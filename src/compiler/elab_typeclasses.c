@@ -3264,20 +3264,77 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
              * two differ by WHERE the second definition lives: a stdlib file
              * (autoloaded or explicitly `(load "stdlib/...")`-ed, which is why
              * `in_stdlib_load` alone is not the signal) stays silent; anything
-             * else is told, once, that the definition is inert.  Warned rather
-             * than replaced or rejected: which of those is right is a language
-             * decision (T1 says user instances shadow stdlib ones for
-             * AMBIGUOUS candidates; nothing has decided the exact-duplicate
-             * case), and a warning turns a mystery into a message without
-             * pre-empting it. */
+             * else is REJECTED.  This was a warning between 2026-09-09 and
+             * 2026-09-11 while the language decision (replace or reject) was
+             * open; the reasoning for rejecting is at the emit site below. */
             const SourceFile *dup_sf = diag_source_file(call->span.file_id);
             bool in_stdlib_file = dup_sf && dup_sf->path && strstr(dup_sf->path, "stdlib/");
             if (!in_stdlib_file && !e->in_stdlib_load) {
-                diag_emit(DIAG_WARNING, call->span,
-                          "instance %s [%s] is already defined (first definition "
-                          "wins): this definstance has no effect",
-                          tc_name->name,
-                          n_type_args > 0 ? type_name(type_args[0]) : "");
+                /* RESOLVED 2026-09-11: the language decision the warning
+                 * deliberately did not pre-empt is REJECT, not replace.
+                 *
+                 * Replace was the other candidate, and T1's "a user instance
+                 * shadows the stdlib one" reads like it wants exactly that --
+                 * but T1 governs the AMBIGUOUS-FALLBACK path, where nothing
+                 * has been emitted yet.  Here the first instance's dictionary
+                 * struct, singleton and __inst_* methods are ALREADY emitted,
+                 * and every call site elaborated before this point is already
+                 * bound to them.  Replacing would leave stdlib's own internal
+                 * uses (map-get's Eq, say) on the old instance while user code
+                 * took the new one: one type, two behaviours, in one program.
+                 * Rejecting keeps exactly one instance per (class, type), which
+                 * is what the static resolver, the interpreter's walk and S9's
+                 * registry each already assume.
+                 *
+                 * It also removes a hazard first-wins carried for any class
+                 * whose stdlib module is load-ON-DEMAND rather than autoloaded:
+                 * "first" then meant LOAD ORDER, so a stdlib `Semigroup [int]`
+                 * of sum and a user's of product gave 7 or 12 depending on
+                 * which file was elaborated first, with the warning blaming
+                 * whichever lost.  A hard error cannot be order-dependent.
+                 *
+                 * The repeated-load case the guard was written for is
+                 * untouched: a stdlib file stays silent via the path test
+                 * above, and `load` is already idempotent per path, so a user
+                 * file loaded twice never reaches here at all. */
+                const SourceFile *prev_sf = diag_source_file(prev->origin_file_id);
+                const char *prev_path = (prev_sf && prev_sf->path) ? prev_sf->path : NULL;
+                /* Render a STABLE path: source files carry absolute paths, and
+                 * an absolute path in a diagnostic is unusable in an errors/
+                 * fixture's expected.diag (it differs per machine and per CI
+                 * runner).  Trim to the "stdlib/..." tail when the definer is
+                 * stdlib -- the common and most informative case -- else to the
+                 * basename. */
+                if (prev_path) {
+                    const char *tail = strstr(prev_path, "stdlib/");
+                    if (!tail) {
+                        const char *slash = strrchr(prev_path, '/');
+                        tail = slash ? slash + 1 : prev_path;
+                    }
+                    prev_path = tail;
+                }
+                if (prev_path) {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "instance %s [%s] is already defined by %s (TUR-E0373): "
+                              "an instance is emitted once and is already bound at "
+                              "every call site elaborated before this point, so a "
+                              "second definition cannot replace it -- remove this "
+                              "definstance, or give the instance a type of its own "
+                              "with a `defopaque` newtype",
+                              tc_name->name,
+                              n_type_args > 0 ? type_name(type_args[0]) : "",
+                              prev_path);
+                } else {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "instance %s [%s] is already defined (TUR-E0373): "
+                              "an instance is emitted once and is already bound at "
+                              "every call site elaborated before this point, so a "
+                              "second definition cannot replace it -- remove this "
+                              "definstance, or give the instance a type of its own "
+                              "with a `defopaque` newtype",
+                              tc_name->name,
+                              n_type_args > 0 ? type_name(type_args[0]) : "");
+                }
             }
             /* Already have this exact instance; emit nothing further. */
             return e_nil(e, call->span);
@@ -3868,6 +3925,31 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                 
                 for (uint8_t j = 0; j < max_method_params; j++) {
                     Form *p = impl_params_form->as.list.items[j];
+                    /* typeclass-method-resolution-ignores-the-class, "Trap for
+                     * anyone writing a repro": a substructural / borrow caret
+                     * annotates the NEXT parameter and is not a parameter
+                     * itself.  The defclass parser has skipped these since ECS
+                     * E2d-P6 (see the identical guard in that loop); this one
+                     * did not, so repeating the class's spelling in the impl
+                     * -- `(foo-of [^borrow w] : int (.v w))` instead of
+                     * `(foo-of [w] (.v w))` -- made `^borrow` consume a param
+                     * slot and emitted a TWO-parameter C function.  `tur check`
+                     * exited 0 and cc then rejected every call site, correct
+                     * ones included, with "too few arguments to function call,
+                     * expected 2, have 1".  A check/build divergence, which is
+                     * the worst place for one.  (The borrow discipline itself
+                     * is enforced on the elaborated FnDefs and at call sites,
+                     * exactly as in the defclass parser.) */
+                    if (p->tag == F_SYM &&
+                        (p->as.sym == e->sym_caret_borrow ||
+                         p->as.sym == e->sym_caret_mut ||
+                         p->as.sym == e->sym_caret_unique ||
+                         p->as.sym == e->sym_caret_linear ||
+                         p->as.sym == e->sym_caret_affine ||
+                         p->as.sym == e->sym_caret_relevant ||
+                         p->as.sym == e->sym_caret_fat)) {
+                        continue;
+                    }
                     if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN) {
                         if (n_method_params == 0) {
                             diag_emit(DIAG_ERROR, p->span,

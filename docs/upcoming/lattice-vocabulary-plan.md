@@ -254,6 +254,35 @@ One new file, `stdlib/typeclass-lattice.tur`, carrying all six classes, the
 selection newtypes, the law functions, and instances for the primitives
 (`int`, `float`, `bool`, `cstr` where meaningful).
 
+**SETTLED 2026-09-11: ship NO `Semigroup`/`Monoid` instance for a bare
+primitive.** This was an open question when the plan was written; the language
+decision it depended on has since landed. A colliding `definstance` from
+outside `stdlib/` is now a hard `TUR-E0373` error, not a silent drop and not a
+warning
+([duplicate-instance-silently-drops-a-user-definstance](../archive/duplicate-instance-silently-drops-a-user-definstance.md),
+resolved: reject, not replace).
+
+That makes the constraint concrete rather than advisory. If this file ships
+`Semigroup [int]`, a user who wants product instead of sum cannot have it --
+their instance is now an **error**, where before it was merely ignored. For
+`Eq [int]` that is correct and desirable; there is one right answer. For
+`Semigroup [int]` there are four, which is the entire reason 3.3 exists.
+
+So: the six classes ship with **no bare-primitive instances at all**, and the
+selection newtypes (`Sum`, `Product`, `MinI`, `MaxI`, `Any`, `All`) carry every
+one of them. `Semigroup [int]` stays free for a user to define unopposed. The
+lattice four may still instance at `bool` (`&&`/`||` under `Any`/`All` are the
+newtypes' business, but `JoinSemilattice [bool]` has a genuinely canonical
+reading) -- decide each on whether the algebra is unique, not by default.
+
+`Ord`'s `max`/`min` (3.2) are unaffected: they are defaults on an existing
+class, not a new instance, so nothing can collide with them.
+
+Reject also removed a hazard this section previously carried. Under the old
+first-wins rule, "first" meant *load order* for a load-on-demand module: the
+same two files gave `7` (stdlib sum) or `12` (user product) depending on which
+was elaborated first. A hard error cannot be order-dependent.
+
 **Not** added to the autoload list initially -- `load`-on-demand, like
 `typeclass.tur`. Autoloading is a per-TU cost in every build in the tree, and
 nothing in stdlib will depend on these classes at first. Revisit only when a
@@ -287,6 +316,11 @@ stdlib module (not a spice) needs them without an import.
 
 - **The gate may say no** (section 1). L1 and L0 survive that verdict; L2-L4
   do not. Do not smuggle the family in under the bug fixes.
+- ~~**A stdlib instance cannot be overridden, and which one wins depends on
+  load order.**~~ **Settled 2026-09-11** (3.5): a colliding instance is now
+  `TUR-E0373`, so the order-dependence is gone -- and L2 ships no
+  bare-primitive `Semigroup`/`Monoid` instance, leaving those types to the
+  selection newtypes.
 - **`Eq` must be structural.** Every law function is an `eq?` call. A law suite
   wired to pointer identity passes on everything. Pin it with a
   deliberately-failing instance in L2.

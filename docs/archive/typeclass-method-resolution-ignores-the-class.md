@@ -4,6 +4,15 @@
 wrong answer at runtime; both are a diagnostic/ordering defect that sends the
 author looking in the wrong place.
 
+**Status 2026-09-11 -- three of four items closed; A's structural half is what
+keeps this open.** See "Execution" at the end. Symptom **B is FIXED** and
+verified (a clean check-time `TUR-E0015` naming the class, the tyvar and the
+constraint to add -- no cc divergence). The **"Trap" below is FIXED** (a borrow
+caret in a `definstance` method impl no longer consumes a param slot). The
+**docs correction owed is DONE**. Symptom **A still reproduces**: instance
+registration is still source-order dependent, and making it order-independent
+remains the scoped project described under "The structural fix for A".
+
 **Status:** open. Found while auditing the diagnostics residual left by the
 archived `ecs-component-set-bounds-plan.md` (ECB). Reproduced against
 `build/tur` at v0.46.0 (Debug, macOS arm64).
@@ -154,7 +163,7 @@ Meanwhile the diagnostic is accurate and names the fix, so the failure mode is
 a papercut with a one-line workaround (move the `definstance` above the use)
 rather than a mystery.
 
-## Docs correction owed
+## Docs correction owed -- DONE 2026-09-11
 
 `docs/archive/ecs-component-set-bounds-plan.md` says the failure mode for the
 typeclass encoding is "an instance-not-found error, which is noticeably worse"
@@ -173,7 +182,7 @@ at the call. The genuine diagnostic debt is A and B above, which that plan does
 not mention. If the ECB ergonomics argument is ever revisited, it should be
 argued against this text, not the archived one.
 
-## Trap for anyone writing a repro
+## Trap for anyone writing a repro -- FIXED 2026-09-11
 
 The method impl in a `definstance` takes the bare parameter list and no return
 type -- `(foo-of [w] (.v w))`. Repeating the class's `^borrow` and `: int`
@@ -183,3 +192,60 @@ with "too few arguments to function call, expected 2, have 1" at every call
 site -- including correct ones. That is a separate papercut and not this bug;
 do not mistake it for one. `spices/ecs/src/ecs/world.tur:114` has the correct
 spelling.
+
+**Fixed 2026-09-11.** The cause was a missing guard, not a design: the
+`defclass` parser has skipped substructural/borrow carets since ECS E2d-P6
+(`^borrow`, `^mut`, `^unique`, `^linear`, `^affine`, `^relevant`, `^fat` each
+annotate the NEXT parameter and are not parameters themselves), and the
+instance-impl parser carried no such skip. The identical guard now sits in
+both loops. All four spellings -- `[w]`, `[w] : int`, `[^borrow w]`,
+`[^borrow w] : int` -- agree; pinned by
+`tests/fixtures/definstance-borrow-caret-in-impl`. Worth fixing here rather
+than deferring: like symptom B, it was a **check/build divergence**, `tur
+check` exiting 0 on a program cc then rejected.
+
+
+## Execution 2026-09-11
+
+Verified against `build/tur` at v0.46.1 (Debug, macOS arm64).
+
+| Item | State |
+| --- | --- |
+| Symptom A -- instance below the use | **open** (diagnostic good, ordering stands) |
+| Symptom B -- unconstrained generic | **FIXED**, verified |
+| Trap -- borrow caret in an impl | **FIXED**, fixture added |
+| Docs correction owed | **DONE** |
+
+### Symptom B: verified fixed, not merely believed
+
+`39c0dac53` claimed it; this is the confirmation. An unconstrained generic
+body calling a class method now fails at **check** time, exit 1:
+
+```
+error [TUR-E0015]: 'foo-of' is a method of typeclass 'Foo', but 'use-foo' does
+not constrain 'W' to it -- so there is no instance to dispatch to. Add the
+constraint: (defn use-foo [W] [(Foo W)] ...).
+```
+
+That is fix direction 2 in full: it names the class, the type variable, and the
+constraint to add, and there is no cc divergence left to find.
+
+### Symptom A: still open, and why no patch landed here
+
+A now reports accurately -- it names the class, says no instance is visible,
+explains that instances register in source order, and tells you to move the
+`definstance` above the use. What it does **not** do is stop requiring that.
+
+The reason no fix landed in this pass is worth recording, because it is not the
+three obstacles above. It is that the constrained-tyvar path needs a concrete
+`FnDef` to reach `found_method`: the representative search binds the receiver
+to an arbitrary carrier-compatible instance precisely so the polymorphic base
+clone stays valid C, and monomorphization re-resolves later. A class
+declaration carries a *signature*, not an implementation, so "resolve against
+the class" cannot by itself produce the `best_method` the downstream path
+consumes. Making that path signature-only is a second scoped change on top of
+the registration pre-pass -- so the estimate in the section above is if
+anything low, not high.
+
+Nothing here is a reason to defer indefinitely; it is a reason not to attempt
+it as a patch inside an unrelated pass.
