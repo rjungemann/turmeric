@@ -2023,7 +2023,18 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 !resolved.as.adt_.def->is_opaque &&
                 resolved.as.adt_.def->n_type_params == 0) {
                 char *un = mangle_adt_name(resolved.as.adt_.def->name);
-                buf_printf(out, "#ifndef TUR_FWD_tur_adt_%s\n", un);
+                /* Also guard on TUR_TD_<Name>, the FULL layout's macro: that
+                 * block emits `typedef struct tur_adt_X { ... } tur_adt_X;`
+                 * for the same name, so two different guards protected one
+                 * typedef and each let the other through.  Re-typedefing a
+                 * name is a C11 feature, so cc accepted it with
+                 * -Wtypedef-redefinition -- noise in EMITTED code, and a hard
+                 * error for anyone compiling the output as C99.  Surfaced by a
+                 * `:heap` parametric struct with a by-value struct field
+                 * (`crdt/ormap`'s `ctx : DotContext`), which reaches both
+                 * emitters for the field type. */
+                buf_printf(out, "#if !defined(TUR_FWD_tur_adt_%s) && "
+                                "!defined(TUR_TD_tur_adt_%s)\n", un, un);
                 buf_printf(out, "#define TUR_FWD_tur_adt_%s\n", un);
                 buf_printf(out, "typedef struct tur_adt_%s tur_adt_%s;\n", un, un);
                 buf_printf(out, "#endif\n");
@@ -5708,6 +5719,22 @@ static ReprForm repr_of_impl(const Type *t, ReprPosition pos) {
          * rediscovering one calibration is the decision function's job to
          * absorb, not each site's to re-exclude. */
         if (t->kind == TY_APP && repr_app_mentions_erased_arg(t) &&
+            (pos == REPR_POS_LET_BIND || pos == REPR_POS_RESULT))
+            return REPR_CARRIER_I64;
+        /* Same erased-declaration fact, reached by the other spelling: a BARE
+         * parametric base (`ORMap` standing for `(ORMap V)` inside a generic
+         * body, its args dropped rather than set to tyvars) is the erased
+         * container too.  The TY_APP test above cannot see it -- there are no
+         * args left to find a tyvar in.
+         *
+         * emit_repr_concrete_heap_ptr_c_name has always excluded BOTH
+         * spellings (it tests `n_type_params > 0` right beside its
+         * mentions-tyvar tests, with a comment saying why), so the two sides
+         * disagreed here and the shadow ICE'd with
+         * `want=heap-ptr got=carrier-i64` on a bare parametric :heap struct.
+         * That is what a `(defstruct ORMap :heap [V] ...)` merge temp hit. */
+        if (t->kind == TY_ADT && t->as.adt_.def &&
+            t->as.adt_.def->n_type_params > 0 &&
             (pos == REPR_POS_LET_BIND || pos == REPR_POS_RESULT))
             return REPR_CARRIER_I64;
         return REPR_HEAP_PTR;

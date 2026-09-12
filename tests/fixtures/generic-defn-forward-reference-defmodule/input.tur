@@ -1,0 +1,23 @@
+;; The defmodule half of `generic-defn-forward-reference`.
+;;
+;; The defmodule forward-declaration pre-pass did not know about type-parameter
+;; vectors at all, so a generic defn got BOTH the wrong arity (it scanned `[V]`
+;; as the value params) and the wrong return type (derived from the same wrong
+;; slot).  A caller written above it saw a one-argument, int-returning function.
+;;
+;; `: bool` is load-bearing here: it is what catches the return-type half.
+
+(defmodule fwd/mod
+  (defstruct B [V] [e : int])
+
+  (defn caller [^borrow a : (B int) ^borrow b : (B int)] : bool
+    (helper a b))
+
+  ;; two value params AND a non-int return, both wrong before the fix
+  (defn helper [V] [^borrow a : (B V) ^borrow b : (B V)] : bool
+    (> (+ (.e a) (.e b)) 0))
+
+  (defn main [] : int
+    (println (caller (B 1) (B 1)))
+    (println (caller (B 0) (B 0)))
+    0))

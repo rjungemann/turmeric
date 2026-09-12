@@ -6505,6 +6505,28 @@ Expr *elab_method_call(Elab *e, const Form *call) {
          * tyvar receiver with >1 name-matching instance reported TUR_E0020. */
         TypeClassInstance *scalar_inst = NULL;
         FnDef *scalar_method = NULL;
+        /* phantom-constrained-generic-base-body-picks-aggregate-instance: a
+         * non-pointer `defopaque` newtype IS the int64 carrier at runtime, so it
+         * is as valid a polymorphic-base representative as a bare `int` -- and
+         * for some classes it is the ONLY carrier-shaped instance there is.
+         * `JoinSemilattice` is the case in point: its scalar instances are
+         * `Sum`/`Product`/`MinI`/`MaxI`, all `defopaque` over int, while its
+         * other instances are by-value aggregates.  Without this tier both
+         * searches below missed, the dispatch fell through to the generic
+         * search, and that picked an AGGREGATE instance -- making the base clone
+         * an aggregate-to-carrier reinterpret, i.e. a TUR-E0295 on a function
+         * that is never called, naming a type the author never mentioned.
+         * Adding an unrelated aggregate instance elsewhere in the program could
+         * break a generic that compiled yesterday.
+         *
+         * The return-directed twin at the top of this file has had this tier
+         * since nullary-class-method-unresolvable-over-newtype-tyvar; this is
+         * the receiver-directed version, which never grew it.  Emit-side
+         * re-resolution specializes the call per monomorphization, and Gap H
+         * names same-carrier newtype specs apart with `__h<n>`, so the
+         * representative is a placeholder rather than a baked answer. */
+        TypeClassInstance *opaque_inst = NULL;
+        FnDef *opaque_method = NULL;
         for (TypeClassInstance *inst = e->typeclass_env.instances;
              inst != NULL && !carrier_inst; inst = inst->next) {
             for (uint8_t i = 0; i < inst->typeclass->n_methods; i++) {
@@ -6532,6 +6554,14 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                     if (carrier_scalar) {
                         scalar_inst = inst;
                         scalar_method = inst->method_impls[i];
+                    } else if (!opaque_inst && itk == TY_ADT) {
+                        /* A `defopaque` newtype over a non-pointer base rides
+                         * the int64 carrier exactly as `int` does. */
+                        const AdtDef *ad = inst->type_args[0].as.adt_.def;
+                        if (ad && ad->is_opaque && !ad->opaque_base_is_ptr) {
+                            opaque_inst = inst;
+                            opaque_method = inst->method_impls[i];
+                        }
                     }
                 }
                 break; /* one method match per instance */
@@ -6540,6 +6570,12 @@ Expr *elab_method_call(Elab *e, const Form *call) {
         if (!carrier_inst && scalar_inst) {
             carrier_inst = scalar_inst;
             carrier_method = scalar_method;
+        }
+        /* Lowest tier: a carrier-shaped opaque newtype, preferred over falling
+         * through to a generic search that may land on an aggregate. */
+        if (!carrier_inst && opaque_inst) {
+            carrier_inst = opaque_inst;
+            carrier_method = opaque_method;
         }
         if (carrier_inst) {
             best_method = carrier_method;

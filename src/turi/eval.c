@@ -6026,6 +6026,72 @@ static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller,
         tb->next = callee->tyvars;
         callee->tyvars = tb;
     }
+
+    /* direct-call-does-not-inherit-caller-tyvar-binding: a constrained callee
+     * whose tyvar reaches NO parameter pins nothing at the call, so the loop
+     * above records nothing for it and its body resolves the class method
+     * against whatever the representative is -- every instantiation alike.
+     *
+     * The CALLER knows which instance serves the class, so inherit it, keyed on
+     * the constraint's CLASS via the frame's dictionary chain.  Never on the
+     * tyvar's name: that made a generic's meaning depend on the spelling of a
+     * bound variable, and alpha-renaming a callee's `[V]` to `[W]` silently
+     * changed the answer.  This is the direct-call twin of the capture done for
+     * a generic referenced as a VALUE in eval_expr's EX_VAR.
+     *
+     * Only fills what the call could not supply -- a tyvar already recorded
+     * above wins. */
+    const Binding *cb = call->as.call_.fn_binding;
+    if (cb && cb->fn_constraints && cb->fn_constraints->n_constraints > 0) {
+        const ConstraintSet *cs = cb->fn_constraints;
+        for (uint8_t ci = 0; ci < cs->n_constraints; ci++) {
+            const Symbol *tv = cs->constraints[ci].tyvar;
+            struct TypeClass *tc = cs->constraints[ci].typeclass;
+            if (!tv || !tv->name || !tc) continue;
+            bool already = false;
+            for (TyvarBind *tb = callee->tyvars; tb; tb = tb->next)
+                if (tb->name == tv->name || strcmp(tb->name, tv->name) == 0) {
+                    already = true;
+                    break;
+                }
+            if (already) continue;
+            struct TypeClassInstance *inst = frame_lookup_dict(caller, tc);
+            if (!inst) {
+                /* The caller may carry the substitution as a TyvarBind without
+                 * ever installing a dictionary -- a plain constrained defn
+                 * does.  Ask the class directly: walk the caller's bound types
+                 * and take the one that has an instance of this class.  That is
+                 * still CLASS-keyed, so it survives an alpha-rename; a caller
+                 * with two bound types implementing the class is genuinely
+                 * ambiguous and is skipped rather than guessed. */
+                TypeClassEnv *tce = env->last_tc_env
+                                        ? (TypeClassEnv *)env->last_tc_env : NULL;
+                if (!tce) continue;
+                uint8_t hits = 0;
+                for (EvalFrame *cf = caller; cf && hits < 2; cf = cf->parent)
+                    for (TyvarBind *tb = cf->tyvars; tb && hits < 2; tb = tb->next) {
+                        Type probe = tb->type;
+                        if (probe.kind == TY_TYVAR) continue;
+                        struct TypeClassInstance *ci2 =
+                            typeclass_env_lookup_instance(tce, tc, &probe, 1);
+                        if (ci2) { inst = ci2; hits++; }
+                    }
+                if (hits != 1) continue;
+            }
+            if (!inst || inst->n_type_args == 0) continue;
+            TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+            tb->name = tv->name;
+            tb->type = inst->type_args[0];
+            tb->next = callee->tyvars;
+            callee->tyvars = tb;
+            DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+            db->tc = tc;
+            db->inst = inst;
+            db->tyvar = tv->name;   /* re-keyed onto the CALLEE's name */
+            db->next = callee->dicts;
+            callee->dicts = db;
+        }
+    }
 }
 
 /* Pin a callee's HKT tyvar from the STATIC type of the argument passed to it,
@@ -8942,12 +9008,18 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* generic-dict-dispatch: pin this call's concrete tyvar
                  * substitutions onto the callee frame so a baked-representative
                  * method call inside the body can re-resolve its instance. */
-                if (top->expr->as.call_.n_abi_bindings > 0)
-                    frame_record_abi(env, call_frame, top->frame, top->expr);
-                else
+                if (top->expr->as.call_.n_abi_bindings == 0)
                     frame_pin_hkt_tyvars_from_args(env, call_frame, fn,
                                                    param_offset, effective_params,
                                                    top->expr, arg_base);
+                /* Called unconditionally now.  A constrained callee whose tyvar
+                 * reaches NO parameter pins nothing at the call, so it arrives
+                 * with zero abi_bindings and this was skipped entirely -- which
+                 * is exactly the case frame_record_abi's constraint inheritance
+                 * exists to serve.  With zero bindings its recording loop is a
+                 * no-op, so the previous behaviour is unchanged for every other
+                 * call of that shape. */
+                frame_record_abi(env, call_frame, top->frame, top->expr);
                 /* Bare-head constrained instance: bind its constraint tyvars
                  * (`(C A)`'s `A`) from the receiver arg's static type so a nested
                  * dispatch inside the body resolves the element's real instance
@@ -9898,8 +9970,82 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Variable -------------------------------------------------------- */
-    case EX_VAR:
-        return eval_lookup(env, frame, e->as.var.binding->name->name);
+    case EX_VAR: {
+        TuriValue _v = eval_lookup(env, frame, e->as.var.binding->name->name);
+        /* constrained-generic-as-fn-value: a top-level constrained generic
+         * referenced AS A VALUE loses the type environment it was named in.
+         * Frames chain LEXICALLY (a callee's parent is `cl->captured`, NULL for
+         * a top-level defn), so when the value is later applied -- through an
+         * ordinary higher-order function, say -- its body cannot see the
+         * caller's tyvar substitution and its class method resolves to whatever
+         * the representative is.  Every instantiation then answers alike.
+         *
+         * The compiled path solves this by emitting a wrapper per clone; the
+         * tree-walking analogue is to capture the substitution INTO the value,
+         * which is what a dictionary is.  Re-home the closure onto a frame
+         * carrying this frame's binding for the generic's constraint tyvar.
+         *
+         * Narrow by construction: only a captureless closure whose FnDef
+         * actually carries constraints, and only when the enclosing frame
+         * really binds the tyvar it names.  Anything else is returned
+         * untouched, so the ordinary path allocates nothing. */
+        if (_v.tag == TURI_CLOSURE && _v.as_closure &&
+            _v.as_closure->captured == NULL && _v.as_closure->fn &&
+            _v.as_closure->fn->binding &&
+            _v.as_closure->fn->binding->fn_constraints &&
+            _v.as_closure->fn->binding->fn_constraints->n_constraints > 0) {
+            const ConstraintSet *cs = _v.as_closure->fn->binding->fn_constraints;
+            EvalFrame *tf = NULL;
+            for (uint8_t ci = 0; ci < cs->n_constraints; ci++) {
+                const Symbol *tv = cs->constraints[ci].tyvar;
+                struct TypeClass *tc = cs->constraints[ci].typeclass;
+                if (!tv || !tv->name || !tc) continue;
+                /* Keyed by the constraint's CLASS, never by the tyvar's name.
+                 * Looking the name up in the caller's frame made a generic's
+                 * meaning depend on the SPELLING of a bound type variable:
+                 * alpha-renaming this callee's `[V]` to `[W]` silently stopped
+                 * the capture and every instantiation collapsed onto one
+                 * instance.  A type parameter must be alpha-renameable, and the
+                 * class is what a dictionary is actually keyed on. */
+                struct TypeClassInstance *inst = frame_lookup_dict(frame, tc);
+                Type bound;
+                bool have = false;
+                if (inst && inst->n_type_args > 0) {
+                    bound = inst->type_args[0];
+                    have = true;
+                } else if (frame_lookup_tyvar(frame, tv->name, &bound)) {
+                    /* Fallback for a frame that pinned the tyvar without ever
+                     * installing a dictionary.  Name-based, so it only fires
+                     * where the class-keyed answer is absent. */
+                    have = true;
+                    inst = NULL;
+                }
+                if (!have) continue;
+                if (!tf) tf = eval_frame_new(env, NULL);
+                TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+                tb->name = tv->name;
+                tb->type = bound;
+                tb->next = tf->tyvars;
+                tf->tyvars = tb;
+                if (inst) {
+                    DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+                    db->tc = tc;
+                    db->inst = inst;
+                    db->tyvar = tv->name;   /* re-keyed onto the CALLEE's name */
+                    db->next = tf->dicts;
+                    tf->dicts = db;
+                }
+            }
+            if (tf) {
+                TuriClosure *copy =
+                    (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
+                *copy = *_v.as_closure;
+                copy->captured = tf;
+                _v = turi_closure(copy);
+            }
+        }
+        return _v;
+    }
 
     /* --- Let / Letrec ---------------------------------------------------- */
     /* T2: delegated to the explicit-stack driver, which owns the new frame and

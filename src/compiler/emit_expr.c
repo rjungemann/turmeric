@@ -8984,7 +8984,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (e->as.call_.ctor && e->as.call_.ctor->adt &&
                         e->as.call_.ctor->adt->n_type_params > 0 &&
                         e->as.call_.ctor->adt->is_heap) {
-                        emit_note_dead_base_ctor(ctx, _mc, 0);
+                        emit_note_dead_base_ctor(ctx, _mc, 0,
+                                                 e->as.call_.ctor->adt);
                     }
                 }
                 free(_mc);
@@ -9795,7 +9796,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (e->as.call_.ctor && e->as.call_.ctor->adt &&
                         e->as.call_.ctor->adt->n_type_params > 0 &&
                         e->as.call_.ctor->adt->is_heap) {
-                        emit_note_dead_base_ctor(ctx, _mc, e->as.call_.n_args);
+                        emit_note_dead_base_ctor(ctx, _mc, e->as.call_.n_args,
+                                                 e->as.call_.ctor->adt);
                     }
                 }
                 free(_mc);
@@ -14151,6 +14153,28 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * Phase F: cast to int64_t(*)(void*,int64_t) to match the field type;
              * concrete call sites reverse this cast via the concrete dispatch path. */
             char *wn = raw_name_for_binding(e->as.poly_wrap_.wrapper_binding);
+            /* constrained-generic-as-fn-value-collapses: the elaboration-time
+             * wrapper hardcodes the generic's BASE entry, so every
+             * specialization that passes the same generic as a value reached
+             * the same instance.  When this specialization has its own clone of
+             * the inner generic, forward through a wrapper variant that names
+             * it instead. */
+            {
+                const Expr *pin = e->as.poly_wrap_.inner;
+                while (pin && (pin->kind == EX_ASCRIBE || pin->kind == EX_FN_TO_FAT))
+                    pin = (pin->kind == EX_ASCRIBE) ? pin->as.ascribe_.inner
+                                                    : pin->as.fn_to_fat_.inner;
+                if (pin && pin->kind == EX_VAR && pin->as.var.binding) {
+                    const Binding *ivb = pin->as.var.binding;
+                    const char *clone =
+                        emit_fn_value_clone_for_current_spec(ctx, ivb);
+                    if (clone && ivb->type.kind == TY_FN) {
+                        char *variant = ensure_poly_wrap_spec_variant(
+                            ctx, clone, ivb->type.as.fn.arity);
+                        if (variant) { free(wn); wn = variant; }
+                    }
+                }
+            }
             /* M7: if the wrapper RETURNS a by-value aggregate (a Monad/HKT
              * continuation returning `(m b)`), it cannot be cast to the int64
              * `tur_poly_fn_t.fn` ABI without corrupting the struct return -- route
