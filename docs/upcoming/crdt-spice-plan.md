@@ -412,11 +412,25 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
   (`hamt/iter-alloc` / `-advance!` / `-cur-key` / `-cur-val` / `-destroy!`) in
   plain Turmeric, so section 1.2's gap is closed without inline C and without
   touching stdlib.
-- **C2 -- PARTIAL 2026-09-11.** `crdt/causal` (`Dot`, `DotContext` with its
-  version-vector join) and `crdt/set` (`GSet`, `TwoPSet`) are in, with
-  `tests/crdt/test_causal.tur` passing. Still to do: **`ORSet`** and **law
-  layer 3 (the fuzzer)** -- which belong together, since the ORSet is the first
-  type whose correctness the three laws do not establish on their own.
+- **C2 -- types DONE 2026-09-11; the fuzzer is what remains.** `crdt/causal`
+  (`Dot`, `DotContext`), `crdt/set` (`GSet`, `TwoPSet`) and `crdt/orset`
+  (`ORSet`) are all in and tested. Still to do: **law layer 3, the fuzzer.**
+
+  **The OR-Set is the reason that layer exists, and its test already shows
+  why.** Its three scenarios were validated by breaking the merge's "has the
+  other side's context seen this dot" test two ways, and measuring:
+
+  | merge broken how | scenarios that fail |
+  | --- | --- |
+  | test removed (keep every dot) | 1 and 3 -- **2 passes** |
+  | test inverted (keep only seen) | 1, 2 and 3 |
+
+  So a suite with only the concurrent-add scenario would certify an
+  implementation where removes never propagate, and one without it would
+  certify a remove-wins set. Three hand-written scenarios were enough to
+  separate those two failures -- but only because someone thought to write all
+  three. That is exactly the argument for generating delivery orders instead of
+  enumerating them.
 
   Still zero inline C across all four modules.
 
