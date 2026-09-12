@@ -412,9 +412,40 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
   (`hamt/iter-alloc` / `-advance!` / `-cur-key` / `-cur-val` / `-destroy!`) in
   plain Turmeric, so section 1.2's gap is closed without inline C and without
   touching stdlib.
-- **C2 -- causal core + sets.** `ReplicaId`, `Dot`, `DotContext`, `GSet`,
-  `TwoPSet`, `ORSet`. Law layer 3 (the fuzzer) lands here, because `ORSet`
-  is the first type the laws alone do not cover.
+- **C2 -- PARTIAL 2026-09-11.** `crdt/causal` (`Dot`, `DotContext` with its
+  version-vector join) and `crdt/set` (`GSet`, `TwoPSet`) are in, with
+  `tests/crdt/test_causal.tur` passing. Still to do: **`ORSet`** and **law
+  layer 3 (the fuzzer)** -- which belong together, since the ORSet is the first
+  type whose correctness the three laws do not establish on their own.
+
+  Still zero inline C across all four modules.
+
+  Three things worth carrying forward:
+
+  - **`dot` is not an available name.** `stdlib/macros.tur` -- auto-loaded --
+    already defines a `dot` macro for method-call sugar, and macro expansion
+    precedes everything, so a function of that name is simply unreachable. The
+    constructor is `mk-dot`. Same collision shape that retired the `max`/`min`
+    macros in lattice-vocabulary-plan L1; **check a name against `macros.tur`
+    before exporting it.**
+  - **Affine state dominates how the tests read.** Every CRDT state here holds
+    a Map or Set handle, so `join` and every mutator CONSUME their argument.
+    An assertion that joins and one that reads the same state need two states,
+    so the tests rebuild divergent replicas per assertion. That is more honest
+    than it first looks -- a replica does not hand its state away and keep
+    using it -- but it is the single biggest difference from how this code
+    would read in a GC'd language, and C5's sequence types will feel it more.
+  - **`Eq [GSet]` is size-only**, and the file says so. An element-wise
+    comparison needs a set iterator the stdlib `Set` API does not expose the
+    way the HAMT one does, so the law functions are correspondingly weaker for
+    `GSet` than for the counters. This is exactly the "Eq must be structural"
+    risk the lattice plan's section 5 named, hitting for a different reason
+    than pointer identity.
+
+  Also filed while building it:
+  [set-add-elem-hash-disagrees-with-set-member](../reported/set-add-elem-hash-disagrees-with-set-member.md)
+  -- the typed `set-add-elem__` adds elements that `set-member?` cannot find,
+  so `crdt/set` uses the explicit-hash macro pair throughout.
 - **C3 -- registers + maps.** `Hlc`, `LwwRegister`, `MvRegister`, `ORMap`
   with its constrained recursive instance. Deterministic LWW tests driven
   from `Mock-Time`.
