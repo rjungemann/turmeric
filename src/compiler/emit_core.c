@@ -1960,6 +1960,30 @@ char *fresh_tmp(EmitCtx *ctx) {
 }
 
 /* Phase 4 v1: Generate a fresh frame variable name */
+/* defer-frame-chain-must-not-escape: frame -> lexical parent side table.  Frame
+ * names are unique per emission (fresh_frame), so no reset is needed and a
+ * miss means "no parent". */
+static struct { char *frame; char *parent; } *g_frame_parents = NULL;
+static uint32_t g_frame_parents_n = 0, g_frame_parents_cap = 0;
+void emit_frame_note_parent(const char *frame, const char *parent) {
+    if (!frame) return;
+    if (g_frame_parents_n == g_frame_parents_cap) {
+        g_frame_parents_cap = g_frame_parents_cap ? g_frame_parents_cap * 2 : 64;
+        g_frame_parents = (void *)realloc(g_frame_parents,
+            g_frame_parents_cap * sizeof(*g_frame_parents));
+        if (!g_frame_parents) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    g_frame_parents[g_frame_parents_n].frame = strdup(frame);
+    g_frame_parents[g_frame_parents_n].parent = parent ? strdup(parent) : NULL;
+    g_frame_parents_n++;
+}
+const char *emit_frame_parent(const char *frame) {
+    if (!frame) return NULL;
+    for (uint32_t i = g_frame_parents_n; i-- > 0; )
+        if (strcmp(g_frame_parents[i].frame, frame) == 0)
+            return g_frame_parents[i].parent;
+    return NULL;
+}
 char *fresh_frame(EmitCtx *ctx) {
     char *p = (char *)malloc(24);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }

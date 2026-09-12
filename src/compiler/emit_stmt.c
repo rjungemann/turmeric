@@ -529,6 +529,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             const char *saved_frame = ctx->frame_var;
             char *frame_var = fresh_frame(ctx);
             ctx->frame_var = frame_var;
+            emit_frame_note_parent(frame_var, saved_frame);
 
             /* Emit frame declaration and init */
             indent_buf(body, ctx->indent);

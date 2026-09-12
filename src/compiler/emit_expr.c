@@ -3997,6 +3997,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     const char *saved_frame = ctx->frame_var;
     char *frame_var = fresh_frame(ctx);
     ctx->frame_var = frame_var;
+    emit_frame_note_parent(frame_var, saved_frame);
 
     /* Emit frame declaration and init */
     indent_buf(body, ctx->indent);
@@ -4596,11 +4597,24 @@ void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
      * function whose callee panics under `catch-unwind` was silently
      * skipped on the direct-call path (the CPS path only fired it because
      * its `ret ctype unknown` arm below never propagated at all). */
+    /* defer-frame-chain-must-not-escape: fire the lexical chain frame by
+     * frame through the INLINED `tur_frame_fire_lifo`, innermost first --
+     * never `tur_frame_fire_chain(&frame)`.  That helper lives in the split
+     * runtime's archive (and is a non-inline `static` in the monolithic
+     * preamble), so passing `&frame` to it made the frame escape and forced
+     * GCC to materialise all 536 bytes of it in every activation; a 20000-deep
+     * recursion whose rc scope owns one frame then overflowed the 2 MiB
+     * Windows stack (`gc-registry-growth` under the split runtime).  The
+     * chain is the parents recorded at each frame's declaration, which is the
+     * same list `tur_frame_fire_chain` would walk at run time. */
     const char *fire_pre = "", *fire_post = "";
-    char fire_buf[128];
+    char fire_buf[1024];
     if (ctx->frame_var) {
-        snprintf(fire_buf, sizeof(fire_buf), "{ tur_frame_fire_chain(&%s); ",
-                 ctx->frame_var);
+        size_t off = (size_t)snprintf(fire_buf, sizeof(fire_buf), "{ ");
+        for (const char *f = ctx->frame_var; f && off < sizeof(fire_buf) - 64;
+             f = emit_frame_parent(f))
+            off += (size_t)snprintf(fire_buf + off, sizeof(fire_buf) - off,
+                                    "tur_frame_fire_lifo(&%s); ", f);
         fire_pre = fire_buf;
         fire_post = " }";
     }

@@ -1097,6 +1097,18 @@ bool catch_box_binding_reader_confined(const Expr *body, const Binding *b,
 bool expr_has_multishot_handler(const Expr *e);
 char *fresh_tmp(EmitCtx *ctx);
 char *fresh_frame(EmitCtx *ctx);
+/* defer-frame-chain-must-not-escape: the lexical parent of each emitted
+ * `tur_frame` (recorded where the frame is declared, i.e. the `saved_frame`
+ * the scope was opened under), so a scope-leaving early return can fire the
+ * chain frame by frame through the INLINED `tur_frame_fire_lifo` instead of
+ * handing `&frame` to the archive-resident `tur_frame_fire_chain`.  That
+ * opaque call forced every frame to be materialised (536 bytes per lexical
+ * scope, per recursion level): under the split runtime `gc-registry-growth`'s
+ * 20000-deep recursion overflowed the 2 MiB Windows stack, exactly the cliff
+ * docs/archive/cc-path-split-windows-and-hamt-findings.md describes.  NULL
+ * parent = a function-outermost frame. */
+void emit_frame_note_parent(const char *frame, const char *parent);
+const char *emit_frame_parent(const char *frame);
 char *fresh_defer_thunk(EmitCtx *ctx);
 char *fresh_defer_env(EmitCtx *ctx);
 void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,

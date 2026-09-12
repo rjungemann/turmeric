@@ -9006,7 +9006,7 @@ static int64_t bt_hyscope(int64_t body) {
             tur_frame_push_defer(&__frame_259, __defer_261, &__t262);
             int64_t __t263;
             int64_t __ps_264 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
-            if (tur_panicking) { tur_frame_fire_chain(&__frame_259); return ((int64_t)0); }
+            if (tur_panicking) { tur_frame_fire_lifo(&__frame_259); return ((int64_t)0); }
             __t263 = __ps_264;
             tur_frame_fire_lifo(&__frame_259);
             __t257 = __t263;
@@ -9021,7 +9021,7 @@ static int64_t with_hyuntrailed(int64_t body) {
         tur_frame_push_defer(&__frame_265, __defer_266, NULL);
         int64_t __t267;
         int64_t __ps_268 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
-        if (tur_panicking) { tur_frame_fire_chain(&__frame_265); return ((int64_t)0); }
+        if (tur_panicking) { tur_frame_fire_lifo(&__frame_265); return ((int64_t)0); }
         __t267 = __ps_268;
         tur_frame_fire_lifo(&__frame_265);
         return __t267;
