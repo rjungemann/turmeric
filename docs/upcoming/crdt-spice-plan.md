@@ -485,36 +485,71 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
 - **C3 -- registers + maps. DONE 2026-09-12.** `crdt/hlc`, `crdt/register`
   (`LwwRegister`, `MvRegister`), `crdt/ormap`. Seven test suites green.
 
-  Two deviations from the design above, both forced and both recorded:
+  Two deviations from the design above, both forced and both recorded
+  (the first revisited 2026-09-12 after two of its three blockers were fixed):
 
   1. **`ORMap`'s join is a PARAMETER, not a constrained instance.** Section 2.3
      wanted `(ORMap K V)` to be a `JoinSemilattice` exactly when `V` is, so an
-     ORMap of PNCounters merges "with no code specific to that pairing". That
-     form is currently **miscompiled**: entries live in a HAMT of int carriers,
-     which makes `V` a *phantom* type parameter, and a phantom parameter does
-     not drive monomorphization -- the constrained generic collapses to one
-     specialization and silently runs the representative instance. An ORMap of
-     PNCounters would have merged with the wrong join and printed a plausible
-     number. See
-     [phantom-type-param-does-not-drive-monomorphization](../reported/phantom-type-param-does-not-drive-monomorphization.md).
+     ORMap of PNCounters merges "with no code specific to that pairing".
 
-     `ormap-merge-with` takes the value merge instead. It is checked at every
-     call site, and `test_ormap`'s nesting test asserts the composition the
-     constrained form was for. Revisit when the defect is fixed.
+     Three separate compiler defects stand between that design and working code.
+     Two were fixed on 2026-09-12; the third still blocks it, so
+     `ormap-merge-with` takes the value merge explicitly and **stays that way**.
+
+     - [phantom-type-param-does-not-drive-monomorphization](../archive/phantom-type-param-does-not-drive-monomorphization.md)
+       (**fixed**) -- a value read back out of a carrier and ascribed to the
+       class variable was not recognized as a dispatch, so no specialization was
+       minted and every instantiation ran the representative instance.
+     - [typeclass-constrained-relay-dispatch](../archive/typeclass-constrained-relay-dispatch.md)
+       (**fixed**) -- a constrained generic whose body calls *another*
+       constrained generic rather than a class method was never specialized.
+       This is the container-CRDT shape exactly: the instance calls a fold
+       helper, which calls the element's join.
+     - [phantom-constrained-generic-base-body-picks-aggregate-instance](../reported/phantom-constrained-generic-base-body-picks-aggregate-instance.md)
+       (**open**) -- a constrained generic over a phantom variable must still
+       emit a generic BASE body, which resolves that variable to a
+       representative instance. `JoinSemilattice` here has by-value aggregate
+       instances (`DotContext`, `GCounter`, `ORSet`), so the base body is
+       invalid C before specialization is even considered. The function need not
+       be called.
+
+     Two further things were learned attempting the migration, recorded so the
+     next attempt does not rediscover them:
+
+     - **The join cannot be shared with the existing fold via a function value.**
+       Passing a constrained helper to the `f`-taking fold collapses every
+       instantiation onto one instance -- a function value is a single address
+       and carries no type argument. A constrained fold needs its own copy of
+       the loop; only the one line that combines two values differs.
+     - **A fold whose parameters are all carriers cannot be constrained at all.**
+       With `V` in no parameter type, nothing pins it. It needs an `(ORMap V)`
+       type-witness parameter even if that parameter is never read -- and the
+       witness must be the map itself, not a field of one: reading `.ctx` off a
+       phantom-parameterized struct unified `V` with `DotContext`.
+
+     `ormap-merge-with` is checked at every call site and is strictly more
+     general (two ORMaps over one value type can merge differently).
+     `test_ormap`'s nesting test asserts the composition the constrained form
+     was for.
 
   2. **Deterministic tests come from parameter-passed wall time, not
      `Mock-Time`.** Every `crdt/hlc` operation takes `now` as an argument, so
      the tests are exact without `stdlib/time.tur` -- which would also have
      cost the spice its inline-C-free property (2.5).
 
-  Three compiler defects were found on the way, **all three now fixed**:
-  `clone_struct_app_type` segfaulted on a parametric instance head whose method
-  recurses into the type parameter
-  ([fixed](../archive/clone-struct-app-type-segv-on-null-arg.md)); forwarding a
-  function-typed parameter to a later-defined defn emitted a broken cast
-  ([fixed](../archive/fn-typed-param-forwarded-to-a-later-defn-miscasts.md) --
-  the helper-ordering workaround has been removed from `crdt/ormap`); and the
-  phantom-dispatch defect above.
+  **Five compiler defects** were found on the way -- four fixed, one open:
+
+  | Defect | Status |
+  | --- | --- |
+  | [`clone_struct_app_type` SEGV on a parametric instance head](../archive/clone-struct-app-type-segv-on-null-arg.md) | fixed |
+  | [fn-typed param forwarded to a later defn miscasts](../archive/fn-typed-param-forwarded-to-a-later-defn-miscasts.md) | fixed (the helper-ordering workaround is gone from `crdt/ormap`) |
+  | [phantom type param does not drive monomorphization](../archive/phantom-type-param-does-not-drive-monomorphization.md) | fixed |
+  | [constrained relay dispatch collapses to one instance](../archive/typeclass-constrained-relay-dispatch.md) | fixed |
+  | [phantom constrained generic base body picks an aggregate instance](../reported/phantom-constrained-generic-base-body-picks-aggregate-instance.md) | **open** -- blocks the constrained `ORMap` |
+
+  Three of the four fixed ones were silent wrong answers, which is the argument
+  for having built the CRDTs against real convergence tests rather than only
+  type-checking them.
 
   The HLC ships a drift bound (`hlc-max-drift`) so a remote replica with a
   wrong clock cannot drag this one forward permanently -- 1.3's requirement.

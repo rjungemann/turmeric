@@ -3365,10 +3365,66 @@ static bool type_mentions_bound_tyvar(const Type *t,
  * compile thread, so a file-scope toggle is safe. */
 static bool g_bhd_detect_return_dispatch = false;
 
+/* Depth guard for the transitive probe below: a constrained generic may call
+ * another, and mutual recursion would not terminate on its own. */
+static uint8_t g_bhd_relay_depth = 0;
+
 static bool body_has_dispatch_on_app_tyvar(
         const Expr *e,
         const AbiTypeBinding *bindings, uint8_t n_bindings) {
     if (!e) return false;
+    /* A constrained generic that dispatches only INDIRECTLY -- its body calls
+     * another constrained generic, which is what actually touches the class
+     * method.  `lvl1` below has no class-method call of its own, so every test
+     * further down answers no, no specialization is minted, and it calls the
+     * BASE `lvl2` -- which baked the last-declared instance.  Two instantiations,
+     * one answer, silently:
+     *
+     *     (defn lvl2 [V] [(JS V)] [a : (M V) b : (M V)] : int (j ...))
+     *     (defn lvl1 [V] [(JS V)] [a : (M V) b : (M V)] : int (lvl2 a b))
+     *
+     * Called directly, lvl2 is correct at both instances; through lvl1, both
+     * collapse.  So ask the callee the same question, with our concrete bindings
+     * substituted into the type arguments this call passes it. */
+    if (e->kind == EX_CALL && g_bhd_relay_depth < 4 &&
+        e->as.call_.fn_binding &&
+        e->as.call_.fn_binding->source_fn_def &&
+        e->as.call_.fn_binding->source_fn_def->body &&
+        e->as.call_.fn_binding->fn_constraints &&
+        e->as.call_.fn_binding->fn_constraints->n_constraints > 0 &&
+        e->as.call_.n_abi_bindings > 0) {
+        AbiTypeBinding inner[ABI_TYPE_BINDINGS_MAX];
+        uint8_t ni = 0;
+        bool grounded = false;
+        for (uint8_t i = 0; i < e->as.call_.n_abi_bindings &&
+                            ni < ABI_TYPE_BINDINGS_MAX; i++) {
+            Type t = e->as.call_.abi_bindings[i].type;
+            /* The call site maps the callee's tyvar onto OURS; resolve it to
+             * whatever this specialization bound ours to. */
+            if (t.kind == TY_TYVAR && t.as.tyvar_.name) {
+                for (uint8_t j = 0; j < n_bindings; j++) {
+                    if (bindings[j].name &&
+                        strcmp(bindings[j].name, t.as.tyvar_.name) == 0) {
+                        t = bindings[j].type;
+                        break;
+                    }
+                }
+            }
+            if (t.kind != TY_TYVAR) grounded = true;
+            inner[ni].name = e->as.call_.abi_bindings[i].name;
+            inner[ni].type = t;
+            ni++;
+        }
+        /* Only when something actually became concrete -- a relay that stays
+         * abstract cannot select an instance and must not mint a spec. */
+        if (grounded && ni > 0) {
+            g_bhd_relay_depth++;
+            bool r = body_has_dispatch_on_app_tyvar(
+                e->as.call_.fn_binding->source_fn_def->body, inner, ni);
+            g_bhd_relay_depth--;
+            if (r) return true;
+        }
+    }
     if (e->kind == EX_CALL && e->as.call_.dict_arg && e->as.call_.n_args >= 1) {
         /* nested-construct/constrained-instance: a RETURN-dispatched inner method
          * call (`(:: (dec tag) (Result A cstr))`) re-dispatches to the per-A
