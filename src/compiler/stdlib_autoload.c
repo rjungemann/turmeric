@@ -21,6 +21,7 @@ static const char *const autoload_files_[] = {
     "contract.tur",
     "hamt.tur",
     "typeclass-eq.tur",
+    "typeclass-ord.tur",
     "typeclass-functor.tur",
     "typeclass-clone.tur",
     "typeclass-drop.tur",

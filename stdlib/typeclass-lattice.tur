@@ -37,8 +37,7 @@
 ;;;   (combine (:: 3 Sum) (:: 7 Sum))   ; => Sum 10
 ;;;
 ;;; Since: lattice-vocabulary-plan L2
-(defclass Semigroup [a]
-  (combine [x : a y : a] : a))
+(defclass Semigroup [a] (combine [x : a y : a] : a))
 
 ;;; Monoid -- a Semigroup with an identity element.
 ;;;
@@ -60,8 +59,7 @@
 ;;
 ;; Flat, not a subclass of Semigroup: defclass has no superclasses, so a
 ;; function needing both lists both constraints (`[^Semigroup A ^Monoid A]`).
-(defclass Monoid [a]
-  (mempty [] : a))
+(defclass Monoid [a] (mempty [] : a))
 
 ;; -- selection newtypes -------------------------------------------------------
 ;;
@@ -86,23 +84,22 @@
 ;; A defopaque inherits nothing; each needs its own instance.
 
 ;;; Eq [Sum] -- structural equality on the carrier.
-(definstance Eq [Sum]     (eq? [x y] (= (:: x int) (:: y int))))
+(definstance Eq [Sum] (eq? [x y] (= (:: x int) (:: y int))))
 ;;; Eq [Product] -- structural equality on the carrier.
 (definstance Eq [Product] (eq? [x y] (= (:: x int) (:: y int))))
 ;;; Eq [MinI] -- structural equality on the carrier.
-(definstance Eq [MinI]    (eq? [x y] (= (:: x int) (:: y int))))
+(definstance Eq [MinI] (eq? [x y] (= (:: x int) (:: y int))))
 ;;; Eq [MaxI] -- structural equality on the carrier.
-(definstance Eq [MaxI]    (eq? [x y] (= (:: x int) (:: y int))))
+(definstance Eq [MaxI] (eq? [x y] (= (:: x int) (:: y int))))
 ;;; Eq [Any] -- structural equality on the carrier.
-(definstance Eq [Any]     (eq? [x y] (= (:: x bool) (:: y bool))))
+(definstance Eq [Any] (eq? [x y] (= (:: x bool) (:: y bool))))
 ;;; Eq [All] -- structural equality on the carrier.
-(definstance Eq [All]     (eq? [x y] (= (:: x bool) (:: y bool))))
+(definstance Eq [All] (eq? [x y] (= (:: x bool) (:: y bool))))
 
 ;; -- Semigroup instances ------------------------------------------------------
 
 ;;; Semigroup [Sum] -- addition.
-(definstance Semigroup [Sum]
-  (combine [x y] (:: (+ (:: x int) (:: y int)) Sum)))
+(definstance Semigroup [Sum] (combine [x y] (:: (+ (:: x int) (:: y int)) Sum)))
 ;;; Semigroup [Product] -- multiplication.
 (definstance Semigroup [Product]
   (combine [x y] (:: (* (:: x int) (:: y int)) Product)))
@@ -126,17 +123,17 @@
 ;; in this file (see the header note).
 
 ;;; Monoid [Sum] -- identity 0.
-(definstance Monoid [Sum]     (mempty [] (:: 0 Sum)))
+(definstance Monoid [Sum] (mempty [] (:: 0 Sum)))
 ;;; Monoid [Product] -- identity 1.
 (definstance Monoid [Product] (mempty [] (:: 1 Product)))
 ;;; Monoid [MinI] -- identity is the largest int64.
-(definstance Monoid [MinI]    (mempty [] (:: 9223372036854775807 MinI)))
+(definstance Monoid [MinI] (mempty [] (:: 9223372036854775807 MinI)))
 ;;; Monoid [MaxI] -- identity is the smallest int64.
-(definstance Monoid [MaxI]    (mempty [] (:: -9223372036854775807 MaxI)))
+(definstance Monoid [MaxI] (mempty [] (:: -9223372036854775807 MaxI)))
 ;;; Monoid [Any] -- identity false.
-(definstance Monoid [Any]     (mempty [] (:: false Any)))
+(definstance Monoid [Any] (mempty [] (:: false Any)))
 ;;; Monoid [All] -- identity true.
-(definstance Monoid [All]     (mempty [] (:: true All)))
+(definstance Monoid [All] (mempty [] (:: true All)))
 
 ;; -- laws ---------------------------------------------------------------------
 ;;
@@ -194,9 +191,9 @@
 ;; declared type supplies what first position lacks, and states the law more
 ;; plainly besides.
 (defn law-identity? [^Semigroup A ^Monoid A ^Eq A] [x : A] : bool
-  (let [unit : A (mempty)]
-    (and (eq? (combine unit x) x)
-         (eq? (combine x unit) x))))
+  (let [unit     : A
+        (mempty)]
+    (and (eq? (combine unit x) x) (eq? (combine x unit) x))))
 
 ;; -- folding -------------------------------------------------------------------
 
@@ -212,10 +209,11 @@
 ;;;   acc combined with v[i..n).
 ;;;
 ;;; Since: lattice-vocabulary-plan L4
-(defn mconcat-from [^Semigroup A ^Monoid A] [v : (Vec A) i : int n : int acc : A] : A
-  (if (>= i n)
-    acc
-    (mconcat-from v (+ i 1) n (combine acc (vec-get v i)))))
+(defn mconcat-from [^Semigroup A ^Monoid A] [v : (Vec A)
+                                             i : int
+                                             n : int
+                                             acc : A] : A
+  (if (>= i n) acc (mconcat-from v (+ i 1) n (combine acc (vec-get v i)))))
 
 ;;; mconcat -- combine every element of a Vec, left to right, from mempty.
 ;;;
@@ -243,7 +241,8 @@
 ;; still answers `mempty` correctly here precisely BECAUSE the Vec parameter
 ;; carries the type -- which is the whole reason an identity earns its keep.
 (defn mconcat [^Semigroup A ^Monoid A] [v : (Vec A)] : A
-  (let [unit : A (mempty)]
+  (let [unit     : A
+        (mempty)]
     (mconcat-from v 0 (vec-len v) unit)))
 
 ;; ============================================================================
@@ -275,8 +274,7 @@
 ;;;   (join (:: 3 MaxI) (:: 7 MaxI))   ; => MaxI 7
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
-(defclass JoinSemilattice [a]
-  (join [x : a y : a] : a))
+(defclass JoinSemilattice [a] (join [x : a y : a] : a))
 
 ;;; MeetSemilattice -- the dual of JoinSemilattice (greatest lower bound).
 ;;;
@@ -290,8 +288,7 @@
 ;;;   (meet (:: 3 MinI) (:: 7 MinI))   ; => MinI 3
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
-(defclass MeetSemilattice [a]
-  (meet [x : a y : a] : a))
+(defclass MeetSemilattice [a] (meet [x : a y : a] : a))
 
 ;;; BoundedJoin -- a JoinSemilattice with a least element.
 ;;;
@@ -302,8 +299,7 @@
 ;;;   (let [z : MaxI (bottom)] (join z (:: 3 MaxI)))   ; => MaxI 3
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
-(defclass BoundedJoin [a]
-  (bottom [] : a))
+(defclass BoundedJoin [a] (bottom [] : a))
 
 ;;; BoundedMeet -- a MeetSemilattice with a greatest element.
 ;;;
@@ -314,8 +310,7 @@
 ;;;   (let [t : MinI (top)] (meet t (:: 3 MinI)))   ; => MinI 3
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
-(defclass BoundedMeet [a]
-  (top [] : a))
+(defclass BoundedMeet [a] (top [] : a))
 
 ;; -- instances ----------------------------------------------------------------
 ;;
@@ -336,29 +331,25 @@
 (definstance JoinSemilattice [MaxI]
   (join [x y] (if (< (:: x int) (:: y int)) y x)))
 ;;; BoundedJoin [MaxI] -- least element is the smallest int64.
-(definstance BoundedJoin [MaxI]
-  (bottom [] (:: -9223372036854775807 MaxI)))
+(definstance BoundedJoin [MaxI] (bottom [] (:: -9223372036854775807 MaxI)))
 
 ;;; MeetSemilattice [MinI] -- greatest lower bound is the smaller int.
 (definstance MeetSemilattice [MinI]
   (meet [x y] (if (< (:: x int) (:: y int)) x y)))
 ;;; BoundedMeet [MinI] -- greatest element is the largest int64.
-(definstance BoundedMeet [MinI]
-  (top [] (:: 9223372036854775807 MinI)))
+(definstance BoundedMeet [MinI] (top [] (:: 9223372036854775807 MinI)))
 
 ;;; JoinSemilattice [Any] -- disjunction.
 (definstance JoinSemilattice [Any]
   (join [x y] (:: (or (:: x bool) (:: y bool)) Any)))
 ;;; BoundedJoin [Any] -- least element is false.
-(definstance BoundedJoin [Any]
-  (bottom [] (:: false Any)))
+(definstance BoundedJoin [Any] (bottom [] (:: false Any)))
 
 ;;; MeetSemilattice [All] -- conjunction.
 (definstance MeetSemilattice [All]
   (meet [x y] (:: (and (:: x bool) (:: y bool)) All)))
 ;;; BoundedMeet [All] -- greatest element is true.
-(definstance BoundedMeet [All]
-  (top [] (:: true All)))
+(definstance BoundedMeet [All] (top [] (:: true All)))
 
 ;; -- lattice laws -------------------------------------------------------------
 
@@ -424,7 +415,8 @@
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
 (defn law-bottom-identity? [^JoinSemilattice A ^BoundedJoin A ^Eq A] [x : A] : bool
-  (let [z : A (bottom)]
+  (let [z        : A
+        (bottom)]
     (eq? (join z x) x)))
 
 ;;; lattice-leq? -- the partial order induced by join.
@@ -475,5 +467,6 @@
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
 (defn law-top-identity? [^MeetSemilattice A ^BoundedMeet A ^Eq A] [x : A] : bool
-  (let [t : A (top)]
+  (let [t     : A
+        (top)]
     (eq? (meet t x) x)))

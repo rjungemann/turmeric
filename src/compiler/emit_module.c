@@ -10290,6 +10290,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * declarations (clock_gettime, nanosleep, ...) used by the emitted runtime
      * even under a strict -std=c99 compile. No-op on Apple libc. */
     buf_puts(out, "#define _DEFAULT_SOURCE 1\n");
+    /* NOMINMAX must be defined before ANY Windows header, not just before the
+     * <windows.h> further down: <winsock2.h> pulls in <windef.h> too, and
+     * whichever block the emitter happens to write first wins.  Without it
+     * windef.h defines `min`/`max` as macros -- `((a)<(b)?(a):(b))` -- and
+     * every emitted `static int64_t max(int64_t, int64_t)` becomes a syntax
+     * error (`expected ')' before '<' token`).  That surfaced the moment
+     * lattice-vocabulary-plan L1 turned stdlib's `min`/`max` from Turmeric
+     * macros, which emit no C symbol, into real defns, which do.
+     * The explicit #undef is belt-and-braces: NOMINMAX is honored by the
+     * MinGW headers we include, but a third-party header in a user's inline-C
+     * can define them anyway, and by then it is our function names at stake. */
+    buf_puts(out, "#ifdef _WIN32\n");
+    buf_puts(out, "#  ifndef NOMINMAX\n#    define NOMINMAX 1\n#  endif\n");
+    buf_puts(out, "#endif\n");
     /* Suppress warnings for unused helpers that are part of the runtime preamble
      * but not exercised by every program.  Both GCC and Clang honour these. */
     buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
@@ -10421,6 +10435,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#include <netinet/in.h>\n");
     buf_puts(out, "#include <arpa/inet.h>\n");
     buf_puts(out, "#endif\n");
+
+    /* See the NOMINMAX note at the top of the preamble. */
+    buf_puts(out, "#ifdef _WIN32\n#  undef min\n#  undef max\n#endif\n");
 
     buf_puts(out, "#ifndef _WIN32\n");
     /* Phase T21: ucontext.h must come before setjmp.h and pthread.h.
