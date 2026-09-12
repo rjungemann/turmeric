@@ -369,11 +369,49 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
 
 ## 6. Phases
 
-- **C1 -- lattice core + counters.** `JoinSemilattice`,
-  `BoundedJoinSemilattice`, `lattice-leq?`, `join-all`, `map-merge-with`,
-  `GCounter`, `PNCounter`, and law layers 1-2. Spice skeleton and manifest.
-  Deliverable check: `join-all` over a `Vec` of `GCounter`s, and the three
-  law functions instantiated for both counters.
+- **C1 -- DONE 2026-09-11.** `spices/crdt/` exists: manifest, `crdt/lattice`
+  (`map-merge-with`, `join-all`), `crdt/counter` (`GCounter`, `PNCounter`,
+  their `JoinSemilattice` / `BoundedJoin` / `Eq` instances), and
+  `tests/crdt/test_counter.tur`, which passes. The classes themselves come
+  from `stdlib/typeclass-lattice.tur` (lattice-vocabulary-plan L3) rather than
+  being redeclared here, so this phase is smaller than written.
+
+  The test checks convergence, not just arithmetic: two replicas that have seen
+  different subsets of the updates merge to the same reading in either order
+  (commutativity), re-delivering a state changes nothing (idempotence -- the
+  law duplicate delivery actually leans on), and `join-all` over an empty `Vec`
+  answers `bottom`.
+
+  **Zero inline C**, as section 2.5 argued for.
+
+  Four things the build taught us, all recorded at their sites:
+
+  - **`(defopaque ReplicaId :Sym)` does not compile.** Section 2.2 flagged it
+    as the one unverified shape and was right to: the opaque path stores the
+    interned symbol POINTER into an `int64_t` slot and cc rejects it
+    (`-Wint-conversion`, an error on clang >= 21). Filed as
+    [defopaque-over-sym-skips-the-ptr-bridge](../reported/defopaque-over-sym-skips-the-ptr-bridge.md).
+  - **The `defstruct` fallback does not work either, for a different reason.**
+    It compiles, but then the map key is a by-value struct, which needs a
+    `MapKey` instance -- whose `mk-cmp` returns a comparator function pointer
+    and can only be written in inline C. That would cost the spice its
+    interpreter coverage for the sake of a newtype. `ReplicaId` is a
+    transparent `defalias` for `Sym` for now: it names the concept without
+    buying type safety, and `Sym` is a real type (an interned name), not the
+    `:int` stand-in CLAUDE.md forbids. One line to change when the defect
+    lands.
+  - **A `defalias` is not an exportable name**, so `ReplicaId` cannot appear in
+    the module's `(export ...)` list. Callers spell `Sym` or use `replica`.
+    Another reason to want the newtype.
+  - **Counter states are affine.** `GCounter` holds a Map handle, so `join`
+    CONSUMES its arguments and the readers take `^borrow`. The test rebuilds
+    divergent states per assertion rather than reusing them -- which is honest
+    anyway: a replica does not hand its state away and keep using it.
+
+  `map-merge-with` is written over the boxed HAMT iterator
+  (`hamt/iter-alloc` / `-advance!` / `-cur-key` / `-cur-val` / `-destroy!`) in
+  plain Turmeric, so section 1.2's gap is closed without inline C and without
+  touching stdlib.
 - **C2 -- causal core + sets.** `ReplicaId`, `Dot`, `DotContext`, `GSet`,
   `TwoPSet`, `ORSet`. Law layer 3 (the fuzzer) lands here, because `ORSet`
   is the first type the laws alone do not cover.
