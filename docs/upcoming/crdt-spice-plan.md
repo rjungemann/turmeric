@@ -412,9 +412,31 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
   (`hamt/iter-alloc` / `-advance!` / `-cur-key` / `-cur-val` / `-destroy!`) in
   plain Turmeric, so section 1.2's gap is closed without inline C and without
   touching stdlib.
-- **C2 -- types DONE 2026-09-11; the fuzzer is what remains.** `crdt/causal`
+- **C2 -- DONE 2026-09-11.** `crdt/causal`
   (`Dot`, `DotContext`), `crdt/set` (`GSet`, `TwoPSet`) and `crdt/orset`
-  (`ORSet`) are all in and tested. Still to do: **law layer 3, the fuzzer.**
+  (`ORSet`) are all in and tested, and **law layer 3 landed** as
+  `tests/crdt/test_converge.tur`: a seeded fuzzer over a pure-Turmeric LCG, 200
+  causally-independent seeds plus 200 with a mid-stream sync, checking four
+  delivery orders (including a duplicate delivery) plus a model oracle.
+  Replicas are rebuilt by replaying the seed rather than copied -- which is
+  also what the affine states require.
+
+  **The most useful thing it produced is a limit on itself**, measured by
+  breaking the OR-Set merge two ways:
+
+  | merge broken how | convergence fuzzer | test_orset scenarios |
+  | --- | --- | --- |
+  | context test inverted | **caught** | caught (scenario 2) |
+  | context test removed | **NOT caught** -- 400 seeds green | caught (1 and 3) |
+
+  Keeping every dot is perfectly order-independent; it just means removes never
+  propagate. A convergence check cannot see that, because what it checks is
+  still true -- every order agrees, on the wrong answer. So section 3's claim
+  that "layer 3 is what catches that; layers 1 and 2 will not" is **half
+  right**: layer 3 catches order-dependence over a state space nobody would
+  enumerate, and the hand-written semantic scenarios catch a merge that keeps
+  too much. Neither subsumes the other, and a project that ships only the
+  fuzzer would have a green suite over an OR-Set whose removes do nothing.
 
   **The OR-Set is the reason that layer exists, and its test already shows
   why.** Its three scenarios were validated by breaking the merge's "has the
