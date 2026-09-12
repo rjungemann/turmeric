@@ -9898,8 +9898,54 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Variable -------------------------------------------------------- */
-    case EX_VAR:
-        return eval_lookup(env, frame, e->as.var.binding->name->name);
+    case EX_VAR: {
+        TuriValue _v = eval_lookup(env, frame, e->as.var.binding->name->name);
+        /* constrained-generic-as-fn-value: a top-level constrained generic
+         * referenced AS A VALUE loses the type environment it was named in.
+         * Frames chain LEXICALLY (a callee's parent is `cl->captured`, NULL for
+         * a top-level defn), so when the value is later applied -- through an
+         * ordinary higher-order function, say -- its body cannot see the
+         * caller's tyvar substitution and its class method resolves to whatever
+         * the representative is.  Every instantiation then answers alike.
+         *
+         * The compiled path solves this by emitting a wrapper per clone; the
+         * tree-walking analogue is to capture the substitution INTO the value,
+         * which is what a dictionary is.  Re-home the closure onto a frame
+         * carrying this frame's binding for the generic's constraint tyvar.
+         *
+         * Narrow by construction: only a captureless closure whose FnDef
+         * actually carries constraints, and only when the enclosing frame
+         * really binds the tyvar it names.  Anything else is returned
+         * untouched, so the ordinary path allocates nothing. */
+        if (_v.tag == TURI_CLOSURE && _v.as_closure &&
+            _v.as_closure->captured == NULL && _v.as_closure->fn &&
+            _v.as_closure->fn->binding &&
+            _v.as_closure->fn->binding->fn_constraints &&
+            _v.as_closure->fn->binding->fn_constraints->n_constraints > 0) {
+            const ConstraintSet *cs = _v.as_closure->fn->binding->fn_constraints;
+            EvalFrame *tf = NULL;
+            for (uint8_t ci = 0; ci < cs->n_constraints; ci++) {
+                const Symbol *tv = cs->constraints[ci].tyvar;
+                if (!tv || !tv->name) continue;
+                Type bound;
+                if (!frame_lookup_tyvar(frame, tv->name, &bound)) continue;
+                if (!tf) tf = eval_frame_new(env, NULL);
+                TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+                tb->name = tv->name;
+                tb->type = bound;
+                tb->next = tf->tyvars;
+                tf->tyvars = tb;
+            }
+            if (tf) {
+                TuriClosure *copy =
+                    (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
+                *copy = *_v.as_closure;
+                copy->captured = tf;
+                _v = turi_closure(copy);
+            }
+        }
+        return _v;
+    }
 
     /* --- Let / Letrec ---------------------------------------------------- */
     /* T2: delegated to the explicit-stack driver, which owns the new frame and

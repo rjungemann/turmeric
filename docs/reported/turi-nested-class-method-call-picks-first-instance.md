@@ -141,26 +141,42 @@ deliberately-failing instances; removing the marker when this lands turns them
 into the interpreter's regression suite for free.
 
 
-## A third symptom, 2026-09-12: a constrained generic passed as a FUNCTION VALUE
+## A third symptom, 2026-09-12 -- FIXED, and what it did NOT fix
 
-Found after fixing the compiled half of
-[constrained-generic-as-fn-value-collapses](../archive/constrained-generic-as-fn-value-collapses.md).
-The interpreter shows the same split this report already describes, from a new
-direction:
+A constrained generic passed as a FUNCTION VALUE collapsed the same way:
 
 ```
 compiled:    9 12 9 12     (direct calls, then the same work via a fn value)
-interpreted: 9 12 12 12    -- both fn-value calls answer with one instance
+interpreted: 9 12 12 12    -- both fn-value calls answered with one instance
 ```
 
-The two DIRECT calls are correct under `--interpret`; only the two that pass the
-constrained generic to an ordinary higher-order function collapse. That is
-consistent with the root cause recorded above -- the compiled path splits a
-specialization per instance and the interpreter has no such split -- and it adds
-a shape worth pinning, because it is the one that makes a container CRDT share
-one fold instead of two.
+**Root cause, measured rather than assumed:** this one was NOT the
+"interpreter mints no per-instance specialization" story above. Interpreter
+frames chain **lexically** -- a callee's parent is `cl->captured`, which is NULL
+for a top-level defn -- so a generic referenced as a value and applied later
+cannot see the caller's `TyvarBind` at all. The substitution machinery was
+present and working; the value simply travelled without it.
 
-`tests/fixtures/constrained-generic-as-fn-value` carries a `requires.compiled`
-marker naming this report. Its rows include the direct-call control, so removing
-the marker when this lands turns it into an interpreter regression test for
-free.
+**Fix** (`src/turi/eval.c`, `EX_VAR`): re-home such a closure onto a frame
+carrying the enclosing frame's binding for its constraint tyvar -- capturing
+the type environment into the value, which is what a dictionary is. Gated to a
+captureless closure whose FnDef actually carries constraints and whose tyvar the
+frame really binds, so the ordinary path allocates nothing.
+
+`tests/fixtures/constrained-generic-as-fn-value` now runs under `--interpret`
+with no marker (turi harness 2056 passed / 0 failed, up one).
+
+**This did not fix the rest of this report.** The four fixtures below still
+diverge under `--interpret`, so the nesting symptom is a separate mechanism, not
+the same one reached from another direction:
+
+| Fixture | still diverges |
+| --- | --- |
+| `typeclass-nested-method-call-float` | yes |
+| `typeclass-nullary-method-newtype-tyvar` | yes |
+| `typeclass-lattice-semigroup-monoid` | yes |
+| `typeclass-lattice-join-meet` | yes |
+
+That is worth knowing before the next attempt: a lexical-capture fix does not
+reach them, so the remaining defect really is about instance selection inside a
+nested call, not about a lost type environment.
