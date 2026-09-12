@@ -4,9 +4,9 @@
 never called, with a message naming a type the function does not mention. Not a
 wrong answer, but it makes a whole design shape unwritable.
 
-**Status:** open. Found 2026-09-12 attempting the constrained `(ORMap V)`
+**Status: RESOLVED** 2026-09-12. Found attempting the constrained `(ORMap V)`
 instance from [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md) section 2.3,
-which it blocks.
+which it blocked. That instance now ships.
 
 ## Repro
 
@@ -63,17 +63,33 @@ be written at all, independent of whether dispatch would specialize correctly
 
 `crdt/ormap` keeps its explicit `ormap-merge-with` parameter for this reason.
 
-## Fix direction
+## Fix
 
-Do not emit a carrier base body for a constrained generic whose constrained
-variable is phantom -- there is no correct representative, and every real call
-site is specialized anyway. Emitting only the specializations would sidestep the
-question. Failing that, choosing the representative from the **carrier-shaped**
-instances rather than the first/arbitrary one would at least make the base body
-valid C, though it would still be an arbitrary choice.
+The second option above, and it turned out to be a one-tier gap rather than a
+design question.
 
-A diagnostic naming the real problem would beat TUR-E0295 here: the author's
-mistake, if any, is the phantom parameter, not an aggregate they never mentioned.
+The receiver-directed representative search in `elab_typeclasses.c` already had
+two tiers -- an `int` instance, then a carrier-compatible **scalar**
+(cstr/bool/sym/sized-int), with a comment correctly noting that "floats and
+aggregates do not ride the carrier and would make the base clone ill-typed".
+What it lacked was a tier for a **`defopaque` newtype over a non-pointer base**,
+which is the int64 carrier just as much as `int` is. With none of its tiers
+matching, the search fell through to a generic one that landed on the aggregate.
+
+The return-directed twin at the top of the same file has had that tier since
+`nullary-class-method-unresolvable-over-newtype-tyvar`; this is the
+receiver-directed version, which never grew it.
+
+That gap bit hard here because `JoinSemilattice`'s only carrier-shaped instances
+ARE opaque newtypes (`Sum`, `Product`, `MinI`, `MaxI`) while its others are
+aggregates -- so the class had a perfectly good representative available and the
+search could not see it.
+
+## Fixture
+
+`tests/fixtures/typeclass-opaque-representative-vs-aggregate` -- an aggregate
+instance in scope alongside two opaque-newtype instances, asserting that each
+instantiation reaches its OWN instance rather than the representative.
 
 ## Related, and NOT the same
 

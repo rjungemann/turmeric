@@ -47,7 +47,31 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
          * params vector is at name_idx+1; return type annotation is
          * at name_idx+2 if it is F_KEYWORD or F_TYPE_ANN. */
         TypeKind fwd_result_kind = TY_INT; /* placeholder */
-        uint32_t ret_idx = name_idx + 2;
+        /* A GENERIC defn spells as `(defn f [TypeVars] [params] : R ...)`, or
+         * with a constraint vec `[TypeVars] [(C V)] [params]`, so the vector
+         * after the name is the TYPE parameters and the real params sit one or
+         * two slots further on.  This pre-pass assumed `name_idx + 1` for both
+         * the params and (via +2) the return type, so a generic defn inside a
+         * `defmodule` was forward-declared with the arity of its TYPE-parameter
+         * list and a placeholder return.  A caller written ABOVE it then saw a
+         * one-argument function: "returns int, which is not callable -- did you
+         * mean to pass all 1 argument(s)?".  Defining the callee first hid it,
+         * which made it look like generics simply could not be forward
+         * referenced.  elab_toplevel.c's twin grew this skip for the return type
+         * (poly-defn-recursive-return-type-inference); the defmodule half never
+         * had it, for either. */
+        uint32_t params_idx = name_idx + 1;
+        if ((uint32_t)f->as.list.len > params_idx + 1 &&
+            f->as.list.items[params_idx]->tag == F_VEC &&
+            f->as.list.items[params_idx + 1]->tag == F_VEC) {
+            params_idx++;   /* past the type-param vec */
+            if ((uint32_t)f->as.list.len > params_idx + 1 &&
+                f->as.list.items[params_idx]->tag == F_VEC &&
+                f->as.list.items[params_idx + 1]->tag == F_VEC) {
+                params_idx++;   /* past the constraint vec */
+            }
+        }
+        uint32_t ret_idx = params_idx + 1;
         /* Skip optional #{Unsafe} / effect-row annotation (F_MAP) */
         if (ret_idx < (uint32_t)f->as.list.len && f->as.list.items[ret_idx]->tag == F_MAP) {
             ret_idx++;
@@ -108,8 +132,8 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
          * a bogus extra-arg PAP wrapper.  See
          * docs/archive/history/pap-defmodule-fat-fn-too-many-args.md */
         TypeKind *arg_kinds = NULL;
-        uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
-            ? fwd_decl_scan_params(e->arena, f->as.list.items[name_idx + 1], &arg_kinds)
+        uint32_t param_arity = (params_idx < (uint32_t)f->as.list.len)
+            ? fwd_decl_scan_params(e->arena, f->as.list.items[params_idx], &arg_kinds)
             : 0;
         Type fn_type = type_fn(arg_kinds, param_arity, fwd_result_kind);
         Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
