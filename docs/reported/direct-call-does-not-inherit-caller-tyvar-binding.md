@@ -81,16 +81,49 @@ separate reason recorded in
 Its fn-value half is fixed; its direct-call half tracks THIS report, since there
 is no binding to capture in the first place.
 
-## What remains open
+## What remains open, mapped
 
-Only the DIRECT-call half. With the class as the key, the principled answer is
-that `(vjoin (.e a) (.e b))` inside a constrained caller should resolve `vjoin`'s
-constraint from the caller's dictionary for the same class -- exactly as the
-fn-value path now does. It still does not: the call site derives no binding (its
-tyvar reaches no parameter), so the relay probe never fires and `viadirect` gets
-no specialization.
+Attempted 2026-09-12 and **not landed**; the attempt is recorded because it
+narrowed the gap to one specific step and the first two sub-fixes are known to
+work.
 
-The two paths therefore still disagree, just on a sounder basis than before.
+First, a detail that argues the current answer is arbitrary rather than chosen:
+**the two back ends pick DIFFERENT wrong instances.**
+
+```
+compiled:     9  9  9 12     (viadirect answers with Gmax twice)
+interpreted: 12 12  9 12     (viadirect answers with Gsum twice)
+```
+
+Three sub-gaps, each measured separately:
+
+1. **The relay probe never fires.** Its guard requires
+   `n_abi_bindings > 0`, and a callee whose tyvar reaches no parameter pins
+   nothing at the call, so it has none. Dropping that requirement and
+   class-translating the frame's bindings onto the callee's tyvars (the same
+   `emit_translate_bindings_by_class` the fn-value path uses) **works**:
+   `viadirect` then gets two specializations and `main` calls them distinctly.
+   Verified in the emitted C.
+
+2. **The callee's clones dedup.** `spec_match_bindings = inner_app_annotated`
+   is false for an instance-only specialization, whose siblings share one C
+   signature and differ only in bindings. It needs the same
+   `(!abi_changes && instance_changes)` arm the fn-value intern has.
+
+3. **The inner call is not re-interned per enclosing spec -- the step that
+   blocks it.** With 1 and 2 applied, both `viadirect` specializations still
+   call the SAME `vjoin` clone. The call is scanned inside each spec with the
+   correct enclosing spec (`outer=viadirect__spec__...` and `...__h1`,
+   confirmed by instrumentation), but it never reaches
+   `emit_abi_intern_spec`/`emit_abi_record_specialized_call` in
+   `emit_abi_register_call` -- and the exit point was **not pinned**: it takes
+   none of that function's instrumented `return;` sites either. Something
+   between scan and intern skips it. That is where the next attempt should
+   start, and it is the only step still unknown.
+
+The (call, outer-spec) key the specialized-call table already uses is the right
+shape for this, so once the inner call interns per enclosing spec the lookup
+should follow without further work.
 
 ## Fixture owed
 
