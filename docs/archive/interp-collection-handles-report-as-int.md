@@ -49,7 +49,7 @@ had said "right site". Both arms now call one helper so they cannot drift.
 
 Neither is this bug; both are filed separately.
 
-- [interp-inline-c-opaque-segv-in-any-reflection](../reported/interp-inline-c-opaque-segv-in-any-reflection.md)
+- [interp-inline-c-opaque-segv-in-any-reflection](interp-inline-c-opaque-segv-in-any-reflection.md)
   -- **a segfault.** A `defopaque` value returned from an inline-C body arrives
   TURI_STRUCT-tagged with `as_struct` set to the raw integer the body returned,
   and `turi_any_named_type` dereferences it. Pre-existing, and invisible because

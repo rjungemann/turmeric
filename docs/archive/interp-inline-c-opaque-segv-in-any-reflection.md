@@ -6,6 +6,17 @@ description: CRASH FIXED by direction 2. Direction 1, the "real fix", turned out
 
 # An inline-C opaque value crashes the interpreter's `any` reflection
 
+**RESOLVED 2026-09-11 -- the divergence too.** Direction 1 was blocked only
+on the field it probed: `FnDef.return_type` keeps a bare kind, but the
+BINDING's full fn type (`fn->binding->type.as.fn.result_full_type`) carries
+the declared result with its `AdtDef`, and `is_opaque` is askable there.  The
+re-tag site in `src/turi/eval.c` now consults it and leaves an opaque result
+the immediate it is, exactly as the `(:: 7 Route)` spelling already did, so
+`type-of` answers `Route` on both back ends.  This also closes the "still
+unguarded" case below: an opaque over a LARGE integer is never re-tagged, so
+there is no pointer to dereference.  `tests/run-interp-inline-c-opaque.sh`
+now asserts `Route` (it was written to fail on exactly this change).
+
 **CRASH FIXED 2026-09-08** by direction 2 (harden the reader).
 `tests/run-interp-inline-c-opaque.sh` / ctest `tur_interp_inline_c_opaque` pins
 it, and was verified to FAIL against the unfixed reader.

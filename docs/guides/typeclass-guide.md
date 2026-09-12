@@ -240,6 +240,29 @@ files: a `load` splices the loaded file's forms at the point it appears, so a
 module's own `(load ...)` of the file declaring a class lands that `defclass`
 ahead of any instance the module then declares.
 
+**One instance per class and type (TUR-E0025).** A `definstance` for a
+`(class, type)` pair that already has an instance is an error, and the
+autoloaded stdlib already supplies instances for the primitives (`Eq [int]`,
+`Show [cstr]`, ...). This is the conventional overlapping-instance rule: there
+is exactly one dictionary to dispatch to, so a second definition cannot
+coexist with the first, and it is rejected rather than silently ignored (which
+is what used to happen, with the stdlib's definition winning). To give a
+primitive different behaviour under a class, wrap it in a newtype:
+
+```turmeric
+(definstance Eq [int]                ;; TUR-E0025: stdlib already defines Eq [int]
+  (eq? [a b] : bool false))
+
+(defopaque Loose :int)
+(definstance Eq [Loose]              ;; fine: a different type
+  (eq? [a b] : bool false))
+(.eq? (:: 3 Loose) (:: 3 Loose))    ;; false; (.eq? 3 3) is still true
+```
+
+A stdlib file loaded twice (an explicit `(load "stdlib/...")` beside the
+autoload) is not a duplicate in this sense: the same definition arriving through
+two load paths stays a silent no-op.
+
 ## Associated Types
 
 An **Associated Type** allows a typeclass to declare a placeholder type member using `(type Name : Type)`. Each concrete instance binds this member to a specific type with `(type Name = <type>)`.

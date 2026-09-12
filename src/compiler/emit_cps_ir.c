@@ -5688,6 +5688,18 @@ static void ce_line(CE *ce, const char *fmt, ...) {
     buf_putc(ce->out, '\n');
 }
 
+/* cps-body-panic-not-propagated: the per-call-site panic-signal check at the
+ * CPS emitter's own indent.  The rendered function returns the int64 word
+ * (ctx->current_fn_ret_ctype is pinned to "int64_t" for the whole render), so
+ * this is `if (tur_panicking) return ((int64_t)0);` -- the C stack unwinds to
+ * the direct-entry wrapper, whose direct caller carries its own check. */
+static void cps_panic_check(CE *ce) {
+    int saved = ce->ctx->indent;
+    ce->ctx->indent = ce->indent;
+    emit_panic_signal_return(ce->ctx, ce->out);
+    ce->ctx->indent = saved;
+}
+
 static const char *join_param(CE *ce, uint32_t id) {
     for (int i = ce->n_joins - 1; i >= 0; i--)
         if (ce->joins[i].id == id) return ce->joins[i].param;
@@ -6368,6 +6380,10 @@ static void emit_term(CE *ce, const CTerm *t) {
                 ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             }
             free(bn); free(fn); free(argv);
+            /* cps-body-panic-not-propagated: a cps->direct callee that panicked
+             * under a handler signals by return; propagate before running the
+             * rest of this body (and the continuation). */
+            cps_panic_check(ce);
             emit_term(ce, t->as.letcall.body);
             break;
         }
@@ -6576,6 +6592,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                 }
                 if (crt && (crt->kind == TY_NIL || crt->kind == TY_NEVER)) {
                     ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
+                    cps_panic_check(ce);   /* cps-body-panic-not-propagated */
                     emit_deliver(ce, &t->as.tailcall.kont, "0");
                 } else {
                     /* S1/findings 16: name the callee's real return type from the
@@ -6588,6 +6605,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                         ce_line(ce, "%s %s = %s(%s); /* cps->direct */", drt, tmp, fn, argv_t);
                     else
                         ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
+                    cps_panic_check(ce);   /* cps-body-panic-not-propagated */
                     /* RM3 R4: close the generation before the value is delivered
                      * to the continuation -- the continuation is the rest of the
                      * caller, so anything after this point is outside the bracket.
@@ -8962,6 +8980,10 @@ static void emit_resume(CE *ce, const CTerm *t) {
     ce_line(ce, "%s = %s;", bn, ld);
     buf_free(&inv);
     free(bn); free(ld); free(sv); free(kk); free(vv);
+    /* cps-body-panic-not-propagated: the resumed continuation may have
+     * panicked under a handler and signalled back through dk_invoke; the rest
+     * of this handler case is past the panic. */
+    cps_panic_check(ce);
     emit_term(ce, t->as.resume.body);
 }
 
@@ -9462,7 +9484,19 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     loop_carried_scan(se->term);
     byref_scan(se->term);
     emit_binder_decls(&ce, se->term);
+    /* cps-body-panic-not-propagated: every function this render produces -- the
+     * `<fn>__cps` body, its join/frame/loop helpers -- returns the int64/intptr
+     * word, so a delegated direct call's panic-signal check has a well-typed
+     * early return here (`return 0` hands the C stack straight back to the
+     * direct-entry wrapper, skipping `__kont`; the frames it abandons are
+     * reap-owned).  With the ctype left NULL the check emitted only a comment,
+     * and a CPS-colored function ran its remaining body -- and the whole
+     * continuation -- after its callee (or its own `(panic ...)`) had panicked
+     * under `catch-unwind`. */
+    const char *saved_cps_ret_ctype = ctx->current_fn_ret_ctype;
+    ctx->current_fn_ret_ctype = "int64_t";
     emit_term(&ce, se->term);
+    ctx->current_fn_ret_ctype = saved_cps_ret_ctype;
     if (cps_env_var) {
         ctx->closure = saved_cps_closure;
         ctx->env_var_name = saved_cps_env_var;

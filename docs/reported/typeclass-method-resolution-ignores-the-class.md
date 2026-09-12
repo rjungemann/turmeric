@@ -4,7 +4,20 @@
 wrong answer at runtime; both are a diagnostic/ordering defect that sends the
 author looking in the wrong place.
 
-**Status:** open. Found while auditing the diagnostics residual left by the
+**PARTIALLY RESOLVED (noted 2026-09-11) -- both diagnostics landed; the
+structural fix is what stays open.** Symptom B now fails at `tur check` with
+`TUR-E0015: 'foo-of' is a method of typeclass 'Foo', but 'use-foo' does not
+constrain 'W' to it ... Add the constraint: (defn use-foo [W] [(Foo W)] ...)`,
+so `check` and `build` agree.  Symptom A's message now says what is actually
+missing (`no 'Foo' instance is visible here ... Instances are registered in
+source order: ... place it ABOVE this use`), and the typeclass guide documents
+the rule ("Instances are registered in source order").  What remains is
+direction (1) proper -- order-independent instance registration -- which "The
+structural fix for A" below measures as a scoped project (a recursive
+registration walk plus making Pass 2's sequential state position-derived).
+The report stays open for that alone.
+
+**Status (at filing):** open. Found while auditing the diagnostics residual left by the
 archived `ecs-component-set-bounds-plan.md` (ECB). Reproduced against
 `build/tur` at v0.46.0 (Debug, macOS arm64).
 

@@ -1,0 +1,26 @@
+;;; defer-in-generic-hof-skipped-on-caught-panic: a `defer` registered in a
+;;; function whose CALLEE panics under `catch-unwind` must fire on the unwind,
+;;; on the direct-call path (the generic HOF) exactly as on the CPS path (the
+;;; mono twin).  The panic-signal early return used to skip the frame's fire.
+(defn gen-hof [A] [^fat body : (fn [] A)] : A
+  (do (defer (println "GEN defer fired")) (body)))
+(defn mono-hof [^fat body : (fn [] int)] : int
+  (do (defer (println "MONO defer fired")) (body)))
+
+;; Two nested defer scopes in one function: both must fire, inner first.
+(defn nested [^fat body : (fn [] int)] : int
+  (do (defer (println "outer defer"))
+      (do (defer (println "inner defer"))
+          (body))))
+
+(defn main [] : int
+  (catch-unwind (fn [] (mono-hof (fn [] (do (panic "x") 0)))))
+  (println "--")
+  (catch-unwind (fn [] (gen-hof  (fn [] (do (panic "y") 0)))))
+  (println "--")
+  (catch-unwind (fn [] (nested (fn [] (do (panic "z") 0)))))
+  (println "--")
+  ;; The normal-exit path still fires exactly once.
+  (println (gen-hof (fn [] 7)))
+  (println "done")
+  0)

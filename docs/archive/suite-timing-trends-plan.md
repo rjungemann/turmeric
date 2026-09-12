@@ -180,7 +180,7 @@ already say this much:
   skipped / 29 via the cc fallback. The "FLIP LINUX TO BLOCKING" note in
   `ci.yml` says its precondition is met; a 1-in-8 red rate says the flip
   would block one `main` push in eight, and
-  [ci-two-fixtures-flake-on-hosted-runners](../reported/ci-two-fixtures-flake-on-hosted-runners.md)
+  [ci-two-fixtures-flake-on-hosted-runners](ci-two-fixtures-flake-on-hosted-runners.md)
   already has the httpd family flaking under JIT.
 - `web_mobile` failed on 49 of the 50 runs since it began reporting on
   2026-09-03 (WebKit; tracked in

@@ -24,7 +24,7 @@ on, so this is more than S0 asked for.
 Three residuals remain open, none of them S0 blockers:
 [a shim-box leak when a fn is widened through a local binding](../reported/any-fn-widen-through-local-binding-leaks.md)
 (low-medium), [a segfault in the interpreter's `any` reflection for an
-inline-C-produced opaque](../reported/interp-inline-c-opaque-segv-in-any-reflection.md)
+inline-C-produced opaque](../archive/interp-inline-c-opaque-segv-in-any-reflection.md)
 (high, but inside the existing TI7 inline-C carve-out -- worth closing before
 S3/S4 lean on the interpreter hard), and
 [a spurious `-Wfree-nonheap-object` in emitted code](../archive/any-drop-inlining-warns-free-nonheap.md)
@@ -1916,7 +1916,7 @@ wins, silently. Static resolution, the interpreter's walk and S9's registry all
 agree because there is only ever one instance to find. What that exposed is
 that a USER instance for a stdlib-covered type is a silent no-op, against the
 file's own stated intent that user instances shadow stdlib ones. Filed as
-[duplicate-instance-silently-drops-a-user-definstance](../reported/duplicate-instance-silently-drops-a-user-definstance.md);
+[duplicate-instance-silently-drops-a-user-definstance](../archive/duplicate-instance-silently-drops-a-user-definstance.md);
 the decision (replace or error) is a language one and S9 inherits it. **The
 warning landed 2026-09-09** -- a user-file definstance the guard drops is now
 told so -- which removes the silence without pre-empting that decision.

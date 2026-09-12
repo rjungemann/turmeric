@@ -2230,7 +2230,7 @@ static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void
  * pushed onto the chain at each defer-scope entry (a `let`), so the firing
  * helpers can mirror the compiled `tur_frame_fire_chain` two-level ordering --
  * same-scope LIFO, and, on an early exit (return / throw / panic), scopes
- * outer-first.  Markers carry no body and are never evaluated; they are simply
+ * innermost-first.  Markers carry no body and are never evaluated; they are simply
  * skipped (LIFO firing) or used to delimit segments (by-scope firing) and then
  * freed.  See docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
 typedef struct DeferItem {
@@ -2311,14 +2311,16 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
     g_firing_panic_defer = prev_fpd;
 }
 
-/* Fire defers at an *early exit* (return / throw / panic) boundary, reversing
- * by SCOPE rather than by item.  Mirrors the compiled tur_frame_fire_chain
- * early-exit semantics: scopes fire outer-first, but within a single scope the
- * defers stay LIFO.  Scope-boundary markers (body == NULL) delimit the scopes;
- * the trailing run (after the last marker, down to `mark`) is the outermost
- * scope and fires first.
+/* Fire defers at an *early exit* (return / throw / panic) boundary, one SCOPE
+ * at a time.  Mirrors the compiled tur_frame_fire_chain: scopes unwind
+ * innermost-first and within a single scope the defers stay LIFO -- the same
+ * order a normal exit produces as scopes end (defer-unwind-innermost-first;
+ * this walk used to fire the scopes OUTER-first, an order no other language's
+ * defer / finally / RAII uses, and one that released a guard before the
+ * resource it guarded).  Scope-boundary markers (body == NULL) delimit the
+ * scopes and are freed, never fired.
  *
- * A flat item-reversal -- the previous implementation -- collapsed both axes
+ * A flat item-reversal -- an earlier implementation -- collapsed both axes
  * into one FIFO walk, so multiple defers in a single (e.g. tail-position) scope
  * came out oldest-first instead of LIFO.  See
  * docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md. */
@@ -2355,9 +2357,9 @@ static void fire_defers_to_mark_by_scope(TuriEnv *env, DeferItem *mark,
     bool saved_panicking = env->panicking;   /* C1: defers fire during unwind */
     bool prev_fpd        = g_firing_panic_defer;
 
-    /* Fire runs outer-first (last recorded = outermost); within a run keep
-     * head-first order (LIFO within the scope). */
-    for (size_t r = n_runs; r-- > 0; ) {
+    /* Fire runs innermost-first (runs were recorded head-first, so index 0 is
+     * the innermost scope); within a run keep head-first order (LIFO). */
+    for (size_t r = 0; r < n_runs; r++) {
         for (size_t k = run_start[r]; k < run_end[r]; k++) {
             DeferItem *item = items[k];
             /* C1: clear `panicking` too so a defer fired mid-panic-unwind runs;
@@ -2473,7 +2475,7 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
         fprintf(stderr, "panic at\npanic: %s\n", s);
     }
     fflush(stderr);
-    /* Fire all pending defers before exiting (outer-first order). */
+    /* Fire all pending defers before exiting (innermost scope first). */
     if (!env->in_no_unwind)
         fire_defers_to_mark_by_scope(env, NULL, NULL);
     fflush(stdout);
@@ -8971,7 +8973,25 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         fn->owner_instance->type_param_constraints,
                         fn->owner_instance->n_type_param_constraints);
 
-                if (top->tail) {
+                /* turi-defer-fires-before-tail-call: a tail call may reuse the
+                 * enclosing activation ONLY while that activation has registered
+                 * no defers.  The reuse below fires the activation's defers as
+                 * "frame completion" BEFORE the callee runs, so
+                 * `(let [m (bt-mark)] (defer (bt-undo-to! m)) (body))` undid
+                 * the trail before `body` wrote to it, and
+                 * `(defer (println "d")) (shout)` printed "d" first -- the
+                 * compiled path prints "body ran" first, because a scope with
+                 * a defer is never a tail position there ("defers break tail",
+                 * emit_fns.c).  With a defer pending, take the non-tail fold
+                 * instead: the callee gets its own DK_CALL_RET, and this
+                 * activation's DK_CALL_RET fires the defers once the callee's
+                 * value has come back.  Only the O(1)-stack property of the
+                 * chain is given up, and only in a scope that already holds a
+                 * defer frame -- the same trade the compiler makes. */
+                bool tail_reuse_ok = top->tail && len >= 2 &&
+                    st[len - 2].kind == DK_CALL_RET &&
+                    (DeferItem *)env->defer_stack == (DeferItem *)st[len - 2].aux;
+                if (tail_reuse_ok) {
                     /* F3: tail call -- REUSE the enclosing activation's
                      * DK_CALL_RET instead of pushing a new one, so a tail chain
                      * stays O(1) on the work-stack.  F1/F2 guarantee that no
@@ -8980,15 +9000,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * The sequence reproduces the per-iteration pre-bounce
                      * cleanup + top-of-loop re-entry of the retired TcoFrame
                      * trampoline (eval_apply_inner), now folded into the driver. */
-                    assert(len >= 2 && st[len - 2].kind == DK_CALL_RET);
                     DriveCont *ret = &st[len - 2];
-                    /* (1) finish the current activation: restore its no_unwind
-                     * and fire its defers.  Reaching a tail call is a *normal*
-                     * frame completion, so fire head-first (innermost scope
-                     * first, same-scope LIFO) -- matching the compiled
-                     * normal-exit ordering. */
+                    /* (1) finish the current activation: restore its no_unwind.
+                     * (Its defer chain is empty by the guard above, so the
+                     * fire that used to sit here is a no-op and is gone.) */
                     env->in_no_unwind = ret->was_no_unwind;
-                    fire_defers_to_mark(env, (DeferItem *)ret->aux, NULL);
                     /* (2) re-enter the callee in the same slot.  saved_module is
                      * left as captured by the chain head (restored once at the
                      * chain's end); was_returning / was_no_unwind are recaptured
@@ -9035,10 +9051,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * module restore. */
                 env->in_no_unwind = top->was_no_unwind;
                 /* Fire this call's defers.  On an early exit (return / throw)
-                 * the chain spans multiple leaked scopes, which fire outer-first
-                 * (by-scope reversal); on normal completion fire head-first
-                 * (innermost scope first, same-scope LIFO).  Both mirror the
-                 * compiled tur_frame_fire_chain (see
+                 * the chain spans multiple leaked scopes, walked by scope so
+                 * the markers are freed; on normal completion fire head-first.
+                 * Both orders are innermost scope first, same-scope LIFO,
+                 * mirroring the compiled tur_frame_fire_chain (see
                  * docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md). */
                 if (env_signaled(env))
                     fire_defers_to_mark_by_scope(env, (DeferItem *)top->aux, NULL);
@@ -9302,7 +9318,26 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
                  * reinterpret it so a downstream `match` (tag == TURI_STRUCT)
                  * still finds its arm.  Guard on non-null to leave a genuine
                  * 0/nil carrier alone. */
+                /* interp-inline-c-opaque-segv-in-any-reflection, direction 1
+                 * by another road: `fn->return_type` keeps only the KIND of a
+                 * plain ADT return (its job is the lifetime pass), so it cannot
+                 * say whether the ADT is an OPAQUE -- a named int64 carrier
+                 * whose word IS the value -- and re-tagged `(defopaque Route
+                 * :int)`'s 7 as a TuriStruct pointer.  The binding's full fn
+                 * type does carry the declared result with its def; ask it.
+                 * An opaque result stays the immediate it is, exactly as the
+                 * `(:: 7 Route)` spelling already does, so `type-of` answers
+                 * the widen's static name (`Route`) instead of `adt`. */
+                bool ret_is_opaque = false;
+                if (fn->binding && fn->binding->type.kind == TY_FN &&
+                    fn->binding->type.as.fn.result_full_type) {
+                    const Type *rft = fn->binding->type.as.fn.result_full_type;
+                    if (rft->kind == TY_ADT && rft->as.adt_.def &&
+                        rft->as.adt_.def->is_opaque)
+                        ret_is_opaque = true;
+                }
                 if (inline_result.tag == TURI_INT && inline_result.as_int != 0 &&
+                    !ret_is_opaque &&
                     (fn->return_type.kind == TY_ADT ||
                      fn->return_type.kind == TY_STRUCT)) {
                     inline_result = turi_struct_val(

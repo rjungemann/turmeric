@@ -441,7 +441,7 @@ the tagged union at the call site -- it is not a free annotation.
 > `any` widen allocation-free. Every other position (a union bound to a local,
 > returned, or held as a temporary) still boxes, and that box has no owner: one
 > leak per widen. Pinned by `tests/fixtures/union-widen-frame-box` under
-> LeakSanitizer; see `docs/reported/union-tagged-union-c-emission.md` for what
+> LeakSanitizer; see `docs/archive/union-tagged-union-c-emission.md` for what
 > the remaining positions need.
 
 Two member kinds do not ride the `val` slot as an integer, and both the inject

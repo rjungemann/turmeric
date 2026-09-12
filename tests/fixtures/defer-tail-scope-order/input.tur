@@ -1,6 +1,6 @@
 ;; Regression: interpreter defer ordering must match the compiled path
-;; (tur_frame_fire_chain): same-scope LIFO, and on an early exit scopes fire
-;; outer-first.  Covers a tail-position scope (the let is f's tail body) with
+;; (tur_frame_fire_chain): same-scope LIFO, and on an early exit scopes unwind
+;; innermost-first.  Covers a tail-position scope (the let is f's tail body) with
 ;; multiple defers, plus a nested inner scope with its own defers and an early
 ;; `return`.  See docs/archive/history/turi-tail-scope-defers-fire-fifo-not-lifo.md.
 
@@ -12,8 +12,8 @@
     (println 30)
     x))
 
-;; (2) Early `return` crossing scopes -> scopes fire outer-first, each LIFO:
-;;     function scope (2, 1), then tail let (11, 10), then inner let (21, 20).
+;; (2) Early `return` crossing scopes -> scopes unwind innermost-first, each
+;;     LIFO: inner let (21, 20), then tail let (11, 10), then function (2, 1).
 (defn early-return [] : int
   (defer (println 1))
   (defer (println 2))

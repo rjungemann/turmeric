@@ -1,6 +1,20 @@
 # Two fixtures flake on hosted runners: `httpd-mw-rate-limit` and `rp7-reload-self-heal`
 
-**Summary:** Both failed on a **documentation-only** PR and both passed on a
+**RESOLVED 2026-09-11 -- both halves.** The `rp7-reload-self-heal` half was
+root-caused and fixed 2026-09-09 (see the update below: the harness polls for
+the failed startup load instead of sleeping a fixed second).  The
+`httpd-mw-rate-limit` half is the middleware's `Retry-After`, which is
+`window - age` in whole seconds: it reads `60` only when the third request
+lands in the same second as the first, and a one-second stall on a loaded
+runner prints `59` -- a stdout mismatch that looked like an answer and was a
+clock.  The fixture now asserts the header is a positive integer no larger
+than the window (`r3-retry-after=ok`) and its client retries `connect()`
+briefly rather than assuming the server is up after a fixed 30 ms sleep.
+Passes under `run.sh`; the `run-jit.sh` leg (where it flaked) was not
+verifiable on the fixing box, which carried no JIT engine -- the only new
+libc call in the client is `strtol`, which c2mir already links.
+
+**Summary (at filing):** Both failed on a **documentation-only** PR and both passed on a
 re-run of the *identical tree* with no change whatsoever. They are flaky, not
 broken. Recorded because the cost is not the re-run -- it is the half hour spent
 deciding whether a red CI belongs to you.

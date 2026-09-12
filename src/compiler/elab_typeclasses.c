@@ -3264,22 +3264,31 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
              * two differ by WHERE the second definition lives: a stdlib file
              * (autoloaded or explicitly `(load "stdlib/...")`-ed, which is why
              * `in_stdlib_load` alone is not the signal) stays silent; anything
-             * else is told, once, that the definition is inert.  Warned rather
-             * than replaced or rejected: which of those is right is a language
-             * decision (T1 says user instances shadow stdlib ones for
-             * AMBIGUOUS candidates; nothing has decided the exact-duplicate
-             * case), and a warning turns a mystery into a message without
-             * pre-empting it. */
+             * else is REJECTED.  Decided 2026-09-11: an exact duplicate is an
+             * error (what Haskell and Rust do with overlapping instances), not
+             * a replacement -- replacing would change which code runs inside
+             * the stdlib itself for a primitive type.  T1's "user shadows
+             * stdlib" stays what it is: a tie-break among AMBIGUOUS candidates,
+             * never a licence to redefine an exact one.  The override route is
+             * a newtype, which the diagnostic's long text names. */
             const SourceFile *dup_sf = diag_source_file(call->span.file_id);
             bool in_stdlib_file = dup_sf && dup_sf->path && strstr(dup_sf->path, "stdlib/");
             if (!in_stdlib_file && !e->in_stdlib_load) {
-                diag_emit(DIAG_WARNING, call->span,
-                          "instance %s [%s] is already defined (first definition "
-                          "wins): this definstance has no effect",
-                          tc_name->name,
-                          n_type_args > 0 ? type_name(type_args[0]) : "");
+                diag_emit_with_code(DIAG_ERROR, call->span,
+                    TUR_E0025_DUPLICATE_INSTANCE,
+                    "instance %s [%s] is already defined%s; a class has one "
+                    "instance per type -- to give this type different behaviour, "
+                    "wrap it in a newtype (defopaque) and define the instance for that",
+                    tc_name->name,
+                    n_type_args > 0 ? type_name(type_args[0]) : "",
+                    (prev->origin_file_id != call->span.file_id &&
+                     diag_file_path(prev->origin_file_id) &&
+                     strstr(diag_file_path(prev->origin_file_id), "stdlib/"))
+                        ? " by the stdlib" : "");
+                return NULL;
             }
-            /* Already have this exact instance; emit nothing further. */
+            /* Already have this exact instance (a stdlib file loaded twice);
+             * emit nothing further. */
             return e_nil(e, call->span);
         }
     }

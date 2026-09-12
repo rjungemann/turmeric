@@ -120,6 +120,11 @@ another thing an `any` can hold:
 (apply-twice (fn [n] (+ n 1)) 10)   ;; 12
 ```
 
+Annotating the parameter with the all-`any` signature it already has --
+`(defn apply-twice [f : (fn [any] any) x] ...)` -- is fine too, and an `any`
+holding a function reaches such a parameter on both back ends. (That was not
+always so: see `all-any-fn-param-is-unusable` in `docs/archive/`.)
+
 ## Containers
 
 Container literals hold `any` elements, so they can be heterogeneous, and the

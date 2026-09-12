@@ -103,6 +103,7 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | 5 | `emit_expr.c:4807` | `EX_GET_FIELD` `:heap` field (`Cons` head) | `emit_var_spec_arg_type` | [OK] | #479 |
 | 6 | `emit_expr.c:4941` | `EX_GET_FIELD` value-struct field (`Option` value) | `emit_var_spec_arg_type` | [OK] | #475 |
 | 7 | `emit_expr.c:5325` | `EX_ASCRIBE` heap concrete cast | `emit_var_spec_arg_type` | [OK] | M7 |
+| 7b | `emit_expr.c` `emit_store_int_ptr_bridge` | store-side int64<->pointer bridge (module-level `def` init, `^thread-local` init return, `set!`) -- same spec-arg peek the `let` binder makes before deciding the init's C representation | `emit_var_spec_arg_type` | [OK] | global-def-store-misses-int-ptr-bridge |
 | 8 | `emit_core.c:1141`/`1318` | method-call dispatch re-resolution | `emit_reresolve_*` | [OK] for scalar/value-struct/`:heap` single-level | #475-#480 |
 | 9 | `emit_core.c:1308` | scan-time liveness companion | `emit_reresolve_method_fndef` | [OK] | #480 |
 | ~~G1~~ | `emit_stmt.c` `EX_CALL` | `(list ...)` homogeneity helper `tur-list-homog__` dead call elided for by-value aggregate args | n/a (elide) | **[FIXED]** | this branch |
