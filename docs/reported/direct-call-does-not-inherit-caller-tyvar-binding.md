@@ -41,25 +41,37 @@ The fn-value path takes a different route: it hands the ENCLOSING
 specialization's bindings to the clone directly, rather than composing the
 call's own. So it resolves `V` to the caller's, and the direct call does not.
 
-## Is it even well-formed?
+## Is it even well-formed? -- SETTLED 2026-09-12
 
-Debatable, and worth settling before fixing. `vjoin`'s `V` and `viadirect`'s `V`
-are independent type variables that merely share a spelling; nothing in the call
-connects them. A Haskell-like reading makes the call **ambiguous** and demands
-an annotation.
+The open question was whether the callee's tyvar should inherit the caller's
+binding at all, given the two are independent variables that merely share a
+spelling. Settling it turned up something worse, and it is worth recording
+because the experiment is one line:
 
-But the two paths must not disagree. Either:
+**Alpha-rename the callee's type parameter.** `[V]` -> `[W]`, changing nothing
+else:
 
-- **inheriting is right** -- the same-named tyvar of an enclosing constrained
-  generic is the intended one (this is what makes the `crdt/ormap` idiom work,
-  where `__vjoin` is passed to a fold and must mean the map's value type), and
-  the direct call should inherit too; or
-- **inheriting is wrong** -- the call is ambiguous and should be a type error,
-  in which case the fn-value path is over-resolving and the diagnostic belongs
-  at both sites.
+```
+matching names  (callee [V]):  9 12   correct
+alpha-renamed   (callee [W]):  12 12  WRONG -- both instantiations collapse
+```
 
-The first is the more useful reading and the one the fn-value path already
-implements.
+Both back ends. So the inheritance the fn-value path implemented was **name
+capture**, not resolution: a generic's meaning depended on the SPELLING of a
+bound type variable. `crdt/ormap` was one rename away from silently merging
+every map with the wrong join -- verified by doing it, which turned
+`test_ormap_join` red.
+
+That settles the question against pure name matching, and in favor of the
+**constraint's CLASS** as the key -- which is what a dictionary is keyed on
+anyway: the caller holds a dictionary for class C, the callee needs one, pass
+it. A caller with two constraints on one class (`[^Show K ^Show V]`) is
+genuinely ambiguous and is skipped rather than guessed.
+
+**Both paths are now class-keyed** (`emit_translate_bindings_by_class` in the
+emitter; `frame_lookup_dict` in `src/turi/eval.c`'s `EX_VAR` capture), and
+`tests/fixtures/constrained-generic-as-fn-value` carries alpha-renamed rows on
+both back ends so it cannot regress to name matching.
 
 ## Not this
 
@@ -69,7 +81,18 @@ separate reason recorded in
 Its fn-value half is fixed; its direct-call half tracks THIS report, since there
 is no binding to capture in the first place.
 
+## What remains open
+
+Only the DIRECT-call half. With the class as the key, the principled answer is
+that `(vjoin (.e a) (.e b))` inside a constrained caller should resolve `vjoin`'s
+constraint from the caller's dictionary for the same class -- exactly as the
+fn-value path now does. It still does not: the call site derives no binding (its
+tyvar reaches no parameter), so the relay probe never fires and `viadirect` gets
+no specialization.
+
+The two paths therefore still disagree, just on a sounder basis than before.
+
 ## Fixture owed
 
-The repro above, once the reading above is settled -- asserting either `9 12 9
-12` or a diagnostic at both call sites.
+The repro above asserting `9 12 9 12`, plus an alpha-renamed sibling, once the
+direct-call half resolves through the class the way the fn-value half does.

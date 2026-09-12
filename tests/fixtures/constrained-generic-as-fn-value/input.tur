@@ -17,6 +17,13 @@
 ;;
 ;; The direct calls are the control: they were correct throughout, so a
 ;; regression that only repairs them is not mistaken for a fix.
+;;
+;; `wjoin` is the same generic with its type parameter ALPHA-RENAMED.  The first
+;; version of this fix inherited the caller's binding by matching tyvar NAMES,
+;; so renaming `[V]` to `[W]` silently stopped the inheritance and both
+;; instantiations collapsed -- a generic's meaning depending on the spelling of
+;; a bound variable.  The inheritance is keyed on the constraint's CLASS now,
+;; and these rows are what hold it there.
 
 (defclass JS [a] (j [x : a y : a] : a))
 
@@ -37,6 +44,13 @@
 (defn mjoin [V] [(JS V)] [a : (M V) b : (M V)] : int
   (fold vjoin (.e a) (.e b)))
 
+;; identical to vjoin, type parameter renamed -- must behave identically
+(defn wjoin [W] [(JS W)] [x : int y : int] : int
+  (:: (j (:: x W) (:: y W)) int))
+
+(defn mjoin-renamed [V] [(JS V)] [a : (M V) b : (M V)] : int
+  (fold wjoin (.e a) (.e b)))
+
 ;; the control: same work, called directly
 (defn djoin [V] [(JS V)] [a : (M V) b : (M V)] : int
   (:: (j (:: (.e a) V) (:: (.e b) V)) int))
@@ -46,4 +60,7 @@
   (println (djoin (:: (M 3) (M Gsum)) (:: (M 9) (M Gsum))))   ;; 12  control
   (println (mjoin (:: (M 3) (M Gmax)) (:: (M 9) (M Gmax))))   ;; 9   via fn value
   (println (mjoin (:: (M 3) (M Gsum)) (:: (M 9) (M Gsum))))   ;; 12  via fn value
+  ;; alpha-renamed callee: an alpha-rename must preserve meaning
+  (println (mjoin-renamed (:: (M 3) (M Gmax)) (:: (M 9) (M Gmax))))  ;; 9
+  (println (mjoin-renamed (:: (M 3) (M Gsum)) (:: (M 9) (M Gsum))))  ;; 12
   0)

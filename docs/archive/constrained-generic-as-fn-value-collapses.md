@@ -66,6 +66,24 @@ Measured by attempting the fix. Three layers had to line up:
    bindings. Bindings are the only way to tell the siblings apart: a fn-value
    clone shares its C signature with every other clone of the same generic.
 
+## The first fix was name capture -- corrected the same day
+
+The version first landed matched the caller's bindings to the callee's by tyvar
+NAME. That makes a generic's meaning depend on the spelling of a bound
+variable: alpha-renaming the callee's `[V]` to `[W]` silently stopped the
+inheritance and every instantiation collapsed again, on both back ends.
+`crdt/ormap` was one rename away from merging every map with the wrong join --
+confirmed by doing it, which turned `test_ormap_join` red.
+
+The key is the constraint's **CLASS**, which is what a dictionary is keyed on:
+the caller holds one for class C, the callee needs one, pass it. A caller with
+two constraints on the same class is genuinely ambiguous and is skipped rather
+than guessed. `emit_translate_bindings_by_class` re-keys the caller's bindings
+onto the callee's tyvars; the interpreter's capture uses `frame_lookup_dict`.
+
+The fixture carries alpha-renamed rows on both back ends so this cannot
+regress.
+
 ## A latent use-after-free this surfaced
 
 `emit_abi_intern_spec` copies its `bindings` / `arg_types` arguments into the

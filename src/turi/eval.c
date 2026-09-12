@@ -9926,15 +9926,43 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             EvalFrame *tf = NULL;
             for (uint8_t ci = 0; ci < cs->n_constraints; ci++) {
                 const Symbol *tv = cs->constraints[ci].tyvar;
-                if (!tv || !tv->name) continue;
+                struct TypeClass *tc = cs->constraints[ci].typeclass;
+                if (!tv || !tv->name || !tc) continue;
+                /* Keyed by the constraint's CLASS, never by the tyvar's name.
+                 * Looking the name up in the caller's frame made a generic's
+                 * meaning depend on the SPELLING of a bound type variable:
+                 * alpha-renaming this callee's `[V]` to `[W]` silently stopped
+                 * the capture and every instantiation collapsed onto one
+                 * instance.  A type parameter must be alpha-renameable, and the
+                 * class is what a dictionary is actually keyed on. */
+                struct TypeClassInstance *inst = frame_lookup_dict(frame, tc);
                 Type bound;
-                if (!frame_lookup_tyvar(frame, tv->name, &bound)) continue;
+                bool have = false;
+                if (inst && inst->n_type_args > 0) {
+                    bound = inst->type_args[0];
+                    have = true;
+                } else if (frame_lookup_tyvar(frame, tv->name, &bound)) {
+                    /* Fallback for a frame that pinned the tyvar without ever
+                     * installing a dictionary.  Name-based, so it only fires
+                     * where the class-keyed answer is absent. */
+                    have = true;
+                    inst = NULL;
+                }
+                if (!have) continue;
                 if (!tf) tf = eval_frame_new(env, NULL);
                 TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
                 tb->name = tv->name;
                 tb->type = bound;
                 tb->next = tf->tyvars;
                 tf->tyvars = tb;
+                if (inst) {
+                    DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+                    db->tc = tc;
+                    db->inst = inst;
+                    db->tyvar = tv->name;   /* re-keyed onto the CALLEE's name */
+                    db->next = tf->dicts;
+                    tf->dicts = db;
+                }
             }
             if (tf) {
                 TuriClosure *copy =
