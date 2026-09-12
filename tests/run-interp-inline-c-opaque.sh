@@ -21,13 +21,12 @@
 #      `match` arm -- the case the struct re-tag exists for, and the one a
 #      careless fix would break.
 #
-# KNOWN DIVERGENCE, asserted rather than hidden: interpreted, (1) answers `adt`
-# where compiled answers `Route`.  The reflection declines the struct name for
-# an implausible pointer and falls back to the generic ADT answer.  Naming the
-# opaque needs the AdtDef, and `FnDef.return_type` does not carry one -- it
-# stores `type_from_kind(return_kind)`, a bare kind, "sufficient for the
-# lifetime pass" per its own comment.  Threading the full declared type through
-# is a separate change; the report records it.
+# Direction 1 landed 2026-09-11 by another road: the re-tag site consults the
+# binding's full fn type (which carries the opaque's AdtDef where the bare
+# FnDef.return_type does not) and leaves an opaque result the immediate it is,
+# so (1) answers `Route` on both back ends.  The earlier `adt` divergence was
+# asserted here deliberately so that this fix would fail the runner and force
+# the expectation to move; it has.
 #
 # Usage: bash tests/run-interp-inline-c-opaque.sh
 # Environment: TUR  path to the compiler (default: ./build/tur)
@@ -82,11 +81,11 @@ elif printf '%s' "$out" | grep -qiE "SEGV|AddressSanitizer|runtime error"; then
     echo "FAIL interp-inline-c-opaque: sanitizer fired"
     echo "$out" | head -5
     FAILED=1
-elif [ "$out" != "adt" ]; then
-    echo "FAIL interp-inline-c-opaque: expected 'adt' (the known divergence), got '$out'"
+elif [ "$out" != "Route" ]; then
+    echo "FAIL interp-inline-c-opaque: expected 'Route' (both back ends agree), got '$out'"
     FAILED=1
 else
-    echo "PASS interp-inline-c-opaque: no crash (answers 'adt' -- known divergence)"
+    echo "PASS interp-inline-c-opaque: no crash, answers 'Route'"
 fi
 
 # 2. The compiled path is unchanged.

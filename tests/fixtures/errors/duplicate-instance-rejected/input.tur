@@ -1,17 +1,10 @@
-;; duplicate-instance-silently-drops-a-user-definstance, RESOLVED: a user
-;; instance for a type the autoloaded stdlib already covers is now REJECTED,
-;; not silently dropped (pre-2026-09-09) and not merely warned about
-;; (2026-09-09..2026-09-11).
-;;
-;; Reject rather than replace: the first instance's dictionary and __inst_*
-;; methods are already emitted and already bound at every call site elaborated
-;; before this point, so replacing would leave stdlib's own internal uses on
-;; the old instance while user code took the new one -- one type, two
-;; behaviours, in one program.
-;;
-;; A stdlib file re-loaded explicitly stays silent (that is the case the guard
-;; was written for), and `load` is idempotent per path, so a user file loaded
-;; twice never reaches the guard at all.  Neither is this fixture.
+;; duplicate-instance-silently-drops-a-user-definstance: a user instance for a
+;; (class, type) the autoloaded stdlib already covers used to be dropped by the
+;; idempotent re-instance guard -- first definition wins -- first silently,
+;; then with a warning.  Decided 2026-09-11: it is REJECTED (TUR-E0025), the
+;; conventional overlapping-instance rule, with the newtype route named in the
+;; message.  A stdlib file loaded twice stays a silent no-op (the case the
+;; guard was written for); that is keyed on the defining file's path.
 (definstance Eq [int]
   (eq? [a b] : bool false))
 

@@ -6,7 +6,20 @@ the surviving code -- the missed side effect is the defer body itself
 (a free, an undo, a log), so it surfaces as a leak or unrestored state rather
 than a diagnostic.
 
-**Status:** OPEN. Found 2026-09-05 while checking whether a `defer`-based
+**RESOLVED 2026-09-11.** The `[A]` was a red herring: the mono twin only fired
+its defer because its body takes the CPS path, whose `ret ctype unknown` arm
+never propagates the panic signal and so falls through to the normal-exit
+`tur_frame_fire_lifo`.  The generic function takes the direct path, where the
+per-call-site `if (tur_panicking) return 0;` left the function without firing
+its open frames.  `emit_panic_signal_return` (`src/compiler/emit_expr.c`) now
+fires the function's frame chain before that early return; the preamble's
+`tur_panic` / `tur_panic_with` also clear `global_panic_frame` after firing
+it, so a later panic cannot re-fire a frame on a dead stack.  Pinned by
+`tests/fixtures/defer-generic-hof-caught-panic` (the report's pair, two
+nested frames, and the normal-exit path).  The compiled path now converges on
+the interpreter's behaviour, as the report asked.
+
+**Status (at filing):** OPEN. Found 2026-09-05 while checking whether a `defer`-based
 bracket could remove the `bt-scope` panic caveat (backtrackable-state guide).
 Not introduced by that work -- the repro has no trail in it.
 

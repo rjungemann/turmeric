@@ -1,0 +1,27 @@
+;;; fn-typed-tyvar-drops-a-capturing-closure: a CAPTURING closure returned by
+;;; a lambda whose declared result is a fn type, travelling through a type
+;;; parameter instantiated to that fn type.  The lambda's declared result now
+;;; carries the fat `boxed` mark (as a defn's already did), so `A` instantiates
+;;; to the fat fn type and the consumer dispatches through the thunk protocol
+;;; instead of calling the env box as code (SIGBUS).
+(defn app [A] [f : (fn [int] A) x : int] : A
+  (f x))
+
+(defn app2 [f : (fn [int] (fn [int] int)) x : int] : (fn [int] int)
+  (f x))
+
+(defn main [] : int
+  ;; capturing, through the type parameter -- the crash shape
+  (let [g (app (fn [n : int] : (fn [int] int) (fn [s : int] : int (+ s n))) 1)]
+    (println (g 5)))
+  ;; capture-free, through the type parameter -- always worked
+  (let [h (app (fn [n : int] : (fn [int] int) (fn [s : int] : int s)) 1)]
+    (println (h 5)))
+  ;; capturing, concretely typed -- always worked
+  (let [k (app2 (fn [n : int] : (fn [int] int) (fn [s : int] : int (+ s n))) 10)]
+    (println (k 5)))
+  ;; capturing lambda called directly, no HOF
+  (let [mk (fn [n : int] : (fn [int] int) (fn [s : int] : int (* s n)))
+        m  (mk 3)]
+    (println (m 5)))
+  0)

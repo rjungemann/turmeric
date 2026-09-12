@@ -95,14 +95,17 @@ search primitive, not a memory-safe region.
 
 Two caveats:
 
-- **A panic inside the body skips the undo**, leaving the trail at the inner
-  level. There is no unwind protection to hang the restore on. `with-untrailed`
-  is worse in the same way: a panic there leaves trailing paused for everything
-  after it, so later writes silently stop being undoable. Do not put fallible
-  work in a `with-untrailed` that a `bt-scope` could hold instead. A `defer`
-  cannot currently close this: `bt-scope` is generic, and a `defer` inside a
-  generic function is dropped on a caught-panic unwind on the compiled path
-  ([report](https://github.com/rjungemann/turmeric/blob/main/docs/reported/defer-in-generic-hof-skipped-on-caught-panic.md)).
+- **A panic inside the body is undone only if something catches it.** The
+  restore is a `defer` (`bt-scope` is `(let [m (bt-mark)] (defer (bt-undo-to! m))
+  (body))`), so a panic that an enclosing `catch-unwind` catches unwinds
+  through it and the trail is back at the outer level when the catch returns;
+  `with-untrailed` resumes trailing the same way. An uncaught panic aborts the
+  process, where the undo is moot. This used to be a real caveat -- the undo
+  was skipped on a caught panic, because a `defer` inside a generic function
+  was dropped on the compiled path's unwind
+  ([archived report](https://github.com/rjungemann/turmeric/blob/main/docs/archive/defer-in-generic-hof-skipped-on-caught-panic.md));
+  `tests/fixtures/bt-scope-panic-undo` pins the fixed behaviour on both back
+  ends.
 - **Free cells outside the scope that wrote them.** A trail entry still pointing
   at a freed cell dangles until the next undo, and the failure surfaces inside
   `bt-undo-to!` rather than at the free.

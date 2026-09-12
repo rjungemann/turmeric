@@ -48,6 +48,13 @@ graduate, shelve, or bump `expires_at` -- in this release or a later one.
 check anywhere in this file's preconditions. Do not invent one: treating this
 as a gate has stranded two releases.
 
+## Step 0: Fold in any pending `[Unreleased]` section
+
+If `CHANGELOG.md` has a `## [Unreleased]` section, its bullets belong to the
+entry drafted in Step 2 (keep their `### Added` / `### Changed` / `### Fixed`
+grouping) and the `[Unreleased]` heading and any "next release must be a
+..." note are deleted; the section never survives a release. If the note asks for a MAJOR bump, stop and use `/cut-major-release`.
+
 ## Step 1: Compute the new version
 
 Read `VERSION`. Parse `MAJOR.MINOR.PATCH`. Compute `NEW = MAJOR.(MINOR+1).0`.

@@ -10530,6 +10530,28 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * lambda's return *value* is a fat closure box vs a thin fn pointer. */
     b->returns_boxed_closure = (body && body->type.kind == TY_FN &&
                                 body->type.as.fn.boxed);
+    /* fn-typed-tyvar-drops-a-capturing-closure: the defn path's
+     * boxed-fn-typed-closure-return marking, mirrored.  A lambda declared
+     * `: (fn [int] int)` whose body yields a CAPTURING closure returns a fat
+     * box, but its declared result type stayed thin -- so when that lambda
+     * is handed to `(defn app [A] [f : (fn [int] A) ...] : A (f x))`, `A`
+     * was instantiated to the THIN fn type, the consumer bound the result as
+     * a bare code pointer and called it thin, and the first call through it
+     * faulted (SIGBUS/SIGSEGV).  Marking the declared result `boxed` here,
+     * under the same guards the defn path uses, makes the type say what the
+     * value is: `A := (fn [int] int){boxed}`, the consumer binds the int64
+     * carrier and dispatches through the fat thunk protocol -- exactly what
+     * the concretely-typed twin `app2` already did.  A captureless body is
+     * untouched (thin value, thin type, consistent as before). */
+    if (b->returns_boxed_closure &&
+        fn_type.as.fn.result_full_type &&
+        fn_type.as.fn.result_full_type->kind == TY_FN &&
+        !fn_type.as.fn.result_full_type->as.fn.boxed &&
+        fn_type.as.fn.result_full_type->as.fn.result_kind != TY_FN &&
+        fn_type.as.fn.result_full_type->as.fn.result_kind != TY_UNKNOWN &&
+        !fn_type.as.fn.result_fat) {
+        fn_type.as.fn.result_full_type->as.fn.boxed = true;
+    }
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));

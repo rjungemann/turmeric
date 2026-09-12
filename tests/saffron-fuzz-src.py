@@ -140,12 +140,10 @@ KNOWN = [
     # residual is tracked under M7 in the report, not by this row.)
     # M10-macro-any-not-seamed (wrap_map_inner + seam_first): retired 2026-09-10.
     ("L-ctor-under-typed-expected", ("wrap_adt", "seam_first")),
-    # H7 itself is fixed (see the retirement note above) and pinned by
-    # tests/fixtures/saffron-seam-into-typed-fn-param.  This route stays
-    # suppressed for a DIFFERENT, still-open finding it cannot avoid touching:
-    # its parameter is an all-`any` fn type, and such a parameter is unusable
-    # compiled -- see docs/reported/all-any-fn-param-is-unusable.md.
-    ("all-any-fn-param",         ("route_seam_fn",)),
+    # all-any-fn-param (route_seam_fn): retired 2026-09-11 -- an all-`any` fn
+    # parameter is usable compiled (the CPS IR no longer spells a fn-value
+    # callee as a named call, and the seam into it casts against the fat
+    # all-any id the widen stamps).  Pinned by tests/fixtures/all-any-fn-param.
     # L-sym-struct-field (scalar_sym + wrap_struct): retired 2026-09-10 --
     # `Sym` is a legal defstruct/defdata field type, and a keyword VALUE in
     # construction position (`(make-struct P :kw)`) no longer reads as a field

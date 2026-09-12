@@ -5,7 +5,17 @@ Silent on older compilers, so it reads as "works everywhere" until a runner
 upgrades. Found via turmeric-spices CI, where it took out the whole macOS leg
 of the `ws-server` spice.
 
-**Status:** open. Worked around spice-side (by matching the ascribed carrier to
+**RESOLVED 2026-09-11.** Fixed as filed: the `let` binder's two bridge arms
+are factored into `emit_store_int_ptr_bridge` (`src/compiler/emit_expr.c`),
+keyed on the value temp's RECORDED emitted C type, and called from all four
+store sites -- the Pass 2 and Pass 1b `EX_DEF` initializers, the
+`^thread-local` init function's `return`, and the plain `set!` store (which
+keys its target off the recorded C type when the side table has it, else the
+type's c-name).  Pinned by `tests/fixtures/global-def-int-ptr-bridge`, which
+covers all four sites in both directions.  Zero snapshot churn: the bridge
+fires only where the emitted C already straddled.
+
+**Status (at filing):** open. Worked around spice-side (by matching the ascribed carrier to
 the value's real C type); the codegen gap itself is unfixed.
 
 ## Summary

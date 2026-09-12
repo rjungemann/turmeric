@@ -1,0 +1,22 @@
+#lang saffron
+;;; all-any-fn-param-is-unusable: a declared all-`any` function parameter,
+;;; the signature the Saffron dialect produces by default.  Repro 1 -- the
+;;; callee's own body: a call through the param with a widened literal used to
+;;; take the CPS backend's named-callee arm (`f(__t0)` against an `int64_t f`,
+;;; a cc error).  Repro 2 -- the seam into it: the box carries the fat all-any
+;;; id H8 stamps, and the cast checked the bare id and panicked.
+(defn tany [f : (fn [any] any)] : any (f (:: 4.5 any)))
+(defn id [x] x)
+
+(defn thru [x] x)
+(defn call0 [f] (f))
+(defn sf [g : (fn [] any)] : (fn [] any) g)
+
+(defn twice [f : (fn [any] any) x] (f (f x)))
+
+(defn main [] : int
+  (println (cast (tany (id (fn [v] v))) float))
+  (println (call0 (thru (sf (thru (fn [] 288))))))
+  (println (twice (fn [n] (+ n 1)) 40))
+  (println (twice (id (fn [s] s)) "same"))
+  0)

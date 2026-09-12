@@ -6,6 +6,19 @@ description: "`(definstance Eq [int] (eq? [a b] false))` in a user file is a no-
 
 # A user instance colliding with an autoloaded stdlib instance is a silent no-op
 
+**RESOLVED 2026-09-11 -- the language decision is REJECT.** An exact duplicate
+of an existing instance from a non-stdlib file is now `TUR-E0025`, the
+conventional overlapping-instance rule (Haskell, Rust): a class has one
+instance per type, and replacing would have changed which code runs inside the
+stdlib itself for a primitive.  The message names the override route (a
+newtype), and T1's "user shadows stdlib" stays a tie-break among AMBIGUOUS
+candidates only.  A stdlib file loaded twice stays a silent no-op, keyed on the
+defining file's path as before.  Pinned by
+`tests/fixtures/errors/duplicate-instance-rejected` (the stdlib case),
+`errors/duplicate-instance-same-file` (two user instances, no stdlib blame),
+and `duplicate-instance-newtype-route` (the recommended override, both back
+ends).  The typeclass guide documents the rule.
+
 **PARTIALLY RESOLVED 2026-09-09 -- it is no longer silent.** Fix direction 2
 landed: the guard now warns `instance Eq [int] is already defined (first
 definition wins): this definstance has no effect`, keyed on the defining FILE

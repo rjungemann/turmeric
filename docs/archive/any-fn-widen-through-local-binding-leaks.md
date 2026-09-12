@@ -6,7 +6,22 @@ description: An `any` fn payload is normalised to a fat `{thunk, orig_fn}` box. 
 
 # A fn widened through a local binding leaks its shim box
 
-**Severity: low-medium.** Bounded and narrow, but unbounded *in a loop*, which
+**RESOLVED 2026-09-11** by fix direction 1.  A `Binding` still does not carry
+its initializer, so the fact is recorded at the `let` instead: an immutable
+binding whose init names a global fn -- a lifted lambda (`__fn_N`) or a
+`defn` -- gets `widen_fn_alias` pointing at it (`elab_forms.c`, next to the
+`source_binding` alias, which deliberately refuses lifted lambdas because it
+changes CALL semantics; this alias changes only where a box lives).  The
+`EX_FN_TO_FAT` static-box guard in `emit_expr.c` sees through the alias and
+spells the global's name, so the widen hoists the same static box the direct
+widen does.  The repro goes from 2400 bytes in 100 allocations to zero;
+`tests/fixtures/any-fn-widen-no-alloc` now covers the local-binding shape for
+both a lambda and a `defn` alias (400 widens, zero allocations under
+`run-leak-check.sh`).  Directions 2 and 3 were not needed for this shape;
+direction 3 (widening the non-retain inference) remains a worthwhile
+independent measurement for the by-value struct widen it also names.
+
+**Severity (at filing): low-medium.** Bounded and narrow, but unbounded *in a loop*, which
 is what turns a small allocation into a real problem.
 
 Filed as the residue of

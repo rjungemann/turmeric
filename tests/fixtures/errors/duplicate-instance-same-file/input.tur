@@ -1,0 +1,14 @@
+;; duplicate-instance-silently-drops-a-user-definstance: the same rule with no
+;; stdlib involved -- two user instances for one (class, type) in one file.
+;; The second is rejected, and the message does not blame the stdlib.
+(defclass Loud [A]
+  (shout [a] : cstr))
+(defstruct Dog [n : int])
+(definstance Loud [Dog]
+  (shout [d] "woof"))
+(definstance Loud [Dog]
+  (shout [d] "WOOF"))
+
+(defn main [] : int
+  (println (.shout (Dog 1)))
+  0)

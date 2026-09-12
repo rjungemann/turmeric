@@ -97,7 +97,7 @@ wrap, a missing-hamt.h implicit decl, two dead `printf_s` externs, and `C:\tmp`)
 - Generated C has type errors that **GCC >= 14 rejects** (permerrors). MSYS2
   ships GCC 16, so it failed 137 fixtures there; a Linux box on GCC 14+ fails
   identically. Worked around with `-Wno-error=`; see
-  [docs/reported/codegen-gcc14-permerrors.md](../../reported/codegen-gcc14-permerrors.md).
+  [docs/archive/history/codegen-gcc14-permerrors.md](../archive/history/codegen-gcc14-permerrors.md).
 - At `-O0` the generated C fails to link: `tur_get_contract_handler` /
   `tur_set_contract_handler` are declared but never defined. At `-O1`+ the calls
   are optimised away, which is why nobody has noticed.

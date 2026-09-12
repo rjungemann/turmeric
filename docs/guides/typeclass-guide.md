@@ -223,22 +223,51 @@ Add `[(Foo W)]` and it resolves. This is checked at `tur check` time; an
 unconstrained call used to pass the type checker and fail later in the C
 compiler, naming a mangled internal symbol.
 
-**Instances are registered in source order.** A `definstance` is visible to the
-code below it, not above it, so an instance declared underneath a constrained
-generic is not in scope for that generic:
+**Instance order does not matter.** A `definstance` may appear above or below
+the code that dispatches on it, at file scope or inside a `defmodule`:
 
 ```turmeric
 (defn use-foo [W] [(Foo W)] [^borrow w : W] : int
-  (foo-of w))          ;; TUR-E0015: no 'Foo' instance is visible here
+  (foo-of w))          ;; fine -- the instance below is found
 
-(definstance Foo [Bar] ;; too late for the defn above
+(definstance Foo [Bar]
   (foo-of [w] (.v w)))
 ```
 
-Move the `definstance` above the first use. The same ordering applies across
-files: a `load` splices the loaded file's forms at the point it appears, so a
-module's own `(load ...)` of the file declaring a class lands that `defclass`
-ahead of any instance the module then declares.
+A `defn` whose body cannot resolve a class method is elaborated speculatively,
+rolled back, and retried once every form in its unit has been processed -- so
+by the time it is typed for real, every instance in the file is registered.
+The retry carries no capture frame, so a body that fails for some other reason
+still reports its own diagnostic.
+
+If you see `no 'Foo' instance is visible here`, the program declares no `Foo`
+instance **at all** -- moving something will not help.
+
+The `defclass` itself must still precede its instances and uses, as any
+declaration must.
+
+**One instance per class and type (TUR-E0025).** A `definstance` for a
+`(class, type)` pair that already has an instance is an error, and the
+autoloaded stdlib already supplies instances for the primitives (`Eq [int]`,
+`Show [cstr]`, ...). This is the conventional overlapping-instance rule: there
+is exactly one dictionary to dispatch to, so a second definition cannot
+coexist with the first, and it is rejected rather than silently ignored (which
+is what used to happen, with the stdlib's definition winning). To give a
+primitive different behaviour under a class, wrap it in a newtype:
+
+```turmeric
+(definstance Eq [int]                ;; TUR-E0025: stdlib already defines Eq [int]
+  (eq? [a b] : bool false))
+
+(defopaque Loose :int)
+(definstance Eq [Loose]              ;; fine: a different type
+  (eq? [a b] : bool false))
+(.eq? (:: 3 Loose) (:: 3 Loose))    ;; false; (.eq? 3 3) is still true
+```
+
+A stdlib file loaded twice (an explicit `(load "stdlib/...")` beside the
+autoload) is not a duplicate in this sense: the same definition arriving through
+two load paths stays a silent no-op.
 
 ## Associated Types
 

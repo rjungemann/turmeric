@@ -2000,6 +2000,86 @@ bool emit_str_is_bare_ident(const char *s) {
     return true;
 }
 
+/* global-def-store-misses-int-ptr-bridge: the int64<->pointer store bridge,
+ * shared by every STORE that is not a `let` binder -- the module-level `def`
+ * initializer (whole-program and separate-compilation), the `^thread-local`
+ * init function's `return`, and the plain `set!` store.  The `let` binder
+ * already spelled this bridge inline (its two `(int64_t)(intptr_t)` /
+ * `(T)(intptr_t)` arms below); the four store sites did not, so
+ * `(def hub-mutex (:: (mutex-new) :int))` emitted `int64_t g = <void * temp>;`
+ * -- a hard error under GCC >= 14 / clang >= 21 -- where the same expression
+ * in a `let` bridged correctly.
+ *
+ * `target_c` is the STORE TARGET's emitted C type and `iv` the value string
+ * `emit_value` handed back for `init`.  Keys on the value temp's RECORDED
+ * emitted C type (the local-var side table), as the binder does, because the
+ * source type's c-name collides under the carrier duality: an opaque
+ * `(defopaque Mutex :ptr<void>)` ascribed to `:int` c-names to `int64_t` on
+ * both sides while the temp holding the call result is a `void *`.  Returns a
+ * malloc'd bridged spelling when the two sides straddle, NULL when the store
+ * needs no bridge; the caller frees it. */
+char *emit_store_int_ptr_bridge(EmitCtx *ctx, const char *target_c,
+                                const char *iv, const Expr *init) {
+    if (!target_c || !iv || !init) return NULL;
+    bool target_is_i64 = strcmp(target_c, "int64_t") == 0;
+    bool target_is_ptr = strchr(target_c, '*') != NULL;
+    if (!target_is_i64 && !target_is_ptr) return NULL;
+    TypeKind init_kind = init->type.kind;
+    Type init_ty_r = emit_resolve_type(ctx, init->type);
+    {
+        const Expr *iexpr = init;
+        while (iexpr && iexpr->kind == EX_ASCRIBE) iexpr = iexpr->as.ascribe_.inner;
+        Type spec_ty;
+        if (iexpr && emit_var_spec_arg_type(ctx, iexpr, &spec_ty))
+            init_ty_r = spec_ty;
+    }
+    const char *init_cn = emit_type_c_name(ctx, init_ty_r);
+    bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
+    bool rec_ptr = false, rec_voidp = false, rec_i64 = false;
+    if (emit_str_is_bare_ident(iv)) {
+        const char *lvty = emit_localvar_lookup_ctype(iv);
+        size_t lL = lvty ? strlen(lvty) : 0;
+        rec_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
+                  strcmp(lvty, "void *") != 0;
+        rec_voidp = lvty && strcmp(lvty, "void *") == 0;
+        rec_i64 = lvty && strcmp(lvty, "int64_t") == 0;
+    }
+    /* The `(:: <int> :ptr<void>)` union-default read is a `void *` value
+     * whatever its static type says (same detection as the binder). */
+    if (!rec_ptr && target_is_i64) {
+        size_t ivL = strlen(iv);
+        if (ivL >= 4 && strcmp(iv + ivL - 4, "}).d") == 0 &&
+            strstr(iv, "void * d;") != NULL)
+            rec_ptr = true;
+    }
+    if (target_is_i64) {
+        /* A by-value aggregate temp c-names without a `*` and is never
+         * reinterpreted here; a pointer-typed init that is RECORDED as an
+         * int64 carrier is already the carrier and needs no cast. */
+        if (rec_i64) return NULL;
+        if (init_kind == TY_FN || init_kind == TY_PTR_VOID ||
+            init_is_ptr_repr || rec_ptr || rec_voidp) {
+            size_t n = strlen(iv) + 32;
+            char *out = (char *)malloc(n);
+            if (!out) { fprintf(stderr, "tur: oom\n"); abort(); }
+            snprintf(out, n, "(int64_t)(intptr_t)(%s)", iv);
+            return out;
+        }
+        return NULL;
+    }
+    /* target_is_ptr */
+    if (rec_ptr || rec_voidp) return NULL;
+    if ((init_cn && strcmp(init_cn, "int64_t") == 0) || rec_i64 ||
+        strncmp(iv, "(int64_t)", 9) == 0) {
+        size_t n = strlen(iv) + strlen(target_c) + 32;
+        char *out = (char *)malloc(n);
+        if (!out) { fprintf(stderr, "tur: oom\n"); abort(); }
+        snprintf(out, n, "(%s)(intptr_t)(%s)", target_c, iv);
+        return out;
+    }
+    return NULL;
+}
+
 /* let-returning-noncapturing-lambda-ices-at-merge-temp: true when a merge temp
  * of type `t` must be declared with the FAT-HANDLE spelling (`void *`, the
  * { thunk, env... } box) rather than a thin `R (*)(A...)` function pointer.
@@ -3917,6 +3997,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     const char *saved_frame = ctx->frame_var;
     char *frame_var = fresh_frame(ctx);
     ctx->frame_var = frame_var;
+    emit_frame_note_parent(frame_var, saved_frame);
 
     /* Emit frame declaration and init */
     indent_buf(body, ctx->indent);
@@ -4495,7 +4576,7 @@ static bool spec_abi_spells_ctype(EmitCtx *ctx, const char *cty) {
 
 /* Emit the propagation check that returns a zero of the enclosing function's C
  * return type when a panic signal is pending (panic-return-signal, always-on). */
-static void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
+void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
     const char *rt = ctx->current_fn_ret_ctype;
     /* BR3b: inside the stackless trampoline a fallible reader call routes its
      * panic to the driver's `for(;;)` unwind loop with `break`, never a `return`
@@ -4505,15 +4586,48 @@ static void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
         buf_puts(body, "if (tur_panicking) break;\n");
         return;
     }
+    /* defer-in-generic-hof-skipped-on-caught-panic: this early return leaves
+     * the enclosing function, so every defer frame the function has open
+     * (`ctx->frame_var` and its parents -- all frames of THIS function; a
+     * lifted closure body starts with frame_var = NULL) must fire first,
+     * exactly as the normal-exit `tur_frame_fire_lifo` at scope end would.
+     * A panic raised at a site that already fired the chain through
+     * `global_panic_frame` is harmless here: `tur_frame_fire_lifo` zeroes
+     * `f->n`, so the second pass is a no-op.  Without this, a defer in a
+     * function whose callee panics under `catch-unwind` was silently
+     * skipped on the direct-call path (the CPS path only fired it because
+     * its `ret ctype unknown` arm below never propagated at all). */
+    /* defer-frame-chain-must-not-escape: fire the lexical chain frame by
+     * frame through the INLINED `tur_frame_fire_lifo`, innermost first --
+     * never `tur_frame_fire_chain(&frame)`.  That helper lives in the split
+     * runtime's archive (and is a non-inline `static` in the monolithic
+     * preamble), so passing `&frame` to it made the frame escape and forced
+     * GCC to materialise all 536 bytes of it in every activation; a 20000-deep
+     * recursion whose rc scope owns one frame then overflowed the 2 MiB
+     * Windows stack (`gc-registry-growth` under the split runtime).  The
+     * chain is the parents recorded at each frame's declaration, which is the
+     * same list `tur_frame_fire_chain` would walk at run time. */
+    const char *fire_pre = "", *fire_post = "";
+    char fire_buf[1024];
+    if (ctx->frame_var) {
+        size_t off = (size_t)snprintf(fire_buf, sizeof(fire_buf), "{ ");
+        for (const char *f = ctx->frame_var; f && off < sizeof(fire_buf) - 64;
+             f = emit_frame_parent(f))
+            off += (size_t)snprintf(fire_buf + off, sizeof(fire_buf) - off,
+                                    "tur_frame_fire_lifo(&%s); ", f);
+        fire_pre = fire_buf;
+        fire_post = " }";
+    }
     indent_buf(body, ctx->indent);
     if (rt && strcmp(rt, "void") == 0) {
-        buf_puts(body, "if (tur_panicking) return;\n");
+        buf_printf(body, "if (tur_panicking) %sreturn;%s\n", fire_pre, fire_post);
     } else if (rt) {
         /* A zero of the exact declared return type propagates the signal.
          * S1: `((T)0)` for scalars -- c2mir rejects a scalar compound literal,
          * and this is the highest-volume `(T){0}` site in the emitter. */
         char *rzero = emit_c_zero_of(rt);
-        buf_printf(body, "if (tur_panicking) return %s;\n", rzero ? rzero : "0");
+        buf_printf(body, "if (tur_panicking) %sreturn %s;%s\n", fire_pre,
+                   rzero ? rzero : "0", fire_post);
         free(rzero);
     } else {
         /* D1a prototype limit: the enclosing function's C return type is not
@@ -14247,13 +14361,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * emits a plain identifier too, but its address is not a
              * link-time constant, and a computed fn value never is.  Across the
              * fixture corpus this covers 4307 of 4334 boxing sites. */
+            /* any-fn-widen-through-local-binding-leaks: a LOCAL alias of a
+             * global fn (`(let [f (fn ...)] (peek f))`) boxes the same
+             * link-time constant; see through it (widen_fn_alias, set at the
+             * let for an immutable binding) and spell the GLOBAL's name so the
+             * static box is keyed and initialised on the constant, not on the
+             * local. */
+            const Binding *sb_b = (inner->kind == EX_VAR) ? inner->as.var.binding : NULL;
+            if (sb_b && !sb_b->is_global && sb_b->widen_fn_alias)
+                sb_b = sb_b->widen_fn_alias;
             if (e->as.fn_to_fat_.static_ok &&
-                inner->kind == EX_VAR && inner->as.var.binding &&
-                inner->as.var.binding->is_global &&
-                !inner->as.var.binding->closure_fn_binding &&
-                !inner->as.var.binding->is_param &&
-                !inner->as.var.binding->is_poly_fn &&
-                !inner->as.var.binding->is_fat) {
+                sb_b && sb_b->is_global &&
+                !sb_b->closure_fn_binding &&
+                !sb_b->is_param &&
+                !sb_b->is_poly_fn &&
+                !sb_b->is_fat) {
+                if (sb_b != inner->as.var.binding) {
+                    free(fnptr);
+                    fnptr = atom_var(ctx, sb_b);
+                }
                 char shim_name[64];
                 if (!typed_shim)
                     snprintf(shim_name, sizeof shim_name, "__tur_fatshim%u",

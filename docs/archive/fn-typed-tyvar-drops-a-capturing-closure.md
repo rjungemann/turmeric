@@ -12,7 +12,21 @@ time and invisible before it. The narrowness is what keeps it from being
 higher: it needs a type parameter instantiated to a function type, which is
 mostly reached through `cata`-shaped code.
 
-**Status: OPEN.** Found 2026-09-09 while verifying an adjacent claim in the
+**RESOLVED 2026-09-11.** Fix direction 1 found the missing word in one diff:
+the consumer bound `g` as a thin `int64_t (*)(int64_t)` and called it thin,
+while the capturing lambda returned a fat `{thunk, env}` box.  The cause was
+an asymmetry in the elaborator: a `defn` whose declared result is a fn type
+and whose body yields a capturing closure marks that result `boxed`
+(boxed-fn-typed-closure-return), but a LAMBDA with the same shape only
+recorded `returns_boxed_closure` and left its declared result thin -- so `A`
+instantiated to the thin fn type.  `elab_fn` (`src/compiler/elab_fns.c`) now
+applies the same marking under the same guards; `A := (fn [int] int){boxed}`,
+and the consumer dispatches through the fat thunk protocol exactly as the
+concretely-typed `app2` twin already did.  A captureless lambda is untouched.
+Pinned by `tests/fixtures/fn-typed-tyvar-capturing-closure` (the report's
+three variations plus a direct call).  Zero snapshot churn.
+
+**Status (at filing): OPEN.** Found 2026-09-09 while verifying an adjacent claim in the
 `turmeric-spices` docs (see "Related" below). Confirmed **pre-existing**: a
 binary built from `main` at `70f079975` (v0.46.0), with no local changes,
 crashes identically.

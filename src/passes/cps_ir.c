@@ -3506,6 +3506,24 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 return build_letraw(b, e, x, ac);
             }
+            /* all-any-fn-param-is-unusable: a callee BINDING with no FnDef
+             * behind it is a fn VALUE (a fn-typed param or local), not a name
+             * the CT_LETCALL / CT_TAILCALL arms can spell as `f(args)` -- that
+             * emitted `__t1 = f(__t0)` against an `int64_t f` for
+             * `(defn tany [f : (fn [any] any)] : any (f (:: 4.5 any)))`, a hard
+             * cc error.  Route it exactly like the binding-less indirect call
+             * above: delegate with atomic args, otherwise evict. */
+            if (!fn->source_fn_def && !callee_colored(b, fn)) {
+                if (!call_args_atomic(e)) {
+                    CTerm *t = new_term(b, CT_UNSUPPORTED);
+                    t->as.unsupported.why = "indirect call (non-atomic args)";
+                    return t;
+                }
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return build_letraw(b, e, x, ac);
+            }
             Pending p = {0};
             uint32_t n = e->as.call_.n_args;
             CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
@@ -3993,6 +4011,16 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * to the direct emitter (monomorphized callee names). */
             if (!callee_colored(b, fn) && call_args_delegatable(b, e))
                 return build_letraw(b, e, x, rest);
+            /* all-any-fn-param-is-unusable: see the tail-position twin -- a fn
+             * VALUE callee never takes the named CT_LETCALL arm. */
+            if (!fn->source_fn_def && !callee_colored(b, fn)) {
+                if (!call_args_atomic(e)) {
+                    CTerm *t = new_term(b, CT_UNSUPPORTED);
+                    t->as.unsupported.why = "indirect call (non-atomic args)";
+                    return t;
+                }
+                return build_letraw(b, e, x, rest);
+            }
             Pending p = {0};
             uint32_t n = e->as.call_.n_args;
             CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));

@@ -1,5 +1,32 @@
 # Generated C has type errors that GCC >= 14 rejects
 
+> **RESOLVED (final, 2026-09-11).** The two `-Wno-error` downgrades are gone
+> from every `cc` invocation in `src/main.c` (its comment there cites this
+> file): every front the split below named was bridged at emit time -- String
+> returns, cloneable-frame call args, cps->direct spawn / `void *` params,
+> closure-env `void *` fields, `__ps_N` binder-init crossings, the Saffron D5
+> container seam (2026-09-08), and lastly the module-level `def` /
+> `^thread-local` / `set!` stores (`global-def-store-misses-int-ptr-bridge`,
+> 2026-09-11) -- and `tests/run.sh`'s pointer/integer ratchet fails any fixture
+> whose build prints `-Wint-conversion` or `-Wincompatible-pointer-types`; the
+> corpus is at zero.  A new straddle fails the build, as the report asked.
+>
+> A copy of this report had been re-filed in `docs/reported/` after the July
+> archive and picked up the 2026-09-08 note below; that copy is removed and the
+> note folded in here.
+>
+> 2026-09-08 note from the re-filed copy: **One instance IS fixed
+(2026-09-08): the Saffron D5 boundary seam over a container.** That cast was
+spelled from the target's bare `TypeKind` (`type_simple(kind)`), which for a
+heap ADT app collapses to the int64 carrier, so the emitted C assigned an
+integer to a typed pointer -- and an unannotated container parameter is the
+Saffron dialect's headline case, so it did not build at all from GCC 14 on.
+Fixed by spelling the cast from the resolved target type when that names a
+pointer; pinned by `tests/fixtures/saffron-container-param-cast-shape`, which
+fails on `run.sh`'s existing pointer/integer ratchet without the fix. The
+ratchet was already correct -- what was missing was a fixture exercising this
+shape. The rest of this report stands.
+
 > **Archived 2026-07-19 -- SPLIT into focused, independently-tractable reports;
 > partial progress landed.** Investigation showed this umbrella spans a pervasive,
 > multi-front carrier-ABI-vs-typed-pointer boundary across many codegen sites plus

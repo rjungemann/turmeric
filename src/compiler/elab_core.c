@@ -2416,6 +2416,7 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
     }
     b->closure_fn_binding = NULL;
     b->returns_closure_fn_binding = NULL;
+    b->widen_fn_alias = NULL;
     b->is_moved = false;  /* Phase 5: move semantics */
     b->moved_at = SPAN_UNKNOWN;
     b->no_unwind = false;  /* Phase R5: #[no-unwind] attribute */

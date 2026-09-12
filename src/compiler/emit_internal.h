@@ -855,6 +855,17 @@ bool emit_str_is_bare_ident(const char *s);
  * `want_ctype`, and is that type a by-value aggregate?  Shared by every
  * carrier->concrete bridge so the copies cannot drift.  See emit_expr.c. */
 bool emit_value_is_recorded_as(const char *v, const char *want_ctype);
+/* global-def-store-misses-int-ptr-bridge: the int64<->pointer bridge for a
+ * STORE (module-level def init, thread-local init return, `set!`).  Returns a
+ * malloc'd bridged spelling of `iv` or NULL when no bridge is needed. */
+char *emit_store_int_ptr_bridge(EmitCtx *ctx, const char *target_c,
+                                const char *iv, const struct Expr *init);
+/* cps-body-panic-not-propagated: the per-call-site panic-signal check.  Emits
+ * `if (tur_panicking) return <zero of ctx->current_fn_ret_ctype>;` (firing the
+ * function's open defer frames first), or `break` inside the stackless
+ * trampoline.  Shared with the CPS emitter, whose own cps->direct call sites
+ * bypass emit_value and so bypassed the check. */
+void emit_panic_signal_return(EmitCtx *ctx, Buf *body);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);
@@ -1086,6 +1097,18 @@ bool catch_box_binding_reader_confined(const Expr *body, const Binding *b,
 bool expr_has_multishot_handler(const Expr *e);
 char *fresh_tmp(EmitCtx *ctx);
 char *fresh_frame(EmitCtx *ctx);
+/* defer-frame-chain-must-not-escape: the lexical parent of each emitted
+ * `tur_frame` (recorded where the frame is declared, i.e. the `saved_frame`
+ * the scope was opened under), so a scope-leaving early return can fire the
+ * chain frame by frame through the INLINED `tur_frame_fire_lifo` instead of
+ * handing `&frame` to the archive-resident `tur_frame_fire_chain`.  That
+ * opaque call forced every frame to be materialised (536 bytes per lexical
+ * scope, per recursion level): under the split runtime `gc-registry-growth`'s
+ * 20000-deep recursion overflowed the 2 MiB Windows stack, exactly the cliff
+ * docs/archive/cc-path-split-windows-and-hamt-findings.md describes.  NULL
+ * parent = a function-outermost frame. */
+void emit_frame_note_parent(const char *frame, const char *parent);
+const char *emit_frame_parent(const char *frame);
 char *fresh_defer_thunk(EmitCtx *ctx);
 char *fresh_defer_env(EmitCtx *ctx);
 void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,

@@ -1,5 +1,17 @@
 # turi: single-scope defers at function exit fire FIFO, not LIFO (interpreter/compiled divergence)
 
+> **CORRECTION 2026-09-11 (defer-unwind-innermost-first).** The "scopes fire
+> outer-first on an early exit" half of the ordering described below was the
+> compiled `tur_frame_fire_chain`'s loop direction (frames collected inner to
+> outer, then walked backwards), not a design: it made a function's cleanup
+> order depend on how it left (normal exit already unwound innermost-first),
+> and it released an outer guard before the inner resource it guarded -- an
+> order no other language's `defer` / `finally` / RAII uses. Both back ends now
+> unwind **innermost scope first, same-scope LIFO** on every exit path. The
+> same-scope LIFO fix below stands; only the cross-scope direction changed.
+> `tests/fixtures/defer-tail-scope-order` and `defer-early-return` pin the new
+> order.
+
 > **RESOLVED 2026-06-14.** The interpreter now mirrors the compiled
 > `tur_frame_fire_chain` two-level ordering: **same-scope LIFO**, and on an early
 > exit (return / throw / panic) **scopes fire outer-first**. Three pieces landed

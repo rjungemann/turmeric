@@ -2,6 +2,80 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+**Next release must be a MINOR bump (`/cut-minor-release`, not
+`/cut-patch-release`):** the defer unwind-order change below is a
+user-visible semantic change, not a fix.
+
+### Changed
+
+- **`defer` unwinds innermost scope first on every exit path.** On a `return`,
+  a `throw`, or a caught panic, nested scopes used to fire their defers
+  OUTERMOST first (the compiled `tur_frame_fire_chain` walked the frame chain
+  backwards, and the interpreter had been made to mirror it), while a normal
+  exit already unwound innermost first as scopes ended -- so a function's
+  cleanup order depended on how it left, and an outer guard was released
+  before the inner resource it guarded. Both back ends now unwind innermost
+  first with same-scope LIFO, the order every other language's `defer` /
+  `finally` / RAII uses. A program that relied on the old cross-scope order
+  on an early exit sees its cleanups run in the opposite order. Pinned by
+  `tests/fixtures/defer-early-return` and `defer-tail-scope-order`.
+- **A duplicate `definstance` is an error (`TUR-E0025`).** A user instance
+  for a `(class, type)` the autoloaded stdlib already covers -- `(definstance
+  Eq [int] ...)` -- used to be dropped with the stdlib's definition winning
+  (silently, then with a warning). It is now rejected, the conventional
+  overlapping-instance rule; the message points at the newtype route, and a
+  stdlib file loaded twice stays a silent no-op.
+- **`bt-scope` and `with-untrailed` are panic-safe.** Both brackets are now
+  `defer`-based, so a panic inside the body that an enclosing `catch-unwind`
+  catches undoes the trail level (`bt-scope`) and resumes trailing
+  (`with-untrailed`). The "a panic inside `body` skips the undo" caveat is
+  gone from the docstrings and the backtrackable-state guide.
+
+### Fixed
+
+- **A caught panic now propagates through CPS-colored functions.** On the
+  DK/CPS path (any function taking a `^fat` thunk, or otherwise
+  effect-colored) every per-call-site panic check emitted only a comment, so
+  a function whose callee panicked under `catch-unwind` -- or which panicked
+  itself -- ran the rest of its body and its whole continuation before the
+  catch saw the flag. The interpreter ran none of it.
+- **A `defer` in a function whose callee panics under `catch-unwind` now
+  fires** on the direct-call path; the panic-signal early return skipped the
+  function's open defer frames. This was the report filed against generic
+  HOFs; the `[A]` was incidental (the mono twin was on the CPS path).
+- **`--interpret` no longer fires a scope's defers before a tail call.** The
+  frame-reusing tail call fired the activation's defers as "frame completion"
+  before entering the callee, so `(defer (println "d")) (shout)` printed `d`
+  first. The reuse is now gated on an empty defer chain, matching the
+  compiler's "defers break tail" rule.
+- **A declared all-`any` function parameter is usable compiled.**
+  `(defn tany [f : (fn [any] any)] : any (f (:: 4.5 any)))` failed in `cc`
+  (the CPS backend spelled the parameter as a named callee), and handing an
+  `any`-held function to such a parameter panicked at the seam (the cast
+  checked the bare fn id where the box carries the fat all-`any` one). Both
+  fixed; the Saffron fuzzer's `route_seam_fn` shape is back in its pool.
+- **A capturing closure passed through a type parameter instantiated to a
+  function type no longer crashes (SIGBUS).** A lambda declared
+  `: (fn [int] int)` whose body is a capturing closure now marks that result
+  `boxed` like a `defn` already did, so the consumer dispatches through the
+  fat thunk protocol instead of calling the env box as code.
+- **`--interpret`: `type-of` on an `any` holding an inline-C-built opaque value
+  answers the opaque's name** (`Route`), as the compiled path does, instead of
+  `adt`; the inline-C result path no longer re-tags an opaque's word as a
+  struct pointer, which also removes the last way that path could dereference
+  a large integer.
+- **Widening a let-bound function to `any` no longer leaks a box per widen.**
+  `(let [f (fn ...)] (peek f))` malloc'd a 24-byte shim box that nothing freed,
+  unbounded in a loop; the binding is now recorded as an alias of the lifted
+  global, and the widen hoists the same static box a direct widen uses.
+- **Module-level `def`, `^thread-local` init and `set!` stores bridge the
+  int64/pointer carrier duality,** so `(def hub-mutex (:: (mutex-new) :int))`
+  no longer emits `int64_t g = <void * temp>;` -- a hard error under GCC >= 14
+  and clang >= 21. The `let` binder already bridged it; the four store sites
+  now share its helper.
+
 ## [0.46.1] -- 2026-09-11
 
 ### Changed
