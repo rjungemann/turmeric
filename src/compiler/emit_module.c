@@ -3663,8 +3663,10 @@ static bool body_has_dispatch_on_app_tyvar(
         e->as.call_.fn_binding->source_fn_def &&
         e->as.call_.fn_binding->source_fn_def->body &&
         e->as.call_.fn_binding->fn_constraints &&
-        e->as.call_.fn_binding->fn_constraints->n_constraints > 0 &&
-        e->as.call_.n_abi_bindings > 0) {
+        e->as.call_.fn_binding->fn_constraints->n_constraints > 0) {
+        /* No `n_abi_bindings > 0` requirement: a constrained callee whose tyvar
+         * reaches no parameter pins NOTHING at the call, so it has none -- and
+         * that is exactly the case the class translation below serves. */
         AbiTypeBinding inner[ABI_TYPE_BINDINGS_MAX];
         uint8_t ni = 0;
         bool grounded = false;
@@ -3686,6 +3688,27 @@ static bool body_has_dispatch_on_app_tyvar(
             inner[ni].name = e->as.call_.abi_bindings[i].name;
             inner[ni].type = t;
             ni++;
+        }
+        /* Nothing above could ground a callee whose tyvar reaches no parameter.
+         * Take it from the frame we are in, matched by constraint CLASS -- the
+         * same translation the fn-value arm below uses. */
+        if (ni < ABI_TYPE_BINDINGS_MAX) {
+            AbiTypeBinding xc[ABI_TYPE_BINDINGS_MAX];
+            uint8_t nxc = emit_translate_bindings_by_class(
+                e->as.call_.fn_binding->fn_constraints, g_bhd_caller_cs,
+                bindings, n_bindings, xc, ABI_TYPE_BINDINGS_MAX);
+            for (uint8_t k = 0; k < nxc && ni < ABI_TYPE_BINDINGS_MAX; k++) {
+                bool present = false;
+                for (uint8_t m = 0; m < ni; m++)
+                    if (inner[m].name && xc[k].name &&
+                        strcmp(inner[m].name, xc[k].name) == 0) {
+                        present = true;
+                        break;
+                    }
+                if (present) continue;
+                inner[ni++] = xc[k];
+                grounded = true;
+            }
         }
         /* Only when something actually became concrete -- a relay that stays
          * abstract cannot select an instance and must not mint a spec. */
@@ -4773,6 +4796,54 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 }
             }
             if (any) { bindings = rehydrated; family_elem_rehydrated = true; }
+        }
+    }
+
+    /* direct-call-does-not-inherit-caller-tyvar-binding: a constrained callee
+     * whose tyvar reaches NO parameter pins nothing at the call, so it arrives
+     * here with zero bindings and the gate below drops it -- leaving the base
+     * body's baked representative to run for every instantiation.
+     *
+     * The enclosing specialization does know which instance serves the class.
+     * Take it from there, matched by CLASS (never by tyvar name -- that was the
+     * alpha-rename trap), which is what a dictionary means: the caller holds
+     * one for class C, the callee needs one, pass it.  Without this a generic
+     * PASSED as a value inherited while the same generic CALLED did not.
+     *
+     * Must sit BEFORE the zero-bindings gate: that gate is the exit this case
+     * was taking, so an augmentation placed after it never ran.
+     *
+     * Only ADDS what the call site could not supply; an existing binding always
+     * wins, so a callee whose tyvar IS pinned by its arguments is untouched. */
+    AbiTypeBinding inherited[ABI_TYPE_BINDINGS_MAX];
+    if (call->as.call_.fn_binding->fn_constraints &&
+        call->as.call_.fn_binding->fn_constraints->n_constraints > 0 &&
+        ctx->current_abi_specialization &&
+        ctx->current_abi_specialization->n_bindings > 0 &&
+        ctx->current_abi_specialization->fn &&
+        ctx->current_abi_specialization->fn->binding &&
+        n_bindings < ABI_TYPE_BINDINGS_MAX) {
+        const EmitAbiSpecialization *encl = ctx->current_abi_specialization;
+        AbiTypeBinding xl[ABI_TYPE_BINDINGS_MAX];
+        uint8_t nxl = emit_translate_bindings_by_class(
+            call->as.call_.fn_binding->fn_constraints,
+            encl->fn->binding->fn_constraints,
+            encl->bindings, encl->n_bindings, xl, ABI_TYPE_BINDINGS_MAX);
+        if (nxl > 0) {
+            uint8_t na = 0;
+            for (; na < n_bindings && na < ABI_TYPE_BINDINGS_MAX; na++)
+                inherited[na] = bindings[na];
+            for (uint8_t i = 0; i < nxl && na < ABI_TYPE_BINDINGS_MAX; i++) {
+                bool present = false;
+                for (uint8_t j = 0; j < n_bindings; j++)
+                    if (bindings[j].name && xl[i].name &&
+                        strcmp(bindings[j].name, xl[i].name) == 0) {
+                        present = true;
+                        break;
+                    }
+                if (!present) inherited[na++] = xl[i];
+            }
+            if (na > n_bindings) { bindings = inherited; n_bindings = na; }
         }
     }
 
@@ -5877,7 +5948,12 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * one spec and one inner clone, and whichever element was emitted first
      * wins for both.  Exactly the collapse the match_bindings flag was added
      * for (see its comment in emit_abi_intern_spec); ask for it here too. */
-    bool spec_match_bindings = inner_app_annotated;
+    /* An instance-only specialization shares its C signature with every
+     * sibling, so bindings are the only thing telling them apart.  Without this
+     * the callee's two clones dedup into one body and both enclosing specs call
+     * it.  Gap H then names the siblings `__h<n>`. */
+    bool spec_match_bindings = inner_app_annotated ||
+                               (!abi_changes && instance_changes);
     EmitAbiSpecialization *spec = emit_abi_intern_spec(
         ctx, fn_binding, fn_expr, fd, bindings, n_bindings,
         arg_types, n_spec_args, result_type, call, spec_match_bindings);

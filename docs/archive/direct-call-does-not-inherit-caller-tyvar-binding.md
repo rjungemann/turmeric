@@ -5,8 +5,8 @@ ambiguous to begin with -- see "Is it even well-formed". What makes it worth
 recording is that the compiled path now answers the SAME question two different
 ways depending on whether the generic is called or passed.
 
-**Status:** open. Found 2026-09-12 narrowing the turi fn-value case; the
-direct-call half is pre-existing.
+**Status: RESOLVED** 2026-09-12, on both back ends. Found narrowing the turi
+fn-value case; the direct-call half was pre-existing.
 
 ## Repro
 
@@ -70,7 +70,7 @@ genuinely ambiguous and is skipped rather than guessed.
 
 **Both paths are now class-keyed** (`emit_translate_bindings_by_class` in the
 emitter; `frame_lookup_dict` in `src/turi/eval.c`'s `EX_VAR` capture), and
-`tests/fixtures/constrained-generic-as-fn-value` carries alpha-renamed rows on
+`tests/fixtures/constrained-generic-instance-inheritance` carries alpha-renamed rows on
 both back ends so it cannot regress to name matching.
 
 ## Not this
@@ -81,51 +81,37 @@ separate reason recorded in
 Its fn-value half is fixed; its direct-call half tracks THIS report, since there
 is no binding to capture in the first place.
 
-## What remains open, mapped
+## Root cause -- one guard, in three places
 
-Attempted 2026-09-12 and **not landed**; the attempt is recorded because it
-narrowed the gap to one specific step and the first two sub-fixes are known to
-work.
+Every attempt stalled on the same shape of gate: **`if (n_abi_bindings > 0)`**.
+A constrained callee whose tyvar reaches no parameter pins nothing at the call,
+so it arrives with zero bindings -- and each of these treated "no bindings" as
+"nothing to do", when it is precisely the case that needs the caller's
+dictionary:
 
-First, a detail that argues the current answer is arbitrary rather than chosen:
-**the two back ends pick DIFFERENT wrong instances.**
+| Site | What it skipped |
+| --- | --- |
+| the relay probe's entry guard (`emit_module.c`) | the caller never specialized, so there was no dictionary to inherit from |
+| `emit_abi_register_call`'s zero-bindings gate | the call bailed before reaching the intern -- this is the step that took the longest to find, because the call IS scanned with the correct enclosing spec and takes none of that function's `return;` sites; it exits through this gate's body |
+| `frame_record_abi`'s call guard (`turi/eval.c`) | the interpreter never recorded anything for such a call |
 
-```
-compiled:     9  9  9 12     (viadirect answers with Gmax twice)
-interpreted: 12 12  9 12     (viadirect answers with Gsum twice)
-```
+Two supporting fixes were also needed:
 
-Three sub-gaps, each measured separately:
+- `spec_match_bindings` had to gain the `(!abi_changes && instance_changes)`
+  arm, or the callee's two clones -- which share a C signature and differ only
+  in bindings -- dedup into one body and both enclosing specs call it.
+- The inheritance is keyed on the constraint's **CLASS**, never the tyvar name.
+  Keying on names makes a generic's meaning depend on the spelling of a bound
+  variable; see the alpha-rename section above.
 
-1. **The relay probe never fires.** Its guard requires
-   `n_abi_bindings > 0`, and a callee whose tyvar reaches no parameter pins
-   nothing at the call, so it has none. Dropping that requirement and
-   class-translating the frame's bindings onto the callee's tyvars (the same
-   `emit_translate_bindings_by_class` the fn-value path uses) **works**:
-   `viadirect` then gets two specializations and `main` calls them distinctly.
-   Verified in the emitted C.
+The interpreter resolves the class through `frame_lookup_dict`, falling back to
+walking the caller's bound types for the one implementing the class when the
+frame carries a `TyvarBind` without ever installing a dictionary (a plain
+constrained defn does exactly that). Two bound types implementing one class is
+genuinely ambiguous and is skipped rather than guessed.
 
-2. **The callee's clones dedup.** `spec_match_bindings = inner_app_annotated`
-   is false for an instance-only specialization, whose siblings share one C
-   signature and differ only in bindings. It needs the same
-   `(!abi_changes && instance_changes)` arm the fn-value intern has.
+## Fixture
 
-3. **The inner call is not re-interned per enclosing spec -- the step that
-   blocks it.** With 1 and 2 applied, both `viadirect` specializations still
-   call the SAME `vjoin` clone. The call is scanned inside each spec with the
-   correct enclosing spec (`outer=viadirect__spec__...` and `...__h1`,
-   confirmed by instrumentation), but it never reaches
-   `emit_abi_intern_spec`/`emit_abi_record_specialized_call` in
-   `emit_abi_register_call` -- and the exit point was **not pinned**: it takes
-   none of that function's instrumented `return;` sites either. Something
-   between scan and intern skips it. That is where the next attempt should
-   start, and it is the only step still unknown.
-
-The (call, outer-spec) key the specialized-call table already uses is the right
-shape for this, so once the inner call interns per enclosing spec the lookup
-should follow without further work.
-
-## Fixture owed
-
-The repro above asserting `9 12 9 12`, plus an alpha-renamed sibling, once the
-direct-call half resolves through the class the way the fn-value half does.
+`tests/fixtures/constrained-generic-instance-inheritance` -- ten rows: passed
+and called, each at two instances, each with an alpha-renamed sibling, plus the
+direct-dispatch control. Runs on **both** back ends with no marker.

@@ -96,7 +96,7 @@ before the growth.
 
 ## Fixture
 
-`tests/fixtures/constrained-generic-as-fn-value` asserts the two direct calls
+`tests/fixtures/constrained-generic-instance-inheritance` asserts the two direct calls
 (the control, correct throughout) and the two fn-value calls, so a regression
 that repairs only the controls is not mistaken for a fix.
 

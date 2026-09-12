@@ -163,7 +163,7 @@ the type environment into the value, which is what a dictionary is. Gated to a
 captureless closure whose FnDef actually carries constraints and whose tyvar the
 frame really binds, so the ordinary path allocates nothing.
 
-`tests/fixtures/constrained-generic-as-fn-value` now runs under `--interpret`
+`tests/fixtures/constrained-generic-instance-inheritance` now runs under `--interpret`
 with no marker (turi harness 2056 passed / 0 failed, up one).
 
 **This did not fix the rest of this report.** The four fixtures below still
