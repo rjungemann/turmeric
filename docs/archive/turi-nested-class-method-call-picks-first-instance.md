@@ -6,7 +6,52 @@ is a **silent wrong answer**, which is strictly worse than the crash the
 original repro produced. Confined to `--interpret`; the compiled path is
 correct.
 
-**Status:** open. Found 2026-09-11 while fixing the compiled half,
+**Status: RESOLVED 2026-09-13.**  `src/turi/eval.c`'s driver now recovers the
+dispatch tyvar by looking THROUGH a class-method-call receiver, which is the
+interpreter counterpart of `emit_reresolve_disp_type`'s fix (different
+mechanism, same recovery).
+
+The gates in the driver's `EX_CALL` all ask about a type that is a TYVAR: the
+receiver's, the call's own head, or a carrier-helper's declared result.  A
+receiver that is itself a class-method call defeats every one of them, because
+its elaborated type is the REPRESENTATIVE instance's concrete type.  So the
+outer call found no frame dictionary and ran the representative's body against
+the real instance's values.  `turi_nested_same_class_disp_tyvar` walks that
+receiver (depth-capped) for the tyvar the inner call dispatches on and feeds it
+to the existing `frame_lookup_dict_tyvar` path -- no new dispatch mechanism, no
+return of the retired head-name heuristics.
+
+**It took two rounds, and the second is the one the report did not predict.**
+The same-class walk alone fixed the headline repro, the `defopaque` newtype
+symptom, and `typeclass-nullary-method-newtype-tyvar`, but left every LATTICE
+law wrong.  Those are shaped `(eq? (join x y) y)`: the receiver is a
+JoinSemilattice call and the dispatching call is `Eq`'s -- a CROSS-class
+receiver.  The walk now accepts one, guarded by the inner method's declared
+class return: it must BE that class's type variable (`join : a -> a -> a`), so
+the value really does carry the inner call's dispatch type.  A method returning
+anything else (`len : a -> int`) pins nothing about this call and is declined --
+guessing there would be the head-name matching the retired heuristics were
+removed for.
+
+That second half also corrects this report's own measurement table, which
+records `(eq? (combine x y) (combine y x))` inside a constrained generic as "ok"
+on both back ends.  It is ok when the generic is defined in the MAIN file and
+wrong when it is defined in a `load`ed module (which is where every stdlib law
+lives) -- so the trigger was never nesting alone, and a probe written in one
+file could not see it.
+
+All four `requires.compiled` markers naming this report are removed, as the
+report instructed, and their already-written assertions now run under
+`--interpret`: `typeclass-nested-method-call-float`,
+`typeclass-lattice-semigroup-monoid`, `typeclass-lattice-join-meet`,
+`typeclass-nullary-method-newtype-tyvar`.  A new
+`tests/fixtures/turi-nested-class-method-dispatch` pins all three shapes
+directly -- the hard error, the newtype silent wrong answer, and the cross-class
+lattice shape -- plus the flat controls that were already correct.
+
+Suites: `run-turi.sh` 2065 passed, 0 failed; `run.sh` 2975 passed, 0 failed.
+
+Found 2026-09-11 while fixing the compiled half,
 [nested-class-method-call-picks-the-first-instance](../archive/nested-class-method-call-picks-the-first-instance.md).
 Pre-existing: that fix touched only `src/compiler/emit_core.c`, and this
 reproduces identically before and after it.

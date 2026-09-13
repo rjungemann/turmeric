@@ -1,0 +1,54 @@
+; Regression (turi-nested-class-method-picks-first-instance): the INTERPRETER
+; resolved a class-method call whose RECEIVER is itself a class-method call to
+; the first-declared instance, because that receiver's elaborated type is the
+; representative's concrete type rather than a tyvar -- so none of the driver's
+; tyvar gates fired and the frame dictionary was never consulted.
+;
+; Two symptoms from one cause: a hard error where the wrong instance's body
+; uses an operator the real values cannot take, and a SILENT WRONG ANSWER over
+; a newtype where both instances typecheck.  The compiled path was always
+; correct, so a turi cross-check was not the oracle it looked like.
+(defclass JS [a] (join [x : a y : a] : a))
+(definstance JS [int]  (join [x y] (if (< x y) y x)))   ; first -- the representative
+(definstance JS [cstr] (join [x y] y))
+
+; Nested, same class: was `unknown infix builtin '<'` under --interpret.
+(defn j2 [^JS A] [x : A y : A] : A (join (join x y) y))
+
+; Silent wrong answer: a newtype whose instance disagrees with the
+; representative on values both can accept.
+(defclass SG [a] (comb [x : a y : a] : a))
+(definstance SG [int] (comb [x y] (+ x y)))             ; first -- representative
+(defopaque Diff :int)
+(definstance SG [Diff] (comb [x y] (:: (- (:: x int) (:: y int)) Diff)))
+
+(defn sg-left  [^SG A] [x : A y : A z : A] : A (comb (comb x y) z))
+(defn sg-right [^SG A] [x : A y : A z : A] : A (comb x (comb y z)))
+
+; Cross-class receiver: `eq?`'s receiver is an SG call, not an EQ2 call, and
+; `comb`'s declared result IS SG's class variable -- so it pins the type this
+; call dispatches on.  This is the shape every lattice law uses
+; (`(eq? (join x y) y)`), and it stayed wrong after the same-class half.
+(defclass EQ2 [a] (same? [x : a y : a] : bool))
+(definstance EQ2 [int]  (same? [x y] (= x y)))
+(definstance EQ2 [Diff] (same? [x y] (= (:: x int) (:: y int))))
+
+(defn assoc? [^SG A ^EQ2 A] [x : A y : A z : A] : bool
+  (same? (comb (comb x y) z) (comb x (comb y z))))
+(defn leq? [^SG A ^EQ2 A] [x : A y : A] : bool (same? (comb x y) y))
+
+; Controls that were already correct -- a fix must not regress them.
+(defn j1 [^JS A] [x : A y : A] : A (join x y))
+(defn sg-flat [^SG A] [x : A y : A] : A (comb x y))
+
+(defn main [] : int
+  (println (j2 "a" "b"))
+  (println (j2 3 9))
+  (println (j1 "a" "b"))
+  (println (:: (sg-left  (:: 1 Diff) (:: 2 Diff) (:: 3 Diff)) int))   ; (1-2)-3
+  (println (:: (sg-right (:: 1 Diff) (:: 2 Diff) (:: 3 Diff)) int))   ; 1-(2-3)
+  (println (:: (sg-flat  (:: 1 Diff) (:: 2 Diff)) int))               ; 1-2
+  (println (assoc? (:: 1 Diff) (:: 2 Diff) (:: 3 Diff)))              ; NOT associative
+  (println (assoc? 1 2 3))                                            ; + is
+  (println (leq? (:: 7 Diff) (:: 3 Diff)))                            ; 7-3=4, 4/=3
+  0)

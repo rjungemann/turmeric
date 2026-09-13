@@ -6293,6 +6293,96 @@ static void frame_bind_constraint_dicts(TuriEnv *env, EvalFrame *callee,
     }
 }
 
+/* turi-nested-class-method-call-picks-first-instance: recover the dispatch
+ * tyvar for a method call whose RECEIVER is itself a method call of the SAME
+ * class -- `(join (join x y) y)` inside a `[^JS A]` body.
+ *
+ * The gates in the driver's EX_CALL all ask about a type that is a TYVAR: the
+ * receiver's, the call's own head, or a carrier-helper's declared result.  A
+ * nested same-class receiver defeats every one of them, because its elaborated
+ * type is the REPRESENTATIVE instance's concrete type (whatever `definstance`
+ * came first), not a tyvar.  So the outer call found no dictionary and ran the
+ * representative's body against the real instance's values -- `JS [int]`'s
+ * `(< x y)` on two cstrs, reported as `unknown infix builtin '<'`.  Over a
+ * `defopaque` newtype the same miscall is a silent wrong answer instead.
+ *
+ * This is the turi counterpart of the compiled half's fix
+ * (docs/archive/nested-class-method-call-picks-the-first-instance.md), which
+ * taught `emit_reresolve_disp_type` to look THROUGH such a receiver.  The
+ * mechanism differs -- the interpreter has no emit-side re-resolution -- but
+ * the recovery is the same: the inner call dispatches on some tyvar, and the
+ * outer call, whose receiver IS that inner result, dispatches on the same one.
+ *
+ * Only a same-class receiver is looked through (`instance->typeclass == mtc`).
+ * A different class's method in receiver position says nothing about which
+ * instance of THIS class serves the call, and guessing there would be the
+ * head-name matching the retired heuristics were removed for.  Depth-capped so
+ * a malformed cycle cannot spin. */
+static bool turi_method_returns_class_var(const struct TypeClass *tc,
+                                          const char *mangled_method) {
+    if (!tc || !mangled_method || mangled_method[0] == '\0') return false;
+    if (tc->n_type_params == 0 || !tc->type_params || !tc->type_params[0] ||
+        !tc->type_params[0]->name)
+        return false;
+    const char *cv = tc->type_params[0]->name;
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        const TypeClassMethod *m = &tc->methods[i];
+        if (!m->name || !m->name->name) continue;
+        char mangled[64];
+        tur_mangle_ident(m->name->name, mangled, sizeof(mangled));
+        if (strcmp(mangled, mangled_method) != 0) continue;
+        return m->return_type.kind == TY_TYVAR &&
+               m->return_type.as.tyvar_.name &&
+               strcmp(m->return_type.as.tyvar_.name, cv) == 0;
+    }
+    return false;
+}
+
+static const char *turi_nested_same_class_disp_tyvar(const Expr *recv,
+                                                     const struct TypeClass *mtc,
+                                                     int depth) {
+    if (!recv || !mtc || depth > 8) return NULL;
+    while (recv->kind == EX_ASCRIBE && recv->as.ascribe_.inner)
+        recv = recv->as.ascribe_.inner;
+    if (recv->kind != EX_CALL) return NULL;
+    const Expr *da = recv->as.call_.dict_arg;
+    if (!da || da->kind != EX_DICT || !da->as.dict_.instance ||
+        !da->as.dict_.instance->typeclass)
+        return NULL;
+    /* A DIFFERENT class in receiver position still pins the dispatch type --
+     * but only when that method's declared result IS its own class variable
+     * (`join : a -> a -> a`), so the value handed to this call really does have
+     * the inner call's dispatch type.  That is what `(eq? (join x y) y)` needs:
+     * `eq?`'s receiver is a JoinSemilattice call, and the `A` it dispatches on
+     * is the one `Eq`'s dictionary is keyed by too.  A method returning
+     * something else (`len : a -> int`) pins nothing about this call and is
+     * declined -- guessing there would be the head-name matching the retired
+     * recovery heuristics were removed for. */
+    if (da->as.dict_.instance->typeclass != mtc &&
+        !turi_method_returns_class_var(da->as.dict_.instance->typeclass,
+                                       da->as.dict_.method_name))
+        return NULL;
+    if (recv->as.call_.n_args >= 1 && recv->as.call_.args &&
+        recv->as.call_.args[0]) {
+        const Expr *inner = recv->as.call_.args[0];
+        while (inner->kind == EX_ASCRIBE && inner->as.ascribe_.inner)
+            inner = inner->as.ascribe_.inner;
+        if (inner->type.kind == TY_TYVAR && inner->type.as.tyvar_.name)
+            return inner->type.as.tyvar_.name;
+        const char *deeper = turi_nested_same_class_disp_tyvar(
+            inner, da->as.dict_.instance->typeclass, depth + 1);
+        if (deeper) return deeper;
+    }
+    /* A return-directed inner method (`pure`, `empty`) pins nothing through a
+     * receiver; its own head type is the dispatch position. */
+    {
+        const Type *h = &recv->type;
+        while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+        if (h->kind == TY_TYVAR && h->as.tyvar_.name) return h->as.tyvar_.name;
+    }
+    return NULL;
+}
+
 /* -------------------------------------------------------------------------
  * T2 (turi-eval-trampoline-plan): explicit-stack driver for the linear control
  * forms.  Flattens directly-nested EX_IF branch chains and EX_DO/EX_PROGRAM
@@ -7733,9 +7823,23 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         control->as.call_.args[0]->type.kind == TY_TYVAR;
                     const Type *h = &control->type;
                     while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
-                    if (recv_is_tyvar || h->kind == TY_TYVAR) {
-                        TypeClass *mtc =
-                            control->as.call_.dict_arg->as.dict_.instance->typeclass;
+                    TypeClass *mtc0 =
+                        control->as.call_.dict_arg->as.dict_.instance->typeclass;
+                    /* turi-nested-class-method-call-picks-first-instance: a
+                     * receiver that is itself a SAME-CLASS method call has the
+                     * representative instance's concrete type, not a tyvar, so
+                     * neither gate above fires and the outer call kept the
+                     * representative.  Look through it for the tyvar the inner
+                     * call dispatches on -- the outer call's receiver IS that
+                     * inner result, so they dispatch on the same one. */
+                    const char *nested_tv =
+                        (!recv_is_tyvar && h->kind != TY_TYVAR &&
+                         control->as.call_.n_args >= 1 && control->as.call_.args)
+                            ? turi_nested_same_class_disp_tyvar(
+                                  control->as.call_.args[0], mtc0, 0)
+                            : NULL;
+                    if (recv_is_tyvar || h->kind == TY_TYVAR || nested_tv) {
+                        TypeClass *mtc = mtc0;
                         /* Key the lookup by the dispatch tyvar's NAME so two
                          * same-class dictionaries on the frame (`[^Show K
                          * ^Show V]`) resolve to the one this call dispatches
@@ -7745,7 +7849,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         const char *disp_tv =
                             recv_is_tyvar
                                 ? control->as.call_.args[0]->type.as.tyvar_.name
-                                : h->as.tyvar_.name;
+                                : (h->kind == TY_TYVAR ? h->as.tyvar_.name
+                                                       : nested_tv);
                         struct TypeClassInstance *bound =
                             frame_lookup_dict_tyvar(cf, mtc, disp_tv);
                         if (bound) {
