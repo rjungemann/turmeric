@@ -50,9 +50,10 @@ as a Tier-3 spice (`:cmake-deps` fetches mpack, static-only), modeled on
   `EncodeJson`, `Decode` -> `DecodeJson`, `DecodeChecked` ->
   `DecodeJsonChecked`. Neither spice owns the unqualified spelling. The
   bare method names ship one release as `^deprecated` forwarding shims;
-  the bare *class* names cannot be shimmed and are a hard rename. Full
-  mapping, mechanics and staging in [Naming](#naming-explicit-serde-classes-deprecated-bare-names);
-  the work is phase MPJ.
+  the bare *class* names have no shim today, though a prototyped
+  `defclass-alias` would give them one. Full mapping, mechanics and staging
+  in [Naming](#naming-explicit-serde-classes-deprecated-bare-names); the
+  work is phase MPJ.
 - Owned byte-buffer type `Buf` (length-prefixed, `buf-len` / `buf-data` /
   `buf-free`) as the encode output and decode input carrier.
 - Primitive instances matching json's set: `int`, `bool`, `float`, `cstr`
@@ -250,7 +251,9 @@ below.
 The compiler's `^deprecated` attribute attaches to `defn` and `def` only
 (`src/compiler/elab_fns.c:5573` and `:11208`). There is no `^deprecated`
 on `defclass` and no typeclass-alias form, which splits the rename cleanly
-in two.
+in two. (A `defclass-alias` that removes the second half has since been
+prototyped -- see
+[Closing the class-name gap](#closing-the-class-name-gap-a-deprecated-class-alias).)
 
 **Method names CAN be shimmed.** A constrained generic `defn` forwarding to
 the renamed method keeps `(encode x)` compiling for one release, and the
@@ -358,15 +361,15 @@ names in the **same commit** that introduces them, before any shim reaches
 a downstream caller. A shim should only ever warn about a name the warned
 line actually contains.
 
-### Closing the class-name gap: `^deprecated` on `defclass`
+### Closing the class-name gap: a deprecated class alias
 
 The "class names cannot be shimmed" limit above is a missing compiler
-feature, not a law. Scoped out here because it is the difference between a
-hard break and a clean deprecation for the half of this rename that has no
-migration path at all.
+feature, not a law -- and it is a **smaller** feature than this plan first
+assumed. Prototyped against v0.47.0 on 2026-09-13; everything below is
+measured, not estimated.
 
 **Why the bare names must go regardless.** The alternative -- let both
-spices declare a method named `encode` and distinguish them by class -- is
+spices declare a method named `encode` and tell them apart by class -- is
 not merely bad style, it is a **silent wrong answer** today: two classes
 declaring the same method name compile with zero diagnostics and dispatch
 to whichever instance registered last, so reordering two unrelated
@@ -374,19 +377,56 @@ to whichever instance registered last, so reordering two unrelated
 [same-method-name-in-two-classes-dispatches-by-declaration-order](../../reported/same-method-name-in-two-classes-dispatches-by-declaration-order.md).
 That closes the "could we just keep `encode`?" question: no.
 
-**Feature 1 -- `^deprecated` on `defclass` (small).** The attribute parse is
-a copy of `defn`'s (`elab_fns.c:5573-5603`): `defclass` reads its name at
-`items[1]` (`elab_typeclasses.c:1277`) and everything after is positional,
-so the same "shift the index past `^deprecated` and an optional message
-string" loop drops in. Storage is two fields on `TypeClass`
-(`typeclass.h:86`), mirroring `Binding.is_deprecated` /
-`deprecation_message` (`expr.h:299`).
+**What the prototype does.** One new form, carrying both halves of the
+rename:
 
-Emission is the easy part, because every user-facing class-name site funnels
-through one function -- `typeclass_env_lookup_typeclass`
-(`typeclass.c:86`), a flat scan of one registry. Each caller already has the
-same shape (`lookup; if (!tc) { error; return NULL; }`) and a span in hand,
-so one helper called after each successful lookup covers all of them:
+```turmeric
+(defclass EncodeJson [a] (encode-json [x] : cstr))
+
+(defclass-alias ^deprecated "use `EncodeJson` / `encode-json`"
+  Encode EncodeJson :methods [(encode encode-json)])
+```
+
+With that in place, **unchanged 0.3.0 source compiles, warns, and runs** --
+old class name and old method name together:
+
+```turmeric
+(definstance Encode [int] (encode [x] : cstr ...))   ;; warns, works
+(defn enc [^Encode A] [x : A] : cstr ...)            ;; warns, works
+```
+
+```
+p.tur:10:14: warning: typeclass 'Encode' is deprecated: use `EncodeJson` / `encode-json`
+p.tur:17:17: warning: typeclass 'Encode' is deprecated: use `EncodeJson` / `encode-json`
+```
+
+So the earlier claim in this plan -- that an alias "only half-closes the
+gap" because instance *bodies* still name methods -- **was wrong**. A
+per-method rename map on the alias row closes that half too.
+
+**Cost.** 158 lines across 7 files, and `bash tests/run.sh` stays at
+`2971 passed, 0 failed`. The shape:
+
+| Change | Where |
+| --- | --- |
+| `alias_of` + deprecation fields + method map on `TypeClass` | `typeclass.h:86` |
+| Follow the alias chain in the one lookup chokepoint | `typeclass.c:86` |
+| `elab_defclass_alias` + a `typeclass_warn_if_deprecated` helper | `elab_typeclasses.c` |
+| Warn at each user-facing class-name site | 9 call sites, listed below |
+| Map the written method name to canonical | `elab_typeclasses.c` x3 |
+
+The alias-following lives inside `typeclass_env_lookup_typeclass`
+(`typeclass.c:86`), a flat scan of a single registry -- which is why
+resolution needs no per-site change at all. This is strictly simpler than
+the `defalias` precedent for *types* (`elab_types.c:240`), whose resolution
+is open-coded at four-plus sites in `elab_fns.c` because types have no such
+chokepoint.
+
+The *warning* does need one line per site, because it must not fire for the
+compiler's own internal lookups (`Num` at `elab_call.c:2529`, `Drop`/`Clone`
+at `elab_forms.c:319`, `Serializable` at `elab_effects.c:1257`) -- the user
+did not spell those names. That is the one thing a blanket warning inside
+the lookup function gets wrong. The user-facing sites:
 
 | Site | What the user wrote |
 | --- | --- |
@@ -398,55 +438,55 @@ so one helper called after each successful lookup covers all of them:
 | `elab_fns.c:7507` | `where (Encode a)` clause |
 | `elab_types.c:1460`, `:2722` | constraint inside a type annotation |
 
-The other `typeclass_env_lookup_typeclass` callers look up a *hardcoded*
-class the compiler needs (`Num` at `elab_call.c:2529`, `Drop`/`Clone` at
-`elab_forms.c:319`, `Serializable` at `elab_effects.c:1257`). Those must
-NOT warn -- the user did not spell the name -- which is the one thing a
-blanket warning inside the lookup function would get wrong. Hence the
-helper at call sites rather than in the lookup.
+**Method-name mapping takes exactly three comparisons**, all in
+`elab_typeclasses.c`: the "doesn't match any method of" check (~`:3396`),
+the impl-selection loop (~`:3409`), and a third, easy-to-miss one at
+`:3747` ("doesn't match typeclass method"). The written name is discarded
+after matching -- the emitted symbol is built from `tc->methods[i].name`
+(`:3652`) -- so nothing downstream needs to know a rename happened.
 
-Reuse `TUR-D0001`'s deprecation band and `--Werror=deprecated`
-(`main.c:10304`) so the class warning promotes exactly like the method one.
+**One real hazard, and it is one line.** The emitted instance symbol is
+built at `elab_typeclasses.c:3659` from `tc_name`, *the name the user
+wrote*, while the emit side rebuilds the same string from `tc->name`, *the
+canonical name* (`emit_core.c:3138`). Identical today; divergent under an
+alias. Left alone, an instance written through the alias emits
+`__inst_Encode_encode_hyjson_int` -- confirmed in the prototype's output --
+where the reconstruction looks for `__inst_EncodeJson_...`.
 
-**Feature 2 -- a deprecated class *alias* (the one that actually helps).**
-Feature 1 only lets you *warn* about `Encode`; it does not let `Encode`
-mean `EncodeJson`, so `definstance Encode [T]` still has to be rewritten.
-What closes the gap is a transparent alias:
+It did not break the spike, because `emit_reresolve_method_call` prefers
+the instance's authoritative symbol and only falls back to reconstruction
+when no concrete instance matches (`emit_core.c:3117-3128`). So the
+divergence is **latent**, not fatal -- which makes it the kind that surfaces
+later, in someone else's program. Normalizing `tc_name = tc->name` right
+after the lookup makes emission canonical again (verified: the symbol
+becomes `__inst_EncodeJson_encode_hyjson_int`) and costs nothing. Do it in
+the same change; do not rely on the fallback staying unreachable.
 
-```turmeric
-(defclass-alias ^deprecated "use `EncodeJson`" Encode EncodeJson)
-```
+**What the alias still does NOT cover: call sites.** The alias governs
+*declarations* -- instance heads, instance bodies, constraints. A legacy
+`(encode 42)` call is a different resolution path and still needs the
+`^deprecated` `defn` shim from the previous section. The two compose: with
+both in place, fully unchanged legacy source compiles, runs, and emits four
+warnings (two class-name, two method-name).
 
-There is a direct precedent: `defalias` (`elab_types.c:240-296`) is exactly
-this for *types* -- a transparent name-to-target table consulted at
-resolution, where the alias never becomes a nominal type of its own. The
-class version is simpler, because `typeclass_env_lookup_typeclass` is the
-single chokepoint that `defalias` does not get to enjoy: an `alias_of`
-pointer on `TypeClass`, followed after the deprecation warning, makes all
-nine sites in the table above work with no per-site change.
+**And a trap that cost an hour here.** A `^deprecated` wrapper declared
+*above* the first `definstance` of the class it constrains compiles, runs
+correctly, and emits **no warning at all** -- silently. Reproduced on a
+stock v0.47.0 with no prototype involved, and filed as
+[deprecated-shim-above-its-first-instance-never-warns](../../reported/deprecated-shim-above-its-first-instance-never-warns.md).
+For a deprecation shim the warning *is* the product, so MPJ must place
+every shim below the instance table **and assert the warning count in a
+test** rather than assume it fires. This is the single most likely way for
+the 0.4.0 migration to ship broken while looking fine.
 
-**The catch, and it is a real one.** An alias fixes the class name but not
-the method names inside an instance body. With `Encode` aliased to
-`EncodeJson`, whose method is `encode-json`, this still fails:
-
-```turmeric
-(definstance Encode [User] (encode [x] ...))    ;; `encode` is not a method of EncodeJson
-```
-
-So a class alias makes *constraints* (`[^Encode T]`, `where (Encode a)`)
-and instance *heads* source-compatible, but an instance body must still be
-updated to the new method name -- unless a method-alias facility lands
-alongside, which is a larger design. That is the honest boundary: the alias
-converts most of the 19 constraint sites into a warning, and leaves the 29
-`definstance` bodies a mechanical edit.
-
-**Recommendation.** Neither feature is on the critical path -- MPJ ships
-without them via the sed recipe, and the spices tree is small enough that
-the edit is an afternoon. Build Feature 1 if the deprecation is meant to
-reach out-of-tree consumers, since a warning is the only thing that finds
-their sites for them. Treat Feature 2 as speculative until someone outside
-the tree actually depends on `Encode`; an alias that leaves instance bodies
-broken is a half-migration that may confuse more than the clean break does.
+**Recommendation.** Neither feature is on MPJ's critical path -- the sed
+recipe still works and the in-tree edit is an afternoon. But the prototype
+moved this from "speculative, half-closes the gap" to "158 lines, closes it
+fully, suite-green". Build it if the deprecation is meant to reach an
+out-of-tree consumer, since a warning is the only thing that finds their
+sites for them. If it is built, it ships behind `--enable=` with an
+`EXPERIMENTS[]` row per the repo's experimental-features rule -- the
+prototype is deliberately NOT landed.
 
 ### Staging
 
@@ -571,11 +611,18 @@ destructure-and-rebuild body, not a direct tail-forward -- and export them
 for the deprecation window. Bump `tur-json` to 0.4.0 and write the
 CHANGELOG migration note with the mapping table and the sed recipe.
 
-Optional, and decided at MPJ rather than assumed: land `^deprecated` on
-`defclass` first (scoped in the Naming section, ~9 call sites behind one
-helper) so the class-name half of the break warns instead of simply
-failing. Worth it only if an out-of-tree consumer exists by then; the
-in-tree sites are a mechanical edit either way.
+Place every shim **below** the instance table, and assert the deprecation
+warning count in a test -- a shim above the first instance compiles, runs
+and warns nothing (see the Naming section's last trap). This is the one
+step whose failure is invisible.
+
+Optional, and decided at MPJ rather than assumed: land `defclass-alias`
+first (prototyped, 158 lines, scoped in the Naming section) so the
+class-name half of the break warns instead of simply failing, and unchanged
+consumer source keeps compiling for a release. Worth it only if an
+out-of-tree consumer exists by then; the in-tree sites are a mechanical
+edit either way. If built, it ships behind `--enable=` with an
+`EXPERIMENTS[]` row.
 
 Gate: `spices/json/tests/` green under the new names, plus two new
 fixtures per shimmed method -- one calling the bare name and asserting the
@@ -652,12 +699,18 @@ spice in the top-level `:members` list.
   body.
 - **Bare class names have no migration path until the compiler grows one.**
   The 0.4.0 break falls entirely on `definstance` heads and constraints.
-  Two compiler features would close it -- `^deprecated` on `defclass`, and
-  a deprecated class alias -- both scoped in
-  [Naming](#closing-the-class-name-gap-deprecated-on-defclass). Neither is
-  on MPJ's critical path, and the alias only half-closes the gap (instance
-  *bodies* still need the new method names). Decide whether MPJ waits for
-  Feature 1 based on whether an out-of-tree consumer exists by then.
+A `defclass-alias` carrying both the class rename and a per-method
+  rename map closes it **fully** -- prototyped at 158 lines, suite-green,
+  with unchanged 0.3.0 source compiling and warning. See
+  [Closing the class-name gap](#closing-the-class-name-gap-a-deprecated-class-alias).
+  Still not on MPJ's critical path; decide based on whether an out-of-tree
+  consumer exists by then.
+- **A shim above its first instance warns nothing, silently.** Reproduced on
+  stock v0.47.0 and filed as
+  [deprecated-shim-above-its-first-instance-never-warns](../../reported/deprecated-shim-above-its-first-instance-never-warns.md).
+  It makes the whole 0.4.0 migration look correct while telling nobody to
+  migrate. MPJ must place shims below the instance table and assert the
+  warning count in a test.
 - **`DecodeErrors` / `encode-string` ambiguity.** Both are exported
   defns/types rather than global classes, so `:refer` disambiguates them
   and MPJ does not force the issue. A reader with both spices open still
