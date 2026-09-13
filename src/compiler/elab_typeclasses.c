@@ -4907,6 +4907,7 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
          * mirror the surrounding return-NULL. */
         if (method_body && method_body->kind != EX_INLINE_C) {
             rc_widen_int_literal_to_float_return(mp->ret_kind, method_body);
+            rc_narrow_float_literal_tail_to_return(mp->ret_kind, method_body);
             /* carrier-aware-return-unification Phase 3: a method whose class-decl
              * return was the class type variable, grounded to a concrete
              * (free-tyvar-free) type for this instance, is a genuine per-instance

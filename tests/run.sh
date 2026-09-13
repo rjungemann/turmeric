@@ -816,21 +816,26 @@ run_happy() {
     # non-heap word, and both belong in a FAIL rather than in a build log.
     # GCC's -Wfloat-conversion is BROADER than clang's: it also covers
     # double -> float, which clang splits out as -Wimplicit-float-conversion.
-    # That direction is a precision note, not the representation confusion this
-    # ratchet is for -- an int carrier reaching a float slot, or the reverse --
-    # and the emitter does produce one benign instance of it (a float literal
-    # closing a multi-expression `: float32` body gets a `double` temp; see
-    # docs/reported/float32-block-temp-widens-to-double.md).  Failing the suite
-    # on a legitimate narrowing is the "ratchet that fires on legitimate
-    # narrowing is worse than none" risk this was landed with, so the
-    # destination-is-float direction is excluded here rather than the flag being
-    # dropped: gcc's extra coverage still shows up in the build log.
+    # That direction was excluded wholesale while the emitter produced a benign
+    # instance of it -- a float literal closing a multi-expression `: float32`
+    # body got a `double` temp and narrowed at the `return`.  That is fixed
+    # (docs/archive/float32-block-temp-widens-to-double.md): the literal is now
+    # typed from the declared result, so the temp is a `float` and the narrowing
+    # happens once, where the source says it does.
     #
-    # The exclusion spans both compilers' quoting -- clang writes `to 'float'`
-    # and gcc `to <U+2018>float<U+2019>` -- hence `.{1,3}` rather than a literal
-    # quote.
+    # With the known benign instance gone, the exclusion is EMPTIED rather than
+    # re-aimed: the destination-is-float direction is watched again, which is
+    # what that report asked for when it landed ("it currently also hides any
+    # genuine double -> float confusion").  Swept across the corpus at zero
+    # first, which is the procedure this ratchet was established with and what
+    # makes FAIL affordable here.
+    #
+    # The knob is kept (rather than deleted) as a named, greppable one-liner, so
+    # re-widening it if a legitimate narrowing does appear is one edit with its
+    # history attached.  Re-widening is a decision, not a shortcut: the skip
+    # keyed on the DESTINATION, so it hid int-carrier-into-float-slot too.
     ccwarn_pat='\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object|float-conversion)\]'
-    ccwarn_skip='to .{1,3}(float|double).'
+    ccwarn_skip='\[-Wthis-exclusion-is-empty\]'
     if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ] && [ -s "$actual_stderr" ]; then
         if grep -E "$ccwarn_pat" "$actual_stderr" | grep -qvE "$ccwarn_skip"; then
             {

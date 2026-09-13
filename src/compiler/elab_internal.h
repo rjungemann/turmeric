@@ -1446,6 +1446,12 @@ bool return_type_register_class_conflict(TypeKind declared, Type body);
  * than a register-class conflict.  Returns false (and leaves `body` untouched)
  * otherwise. */
 bool rc_widen_int_literal_to_float_return(TypeKind declared, Expr *body);
+/* float32-block-temp-widens-to-double: retype a float literal closing a
+ * multi-expression body from the declared `: float32` result, so the block's
+ * merge temp is a `float` rather than a `double` narrowed at the return.
+ * Walks EX_DO / EX_LET / EX_LETREC tails; EX_IF is left alone (its arms are
+ * already unified with each other).  Returns true when something changed. */
+bool rc_narrow_float_literal_tail_to_return(TypeKind declared, Expr *body);
 
 /* pointer-vs-scalar-returns: the next carrier-tolerated slice past the nominal
  * and float guards.  `cstr` (a `const char*`) rides the same int64 GP register

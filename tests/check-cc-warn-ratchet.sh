@@ -24,12 +24,14 @@ TUR="${TUR:-./build/tur}"
 # change the other; a drifted pattern is the quiet failure this script exists to
 # catch, so it is deliberately spelled out here rather than sourced.
 #
-# run.sh additionally EXCLUDES float-conversion warnings whose destination is a
-# floating type (`to 'float'`): gcc's -Wfloat-conversion covers double -> float,
-# which clang splits out separately, and that direction is a precision note
-# rather than a representation confusion.  The canary below converts a float to
-# an INTEGER, so it is unaffected by that exclusion -- which is the point: it
-# proves the direction the ratchet actually fails on still fires.
+# run.sh USED TO additionally exclude float-conversion warnings whose
+# destination is a floating type (`to 'float'`), because the emitter produced a
+# benign instance of it (a float literal closing a multi-expression `: float32`
+# body got a `double` temp).  That is fixed and the exclusion is now empty --
+# see docs/archive/float32-block-temp-widens-to-double.md.  The canary below
+# converts a float to an INTEGER either way, so it was and remains unaffected by
+# that knob: it proves the direction the ratchet fails on still fires,
+# independently of whatever the exclusion is set to.
 PATTERN='\[-W(int-conversion|incompatible-pointer-types|free-nonheap-object|float-conversion)\]'
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/tur-ccwarn.XXXXXX")

@@ -1,0 +1,33 @@
+; Regression (float32-block-temp-widens-to-double): a float literal closing a
+; MULTI-EXPRESSION `: float32` body was typed at its own default (TY_FLOAT), so
+; the block's merge temp was declared `double` and the narrowing happened at the
+; `return`:
+;
+;     static float blk(void) { ...; double __t; __t = 2.5; return __t; }
+;
+; The single-expression body has no temp and was emitted as float throughout,
+; which is why the two spellings disagreed.  Visible only under GCC, whose
+; -Wfloat-conversion covers double -> float (clang splits that out as
+; -Wimplicit-float-conversion), and run.sh's ratchet excluded that direction
+; precisely to tolerate this -- so the value assertions below pass either way
+; and the WARNING is what pins it, now that the exclusion is empty.
+(defn one    [] : float32 2.5)
+(defn blk    [] : float32 (do (println 1) 2.5))
+(defn lt     [] : float32 (let [x 1] 7.1))
+(defn nested [] : float32 (do (println 2) (let [y 3] 3.25)))
+
+; A non-exactly-representable literal: this is the value that would round twice
+; -- once into the `double` temp, once on the narrowing return.
+(defn tenth  [] : float32 (do (println 3) 0.1))
+
+; The `: float` (double) siblings must keep their `double` temps.
+(defn blk64  [] : float (do (println 4) 2.5))
+
+(defn main [] : int
+  (println (one))
+  (println (blk))
+  (println (lt))
+  (println (nested))
+  (println (tenth))
+  (println (blk64))
+  0)

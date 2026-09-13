@@ -2477,6 +2477,58 @@ bool rc_widen_int_literal_to_float_return(TypeKind declared, Expr *body) {
     return true;
 }
 
+/* float32-block-temp-widens-to-double: a float literal closing a MULTI-EXPRESSION
+ * `: float32` body was typed TY_FLOAT (the literal's own default), so the
+ * block's merge temp was declared `double` and the narrowing happened at the
+ * `return` instead:
+ *
+ *     static float f(void) { ...; double __t; __t = 2.5; return __t; }
+ *
+ * The single-expression body `(defn f [] : float32 2.5)` has no temp and is
+ * emitted as float throughout, which is why the two spellings disagreed.  The
+ * values seen so far are exactly representable so the answer is right, but a
+ * literal that is not would round twice -- once into the `double` temp, once on
+ * the narrowing return -- which is a different answer from rounding once.
+ *
+ * Retype the literal (and the wrappers that carry its type outward) from the
+ * DECLARED result, in the same place the int-literal widen above runs.  Only
+ * TY_FLOAT32 is narrowed: `float`/`float64` are both `double` in C, so a
+ * float32 literal under a `: float64` return already widens losslessly at the
+ * return, and there is nothing to fix.
+ *
+ * EX_IF is deliberately not walked.  Its arms are already unified with each
+ * other, and retyping the join from one literal arm would leave the other arm's
+ * type behind -- the very "a temp or join taking a type one side cannot satisfy"
+ * shape this fixes. */
+bool rc_narrow_float_literal_tail_to_return(TypeKind declared, Expr *body) {
+    if (!body || declared != TY_FLOAT32) return false;
+    switch (body->kind) {
+        case EX_FLOAT_LIT:
+            if (body->type.kind == TY_FLOAT32) return false;
+            if (!rc_is_float_kind(body->type.kind)) return false;
+            body->type = type_from_kind(TY_FLOAT32);
+            return true;
+        case EX_DO: {
+            if (body->as.do_.n == 0) return false;
+            if (!rc_narrow_float_literal_tail_to_return(
+                    declared, body->as.do_.items[body->as.do_.n - 1]))
+                return false;
+            body->type = type_from_kind(TY_FLOAT32);
+            return true;
+        }
+        case EX_LET:
+        case EX_LETREC: {
+            if (!rc_narrow_float_literal_tail_to_return(declared,
+                                                        body->as.let_.body))
+                return false;
+            body->type = type_from_kind(TY_FLOAT32);
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
 /* pointer-vs-scalar-returns: see elab_internal.h. */
 static bool ps_is_integer_scalar_kind(TypeKind k) {
     switch (k) {

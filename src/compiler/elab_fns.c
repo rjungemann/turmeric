@@ -8359,6 +8359,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * float coercion is widened in place first so it stays a coercion. */
     if (!lazy_defer && body && body->kind != EX_INLINE_C) {
         rc_widen_int_literal_to_float_return(return_kind, body);
+        /* float32-block-temp-widens-to-double: the float-literal counterpart --
+         * narrow a `: float32` body's literal tail so the block temp is a
+         * `float`, not a `double` the `return` narrows. */
+        rc_narrow_float_literal_tail_to_return(return_kind, body);
         /* carrier-aware-return-unification Phase 2: a defn is a genuinely
          * COMMITTED position only when it does not participate in the int64
          * carrier ABI -- i.e. it is monomorphic (no type params, implicit ones
