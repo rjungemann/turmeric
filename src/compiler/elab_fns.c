@@ -93,6 +93,35 @@ static bool fresh_sum_walk(const Expr *e, Binding **params, uint32_t n_params,
                 if (r) break;
             }
             r = call_returns_fresh_sum_box(e);
+            /* generic-wrapper-tail-forwarding-a-return-dispatch-method: a
+             * TYPECLASS-METHOD call is not statically dispatched here (the
+             * instance is chosen per monomorph), so the walk above answers
+             * "not fresh" and a wrapper whose tail forwards such a method
+             * hands its caller an aggregate whose boxed payload nothing drops.
+             *
+             * Decide it by the same contract the inline-C rule below uses, and
+             * for the same reason: a method DECLARED `: (Result a e)` /
+             * `: (Option a)` is the MINTING shape -- an instance's only way to
+             * produce one is tur_box_* / tur_some_ptr, which malloc -- while a
+             * borrowed box wants a borrow-shaped `: a` signature, a bare tyvar
+             * that never reaches here.  That is not a new assumption: the emit
+             * side already marks such a call's carrier OWNED and frees it in
+             * the readback bridge (emit_expr.c's emit_owned_carrier_mark), so
+             * this only stops the payload arm from being the one piece of the
+             * same box nobody owns. */
+            if (!r && e->as.call_.dict_arg) {
+                const Binding *fb = e->as.call_.fn_binding;
+                const Type *decl = (fb && fb->type.kind == TY_FN)
+                    ? fb->type.as.fn.result_full_type : NULL;
+                Type rt = decl ? *decl : e->type;
+                AdtDef *rd = NULL;
+                Type ra[16];
+                uint8_t rn = 0;
+                if (type_extract_adt_app(&rt, &rd, ra, &rn) && rd && rd->name &&
+                    (strcmp(rd->name, "Option") == 0 ||
+                     strcmp(rd->name, "Result") == 0))
+                    r = true;
+            }
             break;
         }
         default:
