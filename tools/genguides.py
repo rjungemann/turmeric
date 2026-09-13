@@ -564,10 +564,16 @@ GUIDE_CSS = '''\
 
 def inject_syntax_toggles(body_html: str) -> str:
     """Wrap adjacent turmeric+sweet-exp block pairs in a syntax-toggle widget."""
+    # The `(?:(?!</code></pre>).)*` is a tempered dot, not decoration: a plain
+    # `.*?` here backtracks PAST its own block's close when the next sibling is
+    # not a sweet-exp block, swallowing the prose and code blocks in between
+    # until it reaches a turmeric block that IS followed by one. The widget then
+    # hid that prose inside the code card, and toggling to sweet-exp made it
+    # vanish. Tempering keeps each group inside a single <pre>.
     pattern = re.compile(
-        r'(<pre><code class="language-turmeric">.*?</code></pre>)'
+        r'(<pre><code class="language-turmeric">(?:(?!</code></pre>).)*</code></pre>)'
         r'(\s*)'
-        r'(<pre><code class="language-sweet-exp">.*?</code></pre>)',
+        r'(<pre><code class="language-sweet-exp">(?:(?!</code></pre>).)*</code></pre>)',
         re.DOTALL,
     )
 

@@ -68,8 +68,8 @@ One law, and it is not checked by the compiler -- it is on you:
 (println (:: (combine (:: 3 Product) (:: 7 Product)) int)) ; => 21
 ```
 ```sweet-exp
-println $ ::(combine(::(3 Sum) ::(7 Sum)) int)          ; => 10
-println $ ::(combine(::(3 Product) ::(7 Product)) int)  ; => 21
+println $ (:: combine((:: 3 Sum) (:: 7 Sum)) int)          ; => 10
+println $ (:: combine((:: 3 Product) (:: 7 Product)) int)  ; => 21
 ```
 
 ## Monoid
@@ -113,7 +113,7 @@ already fine, because `x` has fixed the class variable:
 ```
 ```sweet-exp
 let [unit : Sum (mempty)]
-  combine(unit ::(3 Sum))
+  combine(unit (:: 3 Sum))
 ```
 
 The same rule applies to `bottom` and `top`, which are nullary for the same
@@ -152,9 +152,9 @@ and the carrier is read back the same way:
 (combine (:: true All) (:: false All))   ; => All false
 ```
 ```sweet-exp
-combine(::(3 MinI) ::(7 MinI))
-combine(::(true Any) ::(false Any))
-combine(::(true All) ::(false All))
+combine((:: 3 MinI) (:: 7 MinI))
+combine((:: true Any) (:: false Any))
+combine((:: true All) (:: false All))
 ```
 
 > **Naming caution:** the newtype `Any` is `bool` under disjunction. It is
@@ -173,9 +173,9 @@ algebra.
 (mconcat (:: (vec-of) (Vec Sum)))                            ; => Sum 0
 ```
 ```sweet-exp
-mconcat $ vec-of(::(1 Sum) ::(2 Sum) ::(3 Sum))
-mconcat $ vec-of(::(2 Product) ::(3 Product) ::(4 Product))
-mconcat $ ::(vec-of() (Vec Sum))
+mconcat $ vec-of((:: 1 Sum) (:: 2 Sum) (:: 3 Sum))
+mconcat $ vec-of((:: 2 Product) (:: 3 Product) (:: 4 Product))
+mconcat $ (:: vec-of() (Vec Sum))
 ```
 
 The empty case is the one that needs the identity, and it is where a `Monoid`
@@ -198,11 +198,15 @@ must not change the result.
 (let [t : MinI (top)]    (meet t (:: 3 MinI)))   ; => MinI 3
 ```
 ```sweet-exp
-join(::(3 MaxI) ::(7 MaxI))
-meet(::(3 MinI) ::(7 MinI))
+join((:: 3 MaxI) (:: 7 MaxI))
+meet((:: 3 MinI) (:: 7 MinI))
+join((:: false Any) (:: true Any))
+meet((:: false All) (:: true All))
 
 let [z : MaxI (bottom)]
-  join(z ::(3 MaxI))
+  join(z (:: 3 MaxI))
+let [t : MinI (top)]
+  meet(t (:: 3 MinI))
 ```
 
 ### Each newtype carries exactly one lattice
@@ -228,8 +232,8 @@ it falls out of the operation:
 (lattice-leq? (:: 7 MaxI) (:: 3 MaxI))   ; => false
 ```
 ```sweet-exp
-lattice-leq?(::(3 MaxI) ::(7 MaxI))
-lattice-leq?(::(7 MaxI) ::(3 MaxI))
+lattice-leq?((:: 3 MaxI) (:: 7 MaxI))
+lattice-leq?((:: 7 MaxI) (:: 3 MaxI))
 ```
 
 `(lattice-leq? x y)` is `(eq? (join x y) y)`. This is the reason a
@@ -267,9 +271,9 @@ adds rather than selects fails exactly idempotence:
 (law-join-idempotent? (:: 5 MaxI))                    ; => true
 ```
 ```sweet-exp
-law-associative?(::(1 Sum) ::(2 Sum) ::(3 Sum))
-law-identity?(::(5 Product))
-law-join-idempotent?(::(5 MaxI))
+law-associative?((:: 1 Sum) (:: 2 Sum) (:: 3 Sum))
+law-identity?((:: 5 Product))
+law-join-idempotent?((:: 5 MaxI))
 ```
 
 ## Writing your own instance
@@ -291,11 +295,11 @@ law predicates can be used on it:
 defopaque Longest :cstr
 
 definstance Eq [Longest]
-  eq? [x y] cstr-eq?(::(x cstr) ::(y cstr))
+  eq? [x y] cstr-eq?((:: x cstr) (:: y cstr))
 
 definstance Semigroup [Longest]
   combine [x y]
-    if <(cstr-len(::(x cstr)) cstr-len(::(y cstr)))
+    if <(cstr-len((:: x cstr)) cstr-len((:: y cstr)))
       y
       x
 ```
@@ -326,6 +330,7 @@ defn generic-max [^Ord A] [x : A y : A] : A
 
 println $ max(2.5 7.1)
 println $ max("alpha" "beta")
+println $ generic-max(2.5 7.1)
 ```
 
 They used to be macros in `stdlib/macros.tur` that expanded to the builtin
