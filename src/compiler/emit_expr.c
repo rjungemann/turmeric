@@ -2223,17 +2223,32 @@ static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v,
  * carrier->concrete derefs a value that is not a pointer.
  *
  * A pass-by-pointer parameter is excluded: it really is held as `const T *`, and
- * the caller's own `then_is_byptr_param` branch derefs it. */
+ * the caller's own `then_is_byptr_param` branch derefs it.
+ *
+ * byvalue-struct-param-as-if-arm-derefs: the question this answers is "does
+ * this variable ALREADY have the merge temp's C type", so it keys off
+ * emit_type_is_byvalue_adt (any by-value product) rather than
+ * emit_type_is_byvalue_sum (multi-variant only).  A single-variant by-value
+ * product -- a lowered `defstruct`, an Option/Result monomorph -- is held by
+ * value in C exactly like an SR1 sum, so `(if b x (S 1))` with `x : S` a
+ * by-value struct PARAMETER hit the bridge and emitted
+ * `(*(tur_adt_S *)(intptr_t)(x))`, casting an aggregate to an integer.  This is
+ * a DECLINE, and its real gate is the C-type-name equality below -- widening it
+ * removes bridges, it never adds one, which is why the "keyed on
+ * emit_type_is_byvalue_adt these rules broke 27 fixtures" warning on the SR1
+ * bridges does not transfer.  The g_sr1_sum_byvalue gate stays on the sum half
+ * only: a single-variant product has ridden the by-value ABI since B3, with or
+ * without SR1. */
 static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
 static bool emit_arm_is_byval_agg_var(EmitCtx *ctx, const Expr *arm, Type bv) {
-    if (!g_sr1_sum_byvalue) return false;
     if (!arm || bv.kind == TY_UNKNOWN) return false;
     while (arm->kind == EX_ASCRIBE && arm->as.ascribe_.inner)
         arm = arm->as.ascribe_.inner;
     if (arm->kind != EX_VAR || !arm->as.var.binding) return false;
     if (expr_is_pbp_param(ctx, arm)) return false;
     Type at = emit_resolve_type(ctx, arm->as.var.binding->type);
-    if (!emit_type_is_byvalue_sum(ctx, at)) return false;
+    if (!emit_type_is_byvalue_adt(ctx, at)) return false;
+    if (!g_sr1_sum_byvalue && emit_type_is_byvalue_sum(ctx, at)) return false;
     /* Both names are interned for the whole compilation (type_c_name ->
      * intern_type_name), so holding the first across the second call is safe --
      * unlike adt_field_c_type's pointer-box spelling, which is a shared buffer

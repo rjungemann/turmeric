@@ -1,0 +1,34 @@
+; Regression (byvalue-struct-param-as-if-arm-derefs): a by-value struct
+; PARAMETER used as a bare `if` arm was bridged carrier->concrete and emitted as
+; `(*(tur_adt_S *)(intptr_t)(x))` -- casting an aggregate to an integer, which cc
+; rejects while `tur check` stayed clean.  The arm already HAS the merge temp's
+; C type, so no bridge belongs there.
+(defstruct S [a : int])
+
+(defn mk [n : int] : S (S n))
+(defn id-s [s : S] : S s)
+
+; The broken shapes: a bare by-value struct param as an arm, either side.
+(defn pick-ctor [x : S b : bool] : S (if b x (S 1)))
+(defn pick-call [x : S b : bool] : S (if b x (mk 1)))
+(defn pick-else [x : S b : bool] : S (if b (S 1) x))
+
+; Shapes that already worked -- a fix must not regress them.
+(defn pick-wrap [x : S b : bool] : S (if b (id-s x) (S 1)))
+(defn pick-both [b : bool] : S (if b (S 7) (S 1)))
+
+; A tail-recursive fold returning the bare param from its skip arm: same shape,
+; different join (the other arm is a tail self-call).
+(defstruct H [m : int])
+(defn step [acc : H n : int] : H
+  (if (= n 0) acc (step (H (+ (.m acc) 1)) (- n 1))))
+
+(defn main [] : int
+  (println (.a (pick-ctor (S 7) true)))
+  (println (.a (pick-ctor (S 7) false)))
+  (println (.a (pick-call (S 7) true)))
+  (println (.a (pick-else (S 9) false)))
+  (println (.a (pick-wrap (S 7) true)))
+  (println (.a (pick-both true)))
+  (println (.m (step (H 0) 3)))
+  0)

@@ -4,7 +4,24 @@
 rejects the emitted C. Not a wrong answer -- it never compiles -- but the
 diagnostic names an internal temporary and points at C, not at the `if`.
 
-**Status:** open. Found 2026-09-11 writing crdt-spice-plan C2's convergence
+**Status: RESOLVED 2026-09-13.** `emit_arm_is_byval_agg_var`
+(`src/compiler/emit_expr.c`) -- the DECLINE that says "this arm already holds
+the merge temp's aggregate, do not bridge it" -- keyed off
+`emit_type_is_byvalue_sum`, which requires `n_ctors > 1`.  A lowered
+`defstruct` is a SINGLE-variant by-value product, so the decline never fired
+for it and `emit_if_value` bridged the bare parameter carrier->concrete.
+Widened to `emit_type_is_byvalue_adt` (any by-value product); the real gate is
+the C-type-name equality that follows, so this removes bridges and can never
+add one -- which is why the "keyed on `emit_type_is_byvalue_adt` these rules
+broke 27 fixtures" warning on the SR1 *bridges* does not transfer to a decline.
+The `g_sr1_sum_byvalue` seam gate stays on the multi-variant half only: a
+single-variant product has ridden the by-value ABI since B3, with or without
+SR1.  Pinned by `tests/fixtures/byvalue-struct-param-if-arm`, which carries
+both broken shapes, the else-arm mirror (not in the original filing, and broken
+the same way), the three shapes that already worked, and the tail-recursive
+fold.  Suite: 2971 passed, 0 failed.
+
+Found 2026-09-11 writing crdt-spice-plan C2's convergence
 fuzzer, where the natural "apply this op, or don't" helper is exactly this
 shape.
 
