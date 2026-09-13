@@ -1,0 +1,40 @@
+;; A `:heap` parametric struct with a by-value struct field, merged through a
+;; constrained instance that recurses at its element type.
+;;
+;; This is the container-CRDT shape (crdt/ormap), and it exercised two defects
+;; at once:
+;;
+;;   1. `repr_of` reported HEAP_PTR for the BARE parametric base (`Box`, args
+;;      erased, as it appears inside a generic body) while the merge-temp
+;;      emitter declared the erased carrier -- an ICE,
+;;      "want=heap-ptr got=carrier-i64".  The TY_APP spelling of the same fact
+;;      had a carve-out; the bare-base spelling did not.
+;;   2. The by-value field's forward typedef and its full layout used two
+;;      DIFFERENT include guards for one typedef name, so each let the other
+;;      through and cc warned -Wtypedef-redefinition on emitted code.
+;;
+;; Two element lattices whose joins differ, so a collapse onto one instance is
+;; visible rather than merely suspected.
+
+(defclass JS [a] (j [x : a y : a] : a))
+
+(defopaque Hi :int)
+(definstance JS [Hi] (j [x y] (if (< (:: x int) (:: y int)) y x)))    ;; max
+(defopaque Lo :int)
+(definstance JS [Lo] (j [x y] (if (< (:: x int) (:: y int)) x y)))    ;; min
+
+(defstruct Meta [tag : int])                 ;; a BY-VALUE struct field
+(defstruct Box :heap [V] [e : int m : Meta]) ;; :heap, parametric, phantom V
+
+(defn box-join [V] [(JS V)] [^borrow a : (Box V) ^borrow b : (Box V)] : (Box V)
+  (Box (:: (j (:: (.e a) V) (:: (.e b) V)) int) (Meta 0)))
+
+(definstance JS [(Box V)]
+  (j [x y] (box-join x y)))
+
+(defn main [] : int
+  (let [h (:: (j (:: (Box 3 (Meta 0)) (Box Hi)) (:: (Box 9 (Meta 0)) (Box Hi))) (Box Hi))]
+    (println (.e h)))                        ;; 9  -- max
+  (let [l (:: (j (:: (Box 3 (Meta 0)) (Box Lo)) (:: (Box 9 (Meta 0)) (Box Lo))) (Box Lo))]
+    (println (.e l)))                        ;; 3  -- min, same container code
+  0)

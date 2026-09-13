@@ -1,0 +1,43 @@
+;; A constrained generic that dispatches only INDIRECTLY -- its body calls
+;; another constrained generic, which is what actually touches the class method.
+;;
+;; This used to be a silent wrong answer.  `relay` has no class-method call of
+;; its own, so the "does this body dispatch on a bound tyvar" probe answered no,
+;; no specialization was minted, and it called the BASE `direct` -- which bakes
+;; the last-declared instance.  Two instantiations, one answer.
+;;
+;; `direct` called straight from main was correct all along, which is what made
+;; this hard to see: the SAME function is right or wrong depending on whether a
+;; constrained caller sits in between.
+;;
+;; The shape matters -- it is how a container CRDT merges: the container's
+;; instance calls a fold helper, which calls the element's join.
+
+(defclass JS [a] (j [x : a y : a] : a))
+
+(defopaque Gmax :int)
+(definstance JS [Gmax] (j [x y] (if (< (:: x int) (:: y int)) y x)))
+(defopaque Gsum :int)
+(definstance JS [Gsum] (j [x y] (:: (+ (:: x int) (:: y int)) Gsum)))
+
+;; V is phantom: named in the head, carried by no field.
+(defstruct M [V] [e : int])
+
+(defn direct [V] [(JS V)] [a : (M V) b : (M V)] : int
+  (:: (j (:: (.e a) V) (:: (.e b) V)) int))
+
+;; one constrained hop
+(defn relay [V] [(JS V)] [a : (M V) b : (M V)] : int (direct a b))
+
+;; two hops, so a fix that only looks one level deep is caught
+(defn relay2 [V] [(JS V)] [a : (M V) b : (M V)] : int (relay a b))
+
+(defn main [] : int
+  ;; control: the same generic called with no constrained caller between
+  (println (direct (:: (M 3) (M Gmax)) (:: (M 9) (M Gmax))))   ;; 9  max
+  (println (direct (:: (M 3) (M Gsum)) (:: (M 9) (M Gsum))))   ;; 12 sum
+  (println (relay  (:: (M 3) (M Gmax)) (:: (M 9) (M Gmax))))   ;; 9
+  (println (relay  (:: (M 3) (M Gsum)) (:: (M 9) (M Gsum))))   ;; 12
+  (println (relay2 (:: (M 3) (M Gmax)) (:: (M 9) (M Gmax))))   ;; 9
+  (println (relay2 (:: (M 3) (M Gsum)) (:: (M 9) (M Gsum))))   ;; 12
+  0)

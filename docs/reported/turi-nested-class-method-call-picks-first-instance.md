@@ -139,3 +139,44 @@ newtypes apart with `__h<n>`); the interpreter has no such split.
 `requires.compiled` naming this report. Their assertions are already written and include the
 deliberately-failing instances; removing the marker when this lands turns them
 into the interpreter's regression suite for free.
+
+
+## A third symptom, 2026-09-12 -- FIXED, and what it did NOT fix
+
+A constrained generic passed as a FUNCTION VALUE collapsed the same way:
+
+```
+compiled:    9 12 9 12     (direct calls, then the same work via a fn value)
+interpreted: 9 12 12 12    -- both fn-value calls answered with one instance
+```
+
+**Root cause, measured rather than assumed:** this one was NOT the
+"interpreter mints no per-instance specialization" story above. Interpreter
+frames chain **lexically** -- a callee's parent is `cl->captured`, which is NULL
+for a top-level defn -- so a generic referenced as a value and applied later
+cannot see the caller's `TyvarBind` at all. The substitution machinery was
+present and working; the value simply travelled without it.
+
+**Fix** (`src/turi/eval.c`, `EX_VAR`): re-home such a closure onto a frame
+carrying the enclosing frame's binding for its constraint tyvar -- capturing
+the type environment into the value, which is what a dictionary is. Gated to a
+captureless closure whose FnDef actually carries constraints and whose tyvar the
+frame really binds, so the ordinary path allocates nothing.
+
+`tests/fixtures/constrained-generic-instance-inheritance` now runs under `--interpret`
+with no marker (turi harness 2056 passed / 0 failed, up one).
+
+**This did not fix the rest of this report.** The four fixtures below still
+diverge under `--interpret`, so the nesting symptom is a separate mechanism, not
+the same one reached from another direction:
+
+| Fixture | still diverges |
+| --- | --- |
+| `typeclass-nested-method-call-float` | yes |
+| `typeclass-nullary-method-newtype-tyvar` | yes |
+| `typeclass-lattice-semigroup-monoid` | yes |
+| `typeclass-lattice-join-meet` | yes |
+
+That is worth knowing before the next attempt: a lexical-capture fix does not
+reach them, so the remaining defect really is about instance selection inside a
+nested call, not about a lost type environment.

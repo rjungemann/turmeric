@@ -5064,7 +5064,7 @@ static tur_adt_Vec__int * ctor_Vec_Vec__int(void * _0, int64_t _1, int64_t _2) {
 }
 
 #endif
-#ifndef TUR_FWD_tur_adt_P
+#if !defined(TUR_FWD_tur_adt_P) && !defined(TUR_TD_tur_adt_P)
 #define TUR_FWD_tur_adt_P
 typedef struct tur_adt_P tur_adt_P;
 #endif

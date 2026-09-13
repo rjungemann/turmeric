@@ -1,0 +1,38 @@
+;; Forward-referencing a GENERIC defn -- one with a type-parameter vector.
+;;
+;; The forward-declaration pre-pass took the vector right after the name as the
+;; VALUE parameters.  For `(defn f [V] [a b] ...)` that is the TYPE parameters,
+;; so the forward decl had arity 1, and a caller written ABOVE the callee saw a
+;; one-argument function: "returns int, which is not callable -- did you mean to
+;; pass all 1 argument(s)?".  Defining the callee first avoided it, which made
+;; it look like generics simply could not be forward referenced.
+;;
+;; The bug was in TWO pre-passes with separate code: top-level defns
+;; (elab_toplevel.c), covered here, and defns inside a `defmodule`
+;; (elab_module.c), covered by `generic-defn-forward-reference-defmodule` --
+;; a separate file because a defmodule must be the first form in its own.
+
+(defstruct B [V] [e : int])
+
+;; --- top level, caller BEFORE callee ---
+(defn tl-caller [^borrow a : (B int) ^borrow b : (B int)] : int
+  (tl-helper a b))
+
+;; two value params, so an arity of 1 (the type-param vec) is visibly wrong
+(defn tl-helper [V] [^borrow a : (B V) ^borrow b : (B V)] : int
+  (+ (.e a) (.e b)))
+
+;; a generic with a CONSTRAINT vec too -- three vectors before the return type
+(defclass Sh [a] (sh [x : a] : int))
+(definstance Sh [int] (sh [x] x))
+
+(defn tl-caller2 [^borrow a : (B int) ^borrow b : (B int)] : int
+  (tl-helper2 a b))
+
+(defn tl-helper2 [V] [(Sh V)] [^borrow a : (B V) ^borrow b : (B V)] : int
+  (+ (.e a) (.e b)))
+
+(defn main [] : int
+  (println (tl-caller  (B 1) (B 2)))
+  (println (tl-caller2 (B 3) (B 4)))
+  0)

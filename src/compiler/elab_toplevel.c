@@ -1652,8 +1652,22 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                              * forward-declared arity is not over-stated (see
                              * docs/archive/history/pap-defmodule-fat-fn-too-many-args.md). */
                             TypeKind *arg_kinds = NULL;
-                            uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
-                                ? fwd_decl_scan_params(arena, f->as.list.items[name_idx + 1], &arg_kinds)
+                            /* `params_idx_local`, not `name_idx + 1`: for a
+                             * generic defn -- `(defn f [V] [params] : R ...)`,
+                             * or with a constraint vec, `[V] [(C V)] [params]`
+                             * -- the vector right after the name is the TYPE
+                             * parameters.  Scanning that as the value params
+                             * gave the forward declaration the wrong arity (1,
+                             * for `[V]`), so a caller written ABOVE the callee
+                             * saw a 1-arg function, and a 2-arg call reported
+                             * "returns int, which is not callable -- did you
+                             * mean to pass all 1 argument(s)?".  Defining the
+                             * callee first avoided it, which is what made this
+                             * look like an ordering rule.  The return-type probe
+                             * a few lines up already skips the type-param vec;
+                             * the arity scan never did. */
+                            uint32_t param_arity = (params_idx_local < (uint32_t)f->as.list.len)
+                                ? fwd_decl_scan_params(arena, f->as.list.items[params_idx_local], &arg_kinds)
                                 : 0;
                             /* saffron-dynamic-surface-pass H6: an UNANNOTATED
                              * Saffron return is `any` (D3), and this forward

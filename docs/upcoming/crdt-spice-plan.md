@@ -485,36 +485,72 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
 - **C3 -- registers + maps. DONE 2026-09-12.** `crdt/hlc`, `crdt/register`
   (`LwwRegister`, `MvRegister`), `crdt/ormap`. Seven test suites green.
 
-  Two deviations from the design above, both forced and both recorded:
+  Two notes on how C3 differs from the sketch above:
 
-  1. **`ORMap`'s join is a PARAMETER, not a constrained instance.** Section 2.3
-     wanted `(ORMap K V)` to be a `JoinSemilattice` exactly when `V` is, so an
-     ORMap of PNCounters merges "with no code specific to that pairing". That
-     form is currently **miscompiled**: entries live in a HAMT of int carriers,
-     which makes `V` a *phantom* type parameter, and a phantom parameter does
-     not drive monomorphization -- the constrained generic collapses to one
-     specialization and silently runs the representative instance. An ORMap of
-     PNCounters would have merged with the wrong join and printed a plausible
-     number. See
-     [phantom-type-param-does-not-drive-monomorphization](../reported/phantom-type-param-does-not-drive-monomorphization.md).
+  1. **`ORMap` carries BOTH merges. DONE 2026-09-12.** Section 2.3's constrained
+     instance now ships: `(ORMap V)` is a `JoinSemilattice` exactly when `V` is,
+     so `join`, `join-all` and the lattice laws work on a map of any CRDT value
+     and it nests. `ormap-merge-with` stays beside it -- strictly more general,
+     since two ORMaps over one value type can merge differently.
 
-     `ormap-merge-with` takes the value merge instead. It is checked at every
-     call site, and `test_ormap`'s nesting test asserts the composition the
-     constrained form was for. Revisit when the defect is fixed.
+     `test_ormap_join` asserts the point that matters: the same map code gives
+     DIFFERENT answers for two value lattices (max vs min). A map that ignored
+     its element's instance would give one answer and pass any convergence-only
+     test -- which is exactly what every earlier attempt did, silently.
+
+     Getting there took **five** compiler fixes (all landed):
+
+     | Defect | What it did |
+     | --- | --- |
+     | [phantom type param does not drive monomorphization](../archive/phantom-type-param-does-not-drive-monomorphization.md) | a value read out of a carrier and ascribed back to the class var was not seen as a dispatch |
+     | [constrained relay dispatch collapses](../archive/typeclass-constrained-relay-dispatch.md) | a constrained generic calling another was never specialized -- the fold-helper shape exactly |
+     | [base body picks an aggregate instance](../archive/phantom-constrained-generic-base-body-picks-aggregate-instance.md) | the representative search had no tier for a `defopaque` newtype, so it chose an aggregate and the base body would not compile |
+     | [generic defn forward reference](../archive/generic-defn-forward-reference-wrong-arity.md) | both pre-passes read the TYPE-param vector as the value params, so a generic could not be called from above |
+     | [bare parametric `:heap` base repr](../archive/bare-parametric-heap-base-repr-disagreement.md) | `repr_of` said heap-ptr where the emitter said carrier, ICEing on the merge temp |
+
+     Two design points worth keeping:
+
+     - **`ORMap` is `:heap`**, like stdlib's `Map`/`Vec`/`Set`. A non-heap
+       parametric struct becomes a distinct by-value C aggregate per
+       instantiation, and that path types the result temp at the carrier while
+       the constructor returns the aggregate.
+     - **Both merges share ONE fold.** The constrained path passes `__vjoin`
+       -- a constrained generic -- as the `f` of the same fold the explicit
+       path uses. That collapsed onto a single instance until
+       [the fn-value defect](../archive/constrained-generic-as-fn-value-collapses.md)
+       was fixed, which is why an earlier revision carried a second copy of the
+       loop differing in one line.
+     - **`V` is phantom**, but `ormap-new` no longer needs an ascription: a
+       phantom-only parametric ADT has one layout for every instantiation, so
+       its base ctor is real (it used to be an abort trap), and `V` is pinned by
+       a sibling argument as in `(ormap-put (ormap-new) r k v)`. `DotContext` is
+       `:heap` for the same reason -- a by-value aggregate field would have made
+       ORMap's base ctor need the generic boxing convention.
 
   2. **Deterministic tests come from parameter-passed wall time, not
      `Mock-Time`.** Every `crdt/hlc` operation takes `now` as an argument, so
      the tests are exact without `stdlib/time.tur` -- which would also have
      cost the spice its inline-C-free property (2.5).
 
-  Three compiler defects were found on the way, **all three now fixed**:
-  `clone_struct_app_type` segfaulted on a parametric instance head whose method
-  recurses into the type parameter
-  ([fixed](../archive/clone-struct-app-type-segv-on-null-arg.md)); forwarding a
-  function-typed parameter to a later-defined defn emitted a broken cast
-  ([fixed](../archive/fn-typed-param-forwarded-to-a-later-defn-miscasts.md) --
-  the helper-ordering workaround has been removed from `crdt/ormap`); and the
-  phantom-dispatch defect above.
+  **Nine compiler defects** were found building C3 -- **all nine fixed**:
+
+  | Defect | What it did |
+  | --- | --- |
+  | [`clone_struct_app_type` SEGV](../archive/clone-struct-app-type-segv-on-null-arg.md) | crashed on a parametric instance head whose method recurses into the type parameter |
+  | [fn-typed param forwarded to a later defn](../archive/fn-typed-param-forwarded-to-a-later-defn-miscasts.md) | emitted a carrier cast onto a `tur_poly_fn_t`; trigger was source order |
+  | [phantom type param does not drive monomorphization](../archive/phantom-type-param-does-not-drive-monomorphization.md) | a dispatch reached through an ascription was not detected |
+  | [constrained relay dispatch collapses](../archive/typeclass-constrained-relay-dispatch.md) | a constrained generic calling another was never specialized |
+  | [base body picks an aggregate instance](../archive/phantom-constrained-generic-base-body-picks-aggregate-instance.md) | no representative tier for a `defopaque` newtype, so the base body would not compile |
+  | [generic defn forward reference](../archive/generic-defn-forward-reference-wrong-arity.md) | both pre-passes read the TYPE-param vector as the value params |
+  | [bare parametric `:heap` base repr](../archive/bare-parametric-heap-base-repr-disagreement.md) | `repr_of` and the merge-temp emitter disagreed; ICE, plus a duplicate-typedef guard bug |
+  | [phantom-only parametric base ctor was a trap](../archive/generic-defn-forward-reference-wrong-arity.md) | an empty container needed a hand-written ascription; `(ormap-new)` aborted |
+  | [constrained generic as a fn value collapses](../archive/constrained-generic-as-fn-value-collapses.md) | forced two near-identical folds; also surfaced a latent use-after-free in spec interning |
+
+  Five of the nine were **silent wrong answers**, every one a constrained
+  generic quietly running the wrong instance. That is the argument for building
+  these CRDTs against convergence tests whose value types have DIFFERENT joins,
+  rather than only type-checking them: a merge that ignores its element's
+  instance still converges -- on the wrong answer.
 
   The HLC ships a drift bound (`hlc-max-drift`) so a remote replica with a
   wrong clock cannot drag this one forward permanently -- 1.3's requirement.

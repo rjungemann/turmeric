@@ -1,0 +1,85 @@
+;; A constrained generic whose type variable reaches NO parameter, reached two
+;; ways: PASSED as a function value, and CALLED directly.  Neither pins the
+;; tyvar at the use site, so both must inherit the caller's dictionary -- and
+;; both must inherit the SAME one.
+;;
+;; This used to collapse: every instantiation reached the same instance, so
+;; both value types answered alike, while calling the generic DIRECTLY was
+;; correct at each. Three layers had to line up --
+;;
+;;   1. the enclosing generic must specialize, though the constrained generic
+;;      is an ARGUMENT rather than the callee (and both probes missed it
+;;      entirely, because an argument crossing into a poly slot is wrapped in
+;;      EX_POLY_WRAP);
+;;   2. the fn value needs per-instantiation clones, though its
+;;      specializations share one ABI (two defopaque newtypes over int);
+;;   3. the `tur_poly_fn_t` literal must name a wrapper that forwards to THIS
+;;      specialization's clone, not the single elaboration-time wrapper that
+;;      hardcoded the generic's base entry.
+;;
+;; The direct calls are the control: they were correct throughout, so a
+;; regression that only repairs them is not mistaken for a fix.
+;;
+;; `wjoin` is the same generic with its type parameter ALPHA-RENAMED.  The first
+;; version of this fix inherited the caller's binding by matching tyvar NAMES,
+;; so renaming `[V]` to `[W]` silently stopped the inheritance and both
+;; instantiations collapsed -- a generic's meaning depending on the spelling of
+;; a bound variable.  The inheritance is keyed on the constraint's CLASS now,
+;; and these rows are what hold it there.
+
+(defclass JS [a] (j [x : a y : a] : a))
+
+(defopaque Gmax :int)
+(definstance JS [Gmax] (j [x y] (if (< (:: x int) (:: y int)) y x)))    ;; max
+(defopaque Gsum :int)
+(definstance JS [Gsum] (j [x y] (:: (+ (:: x int) (:: y int)) Gsum)))   ;; sum
+
+(defstruct M [V] [e : int])
+
+(defn vjoin [V] [(JS V)] [x : int y : int] : int
+  (:: (j (:: x V) (:: y V)) int))
+
+;; an ordinary higher-order function -- NOT constrained
+(defn fold [f : (fn [int int] int) a : int b : int] : int (f a b))
+
+;; passes the constrained generic as a VALUE
+(defn mjoin [V] [(JS V)] [a : (M V) b : (M V)] : int
+  (fold vjoin (.e a) (.e b)))
+
+;; identical to vjoin, type parameter renamed -- must behave identically
+(defn wjoin [W] [(JS W)] [x : int y : int] : int
+  (:: (j (:: x W) (:: y W)) int))
+
+(defn mjoin-renamed [V] [(JS V)] [a : (M V) b : (M V)] : int
+  (fold wjoin (.e a) (.e b)))
+
+;; And the same generic CALLED rather than passed.  `vjoin`'s tyvar reaches no
+;; parameter, so the call pins nothing and the callee has to inherit the
+;; caller's dictionary -- by CLASS, exactly as the fn-value path does.  These
+;; two paths answered the same question differently until that landed: a
+;; generic passed as a value inherited, the same generic called did not.
+(defn called [V] [(JS V)] [a : (M V) b : (M V)] : int
+  (vjoin (.e a) (.e b)))
+
+;; alpha-renamed callee, called
+(defn called-renamed [V] [(JS V)] [a : (M V) b : (M V)] : int
+  (wjoin (.e a) (.e b)))
+
+;; the control: same work, called directly
+(defn djoin [V] [(JS V)] [a : (M V) b : (M V)] : int
+  (:: (j (:: (.e a) V) (:: (.e b) V)) int))
+
+(defn main [] : int
+  (println (djoin (:: (M 3) (M Gmax)) (:: (M 9) (M Gmax))))   ;; 9   control
+  (println (djoin (:: (M 3) (M Gsum)) (:: (M 9) (M Gsum))))   ;; 12  control
+  (println (mjoin (:: (M 3) (M Gmax)) (:: (M 9) (M Gmax))))   ;; 9   via fn value
+  (println (mjoin (:: (M 3) (M Gsum)) (:: (M 9) (M Gsum))))   ;; 12  via fn value
+  ;; alpha-renamed callee: an alpha-rename must preserve meaning
+  (println (mjoin-renamed (:: (M 3) (M Gmax)) (:: (M 9) (M Gmax))))  ;; 9
+  (println (mjoin-renamed (:: (M 3) (M Gsum)) (:: (M 9) (M Gsum))))  ;; 12
+  ;; called, not passed
+  (println (called (:: (M 3) (M Gmax)) (:: (M 9) (M Gmax))))          ;; 9
+  (println (called (:: (M 3) (M Gsum)) (:: (M 9) (M Gsum))))          ;; 12
+  (println (called-renamed (:: (M 3) (M Gmax)) (:: (M 9) (M Gmax))))  ;; 9
+  (println (called-renamed (:: (M 3) (M Gsum)) (:: (M 9) (M Gsum))))  ;; 12
+  0)

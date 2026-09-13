@@ -1,0 +1,40 @@
+;; A constrained generic over a PHANTOM type parameter, where the class has a
+;; by-value aggregate instance in scope.
+;;
+;; This used to be a hard TUR-E0295 on a function that is never called, naming a
+;; type the function does not mention.  To emit the generic BASE body the
+;; phantom variable must be given some type, so a representative instance is
+;; picked; the receiver-directed search knew about `int` and carrier-compatible
+;; SCALARS but had no tier for a `defopaque` newtype over int, so it fell
+;; through to a generic search that landed on the AGGREGATE -- making the base
+;; body an aggregate-to-carrier reinterpret.
+;;
+;; Adding an unrelated aggregate instance elsewhere in a program could therefore
+;; break a generic that compiled yesterday.
+;;
+;; A non-pointer `defopaque` newtype IS the int64 carrier, so it is as valid a
+;; representative as `int`, and emit-side re-resolution specializes per
+;; instantiation anyway.
+
+(defclass JS [a] (j [x : a y : a] : a))
+
+(defopaque Gmax :int)
+(definstance JS [Gmax] (j [x y] (if (< (:: x int) (:: y int)) y x)))
+(defopaque Gsum :int)
+(definstance JS [Gsum] (j [x y] (:: (+ (:: x int) (:: y int)) Gsum)))
+
+;; The aggregate instance: no `int` and no carrier-scalar instance exists, so
+;; before the fix this was the only thing the fallback search could find.
+(defstruct Agg [p : int q : int])
+(definstance JS [Agg] (j [x y] x))
+
+(defstruct P [V] [e : int])          ;; V is PHANTOM -- named in the head, in no field
+
+(defn use [V] [(JS V)] [w : (P V) x : int] : int
+  (:: (j (:: x V) (:: x V)) int))
+
+(defn main [] : int
+  ;; Both instantiations must reach their OWN instance, not the representative.
+  (println (:: (use (:: (P 0) (P Gmax)) 7) int))   ;; max(7,7) = 7
+  (println (:: (use (:: (P 0) (P Gsum)) 7) int))   ;; 7+7      = 14
+  0)
