@@ -1,22 +1,18 @@
-# A generic wrapper that tail-forwards a return-dispatch method fails codegen
+# A generic wrapper tail-forwarding a return-dispatch method leaks a boxed struct payload
 
-**Severity: medium** -- a hard `cc` error, not a wrong answer, and it has a
-one-line workaround. But the error surfaces in generated C rather than at the
-Turmeric level, so it reads as a compiler bug rather than as "write the body
-differently", and the working shape is not discoverable from the message.
+**Severity: low** -- 16 bytes per call, and only when the `Result`/`Option`
+payload is a by-value struct. Scalar and `cstr` payloads are leak-clean.
 
-**Status:** open. Found 2026-09-13 while checking whether the
-[msgpack spice plan](../upcoming/hold/msgpack-spice-plan.md)'s json rename
-could keep a compatibility wrapper. Same family as the archived
-`return-dispatch-ascription-result-wrapped-not-honored` and
-`typeclass-method-parameterized-result-carrier-mismatch`, which are resolved;
-this case survives them.
+**Status:** open, and **narrowed** from the original report. The hard cc error
+this file was opened for is **fixed** (see below); what survives is a missing
+caller-side free on one payload shape.
 
-## Repro
+## History: the cc error (FIXED 2026-09-13)
+
+Originally this shape did not compile at all:
 
 ```turmeric
 (defclass DecodeJson [a] (decode-json [doc : int  val : int] : (Result a cstr)))
-
 (definstance DecodeJson [int] (decode-json [doc val]
   ```c
   (void)doc; return tur_box_ok((int64_t)(val + 100));
@@ -26,75 +22,87 @@ this case survives them.
 ;; shape from json/encode.tur.
 (defn decode [A] [(DecodeJson A)] [doc : int  val : int] : (Result A cstr)
   (decode-json doc val))
-
-(defn main [] : int
-  (println (ok-val (:: (decode 0 7) (Result int cstr))))
-  0)
 ```
 
 ```
-$ tur run p.tur
-/tmp/tur-build/p_tur.c: In function
-  'decode__spec__tur_adt_Result__int__cstr_int64_t_int64_t':
-/tmp/tur-build/p_tur.c:8186:16: error: incompatible types when returning type
-  'int64_t' {aka 'long int'} but 'tur_adt_Result__int__cstr' was expected
-tur: cc invocation failed (status 256)
+error: incompatible types when returning type 'int64_t' {aka 'long int'}
+       but 'tur_adt_Result__int__cstr' was expected
 ```
 
-Elaboration is fine: the call-site ascription pins `A` and re-dispatches
-correctly, and a spec is minted per instantiation. Only the emitted return
-type disagrees -- the wrapper's spec declares the by-value
-`tur_adt_Result__int__cstr` while the forwarded method call yields the int64
-carrier.
+The instance returns the int64 carrier (a heap Result box); the wrapper's
+monomorphized spec declares the by-value aggregate, and the return position
+had no bridge -- a concrete `(:: (decode-json d v) (Result int cstr))` gets the
+box readback from the ascription bridge, but the spec's `return` did not.
 
-Ascribing the inner call does **not** help:
+Fixed by a third clause in `fn_return_needs_carrier_result_bridge`
+(`src/compiler/emit_fns.c`), alongside the existing catch-box and
+raw-slot-read clauses: when the tail value is an `int64_t` temp and the
+declared result is `REPR_BYVAL_AGG`, route the return through
+`emit_carrier_bridge` (CK_CARRIER -> CK_CONCRETE), which emits the same
+NULL-guarded deref-and-free the ascription site already gets. Reaching that
+point with an int64 temp and an aggregate return type was always the
+miscompile -- `return <int64_t>` into a by-value struct has no valid reading
+-- so the clause can only turn a guaranteed cc failure into the readback the
+value needs.
 
-```turmeric
-  (:: (decode-json doc val) (Result A cstr))   ;; same cc error
+Pinned by `tests/fixtures/generic-wrapper-tail-forwards-return-dispatch`.
+Full suite green (2971 passed, 0 failed).
+
+## What remains: the boxed-struct payload leaks
+
+With the bridge in place the program runs and answers correctly, but a
+`Result` whose Ok payload is a **by-value struct** leaks that payload's box:
+
+```
+Direct leak of 16 byte(s) in 1 object(s):
+    #1 tur_region_alloc_or_malloc
+    #2 ok__spec__int64_t_tur_adt_User
+    #3 __inst_DecodeJson_decode_hyjson_User
+    #4 decode__spec__tur_adt_Result__User__cstr_int64_t_int64_t
 ```
 
-## Workaround (verified)
+Verified with ASan/LSan: scalar and `cstr` payloads are clean; only the struct
+payload leaks. The destructure-and-rebuild spelling is clean for every payload.
 
-Unwrap at `A` and rebuild at the wrapper's own declared result type:
+## Root cause of the remaining leak
 
-```turmeric
-(defn decode [A] [(DecodeJson A)] [doc : int  val : int] : (Result A cstr)
-  (let [r (:: (decode-json doc val) (Result A cstr))]
-    (if (ok? r) (ok (ok-val r)) (err (err-val r)))))
-```
+Two allocations are in play, not one:
 
-Verified on `int`, `cstr` and a `defstruct` payload, on both `Result` arms,
-and through a macro-spliced call site. Pinned by
-`tests/fixtures/generic-wrapper-over-return-dispatch-method`.
+- the **carrier box** holding the Result -- the new return bridge frees this,
+  correctly and exactly once; and
+- the **payload box**, because a monomorphized `Result` over a by-value struct
+  stores its Ok arm as a `tur_adt_User *` and the ctor mallocs a fresh copy
+  into it (`ok__spec__int64_t_tur_adt_User`).
 
-The rebuild assumes a two-armed `Result`. A class method returning some other
-shape would need its own unwrap/rebuild, and one returning an opaque or
-non-destructurable type may have no workaround at all -- untested.
+The payload box is meant to be released by the **caller**, at the let-binding
+that owns the returned aggregate: `emit_let_value` (`emit_expr.c:3149`) emits
+`boxed_struct_payload_walk`'s tag-switch free when
+`adt_app_has_boxed_struct_payload(b->type)` **and**
+`emit_init_owns_fresh_sum(ctx, init)` both hold.
 
-## Why it matters
-
-This is the shape of `encode-string` (`json/encode.tur:166`) and
-`decode-list` (`:513`) in turmeric-spices: a plain `defn` wrapping a class
-method so callers get an ordinary function rather than a bare method call.
-`encode-string` does not hit it because `Encode`'s method returns a plain
-`cstr`, not a parametric `Result`; any wrapper over a `Decode`-shaped method
-does hit it. The msgpack spice plans the same wrapper shape over `DecodeMp`,
-so it will meet this the moment it is written.
-
-The cost is not the workaround -- it is that the failure appears as a C type
-error in a generated file, several layers below where the author is working.
+The second is what fails. It reduces to `fb->returns_fresh_sum_box` on the
+callee's binding, set at elaboration from the wrapper's body. For the
+destructure-and-rebuild body the tail is an `ok` / `err` ctor call, so the flag
+is set and the caller emits the free. For the direct tail-forward the tail is a
+class-method call whose result is the abstract class tyvar, so elaboration
+cannot see a fresh producer and the flag stays clear -- no caller-side drop.
 
 ## Fix directions
 
-The wrapper's monomorphized spec and the forwarded method's return convention
-need to agree. Two candidate seams, neither investigated deeply:
+The wrapper's spec *always* hands back a freshly-owned aggregate after the
+bridge (the carrier box is freed and the payload pointer inside has no other
+owner), so in principle the binding should be flagged `returns_fresh_sum_box`.
 
-1. Teach the spec minting for a constrained-generic wrapper to use the
-   carrier convention when its body is a bare tail call to a class method,
-   matching what the instance actually returns.
-2. Insert the carrier-to-by-value bridge at the tail-call return, which is
-   what the manual destructure-and-rebuild is doing by hand.
+**Not attempted here, deliberately.** The flag is consulted per call site and
+drives a `free`; setting it where an instance hands back a *borrowed* box
+(the `vec-get` shape, which the carrier bridge's own ownership mark exists to
+distinguish) would turn a 16-byte leak into a double free. The bridge knows
+which case it is at emit time; the flag is set at elaboration and read at other
+call sites, so the two need to be connected deliberately rather than by
+pattern-matching the tail. That is the work, and it wants someone with the
+ownership subsystem in view -- not a quick follow-on to the codegen fix.
 
-(2) is closer to how the resolved sibling reports were fixed. Either way the
-workaround above stays correct, so this is a papercut to remove rather than a
-hole to plug.
+Until then, `tests/fixtures/generic-wrapper-tail-forwards-return-dispatch`
+carries `requires.no-leak-check`, and the destructure-and-rebuild spelling
+(pinned by `tests/fixtures/generic-wrapper-over-return-dispatch-method`)
+remains the leak-clean choice when a wrapper returns a struct payload.

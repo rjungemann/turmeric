@@ -483,13 +483,16 @@ spice in the top-level `:members` list.
   ([report](../../reported/same-method-name-in-two-classes-dispatches-by-declaration-order.md)).
   The naming convention is the only guard. If a third serde spice ever
   lands, that report becomes load-bearing rather than informational.
-- **A generic wrapper over a return-dispatch method needs one specific
-  body.** `encode-string` and `decode-list` are this shape, and the msgpack
-  side will want its own. A direct tail-forward fails codegen on the
-  carrier/by-value return boundary; unwrap-and-rebuild works
-  ([report](../../reported/generic-wrapper-tail-forwarding-a-return-dispatch-method.md),
-  pinned by `tests/fixtures/generic-wrapper-over-return-dispatch-method`).
-  Not a blocker, but budget for it rather than rediscovering it.
+- **A generic wrapper over a return-dispatch method.** `encode-string` and
+  `decode-list` are this shape and the msgpack side will want its own. The
+  direct tail-forward used to fail codegen outright; that is **fixed** (a
+  return bridge in `emit_fns.c`). What remains is a 16-byte leak when the
+  payload is a by-value struct, because the caller-side payload drop does
+  not fire for this producer shape
+  ([report](../../reported/generic-wrapper-tail-forwarding-a-return-dispatch-method.md)).
+  Scalar and `cstr` payloads are clean. If a msgpack wrapper returns a
+  struct payload, prefer the destructure-and-rebuild spelling until the
+  ownership flag is connected.
 
 ---
 

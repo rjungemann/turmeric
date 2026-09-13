@@ -541,7 +541,8 @@ static bool catch_box_tail_sole_owned(const Expr *fnbody, const Expr *e) {
 static bool fn_return_needs_carrier_result_bridge(EmitCtx *ctx, const FnDef *fd,
                                                   const Expr *fn_e,
                                                   const char *ret_ctype,
-                                                  bool ret_is_int64_carrier) {
+                                                  bool ret_is_int64_carrier,
+                                                  const char *ret_val) {
     if (ret_is_int64_carrier || !ret_ctype || !fd || !fd->body) return false;
     if (fd->body->type.kind == TY_NEVER) return false;
     if (strchr(ret_ctype, '*') || strcmp(ret_ctype, "int64_t") == 0 ||
@@ -577,6 +578,38 @@ static bool fn_return_needs_carrier_result_bridge(EmitCtx *ctx, const FnDef *fd,
             return false;
         Type rt = emit_resolve_type(ctx, *fn_e->type.as.fn.result_full_type);
         return repr_of(&rt, REPR_POS_CONTAINER_ELEM) == REPR_BOXED_AGG;
+    }
+    /* generic-wrapper-tail-forwarding-a-return-dispatch-method: the tail is a
+     * call whose emitted temp is the int64 carrier -- a typeclass method whose
+     * DECLARED result is the class tyvar, so every instance returns the carrier
+     * (`__inst_DecodeJson_decode_hyjson_int` -> int64_t) -- while this spec's
+     * declared result is the by-value aggregate:
+     *
+     *   (defn decode [A] [(DecodeJson A)] [doc : int val : int] : (Result A cstr)
+     *     (decode-json doc val))
+     *
+     * Exactly the raw-slot-read case above one seam over, and the same fix: a
+     * concrete `(:: (decode-json d v) (Result int cstr))` gets the box readback
+     * from the ascription bridge, and the spec's RETURN position had no
+     * counterpart, so it emitted `return <int64_t>;` from a struct-returning
+     * function -- a hard cc error for a shape `tur check` accepts.
+     *
+     * The recorded-ctype test is the same one the pointer-return straddle below
+     * uses.  Reaching here with an int64 temp and an aggregate return type is
+     * always the miscompile: `return <int64_t>` into a by-value struct has no
+     * valid reading, so this can only turn a guaranteed cc failure into the
+     * readback the value actually needs.  The bridge's own ownership mark
+     * decides whether the box is freed after the copy, so a borrowed carrier
+     * (a container's element) is read without being released. */
+    if (ret_val && emit_str_is_bare_ident(ret_val)) {
+        const char *rec = emit_localvar_lookup_ctype(ret_val);
+        if (rec && strcmp(rec, "int64_t") == 0) {
+            if (!fn_e || fn_e->type.kind != TY_FN ||
+                !fn_e->type.as.fn.result_full_type)
+                return false;
+            Type rt = emit_resolve_type(ctx, *fn_e->type.as.fn.result_full_type);
+            return repr_of(&rt, REPR_POS_RESULT) == REPR_BYVAL_AGG;
+        }
     }
     return false;
 }
@@ -4588,7 +4621,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_printf(file, "return (%s)(intptr_t)%s;\n",
                        ctx->current_fn_ret_ctype, ret_val);
         } else if (fn_return_needs_carrier_result_bridge(
-                       ctx, fd, e, ret_ctype, ret_is_int64_carrier)) {
+                       ctx, fd, e, ret_ctype, ret_is_int64_carrier, ret_val)) {
             /* catch-unwind-byvalue-result-return-mismatch: the body value is the
              * int64 carrier (a heap Result box, e.g. a let-bound catch-unwind
              * result returned directly) but the declared return is the by-value
