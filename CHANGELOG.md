@@ -2,11 +2,20 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.47.0] -- 2026-09-12
 
-**Next release must be a MINOR bump (`/cut-minor-release`, not
-`/cut-patch-release`):** the defer unwind-order change below is a
-user-visible semantic change, not a fix.
+### Added
+
+- **Lattice vocabulary in the stdlib.** A new `stdlib/typeclass-lattice.tur`
+  lands `Semigroup` and `Monoid` alongside the `JoinSemilattice` /
+  `MeetSemilattice` / `Lattice` join-meet family, and `Ord` gains derived
+  `max` / `min`. This is the vocabulary the CRDT spice is built on; the plan
+  is in `docs/upcoming/lattice-vocabulary-plan.md`.
+- **The source fuzzers run in CI.** A `fuzz.yml` workflow exercises the type,
+  refine, regions and Saffron source fuzzers, backed by a checked-in seed
+  corpus (`tests/fuzz-seed-corpus.txt`) and a `replay-fuzz-seeds.sh` harness
+  that `tests/run.sh` replays too -- so a shape the fuzzer crashed on becomes
+  a permanent regression test rather than a one-off log line.
 
 ### Changed
 
@@ -35,6 +44,23 @@ user-visible semantic change, not a fix.
 
 ### Fixed
 
+- **A constrained generic keeps its instance through every calling shape.**
+  A `(defn f [A : Show] ...)` lost its dictionary when it was passed as a
+  function value, when it was reached through a relay call, and when the
+  interpreter re-entered it; inheritance was also keyed on the type-variable
+  NAME rather than the class, so two constraints sharing a tyvar letter
+  crossed wires. Instance inheritance now flows through the call, the value,
+  and the relay alike, on both back ends.
+- **A `definstance` is dispatchable from another module.** An instance
+  defined in one module of a spice was invisible to a method call in a
+  sibling module; covered by a new `cross-module-instance` spice fixture.
+- **A phantom-only parametric ADT gets a real base constructor,** and
+  `clone_struct_app_type` no longer segfaults on a `TY_APP` with a null
+  fn/arg.
+- **`min` and `max` are back in the prelude,** and the Windows `NOMINMAX`
+  preamble no longer eats their names.
+- **An argument that is already a `tur_poly_fn_t` is not carrier-cast again**
+  when forwarded to a later `defn`.
 - **A caught panic now propagates through CPS-colored functions.** On the
   DK/CPS path (any function taking a `^fat` thunk, or otherwise
   effect-colored) every per-call-site panic check emitted only a comment, so

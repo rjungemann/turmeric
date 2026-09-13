@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.46.1` -- Retires the emitter's expression-depth cap in favor of a compiler stack sized for its own recursion, unifies all four release archives on one prefix layout, and fixes a batch of Saffron `any`-seam and JIT miscompiles.
+**Latest release:** `v0.47.0` -- Unwinds `defer` innermost-first on every exit path, lands the lattice typeclass vocabulary (`Semigroup`, `Monoid`, join/meet), and fixes a cluster of constrained-generic dispatch defects.
 
 ## What
 
