@@ -1899,6 +1899,62 @@ static Type elab_subst_class_tyvars(Arena *arena, Type t,
     return t;
 }
 
+/* default-method-spliced-at-carrier-type: true when `t` names any of `tc`'s
+ * type parameters or associated-type members -- i.e. the annotation is written
+ * IN TERMS OF the class and only means something once an instance grounds it. */
+static bool elab_type_mentions_class_var(const Type *t, const TypeClass *tc,
+                                         const TypeClassInstance *inst) {
+    if (!t || !tc) return false;
+    for (uint8_t k = 0; k < tc->n_type_params; k++)
+        if (tc->type_params[k] &&
+            rt_type_mentions_tyvar(t, tc->type_params[k]->name))
+            return true;
+    if (inst)
+        for (uint8_t k = 0; k < tc->n_assoc_types && k < inst->n_assoc_types; k++)
+            if (tc->assoc_type_names[k] &&
+                rt_type_mentions_tyvar(t, tc->assoc_type_names[k]->name))
+                return true;
+    return false;
+}
+
+/* default-method-spliced-at-carrier-type: ground a SPLICED DEFAULT method's
+ * own annotation at this instance.
+ *
+ * `elab_defclass` cannot elaborate a sibling-calling default at the class (no
+ * instance exists yet for `.tag` to resolve against), so it records the method
+ * FORM and `elab_definstance` splices it in for an omitted method.  From there
+ * the form is treated as one the instance wrote -- but it is not: an instance
+ * method is written with BARE parameters and inherits its types from the class
+ * signature under the instance substitution, while the default carries the
+ * class's own annotations (`[x : a y : a] : a`).  Elaborated literally, `a` is
+ * a type variable, which lowers to the int64 carrier, so `C [float]`'s spliced
+ * `pick` emitted `__inst_C_pick_float(int64_t, int64_t)` and the caller's
+ * doubles were truncated on the way in -- a silent wrong answer that `tur
+ * check` and cc both accept, visible only through a generic (the concrete call
+ * is dispatched and converted consistently).
+ *
+ * Substituting the class's type parameters (and associated-type members) for
+ * this instance's arguments is the same treatment the unannotated-parameter
+ * path already applies; it just never reached the annotations.  Applied ONLY to
+ * a spliced form: an annotation the instance wrote itself is its own word about
+ * its own types, and an instance head's free tyvar may legitimately share a
+ * name with a class type parameter. */
+static Type elab_subst_default_method_ann(Arena *arena, Type t,
+                                          const TypeClass *tc,
+                                          const TypeClassInstance *inst,
+                                          const Type *type_args,
+                                          uint8_t n_type_args) {
+    if (!tc) return t;
+    if (n_type_args > 0 && tc->n_type_params > 0)
+        t = elab_subst_class_tyvars(arena, t, tc->type_params,
+                                    tc->n_type_params, type_args, n_type_args);
+    if (inst && inst->n_assoc_types > 0 && tc->assoc_type_names)
+        t = elab_subst_class_tyvars(arena, t, tc->assoc_type_names,
+                                    tc->n_assoc_types, inst->assoc_types,
+                                    inst->n_assoc_types);
+    return t;
+}
+
 /* M7 fix direction 1 (flag-gated): a function value stored as an HKT container
  * element (e.g. the `(fn a b)` element of `(Option (fn a b))` in the
  * Applicative `ap` shape) is physically a fat closure box -- it was boxed at
@@ -3385,6 +3441,19 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
      * the receiver at this instance's type and its siblings resolvable.  A
      * method with neither an impl nor a default is the error this used to
      * report as a bare count. */
+    /* default-method-spliced-at-carrier-type: which method slots were filled
+     * from the CLASS's default form rather than written by this instance.  A
+     * spliced default carries the class's own annotations (`[x : a y : a] : a`)
+     * and they were elaborated literally -- `a` is a type variable, which lowers
+     * to the int64 carrier -- so a default whose parameters or result are the
+     * class variable emitted `__inst_C_pick_float(int64_t, int64_t)` and the
+     * caller's doubles were converted on the way in.  Only a spliced form gets
+     * the substitution below; an annotation the INSTANCE wrote is its own word
+     * about its own types and stays literal (an instance head's free tyvar may
+     * legitimately share a name with a class type parameter). */
+    bool *impl_is_default = tc->n_methods
+        ? (bool *)arena_alloc(e->arena, tc->n_methods * sizeof(bool)) : NULL;
+    for (uint8_t i = 0; i < tc->n_methods; i++) impl_is_default[i] = false;
     {
         Form **ordered = tc->n_methods
             ? (Form **)arena_alloc(e->arena, tc->n_methods * sizeof(Form *)) : NULL;
@@ -3411,8 +3480,10 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                     pf->as.list.items[0]->as.sym == tc->methods[i].name)
                     found = pf;
             }
-            if (!found && tc->methods[i].default_method_form)
+            if (!found && tc->methods[i].default_method_form) {
                 found = (Form *)tc->methods[i].default_method_form;
+                impl_is_default[i] = true;
+            }
             if (!found) {
                 diag_emit(DIAG_ERROR, call->span,
                           "definstance: missing method '%s' for '%s', and the class "
@@ -3610,6 +3681,10 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
 
     for (uint8_t i = 0; i < tc->n_methods; i++) {
         Form *impl_form = method_impl_forms[i];
+        /* default-method-spliced-at-carrier-type: this slot was filled from the
+         * class's default form, so its annotations are the CLASS's text and name
+         * the class's type parameters, not this instance's types. */
+        const bool is_default_form = impl_is_default && impl_is_default[i];
         if (impl_form->tag != F_LIST || impl_form->as.list.len < 3) {
             diag_emit(DIAG_ERROR, impl_form->span,
                       "method implementation requires (name [params...] body...)");
@@ -3796,6 +3871,30 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                     impl_body_start = 3;
                 }
             }
+            /* default-method-spliced-at-carrier-type: `(pick [x : a y : a] : a
+             * ...)` spliced from the class restates the class signature, so its
+             * `: a` is not an instance opting out -- it IS the class variable.
+             * Elaborated literally it lowers to the int64 carrier and truncates
+             * every non-int instance.  Drop the annotation and keep the
+             * already-substituted class return (and its ret_was_class_var
+             * commit), which is exactly what a hand-written instance method with
+             * no return annotation gets.  Only the annotation is dropped: the
+             * body still starts at slot 3. */
+            if (kw && is_default_form) {
+                bool kw_is_class_var = false;
+                for (uint8_t ck = 0; ck < tc->n_type_params && !kw_is_class_var; ck++)
+                    if (tc->type_params[ck] &&
+                        strcmp(tc->type_params[ck]->name, kw->name) == 0)
+                        kw_is_class_var = true;
+                for (uint8_t ak = 0; !kw_is_class_var && ak < tc->n_assoc_types; ak++)
+                    if (tc->assoc_type_names && tc->assoc_type_names[ak] &&
+                        strcmp(tc->assoc_type_names[ak]->name, kw->name) == 0)
+                        kw_is_class_var = true;
+                if (kw_is_class_var) {
+                    kw = NULL;
+                    impl_body_start = 3;
+                }
+            }
             if (kw) {
                 /* carrier-aware-return-unification Phase 3: an explicit instance
                  * return annotation replaces the substituted class-var return, so
@@ -3840,7 +3939,19 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                                 ret_or_body->as.list.len >= 1)
                         ? ret_or_body->as.list.items[0] : ret_or_body;
                     Type *ft = type_expr_from_form(e, tf, NULL, NULL, NULL, 0);
-                    if (ft) return_type = *ft;
+                    if (ft) {
+                        return_type = *ft;
+                        /* default-method-spliced-at-carrier-type: a COMPOUND
+                         * class-var return on a spliced default (`: (Vec a)`)
+                         * cannot simply be dropped -- the shape is the class's
+                         * word.  Ground its class variables at this instance
+                         * instead of letting them lower to the carrier. */
+                        if (is_default_form &&
+                            elab_type_mentions_class_var(&return_type, tc, inst))
+                            return_type = elab_subst_default_method_ann(
+                                e->arena, return_type, tc, inst,
+                                type_args, n_type_args);
+                    }
                 }
                 impl_body_start = 3;
             }
@@ -3909,6 +4020,30 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                             return NULL;
                         }
                         uint8_t prev = n_method_params - 1;
+                        /* default-method-spliced-at-carrier-type: a spliced
+                         * default carries the CLASS's parameter annotations
+                         * (`[x : a y : a]`).  Elaborated literally, `a` is a
+                         * type variable and lowers to the int64 carrier, so
+                         * `C [float]`'s spliced method took `(int64_t, int64_t)`
+                         * and truncated the caller's doubles at the seam.  A
+                         * hand-written instance method writes BARE parameters
+                         * and inherits the class signature under the instance
+                         * substitution -- which the F_SYM arm below has already
+                         * done for this slot -- so drop the restating annotation
+                         * and keep that.  It also leaves m_param_annotated
+                         * false, which is right: the class's own text is not the
+                         * instance opting out of the class's refinement (RT1).
+                         *
+                         * A CONTRACT annotation is never dropped: it carries a
+                         * predicate, not just a type. */
+                        if (is_default_form && p->tag == F_TYPE_ANN &&
+                            p->as.list.len > 0 &&
+                            p->as.list.items[0]->tag != F_CONTRACT_TYPE) {
+                            Type *dann = type_expr_from_form(
+                                e, p->as.list.items[0], NULL, NULL, NULL, 0);
+                            if (dann && elab_type_mentions_class_var(dann, tc, inst))
+                                continue;
+                        }
                         if (prev < MAX_FN_ARITY) m_param_annotated[prev] = true;
                         Type param_type = method_param_types[prev];
                         if (p->tag == F_TYPE_ANN) {

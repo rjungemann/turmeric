@@ -19,14 +19,17 @@
 (load "stdlib/typeclass.tur")
 
 ;; As defns they cost an Ord instance nothing: every instance implements only
-;; the four predicates.  A DEFAULT METHOD was the obvious design and is
-;; miscompiled -- the class's method form is spliced into the instance with its
-;; `: a` annotations intact and elaborated literally, so `Ord [float]`'s copy
-;; emitted as `int64_t __inst_Ord_max_float(int64_t, int64_t)` and truncated its
-;; own arguments: `(generic-max 2.5 7.1)` answered 2.  Caught by the
+;; the four predicates, and a defn is not overridable -- which is what was
+;; wanted.  A DEFAULT METHOD was the obvious design and used to be miscompiled:
+;; the class's method form was spliced into the instance with its `: a`
+;; annotations intact and elaborated literally, so `Ord [float]`'s copy emitted
+;; as `int64_t __inst_Ord_max_float(int64_t, int64_t)` and truncated its own
+;; arguments: `(generic-max 2.5 7.1)` answered 2.  Caught by the
 ;; -Wfloat-conversion ratchet, not by the stdout diff, because the CONCRETE
-;; `(max 2.5 7.1)` was right and only the generic one was wrong.
-;; See docs/reported/default-method-spliced-at-carrier-type.md.
+;; `(max 2.5 7.1)` was right and only the generic one was wrong.  Fixed
+;; 2026-09-13 -- see docs/archive/default-method-spliced-at-carrier-type.md and
+;; tests/fixtures/default-method-class-var-result, which pins the default-method
+;; spelling directly.  These stay defns for the two reasons above.
 (defn generic-max [^Ord A] [x : A y : A] : A (max x y))
 (defn generic-min [^Ord A] [x : A y : A] : A (min x y))
 

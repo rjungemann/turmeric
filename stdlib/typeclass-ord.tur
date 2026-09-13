@@ -95,19 +95,21 @@
 ;; A constrained generic DEFN, deliberately not a class method with a default
 ;; body.  Three reasons, in order of weight:
 ;;
-;;  1. A default method whose declared types mention the class variable is
-;;     miscompiled.  elab_definstance splices the class's method FORM into the
-;;     instance, annotations and all, and the `: a` on its parameters and result
-;;     is elaborated literally rather than substituted to the instance's type --
-;;     so `Ord [float]`'s spliced copy emits as
-;;     `int64_t __inst_Ord_max_float(int64_t, int64_t)` and truncates its own
-;;     arguments.  `(max 2.5 7.1)` through a generic answered 2.  See
-;;     docs/reported/default-method-spliced-at-carrier-type.md.
-;;  2. Omitting the annotations is not an option either: with the class variable
-;;     appearing only in the return, every call site becomes "cannot infer type
-;;     for return-directed method 'max'".
-;;  3. As a defn it costs a user-written `Ord` instance nothing -- a class
+;;  1. As a defn it costs a user-written `Ord` instance nothing -- a class
 ;;     method, defaulted or not, is one more thing every instance must satisfy.
+;;  2. It is not overridable, which is what was wanted: `max` over an `Ord` is
+;;     the same function at every instance.
+;;
+;; The original first reason was a DEFECT, and it is fixed (2026-09-13): a
+;; default method whose declared types mention the class variable used to be
+;; miscompiled -- elab_definstance spliced the class's method FORM into the
+;; instance, annotations and all, and the `: a` on its parameters and result was
+;; elaborated literally rather than substituted to the instance's type, so
+;; `Ord [float]`'s spliced copy emitted as
+;; `int64_t __inst_Ord_max_float(int64_t, int64_t)` and truncated its own
+;; arguments (`(max 2.5 7.1)` through a generic answered 2).  See
+;; docs/archive/default-method-spliced-at-carrier-type.md.  A default method is
+;; a working spelling again; these two reasons are why this is still a defn.
 ;;
 ;; Retired the `max`/`min` MACROS in stdlib/macros.tur, which expanded to the
 ;; builtin `>=` / `<=` and so worked for concrete int and float and nowhere

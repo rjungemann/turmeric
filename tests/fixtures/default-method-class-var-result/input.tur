@@ -1,0 +1,44 @@
+; Regression (default-method-spliced-at-carrier-type): a class default method
+; whose parameters/result are the CLASS VARIABLE is spliced into an instance
+; carrying the class's own annotations (`[x : a y : a] : a`).  Elaborated
+; literally, `a` is a type variable and lowers to the int64 carrier, so
+; `C [float]`'s spliced method emitted `__inst_C_pick_float(int64_t, int64_t)`
+; and the caller's doubles were truncated at the seam -- 2.5 came back as 2.
+; The concrete call was right, so only the call THROUGH A GENERIC showed it.
+(defclass C [a]
+  (tag  [x : a] : bool)
+  (pick [x : a y : a] : a (if (tag x) x y)))
+
+(definstance C [int]   (tag [x] true))
+(definstance C [float] (tag [x] true))
+
+(defn g [^C A] [x : A y : A] : A (pick x y))
+
+; An instance that WRITES the method keeps working unchanged.
+(defclass D [a]
+  (dtag  [x : a] : bool)
+  (dpick [x : a y : a] : a (if (dtag x) x y)))
+
+(definstance D [float]
+  (dtag [x] true)
+  (dpick [x y] y))
+
+(defn h [^D A] [x : A y : A] : A (dpick x y))
+
+; A default returning a FIXED type is unaffected -- pin that too.
+(defclass Named [a]
+  (nm    [x : a] : cstr)
+  (label [x : a] : cstr (nm x)))
+
+(definstance Named [int] (nm [x] "int"))
+
+(defn lab [^Named A] [x : A] : cstr (label x))
+
+(defn main [] : int
+  (println (pick 2.5 7.1))     ; concrete: already worked
+  (println (g 2.5 7.1))        ; through a generic: was 2
+  (println (pick 2 7))         ; int instance: carrier type is correct by luck
+  (println (g 2 7))
+  (println (h 2.5 7.1))        ; explicit instance method, unchanged
+  (println (lab 1))
+  0)
