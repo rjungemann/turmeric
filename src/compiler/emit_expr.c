@@ -14948,7 +14948,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (adt_opaque_c_names_as_pointer(odef)) {
                     const char *icty =
                         emit_type_c_name(ctx, e->as.ascribe_.inner->type);
-                    if (icty && strchr(icty, '*') == NULL) {
+                    /* defopaque-over-sym-skips-the-ptr-bridge: a pointer-sized
+                     * carrier that is not a `void *` needs the relabel too, and
+                     * for a CONST one (`const char *` from a cstr literal, the
+                     * `const struct __tur_sym *` a quoted symbol emits) it is
+                     * what launders the qualifier -- otherwise `(:: "bob" Name)`
+                     * initialises the `void *` slot from a `const char *` and cc
+                     * reports a discarded qualifier.  Routing through intptr_t
+                     * is the same relabel the non-pointer arm already does, and
+                     * a `void *` inner is skipped because it already agrees. */
+                    bool inner_is_ptr = icty && strchr(icty, '*') != NULL;
+                    bool inner_is_void_ptr =
+                        icty && strcmp(icty, "void *") == 0;
+                    if (icty && (!inner_is_ptr ||
+                                 (inner_is_ptr && !inner_is_void_ptr))) {
                         Buf pb; buf_init(&pb);
                         buf_printf(&pb, "(void *)(intptr_t)(%s)", inner_val);
                         buf_putc(&pb, '\0');

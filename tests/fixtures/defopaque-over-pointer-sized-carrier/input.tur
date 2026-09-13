@@ -1,0 +1,19 @@
+; Regression (defopaque-over-sym-skips-the-ptr-bridge): a `defopaque` over a
+; pointer-sized carrier that is not SPELLED as a pointer -- `:Sym`, `:cstr` --
+; took the int64 path, so the handle was stored into an `int64_t` slot and read
+; back out to a `const char *` / `const struct __tur_sym *`.  `tur check` was
+; clean; cc reported -Wint-conversion in both directions (an error on
+; clang >= 21).  Needs an actual BUILD, not just a check -- run.sh's
+; -Wint-conversion ratchet is what pins it.
+(defopaque ReplicaId :Sym)
+(defopaque Name :cstr)
+
+(defn rid-name [r : ReplicaId] : cstr (sym->str (:: r Sym)))
+
+(defn main [] : int
+  (let [r : ReplicaId (:: (quote alice) ReplicaId)
+        n : Name      (:: "bob" Name)]
+    (println (sym->str (:: r Sym)))     ; store, then read the carrier back out
+    (println (rid-name r))              ; the same read across a call boundary
+    (println (:: n cstr)))
+  0)

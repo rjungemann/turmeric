@@ -1299,14 +1299,27 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
      * `(defopaque String :ptr<void>)` and `(defopaque UserId :int)` were
      * indistinguishable downstream.  The base is a type keyword (`:ptr`,
      * `:ptr<void>`, `:ptr<T>`, `:int`, ...), so the test is a prefix match on
-     * the keyword's own name. */
+     * the keyword's own name.
+     *
+     * defopaque-over-sym-skips-the-ptr-bridge: the question is "is this carrier
+     * a POINTER", not "is it SPELLED with the word ptr".  `cstr` and `Sym` are
+     * pointer-sized carriers whose C spellings are `const char *` and
+     * `const struct __tur_sym *`, and both took the int64 path -- so
+     * `(defopaque Name :cstr)` stored a `char[6]` into an `int64_t` slot and
+     * read it back out to a `const char *`, both directions -Wint-conversion
+     * (a hard error on clang >= 21, and a silent truncation risk elsewhere).
+     * `tur check` was clean; only cc saw it.  `defstruct`/`defdata` got the
+     * equivalent rows in v0.46.1 (`4ff9ad724`); this is the same judgement one
+     * layer up, made once here rather than bridged per store and again per
+     * read-back seam. */
     {
         const Form *base_form = call->as.list.items[base_idx];
         if (base_form->tag == F_KEYWORD && base_form->as.sym) {
             const char *bn = base_form->as.sym->name;
             def->opaque_base_is_ptr =
                 (strcmp(bn, "ptr") == 0 || strcmp(bn, "ptr-void") == 0 ||
-                 strncmp(bn, "ptr<", 4) == 0);
+                 strncmp(bn, "ptr<", 4) == 0 ||
+                 strcmp(bn, "cstr") == 0 || strcmp(bn, "Sym") == 0);
         }
     }
     /* option-niche: `:non-null` declares "this handle's valid values exclude
@@ -1316,8 +1329,8 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     if (opaque_non_null && !def->opaque_base_is_ptr) {
         diag_emit(DIAG_ERROR, call->span,
                   "defopaque: :non-null requires a pointer base type "
-                  "(:ptr or :ptr<...>) -- it declares that the handle's valid "
-                  "values exclude the null pointer");
+                  "(:ptr, :ptr<...>, :cstr or :Sym) -- it declares that the "
+                  "handle's valid values exclude the null pointer");
         return NULL;
     }
     def->opaque_non_null = opaque_non_null;

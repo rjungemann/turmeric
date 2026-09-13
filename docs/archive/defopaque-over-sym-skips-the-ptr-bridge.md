@@ -4,7 +4,37 @@
 (`-Wint-conversion` is an error there), so it is a hard build failure on the
 macOS CI leg and a silent pointer-into-int64 truncation risk elsewhere.
 
-**Status:** open. Found 2026-09-11 executing crdt-spice-plan C1, which had
+**Status: RESOLVED 2026-09-13**, by the direction this report argued for.
+
+`opaque_base_is_ptr` (`elab_structs.c`) asked "is the declared base SPELLED with
+the word ptr" when the question is "is this carrier a POINTER".  `cstr` and
+`Sym` are pointer-sized carriers whose C spellings are `const char *` and
+`const struct __tur_sym *`, so both now take the pointer path and the newtype
+c-names `void *`.  That covers BOTH seams the report identified with one
+judgement -- the store into the handle and the read-back out of it -- which is
+why it beat a per-store bridge: a per-store fix would have needed the read-back
+seam written again, and the next carrier of this kind would have needed both.
+
+One companion change at the emitter: the opaque ascribe seam already relabelled
+a NON-pointer inner through `(void *)(intptr_t)`, and now does the same for a
+pointer inner that is not already `void *`.  That is what launders the qualifier
+-- `(:: "bob" Name)` initialising a `void *` slot from a `const char *` is a
+discarded-qualifier diagnostic, which the run.sh ratchet does not watch and
+would have shipped quietly.
+
+The `:non-null` attribute is now accepted over these bases too (its diagnostic
+names them), which is consistent: an opaque over `cstr` whose author claims
+non-nullness is the same kind of claim as one over `:ptr<void>`.  The report's
+note that a RAW `cstr` payload is never niche-eligible is untouched -- that is
+about a payload with no author to make the claim.
+
+Pinned by `tests/fixtures/defopaque-over-pointer-sized-carrier`: both carriers,
+both directions, plus the read across a call boundary (`rid-name`), which the
+`Sym` repro alone did not reach.  It fails pre-fix through run.sh's own
+-Wint-conversion ratchet exactly as the report predicted, with no assertion of
+its own needed.  Suite: 2973 passed, 0 failed.
+
+Found 2026-09-11 executing crdt-spice-plan C1, which had
 flagged this exact shape as "the one shape here that is not yet exercised by a
 fixture; probe it first".
 
