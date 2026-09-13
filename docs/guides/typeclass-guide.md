@@ -17,6 +17,7 @@ Turmeric's typeclasses are resolved entirely at **compile time** using static di
 - **`defclass`** -- Declares a typeclass name, its type parameters, and its method signatures.
 - **`definstance`** -- Implements a typeclass for a specific type or type constructor, optionally requiring constraints.
 - **Idempotency** -- Re-running or reloading a `definstance` replaces the existing entry in the dispatch table, making it safe for interactive REPL-based development.
+- **Stdlib classes** -- `Eq`, `Ord`, `Show`, `Hash`, `Functor`, `Monad` and friends each ship in their own `stdlib/typeclass-*.tur` file and are **auto-loaded**. The algebraic combining classes (`Semigroup`, `Monoid`, and the join/meet lattice family) are the exception: they live in `stdlib/typeclass-lattice.tur`, which you `load` explicitly -- see the [Lattice Guide](lattice-guide.md).
 - **Shadowing Warnings (TUR-W0039)** -- If a typeclass method shares a name with an ordinary function (`defn`) in the same scope, the compiler emits a warning. Both coexist, but rename one if the clash is accidental.
 
 ---
@@ -462,3 +463,17 @@ For those curious about how this lowers, every `definstance Class [TypeArgs]` un
 3. **Dispatch Resolution**: When calling a typeclass method, the compiler locates the appropriate dictionary singleton at compile time and emits a standard direct/indirect function pointer call (`EX_DICT`).
 
 For a deep dive into return overriding, the closure-handle convention, and C types resolution, please see [Typeclass Dictionary Internals](typeclass-internals-guide.md).
+
+---
+
+## Related Guides
+
+- [Semigroups, Monoids, and Lattices](lattice-guide.md) -- the algebraic
+  combining vocabulary in `stdlib/typeclass-lattice.tur`, the selection
+  newtypes that carry each algebra, and the runnable law predicates. Also
+  covers `max` / `min`, which are now constrained generics over `Ord` rather
+  than macros.
+- [Typeclass Dictionary Internals](typeclass-internals-guide.md) -- how an
+  instance lowers to a C dictionary struct and singleton.
+- [Approaches to Polymorphism](polymorphism-guide.md) -- where ad-hoc
+  polymorphism sits among the other mechanisms.
