@@ -1,24 +1,24 @@
-;; deprecated-shim-over-return-dispatch-method -- a ^deprecated generic defn
-;; forwarding to a RETURN-TYPE-DIRECTED typeclass method.
+;; generic-wrapper-over-return-dispatch-method -- a constrained generic defn
+;; that forwards to a RETURN-TYPE-DIRECTED typeclass method.
 ;;
-;; This is the shape a spice needs when it renames a globally-resolving class
-;; method and wants the old spelling to keep working for one release (the
-;; json-spice Encode/Decode -> EncodeJson/DecodeJson rename planned in
-;; docs/upcoming/hold/msgpack-spice-plan.md).
+;; This is the shape of json/encode.tur's `encode-string` and `decode-list`:
+;; a plain defn wrapping a class method, so callers get an ordinary function
+;; instead of a bare method call.  The msgpack spice will want its own.
 ;;
 ;; The body shape is load-bearing.  A DIRECT tail-forward --
 ;;
 ;;   (defn decode [A] [(DecodeJson A)] [doc : int val : int] : (Result A cstr)
 ;;     (decode-json doc val))
 ;;
-;; -- does not compile: the shim's monomorphized spec declares a by-value
+;; -- does not compile: the wrapper's monomorphized spec declares a by-value
 ;; Result while the forwarded method call yields the int64 carrier, so cc
 ;; rejects it with "incompatible types when returning type 'int64_t' but
 ;; 'tur_adt_Result__int__cstr' was expected".  Unwrapping at A and rebuilding
-;; at the shim's own result type is what works, and is what this pins.
+;; at the wrapper's own result type is what works, and is what this pins.
+;; See docs/reported/generic-wrapper-tail-forwarding-a-return-dispatch-method.md
 ;;
-;; Covers: primitive payload, cstr payload, defstruct payload (the derive-json
-;; case), and both Result arms.
+;; Covers: primitive payload, cstr payload, defstruct payload, both Result
+;; arms, and a macro-spliced call site.
 
 (defstruct User [name : cstr age : int])
 
@@ -43,15 +43,15 @@
     (err "decode User: negative")
     (ok (make-struct User "ada" 36)))))
 
-;; The shim under test.  Unwrap at A, rebuild at the declared result type.
-(defn ^deprecated "use `decode-json`" decode [A] [(DecodeJson A)]
+;; The wrapper under test.  Unwrap at A, rebuild at the declared result type.
+(defn decode [A] [(DecodeJson A)]
   [doc : int  val : int] : (Result A cstr)
   (let [r (:: (decode-json doc val) (Result A cstr))]
     (if (ok? r) (ok (ok-val r)) (err (err-val r)))))
 
-;; A macro that splices a bare call to the deprecated name, as httpd's
-;; req-decode does.
-(defmacro shim-decode [doc val type-name]
+;; A macro that splices a bare call to the wrapper, as httpd's req-decode
+;; does with `decode`.
+(defmacro wrap-decode [doc val type-name]
   `(:: (decode ~doc ~val) (Result ~type-name cstr)))
 
 (defn main [] : int
@@ -60,7 +60,7 @@
         u  (:: (decode 0 7) (Result User cstr))
         bi (:: (decode 0 -1) (Result int cstr))
         bu (:: (decode 0 -1) (Result User cstr))
-        m  (shim-decode 0 7 User)]
+        m  (wrap-decode 0 7 User)]
     (println (ok-val i))
     (println (ok-val s))
     (println (.name (ok-val u)))
