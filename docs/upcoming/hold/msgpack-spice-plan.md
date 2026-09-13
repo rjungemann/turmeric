@@ -271,18 +271,47 @@ scoped by `(export ...)`, so `encode` / `decode` / `decode-checked` must be
 added to `json/encode`'s export list and to `json/build.tur`'s `:exports`
 for the deprecation window, then removed again at 0.5.0.
 
-**The decode side is not low risk.** `decode` is return-type-directed --
-the instance is selected by an ascription at the call site,
-`(:: (decode doc val) (Result User cstr))` -- so a forwarding shim has to
-let that ascription pin `A` and then re-dispatch through it. `decode-list`
-(`json/encode.tur:513`) proves the `[A] [(Decode A)]` generic shape works,
-but *propagating* a `(Result A cstr)` ascription through a second dispatch
-is a genuinely new path and is the same machinery that has already produced
-two archived reports (`return-dispatch-ascription-result-wrapped-not-honored`,
-`typeclass-method-parameterized-result-carrier-mismatch`). **Spike it
-before promising it in the CHANGELOG.** If it does not hold, the decode
-side ships as a hard rename with no shim -- acceptable, but announce it
-that way from the start rather than retracting a promise.
+**The decode side works too, but only one body shape compiles.**
+`decode` is return-type-directed -- the instance is selected by an
+ascription at the call site -- so a forwarding shim has to let that
+ascription pin `A` and then re-dispatch through it. Spiked against
+`tur` v0.47.0; the result is unambiguous. The obvious body **fails
+codegen**:
+
+```turmeric
+;; DOES NOT COMPILE -- forwards the carrier straight out
+(defn ^deprecated "use `decode-json`" decode [A] [(DecodeJson A)]
+  [doc : int  val : int] : (Result A cstr)
+  (decode-json doc val))
+```
+
+```
+error: incompatible types when returning type 'int64_t'
+       but 'tur_adt_Result__int__cstr' was expected
+```
+
+The shim's monomorphized spec declares a by-value `Result`, while the
+forwarded method call yields the int64 carrier -- the mismatch family behind
+`return-dispatch-ascription-result-wrapped-not-honored` and
+`typeclass-method-parameterized-result-carrier-mismatch`. Adding an
+ascription to the inner call does not help. **Destructure and rebuild does:**
+
+```turmeric
+;; COMPILES AND RUNS -- unwrap at A, rebuild at the shim's own result type
+(defn ^deprecated "use `decode-json`" decode [A] [(DecodeJson A)]
+  [doc : int  val : int] : (Result A cstr)
+  (let [r (:: (decode-json doc val) (Result A cstr))]
+    (if (ok? r) (ok (ok-val r)) (err (err-val r)))))
+```
+
+Verified end-to-end on `int`, `cstr`, and a `defstruct` payload (the
+`derive-json` case), on both the ok and err arms, and through a
+macro-spliced call site of the `req-decode` shape. So the decode shim is
+**not** the risk this plan first assumed -- it is a known body shape. Two
+things still to watch: the rebuild costs an unwrap/rewrap per call (it is a
+deprecation shim, so that is acceptable), and it is only reachable because
+`ok-val`/`err-val` are total at `A`; a class whose method returns something
+other than a two-armed `Result` would need its own shape.
 
 **Class names CANNOT be shimmed.** Every `(definstance Encode [T] ...)`
 head and every `[^Encode T]` / `[(Decode A)]` constraint is a hard rename
@@ -314,15 +343,110 @@ repo-wide grep makes them look like fallout.
 
 This is the trap. `req-decode` (`httpd/src/httpd/handler.tur:208`) splices
 a bare `(decode __doc __root)` into its expansion, and `derive-json`'s six
-`definstance` templates do the same inside json. If a shim becomes visible
-before those templates are updated, a user who writes
-`(req-decode req EchoReq)` gets a deprecation warning pointing at *their*
-line and naming `decode` -- a symbol they never typed and cannot rewrite.
+`definstance` templates do the same inside json.
+
+Measured behavior (spiked on v0.47.0): the warning is emitted **once per
+macro expansion**, and every one of them carries the span of the *macro
+template*, not of the call site. Three `(req-decode ...)` calls produce
+three identical warnings all pointing at the same line inside
+`httpd/handler.tur`. So a downstream user gets N copies of a warning about
+a symbol they never typed, located in a file they do not own and cannot
+edit -- unactionable and un-silenceable short of not calling the macro.
 
 So: update every macro template in json, http and httpd to emit the new
 names in the **same commit** that introduces them, before any shim reaches
 a downstream caller. A shim should only ever warn about a name the warned
 line actually contains.
+
+### Closing the class-name gap: `^deprecated` on `defclass`
+
+The "class names cannot be shimmed" limit above is a missing compiler
+feature, not a law. Scoped out here because it is the difference between a
+hard break and a clean deprecation for the half of this rename that has no
+migration path at all.
+
+**Why the bare names must go regardless.** The alternative -- let both
+spices declare a method named `encode` and distinguish them by class -- is
+not merely bad style, it is a **silent wrong answer** today: two classes
+declaring the same method name compile with zero diagnostics and dispatch
+to whichever instance registered last, so reordering two unrelated
+`definstance` forms flips which format a program serializes to. Filed as
+[same-method-name-in-two-classes-dispatches-by-declaration-order](../../reported/same-method-name-in-two-classes-dispatches-by-declaration-order.md).
+That closes the "could we just keep `encode`?" question: no.
+
+**Feature 1 -- `^deprecated` on `defclass` (small).** The attribute parse is
+a copy of `defn`'s (`elab_fns.c:5573-5603`): `defclass` reads its name at
+`items[1]` (`elab_typeclasses.c:1277`) and everything after is positional,
+so the same "shift the index past `^deprecated` and an optional message
+string" loop drops in. Storage is two fields on `TypeClass`
+(`typeclass.h:86`), mirroring `Binding.is_deprecated` /
+`deprecation_message` (`expr.h:299`).
+
+Emission is the easy part, because every user-facing class-name site funnels
+through one function -- `typeclass_env_lookup_typeclass`
+(`typeclass.c:86`), a flat scan of one registry. Each caller already has the
+same shape (`lookup; if (!tc) { error; return NULL; }`) and a span in hand,
+so one helper called after each successful lookup covers all of them:
+
+| Site | What the user wrote |
+| --- | --- |
+| `elab_typeclasses.c:2364` | `definstance Encode [T]` head |
+| `elab_typeclasses.c:2903`, `:3041` | `definstance` constraint vectors |
+| `elab_fns.c:5729` | `[^Encode A]` in a type-param vector |
+| `elab_fns.c:5946` | `[(Encode A)]` constraint vector on `defn` |
+| `elab_fns.c:6227` | `^Encode` in a params vector |
+| `elab_fns.c:7507` | `where (Encode a)` clause |
+| `elab_types.c:1460`, `:2722` | constraint inside a type annotation |
+
+The other `typeclass_env_lookup_typeclass` callers look up a *hardcoded*
+class the compiler needs (`Num` at `elab_call.c:2529`, `Drop`/`Clone` at
+`elab_forms.c:319`, `Serializable` at `elab_effects.c:1257`). Those must
+NOT warn -- the user did not spell the name -- which is the one thing a
+blanket warning inside the lookup function would get wrong. Hence the
+helper at call sites rather than in the lookup.
+
+Reuse `TUR-D0001`'s deprecation band and `--Werror=deprecated`
+(`main.c:10304`) so the class warning promotes exactly like the method one.
+
+**Feature 2 -- a deprecated class *alias* (the one that actually helps).**
+Feature 1 only lets you *warn* about `Encode`; it does not let `Encode`
+mean `EncodeJson`, so `definstance Encode [T]` still has to be rewritten.
+What closes the gap is a transparent alias:
+
+```turmeric
+(defclass-alias ^deprecated "use `EncodeJson`" Encode EncodeJson)
+```
+
+There is a direct precedent: `defalias` (`elab_types.c:240-296`) is exactly
+this for *types* -- a transparent name-to-target table consulted at
+resolution, where the alias never becomes a nominal type of its own. The
+class version is simpler, because `typeclass_env_lookup_typeclass` is the
+single chokepoint that `defalias` does not get to enjoy: an `alias_of`
+pointer on `TypeClass`, followed after the deprecation warning, makes all
+nine sites in the table above work with no per-site change.
+
+**The catch, and it is a real one.** An alias fixes the class name but not
+the method names inside an instance body. With `Encode` aliased to
+`EncodeJson`, whose method is `encode-json`, this still fails:
+
+```turmeric
+(definstance Encode [User] (encode [x] ...))    ;; `encode` is not a method of EncodeJson
+```
+
+So a class alias makes *constraints* (`[^Encode T]`, `where (Encode a)`)
+and instance *heads* source-compatible, but an instance body must still be
+updated to the new method name -- unless a method-alias facility lands
+alongside, which is a larger design. That is the honest boundary: the alias
+converts most of the 19 constraint sites into a warning, and leaves the 29
+`definstance` bodies a mechanical edit.
+
+**Recommendation.** Neither feature is on the critical path -- MPJ ships
+without them via the sed recipe, and the spices tree is small enough that
+the edit is an afternoon. Build Feature 1 if the deprecation is meant to
+reach out-of-tree consumers, since a warning is the only thing that finds
+their sites for them. Treat Feature 2 as speculative until someone outside
+the tree actually depends on `Encode`; an alias that leaves instance bodies
+broken is a half-migration that may confuse more than the clean break does.
 
 ### Staging
 
@@ -442,10 +566,16 @@ rename `decode-list` -> `decode-json-list` and `derive-decoder` ->
 macro template in json, http and httpd to emit the new names in the same
 commit (see *Macro-emitted call sites move FIRST*). Move the five
 non-json sites listed above -- two of which are `errors/` fixtures whose
-`expected.diag` quotes the class name and therefore moves with it. Spike the return-type-directed decode shim before committing to it; add
-the `^deprecated` method shims that survive the spike and export them for
-the deprecation window. Bump `tur-json` to 0.4.0 and write the CHANGELOG
-migration note with the mapping table and the sed recipe.
+`expected.diag` quotes the class name and therefore moves with it. Add the `^deprecated` method shims -- the decode one using the verified
+destructure-and-rebuild body, not a direct tail-forward -- and export them
+for the deprecation window. Bump `tur-json` to 0.4.0 and write the
+CHANGELOG migration note with the mapping table and the sed recipe.
+
+Optional, and decided at MPJ rather than assumed: land `^deprecated` on
+`defclass` first (scoped in the Naming section, ~9 call sites behind one
+helper) so the class-name half of the break warns instead of simply
+failing. Worth it only if an out-of-tree consumer exists by then; the
+in-tree sites are a mechanical edit either way.
 
 Gate: `spices/json/tests/` green under the new names, plus two new
 fixtures per shimmed method -- one calling the bare name and asserting the
@@ -511,12 +641,23 @@ spice in the top-level `:members` list.
   a substitute for it -- but it removes the thing that would otherwise
   make it break callers twice, since after 0.5.0 nobody spells a serde
   class without a format tag.
-- **Decode-side shim feasibility (MPJ).** Whether a `^deprecated`
-  forwarding `defn` can carry return-type-directed dispatch through to the
-  renamed method is **unproven**, and the surrounding machinery has an
-  archived-report history. Spike it at MPJ before the CHANGELOG promises
-  it. Fallback: the decode side is a hard rename with no shim, announced
-  as such from the start. This is the single largest unknown in MPJ.
+- ~~**Decode-side shim feasibility.**~~ **Resolved 2026-09-13** by a spike
+  against v0.47.0: the shim works, but only with a destructure-and-rebuild
+  body -- a direct tail-forward fails codegen on the carrier/by-value
+  return boundary. Verified on `int`, `cstr` and a struct payload, both
+  `Result` arms, and through a macro-spliced call site. See
+  [Naming](#what-can-carry-a-deprecation-shim-and-what-cannot). What is
+  left is narrower: the rebuild assumes a two-armed `Result`, so if a
+  future class method returns some other shape its shim needs its own
+  body.
+- **Bare class names have no migration path until the compiler grows one.**
+  The 0.4.0 break falls entirely on `definstance` heads and constraints.
+  Two compiler features would close it -- `^deprecated` on `defclass`, and
+  a deprecated class alias -- both scoped in
+  [Naming](#closing-the-class-name-gap-deprecated-on-defclass). Neither is
+  on MPJ's critical path, and the alias only half-closes the gap (instance
+  *bodies* still need the new method names). Decide whether MPJ waits for
+  Feature 1 based on whether an out-of-tree consumer exists by then.
 - **`DecodeErrors` / `encode-string` ambiguity.** Both are exported
   defns/types rather than global classes, so `:refer` disambiguates them
   and MPJ does not force the issue. A reader with both spices open still
