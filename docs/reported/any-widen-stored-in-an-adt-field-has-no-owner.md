@@ -22,6 +22,51 @@ and that fixture has almost none. See
 "Residue 1" for why parameter-side discharge is harder than it looks (a
 pattern-match binder aliases the parent, so a callee-side free double-frees).
 
+**FURTHER NARROWED 2026-09-13 -- and this report's TITLE is misleading.**
+Attributing each of the fixture's 21 leaks to its allocation site (below) shows
+the ADT-field boxes are not the roots at all. They leak *indirectly*, because
+the thing holding them leaks. The 9 ROOTS are:
+
+| Count | Kind | Site | Shape |
+| --- | --- | --- | --- |
+| 5 | Direct | `main` | argument-position widen -- a local re-boxed per call into an `any` parameter |
+| 4 | Direct | `lmap`, `lfilter` | return-position widen -- the function's `any` result boxed on the way out |
+| 12 | Indirect | field boxes / spine | reachable only from a leaked root |
+
+So fixing the two root producers reclaims the field boxes transitively (the
+partial fix above already makes an `:any` field owning, so the drop glue walks
+them). Chasing the field case on its own would not have closed this fixture.
+
+**Two missing walk arms were found and fixed, and they were the entry gate, not
+the result gate** -- the same lesson the sibling report
+[saffron-any-return-defeats-the-frame-box-rule](../archive/saffron-any-return-defeats-the-frame-box-rule.md)
+records. `EX_UNION_INJECT` (the widen node) had **no arm** in either
+`expr_subtree_has_inline_c` or `box_uses_confined` (both `emit_core.c`), so:
+
+- the inline-C gate answered "may hide inline C" for any body whose result is a
+  widen, and `elab_infer_nonretain_masks` skipped **the whole function**; and
+- once past that, the retention walk deferred to the strict escape walk, whose
+  answer for an unmodelled node is "escapes".
+
+In Saffron that is most functions, because an unannotated return IS `any`. A
+one-line bisect shows it: `(defn ignore [xs] 42)` leaks, and the identical
+`(defn ignore [xs] : int 42)` does not -- the annotation is the only difference,
+and with it the frame-box rule fires and there is no allocation at all.
+
+Both arms are added. Measured effect: 5 of 2311 fixtures change, all Saffron,
+each either replacing a `malloc` with a frame-box or adding a `__tur_any_drop`.
+Full suite 2972 passed / 0 failed; leak-check 99 passed / 0 failed.
+
+That node has now been the missing arm in **three** walks -- the third is
+[cps-coloring-walk-has-no-arm-for-union-inject](../archive/cps-coloring-walk-has-no-arm-for-union-inject.md).
+Any new walk over expressions should be checked against it specifically.
+
+**`saffron-higher-order` itself is UNCHANGED at 840/21**, and that is expected:
+its four walkers are recursive and pass a match binder (`t`, which aliases the
+parent's payload) into the recursive call, so the retention walk refuses --
+correctly. That is the pattern-match-alias residue named above, and it is the
+only thing still standing between this fixture and zero.
+
 **Severity: medium.** One leaked box per value widened into an `any` FIELD of a
 data structure -- so a container with `any` elements leaks once per element,
 unbounded in a loop that rebuilds it.
