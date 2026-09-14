@@ -6088,6 +6088,30 @@ static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
             buf_printf(&b, "(int64_t)(intptr_t)%s", a);
         else if (cps_call_param_is_poly_fn(ce, fn, i))
             buf_puts(&b, a);                 /* E2: tur_poly_fn_t param -- pass the fat struct by value */
+        else if (arg_is_byval_agg && param_is_i64 && arg_cty &&
+                 strcmp(arg_cty, "tur_tagged_t") == 0) {
+            /* saffron-cps-vec-element-carrier-mismatch, the ARGUMENT direction.
+             *
+             * The branch below is right that a by-value aggregate's
+             * concrete->carrier crossing is "a spill+address bridge, not this
+             * cast" -- but for a `tur_tagged_t` into a carrier-shaped slot
+             * (`vec-push!`'s `int64_t val`) nothing downstream performed that
+             * bridge, so the 16-byte struct was passed bare where an `int64_t`
+             * was declared: a hard error, and the second half of why a Saffron
+             * function that both performed and touched a vector did not build.
+             *
+             * So do the bridge here, spelled exactly as the DIRECT emitter
+             * spells it at the same site -- heap-box the value and pass the
+             * address -- which is what makes the element readable back as an
+             * `any` (and what the return direction, in the CT_LETCALL arm,
+             * dereferences).  The box is the element's, owned by the container
+             * for as long as it holds it, so it is deliberately not reaped:
+             * freeing it here would be a use-after-free on the next read. */
+            int abx = ce->ctx->tmp_n++;
+            ce_line(ce, "tur_tagged_t *__anybox_%d = (tur_tagged_t *)malloc(sizeof(tur_tagged_t));", abx);
+            ce_line(ce, "*__anybox_%d = %s;", abx, a);
+            buf_printf(&b, "(int64_t)(intptr_t)__anybox_%d", abx);
+        }
         else if (atom_is_fat_fn(&args[i]) || arg_is_byval_agg)
             buf_puts(&b, a);
         else if (param_is_voidp && arg_is_ptr && (!arg_c_ptr_known || arg_is_c_ptr))
@@ -6377,7 +6401,31 @@ static void emit_term(CE *ce, const CTerm *t) {
                 else
                     ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             } else {
-                ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
+                /* saffron-cps-vec-element-carrier-mismatch: the CPS twin of the
+                 * `temp_is_tagged` bridge in emit_expr.c's
+                 * bridge_control_result_int_ptr (saffron-lang-plan S6).
+                 *
+                 * An `any` read out of a container arrives as the SLOT WORD --
+                 * the store side boxed it, so the word is a `tur_tagged_t *`
+                 * -- while the binder here is the aggregate.  The direct
+                 * emitter dereferences; this arm assigned raw, which is
+                 * "incompatible types when assigning to type 'tur_tagged_t'
+                 * from type 'int64_t'": a hard error, so a Saffron function
+                 * that both performed and read a vector element did not build.
+                 *
+                 * Keyed on both sides like its direct twin -- the binder must
+                 * be the aggregate AND the callee must really return the
+                 * carrier, per the signature side table -- so a callee that
+                 * already returns a `tur_tagged_t` is untouched. */
+                const char *bct_lc = binder_ctype_full(ce->ctx, t->as.letcall.x.ty,
+                                                       t->as.letcall.x.type);
+                const char *rct_lc = emit_sig_lookup_ret_ctype(fn);
+                if (bct_lc && strcmp(bct_lc, "tur_tagged_t") == 0 &&
+                    rct_lc && strcmp(rct_lc, "int64_t") == 0)
+                    ce_line(ce, "%s = *(tur_tagged_t *)(intptr_t)%s(%s); /* cps->direct (any elem) */",
+                            bn, fn, argv);
+                else
+                    ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             }
             free(bn); free(fn); free(argv);
             /* cps-body-panic-not-propagated: a cps->direct callee that panicked

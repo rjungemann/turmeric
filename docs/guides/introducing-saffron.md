@@ -786,20 +786,15 @@ and the effect -- carry annotations. `area`, `survey` and `main` are all plain
 names, and `survey` handles a circle and a rectangle without ever naming either
 type: `.label` picks the instance from each value's own tag at run time.
 
-Two rough edges are worth knowing before you grow this program, because both
-are easy to walk into and neither says so clearly:
-
-- **`handle` finds the `perform`s in the function it wraps.** In a Saffron file
-  a `perform` one call deeper is *not* picked up -- the compiler warns
-  `handler clause for 'Report' is unreachable` and the program aborts with
-  `unhandled effect` at run time. Perform in the function you hand to `handle`,
-  as `survey` does, or annotate the intermediate function's return type.
-  ([saffron-effect-row-lost-through-unannotated-call](https://github.com/rjungemann/turmeric/blob/main/docs/reported/saffron-effect-row-lost-through-unannotated-call.md))
-- **Keep vectors out of a function that performs.** A Saffron function
-  containing both a `perform` and a `[...]` literal or a `vec-get` fails to
-  build, with an error from the C compiler rather than from `tur`. Put the
-  `handle` in its own small function -- which is good structure anyway.
-  ([saffron-cps-vec-element-carrier-mismatch](https://github.com/rjungemann/turmeric/blob/main/docs/reported/saffron-cps-vec-element-carrier-mismatch.md))
+One rough edge is worth knowing before you grow this program, because it is
+easy to walk into and does not say so clearly: **`handle` finds the `perform`s
+in the function it wraps.** In a Saffron file a `perform` one call deeper is
+*not* picked up -- the compiler warns `handler clause for 'Report' is
+unreachable` and the program aborts with `unhandled effect` at run time.
+Perform in the function you hand to `handle`, as `survey` does, or annotate the
+intermediate function's return type, until
+[saffron-effect-row-lost-through-unannotated-call](https://github.com/rjungemann/turmeric/blob/main/docs/reported/saffron-effect-row-lost-through-unannotated-call.md)
+is fixed.
 
 ---
 

@@ -1,5 +1,39 @@
 # A Saffron function that both performs and touches a vector emits uncompilable C
 
+**RESOLVED 2026-09-14.** Two fixes, one at each end of a vector, because the
+report's two repros were genuinely two defects sharing a cause -- the CPS arm
+not performing the element seam the direct emitter performs:
+
+- **PUSH (repro B).** `atoms_csv_call_typed` (emit_cps_ir.c) correctly says a
+  by-value aggregate's concrete->carrier crossing is "a spill+address bridge,
+  not this cast" and leaves it to the atom emission -- but nothing downstream
+  performed that bridge for a `tur_tagged_t` into a carrier-shaped slot, so the
+  16-byte struct was passed bare into `vec_hypush_ex`'s `int64_t val`. It now
+  heap-boxes and passes the address, spelled exactly as the direct emitter
+  spells it at the same site. The box is the element's, owned by the container,
+  so it is deliberately not reaped.
+- **READ (repro A).** The `CT_LETCALL` cps->direct arm assigned the raw carrier
+  word into a `tur_tagged_t` binder. It now dereferences, keyed on both sides
+  (binder is the aggregate AND the callee really returns the carrier, per the
+  signature side table) -- the CPS twin of `bridge_control_result_int_ptr`'s
+  `temp_is_tagged` arm in emit_expr.c, which is the same fix made for the direct
+  path under saffron-lang-plan S6.
+
+The report's "the element seam, on the CPS arm only" was right, and its
+observation that `vec-len` and a user function over the same vector are fine
+was the load-bearing one: it is what said the trigger is the element WORD
+crossing and not vectors in general, which is why both fixes are keyed on the
+`tur_tagged_t` C spelling rather than on the callee being a vector helper.
+
+Pinned by `tests/fixtures/saffron-cps-vec-element-and-perform`, which carries
+both directions plus a recursive walk that runs them in one CPS body, and keeps
+`vec-len`/`vec-fold` alongside as the control. Both back ends agree.
+
+The tour guide's advice to keep vectors out of a function that performs is
+removed; its worked example no longer has to route around this.
+
+---
+
 **Severity: high -- build breaker.** In a `#lang saffron` file, a function
 containing a `perform` (so it is CPS-lowered) plus a vector element read or a
 `[...]` literal emits C that the host compiler rejects: the CPS arm passes the
