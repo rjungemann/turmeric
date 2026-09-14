@@ -42,6 +42,21 @@ A parameter pattern that does not line up with its argument (a `(Option A)`
 against a carrier-collapsed `int64`) collects nothing, so the pass can only ever
 narrow.
 
+The capture has a **second site, on the result**, and correcting only the
+arguments is not enough. `unwrap`'s declared result is its own `A`, and a
+recovery further down `emit_abi_register_call` re-resolves a bare-tyvar result
+through the ACTIVE SPEC's bindings -- by name again. That is right when only
+the spec knows the element and wrong when the call site has already pinned it,
+so it undid the argument fix and left the clone
+`unwrap__spec__double_tur_adt_Option__int`: a `double` landing in the `int64`
+slot the concrete `(Option int)` calls for. That shape is worse than the
+original cc failure, not better -- it compiles, and it prints the right answer
+for a small integer while waiting for a payload that does not survive the
+truncation. It was caught by the suite's `-Wfloat-conversion` ratchet (which is
+NOT in the default cc flags, so a hand-run `tur build` of the fixture looks
+clean). The result is now derived from the corrected bindings, and that
+recovery stands down when it has been.
+
 Pinned by `tests/fixtures/generic-unwrap-unrelated-option`. The **two**
 instantiations are load-bearing, as the report says: at `A = int` alone the
 fixture passes with the bug present.

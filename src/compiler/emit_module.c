@@ -5119,6 +5119,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * A pattern that does not line up with its argument collects nothing, so
      * the pass can only ever narrow. */
     AbiTypeBinding site_fixed[ABI_TYPE_BINDINGS_MAX];
+    bool site_corrected = false;
     if (!borrow_path && fd && bindings && n_bindings > 0 &&
         n_bindings <= ABI_TYPE_BINDINGS_MAX && call->as.call_.args &&
         !call->as.call_.dict_arg && !fd->owner_instance &&
@@ -5180,7 +5181,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 break;
             }
         }
-        if (site_wins) bindings = site_fixed;
+        if (site_wins) { bindings = site_fixed; site_corrected = true; }
     }
 
     bool abi_changes = false;
@@ -5359,6 +5360,27 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         result_type = emit_abi_instantiate_type(
             &result_type, spec_bindings, spec_n_bindings, ctx->type_arena);
     }
+    /* generic-unwrap-specializes-by-the-enclosing-type-argument: the capture
+     * reaches the RESULT too.  `unwrap`'s declared result is its own `A`, and
+     * the spec body's call node already carries the enclosing generic's
+     * substitution, so correcting only the arguments left the clone named
+     * `unwrap__spec__double_tur_adt_Option__int` -- a double landing in the
+     * int64 slot the concrete `(Option int)` calls for.  That compiles and even
+     * prints the right answer for a small integer, which is the worst shape it
+     * could take: cc reports it as -Wfloat-conversion and the truncation waits
+     * for a payload that does not survive it.  Re-derive a bare-tyvar result
+     * from the corrected bindings, which now say `A -> int`. */
+    bool site_pins_result = false;
+    if (site_corrected && !result_type_override &&
+        generic_result.kind == TY_TYVAR && bindings && n_bindings > 0) {
+        Type rr = emit_abi_instantiate_type(&generic_result, bindings,
+                                            n_bindings, ctx->type_arena);
+        if (rr.kind != TY_TYVAR && rr.kind != TY_UNKNOWN &&
+            !emit_abi_type_has_concrete_named_tyvar(&rr)) {
+            result_type = rr;
+            site_pins_result = true;
+        }
+    }
     /* defopaque-struct-payload-fails-through-unsafe-helper: a
      * return-only-polymorphic callee (bare-tyvar result, no tyvar-carrying
      * argument) has its `call->type` collapsed to the int64 carrier at elab
@@ -5449,7 +5471,19 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * declares int64 -- constrained-loop-vec-push-byvalue-result-element).  The
      * aggregate case has its own recovery path above, keyed on the CALL's own
      * bindings rather than the active spec's. */
+    /* generic-unwrap-specializes-by-the-enclosing-type-argument: `site_pins_result`
+     * is the result-side half of the same name capture.  This recovery resolves
+     * the CALLEE's own result tyvar through the ACTIVE SPEC's bindings, by name
+     * -- which is right when only the spec knows the element, and wrong when the
+     * call site has already pinned it.  `unwrap`'s `A` is `int` because its
+     * argument is an `(Option int)`, whatever the enclosing generic happens to
+     * call its own `A`; without this guard the correction above was undone here
+     * and the clone came back `unwrap__spec__double_tur_adt_Option__int` -- a
+     * double landing in an int64 slot, which cc reports as -Wfloat-conversion
+     * and which prints the right answer for a small integer while waiting for a
+     * payload that does not survive the truncation. */
     if (!result_type_override &&
+        !site_pins_result &&
         ctx->current_abi_specialization &&
         fn_binding->type.as.fn.result_kind == TY_TYVAR &&
         generic_result.kind == TY_TYVAR &&
