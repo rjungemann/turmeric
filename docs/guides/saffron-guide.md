@@ -288,7 +288,10 @@ cannot panic for a missing instance.
 ### What dynamic dispatch does not cover yet
 
 The registry is keyed on the **box tag**, so an instance the tag cannot name is
-not reachable through it. The cases that panic, with a message saying which:
+not reachable through it. The cases that panic, with a message saying which
+(a payload-carrying ADT receiver is **not** among them -- it used to emit
+uncompilable C, fixed 2026-09-14 and pinned by
+`tests/fixtures/saffron-dyn-dispatch-payload-adt`):
 
 - A method taking more than the receiver (`eq [x : a y : a]`) or returning the
   class's own type variable (`clone : a -> a`) -- the call site would have to
@@ -321,6 +324,9 @@ tur run hello.tur
 
 ## See also
 
+- [introducing-saffron.md](introducing-saffron.md) -- the tour this guide is the
+  reference for: Try Turmeric, printing, flow control, functions, ADTs,
+  typeclasses and effects, every example in both syntaxes
 - [docs/upcoming/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/saffron-lang-plan.md) --
   the design decisions and their measurements
 - [union-intersection-types-guide.md](union-intersection-types-guide.md) --

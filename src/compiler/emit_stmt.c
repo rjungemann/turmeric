@@ -343,6 +343,22 @@ void emit_instance_dyn_table(EmitCtx *ctx, TypeClassInstance *inst,
         char conv[320];
         if (dict_slot_param_is_carrier(ctx, mi, 0)) {
             snprintf(conv, sizeof(conv), "*(%s *)(intptr_t)__r", pcn);
+        } else if (emit_type_is_byvalue_adt(ctx, pt) && type_struct_pass_by_ptr(pt)) {
+            /* saffron-dynamic-dispatch-on-payload-adt-emits-bad-c: a by-value
+             * ADT the C convention passes as `const T *` is exactly the case
+             * `dict_slot_param_is_carrier` DECLINES (its pass-by-ptr arm), so
+             * before this it fell through to the scalar `(T)__r` at the bottom
+             * and the shim did not compile -- `conversion to non-scalar type
+             * requested`, on a class whose interpreted answer was correct.
+             *
+             * The split is by PAYLOAD, which is why an all-nullary `defdata`
+             * always worked: that one rides the int64 carrier, so the scalar
+             * cast was right for it and wrong for every ADT carrying anything.
+             *
+             * The widen boxed the value, so `__r` is already the address of the
+             * ADT -- the same three-way choice the WITNESS path above makes,
+             * which is where the correct spelling for each arm was established. */
+            snprintf(conv, sizeof(conv), "(const %s *)(intptr_t)__r", pcn);
         } else if (pt.kind == TY_FLOAT) {
             snprintf(conv, sizeof(conv),
                      "((union { double d; int64_t i; }){.i = __r}).d");

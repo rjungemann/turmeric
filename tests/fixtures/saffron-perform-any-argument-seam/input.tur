@@ -1,0 +1,52 @@
+#lang saffron
+;; saffron-perform-argument-skips-the-any-seam: an `any` argument reaching a
+;; CONCRETE effect parameter takes the same checked unbox an ordinary call's
+;; argument takes, and a concrete argument reaching an `any` effect parameter
+;; takes the widen every other `any` slot gets.
+;;
+;; Before the fix the first direction stored the 16-byte `tur_tagged_t` box in
+;; the one-word effect slot and the handler printed an EMPTY LINE for `pick`'s
+;; string -- silently, on both back ends, with the identical argument to a typed
+;; FUNCTION (`takes-cstr` below) handled correctly two lines away.  That
+;; contrast is the point of the fixture: the two calls differ only in which
+;; construct receives the value, so a regression on one arm shows up as a diff
+;; against the other.
+;;
+;; The mismatch arm is its own fixture (saffron-perform-any-argument-mismatch),
+;; since a checked cast that fails aborts the program.
+;;
+;; Floats carry a non-zero fractional part: an integral float cannot show a
+;; truncation through the `any` carrier.
+
+;; Concrete effect parameters -- each argument arrives as an `any` and is
+;; unboxed on the way in.
+(defeffect Note  [line : cstr]  : int)
+(defeffect Meas  [x : float]    : int)
+
+;; An `any` effect parameter -- the argument is a concrete literal and is
+;; widened on the way in.  An unannotated parameter means this too, since
+;; `defeffect` takes the file's default (saffron-defeffect-param-defaults-to-any).
+(defeffect Show  [v : any]      : int)
+
+(defn pick [n] (if (> n 0) "positive" "other"))
+(defn scale [n] (* n 1.5))
+
+(defn takes-cstr [s : cstr] : int (do (println s) 0))
+
+(defn emit [n]
+  (do (perform (Note (pick n)))
+      (perform (Meas (scale n)))
+      (perform (Show "a literal"))
+      (perform (Show 7.1))
+      0))
+
+(defn run []
+  (handle (emit 3)
+    (Note [line] k) (do (println line) (resume k 0))
+    (Meas [x] k)    (do (println x) (resume k 0))
+    (Show [v] k)    (do (println v) (resume k 0))))
+
+(defn main []
+  (takes-cstr (pick 3))    ;; the typed-function seam, for contrast
+  (run)
+  0)

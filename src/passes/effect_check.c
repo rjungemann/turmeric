@@ -101,6 +101,68 @@ static EffectRow *filter_cross_module_private(Arena *a, EffectRow *row) {
     return effect_row_concrete(a, filtered, k);
 }
 
+/* saffron-effect-row-lost-through-unannotated-call: the operand lists of the
+ * four Saffron dynamic nodes, in ONE place.
+ *
+ * Every walk in this file is structural, and none of them had an arm for
+ * EX_DYN_OP / EX_DYN_CALL / EX_DYN_FIELD / EX_DYN_METHOD -- so each fell to its
+ * `default` and stopped, and a `perform`, an effectful call, or a nested
+ * `handle` reachable only THROUGH a dynamic node was invisible to the whole
+ * pass.  `(+ (g) 1)` is enough: the `+` is dynamic in a Saffron file, so the
+ * call to `g` sat under a node the walk did not descend into, the caller's
+ * inferred row came back empty, and an enclosing handler was reported
+ * unreachable (TUR-W0033) before the program aborted `unhandled effect`.
+ *
+ * Same species as `collect_free_vars` missing these arms
+ * (saffron-dynamic-surface-pass H1), and the reason it is a shared accessor
+ * rather than four copies: four transcriptions of the same shape knowledge is
+ * how the next node kind gets added to three of them.
+ *
+ * Note the report's own hypothesis -- that `any` carries no effect row, so the
+ * row was lost through the unannotated RETURN -- was wrong, and measurably so:
+ * the same program with the dynamic operator removed (`(defn f [] (g))`)
+ * propagates the row and prints the right answer with every signature still
+ * unannotated.  The `any` return was never involved. */
+static uint32_t saffron_dyn_child_count(const Expr *e) {
+    if (!e) return 0;
+    switch (e->kind) {
+    case EX_DYN_OP:     return e->as.dyn_op_.n_args;
+    case EX_DYN_CALL:   return 1 + e->as.dyn_call_.n_args;
+    case EX_DYN_FIELD:  return 1;
+    case EX_DYN_METHOD: return 1 + e->as.dyn_method_.n_args;
+    /* ...and the `any` WIDEN and readers, which the first round of arms missed
+     * for the reason the same omission was missed in cps.c's walk: nothing then
+     * put one between a defn's body and its effectful call.  The RETURN-position
+     * widen does, on every unannotated Saffron defn whose body is not already an
+     * `any` -- so `(defn tc [] (do (g) 1))` had its whole body inside an
+     * EX_UNION_INJECT, the walk stopped there, and the row came back empty while
+     * `(defn tc [] (> (g) 0))` -- no widen -- inferred correctly two lines away.
+     * That divergence is what identified them. */
+    case EX_UNION_INJECT:
+    case EX_ANY_CAST:
+    case EX_ANY_IS:
+    case EX_ANY_TYPE_OF: return 1;
+    default:            return 0;
+    }
+}
+
+static Expr *saffron_dyn_child(const Expr *e, uint32_t i) {
+    if (!e || i >= saffron_dyn_child_count(e)) return NULL;
+    switch (e->kind) {
+    case EX_DYN_OP:     return e->as.dyn_op_.args[i];
+    case EX_DYN_CALL:   return i == 0 ? e->as.dyn_call_.fn
+                                      : e->as.dyn_call_.args[i - 1];
+    case EX_DYN_FIELD:  return e->as.dyn_field_.obj;
+    case EX_DYN_METHOD: return i == 0 ? e->as.dyn_method_.obj
+                                      : e->as.dyn_method_.args[i - 1];
+    case EX_UNION_INJECT: return e->as.union_inject_.value;
+    case EX_ANY_CAST:     return e->as.any_cast_.value;
+    case EX_ANY_IS:       return e->as.any_is_.value;
+    case EX_ANY_TYPE_OF:  return e->as.any_type_of_.value;
+    default:            return NULL;
+    }
+}
+
 /* Walk an expression tree and collect into *row all effects that are directly
  * performed (EX_PERFORM) or transitively performed (EX_CALL to a known defn
  * whose inferred row is already populated).
@@ -593,6 +655,24 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         row = collect_effects_in_expr(a, e->as.discontinue_.discontinue->k,         row, idx, env, subst);
         return collect_effects_in_expr(a, e->as.discontinue_.discontinue->exception, row, idx, env, subst);
 
+    case EX_DYN_OP:
+    case EX_DYN_CALL:
+    case EX_DYN_FIELD:
+    case EX_DYN_METHOD:
+    case EX_UNION_INJECT:
+    case EX_ANY_CAST:
+    case EX_ANY_IS:
+    case EX_ANY_TYPE_OF:
+        /* saffron-effect-row-lost-through-unannotated-call: descend into the
+         * Saffron dynamic nodes' operands.  Exactly the reasoning the
+         * EX_ASCRIBE arm below states, for the nodes a `#lang saffron` file is
+         * mostly MADE of -- without it the inferred row omits an effect
+         * performed under any dynamic operator, call, field read or method
+         * dispatch. */
+        for (uint32_t i = 0; i < saffron_dyn_child_count(e); i++)
+            row = collect_effects_in_expr(a, saffron_dyn_child(e, i), row, idx, env, subst);
+        return row;
+
     case EX_ASCRIBE:
         /* A type ascription `(:: <inner> T)` is erased at codegen; descend into
          * the inner expression so a `perform` (or effectful call) that appears
@@ -809,6 +889,18 @@ static int check_closures_in_expr(Arena *a, Expr *e,
         return rc;
     }
 
+    case EX_DYN_OP:
+    case EX_DYN_CALL:
+    case EX_DYN_FIELD:
+    case EX_DYN_METHOD:
+    case EX_UNION_INJECT:
+    case EX_ANY_CAST:
+    case EX_ANY_IS:
+    case EX_ANY_TYPE_OF:
+        for (uint32_t i = 0; i < saffron_dyn_child_count(e); i++)
+            rc |= check_closures_in_expr(a, saffron_dyn_child(e, i), idx, env);
+        return rc;
+
     case EX_SET:
         return check_closures_in_expr(a, e->as.set_.value, idx, env);
 
@@ -959,6 +1051,21 @@ static int check_call_site_rows_in_expr(Arena *a, Expr *e,
             rc |= check_call_site_rows_in_expr(a, e->as.call_.fn_expr, idx, env);
         for (uint32_t i = 0; i < e->as.call_.n_args; i++)
             rc |= check_call_site_rows_in_expr(a, e->as.call_.args[i], idx, env);
+        return rc;
+    }
+
+    case EX_DYN_OP:
+    case EX_DYN_CALL:
+    case EX_DYN_FIELD:
+    case EX_DYN_METHOD:
+    case EX_UNION_INJECT:
+    case EX_ANY_CAST:
+    case EX_ANY_IS:
+    case EX_ANY_TYPE_OF: {
+        /* An ER4-checkable call reachable only through a dynamic node was
+         * never reached, so its row subtyping went unchecked. */
+        for (uint32_t i = 0; i < saffron_dyn_child_count(e); i++)
+            rc |= check_call_site_rows_in_expr(a, saffron_dyn_child(e, i), idx, env);
         return rc;
     }
 
@@ -1124,6 +1231,19 @@ static void check_unreachable_handlers_in_expr(
         check_unreachable_handlers_in_expr(a, e->as.call_.fn_expr, idx, env);
         for (uint32_t i = 0; i < e->as.call_.n_args; i++)
             check_unreachable_handlers_in_expr(a, e->as.call_.args[i], idx, env);
+        return;
+    case EX_DYN_OP:
+    case EX_DYN_CALL:
+    case EX_DYN_FIELD:
+    case EX_DYN_METHOD:
+    case EX_UNION_INJECT:
+    case EX_ANY_CAST:
+    case EX_ANY_IS:
+    case EX_ANY_TYPE_OF:
+        /* A nested `handle` reachable only through a dynamic node was never
+         * visited, so its own clauses went unchecked. */
+        for (uint32_t i = 0; i < saffron_dyn_child_count(e); i++)
+            check_unreachable_handlers_in_expr(a, saffron_dyn_child(e, i), idx, env);
         return;
     case EX_CLOSURE:
         check_unreachable_handlers_in_expr(

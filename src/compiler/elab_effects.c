@@ -1,5 +1,6 @@
 /* elab_effects.c -- delimited continuations and algebraic effects. */
 #include "elab_internal.h"
+#include "lang_layers.h"   /* saffron-perform-argument-skips-the-any-seam */
 
 /* E3a (owning-cloneable-capture, cps-backend-owning-env-teardown): an owning
  * value captured ^borrow into a genuinely multi-shot cloneable continuation that
@@ -1458,7 +1459,14 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
             }
             param_names[p] = param_f->as.sym;
             /* Check if the next item is a type keyword or F_TYPE_ANN */
-            TypeKind pk = TY_INT;
+            /* saffron-defeffect-params-default-to-int: an unannotated parameter
+             * takes the file's own default -- `any` under `#lang saffron`, `int`
+             * otherwise -- the same one a `defn` parameter takes.  It used to be
+             * a bare TY_INT here, so `(defeffect Log [msg] : int)` in a Saffron
+             * file silently typed `msg` as `int` and `(perform (Log "hi"))`
+             * printed the cstr's address.  The RESULT type is a hard error when
+             * missing, so only this side ever defaulted. */
+            TypeKind pk = saffron_default_param_kind(param_f->span);
             Type *ann = NULL;
             Form *type_form = NULL;   /* the param's type form, for cont-payload scan */
             if (i + 1 < raw_n) {
@@ -1584,6 +1592,19 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
                                           e->current_module_name, is_private);
     if (!effect) return NULL;
     effect->is_capability = is_capability;
+    /* saffron-effect-row-lost-through-unannotated-call: this unit declares an
+     * effect, so the dynamic-node operand hoist's CALL half is live for it.
+     * Set here rather than counted off the effect env, which always holds the
+     * built-ins.
+     *
+     * NOT for a defeffect read during the stdlib autoload: `stdlib/trail.tur`
+     * declares one, and it is autoloaded into EVERY program, so an ungarded
+     * flag was set unconditionally and the gate gated nothing.  That is not a
+     * theoretical looseness -- it is what regressed `any-widen-frame-box` and
+     * `saffron-dyn-field` under the leak harness, by applying the hoist to
+     * programs (typed ones, with no effect of their own) that had no use for
+     * it.  `in_stdlib_load` is the same window that stamps `is_from_stdlib`. */
+    if (!e->in_stdlib_load) e->unit_has_user_effect = true;
     /* Tier C: record the full result Type when it is a by-value aggregate whose
      * bare TypeKind loses the def -- perform reads it so the perform result
      * carries the real monomorphized type. */
@@ -1756,6 +1777,50 @@ Expr *elab_perform(Elab *e, const Form *call) {
         }
         args[i] = elab_form(e, arg_form);
         if (!args[i]) return NULL;
+        /* saffron-perform-argument-skips-the-any-seam: an `any` argument
+         * reaching a CONCRETE effect parameter takes the same checked unbox an
+         * ordinary call's argument takes (elab_call.c's seam).  Without it the
+         * 16-byte `tur_tagged_t` box was stored into the one-word effect slot
+         * and the handler read the box address as the payload -- an empty line
+         * for a `cstr` parameter, silently, on both back ends.
+         *
+         * `elab_any_unbox_to` is the node `(cast x T)` lowers to, so a genuine
+         * mismatch panics with the ordinary `cast: any holds ...` message
+         * rather than reinterpreting the word -- the contract the call-site
+         * seam already has, and the reason `cast` was built checked.
+         *
+         * Gated on the dialect like its twin: in a typed file an `any` here is
+         * a static question, not a runtime one.  Both the argument's span and
+         * the perform's are consulted, for the macro-expanded-argument reason
+         * M10 records at the call seam. */
+        if (i < effect->constructor->n_params &&
+            args[i]->type.kind == TY_ANY &&
+            (lang_span_is_saffron(args[i]->span) ||
+             lang_span_is_saffron(call->span) || e->toplevel_saffron)) {
+            const Type *want_full = effect->constructor->param_full_types
+                ? effect->constructor->param_full_types[i] : NULL;
+            Type want = want_full ? *want_full
+                                  : type_from_kind(effect->constructor->param_types[i]);
+            if (want.kind != TY_ANY && want.kind != TY_TYVAR &&
+                want.kind != TY_UNKNOWN) {
+                Expr *unboxed = elab_any_unbox_to(e, args[i], want, args[i]->span);
+                if (unboxed) args[i] = unboxed;
+            }
+        }
+        /* ...and the other direction, which the same hole covered: a CONCRETE
+         * argument reaching an `any` effect parameter needs the widen every
+         * other `any` slot gets (IT4, `A <: any`), or the raw word is stored
+         * where the handler expects a two-word tagged box and reads a garbage
+         * tag.  Unlike the unbox above this is not dialect-specific -- an `any`
+         * parameter means the same thing in either dialect -- and
+         * `elab_coerce_to_any` is a no-op on a value that is already `any`, so
+         * it is safe to apply whenever the slot asks for one. */
+        if (i < effect->constructor->n_params &&
+            effect->constructor->param_types[i] == TY_ANY &&
+            args[i]->type.kind != TY_ANY) {
+            Expr *widened = elab_coerce_to_any(e, args[i]);
+            if (widened) args[i] = widened;
+        }
         /* cps-dk-multishot-user-effects (Phase A): mark a CAPTURING closure payload
          * of the resumable-payload param `is_effect_payload` so the CPS backend
          * delegates its build (is_delegatable_value) even though it captures --

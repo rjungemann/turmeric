@@ -1784,6 +1784,39 @@ defect -- `any` is documented as a storage and reflection type -- but it is the
 single largest gap between what ships and what a dynamic dialect needs, and it
 is scoped as D4/G3-G9 in the Saffron plan.
 
+## Found writing the Saffron tour (filed 2026-09-14)
+
+Five findings from drafting `docs/guides/introducing-saffron.md` and compiling
+every example in it. Nothing here needed a fuzzer: each is the first shape a
+newcomer's own file takes -- print a value, match an ADT, dispatch a method,
+raise an effect -- which is why the existing Saffron fixtures, written from the
+operation list rather than from a program, do not cover any of them. Two are
+build breakers and two are silent wrong answers.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[saffron-perform-argument-skips-the-any-seam](../archive/saffron-perform-argument-skips-the-any-seam.md)~~ | -- | **RESOLVED 2026-09-14** (archived). `elab_perform` now runs the seam in BOTH directions, and the second was not in the filing: an `any` argument into a concrete parameter takes the checked unbox (a mismatch panics `cast: any holds int, not cstr`), and a CONCRETE argument into an `any` parameter takes the widen every other `any` slot gets. The second half only surfaced while fixing the `defeffect` default below -- the two are one fix. Pinned by `saffron-perform-any-argument-seam` and `saffron-perform-any-argument-mismatch`. It did NOT fix the hole underneath, now filed as `perform-does-not-typecheck-its-arguments` |
+| ~~[saffron-effect-row-lost-through-unannotated-call](../archive/saffron-effect-row-lost-through-unannotated-call.md)~~ | -- | **RESOLVED 2026-09-14** (archived). Two gaps, and the filing was wrong about both: the `any` return was never involved, and the control that says so had always worked. (1) The row walks in effect_check.c and the coloring walks in cps.c lacked arms for the Saffron dynamic nodes AND for the `any` WIDEN -- the widen is the subtle half, since an unannotated defn wraps its whole body in one. (2) The CPS IR delegated the node to the direct emitter because its probe asks about control OPERATORS, not calls to effectful FUNCTIONS; fixed by an elaboration hoist, gated on a new `unit_has_user_effect` so the fixture corpus showed zero churn, and declining for lazy `and`/`or` (short-circuit) and NIL-typed operands (`void` local). Pinned by `saffron-effect-through-dyn-operand`, now compiled. One residue split out: `effect-row-lost-through-a-constructor-argument`, which is NOT Saffron-specific |
+| ~~[saffron-cps-vec-element-carrier-mismatch](../archive/saffron-cps-vec-element-carrier-mismatch.md)~~ | -- | **RESOLVED 2026-09-14** (archived). Two fixes, one at each end of a vector: the CPS arg path now heap-boxes a `tur_tagged_t` into a carrier slot and passes the address (the bridge its own comment said belonged elsewhere, and that nothing downstream performed), and the CT_LETCALL arm now dereferences the carrier word into a `tur_tagged_t` binder -- the CPS twin of emit_expr.c's `temp_is_tagged` bridge. The filing's note that `vec-len` and a user fold were fine is what said the trigger is the element WORD, so both fixes key on the C spelling rather than on the callee. Pinned by `saffron-cps-vec-element-and-perform` |
+| ~~[saffron-dynamic-dispatch-on-payload-adt-emits-bad-c](../archive/saffron-dynamic-dispatch-on-payload-adt-emits-bad-c.md)~~ | -- | **RESOLVED 2026-09-14** (archived). One missing arm in `emit_instance_dyn_table`: `dict_slot_param_is_carrier` correctly declines a parameter passed as `const T *`, and the conversion chain then fell through to the scalar `(T)__r` GCC rejects. The real trigger was narrower than filed -- not "carries a payload" but "large enough to be passed by pointer", since a single-int-payload ADT rides the int64 carrier and worked. Pinned by `saffron-dyn-dispatch-payload-adt` (all three ADT shapes plus a primitive through one dispatch site) |
+| ~~[saffron-defeffect-params-default-to-int](../archive/saffron-defeffect-params-default-to-int.md)~~ | -- | **RESOLVED 2026-09-14** (archived). `defeffect` now calls `saffron_default_param_kind`, the same helper `defn` and `fn` use, rather than a hardcoded `TY_INT`; the helper lost its `static` instead of the one-line policy being copied into a second file, which is the drift that produced the bug. Defaulting rather than rejecting is right because an effect parameter is an ordinary value slot, unlike the two exclusions the helper already documented. Pinned by `saffron-defeffect-param-defaults-to-any` |
+
+**Status 2026-09-14.** All five resolved. The fifth took two rounds -- its row
+half landed with the others, its codegen half needed an elaboration hoist -- and
+split off one residue that turned out not to be Saffron's at all.
+
+Two findings came OUT of the fixing, both wider than the five they came from and
+both open:
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [perform-does-not-typecheck-its-arguments](perform-does-not-typecheck-its-arguments.md) | high | `(perform (Log 42))` against `Log [msg : cstr]` compiles clean in plain TYPED Turmeric and segfaults -- `elab_perform` stores each argument without ever reading the declared parameter types the handler goes on to use. Not a one-liner: a general check has to agree with the ~300 lines of `arg_ok` logic at `elab_call.c:6195`, which wants factoring out first. The `any` seam fixed above is the corner of this hole, not the hole |
+| [effect-row-lost-through-a-constructor-argument](effect-row-lost-through-a-constructor-argument.md) | high | `(Box (g))` where `g` performs loses the row, the handler is called unreachable, and the program aborts -- in plain typed Turmeric, every signature annotated. Was the last shape still failing after the Saffron effect-row fix, and is the half of it that was never Saffron's. The report names the constructor-as-leaf exemption in `cps_collect_calls` as the first place to look and warns that the exemption is right for the callee and wrong for its arguments |
+ The guide routes around each open one and says so where a reader
+would otherwise walk into it, and the two resolved notes were taken back out of
+it when they landed.
+
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

@@ -1,0 +1,71 @@
+#lang saffron
+;; saffron-cps-vec-element-carrier-mismatch: a Saffron function that both
+;; performs (so it is CPS-lowered) and moves a vector ELEMENT used to emit C the
+;; host compiler rejects -- `tur_tagged_t` where the vector helpers declare the
+;; `int64_t` carrier.  `cc invocation failed`, so nothing ran.
+;;
+;; Both ends of a vector were broken, and they are separate fixes, so both are
+;; here:
+;;
+;;   PUSH  -- a `[...]` literal in a function that also handles.  The CPS arg
+;;            path passed the 16-byte box bare into `vec_hypush_ex`'s carrier
+;;            slot; it now heap-boxes and passes the address, spelled exactly as
+;;            the direct emitter spells it at the same site.
+;;   READ  -- `vec-get` in a performing function.  The CPS letcall path assigned
+;;            the raw carrier word into a `tur_tagged_t` binder; it now
+;;            dereferences, the twin of emit_expr.c's `temp_is_tagged` bridge.
+;;
+;; `survey` is the shape that motivated the fix: a recursive walk that reads an
+;; element AND performs on each step, so both directions run in one CPS body.
+;;
+;; Neither `vec-len` nor a user function over the same vector ever tripped it,
+;; and `sum` is kept here for that reason -- it is the control that says the
+;; trigger is the ELEMENT seam and not vectors in general.
+;;
+;; NO requires.leak-check, deliberately.  The element boxes this fixture builds
+;; are orphaned -- but they are orphaned on `main` too, and by the same amount:
+;; the same program without any effect (so the DIRECT emitter's element path,
+;; which main can build) leaks 88 bytes in 4 allocations on both, measured.  The
+;; CPS arm added here reproduces exactly what the direct emitter already does,
+;; which is the point; the orphaned box is the pre-existing `any` element-box
+;; family, the same one `saffron-higher-order` carries as known-open.  Marking
+;; this fixture would fail it on a defect it did not introduce.
+;;
+;; Floats carry a non-zero fractional part: an integral float cannot show a
+;; truncation through the `any` carrier.
+
+(defeffect Ask  [] : int)
+(defeffect Note [line : any] : int)
+
+;; READ: an element read inside a performing function.
+(defn first-of [v]
+  (do (perform (Ask))
+      (vec-get v 0)))
+
+;; Control: `vec-len` and a user fold in a performing function, neither of which
+;; moves an element word across the seam.
+(defn sum [v]
+  (vec-fold v 0 (fn [acc x] (+ acc x))))
+
+(defn size-and-sum [v]
+  (do (perform (Ask))
+      (+ (vec-len v) (sum v))))
+
+;; PUSH + READ together: build a literal, walk it, perform on each element.
+(defn survey [v i acc]
+  (if (< i (vec-len v))
+    (do (perform (Note (vec-get v i)))
+        (survey v (+ i 1) (+ acc 1)))
+    acc))
+
+;; PUSH: a `[...]` literal in the same function as the handle.
+(defn run-all []
+  (println (handle (first-of [7.1 2.5]) (Ask [] k) (resume k 0)))
+  (println (handle (size-and-sum [1 2 3]) (Ask [] k) (resume k 0)))
+  (println
+    (handle (survey ["a" 3.5 true] 0 0)
+      (Note [line] k) (do (println line) (resume k 0)))))
+
+(defn main []
+  (run-all)
+  0)

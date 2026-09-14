@@ -1,0 +1,31 @@
+#lang saffron
+;; saffron-perform-argument-skips-the-any-seam, the failing arm: an `any` whose
+;; payload does not match the effect parameter's declared type panics at the
+;; checked cast rather than reinterpreting the word.
+;;
+;; This is the contract `cast` was built with, and the reason the seam is that
+;; node rather than a new mechanism: before the fix this printed a line of
+;; garbage (the box address read as a `char *`) and carried on.
+;;
+;; `perform` still does not TYPE-CHECK a concrete argument against a concrete
+;; parameter -- `(perform (Note 42))` in a typed file compiles and segfaults --
+;; which is filed separately as perform-does-not-typecheck-its-arguments.
+
+(defeffect Note [line : cstr] : int)
+
+(defn ident [x] x)
+
+(defn emit [v]
+  (do (perform (Note (ident v)))
+      0))
+
+(defn run [v]
+  (handle (emit v)
+    (Note [line] k) (do (println line) (resume k 0))))
+
+(defn main []
+  (run "a real string")
+  (println "before the mismatch")
+  (run 42)
+  (println "after -- should not reach here")
+  0)

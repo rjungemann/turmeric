@@ -605,6 +605,14 @@ typedef struct Elab {
      * condition is map.tur's -- so the seam and the truthiness rule consult
      * this as well as the spans they have. */
     bool toplevel_saffron;
+    /* saffron-effect-row-lost-through-unannotated-call: a user `defeffect` has
+     * been elaborated in this unit.  Gates the CALL half of the dynamic-node
+     * operand hoist (elab_hoist_control_operands): a unit with no effects can
+     * never need it, and gating keeps a transform that would otherwise touch
+     * every Saffron program off the code that cannot benefit.  Deliberately
+     * NOT the effect env's count -- built-in effects (`Unsafe`) are always
+     * registered, so that count is never zero. */
+    bool unit_has_user_effect;
     /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
     SkolemEnv *g2_skolem_env;
     /* Phase G2: GADT constructor whose arm is currently being elaborated.
@@ -1396,6 +1404,12 @@ bool elab_module_resolve_path(Elab *e, const Symbol *name,
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);
+/* saffron-effect-row-lost-through-unannotated-call: the RETURN-position widen.
+ * Hoists an effectful call out of the widened body first; see its comment in
+ * elab_call.c for why this is separate from elab_coerce_to_any (the argument
+ * site's frame_box / stack_ok / any_drop_after stamps require the coercion to
+ * return an EX_UNION_INJECT directly). */
+Expr *elab_coerce_to_any_return(Elab *e, Expr *value);
 /* cps-coloring-walk-has-no-arm-for-union-inject: hoist a control-bearing
  * operand into a `let` so the node above it sees a variable.  The CPS IR can
  * lower a control op in a let INIT but only delegates the nodes below, and a
@@ -1750,6 +1764,11 @@ Expr *elab_borrow_immut(Elab *e, const Form *call);
  * target Type.  Used by the `@TypeName` witness path, which pins an instance
  * and therefore already knows the type the receiver must be unboxed to. */
 Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span);
+/* saffron-lang-plan S2/D3: the declared TypeKind of an UNANNOTATED positional
+ * parameter -- `any` in a Saffron file, `int` in a Turmeric one.  Defined in
+ * elab_fns.c, where the full reasoning and the two deliberate exclusions
+ * (`& rest`, `extern-c`) are documented; also read by defeffect. */
+TypeKind saffron_default_param_kind(Span sp);
 /* Convert a runtime Type back to its source-form spelling (primitives,
  * named ADTs, TY_APP chains).  NULL for a kind that has no source form --
  * callers use that as a clean decline.  Defined in elab_typeclasses.c. */

@@ -1,0 +1,75 @@
+#lang saffron
+;; saffron-effect-row-lost-through-unannotated-call: a `handle` in a Saffron
+;; file used to miss an effect performed one call deeper -- TUR-W0033 called the
+;; clause unreachable, and the program aborted `tur: unhandled effect`.
+;;
+;; The filed hypothesis was that the row is lost through the unannotated RETURN,
+;; `any` carrying no effect row.  `straight` below is the control that
+;; disproves it: the same call chain with no dynamic node in between always
+;; worked, with every signature just as unannotated.  The real cause was two
+;; separate gaps, and this fixture covers both.
+;;
+;; THE ROW.  Every structural walk in src/passes/effect_check.c (and the two in
+;; src/passes/cps.c that build the coloring) lacked arms for the Saffron dynamic
+;; nodes AND for the `any` widen.  The widen is the one that took two rounds to
+;; find: an unannotated `defn` whose body is not already an `any` gets a
+;; RETURN-position widen wrapped around the whole body, so `through-do` was
+;; invisible while `through-op` -- whose body is already `any`, no widen -- was
+;; inferred correctly two lines away.  That divergence is what identified it.
+;;
+;; THE CALL.  Even with the row right, the CPS IR handed the whole dynamic node
+;; (or the whole widened body) to the direct emitter, because its delegation
+;; probe asks whether a lexical control OPERATOR is in the subtree and a call to
+;; an effectful FUNCTION is not one.  The direct emitter then called `g`'s
+;; direct entry, which opens a FRESH DK root, so the perform searched a chain
+;; the caller's handler was not on.  The fix hoists a call-bearing operand into
+;; a `let` at elaboration, which puts the call at a bind position where it
+;; lowers to the DK-threaded cps->cps edge.
+;;
+;; requires.leak-check: this fixture is leak-gated, and that is not incidental.
+;; The first attempt at the hoist put it inside `elab_coerce_to_any`, which also
+;; serves the CALL-ARGUMENT widen -- where three stamps (`frame_box`, the fat
+;; shim's `stack_ok`, `any_drop_after`) key on the coercion returning an
+;; EX_UNION_INJECT *directly*.  Wrapping it in a let skipped all three and
+;; reinstated the per-widen malloc `any-struct-box-leak-per-widen` had removed:
+;; 5999 orphaned allocations in `any-widen-frame-box`.  `tests/run.sh` cannot
+;; see that (it compiles fixture programs unsanitized), so only CI's leak gate
+;; caught it.  The marker here means a future regression of the same shape fails
+;; on this fixture too, not two unrelated ones.
+;;
+;; Every arm below is one shape that was broken, and they are not
+;; interchangeable: `through-op` needs only the row fix, `through-do` and
+;; `through-if` need the widen arm as well, and all of them need the hoist to
+;; run compiled.  Both back ends agree on all of them.
+
+(defeffect Ask [] : int)
+
+(defn g [] (perform (Ask)))
+
+;; The control: no dynamic node between `handle` and `perform`.
+(defn straight [] (g))
+
+;; `+` on an `any` is a dynamic op, so the call sits under one.
+(defn through-op [] (+ (g) 1))
+
+;; A comparison -- a different dynamic operator reaching the same arm.
+(defn through-cmp [] (> (g) 0))
+
+;; A body whose value is an int, so the RETURN-position widen wraps the whole
+;; `do` -- the shape that needed the EX_UNION_INJECT arm.
+(defn through-do [] (do (g) 7))
+
+;; ...and the same through an `if`, in the condition only.
+(defn through-if [] (if (> (g) 0) 1 0))
+
+;; The truthiness path: an `any` condition, not a bool one.
+(defn through-truthy [] (if (g) 1 0))
+
+(defn main []
+  (println (handle (straight)       (Ask [] k) (resume k 41)))
+  (println (handle (through-op)     (Ask [] k) (resume k 41)))
+  (println (handle (through-cmp)    (Ask [] k) (resume k 41)))
+  (println (handle (through-do)     (Ask [] k) (resume k 41)))
+  (println (handle (through-if)     (Ask [] k) (resume k 41)))
+  (println (handle (through-truthy) (Ask [] k) (resume k 41)))
+  0)

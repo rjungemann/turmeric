@@ -1,0 +1,34 @@
+#lang saffron
+;; saffron-defeffect-params-default-to-int: an unannotated `defeffect`
+;; parameter takes the FILE's default -- `any` here -- the same one a `defn`
+;; parameter takes.  It used to be a bare TY_INT, so `(perform (Log "hi"))`
+;; printed the cstr's ADDRESS in a file whose whole premise is the other
+;; default.
+;;
+;; The point of the fixture is that the two declarations below are the same
+;; declaration: `Log` leaves the parameter off, `Say` writes `: any`, and both
+;; carry a string, a float and a bool without either one naming a type at the
+;; perform site.  A regression that restores the `int` default shows up as
+;; addresses in the first three lines and correct values in the last three.
+;;
+;; The RESULT type is still required -- `(defeffect Log [msg])` is a hard error
+;; naming the form -- so only the parameter side ever defaulted.
+
+(defeffect Log [msg]       : int)
+(defeffect Say [msg : any] : int)
+
+(defn shout [x]
+  (do (perform (Log x))
+      (perform (Say x))
+      0))
+
+(defn run [x]
+  (handle (shout x)
+    (Log [msg] k) (do (println msg) (resume k 0))
+    (Say [msg] k) (do (println msg) (resume k 0))))
+
+(defn main []
+  (run "hi")
+  (run 7.1)
+  (run true)
+  0)

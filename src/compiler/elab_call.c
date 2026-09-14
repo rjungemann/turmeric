@@ -373,6 +373,81 @@ Expr *elab_bind_control_temp(Elab *e, Expr *value, LetBinding *lb) {
  * order, so evaluation order is unchanged.  A node with no control-bearing
  * operand is returned untouched -- this costs nothing for ordinary Saffron code,
  * which is almost all of it. */
+/* saffron-effect-row-lost-through-unannotated-call: does this operand hold a
+ * call to a named function, without crossing a function boundary?
+ *
+ * The companion to `cps_expr_uses_control` in the hoist below, and the whole
+ * point is that the two are different questions.  That one asks whether a
+ * lexical control OPERATOR is in the subtree; this one whether a CALL is.  A
+ * call to an effectful function is not a control operator, so the control probe
+ * alone left `(+ (g) 1)` un-hoisted -- and an un-hoisted operand is what lets
+ * the CPS IR hand the whole dynamic node to the direct emitter, which calls
+ * `g`'s direct entry, opens a fresh DK root, and never sees the caller's
+ * handler.  Hoisting puts the call at a bind position, where it lowers to the
+ * DK-threaded cps->cps edge instead.
+ *
+ * Why a SYNTACTIC probe rather than "is the callee effectful": at elaboration
+ * the callee's effect row does not exist yet -- `effect_check` is a later pass
+ * -- and any ordering-based answer would be wrong under forward references and
+ * mutual recursion.  So the probe is coarse and the GATE is what keeps it
+ * narrow: the caller only applies it in a unit that declares an effect at all
+ * (`unit_has_user_effect`), which is where an un-threaded call can do harm.
+ *
+ * A nested fn/closure body is its own call graph and is not descended. */
+static bool saffron_operand_has_call(const Expr *op) {
+    if (!op) return false;
+    /* A NIL-typed operand is never hoisted: the hoist binds the value to a
+     * local, and `void __ctlhoist_N = f(...)` is "declared void" / "void value
+     * not ignored".  `(when (> n 0) (do (println n) (countdown ...)))` in the
+     * tour guide's own fixture is the shape -- a `do` whose value is unit, which
+     * has a call in it and nothing to bind.  Nothing is lost by declining: a
+     * unit-valued operand delivers no word to the enclosing node, so there is no
+     * seam for it to cross. */
+    if (op->type.kind == TY_NIL) return false;
+    switch (op->kind) {
+        case EX_CALL:
+            return true;
+        case EX_ASCRIBE:      return saffron_operand_has_call(op->as.ascribe_.inner);
+        case EX_UNION_INJECT: return saffron_operand_has_call(op->as.union_inject_.value);
+        case EX_ANY_CAST:     return saffron_operand_has_call(op->as.any_cast_.value);
+        case EX_ANY_IS:       return saffron_operand_has_call(op->as.any_is_.value);
+        case EX_ANY_TYPE_OF:  return saffron_operand_has_call(op->as.any_type_of_.value);
+        case EX_GET_FIELD:    return saffron_operand_has_call(op->as.get_field_.struct_expr);
+        /* The composite forms a widened BODY is usually made of.  Without these
+         * the return-position hoist saw `(do (g) 1)` as call-free and the whole
+         * body -- colored call included -- stayed one delegatable operand. */
+        case EX_DO:
+            for (uint32_t i = 0; i < op->as.do_.n; i++)
+                if (saffron_operand_has_call(op->as.do_.items[i])) return true;
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < op->as.let_.n; i++)
+                if (saffron_operand_has_call(op->as.let_.bindings[i].init)) return true;
+            return saffron_operand_has_call(op->as.let_.body);
+        case EX_IF:
+            return saffron_operand_has_call(op->as.if_.cond)
+                || saffron_operand_has_call(op->as.if_.then_)
+                || saffron_operand_has_call(op->as.if_.else_or_null);
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < op->as.dyn_op_.n_args; i++)
+                if (saffron_operand_has_call(op->as.dyn_op_.args[i])) return true;
+            return false;
+        case EX_DYN_CALL:
+            if (saffron_operand_has_call(op->as.dyn_call_.fn)) return true;
+            for (uint32_t i = 0; i < op->as.dyn_call_.n_args; i++)
+                if (saffron_operand_has_call(op->as.dyn_call_.args[i])) return true;
+            return false;
+        case EX_DYN_FIELD:    return saffron_operand_has_call(op->as.dyn_field_.obj);
+        case EX_DYN_METHOD:
+            if (saffron_operand_has_call(op->as.dyn_method_.obj)) return true;
+            for (uint32_t i = 0; i < op->as.dyn_method_.n_args; i++)
+                if (saffron_operand_has_call(op->as.dyn_method_.args[i])) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
 Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
     if (!node) return node;
     Expr **slots[32];
@@ -398,15 +473,34 @@ Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
         default:
             return node;
     }
+    /* saffron-effect-row-lost-through-unannotated-call: a CALL in an operand is
+     * hoisted too, in a unit that declares an effect.  See
+     * saffron_operand_has_call for why the probe is syntactic and why the gate
+     * is what keeps it narrow.
+     *
+     * NOT for `and` / `or`, which are LAZY.  Hoisting binds an operand in a
+     * `let` that runs BEFORE the node, which is exactly what the short-circuit
+     * must not do -- `(and (f false) (f (boom)))` has to not reach `boom`, and
+     * with the operand hoisted it did (saffron-dyn-truthy caught it, which is
+     * what that fixture's short-circuit row is there for).  The CONTROL half of
+     * the hoist has always had the same hazard and is left exactly as it was:
+     * this is the new half declining, not a change to the old one. */
+    bool lazy_op = node->kind == EX_DYN_OP && node->as.dyn_op_.op &&
+                   (strcmp(node->as.dyn_op_.op->name, "and") == 0 ||
+                    strcmp(node->as.dyn_op_.op->name, "or")  == 0);
+    #define SAFFRON_HOIST_OPERAND(OP)                                          \
+        ((OP) && (cps_expr_uses_control(OP)                                    \
+                  || (!lazy_op && e->unit_has_user_effect                       \
+                      && saffron_operand_has_call(OP))))
     uint32_t n_hoist = 0;
     for (uint32_t i = 0; i < n_slots; i++)
-        if (*slots[i] && cps_expr_uses_control(*slots[i])) n_hoist++;
+        if (SAFFRON_HOIST_OPERAND(*slots[i])) n_hoist++;
     if (n_hoist == 0) return node;
 
     LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, n_hoist * sizeof(LetBinding));
     uint32_t h = 0;
     for (uint32_t i = 0; i < n_slots; i++) {
-        if (!*slots[i] || !cps_expr_uses_control(*slots[i])) continue;
+        if (!SAFFRON_HOIST_OPERAND(*slots[i])) continue;
         *slots[i] = elab_bind_control_temp(e, *slots[i], &lbs[h]);
         h++;
     }
@@ -414,6 +508,7 @@ Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
     let->as.let_.bindings = lbs;
     let->as.let_.n = n_hoist;
     let->as.let_.body = node;
+    #undef SAFFRON_HOIST_OPERAND
     return let;
 }
 
@@ -693,6 +788,50 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     inject->as.union_inject_.tag_idx = (int64_t)any_box_tag_for_type(&value->type);
     inject->as.union_inject_.value = value;
     return inject;
+}
+
+/* saffron-effect-row-lost-through-unannotated-call: the RETURN-position widen,
+ * with a call hoisted out of the widened body first.
+ *
+ * An unannotated Saffron `defn` widens its WHOLE BODY here, so
+ * `(defn tc [] (if (> (g) 0) 1 0))` handed the entire `if` -- effectful call
+ * and all -- to the widen as one operand.  `operand_uses_control` saw no
+ * control operator in it, the CPS IR delegated the lot to the direct emitter,
+ * and `g`'s direct entry opened a fresh DK root inside the caller's handler.
+ * Binding the body to a temp first puts the call at a bind position, where it
+ * lowers to the DK-threaded cps->cps edge; the widen then applies to the temp,
+ * INSIDE the let, for the reason the control hoist above documents.
+ *
+ * Deliberately a SEPARATE entry point rather than a branch inside
+ * `elab_coerce_to_any`: that helper also serves the CALL-ARGUMENT widen, and
+ * three stamps at the argument site key on the coercion returning an
+ * `EX_UNION_INJECT` DIRECTLY (`frame_box`, the fat shim's `stack_ok`, and
+ * `any_drop_after`).  Wrapping it in a let there silently skipped all three and
+ * reinstated exactly the per-widen malloc `any-struct-box-leak-per-widen`
+ * removed -- caught by `any-widen-frame-box` and `saffron-dyn-field` under
+ * `tests/run-leak-check.sh`, which `tests/run.sh` cannot see (it compiles
+ * fixture programs unsanitized).  Return position has no such stamps, so the
+ * hoist is confined to it.
+ *
+ * A NIL-typed body is never hoisted: `void __ctlhoist_N = f(...)` does not
+ * compile, and a unit-valued body delivers no word to widen anyway. */
+Expr *elab_coerce_to_any_return(Elab *e, Expr *value) {
+    if (!value) return NULL;
+    if (value->type.kind != TY_ANY && value->type.kind != TY_NIL &&
+        e->unit_has_user_effect && !cps_expr_uses_control(value) &&
+        saffron_operand_has_call(value)) {
+        LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+        Expr *v = elab_bind_control_temp(e, value, &lbs[0]);
+        Expr *inner = elab_coerce_to_any(e, v);
+        if (inner) {
+            Expr *let = expr_new(e->arena, EX_LET, inner->type, value->span);
+            let->as.let_.bindings = lbs;
+            let->as.let_.n = 1;
+            let->as.let_.body = inner;
+            return let;
+        }
+    }
+    return elab_coerce_to_any(e, value);
 }
 
 /* union-tagged-union-c-emission: the union twin of `elab_coerce_to_any`.
