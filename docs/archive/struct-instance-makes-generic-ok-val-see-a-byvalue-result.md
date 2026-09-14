@@ -1,5 +1,51 @@
 # A value-struct instance flips a class's Result representation, and a generic `ok-val` is not told
 
+**RESOLVED 2026-09-14**, and it corrects the report on where the defect lives.
+
+Everything the report establishes about the TRIGGER holds -- it is the
+value-struct instance, the controls bracket it correctly, and json's escape is
+the accident the report names. What is wrong is the root cause. This is **not**
+a producer/consumer specialization-selection split in `emit_module.c`'s ABI
+pass: that pass gets it right. Instrumenting it shows the `ok-val` call inside
+`build`'s specialization interning exactly the spec it should,
+`ok_val__spec__int64_t_tur_adt_Result__int__cstr`, and the emitted
+`build__spec__...` body calls it.
+
+The broken body is the **carrier base** `build` -- which the emitted C carries
+alongside the spec -- and there the mismatch runs the other way: it is the
+PRODUCER that should have stayed on the carrier and did not. With no per-`Expr*`
+recording for a call in a generic body, `find_matched_abi_spec` (`emit_expr.c`)
+falls back to a structural match on the callee binding and the argument types --
+and a return-type-dispatched class method's by-value clone and its carrier base
+have **identical arguments**, differing only in the return. The one guard
+against that is `emit_spec_result_mismatch`, which declines to narrow when
+either side's result is "not decisive". A return-dispatched `(dec ...)` in a
+generic body has a bare `TY_TYVAR` result, which counted as not decisive, so the
+by-value `__inst_Dec_dec_int__spec__...` matched. Its
+`tur_adt_Result__int__cstr` was then handed to the carrier `ok_hyval(int64_t)`,
+which is the cc error in the report. (Two call sites reach that comparison; the
+other one's result had already collapsed to `TY_INT` and the existing C-name
+compare rejected the spec correctly. Only the tyvar-result one slipped through.)
+
+The fix is to recognize that an abstract result is not "cannot tell": a value
+whose type still mentions a named tyvar is being emitted in a generic body,
+where every carrier-ABI value rides the int64 carrier. `emit_spec_result_mismatch`
+now treats that as decisive against a spec whose result is a concrete by-value
+aggregate. It is a pure narrowing -- it can only turn a wrong hit into "no
+spec", which is the erased carrier base a generic body wants.
+
+So fix directions 1 and 2 are both moot; nothing had to follow its producer, and
+no bridge was needed. The by-value instance clone simply must not be visible to
+a carrier body, which is what the `active_outer == NULL` guard a few lines above
+already says for the recorded case.
+
+Direction 3's fixture is in:
+`tests/fixtures/struct-instance-byvalue-result-consumer`, with the value-struct
+instance load-bearing (delete it and the program compiles even with the bug
+present).
+
+## Original report
+
 **Severity: medium-high** -- a **hard cc failure**, not a silent wrong answer,
 but the trigger is nonlocal and counterintuitive: adding an instance for one
 type breaks a generic that never mentions that type.

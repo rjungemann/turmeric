@@ -275,6 +275,33 @@ static int hex_digit(int c) {
     return -1;
 }
 
+/* Accumulate one digit of a numeric literal into an unsigned magnitude.
+ * The accumulation is unsigned so it is always well defined -- the old signed
+ * `ival = ival * 10 + digit` was UB the moment a literal ran past int64, which
+ * is also how an out-of-range literal used to wrap silently instead of being
+ * diagnosed. Once `*ovf` is set the magnitude is pinned at UINT64_MAX and no
+ * further digit changes it; the caller reports the range error after the type
+ * suffix has been read. */
+static void mag_push(uint64_t *mag, bool *ovf, uint64_t base, uint64_t digit) {
+    if (*ovf) return;
+    if (*mag > (UINT64_MAX - digit) / base) { *ovf = true; *mag = UINT64_MAX; return; }
+    *mag = *mag * base + digit;
+}
+
+/* strtod over the delimited slice [start, end) of the source, arena-allocating
+ * only when the slice does not fit the stack buffer. */
+static double read_slice_double(Reader *r, size_t start, size_t end) {
+    size_t num_len = end - start;
+    char stackbuf[64];
+    char *nb = stackbuf;
+    if (num_len >= sizeof(stackbuf)) {
+        nb = (char *)arena_alloc(r->arena, num_len + 1);
+    }
+    memcpy(nb, r->src + start, num_len);
+    nb[num_len] = '\0';
+    return strtod(nb, NULL);
+}
+
 static Form *read_number(Reader *r, int sign) {
     uint32_t start_line = r->line;
     uint32_t start_col = r->col;
@@ -288,20 +315,32 @@ static Form *read_number(Reader *r, int sign) {
     double fval = 0.0;
     int64_t ival = 0;
     bool any = false;
+    /* The literal's magnitude, accumulated unsigned and range-checked once the
+     * type suffix is known. `sign` is applied at the very end, which is why
+     * INT64_MIN's magnitude (INT64_MAX + 1) has to survive the accumulation. */
+    uint64_t mag = 0;
+    bool mag_overflow = false;
+    /* A 0x / 0b literal is a bit pattern, not a magnitude: the full 64-bit
+     * range is its own, so 0xFFFFFFFFFFFFFFFF keeps meaning -1. */
+    bool bitpattern = false;
+    /* The delimited decimal lexeme, for recovering a float value with strtod. */
+    size_t num_start = 0, num_end = 0;
 
     /* 0x / 0b prefixes - these are always integers */
     if (peek(r) == '0' && (peek2(r) == 'x' || peek2(r) == 'X')) {
         advance(r); advance(r);
+        bitpattern = true;
         int d;
         while ((d = hex_digit(peek(r))) >= 0) {
-            ival = ival * 16 + d;
+            mag_push(&mag, &mag_overflow, 16, (uint64_t)d);
             advance(r);
             any = true;
         }
     } else if (peek(r) == '0' && (peek2(r) == 'b' || peek2(r) == 'B')) {
         advance(r); advance(r);
+        bitpattern = true;
         while (peek(r) == '0' || peek(r) == '1') {
-            ival = ival * 2 + (advance(r) - '0');
+            mag_push(&mag, &mag_overflow, 2, (uint64_t)(advance(r) - '0'));
             any = true;
         }
     } else {
@@ -312,12 +351,12 @@ static Form *read_number(Reader *r, int sign) {
          * correctly-rounded double and previously dropped negative exponents
          * outright (e.g. 1e-10 parsed as 1.0). See
          * docs/reader-float-parsing-plan.md. */
-        size_t num_start = r->pos;
+        num_start = r->pos;
 
         /* Parse integer part */
         while (peek(r) >= '0' && peek(r) <= '9') {
             int digit = advance(r) - '0';
-            ival = ival * 10 + (int64_t)digit;
+            mag_push(&mag, &mag_overflow, 10, (uint64_t)digit);
             any = true;
         }
 
@@ -355,16 +394,9 @@ static Form *read_number(Reader *r, int sign) {
          * The type suffix (f32/f64) has not been consumed yet, so the slice is
          * pure decimal-float syntax and strtod stops exactly at its end. The
          * leading sign is applied below via the `sign < 0` negation. */
+        num_end = r->pos;
         if (is_float) {
-            size_t num_len = r->pos - num_start;
-            char stackbuf[64];
-            char *nb = stackbuf;
-            if (num_len >= sizeof(stackbuf)) {
-                nb = (char *)arena_alloc(r->arena, num_len + 1);
-            }
-            memcpy(nb, r->src + num_start, num_len);
-            nb[num_len] = '\0';
-            fval = strtod(nb, NULL);
+            fval = read_slice_double(r, num_start, num_end);
         }
     }
 
@@ -388,8 +420,17 @@ static Form *read_number(Reader *r, int sign) {
         else if (peek(r) == 'u' && peek2(r) == '3'  && peek3(r) == '2' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_U32; }
         else if (peek(r) == 'u' && peek2(r) == '6'  && peek3(r) == '4' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_U64; }
         /* Float suffixes on integer-looking literals (e.g. 1f32) */
-        else if (peek(r) == 'f' && peek2(r) == '3'  && peek3(r) == '2' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_F32; is_float = true; fval = (double)ival; }
-        else if (peek(r) == 'f' && peek2(r) == '6'  && peek3(r) == '4' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_F64; is_float = true; fval = (double)ival; }
+        /* `1f32` / `1f64`: an integer lexeme with a float suffix. Recover the
+         * value with strtod over the delimited digits, not from `mag` -- a
+         * magnitude past 64 bits saturates, and 99999999999999999999f64 is a
+         * perfectly representable double. `0b1f32` has no decimal slice to
+         * read (and `0x` swallows `f` as a digit), so a bit-pattern lexeme
+         * falls back to its magnitude. */
+        #define TUR_INT_LEXEME_AS_DOUBLE() \
+            (num_end > num_start ? read_slice_double(r, num_start, num_end) : (double)mag)
+        else if (peek(r) == 'f' && peek2(r) == '3'  && peek3(r) == '2' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_F32; is_float = true; fval = TUR_INT_LEXEME_AS_DOUBLE(); }
+        else if (peek(r) == 'f' && peek2(r) == '6'  && peek3(r) == '4' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_F64; is_float = true; fval = TUR_INT_LEXEME_AS_DOUBLE(); }
+        #undef TUR_INT_LEXEME_AS_DOUBLE
     } else {
         /* Float suffixes */
         if      (peek(r) == 'f' && peek2(r) == '3'  && peek3(r) == '2' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_F32; }
@@ -404,7 +445,29 @@ static Form *read_number(Reader *r, int sign) {
         if (sign < 0) fval = -fval;
         atom = form_float(r->arena, span, fval);
     } else {
-        if (sign < 0) ival = -ival;
+        /* Range-check the magnitude before it becomes a value. The sized
+         * suffixes below check themselves against the (exact) int64 value, so
+         * defer to them whenever the literal at least fits 64 bits -- for
+         * `300i8`, "overflows int8 range" is the message that helps. What is
+         * left is the default int64 path, which had no check at all and so
+         * turned 9223372036854775808 into INT64_MIN without a word. */
+        bool sized_suffix = (lit_suf != LIT_SUF_NONE && lit_suf != LIT_SUF_I64);
+        bool unsigned_target = (lit_suf == LIT_SUF_U8  || lit_suf == LIT_SUF_U16 ||
+                                lit_suf == LIT_SUF_U32 || lit_suf == LIT_SUF_U64);
+        uint64_t mag_bound = (bitpattern || unsigned_target)
+                             ? UINT64_MAX
+                             : (sign < 0 ? (uint64_t)INT64_MAX + 1u : (uint64_t)INT64_MAX);
+        if (mag_overflow || (!sized_suffix && mag > mag_bound)) {
+            diag_emit(DIAG_ERROR, span,
+                      "integer literal overflows int64 range "
+                      "(-9223372036854775808..9223372036854775807)");
+            r->error = true;
+            return NULL;
+        }
+        /* Apply the sign without negating a signed int64: `~mag + 1` is the
+         * two's-complement negation done in unsigned arithmetic, which is
+         * defined for INT64_MIN's magnitude where `-ival` was UB. */
+        ival = (sign < 0) ? (int64_t)(~mag + 1u) : (int64_t)mag;
         atom = form_int(r->arena, span, ival);
         /* Overflow checks for small integer types */
         if (lit_suf == LIT_SUF_I8 && (ival < -128 || ival > 127)) {

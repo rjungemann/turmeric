@@ -1,0 +1,25 @@
+;; generic-unwrap-specializes-by-the-enclosing-type-argument.
+;;
+;; `firstn` is quantified over `A`; stdlib's `unwrap` is quantified over `A`
+;; too. The (Option int) `unwrap` is applied to has nothing to do with either,
+;; but the ABI specializer resolved the callee's tyvars out of the ENCLOSING
+;; generic's binding set by NAME, so at `A = float` the call was rewritten to
+;; `unwrap__spec__double_tur_adt_Option__float` and handed an Option__int.
+;;
+;; The TWO instantiations are load-bearing: at `A = int` alone the wrong answer
+;; and the right answer coincide, and the fixture passes with the bug present.
+(defn an-option-int [] : (Option int)
+  (:: (some 7) (Option int)))
+
+(defclass Mk [a] (mk [n : int] : a))
+(definstance Mk [int]   (mk [n] : int   n))
+(definstance Mk [float] (mk [n] : float 1.5))
+
+(defn firstn [A] [(Mk A)] [n : int] : A
+  (let [count (unwrap (an-option-int))]
+    (mk (+ n count))))
+
+(defn main [] : int
+  (println (:: (firstn 1) :int))
+  (println (:: (firstn 1) :float))
+  0)

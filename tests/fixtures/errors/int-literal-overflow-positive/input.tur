@@ -1,0 +1,4 @@
+;; INT64_MAX + 1 used to be accepted and wrap silently to INT64_MIN.
+(defn main [] : int
+  (println 9223372036854775808)
+  0)

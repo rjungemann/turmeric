@@ -3788,6 +3788,16 @@ char *atom_bool(bool b)      { return strdup(b ? "true" : "false"); }
 /* Phase N: emit integer literal with correct C macro for fixed-width type */
 char *atom_int_typed(int64_t i, TypeKind k) {
     char buf[64];
+    /* INT64_MIN has no positive spelling: `INT64_C(-9223372036854775808)`
+     * expands to a negated 9223372036854775808, which does not fit a signed
+     * type, so clang reads it as unsigned and warns
+     * (-Wimplicitly-unsigned-literal) on every program that mentions it.
+     * Spell it the way <stdint.h> does. */
+    bool spells_int64 = (k != TY_INT8  && k != TY_INT16  && k != TY_INT32 &&
+                         k != TY_UINT8 && k != TY_UINT16 && k != TY_UINT32 &&
+                         k != TY_UINT64);
+    if (i == INT64_MIN && spells_int64)
+        return strdup("(-INT64_C(9223372036854775807) - 1)");
     switch (k) {
         case TY_INT8:   snprintf(buf, sizeof buf, "INT8_C(%lld)",   (long long)i); break;
         case TY_INT16:  snprintf(buf, sizeof buf, "INT16_C(%lld)",  (long long)i); break;

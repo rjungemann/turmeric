@@ -1,0 +1,6 @@
+;; One past INT64_MIN. The magnitude bound is asymmetric: 9223372036854775808
+;; is legal with a leading '-' and an error without one, so this fixture and
+;; its positive sibling bracket the boundary from both sides.
+(defn main [] : int
+  (println -9223372036854775809)
+  0)

@@ -262,6 +262,18 @@ static bool type_uses_carrier_in_dispatch(Type t) {
  * per-Expr* recording, not here) keep the existing behaviour.  This is the
  * spec-selection half of gap G6; the closure-thunk-per-carrier half (a sub-word
  * `bool` recursive closure) remains open. */
+/* Does `t` mention a named type variable anywhere in its application spine?
+ * A call result that does is being emitted in a GENERIC body, where every
+ * carrier-ABI value rides the int64 carrier. */
+static bool emit_result_type_mentions_tyvar(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR) return true;
+    if (t->kind == TY_APP)
+        return emit_result_type_mentions_tyvar(t->as.app.fn) ||
+               emit_result_type_mentions_tyvar(t->as.app.arg);
+    return false;
+}
+
 static bool emit_prim_result_kind(TypeKind k) {
     switch (k) {
         case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
@@ -295,6 +307,25 @@ bool emit_spec_result_mismatch(EmitCtx *ctx, Type call_result, Type spec_result)
     if (emit_prim_result_kind(call_result.kind) &&
         emit_prim_result_kind(spec_result.kind) &&
         call_result.kind != spec_result.kind)
+        return true;
+    /* struct-instance-makes-generic-ok-val-see-a-byvalue-result: a result that
+     * still mentions a named tyvar is not "cannot tell" -- it is a value being
+     * emitted in a generic body, and there every carrier-ABI value rides the
+     * int64 carrier.  That IS decisive against a spec whose result is a
+     * by-value aggregate, and the args cannot catch it: a return-dispatched
+     * class method's by-value and carrier clones differ ONLY in the return.
+     *
+     * Letting it match is how adding a value-struct instance to a
+     * return-type-dispatched class broke a constrained generic that never
+     * mentions the struct: the struct instance mints a by-value `Result` clone
+     * of the method, the by-args match in the generic's own carrier body then
+     * adopted it, and its `tur_adt_Result__int__cstr` was handed to the carrier
+     * `ok_hyval(int64_t)`.  Nonlocal by construction -- the struct and the
+     * generic need not share a file, a module, or a spice. */
+    if (!emit_result_c_name_is_decisive(&call_result) &&
+        emit_result_type_mentions_tyvar(&call_result) &&
+        emit_result_c_name_is_decisive(&spec_result) &&
+        !type_uses_carrier_abi(spec_result))
         return true;
     /* capturing-thunk-returning-heap-field-record-garbles-int: the primitive
      * rule above cannot see two ADT results apart.  A generic whose type

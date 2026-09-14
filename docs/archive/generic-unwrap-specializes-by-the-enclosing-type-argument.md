@@ -1,5 +1,53 @@
 # Inside a generic, `unwrap` is specialized by the enclosing type argument, not by its own argument
 
+**RESOLVED 2026-09-14** by fix direction 1. The report's closing hint was the
+answer: the binding set **is** consulted by name, and this is name capture.
+
+stdlib's `unwrap` is `(defn unwrap [A] [o : (Option A)] :A ...)`. Its type
+parameter is called `A`, and so is the enclosing generic's. `emit_abi_find_type_binding`
+matches on `strcmp(name)`, so inside `firstn__spec__double` the callee's own `A`
+resolved out of the caller's `{A -> float}` -- which is also why renaming the
+enclosing generic's parameter to `B` is a complete workaround (confirmed as a
+control while fixing this: the identical program compiles and runs).
+
+`emit_abi_register_call` now unifies the callee's declared parameter types
+against the **concrete argument types at the call site**, and a binding
+recovered that way overrides the inherited one. Four conditions keep it to the
+shape this report names, and each was measured against a fixture that regressed
+without it:
+
+- **Not a typeclass method** (no `dict_arg`, no `owner_instance`). An instance
+  dispatch resolves its class var from the RECEIVER and the dispatch paths need
+  that binding verbatim -- correcting it from the argument reroutes
+  `Enc[Option]` calls to the wrong element clone.
+- **The parameter pins its tyvar inside a type application** (`o : (Option A)`),
+  so the argument's own head type determines it. A bare-tyvar parameter
+  (`x : A`) is whatever the caller says it is, which is exactly what the
+  instance paths resolve from the receiver.
+- **That application's spine head is a concrete constructor**, not a
+  higher-kinded type variable. A `(m a)` parameter binds its head to a partial
+  application that may carry a HOLE -- `(Result _ cstr)` saturates at position
+  0, not on the end -- and `emit_abi_unify_collect` walks `fn`/`arg`
+  positionally with no hole handling, so it would transpose `(Result int cstr)`
+  into `m -> (Result int)`, `a -> cstr`. `emit_abi_instantiate_type` carries the
+  hole logic; this unifier does not, so it must not be asked the question
+  (`tests/fixtures/hkt-constrained-hole-headed-instance-head`).
+- **The argument's type is concrete as written**, not concrete only after being
+  resolved through the active spec. An argument that mentions the enclosing
+  generic's tyvars genuinely depends on it; this correction is only for one
+  whose type has nothing to do with the enclosing type parameter -- the shape
+  the report names, and the only one a name collision can misresolve.
+
+A parameter pattern that does not line up with its argument (a `(Option A)`
+against a carrier-collapsed `int64`) collects nothing, so the pass can only ever
+narrow.
+
+Pinned by `tests/fixtures/generic-unwrap-unrelated-option`. The **two**
+instantiations are load-bearing, as the report says: at `A = int` alone the
+fixture passes with the bug present.
+
+## Original report
+
 **Severity: medium-high** -- a **hard cc failure**, and one that hides: the
 program compiles for as long as the generic is only ever instantiated at the
 element type the unrelated `Option` happens to hold. The second instantiation

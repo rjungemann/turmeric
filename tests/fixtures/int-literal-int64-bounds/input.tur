@@ -1,0 +1,16 @@
+;; The happy-path half of the int64 literal range check: both endpoints are
+;; legal and must survive the reader, the emitter and a round trip through
+;; println. INT64_MIN is the interesting one -- its magnitude is one past
+;; INT64_MAX, so it is what an over-eager range check rejects.
+;;
+;; The 0x/0b lines pin the other half of the rule: a bit-pattern literal keeps
+;; the full 64-bit width, so 0xFFFFFFFFFFFFFFFF still means -1 rather than
+;; being rejected as out of range.
+(defn main [] : int
+  (println -9223372036854775808)
+  (println 9223372036854775807)
+  (println (+ -9223372036854775808 9223372036854775807))
+  (println 0xFFFFFFFFFFFFFFFF)
+  (println 0x7FFFFFFFFFFFFFFF)
+  (println 0b1111)
+  0)
