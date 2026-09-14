@@ -1,0 +1,62 @@
+;; generic-wrapper-tail-forwards-return-dispatch -- a constrained generic defn
+;; whose body is a DIRECT tail call to a return-type-directed class method.
+;;
+;;   (defn decode [A] [(DecodeJson A)] [doc : int val : int] : (Result A cstr)
+;;     (decode-json doc val))
+;;
+;; The instance returns the int64 carrier (a heap Result box); the wrapper's
+;; monomorphized spec declares the by-value aggregate.  Before the return
+;; bridge in emit_fns.c's fn_return_needs_carrier_result_bridge, the spec
+;; emitted `return <int64_t>;` from a struct-returning function -- a hard cc
+;; error ("incompatible types when returning type 'int64_t' but
+;; 'tur_adt_Result__int__cstr' was expected") for a shape `tur check` accepts.
+;;
+;; This is the encode-string / decode-list shape from the json spice, so it is
+;; a normal thing to write, not a corner.
+;;
+;; Covers scalar, cstr and by-value struct payloads, and both Result arms.
+;; NOTE: the struct-payload arm still leaks its 16-byte payload box -- the
+;; caller-side drop does not fire for this producer shape.  See
+;; docs/reported/generic-wrapper-tail-forwarding-a-return-dispatch-method.md;
+;; that is why this fixture carries requires.no-leak-check.
+
+(defstruct User [name : cstr age : int])
+
+(defclass DecodeJson [a] (decode-json [doc : int  val : int] : (Result a cstr)))
+
+(definstance DecodeJson [int] (decode-json [doc val]
+  ```c
+  (void)doc;
+  if (val < 0) return tur_box_err((int64_t)(intptr_t)"int: negative");
+  return tur_box_ok((int64_t)(val + 100));
+  ```))
+
+(definstance DecodeJson [cstr] (decode-json [doc val]
+  ```c
+  (void)doc;
+  if (val < 0) return tur_box_err((int64_t)(intptr_t)"cstr: negative");
+  return tur_box_ok((int64_t)(intptr_t)"decoded-string");
+  ```))
+
+(definstance DecodeJson [User] (decode-json [doc val]
+  (if (< val 0) (err "User: negative") (ok (make-struct User "ada" 36)))))
+
+;; The shape under test: a direct tail-forward, NOT a destructure-and-rebuild.
+(defn decode [A] [(DecodeJson A)] [doc : int  val : int] : (Result A cstr)
+  (decode-json doc val))
+
+(defn main [] : int
+  (let [i  (:: (decode 0 7) (Result int cstr))
+        s  (:: (decode 0 7) (Result cstr cstr))
+        u  (:: (decode 0 7) (Result User cstr))
+        bi (:: (decode 0 -1) (Result int cstr))
+        bs (:: (decode 0 -1) (Result cstr cstr))
+        bu (:: (decode 0 -1) (Result User cstr))]
+    (println (ok-val i))
+    (println (ok-val s))
+    (println (.name (ok-val u)))
+    (println (.age (ok-val u)))
+    (println (if (err? bi) (err-val bi) "UNEXPECTED"))
+    (println (if (err? bs) (err-val bs) "UNEXPECTED"))
+    (println (if (err? bu) (err-val bu) "UNEXPECTED"))
+    0))

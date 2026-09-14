@@ -1,0 +1,71 @@
+;; generic-wrapper-over-return-dispatch-method -- a constrained generic defn
+;; that forwards to a RETURN-TYPE-DIRECTED typeclass method.
+;;
+;; This is the shape of json/encode.tur's `encode-string` and `decode-list`:
+;; a plain defn wrapping a class method, so callers get an ordinary function
+;; instead of a bare method call.  The msgpack spice will want its own.
+;;
+;; The body shape is load-bearing.  A DIRECT tail-forward --
+;;
+;;   (defn decode [A] [(DecodeJson A)] [doc : int val : int] : (Result A cstr)
+;;     (decode-json doc val))
+;;
+;; -- does not compile: the wrapper's monomorphized spec declares a by-value
+;; Result while the forwarded method call yields the int64 carrier, so cc
+;; rejects it with "incompatible types when returning type 'int64_t' but
+;; 'tur_adt_Result__int__cstr' was expected".  Unwrapping at A and rebuilding
+;; at the wrapper's own result type is what works, and is what this pins.
+;; See docs/reported/generic-wrapper-tail-forwarding-a-return-dispatch-method.md
+;;
+;; Covers: primitive payload, cstr payload, defstruct payload, both Result
+;; arms, and a macro-spliced call site.
+
+(defstruct User [name : cstr age : int])
+
+(defclass DecodeJson [a] (decode-json [doc : int  val : int] : (Result a cstr)))
+
+(definstance DecodeJson [int] (decode-json [doc val]
+  ```c
+  (void)doc;
+  if (val < 0) return tur_box_err((int64_t)(intptr_t)"decode int: negative");
+  return tur_box_ok((int64_t)(val + 100));
+  ```))
+
+(definstance DecodeJson [cstr] (decode-json [doc val]
+  ```c
+  (void)doc;
+  if (val < 0) return tur_box_err((int64_t)(intptr_t)"decode cstr: negative");
+  return tur_box_ok((int64_t)(intptr_t)"decoded-string");
+  ```))
+
+(definstance DecodeJson [User] (decode-json [doc val]
+  (if (< val 0)
+    (err "decode User: negative")
+    (ok (make-struct User "ada" 36)))))
+
+;; The wrapper under test.  Unwrap at A, rebuild at the declared result type.
+(defn decode [A] [(DecodeJson A)]
+  [doc : int  val : int] : (Result A cstr)
+  (let [r (:: (decode-json doc val) (Result A cstr))]
+    (if (ok? r) (ok (ok-val r)) (err (err-val r)))))
+
+;; A macro that splices a bare call to the wrapper, as httpd's req-decode
+;; does with `decode`.
+(defmacro wrap-decode [doc val type-name]
+  `(:: (decode ~doc ~val) (Result ~type-name cstr)))
+
+(defn main [] : int
+  (let [i  (:: (decode 0 7) (Result int cstr))
+        s  (:: (decode 0 7) (Result cstr cstr))
+        u  (:: (decode 0 7) (Result User cstr))
+        bi (:: (decode 0 -1) (Result int cstr))
+        bu (:: (decode 0 -1) (Result User cstr))
+        m  (wrap-decode 0 7 User)]
+    (println (ok-val i))
+    (println (ok-val s))
+    (println (.name (ok-val u)))
+    (println (.age (ok-val u)))
+    (println (if (err? bi) (err-val bi) "UNEXPECTED-OK"))
+    (println (if (err? bu) (err-val bu) "UNEXPECTED-OK"))
+    (println (.name (ok-val m)))
+    0))

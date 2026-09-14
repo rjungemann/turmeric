@@ -1,7 +1,7 @@
 # MessagePack Spice Plan
 
 > **Status:** Draft Plan
-> **Last Updated:** 2026-07-26
+> **Last Updated:** 2026-09-13
 > **Type:** Serialization / spice (turmeric-spices)
 
 ---
@@ -10,11 +10,12 @@
 
 A new `spices/msgpack` spice providing MessagePack binary serialization,
 deliberately architected as the binary twin of the `json` spice: the same
-typeclass-driven serde surface (`Encode`/`Decode`-style classes with
-return-type-directed decode dispatch), the same derive-macro family for
-`defstruct` products, `defdata` sums, and `defopaque` newtypes, and the
-same accumulate-all-errors checked-decode layer whose primitive vocabulary
-mirrors `stdlib/schema.tur`.
+typeclass-driven serde surface (format-tagged `EncodeMp` / `DecodeMp`
+classes with return-type-directed decode dispatch, mirroring the
+`EncodeJson` / `DecodeJson` this plan renames json's classes to), the
+same derive-macro family for `defstruct` products, `defdata` sums, and
+`defopaque` newtypes, and the same accumulate-all-errors checked-decode
+layer whose primitive vocabulary mirrors `stdlib/schema.tur`.
 
 Where json traffics in malloc'd `cstr` fragments, msgpack is a binary
 format with embedded NUL bytes, so the codec trafficks in an owned,
@@ -42,8 +43,14 @@ as a Tier-3 spice (`:cmake-deps` fetches mpack, static-only), modeled on
 
 ### Goals (v0)
 
-- `EncodeMp` / `DecodeMp` / `DecodeMpChecked` typeclasses (named to avoid
-  colliding with json's globally-resolving `Encode`/`Decode` classes).
+- `EncodeMp` / `DecodeMp` / `DecodeMpChecked` typeclasses -- explicitly
+  format-tagged, because typeclasses resolve globally and one program may
+  hold both spices at once.
+- **json's classes renamed to match:** `Encode` -> `EncodeJson`, `Decode`
+  -> `DecodeJson`, `DecodeChecked` -> `DecodeJsonChecked`, plus their
+  methods. Neither spice owns the unqualified spelling. One breaking
+  change, one minor release, no deprecation window. Mapping and footprint
+  in [Naming](#naming-explicit-serde-classes); the work is phase MPJ.
 - Owned byte-buffer type `Buf` (length-prefixed, `buf-len` / `buf-data` /
   `buf-free`) as the encode output and decode input carrier.
 - Primitive instances matching json's set: `int`, `bool`, `float`, `cstr`
@@ -200,6 +207,121 @@ Derive usage mirrors json exactly:
 
 ---
 
+## Naming: explicit serde classes
+
+Turmeric typeclasses resolve **globally** -- a `defclass` is not scoped by
+its module's `(export ...)` list, which is why `json/encode.tur` documents
+`Encode` / `Decode` / `DecodeChecked` as deliberately *absent* from that
+list. A program importing both spices therefore cannot have two classes
+called `Encode`, and whichever spice claims the bare name makes the other
+look like the special case.
+
+So neither spice gets it. json's classes are renamed to be as explicit as
+msgpack's, in **one breaking change, one minor release**. No deprecation
+shims, no aliases, no transition window: the language has one consumer, and
+a clean break costs less than the machinery to avoid it.
+
+### The mapping
+
+| json today (`tur-json` 0.3.0) | json after the rename | msgpack (new) |
+| --- | --- | --- |
+| `Encode` / `encode` (`encode.tur:50`) | `EncodeJson` / `encode-json` | `EncodeMp` / `encode-mp` |
+| `Decode` / `decode` (`encode.tur:373`) | `DecodeJson` / `decode-json` | `DecodeMp` / `decode-mp` |
+| `DecodeChecked` / `decode-checked` (`encode.tur:1037`) | `DecodeJsonChecked` / `decode-json-checked` | `DecodeMpChecked` / `decode-mp-checked` |
+| `decode-list` (`encode.tur:513`) | `decode-json-list` | `decode-mp-list` |
+| `derive-decoder` (`encode.tur:1074`) | `derive-json-decoder` | `derive-mp-decoder` |
+
+The other derive macros keep their names: `derive-json`,
+`derive-json-encode` / `-decode`, `derive-json-opaque`, `derive-json-sum`
+are already json-explicit. `derive-decoder` is the odd one out -- it is
+bare *and* collides head-on with msgpack's `derive-mp-decoder` -- so it
+moves with the classes. Renaming it changes `json/build.tur`'s `:exports`
+map for `json/encode`, a manifest edit in the same commit.
+
+`encode-string` and `DecodeErrors` are *exported defns/types*, not globally
+resolving classes, so `:refer` disambiguates them and nothing forces them to
+move. A reader holding both spices open still sees two `DecodeErrors`;
+rename them in the same commit or leave them, but decide once -- see the
+open question below.
+
+### Why the method names must differ too
+
+Renaming only the classes and letting both declare a method named `encode`
+is not an option, and not for style reasons. Two classes declaring the same
+method name **compile with zero diagnostics and dispatch to whichever
+instance registered last**, so reordering two unrelated `definstance` forms
+silently flips which format a program serializes to:
+
+```
+$ tur check p.tur      # no output, exit 0
+$ tur run p.tur
+1042                   # EncodeMp
+# swap the two definstance blocks, change nothing else:
+$ tur run p.tur
+json:42                # EncodeJson
+```
+
+Filed as
+[same-method-name-in-two-classes-dispatches-by-declaration-order](../../reported/same-method-name-in-two-classes-dispatches-by-declaration-order.md).
+Until that grows an ambiguity diagnostic, distinct method names are the
+only thing keeping the two spices apart, which is why the mapping renames
+methods as well as classes.
+
+### The footprint
+
+Small, and entirely in-repo. Across the spices tree: **29 `definstance`
+heads and 19 constraint sites**, nearly all inside `json/encode.tur`'s own
+macro templates. Outside json it is five sites total:
+
+- `http/src/http/request.tur:76` -- `json-request [^Encode T ...]`
+- `httpd/src/httpd/handler.tur:222` and `:233` -- `json-ok`, `json-resp`
+- `http/errors/json-request-missing-encode-instance.tur` and
+  `httpd/errors/req-decode-missing-decode-instance.tur` -- negative
+  fixtures whose `expected.diag` quotes the class name, so their expected
+  text moves too
+
+Plus the macro templates that *emit* the old names: `derive-json`'s six
+`definstance` templates inside json, and `req-decode`
+(`httpd/src/httpd/handler.tur:208`), which splices a bare
+`(decode __doc __root)` into its expansion. Those are not optional -- a
+template emitting a name that no longer resolves breaks every caller -- so
+they move in the same commit as everything else.
+
+**Not** in scope: the three main-repo fixtures that declare their *own*
+`Encode` / `Decode` classes --
+`tests/fixtures/decode-bool-carrier-instance-ascription`,
+`instance-method-return-carrier-bridge`, and
+`typeclass-method-parameterized-result-decode`. They are self-contained
+reductions of json-spice bugs, not consumers of the spice (none carries
+`requires.spices`), so the rename does not reach them and they keep the
+bare names their archived reports quote. Worth knowing before a repo-wide
+grep makes them look like fallout.
+
+### The edit
+
+One mechanical pass, then fix what the compiler complains about:
+
+```sh
+# tur-json 0.3.0 -> 0.4.0.  Order matters: DecodeChecked before Decode.
+# GNU sed assumed; on BSD/macOS sed the in-place flag takes an argument (-i '').
+grep -rlE 'Encode|Decode|decode-checked|decode-list|derive-decoder' \
+  --include='*.tur' . | xargs sed -i \
+  -e 's/\bDecodeChecked\b/DecodeJsonChecked/g' \
+  -e 's/\bdecode-checked\b/decode-json-checked/g' \
+  -e 's/\bdecode-list\b/decode-json-list/g' \
+  -e 's/\bderive-decoder\b/derive-json-decoder/g' \
+  -e 's/\bEncode\b/EncodeJson/g' \
+  -e 's/\bDecode\b/DecodeJson/g'
+```
+
+Verified to rewrite the json names while leaving `EncodeMp`,
+`DecodeMpChecked`, `derive-mp-decoder` and `DecodeErrors` untouched (`\b`
+does not match inside `EncodeMp`, and the lowercase rules are
+case-sensitive). It does **not** touch bare method *calls* -- `(encode x)`,
+`(decode doc val)` -- because those are indistinguishable from any other
+identifier by regex; the compiler finds them for you as
+"no typeclass method found" / TUR-E0015, which is the fast path here.
+
 ## Implementation Notes
 
 - **mpack via `:cmake-deps`** (FetchContent, static, tests/tools off),
@@ -230,19 +352,29 @@ Derive usage mirrors json exactly:
   1-5 fields like json's `__decode-make-struct`; >5 fields means a
   hand-written instance. Inherited constraint, documented in the macro
   header.
-- **Class-name collision:** typeclasses resolve globally, and a program
-  importing both json and msgpack must be able to derive both for the
-  same struct. Hence `EncodeMp`/`DecodeMp`, not a second `Encode`. The
-  long-term fix (shared serde classes in stdlib that both spices
-  instantiate) is blocked on the same load-reentrancy bug that forced
-  json's self-contained `ownstr` mirror; note it, don't solve it here.
+- **Class-name collision -- fixed on both sides, not dodged.**
+  Typeclasses resolve globally, and a program importing both json and
+  msgpack must be able to derive both for the same struct. v0 does not buy
+  that by letting json keep the bare name: json is renamed to
+  `EncodeJson` / `DecodeJson` / `DecodeJsonChecked` with the bare
+  spellings retired outright, alongside msgpack's `EncodeMp` / `DecodeMp` /
+  `DecodeMpChecked`. Mapping and footprint are in
+  [Naming](#naming-explicit-serde-classes); the work is phase MPJ.
+  The long-term fix (shared serde classes in stdlib that both spices
+  instantiate) is still blocked on the same load-reentrancy bug that
+  forced json's self-contained `ownstr` mirror -- don't solve it here, but
+  note that the rename makes that end-state *cheaper*: afterwards no caller
+  spells a serde class without a format tag, so a future shared class is
+  additive rather than a second breaking rename.
 - **DecodeErrors:** reimplement json's U3 kernel (a spice cannot depend
   on another spice's private module, and cannot extend stdlib): opaque
   growable `{path, expected, got}` buffer, `decode-errors-count` /
   `-path` / `-expected` / `-got` / `-free`, `__mp-type-name` using
   schema.tur's names (string/int/float/bool/null/array/object -- map
   msgpack `map` to "object" so error text matches the json spice's on
-  identical struct shapes).
+  identical struct shapes). The type *name* `DecodeErrors` is exported,
+  not global, so both spices may legally export one; whether to
+  disambiguate them anyway is an open question below.
 
 ---
 
@@ -260,6 +392,25 @@ fixmap boundary at 15/16 entries). Cross-generate the expected bytes with
 a second implementation (e.g. `python3 -c "import msgpack..."` at
 fixture-authoring time only -- the checked-in bytes are the artifact, the
 suite has no python dependency).
+
+### MPJ -- json spice: explicit class names (parallel track)
+
+Not msgpack code, but a **prerequisite for MP3's cross-check test**: a
+single program that derives both spices for one struct cannot exist while
+json owns the bare `Encode`. Independent of MP0-MP2 and can land first.
+
+One breaking commit. Run the sed pass from
+[The edit](#the-edit), then fix what the compiler reports -- bare method
+calls surface as "no typeclass method found" / TUR-E0015 and are the only
+part the regex cannot do. Update the macro templates in json, http and
+httpd (they emit the old names), `json/build.tur`'s `:exports`, and the two
+`errors/` fixtures' expected diagnostic text. Bump `tur-json` to 0.4.0 and
+note the rename in its CHANGELOG with the mapping table -- as a record of
+what changed, not a migration guide.
+
+Gate: `spices/json/tests/` green, plus the http and httpd suites -- they
+are the only downstream consumers, and their negative fixtures assert
+diagnostic text this rename changes.
 
 ### MP1 -- Buf + hand-rolled encode
 
@@ -280,7 +431,9 @@ tests: encode -> parse -> decode for every primitive.
 :as carrier`, `derive-msgpack-sum`. Round-trip tests on 1-5 field
 structs, a sum type, and an opaque newtype; a cross-check test that
 json-derives and msgpack-derives the same struct and asserts both
-round-trip to equal values.
+round-trip to equal values. **That cross-check test needs MPJ landed** --
+it is a single program holding both spices, which is exactly what the
+bare-`Encode` collision makes impossible today.
 
 ### MP4 -- Checked decode (schema-vocabulary validator)
 
@@ -292,7 +445,8 @@ correct paths) and vocabulary parity with the json spice's messages.
 
 Docstrings to the house standard on every export, README for the spice,
 a paragraph in the spices developing guide's serialization section
-positioning msgpack next to json (when to pick which), and register the
+positioning msgpack next to json (when to pick which) and stating the
+format-tagged class-naming convention the two now share, and register the
 spice in the top-level `:members` list.
 
 ---
@@ -309,15 +463,43 @@ spice in the top-level `:members` list.
   ownstr playbook). Layout-matching `serial.tur`'s bytes value now keeps
   that door open.
 - **Shared serde classes.** `EncodeMp`/`DecodeMp` duplicating json's
-  shape is deliberate debt; a stdlib-level `Encode`/`Decode` pair that
-  both spices instantiate is the clean end-state once the typeclass
-  load-reentrancy bug is fixed. Track there, not here.
+  shape is deliberate debt; a stdlib-level pair that both spices
+  instantiate is the clean end-state once the typeclass load-reentrancy
+  bug is fixed. Track there, not here. MPJ does not deliver it and is not
+  a substitute for it -- but it removes the thing that would otherwise
+  make it break callers twice, since afterwards nobody spells a serde
+  class without a format tag.
+- **`DecodeErrors` / `encode-string` ambiguity.** Both are exported
+  defns/types rather than global classes, so `:refer` disambiguates them
+  and the rename does not force the issue. A reader with both spices open
+  still sees two `DecodeErrors`. Rename to `JsonDecodeErrors` /
+  `MpDecodeErrors` (and `encode-json-string`) in the same commit, or leave
+  them? Decide at MPJ -- deciding later costs a second breaking release for
+  no reason, since MPJ is already breaking.
+- **Same-method-name dispatch is silent.** Distinct method names are what
+  keeps the two spices apart, and nothing in the compiler enforces that:
+  two classes sharing a method name dispatch by declaration order with no
+  diagnostic
+  ([report](../../reported/same-method-name-in-two-classes-dispatches-by-declaration-order.md)).
+  The naming convention is the only guard. If a third serde spice ever
+  lands, that report becomes load-bearing rather than informational.
+- **A generic wrapper over a return-dispatch method.** `encode-string` and
+  `decode-list` are this shape and the msgpack side will want its own. The
+  direct tail-forward used to fail codegen outright; that is **fixed** (a
+  return bridge in `emit_fns.c`). What remains is a 16-byte leak when the
+  payload is a by-value struct, because the caller-side payload drop does
+  not fire for this producer shape
+  ([report](../../reported/generic-wrapper-tail-forwarding-a-return-dispatch-method.md)).
+  Scalar and `cstr` payloads are clean. If a msgpack wrapper returns a
+  struct payload, prefer the destructure-and-rebuild spelling until the
+  ownership flag is connected.
 
 ---
 
 ## See Also
 
-- `spices/json/src/json/encode.tur` -- the architecture this mirrors
+- `spices/json/src/json/encode.tur` -- the architecture this mirrors;
+  the three classes MPJ renames are at `:50`, `:373` and `:1037`
 - `stdlib/schema.tur` -- error-vocabulary source of truth
 - `stdlib/serial.tur` -- binary `Serializable` class; `Buf` layout peer
 - `docs/upcoming/nng-spice-plan.md` -- companion plan; msgpack-over-nng

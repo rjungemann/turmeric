@@ -948,6 +948,25 @@ bool expr_subtree_has_inline_c(const Expr *e) {
         case EX_FN_TO_FAT:   return expr_subtree_has_inline_c(e->as.fn_to_fat_.inner);
         case EX_POLY_TO_FAT: return expr_subtree_has_inline_c(e->as.poly_to_fat_.inner);
         case EX_REINTERPRET: return expr_subtree_has_inline_c(e->as.reinterpret_.expr);
+        /* any-widen-stored-in-an-adt-field-has-no-owner: a WIDEN is a packing
+         * around its operand, exactly like the four above, and hides nothing --
+         * the emitter's own code for it is a malloc-and-copy or a frame-box, no
+         * user C anywhere.  Left to `default` it read as "may hide inline C",
+         * which made elab_infer_nonretain_masks skip the WHOLE body of every
+         * function whose result is a widen.  In Saffron that is most functions,
+         * because an unannotated return IS `any` -- so the frame-box rule that
+         * saffron-any-return-defeats-the-frame-box-rule landed never ran for
+         * them, and each call widening a by-value payload malloc'd a box
+         * nothing freed.
+         *
+         * That archived report fixed this same failure one node kind over
+         * (EX_DYN_OP / EX_DYN_CALL / EX_DYN_FIELD had no arm either) and its
+         * lesson was that the entry gate, not the result gate, was the first
+         * blocker.  EX_UNION_INJECT was the arm it did not add.  The coloring
+         * walk had the identical hole (cps-coloring-walk-has-no-arm-for-union-inject),
+         * so this node has now been the missing arm in three walks. */
+        case EX_UNION_INJECT:
+            return expr_subtree_has_inline_c(e->as.union_inject_.value);
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
             return true;
@@ -1617,6 +1636,19 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
          *              not alias the box.  A carrier payload was never boxed, so
          *              there is nothing this decision could free out from under
          *              it either way. */
+        /* any-widen-stored-in-an-adt-field-has-no-owner: a WIDEN neither reads
+         * nor retains on its own -- it re-tags its operand, and for a by-value
+         * payload copies it into a box.  So it is transparent to this question
+         * and the operand is asked in the SAME position the widen occupies: a
+         * widen of `b` in an unconfined result position still hands a pointer
+         * into b's payload out, while a widen of anything else does not.
+         *
+         * Left to `default` it deferred to the strict escape walk, whose answer
+         * for an unmodelled node is "escapes" -- so a body whose result is a
+         * widen (in Saffron, most bodies: an unannotated return is `any`) read
+         * as retaining and the frame-box rule never fired. */
+        case EX_UNION_INJECT:
+            return box_uses_confined(e->as.union_inject_.value, b, confined);
         case EX_ANY_TYPE_OF:
             return box_uses_confined(e->as.any_type_of_.value, b, /*confined=*/true);
         case EX_ANY_IS:

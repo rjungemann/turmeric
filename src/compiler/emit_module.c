@@ -893,11 +893,13 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
         char **ns = (char **)realloc(ctx->any_type_shown, nc * sizeof(char *));
         bool  *nb = (bool  *)realloc(ctx->any_type_boxed, nc * sizeof(bool));
         int64_t *ni = (int64_t *)realloc(ctx->any_type_ids, nc * sizeof(int64_t));
-        if (!nn || !ns || !nb || !ni) { fprintf(stderr, "tur: oom\n"); abort(); }
+        char **ng = (char **)realloc(ctx->any_type_dropglue, nc * sizeof(char *));
+        if (!nn || !ns || !nb || !ni || !ng) { fprintf(stderr, "tur: oom\n"); abort(); }
         ctx->any_type_names = nn;
         ctx->any_type_shown = ns;
         ctx->any_type_boxed = nb;
         ctx->any_type_ids = ni;
+        ctx->any_type_dropglue = ng;
         ctx->cap_any_type_names = nc;
     }
     char *kdup = strdup(key);
@@ -912,9 +914,48 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
      * and must never be freed here. */
     ctx->any_type_boxed[ctx->n_any_type_names] = emit_type_is_byvalue_adt(ctx, r);
     ctx->any_type_ids[ctx->n_any_type_names] = id;
+    /* deep drop: name the payload's own drop glue when it has one.  Only for a
+     * BOXED payload -- an unboxed one rides the value word and is never freed
+     * here, so it has nothing below it either. */
+    ctx->any_type_dropglue[ctx->n_any_type_names] = NULL;
+    if (ctx->any_type_boxed[ctx->n_any_type_names]) {
+        Type _rr = emit_resolve_type(ctx, r);
+        AdtDef *_ad = NULL;
+        Type _aa[16];
+        uint8_t _an = 0;
+        if (!type_extract_adt_app(&_rr, &_ad, _aa, &_an))
+            _ad = (_rr.kind == TY_ADT) ? _rr.as.adt_.def : NULL;
+        if (_ad && adt_def_has_localowned_glue(_ad)) {
+            const char *_cn = emit_type_c_name(ctx, _rr);
+            if (_cn) {
+                size_t _n = strlen(_cn) + 32;
+                char *_g = (char *)malloc(_n);
+                if (!_g) { fprintf(stderr, "tur: oom\n"); abort(); }
+                snprintf(_g, _n, "drop_localowned_%s", _cn);
+                ctx->any_type_dropglue[ctx->n_any_type_names] = _g;
+            }
+        }
+    }
     ctx->n_any_type_names++;
     ANY_ID_RET(id);
     #undef ANY_ID_RET
+}
+
+/* any-widen-stored-in-an-adt-field-has-no-owner (deep drop): does this ADT own
+ * anything a `drop_localowned_<T>` would release -- a recursive-self field or an
+ * `:any` field?  Factored so the row that names the glue and the site that
+ * EMITS it decide from one predicate, the same discipline the `boxed` flag
+ * already follows. */
+bool adt_def_has_localowned_glue(const AdtDef *def) {
+    if (!def) return false;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        for (uint32_t fi = 0; fi < c->n_fields; fi++)
+            if (c->fields[fi].drop_inner_def == def || c->fields[fi].kind == TY_ANY)
+                return true;
+    }
+    return false;
 }
 
 void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
@@ -976,9 +1017,20 @@ void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
     buf_puts(out, "#else\n");
     buf_puts(out, "#define TUR_ANY_DROP_ATTR __attribute__((noinline))\n");
     buf_puts(out, "#endif\n");
+    /* any-widen-stored-in-an-adt-field-has-no-owner (deep drop): release what
+     * the payload itself owns before freeing the box.  Without the `drop` call
+     * this function was SHALLOW -- it freed the outermost box and every `any`
+     * field inside it leaked, so a nested structure leaked once per level
+     * below the first (measured: a 2-deep list leaked 1 box, a 3-deep list 2).
+     * The row's glue is `drop_localowned_<T>`, whose contract is exactly this:
+     * free what this value owns, not the value itself. */
     buf_puts(out, "static void TUR_ANY_DROP_ATTR __tur_any_drop(tur_tagged_t __v) {\n");
     buf_puts(out, "    const __tur_any_ti *__ti = __tur_any_find(TUR_GETTAG(__v));\n");
-    buf_puts(out, "    if (__ti && __ti->boxed) free((void *)(intptr_t)TUR_UNTAG(__v));\n");
+    buf_puts(out, "    if (!__ti || !__ti->boxed) return;\n");
+    buf_puts(out, "    void *__p = (void *)(intptr_t)TUR_UNTAG(__v);\n");
+    buf_puts(out, "    if (!__p) return;\n");
+    buf_puts(out, "    if (__ti->drop) __ti->drop(__p);\n");
+    buf_puts(out, "    free(__p);\n");
     buf_puts(out, "}\n");
     buf_puts(out, "static void (*__tur_any_drop_keep)(tur_tagged_t) "
                   "__attribute__((unused)) = __tur_any_drop;\n");
@@ -987,12 +1039,25 @@ void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
     /* This TU's rows.  `id` is the hash, so the same type carries the same id
      * in every TU that mentions it and the rows simply agree where they
      * overlap -- which is what makes registering all of them safe. */
+    /* deep drop: forward-declare each glue the table names.  The ADT emission
+     * already runs before this table in practice; the declaration makes the
+     * table independent of that order rather than relying on it. */
+    for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
+        if (!ctx->any_type_dropglue[i]) continue;
+        bool dup = false;
+        for (uint32_t j = 0; j < i && !dup; j++)
+            dup = ctx->any_type_dropglue[j] &&
+                  strcmp(ctx->any_type_dropglue[j], ctx->any_type_dropglue[i]) == 0;
+        if (!dup)
+            buf_printf(out, "static void %s(void *);\n", ctx->any_type_dropglue[i]);
+    }
     buf_puts(out, "static const __tur_any_ti __tur_any_rows[] = {\n");
     for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
-        buf_printf(out, "    { %lldLL, \"%s\", %d },\n",
+        buf_printf(out, "    { %lldLL, \"%s\", %d, %s },\n",
                    (long long)ctx->any_type_ids[i],
                    ctx->any_type_shown[i],
-                   ctx->any_type_boxed[i] ? 1 : 0);
+                   ctx->any_type_boxed[i] ? 1 : 0,
+                   ctx->any_type_dropglue[i] ? ctx->any_type_dropglue[i] : "0");
     }
     buf_puts(out, "};\n");
     buf_printf(out,
@@ -11321,7 +11386,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * site knows only the tag, and reading the flag from a different TU's table
      * is what made one module free a handle another module owned.  One row, one
      * answer, for both questions. */
-    buf_puts(out, "typedef struct __tur_any_ti { int64_t id; const char *name; int boxed; } __tur_any_ti;\n");
+    buf_puts(out, "typedef struct __tur_any_ti { int64_t id; const char *name; int boxed; void (*drop)(void *); } __tur_any_ti;\n");
     buf_puts(out, "typedef struct __tur_any_tichunk { const __tur_any_ti *rows; int n; struct __tur_any_tichunk *next; } __tur_any_tichunk;\n");
     emit_rt_global(out, shared,
                    "__tur_any_tichunk *g_tur_any_types = 0;\n",
@@ -16941,11 +17006,13 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_any_type_names; i++) {
         free(ctx.any_type_names[i]);
         free(ctx.any_type_shown[i]);
+        free(ctx.any_type_dropglue[i]);
     }
     free(ctx.any_type_names);
     free(ctx.any_type_shown);
     free(ctx.any_type_boxed);
     free(ctx.any_type_ids);
+    free(ctx.any_type_dropglue);
     /* any-struct-box-leak-per-widen: the pending-drop stack.  Entries are freed
      * as they drain; anything still here belongs to a node whose enclosing call
      * never materialized (a void-returning consumer), so free the names too. */
@@ -17719,11 +17786,13 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
         for (uint32_t i = 0; i < hdr_ctx.n_any_type_names; i++) {
             free(hdr_ctx.any_type_names[i]);
             free(hdr_ctx.any_type_shown[i]);
+            free(hdr_ctx.any_type_dropglue[i]);
         }
         free(hdr_ctx.any_type_names);
         free(hdr_ctx.any_type_shown);
         free(hdr_ctx.any_type_boxed);
         free(hdr_ctx.any_type_ids);
+        free(hdr_ctx.any_type_dropglue);
         free(hdr_ctx.any_widen_ids);
         if (n_decls > 0) buf_putc(out, '\n');
     }
@@ -18442,11 +18511,13 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     for (uint32_t i = 0; i < ctx.n_any_type_names; i++) {
         free(ctx.any_type_names[i]);
         free(ctx.any_type_shown[i]);
+        free(ctx.any_type_dropglue[i]);
     }
     free(ctx.any_type_names);
     free(ctx.any_type_shown);
     free(ctx.any_type_boxed);
     free(ctx.any_type_ids);
+    free(ctx.any_type_dropglue);
     /* any-struct-box-leak-per-widen: the pending-drop stack.  Entries are freed
      * as they drain; anything still here belongs to a node whose enclosing call
      * never materialized (a void-returning consumer), so free the names too. */
