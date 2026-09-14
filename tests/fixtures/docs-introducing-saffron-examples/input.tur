@@ -1,0 +1,203 @@
+#lang saffron
+;; The examples from docs/guides/introducing-saffron.md, so they cannot rot.
+;;
+;; The twin of `docs-saffron-guide-examples`, for the tour rather than the
+;; reference. The two guides split the audience: the reference states what
+;; `any` supports, this one is the shape a newcomer's first Saffron file
+;; actually has -- println, flow control, functions, ADTs, typeclasses,
+;; effects -- so it exercises the combinations a reader writes rather than the
+;; operations the surface enumerates.
+;;
+;; Keep it in step with the guide: if an example changes there, change it here.
+;;
+;; The guide also carries a sweet-exp twin of every example. Those are pinned
+;; by `tools/check-guide-pairs.py`, which parse-checks each pair to the same
+;; AST, so this fixture only needs the s-expression side.
+;;
+;; No requires.compiled -- the guide describes the language, not a back end, so
+;; both suites run it.
+;;
+;; Floats carry a non-zero fractional part throughout: an integral float cannot
+;; show a truncation on the way back through the `any` carrier.
+
+;; --- 2. Printing ----------------------------------------------------------
+(defn show [x]
+  (println x))
+
+;; --- 3. Flow control ------------------------------------------------------
+(defn abs [n]
+  (if (< n 0) (- 0 n) n))
+
+(defn describe [x]
+  (if x "truthy" "falsy"))
+
+(defn classify [n]
+  (cond (> n 0) "positive"
+        (< n 0) "negative"
+        :else   "zero"))
+
+(defn countdown [n]
+  (when (> n 0)
+    (do (println n)
+        (countdown (- n 1)))))
+
+;; --- 4. Functions ---------------------------------------------------------
+(defn double [x] (* x 2))
+(defn add    [a b] (+ a b))
+
+(defn make-adder [n]
+  (fn [x] (+ x n)))
+
+(defn apply-twice [f x]
+  (f (f x)))
+
+(defn sum [v]
+  (vec-fold v 0 (fn [acc x] (+ acc x))))
+
+;; --- 5. Algebraic data types ----------------------------------------------
+(defdata Shape :copy
+  (Circle :float)
+  (Rect   :float :float))
+
+(defn label [s]
+  (match s
+    (Circle r)  "circle"
+    (Rect w h)  "rect"))
+
+(defn area [s]
+  (match s
+    (Circle r)  (* 3.14159 (* r r))
+    (Rect w h)  (* w h)))
+
+(defdata Json
+  (JNull)
+  (JBool :bool)
+  (JNum  :float)
+  (JStr  :cstr))
+
+(defn render [j]
+  (match j
+    (JNull)   "null"
+    (JBool b) (if b "true" "false")
+    (JNum n)  "a number"
+    (JStr s)  s))
+
+(defn kind-of [x] (type-of x))
+
+;; --- 6. Typeclasses -------------------------------------------------------
+(defclass Speaks [a]
+  (speak [x] : cstr))
+
+(definstance Speaks [int]   (speak [x] "beep"))
+(definstance Speaks [float] (speak [x] "boop"))
+(definstance Speaks [cstr]  (speak [x] "echo"))
+
+(defn tell [x]
+  (println (.speak x)))
+
+(defdata Animal
+  (Dog)
+  (Cat))
+
+(definstance Speaks [Animal]
+  (speak [x] (match x (Dog) "woof" (Cat) "meow")))
+
+;; --- 7. Algebraic effects -------------------------------------------------
+(defeffect Log [msg : cstr] : int)
+(defeffect Ask [] : int)
+
+(defn work []
+  (perform (Log "starting"))
+  (let [n (perform (Ask))]
+    (perform (Log "done"))
+    (+ n 1)))
+
+;; --- Putting it together --------------------------------------------------
+(defeffect Report [line : any] : int)
+
+(defn survey [a b]
+  (do (perform (Report (label a)))
+      (perform (Report (label b)))
+      (+ (area a) (area b))))
+
+;; A `handle` lives in its own function rather than inline in `main`: a
+;; function that both performs and builds a `[...]` literal or reads an
+;; element back out is a build breaker today
+;; (docs/reported/saffron-cps-vec-element-carrier-mismatch.md), and `main`
+;; below does plenty of both.
+(defn run-effects []
+  (println
+    (handle (work)
+      (Log [msg] k) (do (println msg) (resume k 0))
+      (Ask [] k)    (resume k 41)))
+  (println
+    (handle (work)
+      (Log [msg] k) (resume k 0)
+      (Ask [] k)    (resume k 1))))
+
+(defn run-survey []
+  (println
+    (handle (survey (Circle 2.5) (Rect 3.5 4.0))
+      (Report [line] k) (do (println line) (resume k 0)))))
+
+(defn main []
+  ;; 2. Printing
+  (show 42)
+  (show 7.1)
+  (show "hi")
+  (show true)
+
+  ;; 3. Flow control
+  (println (abs -5))
+  (println (abs -7.1))
+  (println (describe 0))
+  (println (describe ""))
+  (println (describe false))
+  (println (describe nil))
+  (println (classify 7.1))
+  (println (classify -3))
+  (println (classify 0))
+  (when   (> 1 0) (println "positive"))
+  (unless (= 1 0) (println "non-zero"))
+  (countdown 3)
+  (let [^mut i 0]
+    (while (< i 3)
+      (println i)
+      (set! i (+ i 1))))
+
+  ;; 4. Functions
+  (println (double 21))
+  (println (add 1 2))
+  (println (add 1.5 2.25))
+  (let [add7 (make-adder 7)]
+    (println (add7 35)))
+  (println (apply-twice double 3))
+  (println (apply-twice (fn [n] (+ n 1)) 10))
+  (println (sum [1 2 3 4]))
+  (println (vec-len [1 "two" 3.5]))
+  (println (vec-get (vec-map [1 2 3] double) 2))
+  (println (vec-len (vec-filter [1 2 3 4] (fn [x] (> x 2)))))
+
+  ;; 5. Algebraic data types
+  (println (area (Circle 2.5)))
+  (println (area (Rect 3.5 4.0)))
+  (println (render (JNull)))
+  (println (render (JBool false)))
+  (println (render (JStr "hi")))
+  (println (kind-of 7.1))
+  (println (kind-of "hi"))
+  (println (kind-of (JNull)))
+
+  ;; 6. Typeclasses
+  (tell 42)
+  (tell 7.35)
+  (tell "hi")
+  (tell (Dog))
+  (tell (Cat))
+
+  ;; 7. Algebraic effects
+  (run-effects)
+
+  ;; Putting it together
+  (run-survey)
+  0)

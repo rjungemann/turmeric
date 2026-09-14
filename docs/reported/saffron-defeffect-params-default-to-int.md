@@ -1,0 +1,46 @@
+# `defeffect` parameters do not take the Saffron `any` default
+
+**Severity: medium.** An unannotated `defeffect` parameter in a `#lang saffron`
+file silently defaults to `int`, not `any`, so passing a string to it prints a
+pointer. A `defn` parameter in the same file defaults to `any` -- that
+divergence is the whole of Saffron's rule, and `defeffect` is outside it with
+nothing saying so.
+
+Found writing `docs/guides/introducing-saffron.md`.
+
+## Repro
+
+```turmeric
+#lang saffron
+(defeffect Log [msg] : int)                    ;; msg: silently `int`
+(defn work [] (perform (Log "hi")) 1)
+(defn main []
+  (println (handle (work) (Log [msg] k) (do (println msg) (resume k 0))))
+  0)
+```
+
+```
+94145609253280     <- the cstr pointer, printed as an int
+1
+```
+
+Note the *return* type is already required: `(defeffect Log [msg])` is the hard
+error `defeffect requires (defeffect Name [params...] result-type)`. Only the
+parameter side defaults, and it defaults the typed way.
+
+## Fix directions
+
+The Saffron default is applied where a `defn`'s parameters are elaborated
+(`src/compiler/elab_fns.c`, and `elab_pre_declare_toplevel_defn` for the
+forward decl -- see the H6 note in
+`docs/reported/saffron-dynamic-surface-pass.md`). `defeffect`'s parameter list
+is elaborated on its own path and never consults `g_opt_saffron`.
+
+Two shapes are defensible and the choice is a design call, not a bug fix:
+default an unannotated `defeffect` parameter to `any` like a `defn`'s, or
+reject it outright the way a missing result type already is. What is not
+defensible is the current silent `int`.
+
+Related: [saffron-perform-argument-skips-the-any-seam](saffron-perform-argument-skips-the-any-seam.md)
+-- with that seam in place, an `any` parameter here would also be reachable
+from a typed `perform` argument.

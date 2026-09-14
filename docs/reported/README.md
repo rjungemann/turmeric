@@ -1782,6 +1782,28 @@ defect -- `any` is documented as a storage and reflection type -- but it is the
 single largest gap between what ships and what a dynamic dialect needs, and it
 is scoped as D4/G3-G9 in the Saffron plan.
 
+## Found writing the Saffron tour (filed 2026-09-14)
+
+Five findings from drafting `docs/guides/introducing-saffron.md` and compiling
+every example in it. Nothing here needed a fuzzer: each is the first shape a
+newcomer's own file takes -- print a value, match an ADT, dispatch a method,
+raise an effect -- which is why the existing Saffron fixtures, written from the
+operation list rather than from a program, do not cover any of them. Two are
+build breakers and two are silent wrong answers.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [saffron-perform-argument-skips-the-any-seam](saffron-perform-argument-skips-the-any-seam.md) | high | An `any` argument to `perform` does NOT get the checked `any` -> concrete cast that the identical argument to a typed *function* gets, so a `cstr` effect parameter receives the 16-byte box and the handler prints garbage. Both back ends, no diagnostic. The two calls in the repro differ only in which construct receives the value |
+| [saffron-effect-row-lost-through-unannotated-call](saffron-effect-row-lost-through-unannotated-call.md) | high | A `handle` in a Saffron file does not see an effect performed one call deeper: TUR-W0033 calls the clause unreachable and the program aborts `unhandled effect`. The same program with the `#lang` line dropped and three return types annotated prints 42. The warning's text points the reader at deleting the clause, which is the opposite of the fix |
+| [saffron-cps-vec-element-carrier-mismatch](saffron-cps-vec-element-carrier-mismatch.md) | high | A Saffron function that both performs and moves a vector ELEMENT (a `[...]` literal's push, or a `vec-get` read) emits C the host compiler rejects -- `tur_tagged_t` where the vector helpers want the `int64_t` carrier. `vec-len` and a user function over the same vector are fine, so it is the element seam, on the CPS arm only |
+| [saffron-dynamic-dispatch-on-payload-adt-emits-bad-c](saffron-dynamic-dispatch-on-payload-adt-emits-bad-c.md) | high | `.method` on an `any` holding an ADT compiles when every constructor is nullary and emits uncompilable C as soon as one carries a payload (`__dynshim_...`: conversion to non-scalar type). The interpreter answers correctly. The guide's "what dynamic dispatch does not cover yet" list does not mention it, and its own examples are all on primitives |
+| [saffron-defeffect-params-default-to-int](saffron-defeffect-params-default-to-int.md) | medium | An unannotated `defeffect` parameter defaults to `int`, not `any`, in a file whose whole premise is the other default. The RESULT type is already a hard error when missing; only the parameter side defaults, and it defaults the typed way |
+
+The first two are one story from the reader's side -- effects in Saffron work
+until a value or a call crosses a boundary -- and worth taking together. The
+guide routes around all five, and says so where a reader would otherwise walk
+into one.
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

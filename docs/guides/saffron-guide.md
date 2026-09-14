@@ -321,6 +321,9 @@ tur run hello.tur
 
 ## See also
 
+- [introducing-saffron.md](introducing-saffron.md) -- the tour this guide is the
+  reference for: Try Turmeric, printing, flow control, functions, ADTs,
+  typeclasses and effects, every example in both syntaxes
 - [docs/upcoming/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/saffron-lang-plan.md) --
   the design decisions and their measurements
 - [union-intersection-types-guide.md](union-intersection-types-guide.md) --
