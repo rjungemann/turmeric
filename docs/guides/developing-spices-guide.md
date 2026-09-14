@@ -946,6 +946,46 @@ For an interface that mixes distinct handle types (e.g. middlewares and
 routes), use two explicit `:list<T>` parameters rather than one untyped
 rest -- a single `& rest` is one homogeneous element type by design.
 
+### Typeclass names are global: tag them with your format or domain
+
+A `defclass` is **not** scoped by its module's `(export ...)` list. It resolves
+globally, across every spice a program loads. Two spices that each declare an
+obviously-named class -- `Encode`, `Render`, `Size`, `Parse` -- cannot be used
+in the same program, and whichever one claims the bare name makes the other
+look like the special case.
+
+Worse, the **method** names have to differ too, and for a harder reason than
+style. Two classes declaring a method of the same name compile with zero
+diagnostics and dispatch to whichever instance registered last, so reordering
+two unrelated `definstance` forms silently changes which implementation runs.
+There is no ambiguity error today; distinct method names are the only guard.
+
+So: name a class for what it does **and for whose it is**.
+
+```turmeric
+(defclass EncodeJson [a] (encode-json [x] : cstr))    ;; tur-json
+(defclass EncodeMp   [a] (encode-mp   [x] : Buf))     ;; tur-msgpack
+```
+
+The two serialization spices are the worked example. They ship the same
+surface -- format-tagged `Encode*` / `Decode*` / `Decode*Checked` classes, a
+`derive-*` family for `defstruct` / `defdata` / `defopaque`, and an
+accumulate-all-errors checked-decode layer whose vocabulary mirrors
+`stdlib/schema.tur` -- and they agree on shape, so a struct is a
+map/object keyed by field name in both and a sum is externally tagged
+`{"Ctor": {...}}` in both. Neither owns the unqualified spelling: tur-json
+gave it up in 0.4.0 precisely so that a program can derive both codecs for one
+struct.
+
+**Which one to reach for.** Pick `tur-json` when the payload crosses a boundary
+a human reads or a browser consumes -- config, HTTP APIs, logs. Pick
+`tur-msgpack` when both ends are programs and you want the bytes smaller and
+the parse cheaper -- internal RPC, on-disk records, message queues. The
+decision surfaces in the types: json hands back a `cstr` you can print, msgpack
+hands back an owned `Buf`, because a binary fragment contains NUL bytes and
+`cstr` cannot hold one. tur-msgpack has no native dependency; tur-json builds
+yyjson.
+
 ---
 
 ## Testing Your Spice

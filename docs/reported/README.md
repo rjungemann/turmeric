@@ -1817,6 +1817,31 @@ would otherwise walk into it, and the two resolved notes were taken back out of
 it when they landed.
 
 
+## Found building the msgpack spice (filed 2026-09-14)
+
+Four defects found in one session implementing
+[msgpack-spice-plan](../upcoming/hold/msgpack-spice-plan.md) as
+`turmeric-spices/spices/msgpack`. Three are build breakers with a known
+workaround in that spice; the fourth is a silent wrong answer in the reader.
+
+The first two share a family with the representation gaps above -- a value whose
+representation does not match the one the typed path chose for it -- but neither
+is the same defect: these are **specialization-selection** bugs in
+`emit_module.c`'s ABI pass, not the elaboration-side widen/carrier gaps.
+
+Each report ends with a "what to remove when this is fixed" section naming the
+exact lines of `spices/msgpack` that exist only to route around it. Those are
+the acceptance criteria -- a fix is not done until the workaround comes out and
+that spice's suite is still green.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [struct-instance-makes-generic-ok-val-see-a-byvalue-result](struct-instance-makes-generic-ok-val-see-a-byvalue-result.md) | medium-high | Adding a value-struct instance to a return-type-dispatched class flips that class's method onto the by-value `Result` representation program-wide, but an `ok-val` inside a constrained generic stays at the carrier, so cc rejects the program. Nonlocal: the struct and the generic need not share a file, a module, or a spice -- deriving a codec for one more struct breaks a list decoder that never mentions it. Three controls narrow it: deleting the struct instance fixes it, a SCALAR second instance is fine, and how the first instance's body is written is irrelevant (the first guess, and wrong). json has the identical shape and compiles only because its primitive instances happen to be carrier-shaped inline C |
+| [generic-unwrap-specializes-by-the-enclosing-type-argument](generic-unwrap-specializes-by-the-enclosing-type-argument.md) | medium-high | Inside a type-parameterized `defn`, `unwrap` on an `(Option int)` -- a type unrelated to the type parameter -- is specialized by the ENCLOSING type argument, so at `A = float` the emitted call is `unwrap__spec__double_tur_adt_Option__float` against an `Option__int`. Hides completely while the generic is only instantiated at `int`, where right and wrong coincide; the second instantiation breaks untouched code. `emit_abi_instantiate_type` consults the caller's binding set where `emit_abi_unify_collect` should first bind from the concrete argument |
+| [pinned-instance-dispatch-loses-an-opaque-return-type](pinned-instance-dispatch-loses-an-opaque-return-type.md) | low-medium | A `@T`-pinned method call whose declared return type is a `defopaque` reports its result as `<adt>`, so every call site needs a redundant `(:: ... TheOpaque)`. The same program with a `cstr` return is fine, which is why json never hit it -- a binary codec cannot return `cstr`. Compile-time only, but the diagnostic names a type the user never wrote |
+| [int-literal-overflow-wraps-silently](int-literal-overflow-wraps-silently.md) | medium | `9223372036854775808` compiles clean and prints `-9223372036854775808`; `99999999999999999999` prints `7766279631452241919`. No diagnostic, though the fixed-width suffix paths ten lines below already emit exactly the right one. Same code makes the legal `-9223372036854775808` two UBSan findings (`reader.c:320` accumulate, `:407` negate) and emits `INT64_C(-9223372036854775808)`, which clang warns on. The sign is applied after accumulation, so INT64_MIN's magnitude is one past INT64_MAX throughout |
+
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
