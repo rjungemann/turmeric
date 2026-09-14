@@ -1360,7 +1360,7 @@ TUR_RT_API void tur_region_shutdown(void) {
     reg_unlock();
 }
 /* ---- end src/runtime/region.c ---- */
-typedef struct __tur_any_ti { int64_t id; const char *name; int boxed; } __tur_any_ti;
+typedef struct __tur_any_ti { int64_t id; const char *name; int boxed; void (*drop)(void *); } __tur_any_ti;
 typedef struct __tur_any_tichunk { const __tur_any_ti *rows; int n; struct __tur_any_tichunk *next; } __tur_any_tichunk;
 static __tur_any_tichunk *g_tur_any_types = 0;
 static void __tur_any_register(__tur_any_tichunk *c) {
@@ -5146,7 +5146,11 @@ typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
 #endif
 static void TUR_ANY_DROP_ATTR __tur_any_drop(tur_tagged_t __v) {
     const __tur_any_ti *__ti = __tur_any_find(TUR_GETTAG(__v));
-    if (__ti && __ti->boxed) free((void *)(intptr_t)TUR_UNTAG(__v));
+    if (!__ti || !__ti->boxed) return;
+    void *__p = (void *)(intptr_t)TUR_UNTAG(__v);
+    if (!__p) return;
+    if (__ti->drop) __ti->drop(__p);
+    free(__p);
 }
 static void (*__tur_any_drop_keep)(tur_tagged_t) __attribute__((unused)) = __tur_any_drop;
 

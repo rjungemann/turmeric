@@ -355,6 +355,11 @@ typedef struct EmitCtx {
      * only thing a drop site knows -- an `any` local is typed `any`, not by its
      * payload.  Interned alongside the id so the two cannot drift. */
     bool     *any_type_boxed;
+    /* any-widen-stored-in-an-adt-field-has-no-owner (deep drop): the payload
+     * type's `drop_localowned_<T>` glue name, or NULL when it owns nothing.
+     * __tur_any_drop must release what the payload owns BEFORE freeing the box;
+     * without it everything below the first nesting level leaked. */
+    char    **any_type_dropglue;
     /* any-struct-box-leak-per-widen (the temporary case): C temp names holding
      * owned `any` values whose payload box must be dropped once the call
      * consuming them has been materialized.  Pushed when the argument is
@@ -1253,6 +1258,7 @@ bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t);
  * above.  Always emitted (a stub when none were), since the preamble
  * forward-declares it. */
 void emit_any_type_name_table(EmitCtx *ctx, Buf *out);
+bool adt_def_has_localowned_glue(const AdtDef *def);
 
 const char *ensure_catch_box_shim(EmitCtx *ctx, Type result_type);
 /* ... and the float-return half, which returns the value's BITS. */
