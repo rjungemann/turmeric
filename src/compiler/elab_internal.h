@@ -1404,6 +1404,12 @@ bool elab_module_resolve_path(Elab *e, const Symbol *name,
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);
+/* saffron-effect-row-lost-through-unannotated-call: the RETURN-position widen.
+ * Hoists an effectful call out of the widened body first; see its comment in
+ * elab_call.c for why this is separate from elab_coerce_to_any (the argument
+ * site's frame_box / stack_ok / any_drop_after stamps require the coercion to
+ * return an EX_UNION_INJECT directly). */
+Expr *elab_coerce_to_any_return(Elab *e, Expr *value);
 /* cps-coloring-walk-has-no-arm-for-union-inject: hoist a control-bearing
  * operand into a `let` so the node above it sees a variable.  The CPS IR can
  * lower a control op in a let INIT but only delegates the nodes below, and a

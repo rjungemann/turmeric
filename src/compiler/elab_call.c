@@ -771,18 +771,7 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
      * Note the widen must end up INSIDE the let. Wrapping the let instead --
      * which is what the elaborator produced before this -- leaves the operand a
      * control-bearing `EX_LET` and changes nothing. */
-    /* saffron-effect-row-lost-through-unannotated-call: a CALL in the widened
-     * value is hoisted for the same reason, under the same gate.
-     *
-     * This is the RETURN-position half.  An unannotated Saffron `defn` widens
-     * its whole body here, so `(defn tc [] (if (> (g) 0) 1 0))` handed the
-     * entire `if` -- colored call and all -- to the widen as one operand;
-     * `operand_uses_control` said no control op, the CPS IR delegated the lot,
-     * and `g`'s direct entry opened a fresh DK root inside the handler.  The
-     * dyn-op hoist above does not reach it: the call is not an operand of the
-     * comparison's enclosing node, it is buried in the `if` the widen wraps. */
-    if (cps_expr_uses_control(value) ||
-        (e->unit_has_user_effect && saffron_operand_has_call(value))) {
+    if (cps_expr_uses_control(value)) {
         LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
         Expr *v = elab_bind_control_temp(e, value, &lbs[0]);
         Expr *inner = expr_new(e->arena, EX_UNION_INJECT, any_type, value->span);
@@ -799,6 +788,50 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     inject->as.union_inject_.tag_idx = (int64_t)any_box_tag_for_type(&value->type);
     inject->as.union_inject_.value = value;
     return inject;
+}
+
+/* saffron-effect-row-lost-through-unannotated-call: the RETURN-position widen,
+ * with a call hoisted out of the widened body first.
+ *
+ * An unannotated Saffron `defn` widens its WHOLE BODY here, so
+ * `(defn tc [] (if (> (g) 0) 1 0))` handed the entire `if` -- effectful call
+ * and all -- to the widen as one operand.  `operand_uses_control` saw no
+ * control operator in it, the CPS IR delegated the lot to the direct emitter,
+ * and `g`'s direct entry opened a fresh DK root inside the caller's handler.
+ * Binding the body to a temp first puts the call at a bind position, where it
+ * lowers to the DK-threaded cps->cps edge; the widen then applies to the temp,
+ * INSIDE the let, for the reason the control hoist above documents.
+ *
+ * Deliberately a SEPARATE entry point rather than a branch inside
+ * `elab_coerce_to_any`: that helper also serves the CALL-ARGUMENT widen, and
+ * three stamps at the argument site key on the coercion returning an
+ * `EX_UNION_INJECT` DIRECTLY (`frame_box`, the fat shim's `stack_ok`, and
+ * `any_drop_after`).  Wrapping it in a let there silently skipped all three and
+ * reinstated exactly the per-widen malloc `any-struct-box-leak-per-widen`
+ * removed -- caught by `any-widen-frame-box` and `saffron-dyn-field` under
+ * `tests/run-leak-check.sh`, which `tests/run.sh` cannot see (it compiles
+ * fixture programs unsanitized).  Return position has no such stamps, so the
+ * hoist is confined to it.
+ *
+ * A NIL-typed body is never hoisted: `void __ctlhoist_N = f(...)` does not
+ * compile, and a unit-valued body delivers no word to widen anyway. */
+Expr *elab_coerce_to_any_return(Elab *e, Expr *value) {
+    if (!value) return NULL;
+    if (value->type.kind != TY_ANY && value->type.kind != TY_NIL &&
+        e->unit_has_user_effect && !cps_expr_uses_control(value) &&
+        saffron_operand_has_call(value)) {
+        LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+        Expr *v = elab_bind_control_temp(e, value, &lbs[0]);
+        Expr *inner = elab_coerce_to_any(e, v);
+        if (inner) {
+            Expr *let = expr_new(e->arena, EX_LET, inner->type, value->span);
+            let->as.let_.bindings = lbs;
+            let->as.let_.n = 1;
+            let->as.let_.body = inner;
+            return let;
+        }
+    }
+    return elab_coerce_to_any(e, value);
 }
 
 /* union-tagged-union-c-emission: the union twin of `elab_coerce_to_any`.

@@ -8250,7 +8250,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * the call-argument widening via the shared coercion helper. */
     if (return_kind == TY_ANY && body && body->type.kind != TY_ANY &&
         body->type.kind != TY_NEVER) {
-        body = elab_coerce_to_any(e, body);
+        body = elab_coerce_to_any_return(e, body);
     }
 
     /* saffron-concrete-return-annotation-on-a-dynamic-body-emits-bad-c: the
@@ -10338,7 +10338,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * `(fn [] : any 7.25)` emitted `return 7.25` into a tur_tagged_t slot. */
     if (return_kind == TY_ANY && body && body->type.kind != TY_ANY &&
         body->type.kind != TY_NEVER) {
-        body = elab_coerce_to_any(e, body);
+        body = elab_coerce_to_any_return(e, body);
     }
 
     /* Infer return type from body if not specified.

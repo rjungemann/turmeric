@@ -26,6 +26,17 @@
 ;; a `let` at elaboration, which puts the call at a bind position where it
 ;; lowers to the DK-threaded cps->cps edge.
 ;;
+;; requires.leak-check: this fixture is leak-gated, and that is not incidental.
+;; The first attempt at the hoist put it inside `elab_coerce_to_any`, which also
+;; serves the CALL-ARGUMENT widen -- where three stamps (`frame_box`, the fat
+;; shim's `stack_ok`, `any_drop_after`) key on the coercion returning an
+;; EX_UNION_INJECT *directly*.  Wrapping it in a let skipped all three and
+;; reinstated the per-widen malloc `any-struct-box-leak-per-widen` had removed:
+;; 5999 orphaned allocations in `any-widen-frame-box`.  `tests/run.sh` cannot
+;; see that (it compiles fixture programs unsanitized), so only CI's leak gate
+;; caught it.  The marker here means a future regression of the same shape fails
+;; on this fixture too, not two unrelated ones.
+;;
 ;; Every arm below is one shape that was broken, and they are not
 ;; interchangeable: `through-op` needs only the row fix, `through-do` and
 ;; `through-if` need the widen arm as well, and all of them need the hoist to

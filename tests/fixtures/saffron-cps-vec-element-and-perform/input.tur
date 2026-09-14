@@ -22,6 +22,15 @@
 ;; and `sum` is kept here for that reason -- it is the control that says the
 ;; trigger is the ELEMENT seam and not vectors in general.
 ;;
+;; NO requires.leak-check, deliberately.  The element boxes this fixture builds
+;; are orphaned -- but they are orphaned on `main` too, and by the same amount:
+;; the same program without any effect (so the DIRECT emitter's element path,
+;; which main can build) leaks 88 bytes in 4 allocations on both, measured.  The
+;; CPS arm added here reproduces exactly what the direct emitter already does,
+;; which is the point; the orphaned box is the pre-existing `any` element-box
+;; family, the same one `saffron-higher-order` carries as known-open.  Marking
+;; this fixture would fail it on a defect it did not introduce.
+;;
 ;; Floats carry a non-zero fractional part: an integral float cannot show a
 ;; truncation through the `any` carrier.
 

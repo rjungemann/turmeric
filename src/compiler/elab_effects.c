@@ -1595,8 +1595,16 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
     /* saffron-effect-row-lost-through-unannotated-call: this unit declares an
      * effect, so the dynamic-node operand hoist's CALL half is live for it.
      * Set here rather than counted off the effect env, which always holds the
-     * built-ins. */
-    e->unit_has_user_effect = true;
+     * built-ins.
+     *
+     * NOT for a defeffect read during the stdlib autoload: `stdlib/trail.tur`
+     * declares one, and it is autoloaded into EVERY program, so an ungarded
+     * flag was set unconditionally and the gate gated nothing.  That is not a
+     * theoretical looseness -- it is what regressed `any-widen-frame-box` and
+     * `saffron-dyn-field` under the leak harness, by applying the hoist to
+     * programs (typed ones, with no effect of their own) that had no use for
+     * it.  `in_stdlib_load` is the same window that stamps `is_from_stdlib`. */
+    if (!e->in_stdlib_load) e->unit_has_user_effect = true;
     /* Tier C: record the full result Type when it is a by-value aggregate whose
      * bare TypeKind loses the def -- perform reads it so the perform result
      * carries the real monomorphized type. */

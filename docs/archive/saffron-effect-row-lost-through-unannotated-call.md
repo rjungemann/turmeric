@@ -41,6 +41,30 @@ reading:
   compile; `(when (> n 0) (do (println n) (countdown ...)))` in the tour guide's
   own fixture is the shape. Nothing is lost -- a unit-valued operand delivers no
   word, so there is no seam for it to cross.
+- **Return position only, through its own entry point** (`elab_coerce_to_any_return`),
+  and **the gate had to actually gate**. Both were found by CI's leak gate after
+  the first version had already landed, and they are the two most useful things
+  in this report:
+  - The first version hoisted inside `elab_coerce_to_any` itself, which also
+    serves the CALL-ARGUMENT widen. Three stamps at the argument site
+    (`frame_box`, the fat shim's `stack_ok`, `any_drop_after`) key on that
+    helper returning an `EX_UNION_INJECT` **directly**; a let around it skipped
+    all three and reinstated exactly the per-widen malloc
+    [any-struct-box-leak-per-widen](any-struct-box-leak-per-widen.md) had
+    removed -- 5999 orphaned allocations in `any-widen-frame-box`.
+  - The gate `unit_has_user_effect` was set by **`stdlib/trail.tur`**, which
+    declares a `defeffect` and is autoloaded into every program, so it was
+    unconditionally true and gated nothing. It now ignores a `defeffect` read
+    during `in_stdlib_load`. The "zero fixture churn" measured before this was
+    therefore luck rather than the gate working, which is worth knowing: a
+    no-churn result does not by itself prove a transform is confined.
+
+  `tests/run.sh` cannot see either -- it compiles fixture programs
+  unsanitized, exactly as CLAUDE.md's leak-detection section warns -- so
+  **`tests/run-leak-check.sh` is part of validating a codegen or elaboration
+  change, not an optional extra**. `saffron-effect-through-dyn-operand` now
+  carries `requires.leak-check` so a repeat fails on the fixture that owns the
+  behaviour.
 
 The earlier note in this report about tightening `is_delegatable_value` directly
 STANDS as a do-not-repeat: it makes the node non-delegatable, the CPS IR has no
