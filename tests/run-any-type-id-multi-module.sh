@@ -77,9 +77,13 @@ MAIN_C="$LIB_BD/obj/main.c"
 if [ -f "$PRODUCER_C" ] && [ -f "$MAIN_C" ]; then
     pass "any-type-id-per-module-c-emitted"
     for ty in Beta HeapThing; do
-        # Rows are emitted as `{ <id>LL, "<Name>", <boxed> },`.
-        p_row=$(grep -oE "\{ -?[0-9]+LL, \"$ty\", [01] \}" "$PRODUCER_C" | head -1)
-        m_row=$(grep -oE "\{ -?[0-9]+LL, \"$ty\", [01] \}" "$MAIN_C" | head -1)
+        # Rows are emitted as `{ <id>LL, "<Name>", <boxed>, <drop> },` -- the
+        # drop-glue slot arrived with the deep __tur_any_drop fix.  Match the
+        # PREFIX through the boxed flag rather than the whole row: id and boxed
+        # are what this assertion is about, and a prefix keeps the test from
+        # breaking again the next time the row grows a field.
+        p_row=$(grep -oE "\{ -?[0-9]+LL, \"$ty\", [01]," "$PRODUCER_C" | head -1)
+        m_row=$(grep -oE "\{ -?[0-9]+LL, \"$ty\", [01]," "$MAIN_C" | head -1)
         if [ -z "$p_row" ] || [ -z "$m_row" ]; then
             fail "any-type-id-agrees-$ty" \
                 "row for $ty missing (producer='$p_row' main='$m_row')"
@@ -99,23 +103,30 @@ if [ -f "$PRODUCER_C" ] && [ -f "$MAIN_C" ]; then
     # key that is a rendered SIGNATURE (not an ADT name) hash the same in two
     # TUs?  A closure rides the tag's value word, so boxed must be 0 -- if it
     # ever flipped, a drop in main would free() a closure producer owns.
-    p_fn=$(grep -oE '\{ -?[0-9]+LL, "fn", [01] \}' "$PRODUCER_C" | head -1)
+    p_fn=$(grep -oE '\{ -?[0-9]+LL, "fn", [01],' "$PRODUCER_C" | head -1)
     if [ -z "$p_fn" ]; then
         fail "any-type-id-agrees-fn" "producer emitted no \"fn\" row"
     elif ! grep -qF "$p_fn" "$MAIN_C"; then
         fail "any-type-id-agrees-fn" \
             "main.c carries no row matching producer's '$p_fn'"
-    elif [ "${p_fn##*, }" != "0 }" ]; then
-        fail "any-type-id-agrees-fn" "closure row must be boxed=0, got '$p_fn'"
     else
-        pass "any-type-id-agrees-fn"
+        # Pull the boxed flag out by POSITION.  This used to read the last
+        # field (`${p_fn##*, }`), which silently became the drop-glue slot when
+        # the row grew one -- the kind of check that keeps passing while
+        # measuring the wrong thing.
+        fn_boxed=$(printf '%s' "$p_fn" | sed -E 's/.*"fn", ([01]),.*/\1/')
+        if [ "$fn_boxed" != "0" ]; then
+            fail "any-type-id-agrees-fn" "closure row must be boxed=0, got '$p_fn'"
+        else
+            pass "any-type-id-agrees-fn"
+        fi
     fi
 
     # Beta is by-value (heap-boxed at the widen); HeapThing rides the value word
     # and must NOT be freed by a drop site.  If these ever coincide the boxed
     # flag has stopped meaning anything and mode 4 is back.
-    if grep -qE '\{ -?[0-9]+LL, "Beta", 1 \}' "$PRODUCER_C" &&
-       grep -qE '\{ -?[0-9]+LL, "HeapThing", 0 \}' "$PRODUCER_C"; then
+    if grep -qE '\{ -?[0-9]+LL, "Beta", 1,' "$PRODUCER_C" &&
+       grep -qE '\{ -?[0-9]+LL, "HeapThing", 0,' "$PRODUCER_C"; then
         pass "any-type-id-boxed-flags-distinct"
     else
         fail "any-type-id-boxed-flags-distinct" \
