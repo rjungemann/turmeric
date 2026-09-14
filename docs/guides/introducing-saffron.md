@@ -599,12 +599,9 @@ first in those cases. [saffron-guide.md](saffron-guide.md) lists the exact
 set, and [typeclass-guide.md](typeclass-guide.md) covers superclasses,
 defaults and the stdlib classes.
 
-`Animal`'s constructors carry nothing, which is not incidental: dispatching a
-method on an `any` holding an ADT whose constructors *do* carry a payload is a
-build breaker today -- see
-[saffron-dynamic-dispatch-on-payload-adt-emits-bad-c](https://github.com/rjungemann/turmeric/blob/main/docs/reported/saffron-dynamic-dispatch-on-payload-adt-emits-bad-c.md).
-Until it is fixed, reach such a type through a plain function (which is what
-the program at the end of this guide does) or narrow with `is?` first.
+`Animal`'s constructors happen to carry nothing, but that is not a
+restriction: an ADT whose constructors carry payloads dispatches the same way,
+and the program at the end of this guide does exactly that with `Shape`.
 
 ---
 
@@ -713,6 +710,12 @@ One complete program using the pieces above:
   (Circle :float)
   (Rect   :float :float))
 
+(defclass Describe [a]
+  (label [x] : cstr))
+
+(definstance Describe [Shape]
+  (label [x] (match x (Circle r) "circle" (Rect w h) "rect")))
+
 (defeffect Report [line : any] : int)
 
 (defn area [s]
@@ -720,14 +723,9 @@ One complete program using the pieces above:
     (Circle r)  (* 3.14159 (* r r))
     (Rect w h)  (* w h)))
 
-(defn label [s]
-  (match s
-    (Circle r)  "circle"
-    (Rect w h)  "rect"))
-
 (defn survey [a b]
-  (do (perform (Report (label a)))
-      (perform (Report (label b)))
+  (do (perform (Report (.label a)))
+      (perform (Report (.label b)))
       (+ (area a) (area b))))
 
 (defn main []
@@ -743,6 +741,12 @@ defdata Shape :copy
   Circle(:float)
   Rect(:float :float)
 
+defclass Describe [a]
+  label([x] : cstr)
+
+definstance Describe [Shape]
+  label([x] match(x (Circle r) "circle" (Rect w h) "rect"))
+
 defeffect Report [line : any] : int
 
 defn area [s]
@@ -752,17 +756,10 @@ defn area [s]
     (Rect w h)
     {w * h}
 
-defn label [s]
-  match s
-    (Circle r)
-    "circle"
-    (Rect w h)
-    "rect"
-
 defn survey [a b]
   do
-    perform(Report(label(a)))
-    perform(Report(label(b)))
+    perform(Report(.label(a)))
+    perform(Report(.label(b)))
     {area(a) + area(b)}
 
 defn main []
@@ -784,9 +781,10 @@ rect
 33.6349
 ```
 
-Only the two declarations -- the shape of the data and the shape of the effect
--- carry annotations. `area`, `label`, `survey` and `main` are all plain names,
-and `survey` handles a circle and a rectangle without ever naming either type.
+Only the declarations -- the shape of the data, the class's method signature,
+and the effect -- carry annotations. `area`, `survey` and `main` are all plain
+names, and `survey` handles a circle and a rectangle without ever naming either
+type: `.label` picks the instance from each value's own tag at run time.
 
 Two rough edges are worth knowing before you grow this program, because both
 are easy to walk into and neither says so clearly:

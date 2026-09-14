@@ -1,5 +1,35 @@
 # Dynamic typeclass dispatch on a payload-carrying ADT emits uncompilable C
 
+**RESOLVED 2026-09-14.** The non-witness shim in `emit_instance_dyn_table`
+(`src/compiler/emit_stmt.c`) was missing one arm. `dict_slot_param_is_carrier`
+DECLINES a parameter the C convention passes as `const T *` -- that is its
+pass-by-ptr arm, and it is correct -- after which the conversion chain fell
+straight through to the scalar `(T)__r` at the bottom, which is what GCC
+rejected. The arm now sits between them and spells the receiver
+`(const T *)(intptr_t)__r`, matching the three-way choice the WITNESS path a
+few lines above already makes; the widen boxed the value, so `__r` is already
+the ADT's address.
+
+The fix directions filed below named the right predicate
+(`emit_type_is_byvalue_adt`) and the right precedent (the dict wrapper), so
+nothing here was a wrong turn -- but note the defect was not "the by-value path
+is missing", it was "the by-value path is there and one SIZE of by-value ADT
+routes around it". That is why an all-nullary `defdata` worked and a
+single-int-payload one worked too: both ride the int64 carrier. Only a
+receiver large enough to be passed by pointer took the broken arm, which is a
+narrower trigger than the report's "carries a payload" and worth knowing if a
+neighbouring shim turns up with the same shape.
+
+A `defstruct` receiver was measured alongside and was never affected.
+
+Pinned by `tests/fixtures/saffron-dyn-dispatch-payload-adt`, which carries all
+three shapes (pass-by-ptr ADT, carrier-shaped ADT, all-nullary ADT) plus a
+primitive instance through one class and one dispatch site. The Saffron guide's
+"what dynamic dispatch does not cover yet" list, which did not mention this
+case, now says explicitly that it is not among them.
+
+---
+
 **Severity: high -- build breaker.** A `.method` call on an un-narrowed `any`
 holding an ADT works when the ADT's constructors are nullary, and fails to
 compile when any constructor carries a payload: the emitted dispatch shim

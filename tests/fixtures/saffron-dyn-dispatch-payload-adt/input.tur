@@ -1,0 +1,46 @@
+#lang saffron
+;; saffron-dynamic-dispatch-on-payload-adt-emits-bad-c: `.method` on an `any`
+;; holding an ADT used to compile only when every constructor was NULLARY, and
+;; to emit uncompilable C as soon as one carried a payload
+;; (`__dynshim_...`: conversion to non-scalar type requested).  The interpreter
+;; answered correctly throughout, which is what made it a build breaker rather
+;; than a wrong answer.
+;;
+;; The split was by PAYLOAD, so the fixture carries all three shapes through one
+;; class and one dispatch site:
+;;
+;;   Shape -- two float payloads, large enough that the C convention passes it
+;;            as `const tur_adt_Shape *`.  This is the arm that was missing:
+;;            `dict_slot_param_is_carrier` DECLINES a pass-by-ptr param, so the
+;;            shim fell through to the scalar `(T)__r` at the bottom.
+;;   Wrap  -- one int payload, carrier-shaped, which took the existing arm.
+;;   Flag  -- all-nullary, which rides the int64 carrier and always worked.
+;;
+;; The float instance is there so the shim table has a primitive row beside the
+;; aggregate ones -- 7.1 rather than a whole number, since an `any` holds a
+;; double's BIT PATTERN and a converting arm would print a wrong number here.
+(defdata Shape :copy (Circle :float) (Rect :float :float))
+(defdata Wrap  :copy (One :int))
+(defdata Flag  :copy (Yes) (No))
+
+(defclass Describe [a] (label [x] : cstr))
+
+(definstance Describe [Shape]
+  (label [x] (match x (Circle r) "circle" (Rect w h) "rect")))
+(definstance Describe [Wrap]
+  (label [x] (match x (One n) "wrap")))
+(definstance Describe [Flag]
+  (label [x] (match x (Yes) "yes" (No) "no")))
+(definstance Describe [float]
+  (label [x] "float"))
+
+(defn tell [x] (println (.label x)))
+
+(defn main []
+  (tell (Circle 2.5))
+  (tell (Rect 3.5 4.5))
+  (tell (One 7))
+  (tell (Yes))
+  (tell (No))
+  (tell 7.1)
+  0)

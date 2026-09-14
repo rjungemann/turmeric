@@ -288,7 +288,10 @@ cannot panic for a missing instance.
 ### What dynamic dispatch does not cover yet
 
 The registry is keyed on the **box tag**, so an instance the tag cannot name is
-not reachable through it. The cases that panic, with a message saying which:
+not reachable through it. The cases that panic, with a message saying which
+(a payload-carrying ADT receiver is **not** among them -- it used to emit
+uncompilable C, fixed 2026-09-14 and pinned by
+`tests/fixtures/saffron-dyn-dispatch-payload-adt`):
 
 - A method taking more than the receiver (`eq [x : a y : a]`) or returning the
   class's own type variable (`clone : a -> a`) -- the call site would have to

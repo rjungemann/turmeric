@@ -59,11 +59,6 @@
   (Circle :float)
   (Rect   :float :float))
 
-(defn label [s]
-  (match s
-    (Circle r)  "circle"
-    (Rect w h)  "rect"))
-
 (defn area [s]
   (match s
     (Circle r)  (* 3.14159 (* r r))
@@ -113,11 +108,20 @@
     (+ n 1)))
 
 ;; --- Putting it together --------------------------------------------------
+(defclass Describe [a]
+  (label [x] : cstr))
+
+;; saffron-dynamic-dispatch-on-payload-adt-emits-bad-c: a payload-carrying ADT
+;; receiver used to emit uncompilable C here.  The dedicated fixture for that is
+;; saffron-dyn-dispatch-payload-adt; this one keeps the guide's own use of it.
+(definstance Describe [Shape]
+  (label [x] (match x (Circle r) "circle" (Rect w h) "rect")))
+
 (defeffect Report [line : any] : int)
 
 (defn survey [a b]
-  (do (perform (Report (label a)))
-      (perform (Report (label b)))
+  (do (perform (Report (.label a)))
+      (perform (Report (.label b)))
       (+ (area a) (area b))))
 
 ;; A `handle` lives in its own function rather than inline in `main`: a
