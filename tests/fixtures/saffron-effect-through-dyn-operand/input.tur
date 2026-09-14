@@ -1,0 +1,51 @@
+#lang saffron
+;; saffron-effect-row-lost-through-unannotated-call, the half that is fixed.
+;;
+;; `(+ (g) 1)` in a Saffron file puts the call to `g` inside a DYNAMIC OPERATOR
+;; node, and every structural walk in src/passes/effect_check.c lacked an arm
+;; for those nodes -- so it fell to `default` and stopped.  The caller's
+;; inferred effect row came back empty, and an enclosing handler was reported
+;; unreachable (TUR-W0033: "the body does not perform 'Ask'") before the
+;; program aborted.  The same walk in src/passes/cps.c had the same gap, so the
+;; caller was never colored either.
+;;
+;; Both are fixed, and under `--interpret` this program now prints the right
+;; answers.  THE COMPILED BACK END STILL ABORTS on the same program, for a
+;; separate reason that is not the effect row: the CPS IR delegates a dynamic
+;; node's whole subtree to the direct emitter on `!operand_uses_control`, which
+;; asks about lexical control OPERATORS and not about calls to effectful
+;; FUNCTIONS -- so the delegated region calls `g()`'s direct entry, which opens
+;; a fresh DK root.  That is why this fixture is `requires.interp-only`: the
+;; compiled arm is still open, and the report says so.
+;;
+;; The report's own hypothesis -- that `any` carries no row, so the row was lost
+;; through the unannotated RETURN -- was wrong.  `straight` below is the control
+;; that says so: the identical call chain with no dynamic operator between the
+;; handler and the perform has always worked, with every signature just as
+;; unannotated.
+
+(defeffect Ask [] : int)
+
+(defn g [] (perform (Ask)))
+
+;; The control: no dynamic node between `handle` and `perform`.
+(defn straight [] (g))
+
+;; The repro: `+` on an `any` is a dynamic op, so the call to `g` sits under it.
+(defn through-op [] (+ (g) 1))
+
+;; ...and through a COMPARISON, which is a different dynamic operator reaching
+;; the same arm, so the fix is not keyed to arithmetic.
+(defn through-cmp [] (> (g) 0))
+
+;; NOT here, deliberately: the same comparison inside an `if`
+;; (`(if (> (g) 0) 1 0)`) still loses the row, and a `(Box (g))` constructor
+;; argument loses it in PLAIN TURMERIC too.  Both are residues of the same
+;; species in other walks, recorded in the report rather than pinned here --
+;; a fixture that asserts a wrong answer is worse than no fixture.
+
+(defn main []
+  (println (handle (straight)    (Ask [] k) (resume k 41)))
+  (println (handle (through-op)  (Ask [] k) (resume k 41)))
+  (println (handle (through-cmp) (Ask [] k) (resume k 41)))
+  0)

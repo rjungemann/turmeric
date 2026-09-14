@@ -776,6 +776,52 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
              * (:: <expr> T) still contributes a call-graph edge. */
             cps_collect_calls(e->as.ascribe_.inner, nodes, n_nodes, self);
             return;
+        /* saffron-effect-row-lost-through-unannotated-call: the Saffron nodes
+         * and the `any` widen / readers, the same set `cps_directly_uses_control`
+         * carries -- and missing here for the same reason it was missing there,
+         * one step removed.
+         *
+         * That walk SEEDS a function that itself holds a control op; this one
+         * builds the call-graph EDGES the fixpoint then propagates along.  With
+         * no arms, an edge whose call sits inside a dynamic operand was never
+         * recorded, so a caller of an effectful function went uncolored: the
+         * handler's DK was not threaded through it, and the callee's `perform`
+         * searched a root with no handler -- `tur: unhandled effect (tag N)` at
+         * run time, on a program the interpreter ran correctly.
+         *
+         * `(defn f [] (+ (g) 1))` is the whole repro, because `+` on an `any`
+         * IS a dynamic op -- which is to say, most of the arithmetic in most
+         * Saffron programs. */
+        case EX_UNION_INJECT:
+            cps_collect_calls(e->as.union_inject_.value, nodes, n_nodes, self);
+            return;
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                cps_collect_calls(e->as.dyn_op_.args[i], nodes, n_nodes, self);
+            return;
+        case EX_DYN_CALL:
+            /* The callee is an expression resolved at run time, so no edge can
+             * be named: conservatively indirect, exactly as the EX_CALL arm
+             * treats an unresolved callee. */
+            self->has_indirect = true;
+            cps_collect_calls(e->as.dyn_call_.fn, nodes, n_nodes, self);
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                cps_collect_calls(e->as.dyn_call_.args[i], nodes, n_nodes, self);
+            return;
+        case EX_DYN_FIELD:
+            cps_collect_calls(e->as.dyn_field_.obj, nodes, n_nodes, self);
+            return;
+        case EX_DYN_METHOD:
+            cps_collect_calls(e->as.dyn_method_.obj, nodes, n_nodes, self);
+            for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++)
+                cps_collect_calls(e->as.dyn_method_.args[i], nodes, n_nodes, self);
+            return;
+        case EX_ANY_CAST:
+            cps_collect_calls(e->as.any_cast_.value, nodes, n_nodes, self);
+            return;
+        case EX_ANY_IS:
+            cps_collect_calls(e->as.any_is_.value, nodes, n_nodes, self);
+            return;
         /* Nested function definitions are call-graph boundaries. */
         case EX_FN_DEF:
         case EX_FN:
@@ -1838,6 +1884,44 @@ static bool cps_body_calls_colored(const Expr *e,
         case EX_SERIAL_SHIFT:
             return cps_body_calls_colored(e->as.serial_shift_.k_fn, colored, n) ||
                    cps_body_calls_colored(e->as.serial_shift_.body, colored, n);
+        /* saffron-effect-row-lost-through-unannotated-call: the Saffron nodes
+         * and the `any` widen/readers, exactly the set `cps_directly_uses_control`
+         * above already carries -- and for the same reason, one step removed.
+         *
+         * That walk asks "is a control op UNDER this node"; this one asks "is a
+         * call to a COLORED function under it", and the backward fixpoint below
+         * is what turns the second into coloring.  With no arms here, a caller
+         * whose only effectful call sits inside a dynamic operand fell to
+         * `default: return false` and was never colored -- so the handler's DK
+         * was not threaded through it and the callee's `perform` searched a
+         * root that had no handler: `tur: unhandled effect (tag N)` at run time,
+         * on a program the interpreter ran correctly.
+         *
+         * `(+ (g) 1)` in a Saffron file is enough, since `+` on an `any` IS a
+         * dynamic op -- which is to say, most of the arithmetic in most Saffron
+         * programs. */
+        case EX_UNION_INJECT:
+            return cps_body_calls_colored(e->as.union_inject_.value, colored, n);
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                if (cps_body_calls_colored(e->as.dyn_op_.args[i], colored, n)) return true;
+            return false;
+        case EX_DYN_CALL:
+            /* The callee is an expression, so this is an indirect call -- the
+             * EX_CALL arm above treats one as conservatively colored, and the
+             * same reasoning applies here. */
+            return true;
+        case EX_DYN_FIELD:
+            return cps_body_calls_colored(e->as.dyn_field_.obj, colored, n);
+        case EX_DYN_METHOD:
+            if (cps_body_calls_colored(e->as.dyn_method_.obj, colored, n)) return true;
+            for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++)
+                if (cps_body_calls_colored(e->as.dyn_method_.args[i], colored, n)) return true;
+            return false;
+        case EX_ANY_CAST:
+            return cps_body_calls_colored(e->as.any_cast_.value, colored, n);
+        case EX_ANY_IS:
+            return cps_body_calls_colored(e->as.any_is_.value, colored, n);
         default:
             return false;
     }
