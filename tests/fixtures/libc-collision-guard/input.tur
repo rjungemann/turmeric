@@ -14,6 +14,14 @@
 ;; declares it only from <bits/stdio2.h>, included only when _FORTIFY_SOURCE is
 ;; on, which -O2 does -- so `tur emit-c | cc` compiled clean while `tur run`
 ;; (which passes -O2) failed.
+;;
+;; `tell` is the one that shows the OTHER half: the table is derived on a glibc
+;; host, and MinGW declares `long tell(int)` in <io.h> where glibc declares it
+;; nowhere.  So a `(defn tell ...)` compiled everywhere the recipe was run and
+;; failed only on CI's MSYS2/UCRT64 job -- which is how it was found, on a
+;; Saffron guide fixture that happened to name a function `tell`.  The MinGW /
+;; MSVC-legacy names below are host-independent regressions: re-running the
+;; derivation on Linux will not reproduce them, so they have to survive it.
 
 (defn div     [a : float b : float] : float (/ a b))
 (defn ldiv    [a : float b : float] : float (/ a b))
@@ -27,6 +35,15 @@
 (defn execl   [a : float b : float] : float (/ a b))
 (defn drand48 [a : float b : float] : float (/ a b))
 (defn erand48 [a : float b : float] : float (/ a b))
+
+;; MinGW / MSVC-legacy names, absent from every glibc header.  One per family:
+;; <io.h>, <conio.h>, the MSVC <string.h> spelling, and the MSVC <stdlib.h> one.
+(defn tell    [a : float b : float] : float (/ a b))
+(defn eof     [a : float b : float] : float (/ a b))
+(defn setmode [a : float b : float] : float (/ a b))
+(defn getch   [a : float b : float] : float (/ a b))
+(defn stricmp [a : float b : float] : float (/ a b))
+(defn itoa    [a : float b : float] : float (/ a b))
 
 ;; Names already covered before, so a regeneration of the table cannot quietly
 ;; drop them.
@@ -50,6 +67,12 @@
     (println (execl   7.1 2.5))
     (println (drand48 7.1 2.5))
     (println (erand48 7.1 2.5))
+    (println (tell    7.1 2.5))
+    (println (eof     7.1 2.5))
+    (println (setmode 7.1 2.5))
+    (println (getch   7.1 2.5))
+    (println (stricmp 7.1 2.5))
+    (println (itoa    7.1 2.5))
     (println (read    7.1 2.5))
     (println (write   7.1 2.5))
     (println (time    7.1 2.5))
