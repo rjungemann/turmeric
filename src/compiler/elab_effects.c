@@ -1592,6 +1592,11 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
                                           e->current_module_name, is_private);
     if (!effect) return NULL;
     effect->is_capability = is_capability;
+    /* saffron-effect-row-lost-through-unannotated-call: this unit declares an
+     * effect, so the dynamic-node operand hoist's CALL half is live for it.
+     * Set here rather than counted off the effect env, which always holds the
+     * built-ins. */
+    e->unit_has_user_effect = true;
     /* Tier C: record the full result Type when it is a by-value aggregate whose
      * bare TypeKind loses the def -- perform reads it so the perform result
      * carries the real monomorphized type. */

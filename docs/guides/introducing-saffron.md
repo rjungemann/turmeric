@@ -786,15 +786,10 @@ and the effect -- carry annotations. `area`, `survey` and `main` are all plain
 names, and `survey` handles a circle and a rectangle without ever naming either
 type: `.label` picks the instance from each value's own tag at run time.
 
-One rough edge is worth knowing before you grow this program, because it is
-easy to walk into and does not say so clearly: **`handle` finds the `perform`s
-in the function it wraps.** In a Saffron file a `perform` one call deeper is
-*not* picked up -- the compiler warns `handler clause for 'Report' is
-unreachable` and the program aborts with `unhandled effect` at run time.
-Perform in the function you hand to `handle`, as `survey` does, or annotate the
-intermediate function's return type, until
-[saffron-effect-row-lost-through-unannotated-call](https://github.com/rjungemann/turmeric/blob/main/docs/reported/saffron-effect-row-lost-through-unannotated-call.md)
-is fixed.
+`handle` finds the `perform`s in the whole computation it wraps, however deep
+-- `survey` performs directly here, but a `perform` several calls down is caught
+just the same. That is worth saying because it did not always hold in a Saffron
+file, and the fix is recent.
 
 ---
 

@@ -1,5 +1,66 @@
 # A Saffron `handle` does not see an effect performed one call deeper
 
+**RESOLVED 2026-09-14.** Two gaps, not one, and the filing's hypothesis was
+wrong about both. It guessed the row was lost through the unannotated RETURN
+(`any` carrying no effect row); the control `(defn straight [] (g))` -- the same
+call chain with no dynamic node in between -- has always worked with every
+signature just as unannotated, so the `any` return was never involved.
+
+**The row.** Every structural walk in `src/passes/effect_check.c`, and the two
+in `src/passes/cps.c` that build the coloring, lacked arms for the Saffron
+dynamic nodes and for the `any` WIDEN. Same species as
+`saffron-dynamic-surface-pass` H1 (`collect_free_vars`). The widen took two
+rounds to find and is the more interesting half: an unannotated `defn` whose
+body is not already an `any` gets a RETURN-position widen wrapped around the
+whole body, so `(defn tc [] (do (g) 1))` was invisible to the walk while
+`(defn tc [] (> (g) 0))` -- already `any`, no widen -- inferred correctly. That
+divergence is what identified it; a single repro would not have.
+
+**The call.** With the row right, the compiled back end still aborted. The CPS
+IR's delegation probe (`is_delegatable_value` -> `operand_uses_control`) asks
+whether a lexical control OPERATOR is in a subtree, and a call to an effectful
+FUNCTION is not one -- so the whole dynamic node (or the whole widened body)
+went to the direct emitter, which called the callee's DIRECT entry, opening a
+fresh DK root inside the handler. Fixed by hoisting a call-bearing operand into
+a `let` at elaboration (`elab_hoist_control_operands` and the return-position
+widen in `elab_coerce_to_any`), which puts the call at a bind position where it
+lowers to the DK-threaded cps->cps edge.
+
+Three things that fix needed, each found by a failing measurement rather than by
+reading:
+
+- **Gated on `unit_has_user_effect`**, a new flag set by `defeffect`. Without a
+  gate the hoist touches every Saffron program; with it, the fixture corpus
+  showed ZERO snapshot churn. It is deliberately not the effect env's count,
+  which is never zero (the built-in `Unsafe` is always registered).
+- **Never for `and` / `or`.** They are lazy, and hoisting evaluates an operand
+  before the node -- `(and (f false) (f (boom)))` reached `boom`.
+  `tests/fixtures/saffron-dyn-truthy` caught it, which is exactly what its
+  short-circuit row is there for.
+- **Never for a NIL-typed operand.** `void __ctlhoist_N = f(...)` does not
+  compile; `(when (> n 0) (do (println n) (countdown ...)))` in the tour guide's
+  own fixture is the shape. Nothing is lost -- a unit-valued operand delivers no
+  word, so there is no seam for it to cross.
+
+The earlier note in this report about tightening `is_delegatable_value` directly
+STANDS as a do-not-repeat: it makes the node non-delegatable, the CPS IR has no
+native lowering for one, and the function evicts wholesale. The hoist is what
+avoids that, by making the operand something the existing lowering already
+admits.
+
+Pinned by `tests/fixtures/saffron-effect-through-dyn-operand`, now a COMPILED
+fixture (it was `requires.interp-only` while only the row half was fixed),
+carrying six arms that are not interchangeable -- the control, a dynamic
+arithmetic op, a comparison, a widened `do`, a widened `if`, and the truthiness
+path. Both back ends agree, and the suite is clean with no snapshot churn.
+
+**One residue, filed separately because it is NOT Saffron-specific:** an
+effectful call as a CONSTRUCTOR argument (`(Box (g))`) still loses its row, in
+plain typed Turmeric too. See
+[effect-row-lost-through-a-constructor-argument](../reported/effect-row-lost-through-a-constructor-argument.md).
+
+---
+
 **Severity: high.** In typed Turmeric a `handle` catches an effect performed by
 a callee of the handled expression. In a `#lang saffron` file it does not: the
 clause is reported *unreachable* (TUR-W0033) and the program aborts with

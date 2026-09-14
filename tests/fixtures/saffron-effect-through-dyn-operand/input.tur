@@ -1,28 +1,35 @@
 #lang saffron
-;; saffron-effect-row-lost-through-unannotated-call, the half that is fixed.
+;; saffron-effect-row-lost-through-unannotated-call: a `handle` in a Saffron
+;; file used to miss an effect performed one call deeper -- TUR-W0033 called the
+;; clause unreachable, and the program aborted `tur: unhandled effect`.
 ;;
-;; `(+ (g) 1)` in a Saffron file puts the call to `g` inside a DYNAMIC OPERATOR
-;; node, and every structural walk in src/passes/effect_check.c lacked an arm
-;; for those nodes -- so it fell to `default` and stopped.  The caller's
-;; inferred effect row came back empty, and an enclosing handler was reported
-;; unreachable (TUR-W0033: "the body does not perform 'Ask'") before the
-;; program aborted.  The same walk in src/passes/cps.c had the same gap, so the
-;; caller was never colored either.
+;; The filed hypothesis was that the row is lost through the unannotated RETURN,
+;; `any` carrying no effect row.  `straight` below is the control that
+;; disproves it: the same call chain with no dynamic node in between always
+;; worked, with every signature just as unannotated.  The real cause was two
+;; separate gaps, and this fixture covers both.
 ;;
-;; Both are fixed, and under `--interpret` this program now prints the right
-;; answers.  THE COMPILED BACK END STILL ABORTS on the same program, for a
-;; separate reason that is not the effect row: the CPS IR delegates a dynamic
-;; node's whole subtree to the direct emitter on `!operand_uses_control`, which
-;; asks about lexical control OPERATORS and not about calls to effectful
-;; FUNCTIONS -- so the delegated region calls `g()`'s direct entry, which opens
-;; a fresh DK root.  That is why this fixture is `requires.interp-only`: the
-;; compiled arm is still open, and the report says so.
+;; THE ROW.  Every structural walk in src/passes/effect_check.c (and the two in
+;; src/passes/cps.c that build the coloring) lacked arms for the Saffron dynamic
+;; nodes AND for the `any` widen.  The widen is the one that took two rounds to
+;; find: an unannotated `defn` whose body is not already an `any` gets a
+;; RETURN-position widen wrapped around the whole body, so `through-do` was
+;; invisible while `through-op` -- whose body is already `any`, no widen -- was
+;; inferred correctly two lines away.  That divergence is what identified it.
 ;;
-;; The report's own hypothesis -- that `any` carries no row, so the row was lost
-;; through the unannotated RETURN -- was wrong.  `straight` below is the control
-;; that says so: the identical call chain with no dynamic operator between the
-;; handler and the perform has always worked, with every signature just as
-;; unannotated.
+;; THE CALL.  Even with the row right, the CPS IR handed the whole dynamic node
+;; (or the whole widened body) to the direct emitter, because its delegation
+;; probe asks whether a lexical control OPERATOR is in the subtree and a call to
+;; an effectful FUNCTION is not one.  The direct emitter then called `g`'s
+;; direct entry, which opens a FRESH DK root, so the perform searched a chain
+;; the caller's handler was not on.  The fix hoists a call-bearing operand into
+;; a `let` at elaboration, which puts the call at a bind position where it
+;; lowers to the DK-threaded cps->cps edge.
+;;
+;; Every arm below is one shape that was broken, and they are not
+;; interchangeable: `through-op` needs only the row fix, `through-do` and
+;; `through-if` need the widen arm as well, and all of them need the hoist to
+;; run compiled.  Both back ends agree on all of them.
 
 (defeffect Ask [] : int)
 
@@ -31,21 +38,27 @@
 ;; The control: no dynamic node between `handle` and `perform`.
 (defn straight [] (g))
 
-;; The repro: `+` on an `any` is a dynamic op, so the call to `g` sits under it.
+;; `+` on an `any` is a dynamic op, so the call sits under one.
 (defn through-op [] (+ (g) 1))
 
-;; ...and through a COMPARISON, which is a different dynamic operator reaching
-;; the same arm, so the fix is not keyed to arithmetic.
+;; A comparison -- a different dynamic operator reaching the same arm.
 (defn through-cmp [] (> (g) 0))
 
-;; NOT here, deliberately: the same comparison inside an `if`
-;; (`(if (> (g) 0) 1 0)`) still loses the row, and a `(Box (g))` constructor
-;; argument loses it in PLAIN TURMERIC too.  Both are residues of the same
-;; species in other walks, recorded in the report rather than pinned here --
-;; a fixture that asserts a wrong answer is worse than no fixture.
+;; A body whose value is an int, so the RETURN-position widen wraps the whole
+;; `do` -- the shape that needed the EX_UNION_INJECT arm.
+(defn through-do [] (do (g) 7))
+
+;; ...and the same through an `if`, in the condition only.
+(defn through-if [] (if (> (g) 0) 1 0))
+
+;; The truthiness path: an `any` condition, not a bool one.
+(defn through-truthy [] (if (g) 1 0))
 
 (defn main []
-  (println (handle (straight)    (Ask [] k) (resume k 41)))
-  (println (handle (through-op)  (Ask [] k) (resume k 41)))
-  (println (handle (through-cmp) (Ask [] k) (resume k 41)))
+  (println (handle (straight)       (Ask [] k) (resume k 41)))
+  (println (handle (through-op)     (Ask [] k) (resume k 41)))
+  (println (handle (through-cmp)    (Ask [] k) (resume k 41)))
+  (println (handle (through-do)     (Ask [] k) (resume k 41)))
+  (println (handle (through-if)     (Ask [] k) (resume k 41)))
+  (println (handle (through-truthy) (Ask [] k) (resume k 41)))
   0)

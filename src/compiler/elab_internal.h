@@ -605,6 +605,14 @@ typedef struct Elab {
      * condition is map.tur's -- so the seam and the truthiness rule consult
      * this as well as the spans they have. */
     bool toplevel_saffron;
+    /* saffron-effect-row-lost-through-unannotated-call: a user `defeffect` has
+     * been elaborated in this unit.  Gates the CALL half of the dynamic-node
+     * operand hoist (elab_hoist_control_operands): a unit with no effects can
+     * never need it, and gating keeps a transform that would otherwise touch
+     * every Saffron program off the code that cannot benefit.  Deliberately
+     * NOT the effect env's count -- built-in effects (`Unsafe`) are always
+     * registered, so that count is never zero. */
+    bool unit_has_user_effect;
     /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
     SkolemEnv *g2_skolem_env;
     /* Phase G2: GADT constructor whose arm is currently being elaborated.
