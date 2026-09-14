@@ -614,11 +614,11 @@ Effects separate *what* an operation is from *how* it is carried out. A
 computation `perform`s an effect; a `handle` installed by the caller decides
 what actually happens.
 
-`defeffect` declares one. Its signature **is** annotated -- an effect is a
-protocol between a computation and its handler, so both sides need to agree on
-it. A `defeffect` parameter does *not* pick up the `any` default a `defn`
-parameter gets, so name the type you mean; write `: any` when the payload is
-genuinely dynamic:
+`defeffect` declares one. Its **result** type is required -- an effect is a
+protocol between a computation and its handler, and the handler has to know
+what to `resume` with. Its parameters take the file's own default like any
+other, so leaving them off means `any`; annotate one when you want that edge
+pinned down:
 
 ```turmeric
 (defeffect Log [msg : cstr] : int)

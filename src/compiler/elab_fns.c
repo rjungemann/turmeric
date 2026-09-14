@@ -5526,9 +5526,16 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
  *   - an `extern-c` parameter, which declares a C signature.  `any` there would
  *     describe an ABI that does not exist.
  *
+ * `defeffect` DOES take this default, since 2026-09-14 -- it did not before,
+ * and an unannotated effect parameter silently meant `int` in a file whose
+ * whole premise is the other default (saffron-defeffect-params-default-to-int).
+ * An effect parameter is an ordinary value slot, unlike the two exclusions
+ * above, so there was never a reason for it to diverge.
+ *
  * Keyed on the span's file, so a Saffron program that loads a Turmeric module
- * gets each file's own default -- see lang_span_is_saffron. */
-static TypeKind saffron_default_param_kind(Span sp) {
+ * gets each file's own default -- see lang_span_is_saffron.  Not static: also
+ * read by defeffect elaboration in elab_effects.c. */
+TypeKind saffron_default_param_kind(Span sp) {
     return lang_span_is_saffron(sp) ? TY_ANY : TY_INT;
 }
 

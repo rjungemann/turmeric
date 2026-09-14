@@ -1793,16 +1793,24 @@ build breakers and two are silent wrong answers.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [saffron-perform-argument-skips-the-any-seam](saffron-perform-argument-skips-the-any-seam.md) | high | An `any` argument to `perform` does NOT get the checked `any` -> concrete cast that the identical argument to a typed *function* gets, so a `cstr` effect parameter receives the 16-byte box and the handler prints garbage. Both back ends, no diagnostic. The two calls in the repro differ only in which construct receives the value |
+| ~~[saffron-perform-argument-skips-the-any-seam](../archive/saffron-perform-argument-skips-the-any-seam.md)~~ | -- | **RESOLVED 2026-09-14** (archived). `elab_perform` now runs the seam in BOTH directions, and the second was not in the filing: an `any` argument into a concrete parameter takes the checked unbox (a mismatch panics `cast: any holds int, not cstr`), and a CONCRETE argument into an `any` parameter takes the widen every other `any` slot gets. The second half only surfaced while fixing the `defeffect` default below -- the two are one fix. Pinned by `saffron-perform-any-argument-seam` and `saffron-perform-any-argument-mismatch`. It did NOT fix the hole underneath, now filed as `perform-does-not-typecheck-its-arguments` |
 | [saffron-effect-row-lost-through-unannotated-call](saffron-effect-row-lost-through-unannotated-call.md) | high | A `handle` in a Saffron file does not see an effect performed one call deeper: TUR-W0033 calls the clause unreachable and the program aborts `unhandled effect`. The same program with the `#lang` line dropped and three return types annotated prints 42. The warning's text points the reader at deleting the clause, which is the opposite of the fix |
 | [saffron-cps-vec-element-carrier-mismatch](saffron-cps-vec-element-carrier-mismatch.md) | high | A Saffron function that both performs and moves a vector ELEMENT (a `[...]` literal's push, or a `vec-get` read) emits C the host compiler rejects -- `tur_tagged_t` where the vector helpers want the `int64_t` carrier. `vec-len` and a user function over the same vector are fine, so it is the element seam, on the CPS arm only |
 | [saffron-dynamic-dispatch-on-payload-adt-emits-bad-c](saffron-dynamic-dispatch-on-payload-adt-emits-bad-c.md) | high | `.method` on an `any` holding an ADT compiles when every constructor is nullary and emits uncompilable C as soon as one carries a payload (`__dynshim_...`: conversion to non-scalar type). The interpreter answers correctly. The guide's "what dynamic dispatch does not cover yet" list does not mention it, and its own examples are all on primitives |
-| [saffron-defeffect-params-default-to-int](saffron-defeffect-params-default-to-int.md) | medium | An unannotated `defeffect` parameter defaults to `int`, not `any`, in a file whose whole premise is the other default. The RESULT type is already a hard error when missing; only the parameter side defaults, and it defaults the typed way |
+| ~~[saffron-defeffect-params-default-to-int](../archive/saffron-defeffect-params-default-to-int.md)~~ | -- | **RESOLVED 2026-09-14** (archived). `defeffect` now calls `saffron_default_param_kind`, the same helper `defn` and `fn` use, rather than a hardcoded `TY_INT`; the helper lost its `static` instead of the one-line policy being copied into a second file, which is the drift that produced the bug. Defaulting rather than rejecting is right because an effect parameter is an ordinary value slot, unlike the two exclusions the helper already documented. Pinned by `saffron-defeffect-param-defaults-to-any` |
 
-The first two are one story from the reader's side -- effects in Saffron work
-until a value or a call crosses a boundary -- and worth taking together. The
-guide routes around all five, and says so where a reader would otherwise walk
-into one.
+**Status 2026-09-14.** Two resolved, both in the same change (see their rows);
+three open. The guide routes around each open one and says so where a reader
+would otherwise walk into it, and the two resolved notes were taken back out of
+it when they landed.
+
+Fixing the `perform` seam turned up a **sixth** finding, and a worse one than
+the five it came from: `perform` does not type-check its arguments at all, in
+either dialect.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [perform-does-not-typecheck-its-arguments](perform-does-not-typecheck-its-arguments.md) | high | `(perform (Log 42))` against `Log [msg : cstr]` compiles clean in plain TYPED Turmeric and segfaults -- `elab_perform` stores each argument without ever reading the declared parameter types the handler goes on to use. Not a one-liner: a general check has to agree with the ~300 lines of `arg_ok` logic at `elab_call.c:6195`, which wants factoring out first. The `any` seam fixed above is the corner of this hole, not the hole |
 
 ## Filing conventions
 

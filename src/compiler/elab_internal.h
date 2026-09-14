@@ -1750,6 +1750,11 @@ Expr *elab_borrow_immut(Elab *e, const Form *call);
  * target Type.  Used by the `@TypeName` witness path, which pins an instance
  * and therefore already knows the type the receiver must be unboxed to. */
 Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span);
+/* saffron-lang-plan S2/D3: the declared TypeKind of an UNANNOTATED positional
+ * parameter -- `any` in a Saffron file, `int` in a Turmeric one.  Defined in
+ * elab_fns.c, where the full reasoning and the two deliberate exclusions
+ * (`& rest`, `extern-c`) are documented; also read by defeffect. */
+TypeKind saffron_default_param_kind(Span sp);
 /* Convert a runtime Type back to its source-form spelling (primitives,
  * named ADTs, TY_APP chains).  NULL for a kind that has no source form --
  * callers use that as a clean decline.  Defined in elab_typeclasses.c. */
