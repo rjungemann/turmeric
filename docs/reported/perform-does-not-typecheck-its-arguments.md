@@ -1,69 +1,140 @@
 # `perform` does not type-check its arguments at all
 
-**Status: open, NARROWED 2026-09-15.** The memory-safety half is closed; the
-general check is not, and is still worth doing on its own terms.
+**Status: open, NARROWED TWICE (2026-09-15).** Arity is fully checked on both
+sides; primitive argument types are checked and now agree with an ordinary
+call. What remains is aggregates, `ptr<void>`-shaped parameters, and one
+deliberate laxness that wants a human decision (see "The carrier question").
 
 ## What is fixed
 
-The report's own "cheaper interim" is implemented, **one notch narrower than it
-proposed**: `elab_perform` now rejects a LITERAL scalar (an integer, a bool, a
-float) arriving at a POINTER-shaped parameter (`cstr`, `ptr<T>`,
-`ref`/`rc`/`weak`, a borrow), with the ordinary `TUR-E0001` at the argument's
-span, naming the declared parameter and both types.
+### Arity -- both sides, and both had a segfaulting direction
 
-The narrowing is measured, not cautious. The filing says a scalar argument
-reaching a pointer-shaped parameter "admits no legitimate program"; it admits
-one, and the fixture corpus found it in seven places. An **unannotated lambda
-parameter defaults to `int`** at elaboration and is refined later, so
+Neither side of the effect ABI compared itself against the declaration.
 
-```turmeric
-(defstruct App :copy [run : fn #fx{Log}])
-(make-struct App (fn [msg] (perform (Log msg))))   ;; Log [msg : cstr]
+| Shape | Before |
+| --- | --- |
+| `perform` supplies too FEW arguments | **segfault** -- the slot array is sized by the declaration, so the tail slots were uninitialised and the handler read them |
+| `perform` supplies too MANY | silent: every seam in `elab_perform` is written `if (i < n_params)`, so the surplus was dropped |
+| handler clause binds too MANY | **segfault** -- reads past the end of the slot array |
+| handler clause binds too FEW | silent garbage word |
+
+All four are now `TUR-E0002`. Strict equality is right: a `defeffect`
+parameter list counts bare symbols, with no `& rest` form and no default
+VALUES.
+
+**This is also the correction to why arity was deferred the first time.** The
+first pass left it out because "`defeffect` parameter defaulting exists and the
+interaction was not measured". That defaulting (commit `4de8906a`) defaults a
+parameter's *TYPE* when the annotation is omitted -- it never makes an argument
+optional. The two were conflated; there was nothing to measure.
+
+### Primitive argument types -- and the `arg_ok` factoring turned out not to be needed
+
+The filing's central claim is that a perform-site check "has to agree with what
+an ordinary call already accepts", and that agreeing means first factoring the
+~300 lines of `arg_ok` out of `elab_call_fn_inner`. **For primitives that is not
+so, and measuring it is what unblocked this.** Those 300 lines are about type
+variables, HKT carriers, by-value aggregates, borrows and fn values. Between two
+plain primitives a call is exact `TypeKind` equality, with two alias pairs and
+no implicit widening at all:
+
+```
+(defn f [n : int] ...)      (f 7.25)    rejected: expected int, got float
+(defn f [x : float] ...)    (f 7)       rejected: expected float, got int
+(defn f [n : int] ...)      (f "hi")    rejected: expected int, got cstr
+(defn f [n : int] ...)      int8 arg    rejected
+(defn f [n : int] ...)      bool arg    rejected
+int64  param <- int   arg               ACCEPTED   (aliases)
+float64 param <- float arg              ACCEPTED   (aliases)
 ```
 
-reads as an int argument at the perform site and is entirely correct --
-`tests/fixtures/effect-type-alias` and `cps-backend-fn-param-effectful` are two
-of the seven, and they are now this check's controls. A literal's type is never
-provisional, so restricting to one gives a rule with **no false positives at
-all**, at the cost of missing a mismatch that arrives through a variable.
-Widening it wants the same factored-out `arg_ok` predicate the general check
-wants; it is not a better guess at this site.
+`perform` now applies that same rule to the same shapes -- verifiably rather
+than by imitation -- via `perform_primitive_norm`, which returns a normalized
+kind for a plain primitive and `TY_UNKNOWN` for everything else, so the check
+fires only when BOTH sides are plain primitives and stays silent wherever the
+call path has a coercion arm (`ptr<void>`, `nil`, `fn`, tyvar, `any`,
+aggregates). The narrower scalar-into-pointer rule still covers `ptr<T>` /
+`ref` / `rc` / `weak` parameters, which are not plain primitives.
 
-The check runs AFTER both existing `any` seams in the same loop, so an `any`
-argument that was just unboxed to the concrete parameter type is judged on what
-it became, not on what it arrived as.
+### The carrier default -- the real reason the first pass could only check literals
 
-Deliberately NOT treated as pointer-shaped: `TY_STRUCT` / `TY_ADT` (by-value
-aggregates, whose slot is not an address), `TY_FN` (already handled by the
-boxing shim a few lines below), and `TY_TYVAR` / `TY_ANY` / `TY_UNKNOWN` (no
-declared shape to disagree with). Not treated as scalar: `TY_NIL`, which an
-ordinary call already accepts for a pointer parameter, and `TY_NEVER`.
+The first pass could only check LITERAL arguments, because a TY_INT argument was
+ambiguous. An **un-annotated lambda parameter defaults to `int`** and routinely
+carries a `cstr` through it -- and that is deliberate, not a missing inference:
+the bidirectional inference that would refine it from an expected fn type is
+gated OFF for primitive expected types, to avoid codegen churn (see `elab_fn`'s
+`expected_type` arm). So `int` there means "one untyped word", and checking it
+reports working code, in seven fixtures.
 
-Pinned by `tests/fixtures/errors/perform-arg-scalar-into-pointer-param`, with
-the `cstr`/`int`/`float`/by-value-struct parameters and the Saffron `any`-seam
-path all verified to still compile and run.
+Two things were ruled out before fixing it:
 
-## What remains -- the general check
+- **Running the check in a later pass does not help.** A probe in
+  `effect_check.c` shows the argument is still `expr_ty=int binding_ty=int
+  want=cstr` at that point. The carrier IS the representation, not a
+  not-yet-refined guess.
+- **There was nowhere to read the answer from.** Neither `Binding` nor `FnDef`
+  recorded whether a parameter's type was written by the author.
 
-Everything the report describes under "Fix directions": factoring the
-argument-compatibility decision out of `elab_call_fn_inner` (the ~300 lines
-from `elab_call.c:6195` that thread implicit coercions, borrows, type
-variables, HKT carriers, by-value aggregates and the seam through a mutable
-`arg_ok` with coercion side effects) into a predicate both call sites can use.
-Until that exists, these still pass unchecked at a `perform` site:
+So the fix records the missing information rather than guessing at it:
+`Binding.type_is_carrier_default`, set at the two sites that take
+`saffron_default_param_kind` and cleared by an annotation (and by the
+bidirectional inference, when it fires). An un-annotated `let` bound directly to
+such a parameter inherits the provenance, so `(let [m msg] (perform (Log m)))`
+is declined one indirection along too. With a declared `int` now distinguishable
+from a carrier `int`, the check reaches variables, call results, field reads and
+operators -- everything except a carrier variable.
 
-- **a scalar reaching a pointer-shaped parameter through a VARIABLE** rather
-  than a literal -- the same defect, one indirection away, which is the price
-  of the no-false-positive restriction above;
-- a `cstr` argument reaching an `:int` parameter (the reverse direction -- a
-  silent misread rather than a crash, so it is not in the narrow rule);
-- a float argument reaching an `:int` parameter and vice versa;
-- an aggregate whose def differs from the declared one;
-- **arity**: `n_args` is never compared against `n_params`, so extra arguments
-  are silently ignored and missing ones leave the handler reading a stale slot.
+Fixtures: `errors/perform-arity-mismatch`,
+`errors/handler-clause-arity-mismatch`,
+`errors/perform-arg-scalar-into-pointer-param`,
+`errors/perform-arg-declared-var-into-pointer-param`,
+`errors/perform-arg-primitive-kind-mismatch`, and the positive
+`perform-arg-primitive-aliases`. The carrier controls are the pre-existing
+`effect-type-alias` and `cps-backend-fn-param-effectful`.
 
-Arity is the cheapest of these and was left out of this pass only because
-`defeffect` parameter defaulting exists and the interaction was not measured.
+## The carrier question -- a decision, not a bug
+
+Worth stating plainly, because it is the crux of what is left and it is
+**deliberately** unresolved here: the ordinary call path does NOT exempt a
+carrier parameter. It rejects one.
+
+```turmeric
+(defstruct App :copy [run : fn])
+(make-struct App (fn [msg] (takes-cstr msg)))
+;; error [TUR-E0001]: function 'takes-cstr' arg 1: expected cstr, got int
+```
+
+The identical `msg` reaching a `perform` is accepted, by the exemption above.
+So `perform` is now *laxer than a call* in exactly one place, and the seven
+corpus fixtures depend on that laxness -- written as function calls they would
+not compile today.
+
+Two defensible positions, and picking between them is a language decision rather
+than a defect fix:
+
+1. **Keep the exemption** (what is implemented). `perform` checks what it can;
+   a carrier parameter stays unchecked on both the perform and handler sides.
+2. **Drop it**, making `perform` agree with a call exactly. Then those seven
+   fixtures become errors and want `(fn [msg : cstr] ...)` annotations -- which
+   is arguably what they should have said all along, and would close the last
+   type hole at this site.
+
+(2) is the more principled end state and is a small change (delete the
+`perform_arg_type_is_declared` guard); it is not taken here because it changes
+what existing, working programs compile.
+
+## What remains
+
+- **The carrier question above** -- the largest remaining hole, and a decision.
+- **Aggregates.** A by-value struct/ADT argument whose def differs from the
+  declared parameter's is unchecked; `TY_STRUCT` / `TY_ADT` are excluded from
+  the primitive rule because a call has real coercion behaviour for them.
+- **`ptr<void>`-shaped parameters.** Excluded because a call accepts `TY_FN` and
+  `TY_NIL` for them; telling those apart is where the original `arg_ok`
+  factoring would genuinely earn its keep.
+- **The `arg_ok` factoring itself**, for the non-primitive cases. Still worth
+  doing on its own terms, as the filing says -- just not, as it turns out, a
+  prerequisite for any of the above.
 
 ---
 

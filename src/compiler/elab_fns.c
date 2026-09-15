@@ -6353,6 +6353,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
                           "defn: type annotation without preceding parameter");
                 return NULL;
             }
+            /* perform-does-not-typecheck-its-arguments: the author wrote a type
+             * here, so this parameter's type is declared, not the carrier
+             * default the binding was created with. */
+            params[n_params - 1]->type_is_carrier_default = false;
             constraint_binder_run = NULL;
             /* An explicit annotation on a run-typed parameter replaces the
              * binder type it was given above, poly slot included. */
@@ -6608,6 +6612,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
                           "defn: type annotation without preceding parameter");
                 return NULL;
             }
+            /* perform-does-not-typecheck-its-arguments: the author wrote a type
+             * here, so this parameter's type is declared, not the carrier
+             * default the binding was created with. */
+            params[n_params - 1]->type_is_carrier_default = false;
             constraint_binder_run = NULL;
             /* An explicit annotation on a run-typed parameter replaces the
              * binder type it was given above, poly slot included. */
@@ -6832,6 +6840,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
         Binding *b = binding_new(e, p->as.sym, type_from_kind(dflt_k),
                                  false, false, p->span);
         b->is_param = true;
+        /* perform-does-not-typecheck-its-arguments: nothing has been declared
+         * yet -- an annotation, if the author wrote one, arrives as the NEXT
+         * form and clears this. */
+        b->type_is_carrier_default = true;
         /* LT0: If the previous ^linear annotation applied to this parameter, mark it linear */
         if (next_param_linear) {
             b->is_linear = true;
@@ -9782,6 +9794,10 @@ Expr *elab_fn(Elab *e, const Form *call) {
                           "fn: type annotation without preceding parameter");
                 return NULL;
             }
+            /* perform-does-not-typecheck-its-arguments: the author wrote a type
+             * here, so this parameter's type is declared, not the carrier
+             * default the binding was created with. */
+            params[n_params - 1]->type_is_carrier_default = false;
             const Form *type_form = (p->tag == F_TYPE_ANN) ? p->as.list.items[0] : p;
             Type *ann = fn_type_from_form(e, type_form,
                                           fn_type_params, fn_type_param_kinds, n_fn_type_params);
@@ -9882,6 +9898,10 @@ Expr *elab_fn(Elab *e, const Form *call) {
         Binding *b = binding_new(e, p->as.sym, type_from_kind(fn_dflt_k),
                                  false, false, p->span);
         b->is_param = true;
+        /* perform-does-not-typecheck-its-arguments: see the defn path.  This is
+         * the site that produces the carrier ints a naive perform-argument check
+         * reports -- an un-annotated lambda param routinely carries a `cstr`. */
+        b->type_is_carrier_default = true;
         /* Bidirectional inference (constrained-generic-as-value-bakes-
          * representative.md): when this lambda is elaborated against an expected
          * function type (pushed by the call site for a fn-typed parameter), type
@@ -9902,6 +9922,10 @@ Expr *elab_fn(Elab *e, const Form *call) {
                 param_kinds[n_params] = exp_full->kind;
                 b->type = *exp_full;
                 param_full_types[n_params] = exp_full;
+                /* Determined from the expected fn type, so no longer a default.
+                 * (This arm is gated to non-primitive expected types, which is
+                 * exactly why a `cstr` param stays a carrier int.) */
+                b->type_is_carrier_default = false;
             }
         }
         if (next_param_linear) {

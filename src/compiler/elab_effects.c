@@ -1745,20 +1745,86 @@ static bool perform_param_is_pointer_shaped(const Type *t) {
     }
 }
 
-static bool perform_arg_is_literal(const Expr *a) {
+/* Is this argument's TYPE something the author actually declared, rather than a
+ * carrier word whose TY_INT means "one machine word of unknown provenance"?
+ *
+ * Only a type we can stand behind may be compared against the declared
+ * parameter, because the carrier case is not a mismatch -- it is the absence of
+ * information (see Binding.type_is_carrier_default).  Two answers qualify:
+ *
+ *   - a LITERAL, whose type is never provisional; and
+ *   - a variable whose binding carries a DECLARED type -- an annotated
+ *     parameter, a global, a let bound to something typed.  This is what the
+ *     `type_is_carrier_default` flag exists to tell us, and it is why the check
+ *     is no longer literal-only.
+ *
+ * A `let` bound directly to a carrier-defaulted parameter inherits the flag at
+ * its binding site (elab_let), so `(fn [msg] (let [m msg] (perform (Log m))))`
+ * is still correctly declined one indirection later. */
+static bool perform_arg_type_is_declared(const Expr *a) {
     while (a) {
         switch (a->kind) {
-            case EX_INT_LIT:
-            case EX_BOOL_LIT:
-            case EX_FLOAT_LIT:
-                return true;
+            case EX_VAR:
+                return a->as.var.binding &&
+                       !a->as.var.binding->type_is_carrier_default;
             case EX_ASCRIBE:     a = a->as.ascribe_.inner;    break;
             case EX_CAST:        a = a->as.cast_.expr;        break;
             case EX_REINTERPRET: a = a->as.reinterpret_.expr; break;
-            default:             return false;
+            /* Everything else -- a literal, a call result, a field read, an
+             * operator -- carries the type the language assigned it, and an
+             * ordinary CALL type-checks those against a declared parameter with
+             * no provenance test whatsoever.  Trusting them here is what makes
+             * `perform` agree with a call rather than lag it: `(perform (Log
+             * (mk)))` with `mk : int` against `Log [msg : cstr]` was accepted
+             * while `(takes-cstr (mk))` two lines away was rejected. */
+            default:             return true;
         }
     }
-    return false;
+    return true;
+}
+
+/* perform-does-not-typecheck-its-arguments, second pass: the PRIMITIVE half of
+ * the general check, which turned out not to need the `arg_ok` factoring at all.
+ *
+ * The filing assumed a perform-site check "has to agree with what an ordinary
+ * call already accepts", and that agreeing meant reproducing ~300 lines of
+ * `elab_call_fn_inner`.  Measuring what a call actually accepts for PRIMITIVES
+ * shows those 300 lines are about type variables, HKT carriers, by-value
+ * aggregates, borrows and fn values -- not scalars.  Between two plain
+ * primitives a call is simply exact TypeKind equality, with two alias pairs and
+ * no implicit widening whatsoever:
+ *
+ *     (defn f [n : int] ...)      (f 7.25)      rejected: expected int, got float
+ *     (defn f [x : float] ...)    (f 7)         rejected: expected float, got int
+ *     (defn f [n : int] ...)      (f "hi")      rejected: expected int, got cstr
+ *     (defn f [n : int64] ...)    int arg       ACCEPTED   (int   == int64)
+ *     (defn f [x : float64] ...)  float arg     ACCEPTED   (float == float64)
+ *     (defn f [n : int] ...)      int8 arg      rejected
+ *     (defn f [n : int] ...)      bool arg      rejected
+ *
+ * So `perform` can have the same rule for the same shapes, verifiably rather
+ * than by imitation.  `perform_primitive_norm` returns the normalized kind for
+ * a plain primitive and TY_UNKNOWN for everything else, so the check fires only
+ * when BOTH sides are plain primitives and stays silent everywhere the call
+ * path has a coercion arm.
+ *
+ * Deliberately NOT plain primitives: TY_PTR_VOID (a call accepts TY_FN and
+ * TY_NIL for it), TY_NIL (accepted for pointer parameters), TY_SYM, TY_NEVER,
+ * and every aggregate / fn / tyvar / any.  Those keep the narrower
+ * scalar-into-pointer rule below, or no rule at all. */
+static TypeKind perform_primitive_norm(TypeKind k) {
+    switch (k) {
+        case TY_INT:   case TY_INT64:   return TY_INT;
+        case TY_FLOAT: case TY_FLOAT64: return TY_FLOAT;
+        case TY_BOOL:
+        case TY_CSTR:
+        case TY_INT8:  case TY_INT16:  case TY_INT32:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32:
+            return k;
+        default:
+            return TY_UNKNOWN;
+    }
 }
 
 static bool perform_arg_is_scalar_word(const Type *t) {
@@ -1843,6 +1909,36 @@ Expr *elab_perform(Elab *e, const Form *call) {
 
     /* Parse arguments */
     uint8_t n_args = effect_call_f->as.list.len - 1;
+
+    /* perform-does-not-typecheck-its-arguments: arity, which was unchecked in
+     * BOTH directions and is a memory-safety hole in one of them.
+     *
+     * The effect slot array is sized by the DECLARATION, so too few arguments
+     * left the tail slots uninitialised and the handler read whatever was
+     * there -- `(defeffect Two [a : int b : int] : int)` performed as
+     * `(perform (Two 1))` segfaulted.  Too many silently dropped the surplus
+     * (the seams below are all written `if (i < n_params)`), so
+     * `(perform (One 1 2 3))` printed a garbage word.
+     *
+     * A strict equality check is right here because an effect constructor has
+     * no arity flexibility at all: `defeffect` counts bare `F_SYM` items and
+     * has no `& rest` form and no default VALUES.  (The "default defeffect
+     * params" work this report grew out of defaults a parameter's TYPE when the
+     * annotation is omitted, which does not change how many arguments a
+     * `perform` must supply -- worth stating, because that is the reason arity
+     * was left out of the first pass at this report.) */
+    if (n_args != effect->constructor->n_params) {
+        diag_emit_with_code(DIAG_ERROR, effect_call_f->span,
+            TUR_E0002_ARITY_MISMATCH,
+            "effect '%s' declares %u parameter%s, but this 'perform' supplies "
+            "%u argument%s",
+            effect_name->name,
+            (unsigned)effect->constructor->n_params,
+            effect->constructor->n_params == 1 ? "" : "s",
+            (unsigned)n_args, n_args == 1 ? "" : "s");
+        return NULL;
+    }
+
     Expr **args = arena_alloc(e->arena, n_args * sizeof(Expr *));
     for (uint32_t i = 0; i < n_args; i++) {
         /* cps-dk-multishot-user-effects (Phase A): reflavor a resumable fn-payload
@@ -1923,9 +2019,17 @@ Expr *elab_perform(Elab *e, const Form *call) {
                 ? effect->constructor->param_full_types[i] : NULL;
             Type want = want_full ? *want_full
                                   : type_from_kind(effect->constructor->param_types[i]);
-            if (perform_param_is_pointer_shaped(&want) &&
-                perform_arg_is_scalar_word(&args[i]->type) &&
-                perform_arg_is_literal(args[i])) {
+            /* Both rules need an argument whose type the author declared --
+             * a carrier word is the absence of information, not a mismatch. */
+            TypeKind wnorm = perform_primitive_norm(want.kind);
+            TypeKind gnorm = perform_primitive_norm(args[i]->type.kind);
+            bool primitive_mismatch =
+                (wnorm != TY_UNKNOWN && gnorm != TY_UNKNOWN && wnorm != gnorm);
+            bool scalar_into_pointer =
+                perform_param_is_pointer_shaped(&want) &&
+                perform_arg_is_scalar_word(&args[i]->type);
+            if ((primitive_mismatch || scalar_into_pointer) &&
+                perform_arg_type_is_declared(args[i])) {
                 const Symbol *pn = effect->constructor->param_names
                     ? effect->constructor->param_names[i] : NULL;
                 char pbuf[96];
@@ -1935,10 +2039,12 @@ Expr *elab_perform(Elab *e, const Form *call) {
                     effect_call_f->as.list.items[i + 1]->span,
                     TUR_E0001_TYPE_MISMATCH,
                     "effect '%s' declares parameter %s as '%s', but this "
-                    "argument has type '%s' -- the handler would read the "
-                    "value as an address",
+                    "argument has type '%s'%s",
                     effect_name->name, pbuf, type_name(want),
-                    type_name(args[i]->type));
+                    type_name(args[i]->type),
+                    scalar_into_pointer
+                        ? " -- the handler would read the value as an address"
+                        : "");
                 return NULL;
             }
         }
@@ -2087,6 +2193,33 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
         }
 
         cases[i].n_params = params_f->as.list.len;
+
+        /* perform-does-not-typecheck-its-arguments: the HANDLER half of the
+         * same arity hole, and the more dangerous direction is the opposite one
+         * from the perform side.  A clause declaring MORE parameters than the
+         * effect has reads past the end of the slot array -- `(Two [a] k)`
+         * against a one-parameter effect printed a garbage word, and
+         * `(One [a b c] k)` against it segfaulted.
+         *
+         * Skipped (not an error) when the effect is not registered: an unknown
+         * effect name is diagnosed on its own terms elsewhere, and reporting an
+         * arity mismatch against a declaration we could not find would be a
+         * confusing second error on the same line. */
+        {
+            Effect *hef = effect_env_lookup(e->effect_env, cases[i].effect_name);
+            if (hef && hef->constructor &&
+                cases[i].n_params != hef->constructor->n_params) {
+                diag_emit_with_code(DIAG_ERROR, params_f->span,
+                    TUR_E0002_ARITY_MISMATCH,
+                    "handler clause for '%s' binds %u parameter%s, but the "
+                    "effect declares %u",
+                    cases[i].effect_name->name,
+                    (unsigned)cases[i].n_params,
+                    cases[i].n_params == 1 ? "" : "s",
+                    (unsigned)hef->constructor->n_params);
+                return NULL;
+            }
+        }
         cases[i].param_names = arena_alloc(e->arena, cases[i].n_params * sizeof(const Symbol *));
         cases[i].param_bindings = arena_alloc(e->arena, cases[i].n_params * sizeof(Binding *));
         for (uint32_t j = 0; j < cases[i].n_params; j++) {

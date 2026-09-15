@@ -1,0 +1,30 @@
+;; perform-does-not-typecheck-its-arguments: the scalar-into-pointer check now
+;; reaches a VARIABLE, not only a literal.
+;;
+;; The first pass at this report could only check literals, because an
+;; un-annotated lambda parameter defaults to `int` and routinely carries a
+;; `cstr` through it -- deliberately, since the bidirectional inference that
+;; would refine it is gated OFF for primitive expected types to avoid codegen
+;; churn.  So a TY_INT argument was ambiguous: a declared integer, or one
+;; untyped carrier word.  Running the check in a LATER pass does not help; the
+;; type is still `int` at effect_check time, because the carrier IS the
+;; representation, not a not-yet-refined guess.
+;;
+;; What closed it was recording the missing information rather than guessing at
+;; it: `Binding.type_is_carrier_default` marks a parameter whose type the author
+;; did not write, set where the default is taken and cleared by an annotation
+;; (and by the bidirectional inference, when that fires).  A declared `int`
+;; below is now distinguishable from a carrier `int`, so this is reported while
+;; `tests/fixtures/effect-type-alias` and `cps-backend-fn-param-effectful` --
+;; the carrier shape, and this check's controls -- still compile and run.
+;;
+;; An un-annotated `let` bound directly to such a parameter inherits the
+;; provenance, so `(let [m msg] (perform (Log m)))` is declined one indirection
+;; along too.
+(defeffect Log [msg : cstr] : int)
+
+(defn w [n : int] : int (perform (Log n)))
+
+(defn main [] : int
+  (println (handle (w 42) (Log [m] k) (do (println m) (resume k 0))))
+  0)

@@ -1006,6 +1006,25 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
+        /* perform-does-not-typecheck-its-arguments: an UNANNOTATED `let` bound
+         * directly to a carrier-defaulted parameter inherits that provenance --
+         * its TY_INT is the same "one untyped word", one indirection along.
+         * Without this, `(fn [msg] (let [m msg] (perform (Log m))))` would look
+         * like a declared int and be reported, while the `msg` spelling one
+         * line up is correctly declined.  An annotated binding declares its own
+         * type and never inherits. */
+        if (!type_ann_form) {
+            const Expr *ip = init;
+            while (ip) {
+                if (ip->kind == EX_ASCRIBE)          ip = ip->as.ascribe_.inner;
+                else if (ip->kind == EX_CAST)        ip = ip->as.cast_.expr;
+                else if (ip->kind == EX_REINTERPRET) ip = ip->as.reinterpret_.expr;
+                else break;
+            }
+            if (ip && ip->kind == EX_VAR && ip->as.var.binding &&
+                ip->as.var.binding->type_is_carrier_default)
+                b->type_is_carrier_default = true;
+        }
         /* SZ8 projection-size recovery: retain a type-annotation Form so a
          * downstream call passing `b` (or a field projection of it) can recover
          * its static size index.  Prefer an explicit binding annotation; else

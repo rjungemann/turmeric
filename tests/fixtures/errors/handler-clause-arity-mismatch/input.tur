@@ -1,0 +1,16 @@
+;; perform-does-not-typecheck-its-arguments (arity, HANDLER side): the same hole
+;; on the other side of the effect ABI, and the dangerous direction is the
+;; opposite one.  A clause binding MORE parameters than the effect declares
+;; reads past the end of the slot array -- this program SEGFAULTED before the
+;; check.  A clause binding FEWER was silent, printing a garbage word.
+;;
+;; Both sides had to be fixed together: checking only `perform` would still let
+;; a mismatched handler corrupt the read, and the two are independent
+;; declarations that each have to agree with the `defeffect`.
+(defeffect One [a : int] : int)
+
+(defn w [] : int (perform (One 1)))
+
+(defn main [] : int
+  (println (handle (w) (One [a b c] k) (resume k (+ a (+ b c)))))
+  0)

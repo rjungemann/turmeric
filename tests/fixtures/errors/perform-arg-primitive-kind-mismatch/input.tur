@@ -1,0 +1,33 @@
+;; perform-does-not-typecheck-its-arguments: a float argument reaching an `:int`
+;; effect parameter.  Before the check this printed 4619848792751996928 -- the
+;; double's bit pattern read as an integer -- silently, on a program `tur check`
+;; and `tur emit-c` both exited 0 on.
+;;
+;; The filing assumed a perform-site check "has to agree with what an ordinary
+;; call already accepts", and that agreeing meant reproducing the ~300 lines of
+;; `arg_ok` in elab_call_fn_inner.  Measuring what a call actually accepts for
+;; PRIMITIVES shows those lines are about type variables, HKT carriers,
+;; by-value aggregates, borrows and fn values -- not scalars.  Between two plain
+;; primitives a call is exact TypeKind equality with two alias pairs and no
+;; implicit widening at all:
+;;
+;;   (defn f [n : int] ...)     (f 7.25)   rejected: expected int, got float
+;;   (defn f [x : float] ...)   (f 7)      rejected: expected float, got int
+;;   (defn f [n : int] ...)     (f "hi")   rejected: expected int, got cstr
+;;   (defn f [n : int] ...)     int8 arg   rejected
+;;   (defn f [n : int] ...)     bool arg   rejected
+;;   int64 param <- int arg                ACCEPTED (aliases)
+;;   float64 param <- float arg            ACCEPTED (aliases)
+;;
+;; So `perform` now has the same rule for the same shapes -- verifiably, rather
+;; than by imitation -- and it fires only when BOTH sides are plain primitives,
+;; staying silent wherever the call path has a coercion arm (ptr<void>, nil, fn,
+;; tyvar, any, aggregates).  tests/fixtures/perform-arg-primitive-aliases is the
+;; positive half: the two alias pairs, which must keep compiling.
+(defeffect I [n : int] : int)
+
+(defn w [x : float] : int (perform (I x)))
+
+(defn main [] : int
+  (println (handle (w 7.25) (I [n] k) (resume k n)))
+  0)
