@@ -1,0 +1,65 @@
+;; instance-method-call-inside-an-instance-body-takes-the-enclosing-result-type.
+;;
+;; The spec-interning rehydration matches type bindings by NAME, and a class's
+;; type parameter carries one name (`a`) across every instance of that class.
+;; So inside `Dec [Pt]`'s body -- where the active spec binds `a -> Pt` -- a
+;; nested `(dec ...)` on the `int` instance was minted as
+;; `__inst_Dec_dec_int__spec__tur_adt_Result__Pt__cstr_...` even though that
+;; instance's `a` IS `int` by declaration.
+;;
+;; Two things are load-bearing, and the pre-existing
+;; struct-instance-byvalue-result-consumer fixture has only the first:
+;;
+;;   1. A VALUE-STRUCT instance of the same class, which is what gives the
+;;      method a by-value `(Result Pt cstr)` clone to be captured by. What a
+;;      derive-codec macro emits for a defstruct.
+;;   2. The primitive instances FORWARD to a separately-declared typed function
+;;      rather than building the Result inline. An inline `(ok ...)` body gets
+;;      specialized to the same wrong result type, so the clone is internally
+;;      consistent and cc accepts it; a forward returns a hard
+;;      `(Result int cstr)` into a `(Result Pt cstr)` slot and cc rejects it.
+;;
+;; Float fields carry a non-zero fractional part so a carrier/by-value mixup
+;; shows up as truncation rather than coinciding.
+(defstruct Pt [x : int  label : cstr  scale : float])
+
+(defclass Dec [a] (dec [n : int] : (Result a cstr)))
+
+;; The typed reads the instances forward to -- msgpack/decode's mp-get-* shape.
+(defn read-int [n : int] : (Result int cstr)
+  (:: (ok n) (Result int cstr)))
+
+(defn read-cstr [n : int] : (Result cstr cstr)
+  (if (> n 0)
+    (:: (ok "pos") (Result cstr cstr))
+    (:: (ok "nonpos") (Result cstr cstr))))
+
+(defn read-float [n : int] : (Result float cstr)
+  (if (> n 5)
+    (:: (ok 7.25) (Result float cstr))
+    (:: (ok 3.5)  (Result float cstr))))
+
+;; One-line forwards, exactly what the msgpack spice wants to write.
+(definstance Dec [int]   (dec [n] (read-int   n)))
+(definstance Dec [cstr]  (dec [n] (read-cstr  n)))
+(definstance Dec [float] (dec [n] (read-float n)))
+
+;; The value-struct instance. Its body calls the three forwards above under an
+;; explicit ascription -- what derive-msgpack's __mp-decode-field expands to.
+(definstance Dec [Pt] (dec [n]
+  (:: (ok (make-struct Pt
+            (ok-val (:: (dec n) (Result int   cstr)))
+            (ok-val (:: (dec n) (Result cstr  cstr)))
+            (ok-val (:: (dec n) (Result float cstr)))))
+      (Result Pt cstr))))
+
+(defn main [] : int
+  (let [p (ok-val (:: (dec 7) (Result Pt cstr)))]
+    (println (. p x))
+    (println (. p label))
+    (println (. p scale))
+    ;; The primitive instances must still work on their own, unspecialized by
+    ;; any enclosing instance.
+    (println (ok-val (:: (dec 3) (Result int cstr))))
+    (println (ok-val (:: (dec 3) (Result float cstr))))
+    0))
