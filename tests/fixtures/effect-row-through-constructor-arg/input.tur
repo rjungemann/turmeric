@@ -11,10 +11,17 @@
 ;; nor one for EX_GET_FIELD -- so the call edge under the constructor was never
 ;; recorded and the fixpoint never reached the caller.
 ;;
-;; Both walks now fall back to a shared child enumeration rather than treating an
-;; unarmed node as childless, which is the third filing of this exact hole (see
-;; cps-coloring-walk-has-no-arm-for-union-inject and
-;; saffron-any-return-defeats-the-frame-box-rule).  Coloring the caller then
+;; The SEED walk now falls back to a shared child enumeration rather than
+;; treating an unarmed node as childless -- the third filing of this exact hole
+;; (see cps-coloring-walk-has-no-arm-for-union-inject and
+;; saffron-any-return-defeats-the-frame-box-rule).  The EDGE walk got just the
+;; two arms this defect needs, on purpose: it sets `has_indirect` for an
+;; unresolved callee, so a blanket version colored 13 more functions on
+;; tests/fixtures/typed/result-basic (every stdlib HOF calls its callback inside
+;; a `match`) and each newly colored frame LEAKED, because the CPS path does not
+;; emit the region frees the direct path does.  See
+;; docs/reported/cps-edge-walk-misses-nodes-and-colored-frames-leak.md.
+;; Coloring the caller then
 ;; exposed a second layer: a ctor call has no `fn_binding`, so the CPS
 ;; translation took its indirect-callee arm and rejected the non-atomic argument
 ;; outright ("indirect call (non-atomic args)").  The elaboration hoist that

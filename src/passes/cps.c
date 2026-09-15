@@ -897,20 +897,6 @@ static int cps_find_node(CpsNode *nodes, uint32_t n, const Binding *b) {
 static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
                               CpsNode *self);
 
-/* The three walk arguments, bundled so the shared child enumerator can thread
- * them through its single `void *`. */
-typedef struct {
-    CpsNode *nodes;
-    uint32_t n_nodes;
-    CpsNode *self;
-} CpsCollectCtx;
-
-static bool cps_collect_visit(const Expr *c, void *ud) {
-    CpsCollectCtx *cx = (CpsCollectCtx *)ud;
-    cps_collect_calls(c, cx->nodes, cx->n_nodes, cx->self);
-    return false;   /* never stop early -- every edge counts */
-}
-
 static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
                               CpsNode *self) {
     if (!e) return;
@@ -1082,21 +1068,42 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
         case EX_FN:
         case EX_CLOSURE:
             return;
-        /* effect-row-lost-through-a-constructor-argument: every other node kind
-         * walks its evaluated operands through the shared enumerator rather than
-         * dropping the subtree.  A call under an unarmed node recorded no edge, so
-         * the coloring fixpoint never reached it: `(defn mk [] : int (.v (Box (g))))`
-         * with an effectful `g` inferred `#{Ask}` and still came out `uncolored`,
-         * and the built program aborted `tur: unhandled effect`.
+        /* effect-row-lost-through-a-constructor-argument: the aggregate family,
+         * which is where this report's defect lived -- `(Box (g))` is an
+         * EX_MAKE_STRUCT whose field value is the effectful call, and the `.v`
+         * reading it back is an EX_GET_FIELD.  Neither had an arm, so the call
+         * edge under them was dropped and the coloring fixpoint never reached
+         * the caller.
          *
-         * Only the EDGE was missing -- `has_indirect` stays where the EX_CALL and
-         * EX_DYN_CALL arms above set it, so this cannot color a function for an
-         * unresolved callee it does not have. */
-        default: {
-            CpsCollectCtx cx = { nodes, n_nodes, self };
-            (void)cps_visit_children(e, cps_collect_visit, &cx);
+         * DELIBERATELY NOT the shared `cps_visit_children` enumerator that
+         * `cps_directly_uses_control` uses, even though the missing-arm problem
+         * is the same one.  The two walks are not symmetric in cost: this one
+         * sets `has_indirect` for an unresolved callee (CPS0.1 rule 3), so
+         * descending into a node it never descended into before can color a
+         * function that merely calls a callback there.  Measured on
+         * `tests/fixtures/typed/result-basic`, a blanket default colored 13 more
+         * functions -- `result-map`, `option-map`, `option-eq?` and six
+         * typeclass instances among them -- because EX_MATCH had no arm and
+         * every stdlib HOF calls its callback inside a `match`.
+         *
+         * That coloring is defensible on its own terms, and it is not what made
+         * it unshippable: the CPS emission path does not emit the
+         * `tur_region_free` calls the direct path does, so each newly colored
+         * function leaked its Result/Option box (16 bytes in
+         * `typed/result-basic`, caught by tests/run-leak-check.sh -- run.sh
+         * compiles fixtures unsanitized and cannot see it).  Closing that gap is
+         * ownership-subsystem work, not a follow-on to a coloring fix, so the
+         * edge walk stays narrow and the rest is filed as
+         * docs/reported/cps-edge-walk-misses-nodes-and-colored-frames-leak.md. */
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                cps_collect_calls(e->as.make_struct_.field_values[i], nodes, n_nodes, self);
             return;
-        }
+        case EX_GET_FIELD:
+            cps_collect_calls(e->as.get_field_.struct_expr, nodes, n_nodes, self);
+            return;
+        default:
+            return;
     }
 }
 

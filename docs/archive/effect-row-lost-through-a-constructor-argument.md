@@ -19,12 +19,30 @@ back. Each walk was written as a switch over the kinds that existed at the
 time, with `default:` meaning "no children", so **every node kind added since
 has been a silent hole**. This is the third filing of that one shape:
 `cps-coloring-walk-has-no-arm-for-union-inject`,
-`saffron-any-return-defeats-the-frame-box-rule`, and this. So rather than add
-two more arms and wait for the fourth, both walks now fall back to a shared
-child enumeration (`cps_visit_children`) covering every kind that carries an
-evaluated operand. Adding an arm is now a choice about NON-uniform treatment
-(a call edge, a boundary, an unconditional seed), not a prerequisite for the
-subtree being visited at all.
+`saffron-any-return-defeats-the-frame-box-rule`, and this.
+
+So the SEED walk (`cps_directly_uses_control`) now falls back to a shared child
+enumeration (`cps_visit_children`) covering every kind that carries an evaluated
+operand -- safe there, because that walk only answers "is a control op in here",
+so a missing arm could only ever produce a false negative.
+
+**The EDGE walk deliberately did NOT get the same treatment**, and finding out
+why is the more useful half of this fix. `cps_collect_calls` sets `has_indirect`
+for an unresolved callee (CPS0.1 rule 3), so descending into a node it never
+descended into before colors any function that merely calls a callback there.
+Measured on `tests/fixtures/typed/result-basic`, the blanket version colored 13
+more functions -- `result-map`, `option-map`, `option-eq?` and six typeclass
+instances -- because every stdlib HOF calls its callback inside a `match`, which
+the walk had never seen into.
+
+And a newly colored function LEAKS: the CPS emission path does not emit the
+`tur_region_free` the direct path does, so `typed/result-basic` went from clean
+to 16 leaked bytes in `ctor_Result_Ok`. `tests/run.sh` cannot see that (it
+compiles fixtures unsanitized and only diffs stdout); CI's `tur_leak_check` is
+what caught it. So the edge walk got exactly the two arms this defect needs,
+`EX_MAKE_STRUCT` and `EX_GET_FIELD`, which leave the coloring on that fixture
+byte-identical to `main`. The rest is filed as
+[cps-edge-walk-misses-nodes-and-colored-frames-leak](../reported/cps-edge-walk-misses-nodes-and-colored-frames-leak.md).
 
 Coloring `mk` then exposed a second layer the filing could not have seen,
 because nothing had ever got that far: a ctor call carries no `fn_binding`, so
@@ -36,8 +54,18 @@ read too -- which is to say the fix literally produces
 `(let [n (g)] (.v (Box n)))`, the spelling the filing named as the shape a fix
 had to preserve.
 
+A second measurement worth keeping: the hoist must not count a CONSTRUCTOR call
+as a call needing hoisting. A ctor invokes nothing and can never reach a
+`perform` (the same reasoning as `cps_collect_calls`'s ctor leaf exemption), and
+counting one wrapped a pure ctor in a `let` -- which loses the `size_index`
+stamped on the EX_CALL node a line above the hoist site, so TUR-E0260 silently
+stopped firing on `errors/sized-cross-param-reject` and
+`errors/sized-return-claim-gadt-reject`. Only on the INTERPRETED path: `tur
+check` still reported it, so `run.sh` stayed green and only `run-turi.sh`
+caught it.
+
 Pinned by `tests/fixtures/effect-row-through-constructor-arg`. Blast radius:
-9 of 2977 fixtures moved, all codegen snapshots gaining the hoist's temp,
+2 of ~2995 fixtures moved, both codegen snapshots gaining the hoist's temp,
 regenerated in the same change.
 
 Two adjacent CPS-backend limits a colored constructor argument merely *reaches*

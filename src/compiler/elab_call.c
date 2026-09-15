@@ -406,6 +406,29 @@ static bool saffron_operand_has_call(const Expr *op) {
     if (op->type.kind == TY_NIL) return false;
     switch (op->kind) {
         case EX_CALL:
+            /* effect-row-lost-through-a-constructor-argument: a CONSTRUCTOR call
+             * is NOT a call for hoisting purposes.  It stores its
+             * (independently-elaborated) argument values into a fresh aggregate
+             * and invokes nothing, so it can never reach a `perform` -- the same
+             * reasoning as the constructor leaf exemption in `cps_collect_calls`
+             * (docs/archive/history/cps-coloring-overcolors-nonnode-calls.md).
+             * Its own arguments are ordinary expressions and are still walked
+             * below, so `(Box (Inner (g)))` hoists on `(g)` as it should.
+             *
+             * Counting one as a call made the hoist wrap a pure constructor in a
+             * `let`, and a ctor call's Expr carries data its caller reads back
+             * off the EX_CALL node -- `size_index`, stamped by
+             * `sz8_infer_ctor_size_index` just above the hoist site.  Wrapped,
+             * the sized-GADT checks found no index and TUR-E0260 silently
+             * stopped firing (errors/sized-cross-param-reject and
+             * errors/sized-return-claim-gadt-reject, on the INTERPRETED path
+             * only -- `tur check` still reported it, which is why run.sh stayed
+             * green and only run-turi.sh caught it). */
+            if (op->as.call_.ctor) {
+                for (uint32_t i = 0; i < op->as.call_.n_args; i++)
+                    if (saffron_operand_has_call(op->as.call_.args[i])) return true;
+                return false;
+            }
             return true;
         case EX_ASCRIBE:      return saffron_operand_has_call(op->as.ascribe_.inner);
         case EX_UNION_INJECT: return saffron_operand_has_call(op->as.union_inject_.value);

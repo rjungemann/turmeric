@@ -7132,7 +7132,6 @@ static int64_t map_hyget_hydynamic_hyas(void * m, int64_t hash, void * key, void
 static int64_t map_hyeq_hyloop__cps(void * iter_989, void * m2_hyhamt_990, void * keyeq_991, int64_t val_cmp, DK *__kont);
 static int64_t list_hyeq_qu__cps(int64_t l1_1273, int64_t l2_1274, int64_t cmp_fn, DK *__kont);
 static int64_t _un_uncons_hyfmap__cps(int64_t cell_1285, void * f_1286, DK *__kont);
-static int64_t option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o_1072, int64_t f, DK *__kont);
 static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp, DK *__kont) {
     bool __t0;
     int64_t h_993;
@@ -9449,47 +9448,33 @@ static tur_adt_Option__int some__spec__tur_adt_Option__int_int64_t(int64_t x) {
         return __ps_305;
 }
 
-static int64_t option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o, int64_t f, DK *__kont) {
-    tur_adt_Option__int __t0;
-    tur_adt_Option__int __t306 = {0};
-    {
-        tur_adt_Option__int __scrut_v = (o);
-        tur_adt_Option__int *__scrut = &__scrut_v;
-        switch (__scrut->tag) {
-        case 1: {
-            int64_t v_1074 = (int64_t)__scrut->as.Some._0;
-            int64_t __ps_307 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(f)))((void *)(intptr_t)(f), v_1074));
-            if (tur_panicking) return ((int64_t)0);
-            tur_adt_Option__int __ps_308 = (some__spec__tur_adt_Option__int_int64_t(__ps_307));
-            if (tur_panicking) return ((int64_t)0);
-            __t306 = __ps_308;
-            break;
+static tur_adt_Option__int option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t(tur_adt_Option__int o, int64_t f) {
+        tur_adt_Option__int __t306 = {0};
+        {
+            tur_adt_Option__int __scrut_v = (o);
+            tur_adt_Option__int *__scrut = &__scrut_v;
+            switch (__scrut->tag) {
+            case 1: {
+                int64_t v_1074 = (int64_t)__scrut->as.Some._0;
+                int64_t __ps_307 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(f)))((void *)(intptr_t)(f), v_1074));
+                if (tur_panicking) return (tur_adt_Option__int){0};
+                tur_adt_Option__int __ps_308 = (some__spec__tur_adt_Option__int_int64_t(__ps_307));
+                if (tur_panicking) return (tur_adt_Option__int){0};
+                __t306 = __ps_308;
+                break;
+            }
+            case 0: {
+                tur_adt_Option__int __ps_309 = (none__spec__tur_adt_Option__int());
+                if (tur_panicking) return (tur_adt_Option__int){0};
+                __t306 = __ps_309;
+                break;
+            }
+            default: break;
+            }
         }
-        case 0: {
-            tur_adt_Option__int __ps_309 = (none__spec__tur_adt_Option__int());
-            if (tur_panicking) return ((int64_t)0);
-            __t306 = __ps_309;
-            break;
-        }
-        default: break;
-        }
-    }
-    __t0 = __t306;
-    return dk_run(__kont, __dk_reap_ptr((intptr_t)({ tur_adt_Option__int *__bx = (tur_adt_Option__int *)malloc(sizeof(tur_adt_Option__int)); *__bx = (__t0); __bx; })));
+        return __t306;
 }
-__attribute__((unused)) static tur_adt_Option__int option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t(tur_adt_Option__int o, int64_t f) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (TUR_SETJMP(__dkjb) == 0) { __r = option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(o, f, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    tur_adt_Option__int __ret = (*(tur_adt_Option__int *)(__r));
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
+
 static tur_adt_Option__int none__spec__tur_adt_Option__int() {
         tur_adt_Option__int __ps_310 = (ctor_Option_None__int());
         if (tur_panicking) return (tur_adt_Option__int){0};

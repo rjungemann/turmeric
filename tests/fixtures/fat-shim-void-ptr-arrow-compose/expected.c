@@ -7708,7 +7708,6 @@ static int64_t map_hyget_hydynamic_hyas(void * m, int64_t hash, void * key, void
 static int64_t map_hyeq_hyloop__cps(void * iter_1026, void * m2_hyhamt_1027, void * keyeq_1028, int64_t val_cmp, DK *__kont);
 static int64_t list_hyeq_qu__cps(int64_t l1_1310, int64_t l2_1311, int64_t cmp_fn, DK *__kont);
 static int64_t _un_uncons_hyfmap__cps(int64_t cell_1322, void * f_1323, DK *__kont);
-static int64_t either__cps(int64_t on_left, int64_t on_right, int64_t e_1735, DK *__kont);
 static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp, DK *__kont) {
     bool __t0;
     int64_t h_1030;
@@ -10169,45 +10168,31 @@ static int64_t from_hyright(int64_t dflt, int64_t e) {
         return __t372;
 }
 
-static int64_t either__cps(int64_t on_left, int64_t on_right, int64_t e, DK *__kont) {
-    int64_t __t0;
-    int64_t __t373 = 0;
-    {
-        tur_adt_Either *__scrut = (tur_adt_Either *)(intptr_t)(e);
-        switch (__scrut ? __scrut->tag : 0) {
-        case 0: {
-            int64_t l_1736 = (int64_t)__scrut->as.Left._0;
-            int64_t __ps_374 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(on_left)))((void *)(intptr_t)(on_left), l_1736));
-            if (tur_panicking) return ((int64_t)0);
-            __t373 = __ps_374;
-            break;
+static int64_t either(int64_t on_left, int64_t on_right, int64_t e) {
+        int64_t __t373 = 0;
+        {
+            tur_adt_Either *__scrut = (tur_adt_Either *)(intptr_t)(e);
+            switch (__scrut ? __scrut->tag : 0) {
+            case 0: {
+                int64_t l_1736 = (int64_t)__scrut->as.Left._0;
+                int64_t __ps_374 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(on_left)))((void *)(intptr_t)(on_left), l_1736));
+                if (tur_panicking) return ((int64_t)0);
+                __t373 = __ps_374;
+                break;
+            }
+            case 1: {
+                int64_t r_1737 = (int64_t)__scrut->as.Right._0;
+                int64_t __ps_375 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(on_right)))((void *)(intptr_t)(on_right), r_1737));
+                if (tur_panicking) return ((int64_t)0);
+                __t373 = __ps_375;
+                break;
+            }
+            default: break;
+            }
         }
-        case 1: {
-            int64_t r_1737 = (int64_t)__scrut->as.Right._0;
-            int64_t __ps_375 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(on_right)))((void *)(intptr_t)(on_right), r_1737));
-            if (tur_panicking) return ((int64_t)0);
-            __t373 = __ps_375;
-            break;
-        }
-        default: break;
-        }
-    }
-    __t0 = __t373;
-    return dk_run(__kont, (intptr_t)(__t0));
+        return __t373;
 }
-__attribute__((unused)) static int64_t either(int64_t on_left, int64_t on_right, int64_t e) {
-    __dk_entry_depth++;
-    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r;
-    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (TUR_SETJMP(__dkjb) == 0) { __r = either__cps(on_left, on_right, e, __root); }
-    else { __r = __dk_drive_after(); }
-    g_dk_driver = __dksave;
-    int64_t __ret = (int64_t)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
-    return __ret;
-}
+
 static int64_t either_hymap(int64_t f, int64_t e) {
         int64_t __t376 = 0;
         {
