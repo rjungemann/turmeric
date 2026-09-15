@@ -274,6 +274,38 @@ def test_mcp() -> None:
         def call_tool(name: str, args: dict) -> dict:
             return srv.call("tools/call", {"name": name, "arguments": args})
 
+        def tool_text(r, what: str) -> str:
+            """The `text` of a tools/call result, or a legible failure.
+
+            `srv.call` returns None only when the reader hit EOF on the
+            server's stdout -- i.e. the server EXITED mid-session, which is a
+            different and much more serious thing than a tool answering
+            unhelpfully.  Subscripting that None raised
+
+                TypeError: 'NoneType' object is not subscriptable
+
+            several frames from anything meaningful, which is how a server
+            crash came to read as a null result.  Say what actually happened,
+            and include the exit status and whatever the server put on stderr,
+            since on a crash that is the only evidence there is.  See
+            docs/reported/mcp-server-exits-mid-session-on-windows.md.
+            """
+            if r is None:
+                rc = srv.proc.poll()
+                err = ""
+                try:
+                    if srv.proc.stderr is not None:
+                        err = srv.proc.stderr.read() or ""
+                        if isinstance(err, bytes):
+                            err = err.decode("utf-8", "replace")
+                except Exception:
+                    pass
+                check(False,
+                      f"{what}: server closed stdout (exited mid-session); "
+                      f"exit status {rc!r}; stderr: {err[:400]!r}")
+                return ""
+            return r["result"]["content"][0]["text"]
+
         # check_file on a good file: diagnostics array (possibly empty,
         # possibly populated by stdlib-deps).  Either way, response must
         # be valid and isError == false.
@@ -307,14 +339,14 @@ def test_mcp() -> None:
         # hover on `add` (line 4, char 6 in 0-based -- the 'd' of 'add' in
         # `(defn add ...)`).  Should at minimum mention the symbol name.
         r = call_tool("hover", {"path": good_path, "line": 4, "col": 8})
-        hover_text = r["result"]["content"][0]["text"]
+        hover_text = tool_text(r, "hover")
         check("add" in hover_text or "No type information" in hover_text or
               "No symbol" in hover_text,
               f"hover: mentions 'add' or reports miss (got {hover_text[:80]!r})")
 
         # definition on `add` at the same position.
         r = call_tool("definition", {"path": good_path, "line": 4, "col": 8})
-        def_text = r["result"]["content"][0]["text"]
+        def_text = tool_text(r, "definition")
         check("line" in def_text or "No definition" in def_text or "No symbol" in def_text,
               f"definition: returns location or miss (got {def_text[:80]!r})")
 
