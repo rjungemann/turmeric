@@ -11,7 +11,7 @@
 
 (defn run [] : nil
   (handle
-    (call-writer (fn [s] (perform (Write s))))
+    (call-writer (fn [s : cstr] (perform (Write s))))
     (Write [s] k) (do (println s) (resume k nil))))
 
 (defn main [] : int (do (run) 0))

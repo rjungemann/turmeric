@@ -27,5 +27,5 @@
 
 (defn main [] : int
   (handle
-    (do (println (use-writer (fn [s] (perform (Write s))))) 0)
+    (do (println (use-writer (fn [s : cstr] (perform (Write s))))) 0)
     (Write [s] k) (do (println s) (resume k nil))))

@@ -5,21 +5,14 @@
 ;; the integer 42 as a `char *` -- with the declared type two lines above the
 ;; performing call.
 ;;
-;; The general check (agreeing with everything an ordinary call already accepts)
-;; wants the argument-compatibility decision factored out of elab_call_fn_inner;
-;; what is checked here is a LITERAL scalar arriving where the handler can only
-;; read an address.
-;;
-;; The literal restriction is narrower than the filed fix direction proposed --
-;; it said a scalar argument reaching a pointer-shaped parameter "admits no
-;; legitimate program", and it does admit one.  An UNANNOTATED lambda parameter
-;; defaults to `int` at elaboration and is refined later, so
-;; `(fn [msg] (perform (Log msg)))` against a `cstr` parameter reads as an int
-;; argument at the perform site and is perfectly correct; the broader rule broke
-;; seven fixtures on that shape, among them effect-type-alias and
-;; cps-backend-fn-param-effectful, which are the controls for this one.  A
-;; literal's type is never provisional, so this rule has no false positives at
-;; the cost of missing a mismatch that arrives through a variable.
+;; The rule is now the same one an ordinary call applies: a scalar word arriving
+;; where the handler can only read an address. It began life restricted to
+;; LITERAL arguments, because an un-annotated lambda parameter takes the `int`
+;; carrier default and a TY_INT argument was therefore ambiguous. That
+;; restriction is gone -- see errors/perform-arg-unannotated-carrier-param for
+;; why the carrier case is now an error too, and
+;; errors/perform-arg-declared-var-into-pointer-param for the variable form of
+;; this one.
 (defeffect Log [msg : cstr] : int)
 
 (defn work [] : int (perform (Log 42)) 1)

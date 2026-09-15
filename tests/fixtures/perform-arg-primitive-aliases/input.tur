@@ -5,10 +5,10 @@
 ;; that make the rule "exact kind equality" rather than "exact kind equality,
 ;; full stop".
 ;;
-;; The carrier case is the other thing that must keep compiling and is covered
-;; by tests/fixtures/effect-type-alias and cps-backend-fn-param-effectful: an
+;; The carrier case used to be a second thing that had to keep compiling -- an
 ;; un-annotated lambda parameter defaults to `int` and routinely carries a
-;; `cstr`, which is the absence of a declared type rather than a mismatch.
+;; `cstr` -- and it no longer is: that exemption is dropped, because an ordinary
+;; call never had it. See errors/perform-arg-unannotated-carrier-param.
 (defeffect I64 [n : int64]   : int)
 (defeffect F64 [x : float64] : int)
 (defeffect I   [n : int]     : int)

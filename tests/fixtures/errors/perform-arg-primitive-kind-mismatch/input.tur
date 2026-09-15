@@ -23,7 +23,8 @@
 ;; than by imitation -- and it fires only when BOTH sides are plain primitives,
 ;; staying silent wherever the call path has a coercion arm (ptr<void>, nil, fn,
 ;; tyvar, any, aggregates).  tests/fixtures/perform-arg-primitive-aliases is the
-;; positive half: the two alias pairs, which must keep compiling.
+;; positive half: the two alias pairs, which must keep compiling -- they are the
+;; only thing separating this rule from plain kind equality.
 (defeffect I [n : int] : int)
 
 (defn w [x : float] : int (perform (I x)))

@@ -1745,42 +1745,39 @@ static bool perform_param_is_pointer_shaped(const Type *t) {
     }
 }
 
-/* Is this argument's TYPE something the author actually declared, rather than a
- * carrier word whose TY_INT means "one machine word of unknown provenance"?
+/* Did this argument's type come from a parameter the author never annotated --
+ * the carrier default (`saffron_default_param_kind`: TY_INT in a typed file)
+ * whose TY_INT means "one machine word", not "an integer"?
  *
- * Only a type we can stand behind may be compared against the declared
- * parameter, because the carrier case is not a mismatch -- it is the absence of
- * information (see Binding.type_is_carrier_default).  Two answers qualify:
+ * This used to SUPPRESS the check, so that `(fn [msg] (perform (Log msg)))`
+ * against `Log [msg : cstr]` compiled.  It no longer does: an ordinary call
+ * rejects the very same value (`function 'takes-cstr' arg 1: expected cstr, got
+ * int`), and a `perform` that accepted it was the last place the effect ABI was
+ * laxer than the language around it.
  *
- *   - a LITERAL, whose type is never provisional; and
- *   - a variable whose binding carries a DECLARED type -- an annotated
- *     parameter, a global, a let bound to something typed.  This is what the
- *     `type_is_carrier_default` flag exists to tell us, and it is why the check
- *     is no longer literal-only.
+ * What the flag is for now is the DIAGNOSTIC.  A mismatch reported on a
+ * carrier-defaulted parameter is not fixed by changing the argument -- the
+ * value is already the right thing at run time -- but by writing the annotation
+ * that was missing, which is a different instruction from the one an ordinary
+ * type error gives.  So the check fires either way and this only decides
+ * whether the message says so.
  *
- * A `let` bound directly to a carrier-defaulted parameter inherits the flag at
- * its binding site (elab_let), so `(fn [msg] (let [m msg] (perform (Log m))))`
- * is still correctly declined one indirection later. */
-static bool perform_arg_type_is_declared(const Expr *a) {
+ * An un-annotated `let` bound directly to such a parameter inherits the
+ * provenance (elab_let), so `(let [m msg] (perform (Log m)))` gets the same
+ * advice one indirection along. */
+static bool perform_arg_is_unannotated_carrier(const Expr *a) {
     while (a) {
         switch (a->kind) {
             case EX_VAR:
                 return a->as.var.binding &&
-                       !a->as.var.binding->type_is_carrier_default;
+                       a->as.var.binding->type_is_carrier_default;
             case EX_ASCRIBE:     a = a->as.ascribe_.inner;    break;
             case EX_CAST:        a = a->as.cast_.expr;        break;
             case EX_REINTERPRET: a = a->as.reinterpret_.expr; break;
-            /* Everything else -- a literal, a call result, a field read, an
-             * operator -- carries the type the language assigned it, and an
-             * ordinary CALL type-checks those against a declared parameter with
-             * no provenance test whatsoever.  Trusting them here is what makes
-             * `perform` agree with a call rather than lag it: `(perform (Log
-             * (mk)))` with `mk : int` against `Log [msg : cstr]` was accepted
-             * while `(takes-cstr (mk))` two lines away was rejected. */
-            default:             return true;
+            default:             return false;
         }
     }
-    return true;
+    return false;
 }
 
 /* perform-does-not-typecheck-its-arguments, second pass: the PRIMITIVE half of
@@ -2019,8 +2016,6 @@ Expr *elab_perform(Elab *e, const Form *call) {
                 ? effect->constructor->param_full_types[i] : NULL;
             Type want = want_full ? *want_full
                                   : type_from_kind(effect->constructor->param_types[i]);
-            /* Both rules need an argument whose type the author declared --
-             * a carrier word is the absence of information, not a mismatch. */
             TypeKind wnorm = perform_primitive_norm(want.kind);
             TypeKind gnorm = perform_primitive_norm(args[i]->type.kind);
             bool primitive_mismatch =
@@ -2028,8 +2023,7 @@ Expr *elab_perform(Elab *e, const Form *call) {
             bool scalar_into_pointer =
                 perform_param_is_pointer_shaped(&want) &&
                 perform_arg_is_scalar_word(&args[i]->type);
-            if ((primitive_mismatch || scalar_into_pointer) &&
-                perform_arg_type_is_declared(args[i])) {
+            if (primitive_mismatch || scalar_into_pointer) {
                 const Symbol *pn = effect->constructor->param_names
                     ? effect->constructor->param_names[i] : NULL;
                 char pbuf[96];
@@ -2045,6 +2039,25 @@ Expr *elab_perform(Elab *e, const Form *call) {
                     scalar_into_pointer
                         ? " -- the handler would read the value as an address"
                         : "");
+                /* The carrier case: the value is already the right thing at run
+                 * time and the argument does not want changing -- the missing
+                 * annotation does.  Say that, rather than leaving the author to
+                 * read a plain type error against a parameter they never
+                 * typed. */
+                if (perform_arg_is_unannotated_carrier(args[i]))
+                    diag_emit(DIAG_NOTE,
+                        effect_call_f->as.list.items[i + 1]->span,
+                        "this parameter has no type annotation, so it took the "
+                        "default '%s' carrier; annotate it (e.g. "
+                        "'[%.*s : %s]') to give it the declared type",
+                        type_name(args[i]->type),
+                        (int)(args[i]->kind == EX_VAR && args[i]->as.var.binding
+                              && args[i]->as.var.binding->name
+                                  ? args[i]->as.var.binding->name->len : 1),
+                        (args[i]->kind == EX_VAR && args[i]->as.var.binding
+                         && args[i]->as.var.binding->name
+                             ? args[i]->as.var.binding->name->name : "x"),
+                        type_name(want));
                 return NULL;
             }
         }

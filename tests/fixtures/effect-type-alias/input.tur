@@ -9,7 +9,7 @@
 (defstruct App :copy [run : fn #fx{Log}])
 
 (defn main [] : int
-  (let [app (make-struct App (fn [msg] (perform (Log msg))))]
+  (let [app (make-struct App (fn [msg : cstr] (perform (Log msg))))]
     (handle
       (do (.run app "type alias test") 0)
       (Log [msg] k) (do (println msg) (resume k nil)))))

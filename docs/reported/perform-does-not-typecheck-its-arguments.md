@@ -1,9 +1,10 @@
 # `perform` does not type-check its arguments at all
 
 **Status: open, NARROWED TWICE (2026-09-15).** Arity is fully checked on both
-sides; primitive argument types are checked and now agree with an ordinary
-call. What remains is aggregates, `ptr<void>`-shaped parameters, and one
-deliberate laxness that wants a human decision (see "The carrier question").
+sides; primitive argument types are checked and now agree with an ordinary call
+exactly -- the carrier exemption that was the last divergence has been dropped.
+What remains is aggregates, `ptr<void>`-shaped parameters, and the `arg_ok`
+factoring for the non-primitive cases.
 
 ## What is fixed
 
@@ -79,53 +80,70 @@ So the fix records the missing information rather than guessing at it:
 `Binding.type_is_carrier_default`, set at the two sites that take
 `saffron_default_param_kind` and cleared by an annotation (and by the
 bidirectional inference, when it fires). An un-annotated `let` bound directly to
-such a parameter inherits the provenance, so `(let [m msg] (perform (Log m)))`
-is declined one indirection along too. With a declared `int` now distinguishable
-from a carrier `int`, the check reaches variables, call results, field reads and
-operators -- everything except a carrier variable.
+such a parameter inherits the provenance. With a declared `int` now
+distinguishable from a carrier `int`, the check reaches variables, call results,
+field reads and operators.
+
+That flag first served to SUPPRESS the check on a carrier argument. It no longer
+does -- see the next section -- and now serves the **diagnostic** instead: a
+mismatch on a carrier-defaulted parameter is not fixed by changing the argument,
+since the value is already the right thing at run time, but by writing the
+annotation that was missing. So the error carries a note that names it:
+
+```
+error [TUR-E0001]: effect 'Log' declares parameter 'msg' as 'cstr', but this
+                   argument has type 'int' -- the handler would read the value
+                   as an address
+note: this parameter has no type annotation, so it took the default 'int'
+      carrier; annotate it (e.g. '[msg : cstr]') to give it the declared type
+```
 
 Fixtures: `errors/perform-arity-mismatch`,
 `errors/handler-clause-arity-mismatch`,
 `errors/perform-arg-scalar-into-pointer-param`,
 `errors/perform-arg-declared-var-into-pointer-param`,
-`errors/perform-arg-primitive-kind-mismatch`, and the positive
-`perform-arg-primitive-aliases`. The carrier controls are the pre-existing
-`effect-type-alias` and `cps-backend-fn-param-effectful`.
+`errors/perform-arg-primitive-kind-mismatch`,
+`errors/perform-arg-unannotated-carrier-param`, and the positive
+`perform-arg-primitive-aliases` (the two alias pairs, the only thing separating
+this rule from plain kind equality).
 
-## The carrier question -- a decision, not a bug
+## The carrier exemption -- dropped (2026-09-15)
 
-Worth stating plainly, because it is the crux of what is left and it is
-**deliberately** unresolved here: the ordinary call path does NOT exempt a
-carrier parameter. It rejects one.
+For a short while `perform` exempted a carrier-defaulted argument from the
+check, so that `(fn [msg] (perform (Log msg)))` against `Log [msg : cstr]` kept
+compiling. That exemption is **gone**, because the ordinary call path never had
+it and rejects the very same value:
 
 ```turmeric
-(defstruct App :copy [run : fn])
+(defn takes-cstr [s : cstr] : int 0)
 (make-struct App (fn [msg] (takes-cstr msg)))
 ;; error [TUR-E0001]: function 'takes-cstr' arg 1: expected cstr, got int
 ```
 
-The identical `msg` reaching a `perform` is accepted, by the exemption above.
-So `perform` is now *laxer than a call* in exactly one place, and the seven
-corpus fixtures depend on that laxness -- written as function calls they would
-not compile today.
+The identical `msg` reaching a `perform` compiled. That made the effect ABI the
+one place in the language where an un-annotated parameter silently escaped its
+declared type, so keeping the exemption would have left this report's headline
+-- "`perform` does not type-check its arguments" -- true for the most common
+shape in the corpus.
 
-Two defensible positions, and picking between them is a language decision rather
-than a defect fix:
+**The migration cost was one annotation per site, and nothing else.** All seven
+affected fixtures were fixed by writing the type the parameter always wanted
+(`(fn [s : cstr] ...)`), and every one of them produces byte-identical output
+afterwards -- which is the evidence that the annotation was the only thing
+missing and that no behaviour depended on the laxness.
 
-1. **Keep the exemption** (what is implemented). `perform` checks what it can;
-   a carrier parameter stays unchecked on both the perform and handler sides.
-2. **Drop it**, making `perform` agree with a call exactly. Then those seven
-   fixtures become errors and want `(fn [msg : cstr] ...)` annotations -- which
-   is arguably what they should have said all along, and would close the last
-   type hole at this site.
+One of the seven is worth singling out. `errors/effect-fn-type-mismatch` asserts
+a TUR-E0009 effect-row violation, and its un-annotated parameter made the new
+TUR-E0001 fire first and mask it. The annotation is load-bearing there, not
+decoration -- a reminder that a new check can hide an existing one rather than
+only adding to it.
 
-(2) is the more principled end state and is a small change (delete the
-`perform_arg_type_is_declared` guard); it is not taken here because it changes
-what existing, working programs compile.
+Pinned by `errors/perform-arg-unannotated-carrier-param`, which keeps the
+carrier shape in the corpus as an ERROR (with its annotation note) rather than
+letting it disappear from the fixtures altogether.
 
 ## What remains
 
-- **The carrier question above** -- the largest remaining hole, and a decision.
 - **Aggregates.** A by-value struct/ADT argument whose def differs from the
   declared parameter's is unchecked; `TY_STRUCT` / `TY_ADT` are excluded from
   the primitive rule because a call has real coercion behaviour for them.

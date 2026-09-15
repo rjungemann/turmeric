@@ -7,7 +7,7 @@
 (defstruct Emitter :copy [run : fn #fx{Emit}])
 
 (defn main [] : int
-  (let [em (make-struct Emitter (fn [s] (perform (Emit s))))]
+  (let [em (make-struct Emitter (fn [s : cstr] (perform (Emit s))))]
     (handle
       (do (.run em "struct field row") 0)
       (Emit [s] k) (do (println s) (resume k nil)))))
