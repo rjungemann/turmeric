@@ -4832,8 +4832,61 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         } else if (n_bindings <= ABI_TYPE_BINDINGS_MAX) {
             /* (2) re-hydrate carrier-collapsed bindings by name. */
             bool any = false;
+            /* instance-method-call-inside-an-instance-body-takes-the-enclosing-
+             * result-type: the rehydration below matches by NAME, and a class's
+             * type parameter carries ONE name across every instance of that
+             * class.  When the CALLEE is itself an instance method that name is
+             * not free -- its own instance pins it, `__inst_D_dec_int`'s `a` IS
+             * `int` by declaration -- so taking the enclosing spec's binding for
+             * it is the tyvar-name capture of generic-unwrap-specializes-by-the-
+             * enclosing-type-argument, one layer up.  Inside `D [Pt]`'s body the
+             * active spec binds that same `a` to `Pt`, so a nested `(dec n)`
+             * minted `__inst_D_dec_int__spec__tur_adt_Result__Pt__cstr_...`
+             * whose body returns `Result int cstr`, and cc rejected the program.
+             *
+             * Invisible while every instance of the class is carrier-shaped --
+             * both spellings c-name to int64_t -- so it surfaces only once one
+             * instance has a by-value result.  That is why msgpack's four
+             * primitive DecodeMp instances had to stay hand-boxed inline C:
+             * `derive-msgpack` mints a by-value struct instance of the same
+             * class, and the forwards then miscompiled.
+             *
+             * Resolve the callee's instance once, outside the loop. */
+            const Expr *callee_fe = emit_abi_find_fn_expr(
+                items, n_items, call->as.call_.fn_binding);
+            FnDef *callee_fd = (callee_fe && callee_fe->kind == EX_FN_DEF)
+                                 ? callee_fe->as.fn_def_.fn : NULL;
+            const TypeClassInstance *callee_inst =
+                callee_fd ? callee_fd->owner_instance : NULL;
+            const TypeClass *callee_cls =
+                callee_inst ? callee_inst->typeclass : NULL;
             for (uint8_t i = 0; i < n_bindings; i++) {
                 rehydrated[i] = bindings[i];
+                /* A name the callee's own instance pins: take the pin from the
+                 * instance and skip the by-name search entirely.  Deliberately
+                 * does NOT set `any` -- this clause only ever WITHHOLDS a
+                 * substitution that was wrong, so on its own it leaves the
+                 * binding carrier-collapsed exactly as before the active spec
+                 * existed.  When some other binding does adopt `rehydrated`,
+                 * this entry then carries the instance's true type arg rather
+                 * than the enclosing instance's. */
+                if (callee_cls && callee_cls->type_params &&
+                    callee_inst->type_args && bindings[i].name) {
+                    uint8_t np = callee_cls->n_type_params < callee_inst->n_type_args
+                                   ? callee_cls->n_type_params
+                                   : callee_inst->n_type_args;
+                    bool pinned_by_instance = false;
+                    for (uint8_t k = 0; k < np; k++) {
+                        const Symbol *tp = callee_cls->type_params[k];
+                        if (tp && tp->name &&
+                            strcmp(tp->name, bindings[i].name) == 0) {
+                            rehydrated[i].type = callee_inst->type_args[k];
+                            pinned_by_instance = true;
+                            break;
+                        }
+                    }
+                    if (pinned_by_instance) continue;
+                }
                 /* constrained-loop redirect-ABI coherence (defect #2): a binding
                  * whose VALUE is a parametric container over the constraint var
                  * (`A -> (Vec A)`, ok's element tyvar happening to share the name
