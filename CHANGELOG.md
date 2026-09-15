@@ -2,6 +2,90 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.48.0] -- 2026-09-15
+
+### Added
+
+- **An "Introducing Saffron" tour guide.** A first tour of the dialect in the
+  order a newcomer meets it -- Try Turmeric, `println`, flow control, functions,
+  ADTs, typeclasses, effects -- with all 23 examples written twice, `#lang
+  saffron` and `#lang saffron/sweet`, checked to the same AST by
+  `tools/check-guide-pairs.py` and compiled and run by
+  `tests/fixtures/docs-introducing-saffron-examples`. `saffron-guide.md` stays
+  the reference; the two cross-link, and both are now indexed in
+  `docs/guides/README.md`. Writing it turned up the five Saffron defects fixed
+  below.
+
+### Changed
+
+- **`perform` typechecks its arguments and its arity, like an ordinary call.**
+  Neither side of the effect ABI compared itself against the `defeffect`
+  declaration: too few arguments segfaulted (the slot array is sized by the
+  declaration, and the handler read the uninitialized tail slots), too many were
+  silently dropped, and a handler clause binding the wrong number did the same
+  in both directions. All four are now `TUR-E0002`. Argument types are checked
+  too, applying exactly the rule an ordinary call applies between two plain
+  primitives and staying silent wherever a call has a coercion arm.
+
+  **Migration:** an unannotated lambda parameter takes the `int` carrier
+  default, and `perform` used to exempt it -- which made the effect ABI the one
+  place in the language where a parameter silently escaped its declared type.
+  That exemption is gone. Write the annotation the parameter always wanted,
+  `(fn [msg : cstr] ...)`; all seven corpus fixtures fixed that way produce
+  byte-identical output, and the error carries a note naming the fix.
+- **Every sidebar on the site is sans-serif,** set on the container rather than
+  on the links, so the generated API reference, the guides, and the
+  hand-written pages read as one component; the tour's rail is centered.
+
+### Fixed
+
+- **The five defects found writing the Saffron tour.** `defeffect` hardcoded
+  `int` for an unannotated parameter instead of the dialect's own default, and
+  `perform` ran neither the `any` widen nor the checked unbox, so an `any`
+  argument reaching a concrete parameter printed an empty line; `.method` on an
+  `any` holding a pass-by-pointer ADT emitted C that `cc` rejects; a Saffron
+  function that both performed and pushed or read a vector element crossed the
+  CPS seam with a `tur_tagged_t` where the vector helpers declare the carrier;
+  and a dynamic operator node (`+` on an `any`) was invisible to the effect and
+  CPS coloring walks, so an enclosing handler was reported unreachable
+  (`TUR-W0033`) and the caller went uncolored.
+- **A constructor argument no longer loses its effect row.** Neither walk in
+  `src/passes/cps.c` had an arm for `EX_MAKE_STRUCT` or `EX_GET_FIELD`, and each
+  was a `switch` whose `default` meant "no children" -- the third filing of that
+  one shape. Both walks now fall back to a shared child enumeration, so adding
+  an arm is a choice about non-uniform treatment rather than a prerequisite for
+  being visited. A constructor call is exempt from the hoist probe (it invokes
+  nothing and can never reach a `perform`), which keeps the sized-GADT checks
+  reading the `size_index` off the un-wrapped node.
+- **`__tur_any_drop` is deep.** It freed the payload box without first releasing
+  what the payload itself owned, so everything below the first level of a nested
+  value leaked with no function call involved anywhere: `(Cons 1 (Cons 2 (Nil)))`
+  leaked one box, and a third level leaked two. `EX_UNION_INJECT` also gained an
+  arm in two more ownership walks, a wrapper forwarding a class method now owns
+  the payload box it returns, and the return-position `any` widen hoist moved
+  into its own entry point rather than sitting in the shared helper, where it
+  skipped three stamps and reinstated a per-widen malloc.
+- **A generic no longer resolves a callee's type variable out of the caller's
+  bindings.** `emit_abi_register_call` matched type bindings by NAME, so stdlib's
+  `unwrap` quantifying over `A` inside a generic that also quantifies over `A`
+  specialized to the wrong type -- on the argument side, and separately on the
+  result side, where a bare-tyvar recovery undid the argument fix. A class's type
+  parameter carries one name across every instance, so an instance method's own
+  instance had the same collision. Call-site argument types now win. A
+  constrained generic whose body tail-calls a return-type-directed class method
+  also bridges the carrier return its monomorphized spec declares, and a pinned
+  `@TypeName` dispatch keeps an opaque result type instead of rendering `<adt>`.
+- **An integer literal past the range is an error, not a silent wrap.**
+  `read_number` accumulated the literal straight into an `int64_t`, which wrapped
+  silently and was UB besides. It now accumulates the magnitude into a
+  `uint64_t`, range-checks it once the type suffix is known, and applies the sign
+  in unsigned arithmetic; `0x`/`0b` literals stay exempt, so
+  `0xFFFFFFFFFFFFFFFF` still means `-1`.
+- **`tell` is guarded against the MinGW/MSVC libc name.** MinGW declares
+  `long tell(int)` in `<io.h>` and glibc declares it nowhere, so two fixtures
+  naming a function `tell` failed to compile on the MSYS2/UCRT64 leg; the
+  `libc_names[]` table that already handled `abs` was simply missing it.
+
 ## [0.47.0] -- 2026-09-12
 
 ### Added

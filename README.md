@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.47.0` -- Unwinds `defer` innermost-first on every exit path, lands the lattice typeclass vocabulary (`Semigroup`, `Monoid`, join/meet), and fixes a cluster of constrained-generic dispatch defects.
+**Latest release:** `v0.48.0` -- Makes `perform` typecheck its arguments and arity like an ordinary call (a breaking change; annotate the parameter), fixes the five Saffron defects found writing the new "Introducing Saffron" tour guide, and makes `__tur_any_drop` deep so nested `any` payloads stop leaking.
 
 ## What
 
