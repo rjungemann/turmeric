@@ -5079,6 +5079,111 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
          * strictly better than today's silent int64 lowering at the call. */
     }
 
+    /* generic-unwrap-specializes-by-the-enclosing-type-argument: the binding
+     * composition above resolves this callee's tyvars out of the ENCLOSING
+     * generic's binding set, and it does so BY NAME.  stdlib's `unwrap`
+     * quantifies over `A`, so a call to it from any generic that also names its
+     * parameter `A` had `unwrap`'s own `A` captured by the caller's:
+     * `(unwrap (an-option-int))` inside `(defn firstn [A] ...)` specialized to
+     * `unwrap__spec__double_tur_adt_Option__float` and was then handed an
+     * `Option__int`.  The defect hides while the enclosing generic is only ever
+     * instantiated at the type the inner Option happens to hold -- right and
+     * wrong coincide at `A = int` -- so it is the SECOND instantiation that
+     * breaks code nobody touched.
+     *
+     * A concrete argument at the call site is unambiguous, so let it correct a
+     * capture: unify each declared parameter type against its actual argument's
+     * type and take that over the inherited binding.  Deliberately narrow --
+     * every condition below was measured against a fixture that regressed
+     * without it, so this fires only where a capture is possible at all:
+     *
+     *   - the callee is an ordinary global defn, NOT a typeclass method (no
+     *     `dict_arg`, no `owner_instance`).  An instance dispatch resolves its
+     *     class var from the RECEIVER and the dispatch paths need that binding
+     *     verbatim;
+     *   - the parameter pins its tyvar INSIDE a type application (`(Option A)`),
+     *     so the argument's own head type determines it.  A bare-tyvar parameter
+     *     (`x : A`) is whatever the caller says it is, which is exactly what the
+     *     instance paths resolve from the receiver;
+     *   - that application's spine head is a concrete constructor, not a
+     *     higher-kinded tyvar -- the unifier used here walks positionally and
+     *     has no hole logic (see the note at the guard itself);
+     *   - the argument's type is concrete AS WRITTEN, not concrete only after
+     *     being resolved through the active spec.  An argument that mentions the
+     *     enclosing generic's tyvars genuinely depends on it, and resolving it
+     *     through the spec is right there; this correction is only for an
+     *     argument whose type has nothing to do with the enclosing type
+     *     parameter -- the shape the report names, and the only one a name
+     *     collision can misresolve.
+     *
+     * A pattern that does not line up with its argument collects nothing, so
+     * the pass can only ever narrow. */
+    AbiTypeBinding site_fixed[ABI_TYPE_BINDINGS_MAX];
+    bool site_corrected = false;
+    if (!borrow_path && fd && bindings && n_bindings > 0 &&
+        n_bindings <= ABI_TYPE_BINDINGS_MAX && call->as.call_.args &&
+        !call->as.call_.dict_arg && !fd->owner_instance &&
+        fn_binding->type.kind == TY_FN) {
+        AbiTypeBinding site[ABI_TYPE_BINDINGS_MAX];
+        uint8_t n_site = 0;
+        for (uint8_t i = 0; i < fd->n_params && i < call->as.call_.n_args; i++) {
+            const Type *expected_full = (fn_binding->type.as.fn.arg_full_types &&
+                                         fn_binding->type.as.fn.arg_full_types[i])
+                ? fn_binding->type.as.fn.arg_full_types[i]
+                : &fd->params[i]->type;
+            /* Only a parameter whose tyvar sits INSIDE a type application
+             * (`o : (Option A)`) is pinned by its argument's own head type. A
+             * bare-tyvar parameter (`x : A`) is whatever the caller says it is,
+             * which is what the instance-dispatch paths resolve from the
+             * receiver -- leave those alone. */
+            if (!expected_full || expected_full->kind != TY_APP ||
+                !emit_abi_type_has_concrete_named_tyvar(expected_full)) continue;
+            /* The spine head must be a concrete constructor too.  A
+             * higher-kinded parameter (`m a`, the Monad shape) binds its head
+             * to a partial application that may carry a HOLE -- `(Result _ cstr)`
+             * saturates at position 0, not on the end -- and
+             * `emit_abi_unify_collect` walks fn/arg positionally with no hole
+             * handling, so it would transpose `(Result int cstr)` into
+             * `m -> (Result int)`, `a -> cstr`.  `emit_abi_instantiate_type`
+             * has the hole logic; this unifier does not, so it must not be
+             * asked the question. */
+            { const Type *head = expected_full;
+              while (head && head->kind == TY_APP && head->as.app.fn)
+                  head = head->as.app.fn;
+              if (!head || head->kind == TY_TYVAR) continue; }
+            const Expr *arg_e = call->as.call_.args[i];
+            if (!arg_e) continue;
+            Type at = arg_e->type;
+            /* The argument's type must be concrete AS WRITTEN -- not concrete
+             * after being resolved through the enclosing spec.  An argument
+             * that mentions the enclosing generic's tyvars genuinely depends on
+             * it, and resolving it through the spec is exactly right there;
+             * this correction is only for an argument whose type has nothing to
+             * do with the enclosing type parameter, which is the shape the
+             * report names and the only one a name collision can misresolve. */
+            if (at.kind == TY_UNKNOWN || at.kind == TY_TYVAR) continue;
+            if (at.kind != TY_APP) continue;
+            if (emit_abi_type_has_concrete_named_tyvar(&at)) continue;
+            emit_abi_unify_collect(expected_full, &at, site, &n_site,
+                                   ABI_TYPE_BINDINGS_MAX);
+        }
+        bool site_wins = false;
+        for (uint8_t i = 0; i < n_bindings; i++) {
+            site_fixed[i] = bindings[i];
+            for (uint8_t j = 0; j < n_site; j++) {
+                if (!site[j].name || !bindings[i].name) continue;
+                if (strcmp(site[j].name, bindings[i].name) != 0) continue;
+                if (emit_abi_type_has_concrete_named_tyvar(&site[j].type)) continue;
+                if (type_eq(site[j].type, bindings[i].type) &&
+                    site[j].type.kind == bindings[i].type.kind) continue;
+                site_fixed[i].type = site[j].type;
+                site_wins = true;
+                break;
+            }
+        }
+        if (site_wins) { bindings = site_fixed; site_corrected = true; }
+    }
+
     bool abi_changes = false;
     Type arg_types[MAX_FN_ARITY];
     uint8_t n_spec_args;
@@ -5255,6 +5360,27 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         result_type = emit_abi_instantiate_type(
             &result_type, spec_bindings, spec_n_bindings, ctx->type_arena);
     }
+    /* generic-unwrap-specializes-by-the-enclosing-type-argument: the capture
+     * reaches the RESULT too.  `unwrap`'s declared result is its own `A`, and
+     * the spec body's call node already carries the enclosing generic's
+     * substitution, so correcting only the arguments left the clone named
+     * `unwrap__spec__double_tur_adt_Option__int` -- a double landing in the
+     * int64 slot the concrete `(Option int)` calls for.  That compiles and even
+     * prints the right answer for a small integer, which is the worst shape it
+     * could take: cc reports it as -Wfloat-conversion and the truncation waits
+     * for a payload that does not survive it.  Re-derive a bare-tyvar result
+     * from the corrected bindings, which now say `A -> int`. */
+    bool site_pins_result = false;
+    if (site_corrected && !result_type_override &&
+        generic_result.kind == TY_TYVAR && bindings && n_bindings > 0) {
+        Type rr = emit_abi_instantiate_type(&generic_result, bindings,
+                                            n_bindings, ctx->type_arena);
+        if (rr.kind != TY_TYVAR && rr.kind != TY_UNKNOWN &&
+            !emit_abi_type_has_concrete_named_tyvar(&rr)) {
+            result_type = rr;
+            site_pins_result = true;
+        }
+    }
     /* defopaque-struct-payload-fails-through-unsafe-helper: a
      * return-only-polymorphic callee (bare-tyvar result, no tyvar-carrying
      * argument) has its `call->type` collapsed to the int64 carrier at elab
@@ -5345,7 +5471,19 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * declares int64 -- constrained-loop-vec-push-byvalue-result-element).  The
      * aggregate case has its own recovery path above, keyed on the CALL's own
      * bindings rather than the active spec's. */
+    /* generic-unwrap-specializes-by-the-enclosing-type-argument: `site_pins_result`
+     * is the result-side half of the same name capture.  This recovery resolves
+     * the CALLEE's own result tyvar through the ACTIVE SPEC's bindings, by name
+     * -- which is right when only the spec knows the element, and wrong when the
+     * call site has already pinned it.  `unwrap`'s `A` is `int` because its
+     * argument is an `(Option int)`, whatever the enclosing generic happens to
+     * call its own `A`; without this guard the correction above was undone here
+     * and the clone came back `unwrap__spec__double_tur_adt_Option__int` -- a
+     * double landing in an int64 slot, which cc reports as -Wfloat-conversion
+     * and which prints the right answer for a small integer while waiting for a
+     * payload that does not survive the truncation. */
     if (!result_type_override &&
+        !site_pins_result &&
         ctx->current_abi_specialization &&
         fn_binding->type.as.fn.result_kind == TY_TYVAR &&
         generic_result.kind == TY_TYVAR &&

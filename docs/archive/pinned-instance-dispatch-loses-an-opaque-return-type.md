@@ -1,5 +1,31 @@
 # `@T`-pinned instance dispatch loses the method's return type when it is a `defopaque`
 
+**RESOLVED 2026-09-14** by fix direction 1, and the report's read of the
+evidence was right: the pinned path did not carry the method's declaration
+through.
+
+The mechanism is one line narrower than "reports the result from the instance's
+head type constructor". `elab_typeclasses.c`'s `@TypeName` witness path rebuilt
+the result as `type_from_kind(binding->type.as.fn.result_kind)` -- **from the
+TypeKind alone**. That is lossless only for a primitive, which is exactly why
+the `cstr` control passed: `TY_CSTR` *is* the whole type. A `defopaque` lowers
+to a `TY_ADT` whose identity lives in `as.adt_.def`, and `type_from_kind` has
+nowhere to put it, so the result came back as a def-less ADT -- rendered
+`<adt>`, a type nobody wrote.
+
+The witness path now prefers the method's declared `result_full_type`,
+substituting the instance's own type args for the class's type parameters
+(`elab_subst_class_tyvars`, the same substitution the method's own elaboration
+uses), and falls back to the kind when the result is still abstract after that
+-- so a return-only-dispatch method whose result *is* the class variable keeps
+taking the carrier, as before. A `defopaque` return now needs no more ceremony
+than a `cstr` one.
+
+Pinned by `tests/fixtures/pinned-dispatch-opaque-return`, which carries the
+`cstr`-returning class alongside as the control the report asked for.
+
+## Original report
+
 **Severity: low-medium** -- a compile-time rejection with a clear one-token
 workaround, so nothing is silently wrong. It is filed because the diagnostic
 names a type the user never wrote (`<adt>`), which makes the cause hard to

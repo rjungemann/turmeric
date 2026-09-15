@@ -1859,6 +1859,18 @@ static bool build_inst_type_suffix(const Type *type_args,
     return true;
 }
 
+/* True when `t` still mentions a named type variable anywhere in its spine.
+ * Used by the `@TypeName` pinned-dispatch path to tell a result type that is
+ * fully resolved (`Buf`, `(Option int)`) from one that is still abstract. */
+static bool tc_type_mentions_tyvar(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR) return true;
+    if (t->kind == TY_APP)
+        return tc_type_mentions_tyvar(t->as.app.fn) ||
+               tc_type_mentions_tyvar(t->as.app.arg);
+    return false;
+}
+
 /* ECS E2d-P6 (Issue 2 secondary): substitute a class method's parameter type --
  * which may reference the class's type parameters as named TY_TYVARs (e.g.
  * `val : E` parses to TY_TYVAR("E")) -- with the concrete instance type args, so
@@ -5886,10 +5898,38 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                 if (!args_w[i]) return NULL;
             }
 
-            /* Determine result type from the method's binding. */
+            /* Determine result type from the method's binding.
+             *
+             * pinned-instance-dispatch-loses-an-opaque-return-type: this used
+             * to rebuild the result from `result_kind` ALONE, which is lossless
+             * only for a primitive -- `cstr` survives, but a `defopaque` (or any
+             * nominal type) comes back as a bare TY_ADT with no def, and the
+             * call site is then told it got `<adt>`, a type the user never
+             * wrote.  The receiver-dispatch path carries the declaration
+             * through, so `(enc @Cons xs)` demanded a hand-written
+             * `(:: ... Buf)` that `(enc xs)` does not.  Prefer the declared
+             * full type, substituting the instance's own type args for the
+             * class's type parameters the way the method's elaboration does;
+             * fall back to the kind when the result is still abstract after
+             * that (a return-only-dispatch method whose result is the class
+             * var takes the carrier, as before). */
             Type result_type_w;
             if (witness_method_fn->binding->type.kind == TY_FN) {
                 result_type_w = type_from_kind(witness_method_fn->binding->type.as.fn.result_kind);
+                const Type *rft_w = witness_method_fn->binding->type.as.fn.result_full_type;
+                if (rft_w) {
+                    Type rf_w = *rft_w;
+                    if (witness_inst->typeclass && witness_inst->typeclass->type_params &&
+                        witness_inst->type_args) {
+                        rf_w = elab_subst_class_tyvars(
+                            e->arena, rf_w,
+                            witness_inst->typeclass->type_params,
+                            witness_inst->typeclass->n_type_params,
+                            witness_inst->type_args, witness_inst->n_type_args);
+                    }
+                    if (!tc_type_mentions_tyvar(&rf_w) && rf_w.kind != TY_UNKNOWN)
+                        result_type_w = rf_w;
+                }
             } else {
                 result_type_w = witness_method_fn->body ? witness_method_fn->body->type : TYPE_INT;
                 if (result_type_w.kind == TY_UNKNOWN || result_type_w.kind == TY_NIL)

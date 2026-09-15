@@ -1,5 +1,43 @@
 # An integer literal past the int64 range wraps silently, and `-9223372036854775808` is UB
 
+**RESOLVED 2026-09-14.** All three symptoms, by the four fix directions the
+report gives, and the root cause was exactly as filed.
+
+`read_number` now accumulates the literal's **magnitude** into a `uint64_t`
+(`mag_push`, which pins at `UINT64_MAX` and raises a flag instead of wrapping),
+so the accumulation is defined whatever the input -- that kills the `:320` UB
+and, with it, the silent wrap. The range check happens once the type suffix has
+been read, against the bound for the sign in hand (`INT64_MAX`, or
+`INT64_MAX + 1` when a `-` was lexed), and emits
+"integer literal overflows int64 range (-9223372036854775808..9223372036854775807)"
+in the shape the sized suffixes already used. The sign is then applied as
+`~mag + 1` in unsigned arithmetic rather than `-ival`, which is what the `:407`
+UB was.
+
+Two properties the check deliberately keeps:
+
+- **`0x` / `0b` literals are exempt.** They are bit patterns, not magnitudes, so
+  `0xFFFFFFFFFFFFFFFF` still means `-1` rather than becoming an error.
+- **A sized suffix keeps its own message.** `300i8` still reports "overflows
+  int8 range", because the int64 check defers to the sized checks whenever the
+  literal at least fits 64 bits.
+
+`atom_int_typed` now spells `INT64_MIN` as `(-INT64_C(9223372036854775807) - 1)`,
+which removes the `-Wimplicitly-unsigned-literal` warning from every program
+that mentions it. A fourth site came along: `1f32` / `1f64` on an integer-looking
+lexeme recovered its value from the accumulator, which a saturated magnitude
+would have corrupted, so it now goes through `strtod` over the delimited digits
+like every other float literal -- `99999999999999999999f64` is a representable
+double and now reads as one.
+
+Pinned by `tests/fixtures/int-literal-int64-bounds` (both endpoints round-trip
+through `println`, plus the `0x`/`0b` bit-pattern cases) and the two `errors/`
+fixtures `int-literal-overflow-positive` / `int-literal-overflow-negative`,
+which bracket the asymmetric boundary from each side. Suite 2982/0 before the
+change and after it, with no snapshot drift.
+
+## Original report
+
 **Severity: medium** -- the headline is a **silent wrong answer**: an
 out-of-range decimal literal is accepted with no diagnostic and compiles to a
 wrapped value. The two UBSan findings below are the same code and come along

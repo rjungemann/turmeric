@@ -1,0 +1,42 @@
+;; pinned-instance-dispatch-loses-an-opaque-return-type.
+;;
+;; A `@TypeName`-pinned dispatch used to rebuild the method's result from its
+;; TypeKind alone, which is lossless only for a primitive. `enc-buf` returns a
+;; defopaque, so the pinned call site was told it got `<adt>` and every caller
+;; needed a hand-written `(:: ... Buf)` the unpinned path never asks for.
+;;
+;; `enc-str`, returning a cstr, is the control: it compiled before the fix and
+;; must keep compiling after it.
+(defopaque Buf :ptr<void>)
+
+(defn __mk-buf [n : int] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t) + 1);
+  p[0] = n;
+  return (void *)p;
+  ```)
+
+(defn buf-len [b : Buf] : int
+  ```c
+  return ((int64_t *)(intptr_t)b)[0];
+  ```)
+
+(defclass EncBuf [a] (enc-buf [x] : Buf))
+(definstance EncBuf [int] (enc-buf [x] : Buf (:: (__mk-buf x) Buf)))
+(definstance EncBuf [Cons]
+  [(EncBuf A)]
+  (enc-buf [xs] : Buf (:: (__mk-buf 9) Buf)))
+
+(defclass EncStr [a] (enc-str [x] : cstr))
+(definstance EncStr [int] (enc-str [x] : cstr "i"))
+(definstance EncStr [Cons]
+  [(EncStr A)]
+  (enc-str [xs] : cstr "list"))
+
+(defn main [] : int
+  ;; No `(:: ... Buf)` wrapper: the pinned call must carry the declared
+  ;; defopaque return type on its own.
+  (println (buf-len (enc-buf @Cons (:: (list 1 2) (Cons int)))))
+  (println (buf-len (enc-buf @int 7)))
+  (println (enc-str @Cons (:: (list 1 2) (Cons int))))
+  0)

@@ -1,0 +1,45 @@
+;; struct-instance-makes-generic-ok-val-see-a-byvalue-result.
+;;
+;; `Dec` is return-type-dispatched. Its second instance is at a VALUE-STRUCT
+;; type -- what a derive-codec macro emits for a defstruct -- and that is what
+;; mints a by-value `(Result Pt cstr)` clone of the method. `build` is a
+;; constrained generic that never mentions `Pt`; its own carrier body then
+;; adopted that by-value clone through the emitter's by-args spec match and
+;; handed a `tur_adt_Result__int__cstr` to the carrier `ok_hyval(int64_t)`,
+;; so cc rejected the program.
+;;
+;; The `Dec [Pt]` instance is load-bearing: delete it and the program compiles
+;; even with the bug present. A second instance at a SCALAR type does not
+;; trigger it either -- it has to be the value struct.
+(defopaque Tree :ptr<void>)
+(defopaque Node :int)
+
+(defstruct Pt [x : int  y : int])
+
+(defclass Dec [a] (dec [t : Tree  nd : Node] : (Result a cstr)))
+
+(definstance Dec [int] (dec [t nd] (:: (ok (:: nd :int)) (Result int cstr))))
+
+(definstance Dec [Pt] (dec [t nd]
+  (:: (ok (make-struct Pt (ok-val (:: (dec t nd) (Result int cstr)))
+                          (ok-val (:: (dec t nd) (Result int cstr)))))
+      (Result Pt cstr))))
+
+(defn mk-node [i : int] : Node (:: i Node))
+
+(defn build [A] [(Dec A)] [t : Tree  i : int  n : int] : (Cons A)
+  (if (>= i n)
+    (:: (tnil) (Cons A))
+    (tcons-of (ok-val (:: (dec t (mk-node i)) (Result A cstr)))
+              (:: (build t (+ i 1) n) :int))))
+
+(defn null-tree [] : Tree
+  ```c
+  return NULL;
+  ```)
+
+(defn main [] : int
+  (let [xs (:: (build (null-tree) 0 3) (Cons int))]
+    (println (.head xs))
+    (println (.head (:: (.tail xs) (Cons int))))
+    0))
