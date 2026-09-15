@@ -5732,6 +5732,19 @@ static void poly_wrap_stamp_carrier_erased(Expr *wrap, const Binding *param) {
     wrap->as.poly_wrap_.carrier_erased_result = res_erased;
 }
 
+/* same-method-name-in-two-classes-dispatches-by-declaration-order: are these
+ * the same typeclass?  Identity is the usual answer, but one `defclass` seen
+ * through two import paths registers twice, so a name match counts too -- the
+ * same equivalence the TY_TYVAR constraint check above already uses.  Without
+ * the name arm, a doubly-registered class would report itself as ambiguous
+ * with itself. */
+static bool typeclass_same_class(const TypeClass *a, const TypeClass *b) {
+    if (a == b) return true;
+    if (!a || !b || !a->name || !b->name) return false;
+    return a->name->len == b->name->len &&
+           memcmp(a->name->name, b->name->name, a->name->len) == 0;
+}
+
 Expr *elab_method_call(Elab *e, const Form *call) {
 
     /* call is (.method obj arg1 arg2 ...)
@@ -6204,7 +6217,10 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                             out->as.get_field_.field_idx = i;
                             out->as.get_field_.adt_def = adt;
                             out->as.get_field_.adt_ctor = ctor;
-                            return out;
+                            /* effect-row-lost-through-a-constructor-argument:
+                             * bind a control-bearing receiver out of the field
+                             * read -- see elab_hoist_control_operands. */
+                            return elab_hoist_control_operands(e, out);
                         }
                     }
                 }
@@ -6427,6 +6443,12 @@ Expr *elab_method_call(Elab *e, const Form *call) {
      * which for macro-expanded `.bind`/`.fmap` points at stdlib/macros.tur). */
     FnDef *user_fallback_method = NULL;
     TypeClassInstance *user_fallback_inst = NULL;
+    /* same-method-name-in-two-classes-dispatches-by-declaration-order: the
+     * instance found (if any) whose class is a DIFFERENT non-stdlib class than
+     * `best_inst`'s and which also matches this receiver.  Non-NULL means the
+     * call is genuinely ambiguous and the search below stopped to say so
+     * instead of silently keeping whichever registered last. */
+    TypeClassInstance *ambig_inst = NULL;
     int user_fallback_count = 0;
 
     /* GHE (constrained-generic-instance-dispatch): when the receiver is a bare
@@ -6647,6 +6669,41 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                              tk == TY_UINT64 ||
                              tk == TY_FLOAT32 || tk == TY_FLOAT64);
         obj_ck = is_primitive ? KIND_STAR : KIND_ARROW;
+    }
+
+    /* same-method-name-in-two-classes-dispatches-by-declaration-order: is this
+     * method name declared by more than one non-stdlib class?
+     *
+     * The search below takes the FIRST instance whose name and receiver type
+     * both match and stops (`goto found_method`), and the registry is a
+     * singly-linked list whose head is the most recently registered entry --
+     * so with two user classes declaring `encode`, `(encode 42)` silently
+     * called whichever `definstance` came last, `tur check` exited 0 with no
+     * output, and swapping two unrelated forms changed the answer.
+     *
+     * The check runs only when this cheap pre-scan (over the CLASS list, which
+     * is short, not the instance list) says two classes are in play; otherwise
+     * the search keeps its original early exit and costs nothing.  Only
+     * non-stdlib classes count on both sides: a user `defn` deliberately
+     * shadowing a stdlib class method is an existing, intentional pattern that
+     * `from_stdlib` and TUR-W0039 exist to support, and it is defn-vs-method,
+     * not the method-vs-method collision this is about. */
+    bool ambig_watch = false;
+    {
+        const TypeClass *seen = NULL;
+        for (TypeClass *c = e->typeclass_env.typeclasses; c && !ambig_watch;
+             c = c->next) {
+            if (c->from_stdlib) continue;
+            for (uint8_t mi = 0; mi < c->n_methods; mi++) {
+                const Symbol *mn = c->methods[mi].name;
+                if (!mn || mn->len != method_name_len ||
+                    memcmp(mn->name, method_name, method_name_len) != 0)
+                    continue;
+                if (!seen) seen = c;
+                else if (!typeclass_same_class(seen, c)) ambig_watch = true;
+                break;   /* one method-name match per class is enough */
+            }
+        }
     }
 
     /* Search instances — prefer the one whose type_args[0] matches obj's type. */
@@ -6883,13 +6940,48 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                 }
             }
             /* Good match (or no type_args to check). */
+            if (exact_match_found) {
+                /* same-method-name-in-two-classes: a SECOND instance matches
+                 * this receiver as well.  Another instance of the same class is
+                 * not ambiguity (the first one registered still wins, exactly as
+                 * before); a different user class is. */
+                if (best_inst &&
+                    !typeclass_same_class(best_inst->typeclass, inst->typeclass)) {
+                    ambig_inst = inst;
+                    goto found_method;
+                }
+                break;
+            }
             best_method = inst->method_impls[i];
             best_inst = inst;
             exact_match_found = true;
-            goto found_method;
+            /* Original behaviour unless two user classes declare this name, in
+             * which case keep scanning for the second match that makes the call
+             * ambiguous. */
+            if (!ambig_watch) goto found_method;
+            break;
         }
     }
 found_method:;
+
+    /* same-method-name-in-two-classes-dispatches-by-declaration-order: report
+     * the ambiguity rather than resolving it by registration order.  A call is
+     * only genuinely ambiguous when BOTH classes have an instance that matches
+     * this receiver, which is what `ambig_inst` records -- two classes merely
+     * declaring the same method name is harmless and is not reported here. */
+    if (ambig_inst && best_inst) {
+        const char *c1 = (best_inst->typeclass && best_inst->typeclass->name)
+                             ? best_inst->typeclass->name->name : "?";
+        const char *c2 = (ambig_inst->typeclass && ambig_inst->typeclass->name)
+                             ? ambig_inst->typeclass->name->name : "?";
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0020_AMBIGUOUS_DISPATCH,
+            "ambiguous method dispatch: '%.*s' is declared by typeclass '%s' and "
+            "by typeclass '%s', and both have an instance for type '%s', so "
+            "which one runs would depend on the order the two 'definstance' "
+            "forms are declared in. Give each class's method a distinct name.",
+            (int)method_name_len, method_name, c1, c2, type_name(obj->type));
+        return NULL;
+    }
 
     if (!best_method) {
         /* saffron-lang-plan S4/D4 (G11): a dynamic field read.

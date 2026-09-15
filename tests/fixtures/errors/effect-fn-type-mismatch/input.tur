@@ -1,4 +1,11 @@
 ;; ET0-D: Assigning a #{Write}-performing closure to a #{} parameter emits TUR-E0009.
+;;
+;; The `s : cstr` annotation is load-bearing for what this fixture asserts, not
+;; decoration.  Un-annotated, `s` takes the `int` carrier default, and since
+;; `perform` began checking its arguments against the declared effect parameter
+;; (perform-does-not-typecheck-its-arguments) that surfaces as a TUR-E0001 which
+;; fires FIRST and masks the effect-row mismatch this fixture is about.  Writing
+;; the annotation the parameter always wanted leaves TUR-E0009 as the one error.
 
 (defeffect Write [s :cstr] :nil)
 
@@ -6,4 +13,4 @@
   (f "test"))
 
 (defn main [] : int
-  (call-pure (fn [s] (perform (Write s)))))
+  (call-pure (fn [s : cstr] (perform (Write s)))))

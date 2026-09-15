@@ -408,12 +408,245 @@ bool cps_fn_needs_cloneable_transform(const FnDef *fd) {
  * sound for the top-level coloring this exposes.
  * ========================================================================= */
 
+/* ---------------------------------------------------------------------------
+ * effect-row-lost-through-a-constructor-argument: generic child enumeration.
+ *
+ * The two whole-program walks below -- `cps_directly_uses_control` (which SEEDS
+ * a function that itself holds a control op) and `cps_collect_calls` (which
+ * builds the call-graph EDGES the coloring fixpoint propagates along) -- were
+ * each written as a switch over the node kinds that existed at the time, with
+ * `default:` meaning "no children".  Every node kind added since has therefore
+ * been a silent hole: the subtree under it is not walked, so a `perform` or a
+ * call to an effectful defn hidden below it does not color its function, the
+ * handler's DK is never threaded through, and the program aborts with
+ * `tur: unhandled effect (tag N)` -- having type-checked clean, because
+ * `collect_effects_in_expr` (src/passes/effect_check.c) has the arm and infers
+ * the row correctly.  `--dump-effects` says `#{Ask}` while
+ * `--dump-cps-coloring` says `uncolored`; that disagreement IS the bug.
+ *
+ * This has now been filed three separate times, each as one more missing arm:
+ * cps-coloring-walk-has-no-arm-for-union-inject,
+ * saffron-any-return-defeats-the-frame-box-rule, and
+ * saffron-effect-row-lost-through-unannotated-call.  The shape that opened THIS
+ * report -- `(.v (Box (g)))`, an effectful call as a constructor argument -- is
+ * the same hole seen through `EX_MAKE_STRUCT` and `EX_GET_FIELD`, neither of
+ * which either walk had ever had an arm for.
+ *
+ * So rather than add two more arms and wait for the fourth report, both walks
+ * now fall back to this one enumeration, which covers every kind that carries
+ * an evaluated operand.  Adding an arm to a walk is now a choice about
+ * NON-uniform treatment (a call-graph edge, a boundary, an unconditional seed),
+ * not a prerequisite for the subtree being visited at all.
+ *
+ * `visit` returns true to stop the walk early; the enumerator returns whether
+ * it stopped.  Nested function definitions (EX_FN_DEF / EX_FN / EX_CLOSURE) are
+ * call-graph boundaries and are NOT enumerated here -- both walks keep their
+ * own explicit arms for them, and the enumerator agrees by omission.
+ * Declaration nodes (defdata / defgadt / defmodule / typeclass / instance /
+ * extern-c / inline-c) likewise have no evaluated operand in the enclosing
+ * body.
+ * ------------------------------------------------------------------------- */
+static bool cps_visit_children(const Expr *e,
+                               bool (*visit)(const Expr *, void *),
+                               void *ud) {
+    if (!e) return false;
+
+#define V(x)  do { const Expr *c_ = (x); if (c_ && visit(c_, ud)) return true; } while (0)
+#define VN(arr, n) do { for (uint32_t i_ = 0; i_ < (uint32_t)(n); i_++) V((arr)[i_]); } while (0)
+
+    switch (e->kind) {
+        /* --- binding / sequencing ------------------------------------- */
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                V(e->as.let_.bindings[i].init);
+            V(e->as.let_.body);
+            return false;
+        case EX_IF:
+            V(e->as.if_.cond); V(e->as.if_.then_); V(e->as.if_.else_or_null);
+            return false;
+        case EX_DO:      VN(e->as.do_.items, e->as.do_.n);     return false;
+        case EX_PROGRAM: VN(e->as.program.items, e->as.program.n); return false;
+        case EX_WHILE:   V(e->as.while_.cond); V(e->as.while_.body); return false;
+        case EX_SET:     V(e->as.set_.value);  return false;
+        case EX_DEF:     V(e->as.def_.init);   return false;
+        case EX_RETURN:  V(e->as.return_.value); return false;
+        case EX_DEFER:   V(e->as.defer_.body); return false;
+
+        /* --- calls ------------------------------------------------------ */
+        case EX_CALL:
+            V(e->as.call_.fn_expr);
+            VN(e->as.call_.args, e->as.call_.n_args);
+            return false;
+        case EX_BUILTIN: VN(e->as.builtin.args, e->as.builtin.n); return false;
+        case EX_CONS_LIST: VN(e->as.cons_list_.items, e->as.cons_list_.n); return false;
+
+        /* --- aggregates and field access -------------------------------
+         * The hole this report was opened for.  `(Box (g))` is an
+         * EX_MAKE_STRUCT whose field value is the effectful call, and the
+         * `.v` reading it back is an EX_GET_FIELD. */
+        case EX_MAKE_STRUCT:
+            VN(e->as.make_struct_.field_values, e->as.make_struct_.n_fields);
+            return false;
+        case EX_GET_FIELD: V(e->as.get_field_.struct_expr); return false;
+        case EX_SET_FIELD: V(e->as.set_field_.receiver); V(e->as.set_field_.value); return false;
+        case EX_SET_LIT:   VN(e->as.set_lit_.items, e->as.set_lit_.n); return false;
+
+        /* --- match ------------------------------------------------------ */
+        case EX_MATCH:
+            V(e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                V(e->as.match_.arms[i].body);
+                V(e->as.match_.arms[i].guard);
+            }
+            return false;
+
+        /* --- effects and delimited control ------------------------------ */
+        case EX_PERFORM:
+            VN(e->as.perform_.perform->args, e->as.perform_.perform->n_args);
+            return false;
+        case EX_HANDLE: {
+            const HandleExpr *h = e->as.handle_.handle;
+            V(h->body);
+            for (uint8_t i = 0; i < h->n_cases; i++) V(h->cases[i].body);
+            return false;
+        }
+        case EX_HANDLER_LIT: {
+            const HandleExpr *h = e->as.handler_lit_.handle;
+            for (uint8_t i = 0; i < h->n_cases; i++) V(h->cases[i].body);
+            return false;
+        }
+        case EX_WITH_HANDLER:     V(e->as.with_handler_.handler); V(e->as.with_handler_.body); return false;
+        case EX_COMPOSE_HANDLERS: V(e->as.compose_handlers_.h1); V(e->as.compose_handlers_.h2); return false;
+        case EX_RESUME:           V(e->as.resume_.resume->k); V(e->as.resume_.resume->value); return false;
+        case EX_DISCONTINUE:      V(e->as.discontinue_.discontinue->k);
+                                  V(e->as.discontinue_.discontinue->exception); return false;
+        case EX_CONT_PRED:        V(e->as.cont_pred_.expr); return false;
+        case EX_RESET:            V(e->as.reset_.body); return false;
+        case EX_SHIFT:            V(e->as.shift_.k_fn); V(e->as.shift_.body); return false;
+        case EX_SHIFT0:           V(e->as.shift0_.k_fn); V(e->as.shift0_.body); return false;
+        case EX_CALLCC:           V(e->as.callcc_.fn); return false;
+        case EX_CLONEABLE_RESET:  V(e->as.cloneable_reset_.body); return false;
+        case EX_CLONEABLE_SHIFT:  V(e->as.cloneable_shift_.k_fn);
+                                  V(e->as.cloneable_shift_.body); return false;
+        case EX_SERIAL_RESET:     V(e->as.serial_reset_.body); return false;
+        case EX_SERIAL_SHIFT:     V(e->as.serial_shift_.k_fn); V(e->as.serial_shift_.body); return false;
+        case EX_CPS_CONT_APP:     V(e->as.cps_cont_app_.cont); V(e->as.cps_cont_app_.value); return false;
+
+        /* --- concurrency ------------------------------------------------ */
+        case EX_ASYNC:      V(e->as.async_.fn_expr);  return false;
+        case EX_AWAIT:      V(e->as.await_.fut_expr); return false;
+        case EX_SELECT:
+            for (uint32_t i = 0; i < e->as.select_.n_clauses; i++) {
+                V(e->as.select_.clauses[i].chan);
+                V(e->as.select_.clauses[i].send_val);
+                V(e->as.select_.clauses[i].body);
+            }
+            V(e->as.select_.default_body);
+            return false;
+        case EX_STM:        VN(e->as.stm_.body, e->as.stm_.n_body); return false;
+        case EX_ATOMICALLY: V(e->as.atomically_.stm_expr); return false;
+        case EX_CHECK:      V(e->as.check_.cond); return false;
+        case EX_OR_ELSE:    V(e->as.or_else_.stm1); V(e->as.or_else_.stm2); return false;
+        case EX_TVAR_NEW:    V(e->as.tvar_new_.init);  return false;
+        case EX_TVAR_READ:   V(e->as.tvar_read_.tvar); return false;
+        case EX_TVAR_WRITE:  V(e->as.tvar_write_.tvar);  V(e->as.tvar_write_.value);   return false;
+        case EX_TVAR_MODIFY: V(e->as.tvar_modify_.tvar); V(e->as.tvar_modify_.fn);     return false;
+        case EX_TVAR_SWAP:   V(e->as.tvar_swap_.tvar);   V(e->as.tvar_swap_.new_val);  return false;
+        case EX_TVAR_CAS:    V(e->as.tvar_cas_.tvar);    V(e->as.tvar_cas_.old_val);
+                             V(e->as.tvar_cas_.new_val); return false;
+
+        /* --- generators -------------------------------------------------- */
+        case EX_YIELD:    V(e->as.yield_.value);        return false;
+        case EX_GEN_NEXT: V(e->as.gen_next_.gen_expr);  return false;
+        case EX_GEN_DONE: V(e->as.gen_done_.gen_expr);  return false;
+
+        /* --- dynamic vars ------------------------------------------------ */
+        case EX_DEFDYNAMIC: V(e->as.defdynamic_.root_expr); return false;
+        case EX_DYNVAR_SET: V(e->as.dynvar_set_.value);     return false;
+        case EX_DYNVAR_BINDING:
+            for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++)
+                V(e->as.dynvar_binding_.pairs[i].override_expr);
+            V(e->as.dynvar_binding_.body);
+            return false;
+
+        /* --- references, rc, borrows ------------------------------------- */
+        case EX_REF:          V(e->as.ref_.expr);           return false;
+        case EX_DEREF:        V(e->as.deref_.expr);         return false;
+        case EX_SET_DEREF:    V(e->as.set_deref_.ref); V(e->as.set_deref_.value); return false;
+        case EX_RC_OF:        V(e->as.rc_of_.expr);         return false;
+        case EX_RC_CLONE:     V(e->as.rc_clone_.expr);      return false;
+        case EX_RC_DROP:      V(e->as.rc_drop_.expr);       return false;
+        case EX_RC_PTR:       V(e->as.rc_ptr_.expr);        return false;
+        case EX_RC_COUNT:     V(e->as.rc_count_.expr);      return false;
+        case EX_RC_FROM_REF:  V(e->as.rc_from_ref_.expr);   return false;
+        case EX_REF_FROM_RC:  V(e->as.ref_from_rc_.expr);   return false;
+        case EX_WEAK:         V(e->as.weak_.expr);          return false;
+        case EX_WEAK_UPGRADE: V(e->as.weak_upgrade_.expr);  return false;
+        case EX_WEAK_PRED:    V(e->as.weak_pred_.expr);     return false;
+        case EX_REF_PRED:     V(e->as.ref_pred_.expr);      return false;
+        case EX_BORROW_IMMUT: V(e->as.borrow_immut_.expr);  return false;
+        case EX_BORROW_MUT:   V(e->as.borrow_mut_.expr);    return false;
+
+        /* --- panics ------------------------------------------------------ */
+        case EX_PANIC:                V(e->as.panic_.payload);                return false;
+        case EX_PANIC_WITH:           V(e->as.panic_with_.payload);           return false;
+        case EX_CATCH_UNWIND:         V(e->as.catch_unwind_.thunk);           return false;
+        case EX_CATCH_PANIC_OF:       V(e->as.catch_panic_of_.thunk);         return false;
+        case EX_PANIC_PAYLOAD_TYPE:   V(e->as.panic_payload_type_.payload);   return false;
+        case EX_PANIC_PAYLOAD_VALUE:  V(e->as.panic_payload_value_.payload);  return false;
+        case EX_PANIC_PAYLOAD_FILE:   V(e->as.panic_payload_file_.payload);   return false;
+        case EX_PANIC_PAYLOAD_LINE:   V(e->as.panic_payload_line_.payload);   return false;
+        case EX_PANIC_PAYLOAD_DOWNS:  V(e->as.panic_payload_downs_.payload);  return false;
+
+        /* --- erased / representation wrappers ---------------------------- */
+        case EX_ASCRIBE:     V(e->as.ascribe_.inner);     return false;
+        case EX_CAST:        V(e->as.cast_.expr);         return false;
+        case EX_REINTERPRET: V(e->as.reinterpret_.expr);  return false;
+        case EX_POLY_WRAP:   V(e->as.poly_wrap_.inner);   return false;
+        case EX_FN_TO_FAT:   V(e->as.fn_to_fat_.inner);   return false;
+        case EX_POLY_TO_FAT: V(e->as.poly_to_fat_.inner); return false;
+
+        /* --- existentials ------------------------------------------------ */
+        case EX_EXISTS_PACK:     V(e->as.exists_pack_.value); return false;
+        case EX_EXISTS_OPEN:     V(e->as.exists_open_.packed); V(e->as.exists_open_.body); return false;
+        case EX_EXISTS_DISPATCH: VN(e->as.exists_dispatch_.args, e->as.exists_dispatch_.n_args);
+                                 return false;
+
+        /* --- Saffron dynamic surface ------------------------------------- */
+        case EX_UNION_INJECT: V(e->as.union_inject_.value);  return false;
+        case EX_ANY_CAST:     V(e->as.any_cast_.value);      return false;
+        case EX_ANY_IS:       V(e->as.any_is_.value);        return false;
+        case EX_ANY_TYPE_OF:  V(e->as.any_type_of_.value);   return false;
+        case EX_DYN_OP:       VN(e->as.dyn_op_.args, e->as.dyn_op_.n_args); return false;
+        case EX_DYN_CALL:     V(e->as.dyn_call_.fn);
+                              VN(e->as.dyn_call_.args, e->as.dyn_call_.n_args); return false;
+        case EX_DYN_FIELD:    V(e->as.dyn_field_.obj); return false;
+        case EX_DYN_METHOD:   V(e->as.dyn_method_.obj);
+                              VN(e->as.dyn_method_.args, e->as.dyn_method_.n_args); return false;
+
+        /* Leaves: literals, variables, dict singletons, `(retry)`, dynvar
+         * reads, generator values, and every declaration form.  Nested fn
+         * definitions are boundaries, not leaves -- see the header comment. */
+        default:
+            return false;
+    }
+#undef VN
+#undef V
+}
+
 /* True iff e's subtree DIRECTLY contains a control-op node, WITHOUT descending
  * into nested function definitions (each nested fn is colored on its own merits;
  * reaching it is modeled as an unresolved call by the caller). This mirrors the
  * trusted enumeration in cps_expr_contains_shift, plus the serial operators. */
 static bool cps_directly_uses_control(const Expr *e);
 bool cps_expr_uses_control(const Expr *e) { return cps_directly_uses_control(e); }
+
+/* Visitor thunk for the enumerator's default arm: "stop" means "found one". */
+static bool cps_control_visit(const Expr *c, void *ud) {
+    (void)ud;
+    return cps_directly_uses_control(c);
+}
 
 static bool cps_directly_uses_control(const Expr *e) {
     if (!e) return false;
@@ -590,8 +823,13 @@ static bool cps_directly_uses_control(const Expr *e) {
         case EX_FN:
         case EX_CLOSURE:
             return false;
+        /* effect-row-lost-through-a-constructor-argument: every other node kind
+         * walks its evaluated operands through the shared enumerator, instead of
+         * reading as "no control here" because this switch was written before the
+         * node existed.  `(.v (Box (perform (Ask))))` is the shape that was
+         * escaping -- neither EX_GET_FIELD nor EX_MAKE_STRUCT had an arm. */
         default:
-            return false;
+            return cps_visit_children(e, cps_control_visit, NULL);
     }
 }
 
@@ -656,6 +894,9 @@ static int cps_find_node(CpsNode *nodes, uint32_t n, const Binding *b) {
 
 /* Walk a function body collecting call edges and the indirect flag, WITHOUT
  * descending into nested function bodies (separate nodes). */
+static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
+                              CpsNode *self);
+
 static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
                               CpsNode *self) {
     if (!e) return;
@@ -826,6 +1067,40 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
         case EX_FN_DEF:
         case EX_FN:
         case EX_CLOSURE:
+            return;
+        /* effect-row-lost-through-a-constructor-argument: the aggregate family,
+         * which is where this report's defect lived -- `(Box (g))` is an
+         * EX_MAKE_STRUCT whose field value is the effectful call, and the `.v`
+         * reading it back is an EX_GET_FIELD.  Neither had an arm, so the call
+         * edge under them was dropped and the coloring fixpoint never reached
+         * the caller.
+         *
+         * DELIBERATELY NOT the shared `cps_visit_children` enumerator that
+         * `cps_directly_uses_control` uses, even though the missing-arm problem
+         * is the same one.  The two walks are not symmetric in cost: this one
+         * sets `has_indirect` for an unresolved callee (CPS0.1 rule 3), so
+         * descending into a node it never descended into before can color a
+         * function that merely calls a callback there.  Measured on
+         * `tests/fixtures/typed/result-basic`, a blanket default colored 13 more
+         * functions -- `result-map`, `option-map`, `option-eq?` and six
+         * typeclass instances among them -- because EX_MATCH had no arm and
+         * every stdlib HOF calls its callback inside a `match`.
+         *
+         * That coloring is defensible on its own terms, and it is not what made
+         * it unshippable: the CPS emission path does not emit the
+         * `tur_region_free` calls the direct path does, so each newly colored
+         * function leaked its Result/Option box (16 bytes in
+         * `typed/result-basic`, caught by tests/run-leak-check.sh -- run.sh
+         * compiles fixtures unsanitized and cannot see it).  Closing that gap is
+         * ownership-subsystem work, not a follow-on to a coloring fix, so the
+         * edge walk stays narrow and the rest is filed as
+         * docs/reported/cps-edge-walk-misses-nodes-and-colored-frames-leak.md. */
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                cps_collect_calls(e->as.make_struct_.field_values[i], nodes, n_nodes, self);
+            return;
+        case EX_GET_FIELD:
+            cps_collect_calls(e->as.get_field_.struct_expr, nodes, n_nodes, self);
             return;
         default:
             return;

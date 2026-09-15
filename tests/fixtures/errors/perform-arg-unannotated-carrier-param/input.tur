@@ -1,0 +1,37 @@
+;; perform-does-not-typecheck-its-arguments: the carrier exemption, dropped.
+;;
+;; An un-annotated lambda parameter takes the `int` carrier default
+;; (saffron_default_param_kind), and for a while `perform` exempted such an
+;; argument from its type check -- the value really is a `cstr` at run time, the
+;; effect slot is one untyped word, and seven fixtures were written this way.
+;;
+;; The exemption is gone, because an ordinary CALL never had it:
+;;
+;;   (defn takes-cstr [s : cstr] : int 0)
+;;   (make-struct App (fn [msg] (takes-cstr msg)))
+;;   ;; error [TUR-E0001]: function 'takes-cstr' arg 1: expected cstr, got int
+;;
+;; The identical value reaching a `perform` compiled. That made the effect ABI
+;; the one place in the language where an un-annotated parameter silently
+;; escaped its declared type, and closing it is what makes `perform` agree with
+;; a call rather than lag it.
+;;
+;; All seven fixtures were fixed by writing the annotation they always wanted --
+;; `(fn [s : cstr] ...)` -- and every one of them still produces byte-identical
+;; output, which is the evidence that the annotation was the only thing missing
+;; and no behaviour depended on the laxness.
+;;
+;; Because the value is already correct at run time, the argument is NOT what
+;; wants changing here, so the error carries a note naming the annotation
+;; instead: "annotate it (e.g. '[msg : cstr]')". That is what
+;; Binding.type_is_carrier_default is for now -- it used to suppress this error,
+;; and it explains it.
+(defeffect Log [msg : cstr] : nil)
+
+(defstruct App :copy [run : fn #fx{Log}])
+
+(defn main [] : int
+  (let [app (make-struct App (fn [msg] (perform (Log msg))))]
+    (handle
+      (do (.run app "carrier") 0)
+      (Log [msg] k) (do (println msg) (resume k nil)))))

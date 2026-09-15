@@ -202,6 +202,11 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0017_CONT_ESCAPE_ASYNC:                return "TUR-E0017";
         case TUR_E0018_NOT_SERIALIZABLE:                 return "TUR-E0018";
         case TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET:       return "TUR-E0019";
+        /* Was missing from this table, so every ambiguous-dispatch error
+         * printed a bare `error []` and could not be grepped for or matched by
+         * an `errors/` fixture's expected.diag.  Both pre-existing call sites
+         * in elab_typeclasses.c were affected, not just the new one. */
+        case TUR_E0020_AMBIGUOUS_DISPATCH:               return "TUR-E0020";
         case TUR_E0021_PRIVATE_EFFECT:                   return "TUR-E0021";
         /* CF6: async Send-across-await */
         case TUR_E0022_AWAIT_LIVE_NOT_SEND:              return "TUR-E0022";

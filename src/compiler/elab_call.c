@@ -406,6 +406,29 @@ static bool saffron_operand_has_call(const Expr *op) {
     if (op->type.kind == TY_NIL) return false;
     switch (op->kind) {
         case EX_CALL:
+            /* effect-row-lost-through-a-constructor-argument: a CONSTRUCTOR call
+             * is NOT a call for hoisting purposes.  It stores its
+             * (independently-elaborated) argument values into a fresh aggregate
+             * and invokes nothing, so it can never reach a `perform` -- the same
+             * reasoning as the constructor leaf exemption in `cps_collect_calls`
+             * (docs/archive/history/cps-coloring-overcolors-nonnode-calls.md).
+             * Its own arguments are ordinary expressions and are still walked
+             * below, so `(Box (Inner (g)))` hoists on `(g)` as it should.
+             *
+             * Counting one as a call made the hoist wrap a pure constructor in a
+             * `let`, and a ctor call's Expr carries data its caller reads back
+             * off the EX_CALL node -- `size_index`, stamped by
+             * `sz8_infer_ctor_size_index` just above the hoist site.  Wrapped,
+             * the sized-GADT checks found no index and TUR-E0260 silently
+             * stopped firing (errors/sized-cross-param-reject and
+             * errors/sized-return-claim-gadt-reject, on the INTERPRETED path
+             * only -- `tur check` still reported it, which is why run.sh stayed
+             * green and only run-turi.sh caught it). */
+            if (op->as.call_.ctor) {
+                for (uint32_t i = 0; i < op->as.call_.n_args; i++)
+                    if (saffron_operand_has_call(op->as.call_.args[i])) return true;
+                return false;
+            }
             return true;
         case EX_ASCRIBE:      return saffron_operand_has_call(op->as.ascribe_.inner);
         case EX_UNION_INJECT: return saffron_operand_has_call(op->as.union_inject_.value);
@@ -469,6 +492,36 @@ Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
             slots[n_slots++] = &node->as.dyn_method_.obj;
             for (uint32_t i = 0; i < node->as.dyn_method_.n_args && n_slots < 32; i++)
                 slots[n_slots++] = &node->as.dyn_method_.args[i];
+            break;
+        /* effect-row-lost-through-a-constructor-argument: the two TYPED nodes
+         * that reach the CPS translation as leaves, for the same reason the
+         * dynamic nodes above do -- the operand is emitted in direct style, so
+         * a colored call inside it opens a fresh DK root and never sees the
+         * caller's handler.
+         *
+         * A CONSTRUCTOR call only.  An ordinary EX_CALL resolves to a binding
+         * and the CPS translation ANF-binds its arguments itself; a ctor call
+         * has no `fn_binding`, so it takes the indirect-callee arm and is
+         * rejected outright ("indirect call (non-atomic args)").  Hoisting the
+         * argument is what turns `(Box (g))` into the `(let [n (g)] (Box n))`
+         * the report names as the shape a fix has to preserve -- literally, as
+         * it happens.
+         *
+         * EX_GET_FIELD is hoisted for the same reason and is needed on the same
+         * repro: with the ctor hoisted, `(.v <let>)` still holds the colored
+         * call one level down, and a `let` operand is no more delegatable than
+         * the call was.  Bound out, the field read is over a plain local. */
+        case EX_CALL:
+            if (!node->as.call_.ctor) return node;
+            for (uint32_t i = 0; i < node->as.call_.n_args && n_slots < 32; i++)
+                slots[n_slots++] = &node->as.call_.args[i];
+            break;
+        case EX_GET_FIELD:
+            slots[n_slots++] = &node->as.get_field_.struct_expr;
+            break;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < node->as.make_struct_.n_fields && n_slots < 32; i++)
+                slots[n_slots++] = &node->as.make_struct_.field_values[i];
             break;
         default:
             return node;
@@ -4386,7 +4439,11 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                     }
                 }
             }
-            return call_expr;
+            /* effect-row-lost-through-a-constructor-argument: bind a
+             * control-bearing / effectful-call argument out of the constructor,
+             * so the call lands at a bind position the CPS backend threads the
+             * DK through instead of a ctor operand it direct-emits. */
+            return elab_hoist_control_operands(e, call_expr);
         }
         /* Phase G3: Non-constructor function returning ADT — patch result from result_full_type.
          * Only recover a genuine ADT result type here; when result_full_type is a

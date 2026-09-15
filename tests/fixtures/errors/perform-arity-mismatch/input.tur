@@ -1,0 +1,23 @@
+;; perform-does-not-typecheck-its-arguments (arity, perform side): `perform`
+;; never compared its argument count against the effect's declared parameter
+;; count.  The effect slot array is sized by the DECLARATION, so too FEW
+;; arguments left the tail slots uninitialised and the handler read whatever was
+;; there -- this program SEGFAULTED before the check, with `tur check` and
+;; `tur emit-c` both exiting 0.
+;;
+;; Too many arguments is the other direction and was also silent: every seam in
+;; elab_perform is written `if (i < n_params)`, so the surplus was dropped and
+;; `(perform (One 1 2 3))` printed a garbage word.
+;;
+;; Strict equality is correct here: a `defeffect` parameter list counts bare
+;; symbols, with no `& rest` form and no default VALUES.  (The "default
+;; defeffect params" work this report grew out of defaults a parameter's TYPE
+;; when the annotation is omitted -- it does not make an argument optional.
+;; That conflation is why arity was left out of the first pass at this report.)
+(defeffect Two [a : int b : int] : int)
+
+(defn w [] : int (perform (Two 1)))
+
+(defn main [] : int
+  (println (handle (w) (Two [a b] k) (resume k (+ a b))))
+  0)

@@ -1,0 +1,22 @@
+;; perform-does-not-typecheck-its-arguments: `perform` elaborated each argument
+;; and stored it in the effect slot without ever consulting the effect's
+;; declared parameter types.  `tur check` and `tur emit-c` both exited 0 on the
+;; program below, and the built binary segfaulted when the handler dereferenced
+;; the integer 42 as a `char *` -- with the declared type two lines above the
+;; performing call.
+;;
+;; The rule is now the same one an ordinary call applies: a scalar word arriving
+;; where the handler can only read an address. It began life restricted to
+;; LITERAL arguments, because an un-annotated lambda parameter takes the `int`
+;; carrier default and a TY_INT argument was therefore ambiguous. That
+;; restriction is gone -- see errors/perform-arg-unannotated-carrier-param for
+;; why the carrier case is now an error too, and
+;; errors/perform-arg-declared-var-into-pointer-param for the variable form of
+;; this one.
+(defeffect Log [msg : cstr] : int)
+
+(defn work [] : int (perform (Log 42)) 1)
+
+(defn main [] : int
+  (println (handle (work) (Log [msg] k) (do (println msg) (resume k 0))))
+  0)

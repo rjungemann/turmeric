@@ -53,6 +53,24 @@ struct Binding {
     bool          is_mut;
     bool          is_global;     /* top-level def vs. local let */
     bool          is_param;      /* function/extern parameter binding */
+    /* perform-does-not-typecheck-its-arguments: this binding's type was NOT
+     * written by the author -- it is the carrier default an un-annotated `fn` /
+     * `defn` parameter takes (`saffron_default_param_kind`: TY_INT in a typed
+     * file, TY_ANY in a Saffron one).
+     *
+     * The distinction matters because a defaulted TY_INT is not a claim that the
+     * value is an integer; it is "one untyped word", and an un-annotated lambda
+     * param routinely carries a `cstr` through it -- deliberately, since the
+     * bidirectional inference that would refine it is gated OFF for primitive
+     * expected types to avoid codegen churn (see elab_fn's expected_type arm).
+     * So a type check that treats every TY_INT as an integer reports working
+     * code; `(fn [msg] (perform (Log msg)))` against `Log [msg : cstr]` is the
+     * shape, and it appears seven times in the fixture corpus.
+     *
+     * Cleared again when something DOES determine the type (bidirectional
+     * inference from an expected fn type), because at that point the type is
+     * known rather than defaulted. */
+    bool          type_is_carrier_default;
     /* True when this binding was introduced by destructuring an ADT
      * constructor pattern in a `match` arm (e.g. `f`/`g` in `(AddF f g)`).
      * collect_free_vars uses it to capture a function-typed match-arm payload

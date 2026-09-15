@@ -1,0 +1,25 @@
+;; perform-does-not-typecheck-its-arguments: the scalar-into-pointer check
+;; through a VARIABLE rather than a literal.
+;;
+;; The first pass at this report could only check literals: an un-annotated
+;; lambda parameter takes the `int` carrier default, so a TY_INT argument might
+;; be a declared integer or one untyped word, and checking it reported working
+;; code. Running the check in a LATER pass does not help -- the type is still
+;; `int` at effect_check time, because the carrier IS the representation, not a
+;; not-yet-refined guess.
+;;
+;; What closed it was recording the missing information rather than guessing at
+;; it: Binding.type_is_carrier_default marks a parameter whose type the author
+;; did not write, set where the default is taken and cleared by an annotation
+;; (and by the bidirectional inference, when that fires). Both kinds of `int`
+;; are now an error -- the carrier one is
+;; errors/perform-arg-unannotated-carrier-param, and gets a note naming the
+;; annotation, since there the ARGUMENT is not what wants changing. Here `n` is
+;; declared, so the ordinary type error is the whole story.
+(defeffect Log [msg : cstr] : int)
+
+(defn w [n : int] : int (perform (Log n)))
+
+(defn main [] : int
+  (println (handle (w 42) (Log [m] k) (do (println m) (resume k 0))))
+  0)

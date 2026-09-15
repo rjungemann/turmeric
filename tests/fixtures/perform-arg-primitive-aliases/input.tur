@@ -1,0 +1,27 @@
+;; perform-does-not-typecheck-its-arguments: the positive half of the
+;; primitive-kind check.  `int`/`int64` and `float`/`float64` are aliases, and an
+;; ordinary call accepts each pair in both directions -- so `perform` must too,
+;; or the check would be stricter than the language.  These are the two pairs
+;; that make the rule "exact kind equality" rather than "exact kind equality,
+;; full stop".
+;;
+;; The carrier case used to be a second thing that had to keep compiling -- an
+;; un-annotated lambda parameter defaults to `int` and routinely carries a
+;; `cstr` -- and it no longer is: that exemption is dropped, because an ordinary
+;; call never had it. See errors/perform-arg-unannotated-carrier-param.
+(defeffect I64 [n : int64]   : int)
+(defeffect F64 [x : float64] : int)
+(defeffect I   [n : int]     : int)
+(defeffect F   [x : float]   : int)
+
+(defn w-i64 [n : int]   : int (perform (I64 n)))
+(defn w-f64 [x : float] : int (perform (F64 x)))
+(defn w-i   [n : int64] : int (perform (I   n)))
+(defn w-f   [x : float64] : int (perform (F x)))
+
+(defn main [] : int
+  (println (handle (w-i64 7)    (I64 [n] k) (resume k n)))
+  (println (handle (w-f64 7.25) (F64 [x] k) (resume k 1)))
+  (println (handle (w-i   9)    (I   [n] k) (resume k n)))
+  (println (handle (w-f   3.5)  (F   [x] k) (resume k 2)))
+  0)
