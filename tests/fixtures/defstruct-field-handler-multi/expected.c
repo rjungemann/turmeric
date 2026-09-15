@@ -9316,7 +9316,8 @@ static intptr_t __dk_hcase_278(intptr_t __dkenv, intptr_t __dkarg, struct DK *__
 }
 
 static int64_t main__cps(DK *__kont) {
-    tur_adt_HRow2 row_1611;
+    tur_handler_table_t * _un_unctlhoist_un1611_1612;
+    tur_adt_HRow2 row_1613;
     tur_handler_table_t * __t1;
     tur_handler_table_t *__t277 = tur_handler_table_new(1);
     __t277->entries[0].eff_name = "Ask";
@@ -9333,10 +9334,11 @@ static int64_t main__cps(DK *__kont) {
     __t281->entries[0].dk_tag = 3;
     __t281->entries[0].dk_fn = __dk_hcase_278;
     tur_handler_table_t *__t282 = tur_handler_table_concat(__t277, __t281);
-    tur_adt_HRow2 __ps_283 = (ctor_HRow2_HRow2((int64_t)(intptr_t)(__t282)));
+    _un_unctlhoist_un1611_1612 = __t282;
+    tur_adt_HRow2 __ps_283 = (ctor_HRow2_HRow2((int64_t)(intptr_t)(_un_unctlhoist_un1611_1612)));
     if (tur_panicking) return ((int64_t)0);
-    row_1611 = __ps_283;
-    __t1 = (tur_handler_table_t *)(row_1611).h;
+    row_1613 = __ps_283;
+    __t1 = (tur_handler_table_t *)(row_1613).h;
     DK *__h0 = __dk_reap_keep(dk_hgroup_from_table((const tur_handler_table_t *)(intptr_t)__t1, dk_frame_resume_borrow(main_hk0, 0, __kont)));
     return dk_perform(3, (intptr_t)("hi"), __dk_reap_node(dk_frame_resume(main_rf1, 0, __h0)));
 }

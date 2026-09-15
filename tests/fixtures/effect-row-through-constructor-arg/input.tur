@@ -1,0 +1,71 @@
+;; effect-row-lost-through-a-constructor-argument: an effectful call used as a
+;; CONSTRUCTOR argument lost the caller's coloring, so the enclosing handler was
+;; never threaded and the program aborted `tur: unhandled effect (tag N)` at run
+;; time -- having type-checked clean.
+;;
+;; What made this one hard to place is that the effect ROW was always right:
+;; `--dump-effects` printed `mk : #{Ask}` for the failing program, while
+;; `--dump-cps-coloring` printed `mk uncolored`.  That disagreement was the bug.
+;; `collect_effects_in_expr` (src/passes/effect_check.c) has an EX_MAKE_STRUCT
+;; arm; the two walks in src/passes/cps.c that build the coloring had none --
+;; nor one for EX_GET_FIELD -- so the call edge under the constructor was never
+;; recorded and the fixpoint never reached the caller.
+;;
+;; Both walks now fall back to a shared child enumeration rather than treating an
+;; unarmed node as childless, which is the third filing of this exact hole (see
+;; cps-coloring-walk-has-no-arm-for-union-inject and
+;; saffron-any-return-defeats-the-frame-box-rule).  Coloring the caller then
+;; exposed a second layer: a ctor call has no `fn_binding`, so the CPS
+;; translation took its indirect-callee arm and rejected the non-atomic argument
+;; outright ("indirect call (non-atomic args)").  The elaboration hoist that
+;; already binds control-bearing operands out of the Saffron dynamic nodes now
+;; covers the constructor call and the field read too.
+;;
+;; `via-let` is the control the report names as the spelling any fix has to keep
+;; working, and it always did; every other arm aborted.
+;;
+;; NOT covered here, deliberately -- two pre-existing CPS-backend limits that a
+;; colored constructor argument merely reaches, and that the `let` control
+;; spelling hits identically, so neither is this report's:
+;;   - a `match` anywhere in a colored function evicts ("unsupported form:
+;;     EX_MATCH"), with or without a constructor argument;
+;;   - a `handle` whose result is a by-value defdata ADT evicts
+;;     ("BODY-STRUCT-CORE"); a defstruct record (`mk-box` below) is fine.
+;; Both are filed as colored-call-inside-match-evicts-the-cps-backend.md.
+(defeffect Ask [] : int)
+(defstruct Box [v : int])
+(defstruct Pair2 [a : int b : int])
+
+(defn g [] : int (perform (Ask)))
+
+;; The control: the call one level out of the constructor.
+(defn via-let [] : int (let [n (g)] (.v (Box n))))
+
+;; The report's repro: the call IS the constructor argument.
+(defn via-ctor-arg [] : int (.v (Box (g))))
+
+;; The constructor alone, with no field read over it -- a different eviction
+;; ("indirect call (non-atomic args)") reaching the same failure.
+(defn mk-box [] : Box (Box (g)))
+
+;; A field read whose receiver is itself a let over the hoisted call -- the
+;; shape the ctor hoist produces, which is why the field read needs a hoist too.
+(defn via-nested [] : int (.v (let [b (Box (g))] b)))
+
+;; Two effectful arguments in one constructor: both are bound, in operand order,
+;; which a single `let` evaluates in order -- so evaluation order is unchanged.
+(defn via-two-args [] : int
+  (let [p (Pair2 (g) (g))]
+    (+ (.a p) (.b p))))
+
+;; The field read's own receiver is a colored call, with no constructor in it.
+(defn via-field-of-call [] : int (.v (mk-box)))
+
+(defn main [] : int
+  (println (handle (via-let)          (Ask [] k) (resume k 41)))
+  (println (handle (via-ctor-arg)     (Ask [] k) (resume k 41)))
+  (println (.v (handle (mk-box)       (Ask [] k) (resume k 41))))
+  (println (handle (via-nested)       (Ask [] k) (resume k 41)))
+  (println (handle (via-two-args)     (Ask [] k) (resume k 41)))
+  (println (handle (via-field-of-call) (Ask [] k) (resume k 41)))
+  0)

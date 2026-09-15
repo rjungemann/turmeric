@@ -7119,6 +7119,8 @@ static int64_t map_hyget_hydynamic_hyas(void * m, int64_t hash, void * key, void
 static int64_t map_hyeq_hyloop__cps(void * iter_992, void * m2_hyhamt_993, void * keyeq_994, int64_t val_cmp, DK *__kont);
 static int64_t list_hyeq_qu__cps(int64_t l1_1276, int64_t l2_1277, int64_t cmp_fn, DK *__kont);
 static int64_t _un_uncons_hyfmap__cps(int64_t cell_1288, void * f_1289, DK *__kont);
+static int64_t option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o_1075, int64_t f, DK *__kont);
+static int64_t option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o1_1078, tur_adt_Option__int o2_1079, int64_t cmp_fn, DK *__kont);
 static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp, DK *__kont) {
     bool __t0;
     int64_t h_996;
@@ -9523,75 +9525,103 @@ static int64_t unwrap_or__spec__int64_t_tur_adt_Option__int_int64_t(tur_adt_Opti
         return __t313;
 }
 
-static tur_adt_Option__int option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t(tur_adt_Option__int o, int64_t f) {
-        tur_adt_Option__int __t314 = {0};
-        {
-            tur_adt_Option__int __scrut_v = (o);
-            tur_adt_Option__int *__scrut = &__scrut_v;
-            switch (__scrut->tag) {
-            case 1: {
-                int64_t v_1077 = (int64_t)__scrut->as.Some._0;
-                int64_t __ps_315 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(f)))((void *)(intptr_t)(f), v_1077));
-                if (tur_panicking) return (tur_adt_Option__int){0};
-                tur_adt_Option__int __ps_316 = (some__spec__tur_adt_Option__int_int64_t(__ps_315));
-                if (tur_panicking) return (tur_adt_Option__int){0};
-                __t314 = __ps_316;
-                break;
-            }
-            case 0: {
-                tur_adt_Option__int __ps_317 = (none__spec__tur_adt_Option__int());
-                if (tur_panicking) return (tur_adt_Option__int){0};
-                __t314 = __ps_317;
-                break;
-            }
-            default: break;
-            }
+static int64_t option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o, int64_t f, DK *__kont) {
+    tur_adt_Option__int __t0;
+    tur_adt_Option__int __t314 = {0};
+    {
+        tur_adt_Option__int __scrut_v = (o);
+        tur_adt_Option__int *__scrut = &__scrut_v;
+        switch (__scrut->tag) {
+        case 1: {
+            int64_t v_1077 = (int64_t)__scrut->as.Some._0;
+            int64_t __ps_315 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(f)))((void *)(intptr_t)(f), v_1077));
+            if (tur_panicking) return ((int64_t)0);
+            tur_adt_Option__int __ps_316 = (some__spec__tur_adt_Option__int_int64_t(__ps_315));
+            if (tur_panicking) return ((int64_t)0);
+            __t314 = __ps_316;
+            break;
         }
-        return __t314;
+        case 0: {
+            tur_adt_Option__int __ps_317 = (none__spec__tur_adt_Option__int());
+            if (tur_panicking) return ((int64_t)0);
+            __t314 = __ps_317;
+            break;
+        }
+        default: break;
+        }
+    }
+    __t0 = __t314;
+    return dk_run(__kont, __dk_reap_ptr((intptr_t)({ tur_adt_Option__int *__bx = (tur_adt_Option__int *)malloc(sizeof(tur_adt_Option__int)); *__bx = (__t0); __bx; })));
 }
-
-static bool option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t(tur_adt_Option__int o1, tur_adt_Option__int o2, int64_t cmp_fn) {
-        bool __t318 = 0;
-        {
-            tur_adt_Option__int __scrut_v = (o1);
-            tur_adt_Option__int *__scrut = &__scrut_v;
-            switch (__scrut->tag) {
-            case 1: {
-                int64_t v1_1081 = (int64_t)__scrut->as.Some._0;
-                bool __t319 = 0;
-                {
-                    tur_adt_Option__int __scrut_v = (o2);
-                    tur_adt_Option__int *__scrut = &__scrut_v;
-                    switch (__scrut->tag) {
-                    case 1: {
-                        int64_t v2_1082 = (int64_t)__scrut->as.Some._0;
-                        bool __ps_320 = ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), v1_1081, v2_1082));
-                        if (tur_panicking) return ((bool)0);
-                        __t319 = __ps_320;
-                        break;
-                    }
-                    case 0: {
-                        __t319 = false;
-                        break;
-                    }
-                    default: break;
-                    }
+__attribute__((unused)) static tur_adt_Option__int option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t(tur_adt_Option__int o, int64_t f) {
+    __dk_entry_depth++;
+    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
+    int64_t __r;
+    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (TUR_SETJMP(__dkjb) == 0) { __r = option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(o, f, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
+    tur_adt_Option__int __ret = (*(tur_adt_Option__int *)(__r));
+    if (!tur_async_suspended) dk_free(__root);
+    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    return __ret;
+}
+static int64_t option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o1, tur_adt_Option__int o2, int64_t cmp_fn, DK *__kont) {
+    bool __t0;
+    bool __t318 = 0;
+    {
+        tur_adt_Option__int __scrut_v = (o1);
+        tur_adt_Option__int *__scrut = &__scrut_v;
+        switch (__scrut->tag) {
+        case 1: {
+            int64_t v1_1081 = (int64_t)__scrut->as.Some._0;
+            bool __t319 = 0;
+            {
+                tur_adt_Option__int __scrut_v = (o2);
+                tur_adt_Option__int *__scrut = &__scrut_v;
+                switch (__scrut->tag) {
+                case 1: {
+                    int64_t v2_1082 = (int64_t)__scrut->as.Some._0;
+                    bool __ps_320 = ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), v1_1081, v2_1082));
+                    if (tur_panicking) return ((int64_t)0);
+                    __t319 = __ps_320;
+                    break;
                 }
-                __t318 = __t319;
-                break;
+                case 0: {
+                    __t319 = false;
+                    break;
+                }
+                default: break;
+                }
             }
-            case 0: {
-                bool __ps_321 = (none___spec__bool_tur_adt_Option__int(o2));
-                if (tur_panicking) return ((bool)0);
-                __t318 = __ps_321;
-                break;
-            }
-            default: break;
-            }
+            __t318 = __t319;
+            break;
         }
-        return __t318;
+        case 0: {
+            bool __ps_321 = (none___spec__bool_tur_adt_Option__int(o2));
+            if (tur_panicking) return ((int64_t)0);
+            __t318 = __ps_321;
+            break;
+        }
+        default: break;
+        }
+    }
+    __t0 = __t318;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
-
+__attribute__((unused)) static bool option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t(tur_adt_Option__int o1, tur_adt_Option__int o2, int64_t cmp_fn) {
+    __dk_entry_depth++;
+    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
+    int64_t __r;
+    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (TUR_SETJMP(__dkjb) == 0) { __r = option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(o1, o2, cmp_fn, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
+    bool __ret = (bool)(__r);
+    if (!tur_async_suspended) dk_free(__root);
+    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    return __ret;
+}
 static bool none___spec__bool_tur_adt_Option__int(tur_adt_Option__int o) {
         bool __t322 = 0;
         {

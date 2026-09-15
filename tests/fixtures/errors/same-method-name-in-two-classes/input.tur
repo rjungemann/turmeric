@@ -1,0 +1,30 @@
+;; same-method-name-in-two-classes-dispatches-by-declaration-order: two user
+;; classes declaring the same method name, each with an instance at `int`.
+;;
+;; This used to be a SILENT wrong answer: `tur check` exited 0 with no output,
+;; cc was happy, and `(encode 42)` called whichever `definstance` registered
+;; last -- printing `1042` as written and `json:42` with only the two
+;; `definstance` blocks swapped.  Typeclasses resolve globally, so this is
+;; reachable the moment two libraries each declare an obviously-named method
+;; (`encode`, `decode`, `size`, `render`), neither of them wrong on its own.
+;;
+;; Both classes are fully applied at `int` and both instances are legal, so the
+;; call really is ambiguous; the fix says so instead of picking by registration
+;; order.  Two classes merely SHARING a method name is not reported -- only a
+;; call where both have an instance matching the receiver.
+(defclass EncodeJson [a] (encode [x] : cstr))
+(defclass EncodeMp   [a] (encode [x] : int))
+
+(definstance EncodeJson [int] (encode [x] : cstr
+  ```c
+  char *b = (char*)malloc(24); snprintf(b,24,"json:%lld",(long long)x); return b;
+  ```))
+
+(definstance EncodeMp [int] (encode [x] : int
+  ```c
+  return x + 1000;
+  ```))
+
+(defn main [] : int
+  (println (encode 42))
+  0)

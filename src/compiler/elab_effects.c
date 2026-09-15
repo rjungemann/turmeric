@@ -1683,6 +1683,98 @@ static bool elab_effect_is_referred(const Elab *e, const Effect *eff) {
 /* (perform (EffectName arg1 arg2 ...))
  * Perform an algebraic effect with arguments.
  */
+/* perform-does-not-typecheck-its-arguments: the memory-safety half of the
+ * general check.
+ *
+ * `elab_perform` elaborated each argument and stored it in the effect slot
+ * without ever consulting the effect's declared parameter types, so
+ * `(defeffect Log [msg : cstr] : int)` performed as `(perform (Log 42))`
+ * compiled clean -- `tur check` and `tur emit-c` both exit 0 -- and segfaulted
+ * when the handler dereferenced the integer 42 as a `char *`.
+ *
+ * The GENERAL check is not a one-liner and is not attempted here: an ordinary
+ * call decides argument compatibility across ~300 lines of `elab_call_fn_inner`
+ * (implicit coercions, borrows, type variables, HKT carriers, by-value
+ * aggregates, the `any` seam), threaded through a mutable `arg_ok` with
+ * coercion side effects, and a naive `kind ==` at the perform site would reject
+ * a large amount of code that is correct today.  Factoring that decision into a
+ * predicate both sites can share is the real fix and is still worth doing.
+ *
+ * What this closes is the shape the segfault takes and the one shape that
+ * admits no legitimate program: a SCALAR word (an integer, a bool, a float)
+ * arriving at a POINTER-shaped parameter, where the handler's only possible
+ * reading of the slot is as an address.  Every other combination is left to the
+ * general check, so this cannot reject anything that works today.
+ *
+ * Deliberately NOT pointer-shaped here: TY_STRUCT / TY_ADT (by-value aggregates
+ * whose slot is not an address), TY_FN (a fn-typed param takes the boxing shim
+ * a few lines below), TY_TYVAR / TY_ANY / TY_UNKNOWN (no declared shape to
+ * disagree with).  And NOT scalar: TY_NIL, which an ordinary call already
+ * accepts for a pointer parameter, and TY_NEVER.
+ *
+ * ...and the argument must be a LITERAL, which is narrower than the filed fix
+ * direction proposed ("reject a scalar argument reaching a pointer-shaped
+ * parameter ... admits no legitimate program").  It does admit one, and the
+ * fixture corpus found it in seven places: an UNANNOTATED lambda parameter
+ * defaults to `int` at elaboration and is refined later, so
+ * `(fn [msg] (perform (Log msg)))` against `Log [msg : cstr]` reads as an int
+ * argument at this point and is perfectly correct --
+ * `tests/fixtures/effect-type-alias` and `cps-backend-fn-param-effectful` are
+ * two of them.  A literal's type is never provisional, so restricting to one
+ * gives a rule with no false positives at all, at the cost of missing a
+ * mismatch that arrives through a variable.  Widening this wants the same
+ * factored-out `arg_ok` predicate the general check wants -- not a better
+ * guess here.
+ *
+ * `is_literal_arg` peels the representation wrappers elaboration may already
+ * have put on the literal, so `(perform (Log 42))` is still recognised when
+ * the 42 arrives boxed or ascribed. */
+static bool perform_param_is_pointer_shaped(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_CSTR:
+        case TY_PTR_VOID:
+        case TY_REF:
+        case TY_RC:
+        case TY_WEAK:
+        case TY_REF_IMMUT:
+        case TY_REF_MUT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool perform_arg_is_literal(const Expr *a) {
+    while (a) {
+        switch (a->kind) {
+            case EX_INT_LIT:
+            case EX_BOOL_LIT:
+            case EX_FLOAT_LIT:
+                return true;
+            case EX_ASCRIBE:     a = a->as.ascribe_.inner;    break;
+            case EX_CAST:        a = a->as.cast_.expr;        break;
+            case EX_REINTERPRET: a = a->as.reinterpret_.expr; break;
+            default:             return false;
+        }
+    }
+    return false;
+}
+
+static bool perform_arg_is_scalar_word(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_BOOL:
+        case TY_INT:
+        case TY_INT8:  case TY_INT16:  case TY_INT32:  case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
 Expr *elab_perform(Elab *e, const Form *call) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -1820,6 +1912,35 @@ Expr *elab_perform(Elab *e, const Form *call) {
             args[i]->type.kind != TY_ANY) {
             Expr *widened = elab_coerce_to_any(e, args[i]);
             if (widened) args[i] = widened;
+        }
+        /* perform-does-not-typecheck-its-arguments: the declared parameter type
+         * is right there in the defeffect, and until now nothing at this site
+         * read it.  Run the shape check AFTER both seams above, so an `any`
+         * argument that was just unboxed to the concrete parameter type is
+         * judged on what it became, not on what it arrived as. */
+        if (i < effect->constructor->n_params) {
+            const Type *want_full = effect->constructor->param_full_types
+                ? effect->constructor->param_full_types[i] : NULL;
+            Type want = want_full ? *want_full
+                                  : type_from_kind(effect->constructor->param_types[i]);
+            if (perform_param_is_pointer_shaped(&want) &&
+                perform_arg_is_scalar_word(&args[i]->type) &&
+                perform_arg_is_literal(args[i])) {
+                const Symbol *pn = effect->constructor->param_names
+                    ? effect->constructor->param_names[i] : NULL;
+                char pbuf[96];
+                if (pn && pn->name) snprintf(pbuf, sizeof(pbuf), "'%s'", pn->name);
+                else                snprintf(pbuf, sizeof(pbuf), "%u", (unsigned)(i + 1));
+                diag_emit_with_code(DIAG_ERROR,
+                    effect_call_f->as.list.items[i + 1]->span,
+                    TUR_E0001_TYPE_MISMATCH,
+                    "effect '%s' declares parameter %s as '%s', but this "
+                    "argument has type '%s' -- the handler would read the "
+                    "value as an address",
+                    effect_name->name, pbuf, type_name(want),
+                    type_name(args[i]->type));
+                return NULL;
+            }
         }
         /* cps-dk-multishot-user-effects (Phase A): mark a CAPTURING closure payload
          * of the resumable-payload param `is_effect_payload` so the CPS backend

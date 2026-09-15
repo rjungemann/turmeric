@@ -1,5 +1,74 @@
 # `perform` does not type-check its arguments at all
 
+**Status: open, NARROWED 2026-09-15.** The memory-safety half is closed; the
+general check is not, and is still worth doing on its own terms.
+
+## What is fixed
+
+The report's own "cheaper interim" is implemented, **one notch narrower than it
+proposed**: `elab_perform` now rejects a LITERAL scalar (an integer, a bool, a
+float) arriving at a POINTER-shaped parameter (`cstr`, `ptr<T>`,
+`ref`/`rc`/`weak`, a borrow), with the ordinary `TUR-E0001` at the argument's
+span, naming the declared parameter and both types.
+
+The narrowing is measured, not cautious. The filing says a scalar argument
+reaching a pointer-shaped parameter "admits no legitimate program"; it admits
+one, and the fixture corpus found it in seven places. An **unannotated lambda
+parameter defaults to `int`** at elaboration and is refined later, so
+
+```turmeric
+(defstruct App :copy [run : fn #fx{Log}])
+(make-struct App (fn [msg] (perform (Log msg))))   ;; Log [msg : cstr]
+```
+
+reads as an int argument at the perform site and is entirely correct --
+`tests/fixtures/effect-type-alias` and `cps-backend-fn-param-effectful` are two
+of the seven, and they are now this check's controls. A literal's type is never
+provisional, so restricting to one gives a rule with **no false positives at
+all**, at the cost of missing a mismatch that arrives through a variable.
+Widening it wants the same factored-out `arg_ok` predicate the general check
+wants; it is not a better guess at this site.
+
+The check runs AFTER both existing `any` seams in the same loop, so an `any`
+argument that was just unboxed to the concrete parameter type is judged on what
+it became, not on what it arrived as.
+
+Deliberately NOT treated as pointer-shaped: `TY_STRUCT` / `TY_ADT` (by-value
+aggregates, whose slot is not an address), `TY_FN` (already handled by the
+boxing shim a few lines below), and `TY_TYVAR` / `TY_ANY` / `TY_UNKNOWN` (no
+declared shape to disagree with). Not treated as scalar: `TY_NIL`, which an
+ordinary call already accepts for a pointer parameter, and `TY_NEVER`.
+
+Pinned by `tests/fixtures/errors/perform-arg-scalar-into-pointer-param`, with
+the `cstr`/`int`/`float`/by-value-struct parameters and the Saffron `any`-seam
+path all verified to still compile and run.
+
+## What remains -- the general check
+
+Everything the report describes under "Fix directions": factoring the
+argument-compatibility decision out of `elab_call_fn_inner` (the ~300 lines
+from `elab_call.c:6195` that thread implicit coercions, borrows, type
+variables, HKT carriers, by-value aggregates and the seam through a mutable
+`arg_ok` with coercion side effects) into a predicate both call sites can use.
+Until that exists, these still pass unchecked at a `perform` site:
+
+- **a scalar reaching a pointer-shaped parameter through a VARIABLE** rather
+  than a literal -- the same defect, one indirection away, which is the price
+  of the no-false-positive restriction above;
+- a `cstr` argument reaching an `:int` parameter (the reverse direction -- a
+  silent misread rather than a crash, so it is not in the narrow rule);
+- a float argument reaching an `:int` parameter and vice versa;
+- an aggregate whose def differs from the declared one;
+- **arity**: `n_args` is never compared against `n_params`, so extra arguments
+  are silently ignored and missing ones leave the handler reading a stale slot.
+
+Arity is the cheapest of these and was left out of this pass only because
+`defeffect` parameter defaulting exists and the interaction was not measured.
+
+---
+
+*Original report follows.*
+
 **Severity: high -- memory safety, both dialects.** `elab_perform` elaborates
 each argument and stores it in the effect slot without ever consulting the
 effect's declared parameter types. A `cstr` parameter handed an `int` compiles

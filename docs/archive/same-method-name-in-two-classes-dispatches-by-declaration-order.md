@@ -1,5 +1,40 @@
 # Two classes declaring the same method name dispatch by declaration order, silently
 
+**RESOLVED 2026-09-15** via fix direction (1) -- the diagnostic, not a
+resolution-order change. `elab_method_call`'s instance search keeps its early
+exit; what changed is that a cheap pre-scan over the CLASS registry (short,
+unlike the instance list) asks first whether two non-stdlib classes declare
+this method name at all. Only then does the search keep going past its first
+exact match, and only a second match from a *different* user class is reported
+-- so the call really is ambiguous when the error fires, and nothing that
+resolves today is affected.
+
+`TUR-E0020_AMBIGUOUS_DISPATCH` already existed and is the right code, so no new
+one was added. It was missing from `diag_code_to_string`, though, which meant
+every ambiguous-dispatch error printed a bare `error []` -- ungreppable, and
+unmatchable by an `errors/` fixture's `expected.diag`. Both pre-existing call
+sites were affected too; the row is added here.
+
+The report's two "do not sweep this up" notes were both respected: `from_stdlib`
+classes are excluded on both sides (the deliberate user-`defn`-shadows-stdlib
+pattern is defn-vs-method and keeps working), and a class registered twice
+through two import paths is compared by name as well as identity, so it does
+not report itself ambiguous with itself.
+
+Fix direction (2), the `defclass`-time warning, was deliberately **not** taken,
+for the reason the report gives: it cannot distinguish the harmless case (two
+classes never used in one program) from the harmful one, and (1) already closes
+the silent-wrong-answer hole.
+
+Pinned by `tests/fixtures/errors/same-method-name-in-two-classes`, with three
+controls verified by hand: the error fires in BOTH declaration orders; one class
+alone still resolves; and two classes sharing a method name with only ONE
+instance matching the receiver still resolves, to the right one.
+
+---
+
+*Original report follows.*
+
 **Severity: high** -- a **silent wrong answer**, with no diagnostic anywhere.
 `tur check` exits 0 with zero output, cc is happy, and the program runs; it
 just calls the other class's instance. Reordering two unrelated `definstance`
