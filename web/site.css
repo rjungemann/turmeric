@@ -667,11 +667,18 @@ nav.nav-drawer .nav-mobile-panel { display: none; }
 .copy-btn.copied { color: var(--gold); border-color: var(--gold-line); background: var(--gold-subtle); }
 
 /* ── SITE SIDEBAR ──────────────────────── */
+/* The generated doc pages (tools/gendocs.py) lay sidebar + content out as one
+   centred grid: `.page-layout { grid-template-columns: 240px 1fr; max-width:
+   1200px; margin: 0 auto }`.  This rail is `position: fixed` instead, so it
+   cannot inherit that centring -- pinned at `left: 0` it sat hard against the
+   viewport edge while /docs/html/guides/ sat ~200px inboard, and /tour read as
+   misaligned against every doc page.  Offset it to where the centred column's
+   left edge falls, clamped at 0 so a narrow window still gets a flush rail. */
 site-sidebar {
   display: block;
   position: fixed;
   top: 60px;
-  left: 0;
+  left: max(0px, calc((100vw - 1200px) / 2));
   bottom: 0;
   width: 240px;
   padding: 1.5rem 1rem;
@@ -711,12 +718,19 @@ site-sidebar li { margin: 0.15rem 0; }
 site-sidebar a {
   font-size: 0.825rem;
   color: var(--text-sec);
+  font-family: 'DM Sans', sans-serif;
 }
 site-sidebar a:hover { color: var(--gold-bright); }
 site-sidebar .sidebar-toc ul { padding-left: 0; }
 site-sidebar .sidebar-toc li { font-size: 0.825rem; }
 
-body:has(site-sidebar) { padding-left: 240px; }
+/* Match the rail's offset, and add the mirror-image right gutter, so the
+   content column is the same 960px (1200 - 240) the doc pages use and a
+   centred hero reads as centred against the page rather than shoved right. */
+body:has(site-sidebar) {
+  padding-left: max(240px, calc((100vw - 1200px) / 2 + 240px));
+  padding-right: max(0px, calc((100vw - 1200px) / 2));
+}
 
 /* Mobile drawer -- same behaviour, breakpoint and overlay as the generated doc
    pages: the topbar hamburger slides the sidebar in rather than hiding its
@@ -732,8 +746,11 @@ body:has(site-sidebar) { padding-left: 240px; }
 .sidebar-overlay.is-open { display: block; }
 
 @media (max-width: 768px) {
-  body:has(site-sidebar) { padding-left: 0; }
+  /* Drawer mode: no reserved gutters, and the rail slides in from the true
+     viewport edge rather than the centred column's. */
+  body:has(site-sidebar) { padding-left: 0; padding-right: 0; }
   site-sidebar {
+    left: 0;
     width: 280px;
     z-index: 100;
     background: var(--bg-surface);

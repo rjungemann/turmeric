@@ -888,6 +888,10 @@ em { color: var(--green); font-style: italic; }
 
 /* Sidebar */
 .sidebar {
+  /* One face for the whole rail, set on the container so every descendant --
+     headings, nav links, definition links, uplinks -- resolves to the same
+     stack rather than half inheriting the body's. */
+  font-family: 'DM Sans', sans-serif;
   padding: 1.5rem 1rem;
   border-right: 1px solid var(--border);
   position: sticky;
@@ -907,10 +911,12 @@ em { color: var(--green); font-style: italic; }
 .sidebar h3:first-child { margin-top: 0; }
 .sidebar ul { list-style: none; }
 .sidebar li { margin: 0.15rem 0; }
-.sidebar a { font-size: 0.825rem; color: var(--text-sec); }
-/* Navigation links read as prose; a link that names a definition is an
-   identifier and stays in the code face. */
-.sidebar a.sidebar-def, .sidebar code { font-family: 'Iosevka', 'Fira Code', monospace; }
+/* Every sidebar on every turmeric surface is sans-serif -- nav labels and
+   definition links alike.  A sidebar is navigation chrome, not code: the one
+   face keeps the rail consistent across the main site, the guides, the API
+   reference and the spices site. */
+.sidebar a { font-size: 0.825rem; color: var(--text-sec); font-family: 'DM Sans', sans-serif; }
+.sidebar a.sidebar-def, .sidebar code { font-family: 'DM Sans', sans-serif; }
 .sidebar a:hover { color: var(--gold-bright); text-decoration: none; }
 /* An ordinary link, not a button: nothing here submits or toggles, it just
    navigates like every other entry in the rail. Selector carries the `a` so it
