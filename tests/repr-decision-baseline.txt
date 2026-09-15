@@ -1,6 +1,6 @@
 type_uses_carrier_abi emit_core.c 1
 type_uses_carrier_abi emit_cps_ir.c 1
-type_uses_carrier_abi emit_expr.c 32
+type_uses_carrier_abi emit_expr.c 33
 type_uses_carrier_abi emit_fns.c 22
 type_uses_carrier_abi emit_module.c 13
 type_uses_carrier_abi emit_stmt.c 1
