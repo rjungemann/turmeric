@@ -436,12 +436,6 @@ extern bool g_sr2_app_sum_byvalue;
  * and reports a clean diagnostic without it, and `unsafe` is still required.
  * See docs/archive/jit-ffi-c2mir-plan.md. */
 
-/* lang-layers L4: true once a project manifest declared an `:experiments`
- * key (even the empty list), i.e. the project owner scoped the experiment set.
- * A `#lang <base> <semantic-layer>` file whose backing experiment is absent
- * from that scoped set is then a hard error instead of a silent ignore. */
-extern bool g_manifest_experiments_scoped;
-
 /* --strict-refine: a diagnostic-strictness knob (NOT an experiment).  Upgrades
  * TUR-E0371 / TUR-W0372 from "keep the runtime check" to a hard compile error,
  * for users who want a fully-discharged build with no silent runtime

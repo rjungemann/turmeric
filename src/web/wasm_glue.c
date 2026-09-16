@@ -22,7 +22,7 @@
 #include "buf.h"
 #include "diag.h"
 #include "fmt.h"
-#include "lang_layers.h"
+#include "lang_dialects.h"
 #include "reader.h"
 #include "runtime/experiments.h"
 #include "symbols.h"
@@ -393,24 +393,21 @@ void turi_wasm_shutdown(void) {
 
 /* Set the reader language mode for subsequent evaluations.
  *
- * `name` is the full directive tail -- a base name optionally followed by
- * space-separated layer tokens (e.g. "turmeric/sweet stringed"), exactly the
- * text after `#lang `.  Builds a synthetic "#lang <name>" line and runs it
- * through detect_lang_layered so the same validation logic used by the REPL
- * and the interpreter applies here too.
+ * `name` is the `#lang` directive tail -- a base dialect name and nothing
+ * else (e.g. "turmeric/sweet", "saffron"), exactly the text after `#lang `.
+ * Builds a synthetic "#lang <name>" line and runs it through
+ * detect_lang_dialect so the same validation logic used by the REPL and the
+ * interpreter applies here too.
  *
- * The layer set is ASSIGNED, never OR-ed: unlike an inline `#lang` line
- * arriving mid-session (src/turi/eval.c unions layers deliberately), this
- * entry point expresses the caller's complete desired state, so toggling a
- * layer off works.  A layer-set change resets the session the same way a
- * base change does -- losing session state on a language switch is the
- * already-accepted behaviour, and the UI warns before it happens.
+ * A base change resets the session -- losing session state on a language
+ * switch is the already-accepted behaviour, and the UI warns before it
+ * happens.
  *
- * Returns 0 on success, 1 if the base or any layer token is unknown. */
+ * Returns 0 on success, 1 if the base is unknown or anything trails it. */
 int turi_wasm_set_lang(const char *name) {
     if (!g_env || !name) return 1;
 
-    /* Build a synthetic "#lang <name>" to reuse detect_lang_layered's
+    /* Build a synthetic "#lang <name>" to reuse detect_lang_dialect's
      * validation. */
     char buf[256];
     int written = snprintf(buf, sizeof(buf), "#lang %s", name);
@@ -418,33 +415,32 @@ int turi_wasm_set_lang(const char *name) {
 
     const char  *rest;
     size_t       rest_len;
-    LangLayerSet layers  = 0;
     const char  *bad     = NULL;
     size_t       bad_len = 0;
-    /* saffron-lang-plan S8: detect_lang_DIALECT, not detect_lang_layered.
-     * The layered form reports only the reader, so every Saffron base came
+    /* saffron-lang-plan S8: detect_lang_DIALECT, not the plain detect_lang.
+     * The latter reports only the reader, so every Saffron base came
      * back as its reader half (`saffron` -> READER_TURMERIC) with the language
      * silently dropped -- the picker would have "switched" to Saffron and left
      * the session in Turmeric. */
     LangDialect dialect = LANG_TURMERIC;
     ReaderType rt = detect_lang_dialect(buf, (size_t)written,
                                         &rest, &rest_len,
-                                        &layers, &bad, &bad_len,
+                                        &bad, &bad_len,
                                         &dialect);
 
     /* rest == buf means no #lang was recognised (pointer unchanged). */
     if (rest == buf || rt == READER_UNKNOWN || rt == (ReaderType)-1) return 1;
-    /* An unknown layer token is a hard reject, matching TUR-E0330 on the
-     * compiled path -- silently ignoring it would leave the UI and the
-     * environment disagreeing. */
+    /* A trailing token is a hard reject, matching TUR-E0330 on the compiled
+     * path -- silently ignoring it would leave the UI and the environment
+     * disagreeing.  (A RETIRED layer token does not reach here: the detector
+     * accepts and consumes it, so a pasted `#lang turmeric stringed` header
+     * still selects the turmeric base rather than failing the switch.) */
     if (bad) return 1;
 
     /* Full switch (no-op when nothing changes): keeps the pinned stdlib
      * preload across an explicit UI language switch, for the same reason the
-     * inline `#lang` path does (web-repl-lang-switch-drops-stdlib), and wipes
-     * the session reader-macro registry so a dropped layer's dispatch
-     * genuinely turns off. */
-    turi_env_apply_lang_dialect(g_env, rt, layers, dialect);
+     * inline `#lang` path does (web-repl-lang-switch-drops-stdlib). */
+    turi_env_apply_lang_dialect(g_env, rt, dialect);
     return 0;
 }
 
@@ -472,7 +468,7 @@ const char *turi_wasm_get_lang(void) {
  * picker still offered the original four, so the dialect was unreachable from
  * the UI.  Keying on the reader suffix means a new LANGUAGE costs this table
  * nothing -- the base list itself is walked from lang_base_at, the same
- * cross-product `tur lang-layers` prints.  The legacy `sweet-exp` alias is
+ * cross-product `tur dialects` prints.  The legacy `sweet-exp` alias is
  * accepted on input but deliberately not offered. */
 static const struct {
     const char *reader;
@@ -510,17 +506,14 @@ static void wasm_json_escape(Buf *b, const char *s) {
 
 /* Return the `#lang` registry as JSON:
  *
- *   {"bases":[{"name":"turmeric","label":"S-expression"},...],
- *    "layers":[{"name":"stringed","kind":"reader",
- *               "summary":"#s\"...\" owned-String literal","since":"v1",
- *               "available":true}]}
+ *   {"bases":[{"name":"turmeric","label":"S-expression",
+ *              "language":"turmeric","experiment":null},...]}
  *
- * Bases come from the WASM_LANG_BASES table above (mirroring
- * lang_base_from_name's canonical set); layers are walked live from
- * LANG_LAYERS[] via the same accessors that back `tur lang-layers`, so the
- * playground picker and the CLI listing cannot disagree.  `available` is
- * false for a semantic layer whose backing experiment no longer exists --
- * such a row renders disabled, never hidden.
+ * One axis, because `#lang` has one: bases are walked live from lang_base_at,
+ * the same accessor that backs `tur dialects`, so the playground picker and
+ * the CLI listing cannot disagree.  There used to be a second `"layers"` key;
+ * the axis was decommissioned and the key is gone rather than emptied, so a
+ * consumer cannot render a control for it.
  *
  * The returned string is built once and owned by this module; the caller
  * must NOT free it. */
@@ -557,35 +550,10 @@ const char *turi_wasm_lang_registry(void) {
         }
         buf_puts(&b, "}");
     }
-    buf_puts(&b, "],\"layers\":[");
-    size_t nlayers = lang_layers_count();
-    for (size_t i = 0; i < nlayers; i++) {
-        const LangLayerDescriptor *d = lang_layer_at(i);
-        if (!d) continue;
-        if (i) buf_putc(&b, ',');
-        buf_puts(&b, "{\"name\":\"");
-        wasm_json_escape(&b, d->name);
-        buf_puts(&b, "\",\"kind\":\"");
-        buf_puts(&b, d->kind == LAYER_SEMANTIC ? "semantic" : "reader");
-        buf_puts(&b, "\",\"summary\":\"");
-        wasm_json_escape(&b, d->summary);
-        buf_puts(&b, "\",\"since\":\"");
-        wasm_json_escape(&b, d->since);
-        buf_puts(&b, "\",\"available\":");
-        bool available = true;
-        if (d->kind == LAYER_SEMANTIC) {
-            /* A semantic layer is only offerable while its EXPERIMENTS[] row
-             * exists; the layer IS the enable, so a missing row means the
-             * token would hard-error. */
-            available = d->experiment && experiment_lookup(d->experiment);
-        }
-        buf_puts(&b, available ? "true" : "false");
-        buf_puts(&b, "}");
-    }
     buf_puts(&b, "]}");
     buf_putc(&b, '\0');   /* Buf does not NUL-terminate; strdup needs it */
 
-    cached = turi_wasm_strdup(b.data ? b.data : "{\"bases\":[],\"layers\":[]}");
+    cached = turi_wasm_strdup(b.data ? b.data : "{\"bases\":[]}");
     buf_free(&b);
     return cached;
 }

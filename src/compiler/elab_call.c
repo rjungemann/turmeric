@@ -6,7 +6,7 @@
 #define _GNU_SOURCE
 #endif
 #include "elab_internal.h"
-#include "lang_layers.h"   /* saffron-lang-plan S3: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_saffron */
 #include "cps.h"          /* cps_expr_uses_control -- the control-widen hoist */
 bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h */
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */

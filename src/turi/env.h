@@ -359,11 +359,6 @@ typedef struct TuriEnv {
     EnvHashTable globals_ht;
     /* Active reader syntax mode — settable via #lang in the REPL */
     ReaderType   reader_type;
-    /* Additive `#lang` layer set active for the session (lang-layers-plan
-     * L1), the neighbor of reader_type: carried onto each eval's SourceFile
-     * so reader layers (e.g. `stringed` => #s"...") stay active across the
-     * accumulated <eval> blob.  Reset alongside reader_type on a #lang switch. */
-    LangLayerSet lang_layers;
     /* saffron-lang-plan S1: the LANGUAGE axis of the session, the twin of
      * reader_type above.  Sticky across an eval session the same way the reader
      * is: a `#lang saffron` blob keeps the dialect for the blobs that follow it
@@ -575,23 +570,18 @@ void turi_env_pin_prelude(TuriEnv *env);
  * set-lang entry point) previously open-coded and had to keep in sync. */
 void turi_env_reset_to_prelude(TuriEnv *env);
 
-/* Honest full language switch (try-turmeric-lang-toggle-plan T0): assign the
- * base reader AND the complete layer set, resetting the session when either
- * changes.  Unlike the inline `#lang` eval path (which unions layers turn by
- * turn), the layer set here is the caller's total desired state, so a layer
- * absent from `layers` genuinely turns OFF: the persistent session
- * reader-macro registry is re-initialized (its arena storage is
- * env-lifetime, reclaimed at teardown) and the still-active layers
- * re-register their dispatches on the next read via
- * lang_layers_apply_readers.  A no-op when nothing changes.  Used by the
- * REPL `#lang` handler and the WASM set-lang entry point. */
-/* saffron-lang-plan S8: apply a reader AND language switch.  The plain
+/* Full language switch: assign the base reader, resetting the session when it
+ * changes.  The session reader-macro registry is re-initialized too, and the
+ * built-in dispatches are reinstalled on the next read.  A no-op when nothing
+ * changes.  Used by the REPL `#lang` handler and the WASM set-lang entry
+ * point.
+ *
+ * saffron-lang-plan S8: apply a reader AND language switch.  The plain
  * turi_env_apply_lang below keeps the session's current dialect, so an
  * existing caller is unchanged. */
 void turi_env_apply_lang_dialect(TuriEnv *env, ReaderType reader_type,
-                                 LangLayerSet layers, LangDialect dialect);
-void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type,
-                         LangLayerSet layers);
+                                 LangDialect dialect);
+void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type);
 
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);

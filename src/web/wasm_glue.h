@@ -133,16 +133,14 @@ int turi_wasm_set_lang(const char *name);
  * The returned pointer must NOT be freed. */
 const char *turi_wasm_get_lang(void);
 
-/* Return the `#lang` registry (base dialects + curated layers) as a JSON
- * string:
+/* Return the `#lang` registry (the base dialects) as a JSON string:
  *
- *   {"bases":[{"name":"turmeric","label":"S-expression"},...],
- *    "layers":[{"name":"stringed","kind":"reader","summary":"...",
- *               "since":"v1","available":true},...]}
+ *   {"bases":[{"name":"turmeric","label":"S-expression",
+ *              "language":"turmeric","experiment":null},...]}
  *
- * Built live from the C-side tables (lang_base_from_name's canonical set and
- * LANG_LAYERS[]) so a UI rendering it never becomes a second source of
- * truth.  The returned pointer is owned by the module; do NOT free it. */
+ * Built live from the C-side base axis (lang_base_at) so a UI rendering it
+ * never becomes a second source of truth.  The returned pointer is owned by
+ * the module; do NOT free it. */
 const char *turi_wasm_lang_registry(void);
 
 /* ---------------------------------------------------------------------------

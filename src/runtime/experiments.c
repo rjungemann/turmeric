@@ -185,9 +185,10 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * execution reaching it.  Preconditions were measured, not assumed: the
      * in-tree blast radius was one fixture (repurposed, not deleted), and cost
      * on a real ~5400-line program was 1.004x with zero TUR-E0371.  The name
-     * moves to GRADUATED[] below and to GRADUATED_LAYERS[] in lang_layers.c --
-     * a lingering --enable is a TUR-W0063 no-op, and a lingering
-     * `#lang turmeric refined` a TUR-W0064 one.  See
+     * moves to GRADUATED[] below, so a lingering --enable is a TUR-W0063
+     * no-op.  (It had a twin in the `#lang` layer table, which is why
+     * `#lang turmeric refined` warned rather than failing for a while; both
+     * the twin and the layer axis itself are gone now.)  See
      * docs/archive/refined-graduation-plan.md. */
     /* J1-J3 jit GRADUATED 2026-08-17 -- `tur jit <file>` no longer needs
      * `--enable=jit`.  The gate existed to hold a third execution engine until
@@ -393,9 +394,10 @@ static const char *const GRADUATED[] = {
      * past its graduation.  `--enable=<any of them>` is now the hard TUR-E0310
      * an unknown name gets, pinned by errors/experiment-retired-name.
      *
-     * `refined` also aged out of GRADUATED_LAYERS[] (lang_layers.c) in the same
-     * change, so `#lang turmeric refined` is now TUR-E0330; the two shims were
-     * always a pair and had to go together.
+     * `refined` also aged out of the `#lang` layer shim in the same change,
+     * so `#lang turmeric refined` became TUR-E0330; the two shims were always
+     * a pair and had to go together.  The layer axis has since been
+     * decommissioned outright, so that token is now simply a trailing one.
      *
      * Only `jit-ffi` stays.  It graduated in 0.38.0 -- this line -- so its
      * window has not opened yet; it becomes eligible at 0.39.0. */

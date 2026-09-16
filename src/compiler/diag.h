@@ -438,15 +438,9 @@ typedef enum LangDialect {
     LANG_SAFFRON,        /* dynamically typed dialect (`#lang saffron`; stable since 0.46.0) */
 } LangDialect;
 
-/* Canonical name of a dialect, for diagnostics and `tur lang-layers`.
+/* Canonical name of a dialect, for diagnostics and `tur dialects`.
  * The sibling of reader_type_name. */
 const char *lang_dialect_name(LangDialect d);
-
-/* The additive `#lang` layer set: a bitset over the LANG_LAYERS[] table
- * (src/compiler/lang_layers.c), one bit per table index.  Rides alongside
- * the base ReaderType, not in place of it.  Empty (0) for a bare file or a
- * `#lang` line with no trailing layer tokens.  See lang_layers.h. */
-typedef uint32_t LangLayerSet;
 
 /* Source map for syntax-transforming readers (currently sweet-exp).
  * Each run says "starting at xform_offset in the transformed text,
@@ -490,11 +484,6 @@ typedef struct SourceFile {
      * SourceFile starts as -- so an unwired construction site keeps today's
      * behaviour rather than silently opting into a dialect. */
     LangDialect lang;
-    /* Additive `#lang` layer set parsed from the same directive line as
-     * reader_type (lang-layers-plan).  Reader layers in this set have their
-     * `#`-dispatch registered at reader init; empty for files without layers.
-     * A SourceFile built with `{0}`/memset starts with no layers. */
-    LangLayerSet lang_layers;
     /* Sweet-exp transformation support: when xform_map is non-NULL, src
      * is the preprocessed s-expression text and orig_src/orig_len point
      * to the user's original source.  Diagnostics render snippets from
@@ -514,33 +503,32 @@ typedef struct SourceFile {
     size_t          head_offset;
 } SourceFile;
 
-/* Detect #lang directive from file source (Phase S0).  Base reader only;
- * any trailing layer tokens are consumed (never leaked into the body) but
- * not reported.  A thin wrapper over detect_lang_layered. */
-ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
-                       size_t *out_rest_len);
+/* Detect a `#lang` directive (Phase S0).  `out_rest`/`out_rest_len` advance
+ * past the directive line, so the reader never sees its leading '#'; they are
+ * left pointing at `src` when there is no directive.
+ *
+ * `#lang` takes a single base dialect and nothing else.  A trailing token
+ * after the base name is not legal: `*out_bad`/`*out_bad_len` point at the
+ * first one (into `src`) and the caller reports TUR-E0330.  The one exception
+ * is a RETIRED token from the decommissioned layer axis, which is accepted,
+ * warned once (TUR-W0064) and ignored for one minor line -- see reader.c.
+ *
+ * An unrecognised BASE comes back through the same out-param, with
+ * READER_UNKNOWN returned; that is how a caller tells the two apart.  The
+ * token loop consumes to end-of-line either way, so nothing ever leaks into
+ * the body.  Any out-param may be NULL. */
+ReaderType detect_lang(const char *src, size_t len,
+                       const char **out_rest, size_t *out_rest_len,
+                       const char **out_bad, size_t *out_bad_len);
 
-/* Detect #lang directive, reporting both the base ReaderType and the
- * additive layer set (lang-layers-plan L0).  `out_layers` receives the set of
- * recognized layer tokens; when a trailing token is NOT a registered layer,
- * `*out_bad`/`*out_bad_len` point at the first offending token (into `src`)
- * and it is omitted from the set -- the caller reports TUR-E0330.  Any of the
- * out-params may be NULL; passing NULL for `out_layers` makes this behave like
- * detect_lang (layers parsed for EOL-consumption but discarded). */
-ReaderType detect_lang_layered(const char *src, size_t len,
-                               const char **out_rest, size_t *out_rest_len,
-                               LangLayerSet *out_layers,
-                               const char **out_bad, size_t *out_bad_len);
-
-/* saffron-lang-plan S1: detect_lang_layered plus the LANGUAGE axis (D1).
- * `out_dialect` receives the dialect the base token named; every existing
- * spelling yields LANG_TURMERIC.  detect_lang_layered is this with
- * `out_dialect == NULL`, which is why the dozen callers that do not care about
- * the dialect needed no change -- only the paths that elaborate a file thread
- * it through to SourceFile.lang. */
+/* saffron-lang-plan S1: detect_lang plus the LANGUAGE axis (D1).
+ * `out_dialect` receives the dialect the base token named; every non-Saffron
+ * spelling yields LANG_TURMERIC.  detect_lang is this with
+ * `out_dialect == NULL`, which is why the callers that do not care about the
+ * dialect need no change -- only the paths that elaborate a file thread it
+ * through to SourceFile.lang. */
 ReaderType detect_lang_dialect(const char *src, size_t len,
                                const char **out_rest, size_t *out_rest_len,
-                               LangLayerSet *out_layers,
                                const char **out_bad, size_t *out_bad_len,
                                LangDialect *out_dialect);
 
@@ -550,7 +538,7 @@ ReaderType detect_lang_dialect(const char *src, size_t len,
  * enable, nothing to warn about, and a project manifest can no longer refuse
  * one.  What remains is recording that this build contains a Saffron TU
  * (g_opt_saffron), which the emitter reads to decide whether to emit the `any`
- * registries -- see lang_layers.c.
+ * registries -- see lang_dialects.c.
  *
  * Still returns bool, and callers still check it, because that is the shape a
  * future gated dialect needs; today it cannot fail. */

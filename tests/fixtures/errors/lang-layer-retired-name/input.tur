@@ -1,22 +1,19 @@
 #lang turmeric refined
-;; The layer-side counterpart of errors/experiment-retired-name.
+;; `refined` is a trailing token, and a trailing token after the base dialect
+;; is a hard TUR-E0330 -- that is the whole of the `#lang` grammar now.
 ;;
-;; A SEMANTIC `#lang` layer is not a second enable path -- it IS its experiment,
-;; scoped to one file, so `#lang turmeric refined` was exactly `--enable=refined`
-;; for this file.  That pairing is why the two shims had to age out together:
-;; keeping the layer shim after retiring the experiment would leave
-;; `#lang turmeric refined` accepted while `--enable=refined` was refused, which
-;; is precisely the inconsistency the pairing exists to prevent.
+;; The fixture predates the decommission and is kept because the history is
+;; the point: `refined` was a SEMANTIC `#lang` layer, which was never a second
+;; enable path -- it WAS its experiment, scoped to one file, so
+;; `#lang turmeric refined` was exactly `--enable=refined` here.  That lesson
+;; is half of why the axis went: a semantic layer is an alias for `--enable`,
+;; and the only other member was a `#`-dispatch that should never have been
+;; optional.  See docs/archive/lang-layers-decommission-plan.md.
 ;;
-;; `refined` graduated 2026-08-01 (v0.33.0) and was retired at 0.38.0, five
-;; minor lines later.  GRADUATED_LAYERS[] in lang_layers.c is empty again, so an
-;; unknown layer token is the hard TUR-E0330 it was before the shim -- what this
-;; pins.  The table itself stays (empty) on purpose: it has to exist BEFORE the
-;; next layer graduates, or that release breaks every file naming the token.
-;;
-;; Replaces refine-graduated-lang-layer-noop, which pinned the TUR-W0064 no-op
-;; this supersedes.  Refinement checking itself is unaffected and unconditional
-;; -- `#refine{...}` needs no layer and never did after graduation.
+;; `refined` graduated 2026-08-01 (v0.33.0) and aged out of the layer shim at
+;; 0.38.0, which is when this became TUR-E0330; the decommission did not change
+;; the outcome, only the reason and the wording.  Refinement checking itself is
+;; unaffected and unconditional -- `#refine{...}` needs no layer and never did.
 (defn main [] : int
   (println "unreachable -- the #lang line is refused first")
   0)

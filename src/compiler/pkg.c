@@ -680,14 +680,34 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
     /* Strip a leading "#lang ..." directive (if any) before parsing.  The
      * sweet-exp preprocessor and the s-expr reader both choke on the bare
      * '#' of an unhandled "#lang" line; main.c's single-file paths run the
-     * same detect_lang sweep before reading. */
+     * same detect_lang sweep before reading.
+     *
+     * A trailing token after the base name is diagnosed HERE too, rather than
+     * silently tolerated because this caller only wants the strip.  A manifest
+     * is source like any other file, and `#lang` taking a base and nothing
+     * else has to mean the same thing in build.tur and build.tur.sweet as it
+     * does in a .tur -- a token rejected everywhere except the one file that
+     * configures the build is the kind of split nobody discovers until it
+     * matters. */
     const char *src_eff = src;
     size_t      len_eff = (size_t)sz;
     {
         const char *src_rest = src;
         size_t      len_rest = (size_t)sz;
-        ReaderType  lang_type = detect_lang(src, (size_t)sz, &src_rest, &len_rest);
-        (void)lang_type;
+        const char *bad      = NULL;
+        size_t      bad_len  = 0;
+        ReaderType  lang_type = detect_lang(src, (size_t)sz, &src_rest, &len_rest,
+                                            &bad, &bad_len);
+        if (bad && lang_type != READER_UNKNOWN) {
+            fprintf(stderr,
+                    "spice: error [TUR-E0330]: `#lang` takes a single base "
+                    "dialect; unexpected trailing token '%.*s' in %s\n",
+                    (int)bad_len, bad, path);
+            arena_free(&arena);
+            if (status) *status = PKG_MANIFEST_MALFORMED;
+            pkg_manifest_mark_malformed(path);
+            return false;
+        }
         src_eff = src_rest;
         len_eff = len_rest;
     }

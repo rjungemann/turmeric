@@ -1,6 +1,6 @@
 /* elab_typeclasses.c -- typeclass declarations, instances, and method-call dispatch. */
 #include "elab_internal.h"
-#include "lang_layers.h"   /* saffron-lang-plan S4: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-lang-plan S4: lang_span_is_saffron */
 #include "refine_discharge.h"     /* RT1: instance/class refinement variance */
 #include "refine_solver.h"        /* RT1: refine_model_search, for the variance witness */
 #include "forms.h"

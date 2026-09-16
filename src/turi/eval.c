@@ -13073,13 +13073,12 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     {
         const char  *rest     = src_body;
         size_t       rest_len  = body_len;
-        LangLayerSet layers    = 0;
         const char  *bad       = NULL;
         size_t       bad_len   = 0;
         LangDialect  dialect   = LANG_TURMERIC;
         ReaderType   detected  = detect_lang_dialect(src_body, body_len,
                                                      &rest, &rest_len,
-                                                     &layers, &bad, &bad_len,
+                                                     &bad, &bad_len,
                                                      &dialect);
         if (rest != src_body) {
             /* A #lang directive was found.  Reject an unknown / not-yet-
@@ -13088,18 +13087,20 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
              * the program under the default reader -- otherwise `#lang foo`
              * would just execute as plain Turmeric under --interpret. */
             if (detected == READER_UNKNOWN && bad) {
-                return turi_errorf("error [TUR-E0331]: unknown #lang base '%.*s' -- see `tur lang-layers` for the valid bases",
+                return turi_errorf("error [TUR-E0331]: unknown #lang base '%.*s' -- see `tur dialects` for the valid bases",
                                    (int)bad_len, bad);
             }
             if (!reader_type_is_implemented(detected)) {
                 return turi_errorf("error: #lang %s is not yet implemented",
                                    reader_type_name(detected));
             }
-            /* Unknown layer token is a hard error (TUR-E0330), matching the
-             * compiled path. */
+            /* `#lang` takes a base dialect and nothing else; a trailing
+             * token is a hard error (TUR-E0330), matching the compiled
+             * path. */
             if (bad) {
-                return turi_errorf("error [TUR-E0330]: unknown #lang layer '%.*s'",
-                                   (int)bad_len, bad);
+                return turi_errorf("error [TUR-E0330]: `#lang` takes a single "
+                                   "base dialect; unexpected trailing token "
+                                   "'%.*s'", (int)bad_len, bad);
             }
             /* Strip the directive from the source body. */
             if (detected != env->reader_type) {
@@ -13112,9 +13113,6 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                 turi_env_reset_to_prelude(env);
                 env->reader_type = detected;
             }
-            /* Layers are additive and file-scoped; union them into the
-             * session set so reader layers stay active across the eval blob. */
-            env->lang_layers |= layers;
             /* saffron-lang-plan S1: the language axis is sticky like the reader
              * -- a session that said `#lang saffron` stays Saffron for the
              * blobs after it.  Only a directive that NAMES a dialect changes
@@ -13190,7 +13188,6 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     sfile->len         = src_len;
     sfile->file_id     = 0;
     sfile->reader_type = env->reader_type;
-    sfile->lang_layers = env->lang_layers;   /* lang-layers-plan L1 */
     sfile->lang        = env->lang;          /* saffron-lang-plan S1 */
     diag_register_file(sfile);
     /* Re-register the previous turn's loaded files (id 0, this turn's blob,

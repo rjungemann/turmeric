@@ -30,7 +30,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "compiler/lang_layers.h"
+#include "compiler/lang_dialects.h"
 #include "web/wasm_glue.h"
 
 static int passed = 0;

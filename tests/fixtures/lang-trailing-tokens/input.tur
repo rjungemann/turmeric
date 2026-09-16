@@ -1,4 +1,22 @@
 #lang turmeric stringed
+;; The RETIRED-TOKEN migration path, and the last file in the suite with a
+;; trailing `#lang` token at all.
+;;
+;; `#lang` takes a single base dialect now; a trailing token is TUR-E0330
+;; (errors/lang-trailing-token). `stringed` is the one exception, for one minor
+;; line: it was the only token the decommissioned layer axis ever shipped, so
+;; it is accepted, warned once (TUR-W0064) and ignored, exactly as GRADUATED[]
+;; does for a retired `--enable` name. A file that opted in per-file keeps
+;; compiling across the boundary.
+;;
+;; Two properties, both pinned here: the warning fires (expected.stderr), and
+;; the token is still STRIPPED rather than leaked into the body -- the
+;; end-of-line consumption that makes that true is independent of what the
+;; tokens mean, which is why it outlived the axis.
+;;
+;; Retire at age-out (0.50.0): with no legal trailing token left, "stripped but
+;; not leaked" has no positive case, and this becomes a second `stringed` case
+;; under errors/lang-trailing-token.
 (defn main [] : int
   (println "trailing #lang layer tokens are stripped, not leaked into the body")
   0)

@@ -1,0 +1,10 @@
+#lang turmeric boguslayer
+;; `#lang` takes a single base dialect and nothing else.  This used to read
+;; "unknown #lang layer", back when a trailing token could name a row in a
+;; curated layer registry; that axis was decommissioned, so the message names
+;; what is actually wrong -- there is nowhere for a trailing token to belong.
+;;
+;; Same code, TUR-E0330: same failure, same class.  The one token still
+;; accepted here is `stringed`, the retired layer name, which warns (TUR-W0064)
+;; and is ignored for one minor line -- see tests/fixtures/lang-trailing-tokens.
+(defn main [] : int 0)
