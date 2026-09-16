@@ -345,35 +345,24 @@ or `Any` -- since the type no longer says it is a node. That is why the stdlib
 hooks above are written the way they are: their `val` is a carrier word, not a
 `Link`.
 
-## `#lang` Layers -- curated only
+## `#lang` takes a base dialect and nothing else
 
-`#lang <base>[/<dialect>] <layer>*` selects one mutually-exclusive base
-reader (slash-namespaced: `turmeric`, `turmeric/curly-infix`,
-`turmeric/neoteric`, `turmeric/sweet`) plus an order-independent **set** of
-additive layers (the space-separated trailing tokens). See
-[docs/archive/lang-layers-plan.md](docs/archive/lang-layers-plan.md).
+`#lang <language>[/<reader>]` selects one mutually-exclusive base dialect:
+`turmeric`, `saffron`, and each over `curly-infix`, `neoteric` or `sweet`.
+That is the whole grammar -- a trailing token is a hard error (TUR-E0330).
+`tur dialects` lists the set.
 
-A `#lang` layer token is legal **only** if it has a row in `LANG_LAYERS[]`.
-Adding a layer means:
+There is **no layer axis**, so there is no table to add a row to. When you
+want new per-file syntax or a per-file gate, it goes in one of three places:
 
-- One `LANG_LAYERS[]` row with every field populated (`name`, `kind`,
-  `reader_hook` or `experiment`, `summary`, `since`).
-- **Reader layers** (a layer that flips on a `#`-dispatch, e.g. `stringed` =>
-  `#s"..."`): the dispatch must be additive and commutative with every other
-  reader layer -- no ordering dependence. If it isn't, it is a base dialect
-  (slash-namespaced), not a layer.
-- **Semantic layers** (a layer that flips on an elaboration/checker gate, e.g.
-  `refined`): **must** point at an existing `EXPERIMENTS[]` row -- never a
-  second, parallel enable path. The experiment carries the lifecycle
-  (TUR-W0060/W0061) and `expires_at`. `#lang turmeric refined` is exactly
-  `--enable=refined` scoped to one file; a manifest that disables the
-  experiment makes the file a **hard error**, never a silent-ignore.
-- A doc paragraph in [docs/guides/syntax-guide.md](docs/guides/syntax-guide.md).
+- A one-off syntax convenience -> a `#use-reader-macros` file.
+- A `#`-dispatch everyone should have -> unconditional, in
+  `reader_macros_install_builtins` (`src/compiler/reader_macros.c`).
+- A semantic gate -> an `EXPERIMENTS[]` row behind `--enable=<name>`, which
+  carries the lifecycle (TUR-W0060/W0061) and `expires_at`.
 
-Prefer *not* adding a layer. A one-off syntax convenience belongs in a
-`#use-reader-macros` file, not the curated `#lang` set. Graduate a layer to
-always-on (delete the row, behavior unconditional) rather than letting layers
-accumulate.
+A new base dialect is a different thing and still legitimate; it is
+slash-namespaced and lives in `lang_base_from_name`.
 
 ## Build System
 

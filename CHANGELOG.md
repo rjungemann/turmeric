@@ -2,6 +2,89 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Removed
+
+- **The `#lang` layer axis is decommissioned.** `#lang` now takes a single
+  base dialect and nothing else:
+
+  ```
+  #lang <language>[/<reader>]
+  ```
+
+  Gone with it: the `LANG_LAYERS[]` registry, the `LangLayerSet` bitset that
+  rode through four compile paths, `SourceFile.lang_layers`,
+  `TuriEnv.lang_layers`, `detect_lang_layered`, `GRADUATED_LAYERS[]`, the
+  `g_manifest_experiments_scoped` global, the wasm registry's `"layers"` key,
+  and the Try Turmeric layer checkboxes. In its whole life the axis held two
+  rows and never more than one at a time. A one-off syntax convenience belongs
+  in a `#use-reader-macros` file; a semantic gate belongs in `EXPERIMENTS[]`
+  behind `--enable=`; an always-on `#`-dispatch belongs in the reader's
+  built-ins. See
+  [the plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/lang-layers-decommission-plan.md).
+
+- **`tur lang-layers` is replaced by `tur dialects`.** The listing itself
+  stays -- it is what the TUR-E0331 diagnostics point at for the valid bases,
+  and the only way to ask a build which dialects it accepts -- but it lists
+  one axis now and is named for it. `--json` emits `{"dialects": [...]}`.
+  Shell completion no longer offers `lang-layers`.
+
+### Added
+
+- **`#s"..."` is always available.** The owned-String literal --
+  `#s"text"` reads as `(string/from-cstr "text")`, where bare `"text"` stays a
+  borrowed `cstr` -- needs no `#lang` token and no `#use-reader-macros`. Every
+  other `#`-dispatch in the language was already unconditional; this one was
+  the outlier. `(load "stdlib/string.tur")` is still required, and still for a
+  real reason: the dispatch is read-time, the code it expands into is not.
+
+  A free fix rides along. The native `tur lsp` never ran the layer detection
+  at all, so `#s"..."` in a `#lang turmeric stringed` file had always been a
+  red squiggle in an editor. It resolves now with no LSP change.
+
+### Fixed
+
+- **`#s(...)` set literals inside a file that also uses `#s"..."`.** The
+  reader's no-exact-match path asked "is there a macro with this NAME?" and
+  reported `#s(1 2 3)` as "reader string macro '#s' expects string body". It
+  was already broken inside a `#lang turmeric stringed` file -- latent because
+  almost nobody turned the layer on -- and making `#s"` unconditional would
+  have promoted it to every set literal in the language. A reserved
+  `(name, delim)` pair now rewinds to the built-in dispatch before either
+  targeted diagnostic can fire.
+
+- **A trailing `#lang` token in a manifest.** `build.tur` / `build.tur.sweet`
+  went through a detection path that only wanted the strip, so a token
+  rejected in every `.tur` file was silently tolerated in the one file that
+  configures the build. It is now the same TUR-E0330.
+
+### Changed
+
+- **TUR-E0330 is reworded.** Same code, same failure, same class; it says what
+  is actually wrong now: ``` `#lang` takes a single base dialect; unexpected
+  trailing token 'x' in path/to/file.tur ```. All five emitters are updated,
+  including the REPL's plain-text line.
+
+- **`stdlib/string-reader.tur` is a comment-only no-op.** A file in the wild
+  carrying `#use-reader-macros "stdlib/string-reader.tur"` keeps compiling and
+  its reader learns why -- re-registering `#s"` against the strict batch
+  registry would otherwise turn a working file into a hard "already
+  registered" error. Deleted at age-out.
+
+- **The Try Turmeric dialect picker is a single-column popover.** One
+  mutually exclusive base, matching the syntax. A returning visitor holding a
+  cached older wasm binary whose registry still carries a `layers` key is
+  fine: the key is simply never read.
+
+### Deprecated
+
+- **`#lang turmeric stringed` warns (TUR-W0064) and is ignored**, for one
+  minor line, so a file that opted in per-file keeps compiling across the
+  boundary. Drop the token -- what it turned on is now always on. At 0.50.0 it
+  becomes the same TUR-E0330 any other trailing token gets, and
+  `stdlib/string-reader.tur` is deleted.
+
 ## [0.48.0] -- 2026-09-15
 
 ### Added

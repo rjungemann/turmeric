@@ -135,7 +135,7 @@
     },
     "dispatch": {
       "comment": "Reader dispatch: #map{...} #set{...} #refine{...} #fx{...} #writes #reads, and the [..] vector literal's own brackets are punctuation.",
-      "match": "#(map|set|refine|fx|writes|reads|s|lang-layers)\\b",
+      "match": "#(map|set|refine|fx|writes|reads|s)\\b",
       "name": "keyword.other.dispatch.turmeric"
     },
     "type-annotation": {

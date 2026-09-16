@@ -1,5 +1,11 @@
 # `#lang` Layers -- base dialect + additive feature layers
 
+> **SUPERSEDED (v0.49.0):** the `#lang` layer axis was decommissioned -- see
+> [`lang-layers-decommission-plan.md`](lang-layers-decommission-plan.md).
+> `#lang` now takes a single base dialect and nothing else, and `#s"..."` is
+> an unconditional reader macro. The body below is kept unrewritten as the
+> historical record of why the axis existed.
+
 Status: L0-L3 + L5 landed (2026-07-23). L4 (semantic-layer bridge / `refined`)
 still rides the refinement-types work -- the LANG_LAYERS[] row struct already
 carries the `LAYER_SEMANTIC` kind + `experiment` field for it, but no semantic
