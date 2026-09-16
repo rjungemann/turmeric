@@ -38,7 +38,7 @@ syn match turmericSpecial "\v\(@<=(with-handler|compose-handlers|cloneable-reset
 " rule requires a preceding `(`, and a clause head never has one.
 syn match turmericSpecial "\v([A-Za-z0-9_/!?<>\=*+-])@<!else([A-Za-z0-9_/!?<>\=*+-])@!"
 
-syn match turmericDispatch "\v#(map|set|refine|fx|writes|reads|s|lang-layers)>"
+syn match turmericDispatch "\v#(map|set|refine|fx|writes|reads|s)>"
 syn match turmericEffect   "\v#\{[^}]*\}"
 syn match turmericAttr     "\v\^[a-z][a-z0-9-]*"
 

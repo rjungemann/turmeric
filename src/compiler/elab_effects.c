@@ -1,6 +1,6 @@
 /* elab_effects.c -- delimited continuations and algebraic effects. */
 #include "elab_internal.h"
-#include "lang_layers.h"   /* saffron-perform-argument-skips-the-any-seam */
+#include "lang_dialects.h"   /* saffron-perform-argument-skips-the-any-seam */
 
 /* E3a (owning-cloneable-capture, cps-backend-owning-env-teardown): an owning
  * value captured ^borrow into a genuinely multi-shot cloneable continuation that

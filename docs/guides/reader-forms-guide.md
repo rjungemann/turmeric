@@ -259,25 +259,28 @@ A set literal.
 #set{:red :green :blue}
 ```
 
-### Owned-String literal -- `#s"..."` (layer `stringed`)
+### Owned-String literal -- `#s"..."`
 
 `#s"text"` reads as `(string/from-cstr "text")` -- a fresh owned `String`,
 where a bare `"text"` stays a borrowed `cstr`. It is dispatched by the
-delimiter, so it does not collide with the `#set{...}` set literal above.
+delimiter, so it does not collide with the `#s(...)` set literal above.
 
-Unlike the always-on forms in this guide, `#s"..."` is **opt-in** via the
-`stringed` `#lang` layer (or, equivalently, `#use-reader-macros
-"stdlib/string-reader.tur"`). Declare it on line 1:
+Like every other form in this guide it is **always on** -- no `#lang` token,
+no `#use-reader-macros`:
 
 ```turmeric no-check
-#lang turmeric stringed
+(load "stdlib/string.tur")
 #s"hello"            ; => (string/from-cstr "hello"), an owned String
 ```
 
-The layer is read-time only; `(load "stdlib/string.tur")` still brings in the
-`String` code it expands to. See the [Syntax
-Guide](syntax-guide.md#part-25----lang-base-dialects-and-layers) for the full
-`#lang` layer model and `tur lang-layers` for the registered set.
+That `(load)` is the one thing still required, and the reason is worth
+knowing: the dispatch is read-time, and the code it expands into is not. The
+[strings guide](strings-guide.md) has the read-time / eval-time split.
+
+`#s"..."` used to be opt-in, through a `stringed` `#lang` layer or a
+`#use-reader-macros "stdlib/string-reader.tur"` directive. Both still parse
+for one minor line -- the token warns (`TUR-W0064`) and the file is a
+comment-only no-op -- and both can simply be deleted.
 
 ### Contract type -- `#refine{ var : T | pred }`
 

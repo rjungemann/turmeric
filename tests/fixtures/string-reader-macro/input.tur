@@ -1,6 +1,10 @@
-;; owned-string-type-plan literal ergonomics: the opt-in #s"..." reader macro.
-;; #use-reader-macros enables the syntax at read time; (load) brings in the code.
-#use-reader-macros "stdlib/string-reader.tur"
+;; owned-string-type-plan literal ergonomics: the #s"..." owned-String literal.
+;;
+;; This is the post-decommission idiom, and the broadest #s coverage in the
+;; suite: no #use-reader-macros, no `#lang` layer, no directive of any kind.
+;; The dispatch is installed unconditionally by the reader; `(load)` is the
+;; only line a program needs, and it is needed for the CODE the literal
+;; expands into (string/from-cstr), not for the syntax.
 (load "stdlib/string.tur")
 
 (defn yn [b : bool] : cstr (if b "T" "F"))
@@ -16,7 +20,7 @@
       (println (yn (string/eq? g (string/from-cstr "hello"))))
       ;; two #s literals are equal by content
       (println (yn (eq? g h)))
-      ;; bare "..." stays a cstr (borrowed) -- shown by using it where cstr is wanted
+      ;; bare "..." stays a cstr (borrowed) -- shown by using it where cstr is expected
       (println "plain-cstr-still-works")
       ;; owned literal as a Map key
       (let [m (map-assoc (:: (map-new) (Map String int)) #s"key" 7)]

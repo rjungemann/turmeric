@@ -1702,11 +1702,10 @@ int turi_repl_run(bool watch_mode) {
             if (strncmp(line, "#lang ", 6) == 0) {
                 const char  *rest    = NULL;
                 size_t       rest_len = 0;
-                LangLayerSet layers  = 0;
                 const char  *bad     = NULL;
                 size_t       bad_len = 0;
-                /* saffron-lang-plan S8: `detect_lang_dialect`, not
-                 * `detect_lang_layered`.  The latter reports only the READER
+                /* saffron-lang-plan S8: `detect_lang_dialect`, not the plain
+                 * `detect_lang`.  The latter reports only the READER
                  * axis, so `#lang saffron` came back as plain `turmeric` with
                  * no dialect, the early-out below fired ("reader already set
                  * to turmeric"), and the language half was silently dropped --
@@ -1716,21 +1715,21 @@ int turi_repl_run(bool watch_mode) {
                 LangDialect dialect = LANG_TURMERIC;
                 ReaderType rt = detect_lang_dialect(line, strlen(line),
                                                     &rest, &rest_len,
-                                                    &layers, &bad, &bad_len,
+                                                    &bad, &bad_len,
                                                     &dialect);
                 if (rt == READER_UNKNOWN || rt == (ReaderType)-1) {
                     fprintf(stderr, "unknown #lang: '%s'\n", line + 6);
                 } else if (bad) {
-                    fprintf(stderr, "unknown #lang layer: '%.*s'\n",
-                            (int)bad_len, bad);
-                } else if (rt != env->reader_type || layers != env->lang_layers
-                           || dialect != env->lang) {
+                    fprintf(stderr,
+                            "#lang takes a single base dialect; unexpected "
+                            "trailing token: '%.*s'\n", (int)bad_len, bad);
+                } else if (rt != env->reader_type || dialect != env->lang) {
                     /* Full switch: rewinds to the pinned stdlib preload
                      * (accumulated USER source may be incompatible with the
                      * new reader, the preload is not) and wipes the session
-                     * reader-macro registry so a dropped layer's dispatch
-                     * genuinely turns off. */
-                    turi_env_apply_lang_dialect(env, rt, layers, dialect);
+                     * reader-macro registry, whose user macros came from the
+                     * source being discarded. */
+                    turi_env_apply_lang_dialect(env, rt, dialect);
                     if (dialect == LANG_SAFFRON)
                         printf("; language set to saffron, reader %s "
                                "(session reset)\n", reader_type_name(rt));
@@ -1740,7 +1739,7 @@ int turi_repl_run(bool watch_mode) {
                 } else {
                     /* "reader already set to <name>" is the pinned wording
                      * (tests/run-flags.sh reader-name-canonical and
-                     * lang-layer-same-set-no-reset); the language axis rides
+                     * lang-same-base-no-reset); the language axis rides
                      * along as a suffix rather than reshaping the line. */
                     printf("; reader already set to %s%s\n", reader_type_name(rt),
                            dialect == LANG_SAFFRON ? " (saffron)" : "");

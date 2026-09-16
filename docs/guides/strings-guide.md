@@ -120,34 +120,40 @@ Typeclasses: `Eq`, `Ord` (lexicographic), `Show` (the bytes), `Hash` (content),
 override, so `String` behaves identically under `--interpret` / the REPL and
 when compiled.
 
-## `#s"..."` -- owned-String literal syntax (opt-in)
+## Owned-String literals -- `#s"..."`
 
 Bare `"..."` stays a `cstr` (borrowed) -- the default literal typing is
-deliberately unchanged. When you want an owned `String` literal, opt into the
-`#s"..."` reader macro shipped in `stdlib/string-reader.tur`:
+deliberately unchanged. When you want an owned `String` literal, write
+`#s"..."`. It is **always available**: no `#lang` token, no
+`#use-reader-macros`, nothing to declare.
 
 ```turmeric
-#use-reader-macros "stdlib/string-reader.tur"   ;; enable #s"..."  (read-time)
-(load "stdlib/string.tur")                        ;; the String code (eval-time)
+(load "stdlib/string.tur")     ;; the String code (eval-time)
 
-... #s"hello" ...   ;; => (string/from-cstr "hello"), an owned String
+... #s"hello" ...              ;; => (string/from-cstr "hello"), an owned String
 ```
 
-**It is two lines, and that is fundamental, not an oversight.** A reader macro is
-registered while the file is being *read*; `(load ...)` runs later, at *eval*
-time -- after `#s"..."` has already been tokenized. So a plain
-`(load "stdlib/string.tur")` can never enable `#s` for the file that loads it;
-the read-time `#use-reader-macros` directive is what registers the syntax. The
-two directives are separate phases:
+**That `(load)` is still required, and the reason is fundamental rather than
+an oversight.** The two things live in different phases. `#s"..."` is expanded
+while the file is being *read*, into a call to `string/from-cstr`; the function
+that call names does not exist until `(load ...)` runs at *eval* time. So the
+load cannot enable the syntax -- the syntax is already gone by then -- and the
+syntax cannot supply the code. You need the one line, and only the one line:
+the reader installs the dispatch for every file.
 
-- `#use-reader-macros "stdlib/string-reader.tur"` -- read-time; turns on the
-  `#s"..."` syntax. (Like `(load)`, it accepts the stable `stdlib/...` path,
-  falling back to `TUR_STDLIB_DIR`.)
-- `(load "stdlib/string.tur")` -- eval-time; provides `string/from-cstr` and the
-  rest of the String API that `#s"..."` expands into.
+`#s"..."` works identically compiled and under `--interpret`, and an
+owned-String literal is safe as a `Map`/`Set` key. See
+`tests/fixtures/string-reader-macro`.
 
-`#s"..."` works identically compiled and under `--interpret`, and an owned-String
-literal is safe as a `Map`/`Set` key. See `tests/fixtures/string-reader-macro`.
+The dispatch is delimiter-keyed, so `#s"..."` and the `#s(...)` set literal
+are different forms and can appear in the same file.
+
+Two directives used to turn this on, and both are now unnecessary:
+`#lang turmeric stringed` (the layer axis, decommissioned -- the token warns
+with `TUR-W0064` for one minor line, then becomes an error) and
+`#use-reader-macros "stdlib/string-reader.tur"` (that file is now a
+comment-only no-op, deleted at age-out). Delete either one where you find it;
+what they enabled is now unconditional.
 
 ## Zero-copy slicing -- `StringSlice` (opt-in)
 

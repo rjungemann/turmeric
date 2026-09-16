@@ -27,7 +27,7 @@ Turmeric module link together in one program.
 Saffron is on by default. The `#lang saffron` line is all you need -- no
 `--enable=` flag, no manifest entry, and no lifecycle warning on stderr. It is
 an ordinary base dialect, on the same footing as `#lang turmeric`, and
-`tur lang-layers` lists all eight bases as `stable`.
+`tur dialects` lists all eight bases as `stable`.
 
 The dialect is young, though, and parts of the dynamic surface are still being
 built out -- design notes, remaining stages and known gaps live in

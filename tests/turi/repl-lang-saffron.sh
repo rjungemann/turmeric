@@ -17,7 +17,7 @@
 #   1. `--lang saffron` starts a Saffron session.  New flag.
 #   2. `#lang saffron` at the prompt switches an already-running one.  This was
 #      ACCEPTED AND SILENTLY IGNORED before: the REPL read the line with
-#      `detect_lang_layered`, which reports only the READER axis, so `saffron`
+#      the plain `detect_lang`, which reports only the READER axis, so `saffron`
 #      came back as plain `turmeric`, the "already set" early-out fired, and the
 #      language half was dropped.  A reader following docs/guides/saffron-guide.md
 #      types that line first.

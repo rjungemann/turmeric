@@ -16,9 +16,8 @@ This guide is the front door to Turmeric's surface syntax. It teaches you to
    (legacy alias: `#lang sweet-exp`) or a `.tur.sweet` extension (indentation
    + neoteric + `$` + curly-infix).
 
-The `#lang` line also carries an optional set of additive **layers** after the
-base dialect (e.g. `#lang turmeric stringed`); see
-[Part 2.5](#part-25----lang-base-dialects-and-layers).
+The `#lang` line names one base dialect and nothing else; see
+[Part 2.5](#part-25----lang-base-dialects).
 
 It does not re-explain the semantics of every special form -- the deep-dive
 guides own that. Instead it shows you the *shape* of the language and points
@@ -376,8 +375,7 @@ Both activations work the same way whether the file is the one you compile or
 one pulled in by `(load "...")`: a loaded file's dialect is read from its own
 first line and its own extension, independently of whatever dialect the loading
 file is written in. When both are present the extension picks the base dialect
-and the directive is a redundant hint; layers on the `#lang` line apply either
-way.
+and the directive is a redundant hint.
 
 ### The three tools
 
@@ -503,23 +501,23 @@ let [add3 make-adder(3)
 
 ---
 
-## Part 2.5 -- `#lang` base dialects and layers
+## Part 2.5 -- `#lang` base dialects
 
-A `#lang` line is more than a dialect switch. Its full shape is:
+A `#lang` line selects one base dialect. Its full shape is:
 
 ```
-#lang <language>[/<reader>] <layer>*
+#lang <language>[/<reader>]
 ```
 
-The whole line is read *before the first form*, so everything that changes how
-the file reads or checks is declared up front and is guaranteed file-scoped.
-It must be the **first line**: the detector skips spaces and tabs before it,
-but not comments, so a comment above the directive silently disables it.
+and nothing else on the line. It is read *before the first form*, so the
+choice is declared up front and is guaranteed file-scoped. It must be the
+**first line**: the detector skips spaces and tabs before it, but not
+comments, so a comment above the directive silently disables it.
 
-`tur lang-layers` lists both axes, and `tur lang-layers --json` emits the same
-thing machine-readably.
+`tur dialects` lists the bases, and `tur dialects --json` emits the same thing
+machine-readably.
 
-### Base (mutually exclusive): a language and a reader
+### A base names a language and a reader
 
 The first, possibly slash-namespaced, token names **two** things: which
 *language* the forms are elaborated as, and which *reader* parses them. They
@@ -544,7 +542,7 @@ Saffron module links against a Turmeric one in the same program. See
 
 Both languages are **stable bases** -- neither is gated. `#lang saffron` needs
 no `--enable=` flag and no `:experiments` entry, and prints no lifecycle
-warning; `tur lang-layers` lists all eight bases as `stable`.
+warning; `tur dialects` lists all eight bases as `stable`.
 
 `turmeric/sweet` is the preferred spelling for the sweet-exp base. The older
 `#lang sweet-exp` is still accepted as a legacy alias, so
@@ -556,56 +554,51 @@ Bases do not compose (sweet-exp is a whole indentation pass; curly/neoteric are
 flags on the same reader), which is exactly why they share the one slash-named
 slot.
 
-### Layers (an additive, order-independent set)
+### Nothing follows the base
 
-The space-separated tokens *after* the base are **layers**: a set, not a
-pipeline. Order does not matter, and each layer is either a **reader layer**
-(it flips on a `#`-dispatch) or a **semantic layer** (it flips on an
-elaboration/checker gate). Layers are a small, curated set -- an arbitrary
-one-off macro bundle still belongs in a `#use-reader-macros` file, not here.
+A token after the base name is a compile error (`TUR-E0330`), never silently
+ignored:
 
-The reader layer available today is **`stringed`**, which turns on the
-`#s"..."` owned-String literal with no `#use-reader-macros` directive:
-
-```turmeric
-#lang turmeric stringed
-(load "stdlib/string.tur")
-(defn main [] : int
-  (let [g #s"hello"]        ; owned String, not a borrowed cstr
-    (string/len g)))
+```
+error [TUR-E0330]: `#lang` takes a single base dialect; unexpected trailing
+token 'boguslayer' in path/to/file.tur
 ```
 
-Because layers ride alongside the base, they compose with any dialect --
-`#lang turmeric/sweet stringed` gives sweet-exp *and* `#s"..."`:
+There used to be a second axis here -- an additive, order-independent set of
+**layers** after the base, each flipping on a `#`-dispatch or an
+elaboration gate. It was decommissioned. Its two members are both better
+served elsewhere, and that is the rule to follow when you want one:
 
-```sweet-exp
-#lang turmeric/sweet stringed
-$ load "stdlib/string.tur"
-defn main [] : int
-  string/len(#s"hello")
-```
+- A **one-off syntax convenience** belongs in a `#use-reader-macros` file. It
+  is the supported per-file mechanism and it is what the layer set was
+  competing with. See
+  [the reader-forms guide](reader-forms-guide.md) for the directive.
+- A **`#`-dispatch that everyone should have** belongs in the reader's
+  built-ins, unconditionally. That is where `#s"..."` went: the owned-String
+  literal is now always available, so `#lang turmeric stringed` is no longer
+  a thing you write.
 
-There is no semantic layer today. Static discharge of `#refine{...}`
-predicates is unconditional (the former `refined` layer graduated), so there
-is nothing for the token to turn on. A file that still carries
-`#lang turmeric refined` keeps compiling -- the token is accepted and ignored
-with a one-time `TUR-W0064` -- but it can be dropped. See
-[refinement-types-guide.md](refinement-types-guide.md).
+  ```turmeric
+  (load "stdlib/string.tur")     ; the CODE it expands into; no directive
+  (defn main [] : int
+    (let [g #s"hello"]           ; owned String, not a borrowed cstr
+      (string/len g)))
+  ```
 
-When a semantic layer does exist, it is never a second enable path: it points
-at an existing `EXPERIMENTS[]` row, so `#lang turmeric <name>` is *exactly*
-`--enable=<name>` scoped to one file, and the experiment's lifecycle warning
-and `expires_at` govern both spellings. If a project manifest states its own
-`:experiments` list and leaves the backing experiment out, such a file is a
-**hard error** rather than a silent downgrade -- compiling it under different
-semantics than it asked for would be worse than refusing.
+- A **semantic gate** belongs in `EXPERIMENTS[]` behind `--enable=<name>`,
+  with the lifecycle warning and `expires_at` that carries. A semantic layer
+  was never a second enable path -- it *was* its experiment, scoped to one
+  file -- so the flag is the real mechanism and the layer was an alias for it.
+  Static discharge of `#refine{...}` predicates, the one semantic layer there
+  ever was, is unconditional now; see
+  [refinement-types-guide.md](refinement-types-guide.md).
 
-A `#lang` layer is a hard requirement of the file: an unrecognised layer token
-is a compile error (`TUR-E0330`), never silently ignored. A *graduated* token
-is the one exception, and deliberately so -- deleting the row on graduation
-would otherwise break every file that opted in, which is the wrong population
-to break. Run `tur lang-layers` (add `--json` for the machine-readable form) to
-list every registered layer, its kind, and a one-line summary.
+**Migration.** `stringed` -- the only layer token that ever shipped -- is
+still accepted for one minor line, warned once (`TUR-W0064`) and ignored, so a
+file that opted in per-file keeps compiling across the boundary. Drop the
+token; nothing is lost, because what it turned on is now always on. At 0.50.0
+it becomes the same `TUR-E0330` any other trailing token gets. See
+[the decommission plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/lang-layers-decommission-plan.md).
 
 ---
 

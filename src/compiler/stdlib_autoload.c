@@ -109,17 +109,15 @@ void tur_source_file_apply_lang_header(SourceFile *sf, const char *whole_src,
     if (!sf || !whole_src) return;
     const char  *rest    = whole_src;
     size_t       rest_len = whole_len;
-    LangLayerSet lay      = 0;
     LangDialect  dl       = LANG_TURMERIC;
     ReaderType   rt = detect_lang_dialect(whole_src, whole_len, &rest, &rest_len,
-                                          &lay, NULL, NULL, &dl);
+                                          NULL, NULL, &dl);
     if (rest == whole_src || !reader_type_is_implemented(rt)) return;
     sf->src         = (char *)rest;
     sf->len         = rest_len;
     sf->head_offset = (size_t)(rest - whole_src);
     sf->reader_type = rt;
     sf->lang        = dl;
-    sf->lang_layers = lay;
 }
 
 static const char *basename_of(const char *path) {

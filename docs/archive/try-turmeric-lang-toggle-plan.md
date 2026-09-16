@@ -1,5 +1,11 @@
 # Try Turmeric: visual `#lang` picker
 
+> **SUPERSEDED (v0.49.0):** the `#lang` layer axis was decommissioned -- see
+> [`lang-layers-decommission-plan.md`](lang-layers-decommission-plan.md).
+> `#lang` now takes a single base dialect and nothing else, and `#s"..."` is
+> an unconditional reader macro. The body below is kept unrewritten as the
+> historical record of why the axis existed.
+
 > **Status:** implemented (2026-08-17); proposed 2026-07-29
 > **Type:** Web playground / `#lang` plumbing
 > **Related:** [`lang-layers-plan.md`](lang-layers-plan.md),

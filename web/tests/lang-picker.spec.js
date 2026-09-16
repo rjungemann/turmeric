@@ -117,29 +117,6 @@ test.describe('language picker', () => {
         await expect(page.locator('#lang-btn-label')).toHaveText('sweet');
     });
 
-    test('layer checkboxes toggle the trailing token in place', async ({ page }) => {
-        await page.goto('/try/');
-        await waitForEditor(page);
-
-        await openLangMenu(page);
-        const layerBoxes = page.locator('#lang-layers input[type=checkbox]');
-        if (await layerBoxes.count() === 0) {
-            // Bases-only fallback (no WASM registry in this environment).
-            test.skip(true, 'lang registry export unavailable; layer rows not rendered');
-            return;
-        }
-
-        await setCode(page, '#lang turmeric/sweet\n\nprintln "hi"\n');
-        const stringed = page.locator('#lang-layers input[value="stringed"]');
-        await stringed.check();
-        expect(await editorValue(page)).toMatch(/^#lang turmeric\/sweet stringed\n/);
-
-        // Unchecking removes the token -- the layer set is assigned, not
-        // accumulated (§2.2 of the plan).
-        await stringed.uncheck();
-        expect(await editorValue(page)).toMatch(/^#lang turmeric\/sweet\n/);
-    });
-
     test('mobile overflow menu exposes the Language... entry', async ({ page }) => {
         await page.setViewportSize({ width: 480, height: 800 });
         await page.goto('/try/');
