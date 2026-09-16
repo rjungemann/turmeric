@@ -1197,23 +1197,24 @@ async function initWasm() {
  * plus the remaining source.  The #lang line must be the first non-blank
  * line (leading spaces/tabs are allowed but not newlines).
  *
- * Returns { lang: string|null, layers: string[], body: string, line: string|null }
- *   lang   -- the base language name (e.g. "turmeric/sweet") or null if no
+ * Returns { lang: string|null, body: string, line: string|null }
+ *   lang   -- the base dialect name (e.g. "turmeric/sweet") or null if no
  *             directive found
- *   layers -- the space-separated trailing layer tokens (e.g. ["stringed"]);
- *             mirrors detect_lang_layered on the C side, where the old
- *             base-only parse silently dropped them
  *   body   -- source text with the #lang line removed
  *   line   -- the full directive line text (no trailing newline), or null
+ *
+ * `#lang` takes a base and nothing else, so a trailing token is malformed
+ * input from the editor buffer rather than a second axis.  The whole line is
+ * still PARSED (so `body` stays correct and a pasted file does not choke the
+ * playground); the wasm side rejects the directive with a status message.
  */
 function parseLangDirective(code) {
     const m = code.match(/^[ \t]*#lang[ \t]+([^\r\n]*?)[ \t]*(\r?\n|$)/);
-    if (!m) return { lang: null, layers: [], body: code, line: null };
+    if (!m) return { lang: null, body: code, line: null };
     const toks = m[1].split(/[ \t]+/).filter(Boolean);
-    if (!toks.length) return { lang: null, layers: [], body: code, line: null };
+    if (!toks.length) return { lang: null, body: code, line: null };
     return {
         lang: toks[0],
-        layers: toks.slice(1),
         body: code.slice(m[0].length),
         line: m[0].replace(/\r?\n$/, ''),
     };
@@ -1222,19 +1223,21 @@ function parseLangDirective(code) {
 // ============================================================================
 // Language picker (try-turmeric-lang-toggle-plan)
 //
-// A dialect radio group + layer checkboxes that edit the #lang line in
-// place.  The #lang line in the buffer stays the source of truth: the picker
-// is a text edit, not a hidden mode, and everything round-trips -- paste a
-// file with a #lang header and the picker updates; flip the picker and the
-// header updates.  Nothing is stored in UI state that is not also in the
-// source.
+// A dialect radio group that edits the #lang line in place.  The #lang line
+// in the buffer stays the source of truth: the picker is a text edit, not a
+// hidden mode, and everything round-trips -- paste a file with a #lang header
+// and the picker updates; flip the picker and the header updates.  Nothing is
+// stored in UI state that is not also in the source.
+//
+// One control, because `#lang` has one axis: the layer checkboxes that used
+// to sit beside the radios are gone with the axis itself.  A registry object
+// from a cached older wasm build may still carry a stale `layers` key; it is
+// simply never read, which is what ignoring an unknown key already does --
+// the point is not to assert against it.
 // ============================================================================
 
 // Fallback for older deployed WASM builds that don't export
-// _turi_wasm_lang_registry.  Bases only, mirroring lang_base_from_name's
-// canonical set -- the LAYER list is never hardcoded in JS, because
-// LANG_LAYERS[] in src/compiler/lang_layers.c is the single source of truth
-// and a JS copy would drift on the next layer added or graduated.
+// _turi_wasm_lang_registry.
 //
 // Deliberately still the four Turmeric bases: a build old enough to be
 // missing the registry export is also old enough to reject `#lang saffron`
@@ -1247,7 +1250,6 @@ const LANG_REGISTRY_FALLBACK = {
         { name: 'turmeric/neoteric',    label: 'Neoteric' },
         { name: 'turmeric/sweet',       label: 'Sweet-expression' },
     ],
-    layers: [],
 };
 
 const LANG_DEFAULT_BASE = 'turmeric';
@@ -1284,7 +1286,7 @@ function baseShortLabel(base) {
 }
 
 /**
- * Fetch the #lang registry (bases + curated layers) from the WASM module and
+ * Fetch the #lang registry (the base dialects) from the WASM module and
  * re-render the picker.  No-op fallback when the export is absent.
  */
 function fetchLangRegistry() {
@@ -1302,7 +1304,7 @@ function fetchLangRegistry() {
         if (!json) return;
         try {
             const parsed = JSON.parse(json);
-            if (parsed && Array.isArray(parsed.bases) && Array.isArray(parsed.layers)) {
+            if (parsed && Array.isArray(parsed.bases)) {
                 langRegistry = parsed;
                 renderLangMenu();
             }
@@ -1319,22 +1321,10 @@ function fetchLangRegistry() {
  */
 function currentLangSelection() {
     const model = editor && editor.getModel();
-    if (!model) return { base: LANG_DEFAULT_BASE, layers: [] };
+    if (!model) return { base: LANG_DEFAULT_BASE };
     const parsed = parseLangDirective(model.getLineContent(1));
-    if (parsed.lang === null) return { base: LANG_DEFAULT_BASE, layers: [] };
-    return { base: normalizeLangBase(parsed.lang), layers: parsed.layers };
-}
-
-// Layers are emitted in registry order so the directive text is stable
-// across toggles -- the set is order-independent to the reader, but a
-// jittering line makes a noisy diff and a noisy undo stack.  Tokens the
-// registry doesn't know (hand-typed) keep their original relative order at
-// the end rather than being dropped.
-function orderLangLayers(layers) {
-    const order = langMenuRegistry().layers.map(l => l.name);
-    const known = order.filter(n => layers.includes(n));
-    const unknown = layers.filter(n => !order.includes(n));
-    return known.concat(unknown);
+    if (parsed.lang === null) return { base: LANG_DEFAULT_BASE };
+    return { base: normalizeLangBase(parsed.lang) };
 }
 
 // Tracks models whose #lang insert also added the blank separator line, so
@@ -1356,12 +1346,11 @@ const langInsertAddedBlank = new WeakMap();
  * - Selection returns to the default: remove the line (and the blank line
  *   after it if the insert above added one).
  */
-function setLangDirective(model, { base, layers }) {
+function setLangDirective(model, { base }) {
     if (!model || !monaco) return;
-    const ordered = orderLangLayers(layers || []);
     const parsed = parseLangDirective(model.getLineContent(1));
-    const isDefault = base === LANG_DEFAULT_BASE && ordered.length === 0;
-    const directive = ['#lang', base].concat(ordered).join(' ');
+    const isDefault = base === LANG_DEFAULT_BASE;
+    const directive = `#lang ${base}`;
 
     let edits;
     if (parsed.lang === null) {
@@ -1394,14 +1383,13 @@ function setLangDirective(model, { base, layers }) {
 }
 
 /**
- * Render the popover's radio group + checkboxes from the registry.  The
- * form of the control mirrors the form of the syntax: one mutually
- * exclusive base, an order-independent set of layers.
+ * Render the popover's radio group from the registry.  The form of the
+ * control mirrors the form of the syntax: one mutually exclusive base, and
+ * nothing else.
  */
 function renderLangMenu() {
     const basesEl = document.getElementById('lang-bases');
-    const layersEl = document.getElementById('lang-layers');
-    if (!basesEl || !layersEl) return;
+    if (!basesEl) return;
     const reg = langMenuRegistry();
 
     // A base names a (language, reader) PAIR, and `label` is only the reader
@@ -1426,31 +1414,8 @@ function renderLangMenu() {
         </label>`;
     }).join('');
 
-    // An unavailable layer renders disabled with the reason -- never hidden,
-    // because hiding it makes it undiscoverable and makes the picker
-    // disagree with `tur lang-layers`.
-    layersEl.innerHTML = reg.layers.length ? reg.layers.map(l => {
-        const unavailable = l.available === false;
-        const title = unavailable
-            ? `${l.summary || ''} (unavailable in this build)`
-            : (l.summary || '');
-        return `
-        <label class="lang-row${unavailable ? ' lang-row-disabled' : ''}"
-               title="${escapeHtml(title)}">
-            <input type="checkbox" value="${escapeHtml(l.name)}"${unavailable ? ' disabled' : ''}>
-            <span class="lang-row-name">${escapeHtml(l.name)}</span>${
-                l.kind === 'semantic'
-                    ? '<span class="lang-chip">experimental</span>'
-                    : ''
-            }
-            <span class="lang-row-summary">${escapeHtml(l.summary || '')}</span>
-        </label>`;
-    }).join('') : '<div class="lang-row-empty">No optional layers in this build</div>';
-
     basesEl.querySelectorAll('input[type=radio]').forEach(r =>
         r.addEventListener('change', onLangControlChange));
-    layersEl.querySelectorAll('input[type=checkbox]').forEach(c =>
-        c.addEventListener('change', onLangControlChange));
 
     reconcileLangPicker();
 }
@@ -1461,10 +1426,7 @@ function onLangControlChange() {
     if (!model) return;
     const checkedBase = document.querySelector('#lang-bases input[type=radio]:checked');
     const base = checkedBase ? checkedBase.value : LANG_DEFAULT_BASE;
-    const layers = Array.from(
-        document.querySelectorAll('#lang-layers input[type=checkbox]:checked'),
-        c => c.value);
-    setLangDirective(model, { base, layers });
+    setLangDirective(model, { base });
     reconcileLangPicker();
 }
 
@@ -1479,9 +1441,6 @@ function reconcileLangPicker() {
     if (btnLabel) btnLabel.textContent = baseShortLabel(sel.base);
     document.querySelectorAll('#lang-bases input[type=radio]').forEach(r => {
         r.checked = (r.value === sel.base);
-    });
-    document.querySelectorAll('#lang-layers input[type=checkbox]').forEach(c => {
-        c.checked = sel.layers.includes(c.value);
     });
 }
 
@@ -1573,13 +1532,12 @@ function processQueue() {
 
     // turi_eval_typed detects and strips an inline #lang directive itself, so
     // pass the raw source through. Still parse it locally to keep the UI's
-    // mode indicator (currentLangMode) in sync; also forward the FULL
-    // directive tail (base + layer tokens) to the Worker as a hint for
-    // runtimes that export _turi_wasm_set_lang -- set_lang assigns the layer
-    // set, so forwarding base-only would silently drop layer toggles.
-    const { lang, layers } = parseLangDirective(code);
+    // mode indicator (currentLangMode) in sync, and forward the base to the
+    // Worker as a hint for runtimes that export _turi_wasm_set_lang. The base
+    // IS the whole directive tail now -- set_lang rejects anything after it.
+    const { lang } = parseLangDirective(code);
     if (lang !== null) currentLangMode = lang;
-    const langDirective = lang !== null ? [lang, ...layers].join(' ') : null;
+    const langDirective = lang;
 
     const id = ++evalCallId;
     pendingCalls.set(id, { resolve, reject, startTime: performance.now(), isEval: true });
@@ -5569,9 +5527,9 @@ async function traceCode() {
 
     const started = performance.now();
     // Forwarded for the same reason Run forwards it: turi_eval_typed strips an
-    // inline #lang itself, but set_lang ASSIGNS the layer set, so a program
-    // opening `#lang turmeric stringed` needs the tail or its layers are off.
-    const { lang, layers } = parseLangDirective(code);
+    // inline #lang itself, but set_lang is what puts the session in the
+    // program's base dialect.
+    const { lang } = parseLangDirective(code);
     if (lang !== null) currentLangMode = lang;
 
     // hasMain is the page's existing Run rule, not a second one: a program with
@@ -5582,7 +5540,7 @@ async function traceCode() {
         input: code,
         maxSteps: TRACE_MAX_STEPS,
         hasMain: definesMainEntry(code),
-        lang: lang !== null ? [lang, ...layers].join(' ') : null,
+        lang,
     });
 
     if (!res || res.steps < 0) {
