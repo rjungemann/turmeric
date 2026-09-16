@@ -1889,6 +1889,37 @@ which is the measurement that separates them from it.
 | [session-payloads-are-int64-only](session-payloads-are-int64-only.md) | high | The session runtime carries every message as a bare `int64_t`, so on the compiled path a **`float` payload is silently truncated** -- `7.25` arrives as `7`, no diagnostic, exit 0 -- while `cstr` and a delegated `(Session P)`/`(Role G R)` endpoint fail to build on macOS (`-Wint-conversion` is a hard error on Apple clang 21, a warning on Linux gcc, so this one is platform-dependent and works on Linux by accident) and a by-value struct fails to build everywhere. The type checker accepts all four and **all four are correct under `--interpret`**, since `TuriValue` carries the payload at its own type. One root cause: `tur_session_send(TurChannel*, int64_t)` plus a plain `(int64_t)(...)` C cast in the send template, which for a double is a value conversion that truncates rather than a reinterpretation. This is why every fixture and every guide example sends `int`. Floor fix is a diagnostic -- a user should not learn this from a wrong number at run time |
 | [multi-party-sessions-have-no-timed-receive](multi-party-sessions-have-no-timed-receive.md) | low-medium | Binary sessions have `recv-timeout`; multi-party role endpoints have no equivalent, so a role blocked in `recv-from` has no bounded wait and no recovery from a stalled peer. Asymmetry, not a wrong answer -- and invisible, since the guide's Timeouts section does not say it stops at binary. The type machinery is not the blocker (`Timeout` has a dual rule, projection already lowers `choice`); what is missing is global-type syntax for a timed interaction plus its projection/mergeability rule, which is where the design risk sits. Hurts most where it cannot be worked around: a compiled multi-party program hangs, where `--interpret` would at least detect the stall |
 
+## stdlib `:int` stand-ins (filed 2026-09-16)
+
+The declared-signature counterpart to the session row above. Where
+`session-payloads-are-int64-only` is an erasure hidden in a runtime slot, this is
+the same erasure written into the stdlib's public types -- so it fails loudly
+instead of silently, and is an expressiveness hole rather than a wrong answer.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [stdlib-int-stand-in-audit](stdlib-int-stand-in-audit.md) | design defect; S1 subset high | The stdlib twin of the 2026-06-14 spices audit, which scoped itself to `../turmeric-spices` and never swept `stdlib/`. Same S1-S4 rubric. **38 callback parameters** typed `^fat f : int` (24, of which 17 in `httpd.tur`) or `ptr<void>` (14): measured, `^fat` enforces callable-ness but **nothing about the shape** -- a 3-arg `cstr` closure, a nullary `float` thunk and a 4-arg `int` closure all pass `tur check` into the same `^fat handler : int` sink. **19 container/cell payloads** declared `:int` across `chan`/`atomic`/`future`/`ref`/`fiber`/`backtrack-dfs`, which cannot carry a `float` at all. Plus an ADT-erased-in-its-own-API class (`either.tur` takes `e : int` throughout; `json/bool [v : int]`) |
+
+Two measured results worth keeping, because both correct the obvious reading.
+First, a `:int` payload parameter is loud for a `float` (`TUR-E0001`) but
+**unsound for aggregates**: `(chan-send ch (Pt 42))` passes `tur check` with exit
+0 and dies in cc with `passing 'tur_adt_Pt' ... to parameter of incompatible type
+'int64_t'`. That is a plain soundness hole, independently fixable, and fixing it
+protects every site in the report at once -- it is the report's floor. Second,
+`^fat` catching non-callables means the spices audit's S1 wording ("even a
+flagrantly wrong handler signature compiles silently") is half right: the
+signature is unchecked, but a non-function is rejected.
+
+The report also records what is **not** a defect, so the next sweep does not
+"fix" it: the phantom-typed carrier opaques (`List [A] :int`, `Backtrack [A]`,
+`Kleisli [A B]`, `Zipper [A]`, `NonEmpty [A]`, `SizedBuf [n]`, `Goal [A]`,
+`Parser [A]`) are the representation the typed path deliberately chose --
+`list-typed.tur:20` says "phantom element type A" and cites
+end-to-end-monomorphization-plan Phase 1.1. And the per-file `: int` counts
+(`httpd.tur` 50, `schema.tur` 42, `range.tur` 38) are a scale signal, not a
+defect count: most are genuine lengths, ports and indices.
+
+
 ## Found on CI while landing the constructor-argument fix (filed 2026-09-15)
 
 | Report | Severity | One line |

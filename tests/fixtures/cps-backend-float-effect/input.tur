@@ -1,18 +1,28 @@
 ;; CPS-IR-to-C backend, Tier B: a float threaded through perform / handle /
-;; resume.  Built with --enable=cps-backend.
+;; resume.
 ;;
 ;; The Sample effect's result type is float.  `measure` performs it and does
 ;; float arithmetic on the resumed value; `run` handles it and resumes with a
-;; float literal.  On the CPS path the float crosses the four effect boundaries
-;; (dk_perform arg, handler-case arg, dk_invoke resume value + result) by
-;; bit-reinterpret through the DK slot.  Per the STRICT float rule the literals
-;; have non-zero fractional parts; the expected value is 7.1 + 1.5 = 8.6.
+;; float literal.  The float crosses the four effect boundaries (dk_perform arg,
+;; handler-case arg, dk_invoke resume value + result) by bit-reinterpret through
+;; the DK slot.  Per the STRICT float rule the literals have non-zero fractional
+;; parts; the expected value is 7.1 + 1.5 = 8.6.
 ;;
-;; NOTE: the direct-style (fiber) effect path currently TRUNCATES a float effect
-;; result to an integer (prints 8), a pre-existing bug tracked in
-;; docs/archive/fiber-effect-float-result-truncated.md.  The CPS backend does
-;; NOT have that bug -- it reinterprets the float bits correctly -- so this
-;; fixture asserts the correct value (8.6), which the CPS build produces.
+;; Both effect paths produce 8.6 today, so this fixture pins a float crossing an
+;; effect boundary rather than a difference between two back ends.  Two stale
+;; claims removed from this header on 2026-09-16, both measured false:
+;;
+;;   - It said the direct-style (fiber) path TRUNCATES a float effect result and
+;;     prints 8.  That was fixed on 2026-07-12 (the resume value stores through a
+;;     `union { double d; int64_t i; }` bit-reinterpret instead of a cast) and is
+;;     archived at docs/archive/fiber-effect-float-result-truncated.md.  Measured
+;;     on main 145df1d49: the default path prints 8.6.  The note outlived its fix
+;;     by two months and read as a live bug.
+;;   - It said "Built with --enable=cps-backend".  No experiment by that name
+;;     exists any more -- `tur experiments` reports an empty registry and the flag
+;;     is a TUR-E0310 -- and this directory carries no flags file, so the fixture
+;;     is built on the default path like any other.  (53 other fixtures still
+;;     carry that stale flag claim in their headers; they are not touched here.)
 
 (defeffect Sample [] :float)
 
