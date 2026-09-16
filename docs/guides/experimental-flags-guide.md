@@ -19,7 +19,7 @@ every flag carries a hard expiry by which it must graduate or be removed.
 > authoritative current set (at the time of writing it holds one row,
 > `class-superclasses` -- the `defclass` constraint preamble, see
 > [typeclass-guide.md](typeclass-guide.md#superclasses) and
-> [typeclass-superclasses-plan.md](../upcoming/typeclass-superclasses-plan.md));
+> [typeclass-superclasses-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/typeclass-superclasses-plan.md));
 > this guide describes how the mechanism behaves for whatever rows are present.
 
 ## Opting in

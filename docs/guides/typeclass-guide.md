@@ -277,7 +277,7 @@ two load paths stays a silent no-op.
 > `:experiments [:class-superclasses]` in `build.tur`). The build prints a
 > `TUR-W0060` notice while the gate is live; writing the preamble without
 > the enable is `TUR-E0390`. The plan is
-> [typeclass-superclasses-plan.md](../upcoming/typeclass-superclasses-plan.md).
+> [typeclass-superclasses-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/typeclass-superclasses-plan.md).
 
 A `defclass` may declare that a constraint on it **entails** other classes.
 The declaration is a constraint vector right after the type-parameter vector
