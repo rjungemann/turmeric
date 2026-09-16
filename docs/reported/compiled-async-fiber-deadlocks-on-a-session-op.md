@@ -9,6 +9,18 @@ correctly under `tur --interpret`.
 This is a parity gap in the direction nobody looks for: the tree-walking
 interpreter is the **more** capable backend here.
 
+## Status (2026-09-16)
+
+Fix direction 2 landed with turi-session-expansion-plan S2:
+`session-spawn` / `session-join` in `stdlib/session.tur` (typed `(fn [] nil)`
+in, an opaque `SessionPeer` out; a pthread compiled, a scheduler fiber under
+`--interpret` via a native override). Every session fixture and every guide
+example now uses it, the hand-rolled `ptr<void>` spawn is gone, the `-turi`
+twins are deleted, and 57 of 58 session fixtures run under `run-turi.sh`.
+**Still open:** directions 1 and 3 -- user code that writes `(async (fn []
+(recv ch)))` directly still compiles clean and hangs. The floor is a
+diagnostic for a session op lexically inside a compiled `async` body.
+
 ## Repro
 
 ```turmeric

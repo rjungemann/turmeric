@@ -75,7 +75,7 @@ concurrency).
 | Async / futures | OK | OK | synchronously-completed bodies settle their future; native future cells |
 | Dynamic variables | OK | OK | dynamic-scope binding stack in the interpreter |
 | Panic / catch / `catch-panic-of` | OK | OK | TI5; panic payloads preserved |
-| Sessions -- binary + multi-party | OK | OK | the full surface (`make-session`/`send`/`recv`/`close`/`offer`/`choose`/`recv-timeout`, and `make-protocol`/`send-to`/`recv-from`/role-`close`) runs on a cooperative fiber rendezvous; two caveats below |
+| Sessions -- binary + multi-party | OK | OK | the full surface (`make-session`/`send`/`recv`/`close`/`offer`/`choose`/`recv-timeout`, and `make-protocol`/`send-to`/`recv-from`/role-`close`) runs on a cooperative fiber rendezvous; one source per fixture on both backends via `stdlib/session.tur`'s `session-spawn`; see below |
 | Sized primitives (`i8`..`i64`, floats) | OK | OK | carrier ascription bit-reinterprets correctly |
 | Symbols (`:Sym`) | OK | OK | interned `const Symbol *`; native `sym=?`/`sym->str` overrides |
 | Maps / sets / HAMT (scalar keys) | OK | OK | native `tur_hamt_*` overrides |
@@ -89,35 +89,46 @@ concurrency).
 
 ---
 
-## Sessions -- two caveats the matrix row cannot hold
+## Sessions -- what the row does not say
 
 The session surface interprets in full: recursive (`Rec`) protocols,
 `offer`/`choose`, `(project G R)`, `Session`/`project`/`Role` struct fields,
 delegation (including sending an endpoint *over* a session), sessions alongside
-effects and STM, 2- and 3-role multi-party, and the `stdlib/session.tur`
-templates all produce their compiled output under `--interpret`, at the REPL,
-and under `tur run --engine interp`. Two things do not follow from that row.
+effects and STM, 2- and 3-role multi-party, `recv-timeout` in both the main
+context and inside a fiber, and the `stdlib/session.tur` templates all produce
+their compiled output under `--interpret`, at the REPL, and under `tur run
+--engine interp`.
 
-- **`recv-timeout` inside a fiber ignores its deadline.** It waits for the
-  peer's value however long that takes and returns the Left (success) branch;
-  compiled returns Right (timeout). The same op in the main context is correct.
-  [turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-fiber-recv-timeout-ignores-its-deadline.md)
+**One fixture source runs on both backends.** `session-spawn` / `session-join`
+in `stdlib/session.tur` run the peer as a pthread compiled and as a scheduler
+fiber here -- the interpreter overrides the two inline-C bodies with natives
+(`turi_eval_register_builtins`), and `tests/run-turi.sh` knows that loading
+`stdlib/session.tur` is not an inline-C carve. So the session fixtures carry no
+`-turi` twins; the `requires.interp-only` ones that remain assert
+interpreter-only behaviour (a `sleep-async` peer, the fiber-context deadline,
+deadlock detection). `TURI_FILTER='session' bash tests/run-turi.sh` runs 57 of
+58 (the one skip is `session-timeout-expired`'s inline-C `nanosleep`).
+
+Two things do not follow from the row:
+
 - **A peer written with `async` runs here and deadlocks compiled.** The compiled
   session runtime blocks an OS thread on a condvar, and compiled `async` runs the
   fiber on that same thread, so `(async (fn [] (recv ch)))` hangs the binary with
-  no diagnostic. The interpreter's rendezvous yields to its scheduler instead, so
-  it is correct. This is why the compiled session fixtures spawn their peer with
-  raw `pthread_create` inline-C -- which `run-turi.sh` then skips, leaving 25 of
-  54 session fixtures unrun here for reasons that have nothing to do with
-  sessions.
+  no diagnostic; the interpreter's rendezvous yields to its scheduler instead.
+  Write the peer with `session-spawn`. The diagnostic for the direct `async`
+  shape is still open:
   [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md)
+- **The interpreter detects session deadlock; the compiled binary hangs.**
+  Because the rendezvous is cooperative and single-threaded, a blocked `recv`
+  (or an `await` on a task) with nothing runnable is a clean `deadlocked` error
+  naming the channel's protocol, with a nonzero exit. Running a protocol under
+  `--interpret` is a pre-ship check the compiled path structurally cannot offer;
+  see the session guide's
+  [Checking a protocol under the interpreter](session-types-guide.md#checking-a-protocol-under-the-interpreter)
+  and `tests/fixtures/errors/session-deadlock-*-turi`.
 
-Because the rendezvous is cooperative and single-threaded, the interpreter also
-**detects session deadlock** -- a blocked `recv` with no runnable peer is a clean
-`eval: session recv deadlocked` error and a nonzero exit, where the compiled
-binary hangs until killed. Running a protocol under `--interpret` is a cheap
-pre-ship check the compiled path structurally cannot offer. See
-[turi-session-expansion-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/turi-session-expansion-plan.md).
+The audit behind this row is
+[turi-session-expansion-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-session-expansion-plan.md).
 
 ---
 

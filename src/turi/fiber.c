@@ -166,6 +166,32 @@ void turi_timer_add(TuriEnv *env, uint64_t ms, TuriFuture *future) {
     *pp = t;
 }
 
+void turi_timer_cancel(TuriEnv *env, TuriFuture *future) {
+    TuriTimer **pp = &env->timers_head;
+    while (*pp) {
+        if ((*pp)->future == future) {
+            TuriTimer *dead = *pp;
+            *pp = dead->next;
+            free(dead);
+        } else {
+            pp = &(*pp)->next;
+        }
+    }
+}
+
+void turi_future_remove_waker(TuriFuture *f, TuriFiber *fiber) {
+    TuriWaker **pp = &f->wakers;
+    while (*pp) {
+        if ((*pp)->fiber == fiber) {
+            TuriWaker *dead = *pp;
+            *pp = dead->next;
+            free(dead);
+        } else {
+            pp = &(*pp)->next;
+        }
+    }
+}
+
 static void fire_timers(TuriEnv *env) {
     uint64_t now = turi_now_ms();
     while (env->timers_head && env->timers_head->deadline_ms <= now) {
@@ -375,6 +401,20 @@ TuriValue turi_await_future(TuriEnv *env, TuriFuture *f) {
             continue;
         }
 
+        /* Nothing runnable, no timer armed, no I/O in flight, and the future
+         * is still pending: nothing in this single-threaded scheduler can
+         * ever settle it.  The awaited task is parked (on a session channel
+         * or on another parked task) with no peer to wake it.  Report the
+         * deadlock instead of polling forever at 100% CPU -- the same
+         * detection the session recv path does (turi-session-expansion S6).
+         * Natives never resolve a future from another thread, so there is no
+         * outside wake source to wait for. */
+        if (!env->timers_head && env->io_pending_count == 0)
+            return turi_error("eval: await deadlocked: the awaited task is parked "
+                              "and nothing else is runnable -- no participant can "
+                              "make progress; this is a deadlock in the program "
+                              "(the compiled binary would hang here)");
+
         /* No ready fibers — wait for timers or I/O. */
         uint64_t now = turi_now_ms();
         uint64_t next = next_timer_deadline(env);
@@ -574,8 +614,15 @@ static TuriValue native_sleep_async(TuriEnv *env, TuriValue *args, uint32_t n,
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
-    /* Resumed: timer fired. */
-    return turi_nil();
+    /* Resumed: timer fired.  Hand back the (now resolved) future rather than
+     * nil: `(await (sleep-async ms))` is the documented spelling and the type
+     * checker sees a Future, so a bare nil here made the fiber's `await` fail
+     * on "expected a future" and silently drop the rest of the fiber body
+     * (awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body).  A resolved
+     * future is what the main-context arm's caller ends up awaiting too, so
+     * both contexts now agree; a bare `(sleep-async ms)` still just blocks and
+     * discards the value. */
+    return turi_future_val(f);
 }
 
 /* with-timeout : (ms :int, task :Future) -> value or TURI_ERROR("timeout") */

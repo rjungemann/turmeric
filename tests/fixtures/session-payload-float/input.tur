@@ -1,0 +1,22 @@
+;; A float session payload round-trips exactly on both backends.
+;;
+;; The runtime carries every message as one int64 word.  The compiled send
+;; template used to value-cast the payload -- (int64_t)(7.25) is 7 -- so the
+;; receiver printed 7 with no diagnostic (session-payloads-are-int64-only).
+;; The word is now a bit reinterpretation (tur_session_f64_bits /
+;; tur_session_bits_f64).  The literal has a non-zero fractional part on
+;; purpose: 7.0 would have hidden the truncation.
+;;
+;; Expected output: 7.25
+(load "stdlib/session.tur")
+
+(defn main [] : int
+  (let [[s r] (make-session (Send float Close))]
+    (let [t (session-spawn (fn []
+                             (let [[v r] (recv r)]
+                               (println v)
+                               (close r))))]
+      (let [s (send s 7.25)]
+        (close s)
+        (session-join t))))
+  0)

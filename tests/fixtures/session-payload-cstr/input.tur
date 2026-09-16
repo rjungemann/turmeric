@@ -1,0 +1,21 @@
+;; A cstr session payload: a pointer crossing the int64 rendezvous word.
+;;
+;; The pointer survived the round trip before, but only because gcc merely
+;; warns on int/pointer conversion -- Apple clang 21 rejects the emitted C
+;; outright (session-payloads-are-int64-only).  The send operand is now
+;; `(int64_t)(intptr_t)(x)` and the recv result `(void *)(intptr_t)...`, so
+;; the emitted C is well-typed on every host compiler.
+;;
+;; Expected output: hello
+(load "stdlib/session.tur")
+
+(defn main [] : int
+  (let [[s r] (make-session (Send cstr Close))]
+    (let [t (session-spawn (fn []
+                             (let [[msg r] (recv r)]
+                               (println msg)
+                               (close r))))]
+      (let [s (send s "hello")]
+        (close s)
+        (session-join t))))
+  0)

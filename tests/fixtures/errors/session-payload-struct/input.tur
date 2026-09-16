@@ -1,0 +1,16 @@
+;; A by-value struct as a session payload is rejected at elaboration.
+;;
+;; The session runtime carries one int64 word per message; a by-value
+;; aggregate has no such carrier.  This used to type-check and then fail
+;; inside cc with an error naming `tur_adt_Pt` and nothing about sessions
+;; (session-payloads-are-int64-only).  TUR-E0212 now names the payload type
+;; and says to send it behind a pointer.
+(defstruct Pt [x : int y : int])
+
+(defn main [] : int
+  (let [[s r] (make-session (Send Pt Close))]
+    (let [s (send s (Pt 1 2))]
+      (close s)
+      (let [[v r] (recv r)]
+        (close r))))
+  0)

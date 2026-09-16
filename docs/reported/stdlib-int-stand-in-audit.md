@@ -202,6 +202,6 @@ are matched, wrapped, or tightened as the work dictates, not a gate.
 - [router-payloads-are-int64-only](router-payloads-are-int64-only.md),
   [generator-yield-payload-is-int64-only](generator-yield-payload-is-int64-only.md),
   [async-await-payload-is-int64-only](async-await-payload-is-int64-only.md),
-  [session-payloads-are-int64-only](session-payloads-are-int64-only.md) -- the
+  [session-payloads-are-int64-only](../archive/session-payloads-are-int64-only.md) -- the
   same erasure where it is SILENT rather than declared.
 - [CLAUDE.md](../../CLAUDE.md) -- "No Lazy `:int` Stand-Ins -- STRICT RULE".

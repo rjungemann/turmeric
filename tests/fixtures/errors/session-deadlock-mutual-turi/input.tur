@@ -1,0 +1,40 @@
+;; S6: the interpreter detects two participants each blocked on the other.
+;;
+;; Three sessions, three participants.  Fiber A waits on B (recv r2) before
+;; it sends on s3 and then s1; fiber B waits on A (recv r3) before it sends
+;; on s2; the main context waits on A (recv r1).  Every endpoint follows its
+;; own protocol -- the checker proves conformance per channel, not deadlock
+;; freedom across independently typed channels -- and this cycle is exactly
+;; the residue the cooperative runtime catches: once A and B are both parked
+;; nothing is runnable, and the main context's recv on r1 is reported as
+;; deadlocked with a nonzero exit.  Compiled, the same program hangs.
+(defn peer-a [^linear r2 :(Session (Recv int Close))
+              ^linear s3 :(Session (Send int Close))
+              ^linear s1 :(Session (Send int Close))] : nil
+  (let [[v r2] (recv r2)]
+    (close r2)
+    (let [s3 (send s3 v)]
+      (close s3)
+      (let [s1 (send s1 v)]
+        (close s1)))))
+
+(defn peer-b [^linear r3 :(Session (Recv int Close))
+              ^linear s2 :(Session (Send int Close))] : nil
+  (let [[v r3] (recv r3)]
+    (close r3)
+    (let [s2 (send s2 v)]
+      (close s2))))
+
+(defn main [] : int
+  (let [[s1 r1] (make-session (Send int Close))]
+    (let [[s2 r2] (make-session (Send int Close))]
+      (let [[s3 r3] (make-session (Send int Close))]
+        (println "before")
+        (let [ta (async (fn [] (peer-a r2 s3 s1)))]
+          (let [tb (async (fn [] (peer-b r3 s2)))]
+            (let [[v r1] (recv r1)]
+              (println v)
+              (close r1)
+              (await ta)
+              (await tb)))))))
+  0)

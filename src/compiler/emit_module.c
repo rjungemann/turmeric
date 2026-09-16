@@ -15006,6 +15006,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#else\n");
     buf_puts(out, "#  define TUR_DBGPROTO(s) ((const char*)0)\n");
     buf_puts(out, "#endif\n");
+    /* session-payloads-are-int64-only: a payload rides the channel's int64
+     * word.  Floats cross by bit reinterpretation (a value cast truncated
+     * 7.25 to 7); the elaborator (session_payload_to_word / _from_word) wraps
+     * the send operand and the recv result in these. */
+    buf_puts(out, "static int64_t tur_session_f64_bits(double d) { int64_t i; memcpy(&i, &d, sizeof i); return i; }\n");
+    buf_puts(out, "static double tur_session_bits_f64(int64_t i) { double d; memcpy(&d, &i, sizeof d); return d; }\n");
+    buf_puts(out, "static int64_t tur_session_f32_bits(float f) { int32_t i; memcpy(&i, &f, sizeof i); return (int64_t)i; }\n");
+    buf_puts(out, "static float tur_session_bits_f32(int64_t i) { int32_t j = (int32_t)i; float f; memcpy(&f, &j, sizeof f); return f; }\n");
     /* TurSyncCh: synchronous rendezvous slot with explicit send/recv handshake.
      * state: 0=idle, 1=sender deposited (waiting for recv), 2=receiver acked (waiting for send to return)
      * cv: broadcast on every state change; both sender and receiver use it.

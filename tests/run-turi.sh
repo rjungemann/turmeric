@@ -122,10 +122,20 @@ fixture_has_inline_c() {
     # tree-walking interpreter, but the own-file grep above says otherwise and
     # the fixture then runs and fails on the first unsupported call.  Follow one
     # level of `load`, which is all any fixture uses.
+    #
+    # A loaded stdlib module whose EVERY inline-C body has a native override
+    # under --interpret is not a carve: its ```c blocks never run there.
+    # stdlib/session.tur is one (session-spawn / session-join are
+    # turi_eval_register_builtins natives), and it is what lets one session
+    # fixture source run under both run.sh and this harness.  Add a module here
+    # only when all of its inline-C is native-backed.
     local loaded
     while IFS= read -r loaded; do
         [ -n "$loaded" ] || continue
         [ -f "$loaded" ] || continue
+        case "$loaded" in
+            stdlib/session.tur) continue ;;
+        esac
         grep -q '```c' "$loaded" 2>/dev/null && return 0
     done < <(sed -n 's/.*(load "\([^"]*\)").*/\1/p' "$f" 2>/dev/null)
     return 1

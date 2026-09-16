@@ -1923,6 +1923,30 @@ void warn_legacy_fx_row(Form *f);
 /* elab_sessions.c */
 Expr *elab_session_make(Elab *e, const Form *call);
 Expr *elab_session_send(Elab *e, const Form *call);
+
+/* Session payload lowering onto the runtime's int64 rendezvous word
+ * (session-payloads-are-int64-only).  The compiled channel carries one
+ * machine word; a payload crosses it by value-cast (ints/bools), by bit
+ * reinterpretation (floats -- a value cast would truncate 7.25 to 7), or by
+ * an explicit pointer<->intptr cast (cstr, Session/Role endpoints, rc, ...).
+ * A by-value aggregate has no word-sized carrier and is rejected at
+ * elaboration rather than handed to cc. */
+typedef enum SessPayloadClass {
+    SESS_PAY_INT = 0,      /* (int64_t)(x) -- ints, bools, handles carried as int64 */
+    SESS_PAY_F64,          /* tur_session_f64_bits / tur_session_bits_f64 */
+    SESS_PAY_F32,          /* tur_session_f32_bits / tur_session_bits_f32 */
+    SESS_PAY_PTR,          /* (int64_t)(intptr_t)(x) / (void *)(intptr_t)x */
+    SESS_PAY_UNSUPPORTED,  /* by-value struct/ADT: TUR-E0212 */
+} SessPayloadClass;
+SessPayloadClass session_payload_class(Type t);
+/* Emit TUR-E0212 naming `op` and the payload type when the class is
+ * SESS_PAY_UNSUPPORTED; returns false in that case. */
+bool session_payload_supported(Elab *e, Type t, Span span, const char *op);
+/* Arena-allocated C expression converting `inner` (a C expression of the
+ * payload's C type) to the int64 word, and back from a word to the payload
+ * type.  `inner` need not be NUL-terminated: pass its length. */
+const char *session_payload_to_word(Elab *e, Type t, const char *inner, size_t inner_len);
+const char *session_payload_from_word(Elab *e, Type t, const char *inner, size_t inner_len);
 Expr *elab_session_recv(Elab *e, const Form *call);
 Expr *elab_session_close(Elab *e, const Form *call);
 Expr *elab_session_offer(Elab *e, const Form *call);

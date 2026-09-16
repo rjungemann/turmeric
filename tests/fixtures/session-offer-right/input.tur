@@ -1,0 +1,22 @@
+;; Session offer/choose taking the Right branch.
+;;
+;; The peer selects the Right branch (choose-right) and closes; the main context
+;; offers, matches Right, and prints a sentinel.  Exercises the choose-right /
+;; offer-Right side of the branch rendezvous on both backends (session-spawn
+;; is a pthread compiled, a scheduler fiber under --interpret).
+;;
+;; Expected output: 999
+(load "stdlib/session.tur")
+
+(defn main [] : int
+  (let [[r s] (make-session (Branch (Recv int Close) Close))]
+    (let [t (session-spawn (fn []
+                             (let [s (choose-right s)]
+                               (close s))))]
+      (match (offer r)
+        (Left r)
+          (let [[n r] (recv r)]
+            (close r) (session-join t) (println n))
+        (Right r)
+          (do (close r) (session-join t) (println 999)))))
+  0)

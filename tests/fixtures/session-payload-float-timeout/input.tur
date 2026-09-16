@@ -1,0 +1,24 @@
+;; A float payload through recv-timeout's success branch.
+;;
+;; The Left arm reads the value back out of the runtime's thread-local
+;; tur__rtv_ word, which is the other place a float used to be value-cast
+;; instead of bit-reinterpreted (session-payloads-are-int64-only).  The
+;; deadline is generous so the branch taken is Left on any box.
+;;
+;; Expected output: 3.5
+(load "stdlib/session.tur")
+
+(defn main [] : int
+  (let [[r s] (make-session (Recv float (Timeout Close Close)))]
+    (let [t (session-spawn (fn []
+                             (let [s (send s 3.5)]
+                               (close s))))]
+      (match (recv-timeout r 5000)
+        (Left pair)
+          (let [[v r] pair]
+            (println v)
+            (close r)
+            (session-join t))
+        (Right r)
+          (do (println "timeout") (close r) (session-join t)))))
+  0)

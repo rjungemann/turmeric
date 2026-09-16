@@ -239,6 +239,17 @@ TuriValue turi_await_future(TuriEnv *env, TuriFuture *f);
 /* Schedule a timer: resolve `future` after `ms` milliseconds. */
 void turi_timer_add(TuriEnv *env, uint64_t ms, TuriFuture *future);
 
+/* Remove every pending timer armed on `future` without resolving it.  Used by
+ * a wait with two wake sources (a session recv-timeout inside a fiber: the
+ * peer's deposit OR the deadline) to disarm the deadline once the other
+ * source won, so a stale firing cannot re-enqueue a fiber that has since
+ * parked elsewhere.  No-op if no timer references the future. */
+void turi_timer_cancel(TuriEnv *env, TuriFuture *future);
+
+/* Detach `fiber` from `f`'s waker chain (the inverse of turi_future_add_waker).
+ * No-op if the fiber is not registered. */
+void turi_future_remove_waker(TuriFuture *f, TuriFiber *fiber);
+
 /* Cancel a task future (marks owner fiber as cancelled and rejects future). */
 void turi_task_cancel(TuriEnv *env, TuriFuture *f);
 

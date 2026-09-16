@@ -5,27 +5,16 @@
 ;; and handles the Left branch by printing "left".
 ;;
 ;; Expected output: left
-(defn spawn [f : ptr<void>] : ptr<void>
-  ```c
-  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
-  return (void *)tid;
-  ```)
 
-(defn join [t : ptr<void>] : int
-  ```c
-  pthread_join(*(pthread_t *)t, NULL);
-  free(t);
-  return 0;
-  ```)
+(load "stdlib/session.tur")
 
 (defn main [] : int
   (let [[s r] (make-session (Choose Close Close))]
-    (let [t (spawn (fn []
+    (let [t (session-spawn (fn []
                      (match (offer r)
                        (Left r) (do (close r) (println "left"))
                        (Right r) (close r))))]
       (let [s (choose-left s)]
         (close s)
-        (join t))))
+        (session-join t))))
   0)
