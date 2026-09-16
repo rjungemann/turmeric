@@ -1,0 +1,16 @@
+;; class-superclasses: entailment is transitive.  L3 <- L2 <- L1, so an `L3`
+;; constraint licenses both an `L2` method and an `L1` method.
+(defclass L1 [a] (l1-id [x : a] : a))
+(defclass L2 [a] [(L1 a)] (l2-twice [x : a] : a))
+(defclass L3 [a] [(L2 a)] (l3-tag [x : a] : int))
+
+(definstance L1 [int] (l1-id [x] x))
+(definstance L2 [int] (l2-twice [x] (* x 2)))
+(definstance L3 [int] (l3-tag [x] 3))
+
+(defn use-l3 [^L3 A] [x : A] : A
+  (l1-id (l2-twice x)))
+
+(defn main [] : int
+  (println (use-l3 21))
+  0)

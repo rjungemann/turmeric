@@ -1,0 +1,16 @@
+;; class-superclasses SC3, the return-directed twin: a nullary method of the
+;; SUBCLASS (`sg-empty`, resolved from the expected type) and a receiver method
+;; of the SUPERCLASS in one `[^Mo A]` body.
+(defclass Sg [a] (sg-combine [x : a y : a] : a))
+(defclass Mo [a] [(Sg a)] (sg-empty [] : a))
+
+(definstance Sg [int] (sg-combine [x y] (+ x y)))
+(definstance Mo [int] (sg-empty [] 0))
+
+(defn fold3 [^Mo A] [x : A y : A z : A] : A
+  (let [e : A (sg-empty)]
+    (sg-combine (sg-combine (sg-combine e x) y) z)))
+
+(defn main [] : int
+  (println (fold3 1 2 3))
+  0)

@@ -1,0 +1,5 @@
+;; class-superclasses SC2: the superclass graph must be a DAG.
+(defclass A [x] [(B x)] (fa [v : x] : int))
+(defclass B [x] [(C x)] (fb [v : x] : int))
+(defclass C [x] [(A x)] (fc [v : x] : int))
+(defn main [] : int 0)

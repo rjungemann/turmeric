@@ -303,6 +303,10 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0381_WRITES_FRAME_INVALID:       return "TUR-E0381";
         case TUR_E0382_WRITES_FRAME_EXCEEDED:      return "TUR-E0382";
         case TUR_W0383_READS_FRAME_OMITS_MUTABLE:  return "TUR-W0383";
+        case TUR_E0390_CLASS_SUPERCLASS_PREAMBLE:         return "TUR-E0390";
+        case TUR_E0391_CLASS_SUPERCLASS_UNRESOLVED:       return "TUR-E0391";
+        case TUR_E0392_CLASS_SUPERCLASS_CYCLE:            return "TUR-E0392";
+        case TUR_E0393_CLASS_SUPERCLASS_INSTANCE_MISSING: return "TUR-E0393";
         /* MS2: Multi-shot continuation capture analysis */
         case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
         case TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER: return "TUR-E0501";
@@ -474,6 +478,10 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0381") == 0) return TUR_E0381_WRITES_FRAME_INVALID;
     if (strcmp(s, "TUR-E0382") == 0) return TUR_E0382_WRITES_FRAME_EXCEEDED;
     if (strcmp(s, "TUR-W0383") == 0) return TUR_W0383_READS_FRAME_OMITS_MUTABLE;
+    if (strcmp(s, "TUR-E0390") == 0) return TUR_E0390_CLASS_SUPERCLASS_PREAMBLE;
+    if (strcmp(s, "TUR-E0391") == 0) return TUR_E0391_CLASS_SUPERCLASS_UNRESOLVED;
+    if (strcmp(s, "TUR-E0392") == 0) return TUR_E0392_CLASS_SUPERCLASS_CYCLE;
+    if (strcmp(s, "TUR-E0393") == 0) return TUR_E0393_CLASS_SUPERCLASS_INSTANCE_MISSING;
     /* MS2: Multi-shot continuation capture analysis */
     if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
     if (strcmp(s, "TUR-E0501") == 0) return TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER;
@@ -1780,6 +1788,64 @@ static const DiagExplanation diag_explanations_[] = {
       "an inline-C body is unwalkable, yields no evidence, stays silent, and\n"
       "keeps the trusted grant.  See\n"
       "docs/upcoming/trusted-refinement-claims-plan.md.\n" },
+    /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md) */
+    { TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
+      "TUR-E0390: Malformed or unavailable `defclass` superclass preamble\n"
+      "\n"
+      "A `defclass` may list the classes a constraint on it entails, in a\n"
+      "constraint vector right after the type-parameter vector -- the same\n"
+      "`[(Class var)]` spelling `definstance` and `defn` already use:\n"
+      "\n"
+      "    (defclass Monoid [a]\n"
+      "      [(Semigroup a)]\n"
+      "      (mempty [] : a))\n"
+      "\n"
+      "This code means the vector was written but cannot be accepted:\n"
+      "  - the feature is experimental and the build did not pass\n"
+      "    `--enable=class-superclasses` (or `:experiments [:class-superclasses]`\n"
+      "    in build.tur);\n"
+      "  - an element is not of the form `(Class var...)`;\n"
+      "  - a variable named is not one of this class's own type parameters;\n"
+      "  - the vector was placed AFTER the `|` functional-dependency clause.\n"
+      "    The canonical order is\n"
+      "    `(defclass Name [params] [(Super var)...] | (from -> to) methods...)`.\n" },
+    { TUR_E0391_CLASS_SUPERCLASS_UNRESOLVED,
+      "TUR-E0391: Superclass does not resolve\n"
+      "\n"
+      "A `defclass` constraint preamble names a class that is not defined\n"
+      "anywhere in the program, or one whose shape does not fit the arguments\n"
+      "given -- a different parameter count, or a parameter of a different\n"
+      "kind (`[(Functor a)]` over a kind-`*` variable `a`).\n"
+      "\n"
+      "Superclasses are resolved after every form in the unit is registered,\n"
+      "so a superclass declared BELOW its subclass is fine; the name must\n"
+      "simply exist somewhere.\n" },
+    { TUR_E0392_CLASS_SUPERCLASS_CYCLE,
+      "TUR-E0392: Superclass cycle\n"
+      "\n"
+      "The superclass graph must be acyclic.  A class may not list itself,\n"
+      "and two classes may not each list the other:\n"
+      "\n"
+      "    (defclass A [x] [(B x)] (fa [v : x] : int))\n"
+      "    (defclass B [x] [(A x)] (fb [v : x] : int))   ;; TUR-E0392: A -> B -> A\n"
+      "\n"
+      "The diagnostic names the full cycle path.\n" },
+    { TUR_E0393_CLASS_SUPERCLASS_INSTANCE_MISSING,
+      "TUR-E0393: Instance is missing a superclass instance\n"
+      "\n"
+      "A constraint on a subclass entails its superclasses -- a `[^Monoid A]`\n"
+      "body may call `combine` -- and that is only sound if every `Monoid`\n"
+      "instance is backed by a `Semigroup` instance for the same type.  So:\n"
+      "\n"
+      "    (defclass Monoid [a] [(Semigroup a)] (mempty [] : a))\n"
+      "    (definstance Monoid [int] (mempty [] 0))   ;; TUR-E0393: no Semigroup [int]\n"
+      "\n"
+      "Add the missing instance; it may appear anywhere in the program, above\n"
+      "or below the subclass instance.  A parametric instance discharges the\n"
+      "obligation against its own declared constraints: `Monoid [(Vec A)]\n"
+      "[(Monoid A)]` needs a `Semigroup [(Vec A)]`, which may itself be\n"
+      "parametric.  A superclass instance is REQUIRED, never inherited -- the\n"
+      "`Monoid` instance does not supply `combine`, the `Semigroup` one does.\n" },
     { TUR_W0373_REFINE_NONLINEAR,
       "TUR-W0373: Nonlinear predicate subterm treated as uninterpreted\n"
       "\n"

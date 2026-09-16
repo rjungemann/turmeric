@@ -1,0 +1,4 @@
+;; class-superclasses SC2: a superclass name must resolve to a defined
+;; typeclass somewhere in the program (above or below).
+(defclass Mo [a] [(Nope a)] (sg-empty [] : a))
+(defn main [] : int 0)

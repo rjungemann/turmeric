@@ -6366,6 +6366,61 @@ static bool turi_pattern_extract_var(const Type *pattern, const Type *concrete,
  * constraints on the same class (`[^Show K ^Show V]`) each push their own
  * bind, keyed by constraint tyvar name -- frame_lookup_dict_tyvar picks the
  * one the dispatch site's tyvar names. */
+/* One dictionary bind: resolve `cls` at `concrete` and push it on the frame,
+ * keyed by the constraint tyvar's name.  Split out of
+ * frame_bind_constraint_dicts so a constraint can bind its SUPERCLASS
+ * dictionaries too (class-superclasses, below). */
+static void frame_bind_one_dict(TuriEnv *env, TypeClassEnv *tc_env,
+                                EvalFrame *callee, TypeClass *cls,
+                                const char *tvname, Type concrete) {
+    TypeClass *lookup_tc = cls;
+    TypeClassInstance *inst = NULL;
+    for (int tc_try = 0; tc_try < 2 && !inst; tc_try++) {
+        if (tc_try == 1) {
+            /* All pointer-keyed lookups missed.  A session reset (#lang
+             * reader switch) or a duplicate class object leaves the
+             * constraint's TypeClass pointer pointing at a copy the live
+             * registry's instances were not registered under -- see
+             * docs/archive/lang-switch-breaks-generic-instance-resolution.md.
+             * Class NAMES are unique per program, so re-resolve the class
+             * by name and retry the same precise lookups under the
+             * canonical copy.  The DictBind still keys on the ORIGINAL
+             * pointer, which is what the body's baked dict_arg carries. */
+            if (!cls->name || !cls->name->name) break;
+            TypeClass *canon = NULL;
+            for (TypeClass *t = tc_env->typeclasses; t; t = t->next)
+                if (t != cls && t->name && t->name->name &&
+                    strcmp(t->name->name, cls->name->name) == 0) {
+                    canon = t;
+                    break;
+                }
+            if (!canon) break;
+            lookup_tc = canon;
+        }
+        inst = typeclass_env_lookup_instance_exact(
+            tc_env, lookup_tc, &concrete, 1);
+        if (!inst)
+            inst = typeclass_env_lookup_instance(tc_env, lookup_tc,
+                                                 &concrete, 1);
+        if (!inst) {
+            TypeClassDispatchKey key;
+            memset(&key, 0, sizeof(key));
+            key.typeclass        = lookup_tc;
+            key.type_args        = &concrete;
+            key.n_type_args      = 1;
+            key.constructor_kind = KIND_ARROW;
+            inst = typeclass_env_lookup_instance_by_key(tc_env, &key);
+        }
+    }
+    if (!inst) return;
+    DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+    db->tc    = cls;
+    db->inst  = inst;
+    db->tyvar = tvname;
+    db->next  = callee->dicts;
+    callee->dicts = db;
+}
+
 static void frame_bind_constraint_dicts(TuriEnv *env, EvalFrame *callee,
                                         const TypeConstraint *constraints,
                                         uint8_t n_constraints) {
@@ -6383,52 +6438,35 @@ static void frame_bind_constraint_dicts(TuriEnv *env, EvalFrame *callee,
         if (!frame_lookup_tyvar(callee, tvname, &concrete) ||
             concrete.kind == TY_TYVAR)
             continue;
-        TypeClass *lookup_tc = c->typeclass;
-        TypeClassInstance *inst = NULL;
-        for (int tc_try = 0; tc_try < 2 && !inst; tc_try++) {
-            if (tc_try == 1) {
-                /* All pointer-keyed lookups missed.  A session reset (#lang
-                 * reader switch) or a duplicate class object leaves the
-                 * constraint's TypeClass pointer pointing at a copy the live
-                 * registry's instances were not registered under -- see
-                 * docs/archive/lang-switch-breaks-generic-instance-resolution.md.
-                 * Class NAMES are unique per program, so re-resolve the class
-                 * by name and retry the same precise lookups under the
-                 * canonical copy.  The DictBind still keys on the ORIGINAL
-                 * pointer, which is what the body's baked dict_arg carries. */
-                if (!c->typeclass->name || !c->typeclass->name->name) break;
-                TypeClass *canon = NULL;
-                for (TypeClass *t = tc_env->typeclasses; t; t = t->next)
-                    if (t != c->typeclass && t->name && t->name->name &&
-                        strcmp(t->name->name, c->typeclass->name->name) == 0) {
-                        canon = t;
-                        break;
-                    }
-                if (!canon) break;
-                lookup_tc = canon;
-            }
-            inst = typeclass_env_lookup_instance_exact(
-                tc_env, lookup_tc, &concrete, 1);
-            if (!inst)
-                inst = typeclass_env_lookup_instance(tc_env, lookup_tc,
-                                                     &concrete, 1);
-            if (!inst) {
-                TypeClassDispatchKey key;
-                memset(&key, 0, sizeof(key));
-                key.typeclass        = lookup_tc;
-                key.type_args        = &concrete;
-                key.n_type_args      = 1;
-                key.constructor_kind = KIND_ARROW;
-                inst = typeclass_env_lookup_instance_by_key(tc_env, &key);
+        frame_bind_one_dict(env, tc_env, callee, c->typeclass, tvname, concrete);
+        /* class-superclasses SC3, the interpreter half of entailment: a
+         * `[^Monoid A]` frame must also carry the `Semigroup` dictionary for
+         * A, or a `combine` call in the body -- whose baked dict_arg names
+         * Semigroup -- finds no frame dictionary and falls back to the
+         * carrier representative.  Walk the constrained class's superclass
+         * closure and bind each at the same tyvar; the post-unit pass has
+         * resolved `supers` by the time anything is evaluated, and the
+         * instance obligation (Half B) guarantees each lookup can succeed. */
+        {
+            TypeClass *stack[64];
+            TypeClass *seen[64];
+            uint32_t n_stack = 0, n_seen = 0;
+            stack[n_stack++] = c->typeclass;
+            seen[n_seen++]   = c->typeclass;
+            while (n_stack > 0) {
+                TypeClass *cur = stack[--n_stack];
+                for (uint8_t si = 0; si < cur->n_supers; si++) {
+                    TypeClass *s = cur->supers ? cur->supers[si] : NULL;
+                    if (!s) continue;
+                    bool dup = false;
+                    for (uint32_t k = 0; k < n_seen && !dup; k++) dup = (seen[k] == s);
+                    if (dup || n_seen >= 64 || n_stack >= 64) continue;
+                    seen[n_seen++]   = s;
+                    stack[n_stack++] = s;
+                    frame_bind_one_dict(env, tc_env, callee, s, tvname, concrete);
+                }
             }
         }
-        if (!inst) continue;
-        DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
-        db->tc    = c->typeclass;
-        db->inst  = inst;
-        db->tyvar = tvname;
-        db->next  = callee->dicts;
-        callee->dicts = db;
     }
 }
 

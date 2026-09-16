@@ -357,6 +357,13 @@ extern bool g_opt_regions;
  * what this bit buys.  It is NOT an on/off switch for the dialect -- the
  * per-file `SourceFile.lang` is (lang_span_is_saffron). */
 extern bool g_opt_saffron;
+/* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md): the
+ * `defclass` constraint preamble `[(Super var)...]` and the entailment it
+ * licenses.  Off by default and gated behind `--enable=class-superclasses`;
+ * elab_defclass reads it at the preamble parse.  With the bit off the vector
+ * is rejected (TUR-E0390) rather than silently changing entailment for a
+ * program that did not ask for it. */
+extern bool g_opt_class_superclasses;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value
  * instead of riding the int64 heap-pointer carrier.  The parametric sibling of

@@ -1,0 +1,20 @@
+;; class-superclasses over a higher-kinded parameter: `Wrap2 [^f]` lists
+;; `Wrap f`, so the kind check accepts `* -> *` on both sides and a
+;; `[^Wrap2 f]` body may call the `Wrap` method.
+(defclass Wrap [^f]
+  (wrap-count [x : (f int)] : int))
+
+(defclass Wrap2 [^f]
+  [(Wrap f)]
+  (wrap-name [x : (f int)] : cstr))
+
+(definstance Wrap [Option] (wrap-count [x] 1))
+(definstance Wrap2 [Option] (wrap-name [x] "opt"))
+
+(defn both [^Wrap2 f] [x : (f int)] : int
+  (+ (wrap-count x) 10))
+
+(defn main [] : int
+  (println (both (some 3)))
+  (println (wrap-name (some 4)))
+  0)

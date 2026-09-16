@@ -1,0 +1,21 @@
+;; class-superclasses: the superclass is declared BELOW the subclass.  The
+;; preamble stores the `(Sg a)` form unresolved and the post-unit pass resolves
+;; it once every defclass in the unit is registered, so declaration order
+;; between the two classes does not matter.  (The classes still precede their
+;; uses, as any declaration must.)
+(defclass Mo [a]
+  [(Sg a)]
+  (sg-empty [] : a))
+
+(defclass Sg [a]
+  (sg-combine [x : a y : a] : a))
+
+(definstance Sg [int] (sg-combine [x y] (+ x y)))
+(definstance Mo [int] (sg-empty [] 0))
+
+(defn double-up [^Mo A] [x : A] : A
+  (sg-combine x x))
+
+(defn main [] : int
+  (println (double-up 21))
+  0)

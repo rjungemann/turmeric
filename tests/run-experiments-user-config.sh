@@ -5,23 +5,27 @@
 # Drives the built `tur` against a synthetic $XDG_CONFIG_HOME so no real user
 # file is touched.
 #
-# As of 2026-07-06 the experiment registry is EMPTY: forall-dict-pass -- the
-# last surviving flag, and the probe this test used to key on -- graduated to
-# always-on (docs/archive/history/forall-dict-pass-multi-constraint-hkt-plan.md).  With
-# no experiment registered, the "enabling a flag changes compile behavior"
-# scenarios (a gated source that only compiles with --enable=<x>) are not
-# expressible -- there is no gated feature to probe.  This test therefore
-# covers the registry-INDEPENDENT paths, which are the parts of the mechanism
-# that must hold regardless of what is registered:
+# The registry was EMPTY from 2026-07-06 (forall-dict-pass, the probe this
+# test used to key on, graduated) until 2026-09-16, when `class-superclasses`
+# registered.  The registry-INDEPENDENT paths -- the parts of the mechanism
+# that must hold regardless of what is registered -- are covered first:
 #
 #   A. manifest with an unknown :experiments name  -> TUR-E0310, exit 2
 #   B. user file with an unknown experiment name    -> TUR-E0310 + path, exit 2
 #   C. user file with an unknown key                 -> TUR-W0062 warning, compiles
 #   D. absent user file                              -> no-op, compiles
 #
-# When a new experiment is registered, restore a gated-source probe here (and
-# in tests/unit/experiments_user_config.c) to re-cover the enable/precedence
-# matrix -- see git history for the forall-dict-pass form.
+# Then the gated-source probe, keyed on the FIRST registered experiment and a
+# source that only compiles with it enabled (the enable/precedence matrix):
+#
+#   E. gated source, nothing enabled                 -> refused (exit != 0)
+#   F. gated source, user file :enable [<probe>]     -> compiles (TUR-W006x)
+#   G. same user file + manifest `:experiments []`    -> user file suppressed,
+#                                                        refused again
+#
+# E-G run only while a gated probe source exists for the first registered
+# experiment (GATED_SRC below); if the registry empties again they skip, and
+# the next experiment to register should point GATED_SRC at its own fixture.
 
 set -u
 cd "$(dirname "$0")/.."
@@ -114,6 +118,30 @@ else
     echo "  stderr:"; sed 's/^/    /' "$key_err"
 fi
 rm -f "$key_err"
+
+# --- E-G. gated-source probe (only with a live experiment) ------------------
+# `class-superclasses` gates the defclass constraint preamble; the fixture
+# below is a hard error without the enable (TUR-E0390) and compiles with it.
+PROBE_NAME="class-superclasses"
+GATED_SRC="tests/fixtures/class-superclass-entails/input.tur"
+if "$TUR" experiments 2>/dev/null | grep -q "^$PROBE_NAME " && [ -f "$GATED_SRC" ]; then
+    S5="$WORK/s5"; mkdir -p "$S5"; cp "$GATED_SRC" "$S5/input.tur"
+    assert_exit 1 "E. gated source refused with nothing enabled" \
+        "$XDG_EMPTY" "$S5" emit-c input.tur
+
+    XDG_ON="$WORK/xdg-on"; mkdir -p "$XDG_ON/turmeric"
+    printf ':enable [%s]\n' "$PROBE_NAME" > "$XDG_ON/turmeric/experiments.tur"
+    assert_exit 0 "F. gated source compiles via user-file :enable" \
+        "$XDG_ON" "$S5" emit-c input.tur
+
+    S6="$WORK/s6"; mkdir -p "$S6/src"
+    printf '(defpackage "demo" :version "0.1.0" :experiments [])\n' > "$S6/build.tur"
+    cp "$GATED_SRC" "$S6/src/input.tur"
+    assert_exit 1 "G. manifest :experiments [] suppresses the user file" \
+        "$XDG_ON" "$S6" emit-c src/input.tur
+else
+    echo "skip  E-G. no gated probe source for the first registered experiment"
+fi
 
 echo
 echo "summary: $PASS passed, $FAIL failed"

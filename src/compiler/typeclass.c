@@ -1,4 +1,5 @@
 #include "typeclass.h"
+#include "forms.h"     /* class-superclasses: the unresolved `(Super var)` forms */
 
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +34,12 @@ TypeClass *typeclass_env_register_typeclass(TypeClassEnv *env, const Symbol *nam
     tc->has_fundep = false;
     tc->fundep_from_mask = 0;
     tc->fundep_to_mask = 0;
+    tc->super_forms = NULL;
+    tc->super_n_args = NULL;
+    tc->super_arg_idx = NULL;
+    tc->n_supers = 0;
+    tc->supers = NULL;
+    tc->decl_form = NULL;
     tc->from_stdlib = false;
     tc->next = env->typeclasses;
     env->typeclasses = tc;
@@ -57,6 +64,8 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
     /* Phase PTC1: Type parameter constraints */
     inst->type_param_constraints = NULL;
     inst->n_type_param_constraints = 0;
+    inst->decl_form = NULL;
+    inst->super_obligations_ok = false;
     inst->assoc_types = NULL;
     inst->n_assoc_types = 0;
     inst->origin_file_id = 0;
@@ -90,6 +99,110 @@ TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol 
         }
     }
     return NULL;
+}
+
+/* ---- class-superclasses (docs/upcoming/typeclass-superclasses-plan.md) ---- */
+
+/* Same class by name: a class re-registered through two import paths is two
+ * TypeClass records with one interned Symbol, and the dispatch path has always
+ * counted that as the same class (elab_method_call's constraint walk). */
+static bool tc_same_name(const TypeClass *a, const TypeClass *b) {
+    if (a == b) return true;
+    if (!a || !b || !a->name || !b->name) return false;
+    return a->name == b->name ||
+           (a->name->len == b->name->len &&
+            memcmp(a->name->name, b->name->name, a->name->len) == 0);
+}
+
+/* The class the i-th superclass element of `tc` names: the resolved slot when
+ * the post-unit pass has run, else a by-name lookup of the form's head. */
+static TypeClass *tc_super_at(const TypeClassEnv *env, const TypeClass *tc, uint8_t i) {
+    if (tc->supers && tc->supers[i]) return tc->supers[i];
+    if (!tc->super_forms || !tc->super_forms[i]) return NULL;
+    const Form *f = tc->super_forms[i];
+    if (f->tag != F_LIST || f->as.list.len < 1 || f->as.list.items[0]->tag != F_SYM)
+        return NULL;
+    return typeclass_env_lookup_typeclass(env, f->as.list.items[0]->as.sym);
+}
+
+bool typeclass_resolve_superclasses(const TypeClassEnv *env, TypeClass *tc) {
+    if (!tc || tc->n_supers == 0) return true;
+    if (!tc->supers) {
+        tc->supers = (TypeClass **)arena_alloc(env->arena,
+                                              tc->n_supers * sizeof(TypeClass *));
+        if (!tc->supers) return false;
+        for (uint8_t i = 0; i < tc->n_supers; i++) tc->supers[i] = NULL;
+    }
+    bool ok = true;
+    for (uint8_t i = 0; i < tc->n_supers; i++) {
+        if (tc->supers[i]) continue;
+        tc->supers[i] = tc_super_at(env, tc, i);
+        if (!tc->supers[i]) ok = false;
+    }
+    return ok;
+}
+
+/* Bounded DFS over the superclass graph.  The class count in any real program
+ * is tiny (the whole stdlib registers a few dozen), so a fixed visited array
+ * with a linear membership test is the right size of machinery; a walk that
+ * would exceed it stops rather than recursing without bound. */
+#define TC_WALK_MAX 256
+
+bool typeclass_entails(const TypeClassEnv *env, TypeClass *sub, const TypeClass *sup) {
+    if (!sub || !sup) return false;
+    if (tc_same_name(sub, sup)) return true;
+    TypeClass *stack[TC_WALK_MAX];
+    TypeClass *seen[TC_WALK_MAX];
+    uint32_t n_stack = 0, n_seen = 0;
+    stack[n_stack++] = sub;
+    seen[n_seen++]   = sub;
+    while (n_stack > 0) {
+        TypeClass *cur = stack[--n_stack];
+        for (uint8_t i = 0; i < cur->n_supers; i++) {
+            TypeClass *s = tc_super_at(env, cur, i);
+            if (!s) continue;                 /* not declared (yet) */
+            if (tc_same_name(s, sup)) return true;
+            bool dup = false;
+            for (uint32_t k = 0; k < n_seen && !dup; k++) dup = (seen[k] == s);
+            if (dup) continue;
+            if (n_seen >= TC_WALK_MAX || n_stack >= TC_WALK_MAX) return false;
+            seen[n_seen++]   = s;
+            stack[n_stack++] = s;
+        }
+    }
+    return false;
+}
+
+/* Recursive colouring: 0 = unvisited, 1 = on the current path, 2 = done. */
+static uint8_t tc_cycle_walk(TypeClass *tc, TypeClass **path, uint8_t depth,
+                             uint8_t cap, TypeClass **out, uint8_t *out_n) {
+    if (depth >= cap) return 0;
+    for (uint8_t d = 0; d < depth; d++) {
+        if (path[d] == tc) {
+            /* Cycle: path[d..depth) then tc again. */
+            uint8_t n = 0;
+            for (uint8_t k = d; k < depth && n < cap; k++) out[n++] = path[k];
+            if (n < cap) out[n++] = tc;
+            *out_n = n;
+            return 1;
+        }
+    }
+    path[depth] = tc;
+    for (uint8_t i = 0; i < tc->n_supers; i++) {
+        TypeClass *s = tc->supers ? tc->supers[i] : NULL;
+        if (!s) continue;
+        if (tc_cycle_walk(s, path, (uint8_t)(depth + 1), cap, out, out_n)) return 1;
+    }
+    return 0;
+}
+
+uint8_t typeclass_find_super_cycle(TypeClass *tc, TypeClass **out, uint8_t cap) {
+    if (!tc || tc->n_supers == 0 || cap == 0) return 0;
+    TypeClass *path[64];
+    uint8_t n = 0;
+    if (cap > 64) cap = 64;
+    if (tc_cycle_walk(tc, path, 0, cap, out, &n)) return n;
+    return 0;
 }
 
 /* assoc-types-plan: find the class declaring an associated type `assoc_name`. */

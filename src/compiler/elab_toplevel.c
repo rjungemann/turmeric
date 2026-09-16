@@ -2344,6 +2344,13 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         tl_deferred = NULL;
     }
 
+    /* class-superclasses SC2/SC4: every defclass and definstance in the unit is
+     * registered now, so resolve the superclass preambles (a superclass may be
+     * declared below its subclass), reject cycles, and enforce the instance
+     * obligation that keeps the entailment sound.  A no-op for a program with
+     * no preamble. */
+    if (!elab_typeclass_superclasses_finish(&e)) rc = -1;
+
     /* cps-backend-n6 cross-function resume: gated whole-program reset-wrapping.
      * Runs after the main pass so uses_crossfn_resume reflects the entire program
      * (a callee's resuming shift may be elaborated after a caller's reset).  When

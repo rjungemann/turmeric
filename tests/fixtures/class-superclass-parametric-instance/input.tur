@@ -1,0 +1,27 @@
+;; class-superclasses SC4: a PARAMETRIC instance discharges its superclass
+;; obligation against its own declared constraints.  `Mo [(Option A)] [(Mo A)]`
+;; needs `Sg [(Option A)]`, which is itself parametric on `(Sg A)`.  The
+;; `[^Mo A]` generic then reaches the Option instance of the SUPERCLASS at
+;; `A = (Option int)` on both the compiled and the interpreted path.
+(defclass Sg [a] (sg-combine [x : a y : a] : a))
+(defclass Mo [a] [(Sg a)] (sg-empty [] : a))
+
+(definstance Sg [int] (sg-combine [x y] (+ x y)))
+(definstance Mo [int] (sg-empty [] 0))
+
+(definstance Sg [(Option A)] [(Sg A)]
+  (sg-combine [x y]
+    (if (some? x)
+      (if (some? y) (some (sg-combine (unwrap x) (unwrap y))) x)
+      y)))
+
+(definstance Mo [(Option A)] [(Mo A)]
+  (sg-empty [] (none)))
+
+(defn dbl [^Mo A] [x : A] : A
+  (sg-combine x x))
+
+(defn main [] : int
+  (let [r : (Option int) (dbl (some 21))]
+    (println (unwrap r))
+    0))

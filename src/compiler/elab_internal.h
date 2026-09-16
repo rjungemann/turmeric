@@ -1852,6 +1852,11 @@ Expr *elab_open(Elab *e, const Form *call);
 /* elab_typeclasses.c */
 Expr *elab_defclass(Elab *e, const Form *call);
 Expr *elab_definstance(Elab *e, const Form *call);
+/* class-superclasses SC2/SC4: the post-unit pass over the superclass graph --
+ * resolve each defclass preamble, reject cycles, and enforce the instance
+ * obligation (Half B).  Runs after every form in the unit is registered, from
+ * elaborate_program_session.  Returns false when it reported an error. */
+bool elab_typeclass_superclasses_finish(Elab *e);
 Expr *elab_method_call(Elab *e, const Form *call);
 /* Phase RT: if `name` is a typeclass method whose dispatch type variable
  * appears only in the return type (a return-only-dispatch method, e.g.

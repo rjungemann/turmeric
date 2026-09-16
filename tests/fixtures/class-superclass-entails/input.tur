@@ -1,0 +1,20 @@
+;; class-superclasses SC3 (Half A): a constraint on a subclass entails its
+;; superclass.  `Mo` lists `Sg` in its constraint preamble, so a `[^Mo A]`
+;; body may call `sg-combine` without a separate `^Sg A` constraint.
+;; Compare the flat two-constraint spelling in lattice-guide.md.
+(defclass Sg [a]
+  (sg-combine [x : a y : a] : a))
+
+(defclass Mo [a]
+  [(Sg a)]
+  (sg-empty [] : a))
+
+(definstance Sg [int] (sg-combine [x y] (+ x y)))
+(definstance Mo [int] (sg-empty [] 0))
+
+(defn double-up [^Mo A] [x : A] : A
+  (sg-combine x x))
+
+(defn main [] : int
+  (println (double-up 21))
+  0)

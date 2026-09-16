@@ -108,6 +108,24 @@ struct TypeClass {
     bool     has_fundep;
     uint16_t fundep_from_mask;
     uint16_t fundep_to_mask;
+    /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md, SC1;
+     * gated behind --enable=class-superclasses): the constraint preamble
+     * written between the type-param vector and the fundep clause --
+     * `(defclass Monoid [a] [(Semigroup a)] ...)`.  Each element is kept as
+     * its UNRESOLVED `(Super var...)` form, because a superclass may be
+     * declared below its subclass (the same reason default_method_form stays
+     * unelaborated); `super_arg_idx` records, per element, which of THIS
+     * class's type params each argument names (stride TUR_SUPER_MAX_ARGS).
+     * `supers` is filled by typeclass_resolve_superclasses in the post-unit
+     * pass; before that, typeclass_entails resolves by name on demand. */
+#define TUR_SUPER_MAX_ARGS 4
+    const struct Form **super_forms;
+    uint8_t            *super_n_args;
+    uint8_t            *super_arg_idx;
+    uint8_t             n_supers;
+    TypeClass         **supers;
+    /* The defclass form, for diagnostics raised in the post-unit pass. */
+    const struct Form  *decl_form;
     /* Phase HKT-P4: file that defined this typeclass (for orphan instance check).
      * file_id mirrors Span.file_id; 0 means unknown/builtin. */
     uint16_t origin_file_id;
@@ -163,6 +181,11 @@ struct TypeClassInstance {
     /* Phase HKT-P4: file that defined this instance (for orphan instance check).
      * file_id mirrors Span.file_id; 0 means unknown. */
     uint16_t origin_file_id;
+    /* class-superclasses SC4: the definstance form (for the obligation
+     * diagnostic), and whether the obligation has already been discharged --
+     * a REPL session re-runs the post-unit pass every turn. */
+    const struct Form *decl_form;
+    bool super_obligations_ok;
     /* M7 partial-application wildcard head (e.g. `(Result _ B)`): the index of
      * the `_` hole slot within the constructor's type params (0-based), so the
      * by-value HKT grounding can fix the OTHER (non-hole) slots from the
@@ -191,6 +214,26 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
 
 /* Look up a typeclass by name */
 TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol *name);
+
+/* class-superclasses SC2/SC3: does a constraint on `sub` entail `sup`?  True
+ * when the two are the same class (by identity, or by NAME so a class
+ * re-registered through two import paths still counts) or when `sup` is in
+ * `sub`'s transitive superclass closure.  Superclasses not yet resolved by the
+ * post-unit pass are looked up by name on demand, so this works mid-unit
+ * (a superclass declared BELOW its subclass resolves once it is registered);
+ * a cyclic graph is walked with a visited set and reported elsewhere. */
+bool typeclass_entails(const TypeClassEnv *env, TypeClass *sub, const TypeClass *sup);
+
+/* class-superclasses SC2: resolve `tc->super_forms` to `tc->supers` by name.
+ * Returns false (leaving the unresolved slot NULL) when a name is unknown;
+ * the caller reports it.  Idempotent. */
+bool typeclass_resolve_superclasses(const TypeClassEnv *env, TypeClass *tc);
+
+/* class-superclasses SC2: find a superclass cycle reachable from `tc`.
+ * Returns the number of classes on the cycle path written to `path` (at most
+ * `cap`, the first and last entries being the same class), or 0 when the
+ * graph under `tc` is acyclic.  Only follows RESOLVED supers. */
+uint8_t typeclass_find_super_cycle(TypeClass *tc, TypeClass **path, uint8_t cap);
 
 /* RT4: find the class METHOD a bare name denotes, if any.  The refinement
  * encoder needs this to tell a typeclass method apart from a name that

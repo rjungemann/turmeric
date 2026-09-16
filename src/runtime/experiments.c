@@ -346,6 +346,21 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * decision is identical either side of this change.  Do NOT re-add a row
      * for it; the bit is a "this build contains a Saffron TU" fact, not a gate.
      * See docs/upcoming/saffron-lang-plan.md (still live for D4/G3-G9). */
+    /* class-superclasses -- the `defclass` constraint preamble
+     * `(defclass Monoid [a] [(Semigroup a)] ...)`, the entailment it licenses
+     * (a `[^Monoid A]` body may call `combine`) and the instance obligation
+     * that makes the entailment sound (`Monoid [int]` requires `Semigroup
+     * [int]`).  Elaboration only; no codegen.  Gated because retrofitting a
+     * preamble onto an existing class is a breaking change for every
+     * downstream instance of it (plan section 4.1), so the stdlib does not
+     * adopt it until graduation. */
+    { "class-superclasses",
+      "defclass constraint preambles (superclass entailment)",
+      "docs/upcoming/typeclass-superclasses-plan.md",
+      "0.49.0",                  /* introduced */
+      "0.55.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_class_superclasses },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

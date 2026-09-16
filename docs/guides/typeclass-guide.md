@@ -16,6 +16,7 @@ Turmeric's typeclasses are resolved entirely at **compile time** using static di
 
 - **`defclass`** -- Declares a typeclass name, its type parameters, and its method signatures.
 - **`definstance`** -- Implements a typeclass for a specific type or type constructor, optionally requiring constraints.
+- **Superclasses** (experimental, `--enable=class-superclasses`) -- A `defclass` may list the classes a constraint on it entails, `(defclass Monoid [a] [(Semigroup a)] ...)`; every instance of it must then have the superclass instance too. See [Superclasses](#superclasses).
 - **Idempotency** -- Re-running or reloading a `definstance` replaces the existing entry in the dispatch table, making it safe for interactive REPL-based development.
 - **Stdlib classes** -- `Eq`, `Ord`, `Show`, `Hash`, `Functor`, `Monad` and friends each ship in their own `stdlib/typeclass-*.tur` file and are **auto-loaded**. The algebraic combining classes (`Semigroup`, `Monoid`, and the join/meet lattice family) are the exception: they live in `stdlib/typeclass-lattice.tur`, which you `load` explicitly -- see the [Lattice Guide](lattice-guide.md).
 - **Shadowing Warnings (TUR-W0039)** -- If a typeclass method shares a name with an ordinary function (`defn`) in the same scope, the compiler emits a warning. Both coexist, but rename one if the clash is accidental.
@@ -269,6 +270,133 @@ primitive different behaviour under a class, wrap it in a newtype:
 A stdlib file loaded twice (an explicit `(load "stdlib/...")` beside the
 autoload) is not a duplicate in this sense: the same definition arriving through
 two load paths stays a silent no-op.
+
+## Superclasses
+
+> **Experimental** -- behind `--enable=class-superclasses` (or
+> `:experiments [:class-superclasses]` in `build.tur`). The build prints a
+> `TUR-W0060` notice while the gate is live; writing the preamble without
+> the enable is `TUR-E0390`. The plan is
+> [typeclass-superclasses-plan.md](../upcoming/typeclass-superclasses-plan.md).
+
+A `defclass` may declare that a constraint on it **entails** other classes.
+The declaration is a constraint vector right after the type-parameter vector
+-- character for character the `[(Class var)]` form `definstance` and `defn`
+already use, in the position `defn` puts it:
+
+```turmeric
+(defclass Semigroup [a]
+  (combine [x : a y : a] : a))
+
+(defclass Monoid [a]
+  [(Semigroup a)]
+  (mempty [] : a))
+```
+```sweet-exp
+defclass Semigroup [a]
+  combine [x : a y : a] :a
+
+defclass Monoid [a]
+  [(Semigroup a)]
+  mempty [] :a
+```
+
+Two things follow from that one line, and they land together.
+
+**Entailment.** A body constrained by the subclass may call the superclass's
+methods. `[^Monoid A]` licenses `combine`; there is no need to also write
+`^Semigroup A`. It is transitive (`C` listing `B` listing `A` lets a `C`
+constraint reach `A`'s methods) and works for return-directed methods
+(`mempty`-shaped, resolved from the expected type) as well as receiver
+methods:
+
+```turmeric
+(defn double-up [^Monoid A] [x : A] : A
+  (combine x x))
+
+(defn fold3 [^Monoid A] [x : A y : A z : A] : A
+  (let [e : A (mempty)]
+    (combine (combine (combine e x) y) z)))
+```
+```sweet-exp
+defn double-up [^Monoid A] [x : A] :A
+  combine(x x)
+
+defn fold3 [^Monoid A] [x : A y : A z : A] :A
+  let [e : A mempty()]
+    combine(combine(combine(e x) y) z)
+```
+
+**The instance obligation.** `(definstance Monoid [int] ...)` requires a
+`Semigroup [int]` instance to exist somewhere in the program, and is
+`TUR-E0393` otherwise. This is what makes the entailment sound: without it a
+`[^Monoid A]` body could call `combine` at a type that has no instance to
+dispatch to. The superclass instance is *required*, never inherited -- the
+`Monoid` instance does not supply `combine`, the `Semigroup` one does. A
+parametric instance discharges the obligation against its own constraints:
+`Monoid [(Option A)] [(Monoid A)]` needs a `Semigroup [(Option A)]`, which
+may itself be parametric on `(Semigroup A)`.
+
+Both checks run after every form in the unit is registered, so declaration
+order between the two classes does not matter and the superclass instance may
+sit above or below the subclass instance.
+
+Several superclasses go in the same vector, and a multi-parameter superclass
+names several of the class's variables:
+
+```turmeric
+(defclass BoundedJoinSemilattice [a]
+  [(JoinSemilattice a) (Eq a)]
+  (bottom [] : a))
+
+(defclass Sized [s e]
+  [(Get2 s e)]
+  (sz-len [^borrow self : s v : e] : int))
+```
+```sweet-exp
+defclass BoundedJoinSemilattice [a]
+  [(JoinSemilattice a) (Eq a)]
+  bottom [] :a
+
+defclass Sized [s e]
+  [(Get2 s e)]
+  sz-len [^borrow self : s v : e] :int
+```
+
+The fundep clause follows the vector (fundeps are written in s-expression
+syntax, as in [Functional Dependencies](#functional-dependencies)):
+
+```turmeric no-check
+(defclass Coll [c e]
+  [(Semigroup c)]
+  | (c -> e)
+  (cget [^borrow x : c i : int] : e))
+```
+
+The rules the compiler enforces, each with its own code:
+
+- Every variable in an element must be one of the class's own type
+  parameters, and every element must be `(Class var...)` -- `TUR-E0390`.
+- The vector goes *before* the `|` clause; the other order is `TUR-E0390`
+  naming the canonical order, not a silent accept.
+- Each superclass must be a defined class whose parameter count and kinds fit
+  the variables applied to it (`[(Functor a)]` over a kind-`*` `a` is
+  refused) -- `TUR-E0391`.
+- The graph must be acyclic; a class may not list itself, directly or
+  through others -- `TUR-E0392`, naming the cycle.
+
+There is no runtime cost and no emitted-C change: static dispatch still
+resolves the instance at each call site from the concrete instantiation, so
+the entailment only decides whether the call is *allowed*, exactly like an
+explicitly written constraint. The interpreter carries the same rule by
+binding a superclass's dictionary alongside the subclass's.
+
+The stdlib's own classes are still flat -- `Monoid` is not declared over
+`Semigroup` in `typeclass-lattice.tur` -- because adding a preamble to an
+existing class obliges every existing instance of it, in every downstream
+spice, to carry the superclass instance. That adoption waits for the
+experiment to graduate; until then a function needing both lists both
+constraints, as the [lattice guide](lattice-guide.md) shows.
 
 ## Associated Types
 

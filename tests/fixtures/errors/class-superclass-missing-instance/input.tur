@@ -1,0 +1,7 @@
+;; class-superclasses SC4 (Half B): a `Mo [int]` instance requires a `Sg [int]`
+;; instance to exist somewhere in the program.  Without this obligation the
+;; entailment would license a `sg-combine` call with no instance behind it.
+(defclass Sg [a] (sg-combine [x : a y : a] : a))
+(defclass Mo [a] [(Sg a)] (sg-empty [] : a))
+(definstance Mo [int] (sg-empty [] 0))
+(defn main [] : int 0)
