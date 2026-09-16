@@ -58,6 +58,57 @@ printed address into a miscompiled body. The `byval_agg` consumer bridge is the
 fix location.
 
 
+## Runtime seams carry payloads as int64 (filed 2026-09-16)
+
+A payload **parked in a runtime data structure** by one piece of emitted code and
+read back later by another. The slot has one C type, so the value is cast in and
+out -- and a plain C cast of a `double` is a value conversion that TRUNCATES.
+Every row below is a silent wrong answer on the compiled path, accepted by the
+type checker, correct under `tur --interpret`.
+
+This is one defect *class*, not three coincidences, and it has been paid for
+before: `docs/archive/` holds ten resolved instances of the same truncation
+found one feature at a time (`ascribe-int-to-float-reinterprets`,
+`forall-dict-float-result-truncated`, `fiber-effect-float-result-truncated`,
+`method-result-float-spec-return-value-converts`,
+`ok-val-untyped-catch-box-loses-float`,
+`float32-generic-call-result-printed-as-carrier`,
+`int-declared-method-float-body-engine-divergence`, ...). **Before reaching for a
+fourth instance, read the fix convention that already shipped**: the direct/fiber
+effect path stores through a `union { double d; int64_t i; }` bit-reinterpret, and
+`any` sidesteps the slot entirely by boxing with a type tag.
+
+Why it went unfound for so long: four source-level fuzzers all fuzz `float` as a
+first-class axis, but every boundary they crossed was one the **compiler owns both
+ends of** (pass-through defn, let, ascription, generic identity, HOF, closure
+return, typeclass dispatch). None emitted a session, a router send, a `yield`, an
+`await`, a `perform` or a `tvar` -- the shapes were absent, not suppressed, and
+absence is invisible. `tests/type-fuzz-src.py` grew a **runtime-seam axis** in the
+same change as these filings; `--seam-matrix` prints the whole table and
+`--known-probes` pins each row's minimal repro.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [router-payloads-are-int64-only](router-payloads-are-int64-only.md) | high | Multi-party `send-to` truncates a `float` payload (`7.25` -> `7`), cc-errors on `cstr` and by-value structs. A **different template** from the binary-session seam (`elab_global.c:611` + `tur_router_send`, not `elab_sessions.c:306`), so fixing that one does not fix this. `tests/fixtures/session-mp-three-role` sends `42`, which is why it passes |
+| [generator-yield-payload-is-int64-only](generator-yield-payload-is-int64-only.md) | high | `yield` parks the payload in a `void *` frame slot and `gen-unwrap` is declared `: int`, so a yielded `cstr` **prints as a raw pointer** and a `bool` prints `1` -- with no cc error anywhere to stop it. Worse than the session seam: the erasure reaches the Turmeric *signature*, so a codegen-only fix still hands back an `int`. Carries a second, separate defect -- the same program trips a UBSan misaligned load on `TuriGen` under `--interpret` (`src/turi/eval.c:11962`), which also blocks using the interpreter as this seam's differential oracle |
+| [async-await-payload-is-int64-only](async-await-payload-is-int64-only.md) | high | `tur_await_future` returns `int64_t` and the await site binds the result at that type, so a `float`-returning `async` thunk prints `4619848792751996928` -- bit-exact `7.25`. **The bits arrive intact and only the type is lost**, which makes this the cheapest row to fix. `tests/fixtures/async-await-basic` documents the int64 return in its own header, so the erasure was known and simply never contradicted |
+
+Two traps recorded so nobody re-derives them. First, the natural assertion
+**hides** the await and generator rows rather than exposing them: `(= (await fut)
+7.25)` is a `TUR-E0042` reject, not a wrong answer, so a fuzzer that compares
+instead of printing files the defect under "the generator emitted an illegal
+program" and never fails. Second, `float` is the only probe that shows these at
+all -- per the float rule in [CLAUDE.md](../../CLAUDE.md), an integer literal
+cannot show truncation, and every fixture and guide example for all three
+features sends an `int`.
+
+A fourth seam, the **binary** session `send`/`recv`, is filed separately as
+`session-payloads-are-int64-only` and is in flight in PR #878 (not yet on
+`main`); the three reports above cross-link it, and those links resolve once it
+lands. Three seams measured **correct** and kept as the fuzzer's positive
+controls: `perform`/`resume`, `any`/`cast`, and `tvar` write/cas.
+
+
 ## Docs audit sweep (filed 2026-08-20)
 
 Thirty-three reports filed from a full-docs accuracy audit (guides, design
