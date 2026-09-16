@@ -171,7 +171,7 @@
       (= step (step-message))  (page-message)
       (= step (step-preview))  (page-preview)
       (= step (step-thankyou)) (send-html (render-thankyou (store-lines)))
-      :else 0))
+      else 0))
 
   ;;; list-entries -- GET /entries: every entry, no continuation involved.
   ;;;

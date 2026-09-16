@@ -34,7 +34,7 @@
 (defn classify [n]
   (cond (> n 0) "positive"
         (< n 0) "negative"
-        :else   "zero"))
+        else    "zero"))
 
 (defn countdown [n]
   (when (> n 0)

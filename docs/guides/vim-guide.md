@@ -77,7 +77,7 @@ Once installed, any `.tur` file is automatically highlighted:
 - **Strings** -- with escape sequence validation (`\n`, `\t`, `A`, etc.)
 - **Comments** -- line comments (`;`), docstring comments (`;;;`), and block
   comments (`#| ... |#`, nestable)
-- **Keyword literals** -- `:else`, `:pre`, `:post`, `:name`, and other
+- **Keyword literals** -- `:as`, `:pre`, `:post`, `:name`, and other
   colon-prefixed symbols
 - **Metadata annotations** -- `^linear`, `^unique`, `^affine`, `^mut`, etc.
 - **Reader macros** -- quote (`'`), quasiquote (`` ` ``), unquote (`~`),

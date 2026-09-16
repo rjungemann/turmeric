@@ -220,8 +220,8 @@ earlier prompts.
 > (defmacro plus1 [x] `(+ ~x 1))
 > :expand (plus1 41)
 (+ 41 1)
-> :expand (cond a 1 :else 2)
-(if a 1 (cond :else 2))
+> :expand (cond a 1 else 2)
+(if a 1 (cond else 2))
 ```
 
 One step at a time: run `:expand` again on the printed result to walk a

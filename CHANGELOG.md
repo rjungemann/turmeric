@@ -17,7 +17,10 @@ All notable changes to Turmeric are documented here.
   before changes meaning, with one exotic exception: a `cond` whose *test*
   position read a variable named `else` now sees a fallback clause instead.
   `else` is still not a global binding; outside a clause head `(if else 1 2)`
-  remains an error.
+  remains an error. The guides, the `:tutorial quickstart` content, and the
+  guestbook and snake examples the tutorials walk you through now teach the
+  bare spelling; `syntax-guide.md` and `symbols-guide.md` record that `:else`
+  is the older spelling and still accepted.
 - **C, C++, and GDScript code blocks are syntax-highlighted in the rendered
   docs,** in the same five-color palette the Turmeric blocks use, on the
   guides site, the spice pages, and Try Turmeric's in-app docs pane (one

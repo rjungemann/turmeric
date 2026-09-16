@@ -222,7 +222,7 @@ Now try a multi-branch form:
   (cond
     (> n 0) 1
     (< n 0) -1
-    :else   0))
+    else    0))
 ```
 ```sweet-exp
 defn sign [n :int] :int
@@ -231,7 +231,7 @@ defn sign [n :int] :int
     1
     <(n 0)
     -1
-    :else
+    else
     0
 ```
 
@@ -250,7 +250,7 @@ Expected output:
 
 **What happened:** `if` takes a condition, a "then" expression, and an "else"
 expression -- both branches must produce a value. `cond` chains tests in order
-and evaluates the expression next to the first truthy test; `:else` is the
+and evaluates the expression next to the first truthy test; `else` is the
 fallback.
 
 > **Try it yourself:** write a `clamp` function that takes `n`, `lo`, and `hi`
@@ -562,7 +562,7 @@ Type this:
   (cond
     (ok? r)  (println "ok!")
     (err? r) (println "err!")
-    :else    (println "unknown")))
+    else     (println "unknown")))
 ```
 ```sweet-exp
 defn describe-result [r]
@@ -571,7 +571,7 @@ defn describe-result [r]
     println("ok!")
     err?(r)
     println("err!")
-    :else
+    else
     println("unknown")
 ```
 
@@ -595,7 +595,7 @@ Then:
   (cond
     (some? o) (println "some!")
     (none? o) (println "none!")
-    :else            (println "unknown")))
+    else      (println "unknown")))
 ```
 ```sweet-exp
 defn describe-option [o]
@@ -604,7 +604,7 @@ defn describe-option [o]
     println("some!")
     none?(o)
     println("none!")
-    :else
+    else
     println("unknown")
 ```
 

@@ -62,7 +62,7 @@ These are consumed by earlier elaborator passes:
 - Type annotations: `:int`, `:cstr`, `:Sym`
 - Import directives: `:refer [...]`, `:as foo`
 - Struct field selectors: `(:name p)`
-- `:else` in `cond`/`case`
+- `:else` in `cond`/`case` (the bare symbol `else` names the same clause)
 
 The `:Sym` value appears only in **expression position**, where `:foo`
 evaluates to the interned symbol.

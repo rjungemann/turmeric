@@ -1085,7 +1085,7 @@ Add food that the snake can eat, with score tracking.
   (cond
     (snake-wall-collision? state.snake state.width state.height) true
     (snake-self-collision? state.snake) true
-    :else (check-food-collision state)))
+    else (check-food-collision state)))
 ```
 
 ```sweet-exp
@@ -1150,7 +1150,7 @@ defn check-collisions [^GameState state] : (or bool GameState)
     true
     snake-self-collision?(state.snake)
     true
-    :else
+    else
     check-food-collision(state)
 ```
 
@@ -1419,7 +1419,7 @@ Use actual time instead of fixed speed.
                (is-key-down KEY_LEFT) 3
                (is-key-down KEY_UP) 0
                (is-key-down KEY_DOWN) 2
-               :else s.snake.direction)]
+               else s.snake.direction)]
     (state/GameState (update-snake s.snake dt) s.food s.score s.width s.height)))
 
 (defn game-loop [^state/GameState state]
@@ -1468,7 +1468,7 @@ defn update-state [^state/GameState s ^float dt] : state/GameState
               (is-key-down KEY_LEFT) 3
               (is-key-down KEY_UP) 0
               (is-key-down KEY_DOWN) 2
-              :else s.snake.direction)]
+              else s.snake.direction)]
     state/GameState(update-snake(s.snake dt) s.food s.score s.width s.height)
 
 defn game-loop [^state/GameState state]
@@ -1681,7 +1681,7 @@ Here's the final, polished game loop:
                 (is-key-down KEY_LEFT) 3
                 (is-key-down KEY_UP) 0
                 (is-key-down KEY_DOWN) 2
-                :else state.snake.direction)
+                else state.snake.direction)
           new-snake (state/update-snake state.snake dir dt)
           new-state (state/GameState new-snake state.food state.score state.width state.height)
           collision-result (state/check-collisions new-state)]
@@ -1763,7 +1763,7 @@ defn game-loop [^state/GameState state]
                (is-key-down KEY_LEFT) 3
                (is-key-down KEY_UP) 0
                (is-key-down KEY_DOWN) 2
-               :else state.snake.direction)
+               else state.snake.direction)
          new-snake state/update-snake(state.snake dir dt)
          new-state state/GameState(new-snake state.food state.score state.width state.height)
          collision-result state/check-collisions(new-state)]

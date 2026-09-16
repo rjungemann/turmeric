@@ -124,13 +124,13 @@ abs(5)     ; => 5
 
 ### Multi-branch with `cond`
 
-`cond` chains tests in order. `:else` is the fallback:
+`cond` chains tests in order. `else` is the fallback:
 
 ```turmeric
 (defn sign [n : int] : int
   (cond (> n 0) 1
         (< n 0) -1
-        :else   0))
+        else    0))
 
 (sign  3)    ; => 1
 (sign -3)    ; => -1
@@ -143,7 +143,7 @@ defn sign [n :int] :int
     1
     {n < 0}
     -1
-    :else
+    else
     0
 
 sign(3)     ; => 1
@@ -265,12 +265,12 @@ Combine predicates inside `cond` to dispatch on either type:
 (defn describe-result [r]
   (cond (ok? r)  (println "ok!")
         (err? r) (println "err!")
-        :else    (println "unknown")))
+        else     (println "unknown")))
 
 (defn describe-option [o]
   (cond (some? o) (println "some!")
         (none? o) (println "none!")
-        :else            (println "unknown")))
+        else      (println "unknown")))
 ```
 ```sweet-exp
 defn describe-result [r]
@@ -279,7 +279,7 @@ defn describe-result [r]
     println("ok!")
     err?(r)
     println("err!")
-    :else
+    else
     println("unknown")
 
 defn describe-option [o]
@@ -288,7 +288,7 @@ defn describe-option [o]
     println("some!")
     none?(o)
     println("none!")
-    :else
+    else
     println("unknown")
 ```
 

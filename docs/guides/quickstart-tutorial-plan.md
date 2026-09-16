@@ -131,7 +131,7 @@ Concept: `if` as an expression (always has a value), `cond` for multiple branche
 > (abs -5)
 5
 > (defn sign [n :int] :int
-    (cond (> n 0) 1 (< n 0) -1 :else 0))
+    (cond (> n 0) 1 (< n 0) -1 else 0))
 > (sign -3)
 -1
 ```
@@ -249,13 +249,13 @@ a lightweight alternative to full pattern-match syntax.
 > (defn describe-result [r]
     (cond (ok? r)  (println "ok!")
           (err? r) (println "err!")
-          :else    (println "unknown")))
+          else     (println "unknown")))
 > (describe-result (ok 1))
 ok!
 > (defn describe-option [o]
     (cond (some? o) (println "some!")
           (none? o) (println "none!")
-          :else            (println "unknown")))
+          else      (println "unknown")))
 > (describe-option (none))
 none!
 ```

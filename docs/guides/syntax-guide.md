@@ -41,10 +41,9 @@ The default dialect is a Lisp. Every program is a tree of **forms**: atoms
 trailing `?` marks a predicate (`option-none?`). Operators like `+`, `-`, `*`,
 `<=`, and `=` are ordinary identifiers used in prefix position.
 
-**Keywords** start with a colon: `:int`, `:else`, `:name`. They are
-self-evaluating and most often appear as type annotations, `cond` fallbacks,
-and map keys. (A `cond` / `case` fallback also accepts the bare symbol `else`,
-so `:else` and `else` name the same clause.)
+**Keywords** start with a colon: `:int`, `:as`, `:name`. They are
+self-evaluating and most often appear as type annotations, option names, and
+map keys.
 
 **Numbers** include integers (`42`, `-5`), floats (`3.14`, `0.1`), and the
 radix forms documented in the reader reference -- hex (`0xFF`), binary
@@ -159,7 +158,7 @@ defn abs [n :int] :int
 (defn sign [n : int] : int
   (cond (> n 0) 1
         (< n 0) -1
-        :else   0))
+        else    0))
 ```
 ```sweet-exp
 defn sign [n :int] :int
@@ -168,18 +167,13 @@ defn sign [n :int] :int
     1
     <(n 0)
     -1
-    :else
+    else
     0
 ```
 
-The fallback clause is spelled `else` or `:else` -- they are the same clause,
-in `cond` and in `case` alike, and may be mixed within one file:
-
-```turmeric
-(cond (> n 0) 1
-      (< n 0) -1
-      else    0)
-```
+The fallback clause is also spelled `:else` -- the keyword is the older
+spelling and still accepted, in `cond` and in `case` alike, so the two may be
+mixed within one file.
 
 `else` is not a global binding: outside a clause head it is still an unbound
 symbol, so `(if else 1 2)` remains an error. The one program the bare spelling
