@@ -751,7 +751,7 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         {"defmacro", "(defmacro name [args] body) -- define a syntax macro"},
         {"when",     "(when cond body ...) -- execute body if cond is true, else nil"},
         {"unless",   "(unless cond body ...) -- execute body if cond is false, else nil"},
-        {"cond",     "(cond (test expr) ... (else expr)) -- multi-branch conditional"},
+        {"cond",     "(cond test expr ... else expr) -- multi-branch conditional; the fallback clause is `else` or `:else`"},
         {"for",      "(for [x seq] body) -- iterate over a sequence"},
         /* Modules */
         {"defmodule","(defmodule Name (export ...) body ...) -- define a module"},

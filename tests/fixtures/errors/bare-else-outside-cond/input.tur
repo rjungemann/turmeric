@@ -1,0 +1,7 @@
+; `else` is the fallback clause of `cond` / `case` (see
+; tests/fixtures/cond-case-bare-else), NOT a global binding for `true`.
+; Accepting the bare spelling there must not make `else` readable as a value
+; anywhere a symbol goes -- outside a clause head it stays unbound.
+
+(defn main [] : int
+  (if else 1 2))

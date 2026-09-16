@@ -35,15 +35,23 @@
     derive-display
     derive-display-body__
     derive-display-rest__)
+  ;; The fallback clause is spelled `:else` or bare `else`; the two are exactly
+  ;; the same clause.  An unbound symbol evaluates to its own Form in the
+  ;; compile-time evaluator, so `(= (first clauses) else)` is a Form comparison
+  ;; against the symbol `else` -- the same thing `(list if ...)` below relies on.
+  ;; Bare `else` was previously TUR-E0003 `unbound symbol 'else'`, so nothing
+  ;; that used to compile changes meaning.
   (defmacro cond [& clauses]
     (if (empty? clauses)
       nil
       (if (= (first clauses) :else)
         (second clauses)
-        (list if
-          (first clauses)
+        (if (= (first clauses) else)
           (second clauses)
-          (list cond ~@(rest (rest clauses)))))))
+          (list if
+            (first clauses)
+            (second clauses)
+            (list cond ~@(rest (rest clauses))))))))
   (defmacro when [test body] (if test (do body)))
   (defmacro unless [test body] (if test nil (do body)))
   ;; lattice-vocabulary-plan L1: `min` / `max` were macros here.  They expanded

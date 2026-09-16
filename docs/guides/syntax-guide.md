@@ -43,7 +43,8 @@ trailing `?` marks a predicate (`option-none?`). Operators like `+`, `-`, `*`,
 
 **Keywords** start with a colon: `:int`, `:else`, `:name`. They are
 self-evaluating and most often appear as type annotations, `cond` fallbacks,
-and map keys.
+and map keys. (A `cond` / `case` fallback also accepts the bare symbol `else`,
+so `:else` and `else` name the same clause.)
 
 **Numbers** include integers (`42`, `-5`), floats (`3.14`, `0.1`), and the
 radix forms documented in the reader reference -- hex (`0xFF`), binary
@@ -152,7 +153,7 @@ defn abs [n :int] :int
     n
 ```
 
-`cond` -- ordered multi-way branch with an `:else` fallback:
+`cond` -- ordered multi-way branch with an `else` fallback:
 
 ```turmeric
 (defn sign [n : int] : int
@@ -170,6 +171,20 @@ defn sign [n :int] :int
     :else
     0
 ```
+
+The fallback clause is spelled `else` or `:else` -- they are the same clause,
+in `cond` and in `case` alike, and may be mixed within one file:
+
+```turmeric
+(cond (> n 0) 1
+      (< n 0) -1
+      else    0)
+```
+
+`else` is not a global binding: outside a clause head it is still an unbound
+symbol, so `(if else 1 2)` remains an error. The one program the bare spelling
+changes is an exotic one -- a `cond` whose test position reads a *variable*
+named `else`. Rename that variable; the clause head now wins.
 
 `when` -- one-armed conditional for side effects:
 
@@ -616,7 +631,7 @@ gloss.
 | Anon fn | `(fn [x :int] :int ...)` | `fn([x :int] :int ...)` | closure |
 | Local binding | `(let [x 1] ...)` | `let [x 1]` + indent | scoped names |
 | Conditional | `(if c a b)` | `if c` + indent | two-armed expression |
-| Multi-branch | `(cond p1 e1 :else e)` | `cond` + indented pairs | ordered dispatch |
+| Multi-branch | `(cond p1 e1 else e)` | `cond` + indented pairs | ordered dispatch |
 | Side-effect guard | `(when c ...)` | `when c` + indent | one-armed conditional |
 | Counted loop | `(for i 0 n ...)` | `for i 0 n ...` | range iteration |
 | Sequence | `(do a b)` | `do` + indent | evaluate in order |

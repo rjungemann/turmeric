@@ -67,7 +67,7 @@ syn keyword turmericDefine  defclass definstance defstruct deftuple
 syn keyword turmericDefine  defpackage use import export
 
 " ---- Control flow ----
-syn keyword turmericControl  if cond case match loop while for
+syn keyword turmericControl  if cond case match loop while for else
 syn keyword turmericControl  break continue return and or not
 
 " ---- Type system keywords ----
