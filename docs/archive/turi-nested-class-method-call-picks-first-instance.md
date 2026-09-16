@@ -1,5 +1,7 @@
 # The interpreter picks the first instance for a nested class-method call
 
+**RESOLVED 2026-09-16** -- see Resolution at the end.
+
 **Severity: high** (raised from medium 2026-09-11 -- see "A second symptom"
 below). It is not only a hard error: over `defopaque` newtypes the same defect
 is a **silent wrong answer**, which is strictly worse than the crash the
@@ -180,3 +182,33 @@ the same one reached from another direction:
 That is worth knowing before the next attempt: a lexical-capture fix does not
 reach them, so the remaining defect really is about instance selection inside a
 nested call, not about a lost type environment.
+
+## Resolution (2026-09-16)
+
+The compiled fix DID port, once read as a rule rather than as code. The
+interpreter's EX_CALL driver re-resolves a baked class-method call through
+the frame dictionary on three static gates -- a bare-tyvar receiver, a
+tyvar-headed result, the tyvar in `abi_bindings[0]` -- and none fires for
+`(join (join x y) y)`: the inner call's elaborated type is the
+REPRESENTATIVE instance's (the generic body was typed against the first
+carrier-compatible instance), so the outer call saw a concrete `int` receiver
+and `eval_lookup` handed it `__inst_JS_join_int` for every instantiation. That
+is the same mechanism `emit_reresolve_disp_type` had on the compiled side. A
+fourth gate now mirrors its nested-receiver branch: when the receiver is
+itself a class-method call whose declared result is the class variable
+(`turi_dict_call_returns_class_var` -- the `a -> a -> a` shape), walk inward
+along receivers to the dispatch variable (`turi_nested_dispatch_tyvar`) and
+read THAT variable's frame dictionary.
+
+Why float was "correct": the wrong instance's body `(if (< x y) y x)` is
+dynamically typed in turi, so it computed the right answer on doubles by
+accident. A body with `<` on strings crashed; a newtype body computed a
+different number. Both were the same misdispatch.
+
+All four fixtures the report listed now pass under `--interpret` with their
+`requires.compiled` markers removed:
+`typeclass-nested-method-call-float`,
+`typeclass-nullary-method-newtype-tyvar`,
+`typeclass-lattice-semigroup-monoid`, `typeclass-lattice-join-meet` -- the
+lattice law suites answer `false` for the deliberately non-associative
+instance again.

@@ -1,0 +1,36 @@
+;; perform-continuation-tail-call-arg-gate-assumes-direct -- RESOLVED.
+;;
+;; A `perform` whose CONTINUATION ends in a tail call to a COLORED callee
+;; handing it by-value aggregates evicted the function (BODY-STRUCT-CORE):
+;; the perform-continuation predicate admitted the tail call but gated its
+;; arguments as if the callee were uncolored (cps->direct), where a by-value
+;; aggregate is refused -- while the same call placed BEFORE the perform, or
+;; in a function with no perform, lowered fine (the general tail-call rule
+;; asks the callee's coloring).  The gate asks the callee now.
+;;
+;; Found while closing colored-call-inside-match-evicts-the-cps-backend;
+;; it is the neighbour that report's resolution names.
+(defeffect Tick [] : int)
+(defn same [a : int b : int] : bool (= a b))
+
+;; tail position of the perform continuation
+(defn after-tail [] : bool
+  (perform (Tick))
+  (option-eq? (some 1) (some 1) same))
+
+;; bind position: the colored call's result feeds `not`
+(defn after-bind [] : bool
+  (perform (Tick))
+  (not (option-eq? (some 1) (some 2) same)))
+
+;; control: the same call BEFORE the perform always lowered
+(defn before [] : bool
+  (let [r (option-eq? (some 3) (some 3) same)]
+    (perform (Tick))
+    r))
+
+(defn main [] : int
+  (println (handle (after-tail) (Tick [] k) (resume k 1)))
+  (println (handle (after-bind) (Tick [] k) (resume k 1)))
+  (println (handle (before)     (Tick [] k) (resume k 1)))
+  0)

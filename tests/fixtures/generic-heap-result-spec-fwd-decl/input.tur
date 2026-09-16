@@ -1,0 +1,30 @@
+;; set-add-elem-hash-disagrees-with-set-member (second defect) -- RESOLVED.
+;;
+;; A generic returning a `:heap` container `(Set A)` / `(Vec A)`, called once
+;; with an unpinned receiver and again with the pinned result, minted a clone
+;; for the second call whose forward declaration spelled the result from the
+;; call's un-substituted `(Set A)` (`int64_t`) while the definition resolved
+;; it under the spec (`tur_adt_Set__int *`): "conflicting types for
+;; idset__spec__int64_t_...", a cc error on a program `tur check` accepted.
+;; No typeclass anywhere -- this is the plain-generic shape.
+;;
+;; The unascribed `(vec-new)` receiver leaves the ELEMENT type of `v2`
+;; unresolved at elab (a pre-existing inference limit, not this defect), so
+;; that read is ascribed; the ascribed-receiver pair below reads back bare.
+(defn idset [A] [s : (Set A) x : A] : (Set A) s)
+
+(defn addv [A] [v : (Vec A) x : A] : (Vec A) (do (vec-push! v x) v))
+
+(defn main [] : int
+  (let [a  (idset (set-new) 5)
+        a2 (idset a 6)]
+    (println (set-count a2)))
+  (let [v  (addv (vec-new) "x")
+        v2 (addv v "y")]
+    (println (vec-len v2))
+    (println (:: (vec-get v2 1) cstr)))
+  (let [w  (addv (:: (vec-new) (Vec cstr)) "x")
+        w2 (addv w "y")]
+    (println (vec-len w2))
+    (println (vec-get w2 1)))
+  0)

@@ -1,5 +1,7 @@
 # A `float32` value closing a multi-expression body gets a `double` temp
 
+**RESOLVED 2026-09-16** -- see Resolution at the end.
+
 **Severity: low.** A precision warning, not a wrong answer at the values seen so
 far -- the emitted C narrows back on return, and the literals involved are
 exactly representable. It is visible only under GCC (whose `-Wfloat-conversion`
@@ -71,3 +73,25 @@ genuine double -> float confusion.
 The two-line repro above, asserting the value. Note it needs a build under GCC
 or clang with `-Wimplicit-float-conversion` to observe the warning; the value
 assertion alone passes either way today.
+
+## Resolution (2026-09-16)
+
+Fixed at elaboration rather than in the emitter, one level above where the
+report pointed: the temp took `double` because the tail LITERAL was `double`.
+`elab_defn` already widens an int literal body to a declared float return
+(`rc_widen_int_literal_to_float_return`); its new sibling
+`rc_narrow_float_literal_tail_to_declared_return` walks the body's tail --
+through `do`, `let`/`letrec`, and both arms of an `if` -- and retypes a
+default-`double` float literal, and each enclosing block node that was
+default-`double`, to the declared `float32`/`float64`. Same reasoning as the
+`(:: 7.1 float32)` ascription arm: the author wrote a constant AT that width,
+so there is no runtime value whose wider bits are being dropped. The emitted
+body is now `float __t; __t = ((float)2.5); return __t;` -- one rounding.
+
+Pinned by `tests/fixtures/float32-block-tail-literal` with `7.1`, which is
+not exactly representable at either width, so the lines are a value check
+and not only a warning check. `tests/run.sh`'s destination-is-float
+exclusion is left in place with its comment updated: this was the one known
+benign instance, but the exclusion was never measured to be the ONLY
+double->float site GCC reports across the corpus, and narrowing it is a
+separate sweep with its own risk.

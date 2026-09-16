@@ -1,5 +1,7 @@
 # Two CPS-backend shapes a colored function cannot take: `match`, and a by-value ADT `handle` result
 
+**RESOLVED 2026-09-16** -- both shapes lower now; see Resolution at the end.
+
 **Severity: medium.** Both are `tur: this effect operation has no lowering
 here` at compile time -- a loud compiler limitation, not a wrong answer -- on
 programs the interpreter runs correctly. Neither has a diagnostic that names
@@ -92,3 +94,46 @@ is a follow-on to a coloring fix.
   keep the colored call out of the helper.
 - Shape 2: return a defstruct record rather than a defdata ADT across the
   `handle`, or reduce the ADT to a scalar inside the handled region.
+
+## Resolution (2026-09-16)
+
+Both shapes were gates in front of machinery that already existed, not
+missing lowerings.
+
+**Shape 1 -- `match` on a by-value ADT with a colored arm.** The CPS match
+emitter (`emit_match`, `emit_cps_ir.c`) has had a by-value scrutinee path
+since SR1: it binds a local copy and reads through its address, exactly as
+the direct emitter's switch does. What kept `(match (MkWrap 1) (MkWrap n) (+
+n (g)))` out was the translation gate `match_dk_ok` (`cps_ir.c`), written for
+boxed tagged sums (`n_ctors >= 2`, so a `tag` word exists). It now admits a
+by-value record or flat sum (`adt_is_byvalue_product`, not `:heap`), and the
+emitter treats a single-constructor record -- which has no `tag` member --
+as one unconditional arm. All-nullary enums stay out on both paths (the
+value is the bare tag), and whether the by-value atom may cross a DK slot is
+still `slot_box_ty`'s question, asked on the scrutinee atom as before.
+
+**Shape 2 -- a by-value aggregate `handle` result handed to a call.** The
+core check refused a by-value ADT atom as a cps->direct call argument on the
+premise that the callee's direct C signature takes it through the int64
+carrier. That is true of a generic base (`(Option A)`), and false of a
+non-generic callee, whose signature IS the aggregate (`wrap_val(tur_adt_Wrap
+w)`); the CPS typed-argument renderer already passes such an atom raw. The
+gate (`call_args_ok`) now admits the atom when the callee's declared
+parameter spells the same aggregate C type and is not pass-by-pointer.
+
+The report's discriminator was slightly off: "a defstruct record is fine"
+was about the CONSUMER -- `(.v ...)` is a delegated field read -- and a
+defstruct record handed to a CALL evicted identically (`box-val (handle
+...)`). Both are pinned.
+
+Pinned by `cps-match-byvalue-scrutinee-colored-arm` (single-ctor record,
+by-value sum with colored calls in every arm, trailing catch-all) and
+`cps-handle-byvalue-adt-result-into-call` (defdata record, by-value sum,
+defstruct record, plus the field-read control), both agreeing with
+`--interpret`.
+
+Found on the way and left alone: a `perform` whose continuation ends in a
+cps->cps tail call is refused by `perform_body_ok` (straight-line
+continuations only), and a colored generic taking a tyvar-elemented
+parameter sig-rejects by the mono-template invariants. Neither is this
+report's shape.

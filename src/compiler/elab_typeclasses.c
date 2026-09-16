@@ -3397,6 +3397,21 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
      * the receiver at this instance's type and its siblings resolvable.  A
      * method with neither an impl nor a default is the error this used to
      * report as a bare count. */
+    /* default-method-spliced-at-carrier-type: which slots were filled from the
+     * class's default form rather than written by the instance.  The spliced
+     * form carries the CLASS's annotations (`[x : a y : a] : a`), and those
+     * elaborate literally -- `a` is a type variable, which lowers to the int64
+     * carrier -- so the spliced copy's signature was `int64_t (int64_t,
+     * int64_t)` while the explicit `(pick [x y] x)` an instance writes gets
+     * `double (double, double)`.  Same dispatch, wrong signature: the
+     * caller's doubles were converted on the way in, and `(g 2.5 7.1)`
+     * through a constrained generic printed `2`.  The per-method loop below
+     * treats a spliced default's annotations as the class's own (which they
+     * are) and lets the parameters and result inherit the class signature
+     * under the instance substitution, exactly like a bare-parameter method. */
+    bool *impl_is_default_arr = tc->n_methods
+        ? (bool *)arena_alloc(e->arena, tc->n_methods * sizeof(bool)) : NULL;
+    if (impl_is_default_arr) memset(impl_is_default_arr, 0, tc->n_methods * sizeof(bool));
     {
         Form **ordered = tc->n_methods
             ? (Form **)arena_alloc(e->arena, tc->n_methods * sizeof(Form *)) : NULL;
@@ -3423,8 +3438,10 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                     pf->as.list.items[0]->as.sym == tc->methods[i].name)
                     found = pf;
             }
-            if (!found && tc->methods[i].default_method_form)
+            if (!found && tc->methods[i].default_method_form) {
                 found = (Form *)tc->methods[i].default_method_form;
+                impl_is_default_arr[i] = true;
+            }
             if (!found) {
                 diag_emit(DIAG_ERROR, call->span,
                           "definstance: missing method '%s' for '%s', and the class "
@@ -3622,6 +3639,8 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
 
     for (uint8_t i = 0; i < tc->n_methods; i++) {
         Form *impl_form = method_impl_forms[i];
+        /* default-method-spliced-at-carrier-type: see the note at the splice. */
+        bool impl_is_default = impl_is_default_arr && impl_is_default_arr[i];
         if (impl_form->tag != F_LIST || impl_form->as.list.len < 3) {
             diag_emit(DIAG_ERROR, impl_form->span,
                       "method implementation requires (name [params...] body...)");
@@ -3773,7 +3792,17 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
         const char *impl_ret_var  = m_class_ret_var;
         bool        impl_ret_pred_own = false;
         /* Check for return type annotation after params */
-        if (impl_form->as.list.len >= 3) {
+        if (impl_is_default && impl_form->as.list.len >= 3 &&
+            (impl_form->as.list.items[2]->tag == F_KEYWORD ||
+             impl_form->as.list.items[2]->tag == F_TYPE_ANN)) {
+            /* default-method-spliced-at-carrier-type: the spliced default's
+             * return annotation IS the class declaration's, already parsed
+             * into `tc->methods[i].return_type` and substituted for this
+             * instance above (`: a` -> the instance type, with
+             * ret_was_class_var set).  Re-reading it here would elaborate the
+             * class tyvar literally and land on the carrier.  Skip past it. */
+            impl_body_start = 3;
+        } else if (impl_form->as.list.len >= 3) {
             Form *ret_or_body = impl_form->as.list.items[2];
             /* Accept both fused `:T` (F_KEYWORD) and spaced `: T` (F_TYPE_ANN). */
             const Symbol *kw = NULL;
@@ -3920,6 +3949,14 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                                       "method parameter type annotation without a preceding parameter");
                             return NULL;
                         }
+                        /* default-method-spliced-at-carrier-type: a spliced
+                         * default's parameter annotations are the CLASS
+                         * signature's, already in `tc->methods[i].param_types`
+                         * (and its refinements / `param_explicit_type`), which
+                         * the bare-parameter path below substitutes for this
+                         * instance.  Reading `x : a` here literally would
+                         * type the parameter at the tyvar carrier. */
+                        if (impl_is_default) continue;
                         uint8_t prev = n_method_params - 1;
                         if (prev < MAX_FN_ARITY) m_param_annotated[prev] = true;
                         Type param_type = method_param_types[prev];

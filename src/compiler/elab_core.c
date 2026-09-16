@@ -2477,6 +2477,46 @@ bool rc_widen_int_literal_to_float_return(TypeKind declared, Expr *body) {
     return true;
 }
 
+/* float32-block-temp-widens-to-double: see elab_internal.h. */
+static bool rc_narrow_block_tail_float_literal(TypeKind declared, Expr *x, int depth) {
+    if (!x || depth > 64) return false;
+    switch (x->kind) {
+        case EX_FLOAT_LIT:
+            if (x->type.kind != TY_FLOAT) return false;   /* already at a width */
+            x->type = type_from_kind(declared);
+            return true;
+        case EX_DO: {
+            if (x->as.do_.n == 0) return false;
+            Expr *last = x->as.do_.items[x->as.do_.n - 1];
+            if (!rc_narrow_block_tail_float_literal(declared, last, depth + 1))
+                return false;
+            if (x->type.kind == TY_FLOAT) x->type = type_from_kind(declared);
+            return true;
+        }
+        case EX_LET:
+        case EX_LETREC:
+            if (!rc_narrow_block_tail_float_literal(declared, x->as.let_.body, depth + 1))
+                return false;
+            if (x->type.kind == TY_FLOAT) x->type = type_from_kind(declared);
+            return true;
+        case EX_IF: {
+            if (!x->as.if_.else_or_null) return false;
+            bool t = rc_narrow_block_tail_float_literal(declared, x->as.if_.then_, depth + 1);
+            bool el = rc_narrow_block_tail_float_literal(declared, x->as.if_.else_or_null, depth + 1);
+            if (!t && !el) return false;
+            if (x->type.kind == TY_FLOAT) x->type = type_from_kind(declared);
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+bool rc_narrow_float_literal_tail_to_declared_return(TypeKind declared, Expr *body) {
+    if (!body || (declared != TY_FLOAT32 && declared != TY_FLOAT64)) return false;
+    if (body->kind == EX_FLOAT_LIT) return false;   /* the bare literal is fine as is */
+    return rc_narrow_block_tail_float_literal(declared, body, 0);
+}
+
 /* pointer-vs-scalar-returns: see elab_internal.h. */
 static bool ps_is_integer_scalar_kind(TypeKind k) {
     switch (k) {

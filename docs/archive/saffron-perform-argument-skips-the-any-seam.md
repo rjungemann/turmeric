@@ -20,7 +20,7 @@ plus the typed-function call two lines away for contrast) and
 **What this did NOT fix**, and it is the larger half: `perform` still does not
 type-check its arguments at all. `(perform (Log 42))` against
 `Log [msg : cstr]` compiles clean in plain Turmeric and segfaults. Filed as
-[perform-does-not-typecheck-its-arguments](../reported/perform-does-not-typecheck-its-arguments.md)
+[perform-does-not-typecheck-its-arguments](perform-does-not-typecheck-its-arguments.md)
 with the measurement of why it is not a one-liner. The seam fixed here is the
 `any`-shaped corner of that hole, not the hole.
 

@@ -693,6 +693,43 @@ static bool call_arg_ok(const CAtom *a, bool cps_to_direct) {
  * admitted when `fn` is effect-free (callee_effect_free) -- pure higher-order
  * value threading (option-eq? / hamt map+filter / parser combinators passing a
  * comparator/mapper); every other arg takes the ordinary call_arg_ok gate. */
+static EmitCtx *g_emit_ctx;   /* defined below (G3b) */
+static const FnDef *cps_fd_of_binding(const Binding *b);   /* defined beside ent_of_binding */
+/* colored-call-inside-match-evicts-the-cps-backend, shape 2: the cps->direct
+ * reject in call_arg_ok exists for a callee whose direct C signature takes a
+ * by-value ADT through the int64 CARRIER (a generic base's `(Option A)`), where
+ * a raw struct arg is a hard C error.  A NON-generic callee declares the
+ * aggregate itself -- `static int64_t wrap_val(tur_adt_Wrap w)` -- and the
+ * CPS emitter's typed arg renderer (atoms_csv_call_typed) already passes a
+ * by-value aggregate atom raw, which is exactly that signature.  So `(wrap-val
+ * (handle (mk-wrap) ...))` in a colored `main` need not evict: admit the atom
+ * when the callee's declared parameter spells the SAME aggregate C type as the
+ * atom, narrow (not wide -- a wide by-value ADT param is passed by pointer on
+ * the direct path, which the raw emission would not match). */
+static bool cps_direct_param_takes_agg_raw(const Binding *fn, uint32_t i,
+                                           const CAtom *a) {
+    if (!g_emit_ctx || !fn || fn->type.kind != TY_FN || !a || !a->type) return false;
+    if (i >= fn->type.as.fn.arity) return false;
+    if (fn->closure_fn_binding) return false;
+    const Type *pt = NULL;
+    const FnDef *fd = cps_fd_of_binding(fn);
+    if (fd && i < fd->n_params && fd->params[i]) {
+        if (fd->params[i]->is_poly_fn) return false;
+        pt = &fd->params[i]->type;
+    } else if (fn->type.as.fn.arg_full_types) {
+        pt = fn->type.as.fn.arg_full_types[i];
+    }
+    if (!pt) return false;
+    if (pt->kind != a->type->kind) return false;
+    if (!type_eq(*pt, *a->type)) return false;
+    if (type_struct_pass_by_ptr(*a->type)) return false;   /* direct path takes `const T *` */
+    const char *pc = binder_ctype_full(g_emit_ctx, pt->kind, pt);
+    const char *ac = binder_ctype_full(g_emit_ctx, a->ty, a->type);
+    if (!pc || !ac || strcmp(pc, ac) != 0) return false;
+    if (strcmp(pc, "int64_t") == 0 || strchr(pc, '*')) return false;
+    return true;
+}
+
 static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
                          bool cps_to_direct) {
     bool cef = callee_effect_free(fn);
@@ -706,6 +743,10 @@ static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
          * whose atom_is_fat_fn reject evicts the caller (E2b keeps a fat-fn param
          * that is only CALLED/CAPTURED, never re-threaded as an arg). */
         if (cef && atom_is_fn_value(&args[i]) && !atom_is_fat_fn(&args[i])) continue;
+        if (cps_to_direct && !call_arg_ok(&args[i], true) &&
+            call_arg_ok(&args[i], false) &&
+            cps_direct_param_takes_agg_raw(fn, i, &args[i]))
+            continue;
         if (!call_arg_ok(&args[i], cps_to_direct)) return false;
     }
     return true;
@@ -1937,8 +1978,18 @@ static bool perform_cont_reset_ok(const CTerm *t) {
              * the O(N) dk_invoke stack this predicate otherwise (correctly) rejects.
              * Unconditional since cps-tramp-resume graduated.  Args must be
              * slot atoms. */
-            for (uint32_t i = 0; i < t->as.tailcall.n; i++)
-                if (!call_arg_ok(&t->as.tailcall.args[i], true)) return false;
+            /* perform-continuation-tail-call-arg-gate-assumes-direct: the gate
+             * used to pass cps_to_direct=true unconditionally, so a by-value
+             * aggregate atom (`(some 1)`) was refused even when the callee is
+             * COLORED and threads `__cps` params of the matching ABI -- the
+             * CT_TAILCALL rule in term_core_ok already asks the callee.  A
+             * `(perform (Tick))` followed by `(option-eq? (some 1) (some 1) f)`
+             * evicted BODY-STRUCT-CORE; the same call BEFORE the perform lowered. */
+            {
+                bool tc_direct = !binding_cps_reachable(t->as.tailcall.fn);
+                for (uint32_t i = 0; i < t->as.tailcall.n; i++)
+                    if (!call_arg_ok(&t->as.tailcall.args[i], tc_direct)) return false;
+            }
             return true;
         case CT_CONTINUE:
             /* cps-while-native: a loop back-edge in a perform continuation -- the
@@ -3203,7 +3254,7 @@ static bool fn_is_d2b_main(const FnDef *fd) {
 }
 
 static const Expr *g_prog;      /* program the cache is keyed on */
-static EmitCtx    *g_emit_ctx;  /* G3b: ctx of the active emission, for ctx->abi_specializations */
+/* g_emit_ctx: G3b, ctx of the active emission (declared above call_args_ok). */
 static EmitCtx    *g_ents_ctx;  /* G3b: the g_emit_ctx the cached g_ents were classified under */
 static Arena       g_arena;     /* owns the cached CTerms (+ coloring) */
 static bool        g_arena_live;
@@ -3266,6 +3317,40 @@ static bool binding_cps_reachable(const Binding *b) {
     return false;
 }
 
+static const char *find_mono_clone_for_call(EmitCtx *ctx, const Binding *fn,
+                                            const CAtom *args, uint32_t n,
+                                            const Expr *call_expr);
+/* colored-generic-clone-join-emitted-inline: does this CT_TAILCALL take the
+ * cps->cps route (thread the continuation into `<callee>__cps`)?  ONE answer
+ * for the classifier and the emitter.  The tail-arm emitter routes cps->cps
+ * when the callee is in S, OR when it is a colored mono-template whose clone
+ * resolves at this call (`<clone>__cps` is emitted) -- unless a typeclass
+ * re-resolution or a region bracket forces the direct arm.  The join
+ * classifier (letcont_is_heap_join / needs_heap_join / jbody_has_cps_tailcall)
+ * used to ask only `binding_in_s`, so a bind-position call to a colored
+ * GENERIC's clone -- `(not (option-eq? (some 1) (some 2) f))` once `option-eq?`
+ * was colored -- was classified as an INLINE join while the emitter threaded
+ * `__kont` straight into the clone: the `not` sat behind a dead label and the
+ * callee's answer went to the caller's continuation unchanged.  A silent
+ * wrong answer (`false`, and `1` for an `if` on it).  Every site asks this. */
+static bool tailcall_routes_cps_to_cps(const CTerm *t) {
+    if (!t || t->kind != CT_TAILCALL) return false;
+    const Binding *fn = t->as.tailcall.fn;
+    if (!fn) return false;
+    if (t->as.tailcall.call_expr && g_emit_ctx) {
+        char *rr = emit_reresolve_method_call(g_emit_ctx, t->as.tailcall.call_expr);
+        if (rr) { free(rr); return false; }
+    }
+    if (emit_binding_is_region_scope(fn)) return false;
+    if (binding_in_s(fn)) return true;
+    SEnt *fe = NULL;
+    for (size_t i = 0; i < g_ents_n; i++)
+        if (g_ents[i].bind == fn) { fe = &g_ents[i]; break; }
+    if (!fe || !fe->mono_template || !g_emit_ctx) return false;
+    return find_mono_clone_for_call(g_emit_ctx, fn, t->as.tailcall.args,
+                                    t->as.tailcall.n, t->as.tailcall.call_expr) != NULL;
+}
+
 /* True when this CT_LETCONT is a non-tail cps->cps call: its body is directly a
  * tailcall to an emittable colored callee that threads this join as the callee's
  * continuation.  Such a join is reified as a DK frame (emit_heap_join) rather
@@ -3278,7 +3363,7 @@ static bool letcont_is_heap_join(const CTerm *t) {
         /* colored callee threads `<fn>__cps`, (E2a tier-`nontail`) a fn-value
          * callee threads via the registry, OR (E2) a fat-closure poly-fn param
          * threads via its fn_cps slot -- all reify this join as a DK frame. */
-        && (binding_in_s(b->as.tailcall.fn) || b->as.tailcall.via_registry
+        && (tailcall_routes_cps_to_cps(b) || b->as.tailcall.via_registry
             || b->as.tailcall.via_fncps);
 }
 
@@ -3300,7 +3385,7 @@ static bool jbody_has_cps_tailcall(const CTerm *t) {
         /* E2/E2a: a fn-value tail call (via the registry, or a fat-closure fn_cps
          * slot) also threads the DK continuation, so a jbody containing one needs
          * a resume-frame (LH_RESUME_CONT) that receives `__kont` at run time. */
-        case CT_TAILCALL: return binding_in_s(t->as.tailcall.fn)
+        case CT_TAILCALL: return tailcall_routes_cps_to_cps(t)
                               || t->as.tailcall.via_registry
                               || t->as.tailcall.via_fncps;
         case CT_LETVAL:   return jbody_has_cps_tailcall(t->as.letval.body);
@@ -3464,7 +3549,7 @@ static bool needs_heap_join(const CTerm *t) {
         case CT_LETRAW:  return needs_heap_join(t->as.letraw.body);
         case CT_TAILCALL:
             return t->as.tailcall.kont.kind == KK_VAR
-                && binding_in_s(t->as.tailcall.fn);
+                && tailcall_routes_cps_to_cps(t);
         case CT_LETCONT:
             if (letcont_is_heap_join(t)) {
                 /* The join is lifted into a DK frame; the handled tailcall (body)
@@ -5093,6 +5178,10 @@ static SEnt *ent_of_binding(const Binding *b) {
         if (g_ents[i].bind == b) return &g_ents[i];
     return NULL;
 }
+static const FnDef *cps_fd_of_binding(const Binding *b) {
+    SEnt *fe = ent_of_binding(b);
+    return fe ? fe->fd : NULL;
+}
 
 /* cps-call-arm-ignores-abi-specialization: the call's OWN result type, when it
  * is concrete enough to tell two specializations apart.
@@ -6264,6 +6353,121 @@ static void emit_println(CE *ce, BuiltinShape shape, const char *arg) {
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * cps-edge-walk-misses-nodes-and-colored-frames-leak: the CPS ownership gap.
+ *
+ * The direct emitter frees a fresh sum-carrier box (`(ok 1)`), an owned `any`,
+ * or a boxed value-struct payload that is handed to a NON-RETAINING callee by
+ * queueing the temp at the argument hoist (sum_pending / any_pending /
+ * vsp_pending) and draining the queue after the consuming call materialises.
+ * That drain lives in emit_value's call hoist.  On the CPS path the argument
+ * is lowered to its own CT_LETRAW -- delegated to emit_value, so the queue
+ * push still happens -- but the consuming call is a CT_LETCALL / CT_TAILCALL
+ * the CPS emitter writes itself, and no CPS statement ever drained the queue:
+ * the entry sat in `ctx->sum_pending` for the rest of the program and the box
+ * leaked (16 bytes per `(ok? (result-map (ok 1) f))` in a colored function,
+ * typed/result-basic under tests/run-leak-check.sh).
+ *
+ * The mechanism here is the same discipline at the CPS statement boundary.
+ * emit_letraw takes the queue marks around its delegation and moves anything
+ * pushed into this table, keyed by the binder the delegated value lands in;
+ * every CPS consumer of an atom (letcall, letprim, the cps->direct tail arm)
+ * fires the matching entry's drop right after its call statement, spelled on
+ * the ATOM (the binder is in scope in the consuming segment; the direct temp
+ * may not be, once a continuation is lifted).  An entry never consumed is a
+ * status-quo leak, never a free; the table is cleared per emitted function so
+ * a binder id can never match across functions.  A cps->cps tail call has no
+ * statement after `return f__cps(...)`; when one of its atoms has an entry the
+ * arm binds the answer, fires the drop and returns it (see the tail arm) --
+ * sound because `f__cps` runs the callee and the whole continuation before
+ * returning, and the callee was proven non-retaining. */
+typedef struct {
+    uint32_t       cvar_id;
+    const Binding *bind;
+    int            kind;     /* 0 sum box, 1 any, 2 boxed value-struct payload */
+    Type           t;
+    bool           owned;    /* t is a malloc'd spine (sum_pending_owned) */
+} CpsDeferredDrop;
+static CpsDeferredDrop g_cps_deferred[256];
+static uint32_t        g_n_cps_deferred;
+
+static void cps_deferred_reset(void) {
+    for (uint32_t i = 0; i < g_n_cps_deferred; i++)
+        if (g_cps_deferred[i].owned) free_struct_app_type(g_cps_deferred[i].t);
+    g_n_cps_deferred = 0;
+}
+
+static void cps_deferred_capture(CE *ce, const CTerm *t,
+                                 uint32_t sum_mark, uint32_t any_mark, uint32_t vsp_mark) {
+    EmitCtx *ctx = ce->ctx;
+    while (ctx->n_sum_pending > sum_mark) {
+        uint32_t k = --ctx->n_sum_pending;
+        free(ctx->sum_pending[k]);
+        if (g_n_cps_deferred < 256) {
+            CpsDeferredDrop *d = &g_cps_deferred[g_n_cps_deferred++];
+            d->cvar_id = t->as.letraw.x.id; d->bind = t->as.letraw.x.bind;
+            d->kind = 0; d->t = ctx->sum_pending_types[k]; d->owned = ctx->sum_pending_owned[k];
+        } else if (ctx->sum_pending_owned[k]) {
+            free_struct_app_type(ctx->sum_pending_types[k]);
+        }
+    }
+    while (ctx->n_any_pending > any_mark) {
+        uint32_t k = --ctx->n_any_pending;
+        free(ctx->any_pending[k]);
+        if (g_n_cps_deferred < 256) {
+            CpsDeferredDrop *d = &g_cps_deferred[g_n_cps_deferred++];
+            d->cvar_id = t->as.letraw.x.id; d->bind = t->as.letraw.x.bind;
+            d->kind = 1; memset(&d->t, 0, sizeof d->t); d->owned = false;
+        }
+    }
+    while (ctx->n_vsp_pending > vsp_mark) {
+        uint32_t k = --ctx->n_vsp_pending;
+        free(ctx->vsp_pending[k]);
+        if (g_n_cps_deferred < 256) {
+            CpsDeferredDrop *d = &g_cps_deferred[g_n_cps_deferred++];
+            d->cvar_id = t->as.letraw.x.id; d->bind = t->as.letraw.x.bind;
+            d->kind = 2; d->t = ctx->vsp_pending_types[k]; d->owned = false;
+        }
+    }
+}
+
+static bool cps_deferred_any_atom(const CAtom *args, uint32_t n) {
+    if (g_n_cps_deferred == 0 || !args) return false;
+    for (uint32_t i = 0; i < n; i++)
+        for (uint32_t k = 0; k < g_n_cps_deferred; k++) {
+            const CpsDeferredDrop *d = &g_cps_deferred[k];
+            if ((args[i].kind == CA_CVAR && args[i].cvar_id == d->cvar_id) ||
+                (args[i].kind == CA_VAR && d->bind && args[i].var == d->bind))
+                return true;
+        }
+    return false;
+}
+
+static void cps_deferred_consume_atoms(CE *ce, const CAtom *args, uint32_t n) {
+    if (g_n_cps_deferred == 0 || !args) return;
+    for (uint32_t i = 0; i < n; i++) {
+        const CAtom *a = &args[i];
+        for (uint32_t k = 0; k < g_n_cps_deferred; k++) {
+            CpsDeferredDrop *d = &g_cps_deferred[k];
+            bool hit = (a->kind == CA_CVAR && a->cvar_id == d->cvar_id) ||
+                       (a->kind == CA_VAR && d->bind && a->var == d->bind);
+            if (!hit) continue;
+            char *v = atom_str(ce, a);
+            Buf nb; buf_init(&nb);
+            buf_printf(&nb, "(%s)", v);
+            buf_putc(&nb, '\0');
+            int saved = ce->ctx->indent;
+            ce->ctx->indent = ce->indent;
+            emit_pending_drop_stmt(ce->ctx, ce->out, d->kind, nb.data, d->t);
+            ce->ctx->indent = saved;
+            buf_free(&nb); free(v);
+            if (d->owned) free_struct_app_type(d->t);
+            g_cps_deferred[k] = g_cps_deferred[--g_n_cps_deferred];
+            break;
+        }
+    }
+}
+
 static void emit_term(CE *ce, const CTerm *t) {
     switch (t->kind) {
         case CT_APPCONT: {
@@ -6318,6 +6522,7 @@ static void emit_term(CE *ce, const CTerm *t) {
             free(bn);
             for (uint32_t i = 0; i < n; i++) free(as[i]);
             free(as);
+            cps_deferred_consume_atoms(ce, t->as.letprim.args, n);
             emit_term(ce, t->as.letprim.body);
             break;
         }
@@ -6432,6 +6637,7 @@ static void emit_term(CE *ce, const CTerm *t) {
              * under a handler signals by return; propagate before running the
              * rest of this body (and the continuation). */
             cps_panic_check(ce);
+            cps_deferred_consume_atoms(ce, t->as.letcall.args, t->as.letcall.n);
             emit_term(ce, t->as.letcall.body);
             break;
         }
@@ -6582,7 +6788,27 @@ static void emit_term(CE *ce, const CTerm *t) {
                 char *argv_t = atoms_csv_call_typed(ce, t->as.tailcall.args,
                                                     t->as.tailcall.n, t->as.tailcall.fn,
                                                     find_spec_by_clone_name(ce->ctx, fn));
-                if (t->as.tailcall.n)
+                /* cps-edge-walk-misses-nodes-and-colored-frames-leak, the tail
+                 * arm: a fresh box handed to this callee (a deferred drop keyed
+                 * on one of the arg atoms) has nothing after `return f__cps(...)`
+                 * to free it.  `f__cps` runs the callee AND delivers its result
+                 * to `__kont` -- the rest of the computation -- before
+                 * returning, and the callee was proven non-retaining at elab,
+                 * so once the call returns the box is dead: bind the answer,
+                 * fire the drop, return it.  The cost is one lost C tail call
+                 * for exactly this shape; the lifetime is the precise one, not
+                 * the driver-boundary reap.  No deferred entry: the tail call is
+                 * emitted as before. */
+                if (cps_deferred_any_atom(t->as.tailcall.args, t->as.tailcall.n)) {
+                    char *rv = fresh_tmp(ce->ctx);
+                    if (t->as.tailcall.n)
+                        ce_line(ce, "int64_t %s = %s__cps(%s, %s); /* cps->cps, freed after */", rv, fn, argv_t, thread);
+                    else
+                        ce_line(ce, "int64_t %s = %s__cps(%s); /* cps->cps, freed after */", rv, fn, thread);
+                    cps_deferred_consume_atoms(ce, t->as.tailcall.args, t->as.tailcall.n);
+                    ce_line(ce, "return %s;", rv);
+                    free(rv);
+                } else if (t->as.tailcall.n)
                     ce_line(ce, "return %s__cps(%s, %s); /* cps->cps */", fn, argv_t, thread);
                 else
                     ce_line(ce, "return %s__cps(%s); /* cps->cps */", fn, thread);
@@ -6641,6 +6867,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                 if (crt && (crt->kind == TY_NIL || crt->kind == TY_NEVER)) {
                     ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
                     cps_panic_check(ce);   /* cps-body-panic-not-propagated */
+                    cps_deferred_consume_atoms(ce, t->as.tailcall.args, t->as.tailcall.n);
                     emit_deliver(ce, &t->as.tailcall.kont, "0");
                 } else {
                     /* S1/findings 16: name the callee's real return type from the
@@ -6654,6 +6881,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                     else
                         ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
                     cps_panic_check(ce);   /* cps-body-panic-not-propagated */
+                    cps_deferred_consume_atoms(ce, t->as.tailcall.args, t->as.tailcall.n);
                     /* RM3 R4: close the generation before the value is delivered
                      * to the continuation -- the continuation is the rest of the
                      * caller, so anything after this point is outside the bracket.
@@ -6810,9 +7038,15 @@ static void emit_match(CE *ce, const CTerm *t) {
 
     uint32_t n = t->as.match.n_arms;
     bool chain_open = false;
+    /* colored-call-inside-match-evicts-the-cps-backend: a single-constructor
+     * record ADT carries no `tag` member (`struct tur_adt_Wrap { union { ...
+     * } as; }`), so its one ctor arm is unconditional -- the same block form a
+     * catch-all takes.  Only match_dk_ok's by-value admission reaches here
+     * with n_ctors == 1. */
+    bool tagged = adt->n_ctors >= 2;
     for (uint32_t i = 0; i < n; i++) {
         const CMatchArm *arm = &t->as.match.arms[i];
-        if (arm->ctor) {
+        if (arm->ctor && tagged) {
             if (!chain_open) { ce_line(ce, "if (%s->tag == %u) {", sv, arm->ctor->tag); chain_open = true; }
             else               ce_line(ce, "} else if (%s->tag == %u) {", sv, arm->ctor->tag);
         } else {
@@ -6843,7 +7077,7 @@ static void emit_match(CE *ce, const CTerm *t) {
     }
     /* Close the chain.  With no trailing catch-all the match is exhaustive by
      * elaboration, so the fallthrough is unreachable (abort keeps -Wreturn quiet). */
-    bool trailing_catchall = (n > 0 && t->as.match.arms[n - 1].ctor == NULL);
+    bool trailing_catchall = (n > 0 && (t->as.match.arms[n - 1].ctor == NULL || !tagged));
     if (chain_open && !trailing_catchall) {
         ce_line(ce, "} else {");
         ce->indent += 4;
@@ -6919,8 +7153,13 @@ static void emit_letraw(CE *ce, const CTerm *t) {
     }
     int saved = ce->ctx->indent;
     ce->ctx->indent = ce->indent;           /* line the delegated statements up */
+    uint32_t dd_sum = ce->ctx->n_sum_pending, dd_any = ce->ctx->n_any_pending,
+             dd_vsp = ce->ctx->n_vsp_pending;
     char *rhs = emit_value(ce->ctx, ce->out, t->as.letraw.e);
     ce->ctx->indent = saved;
+    /* cps-edge-walk-misses-nodes-and-colored-frames-leak: anything the
+     * delegation queued for "drop after the consuming call" is ours now. */
+    cps_deferred_capture(ce, t, dd_sum, dd_any, dd_vsp);
     char *bn = letraw_binder_name(ce, t);
     /* A nil-typed op yields a void/nil expression -- bind the unit placeholder
      * rather than assigning a void value.  But a nil/void EX_CALL is a special
@@ -7482,8 +7721,16 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
                    || jbody_has_cps_tailcall(t->as.letcont.jbody)
                    || jbody_has_perform(t->as.letcont.jbody);
 
-    char *fn = call->as.tailcall.fn ? callee_name(call->as.tailcall.fn)
-                                    : atom_str(ce, &call->as.tailcall.fn_atom);  /* E2c: field-load callee */
+    /* colored-generic-clone-join-emitted-inline: a colored mono-template callee
+     * threads its CLONE's `__cps` twin, exactly as the tail arm resolves it. */
+    const char *hj_clone = call->as.tailcall.fn
+        ? find_mono_clone_for_call(ce->ctx, call->as.tailcall.fn, call->as.tailcall.args,
+                                   call->as.tailcall.n, call->as.tailcall.call_expr)
+        : NULL;
+    char *fn = call->as.tailcall.fn
+        ? (hj_clone && !binding_in_s(call->as.tailcall.fn) ? strdup(hj_clone)
+                                                            : callee_name(call->as.tailcall.fn))
+        : atom_str(ce, &call->as.tailcall.fn_atom);  /* E2c: field-load callee */
     char *argv = atoms_csv_call(ce, call->as.tailcall.args, call->as.tailcall.n);
     /* The join frame is spliced onto cur_k and threaded into the callee in tail
      * position; register it for a single-node reap at the outermost entry
@@ -9318,6 +9565,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (!fd->binding) return false;
     const Expr *program = ctx->program_root;
     if (!program) return false;
+    cps_deferred_reset();   /* binder ids are per function; never match across */
 
     /* ensure_S colors the program (idempotently) and classifies it; the
      * pipeline has not colored by emit time, so this must precede any read of

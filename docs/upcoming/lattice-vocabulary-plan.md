@@ -223,12 +223,15 @@ adding an edge to the Show/string load cycle).
 ```
 
 The defaulted-method design in this section's original text was implemented
-first and is **miscompiled**: the class's method form is spliced into each
-instance with its `: a` annotations intact and elaborated literally, so
-`Ord [float]`'s copy emits as `int64_t __inst_Ord_max_float(int64_t, int64_t)`
-and converts its own arguments -- `(generic-max 2.5 7.1)` answered 2. Dropping
-the annotations is not an option either (section 2.2's trap). Filed as
-[default-method-spliced-at-carrier-type](../reported/default-method-spliced-at-carrier-type.md).
+first and was **miscompiled** at the time: the class's method form was spliced
+into each instance with its `: a` annotations intact and elaborated literally,
+so `Ord [float]`'s copy emitted as `int64_t __inst_Ord_max_float(int64_t,
+int64_t)` and converted its own arguments -- `(generic-max 2.5 7.1)` answered
+2. Filed as
+[default-method-spliced-at-carrier-type](../archive/default-method-spliced-at-carrier-type.md)
+and **fixed 2026-09-16** (a spliced default now inherits the class signature
+under the instance substitution), so the defaulted spelling is available
+again; the defn spelling stayed for the reasons below.
 
 The defn form is better regardless: it is correct at every instance, works
 inside another generic, and costs a user-written `Ord` instance nothing, where
@@ -396,14 +399,14 @@ stdlib module (not a spice) needs them without an import.
   and commutative but NOT idempotent and must fail exactly one law. This is
   what [crdt-spice-plan.md](crdt-spice-plan.md) C1 consumes.
 
-  **Interpreter caveat.** Both L2/L3 fixtures carry `requires.compiled`: the
-  law functions nest a class-method call inside a constrained generic, which
-  `--interpret` resolves to the wrong instance, so a law that must answer
-  `false` answers `true`. Compiled is correct. This raised
-  [turi-nested-class-method-call-picks-first-instance](../reported/turi-nested-class-method-call-picks-first-instance.md)
-  from medium to **high** -- over newtypes it is a silent wrong answer, not the
-  crash its original repro produced. The markers name it, and the assertions
-  are already written.
+  **Interpreter caveat -- closed 2026-09-16.** Both L2/L3 fixtures carried
+  `requires.compiled`: the law functions nest a class-method call inside a
+  constrained generic, which `--interpret` resolved to the wrong instance, so
+  a law that must answer `false` answered `true`. That raised
+  [turi-nested-class-method-call-picks-first-instance](../archive/turi-nested-class-method-call-picks-first-instance.md)
+  from medium to **high**; it is fixed (the driver mirrors the compiled
+  nested-receiver re-resolution) and the markers are gone -- both law suites
+  run under `--interpret`.
 - **L4 -- INVESTIGATED 2026-09-11. Verdict: yes, it is expressible -- and the
   shipped function should NOT be rewritten anyway.**
 

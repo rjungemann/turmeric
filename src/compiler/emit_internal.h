@@ -864,6 +864,14 @@ bool emit_str_is_bare_ident(const char *s);
  * `want_ctype`, and is that type a by-value aggregate?  Shared by every
  * carrier->concrete bridge so the copies cannot drift.  See emit_expr.c. */
 bool emit_value_is_recorded_as(const char *v, const char *want_ctype);
+/* cps-edge-walk-misses-nodes-and-colored-frames-leak: fire ONE pending drop
+ * the direct emitter's argument hoist queued (a fresh sum-carrier box, an owned
+ * `any`, or a by-value monomorph whose arm holds a boxed value struct) at a
+ * site the CPS emitter chooses -- the statement after the CPS call that
+ * consumed the atom.  `kind` is 0 = sum box (emit_carrier_sum_free), 1 = any
+ * (`__tur_any_drop`), 2 = boxed value-struct payload.  `name` is any C
+ * expression naming the value; it is parenthesised where the walk needs it. */
+void emit_pending_drop_stmt(EmitCtx *ctx, Buf *body, int kind, const char *name, Type t);
 /* global-def-store-misses-int-ptr-bridge: the int64<->pointer bridge for a
  * STORE (module-level def init, thread-local init return, `set!`).  Returns a
  * malloc'd bridged spelling of `iv` or NULL when no bridge is needed. */

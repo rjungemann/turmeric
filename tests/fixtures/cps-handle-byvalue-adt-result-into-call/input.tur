@@ -1,0 +1,37 @@
+;; colored-call-inside-match-evicts-the-cps-backend, shape 2 -- RESOLVED.
+;;
+;; A `handle` whose result is a BY-VALUE aggregate, passed straight to an
+;; uncolored function, evicted `main` (BODY-STRUCT-CORE): the CPS core check
+;; refused a by-value ADT atom as a cps->direct call argument on the premise
+;; that the callee's direct C signature takes it through the int64 carrier.
+;; That premise holds for a generic base (`(Option A)`), not for a
+;; non-generic callee, whose signature IS the aggregate -- and the CPS typed
+;; arg renderer already passes such an atom raw.  The gate now admits the
+;; atom when the callee's declared parameter spells the same aggregate C
+;; type (narrow, not pass-by-pointer).
+;;
+;; The report's "a defstruct record is fine" control was about the CONSUMER
+;; (`(.v ...)` is a delegated field read); a defstruct record handed to a
+;; CALL evicted identically, so both are pinned here.
+(defeffect Ask [] : int)
+(defdata Wrap (MkWrap int))
+(defdata Shape [] (Circle [r : int]) (Sq [s : int]))
+(defstruct Box [v : int])
+(defn g [] : int (perform (Ask)))
+
+(defn wrap-val [w : Wrap] : int (match w (MkWrap n) n))
+(defn mk-wrap [] : Wrap (let [n (g)] (MkWrap n)))
+
+(defn area [s : Shape] : int (match s (Circle r) (* 3 r) (Sq q) (* q q)))
+(defn mk-shape [] : Shape (let [n (g)] (if (> n 40) (Circle n) (Sq n))))
+
+(defn box-val [b : Box] : int (.v b))
+(defn mk-box [] : Box (let [n (g)] (Box n)))
+
+(defn main [] : int
+  (println (wrap-val (handle (mk-wrap) (Ask [] k) (resume k 41))))
+  (println (area (handle (mk-shape) (Ask [] k) (resume k 41))))
+  (println (area (handle (mk-shape) (Ask [] k) (resume k 4))))
+  (println (box-val (handle (mk-box) (Ask [] k) (resume k 41))))
+  (println (.v (handle (mk-box) (Ask [] k) (resume k 8))))
+  0)

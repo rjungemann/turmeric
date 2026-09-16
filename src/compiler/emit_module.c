@@ -2452,6 +2452,36 @@ static bool emit_abi_type_has_concrete_named_tyvar(const Type *t) {
  * been removed -- elab now attaches the substitution to EX_CALL via
  * call_.abi_bindings, and emit_abi_register_call consumes that directly. */
 
+/* set-add-elem-hash-disagrees-with-set-member: does `t` mention ANY type
+ * variable, named or not?  The two predicates above ask about NAMED tyvars,
+ * which is the right question for "does this call need specializing" -- but
+ * the wrong one for "is this type fully ground".  `(ok 5)` is typed
+ * `(Result int ?)` with a NAMELESS err var, and grounding a callee's
+ * `(Result B E)` result through bindings that carry that nameless var minted
+ * `result_map__spec__tur_adt_Result__int__int...` for a half-abstract result
+ * (typed/result-basic: an arg-bridge repr ICE, since one site read the
+ * half-ground app as concrete and another as the carrier). */
+static bool emit_abi_type_has_any_tyvar(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return true;
+        case TY_APP:
+            return emit_abi_type_has_any_tyvar(t->as.app.fn) ||
+                   emit_abi_type_has_any_tyvar(t->as.app.arg);
+        case TY_UNION:
+            for (uint8_t i = 0; i < t->as.union_.n_members; i++)
+                if (emit_abi_type_has_any_tyvar(t->as.union_.members[i])) return true;
+            return false;
+        case TY_INTERSECTION:
+            for (uint8_t i = 0; i < t->as.intersection_.n_members; i++)
+                if (emit_abi_type_has_any_tyvar(t->as.intersection_.members[i])) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
 static bool emit_abi_find_type_binding(const AbiTypeBinding *bindings, uint8_t n_bindings,
                                        const char *name, uint8_t *out_idx) {
     if (!name) return false;
@@ -5178,12 +5208,63 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         !call->as.call_.dict_arg && !fd->owner_instance &&
         fn_binding->type.kind == TY_FN) {
         AbiTypeBinding site[ABI_TYPE_BINDINGS_MAX];
+        /* set-add-elem-hash-disagrees-with-set-member: which `site` rows came
+         * from a BARE-tyvar parameter.  Those may only pin a binding elab left
+         * ABSTRACT (see below), never override a concrete one. */
+        bool site_from_bare[ABI_TYPE_BINDINGS_MAX];
         uint8_t n_site = 0;
         for (uint8_t i = 0; i < fd->n_params && i < call->as.call_.n_args; i++) {
             const Type *expected_full = (fn_binding->type.as.fn.arg_full_types &&
                                          fn_binding->type.as.fn.arg_full_types[i])
                 ? fn_binding->type.as.fn.arg_full_types[i]
                 : &fd->params[i]->type;
+            /* set-add-elem-hash-disagrees-with-set-member: a bare-tyvar
+             * parameter (`x : A`) whose sibling receiver left `A` UNPINNED.
+             * `(set-add-elem__ (set-new) "x")` records `A -> <tyvar>` at elab:
+             * the receiver `(set-new)` is `(Set A')` with nothing to ground
+             * it, and the binding walk takes the first mention.  The concrete
+             * `"x"` two slots later never reaches the binding, so the call
+             * stays on the carrier base -- whose `(.hash x)` is baked to the
+             * REPRESENTATIVE instance (`Hash[int]`), so a cstr / Sym element
+             * was hashed by its address and `set-member?` (which hashes at
+             * the call site) could not find it.  A `set-add1` macro
+             * expansion hits the same shape on both calls, since the S4
+             * let-local forward inference is skipped under a macro.  Pin the
+             * binding from the argument's own type -- peeling the carrier
+             * reinterpret the arg-check loop wraps a non-int scalar in, as
+             * S4 does -- but ONLY where elab recorded an abstract tyvar: a
+             * concrete recorded binding is what the caller said, and stays. */
+            if (expected_full && expected_full->kind == TY_TYVAR &&
+                expected_full->as.tyvar_.name) {
+                /* Peel only the carrier REINTERPRET, never an ascription:
+                 * `(:: 7 G)` at a `v : V` slot is a G, and the ascription is
+                 * what says so -- peeling it pinned `V -> int` and handed a
+                 * `(P G)` binding a `tur_adt_P__int *`
+                 * (phantom-parametric-ctor-inferred-from-sibling). */
+                const Expr *ae = call->as.call_.args[i];
+                while (ae && ae->kind == EX_REINTERPRET && ae->as.reinterpret_.expr)
+                    ae = ae->as.reinterpret_.expr;
+                if (!ae) continue;
+                Type at = ae->type;
+                if (at.kind == TY_UNKNOWN || at.kind == TY_TYVAR ||
+                    at.kind == TY_NIL || at.kind == TY_NEVER) continue;
+                if (emit_abi_type_has_any_tyvar(&at)) continue;
+                uint8_t bidx = 0;
+                if (!emit_abi_find_type_binding(bindings, n_bindings,
+                                                expected_full->as.tyvar_.name, &bidx))
+                    continue;
+                if (bindings[bidx].type.kind != TY_TYVAR) continue;
+                uint8_t sidx = 0;
+                if (emit_abi_find_type_binding(site, n_site,
+                                               expected_full->as.tyvar_.name, &sidx))
+                    continue;
+                if (n_site >= ABI_TYPE_BINDINGS_MAX) continue;
+                site[n_site].name = expected_full->as.tyvar_.name;
+                site[n_site].type = at;
+                site_from_bare[n_site] = true;
+                n_site++;
+                continue;
+            }
             /* Only a parameter whose tyvar sits INSIDE a type application
              * (`o : (Option A)`) is pinned by its argument's own head type. A
              * bare-tyvar parameter (`x : A`) is whatever the caller says it is,
@@ -5217,8 +5298,10 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             if (at.kind == TY_UNKNOWN || at.kind == TY_TYVAR) continue;
             if (at.kind != TY_APP) continue;
             if (emit_abi_type_has_concrete_named_tyvar(&at)) continue;
+            uint8_t before_collect = n_site;
             emit_abi_unify_collect(expected_full, &at, site, &n_site,
                                    ABI_TYPE_BINDINGS_MAX);
+            for (uint8_t k = before_collect; k < n_site; k++) site_from_bare[k] = false;
         }
         bool site_wins = false;
         for (uint8_t i = 0; i < n_bindings; i++) {
@@ -5227,6 +5310,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 if (!site[j].name || !bindings[i].name) continue;
                 if (strcmp(site[j].name, bindings[i].name) != 0) continue;
                 if (emit_abi_type_has_concrete_named_tyvar(&site[j].type)) continue;
+                if (site_from_bare[j] && bindings[i].type.kind != TY_TYVAR) continue;
                 if (type_eq(site[j].type, bindings[i].type) &&
                     site[j].type.kind == bindings[i].type.kind) continue;
                 site_fixed[i].type = site[j].type;
@@ -5595,6 +5679,38 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             &generic_result, bindings, n_bindings, ctx->type_arena);
         if (recovered.kind == TY_APP && type_app_is_concrete_adt(&recovered))
             result_type = recovered;
+    }
+    /* set-add-elem-hash-disagrees-with-set-member (second defect): a clone
+     * whose `call->type` still SPELLS the callee's own tyvar -- `(Set A)` for
+     * `(idset a 6)` with `a : (Set int)`, where elab left the result in the
+     * callee's letters -- named and forward-declared its result from that
+     * unresolved app (`int64_t`, the erased-app carrier), while the
+     * definition emitter resolves the same type under the spec's bindings and
+     * writes `tur_adt_Set__int *`.  cc then rejects the clone outright:
+     * "conflicting types for `idset__spec__int64_t_...`".  Instantiate the
+     * result through the CALL's own bindings when that grounds it, so the
+     * name, the prototype and the definition are one spelling.  Only a
+     * result the bindings fully ground is taken -- a tyvar the call does not
+     * bind stays as it was, and the recoveries above (which act on the
+     * DECLARED result, not `call->type`) are unaffected. */
+    if (!result_type_override && bindings && n_bindings > 0 &&
+        emit_abi_type_has_concrete_named_tyvar(&result_type)) {
+        /* Only when EVERY binding is itself ground.  `(result-map (ok 5) f)`
+         * binds `E` to the err var `(ok 5)` never pinned; grounding its
+         * `(Result B int)` result to `Result__int__int` while the `r :
+         * (Result A E)` parameter stays half-abstract minted a spec whose
+         * result was by-value and whose receiver was the carrier -- the
+         * arg-bridge repr ICE in typed/result-basic.  A spec is either all
+         * ground or it stays on the carrier as before. */
+        bool bindings_ground = true;
+        for (uint8_t bi = 0; bi < n_bindings && bindings_ground; bi++)
+            if (emit_abi_type_has_any_tyvar(&bindings[bi].type))
+                bindings_ground = false;
+        Type grounded = emit_abi_instantiate_type(&result_type, bindings,
+                                                  n_bindings, ctx->type_arena);
+        if (bindings_ground && !emit_abi_type_has_any_tyvar(&grounded) &&
+            grounded.kind != TY_UNKNOWN)
+            result_type = grounded;
     }
     if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
         abi_changes = true;
@@ -7118,6 +7234,70 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             emit_abi_note_instance_dict_ref(ctx, e->as.dict_.instance);
             break;
         }
+        /* abi-scan-misses-effect-operands: the effect family had no arms, so a
+         * generic or #{Construct} call sitting in a `perform` ARGUMENT or in a
+         * `resume` VALUE was never interned -- `(perform (EO (some 5)))` in a
+         * colored function emitted the unspecialized `some(...)` (an implicit
+         * declaration) and a handler clause's `(resume k (unwrap-or o 0))`
+         * emitted an undefined `unwrap_hyor`.  Same missing-arm class as the
+         * EX_HANDLE / EX_MATCH arms above and the CPS coloring walks
+         * (cps-edge-walk-misses-nodes-and-colored-frames-leak): a node kind
+         * added after the walk was written is a silent hole under it. */
+        case EX_PERFORM:
+            if (e->as.perform_.perform)
+                for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                    emit_abi_scan_expr(ctx, e->as.perform_.perform->args[i], items, n_items);
+            break;
+        case EX_RESUME:
+            if (e->as.resume_.resume) {
+                emit_abi_scan_expr(ctx, e->as.resume_.resume->k, items, n_items);
+                emit_abi_scan_expr(ctx, e->as.resume_.resume->value, items, n_items);
+            }
+            break;
+        case EX_DISCONTINUE:
+            if (e->as.discontinue_.discontinue) {
+                emit_abi_scan_expr(ctx, e->as.discontinue_.discontinue->k, items, n_items);
+                emit_abi_scan_expr(ctx, e->as.discontinue_.discontinue->exception, items, n_items);
+            }
+            break;
+        case EX_HANDLER_LIT: {
+            const HandleExpr *h = e->as.handler_lit_.handle;
+            if (h)
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    emit_abi_scan_expr(ctx, h->cases[i].body, items, n_items);
+            break;
+        }
+        case EX_WITH_HANDLER:
+            emit_abi_scan_expr(ctx, e->as.with_handler_.handler, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.with_handler_.body, items, n_items);
+            break;
+        case EX_DEFER:
+            emit_abi_scan_expr(ctx, e->as.defer_.body, items, n_items);
+            break;
+        case EX_RESET:
+            emit_abi_scan_expr(ctx, e->as.reset_.body, items, n_items);
+            break;
+        case EX_SHIFT:
+            emit_abi_scan_expr(ctx, e->as.shift_.k_fn, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.shift_.body, items, n_items);
+            break;
+        case EX_SHIFT0:
+            emit_abi_scan_expr(ctx, e->as.shift0_.k_fn, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.shift0_.body, items, n_items);
+            break;
+        case EX_CLONEABLE_RESET:
+            emit_abi_scan_expr(ctx, e->as.cloneable_reset_.body, items, n_items);
+            break;
+        case EX_CLONEABLE_SHIFT:
+            emit_abi_scan_expr(ctx, e->as.cloneable_shift_.k_fn, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.cloneable_shift_.body, items, n_items);
+            break;
+        case EX_CATCH_UNWIND:
+            emit_abi_scan_expr(ctx, e->as.catch_unwind_.thunk, items, n_items);
+            break;
+        case EX_CATCH_PANIC_OF:
+            emit_abi_scan_expr(ctx, e->as.catch_panic_of_.thunk, items, n_items);
+            break;
         default:
             break;
     }

@@ -1,5 +1,7 @@
 # A default method's spliced instance copy is typed at the carrier, not the instance
 
+**RESOLVED 2026-09-16** -- see Resolution at the end.
+
 **Severity: high** -- a **silent wrong answer**. The instance dispatches
 correctly and the emitted function has the wrong signature, so the arguments
 are converted on the way in. `tur check` is clean, cc is happy (the conversion
@@ -122,3 +124,25 @@ it is not overridable, which is usually what was wanted.
 - A sibling with `int` instances only, so a fix that works by accident at the
   carrier type is not mistaken for a real one.
 - `tests/fixtures/ord-max-min` already covers the workaround shape.
+
+## Resolution (2026-09-16)
+
+Fixed along the filed direction, one step further back than it proposed. The
+spliced default's annotations are the CLASS signature's -- the same
+`param_types` / `return_type` (and refinements, and `param_explicit_type`)
+`parse_typeclass_method` already recorded -- so `elab_definstance` now treats a
+spliced form's `: a` annotations as already-consumed: the parameter loop skips
+them and the return-annotation branch skips past `: a`, and the parameters and
+result inherit the class signature under the instance substitution exactly as
+a bare-parameter `(pick [x y] ...)` does (`impl_is_default_arr`, set where the
+splice happens). No new substitution machinery: the `TY_TYVAR` /
+`ret_was_class_var` paths the explicit-method case already takes do the work,
+so the spliced copy is a per-instance commit like any other.
+
+`(g 2.5 7.1)` answers `2.5`; the emitted signature is
+`double __inst_C_pick_float(double, double)`. Pinned by
+`tests/fixtures/typeclass-default-method-class-var-result`, which has the
+float, cstr and int rows plus the int-only control class the report asked for.
+`stdlib/typeclass-ord.tur`'s `max`/`min` stay constrained generic defns -- the
+"better tool anyway" reasoning in the report still holds; only its first
+reason is gone.

@@ -1,0 +1,14 @@
+;; perform-does-not-typecheck-its-arguments, third pass (aggregates and
+;; pointer-shaped parameters).  The primitive pass measured what an ordinary
+;; call accepts between scalars and made `perform` agree; this pass did the
+;; same for the shapes it left alone.  Each row of the table in
+;; elab_effects.c's perform_arg_shape_mismatch is a call's verdict on one
+;; program; this fixture is the perform side of one row.
+;;
+;; (Option int) <- (some "x").  Same head, different element: a call compares
+;; the full applied type, and so does perform.
+(defeffect E [o : (Option int)] : int)
+(defn work [] : int (perform (E (some "x"))))
+(defn main [] : int
+  (println (handle (work) (E [o] k) (resume k (unwrap-or o 0))))
+  0)

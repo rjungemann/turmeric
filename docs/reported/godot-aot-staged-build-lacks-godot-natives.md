@@ -122,7 +122,7 @@
 >
 > "turi has no FFI" is too strong: `dlsym` and `call-ptr` exist, gated behind
 > `(unsafe ...)`, and the known interpreter divergence
-> ([jit-ffi-interp-refuses-parametric-record-field](jit-ffi-interp-refuses-parametric-record-field.md))
+> ([jit-ffi-interp-refuses-parametric-record-field](../archive/jit-ffi-interp-refuses-parametric-record-field.md), since resolved)
 > is one record shape, not the whole surface. It also does not matter here --
 > the interpreter reaches the natives through the env by name and never needs an
 > FFI for them, which is why the interpreter path has worked all along while
