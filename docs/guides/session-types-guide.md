@@ -85,6 +85,13 @@ let [[v b] recv(b)]  ; v = 42, b advances from Recv<int,Close> to Close
 
 **close** -- consume the channel after the protocol ends (type `Close`).
 
+> **Payload types: use `int` or `bool` for now.** The compiled runtime carries
+> every message as an `int64_t`. A `float` payload is **silently truncated**
+> (`7.25` arrives as `7`); a `cstr` or a delegated endpoint fails to build on
+> macOS; a by-value struct fails to build everywhere. All four type-check, and
+> all four are correct under `tur --interpret`. See
+> [session-payloads-are-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/reported/session-payloads-are-int64-only.md).
+
 ### Choice: choose-left, choose-right, offer
 
 When the sender can choose between two branches use `choose-left` / `choose-right`;
@@ -174,6 +181,10 @@ match recv-timeout(ch 500)  ; 500 ms deadline
     close(ch)
 ```
 
+`recv-timeout` is **binary-session only** -- multi-party role endpoints have no
+timed receive, so a role blocked in `recv-from` has no bounded wait. See
+[multi-party-sessions-have-no-timed-receive](https://github.com/rjungemann/turmeric/blob/main/docs/reported/multi-party-sessions-have-no-timed-receive.md).
+
 ### Duality
 
 The duality rule governs how the two ends of a channel relate:
@@ -219,6 +230,13 @@ defn logged-send [^linear ch :(Session (Send int Close)) val :int] :int
 See `tests/fixtures/session-effects/` for a complete example.
 
 ---
+
+> **About `spawn` / `join` in the examples below.** These are not built-ins --
+> each example assumes a peer-spawn helper you supply. The fixtures hand-roll one
+> as inline C over `pthread_create`. Note that writing the peer with `async`
+> instead **deadlocks the compiled binary** (it runs correctly under
+> `--interpret`): see
+> [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md).
 
 ## Multi-Party Session Types (SS5-SS8)
 

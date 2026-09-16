@@ -196,6 +196,35 @@ Two fixtures also want fixing rather than duplicating:
   with `choose-right` at all (its inferred recv-pair return decays, the KB-029
   note in that file), which is a pre-existing surface gap worth its own look.
 
+### S3.5 -- Feature-surface gaps (separate pass, same audit)
+
+A follow-on pass looked at the session *feature* surface rather than its
+interpreter parity, and found two things that are not turi-specific at all. They
+are sequenced here because S3's new fixtures are where they would be pinned.
+
+- **Payloads are int64-only** --
+  [session-payloads-are-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/reported/session-payloads-are-int64-only.md),
+  **severity high and the most consequential finding of either pass.** A `float`
+  payload is silently truncated on the compiled path (`7.25` -> `7`, no
+  diagnostic); `cstr` and delegated endpoints fail to build on macOS; by-value
+  structs fail everywhere. All four type-check and all four are correct under
+  `--interpret`. It is why every fixture and every guide example sends `int`, and
+  it means **delegation -- a headline session-type feature -- does not build on
+  macOS**. Fix the float row first (it is the only silent one); the floor is a
+  diagnostic instead of a wrong number.
+- **No multi-party timed receive** --
+  [multi-party-sessions-have-no-timed-receive](https://github.com/rjungemann/turmeric/blob/main/docs/reported/multi-party-sessions-have-no-timed-receive.md).
+  Binary has `recv-timeout`, multi-party has nothing. Sequence it after S1: a
+  fiber-context timed receive is broken for binary sessions today, and
+  multi-party would inherit the same hole.
+
+Two things this pass checked and found **working**, recorded so they are not
+re-investigated: multi-party recursion (`loop`/`continue`, guarded by a `choice`)
+projects and runs correctly end-to-end, and multi-party `choice` projects
+correctly. The `session-project-loop` fixture only type-checks them -- its `main`
+prints `"ok"` and never runs the protocol -- so S3 should give that one a real
+body.
+
 ### S4 -- Harden the intercept (optional)
 
 `eval_session_intercept` dispatches by `memcmp` against the **emitted C text**:
@@ -284,6 +313,11 @@ wrong answer. Half a day, no new surface.
 spawn stand-in from the stdlib, the fixtures, and the guide; halves the session
 fixture count; and takes interpreter coverage from 29/54 to ~44/44. S2 is the
 only phase with real design in it.
+
+**S3.5's payload row outranks all of it on severity.** It is the only finding in
+either pass that is a silent wrong answer on the default path, and it is
+independent of every other phase -- do not let the turi sequencing above delay
+it.
 
 **S6** is the one to do if the goal is to *expand* session types rather than
 finish porting them -- it is a capability the compiled backend cannot have, it
