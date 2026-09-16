@@ -38,7 +38,8 @@
 ;;     EX_MATCH"), with or without a constructor argument;
 ;;   - a `handle` whose result is a by-value defdata ADT evicts
 ;;     ("BODY-STRUCT-CORE"); a defstruct record (`mk-box` below) is fine.
-;; Both are filed as colored-call-inside-match-evicts-the-cps-backend.md.
+;; Both were filed as colored-call-inside-match-evicts-the-cps-backend.md and
+;; are resolved (2026-09-16); this fixture keeps its original shapes.
 (defeffect Ask [] : int)
 (defstruct Box [v : int])
 (defstruct Pair2 [a : int b : int])

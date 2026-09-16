@@ -7234,6 +7234,70 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             emit_abi_note_instance_dict_ref(ctx, e->as.dict_.instance);
             break;
         }
+        /* abi-scan-misses-effect-operands: the effect family had no arms, so a
+         * generic or #{Construct} call sitting in a `perform` ARGUMENT or in a
+         * `resume` VALUE was never interned -- `(perform (EO (some 5)))` in a
+         * colored function emitted the unspecialized `some(...)` (an implicit
+         * declaration) and a handler clause's `(resume k (unwrap-or o 0))`
+         * emitted an undefined `unwrap_hyor`.  Same missing-arm class as the
+         * EX_HANDLE / EX_MATCH arms above and the CPS coloring walks
+         * (cps-edge-walk-misses-nodes-and-colored-frames-leak): a node kind
+         * added after the walk was written is a silent hole under it. */
+        case EX_PERFORM:
+            if (e->as.perform_.perform)
+                for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                    emit_abi_scan_expr(ctx, e->as.perform_.perform->args[i], items, n_items);
+            break;
+        case EX_RESUME:
+            if (e->as.resume_.resume) {
+                emit_abi_scan_expr(ctx, e->as.resume_.resume->k, items, n_items);
+                emit_abi_scan_expr(ctx, e->as.resume_.resume->value, items, n_items);
+            }
+            break;
+        case EX_DISCONTINUE:
+            if (e->as.discontinue_.discontinue) {
+                emit_abi_scan_expr(ctx, e->as.discontinue_.discontinue->k, items, n_items);
+                emit_abi_scan_expr(ctx, e->as.discontinue_.discontinue->exception, items, n_items);
+            }
+            break;
+        case EX_HANDLER_LIT: {
+            const HandleExpr *h = e->as.handler_lit_.handle;
+            if (h)
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    emit_abi_scan_expr(ctx, h->cases[i].body, items, n_items);
+            break;
+        }
+        case EX_WITH_HANDLER:
+            emit_abi_scan_expr(ctx, e->as.with_handler_.handler, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.with_handler_.body, items, n_items);
+            break;
+        case EX_DEFER:
+            emit_abi_scan_expr(ctx, e->as.defer_.body, items, n_items);
+            break;
+        case EX_RESET:
+            emit_abi_scan_expr(ctx, e->as.reset_.body, items, n_items);
+            break;
+        case EX_SHIFT:
+            emit_abi_scan_expr(ctx, e->as.shift_.k_fn, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.shift_.body, items, n_items);
+            break;
+        case EX_SHIFT0:
+            emit_abi_scan_expr(ctx, e->as.shift0_.k_fn, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.shift0_.body, items, n_items);
+            break;
+        case EX_CLONEABLE_RESET:
+            emit_abi_scan_expr(ctx, e->as.cloneable_reset_.body, items, n_items);
+            break;
+        case EX_CLONEABLE_SHIFT:
+            emit_abi_scan_expr(ctx, e->as.cloneable_shift_.k_fn, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.cloneable_shift_.body, items, n_items);
+            break;
+        case EX_CATCH_UNWIND:
+            emit_abi_scan_expr(ctx, e->as.catch_unwind_.thunk, items, n_items);
+            break;
+        case EX_CATCH_PANIC_OF:
+            emit_abi_scan_expr(ctx, e->as.catch_panic_of_.thunk, items, n_items);
+            break;
         default:
             break;
     }

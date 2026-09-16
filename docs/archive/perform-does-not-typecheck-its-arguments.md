@@ -267,8 +267,8 @@ Pinned by six `errors/` fixtures (`perform-arg-aggregate-def-mismatch`,
 `-scalar-into-aggregate-param`, `-aggregate-into-pointer-param`,
 `-cstr-into-ptr-void-param`, `-option-element-mismatch`,
 `-nil-into-cstr-param`) and the positive
-`perform-arg-aggregate-and-pointer-shapes`. One accepted row is not pinned
-positively: a by-value `(Option int)` through the effect slot passes the
-check but the CPS emitter cannot yet lower `(some 5)` there -- that is
-`colored-call-inside-match-evicts-the-cps-backend`'s second shape, still
-open, not this check's.
+`perform-arg-aggregate-and-pointer-shapes`, whose by-value `(Option int)`
+row first failed for an unrelated reason -- the ABI specialization scan had
+no arm for a `perform` argument or a `resume` value, so `(some 5)` and
+`(unwrap-or o 0)` were emitted unspecialized in the colored function -- fixed
+the same day in `emit_abi_scan_expr` (the effect family joins the walk).

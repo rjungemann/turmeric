@@ -131,8 +131,7 @@ the matching entry's drop right after its call statement, spelled on the
 ATOM (the binder is in scope in the consuming segment where the direct temp
 may not be, once a continuation is lifted). An entry never consumed stays a
 status-quo leak, never a free; the table is cleared per emitted function so
-a binder id cannot match across functions; a cps->cps tail call cannot free
-after itself and is left as before. The emitted line is
+a binder id cannot match across functions. The emitted line is
 
 ```c
 if ((__t2)) tur_region_free((void *)(intptr_t)(__t2));
@@ -146,3 +145,25 @@ direct emitter's own shallow free.
 `typed/result-basic` colors 23 functions and runs leak-clean under
 `tests/run-leak-check.sh`. The stale "DELIBERATELY NOT the shared
 enumerator" note at the arm is rewritten to say why it is shared now.
+
+### The cps->cps tail arm (2026-09-16, later the same day)
+
+A cps->cps tail call is `return f__cps(args, __kont);` -- the callee
+delivers to the continuation itself, so there is no statement after it to
+hang a free on. It did not need the DK boundary reaper (`__dk_reap_ptr`,
+which would extend the box's lifetime to the driver's entry boundary and
+frees with plain `free`, an allocator mismatch under regions): `f__cps` runs
+the callee AND the rest of the computation before returning, and the callee
+was proven non-retaining at elab, so once it returns the box is dead. When a
+deferred entry matches one of the tail call's atoms the emitter binds the
+answer, fires the drop, and returns it -- the precise lifetime, at the cost of
+one lost C tail call for exactly that shape; without an entry the tail call
+is emitted as before.
+
+Measured unreachable today, which is why no fixture pins it: an erased
+carrier box only arises for a sum with an UNPINNED type variable (`(ok 1)` at
+`(Result int ?)`), and a colored callee declaring such a parameter is
+signature-rejected by the mono-template invariants (`SIG-REJECT`); a
+concrete `(Result int cstr)` pins the arm and the value is by-value, with
+nothing to free. The guard is self-gated and inert until one of those
+premises moves.

@@ -70,7 +70,7 @@ regenerated in the same change.
 
 Two adjacent CPS-backend limits a colored constructor argument merely *reaches*
 are NOT this report and are filed separately as
-[colored-call-inside-match-evicts-the-cps-backend](../reported/colored-call-inside-match-evicts-the-cps-backend.md):
+[colored-call-inside-match-evicts-the-cps-backend](colored-call-inside-match-evicts-the-cps-backend.md):
 a `match` anywhere in a colored function, and a `handle` whose result is a
 by-value defdata ADT. The measurement that separates them is that the `let`
 control spelling hits both identically.

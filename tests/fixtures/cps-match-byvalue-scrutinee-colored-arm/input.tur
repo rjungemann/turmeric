@@ -1,0 +1,37 @@
+;; colored-call-inside-match-evicts-the-cps-backend, shape 1 -- RESOLVED.
+;;
+;; A `match` whose arm makes a COLORED call used to evict the whole function
+;; from the CPS backend ("this effect operation has no lowering here") when
+;; the scrutinee was a BY-VALUE ADT: the translation gate (match_dk_ok)
+;; admitted only boxed tagged sums, and the fallback (wholesale delegation to
+;; the direct emitter) cannot take a colored call.  The CPS match emitter
+;; already had a by-value scrutinee path; the gate now admits a by-value
+;; record or flat sum too, and a single-constructor record (no `tag` word)
+;; emits its one arm unconditionally.
+(defeffect Ask [] : int)
+(defdata Wrap (MkWrap int))
+(defdata Shape [] (Circle [r : int]) (Sq [s : int]))
+(defn g [] : int (perform (Ask)))
+
+;; single-constructor record: no tag word
+(defn via-match [] : int (match (MkWrap 1) (MkWrap n) (+ n (g))))
+
+;; multi-constructor by-value sum, colored call in both arms
+(defn area [s : Shape] : int
+  (match s
+    (Circle r) (* r (g))
+    (Sq q)     (+ q (g))))
+
+;; a trailing catch-all on the sum
+(defn kind [s : Shape] : int
+  (match s
+    (Circle r) (+ r (g))
+    _          (g)))
+
+(defn main [] : int
+  (println (handle (via-match) (Ask [] k) (resume k 41)))
+  (println (handle (area (Circle 2)) (Ask [] k) (resume k 5)))
+  (println (handle (area (Sq 3)) (Ask [] k) (resume k 5)))
+  (println (handle (kind (Sq 9)) (Ask [] k) (resume k 7)))
+  (println (handle (kind (Circle 1)) (Ask [] k) (resume k 7)))
+  0)

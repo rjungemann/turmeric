@@ -3270,8 +3270,24 @@ static bool match_dk_ok(const Expr *e) {
      * word) AND at least one field-bearing ctor (so a value is a pointer to a
      * `tur_adt_<Name>` struct read via `->tag` / `->Ctor.fieldN`, the int64
      * carrier the emitter casts).  This excludes bare-int enums (all-nullary --
-     * the value IS the tag, no struct) and by-value / flat-product ADTs. */
-    if (def->n_ctors < 2) return false;
+     * the value IS the tag, no struct).
+     *
+     * colored-call-inside-match-evicts-the-cps-backend: a BY-VALUE ADT
+     * scrutinee (a `defdata` record or flat sum -- `adt_is_byvalue_product`,
+     * not `:heap`) is admitted too.  emit_match already binds a by-value
+     * scrutinee to a local copy and reads through its address (the SR1 path),
+     * so the only thing keeping `(match (MkWrap 1) (MkWrap n) (+ n (g)))` out
+     * of the CPS backend was this gate -- and with `(g)` colored, the fallback
+     * (safe_to_delegate) cannot take it either, so the function evicted with
+     * "no lowering here".  A single-constructor record has NO tag word (its
+     * one arm is unconditional at emit); a by-value sum has the same `tag` /
+     * `as.<Ctor>` layout the boxed one reads.  All-nullary enums stay out on
+     * both paths (the value is the bare tag).  Whether the by-value atom may
+     * cross a DK slot at all is slot_box_ty's question (owning-free products
+     * only), asked by term_core_ok on the scrutinee atom exactly as before. */
+    bool byval = adt_is_byvalue_product(def) && !def->is_heap;
+    if (def->n_ctors < 2 && !byval) return false;
+    if (def->n_ctors < 1) return false;
     bool has_field_ctor = false;
     for (uint32_t c = 0; c < def->n_ctors; c++)
         if (def->ctors[c] && def->ctors[c]->n_fields > 0) { has_field_ctor = true; break; }
