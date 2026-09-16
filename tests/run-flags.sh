@@ -976,7 +976,12 @@ fi
 # for every file and every base. This replaces lang-layer-toggle-off, which
 # asserted the opposite of the post-decommission contract: that a dropped
 # `stringed` layer deactivated the dispatch mid-session.
-out=$(printf '#s"first"\n#lang turmeric/sweet\n#s"second"\n:quit\n' \
+# The blank line after the sweet-exp expression is required, not incidental:
+# the REPL's sweet continuation detection holds an indented block open until a
+# dedent or a blank line, so a piped sweet expression followed straight by
+# :quit is never flushed and evaluates to nothing at all. Without it this
+# assertion fails identically whatever #s"..." does.
+out=$(printf '#s"first"\n#lang turmeric/sweet\n#s"second"\n\n:quit\n' \
       | "$TUR" repl 2>&1); rc=$?
 if ! grep -q '=> "first"' <<< "$out"; then
     fail "string-literal-always-on" "#s\"...\" did not dispatch with no #lang line at all"
