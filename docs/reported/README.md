@@ -1868,6 +1868,27 @@ follow-up row below.
 | ~~[instance-method-call-inside-an-instance-body-takes-the-enclosing-result-type](../archive/instance-method-call-inside-an-instance-body-takes-the-enclosing-result-type.md)~~ | -- | **RESOLVED 2026-09-15** (archived), filed and fixed in the same change. `emit_abi_register_call`'s by-name binding rehydration matched the CALLEE's class type parameter against the enclosing spec's binding for the same name -- but a class's type parameter carries one name across every instance, and the callee's instance already pins it (`__inst_D_dec_int`'s `a` IS `int`). Inside `D [Pt]`'s body that minted `__inst_D_dec_int__spec__tur_adt_Result__Pt__cstr_...` over a body returning `Result int cstr`. The tyvar-name capture of `generic-unwrap-specializes-by-the-enclosing-type-argument` one layer up -- a class's type parameter rather than a `defn`'s. Latent while every instance is carrier-shaped; one by-value instance result exposes it. The rehydration now takes the pin from the callee's own `owner_instance->type_args`. Pinned by `tests/fixtures/instance-method-forwards-inside-instance-body`, whose primitive instances FORWARD to a typed function -- an inline `(ok ...)` body specializes to the same wrong result type and stays self-consistent, which is why the sibling `struct-instance-byvalue-result-consumer` fixture does not catch it |
 
 
+## Found auditing session types under the interpreter (filed 2026-09-16)
+
+Three defects found while answering "can session types be expanded on turi?"
+(the answer, and the measurements behind it, are in
+[turi-session-expansion-plan](../upcoming/turi-session-expansion-plan.md)). The
+headline of that audit is that the parity matrix row for Sessions is **stale**:
+15 programs covering every session fixture shape run correctly under
+`tur interpret`, and the carve the row names was deleted when Slice A landed.
+These three are what is genuinely left.
+
+They interact, so read them together: the third one is why the second one's
+fixture passes vacuously, and it also produced two false leads about the
+interpreter's deadlock detection -- that detection is **sound**, do not go
+hunting for a false-positive deadlock in the channel runtime.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [compiled-async-fiber-deadlocks-on-a-session-op](compiled-async-fiber-deadlocks-on-a-session-op.md) | medium-high | `(async (fn [] (recv ch)))` -- the obvious way to write a session peer -- compiles clean and then **hangs the binary forever with no diagnostic**, while the identical program runs correctly under `--interpret`. A parity gap in the unexpected direction: the tree-walker is the more capable backend, because its rendezvous yields to the fiber scheduler where the compiled one blocks the only OS thread on a condvar. Known inside one fixture comment and nowhere else. It is also why the session fixture suite is written twice: every compiled fixture hand-rolls its peer as `(defn spawn [f : ptr<void>] : ptr<void>)` inline-C over `pthread_create` -- the `:int`/`ptr<void>` stand-in CLAUDE.md forbids, reproduced in 20+ fixtures and in the user guide's examples -- and that inline-C is exactly what `run-turi.sh` skips, so **25 of 54 session fixtures never run under the interpreter** |
+| [turi-fiber-recv-timeout-ignores-its-deadline](turi-fiber-recv-timeout-ignores-its-deadline.md) | medium | A `recv-timeout` inside an `async` fiber under `--interpret` waits indefinitely and takes the **Left (success)** branch on a value that arrives long past the deadline; compiled takes **Right (timeout)**. Silent wrong branch, no diagnostic. The same op in the **main** context is correct, which is why no fixture catches it -- every shipped `recv-timeout` fixture puts the timed receive on the main side. The fiber arm parks with no timer armed, so the loop's deadline re-check is unreachable until the value it was meant to preempt arrives; an in-tree comment predicts exactly this. The interpreter's own timer wheel (`turi_timer_add`, what `sleep-async` uses) is the fix -- the new part is a channel wait with two wake sources where today there is one `recv_waiter` slot |
+| [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md) | medium | Under `--interpret`, an `async` fiber that sleeps via `(await (sleep-async n))` **never runs anything after the sleep**; the future resolves anyway, `(await t)` returns, the program exits 0. Bare `(sleep-async n)` works, and the awaited form in **main** context works, so it is the `await`-on-a-non-future path in fiber context (`native_sleep_async` already blocks and returns nil in a fiber). Not session-specific, but it makes `session-timeout-expired-turi` pass for the wrong reason -- that fixture's peer never reaches its `send`, so it prints `timeout` because nothing is ever deposited, and would pass identically with `recv-timeout` stubbed out |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
