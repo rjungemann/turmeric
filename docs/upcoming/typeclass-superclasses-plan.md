@@ -251,6 +251,20 @@ it.
 
 ## 3. Implementation phases
 
+**The numbering is the dependency order.** Each phase depends on the one
+before it; nothing here is a preference about sequencing. Two edges are the
+ones that actually constrain the schedule, and both were mis-stated in an
+earlier draft of this plan:
+
+- **SC7 (graduation) gates every stdlib change.** A gated feature cannot be a
+  load-bearing stdlib dependency (4.2), so SC8 cannot precede SC7 -- and
+  because `beta` means a one-release soak, SC8 is at least one release behind
+  SC4, not immediately after it.
+- **The doc work splits across that gate.** SC6 documents the gated feature;
+  SC9 documents what the stdlib ended up doing. Fusing them into one phase --
+  as an earlier draft did -- makes the plan unsatisfiable, because half the
+  work is unblocked at SC4 and half is blocked until SC8.
+
 ### SC0 -- Documentation correction (independently shippable; land first)
 
 Fixes the two false claims that motivated this investigation. **No compiler
@@ -323,50 +337,7 @@ wait behind a post-v1 feature.
   constraints, not just ground types: `(definstance Monoid [Vec] [(Monoid A)]
   ...)` needs `Semigroup [Vec]`, which may itself be parametric.
 
-### SC5 -- Documentation for the shipped feature
-
-- **`docs/guides/lattice-guide.md` -- the explicitly requested update.** Two
-  edits, and they must be sequenced correctly:
-  - The `## Monoid` prose at :77-79 currently reads "It is declared **flat**,
-    not as a subclass of `Semigroup`, because `defclass` has no superclasses --
-    so a function needing both lists both constraints." This is **true today**
-    and must not be pre-emptively edited: changing it before SC1-SC4 land makes
-    the guide wrong in the other direction. Once the feature ships, replace it
-    with the subclass declaration and the single-constraint function:
-
-    ```turmeric
-    (defclass Monoid [a]
-      [(Semigroup a)]
-      (mempty [] : a))
-
-    (defn double-up [^Monoid A] [x : A] : A
-      (combine x x))
-    ```
-
-    Update the paired `sweet-exp` block directly beneath it -- the guide carries
-    both spellings for every example, and a half-updated pair is its own defect.
-  - Whether `stdlib/typeclass-lattice.tur` actually adopts the preamble is a
-    separate decision (see 4.2); the guide must describe what the stdlib does,
-    not what it could do. **Do not write SC5's lattice-guide edit until that
-    decision is made and the stdlib matches it.**
-
-  Per the repo's no-archeology rule, the guide states current behavior only --
-  no "this used to be flat" note. The history belongs on this plan.
-
-- `docs/guides/typeclass-guide.md` -- new `## Superclasses` section between
-  "Constrained Functions" and "Associated Types": the syntax, entailment, the
-  instance obligation, acyclicity, and the `--enable=` gate while the
-  experiment is live. This is also what makes the SC0 cross-reference from
-  `introducing-saffron.md` honest again, at which point that line can go back
-  to saying "superclasses".
-- `docs/guides/turi-parity-guide.md` -- re-add a `superclasses` row once both
-  back ends agree, not before.
-- `docs/guides/experimental-flags-guide.md` -- the new gate.
-- `stdlib/typeclass-lattice.tur:60` and `:258` -- the two in-source comments
-  asserting "defclass has no superclasses", if and only if the stdlib adopts
-  the preamble.
-
-### SC6 -- Tests
+### SC5 -- Tests
 
 New fixtures under `tests/fixtures/` (ASCII only, `--` not em dashes):
 
@@ -389,6 +360,100 @@ without `requires.*` markers. If they do not, that divergence is the finding.
 
 Run `bash tests/run.sh` with `timeout: 720000` per the repo rule.
 
+**Precedes SC7.** An experiment cannot graduate on an untested surface, so this
+is a gate on graduation, not a trailing chore.
+
+### SC6 -- Documentation while the feature is gated
+
+The half of the doc work that depends only on the implementation, not on
+graduation or on any stdlib change:
+
+- `docs/guides/typeclass-guide.md` -- new `## Superclasses` section between
+  "Constrained Functions" and "Associated Types": the syntax, entailment, the
+  instance obligation, acyclicity, and the `--enable=` gate while the
+  experiment is live.
+- `docs/guides/experimental-flags-guide.md` -- the new gate.
+
+Once this section exists, `introducing-saffron.md:599` can go back to saying
+"superclasses" -- SC0 pointed it at "constraints" precisely because the section
+it promised did not exist.
+
+### SC7 -- Graduation
+
+The step that makes the feature unconditional, and therefore the step every
+stdlib change waits on. Per
+[experimental-flags-guide.md](../guides/experimental-flags-guide.md):
+
+1. **prototype -> beta.** Freeze the surface; flip the row's lifecycle so
+   TUR-W0061 replaces TUR-W0060.
+2. **Soak one release cycle.** `beta` means exactly that; this is why stdlib
+   adoption is at least one release behind SC4, not immediately after it.
+3. **Graduate.** Delete the `EXPERIMENTS[]` row, move the name to
+   `GRADUATED[]` so a lingering `--enable=class-superclasses` is a TUR-W0063
+   no-op rather than a hard error, and make the parse unconditional.
+
+**Recommendation: keep no bisection hatch.** The guide warns that a surviving
+hatch's harness *inverts* at graduation rather than retiring, and that four
+graduations hit this with three getting it right (`sr2-carrier-seam-rotted`).
+That trap applies to features that flipped a *representation* default, where
+both paths compiled. Superclasses are purely additive syntax: before
+graduation a preamble does not parse at all, so there is no old path to keep
+covered and no `TUR_CLASS_SUPERCLASSES=0` worth carrying. Confirm this when
+the phase is written rather than inheriting it from here.
+
+Precedent for the whole shape: `backtrackable-state` (`experiments.c:34`)
+graduated 2026-08-29, and only then did `stdlib/trail.tur` become
+unconditionally autoloaded. Gate -> graduate -> stdlib, in that order.
+
+### SC8 -- stdlib adoption (conditional on 4.2)
+
+Gated on SC7, and on the 4.2 decision actually going the adopting way -- this
+phase is conditional, not assumed.
+
+- `stdlib/typeclass-lattice.tur` grows the preamble on the classes that want
+  it, and the two in-source comments at `:60` and `:258` asserting "defclass
+  has no superclasses" come out.
+- **The retrofit audit (4.1) happens here, and it is the real cost.** Adding
+  `[(Semigroup a)]` to an existing `Monoid` retroactively obliges every
+  existing `Monoid` instance -- including ones in downstream spices -- to have
+  a `Semigroup` instance. Graduation defers this; it does not remove it. Audit
+  `/Users/rjungemann/Projects/turmeric-spices` against `origin/main`, not a
+  stale working tree.
+
+### SC9 -- Documentation after stdlib adoption
+
+The half of the doc work that could not be written earlier, because a guide
+must describe what the stdlib *does*, not what it could do:
+
+- **`docs/guides/lattice-guide.md` -- the explicitly requested update.** The
+  `## Monoid` prose at :77-79 currently reads "It is declared **flat**, not as
+  a subclass of `Semigroup`, because `defclass` has no superclasses -- so a
+  function needing both lists both constraints." That is **true until SC8
+  lands**; editing it any earlier makes the guide wrong in the other
+  direction. Replace it with the subclass declaration and the
+  single-constraint function:
+
+  ```turmeric
+  (defclass Monoid [a]
+    [(Semigroup a)]
+    (mempty [] : a))
+
+  (defn double-up [^Monoid A] [x : A] : A
+    (combine x x))
+  ```
+
+  Update the paired `sweet-exp` block directly beneath it -- the guide carries
+  both spellings for every example, `check-guide-pairs.py` enforces it in CI,
+  and a half-updated pair is its own defect.
+
+  Per the repo's no-archeology rule, the guide states current behavior only --
+  no "this used to be flat" note. The history belongs on this plan.
+
+- `docs/guides/turi-parity-guide.md` -- re-add a `superclasses` row. It waits
+  until here because a parity table describes the shipped language, and a
+  gated feature is not that. SC0 removed the row precisely because it claimed
+  parity for something absent.
+
 ## 4. Risks and decisions
 
 ### 4.1 Retrofitting a superclass is a breaking change
@@ -408,9 +473,9 @@ post-v1 rather than opportunistic.
 But a gated feature cannot be a load-bearing stdlib dependency -- the stdlib
 must compile with the experiment off. So either the stdlib waits for
 graduation, or it carries both spellings behind the gate, which is worse.
-**Recommendation: stdlib adoption waits for graduation.** SC5's
-`lattice-guide.md` edit is therefore gated on that same decision, which is why
-SC5 explicitly forbids writing it early.
+**Recommendation: stdlib adoption waits for graduation.** That is SC7 -> SC8
+in the phase list; SC9's `lattice-guide.md` edit is gated on SC8 in turn, which
+is why it cannot be written earlier.
 
 ### 4.3 Out of scope
 
@@ -436,7 +501,7 @@ Land **SC0 now, on its own.** The two false doc claims are a live
 correctness defect in the published guides, they are what made this question
 necessary, and they cost nothing to fix.
 
-Hold **SC1-SC6 as post-v1.** The feature is well-scoped, needs no codegen, and
+Hold **SC1-SC9 as post-v1.** The feature is well-scoped, needs no codegen, and
 has a clean single-site payoff, but it is ergonomics rather than
 expressiveness -- everything it enables is already writable by listing both
 constraints, which the lattice guide documents and which compiles today. Per
