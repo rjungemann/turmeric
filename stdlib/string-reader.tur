@@ -1,28 +1,30 @@
-;;; tur/string-reader -- opt-in `#s"..."` owned-String literal syntax.
+;;; tur/string-reader -- RETIRED no-op; `#s"..."` is now always available.
 ;;;
 ;;; `#s"text"` reads as `(string/from-cstr "text")` -- a fresh owned String --
-;;; while bare `"text"` stays a borrowed `cstr` (the owned-string-type-plan keeps
-;;; the default literal typing unchanged).
+;;; while bare `"text"` stays a borrowed `cstr`.  That dispatch used to be
+;;; opt-in, through either this file or the `stringed` `#lang` layer.  It is
+;;; now unconditional: the reader installs it for every file, whatever its
+;;; base dialect, so neither directive is needed any more.
 ;;;
-;;; Two lines, because a reader macro and the code it expands to live in
-;;; different phases:
+;;; What a program still needs is the code the expansion CALLS:
 ;;;
-;;;   #use-reader-macros "stdlib/string-reader.tur"   ;; READ time: enable #s"..."
-;;;   (load "stdlib/string.tur")                       ;; EVAL time: the String code
+;;;   (load "stdlib/string.tur")   ;; EVAL time: string/from-cstr and friends
 ;;;
-;;;   ... #s"hello" ...   ;; => (string/from-cstr "hello"), an owned String
+;;;   ... #s"hello" ...            ;; => (string/from-cstr "hello"), owned
 ;;;
-;;; Why not a single `(load)`?  A reader macro must be registered while the file
-;;; is being READ; `(load ...)` runs later, at EVAL time, after `#s"..."` has
-;;; already been tokenized -- so a plain load can never enable `#s` for the file
-;;; that loads it.  The read-time `#use-reader-macros` directive is what registers
-;;; it.  (Both directives accept the stable `stdlib/...` path: `#use-reader-macros`
-;;; falls back to TUR_STDLIB_DIR just as `(load)` does.)
+;;; The read-time/eval-time split is why that `(load)` is still required and
+;;; is genuinely non-obvious: `#s"..."` is expanded while the file is being
+;;; READ, long before any `(load ...)` form runs, so the load cannot enable
+;;; the syntax -- it only supplies the function the syntax expands into.
 ;;;
-;;; This file is intentionally definition-ONLY: it is meant to be named by
-;;; `#use-reader-macros` (which registers the macro below and discards everything
-;;; else).  Do not add a `(load ...)` here -- a file that is both `#use`-d and
-;;; `(load)`-ed would register the macro twice ("already registered").
+;;; This file is kept, empty of definitions, for one minor line so that a
+;;; file in the wild carrying `#use-reader-macros "stdlib/string-reader.tur"`
+;;; keeps compiling and its reader learns why.  Re-registering `#s"` here
+;;; would be a hard "reader macro '#s' already registered" against the strict
+;;; batch registry -- a working file turned into a compile error -- which is
+;;; exactly what this no-op prevents.
 ;;;
-;;; Since: v2 (owned-string-type-plan literal ergonomics)
-(reader-macros/define 's :string '(string/from-cstr $body))
+;;; Delete at age-out (0.50.0); see
+;;; docs/archive/lang-layers-decommission-plan.md.
+;;;
+;;; Since: v2 (owned-string-type-plan literal ergonomics); retired at 0.49.0

@@ -968,24 +968,24 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# try-turmeric-lang-toggle-plan T0: #lang layer toggle + canonical reader name
+# #lang base switching in a REPL session + canonical reader name
 # ---------------------------------------------------------------------------
 
-# lang-layer-toggle-off: within ONE interpreter session, `#lang turmeric
-# stringed` must activate the #s"..." dispatch and a later `#lang turmeric`
-# must genuinely deactivate it (the layer set is assigned, not accumulated,
-# and turi_env_apply_lang wipes the session reader-macro registry). Before
-# the fix the second #s"..." kept reading as a String.
-out=$(printf '#lang turmeric stringed\n#s"on"\n#lang turmeric\n#s"off"\n:quit\n' \
+# string-literal-always-on: `#s"..."` needs no directive of any kind, and a
+# `#lang` switch cannot turn it off -- the dispatch is installed by the reader
+# for every file and every base. This replaces lang-layer-toggle-off, which
+# asserted the opposite of the post-decommission contract: that a dropped
+# `stringed` layer deactivated the dispatch mid-session.
+out=$(printf '#s"first"\n#lang turmeric/sweet\n#s"second"\n:quit\n' \
       | "$TUR" repl 2>&1); rc=$?
-if ! grep -q '=> "on"' <<< "$out"; then
-    fail "lang-layer-toggle-off" "stringed layer did not activate (#s\"on\" not evaluated)"
-elif grep -q '=> "off"' <<< "$out"; then
-    fail "lang-layer-toggle-off" "#s\"...\" still dispatched after the layer was dropped"
-elif ! grep -q "unknown reader string macro '#s'" <<< "$out"; then
-    fail "lang-layer-toggle-off" "expected an unknown-reader-macro error once stringed is off"
+if ! grep -q '=> "first"' <<< "$out"; then
+    fail "string-literal-always-on" "#s\"...\" did not dispatch with no #lang line at all"
+elif grep -q "unknown reader string macro '#s'" <<< "$out"; then
+    fail "string-literal-always-on" "#s\"...\" reported as an unknown dispatch"
+elif ! grep -q '=> "second"' <<< "$out"; then
+    fail "string-literal-always-on" "#s\"...\" stopped dispatching after a base switch"
 else
-    pass "lang-layer-toggle-off"
+    pass "string-literal-always-on"
 fi
 
 # reader-name-canonical: reader_type_name(READER_SWEET) reports the canonical
@@ -1002,16 +1002,19 @@ else
     pass "reader-name-canonical"
 fi
 
-# lang-layer-same-set-no-reset: repeating the SAME base+layer line must not
-# reset the session (turi_env_apply_lang is a no-op when nothing changes).
-out=$(printf '#lang turmeric stringed\n(def keep 41)\n#lang turmeric stringed\n(+ keep 1)\n:quit\n' \
+# lang-same-base-no-reset: repeating the SAME `#lang` line must not reset the
+# session (turi_env_apply_lang is a no-op when nothing changes).  Retargeted
+# from a base+layer line to a bare base when the layer axis was decommissioned;
+# the property being pinned -- identical directive is a no-op, bindings survive
+# -- is unchanged.
+out=$(printf '#lang turmeric\n(def keep 41)\n#lang turmeric\n(+ keep 1)\n:quit\n' \
       | "$TUR" repl 2>&1); rc=$?
 if ! grep -q "; reader already set to turmeric" <<< "$out"; then
-    fail "lang-layer-same-set-no-reset" "identical #lang line was not treated as a no-op"
+    fail "lang-same-base-no-reset" "identical #lang line was not treated as a no-op"
 elif ! grep -q "=> 42" <<< "$out"; then
-    fail "lang-layer-same-set-no-reset" "binding did not survive an identical #lang line"
+    fail "lang-same-base-no-reset" "binding did not survive an identical #lang line"
 else
-    pass "lang-layer-same-set-no-reset"
+    pass "lang-same-base-no-reset"
 fi
 
 # repl-doc-no-exceptions: the :doc builtin table must not resurrect

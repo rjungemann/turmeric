@@ -4468,19 +4468,12 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
     }
     r.user_macros = reg;
 
-    /* L2: activate every `#lang` reader layer before the first form.  Each
-     * hook registers its `#`-dispatch into `reg` (idempotently, so a
-     * persistent REPL/interp registry is safe).  `file->lang_layers` (not
-     * eff_file's) carries the set: the sweet-exp xform copies it via `*xfile
-     * = *file`, and layers are orthogonal to the base reader. */
-    lang_layers_apply_readers(file->lang_layers, reg, arena, st);
-
-    /* L4: a SEMANTIC layer turns on its backing experiment for this file --
-     * `#lang turmeric refined` is exactly `--enable=refined`, scoped here.
-     * A manifest that scoped :experiments without it is a hard error; the
-     * diagnostic is already emitted, and the caller sees it via
-     * diag_had_error(). */
-    (void)lang_layers_apply_semantic(file->lang_layers, file->path);
+    /* Install the built-in `#`-dispatch macros before the first form.  These
+     * are unconditional -- no `#lang` token, no `#use-reader-macros` -- so
+     * every file gets them regardless of its base dialect.  Idempotent, so a
+     * persistent REPL/interp registry and a `(load)`-shared strict registry
+     * are both safe; see reader_macros.c. */
+    reader_macros_install_builtins(reg, arena, st);
 
     /* The LANGUAGE axis gets the same treatment, in the same place, because it
      * is the same decision one level up.  Since saffron graduated at 0.46.0
