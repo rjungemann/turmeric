@@ -200,13 +200,13 @@ Saffron rule: in typed Turmeric an `if` condition must already be a `bool`.
 
 ### Many branches: `cond`
 
-`cond` takes test/result pairs in order. `:else` is the fallback:
+`cond` takes test/result pairs in order. `else` is the fallback:
 
 ```turmeric
 (defn classify [n]
   (cond (> n 0) "positive"
         (< n 0) "negative"
-        :else   "zero"))
+        else    "zero"))
 
 (classify 7.1)   ; => "positive"
 (classify -3)    ; => "negative"
@@ -219,7 +219,7 @@ defn classify [n]
     "positive"
     {n < 0}
     "negative"
-    :else
+    else
     "zero"
 
 classify(7.1)    ; => "positive"

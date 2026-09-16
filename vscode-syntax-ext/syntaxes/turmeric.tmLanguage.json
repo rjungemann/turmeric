@@ -132,7 +132,7 @@
       "patterns": [
         {
           "name": "keyword.control.turmeric",
-          "match": "(?<![\\w-])(if|cond|case|match|loop|while|for|break|continue|return|and|or|not)(?![\\w-])"
+          "match": "(?<![\\w-])(if|cond|case|match|loop|while|for|else|break|continue|return|and|or|not)(?![\\w-])"
         },
         {
           "name": "keyword.definition.turmeric",

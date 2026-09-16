@@ -79,7 +79,7 @@
       (do (tur-snake-set-dir DIR_UP)    DIR_UP)
     (= (tur-is-key-down KEY_DOWN) 1)
       (do (tur-snake-set-dir DIR_DOWN)  DIR_DOWN)
-    :else dir))
+    else dir))
 
 ;; ============================================================
 ;; Render one frame

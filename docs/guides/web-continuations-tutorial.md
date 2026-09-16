@@ -323,7 +323,7 @@ smoke test in Step 9 drives the server without having to kill it.
       (and get? (cstr-eq? path "/"))         (start-flow)
       (and get? (cstr-eq? path "/entries"))  (list-entries)
       (and post? (cstr-eq? path "/submit"))  (resume-handler)
-      :else (send-error 404 "Page not found."))))
+      else (send-error 404 "Page not found."))))
 ```
 
 ---
@@ -511,7 +511,7 @@ one arm in `advance`. What differs is that the frame now carries state:
     (= step (step-message))  (page-message)
     (= step (step-preview))  (page-preview)
     (= step (step-thankyou)) (send-html (render-thankyou (store-lines)))
-    :else 0))
+    else 0))
 ```
 
 `page-message` captures the *value* of `flow-name` at capture time as the

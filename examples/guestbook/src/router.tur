@@ -45,4 +45,4 @@
         (and get? (cstr-eq? path "/"))         (start-flow)
         (and get? (cstr-eq? path "/entries"))  (list-entries)
         (and post? (cstr-eq? path "/submit"))  (resume-handler)
-        :else (send-error 404 "Page not found.")))))
+        else (send-error 404 "Page not found.")))))

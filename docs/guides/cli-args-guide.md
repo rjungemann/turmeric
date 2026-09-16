@@ -279,7 +279,7 @@ flags, options, and nested subcommands:
               (println (str-concat "testing, filter: "
                                    (args/get-str (.value r) "filter")))
               0)
-          :else
+          else
             (do
               (args/print-help spec)
               1))))))
@@ -313,7 +313,7 @@ defn main [] :int
             [r (args/sub-result result)]
             println $ str-concat "testing, filter: " args/get-str(.value(r) "filter")
             0
-          :else
+          else
           do
             args/print-help(spec)
             1

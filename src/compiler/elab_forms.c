@@ -3753,8 +3753,11 @@ Expr *elab_case(Elab *e, const Form *call) {
         Form *val  = call->as.list.items[2 + i];
         Form *body = call->as.list.items[2 + i + 1];
 
-        if (val->tag == F_KEYWORD && val->as.sym == e->kw_else) {
-            /* :else — replace acc with the else body */
+        /* The fallback clause is spelled `:else` or bare `else` -- one clause,
+         * two spellings, matching `cond`.  A bare `else` used to reach the
+         * `(= disc else)` test below and die as TUR-E0003 `unbound symbol
+         * 'else'`, so no program that compiled before changes meaning. */
+        if ((val->tag == F_KEYWORD || val->tag == F_SYM) && val->as.sym == e->kw_else) {
             acc = body;
             continue;
         }

@@ -384,7 +384,7 @@ GUIDE_JS_CORE = '''\
 (function(){
   var KW = new Set([
     'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
-    'if','cond','when','unless','do','begin','and','or','not',
+    'if','cond','when','unless','do','begin','and','or','not','else',
     'fn','lambda','async','await','match','case',
     'quote','quasiquote','unquote','for','while','loop','do-m',
     'set!','try','catch','finally','with','use',
@@ -394,6 +394,134 @@ GUIDE_JS_CORE = '''\
     'coerce','cast','type-of','any',
   ]);
   function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  // ---- Brace-family highlighter: C, C++, GDScript ------------------------
+  // The guides interleave Turmeric with the C it emits and embeds
+  // (sandboxing-guide, c-integration-guide, ffi-guide) and with the C++ and
+  // GDScript it binds against (godot-resource-loader-guide). An unhighlighted
+  // block sitting next to a highlighted one reads as a rendering failure, so
+  // these run through one tokenizer and share the same five hl-* classes
+  // rather than getting a palette of their own.
+  var C_KW = new Set([
+    'alignas','alignof','auto','break','case','catch','class','const',
+    'const_cast','constexpr','continue','decltype','default','delete','do',
+    'dynamic_cast','else','enum','explicit','extern','final','for','friend',
+    'goto','if','inline','mutable','namespace','new','noexcept','operator',
+    'override','private','protected','public','register','reinterpret_cast',
+    'restrict','return','self','sizeof','static','static_assert','static_cast',
+    'struct','switch','template','this','throw','try','typedef','typename',
+    'union','using','virtual','volatile','while','_Atomic','_Static_assert',
+  ]);
+  var C_TYPE = new Set([
+    'bool','char','double','float','int','long','short','signed','unsigned',
+    'void','_Bool','FILE','va_list','size_t','ssize_t','ptrdiff_t','intptr_t',
+    'uintptr_t','int8_t','int16_t','int32_t','int64_t','uint8_t','uint16_t',
+    'uint32_t','uint64_t','wchar_t',
+  ]);
+  var C_LIT = new Set(['true','false','NULL','nullptr']);
+
+  var GD_KW = new Set([
+    'and','as','assert','await','break','breakpoint','class','class_name',
+    'const','continue','elif','else','enum','export','extends','for','func',
+    'if','in','is','match','not','onready','or','pass','preload','return',
+    'self','setget','signal','static','super','tool','var','while','yield',
+  ]);
+  var GD_TYPE = new Set([
+    'bool','float','int','void','Variant','String','StringName','NodePath',
+    'Array','Dictionary','Callable','Signal','Color','Rect2','Vector2',
+    'Vector2i','Vector3','Vector3i','Transform2D','Transform3D','Object',
+    'Node','Resource','RefCounted','Ref','PackedByteArray','PackedStringArray',
+  ]);
+  var GD_LIT = new Set(['true','false','null','PI','TAU','INF','NAN']);
+
+  // A CamelCase word -- upper initial with a lower-case letter somewhere after
+  // -- is a type in all three languages (TuriEnv, PackedStringArray, Ref).
+  // SCREAMING_CASE (TURI_INT, GDCLASS, OK) deliberately fails the test: those
+  // are macros and enum constants, not types.
+  function looksLikeType(w){ return /^[A-Z]/.test(w) && /[a-z]/.test(w); }
+
+  function hlBrace(code, spec){
+    var out = '', i = 0, n = code.length, lineStart = true;
+    function span(cls, s){ return '<span class="hl-' + cls + '">' + esc(s) + '</span>'; }
+    while(i<n){
+      var c = code[i];
+      if(c==='\\n'){ out+='\\n'; i++; lineStart=true; continue; }
+      if(c===' '||c==='\\t'){ out+=c; i++; continue; }
+      // Preprocessor directive: `#include <turi/eval.h>`, `#define X 1`. The
+      // angle-bracket header is a string, so it is not mistaken for a `<`
+      // comparison and left bare.
+      if(spec.preproc && c==='#' && lineStart){
+        var pe=code.indexOf('\\n',i); if(pe===-1)pe=n;
+        var line=code.slice(i,pe);
+        var dir=/^#[ \\t]*[a-z_]+/.exec(line);
+        if(dir){
+          out+=span('keyword', dir[0]);
+          var restp=line.slice(dir[0].length);
+          var inc=/^([ \\t]*)(<[^>\\n]*>)/.exec(restp);
+          if(inc){ out+=esc(inc[1])+span('string', inc[2]); restp=restp.slice(inc[0].length); }
+          out+=hlBrace(restp, spec);
+          i=pe; lineStart=false; continue;
+        }
+      }
+      // Line comment
+      if(spec.line && code.substr(i, spec.line.length)===spec.line){
+        var le=code.indexOf('\\n',i); if(le===-1)le=n;
+        out+=span('comment', code.slice(i,le)); i=le; lineStart=false; continue;
+      }
+      // Block comment
+      if(spec.block && code.substr(i,2)==='/*'){
+        var be=code.indexOf('*/', i+2); be=(be===-1)?n:be+2;
+        out+=span('comment', code.slice(i,be)); i=be; lineStart=false; continue;
+      }
+      // String or character literal. Unterminated at end of line, it stops
+      // there -- a stray apostrophe in prose cannot swallow the rest of the
+      // block.
+      if(c==='"'||c==="'"){
+        var q=c, sj=i+1;
+        while(sj<n){
+          if(code[sj]==='\\\\'){ sj+=2; continue; }
+          if(code[sj]===q){ sj++; break; }
+          if(code[sj]==='\\n') break;
+          sj++;
+        }
+        out+=span('string', code.slice(i,sj)); i=sj; lineStart=false; continue;
+      }
+      // GDScript annotation (@export) and node path ($Player/Sprite)
+      if(spec.at && (c==='@'||c==='$')){
+        var aj=i+1;
+        while(aj<n&&/[A-Za-z0-9_\\/]/.test(code[aj]))aj++;
+        if(aj>i+1){ out+=span('type', code.slice(i,aj)); i=aj; lineStart=false; continue; }
+      }
+      // Number, with a C integer/float suffix (42u, 1.5f, 0xFFULL)
+      if(/[0-9]/.test(c)){
+        var nj=i;
+        while(nj<n&&/[0-9a-fA-FxXbBoO_\\.]/.test(code[nj]))nj++;
+        while(nj<n&&/[uUlLfF]/.test(code[nj]))nj++;
+        out+=span('number', code.slice(i,nj)); i=nj; lineStart=false; continue;
+      }
+      // Identifier
+      if(/[A-Za-z_]/.test(c)){
+        var ij=i;
+        while(ij<n&&/[A-Za-z0-9_]/.test(code[ij]))ij++;
+        var w=code.slice(i,ij);
+        if(spec.lit.has(w))                                      out+=span('number', w);
+        else if(spec.kw.has(w))                                  out+=span('keyword', w);
+        else if(spec.type.has(w)||/_t$/.test(w)||looksLikeType(w)) out+=span('type', w);
+        else                                                     out+=esc(w);
+        i=ij; lineStart=false; continue;
+      }
+      out+=esc(c); i++; lineStart=false;
+    }
+    return out;
+  }
+
+  var C_SPEC  = { kw:C_KW,  type:C_TYPE,  lit:C_LIT,  line:'//', block:true,  preproc:true,  at:false };
+  var GD_SPEC = { kw:GD_KW, type:GD_TYPE, lit:GD_LIT, line:'#',  block:false, preproc:false, at:true  };
+  var BRACE_LANGS = {
+    'language-c':        C_SPEC,
+    'language-cpp':      C_SPEC,
+    'language-gdscript': GD_SPEC,
+  };
+
   function hl(code){
     var out='', i=0, n=code.length;
     while(i<n){
@@ -408,6 +536,20 @@ GUIDE_JS_CORE = '''\
         var j=i+1;
         while(j<n){if(code[j]==='\\\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
         out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+      }
+      // An inline-C fence inside a Turmeric body is C, not Turmeric. Scanned
+      // after the comment and string cases so a ```c inside either stays
+      // inside it. Without this every `;` ending a C statement reads as a Lisp
+      // line comment and greys out the rest of the line -- which is how the
+      // C bodies in c-integration-guide and ffi-guide used to render. The
+      // block closes at the next ``` (CLAUDE.md spells it ```) , so the paren
+      // is left for the Turmeric scan that resumes after it).
+      if(code.substr(i,4)==='```c'&&!/[A-Za-z0-9_]/.test(code[i+4]||'')){
+        var fe=code.indexOf('```', i+4);
+        var inner=(fe===-1)?code.slice(i+4):code.slice(i+4,fe);
+        out+=esc('```c')+hlBrace(inner, C_SPEC);
+        if(fe===-1){ i=n; } else { out+=esc('```'); i=fe+3; }
+        continue;
       }
       // Type annotation :keyword
       if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
@@ -440,6 +582,7 @@ GUIDE_JS_CORE = '''\
     return out;
   }
 
+
   // Idempotent: the data-hl stamp means a second pass over the same DOM (the
   // docs pane re-renders on every navigation) cannot double-escape the markup.
   function highlightGuideCode(root){
@@ -450,6 +593,13 @@ GUIDE_JS_CORE = '''\
         el.dataset.hlDone = '1';
         el.innerHTML = hl(el.textContent);
       });
+    Object.keys(BRACE_LANGS).forEach(function(cls){
+      scope.querySelectorAll('pre code.' + cls).forEach(function(el){
+        if (el.dataset.hlDone) return;
+        el.dataset.hlDone = '1';
+        el.innerHTML = hlBrace(el.textContent, BRACE_LANGS[cls]);
+      });
+    });
   }
 
   function applyToggle(toggle, syntax) {
@@ -533,6 +683,17 @@ GUIDE_CSS = '''\
     .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
     .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
     .guide-content blockquote { border-left:3px solid var(--green); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    /* A `---` separator. The page reset zeroes hr's UA margins and leaves its
+       UA `1px inset gray` border, so an unstyled rule renders as a 2px grey bar
+       whose spacing comes entirely from its NEIGHBOURS: 16px above (the
+       preceding p's margin-bottom), 32px below a heading, 0px below a
+       paragraph -- the separator ends up glued to the entry under it. That is
+       what made docs/guides/bibliography.md, which separates every entry with
+       `---`, look unevenly spaced. Give the rule its own symmetric margin so
+       margin-collapsing settles every neighbour pair at the same 2rem. */
+    .guide-content hr { height:0; border:0; border-top:1px solid var(--border-mid); margin:2rem 0; }
+    .guide-content hr:first-child { margin-top:0; }
+    .guide-content hr:last-child { margin-bottom:0; }
     .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
     .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
     .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }

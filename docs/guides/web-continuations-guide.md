@@ -59,7 +59,7 @@ Three rules of the capture grammar shape this:
     (= step (step-message))  (page-message)
     (= step (step-preview))  (page-preview)
     (= step (step-thankyou)) (send-html (render-thankyou (store-lines)))
-    :else 0))
+    else 0))
 ```
 
 **When to use it:** any time the flow needs to pause, show a page, and resume

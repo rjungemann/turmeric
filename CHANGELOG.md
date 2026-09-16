@@ -4,6 +4,9 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+**Next release must be a MINOR bump (`/cut-minor-release`, not
+`/cut-patch-release`):** the `else` clause head below adds language surface.
+
 ### Removed
 
 - **The `#lang` layer axis is decommissioned.** `#lang` now takes a single
@@ -42,6 +45,30 @@ All notable changes to Turmeric are documented here.
   A free fix rides along. The native `tur lsp` never ran the layer detection
   at all, so `#s"..."` in a `#lang turmeric stringed` file had always been a
   red squiggle in an editor. It resolves now with no LSP change.
+- **`cond` and `case` accept a bare `else` as the fallback clause,** alongside
+  the `:else` keyword they have always taken. The two spellings name the same
+  clause and mix freely within a file. Bare `else` was previously
+  `TUR-E0003 unbound symbol 'else'` in both forms -- `cond` fell through to
+  `(if else ...)` and `case` to `(= disc else)` -- so nothing that compiled
+  before changes meaning, with one exotic exception: a `cond` whose *test*
+  position read a variable named `else` now sees a fallback clause instead.
+  `else` is still not a global binding; outside a clause head `(if else 1 2)`
+  remains an error. The guides, the `:tutorial quickstart` content, and the
+  guestbook and snake examples the tutorials walk you through now teach the
+  bare spelling; `syntax-guide.md` and `symbols-guide.md` record that `:else`
+  is the older spelling and still accepted.
+- **C, C++, and GDScript code blocks are syntax-highlighted in the rendered
+  docs,** in the same five-color palette the Turmeric blocks use, on the
+  guides site, the spice pages, and Try Turmeric's in-app docs pane (one
+  tokenizer in `GUIDE_JS_CORE`, so the three consumers cannot drift). A C block
+  next to a highlighted Turmeric block used to read as a rendering failure --
+  `sandboxing-guide` and `c-integration-guide` for the C, and
+  `godot-resource-loader-guide` for the C++ and GDScript. 68 blocks across the
+  guides.
+- **An inline-C fence inside a Turmeric block is highlighted as C.** Every `;`
+  ending a C statement used to read as a Lisp line comment and grey out the
+  rest of the line, so the C bodies in `c-integration-guide`, `ffi-guide` and
+  27 other guides rendered mostly in comment grey. 92 spans across 31 guides.
 
 ### Fixed
 
@@ -58,6 +85,13 @@ All notable changes to Turmeric are documented here.
   went through a detection path that only wanted the strip, so a token
   rejected in every `.tur` file was silently tolerated in the one file that
   configures the build. It is now the same TUR-E0330.
+- **A `---` separator in a guide is spaced evenly.** Nothing styled
+  `.guide-content hr`, so the page reset zeroed its margins and left the UA's
+  `1px inset gray` border: a 2px grey bar whose spacing came entirely from its
+  neighbours -- 32px below a heading, 0px below a paragraph, gluing the rule to
+  the entry under it. `docs/guides/bibliography.md`, which separates every
+  entry with `---`, showed it worst. The rule now carries its own symmetric
+  margin and the site's border color.
 
 ### Changed
 

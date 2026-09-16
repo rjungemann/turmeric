@@ -77,7 +77,7 @@
   "Turmeric definition-introducing keywords.")
 
 (defconst turmeric--control-keywords
-  '("if" "cond" "case" "match" "loop" "while" "for"
+  '("if" "cond" "case" "match" "loop" "while" "for" "else"
     "break" "continue" "return" "and" "or" "not")
   "Turmeric control-flow keywords.")
 

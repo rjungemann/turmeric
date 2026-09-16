@@ -254,7 +254,8 @@ typedef struct Elab {
     const Symbol *sym_ref;        /* ref */
     const Symbol *sym_deref;      /* @ (deref operator) - stored as symbol for parsing */
     const Symbol *sym_drop;       /* drop! - explicit drop for ref<T> */
-    const Symbol *kw_else;         /* :else (the symbol named "else") */
+    const Symbol *kw_else;         /* the symbol named "else" -- matches both
+                                    * the keyword `:else` and the bare `else` */
     const Symbol *kw_derive;       /* :as (the symbol named "as") - for inline-C */
     /* LT3: lref<T> — linear owning pointer */
     const Symbol *sym_lref;        /* lref (type name in type expressions) */

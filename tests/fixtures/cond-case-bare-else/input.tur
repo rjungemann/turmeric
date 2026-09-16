@@ -1,0 +1,56 @@
+;; The `cond` / `case` fallback clause is spelled `else` or `:else`.
+;;
+;; Bare `else` used to be TUR-E0003 `unbound symbol 'else'` in both forms --
+;; `cond` fell through to `(if else ...)` and `case` to `(= disc else)` -- so
+;; the two spellings are one clause and nothing that compiled before moved.
+;; `else` is NOT a global binding: outside a clause head it is still unbound
+;; (tests/fixtures/errors/bare-else-outside-cond).
+
+(defn classify [n : int] : cstr
+  (cond (> n 0) "positive"
+        (< n 0) "negative"
+        else    "zero"))
+
+(defn classify-kw [n : int] : cstr
+  (cond (> n 0) "positive"
+        (< n 0) "negative"
+        :else   "zero"))
+
+;; The two spellings nest and mix inside one expression.
+(defn mixed [n : int] : cstr
+  (cond (> n 10) "big"
+        else     (cond (> n 0) "small"
+                       :else   "none")))
+
+;; A fallback-only cond is just its body.
+(defn only-else [] : cstr
+  (cond else "always"))
+
+(defn name-of [n : int] : cstr
+  (case n
+    1    "one"
+    2    "two"
+    else "many"))
+
+(defn name-of-kw [n : int] : cstr
+  (case n
+    1     "one"
+    2     "two"
+    :else "many"))
+
+(defn main [] : int
+  (println (classify 7))
+  (println (classify -3))
+  (println (classify 0))
+  (println (classify-kw 7))
+  (println (classify-kw -3))
+  (println (classify-kw 0))
+  (println (mixed 42))
+  (println (mixed 3))
+  (println (mixed -1))
+  (println (only-else))
+  (println (name-of 1))
+  (println (name-of 9))
+  (println (name-of-kw 2))
+  (println (name-of-kw 9))
+  0)
