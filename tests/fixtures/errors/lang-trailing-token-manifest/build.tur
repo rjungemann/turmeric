@@ -1,0 +1,17 @@
+#lang turmeric boguslayer
+;; A manifest is source like any other file, so `#lang` means the same thing
+;; here as it does in a .tur: one base dialect, nothing after it.
+;;
+;; This path used to only want the STRIP -- it ran the detector purely to keep
+;; the reader from choking on the leading '#' and discarded what it found -- so
+;; a trailing token rejected in every other file in the project was silently
+;; tolerated in the one file that configures the build. That is the split the
+;; decommission plan's risk list said to decide deliberately rather than
+;; inherit.
+;;
+;; The manifest is then unreadable, which is the existing TUR-E0624 contract:
+;; nothing it declares is in effect, so the compile refuses to continue rather
+;; than proceeding with a half-configured search path.
+(defpackage lang-trailing-token-manifest
+  :name    "lang-trailing-token-manifest"
+  :version "0.1.0")

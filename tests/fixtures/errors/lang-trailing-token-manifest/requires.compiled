@@ -1,0 +1,6 @@
+The assertion is about READING THE MANIFEST, and `tur --interpret` does not
+read one: it exits 0 on this fixture, and on a manifest broken in an entirely
+ordinary way too (an unterminated list gets the same silent pass), so the
+skip is about the interpreter's manifest handling and not about `#lang`.
+
+Filed as docs/reported/interpret-ignores-a-malformed-manifest.md.

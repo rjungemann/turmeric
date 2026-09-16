@@ -703,6 +703,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                     "spice: error [TUR-E0330]: `#lang` takes a single base "
                     "dialect; unexpected trailing token '%.*s' in %s\n",
                     (int)bad_len, bad, path);
+            symtab_free(&st);
             arena_free(&arena);
             if (status) *status = PKG_MANIFEST_MALFORMED;
             pkg_manifest_mark_malformed(path);
