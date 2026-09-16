@@ -111,18 +111,16 @@ void turi_wasm_free_string(char *s);
 /* Set the reader language mode for subsequent evaluations.
  *
  * Arguments:
- *   name - the full `#lang` directive tail: a base name ("turmeric",
+ *   name - the `#lang` directive tail: a base dialect name ("turmeric",
  *          "turmeric/curly-infix", "turmeric/neoteric", "turmeric/sweet",
- *          or the legacy alias "sweet-exp"), optionally followed by
- *          space-separated layer tokens, e.g. "turmeric/sweet stringed".
+ *          "saffron" and its readers, or the legacy alias "sweet-exp"), and
+ *          nothing else -- `#lang` takes one base.
  *
  * Returns:
- *   0 on success, 1 if the base or any layer token is not recognised.
+ *   0 on success, 1 if the base is not recognised or anything trails it.
  *
- * When the base or the layer set changes the accumulated session source is
- * cleared (same behaviour as typing '#lang ...' in the interactive REPL).
- * The layer set is assigned, not accumulated, so a previously-enabled layer
- * absent from `name` is turned off.
+ * When the base changes the accumulated session source is cleared (same
+ * behaviour as typing '#lang ...' in the interactive REPL).
  * This function is equivalent to including a '#lang <name>' line at the top
  * of a submitted code block and is useful for programmatic mode-switching
  * (e.g. a language selector in the web REPL UI).
