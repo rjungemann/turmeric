@@ -1,0 +1,37 @@
+;; set-add-elem-hash-disagrees-with-set-member -- RESOLVED.
+;;
+;; The typed adder `set-add-elem__` (behind `set-add1`) dispatches Hash/MapKey
+;; on its element type A inside a constrained generic, while `set-member?`
+;; hashes at the call site.  Two defects made them disagree:
+;;
+;;   1. `(set-add-elem__ (set-new) x)` recorded `A -> <tyvar>` at elab (the
+;;      receiver `(set-new)` pins nothing) and the concrete `x` never reached
+;;      the binding, so the call stayed on the CARRIER base -- whose `(.hash
+;;      x)` is baked to the representative `Hash[int]`.  A Sym or cstr element
+;;      was hashed by its address; `set-count` said 2 and `set-member?` said
+;;      false.  A `set-add1` macro expansion hit it on every call.
+;;   2. Once the second call DID mint a clone, its forward declaration named
+;;      the `(Set A)` result as `int64_t` while the definition resolved it to
+;;      `tur_adt_Set__sym *`: "conflicting types", a cc error.
+;;
+;; Membership is the assertion that matters -- a size-only check passes with
+;; either bug.  int elements pass either way (Hash[int] IS the representative),
+;; so the Sym and cstr rows are the ones that pin this.
+(defn main [] : int
+  (let [s1 (set-add-elem__ (set-new) (quote x))
+        s2 (set-add-elem__ s1 (quote y))]
+    (println (set-count s2))
+    (println (set-member? s2 (hash (quote x)) (quote x)))
+    (println (set-member? s2 (hash (quote y)) (quote y)))
+    (println (set-member? s2 (hash (quote z)) (quote z))))
+  (let [c1 (set-add1 (set-new) "x")
+        c2 (set-add1 c1 "y")]
+    (println (set-count c2))
+    (println (set-member? c2 (hash "x") "x"))
+    (println (set-member? c2 (hash "q") "q")))
+  (let [i1 (set-add-elem__ (set-new) 5)
+        i2 (set-add-elem__ i1 6)]
+    (println (set-count i2))
+    (println (set-member? i2 (hash 5) 5))
+    (println (set-member? i2 (hash 6) 6)))
+  0)

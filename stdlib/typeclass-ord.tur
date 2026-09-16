@@ -95,14 +95,16 @@
 ;; A constrained generic DEFN, deliberately not a class method with a default
 ;; body.  Three reasons, in order of weight:
 ;;
-;;  1. A default method whose declared types mention the class variable is
-;;     miscompiled.  elab_definstance splices the class's method FORM into the
-;;     instance, annotations and all, and the `: a` on its parameters and result
-;;     is elaborated literally rather than substituted to the instance's type --
-;;     so `Ord [float]`'s spliced copy emits as
-;;     `int64_t __inst_Ord_max_float(int64_t, int64_t)` and truncates its own
-;;     arguments.  `(max 2.5 7.1)` through a generic answered 2.  See
-;;     docs/reported/default-method-spliced-at-carrier-type.md.
+;;  1. (Historical, fixed 2026-09-16.)  A default method whose declared types
+;;     mention the class variable used to be miscompiled: elab_definstance
+;;     spliced the class's method FORM into the instance, annotations and all,
+;;     and the `: a` on its parameters and result was elaborated literally --
+;;     `Ord [float]`'s copy emitted as `int64_t __inst_Ord_max_float(int64_t,
+;;     int64_t)` and `(max 2.5 7.1)` through a generic answered 2.  A spliced
+;;     default now inherits the class signature under the instance
+;;     substitution like a bare-parameter method.  See
+;;     docs/archive/default-method-spliced-at-carrier-type.md.  Reasons 2 and
+;;     3 still decide the spelling.
 ;;  2. Omitting the annotations is not an option either: with the class variable
 ;;     appearing only in the return, every call site becomes "cannot infer type
 ;;     for return-directed method 'max'".

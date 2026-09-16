@@ -1460,6 +1460,18 @@ bool return_type_register_class_conflict(TypeKind declared, Type body);
  * than a register-class conflict.  Returns false (and leaves `body` untouched)
  * otherwise. */
 bool rc_widen_int_literal_to_float_return(TypeKind declared, Expr *body);
+/* float32-block-temp-widens-to-double: a float LITERAL closing a
+ * multi-expression `: float32` / `: float64` body -- the tail of a `do`,
+ * `let`, or both arms of an `if` -- keeps its default `double` type, so the
+ * block's merge temp was declared `double` and narrowed on `return`
+ * (-Wfloat-conversion under GCC; two roundings for a literal that is not
+ * exactly representable).  A bare literal body is fine (it returns
+ * directly, one conversion of a constant).  Retype the tail literal, and each
+ * enclosing block node whose type was the default double, to the declared
+ * width -- the same "the author wrote a constant AT that width" reasoning
+ * the ascription arm applies to `(:: 7.1 float32)`.  Returns true when
+ * anything was retyped. */
+bool rc_narrow_float_literal_tail_to_declared_return(TypeKind declared, Expr *body);
 
 /* pointer-vs-scalar-returns: the next carrier-tolerated slice past the nominal
  * and float guards.  `cstr` (a `const char*`) rides the same int64 GP register

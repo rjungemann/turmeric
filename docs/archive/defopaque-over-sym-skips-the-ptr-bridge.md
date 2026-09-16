@@ -1,5 +1,7 @@
 # `defopaque` over `Sym` stores the symbol pointer into an int64 slot
 
+**RESOLVED 2026-09-16** -- see Resolution at the end.
+
 **Severity: medium** -- emits C that clang >= 21 rejects outright
 (`-Wint-conversion` is an error there), so it is a hard build failure on the
 macOS CI leg and a silent pointer-into-int64 truncation risk elsewhere.
@@ -103,3 +105,24 @@ The repro above. Note it needs an ACTUAL build, not just `tur check` -- and the
 existing `-Wint-conversion` ratchet in `tests/run.sh` already fails a fixture
 whose emitted C carries this warning, so a fixture would be caught by the
 ratchet rather than needing its own assertion.
+
+## Resolution (2026-09-16)
+
+Fixed the way the report's `cstr` addendum argued for: the judgement in
+`elab_defstruct`'s opaque path is now "is this carrier a pointer", not "is it
+spelled `:ptr`". `opaque_base_is_ptr` is set for `:cstr` and `:Sym` bases as
+well, so the newtype c-names as `void *` and every seam that already bridges an
+opaque pointer handle (the ascription reinterpret in both directions, the
+let-binder, the carrier crossings) covers it. The `:non-null` gate is
+deliberately still keyed on the `:ptr` spellings: a `cstr` can legitimately be
+null and no author claim is taken for it.
+
+One emit-side addition: the ascription INTO the newtype now casts a pointer
+inner whose own spelling is qualified (`const struct __tur_sym *`,
+`const char *`) explicitly to `void *`, so the store is not a
+`-Wdiscarded-qualifiers` implicit conversion.
+
+Both repros build warning-free and print `alice` / `bob`; pinned by
+`tests/fixtures/defopaque-over-sym-and-cstr` (`Sym` and `cstr`, store and
+read-back), which the `-Wint-conversion` ratchet guards as the report
+predicted.

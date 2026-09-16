@@ -6007,6 +6007,76 @@ static TuriValue gde_method_closure(TuriEnv *env, const Expr *dict_arg,
  * PIN SOURCE on the C auto-show tier, and gde_method_closure stays as the
  * shared method-slot resolver. */
 
+/* turi-nested-class-method-call-picks-first-instance: does this class-method
+ * call's method declare the CLASS VARIABLE itself as its result (`: a` -- the
+ * `a -> a -> a` shape of combine / join / meet)?  Only then is the call's
+ * value typed by whatever its own dispatch resolved to, so an OUTER method
+ * call taking it as receiver dispatches on the same type variable. */
+static bool turi_dict_call_returns_class_var(const Expr *call) {
+    if (!call || call->kind != EX_CALL || !call->as.call_.dict_arg) return false;
+    const Expr *d = call->as.call_.dict_arg;
+    if (d->kind != EX_DICT || !d->as.dict_.instance ||
+        !d->as.dict_.instance->typeclass || d->as.dict_.method_name[0] == '\0')
+        return false;
+    const TypeClass *tc = d->as.dict_.instance->typeclass;
+    if (tc->n_type_params < 1 || !tc->type_params || !tc->type_params[0] ||
+        !tc->type_params[0]->name)
+        return false;
+    const char *cv = tc->type_params[0]->name;
+    for (uint8_t mi = 0; mi < tc->n_methods; mi++) {
+        const TypeClassMethod *m = &tc->methods[mi];
+        if (!m->name) continue;
+        char mang[256];
+        tur_mangle_ident(m->name->name, mang, sizeof(mang));
+        if (strcmp(m->name->name, d->as.dict_.method_name) != 0 &&
+            strcmp(mang, d->as.dict_.method_name) != 0)
+            continue;
+        return m->return_type.kind == TY_TYVAR && m->return_type.as.tyvar_.name &&
+               strcmp(m->return_type.as.tyvar_.name, cv) == 0;
+    }
+    return false;
+}
+
+/* The type variable a class-method call dispatches on, or NULL when it is
+ * resolved concretely.  The two static gates the driver applies (a bare-tyvar
+ * receiver; a tyvar-headed result; the tyvar recorded in abi_bindings[0]) are
+ * asked first.  When none fires and the receiver is ITSELF a class-method call
+ * whose declared result is the class variable, the receiver's elaborated type
+ * is only the REPRESENTATIVE instance's (the generic body was typed against
+ * whichever carrier-compatible instance the elaborator picked first), so the
+ * outer call's real dispatch variable is the inner call's: walk strictly
+ * inward along receivers.  Mirror of emit_reresolve_disp_type's nested-receiver
+ * branch, which fixed the compiled half of this defect. */
+static const char *turi_nested_dispatch_tyvar(const Expr *call) {
+    for (int depth = 0; call && depth < 64; depth++) {
+        if (call->kind != EX_CALL || !call->as.call_.dict_arg) return NULL;
+        const Expr *d = call->as.call_.dict_arg;
+        if (d->kind != EX_DICT || !d->as.dict_.instance ||
+            !d->as.dict_.instance->typeclass || d->as.dict_.method_name[0] == '\0')
+            return NULL;
+        if (call->as.call_.n_args >= 1 && call->as.call_.args &&
+            call->as.call_.args[0] &&
+            call->as.call_.args[0]->type.kind == TY_TYVAR &&
+            call->as.call_.args[0]->type.as.tyvar_.name)
+            return call->as.call_.args[0]->type.as.tyvar_.name;
+        {
+            const Type *h = &call->type;
+            while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+            if (h->kind == TY_TYVAR && h->as.tyvar_.name) return h->as.tyvar_.name;
+        }
+        if (call->as.call_.n_abi_bindings >= 1 && call->as.call_.abi_bindings &&
+            call->as.call_.abi_bindings[0].type.kind == TY_TYVAR &&
+            call->as.call_.abi_bindings[0].type.as.tyvar_.name)
+            return call->as.call_.abi_bindings[0].type.as.tyvar_.name;
+        if (call->as.call_.n_args < 1 || !call->as.call_.args) return NULL;
+        const Expr *recv = call->as.call_.args[0];
+        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+        if (!turi_dict_call_returns_class_var(recv)) return NULL;
+        call = recv;
+    }
+    return NULL;
+}
+
 /* Record the concrete type substitutions a call site pins onto the callee's
  * tyvars (its abi_bindings), resolving any still-abstract tyvar through the
  * caller's own substitution so nested generics compose. */
@@ -6138,6 +6208,75 @@ static void frame_pin_hkt_tyvars_from_args(TuriEnv *env, EvalFrame *callee,
         TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
         tb->name = pf->as.tyvar_.name;
         tb->type = *af;
+        tb->next = callee->tyvars;
+        callee->tyvars = tb;
+    }
+}
+
+/* set-add-elem-hash-disagrees-with-set-member, interpreter half.  Does `t`
+ * mention any type variable at all (named or not)? */
+static bool turi_type_has_any_tyvar(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR: return true;
+        case TY_APP:
+            return turi_type_has_any_tyvar(t->as.app.fn) ||
+                   turi_type_has_any_tyvar(t->as.app.arg);
+        default: return false;
+    }
+}
+
+/* Pin a callee's BARE-tyvar parameter from the static type of the argument
+ * passed to it, for a binding elab left abstract.
+ *
+ * `(set-add-elem__ (set-new) x)` records `A -> <tyvar>`: the receiver
+ * `(set-new)` is `(Set A')` with nothing to ground it, the elab-side binding
+ * walk takes the first mention, and the concrete `x` two slots later never
+ * reaches the binding.  frame_record_abi then skips the abstract binding
+ * ("nothing to pin"), no dictionary is pushed for `Hash A`, and the body's
+ * `(.hash x)` runs the baked representative `Hash[int]` -- a Sym hashed by
+ * its address, so `set-member?` (which hashes at the call site) could not
+ * find it.  The compiled path had the identical hole in its site-correction
+ * pass and pins the same way.
+ *
+ * Only a bare-tyvar parameter (`x : A`), only an argument whose static type
+ * is fully ground (peeling the carrier reinterpret the arg-check loop wraps a
+ * non-int scalar in), and only where the frame has NO concrete binding for
+ * that variable yet -- a binding the call recorded concretely is what the
+ * caller said and stays. */
+static void frame_pin_bare_tyvars_from_args(TuriEnv *env, EvalFrame *callee,
+                                            const FnDef *fn,
+                                            uint32_t param_offset,
+                                            uint32_t effective_params,
+                                            const Expr *call, uint32_t arg_base) {
+    if (!fn || !fn->params || !call || call->kind != EX_CALL) return;
+    const Binding *fb = call->as.call_.fn_binding;
+    for (uint32_t i = 0; i < effective_params; i++) {
+        uint32_t ai = arg_base + i;
+        uint32_t pi = param_offset + i;
+        if (ai >= call->as.call_.n_args || !call->as.call_.args[ai]) continue;
+        if (pi >= fn->n_params || !fn->params[pi]) continue;
+        const Type *pt = &fn->params[pi]->type;
+        if (pt->kind != TY_TYVAR && fb && fb->type.kind == TY_FN &&
+            fb->type.as.fn.arg_full_types && pi < fb->type.as.fn.arity &&
+            fb->type.as.fn.arg_full_types[pi])
+            pt = fb->type.as.fn.arg_full_types[pi];
+        if (pt->kind != TY_TYVAR || !pt->as.tyvar_.name) continue;
+        const Expr *ae = call->as.call_.args[ai];
+        while (ae && ae->kind == EX_REINTERPRET && ae->as.reinterpret_.expr)
+            ae = ae->as.reinterpret_.expr;
+        if (!ae) continue;
+        Type at = ae->type;
+        if (at.kind == TY_UNKNOWN || at.kind == TY_TYVAR ||
+            at.kind == TY_NIL || at.kind == TY_NEVER) continue;
+        if (turi_type_has_any_tyvar(&at)) continue;
+        Type existing;
+        if (frame_lookup_tyvar(callee, pt->as.tyvar_.name, &existing) &&
+            existing.kind != TY_TYVAR)
+            continue;
+        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        tb->name = pt->as.tyvar_.name;
+        tb->type = at;
         tb->next = callee->tyvars;
         callee->tyvars = tb;
     }
@@ -7860,6 +7999,45 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         }
                     }
                 }
+                /* turi-nested-class-method-call-picks-first-instance: the
+                 * receiver is itself a class-method call returning the class
+                 * variable -- `(join (join x y) y)` inside `[^JS A]`.  Its
+                 * elaborated type is the representative instance's, so none of
+                 * the three gates above fires and the baked representative
+                 * (`__inst_JS_join_int`) served the outer call for EVERY
+                 * instantiation: a crash on a cstr instance (`<` on strings),
+                 * and over a `defopaque` newtype a silent wrong answer (a law
+                 * suite certifying subtraction associative).  The compiled
+                 * half was fixed in emit_reresolve_disp_type; this is its turi
+                 * mirror, walking inward along receivers to the dispatch
+                 * variable and reading that variable's frame dictionary. */
+                if (!gde_resolved && control->as.call_.dict_arg &&
+                    control->as.call_.dict_arg->kind == EX_DICT &&
+                    control->as.call_.dict_arg->as.dict_.instance &&
+                    control->as.call_.dict_arg->as.dict_.instance->typeclass &&
+                    control->as.call_.dict_arg->as.dict_.method_name[0] != '\0' &&
+                    control->as.call_.n_args >= 1 && control->as.call_.args) {
+                    const Expr *recv = control->as.call_.args[0];
+                    while (recv && recv->kind == EX_ASCRIBE)
+                        recv = recv->as.ascribe_.inner;
+                    if (turi_dict_call_returns_class_var(recv)) {
+                        const char *ntv = turi_nested_dispatch_tyvar(recv);
+                        if (ntv) {
+                            TypeClass *mtc4 = control->as.call_.dict_arg
+                                                  ->as.dict_.instance->typeclass;
+                            struct TypeClassInstance *bound4 =
+                                frame_lookup_dict_tyvar(cf, mtc4, ntv);
+                            if (bound4) {
+                                TuriValue rv = gde_method_closure(
+                                    env, control->as.call_.dict_arg, mtc4, bound4);
+                                if (rv.tag == TURI_CLOSURE) {
+                                    fn_val = rv;
+                                    gde_resolved = true;
+                                }
+                            }
+                        }
+                    }
+                }
                 /* Return-directed methods (`pure`, `empty`, `default-of`) are
                  * served by the DictBind path above (turi-dict-passing-plan);
                  * the frame-tyvar recovery that used to sit here
@@ -9020,6 +9198,13 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * no-op, so the previous behaviour is unchanged for every other
                  * call of that shape. */
                 frame_record_abi(env, call_frame, top->frame, top->expr);
+                /* set-add-elem-hash-disagrees-with-set-member: a bare-tyvar
+                 * parameter whose binding elab left abstract is pinned from
+                 * the argument's own static type, BEFORE the constraint
+                 * dictionaries below are resolved from the frame's pins. */
+                frame_pin_bare_tyvars_from_args(env, call_frame, fn,
+                                                param_offset, effective_params,
+                                                top->expr, arg_base);
                 /* Bare-head constrained instance: bind its constraint tyvars
                  * (`(C A)`'s `A`) from the receiver arg's static type so a nested
                  * dispatch inside the body resolves the element's real instance

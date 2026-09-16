@@ -1,5 +1,7 @@
 # call-ptr under --interpret refuses a record with a parametric-monomorph field
 
+**ARCHIVED 2026-09-16.** Both fix directions landed 2026-09-10 (status note below); the report had stayed in `docs/reported/` only because the archive move was owed. Verified against `main` at v0.48.0: `tests/run-flags.sh` carries `jit-ffi-interp-parametric-record-field` and `jit-ffi-interp-parametric-field-diag`, and `agg_field_class` threads the substituted `(def, args)` view described below.
+
 **Status update 2026-09-10: BOTH fix directions are DONE. This report is
 resolved and should be archived once the change lands.**
 

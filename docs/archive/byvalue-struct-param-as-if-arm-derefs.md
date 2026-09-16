@@ -1,5 +1,7 @@
 # A by-value struct parameter used directly as an `if` arm is dereferenced
 
+**RESOLVED 2026-09-16** -- see Resolution at the end.
+
 **Severity: medium.** A check/build divergence: `tur check` is clean and cc
 rejects the emitted C. Not a wrong answer -- it never compiles -- but the
 diagnostic names an internal temporary and points at C, not at the `if`.
@@ -68,3 +70,22 @@ the `if`-branch type unifier picking a representation one arm cannot satisfy.
 
 The repro above, plus the tail-recursive variant asserting it still works, so a
 fix cannot regress the path that already does.
+
+## Resolution (2026-09-16)
+
+The `if` unifier was not the culprit; the merge temp was typed correctly as
+`tur_adt_S`. The arm bridge was: `emit_if_value` bridges an arm
+carrier->concrete unless it can see the value already IS the aggregate, and it
+asks two predicates -- the localvar side table (which records let-bound locals,
+never parameters) and `emit_arm_is_byval_agg_var`, which admitted a bare
+by-value SUM parameter only, on the SR1-era reasoning that a by-value PRODUCT
+parameter never reached a control-form merge. It does, in exactly the "pass
+it through unchanged" shape. The predicate now admits a by-value product
+PARAMETER too (parameter only, so no let-bound carrier word is mistaken for
+the aggregate; pass-by-pointer parameters still take their own deref arm).
+
+That is also why the tail-recursive fold never failed: its `acc` arm sat
+beside a self-call whose by-value result already made the temp decision
+agree. Pinned by `tests/fixtures/byvalue-struct-param-if-arm`: parameter vs
+ctor, parameter vs call, ctor vs parameter (the other arm order), and the
+fold.

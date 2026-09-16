@@ -2257,14 +2257,28 @@ static bool emit_arm_is_recorded_byval_agg(EmitCtx *ctx, const char *v,
  * the caller's own `then_is_byptr_param` branch derefs it. */
 static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
 static bool emit_arm_is_byval_agg_var(EmitCtx *ctx, const Expr *arm, Type bv) {
-    if (!g_sr1_sum_byvalue) return false;
     if (!arm || bv.kind == TY_UNKNOWN) return false;
     while (arm->kind == EX_ASCRIBE && arm->as.ascribe_.inner)
         arm = arm->as.ascribe_.inner;
     if (arm->kind != EX_VAR || !arm->as.var.binding) return false;
     if (expr_is_pbp_param(ctx, arm)) return false;
     Type at = emit_resolve_type(ctx, arm->as.var.binding->type);
-    if (!emit_type_is_byvalue_sum(ctx, at)) return false;
+    bool is_sum = g_sr1_sum_byvalue && emit_type_is_byvalue_sum(ctx, at);
+    /* byvalue-struct-param-as-if-arm-derefs: the SR1 comment above only
+     * admitted a by-value SUM, on the reasoning that a by-value PRODUCT
+     * parameter never reached a control-form merge.  It does: `(defn pick
+     * [x : S b : bool] : S (if b x (S 1)))` -- the "transform or pass through
+     * unchanged" shape -- has a bare `tur_adt_S` parameter as one arm, and
+     * the carrier->concrete bridge emitted `*(tur_adt_S *)(intptr_t)(x)`,
+     * which cc rejects ("aggregate value used where an integer was
+     * expected").  A let-bound local is in the localvar table and answered
+     * by emit_arm_is_recorded_byval_agg; a PARAMETER is not, so it is
+     * answered here from its binding type, exactly as the sum case is.
+     * Restricted to a parameter so no let-bound carrier word is mistaken
+     * for the aggregate. */
+    bool is_product_param = arm->as.var.binding->is_param &&
+                            emit_type_is_byvalue_adt(ctx, at);
+    if (!is_sum && !is_product_param) return false;
     /* Both names are interned for the whole compilation (type_c_name ->
      * intern_type_name), so holding the first across the second call is safe --
      * unlike adt_field_c_type's pointer-box spelling, which is a shared buffer
@@ -14967,6 +14981,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (icty && strchr(icty, '*') == NULL) {
                         Buf pb; buf_init(&pb);
                         buf_printf(&pb, "(void *)(intptr_t)(%s)", inner_val);
+                        buf_putc(&pb, '\0');
+                        free(inner_val);
+                        inner_val = strdup(pb.data);
+                        buf_free(&pb);
+                    } else if (icty && strcmp(icty, "void *") != 0) {
+                        /* defopaque-over-sym-skips-the-ptr-bridge: a POINTER
+                         * inner whose own spelling is qualified (`const struct
+                         * __tur_sym *`, `const char *`) flows into the `void *`
+                         * newtype through an explicit cast, so the store is not
+                         * a -Wdiscarded-qualifiers implicit conversion. */
+                        Buf pb; buf_init(&pb);
+                        buf_printf(&pb, "(void *)(%s)", inner_val);
                         buf_putc(&pb, '\0');
                         free(inner_val);
                         inner_val = strdup(pb.data);

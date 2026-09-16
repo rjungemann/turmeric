@@ -1300,20 +1300,38 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
      * indistinguishable downstream.  The base is a type keyword (`:ptr`,
      * `:ptr<void>`, `:ptr<T>`, `:int`, ...), so the test is a prefix match on
      * the keyword's own name. */
+    bool base_is_ptr_keyword = false;
     {
         const Form *base_form = call->as.list.items[base_idx];
         if (base_form->tag == F_KEYWORD && base_form->as.sym) {
             const char *bn = base_form->as.sym->name;
-            def->opaque_base_is_ptr =
+            base_is_ptr_keyword =
                 (strcmp(bn, "ptr") == 0 || strcmp(bn, "ptr-void") == 0 ||
                  strncmp(bn, "ptr<", 4) == 0);
+            /* defopaque-over-sym-skips-the-ptr-bridge: `cstr` and `Sym` are
+             * pointer-sized carriers that are not SPELLED as pointers, so they
+             * took the int64 path -- and every store of one into the newtype
+             * emitted `int64_t r = (const struct __tur_sym *)...` /
+             * `int64_t n = "alice"`, a -Wint-conversion that clang >= 21
+             * rejects outright, with the read-back seam (`puts(n_1607)`)
+             * failing the other way.  A one-field `defstruct` over the same
+             * `Sym` had been fixed a release earlier (`4ff9ad724`); this is
+             * the opaque twin.  The judgement is "is this carrier a
+             * pointer", not "is it spelled :ptr", so both take the pointer
+             * spelling (`void *`), and the ascription seams that already
+             * bridge an opaque pointer handle cover them. */
+            def->opaque_base_is_ptr =
+                base_is_ptr_keyword ||
+                strcmp(bn, "cstr") == 0 || strcmp(bn, "Sym") == 0;
         }
     }
     /* option-niche: `:non-null` declares "this handle's valid values exclude
      * the null pointer", which only means anything over a pointer base -- on an
      * int newtype 0 is just a number, and accepting the attribute there would
-     * let a later base-type edit silently keep a stale claim. */
-    if (opaque_non_null && !def->opaque_base_is_ptr) {
+     * let a later base-type edit silently keep a stale claim.  Kept to the
+     * `:ptr` spellings: a `cstr` can legitimately be null and no author claim
+     * is taken for it. */
+    if (opaque_non_null && !base_is_ptr_keyword) {
         diag_emit(DIAG_ERROR, call->span,
                   "defopaque: :non-null requires a pointer base type "
                   "(:ptr or :ptr<...>) -- it declares that the handle's valid "

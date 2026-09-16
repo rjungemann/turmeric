@@ -386,11 +386,13 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
 
   Four things the build taught us, all recorded at their sites:
 
-  - **`(defopaque ReplicaId :Sym)` does not compile.** Section 2.2 flagged it
-    as the one unverified shape and was right to: the opaque path stores the
-    interned symbol POINTER into an `int64_t` slot and cc rejects it
-    (`-Wint-conversion`, an error on clang >= 21). Filed as
-    [defopaque-over-sym-skips-the-ptr-bridge](../reported/defopaque-over-sym-skips-the-ptr-bridge.md).
+  - **`(defopaque ReplicaId :Sym)` did not compile** (fixed 2026-09-16).
+    Section 2.2 flagged it as the one unverified shape and was right to: the
+    opaque path stored the interned symbol POINTER into an `int64_t` slot and
+    cc rejected it (`-Wint-conversion`, an error on clang >= 21). Filed as
+    [defopaque-over-sym-skips-the-ptr-bridge](../archive/defopaque-over-sym-skips-the-ptr-bridge.md);
+    an opaque over `:Sym` or `:cstr` now takes the pointer spelling, so the
+    newtype spelling is open to the spice again.
   - **The `defstruct` fallback does not work either, for a different reason.**
     It compiles, but then the map key is a by-value struct, which needs a
     `MapKey` instance -- whose `mk-cmp` returns a comparator function pointer
@@ -479,9 +481,12 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
     than pointer identity.
 
   Also filed while building it:
-  [set-add-elem-hash-disagrees-with-set-member](../reported/set-add-elem-hash-disagrees-with-set-member.md)
-  -- the typed `set-add-elem__` adds elements that `set-member?` cannot find,
-  so `crdt/set` uses the explicit-hash macro pair throughout.
+  [set-add-elem-hash-disagrees-with-set-member](../archive/set-add-elem-hash-disagrees-with-set-member.md)
+  -- the typed `set-add-elem__` added elements that `set-member?` could not
+  find, so `crdt/set` uses the explicit-hash macro pair throughout. Fixed
+  2026-09-16 (two emitter defects, neither in set.tur); the typed adder is
+  usable again and the spice's spelling can be simplified when it is next
+  touched.
 - **C3 -- registers + maps. DONE 2026-09-12.** `crdt/hlc`, `crdt/register`
   (`LwwRegister`, `MvRegister`), `crdt/ormap`. Seven test suites green.
 

@@ -1,0 +1,21 @@
+;; defopaque-over-sym-skips-the-ptr-bridge -- RESOLVED.
+;;
+;; `Sym` and `cstr` are pointer-sized carriers that are not SPELLED as
+;; pointers, so an opaque newtype over either took the int64 path: the store
+;; emitted `int64_t r = (const struct __tur_sym *)...` / `int64_t n = "alice"`
+;; (-Wint-conversion, a hard error under clang >= 21) and the read-back seam
+;; failed the other way (`puts(n)` handed an int64).  `tur check` was clean
+;; both times.  The newtype now c-names as a pointer, like `:ptr<void>`.
+(defopaque ReplicaId :Sym)
+(defopaque Name :cstr)
+
+(defn replica-name [r : ReplicaId] : cstr (sym->str (:: r Sym)))
+(defn shout [n : Name] : cstr (:: n cstr))
+
+(defn main [] : int
+  (let [r : ReplicaId (:: (quote alice) ReplicaId)
+        n : Name      (:: "bob" Name)]
+    (println (replica-name r))
+    (println (shout n))
+    (println (:: n cstr)))
+  0)

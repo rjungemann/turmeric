@@ -1,0 +1,20 @@
+;; float32-block-temp-widens-to-double -- RESOLVED.
+;;
+;; A float literal closing a multi-expression `: float32` body kept its
+;; default `double` type, so the block's merge temp was `double` and the
+;; `return` narrowed it (-Wfloat-conversion under GCC; two roundings for a
+;; literal that is not exactly representable).  The tail literal -- through
+;; `do`, `let`, and both arms of an `if` -- is now typed at the declared
+;; width, exactly as `(:: 7.1 float32)` is.  7.1 is not exactly representable
+;; in either width, which is what makes the second and third lines a value
+;; check rather than only a warning check.
+(defn f [] : float32 (do (println 1) 2.5))
+(defn g [] : float32 (let [k 2] (println k) 7.1))
+(defn h [b : bool] : float32 (if b 7.1 3.25))
+
+(defn main [] : int
+  (println (f))
+  (println (g))
+  (println (h true))
+  (println (h false))
+  0)

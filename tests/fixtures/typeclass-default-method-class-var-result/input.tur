@@ -1,0 +1,39 @@
+;; default-method-spliced-at-carrier-type -- RESOLVED.
+;;
+;; A class DEFAULT whose result is the class variable (`pick [x : a y : a]
+;; : a`) is spliced into an instance that omits it.  The spliced form carried
+;; the class's own annotations, which elaborated literally -- `a` is a type
+;; variable, so the copy's C signature was `int64_t (int64_t, int64_t)` while
+;; an instance that wrote `(pick [x y] ...)` itself got `double (double,
+;; double)`.  Dispatch was right, the signature was wrong, and the caller's
+;; doubles were converted on the way in: `(g 2.5 7.1)` printed 2.
+;;
+;; Only the call THROUGH a constrained generic showed it; the concrete
+;; `(pick 2.5 7.1)` was always right, which is why a fixture that checked the
+;; obvious case would have passed.  The int-only class below is the control:
+;; a fix that only worked by accident at the carrier type would pass it and
+;; fail the float one.
+(defclass C [a]
+  (tag  [x : a] : bool)
+  (pick [x : a y : a] : a (if (tag x) x y)))
+
+(definstance C [int]   (tag [x] true))
+(definstance C [float] (tag [x] true))
+(definstance C [cstr]  (tag [x] false))
+
+(defn g [^C A] [x : A y : A] : A (pick x y))
+
+;; int-only sibling: the carrier type, where the old splice was right by luck
+(defclass D [a]
+  (flag [x : a] : bool)
+  (sel  [x : a y : a] : a (if (flag x) y x)))
+(definstance D [int] (flag [x] true))
+(defn h [^D A] [x : A y : A] : A (sel x y))
+
+(defn main [] : int
+  (println (pick 2.5 7.1))
+  (println (g 2.5 7.1))
+  (println (g 3 9))
+  (println (g "left" "right"))
+  (println (h 3 9))
+  0)

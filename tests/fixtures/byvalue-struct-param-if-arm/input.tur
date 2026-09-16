@@ -1,0 +1,33 @@
+;; byvalue-struct-param-as-if-arm-derefs -- RESOLVED.
+;;
+;; A by-value struct PARAMETER used directly as an `if` arm was bridged
+;; carrier->concrete -- `*(tur_adt_S *)(intptr_t)(x)` -- and cc rejected it
+;; ("aggregate value used where an integer was expected").  `tur check` was
+;; clean.  The SR1 bare-variable arm predicate admitted only a by-value SUM
+;; parameter; a by-value PRODUCT parameter is now admitted too.  The
+;; tail-recursive fold below already worked (the other arm is a self-call)
+;; and is here so the fix cannot regress it.
+(defstruct S [a : int])
+
+(defn pick [x : S b : bool] : S
+  (if b x (S 1)))
+
+(defn mk [n : int] : S (S n))
+(defn pick2 [x : S b : bool] : S
+  (if b x (mk 2)))
+
+(defn pick3 [x : S b : bool] : S
+  (if b (S 3) x))
+
+(defstruct H [m : int])
+(defn step [acc : H n : int] : H
+  (if (= n 0) acc (step (H (+ (.m acc) 1)) (- n 1))))
+
+(defn main [] : int
+  (println (.a (pick (S 7) true)))
+  (println (.a (pick (S 7) false)))
+  (println (.a (pick2 (S 8) true)))
+  (println (.a (pick2 (S 8) false)))
+  (println (.a (pick3 (S 9) false)))
+  (println (.m (step (H 0) 3)))
+  0)

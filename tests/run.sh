@@ -818,9 +818,11 @@ run_happy() {
     # double -> float, which clang splits out as -Wimplicit-float-conversion.
     # That direction is a precision note, not the representation confusion this
     # ratchet is for -- an int carrier reaching a float slot, or the reverse --
-    # and the emitter does produce one benign instance of it (a float literal
-    # closing a multi-expression `: float32` body gets a `double` temp; see
-    # docs/reported/float32-block-temp-widens-to-double.md).  Failing the suite
+    # and the emitter used to produce one benign instance of it (a float
+    # literal closing a multi-expression `: float32` body got a `double` temp;
+    # docs/archive/float32-block-temp-widens-to-double.md, fixed 2026-09-16 --
+    # the exclusion is kept because it was never measured to be the ONLY
+    # double->float site GCC reports across the corpus).  Failing the suite
     # on a legitimate narrowing is the "ratchet that fires on legitimate
     # narrowing is worse than none" risk this was landed with, so the
     # destination-is-float direction is excluded here rather than the flag being
