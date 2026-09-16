@@ -316,6 +316,44 @@ compiles + links + runs + prints the predicted output. Shapes reproducing
 the open cells above are excluded via its `known_bug_slug` table and
 pinned by `--known-probes` instead, so a red run means a NEW cell.
 
+### Two kinds of boundary, and only one used to be fuzzed
+
+The wrapper x boundary compositions above are all boundaries the **compiler owns
+both ends of**: it emits the producer and the consumer in the same pass, and the
+value never leaves its static type. A **runtime seam** is the other kind -- the
+payload is parked in a runtime data structure (a session channel, a protocol
+router, a generator frame, a future slot, a fiber slot, a transactional cell) by
+one piece of emitted code and read back later by another. The slot has one C
+type, so the payload is cast in and out, and a plain C cast of a `double` is a
+value conversion that truncates.
+
+That is a distinct column of this matrix, and it went unfuzzed while `float` was
+a first-class axis everywhere else -- which is how three seams shipped carrying
+every payload as a bare `int64_t`. `--seam-frac` (default 0.30) routes a share of
+cases through a seam instead of a crossing, `--seam <name>` isolates one, and
+`--seam-matrix` prints the deterministic seam x payload verdict table, which is
+how a fix here is verified.
+
+Two properties of that axis are worth knowing before extending it. Its oracle
+**prints** the payload rather than comparing it against the generator's literal:
+a seam that erases its payload to `int` makes `(= v 7.25)` a `TUR-E0042` reject,
+and a reject is not a failure, so a comparing oracle files the defect as "the
+generator emitted an illegal program" and stays green. And a seam reject is
+classified apart from a generator reject (`SEAM_REJECT`), because for a seam it
+means the checker refused the payload -- a feature-surface hole, reported rather
+than failed. Three seams that are already correct (`perform`/`resume`,
+`any`/`cast`, `tvar`) are generated deliberately as positive controls, so a run
+where every seam fails is distinguishable from a broken emitter.
+
+Open seam cells:
+[router-payloads-are-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/reported/router-payloads-are-int64-only.md),
+[generator-yield-payload-is-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generator-yield-payload-is-int64-only.md),
+[async-await-payload-is-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/reported/async-await-payload-is-int64-only.md).
+The fix convention to reuse rather than reinvent is the `union { double d;
+int64_t i; }` bit-reinterpret the direct/fiber effect path already ships
+([fiber-effect-float-result-truncated](https://github.com/rjungemann/turmeric/blob/main/docs/archive/fiber-effect-float-result-truncated.md)),
+or `any`'s approach of not riding the slot at all.
+
 The convention-level fix for the closure rows -- normalize every non-carrier
 fn boundary onto the fat protocol instead of deciding representation
 per-boundary -- is complete; see

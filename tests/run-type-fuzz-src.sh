@@ -11,10 +11,22 @@
 # This is the SMOKE size (fast enough for ctest).  For a real session, run the
 # Python driver directly with a larger --n and a fresh --seed.
 #
+# Since the seam axis (2026-09-16) a share of the cases route their payload
+# through a RUNTIME SEAM instead -- a session/router channel, a generator frame,
+# a future slot, a fiber slot, a tagged `any` box, a transactional cell -- i.e.
+# a place the value is parked by one piece of emitted code and read back by
+# another.  Those are the boundaries the crossing pool above structurally cannot
+# reach, and where a `double` gets cast into an int64 slot and truncated.
+#
 # Env:
-#   TUR_BIN          compiler to test        (default ./build/tur)
-#   TYPE_FUZZ_N      cases                   (default 40)
-#   TYPE_FUZZ_SEED   seed                    (default 1)
+#   TUR_BIN               compiler to test        (default ./build/tur)
+#   TYPE_FUZZ_N           cases                   (default 40)
+#   TYPE_FUZZ_SEED        seed                    (default 1)
+#   TYPE_FUZZ_SEAM_FRAC   share of seam cases     (default: the script's 0.30)
+#
+# Reading the axis by hand:
+#   python3 tests/type-fuzz-src.py --seam-matrix     # seam x payload table
+#   python3 tests/type-fuzz-src.py --seam session    # one seam, many shapes
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -26,6 +38,12 @@ export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 TUR="${TUR_BIN:-./build/tur}"
 N="${TYPE_FUZZ_N:-40}"
 SEED="${TYPE_FUZZ_SEED:-1}"
+SEAM_FRAC="${TYPE_FUZZ_SEAM_FRAC:-}"
+
+SEAM_ARGS=()
+if [ -n "$SEAM_FRAC" ]; then
+  SEAM_ARGS=(--seam-frac "$SEAM_FRAC")
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "SKIP type-fuzz-src: python3 unavailable"
@@ -44,7 +62,8 @@ rc=0
 # and a reject before any generated verdict means anything.
 python3 tests/type-fuzz-src.py --self-test --tur "$TUR" || rc=1
 
-python3 tests/type-fuzz-src.py --tur "$TUR" --n "$N" --seed "$SEED" || rc=1
+python3 tests/type-fuzz-src.py --tur "$TUR" --n "$N" --seed "$SEED" \
+        "${SEAM_ARGS[@]+"${SEAM_ARGS[@]}"}" || rc=1
 
 # type-confusion-detection-plan F2: replay any seeds a nightly fuzz run
 # recorded for this harness.  The smoke run above is pinned to seed 1 and
