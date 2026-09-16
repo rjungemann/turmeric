@@ -182,10 +182,11 @@ Rules and representation:
 
 The arrow surface in `stdlib/arrow.tur` and `stdlib/kleisli.tur` is a
 production-grade example of the dictionary-lowering rules above: `Category`
-(the superclass providing `ident`/`comp`), `Arrow`, `ArrowChoice`,
-`ArrowZero`, and a second `Category` instance (`Kleisli`) all share method
-names and exercise both the closure-handle convention and the method-vs-defn
-namespace rules. See [arrows-guide.md](arrows-guide.md).
+(which `Arrow` restates as a constraint rather than inheriting -- `defclass`
+has no superclasses), `Arrow`, `ArrowChoice`, `ArrowZero`, and a second
+`Category` instance (`Kleisli`) all share method names and exercise both the
+closure-handle convention and the method-vs-defn namespace rules. See
+[arrows-guide.md](arrows-guide.md).
 
 ## See also
 
