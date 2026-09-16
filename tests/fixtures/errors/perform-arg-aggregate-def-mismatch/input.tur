@@ -1,0 +1,17 @@
+;; perform-does-not-typecheck-its-arguments, third pass (aggregates and
+;; pointer-shaped parameters).  The primitive pass measured what an ordinary
+;; call accepts between scalars and made `perform` agree; this pass did the
+;; same for the shapes it left alone.  Each row of the table in
+;; elab_effects.c's perform_arg_shape_mismatch is a call's verdict on one
+;; program; this fixture is the perform side of one row.
+;;
+;; Point <- Other.  Before the check this compiled clean and printed 1 -- the
+;; handler read Other's first field as Point's `.x`.  A call says
+;; "expected Point, got Other".
+(defstruct Point [x : int y : int])
+(defstruct Other [a : int])
+(defeffect E [p : Point] : int)
+(defn work [] : int (perform (E (Other 1))))
+(defn main [] : int
+  (println (handle (work) (E [p] k) (resume k (.x p))))
+  0)

@@ -4994,6 +4994,18 @@ static void any_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
     }
 }
 
+void emit_pending_drop_stmt(EmitCtx *ctx, Buf *body, int kind, const char *name, Type t) {
+    switch (kind) {
+        case 0: emit_carrier_sum_free(ctx, body, name, t); break;
+        case 1:
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "__tur_any_drop(%s);\n", name);
+            break;
+        case 2: emit_boxed_struct_payload_free(ctx, body, name, t); break;
+        default: break;
+    }
+}
+
 static char *emit_any_drop_arm(EmitCtx *ctx, Buf *body, char *v) {
     char *slot = fresh_tmp(ctx);
     indent_buf(body, ctx->indent);

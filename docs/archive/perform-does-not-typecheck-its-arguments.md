@@ -1,5 +1,7 @@
 # `perform` does not type-check its arguments at all
 
+**RESOLVED 2026-09-16** -- the aggregate and pointer-shaped half is done the same way the primitive half was; see Resolution at the end.
+
 **Status: open, NARROWED TWICE (2026-09-15).** Arity is fully checked on both
 sides; primitive argument types are checked and now agree with an ordinary call
 exactly -- the carrier exemption that was the last divergence has been dropped.
@@ -217,3 +219,56 @@ A cheaper interim that covers the memory-safety case specifically: reject a
 scalar argument (int/bool) reaching a POINTER-shaped parameter (`cstr`, `ptr`,
 a handle) at the perform site. That is the shape the segfault takes, and it
 admits no legitimate program.
+
+## Resolution (2026-09-16) -- the third pass
+
+The two remaining families were closed the way the second pass closed
+primitives: by MEASURING what an ordinary call accepts, one shape per
+program, and giving `perform` that table rather than an imitation of
+`arg_ok`. The table (in `perform_arg_shape_mismatch`, `elab_effects.c`):
+
+| parameter | argument | call's verdict |
+| --- | --- | --- |
+| `Point` | `Other` / `5` / `"hi"` / `cb` / `nil` | rejected |
+| `Point` | `(Point 1 2)` | accepted |
+| `(Option int)` | `5` / `(some "x")` | rejected |
+| `(Option int)` | `(some 1)` | accepted |
+| `H` (opaque) | `ptr<void>` / `5` | rejected |
+| `ptr<void>` | `"hi"` / `Point` / `(some 1)` / `H` / `:Sym` / `bool` | rejected |
+| `ptr<void>` | `cb` / `nil` / `ptr<int>` | accepted |
+| `ptr<int>` | `"hi"` | rejected |
+| `cstr` | `cb` / `nil` / `Point` | rejected |
+| `float` / `bool` | `Point` | rejected |
+| `int` | `Point` / `(Circle 1)` | **accepted** (the carrier word) |
+
+`perform` accepted every rejected row silently before this -- `(perform (E
+(Other 1)))` against `E [p : Point]` read `Other`'s first field as `.x` and
+printed it -- and now rejects each with the same TUR-E0001 the primitive
+pass introduced. The rule stays silent wherever the call path has an
+inference arm this site cannot reproduce: an argument or parameter that
+still mentions a type variable (a generic body's `x : A`, the W2 `(vec-new)`
+into `(Vec int)` unification), `any` (unboxed above it), `!`, unknown -- and
+for an `int` parameter, which is the carrier word and accepts an aggregate at
+a call too.
+
+**The `ptr<void>` question the filing left open is answered by the table**:
+a call admits a fn value, `nil`, and any pointer at a `ptr<void>` parameter
+and nothing else, so telling `TY_FN`/`TY_NIL` apart from a scalar needed no
+factoring -- it is three kinds in an allowlist.
+
+**The `arg_ok` factoring was not done**, and this pass is the second piece
+of evidence it is not needed for `perform`: the 300 lines are inference and
+coercion machinery (tyvars, HKT carriers, borrows, fn values, the `any`
+seam), and everything a `perform` site must reject is a concrete shape
+against a concrete declaration, which is a table. Worth doing on its own
+terms if a third construct ever needs it; not as this report's leftover.
+
+Pinned by six `errors/` fixtures (`perform-arg-aggregate-def-mismatch`,
+`-scalar-into-aggregate-param`, `-aggregate-into-pointer-param`,
+`-cstr-into-ptr-void-param`, `-option-element-mismatch`,
+`-nil-into-cstr-param`) and the positive
+`perform-arg-aggregate-and-pointer-shapes`. One accepted row is not pinned
+positively: a by-value `(Option int)` through the effect slot passes the
+check but the CPS emitter cannot yet lower `(some 5)` there -- that is
+`colored-call-inside-match-evicts-the-cps-backend`'s second shape, still
+open, not this check's.

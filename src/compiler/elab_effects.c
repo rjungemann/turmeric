@@ -1838,6 +1838,86 @@ static bool perform_arg_is_scalar_word(const Type *t) {
     }
 }
 
+/* perform-does-not-typecheck-its-arguments, third pass: the AGGREGATE and
+ * POINTER shapes the primitive rule above deliberately left alone.  Measured
+ * against an ordinary call the same way the primitive pass was, one shape per
+ * program, so each row below is a call's verdict and not an imitation of
+ * `arg_ok`:
+ *
+ *     param             argument              call
+ *     Point             Other / 5 / "hi" / cb / nil   rejected
+ *     Point             (Point 1 2)           accepted
+ *     (Option int)      5 / (some "x")        rejected
+ *     (Option int)      (some 1)              accepted
+ *     H (opaque)        ptr<void> / 5         rejected
+ *     ptr<void>         "hi" / Point / (some 1) / H / :Sym / bool
+ *                                             rejected
+ *     ptr<void>         cb / nil / ptr<int>   accepted
+ *     ptr<int>          "hi"                  rejected
+ *     cstr              cb / nil / Point      rejected
+ *     float / bool      Point                 rejected
+ *     int               Point / (Circle 1)    ACCEPTED (the carrier word)
+ *
+ * A `perform` accepted every rejected row silently: `(perform (E (Other 1)))`
+ * against `E [p : Point]` read `Other`'s first field as `.x` and printed it.
+ * So the rule here is exactly that table.  It stays silent wherever the call
+ * path has an inference arm this site cannot reproduce -- an argument or
+ * parameter that still mentions a type variable (a generic body's `x : A`,
+ * the W2 `(vec-new)` into `(Vec int)` unification), `any` (unboxed above),
+ * `!`, unknown -- and for an `int` parameter, which is the carrier word and
+ * accepts an aggregate at a call too. */
+static bool perform_type_mentions_named_tyvar(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR: return t->as.tyvar_.name != NULL;
+        case TY_APP:
+            return perform_type_mentions_named_tyvar(t->as.app.fn) ||
+                   perform_type_mentions_named_tyvar(t->as.app.arg);
+        default: return false;
+    }
+}
+static bool perform_type_is_aggregate(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_STRUCT: return true;
+        case TY_ADT:    return t->as.adt_.def != NULL;
+        case TY_APP:    return type_adt_app_def(t) != NULL;
+        default:        return false;
+    }
+}
+static bool perform_arg_shape_mismatch(const Type *want, const Type *got) {
+    if (!want || !got) return false;
+    switch (got->kind) {
+        case TY_TYVAR: case TY_ANY: case TY_UNKNOWN: case TY_NEVER:
+            return false;                       /* an inference arm's business */
+        default: break;
+    }
+    if (perform_type_mentions_named_tyvar(want) ||
+        perform_type_mentions_named_tyvar(got))
+        return false;
+    bool got_agg = perform_type_is_aggregate(got);
+    if (perform_type_is_aggregate(want)) {
+        /* Nominal identity, as the call's same-kind check: the SAME type, not
+         * merely an aggregate. */
+        if (!got_agg) return true;
+        return !type_eq(*got, *want);
+    }
+    switch (want->kind) {
+        case TY_PTR_VOID:
+            /* A call admits a fn value, nil, and any pointer; nothing else. */
+            return !(got->kind == TY_PTR_VOID || got->kind == TY_FN ||
+                     got->kind == TY_NIL);
+        case TY_CSTR:
+            return got->kind == TY_FN || got->kind == TY_NIL || got_agg;
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64: case TY_BOOL:
+        case TY_INT8: case TY_INT16: case TY_INT32:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return got_agg;
+        default:
+            return false;                       /* int (carrier), fn, sym, ... */
+    }
+}
+
 Expr *elab_perform(Elab *e, const Form *call) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2023,7 +2103,9 @@ Expr *elab_perform(Elab *e, const Form *call) {
             bool scalar_into_pointer =
                 perform_param_is_pointer_shaped(&want) &&
                 perform_arg_is_scalar_word(&args[i]->type);
-            if (primitive_mismatch || scalar_into_pointer) {
+            bool shape_mismatch =
+                perform_arg_shape_mismatch(&want, &args[i]->type);
+            if (primitive_mismatch || scalar_into_pointer || shape_mismatch) {
                 const Symbol *pn = effect->constructor->param_names
                     ? effect->constructor->param_names[i] : NULL;
                 char pbuf[96];

@@ -1,0 +1,28 @@
+;; perform-does-not-typecheck-its-arguments, third pass: the POSITIVE half of
+;; the aggregate / pointer shape rule.  Everything here is a shape an ordinary
+;; call accepts, so `perform` must keep accepting it or the check would be
+;; stricter than the language: the same struct, the same applied Option, a fn
+;; value / nil / a typed pointer at a ptr<void> parameter.  (A by-value
+;; `(Option int)` at an effect parameter is accepted by the check too, but the
+;; CPS emitter cannot yet lower `(some 5)` through the effect slot -- that is
+;; colored-call-inside-match-evicts-the-cps-backend's second shape, not this
+;; check's -- so its positive row is not pinned here; its mismatch row is
+;; errors/perform-arg-option-element-mismatch, an elab error.)
+(defstruct Point [x : int y : int])
+(defeffect EP [p : Point] : int)
+(defeffect PV [h : ptr<void>] : int)
+(defeffect EI [w : int] : int)
+
+(defn cb [x : int] : int (+ x 1))
+
+(defn w-point [] : int (perform (EP (Point 3 4))))
+(defn w-fn    [] : int (perform (PV cb)))
+(defn w-nil   [] : int (perform (PV nil)))
+(defn w-ptr   [] : int (perform (PV (:: nil ptr<int>))))
+
+(defn main [] : int
+  (println (handle (w-point) (EP [p] k) (resume k (+ (.x p) (.y p)))))
+  (println (handle (w-fn)    (PV [h] k) (resume k 1)))
+  (println (handle (w-nil)   (PV [h] k) (resume k 2)))
+  (println (handle (w-ptr)   (PV [h] k) (resume k 3)))
+  0)

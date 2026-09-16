@@ -897,6 +897,13 @@ static int cps_find_node(CpsNode *nodes, uint32_t n, const Binding *b) {
 static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
                               CpsNode *self);
 
+typedef struct { CpsNode *nodes; uint32_t n_nodes; CpsNode *self; } CpsCollectUd;
+static bool cps_collect_visit(const Expr *c, void *ud) {
+    CpsCollectUd *u = (CpsCollectUd *)ud;
+    cps_collect_calls(c, u->nodes, u->n_nodes, u->self);
+    return false;
+}
+
 static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
                               CpsNode *self) {
     if (!e) return;
@@ -1075,26 +1082,22 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
          * edge under them was dropped and the coloring fixpoint never reached
          * the caller.
          *
-         * DELIBERATELY NOT the shared `cps_visit_children` enumerator that
-         * `cps_directly_uses_control` uses, even though the missing-arm problem
-         * is the same one.  The two walks are not symmetric in cost: this one
-         * sets `has_indirect` for an unresolved callee (CPS0.1 rule 3), so
-         * descending into a node it never descended into before can color a
-         * function that merely calls a callback there.  Measured on
-         * `tests/fixtures/typed/result-basic`, a blanket default colored 13 more
-         * functions -- `result-map`, `option-map`, `option-eq?` and six
-         * typeclass instances among them -- because EX_MATCH had no arm and
-         * every stdlib HOF calls its callback inside a `match`.
-         *
-         * That coloring is defensible on its own terms, and it is not what made
-         * it unshippable: the CPS emission path does not emit the
-         * `tur_region_free` calls the direct path does, so each newly colored
-         * function leaked its Result/Option box (16 bytes in
-         * `typed/result-basic`, caught by tests/run-leak-check.sh -- run.sh
-         * compiles fixtures unsanitized and cannot see it).  Closing that gap is
-         * ownership-subsystem work, not a follow-on to a coloring fix, so the
-         * edge walk stays narrow and the rest is filed as
-         * docs/reported/cps-edge-walk-misses-nodes-and-colored-frames-leak.md. */
+         * cps-edge-walk-misses-nodes-and-colored-frames-leak (2026-09-16): the
+         * `default:` below now falls back to the shared `cps_visit_children`
+         * enumerator, the same one `cps_directly_uses_control` uses.  It was
+         * held back deliberately for a while: this walk sets `has_indirect`
+         * for an unresolved callee (CPS0.1 rule 3), so descending into a node
+         * it never descended into before colors a function that merely calls
+         * a callback there -- on `tests/fixtures/typed/result-basic` the
+         * enumerator colored 13 more functions (`result-map`, `option-map`,
+         * `option-eq?`, six typeclass instances), because EX_MATCH had no arm
+         * and every stdlib HOF calls its callback inside a `match`.  That
+         * coloring is right; what made it unshippable was that a newly
+         * colored function LEAKED the fresh sum box it handed to a
+         * non-retaining callee (the direct emitter's argument-hoist drain has
+         * no CPS twin).  The CPS emitter now carries that drain -- see the
+         * deferred-drop table in emit_cps_ir.c -- so the widening lands with
+         * it, gated by tests/run-leak-check.sh rather than run.sh alone. */
         case EX_MAKE_STRUCT:
             for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
                 cps_collect_calls(e->as.make_struct_.field_values[i], nodes, n_nodes, self);
@@ -1102,8 +1105,15 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
         case EX_GET_FIELD:
             cps_collect_calls(e->as.get_field_.struct_expr, nodes, n_nodes, self);
             return;
-        default:
+        default: {
+            /* cps-edge-walk-misses-nodes-and-colored-frames-leak: every other
+             * kind that carries an evaluated operand falls back to the shared
+             * enumerator, so a call under a `match` arm (or any later node
+             * kind) contributes its edge. */
+            CpsCollectUd ud = { nodes, n_nodes, self };
+            cps_visit_children(e, cps_collect_visit, &ud);
             return;
+        }
     }
 }
 

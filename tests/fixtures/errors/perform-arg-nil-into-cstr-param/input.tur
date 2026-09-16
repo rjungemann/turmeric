@@ -1,0 +1,14 @@
+;; perform-does-not-typecheck-its-arguments, third pass (aggregates and
+;; pointer-shaped parameters).  The primitive pass measured what an ordinary
+;; call accepts between scalars and made `perform` agree; this pass did the
+;; same for the shapes it left alone.  Each row of the table in
+;; elab_effects.c's perform_arg_shape_mismatch is a call's verdict on one
+;; program; this fixture is the perform side of one row.
+;;
+;; cstr <- nil.  A call rejects nil at a cstr parameter (only a pointer
+;; parameter admits it); the handler would hand puts a null.
+(defeffect Log [msg : cstr] : int)
+(defn work [] : int (perform (Log nil)))
+(defn main [] : int
+  (println (handle (work) (Log [msg] k) (do (println msg) (resume k 0))))
+  0)

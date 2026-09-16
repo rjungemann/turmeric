@@ -6264,6 +6264,107 @@ static void emit_println(CE *ce, BuiltinShape shape, const char *arg) {
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * cps-edge-walk-misses-nodes-and-colored-frames-leak: the CPS ownership gap.
+ *
+ * The direct emitter frees a fresh sum-carrier box (`(ok 1)`), an owned `any`,
+ * or a boxed value-struct payload that is handed to a NON-RETAINING callee by
+ * queueing the temp at the argument hoist (sum_pending / any_pending /
+ * vsp_pending) and draining the queue after the consuming call materialises.
+ * That drain lives in emit_value's call hoist.  On the CPS path the argument
+ * is lowered to its own CT_LETRAW -- delegated to emit_value, so the queue
+ * push still happens -- but the consuming call is a CT_LETCALL / CT_TAILCALL
+ * the CPS emitter writes itself, and no CPS statement ever drained the queue:
+ * the entry sat in `ctx->sum_pending` for the rest of the program and the box
+ * leaked (16 bytes per `(ok? (result-map (ok 1) f))` in a colored function,
+ * typed/result-basic under tests/run-leak-check.sh).
+ *
+ * The mechanism here is the same discipline at the CPS statement boundary.
+ * emit_letraw takes the queue marks around its delegation and moves anything
+ * pushed into this table, keyed by the binder the delegated value lands in;
+ * every CPS consumer of an atom (letcall, letprim, the cps->direct tail arm)
+ * fires the matching entry's drop right after its call statement, spelled on
+ * the ATOM (the binder is in scope in the consuming segment; the direct temp
+ * may not be, once a continuation is lifted).  An entry never consumed is a
+ * status-quo leak, never a free; the table is cleared per emitted function so
+ * a binder id can never match across functions.  A cps->cps tail call cannot
+ * free after itself (the callee delivers to the continuation) and is left as
+ * before. */
+typedef struct {
+    uint32_t       cvar_id;
+    const Binding *bind;
+    int            kind;     /* 0 sum box, 1 any, 2 boxed value-struct payload */
+    Type           t;
+    bool           owned;    /* t is a malloc'd spine (sum_pending_owned) */
+} CpsDeferredDrop;
+static CpsDeferredDrop g_cps_deferred[256];
+static uint32_t        g_n_cps_deferred;
+
+static void cps_deferred_reset(void) {
+    for (uint32_t i = 0; i < g_n_cps_deferred; i++)
+        if (g_cps_deferred[i].owned) free_struct_app_type(g_cps_deferred[i].t);
+    g_n_cps_deferred = 0;
+}
+
+static void cps_deferred_capture(CE *ce, const CTerm *t,
+                                 uint32_t sum_mark, uint32_t any_mark, uint32_t vsp_mark) {
+    EmitCtx *ctx = ce->ctx;
+    while (ctx->n_sum_pending > sum_mark) {
+        uint32_t k = --ctx->n_sum_pending;
+        free(ctx->sum_pending[k]);
+        if (g_n_cps_deferred < 256) {
+            CpsDeferredDrop *d = &g_cps_deferred[g_n_cps_deferred++];
+            d->cvar_id = t->as.letraw.x.id; d->bind = t->as.letraw.x.bind;
+            d->kind = 0; d->t = ctx->sum_pending_types[k]; d->owned = ctx->sum_pending_owned[k];
+        } else if (ctx->sum_pending_owned[k]) {
+            free_struct_app_type(ctx->sum_pending_types[k]);
+        }
+    }
+    while (ctx->n_any_pending > any_mark) {
+        uint32_t k = --ctx->n_any_pending;
+        free(ctx->any_pending[k]);
+        if (g_n_cps_deferred < 256) {
+            CpsDeferredDrop *d = &g_cps_deferred[g_n_cps_deferred++];
+            d->cvar_id = t->as.letraw.x.id; d->bind = t->as.letraw.x.bind;
+            d->kind = 1; memset(&d->t, 0, sizeof d->t); d->owned = false;
+        }
+    }
+    while (ctx->n_vsp_pending > vsp_mark) {
+        uint32_t k = --ctx->n_vsp_pending;
+        free(ctx->vsp_pending[k]);
+        if (g_n_cps_deferred < 256) {
+            CpsDeferredDrop *d = &g_cps_deferred[g_n_cps_deferred++];
+            d->cvar_id = t->as.letraw.x.id; d->bind = t->as.letraw.x.bind;
+            d->kind = 2; d->t = ctx->vsp_pending_types[k]; d->owned = false;
+        }
+    }
+}
+
+static void cps_deferred_consume_atoms(CE *ce, const CAtom *args, uint32_t n) {
+    if (g_n_cps_deferred == 0 || !args) return;
+    for (uint32_t i = 0; i < n; i++) {
+        const CAtom *a = &args[i];
+        for (uint32_t k = 0; k < g_n_cps_deferred; k++) {
+            CpsDeferredDrop *d = &g_cps_deferred[k];
+            bool hit = (a->kind == CA_CVAR && a->cvar_id == d->cvar_id) ||
+                       (a->kind == CA_VAR && d->bind && a->var == d->bind);
+            if (!hit) continue;
+            char *v = atom_str(ce, a);
+            Buf nb; buf_init(&nb);
+            buf_printf(&nb, "(%s)", v);
+            buf_putc(&nb, '\0');
+            int saved = ce->ctx->indent;
+            ce->ctx->indent = ce->indent;
+            emit_pending_drop_stmt(ce->ctx, ce->out, d->kind, nb.data, d->t);
+            ce->ctx->indent = saved;
+            buf_free(&nb); free(v);
+            if (d->owned) free_struct_app_type(d->t);
+            g_cps_deferred[k] = g_cps_deferred[--g_n_cps_deferred];
+            break;
+        }
+    }
+}
+
 static void emit_term(CE *ce, const CTerm *t) {
     switch (t->kind) {
         case CT_APPCONT: {
@@ -6318,6 +6419,7 @@ static void emit_term(CE *ce, const CTerm *t) {
             free(bn);
             for (uint32_t i = 0; i < n; i++) free(as[i]);
             free(as);
+            cps_deferred_consume_atoms(ce, t->as.letprim.args, n);
             emit_term(ce, t->as.letprim.body);
             break;
         }
@@ -6432,6 +6534,7 @@ static void emit_term(CE *ce, const CTerm *t) {
              * under a handler signals by return; propagate before running the
              * rest of this body (and the continuation). */
             cps_panic_check(ce);
+            cps_deferred_consume_atoms(ce, t->as.letcall.args, t->as.letcall.n);
             emit_term(ce, t->as.letcall.body);
             break;
         }
@@ -6641,6 +6744,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                 if (crt && (crt->kind == TY_NIL || crt->kind == TY_NEVER)) {
                     ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
                     cps_panic_check(ce);   /* cps-body-panic-not-propagated */
+                    cps_deferred_consume_atoms(ce, t->as.tailcall.args, t->as.tailcall.n);
                     emit_deliver(ce, &t->as.tailcall.kont, "0");
                 } else {
                     /* S1/findings 16: name the callee's real return type from the
@@ -6654,6 +6758,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                     else
                         ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
                     cps_panic_check(ce);   /* cps-body-panic-not-propagated */
+                    cps_deferred_consume_atoms(ce, t->as.tailcall.args, t->as.tailcall.n);
                     /* RM3 R4: close the generation before the value is delivered
                      * to the continuation -- the continuation is the rest of the
                      * caller, so anything after this point is outside the bracket.
@@ -6919,8 +7024,13 @@ static void emit_letraw(CE *ce, const CTerm *t) {
     }
     int saved = ce->ctx->indent;
     ce->ctx->indent = ce->indent;           /* line the delegated statements up */
+    uint32_t dd_sum = ce->ctx->n_sum_pending, dd_any = ce->ctx->n_any_pending,
+             dd_vsp = ce->ctx->n_vsp_pending;
     char *rhs = emit_value(ce->ctx, ce->out, t->as.letraw.e);
     ce->ctx->indent = saved;
+    /* cps-edge-walk-misses-nodes-and-colored-frames-leak: anything the
+     * delegation queued for "drop after the consuming call" is ours now. */
+    cps_deferred_capture(ce, t, dd_sum, dd_any, dd_vsp);
     char *bn = letraw_binder_name(ce, t);
     /* A nil-typed op yields a void/nil expression -- bind the unit placeholder
      * rather than assigning a void value.  But a nil/void EX_CALL is a special
@@ -9318,6 +9428,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (!fd->binding) return false;
     const Expr *program = ctx->program_root;
     if (!program) return false;
+    cps_deferred_reset();   /* binder ids are per function; never match across */
 
     /* ensure_S colors the program (idempotently) and classifies it; the
      * pipeline has not colored by emit time, so this must precede any read of

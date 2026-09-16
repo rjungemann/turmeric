@@ -42,7 +42,7 @@ compiles fixtures unsanitized and only diffs stdout); CI's `tur_leak_check` is
 what caught it. So the edge walk got exactly the two arms this defect needs,
 `EX_MAKE_STRUCT` and `EX_GET_FIELD`, which leave the coloring on that fixture
 byte-identical to `main`. The rest is filed as
-[cps-edge-walk-misses-nodes-and-colored-frames-leak](../reported/cps-edge-walk-misses-nodes-and-colored-frames-leak.md).
+[cps-edge-walk-misses-nodes-and-colored-frames-leak](cps-edge-walk-misses-nodes-and-colored-frames-leak.md).
 
 Coloring `mk` then exposed a second layer the filing could not have seen,
 because nothing had ever got that far: a ctor call carries no `fn_binding`, so

@@ -1,5 +1,7 @@
 # The CPS edge walk still misses most node kinds, and widening it leaks
 
+**RESOLVED 2026-09-16**, in the order the report prescribed: the ownership gap first, then the walk. See Resolution at the end.
+
 **Severity: medium.** Two findings that are only meaningful together: the
 call-graph walk that feeds CPS coloring drops edges under most node kinds, and
 the obvious fix for that is currently unshippable because the CPS emission path
@@ -100,3 +102,47 @@ the call-bearing composites for step 2.
 bash tests/run-leak-check.sh     # typed/result-basic, with the enumerator on the edge walk
 tur check --dump-cps-coloring tests/fixtures/typed/result-basic/input.tur | grep -c COLORED
 ```
+
+## Resolution (2026-09-16)
+
+Both fix directions, in the order given, and the report's measurements
+reproduced exactly first (23 colored on `typed/result-basic`, then
+`16 byte(s) leaked in 1 allocation(s)` in `ctor_Result_Ok` / `ok`).
+
+**Finding 2 -- the CPS ownership gap.** The leak was narrower than "the
+CPS path does not free what the direct path frees". The direct emitter
+frees a fresh sum-carrier box handed to a non-retaining callee by queueing
+the argument temp at the hoist (`sum_pending`, with `any_pending` and
+`vsp_pending` as siblings) and draining the queue after the consuming call
+materialises -- and that drain lives in emit_value's call hoist. On the CPS
+path the argument is lowered to its own `CT_LETRAW`, which is delegated to
+emit_value, so the queue PUSH still happened; but the consuming call is a
+`CT_LETCALL` / `CT_TAILCALL` the CPS emitter writes itself, and no CPS
+statement ever drained the queue. The entry sat in `ctx->sum_pending` for
+the rest of the program (below every later direct mark, so never freed by
+anyone) -- an orphaned drop, not a missing one.
+
+The CPS emitter now carries the same discipline at its own statement
+boundary (`emit_cps_ir.c`, the deferred-drop table): `emit_letraw` takes the
+three queue marks around its delegation and moves anything pushed into a
+per-function table keyed by the binder the value lands in; every CPS
+consumer of an atom -- letcall, letprim, the cps->direct tail arm -- fires
+the matching entry's drop right after its call statement, spelled on the
+ATOM (the binder is in scope in the consuming segment where the direct temp
+may not be, once a continuation is lifted). An entry never consumed stays a
+status-quo leak, never a free; the table is cleared per emitted function so
+a binder id cannot match across functions; a cps->cps tail call cannot free
+after itself and is left as before. The emitted line is
+
+```c
+if ((__t2)) tur_region_free((void *)(intptr_t)(__t2));
+```
+
+right after the consuming `result_map__spec...(__t2, __t3)`, which is the
+direct emitter's own shallow free.
+
+**Finding 1 -- the walk.** With the drain in place, `cps_collect_calls`'s
+`default:` falls back to `cps_visit_children`, as the report's step 2 says.
+`typed/result-basic` colors 23 functions and runs leak-clean under
+`tests/run-leak-check.sh`. The stale "DELIBERATELY NOT the shared
+enumerator" note at the arm is rewritten to say why it is shared now.

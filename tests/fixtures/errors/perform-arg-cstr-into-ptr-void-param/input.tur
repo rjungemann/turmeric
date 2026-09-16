@@ -1,0 +1,17 @@
+;; perform-does-not-typecheck-its-arguments, third pass (aggregates and
+;; pointer-shaped parameters).  The primitive pass measured what an ordinary
+;; call accepts between scalars and made `perform` agree; this pass did the
+;; same for the shapes it left alone.  Each row of the table in
+;; elab_effects.c's perform_arg_shape_mismatch is a call's verdict on one
+;; program; this fixture is the perform side of one row.
+;;
+;; ptr<void> <- "hi".  A call rejects a cstr at a ptr<void> parameter (the
+;; two are distinct pointer types to the checker); so does perform now.  A fn
+;; value, nil, and a ptr<T> are the three things a call admits there, and
+;; tests/fixtures/perform-arg-aggregate-and-pointer-shapes keeps them
+;; compiling.
+(defeffect P [h : ptr<void>] : int)
+(defn work [] : int (perform (P "hi")))
+(defn main [] : int
+  (println (handle (work) (P [h] k) (resume k 1)))
+  0)
