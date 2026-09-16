@@ -1978,8 +1978,18 @@ static bool perform_cont_reset_ok(const CTerm *t) {
              * the O(N) dk_invoke stack this predicate otherwise (correctly) rejects.
              * Unconditional since cps-tramp-resume graduated.  Args must be
              * slot atoms. */
-            for (uint32_t i = 0; i < t->as.tailcall.n; i++)
-                if (!call_arg_ok(&t->as.tailcall.args[i], true)) return false;
+            /* perform-continuation-tail-call-arg-gate-assumes-direct: the gate
+             * used to pass cps_to_direct=true unconditionally, so a by-value
+             * aggregate atom (`(some 1)`) was refused even when the callee is
+             * COLORED and threads `__cps` params of the matching ABI -- the
+             * CT_TAILCALL rule in term_core_ok already asks the callee.  A
+             * `(perform (Tick))` followed by `(option-eq? (some 1) (some 1) f)`
+             * evicted BODY-STRUCT-CORE; the same call BEFORE the perform lowered. */
+            {
+                bool tc_direct = !binding_cps_reachable(t->as.tailcall.fn);
+                for (uint32_t i = 0; i < t->as.tailcall.n; i++)
+                    if (!call_arg_ok(&t->as.tailcall.args[i], tc_direct)) return false;
+            }
             return true;
         case CT_CONTINUE:
             /* cps-while-native: a loop back-edge in a perform continuation -- the
@@ -3307,6 +3317,40 @@ static bool binding_cps_reachable(const Binding *b) {
     return false;
 }
 
+static const char *find_mono_clone_for_call(EmitCtx *ctx, const Binding *fn,
+                                            const CAtom *args, uint32_t n,
+                                            const Expr *call_expr);
+/* colored-generic-clone-join-emitted-inline: does this CT_TAILCALL take the
+ * cps->cps route (thread the continuation into `<callee>__cps`)?  ONE answer
+ * for the classifier and the emitter.  The tail-arm emitter routes cps->cps
+ * when the callee is in S, OR when it is a colored mono-template whose clone
+ * resolves at this call (`<clone>__cps` is emitted) -- unless a typeclass
+ * re-resolution or a region bracket forces the direct arm.  The join
+ * classifier (letcont_is_heap_join / needs_heap_join / jbody_has_cps_tailcall)
+ * used to ask only `binding_in_s`, so a bind-position call to a colored
+ * GENERIC's clone -- `(not (option-eq? (some 1) (some 2) f))` once `option-eq?`
+ * was colored -- was classified as an INLINE join while the emitter threaded
+ * `__kont` straight into the clone: the `not` sat behind a dead label and the
+ * callee's answer went to the caller's continuation unchanged.  A silent
+ * wrong answer (`false`, and `1` for an `if` on it).  Every site asks this. */
+static bool tailcall_routes_cps_to_cps(const CTerm *t) {
+    if (!t || t->kind != CT_TAILCALL) return false;
+    const Binding *fn = t->as.tailcall.fn;
+    if (!fn) return false;
+    if (t->as.tailcall.call_expr && g_emit_ctx) {
+        char *rr = emit_reresolve_method_call(g_emit_ctx, t->as.tailcall.call_expr);
+        if (rr) { free(rr); return false; }
+    }
+    if (emit_binding_is_region_scope(fn)) return false;
+    if (binding_in_s(fn)) return true;
+    SEnt *fe = NULL;
+    for (size_t i = 0; i < g_ents_n; i++)
+        if (g_ents[i].bind == fn) { fe = &g_ents[i]; break; }
+    if (!fe || !fe->mono_template || !g_emit_ctx) return false;
+    return find_mono_clone_for_call(g_emit_ctx, fn, t->as.tailcall.args,
+                                    t->as.tailcall.n, t->as.tailcall.call_expr) != NULL;
+}
+
 /* True when this CT_LETCONT is a non-tail cps->cps call: its body is directly a
  * tailcall to an emittable colored callee that threads this join as the callee's
  * continuation.  Such a join is reified as a DK frame (emit_heap_join) rather
@@ -3319,7 +3363,7 @@ static bool letcont_is_heap_join(const CTerm *t) {
         /* colored callee threads `<fn>__cps`, (E2a tier-`nontail`) a fn-value
          * callee threads via the registry, OR (E2) a fat-closure poly-fn param
          * threads via its fn_cps slot -- all reify this join as a DK frame. */
-        && (binding_in_s(b->as.tailcall.fn) || b->as.tailcall.via_registry
+        && (tailcall_routes_cps_to_cps(b) || b->as.tailcall.via_registry
             || b->as.tailcall.via_fncps);
 }
 
@@ -3341,7 +3385,7 @@ static bool jbody_has_cps_tailcall(const CTerm *t) {
         /* E2/E2a: a fn-value tail call (via the registry, or a fat-closure fn_cps
          * slot) also threads the DK continuation, so a jbody containing one needs
          * a resume-frame (LH_RESUME_CONT) that receives `__kont` at run time. */
-        case CT_TAILCALL: return binding_in_s(t->as.tailcall.fn)
+        case CT_TAILCALL: return tailcall_routes_cps_to_cps(t)
                               || t->as.tailcall.via_registry
                               || t->as.tailcall.via_fncps;
         case CT_LETVAL:   return jbody_has_cps_tailcall(t->as.letval.body);
@@ -3505,7 +3549,7 @@ static bool needs_heap_join(const CTerm *t) {
         case CT_LETRAW:  return needs_heap_join(t->as.letraw.body);
         case CT_TAILCALL:
             return t->as.tailcall.kont.kind == KK_VAR
-                && binding_in_s(t->as.tailcall.fn);
+                && tailcall_routes_cps_to_cps(t);
         case CT_LETCONT:
             if (letcont_is_heap_join(t)) {
                 /* The join is lifted into a DK frame; the handled tailcall (body)
@@ -7677,8 +7721,16 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
                    || jbody_has_cps_tailcall(t->as.letcont.jbody)
                    || jbody_has_perform(t->as.letcont.jbody);
 
-    char *fn = call->as.tailcall.fn ? callee_name(call->as.tailcall.fn)
-                                    : atom_str(ce, &call->as.tailcall.fn_atom);  /* E2c: field-load callee */
+    /* colored-generic-clone-join-emitted-inline: a colored mono-template callee
+     * threads its CLONE's `__cps` twin, exactly as the tail arm resolves it. */
+    const char *hj_clone = call->as.tailcall.fn
+        ? find_mono_clone_for_call(ce->ctx, call->as.tailcall.fn, call->as.tailcall.args,
+                                   call->as.tailcall.n, call->as.tailcall.call_expr)
+        : NULL;
+    char *fn = call->as.tailcall.fn
+        ? (hj_clone && !binding_in_s(call->as.tailcall.fn) ? strdup(hj_clone)
+                                                            : callee_name(call->as.tailcall.fn))
+        : atom_str(ce, &call->as.tailcall.fn_atom);  /* E2c: field-load callee */
     char *argv = atoms_csv_call(ce, call->as.tailcall.args, call->as.tailcall.n);
     /* The join frame is spliced onto cur_k and threaded into the callee in tail
      * position; register it for a single-node reap at the outermost entry

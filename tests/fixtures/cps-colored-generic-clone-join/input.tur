@@ -1,0 +1,40 @@
+;; colored-generic-clone-join-emitted-inline -- RESOLVED (found and fixed
+;; before it shipped, while widening the CPS coloring walk).
+;;
+;; A bind-position call to a colored GENERIC's clone -- `option-eq?` became
+;; colored once the edge walk saw the callback call inside its match -- was
+;; classified as an INLINE join (the classifier asked `binding_in_s`, which is
+;; false for a mono-template) while the tail-arm emitter threaded the caller's
+;; continuation straight into the clone's `__cps` twin.  The join body (`not`,
+;; the `if`) sat behind a dead label and the callee's answer went to the
+;; caller's continuation unchanged: `(not (option-eq? (some 1) (some 2) f))`
+;; printed `false`, and an `if` on the same call printed 1.  No perform
+;; anywhere; the interpreter was right.  One routing predicate now answers for
+;; the classifier and both emitters, and the heap-join emitter resolves the
+;; clone name.
+(defn same [a : int b : int] : bool (= a b))
+(defeffect Tick [] : int)
+
+(defn w-not [] : bool (not (option-eq? (some 1) (some 2) same)))
+(defn w-if  [] : int  (if (option-eq? (some 1) (some 1) same) 10 20))
+(defn w-if2 [] : int  (if (option-eq? (some 1) (some 3) same) 10 20))
+
+;; the same join in a perform continuation
+(defn w-perf [] : bool
+  (perform (Tick))
+  (not (option-eq? (some 4) (some 4) same)))
+
+;; a colored non-generic callee in the same position (the shape that already
+;; worked: it IS in S, so the classifier and emitter always agreed)
+(defn colored-lt [a : int b : int] : bool (perform (Tick)) (< a b))
+(defn w-plain [] : bool
+  (perform (Tick))
+  (not (colored-lt 1 2)))
+
+(defn main [] : int
+  (println (w-not))
+  (println (w-if))
+  (println (w-if2))
+  (println (handle (w-perf)  (Tick [] k) (resume k 1)))
+  (println (handle (w-plain) (Tick [] k) (resume k 1)))
+  0)

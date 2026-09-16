@@ -167,3 +167,22 @@ signature-rejected by the mono-template invariants (`SIG-REJECT`); a
 concrete `(Result int cstr)` pins the arm and the value is by-value, with
 nothing to free. The guard is self-gated and inert until one of those
 premises moves.
+
+### A second thing the widening exposed (2026-09-16, later still)
+
+Coloring `option-eq?` / `result-map` gave their mono-template clones `__cps`
+twins, and a bind-position call to one from a colored function -- `(not
+(option-eq? (some 1) (some 2) f))` -- then took the cps->cps tail arm while the
+JOIN classifier (`letcont_is_heap_join`, `needs_heap_join`,
+`jbody_has_cps_tailcall`) still asked only `binding_in_s`, false for a
+mono-template. The join was emitted inline behind a dead label and the
+clone's answer was delivered straight to the caller's continuation: `false`
+where `true` was right, and `1` for an `if` on it. No `perform` needed; the
+interpreter was right. Never on `main`: found and fixed on the same branch.
+One predicate (`tailcall_routes_cps_to_cps`, mirroring the tail arm's own
+rule: in S, or a colored mono-template whose clone resolves, unless a
+typeclass re-resolution or a region bracket forces direct) now answers for
+the classifier and both emitters, and `emit_heap_join` threads the clone's
+twin. Pinned by `cps-colored-generic-clone-join`; the perform-continuation
+argument gate that assumed cps->direct was fixed with it (pinned by
+`cps-perform-continuation-tail-call-byvalue-arg`).
