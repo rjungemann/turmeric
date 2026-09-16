@@ -8,15 +8,15 @@
  * wasm-specific, so linking libturi_wasm runs the real thing here.
  *
  * Covered:
- *   - set_lang accepts a full directive tail ("turmeric/sweet stringed") and
- *     rejects an unknown layer token outright (no partial application);
+ *   - set_lang takes a base dialect and nothing else: a trailing token is
+ *     rejected outright, with no partial application;
  *   - get_lang reports the canonical slash-namespaced name, including for
  *     the legacy "sweet-exp" alias on input;
- *   - the layer set is ASSIGNED, so a layer omitted from a later set_lang
- *     genuinely turns off (the #s"..." dispatch stops resolving -- the
- *     session reader-macro registry is wiped, not just the layer bits);
+ *   - `#s"..."` dispatches with no directive at all and survives a base
+ *     switch -- it was the `stringed` layer, toggled through this very entry
+ *     point, before the layer axis was decommissioned;
  *   - the registry export walks the C tables: canonical base names + labels,
- *     every LANG_LAYERS[] row, and never the legacy alias;
+ *     no "layers" key at all, and never the legacy alias;
  *   - the registry offers EVERY base lang_base_at knows, by count and by
  *     spelling.  Asserting a couple of names is what let the picker drift a
  *     whole language behind the reader: `#lang saffron` worked when typed and
@@ -30,7 +30,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "compiler/lang_layers.h"
+#include "compiler/lang_dialects.h"
 #include "web/wasm_glue.h"
 
 static int passed = 0;
@@ -62,51 +62,47 @@ int main(void) {
     CHECK(strcmp(turi_wasm_get_lang(), "turmeric/sweet") == 0,
           "get_lang reports the canonical slash-namespaced name");
 
-    /* Unknown tokens reject outright -- base and layer alike. */
+    /* Unknown tokens reject outright -- an unrecognised base, and any
+     * trailing token at all now that `#lang` takes a base and nothing else. */
     CHECK(turi_wasm_set_lang("no-such-base") == 1,
           "unknown base is rejected");
-    CHECK(turi_wasm_set_lang("turmeric no-such-layer") == 1,
-          "unknown layer token is rejected, not silently ignored");
+    CHECK(turi_wasm_set_lang("turmeric no-such-token") == 1,
+          "a trailing token is rejected, not silently ignored");
     CHECK(strcmp(turi_wasm_get_lang(), "turmeric/sweet") == 0,
           "a rejected set_lang leaves the environment untouched");
 
-    /* Layer toggle round-trip in one session: on, working; off, gone. */
-    CHECK(turi_wasm_set_lang("turmeric stringed") == 0,
-          "set_lang accepts a base plus layer tail");
-    CHECK(eval_contains("#s\"on\"", "on") &&
-          !eval_contains("#s\"on\"", "#<error"),
-          "stringed layer activates the #s\"...\" dispatch");
+    /* `#s"..."` needs no directive and cannot be switched off.  It used to be
+     * the `stringed` layer, toggled through this very entry point; the layer
+     * axis is gone and the dispatch is installed for every base. */
     CHECK(turi_wasm_set_lang("turmeric") == 0,
           "set_lang accepts the bare default base");
-    /* The reader rejects the now-unknown dispatch; the result carries the
-     * error marker (the "unknown reader string macro '#s'" detail goes to
-     * the diag sink, i.e. the browser console). */
-    CHECK(eval_contains("#s\"off\"", "#<error"),
-          "dropping the layer deactivates the dispatch (assign, not OR)");
+    CHECK(eval_contains("#s\"on\"", "on") &&
+          !eval_contains("#s\"on\"", "#<error"),
+          "#s\"...\" dispatches with no layer token and no directive tail");
+    CHECK(turi_wasm_set_lang("turmeric/sweet") == 0,
+          "set_lang accepts another base");
+    CHECK(!eval_contains("#s\"still-on\"", "#<error"),
+          "#s\"...\" survives a base switch (it is not base-gated)");
 
     /* Registry export: built from the C tables, canonical spellings only. */
     const char *reg = turi_wasm_lang_registry();
     CHECK(reg != NULL, "lang registry export returns a string");
     if (reg) {
-        CHECK(strstr(reg, "\"bases\":[") && strstr(reg, "\"layers\":[") != NULL,
-              "registry has bases and layers arrays");
+        CHECK(strstr(reg, "\"bases\":[") != NULL,
+              "registry has a bases array");
+        CHECK(strstr(reg, "\"layers\"") == NULL,
+              "registry has no layers key -- the axis is gone, not emptied");
         CHECK(strstr(reg, "\"name\":\"turmeric/sweet\"") != NULL,
               "registry offers the canonical sweet spelling");
         CHECK(strstr(reg, "sweet-exp") == NULL,
               "registry never offers the legacy alias");
         CHECK(strstr(reg, "\"label\":\"S-expression\"") != NULL,
               "registry carries human-readable base labels");
-        CHECK(strstr(reg, "\"name\":\"stringed\"") != NULL &&
-              strstr(reg, "\"available\":true") != NULL,
-              "registry lists the stringed layer as available");
 
         /* Completeness, not a spot check: every base the C side accepts has
          * to be offerable, or the picker silently hides a language. */
         size_t n_offered = 0;
         for (const char *q = reg; (q = strstr(q, "\"name\":\"")) != NULL; q++) {
-            /* Count only base rows: they precede the layers array. */
-            const char *layers_at = strstr(reg, "\"layers\":[");
-            if (layers_at && q > layers_at) break;
             n_offered++;
         }
         CHECK(n_offered == lang_bases_count(),

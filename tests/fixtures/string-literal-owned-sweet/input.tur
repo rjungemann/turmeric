@@ -1,0 +1,20 @@
+#lang turmeric/sweet
+;; The only fixture pinning `#s"..."` under a NON-DEFAULT base reader.
+;;
+;; The dispatch is installed by reader_macros_install_builtins, on a code path
+;; shared by every base, so this and string-reader-macro (plain s-expr) cover
+;; the two arms of that one install.  Do not fold this into that fixture --
+;; losing the sweet-exp arm is the whole point of keeping it separate.
+;;
+;; No directive enables `#s"` any more: it used to need the `stringed` `#lang`
+;; layer here, and that axis is gone.  `(load)` is still required, because it
+;; brings in the String CODE the literal expands into, not the syntax.
+$ load "stdlib/string.tur"
+
+defn demo [] : int
+  let [g #s"hello world"]
+    do
+      println(string/to-cstr(g))
+      println(string/len(g))
+      0
+demo()

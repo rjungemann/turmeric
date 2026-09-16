@@ -297,3 +297,54 @@ int reader_macros_register_from_form(ReaderMacroRegistry *reg, const Form *f) {
     return reader_macros_register(reg, name, delim, mode,
                                   (Form *)tmpl_arg, f->span);
 }
+
+/* ------------------------------------------------------------------------- *
+ * Built-in reader macros (see the declaration in reader_macros.h).
+ * ------------------------------------------------------------------------- */
+
+/* `#s"text"` reads as `(string/from-cstr "text")`, a fresh owned String,
+ * while bare `"text"` stays a borrowed `cstr`.  Was the `stringed` `#lang`
+ * layer's reader hook; unconditional since the layer axis was decommissioned.
+ *
+ * Deliberately REGISTERED rather than added to kReserved above: the REPL's
+ * registry is non-strict, so a user `reader-macros/define` still updates `#s"`
+ * in place, matching `defn` redefinition semantics.  Reserving it would also
+ * turn a pre-existing `#use-reader-macros "stdlib/string-reader.tur"` into a
+ * "cannot shadow built-in" error rather than the silent no-op that file is
+ * now gutted to be. */
+static void install_string_literal_macro(ReaderMacroRegistry *reg,
+                                         Arena *arena, SymbolTable *st) {
+    StrSlice name = strslice("s", 1);
+    /* LOAD-BEARING, and not obvious from the call site -- do not delete this
+     * as a redundant guard:
+     *
+     *   - the interpreter/REPL registry is env-lifetime and reaches this
+     *     function on every eval;
+     *   - the batch-compile registry is STRICT and is SHARED ACROSS `(load)`:
+     *     load_expand_forms passes `e->user_macros` back into
+     *     read_all_with_registry (elab_toplevel.c), so a program with one
+     *     `(load)` reaches this path twice on the same strict registry.
+     *
+     * Without the early return the second install is a hard
+     * "reader macro '#s' already registered" on every loading program --
+     * which is most of them. */
+    if (reader_macros_lookup(reg, name, '"')) return;
+
+    /* Build the expansion template `(string/from-cstr $body)`.  `$body` is
+     * replaced by a string literal of the `#s"..."` body at dispatch time
+     * (reader.c::expand_raw_template). */
+    Form **items = (Form **)arena_alloc(arena, sizeof(Form *) * 2);
+    items[0] = form_sym(arena, SPAN_UNKNOWN,
+                        symtab_intern(st, strslice("string/from-cstr", 16)));
+    items[1] = form_sym(arena, SPAN_UNKNOWN,
+                        symtab_intern(st, strslice("$body", 5)));
+    Form *tmpl = form_list(arena, SPAN_UNKNOWN, items, 2);
+
+    reader_macros_register(reg, name, '"', RM_BODY_STRING, tmpl, SPAN_UNKNOWN);
+}
+
+void reader_macros_install_builtins(ReaderMacroRegistry *reg,
+                                    Arena *arena, SymbolTable *st) {
+    if (!reg || !arena || !st) return;
+    install_string_literal_macro(reg, arena, st);
+}

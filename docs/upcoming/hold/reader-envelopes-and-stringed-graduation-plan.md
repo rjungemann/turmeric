@@ -10,10 +10,10 @@ which this plan replaces -- see "Why literate is neither a layer nor a base").
 
 Two pieces, independent of each other:
 
-1. **Graduate the `stringed` layer.** `#s"..."` becomes an always-on reader
-   macro, so the only thing needed to use owned Strings is
-   `(load "stdlib/string.tur")`. The `LANG_LAYERS[]` table empties; the token
-   survives one migration window in `GRADUATED_LAYERS[]` as a warned no-op.
+1. ~~**Graduate the `stringed` layer.**~~ **Done in v0.49.0, and superseded**
+   by the decommission of the whole layer axis -- see
+   [`lang-layers-decommission-plan.md`](../../archive/lang-layers-decommission-plan.md).
+   Part 1 below is a pointer, not a design.
 2. **Add a third reader axis -- the *envelope* -- and put literate `.tur.md`
    on it.** An envelope is a source-to-source pass that runs *before* base
    dialect selection and yields ordinary Turmeric source. It composes with
@@ -99,159 +99,24 @@ spaces. For source files this is irrelevant.
 
 ---
 
-## Part 1 -- Graduate the `stringed` layer
+## Part 1 -- Graduate the `stringed` layer -- DONE, and superseded
 
-### Motivation
+Part 1 landed in v0.49.0, as part of something larger: rather than graduating
+the one layer and leaving an empty `LANG_LAYERS[]` behind, the whole layer
+axis was decommissioned. `#s"..."` is an unconditional reader macro
+(`reader_macros_install_builtins`), `#lang` takes a single base dialect, and
+`stringed` is a warned no-op for one minor line.
 
-`stringed` is the only live `#lang` layer, and it registers exactly one
-dispatch: `#s"` => `(string/from-cstr $body)` (`lang_layers.c:39-57`). Every
-other `#`-dispatch in the language (`#map{}`, `#set{}`, `#rat{}`, `#refine{}`,
-`#r{}`, `#json()`, `#fx{}`, `#reads`, `#writes`, `#rx""`) is always-on.
-CLAUDE.md says to graduate a layer to always-on rather than let layers
-accumulate, and `stringed` has no ordering dependence, no semantic gate, and
-no cost when unconditional. It is the textbook graduation.
+The full argument, the surface audit and the migration window are in
+[`lang-layers-decommission-plan.md`](../../archive/lang-layers-decommission-plan.md).
+The design that used to be written out here is deleted rather than kept
+alongside it: two descriptions of the same finished change is exactly the
+drift the archiving rule exists to prevent.
 
-After graduation the only ceremony for owned Strings is
-`(load "stdlib/string.tur")`.
-
-### The read/eval split (why `(load)` stays)
-
-A reader macro is installed at **read** time; `(load)` runs at **eval** time.
-Graduating makes the read-time half unconditional -- `#s"hi"` always *reads*
-as `(string/from-cstr "hi")` -- but evaluating that form still needs
-`string/from-cstr` (`stdlib/string.tur:112`) to be defined. That is precisely
-the "only thing needed is to load the library" end state.
-
-Adding `string.tur` to the autoload list (`stdlib_autoload.c:18`) would remove
-even that, but it pulls a refcounted-heap type into every compilation unit
-whether or not the program uses Strings, and changes the ABI surface of every
-emitted TU. **Out of scope here** -- a separate decision.
-
-### Steps
-
-**S1 -- Register `#s"` unconditionally.** Move the body of
-`stringed_reader_hook` (`lang_layers.c:39`) into the reader init path, called
-from `read_all_with_registry_from` right after `reg` is established and next
-to the existing `lang_layers_apply_readers` call (`reader.c:4413`). Suggested
-home: a `reader_macros_install_builtins(reg, arena, st)` in `reader_macros.c`,
-so the next graduated dispatch has an obvious place to land rather than
-accreting one-offs in `reader.c`.
-
-The existing hook is already idempotent -- it early-returns on
-`reader_macros_lookup(reg, "s", '"')` -- which is what keeps the persistent
-REPL/interp registry (`env.h:364`, `env.c:612`) safe across repeated calls.
-Keep that guard; it is now load-bearing for a different reason (see S4).
-
-**S2 -- Delete the `LANG_LAYERS[]` row** (`lang_layers.c:62-68`). The table
-becomes empty.
-
-> **Gotcha: an empty array initializer is not standard C.**
-> `static const T LANG_LAYERS[] = {};` is a GNU/Clang extension, and
-> `lang_layers_count()` (`lang_layers.c:140`) computes
-> `sizeof(LANG_LAYERS)/sizeof(LANG_LAYERS[0])` on it. Fix it the way
-> `GRADUATED_LAYERS[]` already does: keep a `{ NULL, ... }` sentinel row and
-> count by walking to the first `NULL` name. Then `lang_layer_at`,
-> `lang_layer_index`, and both iteration loops (`lang_layers_apply_readers`,
-> `lang_layers_apply_semantic`) work unchanged against a count of 0. Do this
-> in the same commit as the row deletion, not as a follow-up.
-
-**S3 -- Add `"stringed"` to `GRADUATED_LAYERS[]`** (`lang_layers.c:115`) so
-`#lang turmeric stringed` is an accepted no-op with a one-time TUR-W0064
-instead of a hard TUR-E0330. This is exactly the path `refined` took; the
-table's own comment explains it exists for this moment. Age the entry out one
-minor line later, at which point the token becomes the same hard error any
-unknown token gets.
-
-Note the pairing rule in that comment does **not** apply here: it binds a
-*semantic* layer to its `EXPERIMENTS[]` row. `stringed` is a reader layer with
-no experiment, so there is no `GRADUATED[]` counterpart in `experiments.c` to
-retire alongside it.
-
-**S4 -- Retire `stdlib/string-reader.tur`.** This is the one step with a
-sharp edge the superseded draft missed. Once `#s"` is registered
-unconditionally, `#use-reader-macros "stdlib/string-reader.tur"` re-registers
-the same `(name, delim)` pair against a **strict** batch-compile registry,
-and `reader_macros_register` makes that a hard error with a "previously
-registered here" note (`reader_macros.c:157`). So the file cannot simply be
-left alone -- it would turn from working code into a compile error.
-
-Recommended: **gut the file to a comment-only no-op for one minor line, then
-delete it**, matching the `GRADUATED_LAYERS[]` migration-window philosophy.
-Replace line 28 (`(reader-macros/define 's :string ...)`) with a `;;;` note
-saying the macro is now always-on and the directive is unnecessary. A file in
-the wild naming it keeps compiling; a reader of the file learns why.
-
-Alternative (blunter): delete it now and let callers get "file not found".
-Rejected as the default because it breaks working files at graduation, which
-is the exact failure mode the layer shim exists to prevent.
-
-**S5 -- Fixtures.**
-
-- `tests/fixtures/string-reader-macro/input.tur` -- **must change in this
-  PR**, per S4: line 3 is `#use-reader-macros "stdlib/string-reader.tur"`,
-  which becomes a hard error. Drop the directive; the fixture then pins the
-  post-graduation idiom (`(load)` + `#s"..."` and nothing else). Its Map-key
-  and `eq?` assertions are worth keeping -- they are the broadest `#s`
-  coverage in the suite.
-- `tests/fixtures/lang-layer-stringed/input.tur`,
-  `lang-layer-stringed-sweet/input.tur` -- drop `stringed` from the `#lang`
-  line in one and keep it in the other, so the suite pins both the clean
-  idiom and the TUR-W0064 shim. Note the sweet fixture is the only thing
-  pinning "`#s"` works under a non-default base," so keep that coverage
-  wherever it ends up.
-- `tests/fixtures/lang-trailing-tokens/input.tur` -- its whole point is that
-  trailing tokens are stripped and never leak into the body. It uses
-  `stringed` as the token; after graduation that token is a *graduated*
-  no-op, which exercises a different code path. Swap in a live layer... except
-  there are none left. Either keep `stringed` and accept that it now tests
-  the graduated path, or point it at a deliberately unknown token and pair it
-  with the TUR-E0330 expectation. Lean: keep it, and add a comment that the
-  stripping behavior is what is pinned, not the token's status.
-- `tests/fixtures/errors/lang-layer-retired-name/` -- pins TUR-E0330 for
-  `refined`. Add a `stringed` case only in the age-out PR, not this one.
-
-**S6 -- Listings and the playground.**
-
-- `tests/wasm_glue_lang_unit.c:90` asserts the registry JSON contains
-  `"name":"stringed"`. **This will fail** once the row is gone; update it to
-  assert an empty `layers` array. Line 65-69 (`set_lang("turmeric stringed")`
-  activates `#s"`) still passes, but now for a different reason -- retarget
-  it at the graduated-token path or delete it.
-- `cmd_lang_layers` (`main.c:10524`) already handles `n == 0` on both the
-  human and `--json` paths. No change needed; verify the empty output reads
-  sensibly.
-- `turi_wasm_lang_registry` (`wasm_glue.c:505`) walks the table live, so it
-  emits `"layers":[]` with no change. Check `web/main.js:5546` and the lang
-  picker render an empty layer list gracefully rather than showing an empty
-  control.
-
-**S7 -- Docs.**
-
-- `docs/guides/syntax-guide.md:537-556` -- "The reader layer available today
-  is **`stringed`**" becomes "no reader layer today"; move `#s"..."` into the
-  always-on dispatch table. Also `syntax-guide.md:20`, which uses
-  `#lang turmeric stringed` as the example of a layer token.
-- `docs/guides/reader-forms-guide.md` -- the "Owned-String literal --
-  `#s"..."` (layer `stringed`)" heading loses its parenthetical. Note this
-  heading is an anchor target in the generated site
-  (`#owned-string-literal-s-layer-stringed`), so the docs rebuild is part of
-  the change.
-- `docs/guides/strings-guide.md`, `web/README.md:151`, `CHANGELOG.md`.
-- Per `feedback_guides_link_plans_via_github_url`: any guide reference to this
-  plan is a GitHub URL, not a relative path.
-
-### Risk
-
-Low. The expansion target is unchanged; the only behavioral change is that
-`#s"..."` works without a token. No collision: the built-in `#s(` set literal
-is a different delimiter, and `reader_macros_is_reserved` (`reader_macros.c:139`)
-already lets `("s", '"')` through today.
-
-The one non-obvious failure is S4 -- a `#use-reader-macros` of the old file
-going from working to hard error -- and S6's wasm unit test, which fails
-loudly. Both are listed above precisely so they land in the same PR.
-
----
+Parts 2 and 3 below are unaffected. Neither is a layer -- that is the point
+they were making -- so neither depended on the axis and neither changes. The
+decommission does simplify Part 2 slightly: an envelope now composes with a
+base and nothing else.
 
 ## Part 2 -- The envelope axis and literate `.tur.md`
 
@@ -554,11 +419,9 @@ Because at-exp is a base, it composes with the Part 2 envelope for free: a
 
 ## Dependency order
 
-Part 1 and Part 2 are fully independent -- different files, different axes --
-and either can land first. Part 1 is much smaller and empties
-`LANG_LAYERS[]`, which is a tidy state to be in before touching reader
-plumbing, so it is the natural opener. Part 3 depends on neither, and Part 2's
-fence dispatch picks it up automatically if it lands later.
+Part 1 is done (v0.49.0). Parts 2 and 3 are independent of it and of each
+other -- different files, different axes -- and either can land first; Part
+2's fence dispatch picks Part 3 up automatically if that lands later.
 
 None of the three needs an `--enable` experiment. Per CLAUDE.md, the
 experiment gate covers elaboration/checker gates and codegen knobs; reader
@@ -569,9 +432,9 @@ not the addition of one.
 
 | Piece | Axis | Selected by | Composes with | Needs an offset map? |
 |---|---|---|---|---|
-| `stringed` graduation | (removes a layer) | -- always on | everything | n/a |
+| `stringed` graduation | (axis removed, v0.49.0) | -- always on | everything | n/a |
 | Literate `.tur.md` | **envelope** (new) | `.tur.md` extension | every base | **No** -- blanking preserves offsets |
-| at-exp | base dialect | `#lang turmeric/at-exp` | layers, envelopes | Yes |
+| at-exp | base dialect | `#lang turmeric/at-exp` | envelopes | Yes |
 
 ## Out of scope
 

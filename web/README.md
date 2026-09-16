@@ -147,12 +147,12 @@ The WASM module exposes the following functions:
 - `turi_wasm_eval(input)` - Evaluate code and return result as string
 - `turi_wasm_eval_ex(input, out_result, out_error)` - Evaluate with separate result/error
 - `turi_wasm_version()` - Get version string
-- `turi_wasm_set_lang(name)` - Set the reader dialect + layer set from a full
-  `#lang` directive tail (e.g. `"turmeric/sweet stringed"`); assigns the
-  layer set and resets the session when it changes
-- `turi_wasm_get_lang()` - Current reader name (canonical spelling)
-- `turi_wasm_lang_registry()` - JSON registry of base dialects and curated
-  `#lang` layers, exported from the C tables for the language picker
+- `turi_wasm_set_lang(name)` - Set the base dialect from a `#lang` directive
+  tail (e.g. `"turmeric/sweet"`, `"saffron"`); resets the session when it
+  changes, and rejects the call outright if anything trails the base name
+- `turi_wasm_get_lang()` - Current base dialect (canonical spelling)
+- `turi_wasm_lang_registry()` - JSON registry of the base dialects, exported
+  from the C base axis for the language picker
 - `turi_wasm_lsp_request(json)` - Feed one JSON-RPC message to the language
   server; returns a JSON array of the messages it produced
 - `turi_wasm_lsp_flush()` - Analyze documents with pending edits

@@ -1,6 +1,6 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
-#include "lang_layers.h"  /* saffron-lang-plan S5: lang_span_is_saffron */
+#include "lang_dialects.h"  /* saffron-lang-plan S5: lang_span_is_saffron */
 #include <assert.h>   /* structdef-retirement slice 5 DS-B: zero-producer guard */
 
 /* ---- file-local helper forward declarations ---- */

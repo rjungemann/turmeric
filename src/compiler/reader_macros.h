@@ -90,4 +90,19 @@ bool reader_macros_is_define_form(const Form *f);
  * Returns 0 on success, -1 on error (diagnostic emitted). */
 int reader_macros_register_from_form(ReaderMacroRegistry *reg, const Form *f);
 
+/* Install the built-in `#`-dispatch macros every file gets, whatever its
+ * `#lang` line says.  Called from read_all_with_registry_from after the
+ * registry is established and before the read loop.
+ *
+ * Today that is one macro, `#s"..."` => `(string/from-cstr "...")`.  It used
+ * to be the `stringed` `#lang` layer; the layer axis was decommissioned
+ * (docs/archive/lang-layers-decommission-plan.md) because every other
+ * `#`-dispatch in the language is unconditional and this one had no reason
+ * not to be.  `(load "stdlib/string.tur")` is still what brings in the code
+ * the expansion calls -- registration is read-time, the String code is not.
+ *
+ * `arena`/`st` build the expansion templates; both must outlive `reg`. */
+void reader_macros_install_builtins(ReaderMacroRegistry *reg,
+                                    Arena *arena, SymbolTable *st);
+
 #endif

@@ -288,10 +288,6 @@ bool g_dump_cps_mono = false;
 /* --strict-refine: hard-fail on any obligation the chain could not prove. */
 bool g_strict_refine = false;
 
-/* lang-layers L4: set when a project manifest declared an `:experiments` key.
- * See globals.h. */
-bool g_manifest_experiments_scoped = false;
-
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).

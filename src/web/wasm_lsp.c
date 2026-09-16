@@ -134,15 +134,15 @@ int tur_collect_symbols(const char *source_path, const char *logical_path,
 
     const char  *src_adj = src;
     size_t       len_adj = len;
-    LangLayerSet layers  = 0;
     const char  *bad     = NULL;
     size_t       bad_len = 0;
-    ReaderType lang_type = detect_lang_layered(src, len, &src_adj, &len_adj,
-                                               &layers, &bad, &bad_len);
-    /* An unknown layer token is a hard error in the CLI (TUR-E0330, via
-     * exit(1)). Killing the WASM module over a typo in a `#lang` line is not
-     * an option -- it is the browser tab. Fall back to the base reader and let
-     * the compile report whatever it reports. */
+    ReaderType lang_type = detect_lang(src, len, &src_adj, &len_adj,
+                                       &bad, &bad_len);
+    (void)bad; (void)bad_len;
+    /* A trailing token is a hard error in the CLI (TUR-E0330, via exit(1)).
+     * Killing the WASM module over a typo in a `#lang` line is not an option
+     * -- it is the browser tab. Fall back to the base reader and let the
+     * compile report whatever it reports. */
     ReaderType ext_type = reader_type_from_extension(source_path);
     ReaderType reader_type = (ext_type != READER_TURMERIC) ? ext_type : lang_type;
     if (!reader_type_is_implemented(reader_type)) reader_type = READER_TURMERIC;
@@ -156,7 +156,6 @@ int tur_collect_symbols(const char *source_path, const char *logical_path,
     file.head_offset = (size_t)(src_adj - src);
     file.file_id     = 0;
     file.reader_type = reader_type;
-    file.lang_layers = layers;
     diag_register_file(&file);
 
     Arena arena;

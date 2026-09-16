@@ -80,7 +80,7 @@
 #include "pass.h"         /* Phase P19-1: pass scheduling */
 #include "reader.h"
 #include "reader_macros.h"
-#include "lang_layers.h"  /* L5: `tur lang-layers` registry listing */
+#include "lang_dialects.h"  /* `tur dialects`: the `#lang` base axis */
 #include "refine_discharge.h" /* RT3: per-compile refinement stats reset */
 #include "span_audit.h"  /* debugger Phase 1: breakpoint-span coverage audit */
 #include "symbols.h"
@@ -168,12 +168,9 @@ static bool g_dump_kinds = false;
 static bool g_audit_spans = false;
 static int  g_audit_span_holes = 0;
 
-/* Helper to detect language and adjust source for #lang directive.  Also
- * yields the additive `#lang` layer set (lang-layers-plan L1) via
- * `out_layers` (may be NULL for callers that don't thread it). */
+/* Helper to detect language and adjust source for #lang directive. */
 static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len,
                                         const char **out_src, size_t *out_len,
-                                        LangLayerSet *out_layers,
                                         LangDialect *out_dialect) {
     ReaderType ext_type = reader_type_from_extension(path);
 
@@ -181,31 +178,30 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
      * the source — otherwise the chosen reader would choke on the '#'. When
      * the extension already selected a non-default reader, the extension
      * still wins for the base; the directive is treated as an optional,
-     * redundant hint.  Layers ride alongside the base regardless of source. */
+     * redundant hint. */
     const char *src_rest = src;
     size_t len_rest = len;
-    LangLayerSet layers = 0;
     const char *bad = NULL;
     size_t bad_len = 0;
     LangDialect dialect = LANG_TURMERIC;
     ReaderType lang_type = detect_lang_dialect(src, len, &src_rest, &len_rest,
-                                               &layers, &bad, &bad_len,
-                                               &dialect);
+                                               &bad, &bad_len, &dialect);
 
     if (bad) {
         /* lang-unknown-base-diagnostic-names-nothing: the detector hands an
-         * unrecognised BASE out through the same slot as an unknown layer;
+         * unrecognised BASE out through the same slot as a trailing token;
          * the returned type says which.  Name what the user wrote either way. */
         if (lang_type == READER_UNKNOWN) {
             fprintf(stderr,
-                    "tur: error [TUR-E0331]: unknown #lang base '%.*s' -- see `tur lang-layers` for the valid bases (in %s)\n",
+                    "tur: error [TUR-E0331]: unknown #lang base '%.*s' -- see `tur dialects` for the valid bases (in %s)\n",
                     (int)bad_len, bad, path);
             exit(1);
         }
-        /* Unknown layer token -- hard error (TUR-E0330), mirroring the
-         * unimplemented-base exit below. */
+        /* `#lang` takes a base dialect and nothing else -- hard error
+         * (TUR-E0330), mirroring the unimplemented-base exit below. */
         fprintf(stderr,
-                "tur: error [TUR-E0330]: unknown #lang layer '%.*s' in %s\n",
+                "tur: error [TUR-E0330]: `#lang` takes a single base dialect; "
+                "unexpected trailing token '%.*s' in %s\n",
                 (int)bad_len, bad, path);
         exit(1);
     }
@@ -221,7 +217,6 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
 
     *out_src = src_rest;
     *out_len = len_rest;
-    if (out_layers) *out_layers = layers;
     /* saffron-lang-plan S1: the language axis rides out beside the reader.  The
      * extension override above is deliberately reader-only -- a `.tur.sweet`
      * file is sweet-exp Turmeric unless its `#lang` line says otherwise, and
@@ -967,9 +962,8 @@ static int compile_to_c(const char *path, Buf *out_c,
     /* Detect language and adjust source for #lang directive */
     const char *src_adj = src;
     size_t len_adj = len;
-    LangLayerSet lang_layers = 0;
     LangDialect lang_dialect = LANG_TURMERIC;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers, &lang_dialect);
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_dialect);
 
     /* Each compile_to_c call is a self-contained compilation unit.  Clear the
      * global diagnostic state (the `had_error_` flag and the file registry)
@@ -996,7 +990,6 @@ static int compile_to_c(const char *path, Buf *out_c,
     file.file_id = 0;
     file.reader_type = reader_type;
     file.lang        = lang_dialect;
-    file.lang_layers = lang_layers;
     diag_register_file(&file);
 
     Arena arena;
@@ -1197,9 +1190,8 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     /* Detect language and adjust source for #lang directive */
     const char *src_adj = src;
     size_t len_adj = len;
-    LangLayerSet lang_layers = 0;
     LangDialect lang_dialect = LANG_TURMERIC;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers, &lang_dialect);
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_dialect);
 
     /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
      * project-mode dir build loops compile_to_h / compile_to_implementation
@@ -1222,7 +1214,6 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     file.file_id = 0;
     file.reader_type = reader_type;
     file.lang        = lang_dialect;
-    file.lang_layers = lang_layers;
     diag_register_file(&file);
 
     Arena arena;
@@ -1306,9 +1297,8 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     /* Detect language and adjust source for #lang directive */
     const char *src_adj = src;
     size_t len_adj = len;
-    LangLayerSet lang_layers = 0;
     LangDialect lang_dialect = LANG_TURMERIC;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers, &lang_dialect);
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_dialect);
 
     /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
      * project-mode dir build loops compile_to_h / compile_to_implementation
@@ -1331,7 +1321,6 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     file.file_id = 0;
     file.reader_type = reader_type;
     file.lang        = lang_dialect;
-    file.lang_layers = lang_layers;
     diag_register_file(&file);
 
     Arena arena;
@@ -3067,12 +3056,6 @@ static char *find_spice_root(const char *file_path) {
  * hard configuration error: emit TUR-E0310 and abort, the same "typos surface
  * immediately" contract the CLI path enforces. */
 static void apply_manifest_experiments(const PkgManifest *m) {
-    /* lang-layers L4: a manifest that states its own :experiments list (even
-     * the empty one) has SCOPED the experiment set for this project.  A file
-     * that then asks for a semantic `#lang` layer whose experiment is not in
-     * that list is a hard error rather than a silent ignore -- see
-     * lang_layers_apply_semantic. */
-    if (m->has_experiments_key) g_manifest_experiments_scoped = true;
     for (int i = 0; i < m->n_experiments; i++) {
         if (!experiment_enable(m->experiments[i], XF_SRC_MANIFEST)) {
             fprintf(stderr,
@@ -7337,7 +7320,7 @@ static int parse_check_read(const char *path, ReaderType forced, Buf *out) {
      * the leading '#'. */
     const char *rest = src;
     size_t      rest_len = len;
-    ReaderType  detected = detect_lang(src, len, &rest, &rest_len);
+    ReaderType  detected = detect_lang(src, len, &rest, &rest_len, NULL, NULL);
     ReaderType  reader   = forced;
     if (rest != src) {
         /* A `#lang` directive was present -- honour it and use the
@@ -7488,10 +7471,9 @@ static int fmt_format_source(const char *path_label, const char *src, size_t len
                               ReaderType rtype, Buf *out) {
     const char *body = src;
     size_t body_len = len;
-    LangLayerSet lay = 0;
     LangDialect dl = LANG_TURMERIC;
     ReaderType lang_rt = detect_lang_dialect(src, len, &body, &body_len,
-                                             &lay, NULL, NULL, &dl);
+                                             NULL, NULL, &dl);
     size_t head_len = (size_t)(body - src);
     if (head_len == 0) return fmt_format_buffer(path_label, src, len, rtype, out);
 
@@ -7895,10 +7877,9 @@ static int cmd_eval_h(const char *path, bool use_color,
             fclose(pf);
             head[hn] = '\0';
             const char *rest = head; size_t rest_len = hn;
-            LangLayerSet layers = 0;
             LangDialect dialect = LANG_TURMERIC;
             ReaderType rt = detect_lang_dialect(head, hn, &rest, &rest_len,
-                                                &layers, NULL, NULL, &dialect);
+                                                NULL, NULL, &dialect);
             if (rest != head && reader_type_is_implemented(rt)) {
                 env->reader_type = rt;
                 /* saffron-lang-plan S1: seed the LANGUAGE axis here for the
@@ -7915,11 +7896,6 @@ static int cmd_eval_h(const char *path, bool use_color,
                  * `tur --interpret` reporting "unknown name 'vec-map'" on a
                  * program the compiler accepted. */
                 g_saffron_prelude = (dialect == LANG_SAFFRON);
-                /* Pre-seed the layer set too so the prelude and the user file
-                 * read under the same layers (lang-layers-plan L1); turi_eval
-                 * unions the authoritative set again when it strips the
-                 * directive. */
-                env->lang_layers = layers;
             }
         }
     }
@@ -9276,7 +9252,7 @@ static const char *const CANONICAL_COMMANDS[] = {
     "eval", "doc", "docs", "image-info", "image-verify", "explain",
     "format", "fmt", "parse-check", "test", "demangle",
     "new", "init", "add", "add-cmake", "fetch", "audit",
-    "install", "uninstall", "list", "upgrade", "experiments", "lang-layers",
+    "install", "uninstall", "list", "upgrade", "experiments", "dialects",
     "smt",
     NULL,
 };
@@ -9365,7 +9341,7 @@ static int usage(void) {
         "  tur smt <file.smt2>               run an SMT-LIB2 script through the refinement solver\n"
         "  tur check --dump-refine=json <f>  print one JSON record per refinement obligation\n"
         "  tur experiments                   list experimental features (--enable=<name>)\n"
-        "  tur lang-layers                   list the `#lang` layers a file may request\n"
+        "  tur dialects                      list the base dialects a `#lang` line may name\n"
         "  tur completion <zsh|bash>         print a shell completion script\n"
         "\n"
         "package management (Spice, Phase PKG-1):\n"
@@ -10759,78 +10735,46 @@ static int cmd_experiments(int argc, char **argv) {
     return 0;
 }
 
-/* L5: list the curated `#lang` layer registry (LANG_LAYERS[]), mirroring
- * `tur experiments`.  `--json` emits the machine-readable form. */
-static int cmd_lang_layers(int argc, char **argv) {
+/* List the `#lang` BASE axis -- the (language, reader) pairs a base token can
+ * name -- mirroring `tur experiments`.  `--json` emits the machine-readable
+ * form.
+ *
+ * Was `tur lang-layers`, which listed two axes.  The layer axis was
+ * decommissioned (docs/archive/lang-layers-decommission-plan.md), so the
+ * command lists one axis and is named for it.  The listing itself stays: the
+ * TUR-E0331 diagnostics point at it for the valid bases, and it is the only
+ * way to ask a build which dialects it accepts. */
+static int cmd_dialects(int argc, char **argv) {
     bool json = use_json_output;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--json") == 0) {
             json = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            printf("usage:\n  tur lang-layers [--json]\n\n"
-                   "List the two axes of a `#lang` line: the base DIALECTS "
-                   "(language, and\noptionally a reader after a slash) and the "
-                   "curated additive LAYERS.  A\n`#lang <base> <layer>*` line "
-                   "names one base and any number of layers;\nlayers are "
-                   "order-independent and file-scoped.  --json emits the\n"
-                   "machine-readable form.\n");
+            printf("usage:\n  tur dialects [--json]\n\n"
+                   "List the base DIALECTS a `#lang` line may name: a language, "
+                   "and\noptionally a reader after a slash.  `#lang <base>` takes "
+                   "one base and\nnothing else -- a trailing token is an error "
+                   "(TUR-E0330).  --json emits\nthe machine-readable form.\n");
             return 0;
         } else {
-            fprintf(stderr, "tur lang-layers: unexpected argument '%s'\n", argv[i]);
+            fprintf(stderr, "tur dialects: unexpected argument '%s'\n", argv[i]);
             return 2;
         }
     }
 
-    size_t n = lang_layers_count();
-
     if (json) {
-        /* saffron-lang-plan S1: both axes.  The layer array keeps its shape at
-         * the "layers" key rather than becoming a bare top-level array, so a
-         * consumer that wants only layers reads one key instead of guessing. */
+        /* The array stays under a "dialects" key rather than becoming a bare
+         * top-level array: a consumer reads one key, and the shape survives a
+         * second thing ever being listed here. */
         printf("{\n  \"dialects\": ");
         lang_dialects_print_json();
-        printf(",\n  \"layers\": [");
-        for (size_t i = 0; i < n; i++) {
-            const LangLayerDescriptor *d = lang_layer_at(i);
-            if (i) printf(",");
-            printf("\n  {");
-            printf("\"name\":");    xf_json_puts(stdout, d->name);
-            printf(",\"kind\":");   xf_json_puts(stdout,
-                                        d->kind == LAYER_READER ? "reader"
-                                                                : "semantic");
-            printf(",\"summary\":"); xf_json_puts(stdout, d->summary);
-            printf(",\"since\":");  xf_json_puts(stdout, d->since);
-            if (d->kind == LAYER_SEMANTIC && d->experiment) {
-                printf(",\"experiment\":"); xf_json_puts(stdout, d->experiment);
-            }
-            printf("}");
-        }
-        printf("%s]\n}\n", n ? "\n  " : "");
+        printf("\n}\n");
         return 0;
     }
 
-    if (n == 0) {
-        lang_dialects_print();
-        printf("\nNo `#lang` layers are registered.\n");
-        return 0;
-    }
-
-    /* saffron-lang-plan S1: the two axes of a `#lang` line are listed
-     * together, because a reader looking one up does not know in advance which
-     * axis the token they saw belongs to.  The base names the LANGUAGE and
-     * (optionally, after a slash) the reader; the trailing tokens are the
-     * additive layer set. */
     lang_dialects_print();
-    printf("\n");
-
-    printf("%-12s %-9s %-7s %s\n", "NAME", "KIND", "SINCE", "SUMMARY");
-    for (size_t i = 0; i < n; i++) {
-        const LangLayerDescriptor *d = lang_layer_at(i);
-        printf("%-12s %-9s %-7s %s\n",
-               d->name, d->kind == LAYER_READER ? "reader" : "semantic",
-               d->since, d->summary);
-    }
-    printf("\n%zu `#lang` layer%s registered.\n", n, n == 1 ? "" : "s");
+    printf("\n%zu `#lang` base dialect%s.\n", lang_bases_count(),
+           lang_bases_count() == 1 ? "" : "s");
     return 0;
 }
 
@@ -12414,9 +12358,9 @@ static int tur_main_inner(int argc, char **argv) {
     /* XF3: experimental-feature registry listing */
     if (strcmp(cmd, "experiments") == 0)
         return cmd_experiments(argc, argv);
-    /* L5: `#lang` layer registry listing */
-    if (strcmp(cmd, "lang-layers") == 0)
-        return cmd_lang_layers(argc, argv);
+    /* `#lang` base-dialect listing */
+    if (strcmp(cmd, "dialects") == 0)
+        return cmd_dialects(argc, argv);
     /* Shell completion scripts (zsh/bash) */
     if (strcmp(cmd, "completion") == 0)
         return cmd_completion(argc, argv);

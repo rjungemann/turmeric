@@ -601,9 +601,8 @@ void turi_env_reset_to_prelude(TuriEnv *env) {
     }
 }
 
-void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type,
-                         LangLayerSet layers) {
-    turi_env_apply_lang_dialect(env, reader_type, layers,
+void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type) {
+    turi_env_apply_lang_dialect(env, reader_type,
                                 env ? env->lang : LANG_TURMERIC);
 }
 
@@ -619,24 +618,23 @@ void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type,
  * still resets the session -- which it must, since accumulated source was
  * elaborated under the old defaults. */
 void turi_env_apply_lang_dialect(TuriEnv *env, ReaderType reader_type,
-                                 LangLayerSet layers, LangDialect dialect) {
+                                 LangDialect dialect) {
     if (!env) return;
-    if (reader_type == env->reader_type && layers == env->lang_layers
-        && dialect == env->lang) return;
+    if (reader_type == env->reader_type && dialect == env->lang) return;
     turi_env_reset_to_prelude(env);
-    /* Reader layers register `#`-dispatch macros into the persistent session
-     * registry (RM Q#5), and nothing unregisters them -- so an assignment
-     * that drops a layer must wipe the registry or the dispatch survives the
-     * switch (e.g. `#s"..."` kept reading as a String after `stringed` was
-     * turned off).  User macros registered by discarded session source go
-     * with it, which matches the reset semantics: the `#use-reader-macros`
-     * form that registered them is no longer part of the session either.
-     * The old entries' arena storage is env-lifetime and reclaimed at
-     * teardown, matching the interpreter's process-lifetime policy. */
+    /* Wipe the persistent session reader-macro registry (RM Q#5).  The reason
+     * is the reset, not the vanished layer axis: turi_env_reset_to_prelude
+     * discards the session source, so the `#use-reader-macros` forms that
+     * registered those user macros are no longer part of the session either
+     * -- leaving their dispatches live would let a macro outlive the text
+     * that defined it.  The built-in dispatches (`#s"..."`) are reinstalled
+     * on the next read by reader_macros_install_builtins, so they survive as
+     * they should.  The old entries' arena storage is env-lifetime and
+     * reclaimed at teardown, matching the interpreter's process-lifetime
+     * policy. */
     if (env->reader_macros)
         reader_macros_init(env->reader_macros, &env->sym_arena);
     env->reader_type = reader_type;
-    env->lang_layers = layers;
     env->lang        = dialect;
     /* The Saffron prelude joins the stdlib autoload list when the session is
      * Saffron -- the REPL's analogue of the entry-file switch in main.c. */

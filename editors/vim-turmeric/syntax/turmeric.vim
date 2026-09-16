@@ -32,7 +32,7 @@ syn match turmericDefName "\v[^ \t()\[\]{};]+" contained
 " ending in `?` or `!` has no word boundary after it.
 syn match turmericSpecial "\v\(@<=(with-handler|compose-handlers|cloneable-reset|cloneable-shift|serial-reset|serial-shift|catch-unwind|discontinue|with-region|use-reader-macros|panic-with|bt-scope|call/cc|handle|resume|perform|reset|shift0|shift|escape|import|export|match|letrec|loop|while|when|unless|cond|case|let|fn|if|do|for|set!|and|or|not|quote|quasiquote|unquote|lambda|recur|return|defer|await|async|spawn|yield|try|catch|throw|is\?|cast|type-of)([A-Za-z0-9_/!?<>\=*+-])@!"
 
-syn match turmericDispatch "\v#(map|set|refine|fx|writes|reads|s|lang-layers)>"
+syn match turmericDispatch "\v#(map|set|refine|fx|writes|reads|s)>"
 syn match turmericEffect   "\v#\{[^}]*\}"
 syn match turmericAttr     "\v\^[a-z][a-z0-9-]*"
 

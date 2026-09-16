@@ -1,6 +1,6 @@
 #include "reader.h"
 #include "reader_macros.h"
-#include "lang_layers.h" /* L0: #lang layer registry */
+#include "lang_dialects.h" /* the #lang BASE axis */
 #include "types.h"   /* Phase N: TypeKind constants for literal suffixes */
 #include "globals.h" /* DL0: g_data_literals_enabled */
 #include "buf.h"     /* sweet-exp preprocessor */
@@ -3081,10 +3081,32 @@ static Form *try_read_user_macro(Reader *r) {
         }
     }
     if (!e) {
-        /* No exact (name, delim) match. If a macro with this name exists
-         * under a different delimiter, the user almost certainly meant it —
-         * emit a targeted diagnostic instead of silently rewinding into
-         * the generic "unexpected character" path. */
+        /* No exact (name, delim) match -- but this pair may be a RESERVED
+         * built-in, which always wins.  Rewind so the caller's own dispatch
+         * handles it, before either targeted diagnostic below can fire.
+         *
+         * `#s` is why this exists.  `#s(...)` is the set literal and `#s"..."`
+         * is the owned-String literal: two different (name, delim) pairs that
+         * share a name.  Once `#s"` is registered, the `lookup_any` branch
+         * below sees a macro named "s", concludes the user meant it, and
+         * reports `#s(1 2 3)` as "reader string macro '#s' expects string
+         * body".  That was already true inside a `#lang turmeric stringed`
+         * file -- a latent hole nobody hit, because almost nobody turned the
+         * layer on.  Making `#s"` unconditional turns it into every set
+         * literal in the language, so the rewind is part of that change.
+         *
+         * Checking reserved-ness rather than special-casing `s` is what keeps
+         * this from recurring: a reserved pair cannot be registered at all
+         * (reader_macros_register refuses it), so a registry hit on the NAME
+         * can never be the right answer for it. */
+        if (try_delim != 0 && reader_macros_is_reserved(name, try_delim)) {
+            r->pos = save_pos; r->line = save_line; r->col = save_col;
+            return NULL;
+        }
+        /* If a macro with this name exists under a different delimiter, the
+         * user almost certainly meant it — emit a targeted diagnostic instead
+         * of silently rewinding into the generic "unexpected character"
+         * path. */
         const ReaderMacroEntry *any = (r->user_macros && r->user_macros->len > 0)
             ? reader_macros_lookup_any(r->user_macros, name) : NULL;
         if (any) {
@@ -4468,19 +4490,12 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
     }
     r.user_macros = reg;
 
-    /* L2: activate every `#lang` reader layer before the first form.  Each
-     * hook registers its `#`-dispatch into `reg` (idempotently, so a
-     * persistent REPL/interp registry is safe).  `file->lang_layers` (not
-     * eff_file's) carries the set: the sweet-exp xform copies it via `*xfile
-     * = *file`, and layers are orthogonal to the base reader. */
-    lang_layers_apply_readers(file->lang_layers, reg, arena, st);
-
-    /* L4: a SEMANTIC layer turns on its backing experiment for this file --
-     * `#lang turmeric refined` is exactly `--enable=refined`, scoped here.
-     * A manifest that scoped :experiments without it is a hard error; the
-     * diagnostic is already emitted, and the caller sees it via
-     * diag_had_error(). */
-    (void)lang_layers_apply_semantic(file->lang_layers, file->path);
+    /* Install the built-in `#`-dispatch macros before the first form.  These
+     * are unconditional -- no `#lang` token, no `#use-reader-macros` -- so
+     * every file gets them regardless of its base dialect.  Idempotent, so a
+     * persistent REPL/interp registry and a `(load)`-shared strict registry
+     * are both safe; see reader_macros.c. */
+    reader_macros_install_builtins(reg, arena, st);
 
     /* The LANGUAGE axis gets the same treatment, in the same place, because it
      * is the same decision one level up.  Since saffron graduated at 0.46.0
@@ -4654,18 +4669,50 @@ static ReaderType lang_base_from_name(const char *name, size_t len,
     return (ReaderType)-1;
 }
 
-/* Parse #lang directive, reporting the base reader plus the additive layer
- * set (lang-layers-plan L0).  See the declaration in diag.h for the
- * out-param contract. */
+/* Tokens that used to be legal `#lang` layers.
+ *
+ * The layer axis was decommissioned in v0.49.0
+ * (docs/archive/lang-layers-decommission-plan.md).  `stringed` -- the only
+ * token that was ever legal -- is accepted and ignored for one minor line, so
+ * a file that opted in per-file keeps compiling across the boundary, exactly
+ * as GRADUATED[] in experiments.c does for `--enable`.  Age out at 0.50.0:
+ * empty this list (or delete it with the warning below) and `#lang turmeric
+ * stringed` becomes the same TUR-E0330 any other trailing token gets.
+ *
+ * Six lines and a flag rather than a registry: this is the migration window,
+ * not a second axis to grow rows in. */
+static const char *const RETIRED_LANG_TOKENS[] = { "stringed", NULL };
+
+static bool g_lang_retired_warned = false;
+
+static bool lang_token_is_retired(const char *name, size_t len) {
+    if (!name) return false;
+    for (size_t i = 0; RETIRED_LANG_TOKENS[i]; i++) {
+        if (strlen(RETIRED_LANG_TOKENS[i]) == len &&
+            memcmp(RETIRED_LANG_TOKENS[i], name, len) == 0) {
+            if (!g_lang_retired_warned) {
+                g_lang_retired_warned = true;
+                fprintf(stderr,
+                        "warning [TUR-W0064]: `#lang` layer '%.*s' was retired; "
+                        "the token is accepted and ignored for one release, and "
+                        "its behaviour is now unconditional\n",
+                        (int)len, name);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Parse a `#lang` directive: the base dialect, and nothing else.  See the
+ * declaration in diag.h for the out-param contract. */
 ReaderType detect_lang_dialect(const char *src, size_t len,
                                const char **out_rest, size_t *out_rest_len,
-                               LangLayerSet *out_layers,
                                const char **out_bad, size_t *out_bad_len,
                                LangDialect *out_dialect) {
     const char *p = src;
     size_t remaining = len;
 
-    if (out_layers)  *out_layers  = 0;
     if (out_dialect) *out_dialect = LANG_TURMERIC;
     if (out_bad)     *out_bad     = NULL;
     if (out_bad_len) *out_bad_len = 0;
@@ -4727,13 +4774,14 @@ ReaderType detect_lang_dialect(const char *src, size_t len,
             base = READER_UNKNOWN;
         }
 
-        /* Collect the space-separated trailing tokens as the layer set, then
-         * consume to end-of-line so no token ever leaks into the body handed
-         * to the reader.  `p` stops AT the newline (matching the
-         * no-trailing-token path, where the base-name loop already halts on
-         * `\n`/`\r`), leaving the terminator in place so the body keeps its
-         * original line numbering -- the empty line 1 the reader sees stands
-         * in for the stripped `#lang` line. */
+        /* Classify each trailing token, then consume to end-of-line so no
+         * token ever leaks into the body handed to the reader.  The
+         * EOL-consumption is why the directive never leaks and is independent
+         * of what the tokens mean, so it survived the layer axis.  `p` stops
+         * AT the newline (matching the no-trailing-token path, where the
+         * base-name loop already halts on `\n`/`\r`), leaving the terminator
+         * in place so the body keeps its original line numbering -- the empty
+         * line 1 the reader sees stands in for the stripped `#lang` line. */
         for (;;) {
             while (remaining > 0 && (p[0] == ' ' || p[0] == '\t')) {
                 p++;
@@ -4750,22 +4798,12 @@ ReaderType detect_lang_dialect(const char *src, size_t len,
                 remaining--;
             }
 
-            /* Only classify tokens when the caller wants the layer set; the
-             * base-only detect_lang wrapper just consumes them. */
-            if (out_layers) {
-                long idx = lang_layer_index(tok, tok_len);
-                if (idx >= 0) {
-                    *out_layers = lang_layer_add(*out_layers, idx);
-                } else if (lang_layer_is_graduated(tok, tok_len)) {
-                    /* Accepted and ignored: the layer's behaviour is now
-                     * unconditional, so the token asks for something already
-                     * true.  Reporting it as unknown would break every file
-                     * that opted in per-file at the moment the feature stopped
-                     * being optional.  Warns once, inside the lookup. */
-                } else if (out_bad && *out_bad == NULL) {
-                    *out_bad = tok;              /* first unknown token */
-                    if (out_bad_len) *out_bad_len = tok_len;
-                }
+            /* Two-way: a retired layer token (accepted, warned, ignored) or a
+             * bad one.  `#lang` takes a base dialect and nothing else. */
+            if (lang_token_is_retired(tok, tok_len)) continue;
+            if (out_bad && *out_bad == NULL) {
+                *out_bad = tok;              /* first trailing token */
+                if (out_bad_len) *out_bad_len = tok_len;
             }
         }
 
@@ -4781,22 +4819,13 @@ ReaderType detect_lang_dialect(const char *src, size_t len,
 }
 
 /* saffron-lang-plan S1: the pre-dialect entry point, now a wrapper.  Kept so
- * the dozen callers that have no use for the language axis need no change --
- * the LSP, the REPL line-parser, the wasm glue, the package reader. */
-ReaderType detect_lang_layered(const char *src, size_t len,
-                               const char **out_rest, size_t *out_rest_len,
-                               LangLayerSet *out_layers,
-                               const char **out_bad, size_t *out_bad_len) {
+ * the callers that have no use for the language axis need no change -- the
+ * LSP, the package reader, `tur parse-check`. */
+ReaderType detect_lang(const char *src, size_t len,
+                       const char **out_rest, size_t *out_rest_len,
+                       const char **out_bad, size_t *out_bad_len) {
     return detect_lang_dialect(src, len, out_rest, out_rest_len,
-                               out_layers, out_bad, out_bad_len, NULL);
-}
-
-/* Base-reader-only wrapper: parses (and EOL-consumes) any layer tokens but
- * discards them.  Existing callers that don't thread the layer set use this. */
-ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
-                       size_t *out_rest_len) {
-    return detect_lang_layered(src, len, out_rest, out_rest_len,
-                               NULL, NULL, NULL);
+                               out_bad, out_bad_len, NULL);
 }
 
 /* Get reader type from file extension */
@@ -4825,7 +4854,7 @@ const char *reader_type_name(ReaderType type) {
 }
 
 /* saffron-lang-plan S1: canonical dialect name, the sibling of
- * reader_type_name.  Used by `tur lang-layers` and by diagnostics that need to
+ * reader_type_name.  Used by `tur dialects` and by diagnostics that need to
  * say which language a file is in. */
 const char *lang_dialect_name(LangDialect d) {
     switch (d) {

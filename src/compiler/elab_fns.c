@@ -1,6 +1,6 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include "elab_internal.h"
-#include "lang_layers.h"   /* saffron-lang-plan S2: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-lang-plan S2: lang_span_is_saffron */
 #include "cps.h"          /* cps_expr_uses_control -- the control-cast hoist */
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */

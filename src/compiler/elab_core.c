@@ -1,6 +1,6 @@
 /* elab_core.c -- Elab state, scope, free-var analysis, binding/move/linear-state helpers. */
 #include "elab_internal.h"
-#include "lang_layers.h"   /* saffron-dynamic-surface-pass H6: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-dynamic-surface-pass H6: lang_span_is_saffron */
 #include "mangle.h"
 #include <string.h>  /* memset for elab_init_state */
 

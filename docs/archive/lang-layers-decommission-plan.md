@@ -1,7 +1,30 @@
 # Decommissioning the `#lang` layer axis
 
-Status: plan (surface audited against the tree at d76822e0b; not implemented).
+Status: IMPLEMENTED in v0.49.0 (D0-D8). D9, the age-out, is scheduled for
+0.50.0 and is advisory -- it never blocks a release cut.
 Introduced: 2026-09-08
+Landed: 2026-09-16
+
+Three things went differently from the plan as written, because the tree moved
+from 0.45.0 to 0.48.0 between the audit and the work. All three are noted
+inline below; in summary:
+
+- **`lang_layers.{c,h}` are renamed, not deleted.** Saffron's base axis
+  (`lang_span_is_saffron`, `lang_dialect_apply`, the base cross-product behind
+  the playground picker) landed in that file afterwards. They are now
+  `lang_dialects.{c,h}` with the layer half stripped.
+- **`tur lang-layers` is renamed, not deleted.** The same Saffron work gave it
+  a dialects half that three TUR-E0331 diagnostics and two guides point at for
+  "the valid bases". It is `tur dialects` now, listing the one axis it is
+  named for. The layer registry, listing and JSON key are gone either way.
+- **`#s(...)` set literals broke, and the fix is part of D1.** Not in the risk
+  list: the reader's no-exact-match path asks `lookup_any(NAME)`, so anything
+  registered at `#s"` makes `#s(1 2 3)` report "expects string body". Latent
+  inside a `#lang turmeric stringed` file; universal once `#s"` is always on.
+  A reserved `(name, delim)` pair now rewinds to the built-in dispatch first.
+
+The migration window is 0.49.0 -> 0.50.0, not 0.45.0 -> 0.46.0; every version
+number in the phases below should be read that way.
 Supersedes: Part 1 of `docs/upcoming/reader-envelopes-and-stringed-graduation-plan.md`
 (that doc keeps Part 2, the envelope axis / literate `.tur.md`, and Part 3,
 `turmeric/at-exp`; both are unaffected by this plan and neither is a layer).

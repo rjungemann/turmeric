@@ -461,22 +461,22 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
         if (ext_type == READER_UNKNOWN) ext_type = READER_TURMERIC;
         const char  *msrc = src_copy;
         size_t       mlen = src_len;
-        LangLayerSet layers = 0;
         const char  *bad = NULL;
         size_t       bad_len = 0;
         LangDialect dialect = LANG_TURMERIC;
         ReaderType lang_type = detect_lang_dialect(src_copy, src_len,
                                                    &msrc, &mlen,
-                                                   &layers, &bad, &bad_len,
+                                                   &bad, &bad_len,
                                                    &dialect);
         if (bad) {
             if (lang_type == READER_UNKNOWN)
                 diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
-                          "unknown #lang base '%.*s' -- see `tur lang-layers` for the valid bases (in imported module '%s') (TUR-E0331)",
+                          "unknown #lang base '%.*s' -- see `tur dialects` for the valid bases (in imported module '%s') (TUR-E0331)",
                           (int)bad_len, bad, path_copy);
             else
                 diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
-                          "unknown #lang layer '%.*s' in imported module '%s' "
+                          "`#lang` takes a single base dialect; unexpected "
+                          "trailing token '%.*s' in imported module '%s' "
                           "(TUR-E0330)", (int)bad_len, bad, path_copy);
             return false;
         }
@@ -492,7 +492,6 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
         sfile->head_offset = (size_t)(msrc - src_copy);
         sfile->reader_type = chosen;
         sfile->lang        = dialect;
-        sfile->lang_layers = layers;
     }
     diag_register_file(sfile);
 
