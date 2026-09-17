@@ -15,8 +15,7 @@
 
 #include "turi/eval.h"
 #include "turi/collections_native.h"  /* native_mk_cmp_int / native_mk_box_cstr */
-#include "turi/docstrings.h"  /* PS3: doc-lookup / doc-print */
-#include "turi/repl.h"        /* PS3: turi_doc_lookup_builtin */
+#include "turi/docstrings.h"  /* PS3: doc-lookup / doc-print, builtin docs */
 #include "diag.h"    /* SYNTAX natives: diag file-registry save/restore for read-string */
 #include "forms.h"   /* SYNTAX natives: Form constructors/accessors */
 #include "reader.h"  /* SYNTAX natives: read_all_with_registry for read-string */

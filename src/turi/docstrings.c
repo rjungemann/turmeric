@@ -187,3 +187,87 @@ const char *tur_docstring_lookup(const char *name) {
     if (n < 0 || (size_t)n >= sizeof path) return NULL;
     return tur_docstring_lookup_in(path, name);
 }
+
+/* The builtin table lives here, not in repl.c, because the interpreter's
+ * `doc-print` native uses it: anything interpreter_natives.c references is
+ * linked into every libturi embedder, and repl.c would drag readline in with
+ * it. */
+const char *turi_doc_lookup_builtin(const char *sym) {
+    static const struct { const char *name; const char *doc; } docs[] = {
+        /* Arithmetic */
+        {"+",        "(+ a b ...) -- add numbers"},
+        {"-",        "(- a b ...) -- subtract numbers"},
+        {"*",        "(* a b ...) -- multiply numbers"},
+        {"/",        "(/ a b) -- divide numbers"},
+        {"mod",      "(mod a b) -- integer remainder"},
+        /* Comparison */
+        {"=",        "(= a b) -- equality"},
+        {"!=",       "(!= a b) -- inequality"},
+        {"<",        "(< a b) -- less-than"},
+        {">",        "(> a b) -- greater-than"},
+        {"<=",       "(<= a b) -- less-than-or-equal"},
+        {">=",       "(>= a b) -- greater-than-or-equal"},
+        /* Logic */
+        {"not",      "(not b) -- boolean negation"},
+        {"and",      "(and a b ...) -- short-circuit logical and"},
+        {"or",       "(or a b ...) -- short-circuit logical or"},
+        /* I/O */
+        {"println",  "(println x) -- print value with trailing newline"},
+        {"print",    "(print x) -- print value without trailing newline"},
+        /* Core special forms */
+        {"let",      "(let [x v ...] body) -- bind local variables in scope of body"},
+        {"if",       "(if cond then else) -- conditional: evaluates then or else branch"},
+        {"do",       "(do e1 e2 ...) -- evaluate expressions in sequence, return last"},
+        {"defn",     "(defn name [p1 :T1 ...] :Ret body) -- define a named function"},
+        {"fn",       "(fn [p1 :T1 ...] :Ret body) -- anonymous function (lambda)"},
+        {"def",      "(def name [: type] value) -- bind name; a top-level binding at the top level, scoped over the rest of the body inside one"},
+        {"define",   "(define name [: type] value) -- a spelling of def; same meaning in both positions"},
+        {"while",    "(while cond body) -- loop while cond is true"},
+        {"set!",     "(set! var value) -- mutate an existing variable binding"},
+        {"quote",    "(quote x) -- return x unevaluated; shorthand: 'x"},
+        {"return",   "(return value) -- early return from a function"},
+        {"defer",    "(defer body) -- run body when current scope exits"},
+        /* Pattern matching and data */
+        {"match",    "(match val (Pattern body) ...) -- destructure and branch on value"},
+        {"defstruct","(defstruct Name [field :Type ...]) -- define a named product type"},
+        {"defdata",  "(defdata Name (Ctor) (Ctor :T) ...) -- define an algebraic data type"},
+        {"defgadt",  "(defgadt Name [a] (Ctor :T) ...) -- define a generalized ADT"},
+        {"deftype",  "(deftype Alias ActualType) -- define a type alias"},
+        /* Macros */
+        {"defmacro", "(defmacro name [args] body) -- define a syntax macro"},
+        {"when",     "(when cond body ...) -- execute body if cond is true, else nil"},
+        {"unless",   "(unless cond body ...) -- execute body if cond is false, else nil"},
+        {"cond",     "(cond test expr ... else expr) -- multi-branch conditional; the fallback clause is `else` or `:else`"},
+        {"for",      "(for [x seq] body) -- iterate over a sequence"},
+        /* Modules */
+        {"defmodule","(defmodule Name (export ...) body ...) -- define a module"},
+        {"import",   "(import module/name :as alias) -- import a module (inside defmodule)"},
+        /* Typeclasses */
+        {"defclass", "(defclass Name [param] (method :Type) ...) -- define a typeclass"},
+        {"definstance","(definstance ClassName TypeName method-impls ...) -- implement a typeclass"},
+        /* Effects */
+        {"defeffect","(defeffect Name (op :Type) ...) -- define an algebraic effect"},
+        {"perform",  "(perform effect/op args ...) -- perform an effect operation"},
+        {"handle",   "(handle expr (effect/op args k) body ...) -- handle effects"},
+        {"resume",   "(resume k value) -- resume a delimited continuation"},
+        /* Async */
+        {"async",    "(async body) -- create an async computation"},
+        {"await",    "(await future) -- wait for an async computation to complete"},
+        /* Error handling.  try/catch/throw were deleted end-to-end in v0.25.0
+         * (CHANGELOG.md:1974); the model is Result-returning functions plus
+         * panic for the unrecoverable case.  Do not re-add them here. */
+        {"panic",    "(panic msg) -- abort with an unrecoverable error"},
+        {"panic-with","(panic-with value) -- panic carrying a typed payload"},
+        {"catch-unwind","(catch-unwind thunk) -- run thunk, returning a Result whose err slot carries the Panic"},
+        {"catch-panic-of","(catch-panic-of Type thunk) -- like catch-unwind, but re-raises panics whose payload is not Type"},
+        /* Dynamic vars */
+        {"defdynamic","(defdynamic *name* :Type init) -- define a dynamic (thread-local) variable"},
+        {"let-dyn",  "(let-dyn [*name* val] body) -- bind dynamic variable within scope"},
+        {NULL, NULL}
+    };
+    for (int i = 0; docs[i].name; i++) {
+        if (strcmp(sym, docs[i].name) == 0)
+            return docs[i].doc;
+    }
+    return NULL;
+}

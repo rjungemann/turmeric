@@ -21,7 +21,8 @@
 int turi_repl_run(bool watch_mode);
 
 /* Look up a short doc string for a builtin operator or special form.
- * Returns the doc string, or NULL if sym is not a known builtin. */
+ * Returns the doc string, or NULL if sym is not a known builtin.
+ * Defined in turi/docstrings.c. */
 const char *turi_doc_lookup_builtin(const char *sym);
 
 /* Get the last diagnostic code captured by the REPL */

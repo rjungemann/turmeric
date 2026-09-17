@@ -26,4 +26,9 @@ const char *tur_docstring_lookup_in(const char *path, const char *name);
  * elaborator uses for `(load "stdlib/...")`. */
 const char *tur_docstring_lookup(const char *name);
 
+/* Look up the short doc string for a builtin operator or special form (`+`,
+ * `let`, ...).  Returns a static string, or NULL if `sym` is not one.  Also
+ * declared in turi/repl.h, which has always exported it. */
+const char *turi_doc_lookup_builtin(const char *sym);
+
 #endif /* TURI_DOCSTRINGS_H */
