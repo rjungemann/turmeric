@@ -1521,6 +1521,16 @@ add_test(
 set_tests_properties(tur_wasm_glue_lang_unit PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
+# playground-session-hygiene-plan: doc-panel lookups must not touch the eval
+# session, `(doc ...)` must evaluate, and Run must be re-runnable.
+add_test(
+  NAME tur_wasm_glue_session_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_wasm_glue_session_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_wasm_glue_session_unit PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # Injective name-mangler round-trip + injectivity unit test
 add_test(
   NAME tur_mangle_unit

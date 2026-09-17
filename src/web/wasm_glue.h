@@ -155,8 +155,9 @@ const char *turi_wasm_lang_registry(void);
  *   A static (not malloc'd) C string with the documentation, or NULL if the
  *   name is not found in the doc table.  Do NOT free the returned pointer.
  *
- * This function calls (doc-lookup name) in the Turmeric runtime, which is
- * backed by the auto-generated stdlib/docstrings.tur lookup table.
+ * Checks the builtin/special-form table, then reads the auto-generated
+ * stdlib/docstrings.tur table directly from C (src/turi/docstrings.c).  It never
+ * evaluates anything, so a lookup cannot change the session.
  *
  * Exported with EMSCRIPTEN_KEEPALIVE so it is callable from JavaScript:
  *   const docStr = Module.ccall('turi_doc_lookup', 'string', ['string'], [name]);

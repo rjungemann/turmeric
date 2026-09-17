@@ -1,0 +1,22 @@
+;; symbol-name reads a quoted symbol in either spelling, and string? tells a
+;; string literal from a name -- what the stdlib `doc` macro needs to accept
+;; (doc vec-map), (doc 'vec-map) and (doc "vec-map") alike.
+;; docs/upcoming/playground-session-hygiene-plan.md (PS3)
+(defmacro name-of [x]
+  (list str-id (if (string? x) x (symbol-name x))))
+
+(defn str-id [s : cstr] : cstr s)
+
+;; string? does not gate: a template that only CALLS it is runtime code, and
+;; must reach the user's own string? instead of being folded at compile time.
+(defn string? [s : cstr] : bool true)
+(defmacro runtime-check [x]
+  `(string? ~x))
+
+(defn main [] : int
+  (println (name-of plain-sym))
+  (println (name-of 'quoted-sym))
+  (println (name-of (quote long-quoted)))
+  (println (name-of "a-string"))
+  (println (runtime-check "anything"))
+  0)

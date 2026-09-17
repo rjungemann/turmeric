@@ -99,6 +99,10 @@ set(TURI_EVAL_SOURCES
     # relocated from main.c so the native --interpret path and the WASM REPL
     # load the same list (web-repl-missing-stdlib-preload).
     turi/preload.c
+    # docstrings.c -- reads stdlib/docstrings.tur's doc table from C, for
+    # `tur doc`, the playground doc panel, and the doc-lookup/doc-print natives
+    # (playground-session-hygiene-plan PS2/PS3).
+    turi/docstrings.c
     # interpreter_natives.c -- the wk_register_* / native_* inline-C override
     # block relocated from main.c so `tur repl` and the WASM REPL register the
     # same interpreter natives as --interpret (web-repl-repl-inline-c-native-gap).
@@ -1668,6 +1672,32 @@ if(HAVE_EDITLINE)
     target_compile_definitions(tur_wasm_glue_lang_unit PRIVATE TURI_HAVE_EDITLINE=1)
 endif()
 set_target_properties(tur_wasm_glue_lang_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# playground-session-hygiene-plan: the playground's eval session driven the way
+# Try Turmeric drives it -- doc-panel lookups, `(doc ...)`, Run twice --
+# natively via libturi_wasm, like the lang unit above.
+add_executable(tur_wasm_glue_session_unit
+    ${CMAKE_SOURCE_DIR}/tests/wasm_glue_session_unit.c
+)
+target_include_directories(tur_wasm_glue_session_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_wasm_glue_session_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_wasm_glue_session_unit PRIVATE
+    -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_wasm_glue_session_unit PRIVATE libturi_wasm m ${CMAKE_DL_LIBS})
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_wasm_glue_session_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_wasm_glue_session_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_wasm_glue_session_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 

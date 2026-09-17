@@ -123,9 +123,12 @@
                     coll
                     (list fn `[~var] (list for (list ~@more) ~@body)))))))))))
   (defmacro curry [f] `(fn [a] (fn [b] (~f a b))))
+  ;; (doc vec-map), (doc 'vec-map) and (doc "vec-map") all expand to
+  ;; (doc-print "vec-map"): the name is read at expansion time, so a bare
+  ;; symbol is never evaluated as a variable.  doc-print is an interpreter
+  ;; native (src/turi/interpreter_natives.c).
   (defmacro doc [name]
-    (let [entry (doc-lookup name)]
-      (if (not (= entry 0)) (println entry) (println "No documentation found."))))
+    (list doc-print (if (string? name) name (symbol-name name))))
   (defmacro with-resource [binding & body]
     (let [bname (first binding)
           binit (second binding)]

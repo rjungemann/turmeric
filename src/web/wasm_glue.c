@@ -27,6 +27,7 @@
 #include "runtime/experiments.h"
 #include "symbols.h"
 #include "turi/preload.h"
+#include "turi/docstrings.h"
 #include "turi/interpreter_natives.h"
 #include "turi/repl.h"
 #include "elab.h"
@@ -563,14 +564,17 @@ const char *turi_wasm_lang_registry(void) {
  * ---------------------------------------------------------------------------
  */
 
-/* Look up documentation for a Turmeric stdlib name.
+/* Look up documentation for a Turmeric name: a builtin or special form first,
+ * then the stdlib's generated docstring table.
  *
- * Evaluates (doc-lookup name) in the current runtime environment to retrieve
- * the pre-built docstring from stdlib/docstrings.tur.
+ * Returns a pointer to a string owned by those tables, or NULL if the name is
+ * not found.  The caller must NOT free it.
  *
- * Returns a pointer to the static string stored in the docstrings table, or
- * NULL if the name is not found.  The returned pointer is owned by the
- * docstrings table (a C static array) and must NOT be freed by the caller.
+ * This is a read-only query and must stay one: it reads the table from C and
+ * never evaluates anything.  It used to evaluate `(doc-lookup "name")` into the
+ * session -- which, since doc-lookup was never defined here, failed, and every
+ * Run after a single doc-panel hover then failed too
+ * (doc-lookup-poisons-the-playground-eval-session, PS2).
  *
  * In WASM builds this function is kept alive by EMSCRIPTEN_KEEPALIVE so that
  * JavaScript can call it via Module.ccall / Module._turi_doc_lookup.
@@ -586,44 +590,9 @@ const char *turi_doc_lookup(const char *name) {
     const char *builtin_doc = turi_doc_lookup_builtin(name);
     if (builtin_doc) return builtin_doc;
 
-    /* Build a Turmeric expression: (doc-lookup "name") */
-    size_t name_len = strlen(name);
-    /* Allocate enough room for (doc-lookup "...") + escaping headroom */
-    size_t buf_size = name_len * 2 + 32;
-    char *expr = (char *)malloc(buf_size);
-    if (!expr) return NULL;
-
-    /* Build the expression, escaping backslashes and double-quotes */
-    size_t pos = 0;
-    const char prefix[] = "(doc-lookup \"";
-    memcpy(expr + pos, prefix, sizeof(prefix) - 1);
-    pos += sizeof(prefix) - 1;
-    for (size_t i = 0; i < name_len; i++) {
-        char c = name[i];
-        if (c == '\\' || c == '"') {
-            expr[pos++] = '\\';
-        }
-        expr[pos++] = c;
-    }
-    expr[pos++] = '"';
-    expr[pos++] = ')';
-    expr[pos]   = '\0';
-
-    TuriValue result = turi_eval(g_env, expr);
-    free(expr);
-
-    if (turi_is_error(result)) return NULL;
-
-    /* doc-lookup returns :cstr which is represented at runtime as TURI_INT
-     * holding a const char * cast to int64_t.  A 0 value means "not found". */
-    if (result.tag == TURI_CSTR) {
-        return result.as_cstr;
-    }
-    if (result.tag == TURI_INT) {
-        if (result.as_int == 0) return NULL;
-        return (const char *)(intptr_t)result.as_int;
-    }
-    return NULL;
+    /* The Emscripten link embeds stdlib/ at /stdlib, the module's cwd is "/",
+     * so this is the same file `tur doc` reads from an install. */
+    return tur_docstring_lookup_in(WASM_STDLIB_ROOT "/docstrings.tur", name);
 }
 
 static void wasm_diag_sink(struct TuriEnv *env, int level, const char *code,
