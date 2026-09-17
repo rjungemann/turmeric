@@ -100,6 +100,12 @@ All annotations that `let` accepts work on a body-level `def`:
   (set! n (+ n 1))
   n)
 ```
+```sweet-exp
+defn counter [] : int
+  def ^mut n 0
+  set!(n {n + 1})
+  n
+```
 
 `^mut` also works at the top level, giving a mutable global -- static storage
 that `set!` may write:
@@ -110,6 +116,12 @@ that `set!` may write:
 (defn hit [] : void
   (set! hits (+ hits 1)))
 ```
+```sweet-exp
+def ^mut hits 0
+
+defn hit [] : void
+  set!(hits {hits + 1})
+```
 
 Without `^mut`, a global is immutable and `set!` on it is an error.
 
@@ -119,6 +131,9 @@ every read and every `set!` sequentially consistent:
 
 ```turmeric
 (def ^atomic ^mut ready 0)
+```
+```sweet-exp
+def ^atomic ^mut ready 0
 ```
 
 That prevents torn access and stops the compiler caching the global in a
@@ -135,6 +150,9 @@ initializer on that thread.
 
 ```turmeric
 (def ^thread-local scratch (make-buffer))   ;; one buffer per thread, not shared
+```
+```sweet-exp
+def ^thread-local scratch make-buffer()   ;; one buffer per thread, not shared
 ```
 
 Under `tur --interpret` it is a plain global: turi has no user-reachable thread
@@ -170,6 +188,10 @@ Annotations may appear in any order before the name:
 (def ^mut ^persistent cache (hamt/new))
 (def ^persistent ^mut cache (hamt/new))   ;; identical
 ```
+```sweet-exp
+def ^mut ^persistent cache hamt/new()
+def ^persistent ^mut cache hamt/new()   ;; identical
+```
 
 ### Type annotations
 
@@ -180,6 +202,10 @@ the fused spelling, exactly as top-level `def` and `let` accept it:
 (def total : int (+ a b))
 (def total :int  (+ a b))
 ```
+```sweet-exp
+def total : int {a + b}
+def total :int  {a + b}
+```
 
 ### Semantics: let\* (sequential)
 
@@ -189,6 +215,12 @@ same rule as `let`. Self-recursion inside its init does not work:
 ```turmeric
 ;; Error: f is not in scope inside its own init
 (def f (fn [n] (f n)))
+
+;; Fix: use letrec (see below) or lift f to top-level defn
+```
+```sweet-exp
+;; Error: f is not in scope inside its own init
+def f fn([n] f(n))
 
 ;; Fix: use letrec (see below) or lift f to top-level defn
 ```
@@ -232,6 +264,13 @@ A single self-recursive function is the common case:
     (println (fact 5))   ;; 120
     0))
 ```
+```sweet-exp
+defn main [] : int
+  letrec [fact fn([n : int] : int
+                  if({n = 0} 1 {n * fact({n - 1})}))]
+    println(fact(5))   ;; 120
+    0
+```
 
 ### Type annotation requirement
 
@@ -242,6 +281,11 @@ build placeholder types before the bodies are checked:
 (letrec [a (fn [n : int] : int (b (- n 1)))
          b (fn [n : int] : int (if (= n 0) 0 (a n)))]
   (a 3))
+```
+```sweet-exp
+letrec [a fn([n : int] : int b({n - 1}))
+        b fn([n : int] : int if({n = 0} 0 a(n)))]
+  a(3)
 ```
 
 Omitting `:int` on mutually-referencing functions causes an "unknown type"
@@ -259,6 +303,15 @@ error; add `:ret` annotations to resolve it.
 ;; Error: x cannot reference itself during initialization
 (letrec [x (+ x 1)]
   x)
+```
+```sweet-exp
+;; Fine: x is a plain value, no self-reference
+letrec [x 42]
+  x
+
+;; Error: x cannot reference itself during initialization
+letrec [x {x + 1}]
+  x
 ```
 
 ---
@@ -295,6 +348,11 @@ The named let desugars to:
                 (if (= i 0) acc (loop (- i 1) (+ acc i))))]
   (loop n 0))
 ```
+```sweet-exp
+letrec [loop fn([i : int acc : int] : int
+                if({i = 0} acc loop({i - 1} {acc + i})))]
+  loop(n 0)
+```
 
 ### Type annotations in named let
 
@@ -305,6 +363,12 @@ Annotate binding names the same way as `let`:
   (if (= xs 0)
     n
     (loop (cons-tail xs) (+ n 1))))
+```
+```sweet-exp
+let loop [xs : int n :int 0]
+  if {xs = 0}
+    n
+    loop(cons-tail(xs) {n + 1})
 ```
 
 ---

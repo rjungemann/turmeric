@@ -120,6 +120,21 @@ loop:
       acc
       (loop (+ i 1) (+ acc i)))))
 ```
+```sweet-exp
+; self-recursive defn -- tail call in the `if` else-branch
+defn count-down [n :int acc :int] :int
+  if {n = 0}
+    acc
+    count-down({n - 1} {acc + 1})
+
+; named-let -- the (loop ...) call is the self-tail-call
+defn sum-to [n :int] :int
+  let loop [i   :int 0
+             acc :int 0]
+    if {i >= n}
+      acc
+      loop({i + 1} {acc + i})
+```
 
 A named let lowers one of two ways -- to a lifted closure when the loop body
 reads an enclosing variable, and to a plain lifted function when it does not

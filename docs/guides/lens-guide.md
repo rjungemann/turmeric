@@ -29,6 +29,24 @@ rebuild-the-whole boilerplate at every use site. Turmeric ships lenses in
     (println (.x (over px (fn [v : int] : int (* v 10)) p)))) ; 30
   0)
 ```
+```sweet-exp
+load "stdlib/lens.tur"
+
+defstruct Point :copy :heap [x : int y : int]
+
+defn point-x [] : (Lens Point int)
+  lens
+    fn([p : Point] : int .x(p))
+    fn([nx : int p : Point] : Point make-struct(Point :x nx :y .y(p)))
+
+defn main [] : int
+  let [px point-x()
+       p  make-struct(Point :x 3 :y 9)]
+    println(view(px p))                                     ; 3
+    println(.x(set(px 42 p)))                              ; 42
+    println(.x(over(px fn([v : int] : int {v * 10}) p)))   ; 30
+  0
+```
 
 ## The API
 
@@ -58,6 +76,9 @@ plain record holding two functions -- a getter `(fn [S] A)` and a setter
 
 ```turmeric
 (defstruct Lens :copy [S A] (lget (fn [S] A)) (lput (fn [A S] S)))
+```
+```sweet-exp
+defstruct Lens :copy [S A] (lget (fn [S] A)) (lput (fn [A S] S))
 ```
 
 `view`, `set`, and `over` just project those two fields and call them. There is
@@ -103,6 +124,16 @@ copyable whole types:
       (make-struct Line
         :start (make-struct Point :x nx :y (.y (.start l)))
         :end   (.end l)))))
+```
+```sweet-exp
+;; Line -> start:Point -> x:int
+defn line-start-x [] : (Lens Line int)
+  lens
+    fn([l : Line] : int .x(.start(l)))
+    fn([nx : int l : Line] : Line
+       make-struct(Line
+         :start make-struct(Point :x nx :y .y(.start(l)))
+         :end   .end(l)))
 ```
 
 where the whole types (`Line`, `Point`) are `:copy` so `l`/`s` can be used more

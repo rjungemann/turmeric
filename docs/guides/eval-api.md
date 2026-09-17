@@ -493,6 +493,11 @@ writes which one they meant.
 (float->int 7.1)  ; 7                    -- the NUMBER   (stdlib/math.tur)
 (float->bits 7.1) ; 4619679907765970534  -- the IEEE-754 BITS (stdlib/bits.tur)
 ```
+```sweet-exp
+(:: 7.1 :int)     ; error: `::` between an integer and a float kind is ambiguous
+float->int(7.1)  ; 7                    -- the NUMBER   (stdlib/math.tur)
+float->bits(7.1) ; 4619679907765970534  -- the IEEE-754 BITS (stdlib/bits.tur)
+```
 
 (An integer *literal* ascribed to a float still converts -- `(:: 7 :float)` is
 `7.0` -- since a written constant has no carried bit pattern to mean.  See

@@ -37,6 +37,13 @@ the rest.
 (let [inc (add 1)]
   (inc 41))     ; => 42
 ```
+```sweet-exp
+defn add [a : int b : int] : int
+  {a + b}
+
+let [inc add(1)]
+  inc(41)     ; => 42
+```
 
 The same works for built-in operators:
 
@@ -46,6 +53,13 @@ The same works for built-in operators:
 
 ;; Fold with a partial-applied combiner.
 (fold (+ 0) xs)
+```
+```sweet-exp
+;; Operator section -- (+ 1) is a unary increment.
+map(+(1) xs)
+
+;; Fold with a partial-applied combiner.
+fold(+(0) xs)
 ```
 
 The partially-applied closure carries the full type of its remaining parameters,
@@ -63,6 +77,12 @@ When a function returns another function, you can chain calls inline:
   (fn [x : int] : int (+ n x)))
 
 (make-adder 10 5)     ; => 15, equivalent to ((make-adder 10) 5)
+```
+```sweet-exp
+defn make-adder [n : int] : (fn [int] int)
+  fn [x : int] : int {n + x}
+
+make-adder(10 5)     ; => 15, equivalent to ((make-adder 10) 5)
 ```
 
 The elaborator detects that the intermediate result is callable and threads the
@@ -96,6 +116,12 @@ Usage:
 
 (let [add1 ((curry add) 1)]
   (add1 41))    ; => 42
+```
+```sweet-exp
+defn add [a : int b : int] : int {a + b}
+
+let [add1 curry(add)(1)]
+  add1(41)    ; => 42
 ```
 
 Most of the time you don't need `curry` -- direct partial application (`(add 1)`)

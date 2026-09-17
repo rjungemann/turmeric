@@ -132,6 +132,11 @@ rest of the program from the `call/cc` site":
 (defn t-capture [] : int
   (+ 1 (call/cc (fn [k] (+ 100 (k 41))))))
 ```
+```sweet-exp
+;; (k 41) abandons the pending (+ 100 ...); call/cc yields 41, so this is 42.
+defn t-capture [] : int
+  {1 + call/cc(fn([k] {100 + k(41)}))}
+```
 
 This matches Scheme's top-level `call-with-current-continuation`, restricted
 to one-shot upward use. Use `call/cc*` for the multi-shot cloneable variant.

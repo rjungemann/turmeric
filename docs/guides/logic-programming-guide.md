@@ -213,6 +213,31 @@ site:
 ;; => 7.1
 ;; => 2.5
 ```
+```sweet-exp
+;; Force every result and print it with p
+defn print-all [A] [xs : (Cons A) ^fat p : (fn [A] void)] : void
+  if tnil?(xs)
+    nil
+    do
+      p(thead(xs))
+      print-all((:: (ttail xs) (Cons A)) p)
+
+print-all((mplus(pure(1) pure(2)))
+         fn([x : int] println(x)))
+;; => 1
+;; => 2
+
+print-all((bind(mplus(pure(1) pure(2))
+                  fn([x : int] tcons({x * 10} tnil()))))
+         fn([x : int] println(x)))
+;; => 10
+;; => 20
+
+print-all((mplus(pure(7.1) pure(2.5)))
+         fn([x : float] println(x)))
+;; => 7.1
+;; => 2.5
+```
 
 > **Two representation facts shape the code above.**
 >
@@ -315,6 +340,26 @@ relation answers "parents of", "children of" and "every pair":
 ;; Who are bart's grandparents?  The fresh variable is query variable 0.
 (run-logic 10 (fresh (fn [g] (grandparento g (term-int 2)))))
 ```
+```sweet-exp
+load "stdlib/logic.tur"
+
+;;; fact -- the goal "p is PARENT and c is CHILD", one row of the table.
+defn fact [p : Term c : Term parent : int child : int] : (Goal int)
+  conjoined(lequal(p term-int(parent)) lequal(c term-int(child)))
+
+defn parento [p : Term c : Term] : (Goal int)
+  disjoined(fact(p c 0 1)                      ; abe   -> homer
+    disjoined(fact(p c 5 1)                    ; mona  -> homer
+      disjoined(fact(p c 1 2)                  ; homer -> bart
+                 fact(p c 1 3))))              ; homer -> lisa
+
+;;; grandparento -- some m is g's child and c's parent.
+defn grandparento [g : Term c : Term] : (Goal int)
+  fresh(fn([m] conjoined(parento(g m) parento(m c))))
+
+;; Who are bart's grandparents?  The fresh variable is query variable 0.
+run-logic(10 fresh(fn([g] grandparento(g term-int(2)))))
+```
 
 `run-logic n goal` returns a lazy `Stream` of at most `n` substitutions; each
 is one answer, read back by walking the query variable:
@@ -327,6 +372,16 @@ is one answer, read back by walking the query variable:
         (println (person-name (term-int-val (logic-walk (term-var v) s))))
         (print-people rest v))
     _ 0))
+```
+```sweet-exp
+defn print-people [results : Stream v : int] : int
+  match st-pull(results)
+    (StCons s rest)
+    do
+      println(person-name(term-int-val(logic-walk(term-var(v) s))))
+      print-people(rest v)
+    _
+    0
 ```
 
 The classic `appendo` shows the part a function cannot do. Lists are
@@ -351,6 +406,24 @@ step per pull:
 (run-logic 5 (fresh (fn [l] (appendo l (list2 3 4) (list4 1 2 3 4)))))
 ;; both unknown: every split of (1 2 3)   -> () ++ (1 2 3), (1) ++ (2 3), ...
 (run-logic 10 (fresh (fn [l] (fresh (fn [s] (appendo l s (list3 1 2 3)))))))
+```
+```sweet-exp
+defn appendo [l : Term s : Term out : Term] : (Goal int)
+  disjoined
+    conjoined(lequal(l term-nil()) lequal(s out))
+    fresh(fn([a]
+      fresh(fn([d]
+        fresh(fn([res]
+          conjoined(lequal(l term-pair(a d))
+            conjoined(lequal(out term-pair(a res))
+                       zzz(appendo(d s res))))))))))
+
+;; forwards:  (1 2) ++ (3 4) = ?          -> (1 2 3 4)
+run-logic(5 fresh(fn([out] appendo(list2(1 2) list2(3 4) out))))
+;; backwards: ? ++ (3 4) = (1 2 3 4)      -> (1 2)
+run-logic(5 fresh(fn([l] appendo(l list2(3 4) list4(1 2 3 4)))))
+;; both unknown: every split of (1 2 3)   -> () ++ (1 2 3), (1) ++ (2 3), ...
+run-logic(10 fresh(fn([l] fresh(fn([s] appendo(l s list3(1 2 3)))))))
 ```
 
 `disjoined` interleaves, so a relation with infinitely many solutions still

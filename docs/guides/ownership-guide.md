@@ -141,6 +141,19 @@ deterministically, with the collector off.
     (set! (.parent child) (rc/downgrade parent))
     0))
 ```
+```sweet-exp
+load "stdlib/weak.tur"
+
+;; parent --.child--> child   (strong: the parent owns the child)
+;; child  --.parent-> parent  (weak:   the back-edge owns nothing)
+defstruct Node :move [tag : int child : rc<Node> parent : weak<Node>]
+
+defn build-pair [] : int
+  let [child  rc/of(make-struct(Node 2 null-child() null-parent()))
+        parent rc/of(make-struct(Node 1 rc/clone(child) null-parent()))]
+    set!(.parent(child) rc/downgrade(parent))
+    0
+```
 
 Reading through the back-edge goes via `weak/upgrade`, which is what makes weak
 observation safe rather than merely cheap -- there is no way to read without
@@ -152,6 +165,13 @@ first asking whether the value is still there:
     (let [s (weak/unwrap o)]      ; a NEW strong handle -- ours to release
       (rc/drop s))
     (println "gone")))
+```
+```sweet-exp
+let [o weak/upgrade(w)]
+  if some?(o)
+    let [s weak/unwrap(o)]      ; a NEW strong handle -- ours to release
+      rc/drop(s)
+    println("gone")
 ```
 
 The full surface is `rc/downgrade`, `weak/upgrade`, `weak/unwrap`,

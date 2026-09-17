@@ -186,6 +186,12 @@ the full existential form, and opened inside the callee:
     (println (.show v)))
   0)
 ```
+```sweet-exp
+defn use-ex [e : (exists [a] [(Show a)] a)] : int
+  open e [_ v]
+    println(.show(v))
+  0
+```
 
 Only an untyped parameter (`:ptr<void>`) erases the constraint info --
 see the limitations below.
@@ -216,6 +222,27 @@ the constraint class are in scope.
   (if (= which 0)
     (open (pack (:: 5 :LinesR)  (exists [a] [(Rdr a)] a)) [a v] (rbound v))
     (open (pack (:: 7 :PointsR) (exists [a] [(Rdr a)] a)) [a v] (rbound v))))
+
+; (bound-of 0) => 5    ; LinesR's rbound
+; (bound-of 1) => 107  ; PointsR's rbound (100 + 7)
+```
+```sweet-exp
+defclass Rdr [a]
+  (rbound [x : a] : int)
+
+defopaque LinesR  :int
+defopaque PointsR :int
+
+definstance Rdr [LinesR]  (rbound [x : LinesR]  (:: x :int))
+definstance Rdr [PointsR] (rbound [x : PointsR] {100 + (:: x :int)})
+
+; Both arms produce the same (exists [a] [(Rdr a)] a) type, so the open
+; site cannot know the concrete instance statically -- it dispatches
+; `rbound` through the witness bundled in the record.
+defn bound-of [which : int] : int
+  if {which = 0}
+    open(pack((:: 5 :LinesR)  (exists [a] [(Rdr a)] a)) [a v] rbound(v))
+    open(pack((:: 7 :PointsR) (exists [a] [(Rdr a)] a)) [a v] rbound(v))
 
 ; (bound-of 0) => 5    ; LinesR's rbound
 ; (bound-of 1) => 107  ; PointsR's rbound (100 + 7)

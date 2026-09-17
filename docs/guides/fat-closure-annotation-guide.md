@@ -53,11 +53,19 @@ therefore a **fat-expecting sink**:
   ;; ... eventually calls (apply-fat f x) ...
   ...)
 ```
+```sweet-exp
+defn bind-parser [p f] : ptr<void>
+  ;; ... eventually calls (apply-fat f x) ...
+  ...
+```
 
 If a caller passes a captureless lambda here:
 
 ```turmeric
 (bind-parser p (fn [x] (mreturn (transform x))))   ;; captures nothing
+```
+```sweet-exp
+bind-parser(p fn([x] mreturn(transform(x))))   ;; captures nothing
 ```
 
 ...the lambda lowers to a bare fn-pointer, `apply-fat` reads it as a fat
@@ -77,6 +85,11 @@ call.
 (defn bind-parser [p ^fat f] : ptr<void>
   ;; (apply-fat f x) is now safe for any caller
   ...)
+```
+```sweet-exp
+defn bind-parser [p ^fat f] : ptr<void>
+  ;; (apply-fat f x) is now safe for any caller
+  ...
 ```
 
 - A capturing `fn` argument is already fat and passes through unchanged.
@@ -104,6 +117,14 @@ macros:
   return (int64_t)TUR_APPLY1(f, x);
   ```)
 ```
+```sweet-exp
+defn run-once [^fat f x : int] : int
+  ```c
+  /* f is int64_t at the C level; pass it through TUR_APPLY1
+     to invoke the closure under the unified ABI. */
+  return (int64_t)TUR_APPLY1(f, x);
+  ```
+```
 
 The same rule applies in either direction: a Turmeric global declared
 `^fat` is callable from inline-C as `int64_t`, and an inline-C function
@@ -120,6 +141,10 @@ from a captureless inner lambda:
 ```turmeric
 (defn pfail [] ^fat :ptr<void>          ;; <- ^fat on the return
   (fn [inp] (pfail-impl inp)))          ;; inner lambda captures nothing
+```
+```sweet-exp
+defn pfail [] ^fat :ptr<void>          ;; <- ^fat on the return
+  fn([inp] pfail-impl(inp))          ;; inner lambda captures nothing
 ```
 
 Without `^fat` on the return type, the inner `(fn ...)` lowers to a
@@ -145,6 +170,10 @@ they know about the closure's **result type**:
 ```turmeric
 (defn run-with [^fat g x : int] : int (g x))                     ;; bare
 (defn run-with [^fat g :(fn [float] #{} float) x : float] : float (g x))  ;; annotated
+```
+```sweet-exp
+defn run-with [^fat g x : int] : int g(x)                     ;; bare
+defn run-with [^fat g :(fn [float] #{} float) x : float] : float g(x)  ;; annotated
 ```
 
 Under the unified closure representation, every
@@ -176,6 +205,10 @@ the right register:
 ```turmeric
 (defn run-with [^fat g :(fn [float] #{} float) x : float] : float
   (g x))                       ;; returns a real double
+```
+```sweet-exp
+defn run-with [^fat g :(fn [float] #{} float) x : float] : float
+  g(x)                       ;; returns a real double
 ```
 
 The tail-position retype pass lets a bare `^fat g` in the

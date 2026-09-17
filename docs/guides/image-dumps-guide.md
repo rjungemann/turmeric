@@ -104,6 +104,21 @@ exactly the code a warm start skips.
   (with-image-cache-after-init "/var/cache/app.img" do-init do-loop))
   ;; ... and a warm start's do-loop sees counter = 42, ratio = 7.1
 ```
+```sweet-exp
+defimage-global counter  :int   0       ; T must have a Serializable instance
+defimage-global greeting :cstr  "cold"
+defimage-global ratio    :float 1.5
+
+defn do-init [] :int
+  set!(counter 42)                       ; written on the cold start only ...
+  set!(ratio 7.1)
+  0
+
+defn main [] :int
+  image/track-globals!(counter greeting ratio)   ; at the TOP of main
+  with-image-cache-after-init("/var/cache/app.img" do-init do-loop)
+  ;; ... and a warm start's do-loop sees counter = 42, ratio = 7.1
+```
 
 `(defimage-global name :T initial)` is `(def ^mut name :T initial)` plus three
 generated defns: `name/image-ser` and `name/image-deser` (the global's
@@ -173,6 +188,22 @@ for you at the right point.
   (image/register-finalize-hook! flush-log)    ; of main -- see the note below
   (with-image-cache-after-init "/var/cache/app.img" expensive-init main-loop))
 ```
+```sweet-exp
+defimage-reload-hook reopen-log
+  do
+    reopen-the-log!()
+    0            ; defines (defn reopen-log [] :int ...)
+
+defimage-finalize-hook flush-log
+  do
+    flush-the-log!()
+    0
+
+defn main [] :int
+  image/register-reload-hook!(reopen-log)   ; install BOTH hooks at the top
+  image/register-finalize-hook!(flush-log)    ; of main -- see the note below
+  with-image-cache-after-init("/var/cache/app.img" expensive-init main-loop)
+```
 
 > **Register at the top of `main`, not inside `init`.** A compiled Turmeric
 > program runs only `main` (top-level forms do not execute), so hooks cannot
@@ -205,6 +236,23 @@ resume.
   (image-hooks/use-reopen-tracked!)   ; reload hook: reopen every tracked file
   (image-hooks/use-flush-stdio!)      ; finalize hook: fflush stdout/stderr
   (with-image-cache-after-init "/var/cache/app.img" do-init do-loop))
+```
+```sweet-exp
+load "stdlib/image.tur"
+load "stdlib/image_hooks.tur"
+
+defn do-init [] :int
+  image-hooks/track-file!("/var/run/app.sock" "r+")   ; declare what to reopen
+  0
+
+defn do-loop [] :int
+  let [h image-hooks/slot-handle(0)]                 ; live FILE* after resume
+    read-through(h)
+
+defn main [] :int
+  image-hooks/use-reopen-tracked!()   ; reload hook: reopen every tracked file
+  image-hooks/use-flush-stdio!()      ; finalize hook: fflush stdout/stderr
+  with-image-cache-after-init("/var/cache/app.img" do-init do-loop)
 ```
 
 On a cold start the slot handle is `0` (the reload hook does not run); on a warm

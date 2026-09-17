@@ -587,6 +587,20 @@ precede a general one for the same constructor:
     (Add (Lit 0) r) (eval-expr r)      ; nested literal wins for a zero left
     (Add l r)       (+ (eval-expr l) (eval-expr r))))
 ```
+```sweet-exp
+defgadt Expr [a]
+  (Lit int                   : (Expr int))
+  (Add (Expr int) (Expr int) : (Expr int))
+
+defn simplify [e : (Expr int)] : int
+  match e
+    (Lit v)
+    v
+    (Add (Lit 0) r)
+    eval-expr(r)      ; nested literal wins for a zero left
+    (Add l r)
+    {eval-expr(l) + eval-expr(r)}
+```
 
 The nested arms for one constructor must cover it: either a later arm for the
 same constructor binds plain names (as `(Add l r)` does above), the nested

@@ -547,6 +547,11 @@ builds and links cleanly:
   (export make-rc)
   (defn make-rc [x : int] : rc<int> (rc/of x)))
 ```
+```sweet-exp
+defmodule rcmod
+  export(make-rc)
+  defn make-rc [x : int] : rc<int> rc/of(x)
+```
 
 The manifest types that export as `:any`, so the boundary is untyped in both
 directions and a host has no way to know it received something refcounted.

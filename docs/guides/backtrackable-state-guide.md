@@ -25,6 +25,17 @@ It is autoloaded, so there is nothing to import and no flag to pass.
     (bt-cell-free c)
     0))
 ```
+```sweet-exp
+defn main [] : int
+  let [c bt-cell-new(10)
+        m bt-mark()]
+    bt-set!(c 20)
+    println(bt-get(c))    ; 20
+    bt-undo-to!(m)
+    println(bt-get(c))    ; 10 -- the write is gone
+    bt-cell-free(c)
+    0
+```
 
 ## Why a trail rather than a persistent structure
 
@@ -77,6 +88,17 @@ forgets to pass.
   (println (g-get g))       ; 6 -- survived
   (println (bt-get c)))     ; 1 -- restored
 ```
+```sweet-exp
+let [g g-cell-new(5)      ; never trailed
+      c bt-cell-new(1)     ; trailed
+      m bt-mark()]
+  g-set!(g 6)
+  bt-set!(c 2)
+  println(bt-depth())      ; 1 -- only the BtCell reached the trail
+  bt-undo-to!(m)
+  println(g-get(g))       ; 6 -- survived
+  println(bt-get(c))      ; 1 -- restored
+```
 
 ### `bt-commit-to!` escapes the whole scope, not one level
 
@@ -93,6 +115,13 @@ halves are easy to leave unpaired on an early return, and the bracket cannot be.
 
 ```turmeric
 (bt-scope (fn [] (do (bt-set! c 99) (bt-get c))))   ; => 99, and c is restored
+```
+```sweet-exp
+bt-scope
+  fn []
+    do
+      bt-set!(c 99)
+      bt-get(c)   ; => 99, and c is restored
 ```
 
 The **value** survives; the trailed **writes** do not. Returning something that
@@ -131,6 +160,13 @@ place it is observable:
   (println (bt-depth))      ; 1, not 500
   (bt-undo-to! m))
 ```
+```sweet-exp
+let [c bt-cell-new(0)
+      m bt-mark()]
+  spin(c 500)              ; 500 writes
+  println(bt-depth())      ; 1, not 500
+  bt-undo-to!(m)
+```
 
 ## Write-once cells
 
@@ -159,6 +195,12 @@ index. Always check the result if the mark could be stale:
   (bt-set! c 2)
   (println (if (bt-undo-to! m) 1 0))   ; 1 -- works
   (println (if (bt-undo-to! m) 1 0)))  ; 0 -- refused, and changed nothing
+```
+```sweet-exp
+let [m bt-mark()]
+  bt-set!(c 2)
+  println(if(bt-undo-to!(m) 1 0))   ; 1 -- works
+  println(if(bt-undo-to!(m) 1 0))  ; 0 -- refused, and changed nothing
 ```
 
 Unwinding *past* a scope is fine: `escape`, an abortive `shift0`, or a panic
