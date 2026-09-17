@@ -18,12 +18,20 @@ back-edge; nothing loses the optimization. Pinned by
 non-recursive helper) alongside the regression, because either one alone makes
 the defect disappear.
 
-**Spice-side follow-up, still outstanding:**
+**Spice-side follow-up: closed, by deciding NOT to do it**
+(turmeric-spices#75). This note used to say that
 `turmeric-spices/spices/nng/tests/nng/pubsub_test.tur`'s `send-until-received?`
-delegates its receive to `recv-str=?` purely to sidestep this, with a comment
-pointing here. That delegation can be inlined back into the recursive body once
-this compiler change is on `main`. It is not wrong as written -- just no longer
-necessary.
+could inline its receive back into the recursive body once the fix landed. It
+can -- that shape compiles now -- but it should not. `recv-str=?` has twelve
+call sites across that file and `msg_test.tur`, so inlining a twelve-caller
+helper into one of them, to re-prove something
+`tests/fixtures/tail-recursive-let-carrier-bridge` already pins here, would be
+worse code for redundant coverage.
+
+The delegation was good factoring independent of this defect; only the comment
+claiming it was load-bearing was stale, and that is what was removed. Worth
+recording because "undo the workaround" is the obvious reading of a fixed
+report, and it is the wrong one here.
 
 **Severity: medium.** Not a miscompile -- the emitted C is rejected by the C
 compiler, so the failure is loud. But it is rejected with a message about a
