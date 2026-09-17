@@ -1291,8 +1291,9 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
              * (7.25 -> 7); a pointer is cast, a bool widened.  The typed
              * `gen-unwrap` reinterprets the same way on the way out. */
             indent_buf(body, ctx->indent);
-            buf_printf(body, "*__opt = %s;\n",
-                       emit_word_slot_bits(&e->as.yield_.value->type, yval));
+            char *ybits = emit_word_slot_bits(&e->as.yield_.value->type, yval);
+            buf_printf(body, "*__opt = %s;\n", ybits);
+            free(ybits);
             indent_buf(body, ctx->indent);
             buf_puts(body, "return (void *)__opt;\n");
             ctx->indent -= 4;

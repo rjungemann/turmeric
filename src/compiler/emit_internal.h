@@ -1270,9 +1270,9 @@ const char *ensure_static_fatbox_dual(EmitCtx *ctx, const char *win_shim,
 bool ensure_fatbox_keep(EmitCtx *ctx);
 /* async-await-payload-is-int64-only / generator-yield-payload-is-int64-only:
  * the C expression storing a value of type `t` into an int64 word slot as its
- * bits (float pattern, pointer cast, scalar widen).  Static buffer; consume
- * before the next call.  Defined in emit_expr.c. */
-const char *emit_word_slot_bits(const Type *t, const char *v);
+ * bits (float pattern, pointer cast, scalar widen).  Returns a malloc'd string
+ * the caller frees.  Defined in emit_expr.c. */
+char *emit_word_slot_bits(const Type *t, const char *v);
 /* catch-unwind-aggregate-return-miscompiled: per-type boxing trampoline for an
  * aggregate-returning catch-unwind / catch-panic-of thunk. */
 /* type-of-cast-kind-granularity: the `any` box tag for a type -- its TypeKind

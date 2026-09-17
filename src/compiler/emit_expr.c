@@ -4790,26 +4790,37 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e);
  * the C expression that puts a value of type `t` (spelled by `v`) into an
  * int64 word slot -- a future's, a generator frame's -- as its BITS: a
  * float's IEEE-754 pattern (a `(int64_t)` cast would value-convert 7.25 to
- * 7), a pointer through intptr_t, everything else widened.  Static buffer:
- * the result is consumed by the very next printf. */
-const char *emit_word_slot_bits(const Type *t, const char *v) {
-    static char buf[512];
+ * 7), a pointer through intptr_t, everything else widened.
+ *
+ * Returns a MALLOC'd string the caller frees, the way emit_carrier_bridge
+ * and the other expression builders here do.  It was a function-scoped
+ * `static char[512]` first, on the reasoning that each result is consumed by
+ * the very next printf -- which `tests/check-static-cname-buffers.sh` rejects
+ * on sight, and rightly: the contract it documents is "stable for the whole
+ * compilation", the shape has silently mistyped emitted C twice before, and
+ * a fixed buffer would also have truncated a long `v` into malformed C. */
+char *emit_word_slot_bits(const Type *t, const char *v) {
+    Buf b;
+    buf_init(&b);
     switch (t ? t->kind : TY_INT) {
         case TY_FLOAT: case TY_FLOAT64:
-            snprintf(buf, sizeof buf, "((union { double d; int64_t i; }){ .d = (%s) }).i", v);
+            buf_printf(&b, "((union { double d; int64_t i; }){ .d = (%s) }).i", v);
             break;
         case TY_FLOAT32:
-            snprintf(buf, sizeof buf,
-                     "(int64_t)((union { float f; uint32_t u; }){ .f = (%s) }).u", v);
+            buf_printf(&b,
+                       "(int64_t)((union { float f; uint32_t u; }){ .f = (%s) }).u", v);
             break;
         case TY_CSTR: case TY_PTR_VOID: case TY_SYM:
-            snprintf(buf, sizeof buf, "(int64_t)(intptr_t)(%s)", v);
+            buf_printf(&b, "(int64_t)(intptr_t)(%s)", v);
             break;
         default:
-            snprintf(buf, sizeof buf, "(int64_t)(%s)", v);
+            buf_printf(&b, "(int64_t)(%s)", v);
             break;
     }
-    return buf;
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
 }
 
 /* A-normalize a panic-capable call (always-on since panic-return-signal
@@ -12937,7 +12948,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(pbuf, "    %s (*__f)(void) = (%s (*)(void))(intptr_t)__env;\n", pc, pc);
                         buf_printf(pbuf, "    %s __v = __f();\n", pc);
                     }
-                    buf_printf(pbuf, "    return %s;\n", emit_word_slot_bits(apl, "__v"));
+                    char *wbits = emit_word_slot_bits(apl, "__v");
+                    buf_printf(pbuf, "    return %s;\n", wbits);
+                    free(wbits);
                     buf_puts(pbuf, "}\n\n");
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "void *%s = (void *)tur_async_fiber_via(%s, (void *)(intptr_t)%s);\n",
@@ -13003,7 +13016,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* async-await-payload-is-int64-only: the expression's
                      * value goes into the slot as its BITS -- `(int64_t)` on
                      * a double was a value conversion (7.25 -> 7). */
-                    buf_printf(pbuf, "    return %s;\n", emit_word_slot_bits(apl, ret));
+                    char *tbits = emit_word_slot_bits(apl, ret);
+                    buf_printf(pbuf, "    return %s;\n", tbits);
+                    free(tbits);
                     free(ret);
                 } else {
                     buf_puts(pbuf, "    return 0;\n");
