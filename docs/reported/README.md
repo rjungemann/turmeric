@@ -2006,10 +2006,12 @@ without first asking whether that payload is a carrier (the first) or inhabited
 Each fix turned out to be a SHARED-HELPER problem rather than a one-site patch:
 the first decision already had two byte-identical copies and needed a third
 site, and the second had four sites across three files -- including the CPS
-mirror, which is the one that actually emitted the failing line. Both reports
-carry a "spice-side follow-up, still outstanding" section: `spices/nng`'s `Ack`
-opaque and its pub/sub retry delegation are workarounds that can now be removed,
-and have not been.
+mirror, which is the one that actually emitted the failing line. Both spice-side follow-ups are settled
+(turmeric-spices#75), and differently: `spices/nng`'s `Ack` opaque is gone, and
+its pub/sub retry KEEPS its delegation -- inlining a twelve-caller helper to
+re-prove a defect a compiler fixture already pins would be worse code. "Undo the
+workaround" is the obvious reading of a fixed report and it is right about half
+the time.
 
 | Report | Severity | One line |
 | --- | --- | --- |

@@ -38,12 +38,23 @@ Pinned by `tests/fixtures/result-nil-ok-payload`: both `(Result nil int)` and
 explicit `match`, and the error payload checked in every case -- a wrong slot
 would print `0` rather than fail to compile.
 
-**Spice-side follow-up, still outstanding:** `turmeric-spices/spices/nng` ships
-`(defopaque Ack :int)` as the stand-in this report exists to retire, and
-`dial` / `listen` / `sub-subscribe` / the timeout setters all return
-`(Result Ack int)`. Once this compiler change is on `main` those become
-`(Result nil int)` and `Ack` goes away, along with its paragraph in the spice
-README and its row in `docs/upcoming/nng-spice-plan.md`'s Resolved Decisions.
+**Spice-side follow-up: done** (turmeric-spices#75).
+`turmeric-spices/spices/nng` shipped `(defopaque Ack :int)` as the stand-in this
+report exists to retire; `dial` / `listen` / `sub-subscribe` and both timeout
+setters now return `(Result nil int)`, and the opaque, its export and its doc
+block are gone. The emitted monomorph is
+
+```c
+typedef struct tur_adt_Result__nil__int {
+    int tag;
+    union {
+        struct { int64_t _0; } Ok;
+        struct { int64_t _0; } Err;
+    } as;
+}
+```
+
+-- the Ok slot dead by construction, which is the point.
 
 **Severity when filed: low-medium.** The failure is loud -- three C compiler errors about
 generated identifiers -- and there is a cheap workaround. But `nil` is the
