@@ -344,6 +344,10 @@ discipline, declare a **capability effect** with `^capability`:
 (defeffect IO [] :nil ^capability)
 (defeffect FS [] :nil ^extends IO ^capability)
 ```
+```sweet-exp
+defeffect IO [] :nil ^capability
+defeffect FS [] :nil ^extends IO ^capability
+```
 
 A capability effect is a coarse *authority* tag rather than something you
 `perform`. It behaves differently from an ordinary effect in two ways:
@@ -405,6 +409,21 @@ enforce that it has the capabilities of everything it calls.
 ;; OK: un-annotated, so the row is not checked at all.
 (defn load-config-unchecked [path : cstr] : cstr
   (fs/read-text path))
+```
+```sweet-exp
+import tur/fs :refer [fs/read-text]
+
+;; OK: declares the FS capability it relies on.
+defn load-config [path : cstr] #fx{FS} : cstr
+  fs/read-text(path)
+
+;; ERROR (TUR-E0009): claims purity but reaches the file system.
+defn load-config-bad [path : cstr] #fx{} : cstr
+  fs/read-text(path)
+
+;; OK: un-annotated, so the row is not checked at all.
+defn load-config-unchecked [path : cstr] : cstr
+  fs/read-text(path)
 ```
 
 ### Benefits
@@ -472,6 +491,15 @@ fine -- the code after the conditional runs exactly once per resume.
       (when (= i 3) (perform (Done i)))   ; abort or resume, either way
       (set! i (+ i 1)))))
 ```
+```sweet-exp
+defeffect Done [score : int] : nil
+
+defn run [] : nil
+  let [^mut i 0]
+    while {i < 10}
+      when {i = 3} perform(Done(i))   ; abort or resume, either way
+      set!(i {i + 1})
+```
 
 The lowering carries a loop's `^mut` state in the helper's parameters when a
 variable is assigned once and unconditionally, and in a shared cell otherwise
@@ -509,6 +537,16 @@ as a deprecated no-op.)
 (defn plain [] : int
   (+ 1 (call/cc (fn [k] 10))))                ; => 11
 ```
+```sweet-exp
+;; k aborts the pending (+ 100 ...) and returns 41 at the call/cc site; the
+;; outer (+ 1 ...) makes 42 -- with no enclosing reset.
+defn answer [] : int
+  {1 + call/cc(fn([k] {100 + k(41)}))}   ; => 42
+
+;; f that ignores k just returns its body value.
+defn plain [] : int
+  {1 + call/cc(fn([k] 10))}                ; => 11
+```
 
 **Undelimited vs. delimited.** This is the one thing `call/cc` adds over
 `shift`/`reset`: capture reaches the implicit root prompt, not the nearest
@@ -534,6 +572,14 @@ reach -- use `shift`/`shift0` or `call/cc*` when you want delimited capture.
     (when (>  7 0) (k 7))     ; first positive: aborts here with 7
     -1)))                     ; default if nothing matched
 ```
+```sweet-exp
+defn first-positive [] : int
+  escape
+    fn [k]
+      when {-3 > 0} k(-3)
+      when {7 > 0} k(7)     ; first positive: aborts here with 7
+      -1                     ; default if nothing matched
+```
 
 **Typing.** `f` has type `cont<T> -> T`, where `T` is the prompt's answer type;
 the `(call/cc f)` / `(escape f)` expression itself has type `T`. An unannotated
@@ -549,6 +595,10 @@ is `TUR-E0100` / `TUR-E0101`). Opt into exactly-once accounting with `^linear`:
 ```turmeric
 (defn use-once [] : int
   (call/cc (fn [^linear k] (k 42))))   ; k must be invoked exactly once
+```
+```sweet-exp
+defn use-once [] : int
+  call/cc(fn([^linear k] k(42)))   ; k must be invoked exactly once
 ```
 
 For a **multi-shot**, cloneable/re-enterable continuation use `call/cc*` instead

@@ -231,6 +231,10 @@ instance for the call to dispatch to:
 (defn use-foo [W] [^borrow w : W] : int
   (foo-of w))          ;; TUR-E0015: 'use-foo' does not constrain 'W' to 'Foo'
 ```
+```sweet-exp
+defn use-foo [W] [^borrow w : W] : int
+  foo-of(w)          ;; TUR-E0015: 'use-foo' does not constrain 'W' to 'Foo'
+```
 
 Add `[(Foo W)]` and it resolves. This is checked at `tur check` time; an
 unconstrained call used to pass the type checker and fail later in the C
@@ -245,6 +249,13 @@ the code that dispatches on it, at file scope or inside a `defmodule`:
 
 (definstance Foo [Bar]
   (foo-of [w] (.v w)))
+```
+```sweet-exp
+defn use-foo [W] [(Foo W)] [^borrow w : W] : int
+  foo-of(w)          ;; fine -- the instance below is found
+
+definstance Foo [Bar]
+  (foo-of [w] .v(w))
 ```
 
 A `defn` whose body cannot resolve a class method is elaborated speculatively,
@@ -276,6 +287,15 @@ primitive different behaviour under a class, wrap it in a newtype:
 (definstance Eq [Loose]              ;; fine: a different type
   (eq? [a b] : bool false))
 (.eq? (:: 3 Loose) (:: 3 Loose))    ;; false; (.eq? 3 3) is still true
+```
+```sweet-exp
+definstance Eq [int]                ;; TUR-E0025: stdlib already defines Eq [int]
+  (eq? [a b] : bool false)
+
+defopaque Loose :int
+definstance Eq [Loose]              ;; fine: a different type
+  (eq? [a b] : bool false)
+.eq?((:: 3 Loose) (:: 3 Loose))    ;; false; (.eq? 3 3) is still true
 ```
 
 A stdlib file loaded twice (an explicit `(load "stdlib/...")` beside the
@@ -382,6 +402,12 @@ syntax, as in [Functional Dependencies](#functional-dependencies)):
   [(Semigroup c)]
   | (c -> e)
   (cget [^borrow x : c i : int] : e))
+```
+```sweet-exp
+defclass Coll [c e]
+  [(Semigroup c)]
+  | (c -> e)
+  (cget [^borrow x : c i : int] : e)
 ```
 
 The rules the compiler enforces, each with its own code:
