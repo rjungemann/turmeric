@@ -39,6 +39,12 @@ In a body -- the body of a `defn`, `fn`, `let`, `do`, `when`, or `while` --
   (def y (+ x 1))
   (println y))         ;; prints 2
 ```
+```sweet-exp
+do
+  def x 1
+  def y {x + 1}
+  println(y)         ;; prints 2
+```
 
 This is exactly equivalent to:
 
@@ -48,14 +54,11 @@ This is exactly equivalent to:
     (let [y (+ x 1)]
       (println y))))
 ```
-
-Sweet-exp:
-
 ```sweet-exp
 do
-  def x 1
-  def y +(x 1)
-  println(y)
+  let [x 1]
+    let [y {x + 1}]
+      println(y)
 ```
 
 ### Supported body positions
@@ -242,9 +245,6 @@ group:
     (println (if (even? 10) "even" "odd"))
     0))
 ```
-
-Sweet-exp:
-
 ```sweet-exp
 defn run [] :int
   letrec [even? fn([n :int] :bool if(=(n 0) true  odd?(-(n 1))))
@@ -330,15 +330,12 @@ Write `(let loop [bindings...] body...)` to both introduce a local function
       acc
       (loop (- i 1) (+ acc i)))))
 ```
-
-Sweet-exp:
-
 ```sweet-exp
 defn sum [n :int] :int
   let loop [i n acc 0]
-    if =(i 0)
+    if {i = 0}
       acc
-      loop(-(i 1) +(acc i))
+      loop({i - 1} {acc + i})
 ```
 
 The named let desugars to:
