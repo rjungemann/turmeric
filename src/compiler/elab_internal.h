@@ -158,6 +158,21 @@ typedef struct Elab {
     SymbolTable *st;
     Scope       *scope;     /* current */
     Scope        global;
+
+    /* PS4 (playground-session-hygiene-plan): how big each redefinable registry
+     * was when this elaborate call began.  Set only when the call continues a
+     * live ElabSession -- a REPL or playground turn after the first -- and zero
+     * otherwise, so a compile never treats anything as redefinable.  A
+     * definition below its watermark came from an EARLIER turn, and a turn may
+     * replace it: re-running a program must not fail on the definitions the
+     * previous run left behind.  A duplicate within one turn is still the
+     * error it always was.  See elab_prior_turn_* in elab_core.c. */
+    bool      turn_continues_session;
+    uint32_t  turn_start_n_globals;
+    uint32_t  turn_start_n_macros;
+    uint32_t  turn_start_n_adt_defs;
+    uint32_t  turn_start_n_effects;
+    struct TypeClassInstance *turn_start_instances;
     uint32_t     next_id;
     uint32_t     next_gensym_id;  /* Phase 6: for generating unique symbol names */
     /* Transitive-RM: shared reader-macro registry, set by the driver
@@ -1351,6 +1366,20 @@ bool expr_closure_return_dispatches(const Expr *expr);
 bool expr_closure_return_dispatches_untyped(const Expr *expr);
 void elab_init_state(Elab *e, Arena *arena, SymbolTable *st);
 MacroDef *elab_lookup_macro(Elab *e, const Symbol *name);
+
+/* PS4: did this definition come from an earlier turn of the session this
+ * elaborate call continues?  Always false outside a session (see the
+ * turn_start_* watermarks on Elab). */
+bool elab_prior_turn_global(const Elab *e, const Binding *b);
+bool elab_prior_turn_macro(const Elab *e, const struct MacroDef *m);
+bool elab_prior_turn_adt(const Elab *e, const AdtDef *ad);
+bool elab_prior_turn_effect(const Elab *e, const Symbol *name);
+bool elab_prior_turn_instance(const Elab *e, const struct TypeClassInstance *inst);
+/* True when `file_id` names a stdlib source file (its path runs through a
+ * `stdlib/` directory) -- the same test the duplicate-instance guard uses. */
+bool elab_file_is_stdlib(uint16_t file_id);
+/* PS4: drop an earlier turn's macro so a redefinition can register afresh. */
+void elab_remove_macro(Elab *e, struct MacroDef *m);
 Binding *binding_new(Elab *e, const Symbol *name, Type type,
     bool is_mut, bool is_global, Span span);
 int elab_read_file(const char *path, char **out, size_t *out_len);

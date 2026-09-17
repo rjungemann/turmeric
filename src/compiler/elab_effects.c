@@ -1404,11 +1404,19 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
     }
     const Symbol *name = name_f->as.sym;
     
-    /* Check if effect already exists */
+    /* Check if effect already exists.  PS4: an earlier REPL/playground turn's
+     * effect is redefined in place (below, once the new signature is parsed) --
+     * re-running the shipped effects example must not fail on the effect the
+     * previous run declared.  The builtin Unsafe is never redefinable. */
+    bool redefining = false;
     if (effect_env_contains(e->effect_env, name)) {
-        diag_emit(DIAG_ERROR, name_f->span,
-                  "defeffect: '%s' is already defined", name->name);
-        return NULL;
+        if (name != e->sym_effect_unsafe && elab_prior_turn_effect(e, name)) {
+            redefining = true;
+        } else {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defeffect: '%s' is already defined", name->name);
+            return NULL;
+        }
     }
     
     /* Parse parameter list (index shifts by 1 when ^private is present) */
@@ -1586,6 +1594,10 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
         }
     }
 
+    if (redefining)
+        effect_redefine(effect_env_lookup(e->effect_env, name), param_names,
+                        param_types, n_params, result_type,
+                        e->current_module_name, is_private);
     /* Register the effect — pass module visibility info (Phase P19-6) */
     Effect *effect = effect_env_register(e->effect_env, e->arena, name,
                                           param_names, param_types, n_params, result_type,

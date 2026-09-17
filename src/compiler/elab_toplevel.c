@@ -1793,6 +1793,13 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         e.has_defmodule       = false;
         e.current_module_name = NULL;
         e.current_module      = NULL;
+        /* PS4: everything defined so far belongs to earlier turns. */
+        e.turn_continues_session = true;
+        e.turn_start_n_globals   = e.global.n;
+        e.turn_start_n_macros    = e.n_macros;
+        e.turn_start_n_adt_defs  = e.n_adt_defs;
+        e.turn_start_n_effects   = e.effect_env ? e.effect_env->n_effects : 0;
+        e.turn_start_instances   = e.typeclass_env.instances;
     } else {
         elab_init_state(&e, arena, st);
     }

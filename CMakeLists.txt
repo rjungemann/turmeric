@@ -1268,6 +1268,15 @@ add_test(
 set_tests_properties(tur_session_failure_recovery PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
+# PS4 (playground-session-hygiene-plan): def* forms redefinable across turns.
+add_test(
+  NAME tur_session_redefinition
+  COMMAND "${CMAKE_BINARY_DIR}/tur_session_redefinition"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_session_redefinition PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # macro-system-direction-plan Stage 1: nested macro-time turi env inside a
 # compile-posture process -- g_interpret_mode bracketing, TURI_CAP_NONE,
 # fuel bound, session-owned teardown.
@@ -1614,6 +1623,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_collections_embed tur_stdlib_natives_embed
                      tur_reader_macro_cross_eval tur_incremental_elab_diff
                      tur_lang_switch_prelude tur_session_failure_recovery
+                     tur_session_redefinition
                      tur_show_collection_elems
                      tur_macro_env_nested
                      tur_gc_runtime_copy_parity tur_cc_warn_ratchet

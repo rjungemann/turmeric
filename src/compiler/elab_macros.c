@@ -1489,11 +1489,17 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
     if (!e->in_stdlib_load)
         tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defmacro");
 
-    /* Check if macro already exists */
-    if (elab_lookup_macro(e, name_f->as.sym)) {
-        diag_emit(DIAG_ERROR, name_f->span,
-                  "defmacro: '%s' is already defined", name_f->as.sym->name);
-        return NULL;
+    /* Check if macro already exists.  PS4: an earlier REPL/playground turn's
+     * macro is replaced rather than refused. */
+    {
+        MacroDef *prior = elab_lookup_macro(e, name_f->as.sym);
+        if (prior && elab_prior_turn_macro(e, prior)) {
+            elab_remove_macro(e, prior);
+        } else if (prior) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defmacro: '%s' is already defined", name_f->as.sym->name);
+            return NULL;
+        }
     }
 
     /* Parse params */
@@ -1864,10 +1870,15 @@ Expr *elab_defmacro_star(Elab *e, const Form *call) {
     }
     if (!e->in_stdlib_load)
         tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defmacro*");
-    if (elab_lookup_macro(e, name_f->as.sym)) {
-        diag_emit(DIAG_ERROR, name_f->span,
-                  "defmacro*: '%s' is already defined", name_f->as.sym->name);
-        return NULL;
+    {
+        MacroDef *prior = elab_lookup_macro(e, name_f->as.sym);
+        if (prior && elab_prior_turn_macro(e, prior)) {   /* PS4: see defmacro */
+            elab_remove_macro(e, prior);
+        } else if (prior) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defmacro*: '%s' is already defined", name_f->as.sym->name);
+            return NULL;
+        }
     }
 
     Form *params_f = call->as.list.items[2];

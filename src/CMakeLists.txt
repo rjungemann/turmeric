@@ -836,6 +836,23 @@ set_target_properties(tur_session_failure_recovery PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
+# PS4 (playground-session-hygiene-plan): every def* form is redefinable by a
+# later turn; same-turn duplicates and stdlib-owned definitions stay refused.
+add_executable(tur_session_redefinition ${CMAKE_SOURCE_DIR}/tests/turi/session-redefinition.c)
+target_include_directories(tur_session_redefinition PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_session_redefinition PRIVATE libturi)
+target_compile_options(tur_session_redefinition PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_session_redefinition PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_session_redefinition PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 # ---------------------------------------------------------------------------
 # macro-system-direction-plan Stage 1: the macro-time interpreter env.
 # Nested turi evaluation inside a (simulated) compile must never leave

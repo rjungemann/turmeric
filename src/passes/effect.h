@@ -180,6 +180,17 @@ Effect *effect_env_register(EffectEnv *env, Arena *a, const Symbol *name,
                             const Symbol *defining_module_name, bool is_private);
 
 /* Look up an effect by name */
+/* PS4 (playground-session-hygiene-plan): give an already-registered effect a
+ * new declaration in place -- a later REPL/playground turn redefining it.  The
+ * Effect keeps its identity (earlier turns' nodes point at it); its signature,
+ * visibility, parent and the post-registration Tier C / multishot fields are
+ * reset to what a fresh effect_env_register would give, for the caller to fill
+ * in again. */
+void effect_redefine(Effect *eff, const Symbol **param_names,
+                     TypeKind *param_types, uint8_t n_params,
+                     TypeKind result_type,
+                     const Symbol *defining_module_name, bool is_private);
+
 Effect *effect_env_lookup(EffectEnv *env, const Symbol *name);
 
 /* Check if an effect is valid (exists in environment) */

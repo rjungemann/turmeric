@@ -1281,8 +1281,16 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         Expr *item = program->as.program.items[i];
         if (!item || item->kind != EX_DEFECT || !item->as.effect_def_.def) continue;
         EffectDef *def = item->as.effect_def_.def;
-        /* Skip if already registered (idempotent). */
-        if (!effect_env_contains(env, def->name)) {
+        /* Re-registering takes the node's declaration.  In one program that is
+         * the same declaration again; in a long-lived interpreter env, whose
+         * EffectEnv outlives each turn, it is a later turn redefining the
+         * effect (PS4), and the older signature must not stay behind. */
+        Effect *have = effect_env_lookup(env, def->name);
+        if (have) {
+            effect_redefine(have, def->param_names, def->param_types,
+                            def->n_params, def->result_type,
+                            def->defining_module_name, def->is_private);
+        } else {
             effect_env_register(env, a, def->name,
                                 def->param_names, def->param_types,
                                 def->n_params, def->result_type,
