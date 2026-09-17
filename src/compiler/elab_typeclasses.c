@@ -2284,6 +2284,83 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
     }
 }
 
+/* hkt-carrier-result-loses-payload-types: a copy of the TY_APP chain `t` with
+ * the argument `layers_from_outer` applications below the outermost replaced by
+ * `newarg` (0 = the outermost application's argument).  The receiver `(f a)`
+ * with its hole slot replaced by `b` IS `(f b)`, whatever the instance head's
+ * erased spelling says.  Shares nothing with the head, so the arms cannot
+ * swap.  Beyond the chain's depth, `t` is returned unchanged. */
+static Type m7_app_replace_slot(Arena *arena, Type t, uint32_t layers_from_outer,
+                                Type newarg) {
+    if (t.kind != TY_APP || !t.as.app.fn || !t.as.app.arg) return t;
+    Type out = t;
+    if (layers_from_outer == 0) {
+        Type *na = (Type *)arena_alloc(arena, sizeof(Type));
+        *na = newarg;
+        out.as.app.arg = na;
+        return out;
+    }
+    Type *nf = (Type *)arena_alloc(arena, sizeof(Type));
+    *nf = m7_app_replace_slot(arena, *t.as.app.fn, layers_from_outer - 1, newarg);
+    out.as.app.fn = nf;
+    return out;
+}
+
+/* hkt-carrier-result-loses-payload-types: the argument `layers_from_outer`
+ * applications below the outermost of the TY_APP chain `t` (0 = the outermost
+ * application's argument).  False when the chain is shallower than asked. */
+static bool m7_app_slot_arg(Type t, uint32_t layers_from_outer, Type *out) {
+    while (layers_from_outer > 0) {
+        if (t.kind != TY_APP || !t.as.app.fn) return false;
+        t = *t.as.app.fn;
+        layers_from_outer--;
+    }
+    if (t.kind != TY_APP || !t.as.app.arg) return false;
+    *out = *t.as.app.arg;
+    return true;
+}
+
+/* hkt-carrier-result-loses-payload-types: does the tyvar `bname` occur inside
+ * an application headed by the class variable `fvar` anywhere in `t`?  Such an
+ * occurrence is where the class-variable unification reads a hole-at-0 head
+ * reversed, so a binding of `bname` collected there cannot be trusted. */
+static bool m7_tyvar_under_app_of(const Type *t, const char *fvar, const char *bname) {
+    if (!t || !fvar || !bname) return false;
+    switch (t->kind) {
+        case TY_APP: {
+            const Type *h = t;
+            while (h && h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+            bool under = h && h->kind == TY_TYVAR && h->as.tyvar_.name &&
+                         strcmp(h->as.tyvar_.name, fvar) == 0;
+            for (const Type *a = t; a && a->kind == TY_APP; a = a->as.app.fn) {
+                const Type *arg = a->as.app.arg;
+                if (!arg) continue;
+                if (under && arg->kind == TY_TYVAR && arg->as.tyvar_.name &&
+                    strcmp(arg->as.tyvar_.name, bname) == 0)
+                    return true;
+                if (m7_tyvar_under_app_of(arg, fvar, bname)) return true;
+            }
+            return false;
+        }
+        case TY_FN: {
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    if (m7_tyvar_under_app_of(t->as.fn.arg_full_types[i], fvar, bname))
+                        return true;
+            return m7_tyvar_under_app_of(t->as.fn.result_full_type, fvar, bname);
+        }
+        default:
+            return false;
+    }
+}
+
+static bool m7_params_mention_under_app_of(const TypeClassMethod *cm,
+                                           const char *fvar, const char *bname) {
+    for (uint8_t p = 0; p < cm->n_params; p++)
+        if (m7_tyvar_under_app_of(&cm->param_types[p], fvar, bname)) return true;
+    return false;
+}
+
 /* M7 layer-4 guard: does a (post-substitution) result type still carry a named,
  * un-grounded element tyvar?  When the HKT by-value monomorphization cannot
  * recover a result element tyvar from the call args -- the Applicative `ap`
@@ -8279,6 +8356,147 @@ resolved_user_fallback:;
                     }
                 }
             }
+            /* hkt-carrier-result-loses-payload-types: the result type of a
+             * CARRIER-path dispatch on a partially-applied instance head.
+             *
+             * The two gates above leave two shapes on the erased carrier with
+             * a def-less `(type-app ? ?)` result: a heterogeneous receiver
+             * under a hole-at-0 head (`Functor [(Result _ B)]` on `(Result
+             * int cstr)`), and a carrier-bodied instance (`Functor [(Either
+             * E)]`, whose `fmap` delegates to `either-map`).  Both are right
+             * to stay on the carrier -- neither can take the by-value route
+             * -- but the CONSUMER then sees no payload types: the `match` on
+             * the result binds every arm as the int carrier, and an `Err s`
+             * of `cstr` printed as the string's ADDRESS.
+             *
+             * The result type is recoverable without touching `rft`, which is
+             * where T4's hole erasure swaps the arms (`(f b)` reconstructs as
+             * `(Result B b)`).  The class method's receiver IS `(f a)` and its
+             * result IS `(f b)`, and the instance head fixes every slot of
+             * `f` except the hole -- so `(f b)` is the RECEIVER with its hole
+             * slot replaced by `b`, whatever the head's spelling.  `b` is read
+             * from the function parameter that states it (below), with the
+             * same hole rule when that statement is itself `(f b)`.  It is
+             * derived for a STATIC dispatch only.  Committed below only as a
+             * carrier-path refinement (m7_byvalue_grounded stays false), on
+             * the same terms as the byval_agg arm: the consumer bridges the
+             * carrier box to the aggregate, which the call hoist now does at
+             * production (emit_expr.c) so every consumer position sees it. */
+            Type m7_hole_result;
+            bool m7_have_hole_result = false;
+            /* STATIC dispatch only: the receiver's constructor head must be a
+             * concrete ADT.  Inside a constrained generic (`x : (m int)` under
+             * `^Monad m`) the resolved instance is a REPRESENTATIVE, and a type
+             * minted from it (`(Result int int)`) would be committed on a call
+             * whose real instance is decided per monomorph -- the dict clone
+             * then materialised an aggregate its int64-carrier return could not
+             * hand back (hkt-constrained-*, van-laarhoven-lens-wide-*). */
+            bool m7_recv_head_concrete = false;
+            {
+                const Type *hh = &obj->type;
+                while (hh && hh->kind == TY_APP) hh = hh->as.app.fn;
+                m7_recv_head_concrete = hh && hh->kind == TY_ADT &&
+                                        hh->as.adt_.def != NULL;
+            }
+            if (m7_result_is_applied && m7_recv_head_concrete &&
+                !obj_is_abstract_tyvar && best_inst->n_type_args >= 1 &&
+                best_inst->type_args[0].kind == TY_APP &&
+                obj_orig_type.kind == TY_APP &&
+                cm->n_params >= 1 && cm->param_types[0].kind == TY_APP &&
+                cm->param_types[0].as.app.fn &&
+                cm->param_types[0].as.app.fn->kind == TY_TYVAR &&
+                cm->param_types[0].as.app.fn->as.tyvar_.name &&
+                cm->return_type.as.app.fn &&
+                cm->return_type.as.app.fn->kind == TY_TYVAR &&
+                cm->return_type.as.app.fn->as.tyvar_.name &&
+                strcmp(cm->return_type.as.app.fn->as.tyvar_.name,
+                       cm->param_types[0].as.app.fn->as.tyvar_.name) == 0 &&
+                cm->return_type.as.app.arg) {
+                Type belem = *cm->return_type.as.app.arg;
+                bool belem_ok = belem.kind != TY_TYVAR;
+                const char *fvar = cm->param_types[0].as.app.fn->as.tyvar_.name;
+                uint32_t recv_depth = 0;
+                for (Type t = obj_orig_type; t.kind == TY_APP && t.as.app.fn;
+                     t = *t.as.app.fn)
+                    recv_depth++;
+                uint32_t hole_layers =
+                    (best_inst->partial_hole_pos == 0) ? recv_depth - 1 : 0;
+                if (belem.kind == TY_TYVAR && belem.as.tyvar_.name) {
+                    const char *bname = belem.as.tyvar_.name;
+                    /* `b` is read from a FUNCTION parameter's declared result,
+                     * the way the closure's own type states it -- a bare `b`
+                     * (fmap) is the closure's result itself; an `(f b)` (bind's
+                     * continuation) is the closure's result with the SAME hole
+                     * slot read out of it, because the class-variable
+                     * unification of `(f b)` against `(Result int cstr)` binds
+                     * `b` to the OUTERMOST argument (T4's erasure again), which
+                     * for a hole-at-0 head is the fixed arm, not the hole. */
+                    for (uint8_t p = 1; p < cm->n_params && !belem_ok; p++) {
+                        const Type *pt = &cm->param_types[p];
+                        if (pt->kind != TY_FN || !pt->as.fn.result_full_type) continue;
+                        const Type *pr = pt->as.fn.result_full_type;
+                        if ((uint32_t)(p - 1) >= n_args) break;
+                        Type at = args_orig_types[p - 1];
+                        if (at.kind != TY_FN) continue;
+                        Type ar = at.as.fn.result_full_type
+                            ? *at.as.fn.result_full_type
+                            : type_from_kind(at.as.fn.result_kind);
+                        if (pr->kind == TY_TYVAR && pr->as.tyvar_.name &&
+                            strcmp(pr->as.tyvar_.name, bname) == 0) {
+                            if (ar.kind != TY_TYVAR && ar.kind != TY_UNKNOWN) {
+                                belem = ar;
+                                belem_ok = true;
+                            }
+                            break;
+                        }
+                        if (pr->kind == TY_APP && pr->as.app.fn &&
+                            pr->as.app.fn->kind == TY_TYVAR &&
+                            pr->as.app.fn->as.tyvar_.name && fvar &&
+                            strcmp(pr->as.app.fn->as.tyvar_.name, fvar) == 0 &&
+                            pr->as.app.arg && pr->as.app.arg->kind == TY_TYVAR &&
+                            pr->as.app.arg->as.tyvar_.name &&
+                            strcmp(pr->as.app.arg->as.tyvar_.name, bname) == 0) {
+                            uint32_t ad = 0;
+                            for (Type t = ar; t.kind == TY_APP && t.as.app.fn;
+                                 t = *t.as.app.fn)
+                                ad++;
+                            if (ad == recv_depth) {
+                                Type slot;
+                                if (m7_app_slot_arg(ar, hole_layers, &slot) &&
+                                    slot.kind != TY_TYVAR && slot.kind != TY_UNKNOWN) {
+                                    belem = slot;
+                                    belem_ok = true;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    /* No function parameter states `b`: the collected binding
+                     * is trustworthy only when `b` never sits under an `(f ..)`
+                     * application in the class signature (where the erasure
+                     * would have reversed it). */
+                    if (!belem_ok &&
+                        !m7_tyvar_under_app_of(&cm->return_type, fvar, bname) &&
+                        !m7_params_mention_under_app_of(cm, fvar, bname)) {
+                        for (uint8_t k = 0; k < m7_nb; k++)
+                            if (m7_bind_names[k] &&
+                                strcmp(m7_bind_names[k]->name, bname) == 0) {
+                                belem = m7_bind_types[k];
+                                belem_ok = true;
+                                break;
+                            }
+                    }
+                }
+                /* Slot 0 is the INNERMOST application; a hole-at-0 head fixes
+                 * the outer slots, any other partial head (`(Either E)`, hole
+                 * pos 1 or 0xFF) leaves the OUTERMOST free -- hole_layers,
+                 * computed above, for both the receiver and a `(f b)` result. */
+                if (belem_ok && !m7_type_has_free_tyvar(belem) && recv_depth >= 1) {
+                    m7_hole_result = m7_app_replace_slot(
+                        e->arena, obj_orig_type, hole_layers, belem);
+                    m7_have_hole_result = true;
+                }
+            }
             if (m7_nb > 0) {
                 Type substituted = elab_subst_class_tyvars(
                     e->arena, *rft, m7_bind_names, m7_nb, m7_bind_types, m7_nb);
@@ -8373,6 +8591,25 @@ resolved_user_fallback:;
                         result_type = substituted;
                     }
                 }
+            }
+            /* hkt-carrier-result-loses-payload-types: the carrier-path
+             * refinement for the partially-applied head (computed above).
+             * Only when the by-value route did not take the call and the
+             * result is still the def-less shell; the same three
+             * representation classes the byval_agg arm admits, for the same
+             * reason -- a :heap app and an int-carrier newtype ARE the
+             * carrier, and a by-value aggregate is what the hoist bridges. */
+            if (m7_have_hole_result && !m7_byvalue_grounded &&
+                result_type.kind == TY_APP &&
+                !m7_type_has_free_tyvar(m7_hole_result)) {
+                Type hr = m7_hole_result;
+                Type pf_dummy;
+                bool hr_heap = type_is_heap_adt(hr) || type_is_heap_struct(hr);
+                bool hr_byval = !hr_heap && hr.kind == TY_APP &&
+                                type_app_is_concrete_adt(&hr);
+                if (!m7_app_to_ptr_family(hr, &pf_dummy) &&
+                    (hr_heap || hr_byval || m7_result_is_int_carrier(hr)))
+                    result_type = hr;
             }
         }
     }

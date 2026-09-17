@@ -6064,6 +6064,80 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (bridged) return bridged;
         }
     }
+    /* hkt-carrier-result-loses-payload-types: the by-value twin of the `any`
+     * normalisation above, for a CARRIER-dispatched typeclass method whose
+     * call-node type was refined to a concrete by-value aggregate.
+     *
+     * `__inst_Functor_fmap_Result_tyvar` returns the int64 carrier -- a
+     * pointer to a `tur_adt_Result` box -- while the elaborator now grounds
+     * the call's type to `(Result int cstr)` for a partially-applied instance
+     * head the by-value route cannot take (the heterogeneous hole-at-0
+     * receiver, the carrier-bodied Either).  Before the grounding the consumer
+     * saw a def-less `(type-app ? ?)` and bound every match arm as the int
+     * carrier, printing an `Err s` cstr as its address.  With it, the binder
+     * is declared as the aggregate and an `int64_t` init is an invalid
+     * initializer -- the exact failure the byval_agg arm's let-init hit when
+     * Either's `E` was bound un-gated (the report's "obvious fix").
+     *
+     * So bridge HERE, at production, and every consumer position (let-init,
+     * match scrutinee, argument, return, tail) sees the aggregate: the box's
+     * layout IS the monomorph's (the preamble _Static_asserts pin it), so the
+     * crossing is the same deref the ascription bridge emits.  Scoped to the
+     * shape: a dictionary dispatch (dict_arg), a Turmeric-bodied callee (an
+     * inline-C body already has its consumer-side path, keyed on
+     * body_is_inline_c -- leave it), whose declared result is the generic
+     * applied family `(f b)` (a TY_APP still mentioning a tyvar) and whose
+     * emitted return is the carrier word, refined to a concrete non-heap,
+     * non-niche by-value ADT app.  The box is consumed when it is fresh and
+     * nothing else will drop it (the drain frees a stamped temp itself);
+     * a borrowed box is copied out and left alone.  The aggregate temp is
+     * recorded so the let-init bridge sees "already the aggregate". */
+    /* And STATIC dispatch only (receiver head concrete): inside a constrained
+     * generic the resolved instance is a representative, the dispatch goes
+     * through the dict at run time, and the call node's concrete-looking type
+     * (`(Result int int)`, minted against that representative) is not a
+     * statement about the box the runtime instance hands back -- the dict
+     * clone returns the carrier and its caller boxes across the crossing. */
+    if (ret_ct && strcmp(ret_ct, "int64_t") == 0 && e->as.call_.dict_arg &&
+        call_dispatch_is_static(e) &&
+        e->as.call_.fn_binding && e->as.call_.fn_binding->type.kind == TY_FN &&
+        !e->as.call_.fn_binding->body_is_inline_c) {
+        const Type *cret = e->as.call_.fn_binding->type.as.fn.result_full_type;
+        /* The call node's OWN elaborated type, not its resolution through the
+         * active spec: inside a constrained poly fn's dict clone the dispatch
+         * type is the abstract `(f float32)`, which the clone's spec resolves
+         * to a concrete `(Identity float32)` -- but the enclosing function
+         * returns the int64 carrier and the caller boxes across the rank-2
+         * crossing, so materialising the aggregate there broke its `return
+         * (int64_t)(intptr_t)tmp` (hkt-constrained-byvalue-carrier,
+         * erased-reader-float32-record-monomorph).  Only a type the ELABORATOR
+         * committed as concrete is the shape this bridge exists for. */
+        if (cret && cret->kind == TY_APP && emit_repr_type_mentions_tyvar(cret) &&
+            e->type.kind == TY_APP && type_app_is_concrete_adt(&e->type) &&
+            !emit_repr_type_mentions_tyvar(&e->type)) {
+            Type rt = emit_resolve_type(ctx, e->type);
+            if (rt.kind == TY_APP && type_app_is_concrete_adt(&rt) &&
+                !type_is_heap_adt(rt) && !type_is_heap_struct(rt) &&
+                !adt_app_is_niche_option(rt) &&
+                !emit_repr_type_mentions_tyvar(&rt)) {
+                const char *cn = emit_type_c_name(ctx, rt);
+                if (cn && strcmp(cn, "int64_t") != 0 && strchr(cn, '*') == NULL) {
+                    if (!drop_after_resolved &&
+                        emit_call_returns_fresh_sum_box(ctx, e))
+                        emit_owned_carrier_mark(tmp);
+                    char *bridged = emit_carrier_bridge(ctx, body, strdup(tmp),
+                                                        CK_CARRIER, CK_CONCRETE, rt);
+                    char *agg = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s %s = %s;\n", cn, agg, bridged);
+                    free(bridged);
+                    emit_localvar_record_ctype(agg, cn);
+                    emit_owned_carrier_clear(tmp);
+                    return agg;
+                }
+            }
+        }
+    }
     return strdup(tmp);
 }
 

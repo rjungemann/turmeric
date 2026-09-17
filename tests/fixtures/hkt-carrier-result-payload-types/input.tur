@@ -1,0 +1,42 @@
+;; hkt-carrier-result-loses-payload-types: a typed `fmap` on a HETEROGENEOUS
+;; Result / Either rides the erased carrier (the partially-applied instance
+;; head cannot take the by-value route), and the dispatch result used to stay a
+;; def-less `(type-app ? ?)` -- so the `match` on it bound every arm as the int
+;; carrier and printed the `Err s` cstr as its ADDRESS.  The elaborator now
+;; grounds the carrier-path result hole-aware (receiver with the hole slot
+;; replaced by `b`) and the call hoist bridges the carrier box into the
+;; aggregate at production, so every consumer sees real payload types.
+(load "stdlib/either.tur")
+
+(defn show-res [n : (Result int cstr)] : nil
+  (match n (Ok v) (println v) (Err s) (println s)))
+
+(defn main [] : int
+  ;; Result: hole-at-0 head `(Result _ B)`, heterogeneous receiver.
+  (let [e : (Result int cstr) (err "bad")
+        n (fmap e (fn [x : int] : int (* x 2)))]
+    (match n (Ok v) (println v) (Err s) (println s)))
+  (let [o : (Result int cstr) (ok 21)
+        n (fmap o (fn [x : int] : int (* x 2)))]
+    (match n (Ok v) (println v) (Err s) (println s)))
+  ;; The result flowing straight into a consumer, no let in between.
+  (let [e2 : (Result int cstr) (err "direct")]
+    (show-res (fmap e2 (fn [x : int] : int (+ x 1)))))
+  ;; bind: `b` comes from the continuation's `(f b)` result, which the class
+  ;; variable unification reads reversed for a hole-at-0 head; the hole slot
+  ;; is read out of the continuation's result instead.
+  (let [e3 : (Result int cstr) (err "nope")
+        n (bind e3 (fn [x : int] : (Result int cstr) (ok (+ x 1))))]
+    (match n (Ok v) (println v) (Err s) (println s)))
+  (let [o3 : (Result int cstr) (ok 4)
+        n (bind o3 (fn [x : int] : (Result int cstr) (ok (+ x 1))))]
+    (match n (Ok v) (println v) (Err s) (println s)))
+  ;; Either: leftmost partial head `(Either E)`, carrier-bodied instance
+  ;; (fmap delegates to either-map).
+  (let [r : (Either int cstr) (Right "x")
+        m (fmap r (fn [s : cstr] : cstr s))]
+    (match m (Left a) (println a) (Right b) (println b)))
+  (let [l : (Either int cstr) (Left 7)
+        m (fmap l (fn [s : cstr] : cstr s))]
+    (match m (Left a) (println a) (Right b) (println b)))
+  0)
