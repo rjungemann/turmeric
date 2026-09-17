@@ -2355,6 +2355,62 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
 /* Phase 15: Typeclass cached symbols */
 
 /* Phase 6: Macro lookup */
+/* PS4: earlier-turn tests.  Each compares against the watermark taken when
+ * the call began (elaborate_program_session), so they are all false for a
+ * compile and for a session's first turn. */
+bool elab_prior_turn_global(const Elab *e, const Binding *b) {
+    if (!e->turn_continues_session || !b) return false;
+    for (uint32_t i = 0; i < e->turn_start_n_globals && i < e->global.n; i++)
+        if (e->global.bindings[i] == b) return true;
+    return false;
+}
+
+bool elab_prior_turn_macro(const Elab *e, const MacroDef *m) {
+    if (!e->turn_continues_session || !m) return false;
+    for (uint32_t i = 0; i < e->turn_start_n_macros && i < e->n_macros; i++)
+        if (e->macros[i] == m) return true;
+    return false;
+}
+
+bool elab_prior_turn_adt(const Elab *e, const AdtDef *ad) {
+    if (!e->turn_continues_session || !ad) return false;
+    for (uint32_t i = 0; i < e->turn_start_n_adt_defs && i < e->n_adt_defs; i++)
+        if (e->adt_defs[i] == ad) return true;
+    return false;
+}
+
+bool elab_prior_turn_effect(const Elab *e, const Symbol *name) {
+    if (!e->turn_continues_session || !e->effect_env) return false;
+    for (uint32_t i = 0; i < e->turn_start_n_effects && i < e->effect_env->n_effects; i++)
+        if (e->effect_env->effects[i]->name == name) return true;
+    return false;
+}
+
+bool elab_prior_turn_instance(const Elab *e, const TypeClassInstance *inst) {
+    if (!e->turn_continues_session || !inst) return false;
+    /* The list is prepended to, so everything reachable from the head the
+     * turn started with is older than the turn. */
+    for (const TypeClassInstance *p = e->turn_start_instances; p; p = p->next)
+        if (p == inst) return true;
+    return false;
+}
+
+bool elab_file_is_stdlib(uint16_t file_id) {
+    const char *path = diag_file_path(file_id);
+    return path && strstr(path, "stdlib/") != NULL;
+}
+
+void elab_remove_macro(Elab *e, MacroDef *m) {
+    for (uint32_t i = 0; i < e->n_macros; i++) {
+        if (e->macros[i] != m) continue;
+        memmove(&e->macros[i], &e->macros[i + 1],
+                (e->n_macros - i - 1) * sizeof(MacroDef *));
+        e->n_macros--;
+        if (i < e->turn_start_n_macros) e->turn_start_n_macros--;
+        return;
+    }
+}
+
 MacroDef *elab_lookup_macro(Elab *e, const Symbol *name) {
     for (uint32_t i = 0; i < e->n_macros; i++) {
         MacroDef *m = e->macros[i];
@@ -2433,14 +2489,7 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->c_export_name = NULL;  /* Phase M6: ^:export-as C name */
     /* MF3: mark global bindings created during stdlib auto-load so user
      * code that later shadows them gets a hard diagnostic. */
-    /* PS1: ... except when the prefix is prior SESSION turns.  Those are the
-     * user's own earlier definitions; calling them stdlib made `defn` refuse
-     * a redefinition the incremental path allows, with a message naming a
-     * module that does not contain the name.  Genuine stdlib exports are
-     * still stamped by the `tur/`-module promotion at the prefix boundary
-     * (elab_toplevel.c), so the guard survives for the names it is about. */
-    b->is_from_stdlib = is_global && e->in_stdlib_load &&
-                        !elab_session_prefix_is_history();
+    b->is_from_stdlib = is_global && e->in_stdlib_load;
     return b;
 }
 

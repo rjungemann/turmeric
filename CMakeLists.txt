@@ -1043,19 +1043,6 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_repl_lang_saffron PROPERTIES TIMEOUT 300)
-# PS1 + PS4 (playground-session-hygiene-plan): a failed turn must not poison
-# the session, and re-entering a top-level definition replaces the previous
-# one.  The report this comes from reads as a playground bug, but the
-# mechanism is in shared elaboration -- so it is testable here, with no
-# browser.  Also asserts the two guards were narrowed rather than deleted (a
-# FILE with a duplicate defeffect, or one shadowing a real stdlib name, still
-# errors).
-add_test(
-  NAME tur_repl_session_hygiene
-  COMMAND bash tests/turi/repl-session-hygiene.sh "${CMAKE_BINARY_DIR}/tur"
-  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-)
-set_tests_properties(tur_repl_session_hygiene PROPERTIES TIMEOUT 300)
 # saffron-lang-plan S8: `tur init --saffron` scaffolds a project that BUILDS.
 # The assertion is the build, not the file text: checking for a `#lang` line
 # would have passed while the LIBRARY scaffold could not compile at all
@@ -1269,6 +1256,25 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_lang_switch_prelude PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
+# PS1 (playground-session-hygiene-plan): after a failed turn, re-running a
+# program must work and must not be blamed on an auto-loaded stdlib module.
+add_test(
+  NAME tur_session_failure_recovery
+  COMMAND "${CMAKE_BINARY_DIR}/tur_session_failure_recovery"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_session_failure_recovery PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
+# PS4 (playground-session-hygiene-plan): def* forms redefinable across turns.
+add_test(
+  NAME tur_session_redefinition
+  COMMAND "${CMAKE_BINARY_DIR}/tur_session_redefinition"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_session_redefinition PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
 # macro-system-direction-plan Stage 1: nested macro-time turi env inside a
@@ -1524,6 +1530,16 @@ add_test(
 set_tests_properties(tur_wasm_glue_lang_unit PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
+# playground-session-hygiene-plan: doc-panel lookups must not touch the eval
+# session, `(doc ...)` must evaluate, and Run must be re-runnable.
+add_test(
+  NAME tur_wasm_glue_session_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_wasm_glue_session_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_wasm_glue_session_unit PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # Injective name-mangler round-trip + injectivity unit test
 add_test(
   NAME tur_mangle_unit
@@ -1606,7 +1622,9 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_stm tur_env_teardown tur_env_longlived tur_embed_peripherals
                      tur_collections_embed tur_stdlib_natives_embed
                      tur_reader_macro_cross_eval tur_incremental_elab_diff
-                     tur_lang_switch_prelude tur_show_collection_elems
+                     tur_lang_switch_prelude tur_session_failure_recovery
+                     tur_session_redefinition
+                     tur_show_collection_elems
                      tur_macro_env_nested
                      tur_gc_runtime_copy_parity tur_cc_warn_ratchet
                      tur_experiments_user_config_e2e

@@ -138,6 +138,12 @@ void turi_env_preload_native_stubs(TuriEnv *env) {
          * check).  ok?/err?/some? are dropped because result.tur / option.tur
          * (both preloaded next) define them; none? has no module defn. */
         "(defn none? [r :int] :bool false)\n"
+        /* PS3: what the `doc` macro expands to.  A native (native_doc_print);
+         * the stub is what lets the elaborator type the call instead of
+         * warning TUR-W0040 at every `(doc ...)`.  doc-lookup gets no stub: it
+         * would collide with an explicit (load "stdlib/docstrings.tur"), whose
+         * body the native overrides anyway. */
+        "(defn doc-print [name :cstr] :nil nil)\n"
     );
     (void)sv;
 }

@@ -1529,7 +1529,7 @@ the report's own named-let snippet does not compile (its `if` branches are
 
 | Report | Severity | One line |
 |---|---|---|
-| [doc-lookup-poisons-the-playground-eval-session](doc-lookup-poisons-the-playground-eval-session.md) | high (playground) | **NARROWED 2026-09-17 -- defect 3 and the wrong diagnostic are FIXED; what is left is the two wasm-side defects.** A session turn no longer marks its own earlier turns as stdlib, so the fallback stops reporting the user's `main` as colliding with a module that does not contain it, and repro A's redefinition works; `defeffect` is re-enterable across turns, so the shipped effects example runs twice; `defstruct` still refuses (a struct value carries its AdtDef) but its message names the session and `:reset` instead of a stdlib module. All gated on a prior USER turn, so `--interpret` keeps file semantics. Pinned by `tests/turi/repl-session-hygiene.sh`. STILL OPEN: `turi_doc_lookup` evaluates into the session (PS2) and `doc-lookup` is undefined in the playground (PS3). Original row: three defects behind one failure. `turi_doc_lookup` runs its query through the *accumulating* `turi_eval` (wasm_glue.c:642), so a single doc-panel lookup splices `(doc-lookup "...")` into the session forever -- that is the repeating TUR-W0040, and after it the same program never runs again. `docstrings.tur` is not in `wasm_preload_stdlib`, so the panel's wasm path resolves nothing for any stdlib name. And `defeffect` is not covered by the across-turns redefinition fix `env.c:206` describes for `defn`, whose fallback then blames a user `defn` on "an auto-loaded stdlib module" that does not contain it. Saffron is incidental -- all of it reproduces under `#lang turmeric`. Fix sequence in [playground-session-hygiene-plan](../upcoming/playground-session-hygiene-plan.md). Filed 2026-09-09 |
+| ~~[doc-lookup-poisons-the-playground-eval-session](../archive/doc-lookup-poisons-the-playground-eval-session.md)~~ | -- | **RESOLVED 2026-09-16** (archived) by [playground-session-hygiene-plan](../archive/playground-session-hygiene-plan.md) PS1-PS5: a lost elaboration session is rebuilt by replaying committed turns instead of re-elaborating everything as stdlib; the doc panel, `tur doc` and new `doc-lookup`/`doc-print` natives read `stdlib/docstrings.tur` from C, and `(doc ...)` works in every spelling under the interpreter; every def* form is redefinable by a later turn; Run rewinds to the stdlib and replays the other tabs. Two of the report's claims were corrected on contact: a lookup never spliced into the session (the failed turn was never committed), and `web/examples.js` is not the page's examples list. Also fixed on the way: after a `defmacro*`, any failed turn aborted the process ("too many source files") |
 
 `try-docs-pane-forgets-scroll-position` was resolved 2026-08-26 and moved to
 [docs/archive](../archive/try-docs-pane-forgets-scroll-position.md), along its
@@ -2001,15 +2001,25 @@ without first asking whether that payload is a carrier (the first) or inhabited
 Each fix turned out to be a SHARED-HELPER problem rather than a one-site patch:
 the first decision already had two byte-identical copies and needed a third
 site, and the second had four sites across three files -- including the CPS
-mirror, which is the one that actually emitted the failing line. Both reports
-carry a "spice-side follow-up, still outstanding" section: `spices/nng`'s `Ack`
-opaque and its pub/sub retry delegation are workarounds that can now be removed,
-and have not been.
+mirror, which is the one that actually emitted the failing line. Both spice-side follow-ups are settled
+(turmeric-spices#75), and differently: `spices/nng`'s `Ack` opaque is gone, and
+its pub/sub retry KEEPS its delegation -- inlining a twelve-caller helper to
+re-prove a defect a compiler fixture already pins would be worse code. "Undo the
+workaround" is the obvious reading of a fixed report and it is right about half
+the time.
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[tail-recursive-let-drops-carrier-bridge](../archive/tail-recursive-let-drops-carrier-bridge.md)~~ | -- | **RESOLVED 2026-09-16** (archived), root cause as filed, fixed by the report's structural direction rather than its fix direction 1 -- the decision is now `emit_let_init_carrier_bridge_type` and the TCO back-edge is kept. Original row: A `let` that binds a carrier-returning producer (an inline-C body declared `: (Result T E)`) inside a SELF-TAIL-RECURSIVE body is emitted as `struct x = <int64_t>;` -- `emit_tail`'s inline `EX_LET` arm (`emit_fns.c:718`) assigns `emit_value`'s result straight into a by-value-typed local instead of routing it through `emit_carrier_bridge`, which the non-TCO path (`emit_let_value`) does. Both ingredients are required: delegating the receive to a non-recursive helper fixes it, and so does taking the recursive call out of tail position. The arm's own comment already notes it duplicates `emit_let_value`'s per-binding bookkeeping (for `any` drops) -- the bridge is the piece that was not duplicated. Rejects a retry loop over a fallible operation, which is the obvious spelling of a poll |
 | ~~[result-nil-ok-payload-emits-void-field](../archive/result-nil-ok-payload-emits-void-field.md)~~ | -- | **RESOLVED 2026-09-16** (archived). Fixed by giving the payload the int64 slot the erased twin already reads, NOT by the filed "treat it as a zero-field constructor" -- that would change ctor arity and so every call site and match arm. Four sites, not the three filed: the fourth is the SR2a/SR2b binder override, which put `void` back after normalisation. Original row: `(Result nil E)` and `(Option nil)` type-check and then emit `struct { void _0; } Ok;`, `ctor_Result_Ok__nil__int(void _0)`, and `void _un_N = (void)__scrut->as.Ok._0;` -- three `cc` errors naming only generated identifiers. `nil` is the right type for "worked, carries nothing", which is the return of every setter and connector in a C-wrapping spice; without it each one reaches for `(Result int int)` plus an "ok carries 0" convention (the `:int` stand-in CLAUDE.md forbids) or a per-spice `Ack` opaque, which is what nng ships. The nullary-constructor path already exists; the fix is routing `nil` fields into it at all three sites |
+
+## Found executing playground-session-hygiene-plan (filed 2026-09-16)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [refine-call-sites-re-resolved-every-session-turn](refine-call-sites-re-resolved-every-session-turn.md) | medium | Under an `ElabSession`, `refine_resolve_call_sites` walks every refinement crossing the session has ever collected, on every turn -- the array is session state and nothing clears it. 49% of a 300-turn session replay's samples were under it |
+| [compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type](compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type.md) | low-medium | A compiled `(defdata Option ...)` re-elaborates over the stdlib's filled `Option` stub, and the errors are blamed on `stdlib/option.tur`. `defstruct` has the guard for this; `defdata` never got one |
+| [web-examples-js-is-unused-and-stale](web-examples-js-is-unused-and-stale.md) | low | Nothing imports `web/examples.js` -- the dropdown reads `EXAMPLES` in `main.js` -- and 7 of its 11 examples fail on their first run. Reports have cited it as the playground's examples |
 
 ## Filing conventions
 

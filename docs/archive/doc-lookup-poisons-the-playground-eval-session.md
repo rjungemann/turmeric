@@ -5,62 +5,17 @@ stop working for the rest of the session, and the error it shows blames the
 user's own code for colliding with a stdlib module that does not contain it.
 The advice in the message ("rename the local definition") cannot fix anything.
 
-**Status: OPEN, and NARROWED 2026-09-17.** Defect 3 is fixed, and so is the
-mislabelling that made defect 1's damage permanent. What remains is defects 1
-and 2 proper, both in `src/web/wasm_glue.c` (PS2/PS3) -- the doc query still
-evaluates into the session, and `doc-lookup` is still undefined in the
-playground.
-
-**What landed (PS1's diagnostic half + PS4's `defeffect` half).** Both are in
-shared elaboration and were reproduced, fixed and pinned at `tur repl` with no
-browser -- which is the correction this report most needed: it reads as a
-playground bug, but two of its three defects are not.
-
-- **The wrong "auto-loaded stdlib module" diagnostic is gone.** On the
-  whole-program fallback the prefix is mostly the session's OWN earlier turns,
-  and stamping their bindings `is_from_stdlib` is what made `defn` report the
-  user's own `main` as colliding with a module that does not contain it. The
-  eval path now tells the elaborator its prefix is session history
-  (`elab_set_session_prefix_is_history`), so those bindings are not stamped.
-  `stdlib_prefix`'s other three roles -- load dedup, the macro-promotion
-  boundary, the two-pass partition -- are untouched, so the blast radius Q1
-  warned about is avoided: only the stamp moved. Genuine stdlib bindings are
-  still stamped on the compiled path, where the MF3 guard was written to stop
-  broken C, and that is asserted.
-- **Repro A now runs clean** apart from its wasm half: define, fail, redefine,
-  and the redefinition takes effect (the harness asserts the NEW body's
-  output, not merely the absence of an error). The failed turn still discards
-  `elab_session`; it simply no longer poisons the session when it does, which
-  is what made "one doc lookup breaks Run forever" permanent.
-- **`defeffect` is re-enterable across turns**, so the shipped effects example
-  (`web/examples.js:99`) runs twice. Handler clauses resolve an effect by
-  NAME, so code elaborated after a redefinition binds the new one while
-  already-elaborated code keeps the Effect it was built against; nothing
-  re-tags a live value.
-- **`defstruct` deliberately still refuses**, per PS4's own carve-out for a
-  form that cannot be redefined safely: a struct value carries its `AdtDef`,
-  so a value built by an earlier turn and matched after a redefinition would
-  be read against a different layout. Its message no longer blames "an
-  auto-loaded stdlib module or earlier form in this file" -- in a session it
-  names the session and points at `:reset`, which is the action that works.
-
-All four rules are gated on there being a prior USER turn (`pin_acc_forms`),
-so `tur --interpret prog.tur` -- which comes through the same entry -- keeps
-file semantics exactly: its prefix is the pinned stdlib preload, and a file
-declaring the same effect twice is still an ordinary duplicate.
-
-Pinned by `tests/turi/repl-session-hygiene.sh` (ctest
-`tur_repl_session_hygiene`), 8 checks, which also asserts both guards were
-narrowed rather than deleted. Compiled suite 3043 passed / 0 failed;
-interpreter suite 2151 passed / 0 failed; the 29 repl/eval/incremental ctest
-targets pass.
-
-Original status: reproduced by hand on the live site
-(turmeric-lang.com/try, deployed build `tur-try-v1-0.45.0-57976dc3f`) on
-2026-09-09. Root cause established for all three defects below.
+**Status:** RESOLVED 2026-09-16 by
+[playground-session-hygiene-plan](playground-session-hygiene-plan.md) (PS1-PS5),
+whose execution record also corrects two of this report's claims: a doc lookup
+never spliced `(doc-lookup ...)` into the session -- the failed turn was never
+committed, and the damage was the discarded elaboration session it left
+behind -- and `web/examples.js` is not the page's examples list. Originally
+reproduced by hand on the live site (turmeric-lang.com/try, deployed build
+`tur-try-v1-0.45.0-57976dc3f`) on 2026-09-09.
 
 **Fix sequence:**
-[docs/upcoming/playground-session-hygiene-plan.md](../upcoming/playground-session-hygiene-plan.md)
+[playground-session-hygiene-plan.md](playground-session-hygiene-plan.md)
 (PS1-PS5), whose five open questions were researched and decided 2026-09-09.
 That plan carries two mechanisms this report does not:
 

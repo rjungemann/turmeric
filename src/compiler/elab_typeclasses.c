@@ -3485,7 +3485,8 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
      * already supplied the same primitive instance.  The first definition wins;
      * the redundant one is a silent no-op, matching the include-guard mental
      * model for repeated loads.  See docs/archive/history/load-not-idempotent-typeclass.md. */
-    for (TypeClassInstance *prev = e->typeclass_env.instances; prev; prev = prev->next) {
+    for (TypeClassInstance **link = &e->typeclass_env.instances; *link; link = &(*link)->next) {
+        TypeClassInstance *prev = *link;
         if (prev->typeclass != tc || prev->n_type_args != n_type_args) continue;
         char prev_suffix[64];
         if (!build_inst_type_suffix(prev->type_args, prev->type_arg_syms,
@@ -3510,6 +3511,19 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
              * a newtype, which the diagnostic's long text names. */
             const SourceFile *dup_sf = diag_source_file(call->span.file_id);
             bool in_stdlib_file = dup_sf && dup_sf->path && strstr(dup_sf->path, "stdlib/");
+            /* PS4 (playground-session-hygiene-plan): an instance an earlier
+             * REPL/playground turn defined is replaced -- unlinked here, then
+             * registered afresh below -- so re-running a program does not fail
+             * on the instance its previous run left.  The stdlib's own
+             * instances keep the refusal above, for the reason given there. */
+            if (!in_stdlib_file && !e->in_stdlib_load &&
+                elab_prior_turn_instance(e, prev) &&
+                !elab_file_is_stdlib(prev->origin_file_id)) {
+                *link = prev->next;
+                if (e->turn_start_instances == prev)
+                    e->turn_start_instances = prev->next;
+                break;
+            }
             if (!in_stdlib_file && !e->in_stdlib_load) {
                 diag_emit_with_code(DIAG_ERROR, call->span,
                     TUR_E0025_DUPLICATE_INSTANCE,

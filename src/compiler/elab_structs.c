@@ -1077,47 +1077,34 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
              * DS4-2 check (n_fields/n_ctors > 0 == filled in == redefinition; an
              * empty forward stub is still re-elaborable).  A same-name GADT may
              * coexist with a struct (MF4), so it is not "fully defined" here. */
-            bool prior_fully_defined = false;
-            for (uint32_t ai = 0; ai < e->n_adt_defs && !prior_fully_defined; ai++) {
+            AdtDef *prior = NULL;
+            for (uint32_t ai = 0; ai < e->n_adt_defs && !prior; ai++) {
                 AdtDef *ad = e->adt_defs[ai];
                 if (ad && ad->name && strcmp(ad->name, name->name) == 0 &&
                     ad->n_ctors > 0 && !ad->is_gadt)
-                    prior_fully_defined = true;
+                    prior = ad;
             }
             /* structdef-retirement DS-C: the parallel scan over the (always-empty)
              * struct_defs registry is dead -- a prior definition of this name is
-             * an AdtDef (every lowered defstruct/defdata) checked above. */
-            if (prior_fully_defined) {
-                /* PS4 (playground-session-hygiene-plan): in a REPL / eval
-                 * session the prior definition is an EARLIER TURN, not "an
-                 * auto-loaded stdlib module or earlier form in this file" --
-                 * naming those sends the user to rename a type over a
-                 * collision with their own last Run, and the rename does not
-                 * help.  Say what actually happened and name the action that
-                 * resolves it.
-                 *
-                 * `defstruct` is not made re-enterable here the way
-                 * `defeffect` is, and the reason is the one PS4 reserves:
-                 * a struct VALUE carries its AdtDef, so a value built by an
-                 * earlier turn and matched after a redefinition would be read
-                 * against a different layout.  `defeffect` has no such
-                 * tagging -- handler clauses resolve by name -- which is why
-                 * it could be lifted and this cannot without a
-                 * structural-identity check that does not exist yet. */
-                if (elab_repl_redefinition_allowed())
+             * an AdtDef (every lowered defstruct/defdata) checked above.
+             *
+             * PS4: a type an earlier REPL/playground turn defined is not a clash
+             * -- defdata re-elaborates over it, and defstruct lowers onto that
+             * path -- unless the stdlib defined it: rewriting the stdlib's own
+             * type in place breaks the stdlib code built on it (redefine Pair,
+             * and `(.fst (pair 1 2))` stops resolving). */
+            bool from_stdlib = prior && elab_file_is_stdlib(prior->origin_file_id);
+            if (prior && (from_stdlib || !elab_prior_turn_adt(e, prior))) {
+                if (from_stdlib)
                     diag_emit(DIAG_ERROR, name_form->span,
-                              "defstruct: '%s' was already defined earlier in "
-                              "this session; a struct's values carry its "
-                              "definition, so it cannot be redefined while "
-                              "they may still be live -- use :reset to start a "
-                              "fresh session, or pick a distinct name",
+                              "defstruct: '%s' is already defined by an auto-loaded "
+                              "stdlib module, and redefining it would change it "
+                              "for the stdlib code built on it; pick a distinct name",
                               name->name);
                 else
                     diag_emit(DIAG_ERROR, name_form->span,
-                              "defstruct: '%s' is already defined (an auto-loaded "
-                              "stdlib module or earlier form in this file defines "
-                              "a type with this name; pick a distinct name)",
-                              name->name);
+                              "defstruct: '%s' is already defined by an earlier "
+                              "form; pick a distinct name", name->name);
                 return NULL;
             }
         }
@@ -1832,12 +1819,40 @@ Expr *elab_defdata(Elab *e, const Form *call) {
     /* Phase RF0: allow re-elaboration of forward-declared stub types */
     bool is_forward_stub_adt = false;
     Binding *existing_adt_b = scope_lookup(e->scope, name);
+    /* PS4: a record type from an earlier REPL/playground turn -- a lowered
+     * defstruct -- is shadowed in scope by its own same-named constructor
+     * function, so the lookup above lands on the function.  Re-elaborate over
+     * the type binding underneath it, exactly as a defdata redefinition
+     * re-elaborates over its (unshadowed) type binding. */
+    if (existing_adt_b && existing_adt_b->type.kind != TY_ADT &&
+        elab_prior_turn_global(e, existing_adt_b)) {
+        for (uint32_t bi = e->global.n; bi-- > 0; ) {
+            Binding *tb = e->global.bindings[bi];
+            if (tb->name == name && tb->type.kind == TY_ADT &&
+                elab_prior_turn_global(e, tb) &&
+                elab_prior_turn_adt(e, tb->type.as.adt_.def)) {
+                existing_adt_b = tb;
+                break;
+            }
+        }
+    }
     if (existing_adt_b) {
         /* Reuse the pre-registered stub ONLY when it is genuinely an ADT stub.
          * A forward-typed binding whose payload is not a TY_ADT (e.g. a stdlib
          * type of the same name shadowed by a forward entry) would otherwise be
          * dereferenced as `as.adt_.def` below -- a wild pointer / UBSan
          * misaligned-access crash.  Treat that as a redefinition. */
+        const AdtDef *prior_def = existing_adt_b->type.kind == TY_ADT
+                                ? existing_adt_b->type.as.adt_.def : NULL;
+        if (prior_def && prior_def->n_ctors > 0 && elab_prior_turn_adt(e, prior_def) &&
+            elab_file_is_stdlib(prior_def->origin_file_id)) {
+            /* PS4: see the matching refusal in elab_defstruct. */
+            diag_emit(DIAG_ERROR, name_form->span,
+                      "defdata: '%s' is already defined by an auto-loaded stdlib "
+                      "module, and redefining it would change it for the stdlib "
+                      "code built on it; pick a distinct name", name->name);
+            return NULL;
+        }
         if (elab_is_forward_type(e, name) && existing_adt_b->type.kind == TY_ADT) {
             is_forward_stub_adt = true;
         } else {

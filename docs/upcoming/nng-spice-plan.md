@@ -65,7 +65,7 @@ report. See "Found on the way" below.
   `pull-open` / `pair-open` / `bus-open` / `surveyor-open` /
   `respondent-open`, each `: (Result Socket int)`.
 - `dial` / `listen` (convenience forms; no explicit dialer/listener
-  handles in v0) `: (Result Ack int)`, `#fx{Net}`.
+  handles in v0) `: (Result nil int)`, `#fx{Net}`.
 - Blocking `send-payload` / `recv-payload` on owned byte buffers, plus
   `send-str` / `recv-str` cstr conveniences; all `#fx{Net}`.
 - `sub-subscribe [s topic]` / `sub-unsubscribe` (topic prefix matching;
@@ -79,10 +79,11 @@ report. See "Found on the way" below.
 - Round-trip tests over `inproc://` for req/rep, push/pull, pub/sub,
   pair, bus, and survey -- no network, no external daemon.
 
-Two names moved from the draft; both are recorded under Resolved
-Decisions with the reason: `(Result nil int)` became `(Result Ack int)`,
-and `Buf` / `send-buf` / `recv-buf` became `Payload` /
-`send-payload` / `recv-payload`.
+One name moved from the draft and stuck: `Buf` / `send-buf` / `recv-buf`
+became `Payload` / `send-payload` / `recv-payload`, recorded under Resolved
+Decisions with the reason. A second moved and moved back -- `(Result nil int)`
+briefly became `(Result nil int)` around a compiler defect, and is `nil` again
+now that the defect is fixed.
 
 ### Non-Goals (v0)
 
@@ -107,7 +108,6 @@ and `Buf` / `send-buf` / `recv-buf` became `Payload` /
 ;; spices/nng/src/nng/socket.tur
 
 (defopaque Socket :int :linear)   ;; packs the by-value nng_socket id
-(defopaque Ack :int)              ;; "worked, carries nothing" -- see below
 
 ;;; req-open -- open a REQ (request) socket.
 ;;;
@@ -125,12 +125,12 @@ and `Buf` / `send-buf` / `recv-buf` became `Payload` /
 ;; rep-open, pub-open, sub-open, push-open, pull-open, pair-open,
 ;; bus-open, surveyor-open, respondent-open -- same shape.
 
-(defn dial   [^borrow s : Socket url : cstr] #fx{Net} : (Result Ack int) ...)
-(defn listen [^borrow s : Socket url : cstr] #fx{Net} : (Result Ack int) ...)
+(defn dial   [^borrow s : Socket url : cstr] #fx{Net} : (Result nil int) ...)
+(defn listen [^borrow s : Socket url : cstr] #fx{Net} : (Result nil int) ...)
 (defn close  [s : Socket] : nil ...)
 
-(defn set-recv-timeout-ms [^borrow s : Socket ms : int] : (Result Ack int) ...)
-(defn set-send-timeout-ms [^borrow s : Socket ms : int] : (Result Ack int) ...)
+(defn set-recv-timeout-ms [^borrow s : Socket ms : int] : (Result nil int) ...)
+(defn set-send-timeout-ms [^borrow s : Socket ms : int] : (Result nil int) ...)
 
 (defn err-str    [code : int] : cstr ...)   ;; nng_strerror
 (defn timed-out? [code : int] : bool ...)   ;; == NNG_ETIMEDOUT
@@ -142,7 +142,7 @@ and `Buf` / `send-buf` / `recv-buf` became `Payload` /
 ;;; send-str -- send a NUL-terminated string as one message.
 ;;; Blocks until nng accepts it (or the send timeout fires).
 ;;; Since: Phase NG2
-(defn send-str [^borrow s : Socket msg : cstr] #fx{Net} : (Result Ack int) ...)
+(defn send-str [^borrow s : Socket msg : cstr] #fx{Net} : (Result nil int) ...)
 
 ;;; recv-str -- receive one message as a malloc'd cstr; caller frees.
 ;;; Blocks until a message arrives (or the recv timeout fires ->
@@ -153,15 +153,15 @@ and `Buf` / `send-buf` / `recv-buf` became `Payload` /
 
 ;;; send-payload BORROWS its Payload (nng copies); recv-payload returns a
 ;;; fresh owned one. Binary-safe: embedded NUL bytes survive both ways.
-(defn send-payload [^borrow s : Socket b : Payload] #fx{Net} : (Result Ack int) ...)
+(defn send-payload [^borrow s : Socket b : Payload] #fx{Net} : (Result nil int) ...)
 (defn recv-payload [^borrow s : Socket] #fx{Net} : (Result Payload int) ...)
 
 ;;; sub-subscribe -- add a topic prefix filter to a SUB socket.
 ;;; `s` must be a SUB socket (runtime NNG_ENOTSUP otherwise); "" takes
 ;;; everything, and a SUB socket with NO subscription receives nothing.
 ;;; Since: Phase NG3
-(defn sub-subscribe   [^borrow s : Socket topic : cstr] : (Result Ack int) ...)
-(defn sub-unsubscribe [^borrow s : Socket topic : cstr] : (Result Ack int) ...)
+(defn sub-subscribe   [^borrow s : Socket topic : cstr] : (Result nil int) ...)
+(defn sub-unsubscribe [^borrow s : Socket topic : cstr] : (Result nil int) ...)
 ```
 
 ```turmeric
@@ -266,16 +266,21 @@ Canonical req/rep round trip:
 
 Both were filed with a minimal repro and are now **fixed and archived** -- each
 turned out to be a shared-helper problem rather than a one-site patch, which is
-why the fixes are worth reading even though the spice already works around
-them. Each is still cited from the spice source at the point of its workaround,
-and each archived report carries a "spice-side follow-up, still outstanding"
-section naming what to delete now that the compiler no longer needs it:
+why the fixes are worth reading even though the spice shipped around them first.
+Both spice-side follow-ups are settled (turmeric-spices#75), and they settled
+differently, which is the part worth carrying forward:
 
-- `Ack` and its `(Result Ack int)` signatures become `(Result nil int)`.
-- `send-until-received?` can inline its receive back into the recursive body.
+- **`Ack` is gone.** `dial` / `listen` / `sub-subscribe` and both timeout
+  setters return `(Result nil int)`, the signature this plan specified from the
+  start.
+- **`send-until-received?` keeps its delegation.** It could inline the receive
+  now, and it should not: `recv-str=?` has twelve call sites, and re-proving a
+  fixed defect that a compiler fixture already pins is not worth duplicating a
+  twelve-caller helper. Only the comment claiming the delegation was
+  load-bearing was stale.
 
-Neither removal has been made: the spice's CI builds `turmeric` `main`, so they
-land after the compiler change does, not alongside it.
+"Undo the workaround" is the obvious reading of a fixed report and it is right
+about half the time.
 
 - **[`tail-recursive-let-drops-carrier-bridge`](../archive/tail-recursive-let-drops-carrier-bridge.md)**
   (medium). A `let` that binds a carrier-returning producer inside a
@@ -288,7 +293,7 @@ land after the compiler change does, not alongside it.
   non-recursive helper.
 - **[`result-nil-ok-payload-emits-void-field`](../archive/result-nil-ok-payload-emits-void-field.md)**
   (low-medium). `(Result nil E)` type-checks and then emits
-  `struct { void _0; } Ok;`. This is why `Ack` exists.
+  `struct { void _0; } Ok;`. This is why `Ack` briefly existed.
 
 ---
 
@@ -299,13 +304,13 @@ land after the compiler change does, not alongside it.
   entry point this spice uses is present in 1.12.4, including
   `NNG_FLAG_ALLOC`, which 2.0 removes in favour of `nng_recvmsg` -- so a
   2.0 move is an NG5 item with real work in it, not a version bump.
-- **`(Result Ack int)`, not `(Result nil int)`.** `nil` is the right type
-  for "worked, carries nothing" and the draft specified it, but a `nil`
-  ok payload lowers to a C `void` struct field and the emitted monomorph
-  does not compile (report above). `Ack` is a real named opaque standing
-  in; the alternative, `(Result int int)` with an "ok carries 0"
-  convention, is precisely the `:int` stand-in `CLAUDE.md` forbids. When
-  the report lands, `Ack` goes away and these become `(Result nil int)`.
+- **`(Result nil int)`, as drafted -- after a detour.** `nil` is the right
+  type for "worked, carries nothing" and the draft specified it, but a `nil`
+  ok payload emitted a C `void` union member and the monomorph would not
+  compile, so v0 shipped a `(defopaque Ack :int)` stand-in. That compiler
+  defect is fixed (report above) and `Ack` is gone. The alternative it
+  avoided throughout -- `(Result int int)` with an "ok carries 0"
+  convention -- is precisely the `:int` stand-in `CLAUDE.md` forbids.
 - **`Payload`, not `Buf`.** An opaque's name resolves globally, so two
   spices that each define a `Buf` cannot both be loaded by one program --
   and tur-msgpack's byte carrier is `Buf`. Naming this one `Buf` (as the

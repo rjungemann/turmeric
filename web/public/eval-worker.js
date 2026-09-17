@@ -19,12 +19,16 @@ function wasmSetLang(lang) {
     } catch (_) {}
 }
 
+// PS5: a replayed Run (an eval sent with `quiet`) is bookkeeping -- its output
+// was shown when it first ran -- so nothing it prints reaches the page.
+let muted = false;
+
 function postPrint(text) {
-    self.postMessage({ type: 'print', text });
+    if (!muted) self.postMessage({ type: 'print', text });
 }
 
 function postPrintErr(text) {
-    self.postMessage({ type: 'printErr', text });
+    if (!muted) self.postMessage({ type: 'printErr', text });
 }
 
 // Queue messages that arrive before the module is ready.
@@ -40,6 +44,7 @@ function handleMessage(msg) {
     const id = msg.id;
 
     if (msg.type === 'eval') {
+        muted = !!msg.quiet;
         try {
             if (msg.lang) wasmSetLang(msg.lang);
             const inputLen = turiModule.lengthBytesUTF8(msg.input) + 1;
@@ -52,6 +57,8 @@ function handleMessage(msg) {
             self.postMessage({ type: 'eval-result', id, result });
         } catch (err) {
             self.postMessage({ type: 'error', id, error: String(err) });
+        } finally {
+            muted = false;
         }
 
     } else if (msg.type === 'format') {
@@ -232,6 +239,17 @@ function handleMessage(msg) {
         try {
             turiModule._turi_wasm_trace_release();
             self.postMessage({ type: 'trace-released', id });
+        } catch (err) {
+            self.postMessage({ type: 'error', id, error: String(err) });
+        }
+
+    } else if (msg.type === 'rewind') {
+        // PS5: rewind to the preloaded stdlib.  A cached older wasm without the
+        // export keeps its old behavior (the Run appends to the session).
+        try {
+            if (typeof turiModule._turi_wasm_rewind_to_prelude === 'function')
+                turiModule._turi_wasm_rewind_to_prelude();
+            self.postMessage({ type: 'reset-done', id });
         } catch (err) {
             self.postMessage({ type: 'error', id, error: String(err) });
         }

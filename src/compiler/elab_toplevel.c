@@ -865,29 +865,6 @@ void ls2_resolver_ctx_set(const Ls2ResolverCtx *ctx) {
     g_ls2_resolver_ctx = ctx;
 }
 
-/* PS1: see elab.h.  Not thread-local: the REPL/eval path is single-threaded
- * and sets it immediately around its own elaboration call. */
-static bool g_session_prefix_is_history;
-
-void elab_set_session_prefix_is_history(bool v) {
-    g_session_prefix_is_history = v;
-}
-
-bool elab_session_prefix_is_history(void) {
-    return g_session_prefix_is_history;
-}
-
-/* PS4: see elab.h.  Same single-threaded REPL/eval discipline as above. */
-static bool g_repl_redefinition;
-
-void elab_set_repl_redefinition(bool v) {
-    g_repl_redefinition = v;
-}
-
-bool elab_repl_redefinition_allowed(void) {
-    return g_repl_redefinition;
-}
-
 const Ls2ResolverCtx *ls2_resolver_ctx_active(void) {
     return g_ls2_resolver_ctx;
 }
@@ -1816,6 +1793,13 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         e.has_defmodule       = false;
         e.current_module_name = NULL;
         e.current_module      = NULL;
+        /* PS4: everything defined so far belongs to earlier turns. */
+        e.turn_continues_session = true;
+        e.turn_start_n_globals   = e.global.n;
+        e.turn_start_n_macros    = e.n_macros;
+        e.turn_start_n_adt_defs  = e.n_adt_defs;
+        e.turn_start_n_effects   = e.effect_env ? e.effect_env->n_effects : 0;
+        e.turn_start_instances   = e.typeclass_env.instances;
     } else {
         elab_init_state(&e, arena, st);
     }

@@ -129,6 +129,15 @@ size_t diag_files_save(const SourceFile **out, size_t cap) {
     return n;
 }
 
+void diag_files_replace(const SourceFile **in, size_t n) {
+    if (n > MAX_FILES) n = MAX_FILES;
+    file_count_ = 0;
+    for (size_t i = 0; i < MAX_FILES; i++) {
+        files_[i] = (i < n) ? in[i] : NULL;
+        if (files_[i]) file_count_ = i + 1;
+    }
+}
+
 void diag_files_restore(const SourceFile **in, size_t n) {
     if (n > MAX_FILES) n = MAX_FILES;
     /* Skip id 0: the caller has just registered THIS turn's source blob there,

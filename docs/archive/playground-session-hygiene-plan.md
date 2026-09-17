@@ -6,39 +6,12 @@ description: Stop a doc lookup from mutating the eval session, stop a failed eva
 
 # Playground session hygiene (PS)
 
-**Status: PS1 (diagnostic half) and PS4 (`defeffect`) LANDED 2026-09-17.
-PS2, PS3 and PS5 remain.** Open questions resolved 2026-09-09 -- the five that
-gated this plan were researched and decided; see "Decisions" below.
-
-**What landed, and the one correction to this plan's reading.** PS1's two
-halves are separable, and only the second was done: a failed turn still
-discards `elab_session`, but it no longer POISONS the session when it does.
-The mislabelling was not a consequence of the discard that had to be fixed by
-preventing it -- it was a consequence of the fallback path stamping the
-session's own earlier turns `is_from_stdlib`, and the eval entry can simply
-say the prefix is session history
-(`elab_set_session_prefix_is_history`, `src/compiler/elab.h`).  That touches
-role 1 of `stdlib_prefix` and nothing else, so the role-4 blast radius this
-plan warns about is avoided entirely and the `stdlib_prefix` re-scoping is
-still unneeded.  Q1's "investigate the no-discard route first" was answered
-by not needing either route.
-
-PS4's `defeffect` half landed as decided; its `defstruct` half did not, for
-the reason PS4 itself reserves -- a struct value carries its `AdtDef`, so a
-value from an earlier turn matched after a redefinition reads a different
-layout.  Its message was corrected instead, which PS4 lists as a must-carry.
-
-Everything is gated on a prior USER turn (`pin_acc_forms`), because
-`tur --interpret prog.tur` shares this entry point and must keep file
-semantics.  That gate is what the first attempt missed: without it, a file
-declaring the same struct twice got the session message and
-`errors/defstruct-redef-stdlib-name` went red under the interpreter.
-
-Pinned by `tests/turi/repl-session-hygiene.sh` (ctest
-`tur_repl_session_hygiene`), which also asserts both guards were narrowed
-rather than deleted.
-Filed from
-[doc-lookup-poisons-the-playground-eval-session](../reported/doc-lookup-poisons-the-playground-eval-session.md),
+**Status: EXECUTED 2026-09-16.** PS1-PS5 all landed, and so did one fix the
+plan did not foresee (a `defmacro*` session aborting on its next failed turn).
+PS3 took a different route to the same end than the one decided below, for
+reasons given in the record. See [Execution record](#execution-record-2026-09-16)
+at the end; the body above it is the plan as written. Filed from
+[doc-lookup-poisons-the-playground-eval-session](doc-lookup-poisons-the-playground-eval-session.md),
 whose repros are measured against the live site.
 
 **One line:** a documentation hover can permanently break the Run button, and
@@ -349,3 +322,141 @@ implementation-time verification, not design:
   quadratic over 1500 turns). PS1 and PS5 work *within* that model.
 - The offline docs pack's structure. PS3 adds a C table beside it and does not
   change how [offline-docs-plan](offline-docs-plan.md) built the pack.
+
+## Execution record (2026-09-16)
+
+Branch `claude/playground-session-hygiene`. Every repro in the source report
+was first reproduced natively -- nothing in `src/web/wasm_glue.c` is
+wasm-specific, so a harness linking `libturi_wasm` drives the playground's own
+entry points -- and each fix was shown to turn a failing check green.
+
+**Two corrections to the report's mechanism.** A doc lookup does *not* splice
+`(doc-lookup ...)` into the session: the eval fails at runtime, and a failed
+turn is never committed to `src_acc`. The damage was entirely the failure's
+side effect -- the discarded elaboration session and the whole-program rebuild
+(PS1). And `web/examples.js`, which the report and PS4/PS5 cite, is not what
+the page uses: the dropdown reads the `EXAMPLES` object inside `web/main.js`.
+Filed as [web-examples-js-is-unused-and-stale](../reported/web-examples-js-is-unused-and-stale.md).
+
+### PS1 -- replay, not no-discard
+
+Open question 1 answered: keeping the session alive is not an option. A failed
+turn can leave its definitions in the session scope (a runtime failure always
+does -- elaboration succeeded), and the `Elab` session is shallow-copied state
+over malloc'd registries that mutate in place, so there is no cheap snapshot to
+roll back to. The rollback is a **replay** instead: `TuriEnv.acc_turns` records
+where each committed turn ends in `acc_forms` (and whether it ran as a stdlib
+preload), and a missing session is rebuilt by elaborating those turns one call
+at a time -- the calls that built it, minus the failed turn -- with diagnostics
+muted (a capture frame for errors, a no-op sink for warnings). If the records
+do not line up, the old whole-program path still runs. `stdlib_prefix` was not
+touched.
+
+Open question 2 answered: **no**. Incremental parsing and incremental
+elaboration are gated separately, so a sweet-exp session stays on the
+incremental elaboration path and the replay covers it. Tested.
+
+Cost: after a failure, the next turn pays about what elaborating the session
+originally did -- ~8 ms for a preload-sized session, ~1.1 s at 1500 `defn`
+turns (the old, broken rebuild took 0.5 s there). Half of a long replay is one
+pre-existing cost, filed as
+[refine-call-sites-re-resolved-every-session-turn](../reported/refine-call-sites-re-resolved-every-session-turn.md).
+
+**Found on the way, fixed:** after a `defmacro*`, *any* failed turn killed the
+process with `tur: too many source files` (SIGABRT -- a dead worker in the
+browser), on the old rebuild path too. The macro-time env's bracket merged the
+caller's diagnostic file registry back instead of replacing it, so the macro
+env's own `SourceFile`s stayed registered; a failed turn frees the macro env
+with its session, and the next bracket re-registered freed memory.
+`diag_files_replace` restores the registry exactly.
+
+Test: `tur_session_failure_recovery` (11 checks fail without the replay).
+
+### PS2 + PS3 -- read the generated file, not a second C copy of it
+
+`turi_doc_lookup` no longer evaluates anything. The decided route was to have
+`gendocs.py` emit the table a second time as C and link it in. It was not
+taken: `tur doc` already read the table straight out of
+`stdlib/docstrings.tur` with a small C-string scanner, and the Emscripten build
+already embeds that file at `/stdlib`. That scanner moved to
+`src/turi/docstrings.c` (parsed once, sorted, bsearched -- the panel looks up
+on hover) and is the one reader for the doc panel, `tur doc`, and two new
+interpreter natives. Same direct C lookup, with no second generated artifact to
+drift and no ~480 KB added to every binary and to the playground wasm.
+
+The `doc` macro turned out broken on **every** path, not just the playground:
+it expanded to a runtime `(= entry 0)` on a `cstr` (a type error) and passed
+`'name` as a `:Sym`. It now reads the name at expansion time and expands to
+`(doc-print "name")`, so `(doc vec-map)`, `(doc 'vec-map)` and
+`(doc "vec-map")` all work under the interpreter. That needed two compile-time
+macro builtins: `symbol-name` accepts a quoted symbol in either spelling, and a
+new `string?` -- non-gating, like `=`/`not`, because it is a natural runtime
+predicate name. A compiled program still has no `doc-print`; the autodoc guide
+points shells at `tur doc`.
+
+Tests: `tur_wasm_glue_session_unit`, fixture `macro-ct-name-of-quoted-symbol`.
+
+### PS4 -- every def* form, by turn watermark
+
+Measured first, completing the plan's table (open question 3: there is no
+`defadt`; `defdata` was already redefinable, by an accident of its forward-stub
+reuse): `defn`, `defdata`, `defgadt`, `defalias`, `deftype`, `defopaque`,
+`defclass`, `defdynamic`, `defkind`, `defrec` and `defprotocol` accepted a
+redefinition; `def`/`define`, `defstruct`, `defeffect`, `definstance`,
+`defmacro` and `defmacro*` refused it.
+
+Each elaborate call that continues a live session records the sizes of the
+redefinable registries (globals, macros, ADTs, effects, the instance list head).
+A definition below the watermark came from an earlier turn and is replaced:
+`def` shadows, macros are removed and re-registered, an effect is redefined in
+place (`effect_redefine`, mirrored into the interpreter's session `EffectEnv`),
+`defstruct` re-elaborates over the type like `defdata`, and an instance is
+unlinked. Compiles never continue a session, so nothing changes for them.
+
+Open question 4 answered by probing. Nothing corrupts: a value built under an
+old struct layout, read through the new one, fails cleanly
+(`field index 1 out of bounds`), and a redefined effect's handlers are checked
+against the new signature at elaboration. What **does** break is redefining a
+type the stdlib owns -- it is rewritten in place under the stdlib code built on
+it (`(.fst (pair 1 2))` stops resolving after a user `Pair`) -- so stdlib types
+are refused in sessions, as are stdlib instances (the 2026-09-11 decision) and
+the builtin `Unsafe`. A duplicate within one turn is still an error.
+`defstruct`'s refusal now names the stdlib or "an earlier form", whichever it
+is, instead of both. The compiled path has the stdlib-type hole for `defdata`
+already; filed as
+[compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type](../reported/compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type.md).
+
+Done-when met: the page's effects example, and every other example in
+`main.js`'s `EXAMPLES`, produces identical results on a second Run in one
+session; `tur repl` accepts the effects example twice.
+
+Tests: `tur_session_redefinition`; `tur_incremental_elab_diff` now pins `def`
+redefinition as a known divergence beside `defn` (it had been an
+identical-results session only because both paths refused it).
+
+### PS5 -- rewind, replay, run
+
+As decided, plus the runtime half the plan did not mention:
+`turi_env_reset_to_prelude` rewinds source and the elaboration session but
+leaves runtime globals alone, so a deleted definition would still have resolved
+at runtime. `turi_env_snapshot_prelude` records the globals once the preload
+and its native overrides are in place, and `turi_env_rewind_to_prelude` frees
+what turns added and restores reassigned prelude values (the snapshot's values
+are promotion roots, for `tur repl`). The page calls it through
+`turi_wasm_rewind_to_prelude`, then replays each other tab's last successful
+Run in tab order with output muted, then runs the buffer. Only tabs in the
+running tab's `#lang` dialect are replayed, since a dialect switch resets the
+session anyway.
+
+Cost, measured as the plan asked: 11-24 ms per Run in desktop Chrome for a
+`fib 15` program, the stdlib preload re-elaborated each time. No caching.
+
+Tests: `tur_wasm_glue_session_unit` (the rewind) and
+`web/tests/run-session.spec.js` (effects example twice around a doc lookup; a
+deleted definition stops resolving; a second tab's definitions survive a Run
+without re-printing; `(doc 'vec-map)` at the prompt). The full Playwright suite
+reports 188 passed and 16 failed; the same 16 fail against a dev server
+running `main`, and the one of them that involves Run (`repl-intelligence`'s
+"editor-only defn ... until it is Run") fails the same way with `main`'s
+`main.js` and worker swapped in. The rest need CI dashboard data, the built
+guide HTML, or the live site, or test the prompt and project loading.
