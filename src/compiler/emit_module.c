@@ -13756,6 +13756,39 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return future;\n");
     buf_puts(out, "}\n\n");
     
+    /* async-await-payload-is-int64-only: the typed-payload spawn.  The future
+     * slot is one int64 word, and calling a `double`- or `bool`-returning
+     * thunk through the `int64_t (*)(void)` prototype above is an ABI
+     * mismatch, not a reinterpret -- on x86-64 a double comes back in xmm0
+     * and the int64 read of rax is whatever was there (a stack address, in
+     * the report's repro).  So a non-int64 payload is spawned through a
+     * per-site wrapper the emitter writes at the thunk's REAL prototype,
+     * which converts the value to its slot bits (a float's IEEE-754 pattern,
+     * a bool widened, a pointer cast); `env` is the bare fn pointer or the
+     * closure box, whichever the wrapper expects.  Same future / F3.2
+     * suspend handling as the two spawns above. */
+    buf_puts(out, "static TurFuture *tur_async_fiber_via(int64_t (*wrap)(void *), void *env) {\n");
+    buf_puts(out, "    TurFuture *future = tur_future_new();\n");
+    buf_puts(out, "    if (!tur_scheduler) {\n");
+    buf_puts(out, "        tur_scheduler = tur_scheduler_new();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_async_suspended = 0;\n");
+    buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
+    buf_puts(out, "    tur_handler_chain = &__node;\n");
+    buf_puts(out, "    int64_t result = wrap(env);\n");
+    buf_puts(out, "    tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
+    buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
+    buf_puts(out, "        tur_async_pending_park->outer = future;\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        tur_future_fulfill(future, result);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_async_suspended = 0;\n");
+    buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    return future;\n");
+    buf_puts(out, "}\n\n");
+
     /* Await a future using shift + scheduler. If future is done, return value directly. */
     buf_puts(out, "/* AW-004: await lowering with shift + scheduler callback */\n");
     buf_puts(out, "static int64_t tur_await_future(TurFuture *f) {\n");

@@ -1,0 +1,42 @@
+;; async-await-payload-is-int64-only: the future slot is one int64 word, and
+;; `(await fut)` used to be bound as `int64_t` whatever the `async` thunk
+;; declared -- a float printed its IEEE-754 bits (or, on x86-64, whatever rax
+;; held, since a double returns in xmm0), a cstr printed a pointer, a bool 1.
+;; Now the thunk's declared result rides the async node and the let/def that
+;; binds it, the await reads the slot back at that type, and a non-int64 thunk
+;; is spawned through a wrapper at its REAL prototype that stores the bits.
+(defeffect Tick [] : int)
+(defn compute [] : float 7.25)
+(defn hello [] : cstr "hello")
+(defn yes [] : bool true)
+(defn seven [] : int 7)
+(defn negf [] : float -3.5)
+
+;; def-bound future
+(def gf (async compute))
+
+;; await inside a CPS-colored body (the async-await-cps shape), float payload
+(defn get-it [] : float
+  (let [fut (async negf)]
+    (+ 1.0 (await fut))))
+
+(defn main [] : int
+  ;; thin fn thunks
+  (let [fut (async compute)] (println (await fut)))
+  (let [f2 (async hello)] (println (await f2)))
+  (let [f3 (async yes)] (println (await f3)))
+  (let [f4 (async seven)] (println (await f4)))
+  ;; capturing closure thunks
+  (let [k 3.5
+        f5 (async (fn [] : float (+ k 7.25)))]
+    (println (await f5)))
+  (let [f6 (async (fn [] : cstr "lam"))] (println (await f6)))
+  ;; expression thunk (the with-handler shape)
+  (println (await (async (if (> (handle (perform (Tick)) (Tick [] k) (resume k 2)) 1) 1.25 2.5))))
+  ;; def-bound and inline
+  (println (await gf))
+  (println (await (async compute)))
+  ;; the float arithmetic that TUR-E0042 used to refuse
+  (println (= (await (async compute)) 7.25))
+  (println (get-it))
+  0)

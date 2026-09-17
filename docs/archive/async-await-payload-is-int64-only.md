@@ -1,5 +1,45 @@
 # `await` returns int64 regardless of the awaited thunk's type: a `float` result prints as its raw bit pattern
 
+**RESOLVED 2026-09-17.** Fix directions 1-3, with one correction to the
+report's own reading of the evidence: the bits did NOT arrive intact
+everywhere. On x86-64 the repro printed a stack address, not `7.25`'s
+pattern -- a `double`-returning function called through the `int64_t (*)(void)`
+prototype returns in xmm0 while the caller reads rax, exactly the ABI mismatch
+direction 3 named. So the reinterpret alone (direction 2) would have fixed
+arm64 and left x86-64 wrong.
+
+- **Type.** The thunk's declared result rides the `EX_ASYNC` node
+  (`async_.payload`) and, when a `let`/`def` binds the future, the binding
+  (`Binding.async_payload`). `elab_await` reads it back through that
+  provenance -- the `(async ..)` itself or a variable bound to one, through
+  ascriptions -- and types the await at it when it is word-shaped (a scalar
+  class, `cstr`, `ptr<void>`, `:Sym`). A future that arrived through a
+  parameter or a container is an opaque `ptr<void>` and its await keeps the
+  `int` read, as before. The future handle itself stays `ptr<void>`: ten
+  fixtures and `stdlib/effects.tur` pass it that way.
+- **Spawn.** A non-int64 payload is spawned through `tur_async_fiber_via`
+  (preamble) with a per-site wrapper the emitter writes at the thunk's REAL
+  prototype (`double (*)(void)`, or `const char *(*)(void *)` for a capturing
+  closure) that converts the value to its slot bits -- a float's IEEE-754
+  pattern, a bool widened, a pointer cast. The expression-thunk shape
+  (`(async (with-handler ..))`) stores bits the same way instead of the
+  `(int64_t)` value conversion that truncated `7.25` to `7`. An int-class
+  payload keeps the plain spawn, byte-identical.
+- **Read.** The direct emitter reinterprets the slot at the await
+  (`union` for a float, a cast for the rest); the CPS path's `slot_load`
+  already did, so an await inside a colored body needed nothing.
+
+Pinned by `tests/fixtures/async-await-payload-types` (thin fn, capturing
+closure, expression thunk, `def`-bound, inline, the float comparison
+`TUR-E0042` used to refuse, and the CPS-colored shape), which the interpreter
+also passes. The fuzzer's await rows are retired: the `known_bug_slug` arm and
+the `KNOWN_PROBES` row are gone, and the two self-test rows that used this
+defect as their live wrong-output / reject specimens now use a deliberately
+wrong expectation and a deliberately ill-typed comparison, so they test the
+classifier rather than the compiler. `--seam await` reports 0 bug classes;
+the by-value struct payload is still the honest reject (direction 4 stays
+open only in the sense that it rejects loudly rather than boxing).
+
 **Severity: high.** The future slot is int64-wide and `tur_await_future` returns
 `int64_t`, so `(await fut)` is bound as an `int64_t` local whatever the `async`
 thunk declared. A `float`-returning thunk yields the **IEEE-754 bit pattern

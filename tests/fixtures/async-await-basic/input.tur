@@ -1,6 +1,7 @@
 ;; T21-F: async/await basic test
 ;; (async fn) launches fn in a background thread and returns a future (ptr<void>)
-;; (await fut) blocks until the future is ready and returns the int64 result
+;; (await fut) blocks until the future is ready and returns the thunk's result
+;; (read back at the thunk's declared type; see async-await-payload-types)
 
 (defn compute [] : int
   ```c

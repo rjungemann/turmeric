@@ -1371,6 +1371,13 @@ Expr *elab_let(Elab *e, const Form *call) {
          * is that the CONSUMED rc gets no auto-drop, which is a different
          * binding and still holds. */
 
+        /* async-await-payload-is-int64-only: a binding initialised by an
+         * `(async ..)` remembers the thunk's payload type for its `await`. */
+        {
+            const Expr *ai = init;
+            while (ai && ai->kind == EX_ASCRIBE) ai = ai->as.ascribe_.inner;
+            if (ai && ai->kind == EX_ASYNC) b->async_payload = &ai->as.async_.payload;
+        }
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
         binding_moved_during_init[n_binds] = false; /* new binding, not yet moved during init */

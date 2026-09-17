@@ -4786,6 +4786,31 @@ static bool catch_thunk_owns_fat_box(const Expr *thunk) {
 
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e);
 
+/* async-await-payload-is-int64-only: the C expression that puts a value of
+ * payload type `t` (spelled by `v`) into the future's int64 slot as its BITS:
+ * a float's IEEE-754 pattern (a `(int64_t)` cast would value-convert 7.25 to
+ * 7), a pointer through intptr_t, everything else widened.  Static buffer:
+ * the result is consumed by the very next printf. */
+static const char *emit_async_slot_bits(const Type *t, const char *v) {
+    static char buf[512];
+    switch (t ? t->kind : TY_INT) {
+        case TY_FLOAT: case TY_FLOAT64:
+            snprintf(buf, sizeof buf, "((union { double d; int64_t i; }){ .d = (%s) }).i", v);
+            break;
+        case TY_FLOAT32:
+            snprintf(buf, sizeof buf,
+                     "(int64_t)((union { float f; uint32_t u; }){ .f = (%s) }).u", v);
+            break;
+        case TY_CSTR: case TY_PTR_VOID: case TY_SYM:
+            snprintf(buf, sizeof buf, "(int64_t)(intptr_t)(%s)", v);
+            break;
+        default:
+            snprintf(buf, sizeof buf, "(int64_t)(%s)", v);
+            break;
+    }
+    return buf;
+}
+
 /* A-normalize a panic-capable call (always-on since panic-return-signal
  * graduated).  Every direct call is hoisted into a temporary so a tur_panicking
  * check can follow it; a pending panic then propagates by an early return of a
@@ -12852,6 +12877,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_CONT_PRED:        return emit_effects_cont_pred(ctx, body, e);
         /* Phase T21-F: async/await */
         case EX_ASYNC: {
+            /* async-await-payload-is-int64-only: does this thunk's declared
+             * result need the typed spawn?  Anything whose C return is not the
+             * int64 word itself: a float (bits, not a value conversion), a
+             * bool (the caller's int64 read of a bool return is unspecified
+             * above the low byte on x86-64), a cstr / pointer (a cast).  An
+             * int-class result keeps the plain int64 spawn, byte-identical. */
+            const Type *apl = &e->as.async_.payload;
+            bool apl_typed = false;
+            switch (apl->kind) {
+                case TY_BOOL: case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+                case TY_CSTR: case TY_PTR_VOID: case TY_SYM:
+                case TY_INT32: case TY_UINT32: case TY_INT16: case TY_UINT16:
+                case TY_INT8: case TY_UINT8:
+                    apl_typed = true; break;
+                default: break;
+            }
             /* (async fn-expr) — launch fn-expr in a fiber, return TurFuture* as ptr<void>.
              *
              * Two paths:
@@ -12872,11 +12913,41 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * Route it to the env-taking spawn, which reads the thunk out of
                  * the box and invokes it with the box as its env. */
                 char *fn_val = emit_value(ctx, body, fn_expr);
-                indent_buf(body, ctx->indent);
-                if (fn_expr->type.as.fn.boxed) {
-                    buf_printf(body, "void *%s = (void *)tur_async_fiber_closure((void *)(intptr_t)%s);\n", tmp, fn_val);
+                if (apl_typed) {
+                    /* Typed spawn: a file-scope wrapper at the thunk's real
+                     * prototype, converting the result to its slot bits. */
+                    const char *pc = emit_type_c_name(ctx, *apl);
+                    char wname[48];
+                    snprintf(wname, sizeof wname, "__async_wrap_%d", ctx->tmp_n++);
+                    Buf *pbuf = ctx->pending_handler_fns;
+                    /* Forward-declare in the early typedef region: a CPS
+                     * body's lifted continuations are written BEFORE the
+                     * pending file-scope functions, and an `(async ..)` in
+                     * one of them would otherwise name the wrapper first. */
+                    if (ctx->thunk_typedefs)
+                        buf_printf(ctx->thunk_typedefs, "static int64_t %s(void *);\n", wname);
+                    else
+                        buf_printf(pbuf, "static int64_t %s(void *);\n", wname);
+                    buf_printf(pbuf, "static int64_t %s(void *__env) {\n", wname);
+                    if (fn_expr->type.as.fn.boxed) {
+                        buf_printf(pbuf, "    %s (*__f)(void *) = *(%s (**)(void *))__env;\n", pc, pc);
+                        buf_printf(pbuf, "    %s __v = __f(__env);\n", pc);
+                    } else {
+                        buf_printf(pbuf, "    %s (*__f)(void) = (%s (*)(void))(intptr_t)__env;\n", pc, pc);
+                        buf_printf(pbuf, "    %s __v = __f();\n", pc);
+                    }
+                    buf_printf(pbuf, "    return %s;\n", emit_async_slot_bits(apl, "__v"));
+                    buf_puts(pbuf, "}\n\n");
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "void *%s = (void *)tur_async_fiber_via(%s, (void *)(intptr_t)%s);\n",
+                               tmp, wname, fn_val);
                 } else {
-                    buf_printf(body, "void *%s = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)%s);\n", tmp, fn_val);
+                    indent_buf(body, ctx->indent);
+                    if (fn_expr->type.as.fn.boxed) {
+                        buf_printf(body, "void *%s = (void *)tur_async_fiber_closure((void *)(intptr_t)%s);\n", tmp, fn_val);
+                    } else {
+                        buf_printf(body, "void *%s = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)%s);\n", tmp, fn_val);
+                    }
                 }
                 free(fn_val);
             } else {
@@ -12928,7 +12999,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (thunk_body_buf.len > 0)
                     buf_write(pbuf, thunk_body_buf.data, thunk_body_buf.len);
                 if (ret) {
-                    buf_printf(pbuf, "    return (int64_t)%s;\n", ret);
+                    /* async-await-payload-is-int64-only: the expression's
+                     * value goes into the slot as its BITS -- `(int64_t)` on
+                     * a double was a value conversion (7.25 -> 7). */
+                    buf_printf(pbuf, "    return %s;\n", emit_async_slot_bits(apl, ret));
                     free(ret);
                 } else {
                     buf_puts(pbuf, "    return 0;\n");
@@ -12949,6 +13023,45 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_printf(body, "int64_t %s = tur_await_future((TurFuture*)(intptr_t)%s);\n", tmp, fut_val);
             free(fut_val);
+            /* async-await-payload-is-int64-only: read the slot back at the
+             * payload type the elaborator recovered -- a float from its bits,
+             * the rest by cast.  An `int` payload (or an unknown provenance,
+             * which the elaborator types `int`) is the word itself. */
+            const Type *wpl = &e->as.await_.payload;
+            const char *rc = NULL;
+            char rexpr[256];
+            switch (wpl->kind) {
+                case TY_FLOAT: case TY_FLOAT64:
+                    rc = "double";
+                    snprintf(rexpr, sizeof rexpr,
+                             "((union { int64_t i; double d; }){ .i = (%s) }).d", tmp);
+                    break;
+                case TY_FLOAT32:
+                    rc = "float";
+                    snprintf(rexpr, sizeof rexpr,
+                             "((union { uint32_t u; float f; }){ .u = (uint32_t)(%s) }).f", tmp);
+                    break;
+                case TY_BOOL:
+                    rc = "bool";
+                    snprintf(rexpr, sizeof rexpr, "((%s) != 0)", tmp);
+                    break;
+                case TY_CSTR: case TY_PTR_VOID: case TY_SYM:
+                case TY_INT32: case TY_UINT32: case TY_INT16: case TY_UINT16:
+                case TY_INT8: case TY_UINT8:
+                    rc = emit_type_c_name(ctx, *wpl);
+                    snprintf(rexpr, sizeof rexpr, "(%s)(intptr_t)(%s)", rc, tmp);
+                    break;
+                default:
+                    break;
+            }
+            if (rc) {
+                char *typed = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", rc, typed, rexpr);
+                emit_localvar_record_ctype(typed, rc);
+                free(tmp);
+                return typed;
+            }
             return tmp;
         }
         /* Phase SEL1: fair multi-channel select */

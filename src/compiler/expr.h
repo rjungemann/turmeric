@@ -50,6 +50,11 @@ typedef enum UsageState {
 struct Binding {
     const Symbol *name;
     Type          type;
+    /* async-await-payload-is-int64-only: when this binding was initialised
+     * by an `(async ..)` (through ascriptions), the thunk's declared result
+     * type -- what `(await <this>)` reads the future's int64 slot back at.
+     * NULL otherwise.  The future itself stays `ptr<void>`. */
+    const Type   *async_payload;
     bool          is_mut;
     bool          is_global;     /* top-level def vs. local let */
     bool          is_param;      /* function/extern parameter binding */
@@ -1538,8 +1543,15 @@ struct Expr {
         struct { DiscontinueExpr *discontinue; }     discontinue_; /* (discontinue k e) */
         struct { Expr *expr; }                       cont_pred_;   /* (cont? k) */
         /* Phase T21-F: async/await */
-        struct { Expr *fn_expr; }                    async_;       /* (async fn-expr) */
-        struct { Expr *fut_expr; }                   await_;       /* (await fut) */
+        /* async-await-payload-is-int64-only: `payload` is the thunk's declared
+         * result type.  The future handle stays `ptr<void>` (every consumer in
+         * the tree passes it that way), so the type rides the NODE, and a
+         * `let`/`def` that binds an `(async ..)` copies it onto the binding
+         * (Binding.async_payload) for the `await` to find. */
+        struct { Expr *fn_expr; Type payload; }      async_;       /* (async fn-expr) */
+        /* `payload`: the type the awaited value is read back at (the async's
+         * payload when its provenance is known, else the int64 slot's `int`). */
+        struct { Expr *fut_expr; Type payload; }     await_;       /* (await fut) */
         /* Phase SEL1: fair multi-channel select */
         struct {
             SelectClauseEntry *clauses;   /* arena-allocated array */
