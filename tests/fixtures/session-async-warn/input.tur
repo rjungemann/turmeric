@@ -1,0 +1,25 @@
+;; TUR-W0043: a session op inside an async body warns on the compiled path.
+;;
+;; This program does NOT hang -- its peer is a session-spawn OS thread, so the
+;; recv inside the async body (which compiled `async` runs on the main thread)
+;; is satisfied from another thread.  That is exactly the shape the warning
+;; cannot distinguish from the deadlocking one
+;; (compiled-async-fiber-deadlocks-on-a-session-op), so it warns here too;
+;; the warning names the captured endpoint and points at session-spawn.
+;; Under --interpret the rendezvous is cooperative and no warning is emitted.
+;;
+;; Expected output: 42
+(load "stdlib/session.tur")
+
+(defn main [] : int
+  (let [[s r] (make-session (Send int Close))]
+    (let [peer (session-spawn (fn []
+                                (let [s (send s 42)]
+                                  (close s))))]
+      (let [t (async (fn []
+                       (let [[n r] (recv r)]
+                         (println n)
+                         (close r))))]
+        (await t)
+        (session-join peer))))
+  0)

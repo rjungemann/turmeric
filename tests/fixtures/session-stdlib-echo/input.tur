@@ -1,0 +1,22 @@
+;; stdlib/session.tur echo templates: echo-server-loop + echo-client-call.
+;;
+;; The server runs the stdlib echo loop as a session peer; the client makes two
+;; echo calls through echo-client-call (which hands each echo to a handler and
+;; returns the channel at the recursive protocol), then ends the conversation
+;; with choose-right.  One source, both backends: session-spawn is a pthread
+;; compiled and a scheduler fiber under --interpret.
+;;
+;; Expected output:
+;; 10
+;; 20
+(load "stdlib/session.tur")
+
+(defn main [] : int
+  (let [[srv cli] (make-session (Rec self (Branch (Recv int (Send int self)) Close)))]
+    (let [t (session-spawn (fn [] (echo-server-loop srv)))]
+      (let [cli (echo-client-call cli 10 (fn [v] (println v)))]
+        (let [cli (echo-client-call cli 20 (fn [v] (println v)))]
+          (let [cli (choose-right cli)]
+            (close cli)
+            (session-join t))))))
+  0)

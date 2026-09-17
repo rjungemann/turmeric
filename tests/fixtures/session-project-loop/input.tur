@@ -1,7 +1,18 @@
-;; SS6: projection through a recursive loop.
+;; SS6: projection through a recursive loop -- type-checked AND run.
 ;; EchoP: A loops sending int to B, B sends it back; A can stop.
 ;; project(EchoP, A) = Session[Rec self (Choose (Send int (Recv int self)) Close)]
 ;; project(EchoP, B) = Session[Rec self (Branch (Recv int (Send int self)) Close)]
+;;
+;; The B role runs as a session peer; A drives two rounds through the loop
+;; and then takes the stop branch.  This used to print "ok" without ever
+;; running the protocol (turi-session-expansion S3.5 found the projected
+;; loop/choice correct end-to-end and asked for the body to prove it).
+;;
+;; Expected output:
+;; 5
+;; 6
+(load "stdlib/session.tur")
+
 (defprotocol EchoP [A B]
   (loop self
     (choice A
@@ -17,6 +28,19 @@
     (Right ch)
       (close ch)))
 
+(defn round-a [^linear ch :(project EchoP A) n :int] :(project EchoP A)
+  (let [ch (choose-left ch)]
+    (let [ch (send ch n)]
+      (let [[r ch] (recv ch)]
+        (println r)
+        ch))))
+
 (defn main [] :int
-  (println "ok")
+  (let [[a b] (make-session (Rec self (Choose (Send int (Recv int self)) Close)))]
+    (let [t (session-spawn (fn [] (serve-b b)))]
+      (let [a (round-a a 5)]
+        (let [a (round-a a 6)]
+          (let [a (choose-right a)]
+            (close a)
+            (session-join t))))))
   0)

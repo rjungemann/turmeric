@@ -23,13 +23,16 @@ by default; no compiler flag is required.
     - [Choice: choose-left, choose-right, offer](#choice-choose-left-choose-right-offer)
     - [Recursive protocols: Rec](#recursive-protocols-rec)
     - [Timeouts](#timeouts)
+    - [Payload types](#payload-types)
     - [Duality](#duality)
     - [Effect integration](#effect-integration)
+    - [Running a peer: session-spawn](#running-a-peer-session-spawn)
   - [Multi-Party Session Types (SS5-SS8)](#multi-party-session-types-ss5-ss8)
     - [defprotocol](#defprotocol)
     - [make-protocol, send-to, recv-from, close](#make-protocol-send-to-recv-from-close)
     - [Three or more roles](#three-or-more-roles)
     - [Projection algorithm](#projection-algorithm)
+  - [Checking a protocol under the interpreter](#checking-a-protocol-under-the-interpreter)
   - [Session-Typed Channel Wrappers (stdlib/schan.tur)](#session-typed-channel-wrappers-stdlibschantur)
   - [Error Codes](#error-codes)
   - [Getting More Help](#getting-more-help)
@@ -90,7 +93,7 @@ let [[v b] recv(b)]  ; v = 42, b advances from Recv<int,Close> to Close
 > (`7.25` arrives as `7`); a `cstr` or a delegated endpoint fails to build on
 > macOS; a by-value struct fails to build everywhere. All four type-check, and
 > all four are correct under `tur --interpret`. See
-> [session-payloads-are-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/reported/session-payloads-are-int64-only.md).
+> [session-payloads-are-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/archive/session-payloads-are-int64-only.md).
 
 ### Choice: choose-left, choose-right, offer
 
@@ -185,6 +188,16 @@ match recv-timeout(ch 500)  ; 500 ms deadline
 timed receive, so a role blocked in `recv-from` has no bounded wait. See
 [multi-party-sessions-have-no-timed-receive](https://github.com/rjungemann/turmeric/blob/main/docs/reported/multi-party-sessions-have-no-timed-receive.md).
 
+### Payload types
+
+A message crosses the channel as one machine word. `int`, `bool`, the sized
+integers, `float` (bit-preserved -- `7.25` arrives as `7.25`), `cstr`, pointer
+handles (`ptr<T>`, `rc<T>`, an opaque type over a pointer, a `:heap` record),
+and session endpoints themselves (delegation: `(Send (Session P) ...)`) all
+travel intact on both backends. A by-value `defstruct` or ADT does not fit the
+word and is rejected at elaboration with `TUR-E0212` naming the type; send it
+behind `rc<T>` / `ref<T>`, or declare the record `:heap`.
+
 ### Duality
 
 The duality rule governs how the two ends of a channel relate:
@@ -231,11 +244,33 @@ See `tests/fixtures/session-effects/` for a complete example.
 
 ---
 
-> **About `spawn` / `join` in the examples below.** These are not built-ins --
-> each example assumes a peer-spawn helper you supply. The fixtures hand-roll one
-> as inline C over `pthread_create`. Note that writing the peer with `async`
-> instead **deadlocks the compiled binary** (it runs correctly under
-> `--interpret`): see
+### Running a peer: session-spawn
+
+A session op blocks until its peer arrives, so the other endpoint has to run
+somewhere else. `stdlib/session.tur` provides the portable way to do that:
+
+```turmeric
+(load "stdlib/session.tur")
+
+(let [[s r] (make-session (Send int Close))]
+  (let [t (session-spawn (fn [] (let [[n r] (recv r)] (println n) (close r))))]
+    (let [s (send s 42)]
+      (close s)
+      (session-join t))))
+```
+
+`session-spawn` takes a zero-argument thunk and returns a `SessionPeer`;
+`session-join` waits for it. Compiled, the peer is an OS thread; under
+`tur --interpret` it is a scheduler fiber. The same source runs on both, and
+every example below uses this pair.
+
+> Do not write the peer as `(async (fn [] ...))` in a program you will compile.
+> Compiled `async` runs its body on the spawning thread and the session runtime
+> blocks that thread until the peer arrives, so a session op inside `async`
+> **deadlocks the binary** (it runs correctly under `--interpret`). The
+> compiler warns at the `async` site with `TUR-W0043` when the body captures a
+> session endpoint or spells a session op; the warning is a heuristic, so a
+> body whose peer really is on another OS thread works and still warns. See
 > [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md).
 
 ## Multi-Party Session Types (SS5-SS8)
@@ -334,9 +369,9 @@ Full two-role ping example:
 
 (defn main [] : int
   (let [[ra rb] (make-protocol Ping)]
-    (let [t (spawn (fn [] (role-b rb)))]
+    (let [t (session-spawn (fn [] (role-b rb)))]
       (role-a ra)
-      (join t)))
+      (session-join t)))
   0)
 ```
 
@@ -358,9 +393,9 @@ defn role-b [^linear ch :(Role Ping B)] :nil
 
 defn main [] :int
   let [[ra rb] make-protocol(Ping)]
-    let [t spawn(fn([] role-b(rb)))]
+    let [t session-spawn(fn([] role-b(rb)))]
       role-a(ra)
-      join(t)
+      session-join(t)
   0
 ```
 
@@ -376,11 +411,11 @@ a three-role pipeline:
 
 (defn main [] : int
   (let [[ra rb rc] (make-protocol Pipeline)]
-    (let [ta (spawn (fn [] (role-a ra)))]
-      (let [tb (spawn (fn [] (role-b rb)))]
+    (let [ta (session-spawn (fn [] (role-a ra)))]
+      (let [tb (session-spawn (fn [] (role-b rb)))]
         (role-c rc)
-        (join ta)
-        (join tb))))
+        (session-join ta)
+        (session-join tb))))
   0)
 ```
 
@@ -391,11 +426,11 @@ defprotocol Pipeline [A B C]
 
 defn main [] :int
   let [[ra rb rc] make-protocol(Pipeline)]
-    let [ta spawn(fn([] role-a(ra)))]
-      let [tb spawn(fn([] role-b(rb)))]
+    let [ta session-spawn(fn([] role-a(ra)))]
+      let [tb session-spawn(fn([] role-b(rb)))]
         role-c(rc)
-        join(ta)
-        join(tb)
+        session-join(ta)
+        session-join(tb)
   0
 ```
 
@@ -420,6 +455,33 @@ elaborated.
 
 ---
 
+## Checking a protocol under the interpreter
+
+Session types prove that each endpoint follows its own protocol. They do not
+prove deadlock freedom *across* independently typed channels: two participants
+can each be waiting for the other, and every channel still type-checks.
+
+Run the program under `tur --interpret` first. The interpreter's rendezvous is
+cooperative and single-threaded, so it can see when no participant can make
+progress, and it stops with a clean error and a nonzero exit instead of
+hanging:
+
+```
+$ tur --interpret protocol.tur
+tur: eval: session recv deadlocked (no sender) on Session[Send[int, Close]] -- no participant can make progress; this is a protocol deadlock in the program, not an interpreter limit (the compiled binary would hang here)
+```
+
+The same holds for a main-context `await` on a task that is parked with
+nothing else runnable (`eval: await deadlocked`). The compiled binary has no
+global view of its threads and hangs in both situations, so a `deadlocked`
+error under `--interpret` is a bug in the protocol as written, not an
+interpreter limitation. There are no known false positives: a peer that sleeps
+before sending is waited out, not reported. Runnable examples:
+`tests/fixtures/errors/session-deadlock-no-peer-turi` (a receive nobody will
+ever satisfy), `session-deadlock-mutual-turi` (two participants each blocked
+on the other) and `session-deadlock-awaited-turi` (the same cycle reached
+through `await`).
+
 ## Error Codes
 
 | Code | Meaning |
@@ -431,6 +493,7 @@ elaborated.
 | `TUR-E0221` | Role not declared in the protocol |
 | `TUR-E0222` | Role implementation does not match the projected local type |
 | `TUR-E0223` | Global protocol not well-formed (undeclared role used) |
+| `TUR-W0043` | Session op inside an `async` body: deadlocks the compiled program unless the peer is on another OS thread; use `session-spawn` |
 
 ---
 

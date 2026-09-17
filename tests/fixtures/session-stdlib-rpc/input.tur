@@ -1,0 +1,20 @@
+;; stdlib/session.tur rpc template: rpc-call.
+;;
+;; The server peer receives one request, replies with its double, and closes.
+;; The client performs the whole exchange through rpc-call, which returns the
+;; response and consumes the channel.
+;;
+;; Expected output: 42
+(load "stdlib/session.tur")
+
+(defn serve [^linear ch : (Session (Recv int (Send int Close)))] : nil
+  (let [[req ch] (recv ch)]
+    (let [ch (send ch (* req 2))]
+      (close ch))))
+
+(defn main [] : int
+  (let [[cli srv] (make-session (Send int (Recv int Close)))]
+    (let [t (session-spawn (fn [] (serve srv)))]
+      (println (rpc-call cli 21))
+      (session-join t)))
+  0)

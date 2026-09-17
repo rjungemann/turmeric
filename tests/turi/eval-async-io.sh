@@ -37,6 +37,11 @@ check_line() {
 
 check_line "write-async returns byte count (5)"  "5"
 check_line "read-async returns written data"      "hello"
+# Fiber-context arms.  Both used to return the bare value instead of the Future
+# they declare, so the `await` around them rejected the enclosing fiber and its
+# body stopped there -- these two lines simply never appeared.
+check_line "read-async in a fiber resolves"       "world"
+check_line "the fiber body continues past it"     "fiber-done"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

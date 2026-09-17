@@ -1,23 +1,11 @@
 ;; SS7: session-mp-ping -- 2-role multi-party protocol runtime test.
 ;; Ping protocol: A sends int to B, B sends int back to A.
 
+(load "stdlib/session.tur")
+
 (defprotocol Ping [A B]
   (-> A B int)
   (-> B A int))
-
-(defn spawn [f : ptr<void>] : ptr<void>
-  ```c
-  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
-  return (void *)tid;
-  ```)
-
-(defn join [t : ptr<void>] : int
-  ```c
-  pthread_join(*(pthread_t *)t, NULL);
-  free(t);
-  return 0;
-  ```)
 
 (defn role-a [^linear ch :(Role Ping A)] : nil
   (let [ch (send-to ch B 42)]
@@ -32,7 +20,7 @@
 
 (defn main [] : int
   (let [[ra rb] (make-protocol Ping)]
-    (let [t (spawn (fn [] (role-b rb)))]
+    (let [t (session-spawn (fn [] (role-b rb)))]
       (role-a ra)
-      (join t)))
+      (session-join t)))
   0)

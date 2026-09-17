@@ -1,23 +1,11 @@
 ;; SS8: session-mp-three-role -- 3-role pipeline protocol.
 ;; A sends 42 to B, B forwards to C, C receives and prints it.
 
+(load "stdlib/session.tur")
+
 (defprotocol Pipeline [A B C]
   (-> A B int)
   (-> B C int))
-
-(defn spawn [f : ptr<void>] : ptr<void>
-  ```c
-  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
-  return (void *)tid;
-  ```)
-
-(defn join [t : ptr<void>] : int
-  ```c
-  pthread_join(*(pthread_t *)t, NULL);
-  free(t);
-  return 0;
-  ```)
 
 (defn role-a [^linear ch :(Role Pipeline A)] : nil
   (let [ch (send-to ch B 42)]
@@ -35,9 +23,9 @@
 
 (defn main [] : int
   (let [[ra rb rc] (make-protocol Pipeline)]
-    (let [ta (spawn (fn [] (role-a ra)))]
-      (let [tb (spawn (fn [] (role-b rb)))]
+    (let [ta (session-spawn (fn [] (role-a ra)))]
+      (let [tb (session-spawn (fn [] (role-b rb)))]
         (role-c rc)
-        (join ta)
-        (join tb))))
+        (session-join ta)
+        (session-join tb))))
   0)

@@ -8,11 +8,19 @@
 ;; peer's send lands on an already-closed channel and is dropped silently
 ;; (matching the compiled tur_session_send abandoned-drop semantics).
 ;;
+;; The peer's sleep is a bare (sleep-async 200): inside a fiber it blocks the
+;; fiber directly.  This fixture once wrapped it in `await`, which at the time
+;; dropped the rest of the fiber body, so no value was ever deposited and the
+;; "timeout" it printed said nothing about the deadline
+;; (awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body).  With the bare
+;; sleep the send really does happen at 200ms, so a stubbed deadline would now
+;; print 99 and fail.
+;;
 ;; Expected output: timeout
 (defn main [] : int
   (let [[r s] (make-session (Recv int (Timeout Close Close)))]
     (let [t (async (fn []
-                     (await (sleep-async 200))
+                     (sleep-async 200)
                      (let [s (send s 99)]
                        (close s))))]
       (match (recv-timeout r 50)
