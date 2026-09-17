@@ -6263,6 +6263,18 @@ static bool cty_is_byval_agg(const char *cty) {
     return strncmp(cty, "tur_adt_", 8) == 0;
 }
 
+/* True when one of two C type spellings is a pointer and the other the int64
+ * carrier word -- an assignment between them needs an intptr_t bridge. */
+static bool cty_is_ptr(const char *cty) {
+    return cty && *cty && cty[strlen(cty) - 1] == '*';
+}
+static bool cty_is_int_word(const char *cty) {
+    return cty && (strcmp(cty, "int64_t") == 0 || strcmp(cty, "intptr_t") == 0);
+}
+static bool cty_word_straddle(const char *a, const char *b) {
+    return (cty_is_ptr(a) && cty_is_int_word(b)) || (cty_is_int_word(a) && cty_is_ptr(b));
+}
+
 /* The C type of the SLOT that a delivery to `kont` lands in: the join local's
  * declared type (KK_VAR), or -- for the one-word DK slot -- the type the
  * crossing value is expected to have there, which is what slot_store_reap keys
@@ -6927,6 +6939,17 @@ static void emit_term(CE *ce, const CTerm *t) {
                         buf_putc(&bx, '\0');
                         emit_deliver(ce, &t->as.tailcall.kont, bx.data);
                         buf_free(&bx);
+                    } else if (cty_word_straddle(drt, slot_cty)) {
+                        /* An erasing ascription `(:: (f) :int)` over a callee
+                         * that returns a concrete pointer (`tur_adt_Vec__int *`)
+                         * lands the handle in an int64 join local (or the
+                         * reverse).  A bare assignment is -Wint-conversion, a
+                         * hard error on macOS clang; bridge through intptr_t. */
+                        Buf bv; buf_init(&bv);
+                        buf_printf(&bv, "(%s)(intptr_t)%s", slot_cty, tmp);
+                        buf_putc(&bv, '\0');
+                        emit_deliver(ce, &t->as.tailcall.kont, bv.data);
+                        buf_free(&bv);
                     } else {
                         emit_deliver(ce, &t->as.tailcall.kont, tmp);
                     }

@@ -1,0 +1,39 @@
+;; A colored fn (it calls `lower`, whose letrec lambda is colored) whose body is
+;; `(sum-words (:: (lower rs) :int) bias)`.  The CPS backend lowers the erasing
+;; ascription to an inline join: `lower` is a cps->direct tail call returning a
+;; concrete `tur_adt_Vec__int *`, delivered into the join's `int64_t` local.  The
+;; delivery must bridge through intptr_t -- a bare `__t0 = __tN;` is
+;; -Wint-conversion, a hard error on macOS clang (turmeric-spices plot).
+;; Note the param is `bias`, not `k`: a `k` param clashes with the CPS
+;; continuation name and keeps the fn on the direct emitter, hiding the bug.
+
+(defclass Shape [a]
+  (to-word [r] : int))
+
+(defstruct Sq [side : int])
+(definstance Shape [Sq]
+  (to-word [r] (.side r)))
+
+(defn lower [rs : (Vec (exists [a] [(Shape a)] a))] : (Vec int)
+  (let [n   (vec-len rs)
+        out (vec-new)]
+    (letrec [go (fn [i : int] : (Vec int)
+                  (if (>= i n) out
+                    (let [h (open (vec-get rs i) [a v] (to-word v))]
+                      (do (vec-push! out h)
+                          (go (+ i 1))))))]
+      (go 0))))
+
+(defn sum-words [words : int bias : int] : int
+  (+ bias (+ (vec-get (:: words (Vec int)) 0)
+             (vec-get (:: words (Vec int)) 1))))
+
+(defn lower-and-sum [rs : (Vec (exists [a] [(Shape a)] a)) bias : int] : int
+  (sum-words (:: (lower rs) :int) bias))
+
+(defn main [] : int
+  (let [rs (vec-new)]
+    (vec-push! rs (pack (Sq 3) (exists [a] [(Shape a)] a)))
+    (vec-push! rs (pack (Sq 4) (exists [a] [(Shape a)] a)))
+    (println (lower-and-sum rs 100))
+    0))
