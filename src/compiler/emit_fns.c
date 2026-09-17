@@ -724,8 +724,29 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                     const Binding *b = e->as.let_.bindings[i].binding;
                     char *bn = name_for_binding(ctx, b);
                     char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
+                    const char *bind_c = emit_type_c_name(ctx, b->type);
+                    /* tail-recursive-let-drops-carrier-bridge: this arm emits a
+                     * tail-position `let` INLINE rather than through
+                     * emit_let_value -- see the `any` drop note below -- so the
+                     * carrier->by-value crossing that lives there has to be
+                     * repeated too, and was not.  A binding whose C type is a
+                     * by-value aggregate, initialised by a producer whose C
+                     * return is the int64 carrier (an inline-C body declared
+                     * `: (Result T E)`, a #{Construct} helper, an instance
+                     * method), emitted `T x = <int64_t>;` -- a hard cc error,
+                     * loud but pointing at a generated identifier, and absent
+                     * the moment the recursive call left tail position.  The
+                     * decision is emit_let_init_carrier_bridge_type so the three
+                     * sites that ask it cannot drift apart again. */
+                    Type init_bv = emit_let_init_carrier_bridge_type(
+                        ctx, e->as.let_.bindings[i].init, bind_c, iv);
+                    if (init_bv.kind != TY_UNKNOWN) {
+                        char *bridged = emit_carrier_bridge(ctx, body, iv,
+                                            CK_CARRIER, CK_CONCRETE, init_bv);
+                        iv = bridged;  /* emit_carrier_bridge freed the old iv */
+                    }
                     indent_buf(body, ctx->indent);
-                    buf_printf(body, "%s %s = %s;\n", emit_type_c_name(ctx, b->type), bn, iv);
+                    buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "(void)%s;\n", bn);
                     free(bn);

@@ -1,0 +1,64 @@
+;; result-nil-ok-payload -- `(Result nil E)` and `(Option nil)`: the ok/some
+;; payload that carries no information.
+;;
+;; `nil` c-names to `void`, and a monomorph over it used that spelling verbatim
+;; in three positions no local can hold:
+;;
+;;   struct { void _0; } Ok;                       the union member
+;;   ctor_Result_Ok__nil__int(void _0)             the constructor parameter
+;;   void _un_7 = (void)__scrut->as.Ok._0;         the match binder
+;;
+;; Three cc errors naming only generated identifiers, for a signature the type
+;; checker accepts without comment. `nil` is the right type for "it worked and
+;; carries nothing" -- the return shape of every setter and connector in a
+;; C-wrapping spice -- so the shape has to WORK rather than be diagnosed away.
+;;
+;; The slot is now the int64 the erased twin already reads there. Nothing can
+;; read the value (`nil` has no values), so the bytes are dead by construction;
+;; what matters is that the OTHER arm's payload still crosses intact, which is
+;; why every case below checks the error code too.
+;;
+;; Turmeric-side regression for
+;; docs/reported/result-nil-ok-payload-emits-void-field.md, found writing the
+;; nng spice -- whose dial/listen/setters all want exactly this signature.
+
+;; The producers are inline C, which is how this shape arises in practice: a
+;; fallible C call has an ok/err split and no ok value to hand back.
+(defn connect [x : int] : (Result nil int)
+  ```c
+  if (x != 0) return tur_err_int((int64_t)x);
+  return tur_ok_int(0);
+  ```)
+
+(defn lookup [x : int] : (Option nil)
+  ```c
+  if (x != 0) return tur_none();
+  return tur_some_int(0);
+  ```)
+
+;; A Turmeric-side producer of the same type, so the shape is not only reachable
+;; from inline C.
+(defn verify [x : int] : (Result nil int)
+  (if (= x 0)
+    (connect 0)
+    (connect x)))
+
+(defn main [] : int
+  ;; The accessors, which are where the match binder is emitted.
+  (if (ok? (connect 0))  (println "ok yes")  (println "ok no"))
+  (if (err? (connect 7)) (println "err yes") (println "err no"))
+  (if (ok? (verify 0))    (println "verify ok yes")  (println "verify ok no"))
+  (if (err? (verify 3))   (println "verify err yes") (println "verify err no"))
+
+  ;; The OTHER arm still carries its payload -- a wrong slot would print 0.
+  (println (err-val (connect 7)))
+  (println (err-val (verify 3)))
+
+  ;; The same shape one constructor over.
+  (if (some? (lookup 0)) (println "some yes") (println "some no"))
+  (if (none? (lookup 3)) (println "none yes") (println "none no"))
+
+  ;; An explicit match, binding the nil payload as a wildcard.
+  (match (connect 0) (Ok _) (println "matched ok") (Err e) (println e))
+  (match (connect 9) (Ok _) (println "matched ok") (Err e) (println e))
+  0)

@@ -2856,6 +2856,75 @@ static bool let_init_aliases_fat_fn_param(const Expr *init) {
            init->as.var.binding->type.kind == TY_FN;
 }
 
+/* result-nil-ok-payload-emits-void-field: the C type for a MATCH BINDER.
+ *
+ * type_c_name answers "void" for `nil`, which is right for a function return
+ * and impossible for a local: `void _un_7 = (void)__scrut->as.Ok._0;` is
+ * "variable has incomplete type 'void'".  It is reachable because a wildcard
+ * binder is emitted whether or not the arm reads it -- `ok?` on a
+ * `(Result nil int)` destructures `(Ok _)` and never looks at the payload.
+ *
+ * The slot a `nil` payload occupies is the int64 adt_field_c_type now gives it
+ * (see the note there), so the binder that names the slot is an int64 too.
+ * Nothing can read it: `nil` has no values, so a binder of that type is dead by
+ * construction.
+ *
+ * Shared with emit_cps_ir.c's arm-binder mirror, which is the site that
+ * actually emitted the failing line for `ok?` -- stdlib's accessors compile
+ * through the CPS path, so patching only the direct emitter's three sites left
+ * the defect exactly where it was. */
+const char *match_binder_c_type(const Type *t) {
+    const char *nm = type_c_name(*t);
+    return (nm && strcmp(nm, "void") == 0) ? "int64_t" : nm;
+}
+
+/* tail-recursive-let-drops-carrier-bridge: the ONE question "must this `let`
+ * binding's initialiser be bridged from the int64 carrier into a by-value
+ * aggregate, and into WHICH type?"
+ *
+ * A binding whose declared C type is a by-value aggregate can be initialised by
+ * a producer whose C return is the uniform int64 carrier -- an inline-C body
+ * declared `: (Result T E)`, a #{Construct} helper, an instance method. Emitting
+ * `T x = <int64_t>;` is a hard cc error, so the carrier has to be dereferenced
+ * into the aggregate first.
+ *
+ * Shared, because the decision had two byte-identical copies (emit_let_value
+ * and emit_letrec_value) and a third site that needed it and did not have it:
+ * emit_tail's inline tail-position `let` arm, which exists because a TCO'd
+ * function's `let` is emitted straight into the back-edge loop rather than
+ * through emit_let_value. A `let` binding a carrier producer inside a
+ * self-tail-recursive body therefore emitted `struct x = <int64_t>;` and the
+ * translation unit did not compile -- while the same source with the recursive
+ * call out of tail position compiled fine. The `any`-drop bookkeeping that arm
+ * also has to repeat is the standing reminder that this shape has more than one
+ * piece; this is the piece that was missed.
+ *
+ * Returns the by-value type to bridge TO, or a TY_UNKNOWN type when no bridge
+ * applies. Every guard is load-bearing:
+ *
+ *   - a pointer-represented or int64_t binding is not a by-value aggregate, so
+ *     there is nothing to deref into;
+ *   - fn_body_tail_byvalue_carrier_type answers TY_UNKNOWN unless every tail
+ *     leaf of the initialiser really is a carrier producer;
+ *   - emit_value_is_recorded_as suppresses a SECOND deref when the init is a
+ *     control form whose merge temp bridge_control_value_to_byvalue_temp
+ *     already bridged (the value in hand IS the aggregate);
+ *   - fn_body_tail_emits_byvalue_carrier_abi excludes a producer that already
+ *     hands back the aggregate.
+ */
+Type emit_let_init_carrier_bridge_type(EmitCtx *ctx, const Expr *init,
+                                       const char *bind_c, const char *iv) {
+    Type none = type_simple(TY_UNKNOWN, CK_COPY);
+    if (!bind_c || !init) return none;
+    if (strchr(bind_c, '*') != NULL) return none;
+    if (strcmp(bind_c, "int64_t") == 0) return none;
+    Type init_bv = fn_body_tail_byvalue_carrier_type(ctx, init);
+    if (init_bv.kind == TY_UNKNOWN) return none;
+    if (emit_value_is_recorded_as(iv, bind_c)) return none;
+    if (fn_body_tail_emits_byvalue_carrier_abi(ctx, init)) return none;
+    return init_bv;
+}
+
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
@@ -3245,32 +3314,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * as the int64 carrier (emit_fns lowers an inline-C TY_APP result to
              * int64), but the binding is the by-value aggregate.  Deref the carrier
              * into the aggregate so the initialiser type-checks -- the consume-side
-             * companion of the assignment-straddle merge bridge.  Gated on the
-             * by-value-vs-emit disagreement, so inert when the init already yields
-             * the aggregate. */
-            Type init_bv = fn_body_tail_byvalue_carrier_type(
-                ctx, e->as.let_.bindings[i].init);
-            /* Increment 3 (double-deref guard): when the init is a control
-             * form (a `let`/`do` -- e.g. the map-get macro's expansion) whose
-             * merge temp was ALREADY declared by-value and bridged by
-             * bridge_control_value_to_byvalue_temp, the value in hand IS the
-             * aggregate -- re-deriving "carrier producer" from the tail call
-             * here would deref it a second time (`(*(T *)(intptr_t)(<T
-             * value>))`, a hard cc error).  The temp's ACTUAL emitted C type
-             * is in the localvar side table (the init_val_recorded_* pattern
-             * above); a recorded by-value aggregate type equal to the
-             * binding's own suppresses the re-bridge -- consult the recorded
-             * representation instead of re-deciding from the tail. */
-            /* Was an inline copy of emit_value_is_recorded_as -- there were two,
-             * and the CPS mirror had none.  Shared now so they cannot drift. */
-            bool init_val_recorded_byval_agg =
-                emit_value_is_recorded_as(iv, bind_c);
-            bool init_carrier_to_byval = !bind_is_ptr_repr &&
-                strcmp(bind_c, "int64_t") != 0 &&
-                init_bv.kind != TY_UNKNOWN &&
-                !init_val_recorded_byval_agg &&
-                !fn_body_tail_emits_byvalue_carrier_abi(
-                    ctx, e->as.let_.bindings[i].init);
+             * companion of the assignment-straddle merge bridge.
+             *
+             * The decision and its four guards live in
+             * emit_let_init_carrier_bridge_type, because emit_tail's inline
+             * tail-position `let` arm is a third site that has to ask it --
+             * see the header comment there. */
+            Type init_bv = emit_let_init_carrier_bridge_type(
+                ctx, e->as.let_.bindings[i].init, bind_c, iv);
+            bool init_carrier_to_byval = init_bv.kind != TY_UNKNOWN;
             /* SR3 slice B (inline-C carrier producer): an inline-C body declared
              * `: (Option String)` builds its result with the preamble's typed
              * builders (`tur_some_ptr`), which return the CARRIER -- a pointer to
@@ -3662,32 +3714,15 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * as the int64 carrier (emit_fns lowers an inline-C TY_APP result to
              * int64), but the binding is the by-value aggregate.  Deref the carrier
              * into the aggregate so the initialiser type-checks -- the consume-side
-             * companion of the assignment-straddle merge bridge.  Gated on the
-             * by-value-vs-emit disagreement, so inert when the init already yields
-             * the aggregate. */
-            Type init_bv = fn_body_tail_byvalue_carrier_type(
-                ctx, e->as.let_.bindings[i].init);
-            /* Increment 3 (double-deref guard): when the init is a control
-             * form (a `let`/`do` -- e.g. the map-get macro's expansion) whose
-             * merge temp was ALREADY declared by-value and bridged by
-             * bridge_control_value_to_byvalue_temp, the value in hand IS the
-             * aggregate -- re-deriving "carrier producer" from the tail call
-             * here would deref it a second time (`(*(T *)(intptr_t)(<T
-             * value>))`, a hard cc error).  The temp's ACTUAL emitted C type
-             * is in the localvar side table (the init_val_recorded_* pattern
-             * above); a recorded by-value aggregate type equal to the
-             * binding's own suppresses the re-bridge -- consult the recorded
-             * representation instead of re-deciding from the tail. */
-            /* Was an inline copy of emit_value_is_recorded_as -- there were two,
-             * and the CPS mirror had none.  Shared now so they cannot drift. */
-            bool init_val_recorded_byval_agg =
-                emit_value_is_recorded_as(iv, bind_c);
-            bool init_carrier_to_byval = !bind_is_ptr_repr &&
-                strcmp(bind_c, "int64_t") != 0 &&
-                init_bv.kind != TY_UNKNOWN &&
-                !init_val_recorded_byval_agg &&
-                !fn_body_tail_emits_byvalue_carrier_abi(
-                    ctx, e->as.let_.bindings[i].init);
+             * companion of the assignment-straddle merge bridge.
+             *
+             * The decision and its four guards live in
+             * emit_let_init_carrier_bridge_type, because emit_tail's inline
+             * tail-position `let` arm is a third site that has to ask it --
+             * see the header comment there. */
+            Type init_bv = emit_let_init_carrier_bridge_type(
+                ctx, e->as.let_.bindings[i].init, bind_c, iv);
+            bool init_carrier_to_byval = init_bv.kind != TY_UNKNOWN;
             /* SR3 slice B (inline-C carrier producer): an inline-C body declared
              * `: (Option String)` builds its result with the preamble's typed
              * builders (`tur_some_ptr`), which return the CARRIER -- a pointer to
@@ -15589,7 +15624,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (pat->n_bindings > 0 && pat->bindings[0]) {
                         Binding *fb = pat->bindings[0];
                         Type fbt = emit_resolve_type(ctx, fb->type);
-                        const char *ctype = type_c_name(fb->type);
+                        const char *ctype = match_binder_c_type(&fb->type);
                         char *bname = name_for_binding(ctx, fb);
                         indent_buf(body, ctx->indent);
                         if (fbt.kind == TY_FLOAT) {
@@ -16138,7 +16173,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         const char *acc = (adt_byval && !adt_byval_pbp) ? "." : "->";
                         for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                             Binding *fb = pat->bindings[bi];
-                            const char *ctype = type_c_name(fb->type);
+                            const char *ctype = match_binder_c_type(&fb->type);
                             /* match-arm-binder-in-any-monomorph-typed-as-carrier:
                              * `fb->type` is the ctor's DECLARED field type, so for
                              * `(defdata Box [a] (MkBox a))` reached at `(Box any)`
@@ -16488,7 +16523,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         char *_mctor = mangle_adt_name(pat->ctor->name);
                         for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                             Binding *fb = pat->bindings[bi];
-                            const char *ctype = type_c_name(fb->type);
+                            const char *ctype = match_binder_c_type(&fb->type);
                             /* SR2a: inside a per-instantiation clone the pattern
                              * BINDING's own type is still the generic tyvar --
                              * `(POK a int)` binds `v : a`, the int64 carrier --
@@ -16524,7 +16559,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     _sd == pat->ctor->adt) {
                                     Type _sf = substitute_adt_app_type_owned(
                                         pat->ctor->fields[bi].full_type, _sd, _sargs);
-                                    const char *_sc = type_c_name(_sf);
+                                    /* result-nil-ok-payload-emits-void-field:
+                                     * through match_binder_c_type, not
+                                     * type_c_name -- this block OVERRIDES the
+                                     * binder type decided above, so asking the
+                                     * raw name here put `void` back for a `nil`
+                                     * payload after the binder had already been
+                                     * normalised.  Answering "int64_t" also
+                                     * makes the guard below decline to override
+                                     * at all, which is the right outcome: the
+                                     * binder already names the int64 slot. */
+                                    const char *_sc = match_binder_c_type(&_sf);
                                     if (_sc && strcmp(_sc, "int64_t") != 0) {
                                         snprintf(_sub_ctype, sizeof _sub_ctype, "%s", _sc);
                                         ctype = _sub_ctype;

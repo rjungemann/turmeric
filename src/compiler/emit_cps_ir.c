@@ -7082,7 +7082,7 @@ static void emit_match(CE *ce, const CTerm *t) {
         for (uint32_t bi = 0; bi < arm->n_fields; bi++) {
             const Binding *fb = arm->fields[bi];
             if (!fb) continue;
-            const char *ctype = type_c_name(fb->type);
+            const char *ctype = match_binder_c_type(&fb->type);
             char *bname = name_for_binding(ce->ctx, fb);
             char *mp = adt_field_member_path(arm->ctor->adt, arm->ctor, bi);
             /* SR1: an inline by-value aggregate field IS the aggregate in the

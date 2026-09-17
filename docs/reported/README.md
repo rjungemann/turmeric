@@ -1990,6 +1990,32 @@ most consequential finding of either pass.
 | --- | --- | --- |
 | [let-bound-erasing-ascription-int-to-pointer](let-bound-erasing-ascription-int-to-pointer.md) | medium | The direct emitter inits a `let` binder from an erasing ascription `(:: w (Vec int))` as `tur_adt_Vec__int * v = words;` with no `intptr_t` bridge -- a hard `-Wint-conversion` error on macOS clang, a warning on Linux gcc. The same ascription in call-argument position is cast correctly. Sibling of the CPS inline-join straddle fixed alongside it (`cty_word_straddle` in `emit_cps_ir.c`) |
 
+## Found building the nng spice (filed 2026-09-16)
+
+Two defects found writing `turmeric-spices/spices/nng`, a Tier-3 wrapper over
+nanomsg-next-generation. Both are loud (the C compiler rejects the emitted
+translation unit) and both have workarounds the spice ships with a pointer
+back here, so neither blocked it.
+
+They are unrelated to each other, but they share a shape worth naming: each is a
+per-binding or per-field emission site that asks a payload's C type a question
+without first asking whether that payload is a carrier (the first) or inhabited
+(the second). Both are seams the end-to-end monomorphization plan removes.
+
+**Both RESOLVED 2026-09-16 and archived**, in the same change that filed them.
+Each fix turned out to be a SHARED-HELPER problem rather than a one-site patch:
+the first decision already had two byte-identical copies and needed a third
+site, and the second had four sites across three files -- including the CPS
+mirror, which is the one that actually emitted the failing line. Both reports
+carry a "spice-side follow-up, still outstanding" section: `spices/nng`'s `Ack`
+opaque and its pub/sub retry delegation are workarounds that can now be removed,
+and have not been.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[tail-recursive-let-drops-carrier-bridge](../archive/tail-recursive-let-drops-carrier-bridge.md)~~ | -- | **RESOLVED 2026-09-16** (archived), root cause as filed, fixed by the report's structural direction rather than its fix direction 1 -- the decision is now `emit_let_init_carrier_bridge_type` and the TCO back-edge is kept. Original row: A `let` that binds a carrier-returning producer (an inline-C body declared `: (Result T E)`) inside a SELF-TAIL-RECURSIVE body is emitted as `struct x = <int64_t>;` -- `emit_tail`'s inline `EX_LET` arm (`emit_fns.c:718`) assigns `emit_value`'s result straight into a by-value-typed local instead of routing it through `emit_carrier_bridge`, which the non-TCO path (`emit_let_value`) does. Both ingredients are required: delegating the receive to a non-recursive helper fixes it, and so does taking the recursive call out of tail position. The arm's own comment already notes it duplicates `emit_let_value`'s per-binding bookkeeping (for `any` drops) -- the bridge is the piece that was not duplicated. Rejects a retry loop over a fallible operation, which is the obvious spelling of a poll |
+| ~~[result-nil-ok-payload-emits-void-field](../archive/result-nil-ok-payload-emits-void-field.md)~~ | -- | **RESOLVED 2026-09-16** (archived). Fixed by giving the payload the int64 slot the erased twin already reads, NOT by the filed "treat it as a zero-field constructor" -- that would change ctor arity and so every call site and match arm. Four sites, not the three filed: the fourth is the SR2a/SR2b binder override, which put `void` back after normalisation. Original row: `(Result nil E)` and `(Option nil)` type-check and then emit `struct { void _0; } Ok;`, `ctor_Result_Ok__nil__int(void _0)`, and `void _un_N = (void)__scrut->as.Ok._0;` -- three `cc` errors naming only generated identifiers. `nil` is the right type for "worked, carries nothing", which is the return of every setter and connector in a C-wrapping spice; without it each one reaches for `(Result int int)` plus an "ok carries 0" convention (the `:int` stand-in CLAUDE.md forbids) or a per-spice `Ack` opaque, which is what nng ships. The nullary-constructor path already exists; the fix is routing `nil` fields into it at all three sites |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
