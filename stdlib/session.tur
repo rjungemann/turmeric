@@ -143,13 +143,13 @@
                                                           (Recv int self))
                                                   Close)))
                         val : int
-                        handler : (-> int nil)]
-  : (Session (Rec self (Choose (Send int (Recv int self)) Close)))
+                        handler : (-> int nil)] : (Session (Rec self
+                                                             (Choose (Send int
+                                                                       (Recv int
+                                                                         self))
+                                                               Close)))
   (let [ch (choose-left ch)]
-    (let [ch (send ch val)]
-      (let [[r ch] (recv ch)]
-        (handler r)
-        ch))))
+    (let [ch (send ch val)] (let [[r ch] (recv ch)] (handler r) ch))))
 ;; ---------------------------------------------------------------------------
 ;; rpc -- generic single-shot request/response
 ;;
