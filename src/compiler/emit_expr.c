@@ -2925,6 +2925,41 @@ Type emit_let_init_carrier_bridge_type(EmitCtx *ctx, const Expr *init,
     return init_bv;
 }
 
+/* let-bound-erasing-ascription-int-to-pointer: does this `let` binding's
+ * initialiser hand a bare int64 WORD to a pointer-represented binder?
+ *
+ * `(let [v (:: words (Vec int))] ...)` with `words : int` declares `v` as the
+ * concrete heap pointer (`tur_adt_Vec__int *`) while the EX_ASCRIBE emit hands
+ * back the erased inner word untouched -- an ascription from the int64 carrier
+ * into a carrier-ABI aggregate is a pure relabel, by design, so the value in
+ * hand is `words` itself.  `T v = words;` is then an int->pointer init: a
+ * warning on gcc, a hard `-Wint-conversion` error on AppleClang.  The
+ * call-argument spelling `(vec-get (:: words (Vec int)) 0)` was already cast,
+ * because the call-site bridge asks the ARGUMENT's type; the binder init asked
+ * only the ascription's OUTER type (a pointer, so "no bridge needed") and the
+ * side table (a parameter is never recorded there), and both said no.
+ *
+ * So ask the innermost expression under the ascription chain: when the binder
+ * c-names to a pointer and that innermost value's resolved type c-names to the
+ * int64 carrier, the init is a word and wants `(T)(intptr_t)(word)`.  The cast
+ * is value-preserving in both directions (int64 -> intptr_t -> T, and a
+ * pointer that a spec happened to resolve the inner to survives it unchanged),
+ * so a shape that was right before stays right.  Shared by the same three
+ * binder-init sites as emit_let_init_carrier_bridge_type, for the same reason. */
+bool emit_let_init_is_erased_word_to_ptr(EmitCtx *ctx, const Expr *init,
+                                         const char *bind_c) {
+    if (!ctx || !init || !bind_c) return false;
+    if (strchr(bind_c, '*') == NULL) return false;
+    if (init->kind != EX_ASCRIBE) return false;
+    const Expr *in = init;
+    while (in && in->kind == EX_ASCRIBE) in = in->as.ascribe_.inner;
+    if (!in) return false;
+    Type it = emit_resolve_type(ctx, in->type);
+    if (it.kind == TY_INT) return true;
+    const char *cn = emit_type_c_name(ctx, it);
+    return cn && strcmp(cn, "int64_t") == 0;
+}
+
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
@@ -3359,7 +3394,12 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else if (bind_is_ptr_repr &&
                        ((init_cn && strcmp(init_cn, "int64_t") == 0) ||
-                        init_val_recorded_i64)) {
+                        init_val_recorded_i64 ||
+                        /* let-bound-erasing-ascription-int-to-pointer: the
+                         * ascription's OUTER type is the pointer, so init_cn
+                         * under-fires; ask the innermost word instead. */
+                        emit_let_init_is_erased_word_to_ptr(
+                            ctx, e->as.let_.bindings[i].init, bind_c))) {
                 buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
             } else if (bind_is_ptr_repr && iv &&
                        strncmp(iv, "(int64_t)", 9) == 0) {
@@ -3759,7 +3799,12 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else if (bind_is_ptr_repr &&
                        ((init_cn && strcmp(init_cn, "int64_t") == 0) ||
-                        init_val_recorded_i64)) {
+                        init_val_recorded_i64 ||
+                        /* let-bound-erasing-ascription-int-to-pointer: the
+                         * ascription's OUTER type is the pointer, so init_cn
+                         * under-fires; ask the innermost word instead. */
+                        emit_let_init_is_erased_word_to_ptr(
+                            ctx, e->as.let_.bindings[i].init, bind_c))) {
                 buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
             } else if (bind_is_ptr_repr && iv &&
                        strncmp(iv, "(int64_t)", 9) == 0) {
