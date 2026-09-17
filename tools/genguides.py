@@ -679,6 +679,18 @@ GUIDE_CSS = '''\
     .guide-content p  { margin-bottom:1rem; }
     .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
     .guide-content li { margin:0.25rem 0; }
+    /* GFM task-list items. The checkbox is DISABLED on purpose: a guide page is
+       prerendered HTML with no persistence on either consumer (the site or the
+       offline docs pack), so an interactive box would silently drop every tick
+       on reload. It marks the list as a checklist; the reader tracks state
+       wherever the work actually happens. */
+    .guide-content li.task-item { list-style:none; margin-left:-1.4rem; }
+    /* Drawn, not native. A DISABLED checkbox in its UA skin is a solid grey
+       square whose checked and unchecked states are all but identical against
+       this theme -- an unchecked item reads as done. `appearance:none` drops
+       that skin so an empty box is an empty box. */
+    .guide-content li.task-item input[type="checkbox"] { -webkit-appearance:none; appearance:none; position:relative; width:0.95em; height:0.95em; margin:0 0.55rem 0 0; padding:0; border:1px solid var(--border-mid); border-radius:3px; background:var(--bg-panel); cursor:default; vertical-align:-0.12em; }
+    .guide-content li.task-item input[type="checkbox"]:checked::after { content:""; position:absolute; left:0.3em; top:0.06em; width:0.2em; height:0.48em; border:solid var(--green); border-width:0 2px 2px 0; transform:rotate(43deg); }
     .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
     .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
     .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
@@ -721,6 +733,23 @@ GUIDE_CSS = '''\
     .code-card-body { }
     .code-version { }
     .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }'''
+
+
+# A GFM task-list item as it appears AFTER markdown conversion. python-markdown
+# ships no task-list extension, so `- [ ] text` reaches the HTML as a literal
+# `<li>[ ] text`. Matching post-conversion is what keeps the source a plain
+# bullet list -- which GitHub already renders as a checklist on its own -- and
+# costs no new package in tools/requirements.txt.
+_TASK_ITEM_RE = re.compile(r'<li>\[([ xX])\]\s+')
+
+
+def render_task_lists(body_html: str) -> str:
+    """Render `- [ ]` / `- [x]` list items as real, disabled checkboxes."""
+    def sub(m: re.Match) -> str:
+        checked = ' checked' if m.group(1) in 'xX' else ''
+        return f'<li class="task-item"><input type="checkbox" disabled{checked}> '
+
+    return _TASK_ITEM_RE.sub(sub, body_html)
 
 
 def inject_syntax_toggles(body_html: str) -> str:
@@ -937,6 +966,7 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
                             extension_configs={'toc': {'permalink': False}})
     body_html = conv.convert(text)
     body_html = inject_syntax_toggles(body_html)
+    body_html = render_task_lists(body_html)
     toc_tokens = getattr(conv, 'toc_tokens', [])
 
     # In-body "Contents" box, inserted right after the page title (first <h1>),

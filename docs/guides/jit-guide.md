@@ -1,6 +1,6 @@
 ---
 title: JIT Execution Engine Guide (`tur jit`)
-category: Contributor
+category: Contributor Notes
 description: How the in-process MIR JIT is built -- what MIR is, how the engine is wired into this project, and what it does differently from the cc path (the fallback contract, the permanent constraints, and the inline-C rules that only bite under the JIT)
 ---
 
