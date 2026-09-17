@@ -1286,8 +1286,13 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             ctx->indent += 4;
             indent_buf(body, ctx->indent);
             buf_puts(body, "int64_t *__opt = (int64_t *)malloc(sizeof(int64_t));\n");
+            /* generator-yield-payload-is-int64-only: the slot holds the
+             * value's BITS -- `(int64_t)` on a double was a value conversion
+             * (7.25 -> 7); a pointer is cast, a bool widened.  The typed
+             * `gen-unwrap` reinterprets the same way on the way out. */
             indent_buf(body, ctx->indent);
-            buf_printf(body, "*__opt = (int64_t)(%s);\n", yval);
+            buf_printf(body, "*__opt = %s;\n",
+                       emit_word_slot_bits(&e->as.yield_.value->type, yval));
             indent_buf(body, ctx->indent);
             buf_puts(body, "return (void *)__opt;\n");
             ctx->indent -= 4;
@@ -1397,6 +1402,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_GEN:
         case EX_GEN_NEXT:
         case EX_GEN_DONE:
+        case EX_GEN_UNWRAP:
         case EX_PERFORM:
         case EX_HANDLE:
             /* defopaque-struct-payload-fails-through-unsafe-helper: a pure

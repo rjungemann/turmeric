@@ -257,14 +257,10 @@ def known_bug_slug(tags):
                 or "scalar_cstr" in tags):
             return ("session-payloads-are-int64-only" if "seam_session" in tags
                     else "router-payloads-are-int64-only")
-    if "seam_generator" in tags:
-        # Worse than the session pair: the slot's type reaches the SIGNATURE
-        # (gen-unwrap is declared :int), so bool prints 1 and cstr prints a
-        # raw pointer.  Only a bare int payload survives.  (The await seam
-        # was the same shape until 2026-09-17; it reads the slot back at the
-        # thunk's declared type now and has no row here.)
-        if "payload_box" in tags or "scalar_int" not in tags:
-            return "generator-yield-payload-is-int64-only"
+    # The generator and await seams were the worst of the family until
+    # 2026-09-17 -- the slot's type reached the SIGNATURE (gen-unwrap / await
+    # declared :int), so bool printed 1 and cstr a raw pointer.  Both read
+    # the slot back at the payload's declared type now and have no row here.
     return None
 
 
@@ -409,16 +405,9 @@ KNOWN_PROBES = [
      "    (let [k (fzspawn (fn [] (fzqa a)))] (fzqb b) (fzjoin k)))\n"
      "  0)\n",
      "7.25\n"),
-    ("generator-yield-payload-is-int64-only (float truncates)",
-     '(load "stdlib/gen.tur")\n'
-     "(defn main [] : int\n"
-     "  (let [g (gen [] (yield 7.25))]\n"
-     "    (let [v (gen-next g)]\n"
-     "      (when (gen-some? v) (println (gen-unwrap v)))))\n"
-     "  0)\n",
-     "7.25\n"),
-    # (async-await-payload-is-int64-only's row retired 2026-09-17: it prints
-    # `fixed` -- the await reads the slot at the thunk's declared type.)
+    # (generator-yield-payload-is-int64-only's and async-await-payload-is-
+    # int64-only's rows retired 2026-09-17: both print `fixed` -- the reads
+    # happen at the payload's declared type now.)
 ]
 
 

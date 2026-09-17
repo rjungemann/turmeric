@@ -258,6 +258,7 @@ static const char *cps_form_name(const Expr *e) {
         case EX_GEN:           return "EX_GEN";
         case EX_YIELD:         return "EX_YIELD";
         case EX_GEN_NEXT:      return "EX_GEN_NEXT";
+        case EX_GEN_UNWRAP:    return "EX_GEN_UNWRAP";
         case EX_SELECT:        return "EX_SELECT";
         case EX_STM:           return "EX_STM";
         case EX_ATOMICALLY:    return "EX_ATOMICALLY";

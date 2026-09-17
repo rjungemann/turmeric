@@ -1372,11 +1372,18 @@ Expr *elab_let(Elab *e, const Form *call) {
          * binding and still holds. */
 
         /* async-await-payload-is-int64-only: a binding initialised by an
-         * `(async ..)` remembers the thunk's payload type for its `await`. */
+         * `(async ..)` remembers the thunk's payload type for its `await`.
+         * generator-yield-payload-is-int64-only: one initialised by a
+         * `(gen-next g)` remembers the element kind for its `gen-unwrap`. */
         {
             const Expr *ai = init;
             while (ai && ai->kind == EX_ASCRIBE) ai = ai->as.ascribe_.inner;
             if (ai && ai->kind == EX_ASYNC) b->async_payload = &ai->as.async_.payload;
+            if (ai && ai->kind == EX_GEN_NEXT && ai->as.gen_next_.gen_expr &&
+                ai->as.gen_next_.gen_expr->type.kind == TY_GENERATOR) {
+                b->gen_elem_kind = ai->as.gen_next_.gen_expr->type.as.generator_.element_kind;
+                b->gen_elem_set  = true;
+            }
         }
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
@@ -4353,6 +4360,56 @@ Expr *elab_gen_next(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_GEN_NEXT, ptr_type, call->span);
     out->as.gen_next_.gen_expr = gen_expr;
     out->as.gen_next_.def      = gen_expr->as.gen_.def;
+    return out;
+}
+
+/* generator-yield-payload-is-int64-only: (gen-unwrap p) -- read the yielded
+ * value out of a gen-next result, at the generator's element type.
+ *
+ * `gen-unwrap` was a stdlib inline-C reader declared `: int`, so the slot's
+ * type reached the SIGNATURE: a yielded 7.25 printed 7, a cstr printed its
+ * address, and nothing objected.  The element kind is on the generator's type
+ * (`TY_GENERATOR.element_kind`, recorded at the first `yield`), and the read
+ * reaches it through the `(gen-next g)` it consumes or the let binding that
+ * holds one -- the same provenance rule the await uses, and the shape every
+ * stdlib macro (`gen-for-each`, `gen-collect`, `yield*`) expands to.  A
+ * word-shaped element (a scalar class, cstr, ptr<void>, :Sym) is read at its
+ * type; anything else, or an opaque pointer, keeps the `int` read the stdlib
+ * reader gave.  The slot holds the value's BITS (emit_stmt's EX_YIELD stores
+ * a float's IEEE-754 pattern, not an int conversion), so the read is a
+ * reinterpret, never a value conversion. */
+Expr *elab_gen_unwrap(Elab *e, const Form *call) {
+    Expr *p = elab_form(e, call->as.list.items[1]);
+    if (!p) return NULL;
+    TypeKind elem = TY_INT;
+    bool have = false;
+    const Expr *src = p;
+    while (src && src->kind == EX_ASCRIBE) src = src->as.ascribe_.inner;
+    if (src && src->kind == EX_GEN_NEXT && src->as.gen_next_.gen_expr &&
+        src->as.gen_next_.gen_expr->type.kind == TY_GENERATOR) {
+        elem = src->as.gen_next_.gen_expr->type.as.generator_.element_kind;
+        have = true;
+    } else if (src && src->kind == EX_VAR && src->as.var.binding &&
+               src->as.var.binding->gen_elem_set) {
+        elem = src->as.var.binding->gen_elem_kind;
+        have = true;
+    }
+    if (have) {
+        switch (elem) {
+            case TY_BOOL: case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+            case TY_CSTR: case TY_PTR_VOID: case TY_SYM:
+            case TY_INT: case TY_INT64: case TY_UINT64: case TY_INT32:
+            case TY_UINT32: case TY_INT16: case TY_UINT16: case TY_INT8:
+            case TY_UINT8:
+                break;
+            default:
+                elem = TY_INT;
+                break;
+        }
+    }
+    Expr *out = expr_new(e->arena, EX_GEN_UNWRAP, type_from_kind(elem), call->span);
+    out->as.gen_unwrap_.ptr_expr = p;
+    out->as.gen_unwrap_.elem     = elem;
     return out;
 }
 

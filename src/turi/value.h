@@ -136,6 +136,7 @@ char *turi_val_strdup(TuriEnv *env, const char *s);
  * never calls these -- it allocates from scratch and lets promotion relocate
  * whatever escapes. */
 void *turi_val_perm_alloc(TuriEnv *env, size_t n);
+void *turi_val_perm_alloc_aligned(TuriEnv *env, size_t n, size_t align);
 void *turi_val_perm_calloc(TuriEnv *env, size_t n);
 char *turi_val_perm_strdup(TuriEnv *env, const char *s);
 

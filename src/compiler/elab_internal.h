@@ -878,6 +878,7 @@ typedef struct Elab {
     const Symbol     *sym_yield;        /* "yield" */
     const Symbol     *sym_gen_next;     /* "gen-next" */
     const Symbol     *sym_gen_done;     /* "gen-done?" */
+    const Symbol     *sym_gen_unwrap;   /* "gen-unwrap" (generator-yield-payload-is-int64-only) */
     /* CF5 (control-flow-completeness-plan): set true while elaborating a match arm body. */
     bool              in_match_arm;
     /* bare-fat-result-monomorphization-plan (Phase B): per-call-site
@@ -1629,6 +1630,7 @@ Expr *elab_gen(Elab *e, const Form *call);
 Expr *elab_yield(Elab *e, const Form *call);
 Expr *elab_gen_next(Elab *e, const Form *call);
 Expr *elab_gen_done(Elab *e, const Form *call);
+Expr *elab_gen_unwrap(Elab *e, const Form *call);
 
 /* elab_memory.c */
 Expr *elab_ref(Elab *e, const Form *call);

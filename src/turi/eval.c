@@ -12323,7 +12323,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         const GenDef *def = e->as.gen_.def;
         /* Escaping payload: a generator value is returned and may outlive the
          * creating scope; pool-owned (its coroutine stack stays mmap/malloc). */
-        TuriGen *g = (TuriGen *)turi_val_calloc(env, sizeof(TuriGen));
+        /* generator-yield-payload-is-int64-only (second defect): a TuriGen
+         * holds two ucontext_t, which want 16-byte alignment; the plain
+         * arena calloc handed back an 8-aligned block and UBSan reported
+         * "member access within misaligned address" on every generator. */
+        TuriGen *g = (TuriGen *)turi_val_calloc_aligned(env, sizeof(TuriGen),
+                                                        _Alignof(TuriGen));
         g->env     = env;
         g->body    = def->body;
         /* The body resolves its captures through a fresh child of the creating
@@ -12362,6 +12367,33 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (gv.tag != TURI_GEN)
             return turi_errorf("eval: gen-next: expected a generator, got tag %d", gv.tag);
         return gen_advance(env, gv.as_gen);
+    }
+
+    /* generator-yield-payload-is-int64-only: (gen-unwrap p) -- the yielded
+     * value's bits sit in the generator's box (the union payload of the
+     * TuriValue `yield` stored); re-tag them at the element kind. */
+    case EX_GEN_UNWRAP: {
+        TuriValue pv = eval_expr(env, frame, e->as.gen_unwrap_.ptr_expr);
+        if (turi_is_error(pv) || env_signaled(env)) return pv;
+        int64_t bits = pv.as_int ? *(int64_t *)(intptr_t)pv.as_int : 0;
+        switch (e->as.gen_unwrap_.elem) {
+            case TY_FLOAT: case TY_FLOAT64: {
+                TuriValue r = turi_float(0.0);
+                r.as_int = bits;
+                return r;
+            }
+            case TY_FLOAT32: {
+                float f; uint32_t u = (uint32_t)bits;
+                memcpy(&f, &u, sizeof f);
+                return turi_float((double)f);
+            }
+            case TY_BOOL:
+                return turi_bool(bits != 0);
+            case TY_CSTR:
+                return turi_cstr((const char *)(intptr_t)bits);
+            default:
+                return turi_int(bits);
+        }
     }
 
     /* (gen-done? g) -- has the generator been driven off its end? */
@@ -13073,7 +13105,8 @@ static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
         if (!g || !PROMO_SCRATCH(env, g)) return v;
         void *seen = promo_map_get(fwd, g);
         if (seen) return turi_gen_val((TuriGen *)seen);
-        TuriGen *ng = (TuriGen *)turi_val_perm_alloc(env, sizeof *ng);
+        TuriGen *ng = (TuriGen *)turi_val_perm_alloc_aligned(env, sizeof *ng,
+                                                             _Alignof(TuriGen));
         promo_map_put(fwd, g, ng);
         *ng = *g;
         ng->frame     = promo_copy_frame(env, g->frame, fwd);

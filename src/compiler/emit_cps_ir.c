@@ -4018,6 +4018,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
         case EX_YIELD:     REC(e->as.yield_.value); return;
         case EX_GEN:       if (e->as.gen_.def) REC(e->as.gen_.def->body); return;
         case EX_GEN_NEXT:  REC(e->as.gen_next_.gen_expr); return;
+        case EX_GEN_UNWRAP: REC(e->as.gen_unwrap_.ptr_expr); return;
         case EX_GEN_DONE:  REC(e->as.gen_done_.gen_expr); return;
         case EX_DEFDYNAMIC:   REC(e->as.defdynamic_.root_expr); return;
         case EX_DYNVAR_SET:   REC(e->as.dynvar_set_.value); return;

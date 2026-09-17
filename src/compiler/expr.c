@@ -626,6 +626,11 @@ void expr_print(Buf *b, const Expr *e) {
             if (e->as.gen_next_.gen_expr) expr_print(b, e->as.gen_next_.gen_expr);
             buf_putc(b, ')');
             break;
+        case EX_GEN_UNWRAP:
+            buf_puts(b, "(gen-unwrap ");
+            if (e->as.gen_unwrap_.ptr_expr) expr_print(b, e->as.gen_unwrap_.ptr_expr);
+            buf_putc(b, ')');
+            break;
         case EX_GEN_DONE:
             buf_puts(b, "(gen-done? ");
             if (e->as.gen_done_.gen_expr) expr_print(b, e->as.gen_done_.gen_expr);

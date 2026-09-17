@@ -4786,12 +4786,13 @@ static bool catch_thunk_owns_fat_box(const Expr *thunk) {
 
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e);
 
-/* async-await-payload-is-int64-only: the C expression that puts a value of
- * payload type `t` (spelled by `v`) into the future's int64 slot as its BITS:
- * a float's IEEE-754 pattern (a `(int64_t)` cast would value-convert 7.25 to
+/* async-await-payload-is-int64-only / generator-yield-payload-is-int64-only:
+ * the C expression that puts a value of type `t` (spelled by `v`) into an
+ * int64 word slot -- a future's, a generator frame's -- as its BITS: a
+ * float's IEEE-754 pattern (a `(int64_t)` cast would value-convert 7.25 to
  * 7), a pointer through intptr_t, everything else widened.  Static buffer:
  * the result is consumed by the very next printf. */
-static const char *emit_async_slot_bits(const Type *t, const char *v) {
+const char *emit_word_slot_bits(const Type *t, const char *v) {
     static char buf[512];
     switch (t ? t->kind : TY_INT) {
         case TY_FLOAT: case TY_FLOAT64:
@@ -12936,7 +12937,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(pbuf, "    %s (*__f)(void) = (%s (*)(void))(intptr_t)__env;\n", pc, pc);
                         buf_printf(pbuf, "    %s __v = __f();\n", pc);
                     }
-                    buf_printf(pbuf, "    return %s;\n", emit_async_slot_bits(apl, "__v"));
+                    buf_printf(pbuf, "    return %s;\n", emit_word_slot_bits(apl, "__v"));
                     buf_puts(pbuf, "}\n\n");
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "void *%s = (void *)tur_async_fiber_via(%s, (void *)(intptr_t)%s);\n",
@@ -13002,7 +13003,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* async-await-payload-is-int64-only: the expression's
                      * value goes into the slot as its BITS -- `(int64_t)` on
                      * a double was a value conversion (7.25 -> 7). */
-                    buf_printf(pbuf, "    return %s;\n", emit_async_slot_bits(apl, ret));
+                    buf_printf(pbuf, "    return %s;\n", emit_word_slot_bits(apl, ret));
                     free(ret);
                 } else {
                     buf_puts(pbuf, "    return 0;\n");
@@ -17084,6 +17085,50 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                        tmp, gen_v);
             free(gen_v);
             return tmp;
+        }
+        /* generator-yield-payload-is-int64-only: read the slot at the element
+         * type -- a float from its bits, the rest by cast; `int` is the word. */
+        case EX_GEN_UNWRAP: {
+            char *pv  = emit_value(ctx, body, e->as.gen_unwrap_.ptr_expr);
+            char *raw = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t %s = *(int64_t *)(intptr_t)(%s);\n", raw, pv);
+            free(pv);
+            const char *rc = NULL;
+            char rexpr[256];
+            switch (e->as.gen_unwrap_.elem) {
+                case TY_FLOAT: case TY_FLOAT64:
+                    rc = "double";
+                    snprintf(rexpr, sizeof rexpr,
+                             "((union { int64_t i; double d; }){ .i = (%s) }).d", raw);
+                    break;
+                case TY_FLOAT32:
+                    rc = "float";
+                    snprintf(rexpr, sizeof rexpr,
+                             "((union { uint32_t u; float f; }){ .u = (uint32_t)(%s) }).f", raw);
+                    break;
+                case TY_BOOL:
+                    rc = "bool";
+                    snprintf(rexpr, sizeof rexpr, "((%s) != 0)", raw);
+                    break;
+                case TY_CSTR: case TY_PTR_VOID: case TY_SYM:
+                case TY_INT32: case TY_UINT32: case TY_INT16: case TY_UINT16:
+                case TY_INT8: case TY_UINT8:
+                    rc = emit_type_c_name(ctx, e->type);
+                    snprintf(rexpr, sizeof rexpr, "(%s)(intptr_t)(%s)", rc, raw);
+                    break;
+                default:
+                    break;
+            }
+            if (rc) {
+                char *typed = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", rc, typed, rexpr);
+                emit_localvar_record_ctype(typed, rc);
+                free(raw);
+                return typed;
+            }
+            return raw;
         }
         /* GF1: Yield in expression position -- forward to stmt emitter, return nil */
         case EX_YIELD: {

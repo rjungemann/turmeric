@@ -3254,6 +3254,8 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     if (name == e->sym_yield)    return elab_yield   (e, call);
     if (name == e->sym_gen_next) return elab_gen_next(e, call);
     if (name == e->sym_gen_done) return elab_gen_done(e, call);
+    if (name == e->sym_gen_unwrap && call->as.list.len == 2)
+        return elab_gen_unwrap(e, call);
     /* Phase 5 */
     if (name == e->sym_ref)    return elab_ref   (e, call);
     if (name == e->sym_deref)  return elab_deref (e, call);
