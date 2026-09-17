@@ -1,0 +1,79 @@
+;; tail-recursive-let-carrier-bridge -- a `let` that binds a carrier-returning
+;; producer INSIDE a self-tail-recursive body.
+;;
+;; A TCO'd function's `let` is emitted straight into the back-edge loop by
+;; emit_tail's inline EX_LET arm rather than through emit_let_value, so the
+;; carrier->by-value crossing that lives there has to be repeated -- and was
+;; not. The binding's C type is the by-value `tur_adt_Result__cstr__int`, the
+;; inline-C producer's C return is the int64 carrier, and the arm emitted
+;; `tur_adt_Result__cstr__int r = <int64_t>;`: a hard cc error naming only a
+;; generated identifier.
+;;
+;; Both ingredients are required, so this fixture pins all three shapes at once
+;; and the two controls must keep working:
+;;
+;;   poll-tail    self-tail-recursive + let  -- the regression
+;;   poll-nontail same let, recursive call OUT of tail position (compiled
+;;                before the fix, and must still compile after it)
+;;   poll-helper  same let, hoisted into a non-recursive helper (ditto)
+;;
+;; This is the turmeric-side regression for
+;; docs/reported/tail-recursive-let-drops-carrier-bridge.md, found writing the
+;; nng spice's pub/sub retry helper -- a retry loop over a fallible operation is
+;; the obvious spelling of a poll, and it did not compile.
+
+;; A fallible producer whose C return is the uniform int64 carrier: an inline-C
+;; body declared `: (Result cstr int)` builds its result with the preamble's
+;; typed builders, which hand back the carrier word.
+(defn attempt [n : int] : (Result cstr int)
+  ```c
+  if (n > 1) return tur_err_int(5);        /* "not yet" */
+  return tur_ok_ptr((void *)"landed");
+  ```)
+
+;; THE REGRESSION: self-tail-recursive, and the `let` binds the carrier.
+(defn poll-tail [tries : int] : bool
+  (if (<= tries 0)
+    false
+    (let [r (attempt tries)]
+      (if (ok? r)
+        true
+        (poll-tail (- tries 1))))))
+
+;; CONTROL: identical `let`, but the recursive call is not in tail position, so
+;; the whole function goes through the ordinary emitter.
+(defn poll-nontail [tries : int] : bool
+  (if (<= tries 0)
+    false
+    (let [r (attempt tries)]
+      (if (ok? r)
+        true
+        (not (not (poll-nontail (- tries 1))))))))
+
+;; CONTROL: the `let` hoisted out, so the tail-recursive body binds nothing.
+(defn landed? [n : int] : bool
+  (let [r (attempt n)]
+    (ok? r)))
+
+(defn poll-helper [tries : int] : bool
+  (if (<= tries 0)
+    false
+    (if (landed? tries)
+      true
+      (poll-helper (- tries 1)))))
+
+;; The err payload still reads back correctly through the bridged binding --
+;; a deref that produced the wrong bytes would compile and print 0 here.
+(defn first-error [tries : int] : int
+  (let [r (attempt tries)]
+    (if (err? r)
+      (err-val r)
+      0)))
+
+(defn main [] : int
+  (if (poll-tail 3)    (println "tail yes")    (println "tail no"))
+  (if (poll-nontail 3) (println "nontail yes") (println "nontail no"))
+  (if (poll-helper 3)  (println "helper yes")  (println "helper no"))
+  (if (poll-tail 0)    (println "empty yes")   (println "empty no"))
+  (println (first-error 3))
+  0)

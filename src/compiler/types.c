@@ -1703,6 +1703,29 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
         }
         const char *nm = type_c_name(resolved);
         free_struct_app_type(resolved);
+        /* result-nil-ok-payload-emits-void-field: `nil` c-names to `void`, and
+         * `void` is not something a union member, a ctor parameter, or a match
+         * binder can be.  A `(Result nil E)` / `(Option nil)` monomorph
+         * therefore emitted `struct { void _0; } Ok;`,
+         * `ctor_Result_Ok__nil__int(void _0)`, and
+         * `void _un_N = (void)__scrut->as.Ok._0;` -- three cc errors naming
+         * only generated identifiers, for a signature (`: (Result nil int)`)
+         * the type checker accepts without comment.
+         *
+         * `nil` is the right type for "it worked and carries nothing", which
+         * is the return shape of every setter, connector, and binder in a
+         * C-wrapping spice, so this has to WORK rather than be diagnosed away.
+         * The slot becomes the int64 the erased twin already reads there: a
+         * zero-information payload needs no storage, but it does need a
+         * well-formed member, and every other arm of the union is int64-shaped
+         * anyway.  Nothing ever reads the value -- `nil` has no values to read
+         * -- so the eight bytes are dead by construction, like the other dead
+         * union arms the by-value ctor prologue already leaves indeterminate.
+         *
+         * Same remedy as the sub-word widening just below, and for the same
+         * reason: the monomorph's member and the generic layout every erased
+         * reader goes through have to agree on the slot. */
+        if (nm && strcmp(nm, "void") == 0) return "int64_t";
         /* SR2b layout contract: a MULTI-VARIANT parametric monomorph's union
          * payload lives at offset 8 in a 16-byte tagged aggregate -- that is
          * what the generic base layout (`tur_adt_Option`'s int64 slot), the

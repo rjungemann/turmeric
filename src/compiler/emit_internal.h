@@ -864,6 +864,12 @@ bool emit_str_is_bare_ident(const char *s);
  * `want_ctype`, and is that type a by-value aggregate?  Shared by every
  * carrier->concrete bridge so the copies cannot drift.  See emit_expr.c. */
 bool emit_value_is_recorded_as(const char *v, const char *want_ctype);
+/* result-nil-ok-payload-emits-void-field: the C type for a match-arm binder.
+ * type_c_name answers "void" for `nil`, which no local can be declared as;
+ * a `nil` payload's slot is the int64 adt_field_c_type gives it.  Shared by the
+ * direct emitter's three binder sites and emit_cps_ir.c's mirror.  Defined in
+ * emit_expr.c. */
+const char *match_binder_c_type(const Type *t);
 /* cps-edge-walk-misses-nodes-and-colored-frames-leak: fire ONE pending drop
  * the direct emitter's argument hoist queued (a fresh sum-carrier box, an owned
  * `any`, or a by-value monomorph whose arm holds a boxed value struct) at a
@@ -934,6 +940,15 @@ bool fn_body_tail_is_carrier_producer(const struct Expr *e);
  * emit_expr.c. */
 bool fn_body_tail_emits_byvalue_carrier_abi(struct EmitCtx *ctx, const struct Expr *e);
 Type fn_body_tail_byvalue_carrier_type(struct EmitCtx *ctx, const struct Expr *e);
+/* tail-recursive-let-drops-carrier-bridge: must this `let` binding's
+ * initialiser be bridged from the int64 carrier into a by-value aggregate, and
+ * into WHICH type?  Returns TY_UNKNOWN when no bridge applies.  Shared by
+ * emit_let_value, emit_letrec_value (which held byte-identical copies) and
+ * emit_tail's inline tail-position `let` arm (which held none, and so did not
+ * compile).  Defined in emit_expr.c. */
+Type emit_let_init_carrier_bridge_type(struct EmitCtx *ctx,
+                                       const struct Expr *init,
+                                       const char *bind_c, const char *iv);
 /* CONV-S1 seam 4: does an inline-C body with declared result `rft` return that
  * result BY VALUE (the concrete aggregate) rather than through the int64
  * carrier?  This is the single question that decides an inline-C function's C

@@ -264,10 +264,20 @@ Canonical req/rep round trip:
 
 ## Found on the way
 
-Both are filed in `docs/reported/` with a minimal repro, and both are
-cited from the spice source at the point of the workaround.
+Both were filed with a minimal repro and are now **fixed and archived** -- each
+turned out to be a shared-helper problem rather than a one-site patch, which is
+why the fixes are worth reading even though the spice already works around
+them. Each is still cited from the spice source at the point of its workaround,
+and each archived report carries a "spice-side follow-up, still outstanding"
+section naming what to delete now that the compiler no longer needs it:
 
-- **[`tail-recursive-let-drops-carrier-bridge`](../reported/tail-recursive-let-drops-carrier-bridge.md)**
+- `Ack` and its `(Result Ack int)` signatures become `(Result nil int)`.
+- `send-until-received?` can inline its receive back into the recursive body.
+
+Neither removal has been made: the spice's CI builds `turmeric` `main`, so they
+land after the compiler change does, not alongside it.
+
+- **[`tail-recursive-let-drops-carrier-bridge`](../archive/tail-recursive-let-drops-carrier-bridge.md)**
   (medium). A `let` that binds a carrier-returning producer inside a
   **self-tail-recursive** body is emitted as `struct x = <int64_t>;` --
   `emit_tail`'s inline `EX_LET` arm assigns `emit_value`'s result
@@ -276,7 +286,7 @@ cited from the spice source at the point of the workaround.
   pub/sub retry helper, which is the obvious spelling of a poll. Hard
   `cc` error, so loud; worked around by delegating the receive to a
   non-recursive helper.
-- **[`result-nil-ok-payload-emits-void-field`](../reported/result-nil-ok-payload-emits-void-field.md)**
+- **[`result-nil-ok-payload-emits-void-field`](../archive/result-nil-ok-payload-emits-void-field.md)**
   (low-medium). `(Result nil E)` type-checks and then emits
   `struct { void _0; } Ok;`. This is why `Ack` exists.
 

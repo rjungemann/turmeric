@@ -1,4 +1,29 @@
+---
+title: A `let` inside a self-tail-recursive body drops the carrier-to-by-value bridge
+category: Reported
+description: "emit_tail's inline tail-position `let` arm assigned emit_value's result straight into a by-value-typed local instead of routing it through emit_carrier_bridge, so `struct x = <int64_t>;` reached cc. Both the TCO and the carrier producer were required."
+---
+
 # A `let` inside a self-tail-recursive body drops the carrier-to-by-value bridge
+
+**RESOLVED 2026-09-16.** Root cause as filed, and the fix is the report's own
+structural direction rather than its fix direction 1: the decision is now one
+function, `emit_let_init_carrier_bridge_type` (`src/compiler/emit_expr.c`),
+called from all three sites. It had **two byte-identical copies** already --
+`emit_let_value` and `emit_letrec_value` -- which is the strongest argument
+against re-typing it a third time in `emit_tail`. The arm keeps its TCO
+back-edge; nothing loses the optimization. Pinned by
+`tests/fixtures/tail-recursive-let-carrier-bridge`, which carries both controls
+(recursive call out of tail position, and the `let` hoisted into a
+non-recursive helper) alongside the regression, because either one alone makes
+the defect disappear.
+
+**Spice-side follow-up, still outstanding:**
+`turmeric-spices/spices/nng/tests/nng/pubsub_test.tur`'s `send-until-received?`
+delegates its receive to `recv-str=?` purely to sidestep this, with a comment
+pointing here. That delegation can be inlined back into the recursive body once
+this compiler change is on `main`. It is not wrong as written -- just no longer
+necessary.
 
 **Severity: medium.** Not a miscompile -- the emitted C is rejected by the C
 compiler, so the failure is loud. But it is rejected with a message about a
@@ -9,7 +34,7 @@ recursion stops being a tail call. Writing a retry loop over a fallible
 operation -- poll, re-send, re-try -- is an ordinary thing to want, and this
 rejects the obvious spelling of it.
 
-**Status: open.** Found writing the `nng` spice's pub/sub slow-joiner retry
+**Status when filed: open.** Found writing the `nng` spice's pub/sub slow-joiner retry
 helper (`spices/nng/tests/nng/pubsub_test.tur`, which now delegates the receive
 to a non-recursive helper to sidestep it, with a pointer back here).
 
