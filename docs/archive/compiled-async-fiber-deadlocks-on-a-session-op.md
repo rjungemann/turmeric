@@ -1,5 +1,65 @@
 # A session op inside `async` deadlocks the compiled program, with no diagnostic
 
+> **RESOLVED 2026-09-17 -- fix direction 1 landed; archived.**
+>
+> An `async` body the elaborator sees performing a session op (it captures a
+> `Session`/`Role` endpoint, or spells one of `send`, `recv`, `offer`,
+> `choose-left`, `choose-right`, `recv-timeout`, `send-to`, `recv-from`) now
+> runs on its **own OS thread**, and `await` joins it. The report's own repro
+> goes from `exit=124` (killed at 20s) to printing `42` and exiting 0, and both
+> backends agree.
+>
+> Not the CPS re-colouring the report scoped as "a plan, not a fix". That
+> framing assumed the only way out was to make each session op an
+> `await`-shaped suspension point, colouring every function on the path. The
+> cheaper answer was already implied by the report's own note that "the peer may
+> legitimately be on another OS thread ... in which case the program works":
+> give the body that thread. The classification the `TUR-W0043` warning
+> (direction 3) was already computing became the trigger, so the fix cost one
+> node flag and one runtime spawn rather than a colouring pass.
+>
+> - `elab_async` (`src/compiler/elab_concurrent.c`) sets
+>   `Expr::async_.session_blocking`; under `--interpret` it stays clear, since
+>   the interpreter's rendezvous is already cooperative.
+> - `tur_async_thread_via` / `tur_async_thread_entry` (`emit_module.c`) spawn
+>   the body on a pthread; `TurFuture` gained a `thread` field and
+>   `tur_future_join_thread` is called by `tur_await_future`, by
+>   `__tur_await_body` (the CPS-lowered await -- the path a program whose `main`
+>   awaits actually takes), and by `tur_future_free`.
+> - The emitter (`emit_expr.c`) routes such a site through the same
+>   `(*)(void *)` wrapper the typed spawn uses, so a thin fn, a fat closure, a
+>   non-int64 payload and a `nil`-returning body are one shape.
+> - A panic inside the task rejects that task's future and clears
+>   `tur_panic_in_progress`, so the re-raise at the `await` is catchable rather
+>   than a "double panic: aborting".
+>
+> **`TUR-W0043` is retired** -- the shape it named no longer deadlocks, so the
+> code, its `tur explain` entry and its guide rows are gone.
+>
+> Pinned by `tests/fixtures/session-async-recv` (the repro above: async recvs,
+> main sends) and `tests/fixtures/session-async-peer` (both peers are async
+> tasks -- the shape that could not work at all before), both running under
+> `run.sh` and `run-turi.sh`. `session-async-warn`, which pinned the warning,
+> became `session-async-peer`.
+>
+> Verified beyond the repro: `offer`/`choose-left`, a multi-party
+> `recv-from`/`send-to` role endpoint, a `float` payload (7.1 -> 14.2, so the
+> typed-payload path survives the thread route), and a panicking task caught at
+> the `await` -- each on both backends. Suites: `3045 passed, 0 failed`
+> (`run.sh`) and `2153 passed, 0 failed` (`run-turi.sh`).
+>
+> **Direction 2 (`session-spawn` / `session-join`) remains the preferred
+> spelling for a peer that is purely a peer** -- it names the intent and hands
+> back a `SessionPeer` instead of a future. This fix is about `async` composing
+> when you want the peer's result back, not about replacing that pair.
+>
+> One thing found on the way out, filed rather than fixed: a CPS-lowered
+> `await` never frees its future or its DK frames --
+> [cps-await-never-frees-its-future-or-dk-frames](../reported/cps-await-never-frees-its-future-or-dk-frames.md).
+> It is pre-existing (it reproduces on the untouched `async-await-cps` fixture)
+> and is why the two new fixtures carry a `known-leak` marker alongside their
+> `requires.leak-check`.
+
 **Severity: medium-high.** The most natural way to write the peer side of a
 session protocol -- `(async (fn [] (server ch)))` -- compiles clean and then
 **hangs forever** on the compiled path. No warning at elaboration, no runtime

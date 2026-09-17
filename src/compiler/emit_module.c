@@ -13605,6 +13605,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    int64_t value;\n");
     buf_puts(out, "    const char *error;  /* NULL if no error */\n");
     buf_puts(out, "    FiberBlock *fiber;  /* The fiber running the async task */\n");
+    buf_puts(out, "    void *thread;       /* pthread_t* when the body runs on its own OS thread */\n");
     buf_puts(out, "    struct { void (*fn)(TurFuture *, int64_t); void *env; } on_complete;\n");
     buf_puts(out, "};\n\n");
     
@@ -13614,6 +13615,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!f) { fprintf(stderr, \"future: oom\\n\"); abort(); }\n");
     buf_puts(out, "    f->status = FUTURE_PENDING;\n");
     buf_puts(out, "    f->fiber = NULL;\n");
+    buf_puts(out, "    f->thread = NULL;\n");
     buf_puts(out, "    f->on_complete.fn = NULL;\n");
     buf_puts(out, "    return f;\n");
     buf_puts(out, "}\n\n");
@@ -13789,10 +13791,92 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return future;\n");
     buf_puts(out, "}\n\n");
 
+    /* compiled-async-fiber-deadlocks-on-a-session-op (fix direction 1): the
+     * thread-backed spawn.  The three spawns above run the body on the
+     * SPAWNER's stack, which is a deadlock for a body that performs a session
+     * op: `tur_session_recv` blocks on the channel condvar, and the peer's
+     * `send` is later in the straight-line code of the very thread now parked
+     * inside `pthread_cond_wait`.  So a body the elaborator marked
+     * session-blocking gets its own OS thread; `tur_await_future` joins it.
+     *
+     * The body arrives through the same `(*)(void *)` wrapper the typed spawn
+     * uses, so a thin fn, a fat closure and a non-int64 payload are all one
+     * shape here.  `tur_handler_chain`, `tur_panicking` and `tur_current_fiber`
+     * are thread-local, so the body gets a fresh chain of its own, and the
+     * async Send check has already proved every capture may cross the boundary.
+     *
+     * The F3.2 park globals are deliberately NOT touched: an await inside the
+     * body would be parking on a scheduler the spawner also drives, so this
+     * path fulfills or rejects synchronously on its own thread and nothing is
+     * threaded onto `tur_async_pending_park`. */
+    buf_puts(out, "typedef struct { int64_t (*wrap)(void *); void *env; TurFuture *future; } TurAsyncThreadArg;\n");
+    buf_puts(out, "static void *tur_async_thread_entry(void *arg) {\n");
+    buf_puts(out, "    TurAsyncThreadArg *a = (TurAsyncThreadArg *)arg;\n");
+    buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
+    buf_puts(out, "    tur_handler_chain = &__node;\n");
+    buf_puts(out, "    int64_t result = a->wrap(a->env);\n");
+    buf_puts(out, "    tur_handler_chain = __node.parent;\n");
+    /* A panic inside the task rejects THAT task's future, exactly as
+     * tur_async_reject_if_panicking does for the inline spawns -- but written
+     * out here so it touches only the thread-local panic flag and never the
+     * shared async-park globals. */
+    buf_puts(out, "    if (tur_panicking) {\n");
+    /* Clear the in-progress flag too, exactly as tur_async_reject_if_panicking
+     * does: the panic is now this future's rejection, and the `await` that
+     * re-raises it would otherwise see a panic still in flight and abort with
+     * "double panic". */
+    buf_puts(out, "        tur_panicking = 0; tur_panic_in_progress = 0;\n");
+    buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
+    buf_puts(out, "        global_panic_payload = NULL;\n");
+    buf_puts(out, "        const char *__msg = \"panic\";\n");
+    buf_puts(out, "        if (__p) {\n");
+    buf_puts(out, "            if (__p->type_tag == 5 && __p->value) {\n");
+    buf_puts(out, "                __msg = (const char *)__p->value;\n");
+    buf_puts(out, "                __p->owns_value = 0;  /* the future owns it now */\n");
+    buf_puts(out, "            }\n");
+    buf_puts(out, "            panic_payload_free(__p);\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        tur_future_reject(a->future, __msg);\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        tur_future_fulfill(a->future, result);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    free(a);\n");
+    buf_puts(out, "    return NULL;\n");
+    buf_puts(out, "}\n\n");
+    /* Join a thread-backed task, if this future is one.  Every path that wants
+     * the task's result calls this first: tur_await_future, __tur_await_body
+     * (the CPS-lowered await -- a program whose `main` awaits is CPS-lowered,
+     * so this is the path the report's own repro takes), and tur_future_free.
+     * The join is a full memory barrier, so afterwards the future is already
+     * done and the ordinary done/rejected checks below see the real value --
+     * no on_complete callback and no scheduler spin is ever registered for
+     * one of these.  Idempotent: the pthread_t is cleared before the join. */
+    buf_puts(out, "static void tur_future_join_thread(TurFuture *f) {\n");
+    buf_puts(out, "    if (!f || !f->thread) return;\n");
+    buf_puts(out, "    pthread_t *__tid = (pthread_t *)f->thread;\n");
+    buf_puts(out, "    f->thread = NULL;\n");
+    buf_puts(out, "    pthread_join(*__tid, NULL);\n");
+    buf_puts(out, "    free(__tid);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static TurFuture *tur_async_thread_via(int64_t (*wrap)(void *), void *env) {\n");
+    buf_puts(out, "    TurFuture *future = tur_future_new();\n");
+    buf_puts(out, "    TurAsyncThreadArg *a = (TurAsyncThreadArg *)calloc(1, sizeof *a);\n");
+    buf_puts(out, "    if (!a) { fprintf(stderr, \"async: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    a->wrap = wrap; a->env = env; a->future = future;\n");
+    buf_puts(out, "    pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));\n");
+    buf_puts(out, "    if (!tid) { fprintf(stderr, \"async: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    if (pthread_create(tid, NULL, tur_async_thread_entry, a) != 0) {\n");
+    buf_puts(out, "        fprintf(stderr, \"async: failed to spawn task thread\\n\"); abort();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    future->thread = (void *)tid;\n");
+    buf_puts(out, "    return future;\n");
+    buf_puts(out, "}\n\n");
+
     /* Await a future using shift + scheduler. If future is done, return value directly. */
     buf_puts(out, "/* AW-004: await lowering with shift + scheduler callback */\n");
     buf_puts(out, "static int64_t tur_await_future(TurFuture *f) {\n");
     buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
+    buf_puts(out, "    tur_future_join_thread(f);\n");
     buf_puts(out, "    if (tur_future_done(f)) {\n");
     buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
     buf_puts(out, "            /* Re-raise the task's panic at the point that demanded the\n");
@@ -13862,6 +13946,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static intptr_t __tur_await_body(intptr_t env, DK *subk) {\n");
     buf_puts(out, "    TurFuture *f = (TurFuture *)(intptr_t)env;\n");
     buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
+    buf_puts(out, "    tur_future_join_thread(f);\n");
     buf_puts(out, "    if (tur_future_done(f)) {\n");
     buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
     buf_puts(out, "            /* Same re-raise as tur_await_future; the resumed continuation\n");
@@ -13905,6 +13990,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Free a future */
     buf_puts(out, "static void tur_future_free(TurFuture *f) {\n");
     buf_puts(out, "    if (!f) return;\n");
+    /* A thread-backed task that was never awaited is still running and still
+     * holds this future; join it before releasing the future so the task
+     * cannot write into freed memory. */
+    buf_puts(out, "    tur_future_join_thread(f);\n");
     buf_puts(out, "    free(f);\n");
     buf_puts(out, "}\n\n");
     

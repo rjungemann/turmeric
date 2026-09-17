@@ -12914,6 +12914,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              *      T25 — wrap in a static thunk emitted at file scope, then call tur_async_fiber
              *      with the thunk.  v1 limitation: the expression must not capture outer-scope
              *      variables (same limitation as effect handler bodies). */
+            /* compiled-async-fiber-deadlocks-on-a-session-op: a body that
+             * performs a session op blocks on the channel condvar, so running
+             * it on the spawner's stack deadlocks the one thread that could
+             * run the peer.  The elaborator marked the shape; spawn it on its
+             * own OS thread instead (`await` joins).  The thread spawn takes
+             * the same `(*)(void *)` wrapper the typed spawn uses, so mark the
+             * site as needing one regardless of payload kind. */
+            bool thread_backed = e->as.async_.session_blocking;
             const Expr *fn_expr = e->as.async_.fn_expr;
             char *tmp = fresh_tmp(ctx);
             if (fn_expr->type.kind == TY_FN) {
@@ -12925,10 +12933,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * Route it to the env-taking spawn, which reads the thunk out of
                  * the box and invokes it with the box as its env. */
                 char *fn_val = emit_value(ctx, body, fn_expr);
-                if (apl_typed) {
+                if (apl_typed || thread_backed) {
                     /* Typed spawn: a file-scope wrapper at the thunk's real
                      * prototype, converting the result to its slot bits. */
                     const char *pc = emit_type_c_name(ctx, *apl);
+                    /* A `nil`/`void`-returning thunk has no value to convert;
+                     * declaring `void __v` would not compile.  (The untyped
+                     * spawns reach such a thunk through an `int64_t (*)(void)`
+                     * prototype and discard the garbage word; here the wrapper
+                     * says so explicitly.) */
+                    bool pc_void = (pc && strcmp(pc, "void") == 0);
                     char wname[48];
                     snprintf(wname, sizeof wname, "__async_wrap_%d", ctx->tmp_n++);
                     Buf *pbuf = ctx->pending_handler_fns;
@@ -12943,18 +12957,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(pbuf, "static int64_t %s(void *__env) {\n", wname);
                     if (fn_expr->type.as.fn.boxed) {
                         buf_printf(pbuf, "    %s (*__f)(void *) = *(%s (**)(void *))__env;\n", pc, pc);
-                        buf_printf(pbuf, "    %s __v = __f(__env);\n", pc);
+                        if (pc_void) buf_puts(pbuf, "    __f(__env);\n");
+                        else         buf_printf(pbuf, "    %s __v = __f(__env);\n", pc);
                     } else {
                         buf_printf(pbuf, "    %s (*__f)(void) = (%s (*)(void))(intptr_t)__env;\n", pc, pc);
-                        buf_printf(pbuf, "    %s __v = __f();\n", pc);
+                        if (pc_void) buf_puts(pbuf, "    __f();\n");
+                        else         buf_printf(pbuf, "    %s __v = __f();\n", pc);
                     }
-                    char *wbits = emit_word_slot_bits(apl, "__v");
-                    buf_printf(pbuf, "    return %s;\n", wbits);
-                    free(wbits);
+                    if (pc_void) {
+                        buf_puts(pbuf, "    return 0;\n");
+                    } else {
+                        char *wbits = emit_word_slot_bits(apl, "__v");
+                        buf_printf(pbuf, "    return %s;\n", wbits);
+                        free(wbits);
+                    }
                     buf_puts(pbuf, "}\n\n");
                     indent_buf(body, ctx->indent);
-                    buf_printf(body, "void *%s = (void *)tur_async_fiber_via(%s, (void *)(intptr_t)%s);\n",
-                               tmp, wname, fn_val);
+                    buf_printf(body, "void *%s = (void *)%s(%s, (void *)(intptr_t)%s);\n",
+                               tmp,
+                               thread_backed ? "tur_async_thread_via" : "tur_async_fiber_via",
+                               wname, fn_val);
                 } else {
                     indent_buf(body, ctx->indent);
                     if (fn_expr->type.as.fn.boxed) {
@@ -13027,7 +13049,27 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_free(&thunk_body_buf);
 
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "void *%s = (void *)tur_async_fiber(%s);\n", tmp, thunk_name);
+                if (thread_backed) {
+                    /* The thread spawn takes an env-passing wrapper; the
+                     * bare-expression thunk takes no env (it may not capture),
+                     * so adapt it with a one-line forwarder. */
+                    char aname[48];
+                    snprintf(aname, sizeof aname, "__async_thr_%d", ctx->tmp_n++);
+                    /* Forward-declare in the early typedef region for the same
+                     * reason the typed wrapper above does: a CPS body's lifted
+                     * continuations are written BEFORE the pending file-scope
+                     * functions, so a site inside one would otherwise name this
+                     * adapter before its definition. */
+                    if (ctx->thunk_typedefs)
+                        buf_printf(ctx->thunk_typedefs, "static int64_t %s(void *);\n", aname);
+                    else
+                        buf_printf(pbuf, "static int64_t %s(void *);\n", aname);
+                    buf_printf(pbuf, "static int64_t %s(void *__env) { (void)__env; return %s(); }\n\n",
+                               aname, thunk_name);
+                    buf_printf(body, "void *%s = (void *)tur_async_thread_via(%s, NULL);\n", tmp, aname);
+                } else {
+                    buf_printf(body, "void *%s = (void *)tur_async_fiber(%s);\n", tmp, thunk_name);
+                }
                 free(thunk_name);
             }
             return tmp;

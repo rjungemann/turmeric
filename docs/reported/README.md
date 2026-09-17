@@ -1983,7 +1983,7 @@ most consequential finding of either pass.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [compiled-async-fiber-deadlocks-on-a-session-op](compiled-async-fiber-deadlocks-on-a-session-op.md) | medium | `(async (fn [] (recv ch)))` **hangs the compiled binary** while the identical program runs under `--interpret`: compiled `async` runs its body synchronously on the spawner's stack and the session runtime blocks that thread on a condvar. Since 2026-09-17 it is no longer silent -- `TUR-W0043` warns at the `async` site and points at `session-spawn` / `session-join` (`stdlib/session.tur`, landed 2026-09-16), which is the working spelling on both backends. What remains is the real fix: making a session op an `await`-shaped suspension point in a compiled async body, scoped in the report as a plan-sized change |
+| ~~[compiled-async-fiber-deadlocks-on-a-session-op](../archive/compiled-async-fiber-deadlocks-on-a-session-op.md)~~ | medium | **RESOLVED 2026-09-17** (archived): an async body the elaborator sees performing a session op runs on its **own OS thread** and `await` joins it, so the repro goes from `exit=124` to printing `42` on both backends. Not the CPS re-colouring the report scoped as plan-sized -- the classification `TUR-W0043` already computed became the trigger, so the fix was one node flag (`async_.session_blocking`) plus one runtime spawn (`tur_async_thread_via` / `tur_future_join_thread`, the join wired into `tur_await_future`, `__tur_await_body` **and** `tur_future_free`). `TUR-W0043` is retired with it. Pinned by `tests/fixtures/session-async-recv` and `session-async-peer` (both peers async -- the shape that could not work at all before). `session-spawn`/`session-join` stays the preferred spelling for a peer that is purely a peer. Original row: `(async (fn [] (recv ch)))` **hangs the compiled binary** while the identical program runs under `--interpret`, because compiled `async` ran its body synchronously on the spawner's stack and the session runtime blocks that thread on a condvar |
 
 ## Found building the nng spice (filed 2026-09-16)
 
@@ -2020,6 +2020,12 @@ the time.
 | [refine-call-sites-re-resolved-every-session-turn](refine-call-sites-re-resolved-every-session-turn.md) | medium | Under an `ElabSession`, `refine_resolve_call_sites` walks every refinement crossing the session has ever collected, on every turn -- the array is session state and nothing clears it. 49% of a 300-turn session replay's samples were under it |
 | [compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type](compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type.md) | low-medium | A compiled `(defdata Option ...)` re-elaborates over the stdlib's filled `Option` stub, and the errors are blamed on `stdlib/option.tur`. `defstruct` has the guard for this; `defdata` never got one |
 | [web-examples-js-is-unused-and-stale](web-examples-js-is-unused-and-stale.md) | low | Nothing imports `web/examples.js` -- the dropdown reads `EXAMPLES` in `main.js` -- and 7 of its 11 examples fail on their first run. Reports have cited it as the playground's examples |
+
+## Found landing the async/session deadlock fix (filed 2026-09-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cps-await-never-frees-its-future-or-dk-frames](cps-await-never-frees-its-future-or-dk-frames.md) | low | Nothing calls the emitted `tur_future_free`, and a CPS `await`'s `dk_shift` frames are not reaped on the inline-resume path, so every `async`/`await` pair leaks its future plus ~240 bytes of DK frames. Pre-existing and backend-independent -- it reproduces on the untouched `async-await-cps` fixture -- and is why `session-async-recv` / `session-async-peer` carry a `known-leak` marker. The future being a bare `ptr<void>` is what makes "free it at the await" unsafe to do blindly |
 
 ## Filing conventions
 

@@ -3270,6 +3270,7 @@ struct TurFuture {
     int64_t value;
     const char *error;  /* NULL if no error */
     FiberBlock *fiber;  /* The fiber running the async task */
+    void *thread;       /* pthread_t* when the body runs on its own OS thread */
     struct { void (*fn)(TurFuture *, int64_t); void *env; } on_complete;
 };
 
@@ -3279,6 +3280,7 @@ static TurFuture *tur_future_new(void) {
     if (!f) { fprintf(stderr, "future: oom\n"); abort(); }
     f->status = FUTURE_PENDING;
     f->fiber = NULL;
+    f->thread = NULL;
     f->on_complete.fn = NULL;
     return f;
 }
@@ -3403,9 +3405,59 @@ static TurFuture *tur_async_fiber_via(int64_t (*wrap)(void *), void *env) {
     return future;
 }
 
+typedef struct { int64_t (*wrap)(void *); void *env; TurFuture *future; } TurAsyncThreadArg;
+static void *tur_async_thread_entry(void *arg) {
+    TurAsyncThreadArg *a = (TurAsyncThreadArg *)arg;
+    tur_handler_node __node; __node.parent = tur_handler_chain;
+    tur_handler_chain = &__node;
+    int64_t result = a->wrap(a->env);
+    tur_handler_chain = __node.parent;
+    if (tur_panicking) {
+        tur_panicking = 0; tur_panic_in_progress = 0;
+        tur_panic_payload *__p = global_panic_payload;
+        global_panic_payload = NULL;
+        const char *__msg = "panic";
+        if (__p) {
+            if (__p->type_tag == 5 && __p->value) {
+                __msg = (const char *)__p->value;
+                __p->owns_value = 0;  /* the future owns it now */
+            }
+            panic_payload_free(__p);
+        }
+        tur_future_reject(a->future, __msg);
+    } else {
+        tur_future_fulfill(a->future, result);
+    }
+    free(a);
+    return NULL;
+}
+
+static void tur_future_join_thread(TurFuture *f) {
+    if (!f || !f->thread) return;
+    pthread_t *__tid = (pthread_t *)f->thread;
+    f->thread = NULL;
+    pthread_join(*__tid, NULL);
+    free(__tid);
+}
+
+static TurFuture *tur_async_thread_via(int64_t (*wrap)(void *), void *env) {
+    TurFuture *future = tur_future_new();
+    TurAsyncThreadArg *a = (TurAsyncThreadArg *)calloc(1, sizeof *a);
+    if (!a) { fprintf(stderr, "async: oom\n"); abort(); }
+    a->wrap = wrap; a->env = env; a->future = future;
+    pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+    if (!tid) { fprintf(stderr, "async: oom\n"); abort(); }
+    if (pthread_create(tid, NULL, tur_async_thread_entry, a) != 0) {
+        fprintf(stderr, "async: failed to spawn task thread\n"); abort();
+    }
+    future->thread = (void *)tid;
+    return future;
+}
+
 /* AW-004: await lowering with shift + scheduler callback */
 static int64_t tur_await_future(TurFuture *f) {
     if (!f) { fprintf(stderr, "await: null future\n"); abort(); }
+    tur_future_join_thread(f);
     if (tur_future_done(f)) {
         if (f->status == FUTURE_REJECTED) {
             /* Re-raise the task's panic at the point that demanded the
@@ -3466,6 +3518,7 @@ static void __tur_async_resume(TurFuture *inner, int64_t value) {
 static intptr_t __tur_await_body(intptr_t env, DK *subk) {
     TurFuture *f = (TurFuture *)(intptr_t)env;
     if (!f) { fprintf(stderr, "await: null future\n"); abort(); }
+    tur_future_join_thread(f);
     if (tur_future_done(f)) {
         if (f->status == FUTURE_REJECTED) {
             /* Same re-raise as tur_await_future; the resumed continuation
@@ -3508,6 +3561,7 @@ static intptr_t __tur_await_body(intptr_t env, DK *subk) {
 
 static void tur_future_free(TurFuture *f) {
     if (!f) return;
+    tur_future_join_thread(f);
     free(f);
 }
 

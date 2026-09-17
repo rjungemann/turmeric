@@ -1,0 +1,21 @@
+;; The minimal repro from compiled-async-fiber-deadlocks-on-a-session-op: an
+;; async body does a session `recv`, and the `send` that satisfies it is later
+;; in the SAME straight-line code that spawned the task.
+;;
+;; Compiled `async` used to run the body on the spawner's stack, so the recv
+;; blocked on the channel condvar and the send below it could never run -- the
+;; program hung forever, with no diagnostic, while `tur --interpret` printed 42.
+;; The body now runs on its own OS thread and `await` joins it.
+;;
+;; Expected output: 42
+
+(defn main [] : int
+  (let [[s r] (make-session (Send int Close))]
+    (let [t (async (fn []
+                     (let [[n r] (recv r)]
+                       (println n)
+                       (close r))))]
+      (let [s (send s 42)]
+        (close s)
+        (await t))))
+  0)

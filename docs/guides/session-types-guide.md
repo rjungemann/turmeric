@@ -264,14 +264,18 @@ somewhere else. `stdlib/session.tur` provides the portable way to do that:
 `tur --interpret` it is a scheduler fiber. The same source runs on both, and
 every example below uses this pair.
 
-> Do not write the peer as `(async (fn [] ...))` in a program you will compile.
-> Compiled `async` runs its body on the spawning thread and the session runtime
-> blocks that thread until the peer arrives, so a session op inside `async`
-> **deadlocks the binary** (it runs correctly under `--interpret`). The
-> compiler warns at the `async` site with `TUR-W0043` when the body captures a
-> session endpoint or spells a session op; the warning is a heuristic, so a
-> body whose peer really is on another OS thread works and still warns. See
-> [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md).
+> A peer written as `(async (fn [] ...))` also works, on both backends. When the
+> compiler sees an async body that performs a session op -- it captures a
+> `Session`/`Role` endpoint, or spells one of `send`, `recv`, `offer`,
+> `choose-left`, `choose-right`, `recv-timeout`, `send-to`, `recv-from` -- it
+> runs that body on its **own OS thread** and `await` joins it. Running it on
+> the spawner's stack (what every other async body does) would block the one
+> thread that could ever run the peer, which is how this shape used to hang the
+> binary with no diagnostic while `--interpret` ran it correctly. Prefer
+> `session-spawn` when the task is purely a peer -- it names the intent and its
+> handle is a `SessionPeer` rather than a future -- but `async`/`await` composes
+> when you want the peer's result back. See
+> [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md).
 
 ## Multi-Party Session Types (SS5-SS8)
 
@@ -493,7 +497,6 @@ through `await`).
 | `TUR-E0221` | Role not declared in the protocol |
 | `TUR-E0222` | Role implementation does not match the projected local type |
 | `TUR-E0223` | Global protocol not well-formed (undeclared role used) |
-| `TUR-W0043` | Session op inside an `async` body: deadlocks the compiled program unless the peer is on another OS thread; use `session-spawn` |
 
 ---
 

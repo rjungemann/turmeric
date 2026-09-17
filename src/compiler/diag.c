@@ -264,7 +264,6 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH: return "TUR-W0040";
         case TUR_W0041_HIGH_ARITY:                 return "TUR-W0041";
         case TUR_W0042_SHADOWS_SPECIAL_FORM:       return "TUR-W0042";
-        case TUR_W0043_SESSION_OP_IN_ASYNC:        return "TUR-W0043";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -440,7 +439,6 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0040") == 0) return TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH;
     if (strcmp(s, "TUR-W0041") == 0) return TUR_W0041_HIGH_ARITY;
     if (strcmp(s, "TUR-W0042") == 0) return TUR_W0042_SHADOWS_SPECIAL_FORM;
-    if (strcmp(s, "TUR-W0043") == 0) return TUR_W0043_SESSION_OP_IN_ASYNC;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -1049,33 +1047,6 @@ static const DiagExplanation diag_explanations_[] = {
       "Alternatively, wrap the inline-C call site in (unsafe ...) if the function\n"
       "is a safe abstraction over an unsafe implementation:\n"
       "  (defn safe-fn [] :int (unsafe (raw-c-helper)))\n",
-    },
-    { TUR_W0043_SESSION_OP_IN_ASYNC,
-      "TUR-W0043: Session op inside an async body deadlocks the compiled program\n"
-      "\n"
-      "An (async ...) body captures a session endpoint (Session / Role) or spells\n"
-      "a session op (send, recv, offer, choose-left, choose-right, recv-timeout,\n"
-      "send-to, recv-from), e.g.\n"
-      "  (async (fn [] (let [[n r] (recv r)] (println n) (close r))))\n"
-      "\n"
-      "Compiled `async` runs its body on the thread that spawned it, and the\n"
-      "session runtime blocks that thread on a condition variable until the peer\n"
-      "arrives.  If the peer is the spawner (or another async body on the same\n"
-      "thread) nothing can ever run it, and the program hangs with no further\n"
-      "diagnostic.  The same program runs correctly under `tur --interpret`,\n"
-      "whose rendezvous is cooperative, which is why the warning is not emitted\n"
-      "there.\n"
-      "\n"
-      "Fix: run the peer with session-spawn / session-join from stdlib/session.tur,\n"
-      "which is an OS thread compiled and a scheduler fiber under --interpret:\n"
-      "  (load \"stdlib/session.tur\")\n"
-      "  (let [t (session-spawn (fn [] (let [[n r] (recv r)] (println n) (close r))))]\n"
-      "    ...\n"
-      "    (session-join t))\n"
-      "\n"
-      "The warning is a heuristic: an async body whose peer really does run on\n"
-      "another OS thread (a session-spawn peer) works and still warns.\n"
-      "See docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md.\n",
     },
     { TUR_W0042_SHADOWS_SPECIAL_FORM,
       "TUR-W0042: Definition shadows a special form\n"

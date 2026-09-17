@@ -1,0 +1,26 @@
+;; A session op inside an `async` body composes on both backends.
+;;
+;; Compiled, an async body the elaborator sees performing a session op runs on
+;; its OWN OS thread and `await` joins it -- running it on the spawner's stack
+;; would block the one thread that could ever run the peer
+;; (compiled-async-fiber-deadlocks-on-a-session-op).  Under --interpret the
+;; rendezvous is already cooperative and the scheduler fiber handles it.
+;;
+;; Here BOTH peers are async tasks: the reader recvs, the writer sends.  Before
+;; the fix this shape hung forever with no diagnostic on the compiled path,
+;; while the interpreter ran it correctly.
+;;
+;; Expected output: 42
+
+(defn main [] : int
+  (let [[s r] (make-session (Send int Close))]
+    (let [reader (async (fn []
+                          (let [[n r] (recv r)]
+                            (println n)
+                            (close r))))]
+      (let [writer (async (fn []
+                            (let [s (send s 42)]
+                              (close s))))]
+        (await writer)
+        (await reader))))
+  0)

@@ -111,14 +111,15 @@ deadlock detection). `TURI_FILTER='session' bash tests/run-turi.sh` runs 57 of
 
 Two things do not follow from the row:
 
-- **A peer written with `async` runs here and deadlocks compiled.** The compiled
-  session runtime blocks an OS thread on a condvar, and compiled `async` runs the
-  fiber on that same thread, so `(async (fn [] (recv ch)))` hangs the binary with
-  the interpreter's rendezvous yields to its scheduler instead. Since
-  2026-09-17 the compiler warns at the `async` site (`TUR-W0043`, not emitted
-  under `--interpret`); write the peer with `session-spawn`. The real fix --
-  a session op as a suspension point in a compiled async body -- is still open:
-  [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md)
+- **A peer written with `async` now runs on both backends.** It used to run here
+  and deadlock compiled: the compiled session runtime blocks an OS thread on a
+  condvar, and compiled `async` ran the body on the spawner's own thread, so
+  `(async (fn [] (recv ch)))` hung the binary while the interpreter's
+  cooperative rendezvous yielded to its scheduler. Since 2026-09-17 the compiler
+  gives such a body its own OS thread and joins it at the `await`, so the shape
+  composes on both paths and the `TUR-W0043` warning that named the hang is
+  retired:
+  [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md)
 - **The interpreter detects session deadlock; the compiled binary hangs.**
   Because the rendezvous is cooperative and single-threaded, a blocked `recv`
   (or an `await` on a task) with nothing runnable is a clean `deadlocked` error

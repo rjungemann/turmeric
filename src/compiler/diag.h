@@ -146,13 +146,10 @@ typedef enum DiagCode {
      * as the special form and the definition is unreachable by its bare name.
      * See docs/archive/history/defn-shadows-return-special-form.md. */
     TUR_W0042_SHADOWS_SPECIAL_FORM,
-    /* compiled-async-fiber-deadlocks-on-a-session-op, fix direction 3: an
-     * `async` body captures a session endpoint or spells a session op.
-     * Compiled `async` runs its body on the spawning thread and a session
-     * op blocks that thread until the peer arrives, so unless the peer is
-     * on another OS thread the program hangs with no further diagnostic.
-     * Not emitted under --interpret, whose rendezvous is cooperative. */
-    TUR_W0043_SESSION_OP_IN_ASYNC,
+    /* TUR-W0043 (session op inside an async body) was retired when that shape
+     * stopped deadlocking: such a body now runs on its own OS thread and
+     * `await` joins it.  See
+     * docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md. */
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */

@@ -2,6 +2,34 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **A session op inside a compiled `async` body no longer deadlocks.**
+  `(async (fn [] (recv r)))` hung the binary forever with no diagnostic, while
+  the identical program ran correctly under `tur --interpret`: compiled `async`
+  ran its body on the spawner's stack, so the `recv` blocked on the session
+  condvar and the `send` that would satisfy it -- later in the same
+  straight-line code, on that same now-parked thread -- could never run. Such a
+  body now runs on its **own OS thread** and `await` joins it, which is the
+  compiled analog of the interpreter's cooperative `session_park_or_spin`. The
+  body is recognised by the classification `TUR-W0043` was already computing:
+  it captures a `Session`/`Role` endpoint, or spells one of `send`, `recv`,
+  `offer`, `choose-left`, `choose-right`, `recv-timeout`, `send-to`,
+  `recv-from`. Every async capture is already required to be `Send`, which is
+  exactly the obligation crossing a thread boundary needs. `session-spawn` /
+  `session-join` remains the preferred spelling for a peer that is purely a
+  peer; this is about `async` composing when you want the peer's result back.
+  See
+  [the report](https://github.com/rjungemann/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md).
+
+### Removed
+
+- **TUR-W0043 is retired.** It warned that a session op inside an `async` body
+  deadlocks the compiled program; that shape now works, so the warning, its
+  `tur explain` entry and its guide rows are gone.
+
 ## [0.49.0] -- 2026-09-16
 
 ### Added
