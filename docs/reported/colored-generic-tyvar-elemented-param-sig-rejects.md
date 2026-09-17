@@ -77,6 +77,31 @@ signature to spell the erased arm as `int64_t` on both the `__cps` entry and
 the direct wrapper, which `sig_slot_ok`'s SR2b arm already accepts once the
 app is concrete.
 
+## Scoping note, 2026-09-17
+
+Direction 1 was scoped and not started; what it needs is recorded so the
+next pass does not re-derive it:
+
+- **The elaborator cannot gate on "colored".** `cps_colored` is written by
+  `cps_color_program` (`src/passes/cps.c`), which `ensure_S` in
+  `emit_cps_ir.c` runs AFTER the emitter's ABI pre-scan has already populated
+  `ctx->abi_specializations` -- the spec set the G3b mono-template
+  classification then reads.  At the call site in `elab_call.c` only the
+  DECLARED effect row (`type.as.fn.effect_row`, from a `#fx{}` annotation) is
+  available; `FnDef.inferred_effect_row` is NULL until the P19-2 inference
+  pass runs.  So "bind `E` to the int carrier at the call site for a colored
+  callee" has no colored signal to key on at elab time.
+- **The binding is not absent, it is abstract.** `(peek (ok 1))` unifies
+  `(Result int E)` against `(Result int B)` (`ok`'s own result tyvar), so
+  `E -> B` IS collected -- as a TYVAR-typed binding, which the emitter's
+  `emit_abi_type_has_concrete_named_tyvar` reads as "route through the relay
+  path" (the carrier base).  The defaulting therefore belongs on the EMIT
+  side (`emit_abi_register_call`, where the abstract binding is recognised)
+  or after the coloring pass, not in `elab_call.c`; the Saffron `any`
+  defaulting in `elab_call.c` (D8 Q3) is dialect-keyed and does not carry
+  over.
+- The pinned-arm control is unchanged and still prints `1`.
+
 ## Workaround
 
 Pin the arm: declare the parameter at a concrete type (`(Result int cstr)`),
