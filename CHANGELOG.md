@@ -2,36 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
-
-**Next release must be a MINOR bump (`/cut-minor-release`, not
-`/cut-patch-release`):** the `else` clause head below adds language surface.
-
-### Removed
-
-- **The `#lang` layer axis is decommissioned.** `#lang` now takes a single
-  base dialect and nothing else:
-
-  ```
-  #lang <language>[/<reader>]
-  ```
-
-  Gone with it: the `LANG_LAYERS[]` registry, the `LangLayerSet` bitset that
-  rode through four compile paths, `SourceFile.lang_layers`,
-  `TuriEnv.lang_layers`, `detect_lang_layered`, `GRADUATED_LAYERS[]`, the
-  `g_manifest_experiments_scoped` global, the wasm registry's `"layers"` key,
-  and the Try Turmeric layer checkboxes. In its whole life the axis held two
-  rows and never more than one at a time. A one-off syntax convenience belongs
-  in a `#use-reader-macros` file; a semantic gate belongs in `EXPERIMENTS[]`
-  behind `--enable=`; an always-on `#`-dispatch belongs in the reader's
-  built-ins. See
-  [the plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/lang-layers-decommission-plan.md).
-
-- **`tur lang-layers` is replaced by `tur dialects`.** The listing itself
-  stays -- it is what the TUR-E0331 diagnostics point at for the valid bases,
-  and the only way to ask a build which dialects it accepts -- but it lists
-  one axis now and is named for it. `--json` emits `{"dialects": [...]}`.
-  Shell completion no longer offers `lang-layers`.
+## [0.49.0] -- 2026-09-16
 
 ### Added
 
@@ -98,29 +69,25 @@ All notable changes to Turmeric are documented here.
   ending a C statement used to read as a Lisp line comment and grey out the
   rest of the line, so the C bodies in `c-integration-guide`, `ffi-guide` and
   27 other guides rendered mostly in comment grey. 92 spans across 31 guides.
-
-### Fixed
-
-- **`#s(...)` set literals inside a file that also uses `#s"..."`.** The
-  reader's no-exact-match path asked "is there a macro with this NAME?" and
-  reported `#s(1 2 3)` as "reader string macro '#s' expects string body". It
-  was already broken inside a `#lang turmeric stringed` file -- latent because
-  almost nobody turned the layer on -- and making `#s"` unconditional would
-  have promoted it to every set literal in the language. A reserved
-  `(name, delim)` pair now rewinds to the built-in dispatch before either
-  targeted diagnostic can fire.
-
-- **A trailing `#lang` token in a manifest.** `build.tur` / `build.tur.sweet`
-  went through a detection path that only wanted the strip, so a token
-  rejected in every `.tur` file was silently tolerated in the one file that
-  configures the build. It is now the same TUR-E0330.
-- **A `---` separator in a guide is spaced evenly.** Nothing styled
-  `.guide-content hr`, so the page reset zeroed its margins and left the UA's
-  `1px inset gray` border: a 2px grey bar whose spacing came entirely from its
-  neighbours -- 32px below a heading, 0px below a paragraph, gluing the rule to
-  the entry under it. `docs/guides/bibliography.md`, which separates every
-  entry with `---`, showed it worst. The rule now carries its own symmetric
-  margin and the site's border color.
+- **A typed `session-spawn` / `session-join` pair in `stdlib/session.tur`,** one
+  peer spawn that works on both backends: a pthread over
+  `tur_session_thread_wrapper` compiled, a scheduler fiber under `--interpret`.
+  It takes a `(fn [] nil)` and hands back an opaque `SessionPeer`. All 25
+  pthread session fixtures use it, the eight `-turi` twins whose only
+  difference was the spawn are deleted, and the stdlib templates (echo, rpc,
+  pubsub) plus delegation-over-a-channel get fixtures of their own. The session
+  subset under `run-turi.sh` goes from 29 passed, 25 skipped to 57 passed, 1
+  skipped. See
+  [the plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-session-expansion-plan.md).
+- **TUR-W0043 warns on a session op inside a compiled `async` body.** Compiled
+  `async` runs its body synchronously on the spawning thread while the session
+  runtime blocks that thread until the peer arrives, so
+  `(async (fn [] (recv r)))` hung before `async` even returned its future, with
+  no diagnostic. `elab_async` now warns when the body captures a Session/Role
+  endpoint or spells a session op itself, names the endpoint, and points at
+  `session-spawn`. A warning rather than a rejection, because the peer may
+  legitimately be on another OS thread. Not emitted under `--interpret`, where
+  the cooperative rendezvous makes the shape correct.
 
 ### Changed
 
@@ -147,6 +114,98 @@ All notable changes to Turmeric are documented here.
   boundary. Drop the token -- what it turned on is now always on. At 0.50.0 it
   becomes the same TUR-E0330 any other trailing token gets, and
   `stdlib/string-reader.tur` is deleted.
+
+### Removed
+
+- **The `#lang` layer axis is decommissioned.** `#lang` now takes a single
+  base dialect and nothing else:
+
+  ```
+  #lang <language>[/<reader>]
+  ```
+
+  Gone with it: the `LANG_LAYERS[]` registry, the `LangLayerSet` bitset that
+  rode through four compile paths, `SourceFile.lang_layers`,
+  `TuriEnv.lang_layers`, `detect_lang_layered`, `GRADUATED_LAYERS[]`, the
+  `g_manifest_experiments_scoped` global, the wasm registry's `"layers"` key,
+  and the Try Turmeric layer checkboxes. In its whole life the axis held two
+  rows and never more than one at a time. A one-off syntax convenience belongs
+  in a `#use-reader-macros` file; a semantic gate belongs in `EXPERIMENTS[]`
+  behind `--enable=`; an always-on `#`-dispatch belongs in the reader's
+  built-ins. See
+  [the plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/lang-layers-decommission-plan.md).
+
+- **`tur lang-layers` is replaced by `tur dialects`.** The listing itself
+  stays -- it is what the TUR-E0331 diagnostics point at for the valid bases,
+  and the only way to ask a build which dialects it accepts -- but it lists
+  one axis now and is named for it. `--json` emits `{"dialects": [...]}`.
+  Shell completion no longer offers `lang-layers`.
+
+### Fixed
+
+- **`#s(...)` set literals inside a file that also uses `#s"..."`.** The
+  reader's no-exact-match path asked "is there a macro with this NAME?" and
+  reported `#s(1 2 3)` as "reader string macro '#s' expects string body". It
+  was already broken inside a `#lang turmeric stringed` file -- latent because
+  almost nobody turned the layer on -- and making `#s"` unconditional would
+  have promoted it to every set literal in the language. A reserved
+  `(name, delim)` pair now rewinds to the built-in dispatch before either
+  targeted diagnostic can fire.
+
+- **A trailing `#lang` token in a manifest.** `build.tur` / `build.tur.sweet`
+  went through a detection path that only wanted the strip, so a token
+  rejected in every `.tur` file was silently tolerated in the one file that
+  configures the build. It is now the same TUR-E0330.
+- **A `---` separator in a guide is spaced evenly.** Nothing styled
+  `.guide-content hr`, so the page reset zeroed its margins and left the UA's
+  `1px inset gray` border: a 2px grey bar whose spacing came entirely from its
+  neighbours -- 32px below a heading, 0px below a paragraph, gluing the rule to
+  the entry under it. `docs/guides/bibliography.md`, which separates every
+  entry with `---`, showed it worst. The rule now carries its own symmetric
+  margin and the site's border color.
+- **Session payloads are lowered by class onto the int64 rendezvous word.**
+  Floats are bit-reinterpreted rather than truncated (`7.25` arrived as `7`),
+  pointers cast through `intptr_t` so a `cstr` or a delegated endpoint no longer
+  depends on the host `cc`'s `-Wint-conversion`, and by-value structs and ADTs
+  are rejected with TUR-E0212 at elaboration instead of inside `cc`. Covers the
+  binary templates and the multi-party router on both backends.
+- **Two interpreter fiber defects.** `sleep-async`'s fiber arm returned
+  `turi_nil()` instead of the future its own contract promised, so `EX_AWAIT`
+  failed its tag check and the rest of the fiber body never ran --
+  `native_read_async` and `native_write_async` had the identical shape and are
+  fixed with it. And a `recv` timeout inside a fiber never observed its
+  deadline: the only thing that could resume the park was the peer's deposit,
+  so the deadline re-check was unreachable until the value it was meant to
+  preempt arrived. The fiber arm now arms a timer future alongside the
+  channel's waiter and disarms the loser.
+- **Four CPS backend defects, one of them a silent wrong answer.** A
+  bind-position call to a colored mono-template clone took the cps->cps tail
+  arm while the join classifier still answered only for the binding, so the
+  join was emitted inline behind a dead label and the clone's answer went to
+  the caller's continuation unchanged -- `false` where the program said `true`.
+  Alongside it: the `perform` continuation gated its tail-call arguments as
+  cps->direct unconditionally (it asks the callee now); a colored call inside a
+  `match` evicted the CPS backend for a by-value record or flat-sum scrutinee,
+  and for a by-value aggregate into a cps->direct callee; and the ABI
+  specialization scan had no arm for a `perform` argument or a `resume` value,
+  so `(perform (EO (some 5)))` implicit-declared `some`. A per-function
+  deferred-drop table closes the orphaned drop that made a colored frame leak.
+- **`perform` finishes typechecking its arguments.** 0.48.0 covered the
+  primitives; the aggregate and pointer-shaped parameter families are checked
+  the same way now -- one ordinary-call verdict per shape, measured and made
+  into a table. `Point <- Other` used to compile and read `Other`'s field as
+  `.x`; it, `ptr<void> <- "hi"`, `cstr <- nil`, `(Option int) <- (some "x")`
+  and the rest are TUR-E0001. A `ptr<void>` parameter still admits a fn value,
+  nil and any pointer, as a call does, and an `int` parameter still admits an
+  aggregate (the carrier word).
+- **Six more reports, each pinned by a fixture.** A class default whose result
+  is the class variable was spliced into the instance and elaborated at the
+  int64 carrier (a silent wrong answer); the interpreter's dispatch gates never
+  fired for a receiver that is itself a class-method call, so it picked the
+  first instance; `set-add` hashed against the `Hash[int]` representative
+  instead of the element's own instance; a `defopaque` over `:cstr` or `:Sym`
+  skipped the pointer bridge; a by-value struct parameter in an `if` arm
+  dereferenced; and a `float32` block temp widened to double.
 
 ## [0.48.0] -- 2026-09-15
 

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.48.0` -- Makes `perform` typecheck its arguments and arity like an ordinary call (a breaking change; annotate the parameter), fixes the five Saffron defects found writing the new "Introducing Saffron" tour guide, and makes `__tur_any_drop` deep so nested `any` payloads stop leaking.
+**Latest release:** `v0.49.0` -- Decommissions the `#lang` layer axis so `#lang` takes one base dialect and nothing else, adds typeclass superclasses behind `--enable=class-superclasses`, makes `#s"..."` and a bare `else` clause head always available, and gives sessions one typed peer spawn that works on both backends.
 
 ## What
 
