@@ -2,6 +2,80 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.49.1] -- 2026-09-17
+
+### Changed
+
+- **Try Turmeric's Run button runs the program in the editor.** It used to
+  evaluate the buffer into a session that still held the previous run, so
+  pressing Run twice asked the session to redefine everything, and a name you
+  had deleted still resolved. Run now rewinds the session to the preloaded
+  stdlib, silently replays the last successful Run of every other tab in the
+  same `#lang` dialect, then runs the buffer. Definitions typed at the prompt
+  last until the next Run. Re-elaborating the preload measured 11-24 ms per
+  Run in desktop Chrome.
+- **A later REPL or playground turn can redefine any `def*` form.** `defn`,
+  `defclass`, `defopaque` and `defdata` already accepted this; `def`/`define`,
+  `defstruct`, `defeffect`, `definstance`, `defmacro` and `defmacro*` refused
+  it. That is why the shipped effects example failed on its second Run with
+  `defeffect: 'Ask' is already defined`. A definition from an earlier turn is
+  now replaced. Still refused, each with a clear message: a duplicate within a
+  single turn, redefining a stdlib type or stdlib instance, and the builtin
+  `Unsafe`. Compiled programs never continue a session and are unaffected.
+
+### Fixed
+
+- **A failed turn no longer breaks the rest of the session.** After any error,
+  the next turn rebuilt the session as one whole program and labeled your
+  earlier turns as auto-loaded stdlib. Re-running a program then failed with
+  `'main' is already defined by an auto-loaded stdlib module`, and the session
+  never recovered. In Try Turmeric, a single doc-panel lookup was enough to
+  trigger this. Now the session is rebuilt by replaying your successful turns
+  one at a time. Separately, a failed turn after a `defmacro*` used to abort
+  the process with `tur: too many source files`, which in the playground left
+  a dead eval worker. That abort is gone.
+- **The doc panel, `tur doc` and `(doc ...)` read the docstring table
+  directly.** The playground's doc panel answered a lookup by evaluating
+  `(doc-lookup "name")` in your session. That function was never defined
+  there, so every stdlib lookup failed and each failure broke the session.
+  `(doc ...)` was also broken everywhere: it did not type-check. All three now
+  share one C reader (`src/turi/docstrings.c`). The interpreter gains
+  `doc-lookup` and `doc-print` natives, and the compile-time `symbol-name`
+  builtin now accepts a quoted symbol, with a new `string?` builtin alongside
+  it.
+- **`await` and `gen-unwrap` return values at their declared type.** A float
+  printed its raw bits (arm64) or a stack address (x86-64), a string printed
+  its pointer address, a bool printed as `1`, and a yielded `7.25` came back
+  as `7`. `await` now reads the future at the type its thunk declares, and a
+  non-int payload is spawned through a wrapper with the thunk's real C
+  signature. `gen-unwrap` is now a core form typed by the generator's element
+  type. Also, every generator in the interpreter used to trip UBSan on a
+  misaligned allocation; that is fixed too.
+- **A typed `fmap` on a mixed-type `(Result int cstr)` or `(Either int cstr)`
+  printed the `cstr` value's address.** The result type is now worked out
+  correctly for this path. The same fix removes a 32-byte-per-call leak when a
+  carrier-bodied instance such as `Functor [(Either E)]` passes its closure to
+  a `^fat` helper: the box now lives on the stack when the helper provably
+  does not keep it.
+- **Four emitted-C errors, found while building the `plot` and `nng` spices.**
+  The first two are warnings under gcc but hard errors under macOS
+  AppleClang; the last two fail with every C compiler.
+  - `(:: (f) :int)` over a function returning a pointer, in tail position of a
+    CPS body.
+  - A `let` binding an `int` word through `(:: words (Vec int))`.
+  - A `let` binding a carrier-returning producer inside a self-tail-recursive
+    function. This rejected the obvious way to write a retry/poll loop.
+  - `(Result nil E)` and `(Option nil)` emitted a `void` struct field. They
+    now work as "success, no payload", the natural return type of a setter.
+
+### Docs
+
+- **Sweet-exp versions of s-expression examples in about 20 more guides.**
+  Guides that gain them include binding forms, currying, ownership, effects,
+  typeclasses, error handling, GADTs and logic programming. Nine guides also
+  gain the front matter (title, category, description) the site index uses,
+  and rendered docs show `- [ ]` / `- [x]` task lists as checkboxes.
+
 ## [0.49.0] -- 2026-09-16
 
 ### Added

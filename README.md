@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.49.0` -- Decommissions the `#lang` layer axis so `#lang` takes one base dialect and nothing else, adds typeclass superclasses behind `--enable=class-superclasses`, makes `#s"..."` and a bare `else` clause head always available, and gives sessions one typed peer spawn that works on both backends.
+**Latest release:** `v0.49.1` -- Makes Try Turmeric's Run button run exactly the program in the editor, lets a REPL or playground session survive a failed turn and redefine any `def*` form, and fixes `await`/`gen-unwrap` returning floats, strings and bools at the wrong type.
 
 ## What
 
