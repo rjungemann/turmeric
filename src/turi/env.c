@@ -370,6 +370,10 @@ void turi_env_free(TuriEnv *env) {
     env->acc_forms     = NULL;
     env->n_acc_forms   = 0;
     env->cap_acc_forms = 0;
+    free(env->acc_turns);   /* PS1 */
+    env->acc_turns     = NULL;
+    env->n_acc_turns   = 0;
+    env->cap_acc_turns = 0;
 
     /* Free global bindings */
     EnvBinding *b = env->globals;
@@ -424,8 +428,10 @@ void turi_env_reset(TuriEnv *env) {
     env->pin_prog_items   = 0;
     env->pin_acc_forms    = 0;
     env->pin_next_line    = 0;
+    env->pin_acc_turns    = 0;
     env->prior_toplevel   = 0;
     env->prior_prog_items = 0;
+    env->n_acc_turns      = 0;
 
     /* Rebuild the globals list, keeping only native-closure bindings (the
      * builtins from turi_env_new plus the embedder's natives); free every
@@ -561,6 +567,7 @@ void turi_env_pin_prelude(TuriEnv *env) {
     env->pin_prog_items  = env->prior_prog_items;
     env->pin_acc_forms   = env->n_acc_forms;
     env->pin_next_line   = env->acc_next_line;
+    env->pin_acc_turns   = env->n_acc_turns;
 }
 
 void turi_env_reset_to_prelude(TuriEnv *env) {
@@ -578,6 +585,7 @@ void turi_env_reset_to_prelude(TuriEnv *env) {
         env->prior_prog_items = 0;
         env->n_acc_forms      = 0;
         env->acc_next_line    = 0;
+        env->n_acc_turns      = 0;
     } else {
         /* Rewind to the pin.  The counters come back too, so the prelude is
          * marked already-run: its definitions are still bound in env->globals
@@ -587,13 +595,14 @@ void turi_env_reset_to_prelude(TuriEnv *env) {
         env->prior_prog_items = env->pin_prog_items;
         env->n_acc_forms      = env->pin_acc_forms;
         env->acc_next_line    = env->pin_next_line;
+        env->n_acc_turns      = env->pin_acc_turns;
     }
 
     /* TR2: the elaboration session was built from forms read under the OLD
      * reader; drop it either way.  It is rebuilt by replaying the retained
-     * accumulated forms, which for the pinned region is a re-elaboration, not a
-     * re-evaluation -- prior_prog_items above is what keeps the program items
-     * from running a second time. */
+     * turns (PS1: acc_turns), which for the pinned region is a re-elaboration,
+     * not a re-evaluation -- prior_prog_items above is what keeps the program
+     * items from running a second time. */
     if (env->elab_session) {
         elab_session_free(env->elab_session);
         env->elab_session       = NULL;

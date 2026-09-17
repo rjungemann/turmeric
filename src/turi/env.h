@@ -73,6 +73,14 @@ typedef struct ArenaNode {
     struct ArenaNode *next;
 } ArenaNode;
 
+/* PS1: one committed turn of an env's accumulated forms (TuriEnv.acc_turns). */
+typedef struct TuriAccTurn {
+    uint32_t end_form;        /* n_acc_forms once this turn committed */
+    bool     stdlib_preload;  /* g_turi_stdlib_preload during the turn -- it
+                               * marks typeclasses stdlib-owned, so a replay
+                               * must elaborate under the same value */
+} TuriAccTurn;
+
 /* turi-value-pool-residual-sites: a coroutine execution stack (fiber/generator).
  * These back a ucontext_t, so they must be mmap'd (native) / malloc'd (WASM) at
  * a stable address rather than bump-allocated from the value pool. Each one is
@@ -241,10 +249,23 @@ typedef struct TuriEnv {
      * them -- the O(N^2) retained-elaboration term. `elab_session_forms` is how
      * many accumulated forms the session has already absorbed, so a turn hands
      * the elaborator only acc_forms[elab_session_forms .. n_acc_forms).
-     * Discarded (and rebuilt by replaying all accumulated forms) after any
-     * failed elaboration, since a partial program may have entered its scope. */
+     * Discarded after any failed turn, since a partial program may have entered
+     * its scope, and rebuilt on the next turn by replaying acc_turns below. */
     struct Elab  *elab_session;
     uint32_t      elab_session_forms;
+    /* PS1 (playground-session-hygiene-plan): where each committed turn ENDS in
+     * acc_forms, so a discarded session is rebuilt turn by turn -- the same
+     * sequence of elaborate calls the session was originally built from, minus
+     * the failed turn.  Without this the rebuild elaborated the whole
+     * accumulated program in one call with stdlib_prefix = prior_toplevel,
+     * which marks the user's own earlier turns as stdlib: re-running a program
+     * after ANY failed turn then failed forever with "'main' is already
+     * defined by an auto-loaded stdlib module".  Committed alongside src_acc;
+     * pinned and reset alongside acc_forms. */
+    struct TuriAccTurn *acc_turns;
+    uint32_t      n_acc_turns;
+    uint32_t      cap_acc_turns;
+    uint32_t      pin_acc_turns;  /* n_acc_turns at pin time */
     ArenaNode  *eval_arenas;     /* Linked list of per-call arenas (never freed) */
     /* turi-env-owned-value-arena-pool-plan: dedicated pools for TuriValue heap
      * payloads (closures, structs, captured frames/bindings, cons cells, ...),

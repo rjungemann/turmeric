@@ -813,6 +813,26 @@ set_target_properties(tur_lang_switch_prelude PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# PS1 (playground-session-hygiene-plan): a failed turn must not leave the
+# session unable to re-run a program (the discarded elaboration session is
+# rebuilt by replaying the committed turns).
+# ---------------------------------------------------------------------------
+add_executable(tur_session_failure_recovery ${CMAKE_SOURCE_DIR}/tests/turi/session-failure-recovery.c)
+target_include_directories(tur_session_failure_recovery PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_session_failure_recovery PRIVATE libturi)
+target_compile_options(tur_session_failure_recovery PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_session_failure_recovery PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_session_failure_recovery PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # macro-system-direction-plan Stage 1: the macro-time interpreter env.
 # Nested turi evaluation inside a (simulated) compile must never leave
 # g_interpret_mode flipped; capabilities are denied and fuel is bounded.

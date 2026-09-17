@@ -1258,6 +1258,16 @@ add_test(
 set_tests_properties(tur_lang_switch_prelude PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
+# PS1 (playground-session-hygiene-plan): after a failed turn, re-running a
+# program must work and must not be blamed on an auto-loaded stdlib module.
+add_test(
+  NAME tur_session_failure_recovery
+  COMMAND "${CMAKE_BINARY_DIR}/tur_session_failure_recovery"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_session_failure_recovery PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # macro-system-direction-plan Stage 1: nested macro-time turi env inside a
 # compile-posture process -- g_interpret_mode bracketing, TURI_CAP_NONE,
 # fuel bound, session-owned teardown.
@@ -1593,7 +1603,8 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_stm tur_env_teardown tur_env_longlived tur_embed_peripherals
                      tur_collections_embed tur_stdlib_natives_embed
                      tur_reader_macro_cross_eval tur_incremental_elab_diff
-                     tur_lang_switch_prelude tur_show_collection_elems
+                     tur_lang_switch_prelude tur_session_failure_recovery
+                     tur_show_collection_elems
                      tur_macro_env_nested
                      tur_gc_runtime_copy_parity tur_cc_warn_ratchet
                      tur_experiments_user_config_e2e
