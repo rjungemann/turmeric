@@ -12,3 +12,25 @@
     (println written))
   (let [data (await (read-async rfd 5))]
     (println data)))
+
+;; Fiber-context round-trip.  The main-context calls above never exercise the
+;; fiber arms of read-async / write-async: those park on the scheduler and used
+;; to hand back the bare value instead of the Future they declare, so an
+;; `await` around them failed its future-tag check, rejected the enclosing
+;; fiber, and silently dropped the rest of its body -- the same defect as
+;; awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body, in its two
+;; unfixed siblings.
+;;
+;; The reader is spawned FIRST and the sleep lets it park on an empty pipe, so
+;; the read genuinely blocks and takes the fiber arm rather than the
+;; data-already-available fast path.  The trailing "fiber-done" is the part
+;; that vanished when the arm was wrong.
+(let [rfd (async-pipe-rfd)
+      wfd (async-pipe-wfd)]
+  (let [reader (async (fn []
+                        (let [got (await (read-async rfd 5))]
+                          (println got))
+                        (println "fiber-done")))]
+    (await (sleep-async 40))
+    (await (write-async wfd "world"))
+    (await reader)))

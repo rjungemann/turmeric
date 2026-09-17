@@ -792,8 +792,14 @@ static TuriValue native_read_async(TuriEnv *env, TuriValue *args, uint32_t n,
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
-        /* Resumed: I/O completed, result is in f->result */
-        return f->result;
+        /* Resumed: I/O completed and `f` is settled.  Hand back the FUTURE, as
+         * the main-context arm below already does -- same reason as
+         * native_sleep_async above: this native's contract is `-> Future` in
+         * both contexts, and returning the bare value made `(await (read-async
+         * fd n))` inside a fiber fail EX_AWAIT's future-tag check, which
+         * rejects the enclosing fiber's own future and silently drops the rest
+         * of its body.  Awaiting an already-settled future is free, so the bare
+         * spelling still blocks here and returns immediately. */
     }
     return turi_future_val(f);
 }
@@ -843,7 +849,7 @@ static TuriValue native_write_async(TuriEnv *env, TuriValue *args, uint32_t n,
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
-        return f->result;
+        /* Resumed: `f` is settled.  Return the FUTURE -- see native_read_async. */
     }
     return turi_future_val(f);
 }

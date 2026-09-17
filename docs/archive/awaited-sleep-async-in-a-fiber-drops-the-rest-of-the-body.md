@@ -5,6 +5,19 @@
 > `tests/fixtures/async-await-sleep-in-fiber-turi`;
 > `session-timeout-expired-turi` now uses a bare `sleep-async` and tests the
 > deadline for real.
+>
+> **Follow-up 2026-09-17: the generalisation this report asked about is real,
+> and is now closed too.** It wondered "whether other `await`-on-a-non-future
+> shapes have the same effect (a plausible generalisation -- this need not be
+> sleep-specific)". They do: `native_read_async` and `native_write_async` have
+> the identical shape -- each declares `-> Future`, each returned `f->result`
+> from its fiber arm -- so `(await (read-async fd n))` inside a fiber failed
+> EX_AWAIT's tag check exactly as the awaited sleep did, and dropped the rest
+> of the body just as silently. Both now return the future in both contexts.
+> They were not caught with the sleep because no fixture reached them: the
+> shipped `read-async`/`write-async` coverage (`tests/turi/eval-async-io.tur`)
+> ran entirely in the MAIN context, where the future was already returned.
+> That test now carries a fiber round-trip as well.
 
 # `(await (sleep-async n))` inside an interpreter fiber silently drops the rest of the fiber body
 
