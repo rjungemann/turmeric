@@ -1984,6 +1984,12 @@ most consequential finding of either pass.
 | --- | --- | --- |
 | [compiled-async-fiber-deadlocks-on-a-session-op](compiled-async-fiber-deadlocks-on-a-session-op.md) | medium | `(async (fn [] (recv ch)))` **hangs the compiled binary** while the identical program runs under `--interpret`: compiled `async` runs its body synchronously on the spawner's stack and the session runtime blocks that thread on a condvar. Since 2026-09-17 it is no longer silent -- `TUR-W0043` warns at the `async` site and points at `session-spawn` / `session-join` (`stdlib/session.tur`, landed 2026-09-16), which is the working spelling on both backends. What remains is the real fix: making a session op an `await`-shaped suspension point in a compiled async body, scoped in the report as a plan-sized change |
 
+## Found fixing turmeric-spices `plot (macos-latest)` (filed 2026-09-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [let-bound-erasing-ascription-int-to-pointer](let-bound-erasing-ascription-int-to-pointer.md) | medium | The direct emitter inits a `let` binder from an erasing ascription `(:: w (Vec int))` as `tur_adt_Vec__int * v = words;` with no `intptr_t` bridge -- a hard `-Wint-conversion` error on macOS clang, a warning on Linux gcc. The same ascription in call-argument position is cast correctly. Sibling of the CPS inline-join straddle fixed alongside it (`cty_word_straddle` in `emit_cps_ir.c`) |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
