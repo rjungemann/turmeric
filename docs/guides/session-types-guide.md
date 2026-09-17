@@ -265,9 +265,12 @@ somewhere else. `stdlib/session.tur` provides the portable way to do that:
 every example below uses this pair.
 
 > Do not write the peer as `(async (fn [] ...))` in a program you will compile.
-> The compiled session runtime blocks an OS thread and compiled `async` runs on
-> that same thread, so a session op inside `async` **deadlocks the binary with
-> no diagnostic** (it runs correctly under `--interpret`). See
+> Compiled `async` runs its body on the spawning thread and the session runtime
+> blocks that thread until the peer arrives, so a session op inside `async`
+> **deadlocks the binary** (it runs correctly under `--interpret`). The
+> compiler warns at the `async` site with `TUR-W0043` when the body captures a
+> session endpoint or spells a session op; the warning is a heuristic, so a
+> body whose peer really is on another OS thread works and still warns. See
 > [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md).
 
 ## Multi-Party Session Types (SS5-SS8)
@@ -490,6 +493,7 @@ through `await`).
 | `TUR-E0221` | Role not declared in the protocol |
 | `TUR-E0222` | Role implementation does not match the projected local type |
 | `TUR-E0223` | Global protocol not well-formed (undeclared role used) |
+| `TUR-W0043` | Session op inside an `async` body: deadlocks the compiled program unless the peer is on another OS thread; use `session-spawn` |
 
 ---
 

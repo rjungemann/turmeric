@@ -409,11 +409,17 @@ TuriValue turi_await_future(TuriEnv *env, TuriFuture *f) {
          * detection the session recv path does (turi-session-expansion S6).
          * Natives never resolve a future from another thread, so there is no
          * outside wake source to wait for. */
-        if (!env->timers_head && env->io_pending_count == 0)
+        /* Re-test the future: the fire_timers at the top of this iteration
+         * may just have settled it (e.g. `(await (sleep-async n))` in the
+         * main context), in which case an empty timer list is the normal
+         * exit, not a deadlock. */
+        if (f->state == TURI_FUTURE_PENDING && !env->timers_head &&
+            env->io_pending_count == 0) {
             return turi_error("eval: await deadlocked: the awaited task is parked "
                               "and nothing else is runnable -- no participant can "
                               "make progress; this is a deadlock in the program "
                               "(the compiled binary would hang here)");
+        }
 
         /* No ready fibers — wait for timers or I/O. */
         uint64_t now = turi_now_ms();

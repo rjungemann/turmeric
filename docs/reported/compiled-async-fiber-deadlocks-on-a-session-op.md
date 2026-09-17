@@ -9,17 +9,40 @@ correctly under `tur --interpret`.
 This is a parity gap in the direction nobody looks for: the tree-walking
 interpreter is the **more** capable backend here.
 
-## Status (2026-09-16)
+## Status (2026-09-17)
 
-Fix direction 2 landed with turi-session-expansion-plan S2:
-`session-spawn` / `session-join` in `stdlib/session.tur` (typed `(fn [] nil)`
-in, an opaque `SessionPeer` out; a pthread compiled, a scheduler fiber under
-`--interpret` via a native override). Every session fixture and every guide
-example now uses it, the hand-rolled `ptr<void>` spawn is gone, the `-turi`
-twins are deleted, and 57 of 58 session fixtures run under `run-turi.sh`.
-**Still open:** directions 1 and 3 -- user code that writes `(async (fn []
-(recv ch)))` directly still compiles clean and hangs. The floor is a
-diagnostic for a session op lexically inside a compiled `async` body.
+Two of the three fix directions have landed; the hang itself remains.
+
+- **Direction 2 (2026-09-16, turi-session-expansion-plan S2):** `session-spawn`
+  / `session-join` in `stdlib/session.tur` (typed `(fn [] nil)` in, an opaque
+  `SessionPeer` out; a pthread compiled, a scheduler fiber under `--interpret`
+  via a native override). Every session fixture and every guide example uses
+  it, the hand-rolled `ptr<void>` spawn is gone, the `-turi` twins are deleted,
+  and 57 of 58 session fixtures run under `run-turi.sh`.
+- **Direction 3 (2026-09-17):** `TUR-W0043` warns at every `(async ...)` whose
+  body captures a `Session`/`Role` endpoint (the op may be inside a callee, as
+  in `(async (fn [] (server-loop r)))`) or spells a session op itself. The
+  message names the endpoint and points at `session-spawn`; `tur explain
+  TUR-W0043` has the long form. It is not emitted under `--interpret`, where
+  the shape is correct. It is a warning, not a rejection, because the peer may
+  legitimately be on another OS thread (a `session-spawn` peer), in which case
+  the program works and still warns -- `tests/fixtures/session-async-warn` pins
+  exactly that shape. Implemented in `elab_async` (`src/compiler/elab_concurrent.c`).
+- **Direction 1 -- still open, and larger than the report first suggested.**
+  The compiled `async` is not a fiber that could yield: `tur_async_fiber` /
+  `tur_async_fiber_closure` (`emit_module.c`) run the body **synchronously on
+  the spawner's stack** and only park when a CPS-lowered `await` inside it hits
+  a pending future (`__tur_await_body`, a DK shift). So `(async (fn [] (recv
+  r)))` blocks inside the `async` call itself, before it returns a future --
+  the `send` that would satisfy it is not merely on the same thread, it is
+  later in the same straight-line code. Making sessions compose with compiled
+  `async` therefore means making each session op an `await`-shaped suspension
+  point: elaborate `recv`/`offer`/`recv-from` (and a `send` whose peer has not
+  arrived) inside an async body into a shift on a channel-backed future that
+  the peer's op fulfills, with the CPS colouring that implies for every
+  function on the path. That is a plan, not a fix, and it should be weighed
+  against the fact that `session-spawn` already gives one working spelling on
+  both backends.
 
 ## Repro
 

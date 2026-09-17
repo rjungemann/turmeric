@@ -47,6 +47,32 @@ Expr *elab_thread_spawn(Elab *e, const Form *call) {
     return closure_expr;
 }
 
+/* compiled-async-fiber-deadlocks-on-a-session-op (fix direction 3): true if
+ * the (unelaborated) form spells a session op anywhere inside it.  Macros
+ * and callee bodies are opaque to this walk; the captured-endpoint check in
+ * elab_async covers the callee case. */
+static bool form_mentions_session_op(const Elab *e, const Form *f) {
+    if (!f) return false;
+    switch (f->tag) {
+        case F_LIST: case F_VEC: case F_MAP: case F_SET: {
+            if (f->tag == F_LIST && f->as.list.len > 0 && f->as.list.items[0]
+                    && f->as.list.items[0]->tag == F_SYM) {
+                const Symbol *h = f->as.list.items[0]->as.sym;
+                if (h == e->sym_send || h == e->sym_recv || h == e->sym_offer
+                        || h == e->sym_choose_left || h == e->sym_choose_right
+                        || h == e->sym_recv_timeout || h == e->sym_send_to
+                        || h == e->sym_recv_from)
+                    return true;
+            }
+            for (uint32_t i = 0; i < f->as.list.len; i++)
+                if (form_mentions_session_op(e, f->as.list.items[i])) return true;
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
 /* Phase T21-F: (async fn-expr) — launch fn-expr (no-arg function) in a new
  * thread; return a TurAsyncTask* as ptr<void> (the future handle).          */
 Expr *elab_async(Elab *e, const Form *call) {
@@ -91,43 +117,85 @@ Expr *elab_async(Elab *e, const Form *call) {
      * Values captured in async blocks must be Send (can be moved to fiber context).
      * T25: Also check that no effect-handler continuation (k) escapes into an async
      * block, which would cause a resume-on-wrong-fiber runtime error. */
-    if (fn_expr->kind == EX_FN || fn_expr->kind == EX_CLOSURE) {
-        const struct Closure *cl = NULL;
-        if (fn_expr->kind == EX_CLOSURE) {
-            cl = fn_expr->as.closure_.closure;
-        } else if (fn_expr->kind == EX_FN) {
-            cl = fn_expr->as.fn_.fn->closure;
+    const struct Closure *cl = NULL;
+    if (fn_expr->kind == EX_CLOSURE) {
+        cl = fn_expr->as.closure_.closure;
+    } else if (fn_expr->kind == EX_FN) {
+        cl = fn_expr->as.fn_.fn->closure;
+    }
+    if (cl) {
+        bool had_error = false;
+        for (uint8_t i = 0; i < cl->n_captures; i++) {
+            Binding *cap = cl->captures[i];
+            if (!type_is_send(cap->type)) {
+                diag_emit_with_code(DIAG_ERROR, call->span,
+                    TUR_E0010_NOT_SEND,
+                    "type `%s` cannot be sent across thread boundaries "
+                    "(not `Send`); captured variable `%s` in async block",
+                    type_name(cap->type), cap->name->name);
+                had_error = true;
+            }
+            /* T25: Prevent continuation escape into async scope.
+             * A handler continuation k cannot be captured by an async block because
+             * the continuation is bound to the fiber where perform was called; resuming
+             * it from a different fiber produces a runtime error. Catching this at
+             * compile time is safer. */
+            if (cap->is_continuation) {
+                diag_emit_with_code(DIAG_ERROR, call->span,
+                    TUR_E0017_CONT_ESCAPE_ASYNC,
+                    "effect handler continuation `%s` cannot be captured by an async block; "
+                    "resuming it from a different fiber would cause a runtime error",
+                    cap->name->name);
+                had_error = true;
+            }
         }
+        if (had_error) return NULL;
+    }
+
+    /* compiled-async-fiber-deadlocks-on-a-session-op (fix direction 3): a
+     * session op inside a compiled async body blocks the spawning thread on
+     * the session runtime's condvar, and nothing on that thread can then run
+     * the peer, so the program hangs with no further diagnostic.  Warn when
+     * the body captures a session endpoint (the op may be inside a callee,
+     * e.g. `(async (fn [] (server-loop r)))`) or spells a session op itself
+     * (both endpoints made inside the body).  Under --interpret the rendezvous
+     * is cooperative and the shape is correct, so no warning there.  The peer
+     * may legitimately be on another OS thread (a session-spawn peer), so this
+     * is a warning, not a rejection. */
+    if (!g_interpret_mode) {
+        const char *cap_name = NULL;
         if (cl) {
-            bool had_error = false;
             for (uint8_t i = 0; i < cl->n_captures; i++) {
                 Binding *cap = cl->captures[i];
-                if (!type_is_send(cap->type)) {
-                    diag_emit_with_code(DIAG_ERROR, call->span,
-                        TUR_E0010_NOT_SEND,
-                        "type `%s` cannot be sent across thread boundaries "
-                        "(not `Send`); captured variable `%s` in async block",
-                        type_name(cap->type), cap->name->name);
-                    had_error = true;
-                }
-                /* T25: Prevent continuation escape into async scope.
-                 * A handler continuation k cannot be captured by an async block because
-                 * the continuation is bound to the fiber where perform was called; resuming
-                 * it from a different fiber produces a runtime error. Catching this at
-                 * compile time is safer. */
-                if (cap->is_continuation) {
-                    diag_emit_with_code(DIAG_ERROR, call->span,
-                        TUR_E0017_CONT_ESCAPE_ASYNC,
-                        "effect handler continuation `%s` cannot be captured by an async block; "
-                        "resuming it from a different fiber would cause a runtime error",
-                        cap->name->name);
-                    had_error = true;
+                if (cap->type.kind == TY_SESSION || cap->type.kind == TY_ROLE) {
+                    cap_name = cap->name->name;
+                    break;
                 }
             }
-            if (had_error) return NULL;
+        }
+        bool lexical = !cap_name && form_mentions_session_op(e, call->as.list.items[1]);
+        if (cap_name || lexical) {
+            if (cap_name)
+                diag_emit_with_code(DIAG_WARNING, call->span,
+                    TUR_W0043_SESSION_OP_IN_ASYNC,
+                    "async body captures the session endpoint `%s`: compiled "
+                    "`async` runs on the spawning thread and a session op blocks "
+                    "that thread until the peer arrives -- unless the peer runs on "
+                    "another OS thread this deadlocks with no further diagnostic "
+                    "(it runs under --interpret); run the peer with session-spawn "
+                    "from stdlib/session.tur instead", cap_name);
+            else
+                diag_emit_with_code(DIAG_WARNING, call->span,
+                    TUR_W0043_SESSION_OP_IN_ASYNC,
+                    "async body performs a session op: compiled `async` runs on "
+                    "the spawning thread and a session op blocks that thread until "
+                    "the peer arrives -- unless the peer runs on another OS thread "
+                    "this deadlocks with no further diagnostic (it runs under "
+                    "--interpret); run the peer with session-spawn from "
+                    "stdlib/session.tur instead");
         }
     }
-    
+
     Expr *out = expr_new(e->arena, EX_ASYNC, TYPE_PTR_VOID, call->span);
     out->as.async_.fn_expr = fn_expr;
     return out;
