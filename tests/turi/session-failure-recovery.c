@@ -198,6 +198,24 @@ int main(void) {
 
     recovered_matches_healthy();
 
+    /* A session that has created its macro-time env (the first defmacro*)
+     * frees that env when a failed turn discards the session.  The env's own
+     * source files used to stay in the diagnostic file registry, so the rebuild
+     * after the failure re-registered freed SourceFiles and aborted the whole
+     * process with "too many source files" -- in the playground, a dead worker.
+     * Reaching the checks after the failing turn is most of this test. */
+    {
+        TuriEnv *env = new_session();
+        check_ok("defmacro*: define", turi_eval(env, "(defmacro* ident [x] x)"));
+        check_int("defmacro*: use", 1, turi_eval(env, "(ident 1)"));
+        check_error("defmacro*: failing turn", turi_eval(env, "(undefined-thing 1)"));
+        check_int("defmacro*: turn after the failure", 2, turi_eval(env, "2"));
+        check_int("defmacro*: still expands", 7, turi_eval(env, "(ident 7)"));
+        check_ok("defmacro*: a second one", turi_eval(env, "(defmacro* ident2 [x] x)"));
+        check_int("defmacro*: which expands", 8, turi_eval(env, "(ident2 8)"));
+        turi_env_free(env);
+    }
+
     if (stdlib_blame) {
         fprintf(stderr, "FAIL: %d diagnostic(s) blamed an auto-loaded stdlib module\n",
                 stdlib_blame);

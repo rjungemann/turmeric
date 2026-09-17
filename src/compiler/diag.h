@@ -691,6 +691,11 @@ void diag_reset(void);
  * See docs/archive/incremental-elab-loses-span-file-provenance.md. */
 size_t diag_files_save(const SourceFile **out, size_t cap);
 void   diag_files_restore(const SourceFile **in, size_t n);
+/* Put the registry back EXACTLY as `diag_files_save` found it: every slot the
+ * snapshot does not hold is cleared, not kept.  For a nested evaluation whose
+ * own files live in arenas that can be freed before the next save -- the
+ * macro-time env (src/turi/macro_env.c) -- so they cannot outlive it. */
+void   diag_files_replace(const SourceFile **in, size_t n);
 /* Slots the registry can hold, so callers can size their snapshot buffer. */
 size_t diag_files_capacity(void);
 

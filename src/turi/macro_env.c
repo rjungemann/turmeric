@@ -70,8 +70,14 @@ static void macro_env_bracket_enter(MacroEnvBracket *b) {
 }
 
 static void macro_env_bracket_exit(MacroEnvBracket *b, Elab *e) {
-    for (size_t i = 0; i < b->n_saved; i++)
-        if (b->saved_files[i]) diag_register_file(b->saved_files[i]);
+    /* Replace, do not merge.  The nested evaluations registered the macro
+     * env's own files (its stdlib preload, a defmacro* body's source), which
+     * live in the macro env's eval arenas.  Merging back left them in the
+     * registry, every later turn's save/restore carried them forward, and once
+     * the macro env was freed with its session -- which a failed REPL turn
+     * does -- the next bracket re-registered freed SourceFiles and aborted
+     * with "too many source files" on their garbage file_id. */
+    diag_files_replace(b->saved_files, b->n_saved);
     if (b->saved_had) diag_force_had_error();
     g_dump_expansion = b->saved_dump;
     /* A bare session (e.g. the ctest) has no symtab yet; its next
