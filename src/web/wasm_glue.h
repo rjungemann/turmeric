@@ -22,6 +22,12 @@ int turi_wasm_init(void);
  * This clears all definitions and returns to a clean slate. */
 void turi_wasm_reset(void);
 
+/* Rewind the session to the preloaded stdlib, keeping the env: everything a
+ * Run or prompt line defined is forgotten -- source, elaboration session, and
+ * runtime bindings -- and the stdlib is not reloaded.  What the Run button does
+ * before running the editor's program (playground-session-hygiene-plan PS5). */
+void turi_wasm_rewind_to_prelude(void);
+
 /* Shutdown the Turmeric WASM runtime.
  * Frees all resources. Call turi_wasm_init() again to restart. */
 void turi_wasm_shutdown(void);

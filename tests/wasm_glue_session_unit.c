@@ -12,6 +12,8 @@
  *     builtin docs, miss cleanly, and leave Run working however many times it
  *     is called.
  *   - PS3: `(doc ...)` at the prompt, in each spelling, evaluates cleanly.
+ *   - PS5: turi_wasm_rewind_to_prelude, which Run calls first, forgets what
+ *     turns defined -- at runtime too -- and keeps the stdlib and its natives.
  *
  * Nothing in wasm_glue.c is wasm-specific, so linking libturi_wasm runs the
  * real entry points.  Runs from the source root, where stdlib/ lives (the
@@ -76,6 +78,21 @@ int main(void) {
     CHECK(eval_contains("(doc \"vec-map\")", "nil"), "(doc \"name\") evaluates");
     CHECK(eval_contains("(doc no-such-name-anywhere)", "nil"), "(doc unknown) evaluates");
     CHECK(run_main("(defn main [] : int 4)", "4"), "Run after (doc ...) still works");
+
+    /* ---- PS5: rewinding to the prelude (what Run does first) --------------- */
+    CHECK(eval_contains("(defn gone [] : int 11)", "#<fn gone>"), "define before the rewind");
+    CHECK(eval_contains("(gone)", "11"), "and call it");
+    CHECK(eval_contains("(defn map-count [m : int] : int 999)", "#<fn map-count>"),
+          "reassign a prelude name");
+    turi_wasm_rewind_to_prelude();
+    CHECK(eval_contains("(gone)", "gone"), "a definition from before the rewind no longer resolves");
+    CHECK(eval_contains("(map-count #map{:a 1 :b 2})", "2"),
+          "a prelude name a turn reassigned has its prelude value back");
+    CHECK(eval_contains("(when true 5)", "5"), "prelude macros survive");
+    CHECK(eval_contains("(doc \"vec-map\")", "nil"), "native overrides survive");
+    CHECK(run_main("(defn main [] : int 5)", "5"), "Run after a rewind");
+    turi_wasm_rewind_to_prelude();
+    CHECK(run_main("(defn main [] : int 6)", "6"), "and after a second one");
 
     printf("wasm_glue_session_unit: %d passed, %d failed\n", passed, failed);
     return failed ? 1 : 0;

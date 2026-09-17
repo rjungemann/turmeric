@@ -118,6 +118,13 @@ const STORAGE_KEYS = {
 let tabs = [];          // [{id, name, content, cursor, scrollTop, createdAt, _model}]
 let activeId = null;
 let tabsHydrating = false;  // suppress persist during initial hydration / tutorial
+/* PS5 (playground-session-hygiene-plan): what each tab's last successful Run
+ * put in the session, keyed by tab id.  The session is shared by every tab -- a
+ * Run is how a tab's definitions become callable at the prompt, and from other
+ * tabs -- so rewinding it for one tab's Run must bring the others back
+ * (rewindSessionForRun).  In memory only: a reload starts a fresh session in
+ * which no tab has run. */
+const lastRunByTab = new Map();
 
 const MAX_CONSOLE_LINES = 200;
 
@@ -319,6 +326,7 @@ function closeTab(id) {
     if (tabs.length <= 1) return;  // always keep at least one tab open
     const idx = tabs.findIndex(t => t.id === id);
     if (idx < 0) return;
+    lastRunByTab.delete(id);   // PS5: a closed tab is not replayed
     const closing = tabs[idx];
     tabs.splice(idx, 1);
     if (closing._model && !closing._model.isDisposed()) {
@@ -1501,9 +1509,9 @@ function initLangPicker() {
 /**
  * Evaluate Turmeric code via the eval Worker.
  */
-function evaluateCode(code) {
+function evaluateCode(code, { quiet = false } = {}) {
     return new Promise((resolve, reject) => {
-        executionQueue.push({ code, resolve, reject });
+        executionQueue.push({ code, quiet, resolve, reject });
         if (!isExecuting) processQueue();
     });
 }
@@ -1521,7 +1529,7 @@ function processQueue() {
 
     isExecuting = true;
 
-    const { code, resolve, reject } = executionQueue.shift();
+    const { code, quiet, resolve, reject } = executionQueue.shift();
 
     if (wasmState !== WASM_STATE.READY) {
         reject(new Error('WASM not ready'));
@@ -1541,7 +1549,7 @@ function processQueue() {
 
     const id = ++evalCallId;
     pendingCalls.set(id, { resolve, reject, startTime: performance.now(), isEval: true });
-    evalWorker.postMessage({ type: 'eval', id, input: code, lang: langDirective });
+    evalWorker.postMessage({ type: 'eval', id, input: code, lang: langDirective, quiet });
 }
 
 /**
@@ -1558,6 +1566,7 @@ function resetWasm() {
              * document has to forget it too -- otherwise completion keeps
              * offering names `:reset` just destroyed. */
             replSessionReset();
+            lastRunByTab.clear();
             clearConsole();
             showStatus('Environment reset', 'success');
         },
@@ -2265,6 +2274,12 @@ async function runCode() {
         return;
     }
 
+    /* PS5: Run runs THIS program -- not this program appended to whatever
+     * the session already holds.  Rewind to the stdlib, bring back the other
+     * tabs' last successful runs, then run the buffer. */
+    const tabId = activeId;
+    await rewindSessionForRun(tabId, code);
+
     // Mirror `tur run`: a program that defines a top-level `main` uses it as its
     // entry point. Evaluate the program's top-level forms (which define `main`),
     // suppressing the bare `#<fn main>` closure result, then invoke `(main)` and
@@ -2272,19 +2287,71 @@ async function runCode() {
     // shows `2`, not `#<fn main>`.
     if (definesMainEntry(code)) {
         const { isError } = await executeCode(code, '', true, false, true);
-        if (!isError) {
-            replSessionAccept(code);
-            await executeCode('(main)', '', false, false);
-        }
+        recordRun(tabId, code, isError);
+        if (!isError) await executeCode('(main)', '', false, false);
         return;
     }
 
     const { isError } = await executeCode(code, '', true, false);
-    /* W2: a Run is how a tab's definitions become callable at the prompt, so
-     * it is also how they become offerable there. Before this, completion at
-     * the prompt would have had to guess -- and the two honest answers were
-     * "offer the tab and be wrong until Run" or "never offer it at all". */
-    if (!isError) replSessionAccept(code);
+    recordRun(tabId, code, isError);
+}
+
+/**
+ * Note the outcome of a tab's Run.  W2: a Run is how a tab's definitions become
+ * callable at the prompt, so it is also how they become offerable there. A Run
+ * that failed defined nothing the next rewind can bring back.
+ */
+function recordRun(tabId, code, isError) {
+    if (isError) {
+        lastRunByTab.delete(tabId);
+        return;
+    }
+    lastRunByTab.set(tabId, code);
+    replSessionAccept(code);
+}
+
+/**
+ * Rewind the session to the preloaded stdlib and replay the other tabs' last
+ * runs, so the tab about to run starts from exactly those definitions.
+ *
+ * Replayed runs are muted: their output was already shown when they ran, and
+ * a replay is bookkeeping, not a run. Only tabs in the running tab's dialect
+ * are replayed -- a `#lang` switch rewinds the session itself, so a tab in
+ * another dialect would wipe everything replayed before it. Definitions typed
+ * at the prompt are not replayed: Run means "run this program", and the
+ * program is the buffer.
+ */
+async function rewindSessionForRun(tabId, code) {
+    await rewindWasm();
+    replSessionReset();
+    const dialect = parseLangDirective(code).lang;
+    for (const t of tabs) {
+        if (t.id === tabId) continue;
+        const src = lastRunByTab.get(t.id);
+        if (src === undefined || parseLangDirective(src).lang !== dialect) continue;
+        let isError = true;
+        try {
+            ({ isError } = await evaluateCode(src, { quiet: true }));
+        } catch (_) { /* treated as a failed replay */ }
+        recordRun(t.id, src, isError);
+    }
+}
+
+/**
+ * Rewind the WASM session to the preloaded stdlib (PS5). Unlike resetWasm, the
+ * env and its stdlib stay; only what turns added since is dropped.
+ */
+function rewindWasm() {
+    return new Promise((resolve) => {
+        const id = ++evalCallId;
+        pendingCalls.set(id, {
+            resolve: () => resolve(true),
+            reject: () => resolve(false),
+            startTime: performance.now(),
+            isEval: false,
+        });
+        evalWorker.postMessage({ type: 'rewind', id });
+    });
 }
 
 /**
@@ -5494,6 +5561,7 @@ function traceResetEnv() {
                 // The session forgot what it had accepted, so the prompt's
                 // document has to forget it too.
                 replSessionReset();
+                lastRunByTab.clear();
                 resolve(true);
             },
             reject: () => resolve(false),

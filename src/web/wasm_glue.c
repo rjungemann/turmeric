@@ -121,6 +121,9 @@ static void wasm_preload_stdlib(TuriEnv *env) {
      * gap).  Runs AFTER the preload so the native shims win over the loaded
      * inline-C bodies. */
     turi_env_register_interpreter_natives(env);
+    /* PS5: snapshot the runtime prelude last, so it holds the native overrides
+     * registered just above -- turi_wasm_rewind_to_prelude restores it. */
+    turi_env_snapshot_prelude(env);
 }
 
 /* ---------------------------------------------------------------------------
@@ -164,6 +167,10 @@ void turi_wasm_reset(void) {
             wasm_preload_stdlib(g_env);
         }
     }
+}
+
+void turi_wasm_rewind_to_prelude(void) {
+    if (g_env) turi_env_rewind_to_prelude(g_env);
 }
 
 /* Evaluate a Turmeric source string and return the result as a string.

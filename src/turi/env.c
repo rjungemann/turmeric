@@ -370,6 +370,9 @@ void turi_env_free(TuriEnv *env) {
     env->acc_forms     = NULL;
     env->n_acc_forms   = 0;
     env->cap_acc_forms = 0;
+    free(env->prelude_globals);   /* PS5 */
+    env->prelude_globals   = NULL;
+    env->n_prelude_globals = 0;
     free(env->acc_turns);   /* PS1 */
     env->acc_turns     = NULL;
     env->n_acc_turns   = 0;
@@ -608,6 +611,67 @@ void turi_env_reset_to_prelude(TuriEnv *env) {
         env->elab_session       = NULL;
         env->elab_session_forms = 0;
     }
+}
+
+static int prelude_global_cmp(const void *a, const void *b) {
+    uintptr_t x = (uintptr_t)((const TuriPreludeGlobal *)a)->binding;
+    uintptr_t y = (uintptr_t)((const TuriPreludeGlobal *)b)->binding;
+    return (x > y) - (x < y);
+}
+
+void turi_env_snapshot_prelude(TuriEnv *env) {
+    if (!env) return;
+    free(env->prelude_globals);
+    env->prelude_globals   = NULL;
+    env->n_prelude_globals = 0;
+
+    uint32_t n = 0;
+    for (EnvBinding *b = env->globals; b; b = b->next) n++;
+    if (n == 0) return;
+    TuriPreludeGlobal *snap = (TuriPreludeGlobal *)malloc(n * sizeof *snap);
+    if (!snap) return;   /* no snapshot: a rewind degrades to reset_to_prelude */
+    uint32_t i = 0;
+    for (EnvBinding *b = env->globals; b; b = b->next, i++) {
+        snap[i].binding = b;
+        snap[i].value   = b->value;
+    }
+    qsort(snap, n, sizeof *snap, prelude_global_cmp);
+    env->prelude_globals   = snap;
+    env->n_prelude_globals = n;
+}
+
+void turi_env_rewind_to_prelude(TuriEnv *env) {
+    if (!env) return;
+    turi_env_reset_to_prelude(env);
+    if (!env->prelude_globals) return;
+
+    /* Rebuild the list in its existing order: keep prelude bindings (with their
+     * prelude values) and natives, free everything a turn added -- the same
+     * disposal turi_env_reset uses for user bindings. */
+    EnvBinding  *keep = NULL;
+    EnvBinding **tail = &keep;
+    EnvBinding  *b    = env->globals;
+    while (b) {
+        EnvBinding *next = b->next;
+        TuriPreludeGlobal probe = { b, {0} };
+        TuriPreludeGlobal *hit = (TuriPreludeGlobal *)bsearch(
+            &probe, env->prelude_globals, env->n_prelude_globals,
+            sizeof probe, prelude_global_cmp);
+        if (hit || turi_value_is_native(b->value)) {
+            if (hit) b->value = hit->value;
+            b->next = NULL;
+            *tail   = b;
+            tail    = &b->next;
+        } else {
+            free(b);
+        }
+        b = next;
+    }
+    env->globals = keep;
+
+    free(env->globals_ht.slots);
+    ht_init(&env->globals_ht);
+    for (EnvBinding *k = keep; k; k = k->next) ht_insert(&env->globals_ht, k);
 }
 
 void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type) {

@@ -13471,6 +13471,10 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
             if (!promo_check(env, b->value, &seen)) { ok = false; break; }
         }
     }
+    /* PS5: the prelude snapshot's values are roots too -- a rewind writes them
+     * back into the globals. */
+    for (uint32_t i = 0; ok && i < env->n_prelude_globals; i++)
+        if (!promo_check(env, env->prelude_globals[i].value, &seen)) ok = false;
     promo_map_free(&seen);
     if (!ok) { env->promo_decline_unrelocatable++; return; }   /* keep scratch intact this cycle */
 
@@ -13481,6 +13485,9 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     TuriValue promoted = promo_copy(env, *result, &fwd);
     for (EnvBinding *b = env->globals; b; b = b->next)
         b->value = promo_copy(env, b->value, &fwd);
+    for (uint32_t i = 0; i < env->n_prelude_globals; i++)   /* PS5 */
+        env->prelude_globals[i].value =
+            promo_copy(env, env->prelude_globals[i].value, &fwd);
     promo_map_free(&fwd);
     *result = promoted;
 
