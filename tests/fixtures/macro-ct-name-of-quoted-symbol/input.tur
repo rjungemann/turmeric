@@ -1,7 +1,7 @@
 ;; symbol-name reads a quoted symbol in either spelling, and string? tells a
 ;; string literal from a name -- what the stdlib `doc` macro needs to accept
 ;; (doc vec-map), (doc 'vec-map) and (doc "vec-map") alike.
-;; docs/upcoming/playground-session-hygiene-plan.md (PS3)
+;; docs/archive/playground-session-hygiene-plan.md (PS3)
 (defmacro name-of [x]
   (list str-id (if (string? x) x (symbol-name x))))
 
