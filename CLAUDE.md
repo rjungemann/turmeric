@@ -364,6 +364,31 @@ want new per-file syntax or a per-file gate, it goes in one of three places:
 A new base dialect is a different thing and still legitimate; it is
 slash-namespaced and lives in `lang_base_from_name`.
 
+## Dev server port -- STRICT RULE
+
+**Port 3000 is the developer's own Try Turmeric dev server** (`just web-dev` /
+`tur run web-dev`). **Never use it.** Do not open it in a browser, `curl` it,
+point a test at it, start a server on it, run the `web-dev` recipe, or stop or
+restart whatever is listening there. A test run pointed at it tests whatever
+checkout that server came from, not your branch, and it gets in the way of the
+developer's own session.
+
+Use a different port every time:
+
+- **Browser tests:** run `npx playwright test` from `web/`. It picks a free
+  port, starts its own server there, and never reuses a running one
+  (`web/playwright.config.js`). `TRY_TEST_PORT=<port>` pins the port, and
+  3000 is refused. Do not change the config back to a fixed port or turn on
+  `reuseExistingServer`.
+- **A server to poke at by hand:** from `web/`, run
+  `npx vite --port <free port> --strictPort`, and stop it when you are done.
+- **Checking whether the developer's server is up** is fine and read-only:
+  `lsof -nP -iTCP:3000 -sTCP:LISTEN`. Then leave it alone.
+
+A `PreToolUse` hook (`.claude/hooks/no-dev-server-port.sh`, registered in
+`.claude/settings.json`) denies Bash commands that address port 3000, start a
+server on it, run `web-dev`, or start vite without an explicit `--port`.
+
 ## Build System
 
 The main turmeric compiler is built with CMake directly. Once `tur` is on
