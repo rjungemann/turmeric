@@ -159,18 +159,12 @@ static const char *const S_ERRORS[] = {
     "(ok2 (ok1 3))",
 };
 
-/* Redefinition across turns. `defn` redefinition is a KNOWN, intentional
- * divergence covered separately by test_known_divergence below, so it is not
- * part of this identical-results session. */
-static const char *const S_REDEF[] = {
-    "(def v 1)",
-    "v",
-    "(def v 2)",
-    "v",
-};
 
 /* ---------------------------------------------------------------------------
- * KNOWN, INTENTIONAL DIVERGENCE: redefining a top-level `defn` across turns.
+ * KNOWN, INTENTIONAL DIVERGENCE: redefining a top-level `defn` -- or, since
+ * PS4 of playground-session-hygiene-plan, any def* form, `def` included --
+ * across turns.  (`def` used to be an identical-results session here, because
+ * both paths refused it.)
  *
  * Default (whole-program) path: every turn re-elaborates the accumulated
  * program with stdlib_prefix = (count of prior forms), which marks all
@@ -219,8 +213,37 @@ static void test_known_divergence(void) {
                         "take effect; got %lld (want 110)\n", (long long)vi.as_int);
         failures++;
     }
+
+    /* The same split for `def`: the default path refuses the second one and
+     * keeps 1; the incremental path replaces it. */
+    turi_eval(base, "(def v 1)");
+    turi_eval(incr, "(def v 1)");
+    TuriValue db = turi_eval(base, "(def v 2)");
+    TuriValue di = turi_eval(incr, "(def v 2)");
+    if (db.tag != TURI_ERROR) {
+        fprintf(stderr, "FAIL [known-divergence]: default path no longer rejects "
+                        "def redefinition (tag %d) -- update this test\n", db.tag);
+        failures++;
+    }
+    if (di.tag == TURI_ERROR) {
+        fprintf(stderr, "FAIL [known-divergence]: incremental path rejected def "
+                        "redefinition: %s\n", di.as_error ? di.as_error : "?");
+        failures++;
+    }
+    TuriValue wb = turi_eval(base, "v");
+    TuriValue wi = turi_eval(incr, "v");
+    if (wb.tag != TURI_INT || wb.as_int != 1) {
+        fprintf(stderr, "FAIL [known-divergence]: default def redefinition took "
+                        "effect? got %lld\n", (long long)wb.as_int);
+        failures++;
+    }
+    if (wi.tag != TURI_INT || wi.as_int != 2) {
+        fprintf(stderr, "FAIL [known-divergence]: incremental def redefinition did "
+                        "not take effect; got %lld (want 2)\n", (long long)wi.as_int);
+        failures++;
+    }
     if (!failures)
-        printf("PASS [known-divergence] defn redefinition: default=error, "
+        printf("PASS [known-divergence] defn/def redefinition: default=error, "
                "incremental=new definition wins\n");
 
     turi_env_free(base);
@@ -287,7 +310,6 @@ int main(void) {
     SESSION("multiline",      S_MULTILINE);
     SESSION("reader-macros",  S_READER_MACROS);
     SESSION("errors",         S_ERRORS);
-    SESSION("redefinition",   S_REDEF);
     test_known_divergence();
     test_defmodule_across_evals();
 
