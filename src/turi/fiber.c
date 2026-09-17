@@ -574,8 +574,16 @@ static TuriValue native_sleep_async(TuriEnv *env, TuriValue *args, uint32_t n,
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
-    /* Resumed: timer fired. */
-    return turi_nil();
+    /* Resumed: timer fired, so `f` is already RESOLVED.  Hand back the FUTURE,
+     * not its value: this native's contract is `-> Future` in both contexts,
+     * and `(await (sleep-async ms))` is the natural spelling.  Returning
+     * turi_nil() here made EX_AWAIT fail its `fv.tag != TURI_FUTURE` check,
+     * which rejected the enclosing fiber's own future and silently discarded
+     * the rest of the fiber body -- see
+     * docs/archive/awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md.
+     * Awaiting an already-resolved future is free, so the bare
+     * `(sleep-async ms)` spelling still blocks here and returns immediately. */
+    return turi_future_val(f);
 }
 
 /* with-timeout : (ms :int, task :Future) -> value or TURI_ERROR("timeout") */
@@ -739,8 +747,10 @@ static TuriValue native_read_async(TuriEnv *env, TuriValue *args, uint32_t n,
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
-        /* Resumed: I/O completed, result is in f->result */
-        return f->result;
+        /* Resumed: I/O completed and `f` is settled.  Return the FUTURE, as in
+         * the main-context arm below -- the same reason as native_sleep_async:
+         * `(await (read-async fd n))` must see a future, or EX_AWAIT rejects
+         * the enclosing fiber. */
     }
     return turi_future_val(f);
 }
@@ -790,7 +800,7 @@ static TuriValue native_write_async(TuriEnv *env, TuriValue *args, uint32_t n,
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
-        return f->result;
+        /* Resumed: `f` is settled.  Return the FUTURE -- see native_read_async. */
     }
     return turi_future_val(f);
 }

@@ -112,7 +112,11 @@ Replace the stale row with what is true, and name the one real exception:
 
 | Sessions (binary + multi-party) | OK | OK | full surface runs on a cooperative fiber rendezvous; `recv-timeout` inside a fiber ignores its deadline (S1); a peer written with `async` runs under turi but **deadlocks compiled** (S2) |
 
-Add the same two caveats to
+**Landed, and the S1 caveat is spent** -- it went into the guide on 2026-09-16
+and came back out on 2026-09-17 when S1 was fixed. One caveat remains (S2), and
+a row written from this section today should carry only that one.
+
+Add the same caveats to
 [session-types-guide.md](../guides/session-types-guide.md), which today shows a
 `spawn` it never defines and says nothing about either backend's limits. Per the
 ["no archeology in guides"](https://github.com/rjungemann/turmeric/blob/main/CLAUDE.md)
@@ -121,23 +125,43 @@ convention, each caveat is one deletable paragraph linking its report by GitHub 
 Cost: under an hour. Do this first regardless of what else happens -- the current
 row actively misleads anyone asking the question this plan asks.
 
-### S1 -- Fiber-context `recv-timeout` deadline
+### S1 -- Fiber-context `recv-timeout` deadline -- DONE 2026-09-17
 
-The one genuine session divergence. A 50ms `recv-timeout` inside an `async`
+**Landed as described.** The fiber arm arms one `turi_timer_add` future for the
+remaining wait and registers the fiber as its waker alongside the channel's
+`recv_waiter`, so either the deposit or the deadline resumes it. Two things the
+scoping below did not anticipate, both in the resolution:
+
+- The alarm has to be settled on every exit from the wait, or it fires later at
+  a fiber that is no longer parked there.
+- `session_wake` left its waiter marked `SUSPENDED` while it sat on the ready
+  queue. Harmless with one wake source; with two it is a double-enqueue, and
+  `turi_sched_enqueue` clears `sched_next`, so the second one **truncates the
+  ready queue**. It now marks `READY` first, matching `flush_wakers`.
+
+Pinned by `tests/fixtures/session-timeout-fiber-turi` (`requires.interp-only`),
+which asserts the ORDER of the timeout against the peer's late send rather than
+just the word `timeout` -- see the fixture-fixing note further down for why that
+distinction is the whole point here. Archived:
+[turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-fiber-recv-timeout-ignores-its-deadline.md).
+
+The original scoping follows.
+
+A 50ms `recv-timeout` inside an `async`
 fiber returns the **Left (success)** branch on a value that arrives 800ms later;
 the compiled `pthread_cond_timedwait` returns **Right (timeout)**. Main-context
 `recv-timeout` is correct, which is exactly why no fixture catches it.
 
 Filed as
-[turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-fiber-recv-timeout-ignores-its-deadline.md),
+[turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-fiber-recv-timeout-ignores-its-deadline.md),
 with the mechanism, the in-tree comment that predicted it, and the fix direction:
 arm a `turi_timer_add` future alongside the channel's `recv_waiter` so either the
 deposit or the deadline resumes the fiber. The timer wheel already exists -- it is
 what `sleep-async` uses. The new wiring is a channel wait with two wake sources,
 where today there is one `recv_waiter` slot.
 
-**Do this before S3.** It is the only phase where a new fixture can currently go
-red.
+~~**Do this before S3.** It is the only phase where a new fixture can currently
+go red.~~ Done; S3 is unblocked on this count.
 
 ### S2 -- One peer-spawn that works on both paths
 
@@ -184,12 +208,17 @@ drifting), so prefer it only if S2 slips.
 
 Two fixtures also want fixing rather than duplicating:
 
-- `session-timeout-expired-turi` currently passes **vacuously** -- its peer uses
+- ~~`session-timeout-expired-turi` currently passes **vacuously**~~ -- **fixed
+  2026-09-17, and the prescription was wrong.** Its peer uses
   `(await (sleep-async 200))`, which per
-  [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](https://github.com/rjungemann/turmeric/blob/main/docs/reported/awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md)
-  never reaches its `send` at all. It prints `timeout` because nothing is ever
-  deposited, so it would pass with `recv-timeout` stubbed to always time out.
-  Drop the `await` and it becomes a real test.
+  [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](https://github.com/rjungemann/turmeric/blob/main/docs/archive/awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md)
+  never reached its `send` at all, so it printed `timeout` because nothing was
+  ever deposited. Dropping the `await` was the proposed fix; fixing the `await`
+  itself was the better one. The fixture is unchanged and now meaningful -- its
+  peer does reach the `send`, at 200ms, against a deadline that fired at 50ms --
+  and it keeps a second user of the repaired shape in the suite. The distinction
+  the note was drawing is what `session-timeout-fiber-turi` (S1) now asserts
+  directly, by ORDER rather than by the presence of the word `timeout`.
 - `stdlib/session.tur`'s templates (`rpc-call`, `echo-server-loop`,
   `echo-client-call`, `pubsub-recv-loop`) have **no fixture on either path**.
   Two of the four were verified by hand here; `echo-client-call` does not compose
@@ -358,6 +387,6 @@ S4 and S5 are hygiene. Do them when something else is already open in
 - `src/compiler/elab_sessions.c`, `src/compiler/elab_forms.c` -- the two places
   the intercepted templates are built.
 - The three reports this plan cites:
-  [turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-fiber-recv-timeout-ignores-its-deadline.md),
+  [turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-fiber-recv-timeout-ignores-its-deadline.md),
   [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md),
-  [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](https://github.com/rjungemann/turmeric/blob/main/docs/reported/awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md).
+  [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](https://github.com/rjungemann/turmeric/blob/main/docs/archive/awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md).

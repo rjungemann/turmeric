@@ -1,5 +1,8 @@
 # `(await (sleep-async n))` inside an interpreter fiber silently drops the rest of the fiber body
 
+**RESOLVED 2026-09-17** -- see Resolution at the end. The suspected root cause
+below is close but not right about the mechanism; the correction is there too.
+
 **Severity: medium.** Under `tur --interpret`, an `async` fiber that sleeps via
 `(await (sleep-async n))` never executes anything after the sleep. The fiber's
 future resolves anyway, so `(await t)` on the spawner side returns normally and
@@ -112,3 +115,84 @@ regression fixture for the repro above.
 - `src/turi/fiber.c` -- `native_sleep_async`, `turi_fiber_reclaim_if_done`.
 - `src/turi/eval.c` -- the `await` / `EX_ASYNC` paths.
 - `tests/fixtures/session-timeout-expired-turi/` -- the vacuous fixture.
+
+## Resolution (2026-09-17)
+
+### Correction to the suspected root cause
+
+The suspicion above -- "`await` ... appears to unwind or complete the fiber" --
+points at the right line and the wrong mechanism. Nothing unwinds and nothing
+is reclaimed early. `EX_AWAIT` (`src/turi/eval.c`) simply fails its tag check:
+
+```c
+if (fv.tag != TURI_FUTURE)
+    return turi_errorf("eval: await: expected a future, got tag %d", fv.tag);
+```
+
+That `TURI_ERROR` is an ordinary value. It propagates out of the fiber body the
+way any error does -- which is why the tail never runs -- and
+`async_fiber_thunk` then takes its `turi_is_error(result)` arm and **rejects**
+the fiber's own future. The rejection is real; it is only invisible because the
+repro discards `(await t)`. Printing it shows the whole story:
+
+```
+$ tur interpret t-diag.tur      # (println (await t)) added
+before
+91328185161136                  <-- the rejection, printed as a raw word
+done
+```
+
+So there was a diagnostic all along, one level up from where anyone looked.
+
+### The fix
+
+`native_sleep_async`'s fiber arm violated its own declared contract. Its
+docstring is `sleep-async : (ms :int) -> Future` and its main-context arm
+returns one; the fiber arm blocked on the timer and then handed back
+`turi_nil()`. Blocking early is a legitimate implementation detail -- the
+control in this report proves that half was always correct -- but the VALUE has
+to keep the shape the caller was promised. It now returns the (by then
+resolved) future:
+
+```c
+/* Resumed: timer fired, so `f` is already RESOLVED.  Hand back the FUTURE, ... */
+return turi_future_val(f);
+```
+
+`await` on an already-resolved future is free, so both spellings now work and
+neither pays for the other: the awaited one resolves immediately, the bare one
+still blocks and discards a future nobody reads.
+
+**The generalisation the report asked about is real, and was fixed with it.**
+`native_read_async` and `native_write_async` have the identical shape -- both
+declare `-> Future`, both return `f->result` from their fiber arm -- so
+`(await (read-async fd n))` inside a fiber failed the same tag check. No
+fixture reaches them (they appear only in the sandboxing guides, and only as
+names that get blocked), which is why this surfaced through `sleep-async`
+first. Both now return the future in both contexts.
+
+### The vacuous fixture
+
+`tests/fixtures/session-timeout-expired-turi` is no longer vacuous, and did not
+need the `await` dropped to get there -- with the fix its peer fiber does reach
+its `send`, at 200ms, against a receiver whose 50ms deadline has already
+fired. Probed directly rather than assumed:
+
+```
+$ tur interpret <fixture with a println added to the peer>
+timeout
+peer-awake      <-- the send is now reached; before the fix it never was
+```
+
+Keeping the `await` also keeps a second user of the fixed shape in the suite.
+
+### Tests
+
+- `tests/fixtures/await-sleep-async-in-fiber-turi/` (`requires.interp-only`) --
+  the repro plus its bare-`sleep-async` control in one program, so a future
+  change that fixes one spelling by breaking the other fails here.
+- `tests/fixtures/session-timeout-expired-turi/` -- unchanged, now meaningful.
+- All seven `tests/turi/eval-async-*.sh` ctest targets pass, including
+  `eval-async-timeout`, whose test 3 is this exact shape inside `with-timeout`.
+- `bash tests/run-turi.sh` -- 2118 passed, 0 failed.
+  `bash tests/run.sh` -- 3031 passed, 0 failed.

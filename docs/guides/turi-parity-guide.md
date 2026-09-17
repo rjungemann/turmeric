@@ -75,7 +75,7 @@ concurrency).
 | Async / futures | OK | OK | synchronously-completed bodies settle their future; native future cells |
 | Dynamic variables | OK | OK | dynamic-scope binding stack in the interpreter |
 | Panic / catch / `catch-panic-of` | OK | OK | TI5; panic payloads preserved |
-| Sessions -- binary + multi-party | OK | OK | the full surface (`make-session`/`send`/`recv`/`close`/`offer`/`choose`/`recv-timeout`, and `make-protocol`/`send-to`/`recv-from`/role-`close`) runs on a cooperative fiber rendezvous; two caveats below |
+| Sessions -- binary + multi-party | OK | OK | the full surface (`make-session`/`send`/`recv`/`close`/`offer`/`choose`/`recv-timeout`, and `make-protocol`/`send-to`/`recv-from`/role-`close`) runs on a cooperative fiber rendezvous; one caveat below |
 | Sized primitives (`i8`..`i64`, floats) | OK | OK | carrier ascription bit-reinterprets correctly |
 | Symbols (`:Sym`) | OK | OK | interned `const Symbol *`; native `sym=?`/`sym->str` overrides |
 | Maps / sets / HAMT (scalar keys) | OK | OK | native `tur_hamt_*` overrides |
@@ -89,19 +89,22 @@ concurrency).
 
 ---
 
-## Sessions -- two caveats the matrix row cannot hold
+## Sessions -- one caveat the matrix row cannot hold
 
 The session surface interprets in full: recursive (`Rec`) protocols,
 `offer`/`choose`, `(project G R)`, `Session`/`project`/`Role` struct fields,
 delegation (including sending an endpoint *over* a session), sessions alongside
 effects and STM, 2- and 3-role multi-party, and the `stdlib/session.tur`
 templates all produce their compiled output under `--interpret`, at the REPL,
-and under `tur run --engine interp`. Two things do not follow from that row.
+and under `tur run --engine interp`. One thing does not follow from that row.
 
-- **`recv-timeout` inside a fiber ignores its deadline.** It waits for the
-  peer's value however long that takes and returns the Left (success) branch;
-  compiled returns Right (timeout). The same op in the main context is correct.
-  [turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-fiber-recv-timeout-ignores-its-deadline.md)
+`recv-timeout` used to be a second entry here -- inside a fiber it waited for
+the peer's value however long that took and returned Left (success) where
+compiled returned Right (timeout). It now observes its deadline in fiber and
+main context alike
+([turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-fiber-recv-timeout-ignores-its-deadline.md),
+resolved 2026-09-17), so a timed receive needs no special handling either way.
+
 - **A peer written with `async` runs here and deadlocks compiled.** The compiled
   session runtime blocks an OS thread on a condvar, and compiled `async` runs the
   fiber on that same thread, so `(async (fn [] (recv ch)))` hangs the binary with

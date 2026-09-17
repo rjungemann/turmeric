@@ -9781,7 +9781,17 @@ static int session_park_or_spin(TuriEnv *env, TuriChan *ch, int role) {
 }
 
 static void session_wake(TuriEnv *env, TuriFiber **slot) {
-    if (*slot) { TuriFiber *w = *slot; *slot = NULL; turi_sched_enqueue(env, w); }
+    if (*slot) {
+        TuriFiber *w = *slot;
+        *slot = NULL;
+        /* Mark READY before enqueueing, exactly as fiber.c's flush_wakers does.
+         * That guard (`state == TURI_FIBER_SUSPENDED`) is the only thing keeping
+         * a second wake source from enqueueing the same fiber twice and
+         * truncating the ready queue -- turi_sched_enqueue clears sched_next --
+         * and session_recv_timeout's deadline alarm is such a source. */
+        w->state = TURI_FIBER_READY;
+        turi_sched_enqueue(env, w);
+    }
 }
 
 /* Generic slot send: wait for the slot to be idle, deposit, wake a parked
@@ -9851,22 +9861,48 @@ static TuriValue session_recv_tag(TuriEnv *env, TuriChan *ch) {
 /* recv-timeout: wait up to `dur_ms` for a deposited value on the data slot.
  * On success, ack, stash the value in env->session_rtv, and return tag 0
  * (Left); on timeout (or a peer that closed without sending) return tag 1
- * (Right).  The receiver runs in the main context in practice (the compiled
- * fixtures call recv-timeout from the main thread), so the timed wait pumps the
- * scheduler and re-checks the deadline; poll_io caps each step at 50 ms so the
- * deadline is observed promptly. */
+ * (Right).
+ *
+ * Both contexts observe the deadline, by different means.  The main context
+ * pumps a BOUNDED scheduler step and re-checks the clock (poll_io caps each
+ * step at 50 ms).  A fiber cannot do that: its park is a swapcontext that only
+ * resumes when something enqueues it, and the only thing that did was the
+ * peer's deposit -- so the deadline was unreachable until the value it was
+ * meant to preempt arrived, and the timed receive silently took the Left
+ * (success) branch however late that was.  The fiber arm therefore arms a
+ * scheduler timer as a SECOND wake source, which is the same mechanism
+ * sleep-async uses to bound a fiber's park. */
 static TuriValue session_recv_timeout(TuriEnv *env, TuriChan *ch, int64_t dur_ms) {
-    uint64_t deadline = turi_now_ms() + (dur_ms > 0 ? (uint64_t)dur_ms : 0);
+    uint64_t    deadline  = turi_now_ms() + (dur_ms > 0 ? (uint64_t)dur_ms : 0);
+    TuriFuture *alarm     = NULL;   /* fiber-context deadline alarm, armed lazily */
+    int         timed_out = 0;
+
     while (ch->data_state != 1) {
-        if (ch->abandoned)              return turi_int(1);  /* peer gone -> timeout */
-        if (turi_now_ms() >= deadline)  return turi_int(1);  /* elapsed -> timeout */
-        if (env->current_fiber) {
-            /* Fiber-context timed recv would need a scheduler timer to bound the
-             * park; the shipped variants call recv-timeout from the main context,
-             * so park cooperatively and let a woken deposit / the deadline break
-             * the loop. */
-            if (session_park_or_spin(env, ch, TURI_SESS_RECEIVER) != 0)
-                return turi_int(1);
+        if (ch->abandoned)   { timed_out = 1; break; }  /* peer gone -> timeout */
+        uint64_t now = turi_now_ms();
+        if (now >= deadline) { timed_out = 1; break; }  /* elapsed -> timeout */
+
+        TuriFiber *cur = env->current_fiber;
+        if (cur) {
+            /* One timer for the whole remaining wait, re-registered as a waker
+             * on each park.  Whichever lands first -- the peer's deposit via
+             * ch->recv_waiter, or the alarm via its waker list -- resumes this
+             * fiber, and the top of the loop re-checks the clock.  The alarm
+             * shares `deadline`, so a timer-driven resume always finds
+             * now >= deadline and breaks rather than re-parking. */
+            if (!alarm) {
+                alarm = turi_future_new(env);
+                turi_timer_add(env, deadline - now, alarm);
+            }
+            turi_future_add_waker(alarm, cur);
+            if (session_park_or_spin(env, ch, TURI_SESS_RECEIVER) != 0) {
+                timed_out = 1;
+                break;
+            }
+            /* Resumed.  If the ALARM woke us, ch->recv_waiter still points at
+             * this fiber; clear it so a later deposit cannot enqueue a fiber
+             * that is already running.  A deposit-wake cleared it already. */
+            if (ch->recv_waiter == cur) ch->recv_waiter = NULL;
         } else {
             /* Main context: pump one bounded scheduler step, then re-check the
              * deadline.  turi_sched_step returns false only when nothing is
@@ -9874,6 +9910,15 @@ static TuriValue session_recv_timeout(TuriEnv *env, TuriChan *ch, int64_t dur_ms
             turi_sched_step(env);
         }
     }
+
+    /* Settle the alarm on every exit.  A still-pending timer would fire later
+     * and flush its wakers at a fiber that is no longer parked here; resolving
+     * it now runs flush_wakers while this fiber is RUNNING, so its SUSPENDED
+     * guard drops the waker instead of enqueueing it.  fire_timers' eventual
+     * visit is then a no-op on an already-settled future, and frees the timer. */
+    if (alarm) turi_future_resolve(env, alarm, turi_nil());
+    if (timed_out) return turi_int(1);
+
     TuriValue v = ch->data_val;
     ch->data_state = 2;
     session_wake(env, &ch->send_waiter);

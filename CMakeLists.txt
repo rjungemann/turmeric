@@ -440,8 +440,12 @@ add_test(
 # user-defn-named-div-collides-with-libc: tur_name_collides_libc() bsearches
 # libc_names[], so the table's sort order is a correctness precondition -- one
 # entry out of place makes bsearch quietly miss names and the symptom is a cc
-# error cascade in generated C, not a failed lookup.  Source-text check, no
-# build needed.
+# error cascade in generated C, not a failed lookup.  Also guards the table
+# against silent drift from src/jit_win_prelude.h, whose declarations join the
+# emitted TU's set on the Windows JIT path -- a name in the prelude and not in
+# libc_names is a WRONG ANSWER there, not a build error.  Runs on every
+# platform on purpose: the defect is Windows-only to observe but is introduced
+# by editing these two files anywhere.  Source-text check, no build needed.
 add_test(
   NAME tur_libc_collision_list
   COMMAND bash tests/check-libc-collision-list.sh

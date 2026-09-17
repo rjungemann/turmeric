@@ -1,5 +1,8 @@
 # `recv-timeout` inside an interpreter fiber ignores its deadline
 
+**RESOLVED 2026-09-17** -- see Resolution at the end. The fix is the one this
+report proposed, plus one hazard it did not name.
+
 **Severity: medium.** Silent wrong answer, no diagnostic. A `recv-timeout`
 evaluated inside an `async` fiber under `tur --interpret` waits indefinitely
 for the peer's value and takes the **Left (success)** branch, no matter how far
@@ -129,3 +132,83 @@ deadline. Dropping the `await` around `sleep-async` makes it a real test.
 - `src/turi/fiber.c` -- `turi_timer_add` / `fire_timers` / `native_sleep_async`,
   the fiber-park-with-timer pattern to copy.
 - [turi-session-expansion-plan.md](../upcoming/turi-session-expansion-plan.md) -- phase S1.
+
+## Resolution (2026-09-17)
+
+Implemented as proposed: the fiber arm arms one scheduler timer for the whole
+remaining wait and registers the fiber as its waker alongside `ch->recv_waiter`,
+so either the peer's deposit or the alarm resumes it and the top of the loop
+re-checks the clock. Steps 1-3 were mechanical. Step 4 -- "cancel/detach the
+timer on the deposit path" -- turned out to be two separate hazards, and the
+second one is not in this report.
+
+### Hazard A: the alarm outliving the wait (the one this report named)
+
+Handled on every exit path by resolving the alarm future before returning.
+`turi_future_resolve` runs `flush_wakers` immediately, and that function only
+enqueues a fiber whose state is `TURI_FIBER_SUSPENDED`; the fiber doing the
+resolving is `TURI_FIBER_RUNNING`, so its own waker is dropped rather than
+re-queued. `fire_timers`' eventual visit is then a no-op on a settled future,
+and frees the timer as usual. The symmetric case -- the ALARM woke us and
+`ch->recv_waiter` still points at this fiber -- is cleared right after the park,
+so a later deposit cannot enqueue a fiber that is already running.
+
+### Hazard B: `session_wake` left the fiber SUSPENDED (not in this report)
+
+`session_wake` enqueued its waiter without changing the fiber's state, which
+was harmless while a channel had exactly one wake source. With a second source
+it is a live double-enqueue: the peer deposits and enqueues the fiber, the
+fiber is still marked `SUSPENDED` while it sits on the ready queue, and if the
+alarm fires in that window `flush_wakers` passes its `SUSPENDED` guard and
+enqueues the same fiber a second time. `turi_sched_enqueue` clears
+`sched_next` as it appends, so the second enqueue **truncates the ready queue**
+-- everything queued behind that fiber is silently lost.
+
+Fixed by marking the fiber `TURI_FIBER_READY` before enqueueing, which is
+exactly what `flush_wakers` already does; that guard is then load-bearing for
+both wake paths instead of one. `flush_wakers` was the only reader of the state
+in the tree, so this is a two-line change with no other consumer.
+
+### Measurement
+
+The repro's control -- the timed receive moved to the main context -- was
+already correct and stays correct. The fiber-side repro now prints `timeout`.
+Neither of those alone proves the deadline was *observed* rather than the value
+merely never arriving, so the fixture asserts ORDER instead:
+
+```turmeric
+(let [t (async (fn [] (match (recv-timeout r 50) ... (Right r) (println "fiber-timeout"))))]
+  (await (sleep-async 800))
+  (println "main-about-to-send")
+  (let [s (send s 99)] (close s) (await t)))
+```
+
+```
+fiber-timeout           <-- at ~50ms
+main-about-to-send      <-- at ~800ms
+```
+
+The 50ms deadline preempts a value that is still 750ms away, which is the
+property this report is about and which a `timeout`-only assertion cannot
+distinguish from a peer that never sends.
+
+### Tests
+
+- `tests/fixtures/session-timeout-fiber-turi/` (`requires.interp-only`) -- the
+  ordering program above.
+- `tests/fixtures/session-timeout-expired-turi/` -- the vacuous fixture this
+  report flagged. It is no longer vacuous, and did not need the `await` dropped:
+  see the Resolution in
+  [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md),
+  fixed in the same change.
+- `bash tests/run-turi.sh` -- 2118 passed, 0 failed.
+  `bash tests/run.sh` -- 3031 passed, 0 failed.
+
+### What this does NOT unblock
+
+[multi-party-sessions-have-no-timed-receive](../reported/multi-party-sessions-have-no-timed-receive.md)
+names this report as its step-4 prerequisite ("fix that one first"). That
+prerequisite is now met -- the interpreter's binary-session timed receive is
+sound in both contexts, and `router_recv` can copy the two-wake-source pattern
+verbatim. Its steps 1 and 2 (global-type syntax and the projection rule) are
+untouched, and step 2 is where its design risk was.

@@ -1,0 +1,31 @@
+;; Regression: `(await (sleep-async n))` inside an async fiber must run the
+;; REST of the fiber body.
+;;
+;; `sleep-async`'s fiber arm blocks on a timer and then used to hand back
+;; turi_nil() instead of the future it promises, so the enclosing `await`
+;; failed its future-tag check, rejected the fiber's own future, and silently
+;; discarded everything after the sleep.  The program still exited 0.
+;;
+;; Both spellings are asserted here: the awaited one (the regression) and the
+;; bare one (the control that always worked), so a future change that fixes one
+;; by breaking the other is caught.
+;;
+;; Expected output:
+;;   awaited-before
+;;   awaited-woke
+;;   bare-before
+;;   bare-woke
+;;   done
+(defn main [] : int
+  (let [t (async (fn []
+                   (println "awaited-before")
+                   (await (sleep-async 50))
+                   (println "awaited-woke")))]
+    (await t))
+  (let [u (async (fn []
+                   (println "bare-before")
+                   (sleep-async 50)
+                   (println "bare-woke")))]
+    (await u))
+  (println "done")
+  0)
