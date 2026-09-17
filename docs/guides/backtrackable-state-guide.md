@@ -1,3 +1,9 @@
+---
+title: Backtrackable State Guide
+category: Advanced Control Flow
+description: Trailed mutable cells from `stdlib/trail.tur` -- take a mark, mutate freely, then undo or keep the writes; scopes, the `Bt` capability, and why a search loop wants this instead of a persistent structure
+---
+
 # Backtrackable State Guide
 
 `stdlib/trail.tur` gives you mutable cells whose writes **undo on demand**. You

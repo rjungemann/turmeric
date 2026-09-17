@@ -1,3 +1,9 @@
+---
+title: Godot Binding Guide
+category: Integration / Godot
+description: Attaching `.tur` scripts to Godot 4 nodes -- install, the curated and generated ClassDB facades, typed `godot-call` variants, value marshalling, the editor plugin and debugger, AOT mode, and the known gaps
+---
+
 # Turmeric as a Godot 4 Scripting Language -- Binding Guide
 
 > **Status:** v1 in progress. Working today: the curated + generated

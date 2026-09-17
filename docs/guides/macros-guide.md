@@ -1,3 +1,9 @@
+---
+title: Macros Guide
+category: Language Basics
+description: `defmacro` as a compile-time function from syntax to syntax -- quasiquote and splicing, manual hygiene, procedural `defmacro*`, macro-time imports, and why an expansion is type checked exactly like hand-written code
+---
+
 # Macros (`defmacro`)
 
 Turmeric macros are compile-time functions from **syntax to syntax**.  A
