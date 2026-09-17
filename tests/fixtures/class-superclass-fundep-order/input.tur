@@ -1,0 +1,26 @@
+;; class-superclasses: the constraint preamble and the `|` functional
+;; dependency clause together, in canonical order -- preamble first, then the
+;; fundep.  `Coll [Bag int]` is obliged to have `Sg [Bag]`, and `cget` still
+;; dispatches off the determining `c` with `e` read from the instance.
+(defstruct Bag [n : int])
+
+(defclass Sg [a]
+  (sg-combine [x : a y : a] : a))
+
+(defclass Coll [c e]
+  [(Sg c)]
+  | (c -> e)
+  (cget [^borrow x : c i : int] : e))
+
+(definstance Sg [Bag]
+  (sg-combine [x y] (make-struct Bag (+ (.n x) (.n y)))))
+
+(definstance Coll [Bag int]
+  (cget [x i] (+ (.n x) i)))
+
+(defn main [] : int
+  (let [b (make-struct Bag 40)
+        c : Bag (sg-combine b b)
+        v : int (cget c 2)]
+    (println v)
+    0))

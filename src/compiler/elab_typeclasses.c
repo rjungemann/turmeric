@@ -1,5 +1,7 @@
 /* elab_typeclasses.c -- typeclass declarations, instances, and method-call dispatch. */
 #include "elab_internal.h"
+#include "globals.h"         /* class-superclasses: g_opt_class_superclasses */
+#include "experiments.h"     /* class-superclasses: experiment_warn_if_used */
 #include "lang_dialects.h"   /* saffron-lang-plan S4: lang_span_is_saffron */
 #include "refine_discharge.h"     /* RT1: instance/class refinement variance */
 #include "refine_solver.h"        /* RT1: refine_model_search, for the variance witness */
@@ -1212,9 +1214,27 @@ static bool typeclass_signatures_match(const TypeClass *existing,
                                        uint8_t n_type_params,
                                        const Kind *type_param_kinds,
                                        uint8_t n_methods,
-                                       const TypeClassMethod *methods) {
+                                       const TypeClassMethod *methods,
+                                       uint8_t n_supers,
+                                       const Form **super_forms,
+                                       const uint8_t *super_n_args,
+                                       const uint8_t *super_arg_idx) {
     if (existing->n_type_params != n_type_params) return false;
     if (existing->n_methods     != n_methods)     return false;
+    /* class-superclasses SC1: the preamble is signature surface too.  Without
+     * this a class seen through two import paths with differing preambles
+     * would silently keep the first. */
+    if (existing->n_supers != n_supers) return false;
+    for (uint8_t i = 0; i < n_supers; i++) {
+        const Form *ef = existing->super_forms ? existing->super_forms[i] : NULL;
+        const Form *nf = super_forms[i];
+        if (!ef || !nf) return false;
+        if (ef->as.list.items[0]->as.sym != nf->as.list.items[0]->as.sym) return false;
+        if (existing->super_n_args[i] != super_n_args[i]) return false;
+        for (uint8_t k = 0; k < super_n_args[i]; k++)
+            if (existing->super_arg_idx[i * TUR_SUPER_MAX_ARGS + k] !=
+                super_arg_idx[i * TUR_SUPER_MAX_ARGS + k]) return false;
+    }
     for (uint8_t i = 0; i < n_type_params; i++) {
         Kind a = existing->type_param_kinds ? existing->type_param_kinds[i] : KIND_STAR;
         Kind b = type_param_kinds          ? type_param_kinds[i]          : KIND_STAR;
@@ -1402,6 +1422,100 @@ Expr *elab_defclass(Elab *e, const Form *call) {
         }
     }
 
+    /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md, SC1):
+     * optional constraint preamble `[(Super var...) ...]` right after the
+     * type-param vector -- the same bracketed `(Class var)` vector `definstance`
+     * and `defn` already spell constraints with, and in the same position
+     * `defn` puts it (`(defn f [W] [(Foo W)] [params] ...)`).  It is
+     * distinguished from what may follow by form tag alone: F_VEC is the
+     * preamble, the bare symbol `|` is the fundep clause, F_LIST is a method,
+     * so every existing defclass parses exactly as before.
+     *
+     * The elements are STORED, not resolved: a superclass may be declared
+     * below its subclass, and the post-unit pass (elab_typeclass_superclasses_
+     * finish) resolves, cycle-checks, and enforces the instance obligation once
+     * every form in the unit is registered.  The gate is on the PARSE, so a
+     * program that did not opt in sees a diagnostic rather than a silently
+     * changed entailment. */
+    const Form **super_forms   = NULL;
+    uint8_t     *super_n_args  = NULL;
+    uint8_t     *super_arg_idx = NULL;
+    uint8_t      n_supers      = 0;
+    if (methods_start < call->as.list.len &&
+        call->as.list.items[methods_start]->tag == F_VEC) {
+        Form *sv = call->as.list.items[methods_start];
+        if (!g_opt_class_superclasses) {
+            diag_emit_with_code(DIAG_ERROR, sv->span,
+                TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
+                "defclass '%s': a superclass constraint vector `[(Class var)]` "
+                "is experimental; enable it with --enable=class-superclasses "
+                "(or `:experiments [:class-superclasses]` in build.tur). "
+                "See docs/upcoming/typeclass-superclasses-plan.md.",
+                name->name);
+            return NULL;
+        }
+        experiment_warn_if_used("class-superclasses");
+        if (sv->as.list.len == 0) {
+            diag_emit_with_code(DIAG_ERROR, sv->span,
+                TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
+                "defclass '%s': empty superclass constraint vector; "
+                "list at least one (Class var), or drop the vector",
+                name->name);
+            return NULL;
+        }
+        n_supers      = (uint8_t)sv->as.list.len;
+        super_forms   = (const Form **)arena_alloc(e->arena, n_supers * sizeof(const Form *));
+        super_n_args  = (uint8_t *)arena_alloc(e->arena, n_supers);
+        super_arg_idx = (uint8_t *)arena_alloc(e->arena, n_supers * TUR_SUPER_MAX_ARGS);
+        for (uint8_t i = 0; i < n_supers; i++) {
+            Form *el = sv->as.list.items[i];
+            if (el->tag != F_LIST || el->as.list.len < 2 ||
+                el->as.list.items[0]->tag != F_SYM) {
+                diag_emit_with_code(DIAG_ERROR, el->span,
+                    TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
+                    "defclass '%s': superclass constraint must be (Class var...), "
+                    "e.g. [(Semigroup a)]", name->name);
+                return NULL;
+            }
+            if (el->as.list.len - 1 > TUR_SUPER_MAX_ARGS) {
+                diag_emit_with_code(DIAG_ERROR, el->span,
+                    TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
+                    "defclass '%s': superclass constraint names %u type "
+                    "variables; at most %d are supported",
+                    name->name, (unsigned)(el->as.list.len - 1), TUR_SUPER_MAX_ARGS);
+                return NULL;
+            }
+            if (el->as.list.items[0]->as.sym == name) {
+                diag_emit_with_code(DIAG_ERROR, el->span,
+                    TUR_E0392_CLASS_SUPERCLASS_CYCLE,
+                    "typeclass superclass cycle: '%s' lists itself as a superclass",
+                    name->name);
+                return NULL;
+            }
+            super_n_args[i] = (uint8_t)(el->as.list.len - 1);
+            for (uint8_t k = 1; k < el->as.list.len; k++) {
+                Form *v = el->as.list.items[k];
+                int idx = -1;
+                if (v->tag == F_SYM) {
+                    for (uint8_t p = 0; p < n_type_params; p++)
+                        if (type_params[p] && type_params[p] == v->as.sym) { idx = p; break; }
+                }
+                if (idx < 0) {
+                    diag_emit_with_code(DIAG_ERROR, v->span,
+                        TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
+                        "defclass '%s': superclass constraint (%s ...) names '%s', "
+                        "which is not one of this class's type parameters",
+                        name->name, el->as.list.items[0]->as.sym->name,
+                        v->tag == F_SYM ? v->as.sym->name : form_tag_name(v->tag));
+                    return NULL;
+                }
+                super_arg_idx[i * TUR_SUPER_MAX_ARGS + (k - 1)] = (uint8_t)idx;
+            }
+            super_forms[i] = el;
+        }
+        methods_start += 1;
+    }
+
     /* assoc-types-2 (Part A / MP2): optional functional-dependency clause
      * `| (from... -> to...)` immediately after the type-param vector.  The `|`
      * is a bare symbol; the following form is a parenthesized list with a `->`
@@ -1475,6 +1589,31 @@ Expr *elab_defclass(Elab *e, const Form *call) {
         }
     }
 
+    /* class-superclasses SC1: a vector HERE is either a preamble written after
+     * the fundep clause (canonical order is preamble first) or a second
+     * preamble.  Both get a dedicated diagnostic rather than the generic
+     * "typeclass method requires ..." the method parser would otherwise blame
+     * the whole defclass with. */
+    if (methods_start < call->as.list.len &&
+        call->as.list.items[methods_start]->tag == F_VEC) {
+        Form *sv = call->as.list.items[methods_start];
+        if (fundep_has && n_supers == 0) {
+            diag_emit_with_code(DIAG_ERROR, sv->span,
+                TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
+                "defclass '%s': the superclass constraint vector must come BEFORE "
+                "the '|' functional-dependency clause: "
+                "(defclass %s [params] [(Super var)] | (from -> to) ...)",
+                name->name, name->name);
+        } else {
+            diag_emit_with_code(DIAG_ERROR, sv->span,
+                TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
+                "defclass '%s': only one superclass constraint vector is allowed; "
+                "list every superclass in it: [(A a) (B a)]",
+                name->name);
+        }
+        return NULL;
+    }
+
     /* Parse methods */
     TypeClassMethod *methods = NULL;
     uint8_t n_methods = 0;
@@ -1543,7 +1682,9 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     if (existing) {
         if (existing->n_assoc_types == n_assoc_types &&
             typeclass_signatures_match(existing, n_type_params,
-                                       type_param_kinds, n_methods, methods)) {
+                                       type_param_kinds, n_methods, methods,
+                                       n_supers, super_forms, super_n_args,
+                                       super_arg_idx)) {
             return e_nil(e, call->span);
         }
         diag_emit(DIAG_ERROR, call->span,
@@ -1711,6 +1852,13 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     tc->has_fundep        = fundep_has;
     tc->fundep_from_mask  = fundep_from_mask;
     tc->fundep_to_mask    = fundep_to_mask;
+    /* class-superclasses SC1: the unresolved preamble; resolved post-unit. */
+    tc->super_forms       = super_forms;
+    tc->super_n_args      = super_n_args;
+    tc->super_arg_idx     = super_arg_idx;
+    tc->n_supers          = n_supers;
+    tc->supers            = NULL;
+    tc->decl_form         = call;
     /* Phase HKT-P4: record the file that defined this typeclass. */
     tc->origin_file_id    = call->span.file_id;
     /* method-vs-defn clash check: a class registered during stdlib auto-load is
@@ -3548,6 +3696,8 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
     inst->n_type_param_constraints = n_type_param_constraints;
     /* Phase HKT-P4: record the file that defined this instance. */
     inst->origin_file_id = call->span.file_id;
+    /* class-superclasses SC4: the form, for the post-unit obligation check. */
+    inst->decl_form = call;
     /* M7: record the partial-app wildcard hole slot (0xFF when absent). */
     inst->partial_hole_pos = hkt_hole_pos;
 
@@ -5418,7 +5568,11 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
             if (bound.as.tyvar_.name) {
                 for (uint8_t ci = 0; ci < e->cur_fn_n_constraints && ci < 32; ci++) {
                     const TypeConstraint *con = &e->cur_fn_constraints[ci];
-                    if (!con || con->typeclass != tc) continue;
+                    /* class-superclasses SC3: a superclass constraint reaches a
+                     * parameter exactly when the subclass constraint that
+                     * entails it does, so the mask bit is the entailing
+                     * constraint's. */
+                    if (!con || !typeclass_entails(env, con->typeclass, tc)) continue;
                     if (!con->tyvar || !con->tyvar->name) continue;
                     if (strcmp(con->tyvar->name, bound.as.tyvar_.name) != 0) continue;
                     if (e->cur_fn_constraint_param_mask & (1u << ci))
@@ -6558,12 +6712,12 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                 TypeConstraint *con = &e->cur_fn_constraints[ci];
                 if (!con || !con->typeclass) continue;
                 /* Match by class identity, or by name so a re-registered class
-                 * (same defclass seen through two import paths) still counts. */
-                if (con->typeclass == owner) { constrained = true; break; }
-                if (con->typeclass->name && owner->name &&
-                    con->typeclass->name->len == owner->name->len &&
-                    memcmp(con->typeclass->name->name, owner->name->name,
-                           owner->name->len) == 0)
+                 * (same defclass seen through two import paths) still counts --
+                 * and, class-superclasses SC3 (Half A), through the constrained
+                 * class's superclass closure: `[^Monoid A]` entails `Semigroup`,
+                 * so `combine` is licensed.  typeclass_entails keeps the
+                 * by-name match inside the closure walk. */
+                if (typeclass_entails(&e->typeclass_env, con->typeclass, owner))
                     constrained = true;
             }
             if (!constrained) {
@@ -8443,4 +8597,178 @@ resolved_user_fallback:;
         }
     }
     return out;
+}
+
+/* ======================================================================== *
+ * class-superclasses (docs/upcoming/typeclass-superclasses-plan.md): the
+ * post-unit pass -- SC2 (resolve + validate the superclass graph) and SC4
+ * (the instance obligation, plan Half B).
+ *
+ * Runs once every form in the unit is registered, for the same reason method
+ * resolution already does (typeclass-guide: "instance order does not
+ * matter"): a superclass may be declared below its subclass, and the
+ * Semigroup [int] that discharges a Monoid [int] obligation may be declared
+ * below that instance.  Half B is what makes Half A sound -- without it the
+ * entailment licenses a `combine` call for which no instance need exist, and
+ * the resolver's fallback in that case is the silent carrier-representative
+ * bind the concrete-receiver arm of elab_method_call exists to refuse.
+ * ======================================================================== */
+
+static const char *sc_kind_name(const Kind *kinds, uint8_t i) {
+    return kind_to_string(kinds ? kinds[i] : KIND_STAR);
+}
+
+/* "int cstr" / "Vec" -- the instance head as the author wrote it where the
+ * symbol survived, else the structural type name. */
+static void sc_type_args_str(const Type *args, const Symbol *const *syms,
+                             uint8_t n, char *buf, size_t cap) {
+    size_t used = 0;
+    buf[0] = '\0';
+    for (uint8_t i = 0; i < n && used + 2 < cap; i++) {
+        const char *s = (syms && syms[i] && syms[i]->name) ? syms[i]->name
+                                                            : type_name(args[i]);
+        int w = snprintf(buf + used, cap - used, "%s%s", i ? " " : "", s);
+        if (w < 0) break;
+        used += (size_t)w;
+        if (used >= cap) { used = cap - 1; break; }
+    }
+}
+
+bool elab_typeclass_superclasses_finish(Elab *e) {
+    TypeClassEnv *env = &e->typeclass_env;
+    bool ok = true;
+
+    /* SC2 (1): resolve every preamble element to its class and check the
+     * shape fits: the superclass's parameter count is the number of variables
+     * the element names, and each variable's kind is what that parameter
+     * slot expects. */
+    for (TypeClass *tc = env->typeclasses; tc; tc = tc->next) {
+        if (tc->n_supers == 0) continue;
+        typeclass_resolve_superclasses(env, tc);
+        for (uint8_t i = 0; i < tc->n_supers; i++) {
+            const Form *f = tc->super_forms[i];
+            const char *sname = f->as.list.items[0]->as.sym->name;
+            TypeClass *s = tc->supers ? tc->supers[i] : NULL;
+            if (!s) {
+                diag_emit_with_code(DIAG_ERROR, f->span,
+                    TUR_E0391_CLASS_SUPERCLASS_UNRESOLVED,
+                    "superclass '%s' of typeclass '%s' is not a defined typeclass",
+                    sname, tc->name->name);
+                ok = false;
+                continue;
+            }
+            uint8_t n_args = tc->super_n_args[i];
+            if (s->n_type_params != n_args) {
+                diag_emit_with_code(DIAG_ERROR, f->span,
+                    TUR_E0391_CLASS_SUPERCLASS_UNRESOLVED,
+                    "superclass '%s' takes %u type parameter(s), but typeclass "
+                    "'%s' applies it to %u",
+                    sname, (unsigned)s->n_type_params, tc->name->name,
+                    (unsigned)n_args);
+                ok = false;
+                continue;
+            }
+            for (uint8_t k = 0; k < n_args; k++) {
+                uint8_t idx = tc->super_arg_idx[i * TUR_SUPER_MAX_ARGS + k];
+                Kind want = s->type_param_kinds ? s->type_param_kinds[k] : KIND_STAR;
+                Kind have = tc->type_param_kinds ? tc->type_param_kinds[idx] : KIND_STAR;
+                if (want != have) {
+                    diag_emit_with_code(DIAG_ERROR, f->as.list.items[1 + k]->span,
+                        TUR_E0391_CLASS_SUPERCLASS_UNRESOLVED,
+                        "superclass '%s' expects a parameter of kind '%s' here, "
+                        "but '%s' of typeclass '%s' has kind '%s'",
+                        sname, sc_kind_name(s->type_param_kinds, k),
+                        tc->type_params[idx]->name, tc->name->name,
+                        sc_kind_name(tc->type_param_kinds, idx));
+                    ok = false;
+                }
+            }
+        }
+    }
+    if (!ok) return false;
+
+    /* SC2 (2): the graph must be a DAG.  Each cycle is reported once, from
+     * the first class on it the registry walk reaches; the others on the same
+     * cycle are remembered so they do not report it again. */
+    {
+        TypeClass *reported[64];
+        uint32_t   n_reported = 0;
+        for (TypeClass *tc = env->typeclasses; tc; tc = tc->next) {
+            if (tc->n_supers == 0) continue;
+            bool skip = false;
+            for (uint32_t r = 0; r < n_reported && !skip; r++) skip = (reported[r] == tc);
+            if (skip) continue;
+            TypeClass *path[16];
+            uint8_t n = typeclass_find_super_cycle(tc, path, 16);
+            if (n == 0) continue;
+            char buf[512];
+            size_t used = 0;
+            buf[0] = '\0';
+            for (uint8_t k = 0; k < n && used + 1 < sizeof(buf); k++) {
+                int w = snprintf(buf + used, sizeof(buf) - used, "%s%s",
+                                 k ? " -> " : "", path[k]->name->name);
+                if (w < 0) break;
+                used += (size_t)w;
+                if (used >= sizeof(buf)) break;
+                if (n_reported < 64) reported[n_reported++] = path[k];
+            }
+            const Form *at = path[0]->decl_form ? path[0]->decl_form
+                                                : path[0]->super_forms[0];
+            diag_emit_with_code(DIAG_ERROR, at->span,
+                TUR_E0392_CLASS_SUPERCLASS_CYCLE,
+                "typeclass superclass cycle: %s -- the superclass graph must be "
+                "acyclic", buf);
+            ok = false;
+        }
+    }
+    if (!ok) return false;
+
+    /* SC4 (Half B): every instance of a class with a preamble needs, for each
+     * DIRECT superclass, an instance applying to the same type arguments.
+     * Transitivity follows by induction, because every instance in the
+     * registry is checked and the superclass instance found here is itself
+     * one of them.  The lookup is the ordinary instance-applies machinery --
+     * parametric heads, holes, and the instance's own declared constraints
+     * included -- not a second matcher; a type variable in the required
+     * position is accepted tentatively there, which is exactly how
+     * `Monoid [(Vec A)] [(Monoid A)]` discharges against a parametric
+     * `Semigroup [(Vec A)]`. */
+    for (TypeClassInstance *inst = env->instances; inst; inst = inst->next) {
+        TypeClass *c = inst->typeclass;
+        if (!c || c->n_supers == 0 || !c->supers || inst->super_obligations_ok)
+            continue;
+        bool inst_ok = true;
+        for (uint8_t i = 0; i < c->n_supers; i++) {
+            TypeClass *s = c->supers[i];
+            if (!s) { inst_ok = false; continue; }
+            uint8_t n_args = c->super_n_args[i];
+            Type          args[TUR_SUPER_MAX_ARGS];
+            const Symbol *arg_syms[TUR_SUPER_MAX_ARGS];
+            bool mapped = true;
+            for (uint8_t k = 0; k < n_args; k++) {
+                uint8_t idx = c->super_arg_idx[i * TUR_SUPER_MAX_ARGS + k];
+                if (idx >= inst->n_type_args || !inst->type_args) { mapped = false; break; }
+                args[k]     = inst->type_args[idx];
+                arg_syms[k] = inst->type_arg_syms ? inst->type_arg_syms[idx] : NULL;
+            }
+            if (!mapped) { inst_ok = false; continue; }
+            if (typeclass_env_lookup_instance(env, s, args, n_args)) continue;
+            char head[256], need[256];
+            sc_type_args_str(inst->type_args, inst->type_arg_syms,
+                             inst->n_type_args, head, sizeof(head));
+            sc_type_args_str(args, arg_syms, n_args, need, sizeof(need));
+            const Form *at = inst->decl_form ? inst->decl_form : c->decl_form;
+            diag_emit_with_code(DIAG_ERROR, at ? at->span : c->super_forms[i]->span,
+                TUR_E0393_CLASS_SUPERCLASS_INSTANCE_MISSING,
+                "(definstance %s [%s]) requires a %s [%s] instance ('%s' is a "
+                "superclass of '%s'); none is in scope. Add (definstance %s [%s] "
+                "...) -- it may appear anywhere in the program.",
+                c->name->name, head, s->name->name, need,
+                s->name->name, c->name->name, s->name->name, need);
+            inst_ok = false;
+        }
+        if (inst_ok) inst->super_obligations_ok = true;
+        else         ok = false;
+    }
+    return ok;
 }

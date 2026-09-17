@@ -1,0 +1,18 @@
+;; class-superclasses: two superclasses on one class.  `[^Mo A]` licenses both
+;; `sg-combine` (from Sg) and `tg-tag` (from Tg).
+(defclass Sg [a] (sg-combine [x : a y : a] : a))
+(defclass Tg [a] (tg-tag [x : a] : int))
+(defclass Mo [a]
+  [(Sg a) (Tg a)]
+  (sg-empty [] : a))
+
+(definstance Sg [int] (sg-combine [x y] (+ x y)))
+(definstance Tg [int] (tg-tag [x] 7))
+(definstance Mo [int] (sg-empty [] 0))
+
+(defn both [^Mo A] [x : A] : int
+  (+ (tg-tag x) (tg-tag (sg-combine x x))))
+
+(defn main [] : int
+  (println (both 21))
+  0)

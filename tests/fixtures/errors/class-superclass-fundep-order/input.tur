@@ -1,0 +1,6 @@
+;; class-superclasses SC1: the preamble goes BEFORE the `|` fundep clause.
+;; The other order is a dedicated diagnostic naming the canonical order, not
+;; a silent accept.
+(defclass Sg [a] (sg-combine [x : a y : a] : a))
+(defclass Coll [c e] | (c -> e) [(Sg c)] (cget [x : c i : int] : e))
+(defn main [] : int 0)

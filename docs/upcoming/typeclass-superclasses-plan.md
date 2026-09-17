@@ -1,10 +1,13 @@
 # Typeclass superclasses: `defclass` constraint preambles
 
-> **Status:** proposed (2026-09-16). **Track:** post-v1.
+> **Status:** SC0-SC6 **landed 2026-09-16** behind the gate (see section 7);
+> SC7-SC9 (graduation, stdlib adoption, post-adoption docs) remain open and
+> are post-v1.
 > **Type:** compiler feature (elaboration only, no codegen), plus a
 > **documentation correction that is independently shippable and should land
 > first**.
-> **Gate:** `--enable=class-superclasses` (new `EXPERIMENTS[]` row).
+> **Gate:** `--enable=class-superclasses` (`EXPERIMENTS[]` row, prototype,
+> introduced 0.49.0, expires 0.55.0).
 
 ## 0. Summary
 
@@ -521,3 +524,64 @@ adoption, that is the data point that promotes this plan.
   forms this design reuses.
 - [../guides/typeclass-internals-guide.md](../guides/typeclass-internals-guide.md)
   -- dictionary lowering, and the zero-cost precedent set by associated types.
+
+## 7. Landed (2026-09-16): SC0-SC6
+
+What shipped, and where it departs from the phases above.
+
+- **SC0** had already landed separately: neither `turi-parity-guide.md` nor
+  `introducing-saffron.md` claimed superclasses by the time this branch was
+  cut, and `typeclass-internals-guide.md` already carried the "`defclass`
+  has no superclasses" clarification. `introducing-saffron.md` now says
+  "constraints, superclasses, defaults" again, as SC6 anticipated, because
+  the section it points at exists.
+- **SC1** -- `struct TypeClass` gained `super_forms` / `super_n_args` /
+  `super_arg_idx` / `n_supers` (unresolved) and `supers` (resolved), plus
+  `decl_form` for post-unit diagnostics; `TypeClassInstance` gained
+  `decl_form` and `super_obligations_ok`. `elab_defclass` parses the vector
+  between the type-param vector and the `|` clause, gated on
+  `g_opt_class_superclasses`, and `typeclass_signatures_match` compares
+  preambles. Each element may name up to `TUR_SUPER_MAX_ARGS` (4) of the
+  class's own variables, so a multi-parameter superclass is supported.
+  Four diagnostic codes: TUR-E0390 (preamble: gate off, malformed element,
+  unknown variable, vector after the `|` clause), TUR-E0391 (superclass
+  unresolved, or its arity/kinds do not fit), TUR-E0392 (cycle, with the
+  path), TUR-E0393 (instance obligation).
+- **SC2** -- `elab_typeclass_superclasses_finish` runs from
+  `elaborate_program_session` after the deferred-defn second chance: resolve
+  by name, arity + kind check per element, cycle detection (each cycle
+  reported once), then Half B. Before that pass `typeclass_entails` resolves
+  supers by name on demand, so entailment works mid-unit. The closure is a
+  bounded DFS with a visited set rather than a cached bitset -- class counts
+  are tiny and the walk only runs on tyvar-receiver dispatch.
+- **SC3** -- `elab_typeclasses.c`'s receiver-directed constraint walk and the
+  return-directed `tyvar_reaches_param` walk both go through
+  `typeclass_entails`, which keeps the by-name match inside the closure. The
+  TUR-E0015 wording is unchanged: a superclass of a constrained class is
+  entailed, so there is no "you effectively wrote it" case left to word.
+- **SC4** -- the obligation is checked against each DIRECT superclass;
+  transitivity follows because every registered instance is checked and the
+  instance found is one of them. The lookup is
+  `typeclass_env_lookup_instance`, so parametric heads discharge against
+  their own constraints as planned. A REPL session marks a discharged
+  instance so it is not re-reported every turn.
+- **Interpreter.** Entailment IS a shared-elaborator property, but turi's
+  dictionary passing was not: `frame_bind_constraint_dicts` bound one
+  dictionary per declared constraint, so a `[^Mo A]` frame carried no `Sg`
+  dictionary and a `combine` call at a parametric `(Option int)` fell back
+  to the int representative (`class-superclass-parametric-instance` printed
+  nothing). It now binds the superclass closure's dictionaries at the same
+  tyvar. This was the divergence SC5 said to look for.
+- **SC5** -- the ten planned fixtures plus `class-superclass-hkt`,
+  `class-superclass-parametric-instance`, `class-superclass-return-directed`,
+  `errors/class-superclass-unknown-super`, `errors/class-superclass-fundep-order`
+  and `errors/class-superclass-kind-mismatch`. All pass under `run.sh` and
+  `run-turi.sh` with no `requires.*` markers.
+  `tests/run-experiments-user-config.sh` regained its gated-source probe
+  (E-G) on this row. No fixture snapshot moved (2.4 held).
+- **SC6** -- `typeclass-guide.md` `## Superclasses`,
+  `experimental-flags-guide.md`'s registry note.
+- **Deliberately not done:** stdlib adoption (SC8) and the lattice-guide /
+  parity-table edits (SC9), which are gated on SC7 and on the retrofit audit
+  in 4.1. The two stdlib comments at `typeclass-lattice.tur:60` and `:258`
+  remain true and stay.

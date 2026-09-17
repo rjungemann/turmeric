@@ -1,0 +1,4 @@
+;; class-superclasses SC2: the superclass's parameter kind must match the
+;; variable applied to it.  `Functor` wants `* -> *`; `a` is `*`.
+(defclass Mo [a] [(Functor a)] (sg-empty [] : a))
+(defn main [] : int 0)

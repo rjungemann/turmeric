@@ -35,6 +35,35 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **Typeclass superclasses, behind `--enable=class-superclasses`.** A
+  `defclass` may list the classes a constraint on it entails, in a
+  constraint vector right after the type-parameter vector -- the same
+  `[(Class var)]` spelling `definstance` and `defn` already use:
+
+  ```turmeric
+  (defclass Monoid [a]
+    [(Semigroup a)]
+    (mempty [] : a))
+
+  (defn double-up [^Monoid A] [x : A] : A
+    (combine x x))          ;; entailed: no separate ^Semigroup A needed
+  ```
+
+  Entailment is transitive and covers return-directed methods. It is sound
+  because of the paired obligation: `(definstance Monoid [int] ...)` requires
+  a `Semigroup [int]` instance somewhere in the program (TUR-E0393), with a
+  parametric instance discharging against its own constraints. The graph must
+  be acyclic (TUR-E0392), each superclass must resolve with matching arity
+  and kinds (TUR-E0391), and the preamble itself -- gate off, malformed,
+  naming a non-parameter, or written after the `|` fundep clause -- is
+  TUR-E0390. No codegen change: static dispatch still resolves each call
+  from the concrete instantiation, and the interpreter binds the superclass
+  dictionaries alongside the subclass's. The stdlib's classes stay flat until
+  the experiment graduates. `tur experiments` lists the row (prototype,
+  introduced 0.49.0, expires 0.55.0);
+  `docs/upcoming/typeclass-superclasses-plan.md` is the plan and
+  `typeclass-guide.md` the reference.
+
 - **`#s"..."` is always available.** The owned-String literal --
   `#s"text"` reads as `(string/from-cstr "text")`, where bare `"text"` stays a
   borrowed `cstr` -- needs no `#lang` token and no `#use-reader-macros`. Every

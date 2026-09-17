@@ -372,6 +372,24 @@ typedef enum DiagCode {
      * because it reports a live trust-boundary fact and changes no behavior;
      * escalating warn -> refuse-the-override is a later, gated step. */
     TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+    /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md), the
+     * `defclass` constraint preamble `[(Super var)...]`:
+     * E0390 -- the preamble itself: written without --enable=class-superclasses,
+     *          malformed (an element that is not `(Class var...)`), naming a
+     *          variable that is not one of the class's type params, or placed
+     *          after the `|` fundep clause instead of before it.
+     * E0391 -- a superclass name does not resolve to a defined typeclass, or
+     *          its parameter count / kinds do not fit the arguments given.
+     * E0392 -- the superclass graph has a cycle (a class may not, directly
+     *          or transitively, list itself).
+     * E0393 -- the instance obligation (plan Half B): `(definstance C [T])`
+     *          where a superclass `S` of `C` has no instance applying to `T`.
+     *          Without this the entailment (Half A) would license a method
+     *          call for which no instance need exist. */
+    TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
+    TUR_E0391_CLASS_SUPERCLASS_UNRESOLVED,
+    TUR_E0392_CLASS_SUPERCLASS_CYCLE,
+    TUR_E0393_CLASS_SUPERCLASS_INSTANCE_MISSING,
     /* exports-map-syntax-tighten-plan: `:exports` in build.tur got an
      * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal
      * (`#map{...}`) or a legacy bare `#{...}` map or a path vector. */

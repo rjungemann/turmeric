@@ -1,0 +1,25 @@
+;; class-superclasses: a superclass over a multi-parameter class.  `Sized`
+;; applies `Get2` to both of its own parameters, and the instance obligation
+;; maps the instance head positionally: `Sized [Bag Pos]` needs `Get2 [Bag Pos]`.
+(defstruct Bag [n : int])
+(defstruct Pos [x : int])
+
+(defclass Get2 [s e]
+  (g2-put [^borrow self : s v : e] : int))
+
+(defclass Sized [s e]
+  [(Get2 s e)]
+  (sz-len [^borrow self : s v : e] : int))
+
+(definstance Get2 [Bag Pos]
+  (g2-put [self v] (+ (.n self) (.x v))))
+
+(definstance Sized [Bag Pos]
+  (sz-len [self v] (* (.n self) (.x v))))
+
+(defn main [] : int
+  (let [b (make-struct Bag 5)
+        p (make-struct Pos 7)]
+    (println (g2-put b p))
+    (println (sz-len b p))
+    0))

@@ -597,7 +597,7 @@ the class's own type variable (`eq [x : a y : a]`), or returning one, needs a
 type the tag cannot supply and panics saying so; narrow with `is?` or `cast`
 first in those cases. [saffron-guide.md](saffron-guide.md) lists the exact
 set, and [typeclass-guide.md](typeclass-guide.md) covers constraints,
-defaults and the stdlib classes.
+superclasses, defaults and the stdlib classes.
 
 `Animal`'s constructors happen to carry nothing, but that is not a
 restriction: an ADT whose constructors carry payloads dispatches the same way,

@@ -1,0 +1,5 @@
+;; class-superclasses SC1: a preamble element must name one of the class's
+;; own type parameters.
+(defclass Sg [a] (sg-combine [x : a y : a] : a))
+(defclass Mo [a] [(Sg b)] (sg-empty [] : a))
+(defn main [] : int 0)
