@@ -10,22 +10,11 @@
 ;; 1
 ;; 2
 ;; 3
-(defn spawn [f :ptr<void>] :ptr<void>
-  ```c
-  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
-  return (void *)tid;
-  ```)
-
-(defn join [t :ptr<void>] :int
-  ```c
-  pthread_join(*(pthread_t *)t, NULL);
-  free(t);
-  return 0;
-  ```)
-
 ;; server-loop: repeatedly offer the channel and echo values back.
 ;; Protocol: Session[Rec self (Branch (Recv int (Send int self)) Close)]
+
+(load "stdlib/session.tur")
+
 (defn server-loop [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
   (match (offer ch)
     (Left ch)
@@ -45,11 +34,11 @@
 
 (defn main [] :int
   (let [[s r] (make-session (Rec self (Branch (Recv int (Send int self)) Close)))]
-    (let [t (spawn (fn [] (server-loop r)))]
+    (let [t (session-spawn (fn [] (server-loop r)))]
       (let [s (client-step s 1)]
         (let [s (client-step s 2)]
           (let [s (client-step s 3)]
             (let [s (choose-right s)]
               (close s)
-              (join t)))))))
+              (session-join t)))))))
   0)

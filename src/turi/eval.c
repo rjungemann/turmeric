@@ -152,6 +152,10 @@ static TuriValue native_panic_pred(TuriEnv *env, TuriValue *args, uint32_t n, vo
  * turi_eval_register_builtins so they shadow the inline-C defns the moment
  * stdlib/workflow.tur is loaded. */
 static TuriValue native_save_cont(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
+/* stdlib/session.tur session-spawn / session-join overrides (defined next to
+ * the cooperative session runtime; turi-session-expansion S2). */
+static TuriValue native_session_spawn(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
+static TuriValue native_session_join(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
 static TuriValue native_resume_cont(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
 
 /* Register a native C function as a global binding in env.
@@ -241,6 +245,11 @@ void turi_eval_register_builtins(TuriEnv *env) {
      * the cont machinery). */
     turi_env_register_native(env, "save-cont!",   native_save_cont,   NULL);
     turi_env_register_native(env, "resume-cont!", native_resume_cont, NULL);
+    /* stdlib/session.tur peer spawn: a scheduler fiber instead of a pthread
+     * (the inline-C body cannot run here and would deadlock the cooperative
+     * rendezvous even if it could). */
+    turi_env_register_native(env, "session-spawn", native_session_spawn, NULL);
+    turi_env_register_native(env, "session-join",  native_session_join,  NULL);
     /* TI2: generator ptr<void> helpers (override gen.tur inline-C). */
     turi_env_register_native(env, "gen-some?",  native_gen_some,   NULL);
     turi_env_register_native(env, "gen-unwrap", native_gen_unwrap, NULL);
@@ -9752,7 +9761,25 @@ typedef struct TuriChan {
     TuriFiber *recv_waiter;                     /* parked receiver, or NULL */
     int        refcount;                        /* 2 at make-session */
     int        abandoned;                       /* a peer has closed */
+    const char *dbg_proto;                      /* TUR_DBGPROTO tag, or NULL (router cell) */
 } TuriChan;
+
+/* Deadlock diagnostics (turi-session-expansion S6).  Because the rendezvous
+ * is cooperative and single-threaded, a blocked op with no runnable peer is
+ * a detected protocol deadlock, not a hang -- which the compiled pthread
+ * runtime cannot see.  Name the channel by its make-session protocol so the
+ * message points at the endpoint instead of just the op. */
+static const char *session_chan_desc(const TuriChan *ch) {
+    return (ch && ch->dbg_proto) ? ch->dbg_proto : "<multi-party role channel>";
+}
+static TuriValue session_deadlock_error(const TuriChan *ch, const char *op,
+                                        const char *why) {
+    return turi_errorf("eval: session %s deadlocked (%s) on Session[%s] -- "
+                       "no participant can make progress; this is a protocol "
+                       "deadlock in the program, not an interpreter limit "
+                       "(the compiled binary would hang here)",
+                       op, why, session_chan_desc(ch));
+}
 
 #define TURI_SESS_SENDER   0
 #define TURI_SESS_RECEIVER 1
@@ -9781,7 +9808,18 @@ static int session_park_or_spin(TuriEnv *env, TuriChan *ch, int role) {
 }
 
 static void session_wake(TuriEnv *env, TuriFiber **slot) {
-    if (*slot) { TuriFiber *w = *slot; *slot = NULL; turi_sched_enqueue(env, w); }
+    if (!*slot) return;
+    TuriFiber *w = *slot;
+    *slot = NULL;
+    /* Only a SUSPENDED fiber is enqueued, and it flips to READY here -- the
+     * same discipline flush_wakers (fiber.c) applies.  A fiber parked on a
+     * timed recv has two wake sources (the deposit and its deadline timer);
+     * whichever fires second then finds the fiber already READY and stands
+     * down instead of enqueueing it twice, which would corrupt the intrusive
+     * ready list. */
+    if (w->state != TURI_FIBER_SUSPENDED) return;
+    w->state = TURI_FIBER_READY;
+    turi_sched_enqueue(env, w);
 }
 
 /* Generic slot send: wait for the slot to be idle, deposit, wake a parked
@@ -9795,7 +9833,7 @@ static TuriValue session_send_on(TuriEnv *env, TuriChan *ch, TuriValue val,
                                  int *state, TuriValue *slot) {
     while (*state != 0 && !ch->abandoned) {
         if (session_park_or_spin(env, ch, TURI_SESS_SENDER) != 0)
-            return turi_error("eval: session send deadlocked (no receiver)");
+            return session_deadlock_error(ch, "send", "no receiver");
     }
     if (ch->abandoned) return turi_int((int64_t)(intptr_t)ch);  /* drop */
     *slot  = val;
@@ -9803,7 +9841,7 @@ static TuriValue session_send_on(TuriEnv *env, TuriChan *ch, TuriValue val,
     session_wake(env, &ch->recv_waiter);
     while (*state != 2 && !ch->abandoned) {
         if (session_park_or_spin(env, ch, TURI_SESS_SENDER) != 0)
-            return turi_error("eval: session send deadlocked (receiver never acked)");
+            return session_deadlock_error(ch, "send", "receiver never acked");
     }
     if (!ch->abandoned) {
         *state = 0;
@@ -9823,7 +9861,7 @@ static TuriValue session_recv_on(TuriEnv *env, TuriChan *ch,
         if (ch->abandoned)
             return turi_error("eval: recv on a closed session channel");
         if (session_park_or_spin(env, ch, TURI_SESS_RECEIVER) != 0)
-            return turi_error("eval: session recv deadlocked (no sender)");
+            return session_deadlock_error(ch, "recv", "no sender");
     }
     TuriValue v = *slot;
     *state = 2;
@@ -9851,22 +9889,44 @@ static TuriValue session_recv_tag(TuriEnv *env, TuriChan *ch) {
 /* recv-timeout: wait up to `dur_ms` for a deposited value on the data slot.
  * On success, ack, stash the value in env->session_rtv, and return tag 0
  * (Left); on timeout (or a peer that closed without sending) return tag 1
- * (Right).  The receiver runs in the main context in practice (the compiled
- * fixtures call recv-timeout from the main thread), so the timed wait pumps the
- * scheduler and re-checks the deadline; poll_io caps each step at 50 ms so the
- * deadline is observed promptly. */
+ * (Right).  In the main context the timed wait pumps the scheduler and
+ * re-checks the deadline (poll_io caps each step at 50 ms so the deadline is
+ * observed promptly).  Inside a fiber the park has two wake sources: the
+ * channel's recv_waiter slot (the peer's deposit) and a timer future armed on
+ * the remaining time (the deadline) -- whichever fires first resumes the
+ * fiber, and the top-of-loop re-check decides the branch.  Before the timer
+ * was armed, a fiber-context recv-timeout waited for the value however late
+ * it came and took Left (turi-fiber-recv-timeout-ignores-its-deadline). */
 static TuriValue session_recv_timeout(TuriEnv *env, TuriChan *ch, int64_t dur_ms) {
     uint64_t deadline = turi_now_ms() + (dur_ms > 0 ? (uint64_t)dur_ms : 0);
     while (ch->data_state != 1) {
         if (ch->abandoned)              return turi_int(1);  /* peer gone -> timeout */
         if (turi_now_ms() >= deadline)  return turi_int(1);  /* elapsed -> timeout */
-        if (env->current_fiber) {
-            /* Fiber-context timed recv would need a scheduler timer to bound the
-             * park; the shipped variants call recv-timeout from the main context,
-             * so park cooperatively and let a woken deposit / the deadline break
-             * the loop. */
-            if (session_park_or_spin(env, ch, TURI_SESS_RECEIVER) != 0)
-                return turi_int(1);
+        TuriFiber *cur = env->current_fiber;
+        if (cur) {
+            uint64_t now = turi_now_ms();
+            TuriFuture *tf = turi_future_new(env);
+            turi_timer_add(env, deadline > now ? deadline - now : 0, tf);
+            turi_future_add_waker(tf, cur);
+            ch->recv_waiter = cur;
+            cur->state = TURI_FIBER_SUSPENDED;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+            swapcontext(&cur->ctx, &env->sched_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+            /* Resumed by one source; disarm the other so neither a late
+             * deposit-wake nor a late timer firing can touch this fiber once
+             * it has moved on (session_wake / flush_wakers both also refuse
+             * a fiber that is not SUSPENDED, so this is belt and braces). */
+            if (ch->recv_waiter == cur) ch->recv_waiter = NULL;
+            if (tf->state == TURI_FUTURE_PENDING) {
+                turi_timer_cancel(env, tf);
+                turi_future_remove_waker(tf, cur);
+            }
         } else {
             /* Main context: pump one bounded scheduler step, then re-check the
              * deadline.  turi_sched_step returns false only when nothing is
@@ -9991,6 +10051,27 @@ static bool eval_session_intercept(TuriEnv *env, EvalFrame *frame,
     if (ic->n_captures != 0 || !ic->code.p) return false;
     const char *p = ic->code.p;
     uint32_t    n = ic->code.len;
+    /* session-payloads-are-int64-only: the elaborator wraps a recv template in
+     * a payload conversion (session_payload_from_word in elab_sessions.c) --
+     * `tur_session_bits_f64(...)`, `tur_session_bits_f32(...)` or
+     * `(void *)(intptr_t)...` -- so the compiled int64 word comes back at its
+     * type.  The interpreter carries the value tagged, so the wrapper is a
+     * no-op here: peel it and match the inner template as before. */
+    for (;;) {
+        static const char kF64[] = "tur_session_bits_f64(";
+        static const char kF32[] = "tur_session_bits_f32(";
+        static const char kPtr[] = "(void *)(intptr_t)";
+        if (n > sizeof(kF64) - 1 && memcmp(p, kF64, sizeof(kF64) - 1) == 0 && p[n - 1] == ')') {
+            p += sizeof(kF64) - 1; n -= (uint32_t)(sizeof(kF64) - 1) + 1; continue;
+        }
+        if (n > sizeof(kF32) - 1 && memcmp(p, kF32, sizeof(kF32) - 1) == 0 && p[n - 1] == ')') {
+            p += sizeof(kF32) - 1; n -= (uint32_t)(sizeof(kF32) - 1) + 1; continue;
+        }
+        if (n > sizeof(kPtr) - 1 && memcmp(p, kPtr, sizeof(kPtr) - 1) == 0) {
+            p += sizeof(kPtr) - 1; n -= (uint32_t)(sizeof(kPtr) - 1); continue;
+        }
+        break;
+    }
 #define SESS_PFX(s) (n >= (uint32_t)(sizeof(s) - 1) && \
                      memcmp(p, (s), sizeof(s) - 1) == 0)
 #define SESS_EVAL(dst, idx)                                             \
@@ -10001,6 +10082,24 @@ static bool eval_session_intercept(TuriEnv *env, EvalFrame *frame,
     if (ic->n_val_exprs == 0 && SESS_PFX("tur_session_new(")) {
         TuriChan *ch = (TuriChan *)turi_val_calloc(env, sizeof(TuriChan));
         ch->refcount = 2;
+        /* Keep the protocol tag the elaborator baked in as
+         * tur_session_new(TUR_DBGPROTO("...")) -- the compiled runtime keeps
+         * it on the channel in debug builds; here it names the channel in
+         * the deadlock diagnostics (S6). */
+        {
+            static const char kTag[] = "TUR_DBGPROTO(\"";
+            for (uint32_t i = 0; i + sizeof(kTag) - 1 <= n; i++) {
+                if (memcmp(p + i, kTag, sizeof(kTag) - 1) != 0) continue;
+                uint32_t b = i + (uint32_t)(sizeof(kTag) - 1), q = b;
+                while (q < n && p[q] != '"') q++;
+                if (q > b) {
+                    char *tag = (char *)turi_val_calloc(env, (size_t)(q - b) + 1);
+                    memcpy(tag, p + b, q - b);
+                    ch->dbg_proto = tag;
+                }
+                break;
+            }
+        }
         *out = turi_int((int64_t)(intptr_t)ch);
         return true;
     }
@@ -10061,7 +10160,7 @@ static bool eval_session_intercept(TuriEnv *env, EvalFrame *frame,
     }
     /* tur__rtv_: the recv-timeout Left arm's value slot -- return the value
      * stashed by the preceding session_recv_timeout success. */
-    if (ic->n_val_exprs == 0 && n == 9 && memcmp(p, "tur__rtv_", 9) == 0) {
+    if (ic->n_val_exprs == 0 && SESS_PFX("tur__rtv_")) {
         *out = env->session_rtv;
         return true;
     }
@@ -10105,6 +10204,169 @@ static bool eval_session_intercept(TuriEnv *env, EvalFrame *frame,
 #undef SESS_PFX
 #undef SESS_EVAL
     return false;
+}
+
+/* -------------------------------------------------------------------------
+ * Fiber spawn / await helpers (Phase S7), shared by the EX_ASYNC / EX_AWAIT
+ * arms and by the session-spawn / session-join native overrides below.
+ * ---------------------------------------------------------------------- */
+
+/* Spawn a scheduler fiber that applies `cl_val` (a zero-arg closure) and
+ * returns its future.  A non-closure value is treated as an already-computed
+ * result and handed back as a resolved future. */
+static TuriValue eval_spawn_fiber(TuriEnv *env, TuriValue cl_val) {
+    /* Allocate the fiber's own future. */
+    TuriFuture *f = turi_future_new(env);
+
+    if (cl_val.tag != TURI_CLOSURE) {
+        /* R4 (turi-interpret-flip-residual-plan): the elaborator does not
+         * wrap a non-fn async body in a thunk -- `(async EXPR)` stores EXPR
+         * directly (elab_concurrent.c).  When EXPR is not a `(fn ...)`
+         * literal, the caller's pre-evaluation already ran the body to
+         * completion in the current context (e.g. `(async (with-handler
+         * ...))` settles to its int result).  Under the single-threaded
+         * interpreter that is observationally a resolved future: settle it
+         * with the value and hand back the future so `await` returns it,
+         * instead of erroring "expected a function".  A `(fn [] ...)` thunk
+         * still takes the fiber-spawn path below. */
+        turi_future_resolve(env, f, cl_val);
+        return turi_future_val(f);
+    }
+
+    /* Allocate and initialise the fiber struct. */
+    /* Escaping payload: a fiber is linked into the scheduler/future and lives
+     * until env teardown; pool-owned (its stack stays mmap/malloc below). */
+    /* TuriFiber leads with a ucontext_t that requires 16-byte alignment;
+     * the default pointer-aligned pool would trip UBSan and can corrupt
+     * makecontext/swapcontext register save areas.  Request _Alignof. */
+    TuriFiber *fiber = (TuriFiber *)turi_val_calloc_aligned(
+        env, sizeof(TuriFiber), _Alignof(TuriFiber));
+
+    fiber->own_future    = f;
+    f->owner             = fiber;
+    fiber->env           = env;
+    fiber->fn_closure_val = cl_val;
+    fiber->state         = TURI_FIBER_READY;
+    fiber->cancelled     = false;
+
+    /* Allocate fiber stack. */
+#ifndef __EMSCRIPTEN__
+    fiber->stack = (char *)mmap(NULL, TURI_ASYNC_STACK_SIZE,
+                                PROT_READ | PROT_WRITE,
+                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (fiber->stack == MAP_FAILED) {
+        return turi_error("eval: mmap failed for async fiber stack");
+    }
+#else
+    fiber->stack = (char *)malloc(TURI_ASYNC_STACK_SIZE);
+    if (!fiber->stack) {
+        return turi_error("eval: malloc failed for async fiber stack");
+    }
+#endif
+    /* turi-value-pool-residual-sites: track for reclaim in turi_env_free.
+     * turi-async-fiber-stack-reclaim: keep the node so the scheduler can
+     * munmap this stack early once the fiber reaches TURI_FIBER_DONE,
+     * instead of holding it until env teardown (O(N) growth otherwise). */
+    fiber->stack_node =
+        turi_env_track_coro_stack(env, fiber->stack, TURI_ASYNC_STACK_SIZE);
+
+#if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    getcontext(&fiber->ctx);
+#ifndef __EMSCRIPTEN__
+    fiber->ctx.uc_stack.ss_sp   = fiber->stack;
+    fiber->ctx.uc_stack.ss_size = TURI_ASYNC_STACK_SIZE;
+    fiber->ctx.uc_link          = NULL;
+#endif
+    /* NOTE: g_pending_async_fiber is set right before swapcontext in the
+     * scheduler, not here, so that creating multiple fibers before running
+     * any of them doesn't overwrite the pointer prematurely. */
+    makecontext(&fiber->ctx, async_fiber_thunk, 0);
+#if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+
+    /* Enqueue in the scheduler ready queue. */
+    turi_sched_enqueue(env, fiber);
+
+    return turi_future_val(f);
+}
+
+/* Wait for the future `fv` to settle and return its value: park the current
+ * fiber on it, or pump the event loop from the main context.  DEPR-R0
+ * (throw-deprecation-plan): a rejection surfaces as a TURI_REJECTION value
+ * rather than throwing. */
+static TuriValue eval_await_value(TuriEnv *env, TuriValue fv) {
+    if (fv.tag != TURI_FUTURE)
+        return turi_errorf("eval: await: expected a future, got tag %d", fv.tag);
+
+    TuriFuture *f = fv.as_future;
+
+    /* Already settled? */
+    if (f->state == TURI_FUTURE_RESOLVED) return f->result;
+    if (f->state == TURI_FUTURE_REJECTED) {
+        if (turi_is_rejection(f->result)) return f->result;
+        if (turi_is_error(f->result))
+            return turi_rejection(turi_error_message(f->result));
+        return turi_rejection("future rejected");
+    }
+
+    /* Pending: check if we are inside an async fiber. */
+    TuriFiber *cur = env->current_fiber;
+    if (cur) {
+        /* Suspend current fiber until future resolves. */
+        turi_future_add_waker(f, cur);
+        cur->awaiting_future = f;
+        cur->state = TURI_FIBER_SUSPENDED;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+        swapcontext(&cur->ctx, &env->sched_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+        /* Resumed: future has settled; same rejection surfacing as above. */
+        if (f->state == TURI_FUTURE_RESOLVED) return f->result;
+        if (f->state == TURI_FUTURE_REJECTED) {
+            if (turi_is_rejection(f->result)) return f->result;
+            if (turi_is_error(f->result))
+                return turi_rejection(turi_error_message(f->result));
+            return turi_rejection("future rejected");
+        }
+        return turi_error("eval: await: unexpected future state");
+    }
+    /* Main (non-fiber) context: run event loop until future resolves. */
+    return turi_await_future(env, f);
+}
+
+/* stdlib/session.tur session-spawn / session-join native overrides
+ * (turi-session-expansion S2).  Compiled, the pair is a pthread over
+ * tur_session_thread_wrapper; here the peer is a scheduler fiber and its
+ * SessionPeer handle is the fiber's future, so the same fixture source runs
+ * on both backends and the cooperative session rendezvous (above) sees a
+ * peer it can hand control to.  Registered in turi_eval_register_builtins,
+ * so they shadow the inline-C defns the moment the module is loaded. */
+static TuriValue native_session_spawn(TuriEnv *env, TuriValue *args, uint32_t n,
+                                      void *ud) {
+    (void)ud;
+    if (n != 1 || args[0].tag != TURI_CLOSURE)
+        return turi_error("session-spawn: expected a zero-argument function");
+    if (!turi_env_has_cap(env, TURI_CAP_ASYNC))
+        return turi_error("eval: session-spawn not allowed in sandboxed environment");
+    return eval_spawn_fiber(env, args[0]);
+}
+
+static TuriValue native_session_join(TuriEnv *env, TuriValue *args, uint32_t n,
+                                     void *ud) {
+    (void)ud;
+    if (n != 1 || args[0].tag != TURI_FUTURE)
+        return turi_error("session-join: expected a SessionPeer from session-spawn");
+    TuriValue r = eval_await_value(env, args[0]);
+    if (turi_is_error(r)) return r;
+    return turi_nil();
 }
 
 /* -------------------------------------------------------------------------
@@ -10940,140 +11202,20 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (!turi_env_has_cap(env, TURI_CAP_ASYNC))
             return turi_error("eval: async not allowed in sandboxed environment");
 
-        /* Allocate the fiber's own future. */
-        TuriFuture *f = turi_future_new(env);
-
         /* Pre-evaluate fn_expr in the current (main) context to get a closure.
          * This avoids binding-name lookup issues inside the fiber. */
         TuriValue cl_val = eval_expr(env, frame, e->as.async_.fn_expr);
         if (turi_is_error(cl_val) || env_signaled(env)) {
             return cl_val;
         }
-        if (cl_val.tag != TURI_CLOSURE) {
-            /* R4 (turi-interpret-flip-residual-plan): the elaborator does not
-             * wrap a non-fn async body in a thunk -- `(async EXPR)` stores EXPR
-             * directly (elab_concurrent.c).  When EXPR is not a `(fn ...)`
-             * literal, the pre-evaluation above already ran the body to
-             * completion in the current context (e.g. `(async (with-handler
-             * ...))` settles to its int result).  Under the single-threaded
-             * interpreter that is observationally a resolved future: settle it
-             * with the value and hand back the future so `await` returns it,
-             * instead of erroring "expected a function".  A `(fn [] ...)` thunk
-             * still takes the fiber-spawn path below. */
-            turi_future_resolve(env, f, cl_val);
-            return turi_future_val(f);
-        }
-
-        /* Allocate and initialise the fiber struct. */
-        /* Escaping payload: a fiber is linked into the scheduler/future and lives
-         * until env teardown; pool-owned (its stack stays mmap/malloc below). */
-        /* TuriFiber leads with a ucontext_t that requires 16-byte alignment;
-         * the default pointer-aligned pool would trip UBSan and can corrupt
-         * makecontext/swapcontext register save areas.  Request _Alignof. */
-        TuriFiber *fiber = (TuriFiber *)turi_val_calloc_aligned(
-            env, sizeof(TuriFiber), _Alignof(TuriFiber));
-
-        fiber->own_future    = f;
-        f->owner             = fiber;
-        fiber->env           = env;
-        fiber->fn_closure_val = cl_val;
-        fiber->state         = TURI_FIBER_READY;
-        fiber->cancelled     = false;
-
-        /* Allocate fiber stack. */
-#ifndef __EMSCRIPTEN__
-        fiber->stack = (char *)mmap(NULL, TURI_ASYNC_STACK_SIZE,
-                                    PROT_READ | PROT_WRITE,
-                                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (fiber->stack == MAP_FAILED) {
-            return turi_error("eval: mmap failed for async fiber stack");
-        }
-#else
-        fiber->stack = (char *)malloc(TURI_ASYNC_STACK_SIZE);
-        if (!fiber->stack) {
-            return turi_error("eval: malloc failed for async fiber stack");
-        }
-#endif
-        /* turi-value-pool-residual-sites: track for reclaim in turi_env_free.
-         * turi-async-fiber-stack-reclaim: keep the node so the scheduler can
-         * munmap this stack early once the fiber reaches TURI_FIBER_DONE,
-         * instead of holding it until env teardown (O(N) growth otherwise). */
-        fiber->stack_node =
-            turi_env_track_coro_stack(env, fiber->stack, TURI_ASYNC_STACK_SIZE);
-
-#if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-        getcontext(&fiber->ctx);
-#ifndef __EMSCRIPTEN__
-        fiber->ctx.uc_stack.ss_sp   = fiber->stack;
-        fiber->ctx.uc_stack.ss_size = TURI_ASYNC_STACK_SIZE;
-        fiber->ctx.uc_link          = NULL;
-#endif
-        /* NOTE: g_pending_async_fiber is set right before swapcontext in the
-         * scheduler, not here, so that creating multiple fibers before running
-         * any of them doesn't overwrite the pointer prematurely. */
-        makecontext(&fiber->ctx, async_fiber_thunk, 0);
-#if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
-#  pragma clang diagnostic pop
-#endif
-
-        /* Enqueue in the scheduler ready queue. */
-        turi_sched_enqueue(env, fiber);
-
-        return turi_future_val(f);
+        return eval_spawn_fiber(env, cl_val);
     }
 
     /* (await fut-expr) — wait for a Future to resolve; return its value. */
     case EX_AWAIT: {
         TuriValue fv = eval_expr(env, frame, e->as.await_.fut_expr);
         if (turi_is_error(fv) || env_signaled(env)) return fv;
-
-        if (fv.tag != TURI_FUTURE)
-            return turi_errorf("eval: await: expected a future, got tag %d", fv.tag);
-
-        TuriFuture *f = fv.as_future;
-
-        /* Already settled?  DEPR-R0 (throw-deprecation-plan): surface
-         * rejections as TURI_REJECTION values rather than throwing. */
-        if (f->state == TURI_FUTURE_RESOLVED) return f->result;
-        if (f->state == TURI_FUTURE_REJECTED) {
-            if (turi_is_rejection(f->result)) return f->result;
-            if (turi_is_error(f->result))
-                return turi_rejection(turi_error_message(f->result));
-            return turi_rejection("future rejected");
-        }
-
-        /* Pending: check if we are inside an async fiber. */
-        TuriFiber *cur = env->current_fiber;
-        if (cur) {
-            /* Suspend current fiber until future resolves. */
-            turi_future_add_waker(f, cur);
-            cur->awaiting_future = f;
-            cur->state = TURI_FIBER_SUSPENDED;
-#if defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-            swapcontext(&cur->ctx, &env->sched_ctx);
-#if defined(__APPLE__)
-#  pragma clang diagnostic pop
-#endif
-            /* Resumed: future has settled.  DEPR-R0: see the already-
-             * settled branch above; same rejection surfacing here. */
-            if (f->state == TURI_FUTURE_RESOLVED) return f->result;
-            if (f->state == TURI_FUTURE_REJECTED) {
-                if (turi_is_rejection(f->result)) return f->result;
-                if (turi_is_error(f->result))
-                    return turi_rejection(turi_error_message(f->result));
-                return turi_rejection("future rejected");
-            }
-            return turi_error("eval: await: unexpected future state");
-        } else {
-            /* Main (non-fiber) context: run event loop until future resolves. */
-            return turi_await_future(env, f);
-        }
+        return eval_await_value(env, fv);
     }
 
     /* --- Phase H §1: typeclass dictionary — return method closure ---------- */

@@ -125,4 +125,4 @@ the interpreter is already correct.
 - `tests/fixtures/async-await-basic/input.tur` -- documents the int64 return.
 - [router-payloads-are-int64-only](router-payloads-are-int64-only.md),
   [generator-yield-payload-is-int64-only](generator-yield-payload-is-int64-only.md),
-  [session-payloads-are-int64-only](session-payloads-are-int64-only.md).
+  [session-payloads-are-int64-only](../archive/session-payloads-are-int64-only.md).

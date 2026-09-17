@@ -27,21 +27,9 @@
 ;; handling.  Analysis + decision: docs/archive/
 ;; cps-session-effects-permanently-fiber-bound.md.  Correct on the fiber today.
 
+(load "stdlib/session.tur")
+
 (defeffect SessionLog [msg :cstr] :nil)
-
-(defn spawn [f : ptr<void>] : ptr<void>
-  ```c
-  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
-  return (void *)tid;
-  ```)
-
-(defn join [t : ptr<void>] : int
-  ```c
-  pthread_join(*(pthread_t *)t, NULL);
-  free(t);
-  return 0;
-  ```)
 
 ;; exchange: perform a send+recv on a session channel while logging with effects.
 (defn exchange [^linear ch :(Session (Send int (Recv int Close))) val : int] : int
@@ -54,7 +42,7 @@
 
 (defn main [] : int
   (let [[s r] (make-session (Send int (Recv int Close)))]
-    (let [t (spawn (fn []
+    (let [t (session-spawn (fn []
                      (let [[v r] (recv r)]
                        (let [r (send r v)]
                          (close r)))))]
@@ -62,5 +50,5 @@
             (handle (exchange s 99)
               (SessionLog [msg] k) (do (println msg) (resume k nil)))]
         (println result)
-        (join t))))
+        (session-join t))))
   0)

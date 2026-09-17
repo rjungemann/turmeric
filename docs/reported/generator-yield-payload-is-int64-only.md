@@ -126,4 +126,4 @@ A `-turi` twin is blocked on the UBSan alignment bug above.
 - `src/turi/eval.c:11962` -- the interpreter alignment bug.
 - [router-payloads-are-int64-only](router-payloads-are-int64-only.md),
   [async-await-payload-is-int64-only](async-await-payload-is-int64-only.md),
-  [session-payloads-are-int64-only](session-payloads-are-int64-only.md).
+  [session-payloads-are-int64-only](../archive/session-payloads-are-int64-only.md).

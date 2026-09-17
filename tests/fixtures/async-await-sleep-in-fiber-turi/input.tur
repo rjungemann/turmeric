@@ -1,0 +1,21 @@
+;; Regression: (await (sleep-async n)) inside an async fiber runs the rest of
+;; the fiber body (awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body).
+;;
+;; The fiber arm of the interpreter's sleep-async blocks the fiber on a timer
+;; and used to hand back nil; the surrounding `await` then failed on "expected
+;; a future" and the tail of the body ("woke") never ran, while the fiber's
+;; future still resolved so the spawner's `await` returned normally.  It now
+;; returns the resolved timer future, so `await` passes through.
+;;
+;; Expected output:
+;; before
+;; woke
+;; done
+(defn main [] : int
+  (let [t (async (fn []
+                   (println "before")
+                   (await (sleep-async 60))
+                   (println "woke")))]
+    (await t))
+  (println "done")
+  0)

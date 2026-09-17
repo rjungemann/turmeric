@@ -12,23 +12,11 @@
 ;;
 ;; Expected output: 42
 
+(load "stdlib/session.tur")
+
 (defprotocol Ping [A B]
   (-> A B int)
   (-> B A int))
-
-(defn spawn [f : ptr<void>] : ptr<void>
-  ```c
-  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
-  return (void *)tid;
-  ```)
-
-(defn join [t : ptr<void>] : int
-  ```c
-  pthread_join(*(pthread_t *)t, NULL);
-  free(t);
-  return 0;
-  ```)
 
 (defstruct AEnd [ch : (project Ping A)])
 
@@ -40,12 +28,12 @@
 (defn main [] : int
   (let [[ca cb] (make-session (Send int (Recv int Close)))]
     (let [box (AEnd ca)]
-      (let [t (spawn (fn [] (role-b cb)))]
+      (let [t (session-spawn (fn [] (role-b cb)))]
         ;; read the projected A endpoint back out of the field, then use it
         (let [c0 (.ch box)]
           (let [c1 (send c0 42)]
             (let [[v c2] (recv c1)]
               (println v)
               (close c2)
-              (join t)))))))
+              (session-join t)))))))
   0)

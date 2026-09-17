@@ -1,4 +1,6 @@
 ;;; session-timeout-expired -- sender delays too long; receiver takes the timeout branch.
+(load "stdlib/session.tur")
+
 (defn sleep-ms [ms : int] : int
   ```c
   struct timespec req = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000L };
@@ -7,23 +9,9 @@
   return 0;
   ```)
 
-(defn spawn [f : ptr<void>] : ptr<void>
-  ```c
-  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
-  return (void *)tid;
-  ```)
-
-(defn join [t : ptr<void>] : int
-  ```c
-  pthread_join(*(pthread_t *)t, NULL);
-  free(t);
-  return 0;
-  ```)
-
 (defn main [] : int
   (let [[r s] (make-session (Recv int (Timeout Close Close)))]
-    (let [t (spawn (fn []
+    (let [t (session-spawn (fn []
                      (sleep-ms 200)
                      (let [s (send s 99)]
                        (close s))))]
@@ -32,7 +20,7 @@
           (let [[v r] pair]
             (println v)
             (close r)
-            (join t))
+            (session-join t))
         (Right r)
-          (do (println "timeout") (close r) (join t)))))
+          (do (println "timeout") (close r) (session-join t)))))
   0)

@@ -1,0 +1,4 @@
+interp-only: asserts the interpreter's cooperative session deadlock detection
+(turi-session-expansion S6).  The compiled pthread runtime cannot detect this
+shape -- the same program hangs until killed -- so run.sh skips it and
+tests/run-turi.sh asserts the diagnostic and the nonzero exit.

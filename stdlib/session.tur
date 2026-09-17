@@ -8,14 +8,78 @@
 ;; Provides reusable protocol templates built on the core session primitives
 ;; (make-session, send, recv, choose-left, choose-right, offer, close).
 ;;
-;; Requires: -Xsessions
-;;
 ;; Three patterns are provided:
 ;;   echo    -- recursive echo server / client helpers
 ;;   rpc     -- generic single-shot request/response
 ;;   pubsub  -- publish-subscribe subscriber loop
 ;;
 ;; Since: SS4
+;; ---------------------------------------------------------------------------
+;; peer spawn -- one way to run the other end of a session on both backends
+;;
+;; A session op blocks until its peer arrives.  Compiled, the runtime blocks
+;; an OS thread on a condvar, and compiled `async` runs its fiber on the very
+;; thread that would have to run the peer -- so `(async (fn [] (recv ch)))`
+;; deadlocks the binary (compiled-async-fiber-deadlocks-on-a-session-op).
+;; Under `tur --interpret` the rendezvous is cooperative, so `async` is fine.
+;;
+;; session-spawn / session-join hide that split: compiled, they are a pthread
+;; over the emitted tur_session_thread_wrapper; under the interpreter the
+;; same names are native overrides that spawn a scheduler fiber and await
+;; it.  One source runs on both paths, and no program has to hand-roll a
+;; `(defn spawn [f : ptr<void>] : ptr<void>)` over pthread_create.
+;; ---------------------------------------------------------------------------
+;;; SessionPeer -- handle to a running session peer (see session-spawn).
+;;;
+;;; Compiled: a heap pthread_t.  Interpreted: the peer fiber's future.
+;;; Consumed exactly once, by session-join.
+;;;
+;;; Since: turi-session-expansion S2
+(defopaque SessionPeer :ptr<void>)
+;;; session-spawn -- run `f` as the peer of a session, on a thread or a fiber.
+;;;
+;;; Parameters:
+;;;   f -- a zero-argument thunk that drives one endpoint to `close`
+;;;
+;;; Returns:
+;;;   A SessionPeer to hand to session-join once this side has finished its
+;;;   own half of the protocol.
+;;;
+;;; Example:
+;;;   (let [[s r] (make-session (Send int Close))]
+;;;     (let [t (session-spawn (fn [] (let [[n r] (recv r)] (println n) (close r))))]
+;;;       (let [s (send s 42)] (close s) (session-join t))))   ; => prints 42
+;;;
+;;; Since: turi-session-expansion S2
+(defn session-spawn [^fat f : (fn [] nil)] : SessionPeer
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!tid) { fprintf(stderr, "session-spawn: out of memory\n"); abort(); }
+  int rc = pthread_create(tid, NULL, tur_session_thread_wrapper, (void *)(intptr_t)f);
+  if (rc != 0) {
+      free(tid);
+      fprintf(stderr, "session-spawn: pthread_create failed (%d)\n", rc);
+      abort();
+  }
+  return (void *)tid;
+  ```)
+;;; session-join -- wait for a session peer started by session-spawn.
+;;;
+;;; Parameters:
+;;;   t -- the SessionPeer returned by session-spawn; consumed by this call
+;;;
+;;; Returns:
+;;;   nil, once the peer thunk has returned.
+;;;
+;;; Example:
+;;;   (session-join t)
+;;;
+;;; Since: turi-session-expansion S2
+(defn session-join [t : SessionPeer] : nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
 ;; ---------------------------------------------------------------------------
 ;; echo -- trivial echo protocol
 ;;
@@ -37,7 +101,7 @@
 ;;;   nil -- the function returns after the client sends Close
 ;;;
 ;;; Example:
-;;;   (spawn (fn [] (echo-server-loop server-end)))
+;;;   (session-spawn (fn [] (echo-server-loop server-end)))
 ;;;
 ;;; Since: SS4
 (defn echo-server-loop [^linear ch : (Session (Rec self
@@ -49,42 +113,43 @@
     (let [[n ch] (recv ch)] (let [ch (send ch n)] (echo-server-loop ch)))
     (Right ch)
     (close ch)))
-;;; echo-client-call -- send one integer and receive the echo.
+;;; echo-client-call -- send one integer, hand the echo to `handler`, return the channel.
 ;;;
 ;;; Parameters:
-;;;   ch  -- client-side channel with protocol
-;;;          Session[Rec self (Choose (Send int (Recv int self)) Close)]
-;;;   val -- integer to send and have echoed back
+;;;   ch      -- client-side channel with protocol
+;;;              Session[Rec self (Choose (Send int (Recv int self)) Close)]
+;;;   val     -- integer to send and have echoed back
+;;;   handler -- called with the echoed integer
 ;;;
 ;;; Returns:
-;;;   A pair [echoed-value, updated-channel] where updated-channel still has
-;;;   the recursive EchoClientProto so more calls can be made.
+;;;   The channel, back at the recursive EchoClientProto so more calls can be
+;;;   made -- or `(close (choose-right ch))` to end the conversation.
 ;;;
 ;;; Example:
-;;;   (let [[r ch] (echo-client-call ch 42)]
-;;;     (println r))   ; => 42
+;;;   (let [ch (echo-client-call ch 42 (fn [r] (println r)))]   ; prints 42
+;;;     (close (choose-right ch)))
 ;;;
 ;;; Since: SS4
-;; KB-029 (tracked: docs/archive/history/known-bugs-followups-plan.md): the
-;; return value of (recv ch) is the internal session recv-pair
-;; [echoed-int, updated-Session], which has no surface type syntax (the prior
-;; :[(int (Session ...))] tuple annotation is not a supported type form).  The
-;; return type is left to inference -- it is exactly the recv-pair the body
-;; yields and that callers destructure with (let [[r ch] (echo-client-call ...)]).
-;; The contained-stdlib fix is DONE (annotation dropped, file checks clean under
-;; -Xsessions). The general tuple-type surface gap is now closed: `[T1 T2 ...]`
-;; in type position is sugar for the stdlib TupleN struct (see stdlib/tuple.tur
-;; and src/compiler/elab_types.c). It does NOT apply here, though -- (recv ch)
-;; yields the internal session recv-pair (TY_SESSION_RECV_PAIR), a distinct
-;; type from Tuple2, so `[int (Session ...)]` would mean the wrong thing. The
-;; recv-pair still has no surface spelling; this return stays inferred.
-
+;; The echoed value reaches the caller through `handler` rather than as a
+;; returned pair: `(recv ch)` yields the internal session recv-pair
+;; (TY_SESSION_RECV_PAIR), which has no surface type spelling and which the C
+;; emitter cannot return from a function -- the previous inferred-pair shape
+;; emitted `/*recv-pair*/;` and failed to compile any program that loaded
+;; this module (KB-029, docs/archive/history/known-bugs-followups-plan.md).
+;; A handler plus the threaded channel is the same shape pubsub-recv-loop
+;; uses and composes with choose-right afterwards.
 (defn echo-client-call [^linear ch : (Session (Rec self
                                                 (Choose (Send int
                                                           (Recv int self))
                                                   Close)))
-                        val : int]
-  (let [ch (choose-left ch)] (let [ch (send ch val)] (recv ch))))
+                        val : int
+                        handler : (-> int nil)] : (Session (Rec self
+                                                             (Choose (Send int
+                                                                       (Recv int
+                                                                         self))
+                                                               Close)))
+  (let [ch (choose-left ch)]
+    (let [ch (send ch val)] (let [[r ch] (recv ch)] (handler r) ch))))
 ;; ---------------------------------------------------------------------------
 ;; rpc -- generic single-shot request/response
 ;;

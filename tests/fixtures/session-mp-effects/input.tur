@@ -15,25 +15,13 @@
 ;; Analysis + decision: docs/archive/
 ;; cps-session-effects-permanently-fiber-bound.md.  Correct on the fiber today.
 
+(load "stdlib/session.tur")
+
 (defprotocol Echo [A B]
   (-> A B int)
   (-> B A int))
 
 (defeffect MpLog [msg :cstr] :nil)
-
-(defn spawn [f : ptr<void>] : ptr<void>
-  ```c
-  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
-  return (void *)tid;
-  ```)
-
-(defn join [t : ptr<void>] : int
-  ```c
-  pthread_join(*(pthread_t *)t, NULL);
-  free(t);
-  return 0;
-  ```)
 
 (defn role-a [^linear ch :(Role Echo A) val : int] : int
   (perform (MpLog "sending 99"))
@@ -50,10 +38,10 @@
 
 (defn main [] : int
   (let [[ra rb] (make-protocol Echo)]
-    (let [t (spawn (fn [] (role-b rb)))]
+    (let [t (session-spawn (fn [] (role-b rb)))]
       (let [result
             (handle (role-a ra 99)
               (MpLog [msg] k) (do (println msg) (resume k nil)))]
         (println result)
-        (join t))))
+        (session-join t))))
   0)

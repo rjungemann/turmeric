@@ -257,6 +257,70 @@ static Type *session_protocol_of(Elab *e, Expr *chan, const char *op, Span span)
     return proto;
 }
 
+/* --- Payload lowering onto the int64 rendezvous word ------------------------
+ * (session-payloads-are-int64-only).  Classified from the payload's C
+ * spelling rather than a TypeKind table so every pointer-lowered kind
+ * (cstr, ptr<T>, Session, Role, rc, opaque-over-pointer, :heap records, ...)
+ * lands in the same arm without enumerating them here. */
+SessPayloadClass session_payload_class(Type t) {
+    const char *cn = type_c_name(t);
+    if (!cn || !*cn) return SESS_PAY_INT;
+    if (strcmp(cn, "double") == 0) return SESS_PAY_F64;
+    if (strcmp(cn, "float")  == 0) return SESS_PAY_F32;
+    size_t n = strlen(cn);
+    if (cn[n - 1] == '*') return SESS_PAY_PTR;
+    /* A user aggregate that lowers to a by-value C struct (`tur_adt_Pt`,
+     * `Name`) has no word-sized carrier.  Everything else that reaches here
+     * (int64_t, bool, sized ints, int-carried handles, void) is a word. */
+    if ((t.kind == TY_STRUCT || t.kind == TY_ADT || t.kind == TY_APP) &&
+        strcmp(cn, "int64_t") != 0)
+        return SESS_PAY_UNSUPPORTED;
+    return SESS_PAY_INT;
+}
+
+bool session_payload_supported(Elab *e, Type t, Span span, const char *op) {
+    (void)e;
+    if (session_payload_class(t) != SESS_PAY_UNSUPPORTED) return true;
+    diag_emit_with_code(DIAG_ERROR, span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                        "%s: session payload type %s is a by-value aggregate; "
+                        "the session runtime carries one machine word per "
+                        "message -- send it behind a pointer (rc<%s>, ref<%s>, "
+                        "or a :heap record) instead",
+                        op, type_name(t), type_name(t), type_name(t));
+    return false;
+}
+
+static const char *session_payload_wrap(Elab *e, const char *pre, const char *inner,
+                                        size_t inner_len, const char *post) {
+    size_t need = strlen(pre) + inner_len + strlen(post) + 1;
+    char *s = (char *)arena_alloc(e->arena, need);
+    memcpy(s, pre, strlen(pre));
+    memcpy(s + strlen(pre), inner, inner_len);
+    memcpy(s + strlen(pre) + inner_len, post, strlen(post) + 1);
+    return s;
+}
+
+const char *session_payload_to_word(Elab *e, Type t, const char *inner, size_t inner_len) {
+    switch (session_payload_class(t)) {
+        case SESS_PAY_F64: return session_payload_wrap(e, "tur_session_f64_bits(", inner, inner_len, ")");
+        case SESS_PAY_F32: return session_payload_wrap(e, "tur_session_f32_bits(", inner, inner_len, ")");
+        case SESS_PAY_PTR: return session_payload_wrap(e, "(int64_t)(intptr_t)(", inner, inner_len, ")");
+        default:           return session_payload_wrap(e, "(int64_t)(", inner, inner_len, ")");
+    }
+}
+
+/* The interpreter (src/turi/eval.c, eval_session_intercept) peels exactly
+ * these three wrapper spellings off the recv templates before matching them
+ * by prefix; keep the two in sync. */
+const char *session_payload_from_word(Elab *e, Type t, const char *inner, size_t inner_len) {
+    switch (session_payload_class(t)) {
+        case SESS_PAY_F64: return session_payload_wrap(e, "tur_session_bits_f64(", inner, inner_len, ")");
+        case SESS_PAY_F32: return session_payload_wrap(e, "tur_session_bits_f32(", inner, inner_len, ")");
+        case SESS_PAY_PTR: return session_payload_wrap(e, "(void *)(intptr_t)", inner, inner_len, "");
+        default:           return session_payload_wrap(e, "", inner, inner_len, "");
+    }
+}
+
 /* (send chan val) — consume chan : Session[Send[T, Q]]; return chan' : Session[Q].
  * Emits TUR-E0212 if chan's protocol is not Send[...]. */
 Expr *elab_session_send(Elab *e, const Form *call) {
@@ -281,6 +345,13 @@ Expr *elab_session_send(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* The payload must fit the runtime's one-word slot (see
+     * session_payload_class); reject a by-value aggregate here rather than
+     * from cc. */
+    Type *payload = proto->as.session_.fst;
+    if (payload && !session_payload_supported(e, *payload, call->span, "send"))
+        return NULL;
+
     /* Mark chan as consumed (it's linear) */
     Binding *chan_binding = (chan->kind == EX_VAR) ? chan->as.var.binding : NULL;
     if (chan_binding) binding_mark_moved(chan_binding, call->span);
@@ -301,11 +372,21 @@ Expr *elab_session_send(Elab *e, const Form *call) {
      * session fixture on any libc whose headers do not #define it away.  See
      * docs/archive/history/jit-macos-full-corpus-extension-and-atexit.md.  The
      * interpreter matches this text by prefix in src/turi/eval.c; keep the two
-     * in sync. */
-    static const char send_code[] =
-        "({ tur_session_send(__TUR_VAL_0__, (int64_t)(__TUR_VAL_1__)); (void *)__TUR_VAL_0__; })";
+     * in sync.
+     *
+     * The payload operand is lowered onto the int64 slot by
+     * session_payload_to_word: `(int64_t)(x)` for ints, a bit-reinterpret for
+     * floats (a value cast truncated 7.25 to 7), `(int64_t)(intptr_t)(x)` for
+     * pointers (session-payloads-are-int64-only). */
+    const char *word = session_payload_to_word(
+        e, payload ? *payload : val->type, "__TUR_VAL_1__", strlen("__TUR_VAL_1__"));
+    static const char send_pre[]  = "({ tur_session_send(__TUR_VAL_0__, ";
+    static const char send_post[] = "); (void *)__TUR_VAL_0__; })";
+    size_t send_len = sizeof(send_pre) - 1 + strlen(word) + sizeof(send_post) - 1;
+    char *send_code = (char *)arena_alloc(e->arena, send_len + 1);
+    snprintf(send_code, send_len + 1, "%s%s%s", send_pre, word, send_post);
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
-    ic->code = strslice(send_code, sizeof(send_code) - 1);
+    ic->code = strslice(send_code, (uint32_t)send_len);
     ic->return_type = sess_q;
     ic->captures = NULL; ic->n_captures = 0;
     ic->val_exprs = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));

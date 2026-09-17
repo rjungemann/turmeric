@@ -89,7 +89,6 @@ same change as these filings; `--seam-matrix` prints the whole table and
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [router-payloads-are-int64-only](router-payloads-are-int64-only.md) | high | Multi-party `send-to` truncates a `float` payload (`7.25` -> `7`), cc-errors on `cstr` and by-value structs. A **different template** from the binary-session seam (`elab_global.c:611` + `tur_router_send`, not `elab_sessions.c:306`), so fixing that one does not fix this. `tests/fixtures/session-mp-three-role` sends `42`, which is why it passes |
 | [generator-yield-payload-is-int64-only](generator-yield-payload-is-int64-only.md) | high | `yield` parks the payload in a `void *` frame slot and `gen-unwrap` is declared `: int`, so a yielded `cstr` **prints as a raw pointer** and a `bool` prints `1` -- with no cc error anywhere to stop it. Worse than the session seam: the erasure reaches the Turmeric *signature*, so a codegen-only fix still hands back an `int`. Carries a second, separate defect -- the same program trips a UBSan misaligned load on `TuriGen` under `--interpret` (`src/turi/eval.c:11962`), which also blocks using the interpreter as this seam's differential oracle |
 | [async-await-payload-is-int64-only](async-await-payload-is-int64-only.md) | high | `tur_await_future` returns `int64_t` and the await site binds the result at that type, so a `float`-returning `async` thunk prints `4619848792751996928` -- bit-exact `7.25`. **The bits arrive intact and only the type is lost**, which makes this the cheapest row to fix. `tests/fixtures/async-await-basic` documents the int64 return in its own header, so the erasure was known and simply never contradicted |
 
@@ -102,11 +101,15 @@ all -- per the float rule in [CLAUDE.md](../../CLAUDE.md), an integer literal
 cannot show truncation, and every fixture and guide example for all three
 features sends an `int`.
 
-A fourth seam, the **binary** session `send`/`recv`, is filed separately as
-`session-payloads-are-int64-only` and is in flight in PR #878 (not yet on
-`main`); the three reports above cross-link it, and those links resolve once it
-lands. Three seams measured **correct** and kept as the fuzzer's positive
-controls: `perform`/`resume`, `any`/`cast`, and `tvar` write/cas.
+A fourth seam, the **binary** session `send`/`recv`
+(`session-payloads-are-int64-only`), and the multi-party router seam
+(`router-payloads-are-int64-only`) were fixed 2026-09-16
+(turi-session-expansion-plan S3.5: floats bit-reinterpreted, pointers cast
+through `intptr_t`, by-value aggregates rejected with `TUR-E0212`) and are
+archived under `docs/archive/`; the remaining reports above cross-link the
+archived binary report. Three seams measured **correct** and kept as the
+fuzzer's positive controls: `perform`/`resume`, `any`/`cast`, and `tvar`
+write/cas.
 
 
 ## Docs audit sweep (filed 2026-08-20)
@@ -1887,7 +1890,6 @@ which is the measurement that separates them from it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [session-payloads-are-int64-only](session-payloads-are-int64-only.md) | high | The session runtime carries every message as a bare `int64_t`, so on the compiled path a **`float` payload is silently truncated** -- `7.25` arrives as `7`, no diagnostic, exit 0 -- while `cstr` and a delegated `(Session P)`/`(Role G R)` endpoint fail to build on macOS (`-Wint-conversion` is a hard error on Apple clang 21, a warning on Linux gcc, so this one is platform-dependent and works on Linux by accident) and a by-value struct fails to build everywhere. The type checker accepts all four and **all four are correct under `--interpret`**, since `TuriValue` carries the payload at its own type. One root cause: `tur_session_send(TurChannel*, int64_t)` plus a plain `(int64_t)(...)` C cast in the send template, which for a double is a value conversion that truncates rather than a reinterpretation. This is why every fixture and every guide example sends `int`. Floor fix is a diagnostic -- a user should not learn this from a wrong number at run time |
 | [multi-party-sessions-have-no-timed-receive](multi-party-sessions-have-no-timed-receive.md) | low-medium | Binary sessions have `recv-timeout`; multi-party role endpoints have no equivalent, so a role blocked in `recv-from` has no bounded wait and no recovery from a stalled peer. Asymmetry, not a wrong answer -- and invisible, since the guide's Timeouts section does not say it stops at binary. The type machinery is not the blocker (`Timeout` has a dual rule, projection already lowers `choice`); what is missing is global-type syntax for a timed interaction plus its projection/mergeability rule, which is where the design risk sits. Hurts most where it cannot be worked around: a compiled multi-party program hangs, where `--interpret` would at least detect the stall |
 
 ## stdlib `:int` stand-ins (filed 2026-09-16)
@@ -1980,9 +1982,7 @@ most consequential finding of either pass.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [compiled-async-fiber-deadlocks-on-a-session-op](compiled-async-fiber-deadlocks-on-a-session-op.md) | medium-high | `(async (fn [] (recv ch)))` -- the obvious way to write a session peer -- compiles clean and then **hangs the binary forever with no diagnostic**, while the identical program runs correctly under `--interpret`. A parity gap in the unexpected direction: the tree-walker is the more capable backend, because its rendezvous yields to the fiber scheduler where the compiled one blocks the only OS thread on a condvar. Known inside one fixture comment and nowhere else. It is also why the session fixture suite is written twice: every compiled fixture hand-rolls its peer as `(defn spawn [f : ptr<void>] : ptr<void>)` inline-C over `pthread_create` -- the `:int`/`ptr<void>` stand-in CLAUDE.md forbids, reproduced in 20+ fixtures and in the user guide's examples -- and that inline-C is exactly what `run-turi.sh` skips, so **25 of 54 session fixtures never run under the interpreter** |
-| [turi-fiber-recv-timeout-ignores-its-deadline](turi-fiber-recv-timeout-ignores-its-deadline.md) | medium | A `recv-timeout` inside an `async` fiber under `--interpret` waits indefinitely and takes the **Left (success)** branch on a value that arrives long past the deadline; compiled takes **Right (timeout)**. Silent wrong branch, no diagnostic. The same op in the **main** context is correct, which is why no fixture catches it -- every shipped `recv-timeout` fixture puts the timed receive on the main side. The fiber arm parks with no timer armed, so the loop's deadline re-check is unreachable until the value it was meant to preempt arrives; an in-tree comment predicts exactly this. The interpreter's own timer wheel (`turi_timer_add`, what `sleep-async` uses) is the fix -- the new part is a channel wait with two wake sources where today there is one `recv_waiter` slot |
-| [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md) | medium | Under `--interpret`, an `async` fiber that sleeps via `(await (sleep-async n))` **never runs anything after the sleep**; the future resolves anyway, `(await t)` returns, the program exits 0. Bare `(sleep-async n)` works, and the awaited form in **main** context works, so it is the `await`-on-a-non-future path in fiber context (`native_sleep_async` already blocks and returns nil in a fiber). Not session-specific, but it makes `session-timeout-expired-turi` pass for the wrong reason -- that fixture's peer never reaches its `send`, so it prints `timeout` because nothing is ever deposited, and would pass identically with `recv-timeout` stubbed out |
+| [compiled-async-fiber-deadlocks-on-a-session-op](compiled-async-fiber-deadlocks-on-a-session-op.md) | medium | `(async (fn [] (recv ch)))` **hangs the compiled binary** while the identical program runs under `--interpret`: compiled `async` runs its body synchronously on the spawner's stack and the session runtime blocks that thread on a condvar. Since 2026-09-17 it is no longer silent -- `TUR-W0043` warns at the `async` site and points at `session-spawn` / `session-join` (`stdlib/session.tur`, landed 2026-09-16), which is the working spelling on both backends. What remains is the real fix: making a session op an `await`-shaped suspension point in a compiled async body, scoped in the report as a plan-sized change |
 
 ## Filing conventions
 

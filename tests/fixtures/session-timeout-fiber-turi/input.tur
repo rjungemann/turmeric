@@ -1,0 +1,26 @@
+;; turi-session-expansion S1: recv-timeout INSIDE an async fiber observes its
+;; deadline.
+;;
+;; The timed receive runs in the fiber; the main context sleeps well past the
+;; 50ms deadline before sending.  The fiber must take the Right (timeout)
+;; branch -- before S1 the fiber arm of session_recv_timeout parked with no
+;; timer, waited for the late value, and took Left (printing 99).  The compiled
+;; pthread_cond_timedwait path takes Right, so this pins both paths agreeing.
+;; The late send lands on a closed channel and is dropped silently, as the
+;; compiled tur_session_send abandoned-drop semantics specify.
+;;
+;; Expected output: timeout
+(defn main [] : int
+  (let [[r s] (make-session (Recv int (Timeout Close Close)))]
+    (let [t (async (fn []
+                     (match (recv-timeout r 50)
+                       (Left pair)
+                         (let [[v r] pair]
+                           (println v) (close r))
+                       (Right r)
+                         (do (println "timeout") (close r)))))]
+      (await (sleep-async 400))
+      (let [s (send s 99)]
+        (close s)
+        (await t))))
+  0)

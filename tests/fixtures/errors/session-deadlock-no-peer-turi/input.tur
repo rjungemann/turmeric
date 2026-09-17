@@ -1,0 +1,19 @@
+;; S6: the interpreter detects a session recv with no peer that will ever send.
+;;
+;; The main context receives on `r` before anything has been given the
+;; sending endpoint `s` -- the send that would satisfy the recv comes later on
+;; the same thread, so it can never run.  Both endpoints type-check (each
+;; follows its protocol), but under --interpret the cooperative rendezvous
+;; sees that nothing is runnable and fails with a clean "session recv
+;; deadlocked" error and a nonzero exit, naming the channel's protocol.  The
+;; compiled pthread runtime has no global view and hangs forever -- which is
+;; why this is a `tur --interpret` pre-ship check and an interp-only fixture.
+(defn main [] : int
+  (let [[s r] (make-session (Send int Close))]
+    (println "before")
+    (let [[v r] (recv r)]
+      (println v)
+      (close r)
+      (let [s (send s 7)]
+        (close s))))
+  0)

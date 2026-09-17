@@ -748,7 +748,11 @@ Expr *elab_let(Elab *e, const Form *call) {
                             && orig_ic->val_exprs[0]->kind == EX_VAR)
                             ? orig_ic->val_exprs[0]->as.var.binding : NULL;
                         if (vi == 0) {
-                            ic->code = orig_ic->code;
+                            /* session-payloads-are-int64-only: convert the
+                             * router's int64 word back to the payload type. */
+                            const char *wrapped = session_payload_from_word(
+                                e, elem_type, orig_ic->code.p, orig_ic->code.len);
+                            ic->code = strslice(wrapped, (uint32_t)strlen(wrapped));
                             if (role_b) {
                                 ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
                                 Expr *role_var = expr_new(e->arena, EX_VAR, role_b->type, vec_span);
@@ -770,13 +774,24 @@ Expr *elab_let(Elab *e, const Form *call) {
                         }
                     } else if (vi == 0) {
                         if (is_recv_timeout) {
-                            /* SS3c: value is in tur__rtv_ thread-local */
+                            /* SS3c: value is in tur__rtv_ thread-local;
+                             * converted back from the int64 word to the payload
+                             * type (session-payloads-are-int64-only). */
                             static const char rtv_code[] = "tur__rtv_";
-                            ic->code = strslice(rtv_code, sizeof(rtv_code) - 1);
+                            const char *wrapped = session_payload_from_word(
+                                e, elem_type, rtv_code, sizeof(rtv_code) - 1);
+                            ic->code = strslice(wrapped, (uint32_t)strlen(wrapped));
                             ic->val_exprs = NULL; ic->n_val_exprs = 0;
                         } else {
                             static const char recv_code[] = "tur_session_recv(__TUR_VAL_0__)";
-                            ic->code = strslice(recv_code, sizeof(recv_code) - 1);
+                            /* Converted back from the int64 word to the
+                             * payload type (session-payloads-are-int64-only):
+                             * a double is bit-reinterpreted, a pointer cast
+                             * through intptr_t.  The interpreter peels the
+                             * wrapper before its prefix match. */
+                            const char *wrapped = session_payload_from_word(
+                                e, elem_type, recv_code, sizeof(recv_code) - 1);
+                            ic->code = strslice(wrapped, (uint32_t)strlen(wrapped));
                             if (chan_b) {
                                 ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
                                 Expr *chan_var = expr_new(e->arena, EX_VAR, chan_b->type, vec_span);

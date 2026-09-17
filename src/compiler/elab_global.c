@@ -606,10 +606,18 @@ Expr *elab_send_to(Elab *e, const Form *call) {
     /* Emit: ({ tur_router_send(__TUR_VAL_0__, to_idx, (int64_t)(__TUR_VAL_1__)); (void*)__TUR_VAL_0__; })
      * Bare statement-expression, no __extension__ -- see the note in
      * elab_sessions.c's send_code.  src/turi/eval.c matches this by prefix. */
+    /* The payload is lowered onto the router's int64 slot exactly as a binary
+     * send is (session_payload_to_word): floats bit-reinterpreted, pointers
+     * cast through intptr_t, by-value aggregates rejected here. */
+    Type payload_t = (expected_msg && expected_msg->kind != TY_UNKNOWN) ? *expected_msg : val->type;
+    if (!session_payload_supported(e, payload_t, call->span, "send-to"))
+        return NULL;
+    const char *word = session_payload_to_word(e, payload_t, "__TUR_VAL_1__",
+                                               strlen("__TUR_VAL_1__"));
     char send_code[256];
     snprintf(send_code, sizeof(send_code),
-             "({ tur_router_send(__TUR_VAL_0__, %d, (int64_t)(__TUR_VAL_1__)); (void *)__TUR_VAL_0__; })",
-             to_idx);
+             "({ tur_router_send(__TUR_VAL_0__, %d, %s); (void *)__TUR_VAL_0__; })",
+             to_idx, word);
     size_t send_code_len = strlen(send_code);
     char *code_str = (char *)arena_alloc(e->arena, send_code_len + 1);
     memcpy(code_str, send_code, send_code_len + 1);

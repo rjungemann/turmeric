@@ -4426,6 +4426,10 @@ static void tur_rcvec_drop(void *value) {
 #else
 #  define TUR_DBGPROTO(s) ((const char*)0)
 #endif
+static int64_t tur_session_f64_bits(double d) { int64_t i; memcpy(&i, &d, sizeof i); return i; }
+static double tur_session_bits_f64(int64_t i) { double d; memcpy(&d, &i, sizeof d); return d; }
+static int64_t tur_session_f32_bits(float f) { int32_t i; memcpy(&i, &f, sizeof i); return (int64_t)i; }
+static float tur_session_bits_f32(int64_t i) { int32_t j = (int32_t)i; float f; memcpy(&f, &j, sizeof f); return f; }
 typedef struct {
     pthread_mutex_t mu;
     pthread_cond_t  cv;

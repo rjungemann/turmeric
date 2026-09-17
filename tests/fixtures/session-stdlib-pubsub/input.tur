@@ -1,0 +1,28 @@
+;; stdlib/session.tur pubsub template: pubsub-recv-loop.
+;;
+;; Subscriber protocol: Recv int (Rec self (Branch (Recv int self) Close)).
+;; The publisher (the dual) sends an initial message, then two more through
+;; choose-left, then ends the topic with choose-right.  The subscriber peer
+;; runs pubsub-recv-loop and prints each message through its handler.
+;;
+;; Expected output:
+;; 1
+;; 2
+;; 3
+(load "stdlib/session.tur")
+
+(defn publish [^linear pub : (Session (Send int (Rec self (Choose (Send int self) Close))))] : nil
+  (let [pub (send pub 1)]
+    (let [pub (choose-left pub)]
+      (let [pub (send pub 2)]
+        (let [pub (choose-left pub)]
+          (let [pub (send pub 3)]
+            (let [pub (choose-right pub)]
+              (close pub))))))))
+
+(defn main [] : int
+  (let [[sub pub] (make-session (Recv int (Rec self (Branch (Recv int self) Close))))]
+    (let [t (session-spawn (fn [] (pubsub-recv-loop sub (fn [m] (println m)))))]
+      (publish pub)
+      (session-join t)))
+  0)

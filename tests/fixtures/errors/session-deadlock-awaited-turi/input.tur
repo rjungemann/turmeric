@@ -1,0 +1,31 @@
+;; S6: a main-context await on a task parked forever is a detected deadlock.
+;;
+;; Fiber A and fiber B each receive on the other's channel before sending, so
+;; both park with nothing runnable; the main context awaits A.  The scheduler
+;; loop under `await` used to spin at 100% CPU forever in this shape (nothing
+;; ready, no timers, no I/O).  It now reports "await deadlocked" with a
+;; nonzero exit -- the same detection the session recv path has, reached
+;; through the future rather than a channel.  Compiled, the same program hangs.
+(defn peer-a [^linear r1 :(Session (Recv int Close))
+              ^linear s2 :(Session (Send int Close))] : nil
+  (let [[v r1] (recv r1)]
+    (close r1)
+    (let [s2 (send s2 v)]
+      (close s2))))
+
+(defn peer-b [^linear r2 :(Session (Recv int Close))
+              ^linear s1 :(Session (Send int Close))] : nil
+  (let [[v r2] (recv r2)]
+    (close r2)
+    (let [s1 (send s1 v)]
+      (close s1))))
+
+(defn main [] : int
+  (let [[s1 r1] (make-session (Send int Close))]
+    (let [[s2 r2] (make-session (Send int Close))]
+      (println "before")
+      (let [ta (async (fn [] (peer-a r1 s2)))]
+        (let [tb (async (fn [] (peer-b r2 s1)))]
+          (await ta)
+          (await tb)))))
+  0)

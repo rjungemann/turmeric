@@ -1,0 +1,29 @@
+;; Delegation: a session endpoint sent as the payload of another session.
+;;
+;; The inner session carries an int.  Its receiving endpoint `ri` is handed to
+;; the peer over the outer session (payload type (Session (Recv int Close))),
+;; the outer session closes, and the peer then completes the inner protocol on
+;; the endpoint it was given.  The payload is a pointer, so this pins the
+;; pointer-typed send/recv casts (session-payloads-are-int64-only) on the
+;; compiled path as well as the interpreter's tagged carry.
+;;
+;; Expected output: 42
+(load "stdlib/session.tur")
+
+(defn peer [^linear ro : (Session (Recv (Session (Recv int Close)) Close))] : nil
+  (let [[ch ro] (recv ro)]
+    (close ro)
+    (let [[v ch] (recv ch)]
+      (println v)
+      (close ch))))
+
+(defn main [] : int
+  (let [[si ri] (make-session (Send int Close))]
+    (let [[so ro] (make-session (Send (Session (Recv int Close)) Close))]
+      (let [t (session-spawn (fn [] (peer ro)))]
+        (let [so (send so ri)]
+          (close so)
+          (let [si (send si 42)]
+            (close si)
+            (session-join t))))))
+  0)
