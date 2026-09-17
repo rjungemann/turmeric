@@ -555,6 +555,11 @@ finding rather than a closed one:
 - **[spice-guides-bare-brace-manifest-syntax.md](spice-guides-bare-brace-manifest-syntax.md)** -- guides corrected; spice-README coverage and `tur add-cmake` comment-dropping are not
 - **[turi-interp-incremental-reclamation-plan.md](turi-interp-incremental-reclamation-plan.md)** -- TR1 carrier relocation shelved as demand-driven
 
+### Archived 2026-09-16
+
+- **[playground-session-hygiene-plan.md](playground-session-hygiene-plan.md)** -- Try Turmeric's eval session: PS1 rebuilds a lost elaboration session by replaying committed turns, PS2/PS3 read the docstring table from C (doc panel, `tur doc`, `(doc ...)`), PS4 lets a later turn redefine any def* form, PS5 makes Run rewind to the stdlib and replay the other tabs. Executed 2026-09-16; the record at its end covers the PS3 route change, the measured costs, and a `defmacro*` abort fixed on the way
+- **[doc-lookup-poisons-the-playground-eval-session.md](doc-lookup-poisons-the-playground-eval-session.md)** -- one doc-panel lookup broke Run for the rest of the session and blamed the user's `main` on an auto-loaded stdlib module; resolved by the plan above, which also corrects two of its claims
+
 ### Archived 2026-09-09
 
 Each declares every phase closed, so it is a record rather than open work.

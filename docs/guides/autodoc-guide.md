@@ -14,7 +14,7 @@ Turmeric's documentation system has three layers:
    styled site under `docs/html/api/`.
 3. **Runtime `(doc name)`** -- looks up the docstring for a name at the REPL or
    in the web playground. The same generator can emit `stdlib/docstrings.tur`,
-   the lookup table the `doc` macro reads.
+   the lookup table `(doc name)`, `tur doc`, and the playground doc panel read.
 
 This guide covers all three.
 
@@ -91,7 +91,7 @@ any non-comment, non-blank form (e.g. `(defmodule ...)`, `(export ...)`).
 
 The generator renders the module block as the description paragraph on the
 per-module HTML page and registers the module name in the runtime lookup
-table, so `(doc 'tur/list)` returns the summary.
+table, so `(doc 'tur/list)` prints the summary.
 
 ---
 
@@ -150,8 +150,7 @@ python3 tools/gendocs.py stdlib/list.tur --out docs/html/api/
 
 `stdlib/docstrings.tur` is **auto-generated** by `gendocs.py --emit-tur`. It
 defines the `tur/docstrings` module, whose `doc-lookup` function maps a name
-to its docstring via a static table. The `doc` macro in
-`stdlib/macros.tur` reads it:
+to its docstring via a static table:
 
 ```
 tur> (doc cons)
@@ -170,19 +169,24 @@ Example:
 Since: Phase B1
 ```
 
-`(doc name)` accepts either a bare symbol (`(doc cons)`) or a string
-(`(doc "cons")`). The macro looks the name up via `doc-lookup` from
-`tur/docstrings` and prints either the entry or a "No documentation found."
-message.
+`(doc name)` accepts a bare symbol (`(doc cons)`), a quoted one
+(`(doc 'cons)`), or a string (`(doc "cons")`). The macro reads the name at
+expansion time and expands to `(doc-print "cons")`, which prints the entry --
+or the builtin's description for a special form like `let` -- or a
+"No documentation found." message.
 
-Since `tur/` modules are auto-loaded, `doc` is globally available -- no
-explicit import needed.
+`doc-print` and `doc-lookup` are interpreter natives, available in `tur repl`,
+`tur --interpret`, and the web playground with no import. They read the
+generated file directly from C (`src/turi/docstrings.c`) rather than running
+the table's inline-C body, which the interpreter cannot execute. A compiled
+program has no `doc-print`; from a shell, use `tur doc cons`, which reads the
+same file.
 
 ---
 
 ## Web REPL integration
 
-The Try Turmeric web app exposes the same lookup table from the WASM build.
+The Try Turmeric web app reads the same table from the WASM build.
 `src/web/wasm_glue.c` exports:
 
 ```c
@@ -190,12 +194,14 @@ EMSCRIPTEN_KEEPALIVE
 const char *turi_doc_lookup(const char *name);
 ```
 
-The frontend calls `turi_doc_lookup("cons")` after each `(doc ...)` eval and
-renders the result in the doc panel as formatted HTML. Plain-text output also
-goes to the console for parity with the CLI REPL.
+The doc panel calls it when you pick a name from the docs search, follow a
+symbol link, run `:doc name` or `(doc name)`, or hover a name the search index
+has no summary for, and renders the result. It checks the builtin table, then reads
+`stdlib/docstrings.tur` from the stdlib tree the build embeds. It never
+evaluates anything, so a lookup cannot change the program you are running.
 
-Because the lookup goes through the WASM module itself (not a network fetch),
-`(doc name)` works offline and in embedded deployments.
+Because the lookup reads the WASM module's own embedded files (not a network
+fetch), `(doc name)` works offline and in embedded deployments.
 
 ---
 

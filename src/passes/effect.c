@@ -422,6 +422,27 @@ Effect *effect_env_register(EffectEnv *env, Arena *a, const Symbol *name,
 }
 
 /* Look up an effect by name */
+void effect_redefine(Effect *eff, const Symbol **param_names,
+                     TypeKind *param_types, uint8_t n_params,
+                     TypeKind result_type,
+                     const Symbol *defining_module_name, bool is_private) {
+    if (!eff) return;
+    eff->defining_module_name = defining_module_name;
+    eff->is_private           = is_private;
+    eff->is_exported          = !is_private;
+    eff->parent               = NULL;
+    eff->is_capability        = false;
+    EffectConstructor *ctor = eff->constructor;
+    if (!ctor) return;
+    ctor->param_names             = param_names;
+    ctor->param_types             = param_types;
+    ctor->n_params                = n_params;
+    ctor->result_type             = result_type;
+    ctor->result_full_type        = NULL;
+    ctor->param_full_types        = NULL;
+    ctor->resumable_payload_param = -1;
+}
+
 Effect *effect_env_lookup(EffectEnv *env, const Symbol *name) {
     for (uint32_t i = 0; i < env->n_effects; i++) {
         if (env->effects[i]->name == name) {

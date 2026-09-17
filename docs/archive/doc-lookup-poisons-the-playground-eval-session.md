@@ -5,12 +5,17 @@ stop working for the rest of the session, and the error it shows blames the
 user's own code for colliding with a stdlib module that does not contain it.
 The advice in the message ("rename the local definition") cannot fix anything.
 
-**Status:** OPEN. Reproduced by hand on the live site
-(turmeric-lang.com/try, deployed build `tur-try-v1-0.45.0-57976dc3f`) on
-2026-09-09. Root cause established for all three defects below.
+**Status:** RESOLVED 2026-09-16 by
+[playground-session-hygiene-plan](playground-session-hygiene-plan.md) (PS1-PS5),
+whose execution record also corrects two of this report's claims: a doc lookup
+never spliced `(doc-lookup ...)` into the session -- the failed turn was never
+committed, and the damage was the discarded elaboration session it left
+behind -- and `web/examples.js` is not the page's examples list. Originally
+reproduced by hand on the live site (turmeric-lang.com/try, deployed build
+`tur-try-v1-0.45.0-57976dc3f`) on 2026-09-09.
 
 **Fix sequence:**
-[docs/upcoming/playground-session-hygiene-plan.md](../upcoming/playground-session-hygiene-plan.md)
+[playground-session-hygiene-plan.md](playground-session-hygiene-plan.md)
 (PS1-PS5), whose five open questions were researched and decided 2026-09-09.
 That plan carries two mechanisms this report does not:
 

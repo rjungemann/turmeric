@@ -11400,10 +11400,17 @@ Expr *elab_def(Elab *e, const Form *call) {
                   kw, kw);
         return NULL;
     }
-    if (scope_lookup(e->scope, name_f->as.sym)) {
-        diag_emit(DIAG_ERROR, name_f->span,
-                  "%s: '%s' is already defined", kw, name_f->as.sym->name);
-        return NULL;
+    {
+        Binding *prior = scope_lookup(e->scope, name_f->as.sym);
+        /* PS4: an earlier REPL/playground turn's global is replaced -- the new
+         * binding below shadows it -- so re-running a program that defines
+         * `x` does not fail on the `x` the last run left.  A duplicate within
+         * one turn (or one file) is still an error. */
+        if (prior && !elab_prior_turn_global(e, prior)) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "%s: '%s' is already defined", kw, name_f->as.sym->name);
+            return NULL;
+        }
     }
 
     Type *declared_type = NULL;

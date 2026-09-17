@@ -73,6 +73,21 @@ typedef struct ArenaNode {
     struct ArenaNode *next;
 } ArenaNode;
 
+/* PS5: one runtime global as it stood when the prelude was snapshotted
+ * (TuriEnv.prelude_globals). */
+typedef struct TuriPreludeGlobal {
+    struct EnvBinding *binding;
+    TuriValue          value;
+} TuriPreludeGlobal;
+
+/* PS1: one committed turn of an env's accumulated forms (TuriEnv.acc_turns). */
+typedef struct TuriAccTurn {
+    uint32_t end_form;        /* n_acc_forms once this turn committed */
+    bool     stdlib_preload;  /* g_turi_stdlib_preload during the turn -- it
+                               * marks typeclasses stdlib-owned, so a replay
+                               * must elaborate under the same value */
+} TuriAccTurn;
+
 /* turi-value-pool-residual-sites: a coroutine execution stack (fiber/generator).
  * These back a ucontext_t, so they must be mmap'd (native) / malloc'd (WASM) at
  * a stable address rather than bump-allocated from the value pool. Each one is
@@ -241,10 +256,30 @@ typedef struct TuriEnv {
      * them -- the O(N^2) retained-elaboration term. `elab_session_forms` is how
      * many accumulated forms the session has already absorbed, so a turn hands
      * the elaborator only acc_forms[elab_session_forms .. n_acc_forms).
-     * Discarded (and rebuilt by replaying all accumulated forms) after any
-     * failed elaboration, since a partial program may have entered its scope. */
+     * Discarded after any failed turn, since a partial program may have entered
+     * its scope, and rebuilt on the next turn by replaying acc_turns below. */
     struct Elab  *elab_session;
     uint32_t      elab_session_forms;
+    /* PS1 (playground-session-hygiene-plan): where each committed turn ENDS in
+     * acc_forms, so a discarded session is rebuilt turn by turn -- the same
+     * sequence of elaborate calls the session was originally built from, minus
+     * the failed turn.  Without this the rebuild elaborated the whole
+     * accumulated program in one call with stdlib_prefix = prior_toplevel,
+     * which marks the user's own earlier turns as stdlib: re-running a program
+     * after ANY failed turn then failed forever with "'main' is already
+     * defined by an auto-loaded stdlib module".  Committed alongside src_acc;
+     * pinned and reset alongside acc_forms. */
+    struct TuriAccTurn *acc_turns;
+    uint32_t      n_acc_turns;
+    uint32_t      cap_acc_turns;
+    uint32_t      pin_acc_turns;  /* n_acc_turns at pin time */
+    /* PS5: the runtime half of the prelude -- every global binding and its
+     * value once the preload and its native overrides are in place -- so
+     * turi_env_rewind_to_prelude can put the RUNTIME back too, not just the
+     * source and the elaboration session.  Sorted by binding address; NULL
+     * until turi_env_snapshot_prelude runs.  Promotion roots (eval.c). */
+    TuriPreludeGlobal *prelude_globals;
+    uint32_t           n_prelude_globals;
     ArenaNode  *eval_arenas;     /* Linked list of per-call arenas (never freed) */
     /* turi-env-owned-value-arena-pool-plan: dedicated pools for TuriValue heap
      * payloads (closures, structs, captured frames/bindings, cons cells, ...),
@@ -569,6 +604,22 @@ void turi_env_pin_prelude(TuriEnv *env);
  * (turi_eval_impl, turi_eval_file, the REPL's `#lang` handler, and the WASM
  * set-lang entry point) previously open-coded and had to keep in sync. */
 void turi_env_reset_to_prelude(TuriEnv *env);
+
+/* PS5 (playground-session-hygiene-plan): record the prelude's runtime globals
+ * for turi_env_rewind_to_prelude.  Call once the preload is complete --
+ * AFTER turi_env_register_interpreter_natives, so the snapshot holds the
+ * native overrides rather than the inline-C bodies they replace.  A second
+ * call re-snapshots. */
+void turi_env_snapshot_prelude(TuriEnv *env);
+
+/* PS5: put the session back to the prelude, runtime included:
+ * turi_env_reset_to_prelude, then every global binding added since the
+ * snapshot is dropped and every prelude binding a later turn reassigned gets
+ * its prelude value back.  Native bindings are always kept.  What the
+ * playground's Run does before running the editor's program, so a name
+ * deleted from the program stops resolving.  Without a snapshot this is
+ * exactly turi_env_reset_to_prelude. */
+void turi_env_rewind_to_prelude(TuriEnv *env);
 
 /* Full language switch: assign the base reader, resetting the session when it
  * changes.  The session reader-macro registry is re-initialized too, and the

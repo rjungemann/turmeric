@@ -143,6 +143,9 @@ The WASM module exposes the following functions:
 
 - `turi_wasm_init()` - Initialize the runtime
 - `turi_wasm_reset()` - Reset the evaluation environment
+- `turi_wasm_rewind_to_prelude()` - Forget everything evaluated since the
+  stdlib preload (source, elaboration session and runtime bindings), keeping
+  the env and its stdlib; what Run does first
 - `turi_wasm_shutdown()` - Shutdown the runtime
 - `turi_wasm_eval(input)` - Evaluate code and return result as string
 - `turi_wasm_eval_ex(input, out_result, out_error)` - Evaluate with separate result/error
@@ -157,6 +160,26 @@ The WASM module exposes the following functions:
   server; returns a JSON array of the messages it produced
 - `turi_wasm_lsp_flush()` - Analyze documents with pending edits
 - `turi_wasm_lsp_reset()` - Drop every open document and start a fresh session
+
+### Run and the session
+
+The editor and the prompt share one evaluation session, but Run means "run
+this program", not "append this program to the session":
+
+1. The session rewinds to the preloaded stdlib (`turi_wasm_rewind_to_prelude`).
+2. Every other tab's last successful Run is replayed, in tab order, with its
+   output muted -- that is how one tab's definitions stay callable from another
+   tab and from the prompt. Only tabs in the running tab's `#lang` dialect are
+   replayed; a dialect change resets the session anyway.
+3. The editor's program runs.
+
+So pressing Run twice gives the same result both times, and a definition
+deleted from the program stops resolving. Definitions typed at the prompt last
+until the next Run. `:reset` rebuilds the environment from scratch.
+
+The native checks for this are `tur_wasm_glue_session_unit`,
+`tur_session_redefinition` and `tur_session_failure_recovery`; the page-level
+ones are in `tests/run-session.spec.js`.
 
 ### Language server
 

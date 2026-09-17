@@ -99,6 +99,10 @@ set(TURI_EVAL_SOURCES
     # relocated from main.c so the native --interpret path and the WASM REPL
     # load the same list (web-repl-missing-stdlib-preload).
     turi/preload.c
+    # docstrings.c -- reads stdlib/docstrings.tur's doc table from C, for
+    # `tur doc`, the playground doc panel, and the doc-lookup/doc-print natives
+    # (playground-session-hygiene-plan PS2/PS3).
+    turi/docstrings.c
     # interpreter_natives.c -- the wk_register_* / native_* inline-C override
     # block relocated from main.c so `tur repl` and the WASM REPL register the
     # same interpreter natives as --interpret (web-repl-repl-inline-c-native-gap).
@@ -809,6 +813,43 @@ target_link_options(tur_lang_switch_prelude PRIVATE -pthread
     $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_lang_switch_prelude PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# PS1 (playground-session-hygiene-plan): a failed turn must not leave the
+# session unable to re-run a program (the discarded elaboration session is
+# rebuilt by replaying the committed turns).
+# ---------------------------------------------------------------------------
+add_executable(tur_session_failure_recovery ${CMAKE_SOURCE_DIR}/tests/turi/session-failure-recovery.c)
+target_include_directories(tur_session_failure_recovery PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_session_failure_recovery PRIVATE libturi)
+target_compile_options(tur_session_failure_recovery PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_session_failure_recovery PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_session_failure_recovery PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# PS4 (playground-session-hygiene-plan): every def* form is redefinable by a
+# later turn; same-turn duplicates and stdlib-owned definitions stay refused.
+add_executable(tur_session_redefinition ${CMAKE_SOURCE_DIR}/tests/turi/session-redefinition.c)
+target_include_directories(tur_session_redefinition PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_session_redefinition PRIVATE libturi)
+target_compile_options(tur_session_redefinition PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_session_redefinition PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_session_redefinition PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
@@ -1651,6 +1692,32 @@ set_target_properties(tur_wasm_glue_lang_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
+# playground-session-hygiene-plan: the playground's eval session driven the way
+# Try Turmeric drives it -- doc-panel lookups, `(doc ...)`, Run twice --
+# natively via libturi_wasm, like the lang unit above.
+add_executable(tur_wasm_glue_session_unit
+    ${CMAKE_SOURCE_DIR}/tests/wasm_glue_session_unit.c
+)
+target_include_directories(tur_wasm_glue_session_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_wasm_glue_session_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_wasm_glue_session_unit PRIVATE
+    -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_wasm_glue_session_unit PRIVATE libturi_wasm m ${CMAKE_DL_LIBS})
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_wasm_glue_session_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_wasm_glue_session_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_wasm_glue_session_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 # SX8c: the playground's solver entry point, exercised natively.
 # `turi_smt_check` otherwise only runs inside a wasm module, where nothing in
 # CI can look at it.  Nothing in wasm_glue.c is wasm-specific, so linking
@@ -1809,7 +1876,7 @@ if(TUR_WASM)
                 # go-to-definition can open a stdlib buffer without the page
                 # gaining a general filesystem (wasm_lsp.c,
                 # try-turmeric-navigation-and-minimap-plan M4).
-                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_lsp_request,_turi_wasm_lsp_flush,_turi_wasm_lsp_reset,_turi_wasm_read_file,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_wasm_lang_registry,_turi_doc_lookup,_turi_smt_check,_turi_type_of,_turi_explain,_turi_wasm_trace_run,_turi_wasm_trace_stats,_turi_wasm_trace_seek,_turi_wasm_trace_state,_turi_wasm_trace_site_at,_turi_wasm_trace_find_line,_turi_wasm_trace_output_full,_turi_wasm_trace_buffer,_turi_wasm_trace_buffer_len,_turi_wasm_trace_release,_malloc,_free
+                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_rewind_to_prelude,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_lsp_request,_turi_wasm_lsp_flush,_turi_wasm_lsp_reset,_turi_wasm_read_file,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_wasm_lang_registry,_turi_doc_lookup,_turi_smt_check,_turi_type_of,_turi_explain,_turi_wasm_trace_run,_turi_wasm_trace_stats,_turi_wasm_trace_seek,_turi_wasm_trace_state,_turi_wasm_trace_site_at,_turi_wasm_trace_find_line,_turi_wasm_trace_output_full,_turi_wasm_trace_buffer,_turi_wasm_trace_buffer_len,_turi_wasm_trace_release,_malloc,_free
                 -sEXPORTED_RUNTIME_METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8
                 -sEXPORT_NAME=TurmericModule
                 -sMODULARIZE=1

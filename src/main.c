@@ -88,6 +88,7 @@
 #include "turi/eval.h"
 #include "turi/collections_native.h"
 #include "turi/interpreter_natives.h"
+#include "turi/docstrings.h"
 #include "turi/preload.h"
 /* Phase S1: REPL with libedit, multi-line input, :type/:doc/:reload */
 #include "turi/repl.h"
@@ -9597,111 +9598,19 @@ static int usage_doc(void) {
  *
  * The full docstrings already ship with every install: `just docs` generates
  * stdlib/docstrings.tur, and the formula installs stdlib/ under
- * <prefix>/share/turmeric/. What was missing is a way to read them from a
- * shell -- the table was reachable only from the REPL's (doc ...) and, in the
- * browser, through turi_doc_lookup's interpreter eval.
- *
- * Rather than boot the interpreter and preload the whole stdlib to answer one
- * lookup, read the generated table directly. Its shape is a contract we own on
- * both sides: tools/gendocs.py's emit_docstrings_tur writes
- *
- *     static const struct { const char *key; const char *val; } entries[] = {
- *       {"name", "docstring with \n escapes"},
- *       ...
- *     };
- *
- * so the scanner below only has to understand C string literals -- it does not
- * care about line layout, ordering, or how many entries there are. It stops at
- * the end of that array, which keeps the separate doc-verified? table (a flat
- * list of bare names) from being mistaken for entries.
+ * <prefix>/share/turmeric/.  Rather than boot the interpreter and preload the
+ * whole stdlib to answer one lookup, read the generated table directly -- see
+ * src/turi/docstrings.c for the file-shape contract with tools/gendocs.py.
  * ------------------------------------------------------------------------ */
 
-/* Read one C string literal starting at *p (which must point at the opening
- * quote), unescaping into `out`. Returns a pointer just past the closing
- * quote, or NULL if the literal is unterminated. `out` may be NULL to scan
- * without copying; `cap` then does not matter. */
-static const char *scan_c_string(const char *p, char *out, size_t cap) {
-    if (*p != '"') return NULL;
-    p++;
-    size_t i = 0;
-    while (*p && *p != '"') {
-        char c = *p++;
-        if (c == '\\' && *p) {
-            char e = *p++;
-            switch (e) {
-                case 'n':  c = '\n'; break;
-                case 't':  c = '\t'; break;
-                case 'r':  c = '\r'; break;
-                case '0':  c = '\0'; break;
-                case '\\': c = '\\'; break;
-                case '"':  c = '"';  break;
-                default:   c = e;    break;
-            }
-        }
-        if (out && i + 1 < cap) out[i++] = c;
-    }
-    if (*p != '"') return NULL;
-    if (out && cap) out[i] = '\0';
-    return p + 1;
-}
-
-/* Look up `sym` in <stdlib>/docstrings.tur. Returns a malloc'd string the
- * caller frees, or NULL when the table has no entry (or is not installed). */
-static char *stdlib_docstring_lookup(const char *sym) {
+/* Look up `sym` in <stdlib>/docstrings.tur, or NULL when the table has no
+ * entry (or is not installed).  The table reader is shared with the playground
+ * doc panel and the interpreter's doc natives (src/turi/docstrings.c); the
+ * returned string is owned by its cache. */
+static const char *stdlib_docstring_lookup(const char *sym) {
     char path[4096];
     tur_stdlib_path("docstrings.tur", path, sizeof(path));
-
-    char *text = NULL;
-    size_t len = 0;
-    if (read_entire_file_quiet(path, &text, &len) != 0) return NULL;
-
-    char *found = NULL;
-    const char *p = strstr(text, "entries[] = {");
-    if (!p) goto done;
-    p += strlen("entries[] = {");
-
-#define SKIP_WS_COMMA(q) \
-    while (*(q) == ' ' || *(q) == '\t' || *(q) == '\n' || \
-           *(q) == '\r' || *(q) == ',') (q)++
-
-    for (;;) {
-        SKIP_WS_COMMA(p);
-        /* The array's own closing brace ends the table. Note each entry also
-         * ends in `}`, which is consumed at the bottom of the loop -- leaving
-         * it there would stop the scan after the first entry. */
-        if (*p != '{') break;
-        p++;
-        SKIP_WS_COMMA(p);
-
-        char key[512];
-        const char *after_key = scan_c_string(p, key, sizeof(key));
-        if (!after_key) break;
-        p = after_key;
-        SKIP_WS_COMMA(p);
-        if (*p != '"') break;                 /* malformed pair; stop */
-
-        const char *after_val = scan_c_string(p, NULL, 0);
-        if (!after_val) break;
-
-        if (strcmp(key, sym) == 0) {
-            /* Size the value from the literal's own extent, then read it.
-             * Docstrings run to a few KB; measuring first avoids both a fixed
-             * cap that truncates and a guess that over-allocates. */
-            size_t room = (size_t)(after_val - p) + 1;
-            found = (char *)malloc(room);
-            if (found) scan_c_string(p, found, room);
-            break;
-        }
-
-        p = after_val;
-        SKIP_WS_COMMA(p);
-        if (*p == '}') p++;                   /* close this entry */
-    }
-#undef SKIP_WS_COMMA
-
-done:
-    free(text);
-    return found;
+    return tur_docstring_lookup_in(path, sym);
 }
 
 /* Print one docstring, honouring --json. `owned` is freed when non-NULL. */
@@ -9730,8 +9639,8 @@ static int cmd_doc_cli(const char *sym) {
     const char *builtin = turi_doc_lookup_builtin(sym);
     if (builtin) return print_doc_result(sym, builtin, NULL);
 
-    char *from_stdlib = stdlib_docstring_lookup(sym);
-    if (from_stdlib) return print_doc_result(sym, from_stdlib, from_stdlib);
+    const char *from_stdlib = stdlib_docstring_lookup(sym);
+    if (from_stdlib) return print_doc_result(sym, from_stdlib, NULL);
 
     if (use_json_output)
         fprintf(stderr, "{\"error\":\"no documentation for '%s'\"}\n", sym);

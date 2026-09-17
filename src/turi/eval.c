@@ -13363,6 +13363,100 @@ static bool acc_forms_append(TuriEnv *env, Form **src, uint32_t n) {
     return true;
 }
 
+/* PS1: record that a turn committed, ending at acc_forms[end_form].  A lost
+ * record would silently merge two turns into one replayed elaborate call, so
+ * running out of memory here aborts like the promotion map does. */
+static void acc_turns_push(TuriEnv *env, uint32_t end_form) {
+    if (env->n_acc_turns == env->cap_acc_turns) {
+        uint32_t ncap = env->cap_acc_turns ? env->cap_acc_turns * 2 : 16;
+        TuriAccTurn *grown =
+            (TuriAccTurn *)realloc(env->acc_turns, (size_t)ncap * sizeof(TuriAccTurn));
+        if (!grown) { fprintf(stderr, "tur: out of memory (turn records)\n"); abort(); }
+        env->acc_turns     = grown;
+        env->cap_acc_turns = ncap;
+    }
+    env->acc_turns[env->n_acc_turns].end_form       = end_form;
+    env->acc_turns[env->n_acc_turns].stdlib_preload = g_turi_stdlib_preload;
+    env->n_acc_turns++;
+}
+
+static void replay_mute_sink(DiagLevel level, const char *code, const char *file,
+                             uint32_t line, uint32_t col_start, uint32_t col_end,
+                             const char *message, void *ud) {
+    (void)level; (void)code; (void)file; (void)line;
+    (void)col_start; (void)col_end; (void)message; (void)ud;
+}
+
+/* PS1 (playground-session-hygiene-plan): rebuild a discarded elaboration
+ * session by replaying the committed turns into a fresh one, one elaborate
+ * call per turn -- exactly the calls that built the original session (a first
+ * turn elaborated whole, every later one incrementally, all with
+ * stdlib_prefix 0), minus the failed turn that got it discarded.
+ *
+ * The alternative this replaces was to elaborate the whole accumulated program
+ * in ONE call with stdlib_prefix = prior_toplevel.  That call marks every
+ * earlier form as auto-loaded stdlib, the user's own previous turns included,
+ * so after any failed turn a re-run of the same program was refused with
+ * "'main' is already defined by an auto-loaded stdlib module", and every turn
+ * after that failed the same way.  A single call also cannot express what the
+ * turns did one at a time: each was its own file for `defmodule`, and each
+ * could redefine a name an earlier one bound.
+ *
+ * Replayed turns already succeeded once and showed their diagnostics then, so
+ * they are elaborated muted.  Returns false -- leaving no session, so the
+ * caller falls back to the whole-program path -- if the turn records do not
+ * line up with the accumulated forms or a replayed turn fails. */
+static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
+                                const char *mbase, bool import_blocked) {
+    uint32_t prior = env->prior_toplevel;
+    if (env->n_acc_turns == 0 || env->n_acc_forms < prior ||
+        env->acc_turns[env->n_acc_turns - 1].end_form != prior)
+        return false;
+
+    ElabSession *sess = elab_session_new();
+    if (!sess) return false;
+
+    void      *prev_ud     = NULL;
+    DiagSinkFn prev_sink   = diag_get_sink(&prev_ud);
+    bool       saved_pre   = g_turi_stdlib_preload;
+    bool       ok          = true;
+    uint32_t   from        = 0;
+    diag_set_sink(replay_mute_sink, NULL);
+    for (uint32_t t = 0; t < env->n_acc_turns && ok; t++) {
+        uint32_t to = env->acc_turns[t].end_form;
+        if (to < from || to > prior) { ok = false; break; }
+        if (to == from) continue;   /* a turn with no forms (blank, comments) */
+        g_turi_stdlib_preload = env->acc_turns[t].stdlib_preload;
+        uint32_t n_fsd = 0;
+        /* The capture frame swallows errors and restores had_error on pop, so a
+         * replay that fails leaves this turn's error state untouched; the sink
+         * above mutes the warnings a capture frame lets through. */
+        diag_push_capture();
+        Expr *p = elaborate_program_session(arena, &env->st, forms + from,
+                                            to - from, /*stdlib_prefix=*/0,
+                                            mbase,
+                                            /*separate_compilation=*/false,
+                                            /*sandboxed=*/import_blocked,
+                                            /*out_tc_env=*/NULL,
+                                            /*include_dirs=*/NULL,
+                                            /*n_include_dirs=*/0,
+                                            &n_fsd, env->reader_macros, sess);
+        if (!p || diag_had_error()) ok = false;
+        if (diag_pop_capture() > 0) ok = false;
+        from = to;
+    }
+    g_turi_stdlib_preload = saved_pre;
+    diag_set_sink(prev_sink, prev_ud);
+
+    if (!ok || from != prior) {
+        elab_session_free(sess);
+        return false;
+    }
+    env->elab_session       = sess;
+    env->elab_session_forms = prior;
+    return true;
+}
+
 static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     if (!env || !env->scratch_promotion) return;
     env->promo_attempts++;   /* TR0: promotion attempted this eval boundary */
@@ -13377,6 +13471,10 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
             if (!promo_check(env, b->value, &seen)) { ok = false; break; }
         }
     }
+    /* PS5: the prelude snapshot's values are roots too -- a rewind writes them
+     * back into the globals. */
+    for (uint32_t i = 0; ok && i < env->n_prelude_globals; i++)
+        if (!promo_check(env, env->prelude_globals[i].value, &seen)) ok = false;
     promo_map_free(&seen);
     if (!ok) { env->promo_decline_unrelocatable++; return; }   /* keep scratch intact this cycle */
 
@@ -13387,6 +13485,9 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     TuriValue promoted = promo_copy(env, *result, &fwd);
     for (EnvBinding *b = env->globals; b; b = b->next)
         b->value = promo_copy(env, b->value, &fwd);
+    for (uint32_t i = 0; i < env->n_prelude_globals; i++)   /* PS5 */
+        env->prelude_globals[i].value =
+            promo_copy(env, env->prelude_globals[i].value, &fwd);
     promo_map_free(&fwd);
     *result = promoted;
 
@@ -13643,9 +13744,12 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * new forms -- prior definitions resolve out of the session's accumulated
      * scope instead of being re-elaborated (and re-allocated) every turn.
      *
-     * Otherwise (no session yet, or one just discarded after a failure) fall
-     * back to elaborating the whole accumulated program, which both reproduces
-     * today's behavior exactly and rebuilds the session from scratch. */
+     * A session discarded after a failed turn (or a reset to the prelude) is
+     * rebuilt first by replaying the committed turns (PS1).  Only when that
+     * cannot be done -- or on the very first turn -- does this elaborate the
+     * whole accumulated program, rebuilding the session from scratch. */
+    if (env->incremental_elab && !env->elab_session && prior > 0)
+        (void)elab_session_replay(env, eval_arena, forms, mbase, import_blocked);
     if (env->incremental_elab && !env->elab_session) {
         env->elab_session       = elab_session_new();
         env->elab_session_forms = 0;
@@ -13672,7 +13776,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     if (!prog || diag_had_error()) {
         env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
         /* A failed program may have left partial definitions in the session;
-         * discard it so the next turn rebuilds from the accumulated forms. */
+         * discard it so the next turn rebuilds it from the committed turns. */
         if (env->elab_session) {
             elab_session_free(env->elab_session);
             env->elab_session       = NULL;
@@ -13825,6 +13929,7 @@ eval_done:;
         else               env->prior_prog_items  = total - n_fsd;
         /* The session has now absorbed every accumulated form. */
         if (env->elab_session) env->elab_session_forms = nforms;
+        acc_turns_push(env, nforms);   /* PS1: what a session replay walks */
         /* SI4: persist TypeClassEnv for turi_try_show dispatch. */
         env->last_tc_env = tc_env_slot;
         /* SI4: extract type tag from the last new top-level expression. */
@@ -13847,7 +13952,7 @@ eval_done:;
         env->n_acc_forms = acc_committed;
         /* TR2.2b: the session HAS absorbed this turn's definitions even though
          * the turn failed at runtime, so it no longer matches the accumulated
-         * forms. Discard it; the next turn rebuilds from acc_forms. */
+         * forms. Discard it; the next turn rebuilds it from acc_turns (PS1). */
         if (env->elab_session) {
             elab_session_free(env->elab_session);
             env->elab_session       = NULL;

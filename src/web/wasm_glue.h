@@ -22,6 +22,12 @@ int turi_wasm_init(void);
  * This clears all definitions and returns to a clean slate. */
 void turi_wasm_reset(void);
 
+/* Rewind the session to the preloaded stdlib, keeping the env: everything a
+ * Run or prompt line defined is forgotten -- source, elaboration session, and
+ * runtime bindings -- and the stdlib is not reloaded.  What the Run button does
+ * before running the editor's program (playground-session-hygiene-plan PS5). */
+void turi_wasm_rewind_to_prelude(void);
+
 /* Shutdown the Turmeric WASM runtime.
  * Frees all resources. Call turi_wasm_init() again to restart. */
 void turi_wasm_shutdown(void);
@@ -155,8 +161,9 @@ const char *turi_wasm_lang_registry(void);
  *   A static (not malloc'd) C string with the documentation, or NULL if the
  *   name is not found in the doc table.  Do NOT free the returned pointer.
  *
- * This function calls (doc-lookup name) in the Turmeric runtime, which is
- * backed by the auto-generated stdlib/docstrings.tur lookup table.
+ * Checks the builtin/special-form table, then reads the auto-generated
+ * stdlib/docstrings.tur table directly from C (src/turi/docstrings.c).  It never
+ * evaluates anything, so a lookup cannot change the session.
  *
  * Exported with EMSCRIPTEN_KEEPALIVE so it is callable from JavaScript:
  *   const docStr = Module.ccall('turi_doc_lookup', 'string', ['string'], [name]);

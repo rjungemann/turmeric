@@ -242,9 +242,13 @@ static bool ct_symbol_name(const Symbol *sym, const char *name) {
  * template routes the template through the compile-time evaluator.  Two
  * deliberate exceptions carry gates=false:
  *   - `=` and `not` are recognized builtins but predate the gate, and they
- *     appear in existing templates that are pure runtime code (e.g. the
- *     stdlib `doc` macro); gating them would CT-hijack those templates,
- *     comparing Forms structurally where the author meant runtime values.
+ *     appear in existing templates that are pure runtime code; gating them
+ *     would CT-hijack those templates, comparing Forms structurally where
+ *     the author meant runtime values.
+ *   - `string?` is the same case in advance: it is a natural runtime
+ *     predicate name (spice tests call `(assert-true (string? s))`), so it
+ *     only evaluates at compile time inside a template something else
+ *     already routed there -- as the stdlib `doc` macro's `list` does.
  * `map` is the inverse case: it gates, but is dispatched as a special form
  * in ct_eval_call (the fn argument must stay a CT_VAL_FN), so its switch
  * case below falls through to "not a builtin". */
@@ -267,7 +271,8 @@ static bool ct_symbol_name(const Symbol *sym, const char *name) {
     X(VEC,            "vec",            true)  \
     X(MAP,            "map",            true)  \
     X(EQ,             "=",              false) \
-    X(NOT,            "not",            false)
+    X(NOT,            "not",            false) \
+    X(STRING_P,       "string?",        false)
 
 typedef enum {
     CT_B_NONE = 0,
@@ -442,10 +447,24 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time vec? expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
         return ct_value_form(form_bool(env->elab->arena, span, args[0]->tag == F_VEC));
     }
+    case CT_B_STRING_P: {
+        if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time string? expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
+        return ct_value_form(form_bool(env->elab->arena, span, args[0]->tag == F_STR));
+    }
     case CT_B_SYMBOL_NAME: {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time symbol-name expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
-        if (args[0]->tag != F_SYM) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time symbol-name expects a symbol"); return ct_value_form(form_nil(env->elab->arena, span)); }
-        const Symbol *sym = args[0]->as.sym;
+        /* A quoted symbol names the same symbol: `'x` reads as an F_QUOTE
+         * node and `(quote x)` as a list, and a macro taking a name (the
+         * stdlib `doc`) should not have to tell the three spellings apart. */
+        Form *sf = args[0];
+        if (sf->tag == F_QUOTE && sf->as.list.len == 1)
+            sf = sf->as.list.items[0];
+        else if (sf->tag == F_LIST && sf->as.list.len == 2 &&
+                 sf->as.list.items[0]->tag == F_SYM &&
+                 sf->as.list.items[0]->as.sym == env->elab->sym_quote)
+            sf = sf->as.list.items[1];
+        if (sf->tag != F_SYM) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time symbol-name expects a symbol"); return ct_value_form(form_nil(env->elab->arena, span)); }
+        const Symbol *sym = sf->as.sym;
         return ct_value_form(form_str(env->elab->arena, span, sym->name, sym->len));
     }
     case CT_B_TYPE_ANN_P: {
@@ -1470,11 +1489,17 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
     if (!e->in_stdlib_load)
         tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defmacro");
 
-    /* Check if macro already exists */
-    if (elab_lookup_macro(e, name_f->as.sym)) {
-        diag_emit(DIAG_ERROR, name_f->span,
-                  "defmacro: '%s' is already defined", name_f->as.sym->name);
-        return NULL;
+    /* Check if macro already exists.  PS4: an earlier REPL/playground turn's
+     * macro is replaced rather than refused. */
+    {
+        MacroDef *prior = elab_lookup_macro(e, name_f->as.sym);
+        if (prior && elab_prior_turn_macro(e, prior)) {
+            elab_remove_macro(e, prior);
+        } else if (prior) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defmacro: '%s' is already defined", name_f->as.sym->name);
+            return NULL;
+        }
     }
 
     /* Parse params */
@@ -1845,10 +1870,15 @@ Expr *elab_defmacro_star(Elab *e, const Form *call) {
     }
     if (!e->in_stdlib_load)
         tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defmacro*");
-    if (elab_lookup_macro(e, name_f->as.sym)) {
-        diag_emit(DIAG_ERROR, name_f->span,
-                  "defmacro*: '%s' is already defined", name_f->as.sym->name);
-        return NULL;
+    {
+        MacroDef *prior = elab_lookup_macro(e, name_f->as.sym);
+        if (prior && elab_prior_turn_macro(e, prior)) {   /* PS4: see defmacro */
+            elab_remove_macro(e, prior);
+        } else if (prior) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defmacro*: '%s' is already defined", name_f->as.sym->name);
+            return NULL;
+        }
     }
 
     Form *params_f = call->as.list.items[2];

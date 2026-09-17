@@ -15,6 +15,7 @@
 
 #include "turi/eval.h"
 #include "turi/collections_native.h"  /* native_mk_cmp_int / native_mk_box_cstr */
+#include "turi/docstrings.h"  /* PS3: doc-lookup / doc-print, builtin docs */
 #include "diag.h"    /* SYNTAX natives: diag file-registry save/restore for read-string */
 #include "forms.h"   /* SYNTAX natives: Form constructors/accessors */
 #include "reader.h"  /* SYNTAX natives: read_all_with_registry for read-string */
@@ -4361,6 +4362,37 @@ TuriValue native_contract_enabled(TuriEnv *env, TuriValue *args,
     return turi_bool(true);
 }
 
+/* PS3 (playground-session-hygiene-plan): documentation natives.  The only
+ * compiled definition of doc-lookup is an inline-C body in the generated
+ * stdlib/docstrings.tur, which the tree-walker cannot run and nothing preloads,
+ * so every interpreter -- the playground included -- answered `(doc ...)` with
+ * "unknown function or operator 'doc-lookup'".  Both read the generated table
+ * directly (src/turi/docstrings.c). */
+
+/* (doc-lookup name) -- the docstring for `name`, or 0 when there is none: the
+ * same answers as the tur/docstrings module this overrides when it is loaded. */
+static TuriValue native_doc_lookup(TuriEnv *env, TuriValue *args, uint32_t n,
+                                   void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || args[0].tag != TURI_CSTR || !args[0].as_cstr) return turi_int(0);
+    const char *doc = tur_docstring_lookup(args[0].as_cstr);
+    return doc ? turi_cstr(doc) : turi_int(0);
+}
+
+/* (doc-print name) -- what the `doc` macro expands to: print the documentation
+ * for a builtin, special form, or stdlib name, or say there is none. */
+static TuriValue native_doc_print(TuriEnv *env, TuriValue *args, uint32_t n,
+                                  void *ud) {
+    (void)ud;
+    if (!turi_env_has_cap(env, TURI_CAP_IO))
+        return turi_error("doc-print: capability denied (io)");
+    const char *name = (n >= 1 && args[0].tag == TURI_CSTR) ? args[0].as_cstr : NULL;
+    const char *doc  = name ? turi_doc_lookup_builtin(name) : NULL;
+    if (!doc && name) doc = tur_docstring_lookup(name);
+    puts(doc ? doc : "No documentation found.");
+    return turi_nil();
+}
+
 /* -------------------------------------------------------------------------
  * Public entry point: register the full interpreter native override set.
  *
@@ -4815,6 +4847,9 @@ void turi_env_register_interpreter_natives(TuriEnv *env) {
                              native_contract_check_inv, NULL);
     turi_env_register_native(env, "contract-enabled?",
                              native_contract_enabled, NULL);
+    /* PS3: `doc` and the stdlib doc table (see native_doc_print). */
+    turi_env_register_native(env, "doc-lookup", native_doc_lookup, NULL);
+    turi_env_register_native(env, "doc-print",  native_doc_print,  NULL);
     /* R1 (turi-interpret-flip-residual-plan): safe.tur box/unbox/array-get/-set
      * over the int64-carrier layout, and the typeclass instance-method overrides
      * (Show/Eq inline-C bodies the tree-walker cannot run). */
