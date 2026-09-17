@@ -35,12 +35,16 @@ address in each half:
 
 Both repros print `bad` / `x`; the ok / Left arms still print `42` / `7`; and
 the result flowing straight into a consumer with no `let` between works too.
-Pinned by `tests/fixtures/hkt-carrier-result-payload-types`. Under ASan the
-Result path is leak-clean (the hoist frees the fresh box); the Either path
-still leaks the poly-to-fat closure adapter the instance body allocates to
-call `either-map`'s `^fat` parameter, which predates this report and is not
-about the result. `docs/guides/typeclass-guide.md`'s holes section now says
-what the two routes are and that the result type is precise on both.
+Pinned by `tests/fixtures/hkt-carrier-result-payload-types`, leak-checked.
+The hoist frees the fresh Result box. The Either path first showed a second,
+older leak -- the poly-to-fat closure adapter the instance body mallocs to
+hand its method closure to `either-map`'s `^fat` parameter, 32 bytes per
+call, nothing freeing it -- which was closed in the same change the way the
+bare-fn shim already was: the argument-position `EX_POLY_TO_FAT` now carries
+the sink's non-retaining proof (`stack_ok`, from the inferred mask or a
+declared `^borrow`) and the emitter gives such a box the call's own stack
+frame. `docs/guides/typeclass-guide.md`'s holes section now says what the
+two routes are and that the result type is precise on both.
 
 **Severity: high** -- a silent wrong answer on the TYPED path, no diagnostic,
 no panic. Found 2026-09-10 while fixing `saffron-dynamic-surface-pass` M2, as a

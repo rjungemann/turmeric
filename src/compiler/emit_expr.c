@@ -14743,7 +14743,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "tur_poly_fn_t %s = %s;\n", pf, pv);
             char *box = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            {
+            if (e->as.poly_to_fat_.stack_ok && ensure_fatbox_keep(ctx)) {
+                /* poly-to-fat-box-leaks-per-call: the ^fat sink was proven not
+                 * to retain (or drop) this value, so the { shim, fn, env } box
+                 * is dead the moment the call returns -- give it the call's
+                 * own stack frame, exactly as the bare-fn shim above does.
+                 * Header is the no-op keep glue, so a drop through any path is
+                 * harmless rather than a free() of the stack. */
+                char *pbase = fresh_tmp(ctx);
+                buf_printf(body,
+                           "union { void *__a; int64_t __b; char __c[sizeof(void *) + 3 * sizeof(int64_t)]; } "
+                           "%s = { .__a = (void *)__tur_fatbox_keep };\n", pbase);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t *%s = (int64_t *)((char *)&%s + sizeof(void *));\n",
+                           box, pbase);
+                free(pbase);
+            } else {
                 /* closure-drop-glue (Model R): header the poly-to-fat box too so
                  * TUR_CLOSURE_DROP is uniform across every fat representation.
                  * Header NULL -> tur_closure_drop frees the base (freeing the box

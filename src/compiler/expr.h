@@ -1681,7 +1681,14 @@ struct Expr {
          * elaboration so the emitter can pick a typed slot-0 shim whose ABI
          * matches the typed-thunk cast the sink will apply.  NULL for the int64
          * carrier case (keeps __tur_poly_to_fat1). */
-        struct { struct Expr *inner; const struct Type *sink_fn_type; } poly_to_fat_;
+        /* poly-to-fat-box-leaks-per-call: stack_ok, with the same meaning as
+         * fn_to_fat_.stack_ok -- the ^fat sink was PROVEN non-retaining
+         * (inferred mask or a declared ^borrow), so the { shim, fn, env } box
+         * is dead when the call returns and lives on the stack.  Only the
+         * argument-position conversion sets it; a tail-leaf or join
+         * conversion hands the box out and keeps the heap. */
+        struct { struct Expr *inner; const struct Type *sink_fn_type;
+                 bool stack_ok; } poly_to_fat_;
         /* Phase HRT2: Existential types.
          * Phase EX1c: optional resolved constraint witnesses (one per constraint
          * in the target existential type).  NULL when the target has no
