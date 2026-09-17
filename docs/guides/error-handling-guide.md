@@ -219,6 +219,12 @@ early from the enclosing function. It is the ergonomic counterpart to manual
       (return __q)        ;; propagate the err Result unchanged
       (ok-val __q)))      ;; otherwise yield the unwrapped ok value
 ```
+```sweet-exp
+let [__q expr]
+  if err?(__q)
+      return(__q)        ;; propagate the err Result unchanged
+      ok-val(__q)      ;; otherwise yield the unwrapped ok value
+```
 
 The lowering routes through the `#fx{}`-safe stdlib helpers `__tur-q-is-err?`
 and `__tur-q-ok-val` (in `stdlib/result.tur`), so call sites need no `(unsafe
@@ -249,6 +255,14 @@ the `__tur-q-is-err?` helper fails to accept them.
     (let [toks (? (tokenize     raw))]
       (let [ast (? (parse-forms toks))]
         (ok ast)))))
+```
+```sweet-exp
+;; parse-config threads three fallible steps; any err short-circuits.
+defn parse-config [src : ptr<void>] : ptr<void>
+  let [raw    ?(read-source(src))]
+    let [toks ?(tokenize(raw))]
+      let [ast ?(parse-forms(toks))]
+        ok(ast)
 ```
 
 If `read-source`, `tokenize`, or `parse-forms` returns an err, `parse-config`
@@ -434,6 +448,13 @@ opaque `Panic` wrapper:
   (when (err? r)
     (println (panic-message (result-panic r)))))  ; => boom
 ```
+```sweet-exp
+load "stdlib/panic.tur"
+
+let [r catch-unwind((fn [] : int panic("boom")))]
+  when err?(r)
+    println(panic-message(result-panic(r)))  ; => boom
+```
 
 `stdlib/panic` exposes `result-panic` (extract the `Panic` from an err result),
 `panic-message`, `panic-file`, `panic-line`, and `panic-type`.
@@ -532,6 +553,12 @@ away:
   (write-record r)   ;; warning: discarded result value of type ptr<void>;
                      ;;          use ignore! to suppress this warning
   0)
+```
+```sweet-exp
+defn main [] : int
+  write-record(r)   ;; warning: discarded result value of type ptr<void>;
+                     ;;          use ignore! to suppress this warning
+  0
 ```
 
 The warning is **off by default** and is silenced three ways:
@@ -698,6 +725,20 @@ invariant-msg!(my-list non-empty? "list must not be empty")
       (println "recovered from the task's panic")   ; taken
       (println "no panic")))
   0)
+```
+```sweet-exp
+defn boom [] : int panic("task exploded")
+
+defn main [] : int
+  let [fut async(boom)]
+    println("the spawn itself does not unwind")   ; runs
+
+  let [fut async(boom)
+        r   catch-unwind((fn [] : int await(fut)))]
+    if err?(r)
+      println("recovered from the task's panic")   ; taken
+      println("no panic")
+  0
 ```
 
 > **Still planned.** Three parts of the task-boundary design are not built yet:

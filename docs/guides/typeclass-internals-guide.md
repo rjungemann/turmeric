@@ -65,6 +65,10 @@ When a method declares a function return type, e.g.
 (defclass HasArr [a]
   (arr-of [self n : int] : (fn [int] int)))
 ```
+```sweet-exp
+defclass HasArr [a]
+  (arr-of [self n : int] : (fn [int] int))
+```
 
 the instance-method elaborator (`elab_definstance`,
 `src/compiler/elab_typeclasses.c`) builds the method's fn type with
@@ -141,6 +145,19 @@ type -- the Haskell `type Storage c = ...` / Rust `type Item;` pattern:
   (type Elem = cstr)
   (make-empty [self] 0))
 ```
+```sweet-exp
+defclass Container [t]
+  (type Elem : Type)               ;; associated type member
+  (make-empty [self : t] : int)   ;; ordinary value method
+
+definstance Container [(Vec int)]
+  (type Elem = int)                ;; per-instance binding
+  (make-empty [self] 0)
+
+definstance Container [(Vec cstr)]
+  (type Elem = cstr)
+  (make-empty [self] 0)
+```
 
 In any type-annotation position, the projection `(Elem (Vec int))` resolves to
 whatever the matching instance bound -- here `int`; `(Elem (Vec cstr))`
@@ -148,6 +165,9 @@ resolves to `cstr`:
 
 ```turmeric
 (defn take [x : (Elem (Vec int))] : int (+ x 1))   ;; x : int
+```
+```sweet-exp
+defn take [x : (Elem (Vec int))] : int {x + 1}   ;; x : int
 ```
 
 Rules and representation:

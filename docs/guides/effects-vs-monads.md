@@ -254,6 +254,16 @@ with a loop in the clause -- the direct expression of bounded nondeterminism:
                a)))
   0)
 ```
+```sweet-exp
+defn main [] : int
+  println
+    handle {10 + perform(Choose(1 3))}
+      (Choose [lo hi] ^multishot k)
+      let [^mut a 0 ^mut i lo]
+        while {i <= hi} set!(a {a + resume(k i)}) set!(i {i + 1})
+        a
+  0
+```
 
 Prints `36` -- `(10+1) + (10+2) + (10+3)`, one full run of the continuation per
 iteration.
@@ -594,6 +604,10 @@ picked, so a full `bind`-then-`pure` combinator is expressible:
 (defn bind-then-pure [^m] [^Monad m ^Applicative m x : (m int)] : (m int)
   (bind x (fn [v] (pure (* v 2)))))
 ```
+```sweet-exp
+defn bind-then-pure [^m] [^Monad m ^Applicative m x : (m int)] : (m int)
+  bind(x fn([v] pure({v * 2})))
+```
 
 Several constraints on one type constructor are fine, as above.
 
@@ -624,6 +638,11 @@ pins the type:
 (:: (pure 42) (Option int))      ;; OK -- ascribed
 (defn mk [] : (Option int) (pure 42))   ;; OK -- return type pins it
 ```
+```sweet-exp
+pure(42)                        ;; ambiguous
+(:: pure(42) (Option int))      ;; OK -- ascribed
+defn mk [] : (Option int) pure(42)   ;; OK -- return type pins it
+```
 
 The `for` comprehension macro is not caught by this. It desugars the body to
 `.pure`, and the dot-dispatch path consults the expected type (`bind`'s
@@ -633,6 +652,10 @@ instances:
 ```turmeric no-check
 (defn sums [] : (Option int)
   (for [x (half 20) y (half x)] (+ x y)))   ;; => 15
+```
+```sweet-exp
+defn sums [] : (Option int)
+  for [x half(20) y half(x)] {x + y}   ;; => 15
 ```
 
 `do-m` remains the more explicit spelling and is what most of this guide uses;

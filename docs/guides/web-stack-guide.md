@@ -506,6 +506,21 @@ A `mount!` helper boxes a `(prefix, sub-app)` pair into a single handle so
                       (mount! "/"    (get! "/" home-handler)))
             (serve-static! "/" "./public")))
 ```
+```sweet-exp
+import tourist/routing :refer [url-map! cascade! mount!]
+
+defn api-routes [] : int
+  url-map!
+    mount!("/users" get!("/" users-handler))
+    mount!("/items" get!("/" items-handler))
+
+tourist 3000
+  cascade!
+    url-map!
+      mount!("/api" api-routes())
+      mount!("/"    get!("/" home-handler))
+    serve-static!("/" "./public")
+```
 
 `url-map!` strips the matched prefix from `ctx->path` before dispatching
 the inner sub-app, so handlers see paths relative to their mount point
