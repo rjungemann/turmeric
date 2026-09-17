@@ -185,6 +185,15 @@ Effect *effect_env_lookup(EffectEnv *env, const Symbol *name);
 /* Check if an effect is valid (exists in environment) */
 bool effect_env_contains(EffectEnv *env, const Symbol *name);
 
+/* PS4 (playground-session-hygiene-plan): forget the effect named `name`, so a
+ * REPL turn that re-enters its `defeffect` registers a fresh one instead of
+ * colliding.  The old Effect is left allocated and is still reachable from
+ * anything that captured it -- handler clauses resolve by NAME
+ * (effect_env_lookup), so code elaborated after this point binds the new
+ * definition while already-elaborated code keeps the one it was built
+ * against.  Returns true when an entry was removed. */
+bool effect_env_unregister(EffectEnv *env, const Symbol *name);
+
 /* Register built-in `Unsafe` effect (idempotent). */
 Effect *effect_env_register_builtin_unsafe(EffectEnv *env, Arena *a,
                                            const Symbol *unsafe_name);

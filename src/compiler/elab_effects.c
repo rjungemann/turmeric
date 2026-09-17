@@ -1406,9 +1406,23 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
     
     /* Check if effect already exists */
     if (effect_env_contains(e->effect_env, name)) {
-        diag_emit(DIAG_ERROR, name_f->span,
-                  "defeffect: '%s' is already defined", name->name);
-        return NULL;
+        /* PS4 (playground-session-hygiene-plan): in a REPL / eval session a
+         * re-entered `defeffect` REPLACES the previous one, the way `defn`,
+         * `defclass` and `defopaque` already do.  Refusing it is what broke
+         * the shipped effects example on its second Run, and the split was
+         * never a decision -- `defn` is simply where the incremental work
+         * landed.  Handler clauses resolve an effect by NAME, so code
+         * elaborated from here binds the new definition while already-
+         * elaborated code keeps the Effect it was built against; nothing
+         * re-tags a live value.  A FILE that declares the same effect twice
+         * is still an error (the flag is false outside the REPL). */
+        if (elab_repl_redefinition_allowed()) {
+            effect_env_unregister(e->effect_env, name);
+        } else {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defeffect: '%s' is already defined", name->name);
+            return NULL;
+        }
     }
     
     /* Parse parameter list (index shifts by 1 when ^private is present) */

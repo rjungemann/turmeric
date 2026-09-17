@@ -1043,6 +1043,19 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_repl_lang_saffron PROPERTIES TIMEOUT 300)
+# PS1 + PS4 (playground-session-hygiene-plan): a failed turn must not poison
+# the session, and re-entering a top-level definition replaces the previous
+# one.  The report this comes from reads as a playground bug, but the
+# mechanism is in shared elaboration -- so it is testable here, with no
+# browser.  Also asserts the two guards were narrowed rather than deleted (a
+# FILE with a duplicate defeffect, or one shadowing a real stdlib name, still
+# errors).
+add_test(
+  NAME tur_repl_session_hygiene
+  COMMAND bash tests/turi/repl-session-hygiene.sh "${CMAKE_BINARY_DIR}/tur"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_repl_session_hygiene PROPERTIES TIMEOUT 300)
 # saffron-lang-plan S8: `tur init --saffron` scaffolds a project that BUILDS.
 # The assertion is the build, not the file text: checking for a `#lang` line
 # would have passed while the LIBRARY scaffold could not compile at all

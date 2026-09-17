@@ -13687,6 +13687,31 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                env->elab_session_forms == prior;
     const uint32_t elab_from = use_incr_elab ? prior : 0;
 
+    /* PS1 (playground-session-hygiene-plan): on the fallback path the prefix
+     * we are about to declare "stdlib" is mostly this session's OWN earlier
+     * turns.  Say so, so their bindings are not stamped is_from_stdlib and
+     * `defn` stops reporting the user's own function as already defined by an
+     * auto-loaded stdlib module -- a cause that does not exist and a rename
+     * that cannot help.  Genuine stdlib exports keep the stamp through the
+     * `tur/`-module promotion at the prefix boundary.  Zero on the
+     * incremental path, where the prefix is empty anyway. */
+    /* PS1/PS4: both rules are about a SESSION -- a turn with earlier user
+     * turns behind it -- and neither may fire for the first program an env
+     * evaluates.  `tur --interpret prog.tur` also comes through here, and
+     * there the accumulated prefix is the pinned stdlib preload and nothing
+     * else: its bindings really are stdlib, and a file that declares the same
+     * effect twice is an ordinary duplicate.  `pin_acc_forms` is the form
+     * count at prelude-pin time, so "anything beyond it" is exactly "an
+     * earlier user turn".  With no prelude pinned we cannot tell, and stay
+     * off -- the conservative direction. */
+    const bool session_turn = env->src_pin_len > 0 && prior > env->pin_acc_forms;
+    elab_set_session_prefix_is_history(session_turn && prior - elab_from > 0);
+    /* PS4: a REPL turn re-entering a top-level definition replaces the
+     * previous one.  Not restricted to the fallback path: the collision this
+     * closes -- running the shipped effects example twice -- happens on the
+     * INCREMENTAL path, where the session's effect env carries the first
+     * turn's `defeffect` into the second. */
+    elab_set_repl_redefinition(session_turn);
     Expr *prog = elaborate_program_session(eval_arena, &env->st,
                                    forms + elab_from, nforms - elab_from,
                                    /*stdlib_prefix=*/prior - elab_from,
@@ -13702,6 +13727,8 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                     * see the same macros the entry did. */
                                    env->reader_macros,
                                    env->elab_session);
+    elab_set_session_prefix_is_history(false);
+    elab_set_repl_redefinition(false);
     if (!prog || diag_had_error()) {
         env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
         /* A failed program may have left partial definitions in the session;

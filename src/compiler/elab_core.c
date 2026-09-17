@@ -2433,7 +2433,14 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->c_export_name = NULL;  /* Phase M6: ^:export-as C name */
     /* MF3: mark global bindings created during stdlib auto-load so user
      * code that later shadows them gets a hard diagnostic. */
-    b->is_from_stdlib = is_global && e->in_stdlib_load;
+    /* PS1: ... except when the prefix is prior SESSION turns.  Those are the
+     * user's own earlier definitions; calling them stdlib made `defn` refuse
+     * a redefinition the incremental path allows, with a message naming a
+     * module that does not contain the name.  Genuine stdlib exports are
+     * still stamped by the `tur/`-module promotion at the prefix boundary
+     * (elab_toplevel.c), so the guard survives for the names it is about. */
+    b->is_from_stdlib = is_global && e->in_stdlib_load &&
+                        !elab_session_prefix_is_history();
     return b;
 }
 

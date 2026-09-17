@@ -1088,11 +1088,36 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
              * struct_defs registry is dead -- a prior definition of this name is
              * an AdtDef (every lowered defstruct/defdata) checked above. */
             if (prior_fully_defined) {
-                diag_emit(DIAG_ERROR, name_form->span,
-                          "defstruct: '%s' is already defined (an auto-loaded "
-                          "stdlib module or earlier form in this file defines "
-                          "a type with this name; pick a distinct name)",
-                          name->name);
+                /* PS4 (playground-session-hygiene-plan): in a REPL / eval
+                 * session the prior definition is an EARLIER TURN, not "an
+                 * auto-loaded stdlib module or earlier form in this file" --
+                 * naming those sends the user to rename a type over a
+                 * collision with their own last Run, and the rename does not
+                 * help.  Say what actually happened and name the action that
+                 * resolves it.
+                 *
+                 * `defstruct` is not made re-enterable here the way
+                 * `defeffect` is, and the reason is the one PS4 reserves:
+                 * a struct VALUE carries its AdtDef, so a value built by an
+                 * earlier turn and matched after a redefinition would be read
+                 * against a different layout.  `defeffect` has no such
+                 * tagging -- handler clauses resolve by name -- which is why
+                 * it could be lifted and this cannot without a
+                 * structural-identity check that does not exist yet. */
+                if (elab_repl_redefinition_allowed())
+                    diag_emit(DIAG_ERROR, name_form->span,
+                              "defstruct: '%s' was already defined earlier in "
+                              "this session; a struct's values carry its "
+                              "definition, so it cannot be redefined while "
+                              "they may still be live -- use :reset to start a "
+                              "fresh session, or pick a distinct name",
+                              name->name);
+                else
+                    diag_emit(DIAG_ERROR, name_form->span,
+                              "defstruct: '%s' is already defined (an auto-loaded "
+                              "stdlib module or earlier form in this file defines "
+                              "a type with this name; pick a distinct name)",
+                              name->name);
                 return NULL;
             }
         }

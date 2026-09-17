@@ -436,6 +436,19 @@ bool effect_env_contains(EffectEnv *env, const Symbol *name) {
     return effect_env_lookup(env, name) != NULL;
 }
 
+/* PS4: see effect.h. */
+bool effect_env_unregister(EffectEnv *env, const Symbol *name) {
+    if (!env || !name) return false;
+    for (uint32_t i = 0; i < env->n_effects; i++) {
+        if (env->effects[i]->name != name) continue;
+        for (uint32_t j = i + 1; j < env->n_effects; j++)
+            env->effects[j - 1] = env->effects[j];
+        env->n_effects--;
+        return true;
+    }
+    return false;
+}
+
 Effect *effect_env_register_builtin_unsafe(EffectEnv *env, Arena *a,
                                            const Symbol *unsafe_name) {
     if (!env || !a || !unsafe_name) return NULL;

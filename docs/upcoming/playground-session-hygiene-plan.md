@@ -6,8 +6,37 @@ description: Stop a doc lookup from mutating the eval session, stop a failed eva
 
 # Playground session hygiene (PS)
 
-**Status: planned, not started. Open questions resolved 2026-09-09** -- the
-five that gated this plan were researched and decided; see "Decisions" below.
+**Status: PS1 (diagnostic half) and PS4 (`defeffect`) LANDED 2026-09-17.
+PS2, PS3 and PS5 remain.** Open questions resolved 2026-09-09 -- the five that
+gated this plan were researched and decided; see "Decisions" below.
+
+**What landed, and the one correction to this plan's reading.** PS1's two
+halves are separable, and only the second was done: a failed turn still
+discards `elab_session`, but it no longer POISONS the session when it does.
+The mislabelling was not a consequence of the discard that had to be fixed by
+preventing it -- it was a consequence of the fallback path stamping the
+session's own earlier turns `is_from_stdlib`, and the eval entry can simply
+say the prefix is session history
+(`elab_set_session_prefix_is_history`, `src/compiler/elab.h`).  That touches
+role 1 of `stdlib_prefix` and nothing else, so the role-4 blast radius this
+plan warns about is avoided entirely and the `stdlib_prefix` re-scoping is
+still unneeded.  Q1's "investigate the no-discard route first" was answered
+by not needing either route.
+
+PS4's `defeffect` half landed as decided; its `defstruct` half did not, for
+the reason PS4 itself reserves -- a struct value carries its `AdtDef`, so a
+value from an earlier turn matched after a redefinition reads a different
+layout.  Its message was corrected instead, which PS4 lists as a must-carry.
+
+Everything is gated on a prior USER turn (`pin_acc_forms`), because
+`tur --interpret prog.tur` shares this entry point and must keep file
+semantics.  That gate is what the first attempt missed: without it, a file
+declaring the same struct twice got the session message and
+`errors/defstruct-redef-stdlib-name` went red under the interpreter.
+
+Pinned by `tests/turi/repl-session-hygiene.sh` (ctest
+`tur_repl_session_hygiene`), which also asserts both guards were narrowed
+rather than deleted.
 Filed from
 [doc-lookup-poisons-the-playground-eval-session](../reported/doc-lookup-poisons-the-playground-eval-session.md),
 whose repros are measured against the live site.

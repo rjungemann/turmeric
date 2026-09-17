@@ -127,6 +127,45 @@ typedef struct Ls2ResolverCtx {
 void                  ls2_resolver_ctx_set(const Ls2ResolverCtx *ctx);
 const Ls2ResolverCtx *ls2_resolver_ctx_active(void);
 
+/* PS1 (playground-session-hygiene-plan): is the `stdlib_prefix` handed to the
+ * next elaboration made of PRIOR SESSION TURNS rather than an auto-loaded
+ * stdlib prefix?
+ *
+ * The REPL / `turi_eval` accumulates every turn's forms and, whenever it
+ * cannot use the incremental path (no session yet, or one discarded by a
+ * failed turn), re-elaborates the whole accumulation with
+ * `stdlib_prefix = prior`.  That prefix is mostly the user's own earlier
+ * turns, and marking their bindings `is_from_stdlib` made `defn` report the
+ * user's own function as "already defined by an auto-loaded stdlib module" --
+ * naming a cause that does not exist and prescribing a rename that cannot
+ * help.  It also made the fallback path STRICTER than the incremental one,
+ * where `stdlib_prefix` is 0 and redefinition across turns simply works.
+ *
+ * With this set the prefix keeps all of `stdlib_prefix`'s other roles (load
+ * dedup, the macro-promotion boundary, the two-pass user/stdlib partition)
+ * and only stops stamping `is_from_stdlib`.  Bindings that really do come
+ * from an auto-loaded stdlib module are still stamped, by the separate
+ * `tur/`-module promotion at the prefix boundary, so the guard is narrowed
+ * to the names it was written for rather than deleted.
+ *
+ * Set around a call and cleared after; false everywhere else, so the compiled
+ * pipeline is untouched. */
+void elab_set_session_prefix_is_history(bool v);
+bool elab_session_prefix_is_history(void);
+
+/* PS4 (playground-session-hygiene-plan): is this elaboration a REPL / eval
+ * TURN, where re-entering a top-level definition replaces the previous one
+ * rather than colliding with it?
+ *
+ * `defn`, `defclass` and `defopaque` already redefine across turns; `defeffect`
+ * refused, so running the shipped effects example twice broke the session --
+ * and a REPL where half the `def*` forms are re-enterable and half are not is
+ * not a rule anyone can predict.  Set around a call by the REPL/eval entry and
+ * false everywhere else, so a FILE that declares the same effect twice still
+ * gets its error. */
+void elab_set_repl_redefinition(bool v);
+bool elab_repl_redefinition_allowed(void);
+
 /* used-attr-whole-program: per-compile list of module names to force-load
  * during whole-program elaboration so a `#[used]` defn reached only via a raw
  * mangled C symbol (no `(import)`) is still emitted.  Set by main.c's
