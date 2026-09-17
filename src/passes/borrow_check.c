@@ -803,6 +803,8 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
                 ? borrow_check_expr_recursive(ctx, e->as.yield_.value) : true;
         case EX_GEN_NEXT:
             return borrow_check_expr_recursive(ctx, e->as.gen_next_.gen_expr);
+        case EX_GEN_UNWRAP:
+            return borrow_check_expr_recursive(ctx, e->as.gen_unwrap_.ptr_expr);
         case EX_GEN_DONE:
             return borrow_check_expr_recursive(ctx, e->as.gen_done_.gen_expr);
         case EX_CONS_LIST: {

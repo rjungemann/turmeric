@@ -42,6 +42,10 @@ void *turi_val_perm_alloc(TuriEnv *env, size_t n) {
     return arena_alloc(&env->value_perm, n);
 }
 
+void *turi_val_perm_alloc_aligned(TuriEnv *env, size_t n, size_t align) {
+    return arena_alloc_aligned(&env->value_perm, n, align);
+}
+
 void *turi_val_perm_calloc(TuriEnv *env, size_t n) {
     void *p = arena_alloc(&env->value_perm, n);
     if (n) memset(p, 0, n);

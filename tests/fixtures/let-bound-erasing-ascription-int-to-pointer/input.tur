@@ -1,0 +1,26 @@
+;; let-bound-erasing-ascription-int-to-pointer: a `let` binder whose init is an
+;; ascription from the int64 carrier into a concrete heap pointer type
+;; (`(:: words (Vec int))`) is declared as that pointer, but the ascription is a
+;; pure relabel that hands back the erased word.  The binder init must bridge
+;; through (intptr_t) -- `T v = words;` was a -Wint-conversion warning on gcc
+;; and a hard error on AppleClang.  Three sites: emit_let_value, emit_letrec_value
+;; and emit_tail's inline tail-position `let` arm (the self-tail-recursive shape).
+
+(defn first-word [words : int] : int
+  (let [v (:: words (Vec int))]
+    (vec-get v 0)))
+
+;; tail-position `let` inside a self-tail-recursive fn (the emit_tail inline arm)
+(defn sum-to [words : int i : int acc : int] : int
+  (let [v (:: words (Vec int))]
+    (if (>= i (vec-len v))
+      acc
+      (sum-to words (+ i 1) (+ acc (vec-get v i))))))
+
+(defn main [] : int
+  (let [v (vec-new)]
+    (vec-push! v 7)
+    (vec-push! v 8)
+    (println (first-word (:: v :int)))
+    (println (sum-to (:: v :int) 0 0))
+    0))

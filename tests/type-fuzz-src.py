@@ -257,14 +257,10 @@ def known_bug_slug(tags):
                 or "scalar_cstr" in tags):
             return ("session-payloads-are-int64-only" if "seam_session" in tags
                     else "router-payloads-are-int64-only")
-    if "seam_generator" in tags or "seam_await" in tags:
-        # Worse than the session pair: the slot's type reaches the SIGNATURE
-        # (gen-unwrap / await are declared :int), so bool prints 1 and cstr
-        # prints a raw pointer.  Only a bare int payload survives.
-        if "payload_box" in tags or "scalar_int" not in tags:
-            return ("generator-yield-payload-is-int64-only"
-                    if "seam_generator" in tags
-                    else "async-await-payload-is-int64-only")
+    # The generator and await seams were the worst of the family until
+    # 2026-09-17 -- the slot's type reached the SIGNATURE (gen-unwrap / await
+    # declared :int), so bool printed 1 and cstr a raw pointer.  Both read
+    # the slot back at the payload's declared type now and have no row here.
     return None
 
 
@@ -409,20 +405,9 @@ KNOWN_PROBES = [
      "    (let [k (fzspawn (fn [] (fzqa a)))] (fzqb b) (fzjoin k)))\n"
      "  0)\n",
      "7.25\n"),
-    ("generator-yield-payload-is-int64-only (float truncates)",
-     '(load "stdlib/gen.tur")\n'
-     "(defn main [] : int\n"
-     "  (let [g (gen [] (yield 7.25))]\n"
-     "    (let [v (gen-next g)]\n"
-     "      (when (gen-some? v) (println (gen-unwrap v)))))\n"
-     "  0)\n",
-     "7.25\n"),
-    ("async-await-payload-is-int64-only (float -> raw bit pattern)",
-     "(defn fzc [] : float 7.25)\n"
-     "(defn main [] : int\n"
-     "  (let [fut (async fzc)] (println (await fut)))\n"
-     "  0)\n",
-     "7.25\n"),
+    # (generator-yield-payload-is-int64-only's and async-await-payload-is-
+    # int64-only's rows retired 2026-09-17: both print `fixed` -- the reads
+    # happen at the payload's declared type now.)
 ]
 
 
@@ -1305,19 +1290,29 @@ SELF_TESTS = [
      "(defn fzx [] : float (handle (perform (FzX)) (FzX [] k) (resume k 7.25)))\n"
      "(defn main [] : int (println (fzx)) 0)\n",
      "7.25\n", "ok", True),
-    ("seam wrong-output detected (await float)",
+    # This row used to be the live await-float defect
+    # (async-await-payload-is-int64-only), fixed 2026-09-17.  The classifier
+    # still needs a seam program whose printed value disagrees with its
+    # expectation, so the expectation is deliberately wrong: the program
+    # prints 7.25 and the row expects 7.24.  What is under test is the
+    # classification, not the compiler.
+    ("seam wrong-output detected (deliberately wrong expectation)",
      "(defn fzc [] : float 7.25)\n"
      "(defn main [] : int\n"
      "  (let [fut (async fzc)] (println (await fut)))\n  0)\n",
-     "7.25\n", "BUG_seam_wrong_output", True),
+     "7.24\n", "BUG_seam_wrong_output", True),
     # The reject arm matters most.  This is the shape that made the whole class
     # invisible: comparing an erased payload against its own literal is a
     # TUR-E0042, and under the old classifier that is GEN_REJECT -- "the
     # generator emitted an illegal program" -- which never fails a run.
+    # The reject used to be the live TUR-E0042 on `(= (await fut) 7.25)`; with
+    # the await typed at the thunk's result (2026-09-17) that compares two
+    # floats and is accepted, so the row compares against a cstr instead -- a
+    # deliberate type error, so the checker still refuses a seam program.
     ("seam reject classified apart from GEN_REJECT",
      "(defn fzc [] : float 7.25)\n"
      "(defn main [] : int\n"
-     "  (let [fut (async fzc)] (println (= (await fut) 7.25)))\n  0)\n",
+     "  (let [fut (async fzc)] (println (= (await fut) \"seven\")))\n  0)\n",
      "true\n", "SEAM_REJECT", True),
 ]
 

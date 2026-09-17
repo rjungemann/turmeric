@@ -3381,6 +3381,28 @@ static TurFuture *tur_async_fiber_closure(void *clos) {
     return future;
 }
 
+static TurFuture *tur_async_fiber_via(int64_t (*wrap)(void *), void *env) {
+    TurFuture *future = tur_future_new();
+    if (!tur_scheduler) {
+        tur_scheduler = tur_scheduler_new();
+    }
+    tur_async_suspended = 0;
+    tur_async_pending_park = NULL;
+    tur_handler_node __node; __node.parent = tur_handler_chain;
+    tur_handler_chain = &__node;
+    int64_t result = wrap(env);
+    tur_handler_chain = __node.parent;
+    if (tur_async_reject_if_panicking(future)) return future;
+    if (tur_async_suspended && tur_async_pending_park) {
+        tur_async_pending_park->outer = future;
+    } else {
+        tur_future_fulfill(future, result);
+    }
+    tur_async_suspended = 0;
+    tur_async_pending_park = NULL;
+    return future;
+}
+
 /* AW-004: await lowering with shift + scheduler callback */
 static int64_t tur_await_future(TurFuture *f) {
     if (!f) { fprintf(stderr, "await: null future\n"); abort(); }

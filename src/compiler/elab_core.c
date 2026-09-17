@@ -500,6 +500,9 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 case EX_GEN_NEXT:
                     if (cur->as.gen_next_.gen_expr) ls[lsp++] = cur->as.gen_next_.gen_expr;
                     break;
+                case EX_GEN_UNWRAP:
+                    if (cur->as.gen_unwrap_.ptr_expr) ls[lsp++] = cur->as.gen_unwrap_.ptr_expr;
+                    break;
                 case EX_GEN_DONE:
                     if (cur->as.gen_done_.gen_expr) ls[lsp++] = cur->as.gen_done_.gen_expr;
                     break;
@@ -1124,6 +1127,9 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 break;
             case EX_GEN_NEXT:
                 if (cur->as.gen_next_.gen_expr) stack[sp++] = cur->as.gen_next_.gen_expr;
+                break;
+            case EX_GEN_UNWRAP:
+                if (cur->as.gen_unwrap_.ptr_expr) stack[sp++] = cur->as.gen_unwrap_.ptr_expr;
                 break;
             case EX_GEN_DONE:
                 if (cur->as.gen_done_.gen_expr) stack[sp++] = cur->as.gen_done_.gen_expr;
@@ -2331,6 +2337,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_yield     = intern_cstr(st, "yield");
     e->sym_gen_next  = intern_cstr(st, "gen-next");
     e->sym_gen_done  = intern_cstr(st, "gen-done?");
+    e->sym_gen_unwrap = intern_cstr(st, "gen-unwrap");
     e->gen_ctx       = NULL;
     e->gen_counter   = 0;
     /* CLI-ARGS: Pre-declare *args* as a global :int binding backed by g_tur_args.

@@ -1,5 +1,37 @@
 # `yield` carries every payload as a bare int64: a yielded `cstr` prints as a raw pointer
 
+**RESOLVED 2026-09-17.** Fix directions 1 and 2, plus the interpreter defect
+the report asked to be split out.
+
+- **The reader is parametric in the payload -- as a core form, not a stdlib
+  signature.** `gen-unwrap` is intercepted in `elab_call` and elaborated to a
+  new `EX_GEN_UNWRAP` node whose type is the generator's element kind
+  (`TY_GENERATOR.element_kind`, which `elab_yield` already recorded at the
+  first `yield`), reached through the `(gen-next g)` it consumes or the let
+  binding that holds one (`Binding.gen_elem_kind`) -- the same provenance
+  rule the `await` fix uses, and the shape every stdlib macro
+  (`gen-for-each`, `gen-collect`, `yield*`) expands to. A word-shaped element
+  is read at its type; an opaque pointer keeps the `int` read the stdlib
+  reader gave, which stays defined for the interpreter native and the docs.
+  The signature-level erasure the report called the worst part is gone
+  without changing the `gen-next` / `gen-some?` / `gen-none` `ptr<void>` ABI.
+- **The slot holds bits.** `EX_YIELD` stores a float's IEEE-754 pattern (the
+  `(int64_t)` it used to emit was a value conversion, 7.25 -> 7), a pointer
+  cast, a bool widened -- `emit_word_slot_bits`, shared with the async fix --
+  and the read reinterprets the same way.
+- **The interpreter's `TuriGen` is 16-byte aligned.** It holds two
+  `ucontext_t`; the arena calloc handed back an 8-aligned block, hence the
+  UBSan "member access within misaligned address" on every generator. Both
+  allocation sites (creation and the promotion copy) go through the aligned
+  allocators now, so `--interpret` is a usable differential oracle for this
+  seam again -- and it agrees with the compiled path on the fixture.
+
+By-value struct payloads still reject (direction 3's "or reject" arm), as
+before. Pinned by `tests/fixtures/gen-payload-types` (float, cstr, bool, int,
+`gen-for-each` and `yield*` over float generators, a float accumulation).
+The fuzzer's generator `known_bug_slug` arm and `KNOWN_PROBES` row are
+retired; `--seam generator` reports 0 bug classes.
+
 **Severity: high.** The generator frame parks a yielded value in a single
 int64-wide slot and `gen-unwrap` is declared `: int`, so a generator over
 anything but `int` produces a **silent wrong answer** -- and unlike the session

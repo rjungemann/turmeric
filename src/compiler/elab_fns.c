@@ -11548,6 +11548,12 @@ Expr *elab_def(Elab *e, const Form *call) {
     /* F4: ^deprecated on def */
     b->is_deprecated = is_deprecated_attr;
     b->deprecation_message = deprecation_msg;
+    /* async-await-payload-is-int64-only: same provenance note as a `let`. */
+    {
+        const Expr *ai = init;
+        while (ai && ai->kind == EX_ASCRIBE) ai = ai->as.ascribe_.inner;
+        if (ai && ai->kind == EX_ASYNC) b->async_payload = &ai->as.async_.payload;
+    }
     scope_add(&e->global, b);
 
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);

@@ -3254,6 +3254,8 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     if (name == e->sym_yield)    return elab_yield   (e, call);
     if (name == e->sym_gen_next) return elab_gen_next(e, call);
     if (name == e->sym_gen_done) return elab_gen_done(e, call);
+    if (name == e->sym_gen_unwrap && call->as.list.len == 2)
+        return elab_gen_unwrap(e, call);
     /* Phase 5 */
     if (name == e->sym_ref)    return elab_ref   (e, call);
     if (name == e->sym_deref)  return elab_deref (e, call);
@@ -7819,6 +7821,17 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 bool arg_is_poly_fn = (args[i]->kind == EX_VAR &&
                                        args[i]->as.var.binding &&
                                        args[i]->as.var.binding->is_poly_fn);
+                /* Shared by the poly-to-fat and bare-fn-to-fat conversions
+                 * below: does the callee provably neither retain nor drop
+                 * this argument?  See the comment on the bare-fn shim for why
+                 * a set nonretain bit implies both. */
+                bool sink_is_nonretaining =
+                    fn_binding && i < 32 &&
+                    ((fn_binding->nonretain_param_mask & (1u << i)) != 0 ||
+                     (fn_binding->type.kind == TY_FN &&
+                      i < fn_binding->type.as.fn.arity &&
+                      fn_binding->type.as.fn.arg_flags &&
+                      FN_ARG_FLAG(fn_binding->type.as.fn, i, FA_BORROW)));
                 if (arg_is_poly_fn) {
                     /* SC7: a tur_poly_fn_t value (a typeclass-method closure
                      * param, marked is_poly_fn) is a 16-byte {env,fn} struct,
@@ -7845,6 +7858,15 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     conv->as.poly_to_fat_.inner = args[i];
                     conv->as.poly_to_fat_.sink_fn_type =
                         (eft && eft->kind == TY_FN) ? eft : NULL;
+                    /* poly-to-fat-box-leaks-per-call: the same ownership fact
+                     * the bare-fn shim reads (below) -- a proven non-retaining
+                     * ^fat sink cannot keep or drop the box, so it may live on
+                     * the caller's stack.  Every carrier-bodied HKT instance
+                     * that forwards its method closure to a ^fat helper
+                     * (`Functor [(Either E)]`'s fmap -> `either-map`) minted a
+                     * 32-byte box per call that nothing freed. */
+                    conv->as.poly_to_fat_.stack_ok =
+                        slot_fat_decl && sink_is_nonretaining;
                     args[i] = conv;
                 } else if (ak == TY_FN && !args[i]->type.as.fn.boxed) {
                     /* A bare (non-capturing) fn reference -- auto-shim it into a
@@ -7896,13 +7918,6 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * stdlib comparators (`result-eq?`, `vec-eq?`, `map-eq-raw?`
                      * ...) declare it; without this each call minted a 24-byte
                      * shim box nothing freed. */
-                    bool sink_is_nonretaining =
-                        fn_binding && i < 32 &&
-                        ((fn_binding->nonretain_param_mask & (1u << i)) != 0 ||
-                         (fn_binding->type.kind == TY_FN &&
-                          i < fn_binding->type.as.fn.arity &&
-                          fn_binding->type.as.fn.arg_flags &&
-                          FN_ARG_FLAG(fn_binding->type.as.fn, i, FA_BORROW)));
                     shim->as.fn_to_fat_.static_ok =
                         (slot_nominal && !slot_fat_decl) ||
                         (slot_fat_decl && sink_is_nonretaining);

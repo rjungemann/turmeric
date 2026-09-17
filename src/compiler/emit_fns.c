@@ -746,7 +746,15 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                         iv = bridged;  /* emit_carrier_bridge freed the old iv */
                     }
                     indent_buf(body, ctx->indent);
-                    buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
+                    /* let-bound-erasing-ascription-int-to-pointer: the same
+                     * inline-arm repetition as the bridge above, for the
+                     * int64-word-into-pointer-binder init. */
+                    if (emit_let_init_is_erased_word_to_ptr(
+                            ctx, e->as.let_.bindings[i].init, bind_c))
+                        buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n",
+                                   bind_c, bn, bind_c, iv);
+                    else
+                        buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "(void)%s;\n", bn);
                     free(bn);

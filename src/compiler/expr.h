@@ -50,6 +50,16 @@ typedef enum UsageState {
 struct Binding {
     const Symbol *name;
     Type          type;
+    /* async-await-payload-is-int64-only: when this binding was initialised
+     * by an `(async ..)` (through ascriptions), the thunk's declared result
+     * type -- what `(await <this>)` reads the future's int64 slot back at.
+     * NULL otherwise.  The future itself stays `ptr<void>`. */
+    const Type   *async_payload;
+    /* generator-yield-payload-is-int64-only: when this binding was initialised
+     * by a `(gen-next g)`, the generator's element kind, for the `gen-unwrap`
+     * that reads the binding.  gen_elem_set false otherwise. */
+    TypeKind      gen_elem_kind;
+    bool          gen_elem_set;
     bool          is_mut;
     bool          is_global;     /* top-level def vs. local let */
     bool          is_param;      /* function/extern parameter binding */
@@ -883,6 +893,8 @@ typedef enum ExprKind {
     EX_YIELD,            /* (yield expr)  -- yield a value inside gen body; type TY_NIL */
     EX_GEN_NEXT,         /* (gen-next g)  -- advance generator; returns ptr<void> (option) */
     EX_GEN_DONE,         /* (gen-done? g) -- check if generator is exhausted; returns bool */
+    EX_GEN_UNWRAP,       /* (gen-unwrap p) -- read the yielded value out of a gen-next result,
+                          * at the generator's element type (generator-yield-payload-is-int64-only) */
     /* AR8: Variadic rest-list construction at call sites */
     EX_CONS_LIST,        /* build a right-folded cons list from N items for & rest param */
     /* SYM0 (runtime-symbols-plan): runtime symbol literal (-Xsymbols).
@@ -1538,8 +1550,15 @@ struct Expr {
         struct { DiscontinueExpr *discontinue; }     discontinue_; /* (discontinue k e) */
         struct { Expr *expr; }                       cont_pred_;   /* (cont? k) */
         /* Phase T21-F: async/await */
-        struct { Expr *fn_expr; }                    async_;       /* (async fn-expr) */
-        struct { Expr *fut_expr; }                   await_;       /* (await fut) */
+        /* async-await-payload-is-int64-only: `payload` is the thunk's declared
+         * result type.  The future handle stays `ptr<void>` (every consumer in
+         * the tree passes it that way), so the type rides the NODE, and a
+         * `let`/`def` that binds an `(async ..)` copies it onto the binding
+         * (Binding.async_payload) for the `await` to find. */
+        struct { Expr *fn_expr; Type payload; }      async_;       /* (async fn-expr) */
+        /* `payload`: the type the awaited value is read back at (the async's
+         * payload when its provenance is known, else the int64 slot's `int`). */
+        struct { Expr *fut_expr; Type payload; }     await_;       /* (await fut) */
         /* Phase SEL1: fair multi-channel select */
         struct {
             SelectClauseEntry *clauses;   /* arena-allocated array */
@@ -1681,7 +1700,14 @@ struct Expr {
          * elaboration so the emitter can pick a typed slot-0 shim whose ABI
          * matches the typed-thunk cast the sink will apply.  NULL for the int64
          * carrier case (keeps __tur_poly_to_fat1). */
-        struct { struct Expr *inner; const struct Type *sink_fn_type; } poly_to_fat_;
+        /* poly-to-fat-box-leaks-per-call: stack_ok, with the same meaning as
+         * fn_to_fat_.stack_ok -- the ^fat sink was PROVEN non-retaining
+         * (inferred mask or a declared ^borrow), so the { shim, fn, env } box
+         * is dead when the call returns and lives on the stack.  Only the
+         * argument-position conversion sets it; a tail-leaf or join
+         * conversion hands the box out and keeps the heap. */
+        struct { struct Expr *inner; const struct Type *sink_fn_type;
+                 bool stack_ok; } poly_to_fat_;
         /* Phase HRT2: Existential types.
          * Phase EX1c: optional resolved constraint witnesses (one per constraint
          * in the target existential type).  NULL when the target has no
@@ -1814,6 +1840,15 @@ struct Expr {
         struct {
             struct Expr        *gen_expr;   /* the generator value */
         } gen_done_;
+        /* generator-yield-payload-is-int64-only: read the yielded value out of
+         * a gen-next result.  `elem` is the generator's element kind, found
+         * through the `(gen-next g)` this consumes or the let binding holding
+         * one (Binding.gen_elem_kind); TY_INT when the provenance is opaque,
+         * which is the stdlib reader's old behaviour. */
+        struct {
+            struct Expr        *ptr_expr;   /* the gen-next result (ptr<void>) */
+            TypeKind            elem;       /* element kind the slot is read at */
+        } gen_unwrap_;
         /* AR8: variadic rest-list construction */
         struct {
             struct Expr **items;   /* the surplus args to pack into a cons list */

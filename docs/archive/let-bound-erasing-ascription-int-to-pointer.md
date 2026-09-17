@@ -1,5 +1,23 @@
 # `let`-bound erasing ascription `(:: w (Vec int))` emits an uncast int->pointer init
 
+**RESOLVED 2026-09-17.** Root cause as filed, at three sites rather than one.
+The binder-init arm that bridges an int64 init into a pointer binder keyed on
+the ascription's OUTER type (`init_cn`, a pointer -- "nothing to bridge") and
+on the local-var side table (a parameter is never recorded there), and both
+said no.  The question that was missing is the INNERMOST value under the
+ascription chain: when the binder c-names to a pointer and that value's
+resolved type c-names to the int64 carrier, the init is a word and wants
+`(T)(intptr_t)(word)`.  That is now `emit_let_init_is_erased_word_to_ptr`
+(`src/compiler/emit_expr.c`), asked by `emit_let_value`, `emit_letrec_value`
+AND `emit_tail`'s inline tail-position `let` arm -- the same three sites as
+`emit_let_init_carrier_bridge_type`, for the same reason: the self-tail-
+recursive shape emits its `let` straight into the back-edge loop, and the
+report's repro with the recursion in tail position hit the third copy.  The
+cast is value-preserving in both directions, so a shape that was right before
+stays right.  Pinned by `tests/fixtures/let-bound-erasing-ascription-int-to-
+pointer` (both the plain and the tail-recursive shape); the full suite was
+green with no snapshot drift.
+
 **Severity:** medium -- a hard `-Wint-conversion` error on macOS clang
 (AppleClang 21), only a warning on Linux gcc, so it ships green on Linux CI.
 

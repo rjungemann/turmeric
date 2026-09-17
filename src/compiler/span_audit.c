@@ -317,6 +317,7 @@ static void audit_expr(const Expr *e, bool is_top,
         return;
     case EX_YIELD:    REC(e->as.yield_.value); return;
     case EX_GEN_NEXT: REC(e->as.gen_next_.gen_expr); return;
+    case EX_GEN_UNWRAP: REC(e->as.gen_unwrap_.ptr_expr); return;
     case EX_GEN_DONE: REC(e->as.gen_done_.gen_expr); return;
 
     case EX_CONS_LIST:

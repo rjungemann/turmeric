@@ -198,7 +198,51 @@ Expr *elab_async(Elab *e, const Form *call) {
 
     Expr *out = expr_new(e->arena, EX_ASYNC, TYPE_PTR_VOID, call->span);
     out->as.async_.fn_expr = fn_expr;
+    /* async-await-payload-is-int64-only: the thunk's declared result is the
+     * payload the future carries.  A fn value states it in its type; an
+     * expression body (the with-handler thunk shape) IS the value. */
+    if (fn_expr->type.kind == TY_FN) {
+        out->as.async_.payload = fn_expr->type.as.fn.result_full_type
+            ? *fn_expr->type.as.fn.result_full_type
+            : type_from_kind(fn_expr->type.as.fn.result_kind);
+    } else {
+        out->as.async_.payload = fn_expr->type;
+    }
     return out;
+}
+
+/* async-await-payload-is-int64-only: can this payload type be read back out
+ * of the future's int64 slot at its own type?  A word-shaped scalar, a cstr
+ * and a raw pointer can (float by bit-reinterpret, the rest by cast).  A
+ * by-value aggregate cannot ride the slot at all -- the thunk's C return would
+ * not fit an int64 -- and keeps the status-quo `int` read, which cc rejects
+ * loudly when it is used as the aggregate (the report's "only honest row"). */
+static bool elab_async_payload_rides_slot(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_BOOL: case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+        case TY_CSTR: case TY_PTR_VOID:
+        case TY_INT: case TY_INT64: case TY_UINT64: case TY_INT32:
+        case TY_UINT32: case TY_INT16: case TY_UINT16: case TY_INT8:
+        case TY_UINT8: case TY_SYM:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* The async payload behind a future expression, when its provenance is
+ * visible: the `(async ..)` itself, or a variable a `let`/`def` bound to one
+ * (Binding.async_payload), through ascriptions.  NULL when unknown -- a
+ * future that arrived through a parameter or a container is an opaque
+ * `ptr<void>` and its await keeps the int64 read. */
+static const Type *async_payload_of(const Expr *fut) {
+    while (fut && fut->kind == EX_ASCRIBE) fut = fut->as.ascribe_.inner;
+    if (!fut) return NULL;
+    if (fut->kind == EX_ASYNC) return &fut->as.async_.payload;
+    if (fut->kind == EX_VAR && fut->as.var.binding)
+        return fut->as.var.binding->async_payload;
+    return NULL;
 }
 
 /* Phase T21-F: (await fut) — block on TurAsyncTask* future; return int64_t. */
@@ -244,8 +288,16 @@ Expr *elab_await(Elab *e, const Form *call) {
     }
     Expr *fut_expr = elab_form(e, call->as.list.items[1]);
     if (!fut_expr) return NULL;
-    Expr *out = expr_new(e->arena, EX_AWAIT, TYPE_INT, call->span);
+    /* async-await-payload-is-int64-only: read the slot back at the thunk's
+     * declared type when the future's provenance says what it is.  The slot
+     * itself is still one int64 word: the emitter stores a float's bits and
+     * reinterprets them here, the way the fiber effect path already does. */
+    Type payload = TYPE_INT;
+    const Type *pt = async_payload_of(fut_expr);
+    if (pt && elab_async_payload_rides_slot(pt)) payload = *pt;
+    Expr *out = expr_new(e->arena, EX_AWAIT, payload, call->span);
     out->as.await_.fut_expr = fut_expr;
+    out->as.await_.payload  = payload;
     return out;
 }
 

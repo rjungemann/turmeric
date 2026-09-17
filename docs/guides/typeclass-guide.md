@@ -172,6 +172,17 @@ definstance Functor [(Result _ B)]
       err(.err-val container)
 ```
 
+A method dispatched through a partially-applied head is compiled one of two
+ways, and the difference is representation only, never the answer. When the
+receiver's type arguments are all the same type and the body constructs its
+result in-body, the call takes the by-value route (a monomorphized instance
+method). Otherwise -- a heterogeneous receiver such as `(Result int cstr)`,
+or a body that delegates to a helper as `Functor [(Either E)]`'s `fmap` does
+-- the call stays on the uniform carrier. Either way the call's static type
+is the precise applied result (`(Result int cstr)` for the example above),
+so a `match` on it sees the real payload types and a `cstr` in the `Err` arm
+prints as the string, not as an address.
+
 ---
 
 ## Constrained Functions

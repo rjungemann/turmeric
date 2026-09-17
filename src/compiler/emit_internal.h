@@ -949,6 +949,14 @@ Type fn_body_tail_byvalue_carrier_type(struct EmitCtx *ctx, const struct Expr *e
 Type emit_let_init_carrier_bridge_type(struct EmitCtx *ctx,
                                        const struct Expr *init,
                                        const char *bind_c, const char *iv);
+/* let-bound-erasing-ascription-int-to-pointer: is this `let` binding a
+ * pointer-represented binder initialised by an ascription whose innermost value
+ * is the int64 carrier word (`(let [v (:: words (Vec int))] ...)`)?  Such an
+ * init wants `(T)(intptr_t)(word)`.  Same three sites as the function above.
+ * Defined in emit_expr.c. */
+bool emit_let_init_is_erased_word_to_ptr(struct EmitCtx *ctx,
+                                         const struct Expr *init,
+                                         const char *bind_c);
 /* CONV-S1 seam 4: does an inline-C body with declared result `rft` return that
  * result BY VALUE (the concrete aggregate) rather than through the int64
  * carrier?  This is the single question that decides an inline-C function's C
@@ -1260,6 +1268,11 @@ const char *ensure_static_fatbox_dual(EmitCtx *ctx, const char *win_shim,
 /* Emit the no-op drop glue the static / stack fat boxes carry as their
  * header, once.  False when there is nowhere to put it. */
 bool ensure_fatbox_keep(EmitCtx *ctx);
+/* async-await-payload-is-int64-only / generator-yield-payload-is-int64-only:
+ * the C expression storing a value of type `t` into an int64 word slot as its
+ * bits (float pattern, pointer cast, scalar widen).  Returns a malloc'd string
+ * the caller frees.  Defined in emit_expr.c. */
+char *emit_word_slot_bits(const Type *t, const char *v);
 /* catch-unwind-aggregate-return-miscompiled: per-type boxing trampoline for an
  * aggregate-returning catch-unwind / catch-panic-of thunk. */
 /* type-of-cast-kind-granularity: the `any` box tag for a type -- its TypeKind

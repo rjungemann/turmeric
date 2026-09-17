@@ -559,6 +559,7 @@ static bool cps_visit_children(const Expr *e,
         /* --- generators -------------------------------------------------- */
         case EX_YIELD:    V(e->as.yield_.value);        return false;
         case EX_GEN_NEXT: V(e->as.gen_next_.gen_expr);  return false;
+        case EX_GEN_UNWRAP: V(e->as.gen_unwrap_.ptr_expr); return false;
         case EX_GEN_DONE: V(e->as.gen_done_.gen_expr);  return false;
 
         /* --- dynamic vars ------------------------------------------------ */

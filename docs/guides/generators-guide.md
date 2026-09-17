@@ -460,7 +460,7 @@ For discrete (integer) ranges, use `seq/from-range` or `seq/from-range-step`:
 | Symbol | Description |
 |---|---|
 | `gen-some?` | True if `gen-next` returned a value (non-NULL) |
-| `gen-unwrap` | Extract the `:int` value from a non-NULL `gen-next` result |
+| `gen-unwrap` | Extract the yielded value from a non-NULL `gen-next` result, at the generator's element type (a yielded `7.25` reads back as a float) |
 | `gen-none` | Return NULL to represent no value |
 | `gen-arr-new` | Allocate an empty growable array |
 | `gen-arr-push!` | Append a value to a gen array |

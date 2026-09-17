@@ -1,0 +1,40 @@
+;; generator-yield-payload-is-int64-only: the generator frame parks a yielded
+;; value in one int64 word and `gen-unwrap` was a stdlib `: int` reader, so a
+;; yielded float printed truncated (7.25 -> 7), a bool printed 1 and a cstr
+;; printed its address.  `yield` now stores the value's BITS (a float's
+;; IEEE-754 pattern, not an int conversion) and `gen-unwrap` is a core form
+;; typed by the generator's element type -- read through the `(gen-next g)`
+;; it consumes, or the let binding that holds one.
+(load "stdlib/gen.tur")
+
+(defn main [] : int
+  ;; float, the report's repro
+  (let [g (gen [] (yield 7.25))]
+    (let [v (gen-next g)]
+      (when (gen-some? v) (println (gen-unwrap v)))))
+  ;; cstr
+  (let [g (gen [] (yield "hello") (yield "world"))]
+    (let [v (gen-next g)]
+      (when (gen-some? v) (println (gen-unwrap v))))
+    (println (gen-unwrap (gen-next g))))
+  ;; bool
+  (let [g (gen [] (yield true) (yield false))]
+    (println (gen-unwrap (gen-next g)))
+    (println (gen-unwrap (gen-next g))))
+  ;; int control
+  (let [g (gen [] (yield 7))]
+    (println (gen-unwrap (gen-next g))))
+  ;; the stdlib macros over a float generator: gen-for-each and yield*
+  (let [inner (gen [] (yield 1.5) (yield -2.25))]
+    (gen-for-each println inner))
+  (let [inner2 (gen [] (yield 0.5))]
+    (let [outer (gen [] (yield* inner2) (yield 99.75))]
+      (gen-for-each println outer)))
+  ;; a float generator's values summed
+  (let [g (gen [] (yield 0.25) (yield 0.5) (yield 0.75))]
+    (let [^mut acc 0.0]
+      (while (not (gen-done? g))
+        (let [v (gen-next g)]
+          (when (gen-some? v) (set! acc (+ acc (gen-unwrap v))))))
+      (println acc)))
+  0)

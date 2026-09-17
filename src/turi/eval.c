@@ -12323,7 +12323,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         const GenDef *def = e->as.gen_.def;
         /* Escaping payload: a generator value is returned and may outlive the
          * creating scope; pool-owned (its coroutine stack stays mmap/malloc). */
-        TuriGen *g = (TuriGen *)turi_val_calloc(env, sizeof(TuriGen));
+        /* generator-yield-payload-is-int64-only (second defect): a TuriGen
+         * holds two ucontext_t, which want 16-byte alignment; the plain
+         * arena calloc handed back an 8-aligned block and UBSan reported
+         * "member access within misaligned address" on every generator. */
+        TuriGen *g = (TuriGen *)turi_val_calloc_aligned(env, sizeof(TuriGen),
+                                                        _Alignof(TuriGen));
         g->env     = env;
         g->body    = def->body;
         /* The body resolves its captures through a fresh child of the creating
@@ -12362,6 +12367,33 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (gv.tag != TURI_GEN)
             return turi_errorf("eval: gen-next: expected a generator, got tag %d", gv.tag);
         return gen_advance(env, gv.as_gen);
+    }
+
+    /* generator-yield-payload-is-int64-only: (gen-unwrap p) -- the yielded
+     * value's bits sit in the generator's box (the union payload of the
+     * TuriValue `yield` stored); re-tag them at the element kind. */
+    case EX_GEN_UNWRAP: {
+        TuriValue pv = eval_expr(env, frame, e->as.gen_unwrap_.ptr_expr);
+        if (turi_is_error(pv) || env_signaled(env)) return pv;
+        int64_t bits = pv.as_int ? *(int64_t *)(intptr_t)pv.as_int : 0;
+        switch (e->as.gen_unwrap_.elem) {
+            case TY_FLOAT: case TY_FLOAT64: {
+                TuriValue r = turi_float(0.0);
+                r.as_int = bits;
+                return r;
+            }
+            case TY_FLOAT32: {
+                float f; uint32_t u = (uint32_t)bits;
+                memcpy(&f, &u, sizeof f);
+                return turi_float((double)f);
+            }
+            case TY_BOOL:
+                return turi_bool(bits != 0);
+            case TY_CSTR:
+                return turi_cstr((const char *)(intptr_t)bits);
+            default:
+                return turi_int(bits);
+        }
     }
 
     /* (gen-done? g) -- has the generator been driven off its end? */
@@ -13073,7 +13105,8 @@ static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
         if (!g || !PROMO_SCRATCH(env, g)) return v;
         void *seen = promo_map_get(fwd, g);
         if (seen) return turi_gen_val((TuriGen *)seen);
-        TuriGen *ng = (TuriGen *)turi_val_perm_alloc(env, sizeof *ng);
+        TuriGen *ng = (TuriGen *)turi_val_perm_alloc_aligned(env, sizeof *ng,
+                                                             _Alignof(TuriGen));
         promo_map_put(fwd, g, ng);
         *ng = *g;
         ng->frame     = promo_copy_frame(env, g->frame, fwd);
@@ -13758,6 +13791,14 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                env->elab_session_forms == prior;
     const uint32_t elab_from = use_incr_elab ? prior : 0;
 
+    /* PS1 (playground-session-hygiene-plan): on the fallback path the prefix
+     * we are about to declare "stdlib" is mostly this session's OWN earlier
+     * turns.  Say so, so their bindings are not stamped is_from_stdlib and
+     * `defn` stops reporting the user's own function as already defined by an
+     * auto-loaded stdlib module -- a cause that does not exist and a rename
+     * that cannot help.  Genuine stdlib exports keep the stamp through the
+     * `tur/`-module promotion at the prefix boundary.  Zero on the
+     * incremental path, where the prefix is empty anyway. */
     Expr *prog = elaborate_program_session(eval_arena, &env->st,
                                    forms + elab_from, nforms - elab_from,
                                    /*stdlib_prefix=*/prior - elab_from,
