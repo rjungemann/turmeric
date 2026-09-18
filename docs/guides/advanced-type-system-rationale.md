@@ -88,14 +88,36 @@ Session types describe communication protocols in the type system: which party
 sends what, in which order, and whether the channel branches.
 
 ```turmeric
-(deftype EchoProto []
-  (recv int
-    (send int
-      EchoProto)))
+;; A recursive protocol: receive an int, send one back, repeat.
+(defalias EchoProto (Rec self (Recv int (Send int self))))
+
+;; The channel's type carries the protocol state, so the order of `recv`
+;; and `send` in the body is checked against it -- swapping them is a
+;; TUR-E0212, not a runtime hang.
+(defn echo-server [^linear ch : (Session EchoProto)] : nil
+  (let [[n ch1] (recv ch)]
+    (let [ch2 (send ch1 (* n 2))]
+      (echo-server ch2))))
 ```
 ```sweet-exp
-deftype(EchoProto [] recv(int send(int EchoProto)))
+;; A recursive protocol: receive an int, send one back, repeat.
+defalias EchoProto (Rec self (Recv int (Send int self)))
+
+;; The channel's type carries the protocol state, so the order of `recv`
+;; and `send` in the body is checked against it -- swapping them is a
+;; TUR-E0212, not a runtime hang.
+defn echo-server [^linear ch : (Session EchoProto)] : nil
+  let [[n ch1] recv(ch)]
+    let [ch2 send(ch1 {n * 2})]
+      echo-server(ch2)
 ```
+
+The protocol constructors are capitalised -- `Recv`, `Send`, `Close`, `Rec` --
+and recursion is spelled with `Rec`/`self` rather than by naming the alias
+inside itself. Lowercase `recv`/`send` are the *operations* you call on a
+channel; in a type position they are read as type variables, which is why a
+protocol written that way fails with `cannot compute dual of protocol`
+(TUR-E0210) the moment a channel is allocated from it.
 
 ### Why these features fit
 
