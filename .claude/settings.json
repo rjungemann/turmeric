@@ -25,6 +25,10 @@
           {
             "type": "command",
             "command": "if jq -r '.tool_input.command // empty' | grep -Eq '(\\b(mkdir|touch|tee|cp|mv|install|rsync|ln|dd)\\b[^|;&]*docs/reported/history|>[^|;&]*docs/reported/history)'; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"This command writes into docs/reported/history/, which is forbidden. Resolved reports go in docs/archive/ (or docs/archive/history/ for the per-fix paper trail), never under docs/reported/. Do not create or write into docs/reported/history/.\"}}'; fi"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-dev-server-port.sh\""
           }
         ]
       }
