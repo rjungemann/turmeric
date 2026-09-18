@@ -65,7 +65,7 @@ If a caller passes a captureless lambda here:
 (bind-parser p (fn [x] (mreturn (transform x))))   ;; captures nothing
 ```
 ```sweet-exp
-bind-parser(p fn([x] mreturn(transform(x))))   ;; captures nothing
+bind-parser(p (fn [x] mreturn(transform(x))))   ;; captures nothing
 ```
 
 ...the lambda lowers to a bare fn-pointer, `apply-fat` reads it as a fat
@@ -144,7 +144,7 @@ from a captureless inner lambda:
 ```
 ```sweet-exp
 defn pfail [] ^fat :ptr<void>          ;; <- ^fat on the return
-  fn([inp] pfail-impl(inp))          ;; inner lambda captures nothing
+  (fn [inp] pfail-impl(inp))          ;; inner lambda captures nothing
 ```
 
 Without `^fat` on the return type, the inner `(fn ...)` lowers to a

@@ -236,8 +236,8 @@ By default, a violated contract calls `panic`. A custom handler can be registere
 
 ```sweet-exp
 set-contract-handler!
-  fn [msg location] : unit
-    log/error $ str "Contract violated at " location ": " msg
+  (fn [msg location] : unit
+    log/error(str("Contract violated at " location ": " msg)))
 ```
 
 For scoped overrides:

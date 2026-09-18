@@ -328,11 +328,11 @@ defn analyze-large-dataset [data]
   defn checkpoint-every-n [n items]
     let [processed []]
       for-each-with-index items
-        fn [i item]
+        (fn [i item]
           set!(processed conj(processed process(item)))
           when {mod({i + 1} n) = 0}
             ;; Checkpoint every n items, then keep going
-            serial-shift(snapshot-and-continue 0)
+            serial-shift(snapshot-and-continue 0))
 
   checkpoint-every-n(1000 data)
 ```

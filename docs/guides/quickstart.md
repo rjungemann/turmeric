@@ -388,7 +388,7 @@ let [squares vec-new()
   (add5 10))    ; => 15
 ```
 ```sweet-exp
-let [add5 fn([x :int] :int {x + 5})]
+let [add5 (fn [x :int] :int {x + 5})]
   add5(10)    ; => 15
 ```
 
@@ -405,7 +405,7 @@ captured environment:
 ```
 ```sweet-exp
 defn make-adder [n :int]
-  fn [x :int] :int {x + n}
+  (fn [x :int] :int {x + n})
 
 let [add3 make-adder(3)
      add7 make-adder(7)]
@@ -426,7 +426,7 @@ Functions are first-class values. Pass them to other functions:
 defn apply-twice [f x :int] :int
   f(f(x))
 
-apply-twice(fn([x :int] :int {x * 2}) 3)    ; => 12
+apply-twice((fn [x :int] :int {x * 2}) 3)    ; => 12
 ```
 
 `apply-twice` is not special -- it is just a function whose first parameter
@@ -525,9 +525,8 @@ expression and continues the computation:
 ; done
 ```
 ```sweet-exp
-handle(do-work()
-  (Log [msg] k)
-    do(println(msg) resume(k nil-value())))
+(handle (do-work)
+  (Log [msg] k) (do (println msg) (resume k (nil-value))))
 ; prints:
 ; starting
 ; done
@@ -547,9 +546,8 @@ The same computation runs under different handlers without any changes to
 ; [LOG] done
 ```
 ```sweet-exp
-handle(do-work()
-  (Log [msg] k)
-    do(println(str-concat("[LOG] " msg)) resume(k nil-value())))
+(handle (do-work)
+  (Log [msg] k) (do (println (str-concat "[LOG] " msg)) (resume k (nil-value))))
 ; prints:
 ; [LOG] starting
 ; [LOG] done
@@ -563,8 +561,8 @@ A silent handler discards all messages:
 ; prints nothing; do-work still completes
 ```
 ```sweet-exp
-handle(do-work()
-  (Log [msg] k) resume(k nil-value()))
+(handle (do-work)
+  (Log [msg] k) (resume k (nil-value)))
 ; prints nothing; do-work still completes
 ```
 
@@ -589,8 +587,8 @@ defeffect Ask [] :int
 defn use-ask [] :int
   {1 + perform(Ask())}
 
-handle(use-ask()
-  (Ask [] k) resume(k 41))
+(handle (use-ask)
+  (Ask [] k) (resume k 41))
 ; => 42
 ```
 

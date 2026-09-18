@@ -145,8 +145,8 @@ defn transfer [from to amount]
 transfer(account-a account-b 30)
 
 ;; Concurrent transfers never deadlock!
-async $ fn [] transfer(account-a account-b 10)
-async $ fn [] transfer(account-b account-a 5)
+async $ (fn [] transfer(account-a account-b 10))
+async $ (fn [] transfer(account-b account-a 5))
 ```
 
 ## Core API
@@ -341,15 +341,15 @@ the better tool.)
 def queue tvar/new('())
 
 async
-  fn []
+  (fn []
     ;; Producer: generate items
-    for-each range(10)
-      fn [i]
-        atomically
-          stm
-            let [q tvar/read(queue)]
-              tvar/write(queue conj(q i))
-        sleep(100)
+    (for-each range(10)
+      (fn [i]
+        (atomically
+          (stm
+            (let [q tvar/read(queue)]
+              tvar/write(queue conj(q i)))))
+        sleep(100))))
 
 defn pop-item []
   atomically
@@ -360,10 +360,10 @@ defn pop-item []
         car(q)
 
 async
-  fn []
+  (fn []
     ;; Consumer: process one item per transaction
-    while true
-      println(pop-item())
+    (while true
+      println(pop-item())))
 ```
 
 ### Gate (write token)
@@ -478,19 +478,19 @@ defn merge-sort-stm [vec]
 
       ;; Sort left half in parallel
       async
-        fn []
-          atomically
-            stm
+        (fn []
+          (atomically
+            (stm
               tvar/write(left-result
-                merge-sort-stm(slice(vec 0 mid)))
+                merge-sort-stm(slice(vec 0 mid))))))
 
       ;; Sort right half in parallel
       async
-        fn []
-          atomically
-            stm
+        (fn []
+          (atomically
+            (stm
               tvar/write(right-result
-                merge-sort-stm(slice(vec mid len(vec))))
+                merge-sort-stm(slice(vec mid len(vec)))))))
 
       ;; Merge results (check blocks until both halves are written)
       atomically

@@ -81,9 +81,8 @@ defn greet [] :nil
     perform(Emit())
 
 ;; Handle by printing a fixed message each time.
-handle greet()
-  (Emit [] k)
-  do(println("hello!") resume(k nil))
+(handle (greet)
+  (Emit [] k) (do (println "hello!") (resume k nil)))
 ```
 
 **Output:**
@@ -144,9 +143,8 @@ defn use-double [n :int] :int
   perform(Double(n))
 
 println
-  handle use-double(21)
-    (Double [x] k)
-    resume(k {x * 2})
+  (handle (use-double 21)
+    (Double [x] k) (resume k {x * 2}))
 ; => 42
 ```
 
@@ -185,11 +183,9 @@ defn use-both [] :int
     result
 
 println
-  handle use-both()
-    (Ask  []  k)
-    resume(k 41)
-    (Tell [x] k)
-    do(println(x) resume(k nil))
+  (handle (use-both)
+    (Ask  []  k) (resume k 41)
+    (Tell [x] k) (do (println x) (resume k nil)))
 ; prints: 42
 ; returns: 42
 ```
@@ -218,11 +214,9 @@ defn compute [] :int
   {perform(Add(3)) * perform(Mul(4))}
 
 println
-  handle compute()
-    (Add [x] k)
-    resume(k {x + 10})   ; 3+10 = 13
-    (Mul [x] k)
-    resume(k {x * 2})    ; 4*2  =  8
+  (handle (compute)
+    (Add [x] k) (resume k {x + 10})   ; 3+10 = 13
+    (Mul [x] k) (resume k {x * 2}))   ; 4*2  =  8
 ; => 104
 ```
 
@@ -254,13 +248,11 @@ defn get-val [] :int
 
 ;; Outer handler supplies 10; inner overrides with 42 for its scope.
 println
-  handle
-    + get-val()
-      handle get-val()
-        (Val [] k)
-        resume(k 42)
-    (Val [] k)
-    resume(k 10)
+  (handle
+    (+ (get-val)
+       (handle (get-val)
+         (Val [] k) (resume k 42)))
+    (Val [] k) (resume k 10))
 ; => 52  (10 + 42)
 ```
 
@@ -293,9 +285,8 @@ defn pick-two [] :int
   {perform(Choose(1)) + perform(Choose(2))}
 
 println
-  handle pick-two()
-    (Choose [n] k)
-    resume(k {n * 10})
+  (handle (pick-two)
+    (Choose [n] k) (resume k {n * 10}))
 ; First:  1 * 10 = 10
 ; Second: 2 * 10 = 20
 ; => 30
@@ -331,9 +322,8 @@ defn deferred-ask [] :int
     perform(Ask())
 
 println
-  handle deferred-ask()
-    (Ask [] k)
-    resume(k 42)
+  (handle (deferred-ask)
+    (Ask [] k) (resume k 42))
 ; prints: cleanup
 ; prints: 42
 ```
@@ -367,9 +357,8 @@ defn sum-with-base [] :int
     {deref(base) + perform(GetBase())}
 
 println
-  handle sum-with-base()
-    (GetBase [] k)
-    resume(k 42)
+  (handle (sum-with-base)
+    (GetBase [] k) (resume k 42))
 ; => 142
 ```
 
@@ -394,9 +383,8 @@ defn use-rc [] :int
     {0 + perform(GetCount())}
 
 println
-  handle use-rc()
-    (GetCount [] k)
-    resume(k 42)
+  (handle (use-rc)
+    (GetCount [] k) (resume k 42))
 ; => 42
 ```
 
@@ -429,11 +417,8 @@ defeffect Write [s :cstr] :nil
 
 ;; Package the handler as a macro so callers don't repeat boilerplate.
 defmacro with-write [body]
-  handle body
-    (Write [s] k)
-    do
-      println(s)
-      resume(k nil)
+  (handle body
+    (Write [s] k) (do (println s) (resume k nil)))
 
 ;; Usage:
 with-write
@@ -472,9 +457,8 @@ An effect handler can abort the computation (not resume) and panic instead.
 defeffect Fail [msg :cstr] :nil
 
 defmacro with-fail-panic [body]
-  handle body
-    (Fail [msg] k)
-    panic(msg)   ; no resume -- aborts the computation
+  (handle body
+    (Fail [msg] k) (panic msg))   ; no resume -- aborts the computation
 
 with-fail-panic
   do
@@ -514,11 +498,12 @@ defn ask-with-check [] :int
   perform(Ask())
 
 println
-  handle ask-with-check()
+  (handle (ask-with-check)
+    ;; The one clause -- report that k is still live, then resume with 42.
     (Ask [] k)
-    do
-      println(cont?(k))   ; => true
-      resume(k 42)
+      (do
+        (println (cont? k))   ; => true
+        (resume k 42)))
 ; true
 ; 42
 ```
@@ -571,23 +556,15 @@ defn echo-doubled [] :int
 
 ;; Production handler: real stdin/stdout.
 defmacro with-real-io [body]
-  handle body
-    (Read  []  k)
-    resume(k read-int-console())
-    (Write [s] k)
-    do
-      println(s)
-      resume(k nil)
+  (handle body
+    (Read  []  k) (resume k (read-int-console))
+    (Write [s] k) (do (println s) (resume k nil)))
 
 ;; Test handler: fixed input, captured output.
 defmacro with-test-io [input body]
-  handle body
-    (Read  []  k)
-    resume(k input)
-    (Write [s] k)
-    do
-      println(s)
-      resume(k nil)
+  (handle body
+    (Read  []  k) (resume k input)
+    (Write [s] k) (do (println s) (resume k nil)))
 
 ;; In production:
 ;;   with-real-io echo-doubled()
@@ -652,27 +629,22 @@ defn process [x :int] :int
 
 ;; Handler: print everything
 defmacro with-stderr-log [body]
-  handle body
-    (Log [level msg] k)
-    do
-      println(msg)
-      resume(k nil)
+  (handle body
+    (Log [level msg] k) (do (println msg) (resume k nil)))
 
 ;; Handler: suppress all logs
 defmacro with-silent-log [body]
-  handle body
-    (Log [level msg] k)
-    resume(k nil)
+  (handle body
+    (Log [level msg] k) (resume k nil))
 
 ;; Handler: only print warnings and errors
 defmacro with-warn-log [body]
-  handle body
+  (handle body
+    ;; Warnings and errors print; every other level is dropped silently.
     (Log [level msg] k)
-    if or({level = "warn"} {level = "error"})
-      do
-        println(msg)
-        resume(k nil)
-      resume(k nil)
+      (if (or {level = "warn"} {level = "error"})
+        (do (println msg) (resume k nil))
+        (resume k nil)))
 
 with-stderr-log
   println(process(21))

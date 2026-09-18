@@ -826,6 +826,47 @@ A few forms are cleaner in traditional syntax:
 - **`import` / `export`** -- short enough that indentation adds no value
 - **`cons` lists** -- `(cons x (cons y 0))` reads clearly; neoteric
   `cons(x cons(y 0))` is harder to scan
+- **`fn` lambdas** -- always `(fn [x : int] : int {x * 10})`, never neoteric
+  `fn([x : int] : int ...)` and never the indented head-line form. A lambda is
+  almost always an *argument* to something else, so the sweet forms bury the
+  one delimiter that tells you where the lambda ends:
+
+  ```turmeric
+  ; Good -- the lambda is visibly one argument of three
+  over(px (fn [v : int] : int {v * 10}) p)
+
+  ; Bad -- neoteric: `fn(` looks like a call to a function named fn
+  over(px fn([v : int] : int {v * 10}) p)
+  ```
+
+  Curly-infix and neoteric still apply *inside* the body; it is only the `fn`
+  head that keeps its parens.
+
+  One consequence bites, so state it plainly: **a `(...)` form switches the
+  indentation layer off for everything inside it** -- indentation *and* `$`.
+  Only delimiter-based syntax survives (s-expr parens, neoteric `f(x)`,
+  curly-infix `{a + b}`). A wrapped body must therefore be
+  delimiter-complete:
+
+  ```turmeric
+  ; BROKEN -- `when` was relying on indentation the parens just took away;
+  ; this parses as four flat elements, with no error.
+  (fn []
+    when {read-tvar(x) < 10}
+      perform(Retry()))
+
+  ; BROKEN -- `$` inside parens is inert; it survives as a bare `$` symbol.
+  (fn [msg : cstr] : unit
+    log/error $ str("a" msg))
+
+  ; Correct
+  (fn []
+    (when {read-tvar(x) < 10}
+      perform(Retry())))
+  (fn [msg : cstr] : unit
+    log/error(str("a" msg)))
+  ```
+- **`handle` blocks** -- see below
 - **Inline C blocks** -- the ` ```c ... ``` ` fence body always stays as-is.
   The enclosing `defn` can be either form: indented sweet-exp (body closes by
   dedent, no trailing paren) **or** traditional `(defn ...)` with the
@@ -839,6 +880,81 @@ A few forms are cleaner in traditional syntax:
   ```
 - **Single-form expressions** that fit on one line and are already minimal:
   `(nil-value)`, `(ok-val r)`, etc.
+
+### `handle` -- keep the clause and its body on one line
+
+`handle` takes a *flat* argument list that pairs up two at a time:
+`(handle expr (Eff [p] k) body (Eff2 [p] k) body ...)`. Sweet-exp
+indentation gives every element its own line, which splits each clause from
+the body that answers it -- so the pairing, the only thing a reader needs, is
+exactly what the layout destroys:
+
+```turmeric
+; Bad -- which body belongs to which clause? Count lines and hope.
+println
+  handle compute()
+    (Add [x] k)
+    resume(k {x + 10})
+    (Mul [x] k)
+    resume(k {x * 2})
+```
+
+Write `handle` in traditional parens, one clause per line:
+
+```turmeric
+; Good -- the pairing is on the page
+println
+  (handle (compute)
+    (Add [x] k) (resume k {x + 10})   ; 3+10 = 13
+    (Mul [x] k) (resume k {x * 2}))   ; 4*2  =  8
+```
+
+**When a clause body shares the line with its clause**, write it in
+s-expression form. Curly-infix `{a + b}` stays; it is more readable for
+arithmetic and is legal in every dialect. Mixing neoteric into a packed
+one-liner makes it a two- or three-syntax hybrid that scans worse than either
+pure form:
+
+```turmeric
+; Bad -- neoteric, s-expr and a neoteric zero-arg call on one line
+(Log [msg] k) (do println(msg) (resume k nil-value()))
+
+; Good
+(Log [msg] k) (do (println msg) (resume k (nil-value)))
+```
+
+**A multi-line body under a `;;` comment is ordinary code** -- neoteric and
+curly-infix read fine there, same as in a `(fn ...)` body. The one-liner rule is
+about line density, not about banning neoteric inside `handle`:
+
+```turmeric
+(handle
+  (let [new-state update-state(state)]
+    draw(new-state)
+    game-loop(new-state))
+  ;; Render is forwarded to the backend, then the loop continues.
+  (Render [obj] k)
+    (do handle-render(obj)
+        (resume k)))
+```
+
+`match` has the same flat pair-up-two-at-a-time shape as `handle`, so it gets
+the same treatment: one pattern per line with the body it answers.
+
+When a body is too long to share the line, give the clause its own `;;`
+comment and indent the body under it -- punctuate the block rather than
+letting the clauses run together:
+
+```turmeric
+(handle (serve req)
+  ;; Log, then continue with the untouched request.
+  (Log [msg] k)
+    (do (println msg)
+        (resume k nil))
+  ;; A missing session is not fatal -- resume with the anonymous user.
+  (Session [] k)
+    (resume k (anonymous-user)))
+```
 
 ### Complete example
 

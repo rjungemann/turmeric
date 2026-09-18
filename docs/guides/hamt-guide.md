@@ -344,8 +344,8 @@ hamt/dump(m)
 defn list->hamt [pairs]
   let [t hamt/transient(hamt/new())]
     for-each pairs
-      fn [[k v]]
-        hamt/transient-set!(t hamt/hash-str(k) k v)
+      (fn [[k v]]
+        hamt/transient-set!(t hamt/hash-str(k) k v))
     hamt/persistent!(t)
 ```
 

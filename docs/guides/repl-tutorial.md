@@ -728,7 +728,7 @@ Type this:
   (add5 10))
 ```
 ```sweet-exp
-let [add5 fn([x :int] :int {x + 5})]
+let [add5 (fn [x :int] :int {x + 5})]
   add5(10)
 ```
 
@@ -745,7 +745,7 @@ Then define a function that returns a closure:
 ```
 ```sweet-exp
 defn make-adder [n :int]
-  fn [x :int] :int {x + n}
+  (fn [x :int] :int {x + n})
 ```
 
 ```turmeric
@@ -791,7 +791,7 @@ defn apply-twice [f x :int] :int
 (apply-twice (fn [x : int] : int (* x 2)) 3)
 ```
 ```sweet-exp
-apply-twice(fn([x :int] :int {x * 2}) 3)
+apply-twice((fn [x :int] :int {x * 2}) 3)
 ```
 
 Expected output:
@@ -926,11 +926,8 @@ Type this:
     (do (println msg) (resume k (nil-value))))
 ```
 ```sweet-exp
-handle do-work()
-  (Log [msg] k)
-  do
-    println(msg)
-    resume(k nil-value())
+(handle (do-work)
+  (Log [msg] k) (do (println msg) (resume k (nil-value))))
 ```
 
 Expected output:
@@ -967,11 +964,8 @@ Type this:
     (do (println (str-concat "[LOG] " msg)) (resume k (nil-value))))
 ```
 ```sweet-exp
-handle do-work()
-  (Log [msg] k)
-  do
-    println(str-concat("[LOG] " msg))
-    resume(k nil-value())
+(handle (do-work)
+  (Log [msg] k) (do (println (str-concat "[LOG] " msg)) (resume k (nil-value))))
 ```
 
 Expected output:
@@ -1019,9 +1013,8 @@ defn use-ask [] :int
   (Ask [] k) (resume k 41))
 ```
 ```sweet-exp
-handle use-ask()
-  (Ask [] k)
-  resume(k 41)
+(handle (use-ask)
+  (Ask [] k) (resume k 41))
 ```
 
 Expected output:

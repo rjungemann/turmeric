@@ -158,7 +158,7 @@ schema/optional(schema/str())
 ; null / absent ok
 schema/union(vec-of(schema/int() schema/str()))
 ; first matching arm wins
-schema/transform(schema/int() fn([x] *(x 2)))
+schema/transform(schema/int() (fn [x] *(x 2)))
 ; decode, then map
 ```
 
@@ -228,7 +228,7 @@ memoized:
 ```
 ```sweet-exp
 defn tree-schema [] :int
-  schema/rec(fn([self] schema/field(schema/field(schema/object-new() "value" schema/int()) "children" schema/array(self))))
+  schema/rec((fn [self] schema/field(schema/field(schema/object-new() "value" schema/int()) "children" schema/array(self))))
 schema-decode(tree-schema() json/decode("{\"value\": 1, \"children\": [{\"value\": 2, \"children\": []}]}"))
 ;; => ok, validated to arbitrary depth
 ```

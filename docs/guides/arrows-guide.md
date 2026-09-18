@@ -59,8 +59,8 @@ see `tests/fixtures/arrow-instance-vs-bare`.
 ```sweet-exp
 import stdlib/arrow.tur
 
-let [add1   arr(fn([x] +(x 1)))
-     double arr(fn([x] *(x 2)))]
+let [add1   arr((fn [x] +(x 1)))
+     double arr((fn [x] *(x 2)))]
 
   let [pipeline >>>(add1 double)]
     println pipeline(5)        ; => 12
@@ -101,7 +101,7 @@ passing the other branch unchanged.
 ```sweet-exp
 import stdlib/arrow.tur
 
-let [add1       arr(fn([x] +(x 1)))
+let [add1       arr((fn [x] +(x 1)))
      first-add1 arrow-first(add1)
      p          Pair(5 10)]
   println first-add1(p)                ; => Pair(6, 10)
@@ -128,7 +128,7 @@ Apply `f` to the first component of a `Pair` and `g` to the second simultaneousl
 ```
 
 ```sweet-exp
-let [both par-comp(0 0 0 0 fn([x] {x + 1}) fn([x] {x * 2}))]
+let [both par-comp(0 0 0 0 (fn [x] {x + 1}) (fn [x] {x * 2}))]
   both Pair(3 4)       ; => Pair(4, 8)
 ```
 
@@ -145,7 +145,7 @@ Duplicate a value and apply two functions, collecting results in a `Pair`.
 ```
 
 ```sweet-exp
-let [split arrow-split(0 0 0 fn([x] {x + 1}) fn([x] {x * 2}))]
+let [split arrow-split(0 0 0 (fn [x] {x + 1}) (fn [x] {x * 2}))]
   split 3      ; => Pair(4, 6)
 ```
 
@@ -469,7 +469,7 @@ let [dc constant(5.0)]
 time-signal 2.5           ; => 2.5
 sample(constant(3.0) 1.0) ; => 3.0
 
-let [louder map-signal(fn([x] {x * 2.0}) constant(0.5))]
+let [louder map-signal((fn [x] {x * 2.0}) constant(0.5))]
   louder(0.0)             ; => 1.0
 ```
 

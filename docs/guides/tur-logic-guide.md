@@ -187,7 +187,7 @@ conjoined(g1 g2)
 disjoined(g1 g2)
 ; g1 OR  g2 (parallel streams)
 ;; Variable introduction
-fresh(fn([x] body-goal))
+fresh((fn [x] body-goal))
 ; create one fresh variable x
 ```
 
@@ -351,7 +351,7 @@ defn parento [parent : Term child : Term] : (Goal int)
   disjoined(conjoined(lequal(parent term-int(0)) lequal(child term-int(1))) disjoined(conjoined(lequal(parent term-int(0)) lequal(child term-int(2))) conjoined(lequal(parent term-int(1)) lequal(child term-int(3)))))
 ;; grandparento via fresh intermediate variable
 defn grandparento [grand : Term child : Term] : (Goal int)
-  fresh(fn([mid] conjoined(parento(grand mid) parento(mid child))))
+  fresh((fn [mid] conjoined(parento(grand mid) parento(mid child))))
 ;; Query: who are the grandchildren of Alice (id=0)?
 let [child (term-var 0)
       res   (run-logic 10 (grandparento (term-int 0) child))]
@@ -384,14 +384,12 @@ inspect terms:
 ;; goal: t must walk to an integer in the range [lo, hi]
 defn range-goal [t : Term lo : int hi : int] : (Goal int)
   ::
-    fn [state : Subst]
-      match logic-walk(t state)
-        TInt(v)
-        if and(>=(v lo) <=(v hi))
-          mreturn(state)
-          mzero()
-        _
-        mzero()
+    (fn [state : Subst]
+      (match logic-walk(t state)
+        (TInt v) (if and(>=(v lo) <=(v hi))
+                   mreturn(state)
+                   mzero())
+        _        mzero()))                     ; not ground -- fail
     :Goal
 ```
 

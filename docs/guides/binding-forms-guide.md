@@ -223,7 +223,7 @@ same rule as `let`. Self-recursion inside its init does not work:
 ```
 ```sweet-exp
 ;; Error: f is not in scope inside its own init
-def f fn([n] f(n))
+def f (fn [n] f(n))
 
 ;; Fix: use letrec (see below) or lift f to top-level defn
 ```
@@ -247,8 +247,8 @@ group:
 ```
 ```sweet-exp
 defn run [] :int
-  letrec [even? fn([n :int] :bool if(=(n 0) true  odd?(-(n 1))))
-          odd?  fn([n :int] :bool if(=(n 0) false even?(-(n 1))))]
+  letrec [even? (fn [n :int] :bool if(=(n 0) true  odd?(-(n 1))))
+          odd?  (fn [n :int] :bool if(=(n 0) false even?(-(n 1))))]
     println $ if(even?(10) "even" "odd")
     0
 ```
@@ -266,7 +266,7 @@ A single self-recursive function is the common case:
 ```
 ```sweet-exp
 defn main [] : int
-  letrec [fact fn([n : int] : int
+  letrec [fact (fn [n : int] : int
                   if({n = 0} 1 {n * fact({n - 1})}))]
     println(fact(5))   ;; 120
     0
@@ -283,8 +283,8 @@ build placeholder types before the bodies are checked:
   (a 3))
 ```
 ```sweet-exp
-letrec [a fn([n : int] : int b({n - 1}))
-        b fn([n : int] : int if({n = 0} 0 a(n)))]
+letrec [a (fn [n : int] : int b({n - 1}))
+        b (fn [n : int] : int if({n = 0} 0 a(n)))]
   a(3)
 ```
 
@@ -346,7 +346,7 @@ The named let desugars to:
   (loop n 0))
 ```
 ```sweet-exp
-letrec [loop fn([i : int acc : int] : int
+letrec [loop (fn [i : int acc : int] : int
                 if({i = 0} acc loop({i - 1} {acc + i})))]
   loop(n 0)
 ```

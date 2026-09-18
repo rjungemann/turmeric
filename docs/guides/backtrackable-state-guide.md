@@ -118,10 +118,10 @@ halves are easy to leave unpaired on an early return, and the bracket cannot be.
 ```
 ```sweet-exp
 bt-scope
-  fn []
-    do
+  (fn []
+    (do
       bt-set!(c 99)
-      bt-get(c)   ; => 99, and c is restored
+      bt-get(c)))   ; => 99, and c is restored
 ```
 
 The **value** survives; the trailed **writes** do not. Returning something that

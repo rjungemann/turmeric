@@ -494,7 +494,7 @@ definstance Clone [Pair]
 
 ```sweet-exp
 definstance Eq [Pair]
-  eq? [x y] pair-eq?(x y fn([a b] {a = b}))
+  eq? [x y] pair-eq?(x y (fn [a b] {a = b}))
 ```
 
 ### `Show`
@@ -710,15 +710,10 @@ defeffect Emit [s :cstr] :nil
 defstruct Emitter :copy [run :fn #{Emit}]
 
 defn main [] :int
-  let [em make-struct(Emitter fn([s] perform(Emit(s))))]
-    handle
-      do
-        .run(em "hello")
-        0
-      (Emit [s] k)
-      do
-        println(s)
-        resume(k nil)
+  let [em make-struct(Emitter (fn [s] perform(Emit(s))))]
+    (handle
+      (do (.run em "hello") 0)
+      (Emit [s] k) (do (println s) (resume k nil)))
 ```
 
 ---

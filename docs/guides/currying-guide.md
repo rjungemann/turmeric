@@ -80,7 +80,7 @@ When a function returns another function, you can chain calls inline:
 ```
 ```sweet-exp
 defn make-adder [n : int] : (fn [int] int)
-  fn [x : int] : int {n + x}
+  (fn [x : int] : int {n + x})
 
 make-adder(10 5)     ; => 15, equivalent to ((make-adder 10) 5)
 ```

@@ -393,7 +393,7 @@ defn role-b [^linear ch :(Role Ping B)] :nil
 
 defn main [] :int
   let [[ra rb] make-protocol(Ping)]
-    let [t session-spawn(fn([] role-b(rb)))]
+    let [t session-spawn((fn [] role-b(rb)))]
       role-a(ra)
       session-join(t)
   0
@@ -426,8 +426,8 @@ defprotocol Pipeline [A B C]
 
 defn main [] :int
   let [[ra rb rc] make-protocol(Pipeline)]
-    let [ta session-spawn(fn([] role-a(ra)))]
-      let [tb session-spawn(fn([] role-b(rb)))]
+    let [ta session-spawn((fn [] role-a(ra)))]
+      let [tb session-spawn((fn [] role-b(rb)))]
         role-c(rc)
         session-join(ta)
         session-join(tb)
