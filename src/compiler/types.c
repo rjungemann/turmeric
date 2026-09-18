@@ -103,6 +103,135 @@ static bool lifetimes_eq(LifetimeId a_lifetimes[], uint8_t a_n,
     return true;
 }
 
+/* session-type-eq-ignores-the-protocol: equirecursive equality for session
+ * protocols.
+ *
+ * Protocols are equirecursive: `session_protocol_of` unfolds a `Rec` binder at
+ * every use site (elab_sessions.c), so a DECLARED parameter type can hold the
+ * folded `Rec[X, P]` while the argument holds its one-step unfolding
+ * `P[X := Rec[X, P]]`. Those are the same protocol, so a purely structural
+ * comparison would reject working programs -- the failure mode to avoid here
+ * is a false NEGATIVE, which breaks compiling code, not a false positive.
+ *
+ * Termination is not the difficulty it looks like. A back-reference is a
+ * SENTINEL (`TY_SESSION_REC` with `fst == NULL`) carrying its binder's interned
+ * label, and a binder's body holds that sentinel rather than a pointer back to
+ * itself, so the type graph is a finite DAG. What the assumption set below
+ * buys is convergence when one side is folded and the other is not: the pair
+ * of nodes under comparison recurs, and assuming it equal on the second
+ * encounter is the standard coinductive rule.
+ *
+ * Everything unrecognised is treated as EQUAL. This routine only ever needs to
+ * be strict enough to separate genuinely different protocols; being permissive
+ * on an inference hole (`TY_UNKNOWN`), an unresolved tyvar, or a pathologically
+ * deep type that overflows the fixed bounds keeps it from rejecting a program
+ * the old always-equal behaviour accepted. */
+
+#define SESS_EQ_MAX 32
+
+typedef struct { const char *label; const Type *binder; } SessBind;
+
+typedef struct {
+    SessBind    env_a[SESS_EQ_MAX];
+    SessBind    env_b[SESS_EQ_MAX];
+    int         n_env_a, n_env_b;
+    const Type *assume_a[SESS_EQ_MAX];
+    const Type *assume_b[SESS_EQ_MAX];
+    int         n_assume;
+} SessEqCtx;
+
+static bool sess_is_rec_binder(const Type *t) {
+    return t && t->kind == TY_SESSION_REC && t->as.session_.fst != NULL;
+}
+
+static bool sess_is_backref(const Type *t) {
+    return t && t->kind == TY_SESSION_REC && t->as.session_.fst == NULL;
+}
+
+static const Type *sess_lookup(const SessBind *env, int n, const char *label) {
+    for (int i = n - 1; i >= 0; i--)
+        if (env[i].label == label) return env[i].binder;
+    return NULL;
+}
+
+static bool sess_assumed(const SessEqCtx *ctx, const Type *a, const Type *b) {
+    for (int i = 0; i < ctx->n_assume; i++)
+        if (ctx->assume_a[i] == a && ctx->assume_b[i] == b) return true;
+    return false;
+}
+
+static int sess_proto_eq(const Type *a, const Type *b, SessEqCtx *ctx) {
+    if (a == b) return 1;
+    if (!a || !b) return 1;          /* a missing protocol tells us nothing */
+
+    /* Resolve a back-reference to the binder it names, then re-compare. */
+    if (sess_is_backref(a)) {
+        const Type *bind = sess_lookup(ctx->env_a, ctx->n_env_a, a->as.session_.label);
+        if (!bind) return 1;         /* unbound -- cannot judge, stay permissive */
+        if (sess_assumed(ctx, bind, b)) return 1;
+        return sess_proto_eq(bind, b, ctx);
+    }
+    if (sess_is_backref(b)) {
+        const Type *bind = sess_lookup(ctx->env_b, ctx->n_env_b, b->as.session_.label);
+        if (!bind) return 1;
+        if (sess_assumed(ctx, a, bind)) return 1;
+        return sess_proto_eq(a, bind, ctx);
+    }
+
+    /* A `Rec` binder on either side is compared against the other side's
+     * unfolding, which is what makes folded and unfolded spellings agree. */
+    bool rec_a = sess_is_rec_binder(a), rec_b = sess_is_rec_binder(b);
+    if (rec_a || rec_b) {
+        if (sess_assumed(ctx, a, b)) return 1;
+        if (ctx->n_assume >= SESS_EQ_MAX) return 1;   /* too deep -- permissive */
+        int save_a = ctx->n_env_a, save_b = ctx->n_env_b, save_as = ctx->n_assume;
+        ctx->assume_a[ctx->n_assume] = a;
+        ctx->assume_b[ctx->n_assume] = b;
+        ctx->n_assume++;
+        if (rec_a) {
+            if (ctx->n_env_a >= SESS_EQ_MAX) return 1;
+            ctx->env_a[ctx->n_env_a].label  = a->as.session_.label;
+            ctx->env_a[ctx->n_env_a].binder = a;
+            ctx->n_env_a++;
+        }
+        if (rec_b) {
+            if (ctx->n_env_b >= SESS_EQ_MAX) return 1;
+            ctx->env_b[ctx->n_env_b].label  = b->as.session_.label;
+            ctx->env_b[ctx->n_env_b].binder = b;
+            ctx->n_env_b++;
+        }
+        const Type *ua = rec_a ? a->as.session_.fst : a;
+        const Type *ub = rec_b ? b->as.session_.fst : b;
+        int r = sess_proto_eq(ua, ub, ctx);
+        ctx->n_env_a = save_a; ctx->n_env_b = save_b; ctx->n_assume = save_as;
+        return r;
+    }
+
+    if (a->kind != b->kind) return 0;
+
+    switch (a->kind) {
+        case TY_CLOSE:
+            return 1;
+        case TY_SEND:
+        case TY_RECV:
+            /* fst is the MESSAGE type (an ordinary type), snd the continuation. */
+            if (a->as.session_.fst && b->as.session_.fst &&
+                !type_eq(*a->as.session_.fst, *b->as.session_.fst))
+                return 0;
+            return sess_proto_eq(a->as.session_.snd, b->as.session_.snd, ctx);
+        case TY_CHOOSE:
+        case TY_BRANCH:
+        case TY_TIMEOUT:
+            /* Both slots are protocols (the two branches / the two outcomes). */
+            if (!sess_proto_eq(a->as.session_.fst, b->as.session_.fst, ctx)) return 0;
+            return sess_proto_eq(a->as.session_.snd, b->as.session_.snd, ctx);
+        default:
+            /* TY_UNKNOWN, a tyvar standing in for a protocol, anything the
+             * session elaborator has not ground yet: not our business. */
+            return 1;
+    }
+}
+
 int type_eq(Type a, Type b) {
     /* CRU Phase 3 / Option B (B-1): a boxed TY_FN (a first-class closure
      * value) and TY_PTR_VOID share the same C carrier -- a void* holding the
@@ -339,6 +468,50 @@ int type_eq(Type a, Type b) {
                     return 0;
                 }
             }
+        }
+        return 1;
+    }
+    /* session-type-eq-ignores-the-protocol: a session endpoint carries its
+     * protocol in `session_.fst`, and without this case two Session types fell
+     * through to the `return 1` below -- so any Session[P] compared equal to
+     * any Session[Q] and a protocol mismatch across a call boundary was
+     * accepted silently. Same defect the TY_TYPEROW case above exists to
+     * prevent.
+     *
+     * The three internal pair kinds (TY_SESSION_PAIR, TY_SESSION_RECV_PAIR,
+     * TY_SESSION_OFFER) deliberately stay permissive: they are transient
+     * elaborator products that are always destructured on the spot, never a
+     * type a user writes on a parameter, so they are not part of the boundary
+     * this fixes. */
+    if (a.kind == TY_SESSION) {
+        SessEqCtx ctx = {0};
+        return sess_proto_eq(a.as.session_.fst, b.as.session_.fst, &ctx);
+    }
+    if (a.kind == TY_SEND   || a.kind == TY_RECV   || a.kind == TY_CLOSE ||
+        a.kind == TY_CHOOSE || a.kind == TY_BRANCH ||
+        a.kind == TY_SESSION_REC || a.kind == TY_TIMEOUT) {
+        SessEqCtx ctx = {0};
+        return sess_proto_eq(&a, &b, &ctx);
+    }
+    /* Multi-party endpoints have the same hole as binary sessions did: without
+     * this case, `(Role Ping A)` and `(Role Ping B)` -- or two roles of two
+     * different protocols -- compared equal, so handing a function the wrong
+     * participant's endpoint was accepted silently.
+     *
+     * Compares the protocol and the role name, and deliberately NOT
+     * `current_step`: a role endpoint partway through its interaction tree is
+     * still the same role of the same protocol, and comparing positions would
+     * reject a recursive call the way it advances its own step. Both names are
+     * interned, so a pointer compare is the fast path and strcmp is only the
+     * fallback for a non-interned spelling. */
+    if (a.kind == TY_ROLE) {
+        const char *ar = a.as.role_.role_name, *br = b.as.role_.role_name;
+        if (ar != br && (!ar || !br || strcmp(ar, br) != 0)) return 0;
+        const Type *ag = a.as.role_.global_type, *bg = b.as.role_.global_type;
+        if (ag && bg && ag != bg &&
+            ag->kind == TY_GLOBAL && bg->kind == TY_GLOBAL) {
+            const char *an2 = ag->as.global_.name, *bn2 = bg->as.global_.name;
+            if (an2 != bn2 && (!an2 || !bn2 || strcmp(an2, bn2) != 0)) return 0;
         }
         return 1;
     }
