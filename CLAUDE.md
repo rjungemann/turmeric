@@ -855,7 +855,8 @@ A few forms are cleaner in traditional syntax:
     when {read-tvar(x) < 10}
       perform(Retry()))
 
-  ; BROKEN -- `$` inside parens is inert; it survives as a bare `$` symbol.
+  ; TUR-E0332 -- `$` inside brackets is rejected (it used to be inert, and
+  ; silently survived as a bare `$` symbol). `tur explain` has the long form.
   (fn [msg : cstr] : unit
     log/error $ str("a" msg))
 

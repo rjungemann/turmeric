@@ -1,5 +1,29 @@
 # `$` inside any bracket is silently parsed as a bare symbol
 
+**RESOLVED 2026-09-17.** Fixed by the report's preferred direction -- diagnose
+it -- as **TUR-E0332**, emitted from the reader rather than the preprocessor.
+The `bd == 0` guard stays exactly as it was: a parenthesised form really is
+plain s-expression territory with no "rest of the line" to delimit, so
+declining the rewrite was never the bug. The missing piece was the diagnostic.
+
+The reader turned out to be the better site than the preprocessor's `$` branch.
+Every *other* decline path rewrites to something -- `$` at EOL or before a
+comment wraps an empty rest, `$x` interns as the symbol `$x` -- so a **bare
+`$` arriving from a `READER_SWEET` file means exactly one thing**, which makes
+the check a two-line guard in `read_symbol_or_minus` with no new plumbing, and
+the existing span machinery maps the caret back through the xform map onto the
+user's original source for free. Plain `.tur` files are untouched; a `$`
+identifier there is still legal.
+
+Pinned by `tests/fixtures/errors/sweet-dollar-inside-brackets`, and verified on
+all three bracket kinds and on the compiled and interpreted paths alike (one
+shared reader, so no `requires.*` marker). The follow-up guide audit the report
+carried was split out to
+[docs/upcoming/sweet-dollar-guide-audit-plan.md](../upcoming/sweet-dollar-guide-audit-plan.md)
+rather than archived with it.
+
+---
+
 **Summary:** In a sweet-exp file, a `$` rest-of-line marker that appears inside
 `(...)`, `[...]`, or `{...}` is not rewritten and not diagnosed -- it survives
 into the AST as an ordinary symbol named `$`, changing the shape of the form
@@ -97,41 +121,9 @@ deprecation window.
 Either way, `tests/fixtures/` wants a negative fixture (`errors/`) pinning the
 chosen behavior.
 
-## Follow-up task: audit the guides and use `$` where it is pertinent
+## Follow-up task (split out, not archived)
 
-Separate from the diagnostic above, the guides under-use `$`. The `fn`/`handle`
-paren pass (see `docs/guides/syntax-guide.md`, "What still uses traditional
-parens") moved a lot of code *into* brackets, where `$` is inert -- so it is
-worth a deliberate sweep of where `$` still belongs and reads better.
-
-Scope: every ```sweet-exp block in `docs/guides/*.md`.
-
-The shape `$` is for -- a call whose single argument is itself a call with
-space-separated arguments, at a position where the indentation layer is live
-(i.e. NOT inside `(...)`, `[...]`, or `{...}`):
-
-```
-; before
-println(str-concat("Hello, " name))
-
-; after
-println $ str-concat "Hello, " name
-```
-
-Rules for the sweep:
-
-- **Only outside brackets.** Inside a parenthesised form `$` is inert (this
-  report). A `$` sweep must not touch a `(fn ...)` or `(handle ...)` body.
-- **Single argument only.** `$` takes the rest of the line as one argument, so
-  a call with two or more arguments is not a candidate:
-  `seq/map((fn [x] *(x x)) seq/range(1 6))` stays as it is.
-- **Leave `f((fn ...))` alone unless it reads better.** There are ~42 sites of
-  the form `arr((fn [x] +(x 1)))` where `arr $ (fn [x] +(x 1))` is arguably
-  cleaner. This is a judgement call per site, not a mechanical rewrite --
-  prefer it where the `((` is genuinely dense, skip it where the neoteric call
-  is already short.
-- **A bare atom after `$` is a zero-arg call.** `f $ g` is `(f (g))`, not
-  `(f g)` (SRFI-110). Do not introduce `$` before a bare variable.
-- Verify with
-  `TUR_STDLIB_DIR="$PWD/stdlib" python3 tools/check-guide-pairs.py docs/guides/ --tur ./build/tur`;
-  every pair must stay AST-identical to its ```turmeric sibling.
+The guide audit this report carried -- sweep the guides and use `$` where it is
+pertinent -- is a docs task, not a finding, so it moved to
+[docs/upcoming/sweet-dollar-guide-audit-plan.md](../upcoming/sweet-dollar-guide-audit-plan.md)
+when this report was archived.
