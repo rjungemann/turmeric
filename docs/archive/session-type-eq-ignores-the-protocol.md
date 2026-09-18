@@ -43,9 +43,14 @@ handles every protocol kind including the back-reference sentinel.
 Still permissive, deliberately: the three internal pair kinds
 (`TY_SESSION_PAIR`, `TY_SESSION_RECV_PAIR`, `TY_SESSION_OFFER`) are transient
 elaborator products always destructured on the spot, never a type a user writes
-on a parameter, so they are not part of the boundary this fixes. The
-partial-application path (`elab_call.c:4862`) has the same STRUCT/ADT-only
-gate; it was left alone rather than changed without a repro.
+on a parameter, so they are not part of the boundary this fixes.
+
+The partial-application path (`elab_call.c:4862`) has the same STRUCT/ADT-only
+gate and was left alone here rather than changed without a repro. That repro
+now exists, and because it is live work it is tracked as its own OPEN report --
+[docs/reported/pap-captured-arg-skips-session-role-protocol-check.md](../reported/pap-captured-arg-skips-session-role-protocol-check.md)
+-- not as a note in this archived one. Under-saturating a call bypasses the
+check the saturated path now performs.
 
 ---
 

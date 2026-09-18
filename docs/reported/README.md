@@ -2021,6 +2021,12 @@ the time.
 | [compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type](compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type.md) | low-medium | A compiled `(defdata Option ...)` re-elaborates over the stdlib's filled `Option` stub, and the errors are blamed on `stdlib/option.tur`. `defstruct` has the guard for this; `defdata` never got one |
 | [web-examples-js-is-unused-and-stale](web-examples-js-is-unused-and-stale.md) | low | Nothing imports `web/examples.js` -- the dropdown reads `EXAMPLES` in `main.js` -- and 7 of its 11 examples fail on their first run. Reports have cited it as the playground's examples |
 
+## Found fixing the session protocol check (filed 2026-09-18)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [pap-captured-arg-skips-session-role-protocol-check](pap-captured-arg-skips-session-role-protocol-check.md) | medium | The saturated arg check now compares a session/role endpoint's protocol (`elab_call.c:6487`), but the PARTIAL-APPLICATION path (`elab_call.c:4862`) still gates strictness on a STRUCT/ADT-only `slot_is_nominal`, so a captured `TY_SESSION`/`TY_ROLE` arg is never compared to its slot -- **under-saturating a call bypasses the check a saturated call performs**. Two controls pin it to that path: the same mismatch is TUR-E0001 when saturated, and a matching protocol compiles when partially applied. Fix is the same two-place widening, plus renaming `slot_is_nominal` (a session protocol is structural, not nominal) |
+
 ## Found cleaning up the rationale guide's session example (filed 2026-09-17)
 
 | Report | Severity | One line |
