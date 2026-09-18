@@ -16,9 +16,11 @@ The two outputs cannot drift because there is only one renderer.
 
 import argparse
 import html as _html
+import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1018,6 +1020,12 @@ def rewrite_links_site(body_html: str) -> str:
     return _MD_HREF_RE.sub(rewrite, body_html)
 
 
+def _build_guide_body_job(job: tuple) -> dict:
+    """Process-pool entry point for build_guide_body -- must be top-level to pickle."""
+    stem, src, meta = job
+    return build_guide_body(stem, src, meta)
+
+
 def render_guide(stem: str, src: Path, out: Path, all_stems: set,
                  meta: dict | None = None, doc: dict | None = None) -> None:
     if doc is None:
@@ -1294,11 +1302,22 @@ def main() -> None:
     while repo_root != repo_root.parent and not (repo_root / '.git').exists():
         repo_root = repo_root.parent
 
-    dated: list[tuple[str, Path]] = []
-    for src in md_files:
-        d = get_creation_date(src, repo_root)
-        if d:
-            dated.append((d, src))
+    # `get_creation_date` shells out to `git log --follow` once per guide, and
+    # --follow forces full-history rename detection, so each call costs ~0.12s
+    # and the serial loop was ~25s of the ~34s total -- almost all of it spent
+    # blocked on the child process, not computing. The calls are independent
+    # and I/O-bound, so a thread pool collapses the wait; `ex.map` preserves
+    # input order, so the result is identical to the serial loop, not merely
+    # equivalent. Threads (not processes) because the work is a subprocess
+    # wait, which releases the GIL.
+    n_git_workers = min(32, (os.cpu_count() or 4) * 4, max(1, len(md_files)))
+    with ThreadPoolExecutor(max_workers=n_git_workers) as ex:
+        creation_dates = list(
+            ex.map(lambda s: get_creation_date(s, repo_root), md_files)
+        )
+    dated: list[tuple[str, Path]] = [
+        (d, src) for src, d in zip(md_files, creation_dates) if d
+    ]
     dated.sort(key=lambda t: t[0], reverse=True)
     recent = []
     for date, src in dated[:10]:
@@ -1307,9 +1326,25 @@ def main() -> None:
         recent.append({'stem': src.stem, 'label': label, 'date': date})
 
     print('Generating guides:')
+    # Markdown conversion is the other half of the runtime (~17s of the
+    # original ~34s, essentially all of it inside markdown's inline
+    # treeprocessor) and it is pure CPU, so it needs processes rather than
+    # threads. Only build_guide_body is farmed out: render_guide is cheap
+    # f-string assembly plus the file write, and keeping it -- and its
+    # per-guide print -- in the parent is what keeps stdout and the write
+    # order byte-identical to the serial version. `ex.map` preserves order,
+    # so `docs` is built in md_files order either way.
+    n_md_workers = min(os.cpu_count() or 1, len(md_files)) or 1
+    jobs = [(src.stem, src, meta_by_stem.get(src.stem, {})) for src in md_files]
+    if n_md_workers > 1 and len(jobs) > 1:
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=n_md_workers) as ex:
+            built = list(ex.map(_build_guide_body_job, jobs))
+    else:
+        built = [_build_guide_body_job(j) for j in jobs]
+
     docs = []
-    for src in md_files:
-        doc = build_guide_body(src.stem, src, meta_by_stem.get(src.stem, {}))
+    for src, doc in zip(md_files, built):
         render_guide(src.stem, src, out_dir / f'{src.stem}.html', all_stems,
                      doc=doc)
         docs.append(doc)
