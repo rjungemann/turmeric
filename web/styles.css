@@ -122,13 +122,23 @@
     --safe-left:   0px;
 }
 
-@media (display-mode: standalone), (display-mode: fullscreen) {
-    :root {
-        --safe-top:    env(safe-area-inset-top, 0px);
-        --safe-right:  env(safe-area-inset-right, 0px);
-        --safe-bottom: env(safe-area-inset-bottom, 0px);
-        --safe-left:   env(safe-area-inset-left, 0px);
-    }
+/* The installed app draws under the status bar and the home indicator
+ * (viewport-fit=cover, black-translucent), so the shell reserves those strips
+ * itself.
+ *
+ * Gated on html.pwa -- set by an inline script in try/index.html before first
+ * paint -- and NOT on (display-mode: standalone). iOS reports `fullscreen`,
+ * not `standalone`, for a home-screen app whose status bar is
+ * black-translucent, so a standalone-only query is dead on the one platform
+ * these insets exist for. This block hedged by listing both; the shell block
+ * below listed only `standalone`, so it never applied on the device and the
+ * black band survived two fixes that were correct in every respect except
+ * that they never ran. One class now gates both, so they cannot drift again. */
+html.pwa {
+    --safe-top:    env(safe-area-inset-top, 0px);
+    --safe-right:  env(safe-area-inset-right, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left:   env(safe-area-inset-left, 0px);
 }
 
 /* ==========================================================================
@@ -1694,8 +1704,9 @@ body.split-dragging * {
 
 }
 
-@media (max-width: 1024px) and (display-mode: standalone) {
-    site-nav, .footer { display: none; }
+@media (max-width: 1024px) {
+    html.pwa site-nav,
+    html.pwa .footer { display: none; }
     /* black-translucent status bar overlays the page; reserve the
        safe-area inset at the top so the editor's first line isn't
        tucked under the clock and battery indicator.
@@ -1711,7 +1722,7 @@ body.split-dragging * {
        padding-bottom on the theory that the bottom inset was the dead space;
        the inset is ~34px and the band was ~59px, so it was the top inset
        showing up at the other end, and the band survived. */
-    #app {
+    html.pwa #app {
         position: fixed;
         inset: 0;
         height: auto;
@@ -1726,7 +1737,7 @@ body.split-dragging * {
        the status line above it instead of reading as a dead band below the
        app (the complaint that 37d44e55d was answering). Only the text moves
        up; nothing is cropped. */
-    .console-footer {
+    html.pwa .console-footer {
         height: calc(24px + var(--safe-bottom));
         padding-bottom: var(--safe-bottom);
     }
