@@ -1,0 +1,26 @@
+#lang sweet-exp
+
+;; `$` is the rest-of-line marker, and it belongs to the INDENTATION layer.
+;; A `(...)` / `[...]` / `{...}` form switches that layer off for everything
+;; inside it, so `$` has no meaning there -- there is no "rest of the line"
+;; to delimit when whitespace is insignificant.
+;;
+;; This used to be silent (sweet-dollar-inside-brackets-is-a-silent-symbol):
+;; the preprocessor's `bd == 0` guard declined to rewrite the marker, and the
+;; token reached the reader as an ordinary symbol named `$`, so the body below
+;; parsed as THREE flat elements -- `log-it`, `$`, `(str-of 7)` -- instead of
+;; one call.  No error, no warning, just a different program.
+;;
+;; All three bracket kinds share the one reader path, so pinning the paren
+;; shape pins the set.
+
+defn log-it [msg : cstr] : nil
+  println(msg)
+
+defn str-of [n : int] : cstr
+  "x"
+
+defn main [] : int
+  (fn [n : int] : nil
+    log-it $ str-of(n))
+  0

@@ -425,6 +425,14 @@ typedef enum DiagCode {
      * image carries the continuation, not the heap, so the write is silently
      * absent after a warm start. */
     TUR_W0706_IMAGE_GLOBAL_UNREGISTERED,
+    /* sweet-dollar-inside-brackets-is-a-silent-symbol: the sweet-exp
+     * preprocessor rewrites `$ <rest>` to `(<rest>)` only where the
+     * indentation layer is live -- `bd == 0` in sweet_emit_content.  Inside
+     * `(...)`, `[...]` or `{...}` it declines, and the token then reached the
+     * reader as an ordinary symbol named `$`, silently changing the form's
+     * shape with no error.  A bare `$` in a sweet-exp file can only have
+     * arrived that way, so the reader rejects it. */
+    TUR_E0332_SWEET_DOLLAR_IN_BRACKETS,
 } DiagCode;
 
 typedef enum DiagLevel {

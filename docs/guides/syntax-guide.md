@@ -504,17 +504,25 @@ body must be delimiter-complete:
     perform(Retry())))
 ```
 
-`$` is the trap with the worst failure mode, because it neither errors nor
-rewrites -- it simply survives into the AST as a bare `$` symbol:
+`$` is caught for you. A `$` inside brackets is rejected with **TUR-E0332**,
+pointing at the marker:
 
 ```sweet-exp
-; BROKEN -- parses as (fn [msg :cstr] :unit log/error $ (str "a" msg))
+; TUR-E0332: `$` has no meaning inside brackets
 (fn [msg : cstr] : unit
   log/error $ str("a" msg))
 
-; Correct
+; Correct -- give the call a delimiter
 (fn [msg : cstr] : unit
   log/error(str("a" msg)))
+```
+
+`tur explain TUR-E0332` has the long form. The same `$` is correct as soon as
+it is outside every bracket, where the indentation layer is live again:
+
+```sweet-exp
+defn f [msg : cstr] : nil
+  log/error $ str("a" msg)      ; (log/error (str "a" msg))
 ```
 
 ### `handle` -- keep the clause and its body on one line
