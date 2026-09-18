@@ -196,7 +196,7 @@ failed.
 
 `spices/ws-server`'s carrier-cast workaround is now unblocked and should be
 removed; it is recorded as row 5 in
-[workarounds-to-remove](../reported/workarounds-to-remove.md) with the exact
+[workarounds-to-remove](workarounds-to-remove.md) with the exact
 edit and the proof to run.
 
 ### Guides

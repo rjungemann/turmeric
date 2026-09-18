@@ -128,4 +128,4 @@ infer it from `poly-statement-position-effect` alone -- that fixture pins the
 general rule, while these sites pin that the rule reaches real stdlib code.
 
 Tracked alongside the others in
-[workarounds-to-remove](../reported/workarounds-to-remove.md).
+[workarounds-to-remove](workarounds-to-remove.md).
