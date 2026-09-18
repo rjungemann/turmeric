@@ -20,6 +20,32 @@ bool expr_subtree_has_inline_c(const Expr *e);
  * ALSO retain the argument it returns. */
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);
+/* any-widen-stored-in-an-adt-field-has-no-owner (the deep drop): the predicate
+ * that decides whether a payload gets a `drop_localowned_<T>`, defined emit-side
+ * in emit_module.c.  Reused here so the freshness fact and the drop agree about
+ * what a drop will touch -- the same discipline the `boxed` flag already
+ * follows, and the reason this is one predicate rather than two readings of the
+ * same field list. */
+bool adt_def_has_localowned_glue(const AdtDef *def);
+
+/* any-widen-stored-in-an-adt-field-has-no-owner (the deep drop): would a deep
+ * `__tur_any_drop` of a widen of `payload` release anything BESIDES the box?
+ *
+ * True exactly when the payload's ADT carries drop glue, which is the emitter's
+ * own answer to the same question (`adt_def_has_localowned_glue`): a
+ * recursive-self field or an `:any` field.  A scalar, a cstr, a heap-ADT handle
+ * and a struct of plain fields all own nothing, so the drop is the box free the
+ * freshness rule was written against and the answer is false. */
+static bool any_widen_payload_owns_droppable(const Expr *payload) {
+    if (!payload) return false;
+    const Type *t = &payload->type;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n = 0;
+    if (!type_extract_adt_app(t, &def, args, &n))
+        def = (t->kind == TY_ADT) ? t->as.adt_.def : NULL;
+    return def && adt_def_has_localowned_glue(def);
+}
 
 /* RM1 (reclamation-plan): the freshness analysis, on the elaborated body.
  * True iff every VALUE PATH ends in a sum-constructor application or a call
@@ -9290,7 +9316,30 @@ Expr *elab_defn(Elab *e, const Form *call) {
         while (_fa && (_fa->kind == EX_LET || _fa->kind == EX_ASCRIBE))
             _fa = (_fa->kind == EX_ASCRIBE) ? _fa->as.ascribe_.inner
                                             : _fa->as.let_.body;
-        if (_fa && _fa->kind == EX_UNION_INJECT && _fa->type.kind == TY_ANY)
+        /* any-widen-stored-in-an-adt-field-has-no-owner (the deep drop): the
+         * paragraph above was written when `__tur_any_drop` was a box free.  It
+         * is not one any more -- since 2026-09-14 it calls the payload's
+         * `drop_localowned_<T>` FIRST, so dropping an `any` releases everything
+         * the payload owns as well as the box.  The freshness fact was never
+         * re-derived against that, and it does not survive it: it establishes
+         * that the BOX is fresh and says nothing about what the payload points
+         * at, while a constructor fills an owned field from whatever it is
+         * handed.  `(defn wrap [x] (Cons x (Nil)))` is a widen in tail position,
+         * so it qualified -- and the consumer's drop then walked into `x` and
+         * freed a spine its caller still owned.  That is a heap-use-after-free,
+         * not a leak, and ASan reports it as one.
+         *
+         * The narrowest repair that makes the fact true again is to require the
+         * payload to own NOTHING: no recursive-self field and no `:any` field --
+         * exactly the types for which the emitter publishes no drop glue, and
+         * so exactly the types for which the deep drop degenerates back into the
+         * box free this rule was written for.  Proving a payload DEEPLY fresh
+         * (every owned field itself freshly minted here) would admit more, but
+         * it cannot admit the shape that motivates it: an element handed to an
+         * opaque callee -- `(Cons (f h) ...)` in a Saffron `lmap` -- is exactly
+         * where the answer is unknowable from the AST. */
+        if (_fa && _fa->kind == EX_UNION_INJECT && _fa->type.kind == TY_ANY &&
+            !any_widen_payload_owns_droppable(_fa->as.union_inject_.value))
             b->returns_fresh_any = true;
     }
     /* any-struct-box-leak-per-widen: the passthrough twin.  A body whose tail is

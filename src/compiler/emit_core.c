@@ -1670,9 +1670,10 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
          *                Either way the result is a copy, exactly as EX_ANY_CAST
          *                above is a deref.
          *
-         * A dynamic CALL is the opposite case and keeps the strict answer: the
-         * callee is a value, so there is no body to inspect and no mask to
-         * consult -- the same reason EX_CALL refuses an `fn_expr` callee. */
+         * A dynamic CALL is the opposite case and keeps the strict answer for
+         * what flows INTO it: the callee is a value, so there is no body to
+         * inspect and no mask to consult -- the same reason EX_CALL refuses an
+         * `fn_expr` callee. */
         case EX_DYN_OP:
             for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
                 if (!box_uses_confined(e->as.dyn_op_.args[i], b, /*confined=*/true))
@@ -1680,8 +1681,36 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             return true;
         case EX_DYN_FIELD:
             return box_uses_confined(e->as.dyn_field_.obj, b, /*confined=*/true);
+        /* any-widen-stored-in-an-adt-field-has-no-owner: a bare `return false`
+         * here answered a question this walk never asked.  "The callee is
+         * opaque, so it may keep what it is given" is a statement about `b`
+         * FLOWING IN -- and a dynamic call that never mentions `b` is handed
+         * nothing of `b` to keep.  Refusing on the mere PRESENCE of one
+         * disqualified every parameter of every body containing a dynamic call,
+         * which in Saffron is every higher-order function: `lmap`'s `xs` read
+         * as retained because a sibling subexpression called `(f h)`, where `f`
+         * and `h` are other bindings entirely.
+         *
+         * Checking the operands instead is both narrower and strictly stronger
+         * than the old answer: `b` underneath the callee or an argument is
+         * refused exactly as before (unconfined, so a bare `b`, a widen of `b`
+         * and a general call carrying it all fail at EX_VAR), while a body that
+         * merely CONTAINS a dynamic call is no longer refused on that basis.
+         *
+         * The match binders a Saffron walker forwards are not `b` and do not
+         * make it one: the arm lowering deref-COPIES the scrutinee
+         * (`__scrut_v = *(T *)TUR_UNTAG(b)`) and binds each field by value, so a
+         * binder carries a pointer to a SIBLING allocation, never into b's own
+         * box.  That is what makes this sound for the frame-box client, whose
+         * whole effect is to move that one box from the heap into the caller's
+         * frame. */
         case EX_DYN_CALL:
-            return false;
+            if (!box_uses_confined(e->as.dyn_call_.fn, b, /*confined=*/false))
+                return false;
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                if (!box_uses_confined(e->as.dyn_call_.args[i], b, /*confined=*/false))
+                    return false;
+            return true;
         case EX_IF:
             return box_uses_confined(e->as.if_.cond, b, /*discarded=*/true) &&
                    box_uses_confined(e->as.if_.then_, b, confined) &&
