@@ -2,6 +2,47 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.49.2] -- 2026-09-17
+
+### Fixed
+
+- **A sweet-exp `$` inside `(...)`, `[...]` or `{...}` is now an error
+  (TUR-E0332).** The rest-of-line marker belongs to the indentation layer,
+  which a bracket switches off, so the token reached the reader as an ordinary
+  symbol named `$`: the enclosing form silently gained an extra element and
+  meant something the author never wrote. `(fn [msg : cstr] : unit log/error $
+  str("a" msg))` read as three flat elements where one call was intended, with
+  no error and no warning. Plain `.tur` files are untouched -- a `$` identifier
+  there is still legal.
+- **Try Turmeric reserves the iOS safe area in every fixed overlay.** Installed
+  as a PWA on a notched iPhone the app is served `viewport-fit=cover`, so the
+  top ~59 CSS px of the viewport is drawn over by the clock and the battery
+  indicator. Only `#app` reserved that strip, and `position: fixed` resolves
+  against the viewport, so every overlay escaped it. The docs pane's entire
+  topbar -- close, Contents, search -- sat underneath, leaving a reader who
+  opened a doc with no way back. `--safe-*` tokens now carry the insets through
+  the overlays and the docs sheet, the mobile exit control is a 44px
+  leading-edge "< Back", and the standalone shell is pinned so the page cannot
+  scroll the status bar out of reach.
+
+### Changed
+
+- **`tur run docs` is roughly 3x faster.** `tools/genguides.py` went from ~38s
+  to ~10s by parallelizing the per-guide `git log --follow` creation-date
+  lookups and the markdown rendering stage -- it was running at 47% CPU,
+  blocked rather than computing.
+
+### Docs
+
+- **The sweet-exp guides give `fn` and `handle` traditional parens, and use `$`
+  in the tutorials.** `handle` and `match` take a flat argument list that pairs
+  up two at a time, so indentation splits each clause from the body that
+  answers it; neoteric `fn(` reads as a call to a function named `fn`. The
+  syntax guide now states TUR-E0332 as current behavior and shows the positive
+  half -- the same `$` is correct as soon as it is outside every bracket. The
+  rationale guide's session example is corrected to the capitalized `Recv` /
+  `Send` / `Close` constructors.
+
 ## [0.49.1] -- 2026-09-17
 
 ### Changed
