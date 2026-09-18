@@ -351,6 +351,9 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the outer function's C return type -- so a pending-panic propagation
              * return is `(int64_t){0}`, and an aggregate result is boxed below. */
             hctx.current_fn_ret_ctype = "int64_t";
+            /* byval-spine-drop-past-early-exit: a copied context inherits the
+             * OUTER function's signature verdict; this body has its own. */
+            hctx.current_fn_spine_drop_safe = false;
 
             /* Emit handler case body.
              * Phase 19D: for non-never, non-nil bodies, or nil bodies ending in
@@ -441,6 +444,8 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
          * tur_current_fiber->result), so a pending-panic propagation is a bare
          * `return;`, not a typed zero of the outer function's return type. */
         bctx.current_fn_ret_ctype = "void";
+        /* byval-spine-drop-past-early-exit: same reset as the handler ctx. */
+        bctx.current_fn_spine_drop_safe = false;
 
         if (h->body->type.kind == TY_NIL || h->body->type.kind == TY_NEVER) {
             emit_stmt(&bctx, &fn_buf, h->body);

@@ -1,0 +1,33 @@
+#lang saffron
+;; byval-spine-drop-refused-nonscalar-param -- the counter-case to
+;; byval-spine-drop-past-early-exit: the spine drop must NOT ride the early-exit
+;; channel when the enclosing signature can carry a pointer into the spine.
+;;
+;; `carry` is an `any` PARAMETER, and each turn the tail self-call hands it a
+;; match BINDER -- `t` out of `(DCons h t)` -- which is a pointer to the second
+;; cell of THIS turn's `xs`.  The back-edge assigns the argument temporaries to
+;; the parameters and then fires the channel; had the spine drop been pushed,
+;; `xs`'s chain would be freed with `carry` still pointing into it, and the
+;; next iteration (and the final `match`) would read a freed cell.
+;;
+;; So the gate refuses: `current_fn_spine_drop_safe` is false for any function
+;; whose parameters or result are not all non-pointer scalars, and the loop
+;; leaks its spine every turn exactly as it did before the fix.  That leak is
+;; the residue `known-leak` names; a wrongly admitted push would show here as a
+;; use-after-free, which a marker does not excuse.
+;;
+;; This fixture is asserting a NON-optimisation.  What passing means: the right
+;; answer is printed (the last turn's second cell holds 7), and nothing is
+;; freed early.
+
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+
+(defn drive [i : int n : int carry] : int
+  (if (= i n)
+    (cast (match carry (Cons h t) h (Nil) 0) int)
+    (let [xs (Cons i (Cons 7 (Nil)))]
+      (drive (+ i 1) n (match xs (Cons h t) t (Nil) xs)))))
+
+(defn main [] : int
+  (println (drive 0 50 (Nil)))   ;; 7
+  0)

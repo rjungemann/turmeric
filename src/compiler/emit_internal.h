@@ -574,6 +574,18 @@ typedef struct EmitCtx {
     uint32_t  cap_dead_base_ctors;
     const EmitAbiSpecialization *current_abi_specialization;
     const char *current_fn_ret_ctype;
+    /* byval-spine-drop-past-early-exit: true while emitting a function whose
+     * every parameter AND result is a non-pointer scalar (nil/bool/int/float
+     * and the fixed-width kinds -- NOT cstr, NOT ptr).  Only then may a
+     * by-value ADT local's `drop_localowned_<T>` ride the early-exit channel
+     * (`any_scope_drops`): at a TCO back-edge the next iteration receives only
+     * those parameters, and at a `return` only that result leaves, so neither
+     * can carry a pointer into the spine being freed.  A match binder aliasing
+     * the spine (`t` in `(Cons h t)`) threaded through an `any`/ADT parameter
+     * is exactly what this refuses.  Computed once per FnDef beside
+     * `current_fn_ret_ctype`; reset to false in every copied sub-context, so
+     * the default is the status-quo leak, never a free. */
+    bool current_fn_spine_drop_safe;
     /* MB1 / forall-dict-pass-multi-constraint-hkt-plan (Task 1.4): set while
      * emitting a dict-clone FnDef body (see FnDef.dict_clone_*).  A class-method
      * call carrying a `dict_arg` whose instance's class matches one of

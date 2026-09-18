@@ -60,11 +60,15 @@
 (defn add [a b] (+ a b))
 (defn big? [x] (> x 1))
 
-;; The recursive call is deliberately NOT in tail position.  A tail call is
-;; lowered to a back-edge goto, which jumps past the let's trailing
-;; `drop_localowned_tur_adt_Lst` and leaks the list's own spine -- a different,
-;; still-open defect (byvalue-recursive-adt-boxes-are-never-freed) that would
-;; swamp this gate with allocations that have nothing to do with the rule here.
+;; The recursive call is deliberately NOT in tail position, so this fixture's
+;; gate is about the frame-box rule and nothing else.  (An earlier draft of
+;; this comment blamed a tail call for "jumping past" the let's trailing
+;; `drop_localowned_tur_adt_Lst` and attributed that to
+;; byvalue-recursive-adt-boxes-are-never-freed.  Both halves were wrong: the
+;; drop was never EMITTED for a tail-position let, and that report's residues
+;; are a callee hand-off and `:copy`.  The real defect is filed and mostly
+;; fixed as byval-spine-drop-past-early-exit; the non-tail shape here would
+;; have been clean either way.)
 (defn drive [i : int n : int] : int
   (if (= i n)
     0

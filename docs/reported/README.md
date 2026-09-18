@@ -2033,6 +2033,15 @@ the time.
 | --- | --- | --- |
 | ~~[sweet-dollar-inside-brackets-is-a-silent-symbol](../archive/sweet-dollar-inside-brackets-is-a-silent-symbol.md)~~ | -- | **RESOLVED 2026-09-17** (archived): fixed by the report's preferred direction as **TUR-E0332**, but emitted from the READER rather than the preprocessor's `$` branch -- every other decline path rewrites to something (`$` at EOL or before a comment wraps an empty rest, `$x` interns as `$x`), so a bare `$` from a `READER_SWEET` file means exactly one thing, which makes it a two-line guard in `read_symbol_or_minus` with the caret mapped back through the xform map for free. The `bd == 0` guard was never the bug and stays. Pinned by `tests/fixtures/errors/sweet-dollar-inside-brackets`; plain `.tur` files keep a legal `$` identifier. The guide audit it carried was split out and then executed (9 `$` conversions in the three tutorials, the rest deliberately skipped) -- `docs/archive/history/sweet-dollar-guide-audit-plan.md`. Original row: A `$` rest-of-line marker inside `(...)`, `[...]` or `{...}` was neither rewritten nor diagnosed -- it survived into the AST as a bare `$` symbol, changing the form's shape with no error |
 
+## Found continuing the any-widen report (filed 2026-09-18)
+
+One finding, from checking an attribution that report's second pass had made
+without verifying it.
+
+| Report | Severity | Summary |
+| --- | --- | --- |
+| [byval-spine-drop-past-early-exit](byval-spine-drop-past-early-exit.md) | medium, **partially fixed** | A by-value ADT local's `drop_localowned_<T>` is a TRAILING free, and two exits never reached it -- not "jumped past" but never EMITTED: `emit_tail`'s inline tail-`let` arm repeats the `any` drop bookkeeping and never repeated the spine drop, and `emit_let_value` collected the spine drop only for bodies with no `return`. So the accumulator loop that builds a list per turn leaked the whole spine every turn (2 boxes x N, measured flat, both dialects, both glue paths). The drop now rides the `any` drop's early-exit channel, gated on the enclosing SIGNATURE being all non-pointer scalars -- the gate the `any` drop never needed, because a match binder is a pointer INTO the spine and a loop threading it through an `any` parameter would read a freed cell. Residues: non-scalar signatures (pinned `known-leak`), `emit_tail`'s value-returning default path, and the closure-env/catch-box/fn-field frees behind the same gate. The earlier attribution of this leak to `byvalue-recursive-adt-boxes-are-never-freed` was wrong on both mechanism and owner and is corrected in place |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

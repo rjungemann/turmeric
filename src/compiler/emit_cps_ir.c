@@ -9815,7 +9815,12 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * under `catch-unwind`. */
     const char *saved_cps_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = "int64_t";
+    /* byval-spine-drop-past-early-exit: a CPS term is a different C function
+     * from the one whose signature was judged; refuse the spine push in it. */
+    bool saved_cps_spine_safe = ctx->current_fn_spine_drop_safe;
+    ctx->current_fn_spine_drop_safe = false;
     emit_term(&ce, se->term);
+    ctx->current_fn_spine_drop_safe = saved_cps_spine_safe;
     ctx->current_fn_ret_ctype = saved_cps_ret_ctype;
     if (cps_env_var) {
         ctx->closure = saved_cps_closure;

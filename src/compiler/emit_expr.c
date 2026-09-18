@@ -3042,28 +3042,39 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 let_binding_widen_drop_stmt(ctx, e, i);
         }
     }
+    /* byval-spine-drop-past-early-exit: collected OUTSIDE the
+     * `!body_has_return_or_throw` gate below, unlike its neighbours and like
+     * the `any` drop above.  It was inside, and that was the second face of
+     * one hole: a body with an explicit `return` collected no spine drop at
+     * all, so `(let [xs (Cons ...)] (return (match xs ...)))` leaked its spine
+     * on every call.  (The first face is emit_tail's inline arm, which never
+     * emitted one either.)  Collected here, the drop is pushed onto the
+     * early-exit channel when the enclosing signature permits it
+     * (EmitCtx.current_fn_spine_drop_safe) and emitted trailing on BOTH
+     * fall-through paths, exactly the two places the `any` drop fires.
+     *
+     * Its own loop rather than an arm of the else-chain below: a recursive
+     * local can also be env- or box-freeable, and those are different
+     * questions about the same binding. */
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        const Binding *rb = e->as.let_.bindings[i].binding;
+        if (!rb || !rb->drops_local_owned || rb->type.kind != TY_ADT ||
+            !rb->type.as.adt_.def)
+            continue;
+        char *rmn = mangle_adt_name(rb->type.as.adt_.def->name);
+        size_t rtl = strlen(rmn) + 16;
+        char *rtn = (char *)malloc(rtl);
+        snprintf(rtn, rtl, "tur_adt_%s", rmn);
+        free(rmn);
+        locown_names = (char **)realloc(locown_names,
+                                       (n_locown + 1) * sizeof(char *));
+        locown_types = (char **)realloc(locown_types,
+                                       (n_locown + 1) * sizeof(char *));
+        locown_names[n_locown] = name_for_binding(ctx, rb);
+        locown_types[n_locown] = rtn;
+        n_locown++;
+    }
     if (!body_has_return_or_throw) {
-        /* Its own loop rather than an arm of the else-chain below: a recursive
-         * local can also be env- or box-freeable, and those are different
-         * questions about the same binding. */
-        for (uint32_t i = 0; i < e->as.let_.n; i++) {
-            const Binding *rb = e->as.let_.bindings[i].binding;
-            if (!rb || !rb->drops_local_owned || rb->type.kind != TY_ADT ||
-                !rb->type.as.adt_.def)
-                continue;
-            char *rmn = mangle_adt_name(rb->type.as.adt_.def->name);
-            size_t rtl = strlen(rmn) + 16;
-            char *rtn = (char *)malloc(rtl);
-            snprintf(rtn, rtl, "tur_adt_%s", rmn);
-            free(rmn);
-            locown_names = (char **)realloc(locown_names,
-                                           (n_locown + 1) * sizeof(char *));
-            locown_types = (char **)realloc(locown_types,
-                                           (n_locown + 1) * sizeof(char *));
-            locown_names[n_locown] = name_for_binding(ctx, rb);
-            locown_types[n_locown] = rtn;
-            n_locown++;
-        }
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
             if (let_binding_env_freeable(e, i)) {
                 env_free_names = (char **)realloc(env_free_names,
@@ -3436,6 +3447,24 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     uint32_t any_scope_mark = ctx->n_any_scope_drops;
     for (uint32_t i = 0; i < n_any_free; i++)
         any_scope_drops_push(ctx, any_free_names[i]);
+    /* byval-spine-drop-past-early-exit: the spine drops join the channel, so a
+     * `return` inside the body fires them (after hoisting its value to a temp
+     * -- emit_stmt.c's return arm) instead of jumping past the trailing free.
+     * Gated on the enclosing signature: the `return` hands out only the
+     * result, and the gate says it is a number, so it cannot point into the
+     * spine.  Ungated, the trailing frees below still run on fall-through,
+     * which is the free the ungated path always emitted. */
+    if (ctx->current_fn_spine_drop_safe) {
+        for (uint32_t i = 0; i < n_locown; i++) {
+            Buf ds;
+            buf_init(&ds);
+            buf_printf(&ds, "drop_localowned_%s((void *)&%s)",
+                       locown_types[i], locown_names[i]);
+            buf_putc(&ds, '\0');
+            any_scope_drops_push(ctx, ds.data);
+            buf_free(&ds);
+        }
+    }
 
     if (body_has_return_or_throw) {
         /* Body contains return/throw but may still produce a value on the
@@ -3469,6 +3498,20 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(any_free_names[i]);
         }
         free(any_free_names);
+        /* byval-spine-drop-past-early-exit: the spine drop on the same
+         * fall-through path, for the same reason -- and, when the signature
+         * gate declined the channel push, this is the only place it fires,
+         * which is the status-quo free the ungated path always emitted.
+         * Reverse order, matching the ungated trailing emission below. */
+        for (uint32_t i = n_locown; i-- > 0; ) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "drop_localowned_%s((void *)&%s);\n",
+                       locown_types[i], locown_names[i]);
+            free(locown_names[i]);
+            free(locown_types[i]);
+        }
+        free(locown_names);
+        free(locown_types);
         /* Close scope */
         ctx->indent -= 4;
         indent_buf(body, ctx->indent);

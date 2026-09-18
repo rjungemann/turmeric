@@ -148,6 +148,24 @@ static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) 
     return same;
 }
 
+/* byval-spine-drop-past-early-exit: the kinds that cannot carry a pointer into
+ * a by-value ADT's box chain.  Deliberately NOT `type_is_atomic_scalar`, which
+ * admits cstr and ptr<void>: a cstr binder read out of a spine cell does not
+ * point INTO the cell, but nothing here needs to reason about that, and the
+ * frame-box family's `_result_safe` whitelist -- which this mirrors -- draws the
+ * line at the numeric kinds for the same reason.  Only ever narrows a free. */
+static bool spine_drop_kind_is_nonptr_scalar(TypeKind k) {
+    switch (k) {
+        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* A let/letrec is tail-transparent for TCO only if every binding is a plain
  * scalar we can declare with `T name = init;`.  fn-typed (incl. letrec global
  * fns), poly-fn, and carrier-ABI bindings force the whole let onto the default
@@ -775,6 +793,40 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                     char *nm = let_binding_widen_drop_stmt(ctx, e, i);
                     any_scope_drops_push(ctx, nm);
                     free(nm);
+                }
+                /* byval-spine-drop-past-early-exit: the spine drop of a
+                 * by-value ADT local rides the same channel, for the same
+                 * reason -- this arm is entirely made of early exits, and
+                 * emit_let_value's `drop_localowned_<T>` is a TRAILING free
+                 * that this arm never emitted at all.  So a tail-recursive
+                 * accumulator loop that builds a list per turn leaked the
+                 * whole spine every turn: 2 boxes x N turns, measured flat.
+                 * Gated on the enclosing signature (see
+                 * EmitCtx.current_fn_spine_drop_safe): the back-edge fires
+                 * the channel AFTER the argument temporaries are assigned to
+                 * the parameters, so the only words that could still reach
+                 * this spine are those parameters -- and the gate says they
+                 * are numbers.  The value-returning default path below does
+                 * not fire the channel (the `any` drops have the same gap), so
+                 * on that one path the push is a leak, never a free. */
+                if (ctx->current_fn_spine_drop_safe) {
+                    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                        const Binding *rb = e->as.let_.bindings[i].binding;
+                        if (!rb || !rb->drops_local_owned ||
+                            rb->type.kind != TY_ADT || !rb->type.as.adt_.def)
+                            continue;
+                        char *rmn = mangle_adt_name(rb->type.as.adt_.def->name);
+                        char *rnm = name_for_binding(ctx, rb);
+                        Buf ds;
+                        buf_init(&ds);
+                        buf_printf(&ds, "drop_localowned_tur_adt_%s((void *)&%s)",
+                                   rmn, rnm);
+                        buf_putc(&ds, '\0');
+                        any_scope_drops_push(ctx, ds.data);
+                        buf_free(&ds);
+                        free(rmn);
+                        free(rnm);
+                    }
                 }
                 emit_tail(ctx, body, fn_e, fd, e->as.let_.body, result_kind, is_main);
                 any_scope_drops_pop(ctx, any_mark);
@@ -3146,6 +3198,21 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     const char *saved_current_fn_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = current_fn_ret_ctype_eff;
+    /* byval-spine-drop-past-early-exit: see EmitCtx.current_fn_spine_drop_safe.
+     * Decided from the SIGNATURE, not the body: the two exits the channel
+     * fires at (a back-edge, a `return`) hand exactly the parameters and the
+     * result to whatever runs next, so those are the only words that could
+     * still point into a spine freed on the way out. */
+    bool saved_current_fn_spine_drop_safe = ctx->current_fn_spine_drop_safe;
+    {
+        bool safe = fd && e->type.kind == TY_FN &&
+                    spine_drop_kind_is_nonptr_scalar(e->type.as.fn.result_kind);
+        for (uint32_t pi = 0; safe && pi < fd->n_params; pi++)
+            if (!fd->params[pi] ||
+                !spine_drop_kind_is_nonptr_scalar(fd->params[pi]->type.kind))
+                safe = false;
+        ctx->current_fn_spine_drop_safe = safe;
+    }
 
     /* Use raw name (without ID suffix) for function name */
     const char *fn_name = ctx->fn_name_override
@@ -4775,6 +4842,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     free((void*)ctx->env_var_name);
     ctx->env_var_name = saved_env_var_name;
     ctx->current_fn_ret_ctype = saved_current_fn_ret_ctype;
+    ctx->current_fn_spine_drop_safe = saved_current_fn_spine_drop_safe;
 
     ctx->indent -= 4;
     buf_printf(file, "}\n\n");
