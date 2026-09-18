@@ -102,6 +102,33 @@
     --font-size-sm: 12px;
     --font-size-md: 13px;
     --font-size-lg: 15px;
+
+    /* Safe-area insets, as tokens rather than raw env().
+     *
+     * Two reasons they are not written as env() at every use site. First,
+     * `position: fixed` escapes any padding an ancestor reserved, so every
+     * overlay has to re-apply the insets itself -- and the one that did not,
+     * #docs-overlay, put its 44px topbar (the only way out of the docs pane)
+     * entirely inside a 59px status-bar inset. A token makes "which boxes
+     * reserve the inset" greppable. Second, env() cannot be overridden from
+     * script, so a token is the only way a test can stand in for a notched
+     * device; tests/mobile.safe-area.spec.js sets these on :root.
+     *
+     * Zero outside standalone: in a normal Safari tab the browser's own
+     * chrome already occupies the unsafe strips. */
+    --safe-top:    0px;
+    --safe-right:  0px;
+    --safe-bottom: 0px;
+    --safe-left:   0px;
+}
+
+@media (display-mode: standalone), (display-mode: fullscreen) {
+    :root {
+        --safe-top:    env(safe-area-inset-top, 0px);
+        --safe-right:  env(safe-area-inset-right, 0px);
+        --safe-bottom: env(safe-area-inset-bottom, 0px);
+        --safe-left:   env(safe-area-inset-left, 0px);
+    }
 }
 
 /* ==========================================================================
@@ -1319,6 +1346,12 @@ body.split-dragging * {
     align-items: center;
     justify-content: center;
     z-index: 1000;
+    /* position:fixed resolves against the viewport, not against #app, so an
+       overlay does not inherit the safe-area padding the shell reserves and
+       has to keep its own content clear of the status bar and the home
+       indicator. .docs-overlay sets its own padding and handles the insets on
+       its bars instead -- it is a full-bleed sheet, not a centered dialog. */
+    padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
 }
 
 .overlay.loading {
@@ -1332,7 +1365,11 @@ body.split-dragging * {
     box-shadow: var(--shadow-lg);
     width: 90%;
     max-width: 800px;
-    max-height: 90vh;
+    /* 90vh, but never taller than the overlay's own content box -- which is
+       now the viewport minus the safe-area insets. A flex item centered in a
+       box it overflows loses its top edge off the top of the screen, which is
+       the same failure as the docs topbar, one level in. */
+    max-height: min(90vh, 100%);
     overflow-y: auto;
     animation: slideIn 0.18s ease-out;
 }
@@ -1661,14 +1698,37 @@ body.split-dragging * {
     site-nav, .footer { display: none; }
     /* black-translucent status bar overlays the page; reserve the
        safe-area inset at the top so the editor's first line isn't
-       tucked under the clock and battery indicator. The bottom is
-       allowed to extend to the viewport edge -- the console pane's
-       REPL input and footer naturally sit above the home-indicator
-       gesture zone, so explicit bottom padding only creates a dead
-       band that the user perceives as wasted vertical space. */
+       tucked under the clock and battery indicator.
+
+       The shell is PINNED rather than sized from 100dvh. Sizing it was what
+       produced the "black band at the bottom" report: on iOS in standalone,
+       100dvh does not reliably resolve to the full screen height that
+       viewport-fit=cover hands the page, so an #app of `height: 100dvh`
+       lands short of the bottom edge and the difference shows through as
+       unpainted canvas. `inset: 0` takes the measurement from the layout
+       viewport instead of from a unit, which is the same number under every
+       reading of dvh. Note the earlier fix for that band (37d44e55d) dropped
+       padding-bottom on the theory that the bottom inset was the dead space;
+       the inset is ~34px and the band was ~59px, so it was the top inset
+       showing up at the other end, and the band survived. */
     #app {
-        padding-top: env(safe-area-inset-top, 0px);
+        position: fixed;
+        inset: 0;
+        height: auto;
+        padding-top: var(--safe-top);
         padding-bottom: 0;
+        padding-left: var(--safe-left);
+        padding-right: var(--safe-right);
+    }
+
+    /* The bottom inset is reserved by the last row rather than by #app, so
+       the home-indicator strip is painted panel-colored and continuous with
+       the status line above it instead of reading as a dead band below the
+       app (the complaint that 37d44e55d was answering). Only the text moves
+       up; nothing is cropped. */
+    .console-footer {
+        height: calc(24px + var(--safe-bottom));
+        padding-bottom: var(--safe-bottom);
     }
 }
 
@@ -2024,6 +2084,11 @@ body.split-dragging * {
 
 .docs-status.partial { color: var(--amber); }
 
+/* Desktop: the close control is the plain glyph it has always been. The
+   chevron and label only exist for the phone sheet (see the <=768px block). */
+.docs-close-chevron,
+.docs-close-label { display: none; }
+
 /* site.css styles the bare `nav` selector as the site's fixed header bar, and
  * a guide fragment legitimately contains <nav class="guide-toc"> for its
  * in-body Contents box. Unstyled, that box tears itself out of the article and
@@ -2215,15 +2280,49 @@ body.split-dragging * {
    behind the toolbar toggle, since 260px of tree plus an article does not fit. */
 @media (max-width: 768px) {
     .docs-overlay { padding: 0; }
-    .docs-shell { border: none; border-radius: 0; }
+    .docs-shell { border: none; border-radius: 0; position: relative; }
+
+    /* The pane is full-bleed here, and `.overlay` is position:fixed, so it
+       escapes the safe-area padding #app reserves: without these the 44px
+       topbar sits at viewport y 0-44, entirely inside a notched phone's 59px
+       status-bar inset. Every control that leaves the pane lives in that bar
+       -- the close button, the Contents toggle, and search -- so the whole row
+       disappearing under the clock is why a reader gets into a doc and cannot
+       get out. Pad the bar rather than the shell so its background still
+       paints under the status bar.
+
+       The bars size to their content here (`height: auto` + a min-height)
+       rather than to a literal: once an inset and a 1px border share a
+       border-box with a 44px control, a hard-coded height is off by the
+       border and the control pokes out of the bar. */
+    .docs-topbar {
+        height: auto;
+        /* 48, not the desktop 44: the bar has to hold a 44px tap target and a
+           1px border, and 4px of article height is a fair price for an exit
+           control a thumb can actually land on. */
+        min-height: calc(48px + var(--safe-top));
+        padding-top: var(--safe-top);
+    }
+    .docs-footer {
+        height: auto;
+        min-height: calc(30px + var(--safe-bottom));
+        padding-bottom: var(--safe-bottom);
+    }
     /* Shown, the nav floats over the article rather than splitting a phone's
        width in two. It starts collapsed here -- openDocsPane() seeds
        docsNavCollapsed from the same breakpoint -- so a tap on Docs lands on
-       the page, not on a table of contents. */
+       the page, not on a table of contents.
+
+       It is anchored to .docs-body, not to the shell: pinned to the body's
+       own box it is exactly the article's area with no arithmetic, where
+       against the shell it had to restate the topbar and footer heights --
+       and those now carry the safe-area insets, so the restatement would have
+       to track them too. */
+    .docs-body { position: relative; }
     .docs-nav {
         position: absolute;
-        top: 44px;
-        bottom: 30px;
+        top: 0;
+        bottom: 0;
         left: 0;
         width: 82%;
         max-width: 320px;
@@ -2234,6 +2333,39 @@ body.split-dragging * {
     .docs-brand { display: none; }
     .docs-status { display: none; }
     .docs-load-btn { opacity: 1; }
+
+    /* Leading edge, labeled, and a full 44px tall: the way out of a
+       full-screen sheet has to be where a reader looks for it and big enough
+       to hit. At 28px in a trailing corner it was neither -- and until the
+       inset fix above it was not on screen at all. */
+    .docs-topbar .btn-close {
+        order: -1;
+        width: auto;
+        min-width: 44px;
+        height: 44px;
+        padding: 0 8px 0 4px;
+        gap: 1px;
+        font-size: 15px;
+        color: var(--gold);
+    }
+    .docs-close-chevron {
+        display: block;
+        font-size: 22px;
+        line-height: 1;
+    }
+    .docs-close-label {
+        display: block;
+        font-family: var(--font-family);
+        font-size: 14px;
+    }
+    .docs-close-x { display: none; }
+
+    /* Same reasoning for the only other control in the bar: on a phone the
+       toggle is the nav's sole opener, and 24px is not a tap target. */
+    .docs-topbar .docs-nav-toggle {
+        height: 40px;
+        min-width: 40px;
+    }
 }
 
 @media (min-width: 769px) {
