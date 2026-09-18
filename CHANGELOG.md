@@ -2,6 +2,68 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.49.3] -- 2026-09-18
+
+### Fixed
+
+- **A session endpoint passed to a parameter declaring a different protocol is
+  now rejected** -- the one mismatch session types exist to catch. `type_eq`
+  had no `TY_SESSION` case, and the saturated positional argument check
+  consulted it only for structs and ADTs, matching everything else on
+  `TypeKind` alone; every endpoint has kind `TY_SESSION`, so the protocol was
+  never compared no matter what `type_eq` answered. Multi-party `Role`
+  endpoints had the identical hole (`Role[Ping, A]` compared equal to
+  `Role[Ping, B]`). Both are compared now, and the diagnostic names the full
+  types -- `expected Session[Close], got Session[Send[int, Close]]` -- instead
+  of `Session[?]`. Anything unrecognised (an inference hole, an unresolved
+  tyvar, a type past the comparison's fixed bounds) still compares equal, so
+  the fix cannot reject code it does not understand. Two fixtures that had
+  swapped their two endpoints and compiled only because of this bug are fixed.
+- **An installed Try Turmeric notices and applies a new build.** The app had no
+  update path at all -- `register()` on `load`, nothing else. A standalone web
+  app relaunched from the app switcher is resumed, not navigated, so on the one
+  platform where this matters the update check never ran; that is why closing
+  and reopening it could not have helped. It now asks on every foreground, and
+  a `controllerchange` on a load that started controlled re-navigates once.
+  "Force update" navigates rather than calling `location.reload()`, which
+  WebKit can answer out of its own page cache -- the same HTML naming the same
+  hashed assets, while the UI said "Updating...". The overflow menu names the
+  build actually running, read from the live service-worker cache key rather
+  than a compiled-in constant.
+- **The black band at the bottom of the installed iOS app is gone.** The
+  safe-area tokens were gated on `(display-mode: standalone), (display-mode:
+  fullscreen)` but the pinned shell that consumes them on `standalone` alone --
+  and iOS reports `fullscreen` for a home-screen app with a black-translucent
+  status bar, so the shell block never matched. `#app` kept `height: 100dvh`,
+  which resolves to the safe viewport, landing 93 CSS px short of the
+  `viewport-fit=cover` viewport and painting the shortfall through as the band.
+  Both gates are one `html.pwa` class now, set before first paint, so they
+  cannot drift apart again; `site-nav` / `.footer` hiding lived in that same
+  dead block and applies too.
+- **The service-worker kill-switch works, and can be armed at deploy time.**
+  `web/public/sw-kill.js` had never been run: `activate` did its work in an
+  `async` listener with no `event.waitUntil()`, so the browser was free to
+  terminate the worker before a single cache was deleted; `clients.claim()` was
+  not awaited; and already-open pages were left alone, which was the move that
+  was already not working for a stuck reader. Reloading them unconditionally
+  turned out to be an infinite reload loop while the file is deployed at
+  `/sw.js`, now guarded by a `swkill` URL marker. Arming is
+  `TUR_SW_KILL=1 npm run deploy`, disarming is an ordinary deploy, so the tree
+  is never left in the dangerous state. Procedure:
+  `docs/guides/pwa-recovery-runbook.md`.
+
+### Changed
+
+- **A REPL or playground turn resolves only its own refinement crossings.**
+  `refine_resolve_call_sites` walked the whole `refine_call_sites` array, which
+  under a session is state nothing cleared -- so every turn re-resolved every
+  crossing collected by every earlier turn, minting a fresh undischarged
+  obligation each time (collection does not deduplicate) and re-emitting
+  TUR-W0372 on every later turn for a crossing with no runtime backstop or
+  under `--strict-refine`. Measured on the libturi wasm preload, 60 turns each
+  adding one crossing: 1830 obligations down to 60; turns 400-439 went 48.5 ms
+  to 0.23 ms each. A whole-program compile is untouched.
+
 ## [0.49.2] -- 2026-09-17
 
 ### Fixed

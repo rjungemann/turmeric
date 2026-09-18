@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.49.2` -- Diagnoses a sweet-exp `$` inside brackets (TUR-E0332) instead of silently interning it as a symbol, reserves the iOS safe area in every Try Turmeric overlay so the docs pane's Back control is reachable in the installed PWA, and makes `tur run docs` about 3x faster.
+**Latest release:** `v0.49.3` -- Rejects a session endpoint whose protocol does not match the parameter it is passed to (the mismatch session types exist to catch), gives an installed Try Turmeric a real update path so it can no longer sit builds behind, and stops a REPL session from re-resolving every earlier turn's refinement crossings.
 
 ## What
 
