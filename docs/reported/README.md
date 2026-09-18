@@ -2021,6 +2021,12 @@ the time.
 | [compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type](compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type.md) | low-medium | A compiled `(defdata Option ...)` re-elaborates over the stdlib's filled `Option` stub, and the errors are blamed on `stdlib/option.tur`. `defstruct` has the guard for this; `defdata` never got one |
 | [web-examples-js-is-unused-and-stale](web-examples-js-is-unused-and-stale.md) | low | Nothing imports `web/examples.js` -- the dropdown reads `EXAMPLES` in `main.js` -- and 7 of its 11 examples fail on their first run. Reports have cited it as the playground's examples |
 
+## Found executing the sweet-exp fn/handle paren pass (filed 2026-09-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [sweet-dollar-inside-brackets-is-a-silent-symbol](sweet-dollar-inside-brackets-is-a-silent-symbol.md) | medium | A `$` rest-of-line marker inside `(...)`, `[...]` or `{...}` is neither rewritten nor diagnosed -- it survives into the AST as a bare `$` symbol, changing the form's shape with no error. The `bd == 0` guard at `src/compiler/reader.c:4266` correctly declines to rewrite it; what is missing is the diagnostic. The sharp edge of the rule that `fn`/`handle` keep traditional parens, since wrapping a body switches the indentation layer off and a `$` in it goes inert. Carries a follow-up task to sweep the guides for places `$` *should* be used |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

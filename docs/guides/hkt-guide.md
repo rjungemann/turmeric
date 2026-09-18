@@ -140,7 +140,7 @@ Call typeclass methods using the dot-dispatch syntax:
 ```sweet-exp
 ;; fmap over an Option
 let [opt __opt_some(5)]
-  .fmap(opt fn([x] {x * 2}))    ;; dispatches Functor.fmap
+  .fmap(opt (fn [x] {x * 2}))    ;; dispatches Functor.fmap
 ```
 
 > **Note**: Method dispatch on HKT containers uses the first-found instance as a
@@ -157,8 +157,8 @@ For reliability with multiple instances, call the implementation function direct
 ```
 
 ```sweet-exp
-__fmap_option(opt fn([x] {x * 2}))
-__bind_option(opt fn([x] __opt_some({x * 2})))
+__fmap_option(opt (fn [x] {x * 2}))
+__bind_option(opt (fn [x] __opt_some({x * 2})))
 ```
 
 ## Container Values at Runtime
@@ -282,7 +282,7 @@ defn main [] :int
 
     ;; Composition law: fmap (f . g) x = fmap f (fmap g x)
     let [opt __opt_some(5)
-         lhs __fmap_option(opt fn([x] times2(inc(x))))
+         lhs __fmap_option(opt (fn [x] times2(inc(x))))
          rhs __fmap_option(__fmap_option(opt inc) times2)]
       println(=(__opt_unwrap(lhs) __opt_unwrap(rhs)))  ;; true
     0
@@ -301,8 +301,8 @@ Use `bind` directly to chain monadic operations:
 
 ```sweet-exp
 ;; Sequence two Option computations
-let [step1  __bind_option(__opt_some(3) fn([x] __opt_some({x * 2})))  ;; step1 = some 6
-     result __bind_option(step1 fn([y] __opt_some({y + 1})))]         ;; result = some 7
+let [step1  __bind_option(__opt_some(3) (fn [x] __opt_some({x * 2})))  ;; step1 = some 6
+     result __bind_option(step1 (fn [y] __opt_some({y + 1})))]         ;; result = some 7
   println(__opt_unwrap(result))  ;; 7
 ```
 
@@ -317,7 +317,7 @@ The `do-m` macro provides monadic do-notation. It desugars to nested `.bind` cal
 
 ```sweet-exp
 ;; do-m(x ma1 y ma2 body) desugars to:
-;; .bind(ma1 fn([x] .bind(ma2 fn([y] body))))
+;; .bind(ma1 (fn [x] .bind(ma2 (fn [y] body))))
 ```
 
 Simple usage (single binding, no variable capture in body):
@@ -389,25 +389,25 @@ typeclass dispatch.
 ```sweet-exp
 ;; Non-capturing closure
 let [opt    __opt_some(10)
-     result .fmap(opt fn([x] {x * x}))]
+     result .fmap(opt (fn [x] {x * x}))]
   println(__opt_unwrap(result))  ;; 100
 
 ;; Capturing closure -- delta is captured from the enclosing scope
 let [delta  5
      opt    __opt_some(10)
-     result .fmap(opt fn([x] {x + delta}))]
+     result .fmap(opt (fn [x] {x + delta}))]
   println(__opt_unwrap(result))  ;; 15
 
 ;; Multi-capture
 let [a      2
      b      3
      opt    __opt_some(10)
-     result .fmap(opt fn([x] {*(x a) + b}))]
+     result .fmap(opt (fn [x] {*(x a) + b}))]
   println(__opt_unwrap(result))  ;; 23
 
 ;; Capturing closure through .bind
 let [scale 3
-     r     .bind(__opt_some(4) fn([x] __opt_some({x * scale})))]
+     r     .bind(__opt_some(4) (fn [x] __opt_some({x * scale})))]
   println(__opt_unwrap(r))  ;; 12
 ```
 
@@ -828,7 +828,7 @@ defn run-op [op :int] :int
 
 defn main [] :int
   let [prog calc-add(3 4)]
-    println(free-run(fn([op] let([_ prog] run-op(op))) prog))
+    println(free-run((fn [op] let([_ prog] run-op(op))) prog))
     0
 ```
 

@@ -62,8 +62,8 @@ A cloneable continuation can be resumed multiple times:
 ```sweet-exp
 ;; Surface syntax (sugar)
 cloneable-reset
-  fn []
-    body
+  (fn []
+    body)
 
 cloneable-shift [k]
   body
@@ -156,18 +156,18 @@ continuation`.
 ```sweet-exp
 ;; mzero -- the empty computation (no results)
 defn mzero [A] [] : (fn [] (Cons A))
-  fn []
-    :: tnil() (Cons A)
+  (fn []
+    (:: tnil() (Cons A)))
 
 ;; pure -- a computation with exactly one result
 defn pure [A] [x : A] : (fn [] (Cons A))
-  fn []
-    tcons(x tnil())
+  (fn []
+    tcons(x tnil()))
 
 ;; mplus -- choice: all of fs's results, then all of gs's
 defn mplus [A] [^fat fs : (fn [] (Cons A)) ^fat gs : (fn [] (Cons A))] : (fn [] (Cons A))
-  fn []
-    :: list-concat(fs() gs()) (Cons A)
+  (fn []
+    (:: list-concat(fs() gs()) (Cons A)))
 
 ;; flat-map over a typed cons list; f returns a list per element
 defn list-flat-map [A] [xs : (Cons A) ^fat f : (fn [A] (Cons A))] : (Cons A)
@@ -181,8 +181,8 @@ defn list-flat-map [A] [xs : (Cons A) ^fat f : (fn [A] (Cons A))] : (Cons A)
 
 ;; bind -- sequence: run xs, then f on each result, concatenating
 defn bind [A] [^fat xs : (fn [] (Cons A)) ^fat f : (fn [A] (Cons A))] : (fn [] (Cons A))
-  fn []
-    list-flat-map(xs() f)
+  (fn []
+    list-flat-map(xs() f))
 ```
 
 Driving it -- `mplus` offers both branches, `bind` maps over every result, and
@@ -223,18 +223,18 @@ defn print-all [A] [xs : (Cons A) ^fat p : (fn [A] void)] : void
       print-all((:: (ttail xs) (Cons A)) p)
 
 print-all((mplus(pure(1) pure(2)))
-         fn([x : int] println(x)))
+         (fn [x : int] println(x)))
 ;; => 1
 ;; => 2
 
 print-all((bind(mplus(pure(1) pure(2))
-                  fn([x : int] tcons({x * 10} tnil()))))
-         fn([x : int] println(x)))
+                  (fn [x : int] tcons({x * 10} tnil()))))
+         (fn [x : int] println(x)))
 ;; => 10
 ;; => 20
 
 print-all((mplus(pure(7.1) pure(2.5)))
-         fn([x : float] println(x)))
+         (fn [x : float] println(x)))
 ;; => 7.1
 ;; => 2.5
 ```
@@ -294,7 +294,7 @@ defn <|> [parseA parseB input]
 ;; Sequence: parseA then parseB
 defn >> [parseA parseB input]
   bind
-    fn [rest] parseB(rest)
+    (fn [rest] parseB(rest))
     parseA(input)
 
 ;; Grammar:
@@ -355,10 +355,10 @@ defn parento [p : Term c : Term] : (Goal int)
 
 ;;; grandparento -- some m is g's child and c's parent.
 defn grandparento [g : Term c : Term] : (Goal int)
-  fresh(fn([m] conjoined(parento(g m) parento(m c))))
+  fresh((fn [m] conjoined(parento(g m) parento(m c))))
 
 ;; Who are bart's grandparents?  The fresh variable is query variable 0.
-run-logic(10 fresh(fn([g] grandparento(g term-int(2)))))
+run-logic(10 fresh((fn [g] grandparento(g term-int(2)))))
 ```
 
 `run-logic n goal` returns a lazy `Stream` of at most `n` substitutions; each
@@ -411,19 +411,19 @@ step per pull:
 defn appendo [l : Term s : Term out : Term] : (Goal int)
   disjoined
     conjoined(lequal(l term-nil()) lequal(s out))
-    fresh(fn([a]
-      fresh(fn([d]
-        fresh(fn([res]
+    fresh((fn [a]
+      fresh((fn [d]
+        fresh((fn [res]
           conjoined(lequal(l term-pair(a d))
             conjoined(lequal(out term-pair(a res))
                        zzz(appendo(d s res))))))))))
 
 ;; forwards:  (1 2) ++ (3 4) = ?          -> (1 2 3 4)
-run-logic(5 fresh(fn([out] appendo(list2(1 2) list2(3 4) out))))
+run-logic(5 fresh((fn [out] appendo(list2(1 2) list2(3 4) out))))
 ;; backwards: ? ++ (3 4) = (1 2 3 4)      -> (1 2)
-run-logic(5 fresh(fn([l] appendo(l list2(3 4) list4(1 2 3 4)))))
+run-logic(5 fresh((fn [l] appendo(l list2(3 4) list4(1 2 3 4)))))
 ;; both unknown: every split of (1 2 3)   -> () ++ (1 2 3), (1) ++ (2 3), ...
-run-logic(10 fresh(fn([l] fresh(fn([s] appendo(l s list3(1 2 3)))))))
+run-logic(10 fresh((fn [l] fresh((fn [s] appendo(l s list3(1 2 3)))))))
 ```
 
 `disjoined` interleaves, so a relation with infinitely many solutions still
@@ -478,10 +478,10 @@ defn sudoku [grid]
   defn all-different [xs]
     ;; Constraint: all values in xs must be distinct
     bind
-      fn [vs]
-        if distinct?(vs)
+      (fn [vs]
+        (if distinct?(vs)
           return(vs)
-          mzero
+          mzero))
       map-backtrack(choose-domain xs)
 
   ;; Run constraints: rows, columns, 3x3 boxes all distinct
@@ -514,9 +514,9 @@ Turmeric's `ref<T>` assumes linear consumption (move semantics). Cloneable conti
 ```sweet-exp
 ;; ERROR: re-executing code will consume the ref twice
 cloneable-reset
-  fn []
-    let [r ref(42)]
-      choice-point([1 2])  ; captures r; next backtrack tries to use r again
+  (fn []
+    (let [r ref(42)]
+      choice-point([1 2])))  ; captures r; next backtrack tries to use r again
 ```
 
 **Solution:** Capture immutable data or use `rc<T>` for shared ownership:
@@ -538,15 +538,15 @@ cloneable-reset
 ```sweet-exp
 ;; OK: captured value is immutable
 cloneable-reset
-  fn []
-    let [x 42]  ; immutable
-      choice-point([1 2])
+  (fn []
+    (let [x 42]  ; immutable
+      choice-point([1 2])))
 
 ;; OK: shared ownership doesn't consume on re-entry
 cloneable-reset
-  fn []
-    let [r rc(42)]
-      choice-point([1 2])
+  (fn []
+    (let [r rc(42)]
+      choice-point([1 2])))
 ```
 
 ### Defer and Cloneable Continuations
@@ -568,11 +568,11 @@ When a cloneable continuation captures state across a `defer` boundary, each clo
 ;; When backtracking re-enters this block,
 ;; the file is re-opened in the cloned continuation
 cloneable-reset
-  fn []
-    defer-with-close open-file("data.txt")
-      fn [f]
-        let [data read(f)]
-          choice-point(parse(data))
+  (fn []
+    (defer-with-close open-file("data.txt")
+      (fn [f]
+        (let [data read(f)]
+          choice-point(parse(data))))))
 ```
 
 This is safe but can be expensive. Prefer immutable snapshots where possible.
@@ -629,7 +629,7 @@ succeed()              ; always succeeds, one solution
 fail()                 ; always fails, zero solutions
 conjoined(g1 g2)       ; both goals must hold
 disjoined(g1 g2)       ; either goal may hold
-fresh(fn([x] goal))    ; introduce a new logic variable
+fresh((fn [x] goal))    ; introduce a new logic variable
 ```
 
 ### Running a query
@@ -694,7 +694,7 @@ defn inner-goal [x : Term y : Term] : (Goal int)
   conjoined(lequal(x term-int(10)) lequal(y term-int(20)))
 
 defn main [] : int
-  let [goal    fresh(fn([x] fresh(fn([y] inner-goal(x y)))))
+  let [goal    fresh((fn [x] fresh((fn [y] inner-goal(x y)))))
        results run-logic(1 goal)
        subs    first-state(results)]
     println $ term-int-val $ logic-walk term-var(0) subs      ; => 10

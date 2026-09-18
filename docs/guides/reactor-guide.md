@@ -47,8 +47,8 @@ import reactor
 defn main [] :int
   let [r reactor-new()]
     reactor-add-timer r 0
-      fn [id user] :nil
-        println "hello from timer"
+      (fn [id user] :nil
+        (println "hello from timer"))
       nil
     reactor-run r
     reactor-free r
@@ -93,15 +93,15 @@ defn start-listener [listen-fd :int stop-ch :ptr<void>] :nil
   let [r reactor-new()]
     ;; Accept connections: each READ event means accept() will not block.
     reactor-add-fd r listen-fd READ
-      fn [id events user]
-        let [client accept-conn(listen-fd)]
-          when {client not= -1}
-            pool-submit worker-pool client
+      (fn [id events user]
+        (let [client accept-conn(listen-fd)]
+          (when {client not= -1}
+            (pool-submit worker-pool client))))
       nil
     ;; Shutdown: one value on stop-ch ends the loop (one-shot).
     reactor-add-chan r stop-ch
-      fn [id v user] :nil
-        reactor-stop r
+      (fn [id v user] :nil
+        (reactor-stop r))
       nil
     ;; Block until stopped.
     reactor-run r
@@ -148,8 +148,8 @@ defn run-with-stop [stop-ch :ptr<void>] :nil
 
     ;; Register one-shot shutdown watcher.
     reactor-add-chan r stop-ch
-      fn [id v user] :nil
-        reactor-stop r
+      (fn [id v user] :nil
+        (reactor-stop r))
       nil
 
     reactor-run r
@@ -177,10 +177,10 @@ persistent channel watcher, re-register from inside the callback:
 ```sweet-exp
 defn watch-chan-loop [^borrow r :Reactor ch :ptr<void>] :nil
   reactor-add-chan r ch
-    fn [id v user] :nil
-      handle-message v
+    (fn [id v user] :nil
+      (handle-message v)
       ;; Re-register to watch the next value.
-      watch-chan-loop r ch
+      (watch-chan-loop r ch))
     nil
 ```
 

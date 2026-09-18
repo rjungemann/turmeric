@@ -39,7 +39,7 @@ load "stdlib/chan.tur"
 
 defn main [] :int
   let [h httpd-new(8080
-           fn([conn :ptr<void>] :nil
+           (fn [conn :ptr<void>] :nil
              httpd-resp-status!(conn 200)
              httpd-resp-body!(conn "Hello, world!")))]
     httpd-run(h)
@@ -67,7 +67,7 @@ as a handler -- wrap it:
 ```sweet-exp
 let [_ 0
      h httpd-new(8080
-         fn([conn :ptr<void>] :nil
+         (fn [conn :ptr<void>] :nil
            handle-request(conn _)))]
   ...
 ```
@@ -146,7 +146,7 @@ let [r router-new()]
   defroute r "GET"  "/users/:id"  user-handler
   defroute r "POST" "/users"      create-user-handler
   let [h httpd-new(8080
-           fn([conn :ptr<void>] :nil
+           (fn [conn :ptr<void>] :nil
              router-dispatch(r conn)))]
     httpd-run(h)
     router-free(r)
@@ -180,10 +180,10 @@ machinery:
 ```
 ```sweet-exp
 defn log-mw [next :int]
-  fn [conn :ptr<void>] :nil
+  (fn [conn :ptr<void>] :nil
     println(httpd-req-path(conn))
     httpd-call(next conn)
-    println-status(httpd-resp-status-get(conn))
+    println-status(httpd-resp-status-get(conn)))
 
 let [base (fn [conn :ptr<void>] :nil
             router-dispatch(r conn))
@@ -257,7 +257,7 @@ fd -- see [httpd-tls-guide.md](httpd-tls-guide.md).
 ```sweet-exp
 let [donech chan-new(1)
      h      httpd-new(0
-              fn([conn :ptr<void>] :nil
+              (fn [conn :ptr<void>] :nil
                 httpd-resp-status!(conn 200)
                 httpd-resp-body!(conn "ok")
                 chan-send(donech 1)))

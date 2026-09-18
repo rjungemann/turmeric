@@ -36,9 +36,9 @@ is `async`/`await` (a future-backed spawn):
 ;; Spawn a new thread; returns a future
 def fut
   async
-    fn []
+    (fn []
       println("Hello from thread!")
-      42
+      42)
 
 ;; Block until the thread completes and get the result
 println(await(fut))  ; prints 42
@@ -339,7 +339,7 @@ def p promise-new()
 def f p
 
 ;; Producer thread fulfills the promise
-async(fn([] promise-fulfill(p 42)))
+async((fn [] promise-fulfill(p 42)))
 
 ;; Consumer blocks on the future
 def result future-get(f)
@@ -482,10 +482,10 @@ def ch chan-new(8)
 
 ;; Producer thread
 async
-  fn []
+  (fn []
     chan-send(ch 1)
     chan-send(ch 2)
-    chan-send(ch 3)
+    chan-send(ch 3))
 
 ;; Consumer
 println(chan-recv(ch))  ; => 1
@@ -643,10 +643,10 @@ def s sem-new(1)
 def sem sem-new(3)
 
 async
-  fn []
+  (fn []
     sem-acquire(sem)
     do-work()
-    sem-release(sem)
+    sem-release(sem))
 ```
 
 | Function | Notes |
@@ -836,14 +836,14 @@ Cancellation is **cooperative** -- tasks must periodically check
 def g task-group-new()
 
 task-group-spawn g
-  fn []
+  (fn []
     println("worker A")
-    task-group-task-done(g)
+    task-group-task-done(g))
 
 task-group-spawn g
-  fn []
+  (fn []
     println("worker B")
-    task-group-task-done(g)
+    task-group-task-done(g))
 
 task-group-wait(g)
 task-group-free(g)
@@ -876,10 +876,10 @@ task-group-free(g)
 def g task-group-new()
 
 task-group-spawn g
-  fn []
-    while not(task-group-should-exit?(g))
-      do-work()
-    task-group-task-done(g)
+  (fn []
+    (while not(task-group-should-exit?(g))
+      do-work())
+    task-group-task-done(g))
 
 ;; Cancel from another thread or the parent
 task-group-cancel(g)
@@ -1040,10 +1040,10 @@ def ch chan-new(16)
 
 ;; Producer
 async
-  fn []
-    for-each items
-      fn [item] chan-send(ch item)
-    chan-send(ch :done)
+  (fn []
+    (for-each items
+      (fn [item] chan-send(ch item)))
+    chan-send(ch :done))
 
 ;; Consumer
 let loop []
@@ -1073,10 +1073,10 @@ chan-free(ch)
 def counter atomic-new(0)
 
 for-each range(10)
-  fn [i]
-    async
-      fn []
-        atomic-add!(counter 1)
+  (fn [i]
+    (async
+      (fn []
+        atomic-add!(counter 1))))
 
 ;; ... after joining the workers ...
 println(atomic-load(counter))  ; => 10
@@ -1141,12 +1141,12 @@ rendezvous needs to compose with other transactional state.
 def g task-group-new()
 task-group-with-timeout g 10000
   for-each tasks
-    fn [task]
-      task-group-spawn g
-        fn []
-          when not(task-group-should-exit?(g))
-            run-task(task)
-          task-group-task-done(g)
+    (fn [task]
+      (task-group-spawn g
+        (fn []
+          (when not(task-group-should-exit?(g))
+            run-task(task))
+          task-group-task-done(g))))
 task-group-free(g)
 ```
 
@@ -1177,16 +1177,16 @@ def tp thread-pool-new(4)
 ;; Submit all tasks and collect futures
 def futures
   map items
-    fn [item]
-      thread-pool-submit(tp process-item item)
+    (fn [item]
+      thread-pool-submit(tp process-item item))
 
 ;; Await all results
 for-each futures
-  fn [fut]
-    let [r future-get(fut)]
-      if ok?(r)
+  (fn [fut]
+    (let [r future-get(fut)]
+      (if ok?(r)
         collect(ok-val(r))
-        log-error(err-val(r))
+        log-error(err-val(r)))))
 
 thread-pool-shutdown(tp)
 thread-pool-free(tp)

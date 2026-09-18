@@ -801,20 +801,17 @@ defn handle-render [obj]
     _ println("Unknown render type")
 
 defn game-loop [^state/GameState state]
-  handle
-    let [new-state update-state(state)]
+  (handle
+    (let [new-state update-state(state)]
       draw(new-state)
-      game-loop(new-state)
-    (Render [obj] k)
-      handle-render(obj)
-      resume(k)
+      game-loop(new-state))
+    ((Render [obj] k) (handle-render obj) (resume k)))
 
 defn main []
   init-window(800 600 "Turmeric Snake - Step 8")
   set-fps(10)
   let [initial-state state/init-state()]
-    handle
-      game-loop(initial-state)
+    (handle (game-loop initial-state))
   close-window()
 ```
 
@@ -904,7 +901,7 @@ defn segments-collide? [^Segment a ^Segment b] : bool
 defn snake-self-collision? [^Snake snake] : bool
   let [head vec-get(snake.segments 0)
        tail vec-rest(snake.segments)]
-    any?(fn([seg] segments-collide?(head seg)) tail)
+    any?((fn [seg] segments-collide?(head seg)) tail)
 
 defn snake-wall-collision? [^Snake snake ^int width ^int height] : bool
   let [head vec-get(snake.segments 0)]
@@ -990,27 +987,21 @@ defn update-state [^state/GameState s] : state/GameState
     state/GameState(new-snake s.width s.height)
 
 defn game-loop [^state/GameState state]
-  handle
-    let [new-state update-state(state)]
-      if state/check-collisions(new-state)
+  (handle
+    (let [new-state update-state(state)]
+      (if state/check-collisions(new-state)
         perform(Game-Over(0))
-        draw(new-state)
-      game-loop(new-state)
-    (Render [obj] k)
-      handle-render(obj)
-      resume(k)
-    (Game-Over [score] k)
-      println(concat("Game Over! Score: " itoa(score)))
-      resume(k)
+        draw(new-state))
+      game-loop(new-state))
+    ((Render [obj] k) (handle-render obj) (resume k))
+    ((Game-Over [score] k) (println (concat "Game Over! Score: " (itoa score))) (resume k)))
 
 defn main []
   init-window(800 600 "Turmeric Snake - Step 9")
   set-fps(10)
   let [initial-state state/init-state()]
-    handle
-      game-loop(initial-state)
-      (Game-Over [score] k)
-        close-window()
+    (handle (game-loop initial-state)
+      ((Game-Over [score] k) (close-window)))
   close-window()
 ```
 
@@ -1209,32 +1200,23 @@ defn handle-render [obj]
     _ println("Unknown render type")
 
 defn game-loop [^state/GameState state]
-  handle
-    let [new-state update-state(state)
-         collision-result state/check-collisions(new-state)]
-      match collision-result
-        true perform(Game-Over(new-state.score))
-        (state/GameState updated) game-loop(updated)
-        (_ (do
-              draw(new-state)
-              game-loop(new-state)))
-    (Render [obj] k)
-      handle-render(obj)
-      resume(k)
-    (Get-Time [] k)
-      resume(k 0.0)
-    (Game-Over [score] k)
-      println(concat("Game Over! Score: " itoa(score)))
-      resume(k)
+  (handle
+    (let [new-state update-state(state)
+          collision-result state/check-collisions(new-state)]
+      (match collision-result
+        (true perform(Game-Over(new-state.score)))
+        ((state/GameState updated) game-loop(updated))
+        (_ (do draw(new-state) game-loop(new-state)))))
+    ((Render [obj] k) (handle-render obj) (resume k))
+    ((Get-Time [] k) (resume k 0.0))
+    ((Game-Over [score] k) (println (concat "Game Over! Score: " (itoa score))) (resume k)))
 
 defn main []
   init-window(800 600 "Turmeric Snake - Step 10")
   set-fps(10)
   let [initial-state state/init-state()]
-    handle
-      game-loop(initial-state)
-      (Game-Over [score] k)
-        close-window()
+    (handle (game-loop initial-state)
+      ((Game-Over [score] k) (close-window)))
   close-window()
 ```
 
@@ -1304,37 +1286,32 @@ defn draw-game-over [^int score]
   draw-text(concat("GAME OVER: " itoa(score)) 250 250 40 255 255 255)
 
 defn game-loop [^state/GameState state]
-  handle
-    let [new-state update-state(state)
-         collision-result state/check-collisions(new-state)]
-      match collision-result
-        true perform(Game-Over(new-state.score))
-        (state/GameState updated) game-loop(updated)
-        (_ (do
-              draw(new-state)
-              game-loop(new-state)))
-    (Render [obj] k)
-      handle-render(obj)
-      resume(k)
-    (Get-Time [] k)
-      resume(k 0.0)
-    (Game-Over [score] k)
+  (handle
+    (let [new-state update-state(state)
+          collision-result state/check-collisions(new-state)]
+      (match collision-result
+        (true perform(Game-Over(new-state.score)))
+        ((state/GameState updated) game-loop(updated))
+        (_ (do draw(new-state) game-loop(new-state)))))
+    ((Render [obj] k) (handle-render obj) (resume k))
+    ((Get-Time [] k) (resume k 0.0))
+    ;; Paint the final score on its own frame, then continue.
+    ((Game-Over [score] k)
       begin-drawing()
       clear-background(0 0 0)
       draw-game-over(score)
       end-drawing()
       ;; Wait a bit before exiting
-      resume(k)
+      resume(k)))
 
 defn main []
   init-window(800 600 "Turmeric Snake - Step 11")
   set-fps(10)
   let [initial-state state/init-state()]
-    handle
-      game-loop(initial-state)
-      (Game-Over [score] k)
-        ;; Sleep for a moment so player sees game over
-        ;; Then exit
+    (handle (game-loop initial-state)
+      ;; Sleep for a moment so player sees game over
+      ;; Then exit
+      (Game-Over [score] k))
   close-window()
 ```
 
@@ -1375,14 +1352,15 @@ defn main []
   defer(close-window())
   set-fps(10)
   let [initial-state state/init-state()]
-    handle
-      game-loop(initial-state)
-      (Game-Over [score] k)
+    (handle (game-loop initial-state)
+      ;; Paint the final score; the window itself is closed by defer.
+      ((Game-Over [score] k)
         begin-drawing()
         clear-background(0 0 0)
         draw-game-over(score)
         end-drawing()
         ;; defer will call close-window when we exit this scope
+        ))
 ```
 
 **Turmeric feature:**
@@ -1472,28 +1450,23 @@ defn update-state [^state/GameState s ^float dt] : state/GameState
     state/GameState(update-snake(s.snake dt) s.food s.score s.width s.height)
 
 defn game-loop [^state/GameState state]
-  handle
-    let [dt perform(Get-Time())
-         new-state update-state(state dt)
-         collision-result state/check-collisions(new-state)]
-      match collision-result
-        true perform(Game-Over(new-state.score))
-        (state/GameState updated) game-loop(updated)
-        (_ (do
-              draw(new-state)
-              game-loop(new-state)))
-    (Render [obj] k)
-      handle-render(obj)
-      resume(k)
-    (Get-Time [] k)
-      let [time get-frame-time()]
-        resume(k time)
-    (Game-Over [score] k)
+  (handle
+    (let [dt perform(Get-Time())
+          new-state update-state(state dt)
+          collision-result state/check-collisions(new-state)]
+      (match collision-result
+        (true perform(Game-Over(new-state.score)))
+        ((state/GameState updated) game-loop(updated))
+        (_ (do draw(new-state) game-loop(new-state)))))
+    ((Render [obj] k) (handle-render obj) (resume k))
+    ((Get-Time [] k) (let [time (get-frame-time)] (resume k time)))
+    ;; Paint the final score on its own frame, then continue.
+    ((Game-Over [score] k)
       begin-drawing()
       clear-background(0 0 0)
       draw-game-over(score)
       end-drawing()
-      resume(k)
+      resume(k)))
 ```
 
 ### Score Display
@@ -1569,21 +1542,19 @@ defn handle-render [obj]
 
 ;; Update game-loop to draw score
 defn game-loop [^state/GameState state]
-  handle
-    let [dt perform(Get-Time())
-         new-state update-state(state dt)
-         collision-result state/check-collisions(new-state)]
-      match collision-result
-        true perform(Game-Over(new-state.score))
-        (state/GameState updated) game-loop(updated)
+  (handle
+    (let [dt perform(Get-Time())
+          new-state update-state(state dt)
+          collision-result state/check-collisions(new-state)]
+      (match collision-result
+        (true perform(Game-Over(new-state.score)))
+        ((state/GameState updated) game-loop(updated))
         (_ (do
               draw(new-state)
               perform(Draw-Text(concat("Score: " itoa(new-state.score)) 10 10))
-              game-loop(new-state)))
+              game-loop(new-state)))))
     ;; ... existing handlers ...
-    (Draw-Text [text x y] k)
-      draw-text(text x y 20 255 255 255)
-      resume(k)
+    ((Draw-Text [text x y] k) (draw-text text x y 20 255 255 255) (resume k)))
 ```
 
 ### Grid-Based Movement
@@ -1756,50 +1727,44 @@ defn draw-game-over [^int score]
     draw-text("Press ESC to quit" 280 320 20 255 255 255)
 
 defn game-loop [^state/GameState state]
-  handle
-    let [dt perform(Get-Time())
-         dir (cond
-               (is-key-down KEY_RIGHT) 1
-               (is-key-down KEY_LEFT) 3
-               (is-key-down KEY_UP) 0
-               (is-key-down KEY_DOWN) 2
-               else state.snake.direction)
-         new-snake state/update-snake(state.snake dir dt)
-         new-state state/GameState(new-snake state.food state.score state.width state.height)
-         collision-result state/check-collisions(new-state)]
-      match collision-result
-        true perform(Game-Over(new-state.score))
-        (state/GameState updated) game-loop(updated)
-        _ (do
+  (handle
+    (let [dt perform(Get-Time())
+          dir (cond
+                (is-key-down KEY_RIGHT) 1
+                (is-key-down KEY_LEFT) 3
+                (is-key-down KEY_UP) 0
+                (is-key-down KEY_DOWN) 2
+                else state.snake.direction)
+          new-snake state/update-snake(state.snake dir dt)
+          new-state state/GameState(new-snake state.food state.score state.width state.height)
+          collision-result state/check-collisions(new-state)]
+      (match collision-result
+        (true perform(Game-Over(new-state.score)))
+        ((state/GameState updated) game-loop(updated))
+        (_ (do
              draw(new-state)
              perform(Draw-Text(concat("Score: " itoa(new-state.score)) 10 10))
-             game-loop(new-state))
-    (Render [obj] k)
-      handle-render(obj)
-      resume(k)
-    (Draw-Text [text x y] k)
-      draw-text(text x y 20 255 255 255)
-      resume(k)
-    (Get-Time [] k)
-      let [time get-frame-time()]
-        resume(k time)
-    (Game-Over [score] k)
+             game-loop(new-state)))))
+    ((Render [obj] k) (handle-render obj) (resume k))
+    ((Draw-Text [text x y] k) (draw-text text x y 20 255 255 255) (resume k))
+    ((Get-Time [] k) (let [time (get-frame-time)] (resume k time)))
+    ;; Paint the final score, hold the frame, then continue.
+    ((Game-Over [score] k)
       begin-drawing()
       clear-background(0 0 0)
       draw-game-over(score)
       end-drawing()
       ;; Wait for ESC to exit
-      while not(is-key-down(KEY_ESCAPE))
-      resume(k)
+      (while not(is-key-down(KEY_ESCAPE)))
+      resume(k)))
 
 defn main []
   init-window(800 600 "Turmeric Snake")
   defer(close-window())
   set-fps(60)
   let [initial-state state/init-state()]
-    handle
-      game-loop(initial-state)
-      (Game-Over [score] k)
+    (handle (game-loop initial-state)
+      (Game-Over [score] k))
 ```
 
 ---

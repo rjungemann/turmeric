@@ -31,10 +31,11 @@ Every middleware in this guide has the shape
 ```sweet-exp
 defn mw-foo [next :int] :ptr<void>
   let [_n next ...]
-    fn [c :ptr<void>] :nil
+    (fn [c :ptr<void>] :nil
       ;; pre-processing here ...
       httpd-call(_n c)
       ;; post-processing here ...
+      )
 ```
 
 Pre-processing runs before `(httpd-call _n c)`; post-processing runs
@@ -228,7 +229,7 @@ your program.
 ```sweet-exp
 load "stdlib/httpd-compress.tur"
 
-let [base     fn([c :ptr<void>] :nil
+let [base     (fn [c :ptr<void>] :nil
                  httpd-resp-status!(c 200)
                  httpd-resp-body!(c large-html))
      composed compose-middleware(base mw-log mw-compress)]
@@ -269,7 +270,7 @@ Error` instead of a dropped connection.
 ```
 
 ```sweet-exp
-let [base     fn([c :ptr<void>] :nil
+let [base     (fn [c :ptr<void>] :nil
                  httpd-resp-body!(c render-page(c)))
      composed compose-middleware(base mw-recover mw-log)]
   httpd-new(0 composed)
@@ -358,9 +359,9 @@ defn mw-add-header [name :cstr value :cstr next :int] :ptr<void>
   let [_n next
        _k name
        _v value]
-    fn [c :ptr<void>] :nil
+    (fn [c :ptr<void>] :nil
       httpd-call(_n c)
-      httpd-resp-header!(c _k _v)
+      httpd-resp-header!(c _k _v))
 ```
 
 Short-circuit by *not* calling `(httpd-call _n c)`:
@@ -379,12 +380,12 @@ Short-circuit by *not* calling `(httpd-call _n c)`:
 ```sweet-exp
 defn mw-require-https [next :int] :ptr<void>
   let [_n next]
-    fn [c :ptr<void>] :nil
-      if {1 = httpd-req-header?(c "X-Forwarded-Proto")}
+    (fn [c :ptr<void>] :nil
+      (if {1 = httpd-req-header?(c "X-Forwarded-Proto")}
         httpd-call(_n c)
-        do
+        (do
           httpd-resp-status!(c 400)
-          httpd-resp-body!(c "HTTPS required")
+          httpd-resp-body!(c "HTTPS required"))))
 ```
 
 Use request attrs to thread context downstream:
@@ -402,11 +403,11 @@ Use request attrs to thread context downstream:
 ```sweet-exp
 defn mw-request-id [next :int] :ptr<void>
   let [_n next]
-    fn [c :ptr<void>] :nil
-      let [id httpd-req-header(c "X-Request-Id")]
+    (fn [c :ptr<void>] :nil
+      (let [id httpd-req-header(c "X-Request-Id")]
         httpd-set-attr!(c "request_id" id)
         httpd-call(_n c)
-        httpd-resp-header!(c "X-Request-Id" httpd-req-attr(c "request_id"))
+        httpd-resp-header!(c "X-Request-Id" httpd-req-attr(c "request_id"))))
 ```
 
 ## Async interop

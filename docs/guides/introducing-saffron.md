@@ -338,7 +338,7 @@ concatenation -- it panics with `+: no operator for a cstr argument`.
 ```
 ```sweet-exp
 defn make-adder [n]
-  fn [x] {x + n}
+  (fn [x] {x + n})
 
 let [add7 make-adder(7)]
   add7(35)      ; => 42
@@ -361,7 +361,7 @@ defn apply-twice [f x]
   f(f(x))
 
 apply-twice(double 3)              ; => 12
-apply-twice(fn([n] {n + 1}) 10)    ; => 12
+apply-twice((fn [n] {n + 1}) 10)   ; => 12
 ```
 
 ### Vectors
@@ -381,12 +381,12 @@ heterogeneous. The Saffron prelude ships `vec-map`, `vec-filter` and
 ```
 ```sweet-exp
 defn sum [v]
-  vec-fold(v 0 fn([acc x] {acc + x}))
+  vec-fold(v 0 (fn [acc x] {acc + x}))
 
 sum([1 2 3 4])                                     ; => 10
 vec-len([1 "two" 3.5])                             ; => 3
 vec-get(vec-map([1 2 3] double) 2)                 ; => 6
-vec-len(vec-filter([1 2 3 4] fn([x] {x > 2})))     ; => 2
+vec-len(vec-filter([1 2 3 4] (fn [x] {x > 2})))    ; => 2
 ```
 
 `vec-filter` uses the same truthiness rule as `if`: only `nil` and `false`
@@ -657,14 +657,9 @@ defn work []
 ; => 42
 ```
 ```sweet-exp
-handle
-  work()
-  (Log [msg] k)
-  do
-    println(msg)
-    resume(k 0)
-  (Ask [] k)
-  resume(k 41)
+(handle (work)
+  (Log [msg] k) (do (println msg) (resume k 0))
+  (Ask [] k)    (resume k 41))
 ; prints:
 ; starting
 ; done
@@ -682,12 +677,9 @@ same function behaves differently, with no edit to `work`:
 ; => 2
 ```
 ```sweet-exp
-handle
-  work()
-  (Log [msg] k)
-  resume(k 0)
-  (Ask [] k)
-  resume(k 1)
+(handle (work)
+  (Log [msg] k) (resume k 0)
+  (Ask [] k)    (resume k 1))
 ; prints nothing
 ; => 2
 ```
@@ -764,12 +756,8 @@ defn survey [a b]
 
 defn main []
   println
-    handle
-      survey(Circle(2.5) Rect(3.5 4.0))
-      (Report [line] k)
-      do
-        println(line)
-        resume(k 0)
+    (handle (survey (Circle 2.5) (Rect 3.5 4.0))
+      (Report [line] k) (do (println line) (resume k 0)))
   0
 ```
 

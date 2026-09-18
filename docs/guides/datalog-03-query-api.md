@@ -81,7 +81,7 @@ A wildcard arm `_ false` handles mismatched constructors (e.g. comparing a
 
 ```sweet-exp
 defn q-av [a :cstr v :int]
-  fn([d]
+  (fn [d]
     and(cstr-eq?(datum-attr(d) cstr->int(a))
         value-eq?(datum-value(d) v)))
 ```
@@ -112,7 +112,7 @@ before a given transaction number:
 
 ```sweet-exp
 defn db-as-of [db :int as-of-tx :int] :ptr<void>
-  db-q(db fn([d] {datum-tx(d) <= as-of-tx}))
+  db-q(db (fn [d] {datum-tx(d) <= as-of-tx}))
 ```
 
 Example -- capture Alice's initial age, then update it and compare:
@@ -156,7 +156,7 @@ Pull collects every datum for a single entity:
 
 ```sweet-exp
 defn pull [db :int e :int] :ptr<void>
-  db-q(db fn([d] {datum-entity(d) = e}))
+  db-q(db (fn [d] {datum-entity(d) = e}))
 ```
 
 This is equivalent to `SELECT * FROM datums WHERE entity = e`. The result
@@ -351,7 +351,7 @@ could write:
 db-q(db
   q-and(
     q-av(":user/age" long-val(30))
-    q-not(fn([d] retracted?(db datum-entity(d) ":user/age" 999)))))
+    q-not((fn [d] retracted?(db datum-entity(d) ":user/age" 999)))))
 ```
 
 Combining `q-and`, `q-or`, `q-not`, `q-av`, and custom predicates gives you a

@@ -196,7 +196,7 @@ when {x < 0}
   (add5 10))    ; => 15
 ```
 ```sweet-exp
-let [add5 fn([x :int] :int {x + 5})]
+let [add5 (fn [x :int] :int {x + 5})]
   add5(10)    ; => 15
 ```
 
@@ -461,10 +461,136 @@ A few forms stay clearer in s-expression syntax even in a sweet-exp file:
 
 - **`import` / `export`** -- short enough that indentation adds nothing.
 - **`cons` lists** -- `(cons x (cons y 0))` scans better than nested neoteric.
+- **`fn` lambdas** -- always `(fn [x : int] : int {x * 10})`. See below.
+- **`handle` blocks** -- see below.
 - **Inline-C blocks** -- the ` ```c ``` ` fence is already special; keep the
   body as-is (the enclosing `defn` may still use sweet-exp form).
 - **Trivially short expressions** -- `(nil-value)`, `(ok-val r)`, and similar
   one-liners.
+
+### `fn` -- keep the parens
+
+A lambda is almost always an *argument* to something else, so the sweet forms
+bury the one delimiter that tells you where the lambda ends. Neoteric `fn(` in
+particular reads as a call to a function named `fn`:
+
+```sweet-exp
+; Hard to scan -- where does the lambda stop?
+over(px fn([v : int] : int {v * 10}) p)
+
+; Clear -- the lambda is visibly one argument of three
+over(px (fn [v : int] : int {v * 10}) p)
+```
+
+Curly-infix and neoteric still apply *inside* the body. Only the `fn` head keeps
+its parens.
+
+One consequence is worth stating outright, because it bites: **a `(...)` form
+switches the indentation layer off for everything inside it** -- indentation
+*and* `$`. Only delimiter-based syntax survives: s-expression calls, neoteric
+calls `f(x)`, and curly-infix `{a + b}`. Once a lambda is parenthesised, its
+body must be delimiter-complete:
+
+```sweet-exp
+; BROKEN -- `when` was relying on indentation the parens just took away, so
+; this parses as four flat elements: fn, [], when, {..}, perform(..)
+(fn []
+  when {read-tvar(x) < 10}
+    perform(Retry()))
+
+; Correct
+(fn []
+  (when {read-tvar(x) < 10}
+    perform(Retry())))
+```
+
+`$` is the trap with the worst failure mode, because it neither errors nor
+rewrites -- it simply survives into the AST as a bare `$` symbol:
+
+```sweet-exp
+; BROKEN -- parses as (fn [msg :cstr] :unit log/error $ (str "a" msg))
+(fn [msg : cstr] : unit
+  log/error $ str("a" msg))
+
+; Correct
+(fn [msg : cstr] : unit
+  log/error(str("a" msg)))
+```
+
+### `handle` -- keep the clause and its body on one line
+
+`handle` takes a *flat* argument list that pairs up two at a time:
+`(handle expr (Eff [p] k) body (Eff2 [p] k) body ...)`. Sweet-exp indentation
+gives every element its own line, which splits each clause from the body that
+answers it -- so the pairing, the only thing a reader needs, is exactly what the
+layout destroys:
+
+```sweet-exp
+; Bad -- which body belongs to which clause? Count lines and hope.
+println
+  handle compute()
+    (Add [x] k)
+    resume(k {x + 10})
+    (Mul [x] k)
+    resume(k {x * 2})
+```
+
+Write `handle` in traditional parens, one clause per line:
+
+```sweet-exp
+; Good -- the pairing is on the page
+println
+  (handle (compute)
+    (Add [x] k) (resume k {x + 10})   ; 3+10 = 13
+    (Mul [x] k) (resume k {x * 2}))   ; 4*2  =  8
+```
+
+When a clause body **shares the line with its clause**, write it in
+s-expression form. Curly-infix `{a + b}` stays; it is more readable for
+arithmetic and is legal in every dialect. Mixing neoteric into a packed
+one-liner makes it a two- or three-syntax hybrid that scans worse than either
+pure form:
+
+```sweet-exp
+; Bad -- neoteric, s-expr and a neoteric zero-arg call on one line
+(Log [msg] k) (do println(msg) (resume k nil-value()))
+
+; Good
+(Log [msg] k) (do (println msg) (resume k (nil-value)))
+```
+
+A **multi-line body** under a `;;` comment is ordinary code -- neoteric and
+curly-infix read fine there, exactly as in a `(fn ...)` body. The one-liner rule
+is about line density, not about banning neoteric inside `handle`:
+
+```sweet-exp
+(handle
+  (let [new-state update-state(state)]
+    draw(new-state)
+    game-loop(new-state))
+  ;; Render is forwarded to the backend, then the loop continues.
+  (Render [obj] k)
+    (do handle-render(obj)
+        (resume k)))
+```
+
+`match` has the same flat pair-up-two-at-a-time shape as `handle`, so it takes
+the same treatment: one pattern per line with the body it answers.
+
+When a body is too long to share the line, give the clause its own `;;` comment
+and indent the body under it -- punctuate the block rather than letting the
+clauses run together:
+
+```sweet-exp
+(handle (serve req)
+  ;; Log, then continue with the untouched request.
+  (Log [msg] k)
+    (do (println msg)
+        (resume k nil))
+  ;; A missing session is not fatal -- resume with the anonymous user.
+  (Session [] k)
+    (resume k (anonymous-user)))
+```
 
 ### Mixing styles
 
@@ -491,7 +617,7 @@ dialects. (Lifted from the quickstart so it stays honest.)
 ```
 ```sweet-exp
 defn make-adder [n :int]
-  fn [x :int] :int {x + n}
+  (fn [x :int] :int {x + n})
 
 let [add3 make-adder(3)
      add7 make-adder(7)]

@@ -423,7 +423,7 @@ aborting.
     (use (ok-val r))))
 ```
 ```sweet-exp
-let [r catch-unwind(fn([] :int risky()))]
+let [r catch-unwind((fn [] :int risky()))]
   if err?(r)
     recover()
     use(ok-val(r))

@@ -285,10 +285,9 @@ binding [*log-level* 0]   ; one override, deep stack covered automatically
 defeffect DbEffect query([sql :str] :str)
 
 defn run-tests [] :unit
-  handle
-    assert!(=(query("SELECT 1") "1"))
-    [(DbEffect.query sql k)
-     resume(k mock-db-exec(sql))]
+  (handle
+    (assert! (= (query "SELECT 1") "1"))
+    [(DbEffect.query sql k) (resume k (mock-db-exec sql))])
 ```
 
 ### Comparison

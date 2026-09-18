@@ -135,7 +135,7 @@ rest of the program from the `call/cc` site":
 ```sweet-exp
 ;; (k 41) abandons the pending (+ 100 ...); call/cc yields 41, so this is 42.
 defn t-capture [] : int
-  {1 + call/cc(fn([k] {100 + k(41)}))}
+  {1 + call/cc((fn [k] {100 + k(41)}))}
 ```
 
 This matches Scheme's top-level `call-with-current-continuation`, restricted
@@ -168,11 +168,11 @@ Reach for `escape` when you want to bail out of deep recursion with a value and
 ;; exit produces the value at the escape site, abandoning the rest.
 defn first-negative [xs :list<int>] :int
   escape
-    fn [exit]
-      for [x xs]
-        when <(x 0)
-          exit(x)   ; unwinds straight to the escape site with x
-      0            ; no negative found
+    (fn [exit]
+      (for [x xs]
+        (when <(x 0)
+          exit(x)))  ; unwinds straight to the escape site with x
+      0)             ; no negative found
 ```
 
 Where `shift`/`call/cc` is for splicing a captured slice back into a

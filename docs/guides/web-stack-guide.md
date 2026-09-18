@@ -460,7 +460,7 @@ defn auth-mw [ctx :int] :int
   if =(req-header(ctx "x-api-key") 0)
     some(status(401 text("Unauthorized")))
     none-value()
-tourist(3000 use!(auth-mw) get!("/private" fn([ctx] text("secret"))))
+tourist(3000 use!(auth-mw) get!("/private" (fn [ctx] text("secret"))))
 ```
 
 ### Static file serving
@@ -474,7 +474,7 @@ tourist(3000 use!(auth-mw) get!("/private" fn([ctx] text("secret"))))
 ```
 ```sweet-exp
 import tourist/static :refer [serve-static!]
-tourist(3000 serve-static!("/assets" "./public") get!("/" fn([ctx] html("<h1>Hello</h1>"))))
+tourist(3000 serve-static!("/assets" "./public") get!("/" (fn [ctx] html("<h1>Hello</h1>"))))
 ```
 
 `serve-static!` matches `GET /assets/**` paths and serves files from

@@ -36,15 +36,15 @@ defstruct Point :copy :heap [x : int y : int]
 
 defn point-x [] : (Lens Point int)
   lens
-    fn([p : Point] : int .x(p))
-    fn([nx : int p : Point] : Point make-struct(Point :x nx :y .y(p)))
+    (fn [p : Point] : int .x(p))
+    (fn [nx : int p : Point] : Point make-struct(Point :x nx :y .y(p)))
 
 defn main [] : int
   let [px point-x()
        p  make-struct(Point :x 3 :y 9)]
     println(view(px p))                                     ; 3
     println(.x(set(px 42 p)))                              ; 42
-    println(.x(over(px fn([v : int] : int {v * 10}) p)))   ; 30
+    println(.x(over(px (fn [v : int] : int {v * 10}) p)))   ; 30
   0
 ```
 
@@ -129,8 +129,8 @@ copyable whole types:
 ;; Line -> start:Point -> x:int
 defn line-start-x [] : (Lens Line int)
   lens
-    fn([l : Line] : int .x(.start(l)))
-    fn([nx : int l : Line] : Line
+    (fn [l : Line] : int .x(.start(l)))
+    (fn [nx : int l : Line] : Line
        make-struct(Line
          :start make-struct(Point :x nx :y .y(.start(l)))
          :end   .end(l)))

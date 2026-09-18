@@ -43,11 +43,10 @@ defeffect Read [] :str
 def name perform(Read())
 
 ;; Handle the effect
-handle
-  let [name perform(Read())]
-    println(str("Hello " name))
-  (Read [] k)
-  resume(k "World")
+(handle
+  (let [name (perform (Read))]
+    (println (str "Hello " name)))
+  (Read [] k) (resume k "World"))
 ```
 
 ### One-Shot Continuations
@@ -81,17 +80,11 @@ handler that declares it:
 defeffect Log [msg :cstr] :nil
 defeffect Counter [] :int
 
-handle
-  handle
-    do
-      perform(Log("tick"))
-      +(perform(Counter()) 1)
-    (Counter [] k)
-    resume(k 41)
-  (Log [msg] k)
-  do
-    println(msg)
-    resume(k nil)
+(handle
+  (handle
+    (do (perform (Log "tick")) {(perform (Counter)) + 1})
+    (Counter [] k) (resume k 41))
+  (Log [msg] k) (do (println msg) (resume k nil)))
 ;; prints "tick", evaluates to 42
 ```
 
@@ -191,14 +184,11 @@ Implement generators, early returns, or custom exception handling:
 ;; Generator: yield values one at a time
 defeffect Yield [v :int] :nil
 
-handle
-  do
-    perform(Yield(1))
-    perform(Yield(2))
-  (Yield [v] k)
-  do
-    println(v)
-    resume(k nil)
+(handle
+  (do
+    (perform (Yield 1))
+    (perform (Yield 2)))
+  (Yield [v] k) (do (println v) (resume k nil)))
 ```
 
 ### Dependency Injection
@@ -220,14 +210,12 @@ Mock I/O operations in tests:
 defeffect ReadFile [path :cstr] :str
 
 ;; Production
-handle code
-  ReadFile [path] k
-  resume(k read-file-real(path))
+(handle code
+  (ReadFile [path] k) (resume k (read-file-real path)))
 
 ;; Tests
-handle code
-  ReadFile [path] k
-  resume(k "mock data")
+(handle code
+  (ReadFile [path] k) (resume k "mock data"))
 ```
 
 ### Transactional Retry
@@ -247,13 +235,12 @@ Automatic conflict resolution (see [STM Tutorial](stm-tutorial.md)):
 ```sweet-exp
 defeffect Retry [] :nil
 
-handle
-  fn []
-    when {read-tvar(x) < 10}
-      perform(Retry())
+(handle
+  (fn []
+    (when {(read-tvar x) < 10}
+      (perform (Retry))))
   ;; Re-run transaction on conflict
-  (Retry [] k)
-  resume(k nil)
+  (Retry [] k) (resume k nil))
 ```
 
 ## Effect Rows (Typed Effects)
@@ -541,11 +528,11 @@ as a deprecated no-op.)
 ;; k aborts the pending (+ 100 ...) and returns 41 at the call/cc site; the
 ;; outer (+ 1 ...) makes 42 -- with no enclosing reset.
 defn answer [] : int
-  {1 + call/cc(fn([k] {100 + k(41)}))}   ; => 42
+  {1 + call/cc((fn [k] {100 + k(41)}))}   ; => 42
 
 ;; f that ignores k just returns its body value.
 defn plain [] : int
-  {1 + call/cc(fn([k] 10))}                ; => 11
+  {1 + call/cc((fn [k] 10))}                ; => 11
 ```
 
 **Undelimited vs. delimited.** This is the one thing `call/cc` adds over
@@ -575,10 +562,10 @@ reach -- use `shift`/`shift0` or `call/cc*` when you want delimited capture.
 ```sweet-exp
 defn first-positive [] : int
   escape
-    fn [k]
-      when {-3 > 0} k(-3)
-      when {7 > 0} k(7)     ; first positive: aborts here with 7
-      -1                     ; default if nothing matched
+    (fn [k]
+      (when {-3 > 0} k(-3))
+      (when {7 > 0} k(7))   ; first positive: aborts here with 7
+      -1)                   ; default if nothing matched
 ```
 
 **Typing.** `f` has type `cont<T> -> T`, where `T` is the prompt's answer type;
@@ -598,7 +585,7 @@ is `TUR-E0100` / `TUR-E0101`). Opt into exactly-once accounting with `^linear`:
 ```
 ```sweet-exp
 defn use-once [] : int
-  call/cc(fn([^linear k] k(42)))   ; k must be invoked exactly once
+  call/cc((fn [^linear k] k(42)))   ; k must be invoked exactly once
 ```
 
 For a **multi-shot**, cloneable/re-enterable continuation use `call/cc*` instead

@@ -83,11 +83,9 @@ defn lookup-port [key : cstr] #fx{Fail-Lookup Read-Config} : int
 
 defn main [] : int
   println
-    handle lookup-port("http.port")
-      (Fail-Lookup [] _)
-      8080
-      (Read-Config [k] c)
-      resume(c -1)
+    (handle (lookup-port "http.port")
+      (Fail-Lookup [] _)  8080
+      (Read-Config [k] c) (resume c -1))
   0
 ```
 
@@ -135,12 +133,12 @@ defn read-config [raw : int] #fx{Throw-Cfg} : int
 
 defn main [] : int
   println
-    handle read-config(-1)
+    (handle (read-config -1)
+      ;; Report what failed and where, then fall back to the default port.
       (Throw-Cfg [e] _)
-      do
-        println(.what(e))
-        println(.where(e))
-        8080
+        (do println(.what(e))
+            println(.where(e))
+            8080))
   0
 ```
 
@@ -182,17 +180,9 @@ defn counter-step [] #fx{Get Put} : nil
 
 defn main [] : int
   let [^mut s 0]
-    handle
-      do
-        counter-step()
-        counter-step()
-        counter-step()
-      (Get []  k)
-      resume(k s)
-      (Put [v] k)
-      do
-        set!(s v)
-        resume(k nil)
+    (handle (do (counter-step) (counter-step) (counter-step))
+      (Get []  k) (resume k s)
+      (Put [v] k) (do (set! s v) (resume k nil)))
     println(s)
   0
 ```
@@ -231,9 +221,8 @@ defn pair-sum [] #fx{Choose} : int
 
 defn main [] : int
   println
-    handle pair-sum()
-      (Choose [lo hi] ^multishot k)
-      {resume(k lo) + resume(k hi)}
+    (handle (pair-sum)
+      (Choose [lo hi] ^multishot k) {(resume k lo) + (resume k hi)})
   0
 ```
 
@@ -257,11 +246,12 @@ with a loop in the clause -- the direct expression of bounded nondeterminism:
 ```sweet-exp
 defn main [] : int
   println
-    handle {10 + perform(Choose(1 3))}
+    (handle {10 + perform(Choose(1 3))}
+      ;; Fold the continuation over [lo, hi] -- one full run per iteration.
       (Choose [lo hi] ^multishot k)
-      let [^mut a 0 ^mut i lo]
-        while {i <= hi} set!(a {a + resume(k i)}) set!(i {i + 1})
-        a
+        (let [^mut a 0 ^mut i lo]
+          (while {i <= hi} set!(a {a + resume(k i)}) set!(i {i + 1}))
+          a))
   0
 ```
 
@@ -310,9 +300,8 @@ defn pair-sum [] : int
 
 defn main [] : int
   println
-    handle pair-sum()
-      (ChooseE [f] ^multishot k)
-      f(k)
+    (handle (pair-sum)
+      (ChooseE [f] ^multishot k) (f k))
   0
 ```
 
@@ -357,13 +346,10 @@ defn digit [] #fx{Peek Advance Parse-Fail} : int
 
 defn main [] : int
   println
-    handle digit()
-      (Peek []       k)
-      resume(k 55)
-      (Advance []    k)
-      resume(k 0)
-      (Parse-Fail [] _)
-      -1
+    (handle (digit)
+      (Peek []       k) (resume k 55)
+      (Advance []    k) (resume k 0)
+      (Parse-Fail [] _) -1)
   0
 ```
 
@@ -606,7 +592,7 @@ picked, so a full `bind`-then-`pure` combinator is expressible:
 ```
 ```sweet-exp
 defn bind-then-pure [^m] [^Monad m ^Applicative m x : (m int)] : (m int)
-  bind(x fn([v] pure({v * 2})))
+  bind(x (fn [v] pure({v * 2})))
 ```
 
 Several constraints on one type constructor are fine, as above.

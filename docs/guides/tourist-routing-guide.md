@@ -121,7 +121,7 @@ defn api-routes []
 tourist 3000
   url-map!
     mount! "/api" api-routes()
-    mount! "/"    get!("/" fn([_] text("home")))
+    mount! "/"    get!("/" (fn [_] text("home")))
 ```
 
 A request for `GET /api/users` hits `echo` with `req-path` = `/` and
@@ -181,7 +181,7 @@ import tourist/static  :refer [serve-static!]
 ;; Dynamic routes first; fall back to static files on 404.
 tourist 3000
   cascade!
-    get! "/about" fn([_] html("<h1>About</h1>"))
+    get! "/about" (fn [_] html("<h1>About</h1>"))
     serve-static! "/" "./public"
 ```
 
