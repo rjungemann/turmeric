@@ -1,0 +1,71 @@
+;; byval-owned-local-drop-past-value-tail -- the two residues of
+;; byval-spine-drop-past-early-exit that were closable, closed.
+;;
+;; residue 2 -- emit_tail's value-returning default path.  A tail-position
+;;   `let` in a TCO'd function whose body ends in a plain VALUE (neither the
+;;   self-call nor a `return`) reached the one exit out of emit_tail that did
+;;   not fire the early-exit channel, so everything its inline arm had pushed
+;;   was popped unfired: the final turn of every accumulator loop that ends in
+;;   a value leaked its locals.  The `any` drops had the identical gap.  The
+;;   value is now hoisted to a temp (it may read what is about to be dropped),
+;;   the channel fires, then the return -- emit_stmt.c's return arm, repeated.
+;;   Three variants: a spine local, an `any` local, and a void function (whose
+;;   value is discarded before the drops and needs no hoist).
+;;
+;; residue 3 -- the boxed fn-field drop.  `drop_fnfields_<T>` is collected in
+;;   the same gated trailing section as the spine drop and had both of its
+;;   faces; it now rides the channel under the same signature gate.  A struct
+;;   LITERAL initialiser, on purpose: a local initialised from a CALL
+;;   (`(let [hh (mk i)] ...)`) is never flagged `drops_fn_fields` at all and
+;;   leaks even without an early exit -- a different gap, recorded in the
+;;   report, not this fixture's.
+;;
+;; requires.leak-check, no marker: every count here is "one leaked handle or
+;; box per turn" before the fix.
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+(defstruct Pt [x : int y : int])
+(defstruct H [f : (fn [int] int)])
+
+(defn ret-any [i : int] : any (make-struct Pt i 2))
+
+;; residue 2, spine: the FINAL turn takes a tail let ending in a value.
+(defn last-spine [i : int n : int acc : int] : int
+  (if (= i n)
+    (let [xs (Cons 5 (Cons 2 (Nil)))] (+ acc (match xs (Cons h t) h (Nil) 0)))
+    (last-spine (+ i 1) n (+ acc 1))))
+
+;; residue 2, `any` local: same shape, the drop the any-widen family pushes.
+(defn last-any [i : int n : int acc : int] : int
+  (if (= i n)
+    (let [a (ret-any 9)] (+ acc (if (is? a Pt) 1 0)))
+    (last-any (+ i 1) n (+ acc 1))))
+
+;; residue 2, void function: the value is printed, not returned.
+(defn last-void [i : int n : int] : nil
+  (if (= i n)
+    (let [xs (Cons 5 (Cons 2 (Nil)))] (println (match xs (Cons h t) h (Nil) 0)))
+    (last-void (+ i 1) n)))
+
+;; residue 3, face i: a fn-field local per turn of a tail loop.
+(defn fld-loop [i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (let [hh (make-struct H (fn [x : int] : int (+ x i)))]
+      (fld-loop (+ i 1) n (+ acc ((.f hh) 1))))))
+
+;; residue 3, face ii: a fn-field local in a scope that returns explicitly.
+(defn fld-once [i : int] : int
+  (let [hh (make-struct H (fn [x : int] : int (+ x i)))]
+    (return ((.f hh) 1))))
+
+(defn drive [i : int n : int] : int
+  (if (= i n) 0 (+ (fld-once i) (drive (+ i 1) n))))
+
+(defn main [] : int
+  (println (last-spine 0 10 0))   ;; 10 + 5 = 15
+  (println (last-any 0 10 0))     ;; 10 + 1 = 11
+  (last-void 0 10)                ;; prints 5
+  (println (fld-loop 0 100 0))    ;; sum of (i+1) for i<100 = 5050
+  (println (drive 0 100))         ;; 5050
+  0)

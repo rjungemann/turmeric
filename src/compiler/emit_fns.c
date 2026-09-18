@@ -827,6 +827,33 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                         free(rmn);
                         free(rnm);
                     }
+                    /* byval-spine-drop-past-early-exit (residue 3): the
+                     * boxed fn-field drop of a by-value local rides the same
+                     * channel under the same gate.  `drop_fnfields_<T>` frees
+                     * the heap fat handle a `:fn` field owns, and the gate's
+                     * argument is identical: a numeric parameter cannot carry
+                     * that handle into the next turn.  Measured before: one
+                     * handle per turn, flat.  (The closure-ENV local was
+                     * probed the same way and is already clean -- its drop
+                     * does not live behind this trailing free -- so it is
+                     * not here.) */
+                    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                        const Binding *sb = e->as.let_.bindings[i].binding;
+                        if (!sb || !sb->drops_fn_fields ||
+                            sb->type.kind != TY_ADT || !sb->type.as.adt_.def)
+                            continue;
+                        char *fmn = mangle_adt_name(sb->type.as.adt_.def->name);
+                        char *fnm = name_for_binding(ctx, sb);
+                        Buf ds;
+                        buf_init(&ds);
+                        buf_printf(&ds, "drop_fnfields_tur_adt_%s((void *)&%s)",
+                                   fmn, fnm);
+                        buf_putc(&ds, '\0');
+                        any_scope_drops_push(ctx, ds.data);
+                        buf_free(&ds);
+                        free(fmn);
+                        free(fnm);
+                    }
                 }
                 emit_tail(ctx, body, fn_e, fd, e->as.let_.body, result_kind, is_main);
                 any_scope_drops_pop(ctx, any_mark);
@@ -918,6 +945,33 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         free(v);
         return;
     }
+    /* byval-spine-drop-past-early-exit (residue 2): this is the one exit out of
+     * emit_tail that did NOT fire the early-exit channel.  A tail-position
+     * `let` in a TCO'd function whose body ends in a plain VALUE -- neither
+     * the self-call nor a `return` -- lands here, and the drops its inline arm
+     * pushed (the `any` locals since any-widen-drop-past-early-exit, the
+     * spine and fn-field locals since this report) were popped unfired: a
+     * leak on the final turn of every accumulator loop that ends in a value.
+     *
+     * Same shape as emit_stmt.c's return arm: the value is hoisted to a temp
+     * FIRST, because `(let [xs ...] (match xs ...))` reads the spine, and only
+     * then do the drops run.  The temp's C type is the frame's return ctype,
+     * which is what the value is about to be converted to anyway; where none
+     * is recorded the channel is left unfired rather than guessed at
+     * (`__auto_type` silently costs the JIT).  The void branch below needs no
+     * hoist: its value is discarded before the drops. */
+    if (ctx->n_any_scope_drops > 0 &&
+        ((is_main && result_kind == TY_INT) ||
+         (!is_main && ctx->current_fn_ret_ctype &&
+          strcmp(ctx->current_fn_ret_ctype, "void") != 0))) {
+        char *rv = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s %s = (%s);\n",
+                   is_main ? "int64_t" : ctx->current_fn_ret_ctype, rv, v);
+        free(v);
+        v = rv;
+        emit_any_scope_drops(ctx, body);
+    }
     indent_buf(body, ctx->indent);
     if (is_main && result_kind == TY_INT) {
         buf_printf(body, "return (int)%s;\n", v);
@@ -934,6 +988,10 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
          * statement and return separately; the cast keeps -Wunused-value quiet
          * for a non-call tail and is valid on a void-typed one. */
         buf_printf(body, "(void)(%s);\n", v);
+        /* byval-spine-drop-past-early-exit (residue 2): the void twin of the
+         * hoist above -- the value is already discarded, so the drops go
+         * straight before the `return`. */
+        if (ctx->n_any_scope_drops > 0) emit_any_scope_drops(ctx, body);
         indent_buf(body, ctx->indent);
         buf_puts(body, "return;\n");
     } else {

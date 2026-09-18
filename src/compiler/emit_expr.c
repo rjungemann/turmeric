@@ -3042,6 +3042,33 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 let_binding_widen_drop_stmt(ctx, e, i);
         }
     }
+    /* byval-spine-drop-past-early-exit (residue 3): the boxed fn-field drop
+     * has the same two faces as the spine drop, and its collection sits in the
+     * else-chain inside the gate below.  Rather than unpick that chain, collect
+     * it here for exactly the bodies the gate excludes -- so each binding is
+     * collected once, on one side or the other -- and let the push site and
+     * the gated fall-through below treat it like the spine drop. */
+    if (body_has_return_or_throw) {
+        for (uint32_t i = 0; i < e->as.let_.n; i++) {
+            const Binding *sb = e->as.let_.bindings[i].binding;
+            if (!sb || !sb->drops_fn_fields || sb->type.kind != TY_ADT ||
+                !sb->type.as.adt_.def)
+                continue;
+            char *mn = mangle_adt_name(sb->type.as.adt_.def->name);
+            size_t tl = strlen(mn) + 16;
+            char *tn = (char *)malloc(tl);
+            snprintf(tn, tl, "tur_adt_%s", mn);
+            free(mn);
+            fnfld_names = (char **)realloc(fnfld_names,
+                                           (n_fnfld + 1) * sizeof(char *));
+            fnfld_types = (char **)realloc(fnfld_types,
+                                           (n_fnfld + 1) * sizeof(char *));
+            fnfld_names[n_fnfld] = name_for_binding(ctx, sb);
+            fnfld_types[n_fnfld] = tn;
+            n_fnfld++;
+        }
+    }
+
     /* byval-spine-drop-past-early-exit: collected OUTSIDE the
      * `!body_has_return_or_throw` gate below, unlike its neighbours and like
      * the `any` drop above.  It was inside, and that was the second face of
@@ -3464,6 +3491,18 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             any_scope_drops_push(ctx, ds.data);
             buf_free(&ds);
         }
+        /* residue 3: the fn-field drop, same channel, same gate.  On the
+         * ungated path these entries never fire (nothing in that body exits
+         * early) and are popped below before the trailing free runs. */
+        for (uint32_t i = 0; i < n_fnfld; i++) {
+            Buf ds;
+            buf_init(&ds);
+            buf_printf(&ds, "drop_fnfields_%s((void *)&%s)",
+                       fnfld_types[i], fnfld_names[i]);
+            buf_putc(&ds, '\0');
+            any_scope_drops_push(ctx, ds.data);
+            buf_free(&ds);
+        }
     }
 
     if (body_has_return_or_throw) {
@@ -3512,6 +3551,17 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         free(locown_names);
         free(locown_types);
+        /* residue 3: the fn-field drop on the same fall-through path; on this
+         * (gated) side it was collected by the early-exit loop above. */
+        for (uint32_t i = 0; i < n_fnfld; i++) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "drop_fnfields_%s((void *)&%s);\n",
+                       fnfld_types[i], fnfld_names[i]);
+            free(fnfld_names[i]);
+            free(fnfld_types[i]);
+        }
+        free(fnfld_names);
+        free(fnfld_types);
         /* Close scope */
         ctx->indent -= 4;
         indent_buf(body, ctx->indent);

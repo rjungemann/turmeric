@@ -5,9 +5,12 @@ normally written in: a tail-recursive function that builds a list per turn
 leaked the whole spine every turn (2 boxes x N, measured flat: 200 at 100
 turns, 800 at 400), in both dialects, on both by-value spine paths.
 
-**Status: PARTIALLY FIXED 2026-09-18.** The scalar-signature case -- every
-parameter and the result a non-pointer scalar, which is the accumulator loop --
-is closed on both faces. Three residues are listed below with what each takes.
+**Status: PARTIALLY FIXED 2026-09-18, two passes.** The scalar-signature case
+-- every parameter and the result a non-pointer scalar, which is the
+accumulator loop -- is closed on both faces, on both spine paths, and (second
+pass) on `emit_tail`'s value-returning exit and for the boxed fn-field drop
+too. What remains open is the non-scalar-signature loop (residue 1) and a
+separate finding about call-initialised fn-field locals; both at the end.
 
 Found while executing
 [any-widen-stored-in-an-adt-field-has-no-owner](any-widen-stored-in-an-adt-field-has-no-owner.md),
@@ -116,24 +119,68 @@ droppable. The two reports meet exactly here: a local that is both built and
 read in one scope is this report's; one handed to a by-value callee is the
 sibling's.
 
-## Residues
+## Residues -- second pass, 2026-09-18
 
-1. **Non-scalar signatures.** A loop whose parameters or result include an
-   `any`, an ADT, a cstr or a pointer keeps the leak, because the gate cannot
-   tell a binder that aliases the spine from a value that does not. Closing it
-   needs the borrow/own distinction for by-value ADT arguments that the sibling
-   report's fix direction 1 describes -- the same `nonretain_ptr_param_mask`
-   family question, asked of the back-edge arguments.
-2. **The value-returning default path inside `emit_tail`.** A tail-position
-   `let` in a TCO'd function whose body ends in a plain VALUE (neither the
-   self-call nor a `return`) hits `emit_tail`'s default `return v;`, which does
-   not fire the channel. The `any` drops pushed in that arm have the identical
-   gap. Closing it means hoisting `v` to a temp and firing the channel before
-   the return, exactly as `emit_stmt.c`'s return arm does.
-3. **The other three drops behind the same gate.** `emit_let_value`'s
-   `!body_has_return_or_throw` still guards the closure-env, catch-box and
-   boxed-fn-field frees; the elaborator's own comment
-   (`any_let_move_drop_to_use`) already says "the closure-env and catch-box
-   frees have the same shape and the same hole". Each wants the same channel
-   treatment, and each needs its own soundness argument for what a
-   back-edge argument can alias.
+Of the three residues the first pass listed, two are closed and the third was
+partly wrong. Each was probed under ASan before anything was built.
+
+1. **Non-scalar signatures -- OPEN, unchanged.** A loop whose parameters or
+   result include an `any`, an ADT, a cstr or a pointer keeps the leak, because
+   the gate cannot tell a binder that aliases the spine from a value that does
+   not. Closing it needs the borrow/own distinction for by-value ADT arguments
+   that the sibling report's fix direction 1 describes -- the same
+   `nonretain_ptr_param_mask` family question, asked of the back-edge
+   arguments. `byval-spine-drop-refused-nonscalar-param` pins the refusal.
+
+2. **The value-returning default path inside `emit_tail` -- FIXED.** A
+   tail-position `let` in a TCO'd function whose body ends in a plain VALUE
+   reached the one exit out of `emit_tail` that never fired the channel, and
+   everything the inline arm had pushed was popped unfired: the final turn of
+   every accumulator loop that ends in a value leaked its locals -- measured 2
+   boxes for a spine local, one box for an `any` local. The value is now
+   hoisted to a temp (it may read what is about to be dropped), the channel
+   fires, then the return -- `emit_stmt.c`'s return arm, repeated; the void
+   branch discards first and needs no hoist. Where no return ctype is recorded
+   the channel is left unfired rather than guessed at (`__auto_type` silently
+   costs the JIT). This closed the `any` drops' identical gap in passing.
+
+3. **The other drops behind the gate -- one fixed, one was never there, one
+   unverified.**
+   - **Boxed fn-field: FIXED**, same channel, same gate; it had both faces.
+     Pinned in `byval-owned-local-drop-past-value-tail` with a struct LITERAL
+     initialiser -- see the finding below for why that qualifier matters.
+   - **Closure env: not a residue.** The first pass listed it on the strength
+     of the elaborator's comment ("the closure-env and catch-box frees have the
+     same shape and the same hole"). Probed: a capturing closure bound in a
+     tail-position `let` of a TCO'd loop is already clean. Whatever that
+     comment is describing, it is not this trailing free.
+   - **Catch box: unverified.** Not probed; it sits behind the same gate and
+     would take the same treatment, with its own argument about what a
+     back-edge argument can alias.
+
+### New finding: a fn-field local initialised from a CALL is never dropped at all
+
+Not an early-exit hole -- it leaks with no early exit anywhere:
+
+```turmeric
+(defstruct H [f : (fn [int] int)])
+(defn mk [k : int] : H (make-struct H (fn [x : int] : int (+ x k))))
+(defn h [i : int n : int] : int
+  (if (= i n) 0
+    (let [hh (mk i)]
+      (+ ((.f hh) 1) (h (+ i 1) n)))))     ;; NOT a tail call
+```
+
+```
+SUMMARY: AddressSanitizer: 2400 byte(s) leaked in 100 allocation(s).
+```
+
+`drop_fnfields_tur_adt_H` is emitted as glue and never called: `drops_fn_fields`
+is not set for `hh`. Replace `(mk i)` with the literal
+`(make-struct H (fn ...))` and the same program is clean, in every position.
+So the flag's guards refuse a call-initialised local -- which of the three
+(`binding_moved_during_init`, `is_moved`, `is_binding_consumed`) is not yet
+established, and the fix belongs to the fn-field auto-drop, not to this
+report's channel. Recorded here because it is what stopped the first fn-field
+probe from exercising the channel at all, and it is the shape a factory
+function produces.
