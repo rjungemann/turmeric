@@ -426,7 +426,17 @@
                              worker records during install (OD3). Silent when the
                              pack is complete. -->
                         <span class="docs-status" id="docs-status"></span>
-                        <button class="btn-close" id="docs-close" aria-label="Close documentation">&times;</button>
+                        <!-- On a phone the pane is a full-screen sheet, not a
+                             dialog floating over a visible page, so a bare
+                             "x" in a corner does not read as the way out. The
+                             chevron and label are shown at <=768px only (and
+                             the button moves to the leading edge there); the
+                             desktop pane keeps the plain close glyph. -->
+                        <button class="btn-close" id="docs-close" aria-label="Close documentation">
+                            <span class="docs-close-chevron" aria-hidden="true">&lsaquo;</span>
+                            <span class="docs-close-label" aria-hidden="true">Back</span>
+                            <span class="docs-close-x" aria-hidden="true">&times;</span>
+                        </button>
                     </div>
                     <div class="docs-body">
                         <!-- role=navigation on a div, not a <nav> element:

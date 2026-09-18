@@ -2027,6 +2027,12 @@ the time.
 | --- | --- | --- |
 | [session-type-eq-ignores-the-protocol](session-type-eq-ignores-the-protocol.md) | medium-high | `type_eq` (`src/compiler/types.c:106`) has no case for `TY_SESSION` or any protocol kind, so it falls through to `return 1` and any `Session[P]` compares equal to any `Session[Q]`. Passing a function an endpoint whose protocol is not the one it declares is accepted with no diagnostic -- including swapping the two ends of one `make-session` between dual client/server functions. In-body operation order is still checked (TUR-E0212); it is the call boundary that is unchecked. Same defect class as the `TY_TYPEROW` case whose comment at `types.c:316` already names the hazard. The fix needs a coinductive comparison, not a depth cut, because `TY_SESSION_REC` is recursive |
 
+## Found investigating two PWA reports from a phone (filed 2026-09-17)
+
+| Report | Severity | One line |
+|---|---|---|
+| [pwa-overlays-ignore-ios-safe-area](pwa-overlays-ignore-ios-safe-area.md) | high | `position: fixed` resolves against the viewport, so every overlay escaped the safe-area padding `#app` reserved for the black-translucent status bar: the docs pane's 44px topbar sat inside a 59px inset with **every** control that leaves the pane in it -- close, Contents, search -- so an installed-PWA reader who opened a doc had no way back. Fixed, with tests. The companion "black area at bottom" is the same inset at the other end (59px of band, exactly `safe-area-inset-top`, from `#app` sizing itself with `100dvh`); its fix pins the shell instead of sizing it, but the iOS mechanism is inferred from the reporter's screenshot, not measured, and wants a look on the device before this is archived. Note 37d44e55d already tried to fix that band by dropping the *bottom* inset -- 34px against a 59px band -- and the report came back |
+
 ## Found executing the sweet-exp fn/handle paren pass (filed 2026-09-17)
 
 | Report | Severity | One line |
