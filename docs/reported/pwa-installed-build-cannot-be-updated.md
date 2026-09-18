@@ -128,3 +128,33 @@ it needs:
 Drafted on branch `claude/pwa-update-on-resume` (commit `c4292bbe`), **unverified
 and not reviewed** -- parked deliberately so the kill-switch could ship on its
 own. Do not treat that branch as more than a sketch.
+
+## Not to be confused with: the black band (resolved separately)
+
+A reader hitting this report because an installed app "looks like an old
+build" should check the band first, because it is NOT evidence of staleness
+and it cost a full round of cache archaeology on 2026-09-18.
+
+Symptom: `TUR_SW_KILL=1 npm run deploy`, force-quit, "Clear History and
+Website Data", delete and re-add the icon -- and the app still renders the
+old layout. That reads as an unkillable cache. It was not one. Checked from
+the outside, at that moment:
+
+- `/sw.js` was serving the kill-switch (so there was no caching worker at all)
+- the deployed bundle matched HEAD
+- apex and `www` were byte-identical (same ETag)
+- `/sw.js` is and has always been the only registration URL
+
+Every cache layer was already gone; the bytes on the wire were current. What
+the reader was seeing was the CURRENT build, rendering wrong: the pinned-shell
+rule was gated on `(display-mode: standalone)` while iOS reports `fullscreen`
+for a black-translucent home-screen app, so it never applied. Fixed by gating
+it on `html.pwa` instead -- see the commit for
+`web/styles.css` / `web/try/index.html`.
+
+The tell, if it happens again: measure the band. `height: 100dvh` lands short
+by top+bottom inset (~93 CSS px on a notched iPhone). A stale build is a
+plausible story for anything; a band of exactly that height is a layout bug.
+
+This says nothing about whether the update path in this report works -- the
+kill-switch was deployed at the time, so that run could not have exercised it.
