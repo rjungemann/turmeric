@@ -235,7 +235,7 @@ defn safe-div [a :int b :int]
     none()
     some({a / b})
 
-unwrap(safe-div(10 2))            ; => 5
+unwrap $ safe-div 10 2            ; => 5
 unwrap-or(safe-div(10 0) -1)     ; => -1
 ```
 
@@ -318,7 +318,7 @@ let [v vec-new()]
   vec-push!(v 20)
   vec-push!(v 30)
   println(vec-len(v))       ; 3
-  println(vec-get(v 1))     ; 20
+  println $ vec-get v 1     ; 20
 ```
 
 The `!` suffix on `vec-push!` signals mutation -- the function modifies the
@@ -370,7 +370,7 @@ let [squares vec-new()
     set!(i {i + 1})
   let [^mut j 0]
     while {j < 5}
-      println(vec-get(squares j))
+      println $ vec-get squares j
       set!(j {j + 1})
 ; prints 1 4 9 16 25
 ```
@@ -610,7 +610,7 @@ Write Turmeric code to a `.tur` file and load it into any REPL session with
 ```sweet-exp
 ; hello.tur
 defn greet [name :cstr] :void
-  println(str-concat("Hello, " str-concat(name "!")))
+  println $ str-concat "Hello, " str-concat(name "!")
 ```
 
 ```

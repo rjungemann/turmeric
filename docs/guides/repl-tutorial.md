@@ -457,7 +457,7 @@ defn safe-div [a :int b :int]
 (unwrap (safe-div 10 2))
 ```
 ```sweet-exp
-unwrap(safe-div(10 2))
+unwrap $ safe-div 10 2
 ```
 
 Expected output:
@@ -653,7 +653,7 @@ let [v vec-new()]
   vec-push!(v 20)
   vec-push!(v 30)
   println(vec-len(v))
-  println(vec-get(v 1))
+  println $ vec-get v 1
 ```
 
 Expected output:
@@ -1049,7 +1049,7 @@ directory:
 ```
 ```sweet-exp
 defn greet [name :cstr] :void
-  println(str-concat("Hello, " str-concat(name "!")))
+  println $ str-concat "Hello, " str-concat(name "!")
 ```
 
 Then in the REPL:
