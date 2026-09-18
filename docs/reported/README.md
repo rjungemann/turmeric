@@ -2021,6 +2021,12 @@ the time.
 | [compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type](compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type.md) | low-medium | A compiled `(defdata Option ...)` re-elaborates over the stdlib's filled `Option` stub, and the errors are blamed on `stdlib/option.tur`. `defstruct` has the guard for this; `defdata` never got one |
 | [web-examples-js-is-unused-and-stale](web-examples-js-is-unused-and-stale.md) | low | Nothing imports `web/examples.js` -- the dropdown reads `EXAMPLES` in `main.js` -- and 7 of its 11 examples fail on their first run. Reports have cited it as the playground's examples |
 
+## Found cleaning up the rationale guide's session example (filed 2026-09-17)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [session-type-eq-ignores-the-protocol](session-type-eq-ignores-the-protocol.md) | medium-high | `type_eq` (`src/compiler/types.c:106`) has no case for `TY_SESSION` or any protocol kind, so it falls through to `return 1` and any `Session[P]` compares equal to any `Session[Q]`. Passing a function an endpoint whose protocol is not the one it declares is accepted with no diagnostic -- including swapping the two ends of one `make-session` between dual client/server functions. In-body operation order is still checked (TUR-E0212); it is the call boundary that is unchecked. Same defect class as the `TY_TYPEROW` case whose comment at `types.c:316` already names the hazard. The fix needs a coinductive comparison, not a depth cut, because `TY_SESSION_REC` is recursive |
+
 ## Found executing the sweet-exp fn/handle paren pass (filed 2026-09-17)
 
 | Report | Severity | One line |
