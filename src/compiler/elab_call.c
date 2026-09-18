@@ -6507,13 +6507,25 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * arg_full_types (Phase 1).  Placed before the escape hatches: those only
          * ever set arg_ok from false->true for cross-kind coercions, so demoting a
          * spurious same-kind match here cannot resurrect a real coercion.
-         * See docs/archive/history/positional-nominal-type-identity-fix-plan.md. */
-        if (arg_ok && (expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT) &&
+         * See docs/archive/history/positional-nominal-type-identity-fix-plan.md.
+         *
+         * session-type-eq-ignores-the-protocol: TY_SESSION joins the strict set
+         * for the same reason. A session endpoint's TypeKind says only "some
+         * channel"; the protocol it is partway through lives in the full type.
+         * Comparing kinds alone let an endpoint be passed to a function
+         * declaring a *different* protocol -- including handing a client the
+         * server's end of one `make-session` -- with no diagnostic, which is
+         * precisely the mismatch session types exist to catch. `type_eq` now
+         * compares protocols equirecursively, so folded `Rec[X, P]` and its
+         * unfolding still agree here. */
+        if (arg_ok && (expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT ||
+                       expected_arg_kind == TY_SESSION || expected_arg_kind == TY_ROLE) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
             uint32_t nidx = fn_binding->closure_fn_binding ? i + 1 : i;
             if (nidx < fn_type.as.fn.arity) {
                 Type *ef = fn_type.as.fn.arg_full_types[nidx];
-                if (ef && (ef->kind == TY_STRUCT || ef->kind == TY_ADT) &&
+                if (ef && (ef->kind == TY_STRUCT || ef->kind == TY_ADT ||
+                           ef->kind == TY_SESSION || ef->kind == TY_ROLE) &&
                         !type_eq(args[i]->type, *ef)) {
                     arg_ok = false;
                 }
@@ -7289,6 +7301,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION ||
                  expected_arg_kind == TY_APP || expected_arg_kind == TY_HANDLER ||
                  expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT ||
+                 /* session-type-eq-ignores-the-protocol: a kind-derived session
+                  * prints as `Session[?]`, which tells the reader nothing about
+                  * the protocol they got wrong. The declared protocol is the
+                  * whole content of the diagnostic, so take it from
+                  * arg_full_types. */
+                 expected_arg_kind == TY_SESSION || expected_arg_kind == TY_ROLE ||
                  expected_arg_kind == TY_FN) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
                 uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;

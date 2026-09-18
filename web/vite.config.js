@@ -86,6 +86,47 @@ function injectSwVersion() {
   };
 }
 
+// Ship the kill-switch AT /sw.js instead of the real worker.
+//
+// A stuck client only ever refetches the worker script at the URL it
+// registered, so /sw.js is the one address that can reach it. This overwrites
+// the built worker rather than asking anyone to edit public/sw.js by hand and
+// remember to put it back -- the tree is never left in the dangerous state, and
+// reverting is an ordinary deploy with the flag off.
+//
+//   TUR_SW_KILL=1 npm run deploy     # wipe caches + unregister, on next launch
+//   npm run deploy                   # restore the real worker
+//
+// Runs AFTER injectSwVersion in the plugin list, so the cache-version stamp it
+// would otherwise apply is irrelevant -- there is no cache name left to stamp.
+function swKillSwitch() {
+  const armed = process.env.TUR_SW_KILL === '1';
+  return {
+    name: 'sw-kill-switch',
+    apply: 'build',
+    closeBundle() {
+      if (!armed) return;
+      const src = resolve(__dirname, 'public/sw-kill.js');
+      const targets = [
+        resolve(__dirname, 'dist/client/sw.js'),
+        resolve(__dirname, 'dist/sw.js'),
+      ].filter(existsSync);
+      if (targets.length === 0) {
+        // Louder than a warning would be: an armed build that silently shipped
+        // the ordinary worker is a recovery everyone believes happened.
+        throw new Error('TUR_SW_KILL=1 but no dist sw.js was found to replace; '
+                        + 'the kill-switch was NOT deployed');
+      }
+      const kill = readFileSync(src, 'utf-8');
+      for (const t of targets) writeFileSync(t, kill);
+      console.warn('\n  *** TUR_SW_KILL=1: /sw.js is the KILL-SWITCH ***\n'
+                   + '  This build unregisters the service worker and deletes\n'
+                   + '  every cache on first launch. Deploy again without the\n'
+                   + '  flag to restore the real worker.\n');
+    },
+  };
+}
+
 export default defineConfig({
   base: '/',
   environments: {
@@ -123,5 +164,5 @@ export default defineConfig({
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
   },
-  plugins: [injectVersion(), injectSwVersion(), cloudflare()],
+  plugins: [injectVersion(), injectSwVersion(), swKillSwitch(), cloudflare()],
 });

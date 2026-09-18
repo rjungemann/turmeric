@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.49.1` -- Makes Try Turmeric's Run button run exactly the program in the editor, lets a REPL or playground session survive a failed turn and redefine any `def*` form, and fixes `await`/`gen-unwrap` returning floats, strings and bools at the wrong type.
+**Latest release:** `v0.49.2` -- Diagnoses a sweet-exp `$` inside brackets (TUR-E0332) instead of silently interning it as a symbol, reserves the iOS safe area in every Try Turmeric overlay so the docs pane's Back control is reachable in the installed PWA, and makes `tur run docs` about 3x faster.
 
 ## What
 

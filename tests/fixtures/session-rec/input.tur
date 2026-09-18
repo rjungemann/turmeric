@@ -33,7 +33,7 @@
         ch))))
 
 (defn main [] :int
-  (let [[s r] (make-session (Rec self (Branch (Recv int (Send int self)) Close)))]
+  (let [[r s] (make-session (Rec self (Branch (Recv int (Send int self)) Close)))]
     (let [t (session-spawn (fn [] (server-loop r)))]
       (let [s (client-step s 1)]
         (let [s (client-step s 2)]

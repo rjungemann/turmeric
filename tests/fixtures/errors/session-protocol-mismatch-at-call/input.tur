@@ -1,0 +1,25 @@
+;; session-type-eq-ignores-the-protocol: a session endpoint passed to a
+;; parameter that declares a DIFFERENT protocol must be rejected.
+;;
+;; This used to compile. Two things let it through: `type_eq` had no
+;; TY_SESSION case, so it fell through to its trailing `return 1` and any
+;; Session[P] compared equal to any Session[Q]; and the saturated positional
+;; argument check only consulted `type_eq` for TY_STRUCT/TY_ADT parameters,
+;; so a session parameter was matched on TypeKind alone -- and every endpoint
+;; has the same kind.
+;;
+;; `b` is driven correctly here (recv, then close), so the call to
+;; takes-close is the only thing wrong with the program.
+
+(load "stdlib/session.tur")
+
+;; Expects an endpoint whose protocol is ALREADY complete.
+(defn takes-close [^linear ch :(Session Close)] :nil
+  (close ch))
+
+(defn main [] :int
+  (let [[a b] (make-session (Send int Close))]
+    (takes-close a)
+    (let [[n b1] (recv b)]
+      (close b1)
+      n)))

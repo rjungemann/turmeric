@@ -15,8 +15,9 @@
 // ERR_INTERNET_DISCONNECTED and the worker never gets a chance to serve from
 // cache -- the test would fail no matter how correct the worker is. Making the
 // origin itself unreachable is the only way to exercise the real path, so this
-// file runs its own server on its own port and stops it mid-test. The shared
-// webServer on :3000 is left alone for the other specs.
+// file runs its own server on its own port and stops it mid-test. The suite's
+// shared webServer (on the free port playwright.config.js picks) is left alone
+// for the other specs.
 //
 // Why a production build rather than the dev server:
 // offline is a property of the built artefact. Vite's dev server rewrites the

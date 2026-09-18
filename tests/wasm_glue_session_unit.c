@@ -24,6 +24,9 @@
 #include <string.h>
 
 #include "web/wasm_glue.h"
+/* refine_stats(): the obligation counter the session-scaling case below reads.
+ * src/compiler is on this target's include path. */
+#include "refine_discharge.h"
 
 static int passed = 0;
 static int failed = 0;
@@ -93,6 +96,50 @@ int main(void) {
     CHECK(run_main("(defn main [] : int 5)", "5"), "Run after a rewind");
     turi_wasm_rewind_to_prelude();
     CHECK(run_main("(defn main [] : int 6)", "6"), "and after a second one");
+
+    /* ---- A turn pays for its own crossings, not for every earlier turn's ---
+     *
+     * refine_resolve_call_sites is deferred to the end of the UNIT so a call to
+     * a later-defined function is checked like a call to an earlier-defined
+     * one.  Under a session a turn is the unit -- but the crossing array is
+     * session state and nothing clears it, so the pass used to re-resolve every
+     * crossing the session had ever collected on every turn.  That is quadratic
+     * work over a session, and because refine_collect_obligation does not
+     * deduplicate, each re-resolution minted a FRESH undischarged obligation
+     * that was then discharged again, backend calls and all.
+     *
+     * Counted rather than timed: obligations are deterministic, a clock is not.
+     * g_stats is per-process here (only the compiler driver resets it), so the
+     * delta over N turns that each add exactly one crossing is the measurement.
+     * One per turn is the floor; pre-fix it was the running total, N*(N+1)/2 --
+     * 1830 for the 60 turns below against a ceiling of 240.  The gap is wide
+     * enough that this does not need a tight bound to be meaningful. */
+    CHECK(eval_contains("(defn takes-pos [n : #refine{ x : int | (> x 0) }] : int n)",
+                        "#<fn takes-pos>"),
+          "a refined callee for the crossing below");
+    {
+        const unsigned before = refine_stats()->collected;
+        char buf[256];
+        const int turns = 60;
+        int turns_ok = 1;
+        for (int i = 0; i < turns; i++) {
+            snprintf(buf, sizeof buf,
+                     "(defn cross%d [x : int] : int (takes-pos (+ x %d)))", i, i + 1);
+            /* A failed turn discards the session, and the replay that rebuilds
+             * it would collect obligations of its own -- so a silent failure
+             * here would look exactly like the bug. */
+            turns_ok &= eval_contains(buf, "#<fn cross");
+        }
+        const unsigned added = refine_stats()->collected - before;
+        CHECK(turns_ok, "every crossing turn succeeded");
+        CHECK(added >= (unsigned)turns,
+              "each turn's own crossing is still resolved (the pass is not skipped)");
+        CHECK(added <= (unsigned)turns * 4,
+              "a turn does not re-resolve the crossings of turns already finished");
+        if (added > (unsigned)turns * 4)
+            fprintf(stderr, "  %u obligations over %d turns (expected ~%d)\n",
+                    added, turns, turns);
+    }
 
     printf("wasm_glue_session_unit: %d passed, %d failed\n", passed, failed);
     return failed ? 1 : 0;

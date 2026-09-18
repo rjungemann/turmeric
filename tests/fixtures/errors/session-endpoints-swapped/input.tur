@@ -1,0 +1,29 @@
+;; session-type-eq-ignores-the-protocol, second shape: `make-session P` hands
+;; back the P end first and the dual(P) end second, so handing each end to the
+;; function written for the OTHER role is a protocol mismatch.
+;;
+;; This is the shape that mattered in practice -- tests/fixtures/session-rec
+;; and session-echo-rpc both had their two endpoints swapped exactly this way,
+;; and compiled anyway, because a session parameter was matched on TypeKind
+;; alone. They ran correctly (the runtime pairs two queues and the operation
+;; sequences happened to be complementary), so nothing else caught it.
+
+(load "stdlib/session.tur")
+
+(defn client [^linear ch :(Session (Send int (Recv int Close)))] :int
+  (let [ch1 (send ch 21)]
+    (let [[reply ch2] (recv ch1)]
+      (close ch2)
+      reply)))
+
+(defn server [^linear ch :(Session (Recv int (Send int Close)))] :nil
+  (let [[n ch1] (recv ch)]
+    (let [ch2 (send ch1 (* n 2))]
+      (close ch2))))
+
+(defn main [] :int
+  (let [[a b] (make-session (Send int (Recv int Close)))]
+    ;; `a` runs the client's protocol and `b` the server's -- these are
+    ;; backwards.
+    (server a)
+    (client b)))
