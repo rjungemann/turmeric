@@ -839,9 +839,28 @@ static Form *read_symbol_or_minus(Reader *r) {
     if (name.len == 5 && memcmp(name.p, "false", 5) == 0)
         return form_bool(r->arena, span, false);
 
+    /* sweet-dollar-inside-brackets-is-a-silent-symbol: `$` is the sweet-exp
+     * rest-of-line marker, and sweet_emit_content rewrites it only where the
+     * indentation layer is live (`bd == 0`).  Inside `(...)`, `[...]` or
+     * `{...}` it declines, and the token used to arrive here as an ordinary
+     * symbol named `$` -- silently giving the enclosing form an extra element.
+     * Every other decline path rewrites to something (`$` at EOL or before a
+     * comment wraps an empty rest, `$x` is the symbol `$x`), so a BARE `$`
+     * reaching the reader from a sweet file means exactly one thing. */
+    if (r->file != NULL && r->file->reader_type == READER_SWEET &&
+        name.len == 1 && name.p[0] == '$') {
+        diag_emit_with_code(DIAG_ERROR, span, TUR_E0332_SWEET_DOLLAR_IN_BRACKETS,
+                            "`$` has no meaning inside brackets -- the "
+                            "rest-of-line marker only applies where "
+                            "indentation is significant; write the call with a "
+                            "delimiter instead, as `f(x)` or `(f x)`");
+        r->error = true;
+        return NULL;
+    }
+
     const Symbol *sym = symtab_intern(r->st, name);
     Form *atom = form_sym(r->arena, span, sym);
-    
+
     /* Phase S2: Check for neoteric bracket immediately following atom */
     if (r->neoteric_enabled) {
         int bracket = peek_neoteric_bracket(r);

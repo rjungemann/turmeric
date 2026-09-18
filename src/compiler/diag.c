@@ -357,6 +357,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0623_TUR_VERSION_ABOVE_CEILING: return "TUR-W0623";
         case TUR_W0624_NO_ENTRY_POINT_NEAR_MISS:   return "TUR-W0624";
         case TUR_W0706_IMAGE_GLOBAL_UNREGISTERED:  return "TUR-W0706";
+        case TUR_E0332_SWEET_DOLLAR_IN_BRACKETS:   return "TUR-E0332";
         default:                          return "";
     }
 }
@@ -533,6 +534,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0623") == 0) return TUR_W0623_TUR_VERSION_ABOVE_CEILING;
     if (strcmp(s, "TUR-W0624") == 0) return TUR_W0624_NO_ENTRY_POINT_NEAR_MISS;
     if (strcmp(s, "TUR-W0706") == 0) return TUR_W0706_IMAGE_GLOBAL_UNREGISTERED;
+    if (strcmp(s, "TUR-E0332") == 0) return TUR_E0332_SWEET_DOLLAR_IN_BRACKETS;
     return DIAG_CODE_NONE;
 }
 
@@ -2728,6 +2730,35 @@ static const DiagExplanation diag_explanations_[] = {
       "the bridge is then intentional and accepted.  Case 3 has no such escape:\n"
       "extract a scalar from the aggregate (a field, a tag) or declare the\n"
       "aggregate type.\n",
+    },
+    { TUR_E0332_SWEET_DOLLAR_IN_BRACKETS,
+      "TUR-E0332: `$` inside brackets\n"
+      "\n"
+      "In a sweet-expression file, `$` is the rest-of-line marker: `f $ g x`\n"
+      "reads as `(f (g x))`.  It belongs to the indentation layer, and a\n"
+      "`(...)`, `[...]` or `{...}` form switches that whole layer off for\n"
+      "everything inside it -- indentation and `$` alike.  Inside brackets,\n"
+      "whitespace is insignificant and there is no \"rest of the line\" to\n"
+      "delimit, so the marker has no meaning.\n"
+      "\n"
+      "Example:\n"
+      "  (fn [msg : cstr] : unit\n"
+      "    log/error $ str(\"a\" msg))     ; error: `$` inside brackets\n"
+      "\n"
+      "Write the call with a delimiter instead -- neoteric or s-expression:\n"
+      "  (fn [msg : cstr] : unit\n"
+      "    log/error(str(\"a\" msg)))      ; ok\n"
+      "  (fn [msg : cstr] : unit\n"
+      "    (log/error (str \"a\" msg)))    ; ok\n"
+      "\n"
+      "The same `$` is correct once it is outside every bracket, where the\n"
+      "indentation layer is live again:\n"
+      "  defn f [msg : cstr] : unit\n"
+      "    log/error $ str(\"a\" msg)      ; ok: (log/error (str \"a\" msg))\n"
+      "\n"
+      "This used to be silent: the marker was left alone and reached the\n"
+      "reader as an ordinary symbol named `$`, so the form gained an extra\n"
+      "element and meant something the author never wrote.\n",
     },
 };
 
