@@ -1,0 +1,130 @@
+---
+status: OPEN -- the recovery lever is fixed and tested; the underlying defect is not
+severity: high (an installed PWA can be stuck on an old build indefinitely, with
+  no user-reachable way out)
+discovered: 2026-09-17
+area: web / Try Turmeric PWA (service worker update lifecycle)
+---
+
+# An installed Try Turmeric PWA has no way to notice or apply a new build
+
+## Summary
+
+An installed Try Turmeric on iOS sat several builds behind for months. Every
+lever a user has was tried and none of them shifted it:
+
+- relaunching the app,
+- the in-app **Force update**,
+- deleting the Home Screen icon and re-adding it,
+- clearing Safari's website data.
+
+Safari on the same phone was current the whole time. That is not the
+contradiction it looks like, and it is worth stating because it wasted a round
+of diagnosis: nearly all of the PWA-specific CSS is gated on
+`@media (display-mode: standalone)`, so a Safari tab renders identically on a
+stale build and a current one. "Works in Safari" discriminates nothing.
+
+## What the app does about updates
+
+Nothing. `web/main.js`:
+
+```
+$ grep -c "controllerchange\|\.update()" web/main.js
+0
+```
+
+The whole of it is:
+
+```js
+window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' })
+        .catch((err) => console.warn('SW registration failed:', err));
+});
+```
+
+Two holes follow.
+
+**Noticing.** The browser checks for a new `sw.js` on a navigation in scope.
+`register()` is one, but it runs on `load` -- and a standalone web app
+relaunched from the app switcher is *resumed*, not navigated. On the platform
+where this matters the check may never run at all, which is why "close it and
+open it again" cannot help.
+
+**Applying.** `sw.js` ends `install` with `skipWaiting()` and `activate` with
+`clients.claim()`, so a new worker does take over. But nothing re-renders, so
+the reader keeps looking at the assets the *old* worker served. The update
+becomes visible only on some later cold launch, which iOS may not give them.
+
+## Force update was a placebo on iOS
+
+`forceUpdatePWA()` unregisters every worker and deletes every Cache Storage
+entry correctly -- and then calls `window.location.reload()`. In an iOS
+standalone web app that reload can be answered from WebKit's own HTTP/page
+cache, which neither of those two steps touches. The old HTML comes back, it
+names the same hashed assets, and the command appears to do nothing. It showed
+`Updating...` and reloaded, so it looked like it had worked.
+
+Its test asserts the reload *hook fired* (`window.__turiReload`), never that a
+fetch happened, so the gap was invisible on desktop, where it is not a gap.
+
+## Evidence the client was stale
+
+From a screenshot of the installed app on an iPhone 16 Pro (402x874 CSS,
+`safe-area-inset-top` 62):
+
+```
+app chrome (--bg-panel 22,21,19) ends at   CSS y = 811
+--bg-base (11,10,8) from 812 to bottom      = 63 px band
+874 - 62 = 812
+```
+
+Under the current build `#app` is `position: fixed; inset: 0` and cannot end at
+811, and `.console-footer` is 58px of `--bg-panel` pinned to the bottom. So the
+device was running the pre-fix build -- and, incidentally, this confirms to the
+pixel the `100dvh` behaviour that
+[pwa-overlays-ignore-ios-safe-area](../archive/pwa-overlays-ignore-ios-safe-area.md)
+could only infer: in an iOS standalone web app `100dvh` resolves to the screen
+height *minus the top inset*.
+
+## Fixed here
+
+Only the recovery lever, because that is the half that can reach a client which
+is already stuck. `web/public/sw-kill.js` -- previously written as insurance,
+referenced by nothing, and never executed once -- now works and is tested:
+
+- Its `activate` did async work in an `async` listener with **no
+  `event.waitUntil()`**, so the browser was free to terminate the worker at the
+  first `await`, before a single cache was deleted.
+- It claimed clients without awaiting, and did nothing about already-open pages.
+- It reloaded open windows unconditionally, which while deployed at `/sw.js`
+  is an **infinite reload loop**: the reloaded page registers `/sw.js`, which is
+  the kill-switch, which activates and reloads again. Caught by a test before
+  it ever shipped; guarded now by a `swkill` URL marker.
+
+`swKillSwitch()` in `web/vite.config.js` ships it at `/sw.js` under
+`TUR_SW_KILL=1`, and throws rather than warns if it finds nothing to replace.
+Procedure: [docs/guides/pwa-recovery-runbook.md](../guides/pwa-recovery-runbook.md).
+
+`tests/sw-kill.spec.js` drives a real worker and real Cache Storage -- no stubs
+-- and asserts the wipe, the unregister, the single reload, and the absence of a
+loop.
+
+## Still open
+
+The update lifecycle itself. A PWA that cannot notice a new build will need the
+kill-switch again, and the kill-switch is a two-deploy outage, not a fix. What
+it needs:
+
+1. `registration.update()` when the app is foregrounded (`visibilitychange`),
+   since a resumed standalone app fires no navigation.
+2. A `controllerchange` handler that reloads once when a *new* worker takes
+   over -- guarded on the page having been controlled at load, so the first
+   visit's `clients.claim()` does not reload a page that is already current.
+3. `forceUpdatePWA()` ending in a navigation to a cache-busting URL rather than
+   `location.reload()`.
+4. A visible build stamp, so "is this device stale?" is answerable without a
+   desktop and a cable.
+
+Drafted on branch `claude/pwa-update-on-resume` (commit `c4292bbe`), **unverified
+and not reviewed** -- parked deliberately so the kill-switch could ship on its
+own. Do not treat that branch as more than a sketch.
