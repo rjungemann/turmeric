@@ -622,9 +622,9 @@ defeffect Log [level :cstr msg :cstr] :nil
 
 ;; Business logic
 defn process [x :int] :int
-  perform(Log("info" "starting"))
+  perform $ Log "info" "starting"
   let [result {x * 2}]
-    perform(Log("info" "done"))
+    perform $ Log "info" "done"
     result
 
 ;; Handler: print everything

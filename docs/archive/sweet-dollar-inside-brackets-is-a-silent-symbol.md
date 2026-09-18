@@ -18,9 +18,11 @@ identifier there is still legal.
 Pinned by `tests/fixtures/errors/sweet-dollar-inside-brackets`, and verified on
 all three bracket kinds and on the compiled and interpreted paths alike (one
 shared reader, so no `requires.*` marker). The follow-up guide audit the report
-carried was split out to
-[docs/upcoming/sweet-dollar-guide-audit-plan.md](../upcoming/sweet-dollar-guide-audit-plan.md)
-rather than archived with it.
+carried was split into its own plan and then executed --
+[docs/archive/history/sweet-dollar-guide-audit-plan.md](history/sweet-dollar-guide-audit-plan.md)
+records the outcome, including that its premise was partly wrong (the syntax
+guide already taught `$` definitively), so the executed scope was 9 `$`
+conversions in the three tutorials rather than the ~89 candidate sites.
 
 ---
 
@@ -121,9 +123,9 @@ deprecation window.
 Either way, `tests/fixtures/` wants a negative fixture (`errors/`) pinning the
 chosen behavior.
 
-## Follow-up task (split out, not archived)
+## Follow-up task (split out, then done)
 
 The guide audit this report carried -- sweep the guides and use `$` where it is
-pertinent -- is a docs task, not a finding, so it moved to
-[docs/upcoming/sweet-dollar-guide-audit-plan.md](../upcoming/sweet-dollar-guide-audit-plan.md)
-when this report was archived.
+pertinent -- was a docs task rather than a finding, so it became its own plan
+instead of being archived inside this report. It is now complete:
+[docs/archive/history/sweet-dollar-guide-audit-plan.md](history/sweet-dollar-guide-audit-plan.md).
