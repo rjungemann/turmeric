@@ -173,6 +173,11 @@ typedef struct Elab {
     uint32_t  turn_start_n_adt_defs;
     uint32_t  turn_start_n_effects;
     struct TypeClassInstance *turn_start_instances;
+    /* Same watermark, for the deferred RT1 crossings rather than a redefinable
+     * registry: where THIS turn's call-site crossings begin.  The deferral is
+     * per-UNIT and a turn is a unit, so an earlier turn's crossings are already
+     * resolved and must not be walked again -- see refine_resolve_call_sites. */
+    uint32_t  turn_start_n_refine_call_sites;
     uint32_t     next_id;
     uint32_t     next_gensym_id;  /* Phase 6: for generating unique symbol names */
     /* Transitive-RM: shared reader-macro registry, set by the driver

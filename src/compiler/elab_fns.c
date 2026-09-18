@@ -4154,7 +4154,39 @@ static void rt_lint_class_leniency(Elab *e, RefineCallSite *cs, uint32_t p,
 
 void refine_resolve_call_sites(Elab *e) {
     if (!e) return;
-    for (uint32_t i = 0; i < e->n_refine_call_sites; i++) {
+    /* Start at THIS turn's crossings.  Zero for a compile and for a session's
+     * first turn, so the whole-program path walks everything exactly as before.
+     *
+     * The deferral this pass implements is per-UNIT -- "by the end of the unit
+     * every callee's predicates are stamped" -- and under an ElabSession a turn
+     * IS the unit, so a crossing from an earlier turn was fully resolved at the
+     * end of that turn and has nothing left to learn:
+     *
+     *   - Its callee was already bound when it was recorded (the crossing is
+     *     only noted for an `fn_binding` of kind TY_FN), and pass 1 forward-
+     *     declares everything the same unit defines, so nothing it depends on
+     *     arrives later than the end of its own turn.  A turn that referenced
+     *     an unbound name errored, and a failed turn discards the session.
+     *   - A later turn REDEFINING the callee shadows it with a NEW Binding
+     *     (elab_defn's prior-turn branch), so `cs->callee` still points at the
+     *     definition this crossing actually crossed into.  Re-checking turn N's
+     *     call against turn N+1's function would be a diagnostic about code
+     *     that already ran, under a definition that did not exist when it did.
+     *
+     * Walking them again was not just wasted work: refine_collect_obligation
+     * does not deduplicate, so every old crossing minted a FRESH undischarged
+     * obligation each turn, which was then discharged again -- and the RT7 memo
+     * reuses only the VERDICT, deliberately ("diagnostics still run below, so a
+     * repeated unproven obligation reports at its own source location"), so the
+     * report ran again too.  Which turns that reached depends on the crossing:
+     * an E0371 fails its own turn and the session is discarded with it, but a
+     * crossing with no runtime backstop (a `#reads` measure) or any session
+     * under --strict-refine re-reported W0372 on every later turn.
+     *
+     * A 440-turn session spent 184 ms on one trivial turn that added nothing;
+     * see docs/archive/refine-call-sites-re-resolved-every-session-turn.md. */
+    for (uint32_t i = e->turn_start_n_refine_call_sites;
+         i < e->n_refine_call_sites; i++) {
         RefineCallSite *cs = &e->refine_call_sites[i];
         const Binding *callee = cs->callee;
         /* A crossing is worth walking when EITHER side has a predicate.  An
