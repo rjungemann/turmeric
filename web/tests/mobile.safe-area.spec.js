@@ -168,40 +168,53 @@ test.describe('PWA safe-area insets', () => {
         expect(top.bottom).toBeLessThanOrEqual(top.viewport - SAFE_BOTTOM);
     });
 
-    test('the standalone shell is pinned to the viewport, not sized from 100dvh',
+    test('the installed shell is pinned to the viewport, not sized from 100dvh',
          async ({ page }) => {
         await openTry(page);
 
-        // (display-mode: standalone) cannot be emulated here, so this reads
-        // the rule out of the CSSOM instead of rendering it. What it guards is
-        // the specific regression: #app sized from 100dvh landed short of the
-        // screen bottom on iOS in standalone and the gap showed through as an
-        // unpainted band, which is the "black area at the bottom" report.
-        const decls = await page.evaluate(() => {
-            const walk = (rules, out) => {
-                for (const rule of rules) {
-                    if (rule.cssRules) {
-                        if (rule.conditionText && rule.conditionText.includes('display-mode: standalone')) {
-                            for (const inner of rule.cssRules) {
-                                if (inner.selectorText === '#app') out.push(inner.style.cssText);
-                            }
-                        }
-                        walk(rule.cssRules, out);
-                    }
-                }
-                return out;
+        // Put the page in the installed-app shell the way the device does and
+        // MEASURE it. The previous version of this test read the rule text out
+        // of the CSSOM, which is why the band shipped twice: the assertion was
+        // that a rule with `position: fixed` EXISTS, never that it applies. It
+        // stayed green while the rule was dead on iOS, where the app reports
+        // (display-mode: fullscreen) and the standalone-only query it was
+        // written under never matched. The shell is gated on html.pwa now, so
+        // there is a real switch to flip here.
+        await page.evaluate(() => document.documentElement.classList.add('pwa'));
+        await applyInsets(page);
+
+        const shell = await page.evaluate(() => {
+            const app = document.getElementById('app');
+            const rect = app.getBoundingClientRect();
+            const style = getComputedStyle(app);
+            return {
+                position: style.position,
+                paddingTop: parseFloat(style.paddingTop),
+                top: rect.top,
+                bottom: rect.bottom,
+                viewport: window.innerHeight,
             };
-            const out = [];
-            for (const sheet of document.styleSheets) {
-                try { walk(sheet.cssRules, out); } catch { /* cross-origin */ }
-            }
-            return out;
         });
 
-        expect(decls.length).toBeGreaterThan(0);
-        const shell = decls.join(' ');
-        expect(shell).toContain('position: fixed');
-        expect(shell).not.toContain('100dvh');
-        expect(shell).toContain('var(--safe-top)');
+        expect(shell.position).toBe('fixed');
+        // The whole point: no unpainted strip between the shell and the screen
+        // bottom. `height: 100dvh` on iOS lands short by the two insets, which
+        // is the black band the reports were about.
+        expect(shell.top).toBe(0);
+        expect(shell.bottom).toBeCloseTo(shell.viewport, 0);
+        // And the status bar's strip is still reserved at the top.
+        expect(shell.paddingTop).toBeCloseTo(SAFE_TOP, 0);
+    });
+
+    test('the shell is NOT pinned in an ordinary browser tab', async ({ page }) => {
+        // The gate has to stay a gate. Pinning #app in a normal tab would take
+        // the site nav off the page for every mobile visitor, not just the
+        // installed ones.
+        await openTry(page);
+        await applyInsets(page);
+
+        const position = await page.evaluate(() =>
+            getComputedStyle(document.getElementById('app')).position);
+        expect(position).not.toBe('fixed');
     });
 });

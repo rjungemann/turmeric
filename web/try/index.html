@@ -17,6 +17,42 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Turmeric">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <!-- Mark the installed-app shell BEFORE first paint, so styles.css can gate
+         the pinned shell and the safe-area insets on a class instead of on
+         (display-mode: standalone).
+
+         iOS reports `fullscreen`, not `standalone`, for a home-screen app whose
+         status bar is black-translucent -- which this one is, two lines up. A
+         standalone-only media query therefore never matched on the only
+         platform with a notch to reserve, so #app kept `height: 100dvh` from
+         the plain mobile block. On iOS that lands short of the screen that
+         viewport-fit=cover hands the page, and the shortfall paints through as
+         the black band at the bottom. navigator.standalone is the definitive
+         iOS signal; the media queries cover every other browser. -->
+    <script>
+      (function () {
+        try {
+          var queries = ['(display-mode: standalone)',
+                         '(display-mode: fullscreen)',
+                         '(display-mode: minimal-ui)'];
+          var sync = function () {
+            var installed = navigator.standalone === true;
+            for (var i = 0; !installed && i < queries.length; i++) {
+              installed = !!(window.matchMedia && window.matchMedia(queries[i]).matches);
+            }
+            document.documentElement.classList.toggle('pwa', installed);
+          };
+          sync();
+          if (window.matchMedia) {
+            for (var i = 0; i < queries.length; i++) {
+              var mql = window.matchMedia(queries[i]);
+              if (mql.addEventListener) mql.addEventListener('change', sync);
+              else if (mql.addListener) mql.addListener(sync);
+            }
+          }
+        } catch (e) { /* a missing shell is better than a blank page */ }
+      })();
+    </script>
     <link rel="stylesheet" href="/site.css">
     <link rel="stylesheet" href="/styles.css">
     <!-- Guide typography for the in-app docs pane (OD2). Emitted into the docs
