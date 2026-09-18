@@ -1413,9 +1413,42 @@ void linear_state_restore(Binding **bindings, const bool *states, uint32_t n) {
  * by ref/from-rc or dropped via rc/drop, or a ref<T> binding dropped via drop!.
  * Returns true if the binding is disposed (so the auto-drop must be skipped to
  * avoid a double-free). */
+/* any-widen-stored-in-an-adt-field-has-no-owner (the deep drop): `widen_counts`
+ * adds one disposal pattern -- the binding appearing as the operand of a widen
+ * to `any`.
+ *
+ * A widen COPIES the value's header into a fresh box and hands that box to
+ * whoever stores it.  The copy's children are the original's, so if the box
+ * lands in an `:any` FIELD the field's owner will deep-drop them
+ * (`drop_localowned_<T>` -> `__tur_any_drop` -> the payload's own glue) while
+ * this binding's scope-exit drop is still queued to drop them too.  That is a
+ * double free, and the move discipline the localowned drop already relies on --
+ * "a local that was moved into a call, moved during its own initialisation, or
+ * explicitly consumed has handed ownership on" -- is exactly the right frame;
+ * a widen simply was not on the list.
+ *
+ * Off by default, so the rc/ref auto-drop injections that share this walk are
+ * untouched.  In every caller it can only ever SUPPRESS a free, which trades a
+ * double free for a leak -- the direction this whole family falls in.
+ *
+ * A widen node is reached but not descended into (EX_UNION_INJECT pushes no
+ * children here), which is all this needs: the pattern is the widen's own
+ * operand. */
+static bool binding_disposed_walk(const Expr *body, Binding *binding,
+                                  bool widen_counts);
+
 bool is_binding_consumed(const Expr *body, Binding *binding) {
+    return binding_disposed_walk(body, binding, /*widen_counts=*/false);
+}
+
+bool is_binding_widened_to_any(const Expr *body, Binding *binding) {
+    return binding_disposed_walk(body, binding, /*widen_counts=*/true);
+}
+
+static bool binding_disposed_walk(const Expr *body, Binding *binding,
+                                  bool widen_counts) {
     if (!body) return false;
-    
+
     const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
     if (!stack) {
         fprintf(stderr, "tur: oom\n");
@@ -1430,6 +1463,44 @@ bool is_binding_consumed(const Expr *body, Binding *binding) {
         const Expr *cur = stack[--sp];
         if (!cur) continue;
         
+        /* any-widen-stored-in-an-adt-field-has-no-owner (the deep drop): the
+         * binding widened to `any` and STORED -- see binding_disposed_walk's
+         * header.
+         *
+         * "Stored" is the load-bearing half.  A widen in plain argument
+         * position -- `(lfold count1 0 xs)` -- hands the box to a callee that
+         * reads it and returns; nothing outlives the call holding it, and
+         * suppressing the binding's drop there costs its whole spine for
+         * nothing.  Keying on the widen alone did exactly that and put
+         * `saffron-higher-order` back from 13 allocations to 17.
+         *
+         * The store is recognised by the CONSUMER's result type: a call that
+         * takes the widened value and hands back an aggregate which itself
+         * carries drop glue is one that can have put the box in an owning
+         * field, and `(Cons inner (Nil))` is precisely that call.  A consumer
+         * returning an int, a cstr or a bare `any` cannot have -- there is no
+         * owning field in the result to have stored it in. */
+        if (widen_counts &&
+            (cur->kind == EX_CALL || cur->kind == EX_MAKE_STRUCT) &&
+            any_widen_payload_owns_droppable(cur)) {
+            uint32_t na = (cur->kind == EX_CALL) ? cur->as.call_.n_args
+                                                 : cur->as.make_struct_.n_fields;
+            Expr *const *av = (cur->kind == EX_CALL)
+                                  ? cur->as.call_.args
+                                  : cur->as.make_struct_.field_values;
+            for (uint32_t ai = 0; ai < na; ai++) {
+                const Expr *a = av ? av[ai] : NULL;
+                while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+                if (!a || a->kind != EX_UNION_INJECT) continue;
+                const Expr *w = a->as.union_inject_.value;
+                while (w && w->kind == EX_ASCRIBE) w = w->as.ascribe_.inner;
+                if (w && w->kind == EX_VAR && w->as.var.binding == binding) {
+                    free(stack);
+                    return true;
+                }
+            }
+        }
+
         /* Check if this expression consumes the binding via ref/from-rc */
         if (cur->kind == EX_REF_FROM_RC &&
             cur->as.ref_from_rc_.expr &&

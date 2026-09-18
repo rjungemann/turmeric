@@ -1942,13 +1942,44 @@ Expr *elab_let(Elab *e, const Form *call) {
      * would be refused.  The guards are the same three, and they are what makes
      * the free sound: a local that was moved into a call, moved during its own
      * initialisation, or explicitly consumed has handed ownership on, and the
-     * new owner's scope frees the spine instead. */
+     * new owner's scope frees the spine instead.
+     *
+     * any-widen-stored-in-an-adt-field-has-no-owner (the deep drop): a FOURTH
+     * guard, because a widen to `any` is a hand-off the other three do not see.
+     *
+     *     (let [inner (Cons 1 (Nil))
+     *           outer (Cons inner (Nil))]   ;; `inner` widened into an :any field
+     *       ...)
+     *
+     * The widen copies `inner`'s header into a fresh box, but the copy's `tl`
+     * still points at the `(Nil)` box `inner`'s own spine owns.  `outer`'s
+     * scope-exit `drop_localowned_` walks the `:any` field, `__tur_any_drop`
+     * runs the payload's glue, and that frees `inner`'s spine -- which
+     * `inner`'s own scope-exit drop then frees again.  `free(): double free
+     * detected`, on six lines, in both dialects.
+     *
+     * This became reachable when `__tur_any_drop` went deep (2026-09-14); while
+     * it was a box free the copy's children were never touched and the two
+     * drops did not overlap.  Suppressing here is the safe half of the trade --
+     * `inner`'s spine leaks when nothing else claims it -- and it is all this
+     * guard can do, since the recursion runs through the type-keyed registry
+     * and has no channel to learn that one particular box borrowed its
+     * children.  The sibling inits are searched as well as the body: the
+     * widening constructor is usually a LATER BINDING of the same `let`, which
+     * `body` alone does not cover. */
     for (uint32_t k = 0; k < n_binds; k++) {
         const AdtDef *ad = elab_byval_localowned_adt(binds[k].binding->type);
         if (!ad) continue;
         if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
             is_binding_consumed(body, binds[k].binding))
             continue;
+        if (is_binding_widened_to_any(body, binds[k].binding)) continue;
+        bool widened_by_sibling = false;
+        for (uint32_t j = 0; j < n_binds && !widened_by_sibling; j++)
+            if (j != k && binds[j].init &&
+                is_binding_widened_to_any(binds[j].init, binds[k].binding))
+                widened_by_sibling = true;
+        if (widened_by_sibling) continue;
         binds[k].binding->drops_local_owned = true;
     }
 

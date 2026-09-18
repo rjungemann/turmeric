@@ -156,6 +156,61 @@ Pinned by `tests/fixtures/any-widen-fresh-payload-aliases`, whose second half
 (`ret-any`, a `Pt` of two ints) keeps the admitted case honest -- without it the
 fixture would pass for a compiler that simply switched the rule off.
 
+**The same hole was in `any_expr_is_owned_temp`, and in the localowned scope
+drop (both fixed 2026-09-18, second pass).** The guard above was applied to
+`returns_fresh_any` -- the CALL producer. Two sibling rules asked the same
+question of a WIDEN and got the same wrong answer, because a widen mints a fresh
+box and fills it with a **copy of the header**: the box is fresh, what is under
+it is whatever the original pointed at.
+
+1. **`any_expr_is_owned_temp`** (`elab_call.c`) answered its widen base case with
+   `return !frame_box`. So:
+
+   ```turmeric
+   (let [one (Cons (:: 1 any) (:: (Nil) any))]
+     (peek (:: one any)))     ;; stamped any_drop_after -> deep drop
+   ```
+
+   freed `one`'s `(Nil)` box through the copy, and `one`'s scope-exit drop freed
+   it again: `free(): double free detected in tcache 2`. Same guard applied.
+
+2. **The localowned scope drop** (`elab_forms.c`) is the harder one, and it is
+   not a stamp at all -- it is the type's own glue:
+
+   ```turmeric
+   (let [inner (Cons 1 (Nil))
+         outer (Cons inner (Nil))]   ;; `inner` widened into an :any FIELD
+     ...)
+   ```
+
+   `outer`'s `drop_localowned_` walks the `:any` field, `__tur_any_drop` runs the
+   payload's glue, and that frees `inner`'s spine -- which `inner`'s own drop then
+   frees again. Six lines, both dialects, and it does not go through any of the
+   freshness rules, so neither guard above touches it.
+
+   The repair uses the frame that was already there. The localowned drop is
+   suppressed for "a local that was moved into a call, moved during its own
+   initialisation, or explicitly consumed" -- the move discipline -- and a widen
+   is a hand-off that was simply not on that list. `is_binding_widened_to_any`
+   (`elab_core.c`, the `is_binding_consumed` walk with one extra pattern and off
+   by default for every other caller) adds it. Suppression can only ever turn a
+   double free into a leak, which is the direction this family falls in.
+
+   **"Stored" is load-bearing, and the first attempt got it wrong.** Keying on the
+   widen alone suppressed the drop for a widen in plain ARGUMENT position too --
+   where the callee reads the box and returns, nothing outlives the call holding
+   it, and the binding's drop is still needed. That cost `saffron-higher-order`
+   its whole list spine and put it back from 13 allocations to 17. The guard asks
+   instead whether the CONSUMER's result is itself an aggregate carrying drop
+   glue: `(Cons inner (Nil))` is such a call and `(llen inner)` is not.
+
+   Pinned by `tests/fixtures/any-widen-of-a-borrowed-local`, which carries both
+   halves and no `known-leak` -- drop twice and ASan aborts, drop never and the
+   spine shows up as leaked, so only the narrow answer passes.
+
+**The gate would have shown all three as green.** See the harness note below;
+that is why it was fixed first.
+
 **The gate could not have caught it (fixed 2026-09-18).** `exitcode` in
 `ASAN_OPTIONS` is the exit code for EVERY AddressSanitizer error, not just a
 leak, so `tests/run-leak-check.sh` keying `known-leak` off `rc -eq 23` excused a
@@ -254,11 +309,55 @@ question the two directions below answer, and it is the same question
 [byvalue-recursive-adt-boxes-are-never-freed](byvalue-recursive-adt-boxes-are-never-freed.md)
 "Residue 1" asks one type over.
 
-A spine-only drop (free the boxes this call minted, leave the element payloads
-alone) would close `saffron-higher-order` and is not obviously unsound, but it
-needs a second drop flavour beside `drop_localowned_<T>` and a way to say which
-fields a call minted -- weigh it against direction 2 rather than treating it as
-the cheap option.
+### The residue grows without bound (measured 2026-09-18)
+
+Not one box per program -- one per cell, per pass, forever. Same program, list
+length varied, then iteration count varied:
+
+| List length | Leaked | | Iterations (len 10) | Leaked |
+| --- | --- | --- | --- | --- |
+| 10 | 21 allocations | | 100 | 2199 allocations |
+| 20 | 41 allocations | | 400 | 8799 allocations |
+| 40 | 81 allocations | | | |
+
+Linear in the data (2N+1) and linear in the passes (~22 per turn, flat). A
+long-running Saffron program that maps over data in a loop grows RSS without
+bound, which is what "medium" is doing on this report.
+
+### A spine-only drop is NOT the cheap way in -- it is unsound (established 2026-09-18)
+
+The obvious idea: the spine cells ARE fresh (every one minted by a recursive
+call), only the elements are not, so drop fields whose runtime tag is the ADT's
+own id and skip the rest. It needs no new analysis and no producer keying.
+
+It is wrong, and a three-line program shows why. A list whose ELEMENT is a
+borrowed list emits both words with the identical tag:
+
+```c
+ctor_Lst_Cons(TUR_TAG(8921353031923255322, __t313),   /* hd: borrowed `inner` */
+              TUR_TAG(8921353031923255322, __t315))   /* tl: the fresh spine  */
+```
+
+A list of lists is ordinary Saffron, and the tag cannot tell the two apart. The
+spine drop would free `inner`, whose own scope-exit drop then frees it again --
+re-introducing the exact use-after-free class fixed above. **The spine/element
+distinction is positional and static, never a runtime tag test.**
+
+A STATIC per-field version is still open, and it is the direction with the best
+size-to-payoff ratio of the three:
+
+3. **A producer-keyed spine drop.** Record, per constructor application in a
+   fresh-returning tail, which field positions were filled with freshly-minted
+   values (a self-call, or a nested fresh ctor), and emit a
+   `drop_spine_<producer>_<T>` that drops only those. For `lmap` that is field 1,
+   inductively covering the whole result spine, and never field 0. What it costs
+   is the threading: the drop currently funnels through `__tur_any_drop(name)`
+   with nothing but a name, so the producer identity has to reach
+   `any_pending` / `emit_pending_drop_stmt` / `let_binding_widen_drop_stmt`.
+   Do NOT reach for the whole-program variant (one glue per type, a field
+   droppable iff no site anywhere fills it from a borrow) as the cheap
+   substitute: it changes what every existing drop of that type touches, and the
+   provenance it is trying to encode is a property of the value, not the type.
 
 ## Fix directions for the remainder
 

@@ -35,8 +35,13 @@ bool adt_def_has_localowned_glue(const AdtDef *def);
  * own answer to the same question (`adt_def_has_localowned_glue`): a
  * recursive-self field or an `:any` field.  A scalar, a cstr, a heap-ADT handle
  * and a struct of plain fields all own nothing, so the drop is the box free the
- * freshness rule was written against and the answer is false. */
-static bool any_widen_payload_owns_droppable(const Expr *payload) {
+ * freshness rule was written against and the answer is false.
+ *
+ * Shared with `any_expr_is_owned_temp` (elab_call.c), which had the same hole
+ * for the same reason: a widen COPIES the payload's header into a fresh box,
+ * and the copy's children are whatever the original pointed at.  The box is
+ * fresh; what is under it need not be. */
+bool any_widen_payload_owns_droppable(const Expr *payload) {
     if (!payload) return false;
     const Type *t = &payload->type;
     AdtDef *def = NULL;

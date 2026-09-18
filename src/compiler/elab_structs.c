@@ -3805,8 +3805,22 @@ Expr *elab_match(Elab *e, const Form *call) {
      * ONE ADT only.  Arms drawn from two different ADTs would need a box-id
      * switch over unrelated layouts, which is a bigger thing than a narrow and
      * has no arm-unifier story yet; leaving it to the existing diagnostic is
-     * better than narrowing to whichever ADT happened to be named first. */
-    if (scrutinee->type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
+     * better than narrowing to whichever ADT happened to be named first.
+     *
+     * NOT gated on the dialect, since 2026-09-18.  It was (`lang_span_is_saffron`)
+     * because Saffron is where the shape ARRIVES by default -- an unannotated
+     * parameter is `any` there.  But `any` is a Turmeric type, `(defn peek [l :
+     * any] ...)` is a Turmeric signature, and a plain-Turmeric `match` on one
+     * emitted PRECISELY the C this comment predicts:
+     *
+     *     tur_adt_Lst __scrut_v = (l);   // error: invalid initializer
+     *
+     * -- a hard `cc` failure with no Turmeric-level diagnostic, on a program the
+     * same file compiles and runs the moment `#lang saffron` is added.  The
+     * narrow has nothing dialect-specific in it: it reads the arms, finds one
+     * ADT, and inserts the checked unbox that `cast` would.  The gate was
+     * describing where the author met the problem, not where it applies. */
+    if (scrutinee->type.kind == TY_ANY) {
         AdtDef *only = NULL;
         bool mixed = false;
         for (uint32_t ai = 0; ai < n_arms && !mixed; ai++) {
