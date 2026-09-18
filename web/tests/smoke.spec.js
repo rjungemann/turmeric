@@ -102,9 +102,14 @@ test.describe('Try Turmeric smoke tests', () => {
         await expect(page.locator('#console')).not.toContainText('#<fn main>');
     });
 
-    test('Force update clears caches and reloads', async ({ page }) => {
+    test('Force update clears caches and navigates off the cached URL', async ({ page }) => {
         await page.goto('/try/');
-        await waitForReady(page);
+        // Deliberately NOT waitForReady: this is about the overflow menu and
+        // the service worker, and nothing here touches the evaluator. Waiting
+        // on the WASM boot only made the case unrunnable in a checkout without
+        // a built public/turmeric.wasm -- which is any fresh worktree, and is
+        // why the assertion below went unverified locally when it changed.
+        await page.waitForFunction(() => !!window.turmericApp, null, { timeout: 30_000 });
 
         // Stub the destructive bits so the test observes intent without actually
         // unregistering the SW or navigating away.
@@ -118,16 +123,35 @@ test.describe('Try Turmeric smoke tests', () => {
             if (navigator.serviceWorker) {
                 navigator.serviceWorker.getRegistrations = async () => [];
             }
-            // `location.reload` is non-configurable in current Chromium, so it
-            // cannot be stubbed; the app reloads through `hardReload`, which
-            // defers to this hook when a test installs one.
+            // `location.reload` / `location.replace` are non-configurable in
+            // current Chromium, so they cannot be stubbed; the app goes through
+            // hardReload / hardNavigate, which defer to these hooks when a test
+            // installs one.
             window.__turiReload = () => { window.__reloaded = true; };
+            window.__navigatedTo = null;
+            window.__turiNavigate = (url) => { window.__navigatedTo = url; };
         });
 
-        await page.locator('#more-btn').click();
+        // Open the overflow menu, retrying until it is wired. `turmericApp` is
+        // assigned at module scope, long before init() attaches this button's
+        // listener, so a single click can land on nothing. Click only while the
+        // menu is closed -- clicking blindly in a poll would toggle it shut
+        // again on the iteration after it opened.
+        await expect.poll(async () => {
+            if (!(await page.locator('#more-menu').isVisible())) {
+                await page.locator('#more-btn').click().catch(() => {});
+            }
+            return page.locator('#more-menu').isVisible();
+        }, { timeout: 20_000 }).toBe(true);
         await page.locator('.more-item[data-action="force-update"]').click();
 
-        await expect.poll(() => page.evaluate(() => window.__reloaded)).toBe(true);
+        // A NAVIGATION, not a reload: unregistering the worker and emptying
+        // Cache Storage does not touch WebKit's own HTTP/page cache, which in
+        // an iOS standalone web app can answer location.reload() with the very
+        // HTML this is trying to replace.
+        await expect.poll(() => page.evaluate(() => window.__navigatedTo))
+            .toMatch(/^\/try\/\?u=\d+$/);
+        expect(await page.evaluate(() => window.__reloaded)).toBe(false);
         expect(await page.evaluate(() => window.__cachesDeleted)).toContain('stale-cache');
     });
 

@@ -212,6 +212,15 @@
                                     <button class="more-item" role="menuitemcheckbox" aria-checked="false"
                                             data-action="toggle-minimap">Show minimap</button>
                                     <div class="more-sep" role="separator"></div>
+                                    <!-- Which build is actually running, read
+                                         from the live service-worker cache
+                                         name (which carries version + commit).
+                                         The PWA can hold an old build for a
+                                         long time and nothing on the page said
+                                         so, which made "is this stale?"
+                                         unanswerable without a desktop and a
+                                         cable. Filled by refreshBuildStamp(). -->
+                                    <div class="more-label" id="build-stamp"></div>
                                     <button class="more-item" role="menuitem" data-action="force-update" title="Clear cached assets and reload the latest version">Force update</button>
                                     <div class="more-sep" role="separator"></div>
                                     <div class="more-label">Examples</div>
