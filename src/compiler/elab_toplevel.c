@@ -1800,6 +1800,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         e.turn_start_n_adt_defs  = e.n_adt_defs;
         e.turn_start_n_effects   = e.effect_env ? e.effect_env->n_effects : 0;
         e.turn_start_instances   = e.typeclass_env.instances;
+        e.turn_start_n_refine_call_sites = e.n_refine_call_sites;
     } else {
         elab_init_state(&e, arena, st);
     }
