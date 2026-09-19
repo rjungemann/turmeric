@@ -7,7 +7,7 @@ types, any return type is accepted. Second subset: **19 container/cell payload
 parameters declared `:int`**, which cannot carry a `float` at all and accept a
 by-value struct that then fails in cc.
 **Discovered:** 2026-09-16, while auditing runtime seams for
-[the seam family](router-payloads-are-int64-only.md).
+[the seam family](../archive/router-payloads-are-int64-only.md).
 **Scope:** `stdlib/*.tur` only.
 
 This is the **stdlib twin** of
@@ -178,10 +178,17 @@ many genuine lengths, counts, ports, and indices.
 3. **S2 wants a decision, not a mechanical rewrite.** Making `chan-send`
    parametric in its payload is the right answer and is the same design question
    the runtime-seam family raises: either monomorphize per payload type, or box
-   with a tag the way `any` does (`tests/fixtures/any-box-struct/`). Worth
-   sequencing against
-   [docs/upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md)
-   rather than patching each container.
+   with a tag the way `any` does (`tests/fixtures/any-box-struct/`).
+
+   > **Corrected 2026-09-18.** This item originally said to sequence S2 against
+   > `docs/upcoming/end-to-end-monomorphization-plan.md`. **That plan is
+   > finished, and was already finished when this report was filed** -- it and
+   > its successor were archived 2026-06-19, the successor's banner reading "End
+   > to-end monomorphization landed ... the small ABI bridge that remains is
+   > intentional and necessary, with no further work to be done on it". The
+   > `../upcoming/` path had been dead for three months. So S2 is **not blocked
+   > on a pending ABI decision**; there is nothing to sequence against, and the
+   > question below is the real one.
 4. **Until S2 lands, reject aggregates at the boundary.** The struct-through-a-
    `:int`-parameter case reaching cc is a plain soundness hole and is
    independently fixable: a by-value aggregate passed to a declared `:int`
@@ -242,12 +249,31 @@ unsound, with no boxing rule to consult -- and why its headline, calling `::`
 the cast", reads as complete but is not: **the call-argument position is a
 second such boundary, and it is the harder one.**
 
-**Revised direction 4.** The check belongs where the boxing decision is made --
-the emitter, at the point it is about to assign an aggregate into an `int64_t`
-slot with no applicable box rule -- not in `elab_call.c`. That is a materially
-bigger change than this report estimated, and it should be sequenced with
-[end-to-end-monomorphization-plan](../upcoming/end-to-end-monomorphization-plan.md)
-alongside direction 3 rather than taken as the cheap floor.
+**Revised direction 4.** A general rule does not belong in `elab_call.c`; the
+boxing decision is the emitter's. But there is a **working precedent that is
+not general**, and it is the more useful lead:
+
+`turi-session-expansion-plan` S3.5 closed the whole silent-erasure seam family
+(router / generator / async-await / binary-session payloads, all four archived
+2026-09-16) with a payload-lowering pair --
+`session_payload_to_word` / `session_payload_from_word`
+(`src/compiler/elab_sessions.c:303+`, called from `elab_global.c`,
+`elab_forms.c`, `emit_module.c`, mirrored in `src/turi/eval.c`). A float is
+bit-reinterpreted, a pointer cast through `intptr_t`, and **a by-value struct
+is rejected with a diagnostic (TUR-E0212) rather than reaching cc** -- which is
+precisely what direction 4 asks for, already shipped, at four seams.
+
+Why it worked there and not as a general rule: a session `send-to` / `recv-from`
+is a **compiler-lowered template**, so the compiler owns the lowering site and
+can wrap the payload on the way through. The general call boundary has no such
+site -- which is what the 59/21-regression measurement above is really saying.
+
+**The open question for both S2 and direction 4** is therefore narrower and
+answerable: `chan-send` / `atomic-store!` / `ref-new` are ordinary stdlib
+`defn`s over inline-C, **not** compiler-lowered forms, so the pair does not
+obviously transfer. Either give those seams a lowering site the compiler owns
+(the session shape), or make the containers parametric. That is the decision to
+take -- not a wait on a plan that finished in June.
 
 **Repro kept here rather than as a fixture.** An `errors/` fixture for this
 would be permanently red -- the tree has no xfail/expected-fail marker (the
@@ -276,9 +302,9 @@ shipping one of the two rules measured above. The repro is three lines:
 
 - [docs/archive/spices-int-stand-in-audit-2026-06-14.md](../archive/spices-int-stand-in-audit-2026-06-14.md)
   -- the spice-side twin, same rubric, 35 spices.
-- [router-payloads-are-int64-only](router-payloads-are-int64-only.md),
-  [generator-yield-payload-is-int64-only](generator-yield-payload-is-int64-only.md),
-  [async-await-payload-is-int64-only](async-await-payload-is-int64-only.md),
+- [router-payloads-are-int64-only](../archive/router-payloads-are-int64-only.md),
+  [generator-yield-payload-is-int64-only](../archive/generator-yield-payload-is-int64-only.md),
+  [async-await-payload-is-int64-only](../archive/async-await-payload-is-int64-only.md),
   [session-payloads-are-int64-only](../archive/session-payloads-are-int64-only.md) -- the
   same erasure where it is SILENT rather than declared.
 - [CLAUDE.md](../../CLAUDE.md) -- "No Lazy `:int` Stand-Ins -- STRICT RULE".
