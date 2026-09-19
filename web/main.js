@@ -109,6 +109,9 @@ const STORAGE_KEYS = {
     // Minimap: true / false when the user has chosen, absent when they have
     // not. The absence is load-bearing -- see minimapPreference() (M1).
     minimap:   'tur.try.minimap.v1',
+    // Where the docs pane was when the app last went away: {ref, scrollTop},
+    // or null once it is closed. See persistDocsState().
+    docs:      'tur.try.docs.v1',
 };
 
 // Multi-tab editor state. Each tab carries its persisted record plus a
@@ -4999,8 +5002,12 @@ let docsNavCollapsed = false;
  *
  * Per-ref rather than one global offset on purpose: the pane is a browser over
  * many pages, so coming back to guide A must not restore guide B's offset.
- * Session-scoped in memory -- surviving a reload is not worth a STORAGE_KEYS
- * entry for something this cheap to re-establish by scrolling.
+ *
+ * The map itself is session-scoped: every page you read this session is worth
+ * an entry in memory, and none of them is worth a localStorage write. The one
+ * exception is the page the pane is actually showing when the app goes away,
+ * which persistDocsState() banks alongside the ref -- restoring the open guide
+ * but not the place in it just moves the complaint one step along.
  */
 const docsScrollByRef = new Map();
 
@@ -5303,6 +5310,7 @@ async function showDocsPage(refWithAnchor, { updateHash = true } = {}) {
     decorateDocsArticle(article);
     markDocsNavActive();
     if (updateHash) setHashParam('doc', refWithAnchor);
+    persistDocsState();
 
     const siteLink = document.getElementById('docs-site-link');
     if (siteLink) siteLink.href = docsSiteUrl(ref);
@@ -5449,11 +5457,62 @@ function closeDocsPane() {
     if (overlay) overlay.style.display = 'none';
     document.body.classList.remove('docs-open');
     setHashParam('doc', null);
+    persistDocsState();
 }
 
 function docsPaneIsOpen() {
     const overlay = document.getElementById('docs-overlay');
     return !!overlay && overlay.style.display !== 'none';
+}
+
+/**
+ * Bank the pane's location so a later LAUNCH can come back to it.
+ *
+ * `#doc=` already carries this across a reload and drives back/forward, but a
+ * hash does not survive a relaunch: an installed app cold-starts at the
+ * manifest's start_url, which has no fragment. So a reader who closed the app
+ * inside a guide reopened it on the editor, with nothing on screen saying
+ * where they had been -- the pane remembers within a session and forgot across
+ * the only boundary an installed app actually has.
+ *
+ * Null when the pane is closed, which is what makes this a memory of state
+ * rather than a bookmark: closing the docs is how you say you are done with
+ * them, and the next launch has to honour that.
+ */
+function persistDocsState() {
+    if (!docsPaneIsOpen() || !docsCurrentRef) {
+        safeWrite(STORAGE_KEYS.docs, null);
+        return;
+    }
+    safeWrite(STORAGE_KEYS.docs, {
+        ref: docsCurrentRef,
+        scrollTop: docsScrollByRef.get(docsCurrentRef) || 0,
+    });
+}
+
+/**
+ * Reopen the pane where it was left, on a launch that arrived without a
+ * `#doc=` of its own.
+ *
+ * The ref is checked against the pack before the pane opens. A guide that was
+ * renamed or dropped between releases would otherwise restore as
+ * "No page ... in this documentation pack", which is a worse greeting than the
+ * editor; a stale entry clears itself instead. Nothing is restored when the
+ * pack is missing entirely (a dev server that never ran `just docs`), since
+ * there is no page to restore into.
+ */
+function restoreDocsPane() {
+    const saved = safeRead(STORAGE_KEYS.docs);
+    if (!saved || typeof saved.ref !== 'string') return;
+    loadDocsIndex().then((index) => {
+        if (!index) return;
+        if (!docsEntryFor(saved.ref)) {
+            safeWrite(STORAGE_KEYS.docs, null);
+            return;
+        }
+        if (saved.scrollTop) docsScrollByRef.set(saved.ref, saved.scrollTop);
+        openDocsPane(saved.ref);
+    });
 }
 
 /**
@@ -5568,10 +5627,31 @@ function initDocsPane() {
 
     initDocsLinkInterception();
 
+    // Going away is the last moment the offset is readable, and for an
+    // installed app it is the ONLY one: it is backgrounded rather than
+    // unloaded, and iOS may kill it later without running anything else.
+    // `pagehide` covers the ordinary tab being closed or navigated away.
+    const bankDocsState = () => { rememberDocsScroll(); persistDocsState(); };
+    window.addEventListener('pagehide', bankDocsState);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') bankDocsState();
+    });
+
     // Deep link: /try/#doc=guides/hkt-guide restores a docs location, and
     // composes with the existing #code= share hash rather than replacing it.
+    //
+    // The hash wins outright where it has a `doc` of its own -- following a
+    // link is a request for that page, not for wherever you were last.
+    //
+    // The other two launches are suppressed for one reason between them: they
+    // arrive pointed at something, and the pane would land on top of it. A
+    // `#code=` share link is a request to look at a program; tutorial mode is
+    // a lesson that owns the screen (and already opts out of persistence
+    // wholesale, for the same reason). Neither clears the memory -- the next
+    // ordinary launch still restores.
     const initial = getHashParam('doc');
     if (initial) openDocsPane(initial);
+    else if (!hasUrlHashCode() && !isTutorialMode()) restoreDocsPane();
 }
 
 /** hashchange hook: a #doc= change opens or moves the pane. */

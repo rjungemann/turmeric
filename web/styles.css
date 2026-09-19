@@ -2372,10 +2372,19 @@ body.split-dragging * {
     .docs-close-x { display: none; }
 
     /* Same reasoning for the only other control in the bar: on a phone the
-       toggle is the nav's sole opener, and 24px is not a tap target. */
+       toggle is the nav's sole opener, and 24px is not a tap target.
+
+       `justify-content` because widening the box is what knocks the glyph off
+       center: `.btn` is an inline-flex that only sets `align-items`, so the
+       cross axis was handled and the main axis was left at `flex-start`. That
+       is invisible while the button is sized by its own content -- every
+       desktop use of it -- but here min-width is 40px against a 16px icon in
+       8px padding inside a 1px border, and all 6px of the surplus went to the
+       right of the glyph, drawing it 3px left of the box it sits in. */
     .docs-topbar .docs-nav-toggle {
         height: 40px;
         min-width: 40px;
+        justify-content: center;
     }
 }
 
