@@ -1,5 +1,6 @@
 ---
-status: FIX LANDED -- the shell half awaits confirmation on a device
+status: RESOLVED 2026-09-18 -- confirmed in the installed app on the
+  reporter's iPhone
 severity: high (the docs pane has no reachable exit in the installed PWA)
 discovered: 2026-09-17
 area: web / Try Turmeric PWA (iOS standalone, safe-area insets)
@@ -123,11 +124,42 @@ app -- which is the complaint 37d44e55d was answering.
 - The mobile exit control is leading-edge, 44px, and labeled `< Back`.
 - The standalone shell is pinned, per above.
 
-## Still open
+## Resolved 2026-09-18: confirmed on the device
 
-The shell half needs a look on the device. What to check, in the installed
-PWA: no unpainted band under the console footer, and the status line reaching
-the bottom edge. If a band survives, the next probe is `window.innerHeight`
-against `screen.height` and a `100dvh` probe element, read in the PWA -- that
-settles which viewport iOS is handing the page, which is the one thing this
-report infers rather than measures. Archive this file once that is confirmed.
+The reporter checked the installed app and reports it fixed. That was the one
+thing no checkout could answer, and it took a second commit to get there.
+
+**The first fix never ran on the device.** It gated the safe-area tokens on
+`(display-mode: standalone), (display-mode: fullscreen)` but the pinned shell
+that consumes them on `(max-width: 1024px) and (display-mode: standalone)`
+alone. iOS reports `fullscreen`, not `standalone`, for a home-screen app whose
+status bar is black-translucent -- which `try/index.html` sets two lines above
+the viewport meta -- so on the only platform with a notch to reserve, the
+shell block never matched. `#app` kept `height: 100dvh` from the plain mobile
+block and landed short by top+bottom inset (59 + 34 = 93 CSS px), painting the
+shortfall through as the band. **The measured band matches that sum, not
+either inset alone**, which is also why 37d44e55d's "drop `padding-bottom`"
+reading did not hold. `site-nav, .footer { display: none }` lived in the same
+dead block, so the nav was never hidden either -- in the report screenshot it
+is on screen, crushed under the status bar.
+
+`ce5a6ad3a` replaced both gates with one class, `html.pwa`, set by an inline
+script in `try/index.html` before first paint from `navigator.standalone`
+(definitive on iOS) falling back to the standalone/fullscreen/minimal-ui media
+queries. One switch, so the two halves cannot drift apart again.
+
+**Why it shipped green twice.** The test asserted that a rule containing
+`position: fixed` EXISTS in the CSSOM -- reading rule TEXT via
+`rule.conditionText.includes('display-mode: standalone')`, because standalone
+cannot be emulated under automation -- and never that it applies. A dead rule
+satisfies that perfectly. It now adds the class and MEASURES the rendered
+shell: its position, that `#app`'s bottom edge reaches the viewport bottom
+(the band's absence), and that the top inset is still reserved. A second test
+pins the gate in the other direction, that an ordinary browser tab is NOT
+pinned -- otherwise this would take the site nav off the page for every mobile
+visitor.
+
+The lesson worth carrying: a CSS fix behind a media query the test environment
+cannot enter is unverifiable by construction, and asserting on rule text
+instead is not a substitute -- it is an assertion that the author typed
+something, which was true both times the band survived.
