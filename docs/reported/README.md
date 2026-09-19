@@ -2072,6 +2072,12 @@ nowhere to record whether they are still live.
 | --- | --- | --- |
 | [macos-asan-runtime-deadlocks-at-startup](macos-asan-runtime-deadlocks-at-startup.md) | medium when live | On a mismatched pairing -- a clang whose bundled ASan runtime predates the running dyld shared-cache layout -- the Debug build spins forever in `InitializeShadowMemory` before `main()`, so every invocation hangs, `tur --version` included. Reproduces from a bare `int main(void){}` compiled `-fsanitize=address`, and is triggered by *rebuilding* with the outdated toolchain, not by any source change. **Latent as of filing**: does not reproduce on macOS 27.0 / Apple clang 21.0.0, where `build/tur` is genuinely ASan-linked and runs. Deliberately not auto-disabled -- #660 first keyed an auto-off on Darwin >= 27 and then reverted it, since that would silently strip macOS CI of sanitizer coverage on a runner upgrade; this host being a working Darwin 27 is direct evidence the revert was right and that Darwin version was the wrong variable. Backstopped by the `perl -e 'alarm 10'` `tur --version` smoke check at `ci.yml:150` |
 
+## Found executing the stdlib int-stand-in audit (filed 2026-09-18)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [run-sh-stamp-cache-ignores-the-stdlib](run-sh-stamp-cache-ignores-the-stdlib.md) | medium | `stamp_key` is `hash(input) + hash(expected.c) + mtime(tur)` -- the **stdlib is not in it**, and stdlib/*.tur is data the compiler reads rather than something linked into the binary. So a stdlib-only edit invalidates no stamp, every fixture PASS-skips from cache, and the summary reports `3047 passed, 0 failed` for a run that recompiled nothing. Observed on PR #909: local green, CI red with 148 codegen mismatches from one `json/bool [v : int]` -> `[v : bool]` change. Only springs on stdlib-ONLY edits -- a compiler rebuild bumps `TUR_MTIME` and invalidates everything -- i.e. exactly the shape of a stdlib audit or signature pass. Workaround `TUR_FORCE=1`; fix is to fold a one-shot hash of `stdlib/*.tur` into the key |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
