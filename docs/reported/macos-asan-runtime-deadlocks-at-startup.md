@@ -1,7 +1,7 @@
 ---
 title: An outdated clang's ASan runtime deadlocks every Debug tur at startup on newer macOS
 category: Reported
-description: On a mismatched toolchain pairing (a clang whose bundled ASan runtime predates the running dyld shared-cache layout) the Debug build spins forever in InitializeShadowMemory before main(), so every tur invocation hangs, `tur --version` included. Latent, not fixed -- the tree deliberately keeps sanitizers on and stays loud.
+description: On a mismatched toolchain/OS pairing the Debug build spins forever in InitializeShadowMemory before main(), so every tur invocation hangs, `tur --version` included. Latent, not fixed -- the tree deliberately keeps sanitizers on and stays loud. Mechanism corrected 2026-09-18: the macOS ASan runtime is a dylib loaded from an absolute rpath at startup, not code linked into the binary, so a CLT update fixes already-built binaries and no rebuild is needed.
 ---
 
 # An outdated clang's ASan runtime deadlocks every Debug `tur` at startup on newer macOS
@@ -50,16 +50,65 @@ $ perl -e 'alarm 15; exec @ARGV' ./bare-asan     # hangs when live
 runners ship no coreutils `timeout`, and this is the same portable form CI
 uses.
 
-## Root cause
+## Root cause, corrected 2026-09-18
 
-The ASan runtime is **baked into the binary by the compiler at link time**, so
-the binary carries whatever runtime its clang shipped. An old clang links a
-runtime that predates the current dyld shared-cache layout, and that runtime's
-shadow-memory setup walks a cache it does not understand. The variable is the
-**pairing** of clang to OS, not either one alone.
+**This report's first version said the ASan runtime is "baked into the binary
+by the compiler at link time." On macOS that is not how it works**, and the
+difference changes both the trigger and the set of remedies. Measured:
 
-That distinction is load-bearing, and the tree has already been bitten by
-getting it wrong -- see "Why there is no auto-disable" below.
+```sh
+$ otool -l build/tur | grep -A2 LC_RPATH
+  path /Library/Developer/CommandLineTools/usr/lib/clang/21/lib/darwin
+
+$ DYLD_PRINT_LIBRARIES=1 ./build/tur --version
+  .../CommandLineTools/usr/lib/clang/21/lib/darwin/libclang_rt.asan_osx_dynamic.dylib
+```
+
+What is baked in is an **absolute, version-pinned path**. The runtime is a
+dylib loaded out of the toolchain directory at every startup. Three
+consequences the original text got wrong:
+
+1. **A rebuild is not required to change the runtime.** Updating the Command
+   Line Tools in place swaps the dylib under every binary already built. The
+   original "triggered by *rebuilding* with the outdated toolchain" describes
+   when the rpath gets re-pointed, not when the runtime changes. So if this is
+   ever live, **updating the CLT is a remedy**, and it was not on the list.
+
+2. **A major CLT bump breaks the path; it does not hang.** The rpath names
+   `clang/21`. When CLT moves to 22 that directory is gone and an old binary
+   fails to *load*, with a dyld error. That is loud and instant, and should not
+   be filed as this.
+
+3. **Runtimes are not interchangeable, by design.** The binary imports a guard
+   symbol naming the compiler that built it. Forcing a foreign runtime under
+   it is rejected rather than silently used:
+
+   ```sh
+   $ DYLD_LIBRARY_PATH=/opt/homebrew/Cellar/llvm/22.1.4/lib/clang/22/lib/darwin \
+       ./build/tur --version
+   dyld: Symbol not found: ___asan_version_mismatch_check_apple_clang_2100
+   ```
+
+   This matters for the diagnosis: "an old clang links an old runtime" cannot
+   produce a *silent* mismatch. The pairing that deadlocks has to be a runtime
+   the binary accepts -- its own toolchain's -- that the running dyld defeats.
+
+The variable remains the **pairing** of toolchain to OS, not either alone.
+That part of the original account survives.
+
+## The recommended fix collides with a documented trap
+
+Remedy 1 below (build with Homebrew LLVM) is the same route
+[CLAUDE.md:245](../../CLAUDE.md) warns about from the other direction: a `tur`
+built with Homebrew LLVM, against fixtures that link with Apple `cc`, fails
+**every** fixture on `___asan_version_mismatch_check_v8`, which the harness
+reports as `build failed` -- i.e. it reads exactly like a compiler regression.
+The guard symbol above is that same mechanism, confirmed live on this host.
+
+So the two pieces of macOS advice in CLAUDE.md interact, and neither section
+says so. If you take remedy 1, either pin the fixture compiler to the same
+toolchain (`CC=/opt/homebrew/opt/llvm/bin/clang bash tests/run.sh`) or build
+unsanitized with Apple clang, which sidesteps both.
 
 ## Does it reproduce today?
 
@@ -78,6 +127,28 @@ getting it wrong -- see "Why there is no auto-disable" below.
 
 So a hang on this class of machine today is **not** this report; look
 elsewhere before reaching for `-DTUR_DEBUG_SANITIZE=OFF`.
+
+Both runtimes on this host work: Apple clang 21 and Homebrew clang 22.1.4 each
+run the bare repro to exit 0. `build-release/tur` links no ASan at all, as
+claimed.
+
+**Why it is latent here, stated as a rule rather than a date.** The Command
+Line Tools are `com.apple.pkg.CLTools_Executables` **27.0.0.0** shipping clang
+21, on macOS 27.0 -- toolchain and OS from the same generation. The hazard is
+an *OS-ahead-of-toolchain* window, and on this host that window is closed. So
+the thing to compare when it recurs is **the CLT version against the OS
+version**, not the Darwin version against a threshold.
+
+## Provenance: one commit message
+
+`InitializeShadowMemory` appears in exactly two commits in this repository's
+history -- #660, which filed the CLAUDE.md text, and the one that filed this
+report -- and nowhere else in `docs/`. There is no CI log, stack trace, or
+prior report recording the original observation. The spinlock / dyld
+shared-cache detail rests on a single author's note from 2026-07-11. It is the
+best available account and is probably right, but it has never been
+independently reproduced in anything this tree keeps, which is worth knowing
+before building on it.
 
 ## Why there is no auto-disable, and why that is right
 
@@ -111,10 +182,28 @@ step is what makes "stay loud" a safe policy rather than a hopeful one -- it is
 armed and present as of this filing, and should not be removed without
 replacing the coverage.
 
-## Workarounds (both already in CLAUDE.md)
+## Workarounds
 
-- **Keeps sanitizer coverage** -- build with a current LLVM whose ASan runtime
-  understands the current dyld cache:
+Ordered cheapest first. The third is the one CLAUDE.md leads with; it is listed
+last here because it is the one that costs you something downstream.
+
+- **Update the Command Line Tools first** -- new since the mechanism was
+  corrected, and it is the only remedy that fixes binaries you have already
+  built, because the runtime is loaded from the toolchain at startup rather
+  than linked in:
+
+  ```sh
+  softwareupdate --list        # look for a Command Line Tools update
+  softwareupdate --install "Command Line Tools for Xcode-<version>"
+  ```
+
+  Nothing needs rebuilding afterwards. Verify with `DYLD_PRINT_LIBRARIES=1
+  ./build/tur --version` that the dylib now loading is the new one.
+
+- **Keeps sanitizer coverage, but read the trap above** -- build with a current
+  LLVM whose ASan runtime understands the current dyld cache. This is the one
+  that makes every fixture fail on `___asan_version_mismatch_check_v8` unless
+  you pin the fixture compiler to the same toolchain:
 
   ```sh
   brew install llvm
@@ -129,8 +218,10 @@ replacing the coverage.
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF
   ```
 
-A Release build never carries the sanitizers, so `tur --version` on one always
-works regardless -- useful for telling this apart from a `tur` hang.
+A Release build never carries the sanitizers (verified: `otool -L
+build-release/tur` matches no ASan dylib), so `tur --version` on one always
+works regardless -- which is the quickest way to tell this apart from a hang in
+`tur` itself.
 
 ## What would close this report
 
