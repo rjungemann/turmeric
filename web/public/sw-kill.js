@@ -11,7 +11,7 @@
 // Why this exists: an installed Try Turmeric on iOS sat several builds behind
 // for months, immune to relaunching, to the in-app "Force update", and to
 // deleting and re-adding the icon. See
-// docs/reported/pwa-installed-build-cannot-be-updated.md.
+// docs/archive/pwa-installed-build-cannot-be-updated.md.
 //
 // The previous version of this file was never run, never tested, and referenced
 // by nothing. It did its work in an `async` listener with no event.waitUntil(),

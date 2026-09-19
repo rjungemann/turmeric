@@ -1,5 +1,6 @@
 ---
-status: OPEN -- the recovery lever is fixed and tested; the underlying defect is not
+status: RESOLVED 2026-09-18 -- recovery lever in ebcdda4b0 (#903), update
+  lifecycle in c9afe0aac (#904)
 severity: high (an installed PWA can be stuck on an old build indefinitely, with
   no user-reachable way out)
 discovered: 2026-09-17
@@ -109,25 +110,42 @@ Procedure: [docs/guides/pwa-recovery-runbook.md](../guides/pwa-recovery-runbook.
 -- and asserts the wipe, the unregister, the single reload, and the absence of a
 loop.
 
-## Still open
+## Resolved: the update lifecycle (c9afe0aac, PR #904)
 
-The update lifecycle itself. A PWA that cannot notice a new build will need the
-kill-switch again, and the kill-switch is a two-deploy outage, not a fix. What
-it needs:
+All four items landed. The parked `claude/pwa-update-on-resume` sketch was not
+what shipped -- the branch was rewritten and verified before merge.
 
-1. `registration.update()` when the app is foregrounded (`visibilitychange`),
-   since a resumed standalone app fires no navigation.
-2. A `controllerchange` handler that reloads once when a *new* worker takes
-   over -- guarded on the page having been controlled at load, so the first
-   visit's `clients.claim()` does not reload a page that is already current.
-3. `forceUpdatePWA()` ending in a navigation to a cache-busting URL rather than
-   `location.reload()`.
-4. A visible build stamp, so "is this device stale?" is answerable without a
-   desktop and a cable.
+1. **Noticing.** `reg.update()` on every foreground -- `visibilitychange` plus
+   a persisted `pageshow`, since a standalone app relaunched from the app
+   switcher is RESUMED, not navigated, so `register()` on `load` never ran on
+   the one platform where it mattered.
+2. **Applying.** A `controllerchange` handler re-navigates once, guarded on the
+   page having been controlled at load, so a first visit's `clients.claim()`
+   does not flash. Deferred to the next foreground rather than done on the
+   spot, because an edit reaches `localStorage` through two chained 250ms
+   debounces.
+3. **Force update** navigates to a cache-busting URL instead of
+   `location.reload()` -- WebKit can answer a reload out of its own HTTP/page
+   cache, which neither the unregister nor the Cache Storage wipe touches,
+   which is exactly why it was a placebo on iOS. `applySwUpdate` navigates for
+   the same reason.
+4. **Build stamp** in the overflow menu, read from the live service-worker
+   cache key (version + commit) rather than a compiled-in constant -- a
+   constant reports the build the page WANTS to be, even while a stale worker
+   serves everything around it.
 
-Drafted on branch `claude/pwa-update-on-resume` (commit `c4292bbe`), **unverified
-and not reviewed** -- parked deliberately so the kill-switch could ship on its
-own. Do not treat that branch as more than a sketch.
+`tests/pwa-update.spec.js` is red against the pre-change files and green after,
+checked by reverting `main.js` / `try/index.html`. Two test defects had to be
+fixed for that to mean anything: the suite's first run passed 2 of 4 for the
+wrong reason (service workers are disabled on loopback hosts without `?sw=1`,
+so the branch under test was dead and the negatives were green about nothing --
+every negative is now preceded by a positive that proves the wiring is live),
+and the Force-update smoke case waited on the WASM boot, making it unrunnable
+in any fresh worktree, which is precisely where its assertion had changed and
+gone unverified.
+
+This ships IN a build, so it cannot reach a client already stuck -- that is
+what the kill-switch above is for.
 
 ## Not to be confused with: the black band (resolved separately)
 

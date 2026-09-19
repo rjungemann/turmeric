@@ -97,7 +97,7 @@ means nobody has offline support until you finish.
 A fix to the update logic ships *inside* the build a stuck client cannot fetch,
 so it can only prevent the next stuck state, never the current one. That is the
 whole reason a server-side lever has to exist. See
-[docs/reported/pwa-installed-build-cannot-be-updated.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/pwa-installed-build-cannot-be-updated.md)
+[docs/archive/pwa-installed-build-cannot-be-updated.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/pwa-installed-build-cannot-be-updated.md)
 for the underlying defect -- `main.js` registers the worker and does nothing
 else: no `update()` on resume, no `controllerchange` handler, so an installed
 PWA has no way to notice or apply a new build on its own.
