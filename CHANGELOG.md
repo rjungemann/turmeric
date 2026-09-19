@@ -2,6 +2,76 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.50.0] -- 2026-09-19
+
+### Added
+
+- **A variadic rest parameter can be declared `: any`.** It used to be rejected
+  at every call site (`rest arg 0 has wrong type (expected any, got int)`), and
+  passing already-`any` arguments hit `aggregate value used where an integer was
+  expected` -- a rest list was a cons of two raw `int64_t` words and an `any` is
+  a two-word tagged box. The rest list of a `: any` rest is now the stdlib
+  `(Cons any)` monomorph, built the way source would build it, so each element
+  reads back with its own tag and both back ends produce the same cell they
+  already produce for `(list 1 "two" 7.1)`. Compiled and interpreted agree.
+- **A `:heap` parametric struct can carry a self-typed field** -- the shape a
+  typed cons tail needs, previously rejected at elaboration.
+- **A GADT index refines exhaustiveness checking.** The check reads the
+  scrutinee's index and drops a constructor whose declared index provably
+  differs, so a head over `(Vec (Succ n))` no longer demands a `VNil` arm.
+  Constructor applications are still typed bare; the guide and the stdlib
+  docstring say what is proven and what remains phantom.
+- **Saffron: function-valued globals, multi-argument dynamic methods, and an
+  `any`-typed `call/cc` receiver.** A thin function-valued global is declared
+  and cast at its real type and forward-declared unconditionally; a `kind-*`
+  method taking more than the receiver (or returning the class variable) now
+  dispatches on an `any` receiver through the same source-level witness the HKT
+  classes use; a `call/cc` receiver annotated `: any` gets a value-typed
+  continuation, so `(k v)` widens the value.
+
+### Changed
+
+- **`json/bool` takes `:bool`, and `#json(true)` / `#json(false)` read as real
+  booleans** rather than `1` / `0`. The `#json(...)` reader macro builds its
+  call in `reader.c`, so it never appeared as source text to grep for.
+- **`ref`, `chan` and `atomic` carry parametric payloads, and the httpd handler
+  seams are typed.** The stdlib int-stand-in audit's S1/S2 work replaces
+  `:int`-erased payload and callback parameters with real types, and the
+  elaborator now enforces the fat-callback shape. Error diagnostics on these
+  modules name the real types.
+- **`defdata` over a stdlib type name is refused instead of rewriting it.**
+  `elab_defdata` treats a filled definition (`n_ctors > 0`) as a redefinition
+  rather than a forward stub, in a whole-program compile as well as a REPL
+  session; a same-compile duplicate reports "already defined by an earlier
+  form", and an earlier session turn keeps its reuse path.
+- **Five more fixtures compile on the JIT engine instead of falling back to
+  `cc`** -- any-field reads no longer emit struct casts, and the
+  function-pointer global hoist is typed.
+
+### Fixed
+
+- **`future.tur` and `fiber.tur` note the region stores they never had.** Five
+  stores -- `promise-fulfill`, `promise-fail`, `future-of`, `future-error-of`
+  and `fiber-yield` -- write a caller's word into memory that outlives a
+  `with-region` bracket with no `TUR_REGION_NOTE`, which is a silent
+  use-after-rewind on the default build. All five parameters arrive erased as
+  `:int`, the case the emitter's body-entry note cannot cover. Verified in
+  emitted C, and the accompanying fixture was rewritten to actually exercise the
+  hooks: an erasing ascription is itself a hooked site, so the old cases passed
+  with the hooks deleted.
+- **A mutable function cell is fat, and a local's spine drop respects escaping
+  aliases.** A capturing closure stored into a function cell no longer loses its
+  environment.
+- **A monomorph's typedef name is introduced once,** and a local callee reached
+  through `emit_call_name`'s early exits is spelled by its declared name --
+  both had produced C that did not compile.
+- **An erased colored generic no longer rejects an elemented parameter
+  signature.** `mono_sig_ok` admits an erased `int64` carrier application in an
+  ABI clone's signature, and the clone lookups stop treating a call whose
+  arguments are still abstract under an erased outer as the pinned sibling.
+- **`adt_app_is_byvalue_product` is guarded against a self-typed field,** and
+  by-value recursive ADT lends are handled.
+
 ## [0.49.4] -- 2026-09-18
 
 ### Fixed

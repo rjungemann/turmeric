@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.49.4` -- Try Turmeric now reopens the documentation pane on the page and scroll position you left it at, and centers the Contents icon in its button on phones.
+**Latest release:** `v0.50.0` -- A variadic rest parameter can be declared `: any`, `ref`/`chan`/`atomic` carry parametric payloads instead of `:int`, and `future.tur` and `fiber.tur` note the region stores they were missing.
 
 ## What
 
