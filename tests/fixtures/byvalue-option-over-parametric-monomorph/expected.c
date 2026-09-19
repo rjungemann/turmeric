@@ -5172,6 +5172,10 @@ static tur_adt_Option__Q__int ctor_Option_Some__Q__int(tur_adt_Q__int _0) {
 }
 
 #endif
+#if !defined(TUR_FWD_tur_adt_Vec__int) && !defined(TUR_TY_tur_adt_Vec__int)
+#define TUR_FWD_tur_adt_Vec__int
+typedef struct tur_adt_Vec__int tur_adt_Vec__int;
+#endif
 #ifndef TUR_TY_tur_adt_Result__Vec__int__cstr
 #define TUR_TY_tur_adt_Result__Vec__int__cstr
 typedef struct tur_adt_Result__Vec__int__cstr {
