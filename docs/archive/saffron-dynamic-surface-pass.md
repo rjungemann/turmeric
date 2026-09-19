@@ -1,13 +1,20 @@
 # Saffron dynamic-surface pass -- findings (2026-09-09)
 
+**ARCHIVED 2026-09-19: every item of the pass is resolved and pinned.** The
+last two to close were M7 (the erased self-referential cons tail; stdlib
+`Cons`'s tail is now the typed `(Cons A)` link) and the `& rest : any`
+representation gap (a `: any` rest list is the `(Cons any)` monomorph). The
+status paragraph and per-item notes below are kept as the paper trail.
+
 **Status 2026-09-19.** Resolved: H1-H11, M1-M6, M8, M10, and -- this date --
 six of the lows (Sym `=`, the expression call head, the `if` join, the
 `(defn mkv [] [1 2.5])` parse, the trailing-keyword body, the ctor under an
 all-`any` expectation), each pinned by a fixture; the fuzzer's last two KNOWN
 rows and both known-probes are retired and 250 cases with those shapes back
-in the pool are clean; the guide's boundary example is corrected. **M9 and the `call/cc` `: any` low resolved later the same day.** **Open:**
-M7 (the erased self-referential tail) and the `& rest : any` low, which is
-gated on the same stdlib `Cons` representation as M7 (see the item). The
+in the pool are clean; the guide's boundary example is corrected. **M9 and the `call/cc` `: any` low resolved later the same day; M7 (the
+erased self-referential tail) and the `& rest : any` low, which was gated on
+the same stdlib `Cons` representation, later still.** **Open:** nothing --
+every item of the pass is resolved and pinned (see each item). The
 `#lang`-less `(defn f [] [x y])` reading is deliberately unchanged (see the
 parse item). Struck-through items below carry their resolution note.
 
@@ -347,9 +354,9 @@ both back ends. Pinned by `tests/fixtures/saffron-dyn-field-on-generic-adt`.
 (Cons A)))` now: the tail is the recursive occurrence, a typed pointer, so
 `.tail` hands back a `(Cons A)` and the widen tags it `(Cons any)`. Three
 things had to land first, in order: the self-typed `:heap` shape itself
-([self-typed-heap-parametric-field-unsupported](../archive/self-typed-heap-parametric-field-unsupported.md)),
+([self-typed-heap-parametric-field-unsupported](self-typed-heap-parametric-field-unsupported.md)),
 a nullary generic under a tyvar-shaped expectation so `tnil` could become
-`[A] [] : (Cons A)` ([nullary-generic-call-under-tyvar-expectation](../archive/nullary-generic-call-under-tyvar-expectation.md)),
+`[A] [] : (Cons A)` ([nullary-generic-call-under-tyvar-expectation](nullary-generic-call-under-tyvar-expectation.md)),
 and the dynamic field read widening an app-typed field under the all-`any`
 monomorph rather than the OPEN `(Cons A)` (whose id no `.head` arm matched:
 `no field '.head' on a Cons value`). `tnil?` takes the typed list now so an
@@ -528,12 +535,20 @@ covered, by the same rule as before: a parametric or `:heap` receiver.
   (`head`, the untyped cons helpers) would have to know the head is a box
   and deref it, a second protocol for one accessor. Both are the stdlib
   `Cons` representation change M7 records, not a call-site fix.
-  **UNBLOCKED later on 2026-09-19:** M7 landed -- `Cons`'s tail is `(Cons
-  A)` and a `(Cons any)` walks through an `any` on both back ends -- so the
-  `(Cons any)` route above is open: the remaining work is routing the
-  variadic rest lowering for a `: any` rest onto the `(Cons any)` monomorph
-  (`tcons-of` at `any`) instead of `__tur_cons_of`'s int64 cell, and typing
-  the callee's `rest` as `(Cons any)`. Still open.
+  **RESOLVED later on 2026-09-19**, by the `(Cons any)` route once M7
+  landed. The rest binding of a `: any` rest (elab_fns.c) is typed as the
+  stdlib `(Cons any)` monomorph, so the callee walks it with `.head` /
+  `.tail` / `tnil?` and each element reads back with its own tag; the call
+  site (elab_call.c) builds the chain as source would -- `(make-struct Cons
+  (:: e0 any) (make-struct Cons (:: e1 any) ... (:: 0 (Cons any))))` -- and
+  elaborates that, so both back ends build the same cell they build for
+  `(list 1 "two" 7.1)` and no emitter grew a second cons protocol. The
+  variadic path also now widens the callee's FIXED `any` parameters (a
+  Saffron variadic defn's unannotated first parameter took a bare int:
+  `incompatible type for argument 1`). Pinned by
+  `tests/fixtures/saffron-variadic-rest-any` (walk, count, an already-`any`
+  argument, a `bool` element) and `variadic-rest-any` (the typed-file twin,
+  with the hand-built chain), agreeing compiled and interpreted.
 - ~~`(defstruct Dyn [v : any])` is `unsupported field form` (typed too); ADT
   fields accept `any`, struct fields do not.~~ **RESOLVED 2026-09-10.**
   `defstruct_field_type_lowerable` had no arm for `TY_ANY`, so the gate fell to

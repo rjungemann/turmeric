@@ -11,7 +11,7 @@ vec-element round trip), `heap-parametric-self-typed-field-option-link`
 
 **Severity: medium** (was a compiler crash; then a clean rejection or ICE).
 Found 2026-09-19 while assessing M7 of
-[saffron-dynamic-surface-pass](../reported/saffron-dynamic-surface-pass.md): the fix that
+[saffron-dynamic-surface-pass](saffron-dynamic-surface-pass.md): the fix that
 report needs is exactly this shape -- `stdlib/list.tur`'s `Cons` with its tail
 declared as the recursive occurrence instead of the erased `:int`.
 
@@ -81,7 +81,8 @@ Five defects sat in a row behind the one shape; each fix uncovered the next.
 
 Both M7 (walking a cons list through an `any`) and the `& rest : any` gap in
 the Saffron report reduce to declaring `Cons`'s tail as `(Cons A)`. The shape
-is supported now; the stdlib redeclaration itself is still to do.
+is supported now, and the stdlib redeclaration landed later the same day
+(M7 and `& rest : any` in the Saffron report are resolved).
 
 ## Found on the way, not fixed here
 
@@ -90,4 +91,5 @@ tyvar-shaped -- `(make-struct W 8 (none))` for `(defstruct W :heap [A] (val
 A) (opt (Option A)))`, or `(push 3 (node-nil))` -- is rejected with
 `expected (type-app Option tyvar 'A'), got (type-app Option tyvar 'A')`. It
 reproduces on a non-recursive def, so it is not this shape's; filed as
-[nullary-generic-call-under-tyvar-expectation](../reported/nullary-generic-call-under-tyvar-expectation.md).
+[nullary-generic-call-under-tyvar-expectation](nullary-generic-call-under-tyvar-expectation.md)
+(resolved later the same day).

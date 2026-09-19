@@ -6154,6 +6154,16 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         for (uint32_t i = 0; i < n_required; i++) {
             call_args[i] = elab_form(e, call->as.list.items[1 + i]);
             if (!call_args[i]) return NULL;
+            /* saffron-dynamic-surface-pass (`& rest : any`): a variadic
+             * callee's FIXED parameters get none of the fixed-arity path's
+             * coercions, so an unannotated (`any`) parameter of a Saffron
+             * variadic defn received a bare int and cc rejected the call
+             * (`incompatible type for argument 1`).  Widen exactly as the
+             * fixed-arity `A <: any` rule does. */
+            if (i < fn_type.as.fn.arity && fn_type.as.fn.arg_kinds &&
+                fn_type.as.fn.arg_kinds[i] == TY_ANY &&
+                call_args[i]->type.kind != TY_ANY)
+                call_args[i] = elab_coerce_to_any(e, call_args[i]);
         }
         /* Build cons-list expression for rest args */
         Expr *rest_expr;
@@ -6168,7 +6178,50 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             (fn_type.as.fn.rest_full_type &&
              fn_type.as.fn.rest_full_type->kind == TY_TYVAR)
                 ? fn_type.as.fn.rest_full_type->as.tyvar_.name : NULL;
-        if (n_rest == 0) {
+        /* saffron-dynamic-surface-pass (`& rest : any`): the rest list of a
+         * `: any` rest is the stdlib `(Cons any)` monomorph (see the rest
+         * binding in elab_fns.c), not the int64 `__tur_cons_of` cell -- an
+         * `any` is a two-word tagged box and the cell's head slot is one
+         * word; before this the check below rejected `(f 1 2 3)` outright
+         * and an already-`any` argument compiled to `aggregate value used
+         * where an integer was expected`.  Build the chain as the source
+         * would: `(make-struct Cons (:: e0 any) (make-struct Cons (:: e1
+         * any) ... (:: 0 (Cons any))))`, and elaborate THAT, so every
+         * element takes the ordinary widen and both back ends build the
+         * same cell they build for `(list 1 "two" 7.1)`. */
+        bool rest_any = fn_type.as.fn.rest_kind == TY_ANY &&
+                        !(fn_type.as.fn.rest_full_type &&
+                          fn_type.as.fn.rest_full_type->kind != TY_ANY);
+        if (rest_any) {
+            Arena *fa = e->arena;
+            Span sp = call->span;
+            const Symbol *cons_sym = intern_cstr(e->st, "Cons");
+            const Symbol *any_sym  = intern_cstr(e->st, "any");
+            Form **ty_items = (Form **)arena_alloc(fa, 2 * sizeof(Form *));
+            ty_items[0] = form_sym(fa, sp, cons_sym);
+            ty_items[1] = form_sym(fa, sp, any_sym);
+            Form *cons_any_ty = form_list(fa, sp, ty_items, 2);
+            Form **nil_items = (Form **)arena_alloc(fa, 3 * sizeof(Form *));
+            nil_items[0] = form_sym(fa, sp, e->sym_ascribe);
+            nil_items[1] = form_int(fa, sp, 0);
+            nil_items[2] = cons_any_ty;
+            Form *chain = form_list(fa, sp, nil_items, 3);
+            for (int32_t ri = (int32_t)n_rest - 1; ri >= 0; ri--) {
+                Form *item = call->as.list.items[1 + n_required + ri];
+                Form **asc = (Form **)arena_alloc(fa, 3 * sizeof(Form *));
+                asc[0] = form_sym(fa, item->span, e->sym_ascribe);
+                asc[1] = item;
+                asc[2] = form_sym(fa, item->span, any_sym);
+                Form **ms = (Form **)arena_alloc(fa, 4 * sizeof(Form *));
+                ms[0] = form_sym(fa, item->span, e->sym_make_struct);
+                ms[1] = form_sym(fa, item->span, cons_sym);
+                ms[2] = form_list(fa, item->span, asc, 3);
+                ms[3] = chain;
+                chain = form_list(fa, item->span, ms, 4);
+            }
+            rest_expr = elab_form(e, chain);
+            if (!rest_expr) return NULL;
+        } else if (n_rest == 0) {
             rest_expr = expr_new(e->arena, EX_INT_LIT, TYPE_INT, call->span);
             rest_expr->as.i = 0;  /* nil = 0 */
         } else {

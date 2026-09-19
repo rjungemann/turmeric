@@ -1,0 +1,18 @@
+;; `& rest : any` in a plain (typed) file: the rest list is the stdlib
+;; `(Cons any)` monomorph, so the body types it as one and each element
+;; reads back with its own tag.  The last line builds the same chain by
+;; hand -- it is what the call site lowers `(f 1 7.25)` to.
+;; 7.25 rather than 7.0: a truncating path through the widen would print 7.
+(defn len-l [l : (Cons any)] : int
+  (if (tnil? l) 0 (+ 1 (len-l (.tail l)))))
+(defn count-rest [a : int & rest : any] : int
+  (len-l rest))
+(defn first-tag [& rest : any] : cstr
+  (type-of (.head rest)))
+(defn main [] : int
+  (println (count-rest 0 1 "two" 7.1))
+  (println (count-rest 0))
+  (println (first-tag 7.1 2))
+  (println (first-tag "s"))
+  (println (cast (.head (.tail (make-struct Cons (:: 1 any) (make-struct Cons (:: 7.25 any) (:: 0 (Cons any)))))) float))
+  0)

@@ -1,0 +1,30 @@
+#lang saffron
+;; saffron-dynamic-surface-pass (`& rest : any`): a variadic rest declared
+;; `: any`.  `(f 1 2 3)` used to be rejected (`rest arg 0 has wrong type
+;; (expected any, got int)`), and passing already-`any` arguments did not
+;; compile either (`aggregate value used where an integer was expected`):
+;; a rest list was a cons of `{ int64_t head; int64_t tail; }` and an `any`
+;; is a two-word tagged box.  The rest list of a `: any` rest is now the
+;; stdlib `(Cons any)` monomorph -- the cell a Saffron `(list 1 "two" 7.1)`
+;; builds -- so the parameter is a typed list the body walks with `.head`,
+;; `.tail` and `tnil?`, and every element reads back with its own tag.
+;; The fixed parameters of a variadic Saffron defn are widened like any
+;; other call's (they were not: `incompatible type for argument 1`).
+(defn len-l [l]
+  (if (tnil? l) 0 (+ 1 (len-l (.tail l)))))
+(defn count-rest [a & rest : any] : int
+  (len-l rest))
+(defn show-list [l]
+  (if (tnil? l)
+    0
+    (do (println (type-of (.head l)))
+        (show-list (.tail l)))))
+(defn show-all [& rest : any]
+  (show-list rest))
+(defn main [] : int
+  (println (count-rest 0 1 "two" 7.1))
+  (println (count-rest 0))
+  (show-all 1 "two" 7.1 true)
+  (let [r (:: 2 any)]
+    (show-all r 3.5))
+  0)

@@ -6223,8 +6223,32 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (n_params == 0) {
                 params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
             }
-            param_kinds[n_params] = TY_INT;
-            Binding *rest_b = binding_new(e, rest_p->as.sym, TYPE_INT, false, false, rest_p->span);
+            /* saffron-dynamic-surface-pass (`& rest : any`): an `any` rest
+             * element is a two-word tagged box and does not fit the int64
+             * cons cell's head slot, so the rest list of a `: any` rest is
+             * the stdlib `(Cons any)` monomorph -- the same cell a Saffron
+             * `(list 1 "two" 7.1)` builds, whose head IS 16 bytes and whose
+             * tail is the typed link (M7).  The parameter is typed as that
+             * list, so the body walks it with `.head` / `.tail` / `tnil?`
+             * and each element reads back with its own tag.  The call site
+             * (elab_call.c) builds the chain with the `Cons` constructor
+             * under an `any` ascription per element. */
+            Type rest_bt = TYPE_INT;
+            TypeKind rest_pk = TY_INT;
+            if (rest_kind == TY_ANY) {
+                Type *cons_t = elab_lookup_type_by_name(e, intern_cstr(e->st, "Cons"));
+                if (cons_t && cons_t->kind == TY_ADT && cons_t->as.adt_.def &&
+                    cons_t->as.adt_.def->n_type_params == 1) {
+                    Type head = *cons_t;
+                    head.hkt_kind = kind_for_arity(1);
+                    Type any_t; memset(&any_t, 0, sizeof any_t);
+                    any_t.kind = TY_ANY;
+                    rest_bt = type_app(e->arena, head, any_t, rest_p->span);
+                    rest_pk = TY_APP;
+                }
+            }
+            param_kinds[n_params] = rest_pk;
+            Binding *rest_b = binding_new(e, rest_p->as.sym, rest_bt, false, false, rest_p->span);
             rest_b->is_param = true;
             params[n_params++] = rest_b;
             break; /* & must be the last; done parsing params */

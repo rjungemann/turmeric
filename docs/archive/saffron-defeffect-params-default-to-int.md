@@ -58,7 +58,7 @@ parameter side defaults, and it defaults the typed way.
 The Saffron default is applied where a `defn`'s parameters are elaborated
 (`src/compiler/elab_fns.c`, and `elab_pre_declare_toplevel_defn` for the
 forward decl -- see the H6 note in
-`docs/reported/saffron-dynamic-surface-pass.md`). `defeffect`'s parameter list
+`docs/archive/saffron-dynamic-surface-pass.md`). `defeffect`'s parameter list
 is elaborated on its own path and never consults `g_opt_saffron`.
 
 Two shapes are defensible and the choice is a design call, not a bug fix:
