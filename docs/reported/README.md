@@ -39,7 +39,8 @@ directory is worse for triage than no index.
 A value whose representation does not fit the one the typed path already chose
 for it. The three rows below were found independently and share that shape;
 the family the Saffron pass tracked under H7 / M1 / M2 is resolved and lives in
-[saffron-dynamic-surface-pass](saffron-dynamic-surface-pass.md).
+[saffron-dynamic-surface-pass](../archive/saffron-dynamic-surface-pass.md)
+(archived 2026-09-19 with every item of the pass resolved).
 
 | Report | Severity | One line |
 | --- | --- | --- |

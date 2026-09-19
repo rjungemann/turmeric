@@ -68,7 +68,8 @@
 ;;;
 ;;; Since: Phase TS3
 
-(defn tcons-of [A] [h :A t : (Cons A)] : (Cons A) (make-struct Cons :head h :tail t))
+(defn tcons-of [A] [h :A t : (Cons A)] : (Cons A)
+  (make-struct Cons :head h :tail t))
 ;;; tnil -- return an empty typed list.
 ;;;
 ;;; Returns:
@@ -230,9 +231,7 @@
   (if (eq? (.head c1) (.head c2))
     (let [t1 (.tail c1)
           t2 (.tail c2)]
-      (if (tnil? t1)
-        (tnil? t2)
-        (if (tnil? t2) false (cons-eq-go t1 t2))))
+      (if (tnil? t1) (tnil? t2) (if (tnil? t2) false (cons-eq-go t1 t2))))
     false))
 ;;; Eq [Cons] -- element-wise equality using the element type's Eq instance.
 ;; TC1-9: Phase PTC4 -- constrained Eq instance for List[A] (Cons cells).
