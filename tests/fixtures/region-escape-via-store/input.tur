@@ -80,13 +80,22 @@
   return ((FutureCell *)f)->value;
   ```)
 
+;; NOTE the node is passed DIRECTLY, not through `(build n 0)`.  An erasing
+;; ascription is itself a hooked site, so a case that erases on the way in is
+;; already noted before it reaches the store and would pass with the store hook
+;; REMOVED -- it tests nothing.  Verified with TUR_REGION_STATS=1: this shape
+;; goes rewinds=0 retires=1 with the hook and rewinds=1 retires=0 without it.
 (defn store-promise [p : Promise n : int] : int
-  (with-region (fn [] (do (promise-fulfill p (build n 0)) 1))))
+  (with-region (fn [] (do (promise-fulfill p (Link n 0)) 1))))
 
-;; 11. future-of allocates the cell INSIDE the bracket and hands the handle
-;;     out; the node it carries is the erased chain.
-(defn store-future-of [n : int] : Future
-  (with-region (fn [] (future-of (build n 0)))))
+;; 11. future-of allocates the cell INSIDE the bracket; the Future is pushed
+;;     into an OUTER vec rather than returned.  Returning it would make the
+;;     result walk refuse the rewind on its own and the store hook would go
+;;     untested -- measured: as a returned value this case is rewinds=0 with
+;;     the hook AND without it.  Held in the vec, it is rewinds=0 with and
+;;     rewinds=1 without, so the hook is what blocks the rewind.
+(defn store-future-of [fv : (Vec Future) n : int] : int
+  (with-region (fn [] (do (vec-push! fv (future-of (Link n 0))) 1))))
 
 (defn main [] : int
   (let [v (:: (vec-new) (Vec Link))]
@@ -118,9 +127,9 @@
   (let [p (promise-new)
         f (future-handle p)]
     (println (store-promise p 4))                       ;; 1
-    (println (chain-sum (future-value f)))              ;; 10
+    (println (link-v (:: (future-value f) Link)))       ;; 4
     (future-free f))
-  (let [g (store-future-of 3)]
-    (println (chain-sum (future-value g)))              ;; 6
-    (future-free g))
+  (let [fv (:: (vec-new) (Vec Future))]
+    (println (store-future-of fv 3))                    ;; 1
+    (println (link-v (:: (future-value (vec-get fv 0)) Link))))   ;; 3
   0)
