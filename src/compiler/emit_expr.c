@@ -14261,6 +14261,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(sv); free(adt_mn); free(mctor); free(mp);
                 if (fld_rty_owned) free_struct_app_type(fld_rty);
                 char *r = strdup(hb.data);
+                /* jit-fallback (the Saffron `(Cons any)` reads): every arm above
+                 * spells the read as `(cty)<deref>->field`, and when the field
+                 * is an `any` -- `cty` is `tur_tagged_t`, a STRUCT -- or a
+                 * by-value aggregate, that is a cast to a non-scalar type.
+                 * gcc/clang treat a cast to the value's own struct type as a
+                 * no-op; c2mir rejects it (`conversion to non-scalar type
+                 * requested`) and the whole program lost the engine
+                 * (saffron-cons-list has sat in the fallback baseline for it).
+                 * The cast never did anything on a struct: drop it. */
+                if (cty && strchr(cty, '*') == NULL &&
+                    (strcmp(cty, "tur_tagged_t") == 0 ||
+                     strncmp(cty, "tur_adt_", 8) == 0)) {
+                    size_t cl = strlen(cty);
+                    if (r[0] == '(' && strncmp(r + 1, cty, cl) == 0 && r[1 + cl] == ')')
+                        memmove(r, r + cl + 2, strlen(r + cl + 2) + 1);
+                }
                 buf_free(&hb);
                 return r;
             }
@@ -17083,6 +17099,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                         "%s %s = *(%s *)(intptr_t)(__scrut->%s);\n",
                                         ctype, bname, ctype, mp);
                                 }
+                            } else if (ctype && strchr(ctype, '*') == NULL &&
+                                       (strcmp(ctype, "tur_tagged_t") == 0 ||
+                                        strncmp(ctype, "tur_adt_", 8) == 0)) {
+                                /* jit-fallback: a field declared as the type
+                                 * PARAMETER (`(Some a)`) resolves to a struct in
+                                 * the all-`any` monomorph -- `ctype` is
+                                 * `tur_tagged_t` while `fb->type.kind` is the
+                                 * tyvar, so the `any` arm above did not fire and
+                                 * the read was cast to a STRUCT.  gcc/clang
+                                 * accept a same-type struct cast as a no-op;
+                                 * c2mir rejects it (`conversion to non-scalar
+                                 * type requested`) and the program lost the
+                                 * engine.  Read the slot; there is nothing to
+                                 * cast. */
+                                buf_printf(body, "%s %s = __scrut->%s;\n",
+                                           ctype, bname, mp);
                             } else {
                                 buf_printf(body, "%s %s = (%s)__scrut->%s;\n",
                                            ctype, bname, ctype, mp);

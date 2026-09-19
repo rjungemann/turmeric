@@ -15767,6 +15767,13 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
         const char *fr = NULL; char *fa = NULL;
         if (emit_global_def_thin_fnptr(need[i], &fr, &fa)) {
             buf_printf(out, "static %s (*%s)(%s);\n", fr, bn, fa);
+            /* jit-fallback (global-fn-value-def): a call through this pointer
+             * hoists into a temp whose C type the hoist looks up BY CALLEE
+             * NAME in the signature table; a global has no forward-declared
+             * signature there, so the temp fell to `__auto_type`, which is
+             * GNU-only and c2mir cannot parse -- the whole program lost the
+             * engine.  Record the pointer's result type under its name. */
+            emit_sig_record_ret_ctype(bn, need[i]->type.as.fn.arity, fr);
             free(fa);
         } else {
             buf_printf(out, "static %s %s;\n", type_c_name(need[i]->type), bn);
@@ -16570,6 +16577,11 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 const char *fp_ret = NULL; char *fp_args = NULL;
                 if (emit_global_def_thin_fnptr(e->as.def_.binding, &fp_ret, &fp_args)) {
                     buf_printf(&file, "static %s (*%s)(%s);\n", fp_ret, bn, fp_args);
+                    /* jit-fallback: see the forward-declaration pass above --
+                     * the hoist temp of a call through this pointer needs the
+                     * result type on record under the global's name. */
+                    emit_sig_record_ret_ctype(bn, e->as.def_.binding->type.as.fn.arity,
+                                              fp_ret);
                     if (e->as.def_.init) {
                         char *iv = emit_value(&ctx, &def_init_body, e->as.def_.init);
                         indent_buf(&def_init_body, ctx.indent);
