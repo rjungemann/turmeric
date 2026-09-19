@@ -2072,6 +2072,16 @@ nowhere to record whether they are still live.
 | --- | --- | --- |
 | [macos-asan-runtime-deadlocks-at-startup](macos-asan-runtime-deadlocks-at-startup.md) | medium when live | On a mismatched pairing -- a clang whose bundled ASan runtime predates the running dyld shared-cache layout -- the Debug build spins forever in `InitializeShadowMemory` before `main()`, so every invocation hangs, `tur --version` included. Reproduces from a bare `int main(void){}` compiled `-fsanitize=address`, and is triggered by *rebuilding* with the outdated toolchain, not by any source change. **Latent as of filing**: does not reproduce on macOS 27.0 / Apple clang 21.0.0, where `build/tur` is genuinely ASan-linked and runs. Deliberately not auto-disabled -- #660 first keyed an auto-off on Darwin >= 27 and then reverted it, since that would silently strip macOS CI of sanitizer coverage on a runner upgrade; this host being a working Darwin 27 is direct evidence the revert was right and that Darwin version was the wrong variable. Backstopped by the `perl -e 'alarm 10'` `tur --version` smoke check at `ci.yml:150` |
 
+## Found executing the stdlib int-stand-in audit, S1/S2 (filed 2026-09-18)
+
+Both are products of that work rather than part of it. Neither is a regression
+from it -- the second reproduces on `vec-push!`, parametric since long before.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [plain-fn-typed-params-are-kind-matched](plain-fn-typed-params-are-kind-matched.md) | medium | A parameter declared `(fn [int] int)` accepts `(fn [a : cstr] : cstr a)` with exit 0, arity mismatches included: call arguments compare `TY_FN` to `TY_FN` by KIND. S1's `fn_type_structurally_compatible` closed this for `^fat` parameters only, because it is reached through the LT2 block, which reads the expected type from `arg_full_types` -- and `types.h:681` says that array is "NULL for monomorphic args". A `^fat` param records one; a plain `(fn [int] int)` param does not, so there is nothing to compare and the check returns early. `fn_type_subtype`'s own comment claims "arity mismatch caught elsewhere"; it is caught nowhere. The predicate needs no change (it already compares carrier class and skips tyvar/unknown/any, which took S1 from 59 regressions to 0) -- the work is populating `arg_full_types` for the monomorphic case, which is load-bearing for the rank-2 paths |
+| [parametric-stdlib-diagnostics-print-tyvar-internals](parametric-stdlib-diagnostics-print-tyvar-internals.md) | low | A payload mismatch on a parametric container reads `expected tyvar, got float` and a handle mismatch reads `expected (type-app Chan tyvar 'A')` -- neither is a spelling a user can write, and the first lands on the most likely first mistake with the new API (two payload types in one container, where `A` is already bound and the message should say `expected int`). Reproduces on `vec-push!` today, so NOT an S2 regression; S2 widened its reach to chan/ref/atomic. `(type-app F X)` is `type_name_buf`'s general fallback (`types.c:3295`), whose sibling branch already prints the partial-application form as `(F _ X)`. Fixing the printer touches every snapshot that spells `type-app`, so it wants its own change with the regen in it |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
