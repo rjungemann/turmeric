@@ -3,7 +3,13 @@
 **Severity:** low (dead code that misleads: reports cite it as the playground's
 examples).
 
-**Status:** OPEN. Filed 2026-09-16 while executing
+**Status: RESOLVED 2026-09-19.** `web/examples.js` is deleted and the
+`web/README.md` project-structure tree no longer lists it. The one list the
+page reads -- `EXAMPLES` in `web/main.js` -- is the only one left; nothing
+imported the deleted file (checked: no `import`, no `<script>`, no test
+reference), so no example the page offered has changed.
+
+Filed 2026-09-16 while executing
 [playground-session-hygiene-plan](../archive/playground-session-hygiene-plan.md),
 whose source report cited `web/examples.js:99` as "the effects entry ...
 reachable straight from the examples dropdown".

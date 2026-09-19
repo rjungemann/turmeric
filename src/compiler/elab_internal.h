@@ -1775,10 +1775,6 @@ Expr *elab_defstruct(Elab *e, const Form *call);
 Expr *elab_defopaque(Elab *e, const Form *call);
 void elab_register_adt_def(Elab *e, AdtDef *def);
 Expr *elab_defdata(Elab *e, const Form *call);
-/* CONV-S1 (defstruct-as-defadt): true iff this defstruct form qualifies for the
- * slice-1 lowering to a single-variant record defadt.  Shared by the top-level
- * type pre-pass and elab_defstruct. */
-bool defstruct_lowers_to_adt(Elab *e, const Form *call);
 /* TP6: unpack a TY_APP chain on an ADT type to recover concrete type arguments
  * (into out_args, sized def->n_type_params); true on a fully-applied match.
  * adt_field_instantiate_type substitutes those args for the TY_TYVAR names in a
