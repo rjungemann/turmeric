@@ -540,6 +540,77 @@ int fn_type_subtype(Type actual, Type expected) {
     return 1;
 }
 
+/* stdlib-int-stand-in-audit S1: STRUCTURAL compatibility of two function types
+ * -- arity, argument kinds, result kind.
+ *
+ * The comment above says "arity mismatch caught elsewhere". It is not: a
+ * parameter declared `(fn [int] int)` accepted `(fn [cstr] cstr)` with exit 0,
+ * because the call-argument check compares TY_FN to TY_FN by KIND and the only
+ * refinement was the linearity pass above. That is the real mechanism behind
+ * S1's "38 callback parameters whose signature is entirely unchecked" -- and it
+ * means spelling the handler type out, which the report proposed as the fix,
+ * documents intent without enforcing anything.
+ *
+ * Deliberately permissive where the checker cannot know:
+ *   - either side a tyvar / unknown / any slot: accept (generic code passes
+ *     functions whose shape is only fixed per monomorphization);
+ *   - expected side lacking recorded full types: accept (nothing to compare).
+ * Only a concrete-vs-concrete disagreement is rejected. */
+static int fn_slot_same_carrier(TypeKind a, TypeKind b) {
+    /* Compare CARRIER CLASS, not exact kind. Under the hybrid ABI an ADT, a
+     * type-application, a struct handle, an opaque and a ptr<void> all ride the
+     * same int64 word, so `(fn [(Option String)] bool)` genuinely does satisfy a
+     * slot recorded as `(fn [int] bool)` -- rejecting that broke
+     * niche-elem-comparator-conventions and backtrack-mbind-captureless-lambda,
+     * both of which are correct programs.
+     *
+     * What survives is what the hybrid ABI actually distinguishes: ARITY, and a
+     * float (a `double` register) against a word. That is the tour-tourist class
+     * of mistake -- `(fn [req : int] : int)` where `(fn [ctx : Ctx] ...)` was
+     * meant is an arity/shape error far more often than a same-arity word swap. */
+    if (a == b) return 1;
+    return (a != TY_FLOAT) && (b != TY_FLOAT);
+}
+
+static int fn_slot_is_wildcard(const Type *full, TypeKind lowered) {
+    /* A slot the checker must not judge. The FULL type is authoritative: a
+     * generic `(fn [a] b)` lowers its tyvar slots to the int64 CARRIER kind, so
+     * arg_kinds alone reads as a concrete `int` and would be compared against a
+     * typed sink's `float`. That is the erased-fn-param-to-typed-fat-sink shape,
+     * which is supported -- the poly-to-fat box's slot-0 shim bridges the bits. */
+    TypeKind k = full ? full->kind : lowered;
+    return k == TY_TYVAR || k == TY_UNKNOWN || k == TY_ANY ||
+           k == TY_FORALL || k == TY_EXISTS;
+}
+
+int fn_type_structurally_compatible(Type actual, Type expected) {
+    if (actual.kind != TY_FN || expected.kind != TY_FN) return 1;
+    /* Arity first: a nullary fn has no arg_kinds array at all, so testing that
+     * array before the arity would let `(fn [] int)` satisfy `(fn [int] int)`. */
+    if (actual.as.fn.arity != expected.as.fn.arity) return 0;
+    if (!actual.as.fn.arg_kinds || !expected.as.fn.arg_kinds) return 1;
+    for (uint32_t i = 0; i < actual.as.fn.arity; i++) {
+        const Type *af = actual.as.fn.arg_full_types
+            ? actual.as.fn.arg_full_types[i] : NULL;
+        const Type *ef = expected.as.fn.arg_full_types
+            ? expected.as.fn.arg_full_types[i] : NULL;
+        TypeKind ak = (TypeKind)actual.as.fn.arg_kinds[i];
+        TypeKind ek = (TypeKind)expected.as.fn.arg_kinds[i];
+        if (fn_slot_is_wildcard(af, ak) || fn_slot_is_wildcard(ef, ek)) continue;
+        if (!fn_slot_same_carrier(ak, ek)) return 0;
+    }
+    {
+        const Type *af = actual.as.fn.result_full_type;
+        const Type *ef = expected.as.fn.result_full_type;
+        TypeKind ak = actual.as.fn.result_kind;
+        TypeKind ek = expected.as.fn.result_kind;
+        if (!fn_slot_is_wildcard(af, ak) && !fn_slot_is_wildcard(ef, ek) &&
+            !fn_slot_same_carrier(ak, ek))
+            return 0;
+    }
+    return 1;
+}
+
 /* Helper to create a Type from TypeKind.
  * Zero-initialises the entire struct so that compound type fields (union_,
  * intersection_, etc.) are safe to pass to type_name() even for kinds that

@@ -42,9 +42,9 @@
 ;; count variants -- declare their handle parameter ^borrow, so sending and
 ;; receiving repeatedly reads the handle without consuming it; only the *-free
 ;; operation consumes. See docs/archive/history/stdlib-linear-handle-borrows.md.
-(defopaque Chan :ptr<void> :linear)
+(defopaque Chan [A] :ptr<void> :linear)
 
-(defopaque AsyncChan :ptr<void> :linear)
+(defopaque AsyncChan [A] :ptr<void> :linear)
 ;; ---- Chan (synchronous blocking) ----
 ;;; chan-new -- allocate a new synchronous blocking channel with the given capacity.
 ;;;
@@ -59,7 +59,7 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn chan-new [cap : int] : Chan
+(defn chan-new [A] [cap : int] : (Chan A)
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -82,7 +82,7 @@
   pthread_cond_init(&ch->not_empty, NULL);
   ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
   ch->recv_waiters = NULL; ch->send_waiters = NULL;
-  return (void *)(intptr_t)ch;
+  return (int64_t)(intptr_t)ch;
   ```)
 ;;; chan-send -- send a value into a synchronous channel, blocking when full.
 ;;;
@@ -95,14 +95,14 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn chan-send [^borrow ch : Chan val : int] : nil
+(defn chan-send [A] [^borrow ch : (Chan A) val : A] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
   } ChanBlock;
-  ChanBlock *c = (ChanBlock *)ch;
+  ChanBlock *c = (ChanBlock *)(intptr_t)ch;
   pthread_mutex_lock(&c->lock);
   while (c->count == c->cap) {
       if (tur_thread_cancel_requested()) {
@@ -115,6 +115,11 @@
       __ts.tv_sec += __ns / 1000000000L; __ts.tv_nsec = __ns % 1000000000L;
       pthread_cond_timedwait(&c->not_full, &c->lock, &__ts);
   }
+  /* region-lock-hardening (stdlib-int-stand-in-audit S2): the ring buffer is
+     malloc'd and outlives any region bracket this send runs inside, so a
+     region-allocated payload is an escape the result walk cannot see. chan.tur
+     carried no note at all before this change. */
+  TUR_REGION_NOTE(val);
   c->buf[c->tail] = (int64_t)val;
   c->tail = (c->tail + 1) % c->cap;
   c->count++;
@@ -135,14 +140,14 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn chan-recv [^borrow ch : Chan] : int
+(defn chan-recv [A] [^borrow ch : (Chan A)] : A
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
   } ChanBlock;
-  ChanBlock *c = (ChanBlock *)ch;
+  ChanBlock *c = (ChanBlock *)(intptr_t)ch;
   pthread_mutex_lock(&c->lock);
   while (c->count == 0) {
       if (tur_thread_cancel_requested()) {
@@ -173,14 +178,14 @@
 ;;;
 ;;; Since: Phase T19-C
 
-(defn chan-free [ch : Chan] : nil
+(defn chan-free [A] [ch : (Chan A)] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
   } ChanBlock;
-  ChanBlock *c = (ChanBlock *)ch;
+  ChanBlock *c = (ChanBlock *)(intptr_t)ch;
   pthread_mutex_destroy(&c->lock);
   pthread_cond_destroy(&c->not_full);
   pthread_cond_destroy(&c->not_empty);
@@ -203,7 +208,7 @@
 ;;; Since: Phase T19-D
 
 
-(defn async-chan-new [cap : int] : AsyncChan
+(defn async-chan-new [A] [cap : int] : (AsyncChan A)
   ```c
   typedef struct {
       pthread_mutex_t lock;
@@ -226,7 +231,7 @@
   pthread_cond_init(&ch->not_empty, NULL);
   ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
   ch->recv_waiters = NULL; ch->send_waiters = NULL;
-  return (void *)(intptr_t)ch;
+  return (int64_t)(intptr_t)ch;
   ```)
 ;;; async-chan-send -- send a value into an async channel, blocking when full.
 ;;;
@@ -239,14 +244,14 @@
 ;;;
 ;;; Since: Phase T19-D
 
-(defn async-chan-send [^borrow ch : AsyncChan val : int] : nil
+(defn async-chan-send [A] [^borrow ch : (AsyncChan A) val : A] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
   } ChanBlock;
-  ChanBlock *c = (ChanBlock *)ch;
+  ChanBlock *c = (ChanBlock *)(intptr_t)ch;
   pthread_mutex_lock(&c->lock);
   while (c->count == c->cap) {
       if (tur_thread_cancel_requested()) {
@@ -259,6 +264,11 @@
       __ts.tv_sec += __ns / 1000000000L; __ts.tv_nsec = __ns % 1000000000L;
       pthread_cond_timedwait(&c->not_full, &c->lock, &__ts);
   }
+  /* region-lock-hardening (stdlib-int-stand-in-audit S2): the ring buffer is
+     malloc'd and outlives any region bracket this send runs inside, so a
+     region-allocated payload is an escape the result walk cannot see. chan.tur
+     carried no note at all before this change. */
+  TUR_REGION_NOTE(val);
   c->buf[c->tail] = (int64_t)val;
   c->tail = (c->tail + 1) % c->cap;
   c->count++;
@@ -279,14 +289,14 @@
 ;;;
 ;;; Since: Phase T19-D
 
-(defn async-chan-recv [^borrow ch : AsyncChan] : int
+(defn async-chan-recv [A] [^borrow ch : (AsyncChan A)] : A
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
   } ChanBlock;
-  ChanBlock *c = (ChanBlock *)ch;
+  ChanBlock *c = (ChanBlock *)(intptr_t)ch;
   pthread_mutex_lock(&c->lock);
   while (c->count == 0) {
       if (tur_thread_cancel_requested()) {
@@ -321,19 +331,24 @@
 ;;;
 ;;; Since: Phase T19-D
 
-(defn async-chan-try-send [^borrow ch : AsyncChan val : int] : bool
+(defn async-chan-try-send [A] [^borrow ch : (AsyncChan A) val : A] : bool
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
   } ChanBlock;
-  ChanBlock *c = (ChanBlock *)ch;
+  ChanBlock *c = (ChanBlock *)(intptr_t)ch;
   pthread_mutex_lock(&c->lock);
   if (c->count == c->cap) {
       pthread_mutex_unlock(&c->lock);
       return 0; /* full */
   }
+  /* region-lock-hardening (stdlib-int-stand-in-audit S2): the ring buffer is
+     malloc'd and outlives any region bracket this send runs inside, so a
+     region-allocated payload is an escape the result walk cannot see. chan.tur
+     carried no note at all before this change. */
+  TUR_REGION_NOTE(val);
   c->buf[c->tail] = (int64_t)val;
   c->tail = (c->tail + 1) % c->cap;
   c->count++;
@@ -357,14 +372,14 @@
 ;;;
 ;;; Since: Phase T19-D
 
-(defn async-chan-try-recv [^borrow ch : AsyncChan] : int
+(defn async-chan-try-recv [A] [^borrow ch : (AsyncChan A)] : A
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
   } ChanBlock;
-  ChanBlock *c = (ChanBlock *)ch;
+  ChanBlock *c = (ChanBlock *)(intptr_t)ch;
   pthread_mutex_lock(&c->lock);
   if (c->count == 0) {
       pthread_mutex_unlock(&c->lock);
@@ -391,14 +406,14 @@
 ;;;
 ;;; Since: Phase T19-D
 
-(defn async-chan-count [^borrow ch : AsyncChan] : int
+(defn async-chan-count [A] [^borrow ch : (AsyncChan A)] : int
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
   } ChanBlock;
-  ChanBlock *c = (ChanBlock *)ch;
+  ChanBlock *c = (ChanBlock *)(intptr_t)ch;
   pthread_mutex_lock(&c->lock);
   int64_t n = c->count;
   pthread_mutex_unlock(&c->lock);
@@ -414,14 +429,14 @@
 ;;;
 ;;; Since: Phase T19-D
 
-(defn async-chan-free [ch : AsyncChan] : nil
+(defn async-chan-free [A] [ch : (AsyncChan A)] : nil
   ```c
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
   } ChanBlock;
-  ChanBlock *c = (ChanBlock *)ch;
+  ChanBlock *c = (ChanBlock *)(intptr_t)ch;
   pthread_mutex_destroy(&c->lock);
   pthread_cond_destroy(&c->not_full);
   pthread_cond_destroy(&c->not_empty);

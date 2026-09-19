@@ -6995,6 +6995,20 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 fn_arg_idx_lt2 < fn_type.as.fn.arity) {
                 const Type *expected_fn = fn_type.as.fn.arg_full_types[fn_arg_idx_lt2];
                 if (expected_fn && expected_fn->kind == TY_FN &&
+                    !fn_type_structurally_compatible(args[i]->type, *expected_fn)) {
+                    Buf sx; buf_init(&sx);
+                    type_print(&sx, *expected_fn); buf_putc(&sx, '\0');
+                    Buf sa; buf_init(&sa);
+                    type_print(&sa, args[i]->type); buf_putc(&sa, '\0');
+                    diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                        TUR_E0001_TYPE_MISMATCH,
+                                        "function '%s' arg %u: expected a function of type %s, "
+                                        "got %s -- arity, argument types and result type must match",
+                                        fn_binding->name->name, i + 1, sx.data, sa.data);
+                    buf_free(&sx); buf_free(&sa);
+                    return NULL;
+                }
+                if (expected_fn && expected_fn->kind == TY_FN &&
                     !fn_type_subtype(args[i]->type, *expected_fn)) {
                     /* PH2.2: owned buffer for the composite (fn) type name. */
                     Buf exp_buf; buf_init(&exp_buf);

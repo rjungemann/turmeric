@@ -1,1 +1,1 @@
-function 'atomic-load' arg 1: expected AtomicCell, got ptr<void>
+function 'atomic-load' arg 1: expected (type-app AtomicCell tyvar 'A'), got ptr<void>

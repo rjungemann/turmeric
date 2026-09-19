@@ -677,7 +677,9 @@
 ;;;
 ;;; Since: Phase H3
 
-(defn httpd-new-pool [port : int workers : int ^fat handler : int]
+(defn httpd-new-pool [port : int
+                      workers : int
+                      ^fat handler : (fn [ptr<void>] nil)]
   #fx{Net}
   : ptr<void>
   ```c
@@ -782,7 +784,7 @@
 ;;;
 ;;; Since: Phase H1
 
-(defn httpd-new [port : int ^fat handler : int]
+(defn httpd-new [port : int ^fat handler : (fn [ptr<void>] nil)]
   #fx{Net}
   : ptr<void>
   (httpd-new-pool port 4 handler))
@@ -821,7 +823,10 @@
 ;;;
 ;;; Since: Phase H5
 
-(defn httpd-new-tls [port : int workers : int ^fat handler : int ctx : int]
+(defn httpd-new-tls [port : int
+                     workers : int
+                     ^fat handler : (fn [ptr<void>] nil)
+                     ctx : int]
   #fx{Net}
   : ptr<void>
   ```c
@@ -1634,7 +1639,7 @@
 ;;;
 ;;; Since: Phase H8 (M3)
 
-(defn mw-json-body [^fat next : int] : ptr<void>
+(defn mw-json-body [^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_n next]
     (fn [c : ptr<void>] : nil
       (if (= 1 (httpd-mw-json-body-precheck c))
@@ -1816,7 +1821,7 @@
                     expose-headers : cstr
                     allow-credentials : int
                     max-age : int
-                    ^fat next : int] : ptr<void>
+                    ^fat next : (fn [ptr<void>] nil)] : ptr<void>
   ;; Own the captured strings so the server-lifetime closure never holds a
   ;; borrowed pointer into a caller buffer that may be freed (the dangling
   ;; hazard when allow-origin/headers are computed rather than literals).  The
@@ -1854,7 +1859,7 @@
 ;;;
 ;;; Since: Phase H8 (M4)
 
-(defn mw-cors [^fat next : int] : ptr<void>
+(defn mw-cors [^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (mw-cors-with "*"
     "GET, POST, PUT, DELETE, OPTIONS"
     "Content-Type"
@@ -1891,7 +1896,7 @@
 ;;;
 ;;; Since: Phase H8 (M4)
 
-(defn mw-cors-opts [opts : CorsOpts ^fat next : int] : ptr<void>
+(defn mw-cors-opts [opts : CorsOpts ^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (mw-cors-with (.allow-origin opts)
     (.allow-methods opts)
     (.allow-headers opts)
@@ -2032,7 +2037,9 @@
 ;;;
 ;;; Since: Phase H8 (M5)
 
-(defn mw-basic-auth [realm : cstr ^fat verifier : int ^fat next : int] : ptr<void>
+(defn mw-basic-auth [realm : cstr
+                     ^fat verifier : (fn [cstr cstr] int)
+                     ^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_r realm
         _v verifier
         _n next]
@@ -2771,7 +2778,7 @@
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-new-async-with-limit [port : int
-                                  ^fat handler : int
+                                  ^fat handler : (fn [ptr<void>] nil)
                                   max-in-flight : int]
   #fx{Net}
   : ptr<void>
@@ -2848,7 +2855,7 @@
 ;;;
 ;;; Since: Phase H8 (A0+A1)
 
-(defn httpd-new-async [port : int ^fat handler : int]
+(defn httpd-new-async [port : int ^fat handler : (fn [ptr<void>] nil)]
   #fx{Net}
   : ptr<void>
   (httpd-new-async-with-limit port handler 0))
@@ -3083,7 +3090,10 @@
 ;;;
 ;;; Since: Phase H6
 
-(defn router-add [r : ptr<void> method : cstr pattern : cstr ^fat handler : int] : nil
+(defn router-add [r : ptr<void>
+                  method : cstr
+                  pattern : cstr
+                  ^fat handler : (fn [ptr<void>] nil)] : nil
   ```c
   typedef struct Route Route;
   struct Route {
@@ -3361,7 +3371,7 @@
 ;;;
 ;;; Since: Phase H8 (M1)
 
-(defn mw-log [^fat next : int] : ptr<void>
+(defn mw-log [^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_n next]
     (fn [c : ptr<void>] : nil
       (let [t0 (httpd-mw-mono-ms)]
@@ -3466,7 +3476,7 @@
 
 (definstance Drop [Handler] (drop [x] : void (httpd-handler-drop x)))
 ;;; httpd-handler-carrier -- CONSUME a Handler, yielding its raw int64 carrier for
-;;; a server constructor (`^fat handler : int`) or any `:int` handler sink that
+;;; a server constructor (`^fat handler : (fn [ptr<void>] nil)`) or any `:int` handler sink that
 ;;; TAKES OWNERSHIP.
 ;;;
 ;;; Because the parameter is the affine Handler itself, passing a bound Handler
@@ -3488,7 +3498,7 @@
 ;;;
 ;;; Since: automatic R3a (closure-drop-glue)
 
-(defn httpd-handler-carrier [h : Handler] : int
+(defn httpd-handler-carrier [h : Handler] : (fn [ptr<void>] nil)
   ```c
   return (int64_t)h;
   ```)
@@ -3758,7 +3768,7 @@
 ;;;
 ;;; Since: Phase H8 (MW1)
 
-(defn mw-body-size [max-bytes : int ^fat next : int] : ptr<void>
+(defn mw-body-size [max-bytes : int ^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_max max-bytes
         _n   next]
     (fn [c : ptr<void>] : nil
@@ -4079,7 +4089,7 @@
 ;;;
 ;;; Since: Phase H8 (MW2)
 
-(defn mw-rate-limit [opts : RateLimitOpts ^fat next : int] : ptr<void>
+(defn mw-rate-limit [opts : RateLimitOpts ^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_st (httpd-mw-ratelimit-new (.requests opts) (.window-s opts))
         _n  next]
     (fn [c : ptr<void>] : nil
@@ -4233,7 +4243,7 @@
   (void)httpd_hymw_hystatic_hytry((void *)conn, root);
   ```)
 
-(defn mw-static [root-dir : cstr ^fat next : int] : ptr<void>
+(defn mw-static [root-dir : cstr ^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_root root-dir
         _n    next]
     (fn [c : ptr<void>] : nil
@@ -4288,7 +4298,7 @@
 ;;;
 ;;; Since: Phase H8 (MW3)
 
-(defn mw-recover [^fat next : int] : ptr<void>
+(defn mw-recover [^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_n next]
     (fn [c : ptr<void>] : nil
       (let [r (catch-unwind (fn [] : int (do (httpd-call _n c) 0)))]

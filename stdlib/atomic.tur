@@ -16,7 +16,7 @@
 ;; the checker rejects passing an unrelated handle where an atomic cell is
 ;; expected. It lowers to :ptr<void> in the C ABI, so the inline-C bodies are
 ;; unchanged.
-(defopaque AtomicCell :ptr<void>)
+(defopaque AtomicCell [A] :ptr<void>)
 ;;; atomic-new -- allocate a heap-based atomic int64 cell initialised to init.
 ;;;
 ;;; Parameters:
@@ -30,12 +30,12 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-new [init : int] : AtomicCell
+(defn atomic-new [A] [init : A] : (AtomicCell A)
   ```c
   int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
   if (!cell) { fprintf(stderr, "atomic-new: out of memory\n"); abort(); }
   __atomic_store_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
-  return (void *)(intptr_t)cell;
+  return (int64_t)(intptr_t)cell;
   ```)
 ;;; atomic-load -- atomically read the current value of the cell.
 ;;;
@@ -50,9 +50,9 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-load [p : AtomicCell] : int
+(defn atomic-load [A] [p : (AtomicCell A)] : A
   ```c
-  int64_t *cell = (int64_t *)p;
+  int64_t *cell = (int64_t *)(intptr_t)p;
   return (int64_t)__atomic_load_n(cell, __ATOMIC_SEQ_CST);
   ```)
 ;;; atomic-store! -- atomically write v into the cell.
@@ -63,9 +63,9 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-store! [p : AtomicCell v : int] : nil
+(defn atomic-store! [A] [p : (AtomicCell A) v : A] : nil
   ```c
-  int64_t *cell = (int64_t *)p;
+  int64_t *cell = (int64_t *)(intptr_t)p;
   TUR_REGION_NOTE(v);   /* region-lock-hardening: the cell outlives any bracket */
   __atomic_store_n(cell, (int64_t)v, __ATOMIC_SEQ_CST);
   ```)
@@ -83,9 +83,9 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-add! [p : AtomicCell delta : int] : int
+(defn atomic-add! [p : (AtomicCell int) delta : int] : int
   ```c
-  int64_t *cell = (int64_t *)p;
+  int64_t *cell = (int64_t *)(intptr_t)p;
   return (int64_t)__atomic_fetch_add(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
   ```)
 ;;; atomic-sub! -- atomically subtract delta and return the old value.
@@ -99,9 +99,9 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-sub! [p : AtomicCell delta : int] : int
+(defn atomic-sub! [p : (AtomicCell int) delta : int] : int
   ```c
-  int64_t *cell = (int64_t *)p;
+  int64_t *cell = (int64_t *)(intptr_t)p;
   return (int64_t)__atomic_fetch_sub(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
   ```)
 ;;; atomic-swap! -- atomically replace the cell value with new-val and return the old value.
@@ -118,9 +118,9 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-swap! [p : AtomicCell new-val : int] : int
+(defn atomic-swap! [A] [p : (AtomicCell A) new-val : A] : A
   ```c
-  int64_t *cell = (int64_t *)p;
+  int64_t *cell = (int64_t *)(intptr_t)p;
   int64_t tmp = (int64_t)new_val;
   TUR_REGION_NOTE(tmp);   /* region-lock-hardening: see atomic-store! */
   return (int64_t)__atomic_exchange_n(cell, tmp, __ATOMIC_SEQ_CST);
@@ -140,9 +140,9 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-cas! [p : AtomicCell expected : int desired : int] : bool
+(defn atomic-cas! [A] [p : (AtomicCell A) expected : A desired : A] : bool
   ```c
-  int64_t *cell = (int64_t *)p;
+  int64_t *cell = (int64_t *)(intptr_t)p;
   int64_t exp_v = (int64_t)expected;
   int64_t des_v = (int64_t)desired;
   TUR_REGION_NOTE(des_v);   /* region-lock-hardening: see atomic-store! */
@@ -156,7 +156,7 @@
 ;;;
 ;;; Since: Phase T19
 
-(defn atomic-free [p : AtomicCell] : nil
+(defn atomic-free [A] [p : (AtomicCell A)] : nil
   ```c
   free(p);
   ```)
