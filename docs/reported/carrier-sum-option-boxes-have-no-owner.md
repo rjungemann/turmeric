@@ -141,3 +141,42 @@ readback positions, both Some and None paths) pinning it. Write-up appended to
 `RxCons` cells), which is RM2 -- and RM2's own assessment is that it gets
 unblocked by RM3 (regions), not by a better analysis.  RM1's own residue is
 ~240 B.
+
+## Re-measured 2026-09-19, and one row added on purpose
+
+The erased-base sweep re-run against the current compiler over the same
+fixture list (`docs/artifacts/rm1-leak-sweep-after.txt`'s rows, built with
+`-fsanitize=address`, `detect_leaks=1`, attributed by first non-allocator
+frame):
+
+| | bytes |
+|---|---:|
+| last recorded (2026-09-05) | 1678 |
+| today | 1630 |
+
+The split is the one already recorded: `re-string` 516 and
+`constrained-defn-cons-return-monomorphize` 432 are the recursive spine
+(RM2); `option-niche-crossings` 151 / `option-niche-string` 22 /
+`httpd-req-string-opt` 109 are `tur_string_from_bytes` payloads; `zipper-basic`
+is 0 (its rig leak was fixed); `coerce-carrier-to-struct` no longer exists.
+RM1's own rows (`some` / `ok` / `err` / `ctor_Option_Some` / `tur_box_err`
+under `hkt-*`, `conv-defstruct-option-hkt-instance-bodies`,
+`option-map-capturing-closure`) sum to ~320 B including the ~48 B of
+`__tur_aggrspill_*`, unchanged. Nothing has regressed and nothing has moved;
+the attribution above stands.
+
+**One row is new, and deliberate.** Closing
+[colored-generic-tyvar-elemented-param-sig-rejects](../archive/colored-generic-tyvar-elemented-param-sig-rejects.md)
+made `(peek (ok 1))` -- an erased `(ok 1)` box handed to a COLORED generic --
+compile and run. Its 16 bytes are not freed: `elab_call.c` stamps a fresh sum
+argument for the drop-after free only when the callee's effect row is EMPTY,
+because a callee that suspends may capture its continuation and resume after
+the caller has freed the box (a use-after-free, the one failure mode this
+whole report refuses). The CPS deferred-drop table's cps->cps tail arm would
+be the right place to fire it -- `f__cps` runs the callee and the rest of the
+computation before returning -- but only when the continuation is provably
+one-shot and non-escaping, which elab does not know at the stamp. So the box
+joins the "consumer outside the audited set" residue this report already
+owns. `tests/fixtures/colored-generic-erased-carrier-param` carries
+`requires.leak-check` plus a `known-leak` marker naming this report, so the
+gate turns red the day the box is freed and the marker must go.

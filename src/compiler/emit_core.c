@@ -3449,6 +3449,32 @@ static char *call_name_plain(EmitCtx *ctx, const Binding *b) {
     return raw_name_for_binding(b);
 }
 
+/* A row-kinded variable (`^&` rows) never changes the C ABI, exactly as
+ * emit_abi_type_has_concrete_named_tyvar says; every other tyvar does. */
+static bool emit_type_mentions_tyvar(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR) return t->hkt_kind != KIND_TYPEROW;
+    if (t->kind == TY_APP)
+        return emit_type_mentions_tyvar(t->as.app.fn) ||
+               emit_type_mentions_tyvar(t->as.app.arg);
+    return false;
+}
+
+bool emit_expr_abstract_under_active_spec(EmitCtx *ctx, const Expr *e) {
+    if (!ctx || !ctx->current_abi_specialization || !e) return false;
+    Type rt = emit_resolve_type(ctx, e->type);
+    return emit_type_mentions_tyvar(&rt);
+}
+
+bool emit_call_abstract_under_active_spec(EmitCtx *ctx, const Expr *call) {
+    if (!ctx || !ctx->current_abi_specialization || !call ||
+        call->kind != EX_CALL) return false;
+    for (uint32_t ai = 0; ai < call->as.call_.n_args; ai++)
+        if (emit_expr_abstract_under_active_spec(ctx, call->as.call_.args[ai]))
+            return true;
+    return false;
+}
+
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
     const Expr *cur = NULL;
     /* MB1 (constrained-hkt-forall-mode-b-plan): while emitting a dict-clone
@@ -3625,6 +3651,10 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
             b && b->is_construct_template && ctx->current_abi_specialization &&
             strcmp(emit_type_c_name(ctx, ctx->current_abi_specialization->result_type),
                    "int64_t") == 0;
+        /* colored-generic-tyvar-elemented-param-sig-rejects: under an ERASED
+         * outer clone this call's args are still the carrier; a sibling's
+         * by-value clone is never the right callee (see the helper). */
+        bool abstract_here = emit_call_abstract_under_active_spec(ctx, call);
         const char *matched = NULL;
         bool saw = false;
         bool saw_any = false;
@@ -3640,7 +3670,8 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
              * carrier base / top-level emit must require an exact NULL-outer
              * match so it never routes a call to a spec-scoped clone with a
              * different return ABI (M2-completion primitive-payload construct). */
-            if (active_outer != NULL && !saw && !construct_into_carrier) {
+            if (active_outer != NULL && !saw && !construct_into_carrier &&
+                !abstract_here) {
                 matched = ctx->specialized_call_names[i];
                 saw = true;
             }

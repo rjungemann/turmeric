@@ -1221,6 +1221,26 @@ int emit_call_dict_env_dispatch_index(EmitCtx *ctx, const Expr *call);
  * resolved to a concrete by-value spec -- so a pointer-returning function must
  * bridge int64->pointer at its return.  Defined in emit_expr.c. */
 bool emit_tail_call_returns_tyvar_carrier(EmitCtx *ctx, const Expr *e);
+
+/* colored-generic-tyvar-elemented-param-sig-rejects: true when `call` is being
+ * emitted inside a spec (ctx->current_abi_specialization) and at least one of
+ * its arguments is STILL ABSTRACT once resolved through that spec -- the
+ * active outer is an ERASED carrier clone (the one the ABI scan mints for an
+ * unpinned call of a colored generic, `bump__spec__int64_t_int64_t` for
+ * `(bump (none))`), and this call rides the int64 carrier under it.  The
+ * cross-spec fallbacks in emit_call_name / find_matched_abi_spec, which adopt
+ * a sibling spec's recorded clone when nothing is recorded under the active
+ * outer, must not fire for such a call: the sibling is a by-value clone
+ * (`ok___spec__bool_tur_adt_Result__int__cstr`) recorded under the PINNED
+ * sibling, and handing it the carrier word is a cc type error.  An exact
+ * per-outer recording is unaffected. */
+bool emit_call_abstract_under_active_spec(EmitCtx *ctx, const Expr *call);
+/* The per-expression form: `e`'s type, resolved through the active spec, still
+ * mentions a type variable -- so `e` is an erased carrier word here, whatever
+ * its declared shape (`(Option A)`) looks like structurally.  A by-value spill
+ * of such a value is a spill of an int64 as a struct: the arg-bridge repr
+ * shadow's "want=concrete got=carrier-i64". */
+bool emit_expr_abstract_under_active_spec(EmitCtx *ctx, const Expr *e);
 /* GHE struct-receiver: true when a constrained-generic method call re-resolved
  * in the active ABI spec targets a struct/ADT-receiver instance whose method
  * takes the receiver by `const T *`, so the by-value receiver arg must be passed

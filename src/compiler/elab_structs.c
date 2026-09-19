@@ -1577,14 +1577,34 @@ Expr *elab_defdata(Elab *e, const Form *call) {
          * misaligned-access crash.  Treat that as a redefinition. */
         const AdtDef *prior_def = existing_adt_b->type.kind == TY_ADT
                                 ? existing_adt_b->type.as.adt_.def : NULL;
-        if (prior_def && prior_def->n_ctors > 0 && elab_prior_turn_adt(e, prior_def) &&
-            elab_file_is_stdlib(prior_def->origin_file_id)) {
-            /* PS4: see the matching refusal in elab_defstruct. */
-            diag_emit(DIAG_ERROR, name_form->span,
-                      "defdata: '%s' is already defined by an auto-loaded stdlib "
-                      "module, and redefining it would change it for the stdlib "
-                      "code built on it; pick a distinct name", name->name);
-            return NULL;
+        /* A FILLED def (n_ctors > 0) is not a forward stub, whatever the
+         * forward-type list says: the stdlib's own type pre-pass registered
+         * `Option` / `Result` / `Cons` as forward types, so a user `defdata`
+         * reusing one of those names passed elab_is_forward_type after the
+         * stdlib had already filled the stub -- and re-elaborated the
+         * stdlib's type IN PLACE, turning `(Option a)` into a kind-`*` type
+         * and blaming stdlib/option.tur's Functor instance for it
+         * (compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type).
+         * Mirror elab_defstruct's guard: a filled stdlib type is a
+         * redefinition in a compile AND in a session (PS4); a filled type from
+         * an earlier session turn is the one shape that legitimately
+         * re-elaborates over its binding (PS4's reuse path), and a filled
+         * type from THIS compile is "already defined". */
+        if (prior_def && prior_def->n_ctors > 0) {
+            bool from_stdlib = elab_file_is_stdlib(prior_def->origin_file_id);
+            if (from_stdlib) {
+                diag_emit(DIAG_ERROR, name_form->span,
+                          "defdata: '%s' is already defined by an auto-loaded stdlib "
+                          "module, and redefining it would change it for the stdlib "
+                          "code built on it; pick a distinct name", name->name);
+                return NULL;
+            }
+            if (!elab_prior_turn_adt(e, prior_def)) {
+                diag_emit(DIAG_ERROR, name_form->span,
+                          "defdata: '%s' is already defined by an earlier form; "
+                          "pick a distinct name", name->name);
+                return NULL;
+            }
         }
         if (elab_is_forward_type(e, name) && existing_adt_b->type.kind == TY_ADT) {
             is_forward_stub_adt = true;
@@ -2122,6 +2142,132 @@ static void infer_type_param_kinds(AdtDef *def) {
 }
 
 
+
+/* gadt-length-index-not-enforced: can a GADT constructor's result-type index
+ * form `f` (as written in `(VCons int (Vec n) : (Vec (Succ n)))`) match the
+ * scrutinee's index type `t`?  A type parameter of `def` is flexible; a
+ * primitive name matches its kind; a type name (`Zero`, a defopaque / defdata
+ * / defgadt in scope) matches that def; an application `(Succ n)` matches an
+ * application of the same head whose arguments match position by position.
+ *
+ * Every shape this cannot read answers "maybe" (true): a size term
+ * (`(Static n)`, `(Add a b)` -- SZ6's own machinery), an unknown symbol, a
+ * scrutinee index that is itself a tyvar.  So the only constructor the
+ * exhaustiveness check drops on this answer is one whose index PROVABLY
+ * differs from the scrutinee's -- `VNil : (Vec Zero)` against a scrutinee
+ * typed `(Vec (Succ n))`.  That is what lets a `head` over a non-empty vector
+ * omit the `VNil` arm. */
+/* Primitive index classes for the "provably differs" test.  Integer widths are
+ * one class (an `int` index and a TY_INT64 scrutinee are not a contradiction
+ * the checker would stand behind), floats another, bool and cstr their own.
+ * 0 = not a primitive. */
+static int gadt_index_prim_class(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return 1;
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+            return 2;
+        case TY_BOOL: return 3;
+        case TY_CSTR: return 4;
+        default: return 0;
+    }
+}
+
+static bool gadt_index_form_may_match(Elab *e, const AdtDef *def,
+                                      const Form *f, const Type *t) {
+    if (!f || !t) return true;
+    if (t->kind == TY_TYVAR || t->kind == TY_UNKNOWN || t->kind == TY_ANY)
+        return true;
+    if (f->tag == F_SYM) {
+        const char *n = f->as.sym->name;
+        for (uint8_t pi = 0; pi < def->n_type_params; pi++)
+            if (def->type_params[pi] && strcmp(def->type_params[pi], n) == 0)
+                return true;
+        static const struct { const char *name; TypeKind kind; } prims[] = {
+            { "int", TY_INT }, { "bool", TY_BOOL }, { "float", TY_FLOAT },
+            { "cstr", TY_CSTR }, { "int8", TY_INT8 }, { "int16", TY_INT16 },
+            { "int32", TY_INT32 }, { "int64", TY_INT64 }, { "uint8", TY_UINT8 },
+            { "uint16", TY_UINT16 }, { "uint32", TY_UINT32 },
+            { "uint64", TY_UINT64 }, { "float32", TY_FLOAT32 },
+            { "float64", TY_FLOAT64 },
+        };
+        for (size_t i = 0; i < sizeof prims / sizeof prims[0]; i++) {
+            if (strcmp(prims[i].name, n) != 0) continue;
+            /* Two primitives of different classes differ; a primitive
+             * against a named type differs; anything else is "maybe". */
+            int fc = gadt_index_prim_class(prims[i].kind);
+            int tc = gadt_index_prim_class(t->kind);
+            if (tc) return fc == tc;
+            return !(t->kind == TY_ADT || t->kind == TY_APP);
+        }
+        Binding *tb = scope_lookup(e->scope, f->as.sym);
+        if (!tb) tb = scope_lookup(&e->global, f->as.sym);
+        if (tb && tb->type.kind == TY_ADT && tb->type.as.adt_.def) {
+            if (t->kind == TY_ADT) return t->as.adt_.def == tb->type.as.adt_.def;
+            /* A nullary name against an application of another head is a
+             * different index.  Against a primitive it is left "maybe": a
+             * defopaque's carrier IS a primitive, and a resolution path that
+             * collapsed the name to its base must not drop an arm. */
+            if (t->kind == TY_APP) return type_adt_app_def(t) == tb->type.as.adt_.def;
+            return true;
+        }
+        return true;
+    }
+    if (f->tag == F_LIST && f->as.list.len >= 1 &&
+            f->as.list.items[0]->tag == F_SYM) {
+        const Form *hd = f->as.list.items[0];
+        const char *op = hd->as.sym->name;
+        if (strcmp(op, "Static") == 0 || strcmp(op, "Add") == 0 ||
+                strcmp(op, "Mul") == 0)
+            return true;                       /* SZ6 size index: not ours */
+        Binding *tb = scope_lookup(e->scope, hd->as.sym);
+        if (!tb) tb = scope_lookup(&e->global, hd->as.sym);
+        if (!tb || tb->type.kind != TY_ADT || !tb->type.as.adt_.def) return true;
+        const AdtDef *hdef = tb->type.as.adt_.def;
+        if (t->kind == TY_ADT) return t->as.adt_.def == hdef;
+        if (t->kind != TY_APP) return true;     /* not classified: "maybe" */
+        if (type_adt_app_def(t) != hdef) return false;
+        uint32_t n_args = f->as.list.len - 1;
+        if (hdef->n_type_params == 0 || n_args != hdef->n_type_params) return true;
+        Type *targs = (Type *)malloc(hdef->n_type_params * sizeof(Type));
+        if (!targs) return true;
+        bool ok = true;
+        if (elab_adt_type_extract_args(t, hdef, targs)) {
+            for (uint32_t i = 0; i < n_args && ok; i++)
+                ok = gadt_index_form_may_match(e, def, f->as.list.items[1 + i],
+                                               &targs[i]);
+        }
+        free(targs);
+        return ok;
+    }
+    return true;
+}
+
+/* Is GADT constructor `c` reachable from a scrutinee of type `scrut`?  False
+ * only when the scrutinee is an application of the GADT with every index
+ * position readable and some position provably mismatching the constructor's
+ * declared result index.  An unannotated / bare-`Vec` scrutinee carries no
+ * instantiation, so every constructor stays reachable (today's behaviour). */
+static bool gadt_ctor_reachable_from_scrutinee(Elab *e, const AdtDef *adt,
+                                               const CtorDef *c, const Type *scrut) {
+    if (!adt->is_gadt || adt->n_type_params == 0 || !c || !c->result_type_form)
+        return true;
+    if (!scrut || scrut->kind != TY_APP) return true;
+    const Form *rt = c->result_type_form;
+    if (rt->tag != F_LIST || rt->as.list.len < 2) return true;
+    Type *sargs = (Type *)malloc(adt->n_type_params * sizeof(Type));
+    if (!sargs) return true;
+    bool reachable = true;
+    if (elab_adt_type_extract_args(scrut, adt, sargs)) {
+        uint32_t n_args = rt->as.list.len - 1;
+        for (uint32_t i = 0; i < n_args && i < adt->n_type_params && reachable; i++)
+            reachable = gadt_index_form_may_match(e, adt, rt->as.list.items[1 + i],
+                                                  &sargs[i]);
+    }
+    free(sargs);
+    return reachable;
+}
 
 /* Phase G2: Build a SkolemEnv for a GADT constructor arm.
  * Parses the constructor's result_type_form (e.g. "(Expr int)") against
@@ -4861,6 +5007,13 @@ Expr *elab_match(Elab *e, const Form *call) {
             for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
                 if (covered[ci]) continue;
                 CtorDef *c = adt->ctors[ci];
+                /* gadt-length-index-not-enforced: a constructor whose declared
+                 * result index provably differs from the SCRUTINEE's index --
+                 * `VNil : (Vec Zero)` when `v : (Vec (Succ n))` -- cannot be
+                 * the scrutinee's value, so it needs no arm.  Silently: that
+                 * omission is the whole point of the annotation. */
+                if (!gadt_ctor_reachable_from_scrutinee(e, adt, c, &scrutinee->type))
+                    continue;
                 /* Extract first type arg from this constructor's return type */
                 const char *my_a0 = NULL;
                 if (c->result_type_form && c->result_type_form->tag == F_LIST

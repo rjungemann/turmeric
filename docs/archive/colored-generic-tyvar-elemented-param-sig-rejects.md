@@ -112,3 +112,58 @@ or reduce the Result to a scalar in the caller before the effectful call.
 The repro above, plus the pinned-arm control, asserting `1` twice; the
 deferred-drop tail arm in `emit_cps_ir.c` becomes reachable by it and wants a
 leak-check marker.
+
+## Resolution (2026-09-19)
+
+Direction 1, and the clone it asked for already existed. Tracing the ABI scan
+showed `emit_cps_ir_colored_fn_needs_mono` answering true for `peek` (its base
+sig-rejects), so the scan minted `peek__spec__int64_t_int64_t` for the
+unpinned `(peek (ok 1))` -- a clone whose argument materializes as the ERASED
+app `(Result int ?)`, C spelling `int64_t`. `--dump-cps-mono` then said
+`sig=no body=ok`: the clone was inadmissible only because `mono_sig_ok`'s
+slot gate (`MONO_SLOT_OK`) admits a concrete carrier app (`slot_carrier_app`,
+`type_app_is_concrete_adt`) and nothing erased. With no admissible clone the
+base was the only candidate, and the base rejects by design.
+
+Three changes, all on the emit side, as the scoping note predicted:
+
+1. **`slot_erased_carrier_app`** (`emit_cps_ir.c`), admitted by `MONO_SLOT_OK`
+   for a non-instance spec: an ADT application with an unresolved tyvar
+   argument whose C spelling is the int64 carrier. The clone's `__cps` entry
+   and direct wrapper both spell it `int64_t` through `emit_params`, matching
+   the direct emitter's forward decl and every caller. The BASE gate
+   (`sig_slot_ok`) is untouched -- a first attempt widened it for a spec-less
+   generic and it went nowhere, because the spec is not absent, it is erased,
+   which is the report's own "the binding is not absent, it is abstract".
+   The admission is withheld when the clone's RESULT is a by-value aggregate:
+   the mixed shape (`result_map__spec__tur_adt_Result__int__int_int64_t_int64_t`,
+   erased receiver in, struct out) hands the delegated match's struct temp to
+   the int64 return slot unboxed -- `typed/result-basic` failed to build on
+   the first cut -- so it keeps the gate it had, and this report's shape
+   (a scalar result) is exactly what is admitted.
+2. **`emit_call_abstract_under_active_spec`** (`emit_core.c`, declared in
+   `emit_internal.h`), consulted by both clone lookups (`emit_call_name` and
+   `find_matched_abi_spec`) before their cross-spec fallback: under the erased
+   clone a call whose arguments are still abstract must not adopt a sibling
+   spec's recorded clone. It did, whenever the PINNED call was scanned first:
+   `(some? o)` inside `bump__spec__int64_t_int64_t` was routed to
+   `some___spec__bool_tur_adt_Option__int`, recorded under the by-value
+   sibling, and handed the carrier word (a cc type error). Erased-first order
+   never hit it, which is why the report's own repro passed before this piece.
+3. **`emit_expr_abstract_under_active_spec`**, the per-argument form, gating
+   the two concrete->carrier spills in emit_expr.c's call-argument path: the
+   erased clone's parameter reads as an aggregate by shape but is already the
+   carrier word, and spilling it tripped the arg-bridge repr shadow
+   (`want=concrete got=carrier-i64`).
+
+`tur run` now prints `1` for the repro, `1 1 0` with the pinned controls
+beside it, and the `Option` flavour in both call orders. Pinned by
+`tests/fixtures/colored-generic-erased-carrier-param`, which carries
+`requires.leak-check` **and** `known-leak`: the unpinned `(ok 1)` is a fresh
+carrier box handed to a COLORED callee, and elab_call.c stamps a fresh sum
+argument for the drop-after free only when the callee's effect row is empty
+(a suspended continuation could outlive the call). So the cps->cps tail arm
+of the deferred-drop table is reachable in principle but not by this shape;
+that 16 bytes is the erased-residue category of
+[carrier-sum-option-boxes-have-no-owner](../reported/carrier-sum-option-boxes-have-no-owner.md),
+recorded there.

@@ -1,0 +1,8 @@
+;; compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type, the same-file
+;; arm: the top-level pre-pass registers `Shape` as a forward stub, the first
+;; `defdata` fills it, and the second used to pass the forward-stub test too
+;; and silently re-elaborate over the filled def.  A filled def is not a stub.
+(defdata Shape (Circle int) (Square int))
+(defdata Shape (Dot))
+
+(defn main [] : int 0)

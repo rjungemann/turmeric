@@ -1,0 +1,8 @@
+docs/reported/carrier-sum-option-boxes-have-no-owner.md
+
+The unpinned `(peek (ok 1))` hands its fresh 16-byte carrier box to a
+COLORED callee.  elab_call.c stamps a fresh sum argument for the drop-after
+free only when the callee has an EMPTY effect row (a suspended continuation
+could outlive the call and read the freed box), so this one box is left to
+the erased-residue category that report tracks.  The pinned calls beside it
+are by-value and allocate nothing.

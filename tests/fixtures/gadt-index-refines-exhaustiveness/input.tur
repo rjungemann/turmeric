@@ -1,0 +1,50 @@
+;; gadt-length-index-not-enforced -- a GADT whose constructors index the type by
+;; a type-level natural: `LNil : (LVec Zero)`, `LCons : (LVec (Succ n))`.
+;;
+;; A `match` on a scrutinee typed `(LVec (Succ n))` no longer needs an `LNil`
+;; arm: the exhaustiveness check reads the scrutinee's index, unifies each
+;; uncovered constructor's declared result index against it, and drops the
+;; ones that provably cannot match (gadt_ctor_reachable_from_scrutinee,
+;; elab_structs.c).  `Zero` against `(Succ n)` is such a mismatch, so `lhead`
+;; and `ltail` below compile with a single arm, and return the element / the
+;; tail directly -- no default, no option.
+;;
+;; The naturals are phantom-parameter opaques: `Succ` is a type constructor of
+;; kind `* -> *` whose carrier is never inspected.  An unannotated scrutinee
+;; (`llen`, `lsum`) carries no index, so every constructor stays reachable and
+;; the match still needs both arms -- exactly as before.
+
+(defopaque Zero :int)
+(defopaque Succ [n] :int)
+
+(defgadt LVec [n]
+  (LNil : (LVec Zero))
+  (LCons int (LVec n) : (LVec (Succ n))))
+
+;; No LNil arm: the scrutinee's index says the vector is non-empty.
+(defn lhead [n] [v : (LVec (Succ n))] : int
+  (match v
+    (LCons x _) x))
+
+(defn ltail [n] [v : (LVec (Succ n))] : (LVec n)
+  (match v
+    (LCons _ t) t))
+
+;; Unannotated: the index is unknown here, both arms are required.
+(defn llen [v] : int
+  (match v
+    (LNil)      0
+    (LCons _ t) (+ 1 (llen t))))
+
+(defn lsum [v] : int
+  (match v
+    (LNil)      0
+    (LCons x t) (+ x (lsum t))))
+
+(defn main [] : int
+  (let [v (:: (LCons 7 (LCons 8 (LCons 9 (LNil)))) (LVec (Succ (Succ (Succ Zero)))))]
+    (println (lhead v))
+    (println (llen (ltail v)))
+    (println (lsum v))
+    (println (lhead (ltail v))))
+  0)

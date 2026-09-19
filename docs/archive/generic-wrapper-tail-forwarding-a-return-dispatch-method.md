@@ -106,3 +106,21 @@ Until then, `tests/fixtures/generic-wrapper-tail-forwards-return-dispatch`
 carries `requires.no-leak-check`, and the destructure-and-rebuild spelling
 (pinned by `tests/fixtures/generic-wrapper-over-return-dispatch-method`)
 remains the leak-clean choice when a wrapper returns a struct payload.
+
+## Resolution (2026-09-19) -- archived
+
+Nothing remained. The "what remains" section above was already stale when it
+was written into the index: the same day's follow-up commit (`fix(elab): own
+the payload box of a wrapper forwarding a class method`) flagged the
+wrapper's binding `returns_fresh_sum_box` from the minting-shape contract the
+inline-C rule uses -- a method DECLARED `: (Result a e)` / `: (Option a)` can
+only produce its value through `tur_box_*` / `tur_some_ptr`, so the wrapper
+always hands back a freshly-owned aggregate -- and switched
+`tests/fixtures/generic-wrapper-tail-forwards-return-dispatch` from
+`requires.no-leak-check` to `requires.leak-check`.
+
+Re-verified today against the current compiler: the fixture builds under
+`-fsanitize=address`, prints its expected output, and LeakSanitizer reports
+nothing (`rc=0`, no `SUMMARY:` line) -- scalar, `cstr` and by-value struct
+payloads, both Result arms. The index row said "kept open only until a second
+consumer confirms the shape"; that is not a defect, so the report moves here.
