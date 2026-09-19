@@ -6,7 +6,7 @@
 
 ## What
 
-Turmeric is a statically-typed Lisp compiler that targets C99. Write expressive Lisp code and get fast, portable C out. The compiler (`tur`) elaborates surface syntax into a typed IR, performs borrow checking, reference-count elision, and then emits C source that you can compile with any C99 compiler.
+Turmeric is a statically-typed Lisp compiler that targets C99. Write expressive code in one of a few provided dialects, and get fast, portable C out. The compiler (`tur`) elaborates surface syntax into a typed IR, performs borrow checking, reference-count elision, and then emits C source that you can compile with any C99 compiler. There is a JIT interpreter available as well.
 
 ## Why
 
@@ -461,7 +461,7 @@ element type is itself `Eq`:
   0)
 ```
 
-## Features
+## Scoped Features for v1
 
 | Feature | Status |
 |---|---|

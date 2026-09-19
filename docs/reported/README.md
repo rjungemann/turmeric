@@ -2061,6 +2061,17 @@ finding came out of verifying the first one's stated payoff.
 | --- | --- | --- |
 | [interpret-takes-no-include-path-or-spice-discovery](interpret-takes-no-include-path-or-spice-discovery.md) | low | `tur --interpret` is reachable only for **single-file** programs: the arm at `src/main.c:12123` does no flag parsing at all (`argv[2]` is the path, `argv+3` is `*args*`), so `-I src` is taken as the *filename* and surfaces as `load: cannot open '-I'`; and no spice walk-up runs, so `tur --interpret tests/signal/test_compose.tur` from a directory with a `build.tur` fails `module 'signal/core' not found` where `tur run` and `tur check` on the same file both pass. Nothing is missing in the elaborator -- `elab_load_module` already prefers `-I` dirs (`elab_module.c:337`); the two `elaborate_program` calls in `src/turi/eval.c` (13474, 13809) pass `include_dirs=NULL` hard-coded and there is no channel to them. `src/main.c:4797` asserts the opposite in a comment ("the tree-walker discovers the enclosing spice itself") and that comment is the recorded reason `-I` is dropped on the `tur run --engine=interp` path, which fails identically. Invisible to `tests/run-turi.sh`, which drives single-file fixtures. Found because it is what blocks the interpreter coverage `signal-compose-hand-rolled-vec-readers` was filed to buy |
 
+## Environmental hazards (filed 2026-09-18)
+
+Not defects in `tur`, but they present as total `tur` failures, so they are
+indexed here to be findable from the symptom. Filed on request after a sweep
+found them documented in prose with no report backing them -- so there was
+nowhere to record whether they are still live.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [macos-asan-runtime-deadlocks-at-startup](macos-asan-runtime-deadlocks-at-startup.md) | medium when live | On a mismatched pairing -- a clang whose bundled ASan runtime predates the running dyld shared-cache layout -- the Debug build spins forever in `InitializeShadowMemory` before `main()`, so every invocation hangs, `tur --version` included. Reproduces from a bare `int main(void){}` compiled `-fsanitize=address`, and is triggered by *rebuilding* with the outdated toolchain, not by any source change. **Latent as of filing**: does not reproduce on macOS 27.0 / Apple clang 21.0.0, where `build/tur` is genuinely ASan-linked and runs. Deliberately not auto-disabled -- #660 first keyed an auto-off on Darwin >= 27 and then reverted it, since that would silently strip macOS CI of sanitizer coverage on a runner upgrade; this host being a working Darwin 27 is direct evidence the revert was right and that Darwin version was the wrong variable. Backstopped by the `perl -e 'alarm 10'` `tur --version` smoke check at `ci.yml:150` |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
