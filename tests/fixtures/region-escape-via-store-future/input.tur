@@ -1,0 +1,51 @@
+;; region-lock-hardening, future.tur half.  Split out of region-escape-via-store
+;; rather than added to it: future.tur pulls in pthread, which the MIR engine
+;; cannot compile, so folding these cases into that fixture cost it its JIT
+;; coverage (it appeared as `region-escape-via-store (new cc fallback)`).  This
+;; file is listed in tests/jit-fallback-baseline.txt instead; the shared store
+;; fixture stays engine-clean.
+;;
+;; BOTH cases pass the node DIRECTLY rather than through `(build n 0)`.  An
+;; erasing ascription is itself a hooked site, so a case that erases on the way
+;; in is already noted before it reaches the store and would pass with the
+;; store hook REMOVED -- it would test nothing.  Measured with
+;; TUR_REGION_STATS=1: rewinds=0 retires=2 with the hooks, rewinds=2 retires=0
+;; without them.
+
+(load "stdlib/future.tur")
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+(defn link-v [l : Link] : int
+  (match l (Link a b) a))
+
+;; future-get hands back a boxed Result, so read the settled word directly --
+;; the same local helper the other future fixtures use.
+(defn future-value [^borrow f : Future] : int
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  return ((FutureCell *)f)->value;
+  ```)
+
+;; 1. promise-fulfill into a FutureCell that outlives the bracket.  The
+;;    bracket's result is a scalar and the Future is an OPAQUE handle, so the
+;;    result walk never sees the node sitting inside the cell.
+(defn store-promise [p : Promise n : int] : int
+  (with-region (fn [] (do (promise-fulfill p (Link n 0)) 1))))
+
+;; 2. future-of allocates the cell INSIDE the bracket; the Future is pushed
+;;    into an OUTER vec rather than returned.  Returning it would make the
+;;    result walk refuse the rewind on its own and the hook would go untested.
+(defn store-future-of [fv : (Vec Future) n : int] : int
+  (with-region (fn [] (do (vec-push! fv (future-of (Link n 0))) 1))))
+
+(defn main [] : int
+  (let [p (promise-new)
+        f (future-handle p)]
+    (println (store-promise p 4))                                 ;; 1
+    (println (link-v (:: (future-value f) Link)))                 ;; 4
+    (future-free f))
+  (let [fv (:: (vec-new) (Vec Future))]
+    (println (store-future-of fv 3))                              ;; 1
+    (println (link-v (:: (future-value (vec-get fv 0)) Link))))   ;; 3
+  0)

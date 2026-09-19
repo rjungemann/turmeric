@@ -157,9 +157,24 @@ can only reach those through a caller deliberately erasing one.
 
 **Whichever lands, the test must assert on `TUR_REGION_STATS=1`, not stdout.**
 Per the measurement above, the existing fixture's stdout assertions pass with
-the hook removed. The two cases added with this report are written to the
-direct (unerased) form for that reason, and were checked both ways:
-`rewinds=1` with the hooks, `rewinds=3` without.
+the hook removed. The two cases added with this report live in their own
+fixture, `tests/fixtures/region-escape-via-store-future`, written to the direct
+(unerased) form for that reason and checked both ways: `rewinds=0 retires=2`
+with the hooks, `rewinds=2 retires=0` without.
+
+They are a separate fixture rather than cases 10 and 11 of the shared one for a
+reason worth knowing before anyone merges them back: **`future.tur` pulls in
+pthread, which the MIR engine cannot compile.** Folding these cases into
+`region-escape-via-store` made that whole fixture fall back to cc under the JIT
+job -- reported as `region-escape-via-store (new cc fallback)` against
+`tests/jit-fallback-baseline.txt` -- costing an engine-clean region fixture its
+JIT coverage to buy two cases. The split keeps the shared fixture on the
+engine and lists only the future one in the baseline, alongside the three
+`future-*` fixtures already there for the same reason.
+
+That also means a fixture for any Tier 1 or Tier 2 hook above should check what
+its module drags in: `threadpool` and `httpd` are both pthread/socket users and
+will land in the baseline the same way.
 
 ## See also
 

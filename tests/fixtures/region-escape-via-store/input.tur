@@ -6,8 +6,6 @@
 ;; memory.  Every value is read AFTER the pop, and TUR_REGIONS=0 must print
 ;; the same lines (tests/run-regions-seam.sh).
 
-(load "stdlib/future.tur")
-
 (defdata Link :heap (Link [v : int nxt : int]))
 
 (defn link-v [l : Link] : int
@@ -68,35 +66,6 @@
     (let [outer (Link (* 5 n) 0)]
       (with-region (fn [] (do (vec-push! v outer) 1)))))))
 
-;; 10. promise-fulfill into a FutureCell that outlives the bracket.  The
-;;     bracket's result is a scalar and the Future is an OPAQUE handle, so the
-;;     result walk never sees the node sitting inside the cell -- only the
-;;     store-side note stands between the read below and reclaimed memory.
-;;     Read with a local helper, as the other future fixtures do, because
-;;     future-get hands back a boxed Result rather than the bare word.
-(defn future-value [^borrow f : Future] : int
-  ```c
-  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
-  return ((FutureCell *)f)->value;
-  ```)
-
-;; NOTE the node is passed DIRECTLY, not through `(build n 0)`.  An erasing
-;; ascription is itself a hooked site, so a case that erases on the way in is
-;; already noted before it reaches the store and would pass with the store hook
-;; REMOVED -- it tests nothing.  Verified with TUR_REGION_STATS=1: this shape
-;; goes rewinds=0 retires=1 with the hook and rewinds=1 retires=0 without it.
-(defn store-promise [p : Promise n : int] : int
-  (with-region (fn [] (do (promise-fulfill p (Link n 0)) 1))))
-
-;; 11. future-of allocates the cell INSIDE the bracket; the Future is pushed
-;;     into an OUTER vec rather than returned.  Returning it would make the
-;;     result walk refuse the rewind on its own and the store hook would go
-;;     untested -- measured: as a returned value this case is rewinds=0 with
-;;     the hook AND without it.  Held in the vec, it is rewinds=0 with and
-;;     rewinds=1 without, so the hook is what blocks the rewind.
-(defn store-future-of [fv : (Vec Future) n : int] : int
-  (with-region (fn [] (do (vec-push! fv (future-of (Link n 0))) 1))))
-
 (defn main [] : int
   (let [v (:: (vec-new) (Vec Link))]
     (println (store-vec v 4))
@@ -124,12 +93,4 @@
   (let [v (:: (vec-new) (Vec Link))]
     (println (store-nested v 2))                        ;; 1
     (println (link-v (vec-get v 0))))                   ;; 10
-  (let [p (promise-new)
-        f (future-handle p)]
-    (println (store-promise p 4))                       ;; 1
-    (println (link-v (:: (future-value f) Link)))       ;; 4
-    (future-free f))
-  (let [fv (:: (vec-new) (Vec Future))]
-    (println (store-future-of fv 3))                    ;; 1
-    (println (link-v (:: (future-value (vec-get fv 0)) Link))))   ;; 3
   0)
