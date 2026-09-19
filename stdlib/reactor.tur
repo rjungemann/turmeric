@@ -554,7 +554,9 @@
 ;; for captureless bodies too, and (b) every body is a heap box the fiber group
 ;; can own and free at teardown (tur_local_disown_body opts a caller out).
 
-(defn local-spawn [g : ptr<void> ^fat body : (fn [ptr<void>] nil) user-data : ptr<void>]
+(defn local-spawn [g : ptr<void>
+                   ^fat body : (fn [ptr<void>] nil)
+                   user-data : ptr<void>]
   #fx{}
   : int
   (tur_local_spawn g body user-data))

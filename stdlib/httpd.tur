@@ -677,7 +677,9 @@
 ;;;
 ;;; Since: Phase H3
 
-(defn httpd-new-pool [port : int workers : int ^fat handler : (fn [ptr<void>] nil)]
+(defn httpd-new-pool [port : int
+                      workers : int
+                      ^fat handler : (fn [ptr<void>] nil)]
   #fx{Net}
   : ptr<void>
   ```c
@@ -821,7 +823,10 @@
 ;;;
 ;;; Since: Phase H5
 
-(defn httpd-new-tls [port : int workers : int ^fat handler : (fn [ptr<void>] nil) ctx : int]
+(defn httpd-new-tls [port : int
+                     workers : int
+                     ^fat handler : (fn [ptr<void>] nil)
+                     ctx : int]
   #fx{Net}
   : ptr<void>
   ```c
@@ -2032,7 +2037,9 @@
 ;;;
 ;;; Since: Phase H8 (M5)
 
-(defn mw-basic-auth [realm : cstr ^fat verifier : (fn [cstr cstr] int) ^fat next : (fn [ptr<void>] nil)] : ptr<void>
+(defn mw-basic-auth [realm : cstr
+                     ^fat verifier : (fn [cstr cstr] int)
+                     ^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_r realm
         _v verifier
         _n next]
@@ -3083,7 +3090,10 @@
 ;;;
 ;;; Since: Phase H6
 
-(defn router-add [r : ptr<void> method : cstr pattern : cstr ^fat handler : (fn [ptr<void>] nil)] : nil
+(defn router-add [r : ptr<void>
+                  method : cstr
+                  pattern : cstr
+                  ^fat handler : (fn [ptr<void>] nil)] : nil
   ```c
   typedef struct Route Route;
   struct Route {

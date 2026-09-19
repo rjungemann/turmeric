@@ -113,4 +113,5 @@
 ;;; Since: Phase H8 (M6)
 
 
-(defn mw-compress [^fat next : (fn [ptr<void>] nil)] : ptr<void> (mw-compress-with 256 next))
+(defn mw-compress [^fat next : (fn [ptr<void>] nil)] : ptr<void>
+  (mw-compress-with 256 next))
