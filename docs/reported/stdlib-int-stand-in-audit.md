@@ -195,6 +195,83 @@ Direction 4 is the floor. Everything else is a preference per the rule's own
 "when you notice this in existing code" clause -- on the one track to v1 these
 are matched, wrapped, or tightened as the work dictates, not a gate.
 
+## Direction 4 reassessed 2026-09-18 -- it is NOT the cheapest item
+
+**Attempted and reverted.** The claim above that direction 4 is "the cheapest
+item in the report", "independently fixable", and "protects every S2 and S3
+site at once" does not survive contact. The hole is real and still reproduces
+(`tur check` exit 0 on a by-value aggregate into a declared `:int` parameter,
+verified against v0.49.4), but **no type-level rule in the elaborator can close
+it without rejecting crossings that work today.**
+
+What was tried, both as a `TUR-E0295` rejection at the `TY_ADT -> TY_INT` hatch
+in `elab_call.c` (the `Phase G0` comment there -- "ADT values are heap-allocated
+and passed as int64_t pointers" -- is the stale premise):
+
+| Rule | Fixture result |
+| --- | --- |
+| baseline, unmodified | **3047 passed, 0 failed** |
+| reject `type_is_byvalue_aggregate` (the predicate `::` already uses) | 2989 passed, **59 failed** |
+| narrowed to single-variant flat products (`n_ctors == 1`) | 3027 passed, **21 failed** |
+
+The 59 and the 21 are regressions, not pre-existing failures -- the baseline
+was measured on the same tree with the change reverted.
+
+**Why the elaborator cannot decide.** The failures are not broken programs. They
+are legitimate crossings the *emitter* handles:
+
+- `emit_expr.c:8370` heap-boxes a by-value aggregate argument (`emit_agg_box`)
+  at poly-carrier / HKT-wrapper boundaries -- "Slice 3
+  (constrained-hkt-forall codegen)".
+- ADT **constructor** arguments take a carrier field and box into it:
+  `stdlib/logic.tur:105` `(StCons v ...)` with `v : Subst` is a by-value
+  aggregate into an `:int` ctor field, and it is correct.
+- SR1 by-value **sums** qualify as "by-value products" to
+  `adt_is_byvalue_product` (via `adt_sr1_sum_candidate`), so
+  `tests/fixtures/typed-slots/adt-float-payload` -- whose own comment reads
+  "through polymorphic boundary: pointer survives as int64, value unchanged"
+  -- is rejected by the blanket rule while being exactly the behaviour the
+  fixture asserts.
+
+So "by-value aggregate meets `:int` parameter" is **not** the predicate for
+"this will fail in cc". The emitter knows; elaboration does not. That is also
+why [byvalue-adt-int-cast-plan](../archive/byvalue-adt-int-cast-plan.md) could
+close GAP 3 cleanly for `::` -- there the reinterpret is unconditionally
+unsound, with no boxing rule to consult -- and why its headline, calling `::`
+"the one erased-carrier boundary that neither uses [the box bridge] nor rejects
+the cast", reads as complete but is not: **the call-argument position is a
+second such boundary, and it is the harder one.**
+
+**Revised direction 4.** The check belongs where the boxing decision is made --
+the emitter, at the point it is about to assign an aggregate into an `int64_t`
+slot with no applicable box rule -- not in `elab_call.c`. That is a materially
+bigger change than this report estimated, and it should be sequenced with
+[end-to-end-monomorphization-plan](../upcoming/end-to-end-monomorphization-plan.md)
+alongside direction 3 rather than taken as the cheap floor.
+
+**Repro kept here rather than as a fixture.** An `errors/` fixture for this
+would be permanently red -- the tree has no xfail/expected-fail marker (the
+`requires.*` family are skip conditions, not known-failure ones) -- and a
+standing red fixture with no way to mark it invites someone to "fix" it by
+shipping one of the two rules measured above. The repro is three lines:
+
+```turmeric
+(defdata Vec2 :copy (Vec2 :int :int))
+(defn sink [v : int] : int v)
+(defn main [] : int (println (sink (Vec2 3 4))))
+```
+
+`tur check` exits 0; `tur run` fails in cc with
+`passing 'tur_adt_Vec2' to parameter of incompatible type 'int64_t'`.
+
+## Done 2026-09-18
+
+- **S3, `json/bool`** -- `(defn json/bool [v : int] : int)` is now
+  `[v : bool]`, the one item the report called out as unambiguous ("should just
+  be `:bool`"). The inline-C body's `v ? 1 : 0` is unchanged, no caller outside
+  the generated docstring table existed, and `(json/get-bool (json/bool true))`
+  prints `true` / `false` across the pair. Suite 3047/0.
+
 ## See also
 
 - [docs/archive/spices-int-stand-in-audit-2026-06-14.md](../archive/spices-int-stand-in-audit-2026-06-14.md)

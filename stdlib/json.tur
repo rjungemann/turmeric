@@ -47,17 +47,17 @@
 ;;; json/bool -- create a JSON boolean node.
 ;;;
 ;;; Parameters:
-;;;   v -- 0 for false, non-zero for true
+;;;   v -- the boolean value
 ;;;
 ;;; Returns:
 ;;;   A heap-allocated JSON bool node.
 ;;;
 ;;; Example:
-;;;   (json/bool 1)  ; => <true node>
+;;;   (json/bool true)  ; => <true node>
 ;;;
 ;;; Since: Phase B2
 
-(defn json/bool [v : int] : int
+(defn json/bool [v : bool] : int
   ```c
   int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 1; n[1] = v ? 1 : 0;
