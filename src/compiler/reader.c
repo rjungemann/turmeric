@@ -1540,7 +1540,7 @@ static Form *try_read_data_literal(Reader *r) {
 /*   object -> (json/object-put (json/object-put (json/object-new) k v) ...) */
 /*   array  -> (json/array-push (json/array-push (json/array-new) e0) ...)   */
 /*   string -> (json/string "..."),  int -> (json/int n)                     */
-/*   float  -> (json/float f),       true/false -> (json/bool 1|0)           */
+/*   float  -> (json/float f),       true/false -> (json/bool true|false)    */
 /*   null   -> (json/null)                                                   */
 /* Every node is a uniform :int handle, so heterogeneous and nested JSON     */
 /* compose -- the type variation lives in each node's runtime tag, queryable */
@@ -1826,14 +1826,16 @@ static Form *json_read_value(Reader *r) {
         case 't':
             if (json_match_kw(r, "true")) {
                 Span sp = span_from_to(r, sl, sc, so, r->pos);
-                Form *one = form_int(r->arena, sp, 1);
+                /* stdlib-int-stand-in-audit S3: json/bool takes :bool now,
+                   so the reader emits a real boolean rather than 1/0. */
+                Form *one = form_bool(r->arena, sp, true);
                 return json_call(r, sp, "json/bool", &one, 1);
             }
             break;
         case 'f':
             if (json_match_kw(r, "false")) {
                 Span sp = span_from_to(r, sl, sc, so, r->pos);
-                Form *zero = form_int(r->arena, sp, 0);
+                Form *zero = form_bool(r->arena, sp, false);
                 return json_call(r, sp, "json/bool", &zero, 1);
             }
             break;
