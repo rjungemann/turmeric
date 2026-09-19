@@ -23,6 +23,7 @@ local-fn-into-rank2-slot
 once-basic
 poly-fn-any-parameter
 promise-linear
+region-escape-via-store-future
 thread-local-basic
 typeclass-assoc-type-method-return
 workstealing-balance

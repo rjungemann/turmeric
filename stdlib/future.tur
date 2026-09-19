@@ -220,6 +220,15 @@
       fprintf(stderr, "promise-fulfill: promise already settled\n");
       abort();
   }
+  /* region-lock-hardening (stdlib-int-stand-in-audit follow-up): the
+     FutureCell is malloc'd and outlives any region bracket this call runs
+     inside, so a region-allocated payload word is an escape the result walk
+     cannot see -- the walk sees an opaque Promise/Future handle, never the
+     node inside the cell.  The parameter arrives ERASED (`:int`), so the
+     emitter's body-entry note for a typed node param does not fire and the
+     note has to be written here.  Same shape as chan-send in stdlib/chan.tur.
+     */
+  TUR_REGION_NOTE(v);
   fc->value = (int64_t)v;
   fc->is_set = true;
   fc->is_ok = true;
@@ -252,6 +261,15 @@
       fprintf(stderr, "promise-fail: promise already settled\n");
       abort();
   }
+  /* region-lock-hardening (stdlib-int-stand-in-audit follow-up): the
+     FutureCell is malloc'd and outlives any region bracket this call runs
+     inside, so a region-allocated payload word is an escape the result walk
+     cannot see -- the walk sees an opaque Promise/Future handle, never the
+     node inside the cell.  The parameter arrives ERASED (`:int`), so the
+     emitter's body-entry note for a typed node param does not fire and the
+     note has to be written here.  Same shape as chan-send in stdlib/chan.tur.
+     */
+  TUR_REGION_NOTE(e);
   fc->exn = (int64_t)e;
   fc->is_set = true;
   fc->is_ok = false;
@@ -365,6 +383,15 @@
   pthread_mutex_init(&cell->lock, NULL);
   pthread_cond_init(&cell->ready, NULL);
   cell->refcount = 1;
+  /* region-lock-hardening (stdlib-int-stand-in-audit follow-up): the
+     FutureCell is malloc'd and outlives any region bracket this call runs
+     inside, so a region-allocated payload word is an escape the result walk
+     cannot see -- the walk sees an opaque Promise/Future handle, never the
+     node inside the cell.  The parameter arrives ERASED (`:int`), so the
+     emitter's body-entry note for a typed node param does not fire and the
+     note has to be written here.  Same shape as chan-send in stdlib/chan.tur.
+     */
+  TUR_REGION_NOTE(v);
   cell->value = (int64_t)v;
   cell->exn = 0;
   cell->is_set = true;
@@ -391,6 +418,15 @@
   pthread_cond_init(&cell->ready, NULL);
   cell->refcount = 1;
   cell->value = 0;
+  /* region-lock-hardening (stdlib-int-stand-in-audit follow-up): the
+     FutureCell is malloc'd and outlives any region bracket this call runs
+     inside, so a region-allocated payload word is an escape the result walk
+     cannot see -- the walk sees an opaque Promise/Future handle, never the
+     node inside the cell.  The parameter arrives ERASED (`:int`), so the
+     emitter's body-entry note for a typed node param does not fire and the
+     note has to be written here.  Same shape as chan-send in stdlib/chan.tur.
+     */
+  TUR_REGION_NOTE(e);
   cell->exn = (int64_t)e;
   cell->is_set = true;
   cell->is_ok = false;
