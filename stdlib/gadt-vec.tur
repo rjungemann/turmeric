@@ -1,13 +1,17 @@
-;;; tur/gadt-vec -- length-indexed GVec GADT with phantom natural-number type parameter.
+;;; tur/gadt-vec -- GVec GADT: a singly-linked list of ints with a phantom type parameter.
 ;;;
-;;; GVec is a phantom-typed singly-linked list of ints.
-;;; True compile-time length safety is deferred to a future dependent-types phase.
+;;; GVec is a phantom-typed singly-linked list of ints: both constructors
+;;; return (GVec int), so the parameter never says anything about the length,
+;;; and gvec-head-or takes an explicit default.  A genuinely length-indexed
+;;; vector -- VNil : (Vec Zero), VCons : (Vec (Succ n)) over phantom-parameter
+;;; opaques -- gets an arm-less head on a scrutinee annotated (Vec (Succ n)),
+;;; and a rejected call on a value ascribed (Vec Zero); the recipe is the
+;;; "Length-Indexed Vectors" section of docs/guides/gadts-cookbook.md.
 ;;;
 ;;; Since: Phase G4
-;; Phase G4: length-indexed GVec GADT (simplified int elements)
+;; Phase G4: GVec GADT (simplified int elements)
 ;; GVec is a phantom-typed singly-linked list of ints.
 ;; The type parameter a is unused in constructor field types (phantom).
-;; True compile-time length safety is deferred to a future dependent-types phase.
 ;; Renamed from Vec to GVec (KB-023) to avoid shadowing stdlib/vec.tur's Vec struct.
 (defgadt GVec [a] (GVNil : (GVec int)) (GVCons int (GVec int) : (GVec int)))
 ;;; gvec-nil -- construct an empty GVec.

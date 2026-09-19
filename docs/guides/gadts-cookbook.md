@@ -83,106 +83,116 @@ value.
 
 ## Length-Indexed Vectors
 
-Use a type-level natural number to track vector length at compile time. Safe
-`head` and `vzip-with` become expressible without `option`.
+Use a type-level natural number to track vector length at compile time. A
+`head` that returns `int` rather than `(Option int)`, with no default and no
+empty-vector arm, is expressible -- provided the values carry their index.
 
-> **Caveat -- the index is phantom today.** The declarations below sketch the
-> full length-indexed design. In current Turmeric the `n` parameter is a
-> *phantom*: it does not yet prove non-emptiness or equal lengths at compile
-> time (true compile-time length safety awaits a dependent-types phase), which
-> is why the stdlib module ships `gvec-head-or` with an explicit default
-> rather than a bare `head`.
+The naturals are **phantom-parameter opaques**, not constructors: `Succ` has
+to be a type constructor (kind `* -> *`) so that `(NVec (Succ n))` is a type,
+and `defopaque` with a type-parameter vector is exactly that. (A `defgadt
+Nat` with `Zero` / `Succ` constructors puts those names in the VALUE
+namespace, where a type annotation cannot see them.)
+
+> **What is proven, and what is not.** A `match` on a scrutinee typed
+> `(NVec (Succ n))` reads the index: `NNil : (NVec Zero)` provably cannot be
+> the value, so it needs no arm. And a value that CARRIES an index is checked
+> at the call: `(nvec-head (:: (NNil) (NVec Zero)))` is a `TUR-E0001`. What is
+> still phantom is the constructor application itself -- `(NNil)` and
+> `(NCons 7 (NNil))` are typed as the bare `NVec`, which unifies with every
+> instantiation, so an UNANNOTATED empty vector reaches `nvec-head` and falls
+> off the match at runtime. Annotate the values you build (an ascription, or
+> a function whose declared return names the index), and the proof holds.
+> The open half is filed as
+> `docs/reported/gadt-length-index-not-enforced.md`.
 
 ```turmeric
-; Type-level naturals (canonical constructor syntax: fields, then ': return-type')
-(defgadt Nat []
-  (Zero : (Nat))
-  (Succ (Nat) : (Nat)))
+; Type-level naturals: phantom-parameter opaques, so (Succ n) is a type.
+(defopaque Zero :int)
+(defopaque Succ [n] :int)
 
-; Length-indexed int vector: (Vec n) has exactly n elements.
+; Length-indexed int vector: (NVec n) has exactly n elements.
 ; (Uses int elements; see stdlib/gadt-vec.tur for the shipped module.)
-(defgadt Vec [n]
-  (VNil            : (Vec Zero))
-  (VCons int (Vec n) : (Vec (Succ n))))
+(defgadt NVec [n]
+  (NNil            : (NVec Zero))
+  (NCons int (NVec n) : (NVec (Succ n))))
 
-; Length is computable at compile time -- no bounds check needed.
-(defn vec-len [v] : int
+; Length: the index is unknown here, so both arms are required.
+(defn nvec-len [v] : int
   (match v
-    (VNil)       0
-    (VCons _ tl) (+ 1 (vec-len tl))))
+    (NNil)       0
+    (NCons _ tl) (+ 1 (nvec-len tl))))
 
-; Head is only callable on non-empty vectors.
-; The return type is int, not (option int).
-(defn vec-head [v] : int
+; Head is only callable on non-empty vectors: no NNil arm, and the
+; return type is int, not (Option int).
+(defn nvec-head [n] [v : (NVec (Succ n))] : int
   (match v
-    (VCons x _) x))
+    (NCons x _) x))
 
-; Only vectors of the same length can be zipped -- the type guarantees it.
-(defn vzip-add [xs ys] : int
-  (match xs
-    (VNil)        0
-    (VCons x xtl)
-      (match ys
-        (VCons y ytl) (+ (* x y) (vzip-add xtl ytl)))))
+; The tail of a (NVec (Succ n)) is a (NVec n) -- the return carries the index.
+(defn nvec-tail [n] [v : (NVec (Succ n))] : (NVec n)
+  (match v
+    (NCons _ tl) tl))
 
 (defn main [] : int
-  (let [v (VCons 1 (VCons 2 (VCons 3 (VNil))))]
-    (println (vec-len v))      ; 3
-    (println (vec-head v))     ; 1
-    (println (vzip-add v v)))  ; 1*1 + 2*2 + 3*3 = 14
+  ; Ascribe the value you build; the index is what makes the calls checkable.
+  (let [v (:: (NCons 1 (NCons 2 (NCons 3 (NNil))))
+              (NVec (Succ (Succ (Succ Zero)))))]
+    (println (nvec-len v))              ; 3
+    (println (nvec-head v))             ; 1
+    (println (nvec-head (nvec-tail v)))  ; 2
+    ; (nvec-head (:: (NNil) (NVec Zero)))  ; TUR-E0001: expected (NVec (Succ n))
+    )
   0)
 ```
 
 ```sweet-exp
-; Type-level naturals (canonical constructor syntax: fields, then ': return-type')
-defgadt Nat []
-  (Zero : (Nat))
-  (Succ (Nat) : (Nat))
+; Type-level naturals: phantom-parameter opaques, so (Succ n) is a type.
+defopaque Zero :int
+defopaque Succ [n] :int
 
-; Length-indexed int vector: (Vec n) has exactly n elements.
+; Length-indexed int vector: (NVec n) has exactly n elements.
 ; (Uses int elements; see stdlib/gadt-vec.tur for the shipped module.)
-defgadt Vec [n]
-  (VNil            : (Vec Zero))
-  (VCons int (Vec n) : (Vec (Succ n)))
+defgadt NVec [n]
+  (NNil            : (NVec Zero))
+  (NCons int (NVec n) : (NVec (Succ n)))
 
-; Length is computable at compile time -- no bounds check needed.
-defn vec-len [v] :int
+; Length: the index is unknown here, so both arms are required.
+defn nvec-len [v] :int
   match v
-    (VNil)
+    (NNil)
     0
-    (VCons _ tl)
-    +(1 vec-len(tl))
+    (NCons _ tl)
+    +(1 nvec-len(tl))
 
-; Head is only callable on non-empty vectors.
-; The return type is int, not (option int).
-defn vec-head [v] :int
+; Head is only callable on non-empty vectors: no NNil arm, and the
+; return type is int, not (Option int).
+defn nvec-head [n] [v : (NVec (Succ n))] :int
   match v
-    (VCons x _)
+    (NCons x _)
     x
 
-; Only vectors of the same length can be zipped -- the type guarantees it.
-defn vzip-add [xs ys] :int
-  match xs
-    (VNil)
-    0
-    (VCons x xtl)
-    match ys
-      (VCons y ytl)
-      +(*(x y) vzip-add(xtl ytl))
+; The tail of a (NVec (Succ n)) is a (NVec n) -- the return carries the index.
+defn nvec-tail [n] [v : (NVec (Succ n))] : (NVec n)
+  match v
+    (NCons _ tl)
+    tl
 
 defn main [] :int
-  let [v VCons(1 VCons(2 VCons(3 (VNil))))]
-    println(vec-len(v))
-    println(vec-head(v))
-    println(vzip-add(v v))
+  ; Ascribe the value you build; the index is what makes the calls checkable.
+  let [v (:: (NCons 1 (NCons 2 (NCons 3 (NNil))))
+             (NVec (Succ (Succ (Succ Zero)))))]
+    println(nvec-len(v))
+    println(nvec-head(v))
+    println(nvec-head(nvec-tail(v)))
   0
 ```
 
 **Stdlib:** `stdlib/gadt-vec.tur` provides `gvec-nil`, `gvec-cons`,
 `gvec-len`, `gvec-sum`, `gvec-head-or`, `gvec-tail`, `gvmap`, and
-`gvzip-with` as a reusable module (a phantom-typed `GVec` of int elements;
-true compile-time length safety awaits a dependent-types phase). Import it
-with `(load "stdlib/gadt-vec.tur")`.
+`gvzip-with` as a reusable module. Its `GVec` is indexed by `int` on both
+constructors -- a phantom index, so it ships `gvec-head-or` with an explicit
+default; the recipe above is how to write the length-indexed variant. Import
+it with `(load "stdlib/gadt-vec.tur")`.
 
 ---
 

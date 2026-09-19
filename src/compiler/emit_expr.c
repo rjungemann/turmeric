@@ -454,6 +454,7 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
      * call is simply not specialized here. */
     if (!saw_call && active_outer != NULL && other_clone &&
         !(fn_binding && fn_binding->is_construct_template) &&
+        !emit_call_abstract_under_active_spec(ctx, e) &&
         emit_spec_clone_belongs_to(ctx, other_clone, fn_binding)) {
         fallback_clone = other_clone;
         saw_call = true;
@@ -11552,8 +11553,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * carrier, only a by-value struct literal still needs bridging
                  * here; a plain var / call result / temp is already a carrier
                  * int64_t that the impl accepts as-is. */
+                /* colored-generic-tyvar-elemented-param-sig-rejects: neither
+                 * spill below applies to an argument that is still ABSTRACT
+                 * under the active spec (an erased carrier clone's own
+                 * parameter, `o : (Option A)` with `A` unpinned): its C
+                 * spelling is already the int64 carrier, and spilling it as
+                 * the by-value struct its declared shape suggests is the
+                 * arg-bridge repr-shadow ICE. */
+                bool arg_abstract_here =
+                    emit_expr_abstract_under_active_spec(ctx, e->as.call_.args[i]);
                 if (!needs_fn_cast && !matched_spec &&
-                    !callee_param_is_typed_heap_ptr &&
+                    !callee_param_is_typed_heap_ptr && !arg_abstract_here &&
                     e->as.call_.dict_arg != NULL &&
                     emit_arg && type_kind_is_aggregate(emit_arg->type.kind) &&
                     type_kind_is_aggregate(e->as.call_.args[i]->type.kind) &&
@@ -11583,7 +11593,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * this only fires on a real by-value producer.  The dict path
                  * above keeps its own `dict_arg != NULL` branch unchanged. */
                 else if (!needs_fn_cast && !matched_spec &&
-                         !callee_param_is_typed_heap_ptr &&
+                         !callee_param_is_typed_heap_ptr && !arg_abstract_here &&
                          e->as.call_.dict_arg == NULL &&
                          emit_arg && type_kind_is_aggregate(emit_arg->type.kind) &&
                          type_kind_is_aggregate(e->as.call_.args[i]->type.kind) &&

@@ -1,0 +1,14 @@
+;; compiled-defdata-over-stdlib-type-rewrites-the-stdlib-type: a `defdata`
+;; reusing a stdlib type name (`Option` comes from stdlib/option.tur) used to
+;; pass elab_defdata's forward-stub test -- the stdlib's own type pre-pass had
+;; registered `Option` as a forward type -- and re-elaborate the stdlib's def
+;; IN PLACE.  The stdlib's `(definstance Functor [Option] ...)` then saw a
+;; kind-`*` type and the user got a TUR-E0012 blamed on stdlib/option.tur,
+;; with no mention of the name clash.  `defstruct` already refused this
+;; (errors/defstruct-redef-stdlib-name); `defdata` now does too, in a compile
+;; as well as in a session.
+(defdata Option (Nada) (Algo int))
+
+(defn main [] : int
+  (println (match (Algo 3) (Nada) 0 (Algo n) n))
+  0)

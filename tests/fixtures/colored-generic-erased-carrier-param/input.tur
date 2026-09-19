@@ -1,0 +1,42 @@
+;; colored-generic-tyvar-elemented-param-sig-rejects -- a colored generic whose
+;; parameter is a tyvar-elemented application, called with NOTHING pinning the
+;; tyvar: `(peek (ok 1))` hands `peek [E] [r : (Result int E)]` an erased
+;; carrier box.
+;;
+;; The base sig-rejects on purpose (the mono-template machinery keys on it),
+;; and the ABI scan mints a clone for the unpinned call whose argument
+;; materializes as the erased app -- C spelling `int64_t`.  That clone was the
+;; only thing that could carry the `perform`, and mono_sig_ok's slot gate
+;; declined its erased argument, so the function evicted with "this effect
+;; operation has no lowering here" while `--interpret` printed 1.
+;;
+;; Now the clone's gate admits an erased int64 carrier app
+;; (slot_erased_carrier_app), so the unpinned call routes to the clone's
+;; `__cps` like any other monomorph.  Both flavours below, and both call
+;; orders: with the PINNED call scanned first, the inner `ok?` / `some?` under
+;; the erased clone used to adopt the pinned sibling's by-value accessor clone
+;; through the cross-spec fallback (emit_call_abstract_under_active_spec
+;; closes that).  The pinned-arm controls are unchanged.
+
+(defeffect Tick [] : int)
+
+(defn peek [E] [r : (Result int E)] : int
+  (perform (Tick))
+  (if (ok? r) 1 0))
+
+(defeffect Ask [] : int)
+
+(defn bump [A] [o : (Option A)] : int
+  (let [n (perform (Ask))]
+    (if (some? o) (+ n 1) n)))
+
+(defn main [] : int
+  ;; unpinned, then pinned
+  (println (handle (peek (ok 1)) (Tick [] k) (resume k 1)))
+  (println (handle (peek (:: (ok 1) (Result int cstr))) (Tick [] k) (resume k 1)))
+  (println (handle (peek (:: (err "no") (Result int cstr))) (Tick [] k) (resume k 1)))
+  ;; pinned FIRST, then unpinned
+  (println (handle (bump (some 5)) (Ask [] k) (resume k 10)))
+  (println (handle (bump (none)) (Ask [] k) (resume k 10)))
+  (println (handle (bump (:: (none) (Option int))) (Ask [] k) (resume k 10)))
+  0)

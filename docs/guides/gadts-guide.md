@@ -620,7 +620,14 @@ arm falls through to the next arm of the same group when it fails.
 **Unsupported:**
 
 - **No dependent types.** Type parameters must be types, not values. You cannot
-  index a GADT by a runtime integer directly; use a type-level Nat GADT instead.
+  index a GADT by a runtime integer directly; use type-level naturals instead
+  (phantom-parameter opaques: `(defopaque Zero :int)`, `(defopaque Succ [n]
+  :int)`). A `match` on a scrutinee annotated `(Vec (Succ n))` then omits the
+  `VNil` arm -- the exhaustiveness check drops a constructor whose declared
+  index provably differs from the scrutinee's -- and a value ascribed
+  `(Vec Zero)` is rejected at such a call. A constructor application itself
+  is still typed as the bare `Vec`, so the proof needs the values annotated;
+  see the cookbook's "Length-Indexed Vectors".
 
 - **No mutual recursion across files.** Mutually recursive GADTs must be
   defined in the same file.

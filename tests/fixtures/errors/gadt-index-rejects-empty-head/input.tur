@@ -1,0 +1,24 @@
+;; gadt-length-index-not-enforced -- the other half of the length proof: a
+;; value that CARRIES its index cannot reach a function that demands a
+;; different one.  `(:: (LNil) (LVec Zero))` against `[v : (LVec (Succ n))]`
+;; is a TUR-E0001 at the call, so the arm-less `lhead` in
+;; gadt-index-refines-exhaustiveness is never entered with an empty vector.
+;;
+;; A bare `(LNil)` with no ascription is typed as the plain `LVec` and unifies
+;; with any instantiation -- the index lives on the annotation, not on the
+;; constructor application -- so the proof asks the caller to say what it has.
+
+(defopaque Zero :int)
+(defopaque Succ [n] :int)
+
+(defgadt LVec [n]
+  (LNil : (LVec Zero))
+  (LCons int (LVec n) : (LVec (Succ n))))
+
+(defn lhead [n] [v : (LVec (Succ n))] : int
+  (match v
+    (LCons x _) x))
+
+(defn main [] : int
+  (println (lhead (:: (LNil) (LVec Zero))))
+  0)

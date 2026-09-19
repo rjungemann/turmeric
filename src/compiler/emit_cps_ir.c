@@ -166,6 +166,29 @@ static bool slot_carrier_app(const Type *t) {
     return cn && strcmp(cn, "int64_t") == 0;
 }
 
+/* colored-generic-tyvar-elemented-param-sig-rejects: the ERASED counterpart of
+ * slot_carrier_app, for a monomorph SPEC's materialized signature only.  When
+ * nothing pins a colored generic's tyvar -- `(peek (ok 1))` against `peek [E]
+ * [r : (Result int E)]`, where `(ok 1)` is `(Result int ?)` -- the ABI scan
+ * still mints a clone (`peek__spec__int64_t_int64_t`), with the arg
+ * materialized as the erased app, whose C spelling is the int64 carrier.  That
+ * clone is the only candidate that can carry the `perform` (the base must keep
+ * sig-rejecting so it stays a mono-template), and its arg crosses a DK slot as
+ * the plain word it already is, exactly like the concrete SR2b case.  The
+ * direct emitter's forward decl and emit_params both spell it `int64_t`, so
+ * the `__cps` entry and the wrapper agree with every caller.  Not admitted at
+ * the BASE gate (sig_slot_ok): the base name is shared by every clone, and
+ * admitting it there is what double-emitted the map-eq drivers' joins. */
+static bool erased_adt_carrier(const Type *t);
+static bool slot_erased_carrier_app(const Type *t) {
+    if (!t) return false;
+    Type _r; t = cps_resolve_ty(t, &_r);
+    if (t->kind != TY_APP) return false;
+    if (!erased_adt_carrier(t)) return false;
+    const char *cn = type_c_name(*(Type *)t);
+    return cn && strcmp(cn, "int64_t") == 0;
+}
+
 static bool slot_box_ty(const Type *t) {
     if (!t) return false;
     Type _r; t = cps_resolve_ty(t, &_r);
@@ -9556,9 +9579,20 @@ static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
      * through the concrete mono `__cps` mishandles its interior carrier fields
      * (show-collections: a Map with cstr keys printed the key POINTERS), so those
      * stay on the strict scalar gate.  A scalar always passes `sig_slot_ok`. */
+    /* ... and an ERASED carrier app (slot_erased_carrier_app): the clone the
+     * ABI scan mints for an UNPINNED call of a colored generic, whose only
+     * lowering this is.  See colored-generic-tyvar-elemented-param-sig-rejects.
+     * NOT when the clone's RESULT is a by-value aggregate: that mixed shape
+     * (`result_map__spec__tur_adt_Result__int__int_int64_t_int64_t`, erased
+     * receiver in, `(Result int int)` struct out) delivers the delegated
+     * match's struct temp straight into the int64 return slot unboxed
+     * (`__t0 = __t348`, a cc error in typed/result-basic), so it keeps the
+     * gate it had. */
+    bool erased_arg_ok = !is_inst && !(rt->kind != TY_NIL && slot_box_ty(rt));
     #define MONO_SLOT_OK(t, k) (is_inst ? sig_slot_ok((t), (k)) \
                                         : (sig_slot_ok((t), (k)) || slot_box_ty(t) || \
-                                           slot_carrier_app(t)))
+                                           slot_carrier_app(t) || \
+                                           (erased_arg_ok && slot_erased_carrier_app(t))))
     if (rt->kind != TY_NIL && !MONO_SLOT_OK(rt, rt->kind)) return false;
     for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
