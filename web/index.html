@@ -115,7 +115,7 @@ println
 
   <div class="feature-card">
     <div class="feat-icon"><t-icon name="target"></t-icon></div>
-    <div class="feat-title">Typeclasses</div>
+    <div class="feat-title">Typeclasses and ADTs</div>
     <p class="feat-desc">Ad-hoc polymorphism with zero-cost dispatch. Define interfaces, implement them for any type, and let the compiler verify everything.</p>
   </div>
 
@@ -215,8 +215,8 @@ defn color-name [c] : cstr
 <div class="split-section reverse reveal">
   <div>
     <p class="section-label">Effect Handlers</p>
-    <h2 class="section-title">Write once,<br>handle anywhere.</h2>
-    <p class="section-desc mb-24">The same business logic powers your production app and your test suite. Swap the handler -- not the function. No mocking frameworks, no dependency injection.</p>
+    <h2 class="section-title">Let consumers handle effects<br>the way they want</h2>
+    <p class="section-desc mb-24">The same business logic powers your production app and your test suite. Swap the handler to use effectful code in a different context.</p>
     <p class="section-desc">Turmeric's algebraic effect system makes this possible: declare what a function can do, not how it does it. The type system ensures every effect is handled.</p>
   </div>
   <div class="code-card code-card--sm">
@@ -273,7 +273,7 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
 <div class="split-section reveal">
   <div>
     <p class="section-label">Package Manager</p>
-    <h2 class="section-title">One file. No ceremony.</h2>
+    <h2 class="section-title">One file to manage all your deps</h2>
     <p class="section-desc mb-24">One <code>build.tur</code> declares your package and its dependencies. Reference any spice by Git URL -- no registry account, no separate tooling. Third-party spices import just like your own modules.</p>
     <p class="section-desc">Most spices are pure Turmeric or inline C -- nothing to install. When you need a native C library, add it to <code>:cmake-deps</code> and Turmeric handles fetching, building, and linking automatically. Many popular libraries already have Turmeric spices -- like <a href="https://spices.turmeric-lang.com/raylib/" style="color:var(--gold);">tur/raylib</a> -- so you may not need it at all.</p>
   </div>
@@ -307,7 +307,7 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
 
 <!-- ── GETTING STARTED ───────────────── -->
 <div class="started-section reveal" id="install">
-  <h2 class="section-title">Up and running<br>in minutes.</h2>
+  <h2 class="section-title">Up and running<br>in minutes</h2>
 
   <div class="started-grid">
     <div class="step-card">
