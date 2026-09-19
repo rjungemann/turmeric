@@ -2310,6 +2310,20 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     if (!app_niche) {
     buf_printf(out, "#ifndef TUR_TY_%s\n", adt_inst_name);
     buf_printf(out, "#define TUR_TY_%s\n", adt_inst_name);
+    /* self-typed-heap-parametric-field-unsupported: the typedef NAME is
+     * introduced exactly once, by a guarded forward declaration, and the
+     * body below defines only the struct TAG.  The dependency pre-pass above
+     * emits the same guarded forward decl for a pointer-held `:heap`
+     * monomorph -- including a self-typed one's own name, right before its
+     * body -- and `typedef struct X {...} X;` after `typedef struct X X;`
+     * is a typedef REDEFINITION: silent under gcc, but clang -std=c99 (the
+     * flags `tur build` passes) warns `redefinition of typedef 'X' is a C11
+     * feature`, which turned every self-typed monomorph's program into a
+     * warning on macOS (tur_offtree_load). */
+    buf_printf(out, "#ifndef TUR_FWD_%s\n", adt_inst_name);
+    buf_printf(out, "#define TUR_FWD_%s\n", adt_inst_name);
+    buf_printf(out, "typedef struct %s %s;\n", adt_inst_name, adt_inst_name);
+    buf_printf(out, "#endif\n");
     /* CONV-S1 seam 4 (keystone): a single-variant record monomorph carries the
      * record's real field names (`{ T data; ... }`) -- the parametric analogue
      * of the non-parametric named layout -- so inline-C that reads it by field
@@ -2319,7 +2333,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     bool named = adt_uses_named_layout(def);
     if (named) {
         CtorDef *ctor = def->ctors[0];
-        buf_printf(out, "typedef struct %s {\n", adt_inst_name);
+        buf_printf(out, "struct %s {\n", adt_inst_name);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             const CtorField *fld = &ctor->fields[fi];
             Type fres = (fld->full_type && def)
@@ -2345,10 +2359,10 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 buf_printf(out, "    int32_t __pad_%s;\n", fname);
             free(fname);
         }
-        buf_printf(out, "} %s;\n", adt_inst_name);
+        buf_printf(out, "};\n");
         buf_printf(out, "#endif\n\n");
     } else {
-    buf_printf(out, "typedef struct %s {\n", adt_inst_name);
+    buf_printf(out, "struct %s {\n", adt_inst_name);
     if (!flat) buf_printf(out, "    int tag;\n");
     buf_printf(out, "    union {\n");
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
@@ -2386,7 +2400,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         free(mctor);
     }
     buf_printf(out, "    } as;\n");
-    buf_printf(out, "} %s;\n", adt_inst_name);
+    buf_printf(out, "};\n");
     buf_printf(out, "#endif\n\n");
     }
     }   /* !app_niche */
