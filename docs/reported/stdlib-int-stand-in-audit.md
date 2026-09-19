@@ -298,6 +298,81 @@ shipping one of the two rules measured above. The repro is three lines:
   the generated docstring table existed, and `(json/get-bool (json/bool true))`
   prints `true` / `false` across the pair. Suite 3047/0.
 
+## The remaining 6 S2 sites, investigated 2026-09-19
+
+S2 landed 13 of 19 sites (ref, chan, atomic). The other 6 were left with
+"needs a design call" against them; this is what each one actually needs.
+**None is blocked on effort, and none should be done the obvious way.**
+
+### `dfs-set` (1 site) -- BLOCKED, and parameterising it today is a REGRESSION
+
+Mechanically the smallest of the three: `(defopaque BtCell [A] :ptr)` plus
+seven signatures in `trail.tur` and three in `backtrack-dfs.tur`, ~20 lines.
+It was **written, measured and reverted**.
+
+`dfs-set` returns a closure capturing its payload, and a generic type parameter
+bound to `float` is **truncated when captured into a closure** --
+[generic-closure-capture-of-float-truncates](generic-closure-capture-of-float-truncates.md),
+a pre-existing compiler bug this investigation found and filed. Same program,
+both ways:
+
+| | `(dfs-set c 7.25)` |
+| --- | --- |
+| today, `v : int` | `error [TUR-E0001]: expected int, got float` -- loud |
+| parameterised | runs, prints `3.45846e-323` -- silent wrong answer |
+
+So the parameterisation converts a correct rejection into a wrong answer. **Do
+not land it until that bug is fixed**; the ordering is a hard dependency, not a
+preference.
+
+Two notes for whoever picks it up. `dfs-choose-int` / `dfs-choose-go` enumerate
+`lo..hi` into the cell, so they pin to `(BtCell int)` -- the `atomic-add!` case.
+And `BtCell` lives in `trail.tur`, not the module this report lists.
+
+### `future.tur` (4 sites) -- not 4 functions, 34
+
+The report counts payload parameters; the module has **34 `defn`s**, and
+parameterising `Promise`/`Future` touches nearly all of them. The payload path
+itself is the easy part and would work today (it is `ref.tur`'s shape, no
+closure capture, so the bug above does not apply). The surface is the problem:
+
+- **`future-get` already builds a `Result`** -- `tur_box_ok(fc->value)` /
+  `tur_box_err(fc->exn)` -- and then declares it `: ptr<void>`. With
+  `(Future A E)` it should return `(Result A E)`, which is a strict
+  improvement and arguably the single highest-value edit in the module.
+- **The cell has two payload slots** (`int64_t value; int64_t exn;`), so the
+  question really is `(Future A)` vs `(Future A E)`. Two parameters is the
+  honest shape.
+- **The combinators change the type**, which no other S2 module had to do:
+  `future-map` is `A -> B`; `future-all2` / `future-join` are
+  `(Future A) + (Future B) -> (Future (Tuple2 A B))`, where `Tuple2` is a
+  hand-rolled `ptr<void>` whose `tuple-first`/`tuple-second` return `:int` and
+  would need parameterising too; `future-race-n` / `future-all-n` /
+  `future-any-n` take a raw `ptr<void>` array of futures, which wants a typed
+  array before it can carry an element type.
+
+This is a module redesign with a real payoff, not a signature pass. Worth its
+own plan.
+
+### `fiber-yield` (1 site) -- needs a handle it does not have
+
+`(defn fiber-yield [value : int] : nil)` takes **no handle**. It is called from
+inside the fiber body and reaches the runtime through
+`tur_fiber_block_yield(value)`, which stores into
+`tur_current_fiber->result` -- there is nothing in its arguments to carry a
+type parameter. Typing the payload means either giving it a handle parameter or
+routing it through an effect-typed mechanism, and either way the protocol has
+**three** payloads that have to agree: `fiber-resume`'s argument, the yielded
+value, and `fiber-resume`'s return.
+
+Also worth noting while here: `tur_fiber_block_yield` writes a caller word into
+a `FiberBlock` that outlives the yield, and `stdlib/fiber.tur` carries **zero**
+`TUR_REGION_NOTE`s -- the same missing-hook shape that `chan.tur` had before
+S2. `future.tur` has zero as well, across four stores of a caller word into a
+malloc'd cell (`promise-fulfill`, `promise-fail`, `future-of`,
+`future-error-of`). Both are independent of the typing work and are cheap to
+fix on their own.
+
 ## See also
 
 - [docs/archive/spices-int-stand-in-audit-2026-06-14.md](../archive/spices-int-stand-in-audit-2026-06-14.md)
