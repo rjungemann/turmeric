@@ -32,7 +32,7 @@ harness (102 fixtures) is unchanged.
 **Found, not fixed, filed separately:** a `let` alias of a fn PARAMETER
 called through the alias (`(let [h g] (h))`) does not compile -- pre-existing,
 independent of `^mut`. See
-[let-alias-of-fn-param-call-undeclared](../reported/let-alias-of-fn-param-call-undeclared.md).
+[let-alias-of-fn-param-call-undeclared](let-alias-of-fn-param-call-undeclared.md) (since resolved).
 
 **Severity: medium.** `tur check` and `tur build` both pass; the program
 segfaults at the call. Local and global cells alike. Found 2026-09-19 while

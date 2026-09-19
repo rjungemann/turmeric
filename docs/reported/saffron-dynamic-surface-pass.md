@@ -6,10 +6,10 @@ six of the lows (Sym `=`, the expression call head, the `if` join, the
 all-`any` expectation), each pinned by a fixture; the fuzzer's last two KNOWN
 rows and both known-probes are retired and 250 cases with those shapes back
 in the pool are clean; the guide's boundary example is corrected. **M9 and the `call/cc` `: any` low resolved later the same day.** **Open:**
-M7 (the erased self-referential tail) and two lows -- the variadic `& rest : any` representation gap, the `call/cc`
-receiver annotated `: any`, and the `#lang`-less `(defn f [] [x y])` reading
-(deliberately unchanged, see the parse item). Struck-through items below
-carry their resolution note.
+M7 (the erased self-referential tail) and the `& rest : any` low, which is
+gated on the same stdlib `Cons` representation as M7 (see the item). The
+`#lang`-less `(defn f [] [x y])` reading is deliberately unchanged (see the
+parse item). Struck-through items below carry their resolution note.
 
 H7, M1 and M2 were one SHAPE of problem -- a value whose Saffron representation
 (a 16-byte `tur_tagged_t`) did not fit the representation the typed path had
@@ -512,6 +512,13 @@ covered, by the same rule as before: a parametric or `:heap` receiver.
   in the existing cell is the other option, and costs a deref in every rest
   walk. Same representation-gap family as H7/M1/M2-compiled: the THIRD filed
   direction in this report to name a check when the defect is a width.
+  *Assessed 2026-09-19, still open, and now gated on M7:* the `(Cons any)`
+  route makes the callee's `rest` a `(Cons any)` whose link is the erased
+  `:int` tail (`stdlib/list.tur`), so every walk of it is the M7 read; the
+  pointer-boxing route keeps the int64 cell but every read of an element
+  (`head`, the untyped cons helpers) would have to know the head is a box
+  and deref it, a second protocol for one accessor. Both are the stdlib
+  `Cons` representation change M7 records, not a call-site fix.
 - ~~`(defstruct Dyn [v : any])` is `unsupported field form` (typed too); ADT
   fields accept `any`, struct fields do not.~~ **RESOLVED 2026-09-10.**
   `defstruct_field_type_lowerable` had no arm for `TY_ANY`, so the gate fell to

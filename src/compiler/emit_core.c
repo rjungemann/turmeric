@@ -3437,6 +3437,18 @@ bool emit_call_is_dict_param_dispatch(EmitCtx *ctx, const Expr *call) {
            emit_call_is_dict_env_dispatch(ctx, call);
 }
 
+/* The plain (un-specialised) spelling of a callee: a global's raw C symbol,
+ * or -- let-alias-of-fn-param-call-undeclared -- a LOCAL's declared name.  The
+ * three early exits of emit_call_name below used raw_name_for_binding for
+ * both, so a zero-argument call through a let-bound poly-fn alias `h` was
+ * emitted `h.fn(h.env)` against a declaration `tur_poly_fn_t h_1608` (the
+ * same declared-vs-used mismatch the function's closing comment describes
+ * for the general path, one exit earlier). */
+static char *call_name_plain(EmitCtx *ctx, const Binding *b) {
+    if (b && !b->is_global) return name_for_binding(ctx, b);
+    return raw_name_for_binding(b);
+}
+
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
     const Expr *cur = NULL;
     /* MB1 (constrained-hkt-forall-mode-b-plan): while emitting a dict-clone
@@ -3645,7 +3657,7 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                 char *captured = capture_env_access(ctx, b);
                 if (captured) return captured;
             }
-            return raw_name_for_binding(b);
+            return call_name_plain(ctx, b);
         }
         /* If this call was recorded under a spec outer but none matches the
          * active (NULL) outer, it is a spec-scoped specialization (e.g. a
@@ -3658,7 +3670,7 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                 char *captured = capture_env_access(ctx, b);
                 if (captured) return captured;
             }
-            return raw_name_for_binding(b);
+            return call_name_plain(ctx, b);
         }
         /* option-consumer-retype-byvalue step 2: a 0-arg call (e.g. a
          * `(none)` / `(empty)` constructor) carries no argument types to
@@ -3686,7 +3698,7 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                 char *captured = capture_env_access(ctx, b);
                 if (captured) return captured;
             }
-            return raw_name_for_binding(b);
+            return call_name_plain(ctx, b);
         }
         if (call->kind == EX_CALL && b) {
             for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
@@ -3870,7 +3882,12 @@ char *name_for_binding(EmitCtx *ctx, const Binding *b) {
      * not a function symbol; fall through to the id-suffixed mangling path so
      * distinct closures don't collide and a source name that is a C keyword
      * (e.g. `double`) is disambiguated to `double_<id>`. */
-    if (b->type.kind == TY_FN && !b->type.as.fn.boxed) {
+    /* let-alias-of-fn-param-call-undeclared: a let-bound POLY-FN alias
+     * (`(let [h g] ...)` with `g` a fat-normalised fn parameter) is a
+     * `tur_poly_fn_t` VALUE declared with the id suffix by the let binder, not
+     * a function symbol; the raw-name rule below spelled its CALL `h` against
+     * a declaration `h_1608`. */
+    if (b->type.kind == TY_FN && !b->type.as.fn.boxed && !b->is_poly_fn) {
         return raw_name_for_binding(b);
     }
     /* Phase M6: If c_export_name is set, use it directly (bypasses mangling and id suffix). */

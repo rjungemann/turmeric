@@ -1,8 +1,22 @@
 # A `let` alias of a fn parameter, called through the alias, emits an undeclared C name
 
+**RESOLVED 2026-09-19.** The root was not the invoke path but
+`emit_call_name`'s three early exits (construct-into-carrier, spec-scoped
+specialisation, and the ZERO-ARGUMENT call -- the one `(h)` takes), which
+spelled every callee with `raw_name_for_binding`, local or global, while the
+general path at the function's end already routes a local through
+`name_for_binding` for exactly this declared-vs-used reason. The exits now
+share that rule (`call_name_plain`). Pinned by
+`tests/fixtures/let-alias-of-fn-param-call` (zero-arg, one-arg, called
+twice, passed on to a typed HOF, a float result). The `^mut` twin -- a cell
+aliasing such a parameter being RE-POINTED -- is a `tur_poly_fn_t` value no
+lambda or closure box can be assigned to (thin and capturing stores both
+failed in cc), so it is refused statically now:
+`tests/fixtures/errors/set-poly-fn-param-alias-cell`.
+
 **Severity: low-medium.** `tur check` passes; cc rejects the emitted C. Found
 2026-09-19 while closing
-[fn-cell-set-with-capturing-closure-segfaults](../archive/fn-cell-set-with-capturing-closure-segfaults.md);
+[fn-cell-set-with-capturing-closure-segfaults](fn-cell-set-with-capturing-closure-segfaults.md);
 pre-existing and independent of `^mut` (the immutable alias fails the same
 way).
 

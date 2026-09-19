@@ -3785,6 +3785,20 @@ Expr *elab_set(Elab *e, const Form *call) {
      * that stayed thin -- initialised from a thin fn VALUE the `let` could
      * not re-spell, such as a parameter -- cannot hold a capturing closure,
      * and the store is refused here rather than segfaulting at the call. */
+    if (b->is_poly_fn && value->type.kind == TY_FN) {
+        /* let-alias-of-fn-param-call-undeclared: a cell that ALIASES a
+         * polymorphic fn parameter is a `tur_poly_fn_t` value -- a
+         * representation neither a lambda literal nor a closure box has (the
+         * store was `incompatible types when assigning to type
+         * 'tur_poly_fn_t'`, thin and capturing alike).  Refuse it statically;
+         * a cell meant to be re-pointed is bound from a lambda literal. */
+        diag_emit(DIAG_ERROR, value->span,
+                  "set!: '%s' aliases a polymorphic function parameter and "
+                  "cannot be re-pointed; bind a `^mut` cell from a lambda "
+                  "literal instead",
+                  b->name->name);
+        return NULL;
+    }
     if (b->type.kind == TY_FN && value->type.kind == TY_FN) {
         if (b->type.as.fn.boxed && !value->type.as.fn.boxed) {
             value = elab_fn_value_to_fat(e, value);

@@ -1,0 +1,31 @@
+;; let-alias-of-fn-param-call-undeclared: `(let [h g] (h))` with `g` a fn
+;; parameter did not compile -- cc: 'h' undeclared.  The parameter is
+;; fat-normalised, so the alias is declared as a `tur_poly_fn_t` VALUE with
+;; the id suffix (`h_1608`), but the call went through the three early exits
+;; of emit_call_name -- the zero-argument one here -- which spelled every
+;; callee by its raw symbol, local or global.  A local callee is now spelled
+;; by the rule that declared it, on those exits as on the general path.
+;;
+;; Shapes: a zero-argument alias call (the failing one), an alias with an
+;; argument, the alias called twice, and the alias passed on to another
+;; typed HOF.  The float keeps a fraction so a truncating path would show.
+
+(defn call0 [g : (fn [] int)] : int
+  (let [h g] (h)))
+
+(defn call1 [g : (fn [int] int)] : int
+  (let [h g] (+ (h 1) (h 2))))
+
+(defn callf [g : (fn [float] float)] : float
+  (let [h g] (h 7.25)))
+
+(defn ap [g : (fn [int] int) v : int] : int (g v))
+(defn pass-on [g : (fn [int] int)] : int
+  (let [h g] (ap h 20)))
+
+(defn main [] : int
+  (println (call0 (fn [] : int 3)))
+  (println (call1 (fn [x : int] : int (* x 10))))
+  (println (callf (fn [x : float] : float (* x 2.0))))
+  (println (pass-on (fn [x : int] : int (+ x 1))))
+  0)
