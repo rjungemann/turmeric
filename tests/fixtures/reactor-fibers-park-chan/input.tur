@@ -28,8 +28,11 @@
 ;; consuming the linear handle.  A linear Chan cannot be aliased across two
 ;; fiber closures, so main keeps sole ownership of `ch` (freeing it once at the
 ;; end) and lends this non-linear raw pointer to both fibers instead.
-(defn chan-raw [^borrow ch : Chan] : ptr<void>
-  ```c return (void *)ch; ```)
+;; stdlib-int-stand-in-audit S2: Chan is (Chan A) now, and a parametric opaque
+;; rides the int64 carrier even though its repr is :ptr<void> -- hence the
+;; intptr_t hop rather than a bare (void *) cast.
+(defn chan-raw [A] [^borrow ch : (Chan A)] : ptr<void>
+  ```c return (void *)(intptr_t)ch; ```)
 
 (defn main [] : int
   (let [r   (reactor-new)
