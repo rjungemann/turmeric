@@ -183,15 +183,22 @@ reinterpreting a payload word:
 
 ```turmeric
 ;; typed module
-(defn scale [v : (Vec int) k : int] : int ...)
+(defn scale [x : float k : int] : float ...)
 
-;; Saffron caller -- the compiler checks `v` and `k` on the way in
-(scale my-vec 2)
+;; Saffron caller -- the compiler checks `x` and `k` on the way in
+(scale 7.5 2)
 ```
 
 The cost is one tag compare per argument. There is deliberately **no** flag to
 turn it off: an unchecked boundary turns a type error into a memory-safety bug,
 which is the whole reason `cast` was built checked.
+
+One consequence for **containers**: a container a Saffron file builds is always
+the all-`any` instantiation (a `[1 2 3]` literal is a `(Vec any)`, holding
+boxes), so it does not fit a typed `(Vec int)` parameter, whose elements are
+raw ints -- the checked crossing panics with `different instantiation of Vec`
+rather than reinterpreting the boxes. A typed container parameter can only be
+fed a container built in typed code; scalars cross freely.
 
 The reverse direction works too -- a typed module can `import` a Saffron one and
 narrow its `any`-typed exports.

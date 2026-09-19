@@ -43,7 +43,7 @@ static const AdtDef *elab_byval_drop_adt(Type t) {
  * (elab_structs.c) has already applied the `:copy` and `:heap` exclusions and
  * the direct-self-reference test -- a field pointing `drop_inner_def` at its own
  * def is the whole condition, so it is not restated here. */
-static const AdtDef *elab_byval_localowned_adt(Type t) {
+const AdtDef *elab_byval_localowned_adt(Type t) {
     const AdtDef *def = NULL;
     if (t.kind == TY_ADT)      def = t.as.adt_.def;
     else if (t.kind == TY_APP) def = type_adt_app_def(&t);
@@ -1946,8 +1946,15 @@ Expr *elab_let(Elab *e, const Form *call) {
     for (uint32_t k = 0; k < n_binds; k++) {
         const AdtDef *ad = elab_byval_localowned_adt(binds[k].binding->type);
         if (!ad) continue;
-        if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
-            is_binding_consumed(body, binds[k].binding))
+        /* Residue 1: a local whose only "move" was a LEND -- every use that
+         * poisoned it passed it to a callee proven non-retaining -- still owns
+         * its spine here, and nothing else will free it.  A real move anywhere
+         * (moved_owning is sticky across branches) keeps the old answer. */
+        Binding *lb = binds[k].binding;
+        bool moved_for_real = lb->is_moved &&
+                              !(lb->lent_to_nonretaining && !lb->moved_owning);
+        if (binding_moved_during_init[k] || moved_for_real ||
+            is_binding_consumed(body, lb))
             continue;
         binds[k].binding->drops_local_owned = true;
     }
@@ -3237,6 +3244,24 @@ Expr *elab_if(Elab *e, const Form *call) {
              * result with `^fat` (or `::`) to call it again.  Calling a raw
              * :ptr<void> directly stays an error (CRU B-4). */
             result_t = TYPE_PTR_VOID;
+        } else if (!type_eq(then_->type, else_->type) &&
+                   (lang_span_is_saffron(call->span) || e->toplevel_saffron) &&
+                   !if_branches_unify_via_tyvar(then_->type, else_->type, &result_t)) {
+            /* saffron-dynamic-surface-pass (low): in a Saffron file an `if`
+             * whose arms disagree JOINS TO `any` -- `(defn pick [c] (if c 1
+             * "one"))` is the ordinary dynamic-language shape, and it was a
+             * static "then=int else=cstr" because the widen above fires only
+             * when an arm or the expectation already IS `any`; an unannotated
+             * Saffron defn pins its return to `any` after the body is
+             * elaborated, so the expectation was not there to see.  Placed
+             * after every other reconciliation (the fn-carrier seams, the
+             * tyvar unify) so those keep their typed answers, and keyed on
+             * the dialect the same way the truthiness rule is (the form's own
+             * span, or the top-level form's dialect when a macro hides it).
+             * Typed Turmeric keeps the diagnostic below. */
+            then_ = elab_coerce_to_any(e, then_);
+            else_ = elab_coerce_to_any(e, else_);
+            result_t = then_->type;
         } else if (!type_eq(then_->type, else_->type)
                    && !if_branches_unify_via_tyvar(then_->type, else_->type, &result_t)) {
             free(then_states);

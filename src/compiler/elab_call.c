@@ -2111,8 +2111,63 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
     return NULL;
 }
 
+/* saffron-lang-plan S4/D4 (G5): build the dynamic call `(fnv args...)` whose
+ * callee is a runtime `any` value.  Resolution moves to runtime, where the
+ * value's own tag says whether it is callable and with what arity.  Every
+ * argument crosses as a BOX -- the callee is invoked through
+ * `TUR_APPLY*_T(tur_tagged_t, ...)` -- so a concrete one is widened here
+ * (saffron-dyn-call-concrete-argument-is-not-widened: `(f 41)` with `f : any`
+ * once emitted an `int64_t` into a `tur_tagged_t` slot).
+ *
+ * Shared by the two shapes of head: a bare symbol bound to an `any`
+ * (`(f h)`, the common one) and, per saffron-dynamic-surface-pass (low), an
+ * arbitrary EXPRESSION of type `any` -- `((adder 1) 1)`, `((mkc) 7)` -- which
+ * used to be "expression in call head has type any, which is not callable".
+ * The node's `fn` slot has always taken any expression (emit_value /
+ * eval_expr evaluate it, the CPS and effect walks descend into it), so the
+ * second shape needs no new machinery, only the permission the first already
+ * had. */
+/* True when an enclosing expectation is an applied type that fixes at least
+ * one CONCRETE type argument -- the signal the Saffron ctor / generic-fn widens
+ * defer to.  An application whose arguments are all `any` (or a NULL / non-app
+ * expectation) pins nothing.  Walks the curried TY_APP chain; a hole-headed
+ * partial application has no free slot to inspect and counts as pinning. */
+static bool saffron_expected_app_pins(const Type *t) {
+    if (!t || t->kind != TY_APP) return false;
+    const Type *cur = t;
+    while (cur && cur->kind == TY_APP) {
+        if (type_app_has_hole(cur)) return true;
+        if (!cur->as.app.arg || cur->as.app.arg->kind != TY_ANY) return true;
+        cur = cur->as.app.fn;
+    }
+    return false;
+}
+
+static Expr *saffron_dyn_call_on(Elab *e, const Form *call, Expr *fnv) {
+    uint32_t dn = call->as.list.len - 1;
+    Expr **dargs = (dn == 0) ? NULL
+        : (Expr **)arena_alloc(e->arena, dn * sizeof(Expr *));
+    for (uint32_t i = 0; i < dn; i++) {
+        dargs[i] = elab_form(e, call->as.list.items[1 + i]);
+        if (!dargs[i]) return NULL;
+        if (dargs[i]->type.kind != TY_ANY && dargs[i]->type.kind != TY_NEVER)
+            dargs[i] = elab_coerce_to_any(e, dargs[i]);
+    }
+    Type any_t;
+    memset(&any_t, 0, sizeof(any_t));
+    any_t.kind = TY_ANY;
+    Expr *dc = expr_new(e->arena, EX_DYN_CALL, any_t, call->span);
+    dc->as.dyn_call_.fn     = fnv;
+    dc->as.dyn_call_.args   = dargs;
+    dc->as.dyn_call_.n_args = dn;
+    return elab_hoist_control_operands(e, dc);
+}
+
 static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     TypeKind head_kind = head_expr->type.kind;
+    if (head_kind == TY_ANY &&
+        (lang_span_is_saffron(call->span) || e->toplevel_saffron))
+        return saffron_dyn_call_on(e, call, head_expr);
     if (head_kind != TY_FN && head_kind != TY_PTR_VOID && head_kind != TY_CONT) {
         diag_emit(DIAG_ERROR, call->as.list.items[0]->span,
                   "expression in call head has type `%s`, which is not callable",
@@ -3072,8 +3127,18 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
      * only a saturated call -- an under-applied ctor partial-applies into a
      * closure, and ascribing its arguments would change what that closure
      * completes to. */
+    /* saffron-dynamic-surface-pass (low): the widen defers to an enclosing
+     * TY_APP expectation because `(:: (Wrap 7) (W int))` pins the
+     * instantiation on purpose -- but an expectation whose every type
+     * argument is ITSELF `any` (a `[v : (W any)]` parameter, the seam into
+     * an all-`any` slot) pins nothing the widen would not choose anyway, and
+     * declining under it built a `(W int)` that the parameter then rejected
+     * (`expected (type-app W any), got (type-app W int)`), while the same
+     * `(Wrap 7)` through an unannotated defn was accepted.  So the rule keys
+     * on what the expectation SAYS, not on its presence: only a concrete
+     * argument somewhere in the applied type pins. */
     if (lang_span_is_saffron(call->span) &&
-        !(e->expected_type && e->expected_type->kind == TY_APP)) {
+        !saffron_expected_app_pins(e->expected_type)) {
         CtorDef *sctor = elab_lookup_ctor(e, name);
         if (sctor && sctor->adt && sctor->adt->n_type_params > 0 &&
             call->as.list.len - 1u == sctor->n_fields) {
@@ -3130,7 +3195,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
      * sets e->expected_type around the inner form -- the same signal the ctor
      * result path consults.  Widening under it produced an `(Option any)` the
      * ascription then could not accept. */
-    bool saffron_pinned = e->expected_type && e->expected_type->kind == TY_APP;
+    bool saffron_pinned = saffron_expected_app_pins(e->expected_type);
     if (lang_span_is_saffron(call->span) && !saffron_pinned && !elab_lookup_ctor(e, name)) {
         Binding *gb = scope_lookup(e->scope, name);
         if (gb && gb->type.kind == TY_FN && gb->type.as.fn.arg_full_types &&
@@ -5839,34 +5904,9 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * surface syntax.  Resolution moves to runtime, where the value's own tag
      * says whether it is callable and with what arity. */
     if (fn_type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
-        uint32_t dn = call->as.list.len - 1;
-        Expr **dargs = (dn == 0) ? NULL
-            : (Expr **)arena_alloc(e->arena, dn * sizeof(Expr *));
-        for (uint32_t i = 0; i < dn; i++) {
-            dargs[i] = elab_form(e, call->as.list.items[1 + i]);
-            if (!dargs[i]) return NULL;
-            /* saffron-dyn-call-concrete-argument-is-not-widened: the callee is
-             * a runtime value invoked through `TUR_APPLY*_T(tur_tagged_t,
-             * tur_tagged_t, ...)`, so every argument crosses as a BOX.  A
-             * concrete one was passed raw -- `(f 41)` with `f : any` emitted an
-             * `int64_t` into a `tur_tagged_t` slot and cc rejected it
-             * ("conversion to non-scalar type requested"), while `(f x)` with
-             * an `any` `x` worked, which is why the gap survived: the shape
-             * that happens to be written most often in Saffron is the one that
-             * was already boxed. */
-            if (dargs[i]->type.kind != TY_ANY && dargs[i]->type.kind != TY_NEVER)
-                dargs[i] = elab_coerce_to_any(e, dargs[i]);
-        }
         Expr *fnv = expr_new(e->arena, EX_VAR, fn_binding->type, call->span);
         fnv->as.var.binding = fn_binding;
-        Type any_t;
-        memset(&any_t, 0, sizeof(any_t));
-        any_t.kind = TY_ANY;
-        Expr *dc = expr_new(e->arena, EX_DYN_CALL, any_t, call->span);
-        dc->as.dyn_call_.fn     = fnv;
-        dc->as.dyn_call_.args   = dargs;
-        dc->as.dyn_call_.n_args = dn;
-        return elab_hoist_control_operands(e, dc);
+        return saffron_dyn_call_on(e, call, fnv);
     }
 
     if (fn_type.kind != TY_FN && fn_type.kind != TY_CONT) {
@@ -8065,7 +8105,24 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     param_is_borrow = FN_ARG_FLAG(fn_type.as.fn, fn_borrow_idx, FA_BORROW);
             }
             if (!param_is_unique_mut && !arg_is_unique_mut && !param_is_borrow) {
-                binding_mark_moved(arg_b2, args[i]->span);
+                /* byvalue-recursive-adt-boxes-are-never-freed (Residue 1): a
+                 * by-value recursive ADT local passed to a callee whose mask
+                 * says it does not retain the parameter is LENT, not moved:
+                 * the static answer is the same (poisoned for later uses),
+                 * but ownership of the spine stays here, and this scope's
+                 * exit frees it.  Same guards as the frame-box rule beside
+                 * the `any` widen -- a direct, effect-free, non-closure
+                 * callee (the mask is indexed by the callee's own parameter
+                 * vector, and a closure's env parameter shifts it by one). */
+                bool lend = fn_binding && !fn_binding->closure_fn_binding &&
+                            i < 32 && fn_type.kind == TY_FN &&
+                            (fn_binding->nonretain_ptr_param_mask & (1u << i)) &&
+                            effect_row_is_empty(fn_type.as.fn.effect_row) &&
+                            elab_byval_localowned_adt(arg_b2->type) != NULL;
+                if (lend)
+                    binding_mark_lent(arg_b2, args[i]->span);
+                else
+                    binding_mark_moved(arg_b2, args[i]->span);
             }
         }
 

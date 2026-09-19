@@ -139,7 +139,11 @@ KNOWN = [
     # answers.  (`.tail` still reads back an `int`, the erased carrier; that
     # residual is tracked under M7 in the report, not by this row.)
     # M10-macro-any-not-seamed (wrap_map_inner + seam_first): retired 2026-09-10.
-    ("L-ctor-under-typed-expected", ("wrap_adt", "seam_first")),
+    # L-ctor-under-typed-expected (wrap_adt + seam_first): retired 2026-09-19
+    # -- the Saffron ctor widen now declines only under an expectation that
+    # fixes a CONCRETE type argument, so `(Wrap 7)` at a `(W any)` slot builds
+    # the `(W any)` the slot wants.  Pinned by
+    # tests/fixtures/saffron-ctor-under-all-any-expectation.
     # all-any-fn-param (route_seam_fn): retired 2026-09-11 -- an all-`any` fn
     # parameter is usable compiled (the CPS IR no longer spells a fn-value
     # callee as a named call, and the seam into it casts against the fat
@@ -148,7 +152,9 @@ KNOWN = [
     # `Sym` is a legal defstruct/defdata field type, and a keyword VALUE in
     # construction position (`(make-struct P :kw)`) no longer reads as a field
     # name.
-    ("L-fn-keyword-body",        ("scalar_sym", "wrap_thunk_lit")),
+    # L-fn-keyword-body (scalar_sym + wrap_thunk_lit): retired 2026-09-19 -- a
+    # trailing keyword is the lambda's body, not a return annotation.  Pinned
+    # by tests/fixtures/saffron-keyword-literal-body.
 ]
 
 
@@ -757,19 +763,14 @@ def self_test(tur, workdir):
 # One pinned minimal repro per open finding.  Each must FIRE (any non-ok
 # classification on either arm) on an unfixed build.
 KNOWN_PROBES = [
-    # H7, M7 and the Sym field-type probes were retired 2026-09-10 once each
-    # reported FIXED here and gained a fixture of its own
-    # (saffron-seam-into-typed-fn-param, saffron-dyn-field-on-generic-adt,
-    # defstruct-sym-field + ctor-keyword-vs-sym-value).  A probe belongs here
-    # only while its finding is OPEN; a permanently-FIXED row is noise that
-    # trains the reader to skip the list.
-    ("L   a keyword-literal lambda body parses as a return annotation",
-     '#lang saffron\n(defn call0 [f] (f))\n'
-     '(defn main [] : int (println (type-of (call0 (fn [] :kw)))) 0)\n', "Sym\n"),
-    ("L   parametric ctor under a typed (W any) expectation builds (W int)",
-     '#lang saffron\n(defdata W [a] (Wrap a))\n(defn s [v : (W any)] : (W any) v)\n'
-     '(defn t [x] x)\n(defn main [] : int (println (match (t (s (Wrap 7))) (Wrap v) v)) 0)\n',
-     "7\n"),
+    # H7, M7 and the Sym field-type probes were retired 2026-09-10, and the
+    # keyword-body and ctor-under-(W any) probes 2026-09-19, once each reported
+    # FIXED here and gained a fixture of its own (saffron-seam-into-typed-fn-
+    # param, saffron-dyn-field-on-generic-adt, defstruct-sym-field +
+    # ctor-keyword-vs-sym-value, saffron-keyword-literal-body,
+    # saffron-ctor-under-all-any-expectation).  A probe belongs here only while
+    # its finding is OPEN; a permanently-FIXED row is noise that trains the
+    # reader to skip the list.  The list may be empty.
 ]
 
 

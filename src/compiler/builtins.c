@@ -44,6 +44,19 @@ static BuiltinSpec table_[] = {
     { "=",    NULL, 2, 2, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_BIN_INFIX, "==" },
     { "not=", NULL, 2, 2, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_BIN_INFIX, "!=" },
 
+    /* Comparison — Sym.  saffron-dynamic-surface-pass (low): `(= k :a)` on a
+     * Sym-typed `k` was TUR-E0006 while the same comparison on two `any`-held
+     * Syms answered pointer identity, so a keyword could be compared only for
+     * as long as the type checker did NOT know it was one.  A Sym is an
+     * interned record pointer -- identity IS its equality (`Eq[Sym]` /
+     * `sym=?` say the same) -- so, unlike `cstr` (where `==` on the pointer
+     * would silently differ from `cstr-eq?`), a builtin row changes nothing
+     * about what equality means and only adds the spelling.  Compiled: a C
+     * pointer compare.  Interpreted: a Sym rides the int carrier and the
+     * BS_BIN_INFIX fallback compares that word. */
+    { "=",    NULL, 2, 2, {.kind=TY_SYM}, {.kind=TY_BOOL}, BS_BIN_INFIX, "==" },
+    { "not=", NULL, 2, 2, {.kind=TY_SYM}, {.kind=TY_BOOL}, BS_BIN_INFIX, "!=" },
+
     /* Logical. */
     { "and", NULL, 2, -1, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_AND_SC,      NULL },
     { "or",  NULL, 2, -1, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_OR_SC,       NULL },

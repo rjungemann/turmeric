@@ -1,0 +1,29 @@
+#lang saffron
+; saffron-dynamic-surface-pass (low): `(defn pick [c] (if c 1 "one"))` was a
+; static error -- if branches have mismatched types: then=int else=cstr -- on
+; both back ends. The branch widen fires when an arm or the EXPECTATION already
+; is `any`; an unannotated Saffron defn pins its return to `any` only after
+; the body is elaborated, so the expectation was not there to see, and the
+; if-join only widened under an explicit `: any`.
+;
+; In a Saffron file an `if` whose arms disagree now joins to `any`. The arm is
+; placed after every other reconciliation (the fn-carrier seams, the tyvar
+; unify) so those keep their typed answers, and keyed on the dialect the same
+; way truthiness is -- the form's own span, or the top-level form's dialect
+; when a macro hides it, which is why `cond` (a macro over `if`) is the second
+; case. Typed Turmeric keeps the diagnostic
+; (tests/fixtures/errors/if-branch-mismatch-typed-still-rejected).
+
+(defn pick [c] (if c 1 "one"))
+(defn kind [x]
+  (cond (is? x int) "int"
+        (is? x float) 7.25
+        :else :other))
+(defn main [] : int
+  (println (pick true))
+  (println (pick false))
+  (println (type-of (pick true)))
+  (println (kind 1))
+  (println (kind 1.5))
+  (println (type-of (kind "s")))
+  0)

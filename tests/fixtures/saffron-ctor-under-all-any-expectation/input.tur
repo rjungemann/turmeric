@@ -1,0 +1,29 @@
+#lang saffron
+; saffron-dynamic-surface-pass (low): `(Wrap 7)` passed straight to a
+; `[v : (W any)]` parameter built a `(W int)` and was a static TUR-E0001
+;   expected (type-app W any), got (type-app W int)
+; while the same call through an unannotated defn built `(W any)` and passed.
+; The Saffron ctor widen (a parametric ctor's tyvar fields are built at `any`)
+; defers to an enclosing TY_APP expectation because `(:: (Wrap 7) (W int))`
+; pins the instantiation on purpose -- but it declined on the expectation's
+; PRESENCE, and one whose every type argument is itself `any` pins nothing the
+; widen would not choose. It now keys on what the expectation says: only a
+; concrete argument somewhere in the applied type pins. The generic-function
+; widen (`(some 3.5)` at a `(Option any)` slot) shares the rule.
+;
+; Retires the fuzzer's `L-ctor-under-typed-expected` KNOWN row and probe.
+
+(defdata W [a] (Wrap a))
+(defn s [v : (W any)] : (W any) v)
+(defn t [x] x)
+(defn unwrap-w [v : (W any)] (match v (Wrap x) x))
+(defn opt [o : (Option any)] (unwrap-or o 0))
+
+(defn main [] : int
+  (println (match (t (s (Wrap 7))) (Wrap v) v))
+  (println (unwrap-w (Wrap 7.25)))
+  (println (unwrap-w (Wrap "s")))
+  (println (opt (some 3.5)))
+  ;; a CONCRETE expectation still pins: (:: (Wrap 7) (W int)) is a (W int)
+  (println (is? (t (:: (Wrap 7) (W int))) (W int)))
+  0)

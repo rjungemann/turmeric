@@ -1251,9 +1251,23 @@ const Symbol *intern_cstr(SymbolTable *st, const char *s) {
 /* Mark a binding as moved (poisoned). Returns true if successfully marked,
  * false if it was already moved (use-after-move). */
 bool binding_mark_moved(Binding *b, Span use_span) {
+    b->moved_owning = true;   /* sticky; see Binding.moved_owning */
     if (b->is_moved) {
         return false; /* Already moved - use-after-move */
     }
+    b->is_moved = true;
+    b->moved_at = use_span;
+    return true;
+}
+
+/* byvalue-recursive-adt-boxes-are-never-freed (Residue 1): the value is
+ * passed to a callee proven not to retain it.  Same static effect as a move
+ * (the binding is poisoned for later uses, so the type checker's answer does
+ * not change), but ownership stays with this scope, which the scope-exit
+ * spine drop reads through `lent_to_nonretaining`. */
+bool binding_mark_lent(Binding *b, Span use_span) {
+    b->lent_to_nonretaining = true;
+    if (b->is_moved) return false;
     b->is_moved = true;
     b->moved_at = use_span;
     return true;

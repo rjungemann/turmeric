@@ -32,9 +32,9 @@
 
 (defn main [] : int
   ;; Consumed by an INLINE match, so the local is never moved into a callee and
-  ;; the scope still owns the spine when it exits. Passing it to a helper hands
-  ;; ownership to that callee instead, which nothing discharges yet -- the
-  ;; residue the report tracks.
+  ;; the scope still owns the spine when it exits. Passing it to a helper is
+  ;; the sibling fixture byval-recursive-adt-lent-to-callee: a callee proven
+  ;; not to retain its parameter BORROWS it, and this scope still frees.
   (let [xs (Cons 1 (Cons 2 (Cons 3 (Nil))))]
     (println (match xs
                (Cons h t) h

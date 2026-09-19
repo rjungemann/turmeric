@@ -1611,6 +1611,84 @@ static bool box_reader_result_void_sink(const char *name) {
  *     with confined=false, so the alias cannot later escape unnoticed;
  *   - an unmodeled form defers to the strict escape walk, whose own default is
  *     to treat the unknown as an escape. */
+/* byvalue-recursive-adt-boxes-are-never-freed (Residue 1): the walk's
+ * alias-aware STRICT mode, used for a by-value recursive ADT parameter whose
+ * spine the CALLER keeps and frees at scope exit when the callee is proven
+ * non-retaining.  Two things the pointer/any/sum modes do not model matter
+ * here, because the free is a deep one:
+ *
+ *   - a `match` on the parameter binds ALIASES into its spine -- `t` in
+ *     `(match xs (Cons h t) ...)` carries the next box's pointer -- and so
+ *     does a field read (`(.tl xs)`).  A use of such an alias is a use of the
+ *     parameter: stored, returned, let-bound or handed to an opaque callee it
+ *     is retention.  Binders of non-pointer scalar type (`h : int`) cannot
+ *     point into the spine and are not tracked.
+ *   - a hand-off to a callee is an escape unless that callee's own mask says
+ *     it does not retain the argument (the sum walk's posture, not the
+ *     pointer walk's "reader model", since the callee could store it).
+ *
+ * The alias set is a file-scope stack, like the sum flag: the walk is not
+ * reentrant.  Bounded; overflow refuses (conservative). */
+static bool g_bc_strict_handoff = false;
+#define BC_MAX_ALIAS 64
+static const Binding *g_bc_alias[BC_MAX_ALIAS];
+static uint32_t g_bc_n_alias = 0;
+static bool g_bc_alias_overflow = false;
+
+static bool bc_is_b(const Binding *x, const Binding *b) {
+    if (x == b) return true;
+    for (uint32_t i = 0; i < g_bc_n_alias; i++)
+        if (g_bc_alias[i] == x) return true;
+    return false;
+}
+
+/* A value of this kind may carry a pointer into the spine (or into an owned
+ * payload box): anything but a non-pointer scalar. */
+static bool bc_kind_can_alias(TypeKind k) {
+    switch (k) {
+        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_SYM:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return false;
+        default:
+            return true;
+    }
+}
+
+static void bc_push_alias(const Binding *x) {
+    if (!x) return;
+    if (g_bc_n_alias >= BC_MAX_ALIAS) { g_bc_alias_overflow = true; return; }
+    g_bc_alias[g_bc_n_alias++] = x;
+}
+
+/* Peel ascriptions, casts and field reads down to the root variable: true
+ * when that root is `b` or a tracked alias of it. */
+static bool bc_expr_roots_at_b(const Expr *x, const Binding *b) {
+    while (x) {
+        switch (x->kind) {
+            case EX_ASCRIBE:   x = x->as.ascribe_.inner; continue;
+            case EX_CAST:      x = x->as.cast_.expr; continue;
+            case EX_GET_FIELD: x = x->as.get_field_.struct_expr; continue;
+            case EX_VAR:       return bc_is_b(x->as.var.binding, b);
+            default:           return false;
+        }
+    }
+    return false;
+}
+
+/* The unmodelled-form answer: defer to the strict escape walk for `b`, and in
+ * strict mode for every tracked alias too. */
+static bool bc_unmodelled(const Expr *e, const Binding *b) {
+    if (catch_box_binding_escapes(e, b)) return false;
+    if (g_bc_strict_handoff) {
+        if (g_bc_alias_overflow) return false;
+        for (uint32_t i = 0; i < g_bc_n_alias; i++)
+            if (catch_box_binding_escapes(e, g_bc_alias[i])) return false;
+    }
+    return true;
+}
+
 static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
     if (!e) return true;
     switch (e->kind) {
@@ -1620,7 +1698,15 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
         case EX_VAR:
             /* A bare `b` as this expression's result is safe only if confined --
              * its value (the box pointer) is then discarded / printed, not kept. */
-            return e->as.var.binding != b || confined;
+            return !bc_is_b(e->as.var.binding, b) || confined;
+        case EX_GET_FIELD:
+            if (!g_bc_strict_handoff) return bc_unmodelled(e, b);
+            /* Strict mode: a field read rooted at the parameter yields an
+             * alias unless the field is a non-pointer scalar, so it stands
+             * where a bare `b` would. */
+            if (bc_expr_roots_at_b(e->as.get_field_.struct_expr, b))
+                return !bc_kind_can_alias(e->type.kind) || confined;
+            return box_uses_confined(e->as.get_field_.struct_expr, b, true);
         case EX_ASCRIBE: return box_uses_confined(e->as.ascribe_.inner, b, confined);
         case EX_CAST:    return box_uses_confined(e->as.cast_.expr, b, confined);
         /* any-struct-box-leak-per-widen: the three `any` readers.  Each consumes
@@ -1689,11 +1775,26 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
         case EX_MATCH: {
             if (!box_uses_confined(e->as.match_.scrutinee, b, /*discarded=*/true))
                 return false;
+            /* Strict mode: the arms' pattern binders alias the scrutinee's
+             * spine when the scrutinee is rooted at `b`; track them for the
+             * arm, then drop them. */
+            bool aliasing = g_bc_strict_handoff &&
+                            bc_expr_roots_at_b(e->as.match_.scrutinee, b);
             for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
-                if (!box_uses_confined(e->as.match_.arms[i].guard, b, true))
-                    return false;
-                if (!box_uses_confined(e->as.match_.arms[i].body, b, confined))
-                    return false;
+                uint32_t saved_n = g_bc_n_alias;
+                if (aliasing) {
+                    const MatchPattern *pt = &e->as.match_.arms[i].pattern;
+                    for (uint32_t j = 0; j < pt->n_bindings; j++)
+                        if (pt->bindings[j] &&
+                            bc_kind_can_alias(pt->bindings[j]->type.kind))
+                            bc_push_alias(pt->bindings[j]);
+                    if (pt->is_var && pt->var_binding)
+                        bc_push_alias(pt->var_binding);
+                }
+                bool ok = box_uses_confined(e->as.match_.arms[i].guard, b, true) &&
+                          box_uses_confined(e->as.match_.arms[i].body, b, confined);
+                g_bc_n_alias = saved_n;
+                if (!ok) return false;
             }
             return true;
         }
@@ -1755,9 +1856,14 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
                     (fb_static && i < 32 && (fb->nonretain_ptr_param_mask & (1u << i))) ||
                     (g_esc_allow_sum_accessors && fb_static && i < 32 &&
                      (fb->nonretain_sum_param_mask & (1u << i)));
-                if (a && a->kind == EX_VAR && a->as.var.binding == b) {
+                if (a && a->kind == EX_VAR && bc_is_b(a->as.var.binding, b)) {
                     if (acc) continue;             /* scalar result cannot alias */
                     if (arg_sink) continue;        /* printed, not retained */
+                    /* Residue 1 (strict mode): a hand-off to a callee not
+                     * proven non-retaining is an escape -- it may store the
+                     * value, and the spine the caller frees would then be
+                     * reachable from wherever it put it. */
+                    if (g_bc_strict_handoff) return false;
                     /* sum-payload-stashing-callee-not-dropped: under the SUM
                      * walk a callee that is neither an audited reader nor
                      * proven non-retaining may STORE the box -- `(vec-push!
@@ -1787,9 +1893,25 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             /* Stores / returns / captures / unmodeled forms: defer to the strict
              * escape walk.  It sees `b` itself (not a bound alias -- those are
              * gated at their let-binding above) and treats any unknown as an
-             * escape, so a `true` there correctly denies the free. */
-            return !catch_box_binding_escapes(e, b);
+             * escape, so a `true` there correctly denies the free.  Strict mode
+             * asks the same of every tracked alias. */
+            return bc_unmodelled(e, b);
     }
+}
+
+bool localowned_param_is_nonretaining(const Expr *body, const Binding *p) {
+    if (!body || !p) return false;
+    g_bc_strict_handoff = true;
+    g_bc_n_alias = 0;
+    g_bc_alias_overflow = false;
+    /* confined=true: the caller admits only a non-pointer scalar result, so
+     * the body's result position cannot carry a pointer out. */
+    bool r = box_uses_confined(body, p, /*confined=*/true);
+    if (g_bc_alias_overflow) r = false;
+    g_bc_strict_handoff = false;
+    g_bc_n_alias = 0;
+    g_bc_alias_overflow = false;
+    return r;
 }
 
 /* catch-unwind-panic-payload-leaks (Leak 2): true when a caught-box binding `b`

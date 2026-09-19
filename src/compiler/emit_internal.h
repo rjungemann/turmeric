@@ -1114,6 +1114,12 @@ bool sum_box_binding_escapes(const Expr *e, const Binding *b);
 bool sum_box_reader_name(const char *nm);
 bool sum_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry);
+/* byvalue-recursive-adt-boxes-are-never-freed (Residue 1): the same walk for
+ * a by-value recursive ADT parameter, in its alias-aware strict mode -- match
+ * binders and field reads rooted at the parameter are tracked as aliases of
+ * it, and a hand-off to a callee not proven non-retaining is an escape.  The
+ * caller admits only a non-pointer scalar result.  See emit_core.c. */
+bool localowned_param_is_nonretaining(const Expr *body, const Binding *p);
 /* The pending-drop bracket for a call at STATEMENT position (emit_stmt.c);
  * see emit_pending_drops_mark's comment in emit_expr.c. */
 void emit_pending_drops_mark(EmitCtx *ctx, uint32_t m[3]);

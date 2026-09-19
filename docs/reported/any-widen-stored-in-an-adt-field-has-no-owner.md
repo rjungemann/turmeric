@@ -138,6 +138,19 @@ because the binder aliases the parent. See
 
 This is the only thing standing between this fixture and zero.
 
+**Re-measured 2026-09-19, after the sibling report's Residue 1 fix** (a
+by-value recursive ADT parameter now joins the non-retaining inference, with
+match binders tracked as aliases): still `680 byte(s) leaked in 17
+allocation(s)`, 6 direct (4 in `main`, 1 each in `lmap` / `lfilter`), as
+expected. The new machinery cannot admit `lmap`'s `xs`, and correctly so: `h`
+is an alias of `xs` of type `any`, and `(f h)` hands it to an OPAQUE callee
+(`EX_DYN_CALL` -- there is no body to inspect), so the walk must refuse. The
+values `h` carries in this fixture happen to be unboxed scalars, but the walk
+works on static types and `any` says nothing. So the sibling's fix moves
+nothing here, and the two directions below stand; with the typed side now
+closed for the common shape, refcounting the `any` box (direction 2) is the
+one that would settle this fixture.
+
 ## Fix directions for the remainder
 
 **Direction 1 is answered and is NOT the way in.** The emitted match arm

@@ -1,0 +1,32 @@
+; saffron-dynamic-surface-pass (low): `=` on two Sym-typed values was
+;   TUR-E0006: operator lookup failed for '=', got 2 arg(s), first arg type Sym
+; on both back ends, while the same comparison on two `any`-held Syms answered
+; pointer identity (H5). So a keyword could be compared only for as long as the
+; type checker did NOT know it was a keyword -- widening through an unannotated
+; Saffron defn made it start working, which is backwards.
+;
+; The fix is a `=` / `not=` row for Sym in the builtin table. This is plain
+; Turmeric on purpose: the hole was never Saffron-specific, and unlike `cstr`
+; (where `==` on the pointer would silently disagree with `cstr-eq?`) a Sym is
+; an interned record pointer whose identity IS its equality -- `Eq[Sym]` and
+; `sym=?` say exactly the same thing -- so the row adds a spelling without
+; changing what equality means. Compiled it is a C pointer compare; interpreted
+; a Sym rides the int carrier and the operator compares that word.
+;
+; The last two cases are the ones that separate identity from name equality
+; gone wrong: two literals spelled the same MUST compare equal (interning), and
+; so must a keyword that arrived through a function parameter.
+
+(defn tag? [k : Sym] : int
+  (if (= k :a) 1 (if (not= k :b) 2 3)))
+
+(defn id-sym [k : Sym] : Sym k)
+
+(defn main [] : int
+  (println (tag? :a))
+  (println (tag? :b))
+  (println (tag? :c))
+  (println (= :same :same))
+  (println (= (id-sym :rt) :rt))
+  (println (not= (id-sym :rt) :rs))
+  0)

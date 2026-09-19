@@ -1,0 +1,27 @@
+#lang saffron
+; saffron-dynamic-surface-pass (low): only a bare symbol could be a dynamic
+; call head. `((adder 1) 1)` and `((mkc) 7)` were a static error --
+;   expression in call head has type any, which is not callable
+; -- on both back ends, while `(let [f (adder 1)] (f 1))` worked. The EX_DYN_CALL
+; node's `fn` slot has always taken any expression (the emitter and the
+; interpreter evaluate it; the CPS and effect walks descend into it), so the
+; expression head needed only the permission the symbol head already had: the
+; two shapes now share one builder, saffron_dyn_call_on (elab_call.c).
+;
+; Three heads, because they reach the call differently: a call that returns a
+; capturing closure, a call that returns a non-capturing one, and a call whose
+; result is a typed defn widened into an `any` (H8's outbound adaptor). The
+; float is 7.25 so a truncating path would show as 8 rather than 8.25.
+
+(defn adder [k] (fn [x] (+ x k)))
+(defn mkc [] (fn [x] (* x 2)))
+(defn inc-typed [n : int] : int (+ n 1))
+(defn pick [] inc-typed)
+
+(defn main [] : int
+  (println ((adder 1) 1))
+  (println ((adder 0.25) 7))
+  (println ((mkc) 7))
+  (println ((pick) 41))
+  (println (((fn [] (adder 10))) 5))
+  0)

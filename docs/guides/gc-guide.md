@@ -608,6 +608,31 @@ the symbol is present in `libturt_runtime.a` and absent from the `.so`.
 - The walker relies on per-block metadata registered at allocation. Runtime
   type reflection is not available; a block with no `walk_fn` is opaque to
   the collector no matter what it actually points to.
+- A **by-value recursive ADT** (`(defdata Lst [] (Cons [hd : int tl : Lst])
+  (Nil))`) boxes each recursive link on the heap, and the spine is freed by
+  the local that owns it at scope exit -- when the local is consumed inline,
+  or lent to a callee the compiler can prove does not retain it (a
+  non-pointer-scalar result, every match binder and field read of the
+  parameter confined; `tests/fixtures/byval-recursive-adt-lent-to-callee`).
+  Two shapes still leak, by design rather than by accident:
+  - A callee that **consumes** the value and returns part of it (`(defn
+    tail [xs : Lst] : Lst (match xs (Cons h t) t ...))`) takes ownership of
+    the whole spine and hands back only a sub-spine; the boxes above it have
+    no owner. Discharging that at the callee needs an owned/borrowed
+    distinction on the parameter itself, which the move tracking does not
+    carry.
+  - A **`:copy` recursive ADT** -- `Term`, `Subst`, `Stream` in
+    `stdlib/logic.tur`, the `Regex` family -- is never freed per value. This
+    is a contract, not a gap: drop glue makes a type move-only, and that move
+    discipline is the single-owner guarantee a per-chain free depends on
+    (measured: under `:copy`, `(let [t (Cons 3 (Nil)) a (Cons 1 t) b (Cons 2
+    t)] ...)` emits two boxes carrying the SAME tail pointer, so a per-chain
+    free would free it twice). The answer for `:copy` is the region bracket:
+    inside `with-region` the whole spine is reclaimed on rewind (R4 of the
+    regions plan routed exactly this allocation site there; the 3-cell repro
+    wrapped in `(with-region (fn [] : int ...))` reports zero leaks). Build
+    `:copy` recursive structures inside a region, or accept process-lifetime
+    retention.
 - Interpreter memory is reclaimed at env teardown; a long-lived env is
   bounded incrementally only via incremental elaboration and scratch
   promotion (on for the REPL -- see "The interpreter is different" above).

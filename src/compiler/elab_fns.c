@@ -259,6 +259,7 @@ bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry);
 bool sum_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry);
+bool localowned_param_is_nonretaining(const Expr *body, const Binding *p);
 
 /* closure-capture-escapes-linearity: one enclosing linear/unique binding's
  * substructural state, recorded before a lambda body is elaborated so the body's
@@ -5416,14 +5417,61 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
           if (_pb && (_pb->is_fat || _pb->is_poly_fn || _pb->type.kind == TY_FN))
               b->nonretain_param_mask |= (1u << _pi);
       }
-      uint32_t _prev_fn_mask;
+      /* byvalue-recursive-adt-boxes-are-never-freed (Residue 1): a by-value
+       * RECURSIVE ADT parameter joins the inference, in the walk's alias-aware
+       * strict mode, and only when the function's result is a non-pointer
+       * scalar (an aggregate result could carry a sub-spine back out, and the
+       * strict walk does not model which).  The bit means what it means for
+       * the others -- "this body neither keeps a pointer this parameter
+       * carries nor hands one back" -- and a caller passing a LOCAL to such a
+       * parameter keeps ownership of the spine (binding_mark_lent) and frees
+       * it at scope exit, where before the move handed it to a callee that
+       * never discharged it.
+       *
+       * A GREATEST fixed point, like the fn-param mask: `llen` passes the
+       * match binder `t` to its own recursive call, and with the bit clear
+       * during its own walk that hand-off reads as an escape.  Start with
+       * every eligible bit set on the binding the self-call reads, clear the
+       * ones the walk contradicts, and repeat until stable -- bits only ever
+       * clear, so this terminates.  The bits ride nonretain_ptr_param_mask
+       * because that is the mask the walk's hand-off check consults, and a
+       * TY_ADT parameter never enters the pointer-scalar rule below. */
+      uint32_t _adt_bits = 0;
+      {
+          TypeKind _ark = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
+                                                  : TY_UNKNOWN;
+          bool _ares_scalar;
+          switch (_ark) {
+              case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT:
+              case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+              case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+              case TY_FLOAT32: case TY_FLOAT64:
+                  _ares_scalar = true; break;
+              default:
+                  _ares_scalar = false; break;
+          }
+          if (_ares_scalar)
+              for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
+                  Binding *_pb = params[_pi];
+                  if (_pb && !_pb->is_borrow &&
+                      elab_byval_localowned_adt(_pb->type))
+                      _adt_bits |= (1u << _pi);
+              }
+      }
+      uint32_t _prev_fn_mask, _prev_adt_bits;
       do {
         _prev_fn_mask = b->nonretain_param_mask;
-        b->nonretain_ptr_param_mask = 0;
+        _prev_adt_bits = _adt_bits;
+        b->nonretain_ptr_param_mask = _adt_bits;
         b->nonretain_sum_param_mask = 0;
         for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
             Binding *_pb = params[_pi];
             if (!_pb) continue;
+            if ((_adt_bits & (1u << _pi)) &&
+                !localowned_param_is_nonretaining(body, _pb)) {
+                _adt_bits &= ~(1u << _pi);
+                b->nonretain_ptr_param_mask &= ~(1u << _pi);
+            }
             /* value-struct-payload-sum-monomorph-box-has-no-owner: a stdlib
              * Option/Result-typed parameter joins the inference.  Same result
              * gate as the pointer-scalar case (a non-pointer scalar result
@@ -5560,7 +5608,8 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                     b->nonretain_ptr_param_mask |= (1u << _pi);
             }
         }
-      } while (b->nonretain_param_mask != _prev_fn_mask);
+      } while (b->nonretain_param_mask != _prev_fn_mask ||
+               _adt_bits != _prev_adt_bits);
     }
 }
 
@@ -5598,6 +5647,27 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
  * read by defeffect elaboration in elab_effects.c. */
 TypeKind saffron_default_param_kind(Span sp) {
     return lang_span_is_saffron(sp) ? TY_ANY : TY_INT;
+}
+
+
+/* saffron-dynamic-surface-pass (low): `(defn mkv [] [1 2.5])` was read as the
+ * generic form -- type params `[]`, params `[1 2.5]` -- and rejected with
+ * "parameter must be a symbol or type annotation".  Two leading vectors are
+ * the generic shape only when the SECOND could be a parameter list; a vector
+ * carrying a literal in a top-level slot cannot be one, so it is the body and
+ * the first vector is the (possibly empty) parameter list.  Only literals
+ * decide: a symbol-only second vector (`[x y]`) is still read as params, as
+ * before, since either reading is well-formed there. */
+static bool form_vec_has_literal_item(const Form *v) {
+    if (!v || v->tag != F_VEC) return false;
+    for (uint32_t i = 0; i < v->as.list.len; i++) {
+        switch (v->as.list.items[i]->tag) {
+            case F_INT: case F_FLOAT: case F_STR: case F_BOOL:
+                return true;
+            default: break;
+        }
+    }
+    return false;
 }
 
 Expr *elab_defn(Elab *e, const Form *call) {
@@ -5753,7 +5823,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     uint8_t       n_tpv_cons = 0;
     if (call->as.list.len > name_idx + 2 &&
         call->as.list.items[name_idx + 1]->tag == F_VEC &&
-        call->as.list.items[name_idx + 2]->tag == F_VEC) {
+        call->as.list.items[name_idx + 2]->tag == F_VEC &&
+        !form_vec_has_literal_item(call->as.list.items[name_idx + 2])) {
         Form *type_params_f = call->as.list.items[name_idx + 1];
         /* Classes awaiting their binder: `^Show ^Eq a` constrains `a` twice. */
         TypeClass *tpv_pending[MAX_FN_CONSTRAINTS];
@@ -7274,8 +7345,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
-    /* Check for : return-type annotation */
-    if (call->as.list.len >= (body_start + 1)) {
+    /* Check for : return-type annotation.
+     *
+     * saffron-dynamic-surface-pass (low): a keyword that is the LAST item of
+     * the form is the body, not an annotation -- `(defn k [] :kw)` returns
+     * the Sym `:kw`.  A return annotation with nothing after it is always
+     * "missing body", so reading the trailing keyword as the body can only
+     * turn an error into the program that was written. */
+    if (call->as.list.len >= (body_start + 1) &&
+        !(call->as.list.len == body_start + 1 &&
+          call->as.list.items[body_start]->tag == F_KEYWORD)) {
         /* nil-tail-not-checked-against-declared-return: an annotation is
          * consumed exactly when this block advances body_start, on every one of
          * its exits (three `goto done_return_annotation` paths, the keyword
@@ -9645,7 +9724,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
     uint32_t params_idx = 1;
     if (call->as.list.len > 3 &&
         call->as.list.items[1]->tag == F_VEC &&
-        call->as.list.items[2]->tag == F_VEC) {
+        call->as.list.items[2]->tag == F_VEC &&
+        !form_vec_has_literal_item(call->as.list.items[2])) {
         Form *type_params_f = call->as.list.items[1];
         if (type_params_f->as.list.len > 8) {
             diag_emit(DIAG_ERROR, type_params_f->span,
@@ -10028,8 +10108,12 @@ Expr *elab_fn(Elab *e, const Form *call) {
     bool fn_declared_unsafe =
         effect_row_contains_symbol(declared_effect_row_fn, e->sym_effect_unsafe);
 
-    /* Check for : return-type annotation */
-    if (call->as.list.len >= (body_start + 1)) {
+    /* Check for : return-type annotation.  A trailing keyword is the body,
+     * not an annotation -- see elab_defn (`(fn [] :kw)` was "fn: missing
+     * body"). */
+    if (call->as.list.len >= (body_start + 1) &&
+        !(call->as.list.len == body_start + 1 &&
+          call->as.list.items[body_start]->tag == F_KEYWORD)) {
         Form *ret_f = call->as.list.items[body_start];
         /* Spaced `: T` where T is a single symbol or keyword: treat as if
          * fused so the full F_KEYWORD lookup ladder (alias / ADT / struct /

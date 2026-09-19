@@ -1,0 +1,7 @@
+; saffron-dynamic-surface-pass (low): the Saffron if-join to `any`
+; (tests/fixtures/saffron-if-join-to-any) is keyed on the dialect. This is
+; the typed half of that fixture: in plain Turmeric an `if` whose arms
+; disagree is still the static error it always was, so the dynamic join does
+; not leak into the typed surface.
+(defn pick [c : bool] : int (if c 1 "one"))
+(defn main [] : int (println (pick true)) 0)

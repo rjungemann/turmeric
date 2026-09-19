@@ -1,0 +1,23 @@
+#lang saffron
+; saffron-dynamic-surface-pass (low): `(defn mkv [] [1 2.5])` was read as the
+; GENERIC form -- type params `[]`, params `[1 2.5]` -- and rejected with
+;   defn: parameter must be a symbol or type annotation
+; on both back ends. Two leading vectors are the generic shape only when the
+; second could be a parameter list; one carrying a literal in a top-level slot
+; cannot be, so it is the body and the first vector is the (empty) parameter
+; list. The same rule applies to `fn`. A symbol-only second vector (`[x y]`)
+; is still read as params, as before -- either reading is well-formed there,
+; and this fixture does not change it.
+;
+; The float is 2.5 so the Saffron literal's element widen is exercised: a
+; heterogeneous `[1 2.5]` is a `(Vec any)`, and reading the second element back
+; as 2.5 (not 2) shows the elements crossed as boxes.
+
+(defn mkv [] [1 2.5])
+(defn mks [] ["a" "b" "c"])
+(defn main [] : int
+  (println (vec-len (mkv)))
+  (println (vec-get (mkv) 1))
+  (println (vec-len (mks)))
+  (println (vec-len ((fn [] [7 8 9]))))
+  0)
