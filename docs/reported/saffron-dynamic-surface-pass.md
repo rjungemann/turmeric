@@ -351,9 +351,12 @@ int64_t carrier" and ascribes each `(.tail xs)` by hand; and a probe of the
 shape -- `(defstruct Node :heap [A] (val A) (next (Node A)))` built with
 `(make-struct Node 8 0)` -- is rejected at elaboration with `function 'Node'
 arg 2: expected int, got int`, a self-contradictory diagnostic that says a
-self-typed `:heap` parametric field is not a supported shape today. So this
-is a stdlib representation change gated on that shape, not a dynamic-field
-fix; left open.* `.tail` now READS, but it
+self-typed `:heap` parametric field is not a supported shape today (and with
+a typed terminator it overflowed the compiler's stack -- fixed, now a clean
+ICE; filed as
+[self-typed-heap-parametric-field-unsupported](self-typed-heap-parametric-field-unsupported.md)).
+So this is a stdlib representation change gated on that shape, not a
+dynamic-field fix; left open.* `.tail` now READS, but it
 reads back an `int`: the field is declared `:int`, a type-ERASED carrier
 standing for the recursive `(Cons A)` occurrence, so the widen boxes it with
 the int tag and a `cast` to `(Cons any)` panics. The interpreter answers `Cons`

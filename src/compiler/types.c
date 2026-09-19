@@ -4193,11 +4193,38 @@ static bool sr2_app_sum_byvalue(void) {
     return g_sr2_app_sum_byvalue;
 }
 
+/* self-typed-heap-field-overflows-the-compiler: the defs whose field walk is
+ * in progress.  A field naming an application of the SAME def -- `(next (Node
+ * A))` in `(defstruct Node :heap [A] (val A) (next (Node A)))` -- re-entered
+ * this predicate on `(Node int)` from inside `(Node int)`, with no base case:
+ * `is_self_recursive` is not set for that shape, so the SR2b exclusion below
+ * never saw it and `tur check` overflowed its stack.  A def already on this
+ * stack answers false (a self-referential application cannot be inlined as a
+ * flat by-value product), which is also what the recursive-field marking
+ * decides for the non-parametric case. */
+static bool adt_app_is_byvalue_product_inner(Type t, AdtDef *def, Type *args,
+                                             uint8_t n_args);
+#define ADT_APP_BYVAL_DEPTH 32
+static const AdtDef *g_adt_app_byval_stack[ADT_APP_BYVAL_DEPTH];
+static uint32_t g_adt_app_byval_n = 0;
+
 bool adt_app_is_byvalue_product(Type t) {
     AdtDef *def = NULL;
     Type args[16];
     uint8_t n_args = 0;
     if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
+    for (uint32_t si = 0; si < g_adt_app_byval_n; si++)
+        if (g_adt_app_byval_stack[si] == def) return false;
+    if (g_adt_app_byval_n >= ADT_APP_BYVAL_DEPTH) return false;
+    g_adt_app_byval_stack[g_adt_app_byval_n++] = def;
+    bool r = adt_app_is_byvalue_product_inner(t, def, args, n_args);
+    g_adt_app_byval_n--;
+    return r;
+}
+
+static bool adt_app_is_byvalue_product_inner(Type t, AdtDef *def, Type *args,
+                                             uint8_t n_args) {
+    (void)t;
     bool app_sum = sr2_app_sum_byvalue() && def->n_ctors > 1 &&
                    !def->is_gadt && !def->is_heap &&
                    !def->is_self_recursive && def->ctors != NULL;
