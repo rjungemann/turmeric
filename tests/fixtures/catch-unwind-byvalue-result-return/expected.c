@@ -5504,7 +5504,7 @@ static int64_t mutmap_hyslot_hyvalue(int64_t, int64_t);
 static bool mutmap_hyeq_hystorage_qu(void *, void *, int64_t);
 static bool mutmap_hyeq_hyloop(int64_t, int64_t, int64_t, int64_t, int64_t);
 static int64_t json_slnull();
-static int64_t json_slbool(int64_t);
+static int64_t json_slbool(bool);
 static int64_t json_slint(int64_t);
 static int64_t json_slfloat(double);
 static int64_t json_slstring(const char *);
@@ -8122,7 +8122,7 @@ static int64_t json_slnull() {
   
 }
 
-static int64_t json_slbool(int64_t v) {
+static int64_t json_slbool(bool v) {
         int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 1; n[1] = v ? 1 : 0;
   return (int64_t)(intptr_t)n;
