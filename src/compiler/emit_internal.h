@@ -1127,6 +1127,13 @@ bool sum_param_is_nonretaining(const Expr *body, const Binding *p,
  * it, and a hand-off to a callee not proven non-retaining is an escape.  The
  * caller admits only a non-pointer scalar result.  See emit_core.c. */
 bool localowned_param_is_nonretaining(const Expr *body, const Binding *p);
+/* The same walk for a LOCAL whose spine the scope frees at exit: true when no
+ * alias of `b` (a match binder, a field read) escapes `body` -- into a store,
+ * a closure, a let, a return, or a callee not proven non-retaining.
+ * `result_cannot_carry` is true when the scope's value is a non-pointer
+ * scalar. */
+bool localowned_binding_is_confined(const Expr *body, const Binding *b,
+                                    bool result_cannot_carry);
 /* The pending-drop bracket for a call at STATEMENT position (emit_stmt.c);
  * see emit_pending_drops_mark's comment in emit_expr.c. */
 void emit_pending_drops_mark(EmitCtx *ctx, uint32_t m[3]);

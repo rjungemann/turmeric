@@ -1899,19 +1899,24 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
     }
 }
 
-bool localowned_param_is_nonretaining(const Expr *body, const Binding *p) {
-    if (!body || !p) return false;
+bool localowned_binding_is_confined(const Expr *body, const Binding *b,
+                                    bool result_cannot_carry) {
+    if (!body || !b) return false;
     g_bc_strict_handoff = true;
     g_bc_n_alias = 0;
     g_bc_alias_overflow = false;
-    /* confined=true: the caller admits only a non-pointer scalar result, so
-     * the body's result position cannot carry a pointer out. */
-    bool r = box_uses_confined(body, p, /*confined=*/true);
+    bool r = box_uses_confined(body, b, /*confined=*/result_cannot_carry);
     if (g_bc_alias_overflow) r = false;
     g_bc_strict_handoff = false;
     g_bc_n_alias = 0;
     g_bc_alias_overflow = false;
     return r;
+}
+
+bool localowned_param_is_nonretaining(const Expr *body, const Binding *p) {
+    /* confined=true: the caller admits only a non-pointer scalar result, so
+     * the body's result position cannot carry a pointer out. */
+    return localowned_binding_is_confined(body, p, /*result_cannot_carry=*/true);
 }
 
 /* catch-unwind-panic-payload-leaks (Leak 2): true when a caught-box binding `b`

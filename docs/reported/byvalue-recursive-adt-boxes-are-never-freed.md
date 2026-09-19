@@ -96,6 +96,15 @@ not by the walk. And the emitted C has always passed a by-value ADT argument
 by pointer (`llen(&xs)`); the lend changes nothing about the call, only about
 who frees.
 
+**Also closed 2026-09-19 (a soundness hole in the 2026-09-07 rule, not a
+leak):** the scope-exit drop of a LOCAL consulted only the local's own moved /
+consumed state, so a match binder captured by a closure or stored into a
+global outlived the freed spine (measured once
+fn-cell-set-with-capturing-closure-segfaults made the store compile:
+heap-use-after-free). The drop now requires the same alias-aware walk
+(`localowned_binding_is_confined`); pinned by
+`tests/fixtures/closure-retains-match-binder-of-dropped-local`.
+
 **Still open: a callee that consumes and returns PART of the spine.**
 `(defn tail [xs : Lst] : Lst (match xs (Cons h t) t (Nil) (Nil)))` is
 correctly refused (aggregate result), so the caller moves `xs` into it for

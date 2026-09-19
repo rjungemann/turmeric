@@ -1349,6 +1349,8 @@ void elab_pre_declare_toplevel_defn(Elab *e, Arena *arena, Form *f);
 const Symbol *intern_cstr(SymbolTable *st, const char *s);
 bool binding_mark_moved(Binding *b, Span use_span);
 bool binding_mark_lent(Binding *b, Span use_span);
+/* elab_call.c: shim a thin fn value to the fat representation (see there). */
+Expr *elab_fn_value_to_fat(Elab *e, Expr *value);
 /* byvalue-recursive-adt-boxes-are-never-freed: the by-value recursive (or
  * `any`-fielded) ADT def behind `t` whose spine a local owns and frees at
  * scope exit, or NULL.  elab_forms.c; shared with the parameter-mask

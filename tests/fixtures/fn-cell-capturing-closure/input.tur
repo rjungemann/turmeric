@@ -1,0 +1,42 @@
+;; fn-cell-set-with-capturing-closure-segfaults: a `^mut` fn cell initialised
+;; with a non-capturing lambda and re-pointed at a CAPTURING closure segfaulted
+;; at the call, local and global alike.  The cell was spelled as a thin
+;; function pointer from its initializer; the store put a fat `{thunk, env}`
+;; box's address there (its declared fn type is EQUAL to the cell's, so the
+;; type check passed); the next call jumped into the box.
+;;
+;; A `^mut` fn cell is fat from the start now: its init is shimmed to the fat
+;; representation (a link-time constant for a lifted lambda, so no
+;; allocation) and the binding is marked boxed, so every call dispatches
+;; through slot 0 and every later `set!` normalises its value the same way.
+;; An immutable fn binding is never re-pointed and keeps the thin spelling,
+;; and a `def` whose init is a closure-returning call dispatches fat too.
+;;
+;; Shapes: thin init then capturing store (the segfault), capturing init then
+;; another capturing store, thin init then thin store, the same three on a
+;; global cell, and a global bound to a capturing closure by a call.
+
+(defn make-adder [k : int] : (fn [int] int) (fn [x : int] : int (+ x k)))
+
+(def ^mut g-cell (fn [] : int 0))
+(def add5 (make-adder 5))
+
+(defn main [] : int
+  (let [^mut f (fn [] : int 0)]
+    (println (f))
+    (let [t 5] (set! f (fn [] : int (+ t 1))))
+    (println (f)))
+  (let [t 5 ^mut f (fn [] : int (+ t 1))]
+    (println (f))
+    (let [u 9] (set! f (fn [] : int (+ u 1))))
+    (println (f)))
+  (let [^mut f (fn [] : int 0)]
+    (set! f (fn [] : int 7))
+    (println (f)))
+  (println (g-cell))
+  (let [t 40] (set! g-cell (fn [] : int (+ t 2))))
+  (println (g-cell))
+  (set! g-cell (fn [] : int 3))
+  (println (g-cell))
+  (println (add5 1))
+  0)

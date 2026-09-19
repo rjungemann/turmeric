@@ -741,6 +741,40 @@ static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
     return ad;
 }
 
+/* Normalise a THIN function value (a bare code pointer: a non-capturing lambda,
+ * a `defn` referenced by name) to the fat `{ thunk, env }` representation with
+ * an EX_FN_TO_FAT shim; anything else -- already fat, a C function pointer, an
+ * arity past the shim table, not a function -- is returned unchanged.
+ *
+ * The box must not be a per-use malloc.  A `{ shim, orig_fn }` box for a
+ * file-scope function is a LINK-TIME CONSTANT -- it depends only on the
+ * function -- so the emitter can hoist it to a static, and then the shim
+ * allocates nothing at all.  Measured at the `any` widen: without this, 100
+ * widens leaked 100 boxes.  Sound for the same reason it is at the `^fat`
+ * argument sites that already opt in: a shared box is only wrong if someone
+ * frees it, and nothing frees a fn payload.  The emitter applies its own guard
+ * (a global EX_VAR that is not a param, closure, poly or already-fat binding)
+ * and falls back to the malloc form otherwise, so `static_ok` is a request,
+ * not an assertion.
+ *
+ * Shared by the `any` widen (any-cannot-recover-a-capturing-closure) and, per
+ * fn-cell-set-with-capturing-closure-segfaults, by a `^mut` fn cell's init
+ * and `set!`. */
+Expr *elab_fn_value_to_fat(Elab *e, Expr *value) {
+    if (!value) return NULL;
+    if (value->type.kind == TY_FN && !value->type.as.fn.boxed &&
+        !value->type.as.fn.cfnptr && value->type.as.fn.arity <= 5) {
+        Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *bt = value->type;
+        bt->as.fn.boxed = true;
+        Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, value->span);
+        shim->as.fn_to_fat_.inner = value;
+        shim->as.fn_to_fat_.static_ok = true;
+        return shim;
+    }
+    return value;
+}
+
 Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     if (!value) return NULL;
     if (value->type.kind == TY_ANY) return value;  /* already boxed */
@@ -770,32 +804,7 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
      * environment, and fattening it would misrepresent an FFI value.  So is an
      * arity past the shim table, which leaves the payload bare -- it then does
      * not match a fat target, so `is?` is false rather than wrong. */
-    if (value->type.kind == TY_FN && !value->type.as.fn.boxed &&
-        !value->type.as.fn.cfnptr && value->type.as.fn.arity <= 5) {
-        Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
-        *bt = value->type;
-        bt->as.fn.boxed = true;
-        Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, value->span);
-        shim->as.fn_to_fat_.inner = value;
-        /* The box must not be a per-widen malloc.  A `{ shim, orig_fn }` box for
-         * a file-scope function is a LINK-TIME CONSTANT -- it depends only on the
-         * function -- so the emitter can hoist it to a static, and then widening
-         * a bare fn allocates nothing at all, exactly as it did before this
-         * shim existed.  Measured: without this, 100 widens leaked 100 boxes.
-         *
-         * Sound here for the same reason it is at the `^fat` argument sites that
-         * already opt in: a shared box is only wrong if someone frees it, and
-         * nothing frees an `any` fn payload -- `emit_type_is_byvalue_adt` is
-         * false for TY_FN, so the payload's registry row carries boxed = 0 and
-         * `__tur_any_drop` leaves it alone.
-         *
-         * The emitter applies its own guard (a global EX_VAR that is not a
-         * param, closure, poly or already-fat binding) and falls back to the
-         * malloc form otherwise, so setting this is a request, not an
-         * assertion. */
-        shim->as.fn_to_fat_.static_ok = true;
-        value = shim;
-    }
+    value = elab_fn_value_to_fat(e, value);
     Type any_type;
     memset(&any_type, 0, sizeof(any_type));
     any_type.kind = TY_ANY;

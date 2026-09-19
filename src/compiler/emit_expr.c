@@ -8905,7 +8905,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * stored as int64_t in C (a function address or closure pointer cast to
              * int).  Calling it requires the same cast-and-invoke pattern as TY_PTR_VOID
              * callbacks.  Only applies to non-global bindings (local params). */
-            if (fn_binding->type.kind == TY_FN && !fn_binding->is_global) {
+            /* fn-cell-set-with-capturing-closure-segfaults: a BOXED global joins
+             * -- a `^mut` fn global is a fat cell (elab_def shims its init), and
+             * so is a `def` initialised from a closure-returning call.  A `defn`
+             * is never boxed, so the direct named call below is untouched. */
+            if (fn_binding->type.kind == TY_FN &&
+                (!fn_binding->is_global || fn_binding->type.as.fn.boxed)) {
                 /* A#1: a ^fat parameter holds a fat closure ({ thunk, env... }),
                  * not a bare function pointer.  Invoking it directly via (g x)
                  * must dispatch through slot 0 with the box as the env argument

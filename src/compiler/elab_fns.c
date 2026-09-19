@@ -11656,6 +11656,14 @@ Expr *elab_def(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* fn-cell-set-with-capturing-closure-segfaults: a `^mut` fn global is a
+     * fat cell, exactly as a `^mut` fn `let` is (elab_forms.c) and for the
+     * same reason -- a later `set!` may store a capturing closure. */
+    if (is_mut && init->type.kind == TY_FN && !init->type.as.fn.boxed) {
+        Expr *fat = elab_fn_value_to_fat(e, init);
+        if (fat != init) init = fat;
+    }
+
     Binding *b = binding_new(e, name_f->as.sym, init->type,
                              /*is_mut=*/is_mut, /*is_global=*/true, name_f->span);
     b->is_persistent    = is_persistent;

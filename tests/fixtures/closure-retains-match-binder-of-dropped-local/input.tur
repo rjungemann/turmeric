@@ -1,0 +1,31 @@
+;; fn-cell-set-with-capturing-closure-segfaults, found while closing it: a
+;; by-value recursive local was freed at scope exit while a closure stored in
+;; a global still held its match binder `t` -- a pointer into the spine.  The
+;; scope-exit drop looked only at the local (moved? consumed?) and never at
+;; where its aliases went, so the second line printed 1 for a 2-link tail
+;; (heap-use-after-free under ASan) once the store itself compiled.
+;;
+;; The drop now asks the strict alias-aware walk the parameter inference
+;; already uses: every match binder and field read rooted at the local must
+;; stay confined to the body.  Here `t` is captured by a closure that
+;; escapes into a global, so `xs` is NOT freed and the closure reads a live
+;; spine.  (The spine leaks -- one owner-less box -- which is the cost of the
+;; right answer; the inline-match shape that keeps its binders confined still
+;; frees, pinned by byval-recursive-adt-spine-drop under the leak harness.)
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn llen [xs : Lst] : int
+  (match xs
+    (Cons h t) (+ 1 (llen t))
+    (Nil)      0))
+
+(def ^mut g-fn (fn [] : int 0))
+
+(defn main [] : int
+  (let [xs (Cons 1 (Cons 2 (Cons 3 (Nil))))]
+    (println (match xs
+               (Cons h t) (do (set! g-fn (fn [] : int (llen t))) h)
+               (Nil)      0)))
+  (println (g-fn))
+  0)

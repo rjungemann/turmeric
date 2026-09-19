@@ -43,6 +43,9 @@ static const AdtDef *elab_byval_drop_adt(Type t) {
  * (elab_structs.c) has already applied the `:copy` and `:heap` exclusions and
  * the direct-self-reference test -- a field pointing `drop_inner_def` at its own
  * def is the whole condition, so it is not restated here. */
+bool localowned_binding_is_confined(const Expr *body, const Binding *b,
+                                    bool result_cannot_carry);
+
 const AdtDef *elab_byval_localowned_adt(Type t) {
     const AdtDef *def = NULL;
     if (t.kind == TY_ADT)      def = t.as.adt_.def;
@@ -1019,6 +1022,37 @@ Expr *elab_let(Elab *e, const Form *call) {
             init = elab_coerce_to_any(e, init);
             if (!init) { rc = -1; break; }
         }
+        /* fn-cell-set-with-capturing-closure-segfaults: a `^mut` FUNCTION cell
+         * is fat from the start.  A cell initialised with a non-capturing
+         * lambda was spelled as a thin function pointer, and a later `set!` of
+         * a capturing closure -- a fat `{thunk, env}` box, whose declared fn
+         * type is equal to the cell's -- stored the box's address where a code
+         * pointer was expected; the next call jumped into the box.  Both
+         * representations are legitimate values of the cell's type, so the
+         * cell takes the one that can hold either: its init is shimmed to fat
+         * (a link-time constant for a lifted lambda, so no allocation) and the
+         * binding is marked boxed, which is what makes every call through it
+         * dispatch through slot 0 and every later `set!` normalise its value
+         * the same way.  An immutable binding is never re-pointed and keeps
+         * the thin spelling. */
+        if (is_mut && init->type.kind == TY_FN && !init->type.as.fn.boxed) {
+            /* A fn PARAMETER is already fat by the parameter protocol
+             * (fn_param_type_is_fat_normalized) although its type is not
+             * marked boxed; shimming it again would box a box.  Such an init
+             * keeps today's spelling (see
+             * docs/reported/let-alias-of-fn-param-call-undeclared.md for what
+             * that spelling does). */
+            const Expr *ip = init;
+            while (ip && ip->kind == EX_ASCRIBE) ip = ip->as.ascribe_.inner;
+            bool init_is_fat_param = ip && ip->kind == EX_VAR && ip->as.var.binding &&
+                (ip->as.var.binding->is_fat ||
+                 (ip->as.var.binding->is_param &&
+                  fn_param_type_is_fat_normalized(&ip->as.var.binding->type)));
+            if (!init_is_fat_param) {
+                Expr *fat = elab_fn_value_to_fat(e, init);
+                if (fat != init) init = fat;
+            }
+        }
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
         /* perform-does-not-typecheck-its-arguments: an UNANNOTATED `let` bound
@@ -1956,6 +1990,31 @@ Expr *elab_let(Elab *e, const Form *call) {
         if (binding_moved_during_init[k] || moved_for_real ||
             is_binding_consumed(body, lb))
             continue;
+        /* fn-cell-set-with-capturing-closure-segfaults, found while closing
+         * it: the guards above see the LOCAL, not its aliases.  A match
+         * binder of `xs` carries a pointer into the spine, and if the body
+         * stores it -- `(set! g-fn (fn [] (llen t)))`, a closure capturing
+         * `t` into a global cell -- the drop at scope exit frees what the
+         * closure will read (measured: the call printed 1 for a 2-link
+         * tail).  Ask the strict alias-aware walk the parameter inference
+         * already uses: every alias must stay confined to the body, and the
+         * scope's value may carry one out only if it is a non-pointer scalar.
+         * Refusing costs a leak; the old answer cost a use-after-free. */
+        {
+            TypeKind bk = body ? body->type.kind : TY_UNKNOWN;
+            bool scalar_result;
+            switch (bk) {
+                case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_SYM:
+                case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                case TY_FLOAT32: case TY_FLOAT64:
+                    scalar_result = true; break;
+                default:
+                    scalar_result = false; break;
+            }
+            if (!localowned_binding_is_confined(body, lb, scalar_result))
+                continue;
+        }
         binds[k].binding->drops_local_owned = true;
     }
 
@@ -3719,6 +3778,25 @@ Expr *elab_set(Elab *e, const Form *call) {
                   "set!: value type %s does not match binding type %s",
                   type_name(value->type), type_name(b->type));
         return NULL;
+    }
+    /* fn-cell-set-with-capturing-closure-segfaults: `type_eq` does not see the
+     * representation.  A fat cell (a `^mut` fn cell is one, see the `let`
+     * path) takes a thin value through the same shim its init took; a cell
+     * that stayed thin -- initialised from a thin fn VALUE the `let` could
+     * not re-spell, such as a parameter -- cannot hold a capturing closure,
+     * and the store is refused here rather than segfaulting at the call. */
+    if (b->type.kind == TY_FN && value->type.kind == TY_FN) {
+        if (b->type.as.fn.boxed && !value->type.as.fn.boxed) {
+            value = elab_fn_value_to_fat(e, value);
+        } else if (!b->type.as.fn.boxed && value->type.as.fn.boxed) {
+            diag_emit(DIAG_ERROR, value->span,
+                      "set!: '%s' holds a bare function pointer and cannot take a "
+                      "capturing closure; initialise it with a capturing lambda, "
+                      "or bind it with `^mut` from a lambda literal so it is a "
+                      "closure cell",
+                      b->name->name);
+            return NULL;
+        }
     }
 
     /* Phase 11: Move tracking - if value is a CK_MOVE binding reference, poison it */
