@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.49.3` -- Rejects a session endpoint whose protocol does not match the parameter it is passed to (the mismatch session types exist to catch), gives an installed Try Turmeric a real update path so it can no longer sit builds behind, and stops a REPL session from re-resolving every earlier turn's refinement crossings.
+**Latest release:** `v0.49.4` -- Try Turmeric now reopens the documentation pane on the page and scroll position you left it at, and centers the Contents icon in its button on phones.
 
 ## What
 

@@ -2,6 +2,30 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.49.4] -- 2026-09-18
+
+### Fixed
+
+- **Try Turmeric reopens the documentation pane where you left it.** The pane's
+  location rode on the `#doc=` fragment, which drives back/forward within a
+  session but does not survive a relaunch -- an installed app cold-starts at the
+  manifest's `start_url`, with no fragment -- so closing the app inside a guide
+  and reopening it from the home screen landed on the editor, with nothing on
+  screen saying where you had been. A `tur.try.docs.v1` entry now holds the open
+  page and its scroll offset, banked on `pagehide` and on `visibilitychange` to
+  hidden (an installed app is backgrounded, not unloaded), and holds null once
+  the pane is closed -- closing the docs is how you say you are done with them,
+  and the next launch honours that. A `#doc=` link still wins outright; share
+  links and tutorial mode skip the restore without clearing the memory; and a
+  saved page the current docs pack no longer carries clears itself rather than
+  greeting you with "No page ... in this documentation pack".
+- **The Contents icon is centered in its button on phones.** `.btn` sets
+  `align-items` and nothing about the main axis, which is invisible while the
+  button is sized by its own content -- every desktop use of it. The phone rule
+  gives it `min-width: 40px` for a thumb, and the 6px of surplus that leaves
+  around a 16px glyph all went to the right of it under the default
+  `flex-start`, putting the icon 3px left of center.
+
 ## [0.49.3] -- 2026-09-18
 
 ### Fixed
