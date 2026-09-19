@@ -6,6 +6,29 @@ description: defstruct_lowers_to_adt has been widened until it rejects nothing, 
 
 # `elab_defstruct`'s StructDef branch is dead
 
+**RESOLVED 2026-09-19.** `defstruct_lowers_to_adt` and its three helpers
+(`defstruct_field_type_lowerable`, `defstruct_fields_all_primitive`,
+`defstruct_newstyle_fields_all_primitive`, ~270 lines) are deleted;
+`elab_defstruct` rewrites every form to a record `defdata` unconditionally,
+and the "unsupported field form" diagnostic behind the `if` is gone with it.
+The header declaration, the DS-C note in `elab_toplevel.c` and the graduation
+note in `experiments.c` are updated. `bash tests/run.sh`: 3047 passed, 0 failed.
+
+**One correction to the correction below, measured before deleting.** The
+2026-09-05 note says the predicate's `false` returns for malformed input "are
+all shadowed by earlier diagnostics". Five are not: `(defstruct Foo [])`,
+`[a : int b]`, `[1 : int]`, `[v : 7]` and `[v : "s"]` all reached the
+fallthrough and reported the vague `defstruct 'Foo': unsupported field form`
+at the whole form's span. Through the record-ADT parser they now report the
+precise defect at the offending token (`field list cannot be empty`, `must be
+[name : type ...] pairs`, `expected a field name symbol`, `constructor field
+type must be a keyword like :int, :bool, :cstr`). So the branch was not quite
+dead -- it was the worse of two diagnostics for malformed input, and (until
+the Saffron pass added its `TY_ANY` arm) the one place a well-formed shape the
+parser accepted could still be refused. Both are reasons to delete, not keep.
+Direction 2's "machinery" was already gone (DS-D); what this closes is the
+duplicate classifier.
+
 **Severity: low.** No user-visible defect -- this is dead code plus a comment
 that actively misdescribes it. Filed rather than fixed because the deletion
 belongs to the structdef-retirement track, not to a drive-by.

@@ -16,7 +16,7 @@
   (__nlen (:: ne :int) 0))
 
 (defn __nlen [xs : int acc : int] : int
-  (if (tnil? xs) acc (__nlen (list-tail xs) (+ acc 1))))
+  (if (null? xs) acc (__nlen (list-tail xs) (+ acc 1))))
 
 (defn main [] : int
   (println (ne-head (ne-of 7 (tnil))))                 ; 7

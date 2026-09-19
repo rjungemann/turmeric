@@ -183,15 +183,22 @@ reinterpreting a payload word:
 
 ```turmeric
 ;; typed module
-(defn scale [v : (Vec int) k : int] : int ...)
+(defn scale [x : float k : int] : float ...)
 
-;; Saffron caller -- the compiler checks `v` and `k` on the way in
-(scale my-vec 2)
+;; Saffron caller -- the compiler checks `x` and `k` on the way in
+(scale 7.5 2)
 ```
 
 The cost is one tag compare per argument. There is deliberately **no** flag to
 turn it off: an unchecked boundary turns a type error into a memory-safety bug,
 which is the whole reason `cast` was built checked.
+
+One consequence for **containers**: a container a Saffron file builds is always
+the all-`any` instantiation (a `[1 2 3]` literal is a `(Vec any)`, holding
+boxes), so it does not fit a typed `(Vec int)` parameter, whose elements are
+raw ints -- the checked crossing panics with `different instantiation of Vec`
+rather than reinterpreting the boxes. A typed container parameter can only be
+fed a container built in typed code; scalars cross freely.
 
 The reverse direction works too -- a typed module can `import` a Saffron one and
 narrow its `any`-typed exports.
@@ -293,9 +300,13 @@ not reachable through it. The cases that panic, with a message saying which
 uncompilable C, fixed 2026-09-14 and pinned by
 `tests/fixtures/saffron-dyn-dispatch-payload-adt`):
 
-- A method taking more than the receiver (`eq [x : a y : a]`) or returning the
-  class's own type variable (`clone : a -> a`) -- the call site would have to
-  box and unbox more than the receiver.
+- A method taking more than the receiver (`eq [x : a y : a]`) or returning
+  the class's own type variable (`clone : a -> a`) on an instance whose
+  receiver is a **parametric** or **`:heap`** type. On a primitive or a
+  non-parametric ADT receiver such a method dispatches (since 2026-09-19)
+  through a per-instance witness that checked-casts each extra argument to
+  the impl's parameter type and answers `any`; a mismatched extra panics at
+  the cast.
 - An instance whose receiver is itself a type variable
   (`definstance Clone [T]`), which has no ground tag at all.
 - A higher-kinded instance whose method body is not by-value-expressible --

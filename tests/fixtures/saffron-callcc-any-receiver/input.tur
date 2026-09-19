@@ -1,0 +1,33 @@
+#lang saffron
+; saffron-dynamic-surface-pass (low): a `call/cc` receiver annotated `: any`
+; -- `(call/cc (fn [k] : any (k 42)))` -- was `conversion to non-scalar type
+; requested` at cc.  Two things were wrong, both about representation: the
+; receiver's `k` was the bare `:escape-cont`, so `(k 42)` delivered a raw
+; int64 word, and the landing assigned that word (and C-cast the normal
+; return) to a 16-byte `tur_tagged_t` binder.
+;
+; Now a `: any` receiver gets a VALUE-TYPED continuation, `(escape-cont any
+; any)`, so `(k v)` widens `v` to a box; the box crosses the longjmp as a heap
+; copy's address (`__tur_escape_box_any`, one malloc per escape) and the
+; landing reads and frees it; the normal-return path assigns the receiver's
+; box directly.  The interpreter passes a TuriValue through unchanged.
+;
+; Four shapes: an int, a cstr and a float (7.25, so a word-for-value mixup
+; would print a huge integer rather than 7.25) delivered by the escape, and a
+; receiver that returns NORMALLY without invoking k -- the other arm of the
+; landing.  The call/cc sits inside helper defns: `call/cc` directly in `main`
+; is a separate, pre-existing limit ("EX_CALLCC reached the direct emitter",
+; typed Turmeric too) and not this fixture's subject.
+
+(defn esc-int [] (call/cc (fn [k] : any (k 42))))
+(defn esc-str [] (call/cc (fn [k] : any (k "s"))))
+(defn esc-flt [] (call/cc (fn [k] : any (k 7.25))))
+(defn no-esc [] (call/cc (fn [k] : any 5)))
+
+(defn main [] : int
+  (println (esc-int))
+  (println (type-of (esc-str)))
+  (println (esc-flt))
+  (println (no-esc))
+  (println (type-of (no-esc)))
+  0)

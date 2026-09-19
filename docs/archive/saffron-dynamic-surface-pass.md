@@ -1,12 +1,22 @@
 # Saffron dynamic-surface pass -- findings (2026-09-09)
 
-**Status 2026-09-10.** Resolved on this branch: H1, H2, H3, H4, H5, H6, H8
-(named functions), H9 (a sibling determines K), H10, H11, M3, M4, M5, M6, M8,
-M10, each pinned by a fixture and retired from the fuzzer's KNOWN table. M2 is
-resolved on BOTH back ends, and M7's hard error is fixed (the cons-list WALK is
-not). Open: M7 (the erased self-referential tail), M9, and the remaining lows.
-H7, M1 and M2 -- the representation-gap family -- are all resolved.
-Struck-through items below carry their resolution note.
+**ARCHIVED 2026-09-19: every item of the pass is resolved and pinned.** The
+last two to close were M7 (the erased self-referential cons tail; stdlib
+`Cons`'s tail is now the typed `(Cons A)` link) and the `& rest : any`
+representation gap (a `: any` rest list is the `(Cons any)` monomorph). The
+status paragraph and per-item notes below are kept as the paper trail.
+
+**Status 2026-09-19.** Resolved: H1-H11, M1-M6, M8, M10, and -- this date --
+six of the lows (Sym `=`, the expression call head, the `if` join, the
+`(defn mkv [] [1 2.5])` parse, the trailing-keyword body, the ctor under an
+all-`any` expectation), each pinned by a fixture; the fuzzer's last two KNOWN
+rows and both known-probes are retired and 250 cases with those shapes back
+in the pool are clean; the guide's boundary example is corrected. **M9 and the `call/cc` `: any` low resolved later the same day; M7 (the
+erased self-referential tail) and the `& rest : any` low, which was gated on
+the same stdlib `Cons` representation, later still.** **Open:** nothing --
+every item of the pass is resolved and pinned (see each item). The
+`#lang`-less `(defn f [] [x y])` reading is deliberately unchanged (see the
+parse item). Struck-through items below carry their resolution note.
 
 H7, M1 and M2 were one SHAPE of problem -- a value whose Saffron representation
 (a 16-byte `tur_tagged_t`) did not fit the representation the typed path had
@@ -339,7 +349,27 @@ cast that 16-byte tagged value through `(int64_t)`, a truncation. `.head` on a
 cons list and both fields of a user `(defstruct Duo [A B] ...)` now agree on
 both back ends. Pinned by `tests/fixtures/saffron-dyn-field-on-generic-adt`.
 
-**Still open: walking a cons list through an `any`.** `.tail` now READS, but it
+**~~Still open: walking a cons list through an `any`.~~ RESOLVED 2026-09-19.**
+`stdlib/list.tur`'s `Cons` is `(defstruct Cons :heap [A] (head A) (tail
+(Cons A)))` now: the tail is the recursive occurrence, a typed pointer, so
+`.tail` hands back a `(Cons A)` and the widen tags it `(Cons any)`. Three
+things had to land first, in order: the self-typed `:heap` shape itself
+([self-typed-heap-parametric-field-unsupported](self-typed-heap-parametric-field-unsupported.md)),
+a nullary generic under a tyvar-shaped expectation so `tnil` could become
+`[A] [] : (Cons A)` ([nullary-generic-call-under-tyvar-expectation](nullary-generic-call-under-tyvar-expectation.md)),
+and the dynamic field read widening an app-typed field under the all-`any`
+monomorph rather than the OPEN `(Cons A)` (whose id no `.head` arm matched:
+`no field '.head' on a Cons value`). `tnil?` takes the typed list now so an
+`any` holding a list seams into it (`cast: any holds Cons, not int` before);
+`null?` is its `:int`-taking twin for carrier-level lists, and the
+carrier-level helpers (`tcons`, `list-head`, `list-tail`, `list-length`,
+`list-concat`, ...) are unchanged. Pinned by
+`tests/fixtures/saffron-cons-list-walk-through-any`: `(.head (.tail l))`
+static with no ascription, the same through an unannotated parameter, and a
+recursive `walk` over the `any`, agreeing on both back ends. *Was:* the only
+fix that is not the hardcoding the paragraph below refuses is to declare the
+tail as the recursive occurrence -- `(tail (Cons A))` -- and let the widen
+tag it as `(Cons any)`. `.tail` READ, but it
 reads back an `int`: the field is declared `:int`, a type-ERASED carrier
 standing for the recursive `(Cons A)` occurrence, so the widen boxes it with
 the int tag and a `cast` to `(Cons any)` panics. The interpreter answers `Cons`
@@ -378,9 +408,27 @@ Affects every `map-*` accessor since they are macros. The `if` truthiness
 rule (`elab_forms.c:2862`) is gated the same way: `(if (map-get m k) ...)` is
 `if condition must be bool, got any` even in a Saffron file.
 
-**M9. Multi-arg method on `any`: compiled panics as documented, interp
-dispatches.** `(.near? x y)` -> compiled `cannot be dispatched dynamically
-yet`, interp `true`. Parity note; the guide documents the panic.
+**~~M9. Multi-arg method on `any`: compiled panics as documented, interp
+dispatches.~~ RESOLVED 2026-09-19.** `(.near? x y)` -> compiled `cannot be
+dispatched dynamically yet`, interp `true`. The v0 shim could unbox only the
+receiver word, so a method taking more than the receiver, or returning the
+class variable, had a NULL slot. It now gets the witness the HKT classes
+already had (D8 Q3), generalised: `saffron_mint_dyn_witness`
+(elab_typeclasses.c) is shared by both, and a kind-* method with extras or a
+class-variable result mints one witness per instance whose receiver can be
+spelled as a type form (a primitive or a non-parametric ADT) --
+`(defn __dynwit_Near_near?_int [__r : int __a1] : any (.near? __r (cast __a1
+int)))`. The cast is spelled IN the witness because the static method
+dispatch inside it does not run the D5 argument seam (measured: the `any`
+extra reached the impl unconverted, `incompatible type for argument 2`); the
+class variable is the receiver type for a kind-* instance, so that is the
+cast target, and a primitive-typed extra casts to its primitive. The node's
+result becomes `any`, as for an HKT class; one-parameter concrete-result
+methods keep the direct shim and their typed result. The emitter's witness
+shim gained the float-receiver arm (the word is the double's bit pattern).
+Pinned by `tests/fixtures/saffron-dyn-method-extra-args` (int, float and ADT
+receivers, a three-argument method, a class-variable result). Still not
+covered, by the same rule as before: a parametric or `:heap` receiver.
 
 ## Low -- expressiveness holes, both back ends agree
 
@@ -400,8 +448,16 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   Ordering and mixed-type compares still refuse in the same words on both back
   ends. Pinned by `tests/fixtures/saffron-dyn-string-equality`, which asserts
   both halves.
-- `(defn pick [c] (if c 1 "one"))` is a static error (`then=int else=cstr`);
-  the if-join only widens under an explicit `: any` (P6).
+- ~~`(defn pick [c] (if c 1 "one"))` is a static error (`then=int else=cstr`);
+  the if-join only widens under an explicit `: any` (P6).~~ **RESOLVED
+  2026-09-19.** In a Saffron file an `if` whose arms disagree joins to
+  `any`: a new arm in the `if` join (elab_forms.c), placed AFTER every other
+  reconciliation (the fn-carrier seams, the tyvar unify) so those keep their
+  typed answers, and keyed on the dialect the way truthiness is (the form's
+  span, or the top-level form's dialect when a macro hides it -- so `cond`
+  is covered). Typed Turmeric keeps the diagnostic, pinned by
+  `tests/fixtures/errors/if-branch-mismatch-typed-still-rejected`; the
+  positive half is `tests/fixtures/saffron-if-join-to-any`.
 - ~~`while` rejects an `any` condition (`elab_forms.c:3656`) while
   `if/when/and/or` apply truthiness.~~ **RESOLVED 2026-09-10.** `while` is
   simply the THIRD bool slot a Saffron `any` can reach, after the `if`/`when`
@@ -416,8 +472,9 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   That last one pins the rule rather than the wrap: a C-truthiness `while`
   would exit immediately and print `0` where both back ends print `1`.
 
-- **NEW (found 2026-09-10 while pinning the above): `=` on two Syms is a
-  static error unless it goes through an `any`.** `(if (= k :a) ...)` with `k`
+- ~~**NEW (found 2026-09-10 while pinning the above): `=` on two Syms is a
+  static error unless it goes through an `any`.**~~ **RESOLVED 2026-09-19**
+  (details at the end of this item). `(if (= k :a) ...)` with `k`
   a Sym-typed binding is `TUR-E0006: operator lookup failed for '=', got 2
   arg(s), first arg type Sym` on both back ends, while the same comparison on
   two `any`-held Syms answers pointer identity (H5). So a Saffron file can
@@ -430,10 +487,28 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   builtin table (which changes the typed surface, the thing the cstr fix
   deliberately avoided), or route a failed operator lookup to the class
   instance before reporting TUR-E0006 -- the second is the general answer and
-  would subsume the cstr arms too.
-- Only a bare symbol can be a dynamic call head: `((adder 1) 1)` and
+  would subsume the cstr arms too. **RESOLVED 2026-09-19 by the first
+  direction**, on purpose: a Sym is an interned record pointer whose identity
+  IS its equality (`Eq[Sym]` / `sym=?` compute exactly that), so unlike
+  `cstr` -- where a builtin `==` on the pointer would silently disagree with
+  `cstr-eq?` -- a `=` / `not=` row for `TY_SYM` (builtins.c) adds a spelling
+  without changing what equality means, in typed Turmeric and Saffron alike.
+  Compiled it is a C pointer compare; interpreted a Sym rides the int carrier
+  and the operator's fallback compares that word. Pinned by
+  `tests/fixtures/sym-equality-operator` (plain Turmeric, including the
+  interning cases). The general route (operator miss -> class instance) is
+  still the right answer for any future row and is not taken here.
+- ~~Only a bare symbol can be a dynamic call head: `((adder 1) 1)` and
   `((mkc) 7)` are `expression in call head has type any, which is not
-  callable` (`elab_call.c:1796`).
+  callable` (`elab_call.c:1796`).~~ **RESOLVED 2026-09-19.** The
+  `EX_DYN_CALL` node's `fn` slot always took an arbitrary expression (the
+  emitter and the interpreter evaluate it; the CPS and effect walks descend
+  into it), so the expression head needed only the permission the symbol head
+  had: both shapes now go through one builder, `saffron_dyn_call_on`
+  (elab_call.c), and `elab_call_head_expr` routes an `any`-typed head there
+  in a Saffron file. Pinned by `tests/fixtures/saffron-dyn-call-expression-head`
+  (a capturing closure, a non-capturing one, a typed defn through H8's
+  adaptor, and a lambda-literal head).
 - `(defn f [a & rest : any] ...)` rejects `(f 1 2 3)`: `rest arg 0 has wrong
   type (expected any, got int)` (`elab_call.c:5650`). **Fix direction
   CORRECTED 2026-09-10: "rest args are not widened" is not the bug, and
@@ -453,6 +528,27 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   in the existing cell is the other option, and costs a deref in every rest
   walk. Same representation-gap family as H7/M1/M2-compiled: the THIRD filed
   direction in this report to name a check when the defect is a width.
+  *Assessed 2026-09-19, still open, and now gated on M7:* the `(Cons any)`
+  route makes the callee's `rest` a `(Cons any)` whose link is the erased
+  `:int` tail (`stdlib/list.tur`), so every walk of it is the M7 read; the
+  pointer-boxing route keeps the int64 cell but every read of an element
+  (`head`, the untyped cons helpers) would have to know the head is a box
+  and deref it, a second protocol for one accessor. Both are the stdlib
+  `Cons` representation change M7 records, not a call-site fix.
+  **RESOLVED later on 2026-09-19**, by the `(Cons any)` route once M7
+  landed. The rest binding of a `: any` rest (elab_fns.c) is typed as the
+  stdlib `(Cons any)` monomorph, so the callee walks it with `.head` /
+  `.tail` / `tnil?` and each element reads back with its own tag; the call
+  site (elab_call.c) builds the chain as source would -- `(make-struct Cons
+  (:: e0 any) (make-struct Cons (:: e1 any) ... (:: 0 (Cons any))))` -- and
+  elaborates that, so both back ends build the same cell they build for
+  `(list 1 "two" 7.1)` and no emitter grew a second cons protocol. The
+  variadic path also now widens the callee's FIXED `any` parameters (a
+  Saffron variadic defn's unannotated first parameter took a bare int:
+  `incompatible type for argument 1`). Pinned by
+  `tests/fixtures/saffron-variadic-rest-any` (walk, count, an already-`any`
+  argument, a `bool` element) and `variadic-rest-any` (the typed-file twin,
+  with the hand-built chain), agreeing compiled and interpreted.
 - ~~`(defstruct Dyn [v : any])` is `unsupported field form` (typed too); ADT
   fields accept `any`, struct fields do not.~~ **RESOLVED 2026-09-10.**
   `defstruct_field_type_lowerable` had no arm for `TY_ANY`, so the gate fell to
@@ -502,21 +598,52 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   plus a read of the pre-existing entry). Call-position twin of
   `dl_saffron_widen_elem`, which widens a data literal's elements before the
   homogeneous `vec-of` macro sees them.
-- `(defn mkv [] [1 2.5])` is parsed as the generic form (type params `[]`,
-  params `[1 2.5]`): `parameter must be a symbol or type annotation`.
-- Guide: the boundary example `(scale my-vec 2)` with `v : (Vec int)` panics
+- ~~`(defn mkv [] [1 2.5])` is parsed as the generic form (type params `[]`,
+  params `[1 2.5]`): `parameter must be a symbol or type annotation`.~~
+  **RESOLVED 2026-09-19.** Two leading vectors are the generic shape only when
+  the second could be a parameter list; one carrying a literal (int / float /
+  string / bool) in a top-level slot cannot be, so it is the body
+  (`form_vec_has_literal_item`, elab_fns.c; `defn` and `fn` alike). A
+  symbol-only second vector (`(defn f [] [x y])`) is DELIBERATELY still read
+  as params -- either reading is well-formed there, and the generic reading
+  is the one every existing program relies on. Pinned by
+  `tests/fixtures/saffron-defn-empty-params-literal-body`.
+- ~~Guide: the boundary example `(scale my-vec 2)` with `v : (Vec int)` panics
   `different instantiation of Vec` when `my-vec` is a Saffron literal
-  (always `(Vec any)`); the example only works for a vec built in typed code.
-- `(Wrap 7)` passed straight to a `[v : (W any)]` parameter builds `(W int)`
+  (always `(Vec any)`); the example only works for a vec built in typed code.~~
+  **RESOLVED 2026-09-19** -- the example now crosses scalars, and a paragraph
+  states the container rule (a Saffron-built container is the all-`any`
+  instantiation and does not fit a typed `(Vec int)` parameter).
+- ~~`(Wrap 7)` passed straight to a `[v : (W any)]` parameter builds `(W int)`
   and is a static `TUR-E0001`, while the same call through an unannotated
   defn builds `(W any)` and passes. The Saffron ctor widen keys on the
-  call's position, not the file.
-- A `call/cc` receiver annotated `: any` -- `(call/cc (fn [k] : any (k 42)))`
+  call's position, not the file.~~ **RESOLVED 2026-09-19.** The widen declined
+  on the PRESENCE of an enclosing TY_APP expectation (so that `(:: (Wrap 7)
+  (W int))` can pin); it now declines only when that expectation fixes a
+  concrete type argument (`saffron_expected_app_pins`, elab_call.c), so an
+  all-`any` slot gets the `(W any)` it wants. The generic-function widen
+  (`(some 3.5)` at an `(Option any)` slot) shares the rule. Pinned by
+  `tests/fixtures/saffron-ctor-under-all-any-expectation`, which also keeps
+  the concrete-pin case; the fuzzer's `L-ctor-under-typed-expected` row and
+  probe are retired.
+- ~~A `call/cc` receiver annotated `: any` -- `(call/cc (fn [k] : any (k 42)))`
   -- is `conversion to non-scalar type requested` at cc: the CPS call/cc
   emitter assigns its result through a C cast to the binder's type and an
   escape delivers an int64, neither of which is a tagged box. Pre-existing;
   the H10 lambda default deliberately exempts the immediate receiver
-  (`in_callcc_receiver`) so an unannotated one keeps its scalar return.
+  (`in_callcc_receiver`) so an unannotated one keeps its scalar return.~~
+  **RESOLVED 2026-09-19.** A `: any` receiver now gets a value-typed
+  `(escape-cont any any)` (the rewrite in `callcc_default_cont_param`
+  detects the annotation on the form), so `(k v)` widens `v` to a box; the
+  box crosses the longjmp as a heap copy's address (`__tur_escape_box_any`,
+  a preamble helper and builtin, identity in the interpreter) and the
+  landing (`emit_callcc`, emit_cps_ir.c) reads and frees it, with no C cast
+  on either arm for a struct-typed binder. Pinned by
+  `tests/fixtures/saffron-callcc-any-receiver` (int, cstr, float escapes and
+  a normal return). The H10 exemption stays: an UNANNOTATED receiver keeps
+  its scalar return. Noted while pinning: `call/cc` directly inside `main`
+  aborts with "EX_CALLCC reached the direct emitter" in typed Turmeric too --
+  a pre-existing limit of the backend split, not this item.
 - ~~`Sym` is not accepted as a `defstruct` / `defdata` field type (`defdata:
   field has unrecognized type :Sym`), typed Turmeric too. Found by the fuzzer
   once `sym` joined its scalar pool.~~ **RESOLVED 2026-09-10.** Two rows, one
@@ -549,10 +676,15 @@ yet`, interp `true`. Parity note; the guide documents the panic.
   one file because the rule is a choice BETWEEN them. Both this and M7 had
   their `KNOWN` rows retired from `tests/saffron-fuzz-src.py`, and 250 fuzz
   cases with those shapes back in the default pool are clean.
-- `(fn [] :kw)` is `fn: missing body`: a keyword literal in body position is
+- ~~`(fn [] :kw)` is `fn: missing body`: a keyword literal in body position is
   read as a return annotation. `(fn [] (:: :kw Sym))` works. Found by the
   fuzzer; the generator avoids both shapes (KNOWN rows) and pins them with
-  `--known-probes`.
+  `--known-probes`.~~ **RESOLVED 2026-09-19.** A keyword that is the LAST
+  item of a `fn` / `defn` form is the body, not an annotation: an annotation
+  with nothing after it is always "missing body", so the reinterpretation can
+  only turn an error into the program that was written. Pinned by
+  `tests/fixtures/saffron-keyword-literal-body`; the `L-fn-keyword-body` row
+  and probe are retired.
 - ~~Cosmetic: `vec-get` out of bounds reads `tvec index out of bounds`
   compiled vs `vec index out of bounds` interp.~~ **RESOLVED 2026-09-10.**
   `tvec` was a leftover internal name -- the type is `Vec` -- so the compiled

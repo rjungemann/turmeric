@@ -741,6 +741,40 @@ static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
     return ad;
 }
 
+/* Normalise a THIN function value (a bare code pointer: a non-capturing lambda,
+ * a `defn` referenced by name) to the fat `{ thunk, env }` representation with
+ * an EX_FN_TO_FAT shim; anything else -- already fat, a C function pointer, an
+ * arity past the shim table, not a function -- is returned unchanged.
+ *
+ * The box must not be a per-use malloc.  A `{ shim, orig_fn }` box for a
+ * file-scope function is a LINK-TIME CONSTANT -- it depends only on the
+ * function -- so the emitter can hoist it to a static, and then the shim
+ * allocates nothing at all.  Measured at the `any` widen: without this, 100
+ * widens leaked 100 boxes.  Sound for the same reason it is at the `^fat`
+ * argument sites that already opt in: a shared box is only wrong if someone
+ * frees it, and nothing frees a fn payload.  The emitter applies its own guard
+ * (a global EX_VAR that is not a param, closure, poly or already-fat binding)
+ * and falls back to the malloc form otherwise, so `static_ok` is a request,
+ * not an assertion.
+ *
+ * Shared by the `any` widen (any-cannot-recover-a-capturing-closure) and, per
+ * fn-cell-set-with-capturing-closure-segfaults, by a `^mut` fn cell's init
+ * and `set!`. */
+Expr *elab_fn_value_to_fat(Elab *e, Expr *value) {
+    if (!value) return NULL;
+    if (value->type.kind == TY_FN && !value->type.as.fn.boxed &&
+        !value->type.as.fn.cfnptr && value->type.as.fn.arity <= 5) {
+        Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *bt = value->type;
+        bt->as.fn.boxed = true;
+        Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, value->span);
+        shim->as.fn_to_fat_.inner = value;
+        shim->as.fn_to_fat_.static_ok = true;
+        return shim;
+    }
+    return value;
+}
+
 Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     if (!value) return NULL;
     if (value->type.kind == TY_ANY) return value;  /* already boxed */
@@ -770,32 +804,7 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
      * environment, and fattening it would misrepresent an FFI value.  So is an
      * arity past the shim table, which leaves the payload bare -- it then does
      * not match a fat target, so `is?` is false rather than wrong. */
-    if (value->type.kind == TY_FN && !value->type.as.fn.boxed &&
-        !value->type.as.fn.cfnptr && value->type.as.fn.arity <= 5) {
-        Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
-        *bt = value->type;
-        bt->as.fn.boxed = true;
-        Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, value->span);
-        shim->as.fn_to_fat_.inner = value;
-        /* The box must not be a per-widen malloc.  A `{ shim, orig_fn }` box for
-         * a file-scope function is a LINK-TIME CONSTANT -- it depends only on the
-         * function -- so the emitter can hoist it to a static, and then widening
-         * a bare fn allocates nothing at all, exactly as it did before this
-         * shim existed.  Measured: without this, 100 widens leaked 100 boxes.
-         *
-         * Sound here for the same reason it is at the `^fat` argument sites that
-         * already opt in: a shared box is only wrong if someone frees it, and
-         * nothing frees an `any` fn payload -- `emit_type_is_byvalue_adt` is
-         * false for TY_FN, so the payload's registry row carries boxed = 0 and
-         * `__tur_any_drop` leaves it alone.
-         *
-         * The emitter applies its own guard (a global EX_VAR that is not a
-         * param, closure, poly or already-fat binding) and falls back to the
-         * malloc form otherwise, so setting this is a request, not an
-         * assertion. */
-        shim->as.fn_to_fat_.static_ok = true;
-        value = shim;
-    }
+    value = elab_fn_value_to_fat(e, value);
     Type any_type;
     memset(&any_type, 0, sizeof(any_type));
     any_type.kind = TY_ANY;
@@ -1068,6 +1077,50 @@ static bool w2_arg_is_free_poly_call(const Expr *arg) {
     if (!call_type_has_named_tyvar(&arg->type)) return false;
     return w2_tyvars_free_of_args(&arg->type,
                                   arg->as.call_.args, arg->as.call_.n_args);
+}
+
+/* nullary-generic-call-under-tyvar-expectation / M7: is `name` a type
+ * variable quantified by the ENCLOSING signature?  Inside a generic body a
+ * tyvar of that name in an argument's type is the body's own abstract `A`,
+ * not a fresh one a nullary call minted, and it must stay abstract. */
+static bool ng_tyvar_in_sig(const Elab *e, const char *name) {
+    if (!e || !name) return false;
+    for (uint8_t k = 0; k < e->n_sig_tyvars; k++)
+        if (e->sig_tyvars[k] && strcmp(e->sig_tyvars[k], name) == 0) return true;
+    return false;
+}
+
+static bool ng_type_names_sig_tyvar(const Elab *e, const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR) return ng_tyvar_in_sig(e, t->as.tyvar_.name);
+    if (t->kind == TY_APP)
+        return ng_type_names_sig_tyvar(e, t->as.app.fn) ||
+               ng_type_names_sig_tyvar(e, t->as.app.arg);
+    return false;
+}
+
+/* M7 (typed `Cons` tail): an application argument carrying the enclosing
+ * body's abstract tyvar -- `(Cons A)` from an ascription or a recursive call
+ * inside `(defn rec [A] [(C A)] ...)` -- against the parameter instantiated
+ * with the siblings' bindings.  In a constrained body a sibling of type `A`
+ * arrives ERASED to the int64 carrier (`(ok-val (:: (one i) (Result A
+ * cstr)))` types as `int`), so the binding reads `A := int` and the typed
+ * tail's `'A` failed `type_eq` against it: `expected (Cons A), got (Cons A)`.
+ * The int carrier IS the abstract `A` here, so an in-scope tyvar on the
+ * actual side matches an `int` (or itself) on the instantiated side; every
+ * other position must agree exactly. */
+static bool ng_erased_match(const Elab *e, const Type *inst, const Type *actual) {
+    if (!inst || !actual) return false;
+    if (actual->kind == TY_TYVAR && ng_tyvar_in_sig(e, actual->as.tyvar_.name)) {
+        if (inst->kind == TY_INT) return true;
+        if (inst->kind == TY_TYVAR && inst->as.tyvar_.name && actual->as.tyvar_.name)
+            return strcmp(inst->as.tyvar_.name, actual->as.tyvar_.name) == 0;
+        return false;
+    }
+    if (inst->kind == TY_APP && actual->kind == TY_APP)
+        return ng_erased_match(e, inst->as.app.fn, actual->as.app.fn) &&
+               ng_erased_match(e, inst->as.app.arg, actual->as.app.arg);
+    return type_eq(*inst, *actual);
 }
 
 static bool call_find_type_binding(CallTypeBinding *bindings, uint8_t n_bindings,
@@ -2111,8 +2164,63 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
     return NULL;
 }
 
+/* saffron-lang-plan S4/D4 (G5): build the dynamic call `(fnv args...)` whose
+ * callee is a runtime `any` value.  Resolution moves to runtime, where the
+ * value's own tag says whether it is callable and with what arity.  Every
+ * argument crosses as a BOX -- the callee is invoked through
+ * `TUR_APPLY*_T(tur_tagged_t, ...)` -- so a concrete one is widened here
+ * (saffron-dyn-call-concrete-argument-is-not-widened: `(f 41)` with `f : any`
+ * once emitted an `int64_t` into a `tur_tagged_t` slot).
+ *
+ * Shared by the two shapes of head: a bare symbol bound to an `any`
+ * (`(f h)`, the common one) and, per saffron-dynamic-surface-pass (low), an
+ * arbitrary EXPRESSION of type `any` -- `((adder 1) 1)`, `((mkc) 7)` -- which
+ * used to be "expression in call head has type any, which is not callable".
+ * The node's `fn` slot has always taken any expression (emit_value /
+ * eval_expr evaluate it, the CPS and effect walks descend into it), so the
+ * second shape needs no new machinery, only the permission the first already
+ * had. */
+/* True when an enclosing expectation is an applied type that fixes at least
+ * one CONCRETE type argument -- the signal the Saffron ctor / generic-fn widens
+ * defer to.  An application whose arguments are all `any` (or a NULL / non-app
+ * expectation) pins nothing.  Walks the curried TY_APP chain; a hole-headed
+ * partial application has no free slot to inspect and counts as pinning. */
+static bool saffron_expected_app_pins(const Type *t) {
+    if (!t || t->kind != TY_APP) return false;
+    const Type *cur = t;
+    while (cur && cur->kind == TY_APP) {
+        if (type_app_has_hole(cur)) return true;
+        if (!cur->as.app.arg || cur->as.app.arg->kind != TY_ANY) return true;
+        cur = cur->as.app.fn;
+    }
+    return false;
+}
+
+static Expr *saffron_dyn_call_on(Elab *e, const Form *call, Expr *fnv) {
+    uint32_t dn = call->as.list.len - 1;
+    Expr **dargs = (dn == 0) ? NULL
+        : (Expr **)arena_alloc(e->arena, dn * sizeof(Expr *));
+    for (uint32_t i = 0; i < dn; i++) {
+        dargs[i] = elab_form(e, call->as.list.items[1 + i]);
+        if (!dargs[i]) return NULL;
+        if (dargs[i]->type.kind != TY_ANY && dargs[i]->type.kind != TY_NEVER)
+            dargs[i] = elab_coerce_to_any(e, dargs[i]);
+    }
+    Type any_t;
+    memset(&any_t, 0, sizeof(any_t));
+    any_t.kind = TY_ANY;
+    Expr *dc = expr_new(e->arena, EX_DYN_CALL, any_t, call->span);
+    dc->as.dyn_call_.fn     = fnv;
+    dc->as.dyn_call_.args   = dargs;
+    dc->as.dyn_call_.n_args = dn;
+    return elab_hoist_control_operands(e, dc);
+}
+
 static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     TypeKind head_kind = head_expr->type.kind;
+    if (head_kind == TY_ANY &&
+        (lang_span_is_saffron(call->span) || e->toplevel_saffron))
+        return saffron_dyn_call_on(e, call, head_expr);
     if (head_kind != TY_FN && head_kind != TY_PTR_VOID && head_kind != TY_CONT) {
         diag_emit(DIAG_ERROR, call->as.list.items[0]->span,
                   "expression in call head has type `%s`, which is not callable",
@@ -3072,8 +3180,18 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
      * only a saturated call -- an under-applied ctor partial-applies into a
      * closure, and ascribing its arguments would change what that closure
      * completes to. */
+    /* saffron-dynamic-surface-pass (low): the widen defers to an enclosing
+     * TY_APP expectation because `(:: (Wrap 7) (W int))` pins the
+     * instantiation on purpose -- but an expectation whose every type
+     * argument is ITSELF `any` (a `[v : (W any)]` parameter, the seam into
+     * an all-`any` slot) pins nothing the widen would not choose anyway, and
+     * declining under it built a `(W int)` that the parameter then rejected
+     * (`expected (type-app W any), got (type-app W int)`), while the same
+     * `(Wrap 7)` through an unannotated defn was accepted.  So the rule keys
+     * on what the expectation SAYS, not on its presence: only a concrete
+     * argument somewhere in the applied type pins. */
     if (lang_span_is_saffron(call->span) &&
-        !(e->expected_type && e->expected_type->kind == TY_APP)) {
+        !saffron_expected_app_pins(e->expected_type)) {
         CtorDef *sctor = elab_lookup_ctor(e, name);
         if (sctor && sctor->adt && sctor->adt->n_type_params > 0 &&
             call->as.list.len - 1u == sctor->n_fields) {
@@ -3130,7 +3248,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
      * sets e->expected_type around the inner form -- the same signal the ctor
      * result path consults.  Widening under it produced an `(Option any)` the
      * ascription then could not accept. */
-    bool saffron_pinned = e->expected_type && e->expected_type->kind == TY_APP;
+    bool saffron_pinned = saffron_expected_app_pins(e->expected_type);
     if (lang_span_is_saffron(call->span) && !saffron_pinned && !elab_lookup_ctor(e, name)) {
         Binding *gb = scope_lookup(e->scope, name);
         if (gb && gb->type.kind == TY_FN && gb->type.as.fn.arg_full_types &&
@@ -5839,34 +5957,9 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * surface syntax.  Resolution moves to runtime, where the value's own tag
      * says whether it is callable and with what arity. */
     if (fn_type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
-        uint32_t dn = call->as.list.len - 1;
-        Expr **dargs = (dn == 0) ? NULL
-            : (Expr **)arena_alloc(e->arena, dn * sizeof(Expr *));
-        for (uint32_t i = 0; i < dn; i++) {
-            dargs[i] = elab_form(e, call->as.list.items[1 + i]);
-            if (!dargs[i]) return NULL;
-            /* saffron-dyn-call-concrete-argument-is-not-widened: the callee is
-             * a runtime value invoked through `TUR_APPLY*_T(tur_tagged_t,
-             * tur_tagged_t, ...)`, so every argument crosses as a BOX.  A
-             * concrete one was passed raw -- `(f 41)` with `f : any` emitted an
-             * `int64_t` into a `tur_tagged_t` slot and cc rejected it
-             * ("conversion to non-scalar type requested"), while `(f x)` with
-             * an `any` `x` worked, which is why the gap survived: the shape
-             * that happens to be written most often in Saffron is the one that
-             * was already boxed. */
-            if (dargs[i]->type.kind != TY_ANY && dargs[i]->type.kind != TY_NEVER)
-                dargs[i] = elab_coerce_to_any(e, dargs[i]);
-        }
         Expr *fnv = expr_new(e->arena, EX_VAR, fn_binding->type, call->span);
         fnv->as.var.binding = fn_binding;
-        Type any_t;
-        memset(&any_t, 0, sizeof(any_t));
-        any_t.kind = TY_ANY;
-        Expr *dc = expr_new(e->arena, EX_DYN_CALL, any_t, call->span);
-        dc->as.dyn_call_.fn     = fnv;
-        dc->as.dyn_call_.args   = dargs;
-        dc->as.dyn_call_.n_args = dn;
-        return elab_hoist_control_operands(e, dc);
+        return saffron_dyn_call_on(e, call, fnv);
     }
 
     if (fn_type.kind != TY_FN && fn_type.kind != TY_CONT) {
@@ -5920,6 +6013,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * `Cont<BodyT,ResetT>` = (cont BodyT ResetT), the resume value must have
          * type BodyT.  An untyped-arg cont (the one-arg `(cont R)` / bare `cont`
          * spellings, arg == TY_UNKNOWN) stays unchecked, as before. */
+        /* An `any`-typed continuation (the `: any` call/cc receiver) takes
+         * any value: widen rather than reject, exactly as an `any` parameter
+         * would. */
+        if (fn_type.as.cont.arg == TY_ANY && karg->type.kind != TY_ANY &&
+            karg->type.kind != TY_NEVER)
+            karg = elab_coerce_to_any(e, karg);
         if (fn_type.as.cont.arg != TY_UNKNOWN
             && karg->type.kind != TY_UNKNOWN
             && karg->type.kind != fn_type.as.cont.arg) {
@@ -5968,7 +6067,28 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * T != int (e.g. cstr), bit-cast the resume value into the int carrier on
          * the way in and bit-cast the int result back to T on the way out, so the
          * emitted C is clean (no -Wint-conversion). */
-        Expr *karg_c = call_wrap_reinterpret(e, karg, TY_INT, call->span);
+        Expr *karg_c;
+        if (karg->type.kind == TY_ANY) {
+            /* A box does not fit the int64 `result` slot: hand over a heap
+             * copy's address (__tur_escape_box_any), which the landing reads
+             * and frees.  Only an escape continuation can be `any`-typed here
+             * (the call/cc receiver rewrite is what mints one). */
+            const BuiltinSpec *bspec =
+                builtin_first_with_name(intern_cstr(e->st, "__tur_escape_box_any"));
+            if (!bspec) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "internal: escape box builtin missing");
+                return NULL;
+            }
+            Expr **xargs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+            xargs[0] = karg;
+            karg_c = expr_new(e->arena, EX_BUILTIN, TYPE_INT, call->span);
+            karg_c->as.builtin.spec = bspec;
+            karg_c->as.builtin.args = xargs;
+            karg_c->as.builtin.n = 1;
+        } else {
+            karg_c = call_wrap_reinterpret(e, karg, TY_INT, call->span);
+        }
         Expr **bargs = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
         bargs[0] = kvar;
         bargs[1] = karg_c;
@@ -5976,7 +6096,9 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         out->as.builtin.spec = rspec;
         out->as.builtin.args = bargs;
         out->as.builtin.n = 2;
-        if (res_kind != TY_INT)
+        /* An `any` result is not reinterpreted: the resume never returns, and
+         * the receiver's own `: any` return widens the int-typed call. */
+        if (res_kind != TY_INT && res_kind != TY_ANY)
             out = call_wrap_reinterpret(e, out, res_kind, call->span);
         return out;
     }
@@ -6032,6 +6154,16 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         for (uint32_t i = 0; i < n_required; i++) {
             call_args[i] = elab_form(e, call->as.list.items[1 + i]);
             if (!call_args[i]) return NULL;
+            /* saffron-dynamic-surface-pass (`& rest : any`): a variadic
+             * callee's FIXED parameters get none of the fixed-arity path's
+             * coercions, so an unannotated (`any`) parameter of a Saffron
+             * variadic defn received a bare int and cc rejected the call
+             * (`incompatible type for argument 1`).  Widen exactly as the
+             * fixed-arity `A <: any` rule does. */
+            if (i < fn_type.as.fn.arity && fn_type.as.fn.arg_kinds &&
+                fn_type.as.fn.arg_kinds[i] == TY_ANY &&
+                call_args[i]->type.kind != TY_ANY)
+                call_args[i] = elab_coerce_to_any(e, call_args[i]);
         }
         /* Build cons-list expression for rest args */
         Expr *rest_expr;
@@ -6046,7 +6178,50 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             (fn_type.as.fn.rest_full_type &&
              fn_type.as.fn.rest_full_type->kind == TY_TYVAR)
                 ? fn_type.as.fn.rest_full_type->as.tyvar_.name : NULL;
-        if (n_rest == 0) {
+        /* saffron-dynamic-surface-pass (`& rest : any`): the rest list of a
+         * `: any` rest is the stdlib `(Cons any)` monomorph (see the rest
+         * binding in elab_fns.c), not the int64 `__tur_cons_of` cell -- an
+         * `any` is a two-word tagged box and the cell's head slot is one
+         * word; before this the check below rejected `(f 1 2 3)` outright
+         * and an already-`any` argument compiled to `aggregate value used
+         * where an integer was expected`.  Build the chain as the source
+         * would: `(make-struct Cons (:: e0 any) (make-struct Cons (:: e1
+         * any) ... (:: 0 (Cons any))))`, and elaborate THAT, so every
+         * element takes the ordinary widen and both back ends build the
+         * same cell they build for `(list 1 "two" 7.1)`. */
+        bool rest_any = fn_type.as.fn.rest_kind == TY_ANY &&
+                        !(fn_type.as.fn.rest_full_type &&
+                          fn_type.as.fn.rest_full_type->kind != TY_ANY);
+        if (rest_any) {
+            Arena *fa = e->arena;
+            Span sp = call->span;
+            const Symbol *cons_sym = intern_cstr(e->st, "Cons");
+            const Symbol *any_sym  = intern_cstr(e->st, "any");
+            Form **ty_items = (Form **)arena_alloc(fa, 2 * sizeof(Form *));
+            ty_items[0] = form_sym(fa, sp, cons_sym);
+            ty_items[1] = form_sym(fa, sp, any_sym);
+            Form *cons_any_ty = form_list(fa, sp, ty_items, 2);
+            Form **nil_items = (Form **)arena_alloc(fa, 3 * sizeof(Form *));
+            nil_items[0] = form_sym(fa, sp, e->sym_ascribe);
+            nil_items[1] = form_int(fa, sp, 0);
+            nil_items[2] = cons_any_ty;
+            Form *chain = form_list(fa, sp, nil_items, 3);
+            for (int32_t ri = (int32_t)n_rest - 1; ri >= 0; ri--) {
+                Form *item = call->as.list.items[1 + n_required + ri];
+                Form **asc = (Form **)arena_alloc(fa, 3 * sizeof(Form *));
+                asc[0] = form_sym(fa, item->span, e->sym_ascribe);
+                asc[1] = item;
+                asc[2] = form_sym(fa, item->span, any_sym);
+                Form **ms = (Form **)arena_alloc(fa, 4 * sizeof(Form *));
+                ms[0] = form_sym(fa, item->span, e->sym_make_struct);
+                ms[1] = form_sym(fa, item->span, cons_sym);
+                ms[2] = form_list(fa, item->span, asc, 3);
+                ms[3] = chain;
+                chain = form_list(fa, item->span, ms, 4);
+            }
+            rest_expr = elab_form(e, chain);
+            if (!rest_expr) return NULL;
+        } else if (n_rest == 0) {
             rest_expr = expr_new(e->arena, EX_INT_LIT, TYPE_INT, call->span);
             rest_expr->as.i = 0;  /* nil = 0 */
         } else {
@@ -6688,6 +6863,58 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             } else if (expected_full && call_type_has_named_tyvar(expected_full)) {
                 arg_ok = call_collect_type_bindings(expected_full, args[i]->type,
                                                     type_bindings, &n_type_bindings);
+                /* nullary-generic-call-under-tyvar-expectation: `(wrap 3
+                 * (box-nil))` against `[v : A b : (Box A)]`, or `(make-struct
+                 * W 8 (none))` against `(opt (Option A))`.  Arg 1 bound
+                 * `A := int`; the collect above then compares that binding
+                 * with the argument's OWN open tyvar (`(Box 'A)` from the
+                 * nullary call's result) and reports `expected (Box A), got
+                 * (Box A)`.  The argument is a return-only polymorphic call
+                 * result -- exactly W2's population below -- so instantiate
+                 * the parameter with the bindings the siblings produced and,
+                 * when that grounds it, unify the argument's tyvar against it
+                 * the way W2 does for a concrete parameter: record the
+                 * substitution on the nullary call so emit monomorphizes it
+                 * (`none__spec__Option__int`), and take the grounded type as
+                 * the argument's.  A parameter the siblings leave open keeps
+                 * the ordinary rejection. */
+                if (!arg_ok && expected_full->kind == TY_APP &&
+                    args[i]->type.kind == TY_APP &&
+                    ng_type_names_sig_tyvar(e, &args[i]->type)) {
+                    /* M7: the argument names the ENCLOSING body's abstract
+                     * tyvar (a recursive call's `(Cons A)`, an ascription to
+                     * it) -- not a fresh one.  It stays abstract: match it
+                     * against the instantiated parameter with the erased
+                     * carrier standing in for `A` (ng_erased_match), record
+                     * nothing, and never pin the call to a sibling's erased
+                     * `int`, which would monomorphize a generic body's
+                     * recursion at the wrong element type (a float list read
+                     * back int bits). */
+                    Type inst = call_instantiate_type(e, expected_full,
+                                                      type_bindings, n_type_bindings);
+                    if (ng_erased_match(e, &inst, &args[i]->type)) arg_ok = true;
+                } else if (!arg_ok && expected_full->kind == TY_APP &&
+                    args[i]->type.kind == TY_APP &&
+                    w2_arg_is_free_poly_call(args[i])) {
+                    Type inst = call_instantiate_type(e, expected_full,
+                                                      type_bindings, n_type_bindings);
+                    if (inst.kind == TY_APP && !call_type_has_named_tyvar(&inst)) {
+                        CallTypeBinding ngscratch[16];
+                        uint8_t ngn = 0;
+                        if (call_collect_type_bindings(&args[i]->type, inst,
+                                                       ngscratch, &ngn)) {
+                            if (ngn > 0 && !args[i]->as.call_.abi_bindings) {
+                                AbiTypeBinding *saved = (AbiTypeBinding *)arena_alloc(
+                                    e->arena, ngn * sizeof(AbiTypeBinding));
+                                for (uint8_t bi = 0; bi < ngn; bi++) saved[bi] = ngscratch[bi];
+                                args[i]->as.call_.abi_bindings   = saved;
+                                args[i]->as.call_.n_abi_bindings = ngn;
+                            }
+                            args[i]->type = inst;
+                            arg_ok = true;
+                        }
+                    }
+                }
             } else if (arg_ok && expected_arg_kind == TY_APP &&
                        args[i]->type.kind == TY_APP &&
                        expected_full && expected_full->kind == TY_APP) {
@@ -7304,6 +7531,18 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)
                     ? fn_type.as.fn.arg_full_types[fn_arg_idx4] : NULL;
                 if (ct) expected_ty = *ct;
+            } else if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+                /* self-typed-heap-parametric-field-unsupported: a parameter
+                 * whose KIND is the int64 carrier but whose full type names an
+                 * application or an ADT -- a `:heap` app field in a ctor
+                 * signature, `(next (Node A))` -- printed as `expected int,
+                 * got int` against an int argument: the two sides that failed
+                 * type_eq were spelled identically.  Prefer the full type. */
+                uint32_t fn_arg_idx5 = fn_binding->closure_fn_binding ? i + 1 : i;
+                Type *ct = (fn_arg_idx5 < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fn_arg_idx5] : NULL;
+                if (ct && (ct->kind == TY_APP || ct->kind == TY_ADT))
+                    expected_ty = *ct;
             }
             /* PH2.1: Build the type names into owned local buffers via
              * type_print rather than type_name. type_name returns a strdup-ed
@@ -8079,7 +8318,24 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     param_is_borrow = FN_ARG_FLAG(fn_type.as.fn, fn_borrow_idx, FA_BORROW);
             }
             if (!param_is_unique_mut && !arg_is_unique_mut && !param_is_borrow) {
-                binding_mark_moved(arg_b2, args[i]->span);
+                /* byvalue-recursive-adt-boxes-are-never-freed (Residue 1): a
+                 * by-value recursive ADT local passed to a callee whose mask
+                 * says it does not retain the parameter is LENT, not moved:
+                 * the static answer is the same (poisoned for later uses),
+                 * but ownership of the spine stays here, and this scope's
+                 * exit frees it.  Same guards as the frame-box rule beside
+                 * the `any` widen -- a direct, effect-free, non-closure
+                 * callee (the mask is indexed by the callee's own parameter
+                 * vector, and a closure's env parameter shifts it by one). */
+                bool lend = fn_binding && !fn_binding->closure_fn_binding &&
+                            i < 32 && fn_type.kind == TY_FN &&
+                            (fn_binding->nonretain_ptr_param_mask & (1u << i)) &&
+                            effect_row_is_empty(fn_type.as.fn.effect_row) &&
+                            elab_byval_localowned_adt(arg_b2->type) != NULL;
+                if (lend)
+                    binding_mark_lent(arg_b2, args[i]->span);
+                else
+                    binding_mark_moved(arg_b2, args[i]->span);
             }
         }
 

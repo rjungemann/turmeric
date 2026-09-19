@@ -1,0 +1,76 @@
+;; byvalue-recursive-adt-boxes-are-never-freed, Residue 1: a by-value
+;; recursive local HANDED TO A CALLEE.
+;;
+;; byval-recursive-adt-spine-drop pins the inline case -- a local consumed by
+;; a `match` in its own scope is freed at scope exit.  Passing it to a helper
+;; instead marked it moved, ownership went to the callee, and nothing there
+;; ever discharged it: `(println (llen xs))` leaked the whole spine, one box
+;; per link.  That is the common shape, and it is what this fixture pins.
+;;
+;; The fix is a borrow/own distinction at the call, not a callee-side free.
+;; A callee-side free is a double free by construction: a match binder ALIASES
+;; the parent's spine (`t` in `(match xs (Cons h t) ...)` carries the next
+;; box's pointer), `llen` passes it to its own recursive call, and if each
+;; frame freed its parameter the inner frames would free sub-chains the outer
+;; one also owns.  Instead the callee is asked -- with the same inference that
+;; already answers it for `any`, `cstr` and Option/Result parameters -- whether
+;; its body RETAINS the parameter: every match binder and field read rooted at
+;; it is tracked as an alias, an alias reaching a store, a return, a let, a
+;; closure or a callee not itself proven non-retaining is retention, and only a
+;; non-pointer scalar result is admitted (an aggregate result could carry a
+;; sub-spine back out).  The self-call is a greatest fixed point: `llen` is
+;; assumed non-retaining for its own recursive hand-off and the assumption is
+;; kept only if nothing else in the body contradicts it.  A caller passing a
+;; local to such a parameter LENDS it -- the static answer is unchanged (the
+;; binding is poisoned, a later use is still TUR-E0201) -- and frees the spine
+;; at its own scope exit, exactly as the inline case already did.
+;;
+;; The shapes here, each measured to allocate one box per link:
+;;   - llen / lsum: lent to a recursive walker (the self-call hand-off).
+;;   - lsum's `h` is an int binder: a scalar cannot point into the spine, so it
+;;     is not tracked, and `(+ h (lsum t))` is admitted.
+;;   - depth2: a lend that chains -- the callee lends its parameter on to
+;;     another proven non-retaining callee, and its own bit follows.  (One
+;;     use only: a lent binding is still poisoned for the move checker, so
+;;     `(+ (llen xs) (lsum xs))` is TUR-E0005 exactly as before.)
+;;   - keep: the CONTROL.  Its result is the ADT, so it is refused; the caller
+;;     moves `xs` into it for real, and the result `ys` -- a fresh local -- is
+;;     what gets lent and freed.  One owner, one free.
+;;   - the inline-match shape from the sibling fixture, with the binder `t`
+;;     lent to llen: the binder is not a let-local, so only `xs` is freed.
+;;
+;; requires.leak-check: the assertion is about allocation.  The printed values
+;; are the same either way, which is exactly why this shape leaked unnoticed.
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn llen [xs : Lst] : int
+  (match xs
+    (Cons h t) (+ 1 (llen t))
+    (Nil)      0))
+
+(defn lsum [xs : Lst] : int
+  (match xs
+    (Cons h t) (+ h (lsum t))
+    (Nil)      0))
+
+(defn depth2 [xs : Lst] : int
+  (+ 1 (llen xs)))
+
+(defn keep [xs : Lst] : Lst xs)
+
+(defn main [] : int
+  (let [xs (Cons 1 (Cons 2 (Cons 3 (Nil))))]
+    (println (llen xs)))
+  (let [ys (Cons 4 (Cons 5 (Nil)))]
+    (println (lsum ys)))
+  (let [zs (Cons 10 (Cons 20 (Cons 30 (Cons 40 (Nil)))))]
+    (println (depth2 zs)))
+  (let [ws (Cons 7 (Cons 8 (Nil)))
+        ks (keep ws)]
+    (println (llen ks)))
+  (let [vs (Cons 1 (Cons 2 (Cons 3 (Nil))))]
+    (println (match vs
+               (Cons h t) (+ h (llen t))
+               (Nil)      0)))
+  0)

@@ -2,17 +2,24 @@
 ;;;
 ;;; Typed singly-linked list. List[A] = Option[Cons[A]].
 ;;; At runtime, nil is 0 and a cons cell specializes its head slot for
-;;; concrete A while the tail link remains the legacy int64_t carrier.
+;;; concrete A; the tail link is the recursive occurrence `(Cons A)` -- a
+;;; typed pointer to the next cell, NULL for the end -- so `.tail` hands back
+;;; a `(Cons A)` and a walk needs no per-step ascription.  The carrier-level
+;;; helpers (`list-head`, `list-tail`, `list-length`, ...) still read the same
+;;; two-word cell through the `:int` carrier, which a `(Cons A)` coerces to in
+;;; argument position.
 ;;;
 ;;; Since: Phase TC1-B
 ;; Phase TC1-B: Typed List[A]
 ;; Typed singly-linked list. List[A] = Option[Cons[A]].
-;; At runtime, nil is 0 and a cons cell specializes head for concrete A while
-;; the tail link remains the legacy int64_t carrier.
+;; At runtime, nil is 0 and a cons cell specializes head for concrete A; the
+;; tail link is the typed pointer `(Cons A)` (M7 of the Saffron surface pass:
+;; an erased `:int` tail lost the element type one step in, so a `(Cons any)`
+;; could not be walked through an `any`).
 ;;; Cons -- parameterized cons cell with typed head and tail.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Cons :heap [A] (head A) (tail :int))
+(defstruct Cons :heap [A] (head A) (tail (Cons A)))
 ;;; tcons -- prepend a value to a typed list.
 ;;;
 ;;; Element-generic: the head slot specializes to A's concrete C layout, so a
@@ -23,7 +30,8 @@
 ;;;
 ;;; Parameters:
 ;;;   h -- head element of type A
-;;;   t -- tail list (another typed list or tnil)
+;;;   t -- tail list as the :int carrier (another typed list, which coerces
+;;;        to the carrier, a carrier-level list, or tnil)
 ;;;
 ;;; Returns:
 ;;;   A new (Cons A) cell with h at the front. The head slot is laid out as A's
@@ -31,7 +39,9 @@
 ;;;   `tcons-of`. A (Cons A) carrier coerces to the :int carrier in argument
 ;;;   position, so the result still composes with the list-head/list-tail
 ;;;   walkers and the carrier-level list helpers (nest (tcons x (tcons ...))
-;;;   just like before).
+;;;   just like before).  This is the carrier-level constructor -- the tail
+;;;   arrives as the `:int` word the carrier helpers produce and is ascribed
+;;;   to `(Cons A)` here; `tcons-of` is the typed-tail twin.
 ;;;
 ;;; Example:
 ;;;   (tcons 1 (tcons 2 (tnil)))    ; => (Cons int)    [1, 2]
@@ -39,39 +49,48 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn tcons [A] [h : A t : int] : (Cons A) (make-struct Cons :head h :tail t))
+(defn tcons [A] [h : A t : int] : (Cons A)
+  (make-struct Cons :head h :tail (:: t (Cons A))))
 ;;; tcons-of -- typed Cons[A] constructor with a typed head slot.
 ;;;
 ;;; Parameters:
 ;;;   h -- head element of type A
-;;;   t -- tail link (carrier :int; pass another cell's pointer or 0 for tnil)
+;;;   t -- tail link, a (Cons A) (another cell, or (tnil) for the end)
 ;;;
 ;;; Returns:
 ;;;   A (Cons A) value whose head field is laid out as the concrete C type
-;;;   for A (e.g. `double` for `:float`), with no user-side bit-cast.
+;;;   for A (e.g. `double` for `:float`), with no user-side bit-cast, and
+;;;   whose tail is the typed link.
 ;;;
 ;;; Example:
-;;;   (let [c (tcons-of 1.5 0)]
+;;;   (let [c (tcons-of 1.5 (tnil))]
 ;;;     (.head c))  ; => 1.5, read as a `double` field
 ;;;
 ;;; Since: Phase TS3
 
-(defn tcons-of [A] [h :A t :int] : (Cons A) (make-struct Cons :head h :tail t))
+(defn tcons-of [A] [h :A t : (Cons A)] : (Cons A)
+  (make-struct Cons :head h :tail t))
 ;;; tnil -- return an empty typed list.
 ;;;
 ;;; Returns:
-;;;   0, representing the empty List[A].
+;;;   The empty (Cons A): the NULL link.  Its element type is taken from the
+;;;   context -- `(tcons-of 1 (tnil))` pins A to int -- and it coerces to the
+;;;   `:int` carrier 0 wherever a carrier-level list is expected.
 ;;;
 ;;; Example:
 ;;;   (tnil)  ; => empty list
 ;;;
 ;;; Since: Phase TC1
 
-(defn tnil [] : int 0)
+(defn tnil [A] [] : (Cons A) (:: 0 (Cons A)))
 ;;; tnil? -- check whether a typed list is empty.
 ;;;
+;;; Takes the typed list, so a Saffron `any` holding a cons list seams into
+;;; it (the target grounds to `(Cons any)`, which is what the box carries).
+;;; For a carrier-level `:int` list use `null?`, its `:int`-taking twin.
+;;;
 ;;; Parameters:
-;;;   l -- List[A]
+;;;   l -- List[A], a (Cons A)
 ;;;
 ;;; Returns:
 ;;;   true if l is the empty list, false otherwise.
@@ -82,7 +101,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn tnil? [l : int] : bool (= l 0))
+(defn tnil? [A] [l : (Cons A)] : bool (= (:: l :int) 0))
 ;;; thead -- return the head element of a non-empty typed list.
 ;;;
 ;;; Parameters:
@@ -98,21 +117,23 @@
 ;;; Since: Phase TC1
 
 (defn thead [A] [l : (Cons A)] :A (.head l))
-;;; ttail -- return the tail carrier of a non-empty typed list.
+;;; ttail -- return the tail of a non-empty typed list.
 ;;;
 ;;; Parameters:
 ;;;   l -- Cons[A]
 ;;;
 ;;; Returns:
-;;;   The tail list carrier.
+;;;   The tail list, a (Cons A) -- the NULL link (carrier 0) after the last
+;;;   cell.  It coerces to the :int carrier in argument position, so
+;;;   `(tnil? (ttail l))` and the carrier-level helpers still take it.
 ;;;
 ;;; Example:
 ;;;   (let [l (:: (make-struct Cons 1 (tnil)) (Cons int))]
-;;;     (ttail l))  ; => 0
+;;;     (tnil? (ttail l)))  ; => true
 ;;;
 ;;; Since: Phase TC1
 
-(defn ttail [A] [l : (Cons A)] :int (.tail l))
+(defn ttail [A] [l : (Cons A)] : (Cons A) (.tail l))
 ;;; tlength -- count the elements of a typed (Cons A) list.
 ;;;
 ;;; The element-aware sibling of `list-length`. Where `list-length` walks the
@@ -133,7 +154,7 @@
 ;;; Since: Phase G4 (carrier<->concrete ABI crossing audit)
 
 (defn tlength [A] [xs : (Cons A)] : int
-  (if (= (:: xs :int) 0) 0 (+ 1 (tlength (:: (.tail xs) (Cons A))))))
+  (if (= (:: xs :int) 0) 0 (+ 1 (tlength (.tail xs)))))
 ;;; list-length -- count the number of elements in a typed list.
 ;;;
 ;;; Parameters:
@@ -176,9 +197,9 @@
 ;;; Since: Phase TC1
 
 (defn list-eq? [l1 : int l2 : int ^fat cmp-fn : (fn [int int] bool)] : bool
-  (if (tnil? l1)
-    (tnil? l2)
-    (if (tnil? l2)
+  (if (null? l1)
+    (null? l2)
+    (if (null? l2)
       false
       (if (cmp-fn (list-head l1) (list-head l2))
         (list-eq? (list-tail l1) (list-tail l2) cmp-fn)
@@ -210,9 +231,7 @@
   (if (eq? (.head c1) (.head c2))
     (let [t1 (.tail c1)
           t2 (.tail c2)]
-      (if (= t1 0)
-        (= t2 0)
-        (if (= t2 0) false (cons-eq-go (:: t1 (Cons A)) (:: t2 (Cons A))))))
+      (if (tnil? t1) (tnil? t2) (if (tnil? t2) false (cons-eq-go t1 t2))))
     false))
 ;;; Eq [Cons] -- element-wise equality using the element type's Eq instance.
 ;; TC1-9: Phase PTC4 -- constrained Eq instance for List[A] (Cons cells).
@@ -244,7 +263,7 @@
 ;;; Since: Phase TS5
 
 (defn __cons-fmap [cell : int ^fat f] : int
-  (if (tnil? cell)
+  (if (null? cell)
     0
     ;; tcons returns (Cons A); bind it to an :int local so the if's two branches
     ;; share the carrier type and the emitted C stays -Wint-conversion-clean.
@@ -381,7 +400,7 @@
 ;;; Since: List literal macro
 
 (defn list-concat [l1 : int l2 : int] : int
-  (if (tnil? l1)
+  (if (null? l1)
     l2
     ;; tcons returns (Cons A); bind it to an :int local so both if branches
     ;; share the carrier type and the emitted C stays -Wint-conversion-clean.
@@ -418,10 +437,10 @@
 ;;; Since: Phase TC1
 
 (defn cdr [l : int] : int (list-tail l))
-;;; null? -- test a cons-built list for emptiness (alias for tnil?).
+;;; null? -- test a cons-built list for emptiness (the :int-taking twin of tnil?).
 ;;;
 ;;; Parameters:
-;;;   l -- a carrier-level list
+;;;   l -- a carrier-level list (a (Cons A) coerces to it in argument position)
 ;;;
 ;;; Returns:
 ;;;   true when l is the empty list, false otherwise.
@@ -432,7 +451,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn null? [l : int] : bool (tnil? l))
+(defn null? [l : int] : bool (= l 0))
 ;;; length -- count the elements of a cons-built list (alias for list-length).
 ;;;
 ;;; Parameters:

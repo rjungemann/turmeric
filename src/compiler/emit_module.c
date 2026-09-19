@@ -8377,7 +8377,18 @@ void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_par
     if (!cname || idx >= n_params) return;
     EmitSigEntry *e = emit_sig_find_or_add(cname, n_params);
     if (!e || e->n_params != n_params || !e->param_ctypes) return;
-    free(e->param_ctypes[idx]);
+    /* self-typed-heap-parametric-field-unsupported: same discipline as the
+     * return type below.  A ctor-call emitter reads a param ctype through
+     * emit_sig_lookup_param_ctype and then spells the ARGUMENT, and spelling
+     * a `(Node int)` argument re-registers the app (type_register_adt_app
+     * re-records the ctor signatures on every lookup), which used to free the
+     * string the caller was still holding: ASan heap-use-after-free in
+     * emit_value_dispatch for `(defn push [A] [v : A n : (Node A)] : (Node A)
+     * (make-struct Node v n))`.  Re-recording an equal type keeps the
+     * handed-out pointer live; a genuinely new spelling retires the old one. */
+    if (e->param_ctypes[idx] && ctype && strcmp(e->param_ctypes[idx], ctype) == 0)
+        return;
+    emit_sig_retire(e->param_ctypes[idx]);
     e->param_ctypes[idx] = ctype ? strdup(ctype) : NULL;
 }
 
@@ -15409,6 +15420,36 @@ void emit_rt_split_source(Buf *out) {
  * may live in a module-level binding.  That was a red herring: linearity is not
  * consulted anywhere here, and a plain non-linear `(defopaque Handle :int)`
  * global failed identically. */
+/* global-mut-cell-of-byvalue-adt-or-fn-emits-bad-c (repro 2): a global whose
+ * value is a THIN function (`(def g-fn (fn [x : int] : int ...))` -- a
+ * top-level lambda can capture nothing but globals, so it is a bare code
+ * pointer) is declared as a C function pointer, `static R (*g)(A...);`, and
+ * its initializer is cast to that type -- the `let` binder's spelling for the
+ * same shape.  Spelled `int64_t`, every call site that names the binding
+ * (`g()`, and the specialised `g(x)` a typed HOF callback emits) was a call
+ * through a non-function, and the first such call's implicit declaration made
+ * the later `static int64_t g;` a redeclaration.  A boxed / fat / poly / C-ABI
+ * fn value keeps the carrier spelling, as it does for a local.  Returns true
+ * and fills the result C name and the argument list when the spelling
+ * applies; the caller frees `*args_out`. */
+bool emit_global_def_thin_fnptr(const Binding *b, const char **ret_out,
+                                char **args_out) {
+    if (!b || b->type.kind != TY_FN || b->type.as.fn.boxed || b->is_fat ||
+        b->is_poly_fn || b->type.as.fn.cfnptr)
+        return false;
+    *ret_out = type_c_name(emit_type_from_kind(b->type.as.fn.result_kind));
+    Buf argbuf; buf_init(&argbuf);
+    for (uint32_t j = 0; j < b->type.as.fn.arity; j++) {
+        if (j > 0) buf_puts(&argbuf, ", ");
+        buf_puts(&argbuf, type_c_name(emit_type_from_kind(b->type.as.fn.arg_kinds[j])));
+    }
+    buf_putc(&argbuf, '\0');
+    *args_out = strdup(argbuf.data);
+    buf_free(&argbuf);
+    if (!*args_out) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return true;
+}
+
 static bool def_is_opaque_type_decl(const Expr *e) {
     return e && e->kind == EX_DEF &&
            e->as.def_.init == NULL &&
@@ -15697,6 +15738,25 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
         }
     }
     free((void *)refs);
+    /* global-mut-cell-of-byvalue-adt-or-fn-emits-bad-c (repro 2): a thin
+     * function-valued global is forward-declared UNCONDITIONALLY.  It is
+     * called by name, and an ABI-specialised clone of a typed HOF that takes
+     * it as a callback is emitted in an early band that does not follow item
+     * order -- so the position test above cannot see the reference, and the
+     * first call became an implicit `int()` declaration that made the real
+     * declaration below a redeclaration.  No snapshot moves: no fixture had a
+     * thin fn global before this, since none compiled. */
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *d = items[i];
+        if (d->kind != EX_DEF || !d->as.def_.binding) continue;
+        const Binding *db = d->as.def_.binding;
+        if (db->is_thread_local || def_is_opaque_type_decl(d)) continue;
+        const char *fr = NULL; char *fa = NULL;
+        if (emit_global_def_thin_fnptr(db, &fr, &fa)) {
+            free(fa);
+            gdef_ref_push(&need, &n_need, &cap_need, db);
+        }
+    }
     if (n_need == 0) { free((void *)need); return; }
 
     buf_puts(out, "/* Forward declarations for globals read by an earlier-emitted item\n"
@@ -15704,7 +15764,20 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
                   " * `def` whose storage is declared far below it). */\n");
     for (uint32_t i = 0; i < n_need; i++) {
         char *bn = name_for_binding(ctx, (Binding *)need[i]);
-        buf_printf(out, "static %s %s;\n", type_c_name(need[i]->type), bn);
+        const char *fr = NULL; char *fa = NULL;
+        if (emit_global_def_thin_fnptr(need[i], &fr, &fa)) {
+            buf_printf(out, "static %s (*%s)(%s);\n", fr, bn, fa);
+            /* jit-fallback (global-fn-value-def): a call through this pointer
+             * hoists into a temp whose C type the hoist looks up BY CALLEE
+             * NAME in the signature table; a global has no forward-declared
+             * signature there, so the temp fell to `__auto_type`, which is
+             * GNU-only and c2mir cannot parse -- the whole program lost the
+             * engine.  Record the pointer's result type under its name. */
+            emit_sig_record_ret_ctype(bn, need[i]->type.as.fn.arity, fr);
+            free(fa);
+        } else {
+            buf_printf(out, "static %s %s;\n", type_c_name(need[i]->type), bn);
+        }
         free(bn);
     }
     buf_putc(out, '\n');
@@ -16499,6 +16572,27 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 buf_printf(&file, "    b->i_%s = 1; b->v_%s = v;\n}\n\n", bn, bn);
                 free(bn);
                 continue;
+            }
+            {
+                const char *fp_ret = NULL; char *fp_args = NULL;
+                if (emit_global_def_thin_fnptr(e->as.def_.binding, &fp_ret, &fp_args)) {
+                    buf_printf(&file, "static %s (*%s)(%s);\n", fp_ret, bn, fp_args);
+                    /* jit-fallback: see the forward-declaration pass above --
+                     * the hoist temp of a call through this pointer needs the
+                     * result type on record under the global's name. */
+                    emit_sig_record_ret_ctype(bn, e->as.def_.binding->type.as.fn.arity,
+                                              fp_ret);
+                    if (e->as.def_.init) {
+                        char *iv = emit_value(&ctx, &def_init_body, e->as.def_.init);
+                        indent_buf(&def_init_body, ctx.indent);
+                        buf_printf(&def_init_body, "%s = (%s (*)(%s))(intptr_t)(%s);\n",
+                                   bn, fp_ret, fp_args, iv);
+                        free(iv);
+                    }
+                    free(fp_args);
+                    free(bn);
+                    continue;
+                }
             }
             buf_printf(&file, "static %s %s;\n",
                        type_c_name(e->as.def_.binding->type), bn);
@@ -18709,6 +18803,23 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
              * compilation mode so other modules can reference them. */
             bool def_needs_static = !(separate_compilation &&
                                       e->as.def_.binding->is_exported);
+            {
+                const char *fp_ret = NULL; char *fp_args = NULL;
+                if (emit_global_def_thin_fnptr(e->as.def_.binding, &fp_ret, &fp_args)) {
+                    buf_printf(&file, "%s%s (*%s)(%s);\n",
+                               def_needs_static ? "static " : "", fp_ret, bn, fp_args);
+                    if (e->as.def_.init) {
+                        char *iv = emit_value(&ctx, &body, e->as.def_.init);
+                        indent_buf(&body, ctx.indent);
+                        buf_printf(&body, "%s = (%s (*)(%s))(intptr_t)(%s);\n",
+                                   bn, fp_ret, fp_args, iv);
+                        free(iv);
+                    }
+                    free(fp_args);
+                    free(bn);
+                    continue;
+                }
+            }
             buf_printf(&file, "%s%s %s;\n",
                        def_needs_static ? "static " : "",
                        type_c_name(e->as.def_.binding->type), bn);

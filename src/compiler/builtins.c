@@ -44,6 +44,19 @@ static BuiltinSpec table_[] = {
     { "=",    NULL, 2, 2, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_BIN_INFIX, "==" },
     { "not=", NULL, 2, 2, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_BIN_INFIX, "!=" },
 
+    /* Comparison — Sym.  saffron-dynamic-surface-pass (low): `(= k :a)` on a
+     * Sym-typed `k` was TUR-E0006 while the same comparison on two `any`-held
+     * Syms answered pointer identity, so a keyword could be compared only for
+     * as long as the type checker did NOT know it was one.  A Sym is an
+     * interned record pointer -- identity IS its equality (`Eq[Sym]` /
+     * `sym=?` say the same) -- so, unlike `cstr` (where `==` on the pointer
+     * would silently differ from `cstr-eq?`), a builtin row changes nothing
+     * about what equality means and only adds the spelling.  Compiled: a C
+     * pointer compare.  Interpreted: a Sym rides the int carrier and the
+     * BS_BIN_INFIX fallback compares that word. */
+    { "=",    NULL, 2, 2, {.kind=TY_SYM}, {.kind=TY_BOOL}, BS_BIN_INFIX, "==" },
+    { "not=", NULL, 2, 2, {.kind=TY_SYM}, {.kind=TY_BOOL}, BS_BIN_INFIX, "!=" },
+
     /* Logical. */
     { "and", NULL, 2, -1, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_AND_SC,      NULL },
     { "or",  NULL, 2, -1, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_OR_SC,       NULL },
@@ -203,6 +216,11 @@ static BuiltinSpec table_[] = {
      * (call/cc f)/(escape f).  k is the int64_t landing handle f received;
      * invoking it returns v at the call/cc site (one-shot, upward escape). */
     { "tur_escape_resume", NULL, 2, 2, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "tur_escape_resume" },
+    /* saffron-dynamic-surface-pass (low, call/cc `: any` receiver): the resume
+     * value of an `any`-typed escape continuation crosses the longjmp as a
+     * heap copy of the 16-byte box, delivered as its address in the int64
+     * `result` slot; the landing reads and frees it.  Interpreter: identity. */
+    { "__tur_escape_box_any", NULL, 1, 1, {.kind=TY_ANY}, {.kind=TY_INT}, BS_FUNC_CALL, "__tur_escape_box_any" },
     /* cps-transform-plan (CPS10 / CPS5.4): serializable continuations captured
      * by (serial-shift f v) on the DK machine.  The handle f receives is a DK
      * chain (int64); resume runs it, serialize marshals it to a length-prefixed

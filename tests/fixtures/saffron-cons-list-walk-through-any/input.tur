@@ -1,0 +1,37 @@
+#lang saffron
+;; saffron-dynamic-surface-pass M7: walking a cons list through an `any`.
+;;
+;; `Cons` is `(defstruct Cons :heap [A] (head A) (tail (Cons A)))` now -- the
+;; tail is the recursive occurrence, a typed pointer, not an erased `:int` --
+;; so `.tail` hands back a `(Cons A)` and the element type survives each
+;; step.  Three reads that used to fail:
+;;
+;; - static: `(.head (.tail l))` on a `(Cons any)` binder needed
+;;   `(:: (.tail l) (Cons any))` in between (saffron-cons-list);
+;; - dynamic: `.tail` through an unannotated (`any`) parameter read back an
+;;   int-tagged box, so the next `.head` panicked (`no field '.head' on a
+;;   Cons value` once the tag was right but stamped with the OPEN `(Cons A)`);
+;; - `(tnil? l)` on an `any` holding a list was `cast: any holds Cons, not
+;;   int` -- `tnil?` now takes the typed list, so the seam grounds its
+;;   target to `(Cons any)`, which is what the box carries.
+;;
+;; No requires.leak-check: cons cells are `:heap` and never freed
+;; (saffron-cons-list records the same).
+;; 7.1 rather than 7.0: a truncating path through the widen would print 7.
+
+(defn second-of [l] (.head (.tail l)))
+
+(defn walk [l]
+  (if (tnil? l)
+    0
+    (do (println (type-of (.head l)))
+        (walk (.tail l)))))
+
+(defn main [] : int
+  (let [l (list 1 "two" 7.1)]
+    (println (type-of (.head l)))
+    (println (type-of (.head (.tail l))))
+    (println (cast (.head (.tail (.tail l))) float))
+    (println (second-of l))
+    (walk l))
+  0)

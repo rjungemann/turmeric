@@ -150,6 +150,20 @@ struct Binding {
     bool          returns_boxed_closure;
     /* Phase 5: Move semantics - whether this ref binding has been moved */
     bool          is_moved;
+    /* byvalue-recursive-adt-boxes-are-never-freed (Residue 1): the two ways
+     * `is_moved` gets set, kept apart because the scope-exit spine drop needs
+     * the distinction and the move CHECKER does not.  `moved_owning` -- some
+     * use handed ownership on for real (a call that may retain, a let
+     * rebinding, a return).  `lent_to_nonretaining` -- some use passed the
+     * value to a callee whose inferred mask says it neither keeps a pointer
+     * into it nor can hand one back, so ownership stayed here.  Both are
+     * sticky (never rolled back with the per-branch move-state snapshots): a
+     * lend in one arm and a real move in the other must read as moved-for-
+     * real, and that is what "sticky owning" gives.  The static rule is
+     * unchanged -- a lent value is still `is_moved`, so a later use is still
+     * TUR-E0201; only the drop decision reads these. */
+    bool          moved_owning;
+    bool          lent_to_nonretaining;
     /* local-struct-drop (fn-field): set by the elaborator's byvalue-struct-field
      * drop pass when this let-bound by-value struct local (a) passes the same
      * moved/consumed/escape guards that admit an rc/ref field auto-drop and (b)

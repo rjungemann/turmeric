@@ -1,0 +1,19 @@
+#lang saffron
+; saffron-dynamic-surface-pass (low): `(fn [] :kw)` was "fn: missing body" --
+; a keyword literal in body position was read as a return annotation (`: kw`)
+; with nothing after it. The same held for `(defn k [] :kw)`. A return
+; annotation with nothing after it is ALWAYS "missing body", so reading a
+; trailing keyword as the body can only turn an error into the program that
+; was written; an annotation followed by a body (`(fn [] : any :kw)`) is
+; unchanged.
+;
+; Retires the fuzzer's `L-fn-keyword-body` KNOWN row and its known-probe.
+
+(defn call0 [f] (f))
+(defn k [] :kw)
+(defn main [] : int
+  (println (type-of (call0 (fn [] :kw))))
+  (println (type-of (k)))
+  (println (= (k) :kw))
+  (println (type-of ((fn [] : any :other))))
+  0)

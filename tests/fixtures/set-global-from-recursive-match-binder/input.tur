@@ -1,0 +1,32 @@
+;; global-mut-cell-of-byvalue-adt-or-fn-emits-bad-c (repro 1): storing a match
+;; binder of a by-value recursive ADT into a `^mut` global emitted
+;;     g_hold = t;   /* incompatible types: 'tur_adt_Lst' from 'const tur_adt_Lst *' */
+;; A match arm binds a recursive-field link as a POINTER into the scrutinee's
+;; box (the SR4 borrow) while the global is the aggregate by value; the `set!`
+;; emitter copied the name without the deref every by-value read site applies.
+;; It now derefs, as the `let` binder does for the same initializer shape.
+;;
+;; This program is also the retaining-callee CONTROL for the ownership
+;; inference (byval-recursive-adt-boxes-are-never-freed, Residue 1): `stash`
+;; keeps `t` in a global, so the walk must NOT stamp it non-retaining, the
+;; caller must move `xs` into it rather than lend it, and reading the stashed
+;; tail afterwards -- the second line -- must not touch freed memory.
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+(def ^mut g-hold (Nil))
+
+(defn stash [xs : Lst] : int
+  (match xs
+    (Cons h t) (do (set! g-hold t) h)
+    (Nil)      0))
+
+(defn llen [xs : Lst] : int
+  (match xs
+    (Cons h t) (+ 1 (llen t))
+    (Nil)      0))
+
+(defn main [] : int
+  (let [xs (Cons 1 (Cons 2 (Cons 3 (Nil))))]
+    (println (stash xs)))
+  (println (llen g-hold))
+  0)

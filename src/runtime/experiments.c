@@ -49,8 +49,9 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * The name moves to GRADUATED[] below (a lingering --enable is a
      * TUR-W0063 no-op).  See docs/archive/sr3-option-niche-plan.md. */
     /* defstruct-as-defadt GRADUATED 2026-06-28 -- a `defstruct` now lowers to a
-     * single-variant record `defadt` unconditionally (always-on; the gate lives
-     * in defstruct_lowers_to_adt, elab_structs.c).  See
+     * single-variant record `defadt` unconditionally (always-on; the former
+     * per-shape gate defstruct_lowers_to_adt is gone, elab_defstruct in
+     * elab_structs.c rewrites every form).  See
      * docs/archive/defstruct-as-defadt-plan.md. */
     /* B4 byvalue-recursive-carrier GRADUATED 2026-06-25 -- the recursive carrier
      * wrappers (Re/Expr, and wider products carrying an (F Self) field) now flow

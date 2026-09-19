@@ -1076,6 +1076,13 @@ bool emit_spec_result_mismatch(EmitCtx *ctx, Type call_result, Type spec_result)
  * Parameters at fn entry, and the match binder that borrows a wide boxed
  * recursive field (emit_expr.c B3) rather than copying the node out. */
 void emit_pbp_push(EmitCtx *ctx, Binding *b);
+/* A global whose value is a THIN function (a top-level lambda) is declared as
+ * a C function pointer `R (*g)(A...)`; true and the spelling's parts when the
+ * binding is one (caller frees *args_out).  emit_module.c. */
+bool emit_global_def_thin_fnptr(const Binding *b, const char **ret_out, char **args_out);
+/* True when `e` is a bare read of a pass-by-pointer binding (a `const T *`
+ * parameter or match binder registered by emit_pbp_push).  emit_expr.c. */
+bool emit_expr_is_pbp_param(EmitCtx *ctx, const Expr *e);
 /* G2: the concrete instance-method FnDef a class-method call resolves to for a
  * given recovered dispatch type (e.g. `__inst_Enc_enc_Cons` for `(Cons int)`).
  * Defined in emit_core.c. */
@@ -1114,6 +1121,19 @@ bool sum_box_binding_escapes(const Expr *e, const Binding *b);
 bool sum_box_reader_name(const char *nm);
 bool sum_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry);
+/* byvalue-recursive-adt-boxes-are-never-freed (Residue 1): the same walk for
+ * a by-value recursive ADT parameter, in its alias-aware strict mode -- match
+ * binders and field reads rooted at the parameter are tracked as aliases of
+ * it, and a hand-off to a callee not proven non-retaining is an escape.  The
+ * caller admits only a non-pointer scalar result.  See emit_core.c. */
+bool localowned_param_is_nonretaining(const Expr *body, const Binding *p);
+/* The same walk for a LOCAL whose spine the scope frees at exit: true when no
+ * alias of `b` (a match binder, a field read) escapes `body` -- into a store,
+ * a closure, a let, a return, or a callee not proven non-retaining.
+ * `result_cannot_carry` is true when the scope's value is a non-pointer
+ * scalar. */
+bool localowned_binding_is_confined(const Expr *body, const Binding *b,
+                                    bool result_cannot_carry);
 /* The pending-drop bracket for a call at STATEMENT position (emit_stmt.c);
  * see emit_pending_drops_mark's comment in emit_expr.c. */
 void emit_pending_drops_mark(EmitCtx *ctx, uint32_t m[3]);

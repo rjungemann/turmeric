@@ -559,7 +559,7 @@
 ;;; re/union-acc -- internal: right-fold the rest onto acc, joining with "|".
 
 (defn re/union-acc [acc : cstr patterns : int] : cstr
-  (if (tnil? patterns)
+  (if (null? patterns)
     acc
     (let [p (list-head patterns)]
       (if (= p 0)
@@ -590,7 +590,7 @@
 ;;; Since: Phase RU1
 
 (defn re/union-patterns [patterns : int] : cstr
-  (if (tnil? patterns)
+  (if (null? patterns)
     (:: 0 cstr)
     (let [p0 (list-head patterns)]
       (if (= p0 0)

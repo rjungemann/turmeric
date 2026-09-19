@@ -1,0 +1,1 @@
+function 'Node' arg 2: expected (type-app Node tyvar 'A'), got int

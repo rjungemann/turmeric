@@ -1942,11 +1942,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
             /* CONV-S1 (defstruct-as-defadt): a defstruct lowers to a
              * single-variant record defadt, so pre-register an ADT stub (not a
              * struct stub) -- the later elab_defstruct rewrite to elab_defdata
-             * fills this stub exactly as a real defdata would.
-             * structdef-retirement DS-C: defstruct_lowers_to_adt is always true
-             * now (every field shape lowers or is rejected at the ADT field
-             * parser), so the former `else if (is_defstruct)` StructDef-stub
-             * branch was unreachable and is removed. */
+             * fills this stub exactly as a real defdata would.  The lowering is
+             * unconditional (every field shape lowers or is rejected at the
+             * ADT field parser), so there is no struct-stub branch. */
             AdtDef *stub = (AdtDef *)arena_alloc(arena, sizeof(AdtDef));
             memset(stub, 0, sizeof(*stub));
             stub->name = type_name->name;

@@ -289,10 +289,8 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
          * HRT (a rank-N argument must be a named function, not a field-read
          * expression), so a lowered forall field would be write-only; kept
          * rejected until HRT can instantiate a poly value from a field.  A
-         * defstruct with such a field takes the ADT path (defstruct_lowers_to_adt
-         * is true) and errors CLEANLY here instead of silently falling to the
-         * legacy StructDef path -- which is what makes the residual StructDef
-         * producer unreachable (the deletion precondition).  `exists`, `fn`/`c-fn`,
+         * defstruct with such a field lowers to a record ADT like every other
+         * and errors CLEANLY here.  `exists`, `fn`/`c-fn`,
          * `arrow` (`->`), `handler`, the borrow family, and the value-carrying
          * session heads `Session`/`project`/`Role` (EF-4) DO lower and are handled
          * below.  Tracked in
@@ -618,137 +616,10 @@ void elab_add_forward_type(Elab *e, const Symbol *sym) {
  * StructDef is ever produced and the registry stayed empty (proven by DS-B's
  * live assert across a green suite). */
 
-/* CONV-S1 (defstruct-as-defadt): true iff every field in an old-syntax
- * defstruct field vector is lowerable to a record-`defadt` field with a
- * byte-identical layout.  As of slice 5 (pointer-field widening) that is:
- *   - a primitive scalar (int / float / bool / cstr / sized numerics), or
- *   - a pointer-kinded field (rc<T> / ref<T> / lref<T> / weak<T> / ptr<void>)
- *     or a bare `fn` field -- each is an 8-byte carrier slot regardless of the
- *     inner type, so the record-ADT path stores it as a scalar carrier exactly
- *     as the struct path does, drop-glue (rc/ref/weak) and all (slice 2), and the
- *     pre-pass / full-elab lowering decision never disagrees because a pointer's
- *     representation does not depend on the (possibly not-yet-known) inner
- *     type's by-value-ness (the by-value ctor casts an `fn` arg to the int64
- *     carrier, slice 6), or
- *   - a *typed* `fn` field `(fn [..] ..)` (slice 7) -- an F_LIST type form, but
- *     still an 8-byte function-pointer carrier slot like a bare `fn`; its
- *     signature only feeds type checking, never layout, so it lowers like a
- *     scalar carrier and the capability call specialises the pointer through the
- *     intptr_t-cast path, or
- *   - a bare user type that resolves to a by-value aggregate (a non-heap,
- *     non-opaque, drop-glue-free struct, or a by-value ADT product), which the
- *     record-ADT path now stores INLINE by value exactly as a struct inlines a
- *     nested struct field.
- * Any other compound (F_LIST) type, or any parametric / :heap field, still
- * disqualifies so the struct keeps the normal struct path.
- * Mirrors the old-syntax pre-scan (name, then F_TYPE_ANN-wrapped type). */
-/* Per-field-type lowerability check, shared by the old-syntax (flat vector) and
- * new-syntax (per-field list) scans and parametric/non-parametric alike.
- * `type_tok` is the field's type form, already unwrapped from any F_TYPE_ANN.
- * Returns true when the field is representable on the record-ADT path. */
-static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
-    if (type_tok->tag == F_LIST) {
-        /* slice 7: a *typed* `fn`/`c-fn` field `(fn [..] ..)` is, exactly like a
-         * bare `fn` (slice 6), an 8-byte function-pointer carrier slot -- its
-         * argument/return signature only feeds type checking, never layout -- so
-         * it lowers like a scalar carrier.
-         *
-         * structdef-retirement slice 1: a *user applied/parametric type* field --
-         * `(Option cstr)`, `(Box X)`, `(Dense m A)`, `(Tbl #row{..})`, TY_APP --
-         * also lowers.  The record-ADT product already stores such a field the
-         * way `defdata` does (by-value aggregate inline, or int64 carrier with
-         * `adt_field_instantiate_type` tyvar substitution at field access), so it
-         * no longer keeps the struct path.
-         *
-         * A BUILT-IN compound type form is its own TypeKind (not TY_APP), so it
-         * cannot go through the generic type-application loop -- lowering it that
-         * way would mis-elaborate `(lref int)` as a type-constructor application
-         * (`"cannot apply a type of kind '*'"`) and would drop the struct-path-only
-         * diagnostics (e.g. `:copy` over a linear field).  Each is instead routed
-         * to `type_expr_from_form` in `struct_field_type_from_form`: the borrow
-         * family (`(lref T)`/`(& T)`/`(borrow-mut T)`), `fn`/`arrow`, `handler`
-         * (EF-2), and the `exists` pack (slice 3) all lower to real carrier
-         * fields; `forall`/session/role/global/project are rejected there for now. */
-        if (type_tok->as.list.len < 1 ||
-            type_tok->as.list.items[0]->tag != F_SYM)
-            return false;
-        const Symbol *head = type_tok->as.list.items[0]->as.sym;
-        if (head == e->sym_fn || head == e->sym_c_fn) return true; /* fn carrier */
-        /* structdef-retirement slice 3: an `exists`-pack field is carried as the
-         * int64 existential-record pointer (existential packing already boxes a
-         * wide aggregate payload into that carrier slot), so it lowers like any
-         * scalar carrier field.  `forall` (universal quantification) is not a
-         * value-carrying field form and stays on the struct path. */
-        if (head == e->sym_exists || head == e->sym_exists_u) return true;
-        /* structdef-retirement slice 5 DS-A3/DS-A4: every list-form field type is
-         * now "lowerable" in the sense that it takes the record-ADT path -- the
-         * borrow family (`(lref T)`/`(& T)`/`(borrow-mut T)`) resolves to a real
-         * carrier field, `fn`/`arrow`/`handler` resolve to their carrier kinds
-         * (TY_FN / TY_HANDLER), and the remaining built-in compound forms
-         * (forall, session/role/global/project) are REJECTED there with a
-         * clean diagnostic (struct_field_type_from_form) rather than kept on the
-         * legacy StructDef path.  Returning true here is what makes the residual
-         * StructDef producer path unreachable (the deletion precondition); the
-         * eventual lowering of those forms is tracked in
-         * docs/archive/history/structdef-exotic-field-forms-plan.md. */
-        return true;
-    }
-    if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
-        return false;  /* not a leaf type token */
-    TypeKind k = TY_UNKNOWN, inner = TY_UNKNOWN;
-    parse_struct_field_type(type_tok->as.sym->name, type_tok->as.sym->len,
-                            &k, &inner);
-    switch (k) {
-        case TY_INT:   case TY_BOOL:  case TY_FLOAT: case TY_CSTR:
-        case TY_INT8:  case TY_INT16: case TY_INT32: case TY_INT64:
-        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-        case TY_FLOAT32: case TY_FLOAT64:
-            return true;  /* primitive scalar */
-        case TY_RC:   case TY_REF:  case TY_LREF:
-        case TY_WEAK: case TY_PTR_VOID: case TY_FN:
-            /* slice 5/6: a pointer-kinded or `fn` field is an 8-byte carrier slot
-             * whatever its inner type is, so it lowers like a scalar -- the
-             * by-value ADT product already stores such fields as carriers and
-             * synthesises drop glue for the owning (rc/ref/weak) ones (slice 2). */
-            return true;
-        case TY_SYM:
-            /* saffron-dynamic-surface-pass (low): a `Sym` field is the interned
-             * pointer, an 8-byte scalar carrier like the pointer-kinded rows
-             * above -- see parse_struct_field_type's Sym row. */
-            return true;
-        case TY_ANY:
-            /* saffron-dynamic-surface-pass (low): `(defstruct Dyn [v : any])`
-             * was "unsupported field form" -- in typed Turmeric too -- while
-             * the `defdata` it lowers TO has accepted an `any` field all
-             * along: `(defdata Dyn (Dyn any))` round-trips a `(:: 7.25 any)`.
-             * The gate simply had no arm for TY_ANY, so a struct with a
-             * dynamic field was the one shape that could not be spelled. The
-             * record-ADT product stores it as the 16-byte tagged value the
-             * same way the ADT does. */
-            return true;
-        case TY_UNKNOWN:
-            /* slice 4/8 + graduation: a bare *user-type* field -- an ADT, struct,
-             * opaque newtype, forward-declared sibling, OR (now that parametric
-             * structs lower) an in-scope TYPE PARAMETER like `A`.  The decision is
-             * syntactic so the pre-pass and full elaboration always agree; the
-             * record-ADT codegen picks the representation from the resolved type
-             * (by-value aggregate inlined; carrier/:heap/tyvar kept as int64
-             * carrier and substituted at field-access via adt_field_instantiate
-             * _type). */
-            return true;
-        default:
-            return false;
-    }
-}
-
 /* defstruct-grouped-field-spec-vectors: flatten an old-syntax field vector so a
  * grouped `[name : type]` sub-vector splices into the surrounding token stream
- * (the shape a `~@(map (fn [c] `[~c : T]) comps)` macro splice produces).  This
- * is the SAME flattening elab_defstruct applies to the actual field list; the
- * lowering gate must run it too, or the gate (reading the raw `call`) and the
- * elaborator (which flattens) disagree and a grouped-spec defstruct wrongly
- * takes the residual StructDef path.  Returns the input vec unchanged when there
- * is no grouping.  structdef-retirement slice 5 DS-A. */
+ * (the shape a `~@(map (fn [c] `[~c : T]) comps)` macro splice produces).
+ * Returns the input vec unchanged when there is no grouping. */
 static Form *defstruct_flatten_grouped_field_vec(Elab *e, const Form *fields_vec) {
     if (!fields_vec || fields_vec->tag != F_VEC) return (Form *)fields_vec;
     bool has_grouped = false;
@@ -770,128 +641,6 @@ static Form *defstruct_flatten_grouped_field_vec(Elab *e, const Form *fields_vec
             flat[k++] = it;
     }
     return form_vec(e->arena, fields_vec->span, flat, flat_n);
-}
-
-static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
-    if (!fields_vec || fields_vec->tag != F_VEC) return false;
-    uint32_t n = fields_vec->as.list.len;
-    if (n == 0) return false;
-    uint32_t i = 0;
-    while (i < n) {
-        if (fields_vec->as.list.items[i]->tag != F_SYM) return false;  /* field name */
-        i++;
-        if (i >= n) return false;
-        const Form *type_tok = fields_vec->as.list.items[i];
-        if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
-        if (!defstruct_field_type_lowerable(e, type_tok)) return false;
-        i++;
-        /* structdef-retirement slice 5 A1: a `fn`/`c-fn` field may carry a
-         * trailing `#fx{...}` effect-row F_MAP (e.g. `[run : fn #fx{Write}]`).
-         * The record-ADT path now preserves it on CtorField.effect_row, so skip
-         * it here rather than treating it as a stray non-field-name and bailing
-         * to the residual StructDef path. */
-        if (i < n && fields_vec->as.list.items[i]->tag == F_MAP) {
-            bool prev_is_fn =
-                (type_tok->tag == F_SYM &&
-                 (type_tok->as.sym == e->sym_fn || type_tok->as.sym == e->sym_c_fn)) ||
-                (type_tok->tag == F_LIST && type_tok->as.list.len >= 1 &&
-                 type_tok->as.list.items[0]->tag == F_SYM &&
-                 (type_tok->as.list.items[0]->as.sym == e->sym_fn ||
-                  type_tok->as.list.items[0]->as.sym == e->sym_c_fn));
-            if (prev_is_fn) i++;
-        }
-    }
-    return true;
-}
-
-/* New-syntax sibling of defstruct_fields_all_primitive: the field defs are
- * separate `(field-name type)` F_LIST forms (call->items[start_idx ..]), the
- * shape a parametric struct `(defstruct P [A] (f A) ...)` uses.  Every field's
- * type must be lowerable; at least one field is required. */
-static bool defstruct_newstyle_fields_all_primitive(Elab *e, const Form *call,
-                                                    uint32_t start_idx) {
-    (void)e;
-    bool any = false;
-    for (uint32_t ci = start_idx; ci < call->as.list.len; ci++) {
-        const Form *ff = call->as.list.items[ci];
-        if (ff->tag != F_LIST || ff->as.list.len < 2) return false;
-        if (ff->as.list.items[0]->tag != F_SYM) return false;  /* field name */
-        const Form *type_tok = ff->as.list.items[1];
-        if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
-        if (!defstruct_field_type_lowerable(e, type_tok)) return false;
-        any = true;
-    }
-    return any;
-}
-
-/* CONV-S1 (defstruct-as-defadt): decide whether a `defstruct` form qualifies for
- * lowering to a single-variant record `defadt`.  GRADUATED (always-on): a
- * `defstruct` lowers whenever its shape is supported -- old OR new field syntax,
- * scalar / pointer / fn / aggregate / parametric / `:heap` fields.
- *
- * This header used to add that the field checks "still legitimately keep a
- * `:linear` outer struct, or one carrying an applied-type / `exists` field, on
- * the StructDef path".  Measured 2026-09-04, all three lower, and so does every
- * other shape tried: the predicate rejects nothing today, and its sole remaining
- * job is to defer rejection to the ADT field parser.  See
- * docs/reported/defstruct-struct-path-is-dead.md.
- *
- * Shared by the top-level type pre-pass (which must then register an ADT
- * stub rather than a struct stub) and elab_defstruct (which performs the
- * rewrite), so they agree on which names become ADTs.  Re-derives the annotation
- * / field shape straight from the form (cheap; the form is small). */
-bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
-    if (call->tag != F_LIST || call->as.list.len < 3) return false;
-    const Form *name_form = call->as.list.items[1];
-    if (name_form->tag != F_SYM) return false;
-    uint32_t idx = 2;
-    while (idx < call->as.list.len) {
-        const Form *kw = call->as.list.items[idx];
-        if (kw->tag != F_KEYWORD) break;
-        if (kw->as.sym == e->kw_copy || kw->as.sym == e->kw_move) { idx++; continue; }
-        /* structdef-retirement slice 4: `:linear` now lowers -- the lowered ADT
-         * type carries CK_LINEAR (type_adt), so the exactly-once enforcement
-         * propagates from the type's copy_kind exactly as it did on the struct. */
-        if (kw->as.sym == e->kw_linear) { idx++; continue; }
-        /* structdef-retirement slice 2: `:no-auto-ctor` now lowers -- the record-
-         * ADT path honours it by suppressing the value-namespace constructor
-         * (elab_defdata), so the `(Name ...)` call form still gets rejected. */
-        if (kw->as.sym == e->kw_no_auto_ctor) { idx++; continue; }
-        /* seam 3 (DONE): a `:heap` struct -- BOTH non-parametric and parametric
-         * (the stdlib Vec/Map/Set/MutableMap/Cons) -- lowers to a `:heap` record
-         * defadt.  The typed-pointer ABI foundation (`defdata :heap`, the
-         * typed-pointer `type_c_name`, malloc'ing ctors, `->` field access), the
-         * by-value-vs-:heap integration (pbp / carrier-ABI / match scrutinee /
-         * ctor-arg cast all exclude a `:heap` ADT), and the heap-ADT carrier
-         * bridges (the typed-pointer<->int64-carrier crossings the inline-C carrier
-         * bases use) all reconcile it, so `:heap` no longer keeps the struct path. */
-        if (kw->as.sym == e->kw_heap) { idx++; continue; }
-        break;
-    }
-    /* A leading all-symbol vector is a type-parameter list -> parametric.
-     * Parametric structs -- including parametric `:heap` structs (the stdlib
-     * Vec/Map/Set/MutableMap/Cons) -- now lower to parametric record defadts: the
-     * dot-accessor and by-value codegen substitute the app's type args, and the
-     * typed-pointer<->int64-carrier crossings their inline-C carrier bases use are
-     * reconciled by the heap-ADT carrier bridges (seam 3).  So skip past the
-     * type-param vec rather than bailing. */
-    if (idx < call->as.list.len && call->as.list.items[idx]->tag == F_VEC) {
-        const Form *vec = call->as.list.items[idx];
-        bool all_syms = vec->as.list.len > 0;
-        for (uint32_t i = 0; i < vec->as.list.len; i++)
-            if (vec->as.list.items[i]->tag != F_SYM) { all_syms = false; break; }
-        if (all_syms)
-            idx++;  /* parametric (heap or not): consume the type-param vec */
-    }
-    if (idx >= call->as.list.len) return false;
-    const Form *fields = call->as.list.items[idx];
-    if (fields->tag == F_VEC)
-        /* DS-A: flatten grouped `[name : type]` sub-vectors first so the gate
-         * agrees with elab_defstruct's own flattening (else a grouped-spec
-         * struct wrongly takes the residual StructDef path). */
-        return defstruct_fields_all_primitive(
-            e, defstruct_flatten_grouped_field_vec(e, fields));   /* old syntax */
-    return defstruct_newstyle_fields_all_primitive(e, call, idx);  /* new syntax */
 }
 
 Expr *elab_defstruct(Elab *e, const Form *call) {
@@ -1005,9 +754,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
      * only items[0]/items[1] of the single field vector, silently dropping every
      * field after the first (with any type-param count, 1 or more).  Route a
      * bracket field vec back through the old-syntax field-vec path, which flattens
-     * and keeps every field.  This mirrors defstruct_lowers_to_adt's gate, which
-     * already classifies an F_VEC-after-type-params as old syntax; keeping the two
-     * in step is what prevents the silent field drop. */
+     * and keeps every field. */
     if (new_field_syntax && fields_start_idx < call->as.list.len &&
         call->as.list.items[fields_start_idx]->tag == F_VEC) {
         new_field_syntax = false;
@@ -1030,39 +777,35 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         }
         /* defstruct-grouped-field-spec-vectors: flatten grouped `[name : type]`
          * sub-vectors into the surrounding `name`, `: type` token stream (the
-         * shape a `~@(map (fn [c] `[~c : (T ~c)]) comps)` splice produces).
-         * DS-A: shared with the lowering gate via defstruct_flatten_grouped_field_vec
-         * so the two cannot disagree on whether a grouped-spec struct lowers. */
+         * shape a `~@(map (fn [c] `[~c : (T ~c)]) comps)` splice produces). */
         fields_form = defstruct_flatten_grouped_field_vec(e, fields_form);
     }
 
-    /* CONV-S1 (defstruct-as-defadt experiment): lower a `defstruct` to a
-     * single-variant record `defadt`, so it flows through the by-value ADT path.
-     * The lowering now covers non-:heap structs -- scalar/pointer/fn/aggregate
-     * fields, old OR new field syntax, and PARAMETRIC structs (lowered to a
-     * parametric record defadt; the dot-accessor and by-value codegen substitute
-     * the app's type args).  Rewrite, preserving :copy and the type-param vec:
+    /* CONV-S1 (defstruct-as-defadt, graduated): lower the `defstruct` to a
+     * single-variant record `defadt`, so it flows through the by-value ADT path
+     * -- scalar/pointer/fn/aggregate/`any` fields, old OR new field syntax,
+     * `:copy`/`:linear`/`:heap`/`:no-auto-ctor`, and PARAMETRIC structs (a
+     * parametric record defadt; the dot-accessor and by-value codegen
+     * substitute the app's type args).  Rewrite, preserving the keywords and the
+     * type-param vec:
      *     (defstruct P [a : int b : int])      -> (defdata P (P [a : int b : int]))
      *     (defstruct Box [A] (val A))           -> (defdata Box [A] (Box [val : A]))
      * and dispatch to elab_defdata, reusing all the AdtDef machinery.
      *
-     * The `else` below is DEAD, measured 2026-09-04.  This comment used to end
-     * "anything the gate rejects (:heap / :linear outer structs) still elaborates
-     * as a struct", and every clause of that is now stale: `:heap`, `:linear`,
-     * `:no-auto-ctor`, parametric, and fields of applied (`(Option int)`), `fn`,
-     * nested-aggregate and even `exists` type all take the ADT path today, because
-     * defstruct_lowers_to_adt was widened slice by slice until it stopped
-     * rejecting anything.  Instrumenting both outcomes over the whole suite
-     * (2781 fixtures) plus those shapes by hand produced ZERO struct-path hits.
-     * elab_toplevel.c already acted on this and removed its own counterpart
-     * branch (structdef-retirement DS-C, "defstruct_lowers_to_adt is always true
-     * now"), which is what leaves the two files disagreeing.
-     *
-     * Deleting the branch (and whatever StructDef machinery it keeps reachable)
-     * belongs to the structdef-retirement track rather than to a drive-by:
-     * see docs/reported/defstruct-struct-path-is-dead.md.
-     * See docs/archive/defstruct-as-defadt-plan.md. */
-    if (defstruct_lowers_to_adt(e, call)) {
+     * UNCONDITIONAL.  This used to sit behind `defstruct_lowers_to_adt`, a
+     * per-field-shape gate that was widened slice by slice until every
+     * well-formed shape lowered; what it still rejected was only MALFORMED
+     * field lists (`[]`, `[a : int b]`, `[1 : int]`, `[v : 7]`), for which it
+     * produced a single vague "unsupported field form" where the record-ADT
+     * parser below reports the precise defect at the offending token.  The
+     * gate was also the one place a field shape could be accepted by the
+     * parser yet refused here -- `[v : any]` was, until its TY_ANY arm was
+     * added -- so keeping a second classifier bought nothing and cost a
+     * disagreement.  The pre-pass (elab_toplevel.c) registers an ADT stub for
+     * every defstruct on the same understanding.  See
+     * docs/archive/defstruct-struct-path-is-dead.md and
+     * docs/archive/defstruct-as-defadt-plan.md. */
+    {
         /* Redefinition guard -- must run BEFORE dispatching into elab_defdata.
          * A `defstruct` that redefines a fully-defined name (commonly an
          * auto-loaded stdlib type such as `Cons`/`Pair`) must produce the
@@ -1166,16 +909,6 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         return dd_out;
     }
 
-    /* structdef-retirement DS-D: the residual StructDef elaboration path has
-     * been deleted.  Every defstruct now lowers to a record ADT above;
-     * defstruct_lowers_to_adt is true for all field shapes the ADT field
-     * parser accepts, and any unsupported compound field form is rejected by
-     * struct_field_type_from_form with its own diagnostic before we get here.
-     * Reaching this point would mean the gate rejected a shape the field
-     * parser accepted -- treat it as an unsupported field form. */
-    diag_emit(DIAG_ERROR, call->span,
-              "defstruct '%s': unsupported field form", name->name);
-    return NULL;
 }
 
 /* SI4-C: defopaque -- named opaque int64_t newtype for REPL type tags.

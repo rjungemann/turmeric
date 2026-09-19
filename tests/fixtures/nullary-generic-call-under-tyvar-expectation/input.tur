@@ -1,0 +1,42 @@
+;; nullary-generic-call-under-tyvar-expectation: a nullary generic call as an
+;; argument whose parameter type is tyvar-shaped -- `(Box A)` with `A` bound
+;; by a SIBLING argument -- was rejected against itself:
+;;   function 'wrap' arg 2: expected (type-app Box tyvar 'A'), got (type-app Box tyvar 'A')
+;; The sibling had bound `A := int`; the argument's own open `'A` (the nullary
+;; call's result) was then compared with that binding instead of unified with
+;; it.  The parameter is now instantiated with the siblings' bindings and the
+;; argument's tyvar unified against the grounded type, W2-style, so the
+;; nullary call monomorphizes to the instantiation the context chose.
+(defstruct Box :heap [A] (val A))
+(defn box-nil [A] [] : (Box A) (:: 0 (Box A)))
+(defn wrap [A] [v : A b : (Box A)] : (Box A) (make-struct Box v))
+
+(defstruct W :heap [A] (val A) (opt (Option A)))
+
+(defstruct Node :heap [A] (val A) (next (Node A)))
+(defn node-nil [A] [] : (Node A) (:: 0 (Node A)))
+(defn node-nil? [A] [n : (Node A)] : bool (= (:: n int) 0))
+(defn push [A] [v : A n : (Node A)] : (Node A) (make-struct Node v n))
+(defn len [A] [n : (Node A)] : int
+  (if (node-nil? n) 0 (+ 1 (len (.next n)))))
+
+(defn main [] : int
+  ;; user nullary generic under a user generic's parameter
+  (let [b (wrap 3 (box-nil))]
+    (println (.val b)))
+  ;; stdlib nullary ctor under a ctor's parameter
+  (let [w (make-struct W 8 (none))]
+    (println (.val w))
+    (match (.opt w)
+      (Some x) (println x)
+      (None) (println "none")))
+  ;; chained, at two element types, with a non-zero fractional float
+  (let [n (push 1 (push 2 (push 3 (node-nil))))]
+    (println (len n))
+    (println (.val (.next n))))
+  (let [s (push "b" (push "a" (node-nil)))]
+    (println (len s))
+    (println (.val (.next s))))
+  (let [m (make-struct Node 7.5 (node-nil))]
+    (println (.val m)))
+  0)

@@ -3088,12 +3088,39 @@ static Form *callcc_default_cont_param(Elab *e, Form *f_form) {
     /* Already annotated (keyword / `: T` / type-list) -- leave it alone. */
     if (last->tag != F_SYM || last->as.sym->name[0] == '^') return f_form;
 
+    /* saffron-dynamic-surface-pass (low): a receiver annotated `: any` --
+     * `(fn [k] : any (k 42))` -- gets a VALUE-TYPED continuation,
+     * `(escape-cont any any)`, so `(k v)` widens `v` to a box and the
+     * landing reads a box back.  With the bare `:escape-cont` the resume
+     * value stayed a raw word: `(k 42)` delivered an int64 and the landing
+     * assigned it to a `tur_tagged_t` binder ("conversion to non-scalar type
+     * requested").  Detected on the FORM, since the receiver has not been
+     * elaborated yet; only the exact `: any` spelling qualifies. */
+    bool ret_any = false;
+    if (f_form->as.list.len >= 4) {
+        const Form *ra = f_form->as.list.items[2];
+        const Form *inner = (ra->tag == F_TYPE_ANN && ra->as.list.len == 1)
+                                ? ra->as.list.items[0] : ra;
+        if ((inner->tag == F_SYM || inner->tag == F_KEYWORD) &&
+            inner->as.sym->len == 3 && memcmp(inner->as.sym->name, "any", 3) == 0 &&
+            (ra->tag == F_TYPE_ANN || ra->tag == F_KEYWORD))
+            ret_any = true;
+    }
     /* Rebuild the param vec with :escape-cont appended. */
     uint32_t pn = params->as.list.len;
     Form **new_params = (Form **)arena_alloc(e->arena, sizeof(Form *) * (pn + 1));
     for (uint32_t i = 0; i < pn; i++) new_params[i] = params->as.list.items[i];
-    new_params[pn] = form_keyword(e->arena, last->span,
-                                  intern_cstr(e->st, "escape-cont"));
+    if (ret_any) {
+        const Symbol *anys = intern_cstr(e->st, "any");
+        Form *ct[3] = { form_sym(e->arena, last->span, intern_cstr(e->st, "escape-cont")),
+                        form_sym(e->arena, last->span, anys),
+                        form_sym(e->arena, last->span, anys) };
+        new_params[pn] = form_type_ann(e->arena, last->span,
+                                       form_list(e->arena, last->span, ct, 3));
+    } else {
+        new_params[pn] = form_keyword(e->arena, last->span,
+                                      intern_cstr(e->st, "escape-cont"));
+    }
     Form *new_vec = form_vec(e->arena, params->span, new_params, pn + 1);
 
     /* Rebuild the fn form with the rewritten param vec. */

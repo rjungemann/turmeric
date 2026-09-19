@@ -9324,6 +9324,13 @@ static void emit_callcc(CE *ce, const CTerm *t) {
     char cc[48];
     snprintf(cc, sizeof(cc), "__cc%d", id);
 
+    /* saffron-dynamic-surface-pass (low): an `any`-typed call/cc.  The
+     * binder is a 16-byte `tur_tagged_t`, which cannot be C-cast to (it is a
+     * struct) and does not fit the landing's int64 `result`: the receiver
+     * returns it directly on the normal path, and on the resumed path (k v)
+     * delivered a heap copy's address (__tur_escape_box_any) that is read and
+     * freed here. */
+    bool boxed = rty && strcmp(rty, "tur_tagged_t") == 0;
     ce_line(ce, "tur_escape_cont %s;", cc);
     ce_line(ce, "%s.valid = 1;", cc);
     ce_line(ce, "if (TUR_SETJMP(%s.buf) == 0) {", cc);
@@ -9343,10 +9350,16 @@ static void emit_callcc(CE *ce, const CTerm *t) {
             snprintf(thunk_name, 64, "__fn_anon_%d",
                      closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
         }
-        ce_line(ce, "%s = (%s)%s(%s, (int64_t)(intptr_t)&%s);", xn, rty, thunk_name, fval, cc);
+        if (boxed)
+            ce_line(ce, "%s = %s(%s, (int64_t)(intptr_t)&%s);", xn, thunk_name, fval, cc);
+        else
+            ce_line(ce, "%s = (%s)%s(%s, (int64_t)(intptr_t)&%s);", xn, rty, thunk_name, fval, cc);
         free(thunk_name);
     } else {
-        ce_line(ce, "%s = (%s)%s((int64_t)(intptr_t)&%s);", xn, rty, fval, cc);
+        if (boxed)
+            ce_line(ce, "%s = %s((int64_t)(intptr_t)&%s);", xn, fval, cc);
+        else
+            ce_line(ce, "%s = (%s)%s((int64_t)(intptr_t)&%s);", xn, rty, fval, cc);
     }
     /* f returned normally: the captured continuation is now dead. */
     ce_line(ce, "%s.valid = 0;", cc);
@@ -9355,7 +9368,12 @@ static void emit_callcc(CE *ce, const CTerm *t) {
     ce_line(ce, "} else {");
     ce->indent += 4;
     /* Resumed path: an upward (tur_escape_resume &cc v) delivered v here. */
-    ce_line(ce, "%s = (%s)%s.result;", xn, rty, cc);
+    if (boxed) {
+        ce_line(ce, "{ tur_tagged_t *__ccb = (tur_tagged_t *)(intptr_t)%s.result; "
+                    "%s = *__ccb; free(__ccb); }", cc, xn);
+    } else {
+        ce_line(ce, "%s = (%s)%s.result;", xn, rty, cc);
+    }
     ce->indent -= 4;
     ce_line(ce, "}");
     free(xn);

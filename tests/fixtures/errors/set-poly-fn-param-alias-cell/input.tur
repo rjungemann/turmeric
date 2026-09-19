@@ -1,0 +1,12 @@
+; let-alias-of-fn-param-call-undeclared: a `^mut` cell that aliases a
+; polymorphic fn parameter is a `tur_poly_fn_t` value, a representation no
+; lambda or closure box has, so re-pointing it at a capturing closure is
+; refused statically (it was a cc error: incompatible types when assigning
+; to type tur_poly_fn_t).  A thin lambda store into the same cell is already
+; the ordinary set! type mismatch.
+(defn f [g : (fn [] int)] : int
+  (let [^mut h g]
+    (println (h))
+    (let [t 5] (set! h (fn [] : int (+ t 1))))
+    (h)))
+(defn main [] : int (println (f (fn [] : int 3))) 0)

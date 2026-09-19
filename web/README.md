@@ -90,7 +90,6 @@ web/
 ├── index.html          # Main HTML page
 ├── main.js             # Main JavaScript with WASM integration
 ├── styles.css          # Styling
-├── examples.js         # Example code snippets
 ├── package.json        # Node dependencies
 ├── vite.config.js      # Vite build configuration
 ├── lsp-client.js       # Monaco adapter for the language server

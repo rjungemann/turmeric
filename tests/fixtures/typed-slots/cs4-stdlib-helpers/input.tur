@@ -11,7 +11,7 @@
     (println (pair-fst p))
     (println (pair-snd p)))
   ;; List helpers
-  (let [l (:: (make-struct Cons 42 0) (Cons int))]
+  (let [l (:: (make-struct Cons 42 (tnil)) (Cons int))]
     (println (thead l)))
   ;; Option helpers
   (let [o (:: (some 7) (Option int))]

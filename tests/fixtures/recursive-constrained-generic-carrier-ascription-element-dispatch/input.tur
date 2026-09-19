@@ -44,11 +44,11 @@
 (defn rep [A] [x : A  n : int] : (Cons A)
   (if (= n 0)
     (:: (tnil) (Cons A))
-    (tcons-of x (:: (rep x (- n 1)) :int))))
+    (tcons x (:: (rep x (- n 1)) :int))))
 
 ;; Show every element via its own Sh instance -- proves element [1..] dispatch.
 (defn show-all [A] [(Sh A)] [xs : (Cons A)] : cstr
-  (if (tnil? (:: xs :int))
+  (if (tnil? xs)
     "]"
     (str-concat (sh (:: (.head xs) A))
                 (str-concat "," (show-all (:: (.tail xs) (Cons A)))))))
