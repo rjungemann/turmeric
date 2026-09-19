@@ -83,7 +83,7 @@ Under the current build `#app` is `position: fixed; inset: 0` and cannot end at
 811, and `.console-footer` is 58px of `--bg-panel` pinned to the bottom. So the
 device was running the pre-fix build -- and, incidentally, this confirms to the
 pixel the `100dvh` behaviour that
-[pwa-overlays-ignore-ios-safe-area](../archive/pwa-overlays-ignore-ios-safe-area.md)
+[pwa-overlays-ignore-ios-safe-area](pwa-overlays-ignore-ios-safe-area.md)
 could only infer: in an iOS standalone web app `100dvh` resolves to the screen
 height *minus the top inset*.
 
