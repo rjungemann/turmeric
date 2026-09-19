@@ -7368,6 +7368,18 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)
                     ? fn_type.as.fn.arg_full_types[fn_arg_idx4] : NULL;
                 if (ct) expected_ty = *ct;
+            } else if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+                /* self-typed-heap-parametric-field-unsupported: a parameter
+                 * whose KIND is the int64 carrier but whose full type names an
+                 * application or an ADT -- a `:heap` app field in a ctor
+                 * signature, `(next (Node A))` -- printed as `expected int,
+                 * got int` against an int argument: the two sides that failed
+                 * type_eq were spelled identically.  Prefer the full type. */
+                uint32_t fn_arg_idx5 = fn_binding->closure_fn_binding ? i + 1 : i;
+                Type *ct = (fn_arg_idx5 < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fn_arg_idx5] : NULL;
+                if (ct && (ct->kind == TY_APP || ct->kind == TY_ADT))
+                    expected_ty = *ct;
             }
             /* PH2.1: Build the type names into owned local buffers via
              * type_print rather than type_name. type_name returns a strdup-ed

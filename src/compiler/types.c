@@ -580,6 +580,13 @@ typedef struct RegisteredAdtApp {
     char        *name;     /* mangled C typedef name, e.g. "tur_adt_Maybe__float" */
     bool         emitted;
     bool         emitting;
+    /* self-typed-heap-parametric-field-unsupported: set while this entry's
+     * ctor signatures are being recorded.  Recording c-names every field, and
+     * a `:heap` self-typed field (`(next (Node A))` in `Node`) c-names to the
+     * very app being registered -- so without a guard the lookup re-enters
+     * record_adt_app_ctor_sigs on the entry it is in the middle of filling
+     * and the stack goes (ASan DEADLYSIGNAL on `tur check`). */
+    bool         recording;
 } RegisteredAdtApp;
 
 static RegisteredAdtApp *g_adt_apps = NULL;
@@ -2102,14 +2109,17 @@ const char *type_register_adt_app(Type t) {
              * emission, which renders g_adt_apps[i].type, never produces
              * (`int64_t` recorded against a `void *` slot).  The call-site
              * bridge trusts these strings, so a stale one is worse than none. */
+            if (g_adt_apps[i].recording) return g_adt_apps[i].name;
             Type ct = g_adt_apps[i].type;
             AdtDef *cdef = NULL; Type cargs[16]; uint8_t cn_args = 0;
-            if (type_extract_adt_app(&ct, &cdef, cargs, &cn_args) && cdef)
+            if (type_extract_adt_app(&ct, &cdef, cargs, &cn_args) && cdef) {
+                g_adt_apps[i].recording = true;
                 record_adt_app_ctor_sigs(cdef, cargs, cn_args, ct);
+                g_adt_apps[i].recording = false;
+            }
             return g_adt_apps[i].name;
         }
     }
-    record_adt_app_ctor_sigs(def, args, n_args, t);
     /* Grow the registry if needed. */
     if (g_n_adt_apps >= g_cap_adt_apps) {
         uint32_t new_cap = g_cap_adt_apps ? g_cap_adt_apps * 2 : 8;
@@ -2129,9 +2139,25 @@ const char *type_register_adt_app(Type t) {
     g_adt_apps[g_n_adt_apps].name     = tur_strdup(name.data);
     g_adt_apps[g_n_adt_apps].emitted  = false;
     g_adt_apps[g_n_adt_apps].emitting = false;
+    g_adt_apps[g_n_adt_apps].recording = false;
     buf_free(&name);
     if (!g_adt_apps[g_n_adt_apps].name) { fprintf(stderr, "tur: oom\n"); abort(); }
-    return g_adt_apps[g_n_adt_apps++].name;
+    /* Register FIRST, record the ctor signatures SECOND: recording c-names
+     * every field, and a `:heap` self-typed field resolves to this very app.
+     * With the entry already in the table (and flagged `recording`) that
+     * re-entrant lookup returns the name instead of recursing.  The registry
+     * may be realloc'd by a nested registration of some OTHER app the field
+     * types name, so re-index through `idx` rather than a held pointer. */
+    uint32_t idx = g_n_adt_apps++;
+    g_adt_apps[idx].recording = true;
+    {
+        Type ct = g_adt_apps[idx].type;
+        AdtDef *cdef = NULL; Type cargs[16]; uint8_t cn_args = 0;
+        if (type_extract_adt_app(&ct, &cdef, cargs, &cn_args) && cdef)
+            record_adt_app_ctor_sigs(cdef, cargs, cn_args, ct);
+    }
+    g_adt_apps[idx].recording = false;
+    return g_adt_apps[idx].name;
 }
 
 /* TS4P2: Return a heap-allocated string with the C-name suffix for a concrete
@@ -2197,9 +2223,37 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             if (!fld->full_type) continue;
             Type resolved = substitute_adt_app_type_owned(fld->full_type, def, args);
             if (resolved.kind == TY_APP) {
+                /* self-typed-heap-parametric-field-unsupported: a dependency
+                 * this record holds by POINTER -- a `:heap` monomorph, whose C
+                 * spelling is `tur_adt_Node__int *` -- needs only a forward
+                 * `typedef struct X X;`, never its full typedef ahead of ours.
+                 * Recursing into it instead breaks a cycle at the wrong point:
+                 * for `(defstruct Node :heap [A] (val A) (next (Option (Node
+                 * A))))`, `Option__Node__int` is emitted first, its pre-pass
+                 * recursed into `Node__int`, and Node's typedef then embedded
+                 * the still-incomplete Option BY VALUE (`unknown type name`).
+                 * With the forward decl, Option completes first and Node
+                 * (which really does need Option whole) follows in the outer
+                 * loop.  The same forward decl is what a direct self-reference
+                 * (`(next (Node A))`) needs: the field names the typedef the
+                 * body is in the middle of introducing. */
+                AdtDef *rdef = NULL; Type rargs[16]; uint8_t rn = 0;
+                Type rt = resolved;
+                bool ptr_dep = type_extract_adt_app(&rt, &rdef, rargs, &rn) &&
+                               rdef && rdef->is_heap &&
+                               adt_app_is_byvalue_product(resolved);
                 for (uint32_t di = 0; di < g_n_adt_apps; di++) {
                     if (type_eq(g_adt_apps[di].type, resolved)) {
-                        emit_registered_adt_app_rec(out, di);
+                        if (ptr_dep) {
+                            const char *dn = g_adt_apps[di].name;
+                            buf_printf(out, "#if !defined(TUR_FWD_%s) && "
+                                            "!defined(TUR_TY_%s)\n", dn, dn);
+                            buf_printf(out, "#define TUR_FWD_%s\n", dn);
+                            buf_printf(out, "typedef struct %s %s;\n", dn, dn);
+                            buf_printf(out, "#endif\n");
+                        } else {
+                            emit_registered_adt_app_rec(out, di);
+                        }
                         break;
                     }
                 }
@@ -4285,7 +4339,15 @@ static bool adt_app_is_byvalue_product_inner(Type t, AdtDef *def, Type *args,
          * against repr_of's heap-ptr answer.  Excluded for a self-recursive
          * def, where accepting the self-field would inline the typedef into
          * itself. */
-        if (bad && k == TY_APP && !def->is_self_recursive &&
+        /* self-typed-heap-parametric-field-unsupported: a `:heap` def's
+         * self-reference -- `(next (Node A))` on a `:heap` Node -- is a
+         * pointer-sized word in the record (the monomorph IS a typed pointer
+         * to its heap header), so it inlines no typedef into itself and the
+         * self-recursive exclusion does not apply.  Without this the app fell
+         * to the int64 carrier here while repr_of said typed pointer, and the
+         * repr shadow refused the binding.  A non-heap self-recursive def keeps
+         * the exclusion: there the field really would be the aggregate. */
+        if (bad && k == TY_APP && (!def->is_self_recursive || def->is_heap) &&
             type_app_is_concrete_adt(&rf))
             bad = false;
         free_struct_app_type(rf);

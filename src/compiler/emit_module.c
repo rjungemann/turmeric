@@ -8377,7 +8377,18 @@ void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_par
     if (!cname || idx >= n_params) return;
     EmitSigEntry *e = emit_sig_find_or_add(cname, n_params);
     if (!e || e->n_params != n_params || !e->param_ctypes) return;
-    free(e->param_ctypes[idx]);
+    /* self-typed-heap-parametric-field-unsupported: same discipline as the
+     * return type below.  A ctor-call emitter reads a param ctype through
+     * emit_sig_lookup_param_ctype and then spells the ARGUMENT, and spelling
+     * a `(Node int)` argument re-registers the app (type_register_adt_app
+     * re-records the ctor signatures on every lookup), which used to free the
+     * string the caller was still holding: ASan heap-use-after-free in
+     * emit_value_dispatch for `(defn push [A] [v : A n : (Node A)] : (Node A)
+     * (make-struct Node v n))`.  Re-recording an equal type keeps the
+     * handed-out pointer live; a genuinely new spelling retires the old one. */
+    if (e->param_ctypes[idx] && ctype && strcmp(e->param_ctypes[idx], ctype) == 0)
+        return;
+    emit_sig_retire(e->param_ctypes[idx]);
     e->param_ctypes[idx] = ctype ? strdup(ctype) : NULL;
 }
 

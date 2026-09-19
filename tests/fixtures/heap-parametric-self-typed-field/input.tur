@@ -1,0 +1,55 @@
+;; self-typed-heap-parametric-field-unsupported: a `:heap` parametric struct
+;; whose field names its own application.  The monomorph `(Node int)` is a
+;; typed pointer (`tur_adt_Node__int *`), so the self-field is a pointer word
+;; in the record and the typedef only needs a forward declaration of itself.
+;;
+;; Used to overflow `tur`'s own stack (adt_app_is_byvalue_product re-entering
+;; through the self field), then trip the repr ratchet at the `let` binder
+;; (carrier vs heap-ptr), then emit `tur_adt_Node__int * next;` inside the
+;; typedef that introduces the name, then heap-use-after-free the ctor
+;; signature table when a generic `push` was instantiated.
+(defstruct Node :heap [A] (val A) (next (Node A)))
+
+(defn node-nil? [A] [n : (Node A)] : bool (= (:: n int) 0))
+
+(defn push [A] [v : A n : (Node A)] : (Node A) (make-struct Node v n))
+
+;; monomorphic recursion over the typed link
+(defn sum [n : (Node int)] : int
+  (if (node-nil? n) 0 (+ (.val n) (sum (.next n)))))
+
+;; polymorphic recursion over the typed link
+(defn len [A] [n : (Node A)] : int
+  (if (node-nil? n) 0 (+ 1 (len (.next n)))))
+
+(defn ident [A] [x : A] : A x)
+
+(defn main [] : int
+  ;; direct construction, typed terminator, chained field reads
+  (let [m (make-struct Node 8 (:: 0 (Node int)))
+        n (make-struct Node 7 m)]
+    (println (.val (.next n))))
+  ;; nested construction as a ctor argument
+  (let [n (make-struct Node 1 (make-struct Node 2 (:: 0 (Node int))))]
+    (println (sum n))
+    (println (len n)))
+  ;; through a generic push, at two element types
+  (let [n (push 1 (push 2 (push 3 (:: 0 (Node int)))))]
+    (println (sum n))
+    (println (len n))
+    (println (.val (.next n)))
+    (let [s (push "b" (push "a" (:: 0 (Node cstr))))]
+      (println (len s))
+      (println (.val (.next s)))))
+  ;; match binds the link with its typed spelling
+  (let [m (make-struct Node 8 (:: 0 (Node int)))
+        n (make-struct Node 7 m)]
+    (match n
+      (Node v nx) (println (+ v (.val nx)))))
+  ;; round trip through an erased identity and a vec element
+  (let [m (make-struct Node 8 (:: 0 (Node int)))
+        n (ident (make-struct Node 7 m))
+        v (vec-of n m)]
+    (println (.val (.next n)))
+    (println (.val (vec-get v 1))))
+  0)
