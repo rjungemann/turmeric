@@ -3463,6 +3463,12 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
         return true;
     }
     if (strcmp(name, "tur_cloneable_cont_drop") == 0) { *out = turi_nil(); return true; }
+    /* The `any`-typed escape box is a compiled-representation detail (the
+     * value crosses a longjmp as a heap copy); a TuriValue crosses as itself. */
+    if (strcmp(name, "__tur_escape_box_any") == 0) {
+        *out = (n >= 1) ? args[0] : turi_int(0);
+        return true;
+    }
     if (strcmp(name, "tur_escape_resume") == 0) {
         /* (k v) on an escape continuation: SR N4 Slice 2 raises the work-stack
          * abort signal targeting this specific call/cc boundary (matched by

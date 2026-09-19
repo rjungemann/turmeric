@@ -1,0 +1,36 @@
+;; global-mut-cell-of-byvalue-adt-or-fn-emits-bad-c (repro 2): a global whose
+;; value is a function -- `(def g-fn (fn [x : int] : int ...))` -- did not
+;; compile in ANY use: `tur check` passed and cc rejected the emitted C.
+;;
+;; The global was spelled as its int64 carrier (`static int64_t g_fn;`) while
+;; every call site named it as a function (`g_fn()`, and the specialised
+;; `g_fn(x)` a typed HOF's clone emits for a callback), so the first call was
+;; an implicit `int()` declaration and the real one a redeclaration.  A
+;; `let`-bound lambda never had the problem because the binder spells a
+;; function pointer.  A top-level lambda can capture nothing but globals, so
+;; it IS a bare code pointer: the global is now declared `static R (*g)(A...)`,
+;; its initializer cast to that type, and forward-declared unconditionally
+;; (the HOF clone is emitted in a band that does not follow item order).
+;;
+;; Four shapes, each a distinct failure before: a nullary call, a `^mut` cell
+;; that is re-pointed and called, a lambda reading a global, and the global
+;; handed to a typed higher-order function.  The float case makes sure the
+;; pointer's result type is spelled from the fn type, not defaulted to int.
+
+(def k 3)
+(def g-nullary (fn [] : int 7))
+(def ^mut g-cell (fn [] : int 0))
+(def g-add-k (fn [x : int] : int (+ x k)))
+(def g-double (fn [x : int] : int (* x 2)))
+(def g-half (fn [x : float] : float (/ x 2.0)))
+
+(defn ap [f : (fn [int] int) v : int] : int (f v))
+
+(defn main [] : int
+  (println (g-nullary))
+  (set! g-cell (fn [] : int 42))
+  (println (g-cell))
+  (println (g-add-k 4))
+  (println (ap g-double 4))
+  (println (g-half 7.5))
+  0)

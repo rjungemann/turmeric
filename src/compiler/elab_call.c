@@ -5960,6 +5960,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * `Cont<BodyT,ResetT>` = (cont BodyT ResetT), the resume value must have
          * type BodyT.  An untyped-arg cont (the one-arg `(cont R)` / bare `cont`
          * spellings, arg == TY_UNKNOWN) stays unchecked, as before. */
+        /* An `any`-typed continuation (the `: any` call/cc receiver) takes
+         * any value: widen rather than reject, exactly as an `any` parameter
+         * would. */
+        if (fn_type.as.cont.arg == TY_ANY && karg->type.kind != TY_ANY &&
+            karg->type.kind != TY_NEVER)
+            karg = elab_coerce_to_any(e, karg);
         if (fn_type.as.cont.arg != TY_UNKNOWN
             && karg->type.kind != TY_UNKNOWN
             && karg->type.kind != fn_type.as.cont.arg) {
@@ -6008,7 +6014,28 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * T != int (e.g. cstr), bit-cast the resume value into the int carrier on
          * the way in and bit-cast the int result back to T on the way out, so the
          * emitted C is clean (no -Wint-conversion). */
-        Expr *karg_c = call_wrap_reinterpret(e, karg, TY_INT, call->span);
+        Expr *karg_c;
+        if (karg->type.kind == TY_ANY) {
+            /* A box does not fit the int64 `result` slot: hand over a heap
+             * copy's address (__tur_escape_box_any), which the landing reads
+             * and frees.  Only an escape continuation can be `any`-typed here
+             * (the call/cc receiver rewrite is what mints one). */
+            const BuiltinSpec *bspec =
+                builtin_first_with_name(intern_cstr(e->st, "__tur_escape_box_any"));
+            if (!bspec) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "internal: escape box builtin missing");
+                return NULL;
+            }
+            Expr **xargs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+            xargs[0] = karg;
+            karg_c = expr_new(e->arena, EX_BUILTIN, TYPE_INT, call->span);
+            karg_c->as.builtin.spec = bspec;
+            karg_c->as.builtin.args = xargs;
+            karg_c->as.builtin.n = 1;
+        } else {
+            karg_c = call_wrap_reinterpret(e, karg, TY_INT, call->span);
+        }
         Expr **bargs = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
         bargs[0] = kvar;
         bargs[1] = karg_c;
@@ -6016,7 +6043,9 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         out->as.builtin.spec = rspec;
         out->as.builtin.args = bargs;
         out->as.builtin.n = 2;
-        if (res_kind != TY_INT)
+        /* An `any` result is not reinterpreted: the resume never returns, and
+         * the receiver's own `: any` return widens the int-typed call. */
+        if (res_kind != TY_INT && res_kind != TY_ANY)
             out = call_wrap_reinterpret(e, out, res_kind, call->span);
         return out;
     }

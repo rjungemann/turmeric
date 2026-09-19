@@ -216,6 +216,11 @@ static BuiltinSpec table_[] = {
      * (call/cc f)/(escape f).  k is the int64_t landing handle f received;
      * invoking it returns v at the call/cc site (one-shot, upward escape). */
     { "tur_escape_resume", NULL, 2, 2, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "tur_escape_resume" },
+    /* saffron-dynamic-surface-pass (low, call/cc `: any` receiver): the resume
+     * value of an `any`-typed escape continuation crosses the longjmp as a
+     * heap copy of the 16-byte box, delivered as its address in the int64
+     * `result` slot; the landing reads and frees it.  Interpreter: identity. */
+    { "__tur_escape_box_any", NULL, 1, 1, {.kind=TY_ANY}, {.kind=TY_INT}, BS_FUNC_CALL, "__tur_escape_box_any" },
     /* cps-transform-plan (CPS10 / CPS5.4): serializable continuations captured
      * by (serial-shift f v) on the DK machine.  The handle f receives is a DK
      * chain (int64); resume runs it, serialize marshals it to a length-prefixed

@@ -5,9 +5,8 @@ six of the lows (Sym `=`, the expression call head, the `if` join, the
 `(defn mkv [] [1 2.5])` parse, the trailing-keyword body, the ctor under an
 all-`any` expectation), each pinned by a fixture; the fuzzer's last two KNOWN
 rows and both known-probes are retired and 250 cases with those shapes back
-in the pool are clean; the guide's boundary example is corrected. **Open:**
-M7 (the erased self-referential tail), M9 (multi-arg dynamic method), and
-three lows -- the variadic `& rest : any` representation gap, the `call/cc`
+in the pool are clean; the guide's boundary example is corrected. **M9 and the `call/cc` `: any` low resolved later the same day.** **Open:**
+M7 (the erased self-referential tail) and two lows -- the variadic `& rest : any` representation gap, the `call/cc`
 receiver annotated `: any`, and the `#lang`-less `(defn f [] [x y])` reading
 (deliberately unchanged, see the parse item). Struck-through items below
 carry their resolution note.
@@ -343,7 +342,18 @@ cast that 16-byte tagged value through `(int64_t)`, a truncation. `.head` on a
 cons list and both fields of a user `(defstruct Duo [A B] ...)` now agree on
 both back ends. Pinned by `tests/fixtures/saffron-dyn-field-on-generic-adt`.
 
-**Still open: walking a cons list through an `any`.** `.tail` now READS, but it
+**Still open: walking a cons list through an `any`.** *Checked 2026-09-19:
+the only fix that is not the hardcoding the paragraph below refuses is to
+declare the tail as the recursive occurrence -- `(tail (Cons A))` -- and let
+the widen tag it as `(Cons any)` (with a NULL link widening to the nil box).
+`stdlib/list.tur` says outright that "the tail link remains the legacy
+int64_t carrier" and ascribes each `(.tail xs)` by hand; and a probe of the
+shape -- `(defstruct Node :heap [A] (val A) (next (Node A)))` built with
+`(make-struct Node 8 0)` -- is rejected at elaboration with `function 'Node'
+arg 2: expected int, got int`, a self-contradictory diagnostic that says a
+self-typed `:heap` parametric field is not a supported shape today. So this
+is a stdlib representation change gated on that shape, not a dynamic-field
+fix; left open.* `.tail` now READS, but it
 reads back an `int`: the field is declared `:int`, a type-ERASED carrier
 standing for the recursive `(Cons A)` occurrence, so the widen boxes it with
 the int tag and a `cast` to `(Cons any)` panics. The interpreter answers `Cons`
@@ -382,13 +392,27 @@ Affects every `map-*` accessor since they are macros. The `if` truthiness
 rule (`elab_forms.c:2862`) is gated the same way: `(if (map-get m k) ...)` is
 `if condition must be bool, got any` even in a Saffron file.
 
-**M9. Multi-arg method on `any`: compiled panics as documented, interp
-dispatches.** `(.near? x y)` -> compiled `cannot be dispatched dynamically
-yet`, interp `true`. Parity note; the guide documents the panic. *Checked
-2026-09-19, still open:* the witness table has a NULL slot for any method
-taking more than the receiver (`__tur_inst_slot`, emit_module.c); closing it
-means minting an all-`any` marshalling witness per extra argument, the move
-H7/M1 made for one argument, generalised. Not picked up in this pass.
+**~~M9. Multi-arg method on `any`: compiled panics as documented, interp
+dispatches.~~ RESOLVED 2026-09-19.** `(.near? x y)` -> compiled `cannot be
+dispatched dynamically yet`, interp `true`. The v0 shim could unbox only the
+receiver word, so a method taking more than the receiver, or returning the
+class variable, had a NULL slot. It now gets the witness the HKT classes
+already had (D8 Q3), generalised: `saffron_mint_dyn_witness`
+(elab_typeclasses.c) is shared by both, and a kind-* method with extras or a
+class-variable result mints one witness per instance whose receiver can be
+spelled as a type form (a primitive or a non-parametric ADT) --
+`(defn __dynwit_Near_near?_int [__r : int __a1] : any (.near? __r (cast __a1
+int)))`. The cast is spelled IN the witness because the static method
+dispatch inside it does not run the D5 argument seam (measured: the `any`
+extra reached the impl unconverted, `incompatible type for argument 2`); the
+class variable is the receiver type for a kind-* instance, so that is the
+cast target, and a primitive-typed extra casts to its primitive. The node's
+result becomes `any`, as for an HKT class; one-parameter concrete-result
+methods keep the direct shim and their typed result. The emitter's witness
+shim gained the float-receiver arm (the word is the double's bit pattern).
+Pinned by `tests/fixtures/saffron-dyn-method-extra-args` (int, float and ADT
+receivers, a three-argument method, a class-variable result). Still not
+covered, by the same rule as before: a parametric or `:heap` receiver.
 
 ## Low -- expressiveness holes, both back ends agree
 
@@ -565,12 +589,24 @@ H7/M1 made for one argument, generalised. Not picked up in this pass.
   `tests/fixtures/saffron-ctor-under-all-any-expectation`, which also keeps
   the concrete-pin case; the fuzzer's `L-ctor-under-typed-expected` row and
   probe are retired.
-- A `call/cc` receiver annotated `: any` -- `(call/cc (fn [k] : any (k 42)))`
+- ~~A `call/cc` receiver annotated `: any` -- `(call/cc (fn [k] : any (k 42)))`
   -- is `conversion to non-scalar type requested` at cc: the CPS call/cc
   emitter assigns its result through a C cast to the binder's type and an
   escape delivers an int64, neither of which is a tagged box. Pre-existing;
   the H10 lambda default deliberately exempts the immediate receiver
-  (`in_callcc_receiver`) so an unannotated one keeps its scalar return.
+  (`in_callcc_receiver`) so an unannotated one keeps its scalar return.~~
+  **RESOLVED 2026-09-19.** A `: any` receiver now gets a value-typed
+  `(escape-cont any any)` (the rewrite in `callcc_default_cont_param`
+  detects the annotation on the form), so `(k v)` widens `v` to a box; the
+  box crosses the longjmp as a heap copy's address (`__tur_escape_box_any`,
+  a preamble helper and builtin, identity in the interpreter) and the
+  landing (`emit_callcc`, emit_cps_ir.c) reads and frees it, with no C cast
+  on either arm for a struct-typed binder. Pinned by
+  `tests/fixtures/saffron-callcc-any-receiver` (int, cstr, float escapes and
+  a normal return). The H10 exemption stays: an UNANNOTATED receiver keeps
+  its scalar return. Noted while pinning: `call/cc` directly inside `main`
+  aborts with "EX_CALLCC reached the direct emitter" in typed Turmeric too --
+  a pre-existing limit of the backend split, not this item.
 - ~~`Sym` is not accepted as a `defstruct` / `defdata` field type (`defdata:
   field has unrecognized type :Sym`), typed Turmeric too. Found by the fuzzer
   once `sym` joined its scalar pool.~~ **RESOLVED 2026-09-10.** Two rows, one

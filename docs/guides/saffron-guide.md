@@ -300,9 +300,13 @@ not reachable through it. The cases that panic, with a message saying which
 uncompilable C, fixed 2026-09-14 and pinned by
 `tests/fixtures/saffron-dyn-dispatch-payload-adt`):
 
-- A method taking more than the receiver (`eq [x : a y : a]`) or returning the
-  class's own type variable (`clone : a -> a`) -- the call site would have to
-  box and unbox more than the receiver.
+- A method taking more than the receiver (`eq [x : a y : a]`) or returning
+  the class's own type variable (`clone : a -> a`) on an instance whose
+  receiver is a **parametric** or **`:heap`** type. On a primitive or a
+  non-parametric ADT receiver such a method dispatches (since 2026-09-19)
+  through a per-instance witness that checked-casts each extra argument to
+  the impl's parameter type and answers `any`; a mismatched extra panics at
+  the cast.
 - An instance whose receiver is itself a type variable
   (`definstance Clone [T]`), which has no ground tag at all.
 - A higher-kinded instance whose method body is not by-value-expressible --

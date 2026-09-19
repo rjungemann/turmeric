@@ -39,6 +39,15 @@ void emit_cps_callcc_prelude(Buf *out) {
 "    TUR_LONGJMP(cc->buf);\n"
 "    return 0; /* unreachable */\n"
 "}\n"
+"/* An `any`-typed call/cc: the resume value is a 16-byte box, and `result`\n"
+" * carries one word -- so (k v) hands over a heap copy's address and the\n"
+" * landing reads and frees it (emit_callcc).  One malloc per escape. */\n"
+"static int64_t __tur_escape_box_any(tur_tagged_t v) {\n"
+"    tur_tagged_t *b = (tur_tagged_t *)malloc(sizeof *b);\n"
+"    if (!b) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+"    *b = v;\n"
+"    return (int64_t)(intptr_t)b;\n"
+"}\n"
 "\n");
 }
 

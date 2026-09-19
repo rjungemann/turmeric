@@ -1076,6 +1076,13 @@ bool emit_spec_result_mismatch(EmitCtx *ctx, Type call_result, Type spec_result)
  * Parameters at fn entry, and the match binder that borrows a wide boxed
  * recursive field (emit_expr.c B3) rather than copying the node out. */
 void emit_pbp_push(EmitCtx *ctx, Binding *b);
+/* A global whose value is a THIN function (a top-level lambda) is declared as
+ * a C function pointer `R (*g)(A...)`; true and the spelling's parts when the
+ * binding is one (caller frees *args_out).  emit_module.c. */
+bool emit_global_def_thin_fnptr(const Binding *b, const char **ret_out, char **args_out);
+/* True when `e` is a bare read of a pass-by-pointer binding (a `const T *`
+ * parameter or match binder registered by emit_pbp_push).  emit_expr.c. */
+bool emit_expr_is_pbp_param(EmitCtx *ctx, const Expr *e);
 /* G2: the concrete instance-method FnDef a class-method call resolves to for a
  * given recovered dispatch type (e.g. `__inst_Enc_enc_Cons` for `(Cons int)`).
  * Defined in emit_core.c. */

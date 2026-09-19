@@ -1,0 +1,67 @@
+#lang saffron
+; saffron-dynamic-surface-pass M9: a typeclass method taking MORE than the
+; receiver, dispatched on an `any` receiver, panicked compiled --
+;   instance Near int exists but '.near?' cannot be dispatched dynamically yet
+; -- while the interpreter dispatched it.  The v0 shim could unbox only the
+; receiver word.  A method returning the class variable (`.twice`) had the
+; same NULL slot.
+;
+; The fix is the move the HKT witnesses already make (D8 Q3, and H7/M1 at the
+; argument seam): per (instance, method) a source-level WITNESS defn
+;   (defn __dynwit_Near_near?_int [__r : int __a1] : any
+;     (.near? __r (cast __a1 int)))
+; whose extras arrive as boxes and are checked-cast to the impl's parameter
+; type -- the class variable is the receiver type for a kind-* instance -- and
+; whose `: any` return re-tags the result.  The emitter's two-line shim
+; unboxes the receiver word and calls it.  A one-parameter concrete-result
+; method (`.show`, `.hash`) keeps the direct shim and its typed result; only
+; extra-argument / class-variable-result methods go through a witness and
+; answer `any`, which `if` truthiness and `type-of` read as usual.
+;
+; Three receivers -- int, float (its word is the double's bit pattern, so a
+; wrong unbox would show as a huge count rather than 2.5), and a
+; non-parametric ADT -- plus a three-argument method and a class-variable
+; result.  7.25 / 2.5 keep fractions so truncation would be visible.
+
+(defclass Near [a]
+  (near? [x y] : bool)
+  (between? [x lo hi] : bool)
+  (twice [x] : a))
+
+(definstance Near [int]
+  (near? [x y] (< (- x y) 2))
+  (between? [x lo hi] (and (<= lo x) (<= x hi)))
+  (twice [x] (* x 2)))
+
+(definstance Near [float]
+  (near? [x : float y : float] (< (- x y) 1.0))
+  (between? [x : float lo : float hi : float] (and (<= lo x) (<= x hi)))
+  (twice [x : float] (* x 2.0)))
+
+(defdata Pt (Pt [px : int py : int]))
+
+(definstance Near [Pt]
+  (near? [x : Pt y : Pt] (< (- (.px x) (.px y)) 2))
+  (between? [x : Pt lo : Pt hi : Pt] (and (<= (.px lo) (.px x)) (<= (.px x) (.px hi))))
+  (twice [x : Pt] (Pt (* (.px x) 2) (* (.py x) 2))))
+
+(defn n [x y] (.near? x y))
+(defn b [x lo hi] (.between? x lo hi))
+(defn t [x] (.twice x))
+
+(defn main [] : int
+  (println (n 3 2))
+  (println (n 3 -5))
+  (println (n 7.25 7.0))
+  (println (n 7.25 2.5))
+  (println (b 5 1 9))
+  (println (b 5 6 9))
+  (println (b 2.5 2.0 3.0))
+  (println (t 21))
+  (println (t 3.5))
+  (println (type-of (t 21)))
+  (println (n (Pt 1 2) (Pt 2 2)))
+  (println (b (Pt 5 0) (Pt 1 0) (Pt 9 0)))
+  (println (.px (t (Pt 4 5))))
+  (if (n 1 1) (println "close") (println "far"))
+  0)

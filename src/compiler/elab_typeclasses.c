@@ -6027,6 +6027,233 @@ static bool typeclass_same_class(const TypeClass *a, const TypeClass *b) {
            memcmp(a->name->name, b->name->name, a->name->len) == 0;
 }
 
+/* saffron-lang-plan S9 (D8 Q3) / saffron-dynamic-surface-pass M9: mint the
+ * dynamic-dispatch WITNESS for (instance `wi`, method `slot`) -- an ordinary
+ * defn, elaborated at global scope in the Saffron span:
+ *
+ *   (defn __dynwit_<Class>_<method>_<Recv> [__r : <RecvTy> __a1 __a2 ...] : any
+ *     (.<method> __r __a1 __a2 ...))
+ *
+ * `__r` is the receiver at the type the registry row is keyed on (`recv_ty`,
+ * the all-`any` instantiation of a parametric head, or the ground receiver of
+ * a kind-* instance); every extra is `any` by the dialect default, so the D5
+ * seam inserts the checked unbox to the impl's parameter type; the `: any`
+ * return re-tags the result.  The emitter (emit_instance_dyn_table) writes a
+ * two-line C shim that unboxes the receiver word and calls this.  `def` is the
+ * parametric head's AdtDef (used for the applied-result continuation adaptor,
+ * M1) or NULL for a ground receiver.  Memoised per (instance, slot). */
+static void saffron_mint_dyn_witness(Elab *e, TypeClass *tc, uint8_t slot,
+                                     TypeClassInstance *wi, AdtDef *def,
+                                     Form *recv_ty, const char *recv_name,
+                                     const char *method_name, size_t method_name_len,
+                                     Span sp) {
+    if (!wi->dyn_witness) {
+        wi->dyn_witness = (FnDef **)arena_alloc(
+            e->arena, tc->n_methods * sizeof(FnDef *));
+        memset(wi->dyn_witness, 0, tc->n_methods * sizeof(FnDef *));
+    }
+    if (wi->dyn_witness[slot]) return;
+    /* `(Head any ... any)` -- the all-`any` instantiation, built fresh at every
+     * use because a Form is not shared between two positions in one tree. */
+    #define SAFFRON_ALL_ANY_APP(dst)                        \
+        Form *dst;                                          \
+        {   uint32_t __ntp = def->n_type_params;            \
+            Form **__ti = (Form **)arena_alloc(             \
+                e->arena, (1 + __ntp) * sizeof(Form *));    \
+            __ti[0] = form_sym(e->arena, sp,                \
+                symtab_intern(e->st, strslice(              \
+                    def->name,                              \
+                    (uint32_t)strlen(def->name))));         \
+            for (uint32_t __k = 0; __k < __ntp; __k++)      \
+                __ti[1 + __k] = form_sym(e->arena, sp,      \
+                    symtab_intern(e->st,                    \
+                        strslice("any", 3)));               \
+            dst = form_list(e->arena, sp, __ti, 1 + __ntp); \
+        }
+        char wn[256];
+        snprintf(wn, sizeof wn, "__dynwit_%s_%.*s_%s", tc->name->name,
+                 (int)method_name_len, method_name, recv_name);
+        const Symbol *wsym  = symtab_intern(e->st, strslice(wn, (uint32_t)strlen(wn)));
+        const Symbol *anys  = symtab_intern(e->st, strslice("any", 3));
+        const Symbol *defns = symtab_intern(e->st, strslice("defn", 4));
+        char dm[160];
+        snprintf(dm, sizeof dm, ".%.*s", (int)method_name_len, method_name);
+        const Symbol *dots = symtab_intern(e->st, strslice(dm, (uint32_t)strlen(dm)));
+        /* [__r : (Head any..) __a1 __a2 ...] -- class arity, not
+         * this call's, so the witness matches the declaration. */
+        uint32_t n_wextra = tc->methods[slot].n_params > 0
+                              ? tc->methods[slot].n_params - 1 : 0;
+        /* The reader spells `x : T` as `x` followed by an
+         * F_TYPE_ANN wrapping T (and `: any` after the params
+         * the same way); a bare `:` symbol is the legacy GADT
+         * ctor spelling and elab_defn reads `any` after it as an
+         * EXPRESSION ("unbound symbol 'any'"). */
+        Form **pv = (Form **)arena_alloc(e->arena, (2 + n_wextra) * sizeof(Form *));
+        const Symbol *rsym = symtab_intern(e->st, strslice("__r", 3));
+        pv[0] = form_sym(e->arena, sp, rsym);
+        pv[1] = form_type_ann(e->arena, sp, recv_ty);
+        Form **cargs = (Form **)arena_alloc(e->arena, (2 + n_wextra) * sizeof(Form *));
+        cargs[0] = form_sym(e->arena, sp, dots);
+        cargs[1] = form_sym(e->arena, sp, rsym);
+        /* An extra whose IMPL parameter is the erased fn carrier
+         * (`ptr-void` -- how an inferred `(g v)` records `g`,
+         * and what an explicit `: fn` lowers to) is passed as
+         * `(cast __ak (fn [any] any))`, the one shape that
+         * reaches the spec as a fat closure rather than as a
+         * local the poly wrapper would try to call BY NAME from
+         * file scope.  A Saffron lambda IS a `(fn [any] any)`,
+         * so the checked cast admits exactly the closures the
+         * spec can apply, and a closure of another arity panics
+         * at the cast instead of being called wrongly.  Neither
+         * the class nor the impl records the fn's arity (the
+         * method is declared `[container g]`, unannotated), so
+         * unary is the assumption and it is a stated v0 limit
+         * for binary-fn methods such as Foldable's. */
+        FnDef *wimpl = wi->method_impls[slot];
+        const Symbol *casts = symtab_intern(e->st, strslice("cast", 4));
+        const Symbol *fns   = symtab_intern(e->st, strslice("fn", 2));
+        for (uint32_t k = 0; k < n_wextra; k++) {
+            char an[24]; snprintf(an, sizeof an, "__a%u", k + 1);
+            const Symbol *as = symtab_intern(e->st, strslice(an, (uint32_t)strlen(an)));
+            pv[2 + k] = form_sym(e->arena, sp, as);
+            bool erased_fn = wimpl && wimpl->binding &&
+                wimpl->binding->type.kind == TY_FN &&
+                (k + 1) < wimpl->binding->type.as.fn.arity &&
+                wimpl->binding->type.as.fn.arg_kinds[k + 1] == TY_PTR_VOID;
+            /* saffron-dynamic-surface-pass M1: a continuation
+             * whose declared RESULT is the class variable
+             * APPLIED -- Monad's `k : (fn [a] (m b))`, against
+             * Functor's `g : (fn [a] b)` -- must not be cast to
+             * `(fn [any] any)`.
+             *
+             * With that cast the method's result instantiation
+             * never grounds (`(m b)` cannot unify with a bare
+             * `any`), so `.bind` resolves to the ERASED CARRIER
+             * `__inst_Monad_bind_Option(int64_t, tur_poly_fn_t)`
+             * -- whose body calls the continuation through
+             * `((int64_t (*)(void*, int64_t))k.fn)` while a
+             * Saffron lambda returns a 16-byte `tur_tagged_t`,
+             * dropping half the box on the return -- and the
+             * `: any` pin then tags an unresolved result with a
+             * bare TypeKind number, which is why `type-of` read
+             * `unknown`.
+             *
+             * Pass a MARSHALLING adaptor instead, the same move
+             * H7 makes at the argument seam:
+             *
+             *   (fn [__ka : any] : (Head any..)
+             *     (cast (__ak __ka) (Head any..)))
+             *
+             * Now `k` really is `(fn [any] (Head any..))`, so
+             * `b := any`, the instantiation is concrete, the
+             * ABI scan mints the by-value spec, and the result
+             * carries the right tag. */
+            bool app_result_fn = false;
+            if (erased_fn && slot < tc->n_methods &&
+                tc->methods[slot].param_types) {
+                const Type *mp = &tc->methods[slot].param_types[k + 1];
+                if (mp->kind == TY_FN && mp->as.fn.result_full_type &&
+                    mp->as.fn.result_full_type->kind == TY_APP)
+                    app_result_fn = true;
+            }
+            if (app_result_fn && def) {
+                SAFFRON_ALL_ANY_APP(ret_ty)
+                SAFFRON_ALL_ANY_APP(cast_ty)
+                char kn[24];
+                snprintf(kn, sizeof kn, "__ka%u", k);
+                const Symbol *ks = symtab_intern(
+                    e->st, strslice(kn, (uint32_t)strlen(kn)));
+                Form *inner[2] = { form_sym(e->arena, sp, as),
+                                   form_sym(e->arena, sp, ks) };
+                Form *cst2[3] = { form_sym(e->arena, sp, casts),
+                                  form_list(e->arena, sp, inner, 2),
+                                  cast_ty };
+                Form *pv2[2] = { form_sym(e->arena, sp, ks),
+                                 form_type_ann(e->arena, sp,
+                                     form_sym(e->arena, sp, anys)) };
+                Form *lam[4] = { form_sym(e->arena, sp, fns),
+                                 form_vec(e->arena, sp, pv2, 2),
+                                 form_type_ann(e->arena, sp, ret_ty),
+                                 form_list(e->arena, sp, cst2, 3) };
+                cargs[2 + k] = form_list(e->arena, sp, lam, 4);
+            } else if (erased_fn) {
+                Form *pany[1] = { form_sym(e->arena, sp, anys) };
+                Form *fnt[3] = { form_sym(e->arena, sp, fns),
+                                 form_vec(e->arena, sp, pany, 1),
+                                 form_sym(e->arena, sp, anys) };
+                Form *cst[3] = { form_sym(e->arena, sp, casts),
+                                 form_sym(e->arena, sp, as),
+                                 form_list(e->arena, sp, fnt, 3) };
+                cargs[2 + k] = form_list(e->arena, sp, cst, 3);
+            } else if (!def && slot < tc->n_methods && tc->methods[slot].param_types) {
+                /* M9 (kind-* witness): the static `.m __r __a1` inside the
+                 * witness resolves to ONE instance, whose impl declares the
+                 * extra at a concrete type -- the class variable IS the
+                 * receiver type here, `y : a` with `a := int` -- and the
+                 * method-dispatch path does not run the D5 argument seam, so
+                 * an `any` extra reached the impl unconverted (cc: incompatible
+                 * type for argument 2).  Spell the checked cast in the witness
+                 * itself: a class-variable extra casts to the receiver type, a
+                 * primitive-typed extra to that primitive, anything else
+                 * (another tyvar, a compound type) stays bare.  A mismatched
+                 * box panics at the cast, as at every other seam. */
+                /* The cast target is the IMPL's parameter type, which is
+                 * concrete per instance (`y : float` in `Near [float]`, `y :
+                 * Pt` in `Near [Pt]`).  The class declaration is no use here:
+                 * an unannotated class parameter (`(near? [x y] : bool)`) is
+                 * recorded as `int`, not as the class variable -- measured:
+                 * every witness cast to the int tag, and the float and Pt
+                 * instances' impls were handed an int64 word.  A class
+                 * variable in the impl's own signature (a generic impl) still
+                 * means the receiver type. */
+                const Type *mp = &tc->methods[slot].param_types[k + 1];
+                if (wimpl && wimpl->param_types && (k + 1) < wimpl->n_params)
+                    mp = &wimpl->param_types[k + 1];
+                const char *cast_name = NULL;
+                if (mp->kind == TY_TYVAR) cast_name = recv_name;
+                else switch (mp->kind) {
+                    case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_CSTR: case TY_SYM:
+                    case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                    case TY_FLOAT32: case TY_FLOAT64:
+                        cast_name = type_name(*mp); break;
+                    case TY_ADT:
+                        if (mp->as.adt_.def && mp->as.adt_.def->n_type_params == 0)
+                            cast_name = mp->as.adt_.def->name;
+                        break;
+                    default: break;
+                }
+                if (cast_name) {
+                    Form *cst[3] = { form_sym(e->arena, sp, casts),
+                                     form_sym(e->arena, sp, as),
+                                     form_sym(e->arena, sp, symtab_intern(e->st,
+                                         strslice(cast_name, (uint32_t)strlen(cast_name)))) };
+                    cargs[2 + k] = form_list(e->arena, sp, cst, 3);
+                } else {
+                    cargs[2 + k] = form_sym(e->arena, sp, as);
+                }
+            } else {
+                cargs[2 + k] = form_sym(e->arena, sp, as);
+            }
+        }
+        Form *params = form_vec(e->arena, sp, pv, 2 + n_wextra);
+        Form *body   = form_list(e->arena, sp, cargs, 2 + n_wextra);
+        Form *di[5] = { form_sym(e->arena, sp, defns), form_sym(e->arena, sp, wsym),
+                        params,
+                        form_type_ann(e->arena, sp, form_sym(e->arena, sp, anys)),
+                        body };
+        Form *dform = form_list(e->arena, sp, di, 5);
+        Scope *saved = e->scope;
+        e->scope = &e->global;
+        Expr *wdef = elab_defn(e, dform);
+        e->scope = saved;
+        if (wdef && wdef->kind == EX_FN_DEF && wdef->as.fn_def_.fn) {
+            elab_register_file_def(e, wdef);
+            wi->dyn_witness[slot] = wdef->as.fn_def_.fn;
+        }
+    #undef SAFFRON_ALL_ANY_APP
+}
+
 Expr *elab_method_call(Elab *e, const Form *call) {
 
     /* call is (.method obj arg1 arg2 ...)
@@ -7555,184 +7782,77 @@ found_method:;
                                  (p_bare && m7_body_returns_byvalue_element(pimpl->body)));
                             if (!p_body_ok) continue;
                         }
-                        if (!wi->dyn_witness) {
-                            wi->dyn_witness = (FnDef **)arena_alloc(
-                                e->arena, tc->n_methods * sizeof(FnDef *));
-                            memset(wi->dyn_witness, 0, tc->n_methods * sizeof(FnDef *));
-                        }
-                        if (wi->dyn_witness[slot]) continue;
                         AdtDef *def = h.as.adt_.def;
                         Span sp = call->span;
-                        /* `(Head any ... any)` -- the all-`any` instantiation,
-                         * built fresh at every use because a Form is not shared
-                         * between two positions in one tree. */
-                        #define SAFFRON_ALL_ANY_APP(dst)                        \
-                            Form *dst;                                          \
-                            {   uint32_t __ntp = def->n_type_params;            \
-                                Form **__ti = (Form **)arena_alloc(             \
-                                    e->arena, (1 + __ntp) * sizeof(Form *));    \
-                                __ti[0] = form_sym(e->arena, sp,                \
-                                    symtab_intern(e->st, strslice(              \
-                                        def->name,                              \
-                                        (uint32_t)strlen(def->name))));         \
-                                for (uint32_t __k = 0; __k < __ntp; __k++)      \
-                                    __ti[1 + __k] = form_sym(e->arena, sp,      \
-                                        symtab_intern(e->st,                    \
-                                            strslice("any", 3)));               \
-                                dst = form_list(e->arena, sp, __ti, 1 + __ntp); \
-                            }
-                        char wn[256];
-                        snprintf(wn, sizeof wn, "__dynwit_%s_%.*s_%s", tc->name->name,
-                                 (int)method_name_len, method_name, def->name);
-                        const Symbol *wsym  = symtab_intern(e->st, strslice(wn, (uint32_t)strlen(wn)));
                         const Symbol *anys  = symtab_intern(e->st, strslice("any", 3));
-                        const Symbol *defns = symtab_intern(e->st, strslice("defn", 4));
                         const Symbol *heads = symtab_intern(e->st,
                             strslice(def->name, (uint32_t)strlen(def->name)));
-                        char dm[160];
-                        snprintf(dm, sizeof dm, ".%.*s", (int)method_name_len, method_name);
-                        const Symbol *dots = symtab_intern(e->st, strslice(dm, (uint32_t)strlen(dm)));
-                        /* (Head any ... any) */
+                        /* (Head any ... any) -- the all-`any` instantiation. */
                         uint32_t ntp = def->n_type_params;
                         Form **ti = (Form **)arena_alloc(e->arena, (1 + ntp) * sizeof(Form *));
                         ti[0] = form_sym(e->arena, sp, heads);
                         for (uint32_t k = 0; k < ntp; k++) ti[1 + k] = form_sym(e->arena, sp, anys);
                         Form *recv_ty = form_list(e->arena, sp, ti, 1 + ntp);
-                        /* [__r : (Head any..) __a1 __a2 ...] -- class arity, not
-                         * this call's, so the witness matches the declaration. */
-                        uint32_t n_wextra = tc->methods[slot].n_params > 0
-                                              ? tc->methods[slot].n_params - 1 : 0;
-                        /* The reader spells `x : T` as `x` followed by an
-                         * F_TYPE_ANN wrapping T (and `: any` after the params
-                         * the same way); a bare `:` symbol is the legacy GADT
-                         * ctor spelling and elab_defn reads `any` after it as an
-                         * EXPRESSION ("unbound symbol 'any'"). */
-                        Form **pv = (Form **)arena_alloc(e->arena, (2 + n_wextra) * sizeof(Form *));
-                        const Symbol *rsym = symtab_intern(e->st, strslice("__r", 3));
-                        pv[0] = form_sym(e->arena, sp, rsym);
-                        pv[1] = form_type_ann(e->arena, sp, recv_ty);
-                        Form **cargs = (Form **)arena_alloc(e->arena, (2 + n_wextra) * sizeof(Form *));
-                        cargs[0] = form_sym(e->arena, sp, dots);
-                        cargs[1] = form_sym(e->arena, sp, rsym);
-                        /* An extra whose IMPL parameter is the erased fn carrier
-                         * (`ptr-void` -- how an inferred `(g v)` records `g`,
-                         * and what an explicit `: fn` lowers to) is passed as
-                         * `(cast __ak (fn [any] any))`, the one shape that
-                         * reaches the spec as a fat closure rather than as a
-                         * local the poly wrapper would try to call BY NAME from
-                         * file scope.  A Saffron lambda IS a `(fn [any] any)`,
-                         * so the checked cast admits exactly the closures the
-                         * spec can apply, and a closure of another arity panics
-                         * at the cast instead of being called wrongly.  Neither
-                         * the class nor the impl records the fn's arity (the
-                         * method is declared `[container g]`, unannotated), so
-                         * unary is the assumption and it is a stated v0 limit
-                         * for binary-fn methods such as Foldable's. */
-                        FnDef *wimpl = wi->method_impls[slot];
-                        const Symbol *casts = symtab_intern(e->st, strslice("cast", 4));
-                        const Symbol *fns   = symtab_intern(e->st, strslice("fn", 2));
-                        for (uint32_t k = 0; k < n_wextra; k++) {
-                            char an[24]; snprintf(an, sizeof an, "__a%u", k + 1);
-                            const Symbol *as = symtab_intern(e->st, strslice(an, (uint32_t)strlen(an)));
-                            pv[2 + k] = form_sym(e->arena, sp, as);
-                            bool erased_fn = wimpl && wimpl->binding &&
-                                wimpl->binding->type.kind == TY_FN &&
-                                (k + 1) < wimpl->binding->type.as.fn.arity &&
-                                wimpl->binding->type.as.fn.arg_kinds[k + 1] == TY_PTR_VOID;
-                            /* saffron-dynamic-surface-pass M1: a continuation
-                             * whose declared RESULT is the class variable
-                             * APPLIED -- Monad's `k : (fn [a] (m b))`, against
-                             * Functor's `g : (fn [a] b)` -- must not be cast to
-                             * `(fn [any] any)`.
-                             *
-                             * With that cast the method's result instantiation
-                             * never grounds (`(m b)` cannot unify with a bare
-                             * `any`), so `.bind` resolves to the ERASED CARRIER
-                             * `__inst_Monad_bind_Option(int64_t, tur_poly_fn_t)`
-                             * -- whose body calls the continuation through
-                             * `((int64_t (*)(void*, int64_t))k.fn)` while a
-                             * Saffron lambda returns a 16-byte `tur_tagged_t`,
-                             * dropping half the box on the return -- and the
-                             * `: any` pin then tags an unresolved result with a
-                             * bare TypeKind number, which is why `type-of` read
-                             * `unknown`.
-                             *
-                             * Pass a MARSHALLING adaptor instead, the same move
-                             * H7 makes at the argument seam:
-                             *
-                             *   (fn [__ka : any] : (Head any..)
-                             *     (cast (__ak __ka) (Head any..)))
-                             *
-                             * Now `k` really is `(fn [any] (Head any..))`, so
-                             * `b := any`, the instantiation is concrete, the
-                             * ABI scan mints the by-value spec, and the result
-                             * carries the right tag. */
-                            bool app_result_fn = false;
-                            if (erased_fn && slot < tc->n_methods &&
-                                tc->methods[slot].param_types) {
-                                const Type *mp = &tc->methods[slot].param_types[k + 1];
-                                if (mp->kind == TY_FN && mp->as.fn.result_full_type &&
-                                    mp->as.fn.result_full_type->kind == TY_APP)
-                                    app_result_fn = true;
-                            }
-                            if (app_result_fn) {
-                                SAFFRON_ALL_ANY_APP(ret_ty)
-                                SAFFRON_ALL_ANY_APP(cast_ty)
-                                char kn[24];
-                                snprintf(kn, sizeof kn, "__ka%u", k);
-                                const Symbol *ks = symtab_intern(
-                                    e->st, strslice(kn, (uint32_t)strlen(kn)));
-                                Form *inner[2] = { form_sym(e->arena, sp, as),
-                                                   form_sym(e->arena, sp, ks) };
-                                Form *cst2[3] = { form_sym(e->arena, sp, casts),
-                                                  form_list(e->arena, sp, inner, 2),
-                                                  cast_ty };
-                                Form *pv2[2] = { form_sym(e->arena, sp, ks),
-                                                 form_type_ann(e->arena, sp,
-                                                     form_sym(e->arena, sp, anys)) };
-                                Form *lam[4] = { form_sym(e->arena, sp, fns),
-                                                 form_vec(e->arena, sp, pv2, 2),
-                                                 form_type_ann(e->arena, sp, ret_ty),
-                                                 form_list(e->arena, sp, cst2, 3) };
-                                cargs[2 + k] = form_list(e->arena, sp, lam, 4);
-                            } else if (erased_fn) {
-                                Form *pany[1] = { form_sym(e->arena, sp, anys) };
-                                Form *fnt[3] = { form_sym(e->arena, sp, fns),
-                                                 form_vec(e->arena, sp, pany, 1),
-                                                 form_sym(e->arena, sp, anys) };
-                                Form *cst[3] = { form_sym(e->arena, sp, casts),
-                                                 form_sym(e->arena, sp, as),
-                                                 form_list(e->arena, sp, fnt, 3) };
-                                cargs[2 + k] = form_list(e->arena, sp, cst, 3);
-                            } else {
-                                cargs[2 + k] = form_sym(e->arena, sp, as);
-                            }
+                        saffron_mint_dyn_witness(e, tc, slot, wi, def, recv_ty, def->name,
+                                                 method_name, method_name_len, sp);
+                    }
+                }
+                /* saffron-dynamic-surface-pass M9: a kind-* method that takes
+                 * MORE than the receiver (`near? [x : a y : a]`), or returns the
+                 * class variable (`clone : a -> a`), used to get a NULL slot --
+                 * "cannot be dispatched dynamically yet" -- because the v0 shim
+                 * could unbox only the receiver word.  It is exactly the shape
+                 * the HKT witness above already answers: a source-level defn
+                 * whose extras are `any` (so the seam does the checked unbox to
+                 * the impl's parameter type, per instance) and whose `: any`
+                 * return re-tags the result.  So mint the same witness for
+                 * every instance of the class whose receiver can be SPELLED as
+                 * a type form -- a primitive or a non-parametric ADT; anything
+                 * else keeps its NULL slot and the clean panic.  The node's
+                 * result becomes `any`, as for an HKT class: a one-parameter
+                 * concrete-result method keeps the direct shim and its typed
+                 * result, so `.show` / `.hash` are untouched. */
+                bool star_witness = false;
+                if (!tc_is_hkt && slot < tc->n_methods) {
+                    const TypeClassMethod *cm = &tc->methods[slot];
+                    star_witness = cm->n_params > 1 || cm->return_type.kind == TY_TYVAR;
+                }
+                if (star_witness) {
+                    for (TypeClassInstance *wi = e->typeclass_env.instances; wi; wi = wi->next) {
+                        if (wi->typeclass != tc || wi->n_type_args == 0) continue;
+                        Type rt = wi->type_args[0];
+                        const char *rn = NULL;
+                        switch (rt.kind) {
+                            case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_CSTR:
+                            case TY_SYM:
+                            case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                            case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                            case TY_FLOAT32: case TY_FLOAT64:
+                                rn = type_name(rt); break;
+                            case TY_ADT:
+                                if (rt.as.adt_.def && rt.as.adt_.def->n_type_params == 0 &&
+                                    !rt.as.adt_.def->is_heap)
+                                    rn = rt.as.adt_.def->name;
+                                break;
+                            default: break;
                         }
-                        Form *params = form_vec(e->arena, sp, pv, 2 + n_wextra);
-                        Form *body   = form_list(e->arena, sp, cargs, 2 + n_wextra);
-                        Form *di[5] = { form_sym(e->arena, sp, defns), form_sym(e->arena, sp, wsym),
-                                        params,
-                                        form_type_ann(e->arena, sp, form_sym(e->arena, sp, anys)),
-                                        body };
-                        Form *dform = form_list(e->arena, sp, di, 5);
-                        Scope *saved = e->scope;
-                        e->scope = &e->global;
-                        Expr *wdef = elab_defn(e, dform);
-                        e->scope = saved;
-                        if (wdef && wdef->kind == EX_FN_DEF && wdef->as.fn_def_.fn) {
-                            elab_register_file_def(e, wdef);
-                            wi->dyn_witness[slot] = wdef->as.fn_def_.fn;
-                        }
+                        if (!rn) continue;
+                        Span sp = call->span;
+                        Form *recv_ty = form_sym(e->arena, sp,
+                            symtab_intern(e->st, strslice(rn, (uint32_t)strlen(rn))));
+                        saffron_mint_dyn_witness(e, tc, slot, wi, NULL, recv_ty, rn,
+                                                 method_name, method_name_len, sp);
                     }
                 }
                 /* The result type comes from the METHOD's declaration, which is
                  * the same for every instance -- that is what makes one slot
-                 * callable through one signature.  For an HKT class the witness
+                 * callable through one signature.  For an HKT class -- and for
+                 * a kind-* method served by a witness (M9) -- the witness
                  * returns `any`, so the node is `any` regardless of the
                  * declaration (whose result mentions the class variable). */
                 Type result_type = TYPE_INT;
-                if (tc_is_hkt) result_type = type_from_kind(TY_ANY);
-                if (!tc_is_hkt && best_method && best_method->binding &&
+                if (tc_is_hkt || star_witness) result_type = type_from_kind(TY_ANY);
+                if (!tc_is_hkt && !star_witness && best_method && best_method->binding &&
                     best_method->binding->type.kind == TY_FN) {
                     Type rt = best_method->binding->type.as.fn.result_full_type
                                   ? *best_method->binding->type.as.fn.result_full_type

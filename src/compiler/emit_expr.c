@@ -4428,6 +4428,10 @@ static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr) {
     return false;
 }
 
+bool emit_expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr) {
+    return expr_is_pbp_param(ctx, struct_expr);
+}
+
 /* end-to-end-monomorphization: resolve the concrete monomorphized type of an
  * EX_VAR that is a parameter of the active ABI spec.  `emit_resolve_type` does
  * not substitute the spec's element bindings into a parametric param type

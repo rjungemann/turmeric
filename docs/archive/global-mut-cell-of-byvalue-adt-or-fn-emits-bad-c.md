@@ -1,5 +1,20 @@
 # A `^mut` global holding a by-value ADT binder or a fn value emits C that does not compile
 
+**RESOLVED 2026-09-19, both repros.** (1) `emit_set_stmt` derefs a
+pass-by-pointer binder stored into a by-value target, as the `let` binder
+already did (`set-global-from-recursive-match-binder`). (2) A thin
+function-valued global is declared `static R (*g)(A...)`, its initializer
+and every `set!` into it cast to that type, and it is forward-declared
+unconditionally -- the ABI-specialised clone of a typed HOF calling it is
+emitted in a band that does not follow item order, so the position test the
+forward-declaration pass already had could not see the reference
+(`global-fn-value-def`: nullary call, `^mut` re-point, global read, callback
+into a typed HOF, float result). Not `^mut`-specific after all: no
+function-valued global compiled at all, and no fixture or stdlib file had
+one. The one residue -- a capturing closure stored into a thin cell, local
+or global, segfaults at the call -- is filed on its own as
+[fn-cell-set-with-capturing-closure-segfaults](../reported/fn-cell-set-with-capturing-closure-segfaults.md).
+
 **Severity: low-medium.** `tur check` passes; `tur build` fails in cc. Found
 2026-09-19 while probing the retaining-callee controls for
 [byvalue-recursive-adt-boxes-are-never-freed](byvalue-recursive-adt-boxes-are-never-freed.md);

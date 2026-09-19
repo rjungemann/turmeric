@@ -111,6 +111,37 @@ void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             tgt_c = type_c_name(emit_resolve_type(ctx, e->as.set_.target->type));
         char *bv = emit_store_int_ptr_bridge(ctx, tgt_c, v, e->as.set_.value);
         if (bv) { free(v); v = bv; }
+        /* global-mut-cell-of-byvalue-adt-or-fn-emits-bad-c (repro 1): the value
+         * is a pass-by-pointer binder -- a match arm binds a recursive-field
+         * link as `const T *` (the SR4 borrow) -- and the target is the
+         * aggregate by value, so `g = t` assigns a pointer to a struct.  Deref,
+         * exactly as the `let` binder does for the same initializer shape
+         * (`T g = *t;`).  A pointer-represented target (its C name carries a
+         * `*`) keeps the bare alias. */
+        /* (repro 2) a store into a thin function-pointer global casts the
+         * int64 carrier the value emits as to the pointer type the global is
+         * declared with -- the same cast its initializer gets. */
+        {
+            const char *fr = NULL; char *fa = NULL;
+            if (e->as.set_.target && e->as.set_.target->is_global &&
+                emit_global_def_thin_fnptr(e->as.set_.target, &fr, &fa)) {
+                size_t n = strlen(v) + strlen(fr) + strlen(fa) + 32;
+                char *cv = (char *)malloc(n);
+                if (!cv) { fprintf(stderr, "tur: oom\n"); abort(); }
+                snprintf(cv, n, "(%s (*)(%s))(intptr_t)(%s)", fr, fa, v);
+                free(v); v = cv;
+                free(fa);
+            }
+        }
+        if (tgt_c && !strchr(tgt_c, '*') &&
+            emit_expr_is_pbp_param(ctx, e->as.set_.value)) {
+            size_t n = strlen(v) + 4;
+            char *dv = (char *)malloc(n);
+            if (!dv) { fprintf(stderr, "tur: oom\n"); abort(); }
+            snprintf(dv, n, "(*%s)", v);
+            free(v);
+            v = dv;
+        }
     }
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s = %s;\n", bn, v);
@@ -311,6 +342,11 @@ void emit_instance_dyn_table(EmitCtx *ctx, TypeClassInstance *inst,
             buf_printf(ctx->file, "(const %s *)(intptr_t)__r", rcn);
         else if (emit_type_is_byvalue_adt(ctx, wrecv))
             buf_printf(ctx->file, "*(%s *)(intptr_t)__r", rcn);
+        else if (rr.kind == TY_FLOAT)
+            /* M9: a float receiver's word is the double's bit pattern (the
+             * inverse of what the widen wrote), as the direct shim below
+             * already spells it. */
+            buf_puts(ctx->file, "((union { double d; int64_t i; }){.i = __r}).d");
         else
             buf_printf(ctx->file, "(%s)(intptr_t)__r", rcn);
         for (uint32_t k = 0; k < nx; k++) buf_printf(ctx->file, ", __a%u", k + 1);
