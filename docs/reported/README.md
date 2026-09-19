@@ -2101,6 +2101,12 @@ from it -- the second reproduces on `vec-push!`, parametric since long before.
 | --- | --- | --- |
 | [generic-closure-capture-of-float-truncates](generic-closure-capture-of-float-truncates.md) | high | `((capture 7.25))` returns **7**, silently, exit 0, where `(defn capture [A] [v : A] : (fn [] A) (fn [] v))`. The closure-env struct is SHARED between the carrier base and every monomorphized spec and its payload field is `int64_t`, so the float spec's `__t287->v = v` assigns a `double` into it -- a numeric conversion, not a bit-reinterpret. Boundary measured: a generic pass-through (`ident`) is correct, `vec-push!`/`vec-get` are correct, only a **capture into a closure** breaks. The compiler already emits the right union idiom one line away (`bt_hycell_hynew(((union { double s; int64_t d; }){.s = 0.0}).d)`) and the CPS backend has it factored as `slot_store`/`slot_load`; the direct backend's env fill uses neither. **Second, independent defect at the same site**: the spec also drops the `TUR_REGION_NOTE_WORDS` the base emits, for every spec and not just float ones -- a missed hook on the set CLAUDE.md names explicitly. Blocks S2's `dfs-set`: parameterising it turns a loud `TUR-E0001` into `3.45846e-323` |
 
+## Found sweeping the region store hooks (filed 2026-09-19)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [stdlib-region-store-hooks-unswept](stdlib-region-store-hooks-unswept.md) | medium | CLAUDE.md's hooked set is the accumulation of sites someone happened to touch, never a swept set -- its "a new primitive joins the list in the same change" rule binds NEW primitives, and every module below predates it. A 30-line sweep over `stdlib/*.tur` inline-C bodies (parameter assigned into dereferenced memory, no `TUR_REGION_NOTE` in the body) returns 54 candidates, of which ~25 across 10 modules are genuine erased payloads: `threadpool` (`work-queue-push` is **exactly `chan-send`'s shape**, and chan-send was only hooked when S2 opened the file), `stm-sync`, `json`, `schema` (12 sites, the largest cluster), `httpd` (closure words into long-lived server state), `zipper`, `arrow`, `image`, `args`, `serial`. Counts, caps and local unions were checked and dismissed. `future.tur` (4) and `fiber.tur` (1) are fixed with fixture coverage in the filing change; the rest is a work list, and the report argues for a lint rather than another manual pass |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

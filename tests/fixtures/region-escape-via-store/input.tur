@@ -6,6 +6,8 @@
 ;; memory.  Every value is read AFTER the pop, and TUR_REGIONS=0 must print
 ;; the same lines (tests/run-regions-seam.sh).
 
+(load "stdlib/future.tur")
+
 (defdata Link :heap (Link [v : int nxt : int]))
 
 (defn link-v [l : Link] : int
@@ -66,6 +68,26 @@
     (let [outer (Link (* 5 n) 0)]
       (with-region (fn [] (do (vec-push! v outer) 1)))))))
 
+;; 10. promise-fulfill into a FutureCell that outlives the bracket.  The
+;;     bracket's result is a scalar and the Future is an OPAQUE handle, so the
+;;     result walk never sees the node sitting inside the cell -- only the
+;;     store-side note stands between the read below and reclaimed memory.
+;;     Read with a local helper, as the other future fixtures do, because
+;;     future-get hands back a boxed Result rather than the bare word.
+(defn future-value [^borrow f : Future] : int
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  return ((FutureCell *)f)->value;
+  ```)
+
+(defn store-promise [p : Promise n : int] : int
+  (with-region (fn [] (do (promise-fulfill p (build n 0)) 1))))
+
+;; 11. future-of allocates the cell INSIDE the bracket and hands the handle
+;;     out; the node it carries is the erased chain.
+(defn store-future-of [n : int] : Future
+  (with-region (fn [] (future-of (build n 0)))))
+
 (defn main [] : int
   (let [v (:: (vec-new) (Vec Link))]
     (println (store-vec v 4))
@@ -93,4 +115,12 @@
   (let [v (:: (vec-new) (Vec Link))]
     (println (store-nested v 2))                        ;; 1
     (println (link-v (vec-get v 0))))                   ;; 10
+  (let [p (promise-new)
+        f (future-handle p)]
+    (println (store-promise p 4))                       ;; 1
+    (println (chain-sum (future-value f)))              ;; 10
+    (future-free f))
+  (let [g (store-future-of 3)]
+    (println (chain-sum (future-value g)))              ;; 6
+    (future-free g))
   0)

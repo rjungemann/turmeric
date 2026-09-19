@@ -71,6 +71,11 @@
 
 (defn fiber-yield [value : int] : nil
   ```c
+  /* region-lock-hardening: tur_fiber_block_yield stores the word into the
+     FiberBlock (`f->result`), which outlives this yield and is read by the
+     fiber-resume caller after the bracket may have rewound.  The parameter is
+     erased (`:int`), so the note is written here rather than at body entry. */
+  TUR_REGION_NOTE(value);
   tur_fiber_block_yield(value);
   ```)
 ;;; fiber-done? -- check whether a fiber has run to completion.

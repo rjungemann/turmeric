@@ -9350,7 +9350,12 @@ static int64_t fiber_hyresume(void * f, int64_t arg) {
 }
 
 static void fiber_hyyield(int64_t value) {
-        tur_fiber_block_yield(value);
+        /* region-lock-hardening: tur_fiber_block_yield stores the word into the
+     FiberBlock (`f->result`), which outlives this yield and is read by the
+     fiber-resume caller after the bracket may have rewound.  The parameter is
+     erased (`:int`), so the note is written here rather than at body entry. */
+  TUR_REGION_NOTE(value);
+  tur_fiber_block_yield(value);
   
 }
 
