@@ -137,7 +137,7 @@
 ;;; __ne-len-acc -- tail-recursive length accumulator over a cons list.
 
 (defn __ne-len-acc [xs : int acc : int] : int
-  (if (tnil? xs) acc (__ne-len-acc (list-tail xs) (+ acc 1))))
+  (if (null? xs) acc (__ne-len-acc (list-tail xs) (+ acc 1))))
 ;;; ne-from? -- smart constructor: recover a NonEmpty from an arbitrary list.
 ;;;
 ;;; This is the proof obligation: match the resulting Option once, and the

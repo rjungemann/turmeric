@@ -38,7 +38,7 @@
 ;; fold -- the actual exercise of the fixed path: list-head is :int, ascribed to
 ;; the closure's fn type and handed to apply-mw's ^fat parameter.
 (defn fold [base : int mws : int] : int
-  (if (tnil? mws)
+  (if (null? mws)
     base
     (apply-mw (:: (list-head mws) (fn [int] ptr<void>))
               (fold base (list-tail mws)))))

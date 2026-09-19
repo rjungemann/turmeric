@@ -342,22 +342,27 @@ cast that 16-byte tagged value through `(int64_t)`, a truncation. `.head` on a
 cons list and both fields of a user `(defstruct Duo [A B] ...)` now agree on
 both back ends. Pinned by `tests/fixtures/saffron-dyn-field-on-generic-adt`.
 
-**Still open: walking a cons list through an `any`.** *Checked 2026-09-19:
-the only fix that is not the hardcoding the paragraph below refuses is to
-declare the tail as the recursive occurrence -- `(tail (Cons A))` -- and let
-the widen tag it as `(Cons any)` (with a NULL link widening to the nil box).
-`stdlib/list.tur` says outright that "the tail link remains the legacy
-int64_t carrier" and ascribes each `(.tail xs)` by hand; and a probe of the
-shape -- `(defstruct Node :heap [A] (val A) (next (Node A)))` -- was not a
-supported shape (filed as
-[self-typed-heap-parametric-field-unsupported](../archive/self-typed-heap-parametric-field-unsupported.md)).
-**Unblocked later on 2026-09-19:** that shape now compiles end to end
-(typed terminator `(:: 0 (Node int))`, generic `push`, recursive walks,
-`match`, an `(Option (Node A))` link, and `(Node any)` in Saffron -- see
-`tests/fixtures/heap-parametric-self-typed-field*`). What remains here is
-the stdlib representation change itself: redeclaring `Cons`'s tail as
-`(Cons A)` and re-ascribing its consumers, which is a stdlib sweep rather than
-a dynamic-field fix; left open.* `.tail` now READS, but it
+**~~Still open: walking a cons list through an `any`.~~ RESOLVED 2026-09-19.**
+`stdlib/list.tur`'s `Cons` is `(defstruct Cons :heap [A] (head A) (tail
+(Cons A)))` now: the tail is the recursive occurrence, a typed pointer, so
+`.tail` hands back a `(Cons A)` and the widen tags it `(Cons any)`. Three
+things had to land first, in order: the self-typed `:heap` shape itself
+([self-typed-heap-parametric-field-unsupported](../archive/self-typed-heap-parametric-field-unsupported.md)),
+a nullary generic under a tyvar-shaped expectation so `tnil` could become
+`[A] [] : (Cons A)` ([nullary-generic-call-under-tyvar-expectation](../archive/nullary-generic-call-under-tyvar-expectation.md)),
+and the dynamic field read widening an app-typed field under the all-`any`
+monomorph rather than the OPEN `(Cons A)` (whose id no `.head` arm matched:
+`no field '.head' on a Cons value`). `tnil?` takes the typed list now so an
+`any` holding a list seams into it (`cast: any holds Cons, not int` before);
+`null?` is its `:int`-taking twin for carrier-level lists, and the
+carrier-level helpers (`tcons`, `list-head`, `list-tail`, `list-length`,
+`list-concat`, ...) are unchanged. Pinned by
+`tests/fixtures/saffron-cons-list-walk-through-any`: `(.head (.tail l))`
+static with no ascription, the same through an unannotated parameter, and a
+recursive `walk` over the `any`, agreeing on both back ends. *Was:* the only
+fix that is not the hardcoding the paragraph below refuses is to declare the
+tail as the recursive occurrence -- `(tail (Cons A))` -- and let the widen
+tag it as `(Cons any)`. `.tail` READ, but it
 reads back an `int`: the field is declared `:int`, a type-ERASED carrier
 standing for the recursive `(Cons A)` occurrence, so the widen boxes it with
 the int tag and a `cast` to `(Cons any)` panics. The interpreter answers `Cons`
@@ -523,6 +528,12 @@ covered, by the same rule as before: a parametric or `:heap` receiver.
   (`head`, the untyped cons helpers) would have to know the head is a box
   and deref it, a second protocol for one accessor. Both are the stdlib
   `Cons` representation change M7 records, not a call-site fix.
+  **UNBLOCKED later on 2026-09-19:** M7 landed -- `Cons`'s tail is `(Cons
+  A)` and a `(Cons any)` walks through an `any` on both back ends -- so the
+  `(Cons any)` route above is open: the remaining work is routing the
+  variadic rest lowering for a `: any` rest onto the `(Cons any)` monomorph
+  (`tcons-of` at `any`) instead of `__tur_cons_of`'s int64 cell, and typing
+  the callee's `rest` as `(Cons any)`. Still open.
 - ~~`(defstruct Dyn [v : any])` is `unsupported field form` (typed too); ADT
   fields accept `any`, struct fields do not.~~ **RESOLVED 2026-09-10.**
   `defstruct_field_type_lowerable` had no arm for `TY_ANY`, so the gate fell to

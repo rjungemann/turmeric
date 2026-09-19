@@ -16,7 +16,7 @@
 (defn rec [A] [(C A)] [i : int n : int] : (Cons A)
   (if (>= i n) (:: (tnil) (Cons A))
     (tcons-of (ok-val (:: (one i) (Result A cstr)))
-              (:: (rec (+ i 1) n) (Cons A)))))
+              (rec (+ i 1) n))))
 
 ;; a constrained generic that WRAPS the walk (a public decode-list shape)
 (defn wrap [A] [(C A)] [n : int] : (Cons A) (rec 0 n))

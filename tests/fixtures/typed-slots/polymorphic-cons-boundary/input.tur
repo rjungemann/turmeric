@@ -6,7 +6,7 @@
   c)
 
 (defn main [] : int
-  (let [orig (:: (make-struct Cons 1.5 0) (Cons float))
+  (let [orig (:: (make-struct Cons 1.5 (tnil)) (Cons float))
         thru (id-cons orig)]
     ;; Both ends read the head as a direct `double` from Cons__float.
     (println (.head orig))

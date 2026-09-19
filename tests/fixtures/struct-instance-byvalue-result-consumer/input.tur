@@ -31,7 +31,7 @@
   (if (>= i n)
     (:: (tnil) (Cons A))
     (tcons-of (ok-val (:: (dec t (mk-node i)) (Result A cstr)))
-              (:: (build t (+ i 1) n) :int))))
+              (build t (+ i 1) n))))
 
 (defn null-tree [] : Tree
   ```c

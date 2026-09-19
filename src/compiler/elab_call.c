@@ -1079,6 +1079,50 @@ static bool w2_arg_is_free_poly_call(const Expr *arg) {
                                   arg->as.call_.args, arg->as.call_.n_args);
 }
 
+/* nullary-generic-call-under-tyvar-expectation / M7: is `name` a type
+ * variable quantified by the ENCLOSING signature?  Inside a generic body a
+ * tyvar of that name in an argument's type is the body's own abstract `A`,
+ * not a fresh one a nullary call minted, and it must stay abstract. */
+static bool ng_tyvar_in_sig(const Elab *e, const char *name) {
+    if (!e || !name) return false;
+    for (uint8_t k = 0; k < e->n_sig_tyvars; k++)
+        if (e->sig_tyvars[k] && strcmp(e->sig_tyvars[k], name) == 0) return true;
+    return false;
+}
+
+static bool ng_type_names_sig_tyvar(const Elab *e, const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR) return ng_tyvar_in_sig(e, t->as.tyvar_.name);
+    if (t->kind == TY_APP)
+        return ng_type_names_sig_tyvar(e, t->as.app.fn) ||
+               ng_type_names_sig_tyvar(e, t->as.app.arg);
+    return false;
+}
+
+/* M7 (typed `Cons` tail): an application argument carrying the enclosing
+ * body's abstract tyvar -- `(Cons A)` from an ascription or a recursive call
+ * inside `(defn rec [A] [(C A)] ...)` -- against the parameter instantiated
+ * with the siblings' bindings.  In a constrained body a sibling of type `A`
+ * arrives ERASED to the int64 carrier (`(ok-val (:: (one i) (Result A
+ * cstr)))` types as `int`), so the binding reads `A := int` and the typed
+ * tail's `'A` failed `type_eq` against it: `expected (Cons A), got (Cons A)`.
+ * The int carrier IS the abstract `A` here, so an in-scope tyvar on the
+ * actual side matches an `int` (or itself) on the instantiated side; every
+ * other position must agree exactly. */
+static bool ng_erased_match(const Elab *e, const Type *inst, const Type *actual) {
+    if (!inst || !actual) return false;
+    if (actual->kind == TY_TYVAR && ng_tyvar_in_sig(e, actual->as.tyvar_.name)) {
+        if (inst->kind == TY_INT) return true;
+        if (inst->kind == TY_TYVAR && inst->as.tyvar_.name && actual->as.tyvar_.name)
+            return strcmp(inst->as.tyvar_.name, actual->as.tyvar_.name) == 0;
+        return false;
+    }
+    if (inst->kind == TY_APP && actual->kind == TY_APP)
+        return ng_erased_match(e, inst->as.app.fn, actual->as.app.fn) &&
+               ng_erased_match(e, inst->as.app.arg, actual->as.app.arg);
+    return type_eq(*inst, *actual);
+}
+
 static bool call_find_type_binding(CallTypeBinding *bindings, uint8_t n_bindings,
                                    const char *name, uint8_t *out_idx) {
     if (!name) return false;
@@ -6766,6 +6810,58 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             } else if (expected_full && call_type_has_named_tyvar(expected_full)) {
                 arg_ok = call_collect_type_bindings(expected_full, args[i]->type,
                                                     type_bindings, &n_type_bindings);
+                /* nullary-generic-call-under-tyvar-expectation: `(wrap 3
+                 * (box-nil))` against `[v : A b : (Box A)]`, or `(make-struct
+                 * W 8 (none))` against `(opt (Option A))`.  Arg 1 bound
+                 * `A := int`; the collect above then compares that binding
+                 * with the argument's OWN open tyvar (`(Box 'A)` from the
+                 * nullary call's result) and reports `expected (Box A), got
+                 * (Box A)`.  The argument is a return-only polymorphic call
+                 * result -- exactly W2's population below -- so instantiate
+                 * the parameter with the bindings the siblings produced and,
+                 * when that grounds it, unify the argument's tyvar against it
+                 * the way W2 does for a concrete parameter: record the
+                 * substitution on the nullary call so emit monomorphizes it
+                 * (`none__spec__Option__int`), and take the grounded type as
+                 * the argument's.  A parameter the siblings leave open keeps
+                 * the ordinary rejection. */
+                if (!arg_ok && expected_full->kind == TY_APP &&
+                    args[i]->type.kind == TY_APP &&
+                    ng_type_names_sig_tyvar(e, &args[i]->type)) {
+                    /* M7: the argument names the ENCLOSING body's abstract
+                     * tyvar (a recursive call's `(Cons A)`, an ascription to
+                     * it) -- not a fresh one.  It stays abstract: match it
+                     * against the instantiated parameter with the erased
+                     * carrier standing in for `A` (ng_erased_match), record
+                     * nothing, and never pin the call to a sibling's erased
+                     * `int`, which would monomorphize a generic body's
+                     * recursion at the wrong element type (a float list read
+                     * back int bits). */
+                    Type inst = call_instantiate_type(e, expected_full,
+                                                      type_bindings, n_type_bindings);
+                    if (ng_erased_match(e, &inst, &args[i]->type)) arg_ok = true;
+                } else if (!arg_ok && expected_full->kind == TY_APP &&
+                    args[i]->type.kind == TY_APP &&
+                    w2_arg_is_free_poly_call(args[i])) {
+                    Type inst = call_instantiate_type(e, expected_full,
+                                                      type_bindings, n_type_bindings);
+                    if (inst.kind == TY_APP && !call_type_has_named_tyvar(&inst)) {
+                        CallTypeBinding ngscratch[16];
+                        uint8_t ngn = 0;
+                        if (call_collect_type_bindings(&args[i]->type, inst,
+                                                       ngscratch, &ngn)) {
+                            if (ngn > 0 && !args[i]->as.call_.abi_bindings) {
+                                AbiTypeBinding *saved = (AbiTypeBinding *)arena_alloc(
+                                    e->arena, ngn * sizeof(AbiTypeBinding));
+                                for (uint8_t bi = 0; bi < ngn; bi++) saved[bi] = ngscratch[bi];
+                                args[i]->as.call_.abi_bindings   = saved;
+                                args[i]->as.call_.n_abi_bindings = ngn;
+                            }
+                            args[i]->type = inst;
+                            arg_ok = true;
+                        }
+                    }
+                }
             } else if (arg_ok && expected_arg_kind == TY_APP &&
                        args[i]->type.kind == TY_APP &&
                        expected_full && expected_full->kind == TY_APP) {

@@ -56,7 +56,7 @@
 ;;;
 ;;; Since: end-to-end-monomorphization-plan (Phase 1.1)
 
-(defn list-empty? [A] [xs : (List A)] : bool (tnil? (:: xs :int)))
+(defn list-empty? [A] [xs : (List A)] : bool (null? (:: xs :int)))
 ;;; list->carrier -- recover the raw int64 cons-list carrier from a (List A).
 ;;;
 ;;; Parameters:

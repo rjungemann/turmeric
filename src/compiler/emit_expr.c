@@ -6660,6 +6660,21 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
  * aggregate, carrier -- and each case is spelled the way the inject arm spells
  * it, because a float widened any other way is a denormal, not a rounding
  * error. */
+/* M7: rewrite every type VARIABLE inside an applied type to `any` -- the
+ * emit-side twin of elab_call.c's call_ground_open_app_args_to_any, for the
+ * dynamic field read below, where a field declared `(Cons A)` must be
+ * widened as the all-`any` monomorph `(Cons any)` it actually holds.  Walks
+ * the whole spine; anything that is not a tyvar or an application is
+ * returned as it is. */
+static Type dyn_ground_tyvars_to_any(Arena *a, Type t) {
+    if (t.kind == TY_TYVAR) return emit_type_from_kind(TY_ANY);
+    if (t.kind != TY_APP || !t.as.app.fn || !t.as.app.arg) return t;
+    Type fn  = dyn_ground_tyvars_to_any(a, *t.as.app.fn);
+    Type arg = dyn_ground_tyvars_to_any(a, *t.as.app.arg);
+    Span nosp; memset(&nosp, 0, sizeof nosp);
+    return type_app(a, fn, arg, nosp);
+}
+
 static char *dyn_widen_to_any(EmitCtx *ctx, Type t, const char *val) {
     Type r = emit_resolve_type(ctx, t);
     int64_t id = emit_any_type_id(ctx, t);
@@ -6771,6 +6786,17 @@ static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
              * tagged box already. */
             if (def->n_type_params > 0 && ft.kind == TY_TYVAR)
                 ft = emit_type_from_kind(TY_ANY);
+            /* M7 (the typed `Cons` tail): a field declared as an APPLICATION
+             * over the type parameter -- `(tail (Cons A))` -- is, in the
+             * all-`any` monomorph, that application at `any`: `(Cons any)`.
+             * Widening it under its declared `(Cons A)` stamped the box with
+             * the OPEN type's id, so the very next `.head` on it -- which
+             * compares against `(Cons any)`'s id, the only instantiation
+             * Saffron builds -- matched no arm and panicked `no field '.head'
+             * on a Cons value`.  Ground the parameters the same way `at`
+             * above was built, so the link reads back as the value it is. */
+            else if (def->n_type_params > 0 && ft.kind == TY_APP)
+                ft = dyn_ground_tyvars_to_any(ctx->type_arena, ft);
             Buf read; buf_init(&read);
             /* A `:heap` ADT's own C name IS the pointer type
              * (`tur_adt_Cons__any *`), so adding a `*` here would spell a
@@ -15312,6 +15338,35 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * a -Wdiscarded-qualifiers implicit conversion. */
                         Buf pb; buf_init(&pb);
                         buf_printf(&pb, "(void *)(%s)", inner_val);
+                        buf_putc(&pb, '\0');
+                        free(inner_val);
+                        inner_val = strdup(pb.data);
+                        buf_free(&pb);
+                    }
+                }
+            }
+            /* self-typed-heap-parametric-field (M7): the carrier -> typed
+             * pointer direction of seam 3 above.  `(:: t (Cons A))` with
+             * `t : int` -- stdlib `tcons`'s carrier-level tail, or a user's
+             * `(:: 0 (Node int))` terminator -- ascribes the int64 word into a
+             * slot the `:heap` monomorph spells `tur_adt_Cons__int *`.  A
+             * literal 0 is a null pointer constant and passed silently, which
+             * is how the terminator idiom worked; a VARIABLE is an int64 into
+             * a pointer parameter (-Wint-conversion, a hard error under GCC >=
+             * 14).  Resolve through the active spec so `(Cons A)` grounds to
+             * the monomorph, and cast only when it really is a pointer: the
+             * abstract carrier base (`(Cons A)` c-named int64_t) is untouched. */
+            if (e->type.kind == TY_APP &&
+                e->as.ascribe_.inner->type.kind == TY_INT) {
+                Type to_r = emit_resolve_type(ctx, e->type);
+                if (type_is_heap_adt(to_r)) {
+                    const char *tcn = emit_type_c_name(ctx, to_r);
+                    const char *icty =
+                        emit_type_c_name(ctx, e->as.ascribe_.inner->type);
+                    if (tcn && strchr(tcn, '*') &&
+                        icty && strchr(icty, '*') == NULL) {
+                        Buf pb; buf_init(&pb);
+                        buf_printf(&pb, "(%s)(intptr_t)(%s)", tcn, inner_val);
                         buf_putc(&pb, '\0');
                         free(inner_val);
                         inner_val = strdup(pb.data);

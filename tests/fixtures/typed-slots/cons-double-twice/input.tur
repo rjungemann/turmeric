@@ -8,7 +8,7 @@
 ;; the result.
 
 (defn main [] : int
-  (let [xs (tcons-of 3.14 0)
+  (let [xs (tcons-of 3.14 (tnil))
         a (thead xs)
         b (thead xs)]
     (println a)

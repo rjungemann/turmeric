@@ -3,10 +3,10 @@
 ;; -- no user-side bit-cast, no inline-C carrier read.
 
 (defn main [] : int
-  (let [xs (tcons-of 1.5 0)]
+  (let [xs (tcons-of 1.5 (tnil))]
     (println (.head xs))
-    (println (.tail xs)))
-  (let [ys (tcons-of 2.5 0)]
+    (println (:: (.tail xs) :int)))
+  (let [ys (tcons-of 2.5 (tnil))]
     (println (.head ys))
-    (println (.tail ys)))
+    (println (:: (.tail ys) :int)))
   0)
