@@ -1781,6 +1781,9 @@ bool         type_is_subtype(Type sub, Type super_);
  * Returns 1 if compatible (all arg_linear flags match), 0 on mismatch.
  * Non-function types always return 1. */
 int          fn_type_subtype(Type actual, Type expected);
+/* stdlib-int-stand-in-audit S1: arity/arg-kind/result-kind compatibility.
+ * Permissive at tyvar/unknown/any slots; rejects only concrete disagreement. */
+int          fn_type_structurally_compatible(Type actual, Type expected);
 const char  *type_name(Type t);                   /* "int", "bool", … */
 /* any-fn-tag-does-not-discriminate-signatures: the identity spelling of a
  * function type -- "(fn [int cstr] : bool)" -- rendered from its parts rather
