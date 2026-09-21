@@ -140,8 +140,21 @@ jobs:
       # fixtures (three today) key on; without it every one of them skipped
       # on every run.  Shallow, at the sibling's default branch -- the same
       # thing a developer following CLAUDE.md's "Optional dependencies" gets.
+      #
+      # Prefer /usr/bin/git over whatever PATH resolves first. The macos-latest
+      # image currently ships a Homebrew git (2.55.0) linked against a
+      # libintl.8.dylib its own gettext (1.0) no longer provides, and
+      # /opt/homebrew/bin precedes /usr/bin -- so the bare name finds a binary
+      # that SIGABRTs in dyld before it opens a connection (exit 134), and the
+      # step fails identically on every re-run. Apple's git is present on the
+      # macOS runners and is the same binary the bare name already resolves to
+      # on Ubuntu, so this costs nothing there and does not branch on the OS.
       - name: Check out turmeric-spices (sibling)
-        run: git clone --depth 1 https://github.com/rjungemann/turmeric-spices ../turmeric-spices
+        run: |
+          # An `if`, not `[ -x ... ] && GIT=...`: the step shell is `bash -e`,
+          # where that list's own non-zero status on a miss ends the step.
+          if [ -x /usr/bin/git ]; then GIT=/usr/bin/git; else GIT=git; fi
+          "$GIT" clone --depth 1 https://github.com/rjungemann/turmeric-spices ../turmeric-spices
 
       - name: Smoke check (tur --version must not hang)
         run: |
