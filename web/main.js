@@ -908,6 +908,19 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+/**
+ * Escape text that is going inside a double-quoted HTML attribute.
+ *
+ * escapeHtml alone is not enough there: textContent -> innerHTML escapes `&`,
+ * `<` and `>` but leaves `"` alone, so a guide whose title or description
+ * carries a quote -- and several do, since front matter quotes titles that
+ * contain a colon -- closes the attribute early and turns the rest of its own
+ * description into stray attributes on the tag.
+ */
+function escapeAttr(text) {
+    return escapeHtml(text).replace(/"/g, '&quot;');
+}
+
 
 /**
  * Format a console line with prompt and result
@@ -4993,6 +5006,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const DOCS_PACK_BASE = '/docs-pack';
 
+/**
+ * How many pages the nav's "Recently Added" section lists.
+ *
+ * Ten, matching the Recently Added card at the top of the website's guides
+ * index. That card is guides only; this one also carries new API modules,
+ * since the pane is a browser over the whole pack. The dates behind both are
+ * the same numbers -- the generator stamps each page with the day its source
+ * was first committed and passes the guides' dates straight through -- so the
+ * two cannot disagree about when a guide arrived.
+ */
+const DOCS_RECENT_COUNT = 10;
+
 let docsIndex = null;          // parsed index.json, once
 let docsIndexPromise = null;   // in-flight load, so concurrent opens share one
 let docsCurrentRef = null;     // e.g. 'guides/hkt-guide'
@@ -5071,15 +5096,18 @@ function docsAllPages() {
     const out = [];
     for (const g of docsIndex.guides || []) {
         out.push({ ref: `guides/${g.slug}`, title: g.title, kind: 'guide',
-                   category: g.category, description: g.description, words: g.words });
+                   category: g.category, description: g.description, words: g.words,
+                   added: g.added });
     }
     for (const m of docsIndex.api || []) {
         out.push({ ref: `api/${m.slug}`, title: m.title, kind: 'module',
-                   category: m.category, description: m.description, words: m.words });
+                   category: m.category, description: m.description, words: m.words,
+                   added: m.added });
     }
     for (const s of docsIndex.spices || []) {
         out.push({ ref: `spices/${s.slug}`, title: s.title, kind: 'spice',
-                   category: s.category, description: s.description, words: s.words });
+                   category: s.category, description: s.description, words: s.words,
+                   added: s.added });
     }
     return out;
 }
@@ -5160,13 +5188,66 @@ function docsGroupByCategory(pages) {
     return names.map(name => ({ name, pages: groups.get(name) }));
 }
 
+/**
+ * The newest pages in the pack, newest first.
+ *
+ * Reads the `added` date the pack stamps on each page from git. A page git had
+ * no add commit for carries no date and is skipped rather than sorted to one
+ * end: "we do not know when this arrived" is not the same claim as "it is old",
+ * and only one of the two belongs in a list of what is new.
+ *
+ * Deliberately not windowed to the last N days. A quiet month would empty the
+ * section, and a nav that comes and goes is harder to learn than one whose top
+ * entry is simply sometimes older -- the dates are on screen, so a reader can
+ * see for themselves how recent "recent" currently is.
+ */
+function docsRecentPages(pages) {
+    return pages
+        .filter(p => p.added)
+        .sort((a, b) => b.added.localeCompare(a.added)
+                     || a.title.localeCompare(b.title))
+        .slice(0, DOCS_RECENT_COUNT);
+}
+
+const DOCS_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * '2026-09-14' -> 'Sep 14'.
+ *
+ * Split rather than parsed through Date: `new Date('2026-09-14')` is UTC
+ * midnight, which renders as the 13th for every reader west of Greenwich. The
+ * date is a calendar day from a commit, not an instant, so it has no business
+ * being shifted into anyone's timezone.
+ */
+function docsFormatAdded(added) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(added || '');
+    if (!m) return '';
+    return `${DOCS_MONTHS[Number(m[2]) - 1] || ''} ${Number(m[3])}`.trim();
+}
+
+/** The nav's lead section: what arrived most recently, across all three kinds. */
+function docsRecentSection(pages) {
+    let html = '<div class="docs-nav-section docs-nav-recent"><h4>Recently Added</h4><ul>';
+    for (const p of pages) {
+        const title = `${p.kind} -- added ${p.added}`
+                    + (p.description ? `\n${p.description}` : '');
+        html += `<li><a href="#doc=${escapeAttr(p.ref)}" data-doc-ref="${escapeAttr(p.ref)}"`
+             +  ` data-added="${escapeAttr(p.added)}" title="${escapeAttr(title)}">`
+             +  `<span class="docs-recent-title">${escapeHtml(p.title)}</span>`
+             +  `<span class="docs-recent-date">${escapeHtml(docsFormatAdded(p.added))}</span>`
+             +  '</a></li>';
+    }
+    return html + '</ul></div>';
+}
+
 function docsNavSection(label, groups) {
     let html = `<div class="docs-nav-section"><h4>${escapeHtml(label)}</h4>`;
     for (const g of groups) {
         html += `<details class="docs-nav-group"><summary>${escapeHtml(g.name)}</summary><ul>`;
         for (const p of g.pages) {
-            html += `<li><a href="#doc=${escapeHtml(p.ref)}" data-doc-ref="${escapeHtml(p.ref)}"`
-                 +  ` title="${escapeHtml(p.description || '')}">${escapeHtml(p.title)}</a></li>`;
+            html += `<li><a href="#doc=${escapeAttr(p.ref)}" data-doc-ref="${escapeAttr(p.ref)}"`
+                 +  ` title="${escapeAttr(p.description || '')}">${escapeHtml(p.title)}</a></li>`;
         }
         html += '</ul></details>';
     }
@@ -5184,6 +5265,11 @@ function renderDocsNav() {
     }
     const pages = docsAllPages();
     let html = '';
+    // Above the tree, and flat: what is new cuts across guides, API modules and
+    // spices, so grouping it by category would bury the one thing it is for.
+    // Absent entirely when the pack carries no dates, rather than shown empty.
+    const recent = docsRecentPages(pages);
+    if (recent.length) html += docsRecentSection(recent);
     const guides = pages.filter(p => p.kind === 'guide');
     const modules = pages.filter(p => p.kind === 'module');
     const spices = pages.filter(p => p.kind === 'spice');
@@ -5236,7 +5322,7 @@ function renderDocsSearch(query) {
     if (pages.length) {
         html += '<div class="docs-nav-section"><h4>Pages</h4><ul class="docs-results">';
         for (const { p } of pages) {
-            html += `<li><a href="#doc=${escapeHtml(p.ref)}" data-doc-ref="${escapeHtml(p.ref)}">`
+            html += `<li><a href="#doc=${escapeAttr(p.ref)}" data-doc-ref="${escapeAttr(p.ref)}">`
                  +  `<span class="docs-result-title">${escapeHtml(p.title)}</span>`
                  +  `<span class="docs-result-kind">${escapeHtml(p.kind)}</span>`
                  +  `<span class="docs-result-desc">${escapeHtml(p.description || '')}</span>`
@@ -5248,7 +5334,7 @@ function renderDocsSearch(query) {
         html += '<div class="docs-nav-section"><h4>Symbols</h4><ul class="docs-results">';
         for (const s of symbols) {
             const short = s.summary.replace(/^[\w/\-!?*+<>]+\s+--\s+/, '');
-            html += `<li><a href="#" data-doc-symbol="${escapeHtml(s.name)}">`
+            html += `<li><a href="#" data-doc-symbol="${escapeAttr(s.name)}">`
                  +  `<span class="docs-result-title">${escapeHtml(s.name)}</span>`
                  +  `<span class="docs-result-kind">${escapeHtml(s.kind)}</span>`
                  +  `<span class="docs-result-desc">${escapeHtml(short)}</span>`

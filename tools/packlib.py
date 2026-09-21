@@ -23,7 +23,9 @@ from __future__ import annotations
 import html as _html
 import json
 import re
+import subprocess
 from pathlib import Path
+from typing import Iterable
 
 # Every generator drops one of these into the pack root; genpack.py merges them
 # into index.json and then deletes them. Keeping them out of index.json itself
@@ -71,6 +73,99 @@ def heading_names(toc_tokens: list) -> list[str]:
         if name:
             out.append(name)
         out.extend(heading_names(tok.get('children', [])))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# When a page first appeared
+#
+# The pane's "Recently Added" section answers "what is new in here?", and the
+# only durable record of that is the commit that first added a doc's source
+# file. Reading it here, at pack time, keeps the answer out of the pack's
+# content: a guide does not have to remember to carry a date in its front
+# matter, and one that forgets does not quietly read as new forever.
+#
+# One `git log` for the whole set rather than one per file. The guides index
+# asks the same question per guide with `--follow`, which can only take a
+# single path; the pack asks it about ~300, so this pass trades rename
+# following for a single traversal (see git_added_dates).
+# ---------------------------------------------------------------------------
+
+_ISO_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T')
+
+
+def find_repo_root(start: Path) -> Path | None:
+    """Nearest ancestor of `start` holding a `.git`, or None outside a checkout.
+
+    A `.git` file counts as well as a directory, so this finds the root from
+    inside a worktree.
+    """
+    cur = Path(start).resolve()
+    while True:
+        if (cur / '.git').exists():
+            return cur
+        if cur == cur.parent:
+            return None
+        cur = cur.parent
+
+
+def git_added_dates(paths: Iterable[Path],
+                    repo_root: Path | None) -> dict[Path, str]:
+    """Map each path to the `YYYY-MM-DD` its file was first added to git.
+
+    A path git has no add commit for is absent from the result rather than
+    guessed at -- an untracked draft, a file outside `repo_root`, a build from
+    a release tarball with no history at all. The pack then carries no `added`
+    for that page and the pane's Recently Added simply never lists it, which is
+    the honest answer to "when did this appear?" when nothing recorded it.
+
+    Renames are not followed: a doc that moved reads as added where it now
+    lives. That is what buys the single traversal -- `--follow` takes exactly
+    one path -- and for a *recently* added list it is also the more useful of
+    the two answers, since a page that arrived under this name last week did
+    arrive last week.
+
+    Dates are author dates, matching the guides index's own card.
+    """
+    root = Path(repo_root).resolve() if repo_root else None
+    if root is None:
+        return {}
+
+    # Query by repo-relative path, answer by the caller's own Path objects:
+    # the caller looks results up with the path it passed in, not with whatever
+    # spelling git prints.
+    by_rel: dict[str, Path] = {}
+    for path in paths:
+        try:
+            by_rel[Path(path).resolve().relative_to(root).as_posix()] = Path(path)
+        except (ValueError, OSError):
+            continue
+    if not by_rel:
+        return {}
+
+    try:
+        proc = subprocess.run(
+            ['git', 'log', '--diff-filter=A', '--name-only', '--no-renames',
+             '--format=%aI', '--', *sorted(by_rel)],
+            cwd=root, capture_output=True, text=True, check=False)
+    except OSError:
+        return {}  # no git on this machine
+    if proc.returncode != 0:
+        return {}
+
+    out: dict[Path, str] = {}
+    date: str | None = None
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if _ISO_DATE_RE.match(line):
+            date = line[:10]
+        elif date and line in by_rel:
+            # The log runs newest first, so a later line for the same path is
+            # an older add: keep overwriting and a file that was deleted and
+            # restored counts from when it first appeared, not from its return.
+            out[by_rel[line]] = date
     return out
 
 

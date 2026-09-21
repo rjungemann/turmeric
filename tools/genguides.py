@@ -73,6 +73,12 @@ def parse_front_matter(text: str) -> tuple[dict, str]:
         if ':' in line:
             k, _, v = line.partition(':')
             k, v = k.strip(), v.strip()
+            # A YAML value quoted because it contains a colon -- which is why
+            # several guide titles are quoted -- is still just its text. Left
+            # in, the quotes render as part of the title everywhere the title
+            # goes: the page's <title>, the index card, and the docs pane.
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in '"\'':
+                v = v[1:-1]
             if k:
                 meta[k] = v
     return meta, body
@@ -1221,12 +1227,17 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     print('  index.html')
 
 
-def emit_pack_guides(docs: list[dict], guides_dir: Path, pack_dir: Path) -> None:
+def emit_pack_guides(docs: list[dict], guides_dir: Path, pack_dir: Path,
+                     added_by_stem: dict[str, str] | None = None) -> None:
     """Write the chrome-free guide fragments and the guides slice of index.json.
 
     Fragments keep their source links; `tools/genpack.py` rewrites them into the
     pack's `#doc=` URL space once every generator has contributed, because only
     it knows what the finished pack contains.
+
+    `added_by_stem` is the same creation-date map the index page's Recently
+    Added card is built from -- passed in rather than recomputed so the pane's
+    section and the website's card cannot disagree about when a guide arrived.
     """
     pack_dir = Path(pack_dir)
 
@@ -1246,7 +1257,7 @@ def emit_pack_guides(docs: list[dict], guides_dir: Path, pack_dir: Path) -> None
         meta = doc['meta'] or {}
         headings = packlib.heading_names(doc['toc_tokens'])
         description = (meta.get('description', '') or '').replace('—', '--').strip()
-        entries.append({
+        entry = {
             'slug': stem,
             'path': rel,
             'title': doc['title'],
@@ -1256,7 +1267,14 @@ def emit_pack_guides(docs: list[dict], guides_dir: Path, pack_dir: Path) -> None
             'words': packlib.search_string(
                 stem.replace('-', ' '), doc['title'], description,
                 *headings, prose=packlib.strip_tags(doc['body'])),
-        })
+        }
+        # Only when git knows: a guide written but not yet committed has no
+        # date to claim, and the pane leaves an undated page out of Recently
+        # Added rather than dating it from the build.
+        added = (added_by_stem or {}).get(stem)
+        if added:
+            entry['added'] = added
+        entries.append(entry)
 
         # Copy any local images the guide references, so the pack is
         # self-contained and the budget check counts what it ships.
@@ -1352,7 +1370,10 @@ def main() -> None:
     print(f'Done: {len(md_files)} guides + index → {out_dir}')
 
     if args.emit_pack:
-        emit_pack_guides(docs, guides_dir, Path(args.emit_pack))
+        emit_pack_guides(docs, guides_dir, Path(args.emit_pack),
+                         added_by_stem={src.stem: d
+                                        for src, d in zip(md_files, creation_dates)
+                                        if d})
 
 
 if __name__ == '__main__':
