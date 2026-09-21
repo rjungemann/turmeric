@@ -113,6 +113,37 @@ test.describe('docs pane', () => {
         await expect(page.locator('#docs-article .site-header')).toHaveCount(0);
     });
 
+    test('recently added leads the nav, newest first', async ({ page }) => {
+        await openTry(page);
+        await openDocs(page);
+
+        // The pack stamps `added` from git; a pack built outside a checkout
+        // carries none, and the section is then absent by design rather than
+        // empty. Skip instead of failing -- that is a build input, not a bug.
+        const dated = await page.evaluate(async () => {
+            const idx = await (await fetch('/docs-pack/index.json')).json();
+            return [...(idx.guides || []), ...(idx.api || []), ...(idx.spices || [])]
+                .filter(e => e.added).length;
+        });
+        test.skip(dated === 0, 'pack carries no add dates (built outside a git checkout)');
+
+        const sections = await page.locator('#docs-nav .docs-nav-section h4').allTextContents();
+        expect(sections[0]).toBe('Recently Added');
+
+        const dates = await page.locator('#docs-nav .docs-nav-recent a[data-added]')
+            .evaluateAll(els => els.map(el => el.dataset.added));
+        expect(dates.length).toBeGreaterThan(0);
+        expect(dates.length).toBeLessThanOrEqual(10);
+        expect([...dates].sort().reverse()).toEqual(dates);
+
+        // It is a nav, not a display: the entries navigate like any other.
+        const ref = await page.locator('#docs-nav .docs-nav-recent a[data-doc-ref]')
+            .first().getAttribute('data-doc-ref');
+        await page.locator('#docs-nav .docs-nav-recent a[data-doc-ref]').first().click();
+        await page.waitForFunction(
+            (r) => window.turmericApp.getState().docsRef === r, ref, { timeout: 15_000 });
+    });
+
     test('renders a guide with highlighting, toggles, and load-into-editor', async ({ page }) => {
         await openTry(page);
         await openDocs(page);

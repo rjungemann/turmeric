@@ -1993,6 +1993,15 @@ def emit_pack_api(modules, pack_dir, *, section='api', slug_prefix=''):
     modules from stdlib ones when a spice tree is folded into the pack.
     """
     pack_dir = Path(pack_dir)
+
+    # When each module's page first appeared, for the pane's Recently Added
+    # section. One git traversal for the whole set, from the checkout the
+    # sources actually live in -- which is the spice's own repo when a spice
+    # tree is being folded in, not this one.
+    sources = [Path(m['file_path']) for m in modules if m.get('file_path')]
+    added_dates = packlib.git_added_dates(
+        sources, packlib.find_repo_root(sources[0])) if sources else {}
+
     entries = []
     seen_slugs = {}
     for module in modules:
@@ -2020,7 +2029,7 @@ def emit_pack_api(modules, pack_dir, *, section='api', slug_prefix=''):
             dash_idx = s.find(' -- ')
             summary = s[dash_idx + 4:] if dash_idx != -1 else s
 
-        entries.append({
+        entry = {
             'slug': slug,
             'path': rel,
             'module': module['name'],
@@ -2032,7 +2041,12 @@ def emit_pack_api(modules, pack_dir, *, section='api', slug_prefix=''):
             'words': packlib.search_string(
                 module['name'], summary, ' '.join(exported),
                 prose=packlib.strip_tags(content)),
-        })
+        }
+        source = module.get('file_path')
+        added = added_dates.get(Path(source)) if source else None
+        if added:
+            entry['added'] = added
+        entries.append(entry)
 
     packlib.write_sidecar(pack_dir, section, entries)
     print(f'  pack: {len(entries)} {section} fragments -> {pack_dir}/{section}/')

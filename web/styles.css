@@ -2193,6 +2193,29 @@ body.split-dragging * {
     box-shadow: inset 2px 0 0 var(--gold);
 }
 
+/* Recently Added: one flat list above the tree. Title on the left, the day it
+   landed on the right -- the date is what makes the section a claim rather
+   than a curated pick, so it stays on screen instead of in a tooltip. */
+.docs-nav-recent li a {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.docs-nav-recent .docs-recent-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.docs-nav-recent .docs-recent-date {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+}
+
 .docs-results li a {
     white-space: normal;
     padding: 5px 8px;

@@ -54,7 +54,8 @@ The pack is a build output and is gitignored, like `turmeric.wasm` and
   "version": "0.38.0",
   "generated": "2026-08-26T01:35:38Z",
   "guides": [{ "slug": "...", "path": "...", "title": "...", "category": "...",
-               "description": "...", "bytes": 15435, "words": "..." }],
+               "description": "...", "bytes": 15435, "words": "...",
+               "added": "2026-08-26" }],
   "api":    [{ "slug": "...", "module": "...", "symbols": ["..."], ... }],
   "spices": [ ... ],
   "files":  ["guides/....html", "api/....html", "guide.css", ...]
@@ -67,6 +68,15 @@ The pack is a build output and is gitignored, like `turmeric.wasm` and
   It is capped rather than carrying full bodies: whole pages would put ~2.5 MB
   of text into a file the pane fetches on open and the service worker
   precaches, to answer searches that headings already answer well.
+- `added` is the day that page's source file was first committed, read from
+  git while the pack is generated. The pane's **Recently Added** section is
+  this field sorted, and it is here rather than in each doc's front matter so
+  that a guide cannot forget to carry a date -- or keep claiming to be new
+  because it still does. A page git has no add commit for (an untracked draft,
+  a build from a release tarball with no history) carries no `added` and is
+  simply never listed as recent; `genpack.py` prints the coverage, so a pack
+  built outside a checkout says so rather than quietly shipping an empty
+  section.
 - `files` doubles as the service worker's **precache manifest**. One list, so a
   page cannot be in the pack but missing from precache.
 - `version` is stamped from `VERSION`, and the pane displays it -- which makes
@@ -109,8 +119,13 @@ session untouched.
 
 Inside the pane:
 
-- **Nav** lists guides by category, API modules by group, and spices when this
-  build carries their pages.
+- **Nav** leads with **Recently Added**: the ten newest pages in the pack,
+  dated, across all three kinds at once -- new guides and new stdlib modules
+  sit in one list, because "what is new here?" does not respect the tree. Below
+  it, the tree itself: guides by category, API modules by group, and spices
+  when this build carries their pages. It is the in-app counterpart of the
+  Recently Added card on the website's guides index -- same count, same dates,
+  and wider by exactly the pages the card's page does not cover.
 - **Search** takes one query and returns two kinds of result: pages (from the
   pack) and symbols (from `doc-names.json`). Picking a symbol routes to the
   existing docstring panel.
