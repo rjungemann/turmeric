@@ -2193,9 +2193,31 @@ body.split-dragging * {
     box-shadow: inset 2px 0 0 var(--gold);
 }
 
-/* Recently Added: one flat list above the tree. Title on the left, the day it
-   landed on the right -- the date is what makes the section a claim rather
-   than a curated pick, so it stays on screen instead of in a tooltip. */
+/* The pinned quickstart link: no section heading, so it reads as one entry
+   rather than a category of one. Sits tighter to the top than a titled block
+   and drops the ul's indent, since there is no tree here to indent under. */
+.docs-nav-pinned { margin-bottom: 10px; }
+.docs-nav-pinned ul { padding-left: 0; margin: 0; }
+.docs-nav-pinned li a { font-weight: 600; }
+
+/* Recently Added: one flat list above the tree, closed until asked for. Its
+   summary carries the same h4 the other sections use, so the disclosure marker
+   has to hang off the heading rather than the summary box. */
+.docs-nav-recent > summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 1px 0;
+}
+
+.docs-nav-recent > summary::-webkit-details-marker { display: none; }
+.docs-nav-recent > summary h4 { display: inline; }
+.docs-nav-recent > summary h4::before { content: '▸ '; color: var(--text-dim); }
+.docs-nav-recent[open] > summary h4::before { content: '▾ '; }
+.docs-nav-recent > summary:hover h4 { color: var(--text-primary); }
+
+/* Title on the left, the day it landed on the right -- the date is what makes
+   the section a claim rather than a curated pick, so it stays on screen
+   instead of in a tooltip. */
 .docs-nav-recent li a {
     display: flex;
     align-items: baseline;

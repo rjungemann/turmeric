@@ -5018,6 +5018,17 @@ const DOCS_PACK_BASE = '/docs-pack';
  */
 const DOCS_RECENT_COUNT = 10;
 
+/**
+ * The page the pane opens on when nothing else says where to go.
+ *
+ * The quickstart, not whatever guide happens to sort first in the pack. A
+ * reader who opened the docs without asking for a page has not told us what
+ * they want, and "the beginning" is the only answer that is right for a first
+ * visit and harmless for every other -- an alphabetical accident is neither.
+ * A previously visited page still wins; this is the floor, not a redirect.
+ */
+const DOCS_DEFAULT_REF = 'guides/quickstart';
+
 let docsIndex = null;          // parsed index.json, once
 let docsIndexPromise = null;   // in-flight load, so concurrent opens share one
 let docsCurrentRef = null;     // e.g. 'guides/hkt-guide'
@@ -5226,9 +5237,39 @@ function docsFormatAdded(added) {
     return `${DOCS_MONTHS[Number(m[2]) - 1] || ''} ${Number(m[3])}`.trim();
 }
 
-/** The nav's lead section: what arrived most recently, across all three kinds. */
+/**
+ * A pinned link to the quickstart, above everything else in the nav.
+ *
+ * The one page a first-time reader wants, and the hardest to find by browsing:
+ * it is filed under "Getting Started" like a dozen siblings, several rows down
+ * a collapsed tree. Pinning it costs one line and spares that search. Rendered
+ * only when the pack actually carries the page, so the nav never offers a link
+ * it cannot open.
+ */
+function docsQuickstartSection() {
+    const entry = docsEntryFor(DOCS_DEFAULT_REF);
+    if (!entry) return '';
+    return '<div class="docs-nav-section docs-nav-pinned"><ul>'
+         + `<li><a href="#doc=${escapeAttr(DOCS_DEFAULT_REF)}"`
+         + ` data-doc-ref="${escapeAttr(DOCS_DEFAULT_REF)}"`
+         + ` title="${escapeAttr(entry.description || '')}">`
+         + `${escapeHtml(entry.title)}</a></li>`
+         + '</ul></div>';
+}
+
+/**
+ * What arrived most recently, across all three kinds.
+ *
+ * A `<details>`, closed on load. The section answers "what is new since I last
+ * looked?", which is a question you ask occasionally and never on the way to a
+ * page you already know the name of -- so ten rows of it sitting permanently
+ * between the nav's top and the tree taxes every other visit to pay for that
+ * one. Closed it is a single line, and markDocsNavActive() still springs it
+ * open when the page you are reading is one of the entries.
+ */
 function docsRecentSection(pages) {
-    let html = '<div class="docs-nav-section docs-nav-recent"><h4>Recently Added</h4><ul>';
+    let html = '<details class="docs-nav-section docs-nav-recent">'
+             + '<summary><h4>Recently Added</h4></summary><ul>';
     for (const p of pages) {
         const title = `${p.kind} -- added ${p.added}`
                     + (p.description ? `\n${p.description}` : '');
@@ -5238,7 +5279,7 @@ function docsRecentSection(pages) {
              +  `<span class="docs-recent-date">${escapeHtml(docsFormatAdded(p.added))}</span>`
              +  '</a></li>';
     }
-    return html + '</ul></div>';
+    return html + '</ul></details>';
 }
 
 function docsNavSection(label, groups) {
@@ -5264,7 +5305,8 @@ function renderDocsNav() {
         return;
     }
     const pages = docsAllPages();
-    let html = '';
+    // The quickstart first, then what is new, then the tree.
+    let html = docsQuickstartSection();
     // Above the tree, and flat: what is new cuts across guides, API modules and
     // spices, so grouping it by category would bury the one thing it is for.
     // Absent entirely when the pack carries no dates, rather than shown empty.
@@ -5523,8 +5565,12 @@ function openDocsPane(refWithAnchor) {
             version.textContent = index ? `Docs v${index.version}` : '';
         }
         renderDocsNav();
+        // An explicit request wins, then wherever you were last, then the
+        // quickstart. The pack's first guide is only a last resort now: it is
+        // whatever sorted first, which is a fine fallback and a poor greeting.
         const target = refWithAnchor
             || docsCurrentRef
+            || (docsEntryFor(DOCS_DEFAULT_REF) ? DOCS_DEFAULT_REF : null)
             || (index && index.guides && index.guides.length
                 ? `guides/${index.guides[0].slug}`
                 : null);

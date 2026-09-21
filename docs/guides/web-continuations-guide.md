@@ -18,7 +18,7 @@ The unit of a flow is a page: a `serial-reset` whose rest is a call to that
 page's *submitted* function with the hole in argument position, and a named
 receiver that stores the continuation and sends the form.
 
-```turmeric no-check
+```turmeric
 ;; The page: capture "what happens when the message form is posted".
 (defn page-message [] : int
   (serial-reset
@@ -38,6 +38,26 @@ receiver that stores the continuation and sends the form.
       (set! flow-message (html-escape (field-or body "message" "")))
       (step-preview))))
 ```
+```sweet-exp
+;; The page: capture "what happens when the message form is posted".
+defn page-message [] : int
+  serial-reset
+    message-submitted(flow-name serial-shift(suspend-message-page 0))
+
+;; The receiver: store k under a signed token, send the form whose action
+;; carries the token.  It returns WITHOUT resuming k -- the request is over.
+defn suspend-message-page [k : serial-cont] : int
+  send-html $ render-message-form(action-for(k) flow-name flow-message)
+
+;; The leaf: runs when the browser posts.  `name` is the frame's env (what
+;; page-message captured), `body-i` is the POST body arriving through the hole.
+defn message-submitted [name : cstr body-i : int] : int
+  let [body int-as-cstr(body-i)]
+    do
+      set!(flow-name name)
+      set!(flow-message html-escape(field-or(body "message" "")))
+      step-preview()
+```
 
 Three rules of the capture grammar shape this:
 
@@ -53,13 +73,25 @@ Three rules of the capture grammar shape this:
   code**, and `advance`, called by the router outside every reset, starts the
   next page's reset (or renders a terminal page):
 
-```turmeric no-check
+```turmeric
 (defn advance [step : int] : int
   (cond
     (= step (step-message))  (page-message)
     (= step (step-preview))  (page-preview)
     (= step (step-thankyou)) (send-html (render-thankyou (store-lines)))
     else 0))
+```
+```sweet-exp
+defn advance [step : int] : int
+  cond
+    {step = step-message()}
+    page-message()
+    {step = step-preview()}
+    page-preview()
+    {step = step-thankyou()}
+    send-html(render-thankyou(store-lines()))
+    else
+    0
 ```
 
 **When to use it:** any time the flow needs to pause, show a page, and resume
@@ -75,7 +107,7 @@ with one submit button).
 
 The continuation store (`conts.tur`) satisfies:
 
-```turmeric no-check
+```
 ;; Store k and return the signed token that resumes it.
 (store-continuation k) : cstr
 
@@ -127,7 +159,7 @@ storage.
 
 The router maps `POST /submit?k=TOKEN` to `serial-resume`:
 
-```turmeric no-check
+```
 POST /submit?k=TOKEN
   -> parse TOKEN from the query string           (form-field (httpd/query) "k")
   -> verify the signature, age and bytes         (load-continuation t)

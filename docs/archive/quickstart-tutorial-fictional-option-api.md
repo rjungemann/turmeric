@@ -55,7 +55,7 @@ The diff is 24902 insertions against 24902 deletions -- pure renumbering
   `while` + `^mut` + `set!`, with the step retitled, since teaching a counted
   `for` that does not exist was the defect), and the struct step.
 - `docs/guides/quickstart.md`, `docs/guides/repl-tutorial.md`,
-  `docs/guides/quickstart-tutorial-plan.md` -- the same four corrections, in
+  `docs/archive/quickstart-tutorial-plan.md` -- the same four corrections, in
   both the s-expr and sweet-exp halves. All 78 sweet-exp pairs still check.
 
 Every replacement was **run** before being written down: the Option examples

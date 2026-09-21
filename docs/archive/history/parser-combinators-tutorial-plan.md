@@ -72,7 +72,7 @@ before naming the pattern.
 
 Prereq guides referenced from the intro:
 
-- [quickstart-tutorial-plan.md](../guides/quickstart-tutorial-plan.md) -- for `defn`/`let`/`fn`.
+- [quickstart-tutorial-plan.md](../quickstart-tutorial-plan.md) -- for `defn`/`let`/`fn`.
 - [repl-tutorial.md](../guides/repl-tutorial.md) -- so readers can paste snippets.
 - [backtracking-guide.md](../guides/backtracking-guide.md) -- optional
   companion; the tutorial reproduces enough of the backtracking monad to
