@@ -50,19 +50,7 @@ HTTP is stateless. A web form spanning multiple pages is inherently stateful. Th
 
 The continuation approach, popularized by PLT Scheme's `web-server/servlet` and Racket's `send/suspend`, threads the control-flow problem away entirely:
 
-```turmeric no-check
-handler-1 runs to a "send this form, then resume" point
-  -> captures continuation k
-  -> stashes k under token T
-  -> sends HTML page with action="/?k=T"
-
-browser submits form
-  -> server looks up T, loads k
-  -> resumes k with form data
-  -> k is now inside handler-1 again, with form data in hand
-  -> proceeds naturally to the next step
 ```
-```sweet-exp
 handler-1 runs to a "send this form, then resume" point
   -> captures continuation k
   -> stashes k under token T
@@ -124,13 +112,17 @@ examples/guestbook/
     conts/             -- one file per continuation
 ```
 
-```turmeric no-manifest-check
+```turmeric
 ;; build.tur
 (defpackage guestbook
   :name "guestbook"
   :build-opts #map{
     :c-sources ["httpd.c"]
   })
+```
+```sweet-exp
+;; build.tur.sweet
+defpackage guestbook :name "guestbook" :build-opts #map{:c-sources ["httpd.c"]}
 ```
 
 Because there is a manifest, every per-file command resolves the imports on
@@ -142,7 +134,7 @@ its own: `tur check src/router.tur` works, `tur run src/main.tur` links
 
 Each file is a `defmodule` that imports what it uses by name:
 
-```turmeric no-check
+```turmeric
 (defmodule router
   (import strutil :refer [form-field cstr-eq? cstr-as-int])
   (import templates :refer [render-error])
@@ -151,6 +143,16 @@ Each file is a `defmodule` that imports what it uses by name:
   (import httpd :refer [httpd/method httpd/path httpd/query httpd/body httpd/send!])
   (export dispatch)
   ...)
+```
+```sweet-exp
+defmodule router
+  (import strutil :refer [form-field cstr-eq? cstr-as-int])
+  (import templates :refer [render-error])
+  (import conts :refer [load-continuation])
+  (import handlers :refer [start-flow advance list-entries])
+  (import httpd :refer [httpd/method httpd/path httpd/query httpd/body httpd/send!])
+  (export dispatch)
+  ...
 ```
 
 ### Build Targets
@@ -201,7 +203,7 @@ strdup()`, truncates the returned pointer, and the first request segfaults.
 carry across the boundary, so one function owns them as static storage and
 the accessors read from it:
 
-```turmeric no-check
+```turmeric
 (defmodule httpd
   (export httpd/start httpd/wait! httpd/method httpd/path httpd/query httpd/body
           httpd/send!)
@@ -248,6 +250,55 @@ the accessors read from it:
     return status;
     ```))
 ```
+```sweet-exp
+defmodule httpd
+  (export httpd/start httpd/wait! httpd/method httpd/path httpd/query httpd/body
+          httpd/send!)
+
+  ;;; httpd/request-slot -- static request storage (internal).
+  ;;; op 0: accept + parse the next request (frees the previous one).
+  ;;; op 1..4: method / path / query / body of the current request.
+  defn httpd/request-slot [op : int] : cstr
+    ```c
+    extern void httpd_next_request(char **m, char **p, char **q, char **b);
+    static char *method = NULL, *path = NULL, *query = NULL, *body = NULL;
+    switch (op) {
+      case 0:
+        free(method); free(path); free(query); free(body);
+        method = path = query = body = NULL;
+        httpd_next_request(&method, &path, &query, &body);
+        return "";
+      case 1: return method ? method : "";
+      case 2: return path   ? path   : "";
+      case 3: return query  ? query  : "";
+      case 4: return body   ? body   : "";
+      default: return "";
+    }
+    ```
+
+  defn httpd/start [port : int] : int
+    ```c
+    extern int httpd_start(int port);
+    return httpd_start((int)port);
+    ```
+
+  defn httpd/wait! [] : int
+    do
+      httpd/request-slot(0)
+      0
+
+  defn httpd/method [] : cstr httpd/request-slot(1)
+  defn httpd/path   [] : cstr httpd/request-slot(2)
+  defn httpd/query  [] : cstr httpd/request-slot(3)
+  defn httpd/body   [] : cstr httpd/request-slot(4)
+
+  defn httpd/send! [status : int content-type : cstr body : cstr] : int
+    ```c
+    extern void httpd_send_response(int status, const char *ct, const char *body);
+    httpd_send_response((int)status, content_type, body);
+    return status;
+    ```
+```
 
 The `extern` declarations inside the bodies are all the glue there is: the
 symbols resolve because `build.tur` compiles and links `httpd.c`.
@@ -263,12 +314,19 @@ and a response is a call to `httpd/send!` -- the shim owns the socket.
 
 The smallest handler renders a string and sends it:
 
-```turmeric no-check
+```turmeric
 (defn send-html [html : cstr] : int
   (httpd/send! 200 "text/html" html))
 
 (defn list-entries [] : int
   (send-html (render-entries (store-lines))))
+```
+```sweet-exp
+defn send-html [html : cstr] : int
+  httpd/send!(200 "text/html" html)
+
+defn list-entries [] : int
+  send-html $ render-entries(store-lines())
 ```
 
 An earlier draft of this example routed every response through an algebraic
@@ -283,7 +341,7 @@ in a context callee. Direct sends keep every page function plain.
 `main.tur` binds the port and loops: read a request, dispatch it, sweep
 expired continuations.
 
-```turmeric no-check
+```turmeric
 (defn serve-loop [max : int] : int
   (let [^mut served 0]
     (do
@@ -308,13 +366,39 @@ expired continuations.
           (serve-loop max)
           0)))))
 ```
+```sweet-exp
+defn serve-loop [max : int] : int
+  let [^mut served 0]
+    do
+      while or({max = 0} {served < max})
+        do
+          httpd/wait!()
+          dispatch()
+          evict-expired-conts!()
+          set!(served {served + 1})
+      served
+
+defn main [] : int
+  let [port cstr->int-or(env-or("PORT" "8080") 8080)
+       max  cstr->int-or(env-or("GUESTBOOK_MAX_REQUESTS" "0") 0)]
+    do
+      store-init!()
+      if {httpd/start(port) < 0}
+        do
+          println $ str+("guestbook: failed to start HTTP listener on port " int->cstr(port))
+          1
+        do
+          println $ str+("guestbook: listening on http://127.0.0.1:" int->cstr(port) "/")
+          serve-loop(max)
+          0
+```
 
 `GUESTBOOK_MAX_REQUESTS=N` serves N requests and exits; that is how the
 smoke test in Step 9 drives the server without having to kill it.
 
 ### The Router
 
-```turmeric no-check
+```turmeric
 (defn dispatch [] : int
   (let [get?  (cstr-eq? (httpd/method) "GET")
         post? (cstr-eq? (httpd/method) "POST")
@@ -324,6 +408,21 @@ smoke test in Step 9 drives the server without having to kill it.
       (and get? (cstr-eq? path "/entries"))  (list-entries)
       (and post? (cstr-eq? path "/submit"))  (resume-handler)
       else (send-error 404 "Page not found."))))
+```
+```sweet-exp
+defn dispatch [] : int
+  let [get?  cstr-eq?(httpd/method() "GET")
+       post? cstr-eq?(httpd/method() "POST")
+       path  httpd/path()]
+    cond
+      and(get? cstr-eq?(path "/"))
+      start-flow()
+      and(get? cstr-eq?(path "/entries"))
+      list-entries()
+      and(post? cstr-eq?(path "/submit"))
+      resume-handler()
+      else
+      send-error(404 "Page not found.")
 ```
 
 ---
@@ -335,7 +434,7 @@ smoke test in Step 9 drives the server without having to kill it.
 `templates.tur` builds every page from `str+`, a variadic concatenation
 helper from `strutil.tur`, inside a shared shell:
 
-```turmeric no-check
+```turmeric
 (defn page-shell [title : cstr content : cstr] : cstr
   (str+ "<!doctype html><html><head><meta charset=\"utf-8\"><title>" title
         "</title>...</head><body><h1>" title "</h1>" content
@@ -348,6 +447,20 @@ helper from `strutil.tur`, inside a shared shell:
           "<label>Your name <input name=\"name\" autofocus></label>"
           "<button>Next</button></form>")))
 ```
+```sweet-exp
+defn page-shell [title : cstr content : cstr] : cstr
+  str+("<!doctype html><html><head><meta charset=\"utf-8\"><title>" title
+       "</title>...</head><body><h1>" title "</h1>" content
+       "<p class=\"muted\"><a href=\"/\">Sign the guestbook</a> &middot; "
+       "<a href=\"/entries\">Read the entries</a></p></body></html>")
+
+defn render-name-form [action : cstr] : cstr
+  page-shell
+    "Guestbook"
+    str+("<form method=\"post\" action=\"" action "\">"
+         "<label>Your name <input name=\"name\" autofocus></label>"
+         "<button>Next</button></form>")
+```
 
 `action` is the URL the form posts to. In Step 4 it will carry a
 continuation token; for now imagine `/submit`.
@@ -359,7 +472,7 @@ A POST body is `application/x-www-form-urlencoded`: `name=Ada+%3CL%3E&x=1`.
 returning an `(Option cstr)` built with the typed inline-C builders
 (`tur_some_ptr` / `tur_none`):
 
-```turmeric no-check
+```turmeric
 (defn form-field [encoded : cstr name : cstr] : (Option cstr)
   ```c
   ... walk `&`-separated segments, match the key, decode %XX and '+' ...
@@ -372,14 +485,30 @@ returning an `(Option cstr)` built with the typed inline-C builders
     (Some v) v
     (None)   dflt))
 ```
+```sweet-exp
+defn form-field [encoded : cstr name : cstr] : (Option cstr)
+  ```c
+  ... walk `&`-separated segments, match the key, decode %XX and '+' ...
+  return tur_some_ptr(raw);   /* or tur_none() */
+  ```
+
+;; handlers.tur
+defn field-or [body : cstr name : cstr dflt : cstr] : cstr
+  (match (form-field body name)
+    (Some v) v
+    (None)   dflt)
+```
 
 ### Escaping
 
 Everything a visitor typed is escaped once, when it is read, and stays
 escaped for the rest of its life (frames, the entries file, the pages):
 
-```turmeric no-check
+```turmeric
 (html-escape "<b>")   ; => "&lt;b&gt;"   (& < > " escaped; newline -> <br>)
+```
+```sweet-exp
+html-escape("<b>")   ; => "&lt;b&gt;"   (& < > " escaped; newline -> <br>)
 ```
 
 ---
@@ -392,17 +521,22 @@ Page 1 wants to say: "send the name form; when it comes back, run
 `name-submitted` with the posted body." That sentence is a `serial-reset`
 whose rest is the call, with the shift in argument position:
 
-```turmeric no-check
+```turmeric
 (defn start-flow [] : int
   (serial-reset
     (name-submitted "" (serial-shift suspend-name-page 0))))
+```
+```sweet-exp
+defn start-flow [] : int
+  serial-reset
+    name-submitted("" serial-shift(suspend-name-page 0))
 ```
 
 `serial-shift` captures the rest of the reset -- the pending call
 `(name-submitted "" <hole>)` -- as a `serial-cont` and hands it to the
 receiver `suspend-name-page`. The receiver does not resume it:
 
-```turmeric no-check
+```turmeric
 ;;; action-for -- store k and return the form action URL that resumes it.
 (defn action-for [k : serial-cont] : cstr
   (str+ "/submit?k=" (store-continuation k)))
@@ -411,12 +545,21 @@ receiver `suspend-name-page`. The receiver does not resume it:
 (defn suspend-name-page [k : serial-cont] : int
   (send-html (render-name-form (action-for k))))
 ```
+```sweet-exp
+;;; action-for -- store k and return the form action URL that resumes it.
+defn action-for [k : serial-cont] : cstr
+  str+("/submit?k=" store-continuation(k))
+
+;;; suspend-name-page -- page 1's receiver.
+defn suspend-name-page [k : serial-cont] : int
+  send-html $ render-name-form(action-for(k))
+```
 
 The reset then returns the receiver's value and the request is over. The
 continuation lives on only as a file. When the browser posts the form, the
 router rebuilds it and resumes it with the body:
 
-```turmeric no-check
+```turmeric
 (defn resume-handler [] : int
   (match (form-field (httpd/query) "k")
     (None) (send-error 400 "Missing continuation token.")
@@ -425,16 +568,33 @@ router rebuilds it and resumes it with the body:
         (Err m) (send-error 404 m)
         (Ok k)  (advance (serial-resume k (cstr-as-int (httpd/body)))))))
 ```
+```sweet-exp
+defn resume-handler [] : int
+  (match (form-field (httpd/query) "k")
+    (None) (send-error 400 "Missing continuation token.")
+    (Some t)
+      (match (load-continuation t)
+        (Err m) (send-error 404 m)
+        (Ok k)  (advance (serial-resume k (cstr-as-int (httpd/body))))))
+```
 
 and `name-submitted` runs, with the body in the hole:
 
-```turmeric no-check
+```turmeric
 (defn name-submitted [ignored : cstr body-i : int] : int
   (let [body (int-as-cstr body-i)]
     (do
       (set! flow-name (html-escape (field-or body "name" "Anonymous")))
       (set! flow-message "")
       (step-message))))
+```
+```sweet-exp
+defn name-submitted [ignored : cstr body-i : int] : int
+  let [body int-as-cstr(body-i)]
+    do
+      set!(flow-name html-escape(field-or(body "name" "Anonymous")))
+      set!(flow-message "")
+      step-message()
 ```
 
 Three things the capture grammar dictates, stated once:
@@ -453,7 +613,7 @@ Three things the capture grammar dictates, stated once:
 
 `conts.tur` turns a `serial-cont` into a file and back:
 
-```turmeric no-check
+```turmeric
 (defn store-continuation [k : serial-cont] : cstr
   (let [token (random-hex-64)
         bytes (serial-cont->bytes k)]
@@ -474,6 +634,27 @@ Three things the capture grammar dictates, stated once:
             (err "That link has expired. Please start over.")
             (bytes->serial-cont (cont-from-file path)))))))
 ```
+```sweet-exp
+defn store-continuation [k : serial-cont] : cstr
+  let [token random-hex-64()
+       bytes serial-cont->bytes(k)]
+    do
+      cont-to-file(bytes cont-path(token))
+      bytes-release(bytes)
+      sign-token(token server-secret())
+
+defn load-continuation [signed : cstr] : (Result serial-cont cstr)
+  (match (verify-token signed (server-secret))
+    (None) (err "That link was not issued by this server.")
+    (Some token)
+      (let [path (cont-path token)
+            age  (file-age-seconds path)]
+        (if (< age 0)
+          (err "Unknown or already used link. Please start over.")
+          (if (> age (cont-ttl-seconds))
+            (err "That link has expired. Please start over.")
+            (bytes->serial-cont (cont-from-file path))))))
+```
 
 `serial-cont->bytes` marshals the frame by its stable name plus its
 environment; `bytes->serial-cont` validates every frame against this
@@ -487,7 +668,7 @@ comes back as an `Err`, which the router shows as a 404 page.
 Page 2 is the same three pieces again -- a page, a receiver, a leaf -- plus
 one arm in `advance`. What differs is that the frame now carries state:
 
-```turmeric no-check
+```turmeric
 ;; What the next page needs, handed from a resumed leaf to `advance`.
 (def ^mut flow-name    : cstr "")
 (def ^mut flow-message : cstr "")
@@ -512,6 +693,36 @@ one arm in `advance`. What differs is that the frame now carries state:
     (= step (step-preview))  (page-preview)
     (= step (step-thankyou)) (send-html (render-thankyou (store-lines)))
     else 0))
+```
+```sweet-exp
+;; What the next page needs, handed from a resumed leaf to `advance`.
+def ^mut flow-name    : cstr ""
+def ^mut flow-message : cstr ""
+
+defn page-message [] : int
+  serial-reset
+    message-submitted(flow-name serial-shift(suspend-message-page 0))
+
+defn suspend-message-page [k : serial-cont] : int
+  send-html $ render-message-form(action-for(k) flow-name flow-message)
+
+defn message-submitted [name : cstr body-i : int] : int
+  let [body int-as-cstr(body-i)]
+    do
+      set!(flow-name name)
+      set!(flow-message html-escape(field-or(body "message" "")))
+      step-preview()
+
+defn advance [step : int] : int
+  cond
+    {step = step-message()}
+    page-message()
+    {step = step-preview()}
+    page-preview()
+    {step = step-thankyou()}
+    send-html(render-thankyou(store-lines()))
+    else
+    0
 ```
 
 `page-message` captures the *value* of `flow-name` at capture time as the
@@ -545,7 +756,7 @@ The preview shows the entry with **Confirm** and **Back**. Both are submit
 buttons in one form posting one continuation; the pressed button's
 `decision` value says which:
 
-```turmeric no-check
+```turmeric
 (defn render-preview [action : cstr name : cstr message : cstr] : cstr
   (page-shell "Preview"
     (str+ "<blockquote><p>" message "</p><footer>&mdash; " name "</footer></blockquote>"
@@ -553,11 +764,20 @@ buttons in one form posting one continuation; the pressed button's
           "<button name=\"decision\" value=\"confirm\">Confirm</button> "
           "<button name=\"decision\" value=\"back\">Back</button></form>")))
 ```
+```sweet-exp
+defn render-preview [action : cstr name : cstr message : cstr] : cstr
+  page-shell
+    "Preview"
+    str+("<blockquote><p>" message "</p><footer>&mdash; " name "</footer></blockquote>"
+         "<form method=\"post\" action=\"" action "\">"
+         "<button name=\"decision\" value=\"confirm\">Confirm</button> "
+         "<button name=\"decision\" value=\"back\">Back</button></form>")
+```
 
 The preview's frame needs both the name and the message, and a frame carries
 one env value -- so they travel as one tab-separated `cstr`:
 
-```turmeric no-check
+```turmeric
 (defn pack-state [name : cstr message : cstr] : cstr
   (str+ name "\t" message))
 
@@ -566,6 +786,15 @@ one env value -- so they travel as one tab-separated `cstr`:
     (serial-reset
       (preview-decided state (serial-shift suspend-preview-page 0)))))
 ```
+```sweet-exp
+defn pack-state [name : cstr message : cstr] : cstr
+  str+(name "\t" message)
+
+defn page-preview [] : int
+  let [state pack-state(flow-name flow-message)]
+    serial-reset
+      preview-decided(state serial-shift(suspend-preview-page 0))
+```
 
 ### How Back Navigation Works
 
@@ -573,7 +802,7 @@ one env value -- so they travel as one tab-separated `cstr`:
 `step-message` with the message left in `flow-message`, so `advance` shows
 the message form again, prefilled; Confirm goes on to Step 8.
 
-```turmeric no-check
+```turmeric
 (defn preview-decided [state : cstr body-i : int] : int
   (let [body     (int-as-cstr body-i)
         tab      (cstr-index-of state "\t" 0)
@@ -589,6 +818,22 @@ the message form again, prefilled; Confirm goes on to Step 8.
           (store-append! name message)
           (step-thankyou))))))
 ```
+```sweet-exp
+defn preview-decided [state : cstr body-i : int] : int
+  let [body     int-as-cstr(body-i)
+       tab      cstr-index-of(state "\t" 0)
+       name     cstr-slice(state 0 tab)
+       message  cstr-slice(state {tab + 1} cstr-len(state))
+       decision field-or(body "decision" "confirm")]
+    do
+      set!(flow-name name)
+      set!(flow-message message)
+      if cstr-eq?(decision "back")
+        step-message()
+        do
+          store-append!(name message)
+          step-thankyou()
+```
 
 The browser's own Back button works too: an earlier page's form still names
 an unexpired token, and posting it resumes that page again -- the same
@@ -602,7 +847,7 @@ The entries file is one line per entry, `posted-at<TAB>name<TAB>message`.
 Name and message were HTML-escaped when read (which also removed tabs and
 newlines), so the format needs no quoting:
 
-```turmeric no-check
+```turmeric
 (defn store-append! [name : cstr message : cstr] : int
   ```c
   #include <time.h>
@@ -616,6 +861,21 @@ newlines), so the format needs no quoting:
 
 (defn store-lines [] : cstr   ;; the whole file, or "" when there is none yet
   ...)
+```
+```sweet-exp
+defn store-append! [name : cstr message : cstr] : int
+  ```c
+  #include <time.h>
+  FILE *old = fopen("data/entries.txt", "rb");
+  FILE *tmp = fopen("data/entries.tmp", "wb");
+  ... copy old into tmp, append the new line ...
+  fprintf(tmp, "%lld\t%s\t%s\n", (long long)time(NULL), name, message);
+  fclose(tmp);
+  return rename("data/entries.tmp", "data/entries.txt") == 0 ? 1 : 0;
+  ```
+
+defn store-lines [] : cstr   ;; the whole file, or "" when there is none yet
+  ...
 ```
 
 Writes go through a temp file and `rename`, so a crash mid-write leaves the
@@ -637,10 +897,16 @@ would be colored and rejected as a context callee. (`str+` is a plain
 inline-C cons walk with no `unsafe` block precisely so the *receivers* may
 call the templates; they are context callees too.)
 
-```turmeric no-check
+```turmeric
 (defn render-thankyou [lines : cstr] : cstr
   (page-shell "Thank you!"
     (str+ "<p>Your entry has been added.</p><ul>" (entry-rows lines) "</ul>")))
+```
+```sweet-exp
+defn render-thankyou [lines : cstr] : cstr
+  page-shell
+    "Thank you!"
+    str+("<p>Your entry has been added.</p><ul>" entry-rows(lines) "</ul>")
 ```
 
 ---
@@ -653,7 +919,7 @@ A raw token names a file under `data/conts/`. Signing it means a client
 cannot probe the store by guessing names: the router refuses anything whose
 signature does not verify before it touches the filesystem.
 
-```turmeric no-check
+```turmeric
 (defn sign-token [token : cstr secret : cstr] : cstr
   (str+ token "." (hmac-sha256-hex secret token)))
 
@@ -666,6 +932,20 @@ signature does not verify before it touches the filesystem.
         (if (cstr-eq-ct sig (hmac-sha256-hex secret token))
           (some token)
           (none))))))
+```
+```sweet-exp
+defn sign-token [token : cstr secret : cstr] : cstr
+  str+(token "." hmac-sha256-hex(secret token))
+
+defn verify-token [signed : cstr secret : cstr] : (Option cstr)
+  let [dot cstr-index-of(signed "." 0)]
+    if {dot < 0}
+      none()
+      let [token cstr-slice(signed 0 dot)
+           sig   cstr-slice(signed {dot + 1} cstr-len(signed))]
+        if cstr-eq-ct(sig hmac-sha256-hex(secret token))
+          some(token)
+          none()
 ```
 
 `hmac-sha256-hex` is a self-contained inline-C SHA-256 (the same core as

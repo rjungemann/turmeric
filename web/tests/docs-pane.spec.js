@@ -113,6 +113,23 @@ test.describe('docs pane', () => {
         await expect(page.locator('#docs-article .site-header')).toHaveCount(0);
     });
 
+    test('opens on the quickstart, and pins it at the top of the nav', async ({ page }) => {
+        await openTry(page);
+        await openDocs(page);
+
+        // Nothing in the URL and nothing visited this session: the pane picks
+        // the beginning, not whatever guide sorts first in the pack.
+        await page.waitForFunction(
+            () => window.turmericApp.getState().docsRef === 'guides/quickstart',
+            null, { timeout: 15_000 });
+
+        // And the same page is one click away from anywhere in the nav.
+        const pinned = page.locator('#docs-nav .docs-nav-pinned a[data-doc-ref]');
+        await expect(pinned).toHaveCount(1);
+        await expect(pinned).toHaveAttribute('data-doc-ref', 'guides/quickstart');
+        await expect(pinned).toBeVisible();
+    });
+
     test('recently added leads the nav, newest first', async ({ page }) => {
         await openTry(page);
         await openDocs(page);
@@ -135,6 +152,14 @@ test.describe('docs pane', () => {
         expect(dates.length).toBeGreaterThan(0);
         expect(dates.length).toBeLessThanOrEqual(10);
         expect([...dates].sort().reverse()).toEqual(dates);
+
+        // Closed on load -- it is a "what changed?" section, not a permanent
+        // ten-row tax on the top of the nav -- and its summary opens it.
+        const recent = page.locator('#docs-nav .docs-nav-recent');
+        await expect(recent).not.toHaveAttribute('open', /.*/);
+        await expect(recent.locator('a[data-doc-ref]').first()).toBeHidden();
+        await recent.locator('summary').click();
+        await expect(recent).toHaveAttribute('open', /.*/);
 
         // It is a nav, not a display: the entries navigate like any other.
         const ref = await page.locator('#docs-nav .docs-nav-recent a[data-doc-ref]')

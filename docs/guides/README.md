@@ -55,7 +55,6 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[introducing-saffron.md](introducing-saffron.md)** -- A first tour of Saffron, the dynamically typed dialect: Try Turmeric in the browser, printing, flow control, functions, ADTs, typeclasses, and effects, every example in both syntaxes
 - **[quickstart.md](quickstart.md)** -- Prose introduction: expressions, functions, control flow, Option, Result, collections, closures, structs, and algebraic effects
 - **[saffron-guide.md](saffron-guide.md)** -- The Saffron dialect reference: what `any` as the default type changes, the dynamic operations, the checked boundary with typed Turmeric, and the one feature it gives up
-- **[quickstart-tutorial-plan.md](quickstart-tutorial-plan.md)** -- Authoring plan and step outline for the quickstart and the 22-step REPL tutorial
 - **[syntax-guide.md](syntax-guide.md)** -- How to read and write Turmeric -- s-expression and sweet-expression syntax
 - **[releases-and-installation-guide.md](releases-and-installation-guide.md)** -- Install Turmeric from a prebuilt release or Homebrew, what's in the tarball, and how a maintainer cuts a new release
 - **[repl.md](repl.md)** -- Reference for the `tur repl` interactive read-eval-print loop -- startup, evaluation, meta-commands, configuration

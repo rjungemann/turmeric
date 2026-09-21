@@ -7,7 +7,7 @@ description: Authoring plan and step outline for the quickstart.md prose guide a
 # Quickstart & Interactive REPL Tutorial Plan
 
 > **Status: SHIPPED.** All three deliverables exist:
-> [quickstart.md](quickstart.md), [repl-tutorial.md](repl-tutorial.md), and
+> [quickstart.md](../guides/quickstart.md), [repl-tutorial.md](../guides/repl-tutorial.md), and
 > `tutorials/quickstart.yaml` (consumed by the REPL `:tutorial quickstart`
 > meta-command). This document is the authoring plan, kept as the reference
 > for the shared step order and the YAML schema.

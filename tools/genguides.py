@@ -401,6 +401,32 @@ GUIDE_JS_CORE = '''\
     'map','filter','reduce','apply','return','yield','raise','throw',
     'coerce','cast','type-of','any',
   ]);
+
+  // ---- Racket ------------------------------------------------------------
+  // The guides quote Racket where it is the reference implementation of an
+  // idea Turmeric borrows -- `send/suspend` in the web-continuations pair,
+  // `shift`/`reset` in the delimited-control guides. Those blocks sit inches
+  // from a highlighted Turmeric block making the same point, and an
+  // unhighlighted one reads as a rendering failure rather than as "this is
+  // the other language". Racket is close enough to Turmeric to share the
+  // tokenizer; what differs is the keyword set and three bits of syntax, so
+  // it is a spec passed to hl() rather than a second scanner.
+  var RKT_KW = new Set([
+    'define','define-values','define-syntax','define-syntax-rule','define-struct',
+    'define-signature','define-values-for-syntax','lambda','case-lambda',
+    'let','let*','letrec','let-values','let*-values','letrec-values','let/cc','let/ec',
+    'if','cond','case','when','unless','else','and','or','not','begin','begin0',
+    'set!','quote','quasiquote','unquote','unquote-splicing','syntax','syntax-rules',
+    'syntax-case','with-syntax','match','match-lambda','match-define',
+    'for','for*','for/list','for*/list','for/fold','for/vector','for/hash','do',
+    'require','provide','module','module+','module*','struct','lang','#lang',
+    'parameterize','with-handlers','dynamic-wind','call/cc','call-with-current-continuation',
+    'call-with-composable-continuation','shift','reset','prompt','control',
+    'delay','force','thunk','error','raise','λ',
+  ]);
+  var RKT_LIT = new Set(['#t','#f','#true','#false','null','empty','eof','void']);
+  var TUR_LIT = new Set(['true','false','nil']);
+
   function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
   // ---- Brace-family highlighter: C, C++, GDScript ------------------------
   // The guides interleave Turmeric with the C it emits and embeds
@@ -530,7 +556,8 @@ GUIDE_JS_CORE = '''\
     'language-gdscript': GD_SPEC,
   };
 
-  function hl(code){
+  function hl(code, spec){
+    spec = spec || TUR_SPEC;
     var out='', i=0, n=code.length;
     while(i<n){
       var c=code[i];
@@ -538,6 +565,24 @@ GUIDE_JS_CORE = '''\
       if(c===';'){
         var e=code.indexOf('\\n',i); if(e===-1)e=n;
         out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+      }
+      // Racket block comment: #| ... |#, nestable in the language and here.
+      if(spec.blockComment && code.substr(i,2)==='#|'){
+        var depth=1, bj=i+2;
+        while(bj<n&&depth>0){
+          if(code.substr(bj,2)==='#|'){ depth++; bj+=2; continue; }
+          if(code.substr(bj,2)==='|#'){ depth--; bj+=2; continue; }
+          bj++;
+        }
+        out+='<span class="hl-comment">'+esc(code.slice(i,bj))+'</span>'; i=bj; continue;
+      }
+      // Racket keyword argument: #:mode, #:when. Scanned before the symbol
+      // rule, whose character class stops at the colon and would leave the
+      // `#` stranded as bare punctuation.
+      if(spec.hashKeyword && code.substr(i,2)==='#:'){
+        var kj=i+2;
+        while(kj<n&&/[a-zA-Z0-9_\\-!?*+<>=\\/]/.test(code[kj]))kj++;
+        out+='<span class="hl-type">'+esc(code.slice(i,kj))+'</span>'; i=kj; continue;
       }
       // String
       if(c==='"'){
@@ -552,7 +597,7 @@ GUIDE_JS_CORE = '''\
       // C bodies in c-integration-guide and ffi-guide used to render. The
       // block closes at the next ``` (CLAUDE.md spells it ```) , so the paren
       // is left for the Turmeric scan that resumes after it).
-      if(code.substr(i,4)==='```c'&&!/[A-Za-z0-9_]/.test(code[i+4]||'')){
+      if(spec.inlineC&&code.substr(i,4)==='```c'&&!/[A-Za-z0-9_]/.test(code[i+4]||'')){
         var fe=code.indexOf('```', i+4);
         var inner=(fe===-1)?code.slice(i+4):code.slice(i+4,fe);
         out+=esc('```c')+hlBrace(inner, C_SPEC);
@@ -560,7 +605,7 @@ GUIDE_JS_CORE = '''\
         continue;
       }
       // Type annotation :keyword
-      if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+      if(spec.colonType&&c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
         var j=i+1;
         while(j<n&&/[a-zA-Z0-9_\\-?!]/.test(code[j]))j++;
         out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
@@ -576,9 +621,9 @@ GUIDE_JS_CORE = '''\
         var j=i;
         while(j<n&&/[a-zA-Z0-9_\\-!?*+<>=\\/&%^~#@\\.]/.test(code[j]))j++;
         var sym=code.slice(i,j);
-        if(sym==='true'||sym==='false'||sym==='nil'){
+        if(spec.lit.has(sym)){
           out+='<span class="hl-number">'+esc(sym)+'</span>';
-        } else if(KW.has(sym)){
+        } else if(spec.kw.has(sym)){
           out+='<span class="hl-keyword">'+esc(sym)+'</span>';
         } else {
           out+=esc(sym);
@@ -590,17 +635,28 @@ GUIDE_JS_CORE = '''\
     return out;
   }
 
+  var TUR_SPEC = { kw:KW,     lit:TUR_LIT, inlineC:true,  colonType:true,
+                   blockComment:false, hashKeyword:false };
+  var RKT_SPEC = { kw:RKT_KW, lit:RKT_LIT, inlineC:false, colonType:false,
+                   blockComment:true,  hashKeyword:true  };
+  var LISP_LANGS = {
+    'language-turmeric':  TUR_SPEC,
+    'language-sweet-exp': TUR_SPEC,
+    'language-racket':    RKT_SPEC,
+  };
+
 
   // Idempotent: the data-hl stamp means a second pass over the same DOM (the
   // docs pane re-renders on every navigation) cannot double-escape the markup.
   function highlightGuideCode(root){
     var scope = root || document;
-    scope.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp')
-      .forEach(function(el){
+    Object.keys(LISP_LANGS).forEach(function(cls){
+      scope.querySelectorAll('pre code.' + cls).forEach(function(el){
         if (el.dataset.hlDone) return;
         el.dataset.hlDone = '1';
-        el.innerHTML = hl(el.textContent);
+        el.innerHTML = hl(el.textContent, LISP_LANGS[cls]);
       });
+    });
     Object.keys(BRACE_LANGS).forEach(function(cls){
       scope.querySelectorAll('pre code.' + cls).forEach(function(el){
         if (el.dataset.hlDone) return;
@@ -965,7 +1021,17 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
     if meta is None:
         meta = fm_meta
 
-    text = re.sub(r'^(`{3,})(turmeric|sweet-exp)\s+no-check\b[^\n]*', r'\1\2', text,
+    # Drop every checker marker from an opening fence's info string.
+    #
+    # `no-check`, `no-manifest-check` and anything check-guide-pairs.py grows
+    # next are instructions to *that* tool; python-markdown's fenced_code only
+    # accepts a single bare word after the fence, so a marker left in place
+    # stops the line being a fence at all. The block then renders as a literal
+    # paragraph and its closing ``` opens a new one, swallowing the prose and
+    # headings that follow until the next fence -- silently, because nothing
+    # errors. Matching the markers generically rather than by name is what
+    # keeps the next one from repeating it.
+    text = re.sub(r'^(`{3,})(turmeric|sweet-exp)[ \t]+(?!\{)[^\n]*', r'\1\2', text,
                   flags=re.MULTILINE)
     text = strip_manual_toc(text)
     text = widen_nested_fences(text)

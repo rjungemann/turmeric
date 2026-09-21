@@ -119,13 +119,17 @@ session untouched.
 
 Inside the pane:
 
-- **Nav** leads with **Recently Added**: the ten newest pages in the pack,
-  dated, across all three kinds at once -- new guides and new stdlib modules
-  sit in one list, because "what is new here?" does not respect the tree. Below
-  it, the tree itself: guides by category, API modules by group, and spices
-  when this build carries their pages. It is the in-app counterpart of the
-  Recently Added card on the website's guides index -- same count, same dates,
-  and wider by exactly the pages the card's page does not cover.
+- **Nav** is pinned at the top with the **Quickstart**, the page the pane also
+  opens on when you have not been anywhere else yet. Below it, **Recently
+  Added**: the ten newest pages in the pack, dated, across all three kinds at
+  once -- new guides and new stdlib modules sit in one list, because "what is
+  new here?" does not respect the tree. It is collapsed on load and opens on
+  click; "what changed since I last looked?" is an occasional question, and ten
+  permanent rows above the tree is a steep way to answer it. It is the in-app
+  counterpart of the Recently Added card on the website's guides index -- same
+  count, same dates, and wider by exactly the pages the card's page does not
+  cover. Below that, the tree itself: guides by category, API modules by group,
+  and spices when this build carries their pages.
 - **Search** takes one query and returns two kinds of result: pages (from the
   pack) and symbols (from `doc-names.json`). Picking a symbol routes to the
   existing docstring panel.
