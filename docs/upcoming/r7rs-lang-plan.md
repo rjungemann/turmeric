@@ -28,8 +28,11 @@ storage type, on both back ends -- is done, and R7RS inherits all of it.
 R7RS's expensive part is somewhere else entirely: it is a **specification with
 a conformance test suite**, and the last 10% of a spec is most of the work.
 Four items in Section 3 are hard requirements of R7RS that Turmeric does not
-meet today, and one of them (proper tail calls on the compiled path) is
-currently met only by an **optimizer accident** that disappears at `-O0`.
+meet today, and the first of them -- proper tail calls on the compiled path --
+turned out on measurement to be *not met at all* for the shape Scheme is made
+of. It is large enough to have its own document
+([proper-tail-calls-plan.md](proper-tail-calls-plan.md)) and is a prerequisite
+rather than a stage.
 
 **"Support Turmeric libraries" is the whole point**, and it is also the thing
 that makes this worth doing rather than an exercise. A Scheme that can
@@ -200,36 +203,34 @@ justify each site -- rather than waiting to be surprised.
 
 ### 3.1 The compiled path does not have proper tail calls
 
-**This is the most important finding in the document, and it inverts what the
-documentation says.**
+**This is the largest gap, and it is worse than the documentation suggests.**
+It now has its own plan: [proper-tail-calls-plan.md](proper-tail-calls-plan.md),
+which carries the full measurement matrix and the design. The summary:
 
-`docs/guides/performance-guide.md` states plainly that only *self*-tail calls
-are optimized, and that "mutual / general tail calls" are deferred. So the
-expectation was that mutual tail recursion at depth 1e6 would blow the stack.
+| Shape | `-O0` | `-O2` | `--interpret` |
+|---|---|---|---|
+| self tail call | pass | pass | pass |
+| self tail call in a `match` arm | no backedge emitted | no backedge emitted | pass |
+| mutual (2 or 8 functions) | **SIGSEGV** | pass | pass |
+| **indirect, through a `fn` value** | SIGSEGV | **SIGSEGV at ~29,335** | pass |
 
-It does not. It completes:
+Three things follow, and the third is the one that matters here:
 
-```
-$ tur run mutual.tur       # is-even?/is-odd? at n = 1,000,000
-true
-```
+1. **The self-tail-call guarantee is real** -- a `__tur_tailcall:` label and a
+   `goto`, surviving `-O0`. Not an optimizer favor.
+2. **Mutual tail calls pass at `-O2` only because LLVM inlines small cycles into
+   a loop.** Not sibling-call optimization, and not a language property: it
+   evaporates at `-O0` and whenever the bodies exceed the inliner's threshold.
+3. **The indirect case -- a call through a function value -- fails at `-O2` too**,
+   at ~29K deep. That is the shape Scheme is made of: every Scheme procedure call
+   is a call to a value. So the compiled path does not merely lack a guarantee
+   here; it lacks the behavior.
 
-And then, with the same source, at `-O0`:
-
-```
-$ tur run --debug mutual.tur
-exit=139                   # SIGSEGV
-```
-
-So the compiled path has general tail calls **only because clang performs
-sibling-call optimization at `-O2`**, which is the default `cc_flags`
-(`src/main.c:6213`). It is not a language property. It is not checked. It
-depends on the host C compiler, its version, and the optimization level, and it
-vanishes under `--debug` -- that is, under the debugger, for the dialect most
-likely to want one.
-
-**A Scheme cannot ship on that.** R7RS requires proper tail calls, and a
-requirement met by an optimizer's discretion is met by nothing. See D6.
+The root cause is structural and is documented in-tree at `emit_fns.c:4089`:
+`panic` is not `noreturn`, so **every** call site is followed by
+`if (tur_panicking) return ...;`. No call in emitted Turmeric C is ever in C
+tail position, which forecloses both sibling calls and `musttail` until that
+changes.
 
 ### 3.2 `quote` is not a data constructor
 
@@ -491,40 +492,36 @@ one.
 `gensym`'s symbol-table-checked freshness (2.5) is what makes (a) sound against
 hand-written names, which is normally the first thing to break.
 
-### D6 -- proper tail calls: trampoline as the floor, `musttail` as the fast path
+### D6 -- proper tail calls are a Turmeric prerequisite, not R7RS work
 
-**Verdict: the uniform `any` representation makes this tractable. Do not ship
-on `-O2` sibling calls.**
+**Verdict: this is spun out into
+[proper-tail-calls-plan.md](proper-tail-calls-plan.md). R7RS depends on its T6;
+T1-T3 there are worth landing regardless.**
 
-Every Scheme procedure under D2 has the same C signature shape -- arguments and
-result are `tur_tagged_t`. That uniformity is exactly the precondition both
-real options need.
+Investigating 3.1 changed the shape of this decision twice, so the conclusions
+are recorded there rather than restated here. Two of them overturn what an
+earlier draft of this section proposed:
 
-- **(a) Rely on `-O2`.** What happens today, by accident. **Rejected**: 3.1
-  measured it segfaulting at `-O0`, it is unchecked, and it is a property of
-  clang rather than of Turmeric.
-- **(b) `__attribute__((musttail))`** on returns in tail position. Clang 13+ and
-  GCC 15 support it, and the key property is that it is a **hard compile error**
-  when it cannot be honored rather than a silent fallback. Constraint: the
-  callee's signature must match the caller's, which D2's uniform representation
-  gives for equal arity but not across arities.
-- **(c) Trampoline Scheme-to-Scheme tail calls.** A tail call returns a "call
-  this next" descriptor; a driver loop in the entry wrapper runs it to a value.
-  Fully portable, arity-independent, constant per-call overhead.
-- **(d) Route `#lang r7rs` functions through the CPS-IR backend.** `CT_TAILCALL`
-  is already in its emittable subset (`emit_cps_ir.h`), and this would deliver
-  D7's re-entrant `call/cc` in the same stroke. But that subset is today
-  restricted to scalar `int`/`bool` types with no reified join points, so it
-  does not admit an `any`-carrying Scheme program yet.
+- **`musttail` is not available as a first move.** Every emitted call site is
+  followed by a panic check (3.1), so there is no tail position for it to apply
+  to. It becomes an option only after that is addressed -- and the plan's T-D2
+  shows the check is simply *redundant* at a genuine tail call and can be
+  dropped there, which is far cheaper than restructuring `panic`.
+- **"Route it through the CPS-IR backend" is disproven, not pending.** The
+  indirect probe already routes through that backend and still overflows: the
+  call is emitted as an ordinary C call plus a panic check, and each level
+  re-enters through the direct-entry wrapper's `setjmp` and `dk_prompt` malloc.
+  `CT_TAILCALL` exists in the IR vocabulary; this shape does not reach it.
 
-**Ship (c) as the correctness floor, add (b) where the compiler can prove
-signature identity, and name (d) as the strategic direction.** The reason (c)
-is the floor rather than (b) is portability: `musttail` support is uneven
-enough that a conformance property must not depend on it, and MinGW is already
-a supported host.
+What R7RS actually needs is **T6**: a bounce trampoline over the uniform
+fat-closure representation, which D2's "a Scheme value is an `any`" decision is
+what makes natural. The typed-Turmeric half of the problem (T-D3's limit: an
+owned value live across a tail call is not a tail call) is nearly vacuous for
+Scheme, which has no destructors.
 
-Note that the interpreter needs none of this (2.4), which is why R2-R5 can all
-be asserted under `--interpret` before the compiled path has an answer.
+The interpreter needs none of this -- it is correct on every row of 3.1's matrix
+today -- which is why R2-R5 can be asserted under `--interpret` before the
+compiled path has an answer.
 
 ### D7 -- `call/cc`: escape first, re-entrant second, and say so
 
@@ -748,7 +745,9 @@ is about exact/inexact divergence.
 
 ### R6 -- control (large; contains the hardest item)
 
-Proper tail calls on the compiled path (D6). `dynamic-wind`. `values` and
+Proper tail calls on the compiled path -- **T6 of
+[proper-tail-calls-plan.md](proper-tail-calls-plan.md)**, which is a
+prerequisite landing on its own schedule, not work done here (D6). `dynamic-wind`. `values` and
 `call-with-values`. `guard`/`raise`/`raise-continuable`/`with-exception-handler`
 over effects (D10). `parameterize` over `dynvar` (D10). `delay`/`force`
 (D10). `call/cc` at the escape level, with the re-entrant case named and
@@ -902,28 +901,23 @@ expectation from a demo.
 All against `./build/tur` at v0.50.0, Debug build, on 2026-09-21 (macOS,
 arm64). These are the measurements Sections 2 and 3 cite.
 
-### A.1 -- general tail calls work at `-O2` and segfault at `-O0` (3.1)
+### A.1 -- the tail-call matrix (3.1)
 
-```turmeric
-(defn is-even? [n : int] : bool
-  (if (= n 0) true (is-odd? (- n 1))))
-(defn is-odd? [n : int] : bool
-  (if (= n 0) false (is-even? (- n 1))))
-(defn main [] : int
-  (println (is-even? 1000000))
-  0)
-```
+Full transcript, including the two wrong turns this probe took first, is in
+[proper-tail-calls-plan.md](proper-tail-calls-plan.md) Appendix A. Depth is read
+from the environment in every probe; an earlier version passed it as a literal
+and measured only clang's constant folding.
 
 ```
-$ tur run mutual.tur
-true                                   # -O2 default: clang sibling calls
+pA  self          -O2 n=10000000: 0        -O0 n=10000000: 0
+pB  mutual x2     -O2 n=10000000: true     -O0 n=10000000: CRASH (exit=139)
+pC  mutual x8     -O2 n=10000000: 0        -O0 n=10000000: CRASH (exit=139)
+pD  indirect      -O2 n=10000:    1        -O2 n=1000000:  CRASH (exit=139)
 
-$ tur run --interpret mutual.tur
-true                                   # turi's own TCO trampoline
-
-$ tur run --debug mutual.tur           # -O0
-exit=139                               # SIGSEGV
+indirect tail call: deepest OK ~= 29335, crashes by ~= 33202   (8 MB stack)
 ```
+
+Under `--interpret`, the indirect probe passes at 1e6.
 
 ### A.2 -- `quote` is not a data constructor (3.2)
 
@@ -1007,6 +1001,8 @@ saffron/sweet          saffron   sweet        stable
 
 ## See also
 
+- [proper-tail-calls-plan.md](proper-tail-calls-plan.md) -- D6's prerequisite,
+  with the full tail-call measurement matrix
 - [saffron-lang-plan.md](saffron-lang-plan.md) -- the dynamic substrate this
   plan inherits, and the staging discipline it copies
 - [docs/guides/saffron-guide.md](../guides/saffron-guide.md)

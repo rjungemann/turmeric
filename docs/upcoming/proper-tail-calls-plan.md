@@ -1,0 +1,579 @@
+# Proper tail calls in Turmeric
+
+Status: **plan only.** Nothing below has been built.
+
+Prerequisite for [r7rs-lang-plan.md](r7rs-lang-plan.md), but not only for it:
+T1-T3 and T5 are Turmeric features that stand on their own, and T3 closes a
+silent hole in a shape people write every day.
+
+Everything in Sections 1 and 2 was **measured on 2026-09-21** against
+`./build/tur` at v0.50.0 on macOS/arm64. The transcript is in
+[Appendix A](#appendix-a----probe-transcript). Read that appendix before
+trusting any number here, because **the first version of this investigation
+reached the wrong conclusion twice** -- see 2.4.
+
+---
+
+## 0. The ask
+
+> The goal is for Turmeric to fully support tail calls.
+
+Short answer: **mostly yes, and the pieces are worth building independently of
+Scheme.** One piece cannot be promised in full generality, and Section 3's
+T-D3 says exactly which and why. That limit is the same one Rust has, for the
+same reason, and it is better stated up front than discovered by a user whose
+loop overflows.
+
+---
+
+## 1. What ships today (measured)
+
+Depth 10,000,000 unless noted. `-O2` is what `tur build` / `tur run` use by
+default (`src/main.c:6213`); `-O0` is what `tur run --debug` uses.
+
+| Shape | `-O0` | `-O2` | `--interpret` | What is actually happening |
+|---|---|---|---|---|
+| **Self** tail call | **pass** | pass | pass | Turmeric emits a real `__tur_tailcall:` label and `goto`. A genuine language guarantee. |
+| Self tail call, **`match` arm** | n/a | n/a | pass | **No backedge emitted.** Ordinary recursive call. |
+| Self tail call, body owns a **`ref<T>`** | n/a | n/a | pass | **No backedge emitted.** Defer frame pushed; drop fires *after* the call. |
+| **Mutual**, 2 functions | **SIGSEGV** | pass | pass | LLVM inlines the pair and collapses it to a loop. Not a tail call. |
+| **Mutual**, 8 functions | **SIGSEGV** | pass | pass | Same -- LLVM inlines the whole 8-cycle. |
+| **Indirect** (through a `fn` value) | SIGSEGV | **SIGSEGV at ~29,335** | pass at 1e6 | No tail-call handling anywhere. ~285 bytes of C stack per level on an 8 MB stack. |
+
+Three conclusions, in order of importance:
+
+1. **The self-tail-call guarantee is real and solid.** It survives `-O0`, it is
+   visible in the emitted C, and it is not an optimizer favor. Everything
+   `docs/guides/performance-guide.md` says about it is accurate.
+2. **The indirect case fails at `-O2` as well as `-O0`**, at a depth low enough
+   (~29K) to be hit by ordinary programs. This is the one that matters for
+   Scheme, where every procedure call is a call to a value -- and it is also the
+   row most likely to bite a Turmeric user who stores a callback in a struct.
+3. **The interpreter is already correct on all six rows.** `eval_apply_inner`'s
+   trampoline handles direct, mutual, and indirect tail calls alike. Any staging
+   can lean on `--interpret` as the conformant fallback.
+
+---
+
+## 2. Why -- three root causes
+
+### 2.1 Every call site is followed by a panic check
+
+This is the structural blocker, and it is documented in-tree at
+`src/compiler/emit_fns.c:4089`:
+
+> `panic` is NOT `noreturn` on the compiled path: it sets `tur_panicking` and
+> returns, and the per-call-site `if (tur_panicking) return ...;` is what
+> unwinds.
+
+So every emitted call looks like this (from probe pB):
+
+```c
+static bool is_hyeven_qu(int64_t n) {
+        bool __t277;
+        if ((n) == (INT64_C(0))) {
+            __t277 = true;
+        } else {
+            bool __ps_278 = (is_hyodd_qu((n) - (INT64_C(1))));
+            if (tur_panicking) return ((bool)0);   /* <- work after the call */
+            __t277 = __ps_278;
+        }
+        return __t277;
+}
+```
+
+**No call in emitted Turmeric C is ever in C tail position.** Not this one, not
+any. That forecloses every strategy built on the C compiler doing the work:
+sibling-call optimization has nothing to optimize, and
+`__attribute__((musttail))` would be a hard compile error on every site.
+
+The simplest program in this investigation emitted **187** of these checks.
+
+### 2.2 Cleanup after the call
+
+A call with live cleanup after it is not in tail position, and no amount of
+codegen cleverness changes that. `tco_mark` already knows this and bails:
+
+```c
+/* emit_fns.c, tco_mark */
+for (uint32_t i = 0; i < e->as.do_.n; i++)
+    if (e->as.do_.items[i]->kind == EX_DEFER) return 0; /* defers break tail */
+```
+
+Measured, with a `ref<T>` local (auto-defer drop at scope end): the backedge
+does not fire at all, and the emitted C is unambiguous about why --
+
+```c
+tur_frame_push_defer(&__frame_309, __defer_311, &__t312);
+int64_t __ps_314 = (loop_hyref((n) - (INT64_C(1))));
+if (tur_panicking) { tur_frame_fire_lifo(&__frame_309); return ((int64_t)0); }
+__t313 = __ps_314;
+tur_frame_fire_lifo(&__frame_309);        /* <- real work, after the call */
+```
+
+The conservative bail is **correct**. It is also more conservative than it needs
+to be: in that probe `b` is never passed to the recursive call and is dead at
+the call site, so the drop could legally be hoisted *before* it and tail
+position restored. That gap is T4.
+
+### 2.3 `tco_mark`'s tail grammar is missing `match`
+
+`tco_mark` recurses through `EX_CALL`, `EX_IF`, `EX_DO` and `EX_LET`/`EX_LETREC`
+(the last only when every binding is a plain scalar -- `tco_let_simple`). There
+is **no `EX_MATCH` case**, so:
+
+```turmeric
+(defn loop-match [n : int] : int
+  (match (classify n)
+    (Done)   0
+    (More v) (loop-match v)))      ; tail call -- gets NO backedge
+```
+
+emits an ordinary recursive call. `match` is the idiomatic way to write a loop
+over an ADT in this language, so this is not an exotic corner; it is the shape a
+Turmeric programmer reaches for first, silently losing the one TCO guarantee the
+language does make. This is the cheapest high-value fix in the plan (T3).
+
+### 2.4 What the `-O2` numbers actually measure, and why they are not a guarantee
+
+**This subsection exists because the first pass of this investigation got it
+wrong twice, in the direction CLAUDE.md warns about: control flow read, a cause
+inferred, no measurement.**
+
+The first probe ran mutual recursion at depth 1,000,000 with a **literal**
+argument, saw it pass at `-O2`, and concluded "clang is doing sibling-call
+optimization." Both halves were wrong:
+
+- **The probe was void.** Disassembling it, `is_hyeven_qu` and `is_hyodd_qu`
+  were not in the object file at all. They are `static`, side-effect-free, and
+  called with a constant, so clang evaluated the whole recursion at compile time.
+  The probe measured constant folding.
+- **The mechanism was wrong.** Re-run with the depth read from the environment
+  so it cannot be folded, `-O2` still passes -- but the functions are *still*
+  absent from the object file. clang **inlines** the cycle and converts it to a
+  loop. `main` contains:
+
+  ```asm
+  2c10: cmp  x0, #0x1
+  2c14: b.eq 0x2c2c
+  2c18: sub  x0, x0, #0x2      ; n -= 2  (both bodies inlined)
+  2c1c: cbnz x0, 0x2c10        ; loop
+  ```
+
+  There is no sibling call. There is no call.
+
+This matters beyond pedantry, because the two mechanisms have very different
+fragility. Sibling-call optimization would apply to bodies of any size. Inlining
+applies only while the cycle fits under the inliner's cost threshold -- so the
+`-O2` "pass" evaporates the moment the functions do real work, and it never
+applied to indirect calls at all, which is exactly what the ~29K ceiling in
+Section 1 shows.
+
+**Harness consequence, and it is a hard rule: a tail-call fixture compiled at
+`-O2` measures clang, not Turmeric.** Every fixture this plan adds must be built
+and run at `-O0`, or it asserts nothing. The probe battery in Appendix A is
+built both ways for precisely this reason.
+
+### 2.5 The CPS path does not rescue this today
+
+The R7RS plan floated "route it through the CPS-IR backend, which already has
+`CT_TAILCALL`." Measured: the indirect probe **is already being routed there**,
+and it does not help. `step_hya__cps` emits the indirect call as an ordinary C
+call, checks `tur_panicking`, threads the result through two temporaries, and
+only then invokes the continuation:
+
+```c
+static int64_t step_hya__cps(int64_t n, DK *__kont) {
+    ...
+    int64_t __ps_315 = ((*(tur_thunk_int64_t_int64_t_t *)(...))(..., n - 1));
+    if (tur_panicking) return ((int64_t)0);
+    __t313 = __ps_315;
+    ...
+    return dk_run(__kont, (intptr_t)(__t0));
+}
+```
+
+Worse, the callee is reached through its **direct-entry wrapper**, which does a
+`setjmp`, a `dk_prompt` malloc and `__dk_entry_depth++` on every level. So each
+"tail call" is a full nested re-entry into the DK machinery, which is where the
+~285 bytes per frame come from.
+
+`CT_TAILCALL` exists in the IR vocabulary (`emit_cps_ir.h`); this shape is not
+reaching it. Treat "the CPS backend gives us tail calls" as **disproven for the
+current emitter**, not as available.
+
+---
+
+## 3. Design decisions
+
+### T-D1 -- tail position becomes a thing you can ask for, and be refused
+
+**Verdict: add an annotation that is a hard error when the call cannot be a tail
+call.**
+
+Today TCO is invisible. You either get the backedge or you do not, nothing says
+which, and the failure mode is a SIGSEGV at an unpredictable depth in
+production. Every language that takes this seriously has a checked form --
+Scala's `@tailrec`, Clojure's `recur`, Kotlin's `tailrec`.
+
+```turmeric
+(defn loop-match [n : int] : int
+  (match (classify n)
+    (Done)   0
+    (More v) ^tailcall (loop-match v)))
+```
+
+A `^tailcall` call that the compiler cannot place in tail position is
+`TUR-E0xxx`, naming the reason -- "a `ref<T>` local is live across this call",
+"the callee is not statically known and this dialect does not trampoline
+indirect calls". That diagnostic is most of the value: it converts a silent
+performance cliff into a compile-time conversation.
+
+**This lands first**, because it is also the test instrument: every later stage
+is verified by a fixture that annotates a call and asserts the annotation holds
+at `-O0`.
+
+### T-D2 -- the panic check is redundant at a genuine tail call, and should be dropped there
+
+**Verdict: do not restructure `panic`. Just stop emitting the check after a tail
+call.**
+
+The tempting reading of 2.1 is that the whole panic mechanism must change --
+make `panic` `noreturn`, or `longjmp` to a per-thread handler. That is a deep,
+cross-cutting change to something load-bearing (`tur_frame_fire_lifo` unwinding
+depends on it), and **it is not necessary.**
+
+Consider `f` whose body is exactly `return g(x);`. If `g` panics, it sets
+`tur_panicking` and returns a garbage value. `f` returns that garbage value
+unexamined. `f`'s own caller is, by definition, *not* in tail position with
+respect to this chain -- so it has the check, and it fires:
+
+```c
+int64_t __ps = f(...);
+if (tur_panicking) return 0;    /* catches g's panic, one level up */
+```
+
+The panic propagates correctly through any number of tail calls, because a tail
+call by definition does nothing with the value. **The nearest enclosing
+non-tail frame does the checking, and there always is one** (the program entry
+point at worst).
+
+The precondition is that there is genuinely no work between the call and the
+return -- which is T-D3's job to establish, and which the `^tailcall`
+annotation makes checkable. So T-D2 is cheap, local, and safe, and it is what
+unblocks `musttail` later if we ever want it.
+
+One carve-out to verify rather than assume: a tail call inside a `with-region`
+bracket or a `handle` still has a rewind/prompt boundary after it. Those are
+cleanup under T-D3, not exceptions to T-D2.
+
+### T-D3 -- cleanup decides tail position, and the honest answer has a limit
+
+**Verdict: hoist the drop when the value is dead at the call; refuse tail
+position when it is live. Do not promise general TCO in a language with
+destructors.**
+
+Three cases, and the middle one is the work:
+
+| At the tail call, an owned local is ... | Result |
+|---|---|
+| absent | tail position; emit the tail call |
+| **live but dead after** (not an argument, not borrowed by the callee) | **hoist the drop before the call**, then tail position |
+| genuinely live across (passed by borrow, or the callee retains it) | **not a tail call.** Conservative bail + a `^tailcall` diagnostic |
+
+Row 2 is a liveness question over the tail call's argument set, and it covers
+the common case -- the `ref<T>` probe in 2.2 is exactly it.
+
+Row 3 is the limit, and it should be stated in the guide in the same breath as
+the guarantee. It is why Rust does not have guaranteed TCO, and pretending
+otherwise would mean either leaking or dropping a value the callee is still
+using. **Turmeric can promise proper tail calls for calls with no live owned
+value across them, and that promise is worth making precisely because it is
+checkable** (T-D1).
+
+For `#lang r7rs` this limit is nearly vacuous: Scheme has no destructors, and a
+Scheme local is an `any`. The one thing to watch is `__tur_any_drop` on a
+heap-boxed by-value aggregate, which reintroduces row 3 through the back door;
+the R7RS prelude should prefer representations that do not box.
+
+### T-D4 -- extend the tail grammar, starting with `match`
+
+**Verdict: `tco_mark` and `emit_tail` grow an `EX_MATCH` case, and the two stay
+in lockstep.**
+
+`tco_mark`'s contract is that it "mirrors `emit_tail`'s structural recursion
+exactly so that `marked >= 1` predicts whether `emit_tail` will emit a
+backedge". That invariant is what keeps the `__tur_tailcall:` label from being
+emitted-and-unused, and any new case must be added to both or the C compiler
+warns on an unused label.
+
+Order: `EX_MATCH` (2.3, measured), then audit `handle` arms, `and`/`or`, and
+`tco_let_simple`'s carrier-ABI bail, each with a fixture before it is relaxed.
+
+### T-D5 -- mutual tail calls are SCC fusion, not sibling calls
+
+**Verdict: fuse each tail-call strongly-connected component into one C function
+with a dispatch loop.**
+
+Compute the SCC of the direct call graph restricted to **tail edges**. A
+singleton SCC with a self-edge is today's backedge. An SCC with n > 1 members
+becomes one C function with a `state` variable and a `switch` at the top of the
+loop; each member keeps a thin wrapper for non-tail entry from outside the
+group.
+
+```c
+static int64_t __tcg_3(int state, int64_t n) {
+    __tur_tailcall:;
+    switch (state) {
+      case 0: if (n == 0) return 1; n = n - 1; state = 1; goto __tur_tailcall;
+      case 1: if (n == 0) return 0; n = n - 1; state = 0; goto __tur_tailcall;
+    }
+}
+static bool is_hyeven_qu(int64_t n) { return __tcg_3(0, n); }
+static bool is_hyodd_qu (int64_t n) { return __tcg_3(1, n); }
+```
+
+Why this rather than `musttail`: it works at `-O0`, it needs no toolchain
+support (MinGW is a supported host), it has no per-call cost, and it is a
+*generalization of the mechanism already in the tree* rather than a second one.
+The members' parameter lists differ in general, so the fused function takes the
+union -- which is why this wants a size cap and a bail, not unbounded fusion.
+
+`musttail` stays available as a later fast path once T-D2 has made tail position
+real, and is worth revisiting then; it is not the floor.
+
+### T-D6 -- indirect tail calls need a trampoline, and only dynamic dialects get the guarantee
+
+**Verdict: a bounce trampoline on the uniform fat-closure representation.
+Typed-Turmeric indirect tail calls stay unguaranteed, with a diagnostic.**
+
+An indirect call cannot be SCC-fused -- the callee is a runtime value. The two
+real options are `musttail` (needs exact signature identity, which typed
+Turmeric does not have across arbitrary `fn` types) and a trampoline.
+
+For the dynamic dialects the trampoline is natural, because the uniformity it
+needs already exists: under Saffron and `#lang r7rs` every procedure goes
+through the fat-closure protocol with `any`-shaped arguments and result. A tail
+call returns a bounce descriptor instead of calling; the entry wrapper loops
+until it sees a non-bounce value. Cost is one tagged compare and one branch per
+bounce, paid only on tail calls.
+
+For typed Turmeric, an indirect tail call remains a real C call. `^tailcall` on
+one is an error that says so and names T-D6 -- which is a much better outcome
+than today's silent ~29K ceiling.
+
+This is the split that answers the original question honestly: **"full tail call
+support" is achievable for `#lang r7rs`, and achievable-with-a-named-limit for
+typed Turmeric.**
+
+---
+
+## 4. Stages
+
+| Stage | Size | Benefits |
+|---|---|---|
+| **T1** -- `^tailcall` annotation + diagnostic + `-O0` fixture harness | small | all of Turmeric; it is the test instrument for everything below |
+| **T2** -- drop the redundant panic check at tail calls (T-D2) | small | unblocks tail position at all |
+| **T3** -- `EX_MATCH` in the tail grammar (T-D4) | small | closes a silent hole in the most idiomatic loop shape |
+| **T4** -- drop-glue hoisting by liveness (T-D3 row 2) | medium | `ref<T>`/`defer` loops get the guarantee |
+| **T5** -- SCC fusion for mutual tail calls (T-D5) | medium-large | mutual recursion becomes a guarantee instead of an `-O2` accident |
+| **T6** -- bounce trampoline for indirect tail calls under dynamic dialects (T-D6) | medium | **R7RS's actual prerequisite**; also fixes Saffron's ~29K ceiling |
+
+**T1-T3 are worth landing regardless of whether R7RS ever happens**, and they
+are small. T3 in particular fixes a hole that exists in shipped Turmeric today.
+
+T5 is the one that makes `docs/guides/performance-guide.md` able to say
+something stronger than it says now. T6 is the R7RS gate.
+
+**Harness requirement, repeated because it is the trap:** every fixture builds
+at `-O0` (`requires.*` marker or an explicit `--debug` invocation), asserts a
+depth well past any plausible stack (1e7), and is pinned on both back ends. A
+tail-call fixture at `-O2` asserts nothing.
+
+---
+
+## 5. What this costs
+
+- **T2** removes emitted code; it should shrink output slightly.
+- **T3, T4, T5** cost nothing at runtime. They convert calls into `goto`s.
+- **T6** costs one tagged compare and a branch per *tail call* in dynamic
+  dialects, and nothing in typed Turmeric. An `r7rs` and a `saffron` row in
+  `benchmarks/` should exist before T6 lands, not after.
+- Fixture count: roughly one per row of Section 1's table, plus the `^tailcall`
+  negative cases. Call it 15-20, which is inside the budget the R7RS plan's R3
+  risk sets.
+
+---
+
+## 6. Carve-outs
+
+- **An owned value live across a tail call is not a tail call** (T-D3 row 3).
+  Permanent, and it goes in the guide next to the guarantee.
+- **Indirect tail calls in typed Turmeric** stay unguaranteed (T-D6). A
+  diagnostic, not silence.
+- **`musttail`** is not the floor and is not promised. Revisit after T2.
+- **Restructuring `panic` to be `noreturn`** is explicitly *not* in this plan.
+  T-D2 shows it is unnecessary; if some later need arises, it is its own
+  decision with its own risks.
+
+---
+
+## 7. Risks
+
+**TR1 -- `tco_mark` / `emit_tail` drift.** They must mirror each other exactly
+or the `__tur_tailcall:` label is emitted unused and the C compiler warns. Every
+T3/T4 case touches both. Mitigation: one fixture per new case, and the
+cc-warning ratchet (`tests/check-cc-warn-ratchet.sh`) already in the tree will
+catch the unused-label class.
+
+**TR2 -- measuring clang instead of Turmeric.** This investigation made that
+mistake twice (2.4) before catching it. Mitigation: the `-O0` harness rule in
+Section 4, stated as a rule rather than a habit.
+
+**TR3 -- T-D2 is subtly wrong somewhere.** The argument in T-D2 is sound for
+ordinary calls but was not checked against `with-region` rewind, `handle`
+prompts, session-typed endpoints, or the async suspend path. Mitigation: T2
+lands with a fixture per control construct that can sit between a tail call and
+a return, and each is verified to still surface a panic.
+
+**TR4 -- SCC fusion blows up on wide groups.** The fused function takes the
+union of its members' parameters. A large SCC with disjoint signatures produces
+a wide, ugly function. Mitigation: a member/parameter cap with a clean bail to
+today's behavior, plus the `^tailcall` diagnostic saying the group was too wide.
+
+**TR5 -- scope.** This is six stages, and only T6 is strictly required by R7RS.
+It would be easy for this to become the work instead of a prerequisite to it.
+Mitigation: T1-T3 are small and independently valuable; if the R7RS track
+stalls, they should land anyway.
+
+---
+
+## Appendix A -- probe transcript
+
+`./build/tur` v0.50.0, Debug build, macOS/arm64, 8 MB stack (`ulimit -s 8176`),
+2026-09-21. Depth is read from the environment in every probe so that no
+argument can be constant-folded -- see 2.4 for why the first attempt, which used
+a literal, measured nothing.
+
+```turmeric
+(load "stdlib/str.tur")
+(load "stdlib/env.tur")
+(defn depth [] #fx{Proc} : int (str->int (env/get! "N")))
+```
+
+### A.1 -- the matrix
+
+```
+pA  self          -O2 n=10000000: 0        -O0 n=10000000: 0
+pB  mutual x2     -O2 n=10000000: true     -O0 n=10000000: CRASH (exit=139)
+pC  mutual x8     -O2 n=10000000: 0        -O0 n=10000000: CRASH (exit=139)
+pD  indirect      -O2 n=10000:    1        -O2 n=1000000:  CRASH (exit=139)
+```
+
+Bisected ceiling for the indirect case at `-O2`:
+
+```
+indirect tail call: deepest OK ~= 29335, crashes by ~= 33202
+```
+
+8 MB / 29,335 is roughly 285 bytes of C stack per level.
+
+Under the interpreter, the indirect probe passes at every depth tried:
+
+```
+turi indirect n=10000    1
+turi indirect n=100000   1
+turi indirect n=1000000  1
+```
+
+### A.2 -- the self backedge is real (1, and 2.1's contrast)
+
+```c
+static int64_t count_hydown(int64_t n) {
+        __tur_tailcall:;
+        if ((n) == (INT64_C(0))) { return INT64_C(0); }
+        else { int64_t __t305 = (n) - (INT64_C(1)); n = __t305; goto __tur_tailcall; }
+}
+```
+
+### A.3 -- the first probe was void (2.4)
+
+Depth passed as the literal `1000000`:
+
+```
+$ nm mutual_O2.o | grep -i "hyeven\|hyodd"
+                                      # nothing: both functions eliminated
+$ objdump -d --disassemble-symbols=_main mutual_O2.o | wc -l
+43
+```
+
+With the depth read from the environment instead, `-O2` still passes -- and the
+functions are *still* absent, because the cycle is inlined into a loop in
+`main`:
+
+```asm
+2c10: cmp  x0, #0x1
+2c14: b.eq 0x2c2c
+2c18: sub  x0, x0, #0x2
+2c1c: cbnz x0, 0x2c10
+```
+
+### A.4 -- `match` gets no backedge (2.3)
+
+```turmeric
+(defdata Step (More [v : int]) (Done))
+(defn loop-match [n : int] : int
+  (match (classify n) (Done) 0 (More v) (loop-match v)))
+```
+
+```c
+case 0: {
+    int64_t v_1699 = (int64_t)__scrut->as.More._0;
+    int64_t __ps_310 = (loop_hymatch(v_1699));     /* ordinary call */
+    if (tur_panicking) return ((int64_t)0);
+    __t308 = __ps_310;
+    break;
+}
+```
+
+### A.5 -- a `ref<T>` local kills the backedge (2.2)
+
+```c
+tur_frame_push_defer(&__frame_309, __defer_311, &__t312);
+int64_t __ps_314 = (loop_hyref((n) - (INT64_C(1))));
+if (tur_panicking) { tur_frame_fire_lifo(&__frame_309); return ((int64_t)0); }
+__t313 = __ps_314;
+tur_frame_fire_lifo(&__frame_309);
+```
+
+### A.6 -- the CPS path does not tail-call (2.5)
+
+`pD`, whose indirect calls route through the CPS backend:
+
+```c
+static int64_t step_hya__cps(int64_t n, DK *__kont) {
+    ...
+    int64_t __ps_315 = ((*(tur_thunk_int64_t_int64_t_t *)(...))(..., n - 1));
+    if (tur_panicking) return ((int64_t)0);
+    __t313 = __ps_315;
+    __t0 = __t312;
+    return dk_run(__kont, (intptr_t)(__t0));
+}
+__attribute__((unused)) static int64_t step_hya(int64_t n) {
+    __dk_entry_depth++;
+    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
+    ...
+    if (TUR_SETJMP(__dkjb) == 0) { __r = step_hya__cps(n, __root); }
+    ...
+}
+```
+
+---
+
+## See also
+
+- [r7rs-lang-plan.md](r7rs-lang-plan.md) -- T6 is its prerequisite; D6 there
+  defers to this document
+- [docs/guides/performance-guide.md](../guides/performance-guide.md) -- the
+  self-tail-call section, which A.2 confirms and which T5 would let us extend
+- [docs/guides/delimited-control-operators-guide.md](../guides/delimited-control-operators-guide.md) -- the CPS/DK machinery A.6 measures
