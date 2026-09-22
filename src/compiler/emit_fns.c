@@ -175,7 +175,17 @@ static bool tco_let_simple(EmitCtx *ctx, const Expr *e) {
  *
  * INDIRECT calls are excluded: a call through a `fn` value is T-D6's trampoline
  * problem, and its emission goes through the fat-closure protocol rather than a
- * named callee, so it is not a plain `f(args)` to hand back. */
+ * named callee, so it is not a plain `f(args)` to hand back.
+ *
+ * T2's first cut ALSO required the callee's C return type to equal the enclosing
+ * function's, and refused the body outright otherwise.  That was not a statement
+ * about tail position -- it was a workaround for
+ * docs/reported/emit-tail-return-path-lacks-carrier-bridges.md, which is fixed:
+ * both return paths share `emit_fn_return_spelling` now, so a marked call whose
+ * return does need a bridge is simply emitted with its hoist and its check, the
+ * way it always was.  The type question still gets asked, but where it belongs
+ * -- at the call's own emission in emit_value, as the condition for dropping the
+ * check rather than as a veto on the whole body. */
 static bool tc_nonself_tail_eligible(EmitCtx *ctx, const Expr *e) {
     if (e->type.kind == TY_NIL || e->type.kind == TY_NEVER) return false;
     if (e->type.kind == TY_FN) return false;   /* fat-return shim, not a call */
@@ -197,15 +207,7 @@ static bool tc_nonself_tail_eligible(EmitCtx *ctx, const Expr *e) {
      * A name that is not a plain C identifier is a dispatch EXPRESSION (a cast
      * function-pointer head through a dict slot or a captured witness), which
      * has no forward declaration to read and is refused by the same test. */
-    char *cn = emit_call_name(ctx, e, e->as.call_.fn_binding);
-    if (!cn) return false;
-    bool ident = cn[0] == '_' || isalpha((unsigned char)cn[0]);
-    for (const char *p = cn; *p && ident; p++)
-        if (!(*p == '_' || isalnum((unsigned char)*p))) ident = false;
-    const char *rt = ident ? emit_sig_lookup_ret_ctype(cn) : NULL;
-    bool ok = rt && *rt && strcmp(rt, ctx->current_fn_ret_ctype) == 0;
-    free(cn);
-    return ok;
+    return true;
 }
 
 /* proper-tail-calls T3 (T-D4): is this `match` one whose arms emit_tail can put
@@ -235,23 +237,19 @@ static bool tco_match_tail_ok(const Expr *e) {
  *
  * Returns the number of SELF calls marked -- the backedge count, which is what
  * the label is gated on.  `*n_ok` receives the number of non-self tail calls
- * marked for T2's checkless `return f(args);`, and `*n_no` the number this
- * refused (proper-tail-calls T-D2).  The counts are kept apart on purpose:
+ * marked for T2's checkless `return f(args);` (proper-tail-calls T-D2).  The two
+ * are kept apart because a backedge reassigns the C parameters and so needs
+ * `tco_params_simple`, while a plain tail call does not, and because only a
+ * backedge makes the label live.
  *
- *   - a backedge reassigns the C parameters and so needs `tco_params_simple`,
- *     while a plain tail call does not, and only a backedge makes the label
- *     live;
- *   - `*n_no` is what stops a body from being routed into emit_tail on T2's
- *     account alone when some OTHER tail leaf could not be served.  emit_tail's
- *     default return path is a thinner one than emit_fn_def's -- it lacks the
- *     carrier/dict/straddle bridges that path carries -- so a refused leaf
- *     landing there emits an unbridged `return __ps_N;`.  A body that already
- *     has a backedge was going through emit_tail regardless, and its leaves are
- *     unaffected by this; it is only the NEW routing that has to be all-or-
- *     nothing.  (The divergence itself is the real defect -- see
- *     docs/reported/emit-tail-return-path-lacks-carrier-bridges.md.) */
+ * There is no third count.  T2's first cut also tracked REFUSED leaves, so that
+ * a body could be kept out of emit_tail entirely when any one of its tail leaves
+ * could not be served -- emit_tail's return path was a thinner one than
+ * emit_fn_def's, and a refused leaf landing there emitted an unbridged return.
+ * Both paths now share `emit_fn_return_spelling`, so a refused leaf is simply
+ * emitted the way it always was and the all-or-nothing rule is gone. */
 static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
-                    int *n_ok, int *n_no) {
+                    int *n_ok) {
     if (!e) return 0;
     switch (e->kind) {
         case EX_CALL:
@@ -262,14 +260,12 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
             if (tc_nonself_tail_eligible(ctx, e)) {
                 e->as.call_.is_tail_call = true;
                 if (n_ok) (*n_ok)++;
-            } else if (n_no) {
-                (*n_no)++;
             }
             return 0;
         case EX_IF: {
             if (!e->as.if_.else_or_null) return 0;  /* default path; no recursion */
-            int n = tco_mark(ctx, fd, fn_cname, e->as.if_.then_, n_ok, n_no);
-            n += tco_mark(ctx, fd, fn_cname, e->as.if_.else_or_null, n_ok, n_no);
+            int n = tco_mark(ctx, fd, fn_cname, e->as.if_.then_, n_ok);
+            n += tco_mark(ctx, fd, fn_cname, e->as.if_.else_or_null, n_ok);
             return n;
         }
         case EX_DO: {
@@ -277,12 +273,12 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
             for (uint32_t i = 0; i < e->as.do_.n; i++)
                 if (e->as.do_.items[i]->kind == EX_DEFER) return 0; /* defers break tail */
             return tco_mark(ctx, fd, fn_cname, e->as.do_.items[e->as.do_.n - 1],
-                            n_ok, n_no);
+                            n_ok);
         }
         case EX_LET:
         case EX_LETREC:
             if (!tco_let_simple(ctx, e)) return 0;
-            return tco_mark(ctx, fd, fn_cname, e->as.let_.body, n_ok, n_no);
+            return tco_mark(ctx, fd, fn_cname, e->as.let_.body, n_ok);
         case EX_MATCH: {
             /* proper-tail-calls T3 (T-D4): every ARM of a `match` is in the
              * enclosing tail position -- the scrutinee is evaluated first and
@@ -297,7 +293,7 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
             int n = 0;
             for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
                 n += tco_mark(ctx, fd, fn_cname, e->as.match_.arms[i].body,
-                              n_ok, n_no);
+                              n_ok);
             return n;
         }
         default:
@@ -524,6 +520,13 @@ static void tc_verify_fn(EmitCtx *ctx, FnDef *fd, const char *fn_cname,
                          const char *fn_block) {
     tc_check(ctx, fd, fn_cname, fd->body, NULL, fn_block);
 }
+
+/* Forward decl: the shared return-spelling decision (defined beside
+ * emit_fn_def, where its helpers are all in scope). */
+static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
+                                    FnDef *fd, const Expr *tail_e,
+                                    char *ret_val, TypeKind result_kind,
+                                    bool is_main);
 
 /* Forward decl: tail-position emitter (mutually recursive). */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
@@ -1092,11 +1095,37 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                                             CK_CARRIER, CK_CONCRETE, init_bv);
                         iv = bridged;  /* emit_carrier_bridge freed the old iv */
                     }
+                    /* gcc14-int-conversion (carrier-representation-tracking): the
+                     * REVERSE straddle of the one below -- a bare temp whose
+                     * RECORDED emitted C type is a pointer, initialising an
+                     * `int64_t` binder.  `emit_let_value` bridges this
+                     * (`init_val_recorded_ptr` / `_voidp`); this inline arm did
+                     * not, so a `let` that reached tail position declared
+                     * `int64_t x = <tur_adt_Value *>;` -- a hard error under
+                     * Apple clang's default -Wint-conversion, and the shape
+                     * `examples/datalog/datalog.tur` hit the moment
+                     * proper-tail-calls T2 widened which bodies reach here.
+                     *
+                     * Third face of the same defect the return ladder had, and
+                     * the reason this arm exists at all is the `any`-drop
+                     * bookkeeping a few lines down -- see
+                     * docs/reported/emit-tail-return-path-lacks-carrier-bridges.md,
+                     * whose fix direction covers this arm too. */
+                    bool iv_recorded_ptr = false;
+                    if (bind_c && strcmp(bind_c, "int64_t") == 0 &&
+                        emit_str_is_bare_ident(iv)) {
+                        const char *lvty = emit_localvar_lookup_ctype(iv);
+                        size_t lL = lvty ? strlen(lvty) : 0;
+                        iv_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*';
+                    }
                     indent_buf(body, ctx->indent);
                     /* let-bound-erasing-ascription-int-to-pointer: the same
                      * inline-arm repetition as the bridge above, for the
                      * int64-word-into-pointer-binder init. */
-                    if (emit_let_init_is_erased_word_to_ptr(
+                    if (iv_recorded_ptr)
+                        buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n",
+                                   bind_c, bn, iv);
+                    else if (emit_let_init_is_erased_word_to_ptr(
                             ctx, e->as.let_.bindings[i].init, bind_c))
                         buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n",
                                    bind_c, bn, bind_c, iv);
@@ -1176,27 +1205,34 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
      * also only ever observable inside a `catch-unwind` at all -- with no
      * handler installed `tur_panic` prints and aborts.)
      *
-     * Requested only when nothing on the way out would put work after the call,
-     * which is exactly the set of bridges the default path below can still add:
+     * Requested only when nothing on the way out would put work after the call.
+     * Two layers answer that, and they divide along a useful line:
      *
-     *   - `tail_bv`, the by-value-carrier heap spill (a malloc and a copy);
-     *   - the MB2 tyvar-carrier cast into a pointer return;
-     *   - a `void` C return, which emits the call as a statement and returns
-     *     separately, and `main`, whose return is cast;
-     *   - `panic_signal_is_break`: inside the stackless trampoline the signal
-     *     must reach the driver's unwind loop as a `break`, and dropping it
-     *     there would abandon the live continuation chain;
-     *   - an open `any` scope-drop list, whose frees follow the return value.
+     *   - HERE, the properties of the ENCLOSING function that make its return a
+     *     transformation rather than a forward -- `main`'s cast, a `void` return
+     *     (emitted as a statement plus a bare `return`), a `box_aggregate_result`
+     *     or dict-clone wrapper (both of which spill or bit-reinterpret on the
+     *     way out), the by-value-carrier spill, the MB2 tyvar cast, an open `any`
+     *     scope-drop list whose frees follow the value, and
+     *     `panic_signal_is_break` (inside the stackless trampoline the signal
+     *     must reach the driver's unwind loop as a `break`; dropping it would
+     *     abandon the live continuation chain).
+     *   - IN emit_value, the one property of the CALL: its callee's C return type
+     *     must be exactly this function's, which is what proves the shared return
+     *     ladder will forward the value rather than bridge it.  That is a genuine
+     *     tail-position condition, not conservatism -- a return that has to spill
+     *     or cast is work after the call.
      *
-     * emit_value may still refuse (an argument left an owned box pending, a
-     * region bracket is open); `tail_call_no_hoist_taken` reports that back and
-     * the ordinary hoisted spelling is what lands. */
+     * emit_value may also refuse because an argument left an owned box pending or
+     * a region bracket is open; `tail_call_no_hoist_taken` reports any refusal
+     * back and the ordinary hoisted spelling is what lands. */
     bool want_tail_call =
         e->kind == EX_CALL && e->as.call_.is_tail_call && !is_main &&
         !ctx->panic_signal_is_break && ctx->n_any_scope_drops == 0 &&
         e->type.kind != TY_NIL && e->type.kind != TY_NEVER &&
         ctx->current_fn_ret_ctype &&
         strcmp(ctx->current_fn_ret_ctype, "void") != 0 &&
+        !fd->box_aggregate_result && fd->n_dict_clone == 0 &&
         !fn_body_tail_emits_byvalue_carrier_abi(ctx, e) &&
         !(strchr(ctx->current_fn_ret_ctype, '*') != NULL &&
           emit_tail_call_returns_tyvar_carrier(ctx, e));
@@ -1221,103 +1257,29 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         return;
     }
     if (e->type.kind == TY_NIL) {
+        /* A nil-typed tail in a value-returning function: there is no value to
+         * bridge, so the zero of the result kind goes back directly.  (The
+         * shared ladder's predicates all key on the tail's type, which here
+         * says `nothing`.) */
         free(v);
-        v = strdup(result_kind == TY_BOOL ? "false" : "0");
-    }
-    /* Phase 5 carrier-bridge deletion (concrete->carrier tail return): this
-     * tail is emitted in a function/closure whose C return is the uniform int64
-     * carrier but the tail value is now a by-value Option/Result struct (a
-     * monomorphized #{Construct} spec).  Heap-spill it back to the int64 carrier
-     * (a stack spill would return a dangling address).  Guard fires only for an
-     * actual by-value carrier producer, so plain int tails and not-yet-
-     * monomorphized carrier producers are untouched. */
-    Type tail_bv = (!is_main && result_kind == TY_INT && e->type.kind != TY_NIL &&
-                    e->type.kind != TY_NEVER &&
-                    fn_body_tail_emits_byvalue_carrier_abi(ctx, e))
-        ? fn_body_tail_byvalue_carrier_type(ctx, e)
-        : type_simple(TY_UNKNOWN, CK_COPY);
-    if (tail_bv.kind != TY_UNKNOWN) {
         indent_buf(body, ctx->indent);
-        if (type_is_heap_struct(tail_bv)) {
-            /* constrained-defn-monomorphize: a `:heap` struct tail (`Cons__A *`)
-             * already fits the int64 carrier as a pointer; cast it rather than
-             * malloc-boxing it (which would double-box into a `Cons__A **`).  See
-             * the matching guard on the non-fat return path in this file. */
-            buf_printf(body, "return (int64_t)(intptr_t)%s;\n", v);
-        } else {
-            const char *cty = emit_type_c_name(ctx, tail_bv);
-            buf_printf(body,
-                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
-                "*__tur_ret_p = %s; "
-                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
-                cty, cty, cty, v);
-        }
-        free(v);
+        if (is_main && result_kind == TY_INT)
+            buf_printf(body, "return (int)%s;\n",
+                       result_kind == TY_BOOL ? "false" : "0");
+        else
+            buf_printf(body, "return %s;\n",
+                       result_kind == TY_BOOL ? "false" : "0");
         return;
     }
-    /* RSP1: returning a pass-by-ptr struct *parameter* directly.  The param is
-     * held in C as `const T *`, but the function returns the struct by value
-     * (pass-by-ptr applies to parameters, not returns), so `return x;` would
-     * return a pointer where a `T` is expected.  Dereference to copy it out.
-     * Mirrors the if-branch deref in emit_expr.c (emit_if_value). */
-    {
-        const Expr *re = e;
-        while (re && re->kind == EX_ASCRIBE) re = re->as.ascribe_.inner;
-        if (re && re->kind == EX_VAR && re->as.var.binding &&
-            tail_bv.kind == TY_UNKNOWN && !(is_main && result_kind == TY_INT)) {
-            for (uint32_t _i = 0; _i < ctx->n_pbp_params; _i++) {
-                if (ctx->pbp_param_ptrs[_i] == re->as.var.binding) {
-                    char *deref = (char *)malloc(strlen(v) + 4);
-                    sprintf(deref, "*(%s)", v);
-                    free(v);
-                    v = deref;
-                    break;
-                }
-            }
-        }
-    }
-    /* MB2 (constrained-hkt-forall-mode-b-plan): the tail is a call to a generic
-     * fn whose declared result is a bare type variable (`run-id [A] ... : A`),
-     * lowered to the int64 carrier in C.  When A resolves to a concrete
-     * pointer-shaped composite (a :heap ADT like `Point`) the elaborator keeps the
-     * call's full type (a reinterpret cannot carry a composite) but the C value is
-     * still the int64 carrier -- returning it where the fn's C return type is
-     * `tur_adt_Point *` is a -Wint-conversion.  Bridge through intptr_t.  Inert
-     * unless the callee returns a bare tyvar AND the C return type is a pointer. */
-    if (!is_main && ctx->current_fn_ret_ctype &&
-        strchr(ctx->current_fn_ret_ctype, '*') != NULL &&
-        emit_tail_call_returns_tyvar_carrier(ctx, e)) {
-        /* MB2: bridge a generic (tyvar-returning) call's int64 carrier to the
-         * function's concrete pointer C return type.  See the mirror in the
-         * direct-return path; inert when a concrete by-value spec is matched. */
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "return (%s)(intptr_t)%s;\n",
-                   ctx->current_fn_ret_ctype, v);
-        free(v);
-        return;
-    }
-    indent_buf(body, ctx->indent);
-    if (is_main && result_kind == TY_INT) {
-        buf_printf(body, "return (int)%s;\n", v);
-    } else if (!is_main && ctx->current_fn_ret_ctype &&
-               strcmp(ctx->current_fn_ret_ctype, "void") == 0) {
-        /* C11 6.8.6.4p1: a `return` WITH an expression is a constraint
-         * violation in a function returning void -- even when the expression is
-         * itself void-typed.  A `!`-returning defn whose tail is a call to
-         * another `!`-returning defn lands exactly there:
-         *   (defn outer [] : ! (inner))  ->  static void outer() { return inner(); }
-         * clang accepts it as an extension, so the cc path never complained,
-         * but c2mir rejects it and the program silently loses the JIT
-         * (panic-trace was the fixture that surfaced this).  Emit the tail as a
-         * statement and return separately; the cast keeps -Wunused-value quiet
-         * for a non-call tail and is valid on a void-typed one. */
-        buf_printf(body, "(void)(%s);\n", v);
-        indent_buf(body, ctx->indent);
-        buf_puts(body, "return;\n");
-    } else {
-        buf_printf(body, "return %s;\n", v);
-    }
-    free(v);
+    /* emit-tail-return-path-lacks-carrier-bridges: ONE decision, shared with
+     * emit_fn_def.  This arm used to carry a hand-maintained subset of that
+     * ladder -- the by-value carrier spill, the pass-by-ptr deref and the MB2
+     * tyvar cast, three of sixteen arms -- so a TCO-routed body whose result
+     * wanted any of the other thirteen was emitted unbridged.  `e`, not
+     * `fd->body`, is the tail: in this path the value being returned is the
+     * branch/arm actually in tail position, which is the more precise reading
+     * of every result-shape question the ladder asks. */
+    emit_fn_return_spelling(ctx, body, fn_e, fd, e, v, result_kind, is_main);
 }
 
 /* Scalar kinds the trampoline can round-trip through an int64 `saved[]` slot:
@@ -3437,6 +3399,588 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
 
 /* ------------ Phase 2: function emission ------------ */
 
+/* proper-tail-calls / emit-tail-return-path-lacks-carrier-bridges: the ONE
+ * decision for "how does a body's value reach the `return`".
+ *
+ * This ladder used to live inline in emit_fn_def, with emit_tail carrying a
+ * hand-maintained subset of it -- three of its sixteen arms.  Which copy a body
+ * got was decided by whether its tail spine happened to hold a self tail call,
+ * a question with nothing to do with its result shape, so a body that was BOTH
+ * TCO-routed and carrier-returning got the thin copy and miscompiled.  Nothing
+ * reported that: the divergence was only reachable once proper-tail-calls T2
+ * widened the routing, and it then failed 24 fixtures with hard `cc` errors.
+ * Filed as docs/reported/emit-tail-return-path-lacks-carrier-bridges.md, and
+ * this function is the fix -- the same treatment `inline_c_returns_byvalue_adt`
+ * got, for the same stated reason: so the two copies cannot drift apart again.
+ *
+ * `tail_e` is the expression whose value is being returned, which is what every
+ * result-shape predicate below asks about.  For emit_fn_def that is the whole
+ * body; for emit_tail it is the branch, arm or `do`-tail actually in tail
+ * position, which is the more precise reading of the same question.
+ *
+ * Takes ownership of `ret_val` and frees it. */
+static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
+                                    FnDef *fd, const Expr *tail_e,
+                                    char *ret_val, TypeKind result_kind,
+                                    bool is_main) {
+    /* Derived rather than passed: emit_fn_def's own `use_abi_spec` is exactly
+     * this, and a second caller computing it by hand is a way for the two to
+     * disagree about which spec is active. */
+    const bool use_abi_spec = ctx->current_abi_specialization &&
+        ctx->current_abi_specialization->fn == fd;
+    /* RSP1: returning a pass-by-ptr struct *parameter* directly.  The param
+     * is held in C as `const T *` but the function returns the struct by
+     * value, so `return x;` returns a pointer where a `T` is expected.
+     * Dereference to copy it out.  A bare struct param is a concrete sized
+     * value, never an Option/Result carrier aggregate, so it never collides
+     * with the carrier-spill return paths below. */
+    if (tail_e) {
+        const Expr *re = tail_e;
+        while (re && re->kind == EX_ASCRIBE) re = re->as.ascribe_.inner;
+        if (re && re->kind == EX_VAR && re->as.var.binding &&
+            !(is_main && result_kind == TY_INT)) {
+            for (uint32_t _i = 0; _i < ctx->n_pbp_params; _i++) {
+                if (ctx->pbp_param_ptrs[_i] == re->as.var.binding) {
+                    char *deref = (char *)malloc(strlen(ret_val) + 4);
+                    sprintf(deref, "*(%s)", ret_val);
+                    free(ret_val);
+                    ret_val = deref;
+                    break;
+                }
+            }
+        }
+    }
+    indent_buf(out, ctx->indent);
+    /* closure-carrier-return-and-arg-int-pointer-warnings: determine the
+     * function's actual C return type so a fn-typed body returned through
+     * the int64_t/void* closure carrier gets the matching bridge cast.
+     * This mirrors the signature-emission branches in emit_fn_def; the body
+     * is guaranteed non-inline-c here (inline-c is handled before either
+     * caller reaches this), so the inline-c-only sub-branches there do not
+     * apply. */
+    const char *ret_ctype = NULL;
+    bool inst_method_carrier_spill = false;
+    if (fn_e->type.kind == TY_FN && !is_main) {
+        /* structdef-retirement DS-C: emit_carrier_return_override is dead
+         * (method body never TY_STRUCT); its `carrier_override.kind ==
+         * TY_STRUCT` branch below is removed. */
+        if (fd->box_aggregate_result) {
+            /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): the closure
+             * returns its wide `(f A)` aggregate boxed into the int64 carrier;
+             * the explicit heap-spill return below performs the box. */
+            ret_ctype = "int64_t";
+        } else if (fd->n_dict_clone > 0) {
+            /* MB2.5: keep the return ret_ctype in lockstep with the signature
+             * override above -- a dict-clone wrapper returns the int64 carrier. */
+            ret_ctype = "int64_t";
+        } else if (use_abi_spec) {
+            Type rt = ctx->current_abi_specialization->result_type;
+            bool is_inst = fd->binding && fd->binding->name &&
+                fd->binding->name->name &&
+                strncmp(fd->binding->name->name, "__inst_", 7) == 0;
+            /* M4c Path A result-side: non-HKT instance method specs
+             * (typeclass_inst set) skip the carrier-int64 override.
+             * The signature emit at L412 + the forward decl at
+             * emit_module.c:1853 use the same gate; keep them in sync. */
+            Type rt_resolved = emit_resolve_type(ctx, rt);
+            /* M7 layer-4: a per-(f, A) by-value HKT instance-method spec
+             * returns the resolved struct (`Option__int`) BY VALUE, not the
+             * int64 carrier -- this is the whole point of the spec.  Detect
+             * it by the concrete by-value TY_APP result (same guards as
+             * construct_recovered_byvalue) and skip the carrier spill
+             * below. */
+            if (is_inst &&
+                rt_resolved.kind == TY_APP &&
+                !type_is_heap_struct(rt_resolved) &&
+                type_has_concrete_codegen_layout(&rt_resolved)) {
+                ret_ctype = emit_type_c_name(ctx, rt);
+            } else if (is_inst && type_uses_carrier_abi(rt_resolved)
+                && ctx->current_abi_specialization->typeclass_inst == NULL) {
+                ret_ctype = "int64_t";
+                inst_method_carrier_spill = true;
+            } else {
+                ret_ctype = emit_type_c_name(ctx, rt);
+            }
+        } else if (fn_e->type.as.fn.result_full_type &&
+                   fd->binding && fd->binding->name && fd->binding->name->name &&
+                   strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+                   type_uses_carrier_abi(emit_resolve_type(ctx,
+                       *fn_e->type.as.fn.result_full_type))) {
+            ret_ctype = "int64_t";
+            inst_method_carrier_spill = true;
+        } else if (fn_e->type.as.fn.result_full_type &&
+                   emit_inst_fn_return_carrier(fd,
+                       fn_e->type.as.fn.result_full_type)) {
+            ret_ctype = emit_inst_fn_return_carrier(fd,
+                fn_e->type.as.fn.result_full_type);
+        } else if (fn_e->type.as.fn.result_full_type) {
+            Type rft = *fn_e->type.as.fn.result_full_type;
+            const char *fn_ret_td = fn_e->type.as.fn.result_fat
+                ? NULL : emit_fn_return_typedef(fd, &rft);
+            ret_ctype = fn_ret_td ? fn_ret_td : emit_type_c_name(ctx, rft);
+        } else if (fd->binding && fd->binding->name && fd->binding->name->name &&
+                   strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+                   tail_e && (tail_e->type.kind == TY_APP ||
+                                tail_e->type.kind == TY_STRUCT ||
+                                type_uses_carrier_abi(tail_e->type))) {
+            /* Direction (1): non-spec instance method, result_full_type
+             * absent.  Spill only when body codegen is by-value struct
+             * (matching the signature fallback above).  repro 2: a by-value
+             * monomorph body (carrier-ABI false) is included -- the dict
+             * slot is int64 regardless, so it must spill too. */
+            const char *_body_c2 = emit_type_c_name(ctx, tail_e->type);
+            if (_body_c2 && strcmp(_body_c2, "int64_t") != 0) {
+                ret_ctype = "int64_t";
+                inst_method_carrier_spill = true;
+            } else {
+                ret_ctype = emit_type_c_name(ctx,
+                    emit_type_from_kind(fn_e->type.as.fn.result_kind));
+            }
+        } else {
+            ret_ctype = emit_type_c_name(ctx,
+                emit_type_from_kind(fn_e->type.as.fn.result_kind));
+        }
+    }
+    bool ret_is_int64_carrier = ret_ctype &&
+        strcmp(ret_ctype, "int64_t") == 0;
+    /* Special case: if this is main and it returns int64_t, cast to int */
+    if (is_main && result_kind == TY_INT) {
+        buf_printf(out, "return (int)%s;\n", ret_val);
+    } else if (fd->box_aggregate_result) {
+        /* WF1/WF2/WF3 (van-laarhoven-wide-functor-carrier-plan): a functor-
+         * wrapping closure `g` for a wide-functor lens must return the int64
+         * carrier (the generic dict-clone fat-dispatches it int64-in/int64-out
+         * and the lens caller unboxes at the poly-carrier boundary).  Its body
+         * tail comes in two shapes:
+         *   - a by-value aggregate (`mk_id__spec(...)` -> `tur_adt_Identity__int`)
+         *     in the concrete / ABI-specialized emit -- heap-box it (the
+         *     inverse of the caller's unbox, mirroring emit_agg_box); or
+         *   - the int64 carrier already (`mk_hyid(...)`) in the GENERIC base
+         *     emit (the functor is abstract there) -- return it directly, or
+         *     malloc-boxing a carrier word would double-box. */
+        if (tail_e && fn_body_tail_emits_byvalue_carrier_abi(ctx, tail_e)) {
+            Type src = fn_body_tail_byvalue_carrier_type(ctx, tail_e);
+            if (src.kind == TY_UNKNOWN)
+                src = fn_e->type.as.fn.result_full_type
+                    ? emit_resolve_type(ctx, *fn_e->type.as.fn.result_full_type)
+                    : emit_resolve_type(ctx, tail_e->type);
+            const char *scty = emit_type_c_name(ctx, src);
+            buf_printf(out,
+                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                "*__tur_ret_p = %s; "
+                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                scty, scty, scty, ret_val);
+        } else {
+            buf_printf(out, "return (int64_t)(intptr_t)%s;\n", ret_val);
+        }
+    } else if (fd->n_dict_clone > 0) {
+        /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper's
+         * body is a single dispatch through the carrier dict, which already
+         * yields the int64 carrier (emit_call_name + the M7-spec suppression
+         * keep it carrier even for by-value aggregate functors).  Return that
+         * carrier directly -- NONE of the by-value/aggregate spill heuristics
+         * below apply, and firing one would malloc-box a value that is already
+         * the carrier (double-box).  The `(int64_t)(intptr_t)` cast is a no-op
+         * on an int64 and harmless if the body tail is a bare pointer.
+         *
+         * forall-dict-float-result-truncated: it is NOT a no-op on a double.
+         * A method declared `: float` dispatches to a `double`-returning slot,
+         * and `(int64_t)(intptr_t)` on a double is a C numeric conversion --
+         * 2.5 arrived as 2, 7.1 as 7, with no warning and no diagnostic.
+         * Reinterpret the BITS instead, which is what every other float/carrier
+         * crossing does (see tur_sc_bits_f64 in the preamble, whose own comment
+         * says an intptr_t cast would truncate).  The consumer side unpacks
+         * symmetrically in emit_expr.c's poly-call result handling -- the two
+         * must stay in lockstep, since a one-sided change turns a truncation
+         * into garbage. */
+        TypeKind clone_rk = tail_e
+            ? emit_resolve_type(ctx, tail_e->type).kind : TY_UNKNOWN;
+        if (clone_rk == TY_FLOAT || clone_rk == TY_FLOAT64)
+            buf_printf(out, "return tur_sc_bits_f64(%s);\n", ret_val);
+        else if (clone_rk == TY_FLOAT32)
+            buf_printf(out, "return tur_sc_bits_f32(%s);\n", ret_val);
+        else
+            buf_printf(out, "return (int64_t)(intptr_t)%s;\n", ret_val);
+    } else if (inst_method_carrier_spill) {
+        /* Direction (1): instance method whose declared result is a
+         * parameterized struct (e.g. (Result T E)) returns the carrier
+         * int64 handle.  Heap-spill the by-value struct and cast its
+         * pointer as int64_t so the dispatch dict's uniform
+         * `int64_t (*)(...)` signature is honored. */
+        Type rt;
+        if (use_abi_spec) {
+            rt = ctx->current_abi_specialization->result_type;
+        } else if (fn_e->type.as.fn.result_full_type) {
+            rt = emit_resolve_type(ctx, *fn_e->type.as.fn.result_full_type);
+        } else {
+            rt = tail_e->type;
+        }
+        const char *struct_cty = emit_type_c_name(ctx, rt);
+        /* M7 (flag-gated): in a GENERIC carrier base instance method whose
+         * declared result is a parameterized struct with a free element
+         * tyvar -- e.g. `Decode`'s `(Result a cstr)` -- `rt` resolves to the
+         * int64 carrier (no instance specialization active here).  But the
+         * concrete instance body recovers its construct BY VALUE
+         * (`(ok (make-struct Point ...))` -> `ok__spec` returning
+         * `Result__Point__cstr`), so `ret_val` is a by-value aggregate.
+         * Spilling it as `sizeof(int64_t)` + `*(int64_t*)p = <struct>` is a
+         * hard cc error (aggregate into integer).  When the body's own type
+         * is a concrete non-carrier aggregate, spill THAT type so the malloc
+         * size and the cast match the actual value.
+         * See docs/archive/history/m7-hkt-bimap-twoparam-struct-tyvar-leak.md
+         * / the instance-method-return-carrier-bridge fixture. */
+        if (struct_cty &&
+            strcmp(struct_cty, "int64_t") == 0 && tail_e) {
+            const char *body_cty = emit_type_c_name(ctx, tail_e->type);
+            if (body_cty && strcmp(body_cty, "int64_t") != 0)
+                struct_cty = body_cty;
+        }
+        /* hkt-rc-construct-body-boxes-handle: the spill exists to pass a
+         * BY-VALUE aggregate through the dict's uniform `int64_t` slot.  A
+         * value that is already carrier-width needs no box, and boxing one
+         * anyway is a silent miscompile -- the consumer reads the
+         * pointer-to-value as the value.
+         *
+         * Two shapes qualify.  The int64 carrier itself was already handled
+         * (see below).  A POINTER is the other: an instance method whose
+         * result is a pointer-family handle -- `Functor [rc]`'s `(f b)`
+         * grounding to `rc<int>`, i.e. `RcControlBlock *` -- returns a
+         * pointer that fits the carrier exactly.  Boxing it emitted
+         * `RcControlBlock **__tur_ret_p = malloc(...)` and the dispatch
+         * consumer then cast that cell straight to `RcControlBlock *`, so
+         * `rc/strong-count` read a malloc header as a refcount and the value
+         * was never reachable (measured: garbage count, fold 0, 752768 bytes
+         * leaked over 5000 iterations).
+         *
+         * The next branch down already treats a TY_RC/TY_WEAK/TY_REF/TY_LREF
+         * body returned through the int64 carrier exactly this way -- a bare
+         * `(int64_t)(intptr_t)` bridge -- so this only stops the spill from
+         * intercepting a case that was already handled correctly downstream. */
+        bool spill_ty_is_ptr = struct_cty && strchr(struct_cty, '*') != NULL;
+        if (struct_cty &&
+            (strcmp(struct_cty, "int64_t") == 0 || spill_ty_is_ptr)) {
+            /* M7: the body already produced the carrier int64 handle --
+             * e.g. a partial-application `(Result _ E)` instance whose
+             * pure-Turmeric body lowered to the carrier `ok`/`err` (the
+             * spill type stays int64 because the result element doesn't
+             * ground by value).  There is nothing to box: malloc'ing another
+             * int64 and storing the handle into it DOUBLE-boxes (the
+             * by-value consumer then reads a pointer-to-handle as the struct
+             * -> garbage, the `(Result _ E)` fmr returning 0 for 42).
+             * Return the carrier value directly. */
+            buf_printf(out, "return (int64_t)(intptr_t)%s;\n", ret_val);
+        } else {
+            buf_printf(out,
+                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                "*__tur_ret_p = %s; "
+                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                struct_cty, struct_cty, struct_cty, ret_val);
+        }
+    } else if (((emit_resolve_type(ctx, tail_e->type).kind == TY_FN ||
+                 emit_resolve_type(ctx, tail_e->type).kind == TY_PTR_VOID ||
+                 emit_resolve_type(ctx, tail_e->type).kind == TY_CSTR ||
+                 emit_resolve_type(ctx, tail_e->type).kind == TY_RC ||
+                 emit_resolve_type(ctx, tail_e->type).kind == TY_WEAK ||
+                 emit_resolve_type(ctx, tail_e->type).kind == TY_REF ||
+                 emit_resolve_type(ctx, tail_e->type).kind == TY_LREF ||
+                 emit_resolve_type(ctx, tail_e->type).kind == TY_FORALL ||
+                 emit_resolve_type(ctx, tail_e->type).kind == TY_EXISTS ||
+                 (emit_resolve_type(ctx, tail_e->type).kind == TY_STRUCT &&
+                  strchr(type_c_name(emit_resolve_type(ctx, tail_e->type)), '*') != NULL))) &&
+               (result_kind == TY_INT || ret_is_int64_carrier)) {
+        /* A function-typed, pointer-typed, or cstr body returned through the int64_t
+         * carrier: a bare non-capturing fn reference is a `void *(...)`
+         * function pointer, and a fat box is declared `void *`, but the C
+         * return type is the int64_t carrier.  Without the (int64_t)(intptr_t)
+         * bridge, clang trips -Wint-conversion on the implicit pointer-to-int
+         * conversion.  (A void* carrier return needs no cast: the body value
+         * is already a pointer.) */
+        buf_printf(out, "return (int64_t)(intptr_t)%s;\n", ret_val);
+    } else if (ret_is_int64_carrier && fd && tail_e &&
+        fn_e->type.kind == TY_FN &&
+        (fn_e->type.as.fn.result_kind == TY_FLOAT ||
+         fn_e->type.as.fn.result_kind == TY_FLOAT64 ||
+         fn_e->type.as.fn.result_kind == TY_FLOAT32) &&
+        (tail_e->type.kind == TY_FLOAT ||
+         tail_e->type.kind == TY_FLOAT64 ||
+         tail_e->type.kind == TY_FLOAT32)) {
+        /* method-result-float-spec-return-value-converts: this clone's C
+         * return is the int64 carrier, its DECLARED result is a float, and
+         * its body tail is a float.  A plain `return ret_val;` is then C's
+         * implicit floating-to-integer CONVERSION (7.1 -> 7) while every
+         * consumer of a float-declared method result reinterprets the
+         * carrier's BITS back -- so the value is destroyed before it
+         * leaves the callee (`(l1g2 (l1p1 7.1))` printed 3.45846e-323).
+         *
+         * The key is the DECLARED result kind (`fn_e->type.as.fn.result_kind`
+         * -- the instance-resolved signature), and that key is what pairs
+         * producer with consumer: the consumer bit-reinterprets exactly
+         * when the call's resolved result type is a float, i.e. the same
+         * declared type read from the other end.  A method DECLARED `: int`
+         * whose instance body happens to produce a float (BoxMap's boxmap,
+         * pinned by poly-to-fat-float-roundtrip expecting `7`) keeps the
+         * value conversion, because for it the conversion IS the declared
+         * semantics.  The first attempt at this fix keyed on the BODY type
+         * alone and broke exactly those fixtures -- see the report's
+         * "reverted" record for the measurement.
+         *
+         * Routed through the carrier chokepoint, whose inline-scalar arm
+         * emits the same union bit-cast the consumer side uses. */
+        char *bridged = emit_carrier_bridge(ctx, out, strdup(ret_val),
+                                            CK_CONCRETE, CK_CARRIER,
+                                            tail_e->type);
+        indent_buf(out, ctx->indent);
+        buf_printf(out, "return %s;\n", bridged);
+        free(bridged);
+    } else if (use_abi_spec
+               && ctx->current_abi_specialization->typeclass_inst != NULL
+               && ret_ctype && strcmp(ret_ctype, "int64_t") != 0
+               && tail_e->type.kind != TY_NEVER
+               && type_uses_carrier_abi(emit_resolve_type(ctx, tail_e->type))
+               && strcmp(emit_type_c_name(ctx,
+                            emit_resolve_type(ctx, tail_e->type)),
+                         "int64_t") == 0
+               && !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail_e)) {
+        /* M4c Path A result-side: the spec's declared return is a
+         * concrete by-value struct (e.g. `Result__int__cstr`), but the
+         * body's last expression elaborates to a carrier-ABI value
+         * (`int64_t` at C level) — e.g. `(ok v)` where ok still emits
+         * its bare carrier symbol.  Route through emit_carrier_bridge so
+         * the canonical-carrier field-by-field unbox kicks in for
+         * Result/Option sinks with sub-word payloads
+         * (decode-bool-carrier-instance-ascription); the legacy
+         * `*(T *)(intptr_t)x` deref stays for other parametric sinks.
+         *
+         * instance-method-return-carrier-bridge: also skip the deref when
+         * the body tail already emits the struct by value (a post-M2
+         * #{Construct} spec like `(ok (make-struct ...))` lowers to its
+         * by-value `*__spec__*` clone). */
+        Type sink_rt = ctx->current_abi_specialization->result_type;
+        char *bridged = emit_carrier_bridge(ctx, out, strdup(ret_val),
+                                            CK_CARRIER, CK_CONCRETE, sink_rt);
+        indent_buf(out, ctx->indent);
+        buf_printf(out, "return %s;\n", bridged);
+        free(bridged);
+    } else if (!ret_is_int64_carrier && ret_ctype
+               && tail_e->type.kind != TY_NEVER
+               && (type_uses_carrier_abi(emit_resolve_type(ctx, tail_e->type))
+                   || fn_body_tail_returns_carrier_value(ctx, tail_e))
+               && fn_body_tail_is_carrier_producer(tail_e)
+               && !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail_e)) {
+        /* M5 straddle (root cause C): an ordinary function or lifted lambda
+         * whose declared return is a by-value carrier aggregate
+         * (Option__int / Result__int__int) but whose tail value comes from
+         * a carrier-int64 producer (some/ok/err/none or an __inst_ method).
+         * Same carrier->concrete unbox as the M4c spec branch above. */
+        Type sink_rt = (fn_e->type.kind == TY_FN && fn_e->type.as.fn.result_full_type)
+            ? emit_resolve_type(ctx, *fn_e->type.as.fn.result_full_type)
+            : emit_resolve_type(ctx, tail_e->type);
+        char *bridged = emit_carrier_bridge(ctx, out, strdup(ret_val),
+                                            CK_CARRIER, CK_CONCRETE, sink_rt);
+        indent_buf(out, ctx->indent);
+        buf_printf(out, "return %s;\n", bridged);
+        free(bridged);
+    } else if (ret_is_int64_carrier && tail_e
+               && tail_e->type.kind != TY_NEVER
+               && fn_body_tail_emits_byvalue_carrier_abi(ctx, tail_e)
+               && fn_body_tail_byvalue_carrier_type(ctx, tail_e).kind != TY_UNKNOWN) {
+        /* Phase 5 carrier-bridge deletion (concrete->carrier return): the C
+         * return is the uniform int64 carrier (a lifted lambda thunk in a
+         * poly_fn slot, or a generic carrier base) but the body tail now
+         * produces a by-value Option/Result struct (a monomorphized
+         * #{Construct} spec like `some__spec`).  Heap-spill the struct and
+         * return its pointer as int64 -- the SAME malloc spill the
+         * inst_method_carrier_spill path uses, so the carrier consumer
+         * (which derefs a {is_some,value}/{is_ok,...} layout) reads it
+         * correctly.  A stack spill (emit_carrier_bridge concrete->carrier)
+         * would return a dangling address, so it is NOT used here.  The
+         * concrete type comes from the matched spec, since the construct's
+         * own fn_e->type is collapsed to the int64 carrier. */
+        Type src = fn_body_tail_byvalue_carrier_type(ctx, tail_e);
+        if (type_is_heap_struct(src) || type_is_heap_adt(src)) {
+            /* constrained-defn-monomorphize: a `:heap` struct tail (e.g.
+             * `(Cons A)` built by `tcons-of`) is ALREADY a pointer (`Cons__A *`)
+             * that fits the int64 carrier directly.  Malloc-boxing it
+             * double-boxes (the carrier consumer then reads a pointer-to-pointer
+             * as the cell -> a length-1 / garbage list), the heap-struct mirror
+             * of the M7 double-box guard above.  Cast the pointer to the carrier
+             * instead of spilling.  seam 3: a lowered `:heap` ADT tail
+             * (`type_is_heap_adt`) is the same typed-pointer shape. */
+            buf_printf(out, "return (int64_t)(intptr_t)%s;\n", ret_val);
+        } else {
+            const char *cty = emit_type_c_name(ctx, src);
+            buf_printf(out,
+                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                "*__tur_ret_p = %s; "
+                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                cty, cty, cty, ret_val);
+        }
+    } else if (ret_is_int64_carrier && tail_e &&
+               tail_e->type.kind != TY_NEVER &&
+               type_is_heap_adt(emit_resolve_type(ctx, tail_e->type))) {
+        /* seam 3: the function returns the int64 carrier (an abstract
+         * parametric base like `tcons : (Cons A)`), but the body tail is a
+         * lowered `:heap` ADT value -- a typed pointer (`ctor_Cons(..)` ->
+         * `tur_adt_Cons *`) whose bit pattern IS the carrier.  Reinterpret-cast
+         * it, never return it uncast (-Wint-conversion) and never malloc-box
+         * (double-box).  The non-parametric mirror is the `type_is_heap_adt`
+         * arm in `type_uses_carrier_abi` / the heap-struct return cast above. */
+        buf_printf(out, "return (int64_t)(intptr_t)%s;\n", ret_val);
+    } else if (ret_is_int64_carrier && tail_e &&
+               tail_e->type.kind != TY_NEVER &&
+               fn_e->type.kind == TY_FN &&
+               fn_e->type.as.fn.result_kind == TY_TYVAR &&
+               (emit_resolve_type(ctx, tail_e->type).kind == TY_FLOAT ||
+                emit_resolve_type(ctx, tail_e->type).kind == TY_FLOAT32 ||
+                emit_resolve_type(ctx, tail_e->type).kind == TY_FLOAT64)) {
+        /* nested-construct-byvalue (Gap #4, float element): a generic
+         * accessor (`ok-val`) whose DECLARED result is a bare tyvar (`: A`)
+         * collapses to the int64 carrier return, but inside a `(Result float
+         * cstr)` spec its body tail is a concrete `double` field read.  A plain
+         * `return <double>;` through an `int64_t` result NUMERICALLY converts
+         * (3.25 -> 3), and the caller's union reinterpret then reads garbage.
+         * Bit-reinterpret the float into the int64 carrier so the carried
+         * value round-trips (the cstr/pointer element is already bit-
+         * preserving through the implicit pointer->int64 return cast).  Gated
+         * on a TYVAR-declared result so a genuine `: float` function carried
+         * through the int64 poly-fn slot (poly-to-fat-float-*) -- which uses a
+         * NUMERIC convention -- is untouched. */
+        Type body_rt = emit_resolve_type(ctx, tail_e->type);
+        char *bridged = emit_carrier_bridge(ctx, out, strdup(ret_val),
+                                            CK_CONCRETE, CK_CARRIER, body_rt);
+        indent_buf(out, ctx->indent);
+        buf_printf(out, "return %s;\n", bridged);
+        free(bridged);
+    } else if (!ret_is_int64_carrier &&
+               ctx->current_fn_ret_ctype &&
+               strchr(ctx->current_fn_ret_ctype, '*') != NULL &&
+               emit_tail_call_returns_tyvar_carrier(ctx, tail_e)) {
+        /* MB2 (constrained-hkt-forall-mode-b-plan): the function's C return
+         * type is a concrete pointer (a :heap ADT like `Point *`), but the
+         * body tail is a call to a generic fn whose declared result is a bare
+         * type variable (`run-id [A] ... : A`), lowered to the int64 carrier.
+         * The elaborator kept the call's full composite type (a reinterpret
+         * cannot carry a composite) so no wrap was inserted, leaving `ret_val`
+         * as the int64 carrier where a pointer is expected -- a
+         * -Wint-conversion.  Bridge through intptr_t.  Inert when the call
+         * resolves to a concrete by-value spec (the wide-monomorphization path
+         * calls `run_id__spec__...Point`, already a pointer). */
+        buf_printf(out, "return (%s)(intptr_t)%s;\n",
+                   ctx->current_fn_ret_ctype, ret_val);
+    } else if (fn_return_needs_carrier_result_bridge(
+                   ctx, fd, fn_e, ret_ctype, ret_is_int64_carrier, ret_val)) {
+        /* catch-unwind-byvalue-result-return-mismatch: the body value is the
+         * int64 carrier (a heap Result box, e.g. a let-bound catch-unwind
+         * result returned directly) but the declared return is the by-value
+         * Result/Option struct.  Bridge carrier->concrete using the DECLARED
+         * return type (whose emit_type_c_name is the struct), so the canonical
+         * box readback reconstructs the aggregate field-by-field. */
+        Type sink_rt = (fn_e->type.kind == TY_FN && fn_e->type.as.fn.result_full_type)
+            ? emit_resolve_type(ctx, *fn_e->type.as.fn.result_full_type)
+            : emit_resolve_type(ctx, tail_e->type);
+        if (catch_box_tail_sole_owned(tail_e, tail_e)) {
+            /* catch-unwind-return-bridge-residuals (Part B): the caught box
+             * is sole-owned, so free it after the aggregate is materialized.
+             * Capture the carrier in a stable temp (so it is not re-emitted),
+             * read the box fields into a return temp, free the now-dead box
+             * struct, then return -- freeing the struct only (never the
+             * payload, which the returned err aggregate may alias). */
+            char *box_tmp = fresh_tmp(ctx);
+            indent_buf(out, ctx->indent);
+            buf_printf(out, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                       box_tmp, ret_val);
+            char *bridged = emit_carrier_bridge(ctx, out, strdup(box_tmp),
+                                                CK_CARRIER, CK_CONCRETE,
+                                                sink_rt);
+            const char *agg_cty = emit_type_c_name(ctx, sink_rt);
+            char *ret_tmp = fresh_tmp(ctx);
+            indent_buf(out, ctx->indent);
+            buf_printf(out, "%s %s = %s;\n", agg_cty, ret_tmp, bridged);
+            indent_buf(out, ctx->indent);
+            /* catch-unwind-returned-err-box-payload-leak: a scalar err arm
+             * cannot alias the box's panic payload, so the full free
+             * reclaims the 32 B payload too; else stay shallow (a
+             * pointer/cstr/aggregate err field aliases the payload the
+             * returned aggregate now owns). */
+            buf_printf(out, "%s(%s);\n",
+                       result_err_arm_is_freeable_scalar(&sink_rt)
+                           ? "tur_result_box_free"
+                           : "tur_result_box_free_shallow",
+                       box_tmp);
+            indent_buf(out, ctx->indent);
+            buf_printf(out, "return %s;\n", ret_tmp);
+            free(bridged); free(box_tmp); free(ret_tmp);
+        } else {
+            char *bridged = emit_carrier_bridge(ctx, out, strdup(ret_val),
+                                                CK_CARRIER, CK_CONCRETE,
+                                                sink_rt);
+            indent_buf(out, ctx->indent);
+            buf_printf(out, "return %s;\n", bridged);
+            free(bridged);
+        }
+    } else if (ret_ctype && !is_main && ret_val &&
+               ret_ctype[strlen(ret_ctype) - 1] == '*' &&
+               ((strcmp(ret_ctype, "void *") != 0 &&
+                 (strncmp(ret_val, "(int64_t)", 9) == 0 ||
+                  (emit_str_is_bare_ident(ret_val) &&
+                   emit_localvar_lookup_ctype(ret_val) &&
+                   strcmp(emit_localvar_lookup_ctype(ret_val), "int64_t") == 0))) ||
+                fn_tail_emits_int64_carrier(fd, tail_e))) {
+        /* gcc14-int-conversion (carrier-representation-tracking): a spec
+         * clone whose C return type is a concrete pointer (e.g. an element
+         * accessor `err-val [A B] : B` monomorphized to `const char *` /
+         * `tur_adt_Vec__X *`) but whose body VALUE is the int64 carrier --
+         * either an explicit `(int64_t)..` field read, or a bare call temp
+         * RECORDED as int64 (`return __ps_224;` where run_id__spec returns
+         * int64 but the fn returns `tur_adt_Point *`).  `return <int64>` into
+         * a pointer return type is `pointer from integer` -- a hard error
+         * under GCC >= 14.  Reinterpret to the return type (value-preserving).
+         *
+         * macos-int-conversion-carrier-pointer-straddles (case B): the
+         * `void *` exclusion above is conservatism from fe6f47b60, not
+         * semantics -- `return <int64>` into `void *` is the same
+         * -Wint-conversion error and the same intptr_t round-trip fixes it.
+         * It only stays because the string sniff cannot tell a carrier from
+         * a genuine pointer; the AST predicate can, so a tail it recognizes
+         * bridges for any pointer return type, `void *` included. */
+        buf_printf(out, "return (%s)(intptr_t)%s;\n", ret_ctype, ret_val);
+    } else if (ret_is_int64_carrier && ret_val &&
+               emit_str_is_bare_ident(ret_val) &&
+               emit_localvar_lookup_ctype(ret_val) &&
+               emit_localvar_lookup_ctype(ret_val)[
+                   strlen(emit_localvar_lookup_ctype(ret_val)) - 1] == '*') {
+        /* clang int-conversion (reverse straddle): the function returns the
+         * int64 carrier but the body value is a bare temp whose real emitted C
+         * type is a pointer -- a `void *`-returning `extern-c ... :ptr` ascribed
+         * to an opaque carrier (e.g. `(:: (tur_string_from_cstr s) String)`
+         * whose __auto_type panic temp is `void *`).  `return <void*>;` from an
+         * `int64_t` function is `pointer to integer conversion` -- a hard error
+         * under clang's default `-Wint-conversion` (and GCC >= 14 -Werror).
+         * Bridge through intptr_t (value-preserving; a no-op for a genuine
+         * int64 temp, which this branch never sees -- the recorded type is a
+         * pointer). */
+        buf_printf(out, "return (int64_t)(intptr_t)%s;\n", ret_val);
+    } else if (!is_main && ret_ctype && strcmp(ret_ctype, "void") == 0) {
+        /* C11 6.8.6.4p1: a `return` WITH an expression is a constraint
+         * violation in a function returning void -- even when the
+         * expression is itself void-typed.  A `!`-returning defn whose tail
+         * is a call to another `!`-returning defn lands exactly there:
+         *   (defn outer [] : ! (inner))  ->  static void outer() { return inner(); }
+         * clang accepts it as an extension, so the cc path never
+         * complained, but c2mir rejects it and the program silently loses
+         * the JIT (panic-trace was the fixture that surfaced this).  Emit
+         * the tail as a statement and return separately; the cast keeps
+         * -Wunused-value quiet for a non-call tail and is valid on a
+         * void-typed one. */
+        buf_printf(out, "(void)(%s);\n", ret_val);
+        indent_buf(out, ctx->indent);
+        buf_puts(out, "return;\n");
+    } else {
+        buf_printf(out, "return %s;\n", ret_val);
+    }
+    free(ret_val);
+}
+
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     FnDef *fd = e->as.fn_def_.fn;
     /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): a mapper's dead
@@ -4492,20 +5036,21 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     bool tco_spine_ok = !body_diverges && fd->body->kind != EX_INLINE_C &&
         !(result_kind == TY_NIL && !is_main) && !is_main &&
         tco_params_simple(ctx, e, fd);
-    int n_tco_self = 0, n_tco_tail = 0, n_tco_refused = 0;
+    int n_tco_self = 0, n_tco_tail = 0;
     if (tco_spine_ok)
-        n_tco_self = tco_mark(ctx, fd, fn_name, fd->body, &n_tco_tail,
-                              &n_tco_refused);
+        n_tco_self = tco_mark(ctx, fd, fn_name, fd->body, &n_tco_tail);
     /* T2: a body whose tail spine holds ONLY non-self tail calls still goes
      * through emit_tail -- that is what puts the `return` in each branch, and so
-     * what makes the call a C tail call at all.  Routed on T2's account only
-     * when EVERY non-self tail leaf can be served, because emit_tail's default
-     * return path carries fewer bridges than the one such a body would
-     * otherwise have taken (see tco_mark).  The `__tur_tailcall:` label is gated
-     * on a genuine backedge, because an emitted-and-unused label is a C compiler
-     * warning. */
-    bool tco_eligible = tco_spine_ok &&
-        (n_tco_self > 0 || (n_tco_tail > 0 && n_tco_refused == 0));
+     * what makes the call a C tail call at all.  The `__tur_tailcall:` label is
+     * gated on a genuine backedge, because an emitted-and-unused label is a C
+     * compiler warning.
+     *
+     * No all-or-nothing rule: T2's first cut kept a body out of emit_tail unless
+     * EVERY non-self tail leaf could be served, because a refused leaf landing in
+     * emit_tail's thinner return path emitted an unbridged return.  Both paths
+     * share emit_fn_return_spelling now, so a refused leaf is emitted exactly as
+     * it always was. */
+    bool tco_eligible = tco_spine_ok && (n_tco_self > 0 || n_tco_tail > 0);
     bool tco_wants_label = n_tco_self > 0;
 
     /* proper-tail-calls T1 (T-D1): now that tco_mark has had its say, work out
@@ -4706,558 +5251,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_printf(file, "return %s;\n", dflt);
         }
     } else {
-        /* Function with return value */
-        char *ret_val = emit_fat_return_value(ctx, file, e, fd->body);
-        /* RSP1: returning a pass-by-ptr struct *parameter* directly.  The param
-         * is held in C as `const T *` but the function returns the struct by
-         * value, so `return x;` returns a pointer where a `T` is expected.
-         * Dereference to copy it out.  A bare struct param is a concrete sized
-         * value, never an Option/Result carrier aggregate, so it never collides
-         * with the carrier-spill return paths below.  Mirrors emit_tail. */
-        if (fd->body) {
-            const Expr *re = fd->body;
-            while (re && re->kind == EX_ASCRIBE) re = re->as.ascribe_.inner;
-            if (re && re->kind == EX_VAR && re->as.var.binding &&
-                !(is_main && result_kind == TY_INT)) {
-                for (uint32_t _i = 0; _i < ctx->n_pbp_params; _i++) {
-                    if (ctx->pbp_param_ptrs[_i] == re->as.var.binding) {
-                        char *deref = (char *)malloc(strlen(ret_val) + 4);
-                        sprintf(deref, "*(%s)", ret_val);
-                        free(ret_val);
-                        ret_val = deref;
-                        break;
-                    }
-                }
-            }
-        }
-        indent_buf(file, ctx->indent);
-        /* closure-carrier-return-and-arg-int-pointer-warnings: determine the
-         * function's actual C return type so a fn-typed body returned through
-         * the int64_t/void* closure carrier gets the matching bridge cast.
-         * This mirrors the signature-emission branches above; the body is
-         * guaranteed non-inline-c here (inline-c is handled earlier), so the
-         * inline-c-only sub-branches there do not apply. */
-        const char *ret_ctype = NULL;
-        bool inst_method_carrier_spill = false;
-        if (e->type.kind == TY_FN && !is_main) {
-            /* structdef-retirement DS-C: emit_carrier_return_override is dead
-             * (method body never TY_STRUCT); its `carrier_override.kind ==
-             * TY_STRUCT` branch below is removed. */
-            if (fd->box_aggregate_result) {
-                /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): the closure
-                 * returns its wide `(f A)` aggregate boxed into the int64 carrier;
-                 * the explicit heap-spill return below performs the box. */
-                ret_ctype = "int64_t";
-            } else if (fd->n_dict_clone > 0) {
-                /* MB2.5: keep the return ret_ctype in lockstep with the signature
-                 * override above -- a dict-clone wrapper returns the int64 carrier. */
-                ret_ctype = "int64_t";
-            } else if (use_abi_spec) {
-                Type rt = ctx->current_abi_specialization->result_type;
-                bool is_inst = fd->binding && fd->binding->name &&
-                    fd->binding->name->name &&
-                    strncmp(fd->binding->name->name, "__inst_", 7) == 0;
-                /* M4c Path A result-side: non-HKT instance method specs
-                 * (typeclass_inst set) skip the carrier-int64 override.
-                 * The signature emit at L412 + the forward decl at
-                 * emit_module.c:1853 use the same gate; keep them in sync. */
-                Type rt_resolved = emit_resolve_type(ctx, rt);
-                /* M7 layer-4: a per-(f, A) by-value HKT instance-method spec
-                 * returns the resolved struct (`Option__int`) BY VALUE, not the
-                 * int64 carrier -- this is the whole point of the spec.  Detect
-                 * it by the concrete by-value TY_APP result (same guards as
-                 * construct_recovered_byvalue) and skip the carrier spill
-                 * below. */
-                if (is_inst &&
-                    rt_resolved.kind == TY_APP &&
-                    !type_is_heap_struct(rt_resolved) &&
-                    type_has_concrete_codegen_layout(&rt_resolved)) {
-                    ret_ctype = emit_type_c_name(ctx, rt);
-                } else if (is_inst && type_uses_carrier_abi(rt_resolved)
-                    && ctx->current_abi_specialization->typeclass_inst == NULL) {
-                    ret_ctype = "int64_t";
-                    inst_method_carrier_spill = true;
-                } else {
-                    ret_ctype = emit_type_c_name(ctx, rt);
-                }
-            } else if (e->type.as.fn.result_full_type &&
-                       fd->binding && fd->binding->name && fd->binding->name->name &&
-                       strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                       type_uses_carrier_abi(emit_resolve_type(ctx,
-                           *e->type.as.fn.result_full_type))) {
-                ret_ctype = "int64_t";
-                inst_method_carrier_spill = true;
-            } else if (e->type.as.fn.result_full_type &&
-                       emit_inst_fn_return_carrier(fd,
-                           e->type.as.fn.result_full_type)) {
-                ret_ctype = emit_inst_fn_return_carrier(fd,
-                    e->type.as.fn.result_full_type);
-            } else if (e->type.as.fn.result_full_type) {
-                Type rft = *e->type.as.fn.result_full_type;
-                const char *fn_ret_td = e->type.as.fn.result_fat
-                    ? NULL : emit_fn_return_typedef(fd, &rft);
-                ret_ctype = fn_ret_td ? fn_ret_td : emit_type_c_name(ctx, rft);
-            } else if (fd->binding && fd->binding->name && fd->binding->name->name &&
-                       strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                       fd->body && (fd->body->type.kind == TY_APP ||
-                                    fd->body->type.kind == TY_STRUCT ||
-                                    type_uses_carrier_abi(fd->body->type))) {
-                /* Direction (1): non-spec instance method, result_full_type
-                 * absent.  Spill only when body codegen is by-value struct
-                 * (matching the signature fallback above).  repro 2: a by-value
-                 * monomorph body (carrier-ABI false) is included -- the dict
-                 * slot is int64 regardless, so it must spill too. */
-                const char *_body_c2 = emit_type_c_name(ctx, fd->body->type);
-                if (_body_c2 && strcmp(_body_c2, "int64_t") != 0) {
-                    ret_ctype = "int64_t";
-                    inst_method_carrier_spill = true;
-                } else {
-                    ret_ctype = emit_type_c_name(ctx,
-                        emit_type_from_kind(e->type.as.fn.result_kind));
-                }
-            } else {
-                ret_ctype = emit_type_c_name(ctx,
-                    emit_type_from_kind(e->type.as.fn.result_kind));
-            }
-        }
-        bool ret_is_int64_carrier = ret_ctype &&
-            strcmp(ret_ctype, "int64_t") == 0;
-        /* Special case: if this is main and it returns int64_t, cast to int */
-        if (is_main && result_kind == TY_INT) {
-            buf_printf(file, "return (int)%s;\n", ret_val);
-        } else if (fd->box_aggregate_result) {
-            /* WF1/WF2/WF3 (van-laarhoven-wide-functor-carrier-plan): a functor-
-             * wrapping closure `g` for a wide-functor lens must return the int64
-             * carrier (the generic dict-clone fat-dispatches it int64-in/int64-out
-             * and the lens caller unboxes at the poly-carrier boundary).  Its body
-             * tail comes in two shapes:
-             *   - a by-value aggregate (`mk_id__spec(...)` -> `tur_adt_Identity__int`)
-             *     in the concrete / ABI-specialized emit -- heap-box it (the
-             *     inverse of the caller's unbox, mirroring emit_agg_box); or
-             *   - the int64 carrier already (`mk_hyid(...)`) in the GENERIC base
-             *     emit (the functor is abstract there) -- return it directly, or
-             *     malloc-boxing a carrier word would double-box. */
-            if (fd->body && fn_body_tail_emits_byvalue_carrier_abi(ctx, fd->body)) {
-                Type src = fn_body_tail_byvalue_carrier_type(ctx, fd->body);
-                if (src.kind == TY_UNKNOWN)
-                    src = e->type.as.fn.result_full_type
-                        ? emit_resolve_type(ctx, *e->type.as.fn.result_full_type)
-                        : emit_resolve_type(ctx, fd->body->type);
-                const char *scty = emit_type_c_name(ctx, src);
-                buf_printf(file,
-                    "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
-                    "*__tur_ret_p = %s; "
-                    "return (int64_t)(intptr_t)__tur_ret_p; }\n",
-                    scty, scty, scty, ret_val);
-            } else {
-                buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
-            }
-        } else if (fd->n_dict_clone > 0) {
-            /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper's
-             * body is a single dispatch through the carrier dict, which already
-             * yields the int64 carrier (emit_call_name + the M7-spec suppression
-             * keep it carrier even for by-value aggregate functors).  Return that
-             * carrier directly -- NONE of the by-value/aggregate spill heuristics
-             * below apply, and firing one would malloc-box a value that is already
-             * the carrier (double-box).  The `(int64_t)(intptr_t)` cast is a no-op
-             * on an int64 and harmless if the body tail is a bare pointer.
-             *
-             * forall-dict-float-result-truncated: it is NOT a no-op on a double.
-             * A method declared `: float` dispatches to a `double`-returning slot,
-             * and `(int64_t)(intptr_t)` on a double is a C numeric conversion --
-             * 2.5 arrived as 2, 7.1 as 7, with no warning and no diagnostic.
-             * Reinterpret the BITS instead, which is what every other float/carrier
-             * crossing does (see tur_sc_bits_f64 in the preamble, whose own comment
-             * says an intptr_t cast would truncate).  The consumer side unpacks
-             * symmetrically in emit_expr.c's poly-call result handling -- the two
-             * must stay in lockstep, since a one-sided change turns a truncation
-             * into garbage. */
-            TypeKind clone_rk = fd->body
-                ? emit_resolve_type(ctx, fd->body->type).kind : TY_UNKNOWN;
-            if (clone_rk == TY_FLOAT || clone_rk == TY_FLOAT64)
-                buf_printf(file, "return tur_sc_bits_f64(%s);\n", ret_val);
-            else if (clone_rk == TY_FLOAT32)
-                buf_printf(file, "return tur_sc_bits_f32(%s);\n", ret_val);
-            else
-                buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
-        } else if (inst_method_carrier_spill) {
-            /* Direction (1): instance method whose declared result is a
-             * parameterized struct (e.g. (Result T E)) returns the carrier
-             * int64 handle.  Heap-spill the by-value struct and cast its
-             * pointer as int64_t so the dispatch dict's uniform
-             * `int64_t (*)(...)` signature is honored. */
-            Type rt;
-            if (use_abi_spec) {
-                rt = ctx->current_abi_specialization->result_type;
-            } else if (e->type.as.fn.result_full_type) {
-                rt = emit_resolve_type(ctx, *e->type.as.fn.result_full_type);
-            } else {
-                rt = fd->body->type;
-            }
-            const char *struct_cty = emit_type_c_name(ctx, rt);
-            /* M7 (flag-gated): in a GENERIC carrier base instance method whose
-             * declared result is a parameterized struct with a free element
-             * tyvar -- e.g. `Decode`'s `(Result a cstr)` -- `rt` resolves to the
-             * int64 carrier (no instance specialization active here).  But the
-             * concrete instance body recovers its construct BY VALUE
-             * (`(ok (make-struct Point ...))` -> `ok__spec` returning
-             * `Result__Point__cstr`), so `ret_val` is a by-value aggregate.
-             * Spilling it as `sizeof(int64_t)` + `*(int64_t*)p = <struct>` is a
-             * hard cc error (aggregate into integer).  When the body's own type
-             * is a concrete non-carrier aggregate, spill THAT type so the malloc
-             * size and the cast match the actual value.
-             * See docs/archive/history/m7-hkt-bimap-twoparam-struct-tyvar-leak.md
-             * / the instance-method-return-carrier-bridge fixture. */
-            if (struct_cty &&
-                strcmp(struct_cty, "int64_t") == 0 && fd->body) {
-                const char *body_cty = emit_type_c_name(ctx, fd->body->type);
-                if (body_cty && strcmp(body_cty, "int64_t") != 0)
-                    struct_cty = body_cty;
-            }
-            /* hkt-rc-construct-body-boxes-handle: the spill exists to pass a
-             * BY-VALUE aggregate through the dict's uniform `int64_t` slot.  A
-             * value that is already carrier-width needs no box, and boxing one
-             * anyway is a silent miscompile -- the consumer reads the
-             * pointer-to-value as the value.
-             *
-             * Two shapes qualify.  The int64 carrier itself was already handled
-             * (see below).  A POINTER is the other: an instance method whose
-             * result is a pointer-family handle -- `Functor [rc]`'s `(f b)`
-             * grounding to `rc<int>`, i.e. `RcControlBlock *` -- returns a
-             * pointer that fits the carrier exactly.  Boxing it emitted
-             * `RcControlBlock **__tur_ret_p = malloc(...)` and the dispatch
-             * consumer then cast that cell straight to `RcControlBlock *`, so
-             * `rc/strong-count` read a malloc header as a refcount and the value
-             * was never reachable (measured: garbage count, fold 0, 752768 bytes
-             * leaked over 5000 iterations).
-             *
-             * The next branch down already treats a TY_RC/TY_WEAK/TY_REF/TY_LREF
-             * body returned through the int64 carrier exactly this way -- a bare
-             * `(int64_t)(intptr_t)` bridge -- so this only stops the spill from
-             * intercepting a case that was already handled correctly downstream. */
-            bool spill_ty_is_ptr = struct_cty && strchr(struct_cty, '*') != NULL;
-            if (struct_cty &&
-                (strcmp(struct_cty, "int64_t") == 0 || spill_ty_is_ptr)) {
-                /* M7: the body already produced the carrier int64 handle --
-                 * e.g. a partial-application `(Result _ E)` instance whose
-                 * pure-Turmeric body lowered to the carrier `ok`/`err` (the
-                 * spill type stays int64 because the result element doesn't
-                 * ground by value).  There is nothing to box: malloc'ing another
-                 * int64 and storing the handle into it DOUBLE-boxes (the
-                 * by-value consumer then reads a pointer-to-handle as the struct
-                 * -> garbage, the `(Result _ E)` fmr returning 0 for 42).
-                 * Return the carrier value directly. */
-                buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
-            } else {
-                buf_printf(file,
-                    "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
-                    "*__tur_ret_p = %s; "
-                    "return (int64_t)(intptr_t)__tur_ret_p; }\n",
-                    struct_cty, struct_cty, struct_cty, ret_val);
-            }
-        } else if (((emit_resolve_type(ctx, fd->body->type).kind == TY_FN ||
-                     emit_resolve_type(ctx, fd->body->type).kind == TY_PTR_VOID ||
-                     emit_resolve_type(ctx, fd->body->type).kind == TY_CSTR ||
-                     emit_resolve_type(ctx, fd->body->type).kind == TY_RC ||
-                     emit_resolve_type(ctx, fd->body->type).kind == TY_WEAK ||
-                     emit_resolve_type(ctx, fd->body->type).kind == TY_REF ||
-                     emit_resolve_type(ctx, fd->body->type).kind == TY_LREF ||
-                     emit_resolve_type(ctx, fd->body->type).kind == TY_FORALL ||
-                     emit_resolve_type(ctx, fd->body->type).kind == TY_EXISTS ||
-                     (emit_resolve_type(ctx, fd->body->type).kind == TY_STRUCT &&
-                      strchr(type_c_name(emit_resolve_type(ctx, fd->body->type)), '*') != NULL))) &&
-                   (result_kind == TY_INT || ret_is_int64_carrier)) {
-            /* A function-typed, pointer-typed, or cstr body returned through the int64_t
-             * carrier: a bare non-capturing fn reference is a `void *(...)`
-             * function pointer, and a fat box is declared `void *`, but the C
-             * return type is the int64_t carrier.  Without the (int64_t)(intptr_t)
-             * bridge, clang trips -Wint-conversion on the implicit pointer-to-int
-             * conversion.  (A void* carrier return needs no cast: the body value
-             * is already a pointer.) */
-            buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
-        } else if (ret_is_int64_carrier && fd && fd->body &&
-            e->type.kind == TY_FN &&
-            (e->type.as.fn.result_kind == TY_FLOAT ||
-             e->type.as.fn.result_kind == TY_FLOAT64 ||
-             e->type.as.fn.result_kind == TY_FLOAT32) &&
-            (fd->body->type.kind == TY_FLOAT ||
-             fd->body->type.kind == TY_FLOAT64 ||
-             fd->body->type.kind == TY_FLOAT32)) {
-            /* method-result-float-spec-return-value-converts: this clone's C
-             * return is the int64 carrier, its DECLARED result is a float, and
-             * its body tail is a float.  A plain `return ret_val;` is then C's
-             * implicit floating-to-integer CONVERSION (7.1 -> 7) while every
-             * consumer of a float-declared method result reinterprets the
-             * carrier's BITS back -- so the value is destroyed before it
-             * leaves the callee (`(l1g2 (l1p1 7.1))` printed 3.45846e-323).
-             *
-             * The key is the DECLARED result kind (`e->type.as.fn.result_kind`
-             * -- the instance-resolved signature), and that key is what pairs
-             * producer with consumer: the consumer bit-reinterprets exactly
-             * when the call's resolved result type is a float, i.e. the same
-             * declared type read from the other end.  A method DECLARED `: int`
-             * whose instance body happens to produce a float (BoxMap's boxmap,
-             * pinned by poly-to-fat-float-roundtrip expecting `7`) keeps the
-             * value conversion, because for it the conversion IS the declared
-             * semantics.  The first attempt at this fix keyed on the BODY type
-             * alone and broke exactly those fixtures -- see the report's
-             * "reverted" record for the measurement.
-             *
-             * Routed through the carrier chokepoint, whose inline-scalar arm
-             * emits the same union bit-cast the consumer side uses. */
-            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
-                                                CK_CONCRETE, CK_CARRIER,
-                                                fd->body->type);
-            indent_buf(file, ctx->indent);
-            buf_printf(file, "return %s;\n", bridged);
-            free(bridged);
-        } else if (use_abi_spec
-                   && ctx->current_abi_specialization->typeclass_inst != NULL
-                   && ret_ctype && strcmp(ret_ctype, "int64_t") != 0
-                   && fd->body->type.kind != TY_NEVER
-                   && type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type))
-                   && strcmp(emit_type_c_name(ctx,
-                                emit_resolve_type(ctx, fd->body->type)),
-                             "int64_t") == 0
-                   && !fn_body_tail_emits_byvalue_carrier_abi(ctx, fd->body)) {
-            /* M4c Path A result-side: the spec's declared return is a
-             * concrete by-value struct (e.g. `Result__int__cstr`), but the
-             * body's last expression elaborates to a carrier-ABI value
-             * (`int64_t` at C level) — e.g. `(ok v)` where ok still emits
-             * its bare carrier symbol.  Route through emit_carrier_bridge so
-             * the canonical-carrier field-by-field unbox kicks in for
-             * Result/Option sinks with sub-word payloads
-             * (decode-bool-carrier-instance-ascription); the legacy
-             * `*(T *)(intptr_t)x` deref stays for other parametric sinks.
-             *
-             * instance-method-return-carrier-bridge: also skip the deref when
-             * the body tail already emits the struct by value (a post-M2
-             * #{Construct} spec like `(ok (make-struct ...))` lowers to its
-             * by-value `*__spec__*` clone). */
-            Type sink_rt = ctx->current_abi_specialization->result_type;
-            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
-                                                CK_CARRIER, CK_CONCRETE, sink_rt);
-            indent_buf(file, ctx->indent);
-            buf_printf(file, "return %s;\n", bridged);
-            free(bridged);
-        } else if (!ret_is_int64_carrier && ret_ctype
-                   && fd->body->type.kind != TY_NEVER
-                   && (type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type))
-                       || fn_body_tail_returns_carrier_value(ctx, fd->body))
-                   && fn_body_tail_is_carrier_producer(fd->body)
-                   && !fn_body_tail_emits_byvalue_carrier_abi(ctx, fd->body)) {
-            /* M5 straddle (root cause C): an ordinary function or lifted lambda
-             * whose declared return is a by-value carrier aggregate
-             * (Option__int / Result__int__int) but whose tail value comes from
-             * a carrier-int64 producer (some/ok/err/none or an __inst_ method).
-             * Same carrier->concrete unbox as the M4c spec branch above. */
-            Type sink_rt = (e->type.kind == TY_FN && e->type.as.fn.result_full_type)
-                ? emit_resolve_type(ctx, *e->type.as.fn.result_full_type)
-                : emit_resolve_type(ctx, fd->body->type);
-            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
-                                                CK_CARRIER, CK_CONCRETE, sink_rt);
-            indent_buf(file, ctx->indent);
-            buf_printf(file, "return %s;\n", bridged);
-            free(bridged);
-        } else if (ret_is_int64_carrier && fd->body
-                   && fd->body->type.kind != TY_NEVER
-                   && fn_body_tail_emits_byvalue_carrier_abi(ctx, fd->body)
-                   && fn_body_tail_byvalue_carrier_type(ctx, fd->body).kind != TY_UNKNOWN) {
-            /* Phase 5 carrier-bridge deletion (concrete->carrier return): the C
-             * return is the uniform int64 carrier (a lifted lambda thunk in a
-             * poly_fn slot, or a generic carrier base) but the body tail now
-             * produces a by-value Option/Result struct (a monomorphized
-             * #{Construct} spec like `some__spec`).  Heap-spill the struct and
-             * return its pointer as int64 -- the SAME malloc spill the
-             * inst_method_carrier_spill path uses, so the carrier consumer
-             * (which derefs a {is_some,value}/{is_ok,...} layout) reads it
-             * correctly.  A stack spill (emit_carrier_bridge concrete->carrier)
-             * would return a dangling address, so it is NOT used here.  The
-             * concrete type comes from the matched spec, since the construct's
-             * own e->type is collapsed to the int64 carrier. */
-            Type src = fn_body_tail_byvalue_carrier_type(ctx, fd->body);
-            if (type_is_heap_struct(src) || type_is_heap_adt(src)) {
-                /* constrained-defn-monomorphize: a `:heap` struct tail (e.g.
-                 * `(Cons A)` built by `tcons-of`) is ALREADY a pointer (`Cons__A *`)
-                 * that fits the int64 carrier directly.  Malloc-boxing it
-                 * double-boxes (the carrier consumer then reads a pointer-to-pointer
-                 * as the cell -> a length-1 / garbage list), the heap-struct mirror
-                 * of the M7 double-box guard above.  Cast the pointer to the carrier
-                 * instead of spilling.  seam 3: a lowered `:heap` ADT tail
-                 * (`type_is_heap_adt`) is the same typed-pointer shape. */
-                buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
-            } else {
-                const char *cty = emit_type_c_name(ctx, src);
-                buf_printf(file,
-                    "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
-                    "*__tur_ret_p = %s; "
-                    "return (int64_t)(intptr_t)__tur_ret_p; }\n",
-                    cty, cty, cty, ret_val);
-            }
-        } else if (ret_is_int64_carrier && fd->body &&
-                   fd->body->type.kind != TY_NEVER &&
-                   type_is_heap_adt(emit_resolve_type(ctx, fd->body->type))) {
-            /* seam 3: the function returns the int64 carrier (an abstract
-             * parametric base like `tcons : (Cons A)`), but the body tail is a
-             * lowered `:heap` ADT value -- a typed pointer (`ctor_Cons(..)` ->
-             * `tur_adt_Cons *`) whose bit pattern IS the carrier.  Reinterpret-cast
-             * it, never return it uncast (-Wint-conversion) and never malloc-box
-             * (double-box).  The non-parametric mirror is the `type_is_heap_adt`
-             * arm in `type_uses_carrier_abi` / the heap-struct return cast above. */
-            buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
-        } else if (ret_is_int64_carrier && fd->body &&
-                   fd->body->type.kind != TY_NEVER &&
-                   e->type.kind == TY_FN &&
-                   e->type.as.fn.result_kind == TY_TYVAR &&
-                   (emit_resolve_type(ctx, fd->body->type).kind == TY_FLOAT ||
-                    emit_resolve_type(ctx, fd->body->type).kind == TY_FLOAT32 ||
-                    emit_resolve_type(ctx, fd->body->type).kind == TY_FLOAT64)) {
-            /* nested-construct-byvalue (Gap #4, float element): a generic
-             * accessor (`ok-val`) whose DECLARED result is a bare tyvar (`: A`)
-             * collapses to the int64 carrier return, but inside a `(Result float
-             * cstr)` spec its body tail is a concrete `double` field read.  A plain
-             * `return <double>;` through an `int64_t` result NUMERICALLY converts
-             * (3.25 -> 3), and the caller's union reinterpret then reads garbage.
-             * Bit-reinterpret the float into the int64 carrier so the carried
-             * value round-trips (the cstr/pointer element is already bit-
-             * preserving through the implicit pointer->int64 return cast).  Gated
-             * on a TYVAR-declared result so a genuine `: float` function carried
-             * through the int64 poly-fn slot (poly-to-fat-float-*) -- which uses a
-             * NUMERIC convention -- is untouched. */
-            Type body_rt = emit_resolve_type(ctx, fd->body->type);
-            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
-                                                CK_CONCRETE, CK_CARRIER, body_rt);
-            indent_buf(file, ctx->indent);
-            buf_printf(file, "return %s;\n", bridged);
-            free(bridged);
-        } else if (!ret_is_int64_carrier &&
-                   ctx->current_fn_ret_ctype &&
-                   strchr(ctx->current_fn_ret_ctype, '*') != NULL &&
-                   emit_tail_call_returns_tyvar_carrier(ctx, fd->body)) {
-            /* MB2 (constrained-hkt-forall-mode-b-plan): the function's C return
-             * type is a concrete pointer (a :heap ADT like `Point *`), but the
-             * body tail is a call to a generic fn whose declared result is a bare
-             * type variable (`run-id [A] ... : A`), lowered to the int64 carrier.
-             * The elaborator kept the call's full composite type (a reinterpret
-             * cannot carry a composite) so no wrap was inserted, leaving `ret_val`
-             * as the int64 carrier where a pointer is expected -- a
-             * -Wint-conversion.  Bridge through intptr_t.  Inert when the call
-             * resolves to a concrete by-value spec (the wide-monomorphization path
-             * calls `run_id__spec__...Point`, already a pointer). */
-            buf_printf(file, "return (%s)(intptr_t)%s;\n",
-                       ctx->current_fn_ret_ctype, ret_val);
-        } else if (fn_return_needs_carrier_result_bridge(
-                       ctx, fd, e, ret_ctype, ret_is_int64_carrier, ret_val)) {
-            /* catch-unwind-byvalue-result-return-mismatch: the body value is the
-             * int64 carrier (a heap Result box, e.g. a let-bound catch-unwind
-             * result returned directly) but the declared return is the by-value
-             * Result/Option struct.  Bridge carrier->concrete using the DECLARED
-             * return type (whose emit_type_c_name is the struct), so the canonical
-             * box readback reconstructs the aggregate field-by-field. */
-            Type sink_rt = (e->type.kind == TY_FN && e->type.as.fn.result_full_type)
-                ? emit_resolve_type(ctx, *e->type.as.fn.result_full_type)
-                : emit_resolve_type(ctx, fd->body->type);
-            if (catch_box_tail_sole_owned(fd->body, fd->body)) {
-                /* catch-unwind-return-bridge-residuals (Part B): the caught box
-                 * is sole-owned, so free it after the aggregate is materialized.
-                 * Capture the carrier in a stable temp (so it is not re-emitted),
-                 * read the box fields into a return temp, free the now-dead box
-                 * struct, then return -- freeing the struct only (never the
-                 * payload, which the returned err aggregate may alias). */
-                char *box_tmp = fresh_tmp(ctx);
-                indent_buf(file, ctx->indent);
-                buf_printf(file, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
-                           box_tmp, ret_val);
-                char *bridged = emit_carrier_bridge(ctx, file, strdup(box_tmp),
-                                                    CK_CARRIER, CK_CONCRETE,
-                                                    sink_rt);
-                const char *agg_cty = emit_type_c_name(ctx, sink_rt);
-                char *ret_tmp = fresh_tmp(ctx);
-                indent_buf(file, ctx->indent);
-                buf_printf(file, "%s %s = %s;\n", agg_cty, ret_tmp, bridged);
-                indent_buf(file, ctx->indent);
-                /* catch-unwind-returned-err-box-payload-leak: a scalar err arm
-                 * cannot alias the box's panic payload, so the full free
-                 * reclaims the 32 B payload too; else stay shallow (a
-                 * pointer/cstr/aggregate err field aliases the payload the
-                 * returned aggregate now owns). */
-                buf_printf(file, "%s(%s);\n",
-                           result_err_arm_is_freeable_scalar(&sink_rt)
-                               ? "tur_result_box_free"
-                               : "tur_result_box_free_shallow",
-                           box_tmp);
-                indent_buf(file, ctx->indent);
-                buf_printf(file, "return %s;\n", ret_tmp);
-                free(bridged); free(box_tmp); free(ret_tmp);
-            } else {
-                char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
-                                                    CK_CARRIER, CK_CONCRETE,
-                                                    sink_rt);
-                indent_buf(file, ctx->indent);
-                buf_printf(file, "return %s;\n", bridged);
-                free(bridged);
-            }
-        } else if (ret_ctype && !is_main && ret_val &&
-                   ret_ctype[strlen(ret_ctype) - 1] == '*' &&
-                   ((strcmp(ret_ctype, "void *") != 0 &&
-                     (strncmp(ret_val, "(int64_t)", 9) == 0 ||
-                      (emit_str_is_bare_ident(ret_val) &&
-                       emit_localvar_lookup_ctype(ret_val) &&
-                       strcmp(emit_localvar_lookup_ctype(ret_val), "int64_t") == 0))) ||
-                    fn_tail_emits_int64_carrier(fd, fd->body))) {
-            /* gcc14-int-conversion (carrier-representation-tracking): a spec
-             * clone whose C return type is a concrete pointer (e.g. an element
-             * accessor `err-val [A B] : B` monomorphized to `const char *` /
-             * `tur_adt_Vec__X *`) but whose body VALUE is the int64 carrier --
-             * either an explicit `(int64_t)..` field read, or a bare call temp
-             * RECORDED as int64 (`return __ps_224;` where run_id__spec returns
-             * int64 but the fn returns `tur_adt_Point *`).  `return <int64>` into
-             * a pointer return type is `pointer from integer` -- a hard error
-             * under GCC >= 14.  Reinterpret to the return type (value-preserving).
-             *
-             * macos-int-conversion-carrier-pointer-straddles (case B): the
-             * `void *` exclusion above is conservatism from fe6f47b60, not
-             * semantics -- `return <int64>` into `void *` is the same
-             * -Wint-conversion error and the same intptr_t round-trip fixes it.
-             * It only stays because the string sniff cannot tell a carrier from
-             * a genuine pointer; the AST predicate can, so a tail it recognizes
-             * bridges for any pointer return type, `void *` included. */
-            buf_printf(file, "return (%s)(intptr_t)%s;\n", ret_ctype, ret_val);
-        } else if (ret_is_int64_carrier && ret_val &&
-                   emit_str_is_bare_ident(ret_val) &&
-                   emit_localvar_lookup_ctype(ret_val) &&
-                   emit_localvar_lookup_ctype(ret_val)[
-                       strlen(emit_localvar_lookup_ctype(ret_val)) - 1] == '*') {
-            /* clang int-conversion (reverse straddle): the function returns the
-             * int64 carrier but the body value is a bare temp whose real emitted C
-             * type is a pointer -- a `void *`-returning `extern-c ... :ptr` ascribed
-             * to an opaque carrier (e.g. `(:: (tur_string_from_cstr s) String)`
-             * whose __auto_type panic temp is `void *`).  `return <void*>;` from an
-             * `int64_t` function is `pointer to integer conversion` -- a hard error
-             * under clang's default `-Wint-conversion` (and GCC >= 14 -Werror).
-             * Bridge through intptr_t (value-preserving; a no-op for a genuine
-             * int64 temp, which this branch never sees -- the recorded type is a
-             * pointer). */
-            buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
-        } else if (!is_main && ret_ctype && strcmp(ret_ctype, "void") == 0) {
-            /* C11 6.8.6.4p1: a `return` WITH an expression is a constraint
-             * violation in a function returning void -- even when the
-             * expression is itself void-typed.  A `!`-returning defn whose tail
-             * is a call to another `!`-returning defn lands exactly there:
-             *   (defn outer [] : ! (inner))  ->  static void outer() { return inner(); }
-             * clang accepts it as an extension, so the cc path never
-             * complained, but c2mir rejects it and the program silently loses
-             * the JIT (panic-trace was the fixture that surfaced this).  Emit
-             * the tail as a statement and return separately; the cast keeps
-             * -Wunused-value quiet for a non-call tail and is valid on a
-             * void-typed one. */
-            buf_printf(file, "(void)(%s);\n", ret_val);
-            indent_buf(file, ctx->indent);
-            buf_puts(file, "return;\n");
-        } else {
-            buf_printf(file, "return %s;\n", ret_val);
-        }
-        free(ret_val);
+        /* Function with return value.  The spelling -- carrier bridges, heap
+         * spills, straddle casts -- is emit_fn_return_spelling's decision, the
+         * same one emit_tail's tail path takes. */
+        emit_fn_return_spelling(ctx, file, e, fd, fd->body,
+                                emit_fat_return_value(ctx, file, e, fd->body),
+                                result_kind, is_main);
     }
 
     /* Restore previous context */

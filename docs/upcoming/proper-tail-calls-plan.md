@@ -422,18 +422,34 @@ down the generic path that assigns into a `__tN` temp and returns once at the
 bottom. Landing T2 meant widening that gate and suppressing the now-unused
 `__tur_tailcall:` label.
 
-Widening it exposed a real defect, and the gate is narrow because of it: a
-non-self tail call is marked only when the callee's C return type -- read from
-the forward-declaration table via `emit_call_name`, so a `__spec__`
-monomorphization is compared as itself and not as its generic -- is **exactly**
-the enclosing function's, and only when *every* non-self tail leaf in the body
-qualifies. The reason is that `emit_tail`'s return path carries a strict subset
-of `emit_fn_def`'s carrier/dict/straddle bridges, so a leaf that falls back
-lands somewhere that cannot bridge it. Loosening any part of that gate fails 24
-fixtures with hard `cc` errors. Filed as
-[docs/reported/emit-tail-return-path-lacks-carrier-bridges.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/emit-tail-return-path-lacks-carrier-bridges.md);
-merging the two paths is what would let carrier-returning mutual recursion reach
-C tail position too.
+Widening it exposed a real defect: `emit_tail` carried hand-maintained SUBSETS
+of two decisions `emit_fn_def` owned -- the result-shape return ladder (three of
+its sixteen arms) and the `let` binder's straddle bridges -- and widening the
+routing sent bodies into them that had never been there. Twenty-four fixtures
+failed with hard `cc` errors, and `examples/datalog/datalog.tur` compiled on
+Linux and **ran wrong**, which is the more instructive failure: on macOS the same
+emitted C was a hard error, so the Linux leg's silent exit-2 was the same defect
+wearing a warning.
+
+That is fixed, not worked around:
+[docs/archive/emit-tail-return-path-lacks-carrier-bridges.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/emit-tail-return-path-lacks-carrier-bridges.md).
+`emit_fn_return_spelling` is now the one ladder both paths call, and the `let`
+arm gained the bridge it was missing. The extraction was verified as a pure
+no-op first (zero snapshot churn with the old routing still in place), and only
+then was the routing widened.
+
+What survives is one condition, and it is a real statement about tail position
+rather than a workaround: **the callee's C return type must be exactly the
+enclosing function's**, read via `emit_call_name` so a `__spec__` monomorph is
+compared as itself and not as its generic. A return that has to spill or cast is
+work after the call. What went away is the all-or-nothing rule that stood in for
+the defect -- a body is no longer refused wholesale because one of its tail
+leaves needs a bridge; that leaf keeps its hoist and its check while its
+siblings become tail calls.
+
+So, correcting the report's own first guess: merging the ladders does **not**
+let carrier-returning mutual recursion reach C tail position, and should not.
+That case needs T5.
 
 Also still out of scope, deliberately: **indirect** tail calls, which go through
 the fat-closure protocol rather than a named callee and are T-D6's problem.
