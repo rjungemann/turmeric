@@ -187,7 +187,8 @@
 ;;;
 ;;; Since: Phase 19
 
-(defmacro with-fail-panic [& body] (handle (do ~@body) (Fail [msg] k) (panic msg)))
+(defmacro with-fail-panic [& body]
+  (handle (do ~@body) (Fail [msg] k) (panic msg)))
 
 (extern-c getenv [key :cstr] :cstr)
 ;;; with-getenv -- handle the GetEnv effect by delegating to C getenv(3).
@@ -317,7 +318,8 @@
 ;;;
 ;;; Since: Phase 19
 
-(defmacro with-abort-panic [& body] (handle (do ~@body) (Abort [msg] k) (panic msg)))
+(defmacro with-abort-panic [& body]
+  (handle (do ~@body) (Abort [msg] k) (panic msg)))
 ;; ---- Phase T25: Async/Await effects for effect/async integration ----
 ;; Async effect: perform an async computation and return a Future.
 ;; The handler should spawn the computation and return a Future that can be awaited.
@@ -367,7 +369,9 @@
 ;;; Since: Phase T25
 
 (defmacro with-async [& body]
-  (handle (do ~@body) (Async [thunk k]) (do (let [result (thunk)] (resume k result)))))
+  (handle (do ~@body)
+    (Async [thunk k])
+    (do (let [result (thunk)] (resume k result)))))
 ;; with-await -- handle Await by blocking until future is ready
 ;;; with-await -- handle the Await effect by blocking until the future resolves.
 ;;;
@@ -383,4 +387,6 @@
 ;;; Since: Phase T25
 
 (defmacro with-await [& body]
-  (handle (do ~@body) (Await [future k]) (let [value (await future)] (resume k value))))
+  (handle (do ~@body)
+    (Await [future k])
+    (let [value (await future)] (resume k value))))

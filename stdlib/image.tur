@@ -263,7 +263,8 @@
 ;;;
 ;;; Since: Phase AI (AI5.3)
 
-(defmacro defimage-finalize-hook [name & body] `(defn ~name [] : int (do ~@body)))
+(defmacro defimage-finalize-hook [name & body]
+  `(defn ~name [] : int (do ~@body)))
 ;; ---------------------------------------------------------------------------
 ;; Image globals (AI3).
 ;;
@@ -777,15 +778,12 @@
          (do (image/free-stamp stamp) warm))
        (do
          (image/free-stamp stamp)
-         (serial-reset
-           (~init)
+         (serial-reset (~init)
            (serial-shift (fn [k : ptr<void>] : int
                            (let [_ (image/run-finalize-hooks)
                                  s (image/build-stamp)]
                              (do
-                               (image/save-cont-to-file! ~path
-                                 k
-                                 s)
+                               (image/save-cont-to-file! ~path k s)
                                (image/free-stamp s)
                                ;; cold-start: resume the captured tail once to run loop.
                                (image/load-resume-file! ~path 0 0))))
