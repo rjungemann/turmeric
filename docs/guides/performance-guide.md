@@ -211,10 +211,16 @@ annotation holds at `-O0`.  A tail-call fixture built at `-O2` asserts nothing
 measures the C compiler.  See
 [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
 
-General/mutual tail-call elimination and trampolining are deferred to the
-post-1.0 CPS pass.  See
+General/mutual tail-call elimination and trampolining are not built.  The
+route out is mutual-tail-call SCC fusion and, for indirect calls in the
+dynamic dialects, a bounce trampoline -- routing them through the existing CPS
+backend is not it: that backend emits a tail call as an ordinary call, a panic
+check, and a continuation invocation, which was measured rather than assumed.
+See
+[proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md)
+for the measurements and the staging, and
 [control-flow-completeness-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md)
-(Phase CF1) for the full scope.
+(Phase CF1) for the self-tail-call work that shipped.
 
 ### Prime sieve
 
