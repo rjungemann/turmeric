@@ -196,6 +196,7 @@ static const char *const reserved_special_forms_[] = {
     /* core binding / control forms */
     "def", "define", "let", "let*", "letrec", "if", "do", "unsafe", "set!",
     "while", "case", "defer", "return", "match", "quote", "gensym",
+    "^tailcall",
     /* definition forms */
     "defn", "fn", "\xce\xbb", "extern-c", "defmacro", "defmodule", "import",
     "export", "load", "defstruct", "make-struct", "defopaque", "defdata",
@@ -3367,6 +3368,8 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     /* Phase 4 */
     if (name == e->sym_defer)  return elab_defer (e, call);
     if (name == e->sym_return) return elab_return(e, call);
+    /* proper-tail-calls T1: `(^tailcall <call>)` -- checked tail-call marker. */
+    if (name == e->sym_tailcall) return elab_tailcall(e, call);
     /* GF1: Generator forms */
     if (name == e->sym_gen)      return elab_gen     (e, call);
     if (name == e->sym_yield)    return elab_yield   (e, call);

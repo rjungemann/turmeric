@@ -196,6 +196,214 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e) {
     }
 }
 
+
+/* ============================================================================
+ * proper-tail-calls T1 (docs/upcoming/proper-tail-calls-plan.md, T-D1):
+ * verifying the `^tailcall` annotation.
+ *
+ * `^tailcall` is a request to be TOLD, not a request to be optimized: the
+ * author asserts that a call must become a real tail call, and a call that does
+ * not is TUR-E0716 naming the reason.  Without it, whether a call was lowered
+ * to a backedge is invisible in the source and the failure mode is a stack
+ * overflow at an unpredictable depth, in production.
+ *
+ * The check lives HERE, beside tco_mark / emit_tail, rather than in
+ * elaboration, because the tail grammar is theirs: `tco_params_simple`,
+ * `tco_let_simple` and `tco_is_self_call` ARE the decision, and a second copy
+ * of that grammar in the elaborator would be one more pair that can drift
+ * (risk TR1).  The walker below mirrors tco_mark's tail spine exactly, and
+ * additionally descends into the non-tail sub-expressions people write calls
+ * in, so it can say WHICH rule refused the call rather than only that one did.
+ * ========================================================================== */
+
+/* Why a position is not a tail position.  NULL means "this IS a tail position
+ * under tco_mark's grammar"; a non-NULL string is the reason, phrased to
+ * complete the sentence "not in tail position: ...". */
+#define TC_ARG        "the call sits in an argument position, and arguments are " \
+                      "evaluated before the call they belong to"
+#define TC_IF_COND    "the condition of an `if` is evaluated before either branch"
+#define TC_IF_ONE_ARM "a one-armed `if` (no else branch) is not part of the tail " \
+                      "grammar -- give it an else branch"
+#define TC_NOT_LAST   "only the LAST form of a `do` block is in tail position"
+#define TC_DEFER      "a `defer` in this block -- an explicit one, or the drop " \
+                      "glue of an owned local such as a `ref<T>` -- runs AFTER " \
+                      "the call, so nothing in the block is in tail position"
+#define TC_LET_INIT   "a `let` initializer is evaluated before the body"
+#define TC_LET_HARD   "a binding of the enclosing `let` is `fn`-typed, poly-fn, " \
+                      "or carrier-ABI, which takes the whole `let` off the tail " \
+                      "path"
+#define TC_MATCH_SCR  "the scrutinee of a `match` is evaluated before any arm"
+#define TC_MATCH_ARM  "a `match` arm is not part of the tail grammar yet (T3 of " \
+                      "docs/upcoming/proper-tail-calls-plan.md); rewrite the loop " \
+                      "over `if`, or drop the annotation"
+#define TC_ASCRIBE    "an ascription sits between the call and the return, and " \
+                      "is not part of the tail grammar"
+#define TC_RETURN     "an explicit `return` form is not part of the tail grammar " \
+                      "-- make the call the block's value instead"
+#define TC_WHILE      "a `while` body is not in tail position; its value is " \
+                      "discarded and the loop continues"
+#define TC_GUARD      "a `when`-guard is evaluated before the arm it guards"
+#define TC_CPS_BODY   "the enclosing function is lowered through the CPS " \
+                      "backend -- it is effect-colored, or reaches a " \
+                      "delimited-control construct -- and that backend emits " \
+                      "every call as an ordinary call followed by a " \
+                      "continuation invocation"
+
+
+/* The shape of the call itself, when the call sits in a genuine tail position
+ * but still did not become a backedge.  Returns NULL when the call shape is
+ * fine and the refusal belongs to the enclosing function (`fn_block`). */
+static const char *tc_call_shape_reason(FnDef *fd, const char *fn_cname,
+                                        const Expr *call) {
+    if (call->as.call_.fn_expr || call->as.call_.is_poly_call)
+        return "the callee is not statically known -- this is an indirect call "
+               "through a function value (a `fn`-typed parameter, a struct "
+               "field, or a rank-2 polymorphic parameter), and typed Turmeric "
+               "does not trampoline those (T-D6 of "
+               "docs/upcoming/proper-tail-calls-plan.md)";
+    if (!call->as.call_.fn_binding)
+        return "this is not a direct call to a named function";
+    if (!tco_is_self_call(fd, fn_cname, call)) {
+        /* Same function, wrong arity is a different complaint from "a different
+         * function" -- and much more likely to be a typo. */
+        bool same_fn = (call->as.call_.fn_binding == fd->binding);
+        if (!same_fn && fn_cname) {
+            char *cn = raw_name_for_binding(call->as.call_.fn_binding);
+            same_fn = (cn && strcmp(cn, fn_cname) == 0);
+            free(cn);
+        }
+        if (same_fn && call->as.call_.n_args != fd->n_params - tco_env_offset(fd))
+            return "the call is under- or over-saturated -- a backedge has to "
+                   "reassign every parameter, so the arity must match exactly";
+        return "the callee is a DIFFERENT function; only self tail calls are "
+               "guaranteed today, and mutual ones are T5 of "
+               "docs/upcoming/proper-tail-calls-plan.md";
+    }
+    return NULL;
+}
+
+static void tc_report(FnDef *fd, const char *fn_cname, Expr *call,
+                      const char *why, const char *fn_block) {
+    /* A function can be emitted more than once (header + implementation, or
+     * several ABI specializations); report each annotated call once. */
+    if (call->as.call_.tailcall_diagnosed) return;
+    call->as.call_.tailcall_diagnosed = true;
+
+    const char *reason = why;
+    if (!reason) reason = tc_call_shape_reason(fd, fn_cname, call);
+    if (!reason) reason = fn_block;
+    if (!reason) {
+        /* tco_mark's grammar and this walker disagreed.  That is exactly the
+         * TR1 drift the annotation exists to catch, so say so rather than
+         * inventing a reason -- it is a compiler bug, not the author's. */
+        reason = "the emitter's tail grammar refused it for a reason this check "
+                 "could not name -- please report this (tco_mark / emit_tail "
+                 "drift)";
+    }
+    diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0716_TAILCALL_NOT_TAIL,
+                        "`^tailcall` call is not in tail position: %s", reason);
+}
+
+/* Walk `e`, reporting every `^tailcall`-annotated call that did not become a
+ * backedge.  `why` is NULL exactly while the position is a tail position. */
+static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
+                     const char *why, const char *fn_block) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_CALL:
+            if (e->as.call_.wants_tailcall && !e->as.call_.is_tail_self_call)
+                tc_report(fd, fn_cname, e, why, fn_block);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                tc_check(ctx, fd, fn_cname, e->as.call_.args[i], TC_ARG, fn_block);
+            tc_check(ctx, fd, fn_cname, e->as.call_.fn_expr, TC_ARG, fn_block);
+            return;
+        case EX_IF:
+            tc_check(ctx, fd, fn_cname, e->as.if_.cond, TC_IF_COND, fn_block);
+            if (e->as.if_.else_or_null) {
+                tc_check(ctx, fd, fn_cname, e->as.if_.then_, why, fn_block);
+                tc_check(ctx, fd, fn_cname, e->as.if_.else_or_null, why, fn_block);
+            } else {
+                tc_check(ctx, fd, fn_cname, e->as.if_.then_,
+                         why ? why : TC_IF_ONE_ARM, fn_block);
+            }
+            return;
+        case EX_DO: {
+            bool has_defer = false;
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (e->as.do_.items[i]->kind == EX_DEFER) { has_defer = true; break; }
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                bool last = (i + 1 == e->as.do_.n);
+                const char *sub = has_defer ? (why ? why : TC_DEFER)
+                                            : (last ? why : TC_NOT_LAST);
+                tc_check(ctx, fd, fn_cname, e->as.do_.items[i], sub, fn_block);
+            }
+            return;
+        }
+        case EX_LET:
+        case EX_LETREC: {
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                tc_check(ctx, fd, fn_cname, e->as.let_.bindings[i].init,
+                         TC_LET_INIT, fn_block);
+            const char *sub = tco_let_simple(ctx, e) ? why
+                                                     : (why ? why : TC_LET_HARD);
+            tc_check(ctx, fd, fn_cname, e->as.let_.body, sub, fn_block);
+            return;
+        }
+        case EX_MATCH:
+            tc_check(ctx, fd, fn_cname, e->as.match_.scrutinee, TC_MATCH_SCR,
+                     fn_block);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                tc_check(ctx, fd, fn_cname, e->as.match_.arms[i].guard,
+                         TC_GUARD, fn_block);
+                tc_check(ctx, fd, fn_cname, e->as.match_.arms[i].body,
+                         why ? why : TC_MATCH_ARM, fn_block);
+            }
+            return;
+        case EX_ASCRIBE:
+            tc_check(ctx, fd, fn_cname, e->as.ascribe_.inner,
+                     why ? why : TC_ASCRIBE, fn_block);
+            return;
+        case EX_RETURN:
+            tc_check(ctx, fd, fn_cname, e->as.return_.value,
+                     why ? why : TC_RETURN, fn_block);
+            return;
+        case EX_WHILE:
+            tc_check(ctx, fd, fn_cname, e->as.while_.cond, TC_WHILE, fn_block);
+            tc_check(ctx, fd, fn_cname, e->as.while_.body, TC_WHILE, fn_block);
+            return;
+        case EX_BUILTIN:
+            /* Every arithmetic and comparison operator is a builtin, so this is
+             * the node a call-used-as-a-value most often sits under:
+             * `(+ 1 (f x))` is the canonical "not a tail call". */
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                tc_check(ctx, fd, fn_cname, e->as.builtin.args[i], TC_ARG, fn_block);
+            return;
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                tc_check(ctx, fd, fn_cname, e->as.dyn_op_.args[i], TC_ARG, fn_block);
+            return;
+        case EX_DYN_CALL:
+            tc_check(ctx, fd, fn_cname, e->as.dyn_call_.fn, TC_ARG, fn_block);
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                tc_check(ctx, fd, fn_cname, e->as.dyn_call_.args[i], TC_ARG, fn_block);
+            return;
+        default:
+            /* Other node kinds carry sub-expressions this walker does not
+             * enumerate (there are 120 ExprKinds).  A `^tailcall` buried in one
+             * of those goes unchecked rather than mis-reported; every shape a
+             * loop is actually written in is covered above. */
+            return;
+    }
+}
+
+/* Called from emit_fn_def once tco_mark has run (or been skipped).  `fn_block`
+ * is the enclosing function's own reason for carrying no backedge at all, or
+ * NULL when the function itself was eligible. */
+static void tc_verify_fn(EmitCtx *ctx, FnDef *fd, const char *fn_cname,
+                         const char *fn_block) {
+    tc_check(ctx, fd, fn_cname, fd->body, NULL, fn_block);
+}
+
 /* Forward decl: tail-position emitter (mutually recursive). */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                       const Expr *e, TypeKind result_kind, bool is_main);
@@ -3016,7 +3224,15 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * emittable subset is lowered through the DK-threading CPS backend (always
      * on).  Anything outside the subset returns false and keeps its direct-style
      * emission below. */
-    if (emit_cps_ir_try_fn(ctx, file, e)) return;
+    if (emit_cps_ir_try_fn(ctx, file, e)) {
+        /* proper-tail-calls T1 (T-D1): this body never reaches tco_mark, so a
+         * `^tailcall` in it would otherwise go silently unchecked.  The CPS
+         * backend emits every call as an ordinary C call, a panic check, and a
+         * continuation invocation -- Appendix A.6 of the plan measures exactly
+         * this -- so nothing in a CPS-lowered body is in tail position. */
+        if (fd) tc_verify_fn(ctx, fd, NULL, TC_CPS_BODY);
+        return;
+    }
     /* MB1 (constrained-hkt-forall-mode-b-plan): while this dict-clone's body is
      * emitted, route its class-method calls on the constrained var through the
      * dict param (emit_call_name).  emit_fn_def is single-exit (no early
@@ -4051,6 +4267,33 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         !(result_kind == TY_NIL && !is_main) && !is_main &&
         tco_params_simple(ctx, e, fd) && tco_mark(ctx, fd, fn_name, fd->body) > 0;
 
+    /* proper-tail-calls T1 (T-D1): now that tco_mark has had its say, work out
+     * what to tell the author about a `^tailcall` that did NOT become a
+     * backedge.  The conditions above are in && order, so re-test them
+     * individually to name the one that refused -- a function-level refusal is
+     * reported only when the call's own shape was fine.  The reporting itself
+     * waits until `did_general` is known, below. */
+    const char *tc_fn_block = NULL;
+    if (is_main)
+        tc_fn_block = "`main` is emitted with a different signature and carries "
+                      "no backedge";
+    else if (fd->is_variadic)
+        tc_fn_block = "the enclosing function is variadic, and a variadic body "
+                      "is never TCO-eligible";
+    else if (fd->body->kind == EX_INLINE_C)
+        tc_fn_block = "the enclosing function has an inline-C body, which the "
+                      "emitter passes through verbatim";
+    else if (result_kind == TY_NIL)
+        tc_fn_block = "the enclosing function returns nothing, so its body is "
+                      "emitted as statements rather than through the tail path";
+    else if (body_diverges)
+        tc_fn_block = "every path of the enclosing function diverges (`return` "
+                      "or `panic`), so no tail path is emitted";
+    else if (!tco_params_simple(ctx, e, fd))
+        tc_fn_block = "a parameter of the enclosing function cannot be "
+                      "reassigned by a backedge (pass-by-pointer struct, "
+                      "`fn`-typed, poly-fn, or carrier-ABI)";
+
     bool did_general = false;
     if (!prereq6_synthesized_body && !m2b_carrier_synth &&
         stackless_general_eligible(ctx, e, fd, result_kind)) {
@@ -4070,6 +4313,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         int ng = gs_find_group(ctx, fd, group);
         if (ng >= 2) did_general = emit_group_member(ctx, file, fd, result_kind, group, ng);
     }
+    /* proper-tail-calls T1 (T-D1): report here, where `did_general` is known.
+     * G3's segment splitter and G4's group driver are both FLAT-STACK
+     * lowerings: they take over the whole body and run it without growing the
+     * C stack, which is exactly what `^tailcall` asks for, so a body they
+     * claimed is not an error even when tco_mark refused it.  Reporting before
+     * this point would have made those a false positive. */
+    if (!did_general) tc_verify_fn(ctx, fd, fn_name, tc_fn_block);
+
     if (did_general) {
         /* whole body emitted by the general splitter / group shim */
     } else if (prereq6_synthesized_body) {

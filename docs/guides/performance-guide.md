@@ -157,10 +157,70 @@ left as ordinary recursive calls -- correct, but not stack-optimized:
   (`perform`/`handle`/`shift`/`await`) -- it is CPS-lowered, and the loop
   runs on the delimited-control path rather than as a C backedge.
 
-General/mutual tail-call elimination and trampolining are deferred to the
-post-1.0 CPS pass.  See
+#### Asking to be told: `^tailcall`
+
+The boundary above is a list you have to hold in your head, and nothing in the
+source says which side a given call landed on.  `^tailcall` annotates a call
+with the assertion *this must become a real tail call*; a call the compiler
+cannot place in tail position is then `TUR-E0716` at compile time, naming the
+reason, instead of a stack overflow at an unpredictable depth later.
+
+```turmeric no-check
+(defn count-down [n :int acc :int] :int
+  (if (= n 0)
+    acc
+    ^tailcall (count-down (- n 1) (+ acc 1))))   ; ok -- becomes a backedge
+
+(defn not-tail [n :int] :int
+  (if (= n 0)
+    0
+    (+ 1 ^tailcall (not-tail (- n 1)))))          ; TUR-E0716: argument position
+```
+
+The annotation is a prefix -- it binds to the call that follows it -- so it fits
+in a `match` or `handle` arm, where an extra list element would silently re-pair
+every clause after it.  The explicit `(^tailcall (f x))` spelling means exactly
+the same thing, and is what `tur fmt` writes.
+
+It changes nothing about how the call runs.  Removing it always silences the
+error; it does not make the call a tail call, it only stops asking.
+
+Every reason the boundary list gives has its own message.  `tur explain
+TUR-E0716` prints them all, with what to do about each:
+
+```
+$ tur run --debug loop.tur
+loop.tur:9:24: error [TUR-E0716]: `^tailcall` call is not in tail position: a
+`match` arm is not part of the tail grammar yet
+```
+
+Two things worth knowing about the check itself:
+
+- **It runs during C emission**, so `tur build`, `tur run` and `tur emit-c`
+  perform it and `tur check` does not.
+- **`--interpret` never reports it.**  The tree-walking evaluator trampolines
+  direct, mutual and indirect tail calls alike, so under the interpreter every
+  tail call already is one and the annotation is vacuously satisfied.  This is
+  the one place the two engines genuinely differ rather than one lagging the
+  other.
+
+The annotation is also the test instrument for the rest of the tail-call work:
+each later stage is verified by a fixture that annotates a call and asserts the
+annotation holds at `-O0`.  A tail-call fixture built at `-O2` asserts nothing
+-- clang will inline a small recursive cycle into a loop and the fixture then
+measures the C compiler.  See
+[proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
+
+General/mutual tail-call elimination and trampolining are not built.  The
+route out is mutual-tail-call SCC fusion and, for indirect calls in the
+dynamic dialects, a bounce trampoline -- routing them through the existing CPS
+backend is not it: that backend emits a tail call as an ordinary call, a panic
+check, and a continuation invocation, which was measured rather than assumed.
+See
+[proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md)
+for the measurements and the staging, and
 [control-flow-completeness-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md)
-(Phase CF1) for the full scope.
+(Phase CF1) for the self-tail-call work that shipped.
 
 ### Prime sieve
 

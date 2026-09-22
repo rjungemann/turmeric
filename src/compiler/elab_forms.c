@@ -4025,6 +4025,40 @@ Expr *elab_defer(Elab *e, const Form *call) {
  * per frame, then function-exit." The codegen emits tur_frame_fire_chain to 
  * walk the parent chain and fire all defers before returning.
  */
+/* proper-tail-calls T1 (docs/upcoming/proper-tail-calls-plan.md, T-D1):
+ * `(^tailcall <call>)`, or its prefix spelling `^tailcall <call>`.
+ *
+ * The annotation carries no semantics -- it elaborates to the call itself,
+ * unchanged -- it only turns "did this become a tail call?" into a question the
+ * compiler answers.  The check lives in the emitter (emit_fns.c), next to the
+ * `tco_mark` / `emit_tail` pair that decides it, so the annotation and the
+ * lowering cannot drift apart; here we only mark the node.
+ *
+ * An ascription between the marker and the call is transparent: `^tailcall`
+ * binds to the call underneath it, which is where the tail position is. */
+Expr *elab_tailcall(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0716_TAILCALL_NOT_TAIL,
+                            "`^tailcall` takes exactly one call: "
+                            "`^tailcall (f x)`");
+        return NULL;
+    }
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    Expr *target = inner;
+    while (target->kind == EX_ASCRIBE) target = target->as.ascribe_.inner;
+    if (target->kind != EX_CALL) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0716_TAILCALL_NOT_TAIL,
+                            "`^tailcall` must annotate a function call; "
+                            "a tail call is a call, and there is nothing here "
+                            "to place in tail position");
+        return NULL;
+    }
+    target->as.call_.wants_tailcall = true;
+    return inner;
+}
+
 Expr *elab_return(Elab *e, const Form *call) {
     /* return is only valid inside function bodies */
     if (e->scope == &e->global) {

@@ -1,0 +1,10 @@
+;; proper-tail-calls T1 (T-D1): `^tailcall` annotates a CALL.  A tail call is a
+;; call; there is nothing to place in tail position here, so this is rejected in
+;; elaboration rather than reaching the emitter's tail-grammar walk.
+
+(defn f [n : int] : int
+  ^tailcall n)
+
+(defn main [] : int
+  (println (f 1))
+  0)

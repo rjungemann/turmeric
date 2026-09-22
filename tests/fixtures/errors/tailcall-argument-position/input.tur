@@ -1,0 +1,17 @@
+;; proper-tail-calls T1 (T-D1): the plainest "not a tail call" there is -- the
+;; call's value is consumed by an enclosing operator, so a frame has to survive
+;; it.  `(+ 1 (f ...))` is what accidentally-non-tail recursion looks like, and
+;; the annotation is how you find out you wrote one.
+;;
+;; `+` is an EX_BUILTIN rather than an EX_CALL, which is why the verifier walks
+;; builtin arguments too: every arithmetic and comparison operator in the
+;; language lands on that node.
+
+(defn not-tail [n : int] : int
+  (if (= n 0)
+    0
+    (+ 1 ^tailcall (not-tail (- n 1)))))
+
+(defn main [] : int
+  (println (not-tail 3))
+  0)

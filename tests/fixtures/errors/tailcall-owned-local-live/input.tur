@@ -1,0 +1,17 @@
+;; proper-tail-calls T1 (T-D1) / T-D3: an owned local's drop glue runs AFTER
+;; the call, so the call is not in tail position -- tco_mark's `defer` bail
+;; (plan section 2.2) is correct, and this fixture is what it looks like from
+;; the outside.  The `ref<T>` here is never passed to the recursive call and is
+;; dead at that point, so T4 (drop hoisting by liveness) would legally move the
+;; drop before the call and restore tail position; until then, the annotation
+;; is the difference between knowing and not knowing.
+
+(defn with-ref [n : int] : int
+  (let [b (ref 1)]
+    (if (= n 0)
+      0
+      ^tailcall (with-ref (- n 1)))))
+
+(defn main [] : int
+  (println (with-ref 3))
+  0)

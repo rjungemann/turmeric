@@ -26,6 +26,12 @@ typedef struct Reader {
     bool              neoteric_enabled;
     /* RM0/RM1: User-defined #-dispatch macros. May be NULL (no user macros). */
     const ReaderMacroRegistry *user_macros;
+    /* proper-tail-calls T1: true while reading the FIRST element of a `(...)`
+     * list.  Consumed (and cleared) by read_form, which hands it to the symbol
+     * reader so `^tailcall` keeps its prefix meaning everywhere EXCEPT list
+     * head -- otherwise the explicit `(^tailcall (f x))` spelling would read
+     * as a one-element list wrapping a second annotation. */
+    bool at_list_head;
 } Reader;
 
 /* Forward declaration; the RM1 implementation lives further down, after the
@@ -194,6 +200,9 @@ static bool is_sym_cont(int c) {
 
 static Form *read_form(Reader *r);
 static Form *read_attribute(Reader *r);
+/* `head_pos` is true when this symbol is the FIRST element of a `(...)`
+ * list, which suppresses the `^tailcall` prefix sugar below. */
+static Form *read_symbol_or_minus_at(Reader *r, bool head_pos);
 
 static Form *read_string(Reader *r) {
     uint32_t start_line = r->line;
@@ -808,7 +817,7 @@ static Form *read_borrow(Reader *r) {
     return form_list(r->arena, span, items, 2);
 }
 
-static Form *read_symbol_or_minus(Reader *r) {
+static Form *read_symbol_or_minus_at(Reader *r, bool head_pos) {
     uint32_t start_line = r->line;
     uint32_t start_col = r->col;
     size_t start_off = r->pos;
@@ -856,6 +865,36 @@ static Form *read_symbol_or_minus(Reader *r) {
                             "delimiter instead, as `f(x)` or `(f x)`");
         r->error = true;
         return NULL;
+    }
+
+    /* proper-tail-calls T1 (docs/upcoming/proper-tail-calls-plan.md, T-D1):
+     * `^tailcall` is a PREFIX annotation on the expression that follows it,
+     * so `^tailcall (loop v)` reads as `(^tailcall (loop v))`.  It has to be
+     * a prefix rather than an extra element because the shapes that most want
+     * it -- a `match` or `handle` arm -- pair up two forms at a time, and an
+     * extra element there silently re-pairs every clause after it.
+     *
+     * Suppressed in list-head position (`head_pos`), which is what lets the
+     * explicit `(^tailcall (loop v))` spelling read as itself; the sweet-exp
+     * indentation layer produces that spelling from a `^tailcall`-led line. */
+    if (!head_pos && name.len == 9 && memcmp(name.p, "^tailcall", 9) == 0) {
+        Span op_span = span;
+        skip_ws_and_comments(r);
+        if (peek(r) == -1 || peek(r) == ')' || peek(r) == ']' || peek(r) == '}') {
+            diag_emit(DIAG_ERROR, op_span,
+                      "`^tailcall` requires a call after it");
+            r->error = true;
+            return NULL;
+        }
+        Form *inner = read_form(r);
+        if (!inner) return NULL;
+        Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+        items[0] = form_sym(r->arena, op_span,
+                            symtab_intern(r->st, strslice("^tailcall", 9)));
+        items[1] = inner;
+        Span whole = span_from_to(r, start_line, start_col, start_off,
+                                  inner->span.off_end);
+        return form_list(r->arena, whole, items, 2);
     }
 
     const Symbol *sym = symtab_intern(r->st, name);
@@ -959,7 +998,9 @@ static Form *read_seq(Reader *r, char open, char close, FormTag tag,
             free(items);
             return NULL;
         }
+        r->at_list_head = (tag == F_LIST && n == 0);
         Form *child = read_form(r);
+        r->at_list_head = false;
         if (!child) {
             free(items);
             return NULL;
@@ -1057,7 +1098,7 @@ static Form *read_reads_annot(Reader *r) {
                        "unterminated #reads frame (missing ']')");
         if (!vec) return NULL;               /* error already emitted */
     } else {
-        one = read_symbol_or_minus(r);       /* the single parameter name */
+        one = read_symbol_or_minus_at(r, true);  /* the single parameter name */
         if (!one) return NULL;               /* error already emitted */
     }
     uint32_t n = vec ? vec->as.list.len : 1;
@@ -1102,7 +1143,7 @@ static Form *read_writes_annot(Reader *r) {
                        "unterminated #writes frame (missing ']')");
         if (!vec) return NULL;            /* error already emitted */
     } else {
-        one = read_symbol_or_minus(r);    /* the single parameter name */
+        one = read_symbol_or_minus_at(r, true); /* the single parameter name */
         if (!one) return NULL;            /* error already emitted */
     }
     uint32_t n = vec ? vec->as.list.len : 1;
@@ -3356,6 +3397,10 @@ static Form *read_char_literal(Reader *r) {
 }
 
 static Form *read_form(Reader *r) {
+    /* proper-tail-calls T1: consume the one-shot list-head flag before any
+     * recursive read can see it. */
+    bool head_pos = r->at_list_head;
+    r->at_list_head = false;
     skip_ws_and_comments(r);
     if (r->error) return NULL;
     int c = peek(r);
@@ -3522,7 +3567,7 @@ static Form *read_form(Reader *r) {
     if (c == '~') return read_unquote(r);
     /* Phase 12: & as borrow prefix sugar (&x → (& x), &mut x → (&mut x)) */
     if (c == '&') return read_borrow(r);
-    if (is_sym_start(c)) return read_symbol_or_minus(r);
+    if (is_sym_start(c)) return read_symbol_or_minus_at(r, head_pos);
 
     Span s = span_point(r);
     diag_emit(DIAG_ERROR, s, "unexpected character '%c' (0x%02x)", (char)c, c);
@@ -4495,6 +4540,7 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
     r.line = start_line ? start_line : 1;
     r.col = 1;
     r.error = false;
+    r.at_list_head = false;
     /* Phase S1: Set syntax feature flags based on reader type from SourceFile.
      * curly-infix is on in every dialect now -- bare {a + b} reads as (+ a b)
      * regardless of #lang.  Contract types live behind explicit `#refine{...}`. */

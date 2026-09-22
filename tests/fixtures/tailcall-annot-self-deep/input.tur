@@ -1,0 +1,21 @@
+;; proper-tail-calls T1 (docs/upcoming/proper-tail-calls-plan.md, T-D1):
+;; `^tailcall` is a CHECKED annotation -- the compiler either places the call
+;; in tail position or rejects it with TUR-E0716.  This fixture is the positive
+;; half: the annotation is accepted, and the guarantee it asserts actually
+;; holds at ten million frames.
+;;
+;; The `flags` file builds this at -O0 (`--debug`), and that is the whole
+;; point.  Section 2.4 of the plan measured `-O2` "passing" mutual recursion
+;; that clang had simply inlined into a loop -- the probe measured the C
+;; compiler, not Turmeric.  At -O0 there is no inliner to borrow a pass from:
+;; either the emitter produced a `__tur_tailcall:` backedge or this overflows
+;; the C stack long before it reaches 10,000,000.
+
+(defn count-down [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    ^tailcall (count-down (- n 1) (+ acc 1))))
+
+(defn main [] : int
+  (println (count-down 10000000 0))
+  0)

@@ -1,0 +1,15 @@
+;; proper-tail-calls T1 (T-D1) / T-D6: a call through a `fn` VALUE cannot be a
+;; backedge -- the callee is a runtime value, so there is no label to jump to.
+;; This is the row that fails at -O2 as well as -O0, at a depth (~29,000 on an
+;; 8 MB stack) low enough for ordinary programs to reach, and today it fails
+;; silently.  T-D6 keeps the limit for typed Turmeric and gives the dynamic
+;; dialects a trampoline; either way the annotation names it now.
+
+(defn add1 [n : int] : int (+ n 1))
+
+(defn via-fn [f : (fn [int] int) n : int] : int
+  (if (= n 0) 0 ^tailcall (f (- n 1))))
+
+(defn main [] : int
+  (println (via-fn add1 3))
+  0)
