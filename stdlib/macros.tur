@@ -52,8 +52,14 @@
             (first clauses)
             (second clauses)
             (list cond ~@(rest (rest clauses))))))))
-  (defmacro when [test body] (if test (do body)))
-  (defmacro unless [test body] (if test nil (do body)))
+  ;; `when` / `unless` take a BODY, not a single form.  They were `[test body]`
+  ;; for a long time, which made every multi-statement body pay an explicit
+  ;; `(do ...)` -- and made `(when c a b)` a hard error whose primary location
+  ;; was this file rather than the call site.  `& body` matches `for`,
+  ;; `with-resource` and `while`, and it is what `fmt_when` and the turi
+  ;; docstrings already describe.  `(when c)` is `(do)`, i.e. nil.
+  (defmacro when [test & body] (if test (do ~@body)))
+  (defmacro unless [test & body] (if test nil (do ~@body)))
   ;; lattice-vocabulary-plan L1: `min` / `max` were macros here.  They expanded
   ;; to the BUILTIN `<=` / `>=`, so they worked only where those operators do --
   ;; int and float concretely, and nowhere else.  `(max "a" "b")` was

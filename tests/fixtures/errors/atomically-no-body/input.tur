@@ -1,0 +1,7 @@
+;; `atomically` used to be dispatched only at `len == 2`, so every other arity
+;; fell out of the special-form table and reported `unknown function or
+;; operator 'atomically'` -- a wrong diagnostic for an arity mistake.  The row
+;; is ungated now, so a bare `(atomically)` gets a real arity error.
+(defn main [] : int
+  (atomically)
+  0)

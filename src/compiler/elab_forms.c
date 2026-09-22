@@ -3928,12 +3928,36 @@ Expr *elab_case(Elab *e, const Form *call) {
     return elab_form(e, let_form);
 }
 
-/* Phase 4: defer — (defer expr)
- * Records an expression to be evaluated at scope exit, in LIFO order.
+/* Elaborate forms [start..len) of `call` as one implicit body block.
+ * A single form elaborates to itself; two or more are wrapped in an EX_DO so
+ * every consumer that wants one `Expr *` (capture analysis, the reset/defer
+ * lowerings) keeps working unchanged. */
+Expr *elab_implicit_do(Elab *e, const Form *call, uint32_t start) {
+    uint32_t n = call->as.list.len - start;
+    if (n == 0) return e_nil(e, call->span);
+    if (n == 1) return elab_form(e, call->as.list.items[start]);
+    Expr **items = (Expr **)arena_alloc(e->arena, n * sizeof(Expr *));
+    for (uint32_t i = 0; i < n; i++) {
+        items[i] = elab_form(e, call->as.list.items[start + i]);
+        if (!items[i]) return NULL;
+    }
+    Expr *out = expr_new(e->arena, EX_DO, items[n - 1]->type, call->span);
+    out->as.do_.items = items;
+    out->as.do_.n     = n;
+    return out;
+}
+
+/* Phase 4: defer — (defer body ...)
+ * Records a body to be evaluated at scope exit, in LIFO order.
  * For now, only valid inside let/do/defn/while bodies.
  * The body is elaborated but its value is discarded (defer always evaluates to nil).
  * v1 lowering (effects-plan.md §6.10): performs capture analysis for thunk lifting.
  * Nested defers are not yet supported.
+ *
+ * The body is VARIADIC.  It used to read items[1] and nothing else, so
+ * `(defer a b)` compiled clean and silently dropped `b` on both the compiled
+ * path and under `--interpret`.  Forms 2..n now join an implicit `do`, which
+ * collect_free_vars below walks exactly as it walked a hand-written one.
  */
 Expr *elab_defer(Elab *e, const Form *call) {
     if (call->as.list.len < 2) {
@@ -3944,7 +3968,7 @@ Expr *elab_defer(Elab *e, const Form *call) {
      * The body runs at process exit via atexit(). No captures — at global
      * scope all referenced names are already global bindings. */
     if (e->scope == &e->global) {
-        Expr *body = elab_form(e, call->as.list.items[1]);
+        Expr *body = elab_implicit_do(e, call, 1);
         if (!body) return NULL;
         Expr *out = expr_new(e->arena, EX_DEFER, TYPE_NIL, call->span);
         out->as.defer_.body       = body;
@@ -3952,8 +3976,8 @@ Expr *elab_defer(Elab *e, const Form *call) {
         out->as.defer_.n_captures = 0;
         return out;
     }
-    /* Elaborate the body expression */
-    Expr *body = elab_form(e, call->as.list.items[1]);
+    /* Elaborate the body (forms 1..n as one implicit do) */
+    Expr *body = elab_implicit_do(e, call, 1);
     if (!body) return NULL;
     
     /* v1 lowering: Collect free variables (captures) for thunk lifting.

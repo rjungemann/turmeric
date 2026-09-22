@@ -1,0 +1,36 @@
+;; `reset`, `serial-reset`, `cloneable-reset` and `atomically` take a BODY.
+;;
+;; Guard for single-body-control-forms-require-an-explicit-do.  Each of the
+;; three reset flavors used to be "(... body) requires exactly one argument",
+;; so a multi-step delimited computation paid an explicit `(do ...)`.  Folding
+;; the `do` in changes no semantics: the delimiter delimits the same extent.
+;;
+;; `atomically` was worse -- its dispatch row gated on `len == 2`, so a
+;; 3-element call fell out of the special-form table entirely and reported
+;; `unknown function or operator 'atomically'`, which says nothing about arity.
+;; It is ungated now, and a body that is not already an `(stm ...)` becomes an
+;; IMPLICIT transaction block.
+;;
+;; Expected output:
+;;   r1
+;;   r2
+;;   3
+;;   s1
+;;   7
+;;   c1
+;;   9
+;;   true
+;;   true
+;;   false
+
+(defn main [] : int
+  (println (reset (println "r1") (println "r2") (+ 1 2)))
+  (println (serial-reset (println "s1") 7))
+  (println (cloneable-reset (println "c1") 9))
+  (let [tv (tvar/new 5)]
+    ;; Implicit stm block: write 7, then cas 7->8 in the same transaction.
+    (println (atomically (tvar/write tv 7) (tvar/cas tv 7 8)))
+    ;; The explicit `(atomically (stm ...))` spelling still means what it did.
+    (println (atomically (stm (tvar/cas tv 8 9))))
+    (println (atomically (stm (tvar/cas tv 99 99)))))
+  0)

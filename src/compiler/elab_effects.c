@@ -194,9 +194,13 @@ static void record_reset_node(Elab *e, Expr *node) {
 }
 
 Expr *elab_reset(Elab *e, const Form *call) {
-    if (call->as.list.len != 2) {
+    /* The body is VARIADIC: `(reset a b)` used to be
+     * "(reset body) requires exactly one argument", so a multi-step delimited
+     * computation paid an explicit `(do ...)`.  Folding the `do` in changes no
+     * semantics -- the delimiter delimits exactly the same extent. */
+    if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
-                  "(reset body) requires exactly one argument");
+                  "(reset body ...) requires at least one body expression");
         return NULL;
     }
     /* Item B (resuming-shift plan): a plain `reset` is the abortive delimiter
@@ -212,7 +216,7 @@ Expr *elab_reset(Elab *e, const Form *call) {
                  e->reified_serial_at_depth[d] = false;
                  /* A plain `reset` is flavor-flexible -- not pinned cloneable. */
                  e->pinned_cloneable_at_depth[d] = false; }
-    Expr *body = elab_form(e, call->as.list.items[1]);
+    Expr *body = elab_implicit_do(e, call, 1);
     bool reified = track && e->reified_shift_at_depth[d];
     bool serial  = track && e->reified_serial_at_depth[d];
     e->cloneable_reset_depth--;
@@ -424,9 +428,10 @@ static void check_cloneable_capture_precise(Elab *e, Span span,
  * Similar to reset, but all captured values must implement Clone.
  * The body can use cloneable-shift to capture a cloneable continuation. */
 Expr *elab_cloneable_reset(Elab *e, const Form *call) {
-    if (call->as.list.len != 2) {
+    /* Variadic body -- see elab_reset. */
+    if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
-                  "(cloneable-reset body) requires exactly one argument");
+                  "(cloneable-reset body ...) requires at least one body expression");
         return NULL;
     }
     /* CPS-CL7: track nesting depth so cloneable-shift can detect missing reset */
@@ -434,7 +439,7 @@ Expr *elab_cloneable_reset(Elab *e, const Form *call) {
     /* Capability-folding item 1: this depth is pinned cloneable by the keyword, so
      * a `serial-cont` plain-`shift` bound here is rejected with a clear message. */
     if (d >= 0 && d < 64) e->pinned_cloneable_at_depth[d] = true;
-    Expr *body = elab_form(e, call->as.list.items[1]);
+    Expr *body = elab_implicit_do(e, call, 1);
     e->cloneable_reset_depth--;
     if (!body) return NULL;
     /* CPS-CL10 / E4: verify captures of the reified continuation body. */
@@ -1296,13 +1301,14 @@ static void check_serializable_capture_precise(Elab *e, Span span,
 /* (serial-reset body) - Establish a serializable continuation boundary.
  * Like reset, but marks the region so serial-shift can capture it. */
 Expr *elab_serial_reset(Elab *e, const Form *call) {
-    if (call->as.list.len != 2) {
+    /* Variadic body -- see elab_reset. */
+    if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
-                  "(serial-reset body) requires exactly one argument");
+                  "(serial-reset body ...) requires at least one body expression");
         return NULL;
     }
     e->serial_reset_depth++;
-    Expr *body = elab_form(e, call->as.list.items[1]);
+    Expr *body = elab_implicit_do(e, call, 1);
     e->serial_reset_depth--;
     if (!body) return NULL;
     /* E4a: verify captures of the reified serial continuation body. */

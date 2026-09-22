@@ -4268,9 +4268,8 @@
 
 (defn httpd-mw-recover-500 [conn : ptr<void>] : nil
   (when (= 0 (httpd-resp-status-get conn))
-    (do
-      (httpd-resp-status! conn 500)
-      (httpd-resp-body! conn "Internal Server Error"))))
+    (httpd-resp-status! conn 500)
+    (httpd-resp-body! conn "Internal Server Error")))
 
 ;;; mw-recover -- catch a downstream panic and respond 500.
 ;;;

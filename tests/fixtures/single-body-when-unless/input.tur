@@ -1,0 +1,48 @@
+;; `when` / `unless` take a BODY, not a single form.
+;; Guard for single-body-control-forms-require-an-explicit-do: `(when c a b)`
+;; used to be a hard error whose primary location was stdlib/macros.tur, so
+;; every multi-statement body paid an explicit `(do ...)`.
+;;
+;; Expected output:
+;;   w1
+;;   w2
+;;   single
+;;   u1
+;;   u2
+;;   def-in-body-1
+;;   guard-right
+;;   guard-other
+;;   done
+
+(defstruct Point [x : int y : int])
+
+;; `when` is ALSO the match-guard keyword -- a positional token inside a match
+;; clause, never a macro call head.  The macro change must not reach it.
+(defn classify [p : Point] : cstr
+  (match p
+    (Point x y) when (> x 0) "guard-right"
+    (Point x y) "guard-other"))
+
+(defn main [] : int
+  (when (= 1 1)
+    (println "w1")
+    (println "w2"))
+  (when (= 1 1) (println "single"))
+  (when (= 1 2)
+    (println "never")
+    (println "never2"))
+  (unless (= 1 2)
+    (println "u1")
+    (println "u2"))
+  (unless (= 1 1)
+    (println "never3"))
+  ;; An empty body is `(do)`, i.e. nil -- not an arity error.
+  (when (= 1 1))
+  ;; A multi-form body is a real body position, so `def` scopes over it.
+  (when (= 1 1)
+    (def n 1)
+    (println (if (= n 1) "def-in-body-1" "bad")))
+  (println (classify (Point 1 2)))
+  (println (classify (Point -1 2)))
+  (println "done")
+  0)

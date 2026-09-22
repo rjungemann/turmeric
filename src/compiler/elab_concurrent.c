@@ -725,27 +725,52 @@ Expr *elab_stm(Elab *e, const Form *call) {
 }
 
 Expr *elab_atomically(Elab *e, const Form *call) {
-    if (call->as.list.len != 2) {
-        diag_emit(DIAG_ERROR, call->span, "atomically requires exactly one stm block argument");
+    /* The body is VARIADIC.  `(atomically (stm ...))` is still the explicit
+     * spelling; anything else is wrapped in an IMPLICIT stm block, so
+     * `(atomically (tvar/write tv 7) (tvar/cas tv 7 8))` means what it reads
+     * as.  The dispatch row in elab_call.c used to gate on `len == 2`, which
+     * dropped a 3-element call out of the special-form table entirely and
+     * reported `unknown function or operator 'atomically'` -- a wrong
+     * diagnostic for an arity mistake. */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "atomically requires at least one body expression");
         return NULL;
     }
 
-    Form *arg = call->as.list.items[1];
+    uint32_t n = call->as.list.len - 1;
 
-    /* MS2: Set atomically flag so elab_resume can detect TUR-E0502 */
+    /* MS2: Set atomically flag so elab_resume can detect TUR-E0502.
+     * elab_in_stm is set too: the body forms are inside the transaction
+     * whether or not the user wrote the `(stm ...)` by hand, so `retry`,
+     * `check` and `or-else` are in scope for an implicit block. */
     bool prev_in_atomically = elab_in_atomically;
+    bool prev_in_stm        = elab_in_stm;
     elab_in_atomically = true;
+    elab_in_stm        = true;
 
-    /* The argument should be an stm block or something that evaluates to one */
-    /* For v1, we just wrap it in atomically */
-    Expr *stm_expr = elab_form(e, arg);
+    Expr **items = (Expr **)arena_alloc(e->arena, n * sizeof(Expr *));
+    for (uint32_t i = 0; i < n; i++) {
+        items[i] = elab_form(e, call->as.list.items[1 + i]);
+        if (!items[i]) {
+            elab_in_atomically = prev_in_atomically;
+            elab_in_stm        = prev_in_stm;
+            return NULL;
+        }
+    }
+
     elab_in_atomically = prev_in_atomically;
-    if (!stm_expr) return NULL;
+    elab_in_stm        = prev_in_stm;
 
-    /* Check if it's already an stm block */
-    if (stm_expr->kind != EX_STM) {
-        diag_emit(DIAG_ERROR, call->span, "atomically requires an stm block as argument");
-        return NULL;
+    Expr *stm_expr;
+    if (n == 1 && items[0]->kind == EX_STM) {
+        /* Explicit `(atomically (stm ...))` -- unchanged. */
+        stm_expr = items[0];
+    } else {
+        /* Implicit transaction block over the body forms. */
+        stm_expr = expr_new(e->arena, EX_STM, items[n - 1]->type, call->span);
+        stm_expr->as.stm_.body   = items;
+        stm_expr->as.stm_.n_body = n;
     }
 
     Expr *result = expr_new(e->arena, EX_ATOMICALLY, stm_expr->type, call->span);

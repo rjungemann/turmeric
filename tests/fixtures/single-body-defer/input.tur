@@ -1,0 +1,36 @@
+;; `defer` takes a BODY, not a single form.
+;;
+;; Guard for the HIGH sub-case of single-body-control-forms-require-an-explicit-do:
+;; elab_defer used to elaborate items[1] and never read 2..n, so `(defer a b)`
+;; compiled clean, exited 0, and SILENTLY DROPPED `b` -- on the compiled path
+;; and under --interpret alike.  This asserts every form runs, in order, with
+;; captures intact, at both a global and a scoped defer.
+;;
+;; Expected output:
+;;   body
+;;   d1
+;;   captured
+;;   also
+;;   single
+;;   main-end
+;;   g1
+;;   g2
+
+(defer (println "g1") (println "g2"))
+
+(defn scoped [] : int
+  (let [x "captured"
+        y "also"]
+    (defer (println "d1") (println x) (println y))
+    (println "body"))
+  0)
+
+(defn one-form [] : int
+  (defer (println "single"))
+  0)
+
+(defn main [] : int
+  (scoped)
+  (one-form)
+  (println "main-end")
+  0)
