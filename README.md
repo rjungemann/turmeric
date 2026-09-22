@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.50.0` -- A variadic rest parameter can be declared `: any`, `ref`/`chan`/`atomic` carry parametric payloads instead of `:int`, and `future.tur` and `fiber.tur` note the region stores they were missing.
+**Latest release:** `v0.51.0` -- `when`, `unless`, `defer` and eleven other forms take a multi-form body instead of demanding an explicit `(do ...)`, and `(defer a b)` no longer silently drops `b`.
 
 ## What
 

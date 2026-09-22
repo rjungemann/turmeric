@@ -2,6 +2,62 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.51.0] -- 2026-09-21
+
+### Added
+
+- **`when`, `unless`, `defer` and eleven other forms take a multi-form body.**
+  `when` / `unless` are `[test & body]`; `defer`, `reset`, `cloneable-reset`,
+  `serial-reset`, `atomically`, the nine `stdlib/effects.tur` handlers,
+  `with-capability` and the two `defimage-*-hook` macros no longer need the
+  explicit `(do ...)` the guides used to teach as design. A new
+  `elab_implicit_do` elaborates forms `[start..len)` as one block -- one form
+  stays itself, two or more become an `EX_DO` -- so capture analysis and the
+  reset lowerings still take a single expression, unchanged. The elaborator and
+  the prelude are shared, so both back ends and both dialects get it at once.
+  The match-guard `when` is a positional token, not a macro head, and is
+  untouched.
+- **Try Turmeric's docs pane leads with the quickstart and a Recently Added
+  section.** The pane used to open on whatever guide sorted first in the pack.
+  The quickstart is pinned at the top of the nav and is where the pane opens
+  when nothing else says otherwise (an explicit `#doc=`, and wherever you were
+  last, both still win). Recently Added lists the ten newest pages, dated, flat
+  across guides and API modules, in a `<details>` closed on load that springs
+  open when you are reading one of its entries. The dates come from git at pack
+  time, so a page cannot forget to carry one -- or keep claiming to be new.
+
+### Fixed
+
+- **`(defer a b)` silently dropped `b`.** `elab_defer` elaborated `items[1]`
+  and never read 2..n, so the program compiled clean, exited 0, and ran only
+  the first form -- on the compiled path and under `--interpret` alike. Fixed
+  at both sites (global/`atexit` and in-scope).
+- **`atomically` reported `unknown function or operator 'atomically'` on every
+  arity but two.** Its dispatch row gated on `len == 2`, so an arity mistake
+  fell out of the special-form table entirely and got a diagnostic about the
+  wrong thing. The row is ungated now, and the arity error is pinned by a
+  fixture.
+- **A guide fence marked `no-manifest-check` swallowed the section under it.**
+  `genguides` stripped only the `no-check` marker before handing markdown to
+  python-markdown, whose `fenced_code` accepts a single bare word; a fence
+  carrying the longer marker was not a fence at all, so everything up to the
+  next one -- a heading and the block under it -- rendered inside a paragraph.
+  Silently. The stripper matches markers generically now.
+- **Two docs-nav escaping bugs.** A guide description containing a `"` closed
+  the nav's `title` attribute early and scattered the rest of its own text
+  across the tag; the front-matter reader kept YAML quotes, so the five guides
+  whose titles contain a colon rendered as `"Introducing Saffron"`.
+
+### Docs
+
+- **Plans for R7RS-small as a `#lang` over the Turmeric runtime, and for proper
+  tail calls**, in `docs/upcoming/`.
+- The continuations guide and tutorial gain 23 sweet-exp siblings (every
+  Turmeric block in both files is paired and parse-checked now), Racket
+  quotations are highlighted rather than flat, and three prose blocks stop
+  claiming to be Turmeric. The old PWA recovery runbook is removed, and
+  `binding-forms-guide.md` stops teaching the `(do ...)` workaround.
+
 ## [0.50.0] -- 2026-09-19
 
 ### Added
