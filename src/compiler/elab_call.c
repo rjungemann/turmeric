@@ -3654,8 +3654,12 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
         return elab_select(e, call);
     /* Phase 20: Software Transactional Memory */
     if (name == e->sym_stm) return elab_stm(e, call);
-    if (name == e->sym_atomically && call->as.list.len == 2)
-        return elab_atomically(e, call);
+    /* Ungated, like `stm` one line up.  The row used to gate on `len == 2`, so
+     * every other arity fell out of this table and reported `unknown function
+     * or operator 'atomically'` -- a wrong diagnostic for an arity mistake.
+     * The body is variadic now, and a bare `(atomically)` gets a real arity
+     * error from elab_atomically. */
+    if (name == e->sym_atomically) return elab_atomically(e, call);
     if (name == e->sym_retry) return elab_retry(e, call);
     if (name == e->sym_check && call->as.list.len == 2)
         return elab_check(e, call);

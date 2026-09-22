@@ -222,11 +222,11 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         {"fn",       "(fn [p1 :T1 ...] :Ret body) -- anonymous function (lambda)"},
         {"def",      "(def name [: type] value) -- bind name; a top-level binding at the top level, scoped over the rest of the body inside one"},
         {"define",   "(define name [: type] value) -- a spelling of def; same meaning in both positions"},
-        {"while",    "(while cond body) -- loop while cond is true"},
+        {"while",    "(while cond body ...) -- loop while cond is true"},
         {"set!",     "(set! var value) -- mutate an existing variable binding"},
         {"quote",    "(quote x) -- return x unevaluated; shorthand: 'x"},
         {"return",   "(return value) -- early return from a function"},
-        {"defer",    "(defer body) -- run body when current scope exits"},
+        {"defer",    "(defer body ...) -- run body when current scope exits"},
         /* Pattern matching and data */
         {"match",    "(match val (Pattern body) ...) -- destructure and branch on value"},
         {"defstruct","(defstruct Name [field :Type ...]) -- define a named product type"},

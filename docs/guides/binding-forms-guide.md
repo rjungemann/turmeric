@@ -69,7 +69,7 @@ do
 | `fn` body | `(fn [] (def x 1) x)` |
 | `let` body | `(let [y 2] (def x y) x)` |
 | `do` body | `(do (def x 1) x)` |
-| `when` / `while` body | `(when c (do (def x 1) (use x)))` |
+| `when` / `unless` / `while` body | `(when c (def x 1) (use x))` |
 | macro expansion | any of the above, after expansion |
 
 An *expression* position -- an `if` branch, a call argument, a `cond` test --

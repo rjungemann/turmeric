@@ -1,0 +1,28 @@
+;; The stdlib effect handlers take a BODY.
+;;
+;; Guard for single-body-control-forms-require-an-explicit-do: the nine
+;; `stdlib/effects.tur` handlers were `[body]`, one form each, while
+;; `with-resource` / `with-lock` / `with-unique` in the same stdlib were
+;; already `& body`.  Leaving half a family variadic is how the next person
+;; learns the wrong rule.
+;;
+;; Expected output:
+;;   w1
+;;   w2
+;;   after-silent
+;;   log-line
+;;   done
+
+(load "stdlib/effects.tur")
+
+(defn main [] : int
+  (with-write
+    (perform (Write "w1"))
+    (perform (Write "w2")))
+  (with-silent-log
+    (perform (Log "info" "suppressed"))
+    (println "after-silent"))
+  (with-stderr-log
+    (perform (Log "info" "log-line")))
+  (println "done")
+  0)

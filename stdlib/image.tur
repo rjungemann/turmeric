@@ -255,7 +255,7 @@
 ;;;
 ;;; Since: Phase AI (AI5.1)
 
-(defmacro defimage-reload-hook [name body] `(defn ~name [] : int ~body))
+(defmacro defimage-reload-hook [name & body] `(defn ~name [] : int (do ~@body)))
 ;;; defimage-finalize-hook -- define a named finalize hook function.
 ;;;
 ;;; Sugar for `(defn name [] : int body)`, the save-side companion of
@@ -263,7 +263,7 @@
 ;;;
 ;;; Since: Phase AI (AI5.3)
 
-(defmacro defimage-finalize-hook [name body] `(defn ~name [] : int ~body))
+(defmacro defimage-finalize-hook [name & body] `(defn ~name [] : int (do ~@body)))
 ;; ---------------------------------------------------------------------------
 ;; Image globals (AI3).
 ;;
@@ -777,20 +777,20 @@
          (do (image/free-stamp stamp) warm))
        (do
          (image/free-stamp stamp)
-         (serial-reset (do
-                         (~init)
-                         (serial-shift (fn [k : ptr<void>] : int
-                                         (let [_ (image/run-finalize-hooks)
-                                               s (image/build-stamp)]
-                                           (do
-                                             (image/save-cont-to-file! ~path
-                                               k
-                                               s)
-                                             (image/free-stamp s)
-                                             ;; cold-start: resume the captured tail once to run loop.
-                                             (image/load-resume-file! ~path 0 0))))
-                           0)
-                         (~loop)))))))
+         (serial-reset
+           (~init)
+           (serial-shift (fn [k : ptr<void>] : int
+                           (let [_ (image/run-finalize-hooks)
+                                 s (image/build-stamp)]
+                             (do
+                               (image/save-cont-to-file! ~path
+                                 k
+                                 s)
+                               (image/free-stamp s)
+                               ;; cold-start: resume the captured tail once to run loop.
+                               (image/load-resume-file! ~path 0 0))))
+             0)
+           (~loop))))))
 ;;; with-image-cache -- single-body warm-start wrapper.
 ;;;
 ;;; If a valid image exists, restore it; otherwise run body, then capture an

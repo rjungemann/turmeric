@@ -172,8 +172,8 @@
 ;;; Since: Phase 19
 
 
-(defmacro with-write [body]
-  (handle body (Write [s] k) (do (println s) (resume k nil))))
+(defmacro with-write [& body]
+  (handle (do ~@body) (Write [s] k) (do (println s) (resume k nil))))
 ;;; with-fail-panic -- handle the Fail effect by panicking with the message.
 ;;;
 ;;; Parameters:
@@ -187,7 +187,7 @@
 ;;;
 ;;; Since: Phase 19
 
-(defmacro with-fail-panic [body] (handle body (Fail [msg] k) (panic msg)))
+(defmacro with-fail-panic [& body] (handle (do ~@body) (Fail [msg] k) (panic msg)))
 
 (extern-c getenv [key :cstr] :cstr)
 ;;; with-getenv -- handle the GetEnv effect by delegating to C getenv(3).
@@ -203,8 +203,8 @@
 ;;;
 ;;; Since: Phase 19
 
-(defmacro with-getenv [body]
-  (handle body (GetEnv [key] k) (resume k (getenv key))))
+(defmacro with-getenv [& body]
+  (handle (do ~@body) (GetEnv [key] k) (resume k (getenv key))))
 ;;; read-int-console -- read a single integer from stdin via scanf.
 ;;;
 ;;; Returns:
@@ -236,8 +236,8 @@
 ;;;
 ;;; Since: Phase 19
 
-(defmacro with-read-console [body]
-  (handle body (Read [] k) (resume k (read-int-console))))
+(defmacro with-read-console [& body]
+  (handle (do ~@body) (Read [] k) (resume k (read-int-console))))
 ;; -- Log --------------------------------------------------------------------
 ;; Emit a leveled log message.  Handlers choose how to display or suppress.
 ;;; Log -- declare an effect that emits a leveled log message.
@@ -269,8 +269,8 @@
 ;;;
 ;;; Since: Phase 19
 
-(defmacro with-stderr-log [body]
-  (handle body (Log [level msg] k) (do (println msg) (resume k nil))))
+(defmacro with-stderr-log [& body]
+  (handle (do ~@body) (Log [level msg] k) (do (println msg) (resume k nil))))
 ;; with-silent-log -- suppress all log output
 ;;; with-silent-log -- handle the Log effect by suppressing all log output.
 ;;;
@@ -285,8 +285,8 @@
 ;;;
 ;;; Since: Phase 19
 
-(defmacro with-silent-log [body]
-  (handle body (Log [level msg] k) (resume k nil)))
+(defmacro with-silent-log [& body]
+  (handle (do ~@body) (Log [level msg] k) (resume k nil)))
 ;; -- Abort ------------------------------------------------------------------
 ;; Signal an unrecoverable abort (the handler must not resume k).
 ;; The default with-abort-panic handler panics with the message.
@@ -317,7 +317,7 @@
 ;;;
 ;;; Since: Phase 19
 
-(defmacro with-abort-panic [body] (handle body (Abort [msg] k) (panic msg)))
+(defmacro with-abort-panic [& body] (handle (do ~@body) (Abort [msg] k) (panic msg)))
 ;; ---- Phase T25: Async/Await effects for effect/async integration ----
 ;; Async effect: perform an async computation and return a Future.
 ;; The handler should spawn the computation and return a Future that can be awaited.
@@ -366,8 +366,8 @@
 ;;;
 ;;; Since: Phase T25
 
-(defmacro with-async [body]
-  (handle body (Async [thunk k]) (do (let [result (thunk)] (resume k result)))))
+(defmacro with-async [& body]
+  (handle (do ~@body) (Async [thunk k]) (do (let [result (thunk)] (resume k result)))))
 ;; with-await -- handle Await by blocking until future is ready
 ;;; with-await -- handle the Await effect by blocking until the future resolves.
 ;;;
@@ -382,5 +382,5 @@
 ;;;
 ;;; Since: Phase T25
 
-(defmacro with-await [body]
-  (handle body (Await [future k]) (let [value (await future)] (resume k value))))
+(defmacro with-await [& body]
+  (handle (do ~@body) (Await [future k]) (let [value (await future)] (resume k value))))

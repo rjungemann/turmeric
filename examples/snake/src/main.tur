@@ -130,11 +130,10 @@
         (set! dir (handle-input dir))
         (set! tick (+ tick (tur-get-frame-ms)))
         (when (>= tick MOVE_INTERVAL)
-          (do
-            (let [alive (tur-snake-step)]
-              (when (= alive 0)
-                (perform (GameOver (tur-snake-score)))))
-            (set! tick (- tick MOVE_INTERVAL))))
+          (let [alive (tur-snake-step)]
+            (when (= alive 0)
+              (perform (GameOver (tur-snake-score)))))
+          (set! tick (- tick MOVE_INTERVAL)))
         (render-frame))
 
       ;; ---- Effect handler ------------------------------------------------

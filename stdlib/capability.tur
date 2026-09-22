@@ -251,8 +251,8 @@
 ;;; Since: Phase 16
 
 
-(defmacro with-capability [binding cap_expr body]
-  `(let [~binding ~cap_expr] ~body))
+(defmacro with-capability [binding cap_expr & body]
+  `(let [~binding ~cap_expr] (do ~@body)))
 ;; default-capability: returns the default implementation for a capability type
 ;; For now, this just returns NULL - users should provide their own defaults
 ;;; default-capability -- return the default implementation for a capability type (currently always nil).

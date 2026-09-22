@@ -1663,6 +1663,11 @@ Expr *elab_thread_last(Elab *e, const Form *call);
 Expr *elab_set(Elab *e, const Form *call);
 Expr *elab_while(Elab *e, const Form *call);
 Expr *elab_case(Elab *e, const Form *call);
+/* Elaborate forms [start..len) of `call` as one implicit body block: a single
+ * form elaborates to itself, two or more are wrapped in an EX_DO.  This is what
+ * lets `defer`, `reset`, `serial-reset` and `cloneable-reset` take a body while
+ * their lowerings keep taking a single `Expr *`. */
+Expr *elab_implicit_do(Elab *e, const Form *call, uint32_t start);
 Expr *elab_defer(Elab *e, const Form *call);
 Expr *elab_return(Elab *e, const Form *call);
 Expr *elab_question(Elab *e, const Form *call);
