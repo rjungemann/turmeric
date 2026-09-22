@@ -1,10 +1,60 @@
 ---
-title: when, unless and a dozen other body-taking forms accept exactly one form, so every multi-statement body pays an explicit (do ...)
-category: Reported
-description: `(when c a b)` is a hard error naming stdlib/macros.tur; `(defer a b)` silently drops `b`. The stdlib is split down the middle -- 12 `& body` macros against 14 single-`body` ones -- and the formatter and the turi docstrings both already describe these forms as variadic. Same in Saffron, which shares the prelude.
+title: when, unless and a dozen other body-taking forms took exactly one form -- fixed
+category: Archive
+description: RESOLVED. `(when c a b)` was a hard error naming stdlib/macros.tur; `(defer a b)` silently dropped `b`. Fourteen forms take a body now, across both back ends and both dialects; the remaining table is a record of what was fixed.
 ---
 
 # Single-form bodies: `when` / `unless` and friends need an explicit `do`
+
+> **Resolved 2026-09-21**, in the same PR that filed this. Every form in the
+> "Single-form body -- the hole" table below takes a body now, so the table is
+> a record of what was fixed, not of what is open.
+>
+> - **`when` / `unless`** are `[test & body]` (`stdlib/macros.tur`). `(when c)`
+>   is `(do)`, i.e. nil. The match-guard `when` is untouched, as predicted --
+>   it is a positional token inside a `match` clause, never a macro call head
+>   -- and `tests/fixtures/single-body-when-unless` asserts a guarded match
+>   still compiles.
+> - **`defer`** -- the high sub-case -- no longer drops forms 2..n. Fixed at
+>   both sites in `elab_defer` (global/`atexit` and in-scope) via a new
+>   `elab_implicit_do`, which elaborates forms `[start..len)` as one body
+>   block: one form elaborates to itself, two or more become an `EX_DO`. That
+>   is what keeps `collect_free_vars` and the reset lowerings taking a single
+>   `Expr *` with no change, exactly as fix direction 1 predicted.
+>   `tests/fixtures/single-body-defer` asserts captures and ordering on both
+>   back ends.
+> - **`reset` / `cloneable-reset` / `serial-reset`** route through the same
+>   helper.
+> - **`atomically`** takes a body; a body that is not already an `(stm ...)`
+>   becomes an implicit transaction block, with `elab_in_stm` set so `retry` /
+>   `check` / `or-else` are in scope. Its dispatch row in `elab_call.c` is
+>   **ungated**, not merely widened to `len >= 2` -- a bare `(atomically)` was
+>   still falling through to `unknown function or operator` at `len >= 2`.
+>   `tests/fixtures/errors/atomically-no-body` pins the arity diagnostic.
+> - The nine `stdlib/effects.tur` handlers, `with-capability` and the two
+>   `defimage-*-hook` macros are `& body`.
+>
+> **Deviation from the follow-on section.** Only the **three** redundant
+> `(do ...)` wrappers in source and examples were dropped (`stdlib/httpd.tur`,
+> `stdlib/image.tur`, `examples/snake`); a re-scan of
+> `stdlib examples tutorials benchmarks validation web docs` finds 0 remaining.
+> The other 27 are **fixture inputs and were deliberately left**: a fixture's
+> input is its specification, and rewriting 27 regression guards to a new
+> spelling changes what they guard for no functional gain. Several
+> (`serial-context-do`, `serial-context-do-cfg`, `serial-context-do-struct`,
+> `cps-oracle-*-doprelude`, `errors/serial-context-do-not-capturable`) are
+> *named* for the `do` they contain and would be defeated by the edit. The new
+> spelling has its own coverage in the four fixtures added here.
+>
+> `binding-forms-guide.md`'s `when` row and the `defer` / `while` turi
+> docstrings were corrected as the follow-on section asked.
+>
+> One thing this report got slightly wrong, corrected here so it is not
+> re-derived: `atomically`'s single argument was never "a body" in the sense
+> the other rows are -- `elab_atomically` required the argument to elaborate
+> to an `EX_STM` and rejected anything else. So folding a `do` in was not
+> available; the body had to become an implicit `stm` instead. The diagnostic
+> complaint in the report is exactly right, and was the more valuable half.
 
 **Severity: medium**, with one **high** sub-case. Most of the family fails
 loudly at the call site, which makes this an expressiveness and consistency
