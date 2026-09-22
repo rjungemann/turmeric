@@ -1,0 +1,30 @@
+;; proper-tail-calls T1 (T-D1): `^tailcall` reached through the rest of the
+;; tail grammar -- `let` with plain scalar bindings, and the last form of a
+;; `do` -- not just through `if`.  tco_mark recurses through all three, and
+;; expected.c pins the backedge so a change to that grammar shows up here as a
+;; codegen diff rather than as a silently slower loop.
+;;
+;; Both spellings of the annotation appear: the prefix `^tailcall (f x)` and
+;; the explicit `(^tailcall (f x))`.  They read as the same form -- the reader
+;; suppresses the prefix sugar in list-head position precisely so that the
+;; parenthesised spelling is not read as a one-element list wrapping a second
+;; annotation.
+
+(defn sum-to [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (let [next (- n 1)
+          more (+ acc n)]
+      ^tailcall (sum-to next more))))
+
+(defn count-do [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (do
+      (println acc)
+      (^tailcall (count-do (- n 1) (+ acc 1))))))
+
+(defn main [] : int
+  (println (sum-to 100 0))
+  (println (count-do 3 0))
+  0)

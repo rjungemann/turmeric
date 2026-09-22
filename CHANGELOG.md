@@ -2,6 +2,29 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **`^tailcall` -- a checked tail-call annotation.** Whether a call became a
+  real tail call was invisible in the source: you either got the backedge or you
+  did not, nothing said which, and the failure mode was a stack overflow at an
+  unpredictable depth in production. `^tailcall (loop v)` asserts that a call
+  MUST be in tail position, and a call the compiler cannot place there is now
+  `TUR-E0716` naming the specific reason -- an argument position, a live
+  `defer` or owned-local drop, a `match` arm, a different or indirect callee, a
+  parameter a backedge cannot reassign, and a dozen more, each with its own
+  message and its own line in `tur explain TUR-E0716`. The annotation is a
+  prefix, so it fits in a `match` or `handle` arm where an extra list element
+  would silently re-pair every clause after it; `(^tailcall (f x))` is the same
+  form and is what `tur fmt` writes. It changes nothing about how the call runs
+  -- removing it silences the error without making the call a tail call. The
+  check runs during C emission (so `tur build`/`run`/`emit-c` perform it and
+  `tur check` does not), and `--interpret` never reports it, because the
+  tree-walking evaluator already trampolines every tail call. This is T1 of
+  [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md),
+  and it is the test instrument the later stages are verified with.
+
 ## [0.51.0] -- 2026-09-21
 
 ### Added

@@ -433,6 +433,14 @@ typedef enum DiagCode {
      * shape with no error.  A bare `$` in a sweet-exp file can only have
      * arrived that way, so the reader rejects it. */
     TUR_E0332_SWEET_DOLLAR_IN_BRACKETS,
+    /* proper-tail-calls T1 (docs/upcoming/proper-tail-calls-plan.md, T-D1):
+     * a call annotated `^tailcall` that the emitter did NOT place in tail
+     * position.  The annotation exists so that "is this actually a tail
+     * call?" -- today answerable only by reading the emitted C, and
+     * answerable in production only by a SIGSEGV at an unpredictable depth --
+     * becomes a compile-time conversation.  The message always names the
+     * specific reason the call could not be one. */
+    TUR_E0716_TAILCALL_NOT_TAIL,
 } DiagCode;
 
 typedef enum DiagLevel {

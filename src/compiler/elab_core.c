@@ -2005,6 +2005,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_hamt_has_cstr = intern_cstr(st, "hamt/has-cstr?");
     e->sym_defer     = intern_cstr(st, "defer");
     e->sym_return    = intern_cstr(st, "return");
+    e->sym_tailcall  = intern_cstr(st, "^tailcall");
     /* Phase 5 */
     e->sym_ref       = intern_cstr(st, "ref");
     e->sym_deref     = intern_cstr(st, "deref");

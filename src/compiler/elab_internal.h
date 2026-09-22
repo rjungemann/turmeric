@@ -270,6 +270,8 @@ typedef struct Elab {
     const Symbol *sym_hamt_has_cstr; /* hamt/has-cstr? */
     const Symbol *sym_defer;      /* Phase 4 */
     const Symbol *sym_return;     /* return - early return with defer firing */
+    /* proper-tail-calls T1: `^tailcall` -- the checked tail-call annotation. */
+    const Symbol *sym_tailcall;
     /* Phase 5 */
     const Symbol *sym_ref;        /* ref */
     const Symbol *sym_deref;      /* @ (deref operator) - stored as symbol for parsing */
@@ -1649,6 +1651,11 @@ Expr *elab_dlopen(Elab *e, const Form *call);
 Expr *elab_dlsym(Elab *e, const Form *call);
 Expr *elab_dlclose(Elab *e, const Form *call);
 Expr *elab_unsafe(Elab *e, const Form *call);
+/* proper-tail-calls T1 (T-D1): `(^tailcall <call>)` -- elaborates <call> and
+ * flags it `wants_tailcall`, so the emitter reports TUR-E0716 if it does not
+ * end up in tail position.  Returns the annotated call itself; the annotation
+ * is a check, never a change of meaning. */
+Expr *elab_tailcall(Elab *e, const Form *call);
 
 /* elab_forms.c */
 Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span);

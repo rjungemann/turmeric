@@ -1454,6 +1454,16 @@ struct Expr {
                  uint8_t  n_abi_bindings;
                  bool is_tail_self_call; /* CF1: direct self-tail-call lowered to a goto backedge
                                           * by the emitter (set by emit_fns.c tco_mark). */
+                 /* proper-tail-calls T1 (T-D1): the author wrote `^tailcall`
+                  * on this call and is asking to be told, at compile time, if
+                  * it does NOT become a real tail call.  Read by emit_fns.c's
+                  * tailcall verifier, which reports TUR-E0716 whenever the
+                  * call did not end up with `is_tail_self_call`. */
+                 bool wants_tailcall;
+                 /* Set once the verifier has reported on this node, so a
+                  * function emitted more than once (header + implementation,
+                  * or several ABI specializations) reports TUR-E0716 once. */
+                 bool tailcall_diagnosed;
                  /* SZ8: when this call is a sized-GADT constructor, `ctor` is the
                   * resolved CtorDef and `size_index` is the inferred type-level
                   * size index of the constructed value (NULL otherwise). Both

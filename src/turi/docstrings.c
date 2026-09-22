@@ -227,6 +227,7 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         {"quote",    "(quote x) -- return x unevaluated; shorthand: 'x"},
         {"return",   "(return value) -- early return from a function"},
         {"defer",    "(defer body ...) -- run body when current scope exits"},
+        {"^tailcall","(^tailcall (f x)) -- assert this call is in tail position; TUR-E0716 with the reason if it is not. Prefix spelling: ^tailcall (f x)"},
         /* Pattern matching and data */
         {"match",    "(match val (Pattern body) ...) -- destructure and branch on value"},
         {"defstruct","(defstruct Name [field :Type ...]) -- define a named product type"},

@@ -1,6 +1,15 @@
 # Proper tail calls in Turmeric
 
-Status: **plan only.** Nothing below has been built.
+Status: **T1 landed (`^tailcall`); T2-T6 are plan only.**
+
+- **T1 -- `^tailcall` + TUR-E0716 + the `-O0` fixture harness: DONE.** The
+  annotation is a checked assertion, not a hint: a call it cannot place in tail
+  position is a compile-time error naming the reason. See
+  [T-D1](#t-d1----tail-position-becomes-a-thing-you-can-ask-for-and-be-refused)
+  for what shipped, and `docs/guides/performance-guide.md` for the user-facing
+  half.
+- **T2-T6: not built.** Everything they say is still a proposal, and Sections 1
+  and 2 still describe what the compiler does.
 
 Prerequisite for [r7rs-lang-plan.md](r7rs-lang-plan.md), but not only for it:
 T1-T3 and T5 are Turmeric features that stand on their own, and T3 closes a
@@ -209,7 +218,7 @@ current emitter**, not as available.
 ### T-D1 -- tail position becomes a thing you can ask for, and be refused
 
 **Verdict: add an annotation that is a hard error when the call cannot be a tail
-call.**
+call.**  **Landed** -- what follows is the design, and then what shipped.
 
 Today TCO is invisible. You either get the backedge or you do not, nothing says
 which, and the failure mode is a SIGSEGV at an unpredictable depth in
@@ -232,6 +241,52 @@ performance cliff into a compile-time conversation.
 **This lands first**, because it is also the test instrument: every later stage
 is verified by a fixture that annotates a call and asserts the annotation holds
 at `-O0`.
+
+#### What shipped
+
+`^tailcall` is a reader-level **prefix** on the expression that follows it, so
+`^tailcall (loop v)` reads as `(^tailcall (loop v))`.  It had to be a prefix
+rather than an extra list element because the shapes that most want it --
+`match` and `handle` arms -- pair up two forms at a time, and an extra element
+there silently re-pairs every clause after it.  The prefix is suppressed in
+list-head position, which is what lets the explicit `(^tailcall (loop v))`
+spelling read as itself (and is what the sweet-exp indentation layer produces
+from a `^tailcall`-led line).  `tur fmt` normalizes to the parenthesized form.
+
+Elaboration does nothing but set a flag: the annotation elaborates to the call
+itself, unchanged.  **The check lives in `emit_fns.c`, beside `tco_mark` /
+`emit_tail`**, rather than in the elaborator -- `tco_params_simple`,
+`tco_let_simple` and `tco_is_self_call` ARE the tail grammar, and a second copy
+of it in elaboration would be one more pair that can drift (risk TR1).  The
+verifier walks the body mirroring `tco_mark`'s spine, and additionally descends
+into the non-tail sub-expressions people write calls in (`if` conditions, `do`
+prefixes, `let` inits, `match` arms and guards, call and builtin arguments,
+`while` bodies, ascriptions, `return`), so it can say WHICH rule refused the
+call.  A `^tailcall` in one of the node kinds the walker does not enumerate
+goes unchecked rather than mis-reported.
+
+The diagnostic is `TUR-E0716`, with a distinct message per reason: argument
+position, not the last form of a `do`, a live `defer`/owned-local drop, a
+`match` arm, a one-armed `if`, a `let` binding that is fn-typed or carrier-ABI,
+a different callee (T5), an indirect callee (T-D6), a mis-saturated self call,
+a CPS-lowered enclosing body (2.5), and each function-level ineligibility
+(variadic, `void`, `main`, inline-C body, diverging body, a parameter a backedge
+cannot reassign).  `tur explain TUR-E0716` carries the long form.
+
+Two consequences worth stating plainly, both documented in the guide:
+
+- The check runs **during C emission**, so `tur build` / `tur run` / `tur emit-c`
+  perform it and `tur check` does not.
+- **`--interpret` never reports it.**  `eval_apply_inner`'s trampoline makes
+  every tail call proper, so the annotation is vacuously satisfied there.  This
+  is a genuine difference between the engines, not turi lagging.
+
+Fixtures: `tailcall-annot-self-deep` (the `-O0` instrument -- a `flags` file
+carrying `--debug`, 10,000,000 frames, and no `expected.c`, because `--debug`
+emits `#line` directives), `tailcall-annot-let-do` (the `let` and `do` arms,
+both spellings, with a codegen snapshot pinning the backedge), and six negatives
+under `tests/fixtures/errors/tailcall-*`.  The five negatives whose diagnostic is
+an emit-time one carry `requires.compiled` so `run-turi.sh` skips them.
 
 ### T-D2 -- the panic check is redundant at a genuine tail call, and should be dropped there
 
@@ -372,7 +427,7 @@ typed Turmeric.**
 
 | Stage | Size | Benefits |
 |---|---|---|
-| **T1** -- `^tailcall` annotation + diagnostic + `-O0` fixture harness | small | all of Turmeric; it is the test instrument for everything below |
+| ~~**T1** -- `^tailcall` annotation + diagnostic + `-O0` fixture harness~~ **DONE** | small | all of Turmeric; it is the test instrument for everything below |
 | **T2** -- drop the redundant panic check at tail calls (T-D2) | small | unblocks tail position at all |
 | **T3** -- `EX_MATCH` in the tail grammar (T-D4) | small | closes a silent hole in the most idiomatic loop shape |
 | **T4** -- drop-glue hoisting by liveness (T-D3 row 2) | medium | `ref<T>`/`defer` loops get the guarantee |

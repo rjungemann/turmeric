@@ -358,6 +358,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0624_NO_ENTRY_POINT_NEAR_MISS:   return "TUR-W0624";
         case TUR_W0706_IMAGE_GLOBAL_UNREGISTERED:  return "TUR-W0706";
         case TUR_E0332_SWEET_DOLLAR_IN_BRACKETS:   return "TUR-E0332";
+        case TUR_E0716_TAILCALL_NOT_TAIL:          return "TUR-E0716";
         default:                          return "";
     }
 }
@@ -535,6 +536,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0624") == 0) return TUR_W0624_NO_ENTRY_POINT_NEAR_MISS;
     if (strcmp(s, "TUR-W0706") == 0) return TUR_W0706_IMAGE_GLOBAL_UNREGISTERED;
     if (strcmp(s, "TUR-E0332") == 0) return TUR_E0332_SWEET_DOLLAR_IN_BRACKETS;
+    if (strcmp(s, "TUR-E0716") == 0) return TUR_E0716_TAILCALL_NOT_TAIL;
     return DIAG_CODE_NONE;
 }
 
@@ -2759,6 +2761,62 @@ static const DiagExplanation diag_explanations_[] = {
       "This used to be silent: the marker was left alone and reached the\n"
       "reader as an ordinary symbol named `$`, so the form gained an extra\n"
       "element and meant something the author never wrote.\n",
+    },
+    { TUR_E0716_TAILCALL_NOT_TAIL,
+      "TUR-E0716: `^tailcall` call is not in tail position\n"
+      "\n"
+      "`^tailcall` is a CHECKED annotation: it says \"this call must become a\n"
+      "real tail call, and if it cannot, tell me now.\"  Without it, whether a\n"
+      "call is lowered to a backedge is invisible in the source and the failure\n"
+      "mode is a stack overflow at an unpredictable depth, in production.\n"
+      "\n"
+      "  (defn loop-down [n : int] : int\n"
+      "    (if (= n 0) 0 ^tailcall (loop-down (- n 1))))   ; ok: becomes a goto\n"
+      "\n"
+      "The message names the specific reason.  What Turmeric guarantees today is\n"
+      "the SELF tail call: a direct, arity-matching call of the function being\n"
+      "defined, reached through `if` (two-armed), `do`, and `let`/`letrec` with\n"
+      "plain scalar bindings.  That guarantee holds at -O0; it is a backedge in\n"
+      "the emitted C, not an optimizer favor.\n"
+      "\n"
+      "The reasons you will see, and what to do about each:\n"
+      "\n"
+      "  work follows the call -- the call's value is used, or it is not the\n"
+      "    last form of its block.  Restructure so the call is the whole answer.\n"
+      "\n"
+      "  a `defer` / owned-local drop runs after it -- a `ref<T>` local, or an\n"
+      "    explicit `defer`, makes cleanup live across the call, so it is not in\n"
+      "    tail position at all.  Narrow the scope of the owned value, or drop it\n"
+      "    before the call.\n"
+      "\n"
+      "  it is inside a `match` arm -- `match` is not yet part of the tail\n"
+      "    grammar (planned: T3 of docs/upcoming/proper-tail-calls-plan.md).\n"
+      "    Rewrite the loop over `if`, or drop the annotation and accept the\n"
+      "    recursion.\n"
+      "\n"
+      "  the callee is a different function -- mutual tail calls are not\n"
+      "    guaranteed (planned: T5).  At -O2 clang often inlines a small cycle\n"
+      "    into a loop, but that evaporates the moment the bodies grow, so it is\n"
+      "    not something to rely on.\n"
+      "\n"
+      "  the callee is not statically known -- an indirect call, through a `fn`\n"
+      "    value, a struct field, or a rank-2 polymorphic parameter.  Typed\n"
+      "    Turmeric does not trampoline these (T-D6); a direct call does not have\n"
+      "    the limit.\n"
+      "\n"
+      "  a one-armed `if` -- an `if` with no else branch is not on the tail path.\n"
+      "    Give it an else branch.\n"
+      "\n"
+      "  the enclosing function is not eligible -- it is variadic, returns `void`,\n"
+      "    is `main`, has an inline-C body, or has a parameter the backedge cannot\n"
+      "    reassign (pass-by-pointer struct, `fn`-typed, or carrier-ABI).\n"
+      "\n"
+      "Under `--interpret` every tail call is already proper -- the tree-walking\n"
+      "evaluator trampolines direct, mutual and indirect alike -- so this check is\n"
+      "a property of the COMPILED path and runs during C emission.\n"
+      "\n"
+      "Removing the annotation always silences the error.  It does not make the\n"
+      "call a tail call; it only stops asking.\n",
     },
 };
 
