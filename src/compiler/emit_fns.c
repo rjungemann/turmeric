@@ -162,11 +162,96 @@ static bool tco_let_simple(EmitCtx *ctx, const Expr *e) {
     return true;
 }
 
-/* Mark self-tail-calls in tail position, recursing through if/do/let/letrec.
- * This mirrors emit_tail's structural recursion exactly so that "marked >= 1"
- * predicts whether emit_tail will emit a backedge (and thus whether the
- * `__tur_tailcall:` label is used).  Returns the number of calls marked. */
-static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e) {
+/* proper-tail-calls T2 (T-D2): can this NON-self call in tail position be
+ * emitted as a genuine C tail `return f(args);` with no panic check?
+ *
+ * The bar here is deliberately low, because the decision is layered: this only
+ * has to rule out shapes whose emission is not a plain call expression at all.
+ * Everything that depends on how the call actually emits -- an argument leaving
+ * an owned box pending, a region bracket, a carrier bridge on the way out -- is
+ * re-asked at emission time, where the answer is knowable, and a refusal there
+ * falls back to the ordinary hoist-and-check spelling.  So a false positive
+ * here costs an unused mark, never wrong output.
+ *
+ * INDIRECT calls are excluded: a call through a `fn` value is T-D6's trampoline
+ * problem, and its emission goes through the fat-closure protocol rather than a
+ * named callee, so it is not a plain `f(args)` to hand back. */
+static bool tc_nonself_tail_eligible(EmitCtx *ctx, const Expr *e) {
+    if (e->type.kind == TY_NIL || e->type.kind == TY_NEVER) return false;
+    if (e->type.kind == TY_FN) return false;   /* fat-return shim, not a call */
+    if (e->as.call_.fn_expr || e->as.call_.is_poly_call) return false;
+    if (!e->as.call_.fn_binding) return false;
+    if (!ctx->current_fn_ret_ctype) return false;
+    /* The callee's C return type must be exactly the enclosing function's, so
+     * that `return f(args);` needs no cast and no carrier bridge between the
+     * call and the return.
+     *
+     * Ask `emit_call_name` -- the emitter's own answer to "what will this call
+     * be spelled as" -- rather than the binding's raw name: a monomorphized
+     * callee is emitted as `some__spec__tur_adt_Option__int_int64_t`, whose
+     * return is the by-value aggregate, while the generic `some` it came from
+     * returns the int64 carrier.  Comparing against the generic said "match" and
+     * routed the body into a return path that then had to spill the aggregate it
+     * had been promised would not appear.
+     *
+     * A name that is not a plain C identifier is a dispatch EXPRESSION (a cast
+     * function-pointer head through a dict slot or a captured witness), which
+     * has no forward declaration to read and is refused by the same test. */
+    char *cn = emit_call_name(ctx, e, e->as.call_.fn_binding);
+    if (!cn) return false;
+    bool ident = cn[0] == '_' || isalpha((unsigned char)cn[0]);
+    for (const char *p = cn; *p && ident; p++)
+        if (!(*p == '_' || isalnum((unsigned char)*p))) ident = false;
+    const char *rt = ident ? emit_sig_lookup_ret_ctype(cn) : NULL;
+    bool ok = rt && *rt && strcmp(rt, ctx->current_fn_ret_ctype) == 0;
+    free(cn);
+    return ok;
+}
+
+/* proper-tail-calls T3 (T-D4): is this `match` one whose arms emit_tail can put
+ * in tail position?
+ *
+ * `tco_mark` and `emit_tail` have to agree here exactly -- a marked self call
+ * whose arm never reaches emit_tail would leave `__tur_tailcall:` emitted and
+ * unused, which is a C compiler warning -- so both ask this one question.
+ *
+ * A nil-typed match has no value to return, and a SESSION-OFFER scrutinee emits
+ * through its own arm shape (the tag recv, `emit_expr.c`), which is not one of
+ * the five sites carrying the tail hook.  Everything else -- ADT constructor
+ * patterns, `any` type-narrowing, literal patterns, guards, wildcards -- is
+ * served. */
+static bool tco_match_tail_ok(const Expr *e) {
+    if (e->type.kind == TY_NIL || e->type.kind == TY_NEVER) return false;
+    if (e->as.match_.n_arms == 0) return false;
+    if (!e->as.match_.scrutinee) return false;
+    if (e->as.match_.scrutinee->type.kind == TY_SESSION_OFFER) return false;
+    return true;
+}
+
+/* Mark tail-position calls, recursing through if/do/let/letrec/match.  This mirrors
+ * emit_tail's structural recursion exactly so that "marked >= 1" predicts
+ * whether emit_tail will emit a backedge (and thus whether the
+ * `__tur_tailcall:` label is used).
+ *
+ * Returns the number of SELF calls marked -- the backedge count, which is what
+ * the label is gated on.  `*n_ok` receives the number of non-self tail calls
+ * marked for T2's checkless `return f(args);`, and `*n_no` the number this
+ * refused (proper-tail-calls T-D2).  The counts are kept apart on purpose:
+ *
+ *   - a backedge reassigns the C parameters and so needs `tco_params_simple`,
+ *     while a plain tail call does not, and only a backedge makes the label
+ *     live;
+ *   - `*n_no` is what stops a body from being routed into emit_tail on T2's
+ *     account alone when some OTHER tail leaf could not be served.  emit_tail's
+ *     default return path is a thinner one than emit_fn_def's -- it lacks the
+ *     carrier/dict/straddle bridges that path carries -- so a refused leaf
+ *     landing there emits an unbridged `return __ps_N;`.  A body that already
+ *     has a backedge was going through emit_tail regardless, and its leaves are
+ *     unaffected by this; it is only the NEW routing that has to be all-or-
+ *     nothing.  (The divergence itself is the real defect -- see
+ *     docs/reported/emit-tail-return-path-lacks-carrier-bridges.md.) */
+static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
+                    int *n_ok, int *n_no) {
     if (!e) return 0;
     switch (e->kind) {
         case EX_CALL:
@@ -174,24 +259,50 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e) {
                 e->as.call_.is_tail_self_call = true;
                 return 1;
             }
+            if (tc_nonself_tail_eligible(ctx, e)) {
+                e->as.call_.is_tail_call = true;
+                if (n_ok) (*n_ok)++;
+            } else if (n_no) {
+                (*n_no)++;
+            }
             return 0;
         case EX_IF: {
             if (!e->as.if_.else_or_null) return 0;  /* default path; no recursion */
-            int n = tco_mark(ctx, fd, fn_cname, e->as.if_.then_);
-            n += tco_mark(ctx, fd, fn_cname, e->as.if_.else_or_null);
+            int n = tco_mark(ctx, fd, fn_cname, e->as.if_.then_, n_ok, n_no);
+            n += tco_mark(ctx, fd, fn_cname, e->as.if_.else_or_null, n_ok, n_no);
             return n;
         }
         case EX_DO: {
             if (e->as.do_.n == 0) return 0;
             for (uint32_t i = 0; i < e->as.do_.n; i++)
                 if (e->as.do_.items[i]->kind == EX_DEFER) return 0; /* defers break tail */
-            return tco_mark(ctx, fd, fn_cname, e->as.do_.items[e->as.do_.n - 1]);
+            return tco_mark(ctx, fd, fn_cname, e->as.do_.items[e->as.do_.n - 1],
+                            n_ok, n_no);
         }
         case EX_LET:
         case EX_LETREC:
             if (!tco_let_simple(ctx, e)) return 0;
-            return tco_mark(ctx, fd, fn_cname, e->as.let_.body);
+            return tco_mark(ctx, fd, fn_cname, e->as.let_.body, n_ok, n_no);
+        case EX_MATCH: {
+            /* proper-tail-calls T3 (T-D4): every ARM of a `match` is in the
+             * enclosing tail position -- the scrutinee is evaluated first and
+             * nothing runs after the arm that answers it.  This is the shape a
+             * Turmeric programmer reaches for first when looping over an ADT,
+             * and until now it silently got ordinary recursion (2.3).
+             *
+             * A guarded arm is still tail: a failing guard falls through to the
+             * next arm's test, and the guard itself is evaluated before the
+             * body, not after it. */
+            if (!tco_match_tail_ok(e)) return 0;
+            int n = 0;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                n += tco_mark(ctx, fd, fn_cname, e->as.match_.arms[i].body,
+                              n_ok, n_no);
+            return n;
+        }
         default:
+            /* Not a call at all: a literal, a variable.  Neither served nor
+             * refused -- it is simply not a tail CALL. */
             return 0;
     }
 }
@@ -233,9 +344,12 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e) {
                       "or carrier-ABI, which takes the whole `let` off the tail " \
                       "path"
 #define TC_MATCH_SCR  "the scrutinee of a `match` is evaluated before any arm"
-#define TC_MATCH_ARM  "a `match` arm is not part of the tail grammar yet (T3 of " \
-                      "docs/upcoming/proper-tail-calls-plan.md); rewrite the loop " \
-                      "over `if`, or drop the annotation"
+/* T3 landed, so a `match` ARM is in the tail grammar.  What is left to refuse
+ * is the match whose SHAPE emit_tail cannot serve -- see tco_match_tail_ok. */
+#define TC_MATCH_ARM  "the enclosing `match` is not one the tail path can " \
+                      "serve: it yields no value, has no arms, or offers over " \
+                      "a session channel (whose arms are emitted by the " \
+                      "session-offer path)"
 #define TC_ASCRIBE    "an ascription sits between the call and the return, and " \
                       "is not part of the tail grammar"
 #define TC_RETURN     "an explicit `return` form is not part of the tail grammar " \
@@ -352,11 +466,18 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
         case EX_MATCH:
             tc_check(ctx, fd, fn_cname, e->as.match_.scrutinee, TC_MATCH_SCR,
                      fn_block);
+            /* T3 (T-D4): an arm body IS in tail position now, so it inherits
+             * the enclosing reason (`why`) rather than being refused outright --
+             * exactly as an `if` branch does.  Only a match whose shape the tail
+             * path cannot serve still refuses on its own account. */
+            const char *arm_why = why ? why
+                                      : (tco_match_tail_ok(e) ? NULL
+                                                              : TC_MATCH_ARM);
             for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
                 tc_check(ctx, fd, fn_cname, e->as.match_.arms[i].guard,
                          TC_GUARD, fn_block);
                 tc_check(ctx, fd, fn_cname, e->as.match_.arms[i].body,
-                         why ? why : TC_MATCH_ARM, fn_block);
+                         arm_why, fn_block);
             }
             return;
         case EX_ASCRIBE:
@@ -879,6 +1000,24 @@ static bool fn_tail_emits_int64_carrier(const FnDef *fd, const Expr *body) {
     return false;
 }
 
+/* proper-tail-calls T3 (T-D4): what emit_tail hands the match emitter so an arm
+ * body can be emitted back through emit_tail.  The four values are constant for
+ * one function body; they ride here rather than in EmitCtx so that a nested
+ * `match` cannot pick up an outer one's. */
+typedef struct {
+    const Expr *fn_e;
+    FnDef      *fd;
+    TypeKind    result_kind;
+    bool        is_main;
+} MatchTailEnv;
+
+static void emit_tail_match_arm(EmitCtx *ctx, Buf *body, const Expr *arm_body,
+                                void *env) {
+    const MatchTailEnv *mt = (const MatchTailEnv *)env;
+    emit_tail(ctx, body, mt->fn_e, mt->fd, arm_body, mt->result_kind,
+              mt->is_main);
+}
+
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
  * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
@@ -992,12 +1131,95 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                 return;
             }
             break;
+        case EX_MATCH: {
+            /* proper-tail-calls T3 (T-D4): emit the match through its ordinary
+             * emitter, with `match_tail` set so each ARM routes back into
+             * emit_tail and ends in a `return` or a backedge.
+             *
+             * Deliberately NOT a second copy of the match emitter: `match` has
+             * five arm shapes (ADT constructors, `any` narrowing, literals,
+             * session offers, and the guarded variants), and a parallel
+             * implementation of the pattern tests is exactly the drift T-D4
+             * warns about.  The hook changes one statement per shape and leaves
+             * every pattern test, binder and guard where it is.
+             *
+             * The result temp and the `goto <end>` after each arm stay too.
+             * They become unread and unreachable rather than absent, which
+             * costs nothing and buys two things: no unused-label or
+             * unused-variable warning, and the emitter's existing
+             * no-arm-matched fall-through -- the temp's zero init -- is still
+             * what this function returns if the match is not exhaustive. */
+            if (!tco_match_tail_ok(e)) break;
+            MatchTailEnv env = { fn_e, fd, result_kind, is_main };
+            MatchTailCtx mt = { e, emit_tail_match_arm, &env };
+            const MatchTailCtx *save = ctx->match_tail;
+            ctx->match_tail = &mt;
+            char *v = emit_value(ctx, body, e);
+            ctx->match_tail = save;
+            indent_buf(body, ctx->indent);
+            if (is_main && result_kind == TY_INT)
+                buf_printf(body, "return (int)%s;\n", v);
+            else
+                buf_printf(body, "return %s;\n", v);
+            free(v);
+            return;
+        }
         default:
             break;
     }
 
+    /* proper-tail-calls T2 (T-D2): a non-self call in tail position becomes a
+     * genuine C tail `return f(args);` -- no `__ps_N` temp, and no
+     * `if (tur_panicking) return ...;` after it.  The check is redundant here:
+     * a tail call does nothing with the value, so a panic beneath it is caught
+     * by the nearest enclosing NON-tail frame, and there always is one.  (It is
+     * also only ever observable inside a `catch-unwind` at all -- with no
+     * handler installed `tur_panic` prints and aborts.)
+     *
+     * Requested only when nothing on the way out would put work after the call,
+     * which is exactly the set of bridges the default path below can still add:
+     *
+     *   - `tail_bv`, the by-value-carrier heap spill (a malloc and a copy);
+     *   - the MB2 tyvar-carrier cast into a pointer return;
+     *   - a `void` C return, which emits the call as a statement and returns
+     *     separately, and `main`, whose return is cast;
+     *   - `panic_signal_is_break`: inside the stackless trampoline the signal
+     *     must reach the driver's unwind loop as a `break`, and dropping it
+     *     there would abandon the live continuation chain;
+     *   - an open `any` scope-drop list, whose frees follow the return value.
+     *
+     * emit_value may still refuse (an argument left an owned box pending, a
+     * region bracket is open); `tail_call_no_hoist_taken` reports that back and
+     * the ordinary hoisted spelling is what lands. */
+    bool want_tail_call =
+        e->kind == EX_CALL && e->as.call_.is_tail_call && !is_main &&
+        !ctx->panic_signal_is_break && ctx->n_any_scope_drops == 0 &&
+        e->type.kind != TY_NIL && e->type.kind != TY_NEVER &&
+        ctx->current_fn_ret_ctype &&
+        strcmp(ctx->current_fn_ret_ctype, "void") != 0 &&
+        !fn_body_tail_emits_byvalue_carrier_abi(ctx, e) &&
+        !(strchr(ctx->current_fn_ret_ctype, '*') != NULL &&
+          emit_tail_call_returns_tyvar_carrier(ctx, e));
+    const Expr *nh_save = ctx->tail_call_no_hoist;
+    bool taken_save = ctx->tail_call_no_hoist_taken;
+    if (want_tail_call) {
+        ctx->tail_call_no_hoist = e;
+        ctx->tail_call_no_hoist_taken = false;
+    }
+
     /* Default: emit as a value and return it. */
     char *v = emit_fat_return_value(ctx, body, fn_e, e);
+    bool emitted_tail_call = want_tail_call && ctx->tail_call_no_hoist_taken;
+    ctx->tail_call_no_hoist = nh_save;
+    ctx->tail_call_no_hoist_taken = taken_save;
+    if (emitted_tail_call) {
+        /* `v` is the call expression itself.  Nothing between it and the
+         * return, which is the whole point. */
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "return %s;\n", v);
+        free(v);
+        return;
+    }
     if (e->type.kind == TY_NIL) {
         free(v);
         v = strdup(result_kind == TY_BOOL ? "false" : "0");
@@ -4263,9 +4485,28 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * match the spec's signature.  Carrier-ABI params still reject in
      * `tco_params_simple` so a backedge's reassignment never crosses an
      * int64→struct boundary unintentionally. */
-    bool tco_eligible = !body_diverges && fd->body->kind != EX_INLINE_C &&
+    /* The tail SPINE is walkable under all the same function-level conditions;
+     * what the spine then contains decides how the body is emitted.  Split out
+     * of the old single `tco_eligible` expression so the two kinds of tail call
+     * can be counted separately (proper-tail-calls T2 / T-D2). */
+    bool tco_spine_ok = !body_diverges && fd->body->kind != EX_INLINE_C &&
         !(result_kind == TY_NIL && !is_main) && !is_main &&
-        tco_params_simple(ctx, e, fd) && tco_mark(ctx, fd, fn_name, fd->body) > 0;
+        tco_params_simple(ctx, e, fd);
+    int n_tco_self = 0, n_tco_tail = 0, n_tco_refused = 0;
+    if (tco_spine_ok)
+        n_tco_self = tco_mark(ctx, fd, fn_name, fd->body, &n_tco_tail,
+                              &n_tco_refused);
+    /* T2: a body whose tail spine holds ONLY non-self tail calls still goes
+     * through emit_tail -- that is what puts the `return` in each branch, and so
+     * what makes the call a C tail call at all.  Routed on T2's account only
+     * when EVERY non-self tail leaf can be served, because emit_tail's default
+     * return path carries fewer bridges than the one such a body would
+     * otherwise have taken (see tco_mark).  The `__tur_tailcall:` label is gated
+     * on a genuine backedge, because an emitted-and-unused label is a C compiler
+     * warning. */
+    bool tco_eligible = tco_spine_ok &&
+        (n_tco_self > 0 || (n_tco_tail > 0 && n_tco_refused == 0));
+    bool tco_wants_label = n_tco_self > 0;
 
     /* proper-tail-calls T1 (T-D1): now that tco_mark has had its say, work out
      * what to tell the author about a `^tailcall` that did NOT become a
@@ -4440,9 +4681,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         emit_stmt(ctx, file, fd->body);
     } else if (tco_eligible) {
         /* CF1: self-tail-call loop. Label the top of the body; emit_tail turns
-         * each self-tail-call into a parameter-reassignment + goto backedge. */
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "__tur_tailcall:;\n");
+         * each self-tail-call into a parameter-reassignment + goto backedge.
+         * T2 (T-D2): with no self call in the spine there is no backedge and so
+         * no label -- emit_tail is entered purely to put the `return` in each
+         * branch, which is what makes a non-self tail call a C tail call. */
+        if (tco_wants_label) {
+            indent_buf(file, ctx->indent);
+            buf_puts(file, "__tur_tailcall:;\n");
+        }
         emit_tail(ctx, file, e, fd, fd->body, result_kind, is_main);
     } else if (fd->body->type.kind == TY_NIL) {
         /* Body is nil-typed (e.g. a bare void call like (show 99)) but the

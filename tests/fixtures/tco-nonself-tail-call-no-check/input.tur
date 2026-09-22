@@ -1,0 +1,59 @@
+;; proper-tail-calls T2 (T-D2): a call in tail position that is NOT a self call
+;; is emitted as a genuine C tail `return f(args);` -- no `__ps_N` temp, and no
+;; `if (tur_panicking) return ...;` after it.
+;;
+;; The check is redundant there and nowhere else: a tail call does nothing with
+;; the value it gets back, so a panic raised beneath it is caught by the nearest
+;; enclosing NON-tail frame, and there always is one.  `report` below is that
+;; frame for this program.
+;;
+;; What the expected.c snapshot pins, and why each line matters:
+;;
+;;   forward      ->  `return classify(n);`          -- body IS the tail call
+;;   even-ish?    ->  `return odd-ish?(...)` in BOTH arms of the `if`, with no
+;;                    `__tN` result temp and no label: mutual recursion now
+;;                    reaches C tail position, which it never did before (the
+;;                    plan's Section 1 `-O2` pass was clang inlining the cycle,
+;;                    not a tail call).
+;;   depth-of     ->  the self call still becomes `goto __tur_tailcall;` under a
+;;                    `__tur_tailcall:` label.  T2 must not disturb the backedge.
+;;   report       ->  a NON-tail call keeps its hoist and its panic check.  This
+;;                    is the negative half, and it is what makes dropping the
+;;                    check in the others sound.
+
+(defn classify [n : int] : int
+  (if (= n 0) 100 200))
+
+;; Body is the tail call: `return classify(n);`
+(defn forward [n : int] : int
+  (classify n))
+
+;; Mutual recursion: a tail call in each arm of an `if`.
+(defn even-ish? [n : int] : int
+  (if (= n 0)
+    1
+    (odd-ish? (- n 1))))
+
+(defn odd-ish? [n : int] : int
+  (if (= n 0)
+    0
+    (even-ish? (- n 1))))
+
+;; Self tail call: unchanged, still a backedge.
+(defn depth-of [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (depth-of (- n 1) (+ acc 1))))
+
+;; NON-tail: the call's value is an operand of `+`, so work remains after it.
+;; Keeps the hoisted temp and the panic check.
+(defn report [n : int] : int
+  (+ 1 (forward n)))
+
+(defn main [] : int
+  (println (forward 0))
+  (println (even-ish? 7))
+  (println (odd-ish? 7))
+  (println (depth-of 5 0))
+  (println (report 0))
+  0)

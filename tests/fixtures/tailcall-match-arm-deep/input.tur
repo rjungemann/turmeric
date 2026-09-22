@@ -1,0 +1,53 @@
+;; proper-tail-calls T3 (docs/upcoming/proper-tail-calls-plan.md, T-D4): a self
+;; tail call in a `match` ARM becomes a backedge.
+;;
+;; Section 2.3 measured this as the plan's cheapest high-value fix, and the
+;; reason is that `match` is how a loop over an ADT is written in this language.
+;; Before T3 the tail grammar had no `EX_MATCH` case, so the shape a Turmeric
+;; programmer reaches for FIRST silently got ordinary recursion -- and lost the
+;; one TCO guarantee the language does make, with no diagnostic saying so.
+;;
+;; The `flags` file builds this at -O0 (`--debug`), and that is the whole point:
+;; at -O0 there is no inliner to borrow a pass from, so either the emitter
+;; produced a `__tur_tailcall:` backedge inside the match arm or this overflows
+;; the C stack long before 10,000,000.
+;;
+;; Four arms, because each exercises a different part of the change:
+;;
+;;   (Done)     -- a non-call arm still returns its value normally.
+;;   (Skip v)   -- a GUARDED arm.  The guard holds on every step here, so the
+;;                 program's value is fully determined; what it pins is that the
+;;                 arm's backedge is emitted INSIDE the guard's `if`.  A guarded
+;;                 arm does not count toward exhaustiveness, which is why the
+;;                 trailing `_` arm is here.
+;;   (More v)   -- the backedge itself.
+;;   _          -- the catch-all exhaustiveness needs; unreached in this run.
+;;
+;; `^tailcall` on the two recursive calls is the assertion under test: before
+;; T3 both were TUR-E0716 ("a `match` arm is not part of the tail grammar yet").
+;;
+;; n counts down to 0 one step at a time and acc counts those steps, so the
+;; answer is the starting n.
+
+(defdata Step
+  (Done)
+  (Skip int)
+  (More int))
+
+(defn classify [n : int] : Step
+  (if (= n 0)
+    (Done)
+    (if (= (mod n 2) 0)
+      (Skip (- n 1))
+      (More (- n 1)))))
+
+(defn run [n : int acc : int] : int
+  (match (classify n)
+    (Done)   acc
+    (Skip v) when (>= v 0) ^tailcall (run v (+ acc 1))
+    (More v) ^tailcall (run v (+ acc 1))
+    _        acc))
+
+(defn main [] : int
+  (println (run 10000000 0))
+  0)

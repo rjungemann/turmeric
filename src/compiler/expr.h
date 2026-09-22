@@ -1454,6 +1454,14 @@ struct Expr {
                  uint8_t  n_abi_bindings;
                  bool is_tail_self_call; /* CF1: direct self-tail-call lowered to a goto backedge
                                           * by the emitter (set by emit_fns.c tco_mark). */
+                 /* proper-tail-calls T2 (T-D2): this call sits in the enclosing
+                  * function's tail position but is NOT a self call, so there is
+                  * no backedge to take -- it is emitted as a genuine C tail
+                  * `return f(args);` with NO per-call-site panic check, because
+                  * nothing runs between the call and the return.  Set by
+                  * emit_fns.c's tco_mark; mutually exclusive with
+                  * `is_tail_self_call`. */
+                 bool is_tail_call;
                  /* proper-tail-calls T1 (T-D1): the author wrote `^tailcall`
                   * on this call and is asking to be told, at compile time, if
                   * it does NOT become a real tail call.  Read by emit_fns.c's

@@ -101,8 +101,8 @@ The guarantee applies to:
 - a self-recursive `defn` whose recursive call is in tail position, and
 - the named-let / loop idiom `(let loop [...] ... (loop ...))`,
 
-with tail position computed through `if`, `cond`/`when` (which macro-expand to
-`if`), `do`, and `let`/`letrec`.  For example, both of these are lowered to a
+with tail position computed through `if`, `match` arms (guarded ones included),
+`cond`/`when` (which macro-expand to `if`), `do`, and `let`/`letrec`.  For example, both of these are lowered to a
 loop:
 
 ```turmeric no-check
@@ -149,10 +149,16 @@ left as ordinary recursive calls -- correct, but not stack-optimized:
 
 - **non-tail recursion** (e.g. `(+ n (sum-to (- n 1)))`, where work remains
   after the call returns) -- never eligible, by definition;
+- a `match` whose arms cannot be put in tail position at all: one that yields
+  no value, one with no arms, or an `offer` over a session channel.  An
+  ordinary `match` -- ADT constructors, type-narrowing an `any`, literals,
+  with or without `when`-guards -- **is** in the tail grammar;
 - **mutual / general tail calls** (function A tail-calls B which tail-calls A);
-- **tail calls inside `match` arms**;
 - self-recursive functions with pass-by-pointer struct, function-typed, or
   poly-fn parameters;
+- a self-recursive function whose body owns a value with drop glue (an
+  `rc<T>`/`ref<T>` local, or an explicit `defer`): the cleanup runs after the
+  call, which is what takes it out of tail position;
 - a self-recursive function that genuinely uses a control operator
   (`perform`/`handle`/`shift`/`await`) -- it is CPS-lowered, and the loop
   runs on the delimited-control path rather than as a C backedge.
@@ -191,7 +197,9 @@ TUR-E0716` prints them all, with what to do about each:
 ```
 $ tur run --debug loop.tur
 loop.tur:9:24: error [TUR-E0716]: `^tailcall` call is not in tail position: a
-`match` arm is not part of the tail grammar yet
+`defer` in this block -- an explicit one, or the drop glue of an owned local
+such as a `ref<T>` -- runs AFTER the call, so nothing in the block is in tail
+position
 ```
 
 Two things worth knowing about the check itself:

@@ -1,0 +1,27 @@
+;; proper-tail-calls T3 (T-D4) / 2.3: `match` is the idiomatic way to write a
+;; loop over an ADT, and until T3 it was NOT in tco_mark's tail grammar -- the
+;; recursive call got an ordinary C frame.  Before `^tailcall` that was silent;
+;; the annotation is what turned it into a compile-time conversation, and this
+;; fixture was that conversation's negative half (TUR-E0716, "a `match` arm is
+;; not part of the tail grammar yet").
+;;
+;; T3 landed, so it has moved to the positive side, as its own header predicted
+;; it would.  What it pins now is the CODEGEN: the `expected.c` snapshot must
+;; show the `(More v)` arm reassigning the parameter and jumping to
+;; `__tur_tailcall:` rather than calling `loop_hymatch` again.  The companion
+;; `tailcall-match-arm-deep` asserts the same thing survives 10,000,000 frames
+;; at -O0; this one is cheap and reads the emitted C directly.
+
+(defdata Step (More [v : int]) (Done))
+
+(defn classify [n : int] : Step
+  (if (= n 0) (Done) (More (- n 1))))
+
+(defn loop-match [n : int] : int
+  (match (classify n)
+    (Done)   0
+    (More v) ^tailcall (loop-match v)))
+
+(defn main [] : int
+  (println (loop-match 10))
+  0)
