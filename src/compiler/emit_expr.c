@@ -5620,8 +5620,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * vs by-value aggregate vs pointer -- without re-deriving it (the repr
      * heuristic disagrees with the emitted form for some carrier calls). */
     char tmp[64];
-    snprintf(tmp, sizeof tmp, "__ps_%d", ctx->tmp_n++);
-    indent_buf(body, ctx->indent);
+    /* The temp is NAMED and its declaration line indented only once the type
+     * derivation below has run: proper-tail-calls T2 may decide, on the strength
+     * of that derived type, that this call needs no temp at all, and a burnt
+     * `__ps_N` or a stray indent would outlive the decision. */
     /* S1 (jit-engine-plan section 4): name the type when we can prove it, and
      * fall back to __auto_type when we cannot.
      *
@@ -5715,6 +5717,55 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (ok) ret_ct = read_ct;
         }
     }
+    /* proper-tail-calls T2 (T-D2): emit_tail asked for this call UN-hoisted so
+     * it can spell `return f(args);` -- a genuine C tail call -- and drop the
+     * per-call-site panic check, which is redundant when nothing runs between
+     * the call and the return.  The nearest enclosing NON-tail frame does the
+     * checking, and there always is one; a panic is also only observable through
+     * these checks at all inside a `catch-unwind` (with no handler installed
+     * `tur_panic` prints and aborts).
+     *
+     * `ret_ct` is the gate, and it is the reason this decision lives HERE rather
+     * than before the emission: it is the callee's return type as the
+     * forward-declaration pass actually wrote it, so requiring it to equal the
+     * enclosing function's C return type proves `return f(args);` needs no cast
+     * or bridge on the way out.  Without that proof the hoist temp is doing real
+     * work -- it is what the carrier-representation side table records, and what
+     * every straddle bridge downstream keys on to turn an int64 carrier into the
+     * pointer the signature promises.  Dropping it where the types differ is how
+     * the first cut of T2 produced -Wint-conversion errors across the dict,
+     * lens, and carrier-bridge fixtures.
+     *
+     * The other conditions are the post-call bookkeeping below, each of which IS
+     * work after the call and so would falsify the tail position:
+     *
+     *   - the three pending drains: an argument that contributed an owned
+     *     `any` / fresh sum-carrier box / vec spill leaves an entry behind, and
+     *     the drain that frees it hangs off this hoist (it is the statement
+     *     boundary the temporary case needs);
+     *   - `any_drop_after` / the fresh-sum-box drop, which name THIS call's temp
+     *     as the thing an enclosing site must release -- there is no temp to
+     *     name without the hoist;
+     *   - a region bracket (`bt-scope` / `with-region`) opened before the
+     *     arguments, whose pop must follow the call.
+     *
+     * Refusing is free: emit_tail reads `tail_call_no_hoist_taken` and falls
+     * back to the hoisted spelling, so a shape this cannot serve is emitted
+     * exactly as before rather than emitted wrongly. */
+    if (ctx->tail_call_no_hoist == e && ret_ct && ctx->current_fn_ret_ctype &&
+        strcmp(ret_ct, ctx->current_fn_ret_ctype) == 0 &&
+        rgn_id < 0 && !e->any_drop_after &&
+        ctx->n_any_pending == any_mark && ctx->n_sum_pending == sum_mark &&
+        ctx->n_vsp_pending == vsp_mark &&
+        !emit_call_is_raw_slot_read(e) &&
+        !(emit_call_drop_after_stamped(ctx, e) &&
+          emit_call_returns_fresh_sum_box(ctx, e))) {
+        ctx->tail_call_no_hoist_taken = true;
+        if (ret_note[0]) note_call_ret(ctx, ret_note);
+        return v;
+    }
+    snprintf(tmp, sizeof tmp, "__ps_%d", ctx->tmp_n++);
+    indent_buf(body, ctx->indent);
     if (ret_ct) {
         buf_printf(body, "%s %s = (%s);\n", ret_ct, tmp, v);
         /* saffron-lang-plan S6: record the hoist temp's C type when we HAVE it.
@@ -15884,7 +15935,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
 
                     /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
                      * as a statement, leaving the result temp at its zero init. */
-                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    if (emit_match_in_tail(ctx, e)) {
+                        /* T3 (T-D4): this arm is in the enclosing function's tail
+                         * position -- emit_tail ends it in a `return` or a backedge
+                         * `goto` of its own, instead of an assignment to the result
+                         * temp.  The `goto <end>` below stays, unreachable, so the
+                         * label keeps a user and the two paths stay textually the
+                         * same everywhere else. */
+                        ctx->match_tail->emit_arm(ctx, body, arm->body,
+                                                  ctx->match_tail->env);
+                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
@@ -15999,7 +16059,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* Emit arm body */
                     /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
                      * as a statement, leaving the result temp at its zero init. */
-                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    if (emit_match_in_tail(ctx, e)) {
+                        /* T3 (T-D4): this arm is in the enclosing function's tail
+                         * position -- emit_tail ends it in a `return` or a backedge
+                         * `goto` of its own, instead of an assignment to the result
+                         * temp.  The `goto <end>` below stays, unreachable, so the
+                         * label keeps a user and the two paths stay textually the
+                         * same everywhere else. */
+                        ctx->match_tail->emit_arm(ctx, body, arm->body,
+                                                  ctx->match_tail->env);
+                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
@@ -16143,7 +16212,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                         /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
                          * as a statement, leaving the result temp at its zero init. */
-                        if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                        if (emit_match_in_tail(ctx, e)) {
+                            /* T3 (T-D4): this arm is in the enclosing function's tail
+                             * position -- emit_tail ends it in a `return` or a backedge
+                             * `goto` of its own, instead of an assignment to the result
+                             * temp.  The `goto <end>` below stays, unreachable, so the
+                             * label keeps a user and the two paths stay textually the
+                             * same everywhere else. */
+                            ctx->match_tail->emit_arm(ctx, body, arm->body,
+                                                      ctx->match_tail->env);
+                        } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                             char *bv = emit_value(ctx, body, arm->body);
                             indent_buf(body, ctx->indent);
                             buf_printf(body, "%s = %s;\n", tmp, bv);
@@ -16744,7 +16822,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* Emit body */
                     /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
                      * as a statement, leaving the result temp at its zero init. */
-                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    if (emit_match_in_tail(ctx, e)) {
+                        /* T3 (T-D4): this arm is in the enclosing function's tail
+                         * position -- emit_tail ends it in a `return` or a backedge
+                         * `goto` of its own, instead of an assignment to the result
+                         * temp.  The `goto <end>` below stays, unreachable, so the
+                         * label keeps a user and the two paths stay textually the
+                         * same everywhere else. */
+                        ctx->match_tail->emit_arm(ctx, body, arm->body,
+                                                  ctx->match_tail->env);
+                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);
@@ -17138,7 +17225,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* Emit body */
                     /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
                      * as a statement, leaving the result temp at its zero init. */
-                    if (!nil_result && arm->body->type.kind != TY_NEVER) {
+                    if (emit_match_in_tail(ctx, e)) {
+                        /* T3 (T-D4): this arm is in the enclosing function's tail
+                         * position -- emit_tail ends it in a `return` or a backedge
+                         * `goto` of its own, instead of an assignment to the result
+                         * temp.  The `goto <end>` below stays, unreachable, so the
+                         * label keeps a user and the two paths stay textually the
+                         * same everywhere else. */
+                        ctx->match_tail->emit_arm(ctx, body, arm->body,
+                                                  ctx->match_tail->env);
+                    } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
                         indent_buf(body, ctx->indent);

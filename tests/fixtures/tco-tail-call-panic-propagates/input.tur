@@ -1,0 +1,42 @@
+;; proper-tail-calls T2 (T-D2): the correctness half.
+;;
+;; T2 drops the per-call-site `if (tur_panicking) return ...;` after a call in
+;; tail position.  That is only sound if a panic raised BENEATH a chain of such
+;; calls still reaches an enclosing `catch-unwind` -- which is the whole of
+;; T-D2's argument: a tail call does nothing with the value it gets back, so it
+;; propagates the garbage unexamined, and the nearest enclosing NON-tail frame
+;; does the checking.  There always is one.
+;;
+;; Here `t1 -> t2 -> t3 -> boom` are four checkless C tail calls (`t3`'s call to
+;; `boom` included).  Nothing between the panic and the `catch-unwind` looks at
+;; `tur_panicking` until `tur_catch_unwind_box` itself does.  If T2 had made the
+;; signal unobservable, this fixture would print "no panic seen" -- or abort.
+;;
+;; The second half is the same question one frame further out: `guarded` is a
+;; non-tail frame between the boundary and the chain, so its own check is what
+;; fires.  Both spellings have to work, because which one a program gets is an
+;; accident of how it was written.
+
+(defn boom [n : int] : int
+  (panic "boom")
+  n)
+
+(defn t3 [n : int] : int (boom n))
+(defn t2 [n : int] : int (t3 n))
+(defn t1 [n : int] : int (t2 n))
+
+;; A NON-tail frame over the chain: the `+` keeps the call out of tail position,
+;; so this one still carries a panic check of its own.
+(defn guarded [n : int] : int
+  (+ 0 (t1 n)))
+
+(defn main [] : int
+  (let [r (catch-unwind (fn [] : int (t1 7)))]
+    (if (ok? r)
+      (println "direct: no panic seen")
+      (println "direct: caught")))
+  (let [r2 (catch-unwind (fn [] : int (guarded 7)))]
+    (if (ok? r2)
+      (println "guarded: no panic seen")
+      (println "guarded: caught")))
+  0)

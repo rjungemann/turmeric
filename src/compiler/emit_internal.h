@@ -674,7 +674,51 @@ typedef struct EmitCtx {
      * live continuation chain).  emit_panic_signal_return honors this flag; the
      * BR3b pre-emit sets it around the reader call and clears it after. */
     bool         panic_signal_is_break;
+    /* proper-tail-calls T2 (T-D2): the call emit_tail is about to emit as the
+     * enclosing function's tail `return f(args);`.  emit_value hands such a
+     * call's text back UN-hoisted -- no `__ps_N` temp and no per-call-site
+     * `if (tur_panicking) return ...;` -- so the emitted C really is a tail
+     * call.  Dropping the check is safe precisely because nothing runs between
+     * the call and the return: the nearest enclosing NON-tail frame performs
+     * the check, and there always is one (see the plan's T-D2).
+     *
+     * The request can be REFUSED at the point of emission: only emit_value
+     * knows whether the call's arguments left owned `any`/sum/vec-spill boxes
+     * pending, and draining those is real work after the call.  It reports back
+     * through `tail_call_no_hoist_taken`, and emit_tail falls back to the
+     * ordinary hoist-and-check spelling when the answer is no. */
+    const Expr  *tail_call_no_hoist;
+    bool         tail_call_no_hoist_taken;
+    /* proper-tail-calls T3 (T-D4): the `match` whose ARMS are in the enclosing
+     * function's tail position.  `match` is how a loop over an ADT is written in
+     * this language, and its arms were the one idiomatic tail shape the grammar
+     * did not reach -- a self call there silently became ordinary recursion.
+     *
+     * Set by emit_fns.c's emit_tail around its emission of that one node; the
+     * match emitter calls `emit_arm` in place of `<tmp> = <body>;` for every arm
+     * of the matching node, and each arm then ends in a `return` or a backedge
+     * `goto` of its own.  The `goto <end>;` after the arm and the result temp
+     * stay exactly as they are: both become unreachable/unread rather than
+     * absent, which is what keeps the two paths textually identical everywhere
+     * else and leaves the emitter's no-arm-matched fall-through intact.
+     *
+     * NULL off the tail path, and compared by NODE identity, so a `match` nested
+     * inside a tail `match`'s arm is emitted ordinarily. */
+    const struct MatchTailCtx *match_tail;
 } EmitCtx;
+
+/* proper-tail-calls T3 (T-D4): see EmitCtx::match_tail. */
+typedef struct MatchTailCtx {
+    const Expr *node;       /* the EX_MATCH whose arms are in tail position */
+    void (*emit_arm)(EmitCtx *ctx, Buf *body, const Expr *arm_body, void *env);
+    void *env;              /* emit_tail's own fn_e / fd / result_kind / is_main */
+} MatchTailCtx;
+
+/* True when `e` is the match emit_tail is currently emitting, so an arm body
+ * belongs in tail position rather than assigned to the result temp. */
+static inline bool emit_match_in_tail(const EmitCtx *ctx, const Expr *e) {
+    return ctx->match_tail && ctx->match_tail->node == e;
+}
 
 /* Phase 4 v1: Defer thunk tracking */
 typedef struct DeferThunk {
