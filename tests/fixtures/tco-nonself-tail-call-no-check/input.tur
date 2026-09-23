@@ -10,11 +10,13 @@
 ;; What the expected.c snapshot pins, and why each line matters:
 ;;
 ;;   forward      ->  `return classify(n);`          -- body IS the tail call
-;;   even-ish?    ->  `return odd-ish?(...)` in BOTH arms of the `if`, with no
-;;                    `__tN` result temp and no label: mutual recursion now
-;;                    reaches C tail position, which it never did before (the
-;;                    plan's Section 1 `-O2` pass was clang inlining the cycle,
-;;                    not a tail call).
+;;   even-ish?    ->  since T5 (T-D5) this pair is a mutual tail-call GROUP,
+;;                    fused into `__tcg_group_0` with a jump in each arm and a
+;;                    wrapper per member.  T2 put these two calls in C tail
+;;                    position (`return odd-ish?(...)`) as a step on the way;
+;;                    T5 turned them into jumps, which hold at -O0 as well.
+;;                    The checkless non-self tail call T2 introduced is still
+;;                    pinned by `forward`.
 ;;   depth-of     ->  the self call still becomes `goto __tur_tailcall;` under a
 ;;                    `__tur_tailcall:` label.  T2 must not disturb the backedge.
 ;;   report       ->  a NON-tail call keeps its hoist and its panic check.  This

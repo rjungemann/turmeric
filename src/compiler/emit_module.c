@@ -7794,6 +7794,23 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
     return !emit_abi_has_carrier_call(ctx, fd->binding);
 }
 
+/* proper-tail-calls T5 (T-D5): hand the emitter the top-level function
+ * definitions a mutual-tail-call group may be formed from.  A generic template
+ * emit_abi_fn_skip_generic suppresses is never emitted, so it can never be a
+ * member.  The array is process-lifetime for the emission, like the item list. */
+static void tcg_collect_fn_exprs(EmitCtx *ctx, const Expr **items, uint32_t n) {
+    const Expr **out = (const Expr **)malloc((n ? n : 1) * sizeof(const Expr *));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n; i++)
+        if (items[i]->kind == EX_FN_DEF && items[i]->as.fn_def_.fn &&
+            !emit_abi_fn_skip_generic(ctx, items[i]))
+            out[k++] = items[i];
+    free((void *)ctx->tcg_fn_exprs);
+    ctx->tcg_fn_exprs = out;
+    ctx->n_tcg_fn_exprs = k;
+}
+
+
 /* saffron-lang-plan S9 (D8 piece 3): does this instance's receiver have a
  * ground `any` box tag, and is that tag one this TU can actually produce?
  *
@@ -15919,6 +15936,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     ctx.gen_struct_type = NULL;
     ctx.gen_hdr_emitted = false;
     gs_reset_group_registry();
+    tcg_reset_group_registry();
     ctx.abi_specializations = NULL;
     ctx.n_abi_specializations = 0;
     ctx.cap_abi_specializations = 0;
@@ -16522,6 +16540,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     }
 
     /* Pass 2: collect all top-level defs and fn_defs. */
+    tcg_collect_fn_exprs(&ctx, items, n_items);
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
         if (e->kind == EX_DEFER) {
@@ -17505,6 +17524,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     buf_free(&body);
     buf_free(&def_init_body);
     free(items);
+    free((void *)ctx.tcg_fn_exprs);
+    tcg_reset_group_registry();
     for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
@@ -18519,6 +18540,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     ctx.gen_struct_type = NULL;
     ctx.gen_hdr_emitted = false;
     gs_reset_group_registry();
+    tcg_reset_group_registry();
     ctx.abi_specializations = NULL;
     ctx.n_abi_specializations = 0;
     ctx.cap_abi_specializations = 0;
@@ -18789,6 +18811,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     inline_c_dedup_free(&impl_dedup);
 
     /* Pass 1b: emit all top-level definitions (EX_INLINE_C already handled). */
+    tcg_collect_fn_exprs(&ctx, impl_items, impl_n_items);
     for (uint32_t i = 0; i < impl_n_items; i++) {
         const Expr *e = impl_items[i];
         if (e->kind == EX_DEFER) {
@@ -18870,6 +18893,10 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
         }
     }
     free(impl_items);
+    free((void *)ctx.tcg_fn_exprs);
+    ctx.tcg_fn_exprs = NULL;
+    ctx.n_tcg_fn_exprs = 0;
+    tcg_reset_group_registry();
 
     /* J2: Emit clone bodies for owned specs (borrow specs have fn==NULL; skip
      * them -- the owner module's TU provides the definition). */

@@ -1477,6 +1477,13 @@ struct Expr {
                   * function emitted more than once (header + implementation,
                   * or several ABI specializations) reports TUR-E0716 once. */
                  bool tailcall_diagnosed;
+                 /* proper-tail-calls T5 (T-D5): 1 + the index, within the
+                  * enclosing function's mutual-tail-call group, of the member
+                  * this tail call targets -- lowered to a jump through the
+                  * group's fused function rather than a C call.  0 when the
+                  * call is not such a jump.  Set (and cleared) by emit_fns.c's
+                  * tco_mark. */
+                 uint8_t tail_group_idx;
                  /* SZ8: when this call is a sized-GADT constructor, `ctor` is the
                   * resolved CtorDef and `size_index` is the inferred type-level
                   * size index of the constructed value (NULL otherwise). Both

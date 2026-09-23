@@ -705,6 +705,17 @@ typedef struct EmitCtx {
      * NULL off the tail path, and compared by NODE identity, so a `match` nested
      * inside a tail `match`'s arm is emitted ordinarily. */
     const struct MatchTailCtx *match_tail;
+    /* proper-tail-calls T5 (T-D5): the top-level function definitions a
+     * mutual-tail-call group may draw its members from -- the module's
+     * EX_FN_DEF items minus the generic templates emit_abi_fn_skip_generic
+     * suppresses.  Filled by the module emitter before its item loop. */
+    const Expr **tcg_fn_exprs;
+    uint32_t     n_tcg_fn_exprs;
+    /* ... and the group member whose body is being emitted (NULL otherwise).
+     * While set, tco_mark marks a tail call to another member of the group,
+     * and emit_tail lowers it -- and a self tail call -- to a jump through the
+     * group's fused function.  See emit_fns.c, "mutual tail-call groups". */
+    const struct TcgCur *tcg_cur;
 } EmitCtx;
 
 /* proper-tail-calls T3 (T-D4): see EmitCtx::match_tail. */
@@ -1213,6 +1224,7 @@ char *fresh_frame(EmitCtx *ctx);
  * parent = a function-outermost frame. */
 void emit_frame_note_parent(const char *frame, const char *parent);
 const char *emit_frame_parent(const char *frame);
+void tcg_reset_group_registry(void);
 void emit_frame_push_defer(EmitCtx *ctx, Buf *body, const char *frame_var,
                            const Expr *it);
 char *fresh_defer_thunk(EmitCtx *ctx);

@@ -40,6 +40,27 @@ All notable changes to Turmeric are documented here.
   local ... is still live at the call"). A `defer` you wrote is unaffected: it
   still runs after the call, in order. This is T4 of
   [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
+- **Mutual tail calls run in constant stack.** Functions that tail-call each
+  other in a cycle -- `is-even?`/`is-odd?`, a state machine, an 8-way
+  dispatcher -- are now fused into one C function with a dispatch loop, so the
+  cycle is a `goto` rather than a chain of C calls: 10,000,000 steps at `-O0`
+  where it used to overflow. Before, a small cycle survived only at `-O2`, and
+  only because the C compiler happened to inline it. Each function keeps its
+  own entry point, so calls from outside the cycle are unchanged. A group
+  forms when every member is a plain top-level `defn` (no closure, inline-C,
+  effectful or `catch-unwind` body; no variadic or `fn`-typed parameter), they
+  share a return type, and there are at most 8 of them with 16 parameters in
+  all; `^tailcall` on a call that misses says so. This is T5 of
+  [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
+
+### Fixed
+
+- **A call to a `: float` function defined later in the file is typed
+  `float`.** The top-level forward-declaration pass had no `float` arm, so such
+  a call was typed `int` and `(if c x (g ...))` with a float `x` failed with a
+  spurious `if branches have mismatched types: then=float else=int` -- which
+  every float-returning mutual pair hits on one side. Functions inside a
+  `defmodule`, and `letrec`, already had it right.
 
 ## [0.51.0] -- 2026-09-21
 

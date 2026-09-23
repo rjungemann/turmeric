@@ -1,6 +1,6 @@
 # Proper tail calls in Turmeric
 
-Status: **T1-T4 landed; T5 and T6 are plan only.**
+Status: **T1-T5 landed; T6 is plan only.**
 
 - **T1 -- `^tailcall` + TUR-E0716 + the `-O0` fixture harness: DONE.** The
   annotation is a checked assertion, not a hint: a call it cannot place in tail
@@ -30,9 +30,15 @@ Status: **T1-T4 landed; T5 and T6 are plan only.**
   emitted**" is the second stale line of that table. See
   [T-D3](#t-d3----cleanup-decides-tail-position-and-the-honest-answer-has-a-limit),
   whose "What shipped" corrects two of the plan's own four corrections.
-- **T5-T6: not built.** Everything they say is still a proposal, and Sections 1
-  and 2 still describe what the compiler does, with the three exceptions noted
-  above.
+- **T5 -- mutual tail calls fused into one function: DONE (2026-09-23), and it
+  moves the two mutual rows of Section 1.** A cycle of tail calls among plain
+  top-level functions becomes one C function with a `switch` at the top of a
+  loop; every member keeps a thin wrapper. `tailcall-mutual-deep` runs a
+  2-member, an 8-member and a mixed-arity group 10,000,000 deep at `-O0`. See
+  [T-D5](#t-d5----mutual-tail-calls-are-scc-fusion-not-sibling-calls), whose
+  "What shipped" records where the design text had to bend.
+- **T6: not built.** Everything it says is still a proposal, and the indirect
+  row of Section 1 still describes what the compiler does.
 
 Prerequisite for [r7rs-lang-plan.md](r7rs-lang-plan.md), but not only for it:
 T1-T3 and T5 are Turmeric features that stand on their own, and T3 closes a
@@ -68,8 +74,8 @@ default (`src/main.c:6213`); `-O0` is what `tur run --debug` uses.
 | **Self** tail call | **pass** | pass | pass | Turmeric emits a real `__tur_tailcall:` label and `goto`. A genuine language guarantee. |
 | Self tail call, **`match` arm** | ~~n/a~~ **pass** | pass | pass | ~~**No backedge emitted.** Ordinary recursive call.~~ **Fixed by T3** (2026-09-22): a real backedge, verified at 1e7 frames at `-O0`. |
 | Self tail call, body owns a **`ref<T>`** | ~~n/a~~ **pass** | pass | pass | ~~**No backedge emitted.** Defer frame pushed; drop fires *after* the call.~~ **Fixed by T4** (2026-09-23) when the local is dead at the call: the frame fires before the backedge. Verified at 1e7 at `-O0`. |
-| **Mutual**, 2 functions | **SIGSEGV** | pass | pass | LLVM inlines the pair and collapses it to a loop. Not a tail call. |
-| **Mutual**, 8 functions | **SIGSEGV** | pass | pass | Same -- LLVM inlines the whole 8-cycle. |
+| **Mutual**, 2 functions | ~~**SIGSEGV**~~ **pass** | pass | pass | ~~LLVM inlines the pair and collapses it to a loop. Not a tail call.~~ **Fixed by T5** (2026-09-23): one fused function with a dispatch loop. Verified at 1e7 at `-O0`. |
+| **Mutual**, 8 functions | ~~**SIGSEGV**~~ **pass** | pass | pass | ~~Same -- LLVM inlines the whole 8-cycle.~~ **Fixed by T5**, same mechanism; 8 is the member cap. |
 | **Indirect** (through a `fn` value) | SIGSEGV | **SIGSEGV at ~29,335** | pass at 1e6 | No tail-call handling anywhere. ~285 bytes of C stack per level on an 8 MB stack. |
 
 Three conclusions, in order of importance:
@@ -674,7 +680,8 @@ with a guarded arm) are the coverage now.
 ### T-D5 -- mutual tail calls are SCC fusion, not sibling calls
 
 **Verdict: fuse each tail-call strongly-connected component into one C function
-with a dispatch loop.**
+with a dispatch loop.** **Landed 2026-09-23** -- see "What shipped" at the end
+of this section.
 
 Compute the SCC of the direct call graph restricted to **tail edges**. A
 singleton SCC with a self-edge is today's backedge. An SCC with n > 1 members
@@ -704,6 +711,73 @@ union -- which is why this wants a size cap and a bail, not unbounded fusion.
 and, by requiring identical return types, has already enforced `musttail`'s main
 precondition -- see T-D2's T2b. It is still not the floor, and T5 subsumes it
 with no toolchain dependency.
+
+#### What shipped (T5, 2026-09-23)
+
+The emitted shape is the sketch above with three changes, each forced by
+something the sketch did not have to face:
+
+```c
+static bool __tcg_group_0(int, int64_t, int64_t);        /* at the FIRST member */
+static bool is_hyodd_qu(int64_t n) { return __tcg_group_0(0, n, ((int64_t)0)); }
+static bool __tcg_group_0(int __tcg_st, int64_t __tcg_s0, int64_t __tcg_s1) {
+    __tcg_top:;
+    switch (__tcg_st) {
+    case 0: { int64_t n = __tcg_s0; (void)n;
+        if ((n) == (INT64_C(0))) { return false; }
+        else { int64_t __t = (n) - (INT64_C(1));
+               __tcg_s1 = __t; __tcg_st = 1; goto __tcg_top; } }
+    case 1: { int64_t n = __tcg_s1; ... __tcg_st = 0; goto __tcg_top; ... }
+    default: break;
+    }
+    return ((bool)0);
+}
+static bool is_hyeven_qu(int64_t n) { return __tcg_group_0(1, ((int64_t)0), n); }
+```
+
+- **Concatenated slots, not a union.** Each member owns `n_params` slots of its
+  own C types, and its `case` re-declares its parameters as block locals read
+  from them. That is what lets every member's body be emitted by the
+  unmodified `emit_tail` -- the parameters keep their names, so nothing in the
+  body knows it is fused -- and it is why the cap is on total parameters (16)
+  as well as members (8), the TR4 bail. A wrapper passes a typed zero for the
+  slots that are not its own.
+- **A self call inside a group jumps too.** The `__tur_tailcall:` label is
+  function-scoped in C, so two members cannot each have one; every tail call
+  into the group, including a member's own, writes slots and goes through the
+  top of the `switch`. Argument temps, then the T4 frame fire, then the `any`
+  drops, then the slots -- the backedge's order.
+- **The definition is written at the LAST member's position; a prototype at
+  the first.** A member may only ever be emitted after the globals its body
+  names, so the one position every member's body is valid at is the last
+  one.
+
+Membership is deliberately narrow: a plain top-level `defn` -- no closure,
+dictionary clone, instance method, inline-C, effect-colored (CPS) or
+`catch-unwind` body, not variadic -- every parameter one the backedge could
+reassign and that the signature spells `<ctype> <name>` with no binding
+flags, and one C return type across the group. Everything outside that set is
+a function `emit_fn_def` shapes in ways a `case` block does not reproduce
+(its pass-by-pointer, boxed and carrier parameters; its return ladder's
+earlier arms). The edges are computed by walking exactly `tco_mark`'s spine,
+so an edge is a call `tco_mark` will mark, and the component is a property of
+the graph rather than of which member is emitted first.
+
+Found on the way and fixed in the same change: the TOP-LEVEL forward-declaration
+pre-pass (`elab_toplevel.c`) had no `float` arm, so a call to a `: float`
+function defined later in the file was typed `int` -- a spurious
+`then=float else=int`, which every float-returning mutual pair hits on one
+side. The `defmodule` and letrec pre-passes already had the arm.
+
+Fixtures: `tailcall-mutual-deep` (1e7 at `-O0`: an 8-cycle, a mixed-arity
+float/cstr pair with a self jump, a `match`-arm jump under T4 drop glue beside a
+non-tail member call and a tail call out of the group), `tailcall-mutual-annot`
+(the snapshot -- formerly the negative `errors/tailcall-mutual`, whose header
+predicted the move), `tailcall-mutual-panic` (a panic inside a jump's
+argument, leak-checked), and `errors/tailcall-mutual-not-fusable` (a cycle
+threading a `fn`-typed parameter). `mutual-recursion` and
+`tco-nonself-tail-call-no-check` re-snapshot: their even/odd pairs are groups
+now.
 
 ### T-D6 -- indirect tail calls need a trampoline, and only dynamic dialects get the guarantee
 
@@ -739,7 +813,7 @@ typed Turmeric.**
 | ~~**T2** -- drop the redundant panic check at tail calls (T-D2)~~ **DONE** | medium | 6,601 fewer branch sites, -31,216 lines of emitted C. **No depth number moved** |
 | ~~**T3** -- `EX_MATCH` in the tail grammar (T-D4)~~ **DONE** | small | closed a silent hole in the most idiomatic loop shape. 1e7 at `-O0`; **zero** snapshot churn |
 | ~~**T4** -- drop-glue hoisting by liveness (T-D3 row 2)~~ **DONE** | medium | owned-local loops get the guarantee when the local is dead at the call. 1e7 at `-O0`; **zero** snapshot churn |
-| **T5** -- SCC fusion for mutual tail calls (T-D5) | medium-large | mutual recursion becomes a guarantee instead of an `-O2` accident |
+| ~~**T5** -- SCC fusion for mutual tail calls (T-D5)~~ **DONE** | medium-large | mutual recursion is a guarantee instead of an `-O2` accident. 1e7 at `-O0`; two snapshots moved |
 | **T6** -- bounce trampoline for indirect tail calls under dynamic dialects (T-D6) | medium | **R7RS's actual prerequisite**; also fixes Saffron's ~29K ceiling |
 
 **Order T4 and T5 by their own merits, not behind T2.** T2 shipped and is a
@@ -748,11 +822,11 @@ bounce descriptor, so none of them consumes it. Its only consumer is the
 optional T2b (`musttail`). T3 landing on its own, without T2, would have worked
 identically -- which is the evidence.
 
-**T4 has landed** (T-D3, "What shipped"). T5 is now the next stage, and the
-largest thing left that does not depend on R7RS.
+**T4 and T5 have landed** (T-D3 and T-D5, "What shipped"). T6 is the only
+stage left, and it is the R7RS gate.
 
-T5 is the one that makes `docs/guides/performance-guide.md` able to say
-something stronger than it says now. T6 is the R7RS gate.
+T5 is what let `docs/guides/performance-guide.md` say something stronger, and
+it now does. T6 is the R7RS gate.
 
 **Harness requirement, repeated because it is the trap:** every fixture builds
 at `-O0` (`requires.*` marker or an explicit `--debug` invocation), asserts a
@@ -766,7 +840,9 @@ tail-call fixture at `-O2` asserts nothing.
 - **T2** removed emitted code, by more than "slightly": -31,216 lines across
   the 149 `expected.c` snapshots, 6,601 branch sites gone. It costs nothing at
   runtime and changed no depth behavior at either `-O0` or `-O2`.
-- **T3, T5** cost nothing at runtime. They convert calls into `goto`s.
+- **T3** costs nothing at runtime. It converts calls into `goto`s.
+- **T5** converts calls into `goto`s through a `switch`: one indirect branch per
+  jump, and a wrapper that zero-fills the other members' slots on entry.
 - **T4** converts the call into a `goto` and keeps the defer frame, so each
   step still pays the frame's init, push and fire -- the same work the
   recursive version paid per level, minus the call and the stack frame.
@@ -824,11 +900,14 @@ the panic-surfacing half.
 union of its members' parameters. A large SCC with disjoint signatures produces
 a wide, ugly function. Mitigation: a member/parameter cap with a clean bail to
 today's behavior, plus the `^tailcall` diagnostic saying the group was too wide.
+**As shipped (T5):** 8 members and 16 parameters in all; past either the cycle
+is ordinary recursion, and `^tailcall` on one of its calls names both caps
+among the conditions a group needs (it does not single out which one failed).
 
 **TR5 -- scope.** This is six stages, and only T6 is strictly required by R7RS.
 It would be easy for this to become the work instead of a prerequisite to it.
 Mitigation: T1-T3 are small and independently valuable; if the R7RS track
-stalls, they should land anyway. T1-T4 have.
+stalls, they should land anyway. T1-T5 have.
 
 ---
 

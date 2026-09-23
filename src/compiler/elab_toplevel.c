@@ -1534,6 +1534,19 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                                         return_kind = TY_INT;
                                     } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
                                         return_kind = TY_BOOL;
+                                    } else if ((kw->len == 5 && memcmp(kw->name, "float", 5) == 0) ||
+                                               (kw->len == 7 && memcmp(kw->name, "float64", 7) == 0)) {
+                                        /* proper-tail-calls T5: a `: float` defn called
+                                         * before its definition -- the shape every mutual
+                                         * pair has on one side -- forward-typed as the
+                                         * TY_INT default, so `(if c x (g ...))` with a
+                                         * float `x` was a spurious "then=float else=int".
+                                         * The defmodule pre-pass (elab_module.c) and the
+                                         * letrec peek (elab_forms.c) already had this
+                                         * arm; the top-level twin never did.  `float32`
+                                         * stays out for the reason the letrec peek gives:
+                                         * its register class is policed by E0707. */
+                                        return_kind = TY_FLOAT;
                                     } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
                                         return_kind = TY_NIL;
                                     } else if (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0) {

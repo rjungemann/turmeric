@@ -144,8 +144,26 @@ across a self-call).  Pinned by `tests/fixtures/tco-named-let-capture-deep`
 and `tests/fixtures/tco-named-let-nocapture-deep` at 5,000,000 iterations
 each.
 
-**Boundary (1.0).** Only *self*-tail calls are optimized.  The following are
-left as ordinary recursive calls -- correct, but not stack-optimized:
+**Mutual tail calls.** Functions that tail-call each other in a cycle are
+fused into one C function with a dispatch loop, so the cycle runs in constant
+stack at any optimization level:
+
+```turmeric no-check
+(defn is-even? [n :int] :bool (if (= n 0) true  ^tailcall (is-odd?  (- n 1))))
+(defn is-odd?  [n :int] :bool (if (= n 0) false ^tailcall (is-even? (- n 1))))
+```
+
+Each member keeps its own C function as a thin wrapper, so calls from outside
+the cycle -- and non-tail calls from inside it -- are unchanged.  A group forms
+when every member is a plain top-level `defn` (no closure, dictionary, inline-C,
+effectful or `catch-unwind` body; no variadic, `fn`-typed or pass-by-pointer
+parameter), all share one C return type, and the group stays within 8 members
+and 16 parameters in all.  Pinned by `tests/fixtures/tailcall-mutual-deep` at
+10,000,000 steps at `-O0`.  Before this, a small cycle passed at `-O2` only
+because clang inlined it into a loop, and overflowed at `-O0`.
+
+**Boundary (1.0).** Self and mutual tail calls are optimized.  The following
+are left as ordinary recursive calls -- correct, but not stack-optimized:
 
 - **non-tail recursion** (e.g. `(+ n (sum-to (- n 1)))`, where work remains
   after the call returns) -- never eligible, by definition;
@@ -153,7 +171,9 @@ left as ordinary recursive calls -- correct, but not stack-optimized:
   no value, one with no arms, or an `offer` over a session channel.  An
   ordinary `match` -- ADT constructors, type-narrowing an `any`, literals,
   with or without `when`-guards -- **is** in the tail grammar;
-- **mutual / general tail calls** (function A tail-calls B which tail-calls A);
+- **mutual tail calls outside a group** -- a cycle with a member that is not a
+  plain top-level function, a return type that differs, or more than 8 members
+  / 16 parameters -- and **indirect** tail calls through a `fn` value;
 - self-recursive functions with pass-by-pointer struct, function-typed, or
   poly-fn parameters;
 - a self-recursive function with an explicit `defer` in the block around the
@@ -229,10 +249,9 @@ annotation holds at `-O0`.  A tail-call fixture built at `-O2` asserts nothing
 measures the C compiler.  See
 [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
 
-General/mutual tail-call elimination and trampolining are not built.  The
-route out is mutual-tail-call SCC fusion and, for indirect calls in the
-dynamic dialects, a bounce trampoline -- routing them through the existing CPS
-backend is not it: that backend emits a tail call as an ordinary call, a panic
+Indirect tail calls (through a `fn` value) are not built.  The route out, for
+the dynamic dialects, is a bounce trampoline -- routing them through the
+existing CPS backend is not it: that backend emits a tail call as an ordinary call, a panic
 check, and a continuation invocation, which was measured rather than assumed.
 See
 [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md)
