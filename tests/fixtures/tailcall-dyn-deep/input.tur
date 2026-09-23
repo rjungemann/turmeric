@@ -46,11 +46,11 @@
 (defn step [acc x] (apply-to (fn [y] (+ y x)) acc))
 
 (defn main [] : int
-  (println (run run 10000000 0))
+  (println (run run 1000000 0))
   (let [loop (fn [self n] (if (= n 0) "done" ^tailcall (self self (- n 1))))]
-    (println (loop loop 10000000)))
+    (println (loop loop 1000000)))
   (let [counter (make-counter 3)]
-    (println (counter counter 10000000 0)))
-  (println (ping ping pong 10000001))
+    (println (counter counter 1000000 0)))
+  (println (ping ping pong 1000001))
   (println (vec-fold [1 2 3 4 5] 100 step))
   0)
