@@ -59,6 +59,22 @@ All notable changes to Turmeric are documented here.
   plan's D9 exit criterion (a Scheme program calling the stdlib map);
   `tests/fixtures/r7rs-data-forms` runs every R3 shape compiled and
   interpreted with identical output.
+- **`#lang r7rs` `syntax-rules` (R4).** `define-syntax`, `let-syntax`,
+  `letrec-syntax` and `syntax-error`, with the full pattern language (`_`,
+  literals, `...` at any depth and after a subpattern, elements after an
+  ellipsis, improper tails, vector patterns, datum literals, a custom
+  ellipsis, the `(... ...)` escape) and renaming hygiene: an identifier a
+  template introduces in a binding position is renamed fresh, so the
+  standard's own `or`, `let*` and `do` expand correctly and `swap!` cannot
+  capture. The expander is part of the Scheme lowering pass, so every
+  expansion is lowered on the spot; a macro may expand to a `define` at
+  body start. The referential-transparency gap of renaming hygiene (a free
+  identifier the use site shadows) is on record as a named failing test,
+  `tests/fixtures/r7rs-syntax-rules-referential-transparency`, under a new
+  `expected.xfail` fixture marker that both `tests/run.sh` and
+  `tests/run-turi.sh` honour: the expected mismatch passes as `(xfail)` and a
+  match fails until the marker is deleted. `er-macro-transformer` is
+  deferred with a diagnostic.
 - **Fixed: a forward-referenced callee with a compound parameter type in a
   Saffron (or R7RS) file unboxed its `any` argument to `int`.** The pass-1
   forward declaration recorded `[v : (Vec any)]` as the `int` placeholder,

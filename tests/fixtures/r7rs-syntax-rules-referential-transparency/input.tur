@@ -1,0 +1,15 @@
+#lang r7rs
+;; r7rs-lang-plan R4 / D5: the NAMED FAILING TEST for renaming hygiene's
+;; referential-transparency gap.  `my-list`'s template refers to `list`
+;; free; R7RS says that identifier means what it meant where the macro was
+;; DEFINED, so shadowing `list` at the use site must not change the
+;; expansion and this prints (1).  Renaming hygiene (D5a) renames the
+;; identifiers a template BINDS, and leaves a free one to resolve at the use
+;; site, where the let has rebound it to vector: it prints #(1).
+;;
+;; expected.stdout is the R7RS answer, and expected.xfail says the suite
+;; expects this fixture to FAIL until full scope-set hygiene (D5b) lands.
+;; When it passes, delete the marker: that is the day the gap closed.
+(define-syntax my-list (syntax-rules () ((_ x) (list x))))
+(display (let ((list vector)) (my-list 1)))
+(newline)

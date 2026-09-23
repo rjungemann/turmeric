@@ -1,0 +1,3 @@
+#lang r7rs
+(define-syntax loop (syntax-rules () ((_) (loop))))
+(loop)

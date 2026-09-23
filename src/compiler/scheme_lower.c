@@ -173,6 +173,17 @@ typedef struct SL {
     const Symbol **muts;
     uint32_t       n_muts, cap_muts;
     uint32_t       next_tmp;
+    /* R4: the syntax-rules macros in scope, innermost last.  A body or a
+     * let-syntax records n_macros on entry and restores it on exit; lookup
+     * walks from the end so an inner definition shadows an outer one. */
+    struct SMacro **macros;
+    uint32_t        n_macros, cap_macros;
+    /* R4: macros whose templates set! a pattern variable (see collect_muts). */
+    const Symbol  **setters;
+    uint32_t        n_setters, cap_setters;
+    uint32_t        expand_depth;
+    const Symbol   *s_syntax_rules, *s_ellipsis, *s_underscore, *s_syntax_error,
+                   *s_quote, *s_er_macro_transformer;
 } SL;
 
 static const Symbol *I(SL *sl, const char *s) {
@@ -205,6 +216,12 @@ static void sl_init(SL *sl, Arena *a, SymbolTable *st) {
     sl->s_quasiquote = I(sl, "quasiquote");
     sl->s_unquote = I(sl, "unquote");
     sl->s_unquote_splicing = I(sl, "unquote-splicing");
+    sl->s_syntax_rules = I(sl, "syntax-rules");
+    sl->s_ellipsis = I(sl, "...");
+    sl->s_underscore = I(sl, "_");
+    sl->s_syntax_error = I(sl, "syntax-error");
+    sl->s_quote = I(sl, "quote");
+    sl->s_er_macro_transformer = I(sl, "er-macro-transformer");
 
     sl->t_defn = I(sl, "defn");   sl->t_def = I(sl, "def");
     sl->t_fn = I(sl, "fn");       sl->t_let = I(sl, "let");
@@ -265,6 +282,14 @@ static Form *Ln(SL *sl, Span sp, int n, ...) {
 /* `: any`, the way the reader spells a spaced annotation. */
 static Form *AnyAnn(SL *sl, Span sp) {
     return form_type_ann(sl->a, sp, Sym(sl, sp, sl->t_any));
+}
+
+/* The reader spells `()` as F_NIL; a binding list, formals list or do-spec
+ * list written empty (or produced empty by a syntax-rules template) is an
+ * empty list to the forms below. */
+static Form *nil_to_list(SL *sl, Form *f) {
+    if (f && f->tag == F_NIL) return List(sl, f->span, NULL, 0);
+    return f;
 }
 
 static bool is_sym(const Form *f, const Symbol *s) {
@@ -332,6 +357,81 @@ static bool is_mut(const SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_muts; i++) if (sl->muts[i] == s) return true;
     return false;
 }
+/* R4: the mutability scan runs BEFORE expansion (a top-level `define` is
+ * lowered as `def` or `def ^mut` before any later form is looked at), so a
+ * `set!` a template performs has to be accounted for syntactically.  A
+ * `(set! v ...)` in a syntax-rules template whose target is one of the rule's
+ * pattern variables marks the macro as a SETTER of its arguments: every
+ * symbol among a use's arguments is then a set! target (per-name, so it is
+ * the same over-approximation the scan already makes); a template that sets
+ * a name of its own (`(set! counter ...)`) marks that name directly.  Scoping
+ * is ignored here on purpose -- an over-approximation by name is safe. */
+static void note_setter_macro(SL *sl, const Symbol *s) {
+    for (uint32_t i = 0; i < sl->n_setters; i++) if (sl->setters[i] == s) return;
+    if (sl->n_setters == sl->cap_setters) {
+        sl->cap_setters = sl->cap_setters ? sl->cap_setters * 2 : 8;
+        sl->setters = (const Symbol **)realloc((void *)sl->setters,
+                                               sl->cap_setters * sizeof(const Symbol *));
+        if (!sl->setters) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    sl->setters[sl->n_setters++] = s;
+}
+static bool is_setter_macro(const SL *sl, const Symbol *s) {
+    for (uint32_t i = 0; i < sl->n_setters; i++) if (sl->setters[i] == s) return true;
+    return false;
+}
+static bool form_mentions_sym(const Form *f, const Symbol *s) {
+    if (!f) return false;
+    if (f->tag == F_SYM) return f->as.sym == s;
+    if (f->tag == F_LIST || f->tag == F_VEC)
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            if (form_mentions_sym(f->as.list.items[i], s)) return true;
+    return false;
+}
+static void note_all_syms(SL *sl, const Form *f) {
+    if (!f) return;
+    if (f->tag == F_SYM) { note_mut(sl, f->as.sym); return; }
+    if (f->tag == F_QUOTE) return;
+    if (f->tag == F_LIST || f->tag == F_VEC)
+        for (uint32_t i = 0; i < f->as.list.len; i++) note_all_syms(sl, f->as.list.items[i]);
+}
+/* Walk a template for set! forms; `pattern` is the rule's pattern. */
+static void scan_template_sets(SL *sl, const Symbol *macro, const Form *pattern, const Form *t) {
+    if (!t) return;
+    if (t->tag == F_QUOTE) return;
+    if (t->tag != F_LIST && t->tag != F_VEC) return;
+    if (t->tag == F_LIST && t->as.list.len == 3 && is_sym(t->as.list.items[0], sl->s_set) &&
+        t->as.list.items[1]->tag == F_SYM) {
+        const Symbol *tgt = t->as.list.items[1]->as.sym;
+        if (form_mentions_sym(pattern, tgt)) note_setter_macro(sl, macro);
+        else note_mut(sl, tgt);
+    }
+    for (uint32_t i = 0; i < t->as.list.len; i++) scan_template_sets(sl, macro, pattern, t->as.list.items[i]);
+}
+static void scan_syntax_rules(SL *sl, const Symbol *macro, const Form *spec) {
+    if (!head_is(spec, sl->s_syntax_rules)) return;
+    for (uint32_t i = 1; i < spec->as.list.len; i++) {
+        const Form *rule = spec->as.list.items[i];
+        if (rule->tag == F_LIST && rule->as.list.len == 2 && rule->as.list.items[0]->tag == F_LIST)
+            scan_template_sets(sl, macro, rule->as.list.items[0], rule->as.list.items[1]);
+    }
+}
+static void collect_setter_macros(SL *sl, const Form *f) {
+    if (!f || (f->tag != F_LIST && f->tag != F_VEC)) return;
+    if (head_is(f, sl->s_define_syntax) && f->as.list.len == 3 && f->as.list.items[1]->tag == F_SYM)
+        scan_syntax_rules(sl, f->as.list.items[1]->as.sym, f->as.list.items[2]);
+    else if ((head_is(f, sl->s_let_syntax) || head_is(f, sl->s_letrec_syntax)) &&
+             f->as.list.len >= 2 && f->as.list.items[1]->tag == F_LIST) {
+        const Form *bl = f->as.list.items[1];
+        for (uint32_t i = 0; i < bl->as.list.len; i++) {
+            const Form *b = bl->as.list.items[i];
+            if (b->tag == F_LIST && b->as.list.len == 2 && b->as.list.items[0]->tag == F_SYM)
+                scan_syntax_rules(sl, b->as.list.items[0]->as.sym, b->as.list.items[1]);
+        }
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++) collect_setter_macros(sl, f->as.list.items[i]);
+}
+
 static void collect_muts(SL *sl, const Form *f) {
     if (!f) return;
     switch (f->tag) {
@@ -343,6 +443,9 @@ static void collect_muts(SL *sl, const Form *f) {
                 is_sym(f->as.list.items[0], sl->s_set) &&
                 f->as.list.items[1]->tag == F_SYM)
                 note_mut(sl, f->as.list.items[1]->as.sym);
+            if (f->tag == F_LIST && f->as.list.len >= 2 && f->as.list.items[0]->tag == F_SYM &&
+                is_setter_macro(sl, f->as.list.items[0]->as.sym))
+                for (uint32_t i = 1; i < f->as.list.len; i++) note_all_syms(sl, f->as.list.items[i]);
             for (uint32_t i = 0; i < f->as.list.len; i++)
                 collect_muts(sl, f->as.list.items[i]);
             return;
@@ -367,6 +470,561 @@ static const Symbol *rn(SL *sl, const Symbol *s) {
     for (size_t i = 0; i < N_RENAMES; i++)
         if (sl->rn_from[i] == s) return sl->rn_to[i];
     return s;
+}
+
+static bool is_char_form(SL *sl, const Form *f);
+static Form *lower_body(SL *sl, Form **items, uint32_t n, Span sp);
+
+/* --- R4: syntax-rules ------------------------------------------------------ */
+/*
+ * A `syntax-rules` transformer is a pattern matcher plus a template
+ * instantiator over forms, and it lives HERE, in the Form -> Form lowering,
+ * rather than on the `defmacro*` / `Syntax` substrate D5 named.  The reason
+ * is ordering, not taste: a `defmacro*` runs inside elaboration, AFTER this
+ * pass, and its output would be Scheme forms (`let`, `cond`, a named `let`)
+ * that nothing would lower.  An expansion has to happen where the lowering
+ * can still see it, so the expander is part of the lowering and every
+ * expansion is lowered on the spot.  D5's hygiene verdict stands: (a)
+ * renaming -- every identifier a template introduces that lands in a
+ * BINDING position is renamed to a fresh symbol, consistently across that
+ * expansion, so it cannot capture a use-site name; a free identifier the
+ * template introduces keeps its name and means what it means at the
+ * definition site, which in one flat namespace is right until the use site
+ * shadows it (the referential-transparency gap the plan asks for a named
+ * failing test of: tests/fixtures/r7rs-syntax-rules-referential-transparency).
+ *
+ * Patterns: `_`, literals (matched by name), pattern variables, `...` at any
+ * depth including after a subpattern with its own ellipsis, elements after
+ * an ellipsis (`(_ a ... b c)`), improper tails (`(_ a . rest)`), vectors,
+ * and datum literals (numbers, strings, booleans, chars).  A custom ellipsis
+ * (`(syntax-rules ::: (lits) ...)`) and the `(... ...)` escape are honoured.
+ * Templates: substitution, `x ...` and `x ... ...`, dotted tails that splice
+ * a substituted list, vectors, and `syntax-error`.  Macros scope lexically
+ * through `define-syntax` (top level or body start), `let-syntax` and
+ * `letrec-syntax` (both letrec-scoped here, since expansion is lazy).
+ */
+
+typedef struct SRule { Form *pattern, *template; } SRule;
+typedef struct SMacro {
+    const Symbol  *name;
+    const Symbol  *ellipsis;
+    const Symbol **literals; uint32_t n_literals;
+    SRule         *rules;    uint32_t n_rules;
+} SMacro;
+
+/* A pattern-variable binding: depth 0 holds the matched form; depth d > 0
+ * holds an F_LIST whose items are depth d-1 values, one per iteration of
+ * the ellipsis that produced it. */
+typedef struct MBind { const Symbol *var; uint32_t depth; Form *val; } MBind;
+typedef struct MEnv  { MBind *items; uint32_t n, cap; } MEnv;
+/* A symbol buffer (pattern variables with their static depths, binders). */
+typedef struct SB { const Symbol **syms; uint32_t *depths; uint32_t n, cap; } SB;
+
+#define SR_MAX_DEPTH 1000
+
+static void sb_push(SB *b, const Symbol *s, uint32_t d) {
+    for (uint32_t i = 0; i < b->n; i++) if (b->syms[i] == s) return;
+    if (b->n == b->cap) {
+        b->cap = b->cap ? b->cap * 2 : 8;
+        b->syms = (const Symbol **)realloc((void *)b->syms, b->cap * sizeof(*b->syms));
+        b->depths = (uint32_t *)realloc(b->depths, b->cap * sizeof(uint32_t));
+        if (!b->syms || !b->depths) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    b->syms[b->n] = s; b->depths[b->n] = d; b->n++;
+}
+static void sb_free(SB *b) { free((void *)b->syms); free(b->depths); b->syms = NULL; b->depths = NULL; b->n = b->cap = 0; }
+
+static void env_push(MEnv *e, const Symbol *var, uint32_t depth, Form *val) {
+    if (e->n == e->cap) {
+        e->cap = e->cap ? e->cap * 2 : 8;
+        e->items = (MBind *)realloc(e->items, e->cap * sizeof(MBind));
+        if (!e->items) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    e->items[e->n].var = var; e->items[e->n].depth = depth; e->items[e->n].val = val; e->n++;
+}
+static MBind *env_lookup(MEnv *e, const Symbol *var) {
+    for (int32_t i = (int32_t)e->n - 1; i >= 0; i--) if (e->items[i].var == var) return &e->items[i];
+    return NULL;
+}
+static void env_free(MEnv *e) { free(e->items); e->items = NULL; e->n = e->cap = 0; }
+
+static SMacro *sr_lookup(SL *sl, const Symbol *s) {
+    for (int32_t i = (int32_t)sl->n_macros - 1; i >= 0; i--)
+        if (sl->macros[i]->name == s) return sl->macros[i];
+    return NULL;
+}
+static void sr_push(SL *sl, SMacro *m) {
+    if (sl->n_macros == sl->cap_macros) {
+        sl->cap_macros = sl->cap_macros ? sl->cap_macros * 2 : 8;
+        sl->macros = (SMacro **)realloc(sl->macros, sl->cap_macros * sizeof(SMacro *));
+        if (!sl->macros) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    sl->macros[sl->n_macros++] = m;
+}
+static bool sr_is_ellipsis(const SMacro *m, const Form *f) { return f && f->tag == F_SYM && f->as.sym == m->ellipsis; }
+static bool sr_is_literal(const SMacro *m, const Symbol *s) {
+    for (uint32_t i = 0; i < m->n_literals; i++) if (m->literals[i] == s) return true;
+    return false;
+}
+/* The items of a list form and its dotted tail (NULL when proper). */
+static void sr_parts(SL *sl, Form *f, Form ***items, uint32_t *n, Form **tail) {
+    *tail = NULL;
+    if (f->tag == F_NIL) { *items = NULL; *n = 0; return; }
+    *items = f->as.list.items; *n = f->as.list.len;
+    if (*n >= 3 && is_sym((*items)[*n - 2], sl->s_dot)) { *tail = (*items)[*n - 1]; *n -= 2; }
+}
+static bool sr_is_listy(const Form *f) { return f->tag == F_LIST || f->tag == F_NIL; }
+
+/* Pattern variables of `pat` with their static ellipsis depths. */
+static void sr_pattern_vars(SL *sl, const SMacro *m, Form *pat, uint32_t depth, SB *out) {
+    switch (pat->tag) {
+        case F_SYM:
+            if (pat->as.sym == sl->s_underscore || sr_is_ellipsis(m, pat) || sr_is_literal(m, pat->as.sym)) return;
+            sb_push(out, pat->as.sym, depth);
+            return;
+        case F_LIST: case F_VEC: {
+            if (is_char_form(sl, pat)) return;
+            for (uint32_t i = 0; i < pat->as.list.len; i++) {
+                Form *it = pat->as.list.items[i];
+                if (is_sym(it, sl->s_dot)) continue;
+                uint32_t d = depth;
+                if (i + 1 < pat->as.list.len && sr_is_ellipsis(m, pat->as.list.items[i + 1])) d++;
+                if (sr_is_ellipsis(m, it)) continue;
+                sr_pattern_vars(sl, m, it, d, out);
+            }
+            return;
+        }
+        default: return;
+    }
+}
+
+static bool sr_match(SL *sl, const SMacro *m, Form *pat, Form *form, MEnv *env);
+
+/* Match pattern items (with an optional dotted tail pattern) against form
+ * items (with an optional dotted tail).  At most one ellipsis per level. */
+static bool sr_match_items(SL *sl, const SMacro *m, Form **pi, uint32_t np, Form *ptail,
+                           Form **fi, uint32_t nf, Form *ftail, MEnv *env, Span sp) {
+    int32_t e = -1;
+    for (uint32_t i = 0; i < np; i++) {
+        if (sr_is_ellipsis(m, pi[i])) {
+            if (i == 0) { err(pi[i], "an ellipsis must follow a subpattern"); return false; }
+            if (e >= 0) { err(pi[i], "only one ellipsis per list level in a pattern"); return false; }
+            e = (int32_t)i;
+        }
+    }
+    if (e < 0) {
+        if (ptail) {
+            if (nf < np) return false;
+            for (uint32_t i = 0; i < np; i++) if (!sr_match(sl, m, pi[i], fi[i], env)) return false;
+            Form *rest;
+            if (nf == np) rest = ftail ? ftail : Nil(sl, sp);
+            else {
+                FB b = {0};
+                for (uint32_t i = np; i < nf; i++) fb_push(&b, fi[i]);
+                if (ftail) { fb_push(&b, Sym(sl, sp, sl->s_dot)); fb_push(&b, ftail); }
+                rest = fb_list(sl, &b, sp);
+            }
+            return sr_match(sl, m, ptail, rest, env);
+        }
+        if (nf != np || ftail) return false;
+        for (uint32_t i = 0; i < np; i++) if (!sr_match(sl, m, pi[i], fi[i], env)) return false;
+        return true;
+    }
+    uint32_t npre = (uint32_t)e - 1, npost = np - (uint32_t)e - 1;
+    Form *sub = pi[e - 1];
+    if (nf < npre + npost) return false;
+    if (!ptail && ftail) return false;
+    uint32_t cnt = nf - npre - npost;
+    for (uint32_t i = 0; i < npre; i++) if (!sr_match(sl, m, pi[i], fi[i], env)) return false;
+    MEnv *subs = cnt ? (MEnv *)calloc(cnt, sizeof(MEnv)) : NULL;
+    bool ok = true;
+    for (uint32_t j = 0; j < cnt && ok; j++)
+        if (!sr_match(sl, m, sub, fi[npre + j], &subs[j])) ok = false;
+    if (ok) {
+        SB vars = {0};
+        sr_pattern_vars(sl, m, sub, 0, &vars);
+        for (uint32_t v = 0; v < vars.n; v++) {
+            FB seq = {0};
+            for (uint32_t j = 0; j < cnt; j++) {
+                MBind *b = env_lookup(&subs[j], vars.syms[v]);
+                fb_push(&seq, b ? b->val : Nil(sl, sp));
+            }
+            env_push(env, vars.syms[v], vars.depths[v] + 1, fb_list(sl, &seq, sp));
+        }
+        sb_free(&vars);
+    }
+    for (uint32_t j = 0; j < cnt; j++) env_free(&subs[j]);
+    free(subs);
+    if (!ok) return false;
+    for (uint32_t i = 0; i < npost; i++)
+        if (!sr_match(sl, m, pi[e + 1 + i], fi[nf - npost + i], env)) return false;
+    if (ptail) return sr_match(sl, m, ptail, ftail ? ftail : Nil(sl, sp), env);
+    return true;
+}
+
+static bool sr_match(SL *sl, const SMacro *m, Form *pat, Form *form, MEnv *env) {
+    switch (pat->tag) {
+        case F_SYM:
+            if (pat->as.sym == sl->s_underscore) return true;
+            if (sr_is_ellipsis(m, pat)) { err(pat, "misplaced ellipsis in pattern"); return false; }
+            if (sr_is_literal(m, pat->as.sym))
+                return form->tag == F_SYM && form->as.sym == pat->as.sym;
+            env_push(env, pat->as.sym, 0, form);
+            return true;
+        case F_NIL: case F_LIST: {
+            if (is_char_form(sl, pat)) return form_equal(pat, form);
+            if (!sr_is_listy(form)) return false;
+            Form **pi, **fi, *ptail, *ftail; uint32_t np, nf;
+            sr_parts(sl, pat, &pi, &np, &ptail);
+            sr_parts(sl, form, &fi, &nf, &ftail);
+            return sr_match_items(sl, m, pi, np, ptail, fi, nf, ftail, env, form->span);
+        }
+        case F_VEC:
+            if (form->tag != F_VEC) return false;
+            return sr_match_items(sl, m, pat->as.list.items, pat->as.list.len, NULL,
+                                  form->as.list.items, form->as.list.len, NULL, env, form->span);
+        default:
+            return form_equal(pat, form);
+    }
+}
+
+/* Template variables bound at depth >= 1 in `env`, i.e. the ones an
+ * ellipsis over `t` iterates. */
+static void sr_template_vars(SL *sl, const SMacro *m, Form *t, MEnv *env, SB *out) {
+    switch (t->tag) {
+        case F_SYM: {
+            MBind *b = env_lookup(env, t->as.sym);
+            if (b && b->depth >= 1) sb_push(out, t->as.sym, b->depth);
+            return;
+        }
+        case F_LIST: case F_VEC:
+            if (t->as.list.len == 2 && sr_is_ellipsis(m, t->as.list.items[0])) return;   /* (... ...) */
+            for (uint32_t i = 0; i < t->as.list.len; i++) sr_template_vars(sl, m, t->as.list.items[i], env, out);
+            return;
+        case F_QUOTE: case F_QUASIQUOTE: case F_UNQUOTE: case F_UNQUOTE_SPLICING:
+            sr_template_vars(sl, m, t->as.list.items[0], env, out);
+            return;
+        default: return;
+    }
+}
+
+static Form *sr_inst(SL *sl, const SMacro *m, Form *t, MEnv *env, Span sp, FB *intro, bool esc);
+
+/* `t ...` (k ellipses): instantiate `t` once per element of the iterated
+ * variables, flattening k levels. */
+static bool sr_inst_ellipsis(SL *sl, const SMacro *m, Form *t, MEnv *env, uint32_t k,
+                             Span sp, FB *intro, FB *out) {
+    SB vars = {0};
+    sr_template_vars(sl, m, t, env, &vars);
+    if (vars.n == 0) { err(t, "no pattern variable in the subtemplate before this ellipsis"); return false; }
+    int64_t len = -1;
+    for (uint32_t v = 0; v < vars.n; v++) {
+        MBind *b = env_lookup(env, vars.syms[v]);
+        int64_t l = (int64_t)b->val->as.list.len;
+        if (len < 0) len = l;
+        else if (l != len) { err(t, "pattern variables under this ellipsis matched different lengths"); sb_free(&vars); return false; }
+    }
+    bool ok = true;
+    for (int64_t j = 0; j < len && ok; j++) {
+        MEnv e2 = {0};
+        for (uint32_t i = 0; i < env->n; i++) env_push(&e2, env->items[i].var, env->items[i].depth, env->items[i].val);
+        for (uint32_t v = 0; v < vars.n; v++) {
+            MBind *b = env_lookup(env, vars.syms[v]);
+            env_push(&e2, vars.syms[v], b->depth - 1, b->val->as.list.items[j]);
+        }
+        if (k == 1) {
+            Form *r = sr_inst(sl, m, t, &e2, sp, intro, false);
+            if (!r) ok = false; else fb_push(out, r);
+        } else {
+            ok = sr_inst_ellipsis(sl, m, t, &e2, k - 1, sp, intro, out);
+        }
+        env_free(&e2);
+    }
+    sb_free(&vars);
+    return ok;
+}
+
+static Form *sr_inst(SL *sl, const SMacro *m, Form *t, MEnv *env, Span sp, FB *intro, bool esc) {
+    switch (t->tag) {
+        case F_SYM: {
+            if (!esc && sr_is_ellipsis(m, t)) { err(t, "misplaced ellipsis in template"); return NULL; }
+            MBind *b = env_lookup(env, t->as.sym);
+            if (b) {
+                if (b->depth != 0) { err(t, "pattern variable '%s' needs %u more ellipsis(es) here", t->as.sym->name, b->depth); return NULL; }
+                return b->val;
+            }
+            Form *s = Sym(sl, sp, t->as.sym);
+            fb_push(intro, s);
+            return s;
+        }
+        case F_NIL: return t;
+        case F_LIST: case F_VEC: {
+            Form **items, *tail; uint32_t n;
+            if (t->tag == F_VEC) { items = t->as.list.items; n = t->as.list.len; tail = NULL; }
+            else sr_parts(sl, t, &items, &n, &tail);
+            if (!esc && t->tag == F_LIST && n == 2 && !tail && sr_is_ellipsis(m, items[0]))
+                return sr_inst(sl, m, items[1], env, sp, intro, true);
+            FB out = {0};
+            for (uint32_t i = 0; i < n; i++) {
+                uint32_t k = 0;
+                if (!esc) while (i + 1 + k < n && sr_is_ellipsis(m, items[i + 1 + k])) k++;
+                if (k == 0) {
+                    Form *r = sr_inst(sl, m, items[i], env, sp, intro, esc);
+                    if (!r) { free(out.items); return NULL; }
+                    fb_push(&out, r);
+                } else {
+                    if (!sr_inst_ellipsis(sl, m, items[i], env, k, sp, intro, &out)) { free(out.items); return NULL; }
+                    i += k;
+                }
+            }
+            if (tail) {
+                Form *tv = sr_inst(sl, m, tail, env, sp, intro, esc);
+                if (!tv) { free(out.items); return NULL; }
+                if (sr_is_listy(tv)) {
+                    /* (a . (b c)) is (a b c): splice a substituted list. */
+                    if (tv->tag == F_LIST)
+                        for (uint32_t i = 0; i < tv->as.list.len; i++) fb_push(&out, tv->as.list.items[i]);
+                } else {
+                    fb_push(&out, Sym(sl, sp, sl->s_dot));
+                    fb_push(&out, tv);
+                }
+            }
+            if (t->tag == F_VEC) return fb_vec(sl, &out, sp);
+            if (out.n == 0) { free(out.items); return Nil(sl, sp); }
+            return fb_list(sl, &out, sp);
+        }
+        case F_QUOTE: case F_QUASIQUOTE: case F_UNQUOTE: case F_UNQUOTE_SPLICING: {
+            Form *inner = sr_inst(sl, m, t->as.list.items[0], env, sp, intro, esc);
+            if (!inner) return NULL;
+            Form *g = form_new(sl->a, t->tag, sp);
+            Form **one = (Form **)arena_alloc(sl->a, sizeof(Form *));
+            one[0] = inner;
+            g->as.list.items = one; g->as.list.len = 1;
+            return g;
+        }
+        default: return t;
+    }
+}
+
+/* --- hygiene (D5a): rename the introduced binders ---------------------------- */
+
+static bool hyg_introduced(const FB *intro, const Form *f) {
+    for (uint32_t i = 0; i < intro->n; i++) if (intro->items[i] == f) return true;
+    return false;
+}
+static void hyg_add(SL *sl, Form *f, const FB *intro, SB *out) {
+    if (f && f->tag == F_SYM && f->as.sym != sl->s_dot && hyg_introduced(intro, f)) sb_push(out, f->as.sym, 0);
+}
+/* A formals spec: a symbol, or a (possibly dotted) list of symbols. */
+static void hyg_formals(SL *sl, Form *formals, const FB *intro, SB *out) {
+    if (!formals) return;
+    if (formals->tag == F_SYM) { hyg_add(sl, formals, intro, out); return; }
+    if (formals->tag == F_LIST)
+        for (uint32_t i = 0; i < formals->as.list.len; i++) hyg_add(sl, formals->as.list.items[i], intro, out);
+}
+static void hyg_walk(SL *sl, Form *f, const FB *intro, SB *out, bool quoted);
+static void hyg_binding_list(SL *sl, Form *bl, const FB *intro, SB *out, bool formals) {
+    if (!bl || bl->tag != F_LIST) return;
+    for (uint32_t i = 0; i < bl->as.list.len; i++) {
+        Form *b = bl->as.list.items[i];
+        if (b->tag != F_LIST || b->as.list.len < 1) continue;
+        if (formals) hyg_formals(sl, b->as.list.items[0], intro, out);
+        else hyg_add(sl, b->as.list.items[0], intro, out);
+    }
+}
+static void hyg_walk(SL *sl, Form *f, const FB *intro, SB *out, bool quoted) {
+    if (!f) return;
+    switch (f->tag) {
+        case F_QUOTE: return;
+        case F_QUASIQUOTE: hyg_walk(sl, f->as.list.items[0], intro, out, true); return;
+        case F_UNQUOTE: case F_UNQUOTE_SPLICING: hyg_walk(sl, f->as.list.items[0], intro, out, false); return;
+        case F_VEC:
+            for (uint32_t i = 0; i < f->as.list.len; i++) hyg_walk(sl, f->as.list.items[i], intro, out, quoted);
+            return;
+        case F_LIST: break;
+        default: return;
+    }
+    if (quoted || f->as.list.len == 0) {
+        for (uint32_t i = 0; i < f->as.list.len; i++) hyg_walk(sl, f->as.list.items[i], intro, out, quoted);
+        return;
+    }
+    Form *h = f->as.list.items[0];
+    if (h->tag == F_SYM) {
+        const Symbol *s = h->as.sym;
+        uint32_t n = f->as.list.len;
+        if (s == sl->s_quote || s == sl->s_syntax_rules || s == sl->s_define_syntax ||
+            s == sl->s_let_syntax || s == sl->s_letrec_syntax) return;
+        if (s == sl->s_lambda && n >= 2) hyg_formals(sl, f->as.list.items[1], intro, out);
+        else if (s == sl->s_define && n >= 2) {
+            Form *t = f->as.list.items[1];
+            if (t->tag == F_SYM) hyg_add(sl, t, intro, out); else hyg_formals(sl, t, intro, out);
+        }
+        else if (s == sl->s_define_values && n >= 2) hyg_formals(sl, f->as.list.items[1], intro, out);
+        else if ((s == sl->s_let || s == sl->s_letstar || s == sl->s_letrec || s == sl->s_letrecstar) && n >= 2) {
+            uint32_t bi = 1;
+            if (f->as.list.items[1]->tag == F_SYM) { hyg_add(sl, f->as.list.items[1], intro, out); bi = 2; }
+            if (bi < n) hyg_binding_list(sl, f->as.list.items[bi], intro, out, false);
+        }
+        else if (s == sl->s_do && n >= 2) hyg_binding_list(sl, f->as.list.items[1], intro, out, false);
+        else if ((s == sl->s_let_values || s == sl->s_letstar_values) && n >= 2)
+            hyg_binding_list(sl, f->as.list.items[1], intro, out, true);
+        else if (s == sl->s_case_lambda) {
+            for (uint32_t i = 1; i < n; i++) {
+                Form *cl = f->as.list.items[i];
+                if (cl->tag == F_LIST && cl->as.list.len >= 1) hyg_formals(sl, cl->as.list.items[0], intro, out);
+            }
+        }
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++) hyg_walk(sl, f->as.list.items[i], intro, out, quoted);
+}
+/* Rename every introduced occurrence of a collected binder, in place:
+ * introduced symbol nodes are fresh to this expansion, so no other form
+ * shares them. */
+static void hyg_rename(SL *sl, Form *f, const FB *intro, const SB *binders, const Symbol **aliases, bool quoted) {
+    if (!f) return;
+    switch (f->tag) {
+        case F_SYM:
+            if (quoted || !hyg_introduced(intro, f)) return;
+            for (uint32_t i = 0; i < binders->n; i++)
+                if (binders->syms[i] == f->as.sym) { f->as.sym = aliases[i]; return; }
+            return;
+        case F_QUOTE: return;
+        case F_QUASIQUOTE: hyg_rename(sl, f->as.list.items[0], intro, binders, aliases, true); return;
+        case F_UNQUOTE: case F_UNQUOTE_SPLICING: hyg_rename(sl, f->as.list.items[0], intro, binders, aliases, false); return;
+        case F_LIST: case F_VEC:
+            if (f->tag == F_LIST && f->as.list.len >= 1 && is_sym(f->as.list.items[0], sl->s_quote)) return;
+            for (uint32_t i = 0; i < f->as.list.len; i++) hyg_rename(sl, f->as.list.items[i], intro, binders, aliases, quoted);
+            return;
+        default: return;
+    }
+}
+
+/* One expansion of `use` by `m`, hygienically renamed; NULL after an error. */
+static Form *sr_expand(SL *sl, SMacro *m, Form *use) {
+    Form **fi, *ftail; uint32_t nf;
+    sr_parts(sl, use, &fi, &nf, &ftail);
+    for (uint32_t r = 0; r < m->n_rules; r++) {
+        Form *pat = m->rules[r].pattern;
+        Form **pi, *ptail; uint32_t np;
+        sr_parts(sl, pat, &pi, &np, &ptail);
+        MEnv env = {0};
+        /* The keyword position of the pattern is not matched (R7RS 4.3.2). */
+        bool ok = np >= 1 && nf >= 1 &&
+                  sr_match_items(sl, m, pi + 1, np - 1, ptail, fi + 1, nf - 1, ftail, &env, use->span);
+        if (!ok) { env_free(&env); continue; }
+        FB intro = {0};
+        Form *x = sr_inst(sl, m, m->rules[r].template, &env, use->span, &intro, false);
+        env_free(&env);
+        if (!x) { free(intro.items); return NULL; }
+        SB binders = {0};
+        hyg_walk(sl, x, &intro, &binders, false);
+        if (binders.n > 0) {
+            const Symbol **aliases = (const Symbol **)arena_alloc(sl->a, binders.n * sizeof(const Symbol *));
+            for (uint32_t i = 0; i < binders.n; i++) {
+                char pre[160];
+                snprintf(pre, sizeof pre, "%s__h", binders.syms[i]->name);
+                aliases[i] = fresh(sl, pre);
+            }
+            hyg_rename(sl, x, &intro, &binders, aliases, false);
+        }
+        sb_free(&binders);
+        free(intro.items);
+        return x;
+    }
+    err(use, "no syntax-rules pattern of '%s' matches this form", m->name->name);
+    return NULL;
+}
+
+/* (define-syntax name (syntax-rules [ellipsis] (literal ...) (pattern template) ...)) */
+static void sr_define(SL *sl, Form *f) {
+    if (f->as.list.len != 3 || f->as.list.items[1]->tag != F_SYM) {
+        err(f, "define-syntax expects (define-syntax name (syntax-rules ...))");
+        return;
+    }
+    const Symbol *name = f->as.list.items[1]->as.sym;
+    Form *spec = f->as.list.items[2];
+    if (head_is(spec, sl->s_er_macro_transformer)) {
+        err(spec, "er-macro-transformer is not supported yet (r7rs-lang-plan R4 defers the low-level "
+                  "escape); write the transformer with syntax-rules");
+        return;
+    }
+    if (!head_is(spec, sl->s_syntax_rules)) {
+        err(spec, "the transformer of '%s' must be a (syntax-rules ...) form", name->name);
+        return;
+    }
+    SMacro *m = (SMacro *)arena_alloc(sl->a, sizeof(SMacro));
+    memset(m, 0, sizeof *m);
+    m->name = name;
+    m->ellipsis = sl->s_ellipsis;
+    uint32_t i = 1;
+    if (i < spec->as.list.len && spec->as.list.items[i]->tag == F_SYM) { m->ellipsis = spec->as.list.items[i]->as.sym; i++; }
+    if (i >= spec->as.list.len || !sr_is_listy(spec->as.list.items[i])) {
+        err(spec, "syntax-rules expects a literals list: (syntax-rules (literal ...) (pattern template) ...)");
+        return;
+    }
+    Form *lits = spec->as.list.items[i++];
+    if (lits->tag == F_LIST) {
+        m->literals = (const Symbol **)arena_alloc(sl->a, lits->as.list.len * sizeof(const Symbol *));
+        for (uint32_t j = 0; j < lits->as.list.len; j++) {
+            if (lits->as.list.items[j]->tag != F_SYM) { err(lits->as.list.items[j], "syntax-rules literals must be identifiers"); return; }
+            m->literals[m->n_literals++] = lits->as.list.items[j]->as.sym;
+        }
+    }
+    uint32_t nrules = spec->as.list.len - i;
+    m->rules = (SRule *)arena_alloc(sl->a, (nrules ? nrules : 1) * sizeof(SRule));
+    for (; i < spec->as.list.len; i++) {
+        Form *rule = spec->as.list.items[i];
+        if (rule->tag != F_LIST || rule->as.list.len != 2 || !sr_is_listy(rule->as.list.items[0]) ||
+            rule->as.list.items[0]->tag == F_NIL) {
+            err(rule, "a syntax-rules rule is ((_ pattern ...) template)");
+            return;
+        }
+        m->rules[m->n_rules].pattern = rule->as.list.items[0];
+        m->rules[m->n_rules].template = rule->as.list.items[1];
+        m->n_rules++;
+    }
+    sr_push(sl, m);
+}
+
+/* Expand the head of `f` while it is a macro use.  Returns NULL after an
+ * error; otherwise the first form whose head is not a macro. */
+static Form *sr_expand_head(SL *sl, Form *f) {
+    uint32_t steps = 0;
+    for (;;) {
+        if (!f || f->tag != F_LIST || f->as.list.len == 0 || f->as.list.items[0]->tag != F_SYM) return f;
+        SMacro *m = sr_lookup(sl, f->as.list.items[0]->as.sym);
+        if (!m) return f;
+        if (++steps > SR_MAX_DEPTH) {
+            err(f, "macro expansion of '%s' did not terminate after %d steps", m->name->name, SR_MAX_DEPTH);
+            return NULL;
+        }
+        f = sr_expand(sl, m, f);
+        if (!f) return NULL;
+    }
+}
+
+/* (let-syntax ((name (syntax-rules ...)) ...) body...) -- the body is a
+ * body (internal defines allowed) with the macros in scope. */
+static Form *lower_let_syntax(SL *sl, Form *f) {
+    Span sp = f->span;
+    if (f->as.list.len < 3 || !sr_is_listy(f->as.list.items[1])) {
+        err(f, "%s expects (%s ((name (syntax-rules ...)) ...) body...)",
+            f->as.list.items[0]->as.sym->name, f->as.list.items[0]->as.sym->name);
+        return Nil(sl, sp);
+    }
+    uint32_t mark = sl->n_macros;
+    Form *bl = f->as.list.items[1];
+    if (bl->tag == F_LIST) {
+        for (uint32_t i = 0; i < bl->as.list.len; i++) {
+            Form *b = bl->as.list.items[i];
+            if (b->tag != F_LIST || b->as.list.len != 2) { err(b, "a let-syntax binding is (name (syntax-rules ...))"); continue; }
+            Form *def = Ln(sl, b->span, 3, Sym(sl, b->span, sl->s_define_syntax), b->as.list.items[0], b->as.list.items[1]);
+            sr_define(sl, def);
+        }
+    }
+    Form *body = lower_body(sl, f->as.list.items + 2, f->as.list.len - 2, sp);
+    sl->n_macros = mark;
+    return body;
 }
 
 /* --- the lowering ---------------------------------------------------------- */
@@ -489,6 +1147,7 @@ static Form *lower_formals(SL *sl, Form *formals, bool *ok, const Symbol **out_r
         if (out_rest) *out_rest = rn(sl, formals->as.sym);
         return fb_vec(sl, &b, formals->span);
     }
+    formals = nil_to_list(sl, formals);
     if (formals->tag != F_LIST) {
         err(formals, "lambda formals must be a list of identifiers, a single "
                      "identifier, or `(a b . rest)`");
@@ -567,6 +1226,7 @@ static Form *lower_lambda(SL *sl, Form *f) {
  * error (already reported). */
 static bool parse_bindings(SL *sl, Form *blist, const Symbol ***out_names,
                            Form ***out_inits, uint32_t *out_n) {
+    blist = nil_to_list(sl, blist);
     if (blist->tag != F_LIST) {
         err(blist, "expected a list of (name init) bindings");
         return false;
@@ -699,6 +1359,7 @@ static bool looks_like_scheme_do(const Form *f) {
     if (f->as.list.len < 3) return false;
     const Form *specs = f->as.list.items[1];
     const Form *test  = f->as.list.items[2];
+    if (specs->tag == F_NIL) return test->tag == F_LIST;
     if (specs->tag != F_LIST || test->tag != F_LIST) return false;
     for (uint32_t i = 0; i < specs->as.list.len; i++)
         if (specs->as.list.items[i]->tag != F_LIST) return false;
@@ -707,7 +1368,7 @@ static bool looks_like_scheme_do(const Form *f) {
 
 static Form *lower_do(SL *sl, Form *f) {
     Span sp = f->span;
-    Form *specs = f->as.list.items[1];
+    Form *specs = nil_to_list(sl, f->as.list.items[1]);
     Form *test  = f->as.list.items[2];
     uint32_t n = specs->as.list.len;
     const Symbol **names = (const Symbol **)arena_alloc(sl->a, (n + 1) * sizeof(*names));
@@ -961,6 +1622,7 @@ static bool push_values_bindings(SL *sl, FB *b, Form *formals, const Symbol *tmp
                      form_sets(sl, rn(sl, formals->as.sym), body));
         return true;
     }
+    formals = nil_to_list(sl, formals);
     if (formals->tag != F_LIST) { err(formals, "formals must be a list or an identifier"); return false; }
     uint32_t n = formals->as.list.len;
     for (uint32_t i = 0; i < n; i++) {
@@ -982,6 +1644,7 @@ static bool push_values_bindings(SL *sl, FB *b, Form *formals, const Symbol *tmp
  * the star form nests one binding at a time. */
 static Form *lower_let_values(SL *sl, Form *f, bool star) {
     Span sp = f->span;
+    if (f->as.list.len >= 2) f->as.list.items[1] = nil_to_list(sl, f->as.list.items[1]);
     if (f->as.list.len < 3 || f->as.list.items[1]->tag != F_LIST) {
         err(f, "%s expects (((formals) init)...) body...", star ? "let*-values" : "let-values");
         return Nil(sl, sp);
@@ -1036,6 +1699,7 @@ static uint32_t expand_define_values(SL *sl, Form *f, FB *out) {
         fb_push(out, Ln(sl, sp, 3, Sym(sl, sp, sl->s_define), formals, values_ref(sl, sp, tmp, 0, true)));
         return 2;
     }
+    formals = nil_to_list(sl, formals);
     if (formals->tag != F_LIST) { err(formals, "define-values formals must be a list or an identifier"); return 0; }
     uint32_t n = formals->as.list.len, made = 1;
     for (uint32_t i = 0; i < n; i++) {
@@ -1056,18 +1720,41 @@ static uint32_t expand_define_values(SL *sl, Form *f, FB *out) {
 /* A body: internal defines at the start (R7RS 5.3.2 -- letrec* order), then
  * the expressions.  Lambdas group into a `letrec` so they may be mutually
  * recursive; a value define is a `let` (mutable if ever set!). */
-static Form *lower_body(SL *sl, Form **items, uint32_t n, Span sp) {
-    /* Expand define-values into plain defines first, so one loop sees them. */
-    FB seq = {0};
-    for (uint32_t i = 0; i < n; i++) {
-        if (head_is(items[i], sl->s_define_values)) expand_define_values(sl, items[i], &seq);
-        else if (head_is(items[i], sl->s_begin)) {
-            /* (begin (define ...) ...) at body start splices its defines. */
-            for (uint32_t j = 1; j < items[i]->as.list.len; j++) fb_push(&seq, items[i]->as.list.items[j]);
-        }
-        else fb_push(&seq, items[i]);
+/* R4: a body form whose head is a macro is expanded before the body is
+ * classified, so a macro can expand to a define (R7RS 5.3.2); a `begin`
+ * splices, and a `define-syntax` registers a macro scoped to this body. */
+static void sr_expand_body_item(SL *sl, Form *it, FB *out) {
+    it = sr_expand_head(sl, it);
+    if (!it) return;
+    if (head_is(it, sl->s_define_syntax)) { sr_define(sl, it); return; }
+    if (head_is(it, sl->s_begin)) {
+        for (uint32_t j = 1; j < it->as.list.len; j++) sr_expand_body_item(sl, it->as.list.items[j], out);
+        return;
     }
+    fb_push(out, it);
+}
+
+static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp);
+static Form *lower_body(SL *sl, Form **items, uint32_t n, Span sp) {
+    uint32_t mark = sl->n_macros;
+    Form *r = lower_body_inner(sl, items, n, sp);
+    sl->n_macros = mark;
+    return r;
+}
+
+static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp) {
+    /* Macro uses at the head first (R4), then define-values into plain
+     * defines, so one loop sees them. */
+    FB pre = {0};
+    for (uint32_t i = 0; i < n; i++) sr_expand_body_item(sl, items[i], &pre);
+    FB seq = {0};
+    for (uint32_t i = 0; i < pre.n; i++) {
+        if (head_is(pre.items[i], sl->s_define_values)) expand_define_values(sl, pre.items[i], &seq);
+        else fb_push(&seq, pre.items[i]);
+    }
+    free(pre.items);
     items = seq.items; n = seq.n;
+    if (n == 0) { free(seq.items); return Nil(sl, sp); }
 
     uint32_t ndef = 0;
     while (ndef < n && head_is(items[ndef], sl->s_define)) ndef++;
@@ -1170,6 +1857,7 @@ static Form *lower_datum(SL *sl, Form *d) {
             return form_quote(sl->a, sp, d);
         case F_LIST:
             if (is_char_form(sl, d)) return d;
+            if (d->as.list.len == 0) return Ln(sl, sp, 1, Sym(sl, sp, sl->p_list));
             return datum_list(sl, d);
         case F_VEC: {
             FB b = {0};
@@ -1273,11 +1961,36 @@ static Form *lower(SL *sl, Form *f) {
         case F_LIST: break;
         default: return f;
     }
-    if (f->as.list.len == 0) return f;
+    if (f->as.list.len == 0) return Ln(sl, f->span, 1, Sym(sl, f->span, sl->p_list));
     Form *head = f->as.list.items[0];
+    if (head->tag == F_SYM && sr_lookup(sl, head->as.sym)) {
+        /* R4: a macro use.  Expand until the head is not a macro, then lower
+         * the expansion; the depth guard catches an expansion that grows a
+         * macro use inside itself forever. */
+        Form *x = sr_expand_head(sl, f);
+        if (!x) return Nil(sl, f->span);
+        if (sl->expand_depth >= SR_MAX_DEPTH) {
+            err(f, "macro expansion nested more than %d deep -- does '%s' expand to itself?",
+                SR_MAX_DEPTH, head->as.sym->name);
+            return Nil(sl, f->span);
+        }
+        sl->expand_depth++;
+        Form *r = lower(sl, x);
+        sl->expand_depth--;
+        return r;
+    }
     if (head->tag == F_SYM) {
         const Symbol *h = head->as.sym;
         Form *r = NULL;
+        if (h == sl->s_quote && f->as.list.len == 2) return lower_datum(sl, f->as.list.items[1]);
+        if (h == sl->s_quasiquote && f->as.list.len == 2) return lower_qq(sl, f->as.list.items[1], 1);
+        if (h == sl->s_syntax_error) {
+            const char *msg = (f->as.list.len >= 2 && f->as.list.items[1]->tag == F_STR)
+                ? f->as.list.items[1]->as.s.p : "syntax-error";
+            err(f, "%s%s", msg, f->as.list.len > 2 ? " (see the forms that follow the message)" : "");
+            return Nil(sl, f->span);
+        }
+        if (h == sl->s_let_syntax || h == sl->s_letrec_syntax) return lower_let_syntax(sl, f);
         if (h == sl->s_lambda)      return lower_lambda(sl, f);
         if (h == sl->s_let)         { r = lower_let(sl, f);      if (r) return r; }
         if (h == sl->s_letstar)     { r = lower_letstar(sl, f);  if (r) return r; }
@@ -1300,8 +2013,8 @@ static Form *lower(SL *sl, Form *f) {
                    "defines come first (R7RS 5.3.2)");
             return Nil(sl, f->span);
         }
-        if (h == sl->s_define_syntax || h == sl->s_let_syntax || h == sl->s_letrec_syntax) {
-            err(f, "%s: syntax-rules is r7rs-lang-plan R4 and has not landed yet", h->name);
+        if (h == sl->s_define_syntax) {
+            err(f, "define-syntax is only allowed at the top level or at the beginning of a body");
             return Nil(sl, f->span);
         }
         if (h == sl->s_define_record_type) {
@@ -1320,6 +2033,14 @@ static Form *lower(SL *sl, Form *f) {
 /* One top-level Scheme form -> zero or more Turmeric top-level forms. */
 static void lower_toplevel(SL *sl, Form *f, FB *out) {
     Span sp = f->span;
+    if (head_is(f, sl->s_define_syntax)) { sr_define(sl, f); return; }
+    if (f->tag == F_LIST && f->as.list.len > 0 && f->as.list.items[0]->tag == F_SYM &&
+        sr_lookup(sl, f->as.list.items[0]->as.sym)) {
+        Form *x = sr_expand_head(sl, f);
+        if (!x) return;
+        lower_toplevel(sl, x, out);
+        return;
+    }
     if (head_is(f, sl->s_begin)) {
         for (uint32_t i = 1; i < f->as.list.len; i++) lower_toplevel(sl, f->as.list.items[i], out);
         return;
@@ -1736,6 +2457,8 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     SL sl;
     sl_init(&sl, a, st);
     for (uint32_t i = 0; i < n; i++)
+        if (is_scheme_file(forms[i])) collect_setter_macros(&sl, forms[i]);
+    for (uint32_t i = 0; i < n; i++)
         if (is_scheme_file(forms[i])) collect_muts(&sl, forms[i]);
     FB out = {0}, sforms = {0};
     Span first_sp = SPAN_UNKNOWN;
@@ -1818,5 +2541,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     *out_n = out.n;
     free(out.items);
     free((void *)sl.muts);
+    free((void *)sl.setters);
+    free(sl.macros);
     return res;
 }

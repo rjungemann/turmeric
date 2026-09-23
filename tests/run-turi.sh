@@ -407,11 +407,22 @@ run_turi_fixture() {
         return
     fi
 
-    # Check stdout.
+    # Check stdout.  expected.xfail (see tests/run.sh): the mismatch is the
+    # expected outcome of a named failing test and passes; a match says the
+    # gap closed and the marker must go.
     if [ -f "$dir/expected.stdout" ]; then
         if ! diff -u "$dir/expected.stdout" "$actual_stdout" > /dev/null 2>&1; then
+            if [ -f "$dir/expected.xfail" ]; then
+                echo "PASS $name (xfail: still fails, as expected.xfail says)"
+                echo "PASS" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
+                return
+            fi
             echo "FAIL $name -- stdout mismatch"
             diff -u "$dir/expected.stdout" "$actual_stdout" | head -20 | sed 's/^/    /'
+            echo "FAIL" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
+            return
+        elif [ -f "$dir/expected.xfail" ]; then
+            echo "FAIL $name -- expected to fail (expected.xfail) but its stdout now matches; delete the marker"
             echo "FAIL" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
             return
         fi

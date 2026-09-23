@@ -14,8 +14,15 @@ cycles) and opens the Turmeric seam in both directions: `define-library`,
 `import` with `only`/`prefix`/`rename` and the `(turmeric ...)` head, pinned
 by `tests/run-r7rs-import.sh` on both back ends. The D9 exit criterion (a
 Scheme program calling the stdlib map and getting the right answer) is
-`tests/fixtures/r7rs-stdlib-seam`. R4 onward is unbuilt. Each landed stage
-carries a "What shipped" note below.
+`tests/fixtures/r7rs-stdlib-seam`. R4 adds `syntax-rules` -- `define-syntax`,
+`let-syntax`, `letrec-syntax`, `syntax-error`, the full pattern language and
+D5's renaming hygiene -- as an expander inside the same lowering pass; the
+standard's own `or`, `let*` and `do` expand correctly
+(`tests/fixtures/r7rs-syntax-rules`, `r7rs-syntax-rules-do`) and the
+referential-transparency gap is the named failing test
+`r7rs-syntax-rules-referential-transparency` under a new `expected.xfail`
+marker. R5 onward is unbuilt. Each landed stage carries a "What shipped"
+note below.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -975,6 +982,59 @@ hygiene (D5a); `define-syntax`, `let-syntax`, `letrec-syntax`,
 Exit criterion: the standard's own `syntax-rules` definitions of `or`, `let*`
 and `do` expand correctly, **plus** a named failing test that demonstrates the
 referential-transparency gap (D5).
+
+> **What shipped (2026-09-23).**
+>
+> - **The expander lives in the lowering pass, not on `defmacro*`/`Syntax`**
+>   -- a deviation from D5's substrate choice, for a reason D5 did not have in
+>   front of it: R2 made the core forms a Form -> Form pass that runs BEFORE
+>   elaboration, and a `defmacro*` runs inside elaboration, after it. A
+>   `syntax-rules` written as a `defmacro*` would hand back Scheme forms
+>   (`let`, `cond`, a named `let`) that nothing would lower. So `syntax-rules`
+>   is a pattern matcher and template instantiator over forms in
+>   `src/compiler/scheme_lower.c` (`sr_match`, `sr_inst`, `sr_expand`), and
+>   every expansion is lowered on the spot. D5's other verdicts hold: no phase
+>   tower, define-before-use, `gensym`-grade freshness for the renames.
+> - **The pattern language is complete**: `_`, literals (matched by name),
+>   `...` at any depth with nested ellipses, an element after an ellipsis
+>   (`(_ a ... b)`), improper tails (`(_ a . rest)`), vector patterns, datum
+>   literals, a custom ellipsis (`(syntax-rules dots (lits) ...)` -- a symbol;
+>   `:::` reads as a keyword under this reader) and the `(... ...)` escape.
+>   Templates substitute, iterate `x ...` and flatten `x ... ...`, splice a
+>   substituted list into a dotted tail, build vectors, and `syntax-error`
+>   reports at the use site. `define-syntax` at top level or body start (a
+>   macro may expand to a `define`, R7RS 5.3.2), `let-syntax` and
+>   `letrec-syntax` scope lexically; both are letrec-scoped because expansion
+>   is lazy. A use whose expansion never stops is an error after 1000 steps
+>   (`errors/r7rs-macro-expansion-loop`); no matching rule and a
+>   `syntax-error` have their own fixtures.
+> - **Hygiene is D5(a) renaming**: after instantiation, every identifier the
+>   template introduced (not substituted from the use site) that lands in a
+>   binding position -- `lambda`/`define` formals, the `let` family, named
+>   `let`, `do`, `let-values`, `case-lambda` -- is renamed to a fresh symbol
+>   consistently across that expansion, so `swap!`'s `tmp` and `my-or`'s
+>   `x` cannot capture a use-site name; a quoted symbol keeps its name.
+>   Introduced FREE identifiers keep their names, which is exactly the
+>   referential-transparency gap D5 predicts, and it is on record as a test
+>   rather than prose: `tests/fixtures/r7rs-syntax-rules-referential-transparency`
+>   holds the R7RS answer (`(1)`), prints `#(1)` today, and carries the new
+>   `expected.xfail` marker (both harnesses: the mismatch passes as `(xfail)`,
+>   a match fails and says to delete the marker). D5(b) closes it.
+> - **Two things the lowering needed**: the mutability scan runs before any
+>   expansion, so a `set!` a template performs is accounted for syntactically
+>   (a template that sets a pattern variable marks the macro as a setter of
+>   its arguments; one that sets its own name marks that name), and the
+>   reader's `()` (F_NIL) is accepted wherever a binding list or formals list
+>   is expected, since a template can produce an empty one.
+> - **Deviations at R4**: `er-macro-transformer` is deferred (it needs a
+>   transformer procedure run at expansion time;
+>   `errors/r7rs-er-macro-transformer-deferred` says so); macros do not cross
+>   a `define-library` boundary (Turmeric modules export definitions, not
+>   syntax); a local variable that shadows a macro name does not hide the
+>   macro; `let-syntax` is `letrec-syntax`. The standard's `do` runs under
+>   `--interpret` only (`r7rs-syntax-rules-do`, `requires.interp-only`): its
+>   expansion is the letrec-bound lambda over `any` from
+>   `docs/reported/r7rs-compiled-dynamic-shapes.md`.
 
 ### R5 -- numbers (medium)
 

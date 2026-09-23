@@ -1,0 +1,3 @@
+#lang r7rs
+(define-syntax bad (syntax-rules () ((_ a) (syntax-error "bad was given" a))))
+(display (bad 1))
