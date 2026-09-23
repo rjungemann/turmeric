@@ -4614,9 +4614,10 @@ static char *tcg_member_ok(EmitCtx *ctx, const Expr *e) {
         if (type_struct_pass_by_ptr(pty)) return NULL;
         const char *pc = emit_type_c_name(ctx, pty);
         if (!pc) return NULL;
-        if (strcmp(pc, "int64_t") != 0) {
-            if (type_uses_carrier_abi(emit_resolve_type(ctx, pty))) return NULL;
-        } else {
+        /* A carrier-ABI param that spells as a concrete struct is by-value
+         * here, and one that collapses to the int64 carrier was already
+         * refused by tco_params_simple -- the same bar self-TCO uses. */
+        if (strcmp(pc, "int64_t") == 0) {
             const char *btc = emit_type_c_name(ctx, emit_resolve_type(ctx, pb->type));
             if (!btc || strcmp(btc, "int64_t") != 0) return NULL;
         }
