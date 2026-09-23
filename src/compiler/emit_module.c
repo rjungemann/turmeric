@@ -7794,6 +7794,23 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
     return !emit_abi_has_carrier_call(ctx, fd->binding);
 }
 
+/* proper-tail-calls T5 (T-D5): hand the emitter the top-level function
+ * definitions a mutual-tail-call group may be formed from.  A generic template
+ * emit_abi_fn_skip_generic suppresses is never emitted, so it can never be a
+ * member.  The array is process-lifetime for the emission, like the item list. */
+static void tcg_collect_fn_exprs(EmitCtx *ctx, const Expr **items, uint32_t n) {
+    const Expr **out = (const Expr **)malloc((n ? n : 1) * sizeof(const Expr *));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n; i++)
+        if (items[i]->kind == EX_FN_DEF && items[i]->as.fn_def_.fn &&
+            !emit_abi_fn_skip_generic(ctx, items[i]))
+            out[k++] = items[i];
+    free((void *)ctx->tcg_fn_exprs);
+    ctx->tcg_fn_exprs = out;
+    ctx->n_tcg_fn_exprs = k;
+}
+
+
 /* saffron-lang-plan S9 (D8 piece 3): does this instance's receiver have a
  * ground `any` box tag, and is that tag one this TU can actually produce?
  *
@@ -8418,6 +8435,45 @@ const char *emit_sig_lookup_ret_ctype(const char *cname) {
     for (uint32_t i = 0; i < g_sig_tab_n; i++)
         if (strcmp(g_sig_tab[i].cname, cname) == 0) return g_sig_tab[i].ret_ctype;
     return NULL;
+}
+
+/* proper-tail-calls T2b: the recorded arity, or -1 when `cname` has no
+ * forward declaration on record. */
+int emit_sig_lookup_n_params(const char *cname) {
+    if (!cname) return -1;
+    for (uint32_t i = 0; i < g_sig_tab_n; i++)
+        if (strcmp(g_sig_tab[i].cname, cname) == 0) return (int)g_sig_tab[i].n_params;
+    return -1;
+}
+
+/* proper-tail-calls T2b (docs/upcoming/proper-tail-calls-plan.md, T-D2):
+ * `TUR_MUSTTAIL`, written once per program, the first time a tail call is
+ * spelled with it.  It expands to `__attribute__((musttail))` only where that
+ * is known to hold -- clang on x86-64 / aarch64 -- and to nothing everywhere
+ * else: gcc (the attribute arrived in 15 and is not exercised here), c2mir
+ * (the JIT's C compiler has no such attribute), and wasm (clang rejects
+ * musttail there without the tail-call feature).  Where it expands to
+ * nothing, the call is exactly the `return f(args);` T2 already emitted.
+ * `-DTUR_MUSTTAIL=` turns it off from the command line. */
+void ensure_musttail_macro(EmitCtx *ctx) {
+    if (!ctx || ctx->musttail_macro_emitted) return;
+    ctx->musttail_macro_emitted = true;
+    Buf *out = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    if (!out) return;
+    buf_puts(out,
+        "/* proper-tail-calls T2b: a guaranteed tail call where the C compiler\n"
+        " * can promise one, and an ordinary `return f(args);` elsewhere. */\n"
+        "#ifndef TUR_MUSTTAIL\n"
+        "#  if defined(__clang__) && defined(__has_attribute) && !defined(__wasm__) && \\\n"
+        "     (defined(__x86_64__) || defined(__aarch64__))\n"
+        "#    if __has_attribute(musttail)\n"
+        "#      define TUR_MUSTTAIL __attribute__((musttail))\n"
+        "#    endif\n"
+        "#  endif\n"
+        "#  ifndef TUR_MUSTTAIL\n"
+        "#    define TUR_MUSTTAIL\n"
+        "#  endif\n"
+        "#endif\n");
 }
 
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx) {
@@ -11213,6 +11269,153 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    snprintf(__m, sizeof(__m), \"no field '.%s' on a %s value\", __f,\n"
         "             __tur_any_type_name(__tag));\n"
         "    tur_panic(__m);\n"
+        "}\n");
+    /* proper-tail-calls T6 (docs/upcoming/proper-tail-calls-plan.md, T-D6):
+     * the bounce trampoline for a dynamic call in tail position.
+     *
+     * A dynamic call is a call through a fat `any`, so no callee is known at
+     * compile time and neither a backedge (T3) nor fusion (T5) applies.  What
+     * the dynamic dialect has instead is ONE calling convention -- every
+     * argument and every result an `any` -- so a tail call can hand the call
+     * back to a loop below it instead of making it:
+     *
+     *  - A DRIVER (`__tur_tb_call`) makes the call, and while the result is the
+     *    bounce sentinel, makes the call the callee left in `tur_tb_desc`.  A
+     *    tail dynamic call that cannot bounce drives, so a chain of them costs
+     *    one driver frame, not one frame per call.
+     *  - A tail dynamic call BOUNCES -- records the call and returns the
+     *    sentinel -- only when the activation it sits in was entered from a
+     *    driver.  The driver says so by setting `tur_tb_armed_for` to the one
+     *    function it is about to enter, and only for a callee registered as a
+     *    bouncer (a static fat box's function, `__tur_tb_reg_box`, or a
+     *    closure thunk, `__tur_tb_reg_thunk`); that function clears it on
+     *    entry.  Every other caller of a fat closure -- a typed `vec-fold`
+     *    invoking a callback -- never arms anything, so it can never see the
+     *    sentinel.
+     *
+     * The descriptor is consumed by the driver the instant the bouncing
+     * function returns to it, before anything else runs, so it holds its
+     * words for no longer than an ordinary call's argument registers do.
+     * TUR_TB_BOUNCE is negative: interned ids live in [2^62, 2^63) and
+     * primitive tags are TypeKind values, so no `any` carries it. */
+    buf_puts(out,
+        "#define TUR_TB_BOUNCE ((int64_t)-7)\n"
+        "#if defined(__GNUC__) || defined(__clang__)\n"
+        "#define TUR_TB_TLS TUR_THREAD_LOCAL\n"
+        "#else\n"
+        "#define TUR_TB_TLS\n"
+        "#endif\n"
+        "typedef struct { tur_tagged_t fn; int n; tur_tagged_t a[4]; } tur_tb_desc_t;\n"
+        "static TUR_TB_TLS tur_tb_desc_t tur_tb_desc;\n"
+        "static TUR_TB_TLS void *tur_tb_armed_for;\n"
+        "static TUR_TB_TLS void *tur_tb_root;\n"
+        "static TUR_TB_TLS tur_tagged_t tur_tb_sentinel_box;\n"
+        "/* The bouncer registry: an open-addressing hash from a static fat\n"
+        " * box's env (its value is the function the box calls) or a capturing\n"
+        " * closure's thunk (its value is itself) to the function to arm.  Filled\n"
+        " * only from static init, read-only after, and probed on EVERY call the\n"
+        " * driver makes -- a linear scan cost ~0.3 ns per registered bouncer per\n"
+        " * call, 26x at 1000 bouncers, so it is O(1): load <= 1/2, linear probe. */\n"
+        "static void **tur_tb_keys, **tur_tb_vals;\n"
+        "static unsigned tur_tb_cap, tur_tb_count;\n"
+        "static unsigned __tur_tb_hash(void *__k, unsigned __mask) {\n"
+        "    uint64_t __h = (uint64_t)(uintptr_t)__k;\n"
+        "    __h ^= __h >> 17;\n"
+        "    __h *= 0x9E3779B97F4A7C15ULL;\n"
+        "    return (unsigned)(__h >> 32) & __mask;\n"
+        "}\n"
+        "static void __tur_tb_put(void *__k, void *__v) {\n"
+        "    if ((tur_tb_count + 1) * 2 > tur_tb_cap) {\n"
+        "        unsigned __oc = tur_tb_cap, __nc = __oc ? __oc * 2 : 16;\n"
+        "        void **__ok = tur_tb_keys, **__ov = tur_tb_vals;\n"
+        "        tur_tb_keys = (void **)calloc(__nc, sizeof(void *));\n"
+        "        tur_tb_vals = (void **)calloc(__nc, sizeof(void *));\n"
+        "        tur_tb_cap = __nc; tur_tb_count = 0;\n"
+        "        for (unsigned __i = 0; __i < __oc; __i++)\n"
+        "            if (__ok[__i]) __tur_tb_put(__ok[__i], __ov[__i]);\n"
+        "        free(__ok); free(__ov);\n"
+        "    }\n"
+        "    unsigned __m = tur_tb_cap - 1, __i = __tur_tb_hash(__k, __m);\n"
+        "    while (tur_tb_keys[__i] && tur_tb_keys[__i] != __k) __i = (__i + 1) & __m;\n"
+        "    if (!tur_tb_keys[__i]) tur_tb_count++;\n"
+        "    tur_tb_keys[__i] = __k; tur_tb_vals[__i] = __v;\n"
+        "}\n"
+        "static void *__tur_tb_get(void *__k) {\n"
+        "    unsigned __m = tur_tb_cap - 1, __i = __tur_tb_hash(__k, __m);\n"
+        "    while (tur_tb_keys[__i]) {\n"
+        "        if (tur_tb_keys[__i] == __k) return tur_tb_vals[__i];\n"
+        "        __i = (__i + 1) & __m;\n"
+        "    }\n"
+        "    return NULL;\n"
+        "}\n"
+        "static void __tur_tb_reg_box(void *__env, void *__fn) __attribute__((unused));\n"
+        "static void __tur_tb_reg_box(void *__env, void *__fn) { __tur_tb_put(__env, __fn); }\n"
+        "static void __tur_tb_reg_thunk(void *__th) __attribute__((unused));\n"
+        "static void __tur_tb_reg_thunk(void *__th) { __tur_tb_put(__th, __th); }\n"
+        );
+    buf_puts(out,
+        "/* The function a call through `__env` enters, if it is a registered\n"
+        " * bouncer; NULL otherwise, and the callee is simply not armed.  A box\n"
+        " * env and a thunk cannot collide as keys: one is a data address, the\n"
+        " * other code. */\n"
+        "static __attribute__((unused)) void *__tur_tb_target(void *__env) {\n"
+        "    if (!tur_tb_count) return NULL;\n"
+        "    void *__t = __tur_tb_get(__env);\n"
+        "    if (__t) return __t;\n"
+        "    return __tur_tb_get((void *)(intptr_t)TUR_CLOSURE_FN(__env));\n"
+        "}\n"
+        "static __attribute__((unused)) tur_tagged_t __tur_tb_invoke(tur_tagged_t __f, int __n, const tur_tagged_t *__a) {\n"
+        "    void *__env = (void *)(intptr_t)TUR_UNTAG(__f);\n"
+        "    void *__th = (void *)(intptr_t)TUR_CLOSURE_FN(TUR_UNTAG(__f));\n"
+        "    tur_tagged_t __r;\n"
+        "    tur_tb_armed_for = __tur_tb_target(__env);\n"
+        "    switch (__n) {\n"
+        "    case 0: __r = ((tur_tagged_t (*)(void *))__th)(__env); break;\n"
+        "    case 1: __r = ((tur_tagged_t (*)(void *, tur_tagged_t))__th)(__env, __a[0]); break;\n"
+        "    case 2: __r = ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t))__th)(__env, __a[0], __a[1]); break;\n"
+        "    case 3: __r = ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t))__th)(__env, __a[0], __a[1], __a[2]); break;\n"
+        "    default: __r = ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t))__th)(__env, __a[0], __a[1], __a[2], __a[3]); break;\n"
+        "    }\n"
+        "    tur_tb_armed_for = NULL;\n"
+        "    return __r;\n"
+        "}\n"
+        );
+    buf_puts(out,
+        "/* The driver: make the call, and keep making the call a bouncing callee\n"
+        " * hands back until one returns a value. */\n"
+        "static __attribute__((unused)) tur_tagged_t __tur_tb_call(tur_tagged_t __f, int __n, tur_tagged_t __a0,\n"
+        "                                  tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3) {\n"
+        "    tur_tagged_t __a[4] = { __a0, __a1, __a2, __a3 };\n"
+        "    for (;;) {\n"
+        "        tur_tagged_t __r = __tur_tb_invoke(__f, __n, __a);\n"
+        "        if (TUR_GETTAG(__r) != TUR_TB_BOUNCE) return __r;\n"
+        "        __f = tur_tb_desc.fn; __n = tur_tb_desc.n;\n"
+        "        memcpy(__a, tur_tb_desc.a, sizeof __a);\n"
+        "    }\n"
+        "}\n"
+        "static __attribute__((unused)) void __tur_tb_record(tur_tagged_t __f, int __n, tur_tagged_t __a0,\n"
+        "                            tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3) {\n"
+        "    tur_tb_desc.fn = __f; tur_tb_desc.n = __n;\n"
+        "    tur_tb_desc.a[0] = __a0; tur_tb_desc.a[1] = __a1;\n"
+        "    tur_tb_desc.a[2] = __a2; tur_tb_desc.a[3] = __a3;\n"
+        "}\n"
+        );
+    buf_puts(out,
+        "/* A tail dynamic call: bounce when `__may`, drive otherwise. */\n"
+        "static __attribute__((unused)) tur_tagged_t __tur_tb_tail(int __may, tur_tagged_t __f, int __n, tur_tagged_t __a0,\n"
+        "                                  tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3) {\n"
+        "    if (!__may) return __tur_tb_call(__f, __n, __a0, __a1, __a2, __a3);\n"
+        "    __tur_tb_record(__f, __n, __a0, __a1, __a2, __a3);\n"
+        "    return TUR_TAG(TUR_TB_BOUNCE, 0);\n"
+        "}\n"
+        "/* The CPS spelling of a bounce: the sentinel as the boxed value a\n"
+        " * direct-entry wrapper reads back from its `__cps` body, with no\n"
+        " * per-bounce allocation. */\n"
+        "static __attribute__((unused)) tur_tagged_t *__tur_tb_bounce_box(tur_tagged_t __f, int __n, tur_tagged_t __a0,\n"
+        "                                         tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3) {\n"
+        "    __tur_tb_record(__f, __n, __a0, __a1, __a2, __a3);\n"
+        "    tur_tb_sentinel_box = TUR_TAG(TUR_TB_BOUNCE, 0);\n"
+        "    return &tur_tb_sentinel_box;\n"
         "}\n");
 }
 
@@ -15919,6 +16122,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     ctx.gen_struct_type = NULL;
     ctx.gen_hdr_emitted = false;
     gs_reset_group_registry();
+    tcg_reset_group_registry();
     ctx.abi_specializations = NULL;
     ctx.n_abi_specializations = 0;
     ctx.cap_abi_specializations = 0;
@@ -16522,6 +16726,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     }
 
     /* Pass 2: collect all top-level defs and fn_defs. */
+    tcg_collect_fn_exprs(&ctx, items, n_items);
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
         if (e->kind == EX_DEFER) {
@@ -17505,6 +17710,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     buf_free(&body);
     buf_free(&def_init_body);
     free(items);
+    free((void *)ctx.tcg_fn_exprs);
+    tcg_reset_group_registry();
     for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
@@ -18519,6 +18726,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     ctx.gen_struct_type = NULL;
     ctx.gen_hdr_emitted = false;
     gs_reset_group_registry();
+    tcg_reset_group_registry();
     ctx.abi_specializations = NULL;
     ctx.n_abi_specializations = 0;
     ctx.cap_abi_specializations = 0;
@@ -18789,6 +18997,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     inline_c_dedup_free(&impl_dedup);
 
     /* Pass 1b: emit all top-level definitions (EX_INLINE_C already handled). */
+    tcg_collect_fn_exprs(&ctx, impl_items, impl_n_items);
     for (uint32_t i = 0; i < impl_n_items; i++) {
         const Expr *e = impl_items[i];
         if (e->kind == EX_DEFER) {
@@ -18870,6 +19079,10 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
         }
     }
     free(impl_items);
+    free((void *)ctx.tcg_fn_exprs);
+    ctx.tcg_fn_exprs = NULL;
+    ctx.n_tcg_fn_exprs = 0;
+    tcg_reset_group_registry();
 
     /* J2: Emit clone bodies for owned specs (borrow specs have fn==NULL; skip
      * them -- the owner module's TU provides the definition). */

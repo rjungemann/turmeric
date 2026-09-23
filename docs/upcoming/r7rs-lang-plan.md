@@ -515,7 +515,14 @@ earlier draft of this section proposed:
 
 What R7RS actually needs is **T6**: a bounce trampoline over the uniform
 fat-closure representation, which D2's "a Scheme value is an `any`" decision is
-what makes natural. The typed-Turmeric half of the problem (T-D3's limit: an
+what makes natural.
+
+> **T6 landed 2026-09-23** for Saffron's dynamic calls -- the same fat-closure
+> protocol with `any` arguments and result that `#lang r7rs` procedures will
+> ride, so R6 inherits it rather than building it. A dynamic call in tail
+> position runs 10,000,000 deep at `-O0`, and `^tailcall` accepts one. What
+> R6 has to confirm is only that its calls lower to the same `EX_DYN_CALL`
+> node; see the tail-calls plan's T-D6 "What shipped". The typed-Turmeric half of the problem (T-D3's limit: an
 owned value live across a tail call is not a tail call) is nearly vacuous for
 Scheme, which has no destructors.
 

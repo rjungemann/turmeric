@@ -1,0 +1,53 @@
+;; proper-tail-calls T2b (docs/upcoming/proper-tail-calls-plan.md, T-D2): the
+;; codegen snapshot for `TUR_MUSTTAIL`.  It pins where the attribute goes and,
+;; just as much, where it must NOT go -- musttail is a hard contract, so every
+;; condition is checked against text and records rather than inferred.
+;;
+;;   c0 .. c8     -- a nine-member cycle (past T5's cap, so not fused): each
+;;                   tail call is `TUR_MUSTTAIL return c<k+1>(...);`, and the
+;;                   `#ifndef TUR_MUSTTAIL` block appears once, before them.
+;;   z0 -> z1     -- a ZERO-parameter callee is declared `z1()`, which C99
+;;                   does not count as a prototype, and clang refuses musttail
+;;                   without one: a plain `return z1();`.
+;;   w1 -> w2     -- different C signatures (one parameter against two): a
+;;                   plain `return w2(n, 1);`, since musttail needs identical
+;;                   parameter lists and T2 only proved the return types.
+;;   h1 -> h2     -- h1's body passes a by-value `Big` to a pass-by-pointer
+;;                   parameter, which takes the address of a local (`&s`).  A
+;;                   tail call reuses the caller's frame, so an address taken
+;;                   anywhere in the body refuses musttail -- sound, if blunt
+;;                   -- and the call stays a plain `return h2(k);`.
+;;
+;; Everything here also runs where TUR_MUSTTAIL expands to nothing (gcc, the
+;; JIT), which is the other half of the contract: the depths are small.
+
+(defn c0 [n : int] : int (if (= n 0) 0 (c1 (- n 1))))
+(defn c1 [n : int] : int (if (= n 0) 1 (c2 (- n 1))))
+(defn c2 [n : int] : int (if (= n 0) 2 (c3 (- n 1))))
+(defn c3 [n : int] : int (if (= n 0) 3 (c4 (- n 1))))
+(defn c4 [n : int] : int (if (= n 0) 4 (c5 (- n 1))))
+(defn c5 [n : int] : int (if (= n 0) 5 (c6 (- n 1))))
+(defn c6 [n : int] : int (if (= n 0) 6 (c7 (- n 1))))
+(defn c7 [n : int] : int (if (= n 0) 7 (c8 (- n 1))))
+(defn c8 [n : int] : int (if (= n 0) 8 (c0 (- n 1))))
+
+(defn z1 [] : int 7)
+(defn z0 [] : int (z1))
+
+(defn w2 [n : int k : int] : int (+ n k))
+(defn w1 [n : int] : int (w2 n 1))
+
+(defstruct Big [a : int b : int c : int d : int e : int])
+(defn sum5 [s : Big] : int (+ (.a s) (+ (.b s) (+ (.c s) (+ (.d s) (.e s))))))
+(defn h2 [n : int] : int (* n 2))
+(defn h1 [n : int] : int
+  (let [s (Big n 1 2 3 4)
+        k (sum5 s)]
+    (h2 k)))
+
+(defn main [] : int
+  (println (c0 22))
+  (println (z0))
+  (println (w1 41))
+  (println (h1 4))
+  0)

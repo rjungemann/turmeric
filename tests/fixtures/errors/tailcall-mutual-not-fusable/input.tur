@@ -1,0 +1,19 @@
+;; proper-tail-calls T5 (T-D5): a mutual tail-call cycle is fused only when
+;; every member is a function the fused dispatch can hold -- among other
+;; things, every parameter must be a plain value a jump can reassign.  Here
+;; both members thread a `fn`-typed parameter, which a backedge cannot
+;; reassign (the same rule that keeps such a function off the self-call
+;; backedge), so no group forms and the pair is ordinary recursion.
+;;
+;; `^tailcall` says so, with the conditions a group needs, instead of the
+;; program overflowing at -O0.
+
+(defn ping [n : int f : (fn [int] int)] : int
+  (if (= n 0) (f 0) ^tailcall (pong (- n 1) f)))
+
+(defn pong [n : int f : (fn [int] int)] : int
+  (if (= n 0) (f 1) ^tailcall (ping (- n 1) f)))
+
+(defn main [] : int
+  (println (ping 4 (fn [x : int] : int (+ x 10))))
+  0)

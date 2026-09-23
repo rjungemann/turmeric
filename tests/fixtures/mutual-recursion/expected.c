@@ -5155,6 +5155,19 @@ static int64_t ctor_Option_Some__Zipper__struct(int64_t _0) {
 
 #endif
 
+/* proper-tail-calls T2b: a guaranteed tail call where the C compiler
+ * can promise one, and an ordinary `return f(args);` elsewhere. */
+#ifndef TUR_MUSTTAIL
+#  if defined(__clang__) && defined(__has_attribute) && !defined(__wasm__) && \
+     (defined(__x86_64__) || defined(__aarch64__))
+#    if __has_attribute(musttail)
+#      define TUR_MUSTTAIL __attribute__((musttail))
+#    endif
+#  endif
+#  ifndef TUR_MUSTTAIL
+#    define TUR_MUSTTAIL
+#  endif
+#endif
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
 }
@@ -5605,9 +5618,9 @@ static void __defer_168(void *__env) {
 
 static void __defer_163(void *__env) {
     struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
-    bool __ps_174 = (bt_hyundo_hyto_ex(__e->m));
+    bool __ps_176 = (bt_hyundo_hyto_ex(__e->m));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_174);
+    (void)(__ps_176);
 }
 
 
@@ -6295,7 +6308,7 @@ tur_tagged_t __t25 = (x); __tur_any_cast_check(TUR_GETTAG(__t25), 58);
 }
 
 static bool __fn_1008(int64_t a, int64_t b) {
-        return __inst_Eq_eq_qu_int(a, b);
+        TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
 }
 
 static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
@@ -6498,7 +6511,7 @@ static bool __inst_Eq_eq_qu_Set(int64_t x, int64_t y) {
 }
 
 static bool __fn_1423(int64_t a, int64_t b) {
-        return __inst_Eq_eq_qu_int(a, b);
+        TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
@@ -7442,11 +7455,11 @@ static int64_t list_hyconcat(int64_t l1, int64_t l2) {
 }
 
 static int64_t car(int64_t l) {
-        return list_hyhead(l);
+        TUR_MUSTTAIL return list_hyhead(l);
 }
 
 static int64_t cdr(int64_t l) {
-        return list_hytail(l);
+        TUR_MUSTTAIL return list_hytail(l);
 }
 
 static bool null_qu(int64_t l) {
@@ -7454,7 +7467,7 @@ static bool null_qu(int64_t l) {
 }
 
 static int64_t length(int64_t l) {
-        return list_hylength(l);
+        TUR_MUSTTAIL return list_hylength(l);
 }
 
 static int64_t grid_hynew(int64_t width, int64_t height) {
@@ -9103,20 +9116,45 @@ static int64_t with_hyregion(int64_t body) {
         return __ps_171;
 }
 
+static bool __tcg_group_0(int, int64_t, int64_t);
 static bool is_hyeven(int64_t n) {
+        return __tcg_group_0(0, n, ((int64_t)0));
+}
+
+static bool __tcg_group_0(int __tcg_st, int64_t __tcg_s0, int64_t __tcg_s1) {
+    __tcg_top:;
+    switch (__tcg_st) {
+    case 0: {
+        int64_t n = __tcg_s0;
+        (void)n;
         if ((n) == (INT64_C(0))) {
             return true;
         } else {
-            return is_hyodd((n) - (INT64_C(1)));
+            int64_t __t172 = (n) - (INT64_C(1));
+            __tcg_s1 = __t172;
+            __tcg_st = 1;
+            goto __tcg_top;
         }
-}
-
-static bool is_hyodd(int64_t n) {
+    }
+    case 1: {
+        int64_t n = __tcg_s1;
+        (void)n;
         if ((n) == (INT64_C(0))) {
             return false;
         } else {
-            return is_hyeven((n) - (INT64_C(1)));
+            int64_t __t173 = (n) - (INT64_C(1));
+            __tcg_s0 = __t173;
+            __tcg_st = 0;
+            goto __tcg_top;
         }
+    }
+    default: break;
+    }
+    return ((bool)0);
+}
+
+static bool is_hyodd(int64_t n) {
+        return __tcg_group_0(1, ((int64_t)0), n);
 }
 
 int main(int argc, char **argv) {
@@ -9134,9 +9172,9 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        bool __ps_172 = (is_hyeven(INT64_C(4)));
+        bool __ps_174 = (is_hyeven(INT64_C(4)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        puts((__ps_172) ? "true" : "false");
+        puts((__ps_174) ? "true" : "false");
         return (int)0;
 }
 
@@ -9145,9 +9183,9 @@ static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int6
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_173 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_175 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_173;
+        return __ps_175;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {

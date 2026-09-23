@@ -1,0 +1,26 @@
+;; proper-tail-calls T4 (docs/upcoming/proper-tail-calls-plan.md, T-D3): the
+;; codegen snapshot for a backedge taken through an owned local's drop glue.
+;;
+;; This program was `errors/tailcall-owned-local-live` until T4 -- a negative
+;; whose header predicted its own move: "`b` is never passed to the recursive
+;; call and is dead at that point, so T4 would legally move the drop before the
+;; call and restore tail position."  It did.  That fixture now holds a local
+;; that is genuinely live across the call.
+;;
+;; What the snapshot pins, in the emitted `with_hyref`:
+;;
+;;   - `__tur_tailcall:` at the top and `goto __tur_tailcall;` in the else arm;
+;;   - the frame is still declared and the drop still pushed on it -- so a
+;;     panic in an argument fires it through the panic return;
+;;   - `tur_frame_fire_lifo` runs AFTER the argument temps and BEFORE the
+;;     parameter reassignment, and before the `return` in the base case.
+
+(defn with-ref [n : int] : int
+  (let [b (ref 1)]
+    (if (= n 0)
+      0
+      ^tailcall (with-ref (- n 1)))))
+
+(defn main [] : int
+  (println (with-ref 3))
+  0)

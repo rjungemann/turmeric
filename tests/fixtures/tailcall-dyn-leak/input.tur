@@ -1,0 +1,45 @@
+#lang saffron
+;; proper-tail-calls T6 (T-D6): the trampoline's bounces allocate nothing and
+;; drop nothing early.  `requires.leak-check` builds this under AddressSanitizer
+;; with LeakSanitizer on (tests/run-leak-check.sh), so a descriptor holding a
+;; freed argument, or a per-bounce box that is never reaped, fails it.
+;;
+;; The same five shapes as `tailcall-dyn-deep`, a thousand deep: a CPS-lowered
+;; function and a capture-free lambda looping through themselves, a capturing
+;; closure, two functions bouncing to each other, and a typed `vec-fold`
+;; calling a Saffron callback whose tail is a dynamic call.  Strings ride the
+;; loop as arguments, so a word read after its owner released it would show.
+;;
+;; `step` hands `apply-to` a top-level function rather than a capturing lambda:
+;; a capturing closure passed to a dynamic call from a CPS-lowered function
+;; leaks its env, before T6 as after it
+;; (docs/reported/cps-capturing-closure-env-leaks-through-dyn-call.md), and
+;; that is not what this fixture is here to see.
+
+(defn run [f n acc]
+  (if (= n 0) acc (f f (- n 1) (+ acc 1))))
+
+(defn make-counter [step]
+  (fn [self n acc] (if (= n 0) acc (self self (- n 1) (+ acc step)))))
+
+(defn ping [me other n tag]
+  (if (= n 0) tag (other other me (- n 1) tag)))
+
+(defn pong [me other n tag]
+  (if (= n 0) tag (other other me (- n 1) tag)))
+
+(defn apply-to [g x] (g x))
+
+(defn add-one [y] (+ y 1))
+
+(defn step [acc x] (apply-to add-one (+ acc x)))
+
+(defn main [] : int
+  (println (run run 1000 0))
+  (let [loop (fn [self n] (if (= n 0) "done" (self self (- n 1))))]
+    (println (loop loop 1000)))
+  (let [counter (make-counter 3)]
+    (println (counter counter 1000 0)))
+  (println (ping ping pong 1001 "carried"))
+  (println (vec-fold [1 2 3 4 5] 100 step))
+  0)

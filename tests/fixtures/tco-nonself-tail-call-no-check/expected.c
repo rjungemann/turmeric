@@ -5155,6 +5155,19 @@ static int64_t ctor_Option_Some__Zipper__struct(int64_t _0) {
 
 #endif
 
+/* proper-tail-calls T2b: a guaranteed tail call where the C compiler
+ * can promise one, and an ordinary `return f(args);` elsewhere. */
+#ifndef TUR_MUSTTAIL
+#  if defined(__clang__) && defined(__has_attribute) && !defined(__wasm__) && \
+     (defined(__x86_64__) || defined(__aarch64__))
+#    if __has_attribute(musttail)
+#      define TUR_MUSTTAIL __attribute__((musttail))
+#    endif
+#  endif
+#  ifndef TUR_MUSTTAIL
+#    define TUR_MUSTTAIL
+#  endif
+#endif
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
 }
@@ -5609,9 +5622,9 @@ static void __defer_168(void *__env) {
 
 static void __defer_163(void *__env) {
     struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
-    bool __ps_183 = (bt_hyundo_hyto_ex(__e->m));
+    bool __ps_185 = (bt_hyundo_hyto_ex(__e->m));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_183);
+    (void)(__ps_185);
 }
 
 
@@ -6299,7 +6312,7 @@ tur_tagged_t __t25 = (x); __tur_any_cast_check(TUR_GETTAG(__t25), 58);
 }
 
 static bool __fn_1012(int64_t a, int64_t b) {
-        return __inst_Eq_eq_qu_int(a, b);
+        TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
 }
 
 static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
@@ -6502,7 +6515,7 @@ static bool __inst_Eq_eq_qu_Set(int64_t x, int64_t y) {
 }
 
 static bool __fn_1427(int64_t a, int64_t b) {
-        return __inst_Eq_eq_qu_int(a, b);
+        TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
@@ -7446,11 +7459,11 @@ static int64_t list_hyconcat(int64_t l1, int64_t l2) {
 }
 
 static int64_t car(int64_t l) {
-        return list_hyhead(l);
+        TUR_MUSTTAIL return list_hyhead(l);
 }
 
 static int64_t cdr(int64_t l) {
-        return list_hytail(l);
+        TUR_MUSTTAIL return list_hytail(l);
 }
 
 static bool null_qu(int64_t l) {
@@ -7458,7 +7471,7 @@ static bool null_qu(int64_t l) {
 }
 
 static int64_t length(int64_t l) {
-        return list_hylength(l);
+        TUR_MUSTTAIL return list_hylength(l);
 }
 
 static int64_t grid_hynew(int64_t width, int64_t height) {
@@ -9118,23 +9131,48 @@ static int64_t classify(int64_t n) {
 }
 
 static int64_t forward(int64_t n) {
-        return classify(n);
+        TUR_MUSTTAIL return classify(n);
 }
 
+static int64_t __tcg_group_0(int, int64_t, int64_t);
 static int64_t even_hyish_qu(int64_t n) {
+        return __tcg_group_0(0, n, ((int64_t)0));
+}
+
+static int64_t __tcg_group_0(int __tcg_st, int64_t __tcg_s0, int64_t __tcg_s1) {
+    __tcg_top:;
+    switch (__tcg_st) {
+    case 0: {
+        int64_t n = __tcg_s0;
+        (void)n;
         if ((n) == (INT64_C(0))) {
             return INT64_C(1);
         } else {
-            return odd_hyish_qu((n) - (INT64_C(1)));
+            int64_t __t173 = (n) - (INT64_C(1));
+            __tcg_s1 = __t173;
+            __tcg_st = 1;
+            goto __tcg_top;
         }
-}
-
-static int64_t odd_hyish_qu(int64_t n) {
+    }
+    case 1: {
+        int64_t n = __tcg_s1;
+        (void)n;
         if ((n) == (INT64_C(0))) {
             return INT64_C(0);
         } else {
-            return even_hyish_qu((n) - (INT64_C(1)));
+            int64_t __t174 = (n) - (INT64_C(1));
+            __tcg_s0 = __t174;
+            __tcg_st = 0;
+            goto __tcg_top;
         }
+    }
+    default: break;
+    }
+    return ((int64_t)0);
+}
+
+static int64_t odd_hyish_qu(int64_t n) {
+        return __tcg_group_0(1, ((int64_t)0), n);
 }
 
 static int64_t depth_hyof(int64_t n, int64_t acc) {
@@ -9142,18 +9180,18 @@ static int64_t depth_hyof(int64_t n, int64_t acc) {
         if ((n) == (INT64_C(0))) {
             return acc;
         } else {
-            int64_t __t173 = (n) - (INT64_C(1));
-            int64_t __t174 = (acc) + (INT64_C(1));
-            n = __t173;
-            acc = __t174;
+            int64_t __t175 = (n) - (INT64_C(1));
+            int64_t __t176 = (acc) + (INT64_C(1));
+            n = __t175;
+            acc = __t176;
             goto __tur_tailcall;
         }
 }
 
 static int64_t report(int64_t n) {
-        int64_t __ps_175 = (forward(n));
+        int64_t __ps_177 = (forward(n));
         if (tur_panicking) return ((int64_t)0);
-        return (INT64_C(1)) + (__ps_175);
+        return (INT64_C(1)) + (__ps_177);
 }
 
 int main(int argc, char **argv) {
@@ -9171,24 +9209,24 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        int64_t __ps_176 = (forward(INT64_C(0)));
-        /* panic-return-signal: ret ctype unknown; no propagation here */
-        printf("%lld\n", (long long)(__ps_176));
-        int64_t __ps_177 = (even_hyish_qu(INT64_C(7)));
-        /* panic-return-signal: ret ctype unknown; no propagation here */
-        printf("%lld\n", (long long)(__ps_177));
-        int64_t __ps_178 = (odd_hyish_qu(INT64_C(7)));
+        int64_t __ps_178 = (forward(INT64_C(0)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%lld\n", (long long)(__ps_178));
-        int64_t __ps_179 = (depth_hyof(INT64_C(5), INT64_C(0)));
+        int64_t __ps_179 = (even_hyish_qu(INT64_C(7)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%lld\n", (long long)(__ps_179));
-        int64_t __ps_180 = (report(INT64_C(0)));
+        int64_t __ps_180 = (odd_hyish_qu(INT64_C(7)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%lld\n", (long long)(__ps_180));
-        int64_t __t181;
-        __t181 = INT64_C(0);
-        return (int)__t181;
+        int64_t __ps_181 = (depth_hyof(INT64_C(5), INT64_C(0)));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)(__ps_181));
+        int64_t __ps_182 = (report(INT64_C(0)));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)(__ps_182));
+        int64_t __t183;
+        __t183 = INT64_C(0);
+        return (int)__t183;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
@@ -9196,9 +9234,9 @@ static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int6
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_182 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_184 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_182;
+        return __ps_184;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {

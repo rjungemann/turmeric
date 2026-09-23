@@ -1,0 +1,13 @@
+#lang saffron
+;; proper-tail-calls T6 (T-D6): `^tailcall` annotates a DYNAMIC call too --
+;; a call through a function value, which in tail position bounces to a
+;; trampoline.  The only refusal left for one is positional: here the call's
+;; value is an operand of `+`, so work remains after it and there is no tail
+;; position to bounce from.
+
+(defn plus-one [f n]
+  (+ 1 ^tailcall (f n)))
+
+(defn main [] : int
+  (println (plus-one (fn [x] x) 41))
+  0)

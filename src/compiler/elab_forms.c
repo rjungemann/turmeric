@@ -1658,6 +1658,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                         
                         defer_expr->as.defer_.captures = captures;
                         defer_expr->as.defer_.n_captures = n_captures;
+                        defer_expr->as.defer_.is_drop_glue = true;
 
                         new_items[defer_idx++] = defer_expr;
                     }
@@ -1699,6 +1700,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                             free(free_vars);
                             defer_expr->as.defer_.captures = captures;
                             defer_expr->as.defer_.n_captures = n_captures;
+                            defer_expr->as.defer_.is_drop_glue = true;
 
                             new_items[defer_idx++] = defer_expr;
                         }
@@ -1860,6 +1862,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                     
                     defer_expr->as.defer_.captures = captures;
                     defer_expr->as.defer_.n_captures = n_captures;
+                    defer_expr->as.defer_.is_drop_glue = true;
                     
                     new_items[defer_idx++] = defer_expr;
                 }
@@ -2124,6 +2127,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                     free(free_vars);
                     defer_expr->as.defer_.captures = captures;
                     defer_expr->as.defer_.n_captures = n_captures;
+                    defer_expr->as.defer_.is_drop_glue = true;
 
                     new_items[defer_idx++] = defer_expr;
                 }
@@ -4048,6 +4052,13 @@ Expr *elab_tailcall(Elab *e, const Form *call) {
 
     Expr *target = inner;
     while (target->kind == EX_ASCRIBE) target = target->as.ascribe_.inner;
+    /* T6 (T-D6): a DYNAMIC call -- a call through an `any` in the dynamic
+     * dialect -- is a call too, and in tail position it bounces to a
+     * trampoline, so the annotation asks the same question of it. */
+    if (target->kind == EX_DYN_CALL) {
+        target->as.dyn_call_.wants_tailcall = true;
+        return inner;
+    }
     if (target->kind != EX_CALL) {
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0716_TAILCALL_NOT_TAIL,
                             "`^tailcall` must annotate a function call; "

@@ -144,8 +144,34 @@ across a self-call).  Pinned by `tests/fixtures/tco-named-let-capture-deep`
 and `tests/fixtures/tco-named-let-nocapture-deep` at 5,000,000 iterations
 each.
 
-**Boundary (1.0).** Only *self*-tail calls are optimized.  The following are
-left as ordinary recursive calls -- correct, but not stack-optimized:
+**Mutual tail calls.** Functions that tail-call each other in a cycle are
+fused into one C function with a dispatch loop, so the cycle runs in constant
+stack at any optimization level:
+
+```turmeric no-check
+(defn is-even? [n :int] :bool (if (= n 0) true  ^tailcall (is-odd?  (- n 1))))
+(defn is-odd?  [n :int] :bool (if (= n 0) false ^tailcall (is-even? (- n 1))))
+```
+
+Each member keeps its own C function as a thin wrapper, so calls from outside
+the cycle -- and non-tail calls from inside it -- are unchanged.  A group forms
+when every member is a plain top-level `defn` (no closure, dictionary, inline-C,
+effectful or `catch-unwind` body; no variadic, `fn`-typed or pass-by-pointer
+parameter), all share one C return type, and the group stays within 8 members
+and 16 parameters in all.  Pinned by `tests/fixtures/tailcall-mutual-deep` at
+10,000,000 steps at `-O0`.  Before this, a small cycle passed at `-O2` only
+because clang inlined it into a loop, and overflowed at `-O0`.
+
+A cycle T5 does not fuse -- more than 8 members or 16 parameters -- still has
+its calls in C tail position (`return f(args);`), and where the C compiler can
+guarantee a tail call they are marked `musttail` too, so under **clang on
+x86-64/aarch64** such a cycle also runs in constant stack at `-O0`
+(`tests/fixtures/tailcall-musttail-deep`).  gcc and the JIT have no such
+guarantee, so on those the calls are ordinary and `^tailcall` still refuses
+them: the annotation promises a tail call on every toolchain.
+
+**Boundary (1.0).** Self and mutual tail calls are optimized.  The following
+are left as ordinary recursive calls -- correct, but not stack-optimized:
 
 - **non-tail recursion** (e.g. `(+ n (sum-to (- n 1)))`, where work remains
   after the call returns) -- never eligible, by definition;
@@ -153,12 +179,25 @@ left as ordinary recursive calls -- correct, but not stack-optimized:
   no value, one with no arms, or an `offer` over a session channel.  An
   ordinary `match` -- ADT constructors, type-narrowing an `any`, literals,
   with or without `when`-guards -- **is** in the tail grammar;
-- **mutual / general tail calls** (function A tail-calls B which tail-calls A);
+- **mutual tail calls outside a group** -- a cycle with a member that is not a
+  plain top-level function, a return type that differs, or more than 8 members
+  / 16 parameters -- and **indirect** tail calls through a typed `fn` value
+  (Saffron's dynamic calls through an `any` are handled; see below);
 - self-recursive functions with pass-by-pointer struct, function-typed, or
   poly-fn parameters;
-- a self-recursive function whose body owns a value with drop glue (an
-  `rc<T>`/`ref<T>` local, or an explicit `defer`): the cleanup runs after the
-  call, which is what takes it out of tail position;
+- a self-recursive function with an explicit `defer` in the block around the
+  call: a `defer` you wrote runs after the call, innermost first, and that
+  order is observable, so it cannot move ahead of a backedge;
+- a self-recursive function whose owned local (an `rc<T>`/`ref<T>`, a move-only
+  Drop value, a by-value ADT with an owning field) is still **live** at the
+  call -- passed as an argument, captured by a closure, borrowed, or read as
+  anything but a plain number.  Its drop has to wait for the call to return.
+  An owned local that is **dead** at the call is fine: its drop glue runs just
+  before the backedge instead of just after the call, which nothing can
+  observe.  `(let [b (ref 1)] (if (= n 0) acc (loop (- n 1) (+ acc @b))))` is a
+  backedge; `(loop (- n 1) (count-refs x))` with `x` an `rc` is not.  This is
+  the permanent half of the boundary, for the reason Rust has no guaranteed
+  TCO: a value the callee may still use cannot be dropped before it runs;
 - a self-recursive function that genuinely uses a control operator
   (`perform`/`handle`/`shift`/`await`) -- it is CPS-lowered, and the loop
   runs on the delimited-control path rather than as a C backedge.
@@ -196,10 +235,10 @@ TUR-E0716` prints them all, with what to do about each:
 
 ```
 $ tur run --debug loop.tur
-loop.tur:9:24: error [TUR-E0716]: `^tailcall` call is not in tail position: a
-`defer` in this block -- an explicit one, or the drop glue of an owned local
-such as a `ref<T>` -- runs AFTER the call, so nothing in the block is in tail
-position
+loop.tur:9:24: error [TUR-E0716]: `^tailcall` call is not in tail position: an
+owned local of the enclosing `let` (a `ref<T>`, `rc<T>` or other value with drop
+glue) is still live at the call -- it is passed, captured, borrowed or read as
+more than a plain number -- so its drop cannot move ahead of the call
 ```
 
 Two things worth knowing about the check itself:
@@ -219,11 +258,23 @@ annotation holds at `-O0`.  A tail-call fixture built at `-O2` asserts nothing
 measures the C compiler.  See
 [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
 
-General/mutual tail-call elimination and trampolining are not built.  The
-route out is mutual-tail-call SCC fusion and, for indirect calls in the
-dynamic dialects, a bounce trampoline -- routing them through the existing CPS
-backend is not it: that backend emits a tail call as an ordinary call, a panic
-check, and a continuation invocation, which was measured rather than assumed.
+**Dynamic tail calls in Saffron.** A call through an `any` in tail position --
+`(f f (- n 1))` where `f` is a function value -- runs in constant stack too.
+There is no callee to branch to, so it bounces instead: the call is recorded
+and handed back to a trampoline loop one frame below, which makes it.  Every
+Saffron function takes `any` arguments and returns an `any`, which is what
+lets one loop make any such call.  Measured 2.7x *faster* than the nested
+calls it replaced (`benchmarks/saffron-dyn-tail-results.md`), because each
+nested call used to open and tear down a delimited-control entry.  Pinned at
+10,000,000 deep at `-O0` by `tests/fixtures/tailcall-dyn-deep`; `^tailcall`
+accepts a dynamic call and refuses one only for its position.
+
+Indirect tail calls in **typed** Turmeric (through a `fn`-typed value) are not
+built and are not planned: without one calling convention for every function
+there is nothing uniform for a trampoline to call.  Routing them through the
+existing CPS backend is not a way out either: that backend emits a tail call
+as an ordinary call, a panic check, and a continuation invocation, which was
+measured rather than assumed.
 See
 [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md)
 for the measurements and the staging, and

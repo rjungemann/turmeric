@@ -1,6 +1,8 @@
 # Proper tail calls in Turmeric
 
-Status: **T1, T2 and T3 landed; T4-T6 are plan only.**
+Status: **T1-T6 landed, and the optional T2b (`musttail`) with them. The plan
+is complete**; what remains open is named in Section 6's carve-outs, all by
+decision.
 
 - **T1 -- `^tailcall` + TUR-E0716 + the `-O0` fixture harness: DONE.** The
   annotation is a checked assertion, not a hint: a call it cannot place in tail
@@ -22,9 +24,31 @@ Status: **T1, T2 and T3 landed; T4-T6 are plan only.**
   row of Section 1's table ("Self tail call, `match` arm -- **No backedge
   emitted**") is the one line of it that T2 and T3 between them made stale. See
   [T-D4](#t-d4----extend-the-tail-grammar-starting-with-match).
-- **T4-T6: not built.** Everything they say is still a proposal, and Sections 1
-  and 2 still describe what the compiler does, with the two exceptions noted
-  above.
+- **T4 -- drop glue on a dead owned local: DONE (2026-09-23), and it moves a
+  number.** A self tail call under a `ref<T>`, `rc<T>`, move-only Drop or
+  by-value-ADT-with-owning-field local is now a backedge when that local is
+  dead at the call: `tailcall-drop-glue-deep` runs 10,000,000 frames of each
+  kind at `-O0`. The Section 1 row "body owns a `ref<T>` -- **No backedge
+  emitted**" is the second stale line of that table. See
+  [T-D3](#t-d3----cleanup-decides-tail-position-and-the-honest-answer-has-a-limit),
+  whose "What shipped" corrects two of the plan's own four corrections.
+- **T5 -- mutual tail calls fused into one function: DONE (2026-09-23), and it
+  moves the two mutual rows of Section 1.** A cycle of tail calls among plain
+  top-level functions becomes one C function with a `switch` at the top of a
+  loop; every member keeps a thin wrapper. `tailcall-mutual-deep` runs a
+  2-member, an 8-member and a mixed-arity group 10,000,000 deep at `-O0`. See
+  [T-D5](#t-d5----mutual-tail-calls-are-scc-fusion-not-sibling-calls), whose
+  "What shipped" records where the design text had to bend.
+- **T6 -- the bounce trampoline for dynamic tail calls: DONE (2026-09-23), and
+  it moves the indirect row of Section 1 for the dynamic dialect.** A Saffron
+  call through an `any` in tail position bounces to a driver loop instead of
+  nesting: `tailcall-dyn-deep` runs a self loop, a lambda, a capturing
+  closure and a mutual pair through function values 10,000,000 deep at `-O0`
+  in ~1.4 MB. It is also 2.7x faster than the nested calls it replaced
+  (`benchmarks/saffron-dyn-tail-results.md`). See
+  [T-D6](#t-d6----indirect-tail-calls-need-a-trampoline-and-only-dynamic-dialects-get-the-guarantee),
+  whose "What shipped" records how the trampoline had to reach the CPS
+  backend, which the design text never mentioned.
 
 Prerequisite for [r7rs-lang-plan.md](r7rs-lang-plan.md), but not only for it:
 T1-T3 and T5 are Turmeric features that stand on their own, and T3 closes a
@@ -59,10 +83,10 @@ default (`src/main.c:6213`); `-O0` is what `tur run --debug` uses.
 |---|---|---|---|---|
 | **Self** tail call | **pass** | pass | pass | Turmeric emits a real `__tur_tailcall:` label and `goto`. A genuine language guarantee. |
 | Self tail call, **`match` arm** | ~~n/a~~ **pass** | pass | pass | ~~**No backedge emitted.** Ordinary recursive call.~~ **Fixed by T3** (2026-09-22): a real backedge, verified at 1e7 frames at `-O0`. |
-| Self tail call, body owns a **`ref<T>`** | n/a | n/a | pass | **No backedge emitted.** Defer frame pushed; drop fires *after* the call. |
-| **Mutual**, 2 functions | **SIGSEGV** | pass | pass | LLVM inlines the pair and collapses it to a loop. Not a tail call. |
-| **Mutual**, 8 functions | **SIGSEGV** | pass | pass | Same -- LLVM inlines the whole 8-cycle. |
-| **Indirect** (through a `fn` value) | SIGSEGV | **SIGSEGV at ~29,335** | pass at 1e6 | No tail-call handling anywhere. ~285 bytes of C stack per level on an 8 MB stack. |
+| Self tail call, body owns a **`ref<T>`** | ~~n/a~~ **pass** | pass | pass | ~~**No backedge emitted.** Defer frame pushed; drop fires *after* the call.~~ **Fixed by T4** (2026-09-23) when the local is dead at the call: the frame fires before the backedge. Verified at 1e7 at `-O0`. |
+| **Mutual**, 2 functions | ~~**SIGSEGV**~~ **pass** | pass | pass | ~~LLVM inlines the pair and collapses it to a loop. Not a tail call.~~ **Fixed by T5** (2026-09-23): one fused function with a dispatch loop. Verified at 1e7 at `-O0`. |
+| **Mutual**, 8 functions | ~~**SIGSEGV**~~ **pass** | pass | pass | ~~Same -- LLVM inlines the whole 8-cycle.~~ **Fixed by T5**, same mechanism; 8 is the member cap. |
+| **Indirect** (through a `fn` value) | SIGSEGV | **SIGSEGV at ~29,335** | pass at 1e6 | No tail-call handling anywhere. ~285 bytes of C stack per level on an 8 MB stack. **Saffron dynamic calls fixed by T6** (2026-09-23): 1e7 at `-O0`, ~1.4 MB. Typed-Turmeric `fn` values unchanged, by decision (T-D6). |
 
 Three conclusions, in order of importance:
 
@@ -147,6 +171,11 @@ The conservative bail is **correct**. It is also more conservative than it needs
 to be: in that probe `b` is never passed to the recursive call and is dead at
 the call site, so the drop could legally be hoisted *before* it and tail
 position restored. That gap is T4.
+
+> **Closed by T4 (2026-09-23).** That exact program now emits
+> `tur_frame_fire_lifo(&__frame); n = <tmp>; goto __tur_tailcall;` -- the frame
+> is still pushed, and fires after the argument temps instead of after a
+> recursive call. See T-D3's "What shipped".
 
 ### 2.3 `tco_mark`'s tail grammar is missing `match`
 
@@ -454,21 +483,74 @@ That case needs T5.
 Also still out of scope, deliberately: **indirect** tail calls, which go through
 the fat-closure protocol rather than a named callee and are T-D6's problem.
 
-#### T2b -- `musttail`, if the `-O0` guarantee is wanted before T5
+#### T2b -- `musttail`, where the C compiler can promise it
 
-Now a small step rather than a design question, because T2's gate already
-enforces `musttail`'s main precondition (identical return types). What it needs
-is a `TUR_MUSTTAIL` preamble macro that expands to the attribute only where it
-exists -- and a fixture asserting the **JIT** path degrades to an ordinary call
-rather than failing to compile, since c2mir will not accept it. Worth doing only
-if `-O0` mutual recursion is wanted sooner than T5; T5 subsumes it with no
-toolchain dependency.
+**Landed 2026-09-23, after T5** -- which changed what it is for. The design
+text framed it as a way to get `-O0` mutual recursion before T5; T5's `goto`
+now covers every cycle it can fuse, with no toolchain dependency. What T2b
+adds is the rest: a T2 checkless tail call that T5 did NOT turn into a jump is
+spelled `TUR_MUSTTAIL return f(args);`. The case that matters for depth is a
+cycle past T5's caps (9+ members or 17+ parameters, measured below); the
+common case in the corpus is plain forwarding -- stdlib's `list-head` /
+`list-tail` / `list-length` wrappers and the `Eq[int]` instance calls are
+what moved the 153 snapshots. (A generic mutual pair is NOT an example: T5
+fuses it through the carrier.)
+
+**The toolchain split is real, and measured here.** clang 18 honours the
+attribute and runs a nine-member cycle 10,000,004 deep at `-O0`; gcc 13 has
+no such attribute and overflows; c2mir (the JIT) has none either. So
+`TUR_MUSTTAIL`, written lazily into the preamble the first time a program
+needs it (so only those programs' snapshots move), expands to
+`__attribute__((musttail))` only for clang on x86-64/aarch64 and to nothing
+everywhere else -- including gcc 15, which has the attribute but was not
+available to test against, and wasm, where clang rejects musttail without the
+tail-call feature. `-DTUR_MUSTTAIL=` turns it off. Where it is empty the call
+is exactly T2's.
+
+**musttail is a hard contract, so every condition is checked, not inferred**
+(`tail_call_musttail_ok`, `emit_fns.c`):
+
+- the call text is exactly `name(args)`;
+- caller and callee have IDENTICAL recorded C signatures (the forward-
+  declaration pass's ground-truth table): arity, every parameter spelling, and
+  the return. T2 had proved only the return;
+- both take at least one parameter. A zero-parameter function is declared
+  `f()`, which C99 does not count as a prototype, and clang refuses musttail
+  without one -- found by the clang run, on stdlib's `hamt.tur` and
+  `option.tur`;
+- no `const T *` pass-by-pointer parameter;
+- **no address is taken anywhere in the caller's body, nor in the call.** This
+  is the one thing an optimizer checks for itself before a sibling call and
+  musttail skips: a tail call reuses the caller's frame, so an argument
+  pointing into it would dangle. The emitter builds its stack objects -- a
+  stack fat box for a non-retaining sink, a frame `any` box, a T4 defer frame,
+  a pass-by-pointer temp -- with a `&`, so refusing any single `&` is sound,
+  if blunt.
+
+**Verified across the corpus under clang**, not only on the new fixtures: with
+`CC=clang` the suite fails the same 54 fixtures with and without the macro
+enabled (pre-existing clang-only failures, mostly the gcc/ASan `libturi.a`
+link mismatch CLAUDE.md describes), and none of those 54 carries a musttail
+diagnostic behind its link failure. Under gcc: 3105/0, 153 snapshots
+re-spelled (`return f(args);` -> `TUR_MUSTTAIL return f(args);` and the macro
+block, nothing else). Under the JIT harness the new fixtures and a sample of
+the re-snapshotted ones pass.
+
+`^tailcall` still refuses a call that only musttail would keep off the stack:
+the annotation promises a tail call on every toolchain, and this one does not.
+
+Fixtures: `tailcall-musttail-annot` (the snapshot -- where the attribute goes,
+and the zero-arity, differing-signature and address-taken cases where it must
+not) and `tailcall-musttail-deep` (1e7 at `-O0`, carrying the new
+`requires.musttail` marker, which `tests/run.sh` probes with the emitter's own
+gate).
 
 ### T-D3 -- cleanup decides tail position, and the honest answer has a limit
 
 **Verdict: hoist the drop when the value is dead at the call; refuse tail
 position when it is live. Do not promise general TCO in a language with
-destructors.**
+destructors.** **Landed 2026-09-23** -- see "What shipped" at the end of this
+section, which revises corrections 3 and 4 below.
 
 Three cases, and the middle one is the work:
 
@@ -540,6 +622,68 @@ captures the dropped binding and is stored outside the scope. Check whether the
 elaborator already suppresses the auto-drop there, or whether "not free in the
 args" is insufficient.
 
+#### What shipped (T4, 2026-09-23)
+
+Corrections 1 and 2 held exactly: `EX_DEFER` carries `is_drop_glue`, set at the
+four synthesis sites in `elab_forms.c` (the `ref<T>` drop, the move-only Drop
+opaque's `Drop.drop`, the `rc<T>` drop, and a by-value ADT's owning-field drops),
+and a written `defer` keeps the conservative bail with its own message
+(`errors/tailcall-written-defer`, which prints `0 1 2 3` where a hoist would
+print `3 2 1 0`). The synthesized defers are indeed appended after the value,
+and the tail is the last NON-defer item. Corrections 3 and 4 did not survive
+contact with the code:
+
+**3, revised: "not free in the args" is insufficient, and the open question
+above answered it.** The elaborator does NOT suppress the auto-drop when a
+closure captures the binding -- `tests/fixtures/rc-auto-drop-closure-capture`
+pins that as intended behavior -- so an `rc` local captured by a closure the
+loop hands onward, or stores where the next activation can reach it, is live
+across the backedge even though it never appears free in the arguments.
+"Still owns the value, so cannot have escaped" is true of *moves*, not of
+*aliases*. The shipped rule is an allowlist over every occurrence of the dropped
+binding -- in the block's items AND the enclosing `let`'s initializers, which
+is where a sibling binding could have aliased it: a use is dead-safe only when
+it copies a plain number out (`@b`, `(.tag t)` with a scalar result). A bare
+occurrence -- an argument, a capture, a borrow -- refuses, and so does any node
+kind the walker does not enumerate, which it answers with the complete
+`collect_free_vars` walk rather than by skipping. `errors/tailcall-owned-local-live`
+now holds the live case (an `rc` passed to a helper in the recursive call's
+own argument).
+
+**4, revised: the frame stays; only its firing point moves.** Deleting the
+`tur_frame_push_defer` / `tur_frame_fire_lifo` pair and inlining the drop bodies
+before the backedge would have been strictly WORSE on the panic path, not
+better: a panic in one of the backedge's argument expressions returns through
+the per-call-site check, and `emit_panic_signal_return` fires the frame chain
+-- with no frame, that exit skips the drops and leaks under `catch-unwind`.
+`tailcall-drop-glue-panic` pins it under LeakSanitizer. So the lowering is: the
+frame is declared and the drops pushed exactly as `emit_do_value` does, the
+value is emitted in tail position with the frame open, and every exit fires the
+chain -- a backedge after its argument temps and before the parameter
+reassignment, a `return` after its value is in a temp (a one-item `do` wrapper
+gives exactly the temp and carrier bridges the ordinary path hands the return
+ladder). The frame is block-scoped, so a backedge leaves it and the next
+iteration re-declares it: constant stack, and the same per-step work the
+recursive version did.
+
+Two limits, both deliberate:
+
+- **Only a backedge goes through drop glue.** A NON-self call under an open
+  frame is not a C tail call -- the frame fires after it -- so T2's checkless
+  `return f(args);` is off there, and a block that carries no self tail call
+  keeps the path it always took. That is also why **zero** existing snapshots
+  moved.
+- **A block whose items `return` or `throw` is refused** (TC_DROP_EXIT): those
+  fire the chain on their own schedule, which the tail path does not re-derive.
+
+`tco_mark` decides and records it on the block (`tail_drop_hoist`), so
+`emit_tail` and the `^tailcall` verifier read one answer rather than
+re-deriving it (TR1). Fixtures: `tailcall-drop-glue-deep` (1e7 at `-O0` for
+each of `ref<T>`, `rc<T>`, a by-value ADT's owning field, and a backedge in a
+`match` arm), `tailcall-drop-glue-annot` (the snapshot -- formerly the
+negative `errors/tailcall-owned-local-live`, whose header predicted its own
+move), `tailcall-drop-glue-panic` (leak-checked), and the two negatives above.
+
 ### T-D4 -- extend the tail grammar, starting with `match`
 
 **Verdict: `tco_mark` and `emit_tail` grow an `EX_MATCH` case, and the two stay
@@ -598,7 +742,8 @@ with a guarded arm) are the coverage now.
 ### T-D5 -- mutual tail calls are SCC fusion, not sibling calls
 
 **Verdict: fuse each tail-call strongly-connected component into one C function
-with a dispatch loop.**
+with a dispatch loop.** **Landed 2026-09-23** -- see "What shipped" at the end
+of this section.
 
 Compute the SCC of the direct call graph restricted to **tail edges**. A
 singleton SCC with a self-edge is today's backedge. An SCC with n > 1 members
@@ -624,10 +769,76 @@ support (MinGW is a supported host), it has no per-call cost, and it is a
 The members' parameter lists differ in general, so the fused function takes the
 union -- which is why this wants a size cap and a bail, not unbounded fusion.
 
-`musttail` stays available as a later fast path: T2 has made tail position real
-and, by requiring identical return types, has already enforced `musttail`'s main
-precondition -- see T-D2's T2b. It is still not the floor, and T5 subsumes it
-with no toolchain dependency.
+`musttail` stayed available as a later fast path, and has since landed as T2b
+(T-D2) -- for the calls fusion does not reach, and only where the C compiler
+can promise it. It is still not the floor.
+
+#### What shipped (T5, 2026-09-23)
+
+The emitted shape is the sketch above with three changes, each forced by
+something the sketch did not have to face:
+
+```c
+static bool __tcg_group_0(int, int64_t, int64_t);        /* at the FIRST member */
+static bool is_hyodd_qu(int64_t n) { return __tcg_group_0(0, n, ((int64_t)0)); }
+static bool __tcg_group_0(int __tcg_st, int64_t __tcg_s0, int64_t __tcg_s1) {
+    __tcg_top:;
+    switch (__tcg_st) {
+    case 0: { int64_t n = __tcg_s0; (void)n;
+        if ((n) == (INT64_C(0))) { return false; }
+        else { int64_t __t = (n) - (INT64_C(1));
+               __tcg_s1 = __t; __tcg_st = 1; goto __tcg_top; } }
+    case 1: { int64_t n = __tcg_s1; ... __tcg_st = 0; goto __tcg_top; ... }
+    default: break;
+    }
+    return ((bool)0);
+}
+static bool is_hyeven_qu(int64_t n) { return __tcg_group_0(1, ((int64_t)0), n); }
+```
+
+- **Concatenated slots, not a union.** Each member owns `n_params` slots of its
+  own C types, and its `case` re-declares its parameters as block locals read
+  from them. That is what lets every member's body be emitted by the
+  unmodified `emit_tail` -- the parameters keep their names, so nothing in the
+  body knows it is fused -- and it is why the cap is on total parameters (16)
+  as well as members (8), the TR4 bail. A wrapper passes a typed zero for the
+  slots that are not its own.
+- **A self call inside a group jumps too.** The `__tur_tailcall:` label is
+  function-scoped in C, so two members cannot each have one; every tail call
+  into the group, including a member's own, writes slots and goes through the
+  top of the `switch`. Argument temps, then the T4 frame fire, then the `any`
+  drops, then the slots -- the backedge's order.
+- **The definition is written at the LAST member's position; a prototype at
+  the first.** A member may only ever be emitted after the globals its body
+  names, so the one position every member's body is valid at is the last
+  one.
+
+Membership is deliberately narrow: a plain top-level `defn` -- no closure,
+dictionary clone, instance method, inline-C, effect-colored (CPS) or
+`catch-unwind` body, not variadic -- every parameter one the backedge could
+reassign and that the signature spells `<ctype> <name>` with no binding
+flags, and one C return type across the group. Everything outside that set is
+a function `emit_fn_def` shapes in ways a `case` block does not reproduce
+(its pass-by-pointer, boxed and carrier parameters; its return ladder's
+earlier arms). The edges are computed by walking exactly `tco_mark`'s spine,
+so an edge is a call `tco_mark` will mark, and the component is a property of
+the graph rather than of which member is emitted first.
+
+Found on the way and fixed in the same change: the TOP-LEVEL forward-declaration
+pre-pass (`elab_toplevel.c`) had no `float` arm, so a call to a `: float`
+function defined later in the file was typed `int` -- a spurious
+`then=float else=int`, which every float-returning mutual pair hits on one
+side. The `defmodule` and letrec pre-passes already had the arm.
+
+Fixtures: `tailcall-mutual-deep` (1e7 at `-O0`: an 8-cycle, a mixed-arity
+float/cstr pair with a self jump, a `match`-arm jump under T4 drop glue beside a
+non-tail member call and a tail call out of the group), `tailcall-mutual-annot`
+(the snapshot -- formerly the negative `errors/tailcall-mutual`, whose header
+predicted the move), `tailcall-mutual-panic` (a panic inside a jump's
+argument, leak-checked), and `errors/tailcall-mutual-not-fusable` (a cycle
+threading a `fn`-typed parameter). `mutual-recursion` and
+`tco-nonself-tail-call-no-check` re-snapshot: their even/odd pairs are groups
+now.
 
 ### T-D6 -- indirect tail calls need a trampoline, and only dynamic dialects get the guarantee
 
@@ -653,6 +864,74 @@ This is the split that answers the original question honestly: **"full tail call
 support" is achievable for `#lang r7rs`, and achievable-with-a-named-limit for
 typed Turmeric.**
 
+#### What shipped (T6, 2026-09-23)
+
+The design above has the shape right -- a bounce descriptor and a loop -- and
+two things wrong about where they live.
+
+**"The entry wrapper loops" cannot be the callee's wrapper.** If every
+bouncer's own entry drove, a chain of bounces would nest one driver per
+function, which is the recursion again. The loop has to be at the one place
+that is below the whole chain, and a bounce is only safe when the activation
+making it was entered from such a loop -- a typed `vec-fold` invoking a Saffron
+callback must never be handed the sentinel. So:
+
+- **The driver** (`__tur_tb_call`) makes a call, and while the result is the
+  sentinel, makes the call the callee recorded. A tail dynamic call that may
+  not bounce *drives* instead. Driving is always correct -- it is the ordinary
+  call, made in a loop that absorbs the callee's own bounces -- so the first
+  call in a chain costs one driver frame and every later one bounces into it.
+- **Permission is passed by identity.** Before entering a callee, the driver
+  sets `tur_tb_armed_for` to the one function it is about to enter, and only
+  if that function is a registered BOUNCER -- a function whose tail reaches a
+  dynamic call; its static fat box is registered (`__tur_tb_reg_box`) or, for
+  a capturing closure, its thunk (`__tur_tb_reg_thunk`), in an open-addressing
+  hash probed once per driven call. The bouncer compares
+  the flag with its own address on entry and clears it. Nothing else ever arms
+  anything, so no caller outside a driver can see a bounce, and a stale flag
+  cannot be mistaken by any function but the one it names.
+
+**Every function that makes a dynamic call is CPS-lowered.** `cps.c` colors a
+function with an unresolvable callee (`has_indirect`), and a dynamic call is
+the definition of one -- so the plan's own section 2.5 measurement (the
+indirect probe "is already being routed there") was the common case, not an
+aside. T6 therefore has two spellings of a tail site:
+
+- **CPS** (`emit_cps_ir.c`): `x = <dynamic call>; deliver x to KK_RET` in the
+  main body of a bouncer. The direct-entry wrapper publishes its root
+  continuation as `tur_tb_root` when armed; the tail site bounces iff
+  `__kont == tur_tb_root`, by returning a pointer to a static sentinel box --
+  exactly the boxed `any` the wrapper reads back, so a bounce allocates
+  nothing. (Delivering it through `dk_run` would have cost a reaped malloc per
+  bounce, and 1e7 bounces would have held them all until the chain ended.)
+- **Direct** (`emit_tail`, for a bouncer the CPS backend evicts, and for
+  capturing closures, which it does not lower): `__tb_may` from the entry
+  check, and `__tur_tb_tail(__tb_may, ...)` at the tail.
+
+Bouncing is declined -- the site drives -- whenever something would run after
+the return that the deferred call still needs: an argument that queued an
+owned box for "drop after the consuming call", an open defer frame, or `any`
+scope drops.
+
+**The cost is negative.** The plan budgeted "one tagged compare and a branch
+per bounce". A bounce is four words into a thread-local descriptor and a
+return; the nested call it replaces opened and tore down a DK entry (`setjmp`,
+a `dk_prompt` allocation, the entry-depth bookkeeping). On
+`benchmarks/bench-saffron-dyn-tail.tur` -- 10,000,000 dynamic calls, shallow
+enough for the old compiler to survive -- T6 is 471 ms against 1256 ms.
+
+`^tailcall` now annotates a dynamic call too; its only refusals are positional
+(`errors/tailcall-dyn-argument`). Fixtures: `tailcall-dyn-deep` (1e7 at `-O0`,
+five shapes, including the typed-`vec-fold` safety case) and
+`tailcall-dyn-leak` (the same shapes, LeakSanitizer-gated).
+
+Two pre-existing defects surfaced and are filed rather than fixed here:
+[saffron-catch-unwind-around-dyn-call-fn-crashes](https://github.com/rjungemann/turmeric/blob/main/docs/reported/saffron-catch-unwind-around-dyn-call-fn-crashes.md)
+(both engines, which is why no T6 fixture panics) and
+[cps-capturing-closure-env-leaks-through-dyn-call](https://github.com/rjungemann/turmeric/blob/main/docs/reported/cps-capturing-closure-env-leaks-through-dyn-call.md).
+`#lang r7rs` does not exist yet; when it does, its procedures ride the same
+fat-closure protocol, so it inherits this unchanged.
+
 ---
 
 ## 4. Stages
@@ -662,22 +941,18 @@ typed Turmeric.**
 | ~~**T1** -- `^tailcall` annotation + diagnostic + `-O0` fixture harness~~ **DONE** | small | all of Turmeric; it is the test instrument for everything below |
 | ~~**T2** -- drop the redundant panic check at tail calls (T-D2)~~ **DONE** | medium | 6,601 fewer branch sites, -31,216 lines of emitted C. **No depth number moved** |
 | ~~**T3** -- `EX_MATCH` in the tail grammar (T-D4)~~ **DONE** | small | closed a silent hole in the most idiomatic loop shape. 1e7 at `-O0`; **zero** snapshot churn |
-| **T4** -- drop-glue hoisting by liveness (T-D3 row 2) | medium | owned-local loops get the guarantee. Needs an `is_drop_glue` flag on `EX_DEFER` first |
-| **T5** -- SCC fusion for mutual tail calls (T-D5) | medium-large | mutual recursion becomes a guarantee instead of an `-O2` accident |
-| **T6** -- bounce trampoline for indirect tail calls under dynamic dialects (T-D6) | medium | **R7RS's actual prerequisite**; also fixes Saffron's ~29K ceiling |
+| ~~**T4** -- drop-glue hoisting by liveness (T-D3 row 2)~~ **DONE** | medium | owned-local loops get the guarantee when the local is dead at the call. 1e7 at `-O0`; **zero** snapshot churn |
+| ~~**T5** -- SCC fusion for mutual tail calls (T-D5)~~ **DONE** | medium-large | mutual recursion is a guarantee instead of an `-O2` accident. 1e7 at `-O0`; two snapshots moved |
+| ~~**T6** -- bounce trampoline for indirect tail calls under dynamic dialects (T-D6)~~ **DONE** | medium-large | **R7RS's actual prerequisite**; fixed Saffron's ~29K ceiling. 1e7 at `-O0`, and 2.7x faster than before |
 
 **Order T4 and T5 by their own merits, not behind T2.** T2 shipped and is a
 precondition for nothing else here: T3-T5 are `goto`-based and T6 returns a
-bounce descriptor, so none of them consumes it. Its only consumer is the
-optional T2b (`musttail`). T3 landing on its own, without T2, would have worked
+bounce descriptor, so none of them consumes it. Its only consumer is T2b
+(`musttail`), which has since landed too. T3 landing on its own, without T2, would have worked
 identically -- which is the evidence.
 
-**T4 is worth landing regardless of whether R7RS ever happens**, and is now the
-smallest thing left on this list. It needs the `is_drop_glue` flag on `EX_DEFER`
-first (T-D3).
-
-T5 is the one that makes `docs/guides/performance-guide.md` able to say
-something stronger than it says now. T6 is the R7RS gate.
+**Every stage has landed** (each T-D section ends with "What shipped"). T6
+was the R7RS gate; it is open.
 
 **Harness requirement, repeated because it is the trap:** every fixture builds
 at `-O0` (`requires.*` marker or an explicit `--debug` invocation), asserts a
@@ -691,10 +966,21 @@ tail-call fixture at `-O2` asserts nothing.
 - **T2** removed emitted code, by more than "slightly": -31,216 lines across
   the 149 `expected.c` snapshots, 6,601 branch sites gone. It costs nothing at
   runtime and changed no depth behavior at either `-O0` or `-O2`.
-- **T3, T4, T5** cost nothing at runtime. They convert calls into `goto`s.
-- **T6** costs one tagged compare and a branch per *tail call* in dynamic
-  dialects, and nothing in typed Turmeric. An `r7rs` and a `saffron` row in
-  `benchmarks/` should exist before T6 lands, not after.
+- **T3** costs nothing at runtime. It converts calls into `goto`s.
+- **T5** converts calls into `goto`s through a `switch`: one indirect branch per
+  jump, and a wrapper that zero-fills the other members' slots on entry.
+- **T4** converts the call into a `goto` and keeps the defer frame, so each
+  step still pays the frame's init, push and fire -- the same work the
+  recursive version paid per level, minus the call and the stack frame.
+- **T6** costs nothing in typed Turmeric, and in the dynamic dialect it is a
+  net saving: 2.7x faster than the nested calls it replaced
+  (`benchmarks/saffron-dyn-tail-results.md`, the Saffron row the plan asked
+  for; there is no `r7rs` row because there is no `#lang r7rs` yet). The
+  per-bounce work is a four-word descriptor write, a tagged compare, and a
+  hashed registry lookup to arm the next callee. The lookup started as a
+  linear scan and was measured at ~0.3 ns per registered bouncer per call --
+  26x slower at 1000 bouncers -- so it is O(1) now (flat from 0 to 1000; see
+  the "Registry lookup" table in the results file).
 - Fixture count: roughly one per row of Section 1's table, plus the `^tailcall`
   negative cases. Call it 15-20, which is inside the budget the R7RS plan's R3
   risk sets.
@@ -707,10 +993,12 @@ tail-call fixture at `-O2` asserts nothing.
   Permanent, and it goes in the guide next to the guarantee.
 - **Indirect tail calls in typed Turmeric** stay unguaranteed (T-D6). A
   diagnostic, not silence.
-- **`musttail`** is not the floor and is not promised. T2 has landed, so the
-  revisit is now live and scoped as T2b -- a preamble macro plus a fixture
-  asserting the JIT path degrades rather than failing to compile. Take it only
-  if `-O0` mutual recursion is wanted before T5.
+- **`musttail`** is not the floor and is not promised. T5's `goto` is the
+  floor: it covers every cycle it can fuse on every toolchain. T2b (landed)
+  adds `musttail` for the tail calls T5 leaves as C calls -- a cycle past
+  T5's caps is the one that matters for depth -- but only where the C
+  compiler can guarantee it (clang on x86-64/aarch64 today); on gcc and the
+  JIT those calls stay ordinary, and `^tailcall` keeps saying so.
 - **Restructuring `panic` to be `noreturn`** is explicitly *not* in this plan.
   T-D2 shows it is unnecessary; if some later need arises, it is its own
   decision with its own risks.
@@ -746,12 +1034,15 @@ the panic-surfacing half.
 union of its members' parameters. A large SCC with disjoint signatures produces
 a wide, ugly function. Mitigation: a member/parameter cap with a clean bail to
 today's behavior, plus the `^tailcall` diagnostic saying the group was too wide.
+**As shipped (T5):** 8 members and 16 parameters in all; past either the cycle
+is ordinary recursion, and `^tailcall` on one of its calls names both caps
+among the conditions a group needs (it does not single out which one failed).
 
 **TR5 -- scope.** This is six stages, and only T6 is strictly required by R7RS.
+**Closed:** all six landed.
 It would be easy for this to become the work instead of a prerequisite to it.
 Mitigation: T1-T3 are small and independently valuable; if the R7RS track
-stalls, they should land anyway. T1 and T2 have, and T3 is the smallest thing
-left.
+stalls, they should land anyway. T1-T5 have.
 
 ---
 

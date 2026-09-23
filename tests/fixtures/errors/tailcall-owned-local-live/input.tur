@@ -1,17 +1,23 @@
-;; proper-tail-calls T1 (T-D1) / T-D3: an owned local's drop glue runs AFTER
-;; the call, so the call is not in tail position -- tco_mark's `defer` bail
-;; (plan section 2.2) is correct, and this fixture is what it looks like from
-;; the outside.  The `ref<T>` here is never passed to the recursive call and is
-;; dead at that point, so T4 (drop hoisting by liveness) would legally move the
-;; drop before the call and restore tail position; until then, the annotation
-;; is the difference between knowing and not knowing.
+;; proper-tail-calls T1 (T-D1) / T4 (T-D3): an owned local's drop glue can move
+;; ahead of a backedge only when the local is DEAD at the call -- every use of
+;; it copies a plain number out.  Here the `rc<int>` is passed, bare, to `cnt`
+;; in the recursive call's own argument, so the drop cannot run before the
+;; call without the argument reading a freed block.  Passing, capturing in a
+;; closure, and borrowing all keep the local live, and the annotation says so.
+;;
+;; Until T4 this fixture held a DEAD `ref<T>` (the plan's section 2.2 probe),
+;; which T4 now lowers to a backedge; that program moved to the positive
+;; `tailcall-drop-glue-annot`.
 
-(defn with-ref [n : int] : int
-  (let [b (ref 1)]
+(defn cnt [r : rc<int>] : int
+  (rc/strong-count r))
+
+(defn walk [n : int acc : int] : int
+  (let [x (rc/of n)]
     (if (= n 0)
-      0
-      ^tailcall (with-ref (- n 1)))))
+      acc
+      ^tailcall (walk (- n 1) (+ acc (cnt x))))))
 
 (defn main [] : int
-  (println (with-ref 3))
+  (println (walk 3 0))
   0)

@@ -705,7 +705,48 @@ typedef struct EmitCtx {
      * NULL off the tail path, and compared by NODE identity, so a `match` nested
      * inside a tail `match`'s arm is emitted ordinarily. */
     const struct MatchTailCtx *match_tail;
+    /* proper-tail-calls T5 (T-D5): the top-level function definitions a
+     * mutual-tail-call group may draw its members from -- the module's
+     * EX_FN_DEF items minus the generic templates emit_abi_fn_skip_generic
+     * suppresses.  Filled by the module emitter before its item loop. */
+    const Expr **tcg_fn_exprs;
+    uint32_t     n_tcg_fn_exprs;
+    /* ... and the group member whose body is being emitted (NULL otherwise).
+     * While set, tco_mark marks a tail call to another member of the group,
+     * and emit_tail lowers it -- and a self tail call -- to a jump through the
+     * group's fused function.  See emit_fns.c, "mutual tail-call groups". */
+    const struct TcgCur *tcg_cur;
+    /* proper-tail-calls T6 (T-D6): how the NEXT dynamic call emit_dyn_call
+     * emits is spelled, set by the tail path right before it and cleared by
+     * emit_dyn_call on entry (so a dynamic call among the arguments is never
+     * affected).  DYN_TAIL_NONE is an ordinary call.  See the trampoline
+     * runtime in emit_module.c (ensure_saffron_dyn_runtime). */
+    uint8_t      dyn_tail_mode;
+    const char  *dyn_tail_guard;   /* DYN_TAIL_DIRECT: the C condition to bounce on */
+    /* The current direct-style function's bounce permission (`__tb_may`), NULL
+     * when it is not a bouncer or its tail calls cannot bounce here (a fused
+     * T5 group, a CPS body). */
+    const char  *tb_guard;
+    /* Set by tco_mark when the tail spine reaches a dynamic call, so the body
+     * is routed through emit_tail, where that call is recognised. */
+    bool         tail_dyn_seen;
+    /* proper-tail-calls T2b: the C name and body buffer of the function being
+     * emitted, and where its body starts in that buffer -- what a checkless
+     * tail call needs to decide whether it may also be `musttail` (identical
+     * recorded signatures, and no address taken anywhere in the body so far).
+     * NULL name off an ordinary function body (a fused T5 group, a CPS body). */
+    const char  *mt_fn_cname;
+    const Buf   *mt_body_buf;
+    size_t       mt_body_start;
+    bool         musttail_macro_emitted;
 } EmitCtx;
+
+enum {
+    DYN_TAIL_NONE = 0,
+    DYN_TAIL_DRIVE,     /* a tail call that cannot bounce: drive it in a loop */
+    DYN_TAIL_DIRECT,    /* direct style: `__tur_tb_tail(<guard>, ...)` */
+    DYN_TAIL_CPS,       /* a `__cps` body: bounce when __kont is the armed root */
+};
 
 /* proper-tail-calls T3 (T-D4): see EmitCtx::match_tail. */
 typedef struct MatchTailCtx {
@@ -809,6 +850,8 @@ void emit_sig_reset(void);
 void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_params,
                                  const char *ctype);
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
+int emit_sig_lookup_n_params(const char *cname);
+void ensure_musttail_macro(EmitCtx *ctx);
 /* S1 (jit-engine-plan section 4): the same side table's return-type half.  A
  * call site consults it to name the type of a hoisted call temp outright,
  * instead of emitting GNU C's `__auto_type` -- which c2mir cannot parse at all
@@ -1213,6 +1256,12 @@ char *fresh_frame(EmitCtx *ctx);
  * parent = a function-outermost frame. */
 void emit_frame_note_parent(const char *frame, const char *parent);
 const char *emit_frame_parent(const char *frame);
+void tcg_reset_group_registry(void);
+bool fn_may_bounce(const struct FnDef *fd);
+void tb_register_fatbox(EmitCtx *ctx, const char *box, const char *fnptr);
+void tb_register_thunk(EmitCtx *ctx, const char *thunk);
+void emit_frame_push_defer(EmitCtx *ctx, Buf *body, const char *frame_var,
+                           const Expr *it);
 char *fresh_defer_thunk(EmitCtx *ctx);
 char *fresh_defer_env(EmitCtx *ctx);
 void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,

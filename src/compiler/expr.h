@@ -1412,7 +1412,12 @@ struct Expr {
         struct { Binding *binding; }                                       var;
         struct { LetBinding *bindings; uint32_t n; Expr *body; }           let_;
         struct { Expr *cond; Expr *then_; Expr *else_or_null; }            if_;
-        struct { Expr **items; uint32_t n; }                               do_;
+        /* `tail_drop_hoist` (proper-tail-calls T4, T-D3): set by emit_fns.c's
+         * tco_mark when this block's only defers are trailing drop glue whose
+         * locals are dead at every exit of its tail -- the tail path then fires
+         * them before each backedge / return instead of treating the whole
+         * block as a non-tail position. */
+        struct { Expr **items; uint32_t n; bool tail_drop_hoist; }        do_;
         struct { Expr *cond; Expr *body; }                                 while_;
         /* set-bang-rc-release: `release_old` is stamped by elab_set_rc_release
          * when `target` is an rc-managed binding that owns a continuous +1 from
@@ -1472,6 +1477,13 @@ struct Expr {
                   * function emitted more than once (header + implementation,
                   * or several ABI specializations) reports TUR-E0716 once. */
                  bool tailcall_diagnosed;
+                 /* proper-tail-calls T5 (T-D5): 1 + the index, within the
+                  * enclosing function's mutual-tail-call group, of the member
+                  * this tail call targets -- lowered to a jump through the
+                  * group's fused function rather than a C call.  0 when the
+                  * call is not such a jump.  Set (and cleared) by emit_fns.c's
+                  * tco_mark. */
+                 uint8_t tail_group_idx;
                  /* SZ8: when this call is a sized-GADT constructor, `ctor` is the
                   * resolved CtorDef and `size_index` is the inferred type-level
                   * size index of the constructed value (NULL otherwise). Both
@@ -1499,6 +1511,17 @@ struct Expr {
              * to be a runtime policy decision. */
             Binding **captures;       /* captured bindings from enclosing scope */
             uint8_t n_captures;
+            /* proper-tail-calls T4 (T-D3): this defer is COMPILER-SYNTHESIZED
+             * drop glue -- the scope-exit auto-drop of an owned local (`ref<T>`,
+             * `rc<T>`, a move-only Drop opaque, or a by-value ADT's owning
+             * field) -- rather than a `defer` the author wrote.  The two look
+             * identical in the AST otherwise, and they have different answers
+             * at a tail call: drop glue has no observable order relative to the
+             * call when the value is dead there, so it may run BEFORE a
+             * backedge; a written `defer` runs after the call, innermost first,
+             * and hoisting it would reorder output.  Set at each synthesis site
+             * in elab_forms.c; read by emit_fns.c's tail grammar. */
+            bool is_drop_glue;
         } defer_;
         /* Phase 3/4: (return) or (return expr) - early return with defer firing */
         struct { Expr *value; } return_;
@@ -1812,7 +1835,10 @@ struct Expr {
         struct { const Symbol *op; struct Expr **args; uint32_t n_args; } dyn_op_;
         /* saffron-lang-plan S4: callee plus arguments; arity is checked when it
          * runs, against the closure that actually arrived. */
-        struct { struct Expr *fn; struct Expr **args; uint32_t n_args; } dyn_call_;
+        struct { struct Expr *fn; struct Expr **args; uint32_t n_args;
+                 /* proper-tail-calls T6 (T-D6): `^tailcall` on a dynamic call,
+                  * and the once-only report flag -- the EX_CALL pair's twins. */
+                 bool wants_tailcall; bool tailcall_diagnosed; } dyn_call_;
         /* saffron-lang-plan S4: receiver plus the field NAME, resolved against
          * the runtime value's constructor when it runs. */
         struct { struct Expr *obj; const Symbol *field; } dyn_field_;

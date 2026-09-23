@@ -5791,6 +5791,13 @@ typedef struct {
      * prompt's result type (KK_PROMPT).  NULL => scalar (Tier A/B). */
     const Type *ret_ty;
     const Type *cur_ty;
+    /* proper-tail-calls T6 (T-D6): the function is a bouncer, and `tb_out` is
+     * its MAIN body buffer.  A tail dynamic call bounces only when emitted
+     * there -- where `__kont` is the function's own continuation parameter --
+     * never from a lifted helper, which copies this struct but writes
+     * elsewhere. */
+    bool        tb_bouncer;
+    const Buf  *tb_out;
 } CE;
 
 static void ce_line(CE *ce, const char *fmt, ...) {
@@ -7202,7 +7209,34 @@ static void emit_letraw(CE *ce, const CTerm *t) {
     ce->ctx->indent = ce->indent;           /* line the delegated statements up */
     uint32_t dd_sum = ce->ctx->n_sum_pending, dd_any = ce->ctx->n_any_pending,
              dd_vsp = ce->ctx->n_vsp_pending;
+    /* proper-tail-calls T6 (T-D6): `x = <dynamic call>; deliver x to KK_RET` is
+     * a dynamic call in tail position.  In the main body of a bouncer it
+     * bounces when `__kont` is the root the direct-entry wrapper armed, and
+     * drives otherwise; anywhere else it drives.  Driving is always correct --
+     * it is the ordinary call, made in a loop that absorbs the callee's own
+     * bounces. */
+    {
+        const Expr *le = t->as.letraw.e;
+        while (le && le->kind == EX_ASCRIBE) le = le->as.ascribe_.inner;
+        const CTerm *nb = t->as.letraw.body;
+        bool delivers_x = nb && nb->kind == CT_APPCONT &&
+            nb->as.appcont.kont.kind == KK_RET &&
+            ((nb->as.appcont.v.kind == CA_CVAR &&
+              nb->as.appcont.v.cvar_id == t->as.letraw.x.id) ||
+             (nb->as.appcont.v.kind == CA_VAR && t->as.letraw.x.bind &&
+              nb->as.appcont.v.var == t->as.letraw.x.bind));
+        if (le && le->kind == EX_DYN_CALL && le->as.dyn_call_.n_args <= 4 &&
+            delivers_x && t->as.letraw.x.ty == TY_ANY) {
+            bool bounce = ce->tb_bouncer && ce->out == ce->tb_out &&
+                          !ce->ret_mode && !ce->shift_mode &&
+                          ce->ctx->n_any_scope_drops == 0;
+            ce->ctx->dyn_tail_mode = bounce ? DYN_TAIL_CPS : DYN_TAIL_DRIVE;
+            ce->ctx->dyn_tail_guard = NULL;
+        }
+    }
     char *rhs = emit_value(ce->ctx, ce->out, t->as.letraw.e);
+    ce->ctx->dyn_tail_mode = DYN_TAIL_NONE;
+    ce->ctx->dyn_tail_guard = NULL;
     ce->ctx->indent = saved;
     /* cps-edge-walk-misses-nodes-and-colored-frames-leak: anything the
      * delegation queued for "drop after the consuming call" is ours now. */
@@ -9817,6 +9851,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     CE ce; memset(&ce, 0, sizeof(ce));
     ce.ctx = ctx; ce.out = &body_buf; ce.helpers = &helpers; ce.indent = 4;
     ce.cur_k = "__kont"; ce.fn_cn = cn; ce.helper_ctr = &helper_ctr;
+    ce.tb_bouncer = !fd->closure && fn_may_bounce(fd);
+    ce.tb_out = &body_buf;
     ce.ret_ty = mono_ret ? mono_ret : fn_ret_type(fd);   /* KK_RET crossing type (Tier C aggregate return) */
     /* fn-value-fat-normalization (effect-row increment): a CAPTURING lambda's
      * __cps twin reads its captures exactly like the direct thunk does -- cast
@@ -10018,6 +10054,20 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_puts(file, ") {\n");
     buf_puts(file, "    __dk_entry_depth++;\n");
     buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
+    /* proper-tail-calls T6 (T-D6): a bouncer's direct entry is where the
+     * trampoline's arming lands -- the driver arms exactly this function, and
+     * the fat box's shim calls it directly.  Armed, it publishes its root as
+     * `tur_tb_root`, which is how a tail dynamic call in the `__cps` body knows
+     * its continuation is this entry's and may bounce back to the driver.
+     * Saved and restored around the body so a nested entry cannot leak its
+     * root outward. */
+    bool tb_entry = !fd->closure && fn_may_bounce(fd);
+    if (tb_entry) {
+        ensure_saffron_dyn_runtime(ctx);
+        buf_puts(file, "    void *__tb_save = tur_tb_root; tur_tb_root = NULL;\n");
+        buf_printf(file, "    if (tur_tb_armed_for == (void *)%s) { tur_tb_armed_for = NULL; "
+                         "tur_tb_root = (void *)__root; }\n", cn);
+    }
     /* Build the argument list "<params>, __root" once.  A const-pointer param
      * (cps_entry_param_by_ptr) is dereferenced back to the by-value `__cps`
      * signature. */
@@ -10039,8 +10089,12 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_puts(file, "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
     buf_printf(file, "    if (TUR_SETJMP(__dkjb) == 0) { %s%s__cps(%s); }\n",
                void_ret ? "(void)" : "__r = ", cn, __args.data);
-    buf_printf(file, "    else { %s__dk_drive_after(); }\n", void_ret ? "(void)" : "__r = ");
+    /* T6: after a tail-resume longjmp the drive runs continuations that are not
+     * this entry's body; no bounce shortcut applies there. */
+    buf_printf(file, "    else { %s%s__dk_drive_after(); }\n",
+               tb_entry ? "tur_tb_root = NULL; " : "", void_ret ? "(void)" : "__r = ");
     buf_puts(file, "    g_dk_driver = __dksave;\n");
+    if (tb_entry) buf_puts(file, "    tur_tb_root = __tb_save;\n");
     buf_free(&__args);
     /* Read the delivered value out BEFORE the reap: a Tier-C return rides a heap
      * box owned by the reap list (consume=false, never freed at a load), so the

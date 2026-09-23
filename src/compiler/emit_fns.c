@@ -230,6 +230,266 @@ static bool tco_match_tail_ok(const Expr *e) {
     return true;
 }
 
+/* ============================================================================
+ * proper-tail-calls T5 (docs/upcoming/proper-tail-calls-plan.md, T-D5):
+ * mutual tail-call groups -- the registry tco_mark consults.
+ *
+ * A strongly-connected component of the TAIL-call graph (edges: a direct call
+ * in tail position under tco_mark's grammar) with two or more members is fused
+ * into one C function, `__tcg_group_N(int __tcg_st, <every member's params>)`,
+ * that dispatches on `__tcg_st` in a `switch` at the top of a loop.  Each
+ * member's body is emitted as one `case`, with its parameters declared as
+ * block locals read from the member's slots; a tail call to any member of the
+ * group -- itself included -- evaluates its arguments, writes the target's
+ * slots, sets `__tcg_st` and jumps back to the top.  Each member keeps its own
+ * C function as a thin wrapper, `return __tcg_group_N(<i>, ...);`, for every
+ * call from outside the group and every non-tail call from inside it.
+ *
+ * This is the generalization of the self-call backedge the plan asks for, not
+ * a second mechanism: it is a `goto` (so it holds at -O0 and needs nothing
+ * from the C compiler), and the same argument-temps / frame-fire / reassign
+ * order the backedge uses.  Section 2.4 of the plan is why it matters: at -O2
+ * clang inlines a SMALL cycle into a loop, which evaporates the moment the
+ * bodies grow; at -O0 nothing did.
+ * ========================================================================== */
+#define TCG_MAXMEM    8     /* members per fused group (risk TR4) */
+#define TCG_MAXSLOTS  16    /* total parameters across the group */
+
+typedef struct TcgGroup {
+    const Expr *mem_e[TCG_MAXMEM];
+    FnDef      *mem[TCG_MAXMEM];
+    int         n_mem;
+    int         last_mem;               /* the member emitted LAST, in item order */
+    uint32_t    slot_base[TCG_MAXMEM];  /* first slot of each member */
+    char       *slot_ctype[TCG_MAXSLOTS];
+    uint32_t    n_slots;
+    char       *ret_ctype;
+    char        name[40];
+    bool        declared;               /* prototype written */
+    bool        defined;                /* fused body written */
+} TcgGroup;
+
+typedef struct TcgCur {
+    const TcgGroup *g;
+    int             idx;                /* the member being emitted */
+} TcgCur;
+
+static TcgGroup g_tcg_groups[64];
+static int      g_n_tcg_groups;
+static int      g_tcg_ctr;
+
+void tcg_reset_group_registry(void) {
+    for (int i = 0; i < g_n_tcg_groups; i++) {
+        for (uint32_t k = 0; k < g_tcg_groups[i].n_slots; k++)
+            free(g_tcg_groups[i].slot_ctype[k]);
+        free(g_tcg_groups[i].ret_ctype);
+    }
+    g_n_tcg_groups = 0;
+    g_tcg_ctr = 0;
+}
+
+/* The member of the current group a call targets, or -1.  Arity must match
+ * exactly: a jump writes every one of the target's slots. */
+static int tcg_call_target(const EmitCtx *ctx, const Expr *call) {
+    if (!ctx->tcg_cur || !call || call->kind != EX_CALL) return -1;
+    if (call->as.call_.fn_expr || call->as.call_.is_poly_call) return -1;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb || !fb->source_fn_def) return -1;
+    const TcgGroup *g = ctx->tcg_cur->g;
+    for (int i = 0; i < g->n_mem; i++)
+        if (g->mem[i] == fb->source_fn_def &&
+            call->as.call_.n_args == g->mem[i]->n_params)
+            return i;
+    return -1;
+}
+
+/* ============================================================================
+ * proper-tail-calls T4 (docs/upcoming/proper-tail-calls-plan.md, T-D3):
+ * hoisting an owned local's drop glue ahead of a tail call.
+ *
+ * A `let` binding an owned value -- a `ref<T>`, an `rc<T>`, a move-only Drop
+ * opaque, or a by-value ADT with owning fields -- gets its scope-exit drop as a
+ * synthesized `defer` appended to the `let` body's `do`.  That defer used to
+ * take the whole block out of tail position, because "a defer runs after the
+ * call" is true of a defer the author wrote.  For drop glue it is only true
+ * when the value is still LIVE at the call: when nothing the next activation
+ * can reach refers to it, running the drop before the backedge is
+ * indistinguishable from running it after the recursive call returns.
+ *
+ * So a block qualifies when:
+ *
+ *   - every defer in it is drop glue (`is_drop_glue`), and they are all
+ *     trailing -- the elaborator appends them after the block's value;
+ *   - no item returns or throws (those fire the frame chain on their own
+ *     schedule, which this path does not re-derive); and
+ *   - every dropped binding is DEAD at every exit of the tail: each of its
+ *     occurrences, in the block and in the enclosing `let`'s initializers, is a
+ *     read that copies a plain scalar out (`@b`, `(.count o)`) or a store
+ *     through it (`(set-deref! b v)`).  A bare occurrence -- an argument, a
+ *     closure capture, a borrow, anything the walker does not recognise -- may
+ *     let the value outlive the drop, and refuses.
+ *
+ * The lowering keeps the frame rather than deleting it.  The plan's first
+ * reading was to drop the `tur_frame_push_defer` / `tur_frame_fire_lifo` pair
+ * outright, but the frame is what fires the drop on the PANIC path: a panic in
+ * one of the backedge's argument expressions returns through
+ * `emit_panic_signal_return`, which fires `ctx->frame_var`'s chain.  Without the
+ * frame that exit leaks the local under `catch-unwind`.  What changes is when
+ * the frame fires on the normal path: at every exit of the tail -- after a
+ * backedge's argument temps, before a `return` -- rather than once after a
+ * call that is no longer a tail call.  The frame is block-scoped, so a
+ * backedge leaves it and the next iteration re-declares it: constant stack.
+ * ========================================================================== */
+
+/* Forward decl: the capture analysis the elaborator uses for closures and defer
+ * thunks.  Complete over every ExprKind, which is what makes it the right
+ * fallback for the node kinds tco_drop_use_ok does not enumerate. */
+Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
+                            Binding **self_exclude, uint32_t n_self_exclude,
+                            uint32_t *n_out);
+
+/* A value a drop cannot invalidate once it has been copied out: a machine
+ * number or a bool.  Pointer-shaped results (a `cstr`, a nested owner, an
+ * aggregate) may alias storage the drop glue frees, so they do not qualify. */
+static bool tco_plain_scalar(TypeKind k) {
+    switch (k) {
+        case TY_BOOL: case TY_INT: case TY_FLOAT:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool tco_mentions(const Expr *e, const Binding *b) {
+    if (!e) return false;
+    uint32_t n = 0;
+    Binding **fv = collect_free_vars(e, NULL, 0, NULL, 0, &n);
+    bool hit = false;
+    for (uint32_t i = 0; i < n && !hit; i++) hit = (fv[i] == b);
+    free(fv);
+    return hit;
+}
+
+static bool tco_is_var(const Expr *e, const Binding *b) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    return e && e->kind == EX_VAR && e->as.var.binding == b;
+}
+
+/* Is every occurrence of `b` in `e` a use that cannot outlive a drop of `b`?
+ * Conservative by construction: a node kind not enumerated here is answered by
+ * the complete free-variable walk, so it refuses whenever `b` appears in it at
+ * all. */
+static bool tco_drop_use_ok(const Expr *e, const Binding *b) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_VAR:
+            return e->as.var.binding != b;
+        case EX_DEREF:
+            if (tco_is_var(e->as.deref_.expr, b))
+                return tco_plain_scalar(e->type.kind);
+            return tco_drop_use_ok(e->as.deref_.expr, b);
+        case EX_GET_FIELD:
+            if (tco_is_var(e->as.get_field_.struct_expr, b))
+                return tco_plain_scalar(e->type.kind);
+            return tco_drop_use_ok(e->as.get_field_.struct_expr, b);
+        case EX_SET_DEREF:
+            if (!tco_is_var(e->as.set_deref_.ref, b) &&
+                !tco_drop_use_ok(e->as.set_deref_.ref, b))
+                return false;
+            return tco_drop_use_ok(e->as.set_deref_.value, b);
+        case EX_ASCRIBE:
+            return tco_drop_use_ok(e->as.ascribe_.inner, b);
+        case EX_IF:
+            return tco_drop_use_ok(e->as.if_.cond, b) &&
+                   tco_drop_use_ok(e->as.if_.then_, b) &&
+                   tco_drop_use_ok(e->as.if_.else_or_null, b);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!tco_drop_use_ok(e->as.do_.items[i], b)) return false;
+            return true;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!tco_drop_use_ok(e->as.let_.bindings[i].init, b)) return false;
+            return tco_drop_use_ok(e->as.let_.body, b);
+        case EX_CALL:
+            if (e->as.call_.fn_expr && tco_mentions(e->as.call_.fn_expr, b))
+                return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (!tco_drop_use_ok(e->as.call_.args[i], b)) return false;
+            return true;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!tco_drop_use_ok(e->as.builtin.args[i], b)) return false;
+            return true;
+        case EX_MATCH:
+            if (!tco_drop_use_ok(e->as.match_.scrutinee, b)) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (!tco_drop_use_ok(e->as.match_.arms[i].guard, b) ||
+                    !tco_drop_use_ok(e->as.match_.arms[i].body, b))
+                    return false;
+            return true;
+        default:
+            return !tco_mentions(e, b);
+    }
+}
+
+/* The index of a `do` block's value item when its defers are exclusively
+ * TRAILING DROP GLUE -- the shape the elaborator builds for an owned local --
+ * or -1 when they are not (a written `defer`, a defer before the value, or no
+ * defer at all). */
+static int tco_drop_glue_tail_idx(const Expr *e) {
+    int last = -1;
+    for (int i = (int)e->as.do_.n - 1; i >= 0; i--)
+        if (e->as.do_.items[i]->kind != EX_DEFER) { last = i; break; }
+    if (last < 0 || (uint32_t)last + 1 == e->as.do_.n) return -1;
+    for (int i = 0; i < last; i++)
+        if (e->as.do_.items[i]->kind == EX_DEFER) return -1;
+    for (uint32_t i = (uint32_t)last + 1; i < e->as.do_.n; i++)
+        if (!e->as.do_.items[i]->as.defer_.is_drop_glue) return -1;
+    return last;
+}
+
+#define TC_DEFER_USER "a `defer` written in this block runs AFTER the call, " \
+                      "innermost first -- running it before a backedge would " \
+                      "reorder what it does, so nothing in the block is in " \
+                      "tail position"
+#define TC_DROP_LIVE  "an owned local of the enclosing `let` (a `ref<T>`, " \
+                      "`rc<T>` or other value with drop glue) is still live " \
+                      "at the call -- it is passed, captured, borrowed or " \
+                      "read as more than a plain number -- so its drop cannot " \
+                      "move ahead of the call"
+#define TC_DROP_EXIT  "this block's drop glue shares it with a `return` or " \
+                      "`throw`, which the tail path does not re-derive"
+
+/* Why a `do` block (the body of `let_e` when non-NULL) cannot carry a tail
+ * position through its drop glue, or NULL when it can.  Only called for a block
+ * that HAS defers. */
+static const char *tco_drop_glue_refusal(const Expr *e, const Expr *let_e) {
+    int last = tco_drop_glue_tail_idx(e);
+    if (last < 0) return TC_DEFER_USER;
+    for (int i = 0; i <= last; i++)
+        if (expr_contains_return_or_throw(e->as.do_.items[i])) return TC_DROP_EXIT;
+    /* The elaborator only ever builds this shape as a `let` body; without the
+     * `let`, the initializers that may alias the local are out of sight. */
+    if (!let_e) return TC_DROP_LIVE;
+    for (uint32_t d = (uint32_t)last + 1; d < e->as.do_.n; d++) {
+        const Expr *dx = e->as.do_.items[d];
+        for (uint8_t c = 0; c < dx->as.defer_.n_captures; c++) {
+            const Binding *b = dx->as.defer_.captures[c];
+            for (int i = 0; i <= last; i++)
+                if (!tco_drop_use_ok(e->as.do_.items[i], b)) return TC_DROP_LIVE;
+            for (uint32_t i = 0; i < let_e->as.let_.n; i++)
+                if (!tco_drop_use_ok(let_e->as.let_.bindings[i].init, b))
+                    return TC_DROP_LIVE;
+        }
+    }
+    return NULL;
+}
+
 /* Mark tail-position calls, recursing through if/do/let/letrec/match.  This mirrors
  * emit_tail's structural recursion exactly so that "marked >= 1" predicts
  * whether emit_tail will emit a backedge (and thus whether the
@@ -249,12 +509,49 @@ static bool tco_match_tail_ok(const Expr *e) {
  * Both paths now share `emit_fn_return_spelling`, so a refused leaf is simply
  * emitted the way it always was and the all-or-nothing rule is gone. */
 static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
+                    int *n_ok);
+
+/* The `do` arm of tco_mark, split out because a block of trailing drop glue
+ * needs to see the `let` it is the body of (`let_e`, NULL otherwise) -- the
+ * initializers are where the dropped local may have been aliased. */
+static int tco_mark_do(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
+                       const Expr *let_e, int *n_ok) {
+    if (e->as.do_.n == 0) return 0;
+    bool has_defer = false;
+    for (uint32_t i = 0; i < e->as.do_.n; i++)
+        if (e->as.do_.items[i]->kind == EX_DEFER) { has_defer = true; break; }
+    if (!has_defer)
+        return tco_mark(ctx, fd, fn_cname, e->as.do_.items[e->as.do_.n - 1],
+                        n_ok);
+    /* proper-tail-calls T4 (T-D3): drop glue on a dead local no longer takes
+     * the block out of the tail grammar.  Only a BACKEDGE is taken through it:
+     * a non-self call under an open frame is not a C tail call (the frame fires
+     * after it), so those are left unmarked and the block's leaves return
+     * normally.  The block qualifies only when it carries at least one
+     * backedge, which keeps every body without one on the path it always took. */
+    e->as.do_.tail_drop_hoist = false;
+    if (tco_drop_glue_refusal(e, let_e)) return 0;
+    int last = tco_drop_glue_tail_idx(e);
+    int n = tco_mark(ctx, fd, fn_cname, e->as.do_.items[last], NULL);
+    if (n > 0) e->as.do_.tail_drop_hoist = true;
+    return n;
+}
+
+static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                     int *n_ok) {
     if (!e) return 0;
     switch (e->kind) {
-        case EX_CALL:
+        case EX_CALL: {
+            e->as.call_.tail_group_idx = 0;
             if (tco_is_self_call(fd, fn_cname, e)) {
                 e->as.call_.is_tail_self_call = true;
+                return 1;
+            }
+            /* T5: a tail call to another member of this function's mutual
+             * tail-call group is a jump, and counts as a backedge. */
+            int gi = tcg_call_target(ctx, e);
+            if (gi >= 0) {
+                e->as.call_.tail_group_idx = (uint8_t)(gi + 1);
                 return 1;
             }
             if (tc_nonself_tail_eligible(ctx, e)) {
@@ -262,22 +559,20 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                 if (n_ok) (*n_ok)++;
             }
             return 0;
+        }
         case EX_IF: {
             if (!e->as.if_.else_or_null) return 0;  /* default path; no recursion */
             int n = tco_mark(ctx, fd, fn_cname, e->as.if_.then_, n_ok);
             n += tco_mark(ctx, fd, fn_cname, e->as.if_.else_or_null, n_ok);
             return n;
         }
-        case EX_DO: {
-            if (e->as.do_.n == 0) return 0;
-            for (uint32_t i = 0; i < e->as.do_.n; i++)
-                if (e->as.do_.items[i]->kind == EX_DEFER) return 0; /* defers break tail */
-            return tco_mark(ctx, fd, fn_cname, e->as.do_.items[e->as.do_.n - 1],
-                            n_ok);
-        }
+        case EX_DO:
+            return tco_mark_do(ctx, fd, fn_cname, e, NULL, n_ok);
         case EX_LET:
         case EX_LETREC:
             if (!tco_let_simple(ctx, e)) return 0;
+            if (e->as.let_.body && e->as.let_.body->kind == EX_DO)
+                return tco_mark_do(ctx, fd, fn_cname, e->as.let_.body, e, n_ok);
             return tco_mark(ctx, fd, fn_cname, e->as.let_.body, n_ok);
         case EX_MATCH: {
             /* proper-tail-calls T3 (T-D4): every ARM of a `match` is in the
@@ -296,6 +591,12 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                               n_ok);
             return n;
         }
+        case EX_DYN_CALL:
+            /* proper-tail-calls T6 (T-D6): a dynamic call has no callee to
+             * branch to, but in tail position it bounces to a trampoline --
+             * which emit_tail must see to spell. */
+            ctx->tail_dyn_seen = true;
+            return 0;
         default:
             /* Not a call at all: a literal, a variable.  Neither served nor
              * refused -- it is simply not a tail CALL. */
@@ -332,9 +633,6 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
 #define TC_IF_ONE_ARM "a one-armed `if` (no else branch) is not part of the tail " \
                       "grammar -- give it an else branch"
 #define TC_NOT_LAST   "only the LAST form of a `do` block is in tail position"
-#define TC_DEFER      "a `defer` in this block -- an explicit one, or the drop " \
-                      "glue of an owned local such as a `ref<T>` -- runs AFTER " \
-                      "the call, so nothing in the block is in tail position"
 #define TC_LET_INIT   "a `let` initializer is evaluated before the body"
 #define TC_LET_HARD   "a binding of the enclosing `let` is `fn`-typed, poly-fn, " \
                       "or carrier-ABI, which takes the whole `let` off the tail " \
@@ -385,9 +683,14 @@ static const char *tc_call_shape_reason(FnDef *fd, const char *fn_cname,
         if (same_fn && call->as.call_.n_args != fd->n_params - tco_env_offset(fd))
             return "the call is under- or over-saturated -- a backedge has to "
                    "reassign every parameter, so the arity must match exactly";
-        return "the callee is a DIFFERENT function; only self tail calls are "
-               "guaranteed today, and mutual ones are T5 of "
-               "docs/upcoming/proper-tail-calls-plan.md";
+        return "the callee is a DIFFERENT function that does not share a "
+               "mutual tail-call group with this one.  A group forms when "
+               "the functions call each other in a cycle of TAIL calls and "
+               "each is a plain top-level function -- no closure, dictionary, "
+               "inline-C, effectful or `catch-unwind` body, no variadic or "
+               "`fn`-typed parameter -- with the same C return type, at most "
+               "8 members and 16 parameters in all (T5 of "
+               "docs/upcoming/proper-tail-calls-plan.md)";
     }
     return NULL;
 }
@@ -414,6 +717,35 @@ static void tc_report(FnDef *fd, const char *fn_cname, Expr *call,
                         "`^tailcall` call is not in tail position: %s", reason);
 }
 
+static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
+                     const char *why, const char *fn_block);
+
+/* The `do` arm of tc_check, mirroring tco_mark_do: only the value item is in
+ * tail position, and a block with defers passes that position on only when its
+ * defers are drop glue on dead locals (T4); otherwise the value item inherits
+ * the block's own refusal. */
+static void tc_check_do(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
+                        const Expr *let_e, const char *why,
+                        const char *fn_block) {
+    bool has_defer = false;
+    for (uint32_t i = 0; i < e->as.do_.n; i++)
+        if (e->as.do_.items[i]->kind == EX_DEFER) { has_defer = true; break; }
+    int last = (int)e->as.do_.n - 1;
+    const char *last_why = why;
+    if (has_defer) {
+        int li = tco_drop_glue_tail_idx(e);
+        if (li >= 0) last = li;
+        else
+            for (int i = (int)e->as.do_.n - 1; i >= 0; i--)
+                if (e->as.do_.items[i]->kind != EX_DEFER) { last = i; break; }
+        if (!why) last_why = tco_drop_glue_refusal(e, let_e);
+    }
+    for (uint32_t i = 0; i < e->as.do_.n; i++) {
+        const char *sub = ((int)i == last) ? last_why : (why ? why : TC_NOT_LAST);
+        tc_check(ctx, fd, fn_cname, e->as.do_.items[i], sub, fn_block);
+    }
+}
+
 /* Walk `e`, reporting every `^tailcall`-annotated call that did not become a
  * backedge.  `why` is NULL exactly while the position is a tail position. */
 static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
@@ -421,7 +753,8 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
     if (!e) return;
     switch (e->kind) {
         case EX_CALL:
-            if (e->as.call_.wants_tailcall && !e->as.call_.is_tail_self_call)
+            if (e->as.call_.wants_tailcall && !e->as.call_.is_tail_self_call &&
+                !e->as.call_.tail_group_idx)
                 tc_report(fd, fn_cname, e, why, fn_block);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
                 tc_check(ctx, fd, fn_cname, e->as.call_.args[i], TC_ARG, fn_block);
@@ -437,18 +770,9 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                          why ? why : TC_IF_ONE_ARM, fn_block);
             }
             return;
-        case EX_DO: {
-            bool has_defer = false;
-            for (uint32_t i = 0; i < e->as.do_.n; i++)
-                if (e->as.do_.items[i]->kind == EX_DEFER) { has_defer = true; break; }
-            for (uint32_t i = 0; i < e->as.do_.n; i++) {
-                bool last = (i + 1 == e->as.do_.n);
-                const char *sub = has_defer ? (why ? why : TC_DEFER)
-                                            : (last ? why : TC_NOT_LAST);
-                tc_check(ctx, fd, fn_cname, e->as.do_.items[i], sub, fn_block);
-            }
+        case EX_DO:
+            tc_check_do(ctx, fd, fn_cname, e, NULL, why, fn_block);
             return;
-        }
         case EX_LET:
         case EX_LETREC: {
             for (uint32_t i = 0; i < e->as.let_.n; i++)
@@ -456,7 +780,10 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                          TC_LET_INIT, fn_block);
             const char *sub = tco_let_simple(ctx, e) ? why
                                                      : (why ? why : TC_LET_HARD);
-            tc_check(ctx, fd, fn_cname, e->as.let_.body, sub, fn_block);
+            if (e->as.let_.body && e->as.let_.body->kind == EX_DO)
+                tc_check_do(ctx, fd, fn_cname, e->as.let_.body, e, sub, fn_block);
+            else
+                tc_check(ctx, fd, fn_cname, e->as.let_.body, sub, fn_block);
             return;
         }
         case EX_MATCH:
@@ -500,6 +827,23 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                 tc_check(ctx, fd, fn_cname, e->as.dyn_op_.args[i], TC_ARG, fn_block);
             return;
         case EX_DYN_CALL:
+            /* T6 (T-D6): a dynamic call in tail position bounces or drives, so
+             * the only refusals are positional -- plus a function-level one
+             * that keeps its body off the tail path.  A CPS-lowered body is not
+             * such a refusal here: the CPS emitter spells its tail dynamic
+             * calls itself. */
+            if (e->as.dyn_call_.wants_tailcall &&
+                !e->as.dyn_call_.tailcall_diagnosed) {
+                const char *reason = why ? why
+                    : (fn_block && strcmp(fn_block, TC_CPS_BODY) != 0 ? fn_block : NULL);
+                if (reason) {
+                    e->as.dyn_call_.tailcall_diagnosed = true;
+                    diag_emit_with_code(DIAG_ERROR, e->span,
+                                        TUR_E0716_TAILCALL_NOT_TAIL,
+                                        "`^tailcall` call is not in tail position: %s",
+                                        reason);
+                }
+            }
             tc_check(ctx, fd, fn_cname, e->as.dyn_call_.fn, TC_ARG, fn_block);
             for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
                 tc_check(ctx, fd, fn_cname, e->as.dyn_call_.args[i], TC_ARG, fn_block);
@@ -531,6 +875,20 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
 /* Forward decl: tail-position emitter (mutually recursive). */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                       const Expr *e, TypeKind result_kind, bool is_main);
+
+/* proper-tail-calls T4 (T-D3): fire every defer frame this function has open,
+ * innermost first, before leaving it through a backedge or a `return` on the
+ * tail path.  Only the drop-glue blocks emit_tail_drop_hoist_do opens can be
+ * on the chain here -- emit_tail is entered with no frame open, and every
+ * other frame is closed by the emitter that opened it -- so this is exactly the
+ * scope-exit `tur_frame_fire_lifo` those blocks would have run after the call.
+ * The same inlined walk emit_panic_signal_return uses for the panic exit. */
+static void emit_tail_fire_frames(EmitCtx *ctx, Buf *body) {
+    for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "tur_frame_fire_lifo(&%s);\n", f);
+    }
+}
 
 /* Emit a self-tail-call as a backedge: evaluate all args into temporaries
  * first (so argument expressions still see the *old* parameter values, which
@@ -576,6 +934,9 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
         tmps[i] = t;
         free(av);
     }
+    /* T4: the arguments are all read, so an owned local's drop glue runs now --
+     * tco_mark admitted the block only because none of them keeps it alive. */
+    emit_tail_fire_frames(ctx, body);
     for (uint8_t i = (uint8_t)off; i < n; i++) {
         char *pn = raw_name_for_binding(fd->params[i]);
         indent_buf(body, ctx->indent);
@@ -591,6 +952,40 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
     emit_any_scope_drops(ctx, body);
     indent_buf(body, ctx->indent);
     buf_puts(body, "goto __tur_tailcall;\n");
+}
+
+/* proper-tail-calls T5 (T-D5): a tail call to member `t` of the current
+ * mutual tail-call group -- the function itself included -- inside the group's
+ * fused function.  The same order as emit_tail_backedge: every argument into a
+ * temp first (they read the CURRENT member's locals, which the slots do not
+ * alias, but a self jump's arguments may read the very parameters being
+ * replaced), then the frame chain and the `any` drops, then the target's slots,
+ * then the jump. */
+static void emit_tail_group_jump(EmitCtx *ctx, Buf *body, const Expr *call,
+                                 int t) {
+    const TcgGroup *g = ctx->tcg_cur->g;
+    uint32_t base = g->slot_base[t];
+    uint32_t n = g->mem[t]->n_params;
+    char **tmps = n ? (char **)calloc(n, sizeof(char *)) : NULL;
+    for (uint32_t k = 0; k < n; k++) {
+        char *av = emit_value(ctx, body, call->as.call_.args[k]);
+        tmps[k] = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s %s = %s;\n", g->slot_ctype[base + k], tmps[k], av);
+        free(av);
+    }
+    emit_tail_fire_frames(ctx, body);
+    emit_any_scope_drops(ctx, body);
+    for (uint32_t k = 0; k < n; k++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "__tcg_s%u = %s;\n", (unsigned)(base + k), tmps[k]);
+        free(tmps[k]);
+    }
+    free(tmps);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "__tcg_st = %d;\n", t);
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "goto __tcg_top;\n");
 }
 
 /* A#1 (return position): emit a tail/return value, wrapping it in EX_FN_TO_FAT
@@ -1021,12 +1416,127 @@ static void emit_tail_match_arm(EmitCtx *ctx, Buf *body, const Expr *arm_body,
               mt->is_main);
 }
 
+/* proper-tail-calls T4 (T-D3): a `do` block whose only defers are trailing
+ * drop glue on locals dead at every exit (tco_mark set `tail_drop_hoist`).
+ * Opened exactly as emit_do_value opens one -- frame, the statements before
+ * the value, the defer thunks -- and then the value is emitted in TAIL
+ * position with the frame still open.  Every exit below fires it
+ * (emit_tail_fire_frames): a backedge after its argument temps, a `return`
+ * after its value is in a temp.  A panic exit fires it through
+ * emit_panic_signal_return, which is why the frame stays. */
+static void emit_tail_drop_hoist_do(EmitCtx *ctx, Buf *body, const Expr *fn_e,
+                                    FnDef *fd, const Expr *e,
+                                    TypeKind result_kind, bool is_main) {
+    int last = tco_drop_glue_tail_idx(e);
+    const char *saved_frame = ctx->frame_var;
+    char *frame_var = fresh_frame(ctx);
+    ctx->frame_var = frame_var;
+    emit_frame_note_parent(frame_var, saved_frame);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_frame %s;\n", frame_var);
+    indent_buf(body, ctx->indent);
+    if (saved_frame)
+        buf_printf(body, "tur_frame_init(&%s, &%s);\n", frame_var, saved_frame);
+    else
+        buf_printf(body, "tur_frame_init(&%s, NULL);\n", frame_var);
+    for (int i = 0; i < last; i++)
+        emit_stmt(ctx, body, e->as.do_.items[i]);
+    for (uint32_t i = (uint32_t)last + 1; i < e->as.do_.n; i++)
+        emit_frame_push_defer(ctx, body, frame_var, e->as.do_.items[i]);
+    emit_tail(ctx, body, fn_e, fd, e->as.do_.items[last], result_kind, is_main);
+    ctx->frame_var = saved_frame;
+    free(frame_var);
+}
+
+/* proper-tail-calls T2b (T-D2): may this checkless tail call `return v;` also
+ * carry `musttail`?  The attribute is a hard contract -- the C compiler must
+ * make the call a tail call or reject the program -- so everything it
+ * requires is checked here, against text and records, not inferred:
+ *
+ *   - `v` is exactly a direct call `name(args)`, optionally in parentheses,
+ *     with nothing around it (a cast or a wrapper is not a call), and both
+ *     functions take at least one parameter (a zero-parameter function is
+ *     declared `f()`, which C99 does not count as a prototype);
+ *   - caller and callee have IDENTICAL recorded C signatures -- same arity,
+ *     same spelling of every parameter and of the return type, as the
+ *     forward-declaration pass wrote them.  T2 already proved the return
+ *     types match; musttail needs the parameters too;
+ *   - no parameter is a `const T *` pass-by-pointer aggregate, which is a
+ *     pointer into some caller's frame by construction;
+ *   - no address is taken ANYWHERE in the body emitted so far, nor in the
+ *     call.  This is the one condition an optimizer checks for itself and
+ *     musttail skips: a tail call reuses the caller's frame, so an argument
+ *     pointing into it -- a stack fat box for a non-retaining sink, a frame
+ *     `any` box, a defer frame, a pass-by-pointer temp -- would dangle.  The
+ *     emitter builds all of those with a `&`, so refusing any `&` (other than
+ *     `&&`) is sound, if blunt.
+ *
+ * Refusing costs nothing: the call is still T2's `return f(args);`. */
+static bool tail_call_musttail_ok(EmitCtx *ctx, const Buf *body, const char *v) {
+    if (!ctx->mt_fn_cname || !v || body != ctx->mt_body_buf) return false;
+    const char *q = v;
+    size_t open = 0;
+    while (*q == '(') { q++; open++; }
+    size_t idlen = 0;
+    while (q[idlen] && (isalnum((unsigned char)q[idlen]) || q[idlen] == '_')) idlen++;
+    if (idlen == 0 || idlen >= 256 || q[idlen] != '(') return false;
+    char callee[256];
+    memcpy(callee, q, idlen);
+    callee[idlen] = '\0';
+    /* The argument list must close, and only the wrapping parens follow it. */
+    int depth = 0;
+    const char *p = q + idlen;
+    for (; *p; p++) {
+        if (*p == '(') depth++;
+        else if (*p == ')' && --depth == 0) { p++; break; }
+    }
+    if (depth != 0) return false;
+    for (size_t i = 0; i < open; i++, p++) if (*p != ')') return false;
+    if (*p != '\0') return false;
+
+    /* A zero-parameter function is declared `f()` -- in C99 an UNPROTOTYPED
+     * declaration, not `f(void)` -- and clang refuses musttail on a call
+     * whose caller or callee has no prototype. */
+    int n = emit_sig_lookup_n_params(ctx->mt_fn_cname);
+    if (n <= 0 || n != emit_sig_lookup_n_params(callee)) return false;
+    const char *rc = emit_sig_lookup_ret_ctype(ctx->mt_fn_cname);
+    const char *rg = emit_sig_lookup_ret_ctype(callee);
+    if (!rc || !rg || strcmp(rc, rg) != 0) return false;
+    for (int i = 0; i < n; i++) {
+        const char *a = emit_sig_lookup_param_ctype(ctx->mt_fn_cname, (uint32_t)i);
+        const char *b = emit_sig_lookup_param_ctype(callee, (uint32_t)i);
+        if (!a || !b || strcmp(a, b) != 0) return false;
+        if (strncmp(a, "const ", 6) == 0) return false;
+    }
+    const char *segs[2] = { body->data + ctx->mt_body_start, v };
+    size_t lens[2] = { body->len - ctx->mt_body_start, strlen(v) };
+    if (ctx->mt_body_start > body->len) return false;
+    for (int k = 0; k < 2; k++)
+        for (size_t i = 0; i < lens[k]; i++) {
+            if (segs[k][i] != '&') continue;
+            if (i + 1 < lens[k] && segs[k][i + 1] == '&') { i++; continue; }
+            return false;
+        }
+    return true;
+}
+
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
  * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                       const Expr *e, TypeKind result_kind, bool is_main) {
     switch (e->kind) {
         case EX_CALL:
+            /* T5: inside a fused group every backedge -- to itself or to a
+             * sibling -- is a jump through the group's dispatch, since each
+             * member's parameters are block locals of one C function. */
+            if (ctx->tcg_cur && e->as.call_.is_tail_self_call) {
+                emit_tail_group_jump(ctx, body, e, ctx->tcg_cur->idx);
+                return;
+            }
+            if (ctx->tcg_cur && e->as.call_.tail_group_idx) {
+                emit_tail_group_jump(ctx, body, e, e->as.call_.tail_group_idx - 1);
+                return;
+            }
             if (e->as.call_.is_tail_self_call) {
                 emit_tail_backedge(ctx, body, fn_e, fd, e);
                 return;
@@ -1060,6 +1570,11 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                     emit_stmt(ctx, body, e->as.do_.items[i]);
                 emit_tail(ctx, body, fn_e, fd, e->as.do_.items[e->as.do_.n - 1],
                           result_kind, is_main);
+                return;
+            }
+            if (has_defer && e->as.do_.tail_drop_hoist) {
+                emit_tail_drop_hoist_do(ctx, body, fn_e, fd, e, result_kind,
+                                        is_main);
                 return;
             }
             break;
@@ -1185,6 +1700,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
             ctx->match_tail = &mt;
             char *v = emit_value(ctx, body, e);
             ctx->match_tail = save;
+            emit_tail_fire_frames(ctx, body);
             indent_buf(body, ctx->indent);
             if (is_main && result_kind == TY_INT)
                 buf_printf(body, "return (int)%s;\n", v);
@@ -1228,6 +1744,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
      * back and the ordinary hoisted spelling is what lands. */
     bool want_tail_call =
         e->kind == EX_CALL && e->as.call_.is_tail_call && !is_main &&
+        !ctx->frame_var &&
         !ctx->panic_signal_is_break && ctx->n_any_scope_drops == 0 &&
         e->type.kind != TY_NIL && e->type.kind != TY_NEVER &&
         ctx->current_fn_ret_ctype &&
@@ -1243,16 +1760,55 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         ctx->tail_call_no_hoist_taken = false;
     }
 
+    /* T4: with a drop-glue frame open, the value must be in a temp BEFORE the
+     * frame fires -- `v` may be an expression that reads the very local being
+     * dropped (`*b`).  Routing it through a one-item `do` gets exactly the temp
+     * and carrier bridges emit_do_value gives a block's value on the ordinary
+     * path, which is what that path handed the return ladder here before.  A
+     * diverging tail (a `panic`) is left alone: it fires the chain itself. */
+    Expr *one[1] = { (Expr *)e };
+    Expr wrap = {0};
+    bool wrap_value = ctx->frame_var && e->type.kind != TY_NEVER;
+    if (wrap_value) {
+        wrap.kind = EX_DO;
+        wrap.type = e->type;
+        wrap.span = e->span;
+        wrap.as.do_.items = one;
+        wrap.as.do_.n = 1;
+    }
+    const Expr *ve = wrap_value ? &wrap : e;
+
+    /* proper-tail-calls T6 (T-D6): a dynamic call as the function's whole
+     * answer.  It bounces when this activation was entered from a trampoline
+     * driver (`ctx->tb_guard`), and otherwise DRIVES -- makes the call in a
+     * loop that takes the callee's own bounces -- so a chain of dynamic tail
+     * calls runs in one frame either way.  Bouncing needs nothing to run after
+     * the return: no open defer frame (its drops would precede the call) and
+     * no `any` scope drops (the same, for the frees). */
+    if (e->kind == EX_DYN_CALL && !is_main && ctx->current_fn_ret_ctype &&
+        strcmp(ctx->current_fn_ret_ctype, "tur_tagged_t") == 0) {
+        bool can_bounce = ctx->tb_guard && !ctx->frame_var &&
+                          ctx->n_any_scope_drops == 0;
+        ctx->dyn_tail_mode = can_bounce ? DYN_TAIL_DIRECT : DYN_TAIL_DRIVE;
+        ctx->dyn_tail_guard = can_bounce ? ctx->tb_guard : NULL;
+    }
+
     /* Default: emit as a value and return it. */
-    char *v = emit_fat_return_value(ctx, body, fn_e, e);
+    char *v = emit_fat_return_value(ctx, body, fn_e, ve);
+    ctx->dyn_tail_mode = DYN_TAIL_NONE;   /* never outlives the one call */
+    ctx->dyn_tail_guard = NULL;
+    if (wrap_value) emit_tail_fire_frames(ctx, body);
     bool emitted_tail_call = want_tail_call && ctx->tail_call_no_hoist_taken;
     ctx->tail_call_no_hoist = nh_save;
     ctx->tail_call_no_hoist_taken = taken_save;
     if (emitted_tail_call) {
         /* `v` is the call expression itself.  Nothing between it and the
-         * return, which is the whole point. */
+         * return, which is the whole point.  T2b: where the C compiler can
+         * guarantee the tail call, ask it to (`TUR_MUSTTAIL`). */
+        bool mt = tail_call_musttail_ok(ctx, body, v);
+        if (mt) ensure_musttail_macro(ctx);
         indent_buf(body, ctx->indent);
-        buf_printf(body, "return %s;\n", v);
+        buf_printf(body, "%sreturn %s;\n", mt ? "TUR_MUSTTAIL " : "", v);
         free(v);
         return;
     }
@@ -1279,7 +1835,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
      * `fd->body`, is the tail: in this path the value being returned is the
      * branch/arm actually in tail position, which is the more precise reading
      * of every result-shape question the ladder asks. */
-    emit_fn_return_spelling(ctx, body, fn_e, fd, e, v, result_kind, is_main);
+    emit_fn_return_spelling(ctx, body, fn_e, fd, ve, v, result_kind, is_main);
 }
 
 /* Scalar kinds the trampoline can round-trip through an int64 `saved[]` slot:
@@ -3981,6 +4537,350 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
     free(ret_val);
 }
 
+/* ============================================================================
+ * proper-tail-calls T5 (T-D5): forming a mutual tail-call group, and emitting
+ * its fused function.  See the registry above tco_mark for the shape.
+ * ========================================================================== */
+
+static const Expr *tcg_expr_of(const EmitCtx *ctx, const FnDef *fd) {
+    for (uint32_t i = 0; i < ctx->n_tcg_fn_exprs; i++)
+        if (ctx->tcg_fn_exprs[i]->as.fn_def_.fn == fd) return ctx->tcg_fn_exprs[i];
+    return NULL;
+}
+
+static int tcg_item_pos(const EmitCtx *ctx, const Expr *e) {
+    for (uint32_t i = 0; i < ctx->n_tcg_fn_exprs; i++)
+        if (ctx->tcg_fn_exprs[i] == e) return (int)i;
+    return -1;
+}
+
+/* The C return type emit_fn_def will give `e`, for the plain functions a group
+ * admits -- the tail of its return-type ladder, whose earlier arms (dict
+ * clones, boxed aggregates, instance methods, ABI specs) tcg_member_ok has
+ * already excluded.  Cross-checked against the forward declaration's recorded
+ * return type where there is one, so a disagreement refuses rather than emits
+ * a mismatched fused function.  NULL when the function cannot be a member. */
+static char *tcg_ret_ctype(EmitCtx *ctx, const Expr *e, FnDef *fd) {
+    if (e->type.kind != TY_FN || e->type.as.fn.result_fat) return NULL;
+    TypeKind rk = e->type.as.fn.result_kind;
+    if (rk == TY_NIL || rk == TY_NEVER) return NULL;
+    const char *ct;
+    if (e->type.as.fn.result_full_type) {
+        const Type *rft = e->type.as.fn.result_full_type;
+        if (emit_inst_fn_return_carrier(fd, rft)) return NULL;
+        const char *td = emit_fn_return_typedef(fd, rft);
+        ct = td ? td : emit_type_c_name(ctx, *rft);
+    } else {
+        ct = emit_type_c_name(ctx, emit_type_from_kind(rk));
+    }
+    if (!ct || !*ct || strcmp(ct, "void") == 0) return NULL;
+    char *cn = raw_name_for_binding(fd->binding);
+    const char *sig = cn ? emit_sig_lookup_ret_ctype(cn) : NULL;
+    free(cn);
+    if (sig && strcmp(sig, ct) != 0) return NULL;
+    return strdup(ct);
+}
+
+/* Can `e` be a member of a fused group at all?  A plain top-level function
+ * whose body emit_fn_def would send down the ordinary tail path, and whose
+ * every parameter is a plain C value a block local can hold: the signature
+ * emitter spells it `<ctype> <name>` and marks nothing on its binding.  Returns
+ * the C return type (malloc'd), or NULL. */
+static char *tcg_member_ok(EmitCtx *ctx, const Expr *e) {
+    FnDef *fd = e->as.fn_def_.fn;
+    if (!fd || fd->skip_emission || !fd->binding || !fd->binding->name) return NULL;
+    if (fd->closure || fd->is_variadic) return NULL;
+    if (fd->n_dict_clone || fd->n_dict_env || fd->box_aggregate_result) return NULL;
+    const char *nm = fd->binding->name->name;
+    if (!nm || strcmp(nm, "main") == 0 || strncmp(nm, "__inst_", 7) == 0)
+        return NULL;
+    if (!fd->body || fd->body->kind == EX_INLINE_C) return NULL;
+    if (expr_tail_diverges(fd->body)) return NULL;
+    /* G3/G4's flat-stack catch-unwind lowerings claim these bodies. */
+    if (gs_has_catch(fd->body, fd)) return NULL;
+    /* An effect-colored body is CPS-lowered (plan 2.5), or at least runs on the
+     * delimited-control path; neither is a C tail position. */
+    if (fd->cps_colored) return NULL;
+    if (ctx->program_root &&
+        emit_cps_ir_emits_binding(ctx->program_root, fd->binding))
+        return NULL;
+    if (fd->cps_colored) return NULL;   /* colored by the call above */
+    if (!tco_params_simple(ctx, e, fd)) return NULL;
+    for (uint32_t i = 0; i < fd->n_params; i++) {
+        const Binding *pb = fd->params[i];
+        if (!pb || pb->is_poly_fn || pb->is_fat || pb->arrives_as_carrier_box)
+            return NULL;
+        Type pty = tco_param_type(ctx, e, fd, (uint8_t)i);
+        if (type_struct_pass_by_ptr(pty)) return NULL;
+        const char *pc = emit_type_c_name(ctx, pty);
+        if (!pc) return NULL;
+        /* A carrier-ABI param that spells as a concrete struct is by-value
+         * here, and one that collapses to the int64 carrier was already
+         * refused by tco_params_simple -- the same bar self-TCO uses. */
+        if (strcmp(pc, "int64_t") == 0) {
+            const char *btc = emit_type_c_name(ctx, emit_resolve_type(ctx, pb->type));
+            if (!btc || strcmp(btc, "int64_t") != 0) return NULL;
+        }
+    }
+    return tcg_ret_ctype(ctx, e, fd);
+}
+
+/* The direct callees `e` reaches in TAIL position, walking exactly the spine
+ * tco_mark walks -- so an edge here is a call tco_mark will mark. */
+static void tcg_tail_callees(EmitCtx *ctx, const Expr *e, const Expr *let_e,
+                             FnDef **out, int *n, int cap) {
+    if (!e || *n >= cap) return;
+    switch (e->kind) {
+        case EX_CALL: {
+            if (e->as.call_.fn_expr || e->as.call_.is_poly_call) return;
+            const Binding *fb = e->as.call_.fn_binding;
+            FnDef *g = fb ? fb->source_fn_def : NULL;
+            if (!g || e->as.call_.n_args != g->n_params) return;
+            for (int i = 0; i < *n; i++) if (out[i] == g) return;
+            out[(*n)++] = g;
+            return;
+        }
+        case EX_IF:
+            if (!e->as.if_.else_or_null) return;
+            tcg_tail_callees(ctx, e->as.if_.then_, NULL, out, n, cap);
+            tcg_tail_callees(ctx, e->as.if_.else_or_null, NULL, out, n, cap);
+            return;
+        case EX_DO: {
+            if (e->as.do_.n == 0) return;
+            bool has_defer = false;
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (e->as.do_.items[i]->kind == EX_DEFER) { has_defer = true; break; }
+            if (!has_defer) {
+                tcg_tail_callees(ctx, e->as.do_.items[e->as.do_.n - 1], NULL,
+                                 out, n, cap);
+                return;
+            }
+            if (tco_drop_glue_refusal(e, let_e)) return;
+            tcg_tail_callees(ctx, e->as.do_.items[tco_drop_glue_tail_idx(e)],
+                             NULL, out, n, cap);
+            return;
+        }
+        case EX_LET:
+        case EX_LETREC:
+            if (!tco_let_simple(ctx, e)) return;
+            tcg_tail_callees(ctx, e->as.let_.body,
+                             (e->as.let_.body && e->as.let_.body->kind == EX_DO)
+                                 ? e : NULL,
+                             out, n, cap);
+            return;
+        case EX_MATCH:
+            if (!tco_match_tail_ok(e)) return;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                tcg_tail_callees(ctx, e->as.match_.arms[i].body, NULL, out, n, cap);
+            return;
+        default:
+            return;
+    }
+}
+
+#define TCG_EXPLORE 32
+
+/* The group `e` belongs to, forming it on first sight.  NULL when `e` is not
+ * in a strongly-connected component of two or more eligible members.  The
+ * component is a property of the graph, not of which member asked first, so
+ * every member finds the same group; members are kept in item order, which is
+ * also the order their wrappers are emitted in. */
+static TcgGroup *tcg_group_of(EmitCtx *ctx, const Expr *e, int *idx) {
+    FnDef *fd = e->as.fn_def_.fn;
+    for (int i = 0; i < g_n_tcg_groups; i++)
+        for (int j = 0; j < g_tcg_groups[i].n_mem; j++)
+            if (g_tcg_groups[i].mem[j] == fd) { *idx = j; return &g_tcg_groups[i]; }
+    if (g_n_tcg_groups >= 64) return NULL;
+    if (tcg_expr_of(ctx, fd) != e) return NULL;
+    char *rc = tcg_member_ok(ctx, e);
+    if (!rc) return NULL;
+
+    const Expr *node[TCG_EXPLORE];
+    bool adj[TCG_EXPLORE][TCG_EXPLORE];
+    memset(adj, 0, sizeof adj);
+    int nn = 0;
+    node[nn++] = e;
+    for (int i = 0; i < nn; i++) {
+        FnDef *cs[TCG_EXPLORE];
+        int nc = 0;
+        tcg_tail_callees(ctx, node[i]->as.fn_def_.fn->body, NULL, cs, &nc,
+                         TCG_EXPLORE);
+        for (int c = 0; c < nc; c++) {
+            const Expr *ce = tcg_expr_of(ctx, cs[c]);
+            if (!ce || ce == node[i]) continue;
+            int j = -1;
+            for (int k = 0; k < nn; k++) if (node[k] == ce) j = k;
+            if (j < 0) {
+                bool grouped = false;
+                for (int gi = 0; gi < g_n_tcg_groups && !grouped; gi++)
+                    for (int gm = 0; gm < g_tcg_groups[gi].n_mem; gm++)
+                        if (g_tcg_groups[gi].mem[gm] == cs[c]) grouped = true;
+                if (grouped) continue;
+                char *crc = tcg_member_ok(ctx, ce);
+                bool same = crc && strcmp(crc, rc) == 0;
+                free(crc);
+                if (!same) continue;
+                if (nn >= TCG_EXPLORE) { free(rc); return NULL; }
+                j = nn;
+                node[nn++] = ce;
+            }
+            adj[i][j] = true;
+        }
+    }
+    /* Every node was reached FROM `e`; the component is the ones that also
+     * reach back TO it. */
+    bool back[TCG_EXPLORE] = { false };
+    back[0] = true;
+    for (bool changed = true; changed; ) {
+        changed = false;
+        for (int i = 0; i < nn; i++) {
+            if (back[i]) continue;
+            for (int j = 0; j < nn; j++)
+                if (adj[i][j] && back[j]) { back[i] = true; changed = true; break; }
+        }
+    }
+    int pos[TCG_EXPLORE], nm = 0;
+    const Expr *mem[TCG_EXPLORE];
+    for (int i = 0; i < nn; i++) if (back[i]) mem[nm++] = node[i];
+    if (nm < 2 || nm > TCG_MAXMEM) { free(rc); return NULL; }
+    for (int i = 0; i < nm; i++) pos[i] = tcg_item_pos(ctx, mem[i]);
+    /* item order: a stable insertion sort on the item position */
+    for (int i = 1; i < nm; i++)
+        for (int j = i; j > 0 && pos[j] < pos[j - 1]; j--) {
+            int tp = pos[j]; pos[j] = pos[j - 1]; pos[j - 1] = tp;
+            const Expr *te = mem[j]; mem[j] = mem[j - 1]; mem[j - 1] = te;
+        }
+    uint32_t n_slots = 0;
+    for (int i = 0; i < nm; i++) n_slots += mem[i]->as.fn_def_.fn->n_params;
+    if (n_slots > TCG_MAXSLOTS) { free(rc); return NULL; }
+
+    TcgGroup *g = &g_tcg_groups[g_n_tcg_groups++];
+    memset(g, 0, sizeof *g);
+    g->n_mem = nm;
+    g->last_mem = nm - 1;
+    g->ret_ctype = rc;
+    snprintf(g->name, sizeof g->name, "__tcg_group_%d", g_tcg_ctr++);
+    for (int i = 0; i < nm; i++) {
+        g->mem_e[i] = mem[i];
+        g->mem[i] = mem[i]->as.fn_def_.fn;
+        g->slot_base[i] = g->n_slots;
+        for (uint32_t k = 0; k < g->mem[i]->n_params; k++)
+            g->slot_ctype[g->n_slots++] = strdup(emit_type_c_name(ctx,
+                tco_param_type(ctx, mem[i], g->mem[i], (uint8_t)k)));
+        if (g->mem[i] == fd) *idx = i;
+    }
+    return g;
+}
+
+static void tcg_emit_signature(Buf *out, const TcgGroup *g, bool named) {
+    buf_printf(out, "static %s %s(int%s", g->ret_ctype, g->name,
+               named ? " __tcg_st" : "");
+    for (uint32_t k = 0; k < g->n_slots; k++) {
+        if (named) buf_printf(out, ", %s __tcg_s%u", g->slot_ctype[k], (unsigned)k);
+        else       buf_printf(out, ", %s", g->slot_ctype[k]);
+    }
+    buf_puts(out, ")");
+}
+
+/* The fused function.  Written at the LAST member's position in the item
+ * stream, so every global any member's body names has already been declared
+ * (each member is only ever emitted after the globals it reads); the earlier
+ * members' wrappers reach it through the prototype written at the first. */
+static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
+    Buf F; buf_init(&F);
+    Buf *saved_file = ctx->file;
+    int saved_indent = ctx->indent;
+    const char *saved_ret = ctx->current_fn_ret_ctype;
+    Binding **saved_params = ctx->fn_params;
+    uint32_t saved_n_params = ctx->n_fn_params;
+    const Binding **saved_ic_locals = ctx->inline_c_raw_locals;
+    uint32_t saved_n_ic_locals = ctx->n_inline_c_raw_locals;
+    uint32_t saved_n_pbp = ctx->n_pbp_params;
+    bool saved_no_unwind = ctx->no_unwind;
+    struct Closure *saved_closure = ctx->closure;
+    const char *saved_env = ctx->env_var_name;
+    const char *saved_frame = ctx->frame_var;
+    const TcgCur *saved_cur = ctx->tcg_cur;
+    const char *saved_tb = ctx->tb_guard;
+    const char *saved_mt = ctx->mt_fn_cname;
+
+    ctx->file = &F;
+    ctx->closure = NULL;
+    ctx->env_var_name = NULL;
+    ctx->frame_var = NULL;
+    ctx->n_pbp_params = 0;
+
+    tcg_emit_signature(&F, g, true);
+    buf_puts(&F, " {\n");
+    buf_puts(&F, "    __tcg_top:;\n");
+    buf_puts(&F, "    switch (__tcg_st) {\n");
+    for (int m = 0; m < g->n_mem; m++) {
+        const Expr *e = g->mem_e[m];
+        FnDef *fd = g->mem[m];
+        buf_printf(&F, "    case %d: {\n", m);
+        for (uint32_t k = 0; k < fd->n_params; k++) {
+            char *pn = raw_name_for_binding(fd->params[k]);
+            buf_printf(&F, "        %s %s = __tcg_s%u;\n", g->slot_ctype[g->slot_base[m] + k],
+                       pn, (unsigned)(g->slot_base[m] + k));
+            buf_printf(&F, "        (void)%s;\n", pn);
+            free(pn);
+        }
+        TcgCur cur = { g, m };
+        ctx->tcg_cur = &cur;
+        ctx->tb_guard = NULL;   /* T6: a fused body has no `__tb_may` */
+        ctx->mt_fn_cname = NULL; /* T2b: nor a signature of its own on record */
+        ctx->current_fn_ret_ctype = g->ret_ctype;
+        ctx->fn_params = fd->params;
+        ctx->n_fn_params = fd->n_params;
+        ctx->no_unwind = fd->binding->no_unwind;
+        ctx->inline_c_raw_locals = NULL;
+        ctx->n_inline_c_raw_locals = 0;
+        emit_inline_c_raw_locals_collect(fd->body, fd->params, fd->n_params,
+                                         &ctx->inline_c_raw_locals,
+                                         &ctx->n_inline_c_raw_locals);
+        rc_elision_analyze_fn(fd->body);
+        ctx->indent = 8;
+        emit_line_reset(ctx);
+        emit_line_directive(ctx, &F, e->span);
+        char *cn = raw_name_for_binding(fd->binding);
+        int n_ok = 0;
+        tco_mark(ctx, fd, cn, fd->body, &n_ok);
+        free(cn);
+        emit_tail(ctx, &F, e, fd, fd->body, e->type.as.fn.result_kind, false);
+        free((void *)ctx->inline_c_raw_locals);
+        buf_puts(&F, "    }\n");
+    }
+    char *z = emit_c_zero_of(g->ret_ctype);
+    buf_printf(&F, "    default: break;\n    }\n    return %s;\n}\n\n", z ? z : "0");
+    free(z);
+
+    ctx->file = saved_file;
+    ctx->indent = saved_indent;
+    ctx->current_fn_ret_ctype = saved_ret;
+    ctx->fn_params = saved_params;
+    ctx->n_fn_params = saved_n_params;
+    ctx->inline_c_raw_locals = saved_ic_locals;
+    ctx->n_inline_c_raw_locals = saved_n_ic_locals;
+    ctx->n_pbp_params = saved_n_pbp;
+    ctx->no_unwind = saved_no_unwind;
+    ctx->closure = saved_closure;
+    ctx->env_var_name = saved_env;
+    ctx->frame_var = saved_frame;
+    ctx->tcg_cur = saved_cur;
+    ctx->tb_guard = saved_tb;
+    ctx->mt_fn_cname = saved_mt;
+
+    /* Anything the bodies lifted to file scope (handler functions) has to
+     * precede the fused function that references it. */
+    if (ctx->pending_handler_fns && ctx->pending_handler_fns->len > 0) {
+        buf_write(file, ctx->pending_handler_fns->data, ctx->pending_handler_fns->len);
+        buf_free(ctx->pending_handler_fns);
+        buf_init(ctx->pending_handler_fns);
+    }
+    buf_write(file, F.data, F.len);
+    buf_free(&F);
+}
+
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     FnDef *fd = e->as.fn_def_.fn;
     /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): a mapper's dead
@@ -3998,6 +4898,35 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * this -- so nothing in a CPS-lowered body is in tail position. */
         if (fd) tc_verify_fn(ctx, fd, NULL, TC_CPS_BODY);
         return;
+    }
+    /* proper-tail-calls T5 (T-D5): a member of a mutual tail-call group is
+     * emitted as a wrapper around the group's fused function.  The first
+     * member to arrive writes the fused function's prototype; the last (in
+     * item order) writes its definition.  `tcg_cur` stays set for the whole
+     * emission so tco_mark marks the group's tail calls and the `^tailcall`
+     * verifier accepts them. */
+    const TcgCur *saved_tcg_cur = ctx->tcg_cur;
+    TcgCur tcg_cur_v = { NULL, -1 };
+    const TcgGroup *tcg = NULL;
+    if (fd && !ctx->tcg_cur && !ctx->current_abi_specialization &&
+        !ctx->fn_name_override && ctx->n_tcg_fn_exprs) {
+        int ti = -1;
+        TcgGroup *g = tcg_group_of(ctx, e, &ti);
+        if (g && ti >= 0) {
+            if (!g->declared) {
+                tcg_emit_signature(file, g, false);
+                buf_puts(file, ";\n");
+                g->declared = true;
+            }
+            if (!g->defined && g->mem_e[g->last_mem] == e) {
+                tcg_emit_def(ctx, file, g);
+                g->defined = true;
+            }
+            tcg = g;
+            tcg_cur_v.g = g;
+            tcg_cur_v.idx = ti;
+            ctx->tcg_cur = &tcg_cur_v;
+        }
     }
     /* MB1 (constrained-hkt-forall-mode-b-plan): while this dict-clone's body is
      * emitted, route its class-method calls on the constrained var through the
@@ -4750,6 +5679,30 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     buf_puts(file, ") {\n");
 
+    /* proper-tail-calls T6 (T-D6): a bouncer -- a function whose tail reaches a
+     * dynamic call -- learns on entry whether the call that entered it came
+     * from a trampoline driver that will take a bounce, and clears the arming
+     * so nothing it calls in turn inherits it.  The comparison is against its
+     * own address: the driver arms exactly the function it is about to enter. */
+    const char *saved_tb_guard = ctx->tb_guard;
+    ctx->tb_guard = NULL;
+    /* T2b: this body's name and where it starts, for tail_call_musttail_ok. */
+    const char *saved_mt_name = ctx->mt_fn_cname;
+    const Buf *saved_mt_buf = ctx->mt_body_buf;
+    size_t saved_mt_start = ctx->mt_body_start;
+    ctx->mt_fn_cname = is_main ? NULL : fn_name;
+    ctx->mt_body_buf = file;
+    ctx->mt_body_start = file->len;
+    if (!is_main && !body_is_inline_c && fn_may_bounce(fd)) {
+        ensure_saffron_dyn_runtime(ctx);
+        indent_buf(file, ctx->indent + 4);
+        buf_printf(file, "bool __tb_may = (tur_tb_armed_for == (void *)%s); "
+                         "if (__tb_may) tur_tb_armed_for = NULL; (void)__tb_may;\n",
+                   fn_name);
+        ctx->tb_guard = "__tb_may";
+        if (fd->closure) tb_register_thunk(ctx, fn_name);
+    }
+
     /* Debugger Phase 4 (--debug): anchor the function body to the defn's source
      * line so a gdb/lldb frame for this function resolves to its `.tur` site.
      * Reset the dedup tracker first: this body is a fresh statement stream
@@ -5037,6 +5990,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         !(result_kind == TY_NIL && !is_main) && !is_main &&
         tco_params_simple(ctx, e, fd);
     int n_tco_self = 0, n_tco_tail = 0;
+    ctx->tail_dyn_seen = false;
     if (tco_spine_ok)
         n_tco_self = tco_mark(ctx, fd, fn_name, fd->body, &n_tco_tail);
     /* T2: a body whose tail spine holds ONLY non-self tail calls still goes
@@ -5050,7 +6004,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * emit_tail's thinner return path emitted an unbridged return.  Both paths
      * share emit_fn_return_spelling now, so a refused leaf is emitted exactly as
      * it always was. */
-    bool tco_eligible = tco_spine_ok && (n_tco_self > 0 || n_tco_tail > 0);
+    bool tco_eligible = tco_spine_ok &&
+        (n_tco_self > 0 || n_tco_tail > 0 || ctx->tail_dyn_seen);
     bool tco_wants_label = n_tco_self > 0;
 
     /* proper-tail-calls T1 (T-D1): now that tco_mark has had its say, work out
@@ -5109,6 +6064,24 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     if (did_general) {
         /* whole body emitted by the general splitter / group shim */
+    } else if (tcg) {
+        /* T5: the body lives in the group's fused function; this function is
+         * the entry for every call that is not a tail call from inside it. */
+        indent_buf(file, ctx->indent);
+        buf_printf(file, "return %s(%d", tcg->name, tcg_cur_v.idx);
+        uint32_t base = tcg->slot_base[tcg_cur_v.idx];
+        for (uint32_t k = 0; k < tcg->n_slots; k++) {
+            if (k >= base && k < base + fd->n_params) {
+                char *pn = raw_name_for_binding(fd->params[k - base]);
+                buf_printf(file, ", %s", pn);
+                free(pn);
+            } else {
+                char *z = emit_c_zero_of(tcg->slot_ctype[k]);
+                buf_printf(file, ", %s", z ? z : "0");
+                free(z);
+            }
+        }
+        buf_puts(file, ");\n");
     } else if (prereq6_synthesized_body) {
         /* Prereq 6: the function body was already emitted as a synthesized
          * wrapper above (heap-spill + carrier helper call + cast back to
@@ -5287,6 +6260,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_write(real_file, fn_tmp.data, fn_tmp.len);
     buf_free(&fn_tmp);
     ctx->file = real_file;
+    ctx->tcg_cur = saved_tcg_cur;
+    ctx->tb_guard = saved_tb_guard;
+    ctx->mt_fn_cname = saved_mt_name;
+    ctx->mt_body_buf = saved_mt_buf;
+    ctx->mt_body_start = saved_mt_start;
 
     /* CPS3: emit __cps wrapper for colored non-closure functions when --cps-path */
     if (fd->is_cps && g_cps_path && !is_main && !fd->closure) {

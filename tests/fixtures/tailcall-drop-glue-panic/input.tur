@@ -1,0 +1,36 @@
+;; proper-tail-calls T4 (docs/upcoming/proper-tail-calls-plan.md, T-D3): the
+;; drop glue an owned local carries still runs when a panic leaves the loop
+;; from INSIDE a backedge's argument.
+;;
+;; This is why T4 keeps the defer frame rather than deleting it.  The backedge
+;; evaluates its arguments first, and `step` panics on one of them; that exit
+;; goes out through the per-call-site panic check, which fires the enclosing
+;; frame chain.  Had the drops been inlined before the `goto` with no frame,
+;; the panic exit would have skipped them and leaked both locals of the
+;; activation it left.  `requires.leak-check` builds this under
+;; AddressSanitizer with LeakSanitizer on (tests/run-leak-check.sh), which is
+;; what turns "the drop ran" into an assertion.
+;;
+;; The second call runs the same loop to completion, so the normal-exit fire
+;; (before the backedge, and before the base case's `return`) is covered by the
+;; same leak check.  walk 2 reads @b = 2, then 1, and returns 3.
+
+(defn step [n : int] : int
+  (if (= n 3)
+    (do (panic "boom") n)
+    (- n 1)))
+
+(defn walk [n : int acc : int] : int
+  (let [x (rc/of n)
+        b (ref n)]
+    (if (= n 0)
+      acc
+      ^tailcall (walk (step n) (+ acc @b)))))
+
+(defn main [] : int
+  (let [r (catch-unwind (fn [] : int (walk 10 0)))]
+    (if (ok? r)
+      (println "no panic seen")
+      (println "caught")))
+  (println (walk 2 0))
+  0)

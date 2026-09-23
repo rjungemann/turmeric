@@ -1,0 +1,36 @@
+;; proper-tail-calls T5 (docs/upcoming/proper-tail-calls-plan.md, T-D5): a
+;; panic raised while a fused group is running still propagates, and the
+;; owned locals of the member it leaves are still dropped.
+;;
+;; `pa` and `pb` are one fused function.  `pa` owns an `rc<int>` whose drop
+;; glue fires before each jump (T4); `step` panics inside a jump's ARGUMENT,
+;; so the exit is the per-call-site panic check inside the fused function,
+;; which returns out of it -- and out of the wrapper that entered it -- after
+;; firing the frame.  The first call is caught by `catch-unwind`; the second
+;; runs the same group to completion.  `requires.leak-check` builds this under
+;; AddressSanitizer with LeakSanitizer on (tests/run-leak-check.sh), which is
+;; what makes "the drop still ran" an assertion.
+
+(defn step [n : int] : int
+  (if (= n 5)
+    (do (panic "boom") n)
+    (- n 1)))
+
+(defn pa [n : int acc : int] : int
+  (let [x (rc/of n)]
+    (if (= n 0)
+      acc
+      ^tailcall (pb (step n) (+ acc 1)))))
+
+(defn pb [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    ^tailcall (pa (- n 1) (+ acc 1))))
+
+(defn main [] : int
+  (let [r (catch-unwind (fn [] : int (pa 9 0)))]
+    (if (ok? r)
+      (println "no panic seen")
+      (println "caught")))
+  (println (pa 4 0))
+  0)

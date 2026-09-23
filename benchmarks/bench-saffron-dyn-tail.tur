@@ -1,0 +1,21 @@
+#lang saffron
+;;; bench-saffron-dyn-tail -- the cost of a dynamic call in tail position.
+;;
+;; proper-tail-calls T6 (docs/upcoming/proper-tail-calls-plan.md, T-D6) turns a
+;; dynamic tail call into a bounce to a trampoline driver instead of a nested C
+;; call.  This measures what that costs per call, on a shape both compilers can
+;; run: 2,000 rounds of a 5,000-deep loop through a function VALUE -- shallow
+;; enough that the pre-T6 recursion survives an 8 MB stack (this three-argument
+;; shape already overflowed at 20,000 deep before T6) -- so 10,000,000 dynamic
+;; calls in all.
+;; Results and the before/after comparison: saffron-dyn-tail-results.md.
+
+(defn run [f n acc]
+  (if (= n 0) acc (f f (- n 1) (+ acc 1))))
+
+(defn outer [k total]
+  (if (= k 0) total (outer (- k 1) (+ total (run run 5000 0)))))
+
+(defn main [] : int
+  (println (outer 2000 0))
+  0)

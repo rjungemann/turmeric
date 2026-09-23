@@ -1,0 +1,69 @@
+;; proper-tail-calls T4 (docs/upcoming/proper-tail-calls-plan.md, T-D3): a
+;; self tail call under an owned local's drop glue becomes a backedge.
+;;
+;; A `let` that owns a `ref<T>`, an `rc<T>`, or a by-value ADT with an owning
+;; field gets a synthesized scope-exit drop -- a `defer` appended after the
+;; `let` body's value.  Until T4 that defer took the whole block out of tail
+;; position, so every loop that allocated per step silently got ordinary
+;; recursion.  Now, when the local is DEAD at the call (every use copies a
+;; plain number out of it), its drop runs just before the backedge instead of
+;; just after a recursive call returns.
+;;
+;; The `flags` file builds this at -O0 (`--debug`): there is no inliner to lend
+;; a pass, so each loop either got a `__tur_tailcall:` backedge or overflows the
+;; C stack long before 1,000,000.  One loop per kind of drop glue, plus one
+;; whose backedge sits in a `match` arm, since the frame has to fire on every
+;; exit of the arm-switch and not only on an `if` branch.
+;;
+;; `^tailcall` on each recursive call is the assertion under test: before T4
+;; each one was TUR-E0716 ("a `defer` in this block ... runs AFTER the call").
+;;
+;; Each loop counts n down to 0 and sums what it read out of its owned local on
+;; the way, so the printed values pin that the value was read BEFORE the drop.
+
+(defdata Tagged (Tagged [tag : int payload : rc<int>]))
+
+(defdata Step
+  (Done)
+  (More int))
+
+(defn classify [n : int] : Step
+  (if (= n 0)
+    (Done)
+    (More (- n 1))))
+
+;; ref<T>: drop glue is `(drop! b)`.  `@b` copies the int out before the drop.
+(defn with-ref [n : int acc : int] : int
+  (let [b (ref 1)]
+    (if (= n 0)
+      acc
+      ^tailcall (with-ref (- n 1) (+ acc @b)))))
+
+;; rc<T>: drop glue is `(rc/drop x)`.  The local is never read at all.
+(defn with-rc [n : int acc : int] : int
+  (let [x (rc/of n)]
+    (if (= n 0)
+      acc
+      ^tailcall (with-rc (- n 1) (+ acc 1)))))
+
+;; by-value ADT with an owning rc field: drop glue is `(rc/drop (.payload t))`.
+;; `(.tag t)` reads a plain int field, which is the one use that keeps it dead.
+(defn with-adt [n : int acc : int] : int
+  (let [t (Tagged 2 (rc/of n))]
+    (if (= n 0)
+      acc
+      ^tailcall (with-adt (- n 1) (+ acc (.tag t))))))
+
+;; the backedge in a `match` arm, under a ref<T>.
+(defn with-match [n : int acc : int] : int
+  (let [b (ref 3)]
+    (match (classify n)
+      (Done)   acc
+      (More v) ^tailcall (with-match v (+ acc @b)))))
+
+(defn main [] : int
+  (println (with-ref 1000000 0))
+  (println (with-rc 1000000 0))
+  (println (with-adt 1000000 0))
+  (println (with-match 1000000 0))
+  0)

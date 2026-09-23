@@ -1,0 +1,31 @@
+;; proper-tail-calls T5 (docs/upcoming/proper-tail-calls-plan.md, T-D5): a
+;; mutual pair of tail calls is fused into one C function with a dispatch
+;; loop, so the pair runs in constant stack at any optimization level.
+;;
+;; This was `errors/tailcall-mutual` until T5 -- a negative whose header said
+;; "when T5 lands (tail-edge SCC fusion) this fixture moves to the positive
+;; side."  Before T5 the pair passed at -O2 only because clang inlined the
+;; whole cycle into a loop (plan section 2.4), and was a SIGSEGV at -O0.
+;;
+;; What the snapshot pins, in the emitted C:
+;;
+;;   - one `__tcg_group_0(int __tcg_st, int64_t __tcg_s0, int64_t __tcg_s1)`,
+;;     with a prototype ahead of the first member and the definition at the
+;;     LAST member's position;
+;;   - a `case` per member whose parameters are block locals read from that
+;;     member's slots;
+;;   - each tail call as `<target slots> = <temps>; __tcg_st = <m>;
+;;     goto __tcg_top;` -- no C call at all;
+;;   - both `is_hyodd_qu` and `is_hyeven_qu` kept as thin wrappers,
+;;     `return __tcg_group_0(<m>, ...);`, for every call from outside.
+
+(defn is-odd? [n : int] : bool
+  (if (= n 0) false ^tailcall (is-even? (- n 1))))
+
+(defn is-even? [n : int] : bool
+  (if (= n 0) true ^tailcall (is-odd? (- n 1))))
+
+(defn main [] : int
+  (println (if (is-even? 4) 1 0))
+  (println (if (is-odd? 7) 1 0))
+  0)

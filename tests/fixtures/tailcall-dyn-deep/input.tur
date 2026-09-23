@@ -1,0 +1,56 @@
+#lang saffron
+;; proper-tail-calls T6 (docs/upcoming/proper-tail-calls-plan.md, T-D6): a
+;; dynamic call in tail position -- a call through a function VALUE, where no
+;; callee is known at compile time -- runs in constant stack.
+;;
+;; Before T6 each such call was a nested C call through the callee's
+;; direct-entry wrapper, about 285 bytes of stack a level (plan section 1):
+;; ~30,000 deep at -O2, and far less at -O0.  Now a tail dynamic call either
+;; BOUNCES -- records the call and returns to a trampoline driver one frame
+;; below -- when the activation it sits in was entered from a driver, or
+;; DRIVES the call in a loop otherwise.  The `flags` file builds this at -O0
+;; (`--debug`), so the only thing standing between each loop and a stack
+;; overflow is that trampoline.
+;;
+;; Five loops, one per way a dynamic tail call is reached:
+;;
+;;   run        -- a top-level function looping through itself as a value; it
+;;                 is CPS-lowered (a dynamic call colors its caller), so this
+;;                 is the `__cps` body bouncing to its direct-entry wrapper.
+;;   loop       -- a capture-free lambda, lifted and CPS-lowered the same way.
+;;   counter    -- a CAPTURING closure, emitted direct-style: its thunk is the
+;;                 registered bouncer, and `__tb_may` is its permission.
+;;   ping/pong  -- two different functions bouncing to each other, which is
+;;                 the case neither a backedge (T3) nor fusion (T5) can reach.
+;;   folded     -- a typed stdlib `vec-fold` invoking a Saffron callback whose
+;;                 own tail is a dynamic call.  A typed caller never arms the
+;;                 callee, so it must get a value back, never a bounce.
+;;
+;; `^tailcall` on each tail dynamic call is the assertion (T6 lets it annotate
+;; a dynamic call; before, it had to be a static one).
+
+(defn run [f n acc]
+  (if (= n 0) acc ^tailcall (f f (- n 1) (+ acc 1))))
+
+(defn make-counter [step]
+  (fn [self n acc] (if (= n 0) acc ^tailcall (self self (- n 1) (+ acc step)))))
+
+(defn ping [me other n]
+  (if (= n 0) "ping" ^tailcall (other other me (- n 1))))
+
+(defn pong [me other n]
+  (if (= n 0) "pong" ^tailcall (other other me (- n 1))))
+
+(defn apply-to [g x] ^tailcall (g x))
+
+(defn step [acc x] (apply-to (fn [y] (+ y x)) acc))
+
+(defn main [] : int
+  (println (run run 1000000 0))
+  (let [loop (fn [self n] (if (= n 0) "done" ^tailcall (self self (- n 1))))]
+    (println (loop loop 1000000)))
+  (let [counter (make-counter 3)]
+    (println (counter counter 1000000 0)))
+  (println (ping ping pong 1000001))
+  (println (vec-fold [1 2 3 4 5] 100 step))
+  0)

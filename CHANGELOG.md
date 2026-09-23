@@ -25,6 +25,71 @@ All notable changes to Turmeric are documented here.
   [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md),
   and it is the test instrument the later stages are verified with.
 
+### Changed
+
+- **A loop that owns a `ref<T>` or `rc<T>` local is a real loop again.** A
+  self tail call under a `let` that owns a value with drop glue -- a `ref<T>`,
+  an `rc<T>`, a move-only Drop value, or a by-value ADT with an owning field --
+  used to be an ordinary recursive call, because the local's scope-exit drop
+  ran after it. When the local is dead at the call (every use copies a plain
+  number out of it, like `@b` or `(.count o)`), its drop now runs just before
+  the backedge instead, so the loop runs in constant stack: 10,000,000
+  iterations at `-O0` where it used to overflow. A local that is still live --
+  passed to the call, captured by a closure, borrowed -- keeps the old
+  behavior, and `^tailcall` on such a call says why (`TUR-E0716`, "an owned
+  local ... is still live at the call"). A `defer` you wrote is unaffected: it
+  still runs after the call, in order. This is T4 of
+  [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
+- **Mutual tail calls run in constant stack.** Functions that tail-call each
+  other in a cycle -- `is-even?`/`is-odd?`, a state machine, an 8-way
+  dispatcher -- are now fused into one C function with a dispatch loop, so the
+  cycle is a `goto` rather than a chain of C calls: 10,000,000 steps at `-O0`
+  where it used to overflow. Before, a small cycle survived only at `-O2`, and
+  only because the C compiler happened to inline it. Each function keeps its
+  own entry point, so calls from outside the cycle are unchanged. A group
+  forms when every member is a plain top-level `defn` (no closure, inline-C,
+  effectful or `catch-unwind` body; no variadic or `fn`-typed parameter), they
+  share a return type, and there are at most 8 of them with 16 parameters in
+  all; `^tailcall` on a call that misses says so. This is T5 of
+  [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
+
+- **Saffron: a call through a function value in tail position runs in constant
+  stack.** `(f f (- n 1))` where `f` is an `any` used to be a nested C call per
+  step, and a loop written that way overflowed at around 30,000 steps -- fewer
+  at `-O0`. Such a call now bounces: it is recorded and handed back to a
+  trampoline loop one frame below, which makes it. A self loop, a lambda, a
+  capturing closure and two functions bouncing to each other all run
+  10,000,000 deep at `-O0` in about 1.4 MB, and the same calls got 2.7x faster
+  (`benchmarks/saffron-dyn-tail-results.md`). Typed code that calls a Saffron
+  function as a callback is unaffected: only a trampoline ever asks a
+  function to bounce. `^tailcall` can now annotate a dynamic call. This is T6,
+  the last stage of
+  [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md),
+  and the tail-call prerequisite of `#lang r7rs`.
+
+- **`musttail` where the C compiler can promise it.** A tail call to another
+  function that the mutual-group fusion does not reach -- a cycle of more than
+  8 functions, or plain forwarding -- is emitted as
+  `TUR_MUSTTAIL return f(args);`, which asks the C compiler for a guaranteed
+  tail call. Under clang on x86-64/aarch64 that makes such a cycle run in
+  constant stack at `-O0`; everywhere else (gcc, the JIT, wasm) the macro is
+  empty and the call is what it was. Applied only when both functions have
+  identical C signatures and the caller's body takes no address, since a
+  forced tail call must not leave an argument pointing into the frame it
+  replaces. `-DTUR_MUSTTAIL=` turns it off. Fixtures that assert the deep
+  case carry a new `requires.musttail` marker, which `tests/run.sh` probes
+  once against `$CC`. This is T2b of
+  [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
+
+### Fixed
+
+- **A call to a `: float` function defined later in the file is typed
+  `float`.** The top-level forward-declaration pass had no `float` arm, so such
+  a call was typed `int` and `(if c x (g ...))` with a float `x` failed with a
+  spurious `if branches have mismatched types: then=float else=int` -- which
+  every float-returning mutual pair hits on one side. Functions inside a
+  `defmodule`, and `letrec`, already had it right.
+
 ## [0.51.0] -- 2026-09-21
 
 ### Added

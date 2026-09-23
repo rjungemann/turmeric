@@ -228,6 +228,34 @@ if [ "$TUR_TSAN" = "1" ]; then
 fi
 export TUR_TSAN
 
+# proper-tail-calls T2b: `requires.musttail` fixtures assert a depth that holds
+# only where the fixture compiler honours `TUR_MUSTTAIL` -- today clang on
+# x86-64 / aarch64; gcc 13 and the JIT's c2mir expand it to nothing, and a
+# mutual cycle there is ordinary recursion that overflows at -O0.  Probe the
+# fixture compiler once with the SAME gate the emitter writes
+# (ensure_musttail_macro in src/compiler/emit_module.c -- keep the two in
+# step) and PASS-skip the marker when it does not hold.
+TUR_HAS_MUSTTAIL=0
+_mt_probe_dir="$(mktemp -d)"
+cat > "$_mt_probe_dir/p.c" <<'MTEOF'
+#if defined(__clang__) && defined(__has_attribute) && !defined(__wasm__) && \
+    (defined(__x86_64__) || defined(__aarch64__))
+#  if __has_attribute(musttail)
+#    define TUR_MUSTTAIL __attribute__((musttail))
+#  endif
+#endif
+#ifndef TUR_MUSTTAIL
+#  error no musttail
+#endif
+int g(int);
+int f(int x) { TUR_MUSTTAIL return g(x); }
+MTEOF
+if $BUILD_CC -c "$_mt_probe_dir/p.c" -o "$_mt_probe_dir/p.o" >/dev/null 2>&1; then
+    TUR_HAS_MUSTTAIL=1
+fi
+rm -rf "$_mt_probe_dir"
+export TUR_HAS_MUSTTAIL
+
 # T19: Timeout support.
 # `expected.timeout` in a fixture directory sets the per-fixture timeout in
 # seconds.  Default is 10.  Set to 0 to disable the timeout for a fixture.
@@ -589,6 +617,13 @@ run_happy() {
     # T19: Skip fixtures requiring TSan when TSan is not active.
     if [ -f "$dir/requires.tsan" ] && [ "$TUR_TSAN" != "1" ]; then
         write_result "PASS" "$name" "(tsan-skipped)" ""
+        return
+    fi
+
+    # proper-tail-calls T2b: a guaranteed tail call needs a compiler that
+    # honours musttail (see the TUR_HAS_MUSTTAIL probe above).
+    if [ -f "$dir/requires.musttail" ] && [ "$TUR_HAS_MUSTTAIL" != "1" ]; then
+        write_result "PASS" "$name" "(musttail-skipped)" ""
         return
     fi
 
