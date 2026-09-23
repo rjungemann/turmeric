@@ -4023,6 +4023,49 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     return tmp ? tmp : atom_nil();
 }
 
+/* Register one EX_DEFER item on `frame_var`: lift its body into a thunk (with
+ * an env struct when it captures locals) and emit the `tur_frame_push_defer`.
+ * Shared by emit_do_value, emit_stmt's EX_DO arm and emit_fns.c's tail path
+ * (proper-tail-calls T4), which all open a frame the same way. */
+void emit_frame_push_defer(EmitCtx *ctx, Buf *body, const char *frame_var,
+                           const Expr *it) {
+    const Expr *defer_expr = it->as.defer_.body;
+    const uint8_t n_captures = it->as.defer_.n_captures;
+    Binding **captures = it->as.defer_.captures;
+
+    if (n_captures == 0) {
+        /* No captures - generate thunk */
+        char *thunk_name = fresh_defer_thunk(ctx);
+        register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, NULL);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "tur_frame_push_defer(&%s, %s, NULL);\n", frame_var, thunk_name);
+    } else {
+        /* Has captures - generate thunk with env struct */
+        char *env_name = fresh_defer_env(ctx);
+        char *thunk_name = fresh_defer_thunk(ctx);
+        register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, env_name);
+
+        /* Create env instance and register with address */
+        char *env_tmp = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "struct %s %s = {", env_name, env_tmp);
+        for (uint8_t j = 0; j < n_captures; j++) {
+            if (j > 0) buf_puts(body, ", ");
+            char *cn = name_for_binding(ctx, captures[j]);
+            char *field = raw_name_for_binding(captures[j]);
+            buf_printf(body, ".%s = %s", field, cn);
+            free(field);
+            free(cn);
+        }
+        buf_puts(body, "};\n");
+
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "tur_frame_push_defer(&%s, %s, &%s);\n", frame_var, thunk_name, env_tmp);
+        free(env_tmp);
+        free(env_name);
+    }
+}
+
 /* Phase 4 v1: defer-aware do-block emission.
  *
  * v1 strategy (effects-plan.md §6.10): Each scope gets a tur_frame variable.
@@ -4173,39 +4216,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
 
             if (it->kind == EX_DEFER) {
-                /* Register defer thunks */
-                const Expr *defer_expr = it->as.defer_.body;
-                const uint8_t n_captures = it->as.defer_.n_captures;
-                Binding **captures = it->as.defer_.captures;
-
-                if (n_captures == 0) {
-                    char *thunk_name = fresh_defer_thunk(ctx);
-                    register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, NULL);
-                    indent_buf(body, ctx->indent);
-                    buf_printf(body, "tur_frame_push_defer(&%s, %s, NULL);\n", frame_var, thunk_name);
-                } else {
-                    char *env_name = fresh_defer_env(ctx);
-                    char *thunk_name = fresh_defer_thunk(ctx);
-                    register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, env_name);
-
-                    char *env_tmp = fresh_tmp(ctx);
-                    indent_buf(body, ctx->indent);
-                    buf_printf(body, "struct %s %s = {", env_name, env_tmp);
-                    for (uint8_t j = 0; j < n_captures; j++) {
-                        if (j > 0) buf_puts(body, ", ");
-                        char *cn = name_for_binding(ctx, captures[j]);
-                        char *field = raw_name_for_binding(captures[j]);
-                        buf_printf(body, ".%s = %s", field, cn);
-                        free(field);
-                        free(cn);
-                    }
-                    buf_puts(body, "};\n");
-
-                    indent_buf(body, ctx->indent);
-                    buf_printf(body, "tur_frame_push_defer(&%s, %s, &%s);\n", frame_var, thunk_name, env_tmp);
-                    free(env_tmp);
-                    free(env_name);
-                }
+                emit_frame_push_defer(ctx, body, frame_var, it);
             } else if (last_yields_value && (int)i == last_value_idx) {
                 char *bv = emit_value(ctx, body, it);
                 indent_buf(body, ctx->indent);
@@ -4238,46 +4249,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     for (uint32_t i = 0; i < n; i++) {
         const Expr *it = e->as.do_.items[i];
         if (it->kind == EX_DEFER) {
-            /* v1 lowering: Generate thunk and register with frame */
-            const Expr *defer_expr = it->as.defer_.body;
-            const uint8_t n_captures = it->as.defer_.n_captures;
-            Binding **captures = it->as.defer_.captures;
-            
-            if (n_captures == 0) {
-                /* No captures - generate thunk */
-                char *thunk_name = fresh_defer_thunk(ctx);
-                register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, NULL);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "tur_frame_push_defer(&%s, %s, NULL);\n", frame_var, thunk_name);
-            } else {
-                /* Has captures - generate thunk with env struct */
-                char *env_name = fresh_defer_env(ctx);
-                char *thunk_name = fresh_defer_thunk(ctx);
-                register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, env_name);
-                
-                /* Emit env struct type definition at file scope */
-                /* We'll emit this in emit_pending_defer_thunks, but we need to
-                 * also create the env instance here and pass its address */
-                
-                /* Create env instance and register with address */
-                char *env_tmp = fresh_tmp(ctx);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "struct %s %s = {", env_name, env_tmp);
-                for (uint8_t j = 0; j < n_captures; j++) {
-                    if (j > 0) buf_puts(body, ", ");
-                    char *cn = name_for_binding(ctx, captures[j]);
-                    char *field = raw_name_for_binding(captures[j]);
-                    buf_printf(body, ".%s = %s", field, cn);
-                    free(field);
-                    free(cn);
-                }
-                buf_puts(body, "};\n");
-
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "tur_frame_push_defer(&%s, %s, &%s);\n", frame_var, thunk_name, env_tmp);
-                free(env_tmp);
-                free(env_name);
-            }
+            emit_frame_push_defer(ctx, body, frame_var, it);
         } else if ((int)i == last_value_idx) {
             continue; /* emitted as value below */
         } else {

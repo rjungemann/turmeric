@@ -1658,6 +1658,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                         
                         defer_expr->as.defer_.captures = captures;
                         defer_expr->as.defer_.n_captures = n_captures;
+                        defer_expr->as.defer_.is_drop_glue = true;
 
                         new_items[defer_idx++] = defer_expr;
                     }
@@ -1699,6 +1700,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                             free(free_vars);
                             defer_expr->as.defer_.captures = captures;
                             defer_expr->as.defer_.n_captures = n_captures;
+                            defer_expr->as.defer_.is_drop_glue = true;
 
                             new_items[defer_idx++] = defer_expr;
                         }
@@ -1860,6 +1862,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                     
                     defer_expr->as.defer_.captures = captures;
                     defer_expr->as.defer_.n_captures = n_captures;
+                    defer_expr->as.defer_.is_drop_glue = true;
                     
                     new_items[defer_idx++] = defer_expr;
                 }
@@ -2124,6 +2127,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                     free(free_vars);
                     defer_expr->as.defer_.captures = captures;
                     defer_expr->as.defer_.n_captures = n_captures;
+                    defer_expr->as.defer_.is_drop_glue = true;
 
                     new_items[defer_idx++] = defer_expr;
                 }

@@ -1,3 +1,3 @@
 TUR-E0716
 `^tailcall` call is not in tail position
-runs AFTER the call
+is still live at the call

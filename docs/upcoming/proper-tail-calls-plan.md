@@ -1,6 +1,6 @@
 # Proper tail calls in Turmeric
 
-Status: **T1, T2 and T3 landed; T4-T6 are plan only.**
+Status: **T1-T4 landed; T5 and T6 are plan only.**
 
 - **T1 -- `^tailcall` + TUR-E0716 + the `-O0` fixture harness: DONE.** The
   annotation is a checked assertion, not a hint: a call it cannot place in tail
@@ -22,8 +22,16 @@ Status: **T1, T2 and T3 landed; T4-T6 are plan only.**
   row of Section 1's table ("Self tail call, `match` arm -- **No backedge
   emitted**") is the one line of it that T2 and T3 between them made stale. See
   [T-D4](#t-d4----extend-the-tail-grammar-starting-with-match).
-- **T4-T6: not built.** Everything they say is still a proposal, and Sections 1
-  and 2 still describe what the compiler does, with the two exceptions noted
+- **T4 -- drop glue on a dead owned local: DONE (2026-09-23), and it moves a
+  number.** A self tail call under a `ref<T>`, `rc<T>`, move-only Drop or
+  by-value-ADT-with-owning-field local is now a backedge when that local is
+  dead at the call: `tailcall-drop-glue-deep` runs 10,000,000 frames of each
+  kind at `-O0`. The Section 1 row "body owns a `ref<T>` -- **No backedge
+  emitted**" is the second stale line of that table. See
+  [T-D3](#t-d3----cleanup-decides-tail-position-and-the-honest-answer-has-a-limit),
+  whose "What shipped" corrects two of the plan's own four corrections.
+- **T5-T6: not built.** Everything they say is still a proposal, and Sections 1
+  and 2 still describe what the compiler does, with the three exceptions noted
   above.
 
 Prerequisite for [r7rs-lang-plan.md](r7rs-lang-plan.md), but not only for it:
@@ -59,7 +67,7 @@ default (`src/main.c:6213`); `-O0` is what `tur run --debug` uses.
 |---|---|---|---|---|
 | **Self** tail call | **pass** | pass | pass | Turmeric emits a real `__tur_tailcall:` label and `goto`. A genuine language guarantee. |
 | Self tail call, **`match` arm** | ~~n/a~~ **pass** | pass | pass | ~~**No backedge emitted.** Ordinary recursive call.~~ **Fixed by T3** (2026-09-22): a real backedge, verified at 1e7 frames at `-O0`. |
-| Self tail call, body owns a **`ref<T>`** | n/a | n/a | pass | **No backedge emitted.** Defer frame pushed; drop fires *after* the call. |
+| Self tail call, body owns a **`ref<T>`** | ~~n/a~~ **pass** | pass | pass | ~~**No backedge emitted.** Defer frame pushed; drop fires *after* the call.~~ **Fixed by T4** (2026-09-23) when the local is dead at the call: the frame fires before the backedge. Verified at 1e7 at `-O0`. |
 | **Mutual**, 2 functions | **SIGSEGV** | pass | pass | LLVM inlines the pair and collapses it to a loop. Not a tail call. |
 | **Mutual**, 8 functions | **SIGSEGV** | pass | pass | Same -- LLVM inlines the whole 8-cycle. |
 | **Indirect** (through a `fn` value) | SIGSEGV | **SIGSEGV at ~29,335** | pass at 1e6 | No tail-call handling anywhere. ~285 bytes of C stack per level on an 8 MB stack. |
@@ -147,6 +155,11 @@ The conservative bail is **correct**. It is also more conservative than it needs
 to be: in that probe `b` is never passed to the recursive call and is dead at
 the call site, so the drop could legally be hoisted *before* it and tail
 position restored. That gap is T4.
+
+> **Closed by T4 (2026-09-23).** That exact program now emits
+> `tur_frame_fire_lifo(&__frame); n = <tmp>; goto __tur_tailcall;` -- the frame
+> is still pushed, and fires after the argument temps instead of after a
+> recursive call. See T-D3's "What shipped".
 
 ### 2.3 `tco_mark`'s tail grammar is missing `match`
 
@@ -468,7 +481,8 @@ toolchain dependency.
 
 **Verdict: hoist the drop when the value is dead at the call; refuse tail
 position when it is live. Do not promise general TCO in a language with
-destructors.**
+destructors.** **Landed 2026-09-23** -- see "What shipped" at the end of this
+section, which revises corrections 3 and 4 below.
 
 Three cases, and the middle one is the work:
 
@@ -539,6 +553,68 @@ One case to settle with a fixture before relaxing anything: a closure that
 captures the dropped binding and is stored outside the scope. Check whether the
 elaborator already suppresses the auto-drop there, or whether "not free in the
 args" is insufficient.
+
+#### What shipped (T4, 2026-09-23)
+
+Corrections 1 and 2 held exactly: `EX_DEFER` carries `is_drop_glue`, set at the
+four synthesis sites in `elab_forms.c` (the `ref<T>` drop, the move-only Drop
+opaque's `Drop.drop`, the `rc<T>` drop, and a by-value ADT's owning-field drops),
+and a written `defer` keeps the conservative bail with its own message
+(`errors/tailcall-written-defer`, which prints `0 1 2 3` where a hoist would
+print `3 2 1 0`). The synthesized defers are indeed appended after the value,
+and the tail is the last NON-defer item. Corrections 3 and 4 did not survive
+contact with the code:
+
+**3, revised: "not free in the args" is insufficient, and the open question
+above answered it.** The elaborator does NOT suppress the auto-drop when a
+closure captures the binding -- `tests/fixtures/rc-auto-drop-closure-capture`
+pins that as intended behavior -- so an `rc` local captured by a closure the
+loop hands onward, or stores where the next activation can reach it, is live
+across the backedge even though it never appears free in the arguments.
+"Still owns the value, so cannot have escaped" is true of *moves*, not of
+*aliases*. The shipped rule is an allowlist over every occurrence of the dropped
+binding -- in the block's items AND the enclosing `let`'s initializers, which
+is where a sibling binding could have aliased it: a use is dead-safe only when
+it copies a plain number out (`@b`, `(.tag t)` with a scalar result). A bare
+occurrence -- an argument, a capture, a borrow -- refuses, and so does any node
+kind the walker does not enumerate, which it answers with the complete
+`collect_free_vars` walk rather than by skipping. `errors/tailcall-owned-local-live`
+now holds the live case (an `rc` passed to a helper in the recursive call's
+own argument).
+
+**4, revised: the frame stays; only its firing point moves.** Deleting the
+`tur_frame_push_defer` / `tur_frame_fire_lifo` pair and inlining the drop bodies
+before the backedge would have been strictly WORSE on the panic path, not
+better: a panic in one of the backedge's argument expressions returns through
+the per-call-site check, and `emit_panic_signal_return` fires the frame chain
+-- with no frame, that exit skips the drops and leaks under `catch-unwind`.
+`tailcall-drop-glue-panic` pins it under LeakSanitizer. So the lowering is: the
+frame is declared and the drops pushed exactly as `emit_do_value` does, the
+value is emitted in tail position with the frame open, and every exit fires the
+chain -- a backedge after its argument temps and before the parameter
+reassignment, a `return` after its value is in a temp (a one-item `do` wrapper
+gives exactly the temp and carrier bridges the ordinary path hands the return
+ladder). The frame is block-scoped, so a backedge leaves it and the next
+iteration re-declares it: constant stack, and the same per-step work the
+recursive version did.
+
+Two limits, both deliberate:
+
+- **Only a backedge goes through drop glue.** A NON-self call under an open
+  frame is not a C tail call -- the frame fires after it -- so T2's checkless
+  `return f(args);` is off there, and a block that carries no self tail call
+  keeps the path it always took. That is also why **zero** existing snapshots
+  moved.
+- **A block whose items `return` or `throw` is refused** (TC_DROP_EXIT): those
+  fire the chain on their own schedule, which the tail path does not re-derive.
+
+`tco_mark` decides and records it on the block (`tail_drop_hoist`), so
+`emit_tail` and the `^tailcall` verifier read one answer rather than
+re-deriving it (TR1). Fixtures: `tailcall-drop-glue-deep` (1e7 at `-O0` for
+each of `ref<T>`, `rc<T>`, a by-value ADT's owning field, and a backedge in a
+`match` arm), `tailcall-drop-glue-annot` (the snapshot -- formerly the
+negative `errors/tailcall-owned-local-live`, whose header predicted its own
+move), `tailcall-drop-glue-panic` (leak-checked), and the two negatives above.
 
 ### T-D4 -- extend the tail grammar, starting with `match`
 
@@ -662,7 +738,7 @@ typed Turmeric.**
 | ~~**T1** -- `^tailcall` annotation + diagnostic + `-O0` fixture harness~~ **DONE** | small | all of Turmeric; it is the test instrument for everything below |
 | ~~**T2** -- drop the redundant panic check at tail calls (T-D2)~~ **DONE** | medium | 6,601 fewer branch sites, -31,216 lines of emitted C. **No depth number moved** |
 | ~~**T3** -- `EX_MATCH` in the tail grammar (T-D4)~~ **DONE** | small | closed a silent hole in the most idiomatic loop shape. 1e7 at `-O0`; **zero** snapshot churn |
-| **T4** -- drop-glue hoisting by liveness (T-D3 row 2) | medium | owned-local loops get the guarantee. Needs an `is_drop_glue` flag on `EX_DEFER` first |
+| ~~**T4** -- drop-glue hoisting by liveness (T-D3 row 2)~~ **DONE** | medium | owned-local loops get the guarantee when the local is dead at the call. 1e7 at `-O0`; **zero** snapshot churn |
 | **T5** -- SCC fusion for mutual tail calls (T-D5) | medium-large | mutual recursion becomes a guarantee instead of an `-O2` accident |
 | **T6** -- bounce trampoline for indirect tail calls under dynamic dialects (T-D6) | medium | **R7RS's actual prerequisite**; also fixes Saffron's ~29K ceiling |
 
@@ -672,9 +748,8 @@ bounce descriptor, so none of them consumes it. Its only consumer is the
 optional T2b (`musttail`). T3 landing on its own, without T2, would have worked
 identically -- which is the evidence.
 
-**T4 is worth landing regardless of whether R7RS ever happens**, and is now the
-smallest thing left on this list. It needs the `is_drop_glue` flag on `EX_DEFER`
-first (T-D3).
+**T4 has landed** (T-D3, "What shipped"). T5 is now the next stage, and the
+largest thing left that does not depend on R7RS.
 
 T5 is the one that makes `docs/guides/performance-guide.md` able to say
 something stronger than it says now. T6 is the R7RS gate.
@@ -691,7 +766,10 @@ tail-call fixture at `-O2` asserts nothing.
 - **T2** removed emitted code, by more than "slightly": -31,216 lines across
   the 149 `expected.c` snapshots, 6,601 branch sites gone. It costs nothing at
   runtime and changed no depth behavior at either `-O0` or `-O2`.
-- **T3, T4, T5** cost nothing at runtime. They convert calls into `goto`s.
+- **T3, T5** cost nothing at runtime. They convert calls into `goto`s.
+- **T4** converts the call into a `goto` and keeps the defer frame, so each
+  step still pays the frame's init, push and fire -- the same work the
+  recursive version paid per level, minus the call and the stack frame.
 - **T6** costs one tagged compare and a branch per *tail call* in dynamic
   dialects, and nothing in typed Turmeric. An `r7rs` and a `saffron` row in
   `benchmarks/` should exist before T6 lands, not after.
@@ -750,8 +828,7 @@ today's behavior, plus the `^tailcall` diagnostic saying the group was too wide.
 **TR5 -- scope.** This is six stages, and only T6 is strictly required by R7RS.
 It would be easy for this to become the work instead of a prerequisite to it.
 Mitigation: T1-T3 are small and independently valuable; if the R7RS track
-stalls, they should land anyway. T1 and T2 have, and T3 is the smallest thing
-left.
+stalls, they should land anyway. T1-T4 have.
 
 ---
 

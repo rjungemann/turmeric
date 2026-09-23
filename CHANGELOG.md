@@ -25,6 +25,22 @@ All notable changes to Turmeric are documented here.
   [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md),
   and it is the test instrument the later stages are verified with.
 
+### Changed
+
+- **A loop that owns a `ref<T>` or `rc<T>` local is a real loop again.** A
+  self tail call under a `let` that owns a value with drop glue -- a `ref<T>`,
+  an `rc<T>`, a move-only Drop value, or a by-value ADT with an owning field --
+  used to be an ordinary recursive call, because the local's scope-exit drop
+  ran after it. When the local is dead at the call (every use copies a plain
+  number out of it, like `@b` or `(.count o)`), its drop now runs just before
+  the backedge instead, so the loop runs in constant stack: 10,000,000
+  iterations at `-O0` where it used to overflow. A local that is still live --
+  passed to the call, captured by a closure, borrowed -- keeps the old
+  behavior, and `^tailcall` on such a call says why (`TUR-E0716`, "an owned
+  local ... is still live at the call"). A `defer` you wrote is unaffected: it
+  still runs after the call, in order. This is T4 of
+  [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
+
 ## [0.51.0] -- 2026-09-21
 
 ### Added

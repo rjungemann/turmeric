@@ -230,6 +230,193 @@ static bool tco_match_tail_ok(const Expr *e) {
     return true;
 }
 
+/* ============================================================================
+ * proper-tail-calls T4 (docs/upcoming/proper-tail-calls-plan.md, T-D3):
+ * hoisting an owned local's drop glue ahead of a tail call.
+ *
+ * A `let` binding an owned value -- a `ref<T>`, an `rc<T>`, a move-only Drop
+ * opaque, or a by-value ADT with owning fields -- gets its scope-exit drop as a
+ * synthesized `defer` appended to the `let` body's `do`.  That defer used to
+ * take the whole block out of tail position, because "a defer runs after the
+ * call" is true of a defer the author wrote.  For drop glue it is only true
+ * when the value is still LIVE at the call: when nothing the next activation
+ * can reach refers to it, running the drop before the backedge is
+ * indistinguishable from running it after the recursive call returns.
+ *
+ * So a block qualifies when:
+ *
+ *   - every defer in it is drop glue (`is_drop_glue`), and they are all
+ *     trailing -- the elaborator appends them after the block's value;
+ *   - no item returns or throws (those fire the frame chain on their own
+ *     schedule, which this path does not re-derive); and
+ *   - every dropped binding is DEAD at every exit of the tail: each of its
+ *     occurrences, in the block and in the enclosing `let`'s initializers, is a
+ *     read that copies a plain scalar out (`@b`, `(.count o)`) or a store
+ *     through it (`(set-deref! b v)`).  A bare occurrence -- an argument, a
+ *     closure capture, a borrow, anything the walker does not recognise -- may
+ *     let the value outlive the drop, and refuses.
+ *
+ * The lowering keeps the frame rather than deleting it.  The plan's first
+ * reading was to drop the `tur_frame_push_defer` / `tur_frame_fire_lifo` pair
+ * outright, but the frame is what fires the drop on the PANIC path: a panic in
+ * one of the backedge's argument expressions returns through
+ * `emit_panic_signal_return`, which fires `ctx->frame_var`'s chain.  Without the
+ * frame that exit leaks the local under `catch-unwind`.  What changes is when
+ * the frame fires on the normal path: at every exit of the tail -- after a
+ * backedge's argument temps, before a `return` -- rather than once after a
+ * call that is no longer a tail call.  The frame is block-scoped, so a
+ * backedge leaves it and the next iteration re-declares it: constant stack.
+ * ========================================================================== */
+
+/* Forward decl: the capture analysis the elaborator uses for closures and defer
+ * thunks.  Complete over every ExprKind, which is what makes it the right
+ * fallback for the node kinds tco_drop_use_ok does not enumerate. */
+Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
+                            Binding **self_exclude, uint32_t n_self_exclude,
+                            uint32_t *n_out);
+
+/* A value a drop cannot invalidate once it has been copied out: a machine
+ * number or a bool.  Pointer-shaped results (a `cstr`, a nested owner, an
+ * aggregate) may alias storage the drop glue frees, so they do not qualify. */
+static bool tco_plain_scalar(TypeKind k) {
+    switch (k) {
+        case TY_BOOL: case TY_INT: case TY_FLOAT:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool tco_mentions(const Expr *e, const Binding *b) {
+    if (!e) return false;
+    uint32_t n = 0;
+    Binding **fv = collect_free_vars(e, NULL, 0, NULL, 0, &n);
+    bool hit = false;
+    for (uint32_t i = 0; i < n && !hit; i++) hit = (fv[i] == b);
+    free(fv);
+    return hit;
+}
+
+static bool tco_is_var(const Expr *e, const Binding *b) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    return e && e->kind == EX_VAR && e->as.var.binding == b;
+}
+
+/* Is every occurrence of `b` in `e` a use that cannot outlive a drop of `b`?
+ * Conservative by construction: a node kind not enumerated here is answered by
+ * the complete free-variable walk, so it refuses whenever `b` appears in it at
+ * all. */
+static bool tco_drop_use_ok(const Expr *e, const Binding *b) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_VAR:
+            return e->as.var.binding != b;
+        case EX_DEREF:
+            if (tco_is_var(e->as.deref_.expr, b))
+                return tco_plain_scalar(e->type.kind);
+            return tco_drop_use_ok(e->as.deref_.expr, b);
+        case EX_GET_FIELD:
+            if (tco_is_var(e->as.get_field_.struct_expr, b))
+                return tco_plain_scalar(e->type.kind);
+            return tco_drop_use_ok(e->as.get_field_.struct_expr, b);
+        case EX_SET_DEREF:
+            if (!tco_is_var(e->as.set_deref_.ref, b) &&
+                !tco_drop_use_ok(e->as.set_deref_.ref, b))
+                return false;
+            return tco_drop_use_ok(e->as.set_deref_.value, b);
+        case EX_ASCRIBE:
+            return tco_drop_use_ok(e->as.ascribe_.inner, b);
+        case EX_IF:
+            return tco_drop_use_ok(e->as.if_.cond, b) &&
+                   tco_drop_use_ok(e->as.if_.then_, b) &&
+                   tco_drop_use_ok(e->as.if_.else_or_null, b);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!tco_drop_use_ok(e->as.do_.items[i], b)) return false;
+            return true;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!tco_drop_use_ok(e->as.let_.bindings[i].init, b)) return false;
+            return tco_drop_use_ok(e->as.let_.body, b);
+        case EX_CALL:
+            if (e->as.call_.fn_expr && tco_mentions(e->as.call_.fn_expr, b))
+                return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (!tco_drop_use_ok(e->as.call_.args[i], b)) return false;
+            return true;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!tco_drop_use_ok(e->as.builtin.args[i], b)) return false;
+            return true;
+        case EX_MATCH:
+            if (!tco_drop_use_ok(e->as.match_.scrutinee, b)) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (!tco_drop_use_ok(e->as.match_.arms[i].guard, b) ||
+                    !tco_drop_use_ok(e->as.match_.arms[i].body, b))
+                    return false;
+            return true;
+        default:
+            return !tco_mentions(e, b);
+    }
+}
+
+/* The index of a `do` block's value item when its defers are exclusively
+ * TRAILING DROP GLUE -- the shape the elaborator builds for an owned local --
+ * or -1 when they are not (a written `defer`, a defer before the value, or no
+ * defer at all). */
+static int tco_drop_glue_tail_idx(const Expr *e) {
+    int last = -1;
+    for (int i = (int)e->as.do_.n - 1; i >= 0; i--)
+        if (e->as.do_.items[i]->kind != EX_DEFER) { last = i; break; }
+    if (last < 0 || (uint32_t)last + 1 == e->as.do_.n) return -1;
+    for (int i = 0; i < last; i++)
+        if (e->as.do_.items[i]->kind == EX_DEFER) return -1;
+    for (uint32_t i = (uint32_t)last + 1; i < e->as.do_.n; i++)
+        if (!e->as.do_.items[i]->as.defer_.is_drop_glue) return -1;
+    return last;
+}
+
+#define TC_DEFER_USER "a `defer` written in this block runs AFTER the call, " \
+                      "innermost first -- running it before a backedge would " \
+                      "reorder what it does, so nothing in the block is in " \
+                      "tail position"
+#define TC_DROP_LIVE  "an owned local of the enclosing `let` (a `ref<T>`, " \
+                      "`rc<T>` or other value with drop glue) is still live " \
+                      "at the call -- it is passed, captured, borrowed or " \
+                      "read as more than a plain number -- so its drop cannot " \
+                      "move ahead of the call"
+#define TC_DROP_EXIT  "this block's drop glue shares it with a `return` or " \
+                      "`throw`, which the tail path does not re-derive"
+
+/* Why a `do` block (the body of `let_e` when non-NULL) cannot carry a tail
+ * position through its drop glue, or NULL when it can.  Only called for a block
+ * that HAS defers. */
+static const char *tco_drop_glue_refusal(const Expr *e, const Expr *let_e) {
+    int last = tco_drop_glue_tail_idx(e);
+    if (last < 0) return TC_DEFER_USER;
+    for (int i = 0; i <= last; i++)
+        if (expr_contains_return_or_throw(e->as.do_.items[i])) return TC_DROP_EXIT;
+    /* The elaborator only ever builds this shape as a `let` body; without the
+     * `let`, the initializers that may alias the local are out of sight. */
+    if (!let_e) return TC_DROP_LIVE;
+    for (uint32_t d = (uint32_t)last + 1; d < e->as.do_.n; d++) {
+        const Expr *dx = e->as.do_.items[d];
+        for (uint8_t c = 0; c < dx->as.defer_.n_captures; c++) {
+            const Binding *b = dx->as.defer_.captures[c];
+            for (int i = 0; i <= last; i++)
+                if (!tco_drop_use_ok(e->as.do_.items[i], b)) return TC_DROP_LIVE;
+            for (uint32_t i = 0; i < let_e->as.let_.n; i++)
+                if (!tco_drop_use_ok(let_e->as.let_.bindings[i].init, b))
+                    return TC_DROP_LIVE;
+        }
+    }
+    return NULL;
+}
+
 /* Mark tail-position calls, recursing through if/do/let/letrec/match.  This mirrors
  * emit_tail's structural recursion exactly so that "marked >= 1" predicts
  * whether emit_tail will emit a backedge (and thus whether the
@@ -248,6 +435,35 @@ static bool tco_match_tail_ok(const Expr *e) {
  * emit_fn_def's, and a refused leaf landing there emitted an unbridged return.
  * Both paths now share `emit_fn_return_spelling`, so a refused leaf is simply
  * emitted the way it always was and the all-or-nothing rule is gone. */
+static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
+                    int *n_ok);
+
+/* The `do` arm of tco_mark, split out because a block of trailing drop glue
+ * needs to see the `let` it is the body of (`let_e`, NULL otherwise) -- the
+ * initializers are where the dropped local may have been aliased. */
+static int tco_mark_do(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
+                       const Expr *let_e, int *n_ok) {
+    if (e->as.do_.n == 0) return 0;
+    bool has_defer = false;
+    for (uint32_t i = 0; i < e->as.do_.n; i++)
+        if (e->as.do_.items[i]->kind == EX_DEFER) { has_defer = true; break; }
+    if (!has_defer)
+        return tco_mark(ctx, fd, fn_cname, e->as.do_.items[e->as.do_.n - 1],
+                        n_ok);
+    /* proper-tail-calls T4 (T-D3): drop glue on a dead local no longer takes
+     * the block out of the tail grammar.  Only a BACKEDGE is taken through it:
+     * a non-self call under an open frame is not a C tail call (the frame fires
+     * after it), so those are left unmarked and the block's leaves return
+     * normally.  The block qualifies only when it carries at least one
+     * backedge, which keeps every body without one on the path it always took. */
+    e->as.do_.tail_drop_hoist = false;
+    if (tco_drop_glue_refusal(e, let_e)) return 0;
+    int last = tco_drop_glue_tail_idx(e);
+    int n = tco_mark(ctx, fd, fn_cname, e->as.do_.items[last], NULL);
+    if (n > 0) e->as.do_.tail_drop_hoist = true;
+    return n;
+}
+
 static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                     int *n_ok) {
     if (!e) return 0;
@@ -268,16 +484,13 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
             n += tco_mark(ctx, fd, fn_cname, e->as.if_.else_or_null, n_ok);
             return n;
         }
-        case EX_DO: {
-            if (e->as.do_.n == 0) return 0;
-            for (uint32_t i = 0; i < e->as.do_.n; i++)
-                if (e->as.do_.items[i]->kind == EX_DEFER) return 0; /* defers break tail */
-            return tco_mark(ctx, fd, fn_cname, e->as.do_.items[e->as.do_.n - 1],
-                            n_ok);
-        }
+        case EX_DO:
+            return tco_mark_do(ctx, fd, fn_cname, e, NULL, n_ok);
         case EX_LET:
         case EX_LETREC:
             if (!tco_let_simple(ctx, e)) return 0;
+            if (e->as.let_.body && e->as.let_.body->kind == EX_DO)
+                return tco_mark_do(ctx, fd, fn_cname, e->as.let_.body, e, n_ok);
             return tco_mark(ctx, fd, fn_cname, e->as.let_.body, n_ok);
         case EX_MATCH: {
             /* proper-tail-calls T3 (T-D4): every ARM of a `match` is in the
@@ -332,9 +545,6 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
 #define TC_IF_ONE_ARM "a one-armed `if` (no else branch) is not part of the tail " \
                       "grammar -- give it an else branch"
 #define TC_NOT_LAST   "only the LAST form of a `do` block is in tail position"
-#define TC_DEFER      "a `defer` in this block -- an explicit one, or the drop " \
-                      "glue of an owned local such as a `ref<T>` -- runs AFTER " \
-                      "the call, so nothing in the block is in tail position"
 #define TC_LET_INIT   "a `let` initializer is evaluated before the body"
 #define TC_LET_HARD   "a binding of the enclosing `let` is `fn`-typed, poly-fn, " \
                       "or carrier-ABI, which takes the whole `let` off the tail " \
@@ -414,6 +624,35 @@ static void tc_report(FnDef *fd, const char *fn_cname, Expr *call,
                         "`^tailcall` call is not in tail position: %s", reason);
 }
 
+static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
+                     const char *why, const char *fn_block);
+
+/* The `do` arm of tc_check, mirroring tco_mark_do: only the value item is in
+ * tail position, and a block with defers passes that position on only when its
+ * defers are drop glue on dead locals (T4); otherwise the value item inherits
+ * the block's own refusal. */
+static void tc_check_do(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
+                        const Expr *let_e, const char *why,
+                        const char *fn_block) {
+    bool has_defer = false;
+    for (uint32_t i = 0; i < e->as.do_.n; i++)
+        if (e->as.do_.items[i]->kind == EX_DEFER) { has_defer = true; break; }
+    int last = (int)e->as.do_.n - 1;
+    const char *last_why = why;
+    if (has_defer) {
+        int li = tco_drop_glue_tail_idx(e);
+        if (li >= 0) last = li;
+        else
+            for (int i = (int)e->as.do_.n - 1; i >= 0; i--)
+                if (e->as.do_.items[i]->kind != EX_DEFER) { last = i; break; }
+        if (!why) last_why = tco_drop_glue_refusal(e, let_e);
+    }
+    for (uint32_t i = 0; i < e->as.do_.n; i++) {
+        const char *sub = ((int)i == last) ? last_why : (why ? why : TC_NOT_LAST);
+        tc_check(ctx, fd, fn_cname, e->as.do_.items[i], sub, fn_block);
+    }
+}
+
 /* Walk `e`, reporting every `^tailcall`-annotated call that did not become a
  * backedge.  `why` is NULL exactly while the position is a tail position. */
 static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
@@ -437,18 +676,9 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                          why ? why : TC_IF_ONE_ARM, fn_block);
             }
             return;
-        case EX_DO: {
-            bool has_defer = false;
-            for (uint32_t i = 0; i < e->as.do_.n; i++)
-                if (e->as.do_.items[i]->kind == EX_DEFER) { has_defer = true; break; }
-            for (uint32_t i = 0; i < e->as.do_.n; i++) {
-                bool last = (i + 1 == e->as.do_.n);
-                const char *sub = has_defer ? (why ? why : TC_DEFER)
-                                            : (last ? why : TC_NOT_LAST);
-                tc_check(ctx, fd, fn_cname, e->as.do_.items[i], sub, fn_block);
-            }
+        case EX_DO:
+            tc_check_do(ctx, fd, fn_cname, e, NULL, why, fn_block);
             return;
-        }
         case EX_LET:
         case EX_LETREC: {
             for (uint32_t i = 0; i < e->as.let_.n; i++)
@@ -456,7 +686,10 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                          TC_LET_INIT, fn_block);
             const char *sub = tco_let_simple(ctx, e) ? why
                                                      : (why ? why : TC_LET_HARD);
-            tc_check(ctx, fd, fn_cname, e->as.let_.body, sub, fn_block);
+            if (e->as.let_.body && e->as.let_.body->kind == EX_DO)
+                tc_check_do(ctx, fd, fn_cname, e->as.let_.body, e, sub, fn_block);
+            else
+                tc_check(ctx, fd, fn_cname, e->as.let_.body, sub, fn_block);
             return;
         }
         case EX_MATCH:
@@ -532,6 +765,20 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                       const Expr *e, TypeKind result_kind, bool is_main);
 
+/* proper-tail-calls T4 (T-D3): fire every defer frame this function has open,
+ * innermost first, before leaving it through a backedge or a `return` on the
+ * tail path.  Only the drop-glue blocks emit_tail_drop_hoist_do opens can be
+ * on the chain here -- emit_tail is entered with no frame open, and every
+ * other frame is closed by the emitter that opened it -- so this is exactly the
+ * scope-exit `tur_frame_fire_lifo` those blocks would have run after the call.
+ * The same inlined walk emit_panic_signal_return uses for the panic exit. */
+static void emit_tail_fire_frames(EmitCtx *ctx, Buf *body) {
+    for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "tur_frame_fire_lifo(&%s);\n", f);
+    }
+}
+
 /* Emit a self-tail-call as a backedge: evaluate all args into temporaries
  * first (so argument expressions still see the *old* parameter values, which
  * matters for reorderings/swaps), reassign the C parameter variables, then
@@ -576,6 +823,9 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
         tmps[i] = t;
         free(av);
     }
+    /* T4: the arguments are all read, so an owned local's drop glue runs now --
+     * tco_mark admitted the block only because none of them keeps it alive. */
+    emit_tail_fire_frames(ctx, body);
     for (uint8_t i = (uint8_t)off; i < n; i++) {
         char *pn = raw_name_for_binding(fd->params[i]);
         indent_buf(body, ctx->indent);
@@ -1021,6 +1271,38 @@ static void emit_tail_match_arm(EmitCtx *ctx, Buf *body, const Expr *arm_body,
               mt->is_main);
 }
 
+/* proper-tail-calls T4 (T-D3): a `do` block whose only defers are trailing
+ * drop glue on locals dead at every exit (tco_mark set `tail_drop_hoist`).
+ * Opened exactly as emit_do_value opens one -- frame, the statements before
+ * the value, the defer thunks -- and then the value is emitted in TAIL
+ * position with the frame still open.  Every exit below fires it
+ * (emit_tail_fire_frames): a backedge after its argument temps, a `return`
+ * after its value is in a temp.  A panic exit fires it through
+ * emit_panic_signal_return, which is why the frame stays. */
+static void emit_tail_drop_hoist_do(EmitCtx *ctx, Buf *body, const Expr *fn_e,
+                                    FnDef *fd, const Expr *e,
+                                    TypeKind result_kind, bool is_main) {
+    int last = tco_drop_glue_tail_idx(e);
+    const char *saved_frame = ctx->frame_var;
+    char *frame_var = fresh_frame(ctx);
+    ctx->frame_var = frame_var;
+    emit_frame_note_parent(frame_var, saved_frame);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_frame %s;\n", frame_var);
+    indent_buf(body, ctx->indent);
+    if (saved_frame)
+        buf_printf(body, "tur_frame_init(&%s, &%s);\n", frame_var, saved_frame);
+    else
+        buf_printf(body, "tur_frame_init(&%s, NULL);\n", frame_var);
+    for (int i = 0; i < last; i++)
+        emit_stmt(ctx, body, e->as.do_.items[i]);
+    for (uint32_t i = (uint32_t)last + 1; i < e->as.do_.n; i++)
+        emit_frame_push_defer(ctx, body, frame_var, e->as.do_.items[i]);
+    emit_tail(ctx, body, fn_e, fd, e->as.do_.items[last], result_kind, is_main);
+    ctx->frame_var = saved_frame;
+    free(frame_var);
+}
+
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
  * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
@@ -1060,6 +1342,11 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                     emit_stmt(ctx, body, e->as.do_.items[i]);
                 emit_tail(ctx, body, fn_e, fd, e->as.do_.items[e->as.do_.n - 1],
                           result_kind, is_main);
+                return;
+            }
+            if (has_defer && e->as.do_.tail_drop_hoist) {
+                emit_tail_drop_hoist_do(ctx, body, fn_e, fd, e, result_kind,
+                                        is_main);
                 return;
             }
             break;
@@ -1185,6 +1472,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
             ctx->match_tail = &mt;
             char *v = emit_value(ctx, body, e);
             ctx->match_tail = save;
+            emit_tail_fire_frames(ctx, body);
             indent_buf(body, ctx->indent);
             if (is_main && result_kind == TY_INT)
                 buf_printf(body, "return (int)%s;\n", v);
@@ -1228,6 +1516,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
      * back and the ordinary hoisted spelling is what lands. */
     bool want_tail_call =
         e->kind == EX_CALL && e->as.call_.is_tail_call && !is_main &&
+        !ctx->frame_var &&
         !ctx->panic_signal_is_break && ctx->n_any_scope_drops == 0 &&
         e->type.kind != TY_NIL && e->type.kind != TY_NEVER &&
         ctx->current_fn_ret_ctype &&
@@ -1243,8 +1532,27 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         ctx->tail_call_no_hoist_taken = false;
     }
 
+    /* T4: with a drop-glue frame open, the value must be in a temp BEFORE the
+     * frame fires -- `v` may be an expression that reads the very local being
+     * dropped (`*b`).  Routing it through a one-item `do` gets exactly the temp
+     * and carrier bridges emit_do_value gives a block's value on the ordinary
+     * path, which is what that path handed the return ladder here before.  A
+     * diverging tail (a `panic`) is left alone: it fires the chain itself. */
+    Expr *one[1] = { (Expr *)e };
+    Expr wrap = {0};
+    bool wrap_value = ctx->frame_var && e->type.kind != TY_NEVER;
+    if (wrap_value) {
+        wrap.kind = EX_DO;
+        wrap.type = e->type;
+        wrap.span = e->span;
+        wrap.as.do_.items = one;
+        wrap.as.do_.n = 1;
+    }
+    const Expr *ve = wrap_value ? &wrap : e;
+
     /* Default: emit as a value and return it. */
-    char *v = emit_fat_return_value(ctx, body, fn_e, e);
+    char *v = emit_fat_return_value(ctx, body, fn_e, ve);
+    if (wrap_value) emit_tail_fire_frames(ctx, body);
     bool emitted_tail_call = want_tail_call && ctx->tail_call_no_hoist_taken;
     ctx->tail_call_no_hoist = nh_save;
     ctx->tail_call_no_hoist_taken = taken_save;
@@ -1279,7 +1587,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
      * `fd->body`, is the tail: in this path the value being returned is the
      * branch/arm actually in tail position, which is the more precise reading
      * of every result-shape question the ladder asks. */
-    emit_fn_return_spelling(ctx, body, fn_e, fd, e, v, result_kind, is_main);
+    emit_fn_return_spelling(ctx, body, fn_e, fd, ve, v, result_kind, is_main);
 }
 
 /* Scalar kinds the trampoline can round-trip through an int64 `saved[]` slot:

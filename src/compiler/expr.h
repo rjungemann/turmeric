@@ -1412,7 +1412,12 @@ struct Expr {
         struct { Binding *binding; }                                       var;
         struct { LetBinding *bindings; uint32_t n; Expr *body; }           let_;
         struct { Expr *cond; Expr *then_; Expr *else_or_null; }            if_;
-        struct { Expr **items; uint32_t n; }                               do_;
+        /* `tail_drop_hoist` (proper-tail-calls T4, T-D3): set by emit_fns.c's
+         * tco_mark when this block's only defers are trailing drop glue whose
+         * locals are dead at every exit of its tail -- the tail path then fires
+         * them before each backedge / return instead of treating the whole
+         * block as a non-tail position. */
+        struct { Expr **items; uint32_t n; bool tail_drop_hoist; }        do_;
         struct { Expr *cond; Expr *body; }                                 while_;
         /* set-bang-rc-release: `release_old` is stamped by elab_set_rc_release
          * when `target` is an rc-managed binding that owns a continuous +1 from
@@ -1499,6 +1504,17 @@ struct Expr {
              * to be a runtime policy decision. */
             Binding **captures;       /* captured bindings from enclosing scope */
             uint8_t n_captures;
+            /* proper-tail-calls T4 (T-D3): this defer is COMPILER-SYNTHESIZED
+             * drop glue -- the scope-exit auto-drop of an owned local (`ref<T>`,
+             * `rc<T>`, a move-only Drop opaque, or a by-value ADT's owning
+             * field) -- rather than a `defer` the author wrote.  The two look
+             * identical in the AST otherwise, and they have different answers
+             * at a tail call: drop glue has no observable order relative to the
+             * call when the value is dead there, so it may run BEFORE a
+             * backedge; a written `defer` runs after the call, innermost first,
+             * and hoisting it would reorder output.  Set at each synthesis site
+             * in elab_forms.c; read by emit_fns.c's tail grammar. */
+            bool is_drop_glue;
         } defer_;
         /* Phase 3/4: (return) or (return expr) - early return with defer firing */
         struct { Expr *value; } return_;

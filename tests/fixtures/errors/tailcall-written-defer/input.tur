@@ -1,0 +1,17 @@
+;; proper-tail-calls T4 (T-D3): drop glue the COMPILER synthesized may move
+;; ahead of a backedge; a `defer` the AUTHOR wrote may not.  A written defer
+;; has an observable order -- it runs after the call, innermost first -- so
+;; this program prints 0 1 2 3 and then the result.  Hoisted before the
+;; backedge it would print 3 2 1 0: a behavior change, not an optimization.
+;; T4 had to split the two apart (the `is_drop_glue` mark on EX_DEFER) because
+;; before it they were the same AST node and the same refusal.
+
+(defn loop-defer [n : int] : int
+  (do (defer (println n))
+      (if (= n 0)
+        0
+        ^tailcall (loop-defer (- n 1)))))
+
+(defn main [] : int
+  (println (loop-defer 3))
+  0)

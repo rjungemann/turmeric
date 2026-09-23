@@ -1213,6 +1213,8 @@ char *fresh_frame(EmitCtx *ctx);
  * parent = a function-outermost frame. */
 void emit_frame_note_parent(const char *frame, const char *parent);
 const char *emit_frame_parent(const char *frame);
+void emit_frame_push_defer(EmitCtx *ctx, Buf *body, const char *frame_var,
+                           const Expr *it);
 char *fresh_defer_thunk(EmitCtx *ctx);
 char *fresh_defer_env(EmitCtx *ctx);
 void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,

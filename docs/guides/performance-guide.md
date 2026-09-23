@@ -156,9 +156,19 @@ left as ordinary recursive calls -- correct, but not stack-optimized:
 - **mutual / general tail calls** (function A tail-calls B which tail-calls A);
 - self-recursive functions with pass-by-pointer struct, function-typed, or
   poly-fn parameters;
-- a self-recursive function whose body owns a value with drop glue (an
-  `rc<T>`/`ref<T>` local, or an explicit `defer`): the cleanup runs after the
-  call, which is what takes it out of tail position;
+- a self-recursive function with an explicit `defer` in the block around the
+  call: a `defer` you wrote runs after the call, innermost first, and that
+  order is observable, so it cannot move ahead of a backedge;
+- a self-recursive function whose owned local (an `rc<T>`/`ref<T>`, a move-only
+  Drop value, a by-value ADT with an owning field) is still **live** at the
+  call -- passed as an argument, captured by a closure, borrowed, or read as
+  anything but a plain number.  Its drop has to wait for the call to return.
+  An owned local that is **dead** at the call is fine: its drop glue runs just
+  before the backedge instead of just after the call, which nothing can
+  observe.  `(let [b (ref 1)] (if (= n 0) acc (loop (- n 1) (+ acc @b))))` is a
+  backedge; `(loop (- n 1) (count-refs x))` with `x` an `rc` is not.  This is
+  the permanent half of the boundary, for the reason Rust has no guaranteed
+  TCO: a value the callee may still use cannot be dropped before it runs;
 - a self-recursive function that genuinely uses a control operator
   (`perform`/`handle`/`shift`/`await`) -- it is CPS-lowered, and the loop
   runs on the delimited-control path rather than as a C backedge.
@@ -196,10 +206,10 @@ TUR-E0716` prints them all, with what to do about each:
 
 ```
 $ tur run --debug loop.tur
-loop.tur:9:24: error [TUR-E0716]: `^tailcall` call is not in tail position: a
-`defer` in this block -- an explicit one, or the drop glue of an owned local
-such as a `ref<T>` -- runs AFTER the call, so nothing in the block is in tail
-position
+loop.tur:9:24: error [TUR-E0716]: `^tailcall` call is not in tail position: an
+owned local of the enclosing `let` (a `ref<T>`, `rc<T>` or other value with drop
+glue) is still live at the call -- it is passed, captured, borrowed or read as
+more than a plain number -- so its drop cannot move ahead of the call
 ```
 
 Two things worth knowing about the check itself:
