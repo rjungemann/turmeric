@@ -833,7 +833,8 @@ callback must never be handed the sentinel. So:
   sets `tur_tb_armed_for` to the one function it is about to enter, and only
   if that function is a registered BOUNCER -- a function whose tail reaches a
   dynamic call; its static fat box is registered (`__tur_tb_reg_box`) or, for
-  a capturing closure, its thunk (`__tur_tb_reg_thunk`). The bouncer compares
+  a capturing closure, its thunk (`__tur_tb_reg_thunk`), in an open-addressing
+  hash probed once per driven call. The bouncer compares
   the flag with its own address on entry and clears it. Nothing else ever arms
   anything, so no caller outside a driver can see a bounce, and a stale flag
   cannot be mistaken by any function but the one it names.
@@ -924,7 +925,10 @@ tail-call fixture at `-O2` asserts nothing.
   (`benchmarks/saffron-dyn-tail-results.md`, the Saffron row the plan asked
   for; there is no `r7rs` row because there is no `#lang r7rs` yet). The
   per-bounce work is a four-word descriptor write, a tagged compare, and a
-  linear registry lookup to arm the next callee.
+  hashed registry lookup to arm the next callee. The lookup started as a
+  linear scan and was measured at ~0.3 ns per registered bouncer per call --
+  26x slower at 1000 bouncers -- so it is O(1) now (flat from 0 to 1000; see
+  the "Registry lookup" table in the results file).
 - Fixture count: roughly one per row of Section 1's table, plus the `^tailcall`
   negative cases. Call it 15-20, which is inside the budget the R7RS plan's R3
   risk sets.
