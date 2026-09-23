@@ -591,6 +591,12 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                               n_ok);
             return n;
         }
+        case EX_DYN_CALL:
+            /* proper-tail-calls T6 (T-D6): a dynamic call has no callee to
+             * branch to, but in tail position it bounces to a trampoline --
+             * which emit_tail must see to spell. */
+            ctx->tail_dyn_seen = true;
+            return 0;
         default:
             /* Not a call at all: a literal, a variable.  Neither served nor
              * refused -- it is simply not a tail CALL. */
@@ -821,6 +827,23 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                 tc_check(ctx, fd, fn_cname, e->as.dyn_op_.args[i], TC_ARG, fn_block);
             return;
         case EX_DYN_CALL:
+            /* T6 (T-D6): a dynamic call in tail position bounces or drives, so
+             * the only refusals are positional -- plus a function-level one
+             * that keeps its body off the tail path.  A CPS-lowered body is not
+             * such a refusal here: the CPS emitter spells its tail dynamic
+             * calls itself. */
+            if (e->as.dyn_call_.wants_tailcall &&
+                !e->as.dyn_call_.tailcall_diagnosed) {
+                const char *reason = why ? why
+                    : (fn_block && strcmp(fn_block, TC_CPS_BODY) != 0 ? fn_block : NULL);
+                if (reason) {
+                    e->as.dyn_call_.tailcall_diagnosed = true;
+                    diag_emit_with_code(DIAG_ERROR, e->span,
+                                        TUR_E0716_TAILCALL_NOT_TAIL,
+                                        "`^tailcall` call is not in tail position: %s",
+                                        reason);
+                }
+            }
             tc_check(ctx, fd, fn_cname, e->as.dyn_call_.fn, TC_ARG, fn_block);
             for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
                 tc_check(ctx, fd, fn_cname, e->as.dyn_call_.args[i], TC_ARG, fn_block);
@@ -1683,8 +1706,25 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
     }
     const Expr *ve = wrap_value ? &wrap : e;
 
+    /* proper-tail-calls T6 (T-D6): a dynamic call as the function's whole
+     * answer.  It bounces when this activation was entered from a trampoline
+     * driver (`ctx->tb_guard`), and otherwise DRIVES -- makes the call in a
+     * loop that takes the callee's own bounces -- so a chain of dynamic tail
+     * calls runs in one frame either way.  Bouncing needs nothing to run after
+     * the return: no open defer frame (its drops would precede the call) and
+     * no `any` scope drops (the same, for the frees). */
+    if (e->kind == EX_DYN_CALL && !is_main && ctx->current_fn_ret_ctype &&
+        strcmp(ctx->current_fn_ret_ctype, "tur_tagged_t") == 0) {
+        bool can_bounce = ctx->tb_guard && !ctx->frame_var &&
+                          ctx->n_any_scope_drops == 0;
+        ctx->dyn_tail_mode = can_bounce ? DYN_TAIL_DIRECT : DYN_TAIL_DRIVE;
+        ctx->dyn_tail_guard = can_bounce ? ctx->tb_guard : NULL;
+    }
+
     /* Default: emit as a value and return it. */
     char *v = emit_fat_return_value(ctx, body, fn_e, ve);
+    ctx->dyn_tail_mode = DYN_TAIL_NONE;   /* never outlives the one call */
+    ctx->dyn_tail_guard = NULL;
     if (wrap_value) emit_tail_fire_frames(ctx, body);
     bool emitted_tail_call = want_tail_call && ctx->tail_call_no_hoist_taken;
     ctx->tail_call_no_hoist = nh_save;
@@ -4685,6 +4725,7 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     const char *saved_env = ctx->env_var_name;
     const char *saved_frame = ctx->frame_var;
     const TcgCur *saved_cur = ctx->tcg_cur;
+    const char *saved_tb = ctx->tb_guard;
 
     ctx->file = &F;
     ctx->closure = NULL;
@@ -4709,6 +4750,7 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
         }
         TcgCur cur = { g, m };
         ctx->tcg_cur = &cur;
+        ctx->tb_guard = NULL;   /* T6: a fused body has no `__tb_may` */
         ctx->current_fn_ret_ctype = g->ret_ctype;
         ctx->fn_params = fd->params;
         ctx->n_fn_params = fd->n_params;
@@ -4747,6 +4789,7 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     ctx->env_var_name = saved_env;
     ctx->frame_var = saved_frame;
     ctx->tcg_cur = saved_cur;
+    ctx->tb_guard = saved_tb;
 
     /* Anything the bodies lifted to file scope (handler functions) has to
      * precede the fused function that references it. */
@@ -5557,6 +5600,23 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     buf_puts(file, ") {\n");
 
+    /* proper-tail-calls T6 (T-D6): a bouncer -- a function whose tail reaches a
+     * dynamic call -- learns on entry whether the call that entered it came
+     * from a trampoline driver that will take a bounce, and clears the arming
+     * so nothing it calls in turn inherits it.  The comparison is against its
+     * own address: the driver arms exactly the function it is about to enter. */
+    const char *saved_tb_guard = ctx->tb_guard;
+    ctx->tb_guard = NULL;
+    if (!is_main && !body_is_inline_c && fn_may_bounce(fd)) {
+        ensure_saffron_dyn_runtime(ctx);
+        indent_buf(file, ctx->indent + 4);
+        buf_printf(file, "bool __tb_may = (tur_tb_armed_for == (void *)%s); "
+                         "if (__tb_may) tur_tb_armed_for = NULL; (void)__tb_may;\n",
+                   fn_name);
+        ctx->tb_guard = "__tb_may";
+        if (fd->closure) tb_register_thunk(ctx, fn_name);
+    }
+
     /* Debugger Phase 4 (--debug): anchor the function body to the defn's source
      * line so a gdb/lldb frame for this function resolves to its `.tur` site.
      * Reset the dedup tracker first: this body is a fresh statement stream
@@ -5844,6 +5904,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         !(result_kind == TY_NIL && !is_main) && !is_main &&
         tco_params_simple(ctx, e, fd);
     int n_tco_self = 0, n_tco_tail = 0;
+    ctx->tail_dyn_seen = false;
     if (tco_spine_ok)
         n_tco_self = tco_mark(ctx, fd, fn_name, fd->body, &n_tco_tail);
     /* T2: a body whose tail spine holds ONLY non-self tail calls still goes
@@ -5857,7 +5918,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * emit_tail's thinner return path emitted an unbridged return.  Both paths
      * share emit_fn_return_spelling now, so a refused leaf is emitted exactly as
      * it always was. */
-    bool tco_eligible = tco_spine_ok && (n_tco_self > 0 || n_tco_tail > 0);
+    bool tco_eligible = tco_spine_ok &&
+        (n_tco_self > 0 || n_tco_tail > 0 || ctx->tail_dyn_seen);
     bool tco_wants_label = n_tco_self > 0;
 
     /* proper-tail-calls T1 (T-D1): now that tco_mark has had its say, work out
@@ -6113,6 +6175,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_free(&fn_tmp);
     ctx->file = real_file;
     ctx->tcg_cur = saved_tcg_cur;
+    ctx->tb_guard = saved_tb_guard;
 
     /* CPS3: emit __cps wrapper for colored non-closure functions when --cps-path */
     if (fd->is_cps && g_cps_path && !is_main && !fd->closure) {

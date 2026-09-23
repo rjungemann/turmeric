@@ -53,6 +53,20 @@ All notable changes to Turmeric are documented here.
   all; `^tailcall` on a call that misses says so. This is T5 of
   [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
 
+- **Saffron: a call through a function value in tail position runs in constant
+  stack.** `(f f (- n 1))` where `f` is an `any` used to be a nested C call per
+  step, and a loop written that way overflowed at around 30,000 steps -- fewer
+  at `-O0`. Such a call now bounces: it is recorded and handed back to a
+  trampoline loop one frame below, which makes it. A self loop, a lambda, a
+  capturing closure and two functions bouncing to each other all run
+  10,000,000 deep at `-O0` in about 1.4 MB, and the same calls got 2.7x faster
+  (`benchmarks/saffron-dyn-tail-results.md`). Typed code that calls a Saffron
+  function as a callback is unaffected: only a trampoline ever asks a
+  function to bounce. `^tailcall` can now annotate a dynamic call. This is T6,
+  the last stage of
+  [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md),
+  and the tail-call prerequisite of `#lang r7rs`.
+
 ### Fixed
 
 - **A call to a `: float` function defined later in the file is typed

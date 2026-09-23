@@ -6589,6 +6589,80 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
     return atom_nil();
 }
 
+/* proper-tail-calls T6 (T-D6): is `e` -- a function body -- one whose tail
+ * reaches a dynamic call?  Such a function is a BOUNCER: its fat boxes and
+ * closure thunk are registered with the trampoline, and it consumes the
+ * driver's `tur_tb_armed_for` on entry.  Syntactic, over the shapes the tail
+ * grammar walks; a tail site the emitter then declines to bounce simply drives
+ * instead, which is always correct. */
+static bool tb_tail_reaches_dyn_call(const Expr *e) {
+    while (e) {
+        switch (e->kind) {
+            case EX_DYN_CALL:
+                return e->as.dyn_call_.n_args <= 4;
+            case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
+            case EX_IF:
+                if (!e->as.if_.else_or_null) return false;
+                if (tb_tail_reaches_dyn_call(e->as.if_.then_)) return true;
+                e = e->as.if_.else_or_null;
+                continue;
+            case EX_DO:
+                if (e->as.do_.n == 0) return false;
+                e = e->as.do_.items[e->as.do_.n - 1];
+                continue;
+            case EX_LET:
+            case EX_LETREC:
+                e = e->as.let_.body;
+                continue;
+            case EX_MATCH:
+                for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                    if (tb_tail_reaches_dyn_call(e->as.match_.arms[i].body)) return true;
+                return false;
+            default:
+                return false;
+        }
+    }
+    return false;
+}
+
+bool fn_may_bounce(const FnDef *fd) {
+    return fd && fd->body && fd->body->kind != EX_INLINE_C &&
+           tb_tail_reaches_dyn_call(fd->body);
+}
+
+static bool buf_contains(const Buf *b, const char *needle) {
+    size_t nl = strlen(needle);
+    if (!b || !b->data || b->len < nl) return false;
+    for (size_t i = 0; i + nl <= b->len; i++)
+        if (memcmp(b->data + i, needle, nl) == 0) return true;
+    return false;
+}
+
+/* Register a static fat box whose function is a bouncer, once per box, in the
+ * earliest static-init band (the box itself is filled there too). */
+void tb_register_fatbox(EmitCtx *ctx, const char *box, const char *fnptr) {
+    if (!ctx || !ctx->fatbox_init || !box || !fnptr) return;
+    ensure_saffron_dyn_runtime(ctx);
+    Buf line; buf_init(&line);
+    buf_printf(&line, "    __tur_tb_reg_box((void *)((char *)&%s + sizeof(void *)), (void *)%s);\n",
+               box, fnptr);
+    buf_putc(&line, '\0');
+    if (!buf_contains(ctx->fatbox_init, line.data))
+        buf_puts(ctx->fatbox_init, line.data);
+    buf_free(&line);
+}
+
+void tb_register_thunk(EmitCtx *ctx, const char *thunk) {
+    if (!ctx || !ctx->fatbox_init || !thunk) return;
+    ensure_saffron_dyn_runtime(ctx);
+    Buf line; buf_init(&line);
+    buf_printf(&line, "    __tur_tb_reg_thunk((void *)%s);\n", thunk);
+    buf_putc(&line, '\0');
+    if (!buf_contains(ctx->fatbox_init, line.data))
+        buf_puts(ctx->fatbox_init, line.data);
+    buf_free(&line);
+}
+
 /* saffron-lang-plan S5/D4 (G5): `(f a ...)` where `f : any`.
  *
  * The payload of a function-carrying `any` is always the FAT `{ thunk, env }`
@@ -6605,6 +6679,12 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
  * all three of which would otherwise be a jump through a mistyped pointer. */
 static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
     ensure_saffron_dyn_runtime(ctx);
+    /* proper-tail-calls T6: a tail spelling applies to THIS call only -- read
+     * and clear it before the callee and arguments are emitted. */
+    uint8_t tail_mode = ctx->dyn_tail_mode;
+    const char *tail_guard = ctx->dyn_tail_guard;
+    ctx->dyn_tail_mode = DYN_TAIL_NONE;
+    ctx->dyn_tail_guard = NULL;
     uint32_t n = e->as.dyn_call_.n_args;
     /* TUR_APPLYn_T covers arities 0..4.  Beyond that the fat protocol has no
      * macro to borrow, and inventing a sixth here would duplicate the shim
@@ -6627,10 +6707,20 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
     for (uint32_t i = 0; i < n; i++) want.as.fn.arg_kinds[i] = (uint8_t)TY_ANY;
     int64_t want_id = emit_any_type_id(ctx, want);
 
+    uint32_t pd_sum = ctx->n_sum_pending, pd_any = ctx->n_any_pending,
+             pd_vsp = ctx->n_vsp_pending;
     char *fnv = emit_value(ctx, body, e->as.dyn_call_.fn);
     char **argv = n ? (char **)calloc(n, sizeof(char *)) : NULL;
     for (uint32_t i = 0; i < n; i++)
         argv[i] = emit_value(ctx, body, e->as.dyn_call_.args[i]);
+    /* A bounce makes the call AFTER this function has returned.  An argument
+     * that left an owned box queued for "drop after the consuming call" would
+     * be dropped before the callee ever ran, so such a call drives instead --
+     * the call happens here, and the drain after it is right. */
+    if ((tail_mode == DYN_TAIL_DIRECT || tail_mode == DYN_TAIL_CPS) &&
+        (ctx->n_sum_pending != pd_sum || ctx->n_any_pending != pd_any ||
+         ctx->n_vsp_pending != pd_vsp))
+        tail_mode = DYN_TAIL_DRIVE;
 
     /* The callee box is read three times (check, thunk, env), so it is bound
      * to a temp first -- as a STATEMENT in the body, not inside a `({ ... })`
@@ -6657,6 +6747,48 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
                "tur_tagged_t %s = (%s); "
                "__tur_dyn_call_check(TUR_GETTAG(%s), %lld);\n",
                dc, fnv, dc, (long long)want_id);
+    if (tail_mode != DYN_TAIL_NONE) {
+        /* T6: the trampoline takes the callee and up to four arguments; the
+         * unused slots ride as the nil word.  In the CPS spelling each argument
+         * is read twice (the bounce and the drive), so it is bound once. */
+        char *av[4];
+        for (uint32_t i = 0; i < 4; i++) {
+            if (i >= n) { av[i] = strdup("TUR_TAG(0, 0)"); continue; }
+            if (tail_mode == DYN_TAIL_CPS) {
+                av[i] = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_tagged_t %s = %s;\n", av[i], argv[i]);
+            } else {
+                av[i] = strdup(argv[i]);
+            }
+        }
+        Buf tc; buf_init(&tc);
+        if (tail_mode == DYN_TAIL_CPS) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body,
+                       "if ((void *)__kont == tur_tb_root) return (int64_t)(intptr_t)"
+                       "__tur_tb_bounce_box(%s, %u, %s, %s, %s, %s);\n",
+                       dc, (unsigned)n, av[0], av[1], av[2], av[3]);
+            buf_printf(&tc, "__tur_tb_call(%s, %u, %s, %s, %s, %s)",
+                       dc, (unsigned)n, av[0], av[1], av[2], av[3]);
+        } else if (tail_mode == DYN_TAIL_DIRECT) {
+            buf_printf(&tc, "__tur_tb_tail((%s), %s, %u, %s, %s, %s, %s)",
+                       tail_guard ? tail_guard : "0", dc, (unsigned)n,
+                       av[0], av[1], av[2], av[3]);
+        } else {
+            buf_printf(&tc, "__tur_tb_call(%s, %u, %s, %s, %s, %s)",
+                       dc, (unsigned)n, av[0], av[1], av[2], av[3]);
+        }
+        buf_putc(&tc, '\0');
+        for (uint32_t i = 0; i < 4; i++) free(av[i]);
+        free(dc);
+        free(fnv);
+        for (uint32_t i = 0; i < n; i++) free(argv[i]);
+        free(argv);
+        char *r = strdup(tc.data);
+        buf_free(&tc);
+        return r;
+    }
     Buf out; buf_init(&out);
     buf_puts(&out, "((tur_tagged_t (*)(void *");
     for (uint32_t i = 0; i < n; i++) buf_puts(&out, ", tur_tagged_t");
@@ -14856,6 +14988,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     : ensure_static_fatbox(
                           ctx, typed_shim ? typed_shim : shim_name, fnptr);
                 if (box) {
+                    /* proper-tail-calls T6: a bouncer's box is registered, so a
+                     * driver entering it arms the function. */
+                    if (sb_b->source_fn_def && fn_may_bounce(sb_b->source_fn_def))
+                        tb_register_fatbox(ctx, box, fnptr);
                     if (g_emit_abi_trace)
                         fprintf(stderr, "repr-trace %u:%u bridge bare-to-fat "
                                         "static-box %s\n",

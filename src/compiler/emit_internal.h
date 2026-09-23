@@ -716,7 +716,28 @@ typedef struct EmitCtx {
      * and emit_tail lowers it -- and a self tail call -- to a jump through the
      * group's fused function.  See emit_fns.c, "mutual tail-call groups". */
     const struct TcgCur *tcg_cur;
+    /* proper-tail-calls T6 (T-D6): how the NEXT dynamic call emit_dyn_call
+     * emits is spelled, set by the tail path right before it and cleared by
+     * emit_dyn_call on entry (so a dynamic call among the arguments is never
+     * affected).  DYN_TAIL_NONE is an ordinary call.  See the trampoline
+     * runtime in emit_module.c (ensure_saffron_dyn_runtime). */
+    uint8_t      dyn_tail_mode;
+    const char  *dyn_tail_guard;   /* DYN_TAIL_DIRECT: the C condition to bounce on */
+    /* The current direct-style function's bounce permission (`__tb_may`), NULL
+     * when it is not a bouncer or its tail calls cannot bounce here (a fused
+     * T5 group, a CPS body). */
+    const char  *tb_guard;
+    /* Set by tco_mark when the tail spine reaches a dynamic call, so the body
+     * is routed through emit_tail, where that call is recognised. */
+    bool         tail_dyn_seen;
 } EmitCtx;
+
+enum {
+    DYN_TAIL_NONE = 0,
+    DYN_TAIL_DRIVE,     /* a tail call that cannot bounce: drive it in a loop */
+    DYN_TAIL_DIRECT,    /* direct style: `__tur_tb_tail(<guard>, ...)` */
+    DYN_TAIL_CPS,       /* a `__cps` body: bounce when __kont is the armed root */
+};
 
 /* proper-tail-calls T3 (T-D4): see EmitCtx::match_tail. */
 typedef struct MatchTailCtx {
@@ -1225,6 +1246,9 @@ char *fresh_frame(EmitCtx *ctx);
 void emit_frame_note_parent(const char *frame, const char *parent);
 const char *emit_frame_parent(const char *frame);
 void tcg_reset_group_registry(void);
+bool fn_may_bounce(const struct FnDef *fd);
+void tb_register_fatbox(EmitCtx *ctx, const char *box, const char *fnptr);
+void tb_register_thunk(EmitCtx *ctx, const char *thunk);
 void emit_frame_push_defer(EmitCtx *ctx, Buf *body, const char *frame_var,
                            const Expr *it);
 char *fresh_defer_thunk(EmitCtx *ctx);

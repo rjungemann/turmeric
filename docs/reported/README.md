@@ -2111,6 +2111,13 @@ from it -- the second reproduces on `vec-push!`, parametric since long before.
 | --- | --- | --- |
 | [stdlib-capability-vtables-uncompilable](stdlib-capability-vtables-uncompilable.md) | medium | `(load "stdlib/capability.tur")` + a bare `main` is **36 C errors and a failed `cc`** -- the module cannot be compiled at all. Primary defect is **compiler-independent**: all four capability structs (`FileSystem`/`Logger`/`Random`/`Time`) are defined inside their own `*-type` defn body, so the tag has C block scope (C11 6.2.1) and every other inline-C body's `typedef struct X X;` declares a fresh **incomplete** tag -- 28 of the 36 errors, and it would fail on Linux gcc too, so "AppleClang is stricter" is the wrong read. The other 8 are strictness-gated (`-Wreturn-mismatch` on eight `void` defns that `return` a value; `-Wint-conversion` on four `*-free` bodies handing an `int64_t`-carried handle to `free()`). Same class as [log-capability-vtable-uncompilable](../archive/history/log-capability-vtable-uncompilable.md), whose fix hoisted `log.tur` and `stdlib/test/capability.tur` into file-scope c-blocks and **left this sibling behind**. Latent because nothing in-tree loads it: `tests/fixtures/capability-stdlib-roundtrip` loads `stdlib/test/capability.tur`, a different file. Drive-by: `with-capability`'s docstring example uses a binding vector its `[binding cap_expr & body]` signature does not accept |
 
+## Found executing proper-tail-calls T6 (filed 2026-09-23)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [saffron-catch-unwind-around-dyn-call-fn-crashes](saffron-catch-unwind-around-dyn-call-fn-crashes.md) | high | Pre-existing on `main`. A Saffron function that makes a dynamic call and panics, called under `catch-unwind` with an `any` thunk, SIGSEGVs on the compiled path AND under `--interpret` -- even when the dynamic call never runs. Removing the dynamic call from the body, or not passing a function value, makes both engines print the caught panic |
+| [cps-capturing-closure-env-leaks-through-dyn-call](cps-capturing-closure-env-leaks-through-dyn-call.md) | low | Pre-existing on `main`. A capturing lambda built in a CPS-lowered function and passed to a dynamic call leaks its 32-byte env per call under LeakSanitizer; the CPS backend's env reap covers only leaf-admitted non-escaping closures |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

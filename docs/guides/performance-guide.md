@@ -173,7 +173,8 @@ are left as ordinary recursive calls -- correct, but not stack-optimized:
   with or without `when`-guards -- **is** in the tail grammar;
 - **mutual tail calls outside a group** -- a cycle with a member that is not a
   plain top-level function, a return type that differs, or more than 8 members
-  / 16 parameters -- and **indirect** tail calls through a `fn` value;
+  / 16 parameters -- and **indirect** tail calls through a typed `fn` value
+  (Saffron's dynamic calls through an `any` are handled; see below);
 - self-recursive functions with pass-by-pointer struct, function-typed, or
   poly-fn parameters;
 - a self-recursive function with an explicit `defer` in the block around the
@@ -249,10 +250,23 @@ annotation holds at `-O0`.  A tail-call fixture built at `-O2` asserts nothing
 measures the C compiler.  See
 [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
 
-Indirect tail calls (through a `fn` value) are not built.  The route out, for
-the dynamic dialects, is a bounce trampoline -- routing them through the
-existing CPS backend is not it: that backend emits a tail call as an ordinary call, a panic
-check, and a continuation invocation, which was measured rather than assumed.
+**Dynamic tail calls in Saffron.** A call through an `any` in tail position --
+`(f f (- n 1))` where `f` is a function value -- runs in constant stack too.
+There is no callee to branch to, so it bounces instead: the call is recorded
+and handed back to a trampoline loop one frame below, which makes it.  Every
+Saffron function takes `any` arguments and returns an `any`, which is what
+lets one loop make any such call.  Measured 2.7x *faster* than the nested
+calls it replaced (`benchmarks/saffron-dyn-tail-results.md`), because each
+nested call used to open and tear down a delimited-control entry.  Pinned at
+10,000,000 deep at `-O0` by `tests/fixtures/tailcall-dyn-deep`; `^tailcall`
+accepts a dynamic call and refuses one only for its position.
+
+Indirect tail calls in **typed** Turmeric (through a `fn`-typed value) are not
+built and are not planned: without one calling convention for every function
+there is nothing uniform for a trampoline to call.  Routing them through the
+existing CPS backend is not a way out either: that backend emits a tail call
+as an ordinary call, a panic check, and a continuation invocation, which was
+measured rather than assumed.
 See
 [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md)
 for the measurements and the staging, and

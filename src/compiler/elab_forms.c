@@ -4052,6 +4052,13 @@ Expr *elab_tailcall(Elab *e, const Form *call) {
 
     Expr *target = inner;
     while (target->kind == EX_ASCRIBE) target = target->as.ascribe_.inner;
+    /* T6 (T-D6): a DYNAMIC call -- a call through an `any` in the dynamic
+     * dialect -- is a call too, and in tail position it bounces to a
+     * trampoline, so the annotation asks the same question of it. */
+    if (target->kind == EX_DYN_CALL) {
+        target->as.dyn_call_.wants_tailcall = true;
+        return inner;
+    }
     if (target->kind != EX_CALL) {
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0716_TAILCALL_NOT_TAIL,
                             "`^tailcall` must annotate a function call; "

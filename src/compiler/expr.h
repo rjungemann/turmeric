@@ -1835,7 +1835,10 @@ struct Expr {
         struct { const Symbol *op; struct Expr **args; uint32_t n_args; } dyn_op_;
         /* saffron-lang-plan S4: callee plus arguments; arity is checked when it
          * runs, against the closure that actually arrived. */
-        struct { struct Expr *fn; struct Expr **args; uint32_t n_args; } dyn_call_;
+        struct { struct Expr *fn; struct Expr **args; uint32_t n_args;
+                 /* proper-tail-calls T6 (T-D6): `^tailcall` on a dynamic call,
+                  * and the once-only report flag -- the EX_CALL pair's twins. */
+                 bool wants_tailcall; bool tailcall_diagnosed; } dyn_call_;
         /* saffron-lang-plan S4: receiver plus the field NAME, resolved against
          * the runtime value's constructor when it runs. */
         struct { struct Expr *obj; const Symbol *field; } dyn_field_;
