@@ -1,0 +1,23 @@
+50.41
+zero-true
+nil-true
+str-true
+f-false
+not-f
+3 #f 5 #f #t #f
+3 1 2
+negative zero 2 big
+small letter other
+when-yes
+unless-yes
+2
+3
+one
+41
+3
+(1 2 3) (3 2 1) (1 4 9) 3 b 2 #t#f#t
+#t #t#f#f
+(2 two) (b c)
+str 7.1 #t sym (a 1 (2.5))
+("a" 1)
+#t#t#f 7.5 39

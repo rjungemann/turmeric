@@ -34,26 +34,27 @@
 static const LangTraits LANG_TRAITS[] = {
     /* LANG_TURMERIC */
     { "turmeric", READER_TURMERIC, /*reader_axis_free=*/true,
-      /*dynamic=*/false, /*prelude=*/NULL, /*experiment=*/NULL },
+      /*dynamic=*/false, /*scheme_truthiness=*/false,
+      /*prelude=*/NULL, /*experiment=*/NULL },
     /* LANG_SAFFRON: the dynamic substrate.  An unannotated parameter or
      * return defaults to `any`; the prelude adapts the typed stdlib. */
     { "saffron",  READER_TURMERIC, /*reader_axis_free=*/true,
-      /*dynamic=*/true,  /*prelude=*/"saffron/prelude.tur",
-      /*experiment=*/NULL },
+      /*dynamic=*/true,  /*scheme_truthiness=*/false,
+      /*prelude=*/"saffron/prelude.tur", /*experiment=*/NULL },
     /* LANG_R7RS: Saffron's substrate under a Scheme reader (r7rs-lang-plan
      * thesis, Section 1).  `dynamic` is the whole inheritance: unannotated
      * means `any`, the dynamic operator/call/field/match surface and the
      * `any` type-id machinery all come from that one bit.  The reader is its
      * own and there is no reader axis (D1; `r7rs/sweet` is a deliberate
-     * deferral, Section 8 Q5).  The prelude is Saffron's for now -- R1's exit
-     * criterion is that a `#lang r7rs` file elaborates exactly as the same
-     * file under `#lang saffron`, and the Saffron prelude is what supplies
-     * the dynamic adaptors over the typed stdlib; R7 replaces it with
-     * `(scheme base)`.  `experiment` is the EXPERIMENTS[] row that gates the
+     * deferral, Section 8 Q5).  Truthiness is Scheme's (R2): only `#f` is
+     * false.  The prelude is `stdlib/r7rs/prelude.tur` -- R2's core
+     * procedures, spelled `r7rs-<name>` and reached through
+     * scheme_lower.c's rename table; R7 grows it into `(scheme base)` and
+     * its siblings.  `experiment` is the EXPERIMENTS[] row that gates the
      * dialect; the `#lang` line is itself the enable (D11). */
     { "r7rs",     READER_R7RS,     /*reader_axis_free=*/false,
-      /*dynamic=*/true,  /*prelude=*/"saffron/prelude.tur",
-      /*experiment=*/"r7rs" },
+      /*dynamic=*/true,  /*scheme_truthiness=*/true,
+      /*prelude=*/"r7rs/prelude.tur", /*experiment=*/"r7rs" },
 };
 
 const LangTraits *lang_traits(LangDialect d) {
@@ -193,6 +194,11 @@ void lang_dialects_print_json(void) {
 bool lang_span_is_dynamic(Span sp) {
     const SourceFile *f = diag_source_file(sp.file_id);
     return f != NULL && lang_traits(f->lang)->dynamic;
+}
+
+bool lang_span_is_scheme(Span sp) {
+    const SourceFile *f = diag_source_file(sp.file_id);
+    return f != NULL && lang_traits(f->lang)->scheme_truthiness;
 }
 
 /* saffron GRADUATED at 0.46.0: a non-default dialect is no longer gated, warns

@@ -43,6 +43,11 @@ typedef struct LangTraits {
     ReaderType  default_reader;   /* what the bare base token selects */
     bool        reader_axis_free; /* may be spelled over the four Turmeric readers */
     bool        dynamic;          /* an unannotated param/return means `any` */
+    /* r7rs-lang-plan R2: Scheme's truthiness -- ONLY `#f` is false; `0`,
+     * `""`, `'()` and every other value are true (R7RS 6.3).  Saffron's D4
+     * rule also counts `nil` as false, and the two are the one place the
+     * dialects disagree, so it is a trait rather than inherited. */
+    bool        scheme_truthiness;
     const char *prelude;          /* stdlib autoload tail (e.g. "saffron/prelude.tur"), or NULL */
     const char *experiment;       /* gating EXPERIMENTS[] row, or NULL when stable (D11) */
 } LangTraits;
@@ -68,6 +73,11 @@ const LangTraits *lang_traits(LangDialect d);
  * False for an unknown file_id, so an unregistered or synthetic span keeps
  * today's behaviour. */
 bool lang_span_is_dynamic(Span sp);
+
+/* r7rs-lang-plan R2: does the file this span belongs to decide `if` by
+ * Scheme's rule (`LangTraits.scheme_truthiness`)?  Same registry lookup as
+ * lang_span_is_dynamic; false for an unknown file_id. */
+bool lang_span_is_scheme(Span sp);
 
 /* saffron-lang-plan S1: print the `#lang` BASE axis -- the (language, reader)
  * pairs a base token can name -- for `tur dialects`.  Rendered from the two

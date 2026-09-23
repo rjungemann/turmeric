@@ -1,13 +1,16 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 and R1 landed 2026-09-23.** `#lang r7rs` is a base
+Status: **R0, R1 and R2 landed 2026-09-23.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
-`EXPERIMENTS[]` row gates it with the directive as its own enable, and the
-Scheme reader variant reads every lexeme R1 lists. There are no Scheme
-SEMANTICS yet: a `#lang r7rs` file elaborates exactly as the same forms would
-under `#lang saffron`, which is R1's exit criterion and is pinned by
-`tests/fixtures/r7rs-elaborates-as-saffron`. R2 onward is unbuilt. Each landed
-stage carries a "What shipped" note below.
+`EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
+reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
+`lambda`, the `let` family and named `let`, `do`, `begin`, `set!`, `if`,
+`cond`, `case`, `and`/`or`, `when`/`unless`, `case-lambda`, the `-values`
+family -- lower onto Turmeric's own forms (`src/compiler/scheme_lower.c`)
+with Scheme truthiness, over a `stdlib/r7rs/prelude.tur` of core procedures.
+The exit criterion (a named-`let` loop summing a list under `--interpret`) is
+`tests/fixtures/r7rs-named-let-sum`. R3 onward is unbuilt. Each landed stage
+carries a "What shipped" note below.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -780,6 +783,72 @@ needs its own truthiness predicate, not Saffron's. One trait field, one
 
 Exit criterion: a named-`let` loop summing a list runs under `--interpret`.
 
+> **What shipped (2026-09-23).**
+>
+> - **The lowering is a Form -> Form pass**, `src/compiler/scheme_lower.c`,
+>   run after `(load ...)` expansion in both the entry program
+>   (`elab_toplevel.c`) and an imported module (`elab_module.c`), keyed
+>   per form on the span's file being `LANG_R7RS`. "Most map onto existing
+>   Turmeric forms" turned out to be all of them: `define` -> `defn`/`def`,
+>   `lambda` -> `fn`, `let` -> `let` (with temporaries when an init mentions
+>   a binder, since Turmeric's `let` is sequential), named `let`/`do`/`letrec`
+>   -> `letrec`, `begin` -> `do` (spliced at top level), `cond`/`case`/`and`/
+>   `or`/`when`/`unless` -> `if` chains (Scheme's value-returning `and`/`or`,
+>   not Turmeric's bool ones), `case-lambda` -> a variadic `fn` dispatching on
+>   `length`, and the `-values` family over a `Values` carrier. Internal
+>   defines follow R7RS 5.3.2: a run of lambdas becomes one `letrec`, a value
+>   a `let`, in letrec* order. Turmeric-shaped forms in a Scheme file pass
+>   through with their subforms lowered, so the R1 fixtures still run. No
+>   `defmacro` was needed, and no `if (lang == LANG_R7RS)` was added to the
+>   elaborator: the two per-file decisions it makes (truthiness and the
+>   static-condition rule below) read `LangTraits.scheme_truthiness`.
+> - **Truthiness is a trait**, `scheme_truthiness`, with its own reserved
+>   operator (`SCHEME_TRUTHY_OP`, `__tur_dyn_truthy_scheme` in the emitted
+>   preamble, a second arm in `eval.c`) chosen by `elab_saffron_truthy` per
+>   file. The rule R7RS 6.3 states is also a compile-time fact: in a Scheme
+>   file an `if` whose condition has any STATIC type other than `bool` is
+>   decided at elaboration (`nil` false, everything else true), which is what
+>   makes `(let ((x 5)) (if x ...))` legal under Saffron's local inference
+>   (D3) at no runtime cost.
+> - **The substrate needed two things, both Saffron gaps too**: `set!` into an
+>   `any` cell widens a concrete value (elab_forms.c), and a `fn` parameter
+>   vector does not take `^mut` (it reads as an extra parameter and the call
+>   partially applies -- found by the mutual-recursion probe printing `fn`), so
+>   a `set!` parameter is rebound as a mutable local inside the body.
+>   Mutability is decided lexically, per binding body, not file-wide.
+> - **`stdlib/r7rs/prelude.tur`**, read as `#lang r7rs` itself and written in
+>   Turmeric shapes: the list procedures over the `(Cons any)` chain Saffron's
+>   widen builds (`'()` reads as `(list)`, which is the null cell on both back
+>   ends), `eqv?`/`eq?`/`equal?`, the type and numeric predicates, `display`/
+>   `write`/`newline` on three newline-free inline-C write primitives with
+>   interpreter natives, and `values`/`call-with-values`/`apply` (up to four
+>   arguments -- the compiled dynamic-call helpers' limit). Every procedure is
+>   spelled `r7rs-<name>` and reached through the pass's rename table, because
+>   `car`, `list`, `length`, `min`, ... are auto-loaded stdlib names that a
+>   top-level definition cannot shadow. R7's `(import (scheme base))` maps
+>   onto the same table.
+> - **Section 8 Q1 is decided**: multiple values are a `Values` carrier over a
+>   list, `(values x)` is `x` itself (no allocation, and a one-value producer
+>   works with `call-with-values` unchanged), `let-values` and friends
+>   desugar to `values-ref` reads. The ABI convention was not needed.
+> - **Deviations at R2**, all named in the fixtures: a top-level redefinition
+>   of a prelude name (`(define (car x) ...)`) is the Turmeric stdlib-name
+>   error, not a shadowing (R7RS 5.3.1); an operator is not a first-class
+>   value (`(apply + ...)` waits on R5's `+` procedure); `(define (main) ...)`
+>   is the program entry and returns 0; a lambda define that is later `set!`
+>   becomes a `let` and loses self-reference by name; `true`/`false`/`nil`
+>   stay literals under the reader (`nil` is a true value under Scheme
+>   truthiness, as it should be).
+> - **The compiled back end** runs everything in `tests/fixtures/r7rs-core-forms`
+>   (definitions, the conditionals, `let`/`let*`, `set!` on globals and
+>   closed-over locals, internal defines, the list procedures, display/write)
+>   but not a letrec-bound closure over `any` that calls itself (named `let`,
+>   `do`, `letrec`), a dynamic call through `apply`, nor `for-each` with a
+>   two-statement lambda -- `docs/reported/r7rs-compiled-dynamic-shapes.md`
+>   has the repros. Those are the plan's interpreter-first staging in action
+>   and R6's to close; `r7rs-core-forms-interp` and `r7rs-named-let-sum` carry
+>   `requires.interp` until then.
+
 ### R3 -- data, and the Turmeric seam (large)
 
 **The seam is here, not at the end.** This is the stage that proves the point
@@ -948,11 +1017,12 @@ expectation from a demo.
 
 ## 8. Open questions
 
-1. **Multiple values.** Turmeric has no `values`/`call-with-values`. Options: a
-   `Values` struct carrying a list (simple, allocates), a multiple-return
-   convention in the ABI (fast, invasive), or restricting to the common
-   `let-values` pattern and desugaring it away. Not decided; R6 needs it and
-   R2's `define-values` wants it early.
+1. **Multiple values.** ~~Turmeric has no `values`/`call-with-values`.~~
+   **Decided at R2**: a `Values` carrier over a list, with `(values x)` being
+   `x` itself so a single value never allocates; `let-values`,
+   `let*-values` and `define-values` desugar to indexed reads of the carrier
+   and `call-with-values` goes through `apply`. The ABI convention was not
+   needed and stays available if R6's profiling wants it.
 2. **Static-datum mutation detection** (D4). How does `set-car!` cheaply refuse
    a `.rodata` pair -- an address-range test, a spare tag bit, or a
    debug-build-only check? R7RS says "it is an error", which permits undefined

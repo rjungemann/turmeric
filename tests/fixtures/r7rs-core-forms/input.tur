@@ -1,0 +1,105 @@
+#lang r7rs
+;; r7rs-lang-plan R2: the Scheme core forms that run on BOTH back ends today,
+;; lowered by scheme_lower.c onto Turmeric's own forms.  Each line names the
+;; form it pins; the shapes that only the interpreter can run yet (a
+;; letrec-bound closure: named let, do, letrec; dynamic multi-argument apply:
+;; call-with-values, case-lambda) live in r7rs-core-forms-interp.
+;;
+;; A float with a fractional part where a number is printed, so a truncating
+;; path through the dynamic seam would show.
+
+;; define, both shapes; a define'd procedure calls another.
+(define (sq x) (* x x))
+(define seven 7.1)
+(display (sq seven)) (newline)
+
+;; if: Scheme truthiness -- only #f is false.
+(display (if 0 "zero-true" "zero-false")) (newline)
+(display (if '() "nil-true" "nil-false")) (newline)
+(display (if "" "str-true" "str-false")) (newline)
+(display (if #f "f-true" "f-false")) (newline)
+(display (if (not #f) "not-f" "not-t")) (newline)
+;; a one-armed if is unspecified when false: it runs for effect.
+(if #f (display "never"))
+
+;; and / or return the deciding VALUE, not a bool.
+(display (and 1 2 3)) (display " ") (display (and 1 #f 3)) (display " ")
+(display (or #f 5)) (display " ") (display (or #f #f)) (display " ")
+(display (and)) (display " ") (display (or)) (newline)
+
+;; let is parallel (y sees the OUTER x), let* is sequential.
+(display (let ((x 1) (y 2)) (+ x y))) (display " ")
+(display (let ((x 1)) (let ((x 2) (y x)) y))) (display " ")
+(display (let* ((x 1) (y (+ x 1))) (* x y))) (newline)
+
+;; cond with a bare test, `=>`, and else.
+(define (classify n)
+  (cond ((< n 0) 'negative)
+        ((= n 0) 'zero)
+        ((memv n (list 1 2 3)) => (lambda (m) (car m)))
+        (else 'big)))
+(display (classify -5)) (display " ") (display (classify 0)) (display " ")
+(display (classify 2)) (display " ") (display (classify 99)) (newline)
+
+;; case on numbers and symbols, with else.
+(define (kind x)
+  (case x
+    ((1 2 3) 'small)
+    ((a b) 'letter)
+    (else 'other)))
+(display (kind 2)) (display " ") (display (kind 'b)) (display " ")
+(display (kind "s")) (newline)
+
+;; when / unless.
+(when (> 3 2) (display "when-yes") (newline))
+(unless (> 3 2) (display "unless-no") (newline))
+(unless (< 3 2) (display "unless-yes") (newline))
+
+;; set! on a global, and on a local closed over by a lambda.
+(define counter 0)
+(define (bump!) (set! counter (+ counter 1)) counter)
+(bump!) (bump!)
+(display counter) (newline)
+(define (make-counter)
+  (let ((n 0))
+    (lambda () (set! n (+ n 1)) n)))
+(define c (make-counter))
+(c) (c)
+(display (c)) (newline)
+;; a set! that changes the variable's type: the cell is `any`.
+(define shape 1)
+(set! shape "one")
+(display shape) (newline)
+
+;; internal defines: a value and a procedure that closes over it.
+(define (f x)
+  (define y (* x 2))
+  (define (g z) (+ y z))
+  (g 1))
+(display (f 20)) (newline)
+
+;; begin in expression position.
+(display (begin 1 2 3)) (newline)
+
+;; lists: the R2 representation and its procedures.
+(display (append (list 1 2) (list 3))) (display " ")
+(display (reverse (list 1 2 3))) (display " ")
+(display (map (lambda (x) (* x x)) (list 1 2 3))) (display " ")
+(display (length (list 1 2 3))) (display " ")
+(display (list-ref (list 'a 'b 'c) 1)) (display " ")
+(display (cadr (list 1 2 3))) (display " ")
+(display (null? '())) (display (pair? '())) (display (pair? (list 1))) (newline)
+(display (equal? (list 1 (list 2)) (list 1 (list 2)))) (display " ")
+(display (eqv? 'a 'a)) (display (eqv? 1 1.0)) (display (eq? 'a 'b)) (newline)
+(display (assv 2 (list (list 1 'one) (list 2 'two)))) (display " ")
+(display (member "b" (list "a" "b" "c"))) (newline)
+
+;; display vs write, and the printable types.
+(display "str") (display " ") (display 7.1) (display " ") (display #t)
+(display " ") (display 'sym) (display " ") (display (list "a" 1 (list 2.5)))
+(newline)
+(write (list "a" 1)) (newline)
+
+;; numeric predicates from the prelude.
+(display (zero? 0)) (display (even? 4)) (display (odd? 4)) (display " ")
+(display (abs -7.5)) (display " ") (display (min 3 9)) (display (max 3 9)) (newline)

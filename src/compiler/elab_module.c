@@ -1,4 +1,5 @@
 /* elab_module.c -- module loading, imports, exports, and symbol resolution. */
+#include "scheme_lower.h"   /* r7rs-lang-plan R2: Scheme core forms in an imported module */
 #include "elab_internal.h"
 
 /* ---- file-local helper forward declarations ---- */
@@ -532,6 +533,14 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
         }
         forms = expanded;
         nforms = n_expanded;
+        /* r7rs-lang-plan R2: an imported `#lang r7rs` module gets the same
+         * Scheme-form lowering the entry program gets, at the same point --
+         * after its loads are spliced, before anything is elaborated. */
+        if (scheme_lower_needed(forms, nforms)) {
+            uint32_t lowered_n = 0;
+            forms  = scheme_lower_program(e->arena, e->st, forms, nforms, &lowered_n);
+            nforms = lowered_n;
+        }
     }
     if (!forms) {
         slot->is_loading = false;

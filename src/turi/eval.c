@@ -12122,7 +12122,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             vals[i] = v;
         }
         if (!failed && (n_sym > 0 || boxed_name) && e->as.dyn_op_.op &&
-            strcmp(e->as.dyn_op_.op->name, SAFFRON_TRUTHY_OP) != 0) {
+            strcmp(e->as.dyn_op_.op->name, SAFFRON_TRUTHY_OP) != 0 &&
+            strcmp(e->as.dyn_op_.op->name, SCHEME_TRUTHY_OP) != 0) {
             /* Truthiness is answered below for EVERY value -- a Sym or a
              * container is truthy -- so it is not an operator to refuse. */
             const char *opn = e->as.dyn_op_.op->name;
@@ -12153,6 +12154,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             TuriValue v = vals[0];
             bool truthy = !(v.tag == TURI_NIL ||
                             (v.tag == TURI_BOOL && !v.as_bool));
+            if (vals != stackv) free(vals);
+            return turi_bool(truthy);
+        }
+        /* r7rs-lang-plan R2: Scheme's rule -- only `#f` is false (R7RS 6.3);
+         * nil, 0, "" and the empty list are all true. */
+        if (!failed && n == 1 && e->as.dyn_op_.op &&
+            strcmp(e->as.dyn_op_.op->name, SCHEME_TRUTHY_OP) == 0) {
+            TuriValue v = vals[0];
+            bool truthy = !(v.tag == TURI_BOOL && !v.as_bool);
             if (vals != stackv) free(vals);
             return turi_bool(truthy);
         }

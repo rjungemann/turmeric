@@ -1,0 +1,74 @@
+#lang r7rs
+;; r7rs-lang-plan R2: the core forms whose lowering needs a letrec-bound
+;; closure over `any` (named let, do, letrec/letrec*, a recursive internal
+;; define) or a dynamic multi-argument apply (values / call-with-values,
+;; let-values, define-values, case-lambda, a rest formal).  Correct under
+;; --interpret; the compiled back end's gaps on exactly these shapes are
+;; docs/reported/r7rs-compiled-dynamic-shapes.md, R6's to close.
+;;
+;; requires.interp for that reason; r7rs-core-forms pins everything that
+;; already runs on both back ends.
+
+;; named let
+(define (sum lst)
+  (let loop ((l lst) (acc 0))
+    (if (null? l) acc (loop (cdr l) (+ acc (car l))))))
+(display (sum (list 1 2 3 4))) (newline)
+
+;; letrec: mutual recursion; letrec*: sequential
+(display (letrec ((ev? (lambda (n) (if (= n 0) #t (od? (- n 1)))))
+                  (od? (lambda (n) (if (= n 0) #f (ev? (- n 1))))))
+           (ev? 10)))
+(display " ")
+(display (letrec* ((a 1) (b (+ a 1))) (* a b)))
+(newline)
+
+;; do: the iteration form, with a result expression
+(display (do ((i 0 (+ i 1)) (acc '() (cons i acc))) ((= i 4) acc))) (newline)
+;; do with a body and a var with no step
+(display (do ((i 0 (+ i 1)) (k 10)) ((= i 3) (+ i k)) (display i))) (newline)
+
+;; a recursive internal define
+(define (fact n)
+  (define (go k acc) (if (= k 0) acc (go (- k 1) (* k acc))))
+  (go n 1))
+(display (fact 5)) (newline)
+
+;; a set! target that a named let rebinds each iteration
+(define (count-up n)
+  (let loop ((i 0) (seen 0))
+    (if (= i n) seen (begin (set! seen (+ seen i)) (loop (+ i 1) seen)))))
+(display (count-up 4)) (newline)
+
+;; multiple values (plan Section 8, Q1: a Values carrier over a list)
+(call-with-values (lambda () (values 1 2)) (lambda (a b) (display (+ a b)) (newline)))
+(call-with-values (lambda () 7) (lambda (a) (display a) (newline)))
+(let-values (((q r) (values 7 3)) ((s) (values 5))) (display (list q r s)) (newline))
+(let*-values (((a b) (values 1 2)) ((c) (values (+ a b)))) (display c) (newline))
+(define-values (p1 p2) (values 10 20))
+(display (+ p1 p2)) (newline)
+(define-values (h . t) (values 1 2 3))
+(display (list h t)) (newline)
+
+;; case-lambda: dispatch on argument count, and a rest clause
+(define area
+  (case-lambda
+    ((r) (* r r))
+    ((w h) (* w h))
+    ((a b . more) (length more))))
+(display (area 3)) (display " ") (display (area 2 5)) (display " ")
+(display (area 1 2 3 4)) (newline)
+
+;; rest formals
+(define (count . xs) (length xs))
+(display (count 1 2 3)) (newline)
+(define (first-and-rest a . rest) (list a rest))
+(display (first-and-rest 1 2 3)) (newline)
+((lambda args (display (length args)) (newline)) 1 2 3 4)
+
+;; for-each: a lambda whose body is two statements and returns nil -- the
+;; compiled dynamic-call helpers refuse it ("cannot call this function here")
+(for-each (lambda (x) (display x) (display ",")) (list 1 2 3)) (newline)
+
+;; apply (an operator is not a first-class value until R5 makes `+` a procedure)
+(display (apply (lambda (a b c) (+ a b c)) (list 1 2 3))) (newline)

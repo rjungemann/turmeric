@@ -928,6 +928,10 @@ typedef enum ExprKind {
  * the builtin table.  Shared here so elaboration and evaluation cannot spell it
  * differently. */
 #define SAFFRON_TRUTHY_OP "saffron/truthy?"
+/* r7rs-lang-plan R2: the same reserved operator under Scheme's rule -- only
+ * `#f` is false (R7RS 6.3), so `nil` is TRUE here where Saffron's is not.
+ * Chosen per file by LangTraits.scheme_truthiness (elab_saffron_truthy). */
+#define SCHEME_TRUTHY_OP  "r7rs/truthy?"
 
 /* saffron-lang-plan S5: the opcodes the compiled dynamic operator runtime
  * dispatches on.  emit_expr.c picks one from the operator's NAME (which it has

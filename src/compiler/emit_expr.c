@@ -6524,10 +6524,14 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
      * type is `bool`, not `any` -- elab_forms.c builds it precisely to feed a
      * C-level `if`, so re-boxing the answer would only make the consumer unbox
      * it again. */
-    if (strcmp(opn, SAFFRON_TRUTHY_OP) == 0 && n == 1) {
+    if ((strcmp(opn, SAFFRON_TRUTHY_OP) == 0 || strcmp(opn, SCHEME_TRUTHY_OP) == 0) &&
+        n == 1) {
         char *a = emit_value(ctx, body, args[0]);
         Buf out; buf_init(&out);
-        buf_printf(&out, "__tur_dyn_truthy(%s)", a);
+        /* r7rs-lang-plan R2: Scheme's rule has its own preamble helper. */
+        buf_printf(&out, "%s(%s)",
+                   strcmp(opn, SCHEME_TRUTHY_OP) == 0 ? "__tur_dyn_truthy_scheme"
+                                                      : "__tur_dyn_truthy", a);
         buf_putc(&out, '\0');
         free(a);
         char *r = strdup(out.data);

@@ -4,17 +4,10 @@ FIXTURE_DIR="$(cd "$(dirname "$0")" && pwd)"
 TMP="$1"
 cp "$FIXTURE_DIR/program.tur" "$TMP/saffron.tur"
 sed 's/^#lang saffron$/#lang r7rs/' "$FIXTURE_DIR/program.tur" > "$TMP/r7rs.tur"
-# Emitted C embeds the source path (comments, #line); normalise the one
-# token that differs between the two compiles.
-"$TUR" emit-c "$TMP/saffron.tur" 2>/dev/null | sed 's/saffron\.tur/X.tur/g; s/saffron_tur/X_tur/g' > "$TMP/saffron.c"
-"$TUR" emit-c "$TMP/r7rs.tur"    2>/dev/null | sed 's/r7rs\.tur/X.tur/g; s/r7rs_tur/X_tur/g'       > "$TMP/r7rs.c"
-if cmp -s "$TMP/saffron.c" "$TMP/r7rs.c"; then
-    echo "emit-c: identical"
-else
-    echo "emit-c: DIFFERS"
-    diff "$TMP/saffron.c" "$TMP/r7rs.c" | head -20 >&2
-    exit 1
-fi
+# R1 pinned byte-identical emitted C for the two directives.  From R2 the r7rs
+# prelude (stdlib/r7rs/prelude.tur) differs from Saffron's, so the C differs
+# by exactly those definitions; what stays pinned is the thesis itself -- the
+# same program, under both directives, on both back ends, prints the same.
 "$TUR" run "$TMP/r7rs.tur" 2>/dev/null > "$TMP/compiled.out"
 "$TUR" --interpret "$TMP/r7rs.tur" 2>/dev/null > "$TMP/interp.out"
 "$TUR" run "$TMP/saffron.tur" 2>/dev/null > "$TMP/saffron.out"

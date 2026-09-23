@@ -24,6 +24,23 @@ All notable changes to Turmeric are documented here.
   `tests/fixtures/r7rs-elaborates-as-saffron`), and the playground picker
   badges the row rather than hiding it. `r7rs` has no reader axis, so
   `#lang r7rs/sweet` is TUR-E0331.
+- **`#lang r7rs` core forms (R2).** `define`, `lambda`, `let`/`let*`/`letrec`/
+  `letrec*` and named `let`, `do`, `begin`, `set!`, `if`, `cond` (with `=>`),
+  `case`, `and`/`or`, `when`/`unless`, `case-lambda`, `define-values`/
+  `let-values`/`let*-values` and internal defines are lowered onto Turmeric's
+  own forms before elaboration (`src/compiler/scheme_lower.c`), with Scheme
+  truthiness -- only `#f` is false -- as a per-file trait on both back ends.
+  A new `stdlib/r7rs/prelude.tur` supplies the core procedures (`car`, `cdr`,
+  `cons`, `list`, `length`, `append`, `reverse`, `map`, `for-each`, `eqv?`,
+  `equal?`, `display`, `write`, `newline`, `values`, `call-with-values`,
+  `apply`, the type and numeric predicates). Two dynamic-substrate gaps this
+  surfaced are fixed for Saffron too: `set!` into an `any` cell now widens a
+  concrete value instead of rejecting it, and Scheme's `if` accepts a
+  statically typed condition. The compiled back end runs the definitions,
+  conditionals, closures over mutable locals and list procedures; a
+  letrec-bound closure over `any` (named `let`, `do`) and dynamic
+  multi-argument apply are interpreter-only until R6
+  (`docs/reported/r7rs-compiled-dynamic-shapes.md`).
 
 - **`^tailcall` -- a checked tail-call annotation.** Whether a call became a
   real tail call was invisible in the source: you either got the backedge or you

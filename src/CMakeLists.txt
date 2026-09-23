@@ -196,6 +196,7 @@ set(TUR_CORE_SOURCES
     compiler/reader.c
     compiler/reader_macros.c
     compiler/lang_dialects.c
+    compiler/scheme_lower.c
     compiler/stdlib_autoload.c
     # RT1--RT3 + S0--S3 (docs/archive/refinement-types-plan.md): refinement
     # types.  These stages are the whole solver -- the dev-only Z3 oracle that

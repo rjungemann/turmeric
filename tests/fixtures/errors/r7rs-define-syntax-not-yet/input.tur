@@ -1,0 +1,8 @@
+#lang r7rs
+;; r7rs-lang-plan R2: `define-syntax` / `syntax-rules` is R4.  Until it lands
+;; the form is a diagnostic that names the stage, not a silent pass-through
+;; that would surface later as "unknown function 'define-syntax'".
+(define-syntax swap!
+  (syntax-rules ()
+    ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+(display 1)

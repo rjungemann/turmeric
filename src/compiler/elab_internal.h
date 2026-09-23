@@ -630,6 +630,9 @@ typedef struct Elab {
      * they have.  Was `toplevel_saffron`; r7rs-lang-plan R0 renamed it to the
      * trait it records. */
     bool toplevel_dynamic;
+    /* r7rs-lang-plan R2: the same, for Scheme truthiness (lang_span_is_scheme)
+     * -- a macro-expanded `if` in a Scheme file must decide by Scheme's rule. */
+    bool toplevel_scheme;
     /* saffron-effect-row-lost-through-unannotated-call: a user `defeffect` has
      * been elaborated in this unit.  Gates the CALL half of the dynamic-node
      * operand hoist (elab_hoist_control_operands): a unit with no effects can

@@ -2566,6 +2566,24 @@ static TuriValue native_println_float(TuriEnv *env, TuriValue *a, uint32_t n, vo
     printf(fmt, x);
     return turi_nil();
 }
+/* r7rs-lang-plan R2: the three newline-free write primitives the R7RS prelude
+ * builds `display`/`write`/`newline` on (stdlib/r7rs/prelude.tur declares
+ * them as inline C; these are their interpreter twins). */
+static TuriValue native_r7rs_write_cstr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) fputs(a[0].as_cstr, stdout);
+    return turi_nil();
+}
+static TuriValue native_r7rs_write_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0) printf("%lld", (long long)(a[0].tag == TURI_FLOAT ? (int64_t)a[0].as_float : a[0].as_int));
+    return turi_nil();
+}
+static TuriValue native_r7rs_write_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0) printf("%g", a[0].tag == TURI_FLOAT ? a[0].as_float : (double)a[0].as_int);
+    return turi_nil();
+}
 /* int->unit-float: map a 64-bit int to [0,1) by dividing by 2^53 */
 static TuriValue native_int_to_unit_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -3201,6 +3219,10 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "bit-shr",           native_bit_shr,         NULL);
     turi_env_register_native(env, "bit-xor",           native_bit_xor,         NULL);
     turi_env_register_native(env, "println-float",     native_println_float,   NULL);
+    /* r7rs-lang-plan R2: the R7RS prelude's write primitives. */
+    turi_env_register_native(env, "r7rs-write-cstr",   native_r7rs_write_cstr,  NULL);
+    turi_env_register_native(env, "r7rs-write-int",    native_r7rs_write_int,   NULL);
+    turi_env_register_native(env, "r7rs-write-float",  native_r7rs_write_float, NULL);
     turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
     turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);

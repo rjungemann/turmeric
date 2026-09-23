@@ -1,0 +1,283 @@
+#lang r7rs
+;;; r7rs/prelude -- the R7RS dialect's prelude: R2's core procedures.
+;;;
+;;; Auto-loaded, LAST in the stdlib autoload list, when the ENTRY file is
+;;; `#lang r7rs` (LangTraits.prelude).  Read as R7RS itself so its bodies get
+;;; Scheme truthiness and the Scheme reader; written in Turmeric's own shapes
+;;; (`defn`, `[...]` parameter vectors, `if`) because every Turmeric form passes
+;;; through the R2 lowering untouched, and a prelude that reads as plainly as
+;;; the stdlib it adapts is easier to keep honest.
+;;;
+;;; NAMES.  Every procedure here is spelled `r7rs-<name>`, never `<name>`: a
+;;; top-level redefinition of an auto-loaded stdlib name (`car`, `list`,
+;;; `length`, ...) is an error, and list.tur owns those on its carrier list.
+;;; scheme_lower.c's rename table maps the Scheme spelling to the one here at
+;;; every unquoted occurrence in a `#lang r7rs` file, so a Scheme program says
+;;; `(car l)` and calls `r7rs-car`.  A procedure added here is added to that
+;;; table in the same change, or Scheme code cannot reach it.
+;;;
+;;; REPRESENTATION (provisional, R2).  A Scheme list is the `(Cons any)` chain
+;;; Saffron's `(list ...)` widen builds, terminated by the null cell `tnil?`
+;;; recognises; `'()` reads as `(r7rs-list)`.  R3 brings the real, mutable
+;;; `Pair` (D3/D4) with `set-car!`/`set-cdr!` and improper lists, and replaces
+;;; the list half of this file; the numeric and I/O halves are R5's and R8's.
+;;; ADAPTORS, NOT REIMPLEMENTATIONS, on the Saffron prelude's rule: each of
+;;; these forwards to a typed stdlib operation where one exists.
+;;;
+;;; Since: r7rs-lang-plan R2
+
+;;; r7rs-list -- (list e ...).  A variadic `any` rest arrives packed as the
+;;; `(Cons any)` cells the call site builds (one per argument, each widened),
+;;; and with no arguments it is the null cell -- so the ascription is the
+;;; whole body, and `(list)` is the same empty list on both back ends.
+(defn r7rs-list [& xs : any] : (Cons any) (:: xs (Cons any)))
+
+;;; r7rs-tnil__ -- internal: is this cell the empty list?  Typed, so an `any`
+;;; argument crosses the seam with one tag check and the body is static.
+(defn r7rs-tnil__ [l : (Cons any)] : bool (tnil? l))
+;;; r7rs-same-cell__ -- internal: pointer identity of two cells.
+(defn r7rs-same-cell__ [a : (Cons any) b : (Cons any)] : bool
+  (= (:: a :int) (:: b :int)))
+;;; r7rs-type-name__ -- internal: `type-of` as an `any`, so two names compare
+;;; through the dynamic `=` (no static cstr equality is autoloaded).
+(defn r7rs-type-name__ [x] (type-of x))
+
+;;; r7rs-null? -- #t for the empty list.
+(defn r7rs-null? [p] : bool
+  (if (is? p (Cons any)) (r7rs-tnil__ p) false))
+
+;;; r7rs-pair? -- #t for a non-empty list cell.
+(defn r7rs-pair? [p] : bool
+  (if (is? p (Cons any)) (if (r7rs-tnil__ p) false true) false))
+
+;;; r7rs-fail-any__ -- internal: panic, in a position that needs an `any`.
+;;; A bare `(panic ...)` in the value position of an `any`-returning function
+;;; is emitted as a void return by the compiled back end, so the branches
+;;; that cannot happen go through this instead.
+(defn r7rs-fail-any__ [msg : cstr] : any
+  (panic msg)
+  (:: 0 any))
+;;; r7rs-fail-list__ -- the same, for a `(Cons any)` position.
+(defn r7rs-fail-list__ [msg : cstr] : (Cons any)
+  (panic msg)
+  (r7rs-list))
+
+;;; r7rs-list? -- #t for a (proper) list; every R2 list is proper.
+(defn r7rs-list? [p] : bool (is? p (Cons any)))
+
+;;; r7rs-car -- head of a non-empty list.
+(defn r7rs-car [p : (Cons any)] : any
+  (if (tnil? p) (r7rs-fail-any__ "car: empty list") (.head p)))
+
+;;; r7rs-cdr -- tail of a non-empty list.
+(defn r7rs-cdr [p : (Cons any)] : (Cons any)
+  (if (tnil? p) (r7rs-fail-list__ "cdr: empty list") (.tail p)))
+
+(defn r7rs-caar [p : (Cons any)] : any (r7rs-car (r7rs-car p)))
+(defn r7rs-cadr [p : (Cons any)] : any (r7rs-car (r7rs-cdr p)))
+(defn r7rs-cdar [p : (Cons any)] : (Cons any) (r7rs-cdr (r7rs-car p)))
+(defn r7rs-cddr [p : (Cons any)] : (Cons any) (r7rs-cdr (r7rs-cdr p)))
+(defn r7rs-caddr [p : (Cons any)] : any (r7rs-car (r7rs-cdr (r7rs-cdr p))))
+
+;;; r7rs-cons -- prepend to a list.  An improper pair is R3's.
+(defn r7rs-cons [a d : (Cons any)] : (Cons any) (tcons a d))
+
+;;; r7rs-length -- the number of elements.
+(defn r7rs-length-go__ [p : (Cons any) n : int] : int
+  (if (tnil? p) n (r7rs-length-go__ (.tail p) (+ n 1))))
+(defn r7rs-length [p : (Cons any)] : int (r7rs-length-go__ p 0))
+
+;;; r7rs-list-tail -- the list after its first k elements.
+(defn r7rs-list-tail [p : (Cons any) k : int] : (Cons any)
+  (if (= k 0) p (r7rs-list-tail (r7rs-cdr p) (- k 1))))
+
+;;; r7rs-list-ref -- the k-th element, zero-based.
+(defn r7rs-list-ref [p : (Cons any) k : int] : any
+  (r7rs-car (r7rs-list-tail p k)))
+
+;;; r7rs-append -- two lists, the first copied.
+(defn r7rs-append [a : (Cons any) b : (Cons any)] : (Cons any)
+  (if (tnil? a) b (tcons (.head a) (r7rs-append (.tail a) b))))
+
+;;; r7rs-reverse -- a reversed copy.
+(defn r7rs-reverse-go__ [p : (Cons any) acc : (Cons any)] : (Cons any)
+  (if (tnil? p) acc (r7rs-reverse-go__ (.tail p) (tcons (.head p) acc))))
+(defn r7rs-reverse [p : (Cons any)] : (Cons any)
+  (r7rs-reverse-go__ p (r7rs-list)))
+
+;;; r7rs-map -- apply f to each element, into a fresh list (one list).
+(defn r7rs-map [f l : (Cons any)] : (Cons any)
+  (if (tnil? l) l (tcons (f (.head l)) (r7rs-map f (.tail l)))))
+
+;;; r7rs-for-each -- apply f to each element, for effect.
+(defn r7rs-for-each [f l : (Cons any)] : nil
+  (if (tnil? l)
+    nil
+    (do (f (.head l)) (r7rs-for-each f (.tail l)))))
+
+;;; r7rs-eqv? -- identity on booleans, numbers, characters, symbols and the
+;;; empty list; pointer identity on everything else.  Two values of different
+;;; runtime types are never eqv.
+(defn r7rs-eqv? [a b] : bool
+  (if (= (r7rs-type-name__ a) (r7rs-type-name__ b))
+    (if (is? a (Cons any))
+      (if (r7rs-tnil__ a) (r7rs-tnil__ b) (r7rs-same-cell__ a b))
+      (= a b))
+    false))
+
+;;; r7rs-eq? -- same as eqv? at R2 (no bignums, no separate char type yet).
+(defn r7rs-eq? [a b] : bool (r7rs-eqv? a b))
+
+;;; r7rs-equal? -- structural on lists, eqv? on everything else.  R3 adds the
+;;; cycle-terminating version R7RS requires (D4).
+(defn r7rs-equal-lists__ [a : (Cons any) b : (Cons any)] : bool
+  (if (tnil? a)
+    (tnil? b)
+    (if (tnil? b)
+      false
+      (if (r7rs-equal? (.head a) (.head b))
+        (r7rs-equal-lists__ (.tail a) (.tail b))
+        false))))
+(defn r7rs-equal? [a b] : bool
+  (if (is? a (Cons any))
+    (if (is? b (Cons any)) (r7rs-equal-lists__ a b) false)
+    (r7rs-eqv? a b)))
+
+;;; r7rs-not -- #t only for #f (R7RS 6.3).
+(defn r7rs-not [x] : bool (if x false true))
+
+;;; Type predicates over the runtime tag.
+(defn r7rs-boolean? [x] : bool (is? x bool))
+(defn r7rs-number? [x] : bool (if (is? x int) true (is? x float)))
+(defn r7rs-integer? [x] : bool (is? x int))
+(defn r7rs-real? [x] : bool (if (is? x int) true (is? x float)))
+(defn r7rs-string? [x] : bool (is? x cstr))
+(defn r7rs-symbol? [x] : bool (is? x Sym))
+(defn r7rs-procedure? [x] : bool (= (r7rs-type-name__ x) (:: "fn" any)))
+
+;;; Numeric predicates and the two-argument min/max/abs.  R5 brings the
+;;; exactness rules and the full arithmetic surface.
+(defn r7rs-zero? [x] : bool (= x 0))
+(defn r7rs-positive? [x] : bool (> x 0))
+(defn r7rs-negative? [x] : bool (< x 0))
+(defn r7rs-even? [x] : bool (= (mod x 2) 0))
+(defn r7rs-odd? [x] : bool (if (= (mod x 2) 0) false true))
+(defn r7rs-abs [x] (if (< x 0) (- 0 x) x))
+(defn r7rs-min [a b] (if (< a b) a b))
+(defn r7rs-max [a b] (if (> a b) a b))
+
+;;; Multiple values (r7rs-lang-plan Section 8, Q1): a `Values` carrier over a
+;;; list.  `(values x)` is x itself, so a single value never allocates and a
+;;; producer that returns one value works with call-with-values unchanged.
+(defstruct R7rsValues [items : (Cons any)])
+
+(defn r7rs-values [& xs : any]
+  (let [l (:: xs (Cons any))]
+    (if (tnil? l)
+      (R7rsValues l)
+      (if (tnil? (.tail l)) (.head l) (R7rsValues l)))))
+
+;;; r7rs-values-ref -- the i-th value of a Values carrier, or the value itself.
+(defn r7rs-values-ref [v i : int] : any
+  (if (is? v R7rsValues)
+    (r7rs-list-ref (.items v) i)
+    (if (= i 0) v (r7rs-fail-any__ "values: too few values"))))
+
+;;; r7rs-values-rest -- the values from index i on, as a list.
+(defn r7rs-values-rest [v i : int] : (Cons any)
+  (if (is? v R7rsValues)
+    (r7rs-list-tail (.items v) i)
+    (if (= i 0) (r7rs-list v) (r7rs-list))))
+
+;;; r7rs-apply -- call f with the elements of l as its arguments.  Up to four:
+;;; the compiled back end's fat-closure apply helpers stop at 4 arguments for
+;;; a dynamic callee, and the prelude is compiled on both back ends, so the
+;;; limit is the compiled one (R6 lifts it with the rest of the calling
+;;; convention work); `tur --interpret` has no such limit but shares this
+;;; table.
+(defn r7rs-apply [f l : (Cons any)]
+  (let [n (r7rs-length l)]
+    (if (= n 0) (f)
+      (if (= n 1) (f (r7rs-list-ref l 0))
+        (if (= n 2) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1))
+          (if (= n 3) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2))
+            (if (= n 4) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3))
+              (r7rs-fail-any__ "apply: more than 4 arguments is not supported yet (r7rs-lang-plan R6)"))))))))
+
+;;; r7rs-call-with-values -- apply consumer to what producer returns.
+(defn r7rs-call-with-values [producer consumer]
+  (let [v (producer)]
+    (if (is? v R7rsValues)
+      (r7rs-apply consumer (.items v))
+      (consumer v))))
+
+;;; Membership and association, by eqv?/equal?.
+(defn r7rs-memv [x l : (Cons any)]
+  (if (tnil? l) false (if (r7rs-eqv? x (.head l)) l (r7rs-memv x (.tail l)))))
+(defn r7rs-memq [x l : (Cons any)] (r7rs-memv x l))
+(defn r7rs-member [x l : (Cons any)]
+  (if (tnil? l) false (if (r7rs-equal? x (.head l)) l (r7rs-member x (.tail l)))))
+(defn r7rs-assv [x l : (Cons any)]
+  (if (tnil? l) false
+    (if (r7rs-eqv? x (r7rs-car (.head l))) (.head l) (r7rs-assv x (.tail l)))))
+(defn r7rs-assq [x l : (Cons any)] (r7rs-assv x l))
+(defn r7rs-assoc [x l : (Cons any)]
+  (if (tnil? l) false
+    (if (r7rs-equal? x (r7rs-car (.head l))) (.head l) (r7rs-assoc x (.tail l)))))
+
+;;; The write primitives: newline-free, one per representation.  Inline C on
+;;; the compiled path; interpreter_natives.c registers their twins.
+(defn r7rs-write-cstr [s : cstr] : nil
+  ```c
+  fputs(s, stdout);
+  ```)
+(defn r7rs-write-int [x : int] : nil
+  ```c
+  printf("%lld", (long long)x);
+  ```)
+(defn r7rs-write-float [x : float] : nil
+  ```c
+  printf("%g", x);
+  ```)
+
+;;; r7rs-display-list__ -- the elements of a list, space-separated, in parens.
+(defn r7rs-display-list__ [l : (Cons any) quoted : bool] : nil
+  (r7rs-write-cstr "(")
+  (r7rs-display-items__ l quoted true)
+  (r7rs-write-cstr ")"))
+(defn r7rs-display-items__ [l : (Cons any) quoted : bool first : bool] : nil
+  (if (tnil? l)
+    nil
+    (do (if first nil (r7rs-write-cstr " "))
+        (r7rs-display-any__ (.head l) quoted)
+        (r7rs-display-items__ (.tail l) quoted false))))
+
+;;; r7rs-display-any__ -- one value; `quoted` is `write`'s string quoting.
+(defn r7rs-display-any__ [x quoted : bool] : nil
+  (if (is? x int) (r7rs-write-int x)
+    (if (is? x float) (r7rs-write-float x)
+      (if (is? x cstr)
+        (do (if quoted (r7rs-write-cstr "\"") nil)
+            (r7rs-write-cstr x)
+            (if quoted (r7rs-write-cstr "\"") nil))
+        (if (is? x bool) (r7rs-write-cstr (if x "#t" "#f"))
+          (if (is? x (Cons any)) (r7rs-display-list__ x quoted)
+            (if (is? x Sym) (r7rs-write-cstr (sym->str x))
+              (r7rs-write-cstr (type-of x)))))))))
+
+;;; r7rs-display -- write a value for humans (strings bare).
+(defn r7rs-display [x] : nil (r7rs-display-any__ x false))
+;;; r7rs-write -- write a value for reading back (strings quoted).
+(defn r7rs-write [x] : nil (r7rs-display-any__ x true))
+;;; r7rs-newline -- end the line.
+(defn r7rs-newline [] : nil (r7rs-write-cstr "\n"))
+
+;;; r7rs-void -- the unspecified value.
+(defn r7rs-void [] nil)
+;;; r7rs-error -- R7RS `error`: R6 makes it a raised error object; until then
+;;; it prints the message and panics.
+(defn r7rs-error [msg] : nil
+  (r7rs-write-cstr "error: ")
+  (r7rs-display msg)
+  (r7rs-newline)
+  (panic "scheme error"))

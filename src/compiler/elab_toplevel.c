@@ -6,6 +6,7 @@
 #include "refine_discharge.h" /* RT3: final refinement discharge + stats */
 #include "refine_report.h"    /* SX8a-3: --dump-refine=json obligation dump */
 #include "lang_dialects.h"      /* saffron-lang-plan S6 (G7): lang_span_is_dynamic */
+#include "scheme_lower.h"       /* r7rs-lang-plan R2: the Scheme core forms */
 
 /* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
  * in emit_core.c; declared here because elab_toplevel.c does not include
@@ -1895,6 +1896,19 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         if (lx.track_boundary) stdlib_prefix = lx.boundary_out;
     }
 
+    /* r7rs-lang-plan R2: lower the Scheme core forms of every `#lang r7rs`
+     * file in the (now load-expanded) program onto Turmeric's own forms.
+     * Here, after load expansion and before the `main` fold and the two
+     * elaboration passes, so a loaded Scheme file is lowered too and a
+     * lowered top-level expression is an ordinary statement for the fold.
+     * Per-form off the span's file, so stdlib and Turmeric forms are passed
+     * through by pointer and the stdlib prefix keeps its index. */
+    if (scheme_lower_needed(forms, nforms)) {
+        uint32_t lowered_n = 0;
+        forms  = (Form *const *)scheme_lower_program(arena, st, forms, nforms, &lowered_n);
+        nforms = lowered_n;
+    }
+
     Expr **items = (nforms == 0) ? NULL :
         (Expr **)arena_alloc(arena, nforms * sizeof(Expr *));
 
@@ -2287,9 +2301,11 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
          * deeper is an expression subform.  See def_form_is_statement_position. */
         e.toplevel_stmt = forms[i];
         e.toplevel_dynamic = lang_span_is_dynamic(forms[i]->span);   /* M10 */
+        e.toplevel_scheme  = lang_span_is_scheme(forms[i]->span);    /* r7rs R2 */
         items[i] = elab_form(&e, forms[i]);
         e.toplevel_stmt = NULL;
         e.toplevel_dynamic = false;
+        e.toplevel_scheme  = false;
         if (tl_may_defer) {
             uint32_t tl_cerr = diag_pop_capture();
             if (tl_cerr > 0 || !items[i]) {
@@ -2354,9 +2370,11 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
             if (!tl_deferred[i]) continue;
             e.toplevel_stmt = forms[i];
             e.toplevel_dynamic = lang_span_is_dynamic(forms[i]->span);
+            e.toplevel_scheme  = lang_span_is_scheme(forms[i]->span);
             items[i] = elab_form(&e, forms[i]);
             e.toplevel_stmt = NULL;
             e.toplevel_dynamic = false;
+            e.toplevel_scheme  = false;
             if (!items[i]) rc = -1;
         }
         free(tl_deferred);

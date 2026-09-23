@@ -1,4 +1,3 @@
-emit-c: identical
 compiled stdout: identical to saffron
 interpreted stdout: identical to saffron
 int

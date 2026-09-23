@@ -682,10 +682,13 @@ under a Scheme reader
 It is **experiment-gated** (`tur dialects` shows it as `experimental (r7rs)`
 and `tur experiments` lists the row), but the `#lang r7rs` line is itself the
 enable: no `--enable=r7rs` is needed, and the file prints the TUR-W0060
-lifecycle warning once per compile. Today it is the reader only -- a `#lang
-r7rs` file reads Scheme lexemes and then elaborates exactly as the same forms
-would under `#lang saffron`; Scheme's core forms, `quote` as data,
-`syntax-rules` and the rest are the plan's later stages.
+lifecycle warning once per compile. Today it has the reader (R1) and the core
+forms (R2): `define`, `lambda`, the `let` family, `do`, `cond`/`case`,
+`and`/`or`, `set!`, `case-lambda`, multiple values and the core list, equality
+and output procedures, with Scheme truthiness (only `#f` is false). `quote` as
+data, `define-library`, `syntax-rules`, the numeric tower and `call/cc` are
+the plan's later stages, and a named-`let` loop runs under `--interpret` only
+until R6 lifts the compiled back end.
 
 `turmeric` and `saffron` are **stable bases** -- neither is gated. `#lang
 saffron` needs no `--enable=` flag and no `:experiments` entry, and prints no

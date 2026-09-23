@@ -2993,11 +2993,17 @@ Expr *elab_saffron_truthy(Elab *e, Expr *cond, Span site) {
      * Saffron file. */
     if (!lang_span_is_dynamic(cond->span) && !lang_span_is_dynamic(site) &&
         !e->toplevel_dynamic) return cond;
+    /* r7rs-lang-plan R2: a Scheme file decides by Scheme's rule -- only `#f`
+     * is false -- and the two rules disagree on exactly one value, `nil`.
+     * Same three-way test as the dynamic gate above, for the same
+     * macro-expansion reason. */
+    bool scheme = lang_span_is_scheme(cond->span) || lang_span_is_scheme(site) ||
+                  e->toplevel_scheme;
+    const char *opn = scheme ? SCHEME_TRUTHY_OP : SAFFRON_TRUTHY_OP;
     Expr **targs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
     targs[0] = cond;
     Expr *t = expr_new(e->arena, EX_DYN_OP, TYPE_BOOL, cond->span);
-    t->as.dyn_op_.op     = symtab_intern(e->st, strslice(SAFFRON_TRUTHY_OP,
-                               (uint32_t)strlen(SAFFRON_TRUTHY_OP)));
+    t->as.dyn_op_.op     = symtab_intern(e->st, strslice(opn, (uint32_t)strlen(opn)));
     t->as.dyn_op_.args   = targs;
     t->as.dyn_op_.n_args = 1;
     return elab_hoist_control_operands(e, t);
@@ -3069,6 +3075,26 @@ Expr *elab_if(Elab *e, const Form *call) {
      * runtime.  The reserved name is not a builtin, so the interpreter answers
      * it before consulting the builtin table. */
     cond = elab_saffron_truthy(e, cond, call->span);
+    /* r7rs-lang-plan R2: in a Scheme file a condition of any STATIC type is
+     * legal, and its truth is known at compile time -- only `#f` is false, so
+     * a statically-int (or -string, or -Cons) condition is always true, and a
+     * statically-nil one never is.  Saffron's local inference keeps a literal
+     * concrete (D3), which is why `(let ((x 5)) (if x ...))` reaches here with
+     * an int; the condition still runs, for its effects. */
+    if (!type_eq(cond->type, TYPE_BOOL) &&
+        (lang_span_is_scheme(cond->span) || lang_span_is_scheme(call->span) ||
+         e->toplevel_scheme)) {
+        Expr *lit = expr_new(e->arena, EX_BOOL_LIT, TYPE_BOOL, cond->span);
+        lit->as.b = (cond->type.kind != TY_NIL);
+        Expr **seq = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+        seq[0] = cond;
+        seq[1] = lit;
+        Expr *d = expr_new(e->arena, EX_DO, TYPE_BOOL, cond->span);
+        d->as.do_.items = seq;
+        d->as.do_.n = 2;
+        d->as.do_.tail_drop_hoist = false;
+        cond = d;
+    }
     if (!type_eq(cond->type, TYPE_BOOL)) {
         diag_emit(DIAG_ERROR, cond->span,
                   "if condition must be bool, got %s", type_name(cond->type));
@@ -3775,7 +3801,22 @@ Expr *elab_set(Elab *e, const Form *call) {
                   b->name->name, b->defining_module_name->name, b->name->name);
         return NULL;
     }
-    Expr *value = elab_form(e, call->as.list.items[2]);
+    /* r7rs-lang-plan R2 (a Saffron gap too): a `^mut x : any` cell takes any
+     * value, so a concrete one is widened through the same `(:: v any)`
+     * ascription a call argument gets, instead of "value type cstr does not
+     * match binding type any".  Only in a dynamic file, and only into an
+     * `any` cell -- a typed cell keeps the exact check below. */
+    Form *value_form = call->as.list.items[2];
+    if (b->type.kind == TY_ANY &&
+        (lang_span_is_dynamic(call->span) || e->toplevel_dynamic)) {
+        Form **asc = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+        asc[0] = form_sym(e->arena, value_form->span, e->sym_ascribe);
+        asc[1] = value_form;
+        asc[2] = form_sym(e->arena, value_form->span,
+                          symtab_intern(e->st, strslice("any", 3)));
+        value_form = form_list(e->arena, value_form->span, asc, 3);
+    }
+    Expr *value = elab_form(e, value_form);
     if (!value) return NULL;
     if (!type_eq(value->type, b->type)) {
         diag_emit(DIAG_ERROR, value->span,

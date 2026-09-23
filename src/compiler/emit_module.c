@@ -11207,6 +11207,13 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    if (__t == TUR_DYNTAG_BOOL) return TUR_UNTAG(__v) != 0;\n"
         "    return 1;\n"
         "}\n");
+    /* r7rs-lang-plan R2: Scheme's rule (R7RS 6.3) -- only `#f` is false.  The
+     * one value the two rules disagree on is nil, which is true here. */
+    buf_puts(out,
+        "static inline int __tur_dyn_truthy_scheme(tur_tagged_t __v) {\n"
+        "    if (TUR_GETTAG(__v) == TUR_DYNTAG_BOOL) return TUR_UNTAG(__v) != 0;\n"
+        "    return 1;\n"
+        "}\n");
     /* `println` on a dynamic value.  Each arm reproduces the static emitter's
      * own spelling for that type (printf %lld / printf %g / puts of
      * "true"/"false" / puts of the string) so the compiled dynamic path and the

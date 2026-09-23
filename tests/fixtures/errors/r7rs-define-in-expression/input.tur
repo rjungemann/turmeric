@@ -1,0 +1,8 @@
+#lang r7rs
+;; r7rs-lang-plan R2: a body's defines come first (R7RS 5.3.2); a `define`
+;; after the first expression of a body is rejected where it stands.
+(define (f x)
+  (display x)
+  (define y 2)
+  (+ x y))
+(display (f 1))

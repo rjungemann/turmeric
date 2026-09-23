@@ -1,11 +1,13 @@
 #lang saffron
-;; r7rs-lang-plan R1 exit criterion: a `#lang r7rs` file elaborates EXACTLY as
-;; the equivalent `#lang saffron` file does.  hook.sh compiles this program
-;; twice -- once as written and once with the directive swapped to `r7rs` --
-;; and demands byte-identical emitted C (paths normalised) and identical
-;; stdout on both back ends.  That is the thesis of the plan in one test: R7RS
-;; is Saffron's dynamic substrate under a Scheme reader, and until R2 lands
-;; Scheme semantics the reader is the only thing the directive changes.
+;; r7rs-lang-plan R1 exit criterion: a `#lang r7rs` file elaborates as the
+;; equivalent `#lang saffron` file does.  hook.sh runs this program twice --
+;; once as written and once with the directive swapped to `r7rs` -- and
+;; demands identical stdout on both back ends.  That is the thesis of the
+;; plan in one test: R7RS is Saffron's dynamic substrate under a Scheme
+;; reader.  (R1 also pinned byte-identical emitted C; since R2 the r7rs
+;; prelude differs from Saffron's by design, so the C differs by exactly
+;; those definitions and the pin is the output.)  Every form below is
+;; Turmeric-shaped, which the R2 lowering passes through untouched.
 ;;
 ;; The body is saffron-default-any's: an unannotated parameter defaults to
 ;; `any` and is called at three unrelated types, plus one annotated (static)
