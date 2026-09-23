@@ -730,6 +730,15 @@ typedef struct EmitCtx {
     /* Set by tco_mark when the tail spine reaches a dynamic call, so the body
      * is routed through emit_tail, where that call is recognised. */
     bool         tail_dyn_seen;
+    /* proper-tail-calls T2b: the C name and body buffer of the function being
+     * emitted, and where its body starts in that buffer -- what a checkless
+     * tail call needs to decide whether it may also be `musttail` (identical
+     * recorded signatures, and no address taken anywhere in the body so far).
+     * NULL name off an ordinary function body (a fused T5 group, a CPS body). */
+    const char  *mt_fn_cname;
+    const Buf   *mt_body_buf;
+    size_t       mt_body_start;
+    bool         musttail_macro_emitted;
 } EmitCtx;
 
 enum {
@@ -841,6 +850,8 @@ void emit_sig_reset(void);
 void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_params,
                                  const char *ctype);
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
+int emit_sig_lookup_n_params(const char *cname);
+void ensure_musttail_macro(EmitCtx *ctx);
 /* S1 (jit-engine-plan section 4): the same side table's return-type half.  A
  * call site consults it to name the type of a hoisted call temp outright,
  * instead of emitting GNU C's `__auto_type` -- which c2mir cannot parse at all

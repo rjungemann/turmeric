@@ -8437,6 +8437,45 @@ const char *emit_sig_lookup_ret_ctype(const char *cname) {
     return NULL;
 }
 
+/* proper-tail-calls T2b: the recorded arity, or -1 when `cname` has no
+ * forward declaration on record. */
+int emit_sig_lookup_n_params(const char *cname) {
+    if (!cname) return -1;
+    for (uint32_t i = 0; i < g_sig_tab_n; i++)
+        if (strcmp(g_sig_tab[i].cname, cname) == 0) return (int)g_sig_tab[i].n_params;
+    return -1;
+}
+
+/* proper-tail-calls T2b (docs/upcoming/proper-tail-calls-plan.md, T-D2):
+ * `TUR_MUSTTAIL`, written once per program, the first time a tail call is
+ * spelled with it.  It expands to `__attribute__((musttail))` only where that
+ * is known to hold -- clang on x86-64 / aarch64 -- and to nothing everywhere
+ * else: gcc (the attribute arrived in 15 and is not exercised here), c2mir
+ * (the JIT's C compiler has no such attribute), and wasm (clang rejects
+ * musttail there without the tail-call feature).  Where it expands to
+ * nothing, the call is exactly the `return f(args);` T2 already emitted.
+ * `-DTUR_MUSTTAIL=` turns it off from the command line. */
+void ensure_musttail_macro(EmitCtx *ctx) {
+    if (!ctx || ctx->musttail_macro_emitted) return;
+    ctx->musttail_macro_emitted = true;
+    Buf *out = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    if (!out) return;
+    buf_puts(out,
+        "/* proper-tail-calls T2b: a guaranteed tail call where the C compiler\n"
+        " * can promise one, and an ordinary `return f(args);` elsewhere. */\n"
+        "#ifndef TUR_MUSTTAIL\n"
+        "#  if defined(__clang__) && defined(__has_attribute) && !defined(__wasm__) && \\\n"
+        "     (defined(__x86_64__) || defined(__aarch64__))\n"
+        "#    if __has_attribute(musttail)\n"
+        "#      define TUR_MUSTTAIL __attribute__((musttail))\n"
+        "#    endif\n"
+        "#  endif\n"
+        "#  ifndef TUR_MUSTTAIL\n"
+        "#    define TUR_MUSTTAIL\n"
+        "#  endif\n"
+        "#endif\n");
+}
+
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx) {
     if (!cname) return NULL;
     for (uint32_t i = 0; i < g_sig_tab_n; i++)

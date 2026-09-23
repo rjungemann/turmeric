@@ -5213,6 +5213,19 @@ static tur_adt_Box2__int__int ctor_Box2_Box2__int__int(int64_t _0, int64_t _1) {
 
 #endif
 
+/* proper-tail-calls T2b: a guaranteed tail call where the C compiler
+ * can promise one, and an ordinary `return f(args);` elsewhere. */
+#ifndef TUR_MUSTTAIL
+#  if defined(__clang__) && defined(__has_attribute) && !defined(__wasm__) && \
+     (defined(__x86_64__) || defined(__aarch64__))
+#    if __has_attribute(musttail)
+#      define TUR_MUSTTAIL __attribute__((musttail))
+#    endif
+#  endif
+#  ifndef TUR_MUSTTAIL
+#    define TUR_MUSTTAIL
+#  endif
+#endif
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
 }
@@ -6357,7 +6370,7 @@ tur_tagged_t __t25 = (x); __tur_any_cast_check(TUR_GETTAG(__t25), 58);
 }
 
 static bool __fn_1014(int64_t a, int64_t b) {
-        return __inst_Eq_eq_qu_int(a, b);
+        TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
 }
 
 static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
@@ -6560,7 +6573,7 @@ static bool __inst_Eq_eq_qu_Set(int64_t x, int64_t y) {
 }
 
 static bool __fn_1429(int64_t a, int64_t b) {
-        return __inst_Eq_eq_qu_int(a, b);
+        TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
 }
 
 static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
@@ -7504,11 +7517,11 @@ static int64_t list_hyconcat(int64_t l1, int64_t l2) {
 }
 
 static int64_t car(int64_t l) {
-        return list_hyhead(l);
+        TUR_MUSTTAIL return list_hyhead(l);
 }
 
 static int64_t cdr(int64_t l) {
-        return list_hytail(l);
+        TUR_MUSTTAIL return list_hytail(l);
 }
 
 static bool null_qu(int64_t l) {
@@ -7516,7 +7529,7 @@ static bool null_qu(int64_t l) {
 }
 
 static int64_t length(int64_t l) {
-        return list_hylength(l);
+        TUR_MUSTTAIL return list_hylength(l);
 }
 
 static int64_t grid_hynew(int64_t width, int64_t height) {

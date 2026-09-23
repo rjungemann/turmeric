@@ -1,7 +1,8 @@
 # Proper tail calls in Turmeric
 
-Status: **T1-T6 landed. The plan is complete**; what remains open is named in
-Section 6's carve-outs, all by decision.
+Status: **T1-T6 landed, and the optional T2b (`musttail`) with them. The plan
+is complete**; what remains open is named in Section 6's carve-outs, all by
+decision.
 
 - **T1 -- `^tailcall` + TUR-E0716 + the `-O0` fixture harness: DONE.** The
   annotation is a checked assertion, not a hint: a call it cannot place in tail
@@ -482,15 +483,67 @@ That case needs T5.
 Also still out of scope, deliberately: **indirect** tail calls, which go through
 the fat-closure protocol rather than a named callee and are T-D6's problem.
 
-#### T2b -- `musttail`, if the `-O0` guarantee is wanted before T5
+#### T2b -- `musttail`, where the C compiler can promise it
 
-Now a small step rather than a design question, because T2's gate already
-enforces `musttail`'s main precondition (identical return types). What it needs
-is a `TUR_MUSTTAIL` preamble macro that expands to the attribute only where it
-exists -- and a fixture asserting the **JIT** path degrades to an ordinary call
-rather than failing to compile, since c2mir will not accept it. Worth doing only
-if `-O0` mutual recursion is wanted sooner than T5; T5 subsumes it with no
-toolchain dependency.
+**Landed 2026-09-23, after T5** -- which changed what it is for. The design
+text framed it as a way to get `-O0` mutual recursion before T5; T5's `goto`
+now covers every cycle it can fuse, with no toolchain dependency. What T2b
+adds is the rest: a T2 checkless tail call that T5 did NOT turn into a jump is
+spelled `TUR_MUSTTAIL return f(args);`. The case that matters for depth is a
+cycle past T5's caps (9+ members or 17+ parameters, measured below); the
+common case in the corpus is plain forwarding -- stdlib's `list-head` /
+`list-tail` / `list-length` wrappers and the `Eq[int]` instance calls are
+what moved the 153 snapshots. (A generic mutual pair is NOT an example: T5
+fuses it through the carrier.)
+
+**The toolchain split is real, and measured here.** clang 18 honours the
+attribute and runs a nine-member cycle 10,000,004 deep at `-O0`; gcc 13 has
+no such attribute and overflows; c2mir (the JIT) has none either. So
+`TUR_MUSTTAIL`, written lazily into the preamble the first time a program
+needs it (so only those programs' snapshots move), expands to
+`__attribute__((musttail))` only for clang on x86-64/aarch64 and to nothing
+everywhere else -- including gcc 15, which has the attribute but was not
+available to test against, and wasm, where clang rejects musttail without the
+tail-call feature. `-DTUR_MUSTTAIL=` turns it off. Where it is empty the call
+is exactly T2's.
+
+**musttail is a hard contract, so every condition is checked, not inferred**
+(`tail_call_musttail_ok`, `emit_fns.c`):
+
+- the call text is exactly `name(args)`;
+- caller and callee have IDENTICAL recorded C signatures (the forward-
+  declaration pass's ground-truth table): arity, every parameter spelling, and
+  the return. T2 had proved only the return;
+- both take at least one parameter. A zero-parameter function is declared
+  `f()`, which C99 does not count as a prototype, and clang refuses musttail
+  without one -- found by the clang run, on stdlib's `hamt.tur` and
+  `option.tur`;
+- no `const T *` pass-by-pointer parameter;
+- **no address is taken anywhere in the caller's body, nor in the call.** This
+  is the one thing an optimizer checks for itself before a sibling call and
+  musttail skips: a tail call reuses the caller's frame, so an argument
+  pointing into it would dangle. The emitter builds its stack objects -- a
+  stack fat box for a non-retaining sink, a frame `any` box, a T4 defer frame,
+  a pass-by-pointer temp -- with a `&`, so refusing any single `&` is sound,
+  if blunt.
+
+**Verified across the corpus under clang**, not only on the new fixtures: with
+`CC=clang` the suite fails the same 54 fixtures with and without the macro
+enabled (pre-existing clang-only failures, mostly the gcc/ASan `libturi.a`
+link mismatch CLAUDE.md describes), and none of those 54 carries a musttail
+diagnostic behind its link failure. Under gcc: 3105/0, 153 snapshots
+re-spelled (`return f(args);` -> `TUR_MUSTTAIL return f(args);` and the macro
+block, nothing else). Under the JIT harness the new fixtures and a sample of
+the re-snapshotted ones pass.
+
+`^tailcall` still refuses a call that only musttail would keep off the stack:
+the annotation promises a tail call on every toolchain, and this one does not.
+
+Fixtures: `tailcall-musttail-annot` (the snapshot -- where the attribute goes,
+and the zero-arity, differing-signature and address-taken cases where it must
+not) and `tailcall-musttail-deep` (1e7 at `-O0`, carrying the new
+`requires.musttail` marker, which `tests/run.sh` probes with the emitter's own
+gate).
 
 ### T-D3 -- cleanup decides tail position, and the honest answer has a limit
 
@@ -716,10 +769,9 @@ support (MinGW is a supported host), it has no per-call cost, and it is a
 The members' parameter lists differ in general, so the fused function takes the
 union -- which is why this wants a size cap and a bail, not unbounded fusion.
 
-`musttail` stays available as a later fast path: T2 has made tail position real
-and, by requiring identical return types, has already enforced `musttail`'s main
-precondition -- see T-D2's T2b. It is still not the floor, and T5 subsumes it
-with no toolchain dependency.
+`musttail` stayed available as a later fast path, and has since landed as T2b
+(T-D2) -- for the calls fusion does not reach, and only where the C compiler
+can promise it. It is still not the floor.
 
 #### What shipped (T5, 2026-09-23)
 
@@ -895,8 +947,8 @@ fat-closure protocol, so it inherits this unchanged.
 
 **Order T4 and T5 by their own merits, not behind T2.** T2 shipped and is a
 precondition for nothing else here: T3-T5 are `goto`-based and T6 returns a
-bounce descriptor, so none of them consumes it. Its only consumer is the
-optional T2b (`musttail`). T3 landing on its own, without T2, would have worked
+bounce descriptor, so none of them consumes it. Its only consumer is T2b
+(`musttail`), which has since landed too. T3 landing on its own, without T2, would have worked
 identically -- which is the evidence.
 
 **Every stage has landed** (each T-D section ends with "What shipped"). T6
@@ -941,10 +993,12 @@ tail-call fixture at `-O2` asserts nothing.
   Permanent, and it goes in the guide next to the guarantee.
 - **Indirect tail calls in typed Turmeric** stay unguaranteed (T-D6). A
   diagnostic, not silence.
-- **`musttail`** is not the floor and is not promised. T2 has landed, so the
-  revisit is now live and scoped as T2b -- a preamble macro plus a fixture
-  asserting the JIT path degrades rather than failing to compile. Take it only
-  if `-O0` mutual recursion is wanted before T5.
+- **`musttail`** is not the floor and is not promised. T5's `goto` is the
+  floor: it covers every cycle it can fuse on every toolchain. T2b (landed)
+  adds `musttail` for the tail calls T5 leaves as C calls -- a cycle past
+  T5's caps is the one that matters for depth -- but only where the C
+  compiler can guarantee it (clang on x86-64/aarch64 today); on gcc and the
+  JIT those calls stay ordinary, and `^tailcall` keeps saying so.
 - **Restructuring `panic` to be `noreturn`** is explicitly *not* in this plan.
   T-D2 shows it is unnecessary; if some later need arises, it is its own
   decision with its own risks.

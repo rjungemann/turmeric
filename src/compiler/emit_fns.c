@@ -1448,6 +1448,78 @@ static void emit_tail_drop_hoist_do(EmitCtx *ctx, Buf *body, const Expr *fn_e,
     free(frame_var);
 }
 
+/* proper-tail-calls T2b (T-D2): may this checkless tail call `return v;` also
+ * carry `musttail`?  The attribute is a hard contract -- the C compiler must
+ * make the call a tail call or reject the program -- so everything it
+ * requires is checked here, against text and records, not inferred:
+ *
+ *   - `v` is exactly a direct call `name(args)`, optionally in parentheses,
+ *     with nothing around it (a cast or a wrapper is not a call), and both
+ *     functions take at least one parameter (a zero-parameter function is
+ *     declared `f()`, which C99 does not count as a prototype);
+ *   - caller and callee have IDENTICAL recorded C signatures -- same arity,
+ *     same spelling of every parameter and of the return type, as the
+ *     forward-declaration pass wrote them.  T2 already proved the return
+ *     types match; musttail needs the parameters too;
+ *   - no parameter is a `const T *` pass-by-pointer aggregate, which is a
+ *     pointer into some caller's frame by construction;
+ *   - no address is taken ANYWHERE in the body emitted so far, nor in the
+ *     call.  This is the one condition an optimizer checks for itself and
+ *     musttail skips: a tail call reuses the caller's frame, so an argument
+ *     pointing into it -- a stack fat box for a non-retaining sink, a frame
+ *     `any` box, a defer frame, a pass-by-pointer temp -- would dangle.  The
+ *     emitter builds all of those with a `&`, so refusing any `&` (other than
+ *     `&&`) is sound, if blunt.
+ *
+ * Refusing costs nothing: the call is still T2's `return f(args);`. */
+static bool tail_call_musttail_ok(EmitCtx *ctx, const Buf *body, const char *v) {
+    if (!ctx->mt_fn_cname || !v || body != ctx->mt_body_buf) return false;
+    const char *q = v;
+    size_t open = 0;
+    while (*q == '(') { q++; open++; }
+    size_t idlen = 0;
+    while (q[idlen] && (isalnum((unsigned char)q[idlen]) || q[idlen] == '_')) idlen++;
+    if (idlen == 0 || idlen >= 256 || q[idlen] != '(') return false;
+    char callee[256];
+    memcpy(callee, q, idlen);
+    callee[idlen] = '\0';
+    /* The argument list must close, and only the wrapping parens follow it. */
+    int depth = 0;
+    const char *p = q + idlen;
+    for (; *p; p++) {
+        if (*p == '(') depth++;
+        else if (*p == ')' && --depth == 0) { p++; break; }
+    }
+    if (depth != 0) return false;
+    for (size_t i = 0; i < open; i++, p++) if (*p != ')') return false;
+    if (*p != '\0') return false;
+
+    /* A zero-parameter function is declared `f()` -- in C99 an UNPROTOTYPED
+     * declaration, not `f(void)` -- and clang refuses musttail on a call
+     * whose caller or callee has no prototype. */
+    int n = emit_sig_lookup_n_params(ctx->mt_fn_cname);
+    if (n <= 0 || n != emit_sig_lookup_n_params(callee)) return false;
+    const char *rc = emit_sig_lookup_ret_ctype(ctx->mt_fn_cname);
+    const char *rg = emit_sig_lookup_ret_ctype(callee);
+    if (!rc || !rg || strcmp(rc, rg) != 0) return false;
+    for (int i = 0; i < n; i++) {
+        const char *a = emit_sig_lookup_param_ctype(ctx->mt_fn_cname, (uint32_t)i);
+        const char *b = emit_sig_lookup_param_ctype(callee, (uint32_t)i);
+        if (!a || !b || strcmp(a, b) != 0) return false;
+        if (strncmp(a, "const ", 6) == 0) return false;
+    }
+    const char *segs[2] = { body->data + ctx->mt_body_start, v };
+    size_t lens[2] = { body->len - ctx->mt_body_start, strlen(v) };
+    if (ctx->mt_body_start > body->len) return false;
+    for (int k = 0; k < 2; k++)
+        for (size_t i = 0; i < lens[k]; i++) {
+            if (segs[k][i] != '&') continue;
+            if (i + 1 < lens[k] && segs[k][i + 1] == '&') { i++; continue; }
+            return false;
+        }
+    return true;
+}
+
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
  * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
@@ -1731,9 +1803,12 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
     ctx->tail_call_no_hoist_taken = taken_save;
     if (emitted_tail_call) {
         /* `v` is the call expression itself.  Nothing between it and the
-         * return, which is the whole point. */
+         * return, which is the whole point.  T2b: where the C compiler can
+         * guarantee the tail call, ask it to (`TUR_MUSTTAIL`). */
+        bool mt = tail_call_musttail_ok(ctx, body, v);
+        if (mt) ensure_musttail_macro(ctx);
         indent_buf(body, ctx->indent);
-        buf_printf(body, "return %s;\n", v);
+        buf_printf(body, "%sreturn %s;\n", mt ? "TUR_MUSTTAIL " : "", v);
         free(v);
         return;
     }
@@ -4726,6 +4801,7 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     const char *saved_frame = ctx->frame_var;
     const TcgCur *saved_cur = ctx->tcg_cur;
     const char *saved_tb = ctx->tb_guard;
+    const char *saved_mt = ctx->mt_fn_cname;
 
     ctx->file = &F;
     ctx->closure = NULL;
@@ -4751,6 +4827,7 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
         TcgCur cur = { g, m };
         ctx->tcg_cur = &cur;
         ctx->tb_guard = NULL;   /* T6: a fused body has no `__tb_may` */
+        ctx->mt_fn_cname = NULL; /* T2b: nor a signature of its own on record */
         ctx->current_fn_ret_ctype = g->ret_ctype;
         ctx->fn_params = fd->params;
         ctx->n_fn_params = fd->n_params;
@@ -4790,6 +4867,7 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     ctx->frame_var = saved_frame;
     ctx->tcg_cur = saved_cur;
     ctx->tb_guard = saved_tb;
+    ctx->mt_fn_cname = saved_mt;
 
     /* Anything the bodies lifted to file scope (handler functions) has to
      * precede the fused function that references it. */
@@ -5607,6 +5685,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * own address: the driver arms exactly the function it is about to enter. */
     const char *saved_tb_guard = ctx->tb_guard;
     ctx->tb_guard = NULL;
+    /* T2b: this body's name and where it starts, for tail_call_musttail_ok. */
+    const char *saved_mt_name = ctx->mt_fn_cname;
+    const Buf *saved_mt_buf = ctx->mt_body_buf;
+    size_t saved_mt_start = ctx->mt_body_start;
+    ctx->mt_fn_cname = is_main ? NULL : fn_name;
+    ctx->mt_body_buf = file;
+    ctx->mt_body_start = file->len;
     if (!is_main && !body_is_inline_c && fn_may_bounce(fd)) {
         ensure_saffron_dyn_runtime(ctx);
         indent_buf(file, ctx->indent + 4);
@@ -6176,6 +6261,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->file = real_file;
     ctx->tcg_cur = saved_tcg_cur;
     ctx->tb_guard = saved_tb_guard;
+    ctx->mt_fn_cname = saved_mt_name;
+    ctx->mt_body_buf = saved_mt_buf;
+    ctx->mt_body_start = saved_mt_start;
 
     /* CPS3: emit __cps wrapper for colored non-closure functions when --cps-path */
     if (fd->is_cps && g_cps_path && !is_main && !fd->closure) {

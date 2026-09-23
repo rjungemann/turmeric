@@ -162,6 +162,14 @@ and 16 parameters in all.  Pinned by `tests/fixtures/tailcall-mutual-deep` at
 10,000,000 steps at `-O0`.  Before this, a small cycle passed at `-O2` only
 because clang inlined it into a loop, and overflowed at `-O0`.
 
+A cycle T5 does not fuse -- more than 8 members or 16 parameters -- still has
+its calls in C tail position (`return f(args);`), and where the C compiler can
+guarantee a tail call they are marked `musttail` too, so under **clang on
+x86-64/aarch64** such a cycle also runs in constant stack at `-O0`
+(`tests/fixtures/tailcall-musttail-deep`).  gcc and the JIT have no such
+guarantee, so on those the calls are ordinary and `^tailcall` still refuses
+them: the annotation promises a tail call on every toolchain.
+
 **Boundary (1.0).** Self and mutual tail calls are optimized.  The following
 are left as ordinary recursive calls -- correct, but not stack-optimized:
 

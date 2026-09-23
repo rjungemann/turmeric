@@ -67,6 +67,20 @@ All notable changes to Turmeric are documented here.
   [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md),
   and the tail-call prerequisite of `#lang r7rs`.
 
+- **`musttail` where the C compiler can promise it.** A tail call to another
+  function that the mutual-group fusion does not reach -- a cycle of more than
+  8 functions, or plain forwarding -- is emitted as
+  `TUR_MUSTTAIL return f(args);`, which asks the C compiler for a guaranteed
+  tail call. Under clang on x86-64/aarch64 that makes such a cycle run in
+  constant stack at `-O0`; everywhere else (gcc, the JIT, wasm) the macro is
+  empty and the call is what it was. Applied only when both functions have
+  identical C signatures and the caller's body takes no address, since a
+  forced tail call must not leave an argument pointing into the frame it
+  replaces. `-DTUR_MUSTTAIL=` turns it off. Fixtures that assert the deep
+  case carry a new `requires.musttail` marker, which `tests/run.sh` probes
+  once against `$CC`. This is T2b of
+  [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
+
 ### Fixed
 
 - **A call to a `: float` function defined later in the file is typed
