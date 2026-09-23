@@ -79,5 +79,6 @@ boxing the rest list through `t`.
   callee (and a variadic one) needs a row. Lifting the four-argument cap is
   the same table.
 - Until both land, `tests/fixtures/r7rs-core-forms-interp` and
-  `r7rs-named-let-sum` carry `requires.interp`; drop the markers when the
-  repros above compile, and delete this report.
+  `r7rs-named-let-sum` carry `requires.interp-only` (owned by
+  `tests/run-turi.sh`); drop the markers when the repros above compile, and
+  delete this report.

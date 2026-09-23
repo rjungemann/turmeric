@@ -682,13 +682,19 @@ under a Scheme reader
 It is **experiment-gated** (`tur dialects` shows it as `experimental (r7rs)`
 and `tur experiments` lists the row), but the `#lang r7rs` line is itself the
 enable: no `--enable=r7rs` is needed, and the file prints the TUR-W0060
-lifecycle warning once per compile. Today it has the reader (R1) and the core
+lifecycle warning once per compile. Today it has the reader (R1), the core
 forms (R2): `define`, `lambda`, the `let` family, `do`, `cond`/`case`,
 `and`/`or`, `set!`, `case-lambda`, multiple values and the core list, equality
-and output procedures, with Scheme truthiness (only `#f` is false). `quote` as
-data, `define-library`, `syntax-rules`, the numeric tower and `call/cc` are
-the plan's later stages, and a named-`let` loop runs under `--interpret` only
-until R6 lifts the compiled back end.
+and output procedures, with Scheme truthiness (only `#f` is false); and the
+data and the seam (R3): mutable pairs, chars, vectors, bytevectors, records,
+`quote`/`quasiquote` as data, `equal?` on cycles, `define-library`, and
+`import` with `only`/`prefix`/`rename` and the `(turmeric <module>)` head, so
+a Scheme program calls a Turmeric module or the stdlib and a Turmeric module
+imports a `define-library` (its exports are `any`, narrowed with `cast`).
+Strings are immutable `cstr` values (`string-set!` is declined).
+`syntax-rules`, the numeric tower and `call/cc` are the plan's later stages,
+and a named-`let` loop runs under `--interpret` only until R6 lifts the
+compiled back end.
 
 `turmeric` and `saffron` are **stable bases** -- neither is gated. `#lang
 saffron` needs no `--enable=` flag and no `:experiments` entry, and prints no

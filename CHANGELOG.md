@@ -41,6 +41,35 @@ All notable changes to Turmeric are documented here.
   letrec-bound closure over `any` (named `let`, `do`) and dynamic
   multi-argument apply are interpreter-only until R6
   (`docs/reported/r7rs-compiled-dynamic-shapes.md`).
+- **`#lang r7rs` data and the Turmeric seam (R3).** Pairs are a mutable heap
+  struct of two `any` fields (`set-car!`/`set-cdr!` are the region-noted
+  field store), with the null and eof singletons, chars as an opaque over
+  the scalar value, vectors over `(Vec any)`, bytevectors, symbols,
+  `define-record-type`, `quote`/`quasiquote`/`unquote-splicing` as runtime
+  constructors, `cond-expand`, and `eq?`/`eqv?`/`equal?` with `equal?`
+  terminating on a cycle. A rest parameter is a Scheme list. Strings stay
+  `cstr` and immutable: `string-set!`/`string-fill!` are declined, not
+  aliased. The seam is open in both directions: `(define-library (a b) ...)`
+  is `(defmodule a/b ...)`, `(import (turmeric x/y))` is `(import x/y)`
+  with `only`/`prefix`/`rename` (`except` is a diagnostic naming `only`),
+  `(scheme base)` and its siblings map onto the prelude, and an imported
+  `#lang r7rs` module gets the prelude on the import path.
+  `tests/run-r7rs-import.sh` (ctest `tur_r7rs_import`) runs both
+  directions on both back ends; `tests/fixtures/r7rs-stdlib-seam` is the
+  plan's D9 exit criterion (a Scheme program calling the stdlib map);
+  `tests/fixtures/r7rs-data-forms` runs every R3 shape compiled and
+  interpreted with identical output.
+- **Fixed: a forward-referenced callee with a compound parameter type in a
+  Saffron (or R7RS) file unboxed its `any` argument to `int`.** The pass-1
+  forward declaration recorded `[v : (Vec any)]` as the `int` placeholder,
+  and the dynamic seam took that placeholder at its word: "cast: any holds
+  Vec, not int" at runtime, and C passing an int64 to a `tur_adt_Vec__any
+  *`, whenever the callee was defined below its caller. Defining the callee
+  first avoided it, which made it look like an ordering rule. In a dynamic
+  file the forward declaration now carries the full type of a closed
+  compound parameter -- and, inside a `defmodule`, a closed compound return
+  -- so both orders agree (`tests/fixtures/saffron-fwd-decl-app-param-seam`).
+  Typed files keep their placeholders.
 
 - **`^tailcall` -- a checked tail-call annotation.** Whether a call became a
   real tail call was invisible in the source: you either got the backedge or you

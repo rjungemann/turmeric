@@ -1,6 +1,6 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0, R1 and R2 landed 2026-09-23.** `#lang r7rs` is a base
+Status: **R0 through R3 landed 2026-09-23.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -8,8 +8,13 @@ reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
 `cond`, `case`, `and`/`or`, `when`/`unless`, `case-lambda`, the `-values`
 family -- lower onto Turmeric's own forms (`src/compiler/scheme_lower.c`)
 with Scheme truthiness, over a `stdlib/r7rs/prelude.tur` of core procedures.
-The exit criterion (a named-`let` loop summing a list under `--interpret`) is
-`tests/fixtures/r7rs-named-let-sum`. R3 onward is unbuilt. Each landed stage
+R3 gives the data its types (mutable pairs, the null and eof singletons,
+chars, vectors, bytevectors, records, `quote`/`quasiquote`, `equal?` on
+cycles) and opens the Turmeric seam in both directions: `define-library`,
+`import` with `only`/`prefix`/`rename` and the `(turmeric ...)` head, pinned
+by `tests/run-r7rs-import.sh` on both back ends. The D9 exit criterion (a
+Scheme program calling the stdlib map and getting the right answer) is
+`tests/fixtures/r7rs-stdlib-seam`. R4 onward is unbuilt. Each landed stage
 carries a "What shipped" note below.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
@@ -847,7 +852,7 @@ Exit criterion: a named-`let` loop summing a list runs under `--interpret`.
 >   two-statement lambda -- `docs/reported/r7rs-compiled-dynamic-shapes.md`
 >   has the repros. Those are the plan's interpreter-first staging in action
 >   and R6's to close; `r7rs-core-forms-interp` and `r7rs-named-let-sum` carry
->   `requires.interp` until then.
+>   `requires.interp-only` (they are `tests/run-turi.sh`'s) until then.
 
 ### R3 -- data, and the Turmeric seam (large)
 
@@ -870,6 +875,90 @@ of the exercise, and if it does not work we want to know before writing
 
 Exit criterion: the snippet in D9 runs -- a Scheme file calling `stdlib/hamt`
 and getting the right answer.
+
+> **What shipped (2026-09-23).**
+>
+> - **D3's table, in `stdlib/r7rs/prelude.tur`**: a pair is `R7rsPair`, a
+>   heap struct of two `any` fields (`a`/`d` -- `car`/`cdr` as field names
+>   collide with the stdlib's `car` in `.field` method lookup); the empty list
+>   and the eof object are one-field singleton structs with one process-wide
+>   value each; a char is an opaque over the Unicode scalar value, so
+>   `char?` and `integer?` are disjoint; a vector is `(Vec any)`; a
+>   bytevector wraps a `(Vec int)`; a symbol is `Sym`, with `string->symbol`
+>   interning at runtime through `stdlib/sym-dynamic.tur`. Every predicate
+>   is a plain function over `is?`, not an if-guard narrowing, because a
+>   narrowed heap value is unique under the linearity rules and the second
+>   use was "cannot copy unique value".
+> - **A rest parameter is a Scheme list.** A variadic `& r : any` arrives as
+>   the `(Cons any)` chain Saffron's widen builds; the lowering converts it
+>   at the one place it enters Scheme code (`rebind_rest`), so `(define (f
+>   . xs) (length xs))` and `case-lambda`'s rest clauses see `R7rsPair`s
+>   like every other list. R2's prelude walked the chain directly; from R3
+>   the chain is an implementation detail of the seam.
+> - **`quote` builds at runtime, not in `.rodata`** -- a deviation from D4's
+>   static table. The datum walker in `scheme_lower.c` lowers a quoted datum
+>   to `r7rs-list`/`r7rs-cons`/`r7rs-vector`/`r7rs-char__` calls, so `'(1 2
+>   3)` in a loop allocates, and mutating a literal is not detected. D4's
+>   other half holds: `set-car!`/`set-cdr!` are `(set! (.a p) v)`, the
+>   region-noted field store (the emitted body carries
+>   `TUR_REGION_NOTE_WORDS`), and `tests/fixtures/region-escape-via-store`
+>   case 10 is that shape -- a widened word stored into a heap cell's field
+>   inside a bracket and read after it. `quasiquote` is depth-aware
+>   (`unquote` at depth 1 only, nested quasiquote re-quoted), `unquote-
+>   splicing` uses `append`, and a quoted vector is `list->vector` of the
+>   walked elements.
+> - **Strings stay `cstr` and are immutable.** The plan asked for a distinct
+>   mutable Scheme string with a `String` conversion; this stage declines
+>   `string-set!`/`string-fill!` and says so rather than aliasing. `string-
+>   length`/`string-ref`/`substring`/`string-append`/`string<?`/`string->
+>   list`/`number->string` are newline-free inline-C primitives with
+>   interpreter natives; `eqv?` on two strings compares content (there is
+>   no identity to compare -- a literal is a pointer into `.rodata` on one
+>   back end and an interned value on the other).
+> - **`equal?` terminates on cycles** with a `seen` list of pair-pairs under
+>   comparison (the coinductive reading, R7RS 6.1) rather than union-find;
+>   `eqv?`/`eq?` are one predicate (chars and small ints are immediate).
+>   `define-record-type` lowers to a `defstruct` plus the named constructor,
+>   predicate, accessors and modifiers; `cond-expand` evaluates
+>   `and`/`or`/`not`/`library`/`else` over the features `r7rs`, `turmeric`
+>   and `exact-closed` (`(library (scheme ...))` and an auto-loaded stdlib
+>   module hold).
+> - **The seam (D9)**: `(define-library (a b) (export ...) (import ...)
+>   (begin ...))` is `(defmodule a/b ...)`; a program with imports is
+>   wrapped in a synthesized module with a synthesized `main`; `(turmeric
+>   x/y)` is `(import x/y)`, `(only ...)` is `:refer`, `(prefix ...)` and
+>   `(rename ...)` are rename-table entries over the same import, `(scheme
+>   base)` and its siblings map onto the prelude, `(include ...)` is
+>   `load`. `(except ...)` is a diagnostic naming `(only ...)` (Turmeric's
+>   import has no "all but"; `tests/fixtures/errors/r7rs-import-except`).
+>   An imported `#lang r7rs` module gets the prelude on the import path
+>   (`elab_module.c`) when the entry program is not itself Scheme.
+>   `tests/run-r7rs-import.sh` (ctest `tur_r7rs_import`) runs a Turmeric
+>   module importing a `define-library`, and a Scheme program importing a
+>   Turmeric module with `only`/`prefix`/`rename` and the stdlib through
+>   `(turmeric stdlib/vec)`, on both back ends.
+> - **A substrate bug the seam surfaced, fixed for Saffron too**: a callee
+>   with a COMPOUND parameter type (`[v : (Vec any)]`) defined BELOW its
+>   caller was forward-declared with the `int` placeholder, and the
+>   Saffron seam then unboxed the `any` argument to int -- "cast: any holds
+>   Vec, not int" at runtime, C passing an int64 to a `tur_adt_Vec__any *`.
+>   The pass-1 forward declaration now carries the full type of a closed
+>   compound parameter (and, in the `defmodule` pre-pass, a closed compound
+>   return) in a dynamic file (`elab_fwd_param_full_types`,
+>   `elab_fwd_compound_result_type`); typed files keep their placeholders
+>   and int64 hatches. `tests/fixtures/saffron-fwd-decl-app-param-seam`
+>   pins both orders.
+> - **Deviations and gaps at R3**: a generic stdlib constructor with no
+>   value arguments (`(map-new)`) cannot be grounded from Scheme -- `K`/`V`
+>   never bind -- so the seam fixture builds its map from a `#map{}`
+>   literal (a Saffron gap, not a Scheme one); `apply` takes at most four
+>   arguments (the compiled dynamic-call helpers' limit); `string-copy`
+>   returns its argument (strings are immutable, so a copy is the value);
+>   `vector-map`/`vector-for-each`/`string-map` and the char-class
+>   procedures beyond `alphabetic?`/`numeric?`/`whitespace?`/`upcase`/
+>   `downcase` wait on R7.
+>   `tests/fixtures/r7rs-data-forms` runs every R3 shape on both back ends
+>   with identical output.
 
 ### R4 -- `syntax-rules` (large)
 

@@ -2584,6 +2584,86 @@ static TuriValue native_r7rs_write_float(TuriEnv *env, TuriValue *a, uint32_t n,
     if (n > 0) printf("%g", a[0].tag == TURI_FLOAT ? a[0].as_float : (double)a[0].as_int);
     return turi_nil();
 }
+/* R3: the R7RS prelude's string and character primitives. */
+static const char *r7rs_arg_cstr(TuriValue *a, uint32_t n, uint32_t i) {
+    return (i < n && a[i].tag == TURI_CSTR && a[i].as_cstr) ? a[i].as_cstr : "";
+}
+static int64_t r7rs_arg_int(TuriValue *a, uint32_t n, uint32_t i) {
+    if (i >= n) return 0;
+    return a[i].tag == TURI_FLOAT ? (int64_t)a[i].as_float : a[i].as_int;
+}
+static void r7rs_put_utf8(char *out, int *n, uint32_t cp) {
+    if (cp < 0x80) out[(*n)++] = (char)cp;
+    else if (cp < 0x800) { out[(*n)++] = (char)(0xC0 | (cp >> 6)); out[(*n)++] = (char)(0x80 | (cp & 0x3F)); }
+    else if (cp < 0x10000) { out[(*n)++] = (char)(0xE0 | (cp >> 12)); out[(*n)++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[(*n)++] = (char)(0x80 | (cp & 0x3F)); }
+    else { out[(*n)++] = (char)(0xF0 | (cp >> 18)); out[(*n)++] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[(*n)++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[(*n)++] = (char)(0x80 | (cp & 0x3F)); }
+}
+static TuriValue native_r7rs_same_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_bool(false);
+    /* Both structs (or both vectors / same representation): the payload word. */
+    return turi_bool(a[0].tag == a[1].tag && a[0].as_int == a[1].as_int);
+}
+static TuriValue native_r7rs_string_length(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int((int64_t)strlen(r7rs_arg_cstr(a, n, 0)));
+}
+static TuriValue native_r7rs_string_ref_code(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *s = r7rs_arg_cstr(a, n, 0);
+    int64_t i = r7rs_arg_int(a, n, 1);
+    if (i < 0 || (size_t)i >= strlen(s)) turi_runtime_panic(env, "string-ref: index out of range");
+    return turi_int((int64_t)(unsigned char)s[i]);
+}
+static TuriValue native_r7rs_string_append2(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *x = r7rs_arg_cstr(a, n, 0), *y = r7rs_arg_cstr(a, n, 1);
+    size_t lx = strlen(x), ly = strlen(y);
+    char *r = (char *)malloc(lx + ly + 1);
+    memcpy(r, x, lx); memcpy(r + lx, y, ly + 1);
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_substring(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *s = r7rs_arg_cstr(a, n, 0);
+    int64_t st = r7rs_arg_int(a, n, 1), en = r7rs_arg_int(a, n, 2);
+    size_t len = strlen(s);
+    if (st < 0 || en < st || (size_t)en > len) turi_runtime_panic(env, "substring: range out of bounds");
+    char *r = (char *)malloc((size_t)(en - st) + 1);
+    memcpy(r, s + st, (size_t)(en - st)); r[en - st] = 0;
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_string_lt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool(strcmp(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1)) < 0);
+}
+static TuriValue native_r7rs_string_of_code(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    char *r = (char *)malloc(5); int k = 0;
+    r7rs_put_utf8(r, &k, (uint32_t)r7rs_arg_int(a, n, 0));
+    r[k] = 0;
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_int_to_string(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    char *r = (char *)malloc(32);
+    snprintf(r, 32, "%lld", (long long)r7rs_arg_int(a, n, 0));
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_float_to_string(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    char *r = (char *)malloc(32);
+    double x = (n > 0) ? (a[0].tag == TURI_FLOAT ? a[0].as_float : (double)a[0].as_int) : 0.0;
+    snprintf(r, 32, "%g", x);
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_write_char(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    char buf[5]; int k = 0;
+    r7rs_put_utf8(buf, &k, (uint32_t)r7rs_arg_int(a, n, 0));
+    fwrite(buf, 1, (size_t)k, stdout);
+    return turi_nil();
+}
 /* int->unit-float: map a 64-bit int to [0,1) by dividing by 2^53 */
 static TuriValue native_int_to_unit_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -3223,6 +3303,16 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-write-cstr",   native_r7rs_write_cstr,  NULL);
     turi_env_register_native(env, "r7rs-write-int",    native_r7rs_write_int,   NULL);
     turi_env_register_native(env, "r7rs-write-float",  native_r7rs_write_float, NULL);
+    turi_env_register_native(env, "r7rs-write-char",   native_r7rs_write_char,  NULL);
+    turi_env_register_native(env, "r7rs-same-ref__",       native_r7rs_same_ref,        NULL);
+    turi_env_register_native(env, "r7rs-string-length",    native_r7rs_string_length,   NULL);
+    turi_env_register_native(env, "r7rs-string-ref-code__", native_r7rs_string_ref_code, NULL);
+    turi_env_register_native(env, "r7rs-string-append2__", native_r7rs_string_append2,  NULL);
+    turi_env_register_native(env, "r7rs-substring",        native_r7rs_substring,       NULL);
+    turi_env_register_native(env, "r7rs-string<?",         native_r7rs_string_lt,       NULL);
+    turi_env_register_native(env, "r7rs-string-of-code__", native_r7rs_string_of_code,  NULL);
+    turi_env_register_native(env, "r7rs-int->string__",    native_r7rs_int_to_string,   NULL);
+    turi_env_register_native(env, "r7rs-float->string__",  native_r7rs_float_to_string, NULL);
     turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
     turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);

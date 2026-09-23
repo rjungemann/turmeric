@@ -2118,6 +2118,12 @@ from it -- the second reproduces on `vec-push!`, parametric since long before.
 | [saffron-catch-unwind-around-dyn-call-fn-crashes](saffron-catch-unwind-around-dyn-call-fn-crashes.md) | high | Pre-existing on `main`. A Saffron function that makes a dynamic call and panics, called under `catch-unwind` with an `any` thunk, SIGSEGVs on the compiled path AND under `--interpret` -- even when the dynamic call never runs. Removing the dynamic call from the body, or not passing a function value, makes both engines print the caught panic |
 | [cps-capturing-closure-env-leaks-through-dyn-call](cps-capturing-closure-env-leaks-through-dyn-call.md) | low | Pre-existing on `main`. A capturing lambda built in a CPS-lowered function and passed to a dynamic call leaks its 32-byte env per call under LeakSanitizer; the CPS backend's env reap covers only leaf-admitted non-escaping closures |
 
+## Found landing r7rs-lang-plan R2 (filed 2026-09-23)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [r7rs-compiled-dynamic-shapes](r7rs-compiled-dynamic-shapes.md) | medium | Three dynamic-closure shapes the COMPILED back end refuses and `--interpret` answers correctly, none Scheme-specific: a letrec-bound closure over `any` that calls itself (cc: "aggregate value used where an integer was expected" -- the shape every Scheme named `let`/`do`/`letrec` lowers to), a dynamic call the fat-closure apply helpers refuse (a `nil`-returning callee, and anything past four arguments), and `type-of` on an `any` rest parameter passed through an identity (SIGSEGV). The plan stages R7RS interpreter-first and lifts the compiled path in R6; until then `tests/fixtures/r7rs-core-forms-interp` and `r7rs-named-let-sum` carry `requires.interp-only` |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

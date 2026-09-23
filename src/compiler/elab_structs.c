@@ -3048,6 +3048,7 @@ static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
     if (a.kind == TY_ANY || b.kind == TY_ANY) {
         Type any_t;
         memset(&any_t, 0, sizeof(any_t));
+    any_t.copy_kind = CK_COPY;   /* CK_UNIQUE is 0: a zeroed type is unique-kinded (saffron-any-let-binding-is-unique) */
         any_t.kind = TY_ANY;
         *out = any_t;
         return true;

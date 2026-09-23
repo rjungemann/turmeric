@@ -946,8 +946,11 @@ static Form *read_symbol_or_minus_at(Reader *r, bool head_pos) {
         return read_number(r, peek(r) == '-' ? -1 : 1);
     }
 
+    /* R3: `:` is an ordinary identifier character in Scheme once past the
+     * first byte (`v:vec-new`, the conventional `(prefix ...)` spelling); at
+     * token start it is still Turmeric's keyword, which read_form owns. */
     while (is_sym_cont(peek(r)) ||
-           (r->scheme_enabled && scheme_sym_extra(peek(r)))) advance(r);
+           (r->scheme_enabled && (scheme_sym_extra(peek(r)) || peek(r) == ':'))) advance(r);
     size_t end = r->pos;
     if (end == start_off) {
         Span s = span_point(r);
@@ -3641,6 +3644,18 @@ static Form *read_char_literal(Reader *r) {
     }
 
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    /* r7rs-lang-plan R3 / D3: under the Scheme reader a character is its own
+     * type, distinct from an integer (`char?` must be disjoint from
+     * `integer?`), and there is no character Form -- so the literal reads as
+     * the call form `(r7rs-char__ <scalar value>)`, which the prelude's
+     * constructor turns into an `R7rsChar`.  scheme_lower.c's datum walker
+     * recognises the shape under `quote`. */
+    if (r->scheme_enabled) {
+        Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+        items[0] = form_sym(r->arena, span, symtab_intern(r->st, strslice("r7rs-char__", 11)));
+        items[1] = form_int(r->arena, span, value);
+        return form_list(r->arena, span, items, 2);
+    }
     return form_int(r->arena, span, value);
 }
 

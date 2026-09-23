@@ -17,5 +17,5 @@ aAb
 "aAb|c"
 (f true false true false)
 '()
-65
+(r7rs-char__ 65)
 (kept) (also kept)

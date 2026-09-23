@@ -9,6 +9,7 @@
 
 #include "diag.h"
 #include "lang_dialects.h"
+#include "stdlib_autoload.h"   /* R3: which `(turmeric stdlib/x)` imports are no-ops */
 
 /* ---------------------------------------------------------------------------
  * The rename table: Scheme spelling -> prelude spelling.
@@ -76,8 +77,55 @@ static const char *const RENAMES[][2] = {
     { "apply",            "r7rs-apply" },
     { "error",            "r7rs-error" },
     { "void",             "r7rs-void" },
+    /* R3: data. */
+    { "set-car!",         "r7rs-set-car!" },
+    { "set-cdr!",         "r7rs-set-cdr!" },
+    { "list-copy",        "r7rs-list-copy" },
+    { "char?",            "r7rs-char?" },
+    { "char->integer",    "r7rs-char->integer" },
+    { "integer->char",    "r7rs-integer->char" },
+    { "char=?",           "r7rs-char=?" },
+    { "char<?",           "r7rs-char<?" },
+    { "char>?",           "r7rs-char>?" },
+    { "char-upcase",      "r7rs-char-upcase" },
+    { "char-downcase",    "r7rs-char-downcase" },
+    { "char-alphabetic?", "r7rs-char-alphabetic?" },
+    { "char-numeric?",    "r7rs-char-numeric?" },
+    { "char-whitespace?", "r7rs-char-whitespace?" },
+    { "string-length",    "r7rs-string-length" },
+    { "string-ref",       "r7rs-string-ref" },
+    { "string-append",    "r7rs-string-append" },
+    { "substring",        "r7rs-substring" },
+    { "string-copy",      "r7rs-string-copy" },
+    { "string=?",         "r7rs-string=?" },
+    { "string<?",         "r7rs-string<?" },
+    { "string->symbol",   "r7rs-string->symbol" },
+    { "symbol->string",   "r7rs-symbol->string" },
+    { "string->list",     "r7rs-string->list" },
+    { "list->string",     "r7rs-list->string" },
+    { "number->string",   "r7rs-number->string" },
+    { "vector",           "r7rs-vector" },
+    { "vector?",          "r7rs-vector?" },
+    { "make-vector",      "r7rs-make-vector" },
+    { "vector-ref",       "r7rs-vector-ref" },
+    { "vector-set!",      "r7rs-vector-set!" },
+    { "vector-length",    "r7rs-vector-length" },
+    { "vector->list",     "r7rs-vector->list" },
+    { "list->vector",     "r7rs-list->vector" },
+    { "vector-fill!",     "r7rs-vector-fill!" },
+    { "bytevector",       "r7rs-bytevector" },
+    { "bytevector?",      "r7rs-bytevector?" },
+    { "make-bytevector",  "r7rs-make-bytevector" },
+    { "bytevector-u8-ref",  "r7rs-bytevector-u8-ref" },
+    { "bytevector-u8-set!", "r7rs-bytevector-u8-set!" },
+    { "bytevector-length",  "r7rs-bytevector-length" },
+    { "eof-object",       "r7rs-eof-object" },
+    { "eof-object?",      "r7rs-eof-object?" },
 };
 #define N_RENAMES (sizeof(RENAMES) / sizeof(RENAMES[0]))
+
+/* A growable item buffer for building lists. */
+typedef struct FB { Form **items; uint32_t n, cap; } FB;
 
 typedef struct SL {
     Arena       *a;
@@ -97,7 +145,27 @@ typedef struct SL {
                  *t_panic;
     /* Prelude names the lowering itself emits. */
     const Symbol *p_eqv, *p_list, *p_length, *p_list_ref, *p_list_tail,
-                 *p_values_ref, *p_values_rest;
+                 *p_chain_to_list, *p_values_ref, *p_values_rest, *p_cons, *p_append, *p_vector,
+                 *p_list_to_vector, *p_char, *s_cond_expand, *s_export,
+                 *s_include, *t_import, *t_defmodule, *t_export, *t_refer,
+                 *t_as, *t_defstruct, *t_heap, *t_is, *t_nil_sym;
+    /* R3: an `(import ...)` was lowered, so the program is wrapped in a
+     * defmodule (Turmeric's import is only legal there). */
+    bool          needs_module;
+    /* R3: `(prefix <set> p)` -- a symbol spelled `p<rest>` reads as
+     * `<alias>/<rest>`; `(rename <set> (a b))` -- `b` reads as `a`. */
+    struct { const char *prefix; size_t plen; const Symbol *alias; } prefixes[16];
+    uint32_t n_prefixes;
+    struct { const Symbol *from, *to; } renames[64];
+    uint32_t n_renames;
+    /* R3: the import forms produced so far (placed first in the module), and
+     * a define-library under construction. */
+    FB            imports;
+    bool          has_library;
+    const Symbol *lib_name;
+    FB            lib_exports;
+    FB            lib_body;
+    bool          user_main;
     /* Rename table, interned. */
     const Symbol *rn_from[N_RENAMES];
     const Symbol *rn_to[N_RENAMES];
@@ -150,8 +218,19 @@ static void sl_init(SL *sl, Arena *a, SymbolTable *st) {
     sl->p_eqv = I(sl, "r7rs-eqv?");       sl->p_list = I(sl, "r7rs-list");
     sl->p_length = I(sl, "r7rs-length");  sl->p_list_ref = I(sl, "r7rs-list-ref");
     sl->p_list_tail = I(sl, "r7rs-list-tail");
+    sl->p_chain_to_list = I(sl, "r7rs-chain->list__");
     sl->p_values_ref = I(sl, "r7rs-values-ref");
     sl->p_values_rest = I(sl, "r7rs-values-rest");
+    sl->p_cons = I(sl, "r7rs-cons");         sl->p_append = I(sl, "r7rs-append");
+    sl->p_vector = I(sl, "r7rs-vector");     sl->p_list_to_vector = I(sl, "r7rs-list->vector");
+    sl->p_char = I(sl, "r7rs-char__");
+    sl->s_cond_expand = I(sl, "cond-expand"); sl->s_export = I(sl, "export");
+    sl->s_include = I(sl, "include");
+    sl->t_import = I(sl, "import");          sl->t_defmodule = I(sl, "defmodule");
+    sl->t_export = I(sl, "export");          sl->t_refer = I(sl, "refer");
+    sl->t_as = I(sl, "as");                  sl->t_defstruct = I(sl, "defstruct");
+    sl->t_heap = I(sl, "heap");              sl->t_is = I(sl, "is?");
+    sl->t_nil_sym = I(sl, "nil");
 
     for (size_t i = 0; i < N_RENAMES; i++) {
         sl->rn_from[i] = I(sl, RENAMES[i][0]);
@@ -162,6 +241,9 @@ static void sl_init(SL *sl, Arena *a, SymbolTable *st) {
 /* --- Form helpers ---------------------------------------------------------- */
 
 static Form *Sym(SL *sl, Span sp, const Symbol *s) { return form_sym(sl->a, sp, s); }
+/* `:refer`, `:as`, `:heap` -- the reader spells these as keywords, so the
+ * elaborator expects F_KEYWORD, not a symbol whose name starts with ':'. */
+static Form *Kw(SL *sl, Span sp, const Symbol *s)  { return form_keyword(sl->a, sp, s); }
 static Form *Nil(SL *sl, Span sp)                  { return form_nil(sl->a, sp); }
 static Form *Int(SL *sl, Span sp, int64_t v)       { return form_int(sl->a, sp, v); }
 static Form *Bool(SL *sl, Span sp, bool v)         { return form_bool(sl->a, sp, v); }
@@ -196,8 +278,6 @@ static bool is_scheme_file(const Form *f) {
     return sf != NULL && sf->lang == LANG_R7RS;
 }
 
-/* A growable item buffer for building lists. */
-typedef struct FB { Form **items; uint32_t n, cap; } FB;
 static void fb_push(FB *b, Form *f) {
     if (b->n == b->cap) {
         b->cap = b->cap ? b->cap * 2 : 8;
@@ -273,6 +353,17 @@ static void collect_muts(SL *sl, const Form *f) {
 /* --- renaming -------------------------------------------------------------- */
 
 static const Symbol *rn(SL *sl, const Symbol *s) {
+    for (uint32_t i = 0; i < sl->n_renames; i++)
+        if (sl->renames[i].from == s) return sl->renames[i].to;
+    for (uint32_t i = 0; i < sl->n_prefixes; i++) {
+        if (s->len > sl->prefixes[i].plen &&
+            memcmp(s->name, sl->prefixes[i].prefix, sl->prefixes[i].plen) == 0) {
+            char buf[256];
+            snprintf(buf, sizeof buf, "%s/%s", sl->prefixes[i].alias->name,
+                     s->name + sl->prefixes[i].plen);
+            return I(sl, buf);
+        }
+    }
     for (size_t i = 0; i < N_RENAMES; i++)
         if (sl->rn_from[i] == s) return sl->rn_to[i];
     return s;
@@ -282,6 +373,11 @@ static const Symbol *rn(SL *sl, const Symbol *s) {
 
 static Form *lower(SL *sl, Form *f);
 static Form *lower_body(SL *sl, Form **items, uint32_t n, Span sp);
+static void lower_toplevel(SL *sl, Form *f, FB *out);
+static void lower_import_set(SL *sl, Form *set);
+static const Symbol *library_module(SL *sl, Form *set, bool *ok);
+static Form *cond_expand_clause(SL *sl, Form *f, uint32_t *out_n, Form ***out_items);
+static void lower_record_type(SL *sl, Form *f, FB *out);
 static Form *rebind_rest(SL *sl, Span sp, const Symbol *rest, Form *body);
 
 /* Does `f` mention any of `names` (unquoted)?  Decides whether a `let` needs
@@ -425,13 +521,19 @@ static Form *lower_formals(SL *sl, Form *formals, bool *ok, const Symbol **out_r
     return fb_vec(sl, &b, formals->span);
 }
 
-/* (let [rest (:: rest (Cons any))] body) -- see lower_formals. */
+/* (let [rest (r7rs-chain->list__ (:: rest (Cons any)))] body) -- see
+ * lower_formals.  A variadic `& r : any` arrives as the `(Cons any)` chain
+ * Saffron's widen builds; R3 gives Scheme lists their own representation
+ * (R7rsPair / the null singleton, so `set-cdr!` and dotted tails work), and
+ * the chain is converted at the one place it enters Scheme code, so a rest
+ * parameter is a Scheme list like every other list the program sees. */
 static Form *rebind_rest(SL *sl, Span sp, const Symbol *rest, Form *body) {
     if (!rest) return body;
     Form *cons_any = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "Cons")), Sym(sl, sp, sl->t_any));
     Form *asc = Ln(sl, sp, 3, Sym(sl, sp, I(sl, "::")), Sym(sl, sp, rest), cons_any);
+    Form *conv = Ln(sl, sp, 2, Sym(sl, sp, sl->p_chain_to_list), asc);
     FB b = {0};
-    push_binding(sl, &b, sp, rest, asc, form_sets(sl, rest, body));
+    push_binding(sl, &b, sp, rest, conv, form_sets(sl, rest, body));
     return Ln(sl, sp, 3, Sym(sl, sp, sl->t_let), fb_vec(sl, &b, sp), body);
 }
 
@@ -1033,30 +1135,111 @@ static Form *lower_body(SL *sl, Form **items, uint32_t n, Span sp) {
     return body;
 }
 
-/* Inside quasiquote only the unquoted parts are expressions. */
-static Form *lower_qq(SL *sl, Form *f) {
-    if (!f) return f;
+/* R3 / D4: `quote` constructs runtime data.  A symbol stays the `(quote sym)`
+ * the substrate already understands (an interned Sym), an atom is itself, a
+ * character literal is the `(r7rs-char__ n)` call the reader produced, a
+ * list is `(r7rs-list d...)` (a dotted one a `r7rs-cons` chain ending in the
+ * tail datum), a vector `(r7rs-vector d...)`.  Built at runtime each time the
+ * expression runs -- the static `.rodata` table D4 wants is deferred with the
+ * literal-mutation question (Section 8, Q2). */
+static bool is_char_form(SL *sl, const Form *f) {
+    return f->tag == F_LIST && f->as.list.len == 2 && is_sym(f->as.list.items[0], sl->p_char) &&
+           f->as.list.items[1]->tag == F_INT;
+}
+static Form *lower_datum(SL *sl, Form *d);
+static Form *datum_list(SL *sl, Form *f) {
+    Span sp = f->span;
+    uint32_t n = f->as.list.len;
+    /* dotted: (a b . t) */
+    if (n >= 3 && is_sym(f->as.list.items[n - 2], sl->s_dot)) {
+        Form *tail = lower_datum(sl, f->as.list.items[n - 1]);
+        for (int32_t i = (int32_t)n - 3; i >= 0; i--)
+            tail = Ln(sl, sp, 3, Sym(sl, sp, sl->p_cons), lower_datum(sl, f->as.list.items[i]), tail);
+        return tail;
+    }
+    FB b = {0};
+    fb_push(&b, Sym(sl, sp, sl->p_list));
+    for (uint32_t i = 0; i < n; i++) fb_push(&b, lower_datum(sl, f->as.list.items[i]));
+    return fb_list(sl, &b, sp);
+}
+static Form *lower_datum(SL *sl, Form *d) {
+    Span sp = d->span;
+    switch (d->tag) {
+        case F_SYM:
+            if (d->as.sym == sl->t_nil_sym) return Ln(sl, sp, 1, Sym(sl, sp, sl->p_list));
+            return form_quote(sl->a, sp, d);
+        case F_LIST:
+            if (is_char_form(sl, d)) return d;
+            return datum_list(sl, d);
+        case F_VEC: {
+            FB b = {0};
+            fb_push(&b, Sym(sl, sp, sl->p_vector));
+            for (uint32_t i = 0; i < d->as.list.len; i++) fb_push(&b, lower_datum(sl, d->as.list.items[i]));
+            return fb_list(sl, &b, sp);
+        }
+        case F_QUOTE: case F_QUASIQUOTE: case F_UNQUOTE: case F_UNQUOTE_SPLICING: {
+            /* ''x is (quote x) as data: a two-element list. */
+            const char *head = d->tag == F_QUOTE ? "quote" : d->tag == F_QUASIQUOTE ? "quasiquote"
+                             : d->tag == F_UNQUOTE ? "unquote" : "unquote-splicing";
+            Form *h = form_quote(sl->a, sp, Sym(sl, sp, I(sl, head)));
+            return Ln(sl, sp, 3, Sym(sl, sp, sl->p_list), h, lower_datum(sl, d->as.list.items[0]));
+        }
+        case F_NIL: return Ln(sl, sp, 1, Sym(sl, sp, sl->p_list));
+        default: return d;   /* int, float, string, bool, keyword */
+    }
+}
+
+/* Quasiquote: the datum walker with holes.  At depth 1 an `unquote` is an
+ * expression and an `unquote-splicing` element splices via `r7rs-append`;
+ * a nested quasiquote raises the depth and its unquotes lower it, staying
+ * data (R7RS 4.2.8). */
+static Form *lower_qq(SL *sl, Form *f, int depth);
+static Form *qq_list(SL *sl, Form *f, int depth) {
+    Span sp = f->span;
+    uint32_t n = f->as.list.len;
+    Form *tail;
+    int32_t last;
+    if (n >= 3 && is_sym(f->as.list.items[n - 2], sl->s_dot)) {
+        tail = lower_qq(sl, f->as.list.items[n - 1], depth);
+        last = (int32_t)n - 3;
+    } else {
+        tail = Ln(sl, sp, 1, Sym(sl, sp, sl->p_list));
+        last = (int32_t)n - 1;
+    }
+    for (int32_t i = last; i >= 0; i--) {
+        Form *it = f->as.list.items[i];
+        if (it->tag == F_UNQUOTE_SPLICING && depth == 1)
+            tail = Ln(sl, sp, 3, Sym(sl, sp, sl->p_append), lower(sl, it->as.list.items[0]), tail);
+        else
+            tail = Ln(sl, sp, 3, Sym(sl, sp, sl->p_cons), lower_qq(sl, it, depth), tail);
+    }
+    return tail;
+}
+static Form *lower_qq(SL *sl, Form *f, int depth) {
+    Span sp = f->span;
     switch (f->tag) {
-        case F_UNQUOTE: case F_UNQUOTE_SPLICING: {
-            Form *g = form_new(sl->a, f->tag, f->span);
-            Form **it = (Form **)arena_alloc(sl->a, sizeof(Form *));
-            it[0] = lower(sl, f->as.list.items[0]);
-            g->as.list.items = it; g->as.list.len = 1;
-            return g;
+        case F_UNQUOTE:
+            if (depth == 1) return lower(sl, f->as.list.items[0]);
+            return Ln(sl, sp, 3, Sym(sl, sp, sl->p_list),
+                      form_quote(sl->a, sp, Sym(sl, sp, sl->s_unquote)),
+                      lower_qq(sl, f->as.list.items[0], depth - 1));
+        case F_UNQUOTE_SPLICING:
+            return Ln(sl, sp, 3, Sym(sl, sp, sl->p_list),
+                      form_quote(sl->a, sp, Sym(sl, sp, sl->s_unquote_splicing)),
+                      lower_qq(sl, f->as.list.items[0], depth - 1));
+        case F_QUASIQUOTE:
+            return Ln(sl, sp, 3, Sym(sl, sp, sl->p_list),
+                      form_quote(sl->a, sp, Sym(sl, sp, sl->s_quasiquote)),
+                      lower_qq(sl, f->as.list.items[0], depth + 1));
+        case F_LIST:
+            if (is_char_form(sl, f)) return f;
+            return qq_list(sl, f, depth);
+        case F_VEC: {
+            Form *as_list = form_new(sl->a, F_LIST, sp);
+            as_list->as.list = f->as.list;
+            return Ln(sl, sp, 2, Sym(sl, sp, sl->p_list_to_vector), qq_list(sl, as_list, depth));
         }
-        case F_LIST: case F_VEC: {
-            Form **it = (Form **)arena_alloc(sl->a, (f->as.list.len + 1) * sizeof(Form *));
-            bool changed = false;
-            for (uint32_t i = 0; i < f->as.list.len; i++) {
-                it[i] = lower_qq(sl, f->as.list.items[i]);
-                if (it[i] != f->as.list.items[i]) changed = true;
-            }
-            if (!changed) return f;
-            Form *g = form_new(sl->a, f->tag, f->span);
-            g->as.list.items = it; g->as.list.len = f->as.list.len;
-            return g;
-        }
-        default: return f;
+        default: return lower_datum(sl, f);
     }
 }
 
@@ -1082,15 +1265,8 @@ static Form *lower(SL *sl, Form *f) {
             const Symbol *r = rn(sl, f->as.sym);
             return (r == f->as.sym) ? f : Sym(sl, f->span, r);
         }
-        case F_QUOTE:
-            /* `'()` -- the empty list.  R3 makes quote a datum constructor;
-             * until then the one datum every list program needs reads as the
-             * empty list the prelude builds. */
-            if (f->as.list.len == 1 && f->as.list.items[0]->tag == F_LIST &&
-                f->as.list.items[0]->as.list.len == 0)
-                return Ln(sl, f->span, 1, Sym(sl, f->span, sl->p_list));
-            return f;
-        case F_QUASIQUOTE: return lower_qq(sl, f);
+        case F_QUOTE:      return lower_datum(sl, f->as.list.items[0]);
+        case F_QUASIQUOTE: return lower_qq(sl, f->as.list.items[0], 1);
         case F_VEC: case F_MAP: case F_SET: case F_MAP_LITERAL: case F_SET_LITERAL:
         case F_UNQUOTE: case F_UNQUOTE_SPLICING:
             return lower_children(sl, f);
@@ -1129,8 +1305,13 @@ static Form *lower(SL *sl, Form *f) {
             return Nil(sl, f->span);
         }
         if (h == sl->s_define_record_type) {
-            err(f, "define-record-type is r7rs-lang-plan R3 and has not landed yet");
+            err(f, "define-record-type is only allowed at the top level or in a library body");
             return Nil(sl, f->span);
+        }
+        if (h == sl->s_cond_expand) {
+            uint32_t n; Form **items;
+            if (!cond_expand_clause(sl, f, &n, &items)) return Nil(sl, f->span);
+            return lower_seq(sl, items, n, f->span);
         }
     }
     return lower_children(sl, f);
@@ -1171,6 +1352,7 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
             if (name == sl->s_main && params->as.list.len == 0) {
                 /* `(define (main) ...)` is the program's entry: Turmeric's main
                  * returns int, so run the body for effect and answer 0. */
+                sl->user_main = true;
                 Form *ann = form_type_ann(sl->a, sp, Sym(sl, sp, sl->t_int));
                 fb_push(out, Ln(sl, sp, 6, Sym(sl, sp, sl->t_defn), Sym(sl, sp, name),
                                 params, ann, body, Int(sl, sp, 0)));
@@ -1194,28 +1376,353 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
         return;
     }
     if (head_is(f, sl->s_import) && f->as.list.len >= 2 && f->as.list.items[1]->tag == F_LIST) {
-        /* `(import (scheme base) ...)`: the library system is r7rs-lang-plan
-         * R3 (define-library and the `(turmeric ...)` seam).  Until then the
-         * prelude IS `(scheme base)` and is preloaded, so an import of a
-         * `(scheme ...)` set is accepted as a no-op and anything else says
-         * which stage it waits on. */
-        for (uint32_t i = 1; i < f->as.list.len; i++) {
-            Form *set = f->as.list.items[i];
-            if (set->tag == F_LIST && set->as.list.len >= 1 &&
-                set->as.list.items[0]->tag == F_SYM &&
-                strcmp(set->as.list.items[0]->as.sym->name, "scheme") == 0)
-                continue;
-            err(set, "(import ...) of a non-(scheme ...) library set is "
-                     "r7rs-lang-plan R3 (define-library and the (turmeric ...) "
-                     "seam) and has not landed yet");
-        }
+        /* R3 / D9: each import set maps onto a Turmeric import (or a no-op
+         * when the names are already global); the program is then wrapped
+         * in a defmodule, where Turmeric's import is legal. */
+        for (uint32_t i = 1; i < f->as.list.len; i++) lower_import_set(sl, f->as.list.items[i]);
         return;
     }
     if (head_is(f, sl->s_define_library)) {
-        err(f, "define-library is r7rs-lang-plan R3 and has not landed yet");
+        /* (define-library (my utils) (export ...) (import ...) (begin ...))
+         * -> (defmodule my/utils (export ...) imports... body...) */
+        if (sl->has_library) { err(f, "only one define-library per file (Turmeric: one defmodule per file)"); return; }
+        if (f->as.list.len < 2) { err(f, "define-library needs a library name"); return; }
+        bool ok;
+        const Symbol *name = library_module(sl, f->as.list.items[1], &ok);
+        if (!ok) return;
+        if (!name) { err(f->as.list.items[1], "a (scheme ...) or auto-loaded stdlib name cannot be defined here"); return; }
+        sl->has_library = true;
+        sl->lib_name = name;
+        for (uint32_t i = 2; i < f->as.list.len; i++) {
+            Form *decl = f->as.list.items[i];
+            if (head_is(decl, sl->s_export)) {
+                for (uint32_t j = 1; j < decl->as.list.len; j++) {
+                    Form *nm = decl->as.list.items[j];
+                    if (nm->tag == F_LIST && nm->as.list.len == 3 && is_sym(nm->as.list.items[0], I(sl, "rename"))) {
+                        err(nm, "(export (rename a b)) is not supported yet; export the name and rename at the import");
+                        continue;
+                    }
+                    if (nm->tag != F_SYM) { err(nm, "export names must be identifiers"); continue; }
+                    fb_push(&sl->lib_exports, Sym(sl, nm->span, rn(sl, nm->as.sym)));
+                }
+            } else if (head_is(decl, sl->s_import)) {
+                for (uint32_t j = 1; j < decl->as.list.len; j++) lower_import_set(sl, decl->as.list.items[j]);
+            } else if (head_is(decl, sl->s_begin)) {
+                for (uint32_t j = 1; j < decl->as.list.len; j++) lower_toplevel(sl, decl->as.list.items[j], &sl->lib_body);
+            } else if (head_is(decl, sl->s_cond_expand)) {
+                uint32_t n; Form **items;
+                if (cond_expand_clause(sl, decl, &n, &items))
+                    for (uint32_t j = 0; j < n; j++) {
+                        /* a chosen clause holds declarations, not forms */
+                        Form *d = items[j];
+                        if (head_is(d, sl->s_begin))
+                            for (uint32_t k = 1; k < d->as.list.len; k++) lower_toplevel(sl, d->as.list.items[k], &sl->lib_body);
+                        else if (head_is(d, sl->s_import))
+                            for (uint32_t k = 1; k < d->as.list.len; k++) lower_import_set(sl, d->as.list.items[k]);
+                        else err(d, "cond-expand inside define-library takes (import ...) and (begin ...) declarations");
+                    }
+            } else if (head_is(decl, sl->s_include)) {
+                err(decl, "(include \"file\") in a library is not supported yet; write the definitions in a (begin ...)");
+            } else {
+                err(decl, "define-library declarations are (export ...), (import ...), (begin ...) and (cond-expand ...)");
+            }
+        }
         return;
     }
+    if (head_is(f, sl->s_cond_expand)) {
+        uint32_t n; Form **items;
+        if (cond_expand_clause(sl, f, &n, &items))
+            for (uint32_t i = 0; i < n; i++) lower_toplevel(sl, items[i], out);
+        return;
+    }
+    if (head_is(f, sl->s_define_record_type)) {
+        lower_record_type(sl, f, out);
+        return;
+    }
+    if (head_is(f, sl->s_define) && f->as.list.len >= 2 && f->as.list.items[1]->tag == F_LIST &&
+        f->as.list.items[1]->as.list.len >= 1 && is_sym(f->as.list.items[1]->as.list.items[0], sl->s_main) &&
+        f->as.list.items[1]->as.list.len == 1)
+        sl->user_main = true;
     fb_push(out, lower(sl, f));
+}
+
+/* ---------------------------------------------------------------------------
+ * R3 / D9: the library system and the `(turmeric ...)` seam.
+ * ------------------------------------------------------------------------- */
+
+/* Is `<name>.tur` an auto-loaded stdlib file?  Its names are global already,
+ * so `(import (turmeric stdlib/<name>))` is a no-op rather than an import
+ * the module loader would fail to resolve. */
+static bool stdlib_autoloaded(const char *name) {
+    const char *const *files = tur_stdlib_autoload_files();
+    size_t n = strlen(name);
+    for (size_t i = 0; files && files[i]; i++) {
+        const char *f = files[i];
+        size_t fl = strlen(f);
+        if (fl == n + 4 && memcmp(f, name, n) == 0 && strcmp(f + n, ".tur") == 0) return true;
+    }
+    return false;
+}
+
+/* The Turmeric module a library NAME denotes, or NULL when the import is a
+ * no-op (`(scheme ...)` is the prelude; an auto-loaded stdlib file is already
+ * global).  `(turmeric a/b/c)` is the module `a/b/c` with a leading `stdlib/`
+ * dropped (the module loader's stdlib fallback finds it); any other name
+ * `(my utils)` joins with `/`. */
+static const Symbol *library_module(SL *sl, Form *set, bool *ok) {
+    *ok = true;
+    if (set->tag != F_LIST || set->as.list.len == 0 || set->as.list.items[0]->tag != F_SYM) {
+        err(set, "a library name is a list of identifiers, e.g. (scheme base) or (turmeric stdlib/vec)");
+        *ok = false;
+        return NULL;
+    }
+    const char *head = set->as.list.items[0]->as.sym->name;
+    if (strcmp(head, "scheme") == 0) return NULL;
+    if (strcmp(head, "turmeric") == 0) {
+        if (set->as.list.len != 2 || set->as.list.items[1]->tag != F_SYM) {
+            err(set, "(turmeric <module>) takes one module path, e.g. (turmeric stdlib/vec) or (turmeric json/encode)");
+            *ok = false;
+            return NULL;
+        }
+        const char *m = set->as.list.items[1]->as.sym->name;
+        if (strncmp(m, "stdlib/", 7) == 0) m += 7;
+        if (stdlib_autoloaded(m)) return NULL;
+        return I(sl, m);
+    }
+    char buf[256]; size_t at = 0;
+    for (uint32_t i = 0; i < set->as.list.len; i++) {
+        const Form *p = set->as.list.items[i];
+        if (p->tag != F_SYM) { err(p, "a library name part must be an identifier"); *ok = false; return NULL; }
+        int w = snprintf(buf + at, sizeof buf - at, "%s%s", i ? "/" : "", p->as.sym->name);
+        if (w < 0 || (size_t)w >= sizeof buf - at) { err(set, "library name too long"); *ok = false; return NULL; }
+        at += (size_t)w;
+    }
+    return I(sl, buf);
+}
+
+/* One import set -> zero or one Turmeric `(import ...)` form in sl->imports,
+ * plus the rename/prefix rules `rename`/`prefix` need. */
+static void lower_import_set(SL *sl, Form *set) {
+    Span sp = set->span;
+    if (set->tag != F_LIST || set->as.list.len == 0) { err(set, "malformed import set"); return; }
+    Form *head = set->as.list.items[0];
+    const char *h = head->tag == F_SYM ? head->as.sym->name : "";
+    bool ok;
+    if (strcmp(h, "only") == 0 || strcmp(h, "rename") == 0 || strcmp(h, "prefix") == 0 ||
+        strcmp(h, "except") == 0) {
+        if (set->as.list.len < 2) { err(set, "(%s <import set> ...) needs an import set", h); return; }
+        Form *inner = set->as.list.items[1];
+        if (inner->tag == F_LIST && inner->as.list.len > 0 && inner->as.list.items[0]->tag == F_SYM) {
+            const char *ih = inner->as.list.items[0]->as.sym->name;
+            if (strcmp(ih, "only") == 0 || strcmp(ih, "rename") == 0 || strcmp(ih, "prefix") == 0 ||
+                strcmp(ih, "except") == 0) {
+                err(set, "nested import sets are not supported yet; use one of only/prefix/rename directly on the library name");
+                return;
+            }
+        }
+        if (strcmp(h, "except") == 0) {
+            err(set, "(except ...) is not supported: Turmeric's import has no \"all but\"; list the names with (only ...) instead");
+            return;
+        }
+        const Symbol *mod = library_module(sl, inner, &ok);
+        if (!ok) return;
+        if (strcmp(h, "only") == 0) {
+            FB names = {0};
+            for (uint32_t i = 2; i < set->as.list.len; i++) {
+                Form *nm = set->as.list.items[i];
+                if (nm->tag != F_SYM) { err(nm, "(only ...) names must be identifiers"); free(names.items); return; }
+                fb_push(&names, Sym(sl, nm->span, rn(sl, nm->as.sym)));
+            }
+            if (!mod) { free(names.items); return; }   /* already global */
+            fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
+                                     Kw(sl, sp, sl->t_refer), fb_vec(sl, &names, sp)));
+            sl->needs_module = true;
+            return;
+        }
+        if (strcmp(h, "rename") == 0) {
+            FB names = {0};
+            for (uint32_t i = 2; i < set->as.list.len; i++) {
+                Form *pr = set->as.list.items[i];
+                if (pr->tag != F_LIST || pr->as.list.len != 2 || pr->as.list.items[0]->tag != F_SYM ||
+                    pr->as.list.items[1]->tag != F_SYM) {
+                    err(pr, "(rename <set> (from to) ...) takes identifier pairs"); free(names.items); return;
+                }
+                const Symbol *from = rn(sl, pr->as.list.items[0]->as.sym);
+                if (sl->n_renames < 64) {
+                    sl->renames[sl->n_renames].from = pr->as.list.items[1]->as.sym;
+                    sl->renames[sl->n_renames].to   = from;
+                    sl->n_renames++;
+                }
+                fb_push(&names, Sym(sl, pr->span, from));
+            }
+            if (!mod) { free(names.items); return; }
+            fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
+                                     Kw(sl, sp, sl->t_refer), fb_vec(sl, &names, sp)));
+            sl->needs_module = true;
+            return;
+        }
+        /* prefix */
+        if (set->as.list.len != 3 || set->as.list.items[2]->tag != F_SYM) {
+            err(set, "(prefix <set> <identifier>) takes one prefix identifier"); return;
+        }
+        const Symbol *pfx = set->as.list.items[2]->as.sym;
+        if (sl->n_prefixes >= 16) { err(set, "too many (prefix ...) imports"); return; }
+        if (!mod) {
+            /* Auto-loaded: the names are global and bare, so the prefix just
+             * comes off.  Recorded as an alias-less rule. */
+            sl->prefixes[sl->n_prefixes].prefix = pfx->name;
+            sl->prefixes[sl->n_prefixes].plen   = pfx->len;
+            sl->prefixes[sl->n_prefixes].alias  = NULL;
+            sl->n_prefixes++;
+            return;
+        }
+        /* The alias is the prefix without a trailing ':' or '-'; `p:name` then
+         * reads as `p/name`, which is Turmeric's `:as p` spelling. */
+        char alias[128];
+        snprintf(alias, sizeof alias, "%s", pfx->name);
+        size_t al = strlen(alias);
+        while (al > 0 && (alias[al - 1] == ':' || alias[al - 1] == '-')) alias[--al] = '\0';
+        if (al == 0) { err(set, "(prefix ...) needs a non-empty prefix"); return; }
+        sl->prefixes[sl->n_prefixes].prefix = pfx->name;
+        sl->prefixes[sl->n_prefixes].plen   = pfx->len;
+        sl->prefixes[sl->n_prefixes].alias  = I(sl, alias);
+        sl->n_prefixes++;
+        fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
+                                 Kw(sl, sp, sl->t_as), Sym(sl, sp, I(sl, alias))));
+        sl->needs_module = true;
+        return;
+    }
+    const Symbol *mod = library_module(sl, set, &ok);
+    if (!ok || !mod) return;
+    fb_push(&sl->imports, Ln(sl, sp, 2, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod)));
+    sl->needs_module = true;
+}
+
+/* cond-expand feature requirements: `r7rs`, `turmeric`, `else` and any
+ * `(library (scheme ...))` hold; `and`/`or`/`not` compose. */
+static bool feature_holds(SL *sl, Form *req) {
+    if (req->tag == F_SYM) {
+        const char *n = req->as.sym->name;
+        return strcmp(n, "r7rs") == 0 || strcmp(n, "turmeric") == 0 || strcmp(n, "else") == 0 ||
+               strcmp(n, "exact-closed") == 0;
+    }
+    if (req->tag != F_LIST || req->as.list.len == 0 || req->as.list.items[0]->tag != F_SYM) return false;
+    const char *h = req->as.list.items[0]->as.sym->name;
+    if (strcmp(h, "and") == 0) {
+        for (uint32_t i = 1; i < req->as.list.len; i++) if (!feature_holds(sl, req->as.list.items[i])) return false;
+        return true;
+    }
+    if (strcmp(h, "or") == 0) {
+        for (uint32_t i = 1; i < req->as.list.len; i++) if (feature_holds(sl, req->as.list.items[i])) return true;
+        return false;
+    }
+    if (strcmp(h, "not") == 0) return req->as.list.len == 2 && !feature_holds(sl, req->as.list.items[1]);
+    if (strcmp(h, "library") == 0 && req->as.list.len == 2) {
+        bool ok; const Symbol *m = library_module(sl, req->as.list.items[1], &ok);
+        (void)m;
+        return ok;   /* (scheme ...) and an auto-loaded stdlib file hold; a module we cannot check is assumed present */
+    }
+    return false;
+}
+/* The body of the first cond-expand clause that holds, or NULL. */
+static Form *cond_expand_clause(SL *sl, Form *f, uint32_t *out_n, Form ***out_items) {
+    for (uint32_t i = 1; i < f->as.list.len; i++) {
+        Form *cl = f->as.list.items[i];
+        if (cl->tag != F_LIST || cl->as.list.len == 0) { err(cl, "cond-expand clause expects (<feature requirement> body...)"); return NULL; }
+        if (feature_holds(sl, cl->as.list.items[0])) {
+            *out_items = cl->as.list.items + 1;
+            *out_n = cl->as.list.len - 1;
+            return cl;
+        }
+    }
+    *out_n = 0; *out_items = NULL;
+    return NULL;
+}
+
+/* (define-record-type <name> (ctor f...) pred (f accessor [modifier])...)
+ * -> a heap defstruct of `any` fields plus the procedures (D3: a record is
+ * an ordinary Turmeric type, its predicate an `is?`). */
+static void lower_record_type(SL *sl, Form *f, FB *out) {
+    Span sp = f->span;
+    if (f->as.list.len < 4 || f->as.list.items[1]->tag != F_SYM || f->as.list.items[2]->tag != F_LIST ||
+        f->as.list.items[3]->tag != F_SYM) {
+        err(f, "define-record-type expects (define-record-type <name> (ctor field...) pred (field accessor [modifier])...)");
+        return;
+    }
+    /* Struct name: the record name with `<`/`>` dropped and a prefix, so it
+     * can never collide with a stdlib type. */
+    char sbuf[128]; size_t at = 0;
+    const char *rn_name = f->as.list.items[1]->as.sym->name;
+    at += (size_t)snprintf(sbuf, sizeof sbuf, "R7rsRec_");
+    for (const char *p = rn_name; *p && at + 1 < sizeof sbuf; p++) {
+        char c = *p;
+        if (c == '<' || c == '>') continue;
+        sbuf[at++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) ? c : '_';
+    }
+    sbuf[at] = '\0';
+    const Symbol *sname = I(sl, sbuf);
+    /* Fields, in declaration order. */
+    uint32_t nf = f->as.list.len - 4;
+    const Symbol **fields = (const Symbol **)arena_alloc(sl->a, (nf + 1) * sizeof(*fields));
+    FB fvec = {0};
+    for (uint32_t i = 0; i < nf; i++) {
+        Form *spec = f->as.list.items[4 + i];
+        if (spec->tag != F_LIST || spec->as.list.len < 2 || spec->as.list.len > 3 || spec->as.list.items[0]->tag != F_SYM) {
+            err(spec, "record field spec expects (field accessor [modifier])"); free(fvec.items); return;
+        }
+        fields[i] = spec->as.list.items[0]->as.sym;
+        fb_push(&fvec, Sym(sl, spec->span, fields[i]));
+        fb_push(&fvec, AnyAnn(sl, spec->span));
+    }
+    fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defstruct), Sym(sl, sp, sname), Kw(sl, sp, sl->t_heap),
+                    fb_vec(sl, &fvec, sp)));
+    /* Constructor: its parameters name a subset of the fields, in any order;
+     * an unmentioned field starts as nil. */
+    Form *ctor = f->as.list.items[2];
+    if (ctor->as.list.len < 1 || ctor->as.list.items[0]->tag != F_SYM) { err(ctor, "record constructor spec expects (name field...)"); return; }
+    FB params = {0}, args = {0};
+    for (uint32_t i = 1; i < ctor->as.list.len; i++) {
+        Form *p = ctor->as.list.items[i];
+        if (p->tag != F_SYM) { err(p, "constructor field must be an identifier"); free(params.items); free(args.items); return; }
+        fb_push(&params, Sym(sl, p->span, rn(sl, p->as.sym)));
+    }
+    fb_push(&args, Sym(sl, sp, sname));
+    for (uint32_t i = 0; i < nf; i++) {
+        bool named = false;
+        for (uint32_t j = 1; j < ctor->as.list.len; j++)
+            if (ctor->as.list.items[j]->as.sym == fields[i]) { named = true; break; }
+        fb_push(&args, named ? Sym(sl, sp, rn(sl, fields[i])) : Nil(sl, sp));
+    }
+    fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, ctor->as.list.items[0]->as.sym)),
+                    fb_vec(sl, &params, sp), fb_list(sl, &args, sp)));
+    /* Predicate. */
+    {
+        const Symbol *x = I(sl, "x");
+        Form *pv[1] = { Sym(sl, sp, x) };
+        fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, f->as.list.items[3]->as.sym)),
+                        Vec(sl, sp, pv, 1), form_type_ann(sl->a, sp, Sym(sl, sp, sl->t_bool)),
+                        Ln(sl, sp, 3, Sym(sl, sp, sl->t_is), Sym(sl, sp, x), Sym(sl, sp, sname))));
+    }
+    /* Accessors and modifiers. */
+    for (uint32_t i = 0; i < nf; i++) {
+        Form *spec = f->as.list.items[4 + i];
+        const Symbol *r = I(sl, "r");
+        char fld[128]; snprintf(fld, sizeof fld, ".%s", fields[i]->name);
+        Form *sann = form_type_ann(sl->a, sp, Sym(sl, sp, sname));
+        Form *acc_params[2] = { Sym(sl, sp, r), sann };
+        Form *read = Ln(sl, sp, 2, Sym(sl, sp, I(sl, fld)), Sym(sl, sp, r));
+        if (spec->as.list.items[1]->tag != F_SYM) { err(spec, "accessor must be an identifier"); return; }
+        fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, spec->as.list.items[1]->as.sym)),
+                        Vec(sl, sp, acc_params, 2), AnyAnn(sl, sp), read));
+        if (spec->as.list.len == 3) {
+            if (spec->as.list.items[2]->tag != F_SYM) { err(spec, "modifier must be an identifier"); return; }
+            const Symbol *v = I(sl, "v");
+            Form *mod_params[3] = { Sym(sl, sp, r), form_type_ann(sl->a, sp, Sym(sl, sp, sname)), Sym(sl, sp, v) };
+            Form *store = Ln(sl, sp, 3, Sym(sl, sp, sl->t_set), read, Sym(sl, sp, v));
+            fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, spec->as.list.items[2]->as.sym)),
+                            Vec(sl, sp, mod_params, 3), store));
+        }
+    }
 }
 
 bool scheme_lower_needed(Form *const *forms, uint32_t n) {
@@ -1230,11 +1737,81 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     sl_init(&sl, a, st);
     for (uint32_t i = 0; i < n; i++)
         if (is_scheme_file(forms[i])) collect_muts(&sl, forms[i]);
-    FB out = {0};
+    FB out = {0}, sforms = {0};
+    Span first_sp = SPAN_UNKNOWN;
+    bool have_first = false;
     for (uint32_t i = 0; i < n; i++) {
-        if (is_scheme_file(forms[i])) lower_toplevel(&sl, forms[i], &out);
-        else fb_push(&out, forms[i]);
+        if (is_scheme_file(forms[i])) {
+            if (!have_first) { first_sp = forms[i]->span; have_first = true; }
+            lower_toplevel(&sl, forms[i], &sforms);
+        } else {
+            fb_push(&out, forms[i]);
+        }
     }
+    if (sl.has_library) {
+        /* A library file: exactly the defmodule.  Anything else at top level
+         * in the same file has nowhere to go. */
+        if (sforms.n > 0) err(sforms.items[0], "a file with a define-library may hold nothing else at top level");
+        FB m = {0};
+        fb_push(&m, Sym(&sl, first_sp, sl.t_defmodule));
+        fb_push(&m, Sym(&sl, first_sp, sl.lib_name));
+        FB ex = {0};
+        fb_push(&ex, Sym(&sl, first_sp, sl.t_export));
+        for (uint32_t i = 0; i < sl.lib_exports.n; i++) fb_push(&ex, sl.lib_exports.items[i]);
+        fb_push(&m, fb_list(&sl, &ex, first_sp));
+        for (uint32_t i = 0; i < sl.imports.n; i++) fb_push(&m, sl.imports.items[i]);
+        for (uint32_t i = 0; i < sl.lib_body.n; i++) fb_push(&m, sl.lib_body.items[i]);
+        fb_push(&out, fb_list(&sl, &m, first_sp));
+        free(sl.lib_exports.items); free(sl.lib_body.items); free(sl.imports.items);
+    } else if (sl.needs_module && have_first) {
+        /* A program with imports: wrap it in a defmodule named after its file,
+         * imports first, definitions next, and the top-level expressions as
+         * the body of a synthesized `main` (the top-level fold does not look
+         * inside a module). */
+        const SourceFile *sf = diag_source_file(first_sp.file_id);
+        char mbuf[128] = "r7rs-program";
+        if (sf && sf->path) {
+            const char *base = strrchr(sf->path, '/');
+            base = base ? base + 1 : sf->path;
+            size_t at = 0;
+            for (const char *p = base; *p && at + 1 < sizeof mbuf; p++) {
+                if (*p == '.') break;
+                mbuf[at++] = (*p == '-' || *p == '_' || (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                              (*p >= '0' && *p <= '9')) ? *p : '-';
+            }
+            if (at) mbuf[at] = '\0';
+        }
+        FB m = {0}, stmts = {0};
+        fb_push(&m, Sym(&sl, first_sp, sl.t_defmodule));
+        fb_push(&m, Sym(&sl, first_sp, I(&sl, mbuf)));
+        for (uint32_t i = 0; i < sl.imports.n; i++) fb_push(&m, sl.imports.items[i]);
+        for (uint32_t i = 0; i < sforms.n; i++) {
+            Form *f = sforms.items[i];
+            bool is_def = f->tag == F_LIST && f->as.list.len > 0 && f->as.list.items[0]->tag == F_SYM &&
+                          strncmp(f->as.list.items[0]->as.sym->name, "def", 3) == 0;
+            if (is_def) fb_push(&m, f); else fb_push(&stmts, f);
+        }
+        if (stmts.n > 0) {
+            if (sl.user_main) {
+                err(stmts.items[0], "a program that imports libraries and defines (main) cannot also have top-level expressions; move them into main");
+            }
+            FB body = {0};
+            fb_push(&body, Sym(&sl, first_sp, sl.t_do));
+            for (uint32_t i = 0; i < stmts.n; i++) fb_push(&body, stmts.items[i]);
+            fb_push(&body, Int(&sl, first_sp, 0));
+            fb_push(&m, Ln(&sl, first_sp, 5, Sym(&sl, first_sp, sl.t_defn), Sym(&sl, first_sp, sl.s_main),
+                           Vec(&sl, first_sp, NULL, 0),
+                           form_type_ann(sl.a, first_sp, Sym(&sl, first_sp, sl.t_int)),
+                           fb_list(&sl, &body, first_sp)));
+        }
+        free(stmts.items);
+        fb_push(&out, fb_list(&sl, &m, first_sp));
+        free(sl.imports.items);
+    } else {
+        for (uint32_t i = 0; i < sforms.n; i++) fb_push(&out, sforms.items[i]);
+        free(sl.imports.items);
+    }
+    free(sforms.items);
     Form **res = (Form **)arena_alloc(a, (out.n + 1) * sizeof(Form *));
     for (uint32_t i = 0; i < out.n; i++) res[i] = out.items[i];
     res[out.n] = NULL;

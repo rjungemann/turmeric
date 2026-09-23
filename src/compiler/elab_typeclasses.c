@@ -7508,6 +7508,7 @@ found_method:;
         if (obj && obj->type.kind == TY_ANY && lang_span_is_dynamic(call->span)) {
             Type any_t;
             memset(&any_t, 0, sizeof(any_t));
+    any_t.copy_kind = CK_COPY;   /* CK_UNIQUE is 0: a zeroed type is unique-kinded (saffron-any-let-binding-is-unique) */
             any_t.kind = TY_ANY;
             Expr *df = expr_new(e->arena, EX_DYN_FIELD, any_t, call->span);
             df->as.dyn_field_.obj   = obj;

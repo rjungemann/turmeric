@@ -1353,6 +1353,15 @@ int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
  * (imported/loaded modules) so bare top-level defns spliced by (load ...) can
  * self/mutually recurse.  A non-defn form is a no-op. */
 void elab_pre_declare_toplevel_defn(Elab *e, Arena *arena, Form *f);
+/* r7rs-lang-plan R3: full types for a forward decl's compound parameters in a
+ * dynamic file (NULL when none); marks the matching arg_kinds slots TY_APP. */
+Type **elab_fwd_param_full_types(Elab *e, Arena *arena, const Form *f,
+                                 uint32_t name_idx, uint32_t params_idx,
+                                 uint32_t param_arity, TypeKind *arg_kinds);
+/* r7rs-lang-plan R3: the full TY_APP type of a compound return annotation in a
+ * dynamic file (NULL otherwise), for the defmodule pre-pass. */
+Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
+                                    uint32_t params_idx, const Form *ret_f);
 const Symbol *intern_cstr(SymbolTable *st, const char *s);
 bool binding_mark_moved(Binding *b, Span use_span);
 bool binding_mark_lent(Binding *b, Span use_span);

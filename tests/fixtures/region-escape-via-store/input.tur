@@ -66,7 +66,23 @@
     (let [outer (Link (* 5 n) 0)]
       (with-region (fn [] (do (vec-push! v outer) 1)))))))
 
+;; 10. a field store of a WIDENED word into a heap cell that outlives the
+;;     bracket: the Scheme pair shape (r7rs-lang-plan R3 / D4 -- `set-car!`
+;;     is `(set! (.a p) v)` on a struct of `any` fields).  The node arrives
+;;     erased to `any`, so the field-store note is what stands between the
+;;     `cast` below and reclaimed memory.
+(defstruct AnyCell :heap [a : any])
+(defn store-field-any [c : any n : int] : int
+  (with-region (fn [] (let [p (cast c AnyCell)]
+                        (set! (.a p) (:: (Link (* 7 n) 0) any))
+                        1))))
+(defn read-field-any [c : any] : int
+  (let [p (cast c AnyCell)] (link-v (cast (.a p) Link))))
+
 (defn main [] : int
+  (let [c (:: (AnyCell (:: 0 any)) any)]
+    (println (store-field-any c 2))                     ;; 1
+    (println (read-field-any c)))                       ;; 14
   (let [v (:: (vec-new) (Vec Link))]
     (println (store-vec v 4))
     (println (link-v (vec-get v 0))))                   ;; 4

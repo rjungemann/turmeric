@@ -808,6 +808,7 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     value = elab_fn_value_to_fat(e, value);
     Type any_type;
     memset(&any_type, 0, sizeof(any_type));
+    any_type.copy_kind = CK_COPY;   /* CK_UNIQUE is 0: a zeroed type is unique-kinded */
     any_type.kind = TY_ANY;
 
     /* cps-coloring-walk-has-no-arm-for-union-inject, the remaining half: a widen
@@ -2209,6 +2210,7 @@ static Expr *saffron_dyn_call_on(Elab *e, const Form *call, Expr *fnv) {
     }
     Type any_t;
     memset(&any_t, 0, sizeof(any_t));
+    any_t.copy_kind = CK_COPY;   /* CK_UNIQUE is 0: a zeroed type is unique-kinded (saffron-any-let-binding-is-unique) */
     any_t.kind = TY_ANY;
     Expr *dc = expr_new(e->arena, EX_DYN_CALL, any_t, call->span);
     dc->as.dyn_call_.fn     = fnv;
@@ -4712,6 +4714,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
         if (has_any) {
             Type any_t;
             memset(&any_t, 0, sizeof(any_t));
+    any_t.copy_kind = CK_COPY;   /* CK_UNIQUE is 0: a zeroed type is unique-kinded (saffron-any-let-binding-is-unique) */
             any_t.kind = TY_ANY;
             /* saffron-lang-plan S5: widen every operand, not only the `any`
              * ones.  A mixed call like `(* x 2)` is the common shape, and the

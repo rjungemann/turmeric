@@ -3619,10 +3619,6 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
         }
     }
 
-    /* Elaborate the value and type-check against the field. */
-    Expr *value = elab_form(e, call->as.list.items[2]);
-    if (!value) return NULL;
-
     /* Record-ADT field type, with type-arg substitution for a parametric
      * receiver (`(Box int)` -> field A becomes int), mirroring the read side
      * (elab_typeclasses.c get-field).  structdef-retirement DS-C: the former
@@ -3640,6 +3636,22 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
                                      cf->full_type, type_args);
         }
     }
+    /* Elaborate the value and type-check against the field.  r7rs-lang-plan
+     * R3 (a Saffron gap too): an `any` field takes any value, so a concrete
+     * one is widened through `(:: v any)` in a dynamic file, exactly as a
+     * `set!` into an `any` cell is. */
+    Form *value_form = call->as.list.items[2];
+    if (expected_field.kind == TY_ANY &&
+        (lang_span_is_dynamic(call->span) || e->toplevel_dynamic)) {
+        Form **asc = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+        asc[0] = form_sym(e->arena, value_form->span, e->sym_ascribe);
+        asc[1] = value_form;
+        asc[2] = form_sym(e->arena, value_form->span,
+                          symtab_intern(e->st, strslice("any", 3)));
+        value_form = form_list(e->arena, value_form->span, asc, 3);
+    }
+    Expr *value = elab_form(e, value_form);
+    if (!value) return NULL;
     if (value->type.kind != TY_PTR_VOID && !type_eq(value->type, expected_field)) {
         diag_emit(DIAG_ERROR, value->span,
                   "set! (.%s ...): value type %s does not match field type %s",

@@ -802,6 +802,15 @@ add_test(
   COMMAND bash tests/run-saffron-import.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# r7rs-lang-plan R3 / D9: the Turmeric <-> R7RS seam in both directions on
+# both back ends -- a Turmeric module importing a `define-library`, and a
+# Scheme program importing a Turmeric module through `(turmeric ...)` with
+# `only`/`prefix`/`rename`.  A multi-module case, so a runner, not a fixture.
+add_test(
+  NAME tur_r7rs_import
+  COMMAND bash tests/run-r7rs-import.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # tur-init-help-scaffolds-and-overwrites: `tur init` must never destroy a
 # working tree.  `tur init --help` did not print help -- the flag fell past the
 # project-name slot, the cwd basename was used as the name, and scaffolding

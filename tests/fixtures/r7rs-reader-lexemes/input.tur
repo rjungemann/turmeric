@@ -17,10 +17,12 @@
   (println #false)
   ;; R7RS 6.6 characters: a plain one, an R7RS-only name, the `#\x<hex>`
   ;; scalar-value form, a multi-byte UTF-8 character, and the shared names.
-  (println #\a)
-  (println #\alarm)
-  (println #\x3bb)
-  (println #\space)
+  ;; Since R3 a character is its own type (R7rsChar), so the code is read
+  ;; back through `char->integer`.
+  (println (char->integer #\a))
+  (println (char->integer #\alarm))
+  (println (char->integer #\x3bb))
+  (println (char->integer #\space))
   ;; R7RS 7.1.1 radix and exactness prefixes, alone and stacked.
   (println #x1F)
   (println #b101)

@@ -1237,6 +1237,28 @@ static Type *fwd_shallow_result_app(Elab *e, const Form *appform,
     return out;
 }
 
+/* r7rs-lang-plan R3: is every tyvar leaf of a shallow-resolved type one of the
+ * defn's own type parameters?  The resolver spells an UNKNOWN name as a named
+ * tyvar (harmless for a return, which Pass 2 recomputes), so a parameter type
+ * is only committed to the forward decl when nothing in it is a guess. */
+static bool fwd_type_is_closed(const Type *t, const Symbol **tps, uint8_t n_tp) {
+    if (!t) return true;
+    switch (t->kind) {
+        case TY_TYVAR: {
+            const char *nm = t->as.tyvar_.name;
+            if (!nm) return false;
+            for (uint8_t i = 0; i < n_tp; i++)
+                if (tps[i] && strcmp(tps[i]->name, nm) == 0) return true;
+            return false;
+        }
+        case TY_APP:
+            return fwd_type_is_closed(t->as.app.fn, tps, n_tp) &&
+                   fwd_type_is_closed(t->as.app.arg, tps, n_tp);
+        default:
+            return true;
+    }
+}
+
 static Type fwd_shallow_type_arg(Elab *e, const Form *af,
                                  const Symbol **tps, uint8_t n_tp) {
     if (af && af->tag == F_LIST) {
@@ -1257,6 +1279,12 @@ static Type fwd_shallow_type_arg(Elab *e, const Form *af,
         if (strcmp(nm, "float") == 0) return TYPE_FLOAT;
         if (strcmp(nm, "void") == 0 || strcmp(nm, "nil") == 0)
             return TYPE_NIL;
+        /* r7rs-lang-plan R3: `any` is a bare name that determines its type
+         * completely, exactly as elab_types.c's IT4 arm builds it.  Left as
+         * a named tyvar, `(Vec any)` forward-declared as `(Vec 'any)` -- an
+         * OPEN application -- and the dynamic seam grounded and re-collected
+         * it instead of checking against the declared instantiation. */
+        if (strcmp(nm, "any") == 0)   return type_simple(TY_ANY, CK_COPY);
         for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
             if (strcmp(e->adt_defs[ai]->name, nm) == 0) {
                 return type_adt(e->adt_defs[ai]);
@@ -1265,6 +1293,97 @@ static Type fwd_shallow_type_arg(Elab *e, const Form *af,
         return type_tyvar_named(nm);
     }
     return type_tyvar_named("_");
+}
+
+/* r7rs-lang-plan R3: the full types of a defn's COMPOUND parameter annotations
+ * for a pass-1 forward declaration, in a DYNAMIC file -- or NULL when there
+ * are none to commit.
+ *
+ * fwd_decl_scan_params leaves `(Vec any)` as the TY_INT placeholder, and the
+ * Saffron seam (elab_call.c D5/S4) reads that placeholder as a real `int`
+ * target: a caller written ABOVE `(defn f [v : (Vec any)] ...)` that passes
+ * an `any` got a checked unbox to int -- "cast: any holds Vec, not int" at
+ * runtime, and C that handed an int64 to a `tur_adt_Vec__any *`.  Defining
+ * the callee first avoided it, which is what made it look like an ordering
+ * rule.  Only a fully closed application (every leaf a scalar, a registered
+ * ADT or one of the defn's own type params) is committed, and the matching
+ * `arg_kinds` slot becomes TY_APP; anything the shallow resolver could not
+ * name stays the placeholder, so a typed file's int64 hatches are untouched.
+ * Shared by the top-level pre-pass and the defmodule one (elab_module.c),
+ * which is where an imported prelude's defns are forward-declared. */
+Type **elab_fwd_param_full_types(Elab *e, Arena *arena, const Form *f,
+                                 uint32_t name_idx, uint32_t params_idx,
+                                 uint32_t param_arity, TypeKind *arg_kinds) {
+    if (param_arity == 0 || !arg_kinds || !lang_span_is_dynamic(f->span) ||
+        params_idx >= (uint32_t)f->as.list.len ||
+        f->as.list.items[params_idx]->tag != F_VEC)
+        return NULL;
+    const Symbol *tp_syms[MAX_FN_ARITY];
+    uint8_t n_tp = 0;
+    if (params_idx > name_idx + 1 && f->as.list.items[name_idx + 1]->tag == F_VEC) {
+        const Form *tpv = f->as.list.items[name_idx + 1];
+        for (uint32_t ti = 0; ti < tpv->as.list.len && n_tp < MAX_FN_ARITY; ti++) {
+            if (tpv->as.list.items[ti]->tag == F_SYM)
+                tp_syms[n_tp++] = tpv->as.list.items[ti]->as.sym;
+        }
+    }
+    Type **full_types = NULL;
+    const Form *pv = f->as.list.items[params_idx];
+    uint32_t slot = 0;
+    for (uint32_t pi = 0; pi < pv->as.list.len; pi++) {
+        const Form *p = pv->as.list.items[pi];
+        if (p->tag == F_SYM && p->as.sym->name && p->as.sym->name[0] == '^')
+            continue;
+        if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN) {
+            if (slot == 0 || slot > param_arity) continue;
+            const Form *t = p;
+            if (p->tag == F_TYPE_ANN && p->as.list.len >= 1)
+                t = p->as.list.items[0];
+            if (t->tag != F_LIST) continue;
+            Type *full = fwd_shallow_result_app(e, t, tp_syms, n_tp);
+            if (!full || full->kind != TY_APP || !fwd_type_is_closed(full, tp_syms, n_tp))
+                continue;
+            if (!full_types) {
+                full_types = (Type **)arena_alloc(arena, param_arity * sizeof(Type *));
+                memset(full_types, 0, param_arity * sizeof(Type *));
+            }
+            full_types[slot - 1] = full;
+            arg_kinds[slot - 1] = TY_APP;
+            continue;
+        }
+        slot++;
+    }
+    return full_types;
+}
+
+/* r7rs-lang-plan R3: the full TY_APP result type of a defn's COMPOUND return
+ * annotation for a pass-1 forward declaration in a DYNAMIC file, or NULL.
+ * The defmodule pre-pass kept "other compound types" as the TY_INT
+ * placeholder, which was fine while a compound PARAMETER was the same
+ * placeholder: once `(defn f [v : (Vec int)] ...)` is forward-declared in
+ * full, a forward-declared `(defn g [] : (Vec int) ...)` feeding it has to
+ * say `(Vec int)` too, or the call is "expected (Vec int), got int".  Same
+ * closedness rule as the parameters. */
+Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
+                                    uint32_t params_idx, const Form *ret_f) {
+    if (!ret_f || ret_f->tag != F_TYPE_ANN || ret_f->as.list.len < 1 ||
+        !lang_span_is_dynamic(f->span))
+        return NULL;
+    const Form *app = ret_f->as.list.items[0];
+    if (app->tag != F_LIST) return NULL;
+    const Symbol *tp_syms[MAX_FN_ARITY];
+    uint8_t n_tp = 0;
+    if (params_idx > name_idx + 1 && f->as.list.items[name_idx + 1]->tag == F_VEC) {
+        const Form *tpv = f->as.list.items[name_idx + 1];
+        for (uint32_t ti = 0; ti < tpv->as.list.len && n_tp < MAX_FN_ARITY; ti++) {
+            if (tpv->as.list.items[ti]->tag == F_SYM)
+                tp_syms[n_tp++] = tpv->as.list.items[ti]->as.sym;
+        }
+    }
+    Type *full = fwd_shallow_result_app(e, app, tp_syms, n_tp);
+    if (!full || full->kind != TY_APP || !fwd_type_is_closed(full, tp_syms, n_tp))
+        return NULL;
+    return full;
 }
 
 /* A top-level statement USED to be fold-unsafe when its handle subtree carried a
@@ -1698,11 +1817,22 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                                 return_kind = TY_ANY;
                                 fwd_result_full = NULL;
                             }
+                            /* r7rs-lang-plan R3: a compound parameter type in a
+                             * dynamic file rides the forward decl in full -- see
+                             * elab_fwd_param_full_types. */
+                            Type **fwd_arg_full = elab_fwd_param_full_types(
+                                ep, arena, f, name_idx, params_idx_local,
+                                param_arity, arg_kinds);
                             Type fn_type = type_fn(arg_kinds, param_arity, return_kind);
                             /* defdata-parametric-forward-decl-inference: carry the
                              * full compound result type on the forward decl. */
                             if (fwd_result_full) {
                                 fn_type.as.fn.result_full_type = fwd_result_full;
+                            }
+                            if (fwd_arg_full) {
+                                /* The seam indexes arg_full_types by parameter
+                                 * and tolerates NULL for a slot without one. */
+                                fn_type.as.fn.arg_full_types = fwd_arg_full;
                             }
                             /* MF3: if the name is already in global scope (e.g. an
                              * auto-loaded stdlib defn), do NOT pre-register a

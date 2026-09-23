@@ -1,12 +1,12 @@
 #lang r7rs
-;;; r7rs/prelude -- the R7RS dialect's prelude: R2's core procedures.
+;;; r7rs/prelude -- the R7RS dialect's prelude: the core procedures.
 ;;;
 ;;; Auto-loaded, LAST in the stdlib autoload list, when the ENTRY file is
 ;;; `#lang r7rs` (LangTraits.prelude).  Read as R7RS itself so its bodies get
 ;;; Scheme truthiness and the Scheme reader; written in Turmeric's own shapes
 ;;; (`defn`, `[...]` parameter vectors, `if`) because every Turmeric form passes
-;;; through the R2 lowering untouched, and a prelude that reads as plainly as
-;;; the stdlib it adapts is easier to keep honest.
+;;; through the Scheme lowering untouched, and a prelude that reads as plainly
+;;; as the stdlib it adapts is easier to keep honest.
 ;;;
 ;;; NAMES.  Every procedure here is spelled `r7rs-<name>`, never `<name>`: a
 ;;; top-level redefinition of an auto-loaded stdlib name (`car`, `list`,
@@ -16,39 +16,49 @@
 ;;; `(car l)` and calls `r7rs-car`.  A procedure added here is added to that
 ;;; table in the same change, or Scheme code cannot reach it.
 ;;;
-;;; REPRESENTATION (provisional, R2).  A Scheme list is the `(Cons any)` chain
-;;; Saffron's `(list ...)` widen builds, terminated by the null cell `tnil?`
-;;; recognises; `'()` reads as `(r7rs-list)`.  R3 brings the real, mutable
-;;; `Pair` (D3/D4) with `set-car!`/`set-cdr!` and improper lists, and replaces
-;;; the list half of this file; the numeric and I/O halves are R5's and R8's.
-;;; ADAPTORS, NOT REIMPLEMENTATIONS, on the Saffron prelude's rule: each of
-;;; these forwards to a typed stdlib operation where one exists.
+;;; REPRESENTATION (r7rs-lang-plan D3/D4, R3).  Every Scheme type is an ordinary
+;;; Turmeric type, and its predicate is `is?` against that type:
 ;;;
-;;; Since: r7rs-lang-plan R2
+;;;   pair          R7rsPair, a heap struct of two `any` fields (`a`/`d`: the
+;;;                 names `car`/`cdr` would meet the stdlib's `car` in `.field`
+;;;                 method lookup); mutable through `(set! (.a p) v)`, which is
+;;;                 the region-noted field store.
+;;;   empty list    R7rsNull, one process-wide value (r7rs-null-value__).
+;;;   char          R7rsChar, an opaque over the Unicode scalar value -- disjoint
+;;;                 from int, which is what `char?` vs `integer?` needs.
+;;;   string        Turmeric's cstr.  R7RS strings are mutable and these are
+;;;                 not: `string-set!`/`string-fill!` are the one R7RS surface
+;;;                 this stage declines, and says so rather than aliasing.
+;;;   vector        (Vec any) -- `#(...)` reads as the same F_VEC `[...]` does.
+;;;   bytevector    R7rsBytevector over a (Vec int) of 0..255.
+;;;   eof-object    R7rsEof, one value.
+;;;   symbol        Sym (stdlib/sym.tur); `string->symbol` interns at runtime
+;;;                 through stdlib/sym-dynamic.tur, loaded below.
+;;;   values        R7rsValues over a Scheme list; `(values x)` is x itself.
+;;;
+;;; `quote` builds these at runtime through r7rs-list / r7rs-cons /
+;;; r7rs-vector / r7rs-char__ (scheme_lower.c's datum walker); the static
+;;; `.rodata` table D4 wants is deferred with the literal-mutation question.
+;;;
+;;; ADAPTORS, NOT REIMPLEMENTATIONS, on the Saffron prelude's rule: each of
+;;; these forwards to a typed stdlib operation where one exists.  The numeric
+;;; surface is R5's, ports are R8's, `error`/`raise` are R6's.
+;;;
+;;; Since: r7rs-lang-plan R2, R3
 
-;;; r7rs-list -- (list e ...).  A variadic `any` rest arrives packed as the
-;;; `(Cons any)` cells the call site builds (one per argument, each widened),
-;;; and with no arguments it is the null cell -- so the ascription is the
-;;; whole body, and `(list)` is the same empty list on both back ends.
-(defn r7rs-list [& xs : any] : (Cons any) (:: xs (Cons any)))
+(load "stdlib/sym-dynamic.tur")
 
-;;; r7rs-tnil__ -- internal: is this cell the empty list?  Typed, so an `any`
-;;; argument crosses the seam with one tag check and the body is static.
-(defn r7rs-tnil__ [l : (Cons any)] : bool (tnil? l))
-;;; r7rs-same-cell__ -- internal: pointer identity of two cells.
-(defn r7rs-same-cell__ [a : (Cons any) b : (Cons any)] : bool
-  (= (:: a :int) (:: b :int)))
-;;; r7rs-type-name__ -- internal: `type-of` as an `any`, so two names compare
-;;; through the dynamic `=` (no static cstr equality is autoloaded).
-(defn r7rs-type-name__ [x] (type-of x))
+;;; ---- the types --------------------------------------------------------
 
-;;; r7rs-null? -- #t for the empty list.
-(defn r7rs-null? [p] : bool
-  (if (is? p (Cons any)) (r7rs-tnil__ p) false))
+(defstruct R7rsPair :heap [a : any d : any])
+(defstruct R7rsNull [tag : int])
+(defstruct R7rsEof [tag : int])
+(defopaque R7rsChar :int)
+(defstruct R7rsBytevector :heap [bytes : (Vec int)])
+(defstruct R7rsValues [items : any])
 
-;;; r7rs-pair? -- #t for a non-empty list cell.
-(defn r7rs-pair? [p] : bool
-  (if (is? p (Cons any)) (if (r7rs-tnil__ p) false true) false))
+(def r7rs-null-value__ (R7rsNull 0))
+(def r7rs-eof-value__ (R7rsEof 0))
 
 ;;; r7rs-fail-any__ -- internal: panic, in a position that needs an `any`.
 ;;; A bare `(panic ...)` in the value position of an `any`-returning function
@@ -57,106 +67,222 @@
 (defn r7rs-fail-any__ [msg : cstr] : any
   (panic msg)
   (:: 0 any))
-;;; r7rs-fail-list__ -- the same, for a `(Cons any)` position.
-(defn r7rs-fail-list__ [msg : cstr] : (Cons any)
+(defn r7rs-fail-bool__ [msg : cstr] : bool
   (panic msg)
-  (r7rs-list))
+  false)
 
-;;; r7rs-list? -- #t for a (proper) list; every R2 list is proper.
-(defn r7rs-list? [p] : bool (is? p (Cons any)))
+;;; r7rs-type-name__ -- internal: `type-of` as an `any`, so two names compare
+;;; through the dynamic `=` (no static cstr equality is autoloaded).
+(defn r7rs-type-name__ [x] (type-of x))
 
-;;; r7rs-car -- head of a non-empty list.
-(defn r7rs-car [p : (Cons any)] : any
-  (if (tnil? p) (r7rs-fail-any__ "car: empty list") (.head p)))
+;;; ---- pairs and lists --------------------------------------------------
 
-;;; r7rs-cdr -- tail of a non-empty list.
-(defn r7rs-cdr [p : (Cons any)] : (Cons any)
-  (if (tnil? p) (r7rs-fail-list__ "cdr: empty list") (.tail p)))
+;;; r7rs-null? -- #t for the empty list.
+;;; The predicates are FUNCTIONS, and the rest of this file tests through
+;;; them rather than with an inline `(is? x T)`: the inline test narrows `x`
+;;; to `T` in its then-branch, and a narrowed heap value is unique -- a
+;;; second use of it is TUR-E0201 "cannot copy unique value".  A call leaves
+;;; `x` an `any`, and each later use crosses the seam on its own.
+(defn r7rs-null? [p] : bool (is? p R7rsNull))
+;;; r7rs-pair? -- #t for a pair.
+(defn r7rs-pair? [p] : bool (is? p R7rsPair))
+;;; r7rs-cons -- a fresh pair; the cdr may be anything (an improper list).
+;;; Returns `any`, as does every procedure that hands out a pair: a statically
+;;; typed heap struct is a unique value in Turmeric, and a Scheme variable
+;;; holding one must be usable any number of times.
+(defn r7rs-cons [a d] : any (R7rsPair a d))
+;;; r7rs-car / r7rs-cdr -- the fields.  An `any` argument crosses the seam
+;;; with one tag check; `(car '())` is the checked-cast panic naming both types.
+(defn r7rs-car [p : R7rsPair] : any (.a p))
+(defn r7rs-cdr [p : R7rsPair] : any (.d p))
+;;; r7rs-set-car! / r7rs-set-cdr! -- the mutators.  `(set! (.a p) v)` is the
+;;; region-noted field store (CLAUDE.md, Region Store Hooks), so a value
+;;; built inside a `with-region` bracket and stored here blocks the rewind.
+(defn r7rs-set-car! [p : R7rsPair v] : nil (set! (.a p) v))
+(defn r7rs-set-cdr! [p : R7rsPair v] : nil (set! (.d p) v))
 
-(defn r7rs-caar [p : (Cons any)] : any (r7rs-car (r7rs-car p)))
-(defn r7rs-cadr [p : (Cons any)] : any (r7rs-car (r7rs-cdr p)))
-(defn r7rs-cdar [p : (Cons any)] : (Cons any) (r7rs-cdr (r7rs-car p)))
-(defn r7rs-cddr [p : (Cons any)] : (Cons any) (r7rs-cdr (r7rs-cdr p)))
-(defn r7rs-caddr [p : (Cons any)] : any (r7rs-car (r7rs-cdr (r7rs-cdr p))))
+(defn r7rs-caar [p] : any (r7rs-car (r7rs-car p)))
+(defn r7rs-cadr [p] : any (r7rs-car (r7rs-cdr p)))
+(defn r7rs-cdar [p] : any (r7rs-cdr (r7rs-car p)))
+(defn r7rs-cddr [p] : any (r7rs-cdr (r7rs-cdr p)))
+(defn r7rs-caddr [p] : any (r7rs-car (r7rs-cdr (r7rs-cdr p))))
 
-;;; r7rs-cons -- prepend to a list.  An improper pair is R3's.
-(defn r7rs-cons [a d : (Cons any)] : (Cons any) (tcons a d))
+;;; r7rs-chain->list__ -- internal: the `(Cons any)` cells a variadic `any`
+;;; rest parameter arrives packed in, as a Scheme list.
+(defn r7rs-chain->list__ [c : (Cons any)] : any
+  (if (tnil? c)
+    r7rs-null-value__
+    (R7rsPair (.head c) (r7rs-chain->list__ (.tail c)))))
 
-;;; r7rs-length -- the number of elements.
-(defn r7rs-length-go__ [p : (Cons any) n : int] : int
-  (if (tnil? p) n (r7rs-length-go__ (.tail p) (+ n 1))))
-(defn r7rs-length [p : (Cons any)] : int (r7rs-length-go__ p 0))
+;;; r7rs-list -- (list e ...).
+(defn r7rs-list [& xs : any] : any (r7rs-chain->list__ (:: xs (Cons any))))
+
+;;; r7rs-list? -- #t for a proper list (terminates on a cycle: two cursors).
+(defn r7rs-list-go__ [slow fast] : bool
+  (if (r7rs-null? fast)
+    true
+    (if (r7rs-pair? fast)
+      (let [f2 (r7rs-cdr fast)]
+        (if (r7rs-null? f2)
+          true
+          (if (r7rs-pair? f2)
+            (let [s2 (r7rs-cdr slow)
+                  f3 (r7rs-cdr f2)]
+              (if (r7rs-eq? s2 f3) false (r7rs-list-go__ s2 f3)))
+            false)))
+      false)))
+(defn r7rs-list? [p] : bool (r7rs-list-go__ p p))
+
+;;; r7rs-length -- the number of elements of a proper list.
+(defn r7rs-length-go__ [p n : int] : int
+  (if (r7rs-null? p) n (r7rs-length-go__ (r7rs-cdr p) (+ n 1))))
+(defn r7rs-length [p] : int (r7rs-length-go__ p 0))
 
 ;;; r7rs-list-tail -- the list after its first k elements.
-(defn r7rs-list-tail [p : (Cons any) k : int] : (Cons any)
+(defn r7rs-list-tail [p k : int] : any
   (if (= k 0) p (r7rs-list-tail (r7rs-cdr p) (- k 1))))
-
 ;;; r7rs-list-ref -- the k-th element, zero-based.
-(defn r7rs-list-ref [p : (Cons any) k : int] : any
-  (r7rs-car (r7rs-list-tail p k)))
+(defn r7rs-list-ref [p k : int] : any (r7rs-car (r7rs-list-tail p k)))
 
 ;;; r7rs-append -- two lists, the first copied.
-(defn r7rs-append [a : (Cons any) b : (Cons any)] : (Cons any)
-  (if (tnil? a) b (tcons (.head a) (r7rs-append (.tail a) b))))
-
+(defn r7rs-append [a b] : any
+  (if (r7rs-null? a) b (R7rsPair (r7rs-car a) (r7rs-append (r7rs-cdr a) b))))
 ;;; r7rs-reverse -- a reversed copy.
-(defn r7rs-reverse-go__ [p : (Cons any) acc : (Cons any)] : (Cons any)
-  (if (tnil? p) acc (r7rs-reverse-go__ (.tail p) (tcons (.head p) acc))))
-(defn r7rs-reverse [p : (Cons any)] : (Cons any)
-  (r7rs-reverse-go__ p (r7rs-list)))
+(defn r7rs-reverse-go__ [p acc] : any
+  (if (r7rs-null? p) acc (r7rs-reverse-go__ (r7rs-cdr p) (R7rsPair (r7rs-car p) acc))))
+(defn r7rs-reverse [p] : any (r7rs-reverse-go__ p r7rs-null-value__))
+;;; r7rs-list-copy -- a shallow copy.
+(defn r7rs-list-copy [p] : any
+  (if (r7rs-pair? p) (R7rsPair (r7rs-car p) (r7rs-list-copy (r7rs-cdr p))) p))
 
 ;;; r7rs-map -- apply f to each element, into a fresh list (one list).
-(defn r7rs-map [f l : (Cons any)] : (Cons any)
-  (if (tnil? l) l (tcons (f (.head l)) (r7rs-map f (.tail l)))))
-
+(defn r7rs-map [f l] : any
+  (if (r7rs-null? l) l (R7rsPair (f (r7rs-car l)) (r7rs-map f (r7rs-cdr l)))))
 ;;; r7rs-for-each -- apply f to each element, for effect.
-(defn r7rs-for-each [f l : (Cons any)] : nil
-  (if (tnil? l)
+(defn r7rs-for-each [f l] : nil
+  (if (r7rs-null? l)
     nil
-    (do (f (.head l)) (r7rs-for-each f (.tail l)))))
+    (do (f (r7rs-car l)) (r7rs-for-each f (r7rs-cdr l)))))
 
-;;; r7rs-eqv? -- identity on booleans, numbers, characters, symbols and the
-;;; empty list; pointer identity on everything else.  Two values of different
-;;; runtime types are never eqv.
+;;; ---- equivalence ------------------------------------------------------
+
+;;; r7rs-same-ref__ -- internal: identity of two heap values (a pair, a
+;;; vector, a bytevector, a record) by their carrier word.  Inline C on the
+;;; compiled path, a native under the interpreter; typed helpers per type
+;;; would each need the seam's pointer cast, and this asks one question of
+;;; the tagged words directly.
+(defn r7rs-same-ref__ [a b] : bool
+  ```c
+  return TUR_UNTAG(a) == TUR_UNTAG(b);
+  ```)
+(defn r7rs-same-pair__ [a b] : bool (r7rs-same-ref__ a b))
+;;; r7rs-char-code__ -- internal, typed: a char's scalar value.
+(defn r7rs-char-code__ [c : R7rsChar] : int (:: c :int))
+
+;;; r7rs-eqv? -- R7RS 6.1: identity on booleans, numbers, characters, symbols
+;;; and the empty list; pointer identity on pairs, vectors and records; two
+;;; values of different runtime types are never eqv.
 (defn r7rs-eqv? [a b] : bool
   (if (= (r7rs-type-name__ a) (r7rs-type-name__ b))
-    (if (is? a (Cons any))
-      (if (r7rs-tnil__ a) (r7rs-tnil__ b) (r7rs-same-cell__ a b))
-      (= a b))
+    (if (r7rs-pair? a)
+      (r7rs-same-pair__ a b)
+      (if (r7rs-char? a)
+        (= (r7rs-char-code__ a) (r7rs-char-code__ b))
+        (if (r7rs-null? a)
+          true
+          (if (r7rs-eof-object? a)
+            true
+            (if (r7rs-vector? a)
+              (r7rs-same-ref__ a b)
+              (if (r7rs-bytevector? a)
+                (r7rs-same-ref__ a b)
+                (= a b)))))))
     false))
-
-;;; r7rs-eq? -- same as eqv? at R2 (no bignums, no separate char type yet).
+;;; r7rs-eq? -- same as eqv? here (no bignums; chars and small ints are immediate).
 (defn r7rs-eq? [a b] : bool (r7rs-eqv? a b))
 
-;;; r7rs-equal? -- structural on lists, eqv? on everything else.  R3 adds the
-;;; cycle-terminating version R7RS requires (D4).
-(defn r7rs-equal-lists__ [a : (Cons any) b : (Cons any)] : bool
-  (if (tnil? a)
-    (tnil? b)
-    (if (tnil? b)
-      false
-      (if (r7rs-equal? (.head a) (.head b))
-        (r7rs-equal-lists__ (.tail a) (.tail b))
-        false))))
-(defn r7rs-equal? [a b] : bool
-  (if (is? a (Cons any))
-    (if (is? b (Cons any)) (r7rs-equal-lists__ a b) false)
-    (r7rs-eqv? a b)))
+;;; r7rs-equal? -- structural on pairs, vectors and bytevectors, eqv? on
+;;; everything else, and it TERMINATES ON CYCLES (R7RS 6.1): the pairs of
+;;; pairs already under comparison ride along in `seen`, and a pair of pairs
+;;; met again is assumed equal, which is the coinductive reading the standard
+;;; specifies.
+(defn r7rs-seen__? [a b seen] : bool
+  (if (r7rs-null? seen)
+    false
+    (let [e (r7rs-car seen)]
+      (if (if (r7rs-same-pair__ (r7rs-car e) a) (r7rs-same-pair__ (r7rs-cdr e) b) false)
+        true
+        (r7rs-seen__? a b (r7rs-cdr seen))))))
+(defn r7rs-equal-go__ [a b seen] : bool
+  (if (r7rs-eqv? a b)
+    true
+    (if (if (r7rs-pair? a) (r7rs-pair? b) false)
+      (if (r7rs-seen__? a b seen)
+        true
+        (let [seen2 (R7rsPair (R7rsPair a b) seen)]
+          (if (r7rs-equal-go__ (r7rs-car a) (r7rs-car b) seen2)
+            (r7rs-equal-go__ (r7rs-cdr a) (r7rs-cdr b) seen2)
+            false)))
+      (if (if (r7rs-vector? a) (r7rs-vector? b) false)
+        (r7rs-equal-vec__ a b 0 seen)
+        (if (if (r7rs-bytevector? a) (r7rs-bytevector? b) false)
+          (r7rs-equal-bytes__ (r7rs-bytevector-bytes__ a) (r7rs-bytevector-bytes__ b) 0)
+          (if (if (r7rs-string? a) (r7rs-string? b) false)
+            (= a b)
+            false))))))
+(defn r7rs-equal-vec__ [a : (Vec any) b : (Vec any) i : int seen] : bool
+  (if (= (vec-len a) (vec-len b))
+    (if (>= i (vec-len a))
+      true
+      (if (r7rs-equal-go__ (vec-get a i) (vec-get b i) seen)
+        (r7rs-equal-vec__ a b (+ i 1) seen)
+        false))
+    false))
+(defn r7rs-equal-bytes__ [a : (Vec int) b : (Vec int) i : int] : bool
+  (if (= (vec-len a) (vec-len b))
+    (if (>= i (vec-len a))
+      true
+      (if (= (vec-get a i) (vec-get b i)) (r7rs-equal-bytes__ a b (+ i 1)) false))
+    false))
+(defn r7rs-equal? [a b] : bool (r7rs-equal-go__ a b r7rs-null-value__))
 
 ;;; r7rs-not -- #t only for #f (R7RS 6.3).
 (defn r7rs-not [x] : bool (if x false true))
 
-;;; Type predicates over the runtime tag.
+;;; ---- membership and association ----------------------------------------
+
+(defn r7rs-memv [x l]
+  (if (r7rs-null? l) false (if (r7rs-eqv? x (r7rs-car l)) l (r7rs-memv x (r7rs-cdr l)))))
+(defn r7rs-memq [x l] (r7rs-memv x l))
+(defn r7rs-member [x l]
+  (if (r7rs-null? l) false (if (r7rs-equal? x (r7rs-car l)) l (r7rs-member x (r7rs-cdr l)))))
+(defn r7rs-assv [x l]
+  (if (r7rs-null? l) false
+    (if (r7rs-eqv? x (r7rs-car (r7rs-car l))) (r7rs-car l) (r7rs-assv x (r7rs-cdr l)))))
+(defn r7rs-assq [x l] (r7rs-assv x l))
+(defn r7rs-assoc [x l]
+  (if (r7rs-null? l) false
+    (if (r7rs-equal? x (r7rs-car (r7rs-car l))) (r7rs-car l) (r7rs-assoc x (r7rs-cdr l)))))
+
+;;; ---- type predicates ---------------------------------------------------
+
 (defn r7rs-boolean? [x] : bool (is? x bool))
 (defn r7rs-number? [x] : bool (if (is? x int) true (is? x float)))
 (defn r7rs-integer? [x] : bool (is? x int))
+(defn r7rs-float?__ [x] : bool (is? x float))
 (defn r7rs-real? [x] : bool (if (is? x int) true (is? x float)))
 (defn r7rs-string? [x] : bool (is? x cstr))
 (defn r7rs-symbol? [x] : bool (is? x Sym))
 (defn r7rs-procedure? [x] : bool (= (r7rs-type-name__ x) (:: "fn" any)))
+(defn r7rs-char? [x] : bool (is? x R7rsChar))
+(defn r7rs-vector? [x] : bool (is? x (Vec any)))
+(defn r7rs-bytevector? [x] : bool (is? x R7rsBytevector))
+(defn r7rs-eof-object? [x] : bool (is? x R7rsEof))
+(defn r7rs-values?__ [x] : bool (is? x R7rsValues))
+(defn r7rs-eof-object [] r7rs-eof-value__)
 
-;;; Numeric predicates and the two-argument min/max/abs.  R5 brings the
-;;; exactness rules and the full arithmetic surface.
+;;; ---- numbers (the R2 subset; R5 brings the tower) ----------------------
+
 (defn r7rs-zero? [x] : bool (= x 0))
 (defn r7rs-positive? [x] : bool (> x 0))
 (defn r7rs-negative? [x] : bool (< x 0))
@@ -166,36 +292,168 @@
 (defn r7rs-min [a b] (if (< a b) a b))
 (defn r7rs-max [a b] (if (> a b) a b))
 
-;;; Multiple values (r7rs-lang-plan Section 8, Q1): a `Values` carrier over a
-;;; list.  `(values x)` is x itself, so a single value never allocates and a
-;;; producer that returns one value works with call-with-values unchanged.
-(defstruct R7rsValues [items : (Cons any)])
+;;; ---- characters --------------------------------------------------------
+
+;;; r7rs-char__ -- the reader's constructor: `#\a` reads as (r7rs-char__ 97).
+(defn r7rs-char__ [c : int] : R7rsChar (:: c R7rsChar))
+(defn r7rs-char->integer [c : R7rsChar] : int (:: c :int))
+(defn r7rs-integer->char [n : int] : R7rsChar (:: n R7rsChar))
+(defn r7rs-char=? [a : R7rsChar b : R7rsChar] : bool (= (:: a :int) (:: b :int)))
+(defn r7rs-char<? [a : R7rsChar b : R7rsChar] : bool (< (:: a :int) (:: b :int)))
+(defn r7rs-char>? [a : R7rsChar b : R7rsChar] : bool (> (:: a :int) (:: b :int)))
+(defn r7rs-char-upcase [c : R7rsChar] : R7rsChar
+  (let [n (:: c :int)]
+    (if (if (>= n 97) (<= n 122) false) (:: (- n 32) R7rsChar) c)))
+(defn r7rs-char-downcase [c : R7rsChar] : R7rsChar
+  (let [n (:: c :int)]
+    (if (if (>= n 65) (<= n 90) false) (:: (+ n 32) R7rsChar) c)))
+(defn r7rs-char-alphabetic? [c : R7rsChar] : bool
+  (let [n (:: c :int)]
+    (if (if (>= n 65) (<= n 90) false) true (if (>= n 97) (<= n 122) false))))
+(defn r7rs-char-numeric? [c : R7rsChar] : bool
+  (let [n (:: c :int)] (if (>= n 48) (<= n 57) false)))
+(defn r7rs-char-whitespace? [c : R7rsChar] : bool
+  (let [n (:: c :int)]
+    (if (= n 32) true (if (= n 9) true (if (= n 10) true (if (= n 13) true (= n 12)))))))
+
+;;; ---- strings (immutable cstr; the primitives are inline C with
+;;; interpreter twins in interpreter_natives.c) -------------------------------
+
+(defn r7rs-string-length [s : cstr] : int
+  ```c
+  return (int64_t)strlen(s);
+  ```)
+(defn r7rs-string-ref-code__ [s : cstr i : int] : int
+  ```c
+  if (i < 0 || (size_t)i >= strlen(s)) tur_panic("string-ref: index out of range");
+  return (int64_t)(unsigned char)s[i];
+  ```)
+(defn r7rs-string-append2__ [a : cstr b : cstr] : cstr
+  ```c
+  size_t la = strlen(a), lb = strlen(b);
+  char *r = (char *)malloc(la + lb + 1);
+  memcpy(r, a, la); memcpy(r + la, b, lb + 1);
+  return r;
+  ```)
+(defn r7rs-substring [s : cstr start : int end : int] : cstr
+  ```c
+  size_t n = strlen(s);
+  if (start < 0 || end < start || (size_t)end > n) tur_panic("substring: range out of bounds");
+  char *r = (char *)malloc((size_t)(end - start) + 1);
+  memcpy(r, s + start, (size_t)(end - start)); r[end - start] = 0;
+  return r;
+  ```)
+(defn r7rs-string<? [a : cstr b : cstr] : bool
+  ```c
+  return strcmp(a, b) < 0;
+  ```)
+(defn r7rs-string-of-code__ [c : int] : cstr
+  ```c
+  char *r = (char *)malloc(5); int n = 0;
+  uint32_t cp = (uint32_t)c;
+  if (cp < 0x80) r[n++] = (char)cp;
+  else if (cp < 0x800) { r[n++] = (char)(0xC0 | (cp >> 6)); r[n++] = (char)(0x80 | (cp & 0x3F)); }
+  else if (cp < 0x10000) { r[n++] = (char)(0xE0 | (cp >> 12)); r[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); r[n++] = (char)(0x80 | (cp & 0x3F)); }
+  else { r[n++] = (char)(0xF0 | (cp >> 18)); r[n++] = (char)(0x80 | ((cp >> 12) & 0x3F)); r[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); r[n++] = (char)(0x80 | (cp & 0x3F)); }
+  r[n] = 0;
+  return r;
+  ```)
+(defn r7rs-int->string__ [x : int] : cstr
+  ```c
+  char *r = (char *)malloc(32); snprintf(r, 32, "%lld", (long long)x); return r;
+  ```)
+(defn r7rs-float->string__ [x : float] : cstr
+  ```c
+  char *r = (char *)malloc(32); snprintf(r, 32, "%g", x); return r;
+  ```)
+
+(defn r7rs-string-ref [s : cstr i : int] : R7rsChar (:: (r7rs-string-ref-code__ s i) R7rsChar))
+(defn r7rs-string-append [& xs : any] : cstr
+  (r7rs-string-append-go__ (:: xs (Cons any)) ""))
+(defn r7rs-string-append-go__ [c : (Cons any) acc : cstr] : cstr
+  (if (tnil? c) acc (r7rs-string-append-go__ (.tail c) (r7rs-string-append2__ acc (.head c)))))
+(defn r7rs-string-copy [s : cstr] : cstr s)
+(defn r7rs-string=? [a b] : bool (= a b))
+(defn r7rs-string->symbol [s : cstr] : Sym (str->sym s))
+(defn r7rs-symbol->string [s : Sym] : cstr (sym->str s))
+(defn r7rs-string->list-go__ [s : cstr i : int] : any
+  (if (>= i (r7rs-string-length s))
+    r7rs-null-value__
+    (R7rsPair (r7rs-string-ref s i) (r7rs-string->list-go__ s (+ i 1)))))
+(defn r7rs-string->list [s : cstr] : any (r7rs-string->list-go__ s 0))
+(defn r7rs-list->string-go__ [l acc : cstr] : cstr
+  (if (r7rs-null? l)
+    acc
+    (r7rs-list->string-go__ (r7rs-cdr l)
+                            (r7rs-string-append2__ acc (r7rs-string-of-code__ (r7rs-char->integer (r7rs-car l)))))))
+(defn r7rs-list->string [l] : cstr (r7rs-list->string-go__ l ""))
+(defn r7rs-number->string [x] : cstr
+  (if (r7rs-integer? x) (r7rs-int->string__ x) (r7rs-float->string__ x)))
+
+;;; ---- vectors and bytevectors -------------------------------------------
+
+(defn r7rs-vector-from-chain__ [c : (Cons any) v : (Vec any)] : (Vec any)
+  (if (tnil? c) v (do (vec-push! v (.head c)) (r7rs-vector-from-chain__ (.tail c) v))))
+(defn r7rs-vector [& xs : any] : (Vec any)
+  (r7rs-vector-from-chain__ (:: xs (Cons any)) (:: (vec-new) (Vec any))))
+(defn r7rs-make-vector-go__ [n : int fill v : (Vec any)] : (Vec any)
+  (if (<= n 0) v (do (vec-push! v fill) (r7rs-make-vector-go__ (- n 1) fill v))))
+(defn r7rs-make-vector [n : int fill] : (Vec any)
+  (r7rs-make-vector-go__ n fill (:: (vec-new) (Vec any))))
+(defn r7rs-vector-ref [v : (Vec any) i : int] : any (vec-get v i))
+(defn r7rs-vector-set! [v : (Vec any) i : int x] : nil (vec-set! v i x))
+(defn r7rs-vector-length [v : (Vec any)] : int (vec-len v))
+(defn r7rs-vector->list-go__ [v : (Vec any) i : int] : any
+  (if (>= i (vec-len v)) r7rs-null-value__ (R7rsPair (vec-get v i) (r7rs-vector->list-go__ v (+ i 1)))))
+(defn r7rs-vector->list [v : (Vec any)] : any (r7rs-vector->list-go__ v 0))
+(defn r7rs-list->vector-go__ [l v : (Vec any)] : (Vec any)
+  (if (r7rs-null? l) v (do (vec-push! v (r7rs-car l)) (r7rs-list->vector-go__ (r7rs-cdr l) v))))
+(defn r7rs-list->vector [l] : (Vec any) (r7rs-list->vector-go__ l (:: (vec-new) (Vec any))))
+(defn r7rs-vector-fill-go__ [v : (Vec any) x i : int] : nil
+  (if (>= i (vec-len v)) nil (do (vec-set! v i x) (r7rs-vector-fill-go__ v x (+ i 1)))))
+(defn r7rs-vector-fill! [v : (Vec any) x] : nil (r7rs-vector-fill-go__ v x 0))
+
+(defn r7rs-bytes-from-chain__ [c : (Cons any) v : (Vec int)] : (Vec int)
+  (if (tnil? c)
+    v
+    (let [b (cast (.head c) int)]
+      (if (if (>= b 0) (<= b 255) false) nil (panic "bytevector: byte out of range 0..255"))
+      (vec-push! v b)
+      (r7rs-bytes-from-chain__ (.tail c) v))))
+(defn r7rs-bytevector [& xs : any] : any
+  (R7rsBytevector (r7rs-bytes-from-chain__ (:: xs (Cons any)) (:: (vec-new) (Vec int)))))
+(defn r7rs-make-bytevector-go__ [n : int fill : int v : (Vec int)] : (Vec int)
+  (if (<= n 0) v (do (vec-push! v fill) (r7rs-make-bytevector-go__ (- n 1) fill v))))
+(defn r7rs-make-bytevector [n : int fill : int] : any
+  (R7rsBytevector (r7rs-make-bytevector-go__ n fill (:: (vec-new) (Vec int)))))
+(defn r7rs-bytevector-bytes__ [b : R7rsBytevector] : (Vec int) (.bytes b))
+(defn r7rs-bytevector-u8-ref [b : R7rsBytevector i : int] : int (vec-get (.bytes b) i))
+(defn r7rs-bytevector-u8-set! [b : R7rsBytevector i : int x : int] : nil (vec-set! (.bytes b) i x))
+(defn r7rs-bytevector-length [b : R7rsBytevector] : int (vec-len (.bytes b)))
+
+;;; ---- multiple values (plan Section 8, Q1: a carrier over a list) --------
 
 (defn r7rs-values [& xs : any]
-  (let [l (:: xs (Cons any))]
-    (if (tnil? l)
+  (let [l (r7rs-chain->list__ (:: xs (Cons any)))]
+    (if (r7rs-null? l)
       (R7rsValues l)
-      (if (tnil? (.tail l)) (.head l) (R7rsValues l)))))
-
-;;; r7rs-values-ref -- the i-th value of a Values carrier, or the value itself.
+      (if (is? (r7rs-cdr l) R7rsNull) (r7rs-car l) (R7rsValues l)))))
+(defn r7rs-values-items__ [v : R7rsValues] : any (.items v))
 (defn r7rs-values-ref [v i : int] : any
-  (if (is? v R7rsValues)
-    (r7rs-list-ref (.items v) i)
+  (if (r7rs-values?__ v)
+    (r7rs-list-ref (r7rs-values-items__ v) i)
     (if (= i 0) v (r7rs-fail-any__ "values: too few values"))))
-
-;;; r7rs-values-rest -- the values from index i on, as a list.
-(defn r7rs-values-rest [v i : int] : (Cons any)
-  (if (is? v R7rsValues)
-    (r7rs-list-tail (.items v) i)
+(defn r7rs-values-rest [v i : int] : any
+  (if (r7rs-values?__ v)
+    (r7rs-list-tail (r7rs-values-items__ v) i)
     (if (= i 0) (r7rs-list v) (r7rs-list))))
 
 ;;; r7rs-apply -- call f with the elements of l as its arguments.  Up to four:
 ;;; the compiled back end's fat-closure apply helpers stop at 4 arguments for
 ;;; a dynamic callee, and the prelude is compiled on both back ends, so the
 ;;; limit is the compiled one (R6 lifts it with the rest of the calling
-;;; convention work); `tur --interpret` has no such limit but shares this
-;;; table.
-(defn r7rs-apply [f l : (Cons any)]
+;;; convention work).
+(defn r7rs-apply [f l]
   (let [n (r7rs-length l)]
     (if (= n 0) (f)
       (if (= n 1) (f (r7rs-list-ref l 0))
@@ -203,30 +461,14 @@
           (if (= n 3) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2))
             (if (= n 4) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3))
               (r7rs-fail-any__ "apply: more than 4 arguments is not supported yet (r7rs-lang-plan R6)"))))))))
-
-;;; r7rs-call-with-values -- apply consumer to what producer returns.
 (defn r7rs-call-with-values [producer consumer]
   (let [v (producer)]
-    (if (is? v R7rsValues)
-      (r7rs-apply consumer (.items v))
+    (if (r7rs-values?__ v)
+      (r7rs-apply consumer (r7rs-values-items__ v))
       (consumer v))))
 
-;;; Membership and association, by eqv?/equal?.
-(defn r7rs-memv [x l : (Cons any)]
-  (if (tnil? l) false (if (r7rs-eqv? x (.head l)) l (r7rs-memv x (.tail l)))))
-(defn r7rs-memq [x l : (Cons any)] (r7rs-memv x l))
-(defn r7rs-member [x l : (Cons any)]
-  (if (tnil? l) false (if (r7rs-equal? x (.head l)) l (r7rs-member x (.tail l)))))
-(defn r7rs-assv [x l : (Cons any)]
-  (if (tnil? l) false
-    (if (r7rs-eqv? x (r7rs-car (.head l))) (.head l) (r7rs-assv x (.tail l)))))
-(defn r7rs-assq [x l : (Cons any)] (r7rs-assv x l))
-(defn r7rs-assoc [x l : (Cons any)]
-  (if (tnil? l) false
-    (if (r7rs-equal? x (r7rs-car (.head l))) (.head l) (r7rs-assoc x (.tail l)))))
+;;; ---- output (the write primitives are inline C with interpreter twins) --
 
-;;; The write primitives: newline-free, one per representation.  Inline C on
-;;; the compiled path; interpreter_natives.c registers their twins.
 (defn r7rs-write-cstr [s : cstr] : nil
   ```c
   fputs(s, stdout);
@@ -239,35 +481,79 @@
   ```c
   printf("%g", x);
   ```)
+(defn r7rs-write-char [c : int] : nil
+  ```c
+  uint32_t cp = (uint32_t)c;
+  if (cp < 0x80) putchar((int)cp);
+  else if (cp < 0x800) { putchar(0xC0 | (cp >> 6)); putchar(0x80 | (cp & 0x3F)); }
+  else if (cp < 0x10000) { putchar(0xE0 | (cp >> 12)); putchar(0x80 | ((cp >> 6) & 0x3F)); putchar(0x80 | (cp & 0x3F)); }
+  else { putchar(0xF0 | (cp >> 18)); putchar(0x80 | ((cp >> 12) & 0x3F)); putchar(0x80 | ((cp >> 6) & 0x3F)); putchar(0x80 | (cp & 0x3F)); }
+  ```)
 
-;;; r7rs-display-list__ -- the elements of a list, space-separated, in parens.
-(defn r7rs-display-list__ [l : (Cons any) quoted : bool] : nil
-  (r7rs-write-cstr "(")
-  (r7rs-display-items__ l quoted true)
-  (r7rs-write-cstr ")"))
-(defn r7rs-display-items__ [l : (Cons any) quoted : bool first : bool] : nil
-  (if (tnil? l)
+;;; r7rs-display-char__ -- `write` spells a char `#\a` (with the R7RS names
+;;; for the unprintable ones); `display` writes the character itself.
+(defn r7rs-display-char__ [c : R7rsChar quoted : bool] : nil
+  (let [n (:: c :int)]
+    (if quoted
+      (do (r7rs-write-cstr "#\\")
+          (if (= n 32) (r7rs-write-cstr "space")
+            (if (= n 10) (r7rs-write-cstr "newline")
+              (if (= n 9) (r7rs-write-cstr "tab")
+                (if (= n 0) (r7rs-write-cstr "null")
+                  (r7rs-write-char n))))))
+      (r7rs-write-char n))))
+
+;;; r7rs-display-tail__ -- the rest of a list after its first element: the
+;;; proper `b c)` case and the improper ` . d)` case.
+(defn r7rs-display-tail__ [d quoted : bool] : nil
+  (if (r7rs-null? d)
+    (r7rs-write-cstr ")")
+    (if (r7rs-pair? d)
+      (do (r7rs-write-cstr " ")
+          (r7rs-display-any__ (r7rs-car d) quoted)
+          (r7rs-display-tail__ (r7rs-cdr d) quoted))
+      (do (r7rs-write-cstr " . ")
+          (r7rs-display-any__ d quoted)
+          (r7rs-write-cstr ")")))))
+(defn r7rs-display-vec__ [v : (Vec any) i : int quoted : bool] : nil
+  (if (>= i (vec-len v))
     nil
-    (do (if first nil (r7rs-write-cstr " "))
-        (r7rs-display-any__ (.head l) quoted)
-        (r7rs-display-items__ (.tail l) quoted false))))
+    (do (if (= i 0) nil (r7rs-write-cstr " "))
+        (r7rs-display-any__ (vec-get v i) quoted)
+        (r7rs-display-vec__ v (+ i 1) quoted))))
+(defn r7rs-display-bytes__ [v : (Vec int) i : int] : nil
+  (if (>= i (vec-len v))
+    nil
+    (do (if (= i 0) nil (r7rs-write-cstr " "))
+        (r7rs-write-int (vec-get v i))
+        (r7rs-display-bytes__ v (+ i 1)))))
 
-;;; r7rs-display-any__ -- one value; `quoted` is `write`'s string quoting.
+;;; r7rs-display-any__ -- one value; `quoted` is `write`'s spelling.
 (defn r7rs-display-any__ [x quoted : bool] : nil
-  (if (is? x int) (r7rs-write-int x)
-    (if (is? x float) (r7rs-write-float x)
-      (if (is? x cstr)
+  (if (r7rs-integer? x) (r7rs-write-int x)
+    (if (r7rs-float?__ x) (r7rs-write-float x)
+      (if (r7rs-string? x)
         (do (if quoted (r7rs-write-cstr "\"") nil)
             (r7rs-write-cstr x)
             (if quoted (r7rs-write-cstr "\"") nil))
-        (if (is? x bool) (r7rs-write-cstr (if x "#t" "#f"))
-          (if (is? x (Cons any)) (r7rs-display-list__ x quoted)
-            (if (is? x Sym) (r7rs-write-cstr (sym->str x))
-              (r7rs-write-cstr (type-of x)))))))))
+        (if (r7rs-boolean? x) (r7rs-write-cstr (if x "#t" "#f"))
+          (if (r7rs-null? x) (r7rs-write-cstr "()")
+            (if (r7rs-pair? x)
+              (do (r7rs-write-cstr "(")
+                  (r7rs-display-any__ (r7rs-car x) quoted)
+                  (r7rs-display-tail__ (r7rs-cdr x) quoted))
+              (if (r7rs-symbol? x) (r7rs-write-cstr (sym->str x))
+                (if (r7rs-char? x) (r7rs-display-char__ x quoted)
+                  (if (r7rs-vector? x)
+                    (do (r7rs-write-cstr "#(") (r7rs-display-vec__ x 0 quoted) (r7rs-write-cstr ")"))
+                    (if (r7rs-bytevector? x)
+                      (do (r7rs-write-cstr "#u8(") (r7rs-display-bytes__ (r7rs-bytevector-bytes__ x) 0) (r7rs-write-cstr ")"))
+                      (if (r7rs-eof-object? x) (r7rs-write-cstr "#<eof>")
+                        (do (r7rs-write-cstr "#<") (r7rs-write-cstr (type-of x)) (r7rs-write-cstr ">"))))))))))))))
 
-;;; r7rs-display -- write a value for humans (strings bare).
+;;; r7rs-display -- write a value for humans (strings and chars bare).
 (defn r7rs-display [x] : nil (r7rs-display-any__ x false))
-;;; r7rs-write -- write a value for reading back (strings quoted).
+;;; r7rs-write -- write a value for reading back (strings quoted, chars `#\c`).
 (defn r7rs-write [x] : nil (r7rs-display-any__ x true))
 ;;; r7rs-newline -- end the line.
 (defn r7rs-newline [] : nil (r7rs-write-cstr "\n"))

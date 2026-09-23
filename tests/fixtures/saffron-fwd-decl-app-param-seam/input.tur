@@ -1,0 +1,19 @@
+#lang saffron
+;; r7rs-lang-plan R3 (found through the R7RS prelude's `equal?`): a callee
+;; with a COMPOUND parameter type that is defined BELOW its caller.  The pass-1
+;; forward declaration recorded `(Vec any)` as the int placeholder, and the
+;; Saffron seam then unboxed the `any` argument to int: "cast: any holds Vec,
+;; not int" at runtime, and C that passed an int64 to a `tur_adt_Vec__any *`.
+;; Defining `vlen` above `go` avoided it, which made it look like an ordering
+;; rule.  Both orders must agree.
+(defn id [x] x)
+(defn go [x] (vlen (id x)))
+(defn vlen [v : (Vec any)] : int (vec-len v))
+(defn go2 [x] (vsum (id x) 0 0))
+(defn vsum [v : (Vec any) i : int acc : int] : int
+  (if (>= i (vec-len v)) acc (vsum v (+ i 1) (+ acc (cast (vec-get v i) int)))))
+(defn main [] : int
+  (let [v (vec-of (:: 1 any) (:: 2 any) (:: 4 any))]
+    (println (go (id v)))
+    (println (go2 (id v))))
+  0)

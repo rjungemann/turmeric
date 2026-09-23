@@ -6,8 +6,8 @@
 ;; --interpret; the compiled back end's gaps on exactly these shapes are
 ;; docs/reported/r7rs-compiled-dynamic-shapes.md, R6's to close.
 ;;
-;; requires.interp for that reason; r7rs-core-forms pins everything that
-;; already runs on both back ends.
+;; requires.interp-only for that reason (run-turi.sh owns it); r7rs-core-forms
+;; pins everything that already runs on both back ends.
 
 ;; named let
 (define (sum lst)
