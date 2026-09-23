@@ -1,6 +1,6 @@
 /* elab_forms.c -- control-flow and basic expression forms (let/if/do/while/case/...). */
 #include "elab_internal.h"
-#include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_dynamic */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -2958,7 +2958,7 @@ static bool if_branches_unify_via_tyvar(Type then_ty, Type else_ty, Type *out) {
 bool saffron_reject_static_only(Elab *e, Span span, const char *feature,
                                 const char *why) {
     (void)e;
-    if (!lang_span_is_saffron(span)) return false;
+    if (!lang_span_is_dynamic(span)) return false;
     diag_emit_with_code(DIAG_ERROR, span, TUR_E0312_SAFFRON_STATIC_ONLY,
                         "`%s` is not available in a `#lang saffron` file: %s",
                         feature, why);
@@ -2991,8 +2991,8 @@ Expr *elab_saffron_truthy(Elab *e, Expr *cond, Span site) {
      * macro-expanded condition (`(if (map-get m k) ...)`) carries the
      * stdlib's span, and was "if condition must be bool, got any" even in a
      * Saffron file. */
-    if (!lang_span_is_saffron(cond->span) && !lang_span_is_saffron(site) &&
-        !e->toplevel_saffron) return cond;
+    if (!lang_span_is_dynamic(cond->span) && !lang_span_is_dynamic(site) &&
+        !e->toplevel_dynamic) return cond;
     Expr **targs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
     targs[0] = cond;
     Expr *t = expr_new(e->arena, EX_DYN_OP, TYPE_BOOL, cond->span);
@@ -3308,7 +3308,7 @@ Expr *elab_if(Elab *e, const Form *call) {
              * :ptr<void> directly stays an error (CRU B-4). */
             result_t = TYPE_PTR_VOID;
         } else if (!type_eq(then_->type, else_->type) &&
-                   (lang_span_is_saffron(call->span) || e->toplevel_saffron) &&
+                   (lang_span_is_dynamic(call->span) || e->toplevel_dynamic) &&
                    !if_branches_unify_via_tyvar(then_->type, else_->type, &result_t)) {
             /* saffron-dynamic-surface-pass (low): in a Saffron file an `if`
              * whose arms disagree JOINS TO `any` -- `(defn pick [c] (if c 1

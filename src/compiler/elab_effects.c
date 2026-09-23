@@ -2078,8 +2078,8 @@ Expr *elab_perform(Elab *e, const Form *call) {
          * M10 records at the call seam. */
         if (i < effect->constructor->n_params &&
             args[i]->type.kind == TY_ANY &&
-            (lang_span_is_saffron(args[i]->span) ||
-             lang_span_is_saffron(call->span) || e->toplevel_saffron)) {
+            (lang_span_is_dynamic(args[i]->span) ||
+             lang_span_is_dynamic(call->span) || e->toplevel_dynamic)) {
             const Type *want_full = effect->constructor->param_full_types
                 ? effect->constructor->param_full_types[i] : NULL;
             Type want = want_full ? *want_full

@@ -1,6 +1,6 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include "elab_internal.h"
-#include "lang_dialects.h"   /* saffron-lang-plan S2: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-lang-plan S2: lang_span_is_dynamic */
 #include "cps.h"          /* cps_expr_uses_control -- the control-cast hoist */
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
@@ -5643,10 +5643,10 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
  * above, so there was never a reason for it to diverge.
  *
  * Keyed on the span's file, so a Saffron program that loads a Turmeric module
- * gets each file's own default -- see lang_span_is_saffron.  Not static: also
+ * gets each file's own default -- see lang_span_is_dynamic.  Not static: also
  * read by defeffect elaboration in elab_effects.c. */
 TypeKind saffron_default_param_kind(Span sp) {
-    return lang_span_is_saffron(sp) ? TY_ANY : TY_INT;
+    return lang_span_is_dynamic(sp) ? TY_ANY : TY_INT;
 }
 
 
@@ -7865,7 +7865,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * it cannot cover, because the type is needed before the body is
          * analysed. */
         if (return_kind == TY_NIL && !return_annotated &&
-            lang_span_is_saffron(call->span)) {
+            lang_span_is_dynamic(call->span)) {
             existing->type.as.fn.result_kind = TY_ANY;
         } else if (return_kind != TY_NIL && return_kind != TY_TYVAR) {
             existing->type.as.fn.result_kind = return_kind;
@@ -8391,7 +8391,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * Placed before the widen below on purpose, so the body is boxed by the
      * existing return-position coercion rather than a second one written here. */
     if (return_kind == TY_NIL && !return_annotated && body &&
-        body->type.kind != TY_NEVER && lang_span_is_saffron(call->span)) {
+        body->type.kind != TY_NEVER && lang_span_is_dynamic(call->span)) {
         /* saffron-lang-plan open question 3: `main` is the ONE unannotated
          * Saffron function that does not default to `any`.
          *
@@ -8454,7 +8454,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * target.  Placed before the conflict check below so that check sees the
      * narrowed type and stays quiet. */
     if (body && return_annotated && body->type.kind == TY_ANY &&
-        lang_span_is_saffron(body->span) &&
+        lang_span_is_dynamic(body->span) &&
         return_kind != TY_ANY && return_kind != TY_NIL &&
         return_kind != TY_UNION && return_kind != TY_NEVER &&
         return_kind != TY_TYVAR && return_kind != TY_UNKNOWN) {
@@ -10522,7 +10522,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * side-effect lambda keeps the shape a `(fn [T] nil)` slot wants. */
     if (!return_annotated && return_kind == TY_NIL && body &&
         body->type.kind != TY_NIL && body->type.kind != TY_NEVER &&
-        body->type.kind != TY_ANY && lang_span_is_saffron(call->span) &&
+        body->type.kind != TY_ANY && lang_span_is_dynamic(call->span) &&
         !is_callcc_receiver &&
         !(e->expected_type && e->expected_type->kind == TY_FN)) {
         return_kind = TY_ANY;

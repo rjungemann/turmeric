@@ -5,7 +5,7 @@
 #include "mangle.h"   /* tur_cname_name_len */
 #include "refine_discharge.h" /* RT3: final refinement discharge + stats */
 #include "refine_report.h"    /* SX8a-3: --dump-refine=json obligation dump */
-#include "lang_dialects.h"      /* saffron-lang-plan S6 (G7): lang_span_is_saffron */
+#include "lang_dialects.h"      /* saffron-lang-plan S6 (G7): lang_span_is_dynamic */
 
 /* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
  * in emit_core.c; declared here because elab_toplevel.c does not include
@@ -281,7 +281,7 @@ static Form *dl_saffron_widen_elem(Elab *e, Form *elem) {
 /* Widen every element of a data literal, or return `items` unchanged when the
  * literal is not in a Saffron file. */
 static Form **dl_saffron_widen_elems(Elab *e, Span sp, Form **items, uint32_t n) {
-    if (n == 0 || !lang_span_is_saffron(sp)) return items;
+    if (n == 0 || !lang_span_is_dynamic(sp)) return items;
     Form **out = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
     for (uint32_t i = 0; i < n; i++) out[i] = dl_saffron_widen_elem(e, items[i]);
     return out;
@@ -606,7 +606,7 @@ Expr *elab_form(Elab *e, Form *f) {
             for (uint32_t i = 0; i + 1 < n; i += 2) {
                 if (f->as.list.items[i]->tag != F_STR) { all_str_keys = false; break; }
             }
-            bool saffron = lang_span_is_saffron(f->span);
+            bool saffron = lang_span_is_dynamic(f->span);
             Form **kvs = (n == 0) ? NULL
                 : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
             for (uint32_t i = 0; i + 1 < n; i += 2) {
@@ -803,7 +803,7 @@ Expr *elab_form(Elab *e, Form *f) {
              * tests/fixtures/saffron-cons-list.  A `defdata` with `any` in BOTH
              * slots (what tests/fixtures/saffron-higher-order uses) needs no
              * ascription and stays the better idiom for a list you walk. */
-            if (lang_span_is_saffron(f->span) && f->as.list.len > 1 &&
+            if (lang_span_is_dynamic(f->span) && f->as.list.len > 1 &&
                 f->as.list.items[0]->tag == F_SYM &&
                 strcmp(f->as.list.items[0]->as.sym->name, "list") == 0 &&
                 !scope_lookup(e->scope, f->as.list.items[0]->as.sym)) {
@@ -1690,7 +1690,7 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                              * binary +) and for mutual recursion (`then=bool
                              * else=int`).  Same `main` exception as elab_defn:
                              * the zero-arity entry point stays `int`. */
-                            if (!ret_annotated && lang_span_is_saffron(f->span) &&
+                            if (!ret_annotated && lang_span_is_dynamic(f->span) &&
                                 !(name_f->as.sym->len == 4 &&
                                   memcmp(name_f->as.sym->name, "main", 4) == 0 &&
                                   param_arity == 0)) {
@@ -2286,10 +2286,10 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
          * form reachable from it through `do` chains, is a statement.  Anything
          * deeper is an expression subform.  See def_form_is_statement_position. */
         e.toplevel_stmt = forms[i];
-        e.toplevel_saffron = lang_span_is_saffron(forms[i]->span);   /* M10 */
+        e.toplevel_dynamic = lang_span_is_dynamic(forms[i]->span);   /* M10 */
         items[i] = elab_form(&e, forms[i]);
         e.toplevel_stmt = NULL;
-        e.toplevel_saffron = false;
+        e.toplevel_dynamic = false;
         if (tl_may_defer) {
             uint32_t tl_cerr = diag_pop_capture();
             if (tl_cerr > 0 || !items[i]) {
@@ -2353,10 +2353,10 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
             if (i == stdlib_prefix) e.in_stdlib_load = false;
             if (!tl_deferred[i]) continue;
             e.toplevel_stmt = forms[i];
-            e.toplevel_saffron = lang_span_is_saffron(forms[i]->span);
+            e.toplevel_dynamic = lang_span_is_dynamic(forms[i]->span);
             items[i] = elab_form(&e, forms[i]);
             e.toplevel_stmt = NULL;
-            e.toplevel_saffron = false;
+            e.toplevel_dynamic = false;
             if (!items[i]) rc = -1;
         }
         free(tl_deferred);

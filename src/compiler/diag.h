@@ -577,9 +577,10 @@ ReaderType detect_lang_dialect(const char *src, size_t len,
  *
  * saffron GRADUATED at 0.46.0, so no dialect is gated: there is nothing to
  * enable, nothing to warn about, and a project manifest can no longer refuse
- * one.  What remains is recording that this build contains a Saffron TU
- * (g_opt_saffron), which the emitter reads to decide whether to emit the `any`
- * registries -- see lang_dialects.c.
+ * one.  What remains is recording that this build contains a dynamically
+ * typed TU (g_opt_dynamic_any -- keyed on the language's LangTraits.dynamic
+ * bit, not its name), which the emitter reads to decide whether to emit the
+ * `any` registries -- see lang_dialects.c.
  *
  * Still returns bool, and callers still check it, because that is the shape a
  * future gated dialect needs; today it cannot fail. */

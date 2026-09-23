@@ -1,6 +1,6 @@
 /* elab_core.c -- Elab state, scope, free-var analysis, binding/move/linear-state helpers. */
 #include "elab_internal.h"
-#include "lang_dialects.h"   /* saffron-dynamic-surface-pass H6: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-dynamic-surface-pass H6: lang_span_is_dynamic */
 #include "mangle.h"
 #include <string.h>  /* memset for elab_init_state */
 
@@ -119,7 +119,7 @@ uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out
      * signature the definition did not have.  A slot that an annotation
      * follows is handled below exactly as before: the annotation either
      * commits a scalar kind or restores the compound placeholder. */
-    bool saffron = lang_span_is_saffron(params_f->span);
+    bool saffron = lang_span_is_dynamic(params_f->span);
     for (uint32_t pi = 0; pi < params_f->as.list.len; pi++) {
         const Form *p = params_f->as.list.items[pi];
         /* `^`-prefixed substructural / fat / mut markers annotate the next

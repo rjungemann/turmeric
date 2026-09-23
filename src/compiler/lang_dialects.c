@@ -117,27 +117,48 @@ void lang_dialects_print_json(void) {
     printf("\n  ]");
 }
 
-/* saffron-lang-plan S2: see lang_dialects.h for why this is a registry lookup
- * rather than threaded state. */
-bool lang_span_is_saffron(Span sp) {
+/* r7rs-lang-plan R0 / D1: one trait row per language, indexed by LangDialect.
+ * The order MUST match the enum in diag.h; lang_traits() bounds-checks so a
+ * stray value degrades to the Turmeric row rather than past the array. */
+static const LangTraits LANG_TRAITS[] = {
+    /* LANG_TURMERIC */
+    { "turmeric", READER_TURMERIC, /*reader_axis_free=*/true,
+      /*dynamic=*/false, /*prelude=*/NULL },
+    /* LANG_SAFFRON: the dynamic substrate.  An unannotated parameter or
+     * return defaults to `any`; the prelude adapts the typed stdlib. */
+    { "saffron",  READER_TURMERIC, /*reader_axis_free=*/true,
+      /*dynamic=*/true,  /*prelude=*/"saffron/prelude.tur" },
+};
+
+const LangTraits *lang_traits(LangDialect d) {
+    size_t i = (size_t)d;
+    if (i >= sizeof(LANG_TRAITS) / sizeof(LANG_TRAITS[0])) i = 0;
+    return &LANG_TRAITS[i];
+}
+
+/* saffron-lang-plan S2 / r7rs-lang-plan R0: see lang_dialects.h for why this
+ * is a registry lookup rather than threaded state, and why it asks the trait
+ * rather than the dialect's name. */
+bool lang_span_is_dynamic(Span sp) {
     const SourceFile *f = diag_source_file(sp.file_id);
-    return f != NULL && f->lang == LANG_SAFFRON;
+    return f != NULL && lang_traits(f->lang)->dynamic;
 }
 
 /* saffron GRADUATED at 0.46.0: a non-default dialect is no longer gated, warns
  * nothing, and cannot be switched off by a manifest.  What remains is the one
- * side effect the gate used to carry incidentally -- flipping `g_opt_saffron`,
- * which the emitter reads to decide whether this build emits the `any` type and
- * instance registries and the dynamic-dispatch panic (emit_module.c).  Setting
- * it HERE, at the moment a `#lang saffron` file is read, is exactly when
- * `experiment_enable` used to set it, so the emitted C is unchanged on both
- * arms: a build with no Saffron TU still emits none of it.
+ * side effect the gate used to carry incidentally -- flipping
+ * `g_opt_dynamic_any`, which the emitter reads to decide whether this build
+ * emits the `any` type and instance registries and the dynamic-dispatch panic
+ * (emit_module.c).  Setting it HERE, at the moment a dynamic-language file is
+ * read, is exactly when `experiment_enable` used to set it, so the emitted C
+ * is unchanged on both arms: a build with no dynamic TU still emits none of
+ * it.  Keyed on the trait, not the dialect's identity (r7rs-lang-plan D2):
+ * any language whose row says `dynamic` needs the registries.
  *
  * Returns bool, and every caller still checks it, because that is the shape a
  * future gated dialect needs; today no dialect can fail. */
 bool lang_dialect_apply(LangDialect d, const char *path) {
     (void)path;
-    if (d == LANG_TURMERIC) return true;           /* the default: nothing to do */
-    g_opt_saffron = true;
+    if (lang_traits(d)->dynamic) g_opt_dynamic_any = true;
     return true;
 }

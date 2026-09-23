@@ -344,19 +344,24 @@ extern bool g_opt_option_niche;
  * hatch; tests/run-regions-seam.sh keeps that off path green. */
 extern bool g_opt_regions;
 
-/* "This build contains a Saffron translation unit."  Set by lang_dialect_apply
- * when the reader takes a `#lang saffron` line; never by a user-facing flag.
+/* "This build contains a DYNAMICALLY TYPED translation unit."  Set by
+ * lang_dialect_apply when the reader takes a `#lang` line whose language's
+ * trait row says `dynamic` (Saffron today; r7rs-lang-plan's `#lang r7rs`
+ * next); never by a user-facing flag.
  *
- * GRADUATED 2026-09-10, at 0.46.0.  This WAS the `saffron` experiment's enable
- * bit, flipped by `--enable=saffron` / `:experiments` / the `#lang` line (D9);
- * the experiment is gone and `--enable=saffron` is a TUR-W0063 no-op, but the
- * bit stays because the emitter reads it for a reason unrelated to gating: it
- * decides whether to emit the `any` type registry, the instance registry and
- * the dynamic-dispatch panic (emit_module.c).  A plain Turmeric program's
- * emitted C is byte-for-byte what it was before Saffron existed, and that is
- * what this bit buys.  It is NOT an on/off switch for the dialect -- the
- * per-file `SourceFile.lang` is (lang_span_is_saffron). */
-extern bool g_opt_saffron;
+ * GRADUATED 2026-09-10, at 0.46.0, as `g_opt_saffron`.  This WAS the
+ * `saffron` experiment's enable bit, flipped by `--enable=saffron` /
+ * `:experiments` / the `#lang` line (D9); the experiment is gone and
+ * `--enable=saffron` is a TUR-W0063 no-op, but the bit stays because the
+ * emitter reads it for a reason unrelated to gating: it decides whether to
+ * emit the `any` type registry, the instance registry and the
+ * dynamic-dispatch panic (emit_module.c).  A plain Turmeric program's emitted
+ * C is byte-for-byte what it was before Saffron existed, and that is what
+ * this bit buys.  It is NOT an on/off switch for a dialect -- the per-file
+ * `SourceFile.lang` is (lang_span_is_dynamic).  Renamed in r7rs-lang-plan R0
+ * because the fact it records is "the `any` machinery is needed", which is a
+ * trait shared by every dynamic language, not Saffron's identity. */
+extern bool g_opt_dynamic_any;
 /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md): the
  * `defclass` constraint preamble `[(Super var)...]` and the entailment it
  * licenses.  Off by default and gated behind `--enable=class-superclasses`;

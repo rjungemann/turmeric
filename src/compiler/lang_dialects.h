@@ -26,18 +26,45 @@
 #include "runtime/arena.h"
 #include "symbols.h"
 
-/* saffron-lang-plan S2: is the file this span belongs to written in Saffron?
+/* r7rs-lang-plan R0 / D1: the per-language TRAIT row.
  *
- * The dialect lives on the SourceFile, and every Form carries the file_id of
- * the file it was read from, so this is a registry lookup rather than state
- * threaded through elaboration.  That is what makes the answer PER-FILE: a
- * Saffron program that loads a Turmeric module gets Turmeric defaults for that
- * module's forms and Saffron defaults for its own, with no extra work -- the
- * contract boundary of D5 falls out of asking the question this way.
+ * Everything the elaborator and the emitter used to ask by testing for
+ * LANG_SAFFRON by name was really asking one of these questions -- "is this
+ * file dynamically typed?", "which reader does the bare base token mean?",
+ * "does this language autoload a prelude?" -- so the answers live in one row
+ * per language and the identity test goes away.  A second dynamic language
+ * (`#lang r7rs`) then inherits the whole dynamic surface by setting one bit
+ * here, instead of growing an `if (lang == LANG_R7RS)` beside every
+ * `LANG_SAFFRON` test (the plan's R1 risk: two dynamic substrates). */
+typedef struct LangTraits {
+    const char *name;             /* "turmeric" | "saffron" | "r7rs" */
+    ReaderType  default_reader;   /* what the bare base token selects */
+    bool        reader_axis_free; /* may be spelled over the four Turmeric readers */
+    bool        dynamic;          /* an unannotated param/return means `any` */
+    const char *prelude;          /* stdlib autoload tail (e.g. "saffron/prelude.tur"), or NULL */
+} LangTraits;
+
+/* The trait row for a dialect.  Never NULL: an out-of-range value gets the
+ * Turmeric row, so an unwired construction site keeps the default behaviour
+ * rather than dereferencing garbage. */
+const LangTraits *lang_traits(LangDialect d);
+
+/* saffron-lang-plan S2 / r7rs-lang-plan R0: is the file this span belongs to
+ * written in a DYNAMICALLY TYPED language (`LangTraits.dynamic`)?
+ *
+ * This used to be lang_span_is_saffron, and every one of its callers was
+ * asking this question, not "is it Saffron specifically" -- the canonical
+ * site is elab_fns.c's `? TY_ANY : TY_INT` default.  The dialect lives on the
+ * SourceFile, and every Form carries the file_id of the file it was read
+ * from, so this is a registry lookup rather than state threaded through
+ * elaboration.  That is what makes the answer PER-FILE: a dynamic program
+ * that loads a Turmeric module gets Turmeric defaults for that module's
+ * forms and dynamic defaults for its own, with no extra work -- the contract
+ * boundary of Saffron's D5 falls out of asking the question this way.
  *
  * False for an unknown file_id, so an unregistered or synthetic span keeps
  * today's behaviour. */
-bool lang_span_is_saffron(Span sp);
+bool lang_span_is_dynamic(Span sp);
 
 /* saffron-lang-plan S1: print the `#lang` BASE axis -- the (language, reader)
  * pairs a base token can name -- for `tur dialects`.  Rendered from the two

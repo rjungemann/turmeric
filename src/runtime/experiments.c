@@ -337,7 +337,9 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * enable, prints no lifecycle warning, and a project manifest that scopes
      * `:experiments` can no longer turn it off.
      *
-     * `g_opt_saffron` SURVIVES the graduation and keeps its name, because it
+     * `g_opt_saffron` SURVIVED the graduation (renamed `g_opt_dynamic_any`
+     * by r7rs-lang-plan R0, since the fact it records is a trait every
+     * dynamic language shares), because it
      * was never only an enable bit: the emitter reads it to decide whether to
      * emit the `any` type/instance registries and the dynamic-dispatch panic
      * (emit_module.c), and gating them is what keeps a plain Turmeric program's

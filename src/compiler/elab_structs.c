@@ -1,6 +1,6 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
-#include "lang_dialects.h"  /* saffron-lang-plan S5: lang_span_is_saffron */
+#include "lang_dialects.h"  /* saffron-lang-plan S5: lang_span_is_dynamic */
 #include <assert.h>   /* structdef-retirement slice 5 DS-B: zero-producer guard */
 
 /* ---- file-local helper forward declarations ---- */
@@ -3685,7 +3685,7 @@ Expr *elab_match(Elab *e, const Form *call) {
      * switch over unrelated layouts, which is a bigger thing than a narrow and
      * has no arm-unifier story yet; leaving it to the existing diagnostic is
      * better than narrowing to whichever ADT happened to be named first. */
-    if (scrutinee->type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
+    if (scrutinee->type.kind == TY_ANY && lang_span_is_dynamic(call->span)) {
         AdtDef *only = NULL;
         bool mixed = false;
         for (uint32_t ai = 0; ai < n_arms && !mixed; ai++) {

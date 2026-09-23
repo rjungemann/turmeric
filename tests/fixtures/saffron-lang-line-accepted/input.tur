@@ -17,7 +17,7 @@
 ;; no EXPERIMENTS[] row, `--enable=saffron` is a TUR-W0063 no-op, a project
 ;; manifest can no longer refuse the dialect, and nothing is printed to stderr
 ;; (TUR-W0060, the prototype lifecycle warning, is gone).  What the `#lang`
-;; line still does behind the scenes is set g_opt_saffron, which tells the
+;; line still does behind the scenes is set g_opt_dynamic_any, which tells the
 ;; emitter this build contains a Saffron TU.
 
 (defn add [x : int y : int] : int (+ x y))

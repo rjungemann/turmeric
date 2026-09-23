@@ -621,13 +621,15 @@ typedef struct Elab {
      * binder's type and an escape delivers an int64 -- neither is a
      * tur_tagged_t. */
     bool in_callcc_receiver;
-    /* saffron-dynamic-surface-pass M10: the dialect of the TOP-LEVEL form
-     * being elaborated, set beside toplevel_stmt in pass 2.  Per-form spans
-     * cannot see through a macro expansion -- `(when (map-get m k) ...)` in
-     * a Saffron file is an `if` whose form is macros.tur's and whose
-     * condition is map.tur's -- so the seam and the truthiness rule consult
-     * this as well as the spans they have. */
-    bool toplevel_saffron;
+    /* saffron-dynamic-surface-pass M10: whether the TOP-LEVEL form being
+     * elaborated comes from a dynamically typed file (lang_span_is_dynamic),
+     * set beside toplevel_stmt in pass 2.  Per-form spans cannot see through
+     * a macro expansion -- `(when (map-get m k) ...)` in a Saffron file is
+     * an `if` whose form is macros.tur's and whose condition is map.tur's --
+     * so the seam and the truthiness rule consult this as well as the spans
+     * they have.  Was `toplevel_saffron`; r7rs-lang-plan R0 renamed it to the
+     * trait it records. */
+    bool toplevel_dynamic;
     /* saffron-effect-row-lost-through-unannotated-call: a user `defeffect` has
      * been elaborated in this unit.  Gates the CALL half of the dynamic-node
      * operand hoist (elab_hoist_control_operands): a unit with no effects can

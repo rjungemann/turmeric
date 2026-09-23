@@ -4567,7 +4567,7 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
     /* The LANGUAGE axis gets the same treatment, in the same place, because it
      * is the same decision one level up.  Since saffron graduated at 0.46.0
      * this cannot fail -- no dialect is gated -- but it is still where a
-     * Saffron file records itself for the emitter (g_opt_saffron).
+     * dynamic-language file records itself for the emitter (g_opt_dynamic_any).
      *
      * Here rather than at each detection site: every path that elaborates a
      * file -- compile, `--interpret`, an imported module, the REPL -- funnels

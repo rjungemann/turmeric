@@ -6,7 +6,7 @@
 #define _GNU_SOURCE
 #endif
 #include "elab_internal.h"
-#include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_dynamic */
 #include "cps.h"          /* cps_expr_uses_control -- the control-widen hoist */
 bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h */
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
@@ -711,7 +711,7 @@ static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
     if (!value || value->kind != EX_VAR || !value->as.var.binding ||
         !value->as.var.binding->name || value->type.kind != TY_FN)
         return NULL;
-    if (!(e->toplevel_saffron || lang_span_is_saffron(value->span))) return NULL;
+    if (!(e->toplevel_dynamic || lang_span_is_dynamic(value->span))) return NULL;
     const Type *ft = &value->type;
     if (ft->as.fn.cfnptr || ft->as.fn.arity > 5) return NULL;
     bool all_any = (ft->as.fn.result_kind == TY_ANY);
@@ -2220,7 +2220,7 @@ static Expr *saffron_dyn_call_on(Elab *e, const Form *call, Expr *fnv) {
 static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     TypeKind head_kind = head_expr->type.kind;
     if (head_kind == TY_ANY &&
-        (lang_span_is_saffron(call->span) || e->toplevel_saffron))
+        (lang_span_is_dynamic(call->span) || e->toplevel_dynamic))
         return saffron_dyn_call_on(e, call, head_expr);
     if (head_kind != TY_FN && head_kind != TY_PTR_VOID && head_kind != TY_CONT) {
         diag_emit(DIAG_ERROR, call->as.list.items[0]->span,
@@ -3191,7 +3191,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
      * `(Wrap 7)` through an unannotated defn was accepted.  So the rule keys
      * on what the expectation SAYS, not on its presence: only a concrete
      * argument somewhere in the applied type pins. */
-    if (lang_span_is_saffron(call->span) &&
+    if (lang_span_is_dynamic(call->span) &&
         !saffron_expected_app_pins(e->expected_type)) {
         CtorDef *sctor = elab_lookup_ctor(e, name);
         if (sctor && sctor->adt && sctor->adt->n_type_params > 0 &&
@@ -3250,7 +3250,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
      * result path consults.  Widening under it produced an `(Option any)` the
      * ascription then could not accept. */
     bool saffron_pinned = saffron_expected_app_pins(e->expected_type);
-    if (lang_span_is_saffron(call->span) && !saffron_pinned && !elab_lookup_ctor(e, name)) {
+    if (lang_span_is_dynamic(call->span) && !saffron_pinned && !elab_lookup_ctor(e, name)) {
         Binding *gb = scope_lookup(e->scope, name);
         if (gb && gb->type.kind == TY_FN && gb->type.as.fn.arg_full_types &&
             gb->type.as.fn.arity > 0) {
@@ -4253,7 +4253,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
              * it at the all-`any` instantiation, exactly as the instance
              * registry keys a parametric receiver. */
             if (!result_pinned && ctor->adt->n_type_params > 0 &&
-                lang_span_is_saffron(call->span)) {
+                lang_span_is_dynamic(call->span)) {
                 Type any_t = type_from_kind(TY_ANY);
                 Type app = type_adt(ctor->adt);
                 app.hkt_kind = kind_for_arity(ctor->adt->n_type_params);
@@ -4705,7 +4705,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
      * operator is dynamic when ANY operand is, not only when the first is, so
      * the whole call goes dynamic and the position of the `any` stops
      * mattering. */
-    if (lang_span_is_saffron(call->span) && builtin_first_with_name(name)) {
+    if (lang_span_is_dynamic(call->span) && builtin_first_with_name(name)) {
         bool has_any = false;
         for (uint32_t i = 0; i < n_args; i++)
             if (args[i] && args[i]->type.kind == TY_ANY) { has_any = true; break; }
@@ -5963,7 +5963,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * case rather than an error -- higher-order code is the whole point of the
      * surface syntax.  Resolution moves to runtime, where the value's own tag
      * says whether it is callable and with what arity. */
-    if (fn_type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
+    if (fn_type.kind == TY_ANY && lang_span_is_dynamic(call->span)) {
         Expr *fnv = expr_new(e->arena, EX_VAR, fn_binding->type, call->span);
         fnv->as.var.binding = fn_binding;
         return saffron_dyn_call_on(e, call, fnv);
@@ -7313,8 +7313,8 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * the argument alone turned a Saffron call into a static
          * "expected int, got any" reported inside the stdlib. */
         if (!arg_ok && args[i] && args[i]->type.kind == TY_ANY &&
-            (lang_span_is_saffron(args[i]->span) ||
-             lang_span_is_saffron(call->span) || e->toplevel_saffron) &&
+            (lang_span_is_dynamic(args[i]->span) ||
+             lang_span_is_dynamic(call->span) || e->toplevel_dynamic) &&
             expected_arg_kind != TY_ANY && expected_arg_kind != TY_TYVAR &&
             expected_arg_kind != TY_UNKNOWN) {
             Type want = type_from_kind(expected_arg_kind);
@@ -7461,8 +7461,8 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         if (!arg_ok && args[i] && args[i]->type.kind != TY_ANY &&
             expected_arg_kind == TY_TYVAR && fn_binding &&
             fn_type.kind == TY_FN &&
-            (lang_span_is_saffron(args[i]->span) ||
-             lang_span_is_saffron(call->span) || e->toplevel_saffron)) {
+            (lang_span_is_dynamic(args[i]->span) ||
+             lang_span_is_dynamic(call->span) || e->toplevel_dynamic)) {
             uint32_t fi_w = fn_binding->closure_fn_binding ? i + 1 : i;
             /* A bare tyvar parameter has no entry in arg_full_types (that is
              * for compound args), so fall back to the callee's own FnDef,
@@ -8563,7 +8563,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * Deferred to an enclosing ascription like the other two: `(:: (none)
      * (Option float))` pins the instantiation on purpose. */
     if (fn_type.kind == TY_FN && fn_type.as.fn.result_full_type &&
-        lang_span_is_saffron(call->span) &&
+        lang_span_is_dynamic(call->span) &&
         call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
         !(saved_expected_return && saved_expected_return->kind == TY_APP)) {
         const char *open_names[16];

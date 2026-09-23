@@ -3397,7 +3397,7 @@ static void emit_abi_note_carrier_call(EmitCtx *ctx, const Binding *binding) {
  * `type_name`, and the boxed flag is computed from the type alone), so calling
  * it here rather than at the widen changes nothing about what gets published. */
 static void emit_abi_note_any_widen(EmitCtx *ctx, Type t) {
-    if (!ctx || !g_opt_saffron) return;
+    if (!ctx || !g_opt_dynamic_any) return;
     /* Gated with its only consumer, so a plain Turmeric program is untouched
      * BYTE FOR BYTE.  Collecting unconditionally would be tidier but is not
      * free: `emit_any_type_id` interns, and a widen the scan reaches in code
@@ -7900,7 +7900,7 @@ bool emit_instance_dispatch_recv_type(EmitCtx *ctx, TypeClassInstance *inst,
 
 bool emit_instance_dispatch_tag(EmitCtx *ctx, TypeClassInstance *inst,
                                 int64_t *out_tag) {
-    if (!ctx || !g_opt_saffron) return false;
+    if (!ctx || !g_opt_dynamic_any) return false;
     Type recv;
     if (!emit_instance_dispatch_recv_type(ctx, inst, &recv)) return false;
     int64_t id = emit_any_type_id(ctx, recv);
@@ -7980,14 +7980,14 @@ static void emit_abi_scan_program(EmitCtx *ctx, const Expr **items, uint32_t n_i
      * appear before the widen that makes its tag reachable; the tag set is only
      * complete once every item has been scanned.
      *
-     * Gated on g_opt_saffron, which a `#lang saffron` file turns on build-wide
+     * Gated on g_opt_dynamic_any, which a `#lang saffron` file turns on build-wide
      * (lang_dialect_apply sets it), so a plain Turmeric program emits exactly
      * what it did before -- no dicts it did not already need, and no growth
      * from the row table that references them.  A build that mixes a Saffron TU
      * with a Turmeric TU compiled entirely separately would not share the flag;
      * that is a known v0 limitation, not a silent one, since the failure is the
      * no-instance panic rather than a wrong answer. */
-    if (!g_opt_saffron) return;
+    if (!g_opt_dynamic_any) return;
     for (uint32_t i = 0; i < n_items; i++) {
         if (!items[i] || items[i]->kind != EX_INSTANCE_DEF) continue;
         TypeClassInstance *inst = items[i]->as.instance_def_.instance;
@@ -11987,7 +11987,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * found by a TU that DISPATCHES on the box.  Only the rows array itself is
      * emitted late (it takes the singletons' addresses); the types and the two
      * functions belong here, where the dispatch sites can see them. */
-    if (g_opt_saffron) {
+    if (g_opt_dynamic_any) {
     buf_puts(out, "typedef struct __tur_inst_row { const char *cls; int64_t tag; const void *dict; } __tur_inst_row;\n");
     buf_puts(out, "typedef struct __tur_inst_chunk { const __tur_inst_row *rows; int n; struct __tur_inst_chunk *next; } __tur_inst_chunk;\n");
     emit_rt_global(out, shared,
@@ -12005,7 +12005,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            if (c->rows[i].tag == tag && strcmp(c->rows[i].cls, cls) == 0)\n");
     buf_puts(out, "                return c->rows[i].dict;\n");
     buf_puts(out, "    return 0;\n}\n");
-    }   /* g_opt_saffron -- gated so a plain Turmeric program's emitted C, and
+    }   /* g_opt_dynamic_any -- gated so a plain Turmeric program's emitted C, and
          * therefore every `expected.c` snapshot, is unchanged byte for byte. */
     buf_puts(out, "static const __tur_any_ti *__tur_any_find(int64_t tag) {\n");
     buf_puts(out, "    for (__tur_any_tichunk *c = g_tur_any_types; c; c = c->next)\n");
@@ -12067,7 +12067,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      *
      * Reports the runtime type NAME rather than the tag: the tag is a hash and
      * means nothing to a reader, and P1's registry already answers this. */
-    if (g_opt_saffron) {
+    if (g_opt_dynamic_any) {
     buf_puts(out, "static const void *__tur_inst_slot(const char *cls, const char *meth, "
                   "int64_t tag, int slot) {\n");
     buf_puts(out, "    const void *__t = __tur_inst_find(cls, tag);\n");
