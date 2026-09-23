@@ -2124,6 +2124,12 @@ from it -- the second reproduces on `vec-push!`, parametric since long before.
 | --- | --- | --- |
 | [r7rs-compiled-dynamic-shapes](r7rs-compiled-dynamic-shapes.md) | medium | Three dynamic-closure shapes the COMPILED back end refuses and `--interpret` answers correctly, none Scheme-specific: a letrec-bound closure over `any` that calls itself (cc: "aggregate value used where an integer was expected" -- the shape every Scheme named `let`/`do`/`letrec` lowers to), a dynamic call the fat-closure apply helpers refuse (a `nil`-returning callee, and anything past four arguments), and `type-of` on an `any` rest parameter passed through an identity (SIGSEGV). The plan stages R7RS interpreter-first and lifts the compiled path in R6; until then `tests/fixtures/r7rs-core-forms-interp` and `r7rs-named-let-sum` carry `requires.interp-only` |
 
+## Found landing r7rs-lang-plan R3 (filed 2026-09-23)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [saffron-open-generic-result-not-grounded](saffron-open-generic-result-not-grounded.md) | medium | Pre-existing on `main`. A generic constructor called with nothing to bind its type parameters -- `(map-new)` -- hands a Saffron (or `#lang r7rs`) program an OPEN `(Map K V)` that nothing ever grounds to `any`: `(map-assoc m "k" 42)` on it is a static `TUR-E0001` reported inside stdlib/map.tur (`expected &?, got &cstr`), and the same map returned through an unannotated function is a compiled `cast: any holds a different instantiation of Map` where `--interpret` prints the right answer. The seam grounds open type arguments on the target side only; the value side (the let/def binding, the return widen) keeps the open type. Workaround is an ascription the dynamic-language user has no reason to know about; the R3 seam fixture builds its map from a `#map{}` literal for this reason |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

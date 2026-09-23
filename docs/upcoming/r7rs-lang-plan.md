@@ -951,7 +951,12 @@ and getting the right answer.
 > - **Deviations and gaps at R3**: a generic stdlib constructor with no
 >   value arguments (`(map-new)`) cannot be grounded from Scheme -- `K`/`V`
 >   never bind -- so the seam fixture builds its map from a `#map{}`
->   literal (a Saffron gap, not a Scheme one); `apply` takes at most four
+>   literal. That is a Saffron gap, pre-existing on `main`, and it has two
+>   faces (a static error reported inside stdlib/map.tur, and a compiled
+>   panic where `--interpret` answers correctly when the map comes back
+>   through an unannotated function):
+>   `docs/reported/saffron-open-generic-result-not-grounded.md` has the
+>   repros and the one-site fix direction; `apply` takes at most four
 >   arguments (the compiled dynamic-call helpers' limit); `string-copy`
 >   returns its argument (strings are immutable, so a copy is the value);
 >   `vector-map`/`vector-for-each`/`string-map` and the char-class
@@ -1010,6 +1015,15 @@ have at all **belongs in the typed stdlib first**.
 `(scheme eval)` and `(scheme repl)` need an evaluator at runtime, which means
 either linking `libturi` into the emitted program or declaring them
 interpreter-only. That is Section 8's question, not a settled decision.
+
+A prerequisite the R3 seam found: a Turmeric generic constructor called with
+nothing to bind its type parameters (`(map-new)`, and any adaptor that
+forwards to one) hands Scheme an OPEN type that nothing grounds to `any`, so
+the first insert is a static error or a compiled-only panic
+(`docs/reported/saffron-open-generic-result-not-grounded.md`). Every
+adaptor here that forwards to such a constructor either ascribes the result
+itself (`(:: (map-new) (Map any any))`) or waits on that report; the D9
+snippet as written (`(hamt-set (hamt-new) "k" 42)`) is the second face of it.
 
 ### R8 -- ports and I/O (medium)
 
