@@ -223,13 +223,13 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
      * file is sweet-exp Turmeric unless its `#lang` line says otherwise, and
      * there is no extension that means "Saffron". */
     if (out_dialect) *out_dialect = dialect;
-    /* saffron-lang-plan S6: the Saffron prelude joins the stdlib autoload list
-     * when the ENTRY file is Saffron.  Set here rather than at each caller
+    /* saffron-lang-plan S6: the language's prelude (LangTraits.prelude) joins
+     * the stdlib autoload list when the ENTRY file has one.  Set here rather than at each caller
      * because this is the one function every CLI path that opens an entry file
      * goes through, and set unconditionally (not only when true) so a Saffron
      * compile cannot license the prelude for the next Turmeric one in the same
      * process -- see the note on the declaration. */
-    g_saffron_prelude = (dialect == LANG_SAFFRON);
+    g_lang_prelude = lang_traits(dialect)->prelude;
     return detected_type;
 }
 
@@ -7896,7 +7896,7 @@ static int cmd_eval_h(const char *path, bool use_color,
                  * `detect_and_adjust_lang` (which the compiled paths use) left
                  * `tur --interpret` reporting "unknown name 'vec-map'" on a
                  * program the compiler accepted. */
-                g_saffron_prelude = (dialect == LANG_SAFFRON);
+                g_lang_prelude = lang_traits(dialect)->prelude;
             }
         }
     }

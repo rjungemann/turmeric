@@ -486,6 +486,7 @@ static const struct {
     { "curly-infix", "Curly-infix" },
     { "neoteric",    "Neoteric" },
     { "sweet",       "Sweet-expression" },
+    { "scheme",      "Scheme" },          /* r7rs-lang-plan R1: READER_R7RS */
 };
 
 static const char *wasm_reader_label(const char *reader) {
@@ -543,11 +544,10 @@ const char *turi_wasm_lang_registry(void) {
         wasm_json_escape(&b, wasm_reader_label(d.reader));
         buf_puts(&b, "\",\"language\":\"");
         wasm_json_escape(&b, d.language);
-        /* Always null since saffron graduated at 0.46.0 -- every base is
-         * stable.  The key is still emitted so the picker's rendering path is
-         * exercised and a future gated dialect needs no JS change: a base with
-         * an experiment is BADGED, never hidden, because the `#lang` line is
-         * itself the enable and the row stays selectable. */
+        /* null for a stable base; the gating EXPERIMENTS[] name for a gated
+         * one (`r7rs` since r7rs-lang-plan R1).  A base with an experiment is
+         * BADGED, never hidden, because the `#lang` line is itself the enable
+         * and the row stays selectable. */
         buf_puts(&b, "\",\"experiment\":");
         if (d.experiment) {
             buf_puts(&b, "\"");

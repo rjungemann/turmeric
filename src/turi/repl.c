@@ -35,6 +35,7 @@
 #include "elab_internal.h" /* :expand -- MacroDef registry + elab_expand_macro */
 #include "ffi_thunk.h"     /* RP4: install per-export TuriNativeFn bindings */
 #include "platform_fs.h"   /* setenv/unsetenv on Windows */
+#include "lang_dialects.h" /* lang_traits: a dialect's prelude and name */
 
 #include <ctype.h>
 #include <errno.h>
@@ -1292,14 +1293,14 @@ int turi_repl_run(bool watch_mode) {
 
     /* saffron-lang-plan S8: `tur repl --lang saffron`.
      *
-     * Set BEFORE the preload below, because `g_saffron_prelude` selects the
+     * Set BEFORE the preload below, because `g_lang_prelude` selects the
      * stdlib autoload list -- flipping it afterwards would leave the session
      * without stdlib/saffron/prelude.tur.  The fields are assigned directly
      * rather than through turi_env_apply_lang_dialect: that helper resets the
      * session to its prelude, which at startup has not been loaded yet. */
     if (g_repl_start_saffron) {
-        env->lang         = LANG_SAFFRON;
-        g_saffron_prelude = true;
+        env->lang      = LANG_SAFFRON;
+        g_lang_prelude = lang_traits(LANG_SAFFRON)->prelude;
     }
 
     /* Preload the core macros (when/cond/for/and/or + assert!/require!/...) and
@@ -1653,9 +1654,10 @@ int turi_repl_run(bool watch_mode) {
                      * reader-macro registry, whose user macros came from the
                      * source being discarded. */
                     turi_env_apply_lang_dialect(env, rt, dialect);
-                    if (dialect == LANG_SAFFRON)
-                        printf("; language set to saffron, reader %s "
-                               "(session reset)\n", reader_type_name(rt));
+                    if (dialect != LANG_TURMERIC)
+                        printf("; language set to %s, reader %s "
+                               "(session reset)\n", lang_dialect_name(dialect),
+                               reader_type_name(rt));
                     else
                         printf("; reader set to %s (session reset)\n",
                                reader_type_name(rt));
@@ -1664,8 +1666,10 @@ int turi_repl_run(bool watch_mode) {
                      * (tests/run-flags.sh reader-name-canonical and
                      * lang-same-base-no-reset); the language axis rides
                      * along as a suffix rather than reshaping the line. */
-                    printf("; reader already set to %s%s\n", reader_type_name(rt),
-                           dialect == LANG_SAFFRON ? " (saffron)" : "");
+                    printf("; reader already set to %s", reader_type_name(rt));
+                    if (dialect != LANG_TURMERIC)
+                        printf(" (%s)", lang_dialect_name(dialect));
+                    printf("\n");
                 }
                 free(line);
                 continue;

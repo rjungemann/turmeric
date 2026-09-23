@@ -1,0 +1,8 @@
+#lang r7rs/sweet
+;; r7rs-lang-plan D1: `r7rs` brings its own reader and has no reader axis
+;; (LangTraits.reader_axis_free = false), so a slash spelling is not a base
+;; -- it is the same TUR-E0331 any unknown base gets, not a silent fallback
+;; to the Scheme reader or to sweet-exp Turmeric.  `r7rs/sweet` is a
+;; deliberate deferral (plan Section 8, Q5), and if it is ever wanted the
+;; LANG_BASES[] table is where it goes.
+(defn main [] : int 0)

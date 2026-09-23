@@ -459,6 +459,14 @@ typedef enum ReaderType {
     READER_CURLY_INFIX,    /* Turmeric + curly-infix (SRFI-105) */
     READER_NEOTERIC,       /* Turmeric + neoteric notation */
     READER_SWEET,          /* Full sweet-expressions */
+    /* r7rs-lang-plan R1: the Scheme reader.  A VARIANT of the s-expression
+     * reader (one flag on `Reader`, beside neoteric_enabled), not a second
+     * reader: `#t`/`#f`, `#\c` with the R7RS names and `#\x<hex>`, `#(...)`,
+     * `#u8(...)`, `,`/`,@` as unquote (comma is whitespace in every Turmeric
+     * reader), dotted pairs, `|sym|`, the `#x`/`#o`/`#b`/`#d`/`#e`/`#i`
+     * numeric prefixes and the Scheme string escapes.  Only `#lang r7rs`
+     * selects it; the language has no reader axis (D1). */
+    READER_R7RS,
 } ReaderType;
 
 /* saffron-lang-plan D1: the LANGUAGE axis of a `#lang` line, orthogonal to the
@@ -477,6 +485,10 @@ typedef enum ReaderType {
 typedef enum LangDialect {
     LANG_TURMERIC = 0,   /* the default; every existing file */
     LANG_SAFFRON,        /* dynamically typed dialect (`#lang saffron`; stable since 0.46.0) */
+    /* r7rs-lang-plan D1: R7RS-small Scheme.  Rides the same dynamic substrate
+     * as Saffron (LangTraits.dynamic) under a Scheme reader (READER_R7RS);
+     * experiment-gated, and the `#lang` line is itself the enable (D11). */
+    LANG_R7RS,
 } LangDialect;
 
 /* Canonical name of a dialect, for diagnostics and `tur dialects`.

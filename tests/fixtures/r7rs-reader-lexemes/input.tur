@@ -1,0 +1,51 @@
+#lang r7rs
+;; r7rs-lang-plan R1: the Scheme reader (READER_R7RS), exercised through the
+;; lexemes that survive to runtime as ordinary Turmeric values.  No Scheme
+;; SEMANTICS are asserted here -- `#t` is a bool, `#\a` an int code point,
+;; `#(...)` a Vec -- which is exactly R1's contract: a `#lang r7rs` file reads,
+;; then elaborates as the same forms would under `#lang saffron`.  The forms
+;; that do not survive to runtime yet (dotted pairs, `,`/`,@`, `|sym|`,
+;; `#u8(...)`, `#!fold-case`) are pinned by r7rs-reader-forms via parse-check.
+;;
+;; The directive is the enable (D11), so this file prints TUR-W0060 to stderr;
+;; the harness compares stdout only.
+(defn main [] : int
+  ;; R7RS 6.3 booleans, both spellings.
+  (println #t)
+  (println #f)
+  (println #true)
+  (println #false)
+  ;; R7RS 6.6 characters: a plain one, an R7RS-only name, the `#\x<hex>`
+  ;; scalar-value form, a multi-byte UTF-8 character, and the shared names.
+  (println #\a)
+  (println #\alarm)
+  (println #\x3bb)
+  (println #\space)
+  ;; R7RS 7.1.1 radix and exactness prefixes, alone and stacked.
+  (println #x1F)
+  (println #b101)
+  (println #o17)
+  (println #d10)
+  (println #x-1F)
+  (println #e10)
+  (println #i10)
+  (println #e#x10)
+  (println #e1e3)
+  ;; Explicit `+` sign and a bare fraction, both Scheme-only spellings.
+  (println +5)
+  (println .5)
+  (println -.5)
+  ;; R7RS 6.7 string escapes: `\x<hex>;`, `\t`, and the line continuation.
+  (println "a\x41;b")
+  (println "tab\there")
+  (println "one \
+            two")
+  ;; `#(...)` is the same F_VEC `[...]` reads as.
+  (println (vec-len #(1 2 3)))
+  ;; A float with a fractional part, so a numeric-tower surprise would show.
+  (let [x 7.1] (println x))
+  ;; Everything Turmeric that Scheme does not contradict still reads:
+  ;; binding vectors, keywords, `#map{...}`, curly-infix.
+  (let [m #map{:k 42}] (println (map-get m :k)))
+  (println {2.0 * 3.25})
+  0)

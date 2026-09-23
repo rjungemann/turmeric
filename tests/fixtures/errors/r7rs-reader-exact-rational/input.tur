@@ -1,0 +1,10 @@
+#lang r7rs
+;; r7rs-lang-plan R1 / D8: `#e` on a non-integral literal would need an exact
+;; rational, which the numeric stage (R5) has not brought yet.  Reading
+;; `#e1.5` as the inexact 1.5 would be a wrong answer wearing the exactness
+;; prefix, so the reader refuses it and names the stage that lifts the limit.
+;; A literal with a non-zero fractional part on purpose: `#e1.0` is integral
+;; and reads fine as the exact 1.
+(defn main [] : int
+  (println #e1.5)
+  0)

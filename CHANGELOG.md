@@ -6,6 +6,25 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs` -- the Scheme base, reader only, behind the `r7rs`
+  experiment.** R0 and R1 of
+  [r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-lang-plan.md).
+  R0 de-Saffronized the dynamic substrate: every "is this file Saffron?"
+  test in the elaborator and emitter now asks a per-language trait row
+  (`lang_traits`, `lang_span_is_dynamic`, `g_opt_dynamic_any`) instead,
+  with no change to any emitted C. R1 adds the ninth `#lang` base: `tur
+  dialects` lists `r7rs` as `experimental (r7rs)`, the directive is itself
+  the enable (no `--enable=r7rs`; TUR-W0060 prints once per compile), and
+  the file is read by a Scheme variant of the reader -- `#t`/`#f`, `#\c`
+  with the R7RS names and `#\x<hex>`, `#(...)`, `#u8(...)`, `,`/`,@`,
+  dotted pairs, `|sym|`, the `#x`/`#o`/`#b`/`#d`/`#e`/`#i` prefixes, `+5`
+  and `.5`, `+inf.0`, the R7RS string escapes and `#!fold-case`. There are
+  no Scheme semantics yet: a `#lang r7rs` file elaborates exactly as the
+  same forms would under `#lang saffron` (pinned by
+  `tests/fixtures/r7rs-elaborates-as-saffron`), and the playground picker
+  badges the row rather than hiding it. `r7rs` has no reader axis, so
+  `#lang r7rs/sweet` is TUR-E0331.
+
 - **`^tailcall` -- a checked tail-call annotation.** Whether a call became a
   real tail call was invisible in the source: you either got the backedge or you
   did not, nothing said which, and the failure mode was a stack overflow at an

@@ -118,10 +118,11 @@ bool g_sized_types_enabled = true;
 bool g_dump_sizes = false;
 bool g_dump_refine_json = false;
 bool g_trail_autoloaded = false;
-bool g_saffron_prelude = false;   /* saffron-lang-plan S6; set per entry-file detection */
+const char *g_lang_prelude = NULL;   /* saffron-lang-plan S6 / r7rs R1: LangTraits.prelude of the entry file */
 bool g_repl_start_saffron = false; /* saffron-lang-plan S8; `tur repl --lang saffron` */
 bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
 bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc + unbracketed calls */
+bool g_opt_r7rs = false;         /* r7rs-lang-plan D11: set by the `#lang r7rs` line, never by a flag */
 bool g_opt_dynamic_any = false;  /* graduated 2026-09-10 as g_opt_saffron; set by any dynamic-language `#lang` file, not by a flag */
 bool g_opt_class_superclasses = false;  /* --enable=class-superclasses (prototype) */
 bool g_adt_slab = false;

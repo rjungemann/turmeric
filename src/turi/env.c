@@ -8,6 +8,7 @@
 #include "string_native.h"        /* owned String type native overrides */
 #include "interpreter_natives.h"  /* option/result/str/math/seq/json/... natives */
 #include "../runtime/globals.h"  /* g_interpret_mode (libturi-embed-interpret-mode-flag) */
+#include "../compiler/lang_dialects.h"  /* lang_traits: the session language's prelude */
 
 #include <limits.h>
 #include <stdlib.h>
@@ -709,9 +710,10 @@ void turi_env_apply_lang_dialect(TuriEnv *env, ReaderType reader_type,
         reader_macros_init(env->reader_macros, &env->sym_arena);
     env->reader_type = reader_type;
     env->lang        = dialect;
-    /* The Saffron prelude joins the stdlib autoload list when the session is
-     * Saffron -- the REPL's analogue of the entry-file switch in main.c. */
-    g_saffron_prelude = (dialect == LANG_SAFFRON);
+    /* The language's prelude joins the stdlib autoload list when the session
+     * language has one -- the REPL's analogue of the entry-file switch in
+     * main.c. */
+    g_lang_prelude = lang_traits(dialect)->prelude;
 }
 
 void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image) {

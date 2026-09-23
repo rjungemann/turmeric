@@ -654,8 +654,9 @@ machine-readably.
 ### A base names a language and a reader
 
 The first, possibly slash-namespaced, token names **two** things: which
-*language* the forms are elaborated as, and which *reader* parses them. They
-are independent axes, so every language is spellable over every reader.
+*language* the forms are elaborated as, and which *reader* parses them. For
+`turmeric` and `saffron` they are independent axes, so each is spellable over
+every reader; `r7rs` brings its own reader and takes no slash.
 
 | Base | Language | Reader |
 |---|---|---|
@@ -667,6 +668,7 @@ are independent axes, so every language is spellable over every reader.
 | `saffron/curly-infix` | saffron | curly-infix emphasis |
 | `saffron/neoteric` | saffron | curly-infix + neoteric |
 | `saffron/sweet` | saffron | full sweet-expressions |
+| `r7rs` | r7rs | the Scheme reader (`#t`/`#f`, `#\c`, `#(...)`, `,`/`,@`, dotted pairs, `\|sym\|`, `#x`/`#e`... prefixes) |
 
 **Saffron** is the dynamically typed dialect: an unannotated parameter or
 return defaults to `any` instead of `int`, and the file gets a dynamic operator
@@ -674,9 +676,21 @@ layer, dynamic calls and dynamic field access. Annotations stay legal, and a
 Saffron module links against a Turmeric one in the same program. See
 [the Saffron guide](saffron-guide.md).
 
-Both languages are **stable bases** -- neither is gated. `#lang saffron` needs
-no `--enable=` flag and no `:experiments` entry, and prints no lifecycle
-warning; `tur dialects` lists all eight bases as `stable`.
+**R7RS** is R7RS-small Scheme, being built as Saffron's dynamic substrate
+under a Scheme reader
+([r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-lang-plan.md)).
+It is **experiment-gated** (`tur dialects` shows it as `experimental (r7rs)`
+and `tur experiments` lists the row), but the `#lang r7rs` line is itself the
+enable: no `--enable=r7rs` is needed, and the file prints the TUR-W0060
+lifecycle warning once per compile. Today it is the reader only -- a `#lang
+r7rs` file reads Scheme lexemes and then elaborates exactly as the same forms
+would under `#lang saffron`; Scheme's core forms, `quote` as data,
+`syntax-rules` and the rest are the plan's later stages.
+
+`turmeric` and `saffron` are **stable bases** -- neither is gated. `#lang
+saffron` needs no `--enable=` flag and no `:experiments` entry, and prints no
+lifecycle warning; `tur dialects` lists those eight bases as `stable` and the
+ninth, `r7rs`, as experimental.
 
 `turmeric/sweet` is the preferred spelling for the sweet-exp base. The older
 `#lang sweet-exp` is still accepted as a legacy alias, so

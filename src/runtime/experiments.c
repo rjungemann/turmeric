@@ -364,6 +364,27 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.55.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_class_superclasses },
+    /* r7rs -- R7RS-small Scheme as a `#lang` base over the Turmeric runtime
+     * (Saffron's dynamic substrate under a Scheme reader).  Gated because the
+     * plan is staged R0-R10 and everything past R1 -- Scheme core forms, a
+     * real datum, `syntax-rules`, the numeric tower, control -- is still to
+     * land; until the conformance suite (R10) reports a number the dialect is
+     * a documented deviation from the standard and must say so.
+     *
+     * The `#lang r7rs` line is itself the enable (D11): lang_dialect_apply
+     * enables this row at CLI precedence when it reads the directive, so no
+     * `--enable=r7rs` is needed and no manifest can refuse it.  Long-lived by
+     * design, and therefore the row most likely to be misread as a release
+     * gate: `expires_at` is ADVISORY and never blocks a cut (plan R4) --
+     * graduate early, or bump it with a one-line rationale, but never refuse
+     * a version bump over it. */
+    { "r7rs",
+      "R7RS-small Scheme as a `#lang` base (Saffron's dynamic substrate under a Scheme reader)",
+      "docs/upcoming/r7rs-lang-plan.md",
+      "0.52.0",                  /* introduced */
+      "0.70.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_r7rs },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
