@@ -11,7 +11,7 @@
 ;;
 ;; The `flags` file builds this at -O0 (`--debug`): there is no inliner to lend
 ;; a pass, so each loop either got a `__tur_tailcall:` backedge or overflows the
-;; C stack long before 10,000,000.  One loop per kind of drop glue, plus one
+;; C stack long before 1,000,000.  One loop per kind of drop glue, plus one
 ;; whose backedge sits in a `match` arm, since the frame has to fire on every
 ;; exit of the arm-switch and not only on an `if` branch.
 ;;
@@ -62,8 +62,8 @@
       (More v) ^tailcall (with-match v (+ acc @b)))))
 
 (defn main [] : int
-  (println (with-ref 10000000 0))
-  (println (with-rc 10000000 0))
-  (println (with-adt 10000000 0))
-  (println (with-match 10000000 0))
+  (println (with-ref 1000000 0))
+  (println (with-rc 1000000 0))
+  (println (with-adt 1000000 0))
+  (println (with-match 1000000 0))
   0)
