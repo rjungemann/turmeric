@@ -55,7 +55,7 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
 
 ## What is there
 
-All of R7RS-small except the evaluator libraries:
+All of R7RS-small, and `(scheme r5rs)`'s environments:
 
 | Library | Status |
 |---|---|
@@ -66,7 +66,7 @@ All of R7RS-small except the evaluator libraries:
 | `(scheme write)` | `write` and `display` label cycles; `write-shared`, `write-simple` |
 | `(scheme read)` | `read`, datum labels and cycles included |
 | `(scheme file)`, `(scheme time)`, `(scheme process-context)` | complete; loaded only when imported |
-| `(scheme eval)`, `(scheme repl)`, `(scheme load)` | refused at the import, with the reason |
+| `(scheme eval)`, `(scheme repl)`, `(scheme load)`, `(scheme r5rs)` | complete; importing one links the interpreter into a compiled program (see Eval) |
 
 The core forms are all there: `define`, `lambda`, the `let` family and named
 `let`, `do`, `case`, `cond` with `=>`, `when`/`unless`, `case-lambda`, the
@@ -211,6 +211,47 @@ Invoking it after the `call/cc` has returned, which would re-enter it, is a
 named error. An uncaught `raise` reports on the current error port and exits
 with status 70.
 
+## Eval
+
+`eval` runs a datum as code, in an environment that names the libraries it
+sees:
+
+```scheme
+(import (scheme base) (scheme write) (scheme eval) (scheme repl))
+(write (eval '(* 6 7) (environment '(scheme base))))            ; 42
+(define env (interaction-environment))
+(eval '(define (twice x) (* 2 x)) env)
+(write ((eval 'twice env) 21))                                   ; 42
+(write ((eval '(lambda (f) (f 10)) env) (lambda (n) (+ n 1))))   ; 11
+```
+
+Importing `(scheme eval)`, `(scheme repl)`, `(scheme load)` or `(scheme
+r5rs)` links the interpreter into a compiled program. A program that imports
+none of them links nothing extra. The evaluator is one embedded R7RS session
+per run, so a definition evaluated in `(interaction-environment)` stays for
+later `eval`s, and `load` evaluates a file's forms the same way.
+
+Values cross between the program and the evaluator:
+
+- **Data is copied.** Numbers, booleans, characters, strings, symbols, lists
+  and vectors go over as their `write` text and are read back on the other
+  side. A pair that evaluated code mutates is a different pair from the
+  program's.
+- **Procedures cross as handles.** A procedure `eval` returns is called like
+  any other. A program procedure passed into evaluated code is called back.
+  Each keeps its identity, so it is `eq?` to itself when it comes back.
+- **Raised objects cross too.** A `raise` or `error` inside evaluated code
+  reaches the program's `guard`, and a program procedure's raise reaches a
+  `guard` in evaluated code.
+- A datum that holds a procedure or a record cannot be written, so it is an
+  error.
+
+The interpreter (`tur --interpret`) runs `eval` through the same embedded
+session, so both back ends give the same answers.
+
+A built program finds the stdlib it was built against. `TUR_STDLIB_DIR`
+overrides that, and the program sets it for itself when unset.
+
 ## Ports
 
 String, bytevector and file ports, with the current ports as parameters:
@@ -273,8 +314,10 @@ library's string result to `cstr` gets the same copy.
 - **`char-ready?` and `u8-ready?` always answer `#t`.**
 - **`(except ...)` in an import is refused.** A Turmeric import cannot say
   "all but these names"; the error says to list them with `(only ...)`.
-- **`(scheme eval)`, `(scheme repl)`, `(scheme load)` and `include`** are
-  refused at the import, with the reason: they need an evaluator at run time.
+- **`include` is refused**, with the reason.
+- **`eval` copies data.** A datum crosses into and out of `eval` as text, so
+  evaluated code never shares a pair, vector or string with the program. A
+  datum that holds a procedure or a record cannot cross. See Eval above.
 - **Compiled top-level order.** On the compiled back end a top-level
   `define` whose initializer has an effect runs before the program's
   top-level expressions. Opening a file or reading input in a top-level
@@ -293,10 +336,10 @@ bash tests/run-r7rs-conformance.sh      # both back ends, about two minutes
 python3 tests/r7rs/run-conformance.py --backend interp --list-failures
 ```
 
-**1147 of the 1216 tests** written in the suite pass, the same on the
+**1151 of the 1216 tests** written in the suite pass, the same on the
 interpreter and the compiled back end. Nearly all the rest are the
-differences listed above: complex numbers (`3+4i`), `eval` and
-`environment`, and re-entering a continuation.
+differences listed above: complex numbers (`3+4i`) and re-entering a
+continuation.
 What remains after those is two float spellings that differ from chibi's
 own (`1.7976931348623157e308` rather than `e+308`; both are R7RS).
 

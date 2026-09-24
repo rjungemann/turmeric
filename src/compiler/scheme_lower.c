@@ -328,9 +328,13 @@ static const struct { const char *name; int kind; const char *what; } SCHEME_LIB
     { "time",            LIB_ONDEMAND, "stdlib/r7rs/time.tur" },
     { "process-context", LIB_ONDEMAND, "stdlib/r7rs/process-context.tur" },
     { "file",            LIB_ONDEMAND, "stdlib/r7rs/file.tur" },
-    { "eval",            LIB_DEFERRED, "needs an evaluator at run time (r7rs-lang-plan Section 8, question 3)" },
-    { "repl",            LIB_DEFERRED, "needs an evaluator at run time (r7rs-lang-plan Section 8, question 3)" },
-    { "load",            LIB_DEFERRED, "needs an evaluator at run time (r7rs-lang-plan Section 8, question 3)" },
+    /* r7rs-lang-plan T4: the evaluator libraries share one file, whose
+     * inline C links the interpreter into a compiled program -- only one
+     * that imports them. */
+    { "eval",            LIB_ONDEMAND, "stdlib/r7rs/eval.tur" },
+    { "repl",            LIB_ONDEMAND, "stdlib/r7rs/eval.tur" },
+    { "load",            LIB_ONDEMAND, "stdlib/r7rs/eval.tur" },
+    { "r5rs",            LIB_ONDEMAND, "stdlib/r7rs/eval.tur" },
     { "read",            LIB_ONDEMAND, "stdlib/r7rs/read.tur" },
 };
 #define N_SCHEME_LIBS (sizeof(SCHEME_LIBS) / sizeof(SCHEME_LIBS[0]))
@@ -356,6 +360,15 @@ static const char *const ONDEMAND[][3] = {
     { "with-input-from-file", "r7rs-with-input-from-file", "file" },
     { "with-output-to-file", "r7rs-with-output-to-file", "file" },
     { "read", "r7rs-read", "read" },
+    { "eval",                      "r7rs-eval",                      "eval" },
+    { "environment",               "r7rs-environment",               "eval" },
+    { "interaction-environment",   "r7rs-interaction-environment",   "repl" },
+    { "load",                      "r7rs-load",                      "load" },
+    { "eval",                      "r7rs-eval",                      "r5rs" },
+    { "interaction-environment",   "r7rs-interaction-environment",   "r5rs" },
+    { "load",                      "r7rs-load",                      "r5rs" },
+    { "null-environment",          "r7rs-null-environment",          "r5rs" },
+    { "scheme-report-environment", "r7rs-scheme-report-environment", "r5rs" },
 };
 #define N_ONDEMAND (sizeof(ONDEMAND) / sizeof(ONDEMAND[0]))
 
@@ -3229,8 +3242,8 @@ static const Symbol *library_module(SL *sl, Form *set, bool *ok) {
         int li = scheme_lib_index(set);
         if (li < 0) {
             err(set, "no such library in R7RS-small: the (scheme ...) libraries are base, case-lambda, "
-                     "char, complex, cxr, eval, file, inexact, lazy, load, process-context, read, "
-                     "repl, time and write");
+                     "char, complex, cxr, eval, file, inexact, lazy, load, process-context, r5rs, "
+                     "read, repl, time and write");
             *ok = false;
             return NULL;
         }

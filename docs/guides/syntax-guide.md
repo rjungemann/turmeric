@@ -713,8 +713,14 @@ capped at four arguments, so `apply` is too). R7 completes the libraries
 short of ports: the rest of `(scheme base)`, and `(scheme char)` (ASCII case
 mapping), `(scheme cxr)`, `(scheme complex)` over the reals, `(scheme time)`,
 `(scheme process-context)` and `(scheme file)`'s `file-exists?` and
-`delete-file`. The last three are loaded only when imported. `(scheme eval)`,
-`(scheme repl)`, `(scheme load)` and `include` are refused with the reason.
+`delete-file`. The last three are loaded only when imported. `include` is
+refused with the reason. `(scheme eval)`, `(scheme repl)`, `(scheme load)` and
+`(scheme r5rs)` give `eval`, `environment`, `interaction-environment`,
+`null-environment`, `scheme-report-environment` and `load` (T4). Importing
+one links the interpreter into a compiled program, and a program that imports
+none links nothing extra. Evaluated code runs in one embedded R7RS session
+per run: data crosses by copy, and procedures and raised objects cross in
+both directions.
 R8 adds ports: string, bytevector and file ports, `read-char`/`read-line`/
 `read-string`/`read-u8` and the rest of the R7RS I/O procedures, the current
 ports as parameters (`(parameterize ((current-output-port p)) ...)`),
@@ -730,7 +736,8 @@ R10 runs chibi-scheme's R7RS test suite as a ctest target
 (`tur_r7rs_conformance`) that reports a pass count: 1082 of the 1216 tests
 written in it pass, on both back ends, and the rest are the named carve-outs
 (bignums, exact rationals, complex numbers, mutable strings, `eval`,
-re-entrant `call/cc`). `(scheme char)` maps and
+re-entrant `call/cc`); Section 9's tasks have since closed all but complex
+numbers and re-entrant `call/cc`, for 1151. `(scheme char)` maps and
 classifies all of Unicode, from tables generated out of the Unicode
 database. The full
 reference is [r7rs-guide.md](r7rs-guide.md).

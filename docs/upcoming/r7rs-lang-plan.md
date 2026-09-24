@@ -1,6 +1,6 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 through R10 landed 2026-09-23/24.** `#lang r7rs` is a base
+Status: **R0 through R10 landed 2026-09-23/24; Section 9's T0-T4 since.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -39,7 +39,7 @@ ports: the rest of `(scheme base)`, `(scheme char)`, `(scheme cxr)` and
 process-context)` and the non-port half of `(scheme file)` as files spliced
 in only when imported (`tests/fixtures/r7rs-base-library`,
 `r7rs-system-libraries`); `(scheme eval)`, `(scheme repl)`, `(scheme load)`
-and `include` are refused with their reason. R8 gives the ports: string,
+and `include` are refused with their reason (the first three until T4). R8 gives the ports: string,
 bytevector and file ports over one C buffer, the current ports as parameter
 objects, the whole R7RS I/O surface, `write`/`display` with datum labels for
 cycles, `write-shared`/`write-simple`, and `(scheme read)`
@@ -49,13 +49,12 @@ that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 (native and browser) analysing and formatting Scheme, the editor packs,
 `gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
 runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
-which reports a count: 1147 of 1216 tests pass on both back ends (887 on the
+which reports a count: 1151 of 1216 tests pass on both back ends (887 on the
 interpreter, and a compiled build that did not finish, when it was first
-wired; 1082 at the end of R10, then 1096, 1103, 1134 and 1147 after Section
-9's T0-T3). Each landed stage carries a "What shipped" note below. What is
-left --
-`eval` (the interpreter linked in on demand), re-entrant continuations and,
-last, complex numbers -- is Section 9,
+wired; 1082 at the end of R10, then 1096, 1103, 1134, 1147 and 1151 after
+Section 9's T0-T4). Each landed stage carries a "What shipped" note below.
+What is left -- re-entrant continuations and, last, complex numbers -- is
+Section 9,
 as tasks that change what a Scheme program means and leave Turmeric's and
 Saffron's semantics as they are.
 
@@ -1665,7 +1664,7 @@ this one should be **measured the same way** before it is believed.
 | Linear / affine / unique, borrows, session types, GADTs | **expected to survive**, via annotations | Saffron measured these as kept; R7RS has no *syntax* for the annotations, so this is "survives if written in an annotated Turmeric module and called across the seam" |
 | Full numeric tower | int64 exact + checked overflow | D8; bignums and rationals are Section 9's T1-T2, complex T6 |
 | Re-entrant `call/cc` | not at first | D7; the conformance claim is gated on it; Section 9's T5 |
-| `(scheme eval)`, `(scheme repl)` | refused at the import | needs an evaluator at runtime; decided: link the interpreter on import, Section 9's T4 |
+| `(scheme eval)`, `(scheme repl)` | **landed (T4)**: importing links the interpreter | one embedded R7RS session per run; data crosses by copy, procedures and raises as handles |
 | Typeclass dispatch on `any` | inherits Saffron's S9 state | separate epic |
 
 ---
@@ -1738,6 +1737,7 @@ expectation from a demo.
    `(scheme repl)` / `(scheme load)`) links the interpreter into the compiled
    program through the `__tur_autolink__` marker `turi/eval` already uses; a
    program without the import links nothing new. The work is Section 9, T4.
+   **Landed 2026-09-24 (T4)** -- see its "What shipped" note.
 4. **File extension.** `.scm` is the obvious spelling and means every tool
    learns a new file type. The Saffron plan deferred `.saf` for exactly this
    reason, and R7RS should defer `.scm` the same way -- `#lang r7rs` inside a
@@ -1759,8 +1759,8 @@ What `#lang r7rs` still does differently from R7RS, measured on 2026-09-24:
 chibi's suite passed 1082 of the 1216 tests written in it, on both back ends,
 and the runner counted 143 failed test invocations (a test-numeric-syntax
 form counts two). Every one of those 143 belonged to a task below; the counts
-per task are the runner's, as written before T0. T0-T3 have landed since:
-1147 pass and 78 invocations fail, and the test lines each task turned
+per task are the runner's, as written before T0. T0-T4 have landed since:
+1151 pass and 74 invocations fail, and the test lines each task turned
 green are struck from the tasks below (each task says so). Section
 9.3 lists the documented differences no chibi test reaches.
 
@@ -2215,6 +2215,109 @@ task.*
   - a check that a program without the import links no `libturi` symbols,
     and that one with it builds from a clean build directory in both Debug
     (ASan) and Release.
+
+> **What shipped (T4, 2026-09-24).** `eval`, with the interpreter linked in
+> on demand, on both back ends. The count is **1151** of 1216, up from 1147:
+> all four T4 tests, 1946 included (`(scheme r5rs)`'s environments are part
+> of this task).
+>
+> - **The libraries.**
+>   - `(scheme eval)`, `(scheme repl)`, `(scheme load)` and `(scheme r5rs)`
+>     are `LIB_ONDEMAND` rows sharing `stdlib/r7rs/eval.tur`.
+>   - They give `eval`, `environment`, `interaction-environment`,
+>     `null-environment`, `scheme-report-environment` and `load`.
+>   - An environment object holds its import sets, written as text.
+>     `null-environment` is `(scheme base)`.
+> - **Linking.**
+>   - The first inline C in `eval.tur` carries
+>     `__tur_autolink__: -lturi ... -DTUR_R7RS_STDLIB=@TUR_STDLIB_ROOT@`.
+>   - `resolve_autolink_flags` (src/main.c) resolves that token to the
+>     stdlib root `tur` is using, quoted as a C string. A built program
+>     therefore finds its prelude from any directory, and sets
+>     `TUR_STDLIB_DIR` for itself when unset (the stdlib's own `(load
+>     "stdlib/...")` forms resolve through it).
+>   - An in-tree `tur` (no SDK) adds `-L<build>/src` when the archive is
+>     there and `TUR_CC_FLAGS` names no `-L`. The ASan probe now also scans
+>     the autolink's own `-L` paths.
+>   - `tests/check-r7rs-eval-link.sh` (ctest `tur_r7rs_eval_link`) checks:
+>     - a program without the import has no `-lturi` marker and no libturi
+>       symbol;
+>     - one with it carries `turi_r7rs_embed_eval` and prints 1024 from `/`
+>       with `TUR_STDLIB_DIR` unset.
+>   - Verified by hand from a clean Release build directory as well as the
+>     Debug (ASan) one: the check and `r7rs-eval` pass on both back ends.
+> - **The evaluator.**
+>   - `src/turi/r7rs_embed.c`, in libturi, keeps one embedded `TuriEnv` per
+>     process, created on the first use. The setup is the REPL's R7RS
+>     session, plus `(scheme read)`.
+>   - An `eval` evaluates `(import (scheme base) <sets>)` followed by the
+>     expression, as one turn.
+>   - An expression is wrapped as `(r7rs-bridge-catch__ (lambda ()
+>     (r7rs-bridge-value__ <expr>)))`.
+>     - The identity through an `any` parameter is needed because a
+>       top-level expression's value is otherwise its elaborated
+>       representation: a `let` yielding a vector came back as the bare
+>       `Vec` pointer. The REPL has the same bug, filed as
+>       [r7rs-repl-toplevel-expression-value-not-widened](../reported/r7rs-repl-toplevel-expression-value-not-widened.md).
+>     - The catch turns an uncaught raise into a value instead of the
+>       process exit an uncaught raise is.
+>   - A `define` is evaluated as it stands, and its value is unspecified.
+> - **Values across** (the bridge helpers are in `stdlib/r7rs/read.tur`,
+>   since both sides load it):
+>   - **Data** crosses as `write` text read back by `read`, so it is copied.
+>     `r7rs-eval` shows a pair mutated by evaluated code while the program's
+>     stays put.
+>   - **Procedures** cross as ids.
+>     - An embedded procedure is a variadic program closure (one per id, so
+>       it stays `eq?`) that pushes its arguments and calls
+>       `turi_r7rs_embed_apply`.
+>     - A program procedure is registered in the embedded env as a native,
+>       wrapped by `r7rs-bridge-host-wrap__`. The native calls the host
+>       function: in a compiled program, the Turmeric trampoline
+>       `r7rs-eval-host-call__` by its C name; under the interpreter, the
+>       same trampoline through `turi_call` on the program's env.
+>     - Either kind handed back is recognized and returned as itself.
+>   - **Raises** cross both ways as a condition datum: `(#t kind message .
+>     irritants)` for an error object, `(#f . obj)` otherwise. They are
+>     raised again on the far side, so no escape unwinds through the other
+>     side's C frames.
+>   - A datum holding a procedure or a record does not read back, and is the
+>     error the reader reports.
+> - **Two envs in one process.**
+>   - The interpreter back end is a second TuriEnv beside the program's.
+>     Two pieces of the elaborator's process-global state are keyed to
+>     whichever env elaborated last:
+>     - the builtin operator table's `name_sym` pointers, which the
+>       tree-walker's dynamic operators read at RUN time (the program's
+>       `(+ a b)` failed "no operator for a int argument" after the first
+>       `eval`);
+>     - the diagnostic file registry.
+>   - Every crossing swaps both (`switch_side`), the bracket
+>     `src/turi/macro_env.c` already puts around the macro env.
+>   - A compiled program has no elaborator of its own, so the swap is a
+>     no-op on its side.
+>   - The embedded elaboration does not repeat the TUR-W0060 warning the
+>     compile already printed (`experiment_mark_warned`).
+> - **Not done:**
+>   - Evaluated code has no `eval` of its own: the four evaluator libraries
+>     are dropped from an environment's import sets.
+>   - An `(except ...)` set is refused, as everywhere.
+>   - A top-level `define` whose initializer calls `eval` runs early on the
+>     compiled back end
+>     ([toplevel-def-initializers-run-before-toplevel-expressions](../reported/toplevel-def-initializers-run-before-toplevel-expressions.md)),
+>     so the fixture's program is one procedure body.
+> - **Fixtures:**
+>   - `r7rs-eval`, on both back ends: the four chibi tests, a persistent
+>     definition, evaluated and program procedures both ways, copy
+>     semantics, raises both ways, an on-demand library inside `eval`, and
+>     `load`;
+>   - `docs-r7rs-guide-examples`, with the guide's new Eval example.
+>   - Both carry `requires.no-leak-check` (the embedded evaluator is
+>     process-lifetime, like the interpreter's closures, and the ASan libturi
+>     brings LeakSanitizer into the program) and a 60-second
+>     `expected.timeout` (linking the ASan archive costs about 5s).
+>   - `errors/r7rs-deferred-library` is removed: no library is deferred any
+>     more.
 
 **T5 -- re-entrant continuations (1 test: 1772, `dynamic-wind` around a
 re-entered continuation).**

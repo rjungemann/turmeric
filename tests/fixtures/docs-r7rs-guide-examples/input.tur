@@ -5,7 +5,7 @@
 ;;
 ;; No requires.* marker -- the guide describes the language, not a back end,
 ;; so both suites run it.  Floats carry a non-zero fractional part.
-(import (scheme base) (scheme write) (scheme char) (scheme read))
+(import (scheme base) (scheme write) (scheme char) (scheme read) (scheme eval) (scheme repl))
 
 ;; --- A first program ---------------------------------------------------------
 (define (fact n)
@@ -65,6 +65,16 @@
   (lambda () (display "[in]"))
   (lambda () (display "body"))
   (lambda () (display "[out]")))
+(newline)
+
+;; --- Eval ----------------------------------------------------------------------
+(write (eval '(* 6 7) (environment '(scheme base))))
+(newline)
+(define env (interaction-environment))
+(eval '(define (twice x) (* 2 x)) env)
+(write ((eval 'twice env) 21))
+(newline)
+(write ((eval '(lambda (f) (f 10)) env) (lambda (n) (+ n 1))))
 (newline)
 
 ;; --- Ports ---------------------------------------------------------------------

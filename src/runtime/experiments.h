@@ -72,6 +72,12 @@ void experiment_warn_if_used(const char *name);
  * each compile (alongside diag_reset). */
 void experiment_reset_warnings(void);
 
+/* Count the named experiment's lifecycle warning as already emitted.  For a
+ * compiled program that embeds the compiler (r7rs-lang-plan T4's `eval`):
+ * the compile that built it warned, and the program's own elaboration of the
+ * same language should not warn again on its stderr. */
+void experiment_mark_warned(const char *name);
+
 /* UC-2 (user-config-experiments-plan): read the user-level experiments file
  * -- $XDG_CONFIG_HOME/turmeric/experiments.tur (fallback
  * $HOME/.config/turmeric/experiments.tur, or %APPDATA%\turmeric\experiments.tur

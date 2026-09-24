@@ -355,3 +355,63 @@
 (defn r7rs-read [& r : any] : any
   (let [port (r7rs-port-arg__ (r7rs-chain->list__ (:: r (Cons any))) r7rs-current-input-port)]
     (r7rs-rd-datum__ (r7rs-in-io__ port) (:: (R7rsRd port r7rs-null-value__) any))))
+
+;;; ---- T4: the eval bridge -----------------------------------------------
+
+;;; r7rs-bridge-write__ -- internal (r7rs-lang-plan T4): x as `write` text,
+;;; the form a datum crosses to or from the embedded evaluator in.
+(defn r7rs-bridge-write__ [x] : cstr
+  (let [p (r7rs-open-output-string)]
+    (r7rs-write x p)
+    (r7rs-get-output-string p)))
+;;; r7rs-bridge-read__ -- internal (T4): the datum `text` writes.
+(defn r7rs-bridge-read__ [text : cstr] : any (r7rs-read (r7rs-open-input-string text)))
+;;; r7rs-bridge-value__ -- internal (T4): an evaluated expression's value as
+;;; an `any`.  A top-level expression's value is its elaborated type's
+;;; representation (a `let` yielding a vector is the bare Vec), which `write`
+;;; cannot read as a Scheme value; passing it through an `any` parameter
+;;; widens it the way a procedure's result is.
+(defn r7rs-bridge-value__ [x] : any x)
+
+;;; R7rsBridgeRaised -- internal (T4): an object raised on one side of the
+;;; eval bridge, caught there to be raised again on the other.
+(defstruct R7rsBridgeRaised :heap [obj : any])
+(defn r7rs-bridge-raised__ [obj] : any (R7rsBridgeRaised obj))
+(defn r7rs-bridge-raised?__ [x] : bool (is? x R7rsBridgeRaised))
+(defn r7rs-bridge-raised-obj__ [x : R7rsBridgeRaised] : any (.obj x))
+;;; r7rs-bridge-catch__ -- internal (T4): (thunk)'s value, or the object it
+;;; raised, as an R7rsBridgeRaised.
+(defn r7rs-bridge-catch__ [thunk] : any
+  (r7rs-call/cc (fn [k] : any
+                  (r7rs-with-exception-handler (fn [e] : any (k (R7rsBridgeRaised e))) thunk))))
+;;; r7rs-bridge-catch-apply__ -- internal (T4): (apply f l), caught.
+(defn r7rs-bridge-catch-apply__ [f l] : any
+  (r7rs-bridge-catch__ (fn [] : any (r7rs-apply-list__ f l))))
+;;; r7rs-bridge-condition__ -- internal (T4): a caught object as text: an
+;;; error object is (#t kind message . irritants), anything else (#f . obj).
+(defn r7rs-bridge-condition__ [r] : cstr
+  (let [o (r7rs-bridge-raised-obj__ r)]
+    (r7rs-bridge-write__ (if (r7rs-error-object? o)
+                           (R7rsPair true
+                                     (R7rsPair (r7rs-error-kind__ o)
+                                               (R7rsPair (r7rs-error-object-message o)
+                                                         (r7rs-error-object-irritants o))))
+                           (R7rsPair false o)))))
+;;; r7rs-bridge-reraise__ -- internal (T4): raise what a condition text names.
+(defn r7rs-bridge-reraise__ [text : cstr] : any
+  (let [c (r7rs-bridge-read__ text)]
+    (if (r7rs-eqv? (r7rs-car c) (:: true any))
+      (r7rs-bridge-reraise-error__ (r7rs-cdr c))
+      (r7rs-raise (r7rs-cdr c)))))
+(defn r7rs-bridge-reraise-error__ [c] : any
+  (r7rs-raise (R7rsError (r7rs-car (r7rs-cdr c)) (r7rs-cdr (r7rs-cdr c)) (cast (r7rs-car c) int))))
+;;; r7rs-bridge-host-wrap__ -- internal (T4): the procedure evaluated code
+;;; sees for a program procedure: it calls the registered native and raises
+;;; again what the program procedure raised.
+(defn r7rs-bridge-host-wrap__ [native] : any
+  (fn [& args : any] : any
+    (r7rs-bridge-host-result__ (r7rs-apply-list__ native (r7rs-chain->list__ (:: args (Cons any)))))))
+(defn r7rs-bridge-host-result__ [r] : any
+  (if (r7rs-bridge-raised?__ r)
+    (r7rs-bridge-reraise__ (r7rs-str__ (r7rs-bridge-raised-obj__ r)))
+    r))

@@ -6,6 +6,40 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: `eval`, with the interpreter linked in on demand
+  (r7rs-lang-plan T4).** `(scheme eval)`, `(scheme repl)`, `(scheme load)`
+  and `(scheme r5rs)` are no longer refused. They give `eval`,
+  `environment`, `interaction-environment`, `null-environment`,
+  `scheme-report-environment` and `load`.
+  - **Linking.** Importing one of the four links the interpreter (libturi)
+    into a compiled program, through an autolink marker in
+    `stdlib/r7rs/eval.tur`. A program that imports none of them links
+    nothing extra (`tests/check-r7rs-eval-link.sh`, ctest
+    `tur_r7rs_eval_link`).
+  - **The embedded session.** Evaluated code runs in one embedded R7RS
+    session per run (`src/turi/r7rs_embed.c`), and `tur --interpret` uses
+    the same one through native twins, so both back ends agree.
+    Definitions evaluated in `(interaction-environment)` persist for later
+    `eval`s.
+  - **Crossing values.** Data crosses by copy, as `write` text. Procedures
+    cross as handles in both directions: an evaluated procedure is callable
+    from the program, and a program procedure is callable from evaluated
+    code. A raise crosses both ways, so a `guard` on either side catches it.
+  - **Finding the stdlib.** A built program finds the stdlib it was built
+    against without `TUR_STDLIB_DIR`. The token `@TUR_STDLIB_ROOT@` in an
+    autolink marker is resolved to that root.
+  - **In-tree builds.** `tur run` / `tur build` of a program that links
+    `-lturi` find the archive in an in-tree build (`<build>/src/libturi.a`)
+    without `TUR_CC_FLAGS`.
+  - **Two envs in one process.** The builtin operator table and the
+    diagnostic file registry are process-global. Every crossing between the
+    program's interpreter and the embedded one swaps them, as the macro env
+    already does.
+
+  Chibi's suite: 1151 of 1216 on both back ends, up from 1147. Fixture:
+  `r7rs-eval`, and `docs-r7rs-guide-examples` gains the guide's `eval`
+  example.
+
 - **`#lang r7rs`: mutable, character-indexed strings (r7rs-lang-plan T3).**
   A Scheme string is a sequence of characters. `string-length`,
   `string-ref`, `substring` and every other string procedure count

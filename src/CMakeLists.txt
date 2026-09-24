@@ -120,6 +120,10 @@ set(TURI_EVAL_SOURCES
     # handler that captures and immediately resumes step-in IS a tracer.
     turi/trace.c
     turi/repl.c
+    # r7rs-lang-plan T4: the evaluator behind R7RS `eval` -- one embedded
+    # R7RS env that a program importing (scheme eval) links in, and that
+    # `tur --interpret` reaches through native twins.
+    turi/r7rs_embed.c
     # RP3: REPL spice-image loader. Walks up to build.tur, dlopens
     # .tur-repl-cache/lib.so, primes a symbol map from exports.manifest.
     turi/spice_loader.c

@@ -14,6 +14,7 @@
 #include "turi/interpreter_natives.h"
 
 #include "turi/eval.h"
+#include "turi/r7rs_embed.h"   /* r7rs-lang-plan T4: eval twins */
 #include "turi/collections_native.h"  /* native_mk_cmp_int / native_mk_box_cstr */
 #include "turi/docstrings.h"  /* PS3: doc-lookup / doc-print, builtin docs */
 #include "diag.h"    /* SYNTAX natives: diag file-registry save/restore for read-string */
@@ -2866,6 +2867,104 @@ static TuriValue native_r7rs_exit(TuriEnv *env, TuriValue *a, uint32_t n, void *
     fflush(stderr);
     exit((int)r7rs_arg_int(a, n, 0));
 }
+
+/* r7rs-lang-plan T4: twins of stdlib/r7rs/eval.tur's inline C.  Both back
+ * ends drive the same embedded evaluator (src/turi/r7rs_embed.c) -- its own
+ * env, not the program's, so `eval` copies datums here exactly as it does in
+ * a compiled program.  The host function calls back into the PROGRAM's env,
+ * the one the first eval ran from. */
+static TuriEnv *g_r7rs_eval_host_env;
+static int64_t r7rs_eval_interp_host(int64_t host_id) {
+    TuriEnv *env = g_r7rs_eval_host_env;
+    if (!env) return 0;
+    TuriValue fn = turi_env_get(env, "r7rs-eval-host-call__");
+    TuriValue arg = turi_int(host_id);
+    TuriValue r = turi_call(env, fn, &arg, 1);
+    if (turi_is_error(r)) turi_r7rs_embed_answer_error(turi_error_message(r) ? turi_error_message(r) : "eval: a program procedure failed");
+    return 0;
+}
+static void r7rs_eval_bind_host(TuriEnv *env) {
+    g_r7rs_eval_host_env = env;
+    turi_r7rs_embed_set_host(r7rs_eval_interp_host, env);
+}
+static TuriValue native_r7rs_eval_c_eval(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    r7rs_eval_bind_host(env);
+    return turi_int(turi_r7rs_embed_eval(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1)));
+}
+static TuriValue native_r7rs_eval_c_load(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    r7rs_eval_bind_host(env);
+    return turi_int(turi_r7rs_embed_load(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1)));
+}
+static TuriValue native_r7rs_eval_c_apply(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(turi_r7rs_embed_apply(r7rs_arg_int(a, n, 0)));
+}
+static TuriValue native_r7rs_eval_c_push_datum(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_push_datum(r7rs_arg_cstr(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_push_host(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_push_host(r7rs_arg_int(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_push_proc(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_push_proc(r7rs_arg_int(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_result_text(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_cstr(strdup(turi_r7rs_embed_result_text()));
+}
+static TuriValue native_r7rs_eval_c_result_id(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(turi_r7rs_embed_result_id());
+}
+static TuriValue native_r7rs_eval_c_frame_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(turi_r7rs_embed_frame_count());
+}
+static TuriValue native_r7rs_eval_c_frame_kind(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(turi_r7rs_embed_frame_kind((int)r7rs_arg_int(a, n, 0)));
+}
+static TuriValue native_r7rs_eval_c_frame_text(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_cstr(strdup(turi_r7rs_embed_frame_text((int)r7rs_arg_int(a, n, 0))));
+}
+static TuriValue native_r7rs_eval_c_frame_id(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(turi_r7rs_embed_frame_id((int)r7rs_arg_int(a, n, 0)));
+}
+static TuriValue native_r7rs_eval_c_answer_datum(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_answer_datum(r7rs_arg_cstr(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_answer_host(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_answer_host(r7rs_arg_int(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_answer_proc(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_answer_proc(r7rs_arg_int(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_answer_unspecified(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    turi_r7rs_embed_answer_unspecified();
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_answer_raise(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_answer_raise(r7rs_arg_cstr(a, n, 0));
+    return turi_nil();
+}
 /* r7rs-lang-plan R5: the one spelling of a float both back ends print.
  * Shortest of %.15g / %.17g that round-trips, `.0` appended to an integral
  * value (R7RS writes 7.0 as `7.0`, never `7`), and the standard's own
@@ -3805,6 +3904,24 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-environ-value__",  native_r7rs_environ_value,  NULL);
     turi_env_register_native(env, "r7rs-file-exists-c__",  native_r7rs_file_exists,    NULL);
     turi_env_register_native(env, "r7rs-unlink__",         native_r7rs_unlink,         NULL);
+    /* r7rs-lang-plan T4: stdlib/r7rs/eval.tur. */
+    turi_env_register_native(env, "r7rs-eval-c-eval__",             native_r7rs_eval_c_eval,             NULL);
+    turi_env_register_native(env, "r7rs-eval-c-load__",             native_r7rs_eval_c_load,             NULL);
+    turi_env_register_native(env, "r7rs-eval-c-apply__",            native_r7rs_eval_c_apply,            NULL);
+    turi_env_register_native(env, "r7rs-eval-c-push-datum__",       native_r7rs_eval_c_push_datum,       NULL);
+    turi_env_register_native(env, "r7rs-eval-c-push-host__",        native_r7rs_eval_c_push_host,        NULL);
+    turi_env_register_native(env, "r7rs-eval-c-push-proc__",        native_r7rs_eval_c_push_proc,        NULL);
+    turi_env_register_native(env, "r7rs-eval-c-result-text__",      native_r7rs_eval_c_result_text,      NULL);
+    turi_env_register_native(env, "r7rs-eval-c-result-id__",        native_r7rs_eval_c_result_id,        NULL);
+    turi_env_register_native(env, "r7rs-eval-c-frame-count__",      native_r7rs_eval_c_frame_count,      NULL);
+    turi_env_register_native(env, "r7rs-eval-c-frame-kind__",       native_r7rs_eval_c_frame_kind,       NULL);
+    turi_env_register_native(env, "r7rs-eval-c-frame-text__",       native_r7rs_eval_c_frame_text,       NULL);
+    turi_env_register_native(env, "r7rs-eval-c-frame-id__",         native_r7rs_eval_c_frame_id,         NULL);
+    turi_env_register_native(env, "r7rs-eval-c-answer-datum__",     native_r7rs_eval_c_answer_datum,     NULL);
+    turi_env_register_native(env, "r7rs-eval-c-answer-host__",      native_r7rs_eval_c_answer_host,      NULL);
+    turi_env_register_native(env, "r7rs-eval-c-answer-proc__",      native_r7rs_eval_c_answer_proc,      NULL);
+    turi_env_register_native(env, "r7rs-eval-c-answer-unspecified__", native_r7rs_eval_c_answer_unspecified, NULL);
+    turi_env_register_native(env, "r7rs-eval-c-answer-raise__",     native_r7rs_eval_c_answer_raise,     NULL);
     turi_env_register_native(env, "r7rs-same-ref__",       native_r7rs_same_ref,        NULL);
     turi_env_register_native(env, "r7rs-blen__",           native_r7rs_string_length,   NULL);
     turi_env_register_native(env, "r7rs-utf8-count__",     native_r7rs_utf8_count,      NULL);

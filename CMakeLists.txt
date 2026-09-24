@@ -820,6 +820,15 @@ add_test(
   COMMAND bash tests/run-r7rs-import.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# r7rs-lang-plan T4: `(import (scheme eval))` links the interpreter into a
+# compiled program, and a program without the import links nothing new; the
+# built program finds its stdlib from any directory.
+add_test(
+  NAME tur_r7rs_eval_link
+  COMMAND bash tests/check-r7rs-eval-link.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_eval_link PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
 # tur-init-help-scaffolds-and-overwrites: `tur init` must never destroy a
 # working tree.  `tur init --help` did not print help -- the flag fell past the
 # project-name slot, the cwd basename was used as the name, and scaffolding

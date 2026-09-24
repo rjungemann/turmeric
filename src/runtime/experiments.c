@@ -572,6 +572,11 @@ void experiment_reset_warnings(void) {
     memset(g_warned, 0, sizeof(g_warned));
 }
 
+void experiment_mark_warned(const char *name) {
+    long idx = experiment_index(name);
+    if (idx >= 0 && idx < XF_MAX) g_warned[idx] = true;
+}
+
 /* ------------------------------------------------------------------------- *
  * UC-2: user-level experiments file reader.
  *

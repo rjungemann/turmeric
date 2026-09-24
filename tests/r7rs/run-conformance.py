@@ -58,14 +58,14 @@ TEST_HEADS = {
 }
 DEF_HEADS = {"define", "define-syntax", "define-record-type", "define-values"}
 
-# The libraries the suite imports that exist here.  (scheme eval) and
-# (scheme r5rs) are refused at the import (plan Section 8, question 3), and
-# (chibi test) is replaced by the harness -- a test that needs `eval` or
-# `environment` is then an unknown name, dropped by step 2 and counted failed.
+# The libraries the suite imports, and (chibi test) replaced by the harness.
+# (scheme eval) and (scheme r5rs) link the interpreter into the compiled run
+# (r7rs-lang-plan T4) -- the one program here that carries it.
 HEADER = """#lang r7rs
 (import (scheme base) (scheme char) (scheme lazy) (scheme inexact)
         (scheme complex) (scheme time) (scheme file) (scheme read)
-        (scheme write) (scheme process-context) (scheme case-lambda))
+        (scheme write) (scheme process-context) (scheme case-lambda)
+        (scheme eval) (scheme r5rs))
 """
 
 # The (chibi test) surface the suite uses, reporting one line per test.

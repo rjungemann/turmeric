@@ -2554,13 +2554,47 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
             buf_putc(&new_al, '\0');
             buf_free(autolink);
             *autolink = new_al;
+        } else {
+            /* r7rs-lang-plan T4: an IN-TREE build -- `tur` at <root>/build/tur
+             * with its libturi.a beside it in <build>/src.  `(import (scheme
+             * eval))` links the interpreter, and a developer's `tur run` of
+             * such a program should find the archive this very build made
+             * without TUR_CC_FLAGS.  (The marker's own -I paths are anchored
+             * at the source root by step 3.)  Skipped when TUR_CC_FLAGS
+             * already names a -L, so the ctests' explicit flags still win. */
+            char exe_buf[4096] = "";
+            if (!(cc_flags && strstr(cc_flags, "-L")) &&
+                get_exe_path(exe_buf, sizeof(exe_buf)) == 0) {
+                char dir[4096], probe[4200];
+                struct stat st;
+                dir_of_path(exe_buf, dir, sizeof(dir));
+                snprintf(probe, sizeof(probe), "%s/src/libturi.a", dir);
+                if (stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
+                    Buf new_al;
+                    buf_init(&new_al);
+                    buf_printf(&new_al, "-L%s/src ", dir);
+                    if (autolink->len > 1)
+                        buf_write(&new_al, autolink->data, autolink->len - 1);
+                    buf_putc(&new_al, '\0');
+                    buf_free(autolink);
+                    *autolink = new_al;
+                }
+            }
         }
     }
 
-    /* 2. ASan autodetect: sanitized libturi.a needs -fsanitize on the link. */
+    /* 2. ASan autodetect: sanitized libturi.a needs -fsanitize on the link.
+     * The -L paths searched are TUR_CC_FLAGS' and (r7rs-lang-plan T4) the
+     * autolink's own, which step 1 may have anchored. */
     if (autolink->len > 0 && strstr(autolink->data, "-lturi")) {
         char nm_cmd[512];
-        const char *cf = cc_flags;
+        Buf scan;
+        buf_init(&scan);
+        if (cc_flags) buf_puts(&scan, cc_flags);
+        buf_putc(&scan, ' ');
+        buf_puts(&scan, autolink->data);
+        buf_putc(&scan, '\0');
+        const char *cf = scan.data;
         while (cf && *cf) {
             const char *lf = strstr(cf, "-L");
             if (!lf) break;
@@ -2583,6 +2617,7 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
             }
             cf = lf_end;
         }
+        buf_free(&scan);
     }
 
     /* 3. Anchor turmeric-tree-relative autolink paths at the located root. */
@@ -2597,6 +2632,46 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
             buf_free(autolink);
             *autolink = rewritten;
         }
+    }
+
+    /* 3b. r7rs-lang-plan T4: `@TUR_STDLIB_ROOT@` names the stdlib this `tur`
+     * builds against, as a C string literal -- stdlib/r7rs/eval.tur bakes it
+     * in (`-DTUR_R7RS_STDLIB=@TUR_STDLIB_ROOT@`) so a built program's embedded
+     * evaluator finds the R7RS prelude without TUR_STDLIB_DIR.  A root the
+     * shell quoting cannot carry leaves the define out (the program then
+     * falls back to TUR_STDLIB_DIR and a cwd-relative `stdlib`). */
+    if (autolink->len > 1 && strstr(autolink->data, "@TUR_STDLIB_ROOT@")) {
+        const char *root = resolve_stdlib_root();
+        char abs_root[4096];
+        if (root && realpath(root, abs_root)) root = abs_root;
+        bool quotable = root && *root && !strpbrk(root, "'\"\\ \t\n");
+        Buf out;
+        buf_init(&out);
+        const char *p = autolink->data;
+        while (*p) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            const char *start = p;
+            while (*p && *p != ' ') p++;
+            size_t tlen = (size_t)(p - start);
+            const char *at = strstr(start, "@TUR_STDLIB_ROOT@");
+            if (at && at < p) {
+                if (!quotable) continue;
+                if (out.len > 0) buf_putc(&out, ' ');
+                buf_putc(&out, '\'');
+                buf_write(&out, start, (size_t)(at - start));
+                buf_printf(&out, "\"%s\"", root);
+                const char *after = at + strlen("@TUR_STDLIB_ROOT@");
+                buf_write(&out, after, (size_t)(p - after));
+                buf_putc(&out, '\'');
+                continue;
+            }
+            if (out.len > 0) buf_putc(&out, ' ');
+            buf_write(&out, start, tlen);
+        }
+        buf_putc(&out, '\0');
+        buf_free(autolink);
+        *autolink = out;
     }
 
     /* 4. -lturi supersedes bare .c source args; drop them to avoid duplicate
