@@ -1,0 +1,2 @@
+input.tur:8:8: error: `1/2`: an exact non-integer needs exact rationals
+r7rs-lang-plan T2

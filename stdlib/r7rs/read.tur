@@ -185,33 +185,33 @@
 
 ;;; ---- tokens: numbers, symbols, booleans ------------------------------------
 
-;;; r7rs-rd-prefixed__ -- a `#`-prefixed number: `#x1F`, `#e1.5`, `#x#e10`.
-(defn r7rs-rd-prefixed__ [s : cstr radix : int exactness : int] : any
-  (if (if (>= (r7rs-string-length s) 2) (= (r7rs-string-ref-code__ s 0) 35) false)
-    (let [p (r7rs-string-ref-code__ s 1)
-          rest (r7rs-substring s 2 (r7rs-string-length s))]
-      (if (if (= p 120) true (= p 88)) (r7rs-rd-prefixed__ rest 16 exactness)
-        (if (if (= p 98) true (= p 66)) (r7rs-rd-prefixed__ rest 2 exactness)
-          (if (if (= p 111) true (= p 79)) (r7rs-rd-prefixed__ rest 8 exactness)
-            (if (if (= p 100) true (= p 68)) (r7rs-rd-prefixed__ rest 10 exactness)
-              (if (if (= p 101) true (= p 69)) (r7rs-rd-prefixed__ rest radix 1)
-                (if (if (= p 105) true (= p 73)) (r7rs-rd-prefixed__ rest radix 2)
-                  (r7rs-rd-fail__ "read: bad # syntax"))))))))
-    (let [n (r7rs-string->number s radix)]
-      (if (r7rs-number? n)
-        (if (= exactness 1) (r7rs-exact n) (if (= exactness 2) (r7rs-inexact n) n))
-        (r7rs-rd-fail__ "read: bad number")))))
+;;; r7rs-rd-number__ -- T0: a number token through the one R7RS number parser
+;;; (stdlib/r7rs/numsyntax.tur; the source reader's too), so `1/2` and `1+2i`
+;;; are one token.  A number the tower cannot hold yet is a read error naming
+;;; the reason, never a symbol and never a different number.  `none` is what
+;;; a token that is not number syntax at all reads as.
+(defn r7rs-rd-number__ [s : cstr none] : any
+  (let [k (r7rs-numsyn-kind__ s 10)]
+    (if (= k 1)
+      (:: (r7rs-numsyn-int__ s 10) any)
+      (if (= k 2)
+        (:: (r7rs-numsyn-float__ s 10) any)
+        (if (= k 3)
+          (r7rs-rd-fail__ (r7rs-string-append2__ "read: `"
+                                                 (r7rs-string-append2__ s
+                                                                        (r7rs-string-append2__ "`: " (r7rs-numsyn-why__ s 10)))))
+          none)))))
 ;;; r7rs-rd-hash-token__ -- a `#` token that is not a bracket or a char.
 (defn r7rs-rd-hash-token__ [s : cstr] : any
   (if (if (r7rs-string=2__ s "#t") true (r7rs-string=2__ s "#true")) (:: true any)
     (if (if (r7rs-string=2__ s "#f") true (r7rs-string=2__ s "#false")) (:: false any)
-      (r7rs-rd-prefixed__ s 10 0))))
+      (let [n (r7rs-rd-number__ s (:: false any))]
+        (if (r7rs-number? n) n (r7rs-rd-fail__ "read: bad # syntax"))))))
 ;;; r7rs-rd-atom__ -- a token: a number if it reads as one, else a symbol.
 (defn r7rs-rd-atom__ [s : cstr st] : any
-  (let [n (r7rs-string->number s)]
-    (if (r7rs-number? n)
-      n
-      (:: (str->sym (if (r7rs-rd-fold?__ st) (r7rs-string-foldcase s) s)) any))))
+  (if (> (r7rs-numsyn-kind__ s 10) 0)
+    (r7rs-rd-number__ s (:: false any))
+    (:: (str->sym (if (r7rs-rd-fold?__ st) (r7rs-string-foldcase s) s)) any)))
 
 ;;; ---- datum labels ------------------------------------------------------------
 

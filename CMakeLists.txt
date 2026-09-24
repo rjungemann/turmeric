@@ -1107,6 +1107,14 @@ add_test(
   COMMAND bash tests/check-r7rs-unicode-sync.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# T0: the R7RS number parser, src/compiler/r7rs_numsyntax.inc (the source
+# reader and the interpreter), and its copy in stdlib/r7rs/numsyntax.tur (the
+# compiled back end's `read` and `string->number`) must be identical.
+add_test(
+  NAME tur_r7rs_numsyntax_sync
+  COMMAND bash tests/check-r7rs-numsyntax-sync.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
 # LOADED in a real Vim and queried for highlight groups -- which is what caught
 # the fused-vs-spaced annotation bug.  The vscode half is structure and pattern

@@ -1,2 +1,2 @@
-`#e` on a non-integral literal needs exact rationals
-r7rs-lang-plan R5
+`#e1.5`: an exact non-integer needs exact rationals
+r7rs-lang-plan T2

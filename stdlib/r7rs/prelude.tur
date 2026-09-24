@@ -49,6 +49,7 @@
 (load "stdlib/sym-dynamic.tur")
 (load "stdlib/math.tur")
 (load "stdlib/r7rs/unicode.tur")
+(load "stdlib/r7rs/numsyntax.tur")
 
 ;;; ---- the types --------------------------------------------------------
 
@@ -380,7 +381,13 @@
   return __builtin_isfinite(x) && __builtin_floor(x) == x;
   ```)
 (defn r7rs-int->float__ [x : int] : float (int->float x))
-(defn r7rs-float->int__ [x : float] : int (float->int x))
+;;; r7rs-float->int__ -- an integral double as an exact integer.  T0: a double
+;;; outside int64 (1e30, +inf.0) is the exact-overflow error, where the C
+;;; conversion saturated to a silent wrong answer.
+(defn r7rs-float->int__ [x : float] : int
+  (if (if (>= x 9223372036854775808.0) true (< x -9223372036854775808.0))
+    (r7rs-fail-int__ "exact: exact integer overflow (R7RS 6.2.6: the inexact integer is outside int64; bignums are r7rs-lang-plan T1)")
+    (float->int x)))
 (defn r7rs-to-float__ [x] : float (if (is? x float) x (r7rs-int->float__ x)))
 
 (defn r7rs-number? [x] : bool (if (is? x int) true (is? x float)))
@@ -500,7 +507,12 @@
 (defn r7rs-fail-int__ [msg : cstr] : int
   (panic msg)
   0)
-(defn r7rs-even? [x] : bool (= (mod (r7rs-int-of__ x "even?: not an integer") 2) 0))
+;;; r7rs-even? -- an inexact integer is tested as a double, so a large one
+;;; (1e30, which is even) needs no int64 conversion.
+(defn r7rs-even? [x] : bool
+  (if (if (is? x float) (r7rs-integer? x) false)
+    (let [h (* (r7rs-to-float__ x) 0.5)] (= h (trunc h)))
+    (= (mod (r7rs-int-of__ x "even?: not an integer") 2) 0)))
 (defn r7rs-odd? [x] : bool (if (r7rs-even? x) false true))
 (defn r7rs-abs [x] (if (< x 0) (r7rs-sub2__ 0 x) x))
 ;;; r7rs-min / r7rs-max -- inexact contagion (R7RS 6.2.6): if any argument
@@ -570,7 +582,7 @@
 (defn r7rs-exact [x]
   (if (is? x int) x
     (if (r7rs-integer? x) (:: (r7rs-float->int__ x) any)
-      (r7rs-fail-any__ "exact: no exact representation (there are no exact rationals; r7rs-lang-plan D8)"))))
+      (r7rs-fail-any__ "exact: no exact representation (an infinity or NaN has none, and a non-integer needs exact rationals, r7rs-lang-plan T2)"))))
 (defn r7rs-inexact [x] (if (is? x float) x (:: (r7rs-to-float__ x) any)))
 (defn r7rs-exact->inexact [x] (r7rs-inexact x))
 (defn r7rs-inexact->exact [x] (r7rs-exact x))
@@ -618,74 +630,6 @@
   snprintf(r, 80, "%s", buf + i);
   return r;
   ```)
-;;; string->number's two halves: a predicate and an accessor, so no sentinel
-;;; rides in the value.  The interpreter twins share one parser.
-(defn r7rs-parse-int-ok?__ [s : cstr radix : int] : bool
-  ```c
-  if (!s || !*s || radix < 2 || radix > 36) return false;
-  const char *p = s; int64_t v = 0; bool neg = false;
-  if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
-  if (!*p) return false;
-  for (; *p; p++) {
-    int d;
-    if (*p >= '0' && *p <= '9') d = *p - '0';
-    else if (*p >= 'a' && *p <= 'z') d = *p - 'a' + 10;
-    else if (*p >= 'A' && *p <= 'Z') d = *p - 'A' + 10;
-    else return false;
-    if (d >= radix) return false;
-    if (__builtin_mul_overflow(v, radix, &v) || __builtin_add_overflow(v, neg ? -d : d, &v)) return false;
-  }
-  return true;
-  ```)
-(defn r7rs-parse-int__ [s : cstr radix : int] : int
-  ```c
-  const char *p = s; int64_t v = 0; bool neg = false;
-  if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
-  for (; *p; p++) {
-    int d = (*p >= '0' && *p <= '9') ? *p - '0' : (*p >= 'a' && *p <= 'z') ? *p - 'a' + 10 : *p - 'A' + 10;
-    v = v * radix + (neg ? -d : d);
-  }
-  return v;
-  ```)
-;;; R10: case is not significant in a number (R7RS 7.1.1), so `+NaN.0` and
-;;; `1E2` read; and the exponent markers `s` `f` `d` `l` of R5RS (which
-;;; other implementations still read, chibi's suite among them) mean `e`.
-;;; Both helpers spell the string in strtod's terms first.
-(defn r7rs-parse-float-ok?__ [s : cstr] : bool
-  ```c
-  if (!s || !*s) return false;
-  char lo[8] = {0};
-  for (size_t i = 0; i < 7 && s[i]; i++) lo[i] = (char)((s[i] >= 'A' && s[i] <= 'Z') ? s[i] + 32 : s[i]);
-  if (strlen(s) == 6 && (!strcmp(lo, "+inf.0") || !strcmp(lo, "-inf.0") || !strcmp(lo, "+nan.0") || !strcmp(lo, "-nan.0"))) return true;
-  char buf[128]; size_t n = strlen(s);
-  if (n >= sizeof buf) return false;
-  for (size_t i = 0; i <= n; i++) {
-    char c = s[i];
-    if (i > 0 && strchr("sSfFdDlL", c) && c && ((s[i-1] >= '0' && s[i-1] <= '9') || s[i-1] == '.')) c = 'e';
-    if (c && !((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-')) return false;
-    buf[i] = c;
-  }
-  char *end = NULL; (void)strtod(buf, &end);
-  return end != buf && *end == 0;
-  ```)
-(defn r7rs-parse-float__ [s : cstr] : float
-  ```c
-  char lo[8] = {0};
-  for (size_t i = 0; i < 7 && s[i]; i++) lo[i] = (char)((s[i] >= 'A' && s[i] <= 'Z') ? s[i] + 32 : s[i]);
-  if (strlen(s) == 6) {
-    if (!strcmp(lo, "+inf.0")) return __builtin_inf();
-    if (!strcmp(lo, "-inf.0")) return -__builtin_inf();
-    if (!strcmp(lo, "+nan.0") || !strcmp(lo, "-nan.0")) return __builtin_nan("");
-  }
-  char buf[128]; size_t n = strlen(s);
-  if (n >= sizeof buf) return strtod(s, NULL);
-  for (size_t i = 0; i <= n; i++) {
-    char c = s[i];
-    if (i > 0 && c && strchr("sSfFdDlL", c) && ((s[i-1] >= '0' && s[i-1] <= '9') || s[i-1] == '.')) c = 'e';
-    buf[i] = c;
-  }
-  return strtod(buf, NULL);
-  ```)
 (defn r7rs-radix-of__ [xs : (Cons any) who : cstr] : int
   (if (tnil? xs) 10
     (let [r (r7rs-int-of__ (.head xs) "radix must be an exact integer")]
@@ -702,14 +646,29 @@
 (defn r7rs-fail-cstr__ [msg : cstr] : cstr
   (panic msg)
   "")
+;;; r7rs-number-of__ -- internal: T0 -- s read as a number in radix, through
+;;; the one R7RS number parser (stdlib/r7rs/numsyntax.tur, the source reader's
+;;; too): the number, #f when s is not number syntax, and an error a program
+;;; can `guard` -- `who` and the reason -- when s IS a number the tower cannot
+;;; hold yet (`1/2`, `1+2i`, a 20-digit integer).  Never a different number.
+(defn r7rs-number-of__ [s : cstr radix : int who : cstr] : any
+  (let [k (r7rs-numsyn-kind__ s radix)]
+    (if (= k 1)
+      (:: (r7rs-numsyn-int__ s radix) any)
+      (if (= k 2)
+        (:: (r7rs-numsyn-float__ s radix) any)
+        (if (= k 3)
+          (r7rs-signal__ (r7rs-string-append2__ who
+                                                (r7rs-string-append2__ s
+                                                                       (r7rs-string-append2__ "`: " (r7rs-numsyn-why__ s radix)))))
+          (:: false any))))))
+;;; r7rs-number-syntax?__ -- internal: s is number syntax at all, refused or
+;;; not (write bars such a symbol: '|1/2|).
+(defn r7rs-number-syntax?__ [s : cstr] : bool (> (r7rs-numsyn-kind__ s 10) 0))
 ;;; r7rs-string->number -- #f when the string is not a number in the radix.
 (defn r7rs-string->number [s : cstr & xs : any]
   (let [radix (r7rs-radix-of__ (:: xs (Cons any)) "string->number: radix must be 2, 8, 10 or 16")]
-    (if (r7rs-parse-int-ok?__ s radix)
-      (:: (r7rs-parse-int__ s radix) any)
-      (if (if (= radix 10) (r7rs-parse-float-ok?__ s) false)
-        (:: (r7rs-parse-float__ s) any)
-        (:: false any)))))
+    (r7rs-number-of__ s radix "string->number: `")))
 
 ;;; ---- characters --------------------------------------------------------
 
@@ -2067,7 +2026,7 @@
   return r;
   ```)
 (defn r7rs-symbol-spelling__ [s : cstr] : cstr
-  (if (if (r7rs-symbol-plain?__ s) (r7rs-not (r7rs-string->number s)) false)
+  (if (if (r7rs-symbol-plain?__ s) (r7rs-not (r7rs-number-syntax?__ s)) false)
     s
     (r7rs-bar-symbol__ s)))
 ;;; r7rs-char-spelling__ -- `#\a`, the R7RS names, or `#\xHH` for the other

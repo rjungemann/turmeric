@@ -6,6 +6,28 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: one number parser, and two wrong answers fixed (r7rs-lang-plan
+  T0).** `src/compiler/r7rs_numsyntax.inc` parses the whole R7RS number syntax
+  for the source reader, `read` and `string->number` on both back ends. The
+  compiled back end's copy is `stdlib/r7rs/numsyntax.tur`, written by
+  `tools/gen-r7rs-numsyntax.py`; `tur_r7rs_numsyntax_sync` keeps the two equal.
+  - `1/2` and `3+4i` are one token each. They used to split into `1` and the
+    symbol `/2`, or into `3`, `+4` and `i`, and the error named the wrong thing.
+  - A ratio or complex number the tower holds reads as its value: `10/2` is 5,
+    `#i3/2` is 1.5, and `3+0i` is 3.
+  - One it cannot hold yet is refused with the reason and the plan task that
+    brings it: rationals (T2), complex numbers (T6), bignums (T1). A source
+    literal gets a compile-time error. `read` and `string->number` raise an
+    error `guard` can catch.
+  - **Visible change:** `(string->number "99999999999999999999")` used to
+    return an inexact 1e20. It is now that error.
+  - `(exact 1e30)` used to answer 9223372036854775807. It is now the
+    exact-overflow error, and so is every conversion of a double outside
+    int64. `(even? 1e30)` is still #t.
+
+  Chibi's suite: 1096 of 1216 on both back ends, up from 1082.
+  Fixtures: `r7rs-number-syntax`, `r7rs-exact-inexact-overflow`,
+  `errors/r7rs-reader-ratio`, `errors/r7rs-reader-complex`.
 - **`#lang r7rs`: referential transparency.** A `syntax-rules` template's
   free identifiers now mean what they meant where the macro was defined. The
   lowering tracks lexical scope, gives local binders unique names, and resolves

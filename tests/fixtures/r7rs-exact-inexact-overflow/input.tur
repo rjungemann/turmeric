@@ -1,0 +1,13 @@
+#lang r7rs
+;; r7rs-lang-plan T0: `exact` on an inexact integer outside int64 is the
+;; exact-overflow error.  The C conversion used to saturate, so `(exact 1e30)`
+;; printed 9223372036854775807 -- a silent wrong answer.  Until bignums (T1)
+;; it is the same kind of error `(* 3037000500 3037000500)` gives, on both
+;; back ends.  In-range values still convert, and `even?` tests a large
+;; inexact integer as a double (1e30 is even) instead of converting it.
+(import (scheme base) (scheme write))
+(define (show x) (write x) (newline))
+(show (list (exact 7.0) (exact -9.125e18) (exact -9223372036854775808.0)))
+(show (list (even? 1e30) (odd? 1e30) (even? 7.0) (odd? 7.0)))
+(show (exact 1e30))
+(show "not reached")

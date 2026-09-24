@@ -100,10 +100,26 @@ An exact integer is a 64-bit integer, and an inexact real is a double:
 ```
 
 There are no exact rationals and no bignums yet. So `(/ 7 2)` is the inexact
-3.5 rather than 7/2, a literal like `1/2` is refused, and an exact result
-outside 64 bits **stops the program** with a message naming the rule. It is
+3.5 rather than 7/2, and an exact result outside 64 bits **stops the
+program** with a message naming the rule -- `(exact 1e30)` included. It is
 never a silently wrapped number, but it is a panic, not a condition `guard`
 can catch.
+
+Numbers are read by one parser: in a source file, by `read`, and by
+`string->number`. It knows the whole R7RS number syntax, so a ratio or a
+complex number is one token. When the value is one the tower holds, it reads
+as that value: `10/2` is 5, `#i3/2` is 1.5, and `3+0i` is 3, because an
+exact zero imaginary part makes a real. When it is not, the number is refused
+with the reason and the task in the plan that brings it. That happens at
+compile time for a literal. `read` and `string->number` raise an error a
+program can `guard`. The number is never split into a number and a stray
+symbol, and never read as a different number:
+
+```scheme
+(write (list 10/2 #i3/2 3+0i (string->number "1e2")))   ; (5 1.5 3 100.0)
+(string->number "1/2")
+; error: string->number: `1/2`: an exact non-integer needs exact rationals ...
+```
 
 ## Macros
 
@@ -234,12 +250,12 @@ bash tests/run-r7rs-conformance.sh      # both back ends, about two minutes
 python3 tests/r7rs/run-conformance.py --backend interp --list-failures
 ```
 
-**1082 of the 1216 tests** written in the suite pass, the same on the
+**1096 of the 1216 tests** written in the suite pass, the same on the
 interpreter and the compiled back end. Nearly all the rest are the
 differences listed above: bignums and exact rationals (`1/2`, `(expt 2
 100)`), complex numbers (`3+4i`), the three string mutators, `eval` and
 `environment`, re-entering a continuation, and a string indexed by bytes.
-What remains after those is a handful of hygiene two float spellings that differ from chibi's
+What remains after those is two float spellings that differ from chibi's
 own (`1.7976931348623157e308` rather than `e+308`; both are R7RS).
 
 The target fails only when the count drops below its floor, so raise the

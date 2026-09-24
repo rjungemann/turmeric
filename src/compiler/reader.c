@@ -3685,6 +3685,37 @@ static bool scheme_is_delim(int c) {
            c == '"' || c == ';' || c == '|' || c == '\'' || c == '`' || c == ',';
 }
 
+#include "r7rs_numsyntax.inc"
+
+/* r7rs-lang-plan T0: a number token, read whole.  The token runs to the next
+ * delimiter and goes through the one R7RS number parser (r7rs_numsyntax.inc,
+ * shared with `string->number` and `read`), so `1/2` and `3+4i` are ONE
+ * token -- they used to split into `1` and the symbol `/2`, and `3`, `+4`
+ * and `i`.  A value the tower holds reads as that value (`10/2` is 5); one
+ * it cannot hold yet is an error naming the task that brings it.  Returns
+ * NULL without consuming or setting r->error when the token is not number
+ * syntax, so the caller's own path (a symbol, or its diagnostic) runs. */
+static Form *try_read_scheme_number(Reader *r) {
+    size_t n = 0;
+    while (!scheme_is_delim(peek_at(r, n))) n++;
+    if (n == 0) return NULL;
+    r7rs_ns_result res;
+    r7rs_ns_parse(r->src + r->pos, n, 10, &res);
+    if (res.kind == R7NS_NONE) return NULL;
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    for (size_t k = 0; k < n; k++) advance(r);
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    if (res.kind == R7NS_REFUSED) {
+        diag_emit(DIAG_ERROR, span, "`%.*s`: %s", (int)n, r->src + start_off, res.why);
+        r->error = true;
+        return NULL;
+    }
+    return res.kind == R7NS_INT ? form_int(r->arena, span, res.i)
+                                : form_float(r->arena, span, res.f);
+}
+
 /* Identifier characters R7RS allows that Turmeric's is_sym_start/is_sym_cont
  * do not: `~` and `%` are <special initial>s; `@` is a <special subsequent>
  * (start position is handled by read_form, where `@` stays deref sugar). */
@@ -3939,8 +3970,14 @@ static Form *try_read_scheme_hash(Reader *r) {
         bool numberish = (n0 >= '0' && n0 <= '9') ||
                          ((n0 == '+' || n0 == '-' || n0 == '.') &&
                           ((n1 >= '0' && n1 <= '9') || n1 == '.')) ||
+                         /* T0: `#i+inf.0`, `#e+i` */
+                         ((n0 == '+' || n0 == '-') &&
+                          (n1 == 'i' || n1 == 'I' || n1 == 'n' || n1 == 'N')) ||
                          (n0 >= 'a' && n0 <= 'f') || (n0 >= 'A' && n0 <= 'F');
         if (!numberish) return NULL;
+        Form *num = try_read_scheme_number(r);
+        if (num || r->error) return num;
+        /* Not number syntax: the prefix reader names what is wrong. */
         return read_scheme_prefixed_number(r);
     }
 
@@ -4118,6 +4155,13 @@ static Form *read_form(Reader *r) {
             /* Single backtick - quasiquote */
             return read_quasiquote(r);
         }
+    }
+    /* r7rs-lang-plan T0: a Scheme number is read as one whole token. */
+    if (r->scheme_enabled &&
+        ((c >= '0' && c <= '9') || c == '+' || c == '-' ||
+         (c == '.' && peek2(r) >= '0' && peek2(r) <= '9'))) {
+        Form *num = try_read_scheme_number(r);
+        if (num || r->error) return num;
     }
     if (c >= '0' && c <= '9') return read_number(r, 0);
     /* r7rs-lang-plan R1: Scheme lexemes that a Turmeric byte already owns.

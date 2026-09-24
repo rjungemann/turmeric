@@ -49,9 +49,10 @@ that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 (native and browser) analysing and formatting Scheme, the editor packs,
 `gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
 runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
-which reports a count: 1082 of 1216 tests pass on both back ends (887 on the
+which reports a count: 1096 of 1216 tests pass on both back ends (887 on the
 interpreter, and a compiled build that did not finish, when it was first
-wired). Each landed stage carries a "What shipped" note below. What is
+wired; 1082 at the end of R10, and 1096 after Section 9's T0). Each landed
+stage carries a "What shipped" note below. What is
 left -- bignums, exact rationals, mutable character-indexed strings,
 `eval` (the interpreter linked in on demand), re-entrant continuations and,
 last, complex numbers -- is Section 9,
@@ -1752,10 +1753,12 @@ expectation from a demo.
 ## 9. Remaining work -- the tasks left after R10
 
 What `#lang r7rs` still does differently from R7RS, measured on 2026-09-24:
-chibi's suite passes 1082 of the 1216 tests written in it, on both back ends,
-and the runner counts 143 failed test invocations (a test-numeric-syntax form
-counts two). Every one of those 143 belongs to a task below; the counts per
-task are the runner's. Section 9.3 lists the documented differences no chibi
+chibi's suite passed 1082 of the 1216 tests written in it, on both back ends,
+and the runner counted 143 failed test invocations (a test-numeric-syntax
+form counts two). Every one of those 143 belonged to a task below; the counts
+per task are the runner's, as written before T0. T0 has landed since: 1096
+pass and 129 invocations fail, and the test lines T0 turned green are struck
+from the tasks below (each task says so). Section 9.3 lists the documented differences no chibi
 test reaches.
 
 ### 9.1 The rule: the differences between the languages are preserved
@@ -1804,7 +1807,7 @@ R10 already works this way, and each piece is the pattern to copy:
 ### 9.2 Tasks
 
 **T0 -- two small correctness fixes that need none of the rest (0 tests;
-do first).**
+do first).** *Landed 2026-09-24; see "What shipped" at the end of the task.*
 
 - **`(exact 1e30)` answers `9223372036854775807`.** A silent wrong answer:
   the conversion saturates. Until T1 lands, an inexact integer outside int64
@@ -1819,11 +1822,67 @@ do first).**
     `stdlib/r7rs/read.tur`.
   - Make `string->number` agree.
 
+> **What shipped (T0, 2026-09-24).** Both fixes, on both back ends. The count
+> is **1096** of 1216, up from 1082, because reading a number whole also let
+> some tests pass that name T2 or T6 without needing either.
+>
+> - **`exact` of a large double.**
+>   - `r7rs-float->int__` (the prelude's one conversion from an inexact to an
+>     exact integer) range-checks. A double outside int64 is now the
+>     exact-overflow panic: `(exact 1e30)`, and `quotient` and the other
+>     procedures that convert. Before, it saturated.
+>   - `even?`/`odd?` test an inexact integer as a double, so `(even? 1e30)`
+>     stays #t with no conversion.
+>   - `exact` of an infinity or NaN names that instead of "no rationals".
+>   - Fixture: `r7rs-exact-inexact-overflow`.
+> - **One number parser.**
+>   - `src/compiler/r7rs_numsyntax.inc` parses the whole R7RS `<number>`
+>     grammar:
+>     - prefixes in either order;
+>     - ratios in any radix;
+>     - decimals with the `e s f d l` markers;
+>     - infinities and NaNs;
+>     - rectangular, pure-imaginary and polar complex numbers;
+>     - case-insensitive throughout.
+>   - The source reader and the interpreter's natives `#include` it.
+>     `tools/gen-r7rs-numsyntax.py` copies it into the C block of
+>     `stdlib/r7rs/numsyntax.tur`, where the compiled back end's `read` and
+>     `string->number` call it. ctest `tur_r7rs_numsyntax_sync` checks that
+>     the two copies are identical.
+>   - The old per-back-end integer and float parsers are gone.
+> - **What a number reads as.**
+>   - A value the tower holds reads as that value: `10/2` is 5, `#x10/2`
+>     is 8, `#i3/2` is 1.5, `#i#x1/10` is 0.0625, `1@0` is 1. So does
+>     `3+0i` and `-2.5+0i`, since an exact zero imaginary part makes a real
+>     (R7RS 6.2.6).
+>   - Otherwise the number is refused, with the reason and the task:
+>     - `1/2` and `#e1.5` need rationals (T2);
+>     - `3+4i`, `+i` and `1.0+0.0i` need complex numbers (T6);
+>     - a 20-digit integer needs bignums (T1);
+>     - `1/0` is not a number.
+>   - Where the refusal lands:
+>     - a source literal gets a compile-time diagnostic spanning the whole
+>       token;
+>     - `read` raises a read error, and `string->number` an error, both of
+>       which `guard` catches;
+>     - `#f` still means "not number syntax".
+>   - `write` bars any symbol that is number syntax (`'|1/2|`, `'|+i|`).
+> - **Fixtures:** `r7rs-number-syntax` (both back ends), and
+>   `errors/r7rs-reader-ratio` and `errors/r7rs-reader-complex`.
+>   `errors/r7rs-reader-exact-rational` now expects the message that names
+>   T2.
+> - **Tests now passing** (the lines are struck from T2 and T6 below):
+>   - 759 and 770: an exact zero imaginary part;
+>   - 769 and 772: integral ratios;
+>   - number syntax 2365, 2367-2369, 2426, 2427 and 2434.
+
 **T1 -- bignums (8 tests: chibi lines 215, 219, 223, 227, 231, 822, 841).**
 
 - **Today:** exact integers are int64, and an exact result outside it is a
-  panic naming D8, which `guard` cannot catch. A 20-digit literal (line 227)
-  is TUR-E "integer literal overflows int64 range".
+  panic naming D8, which `guard` cannot catch; since T0 that includes
+  `(exact 1e30)`. A 20-digit literal (line 227) is refused by the one number
+  parser (T0), naming this task, at compile time in a source file and as a
+  catchable error from `read` and `string->number`.
 - **R7RS:** exact integers are unbounded.
 - **Preserve:** Turmeric's and Saffron's `int` stay int64 with their own
   overflow behavior. Bignums exist only as Scheme values.
@@ -1842,9 +1901,9 @@ do first).**
 - **Done:** the 8 tests; `(expt 2 100)` prints its 31 digits on both back
   ends; Turmeric's int-overflow fixtures unchanged.
 
-**T2 -- exact rationals (42 tests: 199, 768, 769, 772, 780, 902, 904, 905,
-965, 967, 968, 970, 972, 973, 1027, 1028; number syntax 2363-2369, 2426,
-2427, 2434-2438).**
+**T2 -- exact rationals (42 tests before T0, 30 after: 199, 768, 780, 902,
+904, 905, 965, 967, 968, 970, 972, 973, 1027, 1028; number syntax 2363,
+2364, 2366, 2435-2438).**
 
 - **Today:** `(/ 7 2)` is the inexact 3.5, and `numerator`/`denominator` of
   an exact non-integer cannot arise.
@@ -1972,20 +2031,22 @@ re-entered continuation).**
 - **Done:** the test; a generator written with re-entrant `call/cc` runs on
   both back ends.
 
-**T6 -- complex numbers, deliberately after the others (73 tests: 756, 759,
-760, 770, 784, 789, 794, 796, 797, 849, 903, 1016, 1017, 1030-1040; number
-syntax 2371-2401, 2441, 2442).**
+**T6 -- complex numbers, deliberately after the others (73 tests before T0,
+71 after: 756, 760, 784, 789, 794, 796, 797, 849, 903, 1016, 1017,
+1030-1040; number syntax 2371-2401, 2441, 2442).**
 
 - **Order (decided 2026-09-24):** on the list, and last of the
   implementation tasks; it also builds on T2.
 - **Today:** `(scheme complex)` is reals only.
   - `make-rectangular` / `make-polar` with a non-zero imaginary part panic.
   - `(sqrt -4)` is `+nan.0`.
-  - A `3+4i` literal is split by the reader (T0).
+  - A `3+4i` literal is refused with the reason (T0; it used to be split by
+    the reader). One whose imaginary part is an exact zero (`3+0i`) reads as
+    the real it is.
 - **R7RS:** non-real numbers are optional (R7RS 6.2.3 does not require the
   whole tower); chibi has them and its suite tests them, and they stay on
-  this list. Until T6 lands, complex syntax is refused with the reason (T0),
-  and `make-rectangular` / `make-polar` with a non-zero imaginary part should
+  this list. Until T6 lands, complex syntax is refused with the reason (T0
+  does this), and `make-rectangular` / `make-polar` with a non-zero imaginary part should
   be a catchable error rather than today's panic.
 - **Preserve:** Turmeric has no complex type, and `math.tur`'s `sqrt` of a
   negative stays NaN in Turmeric.

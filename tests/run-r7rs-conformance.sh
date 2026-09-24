@@ -30,9 +30,9 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 0
 fi
 
-# The floor: the count recorded in the plan's R10 "What shipped" note, of
+# The floor: the count recorded in the plan (R10, raised by Section 9 tasks), of
 # 1216 tests written in the suite -- the same on both back ends.
-FLOOR="${R7RS_CONFORMANCE_FLOOR:-1082}"
+FLOOR="${R7RS_CONFORMANCE_FLOOR:-1096}"
 BACKEND="${R7RS_CONFORMANCE_BACKEND:-both}"
 
 exec python3 tests/r7rs/run-conformance.py --tur "$TUR" --backend "$BACKEND" \
