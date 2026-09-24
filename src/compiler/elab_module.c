@@ -118,6 +118,9 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
                       || strcmp(kn, "void") == 0) fwd_result_kind = TY_NIL;
                 else if (strcmp(kn, "ptr") == 0
                       || strcmp(kn, "ptr<void>") == 0) fwd_result_kind = TY_PTR_VOID;
+                /* r7rs-lang-plan R7: an annotated `: any` result, like the
+                 * unannotated dynamic default below it. */
+                else if (strcmp(kn, "any") == 0) fwd_result_kind = TY_ANY;
             } else if (ret_f && ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
                 /* Compound return type: peek at the head symbol */
                 Form *head_f = ret_f->as.list.items[0];
@@ -152,7 +155,10 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
         Type **fwd_arg_full = elab_fwd_param_full_types(
             e, e->arena, f, name_idx, params_idx, param_arity, arg_kinds);
         Type fn_type = type_fn(arg_kinds, param_arity, fwd_result_kind);
+        /* r7rs-lang-plan R7: the rest shape, as the top-level pre-pass does. */
         if (fwd_arg_full) fn_type.as.fn.arg_full_types = fwd_arg_full;
+        if (params_idx < (uint32_t)f->as.list.len)
+            fwd_decl_apply_variadic(e, e->arena, &fn_type, f->as.list.items[params_idx]);
         if (fwd_result_full) fn_type.as.fn.result_full_type = fwd_result_full;
         Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
         scope_add(&e->global, b);

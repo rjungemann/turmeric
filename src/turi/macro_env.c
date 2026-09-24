@@ -56,7 +56,7 @@
  * are not the user's program. */
 typedef struct MacroEnvBracket {
     bool              saved_had;
-    const SourceFile *saved_files[64];
+    const SourceFile *saved_files[DIAG_MAX_FILES];
     size_t            n_saved;
     bool              saved_dump;
 } MacroEnvBracket;

@@ -1,0 +1,89 @@
+#lang r7rs
+;;; r7rs/process-context -- (scheme process-context): the command line, the
+;;; environment, and leaving the process.
+;;;
+;;; An on-demand R7RS library (see stdlib/r7rs/time.tur).  The primitives
+;;; are inline C with interpreter twins: the typed stdlib's env/process
+;;; functions are effect-annotated inline C with no interpreter natives, so
+;;; forwarding to them would make this library compiled-only.  The command
+;;; line is read from `*args*`, walked cell by cell -- never from g_tur_args.
+;;;
+;;; Since: r7rs-lang-plan R7
+;; (scheme process-context)
+
+(defn r7rs-args-head__ [c : int] : cstr
+  ```c
+  return (const char *)(intptr_t)((int64_t *)(intptr_t)c)[0];
+  ```)
+(defn r7rs-args-tail__ [c : int] : int
+  ```c
+  return ((int64_t *)(intptr_t)c)[1];
+  ```)
+(defn r7rs-args-go__ [c : int] : any
+  (if (= c 0) r7rs-null-value__ (R7rsPair (r7rs-args-head__ c) (r7rs-args-go__ (r7rs-args-tail__ c)))))
+;;; r7rs-command-line -- the command name, then the arguments.  The name is
+;;; implementation-dependent in R7RS; `*args*` does not carry argv[0], so it
+;;; is the constant "tur".
+(defn r7rs-command-line [] : any (R7rsPair "tur" (r7rs-args-go__ *args*)))
+
+(defn r7rs-getenv-set?__ [name : cstr] : bool
+  ```c
+  return getenv(name) != NULL;
+  ```)
+(defn r7rs-getenv__ [name : cstr] : cstr
+  ```c
+  const char *v = getenv(name);
+  return v ? v : "";
+  ```)
+;;; r7rs-get-environment-variable -- the value, or #f when it is not set.
+(defn r7rs-get-environment-variable [name : cstr] : any
+  (if (r7rs-getenv-set?__ name) (:: (r7rs-getenv__ name) any) (:: false any)))
+(defn r7rs-environ-count__ [] : int
+  ```c
+  extern char **environ;
+  int64_t n = 0;
+  while (environ[n]) n++;
+  return n;
+  ```)
+(defn r7rs-environ-name__ [i : int] : cstr
+  ```c
+  extern char **environ;
+  const char *e = environ[i], *eq = strchr(e, '=');
+  size_t n = eq ? (size_t)(eq - e) : strlen(e);
+  char *r = (char *)malloc(n + 1);
+  memcpy(r, e, n); r[n] = 0;
+  return r;
+  ```)
+(defn r7rs-environ-value__ [i : int] : cstr
+  ```c
+  extern char **environ;
+  const char *eq = strchr(environ[i], '=');
+  return eq ? eq + 1 : "";
+  ```)
+(defn r7rs-environ-go__ [i : int n : int] : any
+  (if (>= i n) r7rs-null-value__
+    (R7rsPair (R7rsPair (r7rs-environ-name__ i) (r7rs-environ-value__ i)) (r7rs-environ-go__ (+ i 1) n))))
+;;; r7rs-get-environment-variables -- an alist of (name . value).
+(defn r7rs-get-environment-variables [] : any (r7rs-environ-go__ 0 (r7rs-environ-count__)))
+
+;;; r7rs-exit-code__ -- no argument or #t is success (0), #f is failure (1),
+;;; an exact integer is itself, anything else is success.
+(defn r7rs-exit-code__ [l] : int
+  (if (r7rs-null? l) 0
+    (let [o (r7rs-car l)]
+      (if (r7rs-boolean? o) (if o 0 1) (if (r7rs-exact-integer? o) (r7rs-int-of__ o "exit: bad status") 0)))))
+;;; r7rs-unwind-all__ -- run every outstanding dynamic-wind `after`,
+;;; innermost first.
+(defn r7rs-unwind-all__ [] : nil
+  (if (r7rs-null? r7rs-winders__) nil
+    (let [w (r7rs-car r7rs-winders__)]
+      (set! r7rs-winders__ (r7rs-cdr r7rs-winders__))
+      ((r7rs-wind-after__ w))
+      (r7rs-unwind-all__))))
+;;; r7rs-exit -- run the outstanding dynamic-wind afters, then leave.
+(defn r7rs-exit [& obj : any] : nil
+  (r7rs-unwind-all__)
+  (r7rs-exit__ (r7rs-exit-code__ (r7rs-chain->list__ (:: obj (Cons any))))))
+;;; r7rs-emergency-exit -- leave without running them.
+(defn r7rs-emergency-exit [& obj : any] : nil
+  (r7rs-exit__ (r7rs-exit-code__ (r7rs-chain->list__ (:: obj (Cons any))))))

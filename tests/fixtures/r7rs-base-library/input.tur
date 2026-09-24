@@ -1,0 +1,52 @@
+#lang r7rs
+;; r7rs-lang-plan R7: the rest of (scheme base) that is not a port, and the
+;; pure libraries that live in the prelude -- (scheme char), (scheme cxr),
+;; (scheme complex) -- on both back ends.  Also pins, as used from Scheme:
+;; a typed variadic procedure passed as a value (`=` to member, `max` and
+;; `string-append` through apply, `+` to vector-map) now reaches the dynamic
+;; call through an all-`any` adaptor that forwards its rest list, a vector
+;; literal is self-evaluating (built by `vector`, so `#()` is a (Vec any)),
+;; and pi prints with all its digits compiled (float literals round-trip).
+(import (scheme base) (scheme char) (scheme cxr) (scheme complex) (scheme write))
+(display (list (boolean=? #t #t #t) (boolean=? #f #t) (symbol=? 'a 'a) (symbol=? 'a 'b))) (newline)
+(display (list (char<=? #\a #\b #\b) (char>=? #\c #\b #\a) (char=? #\a #\a #\b))) (newline)
+(display (list (string<? "a" "b" "c") (string>? "c" "b") (string<=? "a" "a") (string>=? "b" "c") (string=? "x" "x" "x"))) (newline)
+(define l (list 1 2 3))
+(list-set! l 1 'two)
+(display l) (newline)
+(display (list (make-list 3 'x) (make-string 3 #\z) (string #\a #\b #\c))) (newline)
+(display (list (string->list "hello" 1 3) (string-copy "hello" 1) (string-copy "hello" 1 4))) (newline)
+(display (list (string->vector "abc") (vector->string #(#\x #\y)) (vector->list #(1 2 3 4) 1 3))) (newline)
+(display (string-map char-upcase "abc")) (newline)
+(string-for-each (lambda (a b) (display a) (display b)) "abc" "xyz") (newline)
+(display (vector-map + #(1 2 3) #(10 20 30))) (newline)
+(vector-for-each (lambda (x) (display x)) #(7 8 9)) (newline)
+(display (map + '(1 2 3) '(10 20 30) '(100 200))) (newline)
+(for-each (lambda (a b) (display (* a b)) (display " ")) '(1 2) '(3 4)) (newline)
+(display (list (vector-append #(1) #(2 3) #()) (vector-copy #(1 2 3 4) 1 3))) (newline)
+(define v (vector 1 2 3 4 5))
+(vector-copy! v 1 v 0 3)
+(display v) (newline)
+(define fv (make-vector 3 0))
+(vector-fill! fv 9 1)
+(display fv) (newline)
+(display (list (bytevector-append #u8(1 2) #u8(3)) (bytevector-copy #u8(1 2 3 4) 2))) (newline)
+(define bv (bytevector 1 2 3 4 5))
+(bytevector-copy! bv 0 #u8(9 9) 0 2)
+(display bv) (newline)
+(display (list (string->utf8 "abc") (utf8->string #u8(104 105)) (utf8->string (string->utf8 "caf\xe9;")))) (newline)
+(display (list (member 2.0 '(1 2 3) =) (assoc 2.0 '((1 . a) (2 . b)) =) (member "b" '("a" "b")))) (newline)
+(display (list (rationalize 7 2) (rationalize -7 10) (rationalize 0.3 0.1))) (newline)
+(display (features)) (newline)
+(write-simple "q") (newline)
+(display (list (char-upper-case? #\A) (char-lower-case? #\A) (char-foldcase #\Q) (digit-value #\7) (digit-value #\x))) (newline)
+(display (list (char-ci=? #\a #\A) (char-ci<? #\a #\B) (string-ci=? "Hello" "hELLO") (string-ci<? "abc" "ABD"))) (newline)
+(display (list (string-upcase "Hello, World") (string-downcase "ABC") (string-foldcase "MiXeD"))) (newline)
+(define t '(((1 2) 3) (4 5) 6 7))
+(display (list (caaar t) (cdaar t) (caddr t) (cadddr t) (cddddr t) (caadr t))) (newline)
+(display (list (real-part 7.1) (imag-part 7.1) (magnitude -3) (angle -1) (angle 2) (make-rectangular 4 0) (make-polar 5 0))) (newline)
+(display (map string-append '("a" "b") '("x" "y"))) (newline)
+(display (list (apply string-append '("p" "q" "r")) (apply max '(3 9 2)) (apply char<? (list #\a #\b #\c)))) (newline)
+(define (f . xs) xs)
+(display (apply f 1 '(2 3))) (newline)
+(display (vector-append #(1) #())) (newline)

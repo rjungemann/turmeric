@@ -9524,7 +9524,7 @@ static void __tur_module_def_init(void) {
     SCHEMA_unAP_1497 = INT64_C(14);
     SCHEMA_unFIELD_1498 = INT64_C(15);
     SCHEMA_unAP_unFAT_1499 = INT64_C(16);
-    PI_1642 = 3.14159265358979;
+    PI_1642 = 3.141592653589793;
 }
 
 static void __tur_fatbox_init(void) {

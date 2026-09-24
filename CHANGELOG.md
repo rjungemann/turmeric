@@ -6,6 +6,35 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs` libraries (R7).** Every R7RS-small procedure that is not a
+  port. The rest of `(scheme base)` (variadic char/string comparisons,
+  `boolean=?`/`symbol=?`, `list-set!`/`make-list`/`make-string`/`string`,
+  `[start [end]]` ranges, multi-list `map`/`for-each`, `string-map`,
+  `vector-map`/`-for-each`/`-append`/`-copy`/`-copy!`, bytevector copies,
+  checked `utf8->string`, `member`/`assoc` with a comparison, `apply` with
+  leading arguments, `rationalize`, `features`, `write-simple`), `(scheme
+  char)` with ASCII case mapping, the 24 `(scheme cxr)` compositions and
+  `(scheme complex)` over the reals live in the prelude. `(scheme time)`,
+  `(scheme process-context)` (`exit` runs the outstanding `dynamic-wind`
+  afters) and `(scheme file)`'s `file-exists?`/`delete-file` (a failure
+  raises a `file-error?` object) are files under `stdlib/r7rs/` spliced in
+  only when imported. `(scheme eval)`/`repl`/`load`/`read`, `include` and
+  string mutation are refused with the reason; an unknown `(scheme ...)`
+  library is an error. Fixed on the way, most of it outside Scheme: a
+  static variadic call now narrows an `any` argument into a concrete fixed
+  parameter; a typed variadic passed as a value gets an all-`any` adaptor
+  that forwards its rest list (it was called through the wrong convention);
+  a variadic's forward declaration carries its rest shape and an annotated
+  `: any` result forward-declares as `any`, so callers may precede their
+  callees; import/load file ids no longer collide with the compiled
+  driver's auto-loaded files (a `(load ...)` overwrote one's source record),
+  and the source-file registry holds 512 files instead of 64;
+  float literals are emitted with the shortest round-trip spelling
+  (`3.141592653589793` compiled as a different double); and a Scheme vector
+  literal is self-evaluating. `tests/fixtures/r7rs-base-library`,
+  `r7rs-system-libraries`, `float-literal-round-trip`,
+  `saffron-variadic-fixed-arg-narrow`, `saffron-forward-ref-any-and-variadic`,
+  and four `errors/r7rs-*` fixtures.
 - **`#lang r7rs` control (R6), and the compiled back end catches up.**
   `call/cc`/`call-with-current-continuation` as a one-shot upward escape --
   the receiver's continuation is a procedure, `(k 1 2)` delivers two values,

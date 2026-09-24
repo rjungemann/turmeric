@@ -8,7 +8,7 @@
 
 #include "buf.h"
 
-#define MAX_FILES 64
+#define MAX_FILES DIAG_MAX_FILES
 #define MAX_NOTES 8
 #define MAX_SECONDARY_SPANS 4
 
@@ -109,6 +109,14 @@ const char *diag_file_path(uint16_t file_id) {
         return files_[file_id]->path;
     return NULL;
 }
+
+/* r7rs-lang-plan R7: the first file id past the auto-loaded stdlib band the
+ * compiled driver numbers from 1 (0 when no band was prepended). */
+static uint16_t autoload_file_ids_end_ = 0;
+void diag_note_autoload_file_ids(uint16_t end) {
+    if (end > autoload_file_ids_end_) autoload_file_ids_end_ = end;
+}
+uint16_t diag_autoload_file_ids_end(void) { return autoload_file_ids_end_; }
 
 const SourceFile *diag_source_file(uint16_t file_id) {
     if (file_id < MAX_FILES) return files_[file_id];

@@ -1,6 +1,6 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 through R6 landed 2026-09-23/24.** `#lang r7rs` is a base
+Status: **R0 through R7 landed 2026-09-23/24.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -33,8 +33,14 @@ forms: `call/cc` at the escape level (D7), `dynamic-wind`, `guard`/`raise`/
 the compiled back end's dynamic-closure gaps are closed, so every r7rs
 fixture runs on both back ends and a Scheme procedure call is a proper
 tail call 10,000,000 deep at `-O0` (`tests/fixtures/r7rs-control`,
-`r7rs-tail-calls`). R7 onward is unbuilt. Each landed stage carries a
-"What shipped" note below.
+`r7rs-tail-calls`). R7 completes the R7RS-small libraries short of
+ports: the rest of `(scheme base)`, `(scheme char)`, `(scheme cxr)` and
+`(scheme complex)` in the prelude, and `(scheme time)`, `(scheme
+process-context)` and the non-port half of `(scheme file)` as files spliced
+in only when imported (`tests/fixtures/r7rs-base-library`,
+`r7rs-system-libraries`); `(scheme eval)`, `(scheme repl)`, `(scheme load)`
+and `include` are refused with their reason. R8 onward is unbuilt. Each
+landed stage carries a "What shipped" note below.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -1222,6 +1228,73 @@ adaptor here that forwards to such a constructor either ascribes the result
 itself (`(:: (map-new) (Map any any))`) or waits on that report; the D9
 snippet as written (`(hamt-set (hamt-new) "k" 42)`) is the second face of it.
 
+> **What shipped (2026-09-24).** Every R7RS-small procedure that is not a
+> port, on both back ends, with the libraries split by cost:
+>
+> - **Resident** -- `base`, `case-lambda`, `char`, `complex`, `cxr`,
+>   `inexact`, `lazy`, `write` -- live in `stdlib/r7rs/prelude.tur`, so
+>   importing one is a scoping statement. New in `(scheme base)`: variadic
+>   char and string comparisons, `boolean=?`, `symbol=?`, `list-set!`,
+>   `make-list`, `make-string`, `string`, the optional `[start [end]]` ranges,
+>   multi-list `map`/`for-each`, `string-map`/`string-for-each`,
+>   `vector-map`/`vector-for-each`/`vector-append`/`vector-copy`/
+>   `vector-copy!` (overlap-safe), the bytevector copies and appends,
+>   `string->utf8`/`utf8->string` (decoding checked), `member`/`assoc` with a
+>   comparison, `apply` with leading arguments, `rationalize`, `features`,
+>   `write-simple`. `(scheme char)` case mapping is ASCII (the typed stdlib
+>   has no Unicode tables; a non-ASCII char maps to itself). `(scheme
+>   complex)` answers for reals and refuses a complex result.
+> - **On demand** -- `time`, `process-context`, and `file`'s
+>   `file-exists?`/`delete-file` -- are files under `stdlib/r7rs/` that the
+>   load expander splices in when a Scheme file imports them
+>   (`scheme_import_library_files`), so an unimporting program carries none
+>   of it and the names stay free for its own use. `exit` runs the
+>   outstanding `dynamic-wind` afters; `delete-file` raises an error object
+>   `file-error?` recognizes (error objects gained a kind).
+> - **Deferred, with the reason at the import** -- `eval`, `repl`, `load`
+>   (Section 8, question 3: decided, they wait for an evaluator at run time)
+>   and `read` (R8). `include`/`include-ci` are refused at the form (an
+>   included file would have to be read as Scheme without a `#lang` line), as
+>   are `string-set!`/`string-fill!`/`string-copy!` (strings are immutable
+>   `cstr`). An unknown `(scheme ...)` name is an error.
+>
+> **Adaptors, not reimplementations, with one measured exception**: the
+> on-demand libraries carry their own inline-C primitives (with interpreter
+> twins) instead of forwarding to `fs`/`env`/`process`/`time`, because those
+> typed functions are effect-annotated inline C with no interpreter natives
+> -- forwarding would have made the libraries compiled-only -- and `time`
+> has no sub-second wall clock or monotonic counter at all.
+>
+> Found and fixed on the way, most of them outside Scheme:
+>
+> - A static call to a variadic did not narrow an `any` argument into a
+>   concrete FIXED parameter (only the widening direction existed), so
+>   `(string->list s)` with `s : any` was a cc error compiled and garbage
+>   interpreted (`saffron-variadic-fixed-arg-narrow`).
+> - A typed variadic passed as a value was boxed as itself and called through
+>   the all-`any` protocol -- `(member x l =)` answered wrong. It now gets an
+>   all-`any` variadic adaptor that forwards its rest list (a `__rest-chain`
+>   marker the variadic call path honours), and only all-`any` variadics are
+>   registered for packing.
+> - A variadic's forward declaration counted `&` as a parameter and had no
+>   rest marker, and an annotated `: any` result forward-declared as `int`
+>   (`saffron-forward-ref-any-and-variadic`) -- which retires R5's "a
+>   variadic must be defined before its callers" rule.
+> - Import and load file ids started at a fixed 10 while the compiled driver
+>   numbers its ~40 auto-loaded files from 1, so any `(load ...)` overwrote
+>   an auto-loaded file's source record (here, `typeclass-alternative.tur`
+>   became a Scheme file). The driver now records where its band ends and
+>   ids start there; the registry that holds them grew from a hard-coded 64
+>   to `DIAG_MAX_FILES` (512), since a procedural macro's compile-time
+>   evaluation alone used the ~20 ids left above the band.
+> - Float literals were emitted with `%.15g`, so `3.141592653589793` compiled
+>   as a different double (`float-literal-round-trip`).
+> - A vector literal is self-evaluating and built by `vector` (the reader
+>   stamps `#(` vectors, PROV_SCHEME_VECTOR), so `#()` is a `(Vec any)`.
+>
+> Deviations: ports and everything built on them are R8; `command-line`'s
+> first element is `"tur"` (`*args*` does not carry argv[0]); a program that
+> imports nothing still sees every resident name.
 ### R8 -- ports and I/O (medium)
 
 The port taxonomy, string ports, `read`, `write`, `display`, `write-shared` and
@@ -1331,7 +1404,12 @@ expectation from a demo.
 3. **`(scheme eval)` in compiled programs.** Link `libturi` into every emitted
    Scheme program, link it on demand when `(scheme eval)` is imported, or
    declare `eval` interpreter-only? The third is honest and cheap; the second is
-   the right answer and needs a mechanism.
+   the right answer and needs a mechanism. **Decided at R7: neither yet.**
+   `(scheme eval)`, `(scheme repl)` and `(scheme load)` are refused at the
+   import with this question named. Even under `--interpret`, `eval` needs a
+   datum-to-Form path and the lowering at run time, which is its own piece of
+   work; the on-demand library mechanism R7 built is where a linked evaluator
+   would plug in.
 4. **File extension.** `.scm` is the obvious spelling and means every tool
    learns a new file type. The Saffron plan deferred `.saf` for exactly this
    reason, and R7RS should defer `.scm` the same way -- `#lang r7rs` inside a

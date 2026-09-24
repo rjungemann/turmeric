@@ -3886,7 +3886,10 @@ static Form *try_read_scheme_hash(Reader *r) {
     if (c2 == '(') {
         advance(r); /* '#' */
         Form *v = read_seq(r, '(', ')', F_VEC, "unterminated vector (missing ')')");
-        if (v) v->span = span_from_to(r, start_line, start_col, start_off, r->pos);
+        if (v) {
+            v->span = span_from_to(r, start_line, start_col, start_off, r->pos);
+            v->fx_prov = PROV_SCHEME_VECTOR;   /* R7: a datum, not a binding vector */
+        }
         return v;
     }
 
@@ -4172,11 +4175,11 @@ int reader_macros_load_file(Arena *arena, SymbolTable *st,
     sf->path        = arena_strdup(arena, abs_path, strlen(abs_path));
     sf->src         = buf;
     sf->len         = (uint32_t)got;
-    /* Use a near-max file_id so we don't overwrite an existing slot.
-     * MAX_FILES (in diag.c) is currently 64; pick the last slot. This is
-     * best-effort — collisions across multiple preloads in the same
-     * compile only affect diagnostic snippet rendering, not correctness. */
-    sf->file_id     = 63;
+    /* Use a near-max file_id so we don't overwrite an existing slot: the
+     * registry's last one (DIAG_MAX_FILES in diag.h). This is best-effort --
+     * collisions across multiple preloads in the same compile only affect
+     * diagnostic snippet rendering, not correctness. */
+    sf->file_id     = DIAG_MAX_FILES - 1;
     sf->reader_type = READER_TURMERIC;
     diag_register_file(sf);
 

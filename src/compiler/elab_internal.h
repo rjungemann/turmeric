@@ -1329,6 +1329,8 @@ struct CtFn {
 Type type_from_kind(TypeKind k);
 TypeKind typekind_from_symbol(const char *name);
 uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out_arg_kinds);
+bool fwd_decl_scan_variadic(const Form *params_f, TypeKind *rest_kind);
+void fwd_decl_apply_variadic(Elab *e, Arena *arena, Type *fn_type, const Form *params_f);
 bool typekind_is_numeric(TypeKind k);
 int type_size_bytes(TypeKind kind);
 bool typekind_is_concrete_for_disjoint(TypeKind k);

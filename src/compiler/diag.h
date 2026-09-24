@@ -652,7 +652,16 @@ void diag_register_file(const SourceFile *file);
 
 /* Return the filesystem path registered for file_id, or NULL. */
 const char *diag_file_path(uint16_t file_id);
+/* The source-file registry's capacity: file ids run [0, DIAG_MAX_FILES).
+ * Raised from a hard-coded 64 at r7rs-lang-plan R7, when import/load ids
+ * stopped reusing the compiled driver's auto-loaded band (~40 files) and a
+ * procedural macro's compile-time evaluation ran out of ids. */
+#define DIAG_MAX_FILES 512
 const SourceFile *diag_source_file(uint16_t file_id);
+/* r7rs-lang-plan R7: the compiled driver records where its auto-loaded stdlib
+ * file ids end, so import/load ids start past them instead of overwriting one. */
+void     diag_note_autoload_file_ids(uint16_t end);
+uint16_t diag_autoload_file_ids_end(void);
 
 /* Translate a span into the coordinates of the file the user is editing.
  *

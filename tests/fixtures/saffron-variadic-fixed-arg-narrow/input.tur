@@ -1,0 +1,17 @@
+#lang saffron
+; r7rs-lang-plan R7: an `any` argument into a CONCRETE fixed parameter of a
+; variadic call takes the seam's checked cast, as the fixed-arity path does.
+; The variadic path only widened the other way, so `(f s)` with `s : any`
+; handed a tagged box to a `const char *` parameter (cc rejected it), and
+; under --interpret the value arrived unconverted.  A typed variadic used as
+; a VALUE gets an all-`any` variadic adaptor that forwards its rest list.
+(defn f [s : cstr n : int & xs : any] : cstr (if (> n 0) s "none"))
+(defn g [s n] (f s n 7.1 "extra"))
+(defn count-rest [n : int & xs : any] : int (+ n (len (:: xs (Cons any)))))
+(defn len [c : (Cons any)] : int (if (tnil? c) 0 (+ 1 (len (.tail c)))))
+(defn via [h] : any (h 10 'a 'b 'c))
+(defn main [] : int
+  (println (g "abcd" 1))
+  (println (g "abcd" 0))
+  (println (via count-rest))
+  0)

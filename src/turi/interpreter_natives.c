@@ -33,6 +33,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "../runtime/tur_string.h"
 #include "../runtime/trail.h"   /* SX1: the real trail, shimmed for --interpret */
 #if defined(_WIN32)
@@ -2586,6 +2587,68 @@ static TuriValue native_r7rs_write_cstr_to(TuriEnv *env, TuriValue *a, uint32_t 
     if (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) fputs(a[0].as_cstr, err ? stderr : stdout);
     return turi_nil();
 }
+/* r7rs-lang-plan R7: twins of the on-demand libraries' inline C --
+ * stdlib/r7rs/time.tur, process-context.tur, file.tur.  Keep them equal. */
+static TuriValue native_r7rs_current_second(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return turi_float((double)ts.tv_sec + (double)ts.tv_nsec / 1e9);
+}
+static TuriValue native_r7rs_current_jiffy(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return turi_int((int64_t)ts.tv_sec * 1000000 + (int64_t)(ts.tv_nsec / 1000));
+}
+static TuriValue native_r7rs_args_head(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_cstr("");
+    return turi_cstr((const char *)(intptr_t)((int64_t *)(intptr_t)a[0].as_int)[0]);
+}
+static TuriValue native_r7rs_args_tail(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(((int64_t *)(intptr_t)a[0].as_int)[1]);
+}
+static TuriValue native_r7rs_getenv_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool(getenv(r7rs_arg_cstr(a, n, 0)) != NULL);
+}
+static TuriValue native_r7rs_getenv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *v = getenv(r7rs_arg_cstr(a, n, 0));
+    return turi_cstr(v ? v : "");
+}
+extern char **environ;
+static TuriValue native_r7rs_environ_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    int64_t k = 0;
+    while (environ[k]) k++;
+    return turi_int(k);
+}
+static TuriValue native_r7rs_environ_name(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *e = environ[r7rs_arg_int(a, n, 0)], *eq = strchr(e, '=');
+    size_t len = eq ? (size_t)(eq - e) : strlen(e);
+    char *r = (char *)malloc(len + 1);
+    memcpy(r, e, len); r[len] = 0;
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_environ_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *eq = strchr(environ[r7rs_arg_int(a, n, 0)], '=');
+    return turi_cstr(eq ? eq + 1 : "");
+}
+static TuriValue native_r7rs_file_exists(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    struct stat st;
+    return turi_bool(stat(r7rs_arg_cstr(a, n, 0), &st) == 0);
+}
+static TuriValue native_r7rs_unlink(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool(unlink(r7rs_arg_cstr(a, n, 0)) == 0);
+}
 static TuriValue native_r7rs_exit(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     fflush(stdout);
@@ -3433,12 +3496,23 @@ void wk_register_stdlib_natives(TuriEnv *env) {
      * the prelude now defines in Turmeric shadowed the prelude's definition). */
     turi_env_register_native(env, "r7rs-write-cstr-to__", native_r7rs_write_cstr_to, NULL);
     turi_env_register_native(env, "r7rs-exit__",       native_r7rs_exit,        NULL);
+    turi_env_register_native(env, "r7rs-current-second",   native_r7rs_current_second, NULL);
+    turi_env_register_native(env, "r7rs-current-jiffy",    native_r7rs_current_jiffy,  NULL);
+    turi_env_register_native(env, "r7rs-args-head__",      native_r7rs_args_head,      NULL);
+    turi_env_register_native(env, "r7rs-args-tail__",      native_r7rs_args_tail,      NULL);
+    turi_env_register_native(env, "r7rs-getenv-set?__",    native_r7rs_getenv_set,     NULL);
+    turi_env_register_native(env, "r7rs-getenv__",         native_r7rs_getenv,         NULL);
+    turi_env_register_native(env, "r7rs-environ-count__",  native_r7rs_environ_count,  NULL);
+    turi_env_register_native(env, "r7rs-environ-name__",   native_r7rs_environ_name,   NULL);
+    turi_env_register_native(env, "r7rs-environ-value__",  native_r7rs_environ_value,  NULL);
+    turi_env_register_native(env, "r7rs-file-exists?",     native_r7rs_file_exists,    NULL);
+    turi_env_register_native(env, "r7rs-unlink__",         native_r7rs_unlink,         NULL);
     turi_env_register_native(env, "r7rs-same-ref__",       native_r7rs_same_ref,        NULL);
     turi_env_register_native(env, "r7rs-string-length",    native_r7rs_string_length,   NULL);
     turi_env_register_native(env, "r7rs-string-ref-code__", native_r7rs_string_ref_code, NULL);
     turi_env_register_native(env, "r7rs-string-append2__", native_r7rs_string_append2,  NULL);
     turi_env_register_native(env, "r7rs-substring",        native_r7rs_substring,       NULL);
-    turi_env_register_native(env, "r7rs-string<?",         native_r7rs_string_lt,       NULL);
+    turi_env_register_native(env, "r7rs-string<2__",       native_r7rs_string_lt,       NULL);
     turi_env_register_native(env, "r7rs-string-of-code__", native_r7rs_string_of_code,  NULL);
     turi_env_register_native(env, "r7rs-int->string__",    native_r7rs_int_to_string,   NULL);
     turi_env_register_native(env, "r7rs-float->string__",  native_r7rs_float_to_string, NULL);
@@ -4708,8 +4782,8 @@ static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *
      * diag_files_restore deliberately skips id 0, so re-register the saved
      * entries directly. */
     bool saved_had = diag_had_error();
-    const SourceFile *saved_files[64];
-    size_t n_saved = diag_files_save(saved_files, 64);
+    const SourceFile *saved_files[DIAG_MAX_FILES];
+    size_t n_saved = diag_files_save(saved_files, DIAG_MAX_FILES);
     diag_reset();
     SourceFile sfile = {0};
     sfile.path        = "<read-string>";

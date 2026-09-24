@@ -13766,7 +13766,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * interpreter retains its eval arenas for the life of the env, so the saved
      * SourceFile pointers stay valid.
      * See docs/archive/incremental-elab-loses-span-file-provenance.md. */
-    const SourceFile *saved_files[64];
+    const SourceFile *saved_files[DIAG_MAX_FILES];
     size_t n_saved = diag_files_save(saved_files,
                                      sizeof(saved_files) / sizeof(saved_files[0]));
     diag_reset();

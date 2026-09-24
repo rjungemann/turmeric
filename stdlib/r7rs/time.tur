@@ -1,0 +1,31 @@
+#lang r7rs
+;;; r7rs/time -- (scheme time): the wall clock and a monotonic jiffy counter.
+;;;
+;;; An on-demand R7RS library: `(import (scheme time))` in a `#lang r7rs`
+;;; file splices this file in (scheme_lower.c SCHEME_LIBS), and a program
+;;; that does not import it carries none of it.  Written, like the prelude,
+;;; in Turmeric shapes; the primitives are inline C with interpreter twins in
+;;; src/turi/interpreter_natives.c, because the typed stdlib's `time` module
+;;; has second-resolution wall time only and no monotonic counter.
+;;;
+;;; Since: r7rs-lang-plan R7
+;; (scheme time)
+
+;;; r7rs-current-second -- seconds since the POSIX epoch, inexact, with the
+;;; clock's sub-second part.  R7RS asks for TAI; POSIX time is what every
+;;; implementation on this platform returns.
+(defn r7rs-current-second [] : float
+  ```c
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+  ```)
+;;; r7rs-current-jiffy -- a monotonic count of microseconds, exact.
+(defn r7rs-current-jiffy [] : int
+  ```c
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (int64_t)ts.tv_sec * 1000000 + (int64_t)(ts.tv_nsec / 1000);
+  ```)
+;;; r7rs-jiffies-per-second -- the jiffy is a microsecond.
+(defn r7rs-jiffies-per-second [] : int 1000000)

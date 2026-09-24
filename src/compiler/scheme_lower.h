@@ -70,4 +70,11 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
  * caller can make before paying for the pass. */
 bool scheme_lower_needed(Form *const *forms, uint32_t n);
 
+/* r7rs-lang-plan R7: the stdlib/r7rs/<lib>.tur files a top-level form of a
+ * Scheme file imports (the on-demand libraries: time, process-context,
+ * file).  Called by the load expander before the lowering, which splices
+ * each file in as though the program had `(load ...)`ed it.  Returns the
+ * count written to `out` (interned string literals; do not free). */
+uint32_t scheme_import_library_files(const Form *f, const char **out, uint32_t cap);
+
 #endif /* TUR_SCHEME_LOWER_H */

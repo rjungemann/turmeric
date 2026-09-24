@@ -986,6 +986,22 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
             lx->boundary_out = lx->out_n;
         Form *f = forms[i];
 
+        /* r7rs-lang-plan R7: a Scheme `(import (scheme time))` (or
+         * process-context / file) splices in that library's file first, as a
+         * `(load ...)` would -- once per compile, through the visited set. */
+        {
+            const char *libs[8];
+            uint32_t nl = scheme_import_library_files(f, libs, 8);
+            for (uint32_t li = 0; li < nl; li++) {
+                Form *ld_items[2];
+                ld_items[0] = form_sym(arena, f->span, e->sym_load);
+                ld_items[1] = form_str(arena, f->span, libs[li], (uint32_t)strlen(libs[li]));
+                Form *ld = form_list(arena, f->span, ld_items, 2);
+                Form *const one[1] = { ld };
+                load_expand_forms(lx, e, arena, st, one, 1);
+            }
+        }
+
         /* Option A: descend into a (defmodule ...) body so a `(load "path")`
          * placed inside the module body splices the loaded file's forms into
          * the module's scope, exactly as a top-level load splices into the
@@ -1680,6 +1696,14 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                                         return_kind = TY_PTR_VOID;
                                     } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
                                         return_kind = TY_PTR_VOID;
+                                    } else if (kw->len == 3 && memcmp(kw->name, "any", 3) == 0) {
+                                        /* r7rs-lang-plan R7: an annotated `: any`
+                                         * result forward-declared as the TY_INT
+                                         * default, so a caller elaborated before
+                                         * the callee widened the tagged result as
+                                         * an int (cc: "aggregate value used where
+                                         * an integer was expected"). */
+                                        return_kind = TY_ANY;
                                     } else {
                                         /* bare-adt-forward-decl-inference: a non-parametric
                                          * user type name -- `: T` for a `defdata` /
@@ -1824,6 +1848,16 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                                 ep, arena, f, name_idx, params_idx_local,
                                 param_arity, arg_kinds);
                             Type fn_type = type_fn(arg_kinds, param_arity, return_kind);
+                            /* r7rs-lang-plan R7: a variadic's forward decl
+                             * carries the rest shape, so a caller elaborated
+                             * before the definition packs its surplus
+                             * arguments (it used to see a fixed arity that
+                             * counted the `&` as a parameter). */
+                            if (fwd_arg_full) fn_type.as.fn.arg_full_types = fwd_arg_full;
+                            if (params_idx_local < (uint32_t)f->as.list.len)
+                                fwd_decl_apply_variadic(ep, arena, &fn_type,
+                                                        f->as.list.items[params_idx_local]);
+                            fwd_arg_full = fn_type.as.fn.arg_full_types;
                             /* defdata-parametric-forward-decl-inference: carry the
                              * full compound result type on the forward decl. */
                             if (fwd_result_full) {

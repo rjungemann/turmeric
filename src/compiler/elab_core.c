@@ -102,10 +102,78 @@ TypeKind typekind_from_symbol(const char *name) {
  *    the HRT5 early-update once the callee's body is elaborated.
  *
  * Fills arg_kinds[0..arity) (capacity MAX_FN_ARITY) and returns the arity. */
+/* r7rs-lang-plan R7: does this parameter vector declare a rest parameter
+ * `& name [: T]` whose element type a bare name settles -- `any` or a scalar?
+ * Then *rest_kind is that kind and the forward decl can carry the variadic
+ * shape; a compound rest type (a struct, a type application) returns false
+ * and the pre-pass keeps its old treatment, since resolving it needs the
+ * elaborator. */
+bool fwd_decl_scan_variadic(const Form *params_f, TypeKind *rest_kind) {
+    if (!params_f || params_f->tag != F_VEC) return false;
+    uint32_t n = params_f->as.list.len;
+    for (uint32_t i = 0; i < n; i++) {
+        const Form *p = params_f->as.list.items[i];
+        if (p->tag != F_SYM || strcmp(p->as.sym->name, "&") != 0) continue;
+        if (i + 1 >= n || params_f->as.list.items[i + 1]->tag != F_SYM) return false;
+        TypeKind k = lang_span_is_dynamic(params_f->span) ? TY_ANY : TY_INT;
+        if (i + 2 < n) {
+            const Form *t = params_f->as.list.items[i + 2];
+            if (t->tag == F_TYPE_ANN && t->as.list.len >= 1) t = t->as.list.items[0];
+            if (t->tag == F_SYM || t->tag == F_KEYWORD) {
+                k = typekind_from_symbol(t->as.sym->name);
+                if (k == TY_UNKNOWN) return false;
+                if (!(k == TY_ANY || typekind_is_numeric(k) || k == TY_BOOL || k == TY_CSTR))
+                    return false;
+            } else {
+                return false;
+            }
+        }
+        *rest_kind = k;
+        return true;
+    }
+    return false;
+}
+
+/* r7rs-lang-plan R7: give a forward-declared fn type the rest shape its
+ * definition will have -- the variadic flag, the rest element kind, and for an
+ * `any` rest the `(Cons any)` chain as the rest slot's type (elab_fns.c builds
+ * the same one), so a call elaborated before the definition packs its surplus
+ * arguments and passes the chain exactly as a later call would. */
+void fwd_decl_apply_variadic(Elab *e, Arena *arena, Type *fn_type, const Form *params_f) {
+    TypeKind rk;
+    if (!fn_type || fn_type->kind != TY_FN || !fwd_decl_scan_variadic(params_f, &rk)) return;
+    fn_type->as.fn.is_variadic = true;
+    fn_type->as.fn.rest_kind = rk;
+    uint32_t n = fn_type->as.fn.arity;
+    if (n == 0 || rk != TY_ANY) {
+        if (n > 0 && fn_type->as.fn.arg_kinds) fn_type->as.fn.arg_kinds[n - 1] = (uint8_t)TY_INT;
+        return;
+    }
+    Type *cons_t = elab_lookup_type_by_name(e, intern_cstr(e->st, "Cons"));
+    if (!(cons_t && cons_t->kind == TY_ADT && cons_t->as.adt_.def &&
+          cons_t->as.adt_.def->n_type_params == 1)) return;
+    Type head = *cons_t;
+    head.hkt_kind = kind_for_arity(1);
+    Type any_t; memset(&any_t, 0, sizeof any_t);
+    any_t.kind = TY_ANY;
+    Type *rt = (Type *)arena_alloc(arena, sizeof(Type));
+    *rt = type_app(arena, head, any_t, params_f->span);
+    if (fn_type->as.fn.arg_kinds) fn_type->as.fn.arg_kinds[n - 1] = (uint8_t)TY_APP;
+    if (!fn_type->as.fn.arg_full_types) {
+        fn_type->as.fn.arg_full_types = (Type **)arena_alloc(arena, n * sizeof(Type *));
+        for (uint32_t i = 0; i < n; i++) fn_type->as.fn.arg_full_types[i] = NULL;
+    }
+    fn_type->as.fn.arg_full_types[n - 1] = rt;
+}
+
 uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out_arg_kinds) {
     *out_arg_kinds = NULL;
     uint32_t arity = 0;
     if (!params_f || params_f->tag != F_VEC) return 0;
+    /* R7: a simple rest parameter's `&` is not a slot (the elaborated fn type
+     * counts the rest parameter itself as the last slot). */
+    TypeKind fwd_rest_kind;
+    bool skip_amp = fwd_decl_scan_variadic(params_f, &fwd_rest_kind);
     /* Scratch is sized to the parameter-vector length -- a safe upper bound on
      * the parameter count -- so the forward-declared arity is not capped
      * (arbitrary-fn-arity: no MAX_FN_ARITY ceiling). */
@@ -125,6 +193,8 @@ uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out
         /* `^`-prefixed substructural / fat / mut markers annotate the next
          * param; they are not slots. */
         if (p->tag == F_SYM && p->as.sym->name && p->as.sym->name[0] == '^')
+            continue;
+        if (skip_amp && p->tag == F_SYM && strcmp(p->as.sym->name, "&") == 0)
             continue;
         if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN) {
             /* Type annotation for the most recent slot. */
@@ -2277,7 +2347,19 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->loaded_modules = NULL;
     e->n_loaded_modules = 0;
     e->cap_loaded_modules = 0;
-    e->next_import_file_id = 10; /* 0-9 reserved for main + stdlib files */
+    /* Import/load file ids start past every file already registered.  The
+     * old fixed 10 assumed "0-9 reserved for main + stdlib files", but the
+     * compiled driver numbers its ~40 auto-loaded stdlib files from 1, so a
+     * `(load ...)` or module import re-registered id 10 over an auto-loaded
+     * file's SourceFile -- diagnostics in that stdlib file then named the
+     * wrong file, and when the loaded file was `#lang r7rs` the stdlib
+     * file's forms were lowered as Scheme (found by r7rs-lang-plan R7).  The
+     * driver records where its band ends; every Elab starts there (so the
+     * compile-time macro evaluator's sessions reuse one range, as they did
+     * at 10). */
+    e->next_import_file_id = 10;
+    if (diag_autoload_file_ids_end() > e->next_import_file_id)
+        e->next_import_file_id = diag_autoload_file_ids_end();
     e->separate_compilation = false;
     e->in_imported_module = false;
     e->macro_expansion_module = NULL;

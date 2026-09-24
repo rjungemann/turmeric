@@ -876,8 +876,16 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
     /* r7rs-lang-plan R6: a boxed VARIADIC fn type is registered with its fixed
      * parameter count, so a dynamic call can pack for it (__tur_dyn_call_var).
      * Idempotent per id; the registry line lives in the fat-box init band. */
-    if (is_fn && r.as.fn.boxed && r.as.fn.is_variadic && r.as.fn.arity >= 1)
-        dyn_register_variadic(ctx, id, (int)r.as.fn.arity - 1);
+    if (is_fn && r.as.fn.boxed && r.as.fn.is_variadic && r.as.fn.arity >= 1) {
+        /* R7: only the all-`any` calling convention can be packed for -- the
+         * pack calls through `tur_tagged_t` parameters and result.  A typed
+         * variadic reaches an `any` through the H8 adaptor, which is itself
+         * all-`any`; one boxed as itself (a typed rest) is refused by its id. */
+        bool va_all_any = r.as.fn.result_kind == TY_ANY && r.as.fn.rest_kind == TY_ANY;
+        for (uint32_t k = 0; k + 1 < r.as.fn.arity && va_all_any; k++)
+            if (r.as.fn.arg_kinds[k] != TY_ANY) va_all_any = false;
+        if (va_all_any) dyn_register_variadic(ctx, id, (int)r.as.fn.arity - 1);
+    }
     for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
         if (strcmp(ctx->any_type_names[i], key) == 0) ANY_ID_RET(id);
         /* Two distinct keys hashing alike would make one type answer as the

@@ -1,0 +1,4 @@
+#lang r7rs
+;; r7rs-lang-plan R7: include is deferred with its reason (an included file
+;; would have to be read as Scheme without its own #lang line).
+(include "helpers.scm")

@@ -1,0 +1,22 @@
+#lang saffron
+; r7rs-lang-plan R7: two forward-declaration gaps, both seen from a caller
+; elaborated BEFORE its callee.
+;  - A result annotated `: any` forward-declared as the TY_INT default, so the
+;    caller widened the callee's tagged result as an int (cc: "aggregate value
+;    used where an integer was expected").  The unannotated dynamic default was
+;    already `any`; the annotation was not.
+;  - A variadic's forward decl counted `&` as a parameter and carried no rest
+;    marker, so an earlier caller did not pack its surplus arguments.  It now
+;    carries the rest shape the definition will have (for an `any` rest, the
+;    `(Cons any)` chain as the last slot).
+(defn user1 [] (later-any 41))
+(defn user2 [] (later-var 1 2 3 4))
+(defn user3 [] (later-var 10))
+(defn later-any [a] : any (+ a 1))
+(defn later-var [a & xs : any] : any (+ a (len (:: xs (Cons any)))))
+(defn len [c : (Cons any)] : int (if (tnil? c) 0 (+ 1 (len (.tail c)))))
+(defn main [] : int
+  (println (user1))
+  (println (user2))
+  (println (user3))
+  0)

@@ -1,0 +1,4 @@
+#lang r7rs
+;; r7rs-lang-plan R7: every (scheme ...) library is known by name.
+(import (scheme base) (scheme bogus))
+(display 1)

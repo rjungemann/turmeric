@@ -1,0 +1,5 @@
+#lang r7rs
+;; r7rs-lang-plan R7 / Section 8 question 3: (scheme eval) is refused at the
+;; import, with the reason, rather than failing later on an unbound `eval`.
+(import (scheme base) (scheme eval))
+(display (eval '(+ 1 2) (environment '(scheme base))))

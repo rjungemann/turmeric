@@ -3995,7 +3995,15 @@ char *atom_float32(double f) {
 
 char *atom_float(double f) {
     char buf[64];
+    /* The shortest of %.15g / %.16g / %.17g that reads back to the same
+     * double.  A flat %.15g dropped the 16th and 17th digits, so a literal
+     * like 3.141592653589793 compiled as 3.14159265358979 -- a different
+     * double, where the interpreter (which keeps the parsed value) had the
+     * right one.  Found by r7rs-lang-plan R7; 15 digits suffice for the
+     * common literal, so most emitted C is unchanged. */
     snprintf(buf, sizeof buf, "%.15g", f);
+    if (f == f && strtod(buf, NULL) != f) snprintf(buf, sizeof buf, "%.16g", f);
+    if (f == f && strtod(buf, NULL) != f) snprintf(buf, sizeof buf, "%.17g", f);
     /* Ensure it's a double literal by appending .0 if needed */
     char *p = strchr(buf, '.');
     char *e = strchr(buf, 'e');

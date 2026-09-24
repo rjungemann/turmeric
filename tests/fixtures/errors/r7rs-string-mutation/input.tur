@@ -1,0 +1,5 @@
+#lang r7rs
+;; r7rs-lang-plan R3/R7: strings are immutable cstr values, so string-set!,
+;; string-fill! and string-copy! are a named refusal, not an unbound name.
+(define s "abc")
+(string-set! s 0 #\z)

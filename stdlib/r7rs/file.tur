@@ -1,0 +1,28 @@
+#lang r7rs
+;;; r7rs/file -- (scheme file): the two procedures that are not ports.
+;;;
+;;; An on-demand R7RS library (see stdlib/r7rs/time.tur).  The port half --
+;;; open-input-file, call-with-output-file, with-input-from-file and the
+;;; rest -- arrives with ports (r7rs-lang-plan R8).  The primitives are inline
+;;; C with interpreter twins, for the reason process-context.tur gives.
+;;;
+;;; Since: r7rs-lang-plan R7
+;; (scheme file)
+
+;;; r7rs-file-exists? -- #t when the path names anything that exists.
+(defn r7rs-file-exists? [path : cstr] : bool
+  ```c
+  #include <sys/stat.h>
+  struct stat st;
+  return stat(path, &st) == 0;
+  ```)
+(defn r7rs-unlink__ [path : cstr] : bool
+  ```c
+  return unlink(path) == 0;
+  ```)
+;;; r7rs-delete-file -- remove the file; a failure raises an error object
+;;; that `file-error?` recognizes.
+(defn r7rs-delete-file [path : cstr] : any
+  (if (r7rs-unlink__ path)
+    nil
+    (r7rs-raise (R7rsError "delete-file: cannot delete the file" (r7rs-list (:: path any)) 1))))

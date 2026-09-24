@@ -946,10 +946,14 @@ static uint32_t prepend_stdlib_forms(Arena *arena, SymbolTable *st,
                                      Form ***forms_in_out,
                                      uint32_t *nforms_in_out,
                                      uint8_t *file_id_in_out) {
-    return tur_stdlib_prepend_forms(arena, st, resolve_stdlib_root(),
-                                    entry_path, g_no_auto_stdlib,
-                                    forms_in_out, nforms_in_out,
-                                    file_id_in_out);
+    uint32_t n = tur_stdlib_prepend_forms(arena, st, resolve_stdlib_root(),
+                                          entry_path, g_no_auto_stdlib,
+                                          forms_in_out, nforms_in_out,
+                                          file_id_in_out);
+    /* The auto-loaded files took ids [1, *file_id_in_out); an import or a
+     * `(load ...)` must be numbered past them (elab_core.c). */
+    if (file_id_in_out) diag_note_autoload_file_ids(*file_id_in_out);
+    return n;
 }
 
 static int compile_to_c(const char *path, Buf *out_c,

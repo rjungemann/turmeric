@@ -121,6 +121,83 @@ static const char *const RENAMES[][2] = {
     { "bytevector-length",  "r7rs-bytevector-length" },
     { "eof-object",       "r7rs-eof-object" },
     { "eof-object?",      "r7rs-eof-object?" },
+    /* R7: the rest of (scheme base) that is not a port, and the pure
+     * libraries -- (scheme char), (scheme cxr), (scheme complex) -- which
+     * live in the prelude like base does. */
+    { "boolean=?", "r7rs-boolean=?" },
+    { "symbol=?", "r7rs-symbol=?" },
+    { "char<=?", "r7rs-char<=?" },
+    { "char>=?", "r7rs-char>=?" },
+    { "list-set!", "r7rs-list-set!" },
+    { "make-list", "r7rs-make-list" },
+    { "make-string", "r7rs-make-string" },
+    { "string", "r7rs-string" },
+    { "string->utf8", "r7rs-string->utf8" },
+    { "utf8->string", "r7rs-utf8->string" },
+    { "string->vector", "r7rs-string->vector" },
+    { "vector->string", "r7rs-vector->string" },
+    { "string-for-each", "r7rs-string-for-each" },
+    { "string-map", "r7rs-string-map" },
+    { "string<=?", "r7rs-string<=?" },
+    { "string>=?", "r7rs-string>=?" },
+    { "string>?", "r7rs-string>?" },
+    { "vector-append", "r7rs-vector-append" },
+    { "vector-copy", "r7rs-vector-copy" },
+    { "vector-copy!", "r7rs-vector-copy!" },
+    { "vector-for-each", "r7rs-vector-for-each" },
+    { "vector-map", "r7rs-vector-map" },
+    { "bytevector-append", "r7rs-bytevector-append" },
+    { "bytevector-copy", "r7rs-bytevector-copy" },
+    { "bytevector-copy!", "r7rs-bytevector-copy!" },
+    { "features", "r7rs-features" },
+    { "rationalize", "r7rs-rationalize" },
+    { "write-simple", "r7rs-write-simple" },
+    { "char-ci<=?", "r7rs-char-ci<=?" },
+    { "char-ci<?", "r7rs-char-ci<?" },
+    { "char-ci=?", "r7rs-char-ci=?" },
+    { "char-ci>=?", "r7rs-char-ci>=?" },
+    { "char-ci>?", "r7rs-char-ci>?" },
+    { "char-foldcase", "r7rs-char-foldcase" },
+    { "char-lower-case?", "r7rs-char-lower-case?" },
+    { "char-upper-case?", "r7rs-char-upper-case?" },
+    { "digit-value", "r7rs-digit-value" },
+    { "string-ci<=?", "r7rs-string-ci<=?" },
+    { "string-ci<?", "r7rs-string-ci<?" },
+    { "string-ci=?", "r7rs-string-ci=?" },
+    { "string-ci>=?", "r7rs-string-ci>=?" },
+    { "string-ci>?", "r7rs-string-ci>?" },
+    { "string-downcase", "r7rs-string-downcase" },
+    { "string-foldcase", "r7rs-string-foldcase" },
+    { "string-upcase", "r7rs-string-upcase" },
+    { "angle", "r7rs-angle" },
+    { "imag-part", "r7rs-imag-part" },
+    { "magnitude", "r7rs-magnitude" },
+    { "make-polar", "r7rs-make-polar" },
+    { "make-rectangular", "r7rs-make-rectangular" },
+    { "real-part", "r7rs-real-part" },
+    { "caaar", "r7rs-caaar" },
+    { "caadr", "r7rs-caadr" },
+    { "cadar", "r7rs-cadar" },
+    { "cdaar", "r7rs-cdaar" },
+    { "cdadr", "r7rs-cdadr" },
+    { "cddar", "r7rs-cddar" },
+    { "cdddr", "r7rs-cdddr" },
+    { "caaaar", "r7rs-caaaar" },
+    { "caaadr", "r7rs-caaadr" },
+    { "caadar", "r7rs-caadar" },
+    { "caaddr", "r7rs-caaddr" },
+    { "cadaar", "r7rs-cadaar" },
+    { "cadadr", "r7rs-cadadr" },
+    { "caddar", "r7rs-caddar" },
+    { "cadddr", "r7rs-cadddr" },
+    { "cdaaar", "r7rs-cdaaar" },
+    { "cdaadr", "r7rs-cdaadr" },
+    { "cdadar", "r7rs-cdadar" },
+    { "cdaddr", "r7rs-cdaddr" },
+    { "cddaar", "r7rs-cddaar" },
+    { "cddadr", "r7rs-cddadr" },
+    { "cdddar", "r7rs-cdddar" },
+    { "cddddr", "r7rs-cddddr" },
     /* R6: control.  `guard`, `parameterize`, `delay` and `delay-force` are
      * forms (lower_guard / lower_parameterize / lower_delay); these are the
      * procedures. */
@@ -188,6 +265,62 @@ static const char *const RENAMES[][2] = {
 };
 #define N_RENAMES (sizeof(RENAMES) / sizeof(RENAMES[0]))
 
+/* R7: the R7RS-small libraries.  A RESIDENT library's procedures live in the
+ * prelude, so importing it is a scoping statement only.  An ON-DEMAND
+ * library is its own file under stdlib/r7rs/, spliced in by the load
+ * expander when a Scheme file imports it (scheme_import_library_files), so a
+ * program that does not import (scheme time) carries none of it; its names
+ * rename only once it is imported.  A DEFERRED library is refused at the
+ * import with the reason. */
+enum { LIB_RESIDENT, LIB_ONDEMAND, LIB_DEFERRED };
+static const struct { const char *name; int kind; const char *what; } SCHEME_LIBS[] = {
+    { "base",            LIB_RESIDENT, NULL },
+    { "case-lambda",     LIB_RESIDENT, NULL },
+    { "char",            LIB_RESIDENT, NULL },
+    { "complex",         LIB_RESIDENT, NULL },
+    { "cxr",             LIB_RESIDENT, NULL },
+    { "inexact",         LIB_RESIDENT, NULL },
+    { "lazy",            LIB_RESIDENT, NULL },
+    { "write",           LIB_RESIDENT, NULL },
+    { "time",            LIB_ONDEMAND, "stdlib/r7rs/time.tur" },
+    { "process-context", LIB_ONDEMAND, "stdlib/r7rs/process-context.tur" },
+    { "file",            LIB_ONDEMAND, "stdlib/r7rs/file.tur" },
+    { "eval",            LIB_DEFERRED, "needs an evaluator at run time (r7rs-lang-plan Section 8, question 3)" },
+    { "repl",            LIB_DEFERRED, "needs an evaluator at run time (r7rs-lang-plan Section 8, question 3)" },
+    { "load",            LIB_DEFERRED, "needs an evaluator at run time (r7rs-lang-plan Section 8, question 3)" },
+    { "read",            LIB_DEFERRED, "arrives with ports (r7rs-lang-plan R8)" },
+};
+#define N_SCHEME_LIBS (sizeof(SCHEME_LIBS) / sizeof(SCHEME_LIBS[0]))
+/* The procedures of the on-demand libraries: Scheme name, prelude-style
+ * target, library. */
+static const char *const ONDEMAND[][3] = {
+    { "current-second",            "r7rs-current-second",            "time" },
+    { "current-jiffy",             "r7rs-current-jiffy",             "time" },
+    { "jiffies-per-second",        "r7rs-jiffies-per-second",        "time" },
+    { "command-line",              "r7rs-command-line",              "process-context" },
+    { "exit",                      "r7rs-exit",                      "process-context" },
+    { "emergency-exit",            "r7rs-emergency-exit",            "process-context" },
+    { "get-environment-variable",  "r7rs-get-environment-variable",  "process-context" },
+    { "get-environment-variables", "r7rs-get-environment-variables", "process-context" },
+    { "file-exists?",              "r7rs-file-exists?",              "file" },
+    { "delete-file",               "r7rs-delete-file",               "file" },
+};
+#define N_ONDEMAND (sizeof(ONDEMAND) / sizeof(ONDEMAND[0]))
+
+/* The SCHEME_LIBS row of a `(scheme <x>)` library name, or -1. */
+static int scheme_lib_index(const Form *set) {
+    if (!set || set->tag != F_LIST || set->as.list.len != 2) return -1;
+    const Form *h = set->as.list.items[0], *t = set->as.list.items[1];
+    if (h->tag != F_SYM || t->tag != F_SYM || strcmp(h->as.sym->name, "scheme") != 0) return -1;
+    for (size_t i = 0; i < N_SCHEME_LIBS; i++)
+        if (strcmp(t->as.sym->name, SCHEME_LIBS[i].name) == 0) return (int)i;
+    return -1;
+}
+static bool is_scheme_libname(const Form *set) {
+    return set && set->tag == F_LIST && set->as.list.len >= 1 && set->as.list.items[0]->tag == F_SYM &&
+           strcmp(set->as.list.items[0]->as.sym->name, "scheme") == 0;
+}
+
 /* A growable item buffer for building lists. */
 typedef struct FB { Form **items; uint32_t n, cap; } FB;
 
@@ -250,6 +383,10 @@ typedef struct SL {
                    *s_quote, *s_er_macro_transformer;
     /* R6: the control forms. */
     const Symbol   *s_guard, *s_parameterize, *s_delay, *s_delay_force;
+    /* R7: which SCHEME_LIBS rows this unit has imported. */
+    bool            lib_imported[N_SCHEME_LIBS];
+    const Symbol   *od_from[N_ONDEMAND], *od_to[N_ONDEMAND];
+    int             od_lib[N_ONDEMAND];
     /* R5: the nine numeric operators -- the Scheme spelling, the binary
      * prelude helper a call folds onto, and the variadic prelude procedure a
      * bare operator in value position names. */
@@ -337,6 +474,13 @@ static void sl_init(SL *sl, Arena *a, SymbolTable *st) {
     sl->t_heap = I(sl, "heap");              sl->t_is = I(sl, "is?");
     sl->t_nil_sym = I(sl, "nil");
 
+    for (size_t i = 0; i < N_ONDEMAND; i++) {
+        sl->od_from[i] = I(sl, ONDEMAND[i][0]);
+        sl->od_to[i]   = I(sl, ONDEMAND[i][1]);
+        sl->od_lib[i]  = -1;
+        for (size_t j = 0; j < N_SCHEME_LIBS; j++)
+            if (strcmp(SCHEME_LIBS[j].name, ONDEMAND[i][2]) == 0) sl->od_lib[i] = (int)j;
+    }
     for (size_t i = 0; i < N_RENAMES; i++) {
         sl->rn_from[i] = I(sl, RENAMES[i][0]);
         sl->rn_to[i]   = I(sl, RENAMES[i][1]);
@@ -557,6 +701,12 @@ static const Symbol *rn(SL *sl, const Symbol *s) {
     }
     for (size_t i = 0; i < N_RENAMES; i++)
         if (sl->rn_from[i] == s) return sl->rn_to[i];
+    /* R7: an on-demand library's name means its procedure only in a unit
+     * that imported the library (the library file is not loaded otherwise,
+     * and the name stays free for the program's own use). */
+    for (size_t i = 0; i < N_ONDEMAND; i++)
+        if (sl->od_from[i] == s && sl->od_lib[i] >= 0 && sl->lib_imported[sl->od_lib[i]])
+            return sl->od_to[i];
     return s;
 }
 
@@ -878,7 +1028,11 @@ static Form *sr_inst(SL *sl, const SMacro *m, Form *t, MEnv *env, Span sp, FB *i
                     fb_push(&out, tv);
                 }
             }
-            if (t->tag == F_VEC) return fb_vec(sl, &out, sp);
+            if (t->tag == F_VEC) {
+                Form *vf = fb_vec(sl, &out, sp);
+                vf->fx_prov = t->fx_prov;   /* R7: a template's `#(...)` stays a datum */
+                return vf;
+            }
             if (out.n == 0) { free(out.items); return Nil(sl, sp); }
             return fb_list(sl, &out, sp);
         }
@@ -1139,10 +1293,16 @@ static int op_index(SL *sl, const Symbol *s) {
 static bool prelude_span(Span sp) {
     const SourceFile *f = diag_source_file(sp.file_id);
     if (!f || !f->path) return false;
+    /* R7: a synthetic source (`<eval>`, the interpreter's stub preamble) is
+     * Turmeric whatever the session's language, never Scheme to rewrite. */
+    if (f->path[0] == '<') return true;
     size_t n = strlen(f->path);
     static const char SUFFIX[] = "r7rs/prelude.tur";
     size_t m = sizeof SUFFIX - 1;
-    return n >= m && memcmp(f->path + n - m, SUFFIX, m) == 0;
+    if (n >= m && memcmp(f->path + n - m, SUFFIX, m) == 0) return true;
+    /* R7: the on-demand library files are written in the prelude's own
+     * Turmeric shapes and against the typed stdlib's real names. */
+    return strstr(f->path, "stdlib/r7rs/") != NULL;
 }
 static Form *lower_operator(SL *sl, Form *f, int op) {
     Span sp = f->span;
@@ -2238,7 +2398,22 @@ static Form *lower(SL *sl, Form *f) {
         }
         case F_QUOTE:      return lower_datum(sl, f->as.list.items[0]);
         case F_QUASIQUOTE: return lower_qq(sl, f->as.list.items[0], 1);
-        case F_VEC: case F_MAP: case F_SET: case F_MAP_LITERAL: case F_SET_LITERAL:
+        case F_VEC:
+            /* R7: a vector is self-evaluating (R7RS 4.1.2), and it is built
+             * the way a quoted one is -- through `vector`, so it is always a
+             * `(Vec any)`.  Left as Turmeric's `[...]`, an empty `#()` did
+             * not elaborate as `(Vec any)` and failed the cast at the first
+             * procedure that takes a vector through `any`.  Only a vector the
+             * reader read from `#(` (PROV_SCHEME_VECTOR): a Turmeric-shaped
+             * `(defn f [x] ...)` in a Scheme file keeps its binding vector. */
+            if (!prelude_span(f->span) && f->fx_prov == PROV_SCHEME_VECTOR) {
+                FB b = {0};
+                fb_push(&b, Sym(sl, f->span, sl->p_vector));
+                for (uint32_t i = 0; i < f->as.list.len; i++) fb_push(&b, lower(sl, f->as.list.items[i]));
+                return fb_list(sl, &b, f->span);
+            }
+            return lower_children(sl, f);
+        case F_MAP: case F_SET: case F_MAP_LITERAL: case F_SET_LITERAL:
         case F_UNQUOTE: case F_UNQUOTE_SPLICING:
             return lower_children(sl, f);
         case F_LIST: break;
@@ -2293,6 +2468,21 @@ static Form *lower(SL *sl, Form *f) {
         if (h == sl->s_case_lambda) return lower_case_lambda(sl, f);
         if (h == sl->s_let_values)  return lower_let_values(sl, f, false);
         if (h == sl->s_letstar_values) return lower_let_values(sl, f, true);
+        if (!prelude_span(f->span)) {
+            /* R7: named refusals rather than an unbound-name error. */
+            const char *hn = h->name;
+            if (strcmp(hn, "string-set!") == 0 || strcmp(hn, "string-fill!") == 0 ||
+                strcmp(hn, "string-copy!") == 0) {
+                err(f, "%s is not supported: #lang r7rs strings are immutable (a Turmeric cstr); "
+                       "build a new string with string-append, substring or list->string", hn);
+                return Nil(sl, f->span);
+            }
+            if (h == sl->s_include || strcmp(hn, "include-ci") == 0) {
+                err(f, "%s is not supported yet: an included file would have to be read as Scheme "
+                       "without its own #lang line; put the definitions in a define-library and import it", hn);
+                return Nil(sl, f->span);
+            }
+        }
         if (h == sl->s_guard)        return lower_guard(sl, f);
         if (h == sl->s_parameterize) return lower_parameterize(sl, f);
         if (h == sl->s_delay)        return lower_delay(sl, f, false);
@@ -2518,7 +2708,26 @@ static const Symbol *library_module(SL *sl, Form *set, bool *ok) {
         return NULL;
     }
     const char *head = set->as.list.items[0]->as.sym->name;
-    if (strcmp(head, "scheme") == 0) return NULL;
+    if (strcmp(head, "scheme") == 0) {
+        /* R7: every R7RS-small library is known by name.  A resident one is
+         * the prelude; an on-demand one is spliced in by the load expander;
+         * a deferred one says why it is not here yet. */
+        int li = scheme_lib_index(set);
+        if (li < 0) {
+            err(set, "no such library in R7RS-small: the (scheme ...) libraries are base, case-lambda, "
+                     "char, complex, cxr, eval, file, inexact, lazy, load, process-context, read, "
+                     "repl, time and write");
+            *ok = false;
+            return NULL;
+        }
+        if (SCHEME_LIBS[li].kind == LIB_DEFERRED) {
+            err(set, "(scheme %s) is not supported yet: it %s", SCHEME_LIBS[li].name, SCHEME_LIBS[li].what);
+            *ok = false;
+            return NULL;
+        }
+        sl->lib_imported[li] = true;
+        return NULL;
+    }
     if (strcmp(head, "turmeric") == 0) {
         if (set->as.list.len != 2 || set->as.list.items[1]->tag != F_SYM) {
             err(set, "(turmeric <module>) takes one module path, e.g. (turmeric stdlib/vec) or (turmeric json/encode)");
@@ -2644,8 +2853,11 @@ static void lower_import_set(SL *sl, Form *set) {
 static bool feature_holds(SL *sl, Form *req) {
     if (req->tag == F_SYM) {
         const char *n = req->as.sym->name;
-        return strcmp(n, "r7rs") == 0 || strcmp(n, "turmeric") == 0 || strcmp(n, "else") == 0 ||
-               strcmp(n, "exact-closed") == 0;
+        if (strcmp(n, "else") == 0) return true;
+        /* R7: the same list `(features)` returns (r7rs-features in the
+         * prelude) -- keep the two equal. */
+        return strcmp(n, "r7rs") == 0 || strcmp(n, "exact-closed") == 0 ||
+               strcmp(n, "turmeric") == 0;
     }
     if (req->tag != F_LIST || req->as.list.len == 0 || req->as.list.items[0]->tag != F_SYM) return false;
     const char *h = req->as.list.items[0]->as.sym->name;
@@ -2659,6 +2871,12 @@ static bool feature_holds(SL *sl, Form *req) {
     }
     if (strcmp(h, "not") == 0) return req->as.list.len == 2 && !feature_holds(sl, req->as.list.items[1]);
     if (strcmp(h, "library") == 0 && req->as.list.len == 2) {
+        /* R7: a (scheme ...) requirement asks the library table, quietly -- a
+         * deferred or unknown library is simply absent. */
+        if (is_scheme_libname(req->as.list.items[1])) {
+            int li = scheme_lib_index(req->as.list.items[1]);
+            return li >= 0 && SCHEME_LIBS[li].kind != LIB_DEFERRED;
+        }
         bool ok; const Symbol *m = library_module(sl, req->as.list.items[1], &ok);
         (void)m;
         return ok;   /* (scheme ...) and an auto-loaded stdlib file hold; a module we cannot check is assumed present */
@@ -2864,4 +3082,39 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     free((void *)sl.setters);
     free(sl.macros);
     return res;
+}
+
+/* R7: the on-demand library files a top-level form of a Scheme file needs --
+ * an `(import ...)` of (scheme time) / (scheme process-context) /
+ * (scheme file), directly or under only/prefix/rename/except, or the same
+ * inside a define-library's import declarations.  The load expander splices
+ * each one in (deduplicated by its visited set) before the lowering runs, so
+ * the library's forms are lowered with everything else. */
+static void lib_files_of_set(const Form *set, const char **out, uint32_t cap, uint32_t *n) {
+    while (set && set->tag == F_LIST && set->as.list.len >= 2 && set->as.list.items[0]->tag == F_SYM) {
+        const char *h = set->as.list.items[0]->as.sym->name;
+        if (strcmp(h, "only") && strcmp(h, "prefix") && strcmp(h, "rename") && strcmp(h, "except")) break;
+        set = set->as.list.items[1];
+    }
+    int li = scheme_lib_index(set);
+    if (li < 0 || SCHEME_LIBS[li].kind != LIB_ONDEMAND) return;
+    for (uint32_t i = 0; i < *n; i++) if (out[i] == SCHEME_LIBS[li].what) return;
+    if (*n < cap) out[(*n)++] = SCHEME_LIBS[li].what;
+}
+uint32_t scheme_import_library_files(const Form *f, const char **out, uint32_t cap) {
+    uint32_t n = 0;
+    if (!f || f->tag != F_LIST || f->as.list.len == 0 || f->as.list.items[0]->tag != F_SYM) return 0;
+    if (!is_scheme_file(f)) return 0;
+    const char *h = f->as.list.items[0]->as.sym->name;
+    if (strcmp(h, "import") == 0) {
+        for (uint32_t i = 1; i < f->as.list.len; i++) lib_files_of_set(f->as.list.items[i], out, cap, &n);
+    } else if (strcmp(h, "define-library") == 0) {
+        for (uint32_t i = 2; i < f->as.list.len; i++) {
+            const Form *d = f->as.list.items[i];
+            if (d->tag == F_LIST && d->as.list.len > 0 && d->as.list.items[0]->tag == F_SYM &&
+                strcmp(d->as.list.items[0]->as.sym->name, "import") == 0)
+                for (uint32_t j = 1; j < d->as.list.len; j++) lib_files_of_set(d->as.list.items[j], out, cap, &n);
+        }
+    }
+    return n;
 }

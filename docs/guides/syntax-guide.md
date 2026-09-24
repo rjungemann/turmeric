@@ -707,7 +707,13 @@ and error objects (an uncaught `raise` reports on stderr and exits 70),
 `parameterize`/`make-parameter`, and `delay`/`delay-force`/`force`. Every
 Scheme procedure call is a proper tail call on both back ends, and the
 compiled back end runs everything the interpreter does (a dynamic call is
-capped at four arguments, so `apply` is too).
+capped at four arguments, so `apply` is too). R7 completes the libraries
+short of ports: the rest of `(scheme base)`, and `(scheme char)` (ASCII case
+mapping), `(scheme cxr)`, `(scheme complex)` over the reals, `(scheme time)`,
+`(scheme process-context)` and `(scheme file)`'s `file-exists?` and
+`delete-file`. The last three are loaded only when imported. `(scheme eval)`,
+`(scheme repl)`, `(scheme load)`, `(scheme read)` and `include` are refused
+with the reason, and ports arrive with R8.
 
 `turmeric` and `saffron` are **stable bases** -- neither is gated. `#lang
 saffron` needs no `--enable=` flag and no `:experiments` entry, and prints no

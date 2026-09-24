@@ -714,12 +714,55 @@ static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
     if (!(e->toplevel_dynamic || lang_span_is_dynamic(value->span))) return NULL;
     const Type *ft = &value->type;
     if (ft->as.fn.cfnptr || ft->as.fn.arity > 5) return NULL;
-    /* r7rs-lang-plan R6: a VARIADIC function is boxed as itself.  Its rest
-     * slot is a chain pointer, so an all-`any` adaptor of its arity would
-     * call it with a bare word as the chain; the dynamic call packs for a
-     * registered variadic instead (emit_dyn_call / the interpreter's
-     * EX_DYN_CALL). */
-    if (ft->as.fn.is_variadic) return NULL;
+    /* r7rs-lang-plan R6/R7: a VARIADIC function.  Its rest slot is a chain
+     * pointer, which the dynamic call packs (emit_dyn_call / the
+     * interpreter's EX_DYN_CALL) -- but only for the all-`any` calling
+     * convention.  An all-`any` variadic is boxed as itself; a TYPED one with
+     * an `any` rest gets an all-`any` VARIADIC adaptor that hands its rest
+     * chain through unchanged:
+     *   (fn [__da0 ... & __dr : any] : any (NAME __da0 ... (__rest-chain __dr)))
+     * `__rest-chain` is the variadic call path's marker for "this is the rest
+     * list already" (elab_call.c, AR8).  A typed rest has no such form, so it
+     * is boxed as itself and a dynamic call refuses it by its id. */
+    if (ft->as.fn.is_variadic) {
+        uint32_t nf = ft->as.fn.arity ? ft->as.fn.arity - 1 : 0;
+        bool va_all_any = (ft->as.fn.result_kind == TY_ANY);
+        for (uint32_t i = 0; i < nf && va_all_any; i++)
+            if (ft->as.fn.arg_kinds[i] != TY_ANY) va_all_any = false;
+        bool rest_any = ft->as.fn.rest_kind == TY_ANY &&
+                        !(ft->as.fn.rest_full_type && ft->as.fn.rest_full_type->kind != TY_ANY);
+        if (va_all_any || !rest_any || ft->as.fn.arity == 0) return NULL;
+        Span vsp = value->span;
+        const Symbol *amp = symtab_intern(e->st, strslice("&", 1));
+        const Symbol *anys = symtab_intern(e->st, strslice("any", 3));
+        const Symbol *drs = symtab_intern(e->st, strslice("__dr", 4));
+        Form **vparams = (Form **)arena_alloc(e->arena, (nf + 3) * sizeof(Form *));
+        Form **vcall = (Form **)arena_alloc(e->arena, (nf + 2) * sizeof(Form *));
+        vcall[0] = form_sym(e->arena, vsp, value->as.var.binding->name);
+        for (uint32_t i = 0; i < nf; i++) {
+            char nm[24];
+            snprintf(nm, sizeof nm, "__da%u", i);
+            const Symbol *ps = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+            vparams[i] = form_sym(e->arena, vsp, ps);
+            vcall[1 + i] = form_sym(e->arena, vsp, ps);
+        }
+        vparams[nf]     = form_sym(e->arena, vsp, amp);
+        vparams[nf + 1] = form_sym(e->arena, vsp, drs);
+        vparams[nf + 2] = form_type_ann(e->arena, vsp, form_sym(e->arena, vsp, anys));
+        Form *rc_items[2] = { form_sym(e->arena, vsp, symtab_intern(e->st, strslice("__rest-chain", 12))),
+                              form_sym(e->arena, vsp, drs) };
+        vcall[1 + nf] = form_list(e->arena, vsp, rc_items, 2);
+        Form *vitems[4];
+        vitems[0] = form_sym(e->arena, vsp, symtab_intern(e->st, strslice("fn", 2)));
+        vitems[1] = form_vec(e->arena, vsp, vparams, nf + 3);
+        vitems[2] = form_type_ann(e->arena, vsp, form_sym(e->arena, vsp, anys));
+        vitems[3] = form_list(e->arena, vsp, vcall, nf + 2);
+        Type *saved_vexp = e->expected_type;
+        e->expected_type = NULL;
+        Expr *vad = elab_fn(e, form_list(e->arena, vsp, vitems, 4));
+        e->expected_type = saved_vexp;
+        return vad;
+    }
     bool all_any = (ft->as.fn.result_kind == TY_ANY);
     for (uint32_t i = 0; i < ft->as.fn.arity && all_any; i++)
         if (ft->as.fn.arg_kinds[i] != TY_ANY) all_any = false;
@@ -6180,9 +6223,39 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 fn_type.as.fn.arg_kinds[i] == TY_ANY &&
                 call_args[i]->type.kind != TY_ANY)
                 call_args[i] = elab_coerce_to_any(e, call_args[i]);
+            /* r7rs-lang-plan R7: and the reverse -- an `any` argument into a
+             * CONCRETE fixed parameter takes the seam's checked cast, as the
+             * fixed-arity path does (D5).  Without it `(string->list s)` with
+             * `s : any` handed a tagged box to a `const char *` parameter and
+             * cc rejected the call. */
+            else if (i < fn_type.as.fn.arity && fn_type.as.fn.arg_kinds &&
+                     call_args[i]->type.kind == TY_ANY) {
+                TypeKind pk = (TypeKind)fn_type.as.fn.arg_kinds[i];
+                if (pk != TY_ANY && pk != TY_UNKNOWN && pk != TY_TYVAR && pk != TY_NIL) {
+                    Type want = (fn_type.as.fn.arg_full_types && fn_type.as.fn.arg_full_types[i])
+                                    ? *fn_type.as.fn.arg_full_types[i]
+                                    : type_from_kind(pk);
+                    Expr *un = elab_any_unbox_to(e, call_args[i], want, call_args[i]->span);
+                    if (un) call_args[i] = un;
+                }
+            }
         }
         /* Build cons-list expression for rest args */
-        Expr *rest_expr;
+        Expr *rest_expr = NULL;
+        /* r7rs-lang-plan R7: `(f a ... (__rest-chain c))` -- `c` IS the rest
+         * list, already a `(Cons any)` chain; pass it through rather than
+         * packing it as one element.  Only the H8 variadic adaptor writes
+         * this, and only for an `any` rest. */
+        if (n_rest == 1) {
+            const Form *lf = call->as.list.items[1 + n_required];
+            if (lf->tag == F_LIST && lf->as.list.len == 2 && lf->as.list.items[0]->tag == F_SYM &&
+                strcmp(lf->as.list.items[0]->as.sym->name, "__rest-chain") == 0 &&
+                fn_type.as.fn.rest_kind == TY_ANY) {
+                Expr *cv = elab_form(e, lf->as.list.items[1]);
+                if (!cv) return NULL;
+                rest_expr = cv;
+            }
+        }
         /* Homogeneity / result specialization (hoisted so they survive past the
          * cons-list build): a polymorphic-tyvar rest (`[& xs :A]`) names a
          * single type variable A.  Bind A to the first rest arg, then -- once
@@ -6208,7 +6281,9 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         bool rest_any = fn_type.as.fn.rest_kind == TY_ANY &&
                         !(fn_type.as.fn.rest_full_type &&
                           fn_type.as.fn.rest_full_type->kind != TY_ANY);
-        if (rest_any) {
+        if (rest_expr) {
+            /* the __rest-chain passthrough above */
+        } else if (rest_any) {
             Arena *fa = e->arena;
             Span sp = call->span;
             const Symbol *cons_sym = intern_cstr(e->st, "Cons");

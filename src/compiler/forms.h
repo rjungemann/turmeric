@@ -105,6 +105,11 @@ typedef enum FxProvenance {
      * because a function may legitimately write more than one argument.  See
      * docs/archive/checked-write-frames-plan.md (WF1). */
     PROV_WRITES,             /* (writes <sym>...) from #writes <sym>|[<sym>...] */
+    /* r7rs-lang-plan R7: stamps an F_VEC the Scheme reader read from `#(...)`
+     * (a self-evaluating vector datum), as opposed to a Turmeric `[...]`
+     * binding vector in the same file.  The Scheme lowering rewrites only the
+     * stamped ones into `(vector ...)`. */
+    PROV_SCHEME_VECTOR,
 } FxProvenance;
 
 struct Form;
