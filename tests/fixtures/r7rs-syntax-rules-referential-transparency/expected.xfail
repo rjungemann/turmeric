@@ -1,1 +1,0 @@
-D5(a) renaming hygiene: a template's free identifier resolves at the use site, which shadows it here.  Prints #(1); R7RS says (1).  Closes with scope-set hygiene (D5b).

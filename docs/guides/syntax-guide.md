@@ -694,8 +694,9 @@ imports a `define-library` (its exports are `any`, narrowed with `cast`).
 Strings are immutable `cstr` values (`string-set!` is declined). R4 adds
 `syntax-rules` -- `define-syntax`, `let-syntax`, `letrec-syntax`,
 `syntax-error`, the full pattern language and renaming hygiene (a template's
-own binders cannot capture a use-site name; a free identifier the use site
-shadows is the known gap, pinned as a named failing test). R5 adds the
+own binders cannot capture a use-site name; R10 closes the other direction, so
+a template's free identifiers mean what they meant where the macro was
+defined). R5 adds the
 numbers: exact integers are int64 and signal on overflow, inexact reals are
 doubles, `(/ 7 2)` is 3.5 (no rationals or bignums yet), and the R7RS
 predicate, rounding, division, `expt`/`sqrt`/transcendental and radix
@@ -725,10 +726,10 @@ expressions, so put such code inside a procedure. R9 adds the tooling: `tur
 repl --lang r7rs`, `tur fmt` (which re-indents a Scheme file and never rewrites
 a token), `tur init --r7rs`, the language server, and editor highlighting.
 R10 runs chibi-scheme's R7RS test suite as a ctest target
-(`tur_r7rs_conformance`) that reports a pass count: 1077 of the 1216 tests
+(`tur_r7rs_conformance`) that reports a pass count: 1082 of the 1216 tests
 written in it pass, on both back ends, and the rest are the named carve-outs
 (bignums, exact rationals, complex numbers, mutable strings, `eval`,
-re-entrant `call/cc`) plus a few hygiene corners. `(scheme char)` maps and
+re-entrant `call/cc`). `(scheme char)` maps and
 classifies all of Unicode, from tables generated out of the Unicode
 database. The full
 reference is [r7rs-guide.md](r7rs-guide.md).

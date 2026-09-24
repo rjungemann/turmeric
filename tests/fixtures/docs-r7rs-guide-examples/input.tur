@@ -42,6 +42,9 @@
   (swap! p q)
   (write (list p q))
   (newline))
+(define-syntax my-list (syntax-rules () ((_ x) (list x))))
+(write (let ((list vector)) (my-list 1)))
+(newline)
 
 ;; --- Control -----------------------------------------------------------------
 (write (call/cc (lambda (k) (+ 1 (k 42)))))

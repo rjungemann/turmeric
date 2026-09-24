@@ -709,7 +709,7 @@ yet; the stdout mismatch then PASSES as `(xfail)` in both `run.sh` and
 recorded has closed. Only the stdout diff is excused; a build failure, crash
 or timeout still fails. Use it for a gap a plan wants on record as a test
 rather than as prose (first use: r7rs-lang-plan D5's referential-transparency
-gap), never to park a regression.
+gap, since closed and its marker deleted), never to park a regression.
 
 A fixture may also carry `requires.no-leak-check` (not a skip marker): the
 compiled binary then runs with `ASAN_OPTIONS=detect_leaks=0`. Reserve it for

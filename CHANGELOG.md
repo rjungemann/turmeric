@@ -6,6 +6,16 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: referential transparency.** A `syntax-rules` template's
+  free identifiers now mean what they meant where the macro was defined. The
+  lowering tracks lexical scope, gives local binders unique names, and resolves
+  each template identifier in the macro's definition scope. So
+  `(let ((list vector)) (my-list 1))` is `(1)`, and a local variable shadows a
+  keyword or macro of its name. The R4 named failing test
+  `r7rs-syntax-rules-referential-transparency` now passes and its
+  `expected.xfail` is gone. Diagnostics on Scheme files show source names.
+  Chibi's suite: 1082 of 1216 on both back ends.
+  `tests/fixtures/r7rs-syntax-rules-hygiene`.
 - **`#lang r7rs`: Unicode `(scheme char)`, and 1077 conformance tests.**
   Char case mapping and classification, `digit-value`, and full string case
   mapping (`"\xDF;"` upcases to "SS") now cover Unicode. The tables come from

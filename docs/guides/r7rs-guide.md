@@ -119,10 +119,17 @@ template's own binders:
   (write (list p q)))                        ; (2 1)
 ```
 
-The `tmp` in the template cannot capture a `tmp` at the use site. The one
-known gap is the other direction: a free identifier in a template that the use
-site shadows resolves to the use site's binding. The plan tracks it as a
-named failing test.
+The `tmp` in the template cannot capture a `tmp` at the use site. The other
+direction holds too: a free identifier in a template means what it meant
+where the macro was defined, however the use site binds that name.
+
+```scheme
+(define-syntax my-list (syntax-rules () ((_ x) (list x))))
+(write (let ((list vector)) (my-list 1)))    ; (1)
+```
+
+A local variable shadows a keyword or a macro of the same name, as R7RS says:
+`(let ((if even?)) (if 7))` calls `even?`.
 
 ## Control
 
@@ -227,14 +234,12 @@ bash tests/run-r7rs-conformance.sh      # both back ends, about two minutes
 python3 tests/r7rs/run-conformance.py --backend interp --list-failures
 ```
 
-**1077 of the 1216 tests** written in the suite pass, the same on the
+**1082 of the 1216 tests** written in the suite pass, the same on the
 interpreter and the compiled back end. Nearly all the rest are the
 differences listed above: bignums and exact rationals (`1/2`, `(expt 2
 100)`), complex numbers (`3+4i`), the three string mutators, `eval` and
 `environment`, re-entering a continuation, and a string indexed by bytes.
-What remains after those is a handful of hygiene corners (a
-macro-introduced binding that captures, a pattern variable reused as a
-nested macro's literal) and two float spellings that differ from chibi's
+What remains after those is a handful of hygiene two float spellings that differ from chibi's
 own (`1.7976931348623157e308` rather than `e+308`; both are R7RS).
 
 The target fails only when the count drops below its floor, so raise the

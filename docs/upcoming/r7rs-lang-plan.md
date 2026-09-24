@@ -19,9 +19,9 @@ Scheme program calling the stdlib map and getting the right answer) is
 D5's renaming hygiene -- as an expander inside the same lowering pass; the
 standard's own `or`, `let*` and `do` expand correctly
 (`tests/fixtures/r7rs-syntax-rules`, `r7rs-syntax-rules-do`) and the
-referential-transparency gap is the named failing test
+referential-transparency gap was the named failing test
 `r7rs-syntax-rules-referential-transparency` under a new `expected.xfail`
-marker. R5 gives the numbers their R7RS semantics over int64 and double:
+marker, until R10 closed it. R5 gives the numbers their R7RS semantics over int64 and double:
 `(+)`, `(- x)`, comparison chains, promotion of a mixed literal pair,
 inexact `/` when the quotient is not exact, checked exact overflow (D8), the
 exactness predicates and conversions, rounding, integer division, `expt`,
@@ -49,7 +49,7 @@ that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 (native and browser) analysing and formatting Scheme, the editor packs,
 `gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
 runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
-which reports a count: 1077 of 1216 tests pass on both back ends (887 on the
+which reports a count: 1082 of 1216 tests pass on both back ends (887 on the
 interpreter, and a compiled build that did not finish, when it was first
 wired). Each landed stage carries a "What shipped" note below.
 
@@ -533,7 +533,10 @@ Hygiene has three honest options:
   `syntax-rules` written on top.
 
 **Ship (a) at R4, expose (c) as the escape hatch, schedule (b) as a named
-follow-up with a failing test that demonstrates the gap.** Rationale: (a) plus
+follow-up with a failing test that demonstrates the gap.** (R10 closed that
+gap without (b)'s elaborator change: the Form-level lowering tracks lexical
+scope, gives local binders unique names, and resolves a template's free
+identifiers in the macro's definition scope. See the R10 note.) Rationale: (a) plus
 (c) is enough to run the conformance suite's macro section, (b) touches the one
 part of the elaborator this plan otherwise leaves alone, and a *named failing
 test* is a much better record of a known gap than prose claiming there is not
@@ -1608,10 +1611,28 @@ conformance story.
 > - **`#;` must be followed by a datum**: a lone `.` is never one, so
 >   `(a #;. b)` and `(#; #;x . z)` are read errors.
 >
-> What is left that is not a carve-out: the five hygiene tests (the template
-> identifiers of a macro are not yet resolved in the macro's definition
-> environment -- R4's named failing test is the same gap), and two float
-> spellings where chibi accepts only its own `e+308`.
+>
+> **Hygiene: 1082.** The five hygiene tests left, and R4's named failing
+> test (`r7rs-syntax-rules-referential-transparency`, whose `expected.xfail`
+> is deleted), had one cause: a template's free identifiers were resolved at
+> the use site. `scheme_lower.c` now tracks lexical scope. Every local binder
+> (formals, the `let` family, named `let`, `do`, `let-values`, `guard`,
+> internal defines) gets a unique name in a scope frame; `rn` looks there
+> first. A macro keeps the frame it was defined in, and after an expansion
+> each free identifier the template inserted is resolved there: bound, it
+> becomes that binding's unique name; a global or keyword that the use site
+> shadows becomes an alias of the global. A local variable shadows a keyword
+> or macro of its name (`(let ((if even?)) (if 7))`), `else` and `=>` are
+> keywords only when not bound, and a `syntax-rules` a template inserts has
+> its pattern variables and literals renamed apart (literals still match by
+> name). Unique names also mean a `let` keeps Scheme's parallel binding with
+> no temporaries. Diagnostics on a Scheme file print the source name, not
+> `n__v12`. `tests/fixtures/r7rs-syntax-rules-hygiene` runs the cases on
+> both back ends.
+>
+> What is left that is not a carve-out: two float spellings where chibi
+> accepts only its own `e+308`, and `string-ref` counting bytes (strings are
+> byte strings, above).
 
 ---
 

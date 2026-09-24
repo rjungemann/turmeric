@@ -32,7 +32,7 @@ fi
 
 # The floor: the count recorded in the plan's R10 "What shipped" note, of
 # 1216 tests written in the suite -- the same on both back ends.
-FLOOR="${R7RS_CONFORMANCE_FLOOR:-1077}"
+FLOOR="${R7RS_CONFORMANCE_FLOOR:-1082}"
 BACKEND="${R7RS_CONFORMANCE_BACKEND:-both}"
 
 exec python3 tests/r7rs/run-conformance.py --tur "$TUR" --backend "$BACKEND" \

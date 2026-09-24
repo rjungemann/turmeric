@@ -1,0 +1,54 @@
+#lang r7rs
+;; r7rs-lang-plan R10: hygiene beyond renaming a template's own binders
+;; (R4's D5a).  The lowering tracks lexical scope and gives local binders
+;; unique names, so a template's FREE identifiers mean what they meant where
+;; the macro was defined (R7RS 4.3.2), a local variable shadows a keyword or
+;; macro of its name, and a macro a template defines keeps its own pattern
+;; variables and literals apart from the user's.  The first five cases are
+;; chibi's.
+(import (scheme base) (scheme write))
+(define (show x) (write x) (newline))
+(show (let ((x 'outer))
+  (let-syntax ((m (syntax-rules () ((m) x))))
+    (let ((x 'inner))
+      (m)))))
+(show (letrec-syntax
+  ((my-or (syntax-rules ()
+            ((my-or) #f)
+            ((my-or e) e)
+            ((my-or e1 e2 ...)
+             (let ((temp e1))
+               (if temp
+                   temp
+                   (my-or e2 ...)))))))
+  (let ((x #f)
+        (y 7)
+        (temp 8)
+        (let odd?)
+        (if even?))
+    (my-or x
+           (let temp)
+           (if y)
+           y))))
+(show (let ((=> #f)) (cond (#t => 'ok))))
+(let ()
+ (define-syntax foo
+   (syntax-rules ()
+     ((foo bar y)
+      (define-syntax bar
+        (syntax-rules ()
+          ((bar x) 'y))))))
+ (foo bar x)
+ (show (bar 1)))
+(let-syntax
+    ((m (syntax-rules ()
+          ((m x) (let-syntax
+                     ((n (syntax-rules (k)
+                           ((n x) 'bound-identifier=?)
+                           ((n y) 'free-identifier=?))))
+                   (n z))))))
+  (show (m k)))
+(define-syntax my-if (syntax-rules () ((_ c a b) (cond (c a) (else b)))))
+(show (let ((else #f)) (my-if #f 1 2)))
+(define-syntax swap! (syntax-rules () ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+(show (let ((tmp 1) (other 2)) (swap! tmp other) (list tmp other)))

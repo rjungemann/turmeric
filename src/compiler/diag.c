@@ -3143,6 +3143,33 @@ void diag_render_snippet(const SourceFile *f, Span span, const SnippetOpts *opts
     render_snippet_ex(f, span, opts);
 }
 
+/* r7rs-lang-plan R10: the Scheme lowering gives every local binder a unique
+ * name -- `n` becomes `n__v12` (and a template's `__h`/`__p`/`__l`/`__g`
+ * renames) -- so a diagnostic about a Scheme file would show that spelling.
+ * Strip the suffix back to the name the user wrote, for `#lang r7rs` files
+ * only.  In place; the message only gets shorter. */
+static void diag_scheme_names(Span span, char *msg) {
+    const SourceFile *f = span.file_id < MAX_FILES ? files_[span.file_id] : NULL;
+    if (!f || f->lang != LANG_R7RS) return;
+    char *w = msg;
+    for (const char *r = msg; *r; ) {
+        if (r[0] == '_' && r[1] == '_' && r[2] && strchr("vhgpl", r[2]) &&
+            r[3] >= '0' && r[3] <= '9' && r > msg) {
+            const char *e = r + 3;
+            while (*e >= '0' && *e <= '9') e++;
+            char c = *e;
+            /* Only at the END of an identifier. */
+            if (!(c == '_' || c == '-' || c == '?' || c == '!' ||
+                  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) {
+                r = e;
+                continue;
+            }
+        }
+        *w++ = *r++;
+    }
+    *w = '\0';
+}
+
 void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap) {
     if (diag_intercept(level)) return;
     if (level == DIAG_ERROR) had_error_ = true;
@@ -3150,6 +3177,7 @@ void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap) {
     if (lsp_collect_) {
         char msg[512];
         vsnprintf(msg, sizeof(msg), fmt, ap);
+        diag_scheme_names(span, msg);
         lsp_append(level, DIAG_CODE_NONE, span, msg);
         return;
     }
@@ -3157,6 +3185,7 @@ void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap) {
     if (diag_sink_fn_) {
         char msg[512];
         vsnprintf(msg, sizeof(msg), fmt, ap);
+        diag_scheme_names(span, msg);
         diag_sink_dispatch(level, DIAG_CODE_NONE, span, msg);
         return;
     }
@@ -3165,6 +3194,7 @@ void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap) {
     if (json_output_) {
         char msg[1024];
         vsnprintf(msg, sizeof(msg), fmt, ap);
+        diag_scheme_names(span, msg);
         diag_emit_json(level, span, DIAG_CODE_NONE, msg);
         return;
     }
@@ -3179,7 +3209,12 @@ void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap) {
     
     /* Phase 8: Rust-style diagnostics with --> pointing to file */
     fprintf(stderr, "%s%s:%u:%u: %s%s: ", color, path, span.line, span.col_start, level_name(level), reset);
-    vfprintf(stderr, fmt, ap);
+    {
+        char msg[4096];
+        vsnprintf(msg, sizeof(msg), fmt, ap);
+        diag_scheme_names(span, msg);
+        fputs(msg, stderr);
+    }
     fputc('\n', stderr);
 
     /* Multi-line source snippet with context */
@@ -3206,6 +3241,7 @@ void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *
         char msg[512];
         vsnprintf(msg, sizeof(msg), fmt, ap);
         va_end(ap);
+        diag_scheme_names(span, msg);
         lsp_append(level, code, span, msg);
         return;
     }
@@ -3216,6 +3252,7 @@ void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *
         char msg[512];
         vsnprintf(msg, sizeof(msg), fmt, ap);
         va_end(ap);
+        diag_scheme_names(span, msg);
         diag_sink_dispatch(level, code, span, msg);
         return;
     }
@@ -3227,6 +3264,7 @@ void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *
         char msg[1024];
         vsnprintf(msg, sizeof(msg), fmt, ap);
         va_end(ap);
+        diag_scheme_names(span, msg);
         diag_emit_json(level, span, code, msg);
         return;
     }
@@ -3247,7 +3285,12 @@ void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *
     } else {
         fprintf(stderr, "%s%s:%u:%u: %s%s: ", color, path, span.line, span.col_start, level_name(level), reset);
     }
-    vfprintf(stderr, fmt, ap);
+    {
+        char msg[4096];
+        vsnprintf(msg, sizeof(msg), fmt, ap);
+        diag_scheme_names(span, msg);
+        fputs(msg, stderr);
+    }
     fputc('\n', stderr);
     
     va_end(ap);
