@@ -52,8 +52,9 @@ runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
 which reports a count: 1082 of 1216 tests pass on both back ends (887 on the
 interpreter, and a compiled build that did not finish, when it was first
 wired). Each landed stage carries a "What shipped" note below. What is
-left -- bignums, exact rationals, complex numbers, mutable
-character-indexed strings, `eval`, re-entrant continuations -- is Section 9,
+left -- bignums, exact rationals, mutable character-indexed strings,
+`eval` (the interpreter linked in on demand), re-entrant continuations and,
+last, complex numbers -- is Section 9,
 as tasks that change what a Scheme program means and leave Turmeric's and
 Saffron's semantics as they are.
 
@@ -1658,9 +1659,9 @@ this one should be **measured the same way** before it is believed.
 | Monomorphization, by-value HKT | off; everything boxes | needs ground types at each site |
 | Refinement types | runtime contracts | no static base type to discharge over |
 | Linear / affine / unique, borrows, session types, GADTs | **expected to survive**, via annotations | Saffron measured these as kept; R7RS has no *syntax* for the annotations, so this is "survives if written in an annotated Turmeric module and called across the seam" |
-| Full numeric tower | int64 exact + checked overflow | D8; bignums, rationals and complex are Section 9's T1-T3 |
-| Re-entrant `call/cc` | not at first | D7; the conformance claim is gated on it; Section 9's T6 |
-| `(scheme eval)`, `(scheme repl)` | refused at the import | needs an evaluator at runtime; Section 9's T5 |
+| Full numeric tower | int64 exact + checked overflow | D8; bignums and rationals are Section 9's T1-T2, complex T6 |
+| Re-entrant `call/cc` | not at first | D7; the conformance claim is gated on it; Section 9's T5 |
+| `(scheme eval)`, `(scheme repl)` | refused at the import | needs an evaluator at runtime; decided: link the interpreter on import, Section 9's T4 |
 | Typeclass dispatch on `any` | inherits Saffron's S9 state | separate epic |
 
 ---
@@ -1729,6 +1730,10 @@ expectation from a demo.
    datum-to-Form path and the lowering at run time, which is its own piece of
    work; the on-demand library mechanism R7 built is where a linked evaluator
    would plug in.
+   **Decided 2026-09-24: link on demand.** Importing `(scheme eval)` (or
+   `(scheme repl)` / `(scheme load)`) links the interpreter into the compiled
+   program through the `__tur_autolink__` marker `turi/eval` already uses; a
+   program without the import links nothing new. The work is Section 9, T4.
 4. **File extension.** `.scm` is the obvious spelling and means every tool
    learns a new file type. The Saffron plan deferred `.saf` for exactly this
    reason, and R7RS should defer `.scm` the same way -- `#lang r7rs` inside a
@@ -1810,7 +1815,7 @@ do first).**
   true only by accident. `(read (open-input-string "1/2"))` returns the
   SYMBOL `1/2`.
   - Read each as one number token.
-  - Until T2 and T3, refuse it with the reason, in both the source reader and
+  - Until T2 and T6, refuse it with the reason, in both the source reader and
     `stdlib/r7rs/read.tur`.
   - Make `string->number` agree.
 
@@ -1861,31 +1866,7 @@ do first).**
   checked error; the Scheme side converts with `inexact` or `round`.
 - **Done:** the 42 tests.
 
-**T3 -- complex numbers (73 tests: 756, 759, 760, 770, 784, 789, 794, 796,
-797, 849, 903, 1016, 1017, 1030-1040; number syntax 2371-2401, 2441,
-2442).**
-
-- **Today:** `(scheme complex)` is reals only.
-  - `make-rectangular` / `make-polar` with a non-zero imaginary part panic.
-  - `(sqrt -4)` is `+nan.0`.
-  - A `3+4i` literal is split by the reader (T0).
-- **R7RS:** non-real numbers are OPTIONAL (R7RS 6.2.3 does not require the
-  whole tower); chibi has them and its suite tests them. So the first step is a
-  decision, and not implementing is a legitimate answer. If the answer is no,
-  T3 becomes: refuse complex syntax with the reason (T0 already does), make
-  `make-rectangular` a catchable error rather than a panic, and record the
-  73 tests as permanently out of scope with the floor unaffected.
-- **Preserve:** Turmeric has no complex type, and `math.tur`'s `sqrt` of a
-  negative stays NaN in Turmeric.
-- **Where:**
-  - A prelude `R7rsComplex` (real and imaginary parts, each any real).
-  - The tower dispatch; `sqrt`, `exp`, `log`, `expt`, `atan` of arguments
-    outside the reals; the rectangular and polar syntax in both readers;
-    `write`.
-- **Depends on:** T2 for exact complex (`1/2+3/4i`).
-- **Done:** the 73 tests, or the recorded "no".
-
-**T4 -- mutable, character-indexed strings (13 tests: 1322, 1324,
+**T3 -- mutable, character-indexed strings (13 tests: 1322, 1324,
 1458-1479, 2258).**
 
 - **Today:** a Scheme string IS a Turmeric `cstr`.
@@ -1916,24 +1897,67 @@ do first).**
 - **Done:** the 13 tests; `(string-length "\x3BB;")` is 1; a fixture passes one
   string both ways across the seam and shows the Turmeric side still immutable.
 
-**T5 -- `eval` and environments (4 tests: 1946, 1950, 1952, 1954).**
+**T4 -- `eval`, with the interpreter linked in on demand (4 tests: 1946,
+1950, 1952, 1954).**
 
 - **Today:** `(scheme eval)`, `(scheme repl)` and `(scheme load)` are refused
-  at the import (Section 8, question 3).
-- **R7RS:** `(eval datum (environment '(scheme base)))`,
-  `interaction-environment`, `null-environment`.
-- **Preserve:** nothing in Turmeric changes; the question is how a compiled
-  program evaluates.
-- **The decision first (question 3):** link the interpreter into a compiled
-  program that imports `(scheme eval)` (the on-demand library mechanism is the
-  hook), or declare `eval` interpreter-only. The second breaks the rule that
-  both back ends run every fixture, so it needs a `requires.interp-only`
-  fixture and a sentence in the guide.
-- **Either way:** a datum-to-Form path, the Scheme lowering at run time, and
-  environment specifiers as import sets.
-- **Done:** the 4 tests on whichever back ends the decision names.
+  at the import (`SCHEME_LIBS`, `LIB_DEFERRED`).
+- **R7RS:** `(eval expr-or-def environment-specifier)`, `(environment set
+  ...)` and, in `(scheme repl)`, `interaction-environment`. `(scheme load)`'s
+  `load` rides on the same evaluator.
+- **Decided (2026-09-24, Section 8 question 3):** importing `(scheme eval)`
+  (or `(scheme repl)` or `(scheme load)`) LINKS THE INTERPRETER INTO THE
+  COMPILED PROGRAM. A program that does not import one of them links nothing
+  new: no binary size, no build time, no change.
+- **Preserve:** nothing in Turmeric or Saffron changes. The evaluator is the
+  same `libturi` a Turmeric program reaches today with `(import turi/eval)`,
+  and it evaluates Scheme with the Scheme lowering.
+- **The mechanism that already exists:** `stdlib/turi/eval.tur` carries a
+  `/* __tur_autolink__: -lturi ... */` marker in its inline C;
+  `scan_autolink_markers` (`src/main.c`) finds it in the generated C and
+  `tur build` links `libturi`, with the SDK / lean-runtime / ASan resolution
+  the `tur_eval_import` ctest target exercises.
+  - `(scheme eval)` becomes a `LIB_ONDEMAND` row whose file,
+    `stdlib/r7rs/eval.tur`, carries the same marker. The R7 on-demand
+    machinery then loads it only for a program that imports it, and the
+    marker links the interpreter only then.
+- **The compiled back end:**
+  - One embedded `TuriEnv`, created on the first `eval` and preloaded with
+    the R7RS prelude. `(environment set ...)` builds an environment whose
+    imports are those sets; `interaction-environment` is one persistent
+    environment per process, so definitions accumulate as at a REPL.
+  - **In:** the expression datum is handed to the embedded evaluator. The
+    first cut writes it with `write` and reads it back with the Scheme
+    reader, which carries every datum an expression can contain. A datum
+    holding a procedure or record object is the named error until a direct
+    datum-to-Form bridge replaces the text round trip.
+  - **Out:** results come back through a value bridge: numbers, booleans,
+    characters, strings, symbols, the empty list, pairs and vectors
+    (copied), and procedures as a callable handle, which a compiled call
+    reaches through `turi_call`.
+  - **Across:** a compiled procedure passed INTO evaluated code, as test
+    1946's `(f + 10)` does, is registered in the embedded environment as a
+    native that calls back into the compiled closure.
+- **The interpreter back end:** `eval` is a native twin in the same
+  environment. The datum becomes a Form, then goes through the Scheme
+  lowering, elaboration and evaluation, with no bridge and no linking.
+- **The two back ends must agree.** The bridge copies pairs and vectors, so
+  the interpreter's `eval` copies too (or both share, if the bridge learns
+  to); a fixture mutates a pair inside `eval` and checks the same answer on
+  both.
+- **`null-environment`** (test 1946) is `(scheme r5rs)`, which is not
+  imported today. Either add the `(scheme r5rs)` environment procedures as
+  part of this task, or count 1946 against a separate `(scheme r5rs)` item.
+- **Done:**
+  - the 4 tests (or 3, with 1946 moved);
+  - a fixture on both back ends that evaluates a definition, calls an
+    evaluated procedure from compiled code and a compiled procedure from
+    evaluated code;
+  - a check that a program without the import links no `libturi` symbols,
+    and that one with it builds from a clean build directory in both Debug
+    (ASan) and Release.
 
-**T6 -- re-entrant continuations (1 test: 1772, `dynamic-wind` around a
+**T5 -- re-entrant continuations (1 test: 1772, `dynamic-wind` around a
 re-entered continuation).**
 
 - **Today:** `call/cc` is an escape (D7), and re-entry after it returns is a
@@ -1947,6 +1971,31 @@ re-entered continuation).**
   cloneable-reset machinery.
 - **Done:** the test; a generator written with re-entrant `call/cc` runs on
   both back ends.
+
+**T6 -- complex numbers, deliberately after the others (73 tests: 756, 759,
+760, 770, 784, 789, 794, 796, 797, 849, 903, 1016, 1017, 1030-1040; number
+syntax 2371-2401, 2441, 2442).**
+
+- **Order (decided 2026-09-24):** on the list, and last of the
+  implementation tasks; it also builds on T2.
+- **Today:** `(scheme complex)` is reals only.
+  - `make-rectangular` / `make-polar` with a non-zero imaginary part panic.
+  - `(sqrt -4)` is `+nan.0`.
+  - A `3+4i` literal is split by the reader (T0).
+- **R7RS:** non-real numbers are optional (R7RS 6.2.3 does not require the
+  whole tower); chibi has them and its suite tests them, and they stay on
+  this list. Until T6 lands, complex syntax is refused with the reason (T0),
+  and `make-rectangular` / `make-polar` with a non-zero imaginary part should
+  be a catchable error rather than today's panic.
+- **Preserve:** Turmeric has no complex type, and `math.tur`'s `sqrt` of a
+  negative stays NaN in Turmeric.
+- **Where:**
+  - A prelude `R7rsComplex` (real and imaginary parts, each any real).
+  - The tower dispatch; `sqrt`, `exp`, `log`, `expt`, `atan` of arguments
+    outside the reals; the rectangular and polar syntax in both readers;
+    `write`.
+- **Depends on:** T2 for exact complex (`1/2+3/4i`).
+- **Done:** the 73 tests.
 
 **T7 -- two float spellings (2 tests: 2465, 2475).**
 
