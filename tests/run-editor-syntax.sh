@@ -41,6 +41,15 @@ cat > "$SAMPLE" <<'EOF'
 (def pi 3.25)
 (println "hi" true nil)
 #map{:a 1}
+(defn p [x : #refine{v : int | (> v 0)}] x)
+EOF
+# r7rs-lang-plan R9: the Scheme lexemes, active in a `#lang r7rs` file only.
+SCHEME_SAMPLE="$(dirname "$SAMPLE")/scheme.tur"
+cat > "$SCHEME_SAMPLE" <<'EOF'
+#lang r7rs
+(define-library (m) (export f))
+(define v '#(#t #\space |two words| #x1F))
+#| block |# #;(skip)
 EOF
 
 # ---------------------------------------------------------------- vim ------
@@ -74,11 +83,27 @@ for [l, c, want, what] in [
       \\ [7, 10, 'Constant',   'float literal'],
       \\ [8, 11, 'Constant',   'string'],
       \\ [9, 2,  'PreProc',    '#map dispatch'],
-      \\ [9, 6,  'Constant',   'keyword literal in value position']]
+      \\ [9, 6,  'Constant',   'keyword literal in value position'],
+      \\ [10, 37, 'Constant',  'a #refine | is not a Scheme bar symbol outside r7rs']]
   let got = synIDattr(synIDtrans(synID(l, c, 1)), 'name')
   echo (got ==# want ? 'ok  ' : 'BAD ') . what . ' want=' . want . ' got=' . got
 endfor
 echo 'ft=' . &filetype
+edit $SCHEME_SAMPLE
+setfiletype turmeric
+for [l, c, want, what] in [
+      \\ [1, 7,  'Type',       'r7rs base'],
+      \\ [2, 2,  'Statement',  'define-library is a Scheme form'],
+      \\ [3, 12, 'PreProc',    'the #( vector opener'],
+      \\ [3, 14, 'Constant',   '#t boolean'],
+      \\ [3, 17, 'Constant',   '#\\space character'],
+      \\ [3, 27, 'Identifier', 'inside a |two words| symbol'],
+      \\ [3, 38, 'Constant',   '#x1F radix number'],
+      \\ [4, 4,  'Comment',    'inside a #| |# block comment'],
+      \\ [4, 13, 'Comment',    'the #; datum comment']]
+  let got = synIDattr(synIDtrans(synID(l, c, 1)), 'name')
+  echo (got ==# want ? 'ok  ' : 'BAD ') . what . ' want=' . want . ' got=' . got
+endfor
 redir END
 qall!
 VIM
@@ -138,6 +163,16 @@ cases = [
     ("special-form",    "(with-region f)",                True),
     ("special-form",    "(isotope x)",                    False),
     ("special-form",    "(setter x)",                     False),
+    # r7rs-lang-plan R9: the Scheme layer.
+    ("scheme-boolean",  "(list #t #false)",               True),
+    ("scheme-boolean",  "#tail",                          False),
+    ("scheme-char",     "(write #\\space)",               True),
+    ("scheme-char",     "#\\x41",                          True),
+    ("scheme-number",   "#x1F #e1.5",                     True),
+    ("scheme-datum-comment", "#;(skip)",                  True),
+    ("scheme-special-form", "(define-library (m))",       True),
+    ("scheme-special-form", "(let* ((a 1)) a)",           True),
+    ("scheme-special-form", "(beginner x)",               False),
 ]
 for rule, text, want in cases:
     r = repo.get(rule)
@@ -150,6 +185,16 @@ for rule, text, want in cases:
 m = re.search(repo["number"]["match"], "(+ 7.1 2)")
 if not m or m.group(0) != "7.1":
     bad.append("number: 7.1 tokenised as %r" % (m.group(0) if m else None))
+
+# The Scheme layer is scoped to `#lang r7rs`: its region begins only there.
+sf = repo.get("scheme-file", {})
+if not re.search(sf.get("begin", "(?!)"), "#lang r7rs"):
+    bad.append("scheme-file: does not begin at `#lang r7rs`")
+for other in ("#lang saffron", "#lang turmeric", "(defn f [] 0)"):
+    if re.search(sf.get("begin", "(?!)"), other):
+        bad.append("scheme-file: begins at %r" % other)
+if g["patterns"][0].get("include") != "#scheme-file":
+    bad.append("scheme-file is not the first top-level pattern")
 
 if bad:
     for b in bad: print("       " + b)

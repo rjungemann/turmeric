@@ -50,6 +50,8 @@
 #include "forms.h"
 #include "reader.h"
 #include "stdlib_autoload.h"
+#include "lang_dialects.h"     /* r7rs-lang-plan R9: lang_traits */
+#include "runtime/globals.h"   /* g_lang_prelude */
 #include "symbols.h"
 
 #include "lsp/lsp_collect.h"
@@ -136,9 +138,24 @@ int tur_collect_symbols(const char *source_path, const char *logical_path,
     size_t       len_adj = len;
     const char  *bad     = NULL;
     size_t       bad_len = 0;
-    ReaderType lang_type = detect_lang(src, len, &src_adj, &len_adj,
-                                       &bad, &bad_len);
+    /* r7rs-lang-plan R9: detect_lang_DIALECT, not the plain detect_lang --
+     * the latter reports only the reader axis, so a `#lang saffron` or
+     * `#lang r7rs` buffer was elaborated as Turmeric (no `any` default, no
+     * Scheme lowering, no prelude) and reported errors that were not there.
+     * The R0 READER_TURMERIC sweep named this site; this is main.c's
+     * detect_and_adjust_lang, minus its exit paths. */
+    LangDialect dialect = LANG_TURMERIC;
+    ReaderType lang_type = detect_lang_dialect(src, len, &src_adj, &len_adj,
+                                               &bad, &bad_len, &dialect);
     (void)bad; (void)bad_len;
+    if (lang_type == READER_UNKNOWN || lang_type == (ReaderType)-1) {
+        lang_type = READER_TURMERIC;
+        dialect   = LANG_TURMERIC;
+    }
+    /* The language's prelude joins the stdlib autoload list for this buffer
+     * only -- set every call, so a Scheme tab cannot license it for the next
+     * Turmeric one. */
+    g_lang_prelude = lang_traits(dialect)->prelude;
     /* A trailing token is a hard error in the CLI (TUR-E0330, via exit(1)).
      * Killing the WASM module over a typo in a `#lang` line is not an option
      * -- it is the browser tab. Fall back to the base reader and let the
@@ -156,6 +173,7 @@ int tur_collect_symbols(const char *source_path, const char *logical_path,
     file.head_offset = (size_t)(src_adj - src);
     file.file_id     = 0;
     file.reader_type = reader_type;
+    file.lang        = dialect;
     diag_register_file(&file);
 
     Arena arena;

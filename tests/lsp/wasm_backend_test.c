@@ -214,6 +214,79 @@ static void test_sweet_exp_buffer_is_read_correctly(void) {
 }
 
 /* -------------------------------------------------------------------------
+ * A dynamic dialect is analysed as itself
+ *
+ * r7rs-lang-plan R9: the backend read the directive with the plain
+ * detect_lang, which reports only the READER axis, and never set the file's
+ * language -- so a `#lang saffron` or `#lang r7rs` tab was elaborated as
+ * Turmeric (int parameter defaults, no Scheme lowering, no prelude) and the
+ * editor flagged working code.  The broken r7rs buffer is the control: a probe
+ * that cannot see a real error would pass the clean ones on no evidence.
+ * --------------------------------------------------------------------- */
+
+static void test_dynamic_dialect_buffers_analyse_as_themselves(void) {
+    fresh();
+    open_doc("file:///project/broken.tur",
+             "#lang r7rs\n(import (scheme base) (scheme write))\n"
+             "(display (undefined-fn-xyz 1))\n");
+    Buf out = send_msg("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\","
+                       "\"params\":{\"textDocument\":{\"uri\":\"file:///project/broken.tur\"}}}");
+    buf_free(&out);
+
+    fresh();
+    Buf b; buf_init(&b);
+    buf_puts(&b, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                 "\"params\":{\"textDocument\":{\"uri\":\"file:///project/bad.scm.tur\","
+                 "\"text\":\"#lang r7rs\\n(import (scheme base) (scheme write))\\n"
+                 "(display (undefined-fn-xyz 1))\\n\"}}}");
+    buf_putc(&b, '\0');
+    out = send_msg(b.data);
+    CHECK(contains(&out, "undefined-fn-xyz"),
+          "control: a broken #lang r7rs buffer reports its unknown name");
+    buf_free(&out); buf_free(&b);
+
+    fresh();
+    buf_init(&b);
+    buf_puts(&b, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                 "\"params\":{\"textDocument\":{\"uri\":\"file:///project/ok.scm.tur\","
+                 "\"text\":\"#lang r7rs\\n(import (scheme base) (scheme write))\\n"
+                 "(define (add a b) (+ a b))\\n(display (add 1.5 2.25))\\n"
+                 "(write (car (quote (a #t #\\\\x))))\\n(newline)\\n\"}}}");
+    buf_putc(&b, '\0');
+    out = send_msg(b.data);
+    CHECK(contains(&out, "\"diagnostics\":[]"),
+          "a valid #lang r7rs buffer is lowered, gets the prelude, and is clean");
+    buf_free(&out); buf_free(&b);
+
+    fresh();
+    buf_init(&b);
+    buf_puts(&b, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                 "\"params\":{\"textDocument\":{\"uri\":\"file:///project/ok.saf.tur\","
+                 "\"text\":\"#lang saffron\\n(defn add [a b] (+ a b))\\n"
+                 "(defn main [] (println (add 1.5 2.25)) 0)\\n\"}}}");
+    buf_putc(&b, '\0');
+    out = send_msg(b.data);
+    CHECK(contains(&out, "\"diagnostics\":[]"),
+          "a valid #lang saffron buffer keeps its any parameters (a float argument is fine)");
+    buf_free(&out); buf_free(&b);
+
+    /* And the language does not leak into the next Turmeric tab. */
+    fresh();
+    open_doc("file:///project/plain.tur",
+             "(defn add [a : int b : int] : int (+ a b))\n"
+             "(defn main [] : int (println (add 1 2)) 0)\n");
+    buf_init(&b);
+    buf_puts(&b, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                 "\"params\":{\"textDocument\":{\"uri\":\"file:///project/plain2.tur\","
+                 "\"text\":\"(defn main [] : int (println (add2 1)) 0)\\n\"}}}");
+    buf_putc(&b, '\0');
+    out = send_msg(b.data);
+    CHECK(contains(&out, "add2"),
+          "a Turmeric tab after the dynamic ones still reports its own errors");
+    buf_free(&out); buf_free(&b);
+}
+
+/* -------------------------------------------------------------------------
  * Cross-tab workspace symbols
  *
  * workspace/symbol covers open documents only -- recorded as a gap against
@@ -444,6 +517,7 @@ int main(int argc, char **argv) {
     test_type_error_becomes_a_diagnostic();
     test_clean_buffer_publishes_no_diagnostics();
     test_sweet_exp_buffer_is_read_correctly();
+    test_dynamic_dialect_buffers_analyse_as_themselves();
     test_workspace_symbol_spans_tabs();
     test_definition_within_a_tab();
     test_definition_reaches_the_stdlib();

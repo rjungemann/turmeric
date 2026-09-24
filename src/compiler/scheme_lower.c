@@ -1,6 +1,7 @@
 /* scheme_lower.c -- r7rs-lang-plan R2: lower the Scheme core forms onto
  * Turmeric's binding and control forms.  See scheme_lower.h for the map. */
 #include "scheme_lower.h"
+#include "runtime/globals.h"   /* R9: g_synthetic_user_from_line */
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -1340,8 +1341,12 @@ static bool prelude_span(Span sp) {
     const SourceFile *f = diag_source_file(sp.file_id);
     if (!f || !f->path) return false;
     /* R7: a synthetic source (`<eval>`, the interpreter's stub preamble) is
-     * Turmeric whatever the session's language, never Scheme to rewrite. */
-    if (f->path[0] == '<') return true;
+     * Turmeric whatever the session's language, never Scheme to rewrite --
+     * R9: up to the end of the pinned preload.  The REPL compiles that
+     * preload and the prompt's input as one `<eval>` text, and the input
+     * after it is the user's Scheme (g_synthetic_user_from_line). */
+    if (f->path[0] == '<')
+        return !(g_synthetic_user_from_line && sp.line >= g_synthetic_user_from_line);
     size_t n = strlen(f->path);
     static const char SUFFIX[] = "r7rs/prelude.tur";
     size_t m = sizeof SUFFIX - 1;
@@ -3048,7 +3053,18 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     Span first_sp = SPAN_UNKNOWN;
     bool have_first = false;
     for (uint32_t i = 0; i < n; i++) {
-        if (is_scheme_file(forms[i])) {
+        if (is_scheme_file(forms[i]) && prelude_span(forms[i]->span)) {
+            /* R9: the prelude and the on-demand library files are `#lang
+             * r7rs` too, and they share this stream with the user's file.
+             * Lower them, but in place: they are neither part of a user
+             * `define-library` (which may hold nothing else, so a project
+             * library build was refused over the prelude's first defstruct)
+             * nor of the module a program with imports is wrapped in. */
+            FB pf = {0};
+            lower_toplevel(&sl, forms[i], &pf);
+            for (uint32_t k = 0; k < pf.n; k++) fb_push(&out, pf.items[k]);
+            free(pf.items);
+        } else if (is_scheme_file(forms[i])) {
             if (!have_first) { first_sp = forms[i]->span; have_first = true; }
             lower_toplevel(&sl, forms[i], &sforms);
         } else {

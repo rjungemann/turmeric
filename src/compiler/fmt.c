@@ -1849,6 +1849,256 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
 #include "reader_macros.h"
 #include "symbols.h"
 
+
+/* ===========================================================================
+ * r7rs-lang-plan R9: `tur fmt` for `#lang r7rs` -- re-indent, never reprint.
+ *
+ * The form printer cannot format Scheme faithfully, because the R7RS reader
+ * desugars lexemes that have no Form of their own: `#\x` reads as a call to
+ * the char constructor, `#u8(...)` as `(bytevector ...)`, `#e1.5e2` as 150,
+ * `|two words|` as a symbol whose name has a space, and `#t` as the boolean
+ * the printer spells `true`.  Printed back, a Scheme file came out as a
+ * different program (measured: every one of those, plus `,` as `~`).
+ *
+ * So a Scheme file keeps every token exactly as written, and every line
+ * break; the formatter recomputes only each line's LEADING whitespace, strips
+ * trailing whitespace, and ends the file with one newline -- which is what a
+ * Lisp editor's indent-region does.  Lines that begin inside a string, a
+ * `|symbol|`, a `#| |#` comment or an inline-C fence are left untouched.
+ *
+ * The indentation rules, per open bracket (innermost first):
+ *   - a line that starts with a closer aligns with its opener;
+ *   - quoted data (`'(`, `` `( ``, `#(`, `#u8(`, and everything nested in
+ *     one) and a `[...]` binding vector align under the first element;
+ *   - a body form -- `define`, `lambda`, the `let` family, `if`, `when`,
+ *     `case`, `syntax-rules`, ... and the prelude's Turmeric
+ *     `defn`/`fn`/`def...` shapes (CLAUDE.md: special forms take a 2-space
+ *     body) -- indents its body two past the opener;
+ *   - a call aligns later arguments under its first argument when that
+ *     argument shares the head's line, else under the head;
+ *   - a list whose head is itself a list (a `let` binding list) aligns under
+ *     that head.
+ * The pass is idempotent: its output only depends on columns it sets itself.
+ * ======================================================================== */
+
+typedef struct {
+    int  col;          /* column of the opening bracket */
+    int  head_col;     /* column of element 0, -1 before it */
+    int  arg_col;      /* column of element 1 when on element 0's line, else -1 */
+    int  head_line;    /* line of element 0 */
+    int  n_elems;
+    bool head_is_sym;
+    bool body_form;
+    bool data;         /* quoted data or a [...] vector */
+    bool data_inherit; /* children inherit `data` (quoted data, not [...]) */
+} SchemeFrame;
+
+static bool scheme_delim(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '(' || c == ')' ||
+           c == '[' || c == ']' || c == '"' || c == ';' || c == '\0';
+}
+
+static bool scheme_body_head(const char *t, size_t n) {
+    static const char *const FORMS[] = {
+        "lambda", "case-lambda", "let", "let*", "letrec", "letrec*", "let-values",
+        "let*-values", "let-syntax", "letrec-syntax", "syntax-rules",
+        "when", "unless", "begin", "case", "if", "guard", "parameterize",
+        "delay", "delay-force", "make-promise", "with-exception-handler",
+        "dynamic-wind", "call-with-port", "call-with-input-file",
+        "call-with-output-file", "with-input-from-file", "with-output-to-file",
+        "fn", "loop", "while", "for", "match", "handle",
+        NULL };
+    if (n >= 3 && strncmp(t, "def", 3) == 0) return true;   /* define*, defn, defstruct, ... */
+    for (int i = 0; FORMS[i]; i++)
+        if (strlen(FORMS[i]) == n && strncmp(FORMS[i], t, n) == 0) return true;
+    return false;
+}
+
+int fmt_scheme_reindent(const char *src, size_t len, Buf *out) {
+    enum { MAXD = 1024 };
+    SchemeFrame *st = (SchemeFrame *)calloc(MAXD, sizeof(SchemeFrame));
+    if (!st) return -1;
+    int depth = 0;
+    bool in_str = false, in_bar = false, in_fence = false;
+    int block = 0;                     /* #| |# nesting */
+    bool pending_prefix = false;       /* a ' ` , ,@ #; waiting for its datum */
+    bool prefix_quotes = false;        /* ...and it quotes (' or `) */
+    int line_no = 0;
+    size_t pos = 0;
+    Buf line; buf_init(&line);
+    int rc = 0;
+
+    while (pos < len) {
+        size_t e = pos;
+        while (e < len && src[e] != '\n') e++;
+        const char *raw = src + pos;
+        size_t rawn = e - pos;
+        pos = (e < len) ? e + 1 : e;
+        line_no++;
+
+        /* A line that begins inside a string, bar symbol, block comment or
+         * inline-C fence is not ours to touch. */
+        bool verbatim = in_str || in_bar || block > 0 || in_fence;
+        size_t lead = 0;
+        while (lead < rawn && (raw[lead] == ' ' || raw[lead] == '\t')) lead++;
+        const char *body = raw + lead;
+        size_t bodyn = rawn - lead;
+
+        line.len = 0;
+        if (verbatim) {
+            buf_write(&line, raw, rawn);
+        } else {
+            while (bodyn > 0 && (body[bodyn - 1] == ' ' || body[bodyn - 1] == '\t' ||
+                                 body[bodyn - 1] == '\r')) bodyn--;
+            if (bodyn > 0) {
+                int ind = 0;
+                if (depth > 0) {
+                    SchemeFrame *f = &st[depth - 1];
+                    if (body[0] == ')' || body[0] == ']') ind = f->col;
+                    else if (f->data) ind = f->col + 1;
+                    else if (f->head_col < 0) ind = f->col + 1;
+                    else if (f->body_form) ind = f->col + 2;
+                    else if (f->arg_col >= 0) ind = f->arg_col;
+                    else ind = f->head_col;
+                }
+                /* An inline-C fence opener keeps the author's column for the
+                 * fence body's sake only when it is at top level; inside a
+                 * form it is an element like any other. */
+                for (int k = 0; k < ind; k++) buf_putc(&line, ' ');
+                buf_write(&line, body, bodyn);
+            }
+        }
+
+        /* Scan the line as emitted, to advance the state. */
+        const char *L = line.data ? line.data : "";
+        size_t n = line.len;
+        size_t i = 0;
+        if (in_fence) {
+            /* The fence closes at a line whose content starts with ```; the
+             * rest of that line (`)` usually) is ordinary source. */
+            size_t k = 0;
+            while (k < n && (L[k] == ' ' || L[k] == '\t')) k++;
+            if (k + 3 <= n && strncmp(L + k, "```", 3) == 0) { in_fence = false; i = k + 3; }
+            else i = n;
+        }
+        while (i < n) {
+            char c = L[i];
+            if (in_str) {
+                if (c == '\\') { i += 2; continue; }
+                if (c == '"') in_str = false;
+                i++; continue;
+            }
+            if (in_bar) {
+                if (c == '\\') { i += 2; continue; }
+                if (c == '|') in_bar = false;
+                i++; continue;
+            }
+            if (block > 0) {
+                if (c == '|' && i + 1 < n && L[i + 1] == '#') { block--; i += 2; continue; }
+                if (c == '#' && i + 1 < n && L[i + 1] == '|') { block++; i += 2; continue; }
+                i++; continue;
+            }
+            if (c == ' ' || c == '\t' || c == '\r') { i++; continue; }
+            if (c == ';') break;
+            if (c == '#' && i + 1 < n && L[i + 1] == '|') { block++; i += 2; continue; }
+            if (c == '`' && i + 2 < n && L[i + 1] == '`' && L[i + 2] == '`') {
+                /* inline-C fence: an element of the enclosing form */
+                if (depth > 0) {
+                    SchemeFrame *f = &st[depth - 1];
+                    if (f->n_elems == 1 && f->head_line == line_no && f->arg_col < 0) f->arg_col = (int)i;
+                    f->n_elems++;
+                }
+                in_fence = true;
+                pending_prefix = false;
+                i = n;   /* the opener line (```c) holds nothing else */
+                continue;
+            }
+            if (c == ')' || c == ']') {
+                if (depth > 0) depth--;
+                pending_prefix = false;
+                i++; continue;
+            }
+            /* Quote-like prefixes attach to the next datum. */
+            bool is_prefix = (c == '\'' || c == '`' || c == ',') ||
+                             (c == '#' && i + 1 < n && L[i + 1] == ';');
+            int elem_col = (int)i;
+            bool counted = false;
+            if (depth > 0 && !pending_prefix) {
+                SchemeFrame *f = &st[depth - 1];
+                if (f->n_elems == 0) { f->head_col = elem_col; f->head_line = line_no; }
+                else if (f->n_elems == 1 && f->head_line == line_no) f->arg_col = elem_col;
+                f->n_elems++;
+                counted = true;
+            }
+            (void)counted;
+            if (is_prefix) {
+                if (!pending_prefix) prefix_quotes = false;
+                if (c == '\'' || c == '`') prefix_quotes = true;
+                if (c == ',') prefix_quotes = false;
+                pending_prefix = true;
+                if (c == '#') i += 2;
+                else if (c == ',' && i + 1 < n && L[i + 1] == '@') i += 2;
+                else i++;
+                continue;
+            }
+            bool quoted = pending_prefix && prefix_quotes;
+            bool unquoted = pending_prefix && !prefix_quotes;
+            pending_prefix = false;
+            /* Openers: ( [ #( #u8( */
+            size_t open_at = n;
+            bool vec_data = false;
+            if (c == '(' || c == '[') open_at = i;
+            else if (c == '#' && i + 1 < n && L[i + 1] == '(') { open_at = i + 1; vec_data = true; }
+            else if (c == '#' && i + 3 < n && L[i + 1] == 'u' && L[i + 2] == '8' && L[i + 3] == '(') { open_at = i + 3; vec_data = true; }
+            if (open_at < n) {
+                if (depth >= MAXD) { rc = -1; break; }
+                SchemeFrame *parent = depth > 0 ? &st[depth - 1] : NULL;
+                SchemeFrame *f = &st[depth++];
+                memset(f, 0, sizeof *f);
+                f->col = (int)open_at;
+                f->head_col = -1;
+                f->arg_col = -1;
+                bool inherited = parent && parent->data_inherit && !unquoted;
+                f->data_inherit = quoted || vec_data || inherited;
+                f->data = f->data_inherit || L[open_at] == '[';
+                /* Peek the head token for the body-form test. */
+                size_t h = open_at + 1;
+                while (h < n && (L[h] == ' ' || L[h] == '\t')) h++;
+                size_t he = h;
+                while (he < n && !scheme_delim(L[he])) he++;
+                f->head_is_sym = he > h && L[h] != '"' && L[h] != '#' && L[h] != '\'';
+                f->body_form = f->head_is_sym && scheme_body_head(L + h, he - h);
+                i = open_at + 1;
+                continue;
+            }
+            if (c == '"') { in_str = true; i++; continue; }
+            if (c == '|') { in_bar = true; i++; continue; }
+            if (c == '#' && i + 1 < n && L[i + 1] == '\\') {
+                /* #\x: the character itself may be a delimiter, e.g. #\( */
+                i += 3;
+                while (i < n && !scheme_delim(L[i])) i++;
+                continue;
+            }
+            /* An ordinary token. */
+            while (i < n && !scheme_delim(L[i]) && L[i] != '|') i++;
+        }
+        if (rc != 0) break;
+        /* No leading blank lines (the body usually starts with the newline
+         * that ended the `#lang` line, which the caller re-emits). */
+        if (out->len == 0 && line.len == 0) continue;
+        buf_write(out, line.data ? line.data : "", line.len);
+        if (e < len) buf_putc(out, '\n');
+    }
+    buf_free(&line);
+    free(st);
+    if (rc != 0) return rc;
+    /* Exactly one trailing newline; no trailing blank lines. */
+    while (out->len > 0 && (out->data[out->len - 1] == '\n' || out->data[out->len - 1] == ' '))
+        out->len--;
+    buf_putc(out, '\n');
+    return 0;
+}
+
 int fmt_format_buffer(const char *path_label, const char *src, size_t len,
                       ReaderType rtype, Buf *out) {
     /* Reset BEFORE registering: diag_reset() clears the file registry, so
@@ -1884,6 +2134,14 @@ int fmt_format_buffer(const char *path_label, const char *src, size_t len,
     int rc = 0;
     if (!forms || diag_had_error()) {
         rc = -1;
+    } else if (rtype == READER_R7RS) {
+        /* r7rs-lang-plan R9: the parse above is the syntax check; the
+         * output is the ORIGINAL text re-indented (fmt_scheme_reindent). */
+        buf_init(out);
+        if (fmt_scheme_reindent(src, len, out) != 0) {
+            buf_free(out);
+            rc = -1;
+        }
     } else {
         FmtOptions opts = {0};
         opts.indent_width = 2;
@@ -1900,4 +2158,37 @@ int fmt_format_buffer(const char *path_label, const char *src, size_t len,
     symtab_free(&st);
     arena_free(&arena);
     return rc;
+}
+
+/* r7rs-lang-plan R9 (moved from main.c): format a document that may carry a
+ * `#lang` directive -- the directive verbatim, the body by its reader.  See
+ * fmt.h. */
+int fmt_format_document(const char *path_label, const char *src, size_t len,
+                              ReaderType rtype, Buf *out) {
+    const char *body = src;
+    size_t body_len = len;
+    LangDialect dl = LANG_TURMERIC;
+    ReaderType lang_rt = detect_lang_dialect(src, len, &body, &body_len,
+                                             NULL, NULL, &dl);
+    size_t head_len = (size_t)(body - src);
+    if (head_len == 0) return fmt_format_buffer(path_label, src, len, rtype, out);
+
+    if (rtype == READER_TURMERIC && reader_type_is_implemented(lang_rt))
+        rtype = lang_rt;
+
+    Buf body_out;
+    int rc = fmt_format_buffer(path_label, body, body_len, rtype, &body_out);
+    if (rc != 0) return rc;
+
+    buf_init(out);
+    buf_write(out, src, head_len);
+    /* The reader hands back the position after the directive TEXT, which may or
+     * may not include its newline, and the printer strips leading blank lines
+     * from the body -- so without this the two ran together as
+     * `#lang saffron;;; ...`.  Normalising to exactly one newline also keeps
+     * the pass idempotent, which `fmt-idempotence-stdlib` checks. */
+    if (head_len == 0 || src[head_len - 1] != '\n') buf_putc(out, '\n');
+    buf_write(out, body_out.data, body_out.len);
+    buf_free(&body_out);
+    return 0;
 }

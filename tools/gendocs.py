@@ -399,10 +399,19 @@ def parse_tur_file(path):
     # on the site and no page at all for turi/eval.
     # ------------------------------------------------------------------
     module_re = re.compile(r'\(\s*defmodule\s+([\w/\-]+)')
+    # r7rs-lang-plan R9: a Scheme library names itself `(define-library (a b))`,
+    # which the compiler maps to the module `a/b`.
+    library_re = re.compile(r'\(\s*define-library\s+\(([^()]*)\)')
     for line in lines:
-        m = module_re.search(strip_line_comment(line))
+        code = strip_line_comment(line)
+        m = module_re.search(code)
         if m:
             module['name'] = m.group(1)
+            module['name_declared'] = True
+            break
+        m = library_re.search(code)
+        if m and m.group(1).split():
+            module['name'] = '/'.join(m.group(1).split())
             module['name_declared'] = True
             break
 
@@ -446,6 +455,12 @@ def parse_tur_file(path):
     def_re = re.compile(
         r'^\s*\(\s*(defn|defmacro|defstruct|defdata|defgadt|definstance|defopaque|defeffect)\s+'
     )
+    # r7rs-lang-plan R9: the Scheme definition forms, documented as the
+    # Turmeric kinds they correspond to.  Parameters are untyped, like a
+    # Saffron defn's: ('x', None).
+    scheme_def_re = re.compile(
+        r'^\s*\(\s*(define-record-type|define-syntax|define)\s+'
+    )
 
     pending_module_doc = None   # most recently flushed ;;; block before first def
     first_def_seen = False
@@ -457,6 +472,38 @@ def parse_tur_file(path):
 
         if stripped.startswith(';;;'):
             doc_buf.append(stripped)
+            i += 1
+            continue
+
+        sm = scheme_def_re.match(line)
+        if sm:
+            if not first_def_seen:
+                if module['docstring'] is None and pending_module_doc:
+                    module['docstring'] = _parse_docstring(pending_module_doc)
+                    pending_module_doc = None
+                first_def_seen = True
+            # Enough following lines to close the header, which may wrap.
+            def_text = line
+            j = i + 1
+            while def_text.count('(') - def_text.count(')') > 1 and j < len(lines) and j < i + 8:
+                def_text += ' ' + lines[j].strip()
+                j += 1
+            parsed = _parse_scheme_def(sm.group(1), def_text)
+            if parsed:
+                kind, name, params = parsed
+                exported = (name in module['exports']) or (not module['exports'])
+                if name.startswith('__'):
+                    exported = False
+                module['definitions'].append({
+                    'kind': kind,
+                    'name': name,
+                    'params': params,
+                    'return_type': None,
+                    'exported': exported,
+                    'docstring': _parse_docstring(doc_buf) if doc_buf else None,
+                    'line': i + 1,
+                })
+            doc_buf = []
             i += 1
             continue
 
@@ -536,6 +583,40 @@ def parse_tur_file(path):
         i += 1
 
     return module
+
+
+def _parse_scheme_def(form, text):
+    """r7rs-lang-plan R9: (kind, name, params) for a Scheme definition, or None.
+
+    (define (name a b . rest) ...)            -> ('defn', name, [a, b, . rest])
+    (define name value)                       -> None (a variable: no signature)
+    (define-syntax name ...)                  -> ('defmacro', name, [])
+    (define-record-type name (make-name f ...) ...) -> ('defstruct', name, [f, ...])
+    """
+    rest = re.sub(r'^\s*\(\s*' + re.escape(form) + r'\s+', '', text)
+    if form == 'define':
+        m = re.match(r'\(\s*([^\s()]+)([^()]*)\)', rest)
+        if not m:
+            return None
+        toks = m.group(2).split()
+        params, k = [], 0
+        while k < len(toks):
+            if toks[k] == '.' and k + 1 < len(toks):
+                params.append(('. ' + toks[k + 1], None))
+                k += 2
+            else:
+                params.append((toks[k], None))
+                k += 1
+        return ('defn', m.group(1), params)
+    m = re.match(r'([^\s()]+)', rest)
+    if not m:
+        return None
+    name = m.group(1)
+    if form == 'define-syntax':
+        return ('defmacro', name, [])
+    ctor = re.match(r'[^\s()]+\s+\(\s*[^\s()]+([^()]*)\)', rest)
+    fields = ctor.group(1).split() if ctor else []
+    return ('defstruct', name, [(f, None) for f in fields])
 
 
 def _extract_exports(text, module):

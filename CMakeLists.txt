@@ -184,6 +184,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(lsp_saffron_diagnostics PROPERTIES TIMEOUT 300)
+# r7rs-lang-plan R9: a `#lang r7rs` buffer analyses as Scheme (by inheritance,
+# measured and pinned) and FORMATS -- textDocument/formatting answered "no
+# edits" for every `#lang` document until it ran fmt_format_document.
+add_test(
+  NAME lsp_r7rs_diagnostics
+  COMMAND bash tests/lsp/run-r7rs-diagnostics.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(lsp_r7rs_diagnostics PROPERTIES TIMEOUT 300)
 
 add_test(NAME source_literal_unit COMMAND tur_source_literal_unit)
 
@@ -1052,6 +1061,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_repl_lang_saffron PROPERTIES TIMEOUT 300)
+# r7rs-lang-plan R9: the REPL as an R7RS session -- `--lang r7rs` (refused
+# before), `#lang r7rs` at the prompt (switched the language but kept
+# Turmeric's preload and skipped the renames), the Scheme echo, and :reset.
+add_test(
+  NAME tur_repl_lang_r7rs
+  COMMAND bash tests/turi/repl-lang-r7rs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_repl_lang_r7rs PROPERTIES TIMEOUT 300)
 # saffron-lang-plan S8: `tur init --saffron` scaffolds a project that BUILDS.
 # The assertion is the build, not the file text: checking for a `#lang` line
 # would have passed while the LIBRARY scaffold could not compile at all
@@ -1063,6 +1081,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_init_saffron PROPERTIES TIMEOUT 300)
+# r7rs-lang-plan R9: `tur init --r7rs` -- both shapes build, the binary runs,
+# both test files pass under `tur test`, and the scaffold is fmt-clean.  It
+# found three project-mode defects the single-file fixtures never reach.
+add_test(
+  NAME tur_init_r7rs
+  COMMAND bash tests/run-init-r7rs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_init_r7rs PROPERTIES TIMEOUT 600)
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
 # LOADED in a real Vim and queried for highlight groups -- which is what caught
 # the fused-vs-spaced annotation bug.  The vscode half is structure and pattern

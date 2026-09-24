@@ -312,7 +312,15 @@ extern const char *g_lang_prelude;
  * session in Saffron instead of making the user type `#lang saffron` as their
  * first line.  Read once at REPL startup; `#lang` at the prompt is the other
  * route to the same env state. */
-extern bool g_repl_start_saffron;
+extern const char *g_repl_start_lang;
+/* r7rs-lang-plan R9: in a synthetic `<...>` source (the interpreter's `<eval>`
+ * blob), the first line that is USER input rather than the pinned stdlib
+ * preload, or 0 when nothing is pinned.  The REPL compiles the pinned preload
+ * and the prompt's input as one `<eval>` text, so a `#lang r7rs` session needs
+ * the Scheme renames on the second part and none on the first (the preload's
+ * native stubs are Turmeric).  Read by scheme_lower.c prelude_span; set around
+ * each interpreter eval (turi_eval_with_sink). */
+extern uint32_t g_synthetic_user_from_line;
 /* SR3 slice B (the Option niche -- default since 2026-09-03, TUR_OPTION_NICHE=0
  * restores the tagged form; docs/archive/sr3-option-niche-plan.md):
  * an `(Option P)` whose payload is a NON-NULLABLE pointer is carried AS that

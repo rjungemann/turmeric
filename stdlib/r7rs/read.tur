@@ -46,11 +46,13 @@
 (defn r7rs-rd-space?__ [b : int] : bool
   (if (= b 32) true (if (>= b 9) (<= b 13) false)))
 ;;; r7rs-rd-delim?__ -- whitespace, a bracket, `"`, `;`, `|`, or the end.
+(defn r7rs-rd-bracket?__ [b : int] : bool
+  (if (= b 40) true (if (= b 41) true (if (= b 91) true (= b 93)))))
 (defn r7rs-rd-delim?__ [b : int] : bool
   (if (< b 0) true
     (if (r7rs-rd-space?__ b) true
-      (if (= b 40) true (if (= b 41) true (if (= b 91) true (if (= b 93) true
-        (if (= b 34) true (if (= b 59) true (= b 124))))))))))
+      (if (r7rs-rd-bracket?__ b) true
+        (if (= b 34) true (if (= b 59) true (= b 124)))))))
 
 ;;; r7rs-rd-token__ -- the bytes up to the next delimiter.
 (defn r7rs-rd-token-go__ [io : R7rsIo out : R7rsIo] : nil

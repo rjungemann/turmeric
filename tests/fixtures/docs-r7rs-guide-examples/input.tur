@@ -1,0 +1,71 @@
+#lang r7rs
+;; The examples from docs/guides/r7rs-guide.md, so they cannot rot (the
+;; saffron guide's twin, docs-saffron-guide-examples).  Keep it in step with
+;; the guide: if an example changes there, change it here.
+;;
+;; No requires.* marker -- the guide describes the language, not a back end,
+;; so both suites run it.  Floats carry a non-zero fractional part.
+(import (scheme base) (scheme write) (scheme char) (scheme read))
+
+;; --- A first program ---------------------------------------------------------
+(define (fact n)
+  (if (= n 0)
+    1
+    (* n (fact (- n 1)))))
+(display (fact 20))
+(newline)
+
+;; --- Lists, vectors, strings ----------------------------------------------
+(define xs (list 3 1 2))
+(write (map (lambda (x) (* x x)) xs))
+(newline)
+(write (vector-map + #(1 2) #(10 20)))
+(newline)
+(write (string-upcase "shout"))
+(newline)
+(let loop ((i 0) (acc '()))
+  (if (< i 3)
+    (loop (+ i 1) (cons i acc))
+    (begin (write acc) (newline))))
+
+;; --- Numbers ---------------------------------------------------------------
+(write (list (/ 7 2) (/ 6 2) (exact->inexact 3) (+ 7.1 0.25) (expt 2 62)))
+(newline)
+; (* 4611686018427387904 2) would stop the program: exact overflow is a
+; panic, not a raised condition (the guide says so; r7rs-numbers pins it).
+
+;; --- Macros ------------------------------------------------------------------
+(define-syntax swap!
+  (syntax-rules ()
+    ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+(let ((p 1) (q 2))
+  (swap! p q)
+  (write (list p q))
+  (newline))
+
+;; --- Control -----------------------------------------------------------------
+(write (call/cc (lambda (k) (+ 1 (k 42)))))
+(newline)
+(write (guard (e ((error-object? e) (error-object-message e)))
+         (error "something broke" 'detail)))
+(newline)
+(define depth (make-parameter 0))
+(write (parameterize ((depth 1)) (depth)))
+(newline)
+(dynamic-wind
+  (lambda () (display "[in]"))
+  (lambda () (display "body"))
+  (lambda () (display "[out]")))
+(newline)
+
+;; --- Ports ---------------------------------------------------------------------
+(let ((out (open-output-string)))
+  (write '(a "b" #\c) out)
+  (write (get-output-string out))
+  (newline))
+(let ((l (list 1 2 3)))
+  (set-cdr! (cddr l) l)
+  (write l)
+  (newline))
+(write (read (open-input-string "(1 (2 . 3) #(4))")))
+(newline)

@@ -2107,8 +2107,8 @@ static void on_formatting(const char *id_raw, size_t id_len,
      * for the buffer come from run_doc_analysis on its own schedule. */
     diag_lsp_begin();
     Buf out;
-    int rc = fmt_format_buffer(doc->path, doc->text, doc->text_len,
-                               reader_type_from_extension(doc->path), &out);
+    int rc = fmt_format_document(doc->path, doc->text, doc->text_len,
+                                 reader_type_from_extension(doc->path), &out);
     diag_lsp_end();
 
     if (rc != 0) {

@@ -1,6 +1,6 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 through R8 landed 2026-09-23/24.** `#lang r7rs` is a base
+Status: **R0 through R9 landed 2026-09-23/24.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -44,8 +44,12 @@ bytevector and file ports over one C buffer, the current ports as parameter
 objects, the whole R7RS I/O surface, `write`/`display` with datum labels for
 cycles, `write-shared`/`write-simple`, and `(scheme read)`
 (`tests/fixtures/r7rs-ports`, `r7rs-write-labels`, `r7rs-read`,
-`r7rs-file-ports`). R9 onward is unbuilt. Each landed stage carries a "What
-shipped" note below.
+`r7rs-file-ports`). R9 gives the tooling: `tur repl --lang r7rs`, a `tur fmt`
+that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
+(native and browser) analysing and formatting Scheme, the editor packs,
+`gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
+(conformance) is unbuilt. Each landed stage carries a "What shipped" note
+below.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -1396,6 +1400,76 @@ The port taxonomy, string ports, `read`, `write`, `display`, `write-shared` and
 it, do not assume it**, since that is exactly how `tur fmt` and module import
 were both caught), editor packs, `tools/gendocs.py`, and
 `docs/guides/r7rs-guide.md`.
+
+> **What shipped (2026-09-24).** Every item, each MEASURED first -- and the
+> measuring earned its keep: of the seven items, one worked by inheritance
+> (LSP diagnostics), and the other six were broken or missing, four of them in
+> code paths no fixture reaches.
+>
+> - **`tur repl --lang r7rs`** (`tests/turi/repl-lang-r7rs.sh`, ctest
+>   `tur_repl_lang_r7rs`). `--lang` was a hard-coded turmeric/saffron pair; it
+>   now takes any base `tur dialects` lists. `#lang r7rs` at the prompt was
+>   worse than refused: it switched the language and kept Turmeric's pinned
+>   preload, and the prompt's `<eval>` text was exempt from the Scheme renames
+>   (R7's exemption for synthetic sources), so `(display ...)` met Turmeric's
+>   `display` method. A dialect whose prelude differs now gets a fresh session
+>   (`repl_fresh_env`, also behind `:reset` and `:run`, which keep the
+>   dialect), and the exemption stops at the pinned preload's last line
+>   (`g_synthetic_user_from_line`). An R7RS session echoes through the
+>   prelude's `write` (`=> (a "b" #\c)`, not `#<struct Sym>`). The browser
+>   REPL's language picker had the same gap and the same fix
+>   (`tur_wasm_glue_lang_unit`).
+> - **`tur fmt`** (`tests/run-fmt.sh`, five `fmt-r7rs-*` cases). The form
+>   printer cannot format Scheme: the reader desugars `#\x`, `#u8(...)`,
+>   `#e1.5e2` and `|two words|`, so printing the forms back made a different
+>   program (measured: all of those, `#t` as `true`, `,` as `~`). A Scheme file
+>   is RE-INDENTED -- every token and line break kept, each line's leading
+>   whitespace recomputed by Lisp rules (body forms two past the opener, calls
+>   aligned under the first argument, data under the first element), lines
+>   inside strings, `|...|`, `#| |#` and inline C untouched. `--stdin --lang
+>   r7rs` for an editor selection. Found on the way: `fmt-bootstrap-stdlib` had
+>   been red since R2 -- every `stdlib/r7rs/` file went through the Turmeric
+>   printer, and `run-fmt.sh` is not part of `run.sh`. The r7rs stdlib is now
+>   self-formatted and the harness is 34/34.
+> - **`tur init --r7rs`** (`tests/run-init-r7rs.sh`, ctest `tur_init_r7rs`): a
+>   binary that is a top-level Scheme program, a `--lib` that is a
+>   `define-library`, each with a test `tur test` runs. The first draft found
+>   three defects, all in project mode (`tur build .`), which no fixture uses:
+>   the bin/lib decision is a text scan for `(defn main`, so a Scheme program
+>   built a shared library (a `#lang r7rs` file without a `define-library` is
+>   now an entry point); a library was refused because the prelude -- itself a
+>   `#lang r7rs` file in the same form stream -- counted as "something else at
+>   top level" (prelude forms are now lowered in place, outside the user's
+>   library or program module); and the per-module C emission never had the
+>   forward-declaration band for globals that single-file emission has, so the
+>   prelude's handler stack was used before its declaration.
+> - **The LSP** (`tests/lsp/r7rs-diagnostics.py`, ctest
+>   `lsp_r7rs_diagnostics`; `tur_lsp_wasm_backend_unit`). Diagnostics work by
+>   inheritance, as for Saffron, and are now pinned (with the broken-buffer
+>   control first). Formatting did NOT work for any `#lang` document:
+>   `textDocument/formatting` handed the directive to the reader and answered
+>   "no edits". The `#lang`-aware document formatter moved from `main.c` into
+>   `fmt.c` (`fmt_format_document`) so the LSP runs the same one. The browser
+>   LSP -- the R0 sweep's flagged site -- now detects the dialect, sets the
+>   file's language and selects its prelude per buffer.
+> - **Editor packs** (`tests/run-editor-syntax.sh`): the Scheme lexemes
+>   (`#t`, `#\x`, `|sym|`, `#| |#`, `#;`, radix numbers, `#(`/`#u8(`, the
+>   Scheme forms), scoped to `#lang r7rs` files in both packs -- a `|...|`
+>   symbol rule would otherwise swallow the `|` of Turmeric's
+>   `#refine{x : T | pred}`, which the harness now checks.
+> - **`tools/gendocs.py`** (`tests/check-gendocs-parse.sh`): measured to find
+>   a Scheme library's exports and NO definitions, under the file's name
+>   rather than the library's. It now reads `define`, `define-syntax` and
+>   `define-record-type`, and names the module from `define-library`.
+> - **`docs/guides/r7rs-guide.md`**, its examples compiled and run on both
+>   back ends by `tests/fixtures/docs-r7rs-guide-examples`. Drafting it
+>   corrected two claims before they shipped: `(except ...)` imports are
+>   refused (R3), and exact overflow is a panic, not a condition `guard` can
+>   catch.
+>
+> Not verified here: the browser builds of the REPL and LSP changes (no
+> Emscripten in this environment). Both are exercised natively by their unit
+> tests, which fail without the fixes.
 
 ### R10 -- conformance (medium, continuous)
 

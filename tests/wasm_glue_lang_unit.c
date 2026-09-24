@@ -178,6 +178,12 @@ int main(void) {
           "#t reads under the Scheme reader");
     CHECK(eval_contains("#x1F", "31"),
           "a radix prefix reads under the Scheme reader");
+    /* r7rs-lang-plan R9: and the PRELUDE came with it.  The switch rewound to
+     * the pinned Turmeric preload, which has no R7RS prelude, so `null?` (the
+     * prelude's r7rs-null?, reached through the rename) was an unknown name. */
+    CHECK(eval_contains("(null? (quote ()))", "true") &&
+          !eval_contains("(null? (quote ()))", "unknown"),
+          "set_lang r7rs brings the R7RS prelude: null? resolves through the rename");
     CHECK(turi_wasm_set_lang("r7rs/sweet") == 1,
           "r7rs has no reader axis: a slash spelling is rejected");
     CHECK(strcmp(turi_wasm_get_lang(), "r7rs") == 0,

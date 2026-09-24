@@ -5680,6 +5680,24 @@ static bool file_has_main_defn(const char *path) {
     size_t len = 0;
     if (read_entire_file_quiet(path, &src, &len) != 0) return false;
     bool found = false;
+    /* r7rs-lang-plan R9: an R7RS PROGRAM is its top-level forms -- it has no
+     * `(defn main`, and the lowering folds its expressions into one.  So a
+     * `#lang r7rs` file is an entry point unless it is a library (a
+     * `(define-library` at the start of a line).  Without this `tur build .`
+     * on a Scheme program produced a shared library and no binary. */
+    {
+        const char *body = NULL; size_t body_len = 0;
+        LangDialect dl = LANG_TURMERIC;
+        (void)detect_lang_dialect(src, len, &body, &body_len, NULL, NULL, &dl);
+        if (dl == LANG_R7RS) {
+            bool is_library = false;
+            for (size_t i = 0; i + 15 <= len && !is_library; i++)
+                if ((i == 0 || src[i - 1] == '\n') && strncmp(src + i, "(define-library", 15) == 0)
+                    is_library = true;
+            free(src);
+            return !is_library;
+        }
+    }
     for (size_t i = 0; i + 4 < len && !found; i++) {
         /* Match "(defn main" or "defn main" (sweet-exp) at a word boundary */
         bool sexpr = (strncmp(src + i, "(defn main", 10) == 0);
@@ -7474,32 +7492,11 @@ static bool fmt_is_tur_file(const char *name) {
  * the extension alone does not say so. */
 static int fmt_format_source(const char *path_label, const char *src, size_t len,
                               ReaderType rtype, Buf *out) {
-    const char *body = src;
-    size_t body_len = len;
-    LangDialect dl = LANG_TURMERIC;
-    ReaderType lang_rt = detect_lang_dialect(src, len, &body, &body_len,
-                                             NULL, NULL, &dl);
-    size_t head_len = (size_t)(body - src);
-    if (head_len == 0) return fmt_format_buffer(path_label, src, len, rtype, out);
-
-    if (rtype == READER_TURMERIC && reader_type_is_implemented(lang_rt))
-        rtype = lang_rt;
-
-    Buf body_out;
-    int rc = fmt_format_buffer(path_label, body, body_len, rtype, &body_out);
-    if (rc != 0) return rc;
-
-    buf_init(out);
-    buf_write(out, src, head_len);
-    /* The reader hands back the position after the directive TEXT, which may or
-     * may not include its newline, and the printer strips leading blank lines
-     * from the body -- so without this the two ran together as
-     * `#lang saffron;;; ...`.  Normalising to exactly one newline also keeps
-     * the pass idempotent, which `fmt-idempotence-stdlib` checks. */
-    if (head_len == 0 || src[head_len - 1] != '\n') buf_putc(out, '\n');
-    buf_write(out, body_out.data, body_out.len);
-    buf_free(&body_out);
-    return 0;
+    /* r7rs-lang-plan R9: the body moved to fmt.c (fmt_format_document) so the
+     * LSP's textDocument/formatting -- linked into tur_core, not main.c --
+     * formats a `#lang` document too; it handed the directive to the reader
+     * and got a parse error, i.e. "no edits", for every `#lang` buffer. */
+    return fmt_format_document(path_label, src, len, rtype, out);
 }
 
 typedef enum {
@@ -7654,7 +7651,7 @@ static int usage_fmt(void) {
         "  Paths may be files or directories.  Defaults to current directory.\n"
         "  Skips:  build/  .git/  .tur-cache/  .turnb-cache/  .tur-repl-cache/\n"
         "\n"
-        "  Dialects for --lang:  turmeric (default)  sweet-exp  curly-infix  neoteric\n"
+        "  Dialects for --lang:  turmeric (default)  sweet-exp  curly-infix  neoteric  r7rs\n"
         "  (tursweet is a deprecated alias for sweet-exp)\n"
         "\n"
         "Exit codes:\n"
@@ -7708,6 +7705,10 @@ static int cmd_fmt(int argc, char **argv) {
                 force_lang = READER_CURLY_INFIX;
             } else if (strcmp(lang, "neoteric") == 0) {
                 force_lang = READER_NEOTERIC;
+            } else if (strcmp(lang, "r7rs") == 0) {
+                /* r7rs-lang-plan R9: a Scheme buffer with no `#lang` line
+                 * (an editor selection) -- re-indented, never reprinted. */
+                force_lang = READER_R7RS;
             } else {
                 fprintf(stderr, "tur fmt: unknown dialect '%s'\n", lang);
                 return 2;
@@ -9699,8 +9700,9 @@ static int usage_repl(void) {
         "                  start the interactive REPL\n"
         "\n"
         "flags:\n"
-        "  --lang <d>      start in a language dialect: \"turmeric\" (default)\n"
-        "                  or \"saffron\" (unannotated params default to any).\n"
+        "  --lang <d>      start in a language dialect: \"turmeric\" (default),\n"
+        "                  \"saffron\" (unannotated params default to any),\n"
+        "                  \"r7rs\" (Scheme), or any base `tur dialects` lists.\n"
         "                  Equivalent to typing `#lang <d>` at the prompt.\n"
         "  --watch         auto-reload the enclosing spice between prompts\n"
         "                  when any source .tur file's mtime advances\n"
@@ -12108,15 +12110,21 @@ static int tur_main_inner(int argc, char **argv) {
         /* Validated HERE rather than inside cmd_repl, so a typo is a usage
          * error before the banner prints and the stdlib preloads. */
         if (repl_lang_flag) {
-            if (strcmp(repl_lang_flag, "saffron") == 0) {
-                g_repl_start_saffron = true;
-            } else if (strcmp(repl_lang_flag, "turmeric") != 0) {
+            /* r7rs-lang-plan R9: any base `tur dialects` lists, resolved
+             * through the same table the `#lang` line uses -- it was a
+             * hard-coded "turmeric"/"saffron" pair, so `--lang r7rs` was
+             * refused. */
+            LangDialect ld;
+            ReaderType lr;
+            if (!lang_base_lookup(repl_lang_flag, strlen(repl_lang_flag), &ld, &lr)) {
                 fprintf(stderr,
                         "tur repl: unknown --lang '%s' "
-                        "(expected \"turmeric\" or \"saffron\")\n",
+                        "(expected a base `tur dialects` lists, e.g. "
+                        "\"turmeric\", \"saffron\" or \"r7rs\")\n",
                         repl_lang_flag);
                 return usage_error(usage_repl);
             }
+            g_repl_start_lang = repl_lang_flag;
         }
         return cmd_repl(watch_mode);
     }

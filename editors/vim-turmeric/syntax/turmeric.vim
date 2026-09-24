@@ -1,4 +1,4 @@
-" Vim syntax file for Turmeric, including the Saffron dialect.
+" Vim syntax file for Turmeric, including the Saffron and R7RS dialects.
 "
 " Kept deliberately close to the VS Code TextMate grammar in
 " ../vscode-turmeric/syntaxes/turmeric.tmLanguage.json -- the two are meant to
@@ -57,6 +57,29 @@ syn match turmericType     "\v(\s|\[)@<=:\s*[A-Za-z_][A-Za-z0-9_/<>-]*"
 syn keyword turmericConstant true false nil nil-value
 " Floats before ints so 7.1 is one token.
 syn match turmericNumber "\v(<|-)@<=-?(0[xX][0-9a-fA-F]+|[0-9]+\.[0-9]+([eE][-+]?[0-9]+)?|[0-9]+)>"
+
+" r7rs-lang-plan R9: the Scheme lexemes, in a `#lang r7rs` file only.  Scoped
+" to the directive because two of them collide with Turmeric: a `|...|` symbol
+" would swallow the `|` of `#refine{x : T | pred}`, and `#|` is not a Turmeric
+" comment.  Defined after the rules above so they win at a shared position.
+if getline(1) =~# '^#lang\s\+r7rs\>'
+  syn region turmericSchemeBlockComment start="#|" end="|#" contains=turmericSchemeBlockComment,turmericTodo
+  syn match  turmericSchemeDatumComment "#;"
+  syn region turmericSchemeBarSymbol start=+|+ skip=+\\.+ end=+|+
+  syn match  turmericSchemeChar "\v#\\(x[0-9a-fA-F]+|alarm|backspace|delete|escape|newline|null|return|space|tab|.)"
+  syn match  turmericSchemeBoolean "\v#(true|false|t|f)([A-Za-z0-9_/!?<>\=*+-])@!"
+  syn match  turmericSchemeNumber "\v#[eEiIxXbBoOdD](#[eEiIxXbBoOdD])?[-+]?[0-9a-fA-F.]+([eE][-+]?[0-9]+)?"
+  syn match  turmericSchemeVector "\v#(u8)?\("me=e-1
+  syn match  turmericSchemeSpecial "\v\(@<=(define-library|define-syntax|define-record-type|define-values|let-syntax|letrec-syntax|syntax-rules|syntax-error|let\*-values|let-values|letrec\*|let\*|begin|delay-force|delay|make-promise|guard|parameterize|case-lambda|cond-expand|include-ci|include|dynamic-wind|call-with-current-continuation|with-exception-handler|raise-continuable|raise|error)([A-Za-z0-9_/!?<>\=*+-])@!"
+  hi def link turmericSchemeBlockComment Comment
+  hi def link turmericSchemeDatumComment Comment
+  hi def link turmericSchemeBarSymbol    Identifier
+  hi def link turmericSchemeChar         Character
+  hi def link turmericSchemeBoolean      Boolean
+  hi def link turmericSchemeNumber       Number
+  hi def link turmericSchemeVector       PreProc
+  hi def link turmericSchemeSpecial      Keyword
+endif
 
 hi def link turmericLang       PreProc
 hi def link turmericLangBase   Type

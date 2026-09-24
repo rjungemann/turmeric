@@ -19045,6 +19045,13 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     /* Forward declarations for module-local functions so that mutually-recursive
      * static C functions resolve at C-compile time (parity with emit_program). */
     emit_fn_forward_decls(&ctx, &impl_fwd_decls, impl_items, impl_n_items);
+    /* r7rs-lang-plan R9: and the global-def band emit_program carries -- a
+     * lifted lambda is prepended to the item list, so it can read or `set!`
+     * a `def` whose storage is declared far below it.  Missing here, a
+     * project build (`tur build .`, per-module .c) of any `#lang r7rs` source
+     * failed in cc on the prelude's handler stack ('r7rs-handlers__'
+     * undeclared) while the single-file build of the same text compiled. */
+    emit_global_def_forward_decls(&ctx, &impl_fwd_decls, impl_items, impl_n_items);
 
     /* Check if user defined a main function */
     bool user_has_main = false;

@@ -6,6 +6,25 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs` tooling (R9).** `tur repl --lang r7rs` (and `#lang r7rs` at
+  the prompt, which switched the language but kept Turmeric's preload and
+  skipped the Scheme renames) with results echoed in Scheme's spelling; `tur
+  fmt` re-indents a Scheme file and never rewrites a token (the form printer
+  turned `#\x`, `|two words|` and `#t` into a different program), with
+  `--stdin --lang r7rs`; `tur init --r7rs` scaffolds a program or, with
+  `--lib`, a `define-library`, both of which build and test; the LSP analyses
+  and formats Scheme (formatting answered "no edits" for every `#lang`
+  document) and the browser LSP and REPL picker learn the dialect; the vim and
+  VS Code packs highlight Scheme lexemes in `#lang r7rs` files; `gendocs`
+  reads Scheme definitions and library names; and
+  `docs/guides/r7rs-guide.md`. Fixed on the way, in project mode (`tur build
+  .`): a Scheme program built a shared library instead of a binary, a Scheme
+  library was refused over the prelude's own definitions, and per-module C
+  emission lacked the forward declarations for globals. `fmt-bootstrap-stdlib`
+  is green again. `tests/turi/repl-lang-r7rs.sh`, `tests/run-init-r7rs.sh`,
+  `tests/lsp/r7rs-diagnostics.py`, new cases in `run-fmt.sh`,
+  `run-editor-syntax.sh`, `check-gendocs-parse.sh` and the two wasm unit
+  tests, and `tests/fixtures/docs-r7rs-guide-examples`.
 - **`#lang r7rs` ports and I/O (R8).** String, bytevector and file ports
   over one C buffer (`defopaque` handles, inline C with interpreter twins),
   the whole R7RS I/O surface of `(scheme base)` with UTF-8 characters, and

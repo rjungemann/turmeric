@@ -970,9 +970,9 @@
 (defn r7rs-call/cc [f] : any
   (let [saved r7rs-winders__]
     (call/cc (fn [k]
-      (f (fn [& vs : any] : any
-           (r7rs-rewind-to__ saved)
-           (k (r7rs-values-of-list__ (r7rs-chain->list__ (:: vs (Cons any)))))))))))
+               (f (fn [& vs : any] : any
+                    (r7rs-rewind-to__ saved)
+                    (k (r7rs-values-of-list__ (r7rs-chain->list__ (:: vs (Cons any)))))))))))
 
 ;;; read-error? / file-error? -- R7: an error object of that kind; (scheme
 ;;; file) raises file errors, the reader's arrive with R8.
@@ -988,9 +988,9 @@
 (defn r7rs-with-exception-handler [handler thunk] : any
   (let [saved r7rs-handlers__]
     (r7rs-dynamic-wind
-      (fn [] : any (set! r7rs-handlers__ (r7rs-cons handler saved)))
-      thunk
-      (fn [] : any (set! r7rs-handlers__ saved)))))
+     (fn [] : any (set! r7rs-handlers__ (r7rs-cons handler saved)))
+     thunk
+     (fn [] : any (set! r7rs-handlers__ saved)))))
 
 ;;; r7rs-raise-continuable -- call the innermost handler with obj, with the
 ;;; outer handlers installed while it runs (R7RS 6.11); its value is the
@@ -1001,9 +1001,9 @@
     (let [saved r7rs-handlers__
           h (r7rs-car saved)]
       (r7rs-dynamic-wind
-        (fn [] : any (set! r7rs-handlers__ (r7rs-cdr saved)))
-        (fn [] : any (h obj))
-        (fn [] : any (set! r7rs-handlers__ saved))))))
+       (fn [] : any (set! r7rs-handlers__ (r7rs-cdr saved)))
+       (fn [] : any (h obj))
+       (fn [] : any (set! r7rs-handlers__ saved))))))
 
 ;;; r7rs-raise -- like raise-continuable, but a handler that returns is an
 ;;; error: a secondary exception is raised to the outer handlers.
@@ -1062,9 +1062,9 @@
                        bindings)
         olds (r7rs-map (fn [c] : any (r7rs-param-get__ c)) cells)]
     (r7rs-dynamic-wind
-      (fn [] : any (r7rs-params-set-all__ cells news))
-      thunk
-      (fn [] : any (r7rs-params-set-all__ cells olds)))))
+     (fn [] : any (r7rs-params-set-all__ cells news))
+     thunk
+     (fn [] : any (r7rs-params-set-all__ cells olds)))))
 
 ;;; R7rsPBox / R7rsPromise -- a promise shares its box with the promise a
 ;;; `delay-force` chain yields, the R7RS 7.3 reference shape.
@@ -1249,17 +1249,17 @@
         (r7rs-utf8-go__ v (+ i 1) end (r7rs-string-append2__ acc (r7rs-string-of-code__ b)))
         (if (if (>= b 192) (< b 224) false)
           (r7rs-utf8-go__ v (+ i 2) end
-            (r7rs-string-append2__ acc (r7rs-string-of-code__ (+ (* (- b 192) 64) (r7rs-utf8-cont__ v (+ i 1) end)))))
+                          (r7rs-string-append2__ acc (r7rs-string-of-code__ (+ (* (- b 192) 64) (r7rs-utf8-cont__ v (+ i 1) end)))))
           (if (if (>= b 224) (< b 240) false)
             (r7rs-utf8-go__ v (+ i 3) end
-              (r7rs-string-append2__ acc (r7rs-string-of-code__
-                (+ (* (- b 224) 4096) (+ (* (r7rs-utf8-cont__ v (+ i 1) end) 64) (r7rs-utf8-cont__ v (+ i 2) end))))))
+                            (r7rs-string-append2__ acc (r7rs-string-of-code__
+                                                        (+ (* (- b 224) 4096) (+ (* (r7rs-utf8-cont__ v (+ i 1) end) 64) (r7rs-utf8-cont__ v (+ i 2) end))))))
             (if (if (>= b 240) (< b 245) false)
               (r7rs-utf8-go__ v (+ i 4) end
-                (r7rs-string-append2__ acc (r7rs-string-of-code__
-                  (+ (* (- b 240) 262144)
-                     (+ (* (r7rs-utf8-cont__ v (+ i 1) end) 4096)
-                        (+ (* (r7rs-utf8-cont__ v (+ i 2) end) 64) (r7rs-utf8-cont__ v (+ i 3) end)))))))
+                              (r7rs-string-append2__ acc (r7rs-string-of-code__
+                                                          (+ (* (- b 240) 262144)
+                                                             (+ (* (r7rs-utf8-cont__ v (+ i 1) end) 4096)
+                                                                (+ (* (r7rs-utf8-cont__ v (+ i 2) end) 64) (r7rs-utf8-cont__ v (+ i 3) end)))))))
               (r7rs-fail-cstr__ "utf8->string: invalid UTF-8 lead byte"))))))))
 (defn r7rs-utf8->string [bv & r : any] : cstr
   (let [v (r7rs-bytevector-bytes__ bv)

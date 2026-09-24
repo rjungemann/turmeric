@@ -4,6 +4,9 @@
   "scopeName": "source.turmeric",
   "patterns": [
     {
+      "include": "#scheme-file"
+    },
+    {
       "include": "#lang-directive"
     },
     {
@@ -180,6 +183,130 @@
       "comment": "A bare :keyword in value position -- distinct from a type annotation, which is preceded by whitespace inside a binder.",
       "match": ":[A-Za-z_][A-Za-z0-9_-]*",
       "name": "constant.other.keyword.turmeric"
+    },
+    "scheme-file": {
+      "comment": "r7rs-lang-plan R9: a `#lang r7rs` file. Begins at the directive and never ends, so the Scheme lexemes apply to that file only -- two of them collide with Turmeric (a `|...|` symbol would swallow the `|` of `#refine{x : T | pred}`, and `#|` is not a Turmeric comment). The Scheme rules come first so they win at a shared position.",
+      "begin": "^(?=#lang[ \\t]+r7rs\\b)",
+      "end": "(?!)",
+      "patterns": [
+        {
+          "include": "#lang-directive"
+        },
+        {
+          "include": "#scheme-block-comment"
+        },
+        {
+          "include": "#scheme-datum-comment"
+        },
+        {
+          "include": "#scheme-bar-symbol"
+        },
+        {
+          "include": "#scheme-char"
+        },
+        {
+          "include": "#scheme-boolean"
+        },
+        {
+          "include": "#scheme-number"
+        },
+        {
+          "include": "#scheme-vector"
+        },
+        {
+          "include": "#scheme-special-form"
+        },
+        {
+          "include": "#inline-c"
+        },
+        {
+          "include": "#doc-comment"
+        },
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#char"
+        },
+        {
+          "include": "#definition"
+        },
+        {
+          "include": "#special-form"
+        },
+        {
+          "include": "#else-clause"
+        },
+        {
+          "include": "#dispatch"
+        },
+        {
+          "include": "#type-annotation"
+        },
+        {
+          "include": "#effect-row"
+        },
+        {
+          "include": "#param-attribute"
+        },
+        {
+          "include": "#constant"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#keyword-literal"
+        }
+      ]
+    },
+    "scheme-block-comment": {
+      "begin": "#\\|",
+      "end": "\\|#",
+      "name": "comment.block.scheme.turmeric",
+      "patterns": [
+        {
+          "include": "#scheme-block-comment"
+        }
+      ]
+    },
+    "scheme-datum-comment": {
+      "match": "#;",
+      "name": "comment.datum.scheme.turmeric"
+    },
+    "scheme-bar-symbol": {
+      "begin": "\\|",
+      "end": "\\|",
+      "name": "variable.other.symbol.scheme.turmeric",
+      "patterns": [
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.turmeric"
+        }
+      ]
+    },
+    "scheme-char": {
+      "match": "#\\\\(?:x[0-9a-fA-F]+|alarm|backspace|delete|escape|newline|null|return|space|tab|.)",
+      "name": "constant.character.scheme.turmeric"
+    },
+    "scheme-boolean": {
+      "match": "#(?:true|false|t|f)(?![A-Za-z0-9_/!?<>=*+-])",
+      "name": "constant.language.boolean.scheme.turmeric"
+    },
+    "scheme-number": {
+      "match": "#[eEiIxXbBoOdD](?:#[eEiIxXbBoOdD])?[-+]?[0-9a-fA-F.]+(?:[eE][-+]?[0-9]+)?",
+      "name": "constant.numeric.scheme.turmeric"
+    },
+    "scheme-vector": {
+      "match": "#(?:u8)?(?=\\()",
+      "name": "keyword.operator.vector.scheme.turmeric"
+    },
+    "scheme-special-form": {
+      "match": "(?<=\\()(define-library|define-syntax|define-record-type|define-values|let-syntax|letrec-syntax|syntax-rules|syntax-error|let\\*-values|let-values|letrec\\*|let\\*|begin|delay-force|delay|make-promise|guard|parameterize|case-lambda|cond-expand|include-ci|include|dynamic-wind|call-with-current-continuation|with-exception-handler|raise-continuable|raise|error)(?![A-Za-z0-9_/!?<>=*+-])",
+      "name": "keyword.control.scheme.turmeric"
     }
   }
 }
