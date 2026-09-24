@@ -99,6 +99,10 @@ static const char *const RENAMES[][2] = {
     { "string-append",    "r7rs-string-append" },
     { "substring",        "r7rs-substring" },
     { "string-copy",      "r7rs-string-copy" },
+    /* T3: the mutators, on the R7rsString a procedure newly allocates. */
+    { "string-set!",      "r7rs-string-set!" },
+    { "string-fill!",     "r7rs-string-fill!" },
+    { "string-copy!",     "r7rs-string-copy!" },
     { "string=?",         "r7rs-string=?" },
     { "string<?",         "r7rs-string<?" },
     { "string->symbol",   "r7rs-string->symbol" },
@@ -2974,12 +2978,6 @@ static Form *lower(SL *sl, Form *f) {
         if (!prelude_span(f->span)) {
             /* R7: named refusals rather than an unbound-name error. */
             const char *hn = h->name;
-            if (strcmp(hn, "string-set!") == 0 || strcmp(hn, "string-fill!") == 0 ||
-                strcmp(hn, "string-copy!") == 0) {
-                err(f, "%s is not supported: #lang r7rs strings are immutable (a Turmeric cstr); "
-                       "build a new string with string-append, substring or list->string", hn);
-                return Nil(sl, f->span);
-            }
             if (h == sl->s_include || strcmp(hn, "include-ci") == 0) {
                 err(f, "%s is not supported yet: an included file would have to be read as Scheme "
                        "without its own #lang line; put the definitions in a define-library and import it", hn);

@@ -3038,6 +3038,42 @@ static TuriValue native_r7rs_string_length(TuriEnv *env, TuriValue *a, uint32_t 
     (void)env; (void)ud;
     return turi_int((int64_t)strlen(r7rs_arg_cstr(a, n, 0)));
 }
+/* T3: a Scheme string's characters are code points; a cstr-backed one (a
+ * literal) is UTF-8 text, counted and indexed by character.  The prelude's
+ * compiled twins are r7rs-utf8-count__ / r7rs-utf8-ref__. */
+static TuriValue native_r7rs_utf8_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t c = 0;
+    for (const unsigned char *p = (const unsigned char *)r7rs_arg_cstr(a, n, 0); *p; p++)
+        if ((*p & 0xC0) != 0x80) c++;
+    return turi_int(c);
+}
+static TuriValue native_r7rs_utf8_at(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const unsigned char *p = (const unsigned char *)r7rs_arg_cstr(a, n, 0) + r7rs_arg_int(a, n, 1);
+    int w = *p < 0xC0 ? 1 : *p < 0xE0 ? 2 : *p < 0xF0 ? 3 : 4;
+    uint32_t cp = w == 1 ? *p : w == 2 ? (*p & 0x1Fu) : w == 3 ? (*p & 0x0Fu) : (*p & 0x07u);
+    int k = 1;
+    for (; k < w && p[k]; k++) cp = (cp << 6) | (p[k] & 0x3Fu);
+    return turi_int((int64_t)cp * 8 + k);
+}
+static TuriValue native_r7rs_utf8_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const unsigned char *p = (const unsigned char *)r7rs_arg_cstr(a, n, 0);
+    int64_t i = r7rs_arg_int(a, n, 1), k = 0;
+    while (i >= 0 && *p) {
+        int w = *p < 0xC0 ? 1 : *p < 0xE0 ? 2 : *p < 0xF0 ? 3 : 4;
+        if (k == i) {
+            uint32_t cp = w == 1 ? *p : w == 2 ? (*p & 0x1Fu) : w == 3 ? (*p & 0x0Fu) : (*p & 0x07u);
+            for (int j = 1; j < w && p[j]; j++) cp = (cp << 6) | (p[j] & 0x3Fu);
+            return turi_int((int64_t)cp);
+        }
+        for (int j = 0; j < w && *p; j++) p++;
+        k++;
+    }
+    turi_runtime_panic(env, "string-ref: index out of range");
+    return turi_int(0);
+}
 static TuriValue native_r7rs_string_ref_code(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     const char *s = r7rs_arg_cstr(a, n, 0);
@@ -3767,14 +3803,17 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-environ-count__",  native_r7rs_environ_count,  NULL);
     turi_env_register_native(env, "r7rs-environ-name__",   native_r7rs_environ_name,   NULL);
     turi_env_register_native(env, "r7rs-environ-value__",  native_r7rs_environ_value,  NULL);
-    turi_env_register_native(env, "r7rs-file-exists?",     native_r7rs_file_exists,    NULL);
+    turi_env_register_native(env, "r7rs-file-exists-c__",  native_r7rs_file_exists,    NULL);
     turi_env_register_native(env, "r7rs-unlink__",         native_r7rs_unlink,         NULL);
     turi_env_register_native(env, "r7rs-same-ref__",       native_r7rs_same_ref,        NULL);
-    turi_env_register_native(env, "r7rs-string-length",    native_r7rs_string_length,   NULL);
+    turi_env_register_native(env, "r7rs-blen__",           native_r7rs_string_length,   NULL);
+    turi_env_register_native(env, "r7rs-utf8-count__",     native_r7rs_utf8_count,      NULL);
+    turi_env_register_native(env, "r7rs-utf8-ref__",       native_r7rs_utf8_ref,        NULL);
+    turi_env_register_native(env, "r7rs-utf8-at__",        native_r7rs_utf8_at,         NULL);
     turi_env_register_native(env, "r7rs-string-ref-code__", native_r7rs_string_ref_code, NULL);
     turi_env_register_native(env, "r7rs-string-append2__", native_r7rs_string_append2,  NULL);
-    turi_env_register_native(env, "r7rs-substring",        native_r7rs_substring,       NULL);
-    turi_env_register_native(env, "r7rs-string<2__",       native_r7rs_string_lt,       NULL);
+    turi_env_register_native(env, "r7rs-bsubstring__",     native_r7rs_substring,       NULL);
+    turi_env_register_native(env, "r7rs-cstr<__",          native_r7rs_string_lt,       NULL);
     turi_env_register_native(env, "r7rs-string-of-code__", native_r7rs_string_of_code,  NULL);
     turi_env_register_native(env, "r7rs-int->string__",    native_r7rs_int_to_string,   NULL);
     turi_env_register_native(env, "r7rs-float->string__",  native_r7rs_float_to_string, NULL);

@@ -204,7 +204,42 @@ Expr *elab_any_cast(Elab *e, const Form *call) {
  * here is what keeps the tag check on the witness path -- a wrong witness
  * panics with the ordinary `cast: any holds ...` message rather than
  * reinterpreting the payload. */
+/* r7rs-lang-plan T3: the string half of the Scheme seam, in both directions.
+ * A Scheme string is a `cstr` (a literal) or an `R7rsString` (one a procedure
+ * newly allocated: mutable code points).  Wherever an `any` is unboxed to a
+ * `cstr` -- a Scheme call passing a string to a Turmeric `cstr` parameter, or
+ * Turmeric code `cast`ing a Scheme library's result -- it goes through the
+ * prelude's `r7rs-str__`, which passes a cstr through, encodes an R7rsString
+ * as a fresh UTF-8 copy, and is the ordinary checked cast for anything else.
+ * So the Turmeric side always holds an immutable cstr, and Turmeric's `cstr`
+ * is unchanged.  Gated on the Scheme prelude being in the program (no
+ * `r7rs-str__` binding, no change), and never inside stdlib/r7rs/ itself,
+ * whose own unboxes are the plain cast (r7rs-str__'s among them). */
+static bool span_in_r7rs_stdlib(Span sp) {
+    const SourceFile *f = diag_source_file(sp.file_id);
+    return f && f->path && strstr(f->path, "stdlib/r7rs/") != NULL;
+}
+static Expr *r7rs_string_unbox(Elab *e, Expr *val, Span span) {
+    if (span_in_r7rs_stdlib(span) || span_in_r7rs_stdlib(val->span)) return NULL;
+    const Symbol *nm = symtab_intern(e->st, strslice("r7rs-str__", 10));
+    bool qual_err = false;
+    Binding *b = elab_lookup_sym(e, nm, span, &qual_err);
+    if (!b || b->type.kind != TY_FN) return NULL;
+    Expr **cargs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+    cargs[0] = val;
+    Expr *call = expr_new(e->arena, EX_CALL, type_simple(TY_CSTR, CK_COPY), span);
+    call->as.call_.fn_binding = b;
+    call->as.call_.args = cargs;
+    call->as.call_.n_args = 1;
+    call->as.call_.fn_expr = NULL;
+    return call;
+}
+
 Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span) {
+    if (target.kind == TY_CSTR) {
+        Expr *conv = r7rs_string_unbox(e, val, span);
+        if (conv) return conv;
+    }
     Expr *out = expr_new(e->arena, EX_ANY_CAST, target, span);
     out->as.any_cast_.value = val;
     out->as.any_cast_.target_kind = any_box_tag_for_type(&target);

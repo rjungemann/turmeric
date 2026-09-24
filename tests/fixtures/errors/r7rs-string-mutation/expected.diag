@@ -1,1 +1,0 @@
-string-set! is not supported: #lang r7rs strings are immutable

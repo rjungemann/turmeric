@@ -691,7 +691,8 @@ data and the seam (R3): mutable pairs, chars, vectors, bytevectors, records,
 `import` with `only`/`prefix`/`rename` and the `(turmeric <module>)` head, so
 a Scheme program calls a Turmeric module or the stdlib and a Turmeric module
 imports a `define-library` (its exports are `any`, narrowed with `cast`).
-Strings are immutable `cstr` values (`string-set!` is declined). R4 adds
+Strings are character sequences; a literal is an immutable `cstr` and a
+string a procedure makes is mutable (T3). R4 adds
 `syntax-rules` -- `define-syntax`, `let-syntax`, `letrec-syntax`,
 `syntax-error`, the full pattern language and renaming hygiene (a template's
 own binders cannot capture a use-site name; R10 closes the other direction, so

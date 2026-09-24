@@ -36,8 +36,9 @@
   return v ? v : "";
   ```)
 ;;; r7rs-get-environment-variable -- the value, or #f when it is not set.
-(defn r7rs-get-environment-variable [name : cstr] : any
-  (if (r7rs-getenv-set?__ name) (:: (r7rs-getenv__ name) any) (:: false any)))
+(defn r7rs-get-environment-variable [name0] : any
+  (let [name (r7rs-str__ name0)]
+    (if (r7rs-getenv-set?__ name) (:: (r7rs-getenv__ name) any) (:: false any))))
 (defn r7rs-environ-count__ [] : int
   ```c
   extern char **environ;

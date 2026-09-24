@@ -90,6 +90,22 @@ The core forms are all there: `define`, `lambda`, the `let` family and named
 Every Scheme procedure call is a proper tail call on both back ends, so a
 named-`let` loop runs in constant space however long it runs.
 
+A string is a sequence of characters. `string-length`, `string-ref`,
+`substring` and the rest count characters, not bytes. A string a procedure
+makes -- `make-string`, `string`, `string-copy`, `substring`,
+`string-append`, `list->string` -- is mutable, so `string-set!`,
+`string-fill!` and `string-copy!` work on it:
+
+```scheme
+(define s (string-copy "caf\xE9;"))
+(string-set! s 0 #\C)
+(write (list s (string-length s)))           ; ("Café" 4)
+```
+
+A string literal is immutable, which R7RS allows. Mutating one is an error
+that names the fix: `string-copy` it first. So is mutating a string from
+`symbol->string`, `number->string`, `read` or Turmeric.
+
 ## Numbers
 
 An exact integer has no size limit, an exact non-integer is a ratio, and an
@@ -240,21 +256,20 @@ Turmeric through the `(turmeric ...)` head:
 ```
 
 Each argument crossing into a typed Turmeric function is checked against its
-signature. `tests/run-r7rs-import.sh` pins both directions on both back ends.
+signature. A string crosses into a Turmeric `cstr` as a fresh UTF-8 copy.
+Turmeric's strings stay immutable, so mutating the Scheme string afterwards
+changes nothing on the Turmeric side. A Turmeric module `cast`ing a Scheme
+library's string result to `cstr` gets the same copy.
+`tests/run-r7rs-import.sh` pins both directions on both back ends.
 
 ## Where it differs from R7RS
 
-- **Strings are immutable.** `string-set!`, `string-fill!` and `string-copy!`
-  are refused with the reason. Every other string procedure is there.
+- **String literals are immutable.** R7RS allows this. See Lists,
+  vectors, strings above.
 - **No complex numbers.** See Numbers above.
 - **`call/cc` is an escape only.** A continuation cannot be re-entered after
   its `call/cc` returns.
 - **`apply` and dynamic calls take at most four arguments.**
-- **Strings are bytes.** A string is UTF-8, and `string-length`,
-  `string-ref` and `string->list` count and return BYTES, so a non-ASCII
-  character is several of them. The case procedures (`string-upcase` and the
-  rest) map the UTF-8 in place and are right for any text; chars themselves
-  are full Unicode scalar values.
 - **`char-ready?` and `u8-ready?` always answer `#t`.**
 - **`(except ...)` in an import is refused.** A Turmeric import cannot say
   "all but these names"; the error says to list them with `(only ...)`.
@@ -278,11 +293,10 @@ bash tests/run-r7rs-conformance.sh      # both back ends, about two minutes
 python3 tests/r7rs/run-conformance.py --backend interp --list-failures
 ```
 
-**1134 of the 1216 tests** written in the suite pass, the same on the
+**1147 of the 1216 tests** written in the suite pass, the same on the
 interpreter and the compiled back end. Nearly all the rest are the
-differences listed above: complex numbers (`3+4i`), the three string
-mutators, `eval` and
-`environment`, re-entering a continuation, and a string indexed by bytes.
+differences listed above: complex numbers (`3+4i`), `eval` and
+`environment`, and re-entering a continuation.
 What remains after those is two float spellings that differ from chibi's
 own (`1.7976931348623157e308` rather than `e+308`; both are R7RS).
 

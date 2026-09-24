@@ -116,6 +116,31 @@ EOF
 # `.0` (R5), where Turmeric's own println would print 3.
 run_case "scheme-renames-turmeric" prog2.tur "3.0"
 
+# ---- Direction 2c: strings both ways across the seam (r7rs-lang-plan T3). --
+# A Scheme string is a cstr (a literal) or an R7rsString (a mutable one,
+# `string-copy` here).  Into a Turmeric `cstr` parameter it crosses as a fresh
+# UTF-8 copy; a cstr coming back is an immutable Scheme string.  `echo`
+# returns the cstr it was given, so mutating the Scheme string after the call
+# shows the copy: the returned string still reads "h" + lambda, and it counts
+# characters (2), not the bytes Turmeric sees.
+cat > "$TMP/echo.tur" <<'EOF'
+(defmodule echo
+  (export echo)
+  (defn echo [s : cstr] : cstr s))
+EOF
+
+cat > "$TMP/prog3.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write)
+        (only (turmeric echo) echo))
+(define s (string-copy "h\x3BB;"))
+(define r (echo s))
+(string-set! s 0 #\j)
+(write (list s r (string-length r))) (newline)
+EOF
+
+run_case "strings-cross-the-seam" prog3.tur '("jλ" "hλ" 2)'
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1

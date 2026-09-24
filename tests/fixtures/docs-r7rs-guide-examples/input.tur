@@ -27,6 +27,10 @@
   (if (< i 3)
     (loop (+ i 1) (cons i acc))
     (begin (write acc) (newline))))
+(define s (string-copy "caf\xE9;"))
+(string-set! s 0 #\C)
+(write (list s (string-length s)))
+(newline)
 
 ;; --- Numbers ---------------------------------------------------------------
 (write (list (/ 7 2) (/ 6 2) (exact->inexact 3) (+ 7.1 0.25) (expt 2 100)))

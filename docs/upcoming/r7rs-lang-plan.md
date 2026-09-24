@@ -49,11 +49,11 @@ that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 (native and browser) analysing and formatting Scheme, the editor packs,
 `gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
 runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
-which reports a count: 1134 of 1216 tests pass on both back ends (887 on the
+which reports a count: 1147 of 1216 tests pass on both back ends (887 on the
 interpreter, and a compiled build that did not finish, when it was first
-wired; 1082 at the end of R10, then 1096, 1103 and 1134 after Section 9's
-T0, T1 and T2). Each landed stage carries a "What shipped" note below. What is
-left -- mutable character-indexed strings,
+wired; 1082 at the end of R10, then 1096, 1103, 1134 and 1147 after Section
+9's T0-T3). Each landed stage carries a "What shipped" note below. What is
+left --
 `eval` (the interpreter linked in on demand), re-entrant continuations and,
 last, complex numbers -- is Section 9,
 as tasks that change what a Scheme program means and leave Turmeric's and
@@ -1759,9 +1759,9 @@ What `#lang r7rs` still does differently from R7RS, measured on 2026-09-24:
 chibi's suite passed 1082 of the 1216 tests written in it, on both back ends,
 and the runner counted 143 failed test invocations (a test-numeric-syntax
 form counts two). Every one of those 143 belonged to a task below; the counts
-per task are the runner's, as written before T0. T0, T1 and T2 have landed
-since: 1134 pass and 91 invocations fail, and the test lines each task
-turned green are struck from the tasks below (each task says so). Section
+per task are the runner's, as written before T0. T0-T3 have landed since:
+1147 pass and 78 invocations fail, and the test lines each task turned
+green are struck from the tasks below (each task says so). Section
 9.3 lists the documented differences no chibi test reaches.
 
 ### 9.1 The rule: the differences between the languages are preserved
@@ -2065,7 +2065,8 @@ T1: 199, 768, 780, 841, 902, 904, 905, 965, 967, 968, 970, 972, 973, 1027,
 >     missed T1's example change.
 
 **T3 -- mutable, character-indexed strings (13 tests: 1322, 1324,
-1458-1479, 2258).**
+1458-1479, 2258).** *Landed 2026-09-24; see "What shipped" at the end of the
+task.*
 
 - **Today:** a Scheme string IS a Turmeric `cstr`.
   - It is immutable UTF-8 bytes.
@@ -2094,6 +2095,66 @@ T1: 199, 768, 780, 841, 902, 904, 905, 965, 967, 968, 970, 972, 973, 1027,
   Mutating it is the named error.
 - **Done:** the 13 tests; `(string-length "\x3BB;")` is 1; a fixture passes one
   string both ways across the seam and shows the Turmeric side still immutable.
+
+> **What shipped (T3, 2026-09-24).** Mutable, character-indexed strings, on
+> both back ends. The count is **1147** of 1216, up from 1134: all 13 T3
+> tests.
+>
+> - **Two representations, one string type.**
+>   - A literal (and a string from `symbol->string`, `number->string`, the
+>     case procedures, `read` or Turmeric) is a `cstr`: immutable UTF-8,
+>     which R7RS allows.
+>   - A string a procedure newly allocates is an `R7rsString`, holding code
+>     points in a `(Vec int)`: `make-string`, `string`, `string-copy`,
+>     `substring`, `string-append`, `list->string`, `vector->string`,
+>     `string-map`, `utf8->string` and `read-string`.
+>   - `r7rs-mstring?` tests for one (a bare `is?` would narrow to the unique
+>     heap struct).
+>   - `r7rs-str__` turns either into a cstr, and `r7rs-cps__` into code
+>     points.
+> - **Characters, not bytes.**
+>   - Every public string procedure takes either representation and counts
+>     characters, on a literal too, so `(string-length "\x3BB;")` is 1. A
+>     literal is indexed through `r7rs-utf8-count__`, `r7rs-utf8-ref__` and
+>     `r7rs-utf8-at__`, inline C with interpreter twins.
+>   - The byte-level primitives the prelude keeps for its own tokens are
+>     renamed `r7rs-blen__`, `r7rs-bsubstring__` and `r7rs-cstr<__`.
+>   - The helpers avoid `R7rsIo` handles. A unique handle used twice is a
+>     use-after-move once a Turmeric module is the entry. Decoding walks
+>     byte offsets instead, and encoding appends by halves.
+> - **The mutators.**
+>   - `string-set!`, `string-fill!` and `string-copy!` are new rows in the
+>     lowering's rename table; their R7 refusal is gone, with
+>     `errors/r7rs-string-mutation`.
+>   - `string-copy!` copies back to front when the ranges overlap that way.
+>   - Mutating a cstr-backed string is the named panic ("string-copy it
+>     first"). It is not a raised condition, so a `raise` stays out of every
+>     string loop's reach (the T2 lesson).
+> - **Equality and output.**
+>   - `equal?` and `string=?` compare characters across the two
+>     representations.
+>   - `eqv?` on two R7rsStrings is identity.
+>   - `write` and `display` encode an R7rsString.
+>   - The file, environment and string-port procedures take either kind.
+> - **The seam, in both directions, through one place.**
+>   - `elab_any_unbox_to` (elab_toplevel.c) calls `r7rs-str__` wherever an
+>     `any` is unboxed to a `cstr`. That covers a Scheme call into a Turmeric
+>     `cstr` parameter, and Turmeric code `cast`ing a Scheme library's
+>     result.
+>   - It applies only when the prelude is in the program, and never inside
+>     stdlib/r7rs/, so a Turmeric-only program is untouched.
+>   - A cstr passes through, an R7rsString crosses as a fresh UTF-8 copy, and
+>     anything else is the ordinary checked cast.
+>   - `tests/run-r7rs-import.sh` gains `strings-cross-the-seam`. A mutable
+>     string passes to a Turmeric `(defn echo [s : cstr] : cstr s)`, is
+>     mutated afterwards, and the returned string is unchanged.
+>   - The existing Turmeric-imports-Scheme case also exercises the return
+>     direction, since `string-append` now makes an R7rsString.
+> - **Fixtures:**
+>   - `r7rs-strings`, on both back ends;
+>   - `r7rs-string-literal-immutable`, the named panic with a nonzero exit;
+>   - `docs-r7rs-guide-examples`, updated with the guide's new string
+>     example.
 
 **T4 -- `eval`, with the interpreter linked in on demand (4 tests: 1946,
 1950, 1952, 1954).**

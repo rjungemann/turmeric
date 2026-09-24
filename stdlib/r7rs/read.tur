@@ -167,7 +167,7 @@
                 (if (r7rs-string=2__ s "space") (:: (r7rs-char__ 32) any)
                   (if (r7rs-string=2__ s "tab") (:: (r7rs-char__ 9) any)
                     (let [h (if (= (r7rs-string-ref-code__ s 0) 120)
-                              (r7rs-string->number (r7rs-substring s 1 (r7rs-string-length s)) 16)
+                              (r7rs-string->number (r7rs-bsubstring__ s 1 (r7rs-blen__ s)) 16)
                               false)]
                       (if (r7rs-exact-integer? h)
                         (:: (r7rs-char__ (r7rs-int-of__ h "char")) any)

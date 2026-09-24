@@ -10,20 +10,26 @@
 ;;; Since: r7rs-lang-plan R7 (file ports: R8)
 ;; (scheme file)
 
-;;; r7rs-file-exists? -- #t when the path names anything that exists.
-(defn r7rs-file-exists? [path : cstr] : bool
+;;; r7rs-file-exists-c__ -- #t when the path names anything that exists.
+(defn r7rs-file-exists-c__ [path : cstr] : bool
   ```c
   #include <sys/stat.h>
   struct stat st;
   return stat(path, &st) == 0;
   ```)
+;;; r7rs-file-exists? -- T3: a path is any Scheme string (a mutable one
+;;; converts, as at every cstr seam).
+(defn r7rs-file-exists? [path] : bool (r7rs-file-exists-c__ (r7rs-str__ path)))
 (defn r7rs-unlink__ [path : cstr] : bool
   ```c
   return unlink(path) == 0;
   ```)
 ;;; r7rs-delete-file -- remove the file; a failure raises an error object
 ;;; that `file-error?` recognizes.
-(defn r7rs-delete-file [path : cstr] : any
+(defn r7rs-delete-file [path0] : any
+  (let [path (r7rs-str__ path0)]
+    (r7rs-delete-file-go__ path)))
+(defn r7rs-delete-file-go__ [path : cstr] : any
   (if (r7rs-unlink__ path)
     nil
     (r7rs-raise (R7rsError "delete-file: cannot delete the file" (r7rs-list (:: path any)) 1))))
@@ -39,24 +45,24 @@
                              (r7rs-list (:: path any)) 1)))))
 ;;; r7rs-open-input-file / r7rs-open-output-file -- textual file ports.  An
 ;;; output file is created, or truncated if it exists.
-(defn r7rs-open-input-file [path : cstr] : any (r7rs-open-file__ path "r" true false))
-(defn r7rs-open-output-file [path : cstr] : any (r7rs-open-file__ path "w" false false))
+(defn r7rs-open-input-file [path] : any (r7rs-open-file__ (r7rs-str__ path) "r" true false))
+(defn r7rs-open-output-file [path] : any (r7rs-open-file__ (r7rs-str__ path) "w" false false))
 ;;; r7rs-open-binary-input-file / r7rs-open-binary-output-file -- binary ones.
-(defn r7rs-open-binary-input-file [path : cstr] : any (r7rs-open-file__ path "rb" true true))
-(defn r7rs-open-binary-output-file [path : cstr] : any (r7rs-open-file__ path "wb" false true))
+(defn r7rs-open-binary-input-file [path] : any (r7rs-open-file__ (r7rs-str__ path) "rb" true true))
+(defn r7rs-open-binary-output-file [path] : any (r7rs-open-file__ (r7rs-str__ path) "wb" false true))
 ;;; r7rs-call-with-input-file -- (proc port) on the opened file, closed after.
-(defn r7rs-call-with-input-file [path : cstr proc] : any
+(defn r7rs-call-with-input-file [path proc] : any
   (r7rs-call-with-port (r7rs-open-input-file path) proc))
-(defn r7rs-call-with-output-file [path : cstr proc] : any
+(defn r7rs-call-with-output-file [path proc] : any
   (r7rs-call-with-port (r7rs-open-output-file path) proc))
 ;;; r7rs-with-input-from-file -- thunk with the file as the current input
 ;;; port (parameterize, so an escape restores it); the file is closed after.
-(defn r7rs-with-input-from-file [path : cstr thunk] : any
+(defn r7rs-with-input-from-file [path thunk] : any
   (let [p (r7rs-open-input-file path)
         r (r7rs-parameterize__ (r7rs-list (r7rs-cons r7rs-current-input-port p)) thunk)]
     (r7rs-close-port p)
     r))
-(defn r7rs-with-output-to-file [path : cstr thunk] : any
+(defn r7rs-with-output-to-file [path thunk] : any
   (let [p (r7rs-open-output-file path)
         r (r7rs-parameterize__ (r7rs-list (r7rs-cons r7rs-current-output-port p)) thunk)]
     (r7rs-close-port p)

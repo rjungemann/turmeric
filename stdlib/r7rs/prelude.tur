@@ -262,7 +262,7 @@
     false))
 ;;; r7rs-eqv-by-value?__ -- internal: the types eqv? compares by value.
 (defn r7rs-eqv-by-value?__ [a] : bool
-  (if (r7rs-number? a) true (if (r7rs-boolean? a) true (if (r7rs-string? a) true (r7rs-symbol? a)))))
+  (if (r7rs-number? a) true (if (r7rs-boolean? a) true (if (is? a cstr) true (r7rs-symbol? a)))))
 ;;; r7rs-eq? -- same as eqv? here (chars and ints are immediate, and a
 ;;; bignum is compared by value, which R7RS allows of eq? on numbers).
 (defn r7rs-eq? [a b] : bool (r7rs-eqv? a b))
@@ -293,8 +293,10 @@
         (r7rs-equal-vec__ a b 0 seen)
         (if (if (r7rs-bytevector? a) (r7rs-bytevector? b) false)
           (r7rs-equal-bytes__ (r7rs-bytevector-bytes__ a) (r7rs-bytevector-bytes__ b) 0)
+          ;; T3: a literal and a mutable string with the same characters
+          ;; are equal.
           (if (if (r7rs-string? a) (r7rs-string? b) false)
-            (= a b)
+            (r7rs-string=2__ a b)
             false))))))
 (defn r7rs-equal-vec__ [a : (Vec any) b : (Vec any) i : int seen] : bool
   (if (= (vec-len a) (vec-len b))
@@ -341,7 +343,7 @@
 ;;; ---- type predicates ---------------------------------------------------
 
 (defn r7rs-boolean? [x] : bool (is? x bool))
-(defn r7rs-string? [x] : bool (is? x cstr))
+(defn r7rs-string? [x] : bool (if (is? x cstr) true (r7rs-mstring? x)))
 (defn r7rs-symbol? [x] : bool (is? x Sym))
 (defn r7rs-procedure? [x] : bool (= (r7rs-type-name__ x) (:: "fn" any)))
 (defn r7rs-char? [x] : bool (is? x R7rsChar))
@@ -872,8 +874,9 @@
 ;;; not (write bars such a symbol: '|1/2|).
 (defn r7rs-number-syntax?__ [s : cstr] : bool (> (r7rs-numsyn-kind__ s 10) 0))
 ;;; r7rs-string->number -- #f when the string is not a number in the radix.
-(defn r7rs-string->number [s : cstr & xs : any]
-  (let [radix (r7rs-radix-of__ (:: xs (Cons any)) "string->number: radix must be 2, 8, 10 or 16")]
+(defn r7rs-string->number [s0 & xs : any]
+  (let [radix (r7rs-radix-of__ (:: xs (Cons any)) "string->number: radix must be 2, 8, 10 or 16")
+        s (r7rs-str__ s0)]
     (r7rs-number-of__ s radix "string->number: `")))
 
 ;;; ---- characters --------------------------------------------------------
@@ -920,12 +923,55 @@
       (if (= n 32) true (if (= n 9) true (if (= n 10) true (if (= n 13) true (if (= n 12) true (= n 11))))))
       (= (r7rs-uc-prop__ n 3) 1))))
 
-;;; ---- strings (immutable cstr; the primitives are inline C with
-;;; interpreter twins in interpreter_natives.c) -------------------------------
+;;; ---- strings: the byte-level primitives (inline C with interpreter twins
+;;; in interpreter_natives.c) ---------------------------------------------------
+;;;
+;;; T3: these count and cut BYTES of a cstr.  The prelude uses them on text it
+;;; built itself (tokens, escapes, number spellings); a Scheme program's
+;;; strings go through the character-level procedures of the T3 section below.
 
-(defn r7rs-string-length [s : cstr] : int
+;;; r7rs-blen__ -- a cstr's length in bytes.
+(defn r7rs-blen__ [s : cstr] : int
   ```c
   return (int64_t)strlen(s);
+  ```)
+;;; r7rs-utf8-count__ -- T3: the number of characters in UTF-8 text.
+(defn r7rs-utf8-count__ [s : cstr] : int
+  ```c
+  int64_t c = 0;
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) if ((*p & 0xC0) != 0x80) c++;
+  return c;
+  ```)
+;;; r7rs-utf8-at__ -- T3: the character at byte offset off of UTF-8 text and
+;;; its width, packed as scalar * 8 + width (a stray byte is itself, width 1).
+(defn r7rs-utf8-at__ [s : cstr off : int] : int
+  ```c
+  const unsigned char *p = (const unsigned char *)s + off;
+  int w = *p < 0xC0 ? 1 : *p < 0xE0 ? 2 : *p < 0xF0 ? 3 : 4;
+  uint32_t cp = w == 1 ? *p : w == 2 ? (*p & 0x1Fu) : w == 3 ? (*p & 0x0Fu) : (*p & 0x07u);
+  int k = 1;
+  for (; k < w && p[k]; k++) cp = (cp << 6) | (p[k] & 0x3Fu);
+  return (int64_t)cp * 8 + k;
+  ```)
+;;; r7rs-utf8-ref__ -- T3: the scalar value of the i-th character of UTF-8
+;;; text (a scan from the start: a literal is short, and a program that
+;;; indexes a long string builds a mutable one).
+(defn r7rs-utf8-ref__ [s : cstr i : int] : int
+  ```c
+  const unsigned char *p = (const unsigned char *)s;
+  int64_t k = 0;
+  while (i >= 0 && *p) {
+    int w = *p < 0xC0 ? 1 : *p < 0xE0 ? 2 : *p < 0xF0 ? 3 : 4;
+    if (k == i) {
+      uint32_t cp = w == 1 ? *p : w == 2 ? (*p & 0x1Fu) : w == 3 ? (*p & 0x0Fu) : (*p & 0x07u);
+      for (int j = 1; j < w && p[j]; j++) cp = (cp << 6) | (p[j] & 0x3Fu);
+      return (int64_t)cp;
+    }
+    for (int j = 0; j < w && *p; j++) p++;
+    k++;
+  }
+  tur_panic("string-ref: index out of range");
+  return 0;
   ```)
 (defn r7rs-string-ref-code__ [s : cstr i : int] : int
   ```c
@@ -939,7 +985,7 @@
   memcpy(r, a, la); memcpy(r + la, b, lb + 1);
   return r;
   ```)
-(defn r7rs-substring [s : cstr start : int end : int] : cstr
+(defn r7rs-bsubstring__ [s : cstr start : int end : int] : cstr
   ```c
   size_t n = strlen(s);
   if (start < 0 || end < start || (size_t)end > n) tur_panic("substring: range out of bounds");
@@ -947,7 +993,7 @@
   memcpy(r, s + start, (size_t)(end - start)); r[end - start] = 0;
   return r;
   ```)
-(defn r7rs-string<2__ [a : cstr b : cstr] : bool
+(defn r7rs-cstr<__ [a : cstr b : cstr] : bool
   ```c
   return strcmp(a, b) < 0;
   ```)
@@ -990,11 +1036,6 @@
   return r;
   ```)
 
-(defn r7rs-string-ref [s : cstr i : int] : R7rsChar (:: (r7rs-string-ref-code__ s i) R7rsChar))
-(defn r7rs-string-append [& xs : any] : cstr
-  (r7rs-string-append-go__ (:: xs (Cons any)) ""))
-(defn r7rs-string-append-go__ [c : (Cons any) acc : cstr] : cstr
-  (if (tnil? c) acc (r7rs-string-append-go__ (.tail c) (r7rs-string-append2__ acc (.head c)))))
 ;;; r7rs-range-start__ / r7rs-range-end__ -- R7: the optional [start [end]]
 ;;; tail most sequence procedures take, defaulting to 0 and len.
 (defn r7rs-range-start__ [r] : int (if (r7rs-null? r) 0 (r7rs-int-of__ (r7rs-car r) "range start must be an exact integer")))
@@ -1004,43 +1045,169 @@
   (if (if (>= start 0) (if (<= start end) (<= end len) false) false)
     nil
     (panic "sequence range out of bounds (start must be <= end <= length)")))
-;;; r7rs-string-copy -- a string is immutable, so a whole copy is itself.
-(defn r7rs-string-copy [s : cstr & r : any] : cstr
-  (let [rl (r7rs-chain->list__ (:: r (Cons any)))
-        n (r7rs-string-length s)
+
+;;; ---- strings (T3): characters, and mutable ones ---------------------------
+;;;
+;;; A Scheme string is one of two things.  A literal -- and a string from
+;;; Turmeric, `symbol->string`, `number->string`, the case procedures,
+;;; `read` -- is a `cstr`: immutable UTF-8, which R7RS allows of a literal.
+;;; A string a procedure newly allocates -- `make-string`, `string`,
+;;; `string-copy`, `substring`, `string-append`, `list->string`,
+;;; `vector->string`, `string-map`, `utf8->string`, `read-string` -- is an
+;;; `R7rsString`: its characters as code points in a vector, so `string-ref`
+;;; and `string-set!` are constant time.  Every string procedure takes
+;;; either and counts characters, never bytes: `(string-length "\x3BB;")` is
+;;; 1.  Turmeric's `cstr` is unchanged (9.1): an R7rsString crosses into a
+;;; Turmeric `cstr` parameter as a fresh UTF-8 copy (the elaborator's Scheme
+;;; seam calls r7rs-str__, elab_call.c), and mutating a `cstr` string is the
+;;; named error.  Tests go through r7rs-mstring?, not a bare `is?`, which
+;;; would narrow the value to the (unique) heap struct.
+(defstruct R7rsString :heap [cps : (Vec int)])
+(defn r7rs-mstring? [x] : bool (is? x R7rsString))
+(defn r7rs-mstring-cps__ [s : R7rsString] : (Vec int) (.cps s))
+(defn r7rs-mk-string__ [v : (Vec int)] : any (:: (R7rsString v) any))
+;;; r7rs-cps-of-cstr__ -- UTF-8 text's characters as a fresh code-point
+;;; vector.  A cstr is walked by byte offset (r7rs-utf8-at__ answers the
+;;; character there and its width); a port buffer would do the decoding too,
+;;; but an R7rsIo is a unique handle, and a loop that reads from it and
+;;; passes it on uses it twice where a Turmeric entry checks ownership.
+(defn r7rs-cps-go__ [s : cstr off : int n : int v : (Vec int)] : (Vec int)
+  (if (>= off n)
+    v
+    (let [x (r7rs-utf8-at__ s off)]
+      (vec-push! v (/ x 8))
+      (r7rs-cps-go__ s (+ off (mod x 8)) n v))))
+(defn r7rs-cps-of-cstr__ [s : cstr] : (Vec int)
+  (r7rs-cps-go__ s 0 (r7rs-blen__ s) (:: (vec-new) (Vec int))))
+;;; r7rs-cps__ -- any string's characters: an R7rsString's own vector (read
+;;; it, do not keep it), a cstr's decoded afresh.
+(defn r7rs-cps__ [s] : (Vec int) (if (r7rs-mstring? s) (r7rs-mstring-cps__ s) (r7rs-cps-of-cstr__ s)))
+;;; r7rs-cps->cstr__ -- characters [a, b) of a code-point vector as UTF-8,
+;;; by halves (each byte is copied log n times, never n).
+(defn r7rs-cps->cstr__ [v : (Vec int) a : int b : int] : cstr
+  (if (>= a b)
+    ""
+    (if (= (+ a 1) b)
+      (r7rs-string-of-code__ (vec-get v a))
+      (let [m (+ a (/ (- b a) 2))]
+        (r7rs-string-append2__ (r7rs-cps->cstr__ v a m) (r7rs-cps->cstr__ v m b))))))
+;;; r7rs-str__ -- any string as a cstr: a cstr is itself, an R7rsString is
+;;; encoded afresh.  The conversion at every seam: the prelude's own C and
+;;; ports take cstr, and the elaborator calls it where a Scheme call passes a
+;;; string to a Turmeric `cstr` parameter.
+(defn r7rs-str__ [x] : cstr
+  (if (r7rs-mstring? x) (let [v (r7rs-mstring-cps__ x)] (r7rs-cps->cstr__ v 0 (vec-len v))) x))
+;;; r7rs-cps-range__ -- characters [a, b) of a vector as a fresh vector.
+(defn r7rs-cps-range-go__ [v : (Vec int) i : int end : int out : (Vec int)] : (Vec int)
+  (if (>= i end) out (do (vec-push! out (vec-get v i)) (r7rs-cps-range-go__ v (+ i 1) end out))))
+(defn r7rs-cps-range__ [v : (Vec int) a : int b : int] : (Vec int)
+  (r7rs-cps-range-go__ v a b (:: (vec-new) (Vec int))))
+;;; r7rs-immutable__ -- the named error for mutating a cstr-backed string.
+(defn r7rs-immutable__ [who : cstr] : nil
+  (panic (r7rs-string-append2__ who ": this string is immutable -- a literal, or a string from symbol->string, number->string, read or Turmeric (R7RS 6.7: it is an error to mutate it); string-copy it first")))
+(defn r7rs-fail-char__ [msg : cstr] : R7rsChar (:: (r7rs-fail-int__ msg) R7rsChar))
+
+(defn r7rs-string-length [s] : int
+  (if (r7rs-mstring? s) (vec-len (r7rs-mstring-cps__ s)) (r7rs-utf8-count__ s)))
+(defn r7rs-string-ref [s i : int] : R7rsChar
+  (if (r7rs-mstring? s)
+    (let [v (r7rs-mstring-cps__ s)]
+      (if (if (>= i 0) (< i (vec-len v)) false) (:: (vec-get v i) R7rsChar) (r7rs-fail-char__ "string-ref: index out of range")))
+    (:: (r7rs-utf8-ref__ s i) R7rsChar)))
+;;; r7rs-string-set! / r7rs-string-fill! / r7rs-string-copy! -- T3: the
+;;; mutators, on an R7rsString; a cstr-backed string is the named error.
+(defn r7rs-string-set! [s i : int c : R7rsChar] : nil
+  (if (r7rs-mstring? s)
+    (let [v (r7rs-mstring-cps__ s)]
+      (if (if (>= i 0) (< i (vec-len v)) false)
+        (vec-set! v i (r7rs-char-code__ c))
+        (panic "string-set!: index out of range")))
+    (r7rs-immutable__ "string-set!")))
+(defn r7rs-fill-go__ [v : (Vec int) i : int end : int c : int] : nil
+  (if (>= i end) nil (do (vec-set! v i c) (r7rs-fill-go__ v (+ i 1) end c))))
+(defn r7rs-string-fill! [s c : R7rsChar & r : any] : nil
+  (if (r7rs-mstring? s)
+    (let [v (r7rs-mstring-cps__ s)
+          rl (r7rs-chain->list__ (:: r (Cons any)))
+          a (r7rs-range-start__ rl)
+          b (r7rs-range-end__ rl (vec-len v))]
+      (r7rs-range-check__ "string-fill!" a b (vec-len v))
+      (r7rs-fill-go__ v a b (r7rs-char-code__ c)))
+    (r7rs-immutable__ "string-fill!")))
+;;; string-copy! copies front to back when the destination starts at or
+;;; before the source and back to front otherwise, so a copy within one
+;;; string is right when the ranges overlap (R7RS 6.7).
+(defn r7rs-copy-fwd__ [dst : (Vec int) at : int src : (Vec int) i : int end : int] : nil
+  (if (>= i end) nil (do (vec-set! dst at (vec-get src i)) (r7rs-copy-fwd__ dst (+ at 1) src (+ i 1) end))))
+(defn r7rs-copy-bwd__ [dst : (Vec int) at : int src : (Vec int) start : int i : int] : nil
+  (if (< i start) nil (do (vec-set! dst (+ at (- i start)) (vec-get src i)) (r7rs-copy-bwd__ dst at src start (- i 1)))))
+(defn r7rs-string-copy! [to at : int from & r : any] : nil
+  (if (r7rs-mstring? to)
+    (let [dst (r7rs-mstring-cps__ to)
+          src (r7rs-cps__ from)
+          rl (r7rs-chain->list__ (:: r (Cons any)))
+          a (r7rs-range-start__ rl)
+          b (r7rs-range-end__ rl (vec-len src))]
+      (r7rs-range-check__ "string-copy!" a b (vec-len src))
+      (r7rs-range-check__ "string-copy!" at (+ at (- b a)) (vec-len dst))
+      (if (<= at a) (r7rs-copy-fwd__ dst at src a b) (r7rs-copy-bwd__ dst at src a (- b 1))))
+    (r7rs-immutable__ "string-copy!")))
+(defn r7rs-string-append-go__ [c : (Cons any) out : (Vec int)] : (Vec int)
+  (if (tnil? c)
+    out
+    (let [v (r7rs-cps__ (.head c))]
+      (r7rs-cps-range-go__ v 0 (vec-len v) out)
+      (r7rs-string-append-go__ (.tail c) out))))
+;;; r7rs-string-append -- a new (mutable) string.
+(defn r7rs-string-append [& xs : any] : any
+  (r7rs-mk-string__ (r7rs-string-append-go__ (:: xs (Cons any)) (:: (vec-new) (Vec int)))))
+;;; r7rs-string-copy / r7rs-substring -- a new (mutable) string of the
+;;; characters [start, end).
+(defn r7rs-string-copy [s & r : any] : any
+  (let [v (r7rs-cps__ s)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
         a (r7rs-range-start__ rl)
-        b (r7rs-range-end__ rl n)]
-    (r7rs-range-check__ "string-copy" a b n)
-    (if (if (= a 0) (= b n) false) s (r7rs-substring s a b))))
-;;; The string comparisons take two or more arguments (R7), on the byte order.
-(defn r7rs-string=2__ [a b] : bool (= a b))
-(defn r7rs-string>2__ [a : cstr b : cstr] : bool (r7rs-string<2__ b a))
-(defn r7rs-string<=2__ [a : cstr b : cstr] : bool (not (r7rs-string<2__ b a)))
-(defn r7rs-string>=2__ [a : cstr b : cstr] : bool (not (r7rs-string<2__ a b)))
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "string-copy" a b (vec-len v))
+    (r7rs-mk-string__ (r7rs-cps-range__ v a b))))
+(defn r7rs-substring [s start : int end : int] : any
+  (let [v (r7rs-cps__ s)]
+    (r7rs-range-check__ "substring" start end (vec-len v))
+    (r7rs-mk-string__ (r7rs-cps-range__ v start end))))
+;;; The string comparisons take two or more arguments (R7).  Characters
+;;; compare by scalar value, which is UTF-8's byte order, so both sides are
+;;; compared as UTF-8.
+(defn r7rs-string<2__ [a b] : bool (r7rs-cstr<__ (r7rs-str__ a) (r7rs-str__ b)))
+(defn r7rs-string=2__ [a b] : bool
+  (let [x (r7rs-str__ a) y (r7rs-str__ b)] (if (r7rs-cstr<__ x y) false (r7rs-not (r7rs-cstr<__ y x)))))
+(defn r7rs-string>2__ [a b] : bool (r7rs-string<2__ b a))
+(defn r7rs-string<=2__ [a b] : bool (not (r7rs-string<2__ b a)))
+(defn r7rs-string>=2__ [a b] : bool (not (r7rs-string<2__ a b)))
 (defn r7rs-string=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-string<? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string<2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-string>? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string>2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-string<=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string<=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-string>=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string>=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
-(defn r7rs-string->symbol [s : cstr] : Sym (str->sym s))
+(defn r7rs-string->symbol [s] : Sym (str->sym (r7rs-str__ s)))
 (defn r7rs-symbol->string [s : Sym] : cstr (sym->str s))
-(defn r7rs-string->list-go__ [s : cstr i : int end : int] : any
+(defn r7rs-string->list-go__ [v : (Vec int) i : int end : int] : any
   (if (>= i end)
     r7rs-null-value__
-    (R7rsPair (r7rs-string-ref s i) (r7rs-string->list-go__ s (+ i 1) end))))
-(defn r7rs-string->list [s : cstr & r : any] : any
-  (let [rl (r7rs-chain->list__ (:: r (Cons any)))
-        n (r7rs-string-length s)
+    (R7rsPair (:: (r7rs-char__ (vec-get v i)) any) (r7rs-string->list-go__ v (+ i 1) end))))
+(defn r7rs-string->list [s & r : any] : any
+  (let [v (r7rs-cps__ s)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
         a (r7rs-range-start__ rl)
-        b (r7rs-range-end__ rl n)]
-    (r7rs-range-check__ "string->list" a b n)
-    (r7rs-string->list-go__ s a b)))
-(defn r7rs-list->string-go__ [l acc : cstr] : cstr
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "string->list" a b (vec-len v))
+    (r7rs-string->list-go__ v a b)))
+(defn r7rs-list->string-go__ [l out : (Vec int)] : (Vec int)
   (if (r7rs-null? l)
-    acc
-    (r7rs-list->string-go__ (r7rs-cdr l)
-                            (r7rs-string-append2__ acc (r7rs-string-of-code__ (r7rs-char->integer (r7rs-car l)))))))
-(defn r7rs-list->string [l] : cstr (r7rs-list->string-go__ l ""))
+    out
+    (do (vec-push! out (r7rs-char->integer (r7rs-car l)))
+        (r7rs-list->string-go__ (r7rs-cdr l) out))))
+;;; r7rs-list->string -- a new (mutable) string of the chars.
+(defn r7rs-list->string [l] : any (r7rs-mk-string__ (r7rs-list->string-go__ l (:: (vec-new) (Vec int)))))
 
 ;;; ---- vectors and bytevectors -------------------------------------------
 
@@ -1415,21 +1582,25 @@
 (defn r7rs-make-list [k : int & fill : any] : any
   (let [fl (r7rs-chain->list__ (:: fill (Cons any)))]
     (r7rs-make-list-go__ k (if (r7rs-null? fl) (:: false any) (r7rs-car fl)) r7rs-null-value__)))
-;;; r7rs-make-string -- k copies of char (default #\space).
-(defn r7rs-make-string [k : int & c : any] : cstr
+;;; r7rs-make-string -- a new (mutable) string of k copies of char (default
+;;; #\space).
+(defn r7rs-make-string-go__ [v : (Vec int) k : int c : int] : (Vec int)
+  (if (<= k 0) v (do (vec-push! v c) (r7rs-make-string-go__ v (- k 1) c))))
+(defn r7rs-make-string [k : int & c : any] : any
   (let [cl (r7rs-chain->list__ (:: c (Cons any)))]
-    (r7rs-list->string (r7rs-make-list k (if (r7rs-null? cl) (:: (r7rs-char__ 32) any) (r7rs-car cl))))))
-;;; r7rs-string -- a string of the given chars.
-(defn r7rs-string [& cs : any] : cstr (r7rs-list->string (r7rs-chain->list__ (:: cs (Cons any)))))
+    (r7rs-mk-string__ (r7rs-make-string-go__ (:: (vec-new) (Vec int)) k
+                                             (if (r7rs-null? cl) 32 (r7rs-char->integer (r7rs-car cl)))))))
+;;; r7rs-string -- a new (mutable) string of the given chars.
+(defn r7rs-string [& cs : any] : any (r7rs-list->string (r7rs-chain->list__ (:: cs (Cons any)))))
 
-(defn r7rs-string->vector [s : cstr & r : any] : any
-  (let [rl (r7rs-chain->list__ (:: r (Cons any)))
-        n (r7rs-string-length s)
+(defn r7rs-string->vector [s & r : any] : any
+  (let [v (r7rs-cps__ s)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
         a (r7rs-range-start__ rl)
-        b (r7rs-range-end__ rl n)]
-    (r7rs-range-check__ "string->vector" a b n)
-    (r7rs-list->vector (r7rs-string->list-go__ s a b))))
-(defn r7rs-vector->string [v : (Vec any) & r : any] : cstr
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "string->vector" a b (vec-len v))
+    (r7rs-list->vector (r7rs-string->list-go__ v a b))))
+(defn r7rs-vector->string [v : (Vec any) & r : any] : any
   (let [rl (r7rs-chain->list__ (:: r (Cons any)))
         a (r7rs-range-start__ rl)
         b (r7rs-range-end__ rl (vec-len v))]
@@ -1444,7 +1615,7 @@
 (defn r7rs-string-list1__ [s] : any (r7rs-string->list s))
 (defn r7rs-vector-list1__ [v] : any (r7rs-vector->list v))
 ;;; r7rs-string-map -- (string-map f s1 s2 ...): f's results are chars.
-(defn r7rs-string-map [f s & ss : any] : cstr
+(defn r7rs-string-map [f s & ss : any] : any
   (r7rs-list->string (r7rs-mapn__ f (r7rs-seq-lists__ r7rs-string-list1__ s (:: ss (Cons any))))))
 (defn r7rs-string-for-each [f s & ss : any] : nil
   (r7rs-for-eachn__ f (r7rs-seq-lists__ r7rs-string-list1__ s (:: ss (Cons any)))))
@@ -1517,18 +1688,19 @@
     (r7rs-range-check__ "bytevector-copy!" at (+ at (- b a)) (vec-len tv))
     (r7rs-bytes-store-list__ tv at (r7rs-bytes-read-range__ fv a b))))
 
-;;; r7rs-string->utf8 -- the string's bytes (a string IS its UTF-8 bytes;
-;;; start/end count bytes, as string-ref does).
+;;; r7rs-string->utf8 -- the UTF-8 bytes of characters [start, end) (T3:
+;;; start and end count characters, as every string procedure does).
 (defn r7rs-utf8-bytes-go__ [s : cstr i : int end : int out : (Vec int)] : (Vec int)
   (if (>= i end) out
     (do (vec-push! out (r7rs-string-ref-code__ s i)) (r7rs-utf8-bytes-go__ s (+ i 1) end out))))
-(defn r7rs-string->utf8 [s : cstr & r : any] : any
-  (let [rl (r7rs-chain->list__ (:: r (Cons any)))
-        n (r7rs-string-length s)
+(defn r7rs-string->utf8 [s & r : any] : any
+  (let [v (r7rs-cps__ s)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
         a (r7rs-range-start__ rl)
-        b (r7rs-range-end__ rl n)]
-    (r7rs-range-check__ "string->utf8" a b n)
-    (R7rsBytevector (r7rs-utf8-bytes-go__ s a b (:: (vec-new) (Vec int))))))
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "string->utf8" a b (vec-len v))
+    (let [t (r7rs-cps->cstr__ v a b)]
+      (R7rsBytevector (r7rs-utf8-bytes-go__ t 0 (r7rs-blen__ t) (:: (vec-new) (Vec int)))))))
 (defn r7rs-utf8-cont__ [v : (Vec int) i : int end : int] : int
   (if (>= i end) (r7rs-fail-int__ "utf8->string: truncated UTF-8 sequence")
     (let [b (vec-get v i)]
@@ -1554,13 +1726,13 @@
                                                              (+ (* (r7rs-utf8-cont__ v (+ i 1) end) 4096)
                                                                 (+ (* (r7rs-utf8-cont__ v (+ i 2) end) 64) (r7rs-utf8-cont__ v (+ i 3) end)))))))
               (r7rs-fail-cstr__ "utf8->string: invalid UTF-8 lead byte"))))))))
-(defn r7rs-utf8->string [bv & r : any] : cstr
+(defn r7rs-utf8->string [bv & r : any] : any
   (let [v (r7rs-bytevector-bytes__ bv)
         rl (r7rs-chain->list__ (:: r (Cons any)))
         a (r7rs-range-start__ rl)
         b (r7rs-range-end__ rl (vec-len v))]
     (r7rs-range-check__ "utf8->string" a b (vec-len v))
-    (r7rs-utf8-go__ v a b "")))
+    (r7rs-mk-string__ (r7rs-cps-of-cstr__ (r7rs-utf8-go__ v a b "")))))
 
 ;;; r7rs-features -- the feature identifiers cond-expand tests (scheme_lower.c
 ;;; feature_holds holds the same list).  `exact-closed`: + - * on exact
@@ -1627,9 +1799,9 @@
 (defn r7rs-char-ci>? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci>2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-char-ci<=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci<=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-char-ci>=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci>=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
-(defn r7rs-string-upcase [s : cstr] : cstr (r7rs-uc-string__ s 0))
-(defn r7rs-string-downcase [s : cstr] : cstr (r7rs-uc-string__ s 1))
-(defn r7rs-string-foldcase [s : cstr] : cstr (r7rs-uc-string__ s 2))
+(defn r7rs-string-upcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 0))
+(defn r7rs-string-downcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 1))
+(defn r7rs-string-foldcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 2))
 (defn r7rs-string-ci=2__ [a b] : bool (r7rs-string=2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
 (defn r7rs-string-ci<2__ [a b] : bool (r7rs-string<2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
 (defn r7rs-string-ci>2__ [a b] : bool (r7rs-string>2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
@@ -1952,16 +2124,19 @@
 (defn r7rs-write-char [c : R7rsChar & r : any] : nil
   (r7rs-port-put__ (r7rs-port-arg__ (r7rs-chain->list__ (:: r (Cons any))) r7rs-current-output-port)
                    (r7rs-string-of-code__ (:: c :int))))
-;;; r7rs-write-string -- (write-string string [port [start [end]]]).
-(defn r7rs-write-string [s : cstr & r : any] : nil
+;;; r7rs-write-string -- (write-string string [port [start [end]]]); start
+;;; and end count characters.
+(defn r7rs-write-string [s & r : any] : nil
   (let [rl (r7rs-chain->list__ (:: r (Cons any)))
         port (r7rs-port-arg__ rl r7rs-current-output-port)
-        rng (r7rs-after-port__ rl)
-        n (r7rs-string-length s)
-        a (r7rs-range-start__ rng)
-        b (r7rs-range-end__ rng n)]
-    (r7rs-range-check__ "write-string" a b n)
-    (r7rs-port-put__ port (if (if (= a 0) (= b n) false) s (r7rs-substring s a b)))))
+        rng (r7rs-after-port__ rl)]
+    (if (r7rs-null? rng)
+      (r7rs-port-put__ port (r7rs-str__ s))
+      (let [v (r7rs-cps__ s)
+            a (r7rs-range-start__ rng)
+            b (r7rs-range-end__ rng (vec-len v))]
+        (r7rs-range-check__ "write-string" a b (vec-len v))
+        (r7rs-port-put__ port (r7rs-cps->cstr__ v a b))))))
 ;;; r7rs-write-u8 -- (write-u8 byte [port]).
 (defn r7rs-write-u8 [x : int & r : any] : nil
   (r7rs-io-add-byte__ (r7rs-out-io__ (r7rs-port-arg__ (r7rs-chain->list__ (:: r (Cons any))) r7rs-current-output-port)) x))
@@ -2061,7 +2236,7 @@
       r7rs-eof-value__
       (let [out (r7rs-io-new__)]
         (r7rs-read-string-go__ io out k)
-        (:: (r7rs-io-take-str__ out) any)))))
+        (r7rs-mk-string__ (r7rs-cps-of-cstr__ (r7rs-io-take-str__ out)))))))
 ;;; r7rs-read-bytevector -- (read-bytevector k [port]): up to k bytes.
 (defn r7rs-read-bytes-go__ [io : R7rsIo v : (Vec int) k : int] : (Vec int)
   (if (<= k 0)
@@ -2094,9 +2269,9 @@
 
 ;;; ---- string and bytevector ports, closing ---------------------------------
 
-(defn r7rs-open-input-string [s : cstr] : any
+(defn r7rs-open-input-string [s] : any
   (let [io (r7rs-io-new__)]
-    (r7rs-io-add__ io s)
+    (r7rs-io-add__ io (r7rs-str__ s))
     (r7rs-make-port__ 1 true false io)))
 (defn r7rs-open-output-string [] : any (r7rs-make-port__ 1 false false (r7rs-io-new__)))
 ;;; r7rs-get-output-string -- everything written to a string port so far.
@@ -2283,7 +2458,7 @@
   (if (r7rs-fixnum?__ x) (r7rs-int->string__ x)
     (if (if (r7rs-big? x) true (r7rs-ratio? x)) (r7rs-number->string x)   ; T1/T2
       (if (r7rs-flonum?__ x) (r7rs-float->string__ x)
-        (if (r7rs-string? x) (if quoted (r7rs-escape-string__ x) x)
+        (if (r7rs-string? x) (if quoted (r7rs-escape-string__ (r7rs-str__ x)) (r7rs-str__ x))
           (if (r7rs-boolean? x) (if x "#t" "#f")
             (if (r7rs-null? x) "()"
               (if (r7rs-symbol? x) (if quoted (r7rs-symbol-spelling__ (sym->str x)) (sym->str x))

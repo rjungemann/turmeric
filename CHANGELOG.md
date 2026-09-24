@@ -6,6 +6,28 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: mutable, character-indexed strings (r7rs-lang-plan T3).**
+  A Scheme string is a sequence of characters. `string-length`,
+  `string-ref`, `substring` and every other string procedure count
+  characters, not bytes, so `(string-length "\x3BB;")` is 1.
+  - A string a procedure makes is mutable, and `string-set!`, `string-fill!`
+    and `string-copy!` (overlap-safe) work on it. This covers
+    `make-string`, `string`, `string-copy`, `substring`, `string-append`,
+    `list->string` and the like.
+  - A literal is an immutable Turmeric `cstr` (R7RS allows this), and
+    mutating one is a named error.
+  - **Visible change:** `string-length` of non-ASCII text used to count
+    bytes.
+  - A Scheme string crosses into a Turmeric `cstr` as a fresh UTF-8 copy,
+    through the prelude's `r7rs-str__`. The same holds for a Turmeric module
+    `cast`ing a Scheme library's string result to `cstr`. Both are handled
+    in `elab_any_unbox_to`, only when the Scheme prelude is in the program.
+  - Turmeric's `cstr` is unchanged.
+
+  Chibi's suite: 1147 of 1216 on both back ends, up from 1134. Fixtures:
+  `r7rs-strings`, `r7rs-string-literal-immutable`, and the
+  `strings-cross-the-seam` case of `tests/run-r7rs-import.sh`. The
+  `errors/r7rs-string-mutation` refusal is removed.
 - **`#lang r7rs`: exact rationals (r7rs-lang-plan T2).** An exact
   non-integer is a ratio in lowest terms, and its numerator and denominator
   are int64 or bignum.
