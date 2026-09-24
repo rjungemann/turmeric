@@ -1,0 +1,9 @@
+1772: (connect talk1 disconnect connect talk2 disconnect)
+escape: 42
+procedure?: #t
+generator: (a b c)
+same fringe: #t
+different fringe: #f
+winds: (in-outer in-inner out-inner out-outer in-outer in-inner out-inner out-outer)
+map: ((1 2 3) (1 20 3))
+guard: (caught oops)

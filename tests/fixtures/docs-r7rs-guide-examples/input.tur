@@ -67,6 +67,14 @@
   (lambda () (display "[out]")))
 (newline)
 
+(define (count-to n)
+  (let ((k #f) (i 0))
+    (call/cc (lambda (c) (set! k c)))
+    (set! i (+ i 1))
+    (if (< i n) (k #f) i)))
+(write (count-to 3))
+(newline)
+
 ;; --- Eval ----------------------------------------------------------------------
 (write (eval '(* 6 7) (environment '(scheme base))))
 (newline)

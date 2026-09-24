@@ -1422,17 +1422,215 @@
     (R7rsValues l)
     (if (is? (r7rs-cdr l) R7rsNull) (r7rs-car l) (R7rsValues l))))
 
-;;; r7rs-call/cc -- `call-with-current-continuation` at the escape level.
-;;; The receiver gets a variadic procedure; invoking it unwinds the wind
-;;; stack to the capture point and delivers its arguments as the value of
-;;; the call/cc expression.  Invoking it after the call/cc has returned is
-;;; the named error "continuation invoked after its call/cc prompt returned".
-(defn r7rs-call/cc [f] : any
+;;; r7rs-call/ec__ -- internal: an ESCAPE-only call/cc (R6, D7).  The
+;;; receiver gets a variadic procedure; invoking it unwinds the wind stack to
+;;; the capture point and delivers its arguments as the value of the call.
+;;; Invoking it after the call has returned is the named error
+;;; "continuation invoked after its call/cc prompt returned".  `guard` and the
+;;; eval bridge escape through this, which costs nothing per call; the
+;;; public `call/cc` below is re-entrant and copies the stack.
+(defn r7rs-call/ec__ [f] : any
   (let [saved r7rs-winders__]
     (call/cc (fn [k]
                (f (fn [& vs : any] : any
                     (r7rs-rewind-to__ saved)
                     (k (r7rs-values-of-list__ (r7rs-chain->list__ (:: vs (Cons any)))))))))))
+
+;;; ---- T5: re-entrant continuations ----------------------------------------
+;;;
+;;; A continuation is a copy of the C stack from the call/cc to the stack's
+;;; base, taken when call/cc is called, plus the runtime state that tracks the
+;;; stack (the tail-call trampoline, the CPS driver, the live escapes).
+;;; Invoking it travels the wind stack to the captured one -- `after` thunks
+;;; out, `before` thunks in -- then copies the stack back and jumps into it, so
+;;; the call/cc returns again, however many times and whenever.  Heap data is
+;;; shared, as Scheme requires: a continuation restores control, not state.
+;;; This is the classic copying implementation (SCM, early Guile); it keeps
+;;; every frame between the call/cc and the base, C frames included, which is
+;;; what a Scheme continuation is.  Where the stack's base cannot be found the
+;;; public call/cc is the escape above.
+
+;;; r7rs-cont-capture__ -- internal: capture; returns the handle, and returns
+;;; AGAIN, tagged (low bit set), each time the continuation is re-entered.
+(defn r7rs-cont-capture__ [] : ptr<void>
+  ```c
+  /* __tur_include__: #include <setjmp.h> */
+  /* __tur_include__: #include <pthread.h> */
+  /* __tur_include__: #include <stdint.h> */
+  /* __tur_include__: #include <stdlib.h> */
+  /* __tur_include__: typedef struct r7k_cont {
+      jmp_buf jb;
+      unsigned char *lo, *img;
+      size_t n;
+      void *tb_root, *tb_armed, *dk_driver, **esc;
+      int dk_depth, esc_n;
+  } r7k_cont;
+  #if defined(__SANITIZE_ADDRESS__)
+  #define R7K_ASAN 1
+  #elif defined(__has_feature)
+  #if __has_feature(address_sanitizer)
+  #define R7K_ASAN 1
+  #endif
+  #endif
+  #ifdef R7K_ASAN
+  void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
+  // ASan's use-after-return detection moves address-taken locals to a heap
+  // "fake stack" that a copy of the real stack cannot see, so an ASan build
+  // of a Scheme program runs with it off (ASAN_OPTIONS still overrides this).
+  const char *__asan_default_options(void) { return "detect_stack_use_after_return=0"; }
+  #define R7K_NOASAN __attribute__((no_sanitize_address))
+  #else
+  #define R7K_NOASAN
+  #endif
+  #if defined(__GLIBC__)
+  extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
+  #endif
+  static __thread unsigned char *r7k_base_tls;
+  static unsigned char *r7k_stack_base(void) {
+      if (r7k_base_tls) return r7k_base_tls;
+  #if defined(__GLIBC__)
+      pthread_attr_t a; void *addr = 0; size_t sz = 0;
+      if (pthread_getattr_np(pthread_self(), &a) == 0) {
+          if (pthread_attr_getstack(&a, &addr, &sz) == 0 && addr)
+              r7k_base_tls = (unsigned char *)addr + sz;
+          pthread_attr_destroy(&a);
+      }
+  #elif defined(__APPLE__)
+      r7k_base_tls = (unsigned char *)pthread_get_stackaddr_np(pthread_self());
+  #endif
+      return r7k_base_tls;
+  }
+  __attribute__((noinline)) R7K_NOASAN
+  static void r7k_copy(unsigned char *dst, const unsigned char *src, size_t n) {
+      volatile uintptr_t *d = (volatile uintptr_t *)dst;
+      const volatile uintptr_t *s = (const volatile uintptr_t *)src;
+      for (size_t i = 0; i < n / sizeof(uintptr_t); i++) d[i] = s[i];
+  }
+  static int r7k_snapshot(r7k_cont *c, unsigned char *mark) {
+      unsigned char *base = r7k_stack_base();
+      unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
+      if (!base || base <= lo) return 0;
+      c->lo = lo;
+      c->n = (size_t)(base - lo) & ~(sizeof(uintptr_t) - 1);
+      c->img = (unsigned char *)malloc(c->n);
+      if (!c->img) return 0;
+      r7k_copy(c->img, lo, c->n);
+      return 1;
+  }
+  __attribute__((noinline, noreturn)) R7K_NOASAN
+  static void r7k_jump(r7k_cont *c) {
+      r7k_copy(c->lo, c->img, c->n);
+  #ifdef R7K_ASAN
+      __asan_unpoison_memory_region(c->lo, c->n);
+  #endif
+      longjmp(c->jb, 1);
+  }
+  __attribute__((noinline, noreturn))
+  static void r7k_restore(r7k_cont *c) {
+      unsigned char here;
+      uintptr_t sp = (uintptr_t)&here, want = (uintptr_t)c->lo - 4096;
+      if (sp > want) {
+          volatile unsigned char *pad = (volatile unsigned char *)__builtin_alloca(sp - want);
+          pad[0] = 0;
+      }
+      r7k_jump(c);
+  } */
+  r7k_cont *volatile c = (r7k_cont *)calloc(1, sizeof(r7k_cont));
+  tur_dk_pinned = 1;
+  volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
+  mark[0] = 0;
+  c->tb_root = tur_tb_root;
+  c->tb_armed = tur_tb_armed_for;
+  c->dk_driver = (void *)g_dk_driver;
+  c->dk_depth = __dk_entry_depth;
+  c->esc_n = tur_escape_live_n;
+  if (c->esc_n > 0) {
+    c->esc = (void **)malloc((size_t)c->esc_n * sizeof(void *));
+    for (int i = 0; i < c->esc_n; i++) c->esc[i] = (void *)tur_escape_live[i];
+  }
+  if (setjmp(c->jb) != 0) {
+    r7k_cont *rc = c;
+    tur_tb_root = rc->tb_root;
+    tur_tb_armed_for = rc->tb_armed;
+    g_dk_driver = (tur_jmp_buf *)rc->dk_driver;
+    __dk_entry_depth = rc->dk_depth;
+    for (int i = 0; i < rc->esc_n; i++) tur_escape_live_push((tur_escape_cont *)rc->esc[i]);
+    return (void *)((uintptr_t)rc | 1);
+  }
+  if (!r7k_snapshot(c, (unsigned char *)mark)) return NULL;
+  return (void *)c;
+  ```)
+;;; r7rs-cont-resumed?__ -- internal: #t for the tagged handle a re-entry
+;;; returns.
+(defn r7rs-cont-resumed?__ [c : ptr<void>] : bool
+  ```c
+  return ((uintptr_t)c & 1) != 0;
+  ```)
+;;; r7rs-cont-null?__ -- internal: #t when no copy could be taken (no stack
+;;; base on this platform).
+(defn r7rs-cont-null?__ [c : ptr<void>] : bool
+  ```c
+  return c == NULL;
+  ```)
+;;; r7rs-cont-restore__ -- internal: copy the captured stack back and jump in.
+(defn r7rs-cont-restore__ [c : ptr<void>] : nil
+  ```c
+  r7k_cont *k = (r7k_cont *)((uintptr_t)c & ~(uintptr_t)1);
+  tur_escape_live_n = 0;
+  r7k_restore(k);
+  ```)
+
+;;; r7rs-cont-delivered__ -- the value an invoked continuation hands its
+;;; call/cc; set just before the jump, read just after it.
+(def ^mut r7rs-cont-delivered__ : any (R7rsNull 0))
+
+;;; r7rs-wind-depth__ -- internal: a wind stack's length.
+(defn r7rs-wind-depth__ [l] : int (if (r7rs-null? l) 0 (+ 1 (r7rs-wind-depth__ (r7rs-cdr l)))))
+(defn r7rs-wind-drop__ [l n : int] : any (if (<= n 0) l (r7rs-wind-drop__ (r7rs-cdr l) (- n 1))))
+;;; r7rs-wind-common__ -- internal: the longest common tail of two wind stacks.
+(defn r7rs-wind-common__ [a b] : any
+  (if (r7rs-null? a) a (if (r7rs-same-ref__ a b) a (r7rs-wind-common__ (r7rs-cdr a) (r7rs-cdr b)))))
+(defn r7rs-wind-before__ [w : R7rsWind] : any (.before w))
+;;; r7rs-rewind-into__ -- internal: enter the frames of `target` above
+;;; `common`, outermost first: each `before` runs, then its frame is pushed.
+(defn r7rs-rewind-into__ [target common] : nil
+  (if (if (r7rs-null? target) true (r7rs-same-ref__ target common))
+    nil
+    (do (r7rs-rewind-into__ (r7rs-cdr target) common)
+        ((r7rs-wind-before__ (r7rs-car target)))
+        (set! r7rs-winders__ target)
+        nil)))
+;;; r7rs-travel-to__ -- internal: R7RS 6.10 -- leave the current extent to
+;;; the common ancestor (each `after`, innermost first), then enter the
+;;; target's (each `before`, outermost first).
+(defn r7rs-travel-to__ [target] : nil
+  (let [la     (r7rs-wind-depth__ r7rs-winders__)
+        lb     (r7rs-wind-depth__ target)
+        common (r7rs-wind-common__ (r7rs-wind-drop__ r7rs-winders__ (- la lb))
+                                   (r7rs-wind-drop__ target (- lb la)))]
+    (r7rs-rewind-to__ common)
+    (r7rs-rewind-into__ target common)))
+
+;;; r7rs-call/cc -- `call-with-current-continuation`, re-entrant.  The
+;;; receiver gets a variadic procedure; invoking it -- while the call/cc is
+;;; running, after it has returned, any number of times -- travels the wind
+;;; stack to the captured one and returns its arguments from the call/cc.
+;;; The escape, as a procedure VALUE: a direct call would make r7rs-call/cc
+;;; itself a CPS function (it would reach Turmeric's call/cc), and a CPS
+;;; entry's heap frames are freed when it returns -- exactly what a re-entry
+;;; must not find.
+(def r7rs-call/ec-proc__ : any r7rs-call/ec__)
+(defn r7rs-call/cc [f] : any
+  (let [saved r7rs-winders__
+        c     (r7rs-cont-capture__)]
+    (if (r7rs-cont-null?__ c)
+      (r7rs-call/ec-proc__ f)
+      (if (r7rs-cont-resumed?__ c)
+        r7rs-cont-delivered__
+        (f (fn [& vs : any] : any
+             (r7rs-travel-to__ saved)
+             (set! r7rs-cont-delivered__ (r7rs-values-of-list__ (r7rs-chain->list__ (:: vs (Cons any)))))
+             (r7rs-cont-restore__ c)))))))
 
 ;;; read-error? / file-error? -- R7: an error object of that kind; (scheme
 ;;; file) raises file errors, the reader's arrive with R8.

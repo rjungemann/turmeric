@@ -386,6 +386,17 @@ void turi_runtime_panic(TuriEnv *env, const char *msg);
  * vector are two different structs; this looks through the box. */
 TuriValue turi_any_identity_payload(TuriValue v);
 
+/* r7rs-lang-plan T5: the interpreter's side of a re-entrant continuation (the
+ * R7RS prelude's call/cc copies the C stack; see eval.c).  `turi_cont_pin`
+ * stops the driver from freeing per-call temporaries for the rest of the run;
+ * a capture saves the env's dynamic-extent fields, the evaluator's boundary
+ * stacks and the drivers' heap work stacks, and a re-entry puts them back
+ * (after the stack image is restored). */
+typedef struct TuriContState TuriContState;
+void           turi_cont_pin(void);
+TuriContState *turi_cont_state_capture(TuriEnv *env);
+void           turi_cont_state_restore(TuriEnv *env, const TuriContState *s);
+
 /* Run the cooperative event loop until all async fibers and timers complete. */
 void turi_run_event_loop(TuriEnv *env);
 

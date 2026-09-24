@@ -6,6 +6,37 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: re-entrant `call/cc` (r7rs-lang-plan T5).** A continuation
+  can be invoked after its `call/cc` has returned, any number of times, on
+  both back ends. Generators, coroutines and same-fringe written with
+  `call/cc` work.
+  - **Winding.** Invoking a continuation travels the `dynamic-wind` stack:
+    `after` thunks out, `before` thunks back in.
+  - **How it works.** A continuation is a copy of the C stack, taken at the
+    `call/cc` and copied back on re-entry, plus the runtime state that tracks
+    the stack. `guard` and `raise` keep the old one-shot escape, which copies
+    nothing.
+  - **Visible change: every `set!` variable is now a heap cell.** Before,
+    only variables that a closure captures were. A re-entry must see the
+    latest value, not the value a stack copy saved.
+  - **Visible change: re-entry after return no longer errors.** Invoking a
+    continuation after its `call/cc` has returned used to be the named error
+    "continuation invoked after its call/cc prompt returned". At top level a
+    continuation is the rest of the program.
+  - **DK runtime.** The runtime gains a `tur_dk_pinned` flag. Only the R7RS
+    `call/cc` sets it, and once set, DK frames are never freed. 154 codegen
+    snapshots change by those lines.
+  - **Interpreter.** The driver's heap work stacks and per-call temporaries
+    survive a re-entry.
+  - **ASan.** A sanitized `tur`, and a sanitized compiled Scheme program,
+    default `detect_stack_use_after_return=0`. ASan's fake stack is
+    invisible to a stack copy. `ASAN_OPTIONS` still overrides the default.
+
+  Turmeric's `call/cc`, `call/cc*`, `reset`/`shift` and cloneable
+  continuations are unchanged. Chibi's suite: 1152 of 1216 on both back
+  ends, up from 1151. Fixtures: `r7rs-continuations`, and a rewritten
+  `r7rs-continuation-after-return`.
+
 - **`#lang r7rs`: `eval`, with the interpreter linked in on demand
   (r7rs-lang-plan T4).** `(scheme eval)`, `(scheme repl)`, `(scheme load)`
   and `(scheme r5rs)` are no longer refused. They give `eval`,

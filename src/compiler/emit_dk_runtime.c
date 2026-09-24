@@ -674,13 +674,20 @@ void emit_cps_runtime_prelude(Buf *out) {
  * A borrow_next node ends the walk: its ->next belongs to another chain (with
  * its own reap entry), so following it would double-free -- and by reap time
  * the borrowed tail may already be gone, so it must not even be read. */
-"static void dk_free(DK *k) { while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }\n");
+/* r7rs-lang-plan T5: once a re-entrant continuation exists (the R7RS
+ * prelude's r7rs-cont-capture__ sets tur_dk_pinned), a copy of the C stack may
+ * hold any live DK node, and re-entering it after its CPS entry returned must
+ * find the node intact -- so from then on DK memory is never reclaimed, the
+ * interpreter's process-lifetime policy.  Nothing else sets the flag, so every
+ * other program frees exactly as before. */
+"static int tur_dk_pinned = 0;\n"
+"static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }\n");
     buf_puts(out,
 "/* Free a single spliced node without following ->next -- used to reclaim the\n"
 " * one-off shift/perform node whose ->next points into an enclosing continuation\n"
 " * (dk_free would walk into that continuation and risk a double free).  See\n"
 " * docs/archive/cps-delimited-dk-node-leak.md. */\n"
-"__attribute__((unused)) static void dk_free_node(DK *k) { if (k && k->env_drop) k->env_drop(k->env); free(k); }\n");
+"__attribute__((unused)) static void dk_free_node(DK *k) { if (tur_dk_pinned) return; if (k && k->env_drop) k->env_drop(k->env); free(k); }\n");
     buf_puts(out,
 "/* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */\n"
 "typedef intptr_t (*__tur_cps_fn)();\n"
@@ -745,7 +752,7 @@ void emit_cps_runtime_prelude(Buf *out) {
     buf_puts(out,
 "__attribute__((unused)) static intptr_t __dk_reap_closure(intptr_t p) { __dk_reap_push((void *)p, 2); return p; }\n"
 "static void __dk_reap_run(void) {\n"
-"    for (size_t i = 0; i < __dk_reap_n; i++) {\n"
+"    for (size_t i = 0; i < __dk_reap_n && !tur_dk_pinned; i++) {\n"
 "        if (__dk_reap_kind[i] == 1) dk_free((DK *)__dk_reap_v[i]);\n"
 "        else if (__dk_reap_kind[i] == 2) TUR_CLOSURE_DROP(__dk_reap_v[i]);\n"
 "        else free(__dk_reap_v[i]);\n"

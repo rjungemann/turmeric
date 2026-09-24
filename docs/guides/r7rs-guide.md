@@ -203,13 +203,31 @@ A local variable shadows a keyword or a macro of the same name, as R7RS says:
   (lambda () (display "[in]"))
   (lambda () (display "body"))
   (lambda () (display "[out]")))             ; [in]body[out]
+(define (count-to n)
+  (let ((k #f) (i 0))
+    (call/cc (lambda (c) (set! k c)))         ; k re-enters here
+    (set! i (+ i 1))
+    (if (< i n) (k #f) i)))
+(write (count-to 3))                         ; 3
 ```
 
-`call/cc` captures an **escape**: invoking the continuation while its
-`call/cc` is still running returns from it, through any `dynamic-wind` exits.
-Invoking it after the `call/cc` has returned, which would re-enter it, is a
-named error. An uncaught `raise` reports on the current error port and exits
-with status 70.
+A continuation is **re-entrant**. Invoking it while its `call/cc` is still
+running returns from it, which is an escape. Invoking it after the `call/cc`
+has returned makes the `call/cc` return again. Either can happen any number
+of times, so generators and coroutines written with `call/cc` work.
+
+Invoking a continuation travels the `dynamic-wind` stack. The `after` thunks
+of the extent being left run first, innermost first. Then the `before` thunks
+of the extent being re-entered run, outermost first.
+
+A variable keeps its latest value across a re-entry, since a continuation
+restores control, not state. At top level a continuation is the rest of the
+program, so re-entering one runs the top-level forms after it again.
+
+`guard` and `raise` escape without copying anything. `call/cc` copies the
+stack between it and the program's start, so it costs time and memory in
+proportion to that depth. An uncaught `raise` reports on the current error
+port and exits with status 70.
 
 ## Eval
 
@@ -308,8 +326,6 @@ library's string result to `cstr` gets the same copy.
 - **String literals are immutable.** R7RS allows this. See Lists,
   vectors, strings above.
 - **No complex numbers.** See Numbers above.
-- **`call/cc` is an escape only.** A continuation cannot be re-entered after
-  its `call/cc` returns.
 - **`apply` and dynamic calls take at most four arguments.**
 - **`char-ready?` and `u8-ready?` always answer `#t`.**
 - **`(except ...)` in an import is refused.** A Turmeric import cannot say
@@ -336,10 +352,9 @@ bash tests/run-r7rs-conformance.sh      # both back ends, about two minutes
 python3 tests/r7rs/run-conformance.py --backend interp --list-failures
 ```
 
-**1151 of the 1216 tests** written in the suite pass, the same on the
-interpreter and the compiled back end. Nearly all the rest are the
-differences listed above: complex numbers (`3+4i`) and re-entering a
-continuation.
+**1152 of the 1216 tests** written in the suite pass, the same on the
+interpreter and the compiled back end. Nearly all the rest are complex
+numbers (`3+4i`), the difference listed above.
 What remains after those is two float spellings that differ from chibi's
 own (`1.7976931348623157e308` rather than `e+308`; both are R7RS).
 

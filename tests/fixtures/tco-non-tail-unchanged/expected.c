@@ -2157,12 +2157,13 @@ static DK *dk_append(DK *a, DK *b) {
     p->next = b;
     return a;
 }
-static void dk_free(DK *k) { while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
+static int tur_dk_pinned = 0;
+static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
 /* Free a single spliced node without following ->next -- used to reclaim the
  * one-off shift/perform node whose ->next points into an enclosing continuation
  * (dk_free would walk into that continuation and risk a double free).  See
  * docs/archive/cps-delimited-dk-node-leak.md. */
-__attribute__((unused)) static void dk_free_node(DK *k) { if (k && k->env_drop) k->env_drop(k->env); free(k); }
+__attribute__((unused)) static void dk_free_node(DK *k) { if (tur_dk_pinned) return; if (k && k->env_drop) k->env_drop(k->env); free(k); }
 /* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */
 typedef intptr_t (*__tur_cps_fn)();
 static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];
@@ -2219,7 +2220,7 @@ __attribute__((unused)) static intptr_t __dk_reap_ptr(intptr_t p) { __dk_reap_pu
 __attribute__((unused)) static DK *__dk_reap_node(DK *k) { __dk_reap_push(k, 0); return k; }
 __attribute__((unused)) static intptr_t __dk_reap_closure(intptr_t p) { __dk_reap_push((void *)p, 2); return p; }
 static void __dk_reap_run(void) {
-    for (size_t i = 0; i < __dk_reap_n; i++) {
+    for (size_t i = 0; i < __dk_reap_n && !tur_dk_pinned; i++) {
         if (__dk_reap_kind[i] == 1) dk_free((DK *)__dk_reap_v[i]);
         else if (__dk_reap_kind[i] == 2) TUR_CLOSURE_DROP(__dk_reap_v[i]);
         else free(__dk_reap_v[i]);

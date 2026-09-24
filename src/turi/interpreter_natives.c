@@ -27,6 +27,7 @@
 #include <limits.h>
 #include <math.h>
 #include <pthread.h>
+#include <setjmp.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -2868,6 +2869,116 @@ static TuriValue native_r7rs_exit(TuriEnv *env, TuriValue *a, uint32_t n, void *
     exit((int)r7rs_arg_int(a, n, 0));
 }
 
+/* r7rs-lang-plan T5: twins of the prelude's re-entrant call/cc
+ * (stdlib/r7rs/prelude.tur, r7rs-cont-capture__ and friends).  The same
+ * copying technique: a capture copies the C stack from here to the thread's
+ * stack base -- every interpreter frame between the call/cc and the base --
+ * and saves the evaluator's off-stack control state (eval.c,
+ * turi_cont_state_capture); a re-entry copies the stack back, jumps into the
+ * capture, and puts the state back.  Keep the stack helpers equal to the
+ * prelude's (r7k_*). */
+#if defined(__SANITIZE_ADDRESS__)
+#  define R7K_ASAN 1
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define R7K_ASAN 1
+#  endif
+#endif
+#ifdef R7K_ASAN
+void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
+#  define R7K_NOASAN __attribute__((no_sanitize_address))
+#else
+#  define R7K_NOASAN
+#endif
+#if defined(__GLIBC__)
+extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
+#endif
+typedef struct R7kCont {
+    jmp_buf        jb;
+    unsigned char *lo, *img;
+    size_t         n;
+    TuriContState *state;
+} R7kCont;
+static _Thread_local unsigned char *r7k_base_tls;
+static unsigned char *r7k_stack_base(void) {
+    if (r7k_base_tls) return r7k_base_tls;
+#if defined(__GLIBC__)
+    pthread_attr_t a; void *addr = 0; size_t sz = 0;
+    if (pthread_getattr_np(pthread_self(), &a) == 0) {
+        if (pthread_attr_getstack(&a, &addr, &sz) == 0 && addr)
+            r7k_base_tls = (unsigned char *)addr + sz;
+        pthread_attr_destroy(&a);
+    }
+#elif defined(__APPLE__)
+    r7k_base_tls = (unsigned char *)pthread_get_stackaddr_np(pthread_self());
+#endif
+    return r7k_base_tls;
+}
+__attribute__((noinline)) R7K_NOASAN
+static void r7k_copy(unsigned char *dst, const unsigned char *src, size_t n) {
+    volatile uintptr_t *d = (volatile uintptr_t *)dst;
+    const volatile uintptr_t *s = (const volatile uintptr_t *)src;
+    for (size_t i = 0; i < n / sizeof(uintptr_t); i++) d[i] = s[i];
+}
+static int r7k_snapshot(R7kCont *c, unsigned char *mark) {
+    unsigned char *base = r7k_stack_base();
+    unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
+    if (!base || base <= lo) return 0;
+    c->lo  = lo;
+    c->n   = (size_t)(base - lo) & ~(sizeof(uintptr_t) - 1);
+    c->img = (unsigned char *)malloc(c->n);
+    if (!c->img) return 0;
+    r7k_copy(c->img, lo, c->n);
+    return 1;
+}
+__attribute__((noinline, noreturn)) R7K_NOASAN
+static void r7k_jump(R7kCont *c) {
+    r7k_copy(c->lo, c->img, c->n);
+#ifdef R7K_ASAN
+    __asan_unpoison_memory_region(c->lo, c->n);
+#endif
+    longjmp(c->jb, 1);
+}
+__attribute__((noinline, noreturn))
+static void r7k_restore(R7kCont *c) {
+    unsigned char here;
+    uintptr_t sp = (uintptr_t)&here, want = (uintptr_t)c->lo - 4096;
+    if (sp > want) {
+        volatile unsigned char *pad = (volatile unsigned char *)__builtin_alloca(sp - want);
+        pad[0] = 0;
+    }
+    r7k_jump(c);
+}
+static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)a; (void)n; (void)ud;
+    R7kCont *volatile c = (R7kCont *)calloc(1, sizeof(R7kCont));
+    TuriEnv *volatile venv = env;
+    turi_cont_pin();
+    c->state = turi_cont_state_capture(env);
+    volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
+    mark[0] = 0;
+    if (setjmp(c->jb) != 0) {
+        R7kCont *rc = c;
+        turi_cont_state_restore(venv, rc->state);
+        return turi_int((int64_t)((uintptr_t)rc | 1));
+    }
+    if (!c->state || !r7k_snapshot(c, (unsigned char *)mark)) return turi_int(0);
+    return turi_int((int64_t)(uintptr_t)c);
+}
+static TuriValue native_r7rs_cont_resumed(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool((r7rs_arg_int(a, n, 0) & 1) != 0);
+}
+static TuriValue native_r7rs_cont_null(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool(r7rs_arg_int(a, n, 0) == 0);
+}
+static TuriValue native_r7rs_cont_restore(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    R7kCont *c = (R7kCont *)(uintptr_t)(r7rs_arg_int(a, n, 0) & ~(int64_t)1);
+    r7k_restore(c);
+}
+
 /* r7rs-lang-plan T4: twins of stdlib/r7rs/eval.tur's inline C.  Both back
  * ends drive the same embedded evaluator (src/turi/r7rs_embed.c) -- its own
  * env, not the program's, so `eval` copies datums here exactly as it does in
@@ -3904,6 +4015,11 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-environ-value__",  native_r7rs_environ_value,  NULL);
     turi_env_register_native(env, "r7rs-file-exists-c__",  native_r7rs_file_exists,    NULL);
     turi_env_register_native(env, "r7rs-unlink__",         native_r7rs_unlink,         NULL);
+    /* r7rs-lang-plan T5: the prelude's re-entrant call/cc. */
+    turi_env_register_native(env, "r7rs-cont-capture__",  native_r7rs_cont_capture,  NULL);
+    turi_env_register_native(env, "r7rs-cont-resumed?__", native_r7rs_cont_resumed,  NULL);
+    turi_env_register_native(env, "r7rs-cont-null?__",    native_r7rs_cont_null,     NULL);
+    turi_env_register_native(env, "r7rs-cont-restore__",  native_r7rs_cont_restore,  NULL);
     /* r7rs-lang-plan T4: stdlib/r7rs/eval.tur. */
     turi_env_register_native(env, "r7rs-eval-c-eval__",             native_r7rs_eval_c_eval,             NULL);
     turi_env_register_native(env, "r7rs-eval-c-load__",             native_r7rs_eval_c_load,             NULL);

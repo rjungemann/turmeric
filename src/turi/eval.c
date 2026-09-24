@@ -6682,6 +6682,146 @@ typedef struct {
     bool        was_no_unwind; /* DK_CALL_RET / DK_PROMPT: env->in_no_unwind to restore */
 } DriveCont;
 
+/* ---------------------------------------------------------------------------
+ * r7rs-lang-plan T5: re-entrant continuations under the interpreter.
+ *
+ * The R7RS prelude's call/cc copies the C stack (src/turi/interpreter_natives.c,
+ * native_r7rs_cont_capture), which holds every interpreter frame between the
+ * call/cc and the base.  The tree-walker also keeps control state OFF that
+ * stack, and a restored copy must find it as it was at the capture:
+ *
+ *   - each eval_drive_ex's work stack starts inline (in the image) but grows
+ *     onto the heap; the drives register themselves here, a capture snapshots
+ *     the heap ones, and a re-entry hands each restored drive a fresh copy;
+ *   - the per-call heap temporaries the driver frees when a call completes
+ *     (argument accumulators and the like) must outlive it, since a re-entry
+ *     completes the call again -- once any continuation exists they are never
+ *     freed (turi_cont_pin; the interpreter's process-lifetime policy);
+ *   - the env's dynamic-extent fields and this file's thread-local boundary
+ *     stacks are saved and put back.
+ * Nothing outside `#lang r7rs`'s call/cc captures, so no other program sees a
+ * difference: the registry is two pointer stores per drive, and the pin is
+ * never set.
+ * ------------------------------------------------------------------------- */
+static bool g_turi_cont_pinned = false;
+#define TURI_DRIVE_FREE(p) do { if (!g_turi_cont_pinned) free(p); } while (0)
+
+typedef struct DriveReg {
+    struct DriveReg *prev;
+    DriveCont      **pst;
+    size_t          *plen, *pcap;
+    DriveCont       *inl;
+} DriveReg;
+static _Thread_local DriveReg *g_drive_regs;
+
+typedef struct { DriveCont **pst; size_t len, cap; DriveCont *copy; } DriveSnap;
+
+struct TuriContState {
+    bool        returning, throwing, aborting, panicking, firing_panic_defer;
+    TuriValue   return_value, throw_value, abort_value;
+    int         abort_prompt_kind;
+    void       *abort_target, *handler_stack, *defer_stack, *effect_env;
+    jmp_buf    *catch_jmp;
+    const char *current_module;
+    void      **escape_live;
+    uint32_t    n_escape_live;
+    TuriCatchBoundary *catch_stack;
+    TuriResetBoundary *reset_stack;
+    TuriEffectCont    *pending_cont;
+    TuriGen           *pending_gen, *current_gen;
+    DriveReg   *drive_regs;
+    DriveSnap  *drives;
+    size_t      n_drives;
+};
+
+void turi_cont_pin(void) { g_turi_cont_pinned = true; }
+
+TuriContState *turi_cont_state_capture(TuriEnv *env) {
+    TuriContState *s = (TuriContState *)calloc(1, sizeof *s);
+    if (!s) return NULL;
+    s->returning          = env->returning;
+    s->throwing           = env->throwing;
+    s->aborting           = env->aborting;
+    s->panicking          = env->panicking;
+    s->return_value       = env->return_value;
+    s->throw_value        = env->throw_value;
+    s->abort_value        = env->abort_value;
+    s->abort_prompt_kind  = env->abort_prompt_kind;
+    s->abort_target       = env->abort_target;
+    s->handler_stack      = env->handler_stack;
+    s->defer_stack        = env->defer_stack;
+    s->effect_env         = env->effect_env;
+    s->catch_jmp          = env->catch_jmp;
+    s->current_module     = env->current_module;
+    s->n_escape_live      = env->n_escape_live;
+    if (s->n_escape_live) {
+        s->escape_live = (void **)malloc(s->n_escape_live * sizeof(void *));
+        memcpy(s->escape_live, env->escape_live, s->n_escape_live * sizeof(void *));
+    }
+    s->firing_panic_defer = g_firing_panic_defer;
+    s->catch_stack        = g_catch_stack;
+    s->reset_stack        = g_reset_stack;
+    s->pending_cont       = g_pending_cont;
+    s->pending_gen        = g_pending_gen;
+    s->current_gen        = g_current_gen;
+    s->drive_regs         = g_drive_regs;
+    for (DriveReg *r = g_drive_regs; r; r = r->prev)
+        if (*r->pst != r->inl) s->n_drives++;
+    if (s->n_drives) {
+        s->drives = (DriveSnap *)calloc(s->n_drives, sizeof(DriveSnap));
+        size_t k = 0;
+        for (DriveReg *r = g_drive_regs; r; r = r->prev) {
+            if (*r->pst == r->inl) continue;
+            DriveSnap *d = &s->drives[k++];
+            d->pst  = r->pst;
+            d->len  = *r->plen;
+            d->cap  = *r->pcap;
+            d->copy = (DriveCont *)malloc(d->cap * sizeof(DriveCont));
+            memcpy(d->copy, *r->pst, d->len * sizeof(DriveCont));
+        }
+    }
+    return s;
+}
+
+void turi_cont_state_restore(TuriEnv *env, const TuriContState *s) {
+    env->returning         = s->returning;
+    env->throwing          = s->throwing;
+    env->aborting          = s->aborting;
+    env->panicking         = s->panicking;
+    env->return_value      = s->return_value;
+    env->throw_value       = s->throw_value;
+    env->abort_value       = s->abort_value;
+    env->abort_prompt_kind = s->abort_prompt_kind;
+    env->abort_target      = s->abort_target;
+    env->handler_stack     = s->handler_stack;
+    env->defer_stack       = s->defer_stack;
+    env->effect_env        = s->effect_env;
+    env->catch_jmp         = s->catch_jmp;
+    env->current_module    = s->current_module;
+    if (s->n_escape_live > env->cap_escape_live) {
+        env->escape_live = (void **)realloc(env->escape_live, s->n_escape_live * sizeof(void *));
+        env->cap_escape_live = s->n_escape_live;
+    }
+    if (s->n_escape_live) memcpy(env->escape_live, s->escape_live, s->n_escape_live * sizeof(void *));
+    env->n_escape_live     = s->n_escape_live;
+    g_firing_panic_defer   = s->firing_panic_defer;
+    g_catch_stack          = s->catch_stack;
+    g_reset_stack          = s->reset_stack;
+    g_pending_cont         = s->pending_cont;
+    g_pending_gen          = s->pending_gen;
+    g_current_gen          = s->current_gen;
+    g_drive_regs           = s->drive_regs;
+    /* The restored drives point at the heap stacks they had; those have been
+     * pushed, popped and perhaps freed since.  Each gets its own fresh copy,
+     * since a continuation can be re-entered any number of times. */
+    for (size_t k = 0; k < s->n_drives; k++) {
+        const DriveSnap *d = &s->drives[k];
+        DriveCont *fresh = (DriveCont *)malloc(d->cap * sizeof(DriveCont));
+        memcpy(fresh, d->copy, d->len * sizeof(DriveCont));
+        *d->pst = fresh;
+    }
+}
+
 /* F4: activation seed for eval_drive_ex.  When non-NULL, the driver pushes a
  * DK_CALL_RET carrying this saved caller-state beneath DK_DONE and descends the
  * fn body in tail position; the DK_CALL_RET epilogue runs when the (possibly
@@ -7725,6 +7865,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
         st[len++] = (C);                                                       \
     } while (0)
 
+    DriveReg drive_reg = { g_drive_regs, &st, &len, &cap, inl };   /* T5 */
+    g_drive_regs = &drive_reg;
+
     DRIVE_PUSH(((DriveCont){ .kind = DK_DONE }));
 
     const Expr *control    = e;
@@ -7776,7 +7919,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             apply_args = NULL;
             if (clv.tag != TURI_CLOSURE || !clv.as_closure) {
                 cur = turi_error("eval: native-resume apply: not a closure");
-                free(acc); descending = false; continue;
+                TURI_DRIVE_FREE(acc); descending = false; continue;
             }
             TuriClosure *cl = clv.as_closure;
             FnDef       *fn = (FnDef *)cl->fn;
@@ -7790,7 +7933,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     TuriCont *c = (n >= 1 && acc[0].as_int)
                                 ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
                     int64_t w = (n >= 2) ? acc[1].as_int : 0;
-                    free(acc);
+                    TURI_DRIVE_FREE(acc);
                     ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                     int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
                     if (rc != 1) { cur = val; descending = false; continue; }
@@ -7802,7 +7945,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* Leaf (native / inline-C): dispatched synchronously via
                  * eval_apply, exactly as the DK_CALL_ARG leaf path does. */
                 cur = eval_apply(env, cl, acc, n);
-                free(acc); descending = false; continue;
+                TURI_DRIVE_FREE(acc); descending = false; continue;
             }
             uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
             uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
@@ -7810,12 +7953,12 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
                                   fn->binding ? fn->binding->name->name : "<fn>",
                                   (unsigned)effective_params, (unsigned)n);
-                free(acc); descending = false; continue;
+                TURI_DRIVE_FREE(acc); descending = false; continue;
             }
             if (env->step_fuel_limit > 0) {
                 if (env->step_fuel == 0) {
                     cur = turi_error("eval: step fuel exhausted");
-                    free(acc); descending = false; continue;
+                    TURI_DRIVE_FREE(acc); descending = false; continue;
                 }
                 env->step_fuel--;
             }
@@ -7824,7 +7967,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 frame_bind(env, call_frame,
                            fn->params[param_offset + i]->name->name,
                            turi_copy_byvalue_struct_arg(env, acc[i]));
-            free(acc);
+            TURI_DRIVE_FREE(acc);
             DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_RET, .frame = call_frame,
                                      .aux = env->defer_stack,
                                      .saved_module  = env->current_module,
@@ -8327,7 +8470,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * the handler, so the storage must outlive this iteration
                      * exactly as the synchronous path's does. */
                     for (uint8_t i = 0; i < n; i++) pargs[i] = pargs_heap[i];
-                    free(pargs_heap);
+                    TURI_DRIVE_FREE(pargs_heap);
                     pargs_heap = NULL; pargs_for = NULL;
                 } else if (n > 0 && ws_has_perform_args(pe)) {
                     /* An arg may itself perform: drive the args on the
@@ -8380,7 +8523,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * into pool memory.  The slice slots st[pidx+1 ..] are
                      * abandoned when `len` truncates below, so after the memcpy
                      * these malloc'd arrays are owned ONLY by wc->frames -- but
-                     * wc is pool-allocated and the driver's normal free(acc)
+                     * wc is pool-allocated and the driver's normal TURI_DRIVE_FREE(acc)
                      * epilogue never runs for the truncated slots, so without
                      * this they leak, growing O(performs)
                      * (turi-ws-perform-capture-accumulator-leak).  A resume
@@ -8406,7 +8549,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         TuriValue *pool_acc =
                             (TuriValue *)turi_val_alloc(env, cnt * sizeof(TuriValue));
                         memcpy(pool_acc, wc->frames[i].aux, cnt * sizeof(TuriValue));
-                        free(wc->frames[i].aux);
+                        TURI_DRIVE_FREE(wc->frames[i].aux);
                         wc->frames[i].aux = pool_acc;
                     }
                 }
@@ -8773,7 +8916,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 TuriResetBoundary *b = (TuriResetBoundary *)top->aux;
                 g_reset_stack = b->prev;
                 cur = reset_consume_abort(env, b, cur);
-                free(b);
+                TURI_DRIVE_FREE(b);
                 len--;
                 break;
             }
@@ -8792,7 +8935,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     env->handler_stack = b->saved_handler_stack;
                     env->defer_stack   = b->saved_defer_stack;
                 }
-                free(b);
+                TURI_DRIVE_FREE(b);
                 len--;
                 break;
             }
@@ -8821,7 +8964,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else {
                     cur = turi_ok_result_box(env, cur);
                 }
-                free(b);
+                TURI_DRIVE_FREE(b);
                 len--;
                 break;
             }
@@ -8889,7 +9032,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         tx->w_tv[i]->version++;
                     }
                 }
-                free(tx->w_tv); free(tx->w_val); free(tx);
+                TURI_DRIVE_FREE(tx->w_tv); TURI_DRIVE_FREE(tx->w_val); TURI_DRIVE_FREE(tx);
                 len--;
                 break;
             }
@@ -8953,7 +9096,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     clone_ws_slice(env, wc->frames, wc->n_frames, clone);
                     for (size_t i = 0; i < wc->n_frames; i++)
                         DRIVE_PUSH(clone[i]);
-                    free(clone);
+                    TURI_DRIVE_FREE(clone);
                 }
                 env->current_module = wc->perf_module;
                 env->in_no_unwind   = wc->perf_no_unwind;
@@ -9078,7 +9221,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * next arg, or hand the full set back to the descending
                  * EX_PERFORM arm via the side channel. */
                 TuriValue *acc = (TuriValue *)top->aux;
-                if (signaled) { free(acc); len--; break; }
+                if (signaled) { TURI_DRIVE_FREE(acc); len--; break; }
                 const Expr  *pex = top->expr;
                 PerformExpr *pe  = pex->as.perform_.perform;
                 acc[top->index] = cur;
@@ -9129,7 +9272,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             case DK_CALL_ARG: {
                 TuriValue *acc = (TuriValue *)top->aux;
                 uint32_t n = top->expr->as.call_.n_args;
-                if (signaled) { free(acc); len--; break; }
+                if (signaled) { TURI_DRIVE_FREE(acc); len--; break; }
                 if (n > 0) {
                     acc[top->index] = cur;
                     top->index++;
@@ -9157,7 +9300,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         TuriCont *c = (n >= 1 && acc[0].as_int)
                                     ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
                         int64_t w = (n >= 2) ? acc[1].as_int : 0;
-                        free(acc);
+                        TURI_DRIVE_FREE(acc);
                         ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                         int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
                         if (rc != 1) { cur = val; len--; break; }
@@ -9169,7 +9312,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     /* Leaf: native / inline-C, dispatched inside eval_apply
                      * (no driver re-entry).  eval_apply copies args, so free. */
                     cur = eval_apply(env, cl, acc, n);
-                    free(acc); len--;
+                    TURI_DRIVE_FREE(acc); len--;
                     break;
                 }
                 /* Turi-body closure: shared prologue (arity + step-fuel checks,
@@ -9273,12 +9416,12 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
                                       fn->binding ? fn->binding->name->name : "<fn>",
                                       (unsigned)effective_params, (unsigned)(n - arg_base));
-                    free(acc); len--; break;
+                    TURI_DRIVE_FREE(acc); len--; break;
                 }
                 if (env->step_fuel_limit > 0) {  /* SB3: step-fuel, as the retired eval_apply_inner charged it */
                     if (env->step_fuel == 0) {
                         cur = turi_error("eval: step fuel exhausted");
-                        free(acc); len--; break;
+                        TURI_DRIVE_FREE(acc); len--; break;
                     }
                     env->step_fuel--;
                 }
@@ -9287,7 +9430,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     frame_bind(env, call_frame,
                                fn->params[param_offset + i]->name->name,
                                turi_copy_byvalue_struct_arg(env, acc[arg_base + i]));
-                free(acc);
+                TURI_DRIVE_FREE(acc);
                 /* turi-dict-passing-plan: a DICT-CLONE's leading dict params
                  * just bound as ordinary int args carry TypeClassInstance
                  * pointers (the EX_DICT address-only value).  Record them as
@@ -9465,7 +9608,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 const BuiltinSpec *spec = be->as.builtin.spec;
                 uint32_t           n    = be->as.builtin.n;
                 TuriValue         *acc  = (TuriValue *)top->aux;  /* NULL if short-circuit */
-                if (signaled) { if (acc) free(acc); len--; break; }
+                if (signaled) { if (acc) TURI_DRIVE_FREE(acc); len--; break; }
                 if (spec->shape == BS_AND_SC) {
                     if (!turi_is_truthy(cur)) { cur = turi_bool(false); len--; break; }
                 } else if (spec->shape == BS_OR_SC) {
@@ -9490,7 +9633,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     TuriCont *c = (n >= 1 && acc[0].as_int)
                                 ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
                     int64_t w = (n >= 2) ? acc[1].as_int : 0;
-                    free(acc);
+                    TURI_DRIVE_FREE(acc);
                     ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                     int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
                     if (rc != 1) { cur = val; len--; break; }   /* done / error */
@@ -9499,13 +9642,13 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     have_apply = true;   /* result returns to this DK_CONT_FOLD */
                 } else {
                     cur = eval_builtin(env, spec, acc, n);
-                    free(acc); len--;
+                    TURI_DRIVE_FREE(acc); len--;
                 }
                 break;
             }
             case DK_MAKE_STRUCT: {
                 TuriValue *fields = (TuriValue *)top->aux;
-                if (signaled) { free(fields); len--; break; }  /* abandon, propagate */
+                if (signaled) { TURI_DRIVE_FREE(fields); len--; break; }  /* abandon, propagate */
                 const Expr *me = top->expr;
                 uint32_t    n  = me->as.make_struct_.n_fields;
                 fields[top->index] = cur;
@@ -9516,7 +9659,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else {
                     /* make_struct_val_def copies the fields, so free after. */
                     cur = make_struct_val_def(env, "<struct>", n, fields);
-                    free(fields);
+                    TURI_DRIVE_FREE(fields);
                     len--;  /* pop; keep returning the struct value */
                 }
                 break;
@@ -9557,7 +9700,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 bool      done = true;
                 TuriValue out  = turi_nil();
                 nr->resume(env, nr->state, cur, &done, &out);
-                free(nr);
+                TURI_DRIVE_FREE(nr);
                 cur = out;
                 len--;   /* pop; propagate the native's value */
                 break;
@@ -9570,21 +9713,21 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * on the work-stack); when no frames remain the resume value is
                  * turi_int(s->v). */
                 ContFoldState *s = (ContFoldState *)top->aux;
-                if (signaled) { free(s); len--; break; }
+                if (signaled) { TURI_DRIVE_FREE(s); len--; break; }
                 /* The frame's result becomes the new accumulator (ts_cont_resume
                  * sets v = r for every call frame -- ignore_value only controls
                  * whether the resume value is passed as an *argument*, handled in
                  * cont_fold_advance, not whether the result updates v). */
                 if (cur.tag != TURI_INT) {
                     cur = turi_errorf("eval: cont call frame returned non-int (tag %d)", cur.tag);
-                    free(s); len--; break;
+                    TURI_DRIVE_FREE(s); len--; break;
                 }
                 s->v = cur.as_int;
                 s->i--;
                 TuriValue ffn, *fargs, ferr; uint32_t fn_n;
                 int rc = cont_fold_advance(s, &ffn, &fargs, &fn_n, &ferr);
-                if (rc == 2) { cur = ferr; free(s); len--; break; }
-                if (rc == 0) { cur = turi_int(s->v); free(s); len--; break; }
+                if (rc == 2) { cur = ferr; TURI_DRIVE_FREE(s); len--; break; }
+                if (rc == 0) { cur = turi_int(s->v); TURI_DRIVE_FREE(s); len--; break; }
                 apply_fn = ffn; apply_args = fargs; apply_n = fn_n;
                 have_apply = true;   /* re-request; result returns to this slot */
                 break;
@@ -9593,6 +9736,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
         }
     }
 done:
+    g_drive_regs = drive_reg.prev;
     if (st != inl) free(st);
     #undef DRIVE_PUSH
     return result;

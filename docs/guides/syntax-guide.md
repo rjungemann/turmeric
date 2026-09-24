@@ -702,8 +702,9 @@ numbers: exact integers are int64 and continue as bignums past it (T1),
 inexact reals are doubles, `(/ 7 2)` is the exact ratio 7/2 (T2), and the R7RS
 predicate, rounding, division, `expt`/`sqrt`/transcendental and radix
 `number->string`/`string->number` surface is there. R6 adds control:
-`call/cc` as a one-shot upward escape (invoking a continuation after its
-call/cc has returned is a named error; re-entry is the plan's open item),
+`call/cc` (re-entrant since T5: a continuation can be invoked after its
+call/cc has returned, any number of times, which re-runs `dynamic-wind`
+`before` thunks),
 `dynamic-wind`, `with-exception-handler`/`raise`/`raise-continuable`/`guard`
 and error objects (an uncaught `raise` reports on stderr and exits 70),
 `parameterize`/`make-parameter`, and `delay`/`delay-force`/`force`. Every
@@ -737,7 +738,7 @@ R10 runs chibi-scheme's R7RS test suite as a ctest target
 written in it pass, on both back ends, and the rest are the named carve-outs
 (bignums, exact rationals, complex numbers, mutable strings, `eval`,
 re-entrant `call/cc`); Section 9's tasks have since closed all but complex
-numbers and re-entrant `call/cc`, for 1151. `(scheme char)` maps and
+numbers, for 1152. `(scheme char)` maps and
 classifies all of Unicode, from tables generated out of the Unicode
 database. The full
 reference is [r7rs-guide.md](r7rs-guide.md).

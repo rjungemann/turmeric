@@ -1,6 +1,6 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 through R10 landed 2026-09-23/24; Section 9's T0-T4 since.** `#lang r7rs` is a base
+Status: **R0 through R10 landed 2026-09-23/24; Section 9's T0-T5 since.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -49,12 +49,11 @@ that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 (native and browser) analysing and formatting Scheme, the editor packs,
 `gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
 runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
-which reports a count: 1151 of 1216 tests pass on both back ends (887 on the
+which reports a count: 1152 of 1216 tests pass on both back ends (887 on the
 interpreter, and a compiled build that did not finish, when it was first
-wired; 1082 at the end of R10, then 1096, 1103, 1134, 1147 and 1151 after
-Section 9's T0-T4). Each landed stage carries a "What shipped" note below.
-What is left -- re-entrant continuations and, last, complex numbers -- is
-Section 9,
+wired; 1082 at the end of R10, then 1096, 1103, 1134, 1147, 1151 and 1152
+after Section 9's T0-T5). Each landed stage carries a "What shipped" note
+below. What is left -- complex numbers -- is Section 9,
 as tasks that change what a Scheme program means and leave Turmeric's and
 Saffron's semantics as they are.
 
@@ -601,6 +600,9 @@ Re-entry after the capturing call has returned gets a **named, documented
 error**, not undefined behavior, and the escape hatch is `--interpret`, where
 the explicit-stack evaluator is the natural substrate for reifying a
 continuation (the archived turi trampoline plan says so in those words).
+
+*Closed 2026-09-24 by Section 9's T5, by a different route than the one
+below: `call/cc` copies the C stack (see T5's "What shipped").*
 
 Full re-entrancy routes through D6(d) -- the CPS path -- because that is where
 a heap-allocated continuation chain already exists. It is scheduled in R6 and
@@ -1663,7 +1665,7 @@ this one should be **measured the same way** before it is believed.
 | Refinement types | runtime contracts | no static base type to discharge over |
 | Linear / affine / unique, borrows, session types, GADTs | **expected to survive**, via annotations | Saffron measured these as kept; R7RS has no *syntax* for the annotations, so this is "survives if written in an annotated Turmeric module and called across the seam" |
 | Full numeric tower | int64 exact + checked overflow | D8; bignums and rationals are Section 9's T1-T2, complex T6 |
-| Re-entrant `call/cc` | not at first | D7; the conformance claim is gated on it; Section 9's T5 |
+| Re-entrant `call/cc` | **landed (T5)** | a continuation is a copy of the C stack; re-entry re-runs the `before` thunks |
 | `(scheme eval)`, `(scheme repl)` | **landed (T4)**: importing links the interpreter | one embedded R7RS session per run; data crosses by copy, procedures and raises as handles |
 | Typeclass dispatch on `any` | inherits Saffron's S9 state | separate epic |
 
@@ -1759,8 +1761,8 @@ What `#lang r7rs` still does differently from R7RS, measured on 2026-09-24:
 chibi's suite passed 1082 of the 1216 tests written in it, on both back ends,
 and the runner counted 143 failed test invocations (a test-numeric-syntax
 form counts two). Every one of those 143 belonged to a task below; the counts
-per task are the runner's, as written before T0. T0-T4 have landed since:
-1151 pass and 74 invocations fail, and the test lines each task turned
+per task are the runner's, as written before T0. T0-T5 have landed since:
+1152 pass and 73 invocations fail, and the test lines each task turned
 green are struck from the tasks below (each task says so). Section
 9.3 lists the documented differences no chibi test reaches.
 
@@ -2333,6 +2335,84 @@ re-entered continuation).**
   cloneable-reset machinery.
 - **Done:** the test; a generator written with re-entrant `call/cc` runs on
   both back ends.
+
+> **What shipped (T5, 2026-09-24).** Re-entrant `call/cc`, on both back ends.
+> The count is **1152** of 1216, up from 1151: test 1772.
+>
+> - **Not on the cloneable machinery.** "Where" above named `cloneable-reset`.
+>   Both of its reifiers -- the compiler's `collect_ctx` and the interpreter's
+>   runtime walk -- model a small grammar: integer binops, one- and
+>   two-argument calls, pure `let`, and an `if` with one shift-bearing arm.
+>   Arbitrary Scheme between a call/cc and its prompt falls outside it, and
+>   generalising it would have changed Turmeric's delimited control. So
+>   Turmeric's `reset`/`shift`/`call/cc*` are untouched, and the Scheme
+>   `call/cc` is built beside them.
+> - **A continuation is a copy of the C stack.** This is the classic
+>   technique for Schemes written in C (SCM, early Guile).
+>   - `r7rs-cont-capture__` (prelude inline C, with the helpers hoisted to
+>     file scope) copies from the call/cc to the thread's stack base
+>     (`pthread_getattr_np`, or `pthread_get_stackaddr_np` on macOS).
+>   - Invoking the continuation travels the wind stack
+>     (`r7rs-travel-to__`: each `after` out to the common ancestor, then
+>     each `before` in, R7RS 6.10), copies the stack back from a frame below
+>     it, and longjmps into the capture, which returns again, tagged.
+>   - Heap data is shared, so a continuation restores control, not state.
+>   - Where no stack base is known, `call/cc` is the escape.
+> - **What the copy cannot hold, and how each is kept right:**
+>   - **Assigned variables.** A plain mutable cell is a C local, so a copy
+>     brings back its old value. R10's assignment conversion now boxes every
+>     `set!` variable, not only captured ones (`ac_walk`, scheme_lower.c).
+>     Without it, a `results` list consed onto after a re-entry lost its
+>     first element and looped forever.
+>   - **CPS frames.** R6's tail calls make many prelude procedures CPS
+>     (`map1__`, `for-each1__`, `apply-list__`, call/cc itself). Their DK
+>     frames live on the heap and are freed when the entry returns. The DK
+>     runtime gains `tur_dk_pinned` (emit_dk_runtime.c): the first capture
+>     sets it, and from then on DK memory is never reclaimed. Nothing else
+>     sets it, and 154 codegen snapshots moved by exactly those lines.
+>   - **Runtime state tied to the stack.** The tail-call trampoline's TLS, the
+>     DK driver and its entry depth, and the live-escape set are saved at
+>     capture and restored at re-entry.
+>   - **The interpreter's off-stack control.** eval.c's
+>     `turi_cont_state_capture` / `_restore` cover:
+>     - the env's dynamic-extent fields;
+>     - the catch, reset, generator and pending-continuation stacks;
+>     - each `eval_drive_ex` work stack that grew onto the heap (the drives
+>       register themselves, and a re-entry hands each a fresh copy);
+>     - the driver's per-call temporaries (argument accumulators), which
+>       stop being freed once a continuation exists (`TURI_DRIVE_FREE`).
+>   - **ASan's fake stack.** Use-after-return detection moves address-taken
+>     locals to a heap "fake stack" a stack copy cannot see. A sanitized
+>     `tur` (main.c) and a sanitized compiled Scheme program (the prelude)
+>     default `detect_stack_use_after_return=0` through
+>     `__asan_default_options`; `ASAN_OPTIONS` still overrides it.
+> - **Escapes stay cheap.**
+>   - The old escape is `r7rs-call/ec__`, used by `guard` and the eval
+>     bridge, so they copy nothing.
+>   - The public `call/cc` copies the stack on every call: O(stack depth),
+>     and never freed.
+>   - `r7rs-call/cc` calls the escape fallback through a procedure value,
+>     since a direct call would make it a CPS function.
+> - **Top level is not delimited.** A continuation is the rest of the
+>   program, as the image includes `main`'s frame (and the interpreter's
+>   loop over the forms). `r7rs-continuation-after-return`, which pinned
+>   D7's named error, now shows a re-entry after return re-running the forms
+>   after it, stopped by a counter.
+> - **Found and filed:**
+>   - [r7rs-internal-define-forward-set](../reported/r7rs-internal-define-forward-set.md)
+>     -- `set!` on a later internal define is "not bound";
+>   - [r7rs-toplevel-define-named-like-a-turmeric-form](../reported/r7rs-toplevel-define-named-like-a-turmeric-form.md)
+>     -- `(define gen ...)` is the `gen` form.
+> - **Fixtures:**
+>   - `r7rs-continuations`, on both back ends: test 1772, an escape, a
+>     generator over `for-each`, same-fringe with two tree walkers, re-entry
+>     into nested `dynamic-wind`s, a continuation captured inside `map`
+>     re-entered, and `guard` after all of it;
+>   - `r7rs-continuation-after-return`, rewritten as above.
+>   - Verified by hand at `-O1` and under ASan, and on a Release build's
+>     both back ends. (`-O0` links no program at all today, Turmeric or
+>     Scheme, before and after T5 -- filed as
+>     [o0-build-cannot-link-contract-handler](../reported/o0-build-cannot-link-contract-handler.md).)
 
 **T6 -- complex numbers, deliberately after the others (73 tests before T0,
 71 after: 756, 760, 784, 789, 794, 796, 797, 849, 903, 1016, 1017,

@@ -12401,6 +12401,17 @@ static int tur_main_job(void *p) {
     return tur_main_inner(a->argc, a->argv);
 }
 
+/* r7rs-lang-plan T5: `#lang r7rs`'s call/cc copies the C stack under
+ * `tur --interpret` (src/turi/interpreter_natives.c).  ASan's use-after-return
+ * detection moves address-taken locals onto a heap "fake stack" that a copy of
+ * the real stack cannot see, so a sanitized `tur` runs with it off -- the
+ * same default the prelude sets for a sanitized compiled Scheme program.
+ * ASAN_OPTIONS still overrides it. */
+#if defined(__SANITIZE_ADDRESS__)
+const char *__asan_default_options(void);
+const char *__asan_default_options(void) { return "detect_stack_use_after_return=0"; }
+#endif
+
 int main(int argc, char **argv) {
     TurMainArgs a = { argc, argv };
     return tur_run_on_big_stack(tur_main_job, &a);

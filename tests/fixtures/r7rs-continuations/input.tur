@@ -1,0 +1,100 @@
+#lang r7rs
+;; r7rs-lang-plan T5: call/cc is re-entrant.  A continuation can be invoked
+;; while its call/cc runs, after it has returned, and any number of times;
+;; re-entering a dynamic-wind runs its `before` again.  Both back ends print
+;; this.
+(import (scheme base) (scheme write))
+
+(define (show label x)
+  (display label) (display ": ") (write x) (newline))
+
+;; chibi's r7rs-tests.scm test 1772: re-entering a continuation captured
+;; inside a dynamic-wind, after the dynamic-wind has returned.
+(show "1772"
+      (let ((path '())
+            (c #f))
+        (let ((add (lambda (s) (set! path (cons s path)))))
+          (dynamic-wind
+            (lambda () (add 'connect))
+            (lambda ()
+              (add (call-with-current-continuation
+                    (lambda (c0) (set! c c0) 'talk1))))
+            (lambda () (add 'disconnect)))
+          (if (< (length path) 4)
+              (c 'talk2)
+              (reverse path)))))
+
+;; An escape still works, and a continuation is a procedure.
+(show "escape" (+ 1 (call/cc (lambda (k) (+ 100 (k 41))))))
+(show "procedure?" (call/cc procedure?))
+
+;; A generator: each call resumes the for-each where the last one left off.
+(define (make-generator lst)
+  (define return #f)
+  (define (resume-here)
+    (for-each (lambda (x)
+                (call/cc (lambda (next)
+                           (set! resume-here (lambda () (next #f)))
+                           (return x))))
+              lst)
+    (return 'done))
+  (lambda ()
+    (call/cc (lambda (r)
+               (set! return r)
+               (resume-here)))))
+(define next-item (make-generator '(a b c)))
+(define (drain acc)
+  (let ((v (next-item)))
+    (if (eq? v 'done) (reverse acc) (drain (cons v acc)))))
+(show "generator" (drain '()))
+
+;; Same fringe: two tree walkers, interleaved.
+(define (tree->generator tree)
+  (define caller #f)
+  (define resume #f)
+  (define (walk t)
+    (cond ((null? t) 'skip)
+          ((pair? t) (walk (car t)) (walk (cdr t)))
+          (else (call/cc (lambda (rest)
+                           (set! resume (lambda () (rest #f)))
+                           (caller t))))))
+  (set! resume (lambda () (walk tree) (caller '*eof*)))
+  (lambda () (call/cc (lambda (c) (set! caller c) (resume)))))
+(define (same-fringe? a b)
+  (let ((ga (tree->generator a)) (gb (tree->generator b)))
+    (let loop ()
+      (let ((x (ga)) (y (gb)))
+        (cond ((not (eqv? x y)) #f)
+              ((eq? x '*eof*) #t)
+              (else (loop)))))))
+(show "same fringe" (same-fringe? '(1 (2 3) ((4))) '((1 2) (3 4))))
+(show "different fringe" (same-fringe? '(1 (2 3)) '(1 (2 4))))
+
+;; Re-entering nested dynamic-winds: the befores run outermost first, the
+;; afters innermost first, each time.
+(define (winds)
+  (let ((log '()) (k #f) (n 0))
+    (define (note x) (set! log (cons x log)))
+    (dynamic-wind
+      (lambda () (note 'in-outer))
+      (lambda ()
+        (dynamic-wind
+          (lambda () (note 'in-inner))
+          (lambda () (call/cc (lambda (c) (set! k c))) (set! n (+ n 1)))
+          (lambda () (note 'out-inner))))
+      (lambda () (note 'out-outer)))
+    (if (< n 2) (k #f) (reverse log))))
+(show "winds" (winds))
+
+;; A continuation captured inside map, re-entered: map builds a fresh list
+;; each time, and the first result is not disturbed.
+(define (map-reentry)
+  (let ((k #f) (results '()))
+    (let ((r (map (lambda (x) (call/cc (lambda (c) (if (= x 2) (set! k c)) x)))
+                  '(1 2 3))))
+      (set! results (cons r results))
+      (if (= (length results) 1) (k 20) (reverse results)))))
+(show "map" (map-reentry))
+
+;; guard and raise still escape through their own (one-shot) continuation.
+(show "guard" (guard (e ((symbol? e) (list 'caught e))) (raise 'oops)))

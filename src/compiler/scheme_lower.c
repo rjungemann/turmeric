@@ -2291,7 +2291,7 @@ static Form *lower_guard(SL *sl, Form *f) {
     Form *weh = Ln(sl, sp, 3, Sym(sl, sp, I(sl, "r7rs-with-exception-handler")), handler, bthunk);
     Form *kp = Sym(sl, sp, k);
     Form *recv = Ln(sl, sp, 4, Sym(sl, sp, sl->t_fn), Vec(sl, sp, &kp, 1), AnyAnn(sl, sp), weh);
-    Form *cc = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-call/cc")), recv);
+    Form *cc = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-call/ec__")), recv);
     return Ln(sl, sp, 1, cc);
 }
 
@@ -3531,8 +3531,14 @@ bool scheme_lower_needed(Form *const *forms, uint32_t n) {
  * once and never reassigned, so every closure's copy is the same pointer.
  * Each read of the name in its scope becomes `(r7rs-unbox__ n)` and each
  * `(set! n v)` becomes `(r7rs-box-set!__ n v)`; a scope that rebinds the name
- * (a `let`, `letrec`, `fn` or `defn` parameter) stops the rewrite.  A `set!`
- * variable no lambda sees keeps its plain mutable cell. */
+ * (a `let`, `letrec`, `fn` or `defn` parameter) stops the rewrite.
+ *
+ * T5 widens it to EVERY `set!` variable, seen by a lambda or not.  A
+ * re-entrant continuation is a copy of the C stack, so a plain mutable cell --
+ * a C local -- comes back holding its value at the capture, where R7RS says a
+ * variable is a location the continuation shares: a `results` list consed
+ * onto after a re-entry lost the first result, forever.  A heap cell is the
+ * location, so re-entry sees every assignment. */
 static bool ac_is_set(SL *sl, const Form *f) {
     return f->tag == F_LIST && f->as.list.len == 3 &&
            (is_sym(f->as.list.items[0], sl->t_set) || is_sym(f->as.list.items[0], sl->s_set));
@@ -3565,22 +3571,6 @@ static Form *ac_copy(SL *sl, const Form *f, Form **items) {
     *c = *f;
     c->as.list.items = items;
     return c;
-}
-static bool ac_captured(SL *sl, const Symbol *n, const Form *f, bool inside) {
-    if (!f) return false;
-    if (f->tag == F_SYM) return inside && f->as.sym == n;
-    if (f->tag != F_LIST && f->tag != F_VEC) return false;
-    uint32_t from = 0;
-    if (head_is(f, sl->t_fn) && f->as.list.len >= 2) {
-        if (ac_vec_binds(f->as.list.items[1], n)) return false;
-        inside = true; from = 2;
-    } else if (head_is(f, sl->t_defn) && f->as.list.len >= 3) {
-        if (ac_vec_binds(f->as.list.items[2], n)) return false;
-        inside = true; from = 3;
-    }
-    for (uint32_t i = from; i < f->as.list.len; i++)
-        if (ac_captured(sl, n, f->as.list.items[i], inside)) return true;
-    return false;
 }
 static Form *ac_subst(SL *sl, const Symbol *n, Form *f);
 /* `f` with items[from..] substituted; `f` itself when nothing changed. */
@@ -3686,13 +3676,7 @@ static Form *ac_walk(SL *sl, Form *f) {
         Form *v = g->as.list.items[1];
         nb = ac_parse_binds(sl, v, bs);
         if (k >= nb || !bs[k].mut) continue;
-        const Symbol *n = v->as.list.items[bs[k].name]->as.sym;
-        bool cap = false;
-        for (uint32_t j = k + 1; j < nb && !cap; j++)
-            cap = ac_captured(sl, n, v->as.list.items[bs[j].init], false);
-        for (uint32_t i = 2; i < g->as.list.len && !cap; i++)
-            cap = ac_captured(sl, n, g->as.list.items[i], false);
-        if (cap) g = ac_convert(sl, g, k);
+        g = ac_convert(sl, g, k);
     }
     return g;
 }

@@ -382,8 +382,8 @@
 ;;; r7rs-bridge-catch__ -- internal (T4): (thunk)'s value, or the object it
 ;;; raised, as an R7rsBridgeRaised.
 (defn r7rs-bridge-catch__ [thunk] : any
-  (r7rs-call/cc (fn [k] : any
-                  (r7rs-with-exception-handler (fn [e] : any (k (R7rsBridgeRaised e))) thunk))))
+  (r7rs-call/ec__ (fn [k] : any
+                    (r7rs-with-exception-handler (fn [e] : any (k (R7rsBridgeRaised e))) thunk))))
 ;;; r7rs-bridge-catch-apply__ -- internal (T4): (apply f l), caught.
 (defn r7rs-bridge-catch-apply__ [f l] : any
   (r7rs-bridge-catch__ (fn [] : any (r7rs-apply-list__ f l))))
