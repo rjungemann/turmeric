@@ -1,0 +1,11 @@
+#lang r7rs
+;; r7rs-lang-plan R5: the procedures that return two values -- floor/,
+;; truncate/, exact-integer-sqrt -- consumed through call-with-values.  A
+;; two-parameter consumer is the compiled dynamic-call gap in
+;; docs/reported/r7rs-compiled-dynamic-shapes.md (R6), so this is
+;; requires.interp-only; r7rs-numbers holds the rest of the tower.
+(call-with-values (lambda () (floor/ -7 2)) (lambda (q r) (display q) (display " ") (display r))) (newline)
+(call-with-values (lambda () (floor/ 7 -2)) (lambda (q r) (display q) (display " ") (display r))) (newline)
+(call-with-values (lambda () (truncate/ -7 2)) (lambda (q r) (display q) (display " ") (display r))) (newline)
+(call-with-values (lambda () (exact-integer-sqrt 17)) (lambda (s r) (display s) (display " ") (display r))) (newline)
+(call-with-values (lambda () (exact-integer-sqrt 16)) (lambda (s r) (display s) (display " ") (display r))) (newline)

@@ -21,8 +21,13 @@ standard's own `or`, `let*` and `do` expand correctly
 (`tests/fixtures/r7rs-syntax-rules`, `r7rs-syntax-rules-do`) and the
 referential-transparency gap is the named failing test
 `r7rs-syntax-rules-referential-transparency` under a new `expected.xfail`
-marker. R5 onward is unbuilt. Each landed stage carries a "What shipped"
-note below.
+marker. R5 gives the numbers their R7RS semantics over int64 and double:
+`(+)`, `(- x)`, comparison chains, promotion of a mixed literal pair,
+inexact `/` when the quotient is not exact, checked exact overflow (D8), the
+exactness predicates and conversions, rounding, integer division, `expt`,
+`sqrt`, the transcendental set, radix `number->string`/`string->number` and
+R7RS float spelling (`tests/fixtures/r7rs-numbers`). R6 onward is unbuilt.
+Each landed stage carries a "What shipped" note below.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -1046,6 +1051,62 @@ and `string->number` across radixes, and the arithmetic surface. `Rational` and
 Leading probe is `7.1`, never `7.0` and never `7`, per CLAUDE.md -- and in this
 stage that rule is load-bearing rather than procedural, because the whole stage
 is about exact/inexact divergence.
+
+> **What shipped (2026-09-23).**
+>
+> - **The operators are the lowering's, the tower is the prelude's.** A call
+>   `(op a b c)` for `+ - * /` folds onto a binary prelude helper
+>   (`r7rs-add2__` ...) that takes a checked path for two exact integers and
+>   the promoting dynamic operator otherwise -- which is what makes `(+ 1
+>   7.1)` legal (Turmeric's static operator rejects a mixed literal pair,
+>   TUR-E0042) and `(+)`, `(*)`, `(- x)`, `(/ x)` mean what R7RS says. A
+>   comparison chain `(< a b c)` binds each argument once and tests adjacent
+>   pairs. A bare operator in value position names the variadic prelude
+>   procedure (`r7rs-+`), so `(map + a b)` type-checks -- but see the
+>   deviations. The prelude itself is exempt from the rewrite and from the
+>   rename table, since it is written against the typed stdlib's real names
+>   and is where the raw operators are allowed.
+> - **Exactness is the type** (`exact?` is int, `inexact?` is float),
+>   `integer?` accepts 7.0, `exact-integer?` does not; `exact` of an
+>   integral float is the int and of 7.1 is an error (no rationals);
+>   `inexact`, `exact->inexact`, `inexact->exact`, `nan?`/`infinite?`/
+>   `finite?`, `rational?`/`real?`/`complex?` as R7RS-small allows.
+> - **D8: checked overflow.** `+`, `-`, `*` and `expt` on exact integers
+>   signal on overflow, on both back ends, with one sentence naming R7RS
+>   6.2.6 and the deferred bignum epic (`tests/fixtures/r7rs-exact-overflow`,
+>   nonzero exit). Until R6's `raise`/`guard` the signal is a panic, not an
+>   error object a handler can catch.
+> - **Division and rounding.** `(/ 7 2)` is the inexact 3.5 and `(/ 8 2)` the
+>   exact 4; `/` by exact zero is an error; `quotient`/`remainder`/`modulo`
+>   with R7RS signs, `floor/`, `truncate/` and the four `*-quotient`/
+>   `*-remainder` procedures; `floor`/`ceiling`/`truncate`/`round` (ties to
+>   even, via a new `rint` in `stdlib/math.tur` next to `trunc`, `tan`,
+>   `asin`, `acos`, `atan`); `gcd`/`lcm` variadic; `min`/`max` with inexact
+>   contagion; `sqrt` exact for a perfect square, `exact-integer-sqrt`,
+>   `expt` exact by checked multiplication for a non-negative exact
+>   exponent; `exp`/`log` (one or two arguments)/`sin`/`cos`/`tan`/`asin`/
+>   `acos`/`atan` (one or two); `square`, `numerator`/`denominator` on
+>   integers.
+> - **Number <-> string.** `number->string` and `string->number` take a
+>   radix of 2, 8, 10 or 16 (an inexact number is radix 10 only);
+>   `string->number` is `#f` on anything that is not a number, through a
+>   predicate/accessor pair rather than a sentinel. A float prints as R7RS
+>   spells it on both back ends: the shortest of 15/16/17 significant
+>   digits that round-trips, `7.0` never `7`, `1e21` not `1e+21`, and
+>   `+inf.0`/`-inf.0`/`+nan.0`; the compiled inline-C and the interpreter
+>   native share one rule.
+> - **Deviations at R5**: no exact rationals (`(/ 1 3)` is 0.3333...,
+>   `(exact 7.1)` errors, `numerator` of 7.1 errors); no bignums (overflow
+>   signals); no complex numbers (`(sqrt -4)` is +nan.0); `string->number`
+>   takes no `#x`/`#e` prefixes; `(apply + xs)` and `(apply max xs)` are the
+>   variadic-through-`apply` gap on both back ends
+>   (`docs/reported/r7rs-compiled-dynamic-shapes.md` 2b, found here), so
+>   `(reduce + ...)`-style code should fold with the binary operator
+>   instead; `floor/`, `truncate/` and `exact-integer-sqrt` run under
+>   `--interpret` only because their consumer is a two-parameter
+>   `call-with-values` (gap 2, R6). `Rational` and `Complex` from the typed
+>   stdlib are not reachable from Scheme; the plan's "offered with limits"
+>   is the documented absence above.
 
 ### R6 -- control (large; contains the hardest item)
 

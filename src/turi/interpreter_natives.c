@@ -2579,12 +2579,6 @@ static TuriValue native_r7rs_write_int(TuriEnv *env, TuriValue *a, uint32_t n, v
     if (n > 0) printf("%lld", (long long)(a[0].tag == TURI_FLOAT ? (int64_t)a[0].as_float : a[0].as_int));
     return turi_nil();
 }
-static TuriValue native_r7rs_write_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    if (n > 0) printf("%g", a[0].tag == TURI_FLOAT ? a[0].as_float : (double)a[0].as_int);
-    return turi_nil();
-}
-/* R3: the R7RS prelude's string and character primitives. */
 static const char *r7rs_arg_cstr(TuriValue *a, uint32_t n, uint32_t i) {
     return (i < n && a[i].tag == TURI_CSTR && a[i].as_cstr) ? a[i].as_cstr : "";
 }
@@ -2592,6 +2586,138 @@ static int64_t r7rs_arg_int(TuriValue *a, uint32_t n, uint32_t i) {
     if (i >= n) return 0;
     return a[i].tag == TURI_FLOAT ? (int64_t)a[i].as_float : a[i].as_int;
 }
+/* r7rs-lang-plan R5: the one spelling of a float both back ends print.
+ * Shortest of %.15g / %.17g that round-trips, `.0` appended to an integral
+ * value (R7RS writes 7.0 as `7.0`, never `7`), and the standard's own
+ * spellings for the non-finite values.  The compiled twin is the inline-C
+ * body of r7rs-float->string__ in stdlib/r7rs/prelude.tur; keep them equal. */
+static void r7rs_fmt_double(char *r, size_t cap, double x) {
+    if (x != x) { snprintf(r, cap, "+nan.0"); return; }
+    if (isinf(x)) { snprintf(r, cap, "%s", x > 0 ? "+inf.0" : "-inf.0"); return; }
+    snprintf(r, cap, "%.15g", x);
+    if (strtod(r, NULL) != x) snprintf(r, cap, "%.16g", x);
+    if (strtod(r, NULL) != x) snprintf(r, cap, "%.17g", x);
+    {   /* 1e+21 -> 1e21, 1e-07 -> 1e-7: R7RS spells the exponent bare. */
+        char *e = strchr(r, 'e');
+        if (e) {
+            char *d = e + 1; char sign = 0;
+            if (*d == '+' || *d == '-') { sign = *d; d++; }
+            while (*d == '0' && d[1]) d++;
+            char tail[32]; snprintf(tail, sizeof tail, "%s", d);
+            if (sign == '-') snprintf(e + 1, cap - (size_t)(e + 1 - r), "-%s", tail);
+            else snprintf(e + 1, cap - (size_t)(e + 1 - r), "%s", tail);
+        }
+    }
+    if (!strpbrk(r, ".eE")) { size_t l = strlen(r); if (l + 3 <= cap) { r[l] = '.'; r[l + 1] = '0'; r[l + 2] = 0; } }
+}
+static double r7rs_arg_double(TuriValue *a, uint32_t n, uint32_t i) {
+    if (i >= n) return 0.0;
+    return a[i].tag == TURI_FLOAT ? a[i].as_float : (double)a[i].as_int;
+}
+/* Checked exact arithmetic (D8): an overflow is an error, never a wrapped
+ * number.  The interpreter reports it as a turi error; the compiled twin
+ * panics with the same sentence. */
+static TuriValue native_r7rs_add_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t r;
+    if (__builtin_add_overflow(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1), &r))
+        return turi_error("+: exact integer overflow (R7RS 6.2.6: the result is not representable; bignums are r7rs-lang-plan D8's deferred epic)");
+    return turi_int(r);
+}
+static TuriValue native_r7rs_sub_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t r;
+    if (__builtin_sub_overflow(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1), &r))
+        return turi_error("-: exact integer overflow (R7RS 6.2.6: the result is not representable; bignums are r7rs-lang-plan D8's deferred epic)");
+    return turi_int(r);
+}
+static TuriValue native_r7rs_mul_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t r;
+    if (__builtin_mul_overflow(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1), &r))
+        return turi_error("*: exact integer overflow (R7RS 6.2.6: the result is not representable; bignums are r7rs-lang-plan D8's deferred epic)");
+    return turi_int(r);
+}
+static TuriValue native_r7rs_float_nan(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; double x = r7rs_arg_double(a, n, 0); return turi_bool(x != x);
+}
+static TuriValue native_r7rs_float_infinite(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; return turi_bool(isinf(r7rs_arg_double(a, n, 0)) != 0);
+}
+static TuriValue native_r7rs_float_integral(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; double x = r7rs_arg_double(a, n, 0);
+    return turi_bool(isfinite(x) && floor(x) == x);
+}
+static TuriValue native_r7rs_int_to_string_radix(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t x = r7rs_arg_int(a, n, 0), radix = r7rs_arg_int(a, n, 1);
+    char *r = (char *)malloc(80);
+    if (radix < 2 || radix > 36) { snprintf(r, 80, "%lld", (long long)x); return turi_cstr(r); }
+    char buf[72]; int i = 71; buf[i] = 0;
+    uint64_t u = x < 0 ? (uint64_t)0 - (uint64_t)x : (uint64_t)x;
+    if (u == 0) buf[--i] = '0';
+    while (u) { int d = (int)(u % (uint64_t)radix); buf[--i] = (char)(d < 10 ? '0' + d : 'a' + d - 10); u /= (uint64_t)radix; }
+    if (x < 0) buf[--i] = '-';
+    snprintf(r, 80, "%s", buf + i);
+    return turi_cstr(r);
+}
+/* string->number's two halves: a predicate and an accessor, so no sentinel
+ * rides in the value (CLAUDE.md: no :int stand-ins). */
+static bool r7rs_parse_int_radix(const char *s, int64_t radix, int64_t *out) {
+    if (!s || !*s || radix < 2 || radix > 36) return false;
+    bool neg = false; const char *p = s;
+    if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
+    if (!*p) return false;
+    int64_t v = 0;
+    for (; *p; p++) {
+        int d;
+        if (*p >= '0' && *p <= '9') d = *p - '0';
+        else if (*p >= 'a' && *p <= 'z') d = *p - 'a' + 10;
+        else if (*p >= 'A' && *p <= 'Z') d = *p - 'A' + 10;
+        else return false;
+        if (d >= radix) return false;
+        if (__builtin_mul_overflow(v, radix, &v) || __builtin_add_overflow(v, neg ? -d : d, &v)) return false;
+    }
+    *out = v;
+    return true;
+}
+static bool r7rs_parse_float_str(const char *s, double *out) {
+    if (!s || !*s) return false;
+    if (strcmp(s, "+inf.0") == 0) { *out = INFINITY; return true; }
+    if (strcmp(s, "-inf.0") == 0) { *out = -INFINITY; return true; }
+    if (strcmp(s, "+nan.0") == 0 || strcmp(s, "-nan.0") == 0) { *out = NAN; return true; }
+    /* strtod accepts "inf", "nan", hex floats and leading whitespace; R7RS
+     * does not, so only a decimal spelling with digits, '.', 'e' and a sign
+     * gets through. */
+    for (const char *p = s; *p; p++)
+        if (!((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')) return false;
+    char *end = NULL;
+    double v = strtod(s, &end);
+    if (end == s || *end) return false;
+    *out = v;
+    return true;
+}
+static TuriValue native_r7rs_parse_int_ok(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; int64_t v; return turi_bool(r7rs_parse_int_radix(r7rs_arg_cstr(a, n, 0), r7rs_arg_int(a, n, 1), &v));
+}
+static TuriValue native_r7rs_parse_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; int64_t v = 0; (void)r7rs_parse_int_radix(r7rs_arg_cstr(a, n, 0), r7rs_arg_int(a, n, 1), &v); return turi_int(v);
+}
+static TuriValue native_r7rs_parse_float_ok(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; double v; return turi_bool(r7rs_parse_float_str(r7rs_arg_cstr(a, n, 0), &v));
+}
+static TuriValue native_r7rs_parse_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; double v = 0.0; (void)r7rs_parse_float_str(r7rs_arg_cstr(a, n, 0), &v);
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = v; return rv;
+}
+static TuriValue native_r7rs_write_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    char r[48];
+    r7rs_fmt_double(r, sizeof r, r7rs_arg_double(a, n, 0));
+    fputs(r, stdout);
+    return turi_nil();
+}
+/* R3: the R7RS prelude's string and character primitives. */
 static void r7rs_put_utf8(char *out, int *n, uint32_t cp) {
     if (cp < 0x80) out[(*n)++] = (char)cp;
     else if (cp < 0x800) { out[(*n)++] = (char)(0xC0 | (cp >> 6)); out[(*n)++] = (char)(0x80 | (cp & 0x3F)); }
@@ -2652,9 +2778,8 @@ static TuriValue native_r7rs_int_to_string(TuriEnv *env, TuriValue *a, uint32_t 
 }
 static TuriValue native_r7rs_float_to_string(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    char *r = (char *)malloc(32);
-    double x = (n > 0) ? (a[0].tag == TURI_FLOAT ? a[0].as_float : (double)a[0].as_int) : 0.0;
-    snprintf(r, 32, "%g", x);
+    char *r = (char *)malloc(48);
+    r7rs_fmt_double(r, 48, r7rs_arg_double(a, n, 0));
     return turi_cstr(r);
 }
 static TuriValue native_r7rs_write_char(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2710,6 +2835,17 @@ static TuriValue native_bits_to_float(TuriEnv *env, TuriValue *a, uint32_t n, vo
     TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = u.d; return rv;
 }
 /* sqrt / floor: math.tur's libm wrappers (inline-C the tree-walker cannot run). */
+#define R7RS_MATH1(cname, fn) \
+static TuriValue cname(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) { \
+    (void)env; (void)ud; double x = (n > 0) ? (a[0].tag == TURI_FLOAT ? a[0].as_float : (double)a[0].as_int) : 0.0; \
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = fn(x); return rv; }
+R7RS_MATH1(native_math_tan, tan)
+R7RS_MATH1(native_math_asin, asin)
+R7RS_MATH1(native_math_acos, acos)
+R7RS_MATH1(native_math_atan, atan)
+R7RS_MATH1(native_math_trunc, trunc)
+R7RS_MATH1(native_math_rint, rint)
+#undef R7RS_MATH1
 static TuriValue native_math_sqrt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     double x = (n > 0) ? a[0].as_float : 0.0;
@@ -3313,6 +3449,18 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-string-of-code__", native_r7rs_string_of_code,  NULL);
     turi_env_register_native(env, "r7rs-int->string__",    native_r7rs_int_to_string,   NULL);
     turi_env_register_native(env, "r7rs-float->string__",  native_r7rs_float_to_string, NULL);
+    /* r7rs-lang-plan R5: the numeric tower's inline-C helpers. */
+    turi_env_register_native(env, "r7rs-add-int__",           native_r7rs_add_int,            NULL);
+    turi_env_register_native(env, "r7rs-sub-int__",           native_r7rs_sub_int,            NULL);
+    turi_env_register_native(env, "r7rs-mul-int__",           native_r7rs_mul_int,            NULL);
+    turi_env_register_native(env, "r7rs-float-nan?__",        native_r7rs_float_nan,          NULL);
+    turi_env_register_native(env, "r7rs-float-infinite?__",   native_r7rs_float_infinite,     NULL);
+    turi_env_register_native(env, "r7rs-float-integral?__",   native_r7rs_float_integral,     NULL);
+    turi_env_register_native(env, "r7rs-int->string-radix__", native_r7rs_int_to_string_radix, NULL);
+    turi_env_register_native(env, "r7rs-parse-int-ok?__",     native_r7rs_parse_int_ok,       NULL);
+    turi_env_register_native(env, "r7rs-parse-int__",         native_r7rs_parse_int,          NULL);
+    turi_env_register_native(env, "r7rs-parse-float-ok?__",   native_r7rs_parse_float_ok,     NULL);
+    turi_env_register_native(env, "r7rs-parse-float__",       native_r7rs_parse_float,        NULL);
     turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
     turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);
@@ -3329,6 +3477,12 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "fabs",              native_math_fabs,       NULL);
     turi_env_register_native(env, "ceil",              native_math_ceil,       NULL);
     turi_env_register_native(env, "pow",               native_math_pow,        NULL);
+    turi_env_register_native(env, "tan",               native_math_tan,        NULL);
+    turi_env_register_native(env, "asin",              native_math_asin,       NULL);
+    turi_env_register_native(env, "acos",              native_math_acos,       NULL);
+    turi_env_register_native(env, "atan",              native_math_atan,       NULL);
+    turi_env_register_native(env, "trunc",             native_math_trunc,      NULL);
+    turi_env_register_native(env, "rint",              native_math_rint,       NULL);
     /* I/O benchmark helpers */
     turi_env_register_native(env, "write-temp-file",   native_write_temp_file, NULL);
     turi_env_register_native(env, "io-fopen-read",     native_io_fopen_read,   NULL);

@@ -112,7 +112,9 @@ cat > "$TMP/prog2.tur" <<'EOF'
 (display (rect-area 1.5 2.0)) (newline)
 EOF
 
-run_case "scheme-renames-turmeric" prog2.tur "3"
+# 1.5 * 2.0 is the inexact 3.0, and R7RS writes an inexact integer with its
+# `.0` (R5), where Turmeric's own println would print 3.
+run_case "scheme-renames-turmeric" prog2.tur "3.0"
 
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"

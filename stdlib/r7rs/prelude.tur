@@ -47,6 +47,7 @@
 ;;; Since: r7rs-lang-plan R2, R3
 
 (load "stdlib/sym-dynamic.tur")
+(load "stdlib/math.tur")
 
 ;;; ---- the types --------------------------------------------------------
 
@@ -267,10 +268,6 @@
 ;;; ---- type predicates ---------------------------------------------------
 
 (defn r7rs-boolean? [x] : bool (is? x bool))
-(defn r7rs-number? [x] : bool (if (is? x int) true (is? x float)))
-(defn r7rs-integer? [x] : bool (is? x int))
-(defn r7rs-float?__ [x] : bool (is? x float))
-(defn r7rs-real? [x] : bool (if (is? x int) true (is? x float)))
 (defn r7rs-string? [x] : bool (is? x cstr))
 (defn r7rs-symbol? [x] : bool (is? x Sym))
 (defn r7rs-procedure? [x] : bool (= (r7rs-type-name__ x) (:: "fn" any)))
@@ -281,16 +278,300 @@
 (defn r7rs-values?__ [x] : bool (is? x R7rsValues))
 (defn r7rs-eof-object [] r7rs-eof-value__)
 
-;;; ---- numbers (the R2 subset; R5 brings the tower) ----------------------
+;;; ---- numbers (R5: the tower over int64 and double) --------------------
+;;;
+;;; R7RS 6.2 with the limits D8 names: an exact integer is Turmeric's int64
+;;; and an inexact real is its double.  There are no exact rationals and no
+;;; bignums, so `(/ 7 2)` is the inexact 3.5 (not 7/2) and an exact result
+;;; outside int64 is an ERROR, never a wrapped number -- `+`, `-`, `*` and
+;;; `expt` on exact integers are checked (D8), and the panic names the rule.
+;;; Exactness is the type: `exact?` is `int`, `inexact?` is `float`, and the
+;;; arithmetic on mixed operands is inexact (the dynamic substrate promotes).
+;;; No complex numbers: `(sqrt -4)` is +nan.0.
+;;;
+;;; The lowering routes every `+ - * / = < > <= >=` in call position through
+;;; the binary helpers here (`r7rs-add2__` ...), folding n-ary uses and
+;;; handling `(+)`, `(- x)`, `(/ x)`; the variadic `r7rs-+` ... are what a
+;;; bare `+` in value position names, so `(apply + xs)` and `(map + a b)`
+;;; work.  The prelude itself is exempt from that rewrite (it is where the
+;;; raw operators are allowed to appear), so the helpers below may use them.
+
+;;; r7rs-fixnum?__ / r7rs-flonum?__ -- the representation tests; `integer?`
+;;; is the R7RS predicate (7.0 is an integer) and is not the one to use to
+;;; pick a printer.
+(defn r7rs-fixnum?__ [x] : bool (is? x int))
+(defn r7rs-flonum?__ [x] : bool (is? x float))
+(defn r7rs-float-nan?__ [x : float] : bool
+  ```c
+  return x != x;
+  ```)
+(defn r7rs-float-infinite?__ [x : float] : bool
+  ```c
+  return __builtin_isinf(x) != 0;
+  ```)
+(defn r7rs-float-integral?__ [x : float] : bool
+  ```c
+  return __builtin_isfinite(x) && __builtin_floor(x) == x;
+  ```)
+(defn r7rs-int->float__ [x : int] : float (int->float x))
+(defn r7rs-float->int__ [x : float] : int (float->int x))
+(defn r7rs-to-float__ [x] : float (if (is? x float) x (r7rs-int->float__ x)))
+
+(defn r7rs-number? [x] : bool (if (is? x int) true (is? x float)))
+(defn r7rs-complex? [x] : bool (r7rs-number? x))
+(defn r7rs-real? [x] : bool (r7rs-number? x))
+(defn r7rs-finite? [x] : bool
+  (if (is? x float) (if (r7rs-float-nan?__ x) false (if (r7rs-float-infinite?__ x) false true)) (is? x int)))
+(defn r7rs-infinite? [x] : bool (if (is? x float) (r7rs-float-infinite?__ x) false))
+(defn r7rs-nan? [x] : bool (if (is? x float) (r7rs-float-nan?__ x) false))
+(defn r7rs-rational? [x] : bool (r7rs-finite? x))
+(defn r7rs-integer? [x] : bool (if (is? x int) true (if (is? x float) (r7rs-float-integral?__ x) false)))
+(defn r7rs-exact? [x] : bool (if (r7rs-number? x) (is? x int) (r7rs-fail-bool__ "exact?: not a number")))
+(defn r7rs-inexact? [x] : bool (if (r7rs-number? x) (is? x float) (r7rs-fail-bool__ "inexact?: not a number")))
+(defn r7rs-exact-integer? [x] : bool (is? x int))
+(defn r7rs-exact-rational? [x] : bool (is? x int))
+
+;;; ---- checked exact arithmetic (D8) --------------------------------------
+
+(defn r7rs-add-int__ [a : int b : int] : int
+  ```c
+  int64_t r;
+  if (__builtin_add_overflow(a, b, &r)) tur_panic("+: exact integer overflow (R7RS 6.2.6: the result is not representable; bignums are r7rs-lang-plan D8's deferred epic)");
+  return r;
+  ```)
+(defn r7rs-sub-int__ [a : int b : int] : int
+  ```c
+  int64_t r;
+  if (__builtin_sub_overflow(a, b, &r)) tur_panic("-: exact integer overflow (R7RS 6.2.6: the result is not representable; bignums are r7rs-lang-plan D8's deferred epic)");
+  return r;
+  ```)
+(defn r7rs-mul-int__ [a : int b : int] : int
+  ```c
+  int64_t r;
+  if (__builtin_mul_overflow(a, b, &r)) tur_panic("*: exact integer overflow (R7RS 6.2.6: the result is not representable; bignums are r7rs-lang-plan D8's deferred epic)");
+  return r;
+  ```)
+(defn r7rs-both-int?__ [a b] : bool (if (is? a int) (is? b int) false))
+
+;;; r7rs-add2__ ... -- the binary operators the lowering emits.  Two exact
+;;; integers take the checked path; anything else is the dynamic operator,
+;;; which promotes a mixed pair to inexact.
+(defn r7rs-add2__ [a b] (if (r7rs-both-int?__ a b) (:: (r7rs-add-int__ a b) any) (+ a b)))
+(defn r7rs-sub2__ [a b] (if (r7rs-both-int?__ a b) (:: (r7rs-sub-int__ a b) any) (- a b)))
+(defn r7rs-mul2__ [a b] (if (r7rs-both-int?__ a b) (:: (r7rs-mul-int__ a b) any) (* a b)))
+;;; r7rs-div2__ -- exact when the quotient is exact, inexact otherwise
+;;; (there are no rationals), and division by exact zero is an error.
+(defn r7rs-div-int__ [a : int b : int]
+  (if (= b 0)
+    (r7rs-fail-any__ "/: division by exact zero")
+    (if (= (mod a b) 0)
+      (:: (/ a b) any)
+      (:: (/ (r7rs-int->float__ a) (r7rs-int->float__ b)) any))))
+(defn r7rs-div2__ [a b]
+  (if (r7rs-both-int?__ a b)
+    (r7rs-div-int__ a b)
+    (:: (/ (r7rs-to-float__ a) (r7rs-to-float__ b)) any)))
+(defn r7rs-numeq2__ [a b] : bool (= a b))
+(defn r7rs-lt2__ [a b] : bool (< a b))
+(defn r7rs-gt2__ [a b] : bool (> a b))
+(defn r7rs-le2__ [a b] : bool (<= a b))
+(defn r7rs-ge2__ [a b] : bool (>= a b))
+
+;;; The variadic procedures a bare operator names in value position.
+(defn r7rs-fold-num__ [f l acc]
+  (if (r7rs-null? l) acc (r7rs-fold-num__ f (r7rs-cdr l) (f acc (r7rs-car l)))))
+(defn r7rs-args__ [xs : (Cons any)] : any (r7rs-chain->list__ xs))
+(defn r7rs-+ [& xs : any] (r7rs-fold-num__ r7rs-add2__ (r7rs-args__ (:: xs (Cons any))) (:: 0 any)))
+(defn r7rs-* [& xs : any] (r7rs-fold-num__ r7rs-mul2__ (r7rs-args__ (:: xs (Cons any))) (:: 1 any)))
+(defn r7rs-- [x & xs : any]
+  (let [l (r7rs-args__ (:: xs (Cons any)))]
+    (if (r7rs-null? l) (r7rs-sub2__ 0 x) (r7rs-fold-num__ r7rs-sub2__ l x))))
+(defn r7rs-/ [x & xs : any]
+  (let [l (r7rs-args__ (:: xs (Cons any)))]
+    (if (r7rs-null? l) (r7rs-div2__ 1 x) (r7rs-fold-num__ r7rs-div2__ l x))))
+(defn r7rs-chain-cmp__ [f x l] : bool
+  (if (r7rs-null? l) true (if (f x (r7rs-car l)) (r7rs-chain-cmp__ f (r7rs-car l) (r7rs-cdr l)) false)))
+(defn r7rs-= [x & xs : any] : bool (r7rs-chain-cmp__ r7rs-numeq2__ x (r7rs-args__ (:: xs (Cons any)))))
+(defn r7rs-< [x & xs : any] : bool (r7rs-chain-cmp__ r7rs-lt2__ x (r7rs-args__ (:: xs (Cons any)))))
+(defn r7rs-> [x & xs : any] : bool (r7rs-chain-cmp__ r7rs-gt2__ x (r7rs-args__ (:: xs (Cons any)))))
+(defn r7rs-<= [x & xs : any] : bool (r7rs-chain-cmp__ r7rs-le2__ x (r7rs-args__ (:: xs (Cons any)))))
+(defn r7rs->= [x & xs : any] : bool (r7rs-chain-cmp__ r7rs-ge2__ x (r7rs-args__ (:: xs (Cons any)))))
+
+;;; ---- predicates, min/max, abs -------------------------------------------
 
 (defn r7rs-zero? [x] : bool (= x 0))
 (defn r7rs-positive? [x] : bool (> x 0))
 (defn r7rs-negative? [x] : bool (< x 0))
-(defn r7rs-even? [x] : bool (= (mod x 2) 0))
-(defn r7rs-odd? [x] : bool (if (= (mod x 2) 0) false true))
-(defn r7rs-abs [x] (if (< x 0) (- 0 x) x))
-(defn r7rs-min [a b] (if (< a b) a b))
-(defn r7rs-max [a b] (if (> a b) a b))
+(defn r7rs-int-of__ [x who : cstr] : int
+  (if (is? x int) x (if (r7rs-integer? x) (r7rs-float->int__ x) (r7rs-fail-int__ who))))
+(defn r7rs-fail-int__ [msg : cstr] : int
+  (panic msg)
+  0)
+(defn r7rs-even? [x] : bool (= (mod (r7rs-int-of__ x "even?: not an integer") 2) 0))
+(defn r7rs-odd? [x] : bool (if (r7rs-even? x) false true))
+(defn r7rs-abs [x] (if (< x 0) (r7rs-sub2__ 0 x) x))
+;;; r7rs-min / r7rs-max -- inexact contagion (R7RS 6.2.6): if any argument
+;;; is inexact the result is inexact.
+(defn r7rs-min2__ [a b] (if (< b a) b a))
+(defn r7rs-max2__ [a b] (if (> b a) b a))
+(defn r7rs-any-inexact?__ [l] : bool
+  (if (r7rs-null? l) false (if (is? (r7rs-car l) float) true (r7rs-any-inexact?__ (r7rs-cdr l)))))
+(defn r7rs-contagion__ [r l]
+  (if (r7rs-any-inexact?__ l) (:: (r7rs-to-float__ r) any) r))
+(defn r7rs-min [x & xs : any]
+  (let [l (r7rs-args__ (:: xs (Cons any)))]
+    (r7rs-contagion__ (r7rs-fold-num__ r7rs-min2__ l x) (r7rs-cons x l))))
+(defn r7rs-max [x & xs : any]
+  (let [l (r7rs-args__ (:: xs (Cons any)))]
+    (r7rs-contagion__ (r7rs-fold-num__ r7rs-max2__ l x) (r7rs-cons x l))))
+
+;;; ---- integer division (R7RS 6.2.6) -------------------------------------
+
+(defn r7rs-quotient [a b] : int
+  (let [x (r7rs-int-of__ a "quotient: not an integer") y (r7rs-int-of__ b "quotient: not an integer")]
+    (if (= y 0) (r7rs-fail-int__ "quotient: division by zero") (/ x y))))
+(defn r7rs-remainder [a b] : int
+  (let [x (r7rs-int-of__ a "remainder: not an integer") y (r7rs-int-of__ b "remainder: not an integer")]
+    (if (= y 0) (r7rs-fail-int__ "remainder: division by zero") (mod x y))))
+(defn r7rs-modulo [a b] : int
+  (let [x (r7rs-int-of__ a "modulo: not an integer") y (r7rs-int-of__ b "modulo: not an integer")]
+    (if (= y 0)
+      (r7rs-fail-int__ "modulo: division by zero")
+      (let [r (mod x y)]
+        (if (= r 0) r (if (if (< r 0) (> y 0) (< y 0)) (+ r y) r))))))
+(defn r7rs-floor-quotient [a b] : int
+  (/ (- (r7rs-int-of__ a "floor-quotient: not an integer") (r7rs-modulo a b)) (r7rs-int-of__ b "floor-quotient: not an integer")))
+(defn r7rs-floor-remainder [a b] : int (r7rs-modulo a b))
+(defn r7rs-truncate-quotient [a b] : int (r7rs-quotient a b))
+(defn r7rs-truncate-remainder [a b] : int (r7rs-remainder a b))
+(defn r7rs-gcd2__ [a : int b : int] : int (if (= b 0) (if (< a 0) (- 0 a) a) (r7rs-gcd2__ b (mod a b))))
+(defn r7rs-gcd-go__ [l acc : int] : int
+  (if (r7rs-null? l) acc (r7rs-gcd-go__ (r7rs-cdr l) (r7rs-gcd2__ acc (r7rs-int-of__ (r7rs-car l) "gcd: not an integer")))))
+(defn r7rs-gcd [& xs : any] : int (r7rs-gcd-go__ (r7rs-args__ (:: xs (Cons any))) 0))
+(defn r7rs-lcm2__ [a : int b : int] : int
+  (if (if (= a 0) true (= b 0)) 0
+    (let [g (r7rs-gcd2__ a b) p (r7rs-mul-int__ a b)] (/ (if (< p 0) (- 0 p) p) g))))
+(defn r7rs-lcm-go__ [l acc : int] : int
+  (if (r7rs-null? l) acc (r7rs-lcm-go__ (r7rs-cdr l) (r7rs-lcm2__ acc (r7rs-int-of__ (r7rs-car l) "lcm: not an integer")))))
+(defn r7rs-lcm [& xs : any] : int (r7rs-lcm-go__ (r7rs-args__ (:: xs (Cons any))) 1))
+
+;;; ---- rounding and exactness ----------------------------------------------
+
+(defn r7rs-floor [x] (if (is? x int) x (:: (floor (r7rs-to-float__ x)) any)))
+(defn r7rs-ceiling [x] (if (is? x int) x (:: (ceil (r7rs-to-float__ x)) any)))
+(defn r7rs-truncate [x] (if (is? x int) x (:: (trunc (r7rs-to-float__ x)) any)))
+;;; r7rs-round -- to the nearest integer, ties to even (rint).
+(defn r7rs-round [x] (if (is? x int) x (:: (rint (r7rs-to-float__ x)) any)))
+(defn r7rs-exact [x]
+  (if (is? x int) x
+    (if (r7rs-integer? x) (:: (r7rs-float->int__ x) any)
+      (r7rs-fail-any__ "exact: no exact representation (there are no exact rationals; r7rs-lang-plan D8)"))))
+(defn r7rs-inexact [x] (if (is? x float) x (:: (r7rs-to-float__ x) any)))
+(defn r7rs-exact->inexact [x] (r7rs-inexact x))
+(defn r7rs-inexact->exact [x] (r7rs-exact x))
+(defn r7rs-numerator [x] (if (is? x int) x (if (r7rs-integer? x) x (r7rs-fail-any__ "numerator: no exact rationals (r7rs-lang-plan D8)"))))
+(defn r7rs-denominator [x] (if (is? x int) (:: 1 any) (if (r7rs-integer? x) (:: 1.0 any) (r7rs-fail-any__ "denominator: no exact rationals (r7rs-lang-plan D8)"))))
+
+;;; ---- powers, roots, transcendental --------------------------------------
+
+(defn r7rs-square [x] (r7rs-mul2__ x x))
+;;; r7rs-isqrt__ -- floor of the square root of a non-negative int, exact.
+(defn r7rs-isqrt-fix__ [n : int r : int] : int
+  (if (> (r7rs-mul-int__ r r) n) (r7rs-isqrt-fix__ n (- r 1))
+    (if (<= (r7rs-mul-int__ (+ r 1) (+ r 1)) n) (r7rs-isqrt-fix__ n (+ r 1)) r)))
+(defn r7rs-isqrt__ [n : int] : int (r7rs-isqrt-fix__ n (float->int (sqrt (int->float n)))))
+;;; r7rs-sqrt -- exact when the argument is a perfect square, else inexact;
+;;; a negative argument is +nan.0 (no complex numbers).
+(defn r7rs-sqrt [x]
+  (if (is? x int)
+    (if (< x 0) (:: (sqrt (r7rs-to-float__ x)) any)
+      (let [r (r7rs-isqrt__ x)]
+        (if (= (* r r) x) (:: r any) (:: (sqrt (r7rs-to-float__ x)) any))))
+    (:: (sqrt (r7rs-to-float__ x)) any)))
+
+;;; ---- number <-> string ---------------------------------------------------
+
+(defn r7rs-int->string-radix__ [x : int radix : int] : cstr
+  ```c
+  char *r = (char *)malloc(80);
+  if (radix < 2 || radix > 36) { snprintf(r, 80, "%lld", (long long)x); return r; }
+  char buf[72]; int i = 71; buf[i] = 0;
+  uint64_t u = x < 0 ? (uint64_t)0 - (uint64_t)x : (uint64_t)x;
+  if (u == 0) buf[--i] = '0';
+  while (u) { int d = (int)(u % (uint64_t)radix); buf[--i] = (char)(d < 10 ? '0' + d : 'a' + d - 10); u /= (uint64_t)radix; }
+  if (x < 0) buf[--i] = '-';
+  snprintf(r, 80, "%s", buf + i);
+  return r;
+  ```)
+;;; string->number's two halves: a predicate and an accessor, so no sentinel
+;;; rides in the value.  The interpreter twins share one parser.
+(defn r7rs-parse-int-ok?__ [s : cstr radix : int] : bool
+  ```c
+  if (!s || !*s || radix < 2 || radix > 36) return false;
+  const char *p = s; int64_t v = 0; bool neg = false;
+  if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
+  if (!*p) return false;
+  for (; *p; p++) {
+    int d;
+    if (*p >= '0' && *p <= '9') d = *p - '0';
+    else if (*p >= 'a' && *p <= 'z') d = *p - 'a' + 10;
+    else if (*p >= 'A' && *p <= 'Z') d = *p - 'A' + 10;
+    else return false;
+    if (d >= radix) return false;
+    if (__builtin_mul_overflow(v, radix, &v) || __builtin_add_overflow(v, neg ? -d : d, &v)) return false;
+  }
+  return true;
+  ```)
+(defn r7rs-parse-int__ [s : cstr radix : int] : int
+  ```c
+  const char *p = s; int64_t v = 0; bool neg = false;
+  if (*p == '+' || *p == '-') { neg = (*p == '-'); p++; }
+  for (; *p; p++) {
+    int d = (*p >= '0' && *p <= '9') ? *p - '0' : (*p >= 'a' && *p <= 'z') ? *p - 'a' + 10 : *p - 'A' + 10;
+    v = v * radix + (neg ? -d : d);
+  }
+  return v;
+  ```)
+(defn r7rs-parse-float-ok?__ [s : cstr] : bool
+  ```c
+  if (!s || !*s) return false;
+  if (!strcmp(s, "+inf.0") || !strcmp(s, "-inf.0") || !strcmp(s, "+nan.0") || !strcmp(s, "-nan.0")) return true;
+  for (const char *p = s; *p; p++)
+    if (!((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')) return false;
+  char *end = NULL; (void)strtod(s, &end);
+  return end != s && *end == 0;
+  ```)
+(defn r7rs-parse-float__ [s : cstr] : float
+  ```c
+  if (!strcmp(s, "+inf.0")) return __builtin_inf();
+  if (!strcmp(s, "-inf.0")) return -__builtin_inf();
+  if (!strcmp(s, "+nan.0") || !strcmp(s, "-nan.0")) return __builtin_nan("");
+  return strtod(s, NULL);
+  ```)
+(defn r7rs-radix-of__ [xs : (Cons any) who : cstr] : int
+  (if (tnil? xs) 10
+    (let [r (r7rs-int-of__ (.head xs) "radix must be an exact integer")]
+      (if (if (= r 2) true (if (= r 8) true (if (= r 10) true (= r 16))))
+        r
+        (r7rs-fail-int__ who)))))
+(defn r7rs-number->string [x & xs : any] : cstr
+  (let [radix (r7rs-radix-of__ (:: xs (Cons any)) "number->string: radix must be 2, 8, 10 or 16")]
+    (if (is? x int)
+      (r7rs-int->string-radix__ x radix)
+      (if (= radix 10)
+        (r7rs-float->string__ (r7rs-to-float__ x))
+        (r7rs-fail-cstr__ "number->string: an inexact number takes radix 10 only")))))
+(defn r7rs-fail-cstr__ [msg : cstr] : cstr
+  (panic msg)
+  "")
+;;; r7rs-string->number -- #f when the string is not a number in the radix.
+(defn r7rs-string->number [s : cstr & xs : any]
+  (let [radix (r7rs-radix-of__ (:: xs (Cons any)) "string->number: radix must be 2, 8, 10 or 16")]
+    (if (r7rs-parse-int-ok?__ s radix)
+      (:: (r7rs-parse-int__ s radix) any)
+      (if (if (= radix 10) (r7rs-parse-float-ok?__ s) false)
+        (:: (r7rs-parse-float__ s) any)
+        (:: false any)))))
 
 ;;; ---- characters --------------------------------------------------------
 
@@ -364,7 +645,26 @@
   ```)
 (defn r7rs-float->string__ [x : float] : cstr
   ```c
-  char *r = (char *)malloc(32); snprintf(r, 32, "%g", x); return r;
+  /* The one spelling of a float (R7RS 6.2.7 / 7.1.1): +nan.0, +inf.0 and
+   * -inf.0 by name, the shortest of %.15g / %.17g that reads back to the
+   * same double, and `.0` on an integral value so 7.0 never prints as 7.
+   * The interpreter twin is r7rs_fmt_double in interpreter_natives.c. */
+  char *r = (char *)malloc(48);
+  if (x != x) { snprintf(r, 48, "+nan.0"); return r; }
+  if (__builtin_isinf(x)) { snprintf(r, 48, "%s", x > 0 ? "+inf.0" : "-inf.0"); return r; }
+  snprintf(r, 48, "%.15g", x);
+  if (strtod(r, NULL) != x) snprintf(r, 48, "%.16g", x);
+  if (strtod(r, NULL) != x) snprintf(r, 48, "%.17g", x);
+  { /* 1e+21 -> 1e21, 1e-07 -> 1e-7: R7RS spells the exponent bare. */
+    char *e = strchr(r, 'e');
+    if (e) { char *d = e + 1; char sign = 0; if (*d == '+' || *d == '-') { sign = *d; d++; }
+             while (*d == '0' && d[1]) d++;
+             char tail[32]; snprintf(tail, sizeof tail, "%s", d);
+             if (sign == '-') snprintf(e + 1, 48 - (size_t)(e + 1 - r), "-%s", tail);
+             else snprintf(e + 1, 48 - (size_t)(e + 1 - r), "%s", tail); }
+  }
+  if (!strpbrk(r, ".eE")) { size_t l = strlen(r); r[l] = '.'; r[l + 1] = '0'; r[l + 2] = 0; }
+  return r;
   ```)
 
 (defn r7rs-string-ref [s : cstr i : int] : R7rsChar (:: (r7rs-string-ref-code__ s i) R7rsChar))
@@ -387,8 +687,6 @@
     (r7rs-list->string-go__ (r7rs-cdr l)
                             (r7rs-string-append2__ acc (r7rs-string-of-code__ (r7rs-char->integer (r7rs-car l)))))))
 (defn r7rs-list->string [l] : cstr (r7rs-list->string-go__ l ""))
-(defn r7rs-number->string [x] : cstr
-  (if (r7rs-integer? x) (r7rs-int->string__ x) (r7rs-float->string__ x)))
 
 ;;; ---- vectors and bytevectors -------------------------------------------
 
@@ -439,6 +737,34 @@
       (R7rsValues l)
       (if (is? (r7rs-cdr l) R7rsNull) (r7rs-car l) (R7rsValues l)))))
 (defn r7rs-values-items__ [v : R7rsValues] : any (.items v))
+;;; R5: the procedures that return two values sit after r7rs-values because a
+;;; variadic callee has to be defined before its callers (the forward
+;;; declaration does not carry the rest parameter).
+(defn r7rs-floor/ [a b] (r7rs-values (:: (r7rs-floor-quotient a b) any) (:: (r7rs-modulo a b) any)))
+(defn r7rs-truncate/ [a b] (r7rs-values (:: (r7rs-quotient a b) any) (:: (r7rs-remainder a b) any)))
+(defn r7rs-exact-integer-sqrt [x]
+  (let [n (r7rs-int-of__ x "exact-integer-sqrt: not an exact integer") s (r7rs-isqrt__ n)]
+    (r7rs-values (:: s any) (:: (- n (* s s)) any))))
+;;; r7rs-expt -- exact by repeated checked multiplication for an exact base
+;;; and a non-negative exact exponent; inexact through pow otherwise.
+(defn r7rs-expt-int__ [b : int e : int acc : int] : int
+  (if (= e 0) acc (r7rs-expt-int__ b (- e 1) (r7rs-mul-int__ acc b))))
+(defn r7rs-expt [b e]
+  (if (if (is? b int) (if (is? e int) (>= e 0) false) false)
+    (:: (r7rs-expt-int__ b e 1) any)
+    (:: (pow (r7rs-to-float__ b) (r7rs-to-float__ e)) any)))
+(defn r7rs-exp [x] : float (exp (r7rs-to-float__ x)))
+(defn r7rs-log [x & xs : any] : float
+  (let [l (:: xs (Cons any))]
+    (if (tnil? l) (log (r7rs-to-float__ x)) (/ (log (r7rs-to-float__ x)) (log (r7rs-to-float__ (.head l)))))))
+(defn r7rs-sin [x] : float (sin (r7rs-to-float__ x)))
+(defn r7rs-cos [x] : float (cos (r7rs-to-float__ x)))
+(defn r7rs-tan [x] : float (tan (r7rs-to-float__ x)))
+(defn r7rs-asin [x] : float (asin (r7rs-to-float__ x)))
+(defn r7rs-acos [x] : float (acos (r7rs-to-float__ x)))
+(defn r7rs-atan [y & xs : any] : float
+  (let [l (:: xs (Cons any))]
+    (if (tnil? l) (atan (r7rs-to-float__ y)) (atan2 (r7rs-to-float__ y) (r7rs-to-float__ (.head l))))))
 (defn r7rs-values-ref [v i : int] : any
   (if (r7rs-values?__ v)
     (r7rs-list-ref (r7rs-values-items__ v) i)
@@ -478,9 +804,7 @@
   printf("%lld", (long long)x);
   ```)
 (defn r7rs-write-float [x : float] : nil
-  ```c
-  printf("%g", x);
-  ```)
+  (r7rs-write-cstr (r7rs-float->string__ x)))
 (defn r7rs-write-char [c : int] : nil
   ```c
   uint32_t cp = (uint32_t)c;
@@ -530,8 +854,8 @@
 
 ;;; r7rs-display-any__ -- one value; `quoted` is `write`'s spelling.
 (defn r7rs-display-any__ [x quoted : bool] : nil
-  (if (r7rs-integer? x) (r7rs-write-int x)
-    (if (r7rs-float?__ x) (r7rs-write-float x)
+  (if (r7rs-fixnum?__ x) (r7rs-write-int x)
+    (if (r7rs-flonum?__ x) (r7rs-write-float x)
       (if (r7rs-string? x)
         (do (if quoted (r7rs-write-cstr "\"") nil)
             (r7rs-write-cstr x)

@@ -75,6 +75,22 @@ All notable changes to Turmeric are documented here.
   `tests/run-turi.sh` honour: the expected mismatch passes as `(xfail)` and a
   match fails until the marker is deleted. `er-macro-transformer` is
   deferred with a diagnostic.
+- **`#lang r7rs` numbers (R5).** R7RS 6.2 over int64 and double: `(+)`,
+  `(*)`, `(- x)`, `(/ x)`, n-ary comparison chains, a mixed exact/inexact
+  literal pair promotes, `(/ 7 2)` is the inexact 3.5 (no rationals), and
+  exact `+`/`-`/`*`/`expt` SIGNAL on overflow instead of wrapping (D8; a
+  panic until R6's `raise`/`guard`). The exactness predicates and
+  conversions (`exact?`, `inexact?`, `exact-integer?`, `integer?` on 7.0,
+  `exact`, `inexact`, `nan?`, `infinite?`, `finite?`), `floor`/`ceiling`/
+  `round` (ties to even)/`truncate`, `quotient`/`remainder`/`modulo` and
+  `floor/`, `truncate/`, `gcd`/`lcm`, `min`/`max` with inexact contagion,
+  `sqrt` (exact for a perfect square), `exact-integer-sqrt`, `expt`, the
+  transcendental set, `square`, and `number->string`/`string->number` with
+  a radix. A float prints as R7RS spells it on both back ends (`7.0`,
+  `1e21`, `+inf.0`). `stdlib/math.tur` gains `tan`, `asin`, `acos`, `atan`,
+  `trunc` and `rint`. A bare operator in value position is a variadic
+  procedure, but `(apply + xs)` hits the variadic-through-`apply` gap on both
+  back ends (`docs/reported/r7rs-compiled-dynamic-shapes.md`).
 - **Fixed: a forward-referenced callee with a compound parameter type in a
   Saffron (or R7RS) file unboxed its `any` argument to `int`.** The pass-1
   forward declaration recorded `[v : (Vec any)]` as the `int` placeholder,

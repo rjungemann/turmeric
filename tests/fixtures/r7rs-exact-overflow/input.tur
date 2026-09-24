@@ -1,0 +1,9 @@
+#lang r7rs
+;; r7rs-lang-plan R5 / D8: exact arithmetic that leaves int64 SIGNALS.  R7RS
+;; 6.2.6 lets an implementation limit the range of exact integers and does
+;; not let it return a different number; before R5 this printed a wrapped
+;; negative.  Until R6's raise/guard the signal is a panic on both back ends,
+;; with the same sentence; the exit is nonzero and the line before it prints.
+(display (* 3037000499 3037000499)) (newline)
+(display (* 3037000500 3037000500)) (newline)
+(display "not reached") (newline)

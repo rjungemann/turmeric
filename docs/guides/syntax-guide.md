@@ -695,8 +695,12 @@ Strings are immutable `cstr` values (`string-set!` is declined). R4 adds
 `syntax-rules` -- `define-syntax`, `let-syntax`, `letrec-syntax`,
 `syntax-error`, the full pattern language and renaming hygiene (a template's
 own binders cannot capture a use-site name; a free identifier the use site
-shadows is the known gap, pinned as a named failing test). The numeric tower
-and `call/cc` are the plan's later stages, and a named-`let` loop runs under
+shadows is the known gap, pinned as a named failing test). R5 adds the
+numbers: exact integers are int64 and signal on overflow, inexact reals are
+doubles, `(/ 7 2)` is 3.5 (no rationals or bignums yet), and the R7RS
+predicate, rounding, division, `expt`/`sqrt`/transcendental and radix
+`number->string`/`string->number` surface is there. `call/cc` and the
+control forms are the plan's later stages, and a named-`let` loop runs under
 `--interpret` only until R6 lifts the compiled back end.
 
 `turmeric` and `saffron` are **stable bases** -- neither is gated. `#lang

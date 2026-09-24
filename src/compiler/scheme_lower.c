@@ -121,6 +121,52 @@ static const char *const RENAMES[][2] = {
     { "bytevector-length",  "r7rs-bytevector-length" },
     { "eof-object",       "r7rs-eof-object" },
     { "eof-object?",      "r7rs-eof-object?" },
+    /* R5: numbers.  The operators + - * / = < > <= >= are not rows: in call
+     * position the lowering folds them onto the binary helpers, and in value
+     * position it names the variadic procedures (lower_operator / sl->ops). */
+    { "exact?", "r7rs-exact?" },
+    { "inexact?", "r7rs-inexact?" },
+    { "exact-integer?", "r7rs-exact-integer?" },
+    { "exact-rational?", "r7rs-exact-rational?" },
+    { "nan?", "r7rs-nan?" },
+    { "infinite?", "r7rs-infinite?" },
+    { "finite?", "r7rs-finite?" },
+    { "rational?", "r7rs-rational?" },
+    { "complex?", "r7rs-complex?" },
+    { "exact", "r7rs-exact" },
+    { "inexact", "r7rs-inexact" },
+    { "exact->inexact", "r7rs-exact->inexact" },
+    { "inexact->exact", "r7rs-inexact->exact" },
+    { "floor", "r7rs-floor" },
+    { "ceiling", "r7rs-ceiling" },
+    { "round", "r7rs-round" },
+    { "truncate", "r7rs-truncate" },
+    { "quotient", "r7rs-quotient" },
+    { "remainder", "r7rs-remainder" },
+    { "modulo", "r7rs-modulo" },
+    { "floor/", "r7rs-floor/" },
+    { "truncate/", "r7rs-truncate/" },
+    { "floor-quotient", "r7rs-floor-quotient" },
+    { "floor-remainder", "r7rs-floor-remainder" },
+    { "truncate-quotient", "r7rs-truncate-quotient" },
+    { "truncate-remainder", "r7rs-truncate-remainder" },
+    { "gcd", "r7rs-gcd" },
+    { "lcm", "r7rs-lcm" },
+    { "expt", "r7rs-expt" },
+    { "exp", "r7rs-exp" },
+    { "log", "r7rs-log" },
+    { "sin", "r7rs-sin" },
+    { "cos", "r7rs-cos" },
+    { "tan", "r7rs-tan" },
+    { "asin", "r7rs-asin" },
+    { "acos", "r7rs-acos" },
+    { "atan", "r7rs-atan" },
+    { "sqrt", "r7rs-sqrt" },
+    { "exact-integer-sqrt", "r7rs-exact-integer-sqrt" },
+    { "square", "r7rs-square" },
+    { "string->number", "r7rs-string->number" },
+    { "numerator", "r7rs-numerator" },
+    { "denominator", "r7rs-denominator" },
 };
 #define N_RENAMES (sizeof(RENAMES) / sizeof(RENAMES[0]))
 
@@ -184,6 +230,10 @@ typedef struct SL {
     uint32_t        expand_depth;
     const Symbol   *s_syntax_rules, *s_ellipsis, *s_underscore, *s_syntax_error,
                    *s_quote, *s_er_macro_transformer;
+    /* R5: the nine numeric operators -- the Scheme spelling, the binary
+     * prelude helper a call folds onto, and the variadic prelude procedure a
+     * bare operator in value position names. */
+    const Symbol   *ops[9], *ops_bin[9], *ops_val[9];
 } SL;
 
 static const Symbol *I(SL *sl, const char *s) {
@@ -222,6 +272,20 @@ static void sl_init(SL *sl, Arena *a, SymbolTable *st) {
     sl->s_syntax_error = I(sl, "syntax-error");
     sl->s_quote = I(sl, "quote");
     sl->s_er_macro_transformer = I(sl, "er-macro-transformer");
+    {
+        static const char *const OPS[9][3] = {
+            { "+",  "r7rs-add2__",   "r7rs-+"  }, { "-",  "r7rs-sub2__",   "r7rs--"  },
+            { "*",  "r7rs-mul2__",   "r7rs-*"  }, { "/",  "r7rs-div2__",   "r7rs-/"  },
+            { "=",  "r7rs-numeq2__", "r7rs-="  }, { "<",  "r7rs-lt2__",    "r7rs-<"  },
+            { ">",  "r7rs-gt2__",    "r7rs->"  }, { "<=", "r7rs-le2__",    "r7rs-<=" },
+            { ">=", "r7rs-ge2__",    "r7rs->=" },
+        };
+        for (int i = 0; i < 9; i++) {
+            sl->ops[i] = I(sl, OPS[i][0]);
+            sl->ops_bin[i] = I(sl, OPS[i][1]);
+            sl->ops_val[i] = I(sl, OPS[i][2]);
+        }
+    }
 
     sl->t_defn = I(sl, "defn");   sl->t_def = I(sl, "def");
     sl->t_fn = I(sl, "fn");       sl->t_let = I(sl, "let");
@@ -474,6 +538,7 @@ static const Symbol *rn(SL *sl, const Symbol *s) {
 
 static bool is_char_form(SL *sl, const Form *f);
 static Form *lower_body(SL *sl, Form **items, uint32_t n, Span sp);
+static Form *lower(SL *sl, Form *f);
 
 /* --- R4: syntax-rules ------------------------------------------------------ */
 /*
@@ -1025,6 +1090,75 @@ static Form *lower_let_syntax(SL *sl, Form *f) {
     Form *body = lower_body(sl, f->as.list.items + 2, f->as.list.len - 2, sp);
     sl->n_macros = mark;
     return body;
+}
+
+/* --- R5: the numeric operators ------------------------------------------- */
+/*
+ * R7RS arithmetic differs from Turmeric's operators in four ways the lowering
+ * has to bridge: `(+)`, `(*)`, `(- x)` and `(/ x)` are legal; `=`/`<`/... take
+ * any number of arguments and chain; a mixed exact/inexact pair promotes even
+ * when both are literals (Turmeric's static `(+ 1 7.1)` is TUR-E0042); and
+ * exact overflow must signal (D8).  So a call `(op a b c)` folds onto the
+ * prelude's binary helper (`(r7rs-add2__ (r7rs-add2__ a b) c)`), which takes
+ * the checked path for two exact integers and the promoting dynamic operator
+ * otherwise, and a comparison chain binds its arguments once and tests each
+ * adjacent pair.  A bare operator in value position names the variadic
+ * prelude procedure, so `(apply + xs)` works.
+ *
+ * The prelude is exempt: it is where the helpers are written in terms of the
+ * raw operators, so its `(+ a b)` must stay Turmeric's.
+ */
+static int op_index(SL *sl, const Symbol *s) {
+    for (int i = 0; i < 9; i++) if (sl->ops[i] == s) return i;
+    return -1;
+}
+static bool prelude_span(Span sp) {
+    const SourceFile *f = diag_source_file(sp.file_id);
+    if (!f || !f->path) return false;
+    size_t n = strlen(f->path);
+    static const char SUFFIX[] = "r7rs/prelude.tur";
+    size_t m = sizeof SUFFIX - 1;
+    return n >= m && memcmp(f->path + n - m, SUFFIX, m) == 0;
+}
+static Form *lower_operator(SL *sl, Form *f, int op) {
+    Span sp = f->span;
+    const Symbol *h = sl->ops[op], *bin = sl->ops_bin[op];
+    uint32_t n = f->as.list.len - 1;
+    Form **args = (Form **)arena_alloc(sl->a, (n + 1) * sizeof(Form *));
+    for (uint32_t i = 0; i < n; i++) args[i] = lower(sl, f->as.list.items[1 + i]);
+    if (op < 4) {
+        if (n == 0) {
+            if (op == 0) return Int(sl, sp, 0);
+            if (op == 2) return Int(sl, sp, 1);
+            err(f, "%s needs at least one argument", h->name);
+            return Nil(sl, sp);
+        }
+        if (n == 1) {
+            if (op == 1) return Ln(sl, sp, 3, Sym(sl, sp, bin), Int(sl, sp, 0), args[0]);
+            if (op == 3) return Ln(sl, sp, 3, Sym(sl, sp, bin), Int(sl, sp, 1), args[0]);
+            return args[0];
+        }
+        Form *acc = args[0];
+        for (uint32_t i = 1; i < n; i++) acc = Ln(sl, sp, 3, Sym(sl, sp, bin), acc, args[i]);
+        return acc;
+    }
+    if (n == 0) { err(f, "%s needs at least one argument", h->name); return Nil(sl, sp); }
+    if (n == 1) return Bool(sl, sp, true);
+    if (n == 2) return Ln(sl, sp, 3, Sym(sl, sp, bin), args[0], args[1]);
+    /* (let [t0 a t1 b t2 c] (if (op t0 t1) (op t1 t2) #f)) */
+    const Symbol **t = (const Symbol **)arena_alloc(sl->a, n * sizeof(*t));
+    FB b = {0};
+    for (uint32_t i = 0; i < n; i++) {
+        t[i] = fresh(sl, "__r7rs_cmp");
+        fb_push(&b, Sym(sl, sp, t[i]));
+        fb_push(&b, args[i]);
+    }
+    Form *acc = Ln(sl, sp, 3, Sym(sl, sp, bin), Sym(sl, sp, t[n - 2]), Sym(sl, sp, t[n - 1]));
+    for (int32_t i = (int32_t)n - 3; i >= 0; i--)
+        acc = Ln(sl, sp, 4, Sym(sl, sp, sl->t_if),
+                 Ln(sl, sp, 3, Sym(sl, sp, bin), Sym(sl, sp, t[i]), Sym(sl, sp, t[i + 1])),
+                 acc, Bool(sl, sp, false));
+    return Ln(sl, sp, 3, Sym(sl, sp, sl->t_let), fb_vec(sl, &b, sp), acc);
 }
 
 /* --- the lowering ---------------------------------------------------------- */
@@ -1950,6 +2084,15 @@ static Form *lower(SL *sl, Form *f) {
     if (!f) return f;
     switch (f->tag) {
         case F_SYM: {
+            /* R5: the prelude is exempt from the rename table as well as the
+             * operator rewrite -- it is written against the typed stdlib by
+             * its real names (`floor`, `sqrt`, `exp`, ...), which are exactly
+             * the Scheme names the table maps onto the prelude's own
+             * procedures; renamed, `(floor x)` inside r7rs-floor called
+             * itself forever. */
+            if (prelude_span(f->span)) return f;
+            int op = op_index(sl, f->as.sym);
+            if (op >= 0) return Sym(sl, f->span, sl->ops_val[op]);
             const Symbol *r = rn(sl, f->as.sym);
             return (r == f->as.sym) ? f : Sym(sl, f->span, r);
         }
@@ -1982,6 +2125,8 @@ static Form *lower(SL *sl, Form *f) {
     if (head->tag == F_SYM) {
         const Symbol *h = head->as.sym;
         Form *r = NULL;
+        int op = op_index(sl, h);
+        if (op >= 0 && !prelude_span(f->span)) return lower_operator(sl, f, op);
         if (h == sl->s_quote && f->as.list.len == 2) return lower_datum(sl, f->as.list.items[1]);
         if (h == sl->s_quasiquote && f->as.list.len == 2) return lower_qq(sl, f->as.list.items[1], 1);
         if (h == sl->s_syntax_error) {

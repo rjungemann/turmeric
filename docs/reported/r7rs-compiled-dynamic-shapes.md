@@ -54,6 +54,20 @@ side: "calling a dynamic value with 5 arguments is not supported by the
 compiled back end (the fat-closure apply helpers stop at 4)", which is why
 `r7rs-apply` caps at four arguments.
 
+**2b (found landing R5, and this face is on BOTH back ends): a VARIADIC
+callee reached through `apply`.** R5 gives `+`, `max`, `<`, ... value-position
+procedures with a `& xs : any` rest parameter, so `(apply + '(1 2 3))` is a
+dynamic call of a variadic. Compiled it is the panic above; interpreted it is
+`eval: arity mismatch: __fn_2523 expects 2 args, got 3` -- the H8 outbound
+adaptor that boxes a function into `any` is synthesized with the callee's
+declared parameter count (fixed + one rest slot) and knows nothing about
+packing surplus arguments into the rest chain. A rest-formal lambda has the
+same shape: `(define f (lambda xs (length xs)))` then `(apply f '(1 2 3 4))`
+fails identically on both back ends while `(f 1 2 3)` works. The fix is in
+the adaptor (elab_fns.c H8) or the dynamic-call helpers, not in the
+interpreter's closure-call arity check: packing there was tried and never
+reached, because the adaptor intercepts first.
+
 ## 3. `type-of` on an `any`-typed rest parameter
 
 ```turmeric

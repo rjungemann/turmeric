@@ -228,3 +228,103 @@
 ;;; PI -- mathematical constant pi.
 
 (def PI 3.141592653589793)
+;;; tan -- tangent of a float (radians).
+;;;
+;;; Parameters:
+;;;   x -- angle in radians
+;;;
+;;; Returns:
+;;;   tan(x).
+;;;
+;;; Example:
+;;;   (tan 0.0)  ; => 0
+;;;
+;;; Since: r7rs-lang-plan R5
+(defn tan [x : float] : float
+  ```c
+  return __builtin_tan(x);
+  ```)
+;;; asin -- arc sine of a float.
+;;;
+;;; Parameters:
+;;;   x -- a value in [-1, 1]
+;;;
+;;; Returns:
+;;;   asin(x), in radians.
+;;;
+;;; Example:
+;;;   (asin 1.0)  ; => 1.5708
+;;;
+;;; Since: r7rs-lang-plan R5
+(defn asin [x : float] : float
+  ```c
+  return __builtin_asin(x);
+  ```)
+;;; acos -- arc cosine of a float.
+;;;
+;;; Parameters:
+;;;   x -- a value in [-1, 1]
+;;;
+;;; Returns:
+;;;   acos(x), in radians.
+;;;
+;;; Example:
+;;;   (acos 1.0)  ; => 0
+;;;
+;;; Since: r7rs-lang-plan R5
+(defn acos [x : float] : float
+  ```c
+  return __builtin_acos(x);
+  ```)
+;;; atan -- arc tangent of a float (one argument; see atan2 for two).
+;;;
+;;; Parameters:
+;;;   x -- any float
+;;;
+;;; Returns:
+;;;   atan(x), in radians.
+;;;
+;;; Example:
+;;;   (atan 1.0)  ; => 0.785398
+;;;
+;;; Since: r7rs-lang-plan R5
+(defn atan [x : float] : float
+  ```c
+  return __builtin_atan(x);
+  ```)
+;;; trunc -- round a float toward zero.
+;;;
+;;; Parameters:
+;;;   x -- any float
+;;;
+;;; Returns:
+;;;   The integral float nearest x in the direction of zero.
+;;;
+;;; Example:
+;;;   (trunc -7.1)  ; => -7
+;;;
+;;; Since: r7rs-lang-plan R5
+(defn trunc [x : float] : float
+  ```c
+  return __builtin_trunc(x);
+  ```)
+;;; rint -- round a float to the nearest integral float, ties to even.
+;;;
+;;; This is the rounding R7RS `round` specifies: (rint 7.5) is 8, (rint 6.5)
+;;; is 6.  `floor` and `ceil` are the directed roundings; `trunc` goes toward
+;;; zero.
+;;;
+;;; Parameters:
+;;;   x -- any float
+;;;
+;;; Returns:
+;;;   The nearest integral float, ties to even.
+;;;
+;;; Example:
+;;;   (rint 6.5)  ; => 6
+;;;
+;;; Since: r7rs-lang-plan R5
+(defn rint [x : float] : float
+  ```c
+  return __builtin_rint(x);
+  ```)
