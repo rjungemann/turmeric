@@ -5,10 +5,9 @@
 ;; the prelude's `null?`/`car`/`cdr`/`list` reached through the rename table,
 ;; and `display`/`newline` on the write primitives.
 ;;
-;; requires.interp-only: the compiled back end cannot yet emit a letrec-bound
-;; closure over `any` that calls itself (docs/reported/
-;; r7rs-compiled-dynamic-shapes.md); the plan stages R7RS interpreter-first
-;; and lifts the compiled path in R6.
+;; R6 lifted the compiled path: a letrec-bound closure over `any` that calls
+;; itself now compiles, so this runs on both back ends.  `(sum (list 1.5 2.5))`
+;; is the inexact 4.0, spelled as R5 spells a float.
 (define (sum lst)
   (let loop ((l lst) (acc 0))
     (if (null? l)

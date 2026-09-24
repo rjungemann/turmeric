@@ -1304,7 +1304,7 @@ static const char *turi_closure_fn_key(TuriValue v) {
     for (uint32_t i = 0; i < arity; i++)
         kinds[i] = (uint8_t)fd->param_types[start + i].kind;
     const char *key = tur_fn_type_key(arity ? kinds : NULL, arity,
-                                      fd->return_type.kind, false);
+                                      fd->return_type.kind, false, false);
     if (kinds != inline_kinds) free(kinds);
     return key;
 }
@@ -1448,6 +1448,9 @@ TuriValue turi_make_struct(TuriEnv *env, const char *name, TuriValue *fields, ui
     const CtorDef *ct = turi_ctor_for_name(env, name);
     if (ct && v.tag == TURI_STRUCT && v.as_struct) v.as_struct->ctor = ct;
     return v;
+}
+static TuriValue turi_make_struct_cell(TuriEnv *env, const char *name, TuriValue *fields, uint32_t n) {
+    return turi_make_struct(env, name, fields, n);
 }
 
 static TuriValue make_struct_val(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
@@ -3255,6 +3258,31 @@ typedef struct TuriEscapeBoundary {
     void     *saved_defer_stack;
 } TuriEscapeBoundary;
 
+/* r7rs-lang-plan R6: liveness of escape boundaries (see TuriEnv.escape_live). */
+static void escape_live_push(TuriEnv *env, void *b) {
+    if (env->n_escape_live == env->cap_escape_live) {
+        env->cap_escape_live = env->cap_escape_live ? env->cap_escape_live * 2 : 16;
+        env->escape_live = (void **)realloc(env->escape_live, env->cap_escape_live * sizeof(void *));
+        if (!env->escape_live) { fprintf(stderr, "turi: oom\n"); abort(); }
+    }
+    env->escape_live[env->n_escape_live++] = b;
+}
+static void escape_live_pop(TuriEnv *env, void *b) {
+    for (uint32_t i = env->n_escape_live; i > 0; i--)
+        if (env->escape_live[i - 1] == b) {
+            memmove(env->escape_live + i - 1, env->escape_live + i,
+                    (env->n_escape_live - i) * sizeof(void *));
+            env->n_escape_live--;
+            return;
+        }
+}
+static bool escape_is_live(const TuriEnv *env, const void *b) {
+    for (uint32_t i = 0; i < env->n_escape_live; i++)
+        if (env->escape_live[i] == b) return true;
+    return false;
+}
+
+
 /* Does e contain a shift of `target` in evaluation position?  Mirrors the
  * compiler's reaches_shift_kind (emit_cps.c): nested resets / shifts / fns
  * self-delimit, so they do not count once the outer target has been matched. */
@@ -3476,6 +3504,11 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
          * of longjmp-ing -- so call/cc nesting stays on the heap. */
         if (n < 2 || args[0].as_int == 0) { *out = turi_int(0); return true; }
         TuriEscapeBoundary *b = (TuriEscapeBoundary *)(intptr_t)args[0].as_int;
+        if (!escape_is_live(env, b)) {
+            turi_runtime_panic(env, "continuation invoked after its call/cc prompt returned");
+            *out = turi_nil();
+            return true;
+        }
         env->aborting          = true;
         env->abort_value       = args[1];
         env->abort_target      = (void *)b;
@@ -3828,7 +3861,9 @@ static TuriValue eval_callcc_escape(TuriEnv *env, EvalFrame *frame,
      * k; if f invokes (k v) it raises env->aborting with abort_target == &b,
      * which propagates back through turi_call to here. */
     TuriValue kval = turi_int((int64_t)(intptr_t)&b);
+    escape_live_push(env, &b);
     TuriValue r = turi_call(env, fn, &kval, 1);
+    escape_live_pop(env, &b);
     if (env->aborting && env->abort_target == (void *)&b) {
         env->aborting      = false;
         env->abort_target  = NULL;
@@ -6862,6 +6897,38 @@ static TuriValue serial_receiver_resume(TuriEnv *env, void *state, TuriValue app
  * it through eval_expr (SR N2).  Handles both the int64 carrier ABI (Option /
  * Result flowing as :int, incl. the NULL "none"/err-less carrier) and a real
  * TuriStruct. */
+
+/* r7rs-lang-plan R6 (docs/archive/r7rs-compiled-dynamic-shapes.md 2b): a
+ * VARIADIC closure reached through a dynamic call -- `(apply f xs)`, a
+ * continuation wrapper, a parameter object -- arrives with the caller's
+ * argument count, not the callee's parameter count.  A static call site packs
+ * the surplus at elaboration; a dynamic one cannot, so the packing is done
+ * here, in the representation the static site builds for an `any` rest: a
+ * chain of `make-struct Cons` cells ending in the int 0 nil (elab_call.c,
+ * `rest_any`), so `.head` hands back the element with its tag.  `base`
+ * leading entries (dict params) are carried over untouched.  Returns a
+ * malloc'd array of base + want values, or NULL when the shape does not fit
+ * (fewer than the fixed count), leaving the arity mismatch to be reported as
+ * before. */
+static TuriValue turi_make_struct_cell(TuriEnv *env, const char *name, TuriValue *fields, uint32_t n);
+static TuriValue *turi_pack_rest_args(TuriEnv *env, const TuriValue *args,
+                                      uint32_t n, uint32_t base, uint32_t want) {
+    if (want < 1 || n < base) return NULL;
+    uint32_t fixed = want - 1;
+    uint32_t have  = n - base;
+    if (have < fixed) return NULL;
+    TuriValue tail = turi_int(0);
+    for (int32_t i = (int32_t)n - 1; i >= (int32_t)(base + fixed); i--) {
+        TuriValue f[2] = { args[i], tail };
+        tail = turi_make_struct_cell(env, "Cons", f, 2);
+    }
+    TuriValue *out = (TuriValue *)malloc((base + want) * sizeof(TuriValue));
+    if (!out) { fprintf(stderr, "turi: oom\n"); abort(); }
+    for (uint32_t i = 0; i < base + fixed; i++) out[i] = args[i];
+    out[base + fixed] = tail;
+    return out;
+}
+
 static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
     uint32_t idx = e->as.get_field_.field_idx;
     /* Auto-deref an rc<T> receiver: an rc value is a "__rc" wrapper struct
@@ -8563,6 +8630,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 b->result              = turi_nil();
                 b->saved_handler_stack = env->handler_stack;
                 b->saved_defer_stack   = env->defer_stack;
+                escape_live_push(env, b);
                 DRIVE_PUSH(((DriveCont){ .kind = DK_ESCAPE, .aux = b }));
                 apply_fn   = fn;
                 apply_args = (TuriValue *)malloc(sizeof(TuriValue));
@@ -8709,6 +8777,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * restore saved env state.  A non-matching abort (a shift abort,
                  * or an escape to an outer call/cc) propagates unchanged. */
                 TuriEscapeBoundary *b = (TuriEscapeBoundary *)top->aux;
+                escape_live_pop(env, b);
                 if (env->aborting && env->abort_target == (void *)b) {
                     env->aborting      = false;
                     env->abort_target  = NULL;
@@ -12027,8 +12096,22 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (turi_is_error(v) || env_signaled(env)) { dres = v; dfailed = true; break; }
             dargs[i] = v;
         }
+        /* r7rs-lang-plan R6: a VARIADIC callee packs the surplus arguments
+         * into its rest chain here, at the dynamic call -- the one place that
+         * knows the arguments arrived unpacked (a static call site packs at
+         * elaboration).  See turi_pack_rest_args. */
+        TuriValue *packed = NULL;
+        if (!dfailed && fnv.as_closure && !fnv.as_closure->native && fnv.as_closure->fn &&
+            ((FnDef *)fnv.as_closure->fn)->is_variadic) {
+            const FnDef *vfd = (const FnDef *)fnv.as_closure->fn;
+            uint32_t skip = fnv.as_closure->skip_env_param ? 1u : 0u;
+            uint32_t want = (uint32_t)vfd->n_params - skip;
+            packed = turi_pack_rest_args(env, dargs, dn, 0, want);
+            if (packed) { dargs = packed; dn = want; }
+        }
         if (!dfailed) dres = turi_call(env, fnv, dargs, dn);
-        if (dargs != dstack) free(dargs);
+        if (packed) free(packed);
+        else if (dargs != dstack) free(dargs);
         return dres;
     }
 

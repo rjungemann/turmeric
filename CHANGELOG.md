@@ -6,6 +6,39 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs` control (R6), and the compiled back end catches up.**
+  `call/cc`/`call-with-current-continuation` as a one-shot upward escape --
+  the receiver's continuation is a procedure, `(k 1 2)` delivers two values,
+  invoking it after its call/cc has returned is the named error on both back
+  ends (the compiled runtime keeps a live-prompt set instead of reading a
+  dead frame's flag) -- `dynamic-wind` with a wind stack that escapes
+  unwind, `with-exception-handler`/`raise`/`raise-continuable`/`guard` and
+  error objects (`error`, `error-object?`, `-message`, `-irritants`; an
+  uncaught raise reports on stderr after flushing stdout and exits 70),
+  `parameterize`/`make-parameter` with converters, and
+  `delay`/`delay-force`/`force`/`make-promise`/`promise?` in constant space.
+  The three compiled dynamic-closure gaps that kept every named `let`, `do`,
+  `letrec`, `call-with-values`, `apply` and `for-each` interpreter-only
+  since R2 are closed (`docs/archive/r7rs-compiled-dynamic-shapes.md`): the
+  letrec placeholder in a dynamic file is `any`, every Scheme lambda returns
+  `any`, and a dynamic call packs surplus arguments for a variadic callee --
+  a fn type's `any` box id now spells its rest slot, boxed variadics are
+  registered with their fixed count, `__tur_dyn_call_var` and the T6
+  trampoline build the `(Cons any)` chain, the fat shim types the rest slot
+  as the chain pointer, a capturing closure's value type carries the rest
+  marker, and the interpreter packs at its dynamic call. Every Scheme
+  procedure call is therefore a proper tail call compiled too
+  (`tests/fixtures/r7rs-tail-calls`, 1e7 at `-O0`). Fixed on the way: a
+  closure that `set!`s a mutable global read it before its declaration in
+  the emitted C, a two-clause `case-lambda` lost its second clause's value
+  compiled, and a top-level `(define f (lambda ...))` is a `defn`.
+  `tests/fixtures/r7rs-control`, `r7rs-uncaught-error`,
+  `r7rs-continuation-after-return`, `saffron-letrec-any-closure`,
+  `saffron-variadic-dynamic-call`, `saffron-closure-sets-global`,
+  `saffron-callcc-stale-prompt`; the four r7rs fixtures that carried
+  `requires.interp-only` run on both back ends. Found and filed, not fixed:
+  `list-length` on a `(Cons any)` chain
+  (`docs/reported/list-length-on-cons-any-segfaults.md`).
 - **`#lang r7rs` -- the Scheme base, reader only, behind the `r7rs`
   experiment.** R0 and R1 of
   [r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-lang-plan.md).
@@ -40,7 +73,7 @@ All notable changes to Turmeric are documented here.
   conditionals, closures over mutable locals and list procedures; a
   letrec-bound closure over `any` (named `let`, `do`) and dynamic
   multi-argument apply are interpreter-only until R6
-  (`docs/reported/r7rs-compiled-dynamic-shapes.md`).
+  (`docs/archive/r7rs-compiled-dynamic-shapes.md`).
 - **`#lang r7rs` data and the Turmeric seam (R3).** Pairs are a mutable heap
   struct of two `any` fields (`set-car!`/`set-cdr!` are the region-noted
   field store), with the null and eof singletons, chars as an opaque over
@@ -90,7 +123,7 @@ All notable changes to Turmeric are documented here.
   `1e21`, `+inf.0`). `stdlib/math.tur` gains `tan`, `asin`, `acos`, `atan`,
   `trunc` and `rint`. A bare operator in value position is a variadic
   procedure, but `(apply + xs)` hits the variadic-through-`apply` gap on both
-  back ends (`docs/reported/r7rs-compiled-dynamic-shapes.md`).
+  back ends (`docs/archive/r7rs-compiled-dynamic-shapes.md`).
 - **Fixed: a forward-referenced callee with a compound parameter type in a
   Saffron (or R7RS) file unboxed its `any` argument to `int`.** The pass-1
   forward declaration recorded `[v : (Vec any)]` as the `int` placeholder,

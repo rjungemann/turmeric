@@ -1,10 +1,10 @@
 #lang r7rs
 ;; r7rs-lang-plan R4: the standard's own `do` (R7RS 7.3), including the
 ;; "step" literal-string rules and the `(if #f #f)` unspecified value.  Its
-;; expansion is a letrec-bound lambda over `any`, which is the compiled
-;; back end's gap in docs/reported/r7rs-compiled-dynamic-shapes.md (R6), so
-;; this is requires.interp-only; r7rs-syntax-rules holds everything that
-;; runs on both back ends.
+;; expansion is a letrec-bound lambda over `any`, which was a compiled
+;; back end gap until R6 closed it (docs/archive/r7rs-compiled-dynamic-
+;; shapes.md), so this runs on both back ends now; r7rs-syntax-rules holds
+;; the rest of the syntax-rules coverage.
 (define-syntax my-do
   (syntax-rules ()
     ((my-do ((var init step ...) ...)

@@ -344,6 +344,11 @@ typedef struct TuriEnv {
      * than by abort_prompt_kind; reset boundaries pass it through.  NULL for a
      * plain shift abort (matched by prompt kind). */
     void       *abort_target;
+    /* r7rs-lang-plan R6 (D7): the escape boundaries currently on the stack, so
+     * `(k v)` on a continuation whose call/cc has already returned is the
+     * named error the compiled path reports, not an abort nobody consumes. */
+    void      **escape_live;
+    uint32_t    n_escape_live, cap_escape_live;
     /* SB3: step-fuel resource limit (0 in both fields = unlimited).  Since C4
      * (turi-c-scoped-forms-heap-bounding) retired the eval_depth recursion
      * guard, step-fuel is the sole per-eval resource limit (it bounds total

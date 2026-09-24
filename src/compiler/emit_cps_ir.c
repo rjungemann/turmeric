@@ -9390,6 +9390,7 @@ static void emit_callcc(CE *ce, const CTerm *t) {
     bool boxed = rty && strcmp(rty, "tur_tagged_t") == 0;
     ce_line(ce, "tur_escape_cont %s;", cc);
     ce_line(ce, "%s.valid = 1;", cc);
+    ce_line(ce, "tur_escape_live_push(&%s);", cc);
     ce_line(ce, "if (TUR_SETJMP(%s.buf) == 0) {", cc);
     ce->indent += 4;
     /* Normal path: emit the receiver value, then call it with &cc. */
@@ -9420,11 +9421,16 @@ static void emit_callcc(CE *ce, const CTerm *t) {
     }
     /* f returned normally: the captured continuation is now dead. */
     ce_line(ce, "%s.valid = 0;", cc);
+    ce_line(ce, "tur_escape_live_pop(&%s);", cc);
     free(fval);
     ce->indent -= 4;
     ce_line(ce, "} else {");
     ce->indent += 4;
-    /* Resumed path: an upward (tur_escape_resume &cc v) delivered v here. */
+    /* Resumed path: an upward (tur_escape_resume &cc v) delivered v here.
+     * The prompt is done either way; the pop also drops every prompt the
+     * escape jumped over. */
+    ce_line(ce, "%s.valid = 0;", cc);
+    ce_line(ce, "tur_escape_live_pop(&%s);", cc);
     if (boxed) {
         ce_line(ce, "{ tur_tagged_t *__ccb = (tur_tagged_t *)(intptr_t)%s.result; "
                     "%s = *__ccb; free(__ccb); }", cc, xn);

@@ -2714,12 +2714,19 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
  * owns nor frees it, and two calls with the same shape return the same
  * pointer. */
 const char *tur_fn_type_key(const uint8_t *arg_kinds, uint32_t arity,
-                            TypeKind result_kind, bool cfnptr) {
+                            TypeKind result_kind, bool cfnptr, bool is_variadic) {
     Buf tmp;
     buf_init(&tmp);
     buf_puts(&tmp, cfnptr ? "(c-fn [" : "(fn [");
     for (uint32_t i = 0; i < arity; i++) {
         if (i > 0) buf_puts(&tmp, " ");
+        /* r7rs-lang-plan R6: a variadic's rest slot is spelled `& T`, so
+         * `(fn [& any] : any)` and `(fn [any] : any)` get different ids -- the
+         * dynamic call reads the id to decide whether to pack surplus
+         * arguments into the rest chain (emit_dyn_call / __tur_dyn_call_var),
+         * and the two must never be confused: one takes a tagged word where
+         * the other takes a chain pointer. */
+        if (is_variadic && i + 1 == arity) buf_puts(&tmp, "& ");
         buf_puts(&tmp, type_name(type_from_kind(
                            arg_kinds ? (TypeKind)arg_kinds[i] : TY_UNKNOWN)));
     }
@@ -2787,7 +2794,8 @@ const char *type_name(Type t) {
         case TY_ANY:     return "any";
         case TY_FN:
             return tur_fn_type_key(t.as.fn.arg_kinds, t.as.fn.arity,
-                                   t.as.fn.result_kind, t.as.fn.cfnptr);
+                                   t.as.fn.result_kind, t.as.fn.cfnptr,
+                                   t.as.fn.is_variadic);
         case TY_REF: {
             /* Build "ref<T>" name */
             Buf tmp;

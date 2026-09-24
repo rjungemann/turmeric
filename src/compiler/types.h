@@ -1794,7 +1794,7 @@ const char  *type_name(Type t);                   /* "int", "bool", … */
  * the two back ends compare the same key.  Interned; do not free.  Pass
  * arg_kinds NULL only with arity 0. */
 const char  *tur_fn_type_key(const uint8_t *arg_kinds, uint32_t arity,
-                             TypeKind result_kind, bool cfnptr);
+                             TypeKind result_kind, bool cfnptr, bool is_variadic);
 const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
 /* ADT-app analogues of the (removed, structdef-retirement DS-D) struct-app
  * helpers: extract an ADT-headed

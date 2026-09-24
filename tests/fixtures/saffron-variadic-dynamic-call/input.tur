@@ -1,0 +1,42 @@
+#lang saffron
+; r7rs-lang-plan R6 (docs/archive/r7rs-compiled-dynamic-shapes.md, sections
+; 2 and 2b): a VARIADIC callee reached through a dynamic call.  The box id of
+; a fn now spells its rest slot (`(fn [& any] : any)`), a boxed variadic is
+; registered with its fixed count, and a dynamic call whose id compare fails
+; asks the registry and packs the surplus arguments into the `(Cons any)`
+; chain the callee reads -- for a defn, a plain lambda, a capturing closure
+; and a `def`-bound lambda alike, with 0..3 fixed parameters, through the
+; tail-call trampoline too.  The interpreter packs at its dynamic call.  A
+; nil-bodied lambda (`side`) is boxed as `(fn [any] : any)` now, so the
+; all-`any` call site admits it.
+(defn top [& vs : any] : any (.head (:: vs (Cons any))))
+(defn len [c : (Cons any)] : int (if (tnil? c) 0 (+ 1 (len (.tail c)))))
+(defn count [& xs : any] : any (len (:: xs (Cons any))))
+(defn mk-plain [] : any (fn [& vs : any] : any (.head (:: vs (Cons any)))))
+(defn mk-capt [x] : any (fn [& vs : any] : any (do x (.head (:: vs (Cons any))))))
+(defn two-fixed [a b & rest : any] : any (+ (* 100 a) (+ (* 10 b) (len (:: rest (Cons any))))))
+(defn three-fixed [a b c & rest : any] : any (+ a (+ b (+ c (len (:: rest (Cons any)))))))
+(def area (fn [& xs : any] : any (len (:: xs (Cons any)))))
+(defn via [f] : any (f 'sym))
+(defn via3 [f] : any (f 1 2 3))
+(defn via0 [f] : any (f))
+(defn tail-via [f n] : any (f n 7.1 "s"))
+(defn side [x] (println x))
+(defn each [f] : any (f 1) (f 2) nil)
+(defn main [] : int
+  (println (type-of (top 'sym)))
+  (println (type-of (via top)))
+  (println (type-of (via (mk-plain))))
+  (println (type-of (via (mk-capt 1))))
+  (let [h (mk-capt 1)] (println (type-of (h 'sym))))
+  (println (via3 count))
+  (println (via0 count))
+  (println (via3 two-fixed))
+  (println (via3 three-fixed))
+  (println (tail-via two-fixed 4))
+  (println (area 3))
+  (println (area 2 5))
+  (println (area 1 2 3 4))
+  (println (via3 area))
+  (each side)
+  0)

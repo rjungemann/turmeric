@@ -2456,8 +2456,18 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                      * must not count its ^fat marker as a parameter slot. */
                     TypeKind *arg_kinds = NULL;
                     uint32_t arity = fwd_decl_scan_params(e->arena, params_f, &arg_kinds);
-                    /* Peek at the return-type keyword at index 2 (fn [params] :ret body). */
-                    TypeKind ret_kind = TY_INT;
+                    /* Peek at the return-type keyword at index 2 (fn [params] :ret body).
+                     *
+                     * r7rs-lang-plan R6 (docs/archive/r7rs-compiled-dynamic-shapes.md
+                     * section 1): in a DYNAMIC file the unannotated default is
+                     * `any`, exactly as elab_defn pins a Saffron signature.  The
+                     * `int` placeholder made the recursive call inside a named
+                     * let / `do` / letrec lambda type `int` while the lambda
+                     * itself returned `any`, and the emitter wrapped the tagged
+                     * result in an int tag ("aggregate value used where an
+                     * integer was expected" from cc).  Pass B below pins the
+                     * lambda's own return to match. */
+                    TypeKind ret_kind = lang_span_is_dynamic(init_f->span) ? TY_ANY : TY_INT;
                     if (init_f->as.list.len >= 4) {
                         Form *ret_f = init_f->as.list.items[2];
                         /* Accept spaced `: T` (F_TYPE_ANN{F_SYM/F_KEYWORD}) too. */
@@ -2507,6 +2517,7 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                              * -- collapses to the int carrier and the self-call
                              * trips a spurious then=Syntax else=int mismatch. */
                             else if (rl == 6 && memcmp(rn, "Syntax",  6) == 0) ret_kind = TY_SYNTAX;
+                            else if (rl == 3 && memcmp(rn, "any",     3) == 0) ret_kind = TY_ANY;
                         }
                     }
                     placeholder = type_fn(arg_kinds, (uint8_t)arity, ret_kind);
@@ -2572,7 +2583,34 @@ Expr *elab_letrec(Elab *e, const Form *call) {
          * sibling value init -- a lambda there must capture group members. */
         e->letrec_self_group   = pre_b;
         e->letrec_self_group_n = n_entries;
-        Expr *init = elab_form(e, entries[k].init_form);
+        /* r7rs-lang-plan R6: pin an unannotated lambda init's return to `any`
+         * in a dynamic file, so the lambda agrees with the `any` placeholder
+         * Pass A gave its callers.  Without this a nil-tailed body (the loop
+         * that ends in `display`) inferred `nil` while the group's other
+         * members called it as `any`.  The rewrite is at the Form level:
+         * `(fn [params] body...)` becomes `(fn [params] : any body...)`. */
+        Form *init_form = entries[k].init_form;
+        if (init_form->tag == F_LIST && init_form->as.list.len >= 3 &&
+            lang_span_is_dynamic(init_form->span)) {
+            Form *ih = init_form->as.list.items[0];
+            Form *rf = init_form->as.list.items[2];
+            bool annotated = (rf->tag == F_TYPE_ANN || rf->tag == F_KEYWORD ||
+                              (rf->tag == F_SYM && rf->as.sym->name[0] == ':'));
+            if (ih->tag == F_SYM &&
+                (ih->as.sym == e->sym_fn || ih->as.sym == e->sym_lambda) &&
+                init_form->as.list.items[1]->tag == F_VEC && !annotated) {
+                uint32_t len = init_form->as.list.len;
+                Form **items = (Form **)arena_alloc(e->arena, (len + 1) * sizeof(Form *));
+                items[0] = init_form->as.list.items[0];
+                items[1] = init_form->as.list.items[1];
+                Form *any_sym = form_sym(e->arena, init_form->span,
+                                         symtab_intern(e->st, strslice("any", 3)));
+                items[2] = form_type_ann(e->arena, init_form->span, any_sym);
+                for (uint32_t j = 2; j < len; j++) items[j + 1] = init_form->as.list.items[j];
+                init_form = form_list(e->arena, init_form->span, items, len + 1);
+            }
+        }
+        Expr *init = elab_form(e, init_form);
         e->letrec_self_group   = NULL;
         e->letrec_self_group_n = 0;
         if (!init) { rc = -1; break; }

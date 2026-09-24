@@ -1,5 +1,39 @@
 # Compiled back end: three dynamic-closure shapes `#lang r7rs` R2 needs
 
+**RESOLVED 2026-09-24 (r7rs-lang-plan R6), archived.** Sections 1, 2 and 2b
+are closed on both back ends and pinned by `tests/fixtures/saffron-letrec-any-
+closure`, `saffron-variadic-dynamic-call`, `r7rs-control`, and the four
+r7rs fixtures that carried `requires.interp-only` (`r7rs-core-forms-interp`,
+`r7rs-named-let-sum`, `r7rs-syntax-rules-do`, `r7rs-numbers-values`), which
+run compiled now:
+
+- (1) the letrec placeholder in a dynamic file is `any`, not `int`, and an
+  unannotated lambda init is pinned `: any` to match (elab_forms.c
+  `elab_letrec`); a capturing closure's VALUE type carries its rest marker
+  (elab_fns.c, `clo_ty`).
+- (2) every Scheme lambda is lowered `: any` (scheme_lower.c), so a
+  nil-tailed body is boxed as `(fn [any] : any)` and the all-`any` call site
+  admits it.
+- (2b) a fn type's `any` box id spells its rest slot (`tur_fn_type_key`,
+  `(fn [& any] : any)`); the emitter registers every boxed variadic with its
+  fixed count (`emit_any_type_id` -> `__tur_dyn_reg_variadic`), the dynamic
+  call and the T6 trampoline pack the surplus arguments into the `(Cons
+  any)` chain and call through the variadic signature (`__tur_dyn_call_var`),
+  the fat shim types the rest slot as the chain pointer, and the H8 adaptor
+  declines a variadic (it would have called it with a bare word).  The
+  interpreter packs at its `EX_DYN_CALL` in the `make-struct Cons`
+  representation a static site builds.
+- Section 3 was misdiagnosed: the crash is `list-length` (stdlib/list.tur,
+  inline C over 8-byte-head cells) walking a `(Cons any)` chain whose heads
+  are 16-byte boxes -- not the boxing of the rest list, which is fine.  That
+  is its own open report, docs/reported/list-length-on-cons-any-segfaults.md.
+
+The original report follows.
+
+---
+
+# Compiled back end: three dynamic-closure shapes `#lang r7rs` R2 needs
+
 **Severity: medium.** Every `#lang r7rs` program that uses a named `let`, a
 `do` loop, `letrec`, `call-with-values`, `apply` or `for-each` is
 interpreter-only today. The plan (r7rs-lang-plan.md, D6/R6) stages R7RS

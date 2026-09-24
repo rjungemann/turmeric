@@ -699,9 +699,15 @@ shadows is the known gap, pinned as a named failing test). R5 adds the
 numbers: exact integers are int64 and signal on overflow, inexact reals are
 doubles, `(/ 7 2)` is 3.5 (no rationals or bignums yet), and the R7RS
 predicate, rounding, division, `expt`/`sqrt`/transcendental and radix
-`number->string`/`string->number` surface is there. `call/cc` and the
-control forms are the plan's later stages, and a named-`let` loop runs under
-`--interpret` only until R6 lifts the compiled back end.
+`number->string`/`string->number` surface is there. R6 adds control:
+`call/cc` as a one-shot upward escape (invoking a continuation after its
+call/cc has returned is a named error; re-entry is the plan's open item),
+`dynamic-wind`, `with-exception-handler`/`raise`/`raise-continuable`/`guard`
+and error objects (an uncaught `raise` reports on stderr and exits 70),
+`parameterize`/`make-parameter`, and `delay`/`delay-force`/`force`. Every
+Scheme procedure call is a proper tail call on both back ends, and the
+compiled back end runs everything the interpreter does (a dynamic call is
+capped at four arguments, so `apply` is too).
 
 `turmeric` and `saffron` are **stable bases** -- neither is gated. `#lang
 saffron` needs no `--enable=` flag and no `:experiments` entry, and prints no

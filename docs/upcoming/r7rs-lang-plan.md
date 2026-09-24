@@ -1,6 +1,6 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 through R3 landed 2026-09-23.** `#lang r7rs` is a base
+Status: **R0 through R6 landed 2026-09-23/24.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -26,8 +26,15 @@ marker. R5 gives the numbers their R7RS semantics over int64 and double:
 inexact `/` when the quotient is not exact, checked exact overflow (D8), the
 exactness predicates and conversions, rounding, integer division, `expt`,
 `sqrt`, the transcendental set, radix `number->string`/`string->number` and
-R7RS float spelling (`tests/fixtures/r7rs-numbers`). R6 onward is unbuilt.
-Each landed stage carries a "What shipped" note below.
+R7RS float spelling (`tests/fixtures/r7rs-numbers`). R6 gives the control
+forms: `call/cc` at the escape level (D7), `dynamic-wind`, `guard`/`raise`/
+`raise-continuable`/`with-exception-handler` and error objects,
+`parameterize`, `delay`/`delay-force`/`force`, and -- the largest item --
+the compiled back end's dynamic-closure gaps are closed, so every r7rs
+fixture runs on both back ends and a Scheme procedure call is a proper
+tail call 10,000,000 deep at `-O0` (`tests/fixtures/r7rs-control`,
+`r7rs-tail-calls`). R7 onward is unbuilt. Each landed stage carries a
+"What shipped" note below.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -861,7 +868,7 @@ Exit criterion: a named-`let` loop summing a list runs under `--interpret`.
 >   closed-over locals, internal defines, the list procedures, display/write)
 >   but not a letrec-bound closure over `any` that calls itself (named `let`,
 >   `do`, `letrec`), a dynamic call through `apply`, nor `for-each` with a
->   two-statement lambda -- `docs/reported/r7rs-compiled-dynamic-shapes.md`
+>   two-statement lambda -- `docs/archive/r7rs-compiled-dynamic-shapes.md`
 >   has the repros. Those are the plan's interpreter-first staging in action
 >   and R6's to close; `r7rs-core-forms-interp` and `r7rs-named-let-sum` carry
 >   `requires.interp-only` (they are `tests/run-turi.sh`'s) until then.
@@ -1039,7 +1046,7 @@ referential-transparency gap (D5).
 >   macro; `let-syntax` is `letrec-syntax`. The standard's `do` runs under
 >   `--interpret` only (`r7rs-syntax-rules-do`, `requires.interp-only`): its
 >   expansion is the letrec-bound lambda over `any` from
->   `docs/reported/r7rs-compiled-dynamic-shapes.md`.
+>   `docs/archive/r7rs-compiled-dynamic-shapes.md`.
 
 ### R5 -- numbers (medium)
 
@@ -1100,7 +1107,7 @@ is about exact/inexact divergence.
 >   signals); no complex numbers (`(sqrt -4)` is +nan.0); `string->number`
 >   takes no `#x`/`#e` prefixes; `(apply + xs)` and `(apply max xs)` are the
 >   variadic-through-`apply` gap on both back ends
->   (`docs/reported/r7rs-compiled-dynamic-shapes.md` 2b, found here), so
+>   (`docs/archive/r7rs-compiled-dynamic-shapes.md` 2b, found here), so
 >   `(reduce + ...)`-style code should fold with the binary operator
 >   instead; `floor/`, `truncate/` and `exact-integer-sqrt` run under
 >   `--interpret` only because their consumer is a two-parameter
@@ -1121,6 +1128,75 @@ scheduled (D7).
 `dynamic-wind` interacting correctly with re-entrant continuations is gated on
 the same item and should be tested as a pair, since a `dynamic-wind` that is
 correct only for escapes is a trap.
+
+> **What shipped (2026-09-24).** Everything above at the escape level, on
+> both back ends, in `stdlib/r7rs/prelude.tur`'s control section and three
+> lowerings in `src/compiler/scheme_lower.c`; pinned by
+> `tests/fixtures/r7rs-control` (both back ends), `r7rs-uncaught-error`,
+> `r7rs-continuation-after-return`, `r7rs-tail-calls` (compiled, `--debug`,
+> 1e7 deep for a self call, a mutual pair, an indirect call through a value
+> and a named `let`).
+>
+> - **Tail calls needed no work here** -- D6's prediction held. Every Scheme
+>   procedure call is the `EX_DYN_CALL` T6 drives, and the named-`let` shape
+>   reaches it once the letrec gap below is closed.
+> - **`call/cc` (D7)** is Turmeric's `call/cc` wrapped in `r7rs-call/cc`: the
+>   receiver gets a variadic procedure that unwinds the wind stack to the
+>   capture point and delivers its arguments as the value (`(k 1 2)` is a
+>   `values`). Invoking it after the call/cc has returned is the named error
+>   on both back ends. The compiled runtime used to read the prompt's `valid`
+>   flag out of the prompt's own dead frame, so the Scheme shape longjmp'd
+>   into garbage; it keeps a live-prompt set now (`tur_escape_live_*`,
+>   emit_dk_runtime.c / emit_cps_ir.c, the split runtime regenerated), and
+>   the interpreter tracks its escape boundaries the same way
+>   (`TuriEnv.escape_live`). Re-entry after return stays D7's named gap.
+> - **`dynamic-wind`** is a wind stack of before/after pairs; an escape pops
+>   the frames above the capture point running each `after`, innermost first.
+> - **Exceptions are NOT effects.** D10 named `handle`/`perform`, and a
+>   `handle` around a dynamic thunk is not lowered by the compiled back end
+>   ("this effect operation has no lowering here"), so the encoding is the
+>   one R7RS 6.11 itself describes: a handler stack whose install and
+>   uninstall are wind frames, `raise-continuable` calling the innermost
+>   handler with the outer handlers installed, `raise` raising a secondary
+>   error to the outer handlers when the handler returns, and `guard` as
+>   `call/cc` + `with-exception-handler` where both arms hand the
+>   continuation a thunk, so the clauses run in the guard's dynamic
+>   environment and a clause-less exception is re-raised from there with
+>   `raise-continuable` (the standard asks for the raise's environment,
+>   which needs re-entry). An uncaught `raise` reports on stderr after
+>   flushing stdout and exits 70. Error objects are `R7rsError`
+>   (`error`, `error-object?`, `-message`, `-irritants`; `read-error?` and
+>   `file-error?` answer `#f` until R8).
+> - **`parameterize` is not `dynvar`.** `defdynamic` declares a static
+>   variable; `make-parameter` makes one at run time, so a parameter is a
+>   closure over a heap cell (`R7rsParam`) that `parameterize` reaches
+>   through a private marker argument, converts the new value through the
+>   parameter's converter, and swaps in and out under `dynamic-wind`.
+> - **Promises** are the R7RS 7.3 reference shape: a promise shares a box
+>   (`R7rsPBox`), `delay` is `delay-force` of `make-promise`, and `force`'s
+>   self call is a tail call, so a 100,000-deep `delay-force` chain runs in
+>   constant space.
+> - **The compiled gaps closed** (docs/archive/r7rs-compiled-dynamic-shapes.md,
+>   the four fixtures that carried `requires.interp-only` run compiled):
+>   the letrec placeholder in a dynamic file is `any` and a lambda init is
+>   pinned to match; every Scheme lambda returns `any`; a fn type's box id
+>   spells its rest slot, the emitter registers each boxed variadic with its
+>   fixed count, and a dynamic call whose id compare fails packs the surplus
+>   arguments into the `(Cons any)` chain (`__tur_dyn_call_var`, and the T6
+>   trampoline's `__tur_tb_invoke`), the fat shim typing the rest slot as
+>   the chain pointer; a capturing closure's value type carries the rest
+>   marker; the H8 adaptor declines a variadic; the interpreter packs at its
+>   dynamic call. Also found and fixed on the way: a closure that `set!`s a
+>   mutable global read it before its declaration (the global forward-decl
+>   pass did not descend the `any` widen), a `case-lambda` whose no-match arm
+>   was a bare `panic` lost its outer arms' results, and a top-level
+>   `(define f (lambda ...))` is a `defn` now, so it keeps its variadic
+>   signature and forward-references.
+> - **Still capped:** a dynamic call with more than four arguments
+>   (`emit_dyn_call`, so `apply` too); the `TUR_APPLYn_T` table stops at 4.
+> - **Not this stage's:** `list-length` on a `(Cons any)` chain
+>   (docs/reported/list-length-on-cons-any-segfaults.md, which is what the
+>   archived report's section 3 really was).
 
 ### R7 -- `(scheme base)` and the other eleven libraries (large; parallelizable)
 

@@ -714,6 +714,12 @@ static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
     if (!(e->toplevel_dynamic || lang_span_is_dynamic(value->span))) return NULL;
     const Type *ft = &value->type;
     if (ft->as.fn.cfnptr || ft->as.fn.arity > 5) return NULL;
+    /* r7rs-lang-plan R6: a VARIADIC function is boxed as itself.  Its rest
+     * slot is a chain pointer, so an all-`any` adaptor of its arity would
+     * call it with a bare word as the chain; the dynamic call packs for a
+     * registered variadic instead (emit_dyn_call / the interpreter's
+     * EX_DYN_CALL). */
+    if (ft->as.fn.is_variadic) return NULL;
     bool all_any = (ft->as.fn.result_kind == TY_ANY);
     for (uint32_t i = 0; i < ft->as.fn.arity && all_any; i++)
         if (ft->as.fn.arg_kinds[i] != TY_ANY) all_any = false;

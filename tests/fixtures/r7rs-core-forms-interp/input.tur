@@ -2,12 +2,10 @@
 ;; r7rs-lang-plan R2: the core forms whose lowering needs a letrec-bound
 ;; closure over `any` (named let, do, letrec/letrec*, a recursive internal
 ;; define) or a dynamic multi-argument apply (values / call-with-values,
-;; let-values, define-values, case-lambda, a rest formal).  Correct under
-;; --interpret; the compiled back end's gaps on exactly these shapes are
-;; docs/reported/r7rs-compiled-dynamic-shapes.md, R6's to close.
-;;
-;; requires.interp-only for that reason (run-turi.sh owns it); r7rs-core-forms
-;; pins everything that already runs on both back ends.
+;; let-values, define-values, case-lambda, a rest formal).  Interpreter-only
+;; from R2 to R5 -- the compiled back end's gaps on exactly these shapes were
+;; docs/archive/r7rs-compiled-dynamic-shapes.md -- and on both back ends
+;; since R6 closed them; r7rs-core-forms pins the forms that always were.
 
 ;; named let
 (define (sum lst)

@@ -121,6 +121,24 @@ static const char *const RENAMES[][2] = {
     { "bytevector-length",  "r7rs-bytevector-length" },
     { "eof-object",       "r7rs-eof-object" },
     { "eof-object?",      "r7rs-eof-object?" },
+    /* R6: control.  `guard`, `parameterize`, `delay` and `delay-force` are
+     * forms (lower_guard / lower_parameterize / lower_delay); these are the
+     * procedures. */
+    { "call/cc",                        "r7rs-call/cc" },
+    { "call-with-current-continuation", "r7rs-call/cc" },
+    { "dynamic-wind",                   "r7rs-dynamic-wind" },
+    { "with-exception-handler",         "r7rs-with-exception-handler" },
+    { "raise",                          "r7rs-raise" },
+    { "raise-continuable",              "r7rs-raise-continuable" },
+    { "error-object?",                  "r7rs-error-object?" },
+    { "error-object-message",           "r7rs-error-object-message" },
+    { "error-object-irritants",         "r7rs-error-object-irritants" },
+    { "read-error?",                    "r7rs-read-error?" },
+    { "file-error?",                    "r7rs-file-error?" },
+    { "make-parameter",                 "r7rs-make-parameter" },
+    { "make-promise",                   "r7rs-make-promise" },
+    { "promise?",                       "r7rs-promise?" },
+    { "force",                          "r7rs-force" },
     /* R5: numbers.  The operators + - * / = < > <= >= are not rows: in call
      * position the lowering folds them onto the binary helpers, and in value
      * position it names the variadic procedures (lower_operator / sl->ops). */
@@ -230,6 +248,8 @@ typedef struct SL {
     uint32_t        expand_depth;
     const Symbol   *s_syntax_rules, *s_ellipsis, *s_underscore, *s_syntax_error,
                    *s_quote, *s_er_macro_transformer;
+    /* R6: the control forms. */
+    const Symbol   *s_guard, *s_parameterize, *s_delay, *s_delay_force;
     /* R5: the nine numeric operators -- the Scheme spelling, the binary
      * prelude helper a call folds onto, and the variadic prelude procedure a
      * bare operator in value position names. */
@@ -272,6 +292,10 @@ static void sl_init(SL *sl, Arena *a, SymbolTable *st) {
     sl->s_syntax_error = I(sl, "syntax-error");
     sl->s_quote = I(sl, "quote");
     sl->s_er_macro_transformer = I(sl, "er-macro-transformer");
+    sl->s_guard = I(sl, "guard");
+    sl->s_parameterize = I(sl, "parameterize");
+    sl->s_delay = I(sl, "delay");
+    sl->s_delay_force = I(sl, "delay-force");
     {
         static const char *const OPS[9][3] = {
             { "+",  "r7rs-add2__",   "r7rs-+"  }, { "-",  "r7rs-sub2__",   "r7rs--"  },
@@ -1344,7 +1368,12 @@ static Form *lower_lambda_parts(SL *sl, Span sp, Form *formals,
     Form *lowered = lower_body(sl, body, nbody, sp);
     lowered = rebind_rest(sl, sp, rest, lowered);
     lowered = rebind_muts(sl, sp, params, lowered);
-    return Ln(sl, sp, 3, Sym(sl, sp, sl->t_fn), params, lowered);
+    /* R6 (docs/archive/r7rs-compiled-dynamic-shapes.md section 2): every
+     * Scheme procedure returns `any`, spelled out.  An unannotated lambda
+     * whose body ends in a nil-returning call (`display`) was typed
+     * `(fn [any] nil)`, and the compiled dynamic call -- which checks the
+     * box against the all-`any` signature -- refused it. */
+    return Ln(sl, sp, 4, Sym(sl, sp, sl->t_fn), params, AnyAnn(sl, sp), lowered);
 }
 
 static Form *lower_lambda(SL *sl, Form *f) {
@@ -1662,6 +1691,113 @@ static Form *or_chain(SL *sl, Form **args, uint32_t n, Span sp) {
     return Ln(sl, sp, 3, Sym(sl, sp, sl->t_let), Vec(sl, sp, bv, 2), body);
 }
 
+/* R6: a zero-parameter `(fn [] : any body)`. */
+static Form *thunk_of(SL *sl, Span sp, Form *body) {
+    return Ln(sl, sp, 4, Sym(sl, sp, sl->t_fn), Vec(sl, sp, NULL, 0), AnyAnn(sl, sp), body);
+}
+
+/* R6: (guard (var clause...) body...) -- R7RS 4.2.7, over the escape
+ * continuation and the handler stack (prelude r7rs-call/cc,
+ * r7rs-with-exception-handler):
+ *
+ *   ((r7rs-call/cc (fn [k] : any
+ *      (r7rs-with-exception-handler
+ *        (fn [var] : any (k (fn [] : any (cond clause... (else (raise-continuable var))))))
+ *        (fn [] : any (let [v body'] (fn [] : any v)))))))
+ *
+ * Both arms hand the continuation a THUNK, so the clauses are evaluated after
+ * the escape, in the guard's own dynamic environment, and a clause-less
+ * exception is re-raised from there with `raise-continuable` -- R7RS asks for
+ * the raise's dynamic environment, which needs a re-entrant continuation
+ * (D7); with escapes only, this is the reachable reading. */
+static Form *lower_guard(SL *sl, Form *f) {
+    Span sp = f->span;
+    if (f->as.list.len < 3 || f->as.list.items[1]->tag != F_LIST ||
+        f->as.list.items[1]->as.list.len < 1 ||
+        f->as.list.items[1]->as.list.items[0]->tag != F_SYM) {
+        err(f, "guard expects (guard (var clause...) body...)");
+        return Nil(sl, sp);
+    }
+    Form *spec = f->as.list.items[1];
+    const Symbol *var = spec->as.list.items[0]->as.sym;
+    uint32_t ncl = spec->as.list.len - 1;
+    Form **given = spec->as.list.items + 1;
+    for (uint32_t i = 0; i < ncl; i++)
+        if (given[i]->tag != F_LIST || given[i]->as.list.len == 0) {
+            err(given[i], "guard clause expects (test body...) or (else body...)");
+            return Nil(sl, sp);
+        }
+    bool has_else = ncl > 0 && is_sym(given[ncl - 1]->as.list.items[0], sl->s_else);
+    Form **cls = (Form **)arena_alloc(sl->a, (ncl + 1) * sizeof(Form *));
+    if (ncl) memcpy(cls, given, ncl * sizeof(Form *));
+    if (!has_else) {
+        Form *reraise = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-raise-continuable")), Sym(sl, sp, var));
+        cls[ncl++] = Ln(sl, sp, 2, Sym(sl, sp, sl->s_else), reraise);
+    }
+    FB pb = {0};
+    push_param(sl, &pb, spec->as.list.items[0]->span, var);
+    Form *hparams = fb_vec(sl, &pb, sp);
+    Form *chain = cond_chain(sl, cls, ncl, sp);
+    const Symbol *k = fresh(sl, "__r7rs_guard_k");
+    const Symbol *v = fresh(sl, "__r7rs_guard_v");
+    Form *hbody = rebind_muts(sl, sp, hparams, Ln(sl, sp, 2, Sym(sl, sp, k), thunk_of(sl, sp, chain)));
+    Form *handler = Ln(sl, sp, 4, Sym(sl, sp, sl->t_fn), hparams, AnyAnn(sl, sp), hbody);
+    Form *body = lower_body(sl, f->as.list.items + 2, f->as.list.len - 2, sp);
+    Form *bv[2] = { Sym(sl, sp, v), body };
+    Form *bthunk = thunk_of(sl, sp, Ln(sl, sp, 3, Sym(sl, sp, sl->t_let), Vec(sl, sp, bv, 2),
+                                       thunk_of(sl, sp, Sym(sl, sp, v))));
+    Form *weh = Ln(sl, sp, 3, Sym(sl, sp, I(sl, "r7rs-with-exception-handler")), handler, bthunk);
+    Form *kp = Sym(sl, sp, k);
+    Form *recv = Ln(sl, sp, 4, Sym(sl, sp, sl->t_fn), Vec(sl, sp, &kp, 1), AnyAnn(sl, sp), weh);
+    Form *cc = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-call/cc")), recv);
+    return Ln(sl, sp, 1, cc);
+}
+
+/* R6: (parameterize ((p v) ...) body...) ->
+ *   (r7rs-parameterize__ (r7rs-list (r7rs-cons p v) ...) (fn [] : any body')) */
+static Form *lower_parameterize(SL *sl, Form *f) {
+    Span sp = f->span;
+    if (f->as.list.len < 3) {
+        err(f, "parameterize expects (parameterize ((param value) ...) body...)");
+        return Nil(sl, sp);
+    }
+    Form *bl = nil_to_list(sl, f->as.list.items[1]);
+    if (bl->tag != F_LIST) {
+        err(bl, "parameterize expects a list of (param value) bindings");
+        return Nil(sl, sp);
+    }
+    FB lb = {0};
+    fb_push(&lb, Sym(sl, sp, sl->p_list));
+    for (uint32_t i = 0; i < bl->as.list.len; i++) {
+        Form *b = bl->as.list.items[i];
+        if (b->tag != F_LIST || b->as.list.len != 2) {
+            err(b, "parameterize binding expects (param value)");
+            free(lb.items);
+            return Nil(sl, sp);
+        }
+        fb_push(&lb, Ln(sl, b->span, 3, Sym(sl, b->span, sl->p_cons),
+                        lower(sl, b->as.list.items[0]), lower(sl, b->as.list.items[1])));
+    }
+    Form *bindings = fb_list(sl, &lb, sp);
+    Form *body = lower_body(sl, f->as.list.items + 2, f->as.list.len - 2, sp);
+    return Ln(sl, sp, 3, Sym(sl, sp, I(sl, "r7rs-parameterize__")), bindings, thunk_of(sl, sp, body));
+}
+
+/* R6: (delay expr) -> (r7rs-delay-force__ (fn [] : any (r7rs-make-promise expr')))
+ *     (delay-force expr) -> (r7rs-delay-force__ (fn [] : any expr'))
+ * -- the R7RS 7.3 definitions, `delay` being `delay-force` of a forced
+ * promise. */
+static Form *lower_delay(SL *sl, Form *f, bool is_force) {
+    Span sp = f->span;
+    if (f->as.list.len != 2) {
+        err(f, "%s expects one expression", is_force ? "delay-force" : "delay");
+        return Nil(sl, sp);
+    }
+    Form *x = lower(sl, f->as.list.items[1]);
+    if (!is_force) x = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-make-promise")), x);
+    return Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-delay-force__")), thunk_of(sl, sp, x));
+}
+
 static Form *lower_when_unless(SL *sl, Form *f, bool negate) {
     Span sp = f->span;
     if (f->as.list.len < 3) { err(f, "%s expects (test body...)", negate ? "unless" : "when"); return Nil(sl, sp); }
@@ -1677,7 +1813,11 @@ static Form *lower_case_lambda(SL *sl, Form *f) {
     Span sp = f->span;
     const Symbol *args = fresh(sl, "__r7rs_args");
     const Symbol *nsym = fresh(sl, "__r7rs_nargs");
-    Form *chain = Ln(sl, sp, 2, Sym(sl, sp, sl->t_panic),
+    /* R6: the no-match arm is the prelude's `any`-typed failure, not a bare
+     * `panic`: a never-typed else arm nested in the clause chain lost the
+     * outer arms' result assignments on the compiled path, so a two-clause
+     * case-lambda answered its second clause with an untagged word. */
+    Form *chain = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-fail-any__")),
                      form_str(sl->a, sp, "case-lambda: no clause matches the argument count", 50));
     for (int32_t i = (int32_t)f->as.list.len - 1; i >= 1; i--) {
         Form *cl = f->as.list.items[i];
@@ -2153,6 +2293,10 @@ static Form *lower(SL *sl, Form *f) {
         if (h == sl->s_case_lambda) return lower_case_lambda(sl, f);
         if (h == sl->s_let_values)  return lower_let_values(sl, f, false);
         if (h == sl->s_letstar_values) return lower_let_values(sl, f, true);
+        if (h == sl->s_guard)        return lower_guard(sl, f);
+        if (h == sl->s_parameterize) return lower_parameterize(sl, f);
+        if (h == sl->s_delay)        return lower_delay(sl, f, false);
+        if (h == sl->s_delay_force)  return lower_delay(sl, f, true);
         if (h == sl->s_define) {
             err(f, "define is not allowed in expression position; a body's "
                    "defines come first (R7RS 5.3.2)");
@@ -2232,6 +2376,37 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
             return;
         }
         const Symbol *name = rn(sl, target->as.sym);
+        /* R6: `(define f (lambda formals body...))` of a name that is never
+         * `set!` is `(define (f . formals) body...)` -- a defn, so it is a
+         * known global with its variadic signature (a `def` of a lambda value
+         * drops the rest marker from the binding's type, and `(apply f xs)`
+         * then cannot pack for it) and a forward reference works. */
+        if (!is_mut(sl, name) && f->as.list.items[2]->tag == F_LIST &&
+            f->as.list.items[2]->as.list.len >= 3 &&
+            is_sym(f->as.list.items[2]->as.list.items[0], sl->s_lambda) &&
+            !sr_lookup(sl, sl->s_lambda)) {
+            Form *lam = f->as.list.items[2];
+            Form *formals = nil_to_list(sl, lam->as.list.items[1]);
+            FB tb = {0};
+            fb_push(&tb, target);
+            if (formals->tag == F_SYM) {
+                fb_push(&tb, Sym(sl, formals->span, sl->s_dot));
+                fb_push(&tb, formals);
+            } else if (formals->tag == F_LIST) {
+                for (uint32_t i = 0; i < formals->as.list.len; i++) fb_push(&tb, formals->as.list.items[i]);
+            } else {
+                err(formals, "lambda formals must be a list of identifiers, a single "
+                             "identifier, or `(a b . rest)`");
+                free(tb.items);
+                return;
+            }
+            FB db = {0};
+            fb_push(&db, f->as.list.items[0]);
+            fb_push(&db, fb_list(sl, &tb, target->span));
+            for (uint32_t i = 2; i < lam->as.list.len; i++) fb_push(&db, lam->as.list.items[i]);
+            lower_toplevel(sl, fb_list(sl, &db, sp), out);
+            return;
+        }
         Form *init = lower(sl, f->as.list.items[2]);
         if (is_mut(sl, name)) {
             fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_def), Sym(sl, sp, sl->t_mut),

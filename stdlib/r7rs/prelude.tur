@@ -61,6 +61,14 @@
 (def r7rs-null-value__ (R7rsNull 0))
 (def r7rs-eof-value__ (R7rsEof 0))
 
+;;; R7rsError -- the R7RS error object (R6): a message and a list of
+;;; irritants.  Declared here, ahead of `display`, because a typed parameter's
+;;; forward declaration needs the struct to exist.
+(defstruct R7rsError :heap [message : any irritants : any])
+(defn r7rs-error-object? [x] : bool (is? x R7rsError))
+(defn r7rs-error-object-message [e : R7rsError] : any (.message e))
+(defn r7rs-error-object-irritants [e : R7rsError] : any (.irritants e))
+
 ;;; r7rs-fail-any__ -- internal: panic, in a position that needs an `any`.
 ;;; A bare `(panic ...)` in the value position of an `any`-returning function
 ;;; is emitted as a void return by the compiled back end, so the branches
@@ -775,10 +783,10 @@
     (if (= i 0) (r7rs-list v) (r7rs-list))))
 
 ;;; r7rs-apply -- call f with the elements of l as its arguments.  Up to four:
-;;; the compiled back end's fat-closure apply helpers stop at 4 arguments for
-;;; a dynamic callee, and the prelude is compiled on both back ends, so the
-;;; limit is the compiled one (R6 lifts it with the rest of the calling
-;;; convention work).
+;;; the compiled back end's dynamic call stops at 4 arguments (emit_dyn_call,
+;;; the TUR_APPLYn_T table), and the prelude is compiled on both back ends,
+;;; so the limit is the compiled one.  R6: a variadic f is fine -- the
+;;; dynamic call packs the surplus arguments into its rest list.
 (defn r7rs-apply [f l]
   (let [n (r7rs-length l)]
     (if (= n 0) (f)
@@ -795,23 +803,27 @@
 
 ;;; ---- output (the write primitives are inline C with interpreter twins) --
 
-(defn r7rs-write-cstr [s : cstr] : nil
+;;; r7rs-write-cstr-to__ -- internal: the one primitive every write goes
+;;; through.  `err` selects stderr; R6's uncaught-exception report uses it,
+;;; and R8's ports will widen it into a real current-output-port.
+(defn r7rs-write-cstr-to__ [s : cstr err : bool] : nil
   ```c
-  fputs(s, stdout);
+  if (err) fflush(stdout);
+  fputs(s, err ? stderr : stdout);
   ```)
-(defn r7rs-write-int [x : int] : nil
-  ```c
-  printf("%lld", (long long)x);
-  ```)
+;;; r7rs-err-out__ -- true while output is being directed at stderr.
+(def ^mut r7rs-err-out__ : bool false)
+(defn r7rs-write-cstr [s : cstr] : nil (r7rs-write-cstr-to__ s r7rs-err-out__))
+(defn r7rs-write-int [x : int] : nil (r7rs-write-cstr (r7rs-int->string__ x)))
 (defn r7rs-write-float [x : float] : nil
   (r7rs-write-cstr (r7rs-float->string__ x)))
-(defn r7rs-write-char [c : int] : nil
+(defn r7rs-write-char [c : int] : nil (r7rs-write-cstr (r7rs-string-of-code__ c)))
+;;; r7rs-exit__ -- internal: flush and leave with a status.
+(defn r7rs-exit__ [code : int] : nil
   ```c
-  uint32_t cp = (uint32_t)c;
-  if (cp < 0x80) putchar((int)cp);
-  else if (cp < 0x800) { putchar(0xC0 | (cp >> 6)); putchar(0x80 | (cp & 0x3F)); }
-  else if (cp < 0x10000) { putchar(0xE0 | (cp >> 12)); putchar(0x80 | ((cp >> 6) & 0x3F)); putchar(0x80 | (cp & 0x3F)); }
-  else { putchar(0xF0 | (cp >> 18)); putchar(0x80 | ((cp >> 12) & 0x3F)); putchar(0x80 | ((cp >> 6) & 0x3F)); putchar(0x80 | (cp & 0x3F)); }
+  fflush(stdout);
+  fflush(stderr);
+  exit((int)code);
   ```)
 
 ;;; r7rs-display-char__ -- `write` spells a char `#\a` (with the R7RS names
@@ -873,7 +885,13 @@
                     (if (r7rs-bytevector? x)
                       (do (r7rs-write-cstr "#u8(") (r7rs-display-bytes__ (r7rs-bytevector-bytes__ x) 0) (r7rs-write-cstr ")"))
                       (if (r7rs-eof-object? x) (r7rs-write-cstr "#<eof>")
-                        (do (r7rs-write-cstr "#<") (r7rs-write-cstr (type-of x)) (r7rs-write-cstr ">"))))))))))))))
+                        (if (r7rs-error-object? x)
+                          (do (r7rs-write-cstr "#<error ")
+                              (r7rs-display-any__ (r7rs-error-object-message x) true)
+                              (r7rs-display-irritants__ (r7rs-error-object-irritants x))
+                              (r7rs-write-cstr ">"))
+                          (if (r7rs-promise? x) (r7rs-write-cstr "#<promise>")
+                            (do (r7rs-write-cstr "#<") (r7rs-write-cstr (type-of x)) (r7rs-write-cstr ">"))))))))))))))))
 
 ;;; r7rs-display -- write a value for humans (strings and chars bare).
 (defn r7rs-display [x] : nil (r7rs-display-any__ x false))
@@ -884,10 +902,211 @@
 
 ;;; r7rs-void -- the unspecified value.
 (defn r7rs-void [] nil)
-;;; r7rs-error -- R7RS `error`: R6 makes it a raised error object; until then
-;;; it prints the message and panics.
-(defn r7rs-error [msg] : nil
-  (r7rs-write-cstr "error: ")
-  (r7rs-display msg)
+
+;;; ---- control (R6) ------------------------------------------------------
+;;;
+;;; Continuations are Turmeric's `call/cc` -- one-shot, upward, an escape --
+;;; wrapped so Scheme sees a procedure (plan D7).  `dynamic-wind` keeps a
+;;; wind stack that an escape unwinds; exceptions are a handler stack over
+;;; the same escapes (D10 named effects, but a `handle` around a dynamic
+;;; thunk is not lowered by the compiled back end, and the escape encoding
+;;; is exactly what R7RS 6.11 describes); `parameterize` is a struct cell
+;;; swapped under `dynamic-wind`; a promise is a shared box.
+
+;;; R7rsWind -- one `dynamic-wind` frame: its before and after thunks.
+(defstruct R7rsWind :heap [before : any after : any])
+;;; r7rs-winders__ -- the wind stack, innermost first, as a Scheme list.
+(def ^mut r7rs-winders__ : any (R7rsNull 0))
+(defn r7rs-wind-after__ [w : R7rsWind] : any (.after w))
+
+;;; r7rs-dynamic-wind -- run before, thunk, after; the frame is on the wind
+;;; stack while thunk runs, so an escape out of thunk runs `after`.
+(defn r7rs-dynamic-wind [before thunk after] : any
+  (before)
+  (set! r7rs-winders__ (r7rs-cons (R7rsWind before after) r7rs-winders__))
+  (let [r (thunk)]
+    (set! r7rs-winders__ (r7rs-cdr r7rs-winders__))
+    (after)
+    r))
+
+;;; r7rs-rewind-to__ -- internal: pop wind frames, running each `after`,
+;;; until the stack is the one captured with the continuation.  The saved
+;;; stack is always a tail of the current one for an escape; if it is not
+;;; reached the continuation is being re-entered, which the underlying
+;;; escape reports itself.
+(defn r7rs-rewind-to__ [saved] : nil
+  (if (r7rs-same-ref__ r7rs-winders__ saved)
+    nil
+    (if (r7rs-null? r7rs-winders__)
+      nil
+      (let [w (r7rs-car r7rs-winders__)]
+        (set! r7rs-winders__ (r7rs-cdr r7rs-winders__))
+        ((r7rs-wind-after__ w))
+        (r7rs-rewind-to__ saved)))))
+
+;;; r7rs-values-of-list__ -- internal: the value a `(values ...)` denotes:
+;;; one value is itself, any other count is the R7rsValues carrier.
+(defn r7rs-values-of-list__ [l] : any
+  (if (r7rs-null? l)
+    (R7rsValues l)
+    (if (is? (r7rs-cdr l) R7rsNull) (r7rs-car l) (R7rsValues l))))
+
+;;; r7rs-call/cc -- `call-with-current-continuation` at the escape level.
+;;; The receiver gets a variadic procedure; invoking it unwinds the wind
+;;; stack to the capture point and delivers its arguments as the value of
+;;; the call/cc expression.  Invoking it after the call/cc has returned is
+;;; the named error "continuation invoked after its call/cc prompt returned".
+(defn r7rs-call/cc [f] : any
+  (let [saved r7rs-winders__]
+    (call/cc (fn [k]
+      (f (fn [& vs : any] : any
+           (r7rs-rewind-to__ saved)
+           (k (r7rs-values-of-list__ (r7rs-chain->list__ (:: vs (Cons any)))))))))))
+
+;;; read-error? / file-error? -- no reader or file layer raises yet (R8).
+(defn r7rs-read-error? [x] : bool false)
+(defn r7rs-file-error? [x] : bool false)
+
+;;; r7rs-handlers__ -- the exception handler stack, innermost first.
+(def ^mut r7rs-handlers__ : any (R7rsNull 0))
+
+;;; r7rs-display-irritants__ -- internal: ` irritant` for each, written.
+(defn r7rs-display-irritants__ [l] : nil
+  (if (r7rs-null? l)
+    nil
+    (do (r7rs-write-cstr " ")
+        (r7rs-write (r7rs-car l))
+        (r7rs-display-irritants__ (r7rs-cdr l)))))
+
+;;; r7rs-uncaught__ -- internal: no handler is installed.  Report on stderr
+;;; the way `error` objects are conventionally shown and exit 70 (EX_SOFTWARE).
+(defn r7rs-uncaught__ [obj] : any
+  (set! r7rs-err-out__ true)
+  (if (r7rs-error-object? obj)
+    (do (r7rs-write-cstr "error: ")
+        (r7rs-display (r7rs-error-object-message obj))
+        (r7rs-display-irritants__ (r7rs-error-object-irritants obj)))
+    (do (r7rs-write-cstr "uncaught exception: ")
+        (r7rs-write obj)))
   (r7rs-newline)
-  (panic "scheme error"))
+  (r7rs-exit__ 70)
+  (:: 0 any))
+
+;;; r7rs-with-exception-handler -- install handler for the extent of thunk.
+;;; The install and the uninstall are wind frames, so an escape out of thunk
+;;; leaves the stack as it found it.
+(defn r7rs-with-exception-handler [handler thunk] : any
+  (let [saved r7rs-handlers__]
+    (r7rs-dynamic-wind
+      (fn [] : any (set! r7rs-handlers__ (r7rs-cons handler saved)))
+      thunk
+      (fn [] : any (set! r7rs-handlers__ saved)))))
+
+;;; r7rs-raise-continuable -- call the innermost handler with obj, with the
+;;; outer handlers installed while it runs (R7RS 6.11); its value is the
+;;; value of the raise.
+(defn r7rs-raise-continuable [obj] : any
+  (if (r7rs-null? r7rs-handlers__)
+    (r7rs-uncaught__ obj)
+    (let [saved r7rs-handlers__
+          h (r7rs-car saved)]
+      (r7rs-dynamic-wind
+        (fn [] : any (set! r7rs-handlers__ (r7rs-cdr saved)))
+        (fn [] : any (h obj))
+        (fn [] : any (set! r7rs-handlers__ saved))))))
+
+;;; r7rs-raise -- like raise-continuable, but a handler that returns is an
+;;; error: a secondary exception is raised to the outer handlers.
+(defn r7rs-raise [obj] : any
+  (if (r7rs-null? r7rs-handlers__)
+    (r7rs-uncaught__ obj)
+    (let [saved r7rs-handlers__]
+      (r7rs-raise-continuable obj)
+      (set! r7rs-handlers__ (r7rs-cdr saved))
+      (r7rs-raise (R7rsError "exception handler returned from a non-continuable raise"
+                             (r7rs-cons obj (R7rsNull 0)))))))
+
+;;; r7rs-error -- R7RS `error`: raise a fresh error object.
+(defn r7rs-error [msg & irritants : any] : any
+  (r7rs-raise (R7rsError msg (r7rs-chain->list__ (:: irritants (Cons any))))))
+
+;;; R7rsParam -- a parameter object's cell: the current value and converter.
+(defstruct R7rsParam :heap [value : any converter : any])
+;;; R7rsParamMarker -- the private argument that asks a parameter for its cell.
+(defstruct R7rsParamMarker [tag : int])
+(def r7rs-param-marker__ (R7rsParamMarker 0))
+(defn r7rs-param-get__ [c : R7rsParam] : any (.value c))
+(defn r7rs-param-conv__ [c : R7rsParam] : any (.converter c))
+(defn r7rs-param-set__ [c : R7rsParam v] : nil (set! (.value c) v))
+(defn r7rs-identity__ [x] : any x)
+
+;;; r7rs-make-parameter -- a parameter is a procedure: `(p)` reads it, and
+;;; `parameterize` reaches its cell through the private marker.
+(defn r7rs-make-parameter [init & xs : any] : any
+  (let [l (r7rs-chain->list__ (:: xs (Cons any)))
+        conv (if (r7rs-null? l) (:: r7rs-identity__ any) (r7rs-car l))
+        first (conv init)
+        cell (:: (R7rsParam first conv) any)]
+    (fn [& args : any] : any
+      (let [a (r7rs-chain->list__ (:: args (Cons any)))]
+        (if (r7rs-null? a)
+          (r7rs-param-get__ cell)
+          (if (is? (r7rs-car a) R7rsParamMarker)
+            cell
+            (r7rs-param-set__ cell (r7rs-car a))))))))
+
+(defn r7rs-param-cell__ [p] : any (p r7rs-param-marker__))
+(defn r7rs-params-set-all__ [cells vals] : nil
+  (if (r7rs-null? cells)
+    nil
+    (do (r7rs-param-set__ (r7rs-car cells) (r7rs-car vals))
+        (r7rs-params-set-all__ (r7rs-cdr cells) (r7rs-cdr vals)))))
+;;; r7rs-parameterize__ -- `(parameterize ((p v) ...) body...)`: bindings is
+;;; the list of `(p . v)`; each new value goes through the parameter's
+;;; converter, the swap in and the swap back are wind frames.
+(defn r7rs-parameterize__ [bindings thunk] : any
+  (let [cells (r7rs-map (fn [b] : any (r7rs-param-cell__ (r7rs-car b))) bindings)
+        news (r7rs-map (fn [b] : any
+                         (let [c (r7rs-param-cell__ (r7rs-car b))]
+                           ((r7rs-param-conv__ c) (r7rs-cdr b))))
+                       bindings)
+        olds (r7rs-map (fn [c] : any (r7rs-param-get__ c)) cells)]
+    (r7rs-dynamic-wind
+      (fn [] : any (r7rs-params-set-all__ cells news))
+      thunk
+      (fn [] : any (r7rs-params-set-all__ cells olds)))))
+
+;;; R7rsPBox / R7rsPromise -- a promise shares its box with the promise a
+;;; `delay-force` chain yields, the R7RS 7.3 reference shape.
+(defstruct R7rsPBox :heap [done : bool value : any])
+(defstruct R7rsPromise :heap [box : any])
+(defn r7rs-promise? [x] : bool (is? x R7rsPromise))
+(defn r7rs-pbox__ [p : R7rsPromise] : any (.box p))
+(defn r7rs-pbox-done__ [b : R7rsPBox] : bool (.done b))
+(defn r7rs-pbox-value__ [b : R7rsPBox] : any (.value b))
+(defn r7rs-pbox-set__ [b : R7rsPBox done : bool v] : nil
+  (set! (.done b) done)
+  (set! (.value b) v))
+(defn r7rs-promise-share__ [p : R7rsPromise b] : nil (set! (.box p) b))
+;;; r7rs-delay-force__ -- `(delay-force expr)`: thunk yields a promise.
+(defn r7rs-delay-force__ [thunk] : any (R7rsPromise (:: (R7rsPBox false thunk) any)))
+;;; r7rs-make-promise -- a promise already forced to v (a promise is itself).
+(defn r7rs-make-promise [v] : any
+  (if (r7rs-promise? v) v (R7rsPromise (:: (R7rsPBox true v) any))))
+;;; r7rs-force -- iterative: each step runs the pending thunk and, unless
+;;; that forced the promise already, adopts the resulting promise's state
+;;; and makes the two share one box, so a `delay-force` loop runs in
+;;; constant space (the self call is a tail call).
+(defn r7rs-force [p] : any
+  (if (r7rs-promise? p)
+    (let [b (r7rs-pbox__ p)]
+      (if (r7rs-pbox-done__ b)
+        (r7rs-pbox-value__ b)
+        (let [p2 ((r7rs-pbox-value__ b))]
+          (if (r7rs-pbox-done__ b)
+            nil
+            (let [b2 (r7rs-pbox__ p2)]
+              (r7rs-pbox-set__ b (r7rs-pbox-done__ b2) (r7rs-pbox-value__ b2))
+              (r7rs-promise-share__ p2 b)))
+          (r7rs-force p))))
+    p))

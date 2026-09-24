@@ -873,6 +873,11 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
      * TU must publish into the runtime registry (see emit_any_type_name_table).
      * Interning is therefore a dedupe of the rows, not the id assignment. */
     int64_t id = tur_any_id_hash(key);
+    /* r7rs-lang-plan R6: a boxed VARIADIC fn type is registered with its fixed
+     * parameter count, so a dynamic call can pack for it (__tur_dyn_call_var).
+     * Idempotent per id; the registry line lives in the fat-box init band. */
+    if (is_fn && r.as.fn.boxed && r.as.fn.is_variadic && r.as.fn.arity >= 1)
+        dyn_register_variadic(ctx, id, (int)r.as.fn.arity - 1);
     for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
         if (strcmp(ctx->any_type_names[i], key) == 0) ANY_ID_RET(id);
         /* Two distinct keys hashing alike would make one type answer as the
@@ -11267,6 +11272,66 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "        tur_panic(__m);\n"
         "    }\n"
         "}\n");
+    /* r7rs-lang-plan R6 (docs/archive/r7rs-compiled-dynamic-shapes.md 2b):
+     * a VARIADIC callee reached through a dynamic call.
+     *
+     * The box id of `(fn [a b & rest : any] : any)` differs from every fixed
+     * arity's (tur_fn_type_key spells the rest slot), so the id compare above
+     * cannot admit it -- and must not, since its thunk takes a chain POINTER
+     * where a fixed callee takes a tagged word.  Instead the emitter registers
+     * every variadic fn type it boxes (emit_any_type_id -> dyn_register_variadic)
+     * with its fixed parameter count, and a call site whose id compare fails
+     * asks the registry: a registered id with `fixed <= n` is called through
+     * __tur_dyn_call_var, which packs the surplus arguments into a `(Cons any)`
+     * chain laid out exactly as ctor_Cons_Cons__any lays one out -- a tagged
+     * head and a tail pointer -- and passes it as the last argument.  Anything
+     * else is the panic above.  Region-allocated like the ctor, so a chain
+     * built inside a bracket does not outlive it. */
+    buf_puts(out,
+        "static int64_t tur_dyn_var_ids[64];\n"
+        "static int     tur_dyn_var_fixed[64];\n"
+        "static int     tur_dyn_var_n;\n"
+        "static __attribute__((unused)) void __tur_dyn_reg_variadic(int64_t __id, int __fixed) {\n"
+        "    for (int __i = 0; __i < tur_dyn_var_n; __i++) if (tur_dyn_var_ids[__i] == __id) return;\n"
+        "    if (tur_dyn_var_n < 64) { tur_dyn_var_ids[tur_dyn_var_n] = __id; tur_dyn_var_fixed[tur_dyn_var_n] = __fixed; tur_dyn_var_n++; }\n"
+        "}\n"
+        "static inline int __tur_dyn_variadic_fixed(int64_t __id) {\n"
+        "    for (int __i = 0; __i < tur_dyn_var_n; __i++) if (tur_dyn_var_ids[__i] == __id) return tur_dyn_var_fixed[__i];\n"
+        "    return -1;\n"
+        "}\n"
+        "/* -1: the ordinary call (the id matched); otherwise the fixed count of\n"
+        " * a variadic callee this call must pack for.  Panics for anything else. */\n"
+        "static __attribute__((unused)) int __tur_dyn_call_arity(tur_tagged_t __f, int64_t __want, int __n) {\n"
+        "    int64_t __have = TUR_GETTAG(__f);\n"
+        "    if (__have == __want) return -1;\n"
+        "    int __fx = tur_dyn_var_n ? __tur_dyn_variadic_fixed(__have) : -1;\n"
+        "    if (__fx >= 0 && __fx <= __n) return __fx;\n"
+        "    __tur_dyn_call_check(__have, __want);\n"
+        "    return -1;\n"
+        "}\n"
+        "typedef struct __tur_dyn_cons { tur_tagged_t head; struct __tur_dyn_cons *tail; } __tur_dyn_cons;\n"
+        "static int64_t __tur_dyn_pack_rest(int __fixed, int __n, const tur_tagged_t *__a) {\n"
+        "    __tur_dyn_cons *__t = NULL;\n"
+        "    for (int __i = __n - 1; __i >= __fixed; __i--) {\n"
+        "        __tur_dyn_cons *__c = (__tur_dyn_cons *)tur_region_alloc_or_malloc(sizeof *__c);\n"
+        "        __c->head = __a[__i]; __c->tail = __t; __t = __c;\n"
+        "    }\n"
+        "    return (int64_t)(intptr_t)__t;\n"
+        "}\n"
+        "static __attribute__((unused)) tur_tagged_t __tur_dyn_call_var(tur_tagged_t __f, int __fixed, int __n,\n"
+        "        tur_tagged_t __a0, tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3) {\n"
+        "    tur_tagged_t __a[4] = { __a0, __a1, __a2, __a3 };\n"
+        "    void *__env = (void *)(intptr_t)TUR_UNTAG(__f);\n"
+        "    void *__th = (void *)(intptr_t)TUR_CLOSURE_FN(TUR_UNTAG(__f));\n"
+        "    int64_t __r = __tur_dyn_pack_rest(__fixed, __n, __a);\n"
+        "    switch (__fixed) {\n"
+        "    case 0: return ((tur_tagged_t (*)(void *, int64_t))__th)(__env, __r);\n"
+        "    case 1: return ((tur_tagged_t (*)(void *, tur_tagged_t, int64_t))__th)(__env, __a[0], __r);\n"
+        "    case 2: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __r);\n"
+        "    case 3: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __a[2], __r);\n"
+        "    default: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __r);\n"
+        "    }\n"
+        "}\n");
     /* saffron-lang-plan S5/D4 (G11): the fall-through of a dynamic field read.
      * Named the interpreter's way -- "an int has no .x" is the useful sentence,
      * not "no field .x". */
@@ -11376,6 +11441,13 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    void *__th = (void *)(intptr_t)TUR_CLOSURE_FN(TUR_UNTAG(__f));\n"
         "    tur_tagged_t __r;\n"
         "    tur_tb_armed_for = __tur_tb_target(__env);\n"
+        "    /* R6: a variadic callee (see __tur_dyn_call_var) is driven too. */\n"
+        "    int __fx = tur_dyn_var_n ? __tur_dyn_variadic_fixed(TUR_GETTAG(__f)) : -1;\n"
+        "    if (__fx >= 0 && __fx <= __n) {\n"
+        "        __r = __tur_dyn_call_var(__f, __fx, __n, __a[0], __a[1], __a[2], __a[3]);\n"
+        "        tur_tb_armed_for = NULL;\n"
+        "        return __r;\n"
+        "    }\n"
         "    switch (__n) {\n"
         "    case 0: __r = ((tur_tagged_t (*)(void *))__th)(__env); break;\n"
         "    case 1: __r = ((tur_tagged_t (*)(void *, tur_tagged_t))__th)(__env, __a[0]); break;\n"
@@ -15920,6 +15992,35 @@ static void gdef_collect_refs(const Expr *e, const Binding ***a, uint32_t *n, ui
         case EX_ASCRIBE: gdef_collect_refs(e->as.ascribe_.inner, a, n, cap); return;
         case EX_CAST:    gdef_collect_refs(e->as.cast_.expr, a, n, cap);     return;
         case EX_RETURN:  gdef_collect_refs(e->as.return_.value, a, n, cap);  return;
+        /* r7rs-lang-plan R6: the dynamic dialects' node kinds.  A Scheme
+         * closure that `set!`s a global -- `(delay (begin (set! count ...)))`
+         * -- has its body widened to `any`, so the EX_SET sat under an
+         * EX_UNION_INJECT this walk did not descend, and cc rejected the
+         * lifted lambda's read of a global declared below it. */
+        case EX_UNION_INJECT: gdef_collect_refs(e->as.union_inject_.value, a, n, cap); return;
+        case EX_ANY_CAST:     gdef_collect_refs(e->as.any_cast_.value, a, n, cap);     return;
+        case EX_ANY_IS:       gdef_collect_refs(e->as.any_is_.value, a, n, cap);       return;
+        case EX_FN_TO_FAT:    gdef_collect_refs(e->as.fn_to_fat_.inner, a, n, cap);    return;
+        case EX_REINTERPRET:  gdef_collect_refs(e->as.reinterpret_.expr, a, n, cap);   return;
+        case EX_GET_FIELD:    gdef_collect_refs(e->as.get_field_.struct_expr, a, n, cap); return;
+        case EX_SET_FIELD:
+            gdef_collect_refs(e->as.set_field_.receiver, a, n, cap);
+            gdef_collect_refs(e->as.set_field_.value, a, n, cap);
+            return;
+        case EX_DYN_FIELD:    gdef_collect_refs(e->as.dyn_field_.obj, a, n, cap);      return;
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                gdef_collect_refs(e->as.dyn_op_.args[i], a, n, cap);
+            return;
+        case EX_DYN_CALL:
+            gdef_collect_refs(e->as.dyn_call_.fn, a, n, cap);
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                gdef_collect_refs(e->as.dyn_call_.args[i], a, n, cap);
+            return;
+        case EX_CONS_LIST:
+            for (uint32_t i = 0; i < e->as.cons_list_.n; i++)
+                gdef_collect_refs(e->as.cons_list_.items[i], a, n, cap);
+            return;
         default: return;
     }
 }

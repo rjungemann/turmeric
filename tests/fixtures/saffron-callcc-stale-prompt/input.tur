@@ -1,0 +1,14 @@
+#lang saffron
+; r7rs-lang-plan R6 (D7): invoking an escape continuation after its call/cc
+; prompt has returned.  The runtime used to read the prompt's `valid` flag
+; out of the prompt's own -- dead -- stack frame, so a stale (k v) reached
+; here longjmp'd into garbage once anything else had run on that stack
+; (the Scheme shape did, every time); the check is a live-prompt set now,
+; and the interpreter reports the same sentence.
+(def ^mut saved : any nil)
+(defn callcc [f] (call/cc (fn [k] (f (fn [& vs : any] : any (k (.head (:: vs (Cons any)))))))))
+(defn main [] : int
+  (println (callcc (fn [k] (set! saved k) 1)))
+  (saved 2)
+  (println "not reached")
+  0)

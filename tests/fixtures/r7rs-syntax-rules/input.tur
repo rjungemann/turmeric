@@ -9,7 +9,7 @@
 ;; hygiene (D5a): `swap!`'s tmp, `my-or`'s x and `my-or2`'s t never capture
 ;; the use site's.  Runs on both back ends.  The standard's `do` is
 ;; r7rs-syntax-rules-do (its expansion is a letrec-bound lambda over `any`,
-;; the compiled gap in docs/reported/r7rs-compiled-dynamic-shapes.md).
+;; the compiled gap in docs/archive/r7rs-compiled-dynamic-shapes.md).
 (define-syntax my-or
   (syntax-rules ()
     ((my-or) #f)

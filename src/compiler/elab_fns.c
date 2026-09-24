@@ -10981,6 +10981,16 @@ Expr *elab_fn(Elab *e, const Form *call) {
         for (uint32_t i = 0; i < n_params; i++) clo_arg_kinds[i] = param_kinds[i];
         Type clo_ty = type_fn(clo_arg_kinds, n_params, return_kind);
         clo_ty.as.fn.boxed = true;
+        /* r7rs-lang-plan R6: the closure VALUE's type carries the rest marker
+         * too.  Without it a capturing variadic closure was typed as a fixed
+         * arity: a static call passed the surplus unpacked, its `any` box id
+         * was the fixed signature's (so a dynamic call could not pack for
+         * it), and `(apply f xs)` on a Scheme closure over its environment --
+         * a continuation wrapper, a parameter object -- read a bare word as
+         * its rest chain. */
+        clo_ty.as.fn.is_variadic    = fn_is_variadic;
+        clo_ty.as.fn.rest_kind      = fn_rest_kind;
+        clo_ty.as.fn.rest_full_type = fn_rest_full_type;
         /* curried-fn-typed-param: preserve the closure's full result type so a
          * closure that *returns a function* keeps the inner (fn ...) type on
          * its first-class value.  Without this, a let-bound closure value

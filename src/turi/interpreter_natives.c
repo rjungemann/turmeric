@@ -2569,22 +2569,28 @@ static TuriValue native_println_float(TuriEnv *env, TuriValue *a, uint32_t n, vo
 /* r7rs-lang-plan R2: the three newline-free write primitives the R7RS prelude
  * builds `display`/`write`/`newline` on (stdlib/r7rs/prelude.tur declares
  * them as inline C; these are their interpreter twins). */
-static TuriValue native_r7rs_write_cstr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    if (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) fputs(a[0].as_cstr, stdout);
-    return turi_nil();
-}
-static TuriValue native_r7rs_write_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    if (n > 0) printf("%lld", (long long)(a[0].tag == TURI_FLOAT ? (int64_t)a[0].as_float : a[0].as_int));
-    return turi_nil();
-}
 static const char *r7rs_arg_cstr(TuriValue *a, uint32_t n, uint32_t i) {
     return (i < n && a[i].tag == TURI_CSTR && a[i].as_cstr) ? a[i].as_cstr : "";
 }
 static int64_t r7rs_arg_int(TuriValue *a, uint32_t n, uint32_t i) {
     if (i >= n) return 0;
     return a[i].tag == TURI_FLOAT ? (int64_t)a[i].as_float : a[i].as_int;
+}
+/* r7rs-lang-plan R6: every prelude write goes through one primitive that
+ * can pick stderr (the uncaught-exception report), and the prelude leaves
+ * the process with a status of its own. */
+static TuriValue native_r7rs_write_cstr_to(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    bool err = n > 1 && ((a[1].tag == TURI_BOOL) ? a[1].as_bool : a[1].as_int != 0);
+    if (err) fflush(stdout);
+    if (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) fputs(a[0].as_cstr, err ? stderr : stdout);
+    return turi_nil();
+}
+static TuriValue native_r7rs_exit(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    fflush(stdout);
+    fflush(stderr);
+    exit((int)r7rs_arg_int(a, n, 0));
 }
 /* r7rs-lang-plan R5: the one spelling of a float both back ends print.
  * Shortest of %.15g / %.17g that round-trips, `.0` appended to an integral
@@ -2710,13 +2716,6 @@ static TuriValue native_r7rs_parse_float(TuriEnv *env, TuriValue *a, uint32_t n,
     (void)env; (void)ud; double v = 0.0; (void)r7rs_parse_float_str(r7rs_arg_cstr(a, n, 0), &v);
     TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = v; return rv;
 }
-static TuriValue native_r7rs_write_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    char r[48];
-    r7rs_fmt_double(r, sizeof r, r7rs_arg_double(a, n, 0));
-    fputs(r, stdout);
-    return turi_nil();
-}
 /* R3: the R7RS prelude's string and character primitives. */
 static void r7rs_put_utf8(char *out, int *n, uint32_t cp) {
     if (cp < 0x80) out[(*n)++] = (char)cp;
@@ -2781,13 +2780,6 @@ static TuriValue native_r7rs_float_to_string(TuriEnv *env, TuriValue *a, uint32_
     char *r = (char *)malloc(48);
     r7rs_fmt_double(r, 48, r7rs_arg_double(a, n, 0));
     return turi_cstr(r);
-}
-static TuriValue native_r7rs_write_char(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    char buf[5]; int k = 0;
-    r7rs_put_utf8(buf, &k, (uint32_t)r7rs_arg_int(a, n, 0));
-    fwrite(buf, 1, (size_t)k, stdout);
-    return turi_nil();
 }
 /* int->unit-float: map a 64-bit int to [0,1) by dividing by 2^53 */
 static TuriValue native_int_to_unit_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -3435,11 +3427,12 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "bit-shr",           native_bit_shr,         NULL);
     turi_env_register_native(env, "bit-xor",           native_bit_xor,         NULL);
     turi_env_register_native(env, "println-float",     native_println_float,   NULL);
-    /* r7rs-lang-plan R2: the R7RS prelude's write primitives. */
-    turi_env_register_native(env, "r7rs-write-cstr",   native_r7rs_write_cstr,  NULL);
-    turi_env_register_native(env, "r7rs-write-int",    native_r7rs_write_int,   NULL);
-    turi_env_register_native(env, "r7rs-write-float",  native_r7rs_write_float, NULL);
-    turi_env_register_native(env, "r7rs-write-char",   native_r7rs_write_char,  NULL);
+    /* r7rs-lang-plan R2/R6: the R7RS prelude's write primitive (R6 routed
+     * every write through the stderr-capable one; the R2 natives for
+     * r7rs-write-cstr/int/float/char are gone -- a stale native under a name
+     * the prelude now defines in Turmeric shadowed the prelude's definition). */
+    turi_env_register_native(env, "r7rs-write-cstr-to__", native_r7rs_write_cstr_to, NULL);
+    turi_env_register_native(env, "r7rs-exit__",       native_r7rs_exit,        NULL);
     turi_env_register_native(env, "r7rs-same-ref__",       native_r7rs_same_ref,        NULL);
     turi_env_register_native(env, "r7rs-string-length",    native_r7rs_string_length,   NULL);
     turi_env_register_native(env, "r7rs-string-ref-code__", native_r7rs_string_ref_code, NULL);

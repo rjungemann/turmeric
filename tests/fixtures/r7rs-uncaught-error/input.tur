@@ -1,0 +1,6 @@
+#lang r7rs
+;; r7rs-lang-plan R6: `error` with no handler installed reports the error
+;; object on stderr, after flushing what stdout holds, and exits 70.
+(display "before") (newline)
+(error "no handler here" 'a 42)
+(display "not reached") (newline)

@@ -1,0 +1,9 @@
+#lang r7rs
+;; r7rs-lang-plan D7: a continuation is a one-shot upward escape.  Invoking
+;; it after its call/cc has returned is the named error on both back ends,
+;; not undefined behaviour (the compiled runtime keeps a live-prompt set, so
+;; a dead prompt's frame is never read).
+(define saved #f)
+(display (call/cc (lambda (k) (set! saved k) 1))) (newline)
+(saved 2)
+(display "not reached") (newline)

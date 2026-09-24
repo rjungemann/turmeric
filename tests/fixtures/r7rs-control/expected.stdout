@@ -1,0 +1,25 @@
+41
+3
+#f
+#f
+(1 2)
+[in]body[out]
+<>escaped
+abBA
+11
+(caught boom)
+str
+(bad thing (1 2))
+body-value
+(outer not-a-number)
+()(g x)
+20
+6
+20
+a
+#t
+42 42 1
+5
+done
+9
+exception handler returned from a non-continuable raise
