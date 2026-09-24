@@ -79,6 +79,11 @@
 (defn r7rs-fail-any__ [msg : cstr] : any
   (panic msg)
   (:: 0 any))
+;;; r7rs-signal__ -- internal: R10 -- an error a program can `guard`: raise
+;;; an error object with this message.  For "it is an error" conditions the
+;;; procedure detects, where r7rs-fail-any__'s panic would end the program.
+(defn r7rs-signal__ [msg : cstr] : any
+  (r7rs-raise (R7rsError msg (R7rsNull 0) 0)))
 (defn r7rs-fail-bool__ [msg : cstr] : bool
   (panic msg)
   false)
@@ -112,6 +117,17 @@
 ;;; built inside a `with-region` bracket and stored here blocks the rewind.
 (defn r7rs-set-car! [p : R7rsPair v] : nil (set! (.a p) v))
 (defn r7rs-set-cdr! [p : R7rsPair v] : nil (set! (.d p) v))
+
+;;; R7rsBox -- internal: the heap cell of a `set!` variable a lambda captures
+;;; (r7rs-lang-plan R10).  A compiled closure copies the variables it
+;;; captures, so without the cell `(set! sum ...)` inside a `do` loop or a
+;;; `for-each` lambda updated the closure's copy and the enclosing procedure
+;;; still read the old value.  scheme_lower.c's assignment conversion binds
+;;; such a variable to one of these; reads and `set!`s go through it.
+(defstruct R7rsBox :heap [v : any])
+(defn r7rs-box__ [x] : any (R7rsBox x))
+(defn r7rs-unbox__ [b : R7rsBox] : any (.v b))
+(defn r7rs-box-set!__ [b : R7rsBox x] : nil (set! (.v b) x))
 
 (defn r7rs-caar [p] : any (r7rs-car (r7rs-car p)))
 (defn r7rs-cadr [p] : any (r7rs-car (r7rs-cdr p)))
@@ -476,23 +492,35 @@
 
 ;;; ---- integer division (R7RS 6.2.6) -------------------------------------
 
-(defn r7rs-quotient [a b] : int
+(defn r7rs-quotient-i__ [a b] : int
   (let [x (r7rs-int-of__ a "quotient: not an integer") y (r7rs-int-of__ b "quotient: not an integer")]
     (if (= y 0) (r7rs-fail-int__ "quotient: division by zero") (/ x y))))
-(defn r7rs-remainder [a b] : int
+(defn r7rs-remainder-i__ [a b] : int
   (let [x (r7rs-int-of__ a "remainder: not an integer") y (r7rs-int-of__ b "remainder: not an integer")]
     (if (= y 0) (r7rs-fail-int__ "remainder: division by zero") (mod x y))))
-(defn r7rs-modulo [a b] : int
+(defn r7rs-modulo-i__ [a b] : int
   (let [x (r7rs-int-of__ a "modulo: not an integer") y (r7rs-int-of__ b "modulo: not an integer")]
     (if (= y 0)
       (r7rs-fail-int__ "modulo: division by zero")
       (let [r (mod x y)]
         (if (= r 0) r (if (if (< r 0) (> y 0) (< y 0)) (+ r y) r))))))
-(defn r7rs-floor-quotient [a b] : int
-  (/ (- (r7rs-int-of__ a "floor-quotient: not an integer") (r7rs-modulo a b)) (r7rs-int-of__ b "floor-quotient: not an integer")))
-(defn r7rs-floor-remainder [a b] : int (r7rs-modulo a b))
-(defn r7rs-truncate-quotient [a b] : int (r7rs-quotient a b))
-(defn r7rs-truncate-remainder [a b] : int (r7rs-remainder a b))
+(defn r7rs-floor-quotient-i__ [a b] : int
+  (/ (- (r7rs-int-of__ a "floor-quotient: not an integer") (r7rs-modulo-i__ a b)) (r7rs-int-of__ b "floor-quotient: not an integer")))
+(defn r7rs-floor-remainder-i__ [a b] : int (r7rs-modulo-i__ a b))
+(defn r7rs-truncate-quotient-i__ [a b] : int (r7rs-quotient-i__ a b))
+(defn r7rs-truncate-remainder-i__ [a b] : int (r7rs-remainder-i__ a b))
+;;; The public integer divisions: R10 -- an inexact argument makes the result
+;;; inexact (R7RS 6.2.6, `(truncate/ -5.0 -2)` is 2.0 and -1.0); the `-i__`
+;;; forms above compute on the exact integers.
+(defn r7rs-idiv-result__ [r : int a b] : any
+  (if (if (is? a float) true (is? b float)) (:: (r7rs-to-float__ r) any) (:: r any)))
+(defn r7rs-quotient [a b] : any (r7rs-idiv-result__ (r7rs-quotient-i__ a b) a b))
+(defn r7rs-remainder [a b] : any (r7rs-idiv-result__ (r7rs-remainder-i__ a b) a b))
+(defn r7rs-modulo [a b] : any (r7rs-idiv-result__ (r7rs-modulo-i__ a b) a b))
+(defn r7rs-floor-quotient [a b] : any (r7rs-idiv-result__ (r7rs-floor-quotient-i__ a b) a b))
+(defn r7rs-floor-remainder [a b] : any (r7rs-idiv-result__ (r7rs-floor-remainder-i__ a b) a b))
+(defn r7rs-truncate-quotient [a b] : any (r7rs-idiv-result__ (r7rs-truncate-quotient-i__ a b) a b))
+(defn r7rs-truncate-remainder [a b] : any (r7rs-idiv-result__ (r7rs-truncate-remainder-i__ a b) a b))
 (defn r7rs-gcd2__ [a : int b : int] : int (if (= b 0) (if (< a 0) (- 0 a) a) (r7rs-gcd2__ b (mod a b))))
 (defn r7rs-gcd-go__ [l acc : int] : int
   (if (r7rs-null? l) acc (r7rs-gcd-go__ (r7rs-cdr l) (r7rs-gcd2__ acc (r7rs-int-of__ (r7rs-car l) "gcd: not an integer")))))
@@ -518,8 +546,18 @@
 (defn r7rs-inexact [x] (if (is? x float) x (:: (r7rs-to-float__ x) any)))
 (defn r7rs-exact->inexact [x] (r7rs-inexact x))
 (defn r7rs-inexact->exact [x] (r7rs-exact x))
-(defn r7rs-numerator [x] (if (is? x int) x (if (r7rs-integer? x) x (r7rs-fail-any__ "numerator: no exact rationals (r7rs-lang-plan D8)"))))
-(defn r7rs-denominator [x] (if (is? x int) (:: 1 any) (if (r7rs-integer? x) (:: 1.0 any) (r7rs-fail-any__ "denominator: no exact rationals (r7rs-lang-plan D8)"))))
+;;; r7rs-numerator / r7rs-denominator -- an exact integer is its own
+;;; numerator over 1.  R10: an inexact real is a dyadic fraction, so its
+;;; lowest terms are found by doubling until it is integral -- (numerator
+;;; 5.5) is 11.0 and (denominator 5.5) 2.0 -- with the answer inexact
+;;; (R7RS 6.2.6).  Only exact NON-integers need rationals, and there are none.
+(defn r7rs-num-den__ [x : float d : float] : any
+  (if (= x (trunc x)) (R7rsPair (:: x any) (:: d any)) (r7rs-num-den__ (* x 2.0) (* d 2.0))))
+(defn r7rs-num-den-of__ [x] : any
+  (let [f (r7rs-to-float__ x)]
+    (if (if (r7rs-nan? x) true (r7rs-infinite? x)) (R7rsPair x (:: 1.0 any)) (r7rs-num-den__ f 1.0))))
+(defn r7rs-numerator [x] (if (is? x int) x (r7rs-car (r7rs-num-den-of__ x))))
+(defn r7rs-denominator [x] (if (is? x int) (:: 1 any) (r7rs-cdr (r7rs-num-den-of__ x))))
 
 ;;; ---- powers, roots, transcendental --------------------------------------
 
@@ -581,21 +619,44 @@
   }
   return v;
   ```)
+;;; R10: case is not significant in a number (R7RS 7.1.1), so `+NaN.0` and
+;;; `1E2` read; and the exponent markers `s` `f` `d` `l` of R5RS (which
+;;; other implementations still read, chibi's suite among them) mean `e`.
+;;; Both helpers spell the string in strtod's terms first.
 (defn r7rs-parse-float-ok?__ [s : cstr] : bool
   ```c
   if (!s || !*s) return false;
-  if (!strcmp(s, "+inf.0") || !strcmp(s, "-inf.0") || !strcmp(s, "+nan.0") || !strcmp(s, "-nan.0")) return true;
-  for (const char *p = s; *p; p++)
-    if (!((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')) return false;
-  char *end = NULL; (void)strtod(s, &end);
-  return end != s && *end == 0;
+  char lo[8] = {0};
+  for (size_t i = 0; i < 7 && s[i]; i++) lo[i] = (char)((s[i] >= 'A' && s[i] <= 'Z') ? s[i] + 32 : s[i]);
+  if (strlen(s) == 6 && (!strcmp(lo, "+inf.0") || !strcmp(lo, "-inf.0") || !strcmp(lo, "+nan.0") || !strcmp(lo, "-nan.0"))) return true;
+  char buf[128]; size_t n = strlen(s);
+  if (n >= sizeof buf) return false;
+  for (size_t i = 0; i <= n; i++) {
+    char c = s[i];
+    if (i > 0 && strchr("sSfFdDlL", c) && c && ((s[i-1] >= '0' && s[i-1] <= '9') || s[i-1] == '.')) c = 'e';
+    if (c && !((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-')) return false;
+    buf[i] = c;
+  }
+  char *end = NULL; (void)strtod(buf, &end);
+  return end != buf && *end == 0;
   ```)
 (defn r7rs-parse-float__ [s : cstr] : float
   ```c
-  if (!strcmp(s, "+inf.0")) return __builtin_inf();
-  if (!strcmp(s, "-inf.0")) return -__builtin_inf();
-  if (!strcmp(s, "+nan.0") || !strcmp(s, "-nan.0")) return __builtin_nan("");
-  return strtod(s, NULL);
+  char lo[8] = {0};
+  for (size_t i = 0; i < 7 && s[i]; i++) lo[i] = (char)((s[i] >= 'A' && s[i] <= 'Z') ? s[i] + 32 : s[i]);
+  if (strlen(s) == 6) {
+    if (!strcmp(lo, "+inf.0")) return __builtin_inf();
+    if (!strcmp(lo, "-inf.0")) return -__builtin_inf();
+    if (!strcmp(lo, "+nan.0") || !strcmp(lo, "-nan.0")) return __builtin_nan("");
+  }
+  char buf[128]; size_t n = strlen(s);
+  if (n >= sizeof buf) return strtod(s, NULL);
+  for (size_t i = 0; i <= n; i++) {
+    char c = s[i];
+    if (i > 0 && c && strchr("sSfFdDlL", c) && ((s[i-1] >= '0' && s[i-1] <= '9') || s[i-1] == '.')) c = 'e';
+    buf[i] = c;
+  }
+  return strtod(buf, NULL);
   ```)
 (defn r7rs-radix-of__ [xs : (Cons any) who : cstr] : int
   (if (tnil? xs) 10
@@ -821,8 +882,10 @@
   (R7rsBytevector (r7rs-bytes-from-chain__ (:: xs (Cons any)) (:: (vec-new) (Vec int)))))
 (defn r7rs-make-bytevector-go__ [n : int fill : int v : (Vec int)] : (Vec int)
   (if (<= n 0) v (do (vec-push! v fill) (r7rs-make-bytevector-go__ (- n 1) fill v))))
-(defn r7rs-make-bytevector [n : int fill : int] : any
-  (R7rsBytevector (r7rs-make-bytevector-go__ n fill (:: (vec-new) (Vec int)))))
+(defn r7rs-make-bytevector [n : int & fill : any] : any
+  (let [fl (r7rs-chain->list__ (:: fill (Cons any)))]
+    (R7rsBytevector (r7rs-make-bytevector-go__ n (if (r7rs-null? fl) 0 (cast (r7rs-car fl) int))
+                                               (:: (vec-new) (Vec int))))))
 (defn r7rs-bytevector-bytes__ [b : R7rsBytevector] : (Vec int) (.bytes b))
 (defn r7rs-bytevector-u8-ref [b : R7rsBytevector i : int] : int (vec-get (.bytes b) i))
 (defn r7rs-bytevector-u8-set! [b : R7rsBytevector i : int x : int] : nil (vec-set! (.bytes b) i x))
@@ -839,8 +902,8 @@
 ;;; R5: the procedures that return two values sit after r7rs-values.  (They
 ;;; had to, then: a variadic's forward declaration did not carry its rest
 ;;; parameter.  R7 fixed that, so the ordering is now only tidiness.)
-(defn r7rs-floor/ [a b] (r7rs-values (:: (r7rs-floor-quotient a b) any) (:: (r7rs-modulo a b) any)))
-(defn r7rs-truncate/ [a b] (r7rs-values (:: (r7rs-quotient a b) any) (:: (r7rs-remainder a b) any)))
+(defn r7rs-floor/ [a b] (r7rs-values (r7rs-floor-quotient a b) (r7rs-modulo a b)))
+(defn r7rs-truncate/ [a b] (r7rs-values (r7rs-quotient a b) (r7rs-remainder a b)))
 (defn r7rs-exact-integer-sqrt [x]
   (let [n (r7rs-int-of__ x "exact-integer-sqrt: not an exact integer") s (r7rs-isqrt__ n)]
     (r7rs-values (:: s any) (:: (- n (* s s)) any))))
@@ -892,8 +955,11 @@
   (if (r7rs-null? (r7rs-cdr l)) (r7rs-car l) (R7rsPair (r7rs-car l) (r7rs-spread-args__ (r7rs-cdr l)))))
 (defn r7rs-apply [f & args : any] : any
   (let [l (r7rs-chain->list__ (:: args (Cons any)))]
-    (if (r7rs-null? l) (r7rs-fail-any__ "apply: needs a list of arguments")
-      (r7rs-apply-list__ f (r7rs-spread-args__ l)))))
+    (if (r7rs-null? l) (r7rs-signal__ "apply: needs a list of arguments")
+      (let [spread (r7rs-spread-args__ l)]
+        (if (r7rs-list? spread)
+          (r7rs-apply-list__ f spread)
+          (r7rs-signal__ "apply: the last argument must be a proper list"))))))
 (defn r7rs-call-with-values [producer consumer]
   (let [v (producer)]
     (if (r7rs-values?__ v)
@@ -1919,13 +1985,24 @@
   return r;
   ```)
 ;;; r7rs-symbol-plain?__ -- a symbol whose name reads back as itself without
-;;; bars: not empty, not `.`, no delimiter, whitespace or control byte, and
-;;; not starting with `#`.  (Names that read as numbers are the caller's.)
+;;; bars: not empty, not `.`, no delimiter, whitespace, control byte or
+;;; backslash, not starting with `#`, and not `+i`/`-i` or led by a signed
+;;; `inf.`/`nan.`.  (Names that read as numbers are the caller's.)
 (defn r7rs-symbol-plain?__ [s : cstr] : bool
   ```c
   if (!*s || (s[0] == '.' && !s[1]) || s[0] == '#') return false;
   for (const unsigned char *p = (const unsigned char *)s; *p; p++)
     if (*p <= 32 || *p == 127 || strchr("()[]{}\"';`,|", *p)) return false;
+  /* R10: a backslash reads as an escape, and a name spelled like a
+   * number's sign-led forms -- `+i`, `-i`, `+inf.0...`, `-nan.0...` in any
+   * case -- reads as (or begins) a number in other readers, so both are
+   * written with bars (chibi's suite: '|+i|, '|\\123|, '|+NaN.0abc|). */
+  if (strchr(s, '\\')) return false;
+  if ((s[0] == '+' || s[0] == '-') && s[1]) {
+    char lo[6] = {0};
+    for (int i = 0; i < 5 && s[1 + i]; i++) lo[i] = (char)((s[1 + i] >= 'A' && s[1 + i] <= 'Z') ? s[1 + i] + 32 : s[1 + i]);
+    if (!strcmp(lo, "i") || !strncmp(lo, "inf.", 4) || !strncmp(lo, "nan.", 4)) return false;
+  }
   return true;
   ```)
 ;;; r7rs-bar-symbol__ -- `|name|`, with `|` and `\` escaped.

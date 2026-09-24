@@ -15971,6 +15971,11 @@ static void gdef_collect_refs(const Expr *e, const Binding ***a, uint32_t *n, ui
         }
         case EX_DEF: gdef_collect_refs(e->as.def_.init, a, n, cap); return;
         case EX_CALL:
+            /* R10: a call to a global holding a closure names it through
+             * `fn_binding` with no `fn_expr` -- `(def add4 (let [x 4] (fn
+             * ...)))` called inside a lambda read `add4_N` before its storage
+             * was declared (cc: undeclared), in every dialect. */
+            if (e->as.call_.fn_binding) gdef_ref_push(a, n, cap, e->as.call_.fn_binding);
             gdef_collect_refs(e->as.call_.fn_expr, a, n, cap);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
                 gdef_collect_refs(e->as.call_.args[i], a, n, cap);
@@ -17876,7 +17881,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
-    for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
+    for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
     free(ctx.env_struct_fn_typedefs);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
@@ -19411,7 +19416,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
-    for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
+    for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
     free(ctx.env_struct_fn_typedefs);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);

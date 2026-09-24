@@ -3719,6 +3719,9 @@ static Form *read_piped_symbol(Reader *r) {
         switch (e) {
             case '|':  buf[bi++] = '|';  break;
             case '\\': buf[bi++] = '\\'; break;
+            /* R10: `\"` too, as in a string: other implementations accept
+             * it, and chibi's suite writes `'|\"|`. */
+            case '"':  buf[bi++] = '"';  break;
             case 'a':  buf[bi++] = 7;    break;
             case 'b':  buf[bi++] = 8;    break;
             case 't':  buf[bi++] = '\t'; break;

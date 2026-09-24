@@ -723,8 +723,13 @@ the compiled back end: a top-level `define` whose initializer has an effect
 (opening a file, reading input) runs before the program's top-level
 expressions, so put such code inside a procedure. R9 adds the tooling: `tur
 repl --lang r7rs`, `tur fmt` (which re-indents a Scheme file and never rewrites
-a token), `tur init --r7rs`, the language server, and editor highlighting. The
-full reference is [r7rs-guide.md](r7rs-guide.md).
+a token), `tur init --r7rs`, the language server, and editor highlighting.
+R10 runs chibi-scheme's R7RS test suite as a ctest target
+(`tur_r7rs_conformance`) that reports a pass count: 1036 of the 1216 tests
+written in it pass, on both back ends, and the rest are the named carve-outs
+(bignums, exact rationals, complex numbers, Unicode case mapping, mutable
+strings, `eval`, re-entrant `call/cc`) plus a few hygiene corners. The full
+reference is [r7rs-guide.md](r7rs-guide.md).
 
 `turmeric` and `saffron` are **stable bases** -- neither is gated. `#lang
 saffron` needs no `--enable=` flag and no `:experiments` entry, and prints no

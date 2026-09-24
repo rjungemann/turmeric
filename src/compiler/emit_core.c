@@ -3987,8 +3987,19 @@ char *atom_int_typed(int64_t i, TypeKind k) {
     return strdup(buf);
 }
 /* Phase N: emit float32 literal as a (float) cast */
+/* R10: an infinity or a NaN has no decimal literal -- `%g` spells it `inf`
+ * / `nan`, which is an undeclared identifier to cc.  `+inf.0` in a Scheme
+ * (or any) source compiled to exactly that. */
+static const char *atom_float_nonfinite(double f) {
+    if (f != f) return "(__builtin_nan(\"\"))";
+    if (f > 0 && f - f != f - f) return "(__builtin_inf())";
+    if (f < 0 && f - f != f - f) return "(-__builtin_inf())";
+    return NULL;
+}
 char *atom_float32(double f) {
     char buf[80];
+    const char *nf = atom_float_nonfinite(f);
+    if (nf) { snprintf(buf, sizeof buf, "((float)%s)", nf); return strdup(buf); }
     snprintf(buf, sizeof buf, "((float)%.9g)", f);
     return strdup(buf);
 }
@@ -4001,6 +4012,8 @@ char *atom_float(double f) {
      * double, where the interpreter (which keeps the parsed value) had the
      * right one.  Found by r7rs-lang-plan R7; 15 digits suffice for the
      * common literal, so most emitted C is unchanged. */
+    const char *nf = atom_float_nonfinite(f);
+    if (nf) return strdup(nf);
     snprintf(buf, sizeof buf, "%.15g", f);
     if (f == f && strtod(buf, NULL) != f) snprintf(buf, sizeof buf, "%.16g", f);
     if (f == f && strtod(buf, NULL) != f) snprintf(buf, sizeof buf, "%.17g", f);

@@ -1,0 +1,25 @@
+#(a b (c d) "s" 1)
+3
+#t
+10
+(3 2 1)
+2
+6
+42
+-4
+(4 #f)
+(list a (quote a))
+(list 3 4)
+(2 0 fail)
+(100 ...)
+(2.0 -1.0)
+(11.0 2.0 6 1)
+(100.0 +nan.0 -inf.0 7.25)
+"apply: the last argument must be a proper list"
+6
+(|+i| |\\x| |+nan.0x| + ->x)
+(+inf.0 -inf.0 #t)
+(#f both both)
+(1 (3 4))
+12
+10

@@ -314,8 +314,8 @@ typedef struct EmitCtx {
      * `int64_t` field ("makes integer from pointer without a cast").  Record
      * the decision once here and have the assignment read it back. */
     char     **env_struct_fn_typedefs;
-    uint8_t   n_env_struct_names;
-    uint8_t   cap_env_struct_names;
+    uint32_t  n_env_struct_names;
+    uint32_t  cap_env_struct_names;
     /* TS1: per-signature thunk typedef tracking */
     char    **thunk_typedef_names;
     uint32_t  n_thunk_typedef_names;

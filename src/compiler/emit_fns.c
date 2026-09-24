@@ -5105,7 +5105,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* Check if we've already emitted this env struct */
         bool already_emitted = false;
         if (ctx->env_struct_names) {
-            for (uint8_t i = 0; i < ctx->n_env_struct_names; i++) {
+            for (uint32_t i = 0; i < ctx->n_env_struct_names; i++) {
                 if (ctx->env_struct_names[i] == env_name) {
                     already_emitted = true;
                     break;

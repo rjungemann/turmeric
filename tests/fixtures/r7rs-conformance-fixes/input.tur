@@ -1,0 +1,114 @@
+#lang r7rs
+;; r7rs-lang-plan R10: the defects chibi's R7RS suite found, one probe each.
+;; Runs on both back ends (run.sh compiles it, run-turi.sh interprets it).
+(import (scheme base) (scheme write) (scheme read) (scheme lazy))
+
+(define (show x) (write x) (newline))
+
+;; A vector literal is a constant: its elements are data, not expressions.
+(show #(a b (c d) "s" 1))
+
+;; make-bytevector's fill is optional; equal? compares bytevectors.
+(show (bytevector-length (make-bytevector 3)))
+(show (equal? #u8(1 2) (bytevector 1 2)))
+
+;; A set! variable a lambda captures is shared, not copied: a do loop, a
+;; for-each lambda and two closures over one counter all see the same cell.
+(define (sum-to n)
+  (let ((sum 0))
+    (do ((i 0 (+ i 1))) ((= i n)) (set! sum (+ sum i)))
+    sum))
+(show (sum-to 5))
+(define (collect lst)
+  (let ((acc '()))
+    (for-each (lambda (x) (set! acc (cons x acc))) lst)
+    acc))
+(show (collect '(1 2 3)))
+(define (make-counter)
+  (let ((n 0))
+    (cons (lambda () n) (lambda () (set! n (+ n 1))))))
+(define ctr (make-counter))
+((cdr ctr))
+((cdr ctr))
+(show ((car ctr)))
+
+;; letrec* for internal defines: a value define may refer to itself.
+(show (let ()
+        (define count 0)
+        (define p
+          (delay (begin (set! count (+ count 1))
+                        (if (> count 5) count (force p)))))
+        (force p)))
+
+;; A thunk made in the body of an internal-define group sees the group.
+(define (run thunk) (thunk))
+(show (let ()
+        (define (quux) (bar))
+        (define (bar) 42)
+        (run (lambda () (quux)))))
+
+;; A binder named like a Turmeric special form is an ordinary variable.
+(define (first-negative lst)
+  (call/cc
+    (lambda (return)
+      (for-each (lambda (x) (if (negative? x) (return x))) lst)
+      #f)))
+(show (first-negative '(3 1 -4 1 -5)))
+
+;; A program's definition may reuse a name the Turmeric stdlib defines.
+(define list-length
+  (lambda (obj)
+    (call/cc
+      (lambda (return)
+        (letrec ((r (lambda (obj)
+                      (cond ((null? obj) 0)
+                            ((pair? obj) (+ (r (cdr obj)) 1))
+                            (else (return #f))))))
+          (r obj))))))
+(show (list (list-length '(1 2 3 4)) (list-length '(a b . c))))
+
+;; Quasiquote: an unquote under a quote still fires, and the long forms are
+;; the same as the abbreviations.
+(show (let ((name 'a)) `(list ,name ',name)))
+(show (quasiquote (list (unquote (+ 1 2)) 4)))
+
+;; syntax-rules: `_` in the literals matches only `_`; a literal ellipsis
+;; is not an ellipsis.
+(define-syntax count-to-2
+  (syntax-rules (_)
+    ((_) 0) ((_ _) 1) ((_ _ _) 2) ((x . y) 'fail)))
+(show (list (count-to-2 _ _) (count-to-2) (count-to-2 a b)))
+(define-syntax elli-lit
+  (syntax-rules ... (...)
+    ((_ x) '(x ...))))
+(show (elli-lit 100))
+
+;; Numbers: an inexact argument makes the integer division inexact, an
+;; inexact real has a numerator and denominator, and the number syntax is
+;; case-insensitive with the R5RS exponent markers.
+(call-with-values (lambda () (truncate/ -5.0 -2)) (lambda (q r) (show (list q r))))
+(show (list (numerator 5.5) (denominator 5.5) (numerator 6) (denominator 6)))
+(show (map string->number '("1s2" "+NaN.0" "-iNF.0" "7.25")))
+
+;; apply's errors are errors a program can catch.
+(show (guard (e (#t (error-object-message e))) (apply + 3)))
+(show (apply + 1 2 '(3)))
+
+;; write spells a symbol that would read as a number with bars.
+(show (list '|+i| '|\\x| '|+nan.0x| '+ '->x))
+
+;; The compiled back end, measured by building the whole suite as one program:
+;; an infinity literal (`%g` spelled it `inf`), letrec lambdas that take each
+;; other as VALUES, a global that is another procedure, and an operator
+;; chosen by `if`.
+(show (list +inf.0 -inf.0 (nan? +nan.0)))
+(show (letrec ((f (lambda () (if (eqv? f g) 'f 'both)))
+               (g (lambda () (if (eqv? f g) 'g 'both))))
+        (list (eqv? f g) (f) (g))))
+(define first car)
+(show (list (first '(1 2)) (map first '((3) (4)))))
+(show ((if #f + *) 3 4))
+(define add4
+  (let ((x 4))
+    (lambda (y) (+ x y))))
+(show (run (lambda () (add4 6))))

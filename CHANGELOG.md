@@ -6,6 +6,46 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs` conformance (R10).** chibi-scheme's R7RS test suite
+  (vendored under `tests/r7rs/` with its BSD licence) runs as the ctest target
+  `tur_r7rs_conformance`, which reports a pass count with a regression floor:
+  1036 of 1216 tests pass on both back ends. The first run passed 887 on the
+  interpreter, and the compiled program did not build. The suite found, and
+  R10 fixes:
+  - `set!` of a variable a lambda captures was lost on the compiled back end
+    (a `do` loop summing into an outer variable answered 0); the Scheme
+    lowering now boxes such variables.
+  - A binder named `return` (or any Turmeric special form) was that form.
+  - A program could not define a name an auto-loaded stdlib module defines
+    (`list-length`).
+  - Vector literals evaluated their elements.
+  - Quasiquote ignored an unquote under a quote and the long forms.
+  - `syntax-rules` treated a literal `_` as the wildcard and a literal
+    ellipsis as the ellipsis.
+  - Internal defines were not `letrec*`.
+  - Numeric fixes: inexact integer division; inexact `numerator` and
+    `denominator`; case-insensitive `+nan.0`/`+inf.0` and the R5RS exponent
+    markers.
+  - Catchable `apply` errors, `write`'s bars for number-like symbols, and
+    `make-bytevector`'s optional fill.
+
+  Outside the dialect:
+  - A typed parameter naming a record, forward-declared as `int`, was cast to
+    int from `any`.
+  - The interpreter's lifted lambdas could not see an enclosing `letrec`.
+  - A global `def` holding a closure was read in C before its declaration.
+  - `+inf.0` was emitted as the C identifier `inf`.
+  - The closure-env registry overflowed a `uint8_t` and crashed `tur` at 256
+    environments.
+  - `emit-c` spent quadratic time resolving callees; a table now makes the
+    suite's four-minute build take 42 seconds.
+
+  The one finding left open: a compiled closure still copies a captured
+  `^mut` in typed Turmeric and Saffron, so the two back ends disagree there
+  ([compiled-closure-copies-a-captured-mut](docs/reported/compiled-closure-copies-a-captured-mut.md)).
+  `tests/fixtures/r7rs-conformance-fixes`, `letrec-lifted-lambda-frame`,
+  `global-closure-def-called-in-lambda`; `r7rs-control`'s expected output had
+  recorded the `return` bug and is corrected.
 - **`#lang r7rs` tooling (R9).** `tur repl --lang r7rs` (and `#lang r7rs` at
   the prompt, which switched the language but kept Turmeric's preload and
   skipped the Scheme renames) with results echoed in Scheme's spelling; `tur

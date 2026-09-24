@@ -4453,7 +4453,7 @@ static const Expr *peel_fn_value(const Expr *e) {
 }
 
 /* Resolve a global fn binding to its FnDef by scanning the program items. */
-static const FnDef *fd_for_binding(const Expr *program, const Binding *b) {
+static const FnDef *fd_for_binding_scan(const Expr *program, const Binding *b) {
     if (!program || !b || program->kind != EX_PROGRAM) return NULL;
     uint32_t np = program->as.program.n;
     for (uint32_t i = 0; i < np; i++) {
@@ -4473,6 +4473,70 @@ static const FnDef *fd_for_binding(const Expr *program, const Binding *b) {
                     return mb->as.fn_def_.fn;
             }
         }
+    }
+    return NULL;
+}
+
+/* r7rs-lang-plan R10: the same answer through a Binding* -> FnDef* table.
+ * The scan above is linear in the program, and the effect walk asks it once
+ * per call node of every function it colors -- quadratic in program size.
+ * chibi's R7RS suite as one program (~1100 top-level forms over the stdlib)
+ * spent over four minutes of `emit-c` here.  The table is rebuilt whenever
+ * the program or its item count changes; first definition wins, as in the
+ * scan. */
+static const Expr     *fdc_prog;
+static uint32_t        fdc_np, fdc_cap;
+static const Binding **fdc_keys;
+static const FnDef   **fdc_vals;
+static uint32_t fdc_slot(const Binding *b) {
+    uintptr_t h = (uintptr_t)b;
+    h ^= h >> 17; h *= (uintptr_t)0x9E3779B97F4A7C15ull; h ^= h >> 29;
+    return (uint32_t)h & (fdc_cap - 1);
+}
+static void fdc_put(const Binding *b, const FnDef *fd) {
+    uint32_t k = fdc_slot(b);
+    while (fdc_keys[k] && fdc_keys[k] != b) k = (k + 1) & (fdc_cap - 1);
+    if (!fdc_keys[k]) { fdc_keys[k] = b; fdc_vals[k] = fd; }
+}
+static void fdc_build(const Expr *program) {
+    uint32_t np = program->as.program.n, n = 0;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        if (it->kind == EX_FN_DEF) n++;
+        else if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) n += it->as.defmodule_.mod->n_body;
+    }
+    uint32_t cap = 16;
+    while (cap < 2 * n + 2) cap <<= 1;
+    free((void *)fdc_keys); free((void *)fdc_vals);
+    fdc_keys = (const Binding **)calloc(cap, sizeof *fdc_keys);
+    fdc_vals = (const FnDef **)calloc(cap, sizeof *fdc_vals);
+    fdc_cap = cap;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        if (it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->binding)
+            fdc_put(it->as.fn_def_.fn->binding, it->as.fn_def_.fn);
+        if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) {
+            DefModule *m = it->as.defmodule_.mod;
+            for (uint32_t j = 0; j < m->n_body; j++) {
+                Expr *mb = m->body[j];
+                if (mb && mb->kind == EX_FN_DEF && mb->as.fn_def_.fn && mb->as.fn_def_.fn->binding)
+                    fdc_put(mb->as.fn_def_.fn->binding, mb->as.fn_def_.fn);
+            }
+        }
+    }
+    fdc_prog = program;
+    fdc_np = np;
+}
+static const FnDef *fd_for_binding(const Expr *program, const Binding *b) {
+    if (!program || !b || program->kind != EX_PROGRAM) return NULL;
+    if (program != fdc_prog || program->as.program.n != fdc_np || !fdc_keys) fdc_build(program);
+    if (!fdc_keys) return fd_for_binding_scan(program, b);
+    uint32_t k = fdc_slot(b);
+    while (fdc_keys[k]) {
+        if (fdc_keys[k] == b) return fdc_vals[k];
+        k = (k + 1) & (fdc_cap - 1);
     }
     return NULL;
 }
@@ -4787,6 +4851,7 @@ static void ensure_S(const Expr *program) {
     if (g_arena_live) { arena_free(&g_arena); g_arena_live = false; }
     free(g_ents); g_ents = NULL; g_ents_n = 0;
     g_prog = program;
+    fdc_prog = NULL;   /* a new classification: rebuild fd_for_binding's table */
     g_fwd_done = false;
     g_eff_n = 0;
     if (!program || program->kind != EX_PROGRAM) return;

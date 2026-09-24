@@ -1090,6 +1090,16 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_init_r7rs PROPERTIES TIMEOUT 600)
+# r7rs-lang-plan R10: chibi-scheme's R7RS test suite, as a pass COUNT with a
+# floor, so a regression fails and progress only needs the floor raised.  Both
+# back ends, about two minutes together.  Skips cleanly without python3.
+# RUN_SERIAL: the compiled pass is one large C build.
+add_test(
+  NAME tur_r7rs_conformance
+  COMMAND bash tests/run-r7rs-conformance.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_conformance PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
 # LOADED in a real Vim and queried for highlight groups -- which is what caught
 # the fused-vs-spaced annotation bug.  The vscode half is structure and pattern

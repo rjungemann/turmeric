@@ -10,6 +10,7 @@
 
 #include "diag.h"
 #include "lang_dialects.h"
+#include "expr.h"              /* R10: tur_name_is_reserved_special_form */
 #include "stdlib_autoload.h"   /* R3: which `(turmeric stdlib/x)` imports are no-ops */
 
 /* ---------------------------------------------------------------------------
@@ -402,6 +403,15 @@ typedef struct SL {
     uint32_t n_prefixes;
     struct { const Symbol *from, *to; } renames[64];
     uint32_t n_renames;
+    /* R10: a program's top-level define whose name an auto-loaded Turmeric
+     * stdlib module also defines (`list-length`, from tur/list) -- the
+     * program's name is spelled `<name>--user` throughout, so the two do not
+     * collide at C level ("already defined by an auto-loaded stdlib
+     * module").  The stdlib name is not in the Scheme namespace to begin
+     * with; the program's definition is the only one it sees. */
+    const Symbol **clash_from, **clash_to;
+    uint32_t n_clash, cap_clash;
+    bool in_user;   /* lowering the user's forms, not the prelude's */
     /* R3: the import forms produced so far (placed first in the module), and
      * a define-library under construction. */
     FB            imports;
@@ -737,6 +747,9 @@ static void collect_muts(SL *sl, const Form *f) {
 static const Symbol *rn(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_renames; i++)
         if (sl->renames[i].from == s) return sl->renames[i].to;
+    if (sl->in_user)
+        for (uint32_t i = 0; i < sl->n_clash; i++)
+            if (sl->clash_from[i] == s) return sl->clash_to[i];
     for (uint32_t i = 0; i < sl->n_prefixes; i++) {
         if (s->len > sl->prefixes[i].plen &&
             memcmp(s->name, sl->prefixes[i].prefix, sl->prefixes[i].plen) == 0) {
@@ -847,10 +860,14 @@ static void sr_push(SL *sl, SMacro *m) {
     }
     sl->macros[sl->n_macros++] = m;
 }
-static bool sr_is_ellipsis(const SMacro *m, const Form *f) { return f && f->tag == F_SYM && f->as.sym == m->ellipsis; }
 static bool sr_is_literal(const SMacro *m, const Symbol *s) {
     for (uint32_t i = 0; i < m->n_literals; i++) if (m->literals[i] == s) return true;
     return false;
+}
+/* R10: a literal has priority over the ellipsis (R7RS 4.3.2): with
+ * `(syntax-rules ... (...) ...)` the `...` matches and emits itself. */
+static bool sr_is_ellipsis(const SMacro *m, const Form *f) {
+    return f && f->tag == F_SYM && f->as.sym == m->ellipsis && !sr_is_literal(m, f->as.sym);
 }
 /* The items of a list form and its dotted tail (NULL when proper). */
 static void sr_parts(SL *sl, Form *f, Form ***items, uint32_t *n, Form **tail) {
@@ -951,10 +968,12 @@ static bool sr_match_items(SL *sl, const SMacro *m, Form **pi, uint32_t np, Form
 static bool sr_match(SL *sl, const SMacro *m, Form *pat, Form *form, MEnv *env) {
     switch (pat->tag) {
         case F_SYM:
-            if (pat->as.sym == sl->s_underscore) return true;
-            if (sr_is_ellipsis(m, pat)) { err(pat, "misplaced ellipsis in pattern"); return false; }
+            /* A literal first: `_` in the literals list matches only `_`
+             * (R7RS 4.3.2), it is not the wildcard. */
             if (sr_is_literal(m, pat->as.sym))
                 return form->tag == F_SYM && form->as.sym == pat->as.sym;
+            if (pat->as.sym == sl->s_underscore) return true;
+            if (sr_is_ellipsis(m, pat)) { err(pat, "misplaced ellipsis in pattern"); return false; }
             env_push(env, pat->as.sym, 0, form);
             return true;
         case F_NIL: case F_LIST: {
@@ -1710,6 +1729,54 @@ static Form *lower_letstar(SL *sl, Form *f) {
     return body;
 }
 
+/* R10: does the lowered `f` mention one of `names` other than as a call's
+ * head?  A letrec lambda that CALLS a sibling compiles to a direct call; one
+ * that takes a sibling as a VALUE (`(eqv? f g)`, `(map g xs)`) captures it,
+ * and the compiled letrec filled that capture before the sibling existed
+ * (cc: 'f_N' undeclared -- chibi's `(letrec ((f (lambda () (eqv? f g)))
+ * ...))`).  Over-approximates (a shadowing parameter counts): the fallback
+ * below is correct for every group, only slower. */
+static bool mentions_as_value(const Form *f, const Symbol **names, uint32_t n) {
+    if (!f) return false;
+    if (f->tag == F_SYM) {
+        for (uint32_t i = 0; i < n; i++) if (f->as.sym == names[i]) return true;
+        return false;
+    }
+    if (f->tag == F_QUOTE) return false;
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    for (uint32_t i = 0; i < f->as.list.len; i++) {
+        const Form *it = f->as.list.items[i];
+        if (i == 0 && f->tag == F_LIST && it->tag == F_SYM) continue;
+        if (mentions_as_value(it, names, n)) return true;
+    }
+    return false;
+}
+/* A letrec over `pairs` (renamed name, lowered init, alternating; consumed).
+ * When some init takes a group member as a value, the group is instead a set
+ * of `any` cells assigned in order -- letrec* (R7RS 4.2.2) -- which the
+ * assignment conversion then turns into shared boxes. */
+static Form *make_letrec(SL *sl, Span sp, FB *pairs, Form *body) {
+    uint32_t n = pairs->n / 2;
+    const Symbol **names = (const Symbol **)arena_alloc(sl->a, (n + 1) * sizeof(*names));
+    for (uint32_t i = 0; i < n; i++) names[i] = pairs->items[2 * i]->as.sym;
+    bool as_value = false;
+    for (uint32_t i = 0; i < n && !as_value; i++)
+        as_value = mentions_as_value(pairs->items[2 * i + 1], names, n);
+    if (!as_value) return Ln(sl, sp, 3, Sym(sl, sp, sl->t_letrec), fb_vec(sl, pairs, sp), body);
+    FB cells = {0}, seq = {0};
+    fb_push(&seq, Sym(sl, sp, sl->t_do));
+    for (uint32_t i = 0; i < n; i++) {
+        fb_push(&cells, Sym(sl, sp, sl->t_mut));
+        fb_push(&cells, Sym(sl, sp, names[i]));
+        fb_push(&cells, AnyAnn(sl, sp));
+        fb_push(&cells, Bool(sl, sp, false));
+        fb_push(&seq, Ln(sl, sp, 3, Sym(sl, sp, sl->s_set), Sym(sl, sp, names[i]), pairs->items[2 * i + 1]));
+    }
+    free(pairs->items);
+    fb_push(&seq, body);
+    return Ln(sl, sp, 3, Sym(sl, sp, sl->t_let), fb_vec(sl, &cells, sp), fb_list(sl, &seq, sp));
+}
+
 /* letrec / letrec*: Turmeric's letrec (a lambda may name any sibling). */
 static Form *lower_letrec(SL *sl, Form *f) {
     Span sp = f->span;
@@ -1724,7 +1791,7 @@ static Form *lower_letrec(SL *sl, Form *f) {
     }
     Form *body = lower_body(sl, f->as.list.items + 2, f->as.list.len - 2, sp);
     if (n == 0) { free(b.items); return body; }
-    return Ln(sl, sp, 3, Sym(sl, sp, sl->t_letrec), fb_vec(sl, &b, sp), body);
+    return make_letrec(sl, sp, &b, body);
 }
 
 /* A Scheme `do` loop has the shape (do ((var init step)...) (test res...)
@@ -2297,10 +2364,23 @@ static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp) {
                 fb_push(&b, Sym(sl, sp, rn(sl, names[k])));
                 fb_push(&b, inits[k]);
             }
-            body = Ln(sl, sp, 3, Sym(sl, sp, sl->t_letrec), fb_vec(sl, &b, sp), body);
+            body = make_letrec(sl, sp, &b, body);
             i = j - 1;
         } else {
-            body = make_let(sl, sp, names + i, inits + i, 1, body);
+            const Symbol *self = rn(sl, names[i]);
+            if (form_mentions_sym(inits[i], self)) {
+                /* R10: letrec* (R7RS 5.3.2) -- a value define whose own init
+                 * refers to it, as `(define p (delay ... (force p)))` does.
+                 * A plain `let` left that `p` unbound; bind a cell first and
+                 * `set!` it, so the init's closure sees the finished value. */
+                FB b = {0};
+                push_binding(sl, &b, sp, names[i], Bool(sl, sp, false), true);
+                Form *store = Ln(sl, sp, 3, Sym(sl, sp, sl->s_set), Sym(sl, sp, self), inits[i]);
+                body = Ln(sl, sp, 3, Sym(sl, sp, sl->t_let), fb_vec(sl, &b, sp),
+                          Ln(sl, sp, 3, Sym(sl, sp, sl->t_do), store, body));
+            } else {
+                body = make_let(sl, sp, names + i, inits + i, 1, body);
+            }
             i--;
         }
     }
@@ -2367,6 +2447,29 @@ static Form *lower_datum(SL *sl, Form *d) {
  * a nested quasiquote raises the depth and its unquotes lower it, staying
  * data (R7RS 4.2.8). */
 static Form *lower_qq(SL *sl, Form *f, int depth);
+/* R10: `,x` and `(unquote x)` are the same datum (R7RS 4.2.8), as are the
+ * other three abbreviations and their long forms.  The kind of `f` -- one of
+ * F_QUOTE / F_QUASIQUOTE / F_UNQUOTE / F_UNQUOTE_SPLICING -- or F_LIST when
+ * it is neither; `*arg` is the one operand. */
+static FormTag qq_kind(SL *sl, Form *f, Form **arg) {
+    switch (f->tag) {
+        case F_QUOTE: case F_QUASIQUOTE: case F_UNQUOTE: case F_UNQUOTE_SPLICING:
+            *arg = f->as.list.items[0];
+            return f->tag;
+        case F_LIST:
+            if (f->as.list.len == 2 && f->as.list.items[0]->tag == F_SYM) {
+                const Symbol *h = f->as.list.items[0]->as.sym;
+                *arg = f->as.list.items[1];
+                if (h == sl->s_quasiquote) return F_QUASIQUOTE;
+                if (h == sl->s_unquote) return F_UNQUOTE;
+                if (h == sl->s_unquote_splicing) return F_UNQUOTE_SPLICING;
+                if (h == I(sl, "quote")) return F_QUOTE;
+            }
+            return F_LIST;
+        default:
+            return f->tag;
+    }
+}
 static Form *qq_list(SL *sl, Form *f, int depth) {
     Span sp = f->span;
     uint32_t n = f->as.list.len;
@@ -2380,9 +2483,9 @@ static Form *qq_list(SL *sl, Form *f, int depth) {
         last = (int32_t)n - 1;
     }
     for (int32_t i = last; i >= 0; i--) {
-        Form *it = f->as.list.items[i];
-        if (it->tag == F_UNQUOTE_SPLICING && depth == 1)
-            tail = Ln(sl, sp, 3, Sym(sl, sp, sl->p_append), lower(sl, it->as.list.items[0]), tail);
+        Form *it = f->as.list.items[i], *arg = NULL;
+        if (qq_kind(sl, it, &arg) == F_UNQUOTE_SPLICING && depth == 1)
+            tail = Ln(sl, sp, 3, Sym(sl, sp, sl->p_append), lower(sl, arg), tail);
         else
             tail = Ln(sl, sp, 3, Sym(sl, sp, sl->p_cons), lower_qq(sl, it, depth), tail);
     }
@@ -2390,20 +2493,27 @@ static Form *qq_list(SL *sl, Form *f, int depth) {
 }
 static Form *lower_qq(SL *sl, Form *f, int depth) {
     Span sp = f->span;
-    switch (f->tag) {
+    Form *arg = NULL;
+    switch (qq_kind(sl, f, &arg)) {
         case F_UNQUOTE:
-            if (depth == 1) return lower(sl, f->as.list.items[0]);
+            if (depth == 1) return lower(sl, arg);
             return Ln(sl, sp, 3, Sym(sl, sp, sl->p_list),
                       form_quote(sl->a, sp, Sym(sl, sp, sl->s_unquote)),
-                      lower_qq(sl, f->as.list.items[0], depth - 1));
+                      lower_qq(sl, arg, depth - 1));
         case F_UNQUOTE_SPLICING:
             return Ln(sl, sp, 3, Sym(sl, sp, sl->p_list),
                       form_quote(sl->a, sp, Sym(sl, sp, sl->s_unquote_splicing)),
-                      lower_qq(sl, f->as.list.items[0], depth - 1));
+                      lower_qq(sl, arg, depth - 1));
         case F_QUASIQUOTE:
             return Ln(sl, sp, 3, Sym(sl, sp, sl->p_list),
                       form_quote(sl->a, sp, Sym(sl, sp, sl->s_quasiquote)),
-                      lower_qq(sl, f->as.list.items[0], depth + 1));
+                      lower_qq(sl, arg, depth + 1));
+        case F_QUOTE:
+            /* R10: `',x` is `(quote (unquote x))` -- a quote does not change
+             * the quasiquote level, so the unquote inside it still fires. */
+            return Ln(sl, sp, 3, Sym(sl, sp, sl->p_list),
+                      form_quote(sl->a, sp, Sym(sl, sp, I(sl, "quote"))),
+                      lower_qq(sl, arg, depth));
         case F_LIST:
             if (is_char_form(sl, f)) return f;
             return qq_list(sl, f, depth);
@@ -2443,31 +2553,40 @@ static Form *lower(SL *sl, Form *f) {
              * itself forever. */
             if (prelude_span(f->span)) return f;
             int op = op_index(sl, f->as.sym);
-            if (op >= 0) return Sym(sl, f->span, sl->ops_val[op]);
+            /* R10: an operator as a VALUE is the variadic prelude procedure,
+             * as an `any` -- `((if #f + *) 3 4)` merged two fn types into a
+             * C function pointer spelled from carrier kinds, which cc rejects
+             * as incompatible pointer types (an error from GCC 14). */
+            if (op >= 0)
+                return Ln(sl, f->span, 3, Sym(sl, f->span, I(sl, "::")),
+                          Sym(sl, f->span, sl->ops_val[op]), Sym(sl, f->span, sl->t_any));
             const Symbol *r = rn(sl, f->as.sym);
             return (r == f->as.sym) ? f : Sym(sl, f->span, r);
         }
         case F_QUOTE:      return lower_datum(sl, f->as.list.items[0]);
         case F_QUASIQUOTE: return lower_qq(sl, f->as.list.items[0], 1);
+        case F_LIST: {
+            /* R10: `(quasiquote x)` written out is the same as `` `x ``. */
+            Form *arg = NULL;
+            if (!prelude_span(f->span) && qq_kind(sl, f, &arg) == F_QUASIQUOTE &&
+                !sr_lookup(sl, sl->s_quasiquote))
+                return lower_qq(sl, arg, 1);
+            break;
+        }
         case F_VEC:
-            /* R7: a vector is self-evaluating (R7RS 4.1.2), and it is built
-             * the way a quoted one is -- through `vector`, so it is always a
-             * `(Vec any)`.  Left as Turmeric's `[...]`, an empty `#()` did
-             * not elaborate as `(Vec any)` and failed the cast at the first
-             * procedure that takes a vector through `any`.  Only a vector the
-             * reader read from `#(` (PROV_SCHEME_VECTOR): a Turmeric-shaped
-             * `(defn f [x] ...)` in a Scheme file keeps its binding vector. */
-            if (!prelude_span(f->span) && f->fx_prov == PROV_SCHEME_VECTOR) {
-                FB b = {0};
-                fb_push(&b, Sym(sl, f->span, sl->p_vector));
-                for (uint32_t i = 0; i < f->as.list.len; i++) fb_push(&b, lower(sl, f->as.list.items[i]));
-                return fb_list(sl, &b, f->span);
-            }
+            /* R7: a vector is self-evaluating (R7RS 4.1.2): `#(a b c)` is
+             * the constant `'#(a b c)`, its elements DATA, not expressions to
+             * evaluate (R10: chibi's suite writes `(test #(a b c) ...)`).  So
+             * it is built exactly as a quoted one -- through `vector`, always
+             * a `(Vec any)`.  Only a vector the reader read from `#(`
+             * (PROV_SCHEME_VECTOR): a Turmeric-shaped `(defn f [x] ...)` in a
+             * Scheme file keeps its binding vector. */
+            if (!prelude_span(f->span) && f->fx_prov == PROV_SCHEME_VECTOR)
+                return lower_datum(sl, f);
             return lower_children(sl, f);
         case F_MAP: case F_SET: case F_MAP_LITERAL: case F_SET_LITERAL:
         case F_UNQUOTE: case F_UNQUOTE_SPLICING:
             return lower_children(sl, f);
-        case F_LIST: break;
         default: return f;
     }
     if (f->as.list.len == 0) return Ln(sl, f->span, 1, Sym(sl, f->span, sl->p_list));
@@ -2649,6 +2768,14 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
             return;
         }
         Form *init = lower(sl, f->as.list.items[2]);
+        /* R10: `(define first car)` -- a global that IS another procedure.
+         * Left bare, it became a thin C function pointer whose declared
+         * parameters were the carrier `int64_t` while the aliased procedure
+         * takes a typed struct (cc: incompatible-pointer / int-conversion, an
+         * error from GCC 14).  As an `any` it is called through the dynamic
+         * path, like every other Scheme procedure value. */
+        if (init->tag == F_SYM && !is_mut(sl, name))
+            init = Ln(sl, sp, 3, Sym(sl, sp, I(sl, "::")), init, Sym(sl, sp, sl->t_any));
         if (is_mut(sl, name)) {
             fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_def), Sym(sl, sp, sl->t_mut),
                             Sym(sl, sp, name), AnyAnn(sl, sp), init));
@@ -3041,6 +3168,307 @@ bool scheme_lower_needed(Form *const *forms, uint32_t n) {
     return false;
 }
 
+/* ---- R10: assignment conversion -----------------------------------------
+ *
+ * A compiled closure COPIES the variables it captures into its environment.
+ * That is right for a variable nothing assigns, and wrong for one that is
+ * `set!`: `(let ((sum 0)) (do ((i 0 (+ i 1))) ((= i n)) (set! sum (+ sum
+ * i))) sum)` answered 0, because the `do` loop is a lambda and its `set!`
+ * updated the loop's copy.  The interpreter's frames are shared, so it said
+ * 10 -- the back ends disagreed on a basic R7RS program.
+ *
+ * The textbook fix, on the lowered forms: a `^mut` `let` binding that a
+ * nested `fn` mentions becomes a heap cell (`R7rsBox`, the prelude), bound
+ * once and never reassigned, so every closure's copy is the same pointer.
+ * Each read of the name in its scope becomes `(r7rs-unbox__ n)` and each
+ * `(set! n v)` becomes `(r7rs-box-set!__ n v)`; a scope that rebinds the name
+ * (a `let`, `letrec`, `fn` or `defn` parameter) stops the rewrite.  A `set!`
+ * variable no lambda sees keeps its plain mutable cell. */
+static bool ac_is_set(SL *sl, const Form *f) {
+    return f->tag == F_LIST && f->as.list.len == 3 &&
+           (is_sym(f->as.list.items[0], sl->t_set) || is_sym(f->as.list.items[0], sl->s_set));
+}
+static bool ac_vec_binds(const Form *pv, const Symbol *n) {
+    if (!pv || pv->tag != F_VEC) return false;
+    for (uint32_t i = 0; i < pv->as.list.len; i++)
+        if (is_sym(pv->as.list.items[i], n)) return true;
+    return false;
+}
+/* One binding of a lowered `let` vector: `[^marker] name [: T] init`. */
+typedef struct { uint32_t name, init; bool mut; } AcBind;
+static uint32_t ac_parse_binds(SL *sl, const Form *v, AcBind *out) {
+    uint32_t n = 0, i = 0, len = v->as.list.len;
+    while (i < len) {
+        bool mut = false;
+        const Form *it = v->as.list.items[i];
+        if (it->tag == F_SYM && it->as.sym->name[0] == '^') { mut = it->as.sym == sl->t_mut; i++; }
+        if (i >= len) break;
+        uint32_t name = i++;
+        if (i < len && v->as.list.items[i]->tag == F_TYPE_ANN) i++;
+        if (i >= len) break;
+        out[n].name = name; out[n].init = i++; out[n].mut = mut;
+        n++;
+    }
+    return n;
+}
+static Form *ac_copy(SL *sl, const Form *f, Form **items) {
+    Form *c = (Form *)arena_alloc(sl->a, sizeof(Form));
+    *c = *f;
+    c->as.list.items = items;
+    return c;
+}
+static bool ac_captured(SL *sl, const Symbol *n, const Form *f, bool inside) {
+    if (!f) return false;
+    if (f->tag == F_SYM) return inside && f->as.sym == n;
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    uint32_t from = 0;
+    if (head_is(f, sl->t_fn) && f->as.list.len >= 2) {
+        if (ac_vec_binds(f->as.list.items[1], n)) return false;
+        inside = true; from = 2;
+    } else if (head_is(f, sl->t_defn) && f->as.list.len >= 3) {
+        if (ac_vec_binds(f->as.list.items[2], n)) return false;
+        inside = true; from = 3;
+    }
+    for (uint32_t i = from; i < f->as.list.len; i++)
+        if (ac_captured(sl, n, f->as.list.items[i], inside)) return true;
+    return false;
+}
+static Form *ac_subst(SL *sl, const Symbol *n, Form *f);
+/* `f` with items[from..] substituted; `f` itself when nothing changed. */
+static Form *ac_subst_from(SL *sl, const Symbol *n, Form *f, uint32_t from) {
+    uint32_t len = f->as.list.len;
+    Form **ni = NULL;
+    for (uint32_t i = from; i < len; i++) {
+        Form *x = ac_subst(sl, n, f->as.list.items[i]);
+        if (x != f->as.list.items[i] && !ni) {
+            ni = (Form **)arena_alloc(sl->a, len * sizeof(Form *));
+            memcpy(ni, f->as.list.items, len * sizeof(Form *));
+        }
+        if (ni) ni[i] = x;
+    }
+    return ni ? ac_copy(sl, f, ni) : f;
+}
+static Form *ac_subst(SL *sl, const Symbol *n, Form *f) {
+    if (!f) return f;
+    Span sp = f->span;
+    if (f->tag == F_SYM)
+        return f->as.sym == n ? Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-unbox__")), f) : f;
+    if (f->tag != F_LIST && f->tag != F_VEC) return f;
+    if (f->tag == F_LIST && ac_is_set(sl, f) && is_sym(f->as.list.items[1], n))
+        return Ln(sl, sp, 3, Sym(sl, sp, I(sl, "r7rs-box-set!__")), f->as.list.items[1],
+                  ac_subst(sl, n, f->as.list.items[2]));
+    if (head_is(f, sl->t_fn) && f->as.list.len >= 2)
+        return ac_vec_binds(f->as.list.items[1], n) ? f : ac_subst_from(sl, n, f, 2);
+    if (head_is(f, sl->t_defn) && f->as.list.len >= 3)
+        return ac_vec_binds(f->as.list.items[2], n) ? f : ac_subst_from(sl, n, f, 3);
+    if (head_is(f, sl->t_letrec) && f->as.list.len >= 2)
+        return ac_vec_binds(f->as.list.items[1], n) ? f : ac_subst_from(sl, n, f, 1);
+    if (head_is(f, sl->t_let) && f->as.list.len >= 2 && f->as.list.items[1]->tag == F_VEC) {
+        /* Sequential: each init sees the bindings before it, so the rewrite
+         * runs through the inits and stops after the one that rebinds `n`. */
+        Form *v = f->as.list.items[1];
+        AcBind *bs = (AcBind *)arena_alloc(sl->a, (v->as.list.len + 1) * sizeof(AcBind));
+        uint32_t nb = ac_parse_binds(sl, v, bs);
+        Form **vi = (Form **)arena_alloc(sl->a, (v->as.list.len + 1) * sizeof(Form *));
+        memcpy(vi, v->as.list.items, v->as.list.len * sizeof(Form *));
+        bool shadowed = false;
+        for (uint32_t k = 0; k < nb && !shadowed; k++) {
+            vi[bs[k].init] = ac_subst(sl, n, v->as.list.items[bs[k].init]);
+            if (is_sym(v->as.list.items[bs[k].name], n)) shadowed = true;
+        }
+        Form **li = (Form **)arena_alloc(sl->a, f->as.list.len * sizeof(Form *));
+        memcpy(li, f->as.list.items, f->as.list.len * sizeof(Form *));
+        li[1] = ac_copy(sl, v, vi);
+        if (!shadowed)
+            for (uint32_t i = 2; i < f->as.list.len; i++) li[i] = ac_subst(sl, n, f->as.list.items[i]);
+        return ac_copy(sl, f, li);
+    }
+    return ac_subst_from(sl, n, f, 0);
+}
+/* Convert binding number `k` of the `let` form `f` (already walked). */
+static Form *ac_convert(SL *sl, Form *f, uint32_t k) {
+    Form *v = f->as.list.items[1];
+    uint32_t vlen = v->as.list.len;
+    AcBind *bs = (AcBind *)arena_alloc(sl->a, (vlen + 1) * sizeof(AcBind));
+    uint32_t nb = ac_parse_binds(sl, v, bs);
+    const Symbol *n = v->as.list.items[bs[k].name]->as.sym;
+    Span sp = v->as.list.items[bs[k].name]->span;
+    FB nv = {0};
+    bool shadowed = false;
+    for (uint32_t j = 0; j < nb; j++) {
+        uint32_t start = j == 0 ? 0 : bs[j - 1].init + 1;
+        if (j == k) {
+            fb_push(&nv, v->as.list.items[bs[j].name]);
+            fb_push(&nv, Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-box__")), v->as.list.items[bs[j].init]));
+            continue;
+        }
+        for (uint32_t i = start; i < bs[j].init; i++) fb_push(&nv, v->as.list.items[i]);
+        Form *init = v->as.list.items[bs[j].init];
+        fb_push(&nv, (j > k && !shadowed) ? ac_subst(sl, n, init) : init);
+        if (j > k && is_sym(v->as.list.items[bs[j].name], n)) shadowed = true;
+    }
+    Form **li = (Form **)arena_alloc(sl->a, f->as.list.len * sizeof(Form *));
+    memcpy(li, f->as.list.items, f->as.list.len * sizeof(Form *));
+    li[1] = fb_vec(sl, &nv, v->span);
+    if (!shadowed)
+        for (uint32_t i = 2; i < f->as.list.len; i++) li[i] = ac_subst(sl, n, f->as.list.items[i]);
+    return ac_copy(sl, f, li);
+}
+static Form *ac_walk(SL *sl, Form *f) {
+    if (!f || (f->tag != F_LIST && f->tag != F_VEC)) return f;
+    uint32_t len = f->as.list.len;
+    Form **ni = NULL;
+    for (uint32_t i = 0; i < len; i++) {
+        Form *x = ac_walk(sl, f->as.list.items[i]);
+        if (x != f->as.list.items[i] && !ni) {
+            ni = (Form **)arena_alloc(sl->a, len * sizeof(Form *));
+            memcpy(ni, f->as.list.items, len * sizeof(Form *));
+        }
+        if (ni) ni[i] = x;
+    }
+    Form *g = ni ? ac_copy(sl, f, ni) : f;
+    if (!(head_is(g, sl->t_let) && len >= 2 && g->as.list.items[1]->tag == F_VEC)) return g;
+    uint32_t vlen = g->as.list.items[1]->as.list.len;
+    AcBind *bs = (AcBind *)arena_alloc(sl->a, (vlen + 1) * sizeof(AcBind));
+    uint32_t nb = ac_parse_binds(sl, g->as.list.items[1], bs);
+    for (uint32_t k = 0; k < nb; k++) {
+        /* Re-parse: a conversion drops the `^mut` marker and the annotation,
+         * which moves the later bindings' indices (never their ordinals). */
+        Form *v = g->as.list.items[1];
+        nb = ac_parse_binds(sl, v, bs);
+        if (k >= nb || !bs[k].mut) continue;
+        const Symbol *n = v->as.list.items[bs[k].name]->as.sym;
+        bool cap = false;
+        for (uint32_t j = k + 1; j < nb && !cap; j++)
+            cap = ac_captured(sl, n, v->as.list.items[bs[j].init], false);
+        for (uint32_t i = 2; i < g->as.list.len && !cap; i++)
+            cap = ac_captured(sl, n, g->as.list.items[i], false);
+        if (cap) g = ac_convert(sl, g, k);
+    }
+    return g;
+}
+
+/* R10: the names the stdlib forms ahead of the program define -- every
+ * `defn`/`def`/`defmacro` at the top of a non-Scheme form or directly inside
+ * its `defmodule`. */
+static void stdlib_names_of(SL *sl, const Form *f, FB *out, int depth) {
+    if (!f || f->tag != F_LIST || f->as.list.len < 2 || f->as.list.items[0]->tag != F_SYM) return;
+    const char *h = f->as.list.items[0]->as.sym->name;
+    if (strcmp(h, "defmodule") == 0 && depth == 0) {
+        for (uint32_t i = 2; i < f->as.list.len; i++) stdlib_names_of(sl, f->as.list.items[i], out, 1);
+        return;
+    }
+    if (strcmp(h, "defn") && strcmp(h, "def") && strcmp(h, "defmacro")) return;
+    for (uint32_t i = 1; i < f->as.list.len; i++) {
+        const Form *x = f->as.list.items[i];
+        if (x->tag != F_SYM) continue;
+        if (x->as.sym->name[0] == '^') continue;
+        fb_push(out, (Form *)x);
+        return;
+    }
+}
+static void user_define_names(SL *sl, const Form *f, FB *out) {
+    if (head_is(f, sl->s_begin)) {
+        for (uint32_t i = 1; i < f->as.list.len; i++) user_define_names(sl, f->as.list.items[i], out);
+        return;
+    }
+    if (!head_is(f, sl->s_define) || f->as.list.len < 2) return;
+    Form *t = f->as.list.items[1];
+    while (t->tag == F_LIST && t->as.list.len >= 1) t = t->as.list.items[0];  /* (define ((f a) b) ...) */
+    if (t->tag == F_SYM) fb_push(out, t);
+}
+/* R10: every identifier the user's Scheme code BINDS -- formals, `let`-family
+ * and `do` variables, named-let names, `guard` variables.  One named like a
+ * Turmeric special form (`return`, `handle`, `perform`, `resume`, ...) was
+ * elaborated AS that form wherever it headed a call: chibi's
+ * `(call/cc (lambda (return) ... (return #f)))` compiled to an early return
+ * (invalid C) and returned #f into a `+` on the interpreter. */
+static void binders_of_formals(const Form *f, FB *out) {
+    if (!f) return;
+    if (f->tag == F_SYM) { fb_push(out, (Form *)f); return; }
+    if (f->tag == F_LIST || f->tag == F_VEC)
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            if (f->as.list.items[i]->tag == F_SYM) fb_push(out, f->as.list.items[i]);
+}
+static void binders_of_bindings(const Form *b, FB *out) {
+    if (!b || b->tag != F_LIST) return;
+    for (uint32_t i = 0; i < b->as.list.len; i++) {
+        const Form *x = b->as.list.items[i];
+        if (x->tag == F_LIST && x->as.list.len >= 1) binders_of_formals(x->as.list.items[0], out);
+    }
+}
+static void user_binders(SL *sl, const Form *f, FB *out) {
+    if (!f || f->tag == F_QUOTE) return;
+    if (f->tag != F_LIST && f->tag != F_VEC) return;
+    uint32_t len = f->as.list.len;
+    if (f->tag == F_LIST && len >= 2) {
+        const Form *h = f->as.list.items[0];
+        if (is_sym(h, sl->s_lambda)) binders_of_formals(f->as.list.items[1], out);
+        else if (is_sym(h, sl->s_define) && f->as.list.items[1]->tag == F_LIST)
+            binders_of_formals(f->as.list.items[1], out);
+        else if (is_sym(h, sl->s_let) || is_sym(h, sl->s_letstar) || is_sym(h, sl->s_letrec) ||
+                 is_sym(h, sl->s_letrecstar) || is_sym(h, sl->s_do) ||
+                 is_sym(h, sl->s_let_values) || is_sym(h, sl->s_letstar_values)) {
+            const Form *b = f->as.list.items[1];
+            if (b->tag == F_SYM && len >= 3) { fb_push(out, (Form *)b); b = f->as.list.items[2]; }
+            binders_of_bindings(b, out);
+        } else if (is_sym(h, sl->s_case_lambda)) {
+            for (uint32_t i = 1; i < len; i++)
+                if (f->as.list.items[i]->tag == F_LIST && f->as.list.items[i]->as.list.len >= 1)
+                    binders_of_formals(f->as.list.items[i]->as.list.items[0], out);
+        } else if (is_sym(h, sl->s_guard) && f->as.list.items[1]->tag == F_LIST &&
+                   f->as.list.items[1]->as.list.len >= 1 &&
+                   f->as.list.items[1]->as.list.items[0]->tag == F_SYM) {
+            fb_push(out, f->as.list.items[1]->as.list.items[0]);
+        }
+    }
+    for (uint32_t i = 0; i < len; i++) user_binders(sl, f->as.list.items[i], out);
+}
+static void add_clash(SL *sl, const Symbol *s) {
+    for (uint32_t i = 0; i < sl->n_clash; i++) if (sl->clash_from[i] == s) return;
+    if (sl->n_clash == sl->cap_clash) {
+        sl->cap_clash = sl->cap_clash ? sl->cap_clash * 2 : 8;
+        sl->clash_from = (const Symbol **)realloc((void *)sl->clash_from, sl->cap_clash * sizeof(Symbol *));
+        sl->clash_to = (const Symbol **)realloc((void *)sl->clash_to, sl->cap_clash * sizeof(Symbol *));
+        if (!sl->clash_from || !sl->clash_to) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    char buf[256];
+    snprintf(buf, sizeof buf, "%s--user", s->name);
+    sl->clash_from[sl->n_clash] = s;
+    sl->clash_to[sl->n_clash++] = I(sl, buf);
+}
+static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
+    FB lib = {0}, user = {0};
+    bool library = false;
+    for (uint32_t i = 0; i < n; i++) {
+        if (!is_scheme_file(forms[i])) stdlib_names_of(sl, forms[i], &lib, 0);
+        else if (!prelude_span(forms[i]->span)) {
+            if (head_is(forms[i], sl->s_define_library)) library = true;
+            user_define_names(sl, forms[i], &user);
+        }
+    }
+    /* A library's names live in its module and are exported by name. */
+    if (!library) {
+        for (uint32_t u = 0; u < user.n; u++) {
+            const Symbol *s = user.items[u]->as.sym;
+            if (rn(sl, s) != s) continue;   /* a standard name: R7RS 5.2 */
+            bool clash = false;
+            for (uint32_t k = 0; k < lib.n && !clash; k++) clash = lib.items[k]->as.sym == s;
+            if (clash) add_clash(sl, s);
+        }
+    }
+    FB binders = {0};
+    for (uint32_t i = 0; i < n; i++)
+        if (is_scheme_file(forms[i]) && !prelude_span(forms[i]->span)) user_binders(sl, forms[i], &binders);
+    for (uint32_t b = 0; b < binders.n; b++) {
+        const Symbol *s = binders.items[b]->as.sym;
+        if (rn(sl, s) == s && tur_name_is_reserved_special_form(s->name)) add_clash(sl, s);
+    }
+    free(binders.items);
+    free(lib.items);
+    free(user.items);
+}
+
 Form **scheme_lower_program(Arena *a, SymbolTable *st,
                             Form *const *forms, uint32_t n, uint32_t *out_n) {
     SL sl;
@@ -3049,6 +3477,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
         if (is_scheme_file(forms[i])) collect_setter_macros(&sl, forms[i]);
     for (uint32_t i = 0; i < n; i++)
         if (is_scheme_file(forms[i])) collect_muts(&sl, forms[i]);
+    note_stdlib_clashes(&sl, forms, n);
     FB out = {0}, sforms = {0};
     Span first_sp = SPAN_UNKNOWN;
     bool have_first = false;
@@ -3061,12 +3490,19 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
              * library build was refused over the prelude's first defstruct)
              * nor of the module a program with imports is wrapped in. */
             FB pf = {0};
+            sl.in_user = false;
             lower_toplevel(&sl, forms[i], &pf);
             for (uint32_t k = 0; k < pf.n; k++) fb_push(&out, pf.items[k]);
             free(pf.items);
         } else if (is_scheme_file(forms[i])) {
             if (!have_first) { first_sp = forms[i]->span; have_first = true; }
+            uint32_t from = sforms.n, lib_from = sl.lib_body.n;
+            sl.in_user = true;
             lower_toplevel(&sl, forms[i], &sforms);
+            sl.in_user = false;
+            for (uint32_t k = from; k < sforms.n; k++) sforms.items[k] = ac_walk(&sl, sforms.items[k]);
+            for (uint32_t k = lib_from; k < sl.lib_body.n; k++)
+                sl.lib_body.items[k] = ac_walk(&sl, sl.lib_body.items[k]);
         } else {
             fb_push(&out, forms[i]);
         }
@@ -3141,6 +3577,8 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     *out_n = out.n;
     free(out.items);
     free((void *)sl.muts);
+    free((void *)sl.clash_from);
+    free((void *)sl.clash_to);
     free((void *)sl.setters);
     free(sl.macros);
     return res;

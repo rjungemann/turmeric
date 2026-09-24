@@ -53,7 +53,7 @@ void emit_env_struct_register(EmitCtx *ctx, const Symbol *env_name,
  * -- the registry owns it. */
 const char *emit_env_struct_fn_typedef(EmitCtx *ctx, const Symbol *env_name) {
     if (!ctx->env_struct_names || !ctx->env_struct_fn_typedefs) return NULL;
-    for (uint8_t i = 0; i < ctx->n_env_struct_names; i++)
+    for (uint32_t i = 0; i < ctx->n_env_struct_names; i++)
         if (ctx->env_struct_names[i] == env_name)
             return ctx->env_struct_fn_typedefs[i];
     return NULL;
@@ -65,7 +65,7 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
                                       bool resolve_spec_params) {
     bool already_emitted = false;
     if (ctx->env_struct_names) {
-        for (uint8_t i = 0; i < ctx->n_env_struct_names; i++) {
+        for (uint32_t i = 0; i < ctx->n_env_struct_names; i++) {
             if (ctx->env_struct_names[i] == env_name) {
                 already_emitted = true;
                 break;

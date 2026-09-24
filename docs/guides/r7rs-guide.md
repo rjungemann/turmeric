@@ -211,6 +211,31 @@ signature. `tests/run-r7rs-import.sh` pins both directions on both back ends.
   `define` is the case to watch. Put such code inside a procedure; the
   interpreter evaluates in order either way.
 - **`command-line`** starts with `"tur"`, not the program's own path.
+- **`'nil` is the empty list.** The symbol `nil` is Turmeric's nil value, so
+  `(symbol? 'nil)` is `#f`. Every other symbol is an ordinary symbol.
+
+## Conformance
+
+chibi-scheme's R7RS test suite (`tests/r7rs/chibi-r7rs-tests.scm`) runs as
+the ctest target `tur_r7rs_conformance`, which reports a count rather than a
+verdict:
+
+```sh
+bash tests/run-r7rs-conformance.sh      # both back ends, about two minutes
+python3 tests/r7rs/run-conformance.py --backend interp --list-failures
+```
+
+**1036 of the 1216 tests** written in the suite pass, the same on the
+interpreter and the compiled back end. Nearly all the rest are the
+differences listed above: bignums and exact rationals (`1/2`, `(expt 2
+100)`), complex numbers (`3+4i`), non-ASCII case mapping and
+`char-alphabetic?`, the three string mutators, `eval` and `environment`, and
+re-entering a continuation. What remains after those is a handful of hygiene
+corners (a macro-introduced binding that captures, a pattern variable reused
+as a nested macro's literal) and `'nil`, which reads as the empty list.
+
+The target fails only when the count drops below its floor, so raise the
+floor in `tests/run-r7rs-conformance.sh` when the count goes up.
 
 ## See also
 

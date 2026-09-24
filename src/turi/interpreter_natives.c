@@ -2773,6 +2773,16 @@ static TuriValue native_r7rs_symbol_plain(TuriEnv *env, TuriValue *a, uint32_t n
     if (!*s || (s[0] == '.' && !s[1]) || s[0] == '#') return turi_bool(false);
     for (const unsigned char *p = (const unsigned char *)s; *p; p++)
         if (*p <= 32 || *p == 127 || strchr("()[]{}\"';`,|", *p)) return turi_bool(false);
+    /* R10: a backslash reads as an escape, and a name spelled like a
+     * number's sign-led forms -- `+i`, `-i`, `+inf.0...`, `-nan.0...` in any
+     * case -- reads as (or begins) a number in other readers, so both are
+     * written with bars (chibi's suite: '|+i|, '|\\123|, '|+NaN.0abc|). */
+    if (strchr(s, '\\')) return turi_bool(false);
+    if ((s[0] == '+' || s[0] == '-') && s[1]) {
+        char lo[6] = {0};
+        for (int i = 0; i < 5 && s[1 + i]; i++) lo[i] = (char)((s[1 + i] >= 'A' && s[1 + i] <= 'Z') ? s[1 + i] + 32 : s[1 + i]);
+        if (!strcmp(lo, "i") || !strncmp(lo, "inf.", 4) || !strncmp(lo, "nan.", 4)) return turi_bool(false);
+    }
     return turi_bool(true);
 }
 static TuriValue native_r7rs_bar_symbol(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2953,17 +2963,31 @@ static bool r7rs_parse_int_radix(const char *s, int64_t radix, int64_t *out) {
 }
 static bool r7rs_parse_float_str(const char *s, double *out) {
     if (!s || !*s) return false;
-    if (strcmp(s, "+inf.0") == 0) { *out = INFINITY; return true; }
-    if (strcmp(s, "-inf.0") == 0) { *out = -INFINITY; return true; }
-    if (strcmp(s, "+nan.0") == 0 || strcmp(s, "-nan.0") == 0) { *out = NAN; return true; }
+    /* R10: case is not significant in a number (R7RS 7.1.1), and the R5RS
+     * exponent markers s/f/d/l mean `e` -- the prelude's compiled twin
+     * (r7rs-parse-float-ok?__) spells the string the same way. */
+    size_t n = strlen(s);
+    if (n == 6) {
+        char lo[7];
+        for (size_t i = 0; i < 7; i++) lo[i] = (char)((s[i] >= 'A' && s[i] <= 'Z') ? s[i] + 32 : s[i]);
+        if (strcmp(lo, "+inf.0") == 0) { *out = INFINITY; return true; }
+        if (strcmp(lo, "-inf.0") == 0) { *out = -INFINITY; return true; }
+        if (strcmp(lo, "+nan.0") == 0 || strcmp(lo, "-nan.0") == 0) { *out = NAN; return true; }
+    }
     /* strtod accepts "inf", "nan", hex floats and leading whitespace; R7RS
      * does not, so only a decimal spelling with digits, '.', 'e' and a sign
      * gets through. */
-    for (const char *p = s; *p; p++)
-        if (!((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')) return false;
+    char buf[128];
+    if (n >= sizeof buf) return false;
+    for (size_t i = 0; i <= n; i++) {
+        char c = s[i];
+        if (i > 0 && c && strchr("sSfFdDlL", c) && ((s[i-1] >= '0' && s[i-1] <= '9') || s[i-1] == '.')) c = 'e';
+        if (c && !((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-')) return false;
+        buf[i] = c;
+    }
     char *end = NULL;
-    double v = strtod(s, &end);
-    if (end == s || *end) return false;
+    double v = strtod(buf, &end);
+    if (end == buf || *end) return false;
     *out = v;
     return true;
 }

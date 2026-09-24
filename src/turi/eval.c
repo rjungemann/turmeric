@@ -10539,6 +10539,27 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- Variable -------------------------------------------------------- */
     case EX_VAR: {
         TuriValue _v = eval_lookup(env, frame, e->as.var.binding->name->name);
+        /* r7rs-lang-plan R10: a LIFTED lambda (`__fn_N`) is a top-level
+         * closure with no captured frame, because the elaborator found no
+         * captures in it.  But a name it calls may still live in a frame --
+         * a `letrec` function the elaborator lifted too, which the compiled
+         * path calls directly and this interpreter resolves BY NAME.  So
+         * `(letrec [f (fn [] (g)) g (fn [] 42)] (run (fn [] (f))))` looked
+         * `f` up from an empty chain: "unbound variable: f" (chibi's forward
+         * hygienic refs test, and any internal-define group a thunk calls).
+         * The lambda's value is taken here, at its lexical site, so re-home
+         * it onto this frame, as a letrec re-homes its own captureless fn
+         * literals. */
+        if (frame && _v.tag == TURI_CLOSURE && _v.as_closure &&
+            _v.as_closure->captured == NULL && !_v.as_closure->native &&
+            _v.as_closure->fn && _v.as_closure->fn->binding &&
+            _v.as_closure->fn->binding->is_lifted_lambda &&
+            e->as.var.binding->is_lifted_lambda) {
+            TuriClosure *copy = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
+            *copy = *_v.as_closure;
+            copy->captured = frame;
+            _v = turi_closure(copy);
+        }
         /* constrained-generic-as-fn-value: a top-level constrained generic
          * referenced AS A VALUE loses the type environment it was named in.
          * Frames chain LEXICALLY (a callee's parent is `cl->captured`, NULL for

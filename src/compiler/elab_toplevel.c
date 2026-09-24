@@ -1355,6 +1355,30 @@ Type **elab_fwd_param_full_types(Elab *e, Arena *arena, const Form *f,
             const Form *t = p;
             if (p->tag == F_TYPE_ANN && p->as.list.len >= 1)
                 t = p->as.list.items[0];
+            if (t->tag == F_SYM) {
+                /* R10: a bare record or ADT name -- `[b : R7rsBytevector]`.
+                 * fwd_decl_scan_params left it the TY_INT placeholder too,
+                 * so a caller above the definition that passes an `any`
+                 * got a checked unbox to int: "cast: any holds
+                 * R7rsBytevector, not int" from `equal?` on two bytevectors
+                 * (chibi's suite).  A registered, non-generic ADT names its
+                 * type completely; commit it. */
+                for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+                    AdtDef *d = e->adt_defs[ai];
+                    if (d->n_type_params != 0 || strcmp(d->name, t->as.sym->name) != 0)
+                        continue;
+                    if (!full_types) {
+                        full_types = (Type **)arena_alloc(arena, param_arity * sizeof(Type *));
+                        memset(full_types, 0, param_arity * sizeof(Type *));
+                    }
+                    Type *adt_t = (Type *)arena_alloc(arena, sizeof(Type));
+                    *adt_t = type_adt(d);
+                    full_types[slot - 1] = adt_t;
+                    arg_kinds[slot - 1] = TY_ADT;
+                    break;
+                }
+                continue;
+            }
             if (t->tag != F_LIST) continue;
             Type *full = fwd_shallow_result_app(e, t, tp_syms, n_tp);
             if (!full || full->kind != TY_APP || !fwd_type_is_closed(full, tp_syms, n_tp))

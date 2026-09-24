@@ -1,6 +1,6 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 through R9 landed 2026-09-23/24.** `#lang r7rs` is a base
+Status: **R0 through R10 landed 2026-09-23/24.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -48,8 +48,10 @@ cycles, `write-shared`/`write-simple`, and `(scheme read)`
 that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 (native and browser) analysing and formatting Scheme, the editor packs,
 `gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
-(conformance) is unbuilt. Each landed stage carries a "What shipped" note
-below.
+runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
+which reports a count: 1036 of 1216 tests pass on both back ends (887 on the
+interpreter, and a compiled build that did not finish, when it was first
+wired). Each landed stage carries a "What shipped" note below.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -1497,6 +1499,91 @@ as a verdict at the end.
 
 Per R3 in Section 7, this is the fixture-count mitigation as much as it is the
 conformance story.
+
+> **What shipped (R10, 2026-09-24).** `tests/r7rs/chibi-r7rs-tests.scm`
+> (chibi's `tests/r7rs-tests.scm`, vendored with its BSD licence as
+> `CHIBI-COPYING`) runs through `tests/r7rs/run-conformance.py`, wrapped by
+> `tests/run-r7rs-conformance.sh` and the ctest target
+> `tur_r7rs_conformance` (both back ends, about two minutes, a floor of 1036
+> so only a regression fails).
+>
+> **How it counts.** The suite is one file, and one form Turmeric cannot
+> compile would take every other test down with it, so the runner splits it
+> into top-level forms, marks each, and defines a `(chibi test)`-compatible
+> `test` family whose `guard` fails a raising test on its own. A form the
+> front end rejects is named by its diagnostic's line and dropped; a form that
+> stops a running program (an uncatchable panic, an unknown name, a signal) is
+> the last marker printed, is counted failed, and the run resumes after it.
+> The interpreter goes first; the compiled pass starts from what the
+> interpreter could run. A form that never ran counts every test written in
+> it as failed.
+>
+> **The count: 1036 of 1216, identical on both back ends.** The first run
+> passed 887 on the interpreter; the compiled program did not build. The
+> fixes, all found by the suite and each pinned in
+> `tests/fixtures/r7rs-conformance-fixes` (both back ends) unless noted:
+>
+> - **`set!` of a captured variable** -- the largest. A compiled closure
+>   copies what it captures, so `(set! sum ...)` inside a `do` loop or a
+>   `for-each` lambda updated the closure's copy: `(sum-to 5)` was 0 compiled
+>   and 10 interpreted. `scheme_lower.c` now does assignment conversion: a
+>   `^mut` binding a nested `fn` mentions lives in an `R7rsBox` (prelude), read
+>   and written through it. Typed Turmeric and Saffron still disagree between
+>   back ends:
+>   [compiled-closure-copies-a-captured-mut](../reported/compiled-closure-copies-a-captured-mut.md).
+> - **Names.** A binder named like a Turmeric special form was that form:
+>   `(call/cc (lambda (return) ... (return x)))` compiled `return` as an early
+>   return (invalid C) and interpreted it as one (a wrong answer, which
+>   `r7rs-control`'s expected output had recorded -- it now says 4). A
+>   program's top-level `define` of a name an auto-loaded stdlib module defines
+>   (`list-length`) was refused on the compiled back end. Both are now spelled
+>   `<name>--user` in the user's code.
+> - **Data.** An unquoted vector literal `#(a b)` evaluated its elements; it
+>   is now the constant R7RS 4.1.2 says. Quasiquote
+>   now fires an unquote under a quote (`',x`) and reads the long forms
+>   `(quasiquote ...)`/`(unquote ...)`. `make-bytevector`'s fill is optional.
+> - **`syntax-rules`.** `_` in the literals list is a literal, and a literal
+>   ellipsis (`(syntax-rules ... (...) ...)`) is not an ellipsis (4.3.2).
+> - **Internal defines are `letrec*`**: `(define p (delay ... (force p)))` in
+>   a body left `p` unbound. A letrec whose lambdas take each other as values
+>   (`(eqv? f g)`) filled a capture before its sibling existed (cc:
+>   undeclared); such a group is now cells assigned in order.
+> - **Numbers.** Integer division is inexact when an argument is;
+>   `numerator`/`denominator` of an inexact real are its dyadic lowest terms
+>   instead of a panic; `string->number` is case-insensitive (`+NaN.0`) and
+>   reads the R5RS exponent markers `s f d l`; `apply`'s errors are
+>   catchable; `write` bars `|+i|`, `|-i|`, backslashes and signed
+>   `inf.`/`nan.` prefixes; the source reader takes `\"` in `|...|`.
+> - **Seams outside the dialect**, each also a defect for typed Turmeric:
+>   - a typed parameter naming a record (`[b : R7rsBytevector]`) was
+>     forward-declared as `int`, so a caller above the definition passing an
+>     `any` got a checked cast to int (`equal?` on two bytevectors panicked;
+>     `elab_fwd_param_full_types`);
+>   - the interpreter lifted a lambda made in a `letrec` body to a top-level
+>     closure with no frame, so it could not see the letrec's functions
+>     (`tests/fixtures/letrec-lifted-lambda-frame`);
+>   - a global `def` holding a capturing closure, called inside a lambda, was
+>     read in C before its declaration (the forward-declaration band ignored a
+>     call's `fn_binding`; `tests/fixtures/global-closure-def-called-in-lambda`);
+>   - `+inf.0` and `+nan.0` were emitted as the C identifiers `inf` and `nan`;
+>   - the emitter's closure-env registry counted in a `uint8_t` and crashed
+>     `tur` on the 256th environment;
+>   - `fd_for_binding` scanned the whole program per call node: the suite as
+>     one program spent over four minutes in `emit-c`, now 42 seconds (a
+>     table, rebuilt when the program changes).
+>
+> **What the other 180 are.** The carve-outs, by the runner's listing:
+> bignums (`(expt 2 119)`, 20-digit literals), exact rationals (`1/2`,
+> `(/ 3 4 5)`, `rationalize`), complex numbers (`3+4i`, `make-rectangular`
+> and the reads of complex syntax), Unicode case mapping and classification,
+> the string mutators, `eval`/`environment`, and re-entering a continuation
+> (`dynamic-wind` through a re-entered `call/cc`). Then a few that are ours
+> and not carve-outs: `'nil` is the empty list; `(= 9007199254740992.0
+> 9007199254740993)` compares through the double; a macro-introduced binding
+> can still capture (the named failing test from R4); a pattern variable
+> reused as a nested macro's literal; three `#;` read-error edge cases; and
+> the shortest float spelling at the edge of the double range. Each is a
+> line in `run-conformance.py --list-failures`.
 
 ---
 
