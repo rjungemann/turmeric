@@ -51,7 +51,11 @@ that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
 which reports a count: 1082 of 1216 tests pass on both back ends (887 on the
 interpreter, and a compiled build that did not finish, when it was first
-wired). Each landed stage carries a "What shipped" note below.
+wired). Each landed stage carries a "What shipped" note below. What is
+left -- bignums, exact rationals, complex numbers, mutable
+character-indexed strings, `eval`, re-entrant continuations -- is Section 9,
+as tasks that change what a Scheme program means and leave Turmeric's and
+Saffron's semantics as they are.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -1654,9 +1658,9 @@ this one should be **measured the same way** before it is believed.
 | Monomorphization, by-value HKT | off; everything boxes | needs ground types at each site |
 | Refinement types | runtime contracts | no static base type to discharge over |
 | Linear / affine / unique, borrows, session types, GADTs | **expected to survive**, via annotations | Saffron measured these as kept; R7RS has no *syntax* for the annotations, so this is "survives if written in an annotated Turmeric module and called across the seam" |
-| Full numeric tower | int64 exact + checked overflow | D8; bignums are a named epic |
-| Re-entrant `call/cc` | not at first | D7; the conformance claim is gated on it |
-| `(scheme eval)`, `(scheme repl)` | interpreter-first | needs an evaluator at runtime |
+| Full numeric tower | int64 exact + checked overflow | D8; bignums, rationals and complex are Section 9's T1-T3 |
+| Re-entrant `call/cc` | not at first | D7; the conformance claim is gated on it; Section 9's T6 |
+| `(scheme eval)`, `(scheme repl)` | refused at the import | needs an evaluator at runtime; Section 9's T5 |
 | Typeclass dispatch on `any` | inherits Saffron's S9 state | separate epic |
 
 ---
@@ -1737,6 +1741,264 @@ expectation from a demo.
 6. **Which R7RS?** R7RS-small is the target. R7RS-large is a moving set of
    dockets and is explicitly out of scope; if it is ever wanted it is a sibling
    base token (D1), not a flag.
+
+---
+
+## 9. Remaining work -- the tasks left after R10
+
+What `#lang r7rs` still does differently from R7RS, measured on 2026-09-24:
+chibi's suite passes 1082 of the 1216 tests written in it, on both back ends,
+and the runner counts 143 failed test invocations (a test-numeric-syntax form
+counts two). Every one of those 143 belongs to a task below; the counts per
+task are the runner's. Section 9.3 lists the documented differences no chibi
+test reaches.
+
+### 9.1 The rule: the differences between the languages are preserved
+
+Each task changes what a `#lang r7rs` program means **and nothing else**.
+Turmeric and Saffron keep their own semantics:
+
+- a `cstr` stays immutable UTF-8 bytes;
+- `int` stays int64 under each dialect's own overflow rule;
+- `/` on two ints means what it means in each dialect;
+- `float` has no complex part;
+- a Turmeric closure's capture rule is Turmeric's decision (9.4).
+
+Where two languages spell a thing the same way and mean different things,
+that is the point of having both, and a task that would erase the difference
+is out of scope. Concretely:
+
+- **Where a task lives.** The Scheme prelude and library files
+  (`stdlib/r7rs/`), the Scheme lowering (`src/compiler/scheme_lower.c`), the
+  Scheme reader's `scheme_enabled` branches, and Scheme-only natives (the
+  interpreter's `r7rs-*` twins). A change to shared machinery -- the
+  elaborator, the emitter, the runtime -- is gated on the dialect
+  (`lang_span_is_scheme`, `LANG_R7RS`) and says so in its comment, or it is a
+  fix that is right for every dialect (as R10's emitter fixes were).
+- **The seam is part of the task.** A new Scheme representation defines how it
+  crosses into Turmeric through a `(turmeric ...)` import or a
+  `define-library` export: which Turmeric type it arrives as, and a CHECKED
+  error when it cannot -- never a silent coercion.
+- **Proof of preservation.** A task lands with its chibi tests passing on both
+  back ends, the floor in `tests/run-r7rs-conformance.sh` raised, fixtures on
+  both back ends, and `run.sh` / `run-turi.sh` green, so no Turmeric or
+  Saffron fixture moved. Where a name is shared (`/`, `string-length`), a
+  fixture shows the Turmeric meaning and the Scheme meaning side by side.
+
+R10 already works this way, and each piece is the pattern to copy:
+
+- Unicode case mapping is prelude tables, and Turmeric's own string
+  functions are untouched.
+- Exact-versus-inexact comparison is `r7rs-cmp-*` in the prelude, and
+  Turmeric's `=` is unchanged.
+- Shared `set!` variables are boxed by the Scheme lowering (`ac_walk`), while
+  a compiled Turmeric closure still copies.
+- Quoted `nil` / `true` / `false` are symbols through a reader stamp
+  (`PROV_SCHEME_WORD`) that only the Scheme datum lowering reads.
+
+### 9.2 Tasks
+
+**T0 -- two small correctness fixes that need none of the rest (0 tests;
+do first).**
+
+- **`(exact 1e30)` answers `9223372036854775807`.** A silent wrong answer:
+  the conversion saturates. Until T1 lands, an inexact integer outside int64
+  is the same exact-overflow error `(expt 2 64)` gives. Test: a fixture.
+- **The reader splits `1/2` and `3+4i`.** They become `1` and `/2`, and `3`,
+  `+4` and `i`. The errors ("unbound symbol '/2'", "unbound symbol 'i'")
+  name the wrong thing, and the guide's "a literal like `1/2` is refused" is
+  true only by accident. `(read (open-input-string "1/2"))` returns the
+  SYMBOL `1/2`.
+  - Read each as one number token.
+  - Until T2 and T3, refuse it with the reason, in both the source reader and
+    `stdlib/r7rs/read.tur`.
+  - Make `string->number` agree.
+
+**T1 -- bignums (8 tests: chibi lines 215, 219, 223, 227, 231, 822, 841).**
+
+- **Today:** exact integers are int64, and an exact result outside it is a
+  panic naming D8, which `guard` cannot catch. A 20-digit literal (line 227)
+  is TUR-E "integer literal overflows int64 range".
+- **R7RS:** exact integers are unbounded.
+- **Preserve:** Turmeric's and Saffron's `int` stay int64 with their own
+  overflow behavior. Bignums exist only as Scheme values.
+- **Where:**
+  - A prelude `R7rsBig` (sign and limbs).
+  - The int64 fast path stays: `r7rs-add2__` and its siblings promote on
+    overflow where they panic today, and a result that fits normalizes back
+    to int64.
+  - The reader reads long literals as bignums, as do `read.tur`,
+    `string->number`, `number->string` and `write`.
+  - The arithmetic core in C goes through the generator pattern of
+    `tools/gen-r7rs-unicode.py`: one text, the prelude's inline C and the
+    interpreter's native, checked equal.
+- **Seam:** a bignum passed to a Turmeric `int` parameter arrives as an int
+  when it fits, and is a checked error naming the value when it does not.
+- **Done:** the 8 tests; `(expt 2 100)` prints its 31 digits on both back
+  ends; Turmeric's int-overflow fixtures unchanged.
+
+**T2 -- exact rationals (42 tests: 199, 768, 769, 772, 780, 902, 904, 905,
+965, 967, 968, 970, 972, 973, 1027, 1028; number syntax 2363-2369, 2426,
+2427, 2434-2438).**
+
+- **Today:** `(/ 7 2)` is the inexact 3.5, and `numerator`/`denominator` of
+  an exact non-integer cannot arise.
+- **R7RS:** `(/ 7 2)` is the exact 7/2, `(expt 2 -10)` is 1/1024, `round`
+  rounds ties to even exactly, and `rationalize` exists.
+- **Preserve:** Turmeric's `/` on ints is unchanged; only a Scheme program's
+  `/` changes. That IS a visible change for existing `#lang r7rs` code (3.5
+  becomes 7/2), so the CHANGELOG entry says so.
+- **Depends on:** T0's reader token, and T1. Without bignums, a rational's
+  numerator or denominator overflows long before an integer would; T2 can
+  land first only with that overflow as the named error.
+- **Where:**
+  - A prelude `R7rsRatio` (numerator and denominator, normalized, positive
+    denominator).
+  - The tower dispatch in the `r7rs-*2__` operators: `exact`, `inexact`,
+    `floor`/`round`/`truncate`, `rationalize`, the predicates.
+  - The number syntax in both readers, and `number->string`.
+- **Seam:** a ratio passed to a Turmeric `int` or `float` parameter is a
+  checked error; the Scheme side converts with `inexact` or `round`.
+- **Done:** the 42 tests.
+
+**T3 -- complex numbers (73 tests: 756, 759, 760, 770, 784, 789, 794, 796,
+797, 849, 903, 1016, 1017, 1030-1040; number syntax 2371-2401, 2441,
+2442).**
+
+- **Today:** `(scheme complex)` is reals only.
+  - `make-rectangular` / `make-polar` with a non-zero imaginary part panic.
+  - `(sqrt -4)` is `+nan.0`.
+  - A `3+4i` literal is split by the reader (T0).
+- **R7RS:** non-real numbers are OPTIONAL (R7RS 6.2.3 does not require the
+  whole tower); chibi has them and its suite tests them. So the first step is a
+  decision, and not implementing is a legitimate answer. If the answer is no,
+  T3 becomes: refuse complex syntax with the reason (T0 already does), make
+  `make-rectangular` a catchable error rather than a panic, and record the
+  73 tests as permanently out of scope with the floor unaffected.
+- **Preserve:** Turmeric has no complex type, and `math.tur`'s `sqrt` of a
+  negative stays NaN in Turmeric.
+- **Where:**
+  - A prelude `R7rsComplex` (real and imaginary parts, each any real).
+  - The tower dispatch; `sqrt`, `exp`, `log`, `expt`, `atan` of arguments
+    outside the reals; the rectangular and polar syntax in both readers;
+    `write`.
+- **Depends on:** T2 for exact complex (`1/2+3/4i`).
+- **Done:** the 73 tests, or the recorded "no".
+
+**T4 -- mutable, character-indexed strings (13 tests: 1322, 1324,
+1458-1479, 2258).**
+
+- **Today:** a Scheme string IS a Turmeric `cstr`.
+  - It is immutable UTF-8 bytes.
+  - `string-length`, `string-ref`, `substring` and `string->list` count
+    bytes, so `(string-length "\x3BB;")` (one Greek lambda) is 2 and
+    `string-ref` returns a byte.
+  - `string-set!`, `string-fill!` and `string-copy!` are refused by the
+    lowering with the reason.
+  - The case procedures already map the UTF-8 correctly.
+- **R7RS:** a string is a sequence of characters and is mutable; a literal
+  may be immutable (`string-set!` on one "is an error").
+- **Preserve:** this is the central case of 9.1. Turmeric's `cstr` stays
+  immutable UTF-8; the Scheme string becomes its own type rather than
+  Turmeric's changing.
+- **Where:**
+  - An `R7rsString` (code points; a UTF-8 buffer with an index cache is the
+    alternative to measure).
+  - Mutable strings come from `make-string`, `string`, `string-copy`,
+    `list->string` and the rest. Literals may stay `cstr`-backed and
+    immutable, which R7RS allows and which keeps literals free.
+  - Every string procedure in the prelude (about sixty), string ports, `read`,
+    `write`/`display`, symbols (`string->symbol`), and the Unicode case
+    procedures (on code points directly).
+- **Seam:** passing a Scheme string to a Turmeric `cstr` parameter copies and
+  UTF-8-encodes it; a `cstr` coming back is an immutable Scheme string.
+  Mutating it is the named error.
+- **Done:** the 13 tests; `(string-length "\x3BB;")` is 1; a fixture passes one
+  string both ways across the seam and shows the Turmeric side still immutable.
+
+**T5 -- `eval` and environments (4 tests: 1946, 1950, 1952, 1954).**
+
+- **Today:** `(scheme eval)`, `(scheme repl)` and `(scheme load)` are refused
+  at the import (Section 8, question 3).
+- **R7RS:** `(eval datum (environment '(scheme base)))`,
+  `interaction-environment`, `null-environment`.
+- **Preserve:** nothing in Turmeric changes; the question is how a compiled
+  program evaluates.
+- **The decision first (question 3):** link the interpreter into a compiled
+  program that imports `(scheme eval)` (the on-demand library mechanism is the
+  hook), or declare `eval` interpreter-only. The second breaks the rule that
+  both back ends run every fixture, so it needs a `requires.interp-only`
+  fixture and a sentence in the guide.
+- **Either way:** a datum-to-Form path, the Scheme lowering at run time, and
+  environment specifiers as import sets.
+- **Done:** the 4 tests on whichever back ends the decision names.
+
+**T6 -- re-entrant continuations (1 test: 1772, `dynamic-wind` around a
+re-entered continuation).**
+
+- **Today:** `call/cc` is an escape (D7), and re-entry after it returns is a
+  named error.
+- **R7RS:** continuations are first-class and re-entrant.
+- **Preserve:** Turmeric's delimited control (`reset`/`shift`, `call/cc*`,
+  cloneable continuations) keeps its semantics. The Scheme `call/cc` is
+  built on it: a multi-shot delimited continuation with the program's top as
+  the prompt, and re-entry re-running the `before` thunks.
+- **Where:** `r7rs-call/cc` and `r7rs-dynamic-wind` in the prelude, over the
+  cloneable-reset machinery.
+- **Done:** the test; a generator written with re-entrant `call/cc` runs on
+  both back ends.
+
+**T7 -- two float spellings (2 tests: 2465, 2475).**
+
+- **Today:** `1.7976931348623157e308`. chibi's test accepts only its own
+  `1.7976931348623157e+308`.
+- **R7RS:** allows both.
+- **Decision:** keep the bare exponent (R5's choice, pinned by
+  `r7rs-numbers`) and record these two as accepted; or write `e+` for a
+  positive exponent, which moves every large number's spelling.
+  **Recommended: keep.** Then the task is a guide sentence and the two tests
+  counted as settled rather than failing.
+
+### 9.3 Documented differences no chibi test reaches
+
+Each one is in `docs/guides/r7rs-guide.md` ("Where it differs") today:
+
+- **`apply` and dynamic calls take at most four arguments.** The compiled
+  dynamic call's apply table stops at 4 (`emit_dyn_call`), and the prelude is
+  compiled on both back ends. Lift it, or pack the surplus into a rest list,
+  in a Scheme-only path.
+- **`char-ready?` and `u8-ready?` always answer `#t`.** Honest readiness needs
+  a non-blocking check on file and console ports.
+- **`(except ...)` in an import is refused**, because a Turmeric import cannot
+  say "all but these". A Scheme-side expansion of the library's export list
+  can.
+- **`include` and `include-ci` are refused.** They need a way to read a file
+  as Scheme without its own `#lang` line.
+- **Compiled top-level order.** A top-level `define` whose initializer has an
+  effect runs before the program's top-level expressions
+  ([toplevel-def-initializers-run-before-toplevel-expressions](../reported/toplevel-def-initializers-run-before-toplevel-expressions.md);
+  every dialect).
+- **`command-line` starts with `"tur"`**, not the program's own path.
+- **Case mapping details.**
+  - `string-downcase` does not apply the context-sensitive final sigma.
+  - A character's simple case mapping is taken from its full mapping when
+    that is one character, so a few Greek iota-subscript letters map to
+    themselves.
+  - `char-alphabetic?` is General Category L* and Nl, without
+    Other_Alphabetic.
+  - The tables follow the Unicode version of the Python that generated them
+    (14.0.0).
+
+### 9.4 Related: the shared-variable difference, kept on purpose
+
+A Scheme `set!` of a variable a lambda captures is shared: the Scheme lowering
+boxes it, on both back ends. A compiled Turmeric or Saffron closure COPIES a
+captured `^mut`, and their interpreter shares it
+([compiled-closure-copies-a-captured-mut](../reported/compiled-closure-copies-a-captured-mut.md)).
+That report is Turmeric's to decide, and whichever way it goes, the Scheme
+behavior does not move with it. If Turmeric settles on copying, Scheme keeps
+its boxes; if it settles on sharing, the Scheme-only `ac_walk` can retire in
+favor of the shared mechanism, with this section's rule deciding that it may.
 
 ---
 
