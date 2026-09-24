@@ -2949,7 +2949,21 @@ static TuriValue native_r7rs_numsyn_why(TuriEnv *env, TuriValue *a, uint32_t n, 
 }
 static TuriValue native_r7rs_numsyn_big(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res);
-    return turi_cstr(res.kind == R7NS_BIG ? res.big : "");
+    return turi_cstr(res.kind == R7NS_BIG || res.kind == R7NS_RATIO ? res.big : "");
+}
+static TuriValue native_r7rs_exact_of_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double f = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : (double)r7rs_arg_int(a, n, 0);
+    return turi_cstr(r7rs_big_exact_of_float(f));
+}
+static TuriValue native_r7rs_ratio_to_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT;
+    rv.as_float = r7rs_ratio_to_float(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1));
+    return rv;
+}
+static TuriValue native_r7rs_ratio_part(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; return turi_cstr(r7rs_ratio_part(r7rs_arg_cstr(a, n, 0), (int)r7rs_arg_int(a, n, 1)));
 }
 static TuriValue native_r7rs_int_ovf(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -3783,6 +3797,9 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-big-radix__",         native_r7rs_big_radix,          NULL);
     turi_env_register_native(env, "r7rs-big-fits?__",         native_r7rs_big_fits,           NULL);
     turi_env_register_native(env, "r7rs-big-int__",           native_r7rs_big_int,            NULL);
+    turi_env_register_native(env, "r7rs-exact-of-float__",    native_r7rs_exact_of_float,     NULL);
+    turi_env_register_native(env, "r7rs-ratio->float__",      native_r7rs_ratio_to_float,     NULL);
+    turi_env_register_native(env, "r7rs-ratio-part__",        native_r7rs_ratio_part,         NULL);
     turi_env_register_native(env, "r7rs-uc-map__",            native_r7rs_uc_map,             NULL);
     turi_env_register_native(env, "r7rs-uc-prop__",           native_r7rs_uc_prop,            NULL);
     turi_env_register_native(env, "r7rs-uc-string__",         native_r7rs_uc_string,          NULL);

@@ -79,6 +79,23 @@ BIGNUM_TAIL = """\
   ```c
   return r7rs_big_radix(a, (int)radix);
   ```)
+;;; r7rs-exact-of-float__ -- internal: T2 -- the exact value of a finite
+;;; double, spelled "n" or "n/d".
+(defn r7rs-exact-of-float__ [f : float] : cstr
+  ```c
+  return r7rs_big_exact_of_float(f);
+  ```)
+;;; r7rs-ratio->float__ -- internal: T2 -- the double nearest n/d.
+(defn r7rs-ratio->float__ [n : cstr d : cstr] : float
+  ```c
+  return r7rs_ratio_to_float(n, d);
+  ```)
+;;; r7rs-ratio-part__ -- internal: T2 -- the numerator (0) or denominator
+;;; (1) of an "n/d" spelling.
+(defn r7rs-ratio-part__ [s : cstr which : int] : cstr
+  ```c
+  return r7rs_ratio_part(s, (int)which);
+  ```)
 ;;; r7rs-big-fits?__ -- internal: the spelling is an int64.
 (defn r7rs-big-fits?__ [a : cstr] : bool
   ```c
@@ -108,7 +125,7 @@ NUMSYNTAX_TAIL = """\
 ;;; r7rs-numsyn-kind__ -- internal: what s reads as in radix (a prefix
 ;;; overrides it): 0 not a number, 1 an exact integer, 2 an inexact real,
 ;;; 3 refused (r7rs-numsyn-why__ says why), 4 an exact integer outside int64
-;;; (r7rs-numsyn-big__ spells it).
+;;; and 5 an exact non-integer (r7rs-numsyn-big__ spells them).
 (defn r7rs-numsyn-kind__ [s : cstr radix : int] : int
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res); free(res.big); return res.kind;
@@ -128,12 +145,12 @@ NUMSYNTAX_TAIL = """\
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res); free(res.big); return (char *)(res.why ? res.why : "");
   ```)
-;;; r7rs-numsyn-big__ -- internal: the decimal spelling of the bignum s reads
-;;; as (kind 4), else "".
+;;; r7rs-numsyn-big__ -- internal: the spelling of the bignum (kind 4) or the
+;;; "n/d" of the ratio (kind 5) s reads as, else "".
 (defn r7rs-numsyn-big__ [s : cstr radix : int] : cstr
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res);
-  if (res.kind == R7NS_BIG) return res.big;
+  if (res.kind == R7NS_BIG || res.kind == R7NS_RATIO) return res.big;
   char *e = (char *)malloc(1); if (e) *e = 0; return e;
   ```)
 """

@@ -3713,13 +3713,15 @@ static Form *try_read_scheme_number(Reader *r) {
         r->error = true;
         return NULL;
     }
-    if (res.kind == R7NS_BIG) {
-        /* T1: an exact integer outside int64 reads as the call form
-         * `(r7rs-big__ "<decimal digits>")`, as a char reads as
-         * `(r7rs-char__ n)`; the prelude builds the R7rsBig, and the datum
-         * walker keeps the shape under `quote`. */
+    if (res.kind == R7NS_BIG || res.kind == R7NS_RATIO) {
+        /* T1/T2: an exact integer outside int64 reads as the call form
+         * `(r7rs-big__ "<decimal digits>")` and an exact non-integer as
+         * `(r7rs-ratio__ "<n>/<d>")`, as a char reads as `(r7rs-char__ n)`;
+         * the prelude builds the value, and the datum walker keeps the shape
+         * under `quote`. */
+        const char *ctor = res.kind == R7NS_BIG ? "r7rs-big__" : "r7rs-ratio__";
         Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
-        items[0] = form_sym(r->arena, span, symtab_intern(r->st, strslice("r7rs-big__", 10)));
+        items[0] = form_sym(r->arena, span, symtab_intern(r->st, strslice(ctor, (uint32_t)strlen(ctor))));
         size_t bl = strlen(res.big);
         char *digits = (char *)arena_alloc_aligned(r->arena, bl + 1, 1);
         memcpy(digits, res.big, bl + 1);

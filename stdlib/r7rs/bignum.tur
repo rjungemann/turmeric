@@ -341,14 +341,132 @@ static inline void r7bn_isqrt(r7rs_bn *s, const r7rs_bn *a) {
     r7bn_free(&x); r7bn_free(&y); r7bn_free(&q); r7bn_free(&m); r7bn_free(&t);
 }
 
+/* r = gcd(|a|, |b|), non-negative. */
+static inline void r7bn_gcd(r7rs_bn *r, const r7rs_bn *a, const r7rs_bn *b) {
+    r7rs_bn x, y, q, m; r7bn_init(&x); r7bn_init(&y); r7bn_init(&q); r7bn_init(&m);
+    r7bn_copy(&x, a); x.neg = 0; r7bn_copy(&y, b); y.neg = 0;
+    while (y.n) { r7bn_divmod(&q, &m, &x, &y); r7bn_copy(&x, &y); r7bn_copy(&y, &m); }
+    r7bn_copy(r, &x);
+    r7bn_free(&x); r7bn_free(&y); r7bn_free(&q); r7bn_free(&m);
+}
+/* r = a^e, square-and-multiply. */
+static inline void r7bn_pow(r7rs_bn *r, const r7rs_bn *a, uint64_t e) {
+    r7rs_bn b, t; r7bn_init(&b); r7bn_init(&t);
+    r7bn_copy(&b, a);
+    r7bn_from_u64(r, 1, 0);
+    while (e) {
+        if (e & 1) { r7bn_mul(&t, r, &b); r7bn_copy(r, &t); }
+        e >>= 1;
+        if (e) { r7bn_mul(&t, &b, &b); r7bn_copy(&b, &t); }
+    }
+    r7bn_free(&b); r7bn_free(&t);
+}
+/* |a| = |a| * 2^k. */
+static inline void r7bn_shl(r7rs_bn *a, uint64_t k) {
+    while (k > 0) { unsigned s = k > 29 ? 29 : (unsigned)k; r7bn_mul_small_add(a, 1u << s, 0); k -= s; }
+}
+/* T2: the canonical spelling of the rational n/d (d nonzero), malloc'd: in
+ * lowest terms, the sign on the numerator, and just "n" when d divides n. */
+static inline char *r7bn_ratio_str(const r7rs_bn *n, const r7rs_bn *d) {
+    r7rs_bn g, nn, dd, m; r7bn_init(&g); r7bn_init(&nn); r7bn_init(&dd); r7bn_init(&m);
+    int neg = (n->n != 0) && (n->neg ^ d->neg);
+    r7bn_gcd(&g, n, d);
+    r7bn_divmod(&nn, &m, n, &g); nn.neg = nn.n ? neg : 0;
+    r7bn_divmod(&dd, &m, d, &g); dd.neg = 0;
+    char *ns = r7bn_to_str(&nn, 10), *r;
+    if (dd.n == 1 && dd.d[0] == 1) r = ns;
+    else {
+        char *ds = r7bn_to_str(&dd, 10);
+        size_t a = strlen(ns), b = strlen(ds);
+        r = (char *)malloc(a + b + 2);
+        if (!r) abort();
+        memcpy(r, ns, a); r[a] = '/'; memcpy(r + a + 1, ds, b + 1);
+        free(ns); free(ds);
+    }
+    r7bn_free(&g); r7bn_free(&nn); r7bn_free(&dd); r7bn_free(&m);
+    return r;
+}
+/* log2|a| to within a tenth of a bit, a nonzero (the exponent estimate the
+ * ratio-to-double conversion scales by). */
+static inline double r7bn_log2(const r7rs_bn *a) {
+    double v = a->d[a->n - 1];
+    size_t rest = a->n - 1;
+    if (a->n >= 2) { v = v * R7BN_BASE + a->d[a->n - 2]; rest--; }
+    uint64_t bits; memcpy(&bits, &v, sizeof bits);
+    int e = (int)((bits >> 52) & 0x7FF) - 1023;
+    double m = 1.0 + (double)(bits & ((1ull << 52) - 1)) / 4503599627370496.0;
+    return e + (m - 1.0) + (double)rest * 29.897352853986263;
+}
+/* The double nearest n/d (d nonzero).  q = n*2^k/d is formed with about 70
+ * bits, a nonzero remainder is folded in as a sticky low bit, and q rounds
+ * once to 53 bits (through its decimal spelling and strtod) before the exact
+ * scaling by 2^-k. */
+static inline double r7bn_ratio_to_double(const r7rs_bn *n, const r7rs_bn *d) {
+    if (n->n == 0) return 0.0;
+    int neg = n->neg ^ d->neg;
+    r7rs_bn a, b, q, m; r7bn_init(&a); r7bn_init(&b); r7bn_init(&q); r7bn_init(&m);
+    r7bn_copy(&a, n); a.neg = 0; r7bn_copy(&b, d); b.neg = 0;
+    long k = (long)(70.0 + r7bn_log2(&b) - r7bn_log2(&a));
+    if (k > 0) r7bn_shl(&a, (uint64_t)k); else if (k < 0) r7bn_shl(&b, (uint64_t)-k);
+    r7bn_divmod(&q, &m, &a, &b);
+    if (m.n && q.n && (q.d[0] & 1u) == 0) q.d[0] |= 1u;   /* the base is even: limb 0's parity is q's */
+    double f = r7bn_to_double(&q);
+    while (k >= 60) { f *= 0x1p-60; k -= 60; }
+    while (k <= -60) { f *= 0x1p60; k += 60; }
+    if (k > 0) f /= (double)(1ull << k); else if (k < 0) f *= (double)(1ull << -k);
+    r7bn_free(&a); r7bn_free(&b); r7bn_free(&q); r7bn_free(&m);
+    return neg ? -f : f;
+}
+/* T2: the exact value of a finite double, spelled "n" or "n/d": a double is
+ * a dyadic fraction, mantissa * 2^shift. */
+static inline char *r7rs_big_exact_of_float(double f) {
+    uint64_t bits; memcpy(&bits, &f, sizeof bits);
+    int neg = (int)(bits >> 63), e = (int)((bits >> 52) & 0x7FF);
+    uint64_t mant = bits & ((1ull << 52) - 1);
+    int shift;
+    if (e == 0) shift = -1074; else { mant |= 1ull << 52; shift = e - 1075; }
+    r7rs_bn n, d; r7bn_init(&n); r7bn_init(&d);
+    char *r;
+    if (mant == 0) { r7bn_from_u64(&n, 0, 0); r = r7bn_to_str(&n, 10); }
+    else if (shift >= 0) { r7bn_from_double(&n, f); r = r7bn_to_str(&n, 10); }
+    else {
+        while (shift < 0 && !(mant & 1)) { mant >>= 1; shift++; }
+        r7bn_from_u64(&n, mant, neg);
+        r7bn_from_u64(&d, 1, 0);
+        r7bn_shl(&d, (uint64_t)-shift);
+        r = r7bn_ratio_str(&n, &d);
+    }
+    r7bn_free(&n); r7bn_free(&d);
+    return r;
+}
+/* T2: the double nearest the ratio of two decimal spellings. */
+static inline double r7rs_ratio_to_float(const char *ns, const char *ds) {
+    r7rs_bn n, d; r7bn_init(&n); r7bn_init(&d);
+    (void)r7bn_from_dec(&n, ns); (void)r7bn_from_dec(&d, ds);
+    double f = d.n ? r7bn_ratio_to_double(&n, &d) : (double)__builtin_nan("");
+    r7bn_free(&n); r7bn_free(&d);
+    return f;
+}
+/* T2: the numerator (which 0) or denominator (which 1) of an "n/d"
+ * spelling, malloc'd; "n" alone has denominator "1". */
+static inline char *r7rs_ratio_part(const char *s, int which) {
+    const char *slash = strchr(s, '/');
+    const char *from = which ? (slash ? slash + 1 : "1") : s;
+    size_t len = which ? strlen(from) : (slash ? (size_t)(slash - s) : strlen(s));
+    char *r = (char *)malloc(len + 1);
+    if (!r) abort();
+    memcpy(r, from, len); r[len] = 0;
+    return r;
+}
+
 /* ---- the entry points: decimal strings in, a malloc'd decimal string out */
 
 enum { R7BN_ADD = 0, R7BN_SUB = 1, R7BN_MUL = 2, R7BN_QUO = 3, R7BN_REM = 4,
        R7BN_MOD = 5, R7BN_GCD = 6, R7BN_EXPT = 7, R7BN_ISQRT = 8, R7BN_NEG = 9 };
 
 /* r7rs_big_op -- one operation on two exact integers.  QUO/REM truncate, MOD
- * floors; the caller has refused a zero divisor.  EXPT takes b >= 0; ISQRT
- * and NEG ignore b. */
+ * floors; the caller has refused a zero divisor.  EXPT takes 0 <= b < 2^63
+ * (the prelude refuses a larger exponent); ISQRT and NEG ignore b. */
 static inline char *r7rs_big_op(int op, const char *as, const char *bs) {
     r7rs_bn a, b, r, m;
     r7bn_init(&a); r7bn_init(&b); r7bn_init(&r); r7bn_init(&m);
@@ -364,19 +482,11 @@ static inline char *r7rs_big_op(int op, const char *as, const char *bs) {
             r7bn_divmod(&m, &r, &a, &b);
             if (r.n && r.neg != b.neg) { r7rs_bn t; r7bn_init(&t); r7bn_addsub(&t, &r, &b, 0); r7bn_copy(&r, &t); r7bn_free(&t); }
             break;
-        case R7BN_GCD: {
-            a.neg = 0; b.neg = 0;
-            while (b.n) { r7bn_divmod(&m, &r, &a, &b); r7bn_copy(&a, &b); r7bn_copy(&b, &r); }
-            r7bn_copy(&r, &a);
-            break;
-        }
+        case R7BN_GCD: r7bn_gcd(&r, &a, &b); break;
         case R7BN_EXPT: {
-            r7bn_from_u64(&r, 1, 0);
-            while (b.n) {
-                if (b.d[0] & 1) { r7bn_mul(&m, &r, &a); r7bn_copy(&r, &m); }
-                (void)r7bn_divmod_small(&b, 2);
-                if (b.n) { r7bn_mul(&m, &a, &a); r7bn_copy(&a, &m); }
-            }
+            int64_t e = 0;
+            (void)r7bn_to_i64(&b, &e);
+            r7bn_pow(&r, &a, (uint64_t)e);
             break;
         }
         case R7BN_ISQRT: r7bn_isqrt(&r, &a); break;
@@ -466,6 +576,23 @@ static inline int r7rs_big_fits(const char *as, int64_t *out) {
 (defn r7rs-big-radix__ [a : cstr radix : int] : cstr
   ```c
   return r7rs_big_radix(a, (int)radix);
+  ```)
+;;; r7rs-exact-of-float__ -- internal: T2 -- the exact value of a finite
+;;; double, spelled "n" or "n/d".
+(defn r7rs-exact-of-float__ [f : float] : cstr
+  ```c
+  return r7rs_big_exact_of_float(f);
+  ```)
+;;; r7rs-ratio->float__ -- internal: T2 -- the double nearest n/d.
+(defn r7rs-ratio->float__ [n : cstr d : cstr] : float
+  ```c
+  return r7rs_ratio_to_float(n, d);
+  ```)
+;;; r7rs-ratio-part__ -- internal: T2 -- the numerator (0) or denominator
+;;; (1) of an "n/d" spelling.
+(defn r7rs-ratio-part__ [s : cstr which : int] : cstr
+  ```c
+  return r7rs_ratio_part(s, (int)which);
   ```)
 ;;; r7rs-big-fits?__ -- internal: the spelling is an int64.
 (defn r7rs-big-fits?__ [a : cstr] : bool

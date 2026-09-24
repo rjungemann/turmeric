@@ -6,6 +6,33 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: exact rationals (r7rs-lang-plan T2).** An exact
+  non-integer is a ratio in lowest terms, and its numerator and denominator
+  are int64 or bignum.
+  - **Visible change:** `(/ 7 2)` is now 7/2. It used to be the inexact 3.5.
+    A quotient that divides is still an integer (`(/ 6 2)` is 3).
+  - Ratios work through the whole tower:
+    - exact arithmetic and comparison, with a double compared by its exact
+      value;
+    - `floor`/`ceiling`/`truncate`/`round`, which give exact integers
+      (`round` ties to even);
+    - `numerator`/`denominator`;
+    - `exact` of any finite double, which gives its exact value
+      (`(exact .5)` is 1/2);
+    - a correctly rounded `inexact`;
+    - `(expt 2 -10)` is 1/1024 and `(sqrt 4/9)` is 2/3;
+    - an exact `rationalize`;
+    - `number->string` and `write` in `n/d` form.
+  - Literals (`1/2`, `#x11/2`), `read` and `string->number` read ratios
+    through the shared parser. `#e` reads a decimal exactly: `#e1.2` is 6/5,
+    and `#e1e30` is exactly 10^30.
+  - `(features)` lists `ratios`.
+  - A ratio passed to a Turmeric `int` or `float` parameter is a checked
+    cast error.
+
+  Turmeric's and Saffron's `/` are unchanged. Chibi's suite: 1134 of 1216 on
+  both back ends, up from 1103. Fixture: `r7rs-rationals`. The reader error
+  fixtures for `1/2` and `#e1.5` are removed.
 - **`#lang r7rs`: bignums (r7rs-lang-plan T1).** Exact integers are
   unbounded. An exact integer is an int64 while it fits. Arithmetic that
   leaves int64 continues as a bignum (`R7rsBig`), and a result that fits is an
@@ -42,15 +69,14 @@ All notable changes to Turmeric are documented here.
   - A ratio or complex number the tower holds reads as its value: `10/2` is 5,
     `#i3/2` is 1.5, and `3+0i` is 3.
   - One it cannot hold yet is refused with the reason and the plan task that
-    brings it: rationals (T2) and complex numbers (T6). A source literal gets
-    a compile-time error. `read` and `string->number` raise an error `guard`
-    can catch.
+    brings it: complex numbers (T6), and rationals until T2 (above). A source
+    literal gets a compile-time error. `read` and `string->number` raise an
+    error `guard` can catch.
   - `(exact 1e30)` used to answer 9223372036854775807; it is exact now (see
     bignums above).
 
   Chibi's suite: 1096 of 1216 on both back ends, up from 1082.
-  Fixtures: `r7rs-number-syntax`, `errors/r7rs-reader-ratio`,
-  `errors/r7rs-reader-complex`.
+  Fixtures: `r7rs-number-syntax`, `errors/r7rs-reader-complex`.
 - **`#lang r7rs`: referential transparency.** A `syntax-rules` template's
   free identifiers now mean what they meant where the macro was defined. The
   lowering tracks lexical scope, gives local binders unique names, and resolves

@@ -49,11 +49,11 @@ that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 (native and browser) analysing and formatting Scheme, the editor packs,
 `gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
 runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
-which reports a count: 1103 of 1216 tests pass on both back ends (887 on the
+which reports a count: 1134 of 1216 tests pass on both back ends (887 on the
 interpreter, and a compiled build that did not finish, when it was first
-wired; 1082 at the end of R10, 1096 after Section 9's T0, and 1103 after
-T1). Each landed stage carries a "What shipped" note below. What is
-left -- exact rationals, mutable character-indexed strings,
+wired; 1082 at the end of R10, then 1096, 1103 and 1134 after Section 9's
+T0, T1 and T2). Each landed stage carries a "What shipped" note below. What is
+left -- mutable character-indexed strings,
 `eval` (the interpreter linked in on demand), re-entrant continuations and,
 last, complex numbers -- is Section 9,
 as tasks that change what a Scheme program means and leave Turmeric's and
@@ -615,7 +615,7 @@ early.
 **Verdict: checked overflow at R5. Bignums named, scoped, and deferred --
 plausibly to a spice.** *Superseded 2026-09-24 by Section 9's T1: bignums
 landed in-tree (`src/compiler/r7rs_bignum.inc`, no GMP), so an exact result
-past int64 is a bignum, not an error.*
+past int64 is a bignum, not an error; and T2 added exact rationals over it.*
 
 R7RS lets an implementation limit the range of exact integers; it does **not**
 let one silently return the wrong number. So the minimum viable conformant
@@ -1759,8 +1759,8 @@ What `#lang r7rs` still does differently from R7RS, measured on 2026-09-24:
 chibi's suite passed 1082 of the 1216 tests written in it, on both back ends,
 and the runner counted 143 failed test invocations (a test-numeric-syntax
 form counts two). Every one of those 143 belonged to a task below; the counts
-per task are the runner's, as written before T0. T0 and T1 have landed
-since: 1103 pass and 122 invocations fail, and the test lines each task
+per task are the runner's, as written before T0. T0, T1 and T2 have landed
+since: 1134 pass and 91 invocations fail, and the test lines each task
 turned green are struck from the tasks below (each task says so). Section
 9.3 lists the documented differences no chibi test reaches.
 
@@ -1976,7 +1976,8 @@ do first).** *Landed 2026-09-24; see "What shipped" at the end of the task.*
 
 **T2 -- exact rationals (42 tests before T0, 30 after, plus line 841 from
 T1: 199, 768, 780, 841, 902, 904, 905, 965, 967, 968, 970, 972, 973, 1027,
-1028; number syntax 2363, 2364, 2366, 2435-2438).**
+1028; number syntax 2363, 2364, 2366, 2435-2438).** *Landed 2026-09-24; see
+"What shipped" at the end of the task.*
 
 - **Today:** `(/ 7 2)` is the inexact 3.5, and `numerator`/`denominator` of
   an exact non-integer cannot arise.
@@ -1998,6 +1999,70 @@ T1: 199, 768, 780, 841, 902, 904, 905, 965, 967, 968, 970, 972, 973, 1027,
 - **Seam:** a ratio passed to a Turmeric `int` or `float` parameter is a
   checked error; the Scheme side converts with `inexact` or `round`.
 - **Done:** the 42 tests.
+
+> **What shipped (T2, 2026-09-24).** Exact rationals, on both back ends. The
+> count is **1134** of 1216, up from 1103: all 31 T2 invocations, including
+> line 841 and the `means` test (199). Nothing is left in T2.
+>
+> - **The value.**
+>   - An `R7rsRatio` has a numerator and denominator that are exact integers
+>     (int64 or bignum, T1), in lowest terms, with a denominator above 1 and
+>     the sign on the numerator.
+>   - `r7rs-make-ratio__` is the one constructor, so `(/ 6 3)` is the
+>     integer 2 and no ratio is ever integral.
+>   - Tests use `r7rs-ratio?`, not a bare `is?`. A bare `is?` would narrow
+>     the value to the unique heap struct, and using it twice is TUR-E0201.
+> - **The tower.**
+>   - `+`, `-`, `*` and `/` are exact on exact operands, and a double
+>     operand makes the result inexact.
+>   - `(/ 7 2)` is 7/2. **This is a visible change**: it used to be 3.5.
+>   - Two ints that divide stay on int64.
+>   - Every ratio operation normalizes through `gcd`, which got an int64
+>     fast path.
+>   - Comparisons are exact, and a ratio against a double goes through the
+>     double's exact value.
+>   - `floor`, `ceiling`, `truncate` and `round` give exact integers; `round`
+>     takes ties to even.
+>   - `numerator`/`denominator` return the parts.
+>   - `exact` of any finite double is its exact dyadic value, so `(exact .3)`
+>     is 5404319552844595/18014398509481984.
+>   - `inexact` rounds correctly. The core forms n*2^k/d with about 70 bits,
+>     folds any remainder into a sticky bit, and rounds once.
+>   - `(expt 2 -10)` is 1/1024, `expt` takes a ratio base, and `(sqrt 4/9)`
+>     is 2/3.
+>   - `rationalize` is one continued-fraction walk over the generic
+>     operators, so it is exact on exact arguments and inexact on inexact
+>     ones.
+>   - `(features)` lists `ratios`.
+> - **Reading and writing.**
+>   - The shared parser returns R7NS_RATIO with an "n/d" spelling, and a
+>     source literal reads as `(r7rs-ratio__ "n/d")`.
+>   - `#e` reads a decimal lexeme exactly from its digits: `#e1.2` is 6/5,
+>     and `#e1e30` is 10^30 exactly, not the double's value.
+>   - `#i` on a ratio is the correctly rounded double.
+>   - `write` and `number->string` (any radix) spell `n/d`.
+>   - `bignum.inc` grew `gcd`, `pow`, the exact value of a double, the
+>     correctly rounded ratio-to-double, and the canonical ratio spelling.
+>   - `errors/r7rs-reader-ratio` and `errors/r7rs-reader-exact-rational` are
+>     gone, since what they refused now reads.
+> - **The seam:** a ratio passed to a Turmeric `int` or `float` parameter is
+>   the checked cast error, as a bignum is.
+> - **A hazard, recorded here and at `r7rs-exint-of__`.**
+>   - For a moment, a non-integer argument to `quotient` and the other
+>     integer procedures raised a condition `guard` could catch. `raise` is
+>     reachable from `=` (a ratio compared with a double goes through
+>     `exact`, then `make-ratio`, then `gcd`).
+>   - The effect analysis therefore marked every procedure that compares
+>     numbers as effectful and compiled it to CPS. That lost the tail-call
+>     trampoline, and `r7rs-tail-calls` segfaulted at 10^7.
+>   - It is a panic again, as it was before T2. Nothing reachable from
+>     arithmetic may `raise`.
+> - **Fixtures:**
+>   - `r7rs-rationals`, on both back ends.
+>   - Regenerated for 7/2 where they had 3.5: `r7rs-numbers`,
+>     `r7rs-base-library` (the features list), `r7rs-number-syntax`.
+>   - `docs-r7rs-guide-examples` is back in step with the guide. It had
+>     missed T1's example change.
 
 **T3 -- mutable, character-indexed strings (13 tests: 1322, 1324,
 1458-1479, 2258).**

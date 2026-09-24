@@ -1,0 +1,32 @@
+#lang r7rs
+;; r7rs-lang-plan T2: exact rationals.  An exact non-integer is an R7rsRatio
+;; in lowest terms, its parts exact integers (int64 or bignum, T1), and a
+;; ratio that divides is the integer.  `(/ 7 2)` is 7/2, where it was the
+;; inexact 3.5 -- a visible change for existing `#lang r7rs` code.  Both back
+;; ends; a Turmeric int's `/` is unchanged (it is not this dialect's).
+(import (scheme base) (scheme write) (scheme read) (scheme inexact))
+(define (show x) (write x) (newline))
+
+;; Division, literals, and lowest terms.
+(show (list (/ 7 2) (/ 6 3) (/ 3) (/ 3 4 5) (/ 1 -3) 6/10 -3/2 #x11/2 #e1.2 #e1e-3))
+
+;; Arithmetic and comparison, exact; a double makes the result inexact.
+(show (list (+ 1/2 1/3) (* 2/3 3/4) (- 1/2 1/2) (* 1/3 3) (+ 1/2 0.25)))
+(show (list (< 1/3 0.3334) (= 1/2 0.5) (> 1/3 1/4) (= 1/3 (/ 2 6)) (max 1/2 1/3) (min 1/2 0.25)))
+
+;; Rounding is exact, round takes ties to even.
+(show (list (floor -7/2) (ceiling -7/2) (truncate -7/2) (round 7/2) (round 5/2) (round -7/10)))
+
+;; Parts, exactness, predicates.
+(show (list (numerator 6/4) (denominator 6/4) (exact .5) (exact .3) (inexact 1/3)))
+(show (list (rational? 6/10) (exact-integer? 32/5) (integer? 8/4) (exact? 1/2) (zero? 1/2)
+            (negative? -1/2) (eqv? 1/2 2/4) (equal? '(1/2) (list (/ 2 4)))))
+
+;; expt, sqrt, rationalize.
+(show (list (expt 2 -10) (expt 2/3 3) (expt 1/2 -2) (sqrt 4/9) (sqrt 2/9)))
+(show (list (rationalize (exact .3) 1/10) (rationalize .3 1/10)))
+
+;; Bignum parts (T1), and the spellings.
+(show (list (/ (expt 10 30) 7) (expt 2 -70)))
+(show (list (number->string 17/2 16) (string->number "-6/4") (read (open-input-string "(1/2 #e.25)"))))
+

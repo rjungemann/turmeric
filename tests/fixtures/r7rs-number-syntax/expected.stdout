@@ -1,9 +1,9 @@
 (5 0 8 1.5 0.0625 3 -2.5 1 1 7.25 -7.25 5 0.5)
 (5 1.5 100.0 100.0 +inf.0 31 7.25 #f #f #f #f)
-(error "string->number: `1/2`: an exact non-integer needs exact rationals, which `#lang r7rs` does not have yet (r7rs-lang-plan T2); write it inexact (`#i` prefix or a decimal point)")
+1/2
 (error "string->number: `3+4i`: a non-real complex number needs complex numbers, which `#lang r7rs` does not have yet (r7rs-lang-plan T6)")
 99999999999999999999
-(error "read: `-1/2`: an exact non-integer needs exact rationals, which `#lang r7rs` does not have yet (r7rs-lang-plan T2); write it inexact (`#i` prefix or a decimal point)")
+(a -1/2)
 (error "read: `+i`: a non-real complex number needs complex numbers, which `#lang r7rs` does not have yet (r7rs-lang-plan T6)")
 (5 0.25 |1/2| a/b -> ... + -)
 (|1/2| |+i| |3+4i| a/b)

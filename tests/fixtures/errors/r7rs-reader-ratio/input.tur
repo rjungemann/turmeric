@@ -1,8 +1,0 @@
-#lang r7rs
-;; r7rs-lang-plan T0: `1/2` is ONE number token.  The reader used to split it
-;; into `1` and the symbol `/2`, so the error named an unbound `/2` -- the
-;; wrong thing.  Until exact rationals (T2) an exact non-integer is refused
-;; with the reason; `10/2` (an integer) and `#i1/2` (inexact) read fine.
-(import (scheme base) (scheme write))
-(write (list 10/2 #i1/2))
-(write 1/2)

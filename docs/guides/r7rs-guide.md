@@ -92,11 +92,12 @@ named-`let` loop runs in constant space however long it runs.
 
 ## Numbers
 
-An exact integer has no size limit, and an inexact real is a double:
+An exact integer has no size limit, an exact non-integer is a ratio, and an
+inexact real is a double:
 
 ```scheme
 (write (list (/ 7 2) (/ 6 2) (exact->inexact 3) (+ 7.1 0.25) (expt 2 100)))
-; (3.5 3 3.0 7.35 1267650600228229401496703205376)
+; (7/2 3 3.0 7.35 1267650600228229401496703205376)
 ```
 
 An exact integer is a 64-bit int while it fits, which keeps the common case
@@ -112,23 +113,40 @@ A bignum is a Scheme value only. Passed to a Turmeric procedure that takes an
 `int`, it is the import's checked cast error (`cast: any holds R7rsBig, not
 int`); a procedure that takes `any` receives it as it is.
 
-There are no exact rationals yet, so `(/ 7 2)` is the inexact 3.5 rather than
-7/2.
+Division of exact numbers is exact: `(/ 7 2)` is the ratio 7/2, kept in
+lowest terms, and `(/ 6 2)` is the integer 3. Ratios work through the whole
+tower. Arithmetic and comparison are exact, and `floor`, `ceiling`,
+`truncate` and `round` give exact integers (`round` takes a tie to even).
+`numerator` and `denominator` give the parts. `exact` of a double gives its
+exact value, so `(exact .5)` is 1/2. `(expt 2 -10)` is 1/1024, `(sqrt 4/9)`
+is 2/3, and `rationalize` finds the simplest rational in an interval.
+`inexact` gives the nearest double:
+
+```scheme
+(write (list (+ 1/2 1/3) (exact .5) (round 7/2) (inexact 1/3)))
+; (5/6 1/2 4 0.3333333333333333)
+```
+
+`#e` reads a decimal exactly, so `#e1.2` is 6/5, not the value of the double
+1.2. A ratio passed to a Turmeric `int` or `float` parameter is a checked
+cast error, as a bignum is; convert it on the Scheme side with `inexact` or
+`round`.
+
+**Visible change:** before r7rs-lang-plan T2, `(/ 7 2)` was the inexact 3.5.
 
 Numbers are read by one parser: in a source file, by `read`, and by
 `string->number`. It knows the whole R7RS number syntax, so a ratio or a
-complex number is one token. When the value is one the tower holds, it reads
-as that value: `10/2` is 5, `#i3/2` is 1.5, and `3+0i` is 3, because an
-exact zero imaginary part makes a real. When it is not, the number is refused
-with the reason and the task in the plan that brings it. That happens at
-compile time for a literal. `read` and `string->number` raise an error a
-program can `guard`. The number is never split into a number and a stray
-symbol, and never read as a different number:
+complex number is one token. A complex number whose imaginary part is an
+exact zero is the real it is, so `3+0i` is 3. Any other complex number is
+refused, with the reason and the task in the plan that brings it. That
+happens at compile time for a literal. `read` and `string->number` raise an
+error a program can `guard`. The number is never split into a number and a
+stray symbol, and never read as a different number:
 
 ```scheme
 (write (list 10/2 #i3/2 3+0i (string->number "1e2")))   ; (5 1.5 3 100.0)
-(string->number "1/2")
-; error: string->number: `1/2`: an exact non-integer needs exact rationals ...
+(string->number "1+2i")
+; error: string->number: `1+2i`: a non-real complex number needs complex numbers ...
 ```
 
 ## Macros
@@ -228,7 +246,7 @@ signature. `tests/run-r7rs-import.sh` pins both directions on both back ends.
 
 - **Strings are immutable.** `string-set!`, `string-fill!` and `string-copy!`
   are refused with the reason. Every other string procedure is there.
-- **No exact rationals.** See Numbers above.
+- **No complex numbers.** See Numbers above.
 - **`call/cc` is an escape only.** A continuation cannot be re-entered after
   its `call/cc` returns.
 - **`apply` and dynamic calls take at most four arguments.**
@@ -260,10 +278,10 @@ bash tests/run-r7rs-conformance.sh      # both back ends, about two minutes
 python3 tests/r7rs/run-conformance.py --backend interp --list-failures
 ```
 
-**1103 of the 1216 tests** written in the suite pass, the same on the
+**1134 of the 1216 tests** written in the suite pass, the same on the
 interpreter and the compiled back end. Nearly all the rest are the
-differences listed above: exact rationals (`1/2`, `(expt 2 -10)`), complex
-numbers (`3+4i`), the three string mutators, `eval` and
+differences listed above: complex numbers (`3+4i`), the three string
+mutators, `eval` and
 `environment`, re-entering a continuation, and a string indexed by bytes.
 What remains after those is two float spellings that differ from chibi's
 own (`1.7976931348623157e308` rather than `e+308`; both are R7RS).

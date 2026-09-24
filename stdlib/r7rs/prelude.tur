@@ -250,9 +250,10 @@
               (r7rs-same-ref__ a b)
               (if (r7rs-bytevector? a)
                 (r7rs-same-ref__ a b)
-                ;; T1: two bignums are eqv when they are the same number.
-                (if (r7rs-big? a)
-                  (= (r7rs-big-cmp__ (r7rs-big-digits__ a) (r7rs-big-digits__ b)) 0)
+                ;; T1/T2: two bignums, or two ratios, are eqv when they are the same
+                ;; number.
+                (if (if (r7rs-big? a) true (r7rs-ratio? a))
+                  (= (r7rs-cmp-slow__ a b) 0)
                   (if (r7rs-eqv-by-value?__ a)
                     (= a b)
                     ;; R8: a record, a port, a procedure, a promise -- identity
@@ -414,6 +415,10 @@
 ;;; r7rs-exint? -- an exact integer: an int or a bignum.
 (defn r7rs-exint? [x] : bool (if (is? x int) true (is? x R7rsBig)))
 (defn r7rs-any-big?__ [a b] : bool (if (is? a R7rsBig) true (is? b R7rsBig)))
+;;; r7rs-any-exotic?__ -- either operand is a bignum or a ratio: off the
+;;; int64/double fast paths.
+(defn r7rs-any-exotic?__ [a b] : bool
+  (if (r7rs-any-big?__ a b) true (if (r7rs-ratio? a) true (r7rs-ratio? b))))
 ;;; r7rs-dec__ -- an exact integer's decimal spelling, for the bignum core.
 (defn r7rs-dec__ [x] : cstr (if (is? x int) (r7rs-int->string-radix__ x 10) (r7rs-big-digits__ x)))
 ;;; r7rs-big2__ -- one bignum-core operation (the R7BN_* codes of
@@ -421,33 +426,105 @@
 (defn r7rs-big2__ [op : int a b] : any (r7rs-big-norm__ (r7rs-big-op__ op (r7rs-dec__ a) (r7rs-dec__ b))))
 (defn r7rs-big-neg?__ [x] : bool (< (r7rs-big-cmp__ (r7rs-big-digits__ x) "0") 0))
 
-(defn r7rs-to-float__ [x] : float
-  (if (is? x float) x (if (is? x int) (r7rs-int->float__ x) (r7rs-big->float__ (r7rs-big-digits__ x)))))
+;;; ---- exact rationals (T2) ---------------------------------------------------
+;;;
+;;; An `R7rsRatio` is an exact non-integer: numerator and denominator are
+;;; exact integers (an int or a bignum), in lowest terms, the denominator
+;;; greater than 1 and the sign on the numerator.  r7rs-make-ratio__ is the
+;;; one constructor, so a ratio is never a number an integer could be, and
+;;; `(/ 6 3)` is the integer 2.  Tests go through r7rs-ratio?, not a bare
+;;; `is?`, which would narrow the value to the (unique) heap struct.
+(defstruct R7rsRatio :heap [num : any den : any])
+(defn r7rs-ratio? [x] : bool (is? x R7rsRatio))
+(defn r7rs-ratio-num__ [r : R7rsRatio] : any (.num r))
+(defn r7rs-ratio-den__ [r : R7rsRatio] : any (.den r))
+;;; r7rs-exrat? -- an exact rational: an exact integer or a ratio.
+(defn r7rs-exrat? [x] : bool (if (r7rs-exint? x) true (r7rs-ratio? x)))
+;;; r7rs-num-of__ / r7rs-den-of__ -- an exact rational's parts (an integer
+;;; is itself over 1).
+(defn r7rs-num-of__ [x] : any (if (r7rs-ratio? x) (r7rs-ratio-num__ x) x))
+(defn r7rs-den-of__ [x] : any (if (r7rs-ratio? x) (r7rs-ratio-den__ x) (:: 1 any)))
+;;; r7rs-make-ratio__ -- n/d in lowest terms; n and d exact integers, d
+;;; nonzero.  An integer when d divides n.
+(defn r7rs-make-ratio__ [n d] : any
+  (let [g (r7rs-gcd2__ n d)
+        sg (if (r7rs-negative? d) (r7rs-sub2__ 0 g) g)
+        nn (r7rs-quotient-i__ n sg)
+        dd (r7rs-quotient-i__ d sg)]
+    (if (r7rs-numeq2__ dd 1) nn (:: (R7rsRatio nn dd) any))))
+;;; r7rs-ratio-of-str__ -- the value of an "n/d" (or "n") spelling, as the
+;;; number parser and the exact value of a double produce it.
+(defn r7rs-ratio-of-str__ [s : cstr] : any
+  (r7rs-make-ratio__ (r7rs-big-norm__ (r7rs-ratio-part__ s 0)) (r7rs-big-norm__ (r7rs-ratio-part__ s 1))))
+;;; r7rs-ratio__ -- the reader's constructor: an exact non-integer literal
+;;; reads as `(r7rs-ratio__ "<n>/<d>")`, as a char reads as `(r7rs-char__ n)`.
+(defn r7rs-ratio__ [s : cstr] : any (r7rs-ratio-of-str__ s))
+;;; r7rs-exint-cmp__ -- two exact integers: -1, 0 or 1.
+(defn r7rs-exint-cmp__ [a b] : int
+  (if (r7rs-both-int?__ a b)
+    (if (< a b) -1 (if (> a b) 1 0))
+    (r7rs-big-cmp__ (r7rs-dec__ a) (r7rs-dec__ b))))
+;;; r7rs-rat-arith__ -- + - * (op 0 1 2) on two exact rationals.
+(defn r7rs-rat-arith__ [op : int a b] : any
+  (let [an (r7rs-num-of__ a) ad (r7rs-den-of__ a) bn (r7rs-num-of__ b) bd (r7rs-den-of__ b)]
+    (if (= op 2)
+      (r7rs-make-ratio__ (r7rs-mul2__ an bn) (r7rs-mul2__ ad bd))
+      (let [l (r7rs-mul2__ an bd) r (r7rs-mul2__ bn ad)]
+        (r7rs-make-ratio__ (if (= op 0) (r7rs-add2__ l r) (r7rs-sub2__ l r)) (r7rs-mul2__ ad bd))))))
+;;; r7rs-rat-cmp__ -- two exact rationals, exactly: -1, 0 or 1 (the
+;;; denominators are positive, so cross-multiplying keeps the order).
+(defn r7rs-rat-cmp__ [a b] : int
+  (r7rs-exint-cmp__ (r7rs-mul2__ (r7rs-num-of__ a) (r7rs-den-of__ b))
+                    (r7rs-mul2__ (r7rs-num-of__ b) (r7rs-den-of__ a))))
+;;; r7rs-cmp-rat-any__ -- a comparison with a ratio: against a double through
+;;; the double's exact value; 2 when a double is a NaN.
+(defn r7rs-cmp-rat-any__ [a b] : int
+  (if (is? a float)
+    (let [c (r7rs-cmp-rat-any__ b a)] (if (= c 2) 2 (- 0 c)))
+    (if (is? b float)
+      (if (r7rs-float-nan?__ b)
+        2
+        (if (r7rs-float-infinite?__ b)
+          (if (> b 0.0) -1 1)
+          (r7rs-rat-cmp__ a (r7rs-exact b))))
+      (r7rs-rat-cmp__ a b))))
 
-(defn r7rs-number? [x] : bool (if (is? x int) true (if (is? x float) true (is? x R7rsBig))))
+(defn r7rs-to-float__ [x] : float
+  (if (is? x float)
+    x
+    (if (is? x int)
+      (r7rs-int->float__ x)
+      (if (r7rs-ratio? x)
+        (r7rs-ratio->float__ (r7rs-dec__ (r7rs-ratio-num__ x)) (r7rs-dec__ (r7rs-ratio-den__ x)))
+        (r7rs-big->float__ (r7rs-big-digits__ x))))))
+
+(defn r7rs-number? [x] : bool (if (is? x int) true (if (is? x float) true (if (is? x R7rsBig) true (r7rs-ratio? x)))))
 (defn r7rs-complex? [x] : bool (r7rs-number? x))
 (defn r7rs-real? [x] : bool (r7rs-number? x))
 (defn r7rs-finite? [x] : bool
-  (if (is? x float) (if (r7rs-float-nan?__ x) false (if (r7rs-float-infinite?__ x) false true)) (r7rs-exint? x)))
+  (if (is? x float) (if (r7rs-float-nan?__ x) false (if (r7rs-float-infinite?__ x) false true)) (r7rs-exrat? x)))
 (defn r7rs-infinite? [x] : bool (if (is? x float) (r7rs-float-infinite?__ x) false))
 (defn r7rs-nan? [x] : bool (if (is? x float) (r7rs-float-nan?__ x) false))
 (defn r7rs-rational? [x] : bool (r7rs-finite? x))
 (defn r7rs-integer? [x] : bool (if (r7rs-exint? x) true (if (is? x float) (r7rs-float-integral?__ x) false)))
-(defn r7rs-exact? [x] : bool (if (r7rs-number? x) (r7rs-exint? x) (r7rs-fail-bool__ "exact?: not a number")))
+(defn r7rs-exact? [x] : bool (if (r7rs-number? x) (r7rs-exrat? x) (r7rs-fail-bool__ "exact?: not a number")))
 (defn r7rs-inexact? [x] : bool (if (r7rs-number? x) (is? x float) (r7rs-fail-bool__ "inexact?: not a number")))
 (defn r7rs-exact-integer? [x] : bool (r7rs-exint? x))
-(defn r7rs-exact-rational? [x] : bool (r7rs-exint? x))
+(defn r7rs-exact-rational? [x] : bool (r7rs-exrat? x))
 
 ;;; ---- exact arithmetic: int64, then bignums (T1) --------------------------
 
 (defn r7rs-both-int?__ [a b] : bool (if (is? a int) (is? b int) false))
-;;; r7rs-big-arith__ -- + - * (op 0 1 2) with a bignum operand: inexact when
-;;; the other one is, else on the bignum core.
+;;; r7rs-big-arith__ -- + - * (op 0 1 2) with a bignum or ratio operand:
+;;; inexact when the other one is, exact rationals (T2) when either is a
+;;; ratio, else the bignum core.
 (defn r7rs-big-arith__ [op : int a b] : any
   (if (if (is? a float) true (is? b float))
     (let [x (r7rs-to-float__ a) y (r7rs-to-float__ b)]
       (:: (if (= op 0) (+ x y) (if (= op 1) (- x y) (* x y))) any))
-    (r7rs-big2__ op a b)))
+    (if (if (r7rs-ratio? a) true (r7rs-ratio? b))
+      (r7rs-rat-arith__ op a b)
+      (r7rs-big2__ op a b))))
 
 ;;; r7rs-add2__ ... -- the binary operators the lowering emits.  Two ints
 ;;; take the int64 path unless it overflows (T1: then the bignum core, where
@@ -456,25 +533,28 @@
 (defn r7rs-add2__ [a b] : any
   (if (r7rs-both-int?__ a b)
     (if (r7rs-int-ovf?__ 0 a b) (r7rs-big2__ 0 a b) (+ a b))
-    (if (r7rs-any-big?__ a b) (r7rs-big-arith__ 0 a b) (+ a b))))
+    (if (r7rs-any-exotic?__ a b) (r7rs-big-arith__ 0 a b) (+ a b))))
 (defn r7rs-sub2__ [a b] : any
   (if (r7rs-both-int?__ a b)
     (if (r7rs-int-ovf?__ 1 a b) (r7rs-big2__ 1 a b) (- a b))
-    (if (r7rs-any-big?__ a b) (r7rs-big-arith__ 1 a b) (- a b))))
+    (if (r7rs-any-exotic?__ a b) (r7rs-big-arith__ 1 a b) (- a b))))
 (defn r7rs-mul2__ [a b] : any
   (if (r7rs-both-int?__ a b)
     (if (r7rs-int-ovf?__ 2 a b) (r7rs-big2__ 2 a b) (* a b))
-    (if (r7rs-any-big?__ a b) (r7rs-big-arith__ 2 a b) (* a b))))
-;;; r7rs-div2__ -- exact when the quotient is exact, inexact otherwise
-;;; (there are no rationals), and division by exact zero is an error.
+    (if (r7rs-any-exotic?__ a b) (r7rs-big-arith__ 2 a b) (* a b))))
+;;; r7rs-div2__ -- T2: exact on exact operands, a ratio when the quotient is
+;;; not an integer (`(/ 7 2)` is 7/2, where it was 3.5), and division by
+;;; exact zero is an error.  Two ints that divide stay on int64 (-1 aside:
+;;; INT64_MIN / -1 leaves it).
 (defn r7rs-div-exact__ [a b] : any
   (if (r7rs-zero? b)
     (r7rs-fail-any__ "/: division by exact zero")
-    (if (r7rs-zero? (r7rs-remainder a b))
-      (r7rs-quotient a b)
-      (:: (/ (r7rs-to-float__ a) (r7rs-to-float__ b)) any))))
+    (if (if (r7rs-both-int?__ a b) (if (= b -1) false (= (mod a b) 0)) false)
+      (:: (/ a b) any)
+      (r7rs-make-ratio__ (r7rs-mul2__ (r7rs-num-of__ a) (r7rs-den-of__ b))
+                         (r7rs-mul2__ (r7rs-den-of__ a) (r7rs-num-of__ b))))))
 (defn r7rs-div2__ [a b] : any
-  (if (if (r7rs-exint? a) (r7rs-exint? b) false)
+  (if (if (r7rs-exrat? a) (r7rs-exrat? b) false)
     (r7rs-div-exact__ a b)
     (:: (/ (r7rs-to-float__ a) (r7rs-to-float__ b)) any)))
 ;;; R10: an exact integer and an inexact real compare EXACTLY (R7RS 6.2.6
@@ -512,8 +592,10 @@
       (r7rs-big-cmp-float__ (r7rs-dec__ a) b)
       (r7rs-big-cmp__ (r7rs-dec__ a) (r7rs-dec__ b)))))
 (defn r7rs-cmp-slow__ [a b] : int
-  (if (r7rs-any-big?__ a b) (r7rs-cmp-big__ a b) (r7rs-cmp-mixed__ a b)))
-(defn r7rs-slow?__ [a b] : bool (if (r7rs-mixed?__ a b) true (r7rs-any-big?__ a b)))
+  (if (if (r7rs-ratio? a) true (r7rs-ratio? b))
+    (r7rs-cmp-rat-any__ a b)
+    (if (r7rs-any-big?__ a b) (r7rs-cmp-big__ a b) (r7rs-cmp-mixed__ a b))))
+(defn r7rs-slow?__ [a b] : bool (if (r7rs-mixed?__ a b) true (r7rs-any-exotic?__ a b)))
 (defn r7rs-numeq2__ [a b] : bool (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) 0) (= a b)))
 (defn r7rs-lt2__ [a b] : bool (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) -1) (< a b)))
 (defn r7rs-gt2__ [a b] : bool (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) 1) (> a b)))
@@ -544,16 +626,24 @@
 
 ;;; ---- predicates, min/max, abs -------------------------------------------
 
-;;; A bignum is never zero (a zero is an int), and its sign is its spelling's.
-(defn r7rs-zero? [x] : bool (if (is? x R7rsBig) false (= x 0)))
-(defn r7rs-positive? [x] : bool (if (is? x R7rsBig) (r7rs-not (r7rs-big-neg?__ x)) (> x 0)))
-(defn r7rs-negative? [x] : bool (if (is? x R7rsBig) (r7rs-big-neg?__ x) (< x 0)))
+;;; A bignum or a ratio is never zero (a zero is an int); a bignum's sign is
+;;; its spelling's, a ratio's its numerator's.
+(defn r7rs-zero? [x] : bool (if (is? x R7rsBig) false (if (r7rs-ratio? x) false (= x 0))))
+(defn r7rs-positive? [x] : bool
+  (if (is? x R7rsBig) (r7rs-not (r7rs-big-neg?__ x)) (if (r7rs-ratio? x) (r7rs-positive? (r7rs-ratio-num__ x)) (> x 0))))
+(defn r7rs-negative? [x] : bool
+  (if (is? x R7rsBig) (r7rs-big-neg?__ x) (if (r7rs-ratio? x) (r7rs-negative? (r7rs-ratio-num__ x)) (< x 0))))
 ;;; r7rs-int-of__ -- an integer argument that must fit int64 (an index, a
 ;;; count, a character code): a bignum there is the error `who`.
 (defn r7rs-int-of__ [x who : cstr] : int
   (if (is? x int) x (if (is? x float) (if (r7rs-integer? x) (r7rs-float->int__ x) (r7rs-fail-int__ who)) (r7rs-fail-int__ who))))
 ;;; r7rs-exint-of__ -- an integer argument as an exact integer (an int or a
-;;; bignum); an inexact integer converts exactly.
+;;; bignum); an inexact integer converts exactly, anything else (a ratio, T2)
+;;; is the panic `who`.  Not a raised condition: this is reachable from `=`
+;;; (through the exact comparison of a ratio and a double), and a `raise`
+;;; there makes every procedure that compares numbers effectful, which
+;;; compiles it to CPS and costs the tail-call trampoline
+;;; (tests/fixtures/r7rs-tail-calls).
 (defn r7rs-exint-of__ [x who : cstr] : any
   (if (r7rs-exint? x) x (if (r7rs-integer? x) (r7rs-exact x) (r7rs-fail-any__ who))))
 (defn r7rs-fail-int__ [msg : cstr] : int
@@ -624,8 +714,14 @@
 (defn r7rs-truncate-quotient [a b] : any (r7rs-idiv-result__ (r7rs-truncate-quotient-i__ a b) a b))
 (defn r7rs-truncate-remainder [a b] : any (r7rs-idiv-result__ (r7rs-truncate-remainder-i__ a b) a b))
 ;;; gcd and lcm on the bignum core (code 6); the answers are non-negative.
+;;; T2: every ratio operation normalizes through gcd, so two ints (INT64_MIN
+;;; aside, whose magnitude leaves int64) take Euclid's loop on int64.
+(defn r7rs-igcd__ [a : int b : int] : int (if (= b 0) (if (< a 0) (- 0 a) a) (r7rs-igcd__ b (mod a b))))
 (defn r7rs-gcd2__ [a b] : any
-  (r7rs-big2__ 6 (r7rs-exint-of__ a "gcd: not an integer") (r7rs-exint-of__ b "gcd: not an integer")))
+  (let [x (r7rs-exint-of__ a "gcd: not an integer") y (r7rs-exint-of__ b "gcd: not an integer")]
+    (if (if (r7rs-both-int?__ x y) (if (= x -9223372036854775808) false (r7rs-not (= y -9223372036854775808))) false)
+      (:: (r7rs-igcd__ x y) any)
+      (r7rs-big2__ 6 x y))))
 (defn r7rs-gcd-go__ [l acc] : any
   (if (r7rs-null? l) acc (r7rs-gcd-go__ (r7rs-cdr l) (r7rs-gcd2__ acc (r7rs-car l)))))
 (defn r7rs-gcd [& xs : any] : any
@@ -644,36 +740,59 @@
 
 ;;; ---- rounding and exactness ----------------------------------------------
 
-(defn r7rs-floor [x] (if (r7rs-exint? x) x (:: (floor (r7rs-to-float__ x)) any)))
-(defn r7rs-ceiling [x] (if (r7rs-exint? x) x (:: (ceil (r7rs-to-float__ x)) any)))
-(defn r7rs-truncate [x] (if (r7rs-exint? x) x (:: (trunc (r7rs-to-float__ x)) any)))
-;;; r7rs-round -- to the nearest integer, ties to even (rint).
-(defn r7rs-round [x] (if (r7rs-exint? x) x (:: (rint (r7rs-to-float__ x)) any)))
-;;; r7rs-exact -- an inexact integer is exact at any size (T1: a bignum
-;;; outside int64, where T0 made it an overflow error).
+;;; T2: a ratio rounds exactly to an exact integer: floor is the floor
+;;; quotient of its parts (the denominator is positive), round takes ties to
+;;; even.
+(defn r7rs-rat-floor__ [x] : any (r7rs-floor-quotient-i__ (r7rs-ratio-num__ x) (r7rs-ratio-den__ x)))
+(defn r7rs-rat-round__ [x] : any
+  (let [fl (r7rs-rat-floor__ x)
+        d (r7rs-ratio-den__ x)
+        twice (r7rs-mul2__ 2 (r7rs-sub2__ (r7rs-ratio-num__ x) (r7rs-mul2__ fl d)))
+        c (r7rs-exint-cmp__ twice d)]
+    (if (= c -1) fl (if (= c 1) (r7rs-add2__ fl 1) (if (r7rs-even? fl) fl (r7rs-add2__ fl 1))))))
+(defn r7rs-floor [x] : any
+  (if (r7rs-exint? x) x (if (r7rs-ratio? x) (r7rs-rat-floor__ x) (:: (floor (r7rs-to-float__ x)) any))))
+(defn r7rs-ceiling [x] : any
+  (if (r7rs-exint? x)
+    x
+    (if (r7rs-ratio? x)
+      (r7rs-sub2__ 0 (r7rs-rat-floor__ (r7rs-sub2__ 0 x)))
+      (:: (ceil (r7rs-to-float__ x)) any))))
+(defn r7rs-truncate [x] : any
+  (if (r7rs-exint? x)
+    x
+    (if (r7rs-ratio? x)
+      (r7rs-quotient-i__ (r7rs-ratio-num__ x) (r7rs-ratio-den__ x))
+      (:: (trunc (r7rs-to-float__ x)) any))))
+;;; r7rs-round -- to the nearest integer, ties to even (rint for a double).
+(defn r7rs-round [x] : any
+  (if (r7rs-exint? x) x (if (r7rs-ratio? x) (r7rs-rat-round__ x) (:: (rint (r7rs-to-float__ x)) any))))
+;;; r7rs-exact -- a finite double's exact value: an int, a bignum at any size
+;;; (T1), or the ratio it is (T2: `(exact .5)` is 1/2; a double is a dyadic
+;;; fraction, so `(exact .3)` is 5404319552844595/18014398509481984).
 (defn r7rs-exact [x] : any
-  (if (r7rs-exint? x) x
-    (if (r7rs-integer? x)
+  (if (r7rs-exrat? x) x
+    (if (r7rs-finite? x)
       (let [f (r7rs-to-float__ x)]
-        (if (if (>= f 9223372036854775808.0) true (< f -9223372036854775808.0))
-          (r7rs-big-norm__ (r7rs-float->big__ f))
-          (:: (float->int f) any)))
-      (r7rs-fail-any__ "exact: no exact representation (an infinity or NaN has none, and a non-integer needs exact rationals, r7rs-lang-plan T2)"))))
+        (if (if (r7rs-float-integral?__ f) (if (< f 9223372036854775808.0) (>= f -9223372036854775808.0) false) false)
+          (:: (float->int f) any)
+          (r7rs-ratio-of-str__ (r7rs-exact-of-float__ f))))
+      (r7rs-fail-any__ "exact: an infinity or NaN has no exact representation"))))
 (defn r7rs-inexact [x] (if (is? x float) x (:: (r7rs-to-float__ x) any)))
 (defn r7rs-exact->inexact [x] (r7rs-inexact x))
 (defn r7rs-inexact->exact [x] (r7rs-exact x))
 ;;; r7rs-numerator / r7rs-denominator -- an exact integer is its own
-;;; numerator over 1.  R10: an inexact real is a dyadic fraction, so its
-;;; lowest terms are found by doubling until it is integral -- (numerator
-;;; 5.5) is 11.0 and (denominator 5.5) 2.0 -- with the answer inexact
-;;; (R7RS 6.2.6).  Only exact NON-integers need rationals, and there are none.
+;;; numerator over 1, and a ratio (T2) has its parts.  R10: an inexact real
+;;; is a dyadic fraction, so its lowest terms are found by doubling until it
+;;; is integral -- (numerator 5.5) is 11.0 and (denominator 5.5) 2.0 -- with
+;;; the answer inexact (R7RS 6.2.6).
 (defn r7rs-num-den__ [x : float d : float] : any
   (if (= x (trunc x)) (R7rsPair (:: x any) (:: d any)) (r7rs-num-den__ (* x 2.0) (* d 2.0))))
 (defn r7rs-num-den-of__ [x] : any
   (let [f (r7rs-to-float__ x)]
     (if (if (r7rs-nan? x) true (r7rs-infinite? x)) (R7rsPair x (:: 1.0 any)) (r7rs-num-den__ f 1.0))))
-(defn r7rs-numerator [x] (if (r7rs-exint? x) x (r7rs-car (r7rs-num-den-of__ x))))
-(defn r7rs-denominator [x] (if (r7rs-exint? x) (:: 1 any) (r7rs-cdr (r7rs-num-den-of__ x))))
+(defn r7rs-numerator [x] : any (if (r7rs-exrat? x) (r7rs-num-of__ x) (r7rs-car (r7rs-num-den-of__ x))))
+(defn r7rs-denominator [x] : any (if (r7rs-exrat? x) (r7rs-den-of__ x) (r7rs-cdr (r7rs-num-den-of__ x))))
 
 ;;; ---- powers, roots, transcendental --------------------------------------
 
@@ -681,13 +800,16 @@
 ;;; r7rs-isqrt__ -- floor of the square root of a non-negative exact
 ;;; integer, exact (the bignum core's code 8; Newton's iteration).
 (defn r7rs-isqrt__ [n] : any (r7rs-big2__ 8 n (:: 0 any)))
-;;; r7rs-sqrt -- exact when the argument is an exact perfect square, else
-;;; inexact; a negative argument is +nan.0 (no complex numbers).
+;;; r7rs-sqrt -- exact when the argument is an exact perfect square (T2: or
+;;; a ratio of two, `(sqrt 4/9)` is 2/3), else inexact; a negative argument
+;;; is +nan.0 (no complex numbers).
+(defn r7rs-exact-sqrt?__ [n] : bool
+  (let [r (r7rs-isqrt__ n)] (r7rs-numeq2__ (r7rs-mul2__ r r) n)))
 (defn r7rs-sqrt [x] : any
-  (if (r7rs-exint? x)
-    (if (r7rs-negative? x) (:: (sqrt (r7rs-to-float__ x)) any)
-      (let [r (r7rs-isqrt__ x)]
-        (if (r7rs-numeq2__ (r7rs-mul2__ r r) x) r (:: (sqrt (r7rs-to-float__ x)) any))))
+  (if (if (r7rs-exrat? x) (r7rs-not (r7rs-negative? x)) false)
+    (if (if (r7rs-exact-sqrt?__ (r7rs-num-of__ x)) (r7rs-exact-sqrt?__ (r7rs-den-of__ x)) false)
+      (r7rs-make-ratio__ (r7rs-isqrt__ (r7rs-num-of__ x)) (r7rs-isqrt__ (r7rs-den-of__ x)))
+      (:: (sqrt (r7rs-to-float__ x)) any))
     (:: (sqrt (r7rs-to-float__ x)) any)))
 
 ;;; ---- number <-> string ---------------------------------------------------
@@ -716,9 +838,12 @@
       (r7rs-int->string-radix__ x radix)
       (if (is? x R7rsBig)
         (r7rs-big-radix__ (r7rs-big-digits__ x) radix)
-        (if (= radix 10)
-          (r7rs-float->string__ (r7rs-to-float__ x))
-          (r7rs-fail-cstr__ "number->string: an inexact number takes radix 10 only"))))))
+        (if (r7rs-ratio? x)
+          (r7rs-string-append2__ (r7rs-number->string (r7rs-ratio-num__ x) radix)
+                                 (r7rs-string-append2__ "/" (r7rs-number->string (r7rs-ratio-den__ x) radix)))
+          (if (= radix 10)
+            (r7rs-float->string__ (r7rs-to-float__ x))
+            (r7rs-fail-cstr__ "number->string: an inexact number takes radix 10 only")))))))
 (defn r7rs-fail-cstr__ [msg : cstr] : cstr
   (panic msg)
   "")
@@ -740,7 +865,9 @@
                                                                        (r7rs-string-append2__ "`: " (r7rs-numsyn-why__ s radix)))))
           (if (= k 4)
             (r7rs-big-norm__ (r7rs-numsyn-big__ s radix))
-            (:: false any)))))))
+            (if (= k 5)
+              (r7rs-ratio-of-str__ (r7rs-numsyn-big__ s radix))
+              (:: false any))))))))
 ;;; r7rs-number-syntax?__ -- internal: s is number syntax at all, refused or
 ;;; not (write bars such a symbol: '|1/2|).
 (defn r7rs-number-syntax?__ [s : cstr] : bool (> (r7rs-numsyn-kind__ s 10) 0))
@@ -994,18 +1121,26 @@
 ;;; int64 is refused unless the base is 0, 1 or -1: the answer could not be
 ;;; stored.
 (defn r7rs-expt-exact__ [b e] : any
-  (if (is? e R7rsBig)
-    (if (r7rs-zero? b)
-      (:: 0 any)
-      (if (r7rs-numeq2__ b 1)
-        (:: 1 any)
-        (if (r7rs-numeq2__ b -1)
-          (if (r7rs-even? e) (:: 1 any) (:: -1 any))
-          (r7rs-fail-any__ "expt: the exponent is too large for an exact answer"))))
-    (r7rs-big2__ 7 b e)))
+  (if (r7rs-ratio? b)
+    (r7rs-make-ratio__ (r7rs-expt-exact__ (r7rs-ratio-num__ b) e) (r7rs-expt-exact__ (r7rs-ratio-den__ b) e))
+    (if (is? e R7rsBig)
+      (if (r7rs-zero? b)
+        (:: 0 any)
+        (if (r7rs-numeq2__ b 1)
+          (:: 1 any)
+          (if (r7rs-numeq2__ b -1)
+            (if (r7rs-even? e) (:: 1 any) (:: -1 any))
+            (r7rs-fail-any__ "expt: the exponent is too large for an exact answer"))))
+      (r7rs-big2__ 7 b e))))
+;;; T2: an exact base to a negative exact integer power is the exact
+;;; reciprocal, `(expt 2 -10)` is 1/1024.
 (defn r7rs-expt [b e] : any
-  (if (if (r7rs-exint? b) (if (r7rs-exint? e) (r7rs-not (r7rs-negative? e)) false) false)
-    (r7rs-expt-exact__ b e)
+  (if (if (r7rs-exrat? b) (r7rs-exint? e) false)
+    (if (r7rs-negative? e)
+      (if (r7rs-zero? b)
+        (r7rs-fail-any__ "expt: exact zero to a negative power")
+        (r7rs-div2__ 1 (r7rs-expt-exact__ b (r7rs-sub2__ 0 e))))
+      (r7rs-expt-exact__ b e))
     (:: (pow (r7rs-to-float__ b) (r7rs-to-float__ e)) any)))
 (defn r7rs-exp [x] : float (exp (r7rs-to-float__ x)))
 (defn r7rs-log [x & xs : any] : float
@@ -1431,27 +1566,32 @@
 ;;; feature_holds holds the same list).  `exact-closed`: + - * on exact
 ;;; integers are exact (or signal); only `/` may be inexact.
 (defn r7rs-features [] : any
-  (r7rs-list (:: (str->sym "r7rs") any) (:: (str->sym "exact-closed") any) (:: (str->sym "turmeric") any)))
+  (r7rs-list (:: (str->sym "r7rs") any) (:: (str->sym "exact-closed") any) (:: (str->sym "ratios") any)
+             (:: (str->sym "turmeric") any)))
 
-;;; r7rs-rationalize -- the simplest rational within y of x.  With no exact
-;;; rationals (D8): exact arguments always have an integer answer (x itself
-;;; lies in the interval), the one nearest zero; otherwise the answer is the
-;;; inexact simplest rational, found by the continued-fraction walk.
-(defn r7rs-simplest-pos__ [lo : float hi : float] : float
-  (let [fl (floor lo)]
-    (if (= fl lo) fl
-      (if (< fl (floor hi)) (+ fl 1.0)
-        (+ fl (/ 1.0 (r7rs-simplest-pos__ (/ 1.0 (- hi fl)) (/ 1.0 (- lo fl)))))))))
-(defn r7rs-simplest__ [lo : float hi : float] : float
-  (if (if (<= lo 0.0) (>= hi 0.0) false) 0.0
-    (if (> lo 0.0) (r7rs-simplest-pos__ lo hi) (- 0.0 (r7rs-simplest-pos__ (- 0.0 hi) (- 0.0 lo))))))
+;;; r7rs-rationalize -- the simplest rational within y of x (R7RS 6.2.6), by
+;;; the continued-fraction walk.  T2: the walk is written over the generic
+;;; operators, so exact arguments give the exact answer (`(rationalize
+;;; (exact .3) 1/10)` is 1/3) and an inexact one the inexact answer, from one
+;;; definition.
+(defn r7rs-simplest-pos__ [lo hi] : any
+  (let [fl (r7rs-floor lo)]
+    (if (r7rs-numeq2__ fl lo)
+      fl
+      (if (r7rs-lt2__ fl (r7rs-floor hi))
+        (r7rs-add2__ fl 1)
+        (r7rs-add2__ fl (r7rs-div2__ 1 (r7rs-simplest-pos__ (r7rs-div2__ 1 (r7rs-sub2__ hi fl))
+                                                            (r7rs-div2__ 1 (r7rs-sub2__ lo fl)))))))))
+(defn r7rs-simplest__ [lo hi] : any
+  (if (if (r7rs-le2__ lo 0) (r7rs-ge2__ hi 0) false)
+    (if (if (is? lo float) true (is? hi float)) (:: 0.0 any) (:: 0 any))
+    (if (r7rs-gt2__ lo 0)
+      (r7rs-simplest-pos__ lo hi)
+      (r7rs-sub2__ 0 (r7rs-simplest-pos__ (r7rs-sub2__ 0 hi) (r7rs-sub2__ 0 lo))))))
 (defn r7rs-rationalize [x y] : any
-  (if (if (is? x int) (is? y int) false)
-    (let [lo (- (cast x int) (r7rs-int-of__ (r7rs-abs y) "rationalize: bad tolerance"))
-          hi (+ (cast x int) (r7rs-int-of__ (r7rs-abs y) "rationalize: bad tolerance"))]
-      (if (if (<= lo 0) (>= hi 0) false) (:: 0 any) (if (> lo 0) (:: lo any) (:: hi any))))
-    (let [fx (r7rs-to-float__ x) fy (r7rs-to-float__ (r7rs-abs y))]
-      (:: (r7rs-simplest__ (- fx fy) (+ fx fy)) any))))
+  (if (if (r7rs-nan? x) true (r7rs-nan? y))
+    (:: (r7rs-add2__ (r7rs-to-float__ x) (r7rs-to-float__ y)) any)
+    (let [ay (r7rs-abs y)] (r7rs-simplest__ (r7rs-sub2__ x ay) (r7rs-add2__ x ay)))))
 
 ;;; ---- R7: (scheme char) -- case mapping ---------------------------------
 ;;;
@@ -1537,7 +1677,7 @@
 (defn r7rs-magnitude [x] : any (r7rs-abs x))
 ;;; r7rs-angle -- 0 for a non-negative real, pi for a negative one.
 (defn r7rs-angle [x] : any
-  (if (r7rs-negative? x) (:: 3.141592653589793 any) (if (r7rs-exint? x) (:: 0 any) (:: 0.0 any))))
+  (if (r7rs-negative? x) (:: 3.141592653589793 any) (if (r7rs-exrat? x) (:: 0 any) (:: 0.0 any))))
 (defn r7rs-make-rectangular [re im] : any
   (if (r7rs-zero? im) re (r7rs-fail-any__ "make-rectangular: complex numbers are not supported (a non-zero imaginary part)")))
 (defn r7rs-make-polar [m a] : any
@@ -2141,7 +2281,7 @@
 ;;; r7rs-atom-spelling__ -- a value that is not a pair, vector or error object.
 (defn r7rs-atom-spelling__ [x quoted : bool] : cstr
   (if (r7rs-fixnum?__ x) (r7rs-int->string__ x)
-    (if (r7rs-big? x) (r7rs-big-digits__ x)   ; T1
+    (if (if (r7rs-big? x) true (r7rs-ratio? x)) (r7rs-number->string x)   ; T1/T2
       (if (r7rs-flonum?__ x) (r7rs-float->string__ x)
         (if (r7rs-string? x) (if quoted (r7rs-escape-string__ x) x)
           (if (r7rs-boolean? x) (if x "#t" "#f")

@@ -21,30 +21,30 @@
  *
  * It reads the whole grammar -- prefixes, ratios, decimals with the R5RS
  * exponent markers, infinities, rectangular and polar complex numbers -- so
- * a token is never split into a number and a stray symbol.  What the tower
- * cannot hold yet is REFUSED with the reason, never read as something else:
- * an exact non-integer (T2), a non-real complex number (T6).  An exact
- * integer outside int64 is a bignum (T1): R7NS_BIG, with its canonical
- * decimal spelling in a malloc'd string the caller frees.  A ratio or
- * complex number whose value the
- * tower does hold reads as that value: `10/2` is 5, `#i1/2` is 0.5 and
- * `3+0i` is 3 (an exact zero imaginary part makes a real, R7RS 6.2.6). */
+ * a token is never split into a number and a stray symbol.  An exact integer
+ * outside int64 is a bignum (T1, R7NS_BIG) and an exact non-integer a ratio
+ * (T2, R7NS_RATIO), each spelled in a malloc'd string the caller frees; a
+ * ratio that divides is the integer (`10/2` is 5).  A complex number whose
+ * imaginary part is an exact zero is the real it is (`3+0i` is 3, R7RS
+ * 6.2.6).  What the tower cannot hold yet -- a non-real complex number (T6)
+ * -- is REFUSED with the reason, never read as something else. */
 
-enum { R7NS_NONE = 0, R7NS_INT = 1, R7NS_FLOAT = 2, R7NS_REFUSED = 3, R7NS_BIG = 4 };
+enum { R7NS_NONE = 0, R7NS_INT = 1, R7NS_FLOAT = 2, R7NS_REFUSED = 3, R7NS_BIG = 4,
+       R7NS_RATIO = 5 };
 
 typedef struct {
     int kind;          /* R7NS_*: not a number, an exact int, a double,
-                        * refused, an exact integer outside int64 */
+                        * refused, an exact integer outside int64, an exact
+                        * non-integer */
     int64_t i;         /* R7NS_INT */
     double f;          /* R7NS_FLOAT */
     const char *why;   /* R7NS_REFUSED: why, as a sentence fragment */
-    char *big;         /* R7NS_BIG: decimal digits, malloc'd, the caller's */
+    char *big;         /* R7NS_BIG: decimal digits; R7NS_RATIO: "n/d" in
+                        * lowest terms, the sign on n.  malloc'd, the caller's */
 } r7rs_ns_result;
 
-static const char r7rs_ns_why_ratio[] =
-    "an exact non-integer needs exact rationals, which `#lang r7rs` does not "
-    "have yet (r7rs-lang-plan T2); write it inexact (`#i` prefix or a decimal "
-    "point)";
+static const char r7rs_ns_why_bigexp[] =
+    "the exponent is too large for an exact number";
 static const char r7rs_ns_why_complex[] =
     "a non-real complex number needs complex numbers, which `#lang r7rs` does "
     "not have yet (r7rs-lang-plan T6)";
@@ -54,13 +54,14 @@ static const char r7rs_ns_why_infnan[] =
     "an infinity or NaN has no exact representation";
 
 /* One real as read.  Exact: sign and the magnitudes n/d (`big` when one
- * left 64 bits, and then the digit text -- s[ns..ne) over s[ds..de) in
- * `radix` -- is what the bignum core reads).  Inexact: the double.  `nf`/`df`
- * shadow n and d as doubles for `#i` on a ratio too long for 64 bits. */
+ * left 64 bits; the digit text -- s[ns..ne) over s[ds..de) in `radix` -- is
+ * what the bignum core reads).  Inexact: the double, and for a decimal
+ * lexeme (`dec`) its text s[ns..ne), which `#e` reads exactly (T2: `#e1.2`
+ * is 6/5, not the double's value). */
 typedef struct {
-    int exact, neg, big, radix;
+    int exact, neg, big, radix, dec;
     uint64_t n, d;
-    double nf, df, f;
+    double f;
     const char *s;
     size_t ns, ne, ds, de;
 } r7rs_ns_real;
@@ -118,31 +119,30 @@ static int r7rs_ns_ureal(const char *s, size_t n, size_t *p, int radix, r7rs_ns_
             }
             buf[len] = 0;
             x->exact = 0; x->f = strtod(buf, NULL);
+            x->dec = 1; x->s = s; x->ns = d0; x->ne = q;
             if (buf != small) free(buf);
             *p = q;
             return 1;
         }
     }
     if (nd == 0) return 0;
-    uint64_t m = 0; double mf = 0.0; int big = 0;
+    uint64_t m = 0; int big = 0;
     for (size_t k = d0; k < q; k++) {
         int v = r7rs_ns_digit((unsigned char)s[k], radix);
         if (__builtin_mul_overflow(m, (uint64_t)radix, &m) || __builtin_add_overflow(m, (uint64_t)v, &m)) big = 1;
-        mf = mf * radix + v;
     }
-    x->exact = 1; x->big = big; x->n = m; x->nf = mf; x->d = 1; x->df = 1.0;
+    x->exact = 1; x->big = big; x->n = m; x->d = 1;
     x->s = s; x->radix = radix; x->ns = d0; x->ne = q; x->ds = x->de = 0;
     if (q < n && s[q] == '/') {
         size_t e0 = ++q;
-        uint64_t dm = 0; double df = 0.0;
+        uint64_t dm = 0;
         while (q < n && r7rs_ns_digit((unsigned char)s[q], radix) >= 0) {
             int v = r7rs_ns_digit((unsigned char)s[q], radix);
             if (__builtin_mul_overflow(dm, (uint64_t)radix, &dm) || __builtin_add_overflow(dm, (uint64_t)v, &dm)) x->big = 1;
-            df = df * radix + v;
             q++;
         }
         if (q == e0) return 0;
-        x->d = dm; x->df = df; x->ds = e0; x->de = q;
+        x->d = dm; x->ds = e0; x->de = q;
     }
     *p = q;
     return 1;
@@ -163,69 +163,91 @@ static int r7rs_ns_real_at(const char *s, size_t n, size_t *p, int radix, r7rs_n
     return 1;
 }
 
-static uint64_t r7rs_ns_gcd(uint64_t a, uint64_t b) {
-    while (b) { uint64_t t = a % b; a = b; b = t; }
-    return a;
+/* An exact real's numerator and denominator as bignums (the sign on n). */
+static void r7rs_ns_parts(const r7rs_ns_real *x, r7rs_bn *n, r7rs_bn *d) {
+    if (x->big) {
+        r7bn_from_digits(n, x->s + x->ns, x->ne - x->ns, x->radix, x->neg);
+        if (x->de > x->ds) r7bn_from_digits(d, x->s + x->ds, x->de - x->ds, x->radix, 0);
+        else r7bn_from_u64(d, 1, 0);
+    } else {
+        r7bn_from_u64(n, x->n, x->neg);
+        r7bn_from_u64(d, x->d, 0);
+    }
+}
+/* The exact number n/d is: an int, a bignum, a ratio (T2), or -- with a zero
+ * denominator -- not a number. */
+static void r7rs_ns_exact_out(const r7rs_bn *n, const r7rs_bn *d, r7rs_ns_result *out) {
+    if (d->n == 0) { out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_div0; return; }
+    r7rs_bn q, m; r7bn_init(&q); r7bn_init(&m);
+    r7bn_divmod(&q, &m, n, d);
+    if (m.n) { out->kind = R7NS_RATIO; out->big = r7bn_ratio_str(n, d); }
+    else if (r7bn_to_i64(&q, &out->i)) out->kind = R7NS_INT;
+    else { out->kind = R7NS_BIG; out->big = r7bn_to_str(&q, 10); }
+    r7bn_free(&q); r7bn_free(&m);
+}
+/* `#e` on a decimal lexeme: its exact value from the digits -- mantissa
+ * times 10^(exponent - fraction digits) -- not from the double. */
+static void r7rs_ns_exact_decimal(const r7rs_ns_real *x, r7rs_ns_result *out) {
+    const char *t = x->s + x->ns;
+    size_t len = x->ne - x->ns, i = 0, nd = 0;
+    char *digits = (char *)malloc(len + 1);
+    if (!digits) abort();
+    long frac = 0; int seen_dot = 0;
+    for (; i < len; i++) {
+        char c = t[i];
+        if (c >= '0' && c <= '9') { digits[nd++] = c; if (seen_dot) frac++; }
+        else if (c == '.') seen_dot = 1;
+        else break;                                /* an exponent marker */
+    }
+    long ex = 0; int eneg = 0, big_ex = 0;
+    if (i < len) {
+        i++;
+        if (i < len && (t[i] == '+' || t[i] == '-')) { eneg = (t[i] == '-'); i++; }
+        for (; i < len; i++) { ex = ex * 10 + (t[i] - '0'); if (ex > 1000000) { big_ex = 1; break; } }
+    }
+    if (big_ex) { free(digits); out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_bigexp; return; }
+    long scale = (eneg ? -ex : ex) - frac;
+    r7rs_bn n, d, p, ten, t2; r7bn_init(&n); r7bn_init(&d); r7bn_init(&p); r7bn_init(&ten); r7bn_init(&t2);
+    r7bn_from_digits(&n, digits, nd, 10, x->neg);
+    r7bn_from_u64(&ten, 10, 0);
+    r7bn_pow(&p, &ten, (uint64_t)(scale < 0 ? -scale : scale));
+    if (scale >= 0) { r7bn_mul(&t2, &n, &p); r7bn_copy(&n, &t2); r7bn_from_u64(&d, 1, 0); }
+    else r7bn_copy(&d, &p);
+    r7rs_ns_exact_out(&n, &d, out);
+    free(digits);
+    r7bn_free(&n); r7bn_free(&d); r7bn_free(&p); r7bn_free(&ten); r7bn_free(&t2);
 }
 
 /* Apply the exactness prefix (1 `#e`, -1 `#i`, 0 none) to a real and say
  * what it reads as. */
 static void r7rs_ns_finish(r7rs_ns_real *x, int exactness, r7rs_ns_result *out) {
     if (x->exact && x->d == 0 && !x->big) { out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_div0; return; }
-    if (x->exact && exactness < 0) {
-        x->exact = 0;
-        if (x->big && x->de == x->ds) {
-            /* A long integer: correctly rounded through its digits. */
-            r7rs_bn b; r7bn_init(&b);
-            r7bn_from_digits(&b, x->s + x->ns, x->ne - x->ns, x->radix, 0);
-            x->f = r7bn_to_double(&b);
-            r7bn_free(&b);
-        } else {
-            x->f = (x->big ? x->nf / x->df : (double)x->n / (double)x->d);
-        }
-        if (x->neg) x->f = -x->f;
-    }
-    if (!x->exact) {
-        if (exactness <= 0) { out->kind = R7NS_FLOAT; out->f = x->f; return; }
-        double f = x->f;
-        if (!__builtin_isfinite(f)) { out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_infnan; return; }
-        if (__builtin_floor(f) != f) { out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_ratio; return; }
-        if (f >= 9223372036854775808.0 || f < -9223372036854775808.0) {
-            out->kind = R7NS_BIG; out->big = r7rs_big_of_float(f);
+    if (x->exact && !x->big && x->d == 1 && exactness >= 0) {
+        /* The common case, an integer that fits 64 bits: no allocation. */
+        uint64_t nm = x->n;
+        if (nm <= (uint64_t)INT64_MAX + (x->neg ? 1u : 0u)) {
+            out->kind = R7NS_INT;
+            out->i = x->neg ? (int64_t)(~nm + 1u) : (int64_t)nm;
             return;
         }
-        out->kind = R7NS_INT; out->i = (int64_t)f;
-        return;
     }
-    if (x->big) {
-        /* A part too long for 64 bits: the bignum core divides exactly, and
-         * a remainder makes it a ratio. */
-        r7rs_bn n, d, q, m;
-        r7bn_init(&n); r7bn_init(&d); r7bn_init(&q); r7bn_init(&m);
-        r7bn_from_digits(&n, x->s + x->ns, x->ne - x->ns, x->radix, x->neg);
-        if (x->de > x->ds) r7bn_from_digits(&d, x->s + x->ds, x->de - x->ds, x->radix, 0);
-        else r7bn_from_u64(&d, 1, 0);
-        if (d.n == 0) { out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_div0; }
-        else {
-            r7bn_divmod(&q, &m, &n, &d);
-            if (m.n) { out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_ratio; }
-            else if (r7bn_to_i64(&q, &out->i)) out->kind = R7NS_INT;
-            else { out->kind = R7NS_BIG; out->big = r7bn_to_str(&q, 10); }
+    if (x->exact) {
+        r7rs_bn n, d; r7bn_init(&n); r7bn_init(&d);
+        r7rs_ns_parts(x, &n, &d);
+        if (exactness < 0) {
+            if (d.n == 0) { out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_div0; }
+            else { out->kind = R7NS_FLOAT; out->f = r7bn_ratio_to_double(&n, &d); }
+        } else {
+            r7rs_ns_exact_out(&n, &d, out);
         }
-        r7bn_free(&n); r7bn_free(&d); r7bn_free(&q); r7bn_free(&m);
+        r7bn_free(&n); r7bn_free(&d);
         return;
     }
-    uint64_t g = r7rs_ns_gcd(x->n, x->d);
-    uint64_t nm = g ? x->n / g : 0, dm = g ? x->d / g : 1;
-    if (dm != 1) { out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_ratio; return; }
-    if (nm > (uint64_t)INT64_MAX + (x->neg ? 1u : 0u)) {
-        r7rs_bn b; r7bn_init(&b); r7bn_from_u64(&b, nm, x->neg);
-        out->kind = R7NS_BIG; out->big = r7bn_to_str(&b, 10);
-        r7bn_free(&b);
-        return;
-    }
-    out->kind = R7NS_INT;
-    out->i = x->neg ? (int64_t)(~nm + 1u) : (int64_t)nm;
+    if (exactness <= 0) { out->kind = R7NS_FLOAT; out->f = x->f; return; }
+    /* `#e`: a decimal lexeme by its digits (it is finite even when its
+     * double overflowed), an infinity or NaN has no exact value. */
+    if (x->dec) r7rs_ns_exact_decimal(x, out);
+    else { out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_infnan; }
 }
 
 /* An exact zero: the imaginary part (or polar angle) that leaves a real. */
@@ -291,7 +313,7 @@ static void r7rs_ns_parse(const char *s, size_t n, int radix, r7rs_ns_result *ou
 ;;; r7rs-numsyn-kind__ -- internal: what s reads as in radix (a prefix
 ;;; overrides it): 0 not a number, 1 an exact integer, 2 an inexact real,
 ;;; 3 refused (r7rs-numsyn-why__ says why), 4 an exact integer outside int64
-;;; (r7rs-numsyn-big__ spells it).
+;;; and 5 an exact non-integer (r7rs-numsyn-big__ spells them).
 (defn r7rs-numsyn-kind__ [s : cstr radix : int] : int
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res); free(res.big); return res.kind;
@@ -311,11 +333,11 @@ static void r7rs_ns_parse(const char *s, size_t n, int radix, r7rs_ns_result *ou
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res); free(res.big); return (char *)(res.why ? res.why : "");
   ```)
-;;; r7rs-numsyn-big__ -- internal: the decimal spelling of the bignum s reads
-;;; as (kind 4), else "".
+;;; r7rs-numsyn-big__ -- internal: the spelling of the bignum (kind 4) or the
+;;; "n/d" of the ratio (kind 5) s reads as, else "".
 (defn r7rs-numsyn-big__ [s : cstr radix : int] : cstr
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res);
-  if (res.kind == R7NS_BIG) return res.big;
+  if (res.kind == R7NS_BIG || res.kind == R7NS_RATIO) return res.big;
   char *e = (char *)malloc(1); if (e) *e = 0; return e;
   ```)

@@ -698,7 +698,7 @@ own binders cannot capture a use-site name; R10 closes the other direction, so
 a template's free identifiers mean what they meant where the macro was
 defined). R5 adds the
 numbers: exact integers are int64 and continue as bignums past it (T1),
-inexact reals are doubles, `(/ 7 2)` is 3.5 (no rationals yet), and the R7RS
+inexact reals are doubles, `(/ 7 2)` is the exact ratio 7/2 (T2), and the R7RS
 predicate, rounding, division, `expt`/`sqrt`/transcendental and radix
 `number->string`/`string->number` surface is there. R6 adds control:
 `call/cc` as a one-shot upward escape (invoking a continuation after its
