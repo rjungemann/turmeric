@@ -697,8 +697,8 @@ Strings are immutable `cstr` values (`string-set!` is declined). R4 adds
 own binders cannot capture a use-site name; R10 closes the other direction, so
 a template's free identifiers mean what they meant where the macro was
 defined). R5 adds the
-numbers: exact integers are int64 and signal on overflow, inexact reals are
-doubles, `(/ 7 2)` is 3.5 (no rationals or bignums yet), and the R7RS
+numbers: exact integers are int64 and continue as bignums past it (T1),
+inexact reals are doubles, `(/ 7 2)` is 3.5 (no rationals yet), and the R7RS
 predicate, rounding, division, `expt`/`sqrt`/transcendental and radix
 `number->string`/`string->number` surface is there. R6 adds control:
 `call/cc` as a one-shot upward escape (invoking a continuation after its

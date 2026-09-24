@@ -8,7 +8,7 @@
 ;; inexact contagion; number->string / string->number take a radix; an
 ;; inexact integer prints with its .0 and the non-finite values by name.
 ;; The two-value procedures (floor/ truncate/ exact-integer-sqrt) are in
-;; r7rs-numbers-values, and the overflow error in r7rs-exact-overflow.
+;; r7rs-numbers-values, and exact integers past int64 in r7rs-bignums (T1).
 (display (+ 1 2 3)) (display " ") (display (+)) (display " ") (display (*)) (display " ") (display (- 5)) (display " ") (display (- 10 1 2)) (display " ") (display (/ 2)) (newline)
 (display (+ 1 7.1)) (display " ") (display (* 2 7.1)) (display " ") (display (- 7.1 1)) (newline)
 (display (/ 7 2)) (display " ") (display (/ 7.1 2)) (display " ") (display (/ 8 2)) (display " ") (display (/ 1 3)) (newline)

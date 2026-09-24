@@ -3685,6 +3685,7 @@ static bool scheme_is_delim(int c) {
            c == '"' || c == ';' || c == '|' || c == '\'' || c == '`' || c == ',';
 }
 
+#include "r7rs_bignum.inc"     /* T1: a literal outside int64 */
 #include "r7rs_numsyntax.inc"
 
 /* r7rs-lang-plan T0: a number token, read whole.  The token runs to the next
@@ -3711,6 +3712,20 @@ static Form *try_read_scheme_number(Reader *r) {
         diag_emit(DIAG_ERROR, span, "`%.*s`: %s", (int)n, r->src + start_off, res.why);
         r->error = true;
         return NULL;
+    }
+    if (res.kind == R7NS_BIG) {
+        /* T1: an exact integer outside int64 reads as the call form
+         * `(r7rs-big__ "<decimal digits>")`, as a char reads as
+         * `(r7rs-char__ n)`; the prelude builds the R7rsBig, and the datum
+         * walker keeps the shape under `quote`. */
+        Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+        items[0] = form_sym(r->arena, span, symtab_intern(r->st, strslice("r7rs-big__", 10)));
+        size_t bl = strlen(res.big);
+        char *digits = (char *)arena_alloc_aligned(r->arena, bl + 1, 1);
+        memcpy(digits, res.big, bl + 1);
+        free(res.big);
+        items[1] = form_str(r->arena, span, digits, (uint32_t)bl);
+        return form_list(r->arena, span, items, 2);
     }
     return res.kind == R7NS_INT ? form_int(r->arena, span, res.i)
                                 : form_float(r->arena, span, res.f);

@@ -49,11 +49,11 @@ that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 (native and browser) analysing and formatting Scheme, the editor packs,
 `gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
 runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
-which reports a count: 1096 of 1216 tests pass on both back ends (887 on the
+which reports a count: 1103 of 1216 tests pass on both back ends (887 on the
 interpreter, and a compiled build that did not finish, when it was first
-wired; 1082 at the end of R10, and 1096 after Section 9's T0). Each landed
-stage carries a "What shipped" note below. What is
-left -- bignums, exact rationals, mutable character-indexed strings,
+wired; 1082 at the end of R10, 1096 after Section 9's T0, and 1103 after
+T1). Each landed stage carries a "What shipped" note below. What is
+left -- exact rationals, mutable character-indexed strings,
 `eval` (the interpreter linked in on demand), re-entrant continuations and,
 last, complex numbers -- is Section 9,
 as tasks that change what a Scheme program means and leave Turmeric's and
@@ -613,7 +613,9 @@ early.
 ### D8 -- exact integers signal on overflow; bignums are a separate epic
 
 **Verdict: checked overflow at R5. Bignums named, scoped, and deferred --
-plausibly to a spice.**
+plausibly to a spice.** *Superseded 2026-09-24 by Section 9's T1: bignums
+landed in-tree (`src/compiler/r7rs_bignum.inc`, no GMP), so an exact result
+past int64 is a bignum, not an error.*
 
 R7RS lets an implementation limit the range of exact integers; it does **not**
 let one silently return the wrong number. So the minimum viable conformant
@@ -1108,7 +1110,8 @@ is about exact/inexact divergence.
 >   signal on overflow, on both back ends, with one sentence naming R7RS
 >   6.2.6 and the deferred bignum epic (`tests/fixtures/r7rs-exact-overflow`,
 >   nonzero exit). Until R6's `raise`/`guard` the signal is a panic, not an
->   error object a handler can catch.
+>   error object a handler can catch. *(Section 9's T1 replaced the signal
+>   with bignums; the fixture is now `r7rs-bignums`.)*
 > - **Division and rounding.** `(/ 7 2)` is the inexact 3.5 and `(/ 8 2)` the
 >   exact 4; `/` by exact zero is an error; `quotient`/`remainder`/`modulo`
 >   with R7RS signs, `floor/`, `truncate/` and the four `*-quotient`/
@@ -1756,10 +1759,10 @@ What `#lang r7rs` still does differently from R7RS, measured on 2026-09-24:
 chibi's suite passed 1082 of the 1216 tests written in it, on both back ends,
 and the runner counted 143 failed test invocations (a test-numeric-syntax
 form counts two). Every one of those 143 belonged to a task below; the counts
-per task are the runner's, as written before T0. T0 has landed since: 1096
-pass and 129 invocations fail, and the test lines T0 turned green are struck
-from the tasks below (each task says so). Section 9.3 lists the documented differences no chibi
-test reaches.
+per task are the runner's, as written before T0. T0 and T1 have landed
+since: 1103 pass and 122 invocations fail, and the test lines each task
+turned green are struck from the tasks below (each task says so). Section
+9.3 lists the documented differences no chibi test reaches.
 
 ### 9.1 The rule: the differences between the languages are preserved
 
@@ -1834,7 +1837,8 @@ do first).** *Landed 2026-09-24; see "What shipped" at the end of the task.*
 >   - `even?`/`odd?` test an inexact integer as a double, so `(even? 1e30)`
 >     stays #t with no conversion.
 >   - `exact` of an infinity or NaN names that instead of "no rationals".
->   - Fixture: `r7rs-exact-inexact-overflow`.
+>   - Fixture: `r7rs-exact-inexact-overflow` (folded into `r7rs-bignums` by
+>     T1, which made `(exact 1e30)` a bignum).
 > - **One number parser.**
 >   - `src/compiler/r7rs_numsyntax.inc` parses the whole R7RS `<number>`
 >     grammar:
@@ -1845,9 +1849,11 @@ do first).** *Landed 2026-09-24; see "What shipped" at the end of the task.*
 >     - rectangular, pure-imaginary and polar complex numbers;
 >     - case-insensitive throughout.
 >   - The source reader and the interpreter's natives `#include` it.
->     `tools/gen-r7rs-numsyntax.py` copies it into the C block of
+>     `tools/gen-r7rs-numsyntax.py` (since T1, `tools/gen-r7rs-inc.py`)
+>     copies it into the C block of
 >     `stdlib/r7rs/numsyntax.tur`, where the compiled back end's `read` and
->     `string->number` call it. ctest `tur_r7rs_numsyntax_sync` checks that
+>     `string->number` call it. ctest `tur_r7rs_numsyntax_sync` (since T1,
+>     `tur_r7rs_inc_sync`) checks that
 >     the two copies are identical.
 >   - The old per-back-end integer and float parsers are gone.
 > - **What a number reads as.**
@@ -1876,13 +1882,14 @@ do first).** *Landed 2026-09-24; see "What shipped" at the end of the task.*
 >   - 769 and 772: integral ratios;
 >   - number syntax 2365, 2367-2369, 2426, 2427 and 2434.
 
-**T1 -- bignums (8 tests: chibi lines 215, 219, 223, 227, 231, 822, 841).**
+**T1 -- bignums (8 tests as first counted, 7 of them bignums: chibi lines
+215, 219, 223, 227, 231 (two tests), 822; 841 was a rational, now in T2).**
+*Landed 2026-09-24; see "What shipped" at the end of the task.*
 
-- **Today:** exact integers are int64, and an exact result outside it is a
-  panic naming D8, which `guard` cannot catch; since T0 that includes
-  `(exact 1e30)`. A 20-digit literal (line 227) is refused by the one number
-  parser (T0), naming this task, at compile time in a source file and as a
-  catchable error from `read` and `string->number`.
+- **Before T1:** exact integers were int64, and an exact result outside it
+  was a panic naming D8, which `guard` cannot catch; T0 added
+  `(exact 1e30)` to that. A 20-digit literal (line 227) was refused by the
+  one number parser (T0), naming this task.
 - **R7RS:** exact integers are unbounded.
 - **Preserve:** Turmeric's and Saffron's `int` stay int64 with their own
   overflow behavior. Bignums exist only as Scheme values.
@@ -1901,9 +1908,75 @@ do first).** *Landed 2026-09-24; see "What shipped" at the end of the task.*
 - **Done:** the 8 tests; `(expt 2 100)` prints its 31 digits on both back
   ends; Turmeric's int-overflow fixtures unchanged.
 
-**T2 -- exact rationals (42 tests before T0, 30 after: 199, 768, 780, 902,
-904, 905, 965, 967, 968, 970, 972, 973, 1027, 1028; number syntax 2363,
-2364, 2366, 2435-2438).**
+> **What shipped (T1, 2026-09-24).** Exact integers are unbounded on both
+> back ends. The count is **1103** of 1216, up from 1096: all 7 bignum tests.
+> Line 841 turned out to be `(exact (/ 10.0 single-float-epsilon))`, an exact
+> NON-integer, so it moved to T2.
+>
+> - **One C core.**
+>   - `src/compiler/r7rs_bignum.inc` holds the core: base-1e9 limbs; add,
+>     subtract and multiply; Knuth's division; Newton's `isqrt`; gcd;
+>     square-and-multiply `expt`; radix output; and the exact conversions to
+>     and from double, including an exact bignum-to-double comparison.
+>   - The interpreter's natives `#include` it, as does the number parser. A
+>     20-digit literal is now R7NS_BIG, not refused.
+>   - `tools/gen-r7rs-inc.py` copies it into `stdlib/r7rs/bignum.tur` for the
+>     compiled back end. The same tool now also writes `numsyntax.tur`, and
+>     it replaces `gen-r7rs-numsyntax.py`.
+>   - ctest `tur_r7rs_inc_sync` checks both copies. It replaces
+>     `tur_r7rs_numsyntax_sync`.
+>   - Before wiring, the core was checked under ASan:
+>     - 200k random divisions against `__int128`;
+>     - 20k `q*b + r == a` round trips on operands up to 300 digits;
+>     - `isqrt` bounds;
+>     - radix round trips.
+> - **The value.**
+>   - An `R7rsBig` holds its canonical decimal spelling. That is also how it
+>     crosses to the interpreter and to C, so the value bridge is a string.
+>   - `r7rs-big-norm__` is the one constructor: a result that fits int64 is
+>     an int. So an `R7rsBig` never holds a number an int could, and `eqv?`
+>     can compare bignums by their spelling.
+> - **The tower.**
+>   - `+`, `-`, `*` keep the int64 path. They check for overflow
+>     (`r7rs-int-ovf?__`) and only then call the core; D8's panic is gone.
+>   - These now take bignums:
+>     - the integer divisions and `floor/`, which use int64 except for
+>       `INT64_MIN / -1`, which goes to the core;
+>     - `/` (exact when it divides);
+>     - `gcd`/`lcm`, `expt`, `exact-integer-sqrt`, `sqrt` of a perfect
+>       square;
+>     - `abs`, `min`/`max`, and the predicates;
+>     - `exact` of a double outside int64, which gives a bignum.
+>   - A comparison with a double is exact (`r7rs-cmp-big__`).
+> - **Reading and writing.**
+>   - A literal reads as `(r7rs-big__ "<digits>")`, as a char reads as
+>     `(r7rs-char__ n)`, and the datum walker keeps it under `quote`.
+>   - `read`, `string->number`, `number->string` (any radix) and `write` all
+>     take bignums.
+> - **The seam.** An argument that must fit int64 (a Turmeric `int`
+>   parameter, a vector index) refuses a bignum with the checked cast
+>   `cast: any holds R7rsBig, not int`, on both back ends. That message names
+>   the type, not the value as this task asked: naming the value would need
+>   the shared runtime cast to know a Scheme type. A value that fits is
+>   always an int, so it always crosses. An `any` parameter takes the bignum.
+> - **Fixtures:**
+>   - `r7rs-bignums`, on both back ends. It replaces `r7rs-exact-overflow`
+>     and T0's `r7rs-exact-inexact-overflow`.
+>   - `r7rs-bignum-int-seam`: the seam refusal, with a nonzero exit.
+>   - `r7rs-number-syntax`, updated: a 20-digit `string->number` is a
+>     bignum.
+>   - Turmeric's and Saffron's int-overflow fixtures are unchanged, and
+>     `run.sh` and `run-turi.sh` are green.
+> - **Found on the way:** `docs/reported/untyped-forward-callee-result-retagged-as-pointer.md`.
+>   - An untyped prelude defn called before its definition had its `any`
+>     result re-tagged as a pointer, but only when a Turmeric module was the
+>     entry. That broke `tests/run-r7rs-import.sh`'s compiled
+>     Turmeric-imports-Scheme case.
+>   - Worked around by declaring `: any` on the procedures T1 changed.
+
+**T2 -- exact rationals (42 tests before T0, 30 after, plus line 841 from
+T1: 199, 768, 780, 841, 902, 904, 905, 965, 967, 968, 970, 972, 973, 1027,
+1028; number syntax 2363, 2364, 2366, 2435-2438).**
 
 - **Today:** `(/ 7 2)` is the inexact 3.5, and `numerator`/`denominator` of
   an exact non-integer cannot arise.
@@ -1912,9 +1985,10 @@ do first).** *Landed 2026-09-24; see "What shipped" at the end of the task.*
 - **Preserve:** Turmeric's `/` on ints is unchanged; only a Scheme program's
   `/` changes. That IS a visible change for existing `#lang r7rs` code (3.5
   becomes 7/2), so the CHANGELOG entry says so.
-- **Depends on:** T0's reader token, and T1. Without bignums, a rational's
-  numerator or denominator overflows long before an integer would; T2 can
-  land first only with that overflow as the named error.
+- **Depends on:** T0's reader token, and T1 (landed). A rational's numerator
+  and denominator are exact integers, so they are int64-or-bignum from the
+  start, over the same core (`r7rs_bignum.inc` already divides and takes
+  gcds).
 - **Where:**
   - A prelude `R7rsRatio` (numerator and denominator, normalized, positive
     denominator).

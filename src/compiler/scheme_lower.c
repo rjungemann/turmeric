@@ -403,7 +403,7 @@ typedef struct SL {
     /* Prelude names the lowering itself emits. */
     const Symbol *p_eqv, *p_list, *p_length, *p_list_ref, *p_list_tail,
                  *p_chain_to_list, *p_values_ref, *p_values_rest, *p_cons, *p_append, *p_vector,
-                 *p_list_to_vector, *p_char, *s_cond_expand, *s_export,
+                 *p_list_to_vector, *p_char, *p_big, *s_cond_expand, *s_export,
                  *s_include, *t_import, *t_defmodule, *t_export, *t_refer,
                  *t_as, *t_defstruct, *t_heap, *t_is, *t_nil_sym;
     /* R3: an `(import ...)` was lowered, so the program is wrapped in a
@@ -544,6 +544,7 @@ static void sl_init(SL *sl, Arena *a, SymbolTable *st) {
     sl->p_cons = I(sl, "r7rs-cons");         sl->p_append = I(sl, "r7rs-append");
     sl->p_vector = I(sl, "r7rs-vector");     sl->p_list_to_vector = I(sl, "r7rs-list->vector");
     sl->p_char = I(sl, "r7rs-char__");
+    sl->p_big = I(sl, "r7rs-big__");
     sl->s_cond_expand = I(sl, "cond-expand"); sl->s_export = I(sl, "export");
     sl->s_include = I(sl, "include");
     sl->t_import = I(sl, "import");          sl->t_defmodule = I(sl, "defmodule");
@@ -2691,9 +2692,12 @@ static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp) {
  * tail datum), a vector `(r7rs-vector d...)`.  Built at runtime each time the
  * expression runs -- the static `.rodata` table D4 wants is deferred with the
  * literal-mutation question (Section 8, Q2). */
+/* T1: a literal outside int64 is the reader's `(r7rs-big__ "<digits>")`, a
+ * datum in the same way, so "char form" here means either reader literal. */
 static bool is_char_form(SL *sl, const Form *f) {
-    return f->tag == F_LIST && f->as.list.len == 2 && is_sym(f->as.list.items[0], sl->p_char) &&
-           f->as.list.items[1]->tag == F_INT;
+    if (f->tag != F_LIST || f->as.list.len != 2) return false;
+    Form *h = f->as.list.items[0], *v = f->as.list.items[1];
+    return (is_sym(h, sl->p_char) && v->tag == F_INT) || (is_sym(h, sl->p_big) && v->tag == F_STR);
 }
 static Form *lower_datum(SL *sl, Form *d);
 static Form *datum_list(SL *sl, Form *f) {

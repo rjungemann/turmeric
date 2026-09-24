@@ -200,7 +200,9 @@
           (r7rs-rd-fail__ (r7rs-string-append2__ "read: `"
                                                  (r7rs-string-append2__ s
                                                                         (r7rs-string-append2__ "`: " (r7rs-numsyn-why__ s 10)))))
-          none)))))
+          (if (= k 4)
+            (r7rs-big-norm__ (r7rs-numsyn-big__ s 10))
+            none))))))
 ;;; r7rs-rd-hash-token__ -- a `#` token that is not a bracket or a char.
 (defn r7rs-rd-hash-token__ [s : cstr] : any
   (if (if (r7rs-string=2__ s "#t") true (r7rs-string=2__ s "#true")) (:: true any)

@@ -92,18 +92,28 @@ named-`let` loop runs in constant space however long it runs.
 
 ## Numbers
 
-An exact integer is a 64-bit integer, and an inexact real is a double:
+An exact integer has no size limit, and an inexact real is a double:
 
 ```scheme
-(write (list (/ 7 2) (/ 6 2) (exact->inexact 3) (+ 7.1 0.25) (expt 2 62)))
-; (3.5 3 3.0 7.35 4611686018427387904)
+(write (list (/ 7 2) (/ 6 2) (exact->inexact 3) (+ 7.1 0.25) (expt 2 100)))
+; (3.5 3 3.0 7.35 1267650600228229401496703205376)
 ```
 
-There are no exact rationals and no bignums yet. So `(/ 7 2)` is the inexact
-3.5 rather than 7/2, and an exact result outside 64 bits **stops the
-program** with a message naming the rule -- `(exact 1e30)` included. It is
-never a silently wrapped number, but it is a panic, not a condition `guard`
-can catch.
+An exact integer is a 64-bit int while it fits, which keeps the common case
+fast. Arithmetic that leaves 64 bits continues as a **bignum**, and a result
+that fits again is an int again. Nothing wraps, and nothing stops the
+program. Bignums work everywhere integers do: literals, `read`,
+`string->number` and `number->string` in any radix, `quotient` and the other
+divisions, `gcd`, `expt`, `exact-integer-sqrt`, and `exact` of a large
+double (`(exact 1e30)`). A comparison between a bignum and a double is exact,
+so `(= (- (expt 2 1000) 1) (inexact (expt 2 1000)))` is `#f`.
+
+A bignum is a Scheme value only. Passed to a Turmeric procedure that takes an
+`int`, it is the import's checked cast error (`cast: any holds R7rsBig, not
+int`); a procedure that takes `any` receives it as it is.
+
+There are no exact rationals yet, so `(/ 7 2)` is the inexact 3.5 rather than
+7/2.
 
 Numbers are read by one parser: in a source file, by `read`, and by
 `string->number`. It knows the whole R7RS number syntax, so a ratio or a
@@ -218,7 +228,7 @@ signature. `tests/run-r7rs-import.sh` pins both directions on both back ends.
 
 - **Strings are immutable.** `string-set!`, `string-fill!` and `string-copy!`
   are refused with the reason. Every other string procedure is there.
-- **No exact rationals or bignums.** See Numbers above.
+- **No exact rationals.** See Numbers above.
 - **`call/cc` is an escape only.** A continuation cannot be re-entered after
   its `call/cc` returns.
 - **`apply` and dynamic calls take at most four arguments.**
@@ -250,10 +260,10 @@ bash tests/run-r7rs-conformance.sh      # both back ends, about two minutes
 python3 tests/r7rs/run-conformance.py --backend interp --list-failures
 ```
 
-**1096 of the 1216 tests** written in the suite pass, the same on the
+**1103 of the 1216 tests** written in the suite pass, the same on the
 interpreter and the compiled back end. Nearly all the rest are the
-differences listed above: bignums and exact rationals (`1/2`, `(expt 2
-100)`), complex numbers (`3+4i`), the three string mutators, `eval` and
+differences listed above: exact rationals (`1/2`, `(expt 2 -10)`), complex
+numbers (`3+4i`), the three string mutators, `eval` and
 `environment`, re-entering a continuation, and a string indexed by bytes.
 What remains after those is two float spellings that differ from chibi's
 own (`1.7976931348623157e308` rather than `e+308`; both are R7RS).

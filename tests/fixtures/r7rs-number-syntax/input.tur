@@ -18,7 +18,7 @@
 (show (map string->number '("10/2" "#i3/2" "1e2" "1S2" "+inf.0" "#x1F" "7.25" "abc" "1 2" "-" "1/2/3")))
 
 ;; What the tower cannot hold yet is an error naming the task, from both
-;; string->number and read.
+;; string->number and read.  A long integer is a bignum (T1).
 (show (try (lambda () (string->number "1/2"))))
 (show (try (lambda () (string->number "3+4i"))))
 (show (try (lambda () (string->number "99999999999999999999"))))

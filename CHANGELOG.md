@@ -6,28 +6,51 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: bignums (r7rs-lang-plan T1).** Exact integers are
+  unbounded. An exact integer is an int64 while it fits. Arithmetic that
+  leaves int64 continues as a bignum (`R7rsBig`), and a result that fits is an
+  int again, so the int64 path stays the fast one.
+  - Bignums work through the whole tower:
+    - literals, `read`, `string->number`, and `number->string` in any radix;
+    - `quotient`/`remainder`/`modulo` and `floor/`;
+    - `/`, `gcd`/`lcm`, `expt`, `exact-integer-sqrt`, `sqrt`;
+    - `exact` of any integral double;
+    - `eqv?`/`equal?` and `write`.
+  - A comparison with a double is exact:
+    `(= (- (expt 2 1000) 1) (inexact (expt 2 1000)))` is `#f`.
+  - The arithmetic is one C file, `src/compiler/r7rs_bignum.inc`, shared by
+    both back ends. The interpreter includes it, and
+    `tools/gen-r7rs-inc.py` copies it into `stdlib/r7rs/bignum.tur`. ctest
+    `tur_r7rs_inc_sync` replaces `tur_r7rs_numsyntax_sync` and checks both
+    copies.
+  - **Visible change:** `(* 3037000500 3037000500)`, `(expt 2 64)` and the
+    like used to panic (D8). They now answer.
+  - A bignum passed where an int64 is required (a Turmeric `int` parameter, a
+    vector index) is the checked cast error `cast: any holds R7rsBig, not
+    int`. It is never truncated.
+
+  Turmeric's and Saffron's `int` are unchanged. Chibi's suite: 1103 of 1216
+  on both back ends, up from 1096. Fixtures: `r7rs-bignums`,
+  `r7rs-bignum-int-seam`. They replace `r7rs-exact-overflow`.
 - **`#lang r7rs`: one number parser, and two wrong answers fixed (r7rs-lang-plan
   T0).** `src/compiler/r7rs_numsyntax.inc` parses the whole R7RS number syntax
   for the source reader, `read` and `string->number` on both back ends. The
   compiled back end's copy is `stdlib/r7rs/numsyntax.tur`, written by
-  `tools/gen-r7rs-numsyntax.py`; `tur_r7rs_numsyntax_sync` keeps the two equal.
+  `tools/gen-r7rs-inc.py`; `tur_r7rs_inc_sync` keeps the two equal.
   - `1/2` and `3+4i` are one token each. They used to split into `1` and the
     symbol `/2`, or into `3`, `+4` and `i`, and the error named the wrong thing.
   - A ratio or complex number the tower holds reads as its value: `10/2` is 5,
     `#i3/2` is 1.5, and `3+0i` is 3.
   - One it cannot hold yet is refused with the reason and the plan task that
-    brings it: rationals (T2), complex numbers (T6), bignums (T1). A source
-    literal gets a compile-time error. `read` and `string->number` raise an
-    error `guard` can catch.
-  - **Visible change:** `(string->number "99999999999999999999")` used to
-    return an inexact 1e20. It is now that error.
-  - `(exact 1e30)` used to answer 9223372036854775807. It is now the
-    exact-overflow error, and so is every conversion of a double outside
-    int64. `(even? 1e30)` is still #t.
+    brings it: rationals (T2) and complex numbers (T6). A source literal gets
+    a compile-time error. `read` and `string->number` raise an error `guard`
+    can catch.
+  - `(exact 1e30)` used to answer 9223372036854775807; it is exact now (see
+    bignums above).
 
   Chibi's suite: 1096 of 1216 on both back ends, up from 1082.
-  Fixtures: `r7rs-number-syntax`, `r7rs-exact-inexact-overflow`,
-  `errors/r7rs-reader-ratio`, `errors/r7rs-reader-complex`.
+  Fixtures: `r7rs-number-syntax`, `errors/r7rs-reader-ratio`,
+  `errors/r7rs-reader-complex`.
 - **`#lang r7rs`: referential transparency.** A `syntax-rules` template's
   free identifiers now mean what they meant where the macro was defined. The
   lowering tracks lexical scope, gives local binders unique names, and resolves

@@ -2897,27 +2897,6 @@ static double r7rs_arg_double(TuriValue *a, uint32_t n, uint32_t i) {
 /* Checked exact arithmetic (D8): an overflow is an error, never a wrapped
  * number.  The interpreter reports it as a turi error; the compiled twin
  * panics with the same sentence. */
-static TuriValue native_r7rs_add_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    int64_t r;
-    if (__builtin_add_overflow(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1), &r))
-        return turi_error("+: exact integer overflow (R7RS 6.2.6: the result is not representable; bignums are r7rs-lang-plan D8's deferred epic)");
-    return turi_int(r);
-}
-static TuriValue native_r7rs_sub_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    int64_t r;
-    if (__builtin_sub_overflow(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1), &r))
-        return turi_error("-: exact integer overflow (R7RS 6.2.6: the result is not representable; bignums are r7rs-lang-plan D8's deferred epic)");
-    return turi_int(r);
-}
-static TuriValue native_r7rs_mul_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    int64_t r;
-    if (__builtin_mul_overflow(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1), &r))
-        return turi_error("*: exact integer overflow (R7RS 6.2.6: the result is not representable; bignums are r7rs-lang-plan D8's deferred epic)");
-    return turi_int(r);
-}
 static TuriValue native_r7rs_float_nan(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; double x = r7rs_arg_double(a, n, 0); return turi_bool(x != x);
 }
@@ -2941,28 +2920,72 @@ static TuriValue native_r7rs_int_to_string_radix(TuriEnv *env, TuriValue *a, uin
     snprintf(r, 80, "%s", buf + i);
     return turi_cstr(r);
 }
-/* r7rs-lang-plan T0: string->number and `read` go through the ONE R7RS
- * number parser -- the same file the source reader includes, and the same
- * text as stdlib/r7rs/numsyntax.tur's C block (tests/check-r7rs-numsyntax-sync.sh) --
- * registered below over that file's four inline-C wrappers. */
+/* r7rs-lang-plan T0/T1: Scheme numbers go through ONE implementation per job
+ * -- the bignum core and the number parser, the same files the source reader
+ * includes and the same text as the C blocks of stdlib/r7rs/bignum.tur and
+ * numsyntax.tur (tests/check-r7rs-inc-sync.sh) -- registered below over
+ * those files' inline-C wrappers.  A bignum crosses as its decimal spelling;
+ * the strings returned are the value's (process-lifetime, the interpreter's
+ * allocation model). */
+#include "r7rs_bignum.inc"
 #include "r7rs_numsyntax.inc"
 static void r7rs_numsyn_of(TuriValue *a, uint32_t n, r7rs_ns_result *res) {
     const char *s = r7rs_arg_cstr(a, n, 0);
     r7rs_ns_parse(s ? s : "", s ? strlen(s) : 0, (int)r7rs_arg_int(a, n, 1), res);
 }
 static TuriValue native_r7rs_numsyn_kind(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res); return turi_int(res.kind);
+    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res); free(res.big); return turi_int(res.kind);
 }
 static TuriValue native_r7rs_numsyn_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res); return turi_int(res.i);
+    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res); free(res.big); return turi_int(res.i);
 }
 static TuriValue native_r7rs_numsyn_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res);
+    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res); free(res.big);
     TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = res.f; return rv;
 }
 static TuriValue native_r7rs_numsyn_why(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res);
+    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res); free(res.big);
     return turi_cstr(res.why ? res.why : "");
+}
+static TuriValue native_r7rs_numsyn_big(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res);
+    return turi_cstr(res.kind == R7NS_BIG ? res.big : "");
+}
+static TuriValue native_r7rs_int_ovf(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t op = r7rs_arg_int(a, n, 0), x = r7rs_arg_int(a, n, 1), y = r7rs_arg_int(a, n, 2), r;
+    return turi_bool(op == 0 ? __builtin_add_overflow(x, y, &r) : op == 1 ? __builtin_sub_overflow(x, y, &r)
+                                                                       : __builtin_mul_overflow(x, y, &r));
+}
+static TuriValue native_r7rs_big_op(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_cstr(r7rs_big_op((int)r7rs_arg_int(a, n, 0), r7rs_arg_cstr(a, n, 1), r7rs_arg_cstr(a, n, 2)));
+}
+static TuriValue native_r7rs_big_cmp(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; return turi_int(r7rs_big_cmp(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1)));
+}
+static TuriValue native_r7rs_big_cmp_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double f = (n > 1 && a[1].tag == TURI_FLOAT) ? a[1].as_float : (double)r7rs_arg_int(a, n, 1);
+    return turi_int(r7rs_big_cmp_float(r7rs_arg_cstr(a, n, 0), f));
+}
+static TuriValue native_r7rs_big_to_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = r7rs_big_to_float(r7rs_arg_cstr(a, n, 0)); return rv;
+}
+static TuriValue native_r7rs_float_to_big(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double f = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : (double)r7rs_arg_int(a, n, 0);
+    return turi_cstr(r7rs_big_of_float(f));
+}
+static TuriValue native_r7rs_big_radix(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; return turi_cstr(r7rs_big_radix(r7rs_arg_cstr(a, n, 0), (int)r7rs_arg_int(a, n, 1)));
+}
+static TuriValue native_r7rs_big_fits(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; int64_t v; return turi_bool(r7rs_big_fits(r7rs_arg_cstr(a, n, 0), &v) != 0);
+}
+static TuriValue native_r7rs_big_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; int64_t v = 0; (void)r7rs_big_fits(r7rs_arg_cstr(a, n, 0), &v); return turi_int(v);
 }
 /* R10: (scheme char)'s Unicode tables -- the SAME generated C the prelude's
  * stdlib/r7rs/unicode.tur compiles in (tools/gen-r7rs-unicode.py writes
@@ -3742,9 +3765,6 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-int->string__",    native_r7rs_int_to_string,   NULL);
     turi_env_register_native(env, "r7rs-float->string__",  native_r7rs_float_to_string, NULL);
     /* r7rs-lang-plan R5: the numeric tower's inline-C helpers. */
-    turi_env_register_native(env, "r7rs-add-int__",           native_r7rs_add_int,            NULL);
-    turi_env_register_native(env, "r7rs-sub-int__",           native_r7rs_sub_int,            NULL);
-    turi_env_register_native(env, "r7rs-mul-int__",           native_r7rs_mul_int,            NULL);
     turi_env_register_native(env, "r7rs-float-nan?__",        native_r7rs_float_nan,          NULL);
     turi_env_register_native(env, "r7rs-float-infinite?__",   native_r7rs_float_infinite,     NULL);
     turi_env_register_native(env, "r7rs-float-integral?__",   native_r7rs_float_integral,     NULL);
@@ -3753,6 +3773,16 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-numsyn-int__",        native_r7rs_numsyn_int,         NULL);
     turi_env_register_native(env, "r7rs-numsyn-float__",      native_r7rs_numsyn_float,       NULL);
     turi_env_register_native(env, "r7rs-numsyn-why__",        native_r7rs_numsyn_why,         NULL);
+    turi_env_register_native(env, "r7rs-numsyn-big__",        native_r7rs_numsyn_big,         NULL);
+    turi_env_register_native(env, "r7rs-int-ovf?__",          native_r7rs_int_ovf,            NULL);
+    turi_env_register_native(env, "r7rs-big-op__",            native_r7rs_big_op,             NULL);
+    turi_env_register_native(env, "r7rs-big-cmp__",           native_r7rs_big_cmp,            NULL);
+    turi_env_register_native(env, "r7rs-big-cmp-float__",     native_r7rs_big_cmp_float,      NULL);
+    turi_env_register_native(env, "r7rs-big->float__",        native_r7rs_big_to_float,       NULL);
+    turi_env_register_native(env, "r7rs-float->big__",        native_r7rs_float_to_big,       NULL);
+    turi_env_register_native(env, "r7rs-big-radix__",         native_r7rs_big_radix,          NULL);
+    turi_env_register_native(env, "r7rs-big-fits?__",         native_r7rs_big_fits,           NULL);
+    turi_env_register_native(env, "r7rs-big-int__",           native_r7rs_big_int,            NULL);
     turi_env_register_native(env, "r7rs-uc-map__",            native_r7rs_uc_map,             NULL);
     turi_env_register_native(env, "r7rs-uc-prop__",           native_r7rs_uc_prop,            NULL);
     turi_env_register_native(env, "r7rs-uc-string__",         native_r7rs_uc_string,          NULL);

@@ -1,0 +1,36 @@
+#lang r7rs
+;; r7rs-lang-plan T1: exact integers are unbounded.  An int64 result that
+;; overflows continues as a bignum (R7rsBig, the C of stdlib/r7rs/bignum.tur on
+;; both back ends), and a bignum result that fits is an int again.  Before T1
+;; the overflow was a panic naming D8, and `(exact 1e30)` an error (T0).
+(import (scheme base) (scheme write) (scheme read) (scheme inexact))
+(define (show x) (write x) (newline))
+
+;; Promotion at the int64 edge, and back.
+(show (list (* 3037000499 3037000499) (* 3037000500 3037000500)))
+(show (list (+ 9223372036854775807 1) (- -9223372036854775808 1)))
+(show (- (+ 9223372036854775807 1) 1))
+(show (list (abs -9223372036854775808) (quotient -9223372036854775808 -1)))
+
+;; expt, literals (in code, quoted, read, string->number), number->string.
+(show (expt 2 100))
+(show '(1 99999999999999999999 -99999999999999999999))
+(show (read (open-input-string "(123456789012345678901234567890 #x10000000000000000)")))
+(show (string->number "-123456789012345678901234567890"))
+(show (list (number->string (expt 2 70) 16) (number->string (- (expt 2 65)) 2)))
+
+;; The integer operations, exactly.
+(show (call-with-values (lambda () (exact-integer-sqrt (expt 10 39))) list))
+(show (list (quotient (expt 10 30) 7) (remainder (expt 10 30) 7) (modulo (- (expt 10 30)) 7)))
+(show (call-with-values (lambda () (floor/ (- (expt 10 25)) 3)) list))
+(show (list (gcd (expt 2 70) (expt 6 30)) (lcm (expt 2 40) (expt 3 30))))
+(show (list (/ (expt 2 70) (expt 2 68)) (square (expt 10 20)) (sqrt (expt 10 40))))
+
+;; Predicates, exactness, and exact comparison with doubles.
+(show (list (exact? (expt 2 64)) (exact-integer? (expt 2 64)) (integer? (expt 2 64))
+            (even? (expt 2 70)) (odd? (+ 1 (expt 2 70))) (negative? (- (expt 2 70)))
+            (zero? (expt 2 70)) (eqv? (expt 2 64) (* (expt 2 32) (expt 2 32)))))
+(show (list (exact 1e30) (exact -1e20) (inexact (expt 2 100)) (even? 1e30)))
+(let ((a (- (expt 2 1000) 1)) (b (inexact (expt 2 1000))) (c (+ (expt 2 1000) 1)))
+  (show (list (= a b) (< a b) (< b c) (= b (expt 2 1000)))))
+(show (list (max 1 (expt 2 70)) (max 1 (expt 2 70) 2.5) (+ (expt 2 70) 0.5)))

@@ -1107,12 +1107,13 @@ add_test(
   COMMAND bash tests/check-r7rs-unicode-sync.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# T0: the R7RS number parser, src/compiler/r7rs_numsyntax.inc (the source
-# reader and the interpreter), and its copy in stdlib/r7rs/numsyntax.tur (the
-# compiled back end's `read` and `string->number`) must be identical.
+# T0/T1: the shared C of Scheme numbers -- src/compiler/r7rs_bignum.inc and
+# r7rs_numsyntax.inc (the source reader and the interpreter) -- and their
+# copies in stdlib/r7rs/bignum.tur and numsyntax.tur (the compiled back end)
+# must be identical.
 add_test(
-  NAME tur_r7rs_numsyntax_sync
-  COMMAND bash tests/check-r7rs-numsyntax-sync.sh
+  NAME tur_r7rs_inc_sync
+  COMMAND bash tests/check-r7rs-inc-sync.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
