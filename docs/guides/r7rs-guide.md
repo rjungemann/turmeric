@@ -62,7 +62,7 @@ All of R7RS-small, and `(scheme r5rs)`'s environments:
 | `(scheme base)` | complete, including string, bytevector and file ports |
 | `(scheme case-lambda)`, `(scheme lazy)`, `(scheme inexact)` | complete |
 | `(scheme char)` | complete, Unicode case mapping and classification included |
-| `(scheme cxr)`, `(scheme complex)` | complete; complex numbers are reals only |
+| `(scheme cxr)`, `(scheme complex)` | complete |
 | `(scheme write)` | `write` and `display` label cycles; `write-shared`, `write-simple` |
 | `(scheme read)` | `read`, datum labels and cycles included |
 | `(scheme file)`, `(scheme time)`, `(scheme process-context)` | complete; loaded only when imported |
@@ -150,19 +150,40 @@ cast error, as a bignum is; convert it on the Scheme side with `inexact` or
 
 **Visible change:** before r7rs-lang-plan T2, `(/ 7 2)` was the inexact 3.5.
 
+**Complex numbers** are there too: `3+4i`, `-i`, `1/2+3/4i`, `1.5+2i` and
+polar `1@0.5`. Their parts can be any real, and a complex number is exact or
+inexact as a whole. An exact-zero imaginary part leaves the real itself, so
+`3+0i` is 3 and `(* +i +i)` is -1. An inexact zero part stays, so
+`(real? 1.0+0.0i)` is `#f`. Arithmetic and `=` work part by part; `<` and
+the other orderings on a non-real are `#f`. `sqrt` of a negative number is
+imaginary (`(sqrt -4)` is `+2i`), and `exp`, `log`, `expt` and the trig
+functions leave the reals when they have to. `real-part`, `imag-part`,
+`magnitude`, `angle`, `make-rectangular` and `make-polar` are in
+`(scheme complex)`:
+
+```scheme
+(write (list (* 1+2i 3-4i) (sqrt -4) (magnitude 3+4i) (make-rectangular 1 2)))
+; (11+2i +2i 5 1+2i)
+```
+
+A complex number passed to a Turmeric `float` parameter is a checked cast
+error, as a ratio is.
+
+**Visible change:** before r7rs-lang-plan T6, `(sqrt -4)` was `+nan.0` and a
+non-real literal did not compile.
+
 Numbers are read by one parser: in a source file, by `read`, and by
 `string->number`. It knows the whole R7RS number syntax, so a ratio or a
-complex number is one token. A complex number whose imaginary part is an
-exact zero is the real it is, so `3+0i` is 3. Any other complex number is
-refused, with the reason and the task in the plan that brings it. That
-happens at compile time for a literal. `read` and `string->number` raise an
-error a program can `guard`. The number is never split into a number and a
-stray symbol, and never read as a different number:
+complex number is one token. Number syntax that is no number, such as
+`1/0`, is refused with the reason. That happens at compile time for a
+literal. `read` and `string->number` raise an error a program can `guard`.
+The number is never split into a number and a stray symbol, and never read
+as a different number:
 
 ```scheme
 (write (list 10/2 #i3/2 3+0i (string->number "1e2")))   ; (5 1.5 3 100.0)
-(string->number "1+2i")
-; error: string->number: `1+2i`: a non-real complex number needs complex numbers ...
+(string->number "1/0")
+; error: string->number: `1/0`: an exact rational with a zero denominator is not a number
 ```
 
 ## Macros
@@ -325,7 +346,6 @@ library's string result to `cstr` gets the same copy.
 
 - **String literals are immutable.** R7RS allows this. See Lists,
   vectors, strings above.
-- **No complex numbers.** See Numbers above.
 - **`apply` and dynamic calls take at most four arguments.**
 - **`char-ready?` and `u8-ready?` always answer `#t`.**
 - **`(except ...)` in an import is refused.** A Turmeric import cannot say
@@ -352,11 +372,11 @@ bash tests/run-r7rs-conformance.sh      # both back ends, about two minutes
 python3 tests/r7rs/run-conformance.py --backend interp --list-failures
 ```
 
-**1152 of the 1216 tests** written in the suite pass, the same on the
-interpreter and the compiled back end. Nearly all the rest are complex
-numbers (`3+4i`), the difference listed above.
-What remains after those is two float spellings that differ from chibi's
-own (`1.7976931348623157e308` rather than `e+308`; both are R7RS).
+The suite has 1216 tests, and the runner counts **1223 passing
+invocations** (a `test-numeric-syntax` form is two), the same on the
+interpreter and the compiled back end. The 2 that fail are float spellings
+that differ from chibi's own (`1.7976931348623157e308` rather than `e+308`;
+both are R7RS).
 
 The target fails only when the count drops below its floor, so raise the
 floor in `tests/run-r7rs-conformance.sh` when the count goes up.

@@ -3159,7 +3159,11 @@ static TuriValue native_r7rs_numsyn_why(TuriEnv *env, TuriValue *a, uint32_t n, 
 }
 static TuriValue native_r7rs_numsyn_big(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res);
-    return turi_cstr(res.kind == R7NS_BIG || res.kind == R7NS_RATIO ? res.big : "");
+    return turi_cstr(res.kind == R7NS_BIG || res.kind == R7NS_RATIO || res.kind == R7NS_COMPLEX ? res.big : "");
+}
+static TuriValue native_r7rs_numsyn_part(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_cstr(r7rs_ns_complex_part(r7rs_arg_cstr(a, n, 0), (int)r7rs_arg_int(a, n, 1)));
 }
 static TuriValue native_r7rs_exact_of_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -4060,6 +4064,7 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-numsyn-float__",      native_r7rs_numsyn_float,       NULL);
     turi_env_register_native(env, "r7rs-numsyn-why__",        native_r7rs_numsyn_why,         NULL);
     turi_env_register_native(env, "r7rs-numsyn-big__",        native_r7rs_numsyn_big,         NULL);
+    turi_env_register_native(env, "r7rs-numsyn-part__",       native_r7rs_numsyn_part,        NULL);
     turi_env_register_native(env, "r7rs-int-ovf?__",          native_r7rs_int_ovf,            NULL);
     turi_env_register_native(env, "r7rs-big-op__",            native_r7rs_big_op,             NULL);
     turi_env_register_native(env, "r7rs-big-cmp__",           native_r7rs_big_cmp,            NULL);

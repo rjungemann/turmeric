@@ -69,7 +69,8 @@ HEADER = """#lang r7rs
 """
 
 # The (chibi test) surface the suite uses, reporting one line per test.
-# Inexact numbers compare approximately, as chibi's `test` does.
+# Inexact numbers compare approximately, as chibi's `test` does (by
+# magnitude, so a complex answer compares too).
 HARNESS = r"""
 (define (tur-conf-form n) (display "@@FORM ") (display n) (newline))
 (define (tur-conf-report ok expected got)
@@ -82,7 +83,7 @@ HARNESS = r"""
           (= a b)
           (or (and (nan? a) (nan? b))
               (= a b)
-              (<= (abs (- a b)) (* 1e-5 (max 1 (abs a))))))
+              (<= (magnitude (- a b)) (* 1e-5 (max 1 (magnitude a))))))
       (equal? a b)))
 (define (tur-conf-error-value e)
   (list 'raised (if (error-object? e) (error-object-message e) e)))

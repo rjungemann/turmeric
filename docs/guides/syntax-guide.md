@@ -699,7 +699,8 @@ own binders cannot capture a use-site name; R10 closes the other direction, so
 a template's free identifiers mean what they meant where the macro was
 defined). R5 adds the
 numbers: exact integers are int64 and continue as bignums past it (T1),
-inexact reals are doubles, `(/ 7 2)` is the exact ratio 7/2 (T2), and the R7RS
+inexact reals are doubles, `(/ 7 2)` is the exact ratio 7/2 (T2), `3+4i` is
+a complex number and `(sqrt -4)` is `+2i` (T6), and the R7RS
 predicate, rounding, division, `expt`/`sqrt`/transcendental and radix
 `number->string`/`string->number` surface is there. R6 adds control:
 `call/cc` (re-entrant since T5: a continuation can be invoked after its
@@ -712,7 +713,7 @@ Scheme procedure call is a proper tail call on both back ends, and the
 compiled back end runs everything the interpreter does (a dynamic call is
 capped at four arguments, so `apply` is too). R7 completes the libraries
 short of ports: the rest of `(scheme base)`, and `(scheme char)` (ASCII case
-mapping), `(scheme cxr)`, `(scheme complex)` over the reals, `(scheme time)`,
+mapping), `(scheme cxr)`, `(scheme complex)`, `(scheme time)`,
 `(scheme process-context)` and `(scheme file)`'s `file-exists?` and
 `delete-file`. The last three are loaded only when imported. `include` is
 refused with the reason. `(scheme eval)`, `(scheme repl)`, `(scheme load)` and
@@ -737,8 +738,8 @@ R10 runs chibi-scheme's R7RS test suite as a ctest target
 (`tur_r7rs_conformance`) that reports a pass count: 1082 of the 1216 tests
 written in it pass, on both back ends, and the rest are the named carve-outs
 (bignums, exact rationals, complex numbers, mutable strings, `eval`,
-re-entrant `call/cc`); Section 9's tasks have since closed all but complex
-numbers, for 1152. `(scheme char)` maps and
+re-entrant `call/cc`); Section 9's tasks have since closed all of them, for
+1223 passing invocations (only two float spellings still differ). `(scheme char)` maps and
 classifies all of Unicode, from tables generated out of the Unicode
 database. The full
 reference is [r7rs-guide.md](r7rs-guide.md).

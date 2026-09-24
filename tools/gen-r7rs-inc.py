@@ -124,8 +124,9 @@ NUMSYNTAX_HEAD = """\
 NUMSYNTAX_TAIL = """\
 ;;; r7rs-numsyn-kind__ -- internal: what s reads as in radix (a prefix
 ;;; overrides it): 0 not a number, 1 an exact integer, 2 an inexact real,
-;;; 3 refused (r7rs-numsyn-why__ says why), 4 an exact integer outside int64
-;;; and 5 an exact non-integer (r7rs-numsyn-big__ spells them).
+;;; 3 refused (r7rs-numsyn-why__ says why), 4 an exact integer outside int64,
+;;; 5 an exact non-integer and 6 a non-real complex number (T6)
+;;; (r7rs-numsyn-big__ spells them).
 (defn r7rs-numsyn-kind__ [s : cstr radix : int] : int
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res); free(res.big); return res.kind;
@@ -145,13 +146,20 @@ NUMSYNTAX_TAIL = """\
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res); free(res.big); return (char *)(res.why ? res.why : "");
   ```)
-;;; r7rs-numsyn-big__ -- internal: the spelling of the bignum (kind 4) or the
-;;; "n/d" of the ratio (kind 5) s reads as, else "".
+;;; r7rs-numsyn-big__ -- internal: the spelling of the bignum (kind 4), the
+;;; "n/d" of the ratio (kind 5) or the "<re> <im>" of the complex number
+;;; (kind 6) s reads as, else "".
 (defn r7rs-numsyn-big__ [s : cstr radix : int] : cstr
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res);
-  if (res.kind == R7NS_BIG || res.kind == R7NS_RATIO) return res.big;
+  if (res.kind == R7NS_BIG || res.kind == R7NS_RATIO || res.kind == R7NS_COMPLEX) return res.big;
   char *e = (char *)malloc(1); if (e) *e = 0; return e;
+  ```)
+;;; r7rs-numsyn-part__ -- internal (T6): part `which` (0 real, 1 imaginary)
+;;; of a "<re> <im>" complex spelling.
+(defn r7rs-numsyn-part__ [s : cstr which : int] : cstr
+  ```c
+  return r7rs_ns_complex_part(s, (int)which);
   ```)
 """
 

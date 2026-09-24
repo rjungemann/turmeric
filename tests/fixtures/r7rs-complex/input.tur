@@ -1,0 +1,43 @@
+#lang r7rs
+;; r7rs-lang-plan T6: complex numbers.  A non-real number is an R7rsComplex
+;; whose parts are reals (an int, a bignum, a ratio or a double); it is exact
+;; or inexact as a whole, and an exact-zero imaginary part is the real itself.
+;; Before T6 a non-real literal was refused at read time.
+(import (scheme base) (scheme write) (scheme read) (scheme complex) (scheme inexact))
+(define (show x) (write x) (newline))
+
+;; Literals: rectangular, pure imaginary, the unit, polar, prefixes.  An exact
+;; zero imaginary part is a real; an inexact one is not.
+(show (list 3+4i -1-2i +2i -i 1/2+3/4i 1.5+2i #x10+Fi 3+0i 1@0))
+(show (list (real? -2.5+0i) (real? -2.5+0.0i) (complex? 3+4i) (number? +i)))
+(show (list (exact? 1+2i) (inexact? 1.0+2i) (rational? 1+2i) (integer? 3+0i)))
+
+;; Arithmetic, part by part; a result with an exact-zero imaginary part is real.
+(show (list (+ 1+2i 3-4i) (- 3/2+i) (* 1+2i 3-4i) (/ 1+2i 3-4i) (* +i +i)))
+(show (list (+ 1+2i 0.5) (* 2 1/2+1/3i) (- 5+i +i)))
+
+;; Comparison: = part by part, and a non-real is never < anything.
+(show (list (= 1 1.0 1.0+0.0i) (= 1.0 1.0+1.0i) (= 1/2+i 0.5+1.0i) (< 1 1+i)))
+(show (list (eqv? 1+2i 1+2i) (eqv? 1+2i 1.0+2.0i) (equal? '(1+i) (list (+ 1 +i)))))
+(show (list (zero? 0.0+0.0i) (zero? +i) (nan? 1+2i) (finite? 3.0+inf.0i) (infinite? 3.0+inf.0i)))
+
+;; (scheme complex).
+(show (list (make-rectangular 1 2) (make-rectangular 1.5 0) (real-part 1+2i) (imag-part 1+2i) (imag-part 7)))
+(show (list (magnitude 3+4i) (magnitude 1+2i) (magnitude -7) (angle +i) (angle -1)))
+(show (make-polar 2 0))
+(show (make-polar 1 1))
+
+;; Roots and transcendental functions leave the reals where they must.
+(show (list (sqrt -4) (sqrt -2.0) (sqrt -1.0-0.0i) (sqrt +2i) (inexact (sqrt -1))))
+(show (list (expt +i 2) (expt 1+i 3) (expt 1+i -1) (expt 0 +i)))
+(show (list (exp 0+3.141592653589793i) (log -1) (log 1+i)))
+(show (list (sin 0+1.0i) (cos 0+1.0i) (atan +2i)))
+
+;; exact and inexact convert both parts.
+(show (list (exact 1.5+2.5i) (inexact 1/2+1/4i)))
+
+;; number->string, string->number and read agree with the literal.
+(show (map number->string (list 1+2i -i 1/2-3/4i 1.0+2.0i +inf.0-inf.0i)))
+(show (map string->number '("1+2i" "+i" "-2.5i" "#e1.5+2.5i" "#i1+2i" "1@0" "1+2" "i")))
+(show (read (open-input-string "(1+2i #x-a+bi 0.5+3/4i)")))
+(show (number->string 5+3i 2))

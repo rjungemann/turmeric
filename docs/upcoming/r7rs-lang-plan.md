@@ -1,6 +1,6 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 through R10 landed 2026-09-23/24; Section 9's T0-T5 since.** `#lang r7rs` is a base
+Status: **R0 through R10 landed 2026-09-23/24; Section 9's T0-T6 since.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -49,13 +49,15 @@ that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 (native and browser) analysing and formatting Scheme, the editor packs,
 `gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
 runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
-which reports a count: 1152 of 1216 tests pass on both back ends (887 on the
-interpreter, and a compiled build that did not finish, when it was first
-wired; 1082 at the end of R10, then 1096, 1103, 1134, 1147, 1151 and 1152
-after Section 9's T0-T5). Each landed stage carries a "What shipped" note
-below. What is left -- complex numbers -- is Section 9,
-as tasks that change what a Scheme program means and leave Turmeric's and
-Saffron's semantics as they are.
+which reports a count: 1223 test invocations pass on both back ends and 2
+fail, of the 1216 tests written in the suite (a `test-numeric-syntax` form
+counts two). It was 887 on the interpreter, and a compiled build that did not
+finish, when it was first wired; 1082 at the end of R10, then 1096, 1103,
+1134, 1147, 1151, 1152 and 1223 after Section 9's T0-T6. Each landed stage
+carries a "What shipped" note below. What is left -- two float spellings
+(T7) and a memory audit (T8) -- is Section 9, as tasks that change what a
+Scheme program means and leave Turmeric's and Saffron's semantics as they
+are.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -1267,7 +1269,8 @@ snippet as written (`(hamt-set (hamt-new) "k" 42)`) is the second face of it.
 >   comparison, `apply` with leading arguments, `rationalize`, `features`,
 >   `write-simple`. `(scheme char)` case mapping is ASCII (the typed stdlib
 >   has no Unicode tables; a non-ASCII char maps to itself). `(scheme
->   complex)` answers for reals and refuses a complex result.
+>   complex)` answers for reals and refuses a complex result. *(Section 9's
+>   T6 gave it complex numbers.)*
 > - **On demand** -- `time`, `process-context`, and `file`'s
 >   `file-exists?`/`delete-file` -- are files under `stdlib/r7rs/` that the
 >   load expander splices in when a Scheme file imports them
@@ -1664,7 +1667,7 @@ this one should be **measured the same way** before it is believed.
 | Monomorphization, by-value HKT | off; everything boxes | needs ground types at each site |
 | Refinement types | runtime contracts | no static base type to discharge over |
 | Linear / affine / unique, borrows, session types, GADTs | **expected to survive**, via annotations | Saffron measured these as kept; R7RS has no *syntax* for the annotations, so this is "survives if written in an annotated Turmeric module and called across the seam" |
-| Full numeric tower | int64 exact + checked overflow | D8; bignums and rationals are Section 9's T1-T2, complex T6 |
+| Full numeric tower | **landed (T1, T2, T6)**: bignums, exact rationals, complex numbers | D8's int64 with checked overflow was the first cut; each kind is a prelude struct the tower dispatch reaches only off the int64 fast path |
 | Re-entrant `call/cc` | **landed (T5)** | a continuation is a copy of the C stack; re-entry re-runs the `before` thunks |
 | `(scheme eval)`, `(scheme repl)` | **landed (T4)**: importing links the interpreter | one embedded R7RS session per run; data crosses by copy, procedures and raises as handles |
 | Typeclass dispatch on `any` | inherits Saffron's S9 state | separate epic |
@@ -1761,9 +1764,9 @@ What `#lang r7rs` still does differently from R7RS, measured on 2026-09-24:
 chibi's suite passed 1082 of the 1216 tests written in it, on both back ends,
 and the runner counted 143 failed test invocations (a test-numeric-syntax
 form counts two). Every one of those 143 belonged to a task below; the counts
-per task are the runner's, as written before T0. T0-T5 have landed since:
-1152 pass and 73 invocations fail, and the test lines each task turned
-green are struck from the tasks below (each task says so). Section
+per task are the runner's, as written before T0. T0-T6 have landed since:
+1223 pass and 2 invocations fail (T7's), and the test lines each task
+turned green are struck from the tasks below (each task says so). Section
 9.3 lists the documented differences no chibi test reaches.
 
 ### 9.1 The rule: the differences between the languages are preserved
@@ -2419,7 +2422,8 @@ re-entered continuation).**
 
 **T6 -- complex numbers, deliberately after the others (73 tests before T0,
 71 after: 756, 760, 784, 789, 794, 796, 797, 849, 903, 1016, 1017,
-1030-1040; number syntax 2371-2401, 2441, 2442).**
+1030-1040; number syntax 2371-2401, 2441, 2442).** *Landed 2026-09-24; see
+"What shipped" at the end of the task.*
 
 - **Order (decided 2026-09-24):** on the list, and last of the
   implementation tasks; it also builds on T2.
@@ -2443,6 +2447,77 @@ re-entered continuation).**
     `write`.
 - **Depends on:** T2 for exact complex (`1/2+3/4i`).
 - **Done:** the 73 tests.
+
+> **What shipped (T6, 2026-09-24).** Complex numbers, on both back ends. The
+> count is **1223**, up from 1152: all 71 T6 invocations. Nothing is left in
+> T6; the 2 failures left are T7's.
+>
+> - **The value.**
+>   - An `R7rsComplex` has a real part and an imaginary part, each a real (an
+>     int, a bignum, a ratio or a double).
+>   - `r7rs-make-rect__` is the one constructor. An exact-zero imaginary part
+>     gives the real itself, so `(* +i +i)` is the integer -1 and `3+0i`
+>     reads as 3.
+>   - A complex number is exact or inexact as a whole: when either part is a
+>     double, both are. An inexact one keeps a `0.0` imaginary part, so
+>     `(real? -2.5+0.0i)` is #f, as R7RS 6.2.6 has it.
+>   - Tests use `r7rs-cplx?`, not a bare `is?` (T2's unique-narrowing
+>     reason).
+> - **The tower.**
+>   - `+`, `-`, `*` and `/` work part by part through the real operators, so
+>     an exact complex stays exact (`(/ 1+2i 3-4i)` is -1/5+2/5i). A complex
+>     operand reaches them only off the int64 fast path, through the same
+>     `r7rs-any-exotic?__` test as a bignum or a ratio.
+>   - `=` compares part by part. A non-real is unordered: `<` on one is #f,
+>     the answer a NaN gives, not an error, because nothing reachable from
+>     arithmetic may raise (T2's hazard).
+>   - `eqv?` compares the parts with `eqv?`, so `1+2i` and `1.0+2.0i` are not
+>     eqv.
+>   - `zero?`, `nan?`, `finite?`, `infinite?`, `exact?`, `inexact?`,
+>     `exact` and `inexact` take a complex argument. `positive?` and
+>     `negative?` on one panic.
+>   - `real?` is what `number?` was; `number?` and `complex?` include the
+>     non-reals, and `rational?` excludes them.
+> - **Roots and transcendental functions.**
+>   - `sqrt` of a negative real is imaginary, exact when the negation's root
+>     is: `(sqrt -4)` is `+2i`, where it was `+nan.0`. A complex argument
+>     takes the principal root. An imaginary part of -0.0 counts as
+>     positive, so `(sqrt -1.0-0.0i)` is `+1.0i`, as chibi's test has it.
+>   - `exp`, `log` (one or two arguments), `sin`, `cos`, `tan`, `asin`,
+>     `acos` and one-argument `atan` take complex arguments, by the usual
+>     formulas on doubles. `log` of a negative real is complex, and so are
+>     `asin` and `acos` outside [-1, 1].
+>   - `expt` with a complex base or exponent, or a negative base and a
+>     non-integer exponent, is complex. An exact complex base to a fixnum
+>     power multiplies exactly: `(expt +i 2)` is -1.
+>   - These return `any` now, where they returned `float`.
+> - **(scheme complex).** `real-part`, `imag-part` (exact 0 for a real),
+>   `magnitude` (exact when the squared magnitude is an exact perfect square,
+>   so `(magnitude 3+4i)` is 5), `angle`, `make-rectangular` and
+>   `make-polar`. The last two panic on a non-real argument, where they
+>   panicked on a non-zero imaginary part.
+> - **Reading and writing.**
+>   - The shared parser returns R7NS_COMPLEX with an "RE IM" spelling, each
+>     part a real it reads back in radix 10 (a double as `#i%.17g`). A
+>     source literal reads as `(r7rs-complex__ "RE IM")`, and `read` and
+>     `string->number` build the same value.
+>   - Rectangular (`a+bi`, `a+i`, `+2i`, `-i`) and polar (`m@a`) syntax, with
+>     every prefix. A polar literal is inexact unless its angle is an exact
+>     zero, since its parts are m cos a and m sin a.
+>   - `write` and `number->string` spell it as chibi does: an exact-zero real
+>     part is left out and an exact unit imaginary part is bare (`+2i`,
+>     `1-i`, `+i`), while `0.0+1.0i` keeps its inexact zero.
+>   - `errors/r7rs-reader-complex` is gone, since what it refused now reads.
+> - **The seam:** a complex number passed to a Turmeric `float` parameter is
+>   the checked cast error, as a ratio is. `math.tur`'s `sqrt` of a negative
+>   is still NaN in Turmeric.
+> - **The harness:** `tur-conf-approx=?` measures the difference with
+>   `magnitude`, not `abs`, so an inexact complex answer compares
+>   approximately.
+> - **Fixtures:**
+>   - `r7rs-complex`, on both back ends;
+>   - `r7rs-number-syntax` regenerated: `3+4i` and `+i` read, and the
+>     refusal it shows is now `1/0`.
 
 **T7 -- two float spellings (2 tests: 2465, 2475).**
 

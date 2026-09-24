@@ -1,8 +1,0 @@
-#lang r7rs
-;; r7rs-lang-plan T0: `3+4i` is ONE number token.  The reader used to split it
-;; into `3`, `+4` and the symbol `i`, and the error named an unbound `i`.
-;; Until complex numbers (T6) a non-real complex number is refused with the
-;; reason; `3+0i` (an exact zero imaginary part is a real) reads as 3.
-(import (scheme base) (scheme write))
-(write 3+0i)
-(write 3+4i)

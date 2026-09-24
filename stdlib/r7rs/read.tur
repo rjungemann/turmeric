@@ -187,8 +187,9 @@
 
 ;;; r7rs-rd-number__ -- T0: a number token through the one R7RS number parser
 ;;; (stdlib/r7rs/numsyntax.tur; the source reader's too), so `1/2` and `1+2i`
-;;; are one token.  A number the tower cannot hold yet is a read error naming
-;;; the reason, never a symbol and never a different number.  `none` is what
+;;; are one token (T6: `1+2i` a complex number).  A number the tower cannot
+;;; hold is a read error naming the reason, never a symbol and never a
+;;; different number.  `none` is what
 ;;; a token that is not number syntax at all reads as.
 (defn r7rs-rd-number__ [s : cstr none] : any
   (let [k (r7rs-numsyn-kind__ s 10)]
@@ -204,7 +205,9 @@
             (r7rs-big-norm__ (r7rs-numsyn-big__ s 10))
             (if (= k 5)
               (r7rs-ratio-of-str__ (r7rs-numsyn-big__ s 10))
-              none)))))))
+              (if (= k 6)
+                (r7rs-complex-of-str__ (r7rs-numsyn-big__ s 10))
+                none))))))))
 ;;; r7rs-rd-hash-token__ -- a `#` token that is not a bracket or a char.
 (defn r7rs-rd-hash-token__ [s : cstr] : any
   (if (if (r7rs-string=2__ s "#t") true (r7rs-string=2__ s "#true")) (:: true any)

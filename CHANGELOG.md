@@ -6,6 +6,34 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: complex numbers (r7rs-lang-plan T6).** `3+4i`, `-i`,
+  `1/2+3/4i`, `1.5+2i` and polar `1@0.5` are numbers, on both back ends,
+  in source, `read` and `string->number`.
+  - **The value.** The parts are any reals, and a complex number is exact or
+    inexact as a whole. An exact-zero imaginary part leaves the real, so
+    `(* +i +i)` is -1; an inexact one stays, so `(real? 1.0+0.0i)` is #f.
+  - **The tower.** `+ - * /` and `=` work part by part, exactly on exact
+    parts. `<` and the other orderings on a non-real are #f. `eqv?`,
+    `zero?`, `nan?`, `finite?`, `infinite?`, `exact` and `inexact` take
+    complex arguments; `number?` and `complex?` include them, `real?` and
+    `rational?` do not.
+  - **Functions.** `sqrt`, `exp`, `log`, `expt`, `sin`, `cos`, `tan`,
+    `asin`, `acos` and `atan` leave the reals when they have to, and
+    `(scheme complex)` has `real-part`, `imag-part`, `magnitude`, `angle`,
+    `make-rectangular` and `make-polar`.
+  - **Writing.** `write` and `number->string` spell a number as chibi does:
+    `+2i`, `1-i`, `0.0+1.0i`.
+  - **Visible changes.** `(sqrt -4)` is `+2i`, where it was `+nan.0`. The
+    log of a negative number, and `asin`/`acos` outside [-1, 1], are complex,
+    where they were NaN. A non-real literal compiles, where it was refused.
+    The inexact functions return any number, not only a float.
+
+  Turmeric has no complex type, and `math.tur`'s `sqrt` of a negative stays
+  NaN. Chibi's suite: 1223 passing invocations on both back ends, up from
+  1152; the 2 failures left are float spellings (T7). Fixtures:
+  `r7rs-complex`, and `r7rs-number-syntax` regenerated;
+  `errors/r7rs-reader-complex` is gone.
+
 - **`#lang r7rs`: re-entrant `call/cc` (r7rs-lang-plan T5).** A continuation
   can be invoked after its `call/cc` has returned, any number of times, on
   both back ends. Generators, coroutines and same-fringe written with

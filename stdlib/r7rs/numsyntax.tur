@@ -26,11 +26,15 @@
  * (T2, R7NS_RATIO), each spelled in a malloc'd string the caller frees; a
  * ratio that divides is the integer (`10/2` is 5).  A complex number whose
  * imaginary part is an exact zero is the real it is (`3+0i` is 3, R7RS
- * 6.2.6).  What the tower cannot hold yet -- a non-real complex number (T6)
- * -- is REFUSED with the reason, never read as something else. */
+ * 6.2.6); any other is R7NS_COMPLEX (T6), its two parts spelled as reals in
+ * `big` ("RE IM"), which the same parser reads back in radix 10.  A polar
+ * number `m@a` is converted to its rectangular parts, inexact.  What is not
+ * a number (a zero denominator, `#e+inf.0`) is REFUSED with the reason, never
+ * read as something else. */
+#include <math.h>
 
 enum { R7NS_NONE = 0, R7NS_INT = 1, R7NS_FLOAT = 2, R7NS_REFUSED = 3, R7NS_BIG = 4,
-       R7NS_RATIO = 5 };
+       R7NS_RATIO = 5, R7NS_COMPLEX = 6 };
 
 typedef struct {
     int kind;          /* R7NS_*: not a number, an exact int, a double,
@@ -40,14 +44,12 @@ typedef struct {
     double f;          /* R7NS_FLOAT */
     const char *why;   /* R7NS_REFUSED: why, as a sentence fragment */
     char *big;         /* R7NS_BIG: decimal digits; R7NS_RATIO: "n/d" in
-                        * lowest terms, the sign on n.  malloc'd, the caller's */
+                        * lowest terms, the sign on n; R7NS_COMPLEX: "RE IM",
+                        * each part a real's spelling.  malloc'd, the caller's */
 } r7rs_ns_result;
 
 static const char r7rs_ns_why_bigexp[] =
     "the exponent is too large for an exact number";
-static const char r7rs_ns_why_complex[] =
-    "a non-real complex number needs complex numbers, which `#lang r7rs` does "
-    "not have yet (r7rs-lang-plan T6)";
 static const char r7rs_ns_why_div0[] =
     "an exact rational with a zero denominator is not a number";
 static const char r7rs_ns_why_infnan[] =
@@ -250,9 +252,85 @@ static void r7rs_ns_finish(r7rs_ns_real *x, int exactness, r7rs_ns_result *out) 
     else { out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_infnan; }
 }
 
+/* A malloc'd copy of t. */
+static char *r7rs_ns_dup(const char *t) {
+    size_t l = strlen(t);
+    char *r = (char *)malloc(l + 1);
+    if (!r) abort();
+    memcpy(r, t, l + 1);
+    return r;
+}
+
+/* T6: part `which` (0 the real, 1 the imaginary) of an R7NS_COMPLEX
+ * spelling "RE IM".  malloc'd.  Inline: the reader does not call it, the
+ * runtime copies do. */
+static inline char *r7rs_ns_complex_part(const char *s, int which) {
+    const char *sp = strchr(s, ' ');
+    if (!sp) return r7rs_ns_dup(which ? "0" : s);
+    if (which) return r7rs_ns_dup(sp + 1);
+    size_t l = (size_t)(sp - s);
+    char *r = (char *)malloc(l + 1);
+    if (!r) abort();
+    memcpy(r, s, l);
+    r[l] = 0;
+    return r;
+}
+
+/* T6: one part of a complex number, spelled as a real this parser reads back
+ * in radix 10 -- an exact integer or bignum in decimal, a ratio "n/d", an
+ * inexact real `#i`-prefixed so it stays inexact.  malloc'd. */
+static char *r7rs_ns_part_spell(const r7rs_ns_result *r) {
+    char buf[64];
+    if (r->kind == R7NS_INT) { snprintf(buf, sizeof buf, "%lld", (long long)r->i); return r7rs_ns_dup(buf); }
+    if (r->kind == R7NS_FLOAT) {
+        if (r->f != r->f) return r7rs_ns_dup("+nan.0");
+        if (r->f > 1.7976931348623157e308) return r7rs_ns_dup("+inf.0");
+        if (r->f < -1.7976931348623157e308) return r7rs_ns_dup("-inf.0");
+        snprintf(buf, sizeof buf, "#i%.17g", r->f);
+        return r7rs_ns_dup(buf);
+    }
+    return r7rs_ns_dup(r->big ? r->big : "0");
+}
+/* T6: a complex number from its two parts (rectangular) or its magnitude and
+ * angle (polar, `m@a`, converted to rectangular and inexact). */
+static void r7rs_ns_complex(r7rs_ns_real *re, r7rs_ns_real *im, int polar, int exactness,
+                            r7rs_ns_result *out) {
+    r7rs_ns_result a, b;
+    memset(&a, 0, sizeof a);
+    memset(&b, 0, sizeof b);
+    r7rs_ns_finish(re, polar ? -1 : exactness, &a);
+    r7rs_ns_finish(im, polar ? -1 : exactness, &b);
+    if (a.kind == R7NS_REFUSED || b.kind == R7NS_REFUSED) {
+        out->kind = R7NS_REFUSED;
+        out->why = a.kind == R7NS_REFUSED ? a.why : b.why;
+        free(a.big); free(b.big);
+        return;
+    }
+    if (polar) {
+        double m = a.f, t = b.f;
+        a.f = m * cos(t);
+        b.f = m * sin(t);
+    }
+    char *ra = r7rs_ns_part_spell(&a), *rb = r7rs_ns_part_spell(&b);
+    size_t la = strlen(ra), lb = strlen(rb);
+    out->big = (char *)malloc(la + lb + 2);
+    if (!out->big) abort();
+    memcpy(out->big, ra, la);
+    out->big[la] = ' ';
+    memcpy(out->big + la + 1, rb, lb + 1);
+    out->kind = R7NS_COMPLEX;
+    free(ra); free(rb); free(a.big); free(b.big);
+}
+
 /* An exact zero: the imaginary part (or polar angle) that leaves a real. */
 static int r7rs_ns_exact_zero(const r7rs_ns_real *x) {
     return x->exact && !x->big && x->n == 0 && x->d != 0;
+}
+/* An exact small integer v, as the parser's own real. */
+static void r7rs_ns_exact_small(r7rs_ns_real *x, int v) {
+    memset(x, 0, sizeof *x);
+    x->exact = 1; x->d = 1; x->radix = 10;
+    x->neg = v < 0; x->n = (uint64_t)(v < 0 ? -v : v);
 }
 
 /* r7rs_ns_parse -- read s[0..n) as a number in `radix` (a prefix overrides
@@ -277,43 +355,46 @@ static void r7rs_ns_parse(const char *s, size_t n, int radix, r7rs_ns_result *ou
     r7rs_ns_real re, im;
     /* `+i` / `-i`: the imaginary unit. */
     if (p + 2 == n && (s[p] == '+' || s[p] == '-') && r7rs_ns_lower((unsigned char)s[p + 1]) == 'i') {
-        out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_complex;
+        r7rs_ns_exact_small(&re, 0);
+        r7rs_ns_exact_small(&im, s[p] == '-' ? -1 : 1);
+        r7rs_ns_complex(&re, &im, 0, exactness, out);
         return;
     }
     size_t q = p;
     if (!r7rs_ns_real_at(s, n, &q, radix, &re)) return;
     if (q == n) { r7rs_ns_finish(&re, exactness, out); return; }
-    int complex_form = 0, imag_zero = 0;
+    int polar = 0;
     if (s[q] == '@') {
         size_t t = q + 1;
         if (!r7rs_ns_real_at(s, n, &t, radix, &im) || t != n) return;
-        complex_form = 1; imag_zero = r7rs_ns_exact_zero(&im);
+        polar = 1;
     } else if (s[q] == '+' || s[q] == '-') {
         if (q + 2 == n && r7rs_ns_lower((unsigned char)s[q + 1]) == 'i') {
-            complex_form = 1; imag_zero = 0;
+            r7rs_ns_exact_small(&im, s[q] == '-' ? -1 : 1);
         } else {
             size_t t = q;
             if (!r7rs_ns_real_at(s, n, &t, radix, &im) || t + 1 != n ||
                 r7rs_ns_lower((unsigned char)s[t]) != 'i') return;
-            complex_form = 1; imag_zero = r7rs_ns_exact_zero(&im);
         }
     } else if (q + 1 == n && r7rs_ns_lower((unsigned char)s[q]) == 'i' && (s[p] == '+' || s[p] == '-')) {
         /* `+2i`, `-inf.0i`: a pure imaginary number. */
-        complex_form = 1; imag_zero = r7rs_ns_exact_zero(&re);
-        if (imag_zero) { memset(&re, 0, sizeof re); re.exact = 1; re.d = 1; }
+        im = re;
+        r7rs_ns_exact_small(&re, 0);
+    } else {
+        return;
     }
-    if (!complex_form) return;
     /* An exact zero imaginary part (or polar angle) is a real, unless `#i`
      * makes it the inexact 0.0 of a complex number. */
-    if (imag_zero && exactness >= 0) { r7rs_ns_finish(&re, exactness, out); return; }
-    out->kind = R7NS_REFUSED; out->why = r7rs_ns_why_complex;
+    if (r7rs_ns_exact_zero(&im) && exactness >= 0) { r7rs_ns_finish(&re, exactness, out); return; }
+    r7rs_ns_complex(&re, &im, polar, exactness, out);
 }
 ```
 
 ;;; r7rs-numsyn-kind__ -- internal: what s reads as in radix (a prefix
 ;;; overrides it): 0 not a number, 1 an exact integer, 2 an inexact real,
-;;; 3 refused (r7rs-numsyn-why__ says why), 4 an exact integer outside int64
-;;; and 5 an exact non-integer (r7rs-numsyn-big__ spells them).
+;;; 3 refused (r7rs-numsyn-why__ says why), 4 an exact integer outside int64,
+;;; 5 an exact non-integer and 6 a non-real complex number (T6)
+;;; (r7rs-numsyn-big__ spells them).
 (defn r7rs-numsyn-kind__ [s : cstr radix : int] : int
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res); free(res.big); return res.kind;
@@ -333,11 +414,18 @@ static void r7rs_ns_parse(const char *s, size_t n, int radix, r7rs_ns_result *ou
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res); free(res.big); return (char *)(res.why ? res.why : "");
   ```)
-;;; r7rs-numsyn-big__ -- internal: the spelling of the bignum (kind 4) or the
-;;; "n/d" of the ratio (kind 5) s reads as, else "".
+;;; r7rs-numsyn-big__ -- internal: the spelling of the bignum (kind 4), the
+;;; "n/d" of the ratio (kind 5) or the "<re> <im>" of the complex number
+;;; (kind 6) s reads as, else "".
 (defn r7rs-numsyn-big__ [s : cstr radix : int] : cstr
   ```c
   r7rs_ns_result res; r7rs_ns_parse(s, strlen(s), (int)radix, &res);
-  if (res.kind == R7NS_BIG || res.kind == R7NS_RATIO) return res.big;
+  if (res.kind == R7NS_BIG || res.kind == R7NS_RATIO || res.kind == R7NS_COMPLEX) return res.big;
   char *e = (char *)malloc(1); if (e) *e = 0; return e;
+  ```)
+;;; r7rs-numsyn-part__ -- internal (T6): part `which` (0 real, 1 imaginary)
+;;; of a "<re> <im>" complex spelling.
+(defn r7rs-numsyn-part__ [s : cstr which : int] : cstr
+  ```c
+  return r7rs_ns_complex_part(s, (int)which);
   ```)
