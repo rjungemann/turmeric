@@ -5007,14 +5007,15 @@ document.addEventListener('DOMContentLoaded', () => {
 const DOCS_PACK_BASE = '/docs-pack';
 
 /**
- * How many pages the nav's "Recently Added" section lists.
+ * How many pages each of the nav's dated sections lists.
  *
- * Ten, matching the Recently Added card at the top of the website's guides
- * index. That card is guides only; this one also carries new API modules,
- * since the pane is a browser over the whole pack. The dates behind both are
- * the same numbers -- the generator stamps each page with the day its source
- * was first committed and passes the guides' dates straight through -- so the
- * two cannot disagree about when a guide arrived.
+ * Ten apiece, matching the Recently Added and Recently Updated cards at the top
+ * of the website's guides index. Those cards are guides only; these also carry
+ * API modules, since the pane is a browser over the whole pack. The dates behind
+ * both are the same numbers -- the generator stamps each page with the day its
+ * source was first committed and the day it was last committed to, and passes
+ * the guides' dates straight through -- so the two cannot disagree about when a
+ * guide arrived or when it last changed.
  */
 const DOCS_RECENT_COUNT = 10;
 
@@ -5108,17 +5109,17 @@ function docsAllPages() {
     for (const g of docsIndex.guides || []) {
         out.push({ ref: `guides/${g.slug}`, title: g.title, kind: 'guide',
                    category: g.category, description: g.description, words: g.words,
-                   added: g.added });
+                   added: g.added, updated: g.updated });
     }
     for (const m of docsIndex.api || []) {
         out.push({ ref: `api/${m.slug}`, title: m.title, kind: 'module',
                    category: m.category, description: m.description, words: m.words,
-                   added: m.added });
+                   added: m.added, updated: m.updated });
     }
     for (const s of docsIndex.spices || []) {
         out.push({ ref: `spices/${s.slug}`, title: s.title, kind: 'spice',
                    category: s.category, description: s.description, words: s.words,
-                   added: s.added });
+                   added: s.added, updated: s.updated });
     }
     return out;
 }
@@ -5220,6 +5221,27 @@ function docsRecentPages(pages) {
         .slice(0, DOCS_RECENT_COUNT);
 }
 
+/**
+ * The most recently edited pages in the pack, newest edit first.
+ *
+ * Reads `updated`, the day the page's source was last committed to -- the other
+ * end of the same history `added` reads the near end of.
+ *
+ * A page whose last commit is the one that added it is left out: `added ===
+ * updated` means nothing has happened to it since it arrived, which the
+ * Recently Added section above already says. Without that filter every page
+ * written this month would fill both lists, and the second one would stop
+ * answering the question it is for -- "what changed under me?" is only
+ * interesting about pages I might already have read.
+ */
+function docsUpdatedPages(pages) {
+    return pages
+        .filter(p => p.updated && p.updated !== p.added)
+        .sort((a, b) => b.updated.localeCompare(a.updated)
+                     || a.title.localeCompare(b.title))
+        .slice(0, DOCS_RECENT_COUNT);
+}
+
 const DOCS_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -5231,8 +5253,8 @@ const DOCS_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
  * date is a calendar day from a commit, not an instant, so it has no business
  * being shifted into anyone's timezone.
  */
-function docsFormatAdded(added) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(added || '');
+function docsFormatDay(day) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day || '');
     if (!m) return '';
     return `${DOCS_MONTHS[Number(m[2]) - 1] || ''} ${Number(m[3])}`.trim();
 }
@@ -5258,25 +5280,31 @@ function docsQuickstartSection() {
 }
 
 /**
- * What arrived most recently, across all three kinds.
+ * One dated, flat section -- "Recently Added" or "Recently Updated" -- across
+ * all three kinds of page.
  *
- * A `<details>`, closed on load. The section answers "what is new since I last
- * looked?", which is a question you ask occasionally and never on the way to a
+ * A `<details>`, closed on load. Both sections answer a "what changed since I
+ * last looked?" question, which you ask occasionally and never on the way to a
  * page you already know the name of -- so ten rows of it sitting permanently
  * between the nav's top and the tree taxes every other visit to pay for that
- * one. Closed it is a single line, and markDocsNavActive() still springs it
- * open when the page you are reading is one of the entries.
+ * one. Closed each is a single line, and markDocsNavActive() still springs the
+ * right one open when the page you are reading is one of its entries.
+ *
+ * `field` names the date the section is about ('added' / 'updated'), and is
+ * also the `data-` attribute each row carries, so a row says which claim it is
+ * making rather than leaving the reader to infer it from its section.
  */
-function docsRecentSection(pages) {
-    let html = '<details class="docs-nav-section docs-nav-recent">'
-             + '<summary><h4>Recently Added</h4></summary><ul>';
+function docsDatedSection(cls, heading, field, pages) {
+    let html = `<details class="docs-nav-section docs-nav-datelist ${cls}">`
+             + `<summary><h4>${escapeHtml(heading)}</h4></summary><ul>`;
     for (const p of pages) {
-        const title = `${p.kind} -- added ${p.added}`
+        const day = p[field];
+        const title = `${p.kind} -- ${field} ${day}`
                     + (p.description ? `\n${p.description}` : '');
         html += `<li><a href="#doc=${escapeAttr(p.ref)}" data-doc-ref="${escapeAttr(p.ref)}"`
-             +  ` data-added="${escapeAttr(p.added)}" title="${escapeAttr(title)}">`
+             +  ` data-${field}="${escapeAttr(day)}" title="${escapeAttr(title)}">`
              +  `<span class="docs-recent-title">${escapeHtml(p.title)}</span>`
-             +  `<span class="docs-recent-date">${escapeHtml(docsFormatAdded(p.added))}</span>`
+             +  `<span class="docs-recent-date">${escapeHtml(docsFormatDay(day))}</span>`
              +  '</a></li>';
     }
     return html + '</ul></details>';
@@ -5307,11 +5335,20 @@ function renderDocsNav() {
     const pages = docsAllPages();
     // The quickstart first, then what is new, then the tree.
     let html = docsQuickstartSection();
-    // Above the tree, and flat: what is new cuts across guides, API modules and
+    // Above the tree, and flat: what changed cuts across guides, API modules and
     // spices, so grouping it by category would bury the one thing it is for.
-    // Absent entirely when the pack carries no dates, rather than shown empty.
+    // Added first, then updated -- arrival is the bigger news, and a page that
+    // has only just landed is filtered out of the second list rather than
+    // repeated in it. Either section is absent entirely when the pack carries no
+    // dates for it, rather than shown empty.
     const recent = docsRecentPages(pages);
-    if (recent.length) html += docsRecentSection(recent);
+    if (recent.length) {
+        html += docsDatedSection('docs-nav-recent', 'Recently Added', 'added', recent);
+    }
+    const updated = docsUpdatedPages(pages);
+    if (updated.length) {
+        html += docsDatedSection('docs-nav-updated', 'Recently Updated', 'updated', updated);
+    }
     const guides = pages.filter(p => p.kind === 'guide');
     const modules = pages.filter(p => p.kind === 'module');
     const spices = pages.filter(p => p.kind === 'spice');

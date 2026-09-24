@@ -1178,9 +1178,11 @@ def _fmt_desc(text: str) -> str:
 
 
 def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
-                 recent: list[dict] | None = None) -> None:
+                 recent: list[dict] | None = None,
+                 recent_updated: list[dict] | None = None) -> None:
     categorized_stems = {g['stem'] for c in categories for g in c['guides']}
     recent = recent or []
+    recent_updated = recent_updated or []
 
     def guide_item(g: dict) -> str:
         if g['stem'] not in all_stems:
@@ -1217,6 +1219,10 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
         f'title="Jump to {_html.escape(c["name"], quote=True)}">{c["name"]}</a></li>'
         for c in categories if any(g['stem'] in all_stems for g in c['guides'])
     ]
+    if recent_updated:
+        sidebar_cats_list.insert(
+            0, '<li><a href="#recently-updated" title="Jump to Recently '
+               'Updated">Recently Updated</a></li>')
     if recent:
         sidebar_cats_list.insert(
             0, '<li><a href="#recently-added" title="Jump to Recently Added">'
@@ -1225,18 +1231,29 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     sidebar_html = build_sidebar(
         toc=f'      <h3>Categories</h3>\n      <ul>{sidebar_cats}</ul>')
 
-    recent_html = ''
-    if recent:
-        recent_items = ''.join(
+    def dated_card(entries: list[dict], slug: str, heading: str) -> str:
+        """One of the two dated cards above the category grid, or '' if empty."""
+        if not entries:
+            return ''
+        items = ''.join(
             f'<li><a href="{r["stem"]}.html">{_fmt_inline(r["label"])}</a>'
             f'<span style="color:var(--text-sec)"> -- {r["date"]}</span></li>'
-            for r in recent
+            for r in entries
         )
-        recent_html = f'''\
-      <div class="index-card" style="display:block;margin-bottom:1.5rem" id="recently-added">
-        <h3 style="font-family:system-ui;font-size:0.9rem;margin-bottom:0.5rem">Recently Added</h3>
-        <ul style="list-style:none;margin:0">{recent_items}</ul>
+        return f'''\
+      <div class="index-card" style="display:block;margin-bottom:1.5rem" id="{slug}">
+        <h3 style="font-family:system-ui;font-size:0.9rem;margin-bottom:0.5rem">{heading}</h3>
+        <ul style="list-style:none;margin:0">{items}</ul>
       </div>'''
+
+    # Two cards, same shape, stacked: what arrived, then what changed. The
+    # dates are the two ends of each guide's git history -- first commit and
+    # last -- so a guide can honestly appear in both only when it landed and
+    # was then edited on a later day.
+    recent_html = '\n'.join(filter(None, [
+        dated_card(recent, 'recently-added', 'Recently Added'),
+        dated_card(recent_updated, 'recently-updated', 'Recently Updated'),
+    ]))
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -1294,16 +1311,18 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
 
 
 def emit_pack_guides(docs: list[dict], guides_dir: Path, pack_dir: Path,
-                     added_by_stem: dict[str, str] | None = None) -> None:
+                     added_by_stem: dict[str, str] | None = None,
+                     updated_by_stem: dict[str, str] | None = None) -> None:
     """Write the chrome-free guide fragments and the guides slice of index.json.
 
     Fragments keep their source links; `tools/genpack.py` rewrites them into the
     pack's `#doc=` URL space once every generator has contributed, because only
     it knows what the finished pack contains.
 
-    `added_by_stem` is the same creation-date map the index page's Recently
-    Added card is built from -- passed in rather than recomputed so the pane's
-    section and the website's card cannot disagree about when a guide arrived.
+    `added_by_stem` and `updated_by_stem` are the same date maps the index
+    page's Recently Added and Recently Updated cards are built from -- passed in
+    rather than recomputed so the pane's sections and the website's cards cannot
+    disagree about when a guide arrived or when it last changed.
     """
     pack_dir = Path(pack_dir)
 
@@ -1336,10 +1355,11 @@ def emit_pack_guides(docs: list[dict], guides_dir: Path, pack_dir: Path,
         }
         # Only when git knows: a guide written but not yet committed has no
         # date to claim, and the pane leaves an undated page out of Recently
-        # Added rather than dating it from the build.
-        added = (added_by_stem or {}).get(stem)
-        if added:
-            entry['added'] = added
+        # Added / Recently Updated rather than dating it from the build.
+        for key, by_stem in (('added', added_by_stem), ('updated', updated_by_stem)):
+            date = (by_stem or {}).get(stem)
+            if date:
+                entry[key] = date
         entries.append(entry)
 
         # Copy any local images the guide references, so the pack is
@@ -1399,15 +1419,39 @@ def main() -> None:
         creation_dates = list(
             ex.map(lambda s: get_creation_date(s, repo_root), md_files)
         )
+    # The other end of each guide's history, for the Recently Updated card.
+    # One `git log` for the whole set rather than `--follow` per file: for a
+    # *last* edit, following renames cannot change the answer -- the newest
+    # commit touching the current path is the newest edit either way -- so the
+    # single traversal is both cheaper and exactly as correct here.
+    modified_dates = {
+        src.stem: d['updated']
+        for src, d in packlib.git_page_dates(md_files, repo_root).items()
+        if d.get('updated')
+    }
+
+    def label_for(src: Path) -> str:
+        m = meta_by_stem.get(src.stem, {})
+        return m.get('title', src.stem.replace('-', ' ').title()).strip()
+
     dated: list[tuple[str, Path]] = [
         (d, src) for src, d in zip(md_files, creation_dates) if d
     ]
     dated.sort(key=lambda t: t[0], reverse=True)
-    recent = []
-    for date, src in dated[:10]:
-        m = meta_by_stem.get(src.stem, {})
-        label = m.get('title', src.stem.replace('-', ' ').title()).strip()
-        recent.append({'stem': src.stem, 'label': label, 'date': date})
+    recent = [{'stem': src.stem, 'label': label_for(src), 'date': date}
+              for date, src in dated[:10]]
+
+    # A guide whose newest commit is the one that added it has not been updated
+    # -- it is new, which the card above already says. Listing it in both would
+    # make Recently Updated a second copy of Recently Added for every guide
+    # written this month, so an untouched-since-arrival guide is left out.
+    edited: list[tuple[str, Path]] = [
+        (mod, src) for src, add in zip(md_files, creation_dates)
+        if (mod := modified_dates.get(src.stem)) and mod != add
+    ]
+    edited.sort(key=lambda t: t[0], reverse=True)
+    recent_updated = [{'stem': src.stem, 'label': label_for(src), 'date': date}
+                      for date, src in edited[:10]]
 
     print('Generating guides:')
     # Markdown conversion is the other half of the runtime (~17s of the
@@ -1432,14 +1476,16 @@ def main() -> None:
         render_guide(src.stem, src, out_dir / f'{src.stem}.html', all_stems,
                      doc=doc)
         docs.append(doc)
-    render_index(categories, all_stems, out_dir, recent=recent)
+    render_index(categories, all_stems, out_dir, recent=recent,
+                 recent_updated=recent_updated)
     print(f'Done: {len(md_files)} guides + index → {out_dir}')
 
     if args.emit_pack:
         emit_pack_guides(docs, guides_dir, Path(args.emit_pack),
                          added_by_stem={src.stem: d
                                         for src, d in zip(md_files, creation_dates)
-                                        if d})
+                                        if d},
+                         updated_by_stem=modified_dates)
 
 
 if __name__ == '__main__':

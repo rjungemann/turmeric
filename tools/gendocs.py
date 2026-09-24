@@ -1994,12 +1994,13 @@ def emit_pack_api(modules, pack_dir, *, section='api', slug_prefix=''):
     """
     pack_dir = Path(pack_dir)
 
-    # When each module's page first appeared, for the pane's Recently Added
-    # section. One git traversal for the whole set, from the checkout the
-    # sources actually live in -- which is the spice's own repo when a spice
-    # tree is being folded in, not this one.
+    # When each module's page first appeared and when it last changed, for the
+    # pane's Recently Added / Recently Updated sections. One git traversal for
+    # the whole set and for both dates, from the checkout the sources actually
+    # live in -- which is the spice's own repo when a spice tree is being folded
+    # in, not this one.
     sources = [Path(m['file_path']) for m in modules if m.get('file_path')]
-    added_dates = packlib.git_added_dates(
+    page_dates = packlib.git_page_dates(
         sources, packlib.find_repo_root(sources[0])) if sources else {}
 
     entries = []
@@ -2043,9 +2044,10 @@ def emit_pack_api(modules, pack_dir, *, section='api', slug_prefix=''):
                 prose=packlib.strip_tags(content)),
         }
         source = module.get('file_path')
-        added = added_dates.get(Path(source)) if source else None
-        if added:
-            entry['added'] = added
+        dates = page_dates.get(Path(source)) if source else {}
+        for key in ('added', 'updated'):
+            if dates.get(key):
+                entry[key] = dates[key]
         entries.append(entry)
 
     packlib.write_sidecar(pack_dir, section, entries)

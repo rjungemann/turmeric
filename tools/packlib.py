@@ -77,18 +77,21 @@ def heading_names(toc_tokens: list) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# When a page first appeared
+# When a page appeared, and when it last changed
 #
-# The pane's "Recently Added" section answers "what is new in here?", and the
-# only durable record of that is the commit that first added a doc's source
-# file. Reading it here, at pack time, keeps the answer out of the pack's
-# content: a guide does not have to remember to carry a date in its front
-# matter, and one that forgets does not quietly read as new forever.
+# The pane's "Recently Added" and "Recently Updated" sections answer "what is
+# new in here?" and "what has changed under me?", and the only durable record
+# of either is the git history of a doc's source file. Reading it here, at pack
+# time, keeps the answer out of the pack's content: a guide does not have to
+# remember to carry a date in its front matter, and one that forgets does not
+# quietly read as new forever.
 #
-# One `git log` for the whole set rather than one per file. The guides index
-# asks the same question per guide with `--follow`, which can only take a
-# single path; the pack asks it about ~300, so this pass trades rename
-# following for a single traversal (see git_added_dates).
+# One `git log` for the whole set rather than one per file, and one traversal
+# for both dates rather than one each: the oldest commit touching a path is the
+# commit that added it and the newest is its last edit, so a single newest-first
+# pass yields both ends. The guides index asks the same question per guide with
+# `--follow`, which can only take a single path; the pack asks it about ~300, so
+# this pass trades rename following for a single traversal (see git_page_dates).
 # ---------------------------------------------------------------------------
 
 _ISO_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T')
@@ -109,15 +112,21 @@ def find_repo_root(start: Path) -> Path | None:
         cur = cur.parent
 
 
-def git_added_dates(paths: Iterable[Path],
-                    repo_root: Path | None) -> dict[Path, str]:
-    """Map each path to the `YYYY-MM-DD` its file was first added to git.
+def git_page_dates(paths: Iterable[Path],
+                   repo_root: Path | None) -> dict[Path, dict[str, str]]:
+    """Map each path to `{'added': 'YYYY-MM-DD', 'updated': 'YYYY-MM-DD'}`.
 
-    A path git has no add commit for is absent from the result rather than
-    guessed at -- an untracked draft, a file outside `repo_root`, a build from
-    a release tarball with no history at all. The pack then carries no `added`
-    for that page and the pane's Recently Added simply never lists it, which is
-    the honest answer to "when did this appear?" when nothing recorded it.
+    `added` is the day the file was first committed; `updated` the day it was
+    last committed to. A file whose only commit is the one that added it has
+    both, equal -- the caller decides what that means (the pane's Recently
+    Updated section reads it as "never edited since it landed" and leaves the
+    page out).
+
+    A path git has no commit for is absent from the result rather than guessed
+    at -- an untracked draft, a file outside `repo_root`, a build from a release
+    tarball with no history at all. The pack then carries no dates for that page
+    and the pane's dated sections simply never list it, which is the honest
+    answer to "when did this appear?" when nothing recorded it.
 
     Renames are not followed: a doc that moved reads as added where it now
     lives. That is what buys the single traversal -- `--follow` takes exactly
@@ -125,7 +134,7 @@ def git_added_dates(paths: Iterable[Path],
     the two answers, since a page that arrived under this name last week did
     arrive last week.
 
-    Dates are author dates, matching the guides index's own card.
+    Dates are author dates, matching the guides index's own cards.
     """
     root = Path(repo_root).resolve() if repo_root else None
     if root is None:
@@ -145,7 +154,7 @@ def git_added_dates(paths: Iterable[Path],
 
     try:
         proc = subprocess.run(
-            ['git', 'log', '--diff-filter=A', '--name-only', '--no-renames',
+            ['git', 'log', '--name-only', '--no-renames',
              '--format=%aI', '--', *sorted(by_rel)],
             cwd=root, capture_output=True, text=True, check=False)
     except OSError:
@@ -153,7 +162,7 @@ def git_added_dates(paths: Iterable[Path],
     if proc.returncode != 0:
         return {}
 
-    out: dict[Path, str] = {}
+    out: dict[Path, dict[str, str]] = {}
     date: str | None = None
     for line in proc.stdout.splitlines():
         line = line.strip()
@@ -162,11 +171,15 @@ def git_added_dates(paths: Iterable[Path],
         if _ISO_DATE_RE.match(line):
             date = line[:10]
         elif date and line in by_rel:
-            # The log runs newest first, so a later line for the same path is
-            # an older add: keep overwriting and a file that was deleted and
+            # The log runs newest first, so the first line for a path is its
+            # latest edit and every later one is older. `updated` therefore
+            # takes the first and keeps it; `added` keeps overwriting, so it
+            # ends on the oldest commit -- and a file that was deleted and
             # restored counts from when it first appeared, not from its return.
-            out[by_rel[line]] = date
+            rec = out.setdefault(by_rel[line], {'updated': date})
+            rec['added'] = date
     return out
+
 
 
 # ---------------------------------------------------------------------------

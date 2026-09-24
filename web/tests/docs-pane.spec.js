@@ -169,6 +169,60 @@ test.describe('docs pane', () => {
             (r) => window.turmericApp.getState().docsRef === r, ref, { timeout: 15_000 });
     });
 
+    test('recently updated sits under recently added, newest edit first', async ({ page }) => {
+        await openTry(page);
+        await openDocs(page);
+
+        // Same build-input caveat as the section above: no git history in the
+        // build, no dates, and the section is absent by design. A page whose
+        // only commit is its add is deliberately not listed -- it is new, not
+        // updated -- so the guard counts the pages that actually qualify.
+        const edited = await page.evaluate(async () => {
+            const idx = await (await fetch('/docs-pack/index.json')).json();
+            return [...(idx.guides || []), ...(idx.api || []), ...(idx.spices || [])]
+                .filter(e => e.updated && e.updated !== e.added).length;
+        });
+        test.skip(edited === 0, 'pack carries no edit dates (built outside a git checkout)');
+
+        const sections = await page.locator('#docs-nav .docs-nav-section h4').allTextContents();
+        expect(sections[0]).toBe('Recently Added');
+        expect(sections[1]).toBe('Recently Updated');
+
+        const dates = await page.locator('#docs-nav .docs-nav-updated a[data-updated]')
+            .evaluateAll(els => els.map(el => el.dataset.updated));
+        expect(dates.length).toBeGreaterThan(0);
+        expect(dates.length).toBeLessThanOrEqual(10);
+        expect([...dates].sort().reverse()).toEqual(dates);
+
+        // Collapsed on load, like its neighbour, and opened by its summary.
+        const updated = page.locator('#docs-nav .docs-nav-updated');
+        await expect(updated).not.toHaveAttribute('open', /.*/);
+        await expect(updated.locator('a[data-doc-ref]').first()).toBeHidden();
+        await updated.locator('summary').click();
+        await expect(updated).toHaveAttribute('open', /.*/);
+
+        // A page that only just landed belongs in Recently Added and nowhere
+        // else: the second list never repeats an unedited arrival.
+        const refs = await page.locator('#docs-nav .docs-nav-updated a[data-doc-ref]')
+            .evaluateAll(els => els.map(el => el.dataset.docRef));
+        const idx = await page.evaluate(async () => {
+            const j = await (await fetch('/docs-pack/index.json')).json();
+            const out = {};
+            for (const e of j.guides || []) out[`guides/${e.slug}`] = e;
+            for (const e of j.api || []) out[`api/${e.slug}`] = e;
+            for (const e of j.spices || []) out[`spices/${e.slug}`] = e;
+            return out;
+        });
+        for (const ref of refs) expect(idx[ref].updated).not.toBe(idx[ref].added);
+
+        // And it navigates like any other nav entry.
+        const first = page.locator('#docs-nav .docs-nav-updated a[data-doc-ref]').first();
+        const ref = await first.getAttribute('data-doc-ref');
+        await first.click();
+        await page.waitForFunction(
+            (r) => window.turmericApp.getState().docsRef === r, ref, { timeout: 15_000 });
+    });
+
     test('renders a guide with highlighting, toggles, and load-into-editor', async ({ page }) => {
         await openTry(page);
         await openDocs(page);

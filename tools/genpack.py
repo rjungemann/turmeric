@@ -8,8 +8,9 @@ manifest sidecar into the pack directory. This script is the pass that runs
 after all of them, when -- and only when -- the whole pack is on disk:
 
   1. merge the sidecars into `index.json`, the pack's one contract -- each
-     page carrying the date its source first appeared, which is what the
-     docs pane's Recently Added section is built from;
+     page carrying the dates its source first appeared and last changed, which
+     is what the docs pane's Recently Added / Recently Updated sections are
+     built from;
   2. rewrite cross-links into the pack's `#doc=` URL space (only genpack knows
      the whole pack, so only genpack can tell an in-pack link from a website
      one) and report the links it could not resolve;
@@ -211,13 +212,15 @@ def build(pack_dir: Path, version: str, max_bytes: int,
 
     print(f'  index.json: {len(guides)} guides, {len(api)} API modules, '
           f'{len(spices)} spice pages ({human(index_path.stat().st_size)})')
-    # Stamped by the generators, from git. Worth a line of its own: an
-    # undated page is invisible to the pane's Recently Added section, so a
-    # count well short of the page count is the one visible symptom of a pack
-    # built outside a checkout.
+    # Stamped by the generators, from git -- first commit and last, in one
+    # traversal, so the two counts move together. Worth a line of its own: an
+    # undated page is invisible to the pane's Recently Added and Recently
+    # Updated sections, so a count well short of the page count is the one
+    # visible symptom of a pack built outside a checkout.
     pages = guides + api + spices
     dated = sum(1 for e in pages if e.get('added'))
-    print(f'  add dates:  {dated} of {len(pages)} pages')
+    edited = sum(1 for e in pages if e.get('updated'))
+    print(f'  git dates:  {dated} added / {edited} updated of {len(pages)} pages')
     print(f'  pack size:  {human(total)} of {human(max_bytes)} budget')
 
     if unresolved:

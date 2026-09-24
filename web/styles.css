@@ -2200,37 +2200,40 @@ body.split-dragging * {
 .docs-nav-pinned ul { padding-left: 0; margin: 0; }
 .docs-nav-pinned li a { font-weight: 600; }
 
-/* Recently Added: one flat list above the tree, closed until asked for. Its
-   summary carries the same h4 the other sections use, so the disclosure marker
-   has to hang off the heading rather than the summary box. */
-.docs-nav-recent > summary {
+/* Recently Added and Recently Updated: flat dated lists above the tree, each
+   closed until asked for. They share this styling and differ only in which date
+   they read, so the look lives on .docs-nav-datelist and .docs-nav-recent /
+   .docs-nav-updated stay pure identity hooks. The summary carries the same h4
+   the other sections use, so the disclosure marker has to hang off the heading
+   rather than the summary box. */
+.docs-nav-datelist > summary {
     cursor: pointer;
     list-style: none;
     padding: 1px 0;
 }
 
-.docs-nav-recent > summary::-webkit-details-marker { display: none; }
-.docs-nav-recent > summary h4 { display: inline; }
-.docs-nav-recent > summary h4::before { content: '▸ '; color: var(--text-dim); }
-.docs-nav-recent[open] > summary h4::before { content: '▾ '; }
-.docs-nav-recent > summary:hover h4 { color: var(--text-primary); }
+.docs-nav-datelist > summary::-webkit-details-marker { display: none; }
+.docs-nav-datelist > summary h4 { display: inline; }
+.docs-nav-datelist > summary h4::before { content: '▸ '; color: var(--text-dim); }
+.docs-nav-datelist[open] > summary h4::before { content: '▾ '; }
+.docs-nav-datelist > summary:hover h4 { color: var(--text-primary); }
 
-/* Title on the left, the day it landed on the right -- the date is what makes
-   the section a claim rather than a curated pick, so it stays on screen
-   instead of in a tooltip. */
-.docs-nav-recent li a {
+/* Title on the left, the day it landed or changed on the right -- the date is
+   what makes each section a claim rather than a curated pick, so it stays on
+   screen instead of in a tooltip. */
+.docs-nav-datelist li a {
     display: flex;
     align-items: baseline;
     gap: 8px;
 }
 
-.docs-nav-recent .docs-recent-title {
+.docs-nav-datelist .docs-recent-title {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.docs-nav-recent .docs-recent-date {
+.docs-nav-datelist .docs-recent-date {
     margin-left: auto;
     flex-shrink: 0;
     font-size: 10px;
