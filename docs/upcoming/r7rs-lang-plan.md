@@ -2455,6 +2455,72 @@ re-entered continuation).**
   **Recommended: keep.** Then the task is a guide sentence and the two tests
   counted as settled rather than failing.
 
+**T8 -- a memory-safety and memory-leak audit of the R7RS features (0
+tests; last).**
+
+- **Why:** T0-T5 added a lot of hand-written C and ownership decisions, and
+  the suites cannot see most of what could go wrong with them:
+  - `run.sh` compiles fixture programs without sanitizers and runs them
+    with `detect_leaks=0`, so a leak, double free or use-after-free in
+    EMITTED code or prelude inline C passes silently. None of the `r7rs-*`
+    fixtures opts into `tests/run-leak-check.sh` (`requires.leak-check`).
+  - `run-turi.sh` runs the interpreter with `detect_leaks=0` by default.
+  - T5 turned two sanitizer features off or around: ASan's use-after-return
+    detection (`detect_stack_use_after_return=0` in a sanitized `tur` and in
+    a sanitized compiled Scheme program), and the copy loops, which are
+    `no_sanitize_address`.
+- **Preserve:** Turmeric's and Saffron's ownership and freeing are not
+  loosened to make a Scheme finding go away. A fix to shared machinery is
+  gated on the dialect or is right for every dialect (9.1).
+- **Scope, by feature** (each a known risk to check, not a known bug unless
+  it links a report):
+  - **The prelude's inline C and its interpreter twins:**
+    - R7rsIo/port buffers and FILE handles (closed exactly once, including
+      on the error paths);
+    - `r7rs-str__` and the string layer's fresh UTF-8 copies (T3);
+    - the bignum and ratio cores (T1, T2), in both the prelude wrappers and
+      `interpreter_natives.c`;
+    - the reader's and printer's temporaries (R8).
+  - **Region store hooks.** No inline C under `stdlib/r7rs/` carries
+    `TUR_REGION_NOTE`. Check every body that stores a caller's word into
+    memory that outlives the call (port and parameter cells, id tables, box
+    setters) against CLAUDE.md's "Region Store Hooks" rule.
+  - **Continuations (T5):**
+    - use-after-free on re-entry: any heap state a copied stack can reach
+      that is still freed. `tur_dk_pinned` and `TURI_DRIVE_FREE` cover what
+      was found; audit the rest of the emitted runtime and eval.c;
+    - the saved runtime-state lists, compiled and interpreted, against every
+      global that tracks the stack;
+    - growth: [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md).
+  - **`eval` (T4):**
+    - the bridge's `strdup`s and result texts;
+    - the host-frame and pending-argument buffers;
+    - the two-env bracket (`switch_side`) on every path, error paths
+      included;
+    - the embedded env's process-lifetime memory against what a program
+      would expect to be freed.
+  - **Closures and boxes in dynamic code:**
+    - [dynamic-returned-closure-env-is-never-freed](../reported/dynamic-returned-closure-env-is-never-freed.md);
+    - the `R7rsBox` cells T5's assignment conversion now makes for every
+      `set!` variable.
+- **How:**
+  - Run every `r7rs-*` fixture and the conformance program compiled with
+    `-fsanitize=address,undefined` and LeakSanitizer ON, and under `tur
+    --interpret` with `detect_leaks=1`.
+  - Opt each clean fixture into `requires.leak-check` so it stays clean.
+  - Run the continuation and `eval` fixtures once with ASan's use-after-return
+    detection forced on for the paths that do not capture, to confirm the
+    `detect_stack_use_after_return=0` default hides nothing else.
+  - Classify each leak as a bug to fix or as process-lifetime by design (the
+    interpreter's closures, the pinned DK memory). A by-design leak gets a
+    `requires.no-leak-check` or LSan suppression that names it.
+- **Done:**
+  - every `r7rs-*` fixture leak-checked on both back ends, or carrying a
+    named, reported exemption;
+  - each finding fixed or filed under `docs/reported/`;
+  - a short table in this task's "What shipped" of what each feature
+    allocates, who frees it, and what is deliberately never freed.
+
 ### 9.3 Documented differences no chibi test reaches
 
 Each one is in `docs/guides/r7rs-guide.md` ("Where it differs") today:
