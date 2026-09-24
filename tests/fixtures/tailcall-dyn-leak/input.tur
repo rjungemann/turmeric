@@ -41,5 +41,14 @@
   (let [counter (make-counter 3)]
     (println (counter counter 1000 0)))
   (println (ping ping pong 1001 "carried"))
-  (println (vec-fold [1 2 3 4 5] 100 step))
+  ;; The vector is the program's, and a compiled Vec is not reclaimed when it
+  ;; goes out of scope (docs/guides/gc-guide.md: `vec-free` is the explicit
+  ;; release), so it is freed here.  It went unfreed until r7rs-lang-plan R9
+  ;; and the gate still passed -- LeakSanitizer found a stale copy of its
+  ;; pointer in a global and on the stack and counted it reachable.  R6's
+  ;; dynamic-call changes moved those words and the 168 bytes surfaced as a
+  ;; "leak" that had nothing to do with the trampoline this fixture checks.
+  (let [v [1 2 3 4 5]]
+    (println (vec-fold v 100 step))
+    (vec-free v))
   0)

@@ -24,7 +24,10 @@ All notable changes to Turmeric are documented here.
   is green again. `tests/turi/repl-lang-r7rs.sh`, `tests/run-init-r7rs.sh`,
   `tests/lsp/r7rs-diagnostics.py`, new cases in `run-fmt.sh`,
   `run-editor-syntax.sh`, `check-gendocs-parse.sh` and the two wasm unit
-  tests, and `tests/fixtures/docs-r7rs-guide-examples`.
+  tests, and `tests/fixtures/docs-r7rs-guide-examples`. Also green again:
+  `tur_regions_fuzz_src` (its self-test predated R3's new region-escape case)
+  and `tur_leak_check` (`tailcall-dyn-leak` had passed on stale-pointer luck;
+  filed as `docs/reported/dynamic-returned-closure-env-is-never-freed.md`).
 - **`#lang r7rs` ports and I/O (R8).** String, bytevector and file ports
   over one C buffer (`defopaque` handles, inline C with interpreter twins),
   the whole R7RS I/O surface of `(scheme base)` with UTF-8 characters, and

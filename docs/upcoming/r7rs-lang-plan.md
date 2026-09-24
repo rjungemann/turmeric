@@ -1470,6 +1470,22 @@ were both caught), editor packs, `tools/gendocs.py`, and
 > Not verified here: the browser builds of the REPL and LSP changes (no
 > Emscripten in this environment). Both are exercised natively by their unit
 > tests, which fail without the fixes.
+>
+> Two ctest targets outside `run.sh` had gone red on this branch and are
+> green again (both measured against `main`, 274f3cbb, in a worktree build):
+>
+> - `tur_regions_fuzz_src`: R3 added case 10 to `region-escape-via-store`, as
+>   the store-hook rule requires, and the fuzz script's self-test hard-codes
+>   that fixture's bracket and retire counts. Updated to 11 brackets and 10
+>   retires.
+> - `tur_leak_check`: `tailcall-dyn-leak` had always leaked -- a vector it
+>   never freed, and its `make-counter` closure env -- and passed because
+>   stale copies of both pointers made LeakSanitizer count them reachable. R6's
+>   dynamic-call change moved those words. The fixture now frees its vector,
+>   and the closure is the new report
+>   [dynamic-returned-closure-env-is-never-freed](../reported/dynamic-returned-closure-env-is-never-freed.md)
+>   (a closure returned as `any` gets no scope-end drop; pre-existing at
+>   `main`), which the fixture's `known-leak` marker cites.
 
 ### R10 -- conformance (medium, continuous)
 
