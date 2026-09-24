@@ -2344,7 +2344,7 @@ re-entered continuation).**
 >   runtime walk -- model a small grammar: integer binops, one- and
 >   two-argument calls, pure `let`, and an `if` with one shift-bearing arm.
 >   Arbitrary Scheme between a call/cc and its prompt falls outside it, and
->   generalising it would have changed Turmeric's delimited control. So
+>   generalizing it would have changed Turmeric's delimited control. So
 >   Turmeric's `reset`/`shift`/`call/cc*` are untouched, and the Scheme
 >   `call/cc` is built beside them.
 > - **A continuation is a copy of the C stack.** This is the classic
@@ -2390,14 +2390,17 @@ re-entered continuation).**
 >   - The old escape is `r7rs-call/ec__`, used by `guard` and the eval
 >     bridge, so they copy nothing.
 >   - The public `call/cc` copies the stack on every call: O(stack depth),
->     and never freed.
+>     and never freed. Filed as
+>     [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md).
 >   - `r7rs-call/cc` calls the escape fallback through a procedure value,
 >     since a direct call would make it a CPS function.
 > - **Top level is not delimited.** A continuation is the rest of the
 >   program, as the image includes `main`'s frame (and the interpreter's
 >   loop over the forms). `r7rs-continuation-after-return`, which pinned
 >   D7's named error, now shows a re-entry after return re-running the forms
->   after it, stopped by a counter.
+>   after it, stopped by a counter. Filed as
+>   [r7rs-toplevel-reentry-reruns-forms](../reported/r7rs-toplevel-reentry-reruns-forms.md)
+>   (chibi and Racket delimit each top-level form).
 > - **Found and filed:**
 >   - [r7rs-internal-define-forward-set](../reported/r7rs-internal-define-forward-set.md)
 >     -- `set!` on a later internal define is "not bound";

@@ -40,5 +40,5 @@ stands at each definition, not against all of the body's names.
 ## Fix directions
 
 Bind every internal-definition name of a body up front (as `letrec*` does):
-declare them all (as `#<unspecified>`-initialised mutable cells), then assign
+declare them all (as `#<unspecified>`-initialized mutable cells), then assign
 them in order.
