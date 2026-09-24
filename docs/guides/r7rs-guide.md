@@ -116,6 +116,14 @@ inexact real is a double:
 ; (7/2 3 3.0 7.35 1267650600228229401496703205376)
 ```
 
+A double is written in the shortest form that reads back as the same double,
+with a `.` or an exponent so that it stays inexact: `7.0`, `7.1`, `+inf.0`,
+`-inf.0`, `+nan.0`. A very large or very small one takes an exponent written
+without a `+`: `1e21`, `1.7976931348623157e308`. R7RS allows the exponent
+either way, and the reader takes both (`1e+21` is `1e21`). chibi-scheme
+writes `e+308`, which is why two of its tests are counted as settled (see
+Conformance).
+
 An exact integer is a 64-bit int while it fits, which keeps the common case
 fast. Arithmetic that leaves 64 bits continues as a **bignum**, and a result
 that fits again is an int again. Nothing wraps, and nothing stops the
@@ -373,10 +381,14 @@ python3 tests/r7rs/run-conformance.py --backend interp --list-failures
 ```
 
 The suite has 1216 tests, and the runner counts **1223 passing
-invocations** (a `test-numeric-syntax` form is two), the same on the
-interpreter and the compiled back end. The 2 that fail are float spellings
-that differ from chibi's own (`1.7976931348623157e308` rather than `e+308`;
-both are R7RS).
+invocations** (a `test-numeric-syntax` form is two), **2 settled and none
+failing**, the same on the interpreter and the compiled back end. A settled
+test fails on a difference kept on purpose, where R7RS allows both answers
+and chibi's test accepts only its own. The two settled tests are the exponent
+spelling above (`1.7976931348623157e308` rather than `e+308`). The runner
+checks each settled test's reason on every run, and counts it failed if the
+reason stops holding; if one starts passing, the run fails so the entry gets
+deleted.
 
 The target fails only when the count drops below its floor, so raise the
 floor in `tests/run-r7rs-conformance.sh` when the count goes up.

@@ -6,6 +6,16 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **R7RS conformance: settled tests (r7rs-lang-plan T7).** The conformance
+  runner now reports `P passed, S settled, F failed`. A settled test fails on
+  a difference kept on purpose, where R7RS allows both answers and chibi's
+  test accepts only its own. Today there are two: `#lang r7rs` writes
+  `1.7976931348623157e308` where chibi's tests want `e+308`, and both
+  spellings are R7RS and read back the same. The runner checks each settled
+  test's reason at the end of every run, and a settled test that starts
+  passing fails the run. Chibi's suite: 1223 passed, 2 settled, 0 failed on
+  both back ends. No Scheme program's output changes.
+
 - **`#lang r7rs`: complex numbers (r7rs-lang-plan T6).** `3+4i`, `-i`,
   `1/2+3/4i`, `1.5+2i` and polar `1@0.5` are numbers, on both back ends,
   in source, `read` and `string->number`.

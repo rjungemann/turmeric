@@ -37,6 +37,15 @@ A form that never ran (rejected, or crashed) contributes the number of test
 invocations written in it, all as failures -- `test-numeric-syntax` counts
 two, since it expands to two `test`s.  Definitions contribute nothing.
 
+Settled tests (plan T7).  A test in SETTLED below fails on a difference the
+plan decided to keep: R7RS allows both answers and chibi's test accepts only
+its own.  Its failures count as SETTLED, not failed -- but only while the
+reason still holds.  The program ends with a check of each entry (what
+`number->string` writes for the input, and whether that reads back as the same
+number), and a settled form whose check does not come out as recorded counts
+failed as usual.  A settled test that PASSES exits 1, as an `expected.xfail`
+fixture does: the difference is gone, so delete the entry.
+
 Usage: run-conformance.py [--tur PATH] [--backend interp|compiled|both]
                           [--min-pass N] [--verbose] [--list-failures]
 """
@@ -50,6 +59,19 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 SUITE = os.path.join(HERE, "chibi-r7rs-tests.scm")
+
+# plan T7: tests that fail on a difference kept on purpose.  Keyed by the
+# form's text; each entry is the input string and the spelling
+# `number->string` gives it here, which the program checks at its end.
+#   R7RS 7.1.1 lets an exponent be written with or without `+`; R5 chose the
+#   bare exponent (`1e21`, pinned by tests/fixtures/r7rs-numbers), and chibi's
+#   test accepts only `e+308`.  The value round-trips exactly either way.
+SETTLED = {
+    '(test-precision "-1.7976931348623157e+308" "-inf.0")':
+        ("-1.7976931348623157e+308", "-1.7976931348623157e308"),
+    '(test-precision "1.7976931348623157e+308" "+inf.0")':
+        ("1.7976931348623157e+308", "1.7976931348623157e308"),
+}
 
 TEST_HEADS = {
     "test": 1, "test-assert": 1, "test-error": 1, "test-values": 1,
@@ -251,8 +273,22 @@ def build_program(forms, keep):
             owner[line + k] = idx
         parts.append(src + "\n")
         line += src.count("\n") + 1
+    # The settled entries' reason, checked where it can change: the spelling
+    # written, and that it reads back as the same number.
+    for key, (inp, _ours) in SETTLED.items():
+        parts.append('(let* ((n (string->number "%s")) (s (number->string n)))'
+                     ' (display "@@SETTLED ") (write (list "%s" s (eqv? n (string->number s))))'
+                     ' (newline))\n' % (inp, inp))
     parts.append('(display "@@DONE")\n(newline)\n')
     return "".join(parts), owner
+
+
+def settled_checks(out):
+    """{input: (spelling, round-trips?)} from a run's @@SETTLED lines."""
+    got = {}
+    for m in re.finditer(r'^@@SETTLED \("([^"]*)" "([^"]*)" (#t|#f)\)$', out, re.M):
+        got[m.group(1)] = (m.group(2), m.group(3) == "#t")
+    return got
 
 
 def run_program(tur, backend, text, timeout):
@@ -278,8 +314,10 @@ def run_program(tur, backend, text, timeout):
     return out, err, timed_out
 
 
-def run_backend(tur, backend, forms, verbose, timeout, keep=None, rejected=None):
-    """{form index: (passes, fails, note)} for every form with tests."""
+def run_backend(tur, backend, forms, verbose, timeout, keep=None, rejected=None,
+                checks=None):
+    """{form index: (passes, fails, note)} for every form with tests.  The
+    settled entries' end-of-program checks are collected into `checks`."""
     results = {}
     for idx, note in (rejected or {}).items():
         results[idx] = (0, None, note)
@@ -322,6 +360,8 @@ def run_backend(tur, backend, forms, verbose, timeout, keep=None, rejected=None)
                         print("      suite line %d: %s"
                               % (forms[owner[ln]][0], msg[:140]))
             continue
+        if checks is not None:
+            checks.update(settled_checks(out))
         # Attribute the PASS/FAIL lines to the form they follow.
         cur, tally = None, {}
         for ln in out.splitlines():
@@ -357,14 +397,34 @@ def run_backend(tur, backend, forms, verbose, timeout, keep=None, rejected=None)
     return results
 
 
-def summarize(forms, results):
-    passed = failed = 0
-    failing = []
+def settled_holds(src, checks):
+    """The form is SETTLED and its reason held in this run."""
+    entry = SETTLED.get(src.strip())
+    if entry is None:
+        return False
+    inp, ours = entry
+    return checks.get(inp) == (ours, True)
+
+
+def summarize(forms, results, checks):
+    passed = failed = settled = 0
+    failing, unsettled = [], []
     for idx, (start, end, src) in enumerate(forms):
         want = static_test_count(src)
         if want == 0:
             continue
         r = results.get(idx)
+        if src.strip() in SETTLED and r is not None and r[1] is not None:
+            p, f, note = r
+            if f == 0:
+                # The kept difference is gone: say so, and fail the run.
+                passed += p
+                unsettled.append((start, "settled test passes -- drop it from SETTLED", src))
+                continue
+            if settled_holds(src, checks):
+                passed += p
+                settled += f
+                continue
         if r is None:
             failed += want
             failing.append((start, "not run", src))
@@ -379,7 +439,7 @@ def summarize(forms, results):
             failed += f
             if f:
                 failing.append((start, note, src))
-    return passed, failed, failing
+    return passed, settled, failed, failing, unsettled
 
 
 def main():
@@ -402,8 +462,9 @@ def main():
     keep, rejected = None, None
     status = 0
     for be in backends:
+        checks = {}
         results = run_backend(args.tur, be, forms, args.verbose, args.timeout,
-                              keep, rejected)
+                              keep, rejected, checks)
         if be == "interp" and "compiled" in backends:
             # Seed the compiled pass: a form the interpreter rejected or
             # crashed on is not rebuilt around again (each compiled round is a
@@ -411,13 +472,17 @@ def main():
             rejected = {i: "(failed on the interpreter) " + r[2]
                         for i, r in results.items() if r[1] is None}
             keep = [i for i in range(len(forms)) if i not in rejected]
-        passed, failed, failing = summarize(forms, results)
-        print("r7rs-conformance [%s]: %d passed, %d failed (of %d written in the suite)"
-              % (be, passed, failed, total))
+        passed, settled, failed, failing, unsettled = summarize(forms, results, checks)
+        print("r7rs-conformance [%s]: %d passed, %d settled, %d failed (of %d written in the suite)"
+              % (be, passed, settled, failed, total))
         if args.list_failures:
             for start, note, src in failing:
                 first = src.splitlines()[0][:90]
                 print("  line %4d  %-40s %s" % (start, (note or "")[:40], first))
+        for start, note, src in unsettled:
+            print("r7rs-conformance [%s]: FAIL -- line %d: %s"
+                  % (be, start, note))
+            status = 1
         if passed < args.min_pass:
             print("r7rs-conformance [%s]: FAIL -- %d passed is below the floor of %d"
                   % (be, passed, args.min_pass))

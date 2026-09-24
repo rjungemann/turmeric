@@ -5,7 +5,9 @@
 #
 # The count is the point: it moves as stages land instead of arriving as a
 # verdict at the end.  This target fails only on a REGRESSION -- fewer passes
-# than the floor below.  Raise the floor when the count goes up.
+# than the floor below, or a SETTLED test (a difference kept on purpose, see
+# run-conformance.py) that now passes and should be deleted from the table.
+# Raise the floor when the count goes up.
 #
 #   R7RS_CONFORMANCE_BACKEND  both (default) | interp | compiled
 #                             The whole suite as one program per round: about

@@ -1,6 +1,6 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 through R10 landed 2026-09-23/24; Section 9's T0-T6 since.** `#lang r7rs` is a base
+Status: **R0 through R10 landed 2026-09-23/24; Section 9's T0-T7 since.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -49,15 +49,15 @@ that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 (native and browser) analysing and formatting Scheme, the editor packs,
 `gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
 runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
-which reports a count: 1223 test invocations pass on both back ends and 2
-fail, of the 1216 tests written in the suite (a `test-numeric-syntax` form
-counts two). It was 887 on the interpreter, and a compiled build that did not
-finish, when it was first wired; 1082 at the end of R10, then 1096, 1103,
-1134, 1147, 1151, 1152 and 1223 after Section 9's T0-T6. Each landed stage
-carries a "What shipped" note below. What is left -- two float spellings
-(T7) and a memory audit (T8) -- is Section 9, as tasks that change what a
-Scheme program means and leave Turmeric's and Saffron's semantics as they
-are.
+which reports a count: 1223 test invocations pass on both back ends, 2 are
+settled (T7: a difference kept on purpose) and none fail, of the 1216 tests
+written in the suite (a `test-numeric-syntax` form counts two). It was 887 on
+the interpreter, and a compiled build that did not finish, when it was first
+wired; 1082 at the end of R10, then 1096, 1103, 1134, 1147, 1151, 1152 and
+1223 after Section 9's T0-T6. Each landed stage carries a "What shipped" note
+below. What is left -- a memory audit (T8) -- is Section 9, with the tasks
+that changed what a Scheme program means and left Turmeric's and Saffron's
+semantics as they are.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -1764,8 +1764,8 @@ What `#lang r7rs` still does differently from R7RS, measured on 2026-09-24:
 chibi's suite passed 1082 of the 1216 tests written in it, on both back ends,
 and the runner counted 143 failed test invocations (a test-numeric-syntax
 form counts two). Every one of those 143 belonged to a task below; the counts
-per task are the runner's, as written before T0. T0-T6 have landed since:
-1223 pass and 2 invocations fail (T7's), and the test lines each task
+per task are the runner's, as written before T0. T0-T7 have landed since:
+1223 pass, 2 are settled (T7) and none fail, and the test lines each task
 turned green are struck from the tasks below (each task says so). Section
 9.3 lists the documented differences no chibi test reaches.
 
@@ -2450,7 +2450,7 @@ re-entered continuation).**
 
 > **What shipped (T6, 2026-09-24).** Complex numbers, on both back ends. The
 > count is **1223**, up from 1152: all 71 T6 invocations. Nothing is left in
-> T6; the 2 failures left are T7's.
+> T6; the 2 failures left were T7's.
 >
 > - **The value.**
 >   - An `R7rsComplex` has a real part and an imaginary part, each a real (an
@@ -2519,7 +2519,8 @@ re-entered continuation).**
 >   - `r7rs-number-syntax` regenerated: `3+4i` and `+i` read, and the
 >     refusal it shows is now `1/0`.
 
-**T7 -- two float spellings (2 tests: 2465, 2475).**
+**T7 -- two float spellings (2 tests: 2465, 2475).** *Landed 2026-09-24;
+see "What shipped" at the end of the task.*
 
 - **Today:** `1.7976931348623157e308`. chibi's test accepts only its own
   `1.7976931348623157e+308`.
@@ -2529,6 +2530,30 @@ re-entered continuation).**
   positive exponent, which moves every large number's spelling.
   **Recommended: keep.** Then the task is a guide sentence and the two tests
   counted as settled rather than failing.
+
+> **What shipped (T7, 2026-09-24).** The recommendation: the bare exponent
+> stays, and the two tests are settled. The count is **1223 passed, 2
+> settled, 0 failed** on both back ends. No Scheme program's output changes.
+>
+> - **Settled, as the runner counts it.** `tests/r7rs/run-conformance.py`
+>   has a `SETTLED` table, keyed by the test form's text. Each entry records
+>   the input and the spelling `number->string` gives it here, with the
+>   reason in a comment. A settled form's failures are counted as `settled`,
+>   not `failed`, and the summary line reads `P passed, S settled, F failed`.
+>   The floor still counts passes only.
+> - **The reason is checked on every run.** The program ends with one check
+>   per entry: what `number->string` writes for the input, and whether that
+>   reads back `eqv?` to the same number. Only when both come out as
+>   recorded does the failure count as settled; otherwise it is an ordinary
+>   failure. Proved by recording a wrong spelling, which moved the two to
+>   `failed`.
+> - **A settled test that passes fails the run** (exit 1), as an
+>   `expected.xfail` fixture does. The difference is gone, so the entry
+>   should be deleted.
+> - **The guide sentence** is in `docs/guides/r7rs-guide.md` Numbers: a
+>   double's spelling, the bare exponent, that the reader takes both, and why
+>   chibi's two tests are settled. The Conformance section explains
+>   "settled".
 
 **T8 -- a memory-safety and memory-leak audit of the R7RS features (0
 tests; last).**
