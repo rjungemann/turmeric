@@ -380,6 +380,11 @@ bool turi_value_is_native(TuriValue v);
  * with the standard message + double-panic guard).  Used by native functions
  * such as result-must / option-must instead of _exit(1).  Does not return. */
 void turi_runtime_panic(TuriEnv *env, const char *msg);
+/* r7rs-lang-plan R8: the value an identity question should compare.  A widen
+ * to `any` of a payload that cannot answer for its own type (a Vec, a Map, an
+ * opaque) wraps it in a FRESH one-field box each time, so two widens of one
+ * vector are two different structs; this looks through the box. */
+TuriValue turi_any_identity_payload(TuriValue v);
 
 /* Run the cooperative event loop until all async fibers and timers complete. */
 void turi_run_event_loop(TuriEnv *env);

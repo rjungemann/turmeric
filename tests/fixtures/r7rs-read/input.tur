@@ -1,0 +1,48 @@
+#lang r7rs
+;; r7rs-lang-plan R8: (scheme read) -- the datum reader over a port.  Each
+;; datum is read and written back; the input covers the R7RS external
+;; representation, comments and directives, datum labels, and read errors.
+(import (scheme base) (scheme write) (scheme read))
+(define (show x) (write x) (newline))
+
+(define text
+  (string-append
+    "(a b . c) [1 2] #(1 \"two\" #\\x) #u8(1 255) 42 -7.5 1e3 #x1F #b101 #o17 #e2.0 #i3 "
+    "|two words| sym #\\space #\\x41 #\\( #t #true #f #false "
+    "'q `(a ,b ,@c) "
+    "; a line comment\n"
+    "#| a block #| nested |# comment |# "
+    "#;(this datum is skipped) "
+    "\"esc\\t\\x41;\\\\ \\\"q\\\" \\\n     continued\" "
+    "#0=(1 2 . #0#) (#1=(x) #1#) #2=#(a #2#) "
+    "#!fold-case ABC #\\SPACE #!no-fold-case ABC "
+    "..."))
+
+(let ((ip (open-input-string text)))
+  (let loop ((d (read ip)) (n 0))
+    (if (eof-object? d)
+        (begin (display "end after ") (display n) (newline))
+        (begin (show d) (loop (read ip) (+ n 1))))))
+
+;; The shared label really is shared, and the vector really is cyclic.
+(let* ((ip (open-input-string "(#0=(x) #0#) #1=#(a #1#)"))
+       (l (read ip))
+       (v (read ip)))
+  (show (list (eq? (car l) (cadr l)) (eq? v (vector-ref v 1)))))
+
+;; read uses the current input port by default.
+(parameterize ((current-input-port (open-input-string "(from the parameter)")))
+  (show (read)))
+
+;; A malformed datum is a read error.
+(define (try s)
+  (guard (e ((read-error? e) (list 'read-error (error-object-message e))))
+    (read (open-input-string s))))
+(show (try "(1 2"))
+(show (try ")"))
+(show (try "(1 . )"))
+(show (try "#\\bogus"))
+(show (try "#9#"))
+(show (try "\"unterminated"))
+(show (read (open-input-string "")))
+(show (eof-object? (read (open-input-string "  ; only a comment\n"))))

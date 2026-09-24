@@ -1,0 +1,27 @@
+#lang saffron
+;; r7rs-lang-plan R8: a :heap record with a field typed as a pointer opaque.
+;; The field is laid out as the int64 carrier word, so the constructor call
+;; relabels a `void *` handle argument, and `set!` of another field of the
+;; record -- whose parameter arrives as the carrier word -- casts to the
+;; record's own cell (it emitted `((int64_t *)p)->open`, invalid C).
+(defopaque Hnd :ptr<void>)
+(defn mk-handle [] : Hnd
+  ```c
+  static int64_t cell = 42;
+  return &cell;
+  ```)
+(defn handle-value [h : Hnd] : int
+  ```c
+  return *(int64_t *)h;
+  ```)
+(defstruct Box :heap [open : bool h : Hnd])
+(defn close! [b : Box] : nil (set! (.open b) false))
+(defn is-open [b : Box] : bool (.open b))
+(defn box-handle [b : Box] : Hnd (.h b))
+(defn main [] : int
+  (let [b (:: (Box true (mk-handle)) any)]
+    (println (if (is-open b) "open" "closed"))
+    (close! b)
+    (println (if (is-open b) "open" "closed"))
+    (println (handle-value (box-handle b)))
+    0))

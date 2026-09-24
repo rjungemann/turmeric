@@ -10441,6 +10441,16 @@ static bool preamble_uses_callcc(const Expr *e) {
             for (uint32_t i = 0; i < e->as.program.n; i++)
                 if (preamble_uses_callcc(e->as.program.items[i])) return true;
             return false;
+        case EX_DEFMODULE:
+            /* r7rs-lang-plan R8: the same hole preamble_uses_serial closed
+             * (guestbook-example-has-no-import-graph).  A program that imports
+             * a module compiles the R7RS prelude as a module, and its call/cc
+             * (R6) was invisible here -- the escape runtime was not emitted
+             * and cc failed on `tur_escape_cont` (tests/run-r7rs-import.sh). */
+            if (e->as.defmodule_.mod)
+                for (uint32_t i = 0; i < e->as.defmodule_.mod->n_body; i++)
+                    if (preamble_uses_callcc(e->as.defmodule_.mod->body[i])) return true;
+            return false;
         case EX_FN_DEF:
             return e->as.fn_def_.fn && preamble_uses_callcc(e->as.fn_def_.fn->body);
         case EX_FN:

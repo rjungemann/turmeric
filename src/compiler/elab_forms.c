@@ -939,6 +939,15 @@ Expr *elab_let(Elab *e, const Form *call) {
          * reach for when the `let` body must end in a particular value (an
          * `it` body that has to yield a bool, say), so the message names `do`
          * as the fix rather than only stating the rule. */
+        /* r7rs-lang-plan R8: in a dynamic file every expression has a value --
+         * Scheme's `(let ((r (display x))) ...)` binds the unspecified value
+         * (and `guard` lowers its body to exactly that binding).  Widen the
+         * nil to `any`, the same widen a nil argument in value position
+         * already gets, rather than refusing the binding. */
+        if (init->type.kind == TY_NIL && lang_span_is_dynamic(init_form->span)) {
+            Expr *w = elab_coerce_to_any(e, init);
+            if (w) init = w;
+        }
         if (init->type.kind == TY_NIL) {
             diag_emit_with_code(DIAG_ERROR, init_form->span,
                 TUR_E0023_BIND_VOID_EXPRESSION,

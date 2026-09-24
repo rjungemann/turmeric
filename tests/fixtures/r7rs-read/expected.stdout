@@ -1,0 +1,42 @@
+(a b . c)
+(1 2)
+#(1 "two" #\x)
+#u8(1 255)
+42
+-7.5
+1000.0
+31
+5
+15
+2
+3.0
+|two words|
+sym
+#\space
+#\A
+#\(
+#t
+#t
+#f
+#f
+(quote q)
+(quasiquote (a (unquote b) (unquote-splicing c)))
+"esc\tA\\ \"q\" continued"
+#0=(1 2 . #0#)
+((x) (x))
+#0=#(a #0#)
+abc
+#\space
+ABC
+...
+end after 31
+(#t #t)
+(from the parameter)
+(read-error "read: end of input inside a list")
+(read-error "read: unexpected )")
+(read-error "read: unexpected )")
+(read-error "read: unknown character name")
+(read-error "read: reference to an undefined datum label")
+(read-error "read: end of input inside a string or |symbol|")
+#<eof>
+#t

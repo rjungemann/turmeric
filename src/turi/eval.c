@@ -1357,6 +1357,13 @@ static TuriValue turi_any_box_widen(TuriEnv *env, const Expr *e, TuriValue v) {
     return b;
 }
 
+TuriValue turi_any_identity_payload(TuriValue v) {
+    if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
+        v.as_struct->n_fields == 1 && v.as_struct->fields)
+        return v.as_struct->fields[0];
+    return v;
+}
+
 static const char *turi_any_named_type(TuriValue v) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return NULL;
     /* interp-inline-c-opaque-segv-in-any-reflection: this dereferences

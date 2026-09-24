@@ -231,8 +231,15 @@
               (r7rs-same-ref__ a b)
               (if (r7rs-bytevector? a)
                 (r7rs-same-ref__ a b)
-                (= a b)))))))
+                (if (r7rs-eqv-by-value?__ a)
+                  (= a b)
+                  ;; R8: a record, a port, a procedure, a promise -- identity
+                  ;; (the dynamic `=` has no operator for a record type).
+                  (r7rs-same-ref__ a b))))))))
     false))
+;;; r7rs-eqv-by-value?__ -- internal: the types eqv? compares by value.
+(defn r7rs-eqv-by-value?__ [a] : bool
+  (if (r7rs-number? a) true (if (r7rs-boolean? a) true (if (r7rs-string? a) true (r7rs-symbol? a)))))
 ;;; r7rs-eq? -- same as eqv? here (no bignums; chars and small ints are immediate).
 (defn r7rs-eq? [a b] : bool (r7rs-eqv? a b))
 
@@ -871,7 +878,7 @@
 ;;; the TUR_APPLYn_T table), and the prelude is compiled on both back ends,
 ;;; so the limit is the compiled one.  R6: a variadic f is fine -- the
 ;;; dynamic call packs the surplus arguments into its rest list.
-(defn r7rs-apply-list__ [f l]
+(defn r7rs-apply-list__ [f l] : any
   (let [n (r7rs-length l)]
     (if (= n 0) (f)
       (if (= n 1) (f (r7rs-list-ref l 0))
@@ -893,23 +900,6 @@
       (r7rs-apply-list__ consumer (r7rs-values-items__ v))
       (consumer v))))
 
-;;; ---- output (the write primitives are inline C with interpreter twins) --
-
-;;; r7rs-write-cstr-to__ -- internal: the one primitive every write goes
-;;; through.  `err` selects stderr; R6's uncaught-exception report uses it,
-;;; and R8's ports will widen it into a real current-output-port.
-(defn r7rs-write-cstr-to__ [s : cstr err : bool] : nil
-  ```c
-  if (err) fflush(stdout);
-  fputs(s, err ? stderr : stdout);
-  ```)
-;;; r7rs-err-out__ -- true while output is being directed at stderr.
-(def ^mut r7rs-err-out__ : bool false)
-(defn r7rs-write-cstr [s : cstr] : nil (r7rs-write-cstr-to__ s r7rs-err-out__))
-(defn r7rs-write-int [x : int] : nil (r7rs-write-cstr (r7rs-int->string__ x)))
-(defn r7rs-write-float [x : float] : nil
-  (r7rs-write-cstr (r7rs-float->string__ x)))
-(defn r7rs-write-char [c : int] : nil (r7rs-write-cstr (r7rs-string-of-code__ c)))
 ;;; r7rs-exit__ -- internal: flush and leave with a status.
 (defn r7rs-exit__ [code : int] : nil
   ```c
@@ -918,79 +908,8 @@
   exit((int)code);
   ```)
 
-;;; r7rs-display-char__ -- `write` spells a char `#\a` (with the R7RS names
-;;; for the unprintable ones); `display` writes the character itself.
-(defn r7rs-display-char__ [c : R7rsChar quoted : bool] : nil
-  (let [n (:: c :int)]
-    (if quoted
-      (do (r7rs-write-cstr "#\\")
-          (if (= n 32) (r7rs-write-cstr "space")
-            (if (= n 10) (r7rs-write-cstr "newline")
-              (if (= n 9) (r7rs-write-cstr "tab")
-                (if (= n 0) (r7rs-write-cstr "null")
-                  (r7rs-write-char n))))))
-      (r7rs-write-char n))))
-
-;;; r7rs-display-tail__ -- the rest of a list after its first element: the
-;;; proper `b c)` case and the improper ` . d)` case.
-(defn r7rs-display-tail__ [d quoted : bool] : nil
-  (if (r7rs-null? d)
-    (r7rs-write-cstr ")")
-    (if (r7rs-pair? d)
-      (do (r7rs-write-cstr " ")
-          (r7rs-display-any__ (r7rs-car d) quoted)
-          (r7rs-display-tail__ (r7rs-cdr d) quoted))
-      (do (r7rs-write-cstr " . ")
-          (r7rs-display-any__ d quoted)
-          (r7rs-write-cstr ")")))))
-(defn r7rs-display-vec__ [v : (Vec any) i : int quoted : bool] : nil
-  (if (>= i (vec-len v))
-    nil
-    (do (if (= i 0) nil (r7rs-write-cstr " "))
-        (r7rs-display-any__ (vec-get v i) quoted)
-        (r7rs-display-vec__ v (+ i 1) quoted))))
-(defn r7rs-display-bytes__ [v : (Vec int) i : int] : nil
-  (if (>= i (vec-len v))
-    nil
-    (do (if (= i 0) nil (r7rs-write-cstr " "))
-        (r7rs-write-int (vec-get v i))
-        (r7rs-display-bytes__ v (+ i 1)))))
-
-;;; r7rs-display-any__ -- one value; `quoted` is `write`'s spelling.
-(defn r7rs-display-any__ [x quoted : bool] : nil
-  (if (r7rs-fixnum?__ x) (r7rs-write-int x)
-    (if (r7rs-flonum?__ x) (r7rs-write-float x)
-      (if (r7rs-string? x)
-        (do (if quoted (r7rs-write-cstr "\"") nil)
-            (r7rs-write-cstr x)
-            (if quoted (r7rs-write-cstr "\"") nil))
-        (if (r7rs-boolean? x) (r7rs-write-cstr (if x "#t" "#f"))
-          (if (r7rs-null? x) (r7rs-write-cstr "()")
-            (if (r7rs-pair? x)
-              (do (r7rs-write-cstr "(")
-                  (r7rs-display-any__ (r7rs-car x) quoted)
-                  (r7rs-display-tail__ (r7rs-cdr x) quoted))
-              (if (r7rs-symbol? x) (r7rs-write-cstr (sym->str x))
-                (if (r7rs-char? x) (r7rs-display-char__ x quoted)
-                  (if (r7rs-vector? x)
-                    (do (r7rs-write-cstr "#(") (r7rs-display-vec__ x 0 quoted) (r7rs-write-cstr ")"))
-                    (if (r7rs-bytevector? x)
-                      (do (r7rs-write-cstr "#u8(") (r7rs-display-bytes__ (r7rs-bytevector-bytes__ x) 0) (r7rs-write-cstr ")"))
-                      (if (r7rs-eof-object? x) (r7rs-write-cstr "#<eof>")
-                        (if (r7rs-error-object? x)
-                          (do (r7rs-write-cstr "#<error ")
-                              (r7rs-display-any__ (r7rs-error-object-message x) true)
-                              (r7rs-display-irritants__ (r7rs-error-object-irritants x))
-                              (r7rs-write-cstr ">"))
-                          (if (r7rs-promise? x) (r7rs-write-cstr "#<promise>")
-                            (do (r7rs-write-cstr "#<") (r7rs-write-cstr (type-of x)) (r7rs-write-cstr ">"))))))))))))))))
-
-;;; r7rs-display -- write a value for humans (strings and chars bare).
-(defn r7rs-display [x] : nil (r7rs-display-any__ x false))
-;;; r7rs-write -- write a value for reading back (strings quoted, chars `#\c`).
-(defn r7rs-write [x] : nil (r7rs-display-any__ x true))
-;;; r7rs-newline -- end the line.
-(defn r7rs-newline [] : nil (r7rs-write-cstr "\n"))
+;;; Output goes through ports; the ports and the printer are the R8 section
+;;; at the end of this file.
 
 ;;; r7rs-void -- the unspecified value.
 (defn r7rs-void [] nil)
@@ -1062,28 +981,6 @@
 
 ;;; r7rs-handlers__ -- the exception handler stack, innermost first.
 (def ^mut r7rs-handlers__ : any (R7rsNull 0))
-
-;;; r7rs-display-irritants__ -- internal: ` irritant` for each, written.
-(defn r7rs-display-irritants__ [l] : nil
-  (if (r7rs-null? l)
-    nil
-    (do (r7rs-write-cstr " ")
-        (r7rs-write (r7rs-car l))
-        (r7rs-display-irritants__ (r7rs-cdr l)))))
-
-;;; r7rs-uncaught__ -- internal: no handler is installed.  Report on stderr
-;;; the way `error` objects are conventionally shown and exit 70 (EX_SOFTWARE).
-(defn r7rs-uncaught__ [obj] : any
-  (set! r7rs-err-out__ true)
-  (if (r7rs-error-object? obj)
-    (do (r7rs-write-cstr "error: ")
-        (r7rs-display (r7rs-error-object-message obj))
-        (r7rs-display-irritants__ (r7rs-error-object-irritants obj)))
-    (do (r7rs-write-cstr "uncaught exception: ")
-        (r7rs-write obj)))
-  (r7rs-newline)
-  (r7rs-exit__ 70)
-  (:: 0 any))
 
 ;;; r7rs-with-exception-handler -- install handler for the extent of thunk.
 ;;; The install and the uninstall are wind frames, so an escape out of thunk
@@ -1398,10 +1295,6 @@
     (let [fx (r7rs-to-float__ x) fy (r7rs-to-float__ (r7rs-abs y))]
       (:: (r7rs-simplest__ (- fx fy) (+ fx fy)) any))))
 
-;;; r7rs-write-simple -- `write` without datum labels, which is what `write`
-;;; is until R8 gives it cycle detection.
-(defn r7rs-write-simple [x] : nil (r7rs-write x))
-
 ;;; ---- R7: (scheme char) -- ASCII case mapping ----------------------------
 ;;;
 ;;; Chars are Unicode scalar values, but the case mapping is ASCII's: the
@@ -1484,3 +1377,713 @@
   (if (r7rs-zero? im) re (r7rs-fail-any__ "make-rectangular: complex numbers are not supported (a non-zero imaginary part)")))
 (defn r7rs-make-polar [m a] : any
   (if (r7rs-zero? a) m (r7rs-fail-any__ "make-polar: complex numbers are not supported (a non-zero angle)")))
+
+;;; ---- R8: ports ------------------------------------------------------------
+;;;
+;;; A port is an R7rsPort over an R7rsIo: one C byte buffer with a read
+;;; position and, for a file port, the FILE it reads or writes.  A string or
+;;; bytevector port is the buffer alone; an input file port fills the buffer
+;;; from its FILE on demand (so peeking a multi-byte character needs no
+;;; ungetc) and reclaims it once it is drained; an output file port writes
+;;; straight through.  The primitives are inline C with interpreter twins in
+;;; interpreter_natives.c (keep them equal).  Text is UTF-8: a char is read
+;;; by decoding, written by encoding.
+;;;
+;;; The current ports are parameter objects (R7RS 6.13.1), so `parameterize`
+;;; and `with-output-to-file` rebind them with the R6 machinery.
+
+;;; R7rsIo -- the C buffer behind a port.
+(defopaque R7rsIo :ptr<void>)
+;;; R7rsIdTab -- an identity hash table from a heap value to an int: the
+;;; printer's datum-label bookkeeping and the reader's patch walk.  Keys are
+;;; compared by address and never dereferenced, and a table lives for one
+;;; `write` or `read` call, so no key outlives the value it names.
+(defopaque R7rsIdTab :ptr<void>)
+
+;;; r7rs-io-new__ -- an empty in-memory buffer.
+(defn r7rs-io-new__ [] : R7rsIo
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  return calloc(1, sizeof(r7rs_io));
+  ```)
+;;; r7rs-io-std__ -- the buffer over stdin (0), stdout (1) or stderr (2).
+(defn r7rs-io-std__ [k : int] : R7rsIo
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  static r7rs_io s[3];
+  static int init = 0;
+  if (!init) { init = 1; s[0].f = stdin; s[1].f = stdout; s[2].f = stderr; s[0].std = s[1].std = s[2].std = 1; }
+  return &s[k < 0 || k > 2 ? 1 : k];
+  ```)
+;;; r7rs-io-open__ -- a buffer over fopen(path, mode); r7rs-io-ok?__ says
+;;; whether the open succeeded.
+(defn r7rs-io-open__ [path : cstr mode : cstr] : R7rsIo
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)calloc(1, sizeof(r7rs_io));
+  b->f = fopen(path, mode);
+  return b;
+  ```)
+(defn r7rs-io-ok?__ [io : R7rsIo] : bool
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  return ((r7rs_io *)io)->f != NULL;
+  ```)
+;;; r7rs-io-add__ -- write a string: through to the FILE, or onto the buffer.
+;;; stdout is flushed before anything goes to stderr, so the two interleave
+;;; in program order.
+(defn r7rs-io-add__ [io : R7rsIo s : cstr] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  size_t l = strlen(s);
+  if (b->f) { if (b->f == stderr) fflush(stdout); fwrite(s, 1, l, b->f); return; }
+  if (b->n + l + 1 > b->cap) {
+    size_t c = b->cap ? b->cap : 64;
+    while (b->n + l + 1 > c) c *= 2;
+    b->p = (unsigned char *)realloc(b->p, c); b->cap = c;
+  }
+  memcpy(b->p + b->n, s, l); b->n += l;
+  ```)
+;;; r7rs-io-add-byte__ -- write one byte.
+(defn r7rs-io-add-byte__ [io : R7rsIo x : int] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  if (b->f) { if (b->f == stderr) fflush(stdout); fputc((int)(x & 0xFF), b->f); return; }
+  if (b->n + 2 > b->cap) { size_t c = b->cap ? b->cap * 2 : 64; b->p = (unsigned char *)realloc(b->p, c); b->cap = c; }
+  b->p[b->n++] = (unsigned char)(x & 0xFF);
+  ```)
+;;; r7rs-io-peek__ -- the byte k places past the read position, or -1 at
+;;; end of input.  A file buffer is filled from its FILE as far as needed;
+;;; stdout is flushed before stdin is read, so a prompt shows.
+(defn r7rs-io-peek__ [io : R7rsIo k : int] : int
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  if (b->f && b->pos == b->n) b->pos = b->n = 0;
+  while (b->pos + (size_t)k >= b->n) {
+    if (!b->f) return -1;
+    if (b->f == stdin) fflush(stdout);
+    int c = fgetc(b->f);
+    if (c == EOF) return -1;
+    if (b->n + 2 > b->cap) { size_t cc = b->cap ? b->cap * 2 : 64; b->p = (unsigned char *)realloc(b->p, cc); b->cap = cc; }
+    b->p[b->n++] = (unsigned char)c;
+  }
+  return (int64_t)b->p[b->pos + (size_t)k];
+  ```)
+;;; r7rs-io-skip__ -- advance the read position by k bytes (after a peek).
+(defn r7rs-io-skip__ [io : R7rsIo k : int] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  b->pos += (size_t)k;
+  if (b->pos > b->n) b->pos = b->n;
+  ```)
+;;; r7rs-io-str__ -- the buffer's bytes as a fresh string.
+(defn r7rs-io-str__ [io : R7rsIo] : cstr
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  char *r = (char *)malloc(b->n + 1);
+  if (b->n) memcpy(r, b->p, b->n);
+  r[b->n] = 0;
+  return r;
+  ```)
+(defn r7rs-io-len__ [io : R7rsIo] : int
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  return (int64_t)((r7rs_io *)io)->n;
+  ```)
+(defn r7rs-io-byte-ref__ [io : R7rsIo i : int] : int
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  return (int64_t)((r7rs_io *)io)->p[i];
+  ```)
+(defn r7rs-io-flush__ [io : R7rsIo] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  if (b->f) fflush(b->f);
+  ```)
+;;; r7rs-io-close__ -- close a file buffer's FILE (never a standard stream).
+(defn r7rs-io-close__ [io : R7rsIo] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  if (b->std) { if (b->f) fflush(b->f); return; }
+  if (b->f) { fclose(b->f); b->f = NULL; }
+  b->pos = b->n;
+  ```)
+;;; r7rs-io-free__ -- release a scratch buffer (a string builder).
+(defn r7rs-io-free__ [io : R7rsIo] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  if (b->std || b->f) return;
+  free(b->p); free(b);
+  ```)
+;;; r7rs-io-take-str__ -- a builder's contents, and the builder released.
+(defn r7rs-io-take-str__ [io : R7rsIo] : cstr
+  (let [s (r7rs-io-str__ io)]
+    (r7rs-io-free__ io)
+    s))
+
+;;; r7rs-idtab-new__ ... -- the identity table (open addressing, key 0 empty).
+;;; A missing key reads as -2.
+(defn r7rs-idtab-new__ [] : R7rsIdTab
+  ```c
+  typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
+  r7rs_idtab *t = (r7rs_idtab *)calloc(1, sizeof(r7rs_idtab));
+  t->cap = 16;
+  t->k = (uintptr_t *)calloc(t->cap, sizeof(uintptr_t));
+  t->v = (int64_t *)calloc(t->cap, sizeof(int64_t));
+  return t;
+  ```)
+(defn r7rs-idtab-get__ [tab : R7rsIdTab x] : int
+  ```c
+  typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
+  r7rs_idtab *t = (r7rs_idtab *)tab;
+  uintptr_t key = (uintptr_t)TUR_UNTAG(x);
+  size_t m = t->cap - 1, i = (size_t)(((key >> 4) ^ (key >> 13)) & m);
+  while (t->k[i]) { if (t->k[i] == key) return t->v[i]; i = (i + 1) & m; }
+  return -2;
+  ```)
+(defn r7rs-idtab-put__ [tab : R7rsIdTab x v : int] : nil
+  ```c
+  typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
+  r7rs_idtab *t = (r7rs_idtab *)tab;
+  uintptr_t key = (uintptr_t)TUR_UNTAG(x);
+  if ((t->cnt + 1) * 2 > t->cap) {
+    size_t oc = t->cap, nc = oc * 2;
+    uintptr_t *ok = t->k; int64_t *ov = t->v;
+    t->k = (uintptr_t *)calloc(nc, sizeof(uintptr_t));
+    t->v = (int64_t *)calloc(nc, sizeof(int64_t));
+    t->cap = nc;
+    for (size_t j = 0; j < oc; j++) if (ok[j]) {
+      size_t q = (size_t)(((ok[j] >> 4) ^ (ok[j] >> 13)) & (nc - 1));
+      while (t->k[q]) q = (q + 1) & (nc - 1);
+      t->k[q] = ok[j]; t->v[q] = ov[j];
+    }
+    free(ok); free(ov);
+  }
+  size_t m = t->cap - 1, i = (size_t)(((key >> 4) ^ (key >> 13)) & m);
+  while (t->k[i] && t->k[i] != key) i = (i + 1) & m;
+  if (!t->k[i]) { t->k[i] = key; t->cnt++; }
+  t->v[i] = v;
+  ```)
+(defn r7rs-idtab-count__ [tab : R7rsIdTab] : int
+  ```c
+  typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
+  return (int64_t)((r7rs_idtab *)tab)->cnt;
+  ```)
+(defn r7rs-idtab-free__ [tab : R7rsIdTab] : nil
+  ```c
+  typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
+  r7rs_idtab *t = (r7rs_idtab *)tab;
+  free(t->k); free(t->v); free(t);
+  ```)
+
+;;; R7rsPort -- kind 0 is a file, 1 a string, 2 a bytevector.  A port is an
+;;; input port or an output port, never both, so one `open` flag serves.
+;;; `fold` is the port's `#!fold-case` state, which `read` keeps (R7RS 2.1:
+;;; the directive affects later data read from the same port).
+(defstruct R7rsPort :heap [kind : int input : bool output : bool binary : bool open : bool fold : bool io : R7rsIo])
+(defn r7rs-port? [x] : bool (is? x R7rsPort))
+(defn r7rs-port-kind__ [p : R7rsPort] : int (.kind p))
+(defn r7rs-port-in__ [p : R7rsPort] : bool (.input p))
+(defn r7rs-port-out__ [p : R7rsPort] : bool (.output p))
+(defn r7rs-port-bin__ [p : R7rsPort] : bool (.binary p))
+(defn r7rs-port-open__ [p : R7rsPort] : bool (.open p))
+(defn r7rs-port-io__ [p : R7rsPort] : R7rsIo (.io p))
+(defn r7rs-port-mark-closed__ [p : R7rsPort] : nil (set! (.open p) false))
+(defn r7rs-port-fold__ [p : R7rsPort] : bool (.fold p))
+(defn r7rs-port-set-fold__ [p : R7rsPort v : bool] : nil (set! (.fold p) v))
+(defn r7rs-make-port__ [kind : int input : bool binary : bool io : R7rsIo] : any
+  (R7rsPort kind input (not input) binary true false io))
+
+(defn r7rs-input-port? [x] : bool (if (r7rs-port? x) (r7rs-port-in__ x) false))
+(defn r7rs-output-port? [x] : bool (if (r7rs-port? x) (r7rs-port-out__ x) false))
+(defn r7rs-textual-port? [x] : bool (if (r7rs-port? x) (not (r7rs-port-bin__ x)) false))
+(defn r7rs-binary-port? [x] : bool (if (r7rs-port? x) (r7rs-port-bin__ x) false))
+(defn r7rs-input-port-open? [p] : bool (if (r7rs-port-in__ p) (r7rs-port-open__ p) false))
+(defn r7rs-output-port-open? [p] : bool (if (r7rs-port-out__ p) (r7rs-port-open__ p) false))
+
+;;; The standard ports and the current-port parameters.
+(def r7rs-stdin-port__ (r7rs-make-port__ 0 true false (r7rs-io-std__ 0)))
+(def r7rs-stdout-port__ (r7rs-make-port__ 0 false false (r7rs-io-std__ 1)))
+(def r7rs-stderr-port__ (r7rs-make-port__ 0 false false (r7rs-io-std__ 2)))
+(def r7rs-current-input-port (r7rs-make-parameter r7rs-stdin-port__))
+(def r7rs-current-output-port (r7rs-make-parameter r7rs-stdout-port__))
+(def r7rs-current-error-port (r7rs-make-parameter r7rs-stderr-port__))
+
+;;; r7rs-port-arg__ -- the optional port argument: the first of rl, or the
+;;; current port the parameter holds.
+(defn r7rs-port-arg__ [rl param] : any (if (r7rs-null? rl) (param) (r7rs-car rl)))
+(defn r7rs-after-port__ [rl] : any (if (r7rs-null? rl) rl (r7rs-cdr rl)))
+
+;;; r7rs-out-io__ / r7rs-in-io__ -- the buffer of an open port of the right
+;;; direction; anything else is an error a `guard` can catch.
+(defn r7rs-out-io__ [port] : R7rsIo
+  (if (if (r7rs-output-port? port) (r7rs-port-open__ port) false)
+    (r7rs-port-io__ port)
+    (do (r7rs-error "not an open output port" port)
+        (r7rs-io-std__ 1))))
+(defn r7rs-in-io__ [port] : R7rsIo
+  (if (if (r7rs-input-port? port) (r7rs-port-open__ port) false)
+    (r7rs-port-io__ port)
+    (do (r7rs-error "not an open input port" port)
+        (r7rs-io-std__ 0))))
+
+;;; r7rs-port-put__ -- internal: a string onto an output port.
+(defn r7rs-port-put__ [port s : cstr] : nil (r7rs-io-add__ (r7rs-out-io__ port) s))
+
+;;; ---- output ---------------------------------------------------------------
+
+;;; r7rs-newline -- (newline [port]).
+(defn r7rs-newline [& r : any] : nil
+  (r7rs-port-put__ (r7rs-port-arg__ (r7rs-chain->list__ (:: r (Cons any))) r7rs-current-output-port) "\n"))
+;;; r7rs-write-char -- (write-char char [port]).
+(defn r7rs-write-char [c : R7rsChar & r : any] : nil
+  (r7rs-port-put__ (r7rs-port-arg__ (r7rs-chain->list__ (:: r (Cons any))) r7rs-current-output-port)
+                   (r7rs-string-of-code__ (:: c :int))))
+;;; r7rs-write-string -- (write-string string [port [start [end]]]).
+(defn r7rs-write-string [s : cstr & r : any] : nil
+  (let [rl (r7rs-chain->list__ (:: r (Cons any)))
+        port (r7rs-port-arg__ rl r7rs-current-output-port)
+        rng (r7rs-after-port__ rl)
+        n (r7rs-string-length s)
+        a (r7rs-range-start__ rng)
+        b (r7rs-range-end__ rng n)]
+    (r7rs-range-check__ "write-string" a b n)
+    (r7rs-port-put__ port (if (if (= a 0) (= b n) false) s (r7rs-substring s a b)))))
+;;; r7rs-write-u8 -- (write-u8 byte [port]).
+(defn r7rs-write-u8 [x : int & r : any] : nil
+  (r7rs-io-add-byte__ (r7rs-out-io__ (r7rs-port-arg__ (r7rs-chain->list__ (:: r (Cons any))) r7rs-current-output-port)) x))
+(defn r7rs-write-bytes-go__ [io : R7rsIo v : (Vec int) i : int end : int] : nil
+  (if (>= i end) nil (do (r7rs-io-add-byte__ io (vec-get v i)) (r7rs-write-bytes-go__ io v (+ i 1) end))))
+;;; r7rs-write-bytevector -- (write-bytevector bv [port [start [end]]]).
+(defn r7rs-write-bytevector [bv & r : any] : nil
+  (let [v (r7rs-bytevector-bytes__ bv)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
+        io (r7rs-out-io__ (r7rs-port-arg__ rl r7rs-current-output-port))
+        rng (r7rs-after-port__ rl)
+        a (r7rs-range-start__ rng)
+        b (r7rs-range-end__ rng (vec-len v))]
+    (r7rs-range-check__ "write-bytevector" a b (vec-len v))
+    (r7rs-write-bytes-go__ io v a b)))
+;;; r7rs-flush-output-port -- (flush-output-port [port]).
+(defn r7rs-flush-output-port [& r : any] : nil
+  (r7rs-io-flush__ (r7rs-out-io__ (r7rs-port-arg__ (r7rs-chain->list__ (:: r (Cons any))) r7rs-current-output-port))))
+
+;;; ---- input ----------------------------------------------------------------
+
+;;; r7rs-utf8-width__ -- the byte length of the character a lead byte starts.
+(defn r7rs-utf8-width__ [b : int] : int (if (< b 192) 1 (if (< b 224) 2 (if (< b 240) 3 4))))
+(defn r7rs-io-cont__ [io : R7rsIo k : int] : int
+  (let [b (r7rs-io-peek__ io k)] (if (< b 128) 0 (- b 128))))
+;;; r7rs-io-peek-code__ -- the next character's scalar value, -1 at the end.
+(defn r7rs-io-peek-code__ [io : R7rsIo] : int
+  (let [b (r7rs-io-peek__ io 0)
+        w (r7rs-utf8-width__ b)]
+    (if (< b 128) b
+      (if (= w 1) b
+        (if (= w 2) (+ (* (- b 192) 64) (r7rs-io-cont__ io 1))
+          (if (= w 3) (+ (* (- b 224) 4096) (+ (* (r7rs-io-cont__ io 1) 64) (r7rs-io-cont__ io 2)))
+            (+ (* (- b 240) 262144)
+               (+ (* (r7rs-io-cont__ io 1) 4096) (+ (* (r7rs-io-cont__ io 2) 64) (r7rs-io-cont__ io 3))))))))))
+(defn r7rs-io-read-code__ [io : R7rsIo] : int
+  (let [b (r7rs-io-peek__ io 0)
+        c (r7rs-io-peek-code__ io)]
+    (if (< b 0) nil (r7rs-io-skip__ io (r7rs-utf8-width__ b)))
+    c))
+(defn r7rs-in-port-io__ [r : (Cons any)] : R7rsIo
+  (r7rs-in-io__ (r7rs-port-arg__ (r7rs-chain->list__ r) r7rs-current-input-port)))
+(defn r7rs-code->char-or-eof__ [c : int] : any
+  (if (< c 0) r7rs-eof-value__ (:: (r7rs-char__ c) any)))
+
+;;; r7rs-read-char / r7rs-peek-char -- the next character, or the eof object.
+(defn r7rs-read-char [& r : any] : any
+  (r7rs-code->char-or-eof__ (r7rs-io-read-code__ (r7rs-in-port-io__ (:: r (Cons any))))))
+(defn r7rs-peek-char [& r : any] : any
+  (r7rs-code->char-or-eof__ (r7rs-io-peek-code__ (r7rs-in-port-io__ (:: r (Cons any))))))
+;;; r7rs-read-u8 / r7rs-peek-u8 -- the next byte, or the eof object.
+(defn r7rs-read-u8 [& r : any] : any
+  (let [io (r7rs-in-port-io__ (:: r (Cons any)))
+        b (r7rs-io-peek__ io 0)]
+    (if (< b 0) r7rs-eof-value__ (do (r7rs-io-skip__ io 1) (:: b any)))))
+(defn r7rs-peek-u8 [& r : any] : any
+  (let [b (r7rs-io-peek__ (r7rs-in-port-io__ (:: r (Cons any))) 0)]
+    (if (< b 0) r7rs-eof-value__ (:: b any))))
+;;; r7rs-char-ready? / r7rs-u8-ready? -- #t: a read never blocks forever on
+;;; these ports except at a terminal, where R7RS leaves the answer open.
+(defn r7rs-char-ready? [& r : any] : bool (do (r7rs-in-port-io__ (:: r (Cons any))) true))
+(defn r7rs-u8-ready? [& r : any] : bool (do (r7rs-in-port-io__ (:: r (Cons any))) true))
+
+;;; r7rs-read-line -- the characters up to a line end (LF, CR or CR LF, which
+;;; is consumed and not included), or the eof object at the end of input.
+(defn r7rs-read-line-go__ [io : R7rsIo out : R7rsIo] : nil
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (< b 0)
+      nil
+      (do (r7rs-io-skip__ io 1)
+          (if (= b 10)
+            nil
+            (if (= b 13)
+              (if (= (r7rs-io-peek__ io 0) 10) (r7rs-io-skip__ io 1) nil)
+              (do (r7rs-io-add-byte__ out b)
+                  (r7rs-read-line-go__ io out))))))))
+(defn r7rs-read-line [& r : any] : any
+  (let [io (r7rs-in-port-io__ (:: r (Cons any)))]
+    (if (< (r7rs-io-peek__ io 0) 0)
+      r7rs-eof-value__
+      (let [out (r7rs-io-new__)]
+        (r7rs-read-line-go__ io out)
+        (:: (r7rs-io-take-str__ out) any)))))
+;;; r7rs-read-string -- (read-string k [port]): up to k characters, or the
+;;; eof object when none are left.
+(defn r7rs-read-string-go__ [io : R7rsIo out : R7rsIo k : int] : nil
+  (if (<= k 0)
+    nil
+    (let [c (r7rs-io-read-code__ io)]
+      (if (< c 0)
+        nil
+        (do (r7rs-io-add__ out (r7rs-string-of-code__ c))
+            (r7rs-read-string-go__ io out (- k 1)))))))
+(defn r7rs-read-string [k : int & r : any] : any
+  (let [io (r7rs-in-port-io__ (:: r (Cons any)))]
+    (if (< (r7rs-io-peek__ io 0) 0)
+      r7rs-eof-value__
+      (let [out (r7rs-io-new__)]
+        (r7rs-read-string-go__ io out k)
+        (:: (r7rs-io-take-str__ out) any)))))
+;;; r7rs-read-bytevector -- (read-bytevector k [port]): up to k bytes.
+(defn r7rs-read-bytes-go__ [io : R7rsIo v : (Vec int) k : int] : (Vec int)
+  (if (<= k 0)
+    v
+    (let [b (r7rs-io-peek__ io 0)]
+      (if (< b 0) v (do (r7rs-io-skip__ io 1) (vec-push! v b) (r7rs-read-bytes-go__ io v (- k 1)))))))
+(defn r7rs-read-bytevector [k : int & r : any] : any
+  (let [io (r7rs-in-port-io__ (:: r (Cons any)))]
+    (if (< (r7rs-io-peek__ io 0) 0)
+      r7rs-eof-value__
+      (R7rsBytevector (r7rs-read-bytes-go__ io (:: (vec-new) (Vec int)) k)))))
+;;; r7rs-read-bytevector! -- (read-bytevector! bv [port [start [end]]]):
+;;; the number of bytes stored, or the eof object.
+(defn r7rs-read-into-go__ [io : R7rsIo v : (Vec int) i : int end : int n : int] : int
+  (if (>= i end)
+    n
+    (let [b (r7rs-io-peek__ io 0)]
+      (if (< b 0) n (do (r7rs-io-skip__ io 1) (vec-set! v i b) (r7rs-read-into-go__ io v (+ i 1) end (+ n 1)))))))
+(defn r7rs-read-bytevector! [bv & r : any] : any
+  (let [v (r7rs-bytevector-bytes__ bv)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
+        io (r7rs-in-io__ (r7rs-port-arg__ rl r7rs-current-input-port))
+        rng (r7rs-after-port__ rl)
+        a (r7rs-range-start__ rng)
+        b (r7rs-range-end__ rng (vec-len v))]
+    (r7rs-range-check__ "read-bytevector!" a b (vec-len v))
+    (if (if (< a b) (< (r7rs-io-peek__ io 0) 0) false)
+      r7rs-eof-value__
+      (:: (r7rs-read-into-go__ io v a b 0) any))))
+
+;;; ---- string and bytevector ports, closing ---------------------------------
+
+(defn r7rs-open-input-string [s : cstr] : any
+  (let [io (r7rs-io-new__)]
+    (r7rs-io-add__ io s)
+    (r7rs-make-port__ 1 true false io)))
+(defn r7rs-open-output-string [] : any (r7rs-make-port__ 1 false false (r7rs-io-new__)))
+;;; r7rs-get-output-string -- everything written to a string port so far.
+(defn r7rs-get-output-string [p] : cstr
+  (if (if (r7rs-output-port? p) (= (r7rs-port-kind__ p) 1) false)
+    (r7rs-io-str__ (r7rs-port-io__ p))
+    (do (r7rs-error "get-output-string: not a string output port" p) "")))
+(defn r7rs-open-input-bytevector [bv] : any
+  (let [io (r7rs-io-new__)]
+    (r7rs-write-bytes-go__ io (r7rs-bytevector-bytes__ bv) 0 (r7rs-bytevector-length bv))
+    (r7rs-make-port__ 2 true true io)))
+(defn r7rs-open-output-bytevector [] : any (r7rs-make-port__ 2 false true (r7rs-io-new__)))
+(defn r7rs-io-bytes-go__ [io : R7rsIo i : int n : int v : (Vec int)] : (Vec int)
+  (if (>= i n) v (do (vec-push! v (r7rs-io-byte-ref__ io i)) (r7rs-io-bytes-go__ io (+ i 1) n v))))
+;;; r7rs-get-output-bytevector -- everything written to a bytevector port.
+(defn r7rs-get-output-bytevector [p] : any
+  (if (if (r7rs-output-port? p) (= (r7rs-port-kind__ p) 2) false)
+    (let [io (r7rs-port-io__ p)]
+      (R7rsBytevector (r7rs-io-bytes-go__ io 0 (r7rs-io-len__ io) (:: (vec-new) (Vec int)))))
+    (r7rs-error "get-output-bytevector: not a bytevector output port" p)))
+
+;;; r7rs-close-port -- close either direction (closing twice is harmless).
+(defn r7rs-close-port [p] : nil
+  (if (r7rs-port-open__ p)
+    (do (r7rs-port-mark-closed__ p)
+        (if (= (r7rs-port-kind__ p) 0) (r7rs-io-close__ (r7rs-port-io__ p)) nil))
+    nil))
+(defn r7rs-close-input-port [p] : nil (if (r7rs-input-port? p) (r7rs-close-port p) nil))
+(defn r7rs-close-output-port [p] : nil (if (r7rs-output-port? p) (r7rs-close-port p) nil))
+;;; r7rs-call-with-port -- (proc port), then close it and return proc's value.
+(defn r7rs-call-with-port [p proc] : any
+  (let [r (proc p)]
+    (r7rs-close-port p)
+    r))
+
+;;; ---- the printer: display, write, write-shared, write-simple -------------
+;;;
+;;; R7RS 6.13.3: `write` and `display` label only the pairs and vectors that
+;;; are part of a cycle (`#0=` defines a label, `#0#` refers back), so they
+;;; always terminate; `write-shared` labels every pair and vector that
+;;; appears more than once; `write-simple` labels nothing and loops on a
+;;; cycle.  A pre-pass fills an identity table: 1 while a node is on the
+;;; current path, 2 when done, 3 / 4 for the same states of a node that needs
+;;; a label.  List spines are walked iteratively (a long list is not a deep
+;;; recursion); only car nesting recurses.
+
+(defn r7rs-node?__ [x] : bool (if (r7rs-pair? x) true (r7rs-vector? x)))
+
+;;; The cycle pre-pass: a node met again while it is still on the path is a
+;;; back edge, so it gets a label.  A spine marks each new pair as on the
+;;; path, then finishes exactly the pairs it marked.
+(defn r7rs-cyc-spine__ [p tab : R7rsIdTab n : int] : int
+  (if (r7rs-pair? p)
+    (let [s (r7rs-idtab-get__ tab p)]
+      (if (= s -2)
+        (do (r7rs-idtab-put__ tab p 1)
+            (r7rs-mark-cycles__ (r7rs-car p) tab)
+            (r7rs-cyc-spine__ (r7rs-cdr p) tab (+ n 1)))
+        (do (if (if (= s 1) true (= s 3)) (r7rs-idtab-put__ tab p 3) nil)
+            n)))
+    (do (r7rs-mark-cycles__ p tab)
+        n)))
+(defn r7rs-cyc-finish__ [p tab : R7rsIdTab n : int] : nil
+  (if (<= n 0)
+    nil
+    (do (r7rs-idtab-put__ tab p (if (= (r7rs-idtab-get__ tab p) 3) 4 2))
+        (r7rs-cyc-finish__ (r7rs-cdr p) tab (- n 1)))))
+(defn r7rs-cyc-vec-go__ [v : (Vec any) i : int tab : R7rsIdTab] : nil
+  (if (>= i (vec-len v)) nil (do (r7rs-mark-cycles__ (vec-get v i) tab) (r7rs-cyc-vec-go__ v (+ i 1) tab))))
+(defn r7rs-mark-cycles__ [x tab : R7rsIdTab] : nil
+  (if (r7rs-pair? x)
+    (r7rs-cyc-finish__ x tab (r7rs-cyc-spine__ x tab 0))
+    (if (r7rs-vector? x)
+      (let [s (r7rs-idtab-get__ tab x)]
+        (if (= s -2)
+          (do (r7rs-idtab-put__ tab x 1)
+              (r7rs-cyc-vec-go__ x 0 tab)
+              (r7rs-idtab-put__ tab x (if (= (r7rs-idtab-get__ tab x) 3) 4 2)))
+          (if (= s 1) (r7rs-idtab-put__ tab x 3) nil)))
+      nil)))
+
+;;; The sharing pre-pass: any pair or vector met twice gets a label.
+(defn r7rs-shr-spine__ [p tab : R7rsIdTab] : nil
+  (if (r7rs-pair? p)
+    (if (= (r7rs-idtab-get__ tab p) -2)
+      (do (r7rs-idtab-put__ tab p 2)
+          (r7rs-mark-shared__ (r7rs-car p) tab)
+          (r7rs-shr-spine__ (r7rs-cdr p) tab))
+      (r7rs-idtab-put__ tab p 4))
+    (r7rs-mark-shared__ p tab)))
+(defn r7rs-shr-vec-go__ [v : (Vec any) i : int tab : R7rsIdTab] : nil
+  (if (>= i (vec-len v)) nil (do (r7rs-mark-shared__ (vec-get v i) tab) (r7rs-shr-vec-go__ v (+ i 1) tab))))
+(defn r7rs-mark-shared__ [x tab : R7rsIdTab] : nil
+  (if (r7rs-pair? x)
+    (r7rs-shr-spine__ x tab)
+    (if (r7rs-vector? x)
+      (if (= (r7rs-idtab-get__ tab x) -2)
+        (do (r7rs-idtab-put__ tab x 2) (r7rs-shr-vec-go__ x 0 tab))
+        (r7rs-idtab-put__ tab x 4))
+      nil)))
+
+;;; The spellings `write` needs (inline C with interpreter twins).
+;;; r7rs-escape-string__ -- a string literal: quoted, with \" \\ \a \b \t \n
+;;; \r and \xHH; for any other control byte.
+(defn r7rs-escape-string__ [s : cstr] : cstr
+  ```c
+  size_t l = strlen(s);
+  char *r = (char *)malloc(l * 6 + 3), *o = r;
+  *o++ = '"';
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    switch (*p) {
+    case '"': *o++ = '\\'; *o++ = '"'; break;
+    case '\\': *o++ = '\\'; *o++ = '\\'; break;
+    case 7: *o++ = '\\'; *o++ = 'a'; break;
+    case 8: *o++ = '\\'; *o++ = 'b'; break;
+    case 9: *o++ = '\\'; *o++ = 't'; break;
+    case 10: *o++ = '\\'; *o++ = 'n'; break;
+    case 13: *o++ = '\\'; *o++ = 'r'; break;
+    default:
+      if (*p < 32 || *p == 127) o += sprintf(o, "\\x%x;", (unsigned)*p);
+      else *o++ = (char)*p;
+    }
+  }
+  *o++ = '"'; *o = 0;
+  return r;
+  ```)
+;;; r7rs-symbol-plain?__ -- a symbol whose name reads back as itself without
+;;; bars: not empty, not `.`, no delimiter, whitespace or control byte, and
+;;; not starting with `#`.  (Names that read as numbers are the caller's.)
+(defn r7rs-symbol-plain?__ [s : cstr] : bool
+  ```c
+  if (!*s || (s[0] == '.' && !s[1]) || s[0] == '#') return false;
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++)
+    if (*p <= 32 || *p == 127 || strchr("()[]{}\"';`,|", *p)) return false;
+  return true;
+  ```)
+;;; r7rs-bar-symbol__ -- `|name|`, with `|` and `\` escaped.
+(defn r7rs-bar-symbol__ [s : cstr] : cstr
+  ```c
+  size_t l = strlen(s);
+  char *r = (char *)malloc(l * 6 + 3), *o = r;
+  *o++ = '|';
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    if (*p == '|' || *p == '\\') { *o++ = '\\'; *o++ = (char)*p; }
+    else if (*p < 32 || *p == 127) o += sprintf(o, "\\x%x;", (unsigned)*p);
+    else *o++ = (char)*p;
+  }
+  *o++ = '|'; *o = 0;
+  return r;
+  ```)
+(defn r7rs-symbol-spelling__ [s : cstr] : cstr
+  (if (if (r7rs-symbol-plain?__ s) (r7rs-not (r7rs-string->number s)) false)
+    s
+    (r7rs-bar-symbol__ s)))
+;;; r7rs-char-spelling__ -- `#\a`, the R7RS names, or `#\xHH` for the other
+;;; control characters.
+(defn r7rs-char-spelling__ [n : int] : cstr
+  (if (= n 0) "#\\null"
+    (if (= n 7) "#\\alarm"
+      (if (= n 8) "#\\backspace"
+        (if (= n 9) "#\\tab"
+          (if (= n 10) "#\\newline"
+            (if (= n 13) "#\\return"
+              (if (= n 27) "#\\escape"
+                (if (= n 32) "#\\space"
+                  (if (= n 127) "#\\delete"
+                    (if (< n 32)
+                      (r7rs-string-append2__ "#\\x" (r7rs-int->string-radix__ n 16))
+                      (r7rs-string-append2__ "#\\" (r7rs-string-of-code__ n)))))))))))))
+
+;;; r7rs-atom-spelling__ -- a value that is not a pair, vector or error object.
+(defn r7rs-atom-spelling__ [x quoted : bool] : cstr
+  (if (r7rs-fixnum?__ x) (r7rs-int->string__ x)
+    (if (r7rs-flonum?__ x) (r7rs-float->string__ x)
+      (if (r7rs-string? x) (if quoted (r7rs-escape-string__ x) x)
+        (if (r7rs-boolean? x) (if x "#t" "#f")
+          (if (r7rs-null? x) "()"
+            (if (r7rs-symbol? x) (if quoted (r7rs-symbol-spelling__ (sym->str x)) (sym->str x))
+              (if (r7rs-char? x)
+                (if quoted (r7rs-char-spelling__ (r7rs-char-code__ x)) (r7rs-string-of-code__ (r7rs-char-code__ x)))
+                (if (r7rs-eof-object? x) "#<eof>"
+                  (if (r7rs-promise? x) "#<promise>"
+                    (if (r7rs-port? x) "#<port>"
+                      (if (r7rs-procedure? x) "#<procedure>"
+                        (r7rs-string-append2__ "#<" (r7rs-string-append2__ (type-of x) ">"))))))))))))))
+
+(defn r7rs-label-put__ [port n : int suffix : cstr] : nil
+  (r7rs-port-put__ port (r7rs-string-append2__ "#" (r7rs-string-append2__ (r7rs-int->string__ n) suffix))))
+
+;;; r7rs-pr__ -- one value.  A labelled node prints `#n=` the first time
+;;; (numbered in print order) and `#n#` after.
+(defn r7rs-pr__ [x port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil
+  (if (r7rs-node?__ x)
+    (if (= (r7rs-idtab-get__ tab x) 4)
+      (let [l (r7rs-idtab-get__ labels x)]
+        (if (= l -2)
+          (let [n (r7rs-idtab-count__ labels)]
+            (r7rs-idtab-put__ labels x n)
+            (r7rs-label-put__ port n "=")
+            (r7rs-pr-node__ x port quoted tab labels))
+          (r7rs-label-put__ port l "#")))
+      (r7rs-pr-node__ x port quoted tab labels))
+    (if (r7rs-bytevector? x)
+      (do (r7rs-port-put__ port "#u8(")
+          (r7rs-pr-bytes__ (r7rs-bytevector-bytes__ x) 0 port)
+          (r7rs-port-put__ port ")"))
+      (if (r7rs-error-object? x)
+        (do (r7rs-port-put__ port "#<error ")
+            (r7rs-pr__ (r7rs-error-object-message x) port true tab labels)
+            (r7rs-pr-irritants__ (r7rs-error-object-irritants x) port tab labels)
+            (r7rs-port-put__ port ">"))
+        (r7rs-port-put__ port (r7rs-atom-spelling__ x quoted))))))
+(defn r7rs-pr-node__ [x port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil
+  (if (r7rs-pair? x)
+    (do (r7rs-port-put__ port "(")
+        (r7rs-pr__ (r7rs-car x) port quoted tab labels)
+        (r7rs-pr-tail__ (r7rs-cdr x) port quoted tab labels))
+    (do (r7rs-port-put__ port "#(")
+        (r7rs-pr-vec__ x 0 port quoted tab labels)
+        (r7rs-port-put__ port ")"))))
+;;; r7rs-pr-tail__ -- the rest of a list: ` b c)`, or ` . d)` for an improper
+;;; tail or a tail that carries a label.
+(defn r7rs-pr-tail__ [d port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil
+  (if (r7rs-null? d)
+    (r7rs-port-put__ port ")")
+    (if (if (r7rs-pair? d) (not (= (r7rs-idtab-get__ tab d) 4)) false)
+      (do (r7rs-port-put__ port " ")
+          (r7rs-pr__ (r7rs-car d) port quoted tab labels)
+          (r7rs-pr-tail__ (r7rs-cdr d) port quoted tab labels))
+      (do (r7rs-port-put__ port " . ")
+          (r7rs-pr__ d port quoted tab labels)
+          (r7rs-port-put__ port ")")))))
+(defn r7rs-pr-vec__ [v : (Vec any) i : int port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil
+  (if (>= i (vec-len v))
+    nil
+    (do (if (= i 0) nil (r7rs-port-put__ port " "))
+        (r7rs-pr__ (vec-get v i) port quoted tab labels)
+        (r7rs-pr-vec__ v (+ i 1) port quoted tab labels))))
+(defn r7rs-pr-bytes__ [v : (Vec int) i : int port] : nil
+  (if (>= i (vec-len v))
+    nil
+    (do (if (= i 0) nil (r7rs-port-put__ port " "))
+        (r7rs-port-put__ port (r7rs-int->string__ (vec-get v i)))
+        (r7rs-pr-bytes__ v (+ i 1) port))))
+(defn r7rs-pr-irritants__ [l port tab : R7rsIdTab labels : R7rsIdTab] : nil
+  (if (r7rs-pair? l)
+    (do (r7rs-port-put__ port " ")
+        (r7rs-pr__ (r7rs-car l) port true tab labels)
+        (r7rs-pr-irritants__ (r7rs-cdr l) port tab labels))
+    nil))
+
+;;; r7rs-print__ -- mode 0 labels nothing, 1 labels cycles, 2 labels sharing.
+(defn r7rs-print__ [x port quoted : bool mode : int] : nil
+  (let [tab (r7rs-idtab-new__)
+        labels (r7rs-idtab-new__)]
+    (if (r7rs-node?__ x)
+      (if (= mode 1) (r7rs-mark-cycles__ x tab) (if (= mode 2) (r7rs-mark-shared__ x tab) nil))
+      nil)
+    (r7rs-pr__ x port quoted tab labels)
+    (r7rs-idtab-free__ tab)
+    (r7rs-idtab-free__ labels)))
+(defn r7rs-out-port-of__ [r : (Cons any)] : any
+  (r7rs-port-arg__ (r7rs-chain->list__ r) r7rs-current-output-port))
+
+;;; r7rs-display -- (display obj [port]): strings and chars bare, cycles labelled.
+(defn r7rs-display [x & r : any] : nil (r7rs-print__ x (r7rs-out-port-of__ (:: r (Cons any))) false 1))
+;;; r7rs-write -- (write obj [port]): for reading back, cycles labelled.
+(defn r7rs-write [x & r : any] : nil (r7rs-print__ x (r7rs-out-port-of__ (:: r (Cons any))) true 1))
+;;; r7rs-write-shared -- (write-shared obj [port]): every shared node labelled.
+(defn r7rs-write-shared [x & r : any] : nil (r7rs-print__ x (r7rs-out-port-of__ (:: r (Cons any))) true 2))
+;;; r7rs-write-simple -- (write-simple obj [port]): no labels (loops on a cycle).
+(defn r7rs-write-simple [x & r : any] : nil (r7rs-print__ x (r7rs-out-port-of__ (:: r (Cons any))) true 0))
+
+;;; r7rs-display-irritants__ -- internal: ` irritant` for each, written.
+(defn r7rs-display-irritants__ [l port] : nil
+  (if (r7rs-null? l)
+    nil
+    (do (r7rs-port-put__ port " ")
+        (r7rs-write (r7rs-car l) port)
+        (r7rs-display-irritants__ (r7rs-cdr l) port))))
+
+;;; r7rs-uncaught__ -- internal: no handler is installed.  Report on the
+;;; current error port the way `error` objects are conventionally shown and
+;;; exit 70 (EX_SOFTWARE).
+(defn r7rs-uncaught__ [obj] : any
+  (let [port (r7rs-current-error-port)]
+    (if (r7rs-error-object? obj)
+      (do (r7rs-port-put__ port "error: ")
+          (r7rs-display (r7rs-error-object-message obj) port)
+          (r7rs-display-irritants__ (r7rs-error-object-irritants obj) port))
+      (do (r7rs-port-put__ port "uncaught exception: ")
+          (r7rs-write obj port)))
+    (r7rs-newline port))
+  (r7rs-exit__ 70)
+  (:: 0 any))

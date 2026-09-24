@@ -1,0 +1,59 @@
+#lang r7rs
+;; r7rs-lang-plan R8: the printer.  `write` and `display` label only the
+;; pairs and vectors on a cycle, so they always terminate; `write-shared`
+;; labels everything that appears twice; `write-simple` labels nothing.
+;; Plus the external representation `write` owes each type: string escapes,
+;; character names, and `|...|` for a symbol that would not read back.
+(import (scheme base) (scheme write))
+
+;; Strings, characters and symbols.
+(write "tab\there \"quoted\" back\\slash\nnew line") (newline)
+(write (string (integer->char 7) (integer->char 1) #\a)) (newline)
+(display "display is bare: \"x\"") (newline)
+(write (list #\a #\space #\newline #\tab #\null #\delete #\escape #\alarm
+             #\backspace #\return (integer->char 1) #\x41)) (newline)
+(display (list #\a #\b "s")) (newline)
+(write (list 'plain (string->symbol "two words") (string->symbol "")
+             (string->symbol "12") (string->symbol "#x") (string->symbol "a|b")
+             (string->symbol "+") (string->symbol "...") (string->symbol "."))) (newline)
+(display (list (string->symbol "two words"))) (newline)
+
+;; Numbers, booleans, the empty list, vectors, bytevectors, dotted pairs.
+(write (list 1 -2 7.1 #t #f '() '#(1 "a" #\b) (bytevector 0 255) '(a . b) '(a b . c)))
+(newline)
+
+;; A cycle through the cdr, through the car, and through a vector.
+(let ((l (list 1 2 3)))
+  (set-cdr! (cddr l) l)
+  (write l) (newline)
+  (display l) (newline))
+(let ((p (list 'a 'b)))
+  (set-car! (cdr p) p)
+  (write p) (newline))
+(let ((v (vector 1 2 3)))
+  (vector-set! v 1 v)
+  (write v) (newline))
+;; Two cycles, numbered in print order.
+(let ((a (list 'x)) (b (list 'y)))
+  (set-cdr! a a)
+  (set-cdr! b b)
+  (write (list a b)) (newline))
+
+;; Sharing without a cycle: write leaves it alone, write-shared labels it.
+(let* ((s (list 'shared 'tail))
+       (x (list s s (vector s))))
+  (write x) (newline)
+  (write-shared x) (newline)
+  (write-simple x) (newline))
+
+;; A long list is printed without deep recursion.
+(let loop ((i 0) (acc '()))
+  (if (< i 100000)
+      (loop (+ i 1) (cons i acc))
+      (let ((p (open-output-string)))
+        (write acc p)
+        (display (string-length (get-output-string p))) (newline))))
+
+;; An error object.
+(guard (e (#t (write e) (newline)))
+  (error "bad thing" 'sym "str" 42))

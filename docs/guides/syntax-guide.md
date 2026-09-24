@@ -712,8 +712,16 @@ short of ports: the rest of `(scheme base)`, and `(scheme char)` (ASCII case
 mapping), `(scheme cxr)`, `(scheme complex)` over the reals, `(scheme time)`,
 `(scheme process-context)` and `(scheme file)`'s `file-exists?` and
 `delete-file`. The last three are loaded only when imported. `(scheme eval)`,
-`(scheme repl)`, `(scheme load)`, `(scheme read)` and `include` are refused
-with the reason, and ports arrive with R8.
+`(scheme repl)`, `(scheme load)` and `include` are refused with the reason.
+R8 adds ports: string, bytevector and file ports, `read-char`/`read-line`/
+`read-string`/`read-u8` and the rest of the R7RS I/O procedures, the current
+ports as parameters (`(parameterize ((current-output-port p)) ...)`),
+`write`/`display` that label cycles (`#0=(1 2 . #0#)`), `write-shared` and
+`write-simple`, `(scheme read)`, and `(scheme file)`'s `open-input-file`,
+`call-with-output-file`, `with-output-to-file` and the rest. One caution for
+the compiled back end: a top-level `define` whose initializer has an effect
+(opening a file, reading input) runs before the program's top-level
+expressions, so put such code inside a procedure.
 
 `turmeric` and `saffron` are **stable bases** -- neither is gated. `#lang
 saffron` needs no `--enable=` flag and no `:experiments` entry, and prints no

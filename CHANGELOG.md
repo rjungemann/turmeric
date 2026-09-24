@@ -6,6 +6,27 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs` ports and I/O (R8).** String, bytevector and file ports
+  over one C buffer (`defopaque` handles, inline C with interpreter twins),
+  the whole R7RS I/O surface of `(scheme base)` with UTF-8 characters, and
+  the current ports as parameter objects. `write` and `display` label cycles
+  (`#0=(1 2 . #0#)`), `write-shared` labels all sharing, `write-simple`
+  labels nothing, and `write` escapes strings, names characters and bars
+  symbols that would not read back. `(scheme read)` reads the R7RS external
+  representation, datum labels and cycles included, and raises a
+  `read-error?` object on a malformed datum; `(scheme file)` gains its file
+  ports and the `call-with-`/`with-` forms. Fixed on the way: a record field
+  typed as a pointer opaque (constructor argument spelling, and `set!` of a
+  field of such a record emitted invalid C); a vector was not `eq?` to itself
+  under the interpreter; `eqv?` on two records panicked; binding a
+  `nil`-returning call in a Scheme `let` or `guard` body was TUR-E0023; a
+  module program whose modules use `call/cc` was emitted without the escape
+  runtime (the presence scan skipped module bodies), which had left
+  `tests/run-r7rs-import.sh` red on its compiled cases since R6.
+  Filed: a compiled top-level `def` initializer runs before every top-level
+  expression (`docs/reported/toplevel-def-initializers-run-before-toplevel-expressions.md`).
+  `tests/fixtures/r7rs-ports`, `r7rs-write-labels`, `r7rs-read`,
+  `r7rs-file-ports`.
 - **`#lang r7rs` libraries (R7).** Every R7RS-small procedure that is not a
   port. The rest of `(scheme base)` (variadic char/string comparisons,
   `boolean=?`/`symbol=?`, `list-set!`/`make-list`/`make-string`/`string`,

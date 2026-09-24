@@ -198,6 +198,43 @@ static const char *const RENAMES[][2] = {
     { "cddadr", "r7rs-cddadr" },
     { "cdddar", "r7rs-cdddar" },
     { "cddddr", "r7rs-cddddr" },
+    /* R8: ports (display, write, newline and write-simple are above). */
+    { "current-input-port", "r7rs-current-input-port" },
+    { "current-output-port", "r7rs-current-output-port" },
+    { "current-error-port", "r7rs-current-error-port" },
+    { "port?", "r7rs-port?" },
+    { "input-port?", "r7rs-input-port?" },
+    { "output-port?", "r7rs-output-port?" },
+    { "textual-port?", "r7rs-textual-port?" },
+    { "binary-port?", "r7rs-binary-port?" },
+    { "input-port-open?", "r7rs-input-port-open?" },
+    { "output-port-open?", "r7rs-output-port-open?" },
+    { "close-port", "r7rs-close-port" },
+    { "close-input-port", "r7rs-close-input-port" },
+    { "close-output-port", "r7rs-close-output-port" },
+    { "call-with-port", "r7rs-call-with-port" },
+    { "open-input-string", "r7rs-open-input-string" },
+    { "open-output-string", "r7rs-open-output-string" },
+    { "get-output-string", "r7rs-get-output-string" },
+    { "open-input-bytevector", "r7rs-open-input-bytevector" },
+    { "open-output-bytevector", "r7rs-open-output-bytevector" },
+    { "get-output-bytevector", "r7rs-get-output-bytevector" },
+    { "read-char", "r7rs-read-char" },
+    { "peek-char", "r7rs-peek-char" },
+    { "read-line", "r7rs-read-line" },
+    { "read-string", "r7rs-read-string" },
+    { "read-u8", "r7rs-read-u8" },
+    { "peek-u8", "r7rs-peek-u8" },
+    { "char-ready?", "r7rs-char-ready?" },
+    { "u8-ready?", "r7rs-u8-ready?" },
+    { "read-bytevector", "r7rs-read-bytevector" },
+    { "read-bytevector!", "r7rs-read-bytevector!" },
+    { "write-char", "r7rs-write-char" },
+    { "write-string", "r7rs-write-string" },
+    { "write-u8", "r7rs-write-u8" },
+    { "write-bytevector", "r7rs-write-bytevector" },
+    { "flush-output-port", "r7rs-flush-output-port" },
+    { "write-shared", "r7rs-write-shared" },
     /* R6: control.  `guard`, `parameterize`, `delay` and `delay-force` are
      * forms (lower_guard / lower_parameterize / lower_delay); these are the
      * procedures. */
@@ -288,7 +325,7 @@ static const struct { const char *name; int kind; const char *what; } SCHEME_LIB
     { "eval",            LIB_DEFERRED, "needs an evaluator at run time (r7rs-lang-plan Section 8, question 3)" },
     { "repl",            LIB_DEFERRED, "needs an evaluator at run time (r7rs-lang-plan Section 8, question 3)" },
     { "load",            LIB_DEFERRED, "needs an evaluator at run time (r7rs-lang-plan Section 8, question 3)" },
-    { "read",            LIB_DEFERRED, "arrives with ports (r7rs-lang-plan R8)" },
+    { "read",            LIB_ONDEMAND, "stdlib/r7rs/read.tur" },
 };
 #define N_SCHEME_LIBS (sizeof(SCHEME_LIBS) / sizeof(SCHEME_LIBS[0]))
 /* The procedures of the on-demand libraries: Scheme name, prelude-style
@@ -304,6 +341,15 @@ static const char *const ONDEMAND[][3] = {
     { "get-environment-variables", "r7rs-get-environment-variables", "process-context" },
     { "file-exists?",              "r7rs-file-exists?",              "file" },
     { "delete-file",               "r7rs-delete-file",               "file" },
+    { "open-input-file", "r7rs-open-input-file", "file" },
+    { "open-output-file", "r7rs-open-output-file", "file" },
+    { "open-binary-input-file", "r7rs-open-binary-input-file", "file" },
+    { "open-binary-output-file", "r7rs-open-binary-output-file", "file" },
+    { "call-with-input-file", "r7rs-call-with-input-file", "file" },
+    { "call-with-output-file", "r7rs-call-with-output-file", "file" },
+    { "with-input-from-file", "r7rs-with-input-from-file", "file" },
+    { "with-output-to-file", "r7rs-with-output-to-file", "file" },
+    { "read", "r7rs-read", "read" },
 };
 #define N_ONDEMAND (sizeof(ONDEMAND) / sizeof(ONDEMAND[0]))
 

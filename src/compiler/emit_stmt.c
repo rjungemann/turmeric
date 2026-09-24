@@ -208,7 +208,16 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else if (type_is_heap_adt(recv_rty)) {
             if (recv_is_ptr)
                 buf_printf(&lhs, "(%s)->%s", rv, mp);
-            else
+            else if (!recv_cn || strcmp(recv_cn, "int64_t") == 0) {
+                /* r7rs-lang-plan R8: a receiver that arrives as the int64
+                 * carrier word (a heap record with a pointer-opaque field is
+                 * passed that way) names no struct, and `((int64_t *)p)->f`
+                 * is not C.  Cast to the record's own cell, as the field
+                 * READ path does (emit_expr.c, `tur_adt_%s`). */
+                char *madt = mangle_adt_name(adt->name);
+                buf_printf(&lhs, "((tur_adt_%s *)(intptr_t)(%s))->%s", madt, rv, mp);
+                free(madt);
+            } else
                 buf_printf(&lhs, "((%s *)(intptr_t)(%s))->%s",
                            type_c_name(recv_rty), rv, mp);
         } else {

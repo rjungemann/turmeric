@@ -10212,6 +10212,38 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                    : NULL))
                             slot_cty = "int64_t";
                     }
+                    /* r7rs-lang-plan R8: a record field typed as a pointer
+                     * opaque (`(defstruct R7rsPort :heap [... io : R7rsIo])`)
+                     * is laid out as the int64 carrier slot
+                     * (adt_ctor_field_c_type keys on the field's kind), while
+                     * the argument -- a let-bound or parameter handle, not a
+                     * spec parameter -- is spelled `void *`.  Relabel it; the
+                     * two are the same word, and a redundant cast over an
+                     * argument that was already the carrier is harmless. */
+                    if (!suffix && arg && arg_strs[i] &&
+                        (!slot_cty || strcmp(slot_cty, "int64_t") == 0) &&
+                        strncmp(arg_strs[i], "(int64_t)(intptr_t)", 19) != 0 &&
+                        e->as.call_.ctor && i < e->as.call_.ctor->n_fields &&
+                        e->as.call_.ctor->fields[i].full_type) {
+                        /* Keyed on the FIELD's declared type: the argument's
+                         * own elab type is not a reliable witness (an `any`
+                         * argument through a module import resolved as the
+                         * opaque, and relabelling a tagged aggregate is a cc
+                         * error). */
+                        const Type *_ft = e->as.call_.ctor->fields[i].full_type;
+                        if (adt_opaque_c_names_as_pointer(
+                                _ft->kind == TY_ADT ? _ft->as.adt_.def
+                              : _ft->kind == TY_APP ? type_adt_app_def(_ft)
+                                                    : NULL)) {
+                            Buf c; buf_init(&c);
+                            buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                            buf_putc(&c, '\0');
+                            free(arg_strs[i]);
+                            arg_strs[i] = strdup(c.data);
+                            buf_free(&c);
+                            continue;
+                        }
+                    }
                     if (slot_cty && arg_strs[i]) {
                         const char *av = arg_strs[i];
                         const char *arg_cty = NULL;

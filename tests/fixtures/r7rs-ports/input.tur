@@ -1,0 +1,82 @@
+#lang r7rs
+;; r7rs-lang-plan R8: the port layer -- string and bytevector ports, char /
+;; line / string / byte input, the output procedures with their optional
+;; port, the current ports as parameters, and closing.
+(import (scheme base) (scheme write))
+(define (show x) (write x) (newline))
+
+;; An output string port collects what is written to it.
+(let ((p (open-output-string)))
+  (write 'x p)
+  (display " and " p)
+  (write "y" p)
+  (write-char #\! p)
+  (write-string "abcdef" p 2 4)
+  (newline p)
+  (show (get-output-string p)))
+
+;; Character input: read-char / peek-char, read-line on LF, CR LF and a last
+;; line with no terminator, then the eof object.
+(let ((ip (open-input-string "line one\nline two\r\nlast")))
+  (show (list (read-char ip) (peek-char ip) (read-char ip)))
+  (show (list (read-line ip) (read-line ip) (read-line ip)))
+  (show (eof-object? (read-line ip)))
+  (show (eof-object? (read-char ip))))
+
+;; read-string counts characters, and a UTF-8 character is one.
+(let ((ip (open-input-string "h\xe9;llo")))
+  (show (read-string 3 ip))
+  (show (read-string 10 ip))
+  (show (eof-object? (read-string 1 ip))))
+
+;; Bytevector ports.
+(let ((bp (open-output-bytevector)))
+  (write-u8 65 bp)
+  (write-bytevector (bytevector 66 67 68 69) bp 1 3)
+  (show (get-output-bytevector bp)))
+(let ((ip (open-input-bytevector (bytevector 1 2 3 4 5))))
+  (show (list (read-u8 ip) (peek-u8 ip) (read-bytevector 2 ip)))
+  (let ((bv (make-bytevector 4 0)))
+    (show (list (read-bytevector! bv ip 1) bv)))
+  (show (list (eof-object? (read-u8 ip)) (eof-object? (read-bytevector 3 ip)))))
+
+;; The predicates.
+(let ((ip (open-input-string "x"))
+      (op (open-output-bytevector)))
+  (show (list (port? ip) (input-port? ip) (output-port? ip) (textual-port? ip)
+              (binary-port? ip) (port? 5)))
+  (show (list (output-port? op) (binary-port? op) (textual-port? op)
+              (char-ready? ip) (u8-ready? (open-input-bytevector (bytevector 1)))))
+  (show (list (input-port-open? ip) (output-port-open? op)))
+  (close-port ip)
+  (close-output-port op)
+  (show (list (input-port-open? ip) (output-port-open? op))))
+
+;; The current ports are parameter objects.
+(let ((sp (open-output-string)))
+  (parameterize ((current-output-port sp))
+    (display "captured ")
+    (write '(1 "two"))
+    (newline))
+  (show (get-output-string sp)))
+(show (output-port? (current-output-port)))
+(show (input-port? (current-input-port)))
+(show (output-port? (current-error-port)))
+(let ((ip (open-input-string "from a parameter")))
+  (parameterize ((current-input-port ip))
+    (show (read-line))))
+
+;; call-with-port closes the port after the procedure returns.
+(let ((ip (open-input-string "abc")))
+  (show (call-with-port ip (lambda (p) (read-char p))))
+  (show (input-port-open? ip)))
+
+;; Using a closed port, or a port of the wrong direction, is an error a
+;; guard can catch.
+(let ((ip (open-input-string "abc")))
+  (close-input-port ip)
+  (show (guard (e ((error-object? e) (error-object-message e)))
+          (read-char ip)))
+  (show (guard (e ((error-object? e) (error-object-message e)))
+          (write-char #\a ip))))
+(flush-output-port)

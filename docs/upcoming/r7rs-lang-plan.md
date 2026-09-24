@@ -1,6 +1,6 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 through R7 landed 2026-09-23/24.** `#lang r7rs` is a base
+Status: **R0 through R8 landed 2026-09-23/24.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -39,8 +39,13 @@ ports: the rest of `(scheme base)`, `(scheme char)`, `(scheme cxr)` and
 process-context)` and the non-port half of `(scheme file)` as files spliced
 in only when imported (`tests/fixtures/r7rs-base-library`,
 `r7rs-system-libraries`); `(scheme eval)`, `(scheme repl)`, `(scheme load)`
-and `include` are refused with their reason. R8 onward is unbuilt. Each
-landed stage carries a "What shipped" note below.
+and `include` are refused with their reason. R8 gives the ports: string,
+bytevector and file ports over one C buffer, the current ports as parameter
+objects, the whole R7RS I/O surface, `write`/`display` with datum labels for
+cycles, `write-shared`/`write-simple`, and `(scheme read)`
+(`tests/fixtures/r7rs-ports`, `r7rs-write-labels`, `r7rs-read`,
+`r7rs-file-ports`). R9 onward is unbuilt. Each landed stage carries a "What
+shipped" note below.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -1295,10 +1300,94 @@ snippet as written (`(hamt-set (hamt-new) "k" 42)`) is the second face of it.
 > Deviations: ports and everything built on them are R8; `command-line`'s
 > first element is `"tur"` (`*args*` does not carry argv[0]); a program that
 > imports nothing still sees every resident name.
+>
+> R8 update: `(scheme read)` is now on demand (`stdlib/r7rs/read.tur`), and
+> `(scheme file)` gained its port half.
 ### R8 -- ports and I/O (medium)
 
 The port taxonomy, string ports, `read`, `write`, `display`, `write-shared` and
 `write-simple` (which need cycle detection, so they pair with R3's `equal?`).
+
+> **What shipped (2026-09-24).** All of it, on both back ends
+> (`tests/fixtures/r7rs-ports`, `r7rs-write-labels`, `r7rs-read`,
+> `r7rs-file-ports`).
+>
+> - **Ports** are an `R7rsPort` record (kind, direction, binary, open, the
+>   `#!fold-case` state) over an `R7rsIo`: one C byte buffer with a read
+>   position and, for a file port, its `FILE`. A string or bytevector port is
+>   the buffer alone; an input file port fills the buffer on demand, so
+>   peeking a multi-byte character needs no `ungetc`; an output file port
+>   writes straight through, flushing stdout before anything reaches stderr.
+>   The primitives are inline C with interpreter twins, and both handles are
+>   `defopaque ... :ptr<void>`, not `:int`. D3's table said a port is a
+>   `defopaque` over the existing stream layer; it is a record over an opaque
+>   buffer instead, because a port carries state of its own (direction, open,
+>   fold-case), and `stdlib/io.tur`'s stream functions have no interpreter
+>   natives, so forwarding to them would have made ports compiled-only.
+> - **The I/O surface of `(scheme base)`**: `read-char`/`peek-char`/
+>   `read-line` (LF, CR or CR LF)/`read-string`/`read-u8`/`peek-u8`/
+>   `read-bytevector`/`read-bytevector!`/`char-ready?`/`u8-ready?`,
+>   `write-char`/`write-string`/`write-u8`/`write-bytevector` with their
+>   ranges, `newline`, `flush-output-port`, the string and bytevector port
+>   constructors and getters, `close-port` and its two directions,
+>   `call-with-port`, and the seven predicates. Text is UTF-8: a character is
+>   decoded on read and encoded on write. Using a closed port, or one of the
+>   wrong direction, raises an error object.
+> - **The current ports are parameter objects**, so `parameterize` rebinds
+>   them with R6's machinery, and the uncaught-exception report goes to
+>   `(current-error-port)`.
+> - **The printer.** `write` and `display` label only the pairs and vectors
+>   on a cycle (`#0=`/`#0#`), found by a pre-pass that walks list spines
+>   iteratively and keeps its state in an identity hash table; `write-shared`
+>   labels everything that appears twice; `write-simple` labels nothing.
+>   `write` escapes strings (`\t`, `\n`, `\xHH;` ...), names characters
+>   (`#\null` ... `#\delete`, `#\xHH` for other control characters) and bars
+>   a symbol that would not read back (`|two words|`, `||`, `|12|`).
+> - **`(scheme read)`** is an on-demand library (`stdlib/r7rs/read.tur`)
+>   reading the R7RS external representation from a port: lists, dotted pairs
+>   and brackets, vectors, bytevectors, strings with every escape and the line
+>   continuation, `|...|` symbols, characters by glyph, name or hex, the
+>   boolean spellings, numbers with their prefixes, the quote abbreviations,
+>   all three comment forms, `#!fold-case` (kept per port), and datum labels
+>   including cycles (placeholders patched after the labelled datum is read).
+>   A malformed datum raises an error object `read-error?` recognizes.
+> - **`(scheme file)`'s port half**: the four `open-*-file` procedures (a
+>   failed open raises a `file-error?` object naming the path), the two
+>   `call-with-*-file` procedures, and `with-input-from-file`/
+>   `with-output-to-file` over `parameterize`.
+>
+> Found and fixed on the way:
+>
+> - A record field typed as a pointer opaque was laid out as the int64 word
+>   while the constructor's argument was spelled `void *` (an int-conversion
+>   warning, an error on newer compilers), and `set!` of a field of such a
+>   record, whose parameter arrives as the carrier word, emitted
+>   `((int64_t *)p)->field`. The constructor call relabels the argument and
+>   the store casts to the record's own cell, as the field read already did.
+> - A vector was not `eq?` to itself under the interpreter: a widen to `any`
+>   wraps a vector in a fresh box each time, and identity compared the boxes.
+>   The identity natives now look through the box.
+> - `eqv?` on two records (ports, `define-record-type` values, procedures)
+>   fell through to the numeric `=` and panicked; it is identity now.
+> - Binding the value of a `nil`-returning call (`(let ((r (display x)))
+>   ...)`, and every `guard` whose body ends in one) was TUR-E0023 in a
+>   dynamic file. It binds the unspecified value now.
+> - `tests/run-r7rs-import.sh` (not part of `run.sh`) had been red on its
+>   compiled cases since R6/R7: a program that imports a module compiles the
+>   prelude as a module, and the `call/cc` presence scan did not look inside
+>   module bodies, so the escape runtime was never emitted; and
+>   `r7rs-apply-list__`, called before its definition with no result
+>   annotation, forward-declared as `int`. The scan descends modules (as the
+>   serial-runtime scan already did) and the result is annotated `: any`.
+>
+> Found and filed, not fixed: on the compiled path a top-level `define`'s
+> initializer runs before every top-level expression, in every dialect
+> ([toplevel-def-initializers-run-before-toplevel-expressions](../reported/toplevel-def-initializers-run-before-toplevel-expressions.md)).
+> It matters once initializers have effects -- `(define p
+> (open-output-file ...))` opens the file before an earlier top-level write.
+>
+> Deviations: `char-ready?`/`u8-ready?` always answer `#t`; a port is one
+> direction, never both; `#e1.5` is an error (no exact rationals, D8).
 
 ### R9 -- tooling (medium; parallelizable)
 
