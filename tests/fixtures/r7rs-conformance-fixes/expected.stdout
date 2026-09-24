@@ -23,3 +23,9 @@
 (1 (3 4))
 12
 10
+(#t (nil true false) #t)
+(#f #t #t #t #f)
+(error error (a c))
+(923 955 955 223)
+(#t #t #t #t #t 4 #f)
+(#t #t #t #t)

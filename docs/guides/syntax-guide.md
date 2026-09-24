@@ -725,10 +725,12 @@ expressions, so put such code inside a procedure. R9 adds the tooling: `tur
 repl --lang r7rs`, `tur fmt` (which re-indents a Scheme file and never rewrites
 a token), `tur init --r7rs`, the language server, and editor highlighting.
 R10 runs chibi-scheme's R7RS test suite as a ctest target
-(`tur_r7rs_conformance`) that reports a pass count: 1036 of the 1216 tests
+(`tur_r7rs_conformance`) that reports a pass count: 1077 of the 1216 tests
 written in it pass, on both back ends, and the rest are the named carve-outs
-(bignums, exact rationals, complex numbers, Unicode case mapping, mutable
-strings, `eval`, re-entrant `call/cc`) plus a few hygiene corners. The full
+(bignums, exact rationals, complex numbers, mutable strings, `eval`,
+re-entrant `call/cc`) plus a few hygiene corners. `(scheme char)` maps and
+classifies all of Unicode, from tables generated out of the Unicode
+database. The full
 reference is [r7rs-guide.md](r7rs-guide.md).
 
 `turmeric` and `saffron` are **stable bases** -- neither is gated. `#lang

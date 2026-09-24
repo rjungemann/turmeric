@@ -1100,6 +1100,13 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_conformance PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
+# R10: the Unicode tables behind (scheme char) are generated twice -- the
+# prelude's inline C and the interpreter's natives -- and must be identical.
+add_test(
+  NAME tur_r7rs_unicode_sync
+  COMMAND bash tests/check-r7rs-unicode-sync.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
 # LOADED in a real Vim and queried for highlight groups -- which is what caught
 # the fused-vs-spaced annotation bug.  The vscode half is structure and pattern

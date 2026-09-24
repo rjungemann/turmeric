@@ -2997,6 +2997,24 @@ static TuriValue native_r7rs_parse_int_ok(TuriEnv *env, TuriValue *a, uint32_t n
 static TuriValue native_r7rs_parse_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; int64_t v = 0; (void)r7rs_parse_int_radix(r7rs_arg_cstr(a, n, 0), r7rs_arg_int(a, n, 1), &v); return turi_int(v);
 }
+/* R10: (scheme char)'s Unicode tables -- the SAME generated C the prelude's
+ * stdlib/r7rs/unicode.tur compiles in (tools/gen-r7rs-unicode.py writes
+ * both), registered below over its three inline-C wrappers. */
+#include "r7rs_unicode.inc"
+static TuriValue native_r7rs_uc_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(r7rs_uc_mapc(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1)));
+}
+static TuriValue native_r7rs_uc_prop(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(r7rs_uc_prop(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1)));
+}
+static TuriValue native_r7rs_uc_string(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    /* The buffer is the value's, as native_r7rs_bar_symbol's is (process-
+     * lifetime, the interpreter's allocation model). */
+    return turi_cstr(r7rs_uc_string(r7rs_arg_cstr(a, n, 0), r7rs_arg_int(a, n, 1)));
+}
 static TuriValue native_r7rs_parse_float_ok(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; double v; return turi_bool(r7rs_parse_float_str(r7rs_arg_cstr(a, n, 0), &v));
 }
@@ -3774,6 +3792,9 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-parse-int-ok?__",     native_r7rs_parse_int_ok,       NULL);
     turi_env_register_native(env, "r7rs-parse-int__",         native_r7rs_parse_int,          NULL);
     turi_env_register_native(env, "r7rs-parse-float-ok?__",   native_r7rs_parse_float_ok,     NULL);
+    turi_env_register_native(env, "r7rs-uc-map__",            native_r7rs_uc_map,             NULL);
+    turi_env_register_native(env, "r7rs-uc-prop__",           native_r7rs_uc_prop,            NULL);
+    turi_env_register_native(env, "r7rs-uc-string__",         native_r7rs_uc_string,          NULL);
     turi_env_register_native(env, "r7rs-parse-float__",       native_r7rs_parse_float,        NULL);
     turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);

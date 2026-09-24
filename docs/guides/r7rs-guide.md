@@ -61,7 +61,7 @@ All of R7RS-small except the evaluator libraries:
 |---|---|
 | `(scheme base)` | complete, including string, bytevector and file ports |
 | `(scheme case-lambda)`, `(scheme lazy)`, `(scheme inexact)` | complete |
-| `(scheme char)` | complete; case mapping is ASCII |
+| `(scheme char)` | complete, Unicode case mapping and classification included |
 | `(scheme cxr)`, `(scheme complex)` | complete; complex numbers are reals only |
 | `(scheme write)` | `write` and `display` label cycles; `write-shared`, `write-simple` |
 | `(scheme read)` | `read`, datum labels and cycles included |
@@ -199,7 +199,11 @@ signature. `tests/run-r7rs-import.sh` pins both directions on both back ends.
 - **`call/cc` is an escape only.** A continuation cannot be re-entered after
   its `call/cc` returns.
 - **`apply` and dynamic calls take at most four arguments.**
-- **Case mapping is ASCII.** A non-ASCII character maps to itself.
+- **Strings are bytes.** A string is UTF-8, and `string-length`,
+  `string-ref` and `string->list` count and return BYTES, so a non-ASCII
+  character is several of them. The case procedures (`string-upcase` and the
+  rest) map the UTF-8 in place and are right for any text; chars themselves
+  are full Unicode scalar values.
 - **`char-ready?` and `u8-ready?` always answer `#t`.**
 - **`(except ...)` in an import is refused.** A Turmeric import cannot say
   "all but these names"; the error says to list them with `(only ...)`.
@@ -211,8 +215,6 @@ signature. `tests/run-r7rs-import.sh` pins both directions on both back ends.
   `define` is the case to watch. Put such code inside a procedure; the
   interpreter evaluates in order either way.
 - **`command-line`** starts with `"tur"`, not the program's own path.
-- **`'nil` is the empty list.** The symbol `nil` is Turmeric's nil value, so
-  `(symbol? 'nil)` is `#f`. Every other symbol is an ordinary symbol.
 
 ## Conformance
 
@@ -225,14 +227,15 @@ bash tests/run-r7rs-conformance.sh      # both back ends, about two minutes
 python3 tests/r7rs/run-conformance.py --backend interp --list-failures
 ```
 
-**1036 of the 1216 tests** written in the suite pass, the same on the
+**1077 of the 1216 tests** written in the suite pass, the same on the
 interpreter and the compiled back end. Nearly all the rest are the
 differences listed above: bignums and exact rationals (`1/2`, `(expt 2
-100)`), complex numbers (`3+4i`), non-ASCII case mapping and
-`char-alphabetic?`, the three string mutators, `eval` and `environment`, and
-re-entering a continuation. What remains after those is a handful of hygiene
-corners (a macro-introduced binding that captures, a pattern variable reused
-as a nested macro's literal) and `'nil`, which reads as the empty list.
+100)`), complex numbers (`3+4i`), the three string mutators, `eval` and
+`environment`, re-entering a continuation, and a string indexed by bytes.
+What remains after those is a handful of hygiene corners (a
+macro-introduced binding that captures, a pattern variable reused as a
+nested macro's literal) and two float spellings that differ from chibi's
+own (`1.7976931348623157e308` rather than `e+308`; both are R7RS).
 
 The target fails only when the count drops below its floor, so raise the
 floor in `tests/run-r7rs-conformance.sh` when the count goes up.

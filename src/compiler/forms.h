@@ -110,6 +110,11 @@ typedef enum FxProvenance {
      * binding vector in the same file.  The Scheme lowering rewrites only the
      * stamped ones into `(vector ...)`. */
     PROV_SCHEME_VECTOR,
+    /* r7rs-lang-plan R10: stamps the F_NIL / F_BOOL the Scheme reader made
+     * from the WORDS `nil`, `true` and `false`.  In code they keep their
+     * Turmeric meaning (the prelude is written with them); as quoted data
+     * they are the symbols a Scheme program means -- `(symbol? 'nil)`. */
+    PROV_SCHEME_WORD,
 } FxProvenance;
 
 struct Form;

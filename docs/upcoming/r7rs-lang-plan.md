@@ -49,7 +49,7 @@ that re-indents Scheme and never reprints a token, `tur init --r7rs`, the LSP
 (native and browser) analysing and formatting Scheme, the editor packs,
 `gendocs` reading Scheme definitions, and `docs/guides/r7rs-guide.md`. R10
 runs chibi-scheme's R7RS suite as the ctest target `tur_r7rs_conformance`,
-which reports a count: 1036 of 1216 tests pass on both back ends (887 on the
+which reports a count: 1077 of 1216 tests pass on both back ends (887 on the
 interpreter, and a compiled build that did not finish, when it was first
 wired). Each landed stage carries a "What shipped" note below.
 
@@ -1584,6 +1584,34 @@ conformance story.
 > reused as a nested macro's literal; three `#;` read-error edge cases; and
 > the shortest float spelling at the edge of the double range. Each is a
 > line in `run-conformance.py --list-failures`.
+>
+> **Follow-up: 1077.** The next pass took the count from 1036 to 1077, the
+> same on both back ends, and the floor with it:
+>
+> - **`(scheme char)` is Unicode.** `tools/gen-r7rs-unicode.py` writes tables
+>   from Python's `unicodedata` (Unicode 14.0.0 here) into
+>   `stdlib/r7rs/unicode.tur` (file-scope C the prelude loads) and, as the
+>   same text, `src/turi/r7rs_unicode.inc`, the interpreter's natives;
+>   `tur_r7rs_unicode_sync` checks the two copies agree. Chars get their
+>   simple case mapping, the Uppercase/Lowercase properties, letters (L*,
+>   Nl), Nd digits with `digit-value`, and White_Space; strings get the FULL
+>   mapping, special casing included (`"\xDF;"` upcases to "SS", folds to
+>   "ss"), without the context-sensitive final sigma. ASCII stays inline. The
+>   interpreter now treats a top-level ```` ```c ```` block as the file-scope
+>   declarations it is, instead of failing the load.
+> - **`'nil`, `'true`, `'false`** are symbols. The reader stamps the F_NIL /
+>   F_BOOL it makes from those WORDS (`PROV_SCHEME_WORD`); in code they keep
+>   their Turmeric meaning, which the prelude uses, and quoted they are built
+>   by name.
+> - **Exact against inexact compares exactly**: `(= 9007199254740992.0
+>   9007199254740993)` is #f (converting the integer made them equal).
+> - **`#;` must be followed by a datum**: a lone `.` is never one, so
+>   `(a #;. b)` and `(#; #;x . z)` are read errors.
+>
+> What is left that is not a carve-out: the five hygiene tests (the template
+> identifiers of a macro are not yet resolved in the macro's definition
+> environment -- R4's named failing test is the same gap), and two float
+> spellings where chibi accepts only its own `e+308`.
 
 ---
 

@@ -1,7 +1,7 @@
 #lang r7rs
 ;; r7rs-lang-plan R10: the defects chibi's R7RS suite found, one probe each.
 ;; Runs on both back ends (run.sh compiles it, run-turi.sh interprets it).
-(import (scheme base) (scheme write) (scheme read) (scheme lazy))
+(import (scheme base) (scheme write) (scheme read) (scheme lazy) (scheme char))
 
 (define (show x) (write x) (newline))
 
@@ -112,3 +112,23 @@
   (let ((x 4))
     (lambda (y) (+ x y))))
 (show (run (lambda () (add4 6))))
+
+;; Follow-up: the words nil/true/false quoted are symbols; an exact integer
+;; and a double compare exactly; `#;` must be followed by a datum.
+(show (list (symbol? 'nil) '(nil true false) (null? '())))
+(show (list (= 9007199254740992.0 9007199254740993) (< 9007199254740992.0 9007199254740993)
+            (= 7 7.0) (< 7 7.1) (= 1 +nan.0)))
+(show (map (lambda (s) (guard (e (#t 'error)) (read (open-input-string s))))
+           '("(a #;. b)" "(#; #;x . z)" "(a #;b c)")))
+
+;; Unicode (the tables in stdlib/r7rs/unicode.tur): chars map and classify
+;; beyond ASCII, and strings take the full mapping (sharp s upcases to SS).
+(show (map char->integer (list (char-upcase #\x3BB) (char-downcase #\x39B) (char-foldcase #\x39B)
+                               (char-upcase #\xDF))))
+(show (list (char-alphabetic? #\x39B) (char-upper-case? #\x39B) (char-lower-case? #\x3BB)
+            (char-numeric? #\x0E50) (char-whitespace? #\x1680) (digit-value #\x0664)
+            (char-alphabetic? #\x2603)))
+(show (list (string=? (string-upcase "\xDF;a") "SSA")
+            (string=? (string-upcase "\x3B1;\x3B2;\x3B3;") "\x391;\x392;\x393;")
+            (string=? (string-foldcase "Ma\xDF;") "mass")
+            (string-ci=? "\x391;\x392;\x393;" "\x3B1;\x3B2;\x3B3;")))

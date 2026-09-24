@@ -48,6 +48,7 @@
 
 (load "stdlib/sym-dynamic.tur")
 (load "stdlib/math.tur")
+(load "stdlib/r7rs/unicode.tur")
 
 ;;; ---- the types --------------------------------------------------------
 
@@ -436,11 +437,38 @@
   (if (r7rs-both-int?__ a b)
     (r7rs-div-int__ a b)
     (:: (/ (r7rs-to-float__ a) (r7rs-to-float__ b)) any)))
-(defn r7rs-numeq2__ [a b] : bool (= a b))
-(defn r7rs-lt2__ [a b] : bool (< a b))
-(defn r7rs-gt2__ [a b] : bool (> a b))
-(defn r7rs-le2__ [a b] : bool (<= a b))
-(defn r7rs-ge2__ [a b] : bool (>= a b))
+;;; R10: an exact integer and an inexact real compare EXACTLY (R7RS 6.2.6
+;;; asks comparisons to be transitive): `(= 9007199254740992.0
+;;; 9007199254740993)` is #f, where converting the integer to a double made
+;;; the two equal.  r7rs-cmp-int-float__ answers -1, 0 or 1 for i against d,
+;;; and 2 when d is a NaN (every comparison false).
+(defn r7rs-cmp-int-float__ [i : int d : float] : int
+  (if (r7rs-float-nan?__ d)
+    2
+    (if (>= d 9223372036854775807.0)
+      -1
+      (if (< d -9223372036854775807.0)
+        1
+        (let [t (r7rs-float->int__ (trunc d))]
+          (if (< i t)
+            -1
+            (if (> i t)
+              1
+              (let [f (- d (r7rs-int->float__ t))]
+                (if (> f 0.0) -1 (if (< f 0.0) 1 0))))))))))
+(defn r7rs-mixed?__ [a b] : bool
+  (if (is? a int) (is? b float) (if (is? a float) (is? b int) false)))
+(defn r7rs-cmp-mixed__ [a b] : int
+  (if (is? a int)
+    (r7rs-cmp-int-float__ a b)
+    (let [c (r7rs-cmp-int-float__ b a)] (if (= c 2) 2 (- 0 c)))))
+(defn r7rs-numeq2__ [a b] : bool (if (r7rs-mixed?__ a b) (= (r7rs-cmp-mixed__ a b) 0) (= a b)))
+(defn r7rs-lt2__ [a b] : bool (if (r7rs-mixed?__ a b) (= (r7rs-cmp-mixed__ a b) -1) (< a b)))
+(defn r7rs-gt2__ [a b] : bool (if (r7rs-mixed?__ a b) (= (r7rs-cmp-mixed__ a b) 1) (> a b)))
+(defn r7rs-le2__ [a b] : bool
+  (if (r7rs-mixed?__ a b) (let [c (r7rs-cmp-mixed__ a b)] (if (= c -1) true (= c 0))) (<= a b)))
+(defn r7rs-ge2__ [a b] : bool
+  (if (r7rs-mixed?__ a b) (let [c (r7rs-cmp-mixed__ a b)] (if (= c 1) true (= c 0))) (>= a b)))
 
 ;;; The variadic procedures a bare operator names in value position.
 (defn r7rs-fold-num__ [f l acc]
@@ -700,20 +728,32 @@
 (defn r7rs-char>? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char>2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-char<=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char<=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-char>=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char>=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+;;; (scheme char): ASCII answers inline, everything else from the Unicode
+;;; tables of stdlib/r7rs/unicode.tur (R10; generated, see
+;;; tools/gen-r7rs-unicode.py).
 (defn r7rs-char-upcase [c : R7rsChar] : R7rsChar
   (let [n (:: c :int)]
-    (if (if (>= n 97) (<= n 122) false) (:: (- n 32) R7rsChar) c)))
+    (if (< n 128)
+      (if (if (>= n 97) (<= n 122) false) (:: (- n 32) R7rsChar) c)
+      (:: (r7rs-uc-map__ n 0) R7rsChar))))
 (defn r7rs-char-downcase [c : R7rsChar] : R7rsChar
   (let [n (:: c :int)]
-    (if (if (>= n 65) (<= n 90) false) (:: (+ n 32) R7rsChar) c)))
+    (if (< n 128)
+      (if (if (>= n 65) (<= n 90) false) (:: (+ n 32) R7rsChar) c)
+      (:: (r7rs-uc-map__ n 1) R7rsChar))))
 (defn r7rs-char-alphabetic? [c : R7rsChar] : bool
   (let [n (:: c :int)]
-    (if (if (>= n 65) (<= n 90) false) true (if (>= n 97) (<= n 122) false))))
+    (if (< n 128)
+      (if (if (>= n 65) (<= n 90) false) true (if (>= n 97) (<= n 122) false))
+      (= (r7rs-uc-prop__ n 0) 1))))
 (defn r7rs-char-numeric? [c : R7rsChar] : bool
-  (let [n (:: c :int)] (if (>= n 48) (<= n 57) false)))
+  (let [n (:: c :int)]
+    (if (< n 128) (if (>= n 48) (<= n 57) false) (>= (r7rs-uc-prop__ n 4) 0))))
 (defn r7rs-char-whitespace? [c : R7rsChar] : bool
   (let [n (:: c :int)]
-    (if (= n 32) true (if (= n 9) true (if (= n 10) true (if (= n 13) true (= n 12)))))))
+    (if (< n 128)
+      (if (= n 32) true (if (= n 9) true (if (= n 10) true (if (= n 13) true (if (= n 12) true (= n 11))))))
+      (= (r7rs-uc-prop__ n 3) 1))))
 
 ;;; ---- strings (immutable cstr; the primitives are inline C with
 ;;; interpreter twins in interpreter_natives.c) -------------------------------
@@ -1361,20 +1401,29 @@
     (let [fx (r7rs-to-float__ x) fy (r7rs-to-float__ (r7rs-abs y))]
       (:: (r7rs-simplest__ (- fx fy) (+ fx fy)) any))))
 
-;;; ---- R7: (scheme char) -- ASCII case mapping ----------------------------
+;;; ---- R7: (scheme char) -- case mapping ---------------------------------
 ;;;
-;;; Chars are Unicode scalar values, but the case mapping is ASCII's: the
-;;; typed stdlib has no Unicode case tables, and a partial table would be a
-;;; wrong answer that looks right.  A non-ASCII char maps to itself.
+;;; Chars are Unicode scalar values.  R10: non-ASCII answers come from the
+;;; Unicode tables (stdlib/r7rs/unicode.tur): a char's simple case mapping,
+;;; the Uppercase/Lowercase properties, Nd digits, and a string's FULL case
+;;; mapping (`(string-upcase "\xDF;")` is "SS").  Strings stay byte strings,
+;;; so the string procedures map the UTF-8 in place rather than per char.
 
 (defn r7rs-char-upper-case? [c : R7rsChar] : bool
-  (let [n (:: c :int)] (if (>= n 65) (<= n 90) false)))
+  (let [n (:: c :int)]
+    (if (< n 128) (if (>= n 65) (<= n 90) false) (= (r7rs-uc-prop__ n 1) 1))))
 (defn r7rs-char-lower-case? [c : R7rsChar] : bool
-  (let [n (:: c :int)] (if (>= n 97) (<= n 122) false)))
-(defn r7rs-char-foldcase [c : R7rsChar] : R7rsChar (r7rs-char-downcase c))
-;;; r7rs-digit-value -- 0..9 for a decimal digit, #f otherwise.
+  (let [n (:: c :int)]
+    (if (< n 128) (if (>= n 97) (<= n 122) false) (= (r7rs-uc-prop__ n 2) 1))))
+(defn r7rs-char-foldcase [c : R7rsChar] : R7rsChar
+  (let [n (:: c :int)]
+    (if (< n 128) (r7rs-char-downcase c) (:: (r7rs-uc-map__ n 2) R7rsChar))))
+;;; r7rs-digit-value -- the value of a decimal digit (any Nd), #f otherwise.
 (defn r7rs-digit-value [c : R7rsChar] : any
-  (let [n (:: c :int)] (if (if (>= n 48) (<= n 57) false) (:: (- n 48) any) (:: false any))))
+  (let [n (:: c :int)]
+    (if (< n 128)
+      (if (if (>= n 48) (<= n 57) false) (:: (- n 48) any) (:: false any))
+      (let [v (r7rs-uc-prop__ n 4)] (if (>= v 0) (:: v any) (:: false any))))))
 (defn r7rs-fold-code__ [c] : int (:: (r7rs-char-foldcase c) :int))
 (defn r7rs-char-ci=2__ [a b] : bool (= (r7rs-fold-code__ a) (r7rs-fold-code__ b)))
 (defn r7rs-char-ci<2__ [a b] : bool (< (r7rs-fold-code__ a) (r7rs-fold-code__ b)))
@@ -1386,11 +1435,9 @@
 (defn r7rs-char-ci>? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci>2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-char-ci<=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci<=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-char-ci>=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci>=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
-(defn r7rs-char-upcase1__ [c] : any (r7rs-char-upcase c))
-(defn r7rs-char-downcase1__ [c] : any (r7rs-char-downcase c))
-(defn r7rs-string-upcase [s : cstr] : cstr (r7rs-list->string (r7rs-map1__ r7rs-char-upcase1__ (r7rs-string->list s))))
-(defn r7rs-string-downcase [s : cstr] : cstr (r7rs-list->string (r7rs-map1__ r7rs-char-downcase1__ (r7rs-string->list s))))
-(defn r7rs-string-foldcase [s : cstr] : cstr (r7rs-string-downcase s))
+(defn r7rs-string-upcase [s : cstr] : cstr (r7rs-uc-string__ s 0))
+(defn r7rs-string-downcase [s : cstr] : cstr (r7rs-uc-string__ s 1))
+(defn r7rs-string-foldcase [s : cstr] : cstr (r7rs-uc-string__ s 2))
 (defn r7rs-string-ci=2__ [a b] : bool (r7rs-string=2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
 (defn r7rs-string-ci<2__ [a b] : bool (r7rs-string<2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
 (defn r7rs-string-ci>2__ [a b] : bool (r7rs-string>2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))

@@ -984,12 +984,17 @@ static Form *read_symbol_or_minus_at(Reader *r, bool head_pos) {
     }
 
     /* Recognize literal keywords. */
+    Form *word = NULL;
     if (name.len == 3 && memcmp(name.p, "nil", 3) == 0)
-        return form_nil(r->arena, span);
-    if (name.len == 4 && memcmp(name.p, "true", 4) == 0)
-        return form_bool(r->arena, span, true);
-    if (name.len == 5 && memcmp(name.p, "false", 5) == 0)
-        return form_bool(r->arena, span, false);
+        word = form_nil(r->arena, span);
+    else if (name.len == 4 && memcmp(name.p, "true", 4) == 0)
+        word = form_bool(r->arena, span, true);
+    else if (name.len == 5 && memcmp(name.p, "false", 5) == 0)
+        word = form_bool(r->arena, span, false);
+    if (word) {
+        if (r->scheme_enabled) word->fx_prov = PROV_SCHEME_WORD;   /* R10 */
+        return word;
+    }
 
     /* sweet-dollar-inside-brackets-is-a-silent-symbol: `$` is the sweet-exp
      * rest-of-line marker, and sweet_emit_content rewrites it only where the

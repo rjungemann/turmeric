@@ -322,7 +322,12 @@
                     (do (r7rs-io-skip__ io 1) (:: (str->sym (r7rs-rd-delimited__ io 124)) any))
                     (if (= b 35)
                       (r7rs-rd-hash__ io st)
-                      (r7rs-rd-atom__ (r7rs-rd-token__ io) st))))))))))))
+                      ;; R10: a lone `.` is never a datum -- the list reader
+                      ;; takes it before asking for one, so here it is after
+                      ;; a `#;` (`(a #;. b)`), a quote or a label.
+                      (if (r7rs-rd-dot?__ io)
+                        (r7rs-rd-fail__ "read: a datum was expected, not a lone .")
+                        (r7rs-rd-atom__ (r7rs-rd-token__ io) st)))))))))))))
 ;;; r7rs-rd-hash__ -- a datum that starts with `#`.
 (defn r7rs-rd-hash__ [io : R7rsIo st] : any
   (let [c (r7rs-io-peek__ io 1)]

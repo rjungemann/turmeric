@@ -6,6 +6,20 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: Unicode `(scheme char)`, and 1077 conformance tests.**
+  Char case mapping and classification, `digit-value`, and full string case
+  mapping (`"\xDF;"` upcases to "SS") now cover Unicode. The tables come from
+  `tools/gen-r7rs-unicode.py`, which writes the same C into the prelude's
+  `stdlib/r7rs/unicode.tur` and the interpreter's
+  `src/turi/r7rs_unicode.inc`; `tur_r7rs_unicode_sync` keeps them equal.
+  Also fixed:
+  - `'nil`, `'true` and `'false` are symbols.
+  - An exact integer and a double compare exactly.
+  - `#;` before a lone `.` is a read error.
+  - The interpreter ignores a top-level C block instead of failing the load.
+
+  The chibi count is 1077 of 1216 on both back ends, up from 1036, and is the
+  ctest floor.
 - **`#lang r7rs` conformance (R10).** chibi-scheme's R7RS test suite
   (vendored under `tests/r7rs/` with its BSD licence) runs as the ctest target
   `tur_r7rs_conformance`, which reports a pass count with a regression floor:

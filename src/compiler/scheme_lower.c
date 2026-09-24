@@ -2437,8 +2437,18 @@ static Form *lower_datum(SL *sl, Form *d) {
             Form *h = form_quote(sl->a, sp, Sym(sl, sp, I(sl, head)));
             return Ln(sl, sp, 3, Sym(sl, sp, sl->p_list), h, lower_datum(sl, d->as.list.items[0]));
         }
-        case F_NIL: return Ln(sl, sp, 1, Sym(sl, sp, sl->p_list));
-        default: return d;   /* int, float, string, bool, keyword */
+        case F_NIL: case F_BOOL:
+            /* R10: the WORD `nil` / `true` / `false` quoted is a symbol (the
+             * reader stamps them); `()` and `#t`/`#f` are not stamped.  Built
+             * by name: a `(quote nil)` would elaborate as Turmeric's nil. */
+            if (d->fx_prov == PROV_SCHEME_WORD && !prelude_span(sp)) {
+                const char *w = d->tag == F_NIL ? "nil" : d->as.b ? "true" : "false";
+                return Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-string->symbol")),
+                          form_str(sl->a, sp, w, (uint32_t)strlen(w)));
+            }
+            if (d->tag == F_NIL) return Ln(sl, sp, 1, Sym(sl, sp, sl->p_list));
+            return d;
+        default: return d;   /* int, float, string, keyword */
     }
 }
 

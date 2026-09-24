@@ -11288,6 +11288,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (ic && eval_session_intercept(env, frame, ic, &sess_out))
                 return sess_out;
         }
+        /* r7rs-lang-plan R10: a TOP-LEVEL block (no frame, no captures) is a
+         * file-scope one -- C declarations for the inline-C bodies beside it,
+         * which the compiled back end emits at file scope and never runs.
+         * There is nothing to evaluate; failing here aborted the whole load
+         * that held it (the R7RS prelude's Unicode tables, whose bodies the
+         * interpreter answers with registered natives). */
+        {
+            InlineC *ic = e->as.inline_c_.inline_c;
+            if (!frame && ic && ic->n_captures == 0 && ic->n_val_exprs == 0)
+                return turi_nil();
+        }
         /* This is the documented clean carve for any inline-C-backed function
          * the tree-walker cannot run -- e.g. a content-keyed map's synthesized
          * MapKey comparator, whose body returns a captured C function-pointer
