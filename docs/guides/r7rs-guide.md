@@ -370,7 +370,9 @@ library's string result to `cstr` gets the same copy.
   that calls one of your procedures (`for-each`, `map`, `member`, a
   `delay-force` stream) runs in constant stack at the default `-O2`, and can
   overflow the stack on a million elements in an `-O1` build.
-- **`apply` and dynamic calls take at most four arguments.**
+- **`apply` and a call through a variable take at most eight arguments.**
+  A direct call to a named procedure has no limit; past eight, pass the rest
+  as a list.
 - **`char-ready?` and `u8-ready?` on Windows always answer `#t`.** Elsewhere
   they ask the descriptor (a zero-timeout poll), so an idle console or an
   empty pipe answers `#f`.

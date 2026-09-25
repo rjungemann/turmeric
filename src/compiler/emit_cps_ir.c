@@ -7290,7 +7290,7 @@ static void emit_letraw(CE *ce, const CTerm *t) {
               nb->as.appcont.v.cvar_id == t->as.letraw.x.id) ||
              (nb->as.appcont.v.kind == CA_VAR && t->as.letraw.x.bind &&
               nb->as.appcont.v.var == t->as.letraw.x.bind));
-        if (le && le->kind == EX_DYN_CALL && le->as.dyn_call_.n_args <= 4 &&
+        if (le && le->kind == EX_DYN_CALL && le->as.dyn_call_.n_args <= TUR_FAT_SHIM_MAX_ARITY &&
             delivers_x && t->as.letraw.x.ty == TY_ANY) {
             bool bounce = ce->tb_bouncer && ce->out == ce->tb_out &&
                           !ce->ret_mode && !ce->shift_mode &&

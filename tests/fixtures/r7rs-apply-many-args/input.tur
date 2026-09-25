@@ -1,0 +1,37 @@
+#lang r7rs
+;; A procedure of five to eight parameters through every dynamic path:
+;; apply, a call through a variable, call-with-values, a variadic callee, a
+;; tail call in a loop (the trampoline), and a lambda passed to a helper.
+;; The compiled dynamic-call helpers carry eight arguments; the direct call
+;; to a named procedure has no limit either way.
+(import (scheme base) (scheme write))
+(define (f5 a b c d e) (list a b c d e))
+(define (f6 a b c d e f) (+ a b c d e f))
+(define (f7 a b c d e f g) (+ a b c d e f g))
+(define (f8 a b c d e f g h) (+ a b c d e f g h))
+(define (v5 a b c d . rest) (list a b c d rest))
+(define g5 f5)
+(define g8 f8)
+(write (list (apply f5 '(1 2 3 4 5))
+             (apply f6 1 2 '(3 4 5 6))
+             (apply f7 '(1 2 3 4 5 6 7))
+             (apply f8 '(1 2 3 4 5 6 7 8))
+             (g5 1 2 3 4 5)
+             (g8 1 2 3 4 5 6 7 8)
+             (apply v5 '(1 2 3 4 5 6))
+             (call-with-values (lambda () (values 1 2 3 4 5)) f5)))
+(newline)
+;; A five-argument dynamic tail call, 100000 deep: the trampoline carries
+;; the arguments (a call through a variable holding the procedure), and the
+;; interpreter's proper tail calls do the same.
+(define (count-down k a b c d)
+  (if (= k 0) (+ a b c d) (count-again (- k 1) a b c d)))
+(define (count-again k a b c d)
+  (count-down k a b c d))
+(define go count-down)
+(write (go 100000 1 2 3 4))
+(newline)
+;; A lambda of six parameters handed to a helper that calls it.
+(define (call6 p) (p 1 2 3 4 5 6))
+(write (call6 (lambda (a b c d e f) (* a b c d e f))))
+(newline)

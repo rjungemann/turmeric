@@ -1058,7 +1058,7 @@ bool type_is_transparent_int_newtype(Type t) {
  * consult it, so the two sides cannot disagree.  Deliberately excluded:
  *   - cfnptr    -- a raw C function pointer must stay thin (extern-c ABI);
  *   - variadic  -- no shim family;
- *   - arity > 5 -- outside the __tur_fatshim0..5 family (mirrors the ^fat
+ *   - arity > TUR_FAT_SHIM_MAX_ARITY -- outside the __tur_fatshim family (mirrors the ^fat
  *                  auto-shim bound; such params keep today's thin protocol).
  * Carrier-eligible params never reach this predicate: elab_fns retypes them
  * to TY_PTR_VOID (is_poly_fn) before any caller asks.  ^fat params are fat
@@ -1121,7 +1121,7 @@ static bool fn_type_sig_has_named_tyvar_(const Type *t) {
 
 bool fn_param_type_is_fat_normalized(const Type *t) {
     if (!(t && t->kind == TY_FN && !t->as.fn.cfnptr &&
-          !t->as.fn.is_variadic && t->as.fn.arity <= 5))
+          !t->as.fn.is_variadic && t->as.fn.arity <= TUR_FAT_SHIM_MAX_ARITY))
         return false;
     return true;
 }

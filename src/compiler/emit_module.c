@@ -10047,18 +10047,16 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * slot, reads the original fn pointer from slot 1, and forwards its arguments
      * using the int64_t carrier ABI (matching TUR_APPLY and the reactor casts).
      * This retires the historical capture-forcing dummy ((let [_ x] (fn ...))). */
-    buf_puts(out, "static int64_t __tur_fatshim0(void *__e) {\n");
-    buf_puts(out, "    return ((int64_t (*)(void))(intptr_t)((int64_t *)__e)[1])();\n}\n");
-    buf_puts(out, "static int64_t __tur_fatshim1(void *__e, int64_t a0) {\n");
-    buf_puts(out, "    return ((int64_t (*)(int64_t))(intptr_t)((int64_t *)__e)[1])(a0);\n}\n");
-    buf_puts(out, "static int64_t __tur_fatshim2(void *__e, int64_t a0, int64_t a1) {\n");
-    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);\n}\n");
-    buf_puts(out, "static int64_t __tur_fatshim3(void *__e, int64_t a0, int64_t a1, int64_t a2) {\n");
-    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2);\n}\n");
-    buf_puts(out, "static int64_t __tur_fatshim4(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3) {\n");
-    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3);\n}\n");
-    buf_puts(out, "static int64_t __tur_fatshim5(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {\n");
-    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3, a4);\n}\n");
+    for (int n = 0; n <= TUR_FAT_SHIM_MAX_ARITY; n++) {
+        buf_printf(out, "static int64_t __tur_fatshim%d(void *__e", n);
+        for (int i = 0; i < n; i++) buf_printf(out, ", int64_t a%d", i);
+        buf_puts(out, ") {\n    return ((int64_t (*)(");
+        if (n == 0) buf_puts(out, "void");
+        for (int i = 0; i < n; i++) buf_printf(out, "%sint64_t", i ? ", " : "");
+        buf_puts(out, "))(intptr_t)((int64_t *)__e)[1])(");
+        for (int i = 0; i < n; i++) buf_printf(out, "%sa%d", i ? ", " : "", i);
+        buf_puts(out, ");\n}\n");
+    }
     /* SC7: EX_POLY_TO_FAT thunks.  Convert a tur_poly_fn_t {env,fn} (a
      * typeclass-method closure param) into the fat-closure protocol: the fat box
      * is { __tur_poly_to_fat<N>, fn, env }, and the sink's N-ary fat-call passes
@@ -10067,7 +10065,7 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * real N-ary thunk in slot 1 (make_poly_wrapper builds it), so a binary or
      * higher-arity poly method round-trips when boxed into a ^fat sink of the
      * matching arity. */
-    for (int n = 0; n <= 5; n++) {
+    for (int n = 0; n <= TUR_FAT_SHIM_MAX_ARITY; n++) {
         buf_printf(out, "static int64_t __tur_poly_to_fat%d(void *__e", n);
         for (int i = 0; i < n; i++) buf_printf(out, ", int64_t a%d", i);
         buf_puts(out, ") {\n    int64_t *__b = (int64_t *)__e;\n");
@@ -10079,11 +10077,9 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     }
     /* Suppress -Wunused-function for shim arities a program does not use. */
     buf_puts(out, "static void *__tur_fatshim_keep[] __attribute__((unused)) = {\n");
-    buf_puts(out, "    (void *)__tur_fatshim0, (void *)__tur_fatshim1, (void *)__tur_fatshim2,\n");
-    buf_puts(out, "    (void *)__tur_fatshim3, (void *)__tur_fatshim4, (void *)__tur_fatshim5,\n");
-    buf_puts(out, "    (void *)__tur_poly_to_fat0, (void *)__tur_poly_to_fat1,\n");
-    buf_puts(out, "    (void *)__tur_poly_to_fat2, (void *)__tur_poly_to_fat3,\n");
-    buf_puts(out, "    (void *)__tur_poly_to_fat4, (void *)__tur_poly_to_fat5 };\n");
+    for (int n = 0; n <= TUR_FAT_SHIM_MAX_ARITY; n++)
+        buf_printf(out, "    (void *)__tur_fatshim%d, (void *)__tur_poly_to_fat%d,\n", n, n);
+    buf_puts(out, "};\n");
     if (guarded) buf_puts(out, "#endif /* TUR_RT_CLOSURE_FAT */\n");
 }
 
@@ -11392,8 +11388,9 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    return (int64_t)(intptr_t)__t;\n"
         "}\n"
         "static __attribute__((unused)) tur_tagged_t __tur_dyn_call_var(tur_tagged_t __f, int __fixed, int __n,\n"
-        "        tur_tagged_t __a0, tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3) {\n"
-        "    tur_tagged_t __a[4] = { __a0, __a1, __a2, __a3 };\n"
+        "        tur_tagged_t __a0, tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3,\n"
+        "        tur_tagged_t __a4, tur_tagged_t __a5, tur_tagged_t __a6, tur_tagged_t __a7) {\n"
+        "    tur_tagged_t __a[8] = { __a0, __a1, __a2, __a3, __a4, __a5, __a6, __a7 };\n"
         "    void *__env = (void *)(intptr_t)TUR_UNTAG(__f);\n"
         "    void *__th = (void *)(intptr_t)TUR_CLOSURE_FN(TUR_UNTAG(__f));\n"
         "    int64_t __r = __tur_dyn_pack_rest(__fixed, __n, __a);\n"
@@ -11402,7 +11399,11 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    case 1: return ((tur_tagged_t (*)(void *, tur_tagged_t, int64_t))__th)(__env, __a[0], __r);\n"
         "    case 2: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __r);\n"
         "    case 3: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __a[2], __r);\n"
-        "    default: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __r);\n"
+        "    case 4: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __r);\n"
+        "    case 5: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __a[4], __r);\n"
+        "    case 6: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __a[4], __a[5], __r);\n"
+        "    case 7: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __a[4], __a[5], __a[6], __r);\n"
+        "    default: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __a[4], __a[5], __a[6], __a[7], __r);\n"
         "    }\n"
         "}\n");
     /* saffron-lang-plan S5/D4 (G11): the fall-through of a dynamic field read.
@@ -11450,7 +11451,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "#else\n"
         "#define TUR_TB_TLS\n"
         "#endif\n"
-        "typedef struct { tur_tagged_t fn; int n; tur_tagged_t a[4]; } tur_tb_desc_t;\n"
+        "typedef struct { tur_tagged_t fn; int n; tur_tagged_t a[8]; } tur_tb_desc_t;\n"
         "static TUR_TB_TLS tur_tb_desc_t tur_tb_desc;\n"
         "static TUR_TB_TLS void *tur_tb_armed_for;\n"
         "static TUR_TB_TLS void *tur_tb_root;\n"
@@ -11517,7 +11518,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    /* R6: a variadic callee (see __tur_dyn_call_var) is driven too. */\n"
         "    int __fx = tur_dyn_var_n ? __tur_dyn_variadic_fixed(TUR_GETTAG(__f)) : -1;\n"
         "    if (__fx >= 0 && __fx <= __n) {\n"
-        "        __r = __tur_dyn_call_var(__f, __fx, __n, __a[0], __a[1], __a[2], __a[3]);\n"
+        "        __r = __tur_dyn_call_var(__f, __fx, __n, __a[0], __a[1], __a[2], __a[3], __a[4], __a[5], __a[6], __a[7]);\n"
         "        tur_tb_armed_for = NULL;\n"
         "        return __r;\n"
         "    }\n"
@@ -11526,7 +11527,11 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    case 1: __r = ((tur_tagged_t (*)(void *, tur_tagged_t))__th)(__env, __a[0]); break;\n"
         "    case 2: __r = ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t))__th)(__env, __a[0], __a[1]); break;\n"
         "    case 3: __r = ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t))__th)(__env, __a[0], __a[1], __a[2]); break;\n"
-        "    default: __r = ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t))__th)(__env, __a[0], __a[1], __a[2], __a[3]); break;\n"
+        "    case 4: __r = ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t))__th)(__env, __a[0], __a[1], __a[2], __a[3]); break;\n"
+        "    case 5: __r = ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __a[4]); break;\n"
+        "    case 6: __r = ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __a[4], __a[5]); break;\n"
+        "    case 7: __r = ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __a[4], __a[5], __a[6]); break;\n"
+        "    default: __r = ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __a[4], __a[5], __a[6], __a[7]); break;\n"
         "    }\n"
         "    tur_tb_armed_for = NULL;\n"
         "    return __r;\n"
@@ -11536,8 +11541,9 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "/* The driver: make the call, and keep making the call a bouncing callee\n"
         " * hands back until one returns a value. */\n"
         "static __attribute__((unused)) tur_tagged_t __tur_tb_call(tur_tagged_t __f, int __n, tur_tagged_t __a0,\n"
-        "                                  tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3) {\n"
-        "    tur_tagged_t __a[4] = { __a0, __a1, __a2, __a3 };\n"
+        "                                  tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3,\n"
+        "                                  tur_tagged_t __a4, tur_tagged_t __a5, tur_tagged_t __a6, tur_tagged_t __a7) {\n"
+        "    tur_tagged_t __a[8] = { __a0, __a1, __a2, __a3, __a4, __a5, __a6, __a7 };\n"
         "    for (;;) {\n"
         "        tur_tagged_t __r = __tur_tb_invoke(__f, __n, __a);\n"
         "        if (TUR_GETTAG(__r) != TUR_TB_BOUNCE) return __r;\n"
@@ -11546,26 +11552,31 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    }\n"
         "}\n"
         "static __attribute__((unused)) void __tur_tb_record(tur_tagged_t __f, int __n, tur_tagged_t __a0,\n"
-        "                            tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3) {\n"
+        "                            tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3,\n"
+        "                            tur_tagged_t __a4, tur_tagged_t __a5, tur_tagged_t __a6, tur_tagged_t __a7) {\n"
         "    tur_tb_desc.fn = __f; tur_tb_desc.n = __n;\n"
         "    tur_tb_desc.a[0] = __a0; tur_tb_desc.a[1] = __a1;\n"
         "    tur_tb_desc.a[2] = __a2; tur_tb_desc.a[3] = __a3;\n"
+        "    tur_tb_desc.a[4] = __a4; tur_tb_desc.a[5] = __a5;\n"
+        "    tur_tb_desc.a[6] = __a6; tur_tb_desc.a[7] = __a7;\n"
         "}\n"
         );
     buf_puts(out,
         "/* A tail dynamic call: bounce when `__may`, drive otherwise. */\n"
         "static __attribute__((unused)) tur_tagged_t __tur_tb_tail(int __may, tur_tagged_t __f, int __n, tur_tagged_t __a0,\n"
-        "                                  tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3) {\n"
-        "    if (!__may) return __tur_tb_call(__f, __n, __a0, __a1, __a2, __a3);\n"
-        "    __tur_tb_record(__f, __n, __a0, __a1, __a2, __a3);\n"
+        "                                  tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3,\n"
+        "                                  tur_tagged_t __a4, tur_tagged_t __a5, tur_tagged_t __a6, tur_tagged_t __a7) {\n"
+        "    if (!__may) return __tur_tb_call(__f, __n, __a0, __a1, __a2, __a3, __a4, __a5, __a6, __a7);\n"
+        "    __tur_tb_record(__f, __n, __a0, __a1, __a2, __a3, __a4, __a5, __a6, __a7);\n"
         "    return TUR_TAG(TUR_TB_BOUNCE, 0);\n"
         "}\n"
         "/* The CPS spelling of a bounce: the sentinel as the boxed value a\n"
         " * direct-entry wrapper reads back from its `__cps` body, with no\n"
         " * per-bounce allocation. */\n"
         "static __attribute__((unused)) tur_tagged_t *__tur_tb_bounce_box(tur_tagged_t __f, int __n, tur_tagged_t __a0,\n"
-        "                                         tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3) {\n"
-        "    __tur_tb_record(__f, __n, __a0, __a1, __a2, __a3);\n"
+        "                                         tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3,\n"
+        "                                         tur_tagged_t __a4, tur_tagged_t __a5, tur_tagged_t __a6, tur_tagged_t __a7) {\n"
+        "    __tur_tb_record(__f, __n, __a0, __a1, __a2, __a3, __a4, __a5, __a6, __a7);\n"
         "    tur_tb_sentinel_box = TUR_TAG(TUR_TB_BOUNCE, 0);\n"
         "    return &tur_tb_sentinel_box;\n"
         "}\n");

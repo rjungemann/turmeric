@@ -1644,7 +1644,11 @@
         (if (= n 2) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1))
           (if (= n 3) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2))
             (if (= n 4) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3))
-              (r7rs-fail-any__ "apply: more than 4 arguments is not supported yet (r7rs-lang-plan R6)"))))))))
+              (if (= n 5) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3) (r7rs-list-ref l 4))
+                (if (= n 6) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3) (r7rs-list-ref l 4) (r7rs-list-ref l 5))
+                  (if (= n 7) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3) (r7rs-list-ref l 4) (r7rs-list-ref l 5) (r7rs-list-ref l 6))
+                    (if (= n 8) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3) (r7rs-list-ref l 4) (r7rs-list-ref l 5) (r7rs-list-ref l 6) (r7rs-list-ref l 7))
+                      (r7rs-fail-any__ "apply: more than 8 arguments is not supported; pass the rest as a list"))))))))))))
 ;;; r7rs-spread-args__ -- (a b (c d)) to (a b c d): every argument but the
 ;;; last, then the last as the tail.
 (defn r7rs-spread-args-go__ [l last] : any

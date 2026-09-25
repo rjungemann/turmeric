@@ -1,5 +1,21 @@
 # `#lang r7rs`: `apply` and dynamic calls stop at four arguments
 
+**RESOLVED 2026-09-25, archived.** The ceiling is eight now, on every path,
+behind one constant (`TUR_FAT_SHIM_MAX_ARITY`, types.h): the fat-closure
+shim family (`__tur_fatshim0..8`, `__tur_poly_to_fat0..8`), the `any`
+widen of a bare function and the `^fat` auto-shim (elab_call.c), the
+fat-normalization rule (types.c), the dynamic call's fixed slots and the
+trampoline's descriptor (`__tur_dyn_call_var`, `__tur_tb_call`,
+`__tur_tb_tail`, `__tur_tb_bounce_box`, `tur_tb_desc`), the two bounce
+decisions (emit_expr.c, emit_cps_ir.c), and the prelude's
+`r7rs-apply-list__`. A procedure of up to eight parameters is a first-class
+value on the compiled back end -- through `apply`, a variable, a parameter,
+`call-with-values`, a variadic callee and a 100,000-deep dynamic tail call
+-- and the direct call to a named procedure has no limit. Past eight, a
+dynamic call is refused at compile time and `apply` panics, each saying to
+pass the rest as a list. Pinned by `tests/fixtures/r7rs-apply-many-args`
+(both back ends). Original report follows.
+
 **Severity:** low-medium. A Scheme procedure of five or more parameters can
 be called directly, but not through `apply` (both back ends) and not through
 a variable that holds it (compiled back end: a compile-time refusal; the

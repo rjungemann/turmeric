@@ -2752,11 +2752,10 @@ since 2026-09-25 each is a report under `docs/reported/` with a repro
 measured on both back ends (README section "The documented R7RS
 differences, as reports"):
 
-- **`apply` and dynamic calls take at most four arguments**
-  ([r7rs-apply-more-than-four-arguments](../reported/r7rs-apply-more-than-four-arguments.md)). The compiled
-  dynamic call's apply table stops at 4 (`emit_dyn_call`), and the prelude is
-  compiled on both back ends. Lift it, or pack the surplus into a rest list,
-  in a Scheme-only path.
+- ~~**`apply` and dynamic calls take at most four arguments**~~ -- resolved
+  2026-09-25: eight, on every path, behind `TUR_FAT_SHIM_MAX_ARITY`
+  ([archived](../archive/r7rs-apply-more-than-four-arguments.md)); past
+  eight, pass the rest as a list.
 - ~~**`char-ready?` and `u8-ready?` always answer `#t`**~~ -- resolved
   2026-09-25 with a zero-timeout `poll()` on file, pipe and console ports
   ([archived](../archive/r7rs-char-ready-always-true.md)); Windows still
