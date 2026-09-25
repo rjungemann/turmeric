@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.53.0` -- `#lang r7rs` programs are garbage-collected by default on Linux and macOS, each top-level form runs under its own prompt so a re-entered continuation no longer re-runs the program, and a `.scm` file is Scheme without the `#lang` line.
+**Latest release:** `v0.54.0` -- `defclass` superclass preambles are unconditional: `(defclass Monoid [a] [(Semigroup a)] ...)` no longer needs `--enable=class-superclasses`, and the instance obligation that keeps the entailment sound is always checked.
 
 ## What
 

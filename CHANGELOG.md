@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.54.0] -- 2026-09-25
 
 ### Changed
 
