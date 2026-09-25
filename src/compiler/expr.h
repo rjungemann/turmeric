@@ -371,6 +371,11 @@ struct Binding {
      * shadows a stdlib name (which would otherwise produce conflicting
      * static functions of the same C name and break the C compile). */
     bool          is_from_stdlib;
+    /* r7rs-procedure-body-forward-reference: a `(def ^mut name : any init)`
+     * the Pass-1 pre-pass declared ahead of the bodies, so a procedure
+     * written above the def can name it; elab_def fills this binding in
+     * when it reaches the def (elab_pre_declare_any_mut_def). */
+    bool          is_forward_def;
     /* KB-021: true when this binding's emitted C value is a *by-value* concrete
      * carrier-ABI aggregate (e.g. a `Tuple2__int__int`/`Cons__int` local or
      * parameter) rather than the int64_t carrier.  Carrier-ABI types have two

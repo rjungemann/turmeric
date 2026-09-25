@@ -1,0 +1,50 @@
+#lang r7rs
+;; r7rs-procedure-body-forward-reference: R7RS 5.3.1 lets a procedure body
+;; name a top-level variable whose define comes later, as long as the
+;; variable is defined by the time the body runs.  The lowering declares such
+;; a variable up front and runs its initializer, as a set!, where the define
+;; stands -- so the order of the initializers is the source order, and a
+;; body that runs before the define sees the void value.
+(import (scheme base) (scheme write))
+(define (show x) (write x) (newline))
+(define (f) (* y 2))
+(define y 21)
+(show (f))
+;; a quoted datum, a literal and a string, referenced before they exist
+(define (first-item) (car items))
+(define (limit-plus n) (+ limit n))
+(define (greet) (string-append "hi " who))
+(define items '(a b c))
+(define limit 100)
+(define who "there")
+(show (first-item))
+(show (limit-plus 1))
+(show (greet))
+;; the initializer runs in source order among the expressions (a read
+;; before the define is an error in R7RS, so none here)
+(define (report) (list stage count))
+(show "before")
+(define stage 'set)
+(define count (begin (show "counting") 3))
+(show (report))
+;; a case-lambda value, a set! of a hoisted variable, a define inside begin
+(define (call-both) (list (cl 1) (cl 1 2)))
+(define cl (case-lambda ((a) (list 'one a)) ((a b) (list 'two a b))))
+(show (call-both))
+(set! limit 7)
+(show (limit-plus 1))
+(define (use-inner) inner)
+(begin (define inner 'from-begin))
+(show (use-inner))
+;; a define that depends on an earlier hoisted variable, read after both ran
+(define (twice-y) (* 2 y))
+(define (sum) (+ y-twice y))
+(define y-twice (twice-y))
+(show (sum))
+;; mutual reference between a procedure and a variable that holds a lambda
+;; the body set!s (so it stays a variable)
+(define (run) (hook 5))
+(define hook (lambda (n) (+ n 1)))
+(show (run))
+(set! hook (lambda (n) (* n 10)))
+(show (run))

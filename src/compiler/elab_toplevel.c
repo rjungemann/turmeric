@@ -1628,7 +1628,48 @@ static bool tl_has_definstance_at_or_after(const Elab *e, Form *const *forms,
     return false;
 }
 
+/* r7rs-procedure-body-forward-reference: Pass 1 also pre-declares every
+ * top-level `(def ^mut name : any init)` -- the shape the Scheme lowering
+ * gives a variable a `set!` writes or a procedure above it names (R7RS 5.3.1
+ * lets a body refer to any top-level variable, wherever its define stands).
+ * A defn is pre-declared so mutual recursion resolves; a plain global was
+ * declared where its def stood, so a body above it saw an unbound name.  The
+ * declared type is what the annotation says, so nothing of the initializer
+ * is needed here: the binding is `any`, mutable, global, and marked so
+ * elab_def fills it in (rather than reporting a redefinition) when Pass 2
+ * reaches the def.  Only this exact shape: an unannotated def's type is its
+ * initializer's, which Pass 1 does not have. */
+void elab_pre_declare_any_mut_def(Elab *ep, const Form *f) {
+    if (!f || f->tag != F_LIST || f->as.list.len < 4) return;
+    const Form *h = f->as.list.items[0];
+    if (h->tag != F_SYM || h->as.sym != ep->sym_def) return;
+    uint32_t i = 1;
+    bool saw_mut = false;
+    while (i < f->as.list.len && f->as.list.items[i]->tag == F_SYM &&
+           f->as.list.items[i]->as.sym->len > 1 && f->as.list.items[i]->as.sym->name[0] == '^') {
+        const Symbol *a = f->as.list.items[i]->as.sym;
+        if (a == ep->sym_caret_mut) saw_mut = true;
+        i++;
+        if (a == ep->sym_caret_deprecated && i < f->as.list.len && f->as.list.items[i]->tag == F_STR) i++;
+    }
+    if (!saw_mut || i + 3 != f->as.list.len) return;
+    const Form *name_f = f->as.list.items[i], *ann = f->as.list.items[i + 1];
+    if (name_f->tag != F_SYM) return;
+    const Symbol *tsym = NULL;
+    if (ann->tag == F_TYPE_ANN && ann->as.list.len == 1 && ann->as.list.items[0]->tag == F_SYM)
+        tsym = ann->as.list.items[0]->as.sym;
+    else if (ann->tag == F_KEYWORD)
+        tsym = ann->as.sym;
+    if (!tsym || strcmp(tsym->name, "any") != 0) return;
+    if (scope_lookup(&ep->global, name_f->as.sym)) return;
+    Binding *b = binding_new(ep, name_f->as.sym, type_simple(TY_ANY, CK_COPY),
+                             /*is_mut=*/true, /*is_global=*/true, name_f->span);
+    b->is_forward_def = true;
+    scope_add(&ep->global, b);
+}
+
 void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
+        elab_pre_declare_any_mut_def(ep, f);
         if (f->tag == F_LIST && f->as.list.len > 0) {
             Form *head = f->as.list.items[0];
             if (head->tag == F_SYM) {
