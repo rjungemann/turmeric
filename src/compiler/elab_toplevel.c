@@ -2304,6 +2304,33 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
             const char *hn = hs->name;
             /* definition: any def* head stays top-level */
             if (hn[0] == 'd' && hn[1] == 'e' && hn[2] == 'f') {
+                /* toplevel-def-initializers-run-before-toplevel-expressions:
+                 * a `def` AFTER a statement, with an initializer that does
+                 * work (a call), must run that work in source order.  The
+                 * folded main cannot hold a `def`, and a top-level `def`'s
+                 * initializers all run in __tur_module_def_init ahead of main.
+                 * So abort the fold: on the historical path every top-level
+                 * form, initializer and statement alike, is a statement of the
+                 * synthesized `int main()` at its source position
+                 * (emit_module.c, the EX_DEF arm).  A literal or `fn` init has
+                 * nothing to order, and a `^deferred-init` def runs its
+                 * initializer in the body itself (the Scheme lowering's define
+                 * arm), which keeps the fold and its CPS main for a Scheme
+                 * program. */
+                if (hs == e.sym_def && any_stmt) {
+                    uint32_t ii = f->as.list.len;
+                    const Form *init = ii >= 3 ? f->as.list.items[ii - 1] : NULL;
+                    bool deferred = false;
+                    for (uint32_t k = 1; k < ii; k++)
+                        if (f->as.list.items[k]->tag == F_SYM
+                            && f->as.list.items[k]->as.sym == e.sym_caret_deferred_init) deferred = true;
+                    if (!deferred && init && init->tag == F_LIST && init->as.list.len > 0) {
+                        const Form *ih = init->as.list.items[0];
+                        bool trivial = ih && ih->tag == F_SYM
+                                       && (ih->as.sym == e.sym_fn || ih->as.sym == e.sym_lambda);
+                        if (!trivial) { ambiguous = true; break; }
+                    }
+                }
                 if (hs == e.sym_defn) {
                     uint32_t ni = 1;   /* skip ^attr / (export-as ..) prefix syms */
                     while (ni < f->as.list.len && f->as.list.items[ni]->tag == F_SYM

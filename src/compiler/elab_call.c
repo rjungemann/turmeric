@@ -3617,6 +3617,28 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     if (name == e->sym_type_app) return elab_type_app(e, call);
     /* Phase HRT1: (:: expr type) — type ascription */
     if (name == e->sym_ascribe) return elab_ascribe(e, call);
+    /* toplevel-def-initializers-run-before-toplevel-expressions:
+     * `(__tur-deferred-init__ name)` IS the `^deferred-init` def's
+     * initializer, taken from the binding once, so `(set! name
+     * (__tur-deferred-init__ name))` runs it at its source position with the
+     * def's own static type. */
+    if (name == e->sym_deferred_init) {
+        if (call->as.list.len != 2 || call->as.list.items[1]->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, call->span, "__tur-deferred-init__ takes one binding name");
+            return NULL;
+        }
+        Binding *b = scope_lookup(e->scope, call->as.list.items[1]->as.sym);
+        if (!b || !b->deferred_init) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "__tur-deferred-init__: '%s' has no deferred initializer to run "
+                      "(not a `^deferred-init` def, or already run)",
+                      call->as.list.items[1]->as.sym->name);
+            return NULL;
+        }
+        Expr *init = b->deferred_init;
+        b->deferred_init = NULL;
+        return init;
+    }
     /* Phase HRT2: existential types */
     if (name == e->sym_pack) return elab_pack(e, call);
     if (name == e->sym_open) return elab_open(e, call);

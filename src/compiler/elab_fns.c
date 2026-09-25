@@ -11399,6 +11399,7 @@ Expr *elab_def(Elab *e, const Form *call) {
     bool is_mut = false;
     bool is_atomic = false;
     bool is_thread_local = false;
+    bool is_deferred_init = false;
     bool is_deprecated_attr = false;
     const char *deprecation_msg = NULL;
 
@@ -11408,6 +11409,13 @@ Expr *elab_def(Elab *e, const Form *call) {
         const Symbol *s = cur->as.sym;
 
         if (s == e->sym_caret_persistent) { is_persistent = true; name_idx++; continue; }
+
+        /* toplevel-def-initializers-run-before-toplevel-expressions:
+         * `^deferred-init` -- the initializer gives the binding its type
+         * here but runs where `(__tur-deferred-init__ name)` stands, which
+         * the Scheme lowering puts in the program body at the define's
+         * source position.  Internal to that lowering. */
+        if (s == e->sym_caret_deferred_init) { is_deferred_init = true; name_idx++; continue; }
 
         /* G4b: `^thread-local` -- each thread gets its own copy, initialized
          * on first access by running the initializer on that thread. */
@@ -11728,6 +11736,14 @@ Expr *elab_def(Elab *e, const Form *call) {
 
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;
-    out->as.def_.init = init;
+    if (is_deferred_init) {
+        /* The def declares; the body's marker initializes.  Both back ends
+         * treat an init-less EX_DEF as a declaration (the interpreter binds
+         * nil, the emitter declares the static), so nothing runs here. */
+        b->deferred_init = init;
+        out->as.def_.init = NULL;
+    } else {
+        out->as.def_.init = init;
+    }
     return out;
 }

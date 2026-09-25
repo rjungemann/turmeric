@@ -468,6 +468,12 @@ typedef struct SL {
     /* Every `set!` target in the unit (a per-name over-approximation). */
     const Symbol **muts;
     uint32_t       n_muts, cap_muts;
+    /* toplevel-def-initializers-run-before-toplevel-expressions: set once a
+     * program's top-level EXPRESSION has been lowered.  A `define` after it
+     * runs its initializer as a statement in source order (a `set!` in the
+     * program body) instead of a module-level `def`, whose initializers all
+     * run before the body. */
+    bool           toplevel_expr_seen;
     uint32_t       next_tmp;
     /* R4: the syntax-rules macros in scope, innermost last.  A body or a
      * let-syntax records n_macros on entry and restores it on exit; lookup
@@ -3212,6 +3218,20 @@ static void expand_includes(SL *sl, Form *const *forms, uint32_t n, FB *out) {
     }
 }
 
+/* r7rs-toplevel-reentry-reruns-forms: one top-level STATEMENT of the program,
+ * lowered under its own prompt -- `(r7rs-toplevel__ (lambda () <stmt>))`,
+ * lowered as the Scheme form it is.  A continuation captured inside the
+ * statement then copies the stack only up to the runner's frame, so
+ * re-entering it from a later form finishes this statement and carries on
+ * after the invoking form, the way chibi and Racket delimit each top-level
+ * form.  The prompt is per program statement: a library body's forms and a
+ * REPL line (whose value the prompt echoes) are lowered bare. */
+static Form *lower_toplevel_stmt(SL *sl, Form *f) {
+    Span sp = f->span;
+    Form *thunk = Ln(sl, sp, 3, Sym(sl, sp, sl->s_lambda), Ln(sl, sp, 0), f);
+    return lower(sl, Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-toplevel__")), thunk));
+}
+
 static void lower_toplevel(SL *sl, Form *f, FB *out) {
     Span sp = f->span;
     {
@@ -3323,6 +3343,34 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
          * path, like every other Scheme procedure value. */
         if (init->tag == F_SYM && !is_mut(sl, name))
             init = Ln(sl, sp, 3, Sym(sl, sp, I(sl, "::")), init, Sym(sl, sp, sl->t_any));
+        if (sl->toplevel_expr_seen && out != &sl->lib_body) {
+            /* toplevel-def-initializers-run-before-toplevel-expressions: a
+             * define AFTER the program's first top-level expression.  Its
+             * initializer must run in source order (R7RS 5.1), but a
+             * module-level `def`'s initializers all run before the program
+             * body (`__tur_module_def_init`).  So the def is `^deferred-init`:
+             * it declares the global with the initializer's own static type
+             * (a seam value keeps its `(Vec A)`, which an `any` round trip
+             * cannot ground back -- saffron-open-generic-result-not-grounded),
+             * and the initializer runs where the define stood, as the
+             * statement `(set! name (__tur-deferred-init__ name))` -- in
+             * order with its neighbours, under its own prompt like every
+             * other statement, on both back ends.  A define before any
+             * expression keeps the plain `def`: those already run in source
+             * order among themselves. */
+            FB d = {0};
+            fb_push(&d, Sym(sl, sp, sl->t_def));
+            fb_push(&d, Sym(sl, sp, sl->t_mut));
+            fb_push(&d, Sym(sl, sp, I(sl, "^deferred-init")));
+            fb_push(&d, Sym(sl, sp, name));
+            if (is_mut(sl, name)) fb_push(&d, AnyAnn(sl, sp));
+            fb_push(&d, init);
+            fb_push(out, fb_list(sl, &d, sp));
+            fb_push(out, lower_toplevel_stmt(sl,
+                Ln(sl, sp, 3, Sym(sl, sp, sl->s_set), Sym(sl, sp, name),
+                   Ln(sl, sp, 2, Sym(sl, sp, I(sl, "__tur-deferred-init__")), Sym(sl, sp, name)))));
+            return;
+        }
         if (is_mut(sl, name)) {
             fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_def), Sym(sl, sp, sl->t_mut),
                             Sym(sl, sp, name), AnyAnn(sl, sp), init));
@@ -3403,7 +3451,9 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
         f->as.list.items[1]->as.list.len >= 1 && is_sym(f->as.list.items[1]->as.list.items[0], sl->s_main) &&
         f->as.list.items[1]->as.list.len == 1)
         sl->user_main = true;
-    Form *lowered = lower(sl, f);
+    /* A top-level expression of the program (not of a library body): every
+     * define after it runs its initializer in order -- see the define arm. */
+    if (out != &sl->lib_body) sl->toplevel_expr_seen = true;
     /* R9 / r7rs-repl-toplevel-expression-value-not-widened: at the REPL
      * prompt (a synthetic `<eval>` source, the user's lines after the pinned
      * preload) a top-level expression's value is what the prompt echoes, and
@@ -3418,10 +3468,18 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
         bool turmeric_form = f->tag == F_LIST && f->as.list.len > 0 && f->as.list.items[0]->tag == F_SYM &&
                              tur_name_is_reserved_special_form(f->as.list.items[0]->as.sym->name) &&
                              !is_scheme_syntax_name(f->as.list.items[0]->as.sym->name);
-        if (at_prompt && !turmeric_form)
-            lowered = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-repl-value__")), lowered);
+        Form *lowered;
+        if (at_prompt) {
+            lowered = lower(sl, f);
+            if (!turmeric_form)
+                lowered = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-repl-value__")), lowered);
+        } else if (out != &sl->lib_body && !turmeric_form) {
+            lowered = lower_toplevel_stmt(sl, f);
+        } else {
+            lowered = lower(sl, f);
+        }
+        fb_push(out, lowered);
     }
-    fb_push(out, lowered);
 }
 
 /* ---------------------------------------------------------------------------

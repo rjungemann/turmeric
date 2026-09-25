@@ -17,6 +17,32 @@ All notable changes to Turmeric are documented here.
   one is a redundant hint. `tests/run-r7rs-import.sh` covers a `.scm`
   program importing a `.scm` library on both back ends.
 
+### Fixed
+
+- **Top-level `def` initializers run in source order, compiled.** A
+  top-level `def` whose initializer has an effect used to run in
+  `__tur_static_init`, before every top-level expression; the interpreter
+  ran the forms in order. With no user `main` the initializer is now a
+  statement of the synthesized `int main()` at its source position, and the
+  synthesized-main fold steps aside for a `def` after a statement whose
+  initializer is a call. A `#lang r7rs` program with imports (a module,
+  whose `def` initializers all precede its body) declares a `define` after
+  the first expression unset and assigns it in the body. Fixtures
+  `toplevel-def-init-order` (both back ends) and `r7rs-toplevel-order`;
+  archived: toplevel-def-initializers-run-before-toplevel-expressions.
+  Found on the way: a Scheme procedure body cannot name a top-level
+  variable defined after it (r7rs-procedure-body-forward-reference).
+- **`#lang r7rs`: each top-level form runs under its own prompt.** A
+  continuation captured in a top-level form was the rest of the program
+  (the stack image reached `main`'s frame, or the interpreter's loop over
+  the forms), so re-entering it from a later form re-ran the forms after
+  it. The lowering now wraps every statement of a program in
+  `r7rs-toplevel__`, whose frame bounds a capture and, in the interpreter,
+  the drive snapshot; a re-entry finishes the captured form and continues
+  after the invoking one, as chibi and Racket do. Fixture
+  `r7rs-toplevel-reentry`; `r7rs-continuation-after-return` pins the
+  delimited answer. Archived: r7rs-toplevel-reentry-reruns-forms.
+
 ### Changed
 
 - **Every `cc` over emitted C runs with `-Wno-misleading-indentation`.**

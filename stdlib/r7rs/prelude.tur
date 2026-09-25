@@ -1798,6 +1798,11 @@
   extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
   #endif
   static _Thread_local unsigned char *r7k_base_tls;
+  // r7rs-toplevel-reentry-reruns-forms: the top of the current top-level
+  // form's frames (r7rs-toplevel__ sets it), which bounds a capture in place
+  // of the thread's stack base: a continuation is the rest of the FORM, not
+  // the rest of the program.
+  static _Thread_local unsigned char *r7k_form_base;
   static unsigned char *r7k_stack_base(void) {
       if (r7k_base_tls) return r7k_base_tls;
   #if defined(__GLIBC__)
@@ -1823,7 +1828,7 @@
   // so under the r7rs-gc experiment the image is on the collected heap and
   // scanned -- a continuation keeps everything its stack points at alive.
   static int r7k_measure(r7k_cont *c, unsigned char *mark) {
-      unsigned char *base = r7k_stack_base();
+      unsigned char *base = (r7k_form_base && r7k_form_base > mark) ? r7k_form_base : r7k_stack_base();
       unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
       if (!base || base <= lo) return 0;
       c->lo = lo;
@@ -1905,6 +1910,28 @@
 ;;; r7rs-cont-delivered__ -- the value an invoked continuation hands its
 ;;; call/cc; set just before the jump, read just after it.
 (def ^mut r7rs-cont-delivered__ : any (R7rsNull 0))
+
+;;; r7rs-run-toplevel-thunk -- internal: call a top-level form's thunk.  Its
+;;; own function so the runner below can call it by C name from inline C.
+(defn r7rs-run-toplevel-thunk [thunk] : nil (thunk) nil)
+;;; r7rs-toplevel__ -- internal: run one top-level form under its own prompt
+;;; (r7rs-toplevel-reentry-reruns-forms).  The Scheme lowering wraps every
+;;; statement of a program in it.  A continuation captured inside the form
+;;; copies the stack only up to this frame's mark (r7k_measure), so a
+;;; re-entry from a later form restores this form's frames over that form's
+;;; -- every statement is called from the same depth, so the mark is the
+;;; same address for each -- finishes this form, and returns into the
+;;; runner frame of the INVOKING form, which carries on after it: the way
+;;; chibi's loader and Racket's per-form prompt behave.
+(defn r7rs-toplevel__ [thunk] : nil
+  ```c
+  volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
+  mark[0] = 0;
+  unsigned char *saved = r7k_form_base;
+  r7k_form_base = (unsigned char *)mark;
+  __TUR_CNAME_r7rs-run-toplevel-thunk__(thunk);
+  r7k_form_base = saved;
+  ```)
 
 ;;; r7rs-wind-depth__ -- internal: a wind stack's length.
 (defn r7rs-wind-depth__ [l] : int (if (r7rs-null? l) 0 (+ 1 (r7rs-wind-depth__ (r7rs-cdr l)))))

@@ -1,5 +1,22 @@
 # Top-level `def` initializers run before every top-level expression (compiled)
 
+> **RESOLVED 2026-09-25.** Every top-level form runs in source order on
+> the compiled back end, as it always did under the interpreter. Two
+> pieces: (1) with no user `main`, a top-level `def`'s initializer is a
+> statement of the synthesized `int main()` at its source position,
+> interleaved with the top-level expressions (`emit_module.c`, the EX_DEF
+> arm of the file-scope pass; `__tur_module_def_init` keeps only the
+> user-has-main case), and the synthesized-main fold (`elab_toplevel.c`)
+> steps aside for a `def` after a statement whose initializer is a call, so
+> that path is the one such a program takes; (2) a `#lang r7rs` program with
+> imports lowers to a module whose `def` initializers all run before its
+> body, so the Scheme lowering declares a `define` after the first
+> expression unset (`(def ^mut x : any (r7rs-void))`) and assigns it in the
+> body (`(set! x init)`, in order with its neighbours). Pinned by
+> `tests/fixtures/toplevel-def-init-order` (both back ends, via
+> `run-turi.sh` too) and `tests/fixtures/r7rs-toplevel-order`. The repro
+> below prints `one two three 2` compiled.
+
 **Severity:** medium. A compiled/interpreted divergence in evaluation ORDER,
 silent on both sides. It matters as soon as an initializer has an effect --
 under `#lang r7rs` (r7rs-lang-plan R8) that is any `(define p (open-...-file

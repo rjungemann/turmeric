@@ -2929,6 +2929,10 @@ typedef struct R7kCont {
     TuriContState *state;
 } R7kCont;
 static _Thread_local unsigned char *r7k_base_tls;
+/* r7rs-toplevel-reentry-reruns-forms: the top of the current top-level
+ * form's frames (r7rs-toplevel__ below sets it), which bounds a capture in
+ * place of the thread's stack base.  See the prelude's twin. */
+static _Thread_local unsigned char *g_r7k_form_base;
 static unsigned char *r7k_stack_base(void) {
     if (r7k_base_tls) return r7k_base_tls;
 #if defined(__GLIBC__)
@@ -2950,7 +2954,8 @@ static void r7k_copy(unsigned char *dst, const unsigned char *src, size_t n) {
     for (size_t i = 0; i < n / sizeof(uintptr_t); i++) d[i] = s[i];
 }
 static int r7k_snapshot(R7kCont *c, unsigned char *mark) {
-    unsigned char *base = r7k_stack_base();
+    unsigned char *base = (g_r7k_form_base && g_r7k_form_base > mark)
+                          ? g_r7k_form_base : r7k_stack_base();
     unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
     if (!base || base <= lo) return 0;
     c->lo  = lo;
@@ -3001,6 +3006,28 @@ static TuriValue native_r7rs_cont_resumed(TuriEnv *env, TuriValue *a, uint32_t n
 static TuriValue native_r7rs_cont_null(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     return turi_bool(r7rs_arg_int(a, n, 0) == 0);
+}
+/* r7rs-toplevel__ -- run one top-level form's thunk under its own prompt.
+ * A continuation captured inside it copies the stack only up to this
+ * frame's mark, and the drive snapshot stops at this drive, so a re-entry
+ * from a later form finishes this form and then continues after the form
+ * that invoked it (chibi, Racket).  Every top-level form of a Scheme
+ * program is evaluated from the same C depth -- the interpreter's loop over
+ * the forms, or a module main's `do` -- so the mark is at the same address
+ * for every form, and a restored image lands where it was taken. */
+static TuriValue native_r7rs_toplevel(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1) return turi_error("r7rs-toplevel__: expected a thunk");
+    volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
+    mark[0] = 0;
+    unsigned char *saved_base = g_r7k_form_base;
+    void *saved_boundary = turi_cont_set_drive_boundary(turi_cont_drive_mark());
+    g_r7k_form_base = (unsigned char *)mark;
+    TuriValue r = turi_call(env, a[0], NULL, 0);
+    g_r7k_form_base = saved_base;
+    turi_cont_set_drive_boundary(saved_boundary);
+    if (turi_is_error(r)) return r;
+    return turi_nil();
 }
 static TuriValue native_r7rs_cont_restore(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -4055,6 +4082,7 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-cont-resumed?__", native_r7rs_cont_resumed,  NULL);
     turi_env_register_native(env, "r7rs-cont-null?__",    native_r7rs_cont_null,     NULL);
     turi_env_register_native(env, "r7rs-cont-restore__",  native_r7rs_cont_restore,  NULL);
+    turi_env_register_native(env, "r7rs-toplevel__",       native_r7rs_toplevel,      NULL);
     /* r7rs-lang-plan T4: stdlib/r7rs/eval.tur. */
     turi_env_register_native(env, "r7rs-eval-c-eval__",             native_r7rs_eval_c_eval,             NULL);
     turi_env_register_native(env, "r7rs-eval-c-load__",             native_r7rs_eval_c_load,             NULL);

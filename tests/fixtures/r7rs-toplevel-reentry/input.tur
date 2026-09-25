@@ -1,0 +1,24 @@
+#lang r7rs
+;; r7rs-toplevel-reentry-reruns-forms: each top-level form runs under its
+;; own prompt (the lowering's r7rs-toplevel__), so a continuation captured in
+;; one is the rest of THAT form.  Re-entering it from a later form finishes
+;; the earlier form and then carries on after the form that invoked it --
+;; chibi and Racket print 1, 2, not reached.  Before, the continuation was
+;; the rest of the program, and this looped forever.
+(import (scheme base) (scheme write))
+(define (show x) (display x) (newline))
+(define saved #f)
+(show (call/cc (lambda (k) (set! saved k) 1)))
+(saved 2)
+(show "not reached")
+;; The same across a define after a statement (its initializer is a
+;; statement of the body too) and with dynamic-wind's before/after thunks.
+(define k2 #f)
+(define trace '())
+(define v (dynamic-wind
+            (lambda () (set! trace (cons 'in trace)))
+            (lambda () (call/cc (lambda (k) (set! k2 k) 'first)))
+            (lambda () (set! trace (cons 'out trace)))))
+(show v)
+(if (eq? v 'first) (k2 'second))
+(show (reverse trace))

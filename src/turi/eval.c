@@ -6713,6 +6713,20 @@ typedef struct DriveReg {
     DriveCont       *inl;
 } DriveReg;
 static _Thread_local DriveReg *g_drive_regs;
+/* r7rs-toplevel-reentry-reruns-forms: the drive the current top-level form
+ * runs under (the R7RS prelude's r7rs-toplevel__ native sets it).  A capture
+ * snapshots only the drives deeper than it: the outer drives -- the loop over
+ * the program's forms, a module main's `do` -- are not part of a
+ * continuation, so a re-entry finishes the captured form and continues after
+ * the form that invoked it, not after the captured one. */
+static _Thread_local DriveReg *g_drive_boundary;
+
+void *turi_cont_drive_mark(void) { return g_drive_regs; }
+void *turi_cont_set_drive_boundary(void *b) {
+    void *prev = g_drive_boundary;
+    g_drive_boundary = (DriveReg *)b;
+    return prev;
+}
 
 typedef struct { DriveCont **pst; size_t len, cap; DriveCont *copy; } DriveSnap;
 
@@ -6767,12 +6781,12 @@ TuriContState *turi_cont_state_capture(TuriEnv *env) {
 #endif
     s->current_gen        = g_current_gen;
     s->drive_regs         = g_drive_regs;
-    for (DriveReg *r = g_drive_regs; r; r = r->prev)
+    for (DriveReg *r = g_drive_regs; r && r != g_drive_boundary; r = r->prev)
         if (*r->pst != r->inl) s->n_drives++;
     if (s->n_drives) {
         s->drives = (DriveSnap *)calloc(s->n_drives, sizeof(DriveSnap));
         size_t k = 0;
-        for (DriveReg *r = g_drive_regs; r; r = r->prev) {
+        for (DriveReg *r = g_drive_regs; r && r != g_drive_boundary; r = r->prev) {
             if (*r->pst == r->inl) continue;
             DriveSnap *d = &s->drives[k++];
             d->pst  = r->pst;
@@ -10823,7 +10837,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Def (top-level binding) ---------------------------------------- */
     case EX_DEF: {
-        TuriValue v = eval_expr(env, frame, e->as.def_.init);
+        /* A `^deferred-init` def (toplevel-def-initializers-run-before-
+         * toplevel-expressions) declares only; its initializer runs where
+         * the program's `(__tur-deferred-init__ name)` stands. */
+        TuriValue v = e->as.def_.init ? eval_expr(env, frame, e->as.def_.init) : turi_nil();
         if (turi_is_error(v) || env_signaled(env)) return v;
         turi_env_set(env, e->as.def_.binding->name->name, v);
         return v;

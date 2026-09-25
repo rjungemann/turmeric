@@ -237,6 +237,12 @@ typedef struct Elab {
     const Symbol *sym_caret_atomic;
     /* G4b (mutable-globals-plan §4.4, §11.4): `^thread-local` on a `def`. */
     const Symbol *sym_caret_thread_local;   /* ^relevant -- relevant value annotation */
+    /* toplevel-def-initializers-run-before-toplevel-expressions: `^deferred-init`
+     * on a `def` elaborates the initializer for the binding's TYPE but does not
+     * run it there; `(__tur-deferred-init__ name)` later in the program is the
+     * initializer, where the Scheme lowering assigns it in the body. */
+    const Symbol *sym_caret_deferred_init;
+    const Symbol *sym_deferred_init;
     /* LB1: ^borrow -- non-consuming parameter annotation for linear/affine handles */
     const Symbol *sym_caret_borrow;     /* ^borrow -- borrow (read without consuming) annotation */
     const Symbol *sym_caret_fat;        /* ^fat -- fat-closure-consuming parameter (A#1) */

@@ -1,0 +1,15 @@
+;; toplevel-def-initializers-run-before-toplevel-expressions: a top-level
+;; `def` whose initializer has an effect runs at its source position, after
+;; the statements before it and before the ones after -- the order the
+;; interpreter always had.  Compiled, every initializer used to run in
+;; __tur_static_init ahead of the first top-level expression, so this printed
+;; "two" first.  The same program runs under tests/run-turi.sh, where both
+;; back ends must agree.
+(println "one")
+(def x (do (println "two") 2))
+(println "three")
+(println x)
+(def y (do (println "four") (+ x 40)))
+(println y)
+(def z (fn [] : int (* y 2)))
+(println (z))

@@ -396,6 +396,11 @@ typedef struct TuriContState TuriContState;
 void           turi_cont_pin(void);
 TuriContState *turi_cont_state_capture(TuriEnv *env);
 void           turi_cont_state_restore(TuriEnv *env, const TuriContState *s);
+/* The per-form prompt (r7rs-toplevel-reentry-reruns-forms): the drive the
+ * current top-level form runs under, and the boundary a capture stops its
+ * drive snapshot at.  `set` returns the previous boundary. */
+void          *turi_cont_drive_mark(void);
+void          *turi_cont_set_drive_boundary(void *b);
 
 /* Run the cooperative event loop until all async fibers and timers complete. */
 void turi_run_event_loop(TuriEnv *env);
