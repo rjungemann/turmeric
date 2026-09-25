@@ -217,6 +217,7 @@ The gate (4.1):
   facts.
 - This plan moved to docs/archive/, and every reference to it followed.
 - The gate keeps every case, and its CMake target keeps the 720 s timeout.
+  The whole gate, 64 cases, takes 194 s on four cores.
 - CHANGELOG entries cover stages A and B, then C and D.
 
 ## 0. The shape of the plan

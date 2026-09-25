@@ -15,9 +15,12 @@
     pthread_once(&lifec_once, lifec_key_init);
     pthread_setspecific(lifec_key, (void *)(intptr_t)m);
     ```)
+  ;; The carrier cast, not (__TUR_RET__): the emitter declares this function
+  ;; int64_t while __TUR_RET__ names the map's pointer type here
+  ;; (docs/reported/tur-ret-disagrees-with-inline-c-signature.md).
   (defn kept-map [] : (Map int any)
     ```c
-    return (__TUR_RET__)(intptr_t)pthread_getspecific(lifec_key);
+    return (int64_t)(intptr_t)pthread_getspecific(lifec_key);
     ```)
   (defn keep! [v : any] : nil
     (let [m : (Map int any) (map-new)]
