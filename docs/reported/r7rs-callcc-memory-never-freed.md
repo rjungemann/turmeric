@@ -51,13 +51,17 @@ stops freeing that runtime memory.
 `guard`, `raise` and the eval bridge use the one-shot escape
 `r7rs-call/ec__`, which copies nothing and pins nothing.
 
-## The experiment (`--enable=r7rs-gc`)
+## Compiled: resolved by the collector (2026-09-25)
 
-Under the r7rs-gc experiment ([docs/upcoming/r7rs-gc-plan.md](../upcoming/r7rs-gc-plan.md))
-the compiled image is a collected object: it is scanned while a continuation
-refers to it and reclaimed after, and the pinned DK frames are reclaimed the
-same way. The repro above runs in 10 MB (from 527 MB with today's build,
-0.13 s from 0.40 s). The interpreter is unchanged, so this report stays open.
+The r7rs-gc collector ([docs/archive/r7rs-gc-plan.md](../archive/r7rs-gc-plan.md))
+graduated and is on by default for a compiled `#lang r7rs` program: the
+image is a collected object, scanned while a continuation refers to it and
+reclaimed after, and the pinned DK frames are reclaimed the same way. The
+repro above runs in 10 MB compiled (from 527 MB, 0.13 s from 0.40 s). **What
+stays open is the interpreter**, which is unchanged: `tur --interpret` keeps
+the image and the pinned driver temporaries for the life of the process
+(120 KB a call in the table above). The fix directions below are the
+interpreter's now.
 
 ## Fix directions
 

@@ -360,14 +360,40 @@ changes nothing on the Turmeric side. A Turmeric module `cast`ing a Scheme
 library's string result to `cstr` gets the same copy.
 `tests/run-r7rs-import.sh` pins both directions on both back ends.
 
+## Memory
+
+A compiled program's allocator is a conservative mark-sweep collector
+(docs/archive/r7rs-gc-plan.md): every pair, vector, string, record,
+procedure, `call/cc` image and runtime record the program makes is reclaimed
+once nothing reaches it. A loop that builds a dead four-element list a
+million times peaks at 10 MB; a hundred thousand escaping `call/cc`s, the
+same. Values you keep in Turmeric maps or `rc<T>` cells through the
+`(turmeric ...)` seam are seen through the node that holds them. A
+collection runs when 8 MiB, or twice the live size, has been allocated since
+the last one; `TUR_GC_TORTURE=N` collects every N allocations, for shaking
+out a missing root.
+
+What it does not cover:
+
+- **Threads.** The collector is single-threaded. A program that starts a
+  thread (through the seam: `thread-spawn-fn`, `session-spawn`, a task
+  group) stops at the start with the reason and exits 70. Build such a
+  program without the collector: `TUR_R7RS_GC=0 tur build prog.tur`, or
+  `tur --no-r7rs-gc build prog.tur`. Its data then stays allocated until the
+  process exits, the way a Turmeric `:heap` box does.
+- **Other builds.** `--shared`, a project build (`tur build <dir>`), `tur
+  jit` and the interpreter (`tur --interpret`) do not use it; the
+  interpreter keeps its values for the life of the process by design.
+- **Other platforms.** Linux (glibc) and macOS. Elsewhere the program
+  allocates from libc and nothing is collected.
+- **Memory libc allocates**, and the backtracking trail's arrays (`stdlib/
+  trail`), are not scanned: a Scheme value stored only in a `bt` cell
+  through the seam is not seen.
+
 ## Where it differs from R7RS
 
 - **String literals are immutable.** R7RS allows this. See Lists,
   vectors, strings above.
-- **`map` and `for-each` take at most four sequences.** A fifth is an error
-  naming the limit, on both back ends, and `vector-map`, `vector-for-each`,
-  `string-map` and `string-for-each` share it. Past four, walk the sequences
-  yourself.
 - **`define-record-type` is a top-level or library-body form.** R7RS counts it
   a definition, so it may open any body; here one inside a `lambda` or `let`
   body is an error naming the restriction. Define the type at the top level
@@ -402,29 +428,6 @@ library's string result to `cstr` gets the same copy.
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.
-- **A procedure body cannot name a variable defined after it.**
-  `(define (f) y)` before `(define y 1)` is "unbound symbol 'y'" on both
-  back ends; define the variable first, or read it through a procedure
-  defined after it. (Top-level forms otherwise run in source order on both
-  back ends, a `define` with an effectful initializer included.)
-- **Data is never freed.** There is no collector on by default: every pair,
-  vector, string, record and procedure a program makes stays allocated until
-  it exits, so a long-running program's memory only grows -- a loop that
-  builds a dead four-element list a million times reaches a few hundred
-  megabytes. Two things cost more per operation than the data does: an
-  escaping `call/cc` keeps its stack image, so a hundred thousand of them also
-  reach a few hundred megabytes, and a `raise` that a `guard` catches leaves
-  about a kilobyte of runtime records. Scratch memory the runtime makes for
-  one call is freed, on all but a few prelude paths.
-  An experimental collector fixes all of that for a single-file compiled
-  program on Linux and macOS: build with `tur --enable=r7rs-gc build prog.tur`
-  and both of those loops run in 10 MB. Values you keep in Turmeric maps or
-  `rc<T>` cells through the `(turmeric ...)` seam are seen. It is
-  single-threaded: a program that starts a thread under the flag stops at the
-  start with the reason (exit 70), so build one that needs threads without the
-  flag. `--shared`, a project build, `tur jit` and the interpreter ignore it --
-  as does every platform but Linux and macOS, where the flag is accepted and
-  collects nothing. See docs/upcoming/r7rs-gc-plan.md.
 - **A loop through a procedure variable needs the C compiler's tail call.** A
   procedure that calls another through a *variable* rather than by name, in a
   non-tail position -- which is what `for-each`, `map`, `member` and a

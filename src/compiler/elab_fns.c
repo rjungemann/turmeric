@@ -11570,8 +11570,13 @@ Expr *elab_def(Elab *e, const Form *call) {
                   kw, kw);
         return NULL;
     }
+    /* r7rs-procedure-body-forward-reference: the binding Pass 1 declared
+     * for this def, if any (elab_pre_declare_any_mut_def); the bodies above
+     * already refer to it, so it is filled in below rather than shadowed. */
+    Binding *fwd = NULL;
     {
         Binding *prior = scope_lookup(e->scope, name_f->as.sym);
+        if (prior && prior->is_forward_def && prior->name == name_f->as.sym) { fwd = prior; prior = NULL; }
         /* PS4: an earlier REPL/playground turn's global is replaced -- the new
          * binding below shadows it -- so re-running a program that defines
          * `x` does not fail on the `x` the last run left.  A duplicate within
@@ -11732,7 +11737,15 @@ Expr *elab_def(Elab *e, const Form *call) {
         while (ai && ai->kind == EX_ASCRIBE) ai = ai->as.ascribe_.inner;
         if (ai && ai->kind == EX_ASYNC) b->async_payload = &ai->as.async_.payload;
     }
-    scope_add(&e->global, b);
+    if (fwd) {
+        /* The pre-declared binding becomes this one, in place: every
+         * reference elaborated above holds its pointer. */
+        *fwd = *b;
+        fwd->is_forward_def = false;
+        b = fwd;
+    } else {
+        scope_add(&e->global, b);
+    }
 
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;

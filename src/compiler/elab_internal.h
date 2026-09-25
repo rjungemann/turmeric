@@ -1361,6 +1361,7 @@ int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
  * (imported/loaded modules) so bare top-level defns spliced by (load ...) can
  * self/mutually recurse.  A non-defn form is a no-op. */
 void elab_pre_declare_toplevel_defn(Elab *e, Arena *arena, Form *f);
+void elab_pre_declare_any_mut_def(Elab *e, const Form *f);
 /* r7rs-lang-plan R3: full types for a forward decl's compound parameters in a
  * dynamic file (NULL when none); marks the matching arg_kinds slots TY_APP. */
 Type **elab_fwd_param_full_types(Elab *e, Arena *arena, const Form *f,

@@ -2787,12 +2787,16 @@ differences, as reports"):
   synthesized main at its position, and a Scheme module program assigns
   such a define in its body
   ([archived](../archive/toplevel-def-initializers-run-before-toplevel-expressions.md)).
-- **A procedure body cannot name a top-level variable defined after it**
-  ([r7rs-procedure-body-forward-reference](../reported/r7rs-procedure-body-forward-reference.md);
-  found writing the fixture for the item above).
-- **`map` and `for-each` take at most four sequences**, the `-map`/`-for-each`
-  pair over vectors and strings with them
-  ([r7rs-map-for-each-at-most-four-sequences](../reported/r7rs-map-for-each-at-most-four-sequences.md)).
+- ~~**A procedure body cannot name a top-level variable defined after it**~~
+  -- resolved 2026-09-25: such a define is `^mut : any` and the elaborator
+  pre-declares that shape ahead of the bodies
+  ([archived](../archive/r7rs-procedure-body-forward-reference.md); found
+  writing the fixture for the item above).
+- ~~**`map` and `for-each` take at most four sequences**, the `-map`/`-for-each`
+  pair over vectors and strings with them~~ -- resolved 2026-09-25: the cap
+  is the shim arity, eight, on both back ends
+  ([archived](../archive/r7rs-map-for-each-at-most-four-sequences.md)); past
+  eight is the `apply` bullet's limit.
 - **`define-record-type` is not an internal definition** -- top level or a
   library body only
   ([r7rs-define-record-type-not-an-internal-definition](../reported/r7rs-define-record-type-not-an-internal-definition.md)).
@@ -2808,11 +2812,14 @@ differences, as reports"):
   ~~A top-level re-entry re-runs the forms after it~~ -- resolved 2026-09-25:
   each top-level form runs under its own prompt
   ([archived](../archive/r7rs-toplevel-reentry-reruns-forms.md)).
-- **A Scheme program's data is never freed**
-  ([r7rs-heap-data-never-reclaimed](../reported/r7rs-heap-data-never-reclaimed.md),
-  with the `call/cc` images, the caught-`raise` records and the leftover
-  prelude scratch as their own reports), answered for a single-file compiled
-  Linux build by `--enable=r7rs-gc`.
+- ~~**A Scheme program's data is never freed**~~ -- resolved 2026-09-25 for
+  the compiled back end: the r7rs-gc collector graduated and is the
+  allocator of every compiled single-unit program on Linux and macOS
+  ([archived plan](../archive/r7rs-gc-plan.md); `TUR_R7RS_GC=0` or
+  `--no-r7rs-gc` for a program that starts threads). The interpreter keeps
+  its values for the life of the process by design; the `call/cc` images'
+  interpreter half stays open
+  ([r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md)).
 - ~~**`command-line` starts with `"tur"`**, not the program's own path~~
   -- resolved 2026-09-25 through a pre-declared `*argv0*` global
   ([archived](../archive/r7rs-command-line-first-element-is-tur.md)).

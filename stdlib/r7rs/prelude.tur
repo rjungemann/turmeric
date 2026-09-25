@@ -251,13 +251,19 @@
     (let [h (R7rsPair (r7rs-cdr (r7rs-car ls)) r7rs-null-value__)]
       (r7rs-cdrs-go__ (r7rs-cdr ls) h)
       h)))
+;;; r7rs-head-of__ -- internal: the car of the k-th (0-based) list of ls.
+(defn r7rs-head-of__ [ls k : int] : any
+  (if (= k 0) (r7rs-caar ls) (r7rs-head-of__ (r7rs-cdr ls) (- k 1))))
 ;;; The many-list map and for-each call f on the heads of the lists INSIDE
 ;;; the loop body (T8).  Calling it through r7rs-apply-list__, or any helper,
 ;;; made the step a call into a separate CPS procedure that resumed the loop
 ;;; from inside its own frame, so every element nested a C frame and a
 ;;; million-element (map + a b) overflowed at -O2.  n is the number of lists:
-;;; 1 (string-map and vector-map come here with one) to 4, the dynamic call's
-;;; argument limit (apply's too).
+;;; 1 (string-map and vector-map come here with one) to 8, the dynamic call's
+;;; argument limit (TUR_FAT_SHIM_MAX_ARITY; apply's is the same, and past it
+;;; apply packs the rest as a list).  Only the CALL of f is spelled per arity;
+;;; the heads past the fourth come through r7rs-head-of__, an argument, not a
+;;; resume point (r7rs-map-for-each-at-most-four-sequences).
 (defn r7rs-mapn-go__ [f ls n : int acc] : any
   (if (r7rs-any-null__ ls)
     acc
@@ -269,7 +275,19 @@
                   (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)))
                   (if (= n 4)
                     (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls)))
-                    (r7rs-fail-any__ "map: more than 4 lists is not supported yet (r7rs-lang-plan R6)")))))]
+                    (if (= n 5)
+                      (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls))
+                         (r7rs-head-of__ ls 4))
+                      (if (= n 6)
+                        (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls))
+                           (r7rs-head-of__ ls 4) (r7rs-head-of__ ls 5))
+                        (if (= n 7)
+                          (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls))
+                             (r7rs-head-of__ ls 4) (r7rs-head-of__ ls 5) (r7rs-head-of__ ls 6))
+                          (if (= n 8)
+                            (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls))
+                               (r7rs-head-of__ ls 4) (r7rs-head-of__ ls 5) (r7rs-head-of__ ls 6) (r7rs-head-of__ ls 7))
+                            (r7rs-fail-any__ "map: more than 8 lists is not supported (the dynamic call's argument limit)")))))))))]
       (r7rs-mapn-go__ f (r7rs-cdrs__ ls) n (R7rsPair x acc)))))
 (defn r7rs-mapn__ [f ls] : any (r7rs-reverse (r7rs-mapn-go__ f ls (r7rs-length ls) r7rs-null-value__)))
 (defn r7rs-for-eachn-go__ [f ls n : int] : bool
@@ -283,7 +301,19 @@
               (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)))
               (if (= n 4)
                 (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls)))
-                (r7rs-fail-any__ "for-each: more than 4 lists is not supported yet (r7rs-lang-plan R6)")))))
+                (if (= n 5)
+                  (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls))
+                     (r7rs-head-of__ ls 4))
+                  (if (= n 6)
+                    (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls))
+                       (r7rs-head-of__ ls 4) (r7rs-head-of__ ls 5))
+                    (if (= n 7)
+                      (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls))
+                         (r7rs-head-of__ ls 4) (r7rs-head-of__ ls 5) (r7rs-head-of__ ls 6))
+                      (if (= n 8)
+                        (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls))
+                           (r7rs-head-of__ ls 4) (r7rs-head-of__ ls 5) (r7rs-head-of__ ls 6) (r7rs-head-of__ ls 7))
+                        (r7rs-fail-any__ "for-each: more than 8 lists is not supported (the dynamic call's argument limit)")))))))))
         (r7rs-for-eachn-go__ f (r7rs-cdrs__ ls) n))))
 (defn r7rs-for-eachn__ [f ls] : nil (r7rs-for-eachn-go__ f ls (r7rs-length ls)) nil)
 ;;; r7rs-map -- (map f list1 list2 ...): R7: any number of lists, stopping at
@@ -1966,9 +1996,9 @@
 ;;; (r7rs-toplevel-reentry-reruns-forms).  The Scheme lowering wraps every
 ;;; statement of a program in it.  A continuation captured inside the form
 ;;; copies the stack only up to the mark r7k_run_form takes (r7k_measure),
-;;; so a re-entry from a later form restores this form's frames over that
-;;; form's -- every statement is called from the same depth, so the mark is
-;;; the same address for each -- finishes this form, and returns into the
+;;; so a re-entry from a later form restores this form's frames over that form's
+;;; -- every statement is called from the same depth, so the mark is the
+;;; same address for each -- finishes this form, and returns into the
 ;;; runner frame of the INVOKING form, which carries on after it: the way
 ;;; chibi's loader and Racket's per-form prompt behave.  The mark lives in
 ;;; r7k_run_form, reached through a volatile function pointer so that no

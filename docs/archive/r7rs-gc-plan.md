@@ -1,22 +1,24 @@
 # A collector for compiled `#lang r7rs` programs (`--enable=r7rs-gc`)
 
-Status: **prototype, behind `--enable=r7rs-gc`** (EXPERIMENTS row `r7rs-gc`,
-introduced 0.52.0). Answers
-[r7rs-heap-data-never-reclaimed](../reported/r7rs-heap-data-never-reclaimed.md)
-for the compiled back end, most of
-[r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md),
-and, on the compiled back end,
-[r7rs-caught-raise-leaks-runtime-records](../reported/r7rs-caught-raise-leaks-runtime-records.md)
-and [r7rs-remaining-scratch-leaks](../reported/r7rs-remaining-scratch-leaks.md)
+Status: **graduated 2026-09-25** -- the collector is the allocator of every
+compiled single-unit `#lang r7rs` program on Linux and macOS (`g_opt_r7rs_gc`
+defaults true; `--enable=r7rs-gc` is a no-op on the GRADUATED list).
+`TUR_R7RS_GC=0`, or `--no-r7rs-gc` on the build, builds a program without
+it, which is what a program that starts threads does. Answered
+[r7rs-heap-data-never-reclaimed](r7rs-heap-data-never-reclaimed.md)
+for the compiled back end, the compiled half of
+[r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md)
+(its interpreter half stays open), and, on the compiled back end,
+[r7rs-caught-raise-leaks-runtime-records](r7rs-caught-raise-leaks-runtime-records.md)
+and [r7rs-remaining-scratch-leaks](r7rs-remaining-scratch-leaks.md)
 (a record or a scratch string nobody frees is garbage like any other).
-All four reports stay open until this graduates.
 
 Progress since the first cut (2026-09-25, second pass): the runtime archive
 allocates through the collector, so a Scheme value kept in a Turmeric map or
-`rc<T>` cell is seen; a thread start under the flag is refused with the
+`rc<T>` cell is seen; a thread start under the collector is refused with the
 reason; the collector has its macOS roots, and CI's `macos-latest` leg ran
 `tur_r7rs_gc` green on them (105 s, run 36113659875), which was the first
-evidence either way. What remains is section 5.
+evidence either way. Third pass, the same day: default on (section 5).
 
 ## 1. The problem
 
@@ -190,8 +192,14 @@ scan:
 - ~~macOS.~~ Done; the `macos-latest` leg runs `tur_r7rs_gc` green.
 - ~~A decision about threads: refuse the flag in a program that spawns them, or
   stop the world.~~ Refused, at the start site, with the reason.
-- Default on for `#lang r7rs` compiled programs on Linux and macOS (an
+- ~~Default on for `#lang r7rs` compiled programs on Linux and macOS (an
   `--enable=r7rs-gc` reference then a no-op, per the GRADUATED list), with a
   way to build without it for a program that starts threads; and the four
-  reports archived. The interpreter stays as it is
-  (r7rs-callcc-memory-never-freed's interpreter half remains open there).
+  reports archived.~~ Done (third pass): `g_opt_r7rs_gc` defaults true, the
+  `r7rs-gc` row moved to `GRADUATED[]`, `TUR_R7RS_GC=0` / `--no-r7rs-gc`
+  opt out (the thread refusal names them), `tests/run-r7rs-gc.sh` builds
+  its "with" arms bare and its "without" arms under `TUR_R7RS_GC=0`, and
+  the two `r7rs-gc-*` fixtures lost their `flags` file -- every `#lang
+  r7rs` fixture of the ordinary suite now runs under the collector. Three
+  reports archived; r7rs-callcc-memory-never-freed stays open for the
+  interpreter, which is unchanged.

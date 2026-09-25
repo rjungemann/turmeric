@@ -1,5 +1,14 @@
 # `#lang r7rs`: small scratch leaks T8 left in the prelude
 
+**RESOLVED 2026-09-25 (compiled back end).** The r7rs-gc collector graduated
+([r7rs-gc-plan](r7rs-gc-plan.md)): it is the allocator of every compiled
+single-unit `#lang r7rs` program on Linux and macOS, so what this report
+describes is garbage the next collection reclaims. `TUR_R7RS_GC=0` or
+`--no-r7rs-gc` builds without it (a program that starts threads). The
+interpreter keeps its values for the life of the process by design
+(gc-guide). Original report follows.
+
+
 **Severity:** low. A few prelude paths still allocate memory for one call and
 never free it. Each is small per call; the list is here so the next pass
 does not have to re-derive it. Found by r7rs-lang-plan T8's audit, after its
@@ -25,7 +34,7 @@ a caught `raise` leaves
 
 ## The experiment (`--enable=r7rs-gc`)
 
-Under the r7rs-gc experiment ([docs/upcoming/r7rs-gc-plan.md](../upcoming/r7rs-gc-plan.md))
+Under the r7rs-gc experiment ([docs/archive/r7rs-gc-plan.md](r7rs-gc-plan.md))
 a scratch string or vector nobody frees is garbage like any other: the
 compiled program's allocator is the collector, so each site above is
 reclaimed at the next collection. The interpreter is unchanged, and a build

@@ -799,6 +799,55 @@ static void collect_muts(SL *sl, const Form *f) {
     }
 }
 
+/* r7rs-procedure-body-forward-reference: R7RS 5.3.1 lets a procedure body
+ * name a top-level variable whose define comes later in the program, as long
+ * as it is defined by the time the body runs:
+ *
+ *     (define (f) (* y 2))
+ *     (define y 21)
+ *
+ * A `(define (f) ...)` is a defn, which the elaborator pre-declares, but a
+ * plain variable is declared where its `def` stands, so `y` was unbound in
+ * `f`'s body.  This scan finds every top-level variable define that a form
+ * BEFORE it mentions (by name, anywhere but under a quote -- the same
+ * over-approximation the set! scan makes) and marks it a set! target: its
+ * def is then `(def ^mut y : any init)`, the one shape the elaborator's
+ * Pass 1 pre-declares ahead of the bodies (elab_pre_declare_any_mut_def),
+ * on the program and on a library body alike.  The initializer still runs
+ * where the define stands.  A `(define f (lambda ...))` is left alone: it
+ * becomes a defn (the define arm) and forward-references already. */
+static struct SMacro *sr_lookup(SL *sl, const Symbol *s);
+static bool form_mentions_sym_unquoted(const Form *f, const Symbol *s) {
+    if (!f) return false;
+    if (f->tag == F_SYM) return f->as.sym == s;
+    if (f->tag == F_QUOTE) return false;
+    if (f->tag == F_LIST || f->tag == F_VEC || f->tag == F_QUASIQUOTE ||
+        f->tag == F_UNQUOTE || f->tag == F_UNQUOTE_SPLICING)
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            if (form_mentions_sym_unquoted(f->as.list.items[i], s)) return true;
+    return false;
+}
+/* The variable defines of one form (a `define`, or a `begin` of them). */
+static void forward_scan_form(SL *sl, const Form *f, Form *const *before, uint32_t n_before) {
+    if (!f || f->tag != F_LIST) return;
+    if (head_is(f, sl->s_begin)) {
+        for (uint32_t i = 1; i < f->as.list.len; i++) forward_scan_form(sl, f->as.list.items[i], before, n_before);
+        return;
+    }
+    if (!head_is(f, sl->s_define) || f->as.list.len != 3 || f->as.list.items[1]->tag != F_SYM) return;
+    const Form *init = f->as.list.items[2];
+    if (init->tag == F_LIST && init->as.list.len >= 3 && is_sym(init->as.list.items[0], sl->s_lambda) &&
+        !sr_lookup(sl, sl->s_lambda))
+        return;
+    const Symbol *name = f->as.list.items[1]->as.sym;
+    if (is_mut(sl, name)) return;
+    for (uint32_t j = 0; j < n_before; j++)
+        if (form_mentions_sym_unquoted(before[j], name)) { note_mut(sl, name); return; }
+}
+static void note_forward_defs(SL *sl, Form *const *forms, uint32_t n) {
+    for (uint32_t i = 1; i < n; i++) forward_scan_form(sl, forms[i], forms, i);
+}
+
 /* --- renaming -------------------------------------------------------------- */
 
 /* ---- R10: lexical scope (hygiene) ------------------------------------------ */
@@ -3432,6 +3481,7 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
             } else if (head_is(decl, sl->s_import)) {
                 for (uint32_t j = 1; j < decl->as.list.len; j++) lower_import_set(sl, decl->as.list.items[j]);
             } else if (head_is(decl, sl->s_begin)) {
+                note_forward_defs(sl, decl->as.list.items + 1, decl->as.list.len - 1);
                 for (uint32_t j = 1; j < decl->as.list.len; j++) lower_toplevel(sl, decl->as.list.items[j], &sl->lib_body);
             } else if (head_is(decl, sl->s_cond_expand)) {
                 uint32_t n; Form **items;
@@ -4292,6 +4342,15 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
         if (is_scheme_file(forms[i])) collect_muts(&sl, forms[i]);
     note_stdlib_clashes(&sl, forms, n);
     FB out = {0}, sforms = {0};
+    {
+        /* r7rs-procedure-body-forward-reference: the user's forms, in order,
+         * with the prelude's left out. */
+        FB user = {0};
+        for (uint32_t i = 0; i < n; i++)
+            if (is_scheme_file(forms[i]) && !prelude_span(forms[i]->span)) fb_push(&user, forms[i]);
+        note_forward_defs(&sl, user.items, user.n);
+        free(user.items);
+    }
     Span first_sp = SPAN_UNKNOWN;
     bool have_first = false;
     for (uint32_t i = 0; i < n; i++) {

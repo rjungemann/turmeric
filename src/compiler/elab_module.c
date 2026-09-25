@@ -26,6 +26,7 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
         Form *f = items[j];
         if (f->tag != F_LIST || f->as.list.len == 0) continue;
         Form *h = f->as.list.items[0];
+        if (h->tag == F_SYM && h->as.sym == e->sym_def) { elab_pre_declare_any_mut_def(e, f); continue; }
         if (h->tag != F_SYM || h->as.sym != e->sym_defn) continue;
         if (f->as.list.len < 3) continue;
         /* Skip optional #[no-unwind] / #[used] bare attribute symbols

@@ -385,13 +385,6 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.70.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_r7rs },
-    { "r7rs-gc",
-      "a conservative mark-sweep collector for compiled `#lang r7rs` programs",
-      "docs/upcoming/r7rs-gc-plan.md",
-      "0.52.0",                  /* introduced */
-      "0.60.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_r7rs_gc },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -448,6 +441,13 @@ static const char *const GRADUATED[] = {
      * Only `jit-ffi` stays.  It graduated in 0.38.0 -- this line -- so its
      * window has not opened yet; it becomes eligible at 0.39.0. */
     "jit-ffi",       /* graduated 2026-08-21; call-ptr / callback-ptr are ordinary `unsafe` forms (-DTUR_JIT=ON still gates the interpreter path) */
+    /* r7rs-gc GRADUATED 2026-09-25 (introduced 0.52.0, graduated in the same
+     * line) -- the conservative collector is the allocator of every compiled
+     * single-unit `#lang r7rs` program on Linux and macOS (g_opt_r7rs_gc
+     * defaults true; emit_module.c's r7rs_gc_active).  A program that starts
+     * threads opts out with TUR_R7RS_GC=0 or --no-r7rs-gc.  See
+     * docs/archive/r7rs-gc-plan.md.  Eligible to age out at 0.54.0. */
+    "r7rs-gc",       /* graduated 2026-09-25; a compiled #lang r7rs program's allocator is the collector (TUR_R7RS_GC=0 / --no-r7rs-gc opt out) */
     /* graduated 2026-08-27, in the 0.39 line.  A representation change with no
      * syntax, so the population that could have written it into a build.tur is
      * the narrow one the backend names above describe -- but it shipped as a

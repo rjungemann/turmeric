@@ -30,8 +30,24 @@ All notable changes to Turmeric are documented here.
   the first expression unset and assigns it in the body. Fixtures
   `toplevel-def-init-order` (both back ends) and `r7rs-toplevel-order`;
   archived: toplevel-def-initializers-run-before-toplevel-expressions.
-  Found on the way: a Scheme procedure body cannot name a top-level
-  variable defined after it (r7rs-procedure-body-forward-reference).
+- **`#lang r7rs`: a procedure body may name a top-level variable defined
+  after it** (R7RS 5.3.1): `(define (f) (* y 2))` before `(define y 21)`
+  was "unbound symbol 'y'" on both back ends. The lowering marks such a
+  define `^mut : any`, and the elaborator's Pass 1 pre-declares every
+  top-level `(def ^mut name : any init)` ahead of the bodies, the way it
+  pre-declares a `defn`, with the def filling the binding in when reached;
+  the initializer still runs in source order. Programs and library bodies,
+  both back ends; a `(def ^mut x : any ...)` in any dialect gets the same
+  pre-declaration. Fixture `r7rs-forward-reference`; archived:
+  r7rs-procedure-body-forward-reference.
+- **`#lang r7rs`: `map` and `for-each` take up to eight sequences**, the
+  shim arity, where a fifth was a runtime error; `vector-map`,
+  `vector-for-each`, `string-map` and `string-for-each` share the walker
+  and the new cap. The arms are spelled inline like the first four, so the
+  million-element `(map + a b)` still runs at `-O2` (a helper call per
+  element overflowed the stack, r7rs-lang-plan T8). Five- and
+  eight-sequence cases in `tests/fixtures/r7rs-base-library`; archived:
+  r7rs-map-for-each-at-most-four-sequences.
 - **`#lang r7rs`: each top-level form runs under its own prompt.** A
   continuation captured in a top-level form was the rest of the program
   (the stack image reached `main`'s frame, or the interpreter's loop over
@@ -51,6 +67,24 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
+- **`#lang r7rs`: the collector is on by default (r7rs-gc graduated).** A
+  compiled single-unit `#lang r7rs` program on Linux or macOS now allocates
+  everything through the conservative mark-sweep collector that was behind
+  `--enable=r7rs-gc` (a no-op now, on the GRADUATED list): a Scheme
+  program's data is reclaimed, as are its `call/cc` images, the records a
+  caught `raise` abandons and the prelude's scratch -- a loop building a
+  dead four-element list a million times peaks at 10 MB (from 429 MB),
+  100,000 escaping `call/cc`s at 10 MB (from 527 MB). `TUR_R7RS_GC=0`, or
+  `--no-r7rs-gc` on `tur build`, builds a program without it; a program
+  that starts a thread under the collector stops at the start site with the
+  reason and that opt-out (exit 70). `--shared`, a project build, `tur jit`,
+  the interpreter and every other platform are unchanged. Every `#lang r7rs`
+  fixture of the ordinary suite now runs under the collector, and
+  `tests/run-r7rs-gc.sh` keeps the torture, seam, thread and reclamation
+  gates. Archived: r7rs-heap-data-never-reclaimed,
+  r7rs-caught-raise-leaks-runtime-records, r7rs-remaining-scratch-leaks and
+  the plan (docs/archive/r7rs-gc-plan.md); r7rs-callcc-memory-never-freed
+  stays open for the interpreter.
 - **Every `cc` over emitted C runs with `-Wno-misleading-indentation`.**
   GCC's check is quadratic on the long brace-less `if` chains the Scheme
   lowering emits and was 71% of a `#lang r7rs` build's C compile: a

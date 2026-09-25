@@ -669,7 +669,7 @@ set(TURT_RUNTIME_SOURCES
     runtime/rc.c
     runtime/gc.c
     runtime/rc_free_queue.c
-    # r7rs-gc (docs/upcoming/r7rs-gc-plan.md): the allocator hook the members
+    # r7rs-gc (docs/archive/r7rs-gc-plan.md): the allocator hook the members
     # above allocate through, so a program's collector can own their blocks.
     # libc until installed; a stdlib autolink marker compiles it beside hamt.c,
     # tur_string.c and symbols.c in bare-source mode.
