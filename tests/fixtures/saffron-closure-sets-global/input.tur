@@ -1,0 +1,19 @@
+#lang saffron
+; r7rs-lang-plan R6: a closure that `set!`s a mutable global.  Its body is
+; widened to `any`, and the forward-declaration pass for globals read by an
+; earlier-emitted lifted lambda did not descend the widen (or the other
+; dynamic-dialect nodes), so cc saw the global's read before its declaration.
+(def ^mut g : any 0)
+(def ^mut count : any 0)
+(defn bump [v] : any
+  (let [t (fn [] : any (set! g v))]
+    (t)
+    g))
+(defn counter [] : any
+  (fn [] : any (set! count (+ count 1)) count))
+(defn main [] : int
+  (println (bump 5))
+  (let [c (counter)]
+    (c) (c)
+    (println (c)))
+  0)

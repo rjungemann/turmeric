@@ -6,7 +6,7 @@
 #define _GNU_SOURCE
 #endif
 #include "elab_internal.h"
-#include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_dynamic */
 #include "cps.h"          /* cps_expr_uses_control -- the control-widen hoist */
 bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h */
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
@@ -711,9 +711,58 @@ static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
     if (!value || value->kind != EX_VAR || !value->as.var.binding ||
         !value->as.var.binding->name || value->type.kind != TY_FN)
         return NULL;
-    if (!(e->toplevel_saffron || lang_span_is_saffron(value->span))) return NULL;
+    if (!(e->toplevel_dynamic || lang_span_is_dynamic(value->span))) return NULL;
     const Type *ft = &value->type;
     if (ft->as.fn.cfnptr || ft->as.fn.arity > 5) return NULL;
+    /* r7rs-lang-plan R6/R7: a VARIADIC function.  Its rest slot is a chain
+     * pointer, which the dynamic call packs (emit_dyn_call / the
+     * interpreter's EX_DYN_CALL) -- but only for the all-`any` calling
+     * convention.  An all-`any` variadic is boxed as itself; a TYPED one with
+     * an `any` rest gets an all-`any` VARIADIC adaptor that hands its rest
+     * chain through unchanged:
+     *   (fn [__da0 ... & __dr : any] : any (NAME __da0 ... (__rest-chain __dr)))
+     * `__rest-chain` is the variadic call path's marker for "this is the rest
+     * list already" (elab_call.c, AR8).  A typed rest has no such form, so it
+     * is boxed as itself and a dynamic call refuses it by its id. */
+    if (ft->as.fn.is_variadic) {
+        uint32_t nf = ft->as.fn.arity ? ft->as.fn.arity - 1 : 0;
+        bool va_all_any = (ft->as.fn.result_kind == TY_ANY);
+        for (uint32_t i = 0; i < nf && va_all_any; i++)
+            if (ft->as.fn.arg_kinds[i] != TY_ANY) va_all_any = false;
+        bool rest_any = ft->as.fn.rest_kind == TY_ANY &&
+                        !(ft->as.fn.rest_full_type && ft->as.fn.rest_full_type->kind != TY_ANY);
+        if (va_all_any || !rest_any || ft->as.fn.arity == 0) return NULL;
+        Span vsp = value->span;
+        const Symbol *amp = symtab_intern(e->st, strslice("&", 1));
+        const Symbol *anys = symtab_intern(e->st, strslice("any", 3));
+        const Symbol *drs = symtab_intern(e->st, strslice("__dr", 4));
+        Form **vparams = (Form **)arena_alloc(e->arena, (nf + 3) * sizeof(Form *));
+        Form **vcall = (Form **)arena_alloc(e->arena, (nf + 2) * sizeof(Form *));
+        vcall[0] = form_sym(e->arena, vsp, value->as.var.binding->name);
+        for (uint32_t i = 0; i < nf; i++) {
+            char nm[24];
+            snprintf(nm, sizeof nm, "__da%u", i);
+            const Symbol *ps = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+            vparams[i] = form_sym(e->arena, vsp, ps);
+            vcall[1 + i] = form_sym(e->arena, vsp, ps);
+        }
+        vparams[nf]     = form_sym(e->arena, vsp, amp);
+        vparams[nf + 1] = form_sym(e->arena, vsp, drs);
+        vparams[nf + 2] = form_type_ann(e->arena, vsp, form_sym(e->arena, vsp, anys));
+        Form *rc_items[2] = { form_sym(e->arena, vsp, symtab_intern(e->st, strslice("__rest-chain", 12))),
+                              form_sym(e->arena, vsp, drs) };
+        vcall[1 + nf] = form_list(e->arena, vsp, rc_items, 2);
+        Form *vitems[4];
+        vitems[0] = form_sym(e->arena, vsp, symtab_intern(e->st, strslice("fn", 2)));
+        vitems[1] = form_vec(e->arena, vsp, vparams, nf + 3);
+        vitems[2] = form_type_ann(e->arena, vsp, form_sym(e->arena, vsp, anys));
+        vitems[3] = form_list(e->arena, vsp, vcall, nf + 2);
+        Type *saved_vexp = e->expected_type;
+        e->expected_type = NULL;
+        Expr *vad = elab_fn(e, form_list(e->arena, vsp, vitems, 4));
+        e->expected_type = saved_vexp;
+        return vad;
+    }
     bool all_any = (ft->as.fn.result_kind == TY_ANY);
     for (uint32_t i = 0; i < ft->as.fn.arity && all_any; i++)
         if (ft->as.fn.arg_kinds[i] != TY_ANY) all_any = false;
@@ -808,6 +857,7 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     value = elab_fn_value_to_fat(e, value);
     Type any_type;
     memset(&any_type, 0, sizeof(any_type));
+    any_type.copy_kind = CK_COPY;   /* CK_UNIQUE is 0: a zeroed type is unique-kinded */
     any_type.kind = TY_ANY;
 
     /* cps-coloring-walk-has-no-arm-for-union-inject, the remaining half: a widen
@@ -2209,6 +2259,7 @@ static Expr *saffron_dyn_call_on(Elab *e, const Form *call, Expr *fnv) {
     }
     Type any_t;
     memset(&any_t, 0, sizeof(any_t));
+    any_t.copy_kind = CK_COPY;   /* CK_UNIQUE is 0: a zeroed type is unique-kinded (saffron-any-let-binding-is-unique) */
     any_t.kind = TY_ANY;
     Expr *dc = expr_new(e->arena, EX_DYN_CALL, any_t, call->span);
     dc->as.dyn_call_.fn     = fnv;
@@ -2220,7 +2271,7 @@ static Expr *saffron_dyn_call_on(Elab *e, const Form *call, Expr *fnv) {
 static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     TypeKind head_kind = head_expr->type.kind;
     if (head_kind == TY_ANY &&
-        (lang_span_is_saffron(call->span) || e->toplevel_saffron))
+        (lang_span_is_dynamic(call->span) || e->toplevel_dynamic))
         return saffron_dyn_call_on(e, call, head_expr);
     if (head_kind != TY_FN && head_kind != TY_PTR_VOID && head_kind != TY_CONT) {
         diag_emit(DIAG_ERROR, call->as.list.items[0]->span,
@@ -3191,7 +3242,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
      * `(Wrap 7)` through an unannotated defn was accepted.  So the rule keys
      * on what the expectation SAYS, not on its presence: only a concrete
      * argument somewhere in the applied type pins. */
-    if (lang_span_is_saffron(call->span) &&
+    if (lang_span_is_dynamic(call->span) &&
         !saffron_expected_app_pins(e->expected_type)) {
         CtorDef *sctor = elab_lookup_ctor(e, name);
         if (sctor && sctor->adt && sctor->adt->n_type_params > 0 &&
@@ -3250,7 +3301,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
      * result path consults.  Widening under it produced an `(Option any)` the
      * ascription then could not accept. */
     bool saffron_pinned = saffron_expected_app_pins(e->expected_type);
-    if (lang_span_is_saffron(call->span) && !saffron_pinned && !elab_lookup_ctor(e, name)) {
+    if (lang_span_is_dynamic(call->span) && !saffron_pinned && !elab_lookup_ctor(e, name)) {
         Binding *gb = scope_lookup(e->scope, name);
         if (gb && gb->type.kind == TY_FN && gb->type.as.fn.arg_full_types &&
             gb->type.as.fn.arity > 0) {
@@ -4253,7 +4304,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
              * it at the all-`any` instantiation, exactly as the instance
              * registry keys a parametric receiver. */
             if (!result_pinned && ctor->adt->n_type_params > 0 &&
-                lang_span_is_saffron(call->span)) {
+                lang_span_is_dynamic(call->span)) {
                 Type any_t = type_from_kind(TY_ANY);
                 Type app = type_adt(ctor->adt);
                 app.hkt_kind = kind_for_arity(ctor->adt->n_type_params);
@@ -4705,13 +4756,14 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
      * operator is dynamic when ANY operand is, not only when the first is, so
      * the whole call goes dynamic and the position of the `any` stops
      * mattering. */
-    if (lang_span_is_saffron(call->span) && builtin_first_with_name(name)) {
+    if (lang_span_is_dynamic(call->span) && builtin_first_with_name(name)) {
         bool has_any = false;
         for (uint32_t i = 0; i < n_args; i++)
             if (args[i] && args[i]->type.kind == TY_ANY) { has_any = true; break; }
         if (has_any) {
             Type any_t;
             memset(&any_t, 0, sizeof(any_t));
+    any_t.copy_kind = CK_COPY;   /* CK_UNIQUE is 0: a zeroed type is unique-kinded (saffron-any-let-binding-is-unique) */
             any_t.kind = TY_ANY;
             /* saffron-lang-plan S5: widen every operand, not only the `any`
              * ones.  A mixed call like `(* x 2)` is the common shape, and the
@@ -5963,7 +6015,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * case rather than an error -- higher-order code is the whole point of the
      * surface syntax.  Resolution moves to runtime, where the value's own tag
      * says whether it is callable and with what arity. */
-    if (fn_type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
+    if (fn_type.kind == TY_ANY && lang_span_is_dynamic(call->span)) {
         Expr *fnv = expr_new(e->arena, EX_VAR, fn_binding->type, call->span);
         fnv->as.var.binding = fn_binding;
         return saffron_dyn_call_on(e, call, fnv);
@@ -6171,9 +6223,39 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 fn_type.as.fn.arg_kinds[i] == TY_ANY &&
                 call_args[i]->type.kind != TY_ANY)
                 call_args[i] = elab_coerce_to_any(e, call_args[i]);
+            /* r7rs-lang-plan R7: and the reverse -- an `any` argument into a
+             * CONCRETE fixed parameter takes the seam's checked cast, as the
+             * fixed-arity path does (D5).  Without it `(string->list s)` with
+             * `s : any` handed a tagged box to a `const char *` parameter and
+             * cc rejected the call. */
+            else if (i < fn_type.as.fn.arity && fn_type.as.fn.arg_kinds &&
+                     call_args[i]->type.kind == TY_ANY) {
+                TypeKind pk = (TypeKind)fn_type.as.fn.arg_kinds[i];
+                if (pk != TY_ANY && pk != TY_UNKNOWN && pk != TY_TYVAR && pk != TY_NIL) {
+                    Type want = (fn_type.as.fn.arg_full_types && fn_type.as.fn.arg_full_types[i])
+                                    ? *fn_type.as.fn.arg_full_types[i]
+                                    : type_from_kind(pk);
+                    Expr *un = elab_any_unbox_to(e, call_args[i], want, call_args[i]->span);
+                    if (un) call_args[i] = un;
+                }
+            }
         }
         /* Build cons-list expression for rest args */
-        Expr *rest_expr;
+        Expr *rest_expr = NULL;
+        /* r7rs-lang-plan R7: `(f a ... (__rest-chain c))` -- `c` IS the rest
+         * list, already a `(Cons any)` chain; pass it through rather than
+         * packing it as one element.  Only the H8 variadic adaptor writes
+         * this, and only for an `any` rest. */
+        if (n_rest == 1) {
+            const Form *lf = call->as.list.items[1 + n_required];
+            if (lf->tag == F_LIST && lf->as.list.len == 2 && lf->as.list.items[0]->tag == F_SYM &&
+                strcmp(lf->as.list.items[0]->as.sym->name, "__rest-chain") == 0 &&
+                fn_type.as.fn.rest_kind == TY_ANY) {
+                Expr *cv = elab_form(e, lf->as.list.items[1]);
+                if (!cv) return NULL;
+                rest_expr = cv;
+            }
+        }
         /* Homogeneity / result specialization (hoisted so they survive past the
          * cons-list build): a polymorphic-tyvar rest (`[& xs :A]`) names a
          * single type variable A.  Bind A to the first rest arg, then -- once
@@ -6199,7 +6281,9 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         bool rest_any = fn_type.as.fn.rest_kind == TY_ANY &&
                         !(fn_type.as.fn.rest_full_type &&
                           fn_type.as.fn.rest_full_type->kind != TY_ANY);
-        if (rest_any) {
+        if (rest_expr) {
+            /* the __rest-chain passthrough above */
+        } else if (rest_any) {
             Arena *fa = e->arena;
             Span sp = call->span;
             const Symbol *cons_sym = intern_cstr(e->st, "Cons");
@@ -7313,8 +7397,8 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * the argument alone turned a Saffron call into a static
          * "expected int, got any" reported inside the stdlib. */
         if (!arg_ok && args[i] && args[i]->type.kind == TY_ANY &&
-            (lang_span_is_saffron(args[i]->span) ||
-             lang_span_is_saffron(call->span) || e->toplevel_saffron) &&
+            (lang_span_is_dynamic(args[i]->span) ||
+             lang_span_is_dynamic(call->span) || e->toplevel_dynamic) &&
             expected_arg_kind != TY_ANY && expected_arg_kind != TY_TYVAR &&
             expected_arg_kind != TY_UNKNOWN) {
             Type want = type_from_kind(expected_arg_kind);
@@ -7461,8 +7545,8 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         if (!arg_ok && args[i] && args[i]->type.kind != TY_ANY &&
             expected_arg_kind == TY_TYVAR && fn_binding &&
             fn_type.kind == TY_FN &&
-            (lang_span_is_saffron(args[i]->span) ||
-             lang_span_is_saffron(call->span) || e->toplevel_saffron)) {
+            (lang_span_is_dynamic(args[i]->span) ||
+             lang_span_is_dynamic(call->span) || e->toplevel_dynamic)) {
             uint32_t fi_w = fn_binding->closure_fn_binding ? i + 1 : i;
             /* A bare tyvar parameter has no entry in arg_full_types (that is
              * for compound args), so fall back to the callee's own FnDef,
@@ -8563,7 +8647,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * Deferred to an enclosing ascription like the other two: `(:: (none)
      * (Option float))` pins the instantiation on purpose. */
     if (fn_type.kind == TY_FN && fn_type.as.fn.result_full_type &&
-        lang_span_is_saffron(call->span) &&
+        lang_span_is_dynamic(call->span) &&
         call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
         !(saved_expected_return && saved_expected_return->kind == TY_APP)) {
         const char *open_names[16];

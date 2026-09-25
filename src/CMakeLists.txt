@@ -120,6 +120,10 @@ set(TURI_EVAL_SOURCES
     # handler that captures and immediately resumes step-in IS a tracer.
     turi/trace.c
     turi/repl.c
+    # r7rs-lang-plan T4: the evaluator behind R7RS `eval` -- one embedded
+    # R7RS env that a program importing (scheme eval) links in, and that
+    # `tur --interpret` reaches through native twins.
+    turi/r7rs_embed.c
     # RP3: REPL spice-image loader. Walks up to build.tur, dlopens
     # .tur-repl-cache/lib.so, primes a symbol map from exports.manifest.
     turi/spice_loader.c
@@ -196,6 +200,7 @@ set(TUR_CORE_SOURCES
     compiler/reader.c
     compiler/reader_macros.c
     compiler/lang_dialects.c
+    compiler/scheme_lower.c
     compiler/stdlib_autoload.c
     # RT1--RT3 + S0--S3 (docs/archive/refinement-types-plan.md): refinement
     # types.  These stages are the whole solver -- the dev-only Z3 oracle that
@@ -437,6 +442,7 @@ add_custom_command(
     DEPENDS
         ${CMAKE_SOURCE_DIR}/cmake/embed_region_runtime.cmake
         runtime/region.h runtime/region.c runtime/arena.h runtime/arena.c
+        runtime/r7gc.c
     COMMENT "Embedding src/runtime/{arena,region}.{h,c} for the emitter"
     VERBATIM
 )

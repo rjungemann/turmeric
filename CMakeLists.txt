@@ -184,6 +184,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(lsp_saffron_diagnostics PROPERTIES TIMEOUT 300)
+# r7rs-lang-plan R9: a `#lang r7rs` buffer analyses as Scheme (by inheritance,
+# measured and pinned) and FORMATS -- textDocument/formatting answered "no
+# edits" for every `#lang` document until it ran fmt_format_document.
+add_test(
+  NAME lsp_r7rs_diagnostics
+  COMMAND bash tests/lsp/run-r7rs-diagnostics.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(lsp_r7rs_diagnostics PROPERTIES TIMEOUT 300)
 
 add_test(NAME source_literal_unit COMMAND tur_source_literal_unit)
 
@@ -217,6 +226,27 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_leak_check PROPERTIES RUN_SERIAL TRUE)
+# r7rs-lang-plan T8: every `#lang r7rs` fixture compiled with ASan and UBSan
+# (UB fatal) and run -- a memory error in the prelude's inline C, the emitted
+# Scheme code or the runtime fails it.  Leaks are not checked: Scheme heap data
+# is never freed by design (docs/reported/r7rs-heap-data-never-reclaimed.md).
+# Fans out across nproc on its own, so RUN_SERIAL.
+add_test(
+  NAME tur_r7rs_sanitize
+  COMMAND bash tests/run-r7rs-sanitize.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_sanitize PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
+# The r7rs-gc experiment (docs/upcoming/r7rs-gc-plan.md): every Scheme fixture
+# built with --enable=r7rs-gc and run in torture mode (a collection every 31
+# allocations), and a churn loop that must fit a 256 MiB address space with
+# the collector and not without it.
+add_test(
+  NAME tur_r7rs_gc
+  COMMAND bash tests/run-r7rs-gc.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_gc PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
 add_test(
   NAME tur_cli_tests
   COMMAND bash tests/run-cli.sh
@@ -802,6 +832,24 @@ add_test(
   COMMAND bash tests/run-saffron-import.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# r7rs-lang-plan R3 / D9: the Turmeric <-> R7RS seam in both directions on
+# both back ends -- a Turmeric module importing a `define-library`, and a
+# Scheme program importing a Turmeric module through `(turmeric ...)` with
+# `only`/`prefix`/`rename`.  A multi-module case, so a runner, not a fixture.
+add_test(
+  NAME tur_r7rs_import
+  COMMAND bash tests/run-r7rs-import.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# r7rs-lang-plan T4: `(import (scheme eval))` links the interpreter into a
+# compiled program, and a program without the import links nothing new; the
+# built program finds its stdlib from any directory.
+add_test(
+  NAME tur_r7rs_eval_link
+  COMMAND bash tests/check-r7rs-eval-link.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_eval_link PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
 # tur-init-help-scaffolds-and-overwrites: `tur init` must never destroy a
 # working tree.  `tur init --help` did not print help -- the flag fell past the
 # project-name slot, the cwd basename was used as the name, and scaffolding
@@ -1043,6 +1091,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_repl_lang_saffron PROPERTIES TIMEOUT 300)
+# r7rs-lang-plan R9: the REPL as an R7RS session -- `--lang r7rs` (refused
+# before), `#lang r7rs` at the prompt (switched the language but kept
+# Turmeric's preload and skipped the renames), the Scheme echo, and :reset.
+add_test(
+  NAME tur_repl_lang_r7rs
+  COMMAND bash tests/turi/repl-lang-r7rs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_repl_lang_r7rs PROPERTIES TIMEOUT 300)
 # saffron-lang-plan S8: `tur init --saffron` scaffolds a project that BUILDS.
 # The assertion is the build, not the file text: checking for a `#lang` line
 # would have passed while the LIBRARY scaffold could not compile at all
@@ -1054,6 +1111,41 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_init_saffron PROPERTIES TIMEOUT 300)
+# r7rs-lang-plan R9: `tur init --r7rs` -- both shapes build, the binary runs,
+# both test files pass under `tur test`, and the scaffold is fmt-clean.  It
+# found three project-mode defects the single-file fixtures never reach.
+add_test(
+  NAME tur_init_r7rs
+  COMMAND bash tests/run-init-r7rs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_init_r7rs PROPERTIES TIMEOUT 600)
+# r7rs-lang-plan R10: chibi-scheme's R7RS test suite, as a pass COUNT with a
+# floor, so a regression fails and progress only needs the floor raised.  Both
+# back ends, about two minutes together.  Skips cleanly without python3.
+# RUN_SERIAL: the compiled pass is one large C build.
+add_test(
+  NAME tur_r7rs_conformance
+  COMMAND bash tests/run-r7rs-conformance.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_conformance PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
+# R10: the Unicode tables behind (scheme char) are generated twice -- the
+# prelude's inline C and the interpreter's natives -- and must be identical.
+add_test(
+  NAME tur_r7rs_unicode_sync
+  COMMAND bash tests/check-r7rs-unicode-sync.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# T0/T1: the shared C of Scheme numbers -- src/compiler/r7rs_bignum.inc and
+# r7rs_numsyntax.inc (the source reader and the interpreter) -- and their
+# copies in stdlib/r7rs/bignum.tur and numsyntax.tur (the compiled back end)
+# must be identical.
+add_test(
+  NAME tur_r7rs_inc_sync
+  COMMAND bash tests/check-r7rs-inc-sync.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
 # LOADED in a real Vim and queried for highlight groups -- which is what caught
 # the fused-vs-spaced annotation bug.  The vscode half is structure and pattern

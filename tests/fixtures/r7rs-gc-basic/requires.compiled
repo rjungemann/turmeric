@@ -1,0 +1,2 @@
+The r7rs-gc collector is compiled-only; --interpret ignores the flag, and
+the churn loop only tests reclamation, which the interpreter does not do.

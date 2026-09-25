@@ -4193,6 +4193,10 @@ typedef struct {
      * and `:experiments` is not needed because the `#lang` line enables the
      * experiment by itself. */
     bool        saffron;
+    /* r7rs-lang-plan R9: --r7rs scaffolds `#lang r7rs` sources -- a binary is
+     * a top-level Scheme program, a library a `define-library`.  Same
+     * manifest, for the same reason as --saffron. */
+    bool        r7rs;
 } ScaffoldOpts;
 
 /* Write a file and print it in the scaffold summary.
@@ -4417,7 +4421,35 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
         mod_name[sizeof(mod_name) - 1] = '\0';
         for (char *q = mod_name; *q; q++) if (*q == '-') *q = '_';
 
-        if (opts->is_bin && opts->saffron) {
+        if (opts->is_bin && opts->r7rs) {
+            /* An R7RS program is its top-level forms: no `main` (the build
+             * treats a `#lang r7rs` file without a define-library as an entry
+             * point, file_has_main_defn). */
+            snprintf(path, sizeof(path), "%s/src/main.tur", dir);
+            snprintf(buf, sizeof(buf),
+                "#lang r7rs\n"
+                ";;; %s -- entry point.\n"
+                ";;\n"
+                "(import (scheme base) (scheme write))\n"
+                "\n"
+                "(display \"Hello from %s!\")\n"
+                "(newline)\n",
+                name, name);
+        } else if (opts->r7rs) {
+            snprintf(path, sizeof(path), "%s/src/%s.tur", dir, mod_name);
+            snprintf(buf, sizeof(buf),
+                "#lang r7rs\n"
+                ";;; %s -- library module.\n"
+                ";;;\n"
+                ";;; Since: 0.1.0\n"
+                ";;\n"
+                "(define-library (%s)\n"
+                "  (export add)\n"
+                "  (import (scheme base))\n"
+                "  (begin\n"
+                "    (define (add a b) (+ a b))))\n",
+                name, mod_name);
+        } else if (opts->is_bin && opts->saffron) {
             /* No `:int` on main, and no annotations anywhere: that is the whole
              * point of the dialect, and a scaffold that annotated would teach
              * the opposite of what the reader asked for. */
@@ -4481,7 +4513,31 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
         for (char *q = mod_name; *q; q++) if (*q == '-') *q = '_';
 
         snprintf(path, sizeof(path), "%s/tests/%s_test.tur", dir, mod_name);
-        if (opts->is_bin && opts->saffron) {
+        if (opts->is_bin && opts->r7rs) {
+            snprintf(buf, sizeof(buf),
+                "#lang r7rs\n"
+                ";;; %s_test -- smoke test for %s.\n"
+                ";;\n"
+                "(import (scheme base) (scheme write))\n"
+                "\n"
+                "(display \"tests: ok\")\n"
+                "(newline)\n",
+                mod_name, name);
+        } else if (opts->r7rs) {
+            /* A Scheme program importing the library under test; `exit` is
+             * (scheme process-context)'s. */
+            snprintf(buf, sizeof(buf),
+                "#lang r7rs\n"
+                ";;; %s_test -- unit tests for %s.\n"
+                ";;\n"
+                "(import (scheme base) (scheme write) (scheme process-context)\n"
+                "        (%s))\n"
+                "\n"
+                "(if (= (add 2 3) 5)\n"
+                "  (begin (display \"tests: ok\") (newline))\n"
+                "  (begin (display \"tests: FAIL\") (newline) (exit 1)))\n",
+                mod_name, name, mod_name);
+        } else if (opts->is_bin && opts->saffron) {
             snprintf(buf, sizeof(buf),
                 "#lang saffron\n"
                 ";;; %s_test -- smoke test for %s.\n"
@@ -4817,6 +4873,7 @@ int cmd_pkg_init(int argc, char **argv) {
     bool no_git = false;
     bool sweet  = false;
     bool saffron = false;
+    bool r7rs = false;
     const char *name = NULL;
 
     bool force = false;
@@ -4838,6 +4895,8 @@ int cmd_pkg_init(int argc, char **argv) {
                    "  --bin, --lib   binary (default) or library spice\n"
                    "  --sweet        write build.tur.sweet (sweet-exp manifest)\n"
                    "  --saffron      scaffold `#lang saffron` sources (no annotations)\n"
+                   "  --r7rs         scaffold `#lang r7rs` sources (a Scheme program,\n"
+                   "                 or a define-library with --lib)\n"
                    "  --no-git       skip git init\n"
                    "  --force        overwrite files that already exist\n"
                    "  -h, --help     show this help\n");
@@ -4848,6 +4907,7 @@ int cmd_pkg_init(int argc, char **argv) {
         else if (strcmp(argv[i], "--no-git") == 0) no_git = true;
         else if (strcmp(argv[i], "--sweet") == 0)  sweet  = true;
         else if (strcmp(argv[i], "--saffron") == 0) saffron = true;
+        else if (strcmp(argv[i], "--r7rs") == 0)   r7rs = true;
         else if (strcmp(argv[i], "--force") == 0)  force  = true;
         /* An UNKNOWN flag was silently IGNORED, which is the same accident with
          * a different spelling: a flag that does not exist scaffolded just as
@@ -4900,6 +4960,11 @@ int cmd_pkg_init(int argc, char **argv) {
         }
     }
 
+    if (saffron && r7rs) {
+        fprintf(stderr, "tur init: --saffron and --r7rs pick different languages; give one\n");
+        return 1;
+    }
+
     ScaffoldOpts opts;
     memset(&opts, 0, sizeof(opts));
     opts.dir     = ".";
@@ -4908,6 +4973,7 @@ int cmd_pkg_init(int argc, char **argv) {
     opts.no_git  = no_git;
     opts.sweet   = sweet;
     opts.saffron = saffron;
+    opts.r7rs    = r7rs;
     opts.license = "none";
     opts.force   = force;
     return scaffold_project_ext(&opts);

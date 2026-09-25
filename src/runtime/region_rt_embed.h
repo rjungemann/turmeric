@@ -28,5 +28,9 @@ extern const unsigned char tur_rt_embed_arena_c[];
 extern const size_t        tur_rt_embed_arena_c_len;
 extern const unsigned char tur_rt_embed_region_c[];
 extern const size_t        tur_rt_embed_region_c_len;
+/* The r7rs-gc experiment's collector (src/runtime/r7gc.c), pasted into a
+ * compiled `#lang r7rs` program's unit when --enable=r7rs-gc is on. */
+extern const unsigned char tur_rt_embed_r7gc_c[];
+extern const size_t        tur_rt_embed_r7gc_c_len;
 
 #endif /* TUR_REGION_RT_EMBED_H */

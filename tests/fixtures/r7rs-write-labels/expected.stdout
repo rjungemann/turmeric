@@ -1,0 +1,18 @@
+"tab\there \"quoted\" back\\slash\nnew line"
+"\a\x1;a"
+display is bare: "x"
+(#\a #\space #\newline #\tab #\null #\delete #\escape #\alarm #\backspace #\return #\x1 #\A)
+(a b s)
+(plain |two words| || |12| |#x| |a\|b| + ... |.|)
+(two words)
+(1 -2 7.1 #t #f () #(1 "a" #\b) #u8(0 255) (a . b) (a b . c))
+#0=(1 2 3 . #0#)
+#0=(1 2 3 . #0#)
+#0=(a #0#)
+#0=#(1 #0# 3)
+(#0=(x . #0#) #1=(y . #1#))
+((shared tail) (shared tail) #((shared tail)))
+(#0=(shared tail) #0# #(#0#))
+((shared tail) (shared tail) #((shared tail)))
+588891
+#<error "bad thing" sym "str" 42>

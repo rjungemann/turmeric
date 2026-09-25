@@ -654,8 +654,9 @@ machine-readably.
 ### A base names a language and a reader
 
 The first, possibly slash-namespaced, token names **two** things: which
-*language* the forms are elaborated as, and which *reader* parses them. They
-are independent axes, so every language is spellable over every reader.
+*language* the forms are elaborated as, and which *reader* parses them. For
+`turmeric` and `saffron` they are independent axes, so each is spellable over
+every reader; `r7rs` brings its own reader and takes no slash.
 
 | Base | Language | Reader |
 |---|---|---|
@@ -667,6 +668,7 @@ are independent axes, so every language is spellable over every reader.
 | `saffron/curly-infix` | saffron | curly-infix emphasis |
 | `saffron/neoteric` | saffron | curly-infix + neoteric |
 | `saffron/sweet` | saffron | full sweet-expressions |
+| `r7rs` | r7rs | the Scheme reader (`#t`/`#f`, `#\c`, `#(...)`, `,`/`,@`, dotted pairs, `\|sym\|`, `#x`/`#e`... prefixes) |
 
 **Saffron** is the dynamically typed dialect: an unannotated parameter or
 return defaults to `any` instead of `int`, and the file gets a dynamic operator
@@ -674,9 +676,81 @@ layer, dynamic calls and dynamic field access. Annotations stay legal, and a
 Saffron module links against a Turmeric one in the same program. See
 [the Saffron guide](saffron-guide.md).
 
-Both languages are **stable bases** -- neither is gated. `#lang saffron` needs
-no `--enable=` flag and no `:experiments` entry, and prints no lifecycle
-warning; `tur dialects` lists all eight bases as `stable`.
+**R7RS** is R7RS-small Scheme, being built as Saffron's dynamic substrate
+under a Scheme reader
+([r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-lang-plan.md)).
+It is **experiment-gated** (`tur dialects` shows it as `experimental (r7rs)`
+and `tur experiments` lists the row), but the `#lang r7rs` line is itself the
+enable: no `--enable=r7rs` is needed, and the file prints the TUR-W0060
+lifecycle warning once per compile. Today it has the reader (R1), the core
+forms (R2): `define`, `lambda`, the `let` family, `do`, `cond`/`case`,
+`and`/`or`, `set!`, `case-lambda`, multiple values and the core list, equality
+and output procedures, with Scheme truthiness (only `#f` is false); and the
+data and the seam (R3): mutable pairs, chars, vectors, bytevectors, records,
+`quote`/`quasiquote` as data, `equal?` on cycles, `define-library`, and
+`import` with `only`/`prefix`/`rename` and the `(turmeric <module>)` head, so
+a Scheme program calls a Turmeric module or the stdlib and a Turmeric module
+imports a `define-library` (its exports are `any`, narrowed with `cast`).
+Strings are character sequences; a literal is an immutable `cstr` and a
+string a procedure makes is mutable (T3). R4 adds
+`syntax-rules` -- `define-syntax`, `let-syntax`, `letrec-syntax`,
+`syntax-error`, the full pattern language and renaming hygiene (a template's
+own binders cannot capture a use-site name; R10 closes the other direction, so
+a template's free identifiers mean what they meant where the macro was
+defined). R5 adds the
+numbers: exact integers are int64 and continue as bignums past it (T1),
+inexact reals are doubles, `(/ 7 2)` is the exact ratio 7/2 (T2), `3+4i` is
+a complex number and `(sqrt -4)` is `+2i` (T6), and the R7RS
+predicate, rounding, division, `expt`/`sqrt`/transcendental and radix
+`number->string`/`string->number` surface is there. R6 adds control:
+`call/cc` (re-entrant since T5: a continuation can be invoked after its
+call/cc has returned, any number of times, which re-runs `dynamic-wind`
+`before` thunks),
+`dynamic-wind`, `with-exception-handler`/`raise`/`raise-continuable`/`guard`
+and error objects (an uncaught `raise` reports on stderr and exits 70),
+`parameterize`/`make-parameter`, and `delay`/`delay-force`/`force`. Every
+Scheme procedure call is a proper tail call on both back ends, and the
+compiled back end runs everything the interpreter does (a dynamic call is
+capped at four arguments, so `apply` is too). R7 completes the libraries
+short of ports: the rest of `(scheme base)`, and `(scheme char)` (ASCII case
+mapping), `(scheme cxr)`, `(scheme complex)`, `(scheme time)`,
+`(scheme process-context)` and `(scheme file)`'s `file-exists?` and
+`delete-file`. The last three are loaded only when imported. `include` is
+refused with the reason. `(scheme eval)`, `(scheme repl)`, `(scheme load)` and
+`(scheme r5rs)` give `eval`, `environment`, `interaction-environment`,
+`null-environment`, `scheme-report-environment` and `load` (T4). Importing
+one links the interpreter into a compiled program, and a program that imports
+none links nothing extra. Evaluated code runs in one embedded R7RS session
+per run: data crosses by copy, and procedures and raised objects cross in
+both directions.
+R8 adds ports: string, bytevector and file ports, `read-char`/`read-line`/
+`read-string`/`read-u8` and the rest of the R7RS I/O procedures, the current
+ports as parameters (`(parameterize ((current-output-port p)) ...)`),
+`write`/`display` that label cycles (`#0=(1 2 . #0#)`), `write-shared` and
+`write-simple`, `(scheme read)`, and `(scheme file)`'s `open-input-file`,
+`call-with-output-file`, `with-output-to-file` and the rest. One caution for
+the compiled back end: a top-level `define` whose initializer has an effect
+(opening a file, reading input) runs before the program's top-level
+expressions, so put such code inside a procedure. R9 adds the tooling: `tur
+repl --lang r7rs`, `tur fmt` (which re-indents a Scheme file and never rewrites
+a token), `tur init --r7rs`, the language server, and editor highlighting.
+R10 runs chibi-scheme's R7RS test suite as a ctest target
+(`tur_r7rs_conformance`) that reports a pass count: 1082 of the 1216 tests
+written in it pass, on both back ends, and the rest are the named carve-outs
+(bignums, exact rationals, complex numbers, mutable strings, `eval`,
+re-entrant `call/cc`); Section 9's tasks have since closed all of them, for
+1223 passing invocations and none failing (two tests of chibi's own float
+spelling, `e+308`, are counted as settled: R7RS allows both). A Scheme
+program's data is never freed -- there is no collector yet -- and every
+Scheme fixture runs under ASan and UBSan in `tur_r7rs_sanitize` (T8). `(scheme char)` maps and
+classifies all of Unicode, from tables generated out of the Unicode
+database. The full
+reference is [r7rs-guide.md](r7rs-guide.md).
+
+`turmeric` and `saffron` are **stable bases** -- neither is gated. `#lang
+saffron` needs no `--enable=` flag and no `:experiments` entry, and prints no
+lifecycle warning; `tur dialects` lists those eight bases as `stable` and the
+ninth, `r7rs`, as experimental.
 
 `turmeric/sweet` is the preferred spelling for the sweet-exp base. The older
 `#lang sweet-exp` is still accepted as a legacy alias, so

@@ -459,6 +459,14 @@ typedef enum ReaderType {
     READER_CURLY_INFIX,    /* Turmeric + curly-infix (SRFI-105) */
     READER_NEOTERIC,       /* Turmeric + neoteric notation */
     READER_SWEET,          /* Full sweet-expressions */
+    /* r7rs-lang-plan R1: the Scheme reader.  A VARIANT of the s-expression
+     * reader (one flag on `Reader`, beside neoteric_enabled), not a second
+     * reader: `#t`/`#f`, `#\c` with the R7RS names and `#\x<hex>`, `#(...)`,
+     * `#u8(...)`, `,`/`,@` as unquote (comma is whitespace in every Turmeric
+     * reader), dotted pairs, `|sym|`, the `#x`/`#o`/`#b`/`#d`/`#e`/`#i`
+     * numeric prefixes and the Scheme string escapes.  Only `#lang r7rs`
+     * selects it; the language has no reader axis (D1). */
+    READER_R7RS,
 } ReaderType;
 
 /* saffron-lang-plan D1: the LANGUAGE axis of a `#lang` line, orthogonal to the
@@ -477,6 +485,10 @@ typedef enum ReaderType {
 typedef enum LangDialect {
     LANG_TURMERIC = 0,   /* the default; every existing file */
     LANG_SAFFRON,        /* dynamically typed dialect (`#lang saffron`; stable since 0.46.0) */
+    /* r7rs-lang-plan D1: R7RS-small Scheme.  Rides the same dynamic substrate
+     * as Saffron (LangTraits.dynamic) under a Scheme reader (READER_R7RS);
+     * experiment-gated, and the `#lang` line is itself the enable (D11). */
+    LANG_R7RS,
 } LangDialect;
 
 /* Canonical name of a dialect, for diagnostics and `tur dialects`.
@@ -577,9 +589,10 @@ ReaderType detect_lang_dialect(const char *src, size_t len,
  *
  * saffron GRADUATED at 0.46.0, so no dialect is gated: there is nothing to
  * enable, nothing to warn about, and a project manifest can no longer refuse
- * one.  What remains is recording that this build contains a Saffron TU
- * (g_opt_saffron), which the emitter reads to decide whether to emit the `any`
- * registries -- see lang_dialects.c.
+ * one.  What remains is recording that this build contains a dynamically
+ * typed TU (g_opt_dynamic_any -- keyed on the language's LangTraits.dynamic
+ * bit, not its name), which the emitter reads to decide whether to emit the
+ * `any` registries -- see lang_dialects.c.
  *
  * Still returns bool, and callers still check it, because that is the shape a
  * future gated dialect needs; today it cannot fail. */
@@ -639,7 +652,16 @@ void diag_register_file(const SourceFile *file);
 
 /* Return the filesystem path registered for file_id, or NULL. */
 const char *diag_file_path(uint16_t file_id);
+/* The source-file registry's capacity: file ids run [0, DIAG_MAX_FILES).
+ * Raised from a hard-coded 64 at r7rs-lang-plan R7, when import/load ids
+ * stopped reusing the compiled driver's auto-loaded band (~40 files) and a
+ * procedural macro's compile-time evaluation ran out of ids. */
+#define DIAG_MAX_FILES 512
 const SourceFile *diag_source_file(uint16_t file_id);
+/* r7rs-lang-plan R7: the compiled driver records where its auto-loaded stdlib
+ * file ids end, so import/load ids start past them instead of overwriting one. */
+void     diag_note_autoload_file_ids(uint16_t end);
+uint16_t diag_autoload_file_ids_end(void);
 
 /* Translate a span into the coordinates of the file the user is editing.
  *

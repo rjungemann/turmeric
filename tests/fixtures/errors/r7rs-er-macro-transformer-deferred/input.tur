@@ -1,0 +1,9 @@
+#lang r7rs
+;; r7rs-lang-plan R4 ships syntax-rules; er-macro-transformer, the low-level
+;; escape D5 names, needs a transformer PROCEDURE run at expansion time and
+;; is deferred.  The form is a diagnostic that says so, not a silent
+;; pass-through that would surface later as "unknown function".
+(define-syntax swap!
+  (er-macro-transformer
+    (lambda (form rename compare) form)))
+(display 1)

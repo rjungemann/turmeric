@@ -1,0 +1,11 @@
+#lang r7rs
+;; r7rs-lang-plan T3: a string literal is an immutable cstr (R7RS 6.7: it is
+;; an error to mutate one), so string-set! on it is the named error on both
+;; back ends -- and string-copy makes the mutable one.  The line before it
+;; prints; the exit is nonzero.
+(import (scheme base) (scheme write))
+(define s (string-copy "abc"))
+(string-set! s 0 #\z)
+(write s) (newline)
+(string-set! "abc" 0 #\z)
+(display "not reached") (newline)

@@ -223,13 +223,13 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
      * file is sweet-exp Turmeric unless its `#lang` line says otherwise, and
      * there is no extension that means "Saffron". */
     if (out_dialect) *out_dialect = dialect;
-    /* saffron-lang-plan S6: the Saffron prelude joins the stdlib autoload list
-     * when the ENTRY file is Saffron.  Set here rather than at each caller
+    /* saffron-lang-plan S6: the language's prelude (LangTraits.prelude) joins
+     * the stdlib autoload list when the ENTRY file has one.  Set here rather than at each caller
      * because this is the one function every CLI path that opens an entry file
      * goes through, and set unconditionally (not only when true) so a Saffron
      * compile cannot license the prelude for the next Turmeric one in the same
      * process -- see the note on the declaration. */
-    g_saffron_prelude = (dialect == LANG_SAFFRON);
+    g_lang_prelude = lang_traits(dialect)->prelude;
     return detected_type;
 }
 
@@ -946,10 +946,14 @@ static uint32_t prepend_stdlib_forms(Arena *arena, SymbolTable *st,
                                      Form ***forms_in_out,
                                      uint32_t *nforms_in_out,
                                      uint8_t *file_id_in_out) {
-    return tur_stdlib_prepend_forms(arena, st, resolve_stdlib_root(),
-                                    entry_path, g_no_auto_stdlib,
-                                    forms_in_out, nforms_in_out,
-                                    file_id_in_out);
+    uint32_t n = tur_stdlib_prepend_forms(arena, st, resolve_stdlib_root(),
+                                          entry_path, g_no_auto_stdlib,
+                                          forms_in_out, nforms_in_out,
+                                          file_id_in_out);
+    /* The auto-loaded files took ids [1, *file_id_in_out); an import or a
+     * `(load ...)` must be numbered past them (elab_core.c). */
+    if (file_id_in_out) diag_note_autoload_file_ids(*file_id_in_out);
+    return n;
 }
 
 static int compile_to_c(const char *path, Buf *out_c,
@@ -2550,13 +2554,47 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
             buf_putc(&new_al, '\0');
             buf_free(autolink);
             *autolink = new_al;
+        } else {
+            /* r7rs-lang-plan T4: an IN-TREE build -- `tur` at <root>/build/tur
+             * with its libturi.a beside it in <build>/src.  `(import (scheme
+             * eval))` links the interpreter, and a developer's `tur run` of
+             * such a program should find the archive this very build made
+             * without TUR_CC_FLAGS.  (The marker's own -I paths are anchored
+             * at the source root by step 3.)  Skipped when TUR_CC_FLAGS
+             * already names a -L, so the ctests' explicit flags still win. */
+            char exe_buf[4096] = "";
+            if (!(cc_flags && strstr(cc_flags, "-L")) &&
+                get_exe_path(exe_buf, sizeof(exe_buf)) == 0) {
+                char dir[4096], probe[4200];
+                struct stat st;
+                dir_of_path(exe_buf, dir, sizeof(dir));
+                snprintf(probe, sizeof(probe), "%s/src/libturi.a", dir);
+                if (stat(probe, &st) == 0 && S_ISREG(st.st_mode)) {
+                    Buf new_al;
+                    buf_init(&new_al);
+                    buf_printf(&new_al, "-L%s/src ", dir);
+                    if (autolink->len > 1)
+                        buf_write(&new_al, autolink->data, autolink->len - 1);
+                    buf_putc(&new_al, '\0');
+                    buf_free(autolink);
+                    *autolink = new_al;
+                }
+            }
         }
     }
 
-    /* 2. ASan autodetect: sanitized libturi.a needs -fsanitize on the link. */
+    /* 2. ASan autodetect: sanitized libturi.a needs -fsanitize on the link.
+     * The -L paths searched are TUR_CC_FLAGS' and (r7rs-lang-plan T4) the
+     * autolink's own, which step 1 may have anchored. */
     if (autolink->len > 0 && strstr(autolink->data, "-lturi")) {
         char nm_cmd[512];
-        const char *cf = cc_flags;
+        Buf scan;
+        buf_init(&scan);
+        if (cc_flags) buf_puts(&scan, cc_flags);
+        buf_putc(&scan, ' ');
+        buf_puts(&scan, autolink->data);
+        buf_putc(&scan, '\0');
+        const char *cf = scan.data;
         while (cf && *cf) {
             const char *lf = strstr(cf, "-L");
             if (!lf) break;
@@ -2579,6 +2617,7 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
             }
             cf = lf_end;
         }
+        buf_free(&scan);
     }
 
     /* 3. Anchor turmeric-tree-relative autolink paths at the located root. */
@@ -2593,6 +2632,46 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
             buf_free(autolink);
             *autolink = rewritten;
         }
+    }
+
+    /* 3b. r7rs-lang-plan T4: `@TUR_STDLIB_ROOT@` names the stdlib this `tur`
+     * builds against, as a C string literal -- stdlib/r7rs/eval.tur bakes it
+     * in (`-DTUR_R7RS_STDLIB=@TUR_STDLIB_ROOT@`) so a built program's embedded
+     * evaluator finds the R7RS prelude without TUR_STDLIB_DIR.  A root the
+     * shell quoting cannot carry leaves the define out (the program then
+     * falls back to TUR_STDLIB_DIR and a cwd-relative `stdlib`). */
+    if (autolink->len > 1 && strstr(autolink->data, "@TUR_STDLIB_ROOT@")) {
+        const char *root = resolve_stdlib_root();
+        char abs_root[4096];
+        if (root && realpath(root, abs_root)) root = abs_root;
+        bool quotable = root && *root && !strpbrk(root, "'\"\\ \t\n");
+        Buf out;
+        buf_init(&out);
+        const char *p = autolink->data;
+        while (*p) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            const char *start = p;
+            while (*p && *p != ' ') p++;
+            size_t tlen = (size_t)(p - start);
+            const char *at = strstr(start, "@TUR_STDLIB_ROOT@");
+            if (at && at < p) {
+                if (!quotable) continue;
+                if (out.len > 0) buf_putc(&out, ' ');
+                buf_putc(&out, '\'');
+                buf_write(&out, start, (size_t)(at - start));
+                buf_printf(&out, "\"%s\"", root);
+                const char *after = at + strlen("@TUR_STDLIB_ROOT@");
+                buf_write(&out, after, (size_t)(p - after));
+                buf_putc(&out, '\'');
+                continue;
+            }
+            if (out.len > 0) buf_putc(&out, ' ');
+            buf_write(&out, start, tlen);
+        }
+        buf_putc(&out, '\0');
+        buf_free(autolink);
+        *autolink = out;
     }
 
     /* 4. -lturi supersedes bare .c source args; drop them to avoid duplicate
@@ -5676,6 +5755,24 @@ static bool file_has_main_defn(const char *path) {
     size_t len = 0;
     if (read_entire_file_quiet(path, &src, &len) != 0) return false;
     bool found = false;
+    /* r7rs-lang-plan R9: an R7RS PROGRAM is its top-level forms -- it has no
+     * `(defn main`, and the lowering folds its expressions into one.  So a
+     * `#lang r7rs` file is an entry point unless it is a library (a
+     * `(define-library` at the start of a line).  Without this `tur build .`
+     * on a Scheme program produced a shared library and no binary. */
+    {
+        const char *body = NULL; size_t body_len = 0;
+        LangDialect dl = LANG_TURMERIC;
+        (void)detect_lang_dialect(src, len, &body, &body_len, NULL, NULL, &dl);
+        if (dl == LANG_R7RS) {
+            bool is_library = false;
+            for (size_t i = 0; i + 15 <= len && !is_library; i++)
+                if ((i == 0 || src[i - 1] == '\n') && strncmp(src + i, "(define-library", 15) == 0)
+                    is_library = true;
+            free(src);
+            return !is_library;
+        }
+    }
     for (size_t i = 0; i + 4 < len && !found; i++) {
         /* Match "(defn main" or "defn main" (sweet-exp) at a word boundary */
         bool sexpr = (strncmp(src + i, "(defn main", 10) == 0);
@@ -7470,32 +7567,11 @@ static bool fmt_is_tur_file(const char *name) {
  * the extension alone does not say so. */
 static int fmt_format_source(const char *path_label, const char *src, size_t len,
                               ReaderType rtype, Buf *out) {
-    const char *body = src;
-    size_t body_len = len;
-    LangDialect dl = LANG_TURMERIC;
-    ReaderType lang_rt = detect_lang_dialect(src, len, &body, &body_len,
-                                             NULL, NULL, &dl);
-    size_t head_len = (size_t)(body - src);
-    if (head_len == 0) return fmt_format_buffer(path_label, src, len, rtype, out);
-
-    if (rtype == READER_TURMERIC && reader_type_is_implemented(lang_rt))
-        rtype = lang_rt;
-
-    Buf body_out;
-    int rc = fmt_format_buffer(path_label, body, body_len, rtype, &body_out);
-    if (rc != 0) return rc;
-
-    buf_init(out);
-    buf_write(out, src, head_len);
-    /* The reader hands back the position after the directive TEXT, which may or
-     * may not include its newline, and the printer strips leading blank lines
-     * from the body -- so without this the two ran together as
-     * `#lang saffron;;; ...`.  Normalising to exactly one newline also keeps
-     * the pass idempotent, which `fmt-idempotence-stdlib` checks. */
-    if (head_len == 0 || src[head_len - 1] != '\n') buf_putc(out, '\n');
-    buf_write(out, body_out.data, body_out.len);
-    buf_free(&body_out);
-    return 0;
+    /* r7rs-lang-plan R9: the body moved to fmt.c (fmt_format_document) so the
+     * LSP's textDocument/formatting -- linked into tur_core, not main.c --
+     * formats a `#lang` document too; it handed the directive to the reader
+     * and got a parse error, i.e. "no edits", for every `#lang` buffer. */
+    return fmt_format_document(path_label, src, len, rtype, out);
 }
 
 typedef enum {
@@ -7650,7 +7726,7 @@ static int usage_fmt(void) {
         "  Paths may be files or directories.  Defaults to current directory.\n"
         "  Skips:  build/  .git/  .tur-cache/  .turnb-cache/  .tur-repl-cache/\n"
         "\n"
-        "  Dialects for --lang:  turmeric (default)  sweet-exp  curly-infix  neoteric\n"
+        "  Dialects for --lang:  turmeric (default)  sweet-exp  curly-infix  neoteric  r7rs\n"
         "  (tursweet is a deprecated alias for sweet-exp)\n"
         "\n"
         "Exit codes:\n"
@@ -7704,6 +7780,10 @@ static int cmd_fmt(int argc, char **argv) {
                 force_lang = READER_CURLY_INFIX;
             } else if (strcmp(lang, "neoteric") == 0) {
                 force_lang = READER_NEOTERIC;
+            } else if (strcmp(lang, "r7rs") == 0) {
+                /* r7rs-lang-plan R9: a Scheme buffer with no `#lang` line
+                 * (an editor selection) -- re-indented, never reprinted. */
+                force_lang = READER_R7RS;
             } else {
                 fprintf(stderr, "tur fmt: unknown dialect '%s'\n", lang);
                 return 2;
@@ -7896,7 +7976,7 @@ static int cmd_eval_h(const char *path, bool use_color,
                  * `detect_and_adjust_lang` (which the compiled paths use) left
                  * `tur --interpret` reporting "unknown name 'vec-map'" on a
                  * program the compiler accepted. */
-                g_saffron_prelude = (dialect == LANG_SAFFRON);
+                g_lang_prelude = lang_traits(dialect)->prelude;
             }
         }
     }
@@ -9695,8 +9775,9 @@ static int usage_repl(void) {
         "                  start the interactive REPL\n"
         "\n"
         "flags:\n"
-        "  --lang <d>      start in a language dialect: \"turmeric\" (default)\n"
-        "                  or \"saffron\" (unannotated params default to any).\n"
+        "  --lang <d>      start in a language dialect: \"turmeric\" (default),\n"
+        "                  \"saffron\" (unannotated params default to any),\n"
+        "                  \"r7rs\" (Scheme), or any base `tur dialects` lists.\n"
         "                  Equivalent to typing `#lang <d>` at the prompt.\n"
         "  --watch         auto-reload the enclosing spice between prompts\n"
         "                  when any source .tur file's mtime advances\n"
@@ -12104,15 +12185,21 @@ static int tur_main_inner(int argc, char **argv) {
         /* Validated HERE rather than inside cmd_repl, so a typo is a usage
          * error before the banner prints and the stdlib preloads. */
         if (repl_lang_flag) {
-            if (strcmp(repl_lang_flag, "saffron") == 0) {
-                g_repl_start_saffron = true;
-            } else if (strcmp(repl_lang_flag, "turmeric") != 0) {
+            /* r7rs-lang-plan R9: any base `tur dialects` lists, resolved
+             * through the same table the `#lang` line uses -- it was a
+             * hard-coded "turmeric"/"saffron" pair, so `--lang r7rs` was
+             * refused. */
+            LangDialect ld;
+            ReaderType lr;
+            if (!lang_base_lookup(repl_lang_flag, strlen(repl_lang_flag), &ld, &lr)) {
                 fprintf(stderr,
                         "tur repl: unknown --lang '%s' "
-                        "(expected \"turmeric\" or \"saffron\")\n",
+                        "(expected a base `tur dialects` lists, e.g. "
+                        "\"turmeric\", \"saffron\" or \"r7rs\")\n",
                         repl_lang_flag);
                 return usage_error(usage_repl);
             }
+            g_repl_start_lang = repl_lang_flag;
         }
         return cmd_repl(watch_mode);
     }
@@ -12313,6 +12400,17 @@ static int tur_main_job(void *p) {
     TurMainArgs *a = (TurMainArgs *)p;
     return tur_main_inner(a->argc, a->argv);
 }
+
+/* r7rs-lang-plan T5: `#lang r7rs`'s call/cc copies the C stack under
+ * `tur --interpret` (src/turi/interpreter_natives.c).  ASan's use-after-return
+ * detection moves address-taken locals onto a heap "fake stack" that a copy of
+ * the real stack cannot see, so a sanitized `tur` runs with it off -- the
+ * same default the prelude sets for a sanitized compiled Scheme program.
+ * ASAN_OPTIONS still overrides it. */
+#if defined(__SANITIZE_ADDRESS__)
+const char *__asan_default_options(void);
+const char *__asan_default_options(void) { return "detect_stack_use_after_return=0"; }
+#endif
 
 int main(int argc, char **argv) {
     TurMainArgs a = { argc, argv };

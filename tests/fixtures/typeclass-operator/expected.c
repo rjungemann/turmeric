@@ -544,6 +544,13 @@ TUR_RT_API int  tur_region_depth(void);
  * blanket refusal shows up as a savings regression rather than as nothing. */
 TUR_RT_API void tur_region_shutdown(void);
 
+/* Call `cb` on the used memory of every live and retired generation on this
+ * thread (a pooled, rewound one is dead memory and is skipped).  The r7rs-gc
+ * experiment's collector reads these as roots: a node built in a bracket can
+ * point at an object on the collected heap. */
+TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud),
+                                     void *ud);
+
 #endif
 /* ---- end src/runtime/region.h ---- */
 #define TUR_REGION_NOTE(w) tur_region_note_escape((const void *)(intptr_t)(w))
@@ -702,6 +709,13 @@ TUR_RT_API void  arena_reset(Arena *a);
  * or lives elsewhere -- permanent pool, eval arenas, sym arena, static data --
  * and must be left untouched.  O(slabs). */
 TUR_RT_API bool  arena_owns(const Arena *a, const void *p);
+
+/* Call `cb` on the used bytes of every slab -- the memory a conservative
+ * collector must read as roots (the r7rs-gc experiment scans region memory
+ * this way, since an object built in a region can point into its heap). */
+TUR_RT_API void  arena_each_used(const Arena *a,
+                                 void (*cb)(const void *p, size_t n, void *ud),
+                                 void *ud);
 
 #endif
 /* ---- end src/runtime/arena.h ---- */
@@ -967,6 +981,13 @@ TUR_RT_API void arena_reset(Arena *a) {
     }
     a->total_bytes = 0;
     a->total_allocs = 0;
+}
+
+TUR_RT_API void arena_each_used(const Arena *a,
+                                void (*cb)(const void *p, size_t n, void *ud),
+                                void *ud) {
+    for (const ArenaSlab *s = a->head; s; s = s->next)
+        if (s->used) cb(s->data, s->used, ud);
 }
 
 TUR_RT_API bool arena_owns(const Arena *a, const void *p) {
@@ -1335,6 +1356,12 @@ TUR_RT_API void tur_region_free(void *p) {
 }
 
 TUR_RT_API bool tur_region_active(void) { return g_live_n > 0; }
+
+TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud),
+                                     void *ud) {
+    for (int i = 0; i < g_live_n; i++) arena_each_used(g_live[i], cb, ud);
+    for (int i = 0; i < g_retired_n; i++) arena_each_used(g_retired[i], cb, ud);
+}
 
 TUR_RT_API int tur_region_depth(void) { return g_live_n; }
 
@@ -2157,12 +2184,13 @@ static DK *dk_append(DK *a, DK *b) {
     p->next = b;
     return a;
 }
-static void dk_free(DK *k) { while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
+static int tur_dk_pinned = 0;
+static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
 /* Free a single spliced node without following ->next -- used to reclaim the
  * one-off shift/perform node whose ->next points into an enclosing continuation
  * (dk_free would walk into that continuation and risk a double free).  See
  * docs/archive/cps-delimited-dk-node-leak.md. */
-__attribute__((unused)) static void dk_free_node(DK *k) { if (k && k->env_drop) k->env_drop(k->env); free(k); }
+__attribute__((unused)) static void dk_free_node(DK *k) { if (tur_dk_pinned) return; if (k && k->env_drop) k->env_drop(k->env); free(k); }
 /* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */
 typedef intptr_t (*__tur_cps_fn)();
 static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];
@@ -2219,7 +2247,7 @@ __attribute__((unused)) static intptr_t __dk_reap_ptr(intptr_t p) { __dk_reap_pu
 __attribute__((unused)) static DK *__dk_reap_node(DK *k) { __dk_reap_push(k, 0); return k; }
 __attribute__((unused)) static intptr_t __dk_reap_closure(intptr_t p) { __dk_reap_push((void *)p, 2); return p; }
 static void __dk_reap_run(void) {
-    for (size_t i = 0; i < __dk_reap_n; i++) {
+    for (size_t i = 0; i < __dk_reap_n && !tur_dk_pinned; i++) {
         if (__dk_reap_kind[i] == 1) dk_free((DK *)__dk_reap_v[i]);
         else if (__dk_reap_kind[i] == 2) TUR_CLOSURE_DROP(__dk_reap_v[i]);
         else free(__dk_reap_v[i]);

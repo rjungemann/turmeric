@@ -39,7 +39,8 @@ foreach(_pair
         "region.h=tur_rt_embed_region_h"
         "arena.h=tur_rt_embed_arena_h"
         "arena.c=tur_rt_embed_arena_c"
-        "region.c=tur_rt_embed_region_c")
+        "region.c=tur_rt_embed_region_c"
+        "r7gc.c=tur_rt_embed_r7gc_c")
   string(REPLACE "=" ";" _kv "${_pair}")
   list(GET _kv 0 _file)
   list(GET _kv 1 _sym)

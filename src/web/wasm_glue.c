@@ -25,6 +25,7 @@
 #include "lang_dialects.h"
 #include "reader.h"
 #include "runtime/experiments.h"
+#include "runtime/globals.h"   /* r7rs-lang-plan R9: g_lang_prelude */
 #include "symbols.h"
 #include "turi/preload.h"
 #include "turi/docstrings.h"
@@ -159,10 +160,17 @@ int turi_wasm_init(void) {
  * This clears all definitions and returns to a clean slate. */
 void turi_wasm_reset(void) {
     if (g_env) {
+        /* r7rs-lang-plan R9: a reset keeps the session's language (its
+         * prelude is seeded before the preload). */
+        LangDialect keep_lang = g_env->lang;
+        ReaderType  keep_rt   = g_env->reader_type;
         turi_env_free(g_env);
         g_env = turi_env_new();
         if (g_env) {
             turi_env_set_diag_sink(g_env, wasm_diag_sink, g_env);
+            g_env->lang        = keep_lang;
+            g_env->reader_type = keep_rt;
+            g_lang_prelude     = lang_traits(keep_lang)->prelude;
             /* Re-establish stdlib parity on the fresh env (matches init). */
             wasm_preload_stdlib(g_env);
         }
@@ -445,6 +453,23 @@ int turi_wasm_set_lang(const char *name) {
      * still selects the turmeric base rather than failing the switch.) */
     if (bad) return 1;
 
+    /* r7rs-lang-plan R9: a language with a different PRELUDE cannot be a
+     * rewind to the pinned preload, which holds the old language's -- it
+     * needs a fresh session with the new dialect seeded before the preload,
+     * as the native REPL builds one (repl_fresh_env in src/turi/repl.c).
+     * Picking r7rs used to keep Turmeric's preload, so `(display ...)` met
+     * Turmeric's `display` method. */
+    if (lang_traits(dialect)->prelude != lang_traits(g_env->lang)->prelude) {
+        turi_env_free(g_env);
+        g_env = turi_env_new();
+        if (!g_env) return 1;
+        turi_env_set_diag_sink(g_env, wasm_diag_sink, g_env);
+        g_env->lang        = dialect;
+        g_env->reader_type = rt;
+        g_lang_prelude     = lang_traits(dialect)->prelude;
+        wasm_preload_stdlib(g_env);
+        return 0;
+    }
     /* Full switch (no-op when nothing changes): keeps the pinned stdlib
      * preload across an explicit UI language switch, for the same reason the
      * inline `#lang` path does (web-repl-lang-switch-drops-stdlib). */
@@ -486,6 +511,7 @@ static const struct {
     { "curly-infix", "Curly-infix" },
     { "neoteric",    "Neoteric" },
     { "sweet",       "Sweet-expression" },
+    { "scheme",      "Scheme" },          /* r7rs-lang-plan R1: READER_R7RS */
 };
 
 static const char *wasm_reader_label(const char *reader) {
@@ -543,11 +569,10 @@ const char *turi_wasm_lang_registry(void) {
         wasm_json_escape(&b, wasm_reader_label(d.reader));
         buf_puts(&b, "\",\"language\":\"");
         wasm_json_escape(&b, d.language);
-        /* Always null since saffron graduated at 0.46.0 -- every base is
-         * stable.  The key is still emitted so the picker's rendering path is
-         * exercised and a future gated dialect needs no JS change: a base with
-         * an experiment is BADGED, never hidden, because the `#lang` line is
-         * itself the enable and the row stays selectable. */
+        /* null for a stable base; the gating EXPERIMENTS[] name for a gated
+         * one (`r7rs` since r7rs-lang-plan R1).  A base with an experiment is
+         * BADGED, never hidden, because the `#lang` line is itself the enable
+         * and the row stays selectable. */
         buf_puts(&b, "\",\"experiment\":");
         if (d.experiment) {
             buf_puts(&b, "\"");

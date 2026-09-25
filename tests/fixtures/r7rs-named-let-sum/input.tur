@@ -1,0 +1,21 @@
+#lang r7rs
+;; r7rs-lang-plan R2 exit criterion: a named-let loop summing a list runs
+;; under --interpret.  Every R2 piece is on the path: `define` with a formals
+;; list, named `let` (a letrec-bound lambda), `if` under Scheme truthiness,
+;; the prelude's `null?`/`car`/`cdr`/`list` reached through the rename table,
+;; and `display`/`newline` on the write primitives.
+;;
+;; R6 lifted the compiled path: a letrec-bound closure over `any` that calls
+;; itself now compiles, so this runs on both back ends.  `(sum (list 1.5 2.5))`
+;; is the inexact 4.0, spelled as R5 spells a float.
+(define (sum lst)
+  (let loop ((l lst) (acc 0))
+    (if (null? l)
+        acc
+        (loop (cdr l) (+ acc (car l))))))
+(display (sum (list 1 2 3 4)))
+(newline)
+(display (sum (list 1.5 2.5)))
+(newline)
+(display (sum '()))
+(newline)

@@ -1,0 +1,101 @@
+#lang r7rs
+;; The examples from docs/guides/r7rs-guide.md, so they cannot rot (the
+;; saffron guide's twin, docs-saffron-guide-examples).  Keep it in step with
+;; the guide: if an example changes there, change it here.
+;;
+;; No requires.* marker -- the guide describes the language, not a back end,
+;; so both suites run it.  Floats carry a non-zero fractional part.
+(import (scheme base) (scheme write) (scheme char) (scheme read) (scheme eval) (scheme repl)
+        (scheme complex) (scheme inexact))
+
+;; --- A first program ---------------------------------------------------------
+(define (fact n)
+  (if (= n 0)
+    1
+    (* n (fact (- n 1)))))
+(display (fact 20))
+(newline)
+
+;; --- Lists, vectors, strings ----------------------------------------------
+(define xs (list 3 1 2))
+(write (map (lambda (x) (* x x)) xs))
+(newline)
+(write (vector-map + #(1 2) #(10 20)))
+(newline)
+(write (string-upcase "shout"))
+(newline)
+(let loop ((i 0) (acc '()))
+  (if (< i 3)
+    (loop (+ i 1) (cons i acc))
+    (begin (write acc) (newline))))
+(define s (string-copy "caf\xE9;"))
+(string-set! s 0 #\C)
+(write (list s (string-length s)))
+(newline)
+
+;; --- Numbers ---------------------------------------------------------------
+(write (list (/ 7 2) (/ 6 2) (exact->inexact 3) (+ 7.1 0.25) (expt 2 100)))
+(newline)
+(write (list (+ 1/2 1/3) (exact .5) (round 7/2) (inexact 1/3)))
+(newline)
+(write (list (* 1+2i 3-4i) (sqrt -4) (magnitude 3+4i) (make-rectangular 1 2)))
+(newline)
+(write (list 10/2 #i3/2 3+0i (string->number "1e2")))
+(newline)
+
+;; --- Macros ------------------------------------------------------------------
+(define-syntax swap!
+  (syntax-rules ()
+    ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+(let ((p 1) (q 2))
+  (swap! p q)
+  (write (list p q))
+  (newline))
+(define-syntax my-list (syntax-rules () ((_ x) (list x))))
+(write (let ((list vector)) (my-list 1)))
+(newline)
+
+;; --- Control -----------------------------------------------------------------
+(write (call/cc (lambda (k) (+ 1 (k 42)))))
+(newline)
+(write (guard (e ((error-object? e) (error-object-message e)))
+         (error "something broke" 'detail)))
+(newline)
+(define depth (make-parameter 0))
+(write (parameterize ((depth 1)) (depth)))
+(newline)
+(dynamic-wind
+  (lambda () (display "[in]"))
+  (lambda () (display "body"))
+  (lambda () (display "[out]")))
+(newline)
+
+(define (count-to n)
+  (let ((k #f) (i 0))
+    (call/cc (lambda (c) (set! k c)))
+    (set! i (+ i 1))
+    (if (< i n) (k #f) i)))
+(write (count-to 3))
+(newline)
+
+;; --- Eval ----------------------------------------------------------------------
+(write (eval '(* 6 7) (environment '(scheme base))))
+(newline)
+(define env (interaction-environment))
+(eval '(define (twice x) (* 2 x)) env)
+(write ((eval 'twice env) 21))
+(newline)
+(write ((eval '(lambda (f) (f 10)) env) (lambda (n) (+ n 1))))
+(newline)
+
+;; --- Ports ---------------------------------------------------------------------
+(let ((out (open-output-string)))
+  (write '(a "b" #\c) out)
+  (write (get-output-string out))
+  (newline))
+(let ((l (list 1 2 3)))
+  (set-cdr! (cddr l) l)
+  (write l)
+  (newline))
+(write (read (open-input-string "(1 (2 . 3) #(4))")))
+(newline)

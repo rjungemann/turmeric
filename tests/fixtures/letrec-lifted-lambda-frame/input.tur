@@ -1,0 +1,12 @@
+;; r7rs-lang-plan R10: a lambda made in a letrec's body that calls one of the
+;; letrec's functions.  The elaborator lifts the lambda (it finds no
+;; captures), and the interpreter resolved the letrec name from an empty
+;; frame chain -- "unbound variable: quux".  Compiled was always right.
+(defn run [th : (fn [] int)] : int (th))
+
+(defn main [] : int
+  (letrec [quux (fn [] : int (bar))
+           bar  (fn [] : int 42)]
+    (println (run (fn [] : int (quux))))
+    (println ((fn [] : int (bar)))))
+  0)

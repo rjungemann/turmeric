@@ -168,4 +168,11 @@ TUR_RT_API int  tur_region_depth(void);
  * blanket refusal shows up as a savings regression rather than as nothing. */
 TUR_RT_API void tur_region_shutdown(void);
 
+/* Call `cb` on the used memory of every live and retired generation on this
+ * thread (a pooled, rewound one is dead memory and is skipped).  The r7rs-gc
+ * experiment's collector reads these as roots: a node built in a bracket can
+ * point at an object on the collected heap. */
+TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud),
+                                     void *ud);
+
 #endif

@@ -1,0 +1,32 @@
+(#t #f #t #f)
+(#t #t #f)
+(#t #t #t #f #t)
+(1 two 3)
+((x x x) zzz abc)
+((e l) ello ell)
+(#(a b c) xy (2 3))
+ABC
+axbycz
+#(11 22 33)
+789
+(111 222)
+3 8 
+(#(1 2 3) #(2 3))
+#(1 1 2 3 5)
+#(0 9 9)
+(#u8(1 2 3) #u8(3 4))
+#u8(9 9 3 4 5)
+(#u8(97 98 99) hi café)
+((2 3) (2 . b) (b))
+(5 0 0.3333333333333333)
+(r7rs exact-closed ratios turmeric)
+"q"
+(#t #f q 7 #f)
+(#t #t #t #t)
+(HELLO, WORLD abc mixed)
+(1 (2) 6 7 () 4)
+(7.1 0 3 3.141592653589793 0 4 5)
+(ax by)
+(pqr 9 #t)
+(1 2 3)
+#(1)

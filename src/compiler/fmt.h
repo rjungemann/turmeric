@@ -39,4 +39,16 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts);
 int fmt_format_buffer(const char *path_label, const char *src, size_t len,
                       ReaderType rtype, Buf *out);
 
+/* Format a whole DOCUMENT: a leading `#lang` directive is preserved verbatim
+ * and selects the reader when `rtype` is the extension default; the body is
+ * formatted by fmt_format_buffer.  What `tur fmt` and the LSP's
+ * textDocument/formatting both run.  Same contract as fmt_format_buffer. */
+int fmt_format_document(const char *path_label, const char *src, size_t len,
+                        ReaderType rtype, Buf *out);
+
+/* r7rs-lang-plan R9: re-indent a `#lang r7rs` body, keeping every token and
+ * line break as written (fmt.c explains why Scheme is never reprinted).
+ * Appends to an initialised `out`; returns 0, or -1 on nesting too deep. */
+int fmt_scheme_reindent(const char *src, size_t len, Buf *out);
+
 #endif /* TUR_FMT_H */

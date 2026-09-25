@@ -6,6 +6,7 @@
 #include "buf.h"     /* sweet-exp preprocessor */
 
 #include <ctype.h>
+#include <math.h>    /* r7rs-lang-plan R1: +inf.0 / +nan.0, #e on a float lexeme */
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
@@ -24,6 +25,18 @@ typedef struct Reader {
     bool              curly_infix_enabled;
     /* Phase S2: Neoteric support */
     bool              neoteric_enabled;
+    /* r7rs-lang-plan R1: the Scheme lexical layer (READER_R7RS).  A variant
+     * of this reader, not a second one: `#t`/`#f`, `#\c` with the R7RS
+     * names and `#\x<hex>`, `#(...)`, `#u8(...)`, `,`/`,@` as unquote (comma
+     * is whitespace in every Turmeric reader -- the byte was never spoken
+     * for, so this costs nothing), dotted pairs, `|sym|`, the
+     * `#x`/`#o`/`#b`/`#d`/`#e`/`#i` numeric prefixes, `+5`/`.5`/`+inf.0`,
+     * and the Scheme string escapes.  Everything the Turmeric reader has
+     * that Scheme does not contradict stays available (keywords, `[...]`,
+     * `#map{...}`, inline C, `^tailcall`). */
+    bool              scheme_enabled;
+    /* `#!fold-case` / `#!no-fold-case` (R7RS 2.1), Scheme only. */
+    bool              fold_case;
     /* RM0/RM1: User-defined #-dispatch macros. May be NULL (no user macros). */
     const ReaderMacroRegistry *user_macros;
     /* proper-tail-calls T1: true while reading the FIRST element of a `(...)`
@@ -37,6 +50,14 @@ typedef struct Reader {
 /* Forward declaration; the RM1 implementation lives further down, after the
  * basic Reader helpers (peek, advance, span_from_to, ...) it depends on. */
 static Form *try_read_user_macro(Reader *r);
+/* r7rs-lang-plan R1: the Scheme-only `#` dispatches and lexemes. */
+static Form *try_read_scheme_hash(Reader *r);
+static Form *read_piped_symbol(Reader *r);
+static Form *read_number(Reader *r, int sign);
+static bool  scheme_sym_extra(int c);
+static bool  is_sym_cont(int c);
+static int   hex_digit(int c);
+static int   utf8_encode(uint32_t cp, char *out);
 
 /* Forward declarations for neoteric support */
 static int peek_neoteric_bracket(const Reader *r);
@@ -146,8 +167,25 @@ static void skip_ws_and_comments(Reader *r) {
         if (r->error) return;
         int c = peek(r);
         if (c == -1) return;
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ',') {
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' ||
+            /* Comma is whitespace (a Clojure inheritance) in every Turmeric
+             * reader; under Scheme it is unquote and read_form owns it. */
+            (c == ',' && !r->scheme_enabled)) {
             advance(r);
+        } else if (r->scheme_enabled && c == '#' && peek2(r) == '!' &&
+                   ((r->pos + 11 <= r->len &&
+                     memcmp(r->src + r->pos, "#!fold-case", 11) == 0) ||
+                    (r->pos + 14 <= r->len &&
+                     memcmp(r->src + r->pos, "#!no-fold-case", 14) == 0))) {
+            /* R7RS 2.1: the case-folding directives are comments that flip a
+             * reader flag for the rest of the file. */
+            bool fold = (r->src[r->pos + 2] == 'f');
+            size_t n = fold ? 11 : 14;
+            if (r->pos + n < r->len && is_sym_cont((unsigned char)r->src[r->pos + n])) {
+                return;   /* `#!fold-casex` -- not the directive; let read_form complain */
+            }
+            for (size_t i = 0; i < n; i++) advance(r);
+            r->fold_case = fold;
         } else if (c == ';') {
             while ((c = peek(r)) != -1 && c != '\n') advance(r);
         } else if (c == '#' && peek2(r) == '|') {
@@ -241,6 +279,50 @@ static Form *read_string(Reader *r) {
         if (c == '\\') {
             int e = advance(r);
             char out;
+            /* r7rs-lang-plan R1: the R7RS 6.7 escape set.  `\a`, `\b` and
+             * `\|` are new; `\x<hex>;` takes any scalar value and is written
+             * back as UTF-8; `\<intraline ws>*<newline><intraline ws>*` is
+             * the line continuation and produces nothing.  `\0` is Turmeric's
+             * and is not Scheme, so it falls through to the shared table
+             * (accepting it costs nothing and keeps the reader a variant). */
+            if (r->scheme_enabled) {
+                if (e == 'a') { buf[bi++] = 7; continue; }
+                if (e == 'b') { buf[bi++] = 8; continue; }
+                if (e == '|') { buf[bi++] = '|'; continue; }
+                if (e == 'x' || e == 'X') {
+                    uint32_t cp = 0; int nd = 0, d;
+                    while ((d = hex_digit(peek(r))) >= 0) {
+                        if (nd < 8) cp = cp * 16 + (uint32_t)d;
+                        advance(r); nd++;
+                    }
+                    if (nd == 0 || peek(r) != ';' || nd > 8 || cp > 0x10FFFF) {
+                        diag_emit(DIAG_ERROR, span_point(r),
+                                  "malformed '\\x<hex>;' string escape: expected 1-8 "
+                                  "hex digits (at most 10FFFF) followed by ';'");
+                        r->error = true;
+                        return NULL;
+                    }
+                    advance(r); /* ';' */
+                    bi += (size_t)utf8_encode(cp, buf + bi);
+                    continue;
+                }
+                if (e == ' ' || e == '\t' || e == '\n' || e == '\r') {
+                    /* Line continuation: optional intraline whitespace, the
+                     * line ending, then the next line's leading whitespace. */
+                    int w = e;
+                    while (w == ' ' || w == '\t') w = advance(r);
+                    if (w == '\r' && peek(r) == '\n') advance(r);
+                    if (w != '\n' && w != '\r') {
+                        diag_emit(DIAG_ERROR, span_point(r),
+                                  "'\\' followed by whitespace must continue "
+                                  "onto the next line (R7RS line continuation)");
+                        r->error = true;
+                        return NULL;
+                    }
+                    while (peek(r) == ' ' || peek(r) == '\t') advance(r);
+                    continue;
+                }
+            }
             switch (e) {
                 case 'n':  out = '\n'; break;
                 case 't':  out = '\t'; break;
@@ -275,6 +357,28 @@ static Form *read_string(Reader *r) {
     }
     
     return f;
+}
+
+/* r7rs-lang-plan R1: write `cp` as UTF-8 into `out` (up to 4 bytes) and
+ * return how many bytes were written.  Callers range-check `cp` first. */
+static int utf8_encode(uint32_t cp, char *out) {
+    if (cp < 0x80) { out[0] = (char)cp; return 1; }
+    if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
 }
 
 static int hex_digit(int c) {
@@ -606,21 +710,24 @@ static Form *read_quote(Reader *r) {
     return form_quote(r->arena, span_from_to(r, start_line, start_col, start_off, inner->span.off_end), inner);
 }
 
-/* Phase 6: Read unquote (~) or unquote-splicing (~@) - only valid inside quasiquote */
-static Form *read_unquote(Reader *r) {
+/* Phase 6: Read unquote (~) or unquote-splicing (~@) - only valid inside
+ * quasiquote.  r7rs-lang-plan R1: the Scheme reader spells the same two
+ * forms `,` and `,@`; `prefix` is the character that introduced them, for
+ * the diagnostics. */
+static Form *read_unquote_with(Reader *r, char prefix) {
     uint32_t start_line = r->line;
     uint32_t start_col = r->col;
     size_t start_off = r->pos;
-    advance(r); /* consume '~' */
+    advance(r); /* consume the prefix */
     
-    /* Check for ~@ (unquote-splicing) */
+    /* Check for ~@ / ,@ (unquote-splicing) */
     if (peek(r) == '@') {
         advance(r); /* consume '@' */
         skip_ws_and_comments(r);
         
         if (peek(r) == -1) {
             Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
-            diag_emit(DIAG_ERROR, s, "~@ requires an expression after it");
+            diag_emit(DIAG_ERROR, s, "%c@ requires an expression after it", prefix);
             r->error = true;
             return NULL;
         }
@@ -636,7 +743,7 @@ static Form *read_unquote(Reader *r) {
     
     if (peek(r) == -1) {
         Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
-        diag_emit(DIAG_ERROR, s, "~ requires an expression after it");
+        diag_emit(DIAG_ERROR, s, "%c requires an expression after it", prefix);
         r->error = true;
         return NULL;
     }
@@ -646,6 +753,10 @@ static Form *read_unquote(Reader *r) {
     
     /* Create an unquote form */
     return form_unquote(r->arena, span_from_to(r, start_line, start_col, start_off, inner->span.off_end), inner);
+}
+
+static Form *read_unquote(Reader *r) {
+    return read_unquote_with(r, '~');
 }
 
 static Form *read_quasiquote(Reader *r) {
@@ -826,8 +937,20 @@ static Form *read_symbol_or_minus_at(Reader *r, bool head_pos) {
     if (peek(r) == '-' && peek2(r) >= '0' && peek2(r) <= '9') {
         return read_number(r, -1);
     }
+    /* r7rs-lang-plan R1: Scheme also has an explicit `+` sign (`+5`) and a
+     * sign before a bare fraction (`-.5`, `+.5`); Turmeric reads `+5` as a
+     * symbol, so these are Scheme-only. */
+    if (r->scheme_enabled && (peek(r) == '+' || peek(r) == '-') &&
+        ((peek2(r) >= '0' && peek2(r) <= '9') ||
+         (peek2(r) == '.' && peek3(r) >= '0' && peek3(r) <= '9'))) {
+        return read_number(r, peek(r) == '-' ? -1 : 1);
+    }
 
-    while (is_sym_cont(peek(r))) advance(r);
+    /* R3: `:` is an ordinary identifier character in Scheme once past the
+     * first byte (`v:vec-new`, the conventional `(prefix ...)` spelling); at
+     * token start it is still Turmeric's keyword, which read_form owns. */
+    while (is_sym_cont(peek(r)) ||
+           (r->scheme_enabled && (scheme_sym_extra(peek(r)) || peek(r) == ':'))) advance(r);
     size_t end = r->pos;
     if (end == start_off) {
         Span s = span_point(r);
@@ -840,13 +963,38 @@ static Form *read_symbol_or_minus_at(Reader *r, bool head_pos) {
     Span span = span_from_to(r, start_line, start_col, start_off, end);
     StrSlice name = strslice(r->src + start_off, (uint32_t)(end - start_off));
 
+    if (r->scheme_enabled) {
+        /* R7RS 6.2.5: the inexact infinities and NaN are peculiar
+         * identifiers that read as numbers. */
+        if (name.len == 6 && (memcmp(name.p, "+inf.0", 6) == 0 ||
+                              memcmp(name.p, "-inf.0", 6) == 0))
+            return form_float(r->arena, span, name.p[0] == '-' ? -INFINITY : INFINITY);
+        if (name.len == 6 && (memcmp(name.p, "+nan.0", 6) == 0 ||
+                              memcmp(name.p, "-nan.0", 6) == 0))
+            return form_float(r->arena, span, NAN);
+        /* `#!fold-case`: an identifier is read as if downcased.  `|...|`
+         * symbols are exempt and never come through here. */
+        if (r->fold_case) {
+            char *lower = (char *)arena_alloc_aligned(r->arena, name.len + 1, 1);
+            for (uint32_t i = 0; i < name.len; i++)
+                lower[i] = (char)tolower((unsigned char)name.p[i]);
+            lower[name.len] = '\0';
+            name = strslice(lower, name.len);
+        }
+    }
+
     /* Recognize literal keywords. */
+    Form *word = NULL;
     if (name.len == 3 && memcmp(name.p, "nil", 3) == 0)
-        return form_nil(r->arena, span);
-    if (name.len == 4 && memcmp(name.p, "true", 4) == 0)
-        return form_bool(r->arena, span, true);
-    if (name.len == 5 && memcmp(name.p, "false", 5) == 0)
-        return form_bool(r->arena, span, false);
+        word = form_nil(r->arena, span);
+    else if (name.len == 4 && memcmp(name.p, "true", 4) == 0)
+        word = form_bool(r->arena, span, true);
+    else if (name.len == 5 && memcmp(name.p, "false", 5) == 0)
+        word = form_bool(r->arena, span, false);
+    if (word) {
+        if (r->scheme_enabled) word->fx_prov = PROV_SCHEME_WORD;   /* R10 */
+        return word;
+    }
 
     /* sweet-dollar-inside-brackets-is-a-silent-symbol: `$` is the sweet-exp
      * rest-of-line marker, and sweet_emit_content rewrites it only where the
@@ -1011,6 +1159,57 @@ static Form *read_seq(Reader *r, char open, char close, FormTag tag,
             if (!items) { fprintf(stderr, "tur: oom\n"); abort(); }
         }
         items[n++] = child;
+
+        /* r7rs-lang-plan R1: a dotted pair `(a . d)`.  The bare `.` is not
+         * an identifier in Scheme, so a `.` symbol inside a list means
+         * exactly one thing.  The reader VALIDATES the shape -- something
+         * before the dot, exactly one datum after it, then the closer -- and
+         * keeps the `.` symbol in place as the improper-tail marker: the
+         * Form model has no improper list, and R3's datum lowering (and
+         * R2's `(lambda (a . rest) ...)` formals) read the marker where it
+         * sits.  Under the Turmeric reader `.` is an ordinary symbol and this
+         * block never runs, which is why `(quote (a . b))` there is an
+         * "unbound symbol" and not a pair. */
+        if (r->scheme_enabled && tag == F_LIST && child->tag == F_SYM &&
+            child->as.sym->len == 1 && child->as.sym->name[0] == '.') {
+            Span dot = child->span;
+            if (n == 1) {
+                diag_emit(DIAG_ERROR, dot,
+                          "malformed dotted pair: `.` needs a datum before it");
+                r->error = true;
+                free(items);
+                return NULL;
+            }
+            skip_ws_and_comments(r);
+            int nc = peek(r);
+            if (r->error || nc == -1 || nc == close) {
+                if (!r->error)
+                    diag_emit(DIAG_ERROR, dot,
+                              "malformed dotted pair: `.` needs a datum after it");
+                r->error = true;
+                free(items);
+                return NULL;
+            }
+            Form *tail = read_form(r);
+            if (!tail) { free(items); return NULL; }
+            if (n == cap) {
+                cap = cap ? cap * 2 : 4;
+                items = (Form **)realloc(items, cap * sizeof(Form *));
+                if (!items) { fprintf(stderr, "tur: oom\n"); abort(); }
+            }
+            items[n++] = tail;
+            skip_ws_and_comments(r);
+            if (r->error) { free(items); return NULL; }
+            if (peek(r) != close) {
+                diag_emit(DIAG_ERROR, dot,
+                          "malformed dotted pair: exactly one datum may follow `.`");
+                r->error = true;
+                free(items);
+                return NULL;
+            }
+            advance(r);
+            break;
+        }
     }
 
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
@@ -3297,6 +3496,7 @@ static bool char_lit_named(const char *name, int64_t *out) {
     else if (strcmp(name, "backspace") == 0) { *out = 8;   return true; }
     else if (strcmp(name, "delete")    == 0) { *out = 127; return true; }
     else if (strcmp(name, "escape")    == 0) { *out = 27;  return true; }
+    else if (strcmp(name, "alarm")     == 0) { *out = 7;   return true; }  /* R7RS 6.6 */
     return false;
 }
 
@@ -3318,10 +3518,66 @@ static Form *read_char_literal(Reader *r) {
 
     int64_t value;
 
+    /* r7rs-lang-plan R1: R7RS 6.6 spells the hex form `#\x<hex>` (any scalar
+     * value), and `#\<char>` may be a non-ASCII character, which is more
+     * than one byte here; both Scheme-only, since under the Turmeric reader
+     * `#\x41` is the ambiguous-literal error below and a lone `#\x` is the
+     * letter x in both. */
+    if (r->scheme_enabled && first == 'x' && hex_digit(peek2(r)) >= 0) {
+        advance(r); /* consume 'x' */
+        uint32_t v = 0; int nd = 0, d;
+        while ((d = hex_digit(peek(r))) >= 0) {
+            if (nd < 8) v = v * 16 + (uint32_t)d;
+            advance(r); nd++;
+        }
+        if (nd > 8 || v > 0x10FFFF || !char_lit_is_delim(peek(r))) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s,
+                      "malformed '#\\x' character escape: expected hex digits "
+                      "naming a Unicode scalar value (at most 10FFFF) followed "
+                      "by a delimiter");
+            r->error = true;
+            return NULL;
+        }
+        value = (int64_t)v;
+    }
+    else if (r->scheme_enabled && first >= 0x80) {
+        /* One UTF-8 encoded character: decode the lead byte's length. */
+        int len = (first >= 0xF0) ? 4 : (first >= 0xE0) ? 3 : (first >= 0xC0) ? 2 : 0;
+        uint32_t v = 0;
+        if (len == 0) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s, "malformed UTF-8 in character literal");
+            r->error = true;
+            return NULL;
+        }
+        v = (uint32_t)first & (0xFFu >> (len + 1));
+        advance(r);
+        for (int i = 1; i < len; i++) {
+            int b = peek(r);
+            if (b == -1 || (b & 0xC0) != 0x80) {
+                Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+                diag_emit(DIAG_ERROR, s, "malformed UTF-8 in character literal");
+                r->error = true;
+                return NULL;
+            }
+            v = (v << 6) | ((uint32_t)b & 0x3F);
+            advance(r);
+        }
+        if (!char_lit_is_delim(peek(r))) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s,
+                      "ambiguous character literal: '#\\' names exactly one "
+                      "character and must be followed by a delimiter");
+            r->error = true;
+            return NULL;
+        }
+        value = (int64_t)v;
+    }
     /* Escape form (CH2): #\u<hex>, 1-4 hex digits, value 0..0xFF.  Checked
      * before the named form so `#\uf` reads as codepoint 0x0F rather than an
      * unknown two-letter name. */
-    if (first == 'u' && hex_digit(peek2(r)) >= 0) {
+    else if (first == 'u' && hex_digit(peek2(r)) >= 0) {
         advance(r); /* consume 'u' */
         int64_t v = 0;
         int ndigits = 0;
@@ -3393,7 +3649,358 @@ static Form *read_char_literal(Reader *r) {
     }
 
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    /* r7rs-lang-plan R3 / D3: under the Scheme reader a character is its own
+     * type, distinct from an integer (`char?` must be disjoint from
+     * `integer?`), and there is no character Form -- so the literal reads as
+     * the call form `(r7rs-char__ <scalar value>)`, which the prelude's
+     * constructor turns into an `R7rsChar`.  scheme_lower.c's datum walker
+     * recognises the shape under `quote`. */
+    if (r->scheme_enabled) {
+        Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+        items[0] = form_sym(r->arena, span, symtab_intern(r->st, strslice("r7rs-char__", 11)));
+        items[1] = form_int(r->arena, span, value);
+        return form_list(r->arena, span, items, 2);
+    }
     return form_int(r->arena, span, value);
+}
+
+/* ---------------------------------------------------------------------------
+ * r7rs-lang-plan R1: the Scheme lexical layer (READER_R7RS)
+ *
+ * Everything below is reachable only with r->scheme_enabled.  It is a
+ * VARIANT of the reader above: the s-expression machinery, spans, symbol
+ * table and Form model are shared, and each helper handles one lexeme R7RS
+ * spells differently from Turmeric.  No Scheme SEMANTICS live here -- `#t`
+ * is an F_BOOL, `#\a` an F_INT code point, `#(1 2)` an F_VEC, `#u8(...)` a
+ * `(bytevector ...)` call form, a dotted pair a list carrying its `.` --
+ * which is exactly the plan's R1 contract: a `#lang r7rs` file reads, and
+ * then elaborates as the same forms would under `#lang saffron`.
+ * ------------------------------------------------------------------------- */
+
+/* R7RS 7.1.1 <delimiter>: whitespace, `|`, `(`, `)`, `"`, `;` -- plus the
+ * brackets and the quote characters, which end a token here as well. */
+static bool scheme_is_delim(int c) {
+    return c == -1 || c == ' ' || c == '\t' || c == '\r' || c == '\n' ||
+           c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
+           c == '"' || c == ';' || c == '|' || c == '\'' || c == '`' || c == ',';
+}
+
+#include "r7rs_bignum.inc"     /* T1: a literal outside int64 */
+#include "r7rs_numsyntax.inc"
+
+/* r7rs-lang-plan T0: a number token, read whole.  The token runs to the next
+ * delimiter and goes through the one R7RS number parser (r7rs_numsyntax.inc,
+ * shared with `string->number` and `read`), so `1/2` and `3+4i` are ONE
+ * token -- they used to split into `1` and the symbol `/2`, and `3`, `+4`
+ * and `i`.  A value the tower holds reads as that value (`10/2` is 5); one
+ * it cannot hold yet is an error naming the task that brings it.  Returns
+ * NULL without consuming or setting r->error when the token is not number
+ * syntax, so the caller's own path (a symbol, or its diagnostic) runs. */
+static Form *try_read_scheme_number(Reader *r) {
+    size_t n = 0;
+    while (!scheme_is_delim(peek_at(r, n))) n++;
+    if (n == 0) return NULL;
+    r7rs_ns_result res;
+    r7rs_ns_parse(r->src + r->pos, n, 10, &res);
+    if (res.kind == R7NS_NONE) return NULL;
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    for (size_t k = 0; k < n; k++) advance(r);
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    if (res.kind == R7NS_REFUSED) {
+        diag_emit(DIAG_ERROR, span, "`%.*s`: %s", (int)n, r->src + start_off, res.why);
+        r->error = true;
+        return NULL;
+    }
+    if (res.kind == R7NS_BIG || res.kind == R7NS_RATIO || res.kind == R7NS_COMPLEX) {
+        /* T1/T2: an exact integer outside int64 reads as the call form
+         * `(r7rs-big__ "<decimal digits>")` and an exact non-integer as
+         * `(r7rs-ratio__ "<n>/<d>")`, as a char reads as `(r7rs-char__ n)`;
+         * the prelude builds the value, and the datum walker keeps the shape
+         * under `quote`.  T6: a non-real complex number is
+         * `(r7rs-complex__ "<re> <im>")`, each part a real's spelling. */
+        const char *ctor = res.kind == R7NS_BIG ? "r7rs-big__"
+                         : res.kind == R7NS_RATIO ? "r7rs-ratio__" : "r7rs-complex__";
+        Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+        items[0] = form_sym(r->arena, span, symtab_intern(r->st, strslice(ctor, (uint32_t)strlen(ctor))));
+        size_t bl = strlen(res.big);
+        char *digits = (char *)arena_alloc_aligned(r->arena, bl + 1, 1);
+        memcpy(digits, res.big, bl + 1);
+        free(res.big);
+        items[1] = form_str(r->arena, span, digits, (uint32_t)bl);
+        return form_list(r->arena, span, items, 2);
+    }
+    return res.kind == R7NS_INT ? form_int(r->arena, span, res.i)
+                                : form_float(r->arena, span, res.f);
+}
+
+/* Identifier characters R7RS allows that Turmeric's is_sym_start/is_sym_cont
+ * do not: `~` and `%` are <special initial>s; `@` is a <special subsequent>
+ * (start position is handled by read_form, where `@` stays deref sugar). */
+static bool scheme_sym_extra(int c) {
+    return c == '~' || c == '%' || c == '@';
+}
+
+/* `|...|` -- a symbol whose spelling is taken verbatim, with the string
+ * escapes (`\|`, `\\`, `\x<hex>;`, `\a`, `\b`, `\t`, `\n`, `\r`).  Never
+ * case-folded (R7RS 2.1). */
+static Form *read_piped_symbol(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    advance(r); /* opening '|' */
+
+    /* Upper bound on the decoded length: every escape decodes to at most as
+     * many bytes as it occupies. */
+    size_t scan = r->pos, cap = 0; bool ok = false;
+    while (scan < r->len) {
+        if (r->src[scan] == '|') { ok = true; break; }
+        if (r->src[scan] == '\\') { if (scan + 1 >= r->len) break; scan += 2; cap += 2; continue; }
+        scan++; cap++;
+    }
+    if (!ok) {
+        Span s = span_from_to(r, start_line, start_col, start_off, start_off + 1);
+        diag_emit(DIAG_ERROR, s, "unterminated |symbol| (missing '|')");
+        r->error = true;
+        return NULL;
+    }
+    char *buf = (char *)arena_alloc_aligned(r->arena, cap + 1, 1);
+    size_t bi = 0;
+    while (peek(r) != '|') {
+        int c = advance(r);
+        if (c != '\\') { buf[bi++] = (char)c; continue; }
+        int e = advance(r);
+        switch (e) {
+            case '|':  buf[bi++] = '|';  break;
+            case '\\': buf[bi++] = '\\'; break;
+            /* R10: `\"` too, as in a string: other implementations accept
+             * it, and chibi's suite writes `'|\"|`. */
+            case '"':  buf[bi++] = '"';  break;
+            case 'a':  buf[bi++] = 7;    break;
+            case 'b':  buf[bi++] = 8;    break;
+            case 't':  buf[bi++] = '\t'; break;
+            case 'n':  buf[bi++] = '\n'; break;
+            case 'r':  buf[bi++] = '\r'; break;
+            case 'x': case 'X': {
+                uint32_t cp = 0; int nd = 0, d;
+                while ((d = hex_digit(peek(r))) >= 0) {
+                    if (nd < 8) cp = cp * 16 + (uint32_t)d;
+                    advance(r); nd++;
+                }
+                if (nd == 0 || nd > 8 || peek(r) != ';' || cp > 0x10FFFF) {
+                    diag_emit(DIAG_ERROR, span_point(r),
+                              "malformed '\\x<hex>;' escape in |symbol|");
+                    r->error = true;
+                    return NULL;
+                }
+                advance(r); /* ';' */
+                bi += (size_t)utf8_encode(cp, buf + bi);
+                break;
+            }
+            default:
+                diag_emit(DIAG_ERROR, span_point(r),
+                          "unknown escape '\\%c' in |symbol|", e);
+                r->error = true;
+                return NULL;
+        }
+    }
+    advance(r); /* closing '|' */
+    buf[bi] = '\0';
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    const Symbol *sym = symtab_intern(r->st, strslice(buf, (uint32_t)bi));
+    return form_sym(r->arena, span, sym);
+}
+
+/* `#x`/`#o`/`#b`/`#d` radix and `#e`/`#i` exactness prefixes (R7RS 7.1.1
+ * <number>), at most one of each, in either order.  A radix-10 body is the
+ * ordinary read_number lexeme (so `#d1.5e3` and `#e#d10` work); another
+ * radix is an integer in that base.  `#i` on an integer lexeme makes it a
+ * float; `#e` on a float lexeme is honoured only when the value is integral
+ * -- an exact non-integer needs the rationals R5 brings, and saying so beats
+ * quietly reading `#e1.5` as 1.5. */
+static Form *read_scheme_prefixed_number(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    int radix = 10;   /* 0 == not yet given */
+    int exact = 0;    /* 0 unspecified, 1 `#e`, -1 `#i` */
+    bool radix_given = false, exact_given = false;
+
+    while (peek(r) == '#') {
+        int p = tolower(peek2(r));
+        if ((p == 'x' || p == 'b' || p == 'o' || p == 'd') && !radix_given) {
+            radix = (p == 'x') ? 16 : (p == 'b') ? 2 : (p == 'o') ? 8 : 10;
+            radix_given = true;
+        } else if ((p == 'e' || p == 'i') && !exact_given) {
+            exact = (p == 'e') ? 1 : -1;
+            exact_given = true;
+        } else {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos + 2);
+            diag_emit(DIAG_ERROR, s,
+                      "malformed numeric prefix: at most one radix (#x #o #b #d) "
+                      "and one exactness (#e #i) prefix");
+            r->error = true;
+            return NULL;
+        }
+        advance(r); advance(r);
+    }
+
+    int sign = 0;
+    if (peek(r) == '-') sign = -1;
+    else if (peek(r) == '+') sign = 1;
+
+    Form *num;
+    if (radix == 10) {
+        num = read_number(r, sign);
+        if (!num) return NULL;
+    } else {
+        if (sign != 0) advance(r);
+        uint64_t mag = 0; bool ovf = false, any = false;
+        for (;;) {
+            int d = hex_digit(peek(r));
+            if (d < 0 || d >= radix) break;
+            mag_push(&mag, &ovf, (uint64_t)radix, (uint64_t)d);
+            advance(r);
+            any = true;
+        }
+        Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+        if (!any || !scheme_is_delim(peek(r))) {
+            diag_emit(DIAG_ERROR, span,
+                      "expected base-%d digits after the radix prefix", radix);
+            r->error = true;
+            return NULL;
+        }
+        uint64_t bound = (sign < 0) ? (uint64_t)INT64_MAX + 1u : (uint64_t)INT64_MAX;
+        if (ovf || mag > bound) {
+            diag_emit(DIAG_ERROR, span,
+                      "integer literal overflows int64 range "
+                      "(-9223372036854775808..9223372036854775807)");
+            r->error = true;
+            return NULL;
+        }
+        int64_t ival = (sign < 0) ? (int64_t)(~mag + 1u) : (int64_t)mag;
+        num = form_int(r->arena, span, ival);
+    }
+
+    if (exact == 1 && num->tag == F_FLOAT) {
+        double f = num->as.f;
+        if (isfinite(f) && f == floor(f) && fabs(f) < 9.2e18) {
+            num->tag  = F_INT;
+            num->as.i = (int64_t)f;
+        } else {
+            diag_emit(DIAG_ERROR, num->span,
+                      "`#e` on a non-integral literal needs exact rationals, "
+                      "which `#lang r7rs` does not have yet (r7rs-lang-plan "
+                      "R5); write the exact integer or drop the prefix");
+            r->error = true;
+            return NULL;
+        }
+    } else if (exact == -1 && num->tag == F_INT) {
+        num->tag  = F_FLOAT;
+        num->as.f = (double)num->as.i;
+        num->lit_suffix = LIT_SUF_NONE;
+    }
+    /* Span the whole lexeme, prefixes included. */
+    num->span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    return num;
+}
+
+/* The Scheme-only `#` dispatches.  Returns NULL WITHOUT setting r->error
+ * when the input is not one of them, so read_form falls through to the
+ * Turmeric `#` literals it shares with every other dialect. */
+static Form *try_read_scheme_hash(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    int c2 = peek2(r);
+
+    /* `#t` / `#f` / `#true` / `#false` (R7RS 6.3).  A delimiter must follow
+     * the tag, which is what keeps `#fx{...}` (Turmeric's effect row) and any
+     * other `#f<ident>` shape out of this branch. */
+    if (c2 == 't' || c2 == 'f') {
+        bool val = (c2 == 't');
+        size_t n = 0;
+        if (val) {
+            if (r->pos + 5 <= r->len && memcmp(r->src + r->pos, "#true", 5) == 0 &&
+                scheme_is_delim(peek_at(r, 5))) n = 5;
+            else if (scheme_is_delim(peek_at(r, 2))) n = 2;
+        } else {
+            if (r->pos + 6 <= r->len && memcmp(r->src + r->pos, "#false", 6) == 0 &&
+                scheme_is_delim(peek_at(r, 6))) n = 6;
+            else if (scheme_is_delim(peek_at(r, 2))) n = 2;
+        }
+        if (n) {
+            for (size_t i = 0; i < n; i++) advance(r);
+            return form_bool(r->arena,
+                             span_from_to(r, start_line, start_col, start_off, r->pos),
+                             val);
+        }
+        return NULL;
+    }
+
+    /* `#(...)` -- a vector literal (R7RS 6.8), the same F_VEC `[...]` reads
+     * as, so it lowers wherever `[...]` lowers. */
+    if (c2 == '(') {
+        advance(r); /* '#' */
+        Form *v = read_seq(r, '(', ')', F_VEC, "unterminated vector (missing ')')");
+        if (v) {
+            v->span = span_from_to(r, start_line, start_col, start_off, r->pos);
+            v->fx_prov = PROV_SCHEME_VECTOR;   /* R7: a datum, not a binding vector */
+        }
+        return v;
+    }
+
+    /* `#u8(...)` -- a bytevector literal (R7RS 6.9).  There is no bytevector
+     * Form, so it reads as the call form `(bytevector e ...)`, which R3's
+     * data stage gives a meaning; the elements are read as ordinary forms
+     * and range-checked there, not here. */
+    if (c2 == 'u' && peek3(r) == '8' && peek_at(r, 3) == '(') {
+        advance(r); advance(r); advance(r); /* "#u8" */
+        Form *l = read_seq(r, '(', ')', F_LIST, "unterminated bytevector (missing ')')");
+        if (!l) return NULL;
+        uint32_t n = l->as.list.len;
+        Form **items = (Form **)malloc((n + 1) * sizeof(Form *));
+        if (!items) { fprintf(stderr, "tur: oom\n"); abort(); }
+        Span head = span_from_to(r, start_line, start_col, start_off, start_off + 3);
+        items[0] = form_sym(r->arena, head, symtab_intern(r->st, strslice("bytevector", 10)));
+        for (uint32_t i = 0; i < n; i++) items[i + 1] = l->as.list.items[i];
+        Form *bv = form_list(r->arena,
+                             span_from_to(r, start_line, start_col, start_off, r->pos),
+                             items, n + 1);
+        free(items);
+        return bv;
+    }
+
+    /* Radix / exactness prefixes (R7RS 7.1.1). */
+    if (c2 == 'x' || c2 == 'X' || c2 == 'b' || c2 == 'B' || c2 == 'o' || c2 == 'O' ||
+        c2 == 'd' || c2 == 'D' || c2 == 'e' || c2 == 'E' || c2 == 'i' || c2 == 'I') {
+        /* `#e`/`#i`/`#d`/`#b`/... only when what follows the prefix chain
+         * can start a number; otherwise decline so `#d`-style user reader
+         * macros and the Turmeric `#`-literals keep their meaning. */
+        size_t k = 0;
+        while (peek_at(r, k) == '#') {
+            int p = tolower(peek_at(r, k + 1));
+            if (p != 'x' && p != 'b' && p != 'o' && p != 'd' && p != 'e' && p != 'i') break;
+            k += 2;
+        }
+        int n0 = peek_at(r, k);
+        int n1 = peek_at(r, k + 1);
+        bool numberish = (n0 >= '0' && n0 <= '9') ||
+                         ((n0 == '+' || n0 == '-' || n0 == '.') &&
+                          ((n1 >= '0' && n1 <= '9') || n1 == '.')) ||
+                         /* T0: `#i+inf.0`, `#e+i` */
+                         ((n0 == '+' || n0 == '-') &&
+                          (n1 == 'i' || n1 == 'I' || n1 == 'n' || n1 == 'N')) ||
+                         (n0 >= 'a' && n0 <= 'f') || (n0 >= 'A' && n0 <= 'F');
+        if (!numberish) return NULL;
+        Form *num = try_read_scheme_number(r);
+        if (num || r->error) return num;
+        /* Not number syntax: the prefix reader names what is wrong. */
+        return read_scheme_prefixed_number(r);
+    }
+
+    return NULL;
 }
 
 static Form *read_form(Reader *r) {
@@ -3446,6 +4053,16 @@ static Form *read_form(Reader *r) {
         }
         (void)discarded;
         return read_form(r);
+    }
+    /* r7rs-lang-plan R1: the Scheme-only `#` dispatches -- `#t`/`#f`,
+     * `#(...)`, `#u8(...)`, the numeric prefixes.  Before every Turmeric
+     * `#` literal so that, e.g., `#f` is a boolean and not the start of
+     * `#fx{...}`; the helper declines (NULL, no error) anything it does not
+     * own, and each of its shapes needs a delimiter or an opener right after
+     * the tag, which is what keeps `#fx{`, `#false{`-style collisions out. */
+    if (c == '#' && r->scheme_enabled) {
+        Form *m = try_read_scheme_hash(r);
+        if (m || r->error) return m;
     }
     /* Legible character literals: `#\a`, `#\space`, `#\u41`.  The backslash
      * after `#` is unambiguous -- no other reader dispatch starts with `#\`.
@@ -3558,16 +4175,34 @@ static Form *read_form(Reader *r) {
             return read_quasiquote(r);
         }
     }
+    /* r7rs-lang-plan T0: a Scheme number is read as one whole token. */
+    if (r->scheme_enabled &&
+        ((c >= '0' && c <= '9') || c == '+' || c == '-' ||
+         (c == '.' && peek2(r) >= '0' && peek2(r) <= '9'))) {
+        Form *num = try_read_scheme_number(r);
+        if (num || r->error) return num;
+    }
     if (c >= '0' && c <= '9') return read_number(r, 0);
+    /* r7rs-lang-plan R1: Scheme lexemes that a Turmeric byte already owns.
+     * `.5` is a number (Turmeric: the symbol `.5`); `,`/`,@` are unquote
+     * (Turmeric: whitespace); `|sym|` is a delimited symbol (Turmeric: `|`
+     * starts an operator such as `|>`); `~` and `&` are ordinary identifier
+     * characters (Turmeric: unquote and borrow sugar). */
+    if (r->scheme_enabled) {
+        if (c == '.' && peek2(r) >= '0' && peek2(r) <= '9') return read_number(r, 0);
+        if (c == ',') return read_unquote_with(r, ',');
+        if (c == '|') return read_piped_symbol(r);
+    }
     /* '@' as deref/effect-row prefix */
     if (c == '@') return read_at(r);
     /* Phase 6: ' as quote operator */
     if (c == '\'') return read_quote(r);
     /* Phase 6: ~ as unquote operator (only valid inside quasiquote) */
-    if (c == '~') return read_unquote(r);
+    if (c == '~' && !r->scheme_enabled) return read_unquote(r);
     /* Phase 12: & as borrow prefix sugar (&x → (& x), &mut x → (&mut x)) */
-    if (c == '&') return read_borrow(r);
-    if (is_sym_start(c)) return read_symbol_or_minus_at(r, head_pos);
+    if (c == '&' && !r->scheme_enabled) return read_borrow(r);
+    if (is_sym_start(c) || (r->scheme_enabled && scheme_sym_extra(c)))
+        return read_symbol_or_minus_at(r, head_pos);
 
     Span s = span_point(r);
     diag_emit(DIAG_ERROR, s, "unexpected character '%c' (0x%02x)", (char)c, c);
@@ -3611,11 +4246,11 @@ int reader_macros_load_file(Arena *arena, SymbolTable *st,
     sf->path        = arena_strdup(arena, abs_path, strlen(abs_path));
     sf->src         = buf;
     sf->len         = (uint32_t)got;
-    /* Use a near-max file_id so we don't overwrite an existing slot.
-     * MAX_FILES (in diag.c) is currently 64; pick the last slot. This is
-     * best-effort — collisions across multiple preloads in the same
-     * compile only affect diagnostic snippet rendering, not correctness. */
-    sf->file_id     = 63;
+    /* Use a near-max file_id so we don't overwrite an existing slot: the
+     * registry's last one (DIAG_MAX_FILES in diag.h). This is best-effort --
+     * collisions across multiple preloads in the same compile only affect
+     * diagnostic snippet rendering, not correctness. */
+    sf->file_id     = DIAG_MAX_FILES - 1;
     sf->reader_type = READER_TURMERIC;
     diag_register_file(sf);
 
@@ -4546,6 +5181,8 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
      * regardless of #lang.  Contract types live behind explicit `#refine{...}`. */
     r.curly_infix_enabled = true;
     r.neoteric_enabled = false;
+    r.scheme_enabled = false;
+    r.fold_case = false;
     /* RM1: Reader-macro registry. If the caller supplied one, dispatch and
      * registration happen against it directly (REPL session semantics);
      * otherwise we keep a per-call local one (file semantics). */
@@ -4567,7 +5204,7 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
     /* The LANGUAGE axis gets the same treatment, in the same place, because it
      * is the same decision one level up.  Since saffron graduated at 0.46.0
      * this cannot fail -- no dialect is gated -- but it is still where a
-     * Saffron file records itself for the emitter (g_opt_saffron).
+     * dynamic-language file records itself for the emitter (g_opt_dynamic_any).
      *
      * Here rather than at each detection site: every path that elaborates a
      * file -- compile, `--interpret`, an imported module, the REPL -- funnels
@@ -4590,6 +5227,13 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
         case READER_SWEET:
             r.curly_infix_enabled = true;
             r.neoteric_enabled = true;
+            break;
+        case READER_R7RS:
+            /* r7rs-lang-plan R1: the Scheme lexical layer, on the same
+             * s-expression reader.  Curly-infix stays on -- SRFI-105 is a
+             * Scheme SRFI, and `{` is reserved in R7RS rather than spoken
+             * for -- and neoteric stays off, since `f(x)` is not Scheme. */
+            r.scheme_enabled = true;
             break;
         case READER_UNKNOWN:
             break;
@@ -4700,38 +5344,21 @@ static ReaderType lang_base_from_name(const char *name, size_t len,
                                       LangDialect *out_dialect) {
     if (out_dialect) *out_dialect = LANG_TURMERIC;
 
-    if (len == 8 && memcmp(name, "turmeric", 8) == 0)
-        return READER_TURMERIC;
-    if (len == 20 && memcmp(name, "turmeric/curly-infix", 20) == 0)
-        return READER_CURLY_INFIX;
-    if (len == 17 && memcmp(name, "turmeric/neoteric", 17) == 0)
-        return READER_NEOTERIC;
-    /* L3: `turmeric/sweet` is the slash-namespaced spelling; `sweet-exp` is
-     * the legacy alias, accepted silently through v1. */
-    if (len == 14 && memcmp(name, "turmeric/sweet", 14) == 0)
-        return READER_SWEET;
+    /* L3: `sweet-exp` is the legacy alias for `turmeric/sweet`, accepted
+     * silently through v1 and deliberately not a LANG_BASES[] row, so it is
+     * never generated and never listed. */
     if (len == 9 && memcmp(name, "sweet-exp", 9) == 0)
         return READER_SWEET;
 
-    /* saffron-lang-plan S1: the Saffron language, over any of the four
-     * readers.  The dialect carries no semantics yet -- a `#lang saffron` file
-     * elaborates exactly as `#lang turmeric` does, and says so once via the
-     * experiment lifecycle warning. */
-    if (len == 7 && memcmp(name, "saffron", 7) == 0) {
-        if (out_dialect) *out_dialect = LANG_SAFFRON;
-        return READER_TURMERIC;
-    }
-    if (len == 19 && memcmp(name, "saffron/curly-infix", 19) == 0) {
-        if (out_dialect) *out_dialect = LANG_SAFFRON;
-        return READER_CURLY_INFIX;
-    }
-    if (len == 16 && memcmp(name, "saffron/neoteric", 16) == 0) {
-        if (out_dialect) *out_dialect = LANG_SAFFRON;
-        return READER_NEOTERIC;
-    }
-    if (len == 13 && memcmp(name, "saffron/sweet", 13) == 0) {
-        if (out_dialect) *out_dialect = LANG_SAFFRON;
-        return READER_SWEET;
+    /* r7rs-lang-plan R1: every other spelling is a row of LANG_BASES[] in
+     * lang_dialects.c -- the same table `tur dialects` prints and the
+     * playground picker walks -- so a base that can be listed can be named
+     * and vice versa, with no second copy to keep in step. */
+    LangDialect d = LANG_TURMERIC;
+    ReaderType  r = READER_TURMERIC;
+    if (lang_base_lookup(name, len, &d, &r)) {
+        if (out_dialect) *out_dialect = d;
+        return r;
     }
     return (ReaderType)-1;
 }
@@ -4916,6 +5543,9 @@ const char *reader_type_name(ReaderType type) {
         case READER_CURLY_INFIX: return "turmeric/curly-infix";
         case READER_NEOTERIC: return "turmeric/neoteric";
         case READER_SWEET: return "turmeric/sweet";
+        /* r7rs-lang-plan R1: the Scheme reader is owned by one language and
+         * has no `turmeric/` spelling; the base token IS the name. */
+        case READER_R7RS: return "r7rs";
         default: return "<invalid>";
     }
 }
@@ -4927,6 +5557,7 @@ const char *lang_dialect_name(LangDialect d) {
     switch (d) {
         case LANG_TURMERIC: return "turmeric";
         case LANG_SAFFRON:  return "saffron";
+        case LANG_R7RS:     return "r7rs";
         default:            return "<invalid>";
     }
 }
@@ -4942,6 +5573,8 @@ bool reader_type_is_implemented(ReaderType type) {
             return true; /* Phase S2: neoteric is now implemented */
         case READER_SWEET:
             return true; /* indent-sensitive t-expressions + curly-infix + neoteric */
+        case READER_R7RS:
+            return true; /* r7rs-lang-plan R1: the Scheme reader variant */
         default:
             return false;
     }

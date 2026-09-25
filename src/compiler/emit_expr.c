@@ -53,7 +53,7 @@ void emit_env_struct_register(EmitCtx *ctx, const Symbol *env_name,
  * -- the registry owns it. */
 const char *emit_env_struct_fn_typedef(EmitCtx *ctx, const Symbol *env_name) {
     if (!ctx->env_struct_names || !ctx->env_struct_fn_typedefs) return NULL;
-    for (uint8_t i = 0; i < ctx->n_env_struct_names; i++)
+    for (uint32_t i = 0; i < ctx->n_env_struct_names; i++)
         if (ctx->env_struct_names[i] == env_name)
             return ctx->env_struct_fn_typedefs[i];
     return NULL;
@@ -65,7 +65,7 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
                                       bool resolve_spec_params) {
     bool already_emitted = false;
     if (ctx->env_struct_names) {
-        for (uint8_t i = 0; i < ctx->n_env_struct_names; i++) {
+        for (uint32_t i = 0; i < ctx->n_env_struct_names; i++) {
             if (ctx->env_struct_names[i] == env_name) {
                 already_emitted = true;
                 break;
@@ -6524,10 +6524,14 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
      * type is `bool`, not `any` -- elab_forms.c builds it precisely to feed a
      * C-level `if`, so re-boxing the answer would only make the consumer unbox
      * it again. */
-    if (strcmp(opn, SAFFRON_TRUTHY_OP) == 0 && n == 1) {
+    if ((strcmp(opn, SAFFRON_TRUTHY_OP) == 0 || strcmp(opn, SCHEME_TRUTHY_OP) == 0) &&
+        n == 1) {
         char *a = emit_value(ctx, body, args[0]);
         Buf out; buf_init(&out);
-        buf_printf(&out, "__tur_dyn_truthy(%s)", a);
+        /* r7rs-lang-plan R2: Scheme's rule has its own preamble helper. */
+        buf_printf(&out, "%s(%s)",
+                   strcmp(opn, SCHEME_TRUTHY_OP) == 0 ? "__tur_dyn_truthy_scheme"
+                                                      : "__tur_dyn_truthy", a);
         buf_putc(&out, '\0');
         free(a);
         char *r = strdup(out.data);
@@ -6652,6 +6656,17 @@ void tb_register_fatbox(EmitCtx *ctx, const char *box, const char *fnptr) {
     buf_free(&line);
 }
 
+void dyn_register_variadic(EmitCtx *ctx, int64_t id, int fixed) {
+    if (!ctx || !ctx->fatbox_init) return;
+    ensure_saffron_dyn_runtime(ctx);
+    Buf line; buf_init(&line);
+    buf_printf(&line, "    __tur_dyn_reg_variadic(INT64_C(%lld), %d);\n", (long long)id, fixed);
+    buf_putc(&line, '\0');
+    if (!buf_contains(ctx->fatbox_init, line.data))
+        buf_puts(ctx->fatbox_init, line.data);
+    buf_free(&line);
+}
+
 void tb_register_thunk(EmitCtx *ctx, const char *thunk) {
     if (!ctx || !ctx->fatbox_init || !thunk) return;
     ensure_saffron_dyn_runtime(ctx);
@@ -6743,10 +6758,30 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
      * its statements queued) before the arguments' were, and the check still
      * runs before any argument is read. */
     char *dc = fresh_tmp(ctx);
-    buf_printf(body,
-               "tur_tagged_t %s = (%s); "
-               "__tur_dyn_call_check(TUR_GETTAG(%s), %lld);\n",
-               dc, fnv, dc, (long long)want_id);
+    if (tail_mode != DYN_TAIL_NONE) {
+        /* The trampoline's __tur_tb_invoke packs for a variadic itself; the
+         * check here only has to admit one (and panic for anything else). */
+        buf_printf(body,
+                   "tur_tagged_t %s = (%s); "
+                   "(void)__tur_dyn_call_arity(%s, %lld, %u);\n",
+                   dc, fnv, dc, (long long)want_id, (unsigned)n);
+    } else {
+        /* R6: `-1` is the ordinary call; a fixed count means a registered
+         * variadic callee that __tur_dyn_call_var packs for (2b of
+         * docs/archive/r7rs-compiled-dynamic-shapes.md).  The arguments are
+         * bound once so neither arm re-evaluates them. */
+        buf_printf(body,
+                   "tur_tagged_t %s = (%s); "
+                   "int %s_v = __tur_dyn_call_arity(%s, %lld, %u);\n",
+                   dc, fnv, dc, dc, (long long)want_id, (unsigned)n);
+        for (uint32_t i = 0; i < n; i++) {
+            char *t = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "tur_tagged_t %s = %s;\n", t, argv[i]);
+            free(argv[i]);
+            argv[i] = t;
+        }
+    }
     if (tail_mode != DYN_TAIL_NONE) {
         /* T6: the trampoline takes the callee and up to four arguments; the
          * unused slots ride as the nil word.  In the CPS spelling each argument
@@ -6790,12 +6825,15 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
         return r;
     }
     Buf out; buf_init(&out);
-    buf_puts(&out, "((tur_tagged_t (*)(void *");
+    buf_printf(&out, "(%s_v < 0 ? ((tur_tagged_t (*)(void *", dc);
     for (uint32_t i = 0; i < n; i++) buf_puts(&out, ", tur_tagged_t");
     buf_printf(&out, "))(intptr_t)TUR_CLOSURE_FN(TUR_UNTAG(%s)))"
                      "((void *)(intptr_t)TUR_UNTAG(%s)", dc, dc);
     for (uint32_t i = 0; i < n; i++) buf_printf(&out, ", %s", argv[i]);
-    buf_puts(&out, ")");
+    buf_printf(&out, ") : __tur_dyn_call_var(%s, %s_v, %u", dc, dc, (unsigned)n);
+    for (uint32_t i = 0; i < 4; i++)
+        buf_printf(&out, ", %s", i < n ? argv[i] : "TUR_TAG(0, 0)");
+    buf_puts(&out, "))");
     buf_putc(&out, '\0');
     free(dc);
 
@@ -10173,6 +10211,38 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                               : _sp.kind == TY_APP ? type_adt_app_def(&_sp)
                                                    : NULL))
                             slot_cty = "int64_t";
+                    }
+                    /* r7rs-lang-plan R8: a record field typed as a pointer
+                     * opaque (`(defstruct R7rsPort :heap [... io : R7rsIo])`)
+                     * is laid out as the int64 carrier slot
+                     * (adt_ctor_field_c_type keys on the field's kind), while
+                     * the argument -- a let-bound or parameter handle, not a
+                     * spec parameter -- is spelled `void *`.  Relabel it; the
+                     * two are the same word, and a redundant cast over an
+                     * argument that was already the carrier is harmless. */
+                    if (!suffix && arg && arg_strs[i] &&
+                        (!slot_cty || strcmp(slot_cty, "int64_t") == 0) &&
+                        strncmp(arg_strs[i], "(int64_t)(intptr_t)", 19) != 0 &&
+                        e->as.call_.ctor && i < e->as.call_.ctor->n_fields &&
+                        e->as.call_.ctor->fields[i].full_type) {
+                        /* Keyed on the FIELD's declared type: the argument's
+                         * own elab type is not a reliable witness (an `any`
+                         * argument through a module import resolved as the
+                         * opaque, and relabelling a tagged aggregate is a cc
+                         * error). */
+                        const Type *_ft = e->as.call_.ctor->fields[i].full_type;
+                        if (adt_opaque_c_names_as_pointer(
+                                _ft->kind == TY_ADT ? _ft->as.adt_.def
+                              : _ft->kind == TY_APP ? type_adt_app_def(_ft)
+                                                    : NULL)) {
+                            Buf c; buf_init(&c);
+                            buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                            buf_putc(&c, '\0');
+                            free(arg_strs[i]);
+                            arg_strs[i] = strdup(c.data);
+                            buf_free(&c);
+                            continue;
+                        }
                     }
                     if (slot_cty && arg_strs[i]) {
                         const char *av = arg_strs[i];
@@ -14900,6 +14970,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 fnt_params[i] = (fnty.as.fn.arg_full_types && fnty.as.fn.arg_full_types[i])
                                     ? *fnty.as.fn.arg_full_types[i]
                                     : emit_type_from_kind(fnty.as.fn.arg_kinds[i]);
+                /* r7rs-lang-plan R6: a variadic's rest slot is the CHAIN
+                 * POINTER (an int64 carrier), whatever the element type says
+                 * -- `(fn [& xs : any])` is emitted `(int64_t xs)`.  The shim
+                 * used to be typed by the element (`tur_tagged_t`), so it
+                 * handed the callee a two-word box where it read a pointer. */
+                if (fnty.as.fn.is_variadic && (uint32_t)i + 1 == (uint32_t)arity)
+                    fnt_params[i] = emit_type_from_kind(TY_INT);
             }
             char *typed_shim = ensure_typed_fatshim(ctx, fnt_result, fnt_params, arity);
 
@@ -14969,8 +15046,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             const Binding *sb_b = (inner->kind == EX_VAR) ? inner->as.var.binding : NULL;
             if (sb_b && !sb_b->is_global && sb_b->widen_fn_alias)
                 sb_b = sb_b->widen_fn_alias;
+            /* r7rs-lang-plan R6: a global that is a `def` of a function VALUE
+             * -- `(def area (fn [& xs : any] ...))` -- is emitted as a function
+             * POINTER variable filled at static init, not a function symbol,
+             * so its address is not the link-time constant the hoist needs:
+             * the static box read the pointer before that init ran and held
+             * NULL.  A `defn` (and a lifted lambda) carries its FnDef; a `def`
+             * binding does not, which is the distinction.  Such a value takes
+             * the per-execution box below. */
+            bool sb_is_fnptr_var = sb_b && sb_b->is_global && !sb_b->source_fn_def;
             if (e->as.fn_to_fat_.static_ok &&
                 sb_b && sb_b->is_global &&
+                !sb_is_fnptr_var &&
                 !sb_b->closure_fn_binding &&
                 !sb_b->is_param &&
                 !sb_b->is_poly_fn &&

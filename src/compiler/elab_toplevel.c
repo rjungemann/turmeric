@@ -5,7 +5,8 @@
 #include "mangle.h"   /* tur_cname_name_len */
 #include "refine_discharge.h" /* RT3: final refinement discharge + stats */
 #include "refine_report.h"    /* SX8a-3: --dump-refine=json obligation dump */
-#include "lang_dialects.h"      /* saffron-lang-plan S6 (G7): lang_span_is_saffron */
+#include "lang_dialects.h"      /* saffron-lang-plan S6 (G7): lang_span_is_dynamic */
+#include "scheme_lower.h"       /* r7rs-lang-plan R2: the Scheme core forms */
 
 /* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
  * in emit_core.c; declared here because elab_toplevel.c does not include
@@ -203,7 +204,42 @@ Expr *elab_any_cast(Elab *e, const Form *call) {
  * here is what keeps the tag check on the witness path -- a wrong witness
  * panics with the ordinary `cast: any holds ...` message rather than
  * reinterpreting the payload. */
+/* r7rs-lang-plan T3: the string half of the Scheme seam, in both directions.
+ * A Scheme string is a `cstr` (a literal) or an `R7rsString` (one a procedure
+ * newly allocated: mutable code points).  Wherever an `any` is unboxed to a
+ * `cstr` -- a Scheme call passing a string to a Turmeric `cstr` parameter, or
+ * Turmeric code `cast`ing a Scheme library's result -- it goes through the
+ * prelude's `r7rs-str__`, which passes a cstr through, encodes an R7rsString
+ * as a fresh UTF-8 copy, and is the ordinary checked cast for anything else.
+ * So the Turmeric side always holds an immutable cstr, and Turmeric's `cstr`
+ * is unchanged.  Gated on the Scheme prelude being in the program (no
+ * `r7rs-str__` binding, no change), and never inside stdlib/r7rs/ itself,
+ * whose own unboxes are the plain cast (r7rs-str__'s among them). */
+static bool span_in_r7rs_stdlib(Span sp) {
+    const SourceFile *f = diag_source_file(sp.file_id);
+    return f && f->path && strstr(f->path, "stdlib/r7rs/") != NULL;
+}
+static Expr *r7rs_string_unbox(Elab *e, Expr *val, Span span) {
+    if (span_in_r7rs_stdlib(span) || span_in_r7rs_stdlib(val->span)) return NULL;
+    const Symbol *nm = symtab_intern(e->st, strslice("r7rs-str__", 10));
+    bool qual_err = false;
+    Binding *b = elab_lookup_sym(e, nm, span, &qual_err);
+    if (!b || b->type.kind != TY_FN) return NULL;
+    Expr **cargs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+    cargs[0] = val;
+    Expr *call = expr_new(e->arena, EX_CALL, type_simple(TY_CSTR, CK_COPY), span);
+    call->as.call_.fn_binding = b;
+    call->as.call_.args = cargs;
+    call->as.call_.n_args = 1;
+    call->as.call_.fn_expr = NULL;
+    return call;
+}
+
 Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span) {
+    if (target.kind == TY_CSTR) {
+        Expr *conv = r7rs_string_unbox(e, val, span);
+        if (conv) return conv;
+    }
     Expr *out = expr_new(e->arena, EX_ANY_CAST, target, span);
     out->as.any_cast_.value = val;
     out->as.any_cast_.target_kind = any_box_tag_for_type(&target);
@@ -281,7 +317,7 @@ static Form *dl_saffron_widen_elem(Elab *e, Form *elem) {
 /* Widen every element of a data literal, or return `items` unchanged when the
  * literal is not in a Saffron file. */
 static Form **dl_saffron_widen_elems(Elab *e, Span sp, Form **items, uint32_t n) {
-    if (n == 0 || !lang_span_is_saffron(sp)) return items;
+    if (n == 0 || !lang_span_is_dynamic(sp)) return items;
     Form **out = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
     for (uint32_t i = 0; i < n; i++) out[i] = dl_saffron_widen_elem(e, items[i]);
     return out;
@@ -606,7 +642,7 @@ Expr *elab_form(Elab *e, Form *f) {
             for (uint32_t i = 0; i + 1 < n; i += 2) {
                 if (f->as.list.items[i]->tag != F_STR) { all_str_keys = false; break; }
             }
-            bool saffron = lang_span_is_saffron(f->span);
+            bool saffron = lang_span_is_dynamic(f->span);
             Form **kvs = (n == 0) ? NULL
                 : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
             for (uint32_t i = 0; i + 1 < n; i += 2) {
@@ -803,7 +839,7 @@ Expr *elab_form(Elab *e, Form *f) {
              * tests/fixtures/saffron-cons-list.  A `defdata` with `any` in BOTH
              * slots (what tests/fixtures/saffron-higher-order uses) needs no
              * ascription and stays the better idiom for a list you walk. */
-            if (lang_span_is_saffron(f->span) && f->as.list.len > 1 &&
+            if (lang_span_is_dynamic(f->span) && f->as.list.len > 1 &&
                 f->as.list.items[0]->tag == F_SYM &&
                 strcmp(f->as.list.items[0]->as.sym->name, "list") == 0 &&
                 !scope_lookup(e->scope, f->as.list.items[0]->as.sym)) {
@@ -984,6 +1020,22 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
         if (lx->track_boundary && i == lx->boundary_in)
             lx->boundary_out = lx->out_n;
         Form *f = forms[i];
+
+        /* r7rs-lang-plan R7: a Scheme `(import (scheme time))` (or
+         * process-context / file) splices in that library's file first, as a
+         * `(load ...)` would -- once per compile, through the visited set. */
+        {
+            const char *libs[8];
+            uint32_t nl = scheme_import_library_files(f, libs, 8);
+            for (uint32_t li = 0; li < nl; li++) {
+                Form *ld_items[2];
+                ld_items[0] = form_sym(arena, f->span, e->sym_load);
+                ld_items[1] = form_str(arena, f->span, libs[li], (uint32_t)strlen(libs[li]));
+                Form *ld = form_list(arena, f->span, ld_items, 2);
+                Form *const one[1] = { ld };
+                load_expand_forms(lx, e, arena, st, one, 1);
+            }
+        }
 
         /* Option A: descend into a (defmodule ...) body so a `(load "path")`
          * placed inside the module body splices the loaded file's forms into
@@ -1236,6 +1288,28 @@ static Type *fwd_shallow_result_app(Elab *e, const Form *appform,
     return out;
 }
 
+/* r7rs-lang-plan R3: is every tyvar leaf of a shallow-resolved type one of the
+ * defn's own type parameters?  The resolver spells an UNKNOWN name as a named
+ * tyvar (harmless for a return, which Pass 2 recomputes), so a parameter type
+ * is only committed to the forward decl when nothing in it is a guess. */
+static bool fwd_type_is_closed(const Type *t, const Symbol **tps, uint8_t n_tp) {
+    if (!t) return true;
+    switch (t->kind) {
+        case TY_TYVAR: {
+            const char *nm = t->as.tyvar_.name;
+            if (!nm) return false;
+            for (uint8_t i = 0; i < n_tp; i++)
+                if (tps[i] && strcmp(tps[i]->name, nm) == 0) return true;
+            return false;
+        }
+        case TY_APP:
+            return fwd_type_is_closed(t->as.app.fn, tps, n_tp) &&
+                   fwd_type_is_closed(t->as.app.arg, tps, n_tp);
+        default:
+            return true;
+    }
+}
+
 static Type fwd_shallow_type_arg(Elab *e, const Form *af,
                                  const Symbol **tps, uint8_t n_tp) {
     if (af && af->tag == F_LIST) {
@@ -1256,6 +1330,12 @@ static Type fwd_shallow_type_arg(Elab *e, const Form *af,
         if (strcmp(nm, "float") == 0) return TYPE_FLOAT;
         if (strcmp(nm, "void") == 0 || strcmp(nm, "nil") == 0)
             return TYPE_NIL;
+        /* r7rs-lang-plan R3: `any` is a bare name that determines its type
+         * completely, exactly as elab_types.c's IT4 arm builds it.  Left as
+         * a named tyvar, `(Vec any)` forward-declared as `(Vec 'any)` -- an
+         * OPEN application -- and the dynamic seam grounded and re-collected
+         * it instead of checking against the declared instantiation. */
+        if (strcmp(nm, "any") == 0)   return type_simple(TY_ANY, CK_COPY);
         for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
             if (strcmp(e->adt_defs[ai]->name, nm) == 0) {
                 return type_adt(e->adt_defs[ai]);
@@ -1264,6 +1344,121 @@ static Type fwd_shallow_type_arg(Elab *e, const Form *af,
         return type_tyvar_named(nm);
     }
     return type_tyvar_named("_");
+}
+
+/* r7rs-lang-plan R3: the full types of a defn's COMPOUND parameter annotations
+ * for a pass-1 forward declaration, in a DYNAMIC file -- or NULL when there
+ * are none to commit.
+ *
+ * fwd_decl_scan_params leaves `(Vec any)` as the TY_INT placeholder, and the
+ * Saffron seam (elab_call.c D5/S4) reads that placeholder as a real `int`
+ * target: a caller written ABOVE `(defn f [v : (Vec any)] ...)` that passes
+ * an `any` got a checked unbox to int -- "cast: any holds Vec, not int" at
+ * runtime, and C that handed an int64 to a `tur_adt_Vec__any *`.  Defining
+ * the callee first avoided it, which is what made it look like an ordering
+ * rule.  Only a fully closed application (every leaf a scalar, a registered
+ * ADT or one of the defn's own type params) is committed, and the matching
+ * `arg_kinds` slot becomes TY_APP; anything the shallow resolver could not
+ * name stays the placeholder, so a typed file's int64 hatches are untouched.
+ * Shared by the top-level pre-pass and the defmodule one (elab_module.c),
+ * which is where an imported prelude's defns are forward-declared. */
+Type **elab_fwd_param_full_types(Elab *e, Arena *arena, const Form *f,
+                                 uint32_t name_idx, uint32_t params_idx,
+                                 uint32_t param_arity, TypeKind *arg_kinds) {
+    if (param_arity == 0 || !arg_kinds || !lang_span_is_dynamic(f->span) ||
+        params_idx >= (uint32_t)f->as.list.len ||
+        f->as.list.items[params_idx]->tag != F_VEC)
+        return NULL;
+    const Symbol *tp_syms[MAX_FN_ARITY];
+    uint8_t n_tp = 0;
+    if (params_idx > name_idx + 1 && f->as.list.items[name_idx + 1]->tag == F_VEC) {
+        const Form *tpv = f->as.list.items[name_idx + 1];
+        for (uint32_t ti = 0; ti < tpv->as.list.len && n_tp < MAX_FN_ARITY; ti++) {
+            if (tpv->as.list.items[ti]->tag == F_SYM)
+                tp_syms[n_tp++] = tpv->as.list.items[ti]->as.sym;
+        }
+    }
+    Type **full_types = NULL;
+    const Form *pv = f->as.list.items[params_idx];
+    uint32_t slot = 0;
+    for (uint32_t pi = 0; pi < pv->as.list.len; pi++) {
+        const Form *p = pv->as.list.items[pi];
+        if (p->tag == F_SYM && p->as.sym->name && p->as.sym->name[0] == '^')
+            continue;
+        if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN) {
+            if (slot == 0 || slot > param_arity) continue;
+            const Form *t = p;
+            if (p->tag == F_TYPE_ANN && p->as.list.len >= 1)
+                t = p->as.list.items[0];
+            if (t->tag == F_SYM) {
+                /* R10: a bare record or ADT name -- `[b : R7rsBytevector]`.
+                 * fwd_decl_scan_params left it the TY_INT placeholder too,
+                 * so a caller above the definition that passes an `any`
+                 * got a checked unbox to int: "cast: any holds
+                 * R7rsBytevector, not int" from `equal?` on two bytevectors
+                 * (chibi's suite).  A registered, non-generic ADT names its
+                 * type completely; commit it. */
+                for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+                    AdtDef *d = e->adt_defs[ai];
+                    if (d->n_type_params != 0 || strcmp(d->name, t->as.sym->name) != 0)
+                        continue;
+                    if (!full_types) {
+                        full_types = (Type **)arena_alloc(arena, param_arity * sizeof(Type *));
+                        memset(full_types, 0, param_arity * sizeof(Type *));
+                    }
+                    Type *adt_t = (Type *)arena_alloc(arena, sizeof(Type));
+                    *adt_t = type_adt(d);
+                    full_types[slot - 1] = adt_t;
+                    arg_kinds[slot - 1] = TY_ADT;
+                    break;
+                }
+                continue;
+            }
+            if (t->tag != F_LIST) continue;
+            Type *full = fwd_shallow_result_app(e, t, tp_syms, n_tp);
+            if (!full || full->kind != TY_APP || !fwd_type_is_closed(full, tp_syms, n_tp))
+                continue;
+            if (!full_types) {
+                full_types = (Type **)arena_alloc(arena, param_arity * sizeof(Type *));
+                memset(full_types, 0, param_arity * sizeof(Type *));
+            }
+            full_types[slot - 1] = full;
+            arg_kinds[slot - 1] = TY_APP;
+            continue;
+        }
+        slot++;
+    }
+    return full_types;
+}
+
+/* r7rs-lang-plan R3: the full TY_APP result type of a defn's COMPOUND return
+ * annotation for a pass-1 forward declaration in a DYNAMIC file, or NULL.
+ * The defmodule pre-pass kept "other compound types" as the TY_INT
+ * placeholder, which was fine while a compound PARAMETER was the same
+ * placeholder: once `(defn f [v : (Vec int)] ...)` is forward-declared in
+ * full, a forward-declared `(defn g [] : (Vec int) ...)` feeding it has to
+ * say `(Vec int)` too, or the call is "expected (Vec int), got int".  Same
+ * closedness rule as the parameters. */
+Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
+                                    uint32_t params_idx, const Form *ret_f) {
+    if (!ret_f || ret_f->tag != F_TYPE_ANN || ret_f->as.list.len < 1 ||
+        !lang_span_is_dynamic(f->span))
+        return NULL;
+    const Form *app = ret_f->as.list.items[0];
+    if (app->tag != F_LIST) return NULL;
+    const Symbol *tp_syms[MAX_FN_ARITY];
+    uint8_t n_tp = 0;
+    if (params_idx > name_idx + 1 && f->as.list.items[name_idx + 1]->tag == F_VEC) {
+        const Form *tpv = f->as.list.items[name_idx + 1];
+        for (uint32_t ti = 0; ti < tpv->as.list.len && n_tp < MAX_FN_ARITY; ti++) {
+            if (tpv->as.list.items[ti]->tag == F_SYM)
+                tp_syms[n_tp++] = tpv->as.list.items[ti]->as.sym;
+        }
+    }
+    Type *full = fwd_shallow_result_app(e, app, tp_syms, n_tp);
+    if (!full || full->kind != TY_APP || !fwd_type_is_closed(full, tp_syms, n_tp))
+        return NULL;
+    return full;
 }
 
 /* A top-level statement USED to be fold-unsafe when its handle subtree carried a
@@ -1560,6 +1755,14 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                                         return_kind = TY_PTR_VOID;
                                     } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
                                         return_kind = TY_PTR_VOID;
+                                    } else if (kw->len == 3 && memcmp(kw->name, "any", 3) == 0) {
+                                        /* r7rs-lang-plan R7: an annotated `: any`
+                                         * result forward-declared as the TY_INT
+                                         * default, so a caller elaborated before
+                                         * the callee widened the tagged result as
+                                         * an int (cc: "aggregate value used where
+                                         * an integer was expected"). */
+                                        return_kind = TY_ANY;
                                     } else {
                                         /* bare-adt-forward-decl-inference: a non-parametric
                                          * user type name -- `: T` for a `defdata` /
@@ -1690,18 +1893,39 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                              * binary +) and for mutual recursion (`then=bool
                              * else=int`).  Same `main` exception as elab_defn:
                              * the zero-arity entry point stays `int`. */
-                            if (!ret_annotated && lang_span_is_saffron(f->span) &&
+                            if (!ret_annotated && lang_span_is_dynamic(f->span) &&
                                 !(name_f->as.sym->len == 4 &&
                                   memcmp(name_f->as.sym->name, "main", 4) == 0 &&
                                   param_arity == 0)) {
                                 return_kind = TY_ANY;
                                 fwd_result_full = NULL;
                             }
+                            /* r7rs-lang-plan R3: a compound parameter type in a
+                             * dynamic file rides the forward decl in full -- see
+                             * elab_fwd_param_full_types. */
+                            Type **fwd_arg_full = elab_fwd_param_full_types(
+                                ep, arena, f, name_idx, params_idx_local,
+                                param_arity, arg_kinds);
                             Type fn_type = type_fn(arg_kinds, param_arity, return_kind);
+                            /* r7rs-lang-plan R7: a variadic's forward decl
+                             * carries the rest shape, so a caller elaborated
+                             * before the definition packs its surplus
+                             * arguments (it used to see a fixed arity that
+                             * counted the `&` as a parameter). */
+                            if (fwd_arg_full) fn_type.as.fn.arg_full_types = fwd_arg_full;
+                            if (params_idx_local < (uint32_t)f->as.list.len)
+                                fwd_decl_apply_variadic(ep, arena, &fn_type,
+                                                        f->as.list.items[params_idx_local]);
+                            fwd_arg_full = fn_type.as.fn.arg_full_types;
                             /* defdata-parametric-forward-decl-inference: carry the
                              * full compound result type on the forward decl. */
                             if (fwd_result_full) {
                                 fn_type.as.fn.result_full_type = fwd_result_full;
+                            }
+                            if (fwd_arg_full) {
+                                /* The seam indexes arg_full_types by parameter
+                                 * and tolerates NULL for a slot without one. */
+                                fn_type.as.fn.arg_full_types = fwd_arg_full;
                             }
                             /* MF3: if the name is already in global scope (e.g. an
                              * auto-loaded stdlib defn), do NOT pre-register a
@@ -1893,6 +2117,19 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
          * stdlib promotion sweep and in_stdlib_load window line up with where
          * the auto-loaded forms actually landed. */
         if (lx.track_boundary) stdlib_prefix = lx.boundary_out;
+    }
+
+    /* r7rs-lang-plan R2: lower the Scheme core forms of every `#lang r7rs`
+     * file in the (now load-expanded) program onto Turmeric's own forms.
+     * Here, after load expansion and before the `main` fold and the two
+     * elaboration passes, so a loaded Scheme file is lowered too and a
+     * lowered top-level expression is an ordinary statement for the fold.
+     * Per-form off the span's file, so stdlib and Turmeric forms are passed
+     * through by pointer and the stdlib prefix keeps its index. */
+    if (scheme_lower_needed(forms, nforms)) {
+        uint32_t lowered_n = 0;
+        forms  = (Form *const *)scheme_lower_program(arena, st, forms, nforms, &lowered_n);
+        nforms = lowered_n;
     }
 
     Expr **items = (nforms == 0) ? NULL :
@@ -2286,10 +2523,12 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
          * form reachable from it through `do` chains, is a statement.  Anything
          * deeper is an expression subform.  See def_form_is_statement_position. */
         e.toplevel_stmt = forms[i];
-        e.toplevel_saffron = lang_span_is_saffron(forms[i]->span);   /* M10 */
+        e.toplevel_dynamic = lang_span_is_dynamic(forms[i]->span);   /* M10 */
+        e.toplevel_scheme  = lang_span_is_scheme(forms[i]->span);    /* r7rs R2 */
         items[i] = elab_form(&e, forms[i]);
         e.toplevel_stmt = NULL;
-        e.toplevel_saffron = false;
+        e.toplevel_dynamic = false;
+        e.toplevel_scheme  = false;
         if (tl_may_defer) {
             uint32_t tl_cerr = diag_pop_capture();
             if (tl_cerr > 0 || !items[i]) {
@@ -2353,10 +2592,12 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
             if (i == stdlib_prefix) e.in_stdlib_load = false;
             if (!tl_deferred[i]) continue;
             e.toplevel_stmt = forms[i];
-            e.toplevel_saffron = lang_span_is_saffron(forms[i]->span);
+            e.toplevel_dynamic = lang_span_is_dynamic(forms[i]->span);
+            e.toplevel_scheme  = lang_span_is_scheme(forms[i]->span);
             items[i] = elab_form(&e, forms[i]);
             e.toplevel_stmt = NULL;
-            e.toplevel_saffron = false;
+            e.toplevel_dynamic = false;
+            e.toplevel_scheme  = false;
             if (!items[i]) rc = -1;
         }
         free(tl_deferred);

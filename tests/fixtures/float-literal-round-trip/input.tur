@@ -1,0 +1,13 @@
+;; float literals round-trip on the compiled path.  The emitter wrote a
+;; literal with %.15g, so 3.141592653589793 compiled as the different double
+;; 3.14159265358979 and these two literals compared EQUAL -- the interpreter,
+;; which keeps the parsed value, said false.  It now writes the shortest of
+;; %.15g / %.16g / %.17g that reads back to the same double, so the common
+;; literal (7.1, 0.1) is spelled exactly as before.  Found by r7rs-lang-plan
+;; R7 (`angle` printing pi short).
+(defn main [] : int
+  (println (= 3.141592653589793 3.14159265358979))
+  (println (= 0.1 0.1))
+  (println (> (- 3.141592653589793 3.14159265358979) 0.0))
+  (println (= 7.1 (+ 7.0 0.1)))
+  0)

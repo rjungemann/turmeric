@@ -873,6 +873,19 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
      * TU must publish into the runtime registry (see emit_any_type_name_table).
      * Interning is therefore a dedupe of the rows, not the id assignment. */
     int64_t id = tur_any_id_hash(key);
+    /* r7rs-lang-plan R6: a boxed VARIADIC fn type is registered with its fixed
+     * parameter count, so a dynamic call can pack for it (__tur_dyn_call_var).
+     * Idempotent per id; the registry line lives in the fat-box init band. */
+    if (is_fn && r.as.fn.boxed && r.as.fn.is_variadic && r.as.fn.arity >= 1) {
+        /* R7: only the all-`any` calling convention can be packed for -- the
+         * pack calls through `tur_tagged_t` parameters and result.  A typed
+         * variadic reaches an `any` through the H8 adaptor, which is itself
+         * all-`any`; one boxed as itself (a typed rest) is refused by its id. */
+        bool va_all_any = r.as.fn.result_kind == TY_ANY && r.as.fn.rest_kind == TY_ANY;
+        for (uint32_t k = 0; k + 1 < r.as.fn.arity && va_all_any; k++)
+            if (r.as.fn.arg_kinds[k] != TY_ANY) va_all_any = false;
+        if (va_all_any) dyn_register_variadic(ctx, id, (int)r.as.fn.arity - 1);
+    }
     for (uint32_t i = 0; i < ctx->n_any_type_names; i++) {
         if (strcmp(ctx->any_type_names[i], key) == 0) ANY_ID_RET(id);
         /* Two distinct keys hashing alike would make one type answer as the
@@ -3397,7 +3410,7 @@ static void emit_abi_note_carrier_call(EmitCtx *ctx, const Binding *binding) {
  * `type_name`, and the boxed flag is computed from the type alone), so calling
  * it here rather than at the widen changes nothing about what gets published. */
 static void emit_abi_note_any_widen(EmitCtx *ctx, Type t) {
-    if (!ctx || !g_opt_saffron) return;
+    if (!ctx || !g_opt_dynamic_any) return;
     /* Gated with its only consumer, so a plain Turmeric program is untouched
      * BYTE FOR BYTE.  Collecting unconditionally would be tidier but is not
      * free: `emit_any_type_id` interns, and a widen the scan reaches in code
@@ -7900,7 +7913,7 @@ bool emit_instance_dispatch_recv_type(EmitCtx *ctx, TypeClassInstance *inst,
 
 bool emit_instance_dispatch_tag(EmitCtx *ctx, TypeClassInstance *inst,
                                 int64_t *out_tag) {
-    if (!ctx || !g_opt_saffron) return false;
+    if (!ctx || !g_opt_dynamic_any) return false;
     Type recv;
     if (!emit_instance_dispatch_recv_type(ctx, inst, &recv)) return false;
     int64_t id = emit_any_type_id(ctx, recv);
@@ -7980,14 +7993,14 @@ static void emit_abi_scan_program(EmitCtx *ctx, const Expr **items, uint32_t n_i
      * appear before the widen that makes its tag reachable; the tag set is only
      * complete once every item has been scanned.
      *
-     * Gated on g_opt_saffron, which a `#lang saffron` file turns on build-wide
+     * Gated on g_opt_dynamic_any, which a `#lang saffron` file turns on build-wide
      * (lang_dialect_apply sets it), so a plain Turmeric program emits exactly
      * what it did before -- no dicts it did not already need, and no growth
      * from the row table that references them.  A build that mixes a Saffron TU
      * with a Turmeric TU compiled entirely separately would not share the flag;
      * that is a known v0 limitation, not a silent one, since the failure is the
      * no-instance panic rather than a wrong answer. */
-    if (!g_opt_saffron) return;
+    if (!g_opt_dynamic_any) return;
     for (uint32_t i = 0; i < n_items; i++) {
         if (!items[i] || items[i]->kind != EX_INSTANCE_DEF) continue;
         TypeClassInstance *inst = items[i]->as.instance_def_.instance;
@@ -9737,6 +9750,7 @@ static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
  * path to find them.  System includes stay -- they are what the bodies were
  * written against, and repeating a system header is harmless. */
 #include "runtime/region_rt_embed.h"
+#include "runtime/experiments.h"   /* experiment_warn_if_used: r7rs-gc */
 
 static void emit_embedded_runtime_source(Buf *out, const char *what,
                                          const unsigned char *src) {
@@ -10254,6 +10268,49 @@ static void emit_rcgc_global(Buf *out, bool shared,
  *
  * The S2 split (emit_rt_split_source) forces the archive posture, so the
  * generated runtime TU never carries these -- the host links region.c. */
+/* ---------------------------------------------------------------------------
+ * The r7rs-gc experiment (docs/upcoming/r7rs-gc-plan.md).
+ *
+ * A compiled `#lang r7rs` program's own allocator becomes the conservative
+ * collector in src/runtime/r7gc.c: the source is pasted into the unit ahead of
+ * the preamble proper, and every later `malloc`/`calloc`/`realloc`/`free`/
+ * `strdup`/`strndup` -- plus the region allocator's malloc fallback and its
+ * free -- is redirected to it by object-like macros (so `free` passed as a
+ * function pointer is the collector's too).  TUR_THREAD_LOCAL is plain static
+ * storage while it is on: the collector scans the data segment, not TLS, and
+ * is single-threaded.
+ *
+ * Only for a single-unit build: a --shared build would give each unit its own
+ * heap, and one unit's free() of another's object would reach libc. */
+static bool r7rs_gc_active(bool shared) {
+    return g_opt_r7rs_gc && g_opt_r7rs && !shared;
+}
+
+/* The redirecting macros, defined (on) or withdrawn (off) -- withdrawn around
+ * runtime sources pasted verbatim, whose own allocations are not the
+ * program's and must not move onto the collected heap. */
+static void emit_r7rs_gc_macros(Buf *out, bool on) {
+    static const char *const names[][2] = {
+        { "malloc", "tur_gc_malloc" },   { "calloc", "tur_gc_calloc" },
+        { "realloc", "tur_gc_realloc" }, { "free", "tur_gc_free" },
+        { "strdup", "tur_gc_strdup" },   { "strndup", "tur_gc_strndup" },
+        { "tur_region_alloc_or_malloc", "tur_gc_region_alloc" },
+        { "tur_region_free", "tur_gc_region_free" },
+    };
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+        if (on) buf_printf(out, "#define %s %s\n", names[i][0], names[i][1]);
+        else    buf_printf(out, "#undef %s\n", names[i][0]);
+    }
+}
+
+static void emit_r7rs_gc_prologue(Buf *out) {
+    experiment_warn_if_used("r7rs-gc");
+    buf_puts(out, "/* r7rs-gc: this unit allocates from the collector below "
+                  "(docs/upcoming/r7rs-gc-plan.md). */\n");
+    emit_embedded_runtime_source(out, "r7gc.c", tur_rt_embed_r7gc_c);
+    emit_r7rs_gc_macros(out, true);
+}
+
 static void emit_region_runtime_bodies(Buf *out, bool shared) {
     if (!regions_enabled()) return;
     if (rt_global_from_archive()) {
@@ -10261,9 +10318,12 @@ static void emit_region_runtime_bodies(Buf *out, bool shared) {
         return;
     }
     if (shared) buf_puts(out, "#ifdef TUR_RT_OWNER\n");
+    /* r7rs-gc: the region runtime's own slabs and tables are libc's. */
+    if (r7rs_gc_active(shared)) emit_r7rs_gc_macros(out, false);
     emit_embedded_runtime_source(out, "arena.h",  tur_rt_embed_arena_h);
     emit_embedded_runtime_source(out, "arena.c",  tur_rt_embed_arena_c);
     emit_embedded_runtime_source(out, "region.c", tur_rt_embed_region_c);
+    if (r7rs_gc_active(shared)) emit_r7rs_gc_macros(out, true);
     if (shared) buf_puts(out, "#endif /* TUR_RT_OWNER */\n");
 }
 
@@ -10427,6 +10487,16 @@ static bool preamble_uses_callcc(const Expr *e) {
         case EX_PROGRAM:
             for (uint32_t i = 0; i < e->as.program.n; i++)
                 if (preamble_uses_callcc(e->as.program.items[i])) return true;
+            return false;
+        case EX_DEFMODULE:
+            /* r7rs-lang-plan R8: the same hole preamble_uses_serial closed
+             * (guestbook-example-has-no-import-graph).  A program that imports
+             * a module compiles the R7RS prelude as a module, and its call/cc
+             * (R6) was invisible here -- the escape runtime was not emitted
+             * and cc failed on `tur_escape_cont` (tests/run-r7rs-import.sh). */
+            if (e->as.defmodule_.mod)
+                for (uint32_t i = 0; i < e->as.defmodule_.mod->n_body; i++)
+                    if (preamble_uses_callcc(e->as.defmodule_.mod->body[i])) return true;
             return false;
         case EX_FN_DEF:
             return e->as.fn_def_.fn && preamble_uses_callcc(e->as.fn_def_.fn->body);
@@ -11207,6 +11277,13 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    if (__t == TUR_DYNTAG_BOOL) return TUR_UNTAG(__v) != 0;\n"
         "    return 1;\n"
         "}\n");
+    /* r7rs-lang-plan R2: Scheme's rule (R7RS 6.3) -- only `#f` is false.  The
+     * one value the two rules disagree on is nil, which is true here. */
+    buf_puts(out,
+        "static inline int __tur_dyn_truthy_scheme(tur_tagged_t __v) {\n"
+        "    if (TUR_GETTAG(__v) == TUR_DYNTAG_BOOL) return TUR_UNTAG(__v) != 0;\n"
+        "    return 1;\n"
+        "}\n");
     /* `println` on a dynamic value.  Each arm reproduces the static emitter's
      * own spelling for that type (printf %lld / printf %g / puts of
      * "true"/"false" / puts of the string) so the compiled dynamic path and the
@@ -11258,6 +11335,74 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "-- it takes a different number of arguments, or parameters this call "
         "site cannot supply\");\n"
         "        tur_panic(__m);\n"
+        "    }\n"
+        "}\n");
+    /* r7rs-lang-plan R6 (docs/archive/r7rs-compiled-dynamic-shapes.md 2b):
+     * a VARIADIC callee reached through a dynamic call.
+     *
+     * The box id of `(fn [a b & rest : any] : any)` differs from every fixed
+     * arity's (tur_fn_type_key spells the rest slot), so the id compare above
+     * cannot admit it -- and must not, since its thunk takes a chain POINTER
+     * where a fixed callee takes a tagged word.  Instead the emitter registers
+     * every variadic fn type it boxes (emit_any_type_id -> dyn_register_variadic)
+     * with its fixed parameter count, and a call site whose id compare fails
+     * asks the registry: a registered id with `fixed <= n` is called through
+     * __tur_dyn_call_var, which packs the surplus arguments into a `(Cons any)`
+     * chain laid out exactly as ctor_Cons_Cons__any lays one out -- a tagged
+     * head and a tail pointer -- and passes it as the last argument.  Anything
+     * else is the panic above.  Region-allocated like the ctor, so a chain
+     * built inside a bracket does not outlive it. */
+    buf_puts(out,
+        "static int64_t tur_dyn_var_ids[64];\n"
+        "static int     tur_dyn_var_fixed[64];\n"
+        "static int     tur_dyn_var_n;\n"
+        "static __attribute__((unused)) void __tur_dyn_reg_variadic(int64_t __id, int __fixed) {\n"
+        "    for (int __i = 0; __i < tur_dyn_var_n; __i++) if (tur_dyn_var_ids[__i] == __id) return;\n"
+        "    if (tur_dyn_var_n < 64) { tur_dyn_var_ids[tur_dyn_var_n] = __id; tur_dyn_var_fixed[tur_dyn_var_n] = __fixed; tur_dyn_var_n++; }\n"
+        "}\n"
+        "static inline int __tur_dyn_variadic_fixed(int64_t __id) {\n"
+        "    for (int __i = 0; __i < tur_dyn_var_n; __i++) if (tur_dyn_var_ids[__i] == __id) return tur_dyn_var_fixed[__i];\n"
+        "    return -1;\n"
+        "}\n"
+        "/* -1: the ordinary call (the id matched); otherwise the fixed count of\n"
+        " * a variadic callee this call must pack for.  Panics for anything else. */\n"
+        "static __attribute__((unused)) int __tur_dyn_call_arity(tur_tagged_t __f, int64_t __want, int __n) {\n"
+        "    int64_t __have = TUR_GETTAG(__f);\n"
+        "    if (__have == __want) return -1;\n"
+        "    int __fx = tur_dyn_var_n ? __tur_dyn_variadic_fixed(__have) : -1;\n"
+        "    if (__fx >= 0 && __fx <= __n) return __fx;\n"
+        "    __tur_dyn_call_check(__have, __want);\n"
+        "    return -1;\n"
+        "}\n"
+        "typedef struct __tur_dyn_cons { tur_tagged_t head; struct __tur_dyn_cons *tail; } __tur_dyn_cons;\n"
+        "static int64_t __tur_dyn_pack_rest(int __fixed, int __n, const tur_tagged_t *__a) {\n"
+        "    __tur_dyn_cons *__t = NULL;\n"
+        "    for (int __i = __n - 1; __i >= __fixed; __i--) {\n");
+    /* r7rs-lang-plan T8: `malloc` under TUR_REGIONS=0, as every other
+     * allocation site here chooses.  The unconditional region call was an
+     * undeclared function on that arm -- an implicit `int` that truncated the
+     * pointer, and a segfault in any program that made a variadic dynamic
+     * call. */
+    buf_printf(out,
+        "        __tur_dyn_cons *__c = (__tur_dyn_cons *)%s(sizeof *__c);\n",
+        regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc");
+    buf_puts(out,
+        "        __c->head = __a[__i]; __c->tail = __t; __t = __c;\n"
+        "    }\n"
+        "    return (int64_t)(intptr_t)__t;\n"
+        "}\n"
+        "static __attribute__((unused)) tur_tagged_t __tur_dyn_call_var(tur_tagged_t __f, int __fixed, int __n,\n"
+        "        tur_tagged_t __a0, tur_tagged_t __a1, tur_tagged_t __a2, tur_tagged_t __a3) {\n"
+        "    tur_tagged_t __a[4] = { __a0, __a1, __a2, __a3 };\n"
+        "    void *__env = (void *)(intptr_t)TUR_UNTAG(__f);\n"
+        "    void *__th = (void *)(intptr_t)TUR_CLOSURE_FN(TUR_UNTAG(__f));\n"
+        "    int64_t __r = __tur_dyn_pack_rest(__fixed, __n, __a);\n"
+        "    switch (__fixed) {\n"
+        "    case 0: return ((tur_tagged_t (*)(void *, int64_t))__th)(__env, __r);\n"
+        "    case 1: return ((tur_tagged_t (*)(void *, tur_tagged_t, int64_t))__th)(__env, __a[0], __r);\n"
+        "    case 2: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __r);\n"
+        "    case 3: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __a[2], __r);\n"
+        "    default: return ((tur_tagged_t (*)(void *, tur_tagged_t, tur_tagged_t, tur_tagged_t, tur_tagged_t, int64_t))__th)(__env, __a[0], __a[1], __a[2], __a[3], __r);\n"
         "    }\n"
         "}\n");
     /* saffron-lang-plan S5/D4 (G11): the fall-through of a dynamic field read.
@@ -11369,6 +11514,13 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    void *__th = (void *)(intptr_t)TUR_CLOSURE_FN(TUR_UNTAG(__f));\n"
         "    tur_tagged_t __r;\n"
         "    tur_tb_armed_for = __tur_tb_target(__env);\n"
+        "    /* R6: a variadic callee (see __tur_dyn_call_var) is driven too. */\n"
+        "    int __fx = tur_dyn_var_n ? __tur_dyn_variadic_fixed(TUR_GETTAG(__f)) : -1;\n"
+        "    if (__fx >= 0 && __fx <= __n) {\n"
+        "        __r = __tur_dyn_call_var(__f, __fx, __n, __a[0], __a[1], __a[2], __a[3]);\n"
+        "        tur_tb_armed_for = NULL;\n"
+        "        return __r;\n"
+        "    }\n"
         "    switch (__n) {\n"
         "    case 0: __r = ((tur_tagged_t (*)(void *))__th)(__env); break;\n"
         "    case 1: __r = ((tur_tagged_t (*)(void *, tur_tagged_t))__th)(__env, __a[0]); break;\n"
@@ -11489,11 +11641,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * that across every supported cc buys nothing -- this way the cc path keeps
      * the exact spelling it has always used, and only a C11-or-later front end
      * (c2mir reports 201112) sees the standard one. */
-    buf_puts(out, "#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L\n");
-    buf_puts(out, "#  define TUR_THREAD_LOCAL _Thread_local\n");
-    buf_puts(out, "#else\n");
-    buf_puts(out, "#  define TUR_THREAD_LOCAL __thread\n");
-    buf_puts(out, "#endif\n");
+    if (r7rs_gc_active(shared)) {
+        /* r7rs-gc: per-thread runtime state becomes plain statics, which the
+         * collector scans as part of the data segment. */
+        buf_puts(out, "#define TUR_THREAD_LOCAL\n");
+        emit_r7rs_gc_prologue(out);
+    } else {
+        buf_puts(out, "#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L\n");
+        buf_puts(out, "#  define TUR_THREAD_LOCAL _Thread_local\n");
+        buf_puts(out, "#else\n");
+        buf_puts(out, "#  define TUR_THREAD_LOCAL __thread\n");
+        buf_puts(out, "#endif\n");
+    }
     /* 6(a) (jit-engine-plan section 4): atomics, spelled through a macro layer.
      *
      * The preamble needs atomics in 18 places -- STM's version clock and each
@@ -11987,7 +12146,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * found by a TU that DISPATCHES on the box.  Only the rows array itself is
      * emitted late (it takes the singletons' addresses); the types and the two
      * functions belong here, where the dispatch sites can see them. */
-    if (g_opt_saffron) {
+    if (g_opt_dynamic_any) {
     buf_puts(out, "typedef struct __tur_inst_row { const char *cls; int64_t tag; const void *dict; } __tur_inst_row;\n");
     buf_puts(out, "typedef struct __tur_inst_chunk { const __tur_inst_row *rows; int n; struct __tur_inst_chunk *next; } __tur_inst_chunk;\n");
     emit_rt_global(out, shared,
@@ -12005,7 +12164,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            if (c->rows[i].tag == tag && strcmp(c->rows[i].cls, cls) == 0)\n");
     buf_puts(out, "                return c->rows[i].dict;\n");
     buf_puts(out, "    return 0;\n}\n");
-    }   /* g_opt_saffron -- gated so a plain Turmeric program's emitted C, and
+    }   /* g_opt_dynamic_any -- gated so a plain Turmeric program's emitted C, and
          * therefore every `expected.c` snapshot, is unchanged byte for byte. */
     buf_puts(out, "static const __tur_any_ti *__tur_any_find(int64_t tag) {\n");
     buf_puts(out, "    for (__tur_any_tichunk *c = g_tur_any_types; c; c = c->next)\n");
@@ -12067,7 +12226,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      *
      * Reports the runtime type NAME rather than the tag: the tag is a hash and
      * means nothing to a reader, and P1's registry already answers this. */
-    if (g_opt_saffron) {
+    if (g_opt_dynamic_any) {
     buf_puts(out, "static const void *__tur_inst_slot(const char *cls, const char *meth, "
                   "int64_t tag, int slot) {\n");
     buf_puts(out, "    const void *__t = __tur_inst_find(cls, tag);\n");
@@ -15874,6 +16033,11 @@ static void gdef_collect_refs(const Expr *e, const Binding ***a, uint32_t *n, ui
         }
         case EX_DEF: gdef_collect_refs(e->as.def_.init, a, n, cap); return;
         case EX_CALL:
+            /* R10: a call to a global holding a closure names it through
+             * `fn_binding` with no `fn_expr` -- `(def add4 (let [x 4] (fn
+             * ...)))` called inside a lambda read `add4_N` before its storage
+             * was declared (cc: undeclared), in every dialect. */
+            if (e->as.call_.fn_binding) gdef_ref_push(a, n, cap, e->as.call_.fn_binding);
             gdef_collect_refs(e->as.call_.fn_expr, a, n, cap);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
                 gdef_collect_refs(e->as.call_.args[i], a, n, cap);
@@ -15913,6 +16077,35 @@ static void gdef_collect_refs(const Expr *e, const Binding ***a, uint32_t *n, ui
         case EX_ASCRIBE: gdef_collect_refs(e->as.ascribe_.inner, a, n, cap); return;
         case EX_CAST:    gdef_collect_refs(e->as.cast_.expr, a, n, cap);     return;
         case EX_RETURN:  gdef_collect_refs(e->as.return_.value, a, n, cap);  return;
+        /* r7rs-lang-plan R6: the dynamic dialects' node kinds.  A Scheme
+         * closure that `set!`s a global -- `(delay (begin (set! count ...)))`
+         * -- has its body widened to `any`, so the EX_SET sat under an
+         * EX_UNION_INJECT this walk did not descend, and cc rejected the
+         * lifted lambda's read of a global declared below it. */
+        case EX_UNION_INJECT: gdef_collect_refs(e->as.union_inject_.value, a, n, cap); return;
+        case EX_ANY_CAST:     gdef_collect_refs(e->as.any_cast_.value, a, n, cap);     return;
+        case EX_ANY_IS:       gdef_collect_refs(e->as.any_is_.value, a, n, cap);       return;
+        case EX_FN_TO_FAT:    gdef_collect_refs(e->as.fn_to_fat_.inner, a, n, cap);    return;
+        case EX_REINTERPRET:  gdef_collect_refs(e->as.reinterpret_.expr, a, n, cap);   return;
+        case EX_GET_FIELD:    gdef_collect_refs(e->as.get_field_.struct_expr, a, n, cap); return;
+        case EX_SET_FIELD:
+            gdef_collect_refs(e->as.set_field_.receiver, a, n, cap);
+            gdef_collect_refs(e->as.set_field_.value, a, n, cap);
+            return;
+        case EX_DYN_FIELD:    gdef_collect_refs(e->as.dyn_field_.obj, a, n, cap);      return;
+        case EX_DYN_OP:
+            for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
+                gdef_collect_refs(e->as.dyn_op_.args[i], a, n, cap);
+            return;
+        case EX_DYN_CALL:
+            gdef_collect_refs(e->as.dyn_call_.fn, a, n, cap);
+            for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
+                gdef_collect_refs(e->as.dyn_call_.args[i], a, n, cap);
+            return;
+        case EX_CONS_LIST:
+            for (uint32_t i = 0; i < e->as.cons_list_.n; i++)
+                gdef_collect_refs(e->as.cons_list_.items[i], a, n, cap);
+            return;
         default: return;
     }
 }
@@ -17750,7 +17943,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
-    for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
+    for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
     free(ctx.env_struct_fn_typedefs);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
@@ -18919,6 +19112,13 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     /* Forward declarations for module-local functions so that mutually-recursive
      * static C functions resolve at C-compile time (parity with emit_program). */
     emit_fn_forward_decls(&ctx, &impl_fwd_decls, impl_items, impl_n_items);
+    /* r7rs-lang-plan R9: and the global-def band emit_program carries -- a
+     * lifted lambda is prepended to the item list, so it can read or `set!`
+     * a `def` whose storage is declared far below it.  Missing here, a
+     * project build (`tur build .`, per-module .c) of any `#lang r7rs` source
+     * failed in cc on the prelude's handler stack ('r7rs-handlers__'
+     * undeclared) while the single-file build of the same text compiled. */
+    emit_global_def_forward_decls(&ctx, &impl_fwd_decls, impl_items, impl_n_items);
 
     /* Check if user defined a main function */
     bool user_has_main = false;
@@ -19278,7 +19478,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     free(ctx.fatbox_names);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
-    for (uint8_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
+    for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
     free(ctx.env_struct_fn_typedefs);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);

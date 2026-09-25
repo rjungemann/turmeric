@@ -621,13 +621,18 @@ typedef struct Elab {
      * binder's type and an escape delivers an int64 -- neither is a
      * tur_tagged_t. */
     bool in_callcc_receiver;
-    /* saffron-dynamic-surface-pass M10: the dialect of the TOP-LEVEL form
-     * being elaborated, set beside toplevel_stmt in pass 2.  Per-form spans
-     * cannot see through a macro expansion -- `(when (map-get m k) ...)` in
-     * a Saffron file is an `if` whose form is macros.tur's and whose
-     * condition is map.tur's -- so the seam and the truthiness rule consult
-     * this as well as the spans they have. */
-    bool toplevel_saffron;
+    /* saffron-dynamic-surface-pass M10: whether the TOP-LEVEL form being
+     * elaborated comes from a dynamically typed file (lang_span_is_dynamic),
+     * set beside toplevel_stmt in pass 2.  Per-form spans cannot see through
+     * a macro expansion -- `(when (map-get m k) ...)` in a Saffron file is
+     * an `if` whose form is macros.tur's and whose condition is map.tur's --
+     * so the seam and the truthiness rule consult this as well as the spans
+     * they have.  Was `toplevel_saffron`; r7rs-lang-plan R0 renamed it to the
+     * trait it records. */
+    bool toplevel_dynamic;
+    /* r7rs-lang-plan R2: the same, for Scheme truthiness (lang_span_is_scheme)
+     * -- a macro-expanded `if` in a Scheme file must decide by Scheme's rule. */
+    bool toplevel_scheme;
     /* saffron-effect-row-lost-through-unannotated-call: a user `defeffect` has
      * been elaborated in this unit.  Gates the CALL half of the dynamic-node
      * operand hoist (elab_hoist_control_operands): a unit with no effects can
@@ -1324,6 +1329,8 @@ struct CtFn {
 Type type_from_kind(TypeKind k);
 TypeKind typekind_from_symbol(const char *name);
 uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out_arg_kinds);
+bool fwd_decl_scan_variadic(const Form *params_f, TypeKind *rest_kind);
+void fwd_decl_apply_variadic(Elab *e, Arena *arena, Type *fn_type, const Form *params_f);
 bool typekind_is_numeric(TypeKind k);
 int type_size_bytes(TypeKind kind);
 bool typekind_is_concrete_for_disjoint(TypeKind k);
@@ -1348,6 +1355,15 @@ int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
  * (imported/loaded modules) so bare top-level defns spliced by (load ...) can
  * self/mutually recurse.  A non-defn form is a no-op. */
 void elab_pre_declare_toplevel_defn(Elab *e, Arena *arena, Form *f);
+/* r7rs-lang-plan R3: full types for a forward decl's compound parameters in a
+ * dynamic file (NULL when none); marks the matching arg_kinds slots TY_APP. */
+Type **elab_fwd_param_full_types(Elab *e, Arena *arena, const Form *f,
+                                 uint32_t name_idx, uint32_t params_idx,
+                                 uint32_t param_arity, TypeKind *arg_kinds);
+/* r7rs-lang-plan R3: the full TY_APP type of a compound return annotation in a
+ * dynamic file (NULL otherwise), for the defmodule pre-pass. */
+Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
+                                    uint32_t params_idx, const Form *ret_f);
 const Symbol *intern_cstr(SymbolTable *st, const char *s);
 bool binding_mark_moved(Binding *b, Span use_span);
 bool binding_mark_lent(Binding *b, Span use_span);

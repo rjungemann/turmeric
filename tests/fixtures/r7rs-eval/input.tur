@@ -1,0 +1,78 @@
+#lang r7rs
+;; r7rs-lang-plan T4: `eval`, with the interpreter linked in on demand.
+;; Importing (scheme eval) links libturi into the compiled program; the
+;; interpreter runs the same program with native twins.  Both print this.
+(import (scheme base) (scheme write) (scheme file) (scheme eval) (scheme repl)
+        (scheme load) (scheme r5rs) (scheme process-context))
+
+(define (show label x)
+  (display label) (display ": ") (write x) (newline))
+
+(define (twice f) (lambda (x) (f (f x))))
+
+;; Top-level `define`s with an `eval` initializer would run before the
+;; statements above them on the compiled back end
+;; (docs/reported/toplevel-def-initializers-run-before-toplevel-expressions.md),
+;; so the program is one procedure body.
+(define (run)
+  ;; The four chibi tests T4 names.
+  (show "1946" (let ((f (eval '(lambda (f x) (f x x)) (null-environment 5)))) (f + 10)))
+  (show "1950" (eval '(expt 2 10) (environment '(scheme base))))
+  (show "1952" (inexact (eval '(sin 0) (environment '(scheme inexact)))))
+  (show "1954" (eval '(+ (expt 2 10) (inexact (sin 0)))
+                     (environment '(scheme base) '(scheme inexact))))
+
+  ;; A definition persists in the interaction environment.
+  (let ((env (interaction-environment)))
+    (eval '(define (sqr x) (* x x)) env)
+    (show "defined" (eval '(sqr 12) env))
+    ;; An evaluated procedure, called from the program.
+    (let ((sq (eval 'sqr env))
+          (count-args (eval '(lambda args (length args)) env)))
+      (show "evaluated procedure" (sq 7.1))
+      (show "variadic" (list (count-args) (count-args 'a) (count-args 1 2 3)))
+      (show "procedure?" (procedure? sq))
+      (show "same wrapper" (eq? count-args ((eval '(lambda (p) p) env) count-args))))
+    ;; A program procedure, called from evaluated code, and handed back.
+    (show "program procedure" ((eval '(lambda (g) (g 5)) env) (twice (lambda (n) (+ n 1)))))
+    (show "handed back" (eq? twice ((eval '(lambda (p) p) env) twice))))
+
+  ;; Datums copy: a pair mutated inside evaluated code is a different pair.
+  (let ((p (list 1 2 3))
+        (mutate! (eval '(lambda (q) (set-car! q 99) q) (environment '(scheme base)))))
+    (show "mutated inside" (mutate! p))
+    (show "unchanged outside" p))
+  (show "datums" (eval '(vector 1 "two" #\3 'four 5/2 (expt 2 70) 7.25 #t '(a . b))
+                       (environment '(scheme base))))
+
+  ;; Raises cross both ways.
+  (show "error object"
+        (guard (e ((error-object? e) (list (error-object-message e) (error-object-irritants e))))
+          (eval '(error "boom" 1 2) (environment '(scheme base)))))
+  (show "raised datum"
+        (guard (e ((string? e) e)) (eval '(raise "str") (environment '(scheme base)))))
+  (show "raised by the program"
+        (guard (e ((symbol? e) (list 'caught e)))
+          ((eval '(lambda (f) (f)) (environment '(scheme base)))
+           (lambda () (raise 'from-program)))))
+  (show "caught inside eval"
+        ((eval '(lambda (f) (guard (e (#t (list 'inner e))) (f))) (environment '(scheme base)))
+         (lambda () (raise 'program-raise))))
+  (show "not an environment" (guard (e (#t 'refused)) (eval '(+ 1 2) 42)))
+
+  ;; An on-demand library in the evaluated environment.
+  (show "file-exists?" (eval '(file-exists? "/") (environment '(scheme file))))
+
+  ;; load: every form of a file, evaluated.
+  ;; In the temporary directory: TEMP on Windows, TMPDIR, else /tmp.
+  (let ((path (string-append (or (get-environment-variable "TEMP")
+                                 (get-environment-variable "TMPDIR")
+                                 "/tmp")
+                             "/tur-r7rs-eval-fixture-load.scm")))
+    (with-output-to-file path
+      (lambda () (write '(define loaded-value (* 6 7))) (newline)))
+    (load path)
+    (show "loaded" (eval 'loaded-value (interaction-environment)))
+    (delete-file path)))
+
+(run)

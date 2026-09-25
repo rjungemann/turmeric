@@ -1,0 +1,21 @@
+#lang turmeric
+;; The Turmeric spelling of each line of scheme.tur.  A `.` symbol is what a
+;; dotted pair reads as (the reader validates the shape under Scheme and
+;; keeps the marker), `~`/`~@` are Turmeric's unquotes, `[...]` is the vector,
+;; and `#u8(...)` reads as the `(bytevector ...)` call form.
+(a . b)
+(a b . c)
+'(1 . 2)
+`(1 ~x ~@ys)
+[1 2 3]
+(bytevector 1 2 3)
+foo
+aAb
+(hello world MiXed)
+(HELLO)
+(5 -5 0.5 -0.5 -31 2 3.0 16)
+"aAb|c"
+(f true false true false)
+'()
+(r7rs-char__ 65)
+(kept) (also kept)

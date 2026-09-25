@@ -1,0 +1,25 @@
+"x and \"y\"!cd\n"
+(#\l #\i #\i)
+("ne one" "line two" "last")
+#t
+#t
+"hél"
+"lo"
+#t
+#u8(65 67 68)
+(1 2 #u8(2 3))
+(2 #u8(0 4 5 0))
+(#t #t)
+(#t #t #f #t #f #f)
+(#t #t #f #t #t)
+(#t #t)
+(#f #f)
+"captured (1 \"two\")\n"
+#t
+#t
+#t
+"from a parameter"
+#\a
+#f
+"not an open input port"
+"not an open output port"

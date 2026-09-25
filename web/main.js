@@ -1305,6 +1305,8 @@ function baseShortLabel(base) {
         case 'saffron/curly-infix':  return 'saffron curly';
         case 'saffron/neoteric':     return 'saffron neoteric';
         case 'saffron/sweet':        return 'saffron sweet';
+        // r7rs brings its own reader, so the base token says it all.
+        case 'r7rs':                 return 'r7rs';
         default:                     return base || 's-expr';
     }
 }
@@ -1423,9 +1425,13 @@ function renderLangMenu() {
     // the same `experimental` chip a semantic layer gets.
     basesEl.innerHTML = reg.bases.map(b => {
         const lang = b.language || 'turmeric';
+        // `r7rs` is an initialism, not a word, so it does not title-case.
+        const langName = lang === 'r7rs'
+            ? 'R7RS'
+            : `${lang.charAt(0).toUpperCase()}${lang.slice(1)}`;
         const name = lang === 'turmeric'
             ? b.label
-            : `${lang.charAt(0).toUpperCase()}${lang.slice(1)} -- ${b.label}`;
+            : `${langName} -- ${b.label}`;
         return `
         <label class="lang-row" title="#lang ${escapeHtml(b.name)}">
             <input type="radio" name="lang-base" value="${escapeHtml(b.name)}">

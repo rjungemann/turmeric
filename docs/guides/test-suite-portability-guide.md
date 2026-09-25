@@ -458,7 +458,8 @@ Two things to know if you touch this:
 
 ### If you are chasing a leak in emitted code
 
-Do not reach for `bash tests/run.sh` -- it cannot see one. Four harnesses can:
+Do not reach for `bash tests/run.sh` -- it cannot see one. Four harnesses can
+(and a fifth, below, sees memory errors but not leaks):
 
 - **`tests/run-leak-check.sh`** -- the general one, and the one ctest runs
   (`ctest -R tur_leak_check`, `RUN_SERIAL` because it fans out across `nproc`
@@ -469,6 +470,11 @@ Do not reach for `bash tests/run.sh` -- it cannot see one. Four harnesses can:
   the point of the test.
 - `tests/run-gc-leak-gate.sh` -- cycle-collector fixtures, ASan, with a
   collector-off control run.
+- `tests/run-r7rs-sanitize.sh` (ctest `tur_r7rs_sanitize`) -- every
+  `#lang r7rs` fixture compiled with ASan and UBSan (UB fatal) and run with
+  leak detection OFF: it gates memory errors, not leaks, because a Scheme
+  program's data is never freed by design
+  (`docs/reported/r7rs-heap-data-never-reclaimed.md`).
 - `tests/run-closure-env-leak.sh`, `tests/run-fat-shim-leak.sh` -- one
   regression each; they emit C and compile it by hand with ASan.
 - `tests/run-leak-gate.sh` -- despite the name, this is the COMPILER's error

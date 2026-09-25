@@ -1,0 +1,4 @@
+Re-entrant call/cc (the #lang r7rs prelude's r7k_stack_base) needs the
+thread's stack base: pthread_getattr_np on glibc, pthread_get_stackaddr_np on
+macOS. MinGW has neither, so call/cc is escape-only there and this fixture's
+re-entry cannot run. See docs/reported/r7rs-reentrant-callcc-not-on-windows.md.

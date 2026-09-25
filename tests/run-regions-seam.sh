@@ -95,7 +95,10 @@ fi
 # and this arm proves the answer is the same without a region at all:
 #   region-escape-via-store, region-escape-via-erasure,
 #   region-escape-via-inline-c (which also pins the other direction -- a
-#   bracket whose inline-C sees only scalars still rewinds).
+#   bracket whose inline-C sees only scalars still rewinds), and
+#   region-escape-via-callcc (r7rs-lang-plan T8: a Scheme continuation's
+#   stack image, which also exercises the variadic dynamic call's rest
+#   packing on this arm -- it called an undeclared region allocator).
 FIXTURES="
 refined-nonempty
 constrained-defn-cons-return-monomorphize
@@ -113,6 +116,7 @@ region-with-region
 region-escape-via-store
 region-escape-via-erasure
 region-escape-via-inline-c
+region-escape-via-callcc
 "
 
 for fx in $FIXTURES; do

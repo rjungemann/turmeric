@@ -1,0 +1,285 @@
+#lang r7rs
+;;; r7rs/eval -- (scheme eval), (scheme repl), (scheme load) and the
+;;; environments of (scheme r5rs): `eval` over an embedded interpreter.
+;;;
+;;; An on-demand R7RS library (see stdlib/r7rs/time.tur).  Importing any of
+;;; the four splices this file in, and its inline C carries the
+;;; `__tur_autolink__: -lturi` marker, so a COMPILED program that imports one
+;;; links the interpreter (libturi) and a program that does not links nothing
+;;; new.  `tur --interpret` runs the same Turmeric code here, with the inline C
+;;; primitives replaced by native twins (src/turi/interpreter_natives.c).
+;;;
+;;; The evaluator is one embedded R7RS environment per process
+;;; (src/turi/r7rs_embed.c).  An environment object names the import sets
+;;; evaluated code sees.  A datum crosses as `write` text and is read back on
+;;; the far side, so pairs, vectors and strings are COPIED in both directions;
+;;; a procedure crosses as a handle -- an evaluated procedure is called
+;;; through the embedded env, and a program procedure passed in (test 1946's
+;;; `(f + 10)`) is called back through `r7rs-eval-host-call__`.  A datum that
+;;; holds a procedure or a record is the named error the reader reports.
+;;;
+;;; Since: r7rs-lang-plan T4
+;; (scheme eval)
+
+(load "stdlib/r7rs/read.tur")
+
+;;; ---- the C side -----------------------------------------------------------
+
+;;; r7rs-eval-c-eval__ -- internal: evaluate `expr` (written) with the import
+;;; sets `sets` (written); the result kind (see r7rs_embed.h).  The first call
+;;; sets the embedded evaluator up with the stdlib this program was built
+;;; against and the host trampoline below.
+(defn r7rs-eval-c-eval__ [sets : cstr expr : cstr] : int
+  ```c
+  /* __tur_autolink__: -lturi -Isrc -Isrc/compiler -Isrc/runtime -DTUR_R7RS_STDLIB=@TUR_STDLIB_ROOT@ */
+  /* __tur_include__: #include "turi/r7rs_embed.h" */
+  #ifndef TUR_R7RS_STDLIB
+  #define TUR_R7RS_STDLIB ""
+  #endif
+  turi_r7rs_embed_init_program(TUR_R7RS_STDLIB, (TuriR7rsHostFn)r7rs_hyeval_hyhost_hycall_un_un);
+  return turi_r7rs_embed_eval(sets, expr);
+  ```)
+;;; r7rs-eval-c-load__ -- internal: `load` the file at `path`.
+(defn r7rs-eval-c-load__ [sets : cstr path : cstr] : int
+  ```c
+  turi_r7rs_embed_init_program(TUR_R7RS_STDLIB, (TuriR7rsHostFn)r7rs_hyeval_hyhost_hycall_un_un);
+  return turi_r7rs_embed_load(sets, path);
+  ```)
+;;; r7rs-eval-c-apply__ -- internal: call embedded procedure `id` with the
+;;; pushed arguments; the result kind.
+(defn r7rs-eval-c-apply__ [id : int] : int
+  ```c
+  return turi_r7rs_embed_apply(id);
+  ```)
+;;; r7rs-eval-c-push-datum__ / -host__ / -proc__ -- internal: one argument.
+(defn r7rs-eval-c-push-datum__ [text : cstr] : nil
+  ```c
+  turi_r7rs_embed_push_datum(text);
+  ```)
+(defn r7rs-eval-c-push-host__ [id : int] : nil
+  ```c
+  turi_r7rs_embed_push_host(id);
+  ```)
+(defn r7rs-eval-c-push-proc__ [id : int] : nil
+  ```c
+  turi_r7rs_embed_push_proc(id);
+  ```)
+;;; r7rs-eval-c-result-text__ / -id__ -- internal: the last result's payload
+;;; (the text is copied: an error message outlives the next call).
+(defn r7rs-eval-c-result-text__ [] : cstr
+  ```c
+  return strdup(turi_r7rs_embed_result_text());
+  ```)
+(defn r7rs-eval-c-result-id__ [] : int
+  ```c
+  return turi_r7rs_embed_result_id();
+  ```)
+;;; r7rs-eval-c-frame-count__ / -kind__ / -text__ / -id__ -- internal: the
+;;; arguments of the host call in progress.
+(defn r7rs-eval-c-frame-count__ [] : int
+  ```c
+  return turi_r7rs_embed_frame_count();
+  ```)
+(defn r7rs-eval-c-frame-kind__ [i : int] : int
+  ```c
+  return turi_r7rs_embed_frame_kind((int)i);
+  ```)
+(defn r7rs-eval-c-frame-text__ [i : int] : cstr
+  ```c
+  return strdup(turi_r7rs_embed_frame_text((int)i));
+  ```)
+(defn r7rs-eval-c-frame-id__ [i : int] : int
+  ```c
+  return turi_r7rs_embed_frame_id((int)i);
+  ```)
+;;; r7rs-eval-c-answer-datum__ / -host__ / -proc__ / -unspecified__ --
+;;; internal: the host call's answer.
+(defn r7rs-eval-c-answer-datum__ [text : cstr] : nil
+  ```c
+  turi_r7rs_embed_answer_datum(text);
+  ```)
+(defn r7rs-eval-c-answer-host__ [id : int] : nil
+  ```c
+  turi_r7rs_embed_answer_host(id);
+  ```)
+(defn r7rs-eval-c-answer-proc__ [id : int] : nil
+  ```c
+  turi_r7rs_embed_answer_proc(id);
+  ```)
+(defn r7rs-eval-c-answer-unspecified__ [] : nil
+  ```c
+  turi_r7rs_embed_answer_unspecified();
+  ```)
+(defn r7rs-eval-c-answer-raise__ [condition : cstr] : nil
+  ```c
+  turi_r7rs_embed_answer_raise(condition);
+  ```)
+
+;;; ---- procedures across the bridge -----------------------------------------
+
+;;; The program procedures evaluated code has been handed, newest first; a
+;;; procedure's host id is its position counted from the oldest.
+(def ^mut r7rs-eval-hosts__ : any (R7rsNull 0))
+;;; The wrappers made for embedded procedures: (wrapper . id) pairs.
+(def ^mut r7rs-eval-wrappers__ : any (R7rsNull 0))
+
+;;; r7rs-eval-index-of__ -- internal: the position of `x` (eq?) in `l`, or -1.
+(defn r7rs-eval-index-of__ [x l i : int] : int
+  (if (r7rs-null? l) -1 (if (r7rs-eq? x (r7rs-car l)) i (r7rs-eval-index-of__ x (r7rs-cdr l) (+ i 1)))))
+;;; r7rs-eval-host-id__ -- internal: the host id of program procedure `f`,
+;;; assigned on its first crossing.
+(defn r7rs-eval-host-id__ [f] : int
+  (let [n (r7rs-length r7rs-eval-hosts__)
+        i (r7rs-eval-index-of__ f r7rs-eval-hosts__ 0)]
+    (if (>= i 0)
+      (- (- n 1) i)
+      (do (set! r7rs-eval-hosts__ (R7rsPair f r7rs-eval-hosts__))
+          n))))
+;;; r7rs-eval-host-ref__ -- internal: the program procedure with host id `id`.
+(defn r7rs-eval-host-ref__ [id : int] : any
+  (r7rs-list-ref r7rs-eval-hosts__ (- (- (r7rs-length r7rs-eval-hosts__) 1) id)))
+;;; r7rs-eval-wrapper-id__ -- internal: the embedded id `f` wraps, or -1.
+(defn r7rs-eval-wrapper-id__ [f l] : int
+  (if (r7rs-null? l) -1
+    (if (r7rs-eq? f (r7rs-car (r7rs-car l)))
+      (cast (r7rs-cdr (r7rs-car l)) int)
+      (r7rs-eval-wrapper-id__ f (r7rs-cdr l)))))
+;;; r7rs-eval-wrapper-of__ -- internal: the wrapper made for embedded `id`.
+(defn r7rs-eval-wrapper-of__ [id : int l] : any
+  (if (r7rs-null? l) (R7rsNull 0)
+    (if (= (cast (r7rs-cdr (r7rs-car l)) int) id)
+      (r7rs-car (r7rs-car l))
+      (r7rs-eval-wrapper-of__ id (r7rs-cdr l)))))
+;;; r7rs-eval-proc__ -- internal: a program procedure for embedded procedure
+;;; `id`: calling it calls the embedded one.  One wrapper per id, so a
+;;; procedure that crosses twice is `eq?` to itself.
+(defn r7rs-eval-proc__ [id : int] : any
+  (let [known (r7rs-eval-wrapper-of__ id r7rs-eval-wrappers__)]
+    (if (r7rs-procedure? known)
+      known
+      (let [w (:: (fn [& args : any] : any
+                    (r7rs-eval-apply__ id (r7rs-chain->list__ (:: args (Cons any)))))
+                  any)]
+        (set! r7rs-eval-wrappers__ (R7rsPair (R7rsPair w (:: id any)) r7rs-eval-wrappers__))
+        w))))
+
+;;; r7rs-eval-unspecified?__ -- internal: #t for the unspecified value.
+(defn r7rs-eval-unspecified?__ [x] : bool (= (r7rs-type-name__ x) (:: "nil" any)))
+
+;;; r7rs-eval-import__ -- internal: the program value a result or an argument
+;;; of kind `kind` names.  What evaluated code raised ('R') is raised again
+;;; here; an error of the evaluator's own ('E': an unbound name, a form that
+;;; does not elaborate) is raised as an error object with its message.
+(defn r7rs-eval-import__ [kind : int text : cstr id : int] : any
+  (if (= kind 68)
+    (r7rs-bridge-read__ text)
+    (if (= kind 80)
+      (r7rs-eval-proc__ id)
+      (if (= kind 72)
+        (r7rs-eval-host-ref__ id)
+        (if (= kind 85)
+          nil
+          (if (= kind 82)
+            (r7rs-bridge-reraise__ text)
+            (r7rs-raise (R7rsError (:: (r7rs-string-append2__ "eval: " text) any) (R7rsNull 0) 0))))))))
+;;; r7rs-eval-result__ -- internal: the value of the last eval, load or apply.
+(defn r7rs-eval-result__ [kind : int] : any
+  (r7rs-eval-import__ kind (r7rs-eval-c-result-text__) (r7rs-eval-c-result-id__)))
+
+;;; r7rs-eval-push__ -- internal: one argument of a call into the embedded env.
+(defn r7rs-eval-push__ [x] : nil
+  (if (r7rs-procedure? x)
+    (let [pid (r7rs-eval-wrapper-id__ x r7rs-eval-wrappers__)]
+      (if (>= pid 0)
+        (r7rs-eval-c-push-proc__ pid)
+        (r7rs-eval-c-push-host__ (r7rs-eval-host-id__ x))))
+    (r7rs-eval-c-push-datum__ (r7rs-bridge-write__ x))))
+(defn r7rs-eval-push-all__ [l] : nil
+  (if (r7rs-null? l)
+    nil
+    (do (r7rs-eval-push__ (r7rs-car l))
+        (r7rs-eval-push-all__ (r7rs-cdr l)))))
+;;; r7rs-eval-apply__ -- internal: call embedded procedure `id` on `args`.
+(defn r7rs-eval-apply__ [id : int args] : any
+  (do (r7rs-eval-push-all__ args)
+      (r7rs-eval-result__ (r7rs-eval-c-apply__ id))))
+
+;;; r7rs-eval-frame-args__ -- internal: the host call's arguments, as a list.
+(defn r7rs-eval-frame-args__ [i : int acc] : any
+  (if (< i 0)
+    acc
+    (r7rs-eval-frame-args__ (- i 1)
+                            (R7rsPair (r7rs-eval-import__ (r7rs-eval-c-frame-kind__ i)
+                                                          (r7rs-eval-c-frame-text__ i)
+                                                          (r7rs-eval-c-frame-id__ i))
+                                      acc))))
+;;; r7rs-eval-answer__ -- internal: hand a program value back as the answer.
+(defn r7rs-eval-answer__ [r] : nil
+  (if (r7rs-procedure? r)
+    (let [pid (r7rs-eval-wrapper-id__ r r7rs-eval-wrappers__)]
+      (if (>= pid 0)
+        (r7rs-eval-c-answer-proc__ pid)
+        (r7rs-eval-c-answer-host__ (r7rs-eval-host-id__ r))))
+    (if (r7rs-eval-unspecified?__ r)
+      (r7rs-eval-c-answer-unspecified__)
+      (r7rs-eval-c-answer-datum__ (r7rs-bridge-write__ r)))))
+;;; r7rs-eval-host-call__ -- internal: evaluated code called program
+;;; procedure `id`.  The embedded evaluator calls this through its C name.
+;;; What the procedure raises is caught here and raised again on the embedded
+;;; side, so no escape unwinds through the evaluator's C frames.
+(defn r7rs-eval-host-call__ [id : int] : int
+  (let [f    (r7rs-eval-host-ref__ id)
+        args (r7rs-eval-frame-args__ (- (r7rs-eval-c-frame-count__) 1) (R7rsNull 0))
+        r    (r7rs-bridge-catch__ (fn [] : any (r7rs-apply-list__ f args)))]
+    (do (if (r7rs-bridge-raised?__ r)
+          (r7rs-eval-c-answer-raise__ (r7rs-bridge-condition__ r))
+          (r7rs-eval-answer__ r))
+        0)))
+
+;;; ---- environments ----------------------------------------------------------
+
+;;; R7rsEnvironment -- an environment specifier: the import sets evaluated
+;;; code sees, written.
+(defstruct R7rsEnvironment :heap [sets : cstr])
+(defn r7rs-environment?__ [x] : bool (is? x R7rsEnvironment))
+(defn r7rs-environment-sets__ [e : R7rsEnvironment] : cstr (.sets e))
+
+;;; r7rs-environment -- (environment set ...): an environment with those
+;;; import sets.
+(defn r7rs-environment [& sets : any] : any
+  (R7rsEnvironment (r7rs-bridge-write__ (r7rs-chain->list__ (:: sets (Cons any))))))
+;;; r7rs-report-version__ -- internal: (null-environment 5) and
+;;; (scheme-report-environment 5) name the fifth report and nothing else.
+(defn r7rs-report-version__ [who : cstr v sets : cstr] : any
+  (if (if (r7rs-exact-integer? v) (= (cast v int) 5) false)
+    (R7rsEnvironment sets)
+    (r7rs-raise (R7rsError (:: (r7rs-string-append2__ who ": the version must be 5") any) (r7rs-list v) 0))))
+;;; r7rs-null-environment -- (null-environment 5): the syntax of R5RS.
+(defn r7rs-null-environment [v] : any
+  (r7rs-report-version__ "null-environment" v "((scheme base))"))
+;;; r7rs-scheme-report-environment -- (scheme-report-environment 5): R5RS.
+(defn r7rs-scheme-report-environment [v] : any
+  (r7rs-report-version__ "scheme-report-environment" v
+                         "((scheme base) (scheme char) (scheme cxr) (scheme inexact) (scheme complex) (scheme lazy) (scheme read) (scheme write) (scheme file))"))
+;;; r7rs-interaction-environment -- the REPL's environment: every library;
+;;; definitions evaluated in it persist for the rest of the run.
+(defn r7rs-interaction-environment [] : any
+  (R7rsEnvironment "((scheme base) (scheme case-lambda) (scheme char) (scheme cxr) (scheme inexact) (scheme complex) (scheme lazy) (scheme read) (scheme write) (scheme file) (scheme time) (scheme process-context))"))
+
+;;; r7rs-eval-sets__ -- internal: the import sets of an environment argument.
+(defn r7rs-eval-sets__ [who : cstr env] : cstr
+  (if (r7rs-environment?__ env)
+    (r7rs-environment-sets__ env)
+    (r7rs-str__ (r7rs-raise (R7rsError (:: (r7rs-string-append2__ who ": not an environment") any) (r7rs-list env) 0)))))
+
+;;; r7rs-eval -- (eval expr-or-def environment): evaluate the datum in the
+;;; environment.  A definition persists in the evaluator for later evals.
+(defn r7rs-eval [x env] : any
+  (r7rs-eval-result__ (r7rs-eval-c-eval__ (r7rs-eval-sets__ "eval" env) (r7rs-bridge-write__ x))))
+
+;;; r7rs-load -- (load filename [environment]): evaluate every form of the
+;;; file (in the interaction environment when none is given).
+(defn r7rs-load [path & more : any] : any
+  (let [l   (r7rs-chain->list__ (:: more (Cons any)))
+        env (if (r7rs-null? l) (r7rs-interaction-environment) (r7rs-car l))]
+    (r7rs-eval-result__ (r7rs-eval-c-load__ (r7rs-eval-sets__ "load" env) (r7rs-str__ path)))))

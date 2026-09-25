@@ -1,0 +1,17 @@
+#lang r7rs
+;; r7rs-lang-plan R6 / D6: proper tail calls on the compiled path, at -O0
+;; (the `flags` file), 10,000,000 deep -- far past any stack.  Every Scheme
+;; procedure call lowers to the dynamic call the tail-calls plan's T6
+;; trampoline drives (self, mutual and indirect through a value), and a
+;; named let is a letrec-bound closure the same trampoline reaches.
+;; requires.compiled: the interpreter has always had proper tail calls and
+;; retains memory per trampolined step, so 1e7 steps are a compiled-path
+;; assertion (see CLAUDE.md, "Memory, not CPU, inside a single turi run").
+(define (loop i) (if (= i 0) 0 (loop (- i 1))))
+(display (loop 10000000)) (newline)
+(define (ev? n) (if (= n 0) #t (od? (- n 1))))
+(define (od? n) (if (= n 0) #f (ev? (- n 1))))
+(display (ev? 10000000)) (newline)
+(define (ind f n) (if (= n 0) 'done (f f (- n 1))))
+(display (ind ind 10000000)) (newline)
+(let lp ((i 10000000)) (if (= i 0) (display "named-let ok") (lp (- i 1)))) (newline)

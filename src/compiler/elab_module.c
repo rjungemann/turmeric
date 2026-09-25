@@ -1,4 +1,6 @@
 /* elab_module.c -- module loading, imports, exports, and symbol resolution. */
+#include "scheme_lower.h"
+#include "runtime/globals.h"     /* g_lang_prelude */   /* r7rs-lang-plan R2: Scheme core forms in an imported module */
 #include "elab_internal.h"
 
 /* ---- file-local helper forward declarations ---- */
@@ -47,6 +49,7 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
          * params vector is at name_idx+1; return type annotation is
          * at name_idx+2 if it is F_KEYWORD or F_TYPE_ANN. */
         TypeKind fwd_result_kind = TY_INT; /* placeholder */
+        Type *fwd_result_full = NULL;
         /* A GENERIC defn spells as `(defn f [TypeVars] [params] : R ...)`, or
          * with a constraint vec `[TypeVars] [(C V)] [params]`, so the vector
          * after the name is the TYPE parameters and the real params sit one or
@@ -115,14 +118,23 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
                       || strcmp(kn, "void") == 0) fwd_result_kind = TY_NIL;
                 else if (strcmp(kn, "ptr") == 0
                       || strcmp(kn, "ptr<void>") == 0) fwd_result_kind = TY_PTR_VOID;
+                /* r7rs-lang-plan R7: an annotated `: any` result, like the
+                 * unannotated dynamic default below it. */
+                else if (strcmp(kn, "any") == 0) fwd_result_kind = TY_ANY;
             } else if (ret_f && ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
                 /* Compound return type: peek at the head symbol */
                 Form *head_f = ret_f->as.list.items[0];
                 if (head_f->tag == F_SYM &&
                         strcmp(head_f->as.sym->name, "Session") == 0) {
                     fwd_result_kind = TY_SESSION;
+                } else {
+                    /* r7rs-lang-plan R3: in a dynamic file a closed
+                     * application rides the forward decl in full; other
+                     * compound types keep the TY_INT placeholder. */
+                    fwd_result_full = elab_fwd_compound_result_type(
+                        e, f, name_idx, params_idx, ret_f);
+                    if (fwd_result_full) fwd_result_kind = TY_APP;
                 }
-                /* Other compound types keep TY_INT placeholder */
             }
         }
         /* Count actual arity + scalar arg kinds from the params vector.
@@ -135,7 +147,19 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
         uint32_t param_arity = (params_idx < (uint32_t)f->as.list.len)
             ? fwd_decl_scan_params(e->arena, f->as.list.items[params_idx], &arg_kinds)
             : 0;
+        /* r7rs-lang-plan R3: a compound parameter type in a dynamic file
+         * rides the forward decl in full -- see elab_fwd_param_full_types.
+         * This pre-pass is the one an imported `#lang r7rs` prelude goes
+         * through, so without it `r7rs-equal?` compiled its vector arm as an
+         * int unbox whenever the program was a module. */
+        Type **fwd_arg_full = elab_fwd_param_full_types(
+            e, e->arena, f, name_idx, params_idx, param_arity, arg_kinds);
         Type fn_type = type_fn(arg_kinds, param_arity, fwd_result_kind);
+        /* r7rs-lang-plan R7: the rest shape, as the top-level pre-pass does. */
+        if (fwd_arg_full) fn_type.as.fn.arg_full_types = fwd_arg_full;
+        if (params_idx < (uint32_t)f->as.list.len)
+            fwd_decl_apply_variadic(e, e->arena, &fn_type, f->as.list.items[params_idx]);
+        if (fwd_result_full) fn_type.as.fn.result_full_type = fwd_result_full;
         Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
         scope_add(&e->global, b);
     }
@@ -532,6 +556,37 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
         }
         forms = expanded;
         nforms = n_expanded;
+        /* r7rs-lang-plan R2: an imported `#lang r7rs` module gets the same
+         * Scheme-form lowering the entry program gets, at the same point --
+         * after its loads are spliced, before anything is elaborated. */
+        if (scheme_lower_needed(forms, nforms)) {
+            uint32_t lowered_n = 0;
+            forms  = scheme_lower_program(e->arena, e->st, forms, nforms, &lowered_n);
+            nforms = lowered_n;
+            /* R3 / D9, the reverse direction: a Turmeric program importing a
+             * Scheme library.  The R7RS prelude is autoloaded only when the
+             * ENTRY file is Scheme, so bring it in here through the same
+             * `(load ...)` path a stdlib load takes -- once per compile (the
+             * load-visited set dedups), before the library's own forms, and
+             * as forms of the prelude's own file, so the library's defmodule
+             * is still the first form of ITS file. */
+            if (!(g_lang_prelude && strcmp(g_lang_prelude, "r7rs/prelude.tur") == 0)) {
+                Form **ld_items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+                ld_items[0] = form_sym(e->arena, import_span, symtab_intern(e->st, strslice("load", 4)));
+                ld_items[1] = form_str(e->arena, import_span, "stdlib/r7rs/prelude.tur", 23);
+                Form *ld = form_list(e->arena, import_span, ld_items, 2);
+                Form *const one[1] = { ld };
+                Form **pre = NULL; uint32_t npre = 0;
+                if (elab_expand_module_loads(e, e->arena, e->st, one, 1, &pre, &npre) == 0 && npre > 0) {
+                    Form **joined = (Form **)arena_alloc(e->arena, (npre + nforms + 1) * sizeof(Form *));
+                    for (uint32_t i = 0; i < npre; i++) joined[i] = pre[i];
+                    for (uint32_t i = 0; i < nforms; i++) joined[npre + i] = forms[i];
+                    joined[npre + nforms] = NULL;
+                    forms = joined;
+                    nforms = npre + nforms;
+                }
+            }
+        }
     }
     if (!forms) {
         slot->is_loading = false;

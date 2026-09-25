@@ -14,6 +14,7 @@
 #include "turi/interpreter_natives.h"
 
 #include "turi/eval.h"
+#include "turi/r7rs_embed.h"   /* r7rs-lang-plan T4: eval twins */
 #include "turi/collections_native.h"  /* native_mk_cmp_int / native_mk_box_cstr */
 #include "turi/docstrings.h"  /* PS3: doc-lookup / doc-print, builtin docs */
 #include "diag.h"    /* SYNTAX natives: diag file-registry save/restore for read-string */
@@ -26,6 +27,7 @@
 #include <limits.h>
 #include <math.h>
 #include <pthread.h>
+#include <setjmp.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -33,6 +35,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "../runtime/tur_string.h"
 #include "../runtime/trail.h"   /* SX1: the real trail, shimmed for --interpret */
 #if defined(_WIN32)
@@ -2566,6 +2569,781 @@ static TuriValue native_println_float(TuriEnv *env, TuriValue *a, uint32_t n, vo
     printf(fmt, x);
     return turi_nil();
 }
+/* r7rs-lang-plan R2: the three newline-free write primitives the R7RS prelude
+ * builds `display`/`write`/`newline` on (stdlib/r7rs/prelude.tur declares
+ * them as inline C; these are their interpreter twins). */
+static const char *r7rs_arg_cstr(TuriValue *a, uint32_t n, uint32_t i) {
+    return (i < n && a[i].tag == TURI_CSTR && a[i].as_cstr) ? a[i].as_cstr : "";
+}
+static int64_t r7rs_arg_int(TuriValue *a, uint32_t n, uint32_t i) {
+    if (i >= n) return 0;
+    return a[i].tag == TURI_FLOAT ? (int64_t)a[i].as_float : a[i].as_int;
+}
+/* r7rs-lang-plan R8: twins of the port and printer primitives in
+ * stdlib/r7rs/prelude.tur's R8 section.  Keep them equal.  An R7rsIo /
+ * R7rsIdTab handle rides as a TURI_INT carrying the pointer. */
+typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
+static r7rs_io *r7rs_arg_io(TuriValue *a, uint32_t n, uint32_t i) {
+    return (r7rs_io *)(intptr_t)r7rs_arg_int(a, n, i);
+}
+static TuriValue r7rs_ptr_val(void *p) { return turi_int((int64_t)(intptr_t)p); }
+static void r7rs_io_reserve(r7rs_io *b, size_t extra) {
+    if (b->n + extra + 1 <= b->cap) return;
+    size_t c = b->cap ? b->cap : 64;
+    while (b->n + extra + 1 > c) c *= 2;
+    b->p = (unsigned char *)realloc(b->p, c); b->cap = c;
+}
+static TuriValue native_r7rs_io_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return r7rs_ptr_val(calloc(1, sizeof(r7rs_io)));
+}
+static TuriValue native_r7rs_io_std(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    static r7rs_io s[3];
+    static int init = 0;
+    if (!init) { init = 1; s[0].f = stdin; s[1].f = stdout; s[2].f = stderr; s[0].std = s[1].std = s[2].std = 1; }
+    int64_t k = r7rs_arg_int(a, n, 0);
+    return r7rs_ptr_val(&s[k < 0 || k > 2 ? 1 : k]);
+}
+static TuriValue native_r7rs_io_open(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_io *b = (r7rs_io *)calloc(1, sizeof(r7rs_io));
+    b->f = fopen(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1));
+    return r7rs_ptr_val(b);
+}
+static TuriValue native_r7rs_io_ok(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool(r7rs_arg_io(a, n, 0)->f != NULL);
+}
+static TuriValue native_r7rs_io_add(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_io *b = r7rs_arg_io(a, n, 0);
+    const char *s = r7rs_arg_cstr(a, n, 1);
+    size_t l = strlen(s);
+    if (b->f) { if (b->f == stderr) fflush(stdout); fwrite(s, 1, l, b->f); return turi_nil(); }
+    r7rs_io_reserve(b, l);
+    memcpy(b->p + b->n, s, l); b->n += l;
+    return turi_nil();
+}
+static TuriValue native_r7rs_io_add_byte(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_io *b = r7rs_arg_io(a, n, 0);
+    int64_t x = r7rs_arg_int(a, n, 1);
+    if (b->f) { if (b->f == stderr) fflush(stdout); fputc((int)(x & 0xFF), b->f); return turi_nil(); }
+    r7rs_io_reserve(b, 1);
+    b->p[b->n++] = (unsigned char)(x & 0xFF);
+    return turi_nil();
+}
+static TuriValue native_r7rs_io_peek(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_io *b = r7rs_arg_io(a, n, 0);
+    int64_t k = r7rs_arg_int(a, n, 1);
+    if (b->f && b->pos == b->n) b->pos = b->n = 0;
+    while (b->pos + (size_t)k >= b->n) {
+        if (!b->f) return turi_int(-1);
+        if (b->f == stdin) fflush(stdout);
+        int c = fgetc(b->f);
+        if (c == EOF) return turi_int(-1);
+        r7rs_io_reserve(b, 1);
+        b->p[b->n++] = (unsigned char)c;
+    }
+    return turi_int((int64_t)b->p[b->pos + (size_t)k]);
+}
+static TuriValue native_r7rs_io_skip(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_io *b = r7rs_arg_io(a, n, 0);
+    b->pos += (size_t)r7rs_arg_int(a, n, 1);
+    if (b->pos > b->n) b->pos = b->n;
+    return turi_nil();
+}
+static TuriValue native_r7rs_io_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_io *b = r7rs_arg_io(a, n, 0);
+    char *r = (char *)malloc(b->n + 1);
+    if (b->n) memcpy(r, b->p, b->n);
+    r[b->n] = 0;
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_io_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int((int64_t)r7rs_arg_io(a, n, 0)->n);
+}
+static TuriValue native_r7rs_io_byte_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int((int64_t)r7rs_arg_io(a, n, 0)->p[r7rs_arg_int(a, n, 1)]);
+}
+static TuriValue native_r7rs_io_flush(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_io *b = r7rs_arg_io(a, n, 0);
+    if (b->f) fflush(b->f);
+    return turi_nil();
+}
+static TuriValue native_r7rs_io_close(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_io *b = r7rs_arg_io(a, n, 0);
+    if (b->std) { if (b->f) fflush(b->f); return turi_nil(); }
+    if (b->f) { fclose(b->f); b->f = NULL; }
+    b->pos = b->n;
+    return turi_nil();
+}
+static TuriValue native_r7rs_io_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_io *b = r7rs_arg_io(a, n, 0);
+    if (b->std || b->f) return turi_nil();
+    free(b->p); free(b);
+    return turi_nil();
+}
+static size_t r7rs_idtab_slot(uintptr_t key, size_t cap) {
+    return (size_t)(((key >> 4) ^ (key >> 13)) & (cap - 1));
+}
+/* r7rs-cstr-free__ (T8) -- release a scratch string the prelude made and no
+ * value holds; the twin of the prelude's inline C.  turi_cstr wraps the
+ * pointer without copying, so this is the native's own malloc. */
+static TuriValue native_r7rs_cstr_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) free((void *)a[0].as_cstr);
+    return turi_nil();
+}
+static TuriValue native_r7rs_idtab_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    r7rs_idtab *t = (r7rs_idtab *)calloc(1, sizeof(r7rs_idtab));
+    t->cap = 16;
+    t->k = (uintptr_t *)calloc(t->cap, sizeof(uintptr_t));
+    t->v = (int64_t *)calloc(t->cap, sizeof(int64_t));
+    return r7rs_ptr_val(t);
+}
+static TuriValue native_r7rs_idtab_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_idtab *t = (r7rs_idtab *)(intptr_t)r7rs_arg_int(a, n, 0);
+    uintptr_t key = n > 1 ? (uintptr_t)turi_any_identity_payload(a[1]).as_int : 0;
+    size_t i = r7rs_idtab_slot(key, t->cap);
+    while (t->k[i]) { if (t->k[i] == key) return turi_int(t->v[i]); i = (i + 1) & (t->cap - 1); }
+    return turi_int(-2);
+}
+static TuriValue native_r7rs_idtab_put(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_idtab *t = (r7rs_idtab *)(intptr_t)r7rs_arg_int(a, n, 0);
+    uintptr_t key = n > 1 ? (uintptr_t)turi_any_identity_payload(a[1]).as_int : 0;
+    int64_t v = r7rs_arg_int(a, n, 2);
+    if ((t->cnt + 1) * 2 > t->cap) {
+        size_t oc = t->cap, nc = oc * 2;
+        uintptr_t *ok = t->k; int64_t *ov = t->v;
+        t->k = (uintptr_t *)calloc(nc, sizeof(uintptr_t));
+        t->v = (int64_t *)calloc(nc, sizeof(int64_t));
+        t->cap = nc;
+        for (size_t j = 0; j < oc; j++) if (ok[j]) {
+            size_t q = r7rs_idtab_slot(ok[j], nc);
+            while (t->k[q]) q = (q + 1) & (nc - 1);
+            t->k[q] = ok[j]; t->v[q] = ov[j];
+        }
+        free(ok); free(ov);
+    }
+    size_t i = r7rs_idtab_slot(key, t->cap);
+    while (t->k[i] && t->k[i] != key) i = (i + 1) & (t->cap - 1);
+    if (!t->k[i]) { t->k[i] = key; t->cnt++; }
+    t->v[i] = v;
+    return turi_nil();
+}
+static TuriValue native_r7rs_idtab_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int((int64_t)((r7rs_idtab *)(intptr_t)r7rs_arg_int(a, n, 0))->cnt);
+}
+static TuriValue native_r7rs_idtab_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_idtab *t = (r7rs_idtab *)(intptr_t)r7rs_arg_int(a, n, 0);
+    free(t->k); free(t->v); free(t);
+    return turi_nil();
+}
+static TuriValue native_r7rs_escape_string(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *s = r7rs_arg_cstr(a, n, 0);
+    char *r = (char *)malloc(strlen(s) * 6 + 3), *o = r;
+    *o++ = '"';
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        switch (*p) {
+        case '"': *o++ = '\\'; *o++ = '"'; break;
+        case '\\': *o++ = '\\'; *o++ = '\\'; break;
+        case 7: *o++ = '\\'; *o++ = 'a'; break;
+        case 8: *o++ = '\\'; *o++ = 'b'; break;
+        case 9: *o++ = '\\'; *o++ = 't'; break;
+        case 10: *o++ = '\\'; *o++ = 'n'; break;
+        case 13: *o++ = '\\'; *o++ = 'r'; break;
+        default:
+            if (*p < 32 || *p == 127) o += sprintf(o, "\\x%x;", (unsigned)*p);
+            else *o++ = (char)*p;
+        }
+    }
+    *o++ = '"'; *o = 0;
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_symbol_plain(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *s = r7rs_arg_cstr(a, n, 0);
+    if (!*s || (s[0] == '.' && !s[1]) || s[0] == '#') return turi_bool(false);
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++)
+        if (*p <= 32 || *p == 127 || strchr("()[]{}\"';`,|", *p)) return turi_bool(false);
+    /* R10: a backslash reads as an escape, and a name spelled like a
+     * number's sign-led forms -- `+i`, `-i`, `+inf.0...`, `-nan.0...` in any
+     * case -- reads as (or begins) a number in other readers, so both are
+     * written with bars (chibi's suite: '|+i|, '|\\123|, '|+NaN.0abc|). */
+    if (strchr(s, '\\')) return turi_bool(false);
+    if ((s[0] == '+' || s[0] == '-') && s[1]) {
+        char lo[6] = {0};
+        for (int i = 0; i < 5 && s[1 + i]; i++) lo[i] = (char)((s[1 + i] >= 'A' && s[1 + i] <= 'Z') ? s[1 + i] + 32 : s[1 + i]);
+        if (!strcmp(lo, "i") || !strncmp(lo, "inf.", 4) || !strncmp(lo, "nan.", 4)) return turi_bool(false);
+    }
+    return turi_bool(true);
+}
+static TuriValue native_r7rs_bar_symbol(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *s = r7rs_arg_cstr(a, n, 0);
+    char *r = (char *)malloc(strlen(s) * 6 + 3), *o = r;
+    *o++ = '|';
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (*p == '|' || *p == '\\') { *o++ = '\\'; *o++ = (char)*p; }
+        else if (*p < 32 || *p == 127) o += sprintf(o, "\\x%x;", (unsigned)*p);
+        else *o++ = (char)*p;
+    }
+    *o++ = '|'; *o = 0;
+    return turi_cstr(r);
+}
+/* r7rs-lang-plan R7: twins of the on-demand libraries' inline C --
+ * stdlib/r7rs/time.tur, process-context.tur, file.tur.  Keep them equal. */
+static TuriValue native_r7rs_current_second(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return turi_float((double)ts.tv_sec + (double)ts.tv_nsec / 1e9);
+}
+static TuriValue native_r7rs_current_jiffy(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return turi_int((int64_t)ts.tv_sec * 1000000 + (int64_t)(ts.tv_nsec / 1000));
+}
+static TuriValue native_r7rs_args_head(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_cstr("");
+    return turi_cstr((const char *)(intptr_t)((int64_t *)(intptr_t)a[0].as_int)[0]);
+}
+static TuriValue native_r7rs_args_tail(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(((int64_t *)(intptr_t)a[0].as_int)[1]);
+}
+static TuriValue native_r7rs_getenv_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool(getenv(r7rs_arg_cstr(a, n, 0)) != NULL);
+}
+static TuriValue native_r7rs_getenv(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *v = getenv(r7rs_arg_cstr(a, n, 0));
+    return turi_cstr(v ? v : "");
+}
+extern char **environ;
+static TuriValue native_r7rs_environ_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    int64_t k = 0;
+    while (environ[k]) k++;
+    return turi_int(k);
+}
+static TuriValue native_r7rs_environ_name(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *e = environ[r7rs_arg_int(a, n, 0)], *eq = strchr(e, '=');
+    size_t len = eq ? (size_t)(eq - e) : strlen(e);
+    char *r = (char *)malloc(len + 1);
+    memcpy(r, e, len); r[len] = 0;
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_environ_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *eq = strchr(environ[r7rs_arg_int(a, n, 0)], '=');
+    return turi_cstr(eq ? eq + 1 : "");
+}
+static TuriValue native_r7rs_file_exists(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    struct stat st;
+    return turi_bool(stat(r7rs_arg_cstr(a, n, 0), &st) == 0);
+}
+static TuriValue native_r7rs_unlink(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool(unlink(r7rs_arg_cstr(a, n, 0)) == 0);
+}
+static TuriValue native_r7rs_exit(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    fflush(stdout);
+    fflush(stderr);
+    exit((int)r7rs_arg_int(a, n, 0));
+}
+
+/* r7rs-lang-plan T5: twins of the prelude's re-entrant call/cc
+ * (stdlib/r7rs/prelude.tur, r7rs-cont-capture__ and friends).  The same
+ * copying technique: a capture copies the C stack from here to the thread's
+ * stack base -- every interpreter frame between the call/cc and the base --
+ * and saves the evaluator's off-stack control state (eval.c,
+ * turi_cont_state_capture); a re-entry copies the stack back, jumps into the
+ * capture, and puts the state back.  Keep the stack helpers equal to the
+ * prelude's (r7k_*). */
+#if defined(__SANITIZE_ADDRESS__)
+#  define R7K_ASAN 1
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define R7K_ASAN 1
+#  endif
+#endif
+#ifdef R7K_ASAN
+void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
+#  define R7K_NOASAN __attribute__((no_sanitize_address))
+#else
+#  define R7K_NOASAN
+#endif
+#if defined(__GLIBC__)
+extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
+#endif
+typedef struct R7kCont {
+    jmp_buf        jb;
+    unsigned char *lo, *img;
+    size_t         n;
+    TuriContState *state;
+} R7kCont;
+static _Thread_local unsigned char *r7k_base_tls;
+static unsigned char *r7k_stack_base(void) {
+    if (r7k_base_tls) return r7k_base_tls;
+#if defined(__GLIBC__)
+    pthread_attr_t a; void *addr = 0; size_t sz = 0;
+    if (pthread_getattr_np(pthread_self(), &a) == 0) {
+        if (pthread_attr_getstack(&a, &addr, &sz) == 0 && addr)
+            r7k_base_tls = (unsigned char *)addr + sz;
+        pthread_attr_destroy(&a);
+    }
+#elif defined(__APPLE__)
+    r7k_base_tls = (unsigned char *)pthread_get_stackaddr_np(pthread_self());
+#endif
+    return r7k_base_tls;
+}
+__attribute__((noinline)) R7K_NOASAN
+static void r7k_copy(unsigned char *dst, const unsigned char *src, size_t n) {
+    volatile uintptr_t *d = (volatile uintptr_t *)dst;
+    const volatile uintptr_t *s = (const volatile uintptr_t *)src;
+    for (size_t i = 0; i < n / sizeof(uintptr_t); i++) d[i] = s[i];
+}
+static int r7k_snapshot(R7kCont *c, unsigned char *mark) {
+    unsigned char *base = r7k_stack_base();
+    unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
+    if (!base || base <= lo) return 0;
+    c->lo  = lo;
+    c->n   = (size_t)(base - lo) & ~(sizeof(uintptr_t) - 1);
+    c->img = (unsigned char *)malloc(c->n);
+    if (!c->img) return 0;
+    r7k_copy(c->img, lo, c->n);
+    return 1;
+}
+__attribute__((noinline, noreturn)) R7K_NOASAN
+static void r7k_jump(R7kCont *c) {
+    r7k_copy(c->lo, c->img, c->n);
+#ifdef R7K_ASAN
+    __asan_unpoison_memory_region(c->lo, c->n);
+#endif
+    longjmp(c->jb, 1);
+}
+__attribute__((noinline, noreturn))
+static void r7k_restore(R7kCont *c) {
+    unsigned char here;
+    uintptr_t sp = (uintptr_t)&here, want = (uintptr_t)c->lo - 4096;
+    if (sp > want) {
+        volatile unsigned char *pad = (volatile unsigned char *)__builtin_alloca(sp - want);
+        pad[0] = 0;
+    }
+    r7k_jump(c);
+}
+static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)a; (void)n; (void)ud;
+    R7kCont *volatile c = (R7kCont *)calloc(1, sizeof(R7kCont));
+    TuriEnv *volatile venv = env;
+    turi_cont_pin();
+    c->state = turi_cont_state_capture(env);
+    volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
+    mark[0] = 0;
+    if (setjmp(c->jb) != 0) {
+        R7kCont *rc = c;
+        turi_cont_state_restore(venv, rc->state);
+        return turi_int((int64_t)((uintptr_t)rc | 1));
+    }
+    if (!c->state || !r7k_snapshot(c, (unsigned char *)mark)) return turi_int(0);
+    return turi_int((int64_t)(uintptr_t)c);
+}
+static TuriValue native_r7rs_cont_resumed(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool((r7rs_arg_int(a, n, 0) & 1) != 0);
+}
+static TuriValue native_r7rs_cont_null(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool(r7rs_arg_int(a, n, 0) == 0);
+}
+static TuriValue native_r7rs_cont_restore(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    R7kCont *c = (R7kCont *)(uintptr_t)(r7rs_arg_int(a, n, 0) & ~(int64_t)1);
+    r7k_restore(c);
+}
+
+/* r7rs-lang-plan T4: twins of stdlib/r7rs/eval.tur's inline C.  Both back
+ * ends drive the same embedded evaluator (src/turi/r7rs_embed.c) -- its own
+ * env, not the program's, so `eval` copies datums here exactly as it does in
+ * a compiled program.  The host function calls back into the PROGRAM's env,
+ * the one the first eval ran from. */
+static TuriEnv *g_r7rs_eval_host_env;
+static int64_t r7rs_eval_interp_host(int64_t host_id) {
+    TuriEnv *env = g_r7rs_eval_host_env;
+    if (!env) return 0;
+    TuriValue fn = turi_env_get(env, "r7rs-eval-host-call__");
+    TuriValue arg = turi_int(host_id);
+    TuriValue r = turi_call(env, fn, &arg, 1);
+    if (turi_is_error(r)) turi_r7rs_embed_answer_error(turi_error_message(r) ? turi_error_message(r) : "eval: a program procedure failed");
+    return 0;
+}
+static void r7rs_eval_bind_host(TuriEnv *env) {
+    g_r7rs_eval_host_env = env;
+    turi_r7rs_embed_set_host(r7rs_eval_interp_host, env);
+}
+static TuriValue native_r7rs_eval_c_eval(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    r7rs_eval_bind_host(env);
+    return turi_int(turi_r7rs_embed_eval(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1)));
+}
+static TuriValue native_r7rs_eval_c_load(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    r7rs_eval_bind_host(env);
+    return turi_int(turi_r7rs_embed_load(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1)));
+}
+static TuriValue native_r7rs_eval_c_apply(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(turi_r7rs_embed_apply(r7rs_arg_int(a, n, 0)));
+}
+static TuriValue native_r7rs_eval_c_push_datum(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_push_datum(r7rs_arg_cstr(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_push_host(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_push_host(r7rs_arg_int(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_push_proc(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_push_proc(r7rs_arg_int(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_result_text(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_cstr(strdup(turi_r7rs_embed_result_text()));
+}
+static TuriValue native_r7rs_eval_c_result_id(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(turi_r7rs_embed_result_id());
+}
+static TuriValue native_r7rs_eval_c_frame_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(turi_r7rs_embed_frame_count());
+}
+static TuriValue native_r7rs_eval_c_frame_kind(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(turi_r7rs_embed_frame_kind((int)r7rs_arg_int(a, n, 0)));
+}
+static TuriValue native_r7rs_eval_c_frame_text(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_cstr(strdup(turi_r7rs_embed_frame_text((int)r7rs_arg_int(a, n, 0))));
+}
+static TuriValue native_r7rs_eval_c_frame_id(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(turi_r7rs_embed_frame_id((int)r7rs_arg_int(a, n, 0)));
+}
+static TuriValue native_r7rs_eval_c_answer_datum(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_answer_datum(r7rs_arg_cstr(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_answer_host(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_answer_host(r7rs_arg_int(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_answer_proc(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_answer_proc(r7rs_arg_int(a, n, 0));
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_answer_unspecified(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    turi_r7rs_embed_answer_unspecified();
+    return turi_nil();
+}
+static TuriValue native_r7rs_eval_c_answer_raise(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    turi_r7rs_embed_answer_raise(r7rs_arg_cstr(a, n, 0));
+    return turi_nil();
+}
+/* r7rs-lang-plan R5: the one spelling of a float both back ends print.
+ * Shortest of %.15g / %.17g that round-trips, `.0` appended to an integral
+ * value (R7RS writes 7.0 as `7.0`, never `7`), and the standard's own
+ * spellings for the non-finite values.  The compiled twin is the inline-C
+ * body of r7rs-float->string__ in stdlib/r7rs/prelude.tur; keep them equal. */
+static void r7rs_fmt_double(char *r, size_t cap, double x) {
+    if (x != x) { snprintf(r, cap, "+nan.0"); return; }
+    if (isinf(x)) { snprintf(r, cap, "%s", x > 0 ? "+inf.0" : "-inf.0"); return; }
+    snprintf(r, cap, "%.15g", x);
+    if (strtod(r, NULL) != x) snprintf(r, cap, "%.16g", x);
+    if (strtod(r, NULL) != x) snprintf(r, cap, "%.17g", x);
+    {   /* 1e+21 -> 1e21, 1e-07 -> 1e-7: R7RS spells the exponent bare. */
+        char *e = strchr(r, 'e');
+        if (e) {
+            char *d = e + 1; char sign = 0;
+            if (*d == '+' || *d == '-') { sign = *d; d++; }
+            while (*d == '0' && d[1]) d++;
+            char tail[32]; snprintf(tail, sizeof tail, "%s", d);
+            if (sign == '-') snprintf(e + 1, cap - (size_t)(e + 1 - r), "-%s", tail);
+            else snprintf(e + 1, cap - (size_t)(e + 1 - r), "%s", tail);
+        }
+    }
+    if (!strpbrk(r, ".eE")) { size_t l = strlen(r); if (l + 3 <= cap) { r[l] = '.'; r[l + 1] = '0'; r[l + 2] = 0; } }
+}
+static double r7rs_arg_double(TuriValue *a, uint32_t n, uint32_t i) {
+    if (i >= n) return 0.0;
+    return a[i].tag == TURI_FLOAT ? a[i].as_float : (double)a[i].as_int;
+}
+/* Checked exact arithmetic (D8): an overflow is an error, never a wrapped
+ * number.  The interpreter reports it as a turi error; the compiled twin
+ * panics with the same sentence. */
+static TuriValue native_r7rs_float_nan(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; double x = r7rs_arg_double(a, n, 0); return turi_bool(x != x);
+}
+static TuriValue native_r7rs_float_infinite(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; return turi_bool(isinf(r7rs_arg_double(a, n, 0)) != 0);
+}
+static TuriValue native_r7rs_float_integral(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; double x = r7rs_arg_double(a, n, 0);
+    return turi_bool(isfinite(x) && floor(x) == x);
+}
+static TuriValue native_r7rs_int_to_string_radix(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t x = r7rs_arg_int(a, n, 0), radix = r7rs_arg_int(a, n, 1);
+    char *r = (char *)malloc(80);
+    if (radix < 2 || radix > 36) { snprintf(r, 80, "%lld", (long long)x); return turi_cstr(r); }
+    char buf[72]; int i = 71; buf[i] = 0;
+    uint64_t u = x < 0 ? (uint64_t)0 - (uint64_t)x : (uint64_t)x;
+    if (u == 0) buf[--i] = '0';
+    while (u) { int d = (int)(u % (uint64_t)radix); buf[--i] = (char)(d < 10 ? '0' + d : 'a' + d - 10); u /= (uint64_t)radix; }
+    if (x < 0) buf[--i] = '-';
+    snprintf(r, 80, "%s", buf + i);
+    return turi_cstr(r);
+}
+/* r7rs-lang-plan T0/T1: Scheme numbers go through ONE implementation per job
+ * -- the bignum core and the number parser, the same files the source reader
+ * includes and the same text as the C blocks of stdlib/r7rs/bignum.tur and
+ * numsyntax.tur (tests/check-r7rs-inc-sync.sh) -- registered below over
+ * those files' inline-C wrappers.  A bignum crosses as its decimal spelling;
+ * the strings returned are the value's (process-lifetime, the interpreter's
+ * allocation model). */
+#include "r7rs_bignum.inc"
+#include "r7rs_numsyntax.inc"
+static void r7rs_numsyn_of(TuriValue *a, uint32_t n, r7rs_ns_result *res) {
+    const char *s = r7rs_arg_cstr(a, n, 0);
+    r7rs_ns_parse(s ? s : "", s ? strlen(s) : 0, (int)r7rs_arg_int(a, n, 1), res);
+}
+static TuriValue native_r7rs_numsyn_kind(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res); free(res.big); return turi_int(res.kind);
+}
+static TuriValue native_r7rs_numsyn_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res); free(res.big); return turi_int(res.i);
+}
+static TuriValue native_r7rs_numsyn_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res); free(res.big);
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = res.f; return rv;
+}
+static TuriValue native_r7rs_numsyn_why(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res); free(res.big);
+    return turi_cstr(res.why ? res.why : "");
+}
+static TuriValue native_r7rs_numsyn_big(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res);
+    return turi_cstr(res.kind == R7NS_BIG || res.kind == R7NS_RATIO || res.kind == R7NS_COMPLEX ? res.big : "");
+}
+static TuriValue native_r7rs_numsyn_part(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_cstr(r7rs_ns_complex_part(r7rs_arg_cstr(a, n, 0), (int)r7rs_arg_int(a, n, 1)));
+}
+static TuriValue native_r7rs_exact_of_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double f = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : (double)r7rs_arg_int(a, n, 0);
+    return turi_cstr(r7rs_big_exact_of_float(f));
+}
+static TuriValue native_r7rs_ratio_to_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT;
+    rv.as_float = r7rs_ratio_to_float(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1));
+    return rv;
+}
+static TuriValue native_r7rs_ratio_part(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; return turi_cstr(r7rs_ratio_part(r7rs_arg_cstr(a, n, 0), (int)r7rs_arg_int(a, n, 1)));
+}
+static TuriValue native_r7rs_int_ovf(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t op = r7rs_arg_int(a, n, 0), x = r7rs_arg_int(a, n, 1), y = r7rs_arg_int(a, n, 2), r;
+    return turi_bool(op == 0 ? __builtin_add_overflow(x, y, &r) : op == 1 ? __builtin_sub_overflow(x, y, &r)
+                                                                       : __builtin_mul_overflow(x, y, &r));
+}
+static TuriValue native_r7rs_big_op(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_cstr(r7rs_big_op((int)r7rs_arg_int(a, n, 0), r7rs_arg_cstr(a, n, 1), r7rs_arg_cstr(a, n, 2)));
+}
+static TuriValue native_r7rs_big_cmp(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; return turi_int(r7rs_big_cmp(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1)));
+}
+static TuriValue native_r7rs_big_cmp_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double f = (n > 1 && a[1].tag == TURI_FLOAT) ? a[1].as_float : (double)r7rs_arg_int(a, n, 1);
+    return turi_int(r7rs_big_cmp_float(r7rs_arg_cstr(a, n, 0), f));
+}
+static TuriValue native_r7rs_big_to_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = r7rs_big_to_float(r7rs_arg_cstr(a, n, 0)); return rv;
+}
+static TuriValue native_r7rs_float_to_big(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double f = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : (double)r7rs_arg_int(a, n, 0);
+    return turi_cstr(r7rs_big_of_float(f));
+}
+static TuriValue native_r7rs_big_radix(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; return turi_cstr(r7rs_big_radix(r7rs_arg_cstr(a, n, 0), (int)r7rs_arg_int(a, n, 1)));
+}
+static TuriValue native_r7rs_big_fits(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; int64_t v; return turi_bool(r7rs_big_fits(r7rs_arg_cstr(a, n, 0), &v) != 0);
+}
+static TuriValue native_r7rs_big_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud; int64_t v = 0; (void)r7rs_big_fits(r7rs_arg_cstr(a, n, 0), &v); return turi_int(v);
+}
+/* R10: (scheme char)'s Unicode tables -- the SAME generated C the prelude's
+ * stdlib/r7rs/unicode.tur compiles in (tools/gen-r7rs-unicode.py writes
+ * both), registered below over its three inline-C wrappers. */
+#include "r7rs_unicode.inc"
+static TuriValue native_r7rs_uc_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(r7rs_uc_mapc(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1)));
+}
+static TuriValue native_r7rs_uc_prop(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(r7rs_uc_prop(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1)));
+}
+static TuriValue native_r7rs_uc_string(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    /* The buffer is the value's, as native_r7rs_bar_symbol's is (process-
+     * lifetime, the interpreter's allocation model). */
+    return turi_cstr(r7rs_uc_string(r7rs_arg_cstr(a, n, 0), r7rs_arg_int(a, n, 1)));
+}
+/* R3: the R7RS prelude's string and character primitives. */
+static void r7rs_put_utf8(char *out, int *n, uint32_t cp) {
+    if (cp < 0x80) out[(*n)++] = (char)cp;
+    else if (cp < 0x800) { out[(*n)++] = (char)(0xC0 | (cp >> 6)); out[(*n)++] = (char)(0x80 | (cp & 0x3F)); }
+    else if (cp < 0x10000) { out[(*n)++] = (char)(0xE0 | (cp >> 12)); out[(*n)++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[(*n)++] = (char)(0x80 | (cp & 0x3F)); }
+    else { out[(*n)++] = (char)(0xF0 | (cp >> 18)); out[(*n)++] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[(*n)++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[(*n)++] = (char)(0x80 | (cp & 0x3F)); }
+}
+static TuriValue native_r7rs_same_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_bool(false);
+    /* Both structs (or both vectors / same representation): the payload word,
+     * looked up through an `any` box (R8: a vector was never eq? to itself). */
+    TuriValue x = turi_any_identity_payload(a[0]), y = turi_any_identity_payload(a[1]);
+    return turi_bool(x.tag == y.tag && x.as_int == y.as_int);
+}
+static TuriValue native_r7rs_string_length(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int((int64_t)strlen(r7rs_arg_cstr(a, n, 0)));
+}
+/* T3: a Scheme string's characters are code points; a cstr-backed one (a
+ * literal) is UTF-8 text, counted and indexed by character.  The prelude's
+ * compiled twins are r7rs-utf8-count__ / r7rs-utf8-ref__. */
+static TuriValue native_r7rs_utf8_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t c = 0;
+    for (const unsigned char *p = (const unsigned char *)r7rs_arg_cstr(a, n, 0); *p; p++)
+        if ((*p & 0xC0) != 0x80) c++;
+    return turi_int(c);
+}
+static TuriValue native_r7rs_utf8_at(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const unsigned char *p = (const unsigned char *)r7rs_arg_cstr(a, n, 0) + r7rs_arg_int(a, n, 1);
+    int w = *p < 0xC0 ? 1 : *p < 0xE0 ? 2 : *p < 0xF0 ? 3 : 4;
+    uint32_t cp = w == 1 ? *p : w == 2 ? (*p & 0x1Fu) : w == 3 ? (*p & 0x0Fu) : (*p & 0x07u);
+    int k = 1;
+    for (; k < w && p[k]; k++) cp = (cp << 6) | (p[k] & 0x3Fu);
+    return turi_int((int64_t)cp * 8 + k);
+}
+static TuriValue native_r7rs_utf8_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const unsigned char *p = (const unsigned char *)r7rs_arg_cstr(a, n, 0);
+    int64_t i = r7rs_arg_int(a, n, 1), k = 0;
+    while (i >= 0 && *p) {
+        int w = *p < 0xC0 ? 1 : *p < 0xE0 ? 2 : *p < 0xF0 ? 3 : 4;
+        if (k == i) {
+            uint32_t cp = w == 1 ? *p : w == 2 ? (*p & 0x1Fu) : w == 3 ? (*p & 0x0Fu) : (*p & 0x07u);
+            for (int j = 1; j < w && p[j]; j++) cp = (cp << 6) | (p[j] & 0x3Fu);
+            return turi_int((int64_t)cp);
+        }
+        for (int j = 0; j < w && *p; j++) p++;
+        k++;
+    }
+    turi_runtime_panic(env, "string-ref: index out of range");
+    return turi_int(0);
+}
+static TuriValue native_r7rs_string_ref_code(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *s = r7rs_arg_cstr(a, n, 0);
+    int64_t i = r7rs_arg_int(a, n, 1);
+    if (i < 0 || (size_t)i >= strlen(s)) turi_runtime_panic(env, "string-ref: index out of range");
+    return turi_int((int64_t)(unsigned char)s[i]);
+}
+static TuriValue native_r7rs_string_append2(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *x = r7rs_arg_cstr(a, n, 0), *y = r7rs_arg_cstr(a, n, 1);
+    size_t lx = strlen(x), ly = strlen(y);
+    char *r = (char *)malloc(lx + ly + 1);
+    memcpy(r, x, lx); memcpy(r + lx, y, ly + 1);
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_substring(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    const char *s = r7rs_arg_cstr(a, n, 0);
+    int64_t st = r7rs_arg_int(a, n, 1), en = r7rs_arg_int(a, n, 2);
+    size_t len = strlen(s);
+    if (st < 0 || en < st || (size_t)en > len) turi_runtime_panic(env, "substring: range out of bounds");
+    char *r = (char *)malloc((size_t)(en - st) + 1);
+    memcpy(r, s + st, (size_t)(en - st)); r[en - st] = 0;
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_string_lt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool(strcmp(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1)) < 0);
+}
+static TuriValue native_r7rs_string_of_code(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    char *r = (char *)malloc(5); int k = 0;
+    r7rs_put_utf8(r, &k, (uint32_t)r7rs_arg_int(a, n, 0));
+    r[k] = 0;
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_int_to_string(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    char *r = (char *)malloc(32);
+    snprintf(r, 32, "%lld", (long long)r7rs_arg_int(a, n, 0));
+    return turi_cstr(r);
+}
+static TuriValue native_r7rs_float_to_string(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    char *r = (char *)malloc(48);
+    r7rs_fmt_double(r, 48, r7rs_arg_double(a, n, 0));
+    return turi_cstr(r);
+}
 /* int->unit-float: map a 64-bit int to [0,1) by dividing by 2^53 */
 static TuriValue native_int_to_unit_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -2612,6 +3390,17 @@ static TuriValue native_bits_to_float(TuriEnv *env, TuriValue *a, uint32_t n, vo
     TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = u.d; return rv;
 }
 /* sqrt / floor: math.tur's libm wrappers (inline-C the tree-walker cannot run). */
+#define R7RS_MATH1(cname, fn) \
+static TuriValue cname(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) { \
+    (void)env; (void)ud; double x = (n > 0) ? (a[0].tag == TURI_FLOAT ? a[0].as_float : (double)a[0].as_int) : 0.0; \
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = fn(x); return rv; }
+R7RS_MATH1(native_math_tan, tan)
+R7RS_MATH1(native_math_asin, asin)
+R7RS_MATH1(native_math_acos, acos)
+R7RS_MATH1(native_math_atan, atan)
+R7RS_MATH1(native_math_trunc, trunc)
+R7RS_MATH1(native_math_rint, rint)
+#undef R7RS_MATH1
 static TuriValue native_math_sqrt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     double x = (n > 0) ? a[0].as_float : 0.0;
@@ -3201,6 +3990,105 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "bit-shr",           native_bit_shr,         NULL);
     turi_env_register_native(env, "bit-xor",           native_bit_xor,         NULL);
     turi_env_register_native(env, "println-float",     native_println_float,   NULL);
+    /* r7rs-lang-plan R8: the port and printer primitives (R6's single
+     * write primitive, r7rs-write-cstr-to__, is gone -- a stale native under
+     * a name the prelude no longer defines would still be callable). */
+    turi_env_register_native(env, "r7rs-io-new__", native_r7rs_io_new, NULL);
+    turi_env_register_native(env, "r7rs-io-std__", native_r7rs_io_std, NULL);
+    turi_env_register_native(env, "r7rs-io-open__", native_r7rs_io_open, NULL);
+    turi_env_register_native(env, "r7rs-io-ok?__", native_r7rs_io_ok, NULL);
+    turi_env_register_native(env, "r7rs-io-add__", native_r7rs_io_add, NULL);
+    turi_env_register_native(env, "r7rs-io-add-byte__", native_r7rs_io_add_byte, NULL);
+    turi_env_register_native(env, "r7rs-io-peek__", native_r7rs_io_peek, NULL);
+    turi_env_register_native(env, "r7rs-io-skip__", native_r7rs_io_skip, NULL);
+    turi_env_register_native(env, "r7rs-io-str__", native_r7rs_io_str, NULL);
+    turi_env_register_native(env, "r7rs-io-len__", native_r7rs_io_len, NULL);
+    turi_env_register_native(env, "r7rs-io-byte-ref__", native_r7rs_io_byte_ref, NULL);
+    turi_env_register_native(env, "r7rs-io-flush__", native_r7rs_io_flush, NULL);
+    turi_env_register_native(env, "r7rs-io-close__", native_r7rs_io_close, NULL);
+    turi_env_register_native(env, "r7rs-io-free__", native_r7rs_io_free, NULL);
+    turi_env_register_native(env, "r7rs-cstr-free__", native_r7rs_cstr_free, NULL);
+    turi_env_register_native(env, "r7rs-idtab-new__", native_r7rs_idtab_new, NULL);
+    turi_env_register_native(env, "r7rs-idtab-get__", native_r7rs_idtab_get, NULL);
+    turi_env_register_native(env, "r7rs-idtab-put__", native_r7rs_idtab_put, NULL);
+    turi_env_register_native(env, "r7rs-idtab-count__", native_r7rs_idtab_count, NULL);
+    turi_env_register_native(env, "r7rs-idtab-free__", native_r7rs_idtab_free, NULL);
+    turi_env_register_native(env, "r7rs-escape-string__", native_r7rs_escape_string, NULL);
+    turi_env_register_native(env, "r7rs-symbol-plain?__", native_r7rs_symbol_plain, NULL);
+    turi_env_register_native(env, "r7rs-bar-symbol__", native_r7rs_bar_symbol, NULL);
+    turi_env_register_native(env, "r7rs-exit__",       native_r7rs_exit,        NULL);
+    turi_env_register_native(env, "r7rs-current-second",   native_r7rs_current_second, NULL);
+    turi_env_register_native(env, "r7rs-current-jiffy",    native_r7rs_current_jiffy,  NULL);
+    turi_env_register_native(env, "r7rs-args-head__",      native_r7rs_args_head,      NULL);
+    turi_env_register_native(env, "r7rs-args-tail__",      native_r7rs_args_tail,      NULL);
+    turi_env_register_native(env, "r7rs-getenv-set?__",    native_r7rs_getenv_set,     NULL);
+    turi_env_register_native(env, "r7rs-getenv__",         native_r7rs_getenv,         NULL);
+    turi_env_register_native(env, "r7rs-environ-count__",  native_r7rs_environ_count,  NULL);
+    turi_env_register_native(env, "r7rs-environ-name__",   native_r7rs_environ_name,   NULL);
+    turi_env_register_native(env, "r7rs-environ-value__",  native_r7rs_environ_value,  NULL);
+    turi_env_register_native(env, "r7rs-file-exists-c__",  native_r7rs_file_exists,    NULL);
+    turi_env_register_native(env, "r7rs-unlink__",         native_r7rs_unlink,         NULL);
+    /* r7rs-lang-plan T5: the prelude's re-entrant call/cc. */
+    turi_env_register_native(env, "r7rs-cont-capture__",  native_r7rs_cont_capture,  NULL);
+    turi_env_register_native(env, "r7rs-cont-resumed?__", native_r7rs_cont_resumed,  NULL);
+    turi_env_register_native(env, "r7rs-cont-null?__",    native_r7rs_cont_null,     NULL);
+    turi_env_register_native(env, "r7rs-cont-restore__",  native_r7rs_cont_restore,  NULL);
+    /* r7rs-lang-plan T4: stdlib/r7rs/eval.tur. */
+    turi_env_register_native(env, "r7rs-eval-c-eval__",             native_r7rs_eval_c_eval,             NULL);
+    turi_env_register_native(env, "r7rs-eval-c-load__",             native_r7rs_eval_c_load,             NULL);
+    turi_env_register_native(env, "r7rs-eval-c-apply__",            native_r7rs_eval_c_apply,            NULL);
+    turi_env_register_native(env, "r7rs-eval-c-push-datum__",       native_r7rs_eval_c_push_datum,       NULL);
+    turi_env_register_native(env, "r7rs-eval-c-push-host__",        native_r7rs_eval_c_push_host,        NULL);
+    turi_env_register_native(env, "r7rs-eval-c-push-proc__",        native_r7rs_eval_c_push_proc,        NULL);
+    turi_env_register_native(env, "r7rs-eval-c-result-text__",      native_r7rs_eval_c_result_text,      NULL);
+    turi_env_register_native(env, "r7rs-eval-c-result-id__",        native_r7rs_eval_c_result_id,        NULL);
+    turi_env_register_native(env, "r7rs-eval-c-frame-count__",      native_r7rs_eval_c_frame_count,      NULL);
+    turi_env_register_native(env, "r7rs-eval-c-frame-kind__",       native_r7rs_eval_c_frame_kind,       NULL);
+    turi_env_register_native(env, "r7rs-eval-c-frame-text__",       native_r7rs_eval_c_frame_text,       NULL);
+    turi_env_register_native(env, "r7rs-eval-c-frame-id__",         native_r7rs_eval_c_frame_id,         NULL);
+    turi_env_register_native(env, "r7rs-eval-c-answer-datum__",     native_r7rs_eval_c_answer_datum,     NULL);
+    turi_env_register_native(env, "r7rs-eval-c-answer-host__",      native_r7rs_eval_c_answer_host,      NULL);
+    turi_env_register_native(env, "r7rs-eval-c-answer-proc__",      native_r7rs_eval_c_answer_proc,      NULL);
+    turi_env_register_native(env, "r7rs-eval-c-answer-unspecified__", native_r7rs_eval_c_answer_unspecified, NULL);
+    turi_env_register_native(env, "r7rs-eval-c-answer-raise__",     native_r7rs_eval_c_answer_raise,     NULL);
+    turi_env_register_native(env, "r7rs-same-ref__",       native_r7rs_same_ref,        NULL);
+    turi_env_register_native(env, "r7rs-blen__",           native_r7rs_string_length,   NULL);
+    turi_env_register_native(env, "r7rs-utf8-count__",     native_r7rs_utf8_count,      NULL);
+    turi_env_register_native(env, "r7rs-utf8-ref__",       native_r7rs_utf8_ref,        NULL);
+    turi_env_register_native(env, "r7rs-utf8-at__",        native_r7rs_utf8_at,         NULL);
+    turi_env_register_native(env, "r7rs-string-ref-code__", native_r7rs_string_ref_code, NULL);
+    turi_env_register_native(env, "r7rs-string-append2__", native_r7rs_string_append2,  NULL);
+    turi_env_register_native(env, "r7rs-bsubstring__",     native_r7rs_substring,       NULL);
+    turi_env_register_native(env, "r7rs-cstr<__",          native_r7rs_string_lt,       NULL);
+    turi_env_register_native(env, "r7rs-string-of-code__", native_r7rs_string_of_code,  NULL);
+    turi_env_register_native(env, "r7rs-int->string__",    native_r7rs_int_to_string,   NULL);
+    turi_env_register_native(env, "r7rs-float->string__",  native_r7rs_float_to_string, NULL);
+    /* r7rs-lang-plan R5: the numeric tower's inline-C helpers. */
+    turi_env_register_native(env, "r7rs-float-nan?__",        native_r7rs_float_nan,          NULL);
+    turi_env_register_native(env, "r7rs-float-infinite?__",   native_r7rs_float_infinite,     NULL);
+    turi_env_register_native(env, "r7rs-float-integral?__",   native_r7rs_float_integral,     NULL);
+    turi_env_register_native(env, "r7rs-int->string-radix__", native_r7rs_int_to_string_radix, NULL);
+    turi_env_register_native(env, "r7rs-numsyn-kind__",       native_r7rs_numsyn_kind,        NULL);
+    turi_env_register_native(env, "r7rs-numsyn-int__",        native_r7rs_numsyn_int,         NULL);
+    turi_env_register_native(env, "r7rs-numsyn-float__",      native_r7rs_numsyn_float,       NULL);
+    turi_env_register_native(env, "r7rs-numsyn-why__",        native_r7rs_numsyn_why,         NULL);
+    turi_env_register_native(env, "r7rs-numsyn-big__",        native_r7rs_numsyn_big,         NULL);
+    turi_env_register_native(env, "r7rs-numsyn-part__",       native_r7rs_numsyn_part,        NULL);
+    turi_env_register_native(env, "r7rs-int-ovf?__",          native_r7rs_int_ovf,            NULL);
+    turi_env_register_native(env, "r7rs-big-op__",            native_r7rs_big_op,             NULL);
+    turi_env_register_native(env, "r7rs-big-cmp__",           native_r7rs_big_cmp,            NULL);
+    turi_env_register_native(env, "r7rs-big-cmp-float__",     native_r7rs_big_cmp_float,      NULL);
+    turi_env_register_native(env, "r7rs-big->float__",        native_r7rs_big_to_float,       NULL);
+    turi_env_register_native(env, "r7rs-float->big__",        native_r7rs_float_to_big,       NULL);
+    turi_env_register_native(env, "r7rs-big-radix__",         native_r7rs_big_radix,          NULL);
+    turi_env_register_native(env, "r7rs-big-fits?__",         native_r7rs_big_fits,           NULL);
+    turi_env_register_native(env, "r7rs-big-int__",           native_r7rs_big_int,            NULL);
+    turi_env_register_native(env, "r7rs-exact-of-float__",    native_r7rs_exact_of_float,     NULL);
+    turi_env_register_native(env, "r7rs-ratio->float__",      native_r7rs_ratio_to_float,     NULL);
+    turi_env_register_native(env, "r7rs-ratio-part__",        native_r7rs_ratio_part,         NULL);
+    turi_env_register_native(env, "r7rs-uc-map__",            native_r7rs_uc_map,             NULL);
+    turi_env_register_native(env, "r7rs-uc-prop__",           native_r7rs_uc_prop,            NULL);
+    turi_env_register_native(env, "r7rs-uc-string__",         native_r7rs_uc_string,          NULL);
     turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
     turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);
@@ -3217,6 +4105,12 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "fabs",              native_math_fabs,       NULL);
     turi_env_register_native(env, "ceil",              native_math_ceil,       NULL);
     turi_env_register_native(env, "pow",               native_math_pow,        NULL);
+    turi_env_register_native(env, "tan",               native_math_tan,        NULL);
+    turi_env_register_native(env, "asin",              native_math_asin,       NULL);
+    turi_env_register_native(env, "acos",              native_math_acos,       NULL);
+    turi_env_register_native(env, "atan",              native_math_atan,       NULL);
+    turi_env_register_native(env, "trunc",             native_math_trunc,      NULL);
+    turi_env_register_native(env, "rint",              native_math_rint,       NULL);
     /* I/O benchmark helpers */
     turi_env_register_native(env, "write-temp-file",   native_write_temp_file, NULL);
     turi_env_register_native(env, "io-fopen-read",     native_io_fopen_read,   NULL);
@@ -4449,8 +5343,8 @@ static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *
      * diag_files_restore deliberately skips id 0, so re-register the saved
      * entries directly. */
     bool saved_had = diag_had_error();
-    const SourceFile *saved_files[64];
-    size_t n_saved = diag_files_save(saved_files, 64);
+    const SourceFile *saved_files[DIAG_MAX_FILES];
+    size_t n_saved = diag_files_save(saved_files, DIAG_MAX_FILES);
     diag_reset();
     SourceFile sfile = {0};
     sfile.path        = "<read-string>";

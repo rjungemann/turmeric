@@ -1,6 +1,6 @@
 /* elab_forms.c -- control-flow and basic expression forms (let/if/do/while/case/...). */
 #include "elab_internal.h"
-#include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_dynamic */
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
@@ -939,6 +939,15 @@ Expr *elab_let(Elab *e, const Form *call) {
          * reach for when the `let` body must end in a particular value (an
          * `it` body that has to yield a bool, say), so the message names `do`
          * as the fix rather than only stating the rule. */
+        /* r7rs-lang-plan R8: in a dynamic file every expression has a value --
+         * Scheme's `(let ((r (display x))) ...)` binds the unspecified value
+         * (and `guard` lowers its body to exactly that binding).  Widen the
+         * nil to `any`, the same widen a nil argument in value position
+         * already gets, rather than refusing the binding. */
+        if (init->type.kind == TY_NIL && lang_span_is_dynamic(init_form->span)) {
+            Expr *w = elab_coerce_to_any(e, init);
+            if (w) init = w;
+        }
         if (init->type.kind == TY_NIL) {
             diag_emit_with_code(DIAG_ERROR, init_form->span,
                 TUR_E0023_BIND_VOID_EXPRESSION,
@@ -2456,8 +2465,18 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                      * must not count its ^fat marker as a parameter slot. */
                     TypeKind *arg_kinds = NULL;
                     uint32_t arity = fwd_decl_scan_params(e->arena, params_f, &arg_kinds);
-                    /* Peek at the return-type keyword at index 2 (fn [params] :ret body). */
-                    TypeKind ret_kind = TY_INT;
+                    /* Peek at the return-type keyword at index 2 (fn [params] :ret body).
+                     *
+                     * r7rs-lang-plan R6 (docs/archive/r7rs-compiled-dynamic-shapes.md
+                     * section 1): in a DYNAMIC file the unannotated default is
+                     * `any`, exactly as elab_defn pins a Saffron signature.  The
+                     * `int` placeholder made the recursive call inside a named
+                     * let / `do` / letrec lambda type `int` while the lambda
+                     * itself returned `any`, and the emitter wrapped the tagged
+                     * result in an int tag ("aggregate value used where an
+                     * integer was expected" from cc).  Pass B below pins the
+                     * lambda's own return to match. */
+                    TypeKind ret_kind = lang_span_is_dynamic(init_f->span) ? TY_ANY : TY_INT;
                     if (init_f->as.list.len >= 4) {
                         Form *ret_f = init_f->as.list.items[2];
                         /* Accept spaced `: T` (F_TYPE_ANN{F_SYM/F_KEYWORD}) too. */
@@ -2507,9 +2526,12 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                              * -- collapses to the int carrier and the self-call
                              * trips a spurious then=Syntax else=int mismatch. */
                             else if (rl == 6 && memcmp(rn, "Syntax",  6) == 0) ret_kind = TY_SYNTAX;
+                            else if (rl == 3 && memcmp(rn, "any",     3) == 0) ret_kind = TY_ANY;
                         }
                     }
                     placeholder = type_fn(arg_kinds, (uint8_t)arity, ret_kind);
+                    /* r7rs-lang-plan R7: a variadic lambda's rest shape. */
+                    fwd_decl_apply_variadic(e, e->arena, &placeholder, params_f);
                     /* W1 (letrec self-recursion): the scalar ret_kind peek
                      * above resolves only int/bool/void/nil/cstr and collapses
                      * every other declared return -- a :copy struct, a (Vec T),
@@ -2572,7 +2594,34 @@ Expr *elab_letrec(Elab *e, const Form *call) {
          * sibling value init -- a lambda there must capture group members. */
         e->letrec_self_group   = pre_b;
         e->letrec_self_group_n = n_entries;
-        Expr *init = elab_form(e, entries[k].init_form);
+        /* r7rs-lang-plan R6: pin an unannotated lambda init's return to `any`
+         * in a dynamic file, so the lambda agrees with the `any` placeholder
+         * Pass A gave its callers.  Without this a nil-tailed body (the loop
+         * that ends in `display`) inferred `nil` while the group's other
+         * members called it as `any`.  The rewrite is at the Form level:
+         * `(fn [params] body...)` becomes `(fn [params] : any body...)`. */
+        Form *init_form = entries[k].init_form;
+        if (init_form->tag == F_LIST && init_form->as.list.len >= 3 &&
+            lang_span_is_dynamic(init_form->span)) {
+            Form *ih = init_form->as.list.items[0];
+            Form *rf = init_form->as.list.items[2];
+            bool annotated = (rf->tag == F_TYPE_ANN || rf->tag == F_KEYWORD ||
+                              (rf->tag == F_SYM && rf->as.sym->name[0] == ':'));
+            if (ih->tag == F_SYM &&
+                (ih->as.sym == e->sym_fn || ih->as.sym == e->sym_lambda) &&
+                init_form->as.list.items[1]->tag == F_VEC && !annotated) {
+                uint32_t len = init_form->as.list.len;
+                Form **items = (Form **)arena_alloc(e->arena, (len + 1) * sizeof(Form *));
+                items[0] = init_form->as.list.items[0];
+                items[1] = init_form->as.list.items[1];
+                Form *any_sym = form_sym(e->arena, init_form->span,
+                                         symtab_intern(e->st, strslice("any", 3)));
+                items[2] = form_type_ann(e->arena, init_form->span, any_sym);
+                for (uint32_t j = 2; j < len; j++) items[j + 1] = init_form->as.list.items[j];
+                init_form = form_list(e->arena, init_form->span, items, len + 1);
+            }
+        }
+        Expr *init = elab_form(e, init_form);
         e->letrec_self_group   = NULL;
         e->letrec_self_group_n = 0;
         if (!init) { rc = -1; break; }
@@ -2958,7 +3007,7 @@ static bool if_branches_unify_via_tyvar(Type then_ty, Type else_ty, Type *out) {
 bool saffron_reject_static_only(Elab *e, Span span, const char *feature,
                                 const char *why) {
     (void)e;
-    if (!lang_span_is_saffron(span)) return false;
+    if (!lang_span_is_dynamic(span)) return false;
     diag_emit_with_code(DIAG_ERROR, span, TUR_E0312_SAFFRON_STATIC_ONLY,
                         "`%s` is not available in a `#lang saffron` file: %s",
                         feature, why);
@@ -2991,13 +3040,19 @@ Expr *elab_saffron_truthy(Elab *e, Expr *cond, Span site) {
      * macro-expanded condition (`(if (map-get m k) ...)`) carries the
      * stdlib's span, and was "if condition must be bool, got any" even in a
      * Saffron file. */
-    if (!lang_span_is_saffron(cond->span) && !lang_span_is_saffron(site) &&
-        !e->toplevel_saffron) return cond;
+    if (!lang_span_is_dynamic(cond->span) && !lang_span_is_dynamic(site) &&
+        !e->toplevel_dynamic) return cond;
+    /* r7rs-lang-plan R2: a Scheme file decides by Scheme's rule -- only `#f`
+     * is false -- and the two rules disagree on exactly one value, `nil`.
+     * Same three-way test as the dynamic gate above, for the same
+     * macro-expansion reason. */
+    bool scheme = lang_span_is_scheme(cond->span) || lang_span_is_scheme(site) ||
+                  e->toplevel_scheme;
+    const char *opn = scheme ? SCHEME_TRUTHY_OP : SAFFRON_TRUTHY_OP;
     Expr **targs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
     targs[0] = cond;
     Expr *t = expr_new(e->arena, EX_DYN_OP, TYPE_BOOL, cond->span);
-    t->as.dyn_op_.op     = symtab_intern(e->st, strslice(SAFFRON_TRUTHY_OP,
-                               (uint32_t)strlen(SAFFRON_TRUTHY_OP)));
+    t->as.dyn_op_.op     = symtab_intern(e->st, strslice(opn, (uint32_t)strlen(opn)));
     t->as.dyn_op_.args   = targs;
     t->as.dyn_op_.n_args = 1;
     return elab_hoist_control_operands(e, t);
@@ -3069,6 +3124,26 @@ Expr *elab_if(Elab *e, const Form *call) {
      * runtime.  The reserved name is not a builtin, so the interpreter answers
      * it before consulting the builtin table. */
     cond = elab_saffron_truthy(e, cond, call->span);
+    /* r7rs-lang-plan R2: in a Scheme file a condition of any STATIC type is
+     * legal, and its truth is known at compile time -- only `#f` is false, so
+     * a statically-int (or -string, or -Cons) condition is always true, and a
+     * statically-nil one never is.  Saffron's local inference keeps a literal
+     * concrete (D3), which is why `(let ((x 5)) (if x ...))` reaches here with
+     * an int; the condition still runs, for its effects. */
+    if (!type_eq(cond->type, TYPE_BOOL) &&
+        (lang_span_is_scheme(cond->span) || lang_span_is_scheme(call->span) ||
+         e->toplevel_scheme)) {
+        Expr *lit = expr_new(e->arena, EX_BOOL_LIT, TYPE_BOOL, cond->span);
+        lit->as.b = (cond->type.kind != TY_NIL);
+        Expr **seq = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+        seq[0] = cond;
+        seq[1] = lit;
+        Expr *d = expr_new(e->arena, EX_DO, TYPE_BOOL, cond->span);
+        d->as.do_.items = seq;
+        d->as.do_.n = 2;
+        d->as.do_.tail_drop_hoist = false;
+        cond = d;
+    }
     if (!type_eq(cond->type, TYPE_BOOL)) {
         diag_emit(DIAG_ERROR, cond->span,
                   "if condition must be bool, got %s", type_name(cond->type));
@@ -3308,7 +3383,7 @@ Expr *elab_if(Elab *e, const Form *call) {
              * :ptr<void> directly stays an error (CRU B-4). */
             result_t = TYPE_PTR_VOID;
         } else if (!type_eq(then_->type, else_->type) &&
-                   (lang_span_is_saffron(call->span) || e->toplevel_saffron) &&
+                   (lang_span_is_dynamic(call->span) || e->toplevel_dynamic) &&
                    !if_branches_unify_via_tyvar(then_->type, else_->type, &result_t)) {
             /* saffron-dynamic-surface-pass (low): in a Saffron file an `if`
              * whose arms disagree JOINS TO `any` -- `(defn pick [c] (if c 1
@@ -3593,10 +3668,6 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
         }
     }
 
-    /* Elaborate the value and type-check against the field. */
-    Expr *value = elab_form(e, call->as.list.items[2]);
-    if (!value) return NULL;
-
     /* Record-ADT field type, with type-arg substitution for a parametric
      * receiver (`(Box int)` -> field A becomes int), mirroring the read side
      * (elab_typeclasses.c get-field).  structdef-retirement DS-C: the former
@@ -3614,6 +3685,22 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
                                      cf->full_type, type_args);
         }
     }
+    /* Elaborate the value and type-check against the field.  r7rs-lang-plan
+     * R3 (a Saffron gap too): an `any` field takes any value, so a concrete
+     * one is widened through `(:: v any)` in a dynamic file, exactly as a
+     * `set!` into an `any` cell is. */
+    Form *value_form = call->as.list.items[2];
+    if (expected_field.kind == TY_ANY &&
+        (lang_span_is_dynamic(call->span) || e->toplevel_dynamic)) {
+        Form **asc = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+        asc[0] = form_sym(e->arena, value_form->span, e->sym_ascribe);
+        asc[1] = value_form;
+        asc[2] = form_sym(e->arena, value_form->span,
+                          symtab_intern(e->st, strslice("any", 3)));
+        value_form = form_list(e->arena, value_form->span, asc, 3);
+    }
+    Expr *value = elab_form(e, value_form);
+    if (!value) return NULL;
     if (value->type.kind != TY_PTR_VOID && !type_eq(value->type, expected_field)) {
         diag_emit(DIAG_ERROR, value->span,
                   "set! (.%s ...): value type %s does not match field type %s",
@@ -3775,7 +3862,22 @@ Expr *elab_set(Elab *e, const Form *call) {
                   b->name->name, b->defining_module_name->name, b->name->name);
         return NULL;
     }
-    Expr *value = elab_form(e, call->as.list.items[2]);
+    /* r7rs-lang-plan R2 (a Saffron gap too): a `^mut x : any` cell takes any
+     * value, so a concrete one is widened through the same `(:: v any)`
+     * ascription a call argument gets, instead of "value type cstr does not
+     * match binding type any".  Only in a dynamic file, and only into an
+     * `any` cell -- a typed cell keeps the exact check below. */
+    Form *value_form = call->as.list.items[2];
+    if (b->type.kind == TY_ANY &&
+        (lang_span_is_dynamic(call->span) || e->toplevel_dynamic)) {
+        Form **asc = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+        asc[0] = form_sym(e->arena, value_form->span, e->sym_ascribe);
+        asc[1] = value_form;
+        asc[2] = form_sym(e->arena, value_form->span,
+                          symtab_intern(e->st, strslice("any", 3)));
+        value_form = form_list(e->arena, value_form->span, asc, 3);
+    }
+    Expr *value = elab_form(e, value_form);
     if (!value) return NULL;
     if (!type_eq(value->type, b->type)) {
         diag_emit(DIAG_ERROR, value->span,

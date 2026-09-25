@@ -1,0 +1,66 @@
+#lang r7rs
+;; r7rs-lang-plan R8: the port half of (scheme file) -- text and binary file
+;; ports, the call-with and with- forms, and a file error on a failed open.
+;; Everything runs inside procedures: a top-level `define` whose initializer
+;; opens a file runs before the top-level expressions on the compiled path
+;; (docs/reported/toplevel-def-initializers-run-before-toplevel-expressions.md).
+(import (scheme base) (scheme write) (scheme read) (scheme file)
+        (scheme process-context))
+(define (show x) (write x) (newline))
+;; The temporary directory: TEMP on Windows (a native program cannot open
+;; /tmp there), TMPDIR, else /tmp.
+(define (tmp-dir)
+  (or (get-environment-variable "TEMP") (get-environment-variable "TMPDIR") "/tmp"))
+(define path (string-append (tmp-dir) "/tur-fixture-r7rs-file-ports.txt"))
+
+(define (text-round-trip)
+  (call-with-output-file path
+    (lambda (p)
+      (write '(1 "two" #\3 (4 . 5)) p)
+      (newline p)
+      (display "second line" p)
+      (newline p)))
+  (show (file-exists? path))
+  (call-with-input-file path
+    (lambda (p)
+      (let* ((d (read p))
+             (rest (read-line p))
+             (line (read-line p))
+             (end (read-line p)))
+        (show (list d rest line (eof-object? end)))))))
+
+(define (with-forms)
+  (let ((before (current-output-port)))
+    (with-output-to-file path
+      (lambda ()
+        (display "written via the current output port")
+        (newline)
+        (display (eq? before (current-output-port)))))
+    ;; The parameter is restored afterwards.
+    (show (eq? before (current-output-port))))
+  (show (with-input-from-file path read-line))
+  (show (with-input-from-file path (lambda () (read-line) (read-line)))))
+
+(define (binary-round-trip)
+  (let ((bp (open-binary-output-file path)))
+    (show (list (binary-port? bp) (output-port? bp)))
+    (write-u8 1 bp)
+    (write-bytevector (bytevector 2 3 250 255) bp)
+    (close-port bp))
+  (let ((bi (open-binary-input-file path)))
+    (show (read-bytevector 100 bi))
+    (show (eof-object? (read-u8 bi)))
+    (close-input-port bi)))
+
+(define (open-errors)
+  (show (guard (e ((file-error? e) (list 'file-error (error-object-irritants e))))
+          (open-input-file "/nonexistent-dir/none.txt")))
+  (show (guard (e ((file-error? e) 'cannot-create))
+          (open-output-file "/nonexistent-dir/none.txt"))))
+
+(text-round-trip)
+(with-forms)
+(binary-round-trip)
+(open-errors)
+(delete-file path)
+(show (file-exists? path))

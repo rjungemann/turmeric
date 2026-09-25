@@ -436,6 +436,67 @@ read -r -d '' MUT_SUGAR <<'EOF'
 EOF
 fmt_gap_case "fmt-mut-borrow-sugar-idempotent" "; a mutable borrow" "$MUT_SUGAR"
 
+# ---------------------------------------------------------------------------
+# r7rs-lang-plan R9: `#lang r7rs` is re-indented, never reprinted.  The form
+# printer rewrote `#t` to `true`, `#\x` to a constructor call, `|two words|`
+# to two symbols, `,` to `~` and `#e1.5e2` to 150 -- a different program.
+# ---------------------------------------------------------------------------
+TMPDIR_R7=$(mktemp -d)
+R7_LEXEMES='#lang r7rs
+(define v (quote #(1 "two\n" #\x #\( #\space |two words| #u8(1 255) #e1.5e2 #x1F)))
+(define (f x) `(,x ,@(list #t #f) . #;skipped tail))
+#| a block
+   comment |#
+(write [1 2])'
+printf '%s\n' "$R7_LEXEMES" > "$TMPDIR_R7/lex.tur"
+NAME="fmt-r7rs-lexemes-verbatim"
+ACTUAL=$("$TUR" fmt --stdout "$TMPDIR_R7/lex.tur" 2>&1)
+if [ "$ACTUAL" = "$R7_LEXEMES" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "a formatted Scheme file changed: $(printf '%s' "$ACTUAL" | head -4 | tr '\n' '|')"
+fi
+
+NAME="fmt-r7rs-reindent"
+printf '%s\n' '#lang r7rs' '(define (f x)' '        (if (> x 0)' '     (list x' '  "a' '   b")' '  #f))' \
+    '(let ((a 1)' '  (b 2))' '   (g a' '  b))' > "$TMPDIR_R7/ind.tur"
+EXPECTED=$(printf '%s\n' '#lang r7rs' '(define (f x)' '  (if (> x 0)' '    (list x' '          "a' '   b")' '    #f))' \
+    '(let ((a 1)' '      (b 2))' '  (g a' '     b))')
+ACTUAL=$("$TUR" fmt --stdout "$TMPDIR_R7/ind.tur" 2>&1)
+if [ "$ACTUAL" = "$EXPECTED" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected:|$(printf '%s' "$EXPECTED" | tr '\n' '|')| got:|$(printf '%s' "$ACTUAL" | tr '\n' '|')|"
+fi
+
+NAME="fmt-r7rs-idempotent"
+PASS1=$("$TUR" fmt --stdout "$TMPDIR_R7/ind.tur" 2>/dev/null)
+PASS2=$(printf '%s\n' "$PASS1" | "$TUR" fmt --stdin 2>/dev/null)
+if [ -n "$PASS1" ] && [ "$PASS1" = "$PASS2" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "fmt(fmt(x)) != fmt(x)"
+fi
+
+NAME="fmt-r7rs-stdin-lang"
+ACTUAL=$(printf '(display #t)\n' | "$TUR" fmt --stdin --lang r7rs 2>&1)
+if [ "$ACTUAL" = '(display #t)' ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "--stdin --lang r7rs: got '$ACTUAL'"
+fi
+
+NAME="fmt-r7rs-parse-error"
+printf '#lang r7rs\n(define (f x)\n' > "$TMPDIR_R7/bad.tur"
+"$TUR" fmt --check "$TMPDIR_R7/bad.tur" > /dev/null 2>&1
+RC=$?
+if [ "$RC" -ne 0 ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "an unbalanced Scheme file was accepted (exit 0)"
+fi
+rm -rf "$TMPDIR_R7"
+
 NAME="fmt-bootstrap-stdlib"
 BOOTSTRAP_DIRTY=""
 BOOTSTRAP_SEEN=0

@@ -1,0 +1,3260 @@
+#lang r7rs
+;;; r7rs/prelude -- the R7RS dialect's prelude: the core procedures.
+;;;
+;;; Auto-loaded, LAST in the stdlib autoload list, when the ENTRY file is
+;;; `#lang r7rs` (LangTraits.prelude).  Read as R7RS itself so its bodies get
+;;; Scheme truthiness and the Scheme reader; written in Turmeric's own shapes
+;;; (`defn`, `[...]` parameter vectors, `if`) because every Turmeric form passes
+;;; through the Scheme lowering untouched, and a prelude that reads as plainly
+;;; as the stdlib it adapts is easier to keep honest.
+;;;
+;;; NAMES.  Every procedure here is spelled `r7rs-<name>`, never `<name>`: a
+;;; top-level redefinition of an auto-loaded stdlib name (`car`, `list`,
+;;; `length`, ...) is an error, and list.tur owns those on its carrier list.
+;;; scheme_lower.c's rename table maps the Scheme spelling to the one here at
+;;; every unquoted occurrence in a `#lang r7rs` file, so a Scheme program says
+;;; `(car l)` and calls `r7rs-car`.  A procedure added here is added to that
+;;; table in the same change, or Scheme code cannot reach it.
+;;;
+;;; REPRESENTATION (r7rs-lang-plan D3/D4, R3).  Every Scheme type is an ordinary
+;;; Turmeric type, and its predicate is `is?` against that type:
+;;;
+;;;   pair          R7rsPair, a heap struct of two `any` fields (`a`/`d`: the
+;;;                 names `car`/`cdr` would meet the stdlib's `car` in `.field`
+;;;                 method lookup); mutable through `(set! (.a p) v)`, which is
+;;;                 the region-noted field store.
+;;;   empty list    R7rsNull, one process-wide value (r7rs-null-value__).
+;;;   char          R7rsChar, an opaque over the Unicode scalar value -- disjoint
+;;;                 from int, which is what `char?` vs `integer?` needs.
+;;;   string        Turmeric's cstr.  R7RS strings are mutable and these are
+;;;                 not: `string-set!`/`string-fill!` are the one R7RS surface
+;;;                 this stage declines, and says so rather than aliasing.
+;;;   vector        (Vec any) -- `#(...)` reads as the same F_VEC `[...]` does.
+;;;   bytevector    R7rsBytevector over a (Vec int) of 0..255.
+;;;   eof-object    R7rsEof, one value.
+;;;   symbol        Sym (stdlib/sym.tur); `string->symbol` interns at runtime
+;;;                 through stdlib/sym-dynamic.tur, loaded below.
+;;;   values        R7rsValues over a Scheme list; `(values x)` is x itself.
+;;;
+;;; `quote` builds these at runtime through r7rs-list / r7rs-cons /
+;;; r7rs-vector / r7rs-char__ (scheme_lower.c's datum walker); the static
+;;; `.rodata` table D4 wants is deferred with the literal-mutation question.
+;;;
+;;; ADAPTORS, NOT REIMPLEMENTATIONS, on the Saffron prelude's rule: each of
+;;; these forwards to a typed stdlib operation where one exists.  The numeric
+;;; surface is R5's, ports are R8's, `error`/`raise` are R6's.
+;;;
+;;; Since: r7rs-lang-plan R2, R3
+
+(load "stdlib/sym-dynamic.tur")
+(load "stdlib/math.tur")
+(load "stdlib/r7rs/unicode.tur")
+(load "stdlib/r7rs/bignum.tur")
+(load "stdlib/r7rs/numsyntax.tur")
+
+;;; ---- the types --------------------------------------------------------
+
+(defstruct R7rsPair :heap [a : any d : any])
+(defstruct R7rsNull [tag : int])
+(defstruct R7rsEof [tag : int])
+(defopaque R7rsChar :int)
+(defstruct R7rsBytevector :heap [bytes : (Vec int)])
+(defstruct R7rsValues [items : any])
+
+(def r7rs-null-value__ (R7rsNull 0))
+(def r7rs-eof-value__ (R7rsEof 0))
+
+;;; R7rsError -- the R7RS error object (R6): a message and a list of
+;;; irritants.  Declared here, ahead of `display`, because a typed parameter's
+;;; forward declaration needs the struct to exist.
+(defstruct R7rsError :heap [message : any irritants : any kind : int])
+(defn r7rs-error-object? [x] : bool (is? x R7rsError))
+(defn r7rs-error-object-message [e : R7rsError] : any (.message e))
+(defn r7rs-error-object-irritants [e : R7rsError] : any (.irritants e))
+;;; r7rs-error-kind__ -- R7: 0 for `error`/`raise`, 1 a file error, 2 a read
+;;; error; `file-error?` and `read-error?` answer from it.
+(defn r7rs-error-kind__ [e : R7rsError] : int (.kind e))
+
+;;; r7rs-fail-any__ -- internal: panic, in a position that needs an `any`.
+;;; A bare `(panic ...)` in the value position of an `any`-returning function
+;;; is emitted as a void return by the compiled back end, so the branches
+;;; that cannot happen go through this instead.
+(defn r7rs-fail-any__ [msg : cstr] : any
+  (panic msg)
+  (:: 0 any))
+;;; r7rs-signal__ -- internal: R10 -- an error a program can `guard`: raise
+;;; an error object with this message.  For "it is an error" conditions the
+;;; procedure detects, where r7rs-fail-any__'s panic would end the program.
+(defn r7rs-signal__ [msg : cstr] : any
+  (r7rs-raise (R7rsError msg (R7rsNull 0) 0)))
+(defn r7rs-fail-bool__ [msg : cstr] : bool
+  (panic msg)
+  false)
+
+;;; r7rs-type-name__ -- internal: `type-of` as an `any`, so two names compare
+;;; through the dynamic `=` (no static cstr equality is autoloaded).
+(defn r7rs-type-name__ [x] (type-of x))
+
+;;; ---- pairs and lists --------------------------------------------------
+
+;;; r7rs-null? -- #t for the empty list.
+;;; The predicates are FUNCTIONS, and the rest of this file tests through
+;;; them rather than with an inline `(is? x T)`: the inline test narrows `x`
+;;; to `T` in its then-branch, and a narrowed heap value is unique -- a
+;;; second use of it is TUR-E0201 "cannot copy unique value".  A call leaves
+;;; `x` an `any`, and each later use crosses the seam on its own.
+(defn r7rs-null? [p] : bool (is? p R7rsNull))
+;;; r7rs-pair? -- #t for a pair.
+(defn r7rs-pair? [p] : bool (is? p R7rsPair))
+;;; r7rs-cons -- a fresh pair; the cdr may be anything (an improper list).
+;;; Returns `any`, as does every procedure that hands out a pair: a statically
+;;; typed heap struct is a unique value in Turmeric, and a Scheme variable
+;;; holding one must be usable any number of times.
+(defn r7rs-cons [a d] : any (R7rsPair a d))
+;;; r7rs-car / r7rs-cdr -- the fields.  An `any` argument crosses the seam
+;;; with one tag check; `(car '())` is the checked-cast panic naming both types.
+(defn r7rs-car [p : R7rsPair] : any (.a p))
+(defn r7rs-cdr [p : R7rsPair] : any (.d p))
+;;; r7rs-set-car! / r7rs-set-cdr! -- the mutators.  `(set! (.a p) v)` is the
+;;; region-noted field store (CLAUDE.md, Region Store Hooks), so a value
+;;; built inside a `with-region` bracket and stored here blocks the rewind.
+(defn r7rs-set-car! [p : R7rsPair v] : nil (set! (.a p) v))
+(defn r7rs-set-cdr! [p : R7rsPair v] : nil (set! (.d p) v))
+
+;;; R7rsBox -- internal: the heap cell of a `set!` variable a lambda captures
+;;; (r7rs-lang-plan R10).  A compiled closure copies the variables it
+;;; captures, so without the cell `(set! sum ...)` inside a `do` loop or a
+;;; `for-each` lambda updated the closure's copy and the enclosing procedure
+;;; still read the old value.  scheme_lower.c's assignment conversion binds
+;;; such a variable to one of these; reads and `set!`s go through it.
+(defstruct R7rsBox :heap [v : any])
+(defn r7rs-box__ [x] : any (R7rsBox x))
+(defn r7rs-unbox__ [b : R7rsBox] : any (.v b))
+(defn r7rs-box-set!__ [b : R7rsBox x] : nil (set! (.v b) x))
+
+(defn r7rs-caar [p] : any (r7rs-car (r7rs-car p)))
+(defn r7rs-cadr [p] : any (r7rs-car (r7rs-cdr p)))
+(defn r7rs-cdar [p] : any (r7rs-cdr (r7rs-car p)))
+(defn r7rs-cddr [p] : any (r7rs-cdr (r7rs-cdr p)))
+(defn r7rs-caddr [p] : any (r7rs-car (r7rs-cdr (r7rs-cdr p))))
+
+;;; r7rs-chain->list__ -- internal: the `(Cons any)` cells a variadic `any`
+;;; rest parameter arrives packed in, as a Scheme list.
+;;; T8: the list builders that call no user procedure append at a tail
+;;; pointer (r7rs-snoc__), so each is a self tail call the compiler lowers to
+;;; a loop (map, which calls one, reverses instead -- see r7rs-map1__).  The natural
+;;; `(R7rsPair x (self ...))` recursion used one C frame per element and
+;;; overflowed the stack on a list of about a million, at every optimization
+;;; level and on both back ends.  Each builder makes its first pair itself,
+;;; so no scratch head is allocated (a pair is never freed).
+(defn r7rs-snoc__ [last x] : any
+  (let [c (R7rsPair x r7rs-null-value__)]
+    (r7rs-set-cdr! last c)
+    c))
+(defn r7rs-chain->list-go__ [c : (Cons any) last] : any
+  (if (tnil? c) last (r7rs-chain->list-go__ (.tail c) (r7rs-snoc__ last (.head c)))))
+(defn r7rs-chain->list__ [c : (Cons any)] : any
+  (if (tnil? c)
+    r7rs-null-value__
+    (let [h (R7rsPair (.head c) r7rs-null-value__)]
+      (r7rs-chain->list-go__ (.tail c) h)
+      h)))
+
+;;; r7rs-list -- (list e ...).
+(defn r7rs-list [& xs : any] : any (r7rs-chain->list__ (:: xs (Cons any))))
+
+;;; r7rs-list? -- #t for a proper list (terminates on a cycle: two cursors).
+(defn r7rs-list-go__ [slow fast] : bool
+  (if (r7rs-null? fast)
+    true
+    (if (r7rs-pair? fast)
+      (let [f2 (r7rs-cdr fast)]
+        (if (r7rs-null? f2)
+          true
+          (if (r7rs-pair? f2)
+            (let [s2 (r7rs-cdr slow)
+                  f3 (r7rs-cdr f2)]
+              (if (r7rs-eq? s2 f3) false (r7rs-list-go__ s2 f3)))
+            false)))
+      false)))
+(defn r7rs-list? [p] : bool (r7rs-list-go__ p p))
+
+;;; r7rs-length -- the number of elements of a proper list.
+(defn r7rs-length-go__ [p n : int] : int
+  (if (r7rs-null? p) n (r7rs-length-go__ (r7rs-cdr p) (+ n 1))))
+(defn r7rs-length [p] : int (r7rs-length-go__ p 0))
+
+;;; r7rs-list-tail -- the list after its first k elements.
+(defn r7rs-list-tail [p k : int] : any
+  (if (= k 0) p (r7rs-list-tail (r7rs-cdr p) (- k 1))))
+;;; r7rs-list-ref -- the k-th element, zero-based.
+(defn r7rs-list-ref [p k : int] : any (r7rs-car (r7rs-list-tail p k)))
+
+;;; r7rs-append -- two lists, the first copied.
+(defn r7rs-append-go__ [p b last] : any
+  (if (r7rs-null? p)
+    (do (r7rs-set-cdr! last b) last)
+    (r7rs-append-go__ (r7rs-cdr p) b (r7rs-snoc__ last (r7rs-car p)))))
+(defn r7rs-append [a b] : any
+  (if (r7rs-null? a)
+    b
+    (let [h (R7rsPair (r7rs-car a) b)]
+      (r7rs-append-go__ (r7rs-cdr a) b h)
+      h)))
+;;; r7rs-reverse -- a reversed copy.
+(defn r7rs-reverse-go__ [p acc] : any
+  (if (r7rs-null? p) acc (r7rs-reverse-go__ (r7rs-cdr p) (R7rsPair (r7rs-car p) acc))))
+(defn r7rs-reverse [p] : any (r7rs-reverse-go__ p r7rs-null-value__))
+;;; r7rs-list-copy -- a shallow copy.
+(defn r7rs-list-copy-go__ [p last] : any
+  (if (r7rs-pair? p)
+    (r7rs-list-copy-go__ (r7rs-cdr p) (r7rs-snoc__ last (r7rs-car p)))
+    (do (r7rs-set-cdr! last p) last)))
+(defn r7rs-list-copy [p] : any
+  (if (r7rs-pair? p)
+    (let [h (R7rsPair (r7rs-car p) r7rs-null-value__)]
+      (r7rs-list-copy-go__ (r7rs-cdr p) h)
+      h)
+    p))
+
+;;; r7rs-map1__ -- apply f to each element, into a fresh list (one list).
+;;; map builds in reverse and reverses at the end, NOT at a tail pointer: f
+;;; can capture a continuation, and re-entering it must not change a list map
+;;; already returned (r7rs-continuations pins this).  The accumulator a
+;;; re-entry resumes from is shared, never mutated, and the final reverse is
+;;; a fresh list each time.
+(defn r7rs-map1-go__ [f l acc] : any
+  (if (r7rs-null? l) acc (r7rs-map1-go__ f (r7rs-cdr l) (R7rsPair (f (r7rs-car l)) acc))))
+(defn r7rs-map1__ [f l] : any (r7rs-reverse (r7rs-map1-go__ f l r7rs-null-value__)))
+;;; r7rs-for-each1__ -- apply f to each element, for effect.
+(defn r7rs-for-each1__ [f l] : nil
+  (if (r7rs-null? l)
+    nil
+    (do (f (r7rs-car l)) (r7rs-for-each1__ f (r7rs-cdr l)))))
+;;; r7rs-any-null__ -- R7: true when any list in ls is exhausted (the
+;;; multi-list map/for-each stop at the shortest, R7RS 6.10).
+(defn r7rs-any-null__ [ls] : bool
+  (if (r7rs-null? ls) false (if (r7rs-pair? (r7rs-car ls)) (r7rs-any-null__ (r7rs-cdr ls)) true)))
+(defn r7rs-cars-go__ [ls last] : any
+  (if (r7rs-null? ls) last (r7rs-cars-go__ (r7rs-cdr ls) (r7rs-snoc__ last (r7rs-car (r7rs-car ls))))))
+(defn r7rs-cars__ [ls] : any
+  (if (r7rs-null? ls)
+    ls
+    (let [h (R7rsPair (r7rs-car (r7rs-car ls)) r7rs-null-value__)]
+      (r7rs-cars-go__ (r7rs-cdr ls) h)
+      h)))
+(defn r7rs-cdrs-go__ [ls last] : any
+  (if (r7rs-null? ls) last (r7rs-cdrs-go__ (r7rs-cdr ls) (r7rs-snoc__ last (r7rs-cdr (r7rs-car ls))))))
+(defn r7rs-cdrs__ [ls] : any
+  (if (r7rs-null? ls)
+    ls
+    (let [h (R7rsPair (r7rs-cdr (r7rs-car ls)) r7rs-null-value__)]
+      (r7rs-cdrs-go__ (r7rs-cdr ls) h)
+      h)))
+;;; The many-list map and for-each call f on the heads of the lists INSIDE
+;;; the loop body (T8).  Calling it through r7rs-apply-list__, or any helper,
+;;; made the step a call into a separate CPS procedure that resumed the loop
+;;; from inside its own frame, so every element nested a C frame and a
+;;; million-element (map + a b) overflowed at -O2.  n is the number of lists:
+;;; 1 (string-map and vector-map come here with one) to 4, the dynamic call's
+;;; argument limit (apply's too).
+(defn r7rs-mapn-go__ [f ls n : int acc] : any
+  (if (r7rs-any-null__ ls)
+    acc
+    (let [x (if (= n 1)
+              (f (r7rs-caar ls))
+              (if (= n 2)
+                (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)))
+                (if (= n 3)
+                  (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)))
+                  (if (= n 4)
+                    (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls)))
+                    (r7rs-fail-any__ "map: more than 4 lists is not supported yet (r7rs-lang-plan R6)")))))]
+      (r7rs-mapn-go__ f (r7rs-cdrs__ ls) n (R7rsPair x acc)))))
+(defn r7rs-mapn__ [f ls] : any (r7rs-reverse (r7rs-mapn-go__ f ls (r7rs-length ls) r7rs-null-value__)))
+(defn r7rs-for-eachn-go__ [f ls n : int] : bool
+  (if (r7rs-any-null__ ls)
+    true
+    (do (if (= n 1)
+          (f (r7rs-caar ls))
+          (if (= n 2)
+            (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)))
+            (if (= n 3)
+              (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)))
+              (if (= n 4)
+                (f (r7rs-caar ls) (r7rs-car (r7rs-cadr ls)) (r7rs-car (r7rs-caddr ls)) (r7rs-car (r7rs-cadddr ls)))
+                (r7rs-fail-any__ "for-each: more than 4 lists is not supported yet (r7rs-lang-plan R6)")))))
+        (r7rs-for-eachn-go__ f (r7rs-cdrs__ ls) n))))
+(defn r7rs-for-eachn__ [f ls] : nil (r7rs-for-eachn-go__ f ls (r7rs-length ls)) nil)
+;;; r7rs-map -- (map f list1 list2 ...): R7: any number of lists, stopping at
+;;; the shortest; the one-list case keeps its direct call.
+(defn r7rs-map [f l & more : any] : any
+  (let [m (r7rs-chain->list__ (:: more (Cons any)))]
+    (if (r7rs-null? m) (r7rs-map1__ f l) (r7rs-mapn__ f (R7rsPair l m)))))
+;;; r7rs-for-each -- (for-each f list1 list2 ...), for effect.
+(defn r7rs-for-each [f l & more : any] : nil
+  (let [m (r7rs-chain->list__ (:: more (Cons any)))]
+    (if (r7rs-null? m) (r7rs-for-each1__ f l) (r7rs-for-eachn__ f (R7rsPair l m)))))
+
+;;; ---- equivalence ------------------------------------------------------
+
+;;; r7rs-same-ref__ -- internal: identity of two heap values (a pair, a
+;;; vector, a bytevector, a record) by their carrier word.  Inline C on the
+;;; compiled path, a native under the interpreter; typed helpers per type
+;;; would each need the seam's pointer cast, and this asks one question of
+;;; the tagged words directly.
+(defn r7rs-same-ref__ [a b] : bool
+  ```c
+  return TUR_UNTAG(a) == TUR_UNTAG(b);
+  ```)
+(defn r7rs-same-pair__ [a b] : bool (r7rs-same-ref__ a b))
+;;; r7rs-char-code__ -- internal, typed: a char's scalar value.
+(defn r7rs-char-code__ [c : R7rsChar] : int (:: c :int))
+
+;;; r7rs-eqv? -- R7RS 6.1: identity on booleans, numbers, characters, symbols
+;;; and the empty list; pointer identity on pairs, vectors and records; two
+;;; values of different runtime types are never eqv.
+(defn r7rs-eqv? [a b] : bool
+  (if (= (r7rs-type-name__ a) (r7rs-type-name__ b))
+    (if (r7rs-pair? a)
+      (r7rs-same-pair__ a b)
+      (if (r7rs-char? a)
+        (= (r7rs-char-code__ a) (r7rs-char-code__ b))
+        (if (r7rs-null? a)
+          true
+          (if (r7rs-eof-object? a)
+            true
+            (if (r7rs-vector? a)
+              (r7rs-same-ref__ a b)
+              (if (r7rs-bytevector? a)
+                (r7rs-same-ref__ a b)
+                ;; T1/T2: two bignums, or two ratios, are eqv when they are the same
+                ;; number; T6: two complex numbers when their parts are eqv.
+                (if (if (r7rs-big? a) true (r7rs-ratio? a))
+                  (= (r7rs-cmp-slow__ a b) 0)
+                  (if (r7rs-cplx? a)
+                    (if (r7rs-eqv? (r7rs-cplx-re__ a) (r7rs-cplx-re__ b)) (r7rs-eqv? (r7rs-cplx-im__ a) (r7rs-cplx-im__ b)) false)
+                    (if (r7rs-eqv-by-value?__ a)
+                      (= a b)
+                      ;; R8: a record, a port, a procedure, a promise -- identity
+                      ;; (the dynamic `=` has no operator for a record type).
+                      (r7rs-same-ref__ a b))))))))))
+    false))
+;;; r7rs-eqv-by-value?__ -- internal: the types eqv? compares by value.
+(defn r7rs-eqv-by-value?__ [a] : bool
+  (if (r7rs-number? a) true (if (r7rs-boolean? a) true (if (is? a cstr) true (r7rs-symbol? a)))))
+;;; r7rs-eq? -- same as eqv? here (chars and ints are immediate, and a
+;;; bignum is compared by value, which R7RS allows of eq? on numbers).
+(defn r7rs-eq? [a b] : bool (r7rs-eqv? a b))
+
+;;; r7rs-equal? is with the identity table it uses (the ports section): its
+;;; helpers hand that table on, and a procedure that hands an opaque handle
+;;; to one defined later in the file is read as giving it away (TUR-E0005,
+;;; under a Turmeric entry file).
+;;; r7rs-not -- #t only for #f (R7RS 6.3).
+(defn r7rs-not [x] : bool (if x false true))
+
+;;; ---- membership and association ----------------------------------------
+
+(defn r7rs-memv [x l]
+  (if (r7rs-null? l) false (if (r7rs-eqv? x (r7rs-car l)) l (r7rs-memv x (r7rs-cdr l)))))
+(defn r7rs-memq [x l] (r7rs-memv x l))
+(defn r7rs-member-by__ [x l eq] : any
+  (if (r7rs-null? l) false (if (eq x (r7rs-car l)) l (r7rs-member-by__ x (r7rs-cdr l) eq))))
+;;; r7rs-member -- R7: an optional third argument is the equivalence.
+(defn r7rs-member [x l & cmp : any] : any
+  (let [c (r7rs-chain->list__ (:: cmp (Cons any)))]
+    (r7rs-member-by__ x l (if (r7rs-null? c) (:: r7rs-equal? any) (r7rs-car c)))))
+(defn r7rs-assv [x l]
+  (if (r7rs-null? l) false
+    (if (r7rs-eqv? x (r7rs-car (r7rs-car l))) (r7rs-car l) (r7rs-assv x (r7rs-cdr l)))))
+(defn r7rs-assq [x l] (r7rs-assv x l))
+(defn r7rs-assoc-by__ [x l eq] : any
+  (if (r7rs-null? l) false
+    (if (eq x (r7rs-car (r7rs-car l))) (r7rs-car l) (r7rs-assoc-by__ x (r7rs-cdr l) eq))))
+;;; r7rs-assoc -- R7: an optional third argument is the equivalence.
+(defn r7rs-assoc [x l & cmp : any] : any
+  (let [c (r7rs-chain->list__ (:: cmp (Cons any)))]
+    (r7rs-assoc-by__ x l (if (r7rs-null? c) (:: r7rs-equal? any) (r7rs-car c)))))
+
+;;; ---- type predicates ---------------------------------------------------
+
+(defn r7rs-boolean? [x] : bool (is? x bool))
+(defn r7rs-string? [x] : bool (if (is? x cstr) true (r7rs-mstring? x)))
+(defn r7rs-symbol? [x] : bool (is? x Sym))
+(defn r7rs-procedure? [x] : bool (= (r7rs-type-name__ x) (:: "fn" any)))
+(defn r7rs-char? [x] : bool (is? x R7rsChar))
+(defn r7rs-vector? [x] : bool (is? x (Vec any)))
+(defn r7rs-bytevector? [x] : bool (is? x R7rsBytevector))
+(defn r7rs-eof-object? [x] : bool (is? x R7rsEof))
+(defn r7rs-values?__ [x] : bool (is? x R7rsValues))
+(defn r7rs-eof-object [] r7rs-eof-value__)
+
+;;; ---- numbers (R5: the tower over int64 and double) --------------------
+;;;
+;;; R7RS 6.2 over three representations: an exact integer is Turmeric's
+;;; int64 when it fits and an `R7rsBig` when it does not (T1: exact integers
+;;; are unbounded), and an inexact real is a double.  There are no exact
+;;; rationals yet (T2), so `(/ 7 2)` is the inexact 3.5 (not 7/2).  The int64
+;;; path stays the fast one: `+`, `-`, `*` check for overflow and only then
+;;; compute on bignums, and a bignum result that fits is an int again, so an
+;;; `R7rsBig` is never a number int64 could hold.  Exactness is the
+;;; representation: `exact?` is an int or a bignum, `inexact?` a float, and
+;;; the arithmetic on mixed operands is inexact.  No complex numbers:
+;;; `(sqrt -4)` is +nan.0.
+;;;
+;;; The lowering routes every `+ - * / = < > <= >=` in call position through
+;;; the binary helpers here (`r7rs-add2__` ...), folding n-ary uses and
+;;; handling `(+)`, `(- x)`, `(/ x)`; the variadic `r7rs-+` ... are what a
+;;; bare `+` in value position names, so `(apply + xs)` and `(map + a b)`
+;;; work.  The prelude itself is exempt from that rewrite (it is where the
+;;; raw operators are allowed to appear), so the helpers below may use them.
+
+;;; r7rs-fixnum?__ / r7rs-flonum?__ -- the representation tests; `integer?`
+;;; is the R7RS predicate (7.0 is an integer) and is not the one to use to
+;;; pick a printer.
+(defn r7rs-fixnum?__ [x] : bool (is? x int))
+(defn r7rs-flonum?__ [x] : bool (is? x float))
+(defn r7rs-float-nan?__ [x : float] : bool
+  ```c
+  return x != x;
+  ```)
+(defn r7rs-float-infinite?__ [x : float] : bool
+  ```c
+  return __builtin_isinf(x) != 0;
+  ```)
+(defn r7rs-float-integral?__ [x : float] : bool
+  ```c
+  return __builtin_isfinite(x) && __builtin_floor(x) == x;
+  ```)
+(defn r7rs-int->float__ [x : int] : float (int->float x))
+;;; r7rs-float->int__ -- an integral double as an int64, for an argument that
+;;; must be one (an index, a count, a character code).  T0: a double outside
+;;; int64 is an error, where the C conversion saturated to a silent wrong
+;;; answer.  `exact` itself goes through r7rs-exact, which makes a bignum.
+(defn r7rs-float->int__ [x : float] : int
+  (if (if (>= x 9223372036854775808.0) true (< x -9223372036854775808.0))
+    (r7rs-fail-int__ "exact integer overflow (R7RS 6.2.6: the value is outside int64, which this argument must fit)")
+    (float->int x)))
+
+;;; ---- bignums (T1) ---------------------------------------------------------
+;;;
+;;; An `R7rsBig` holds the canonical decimal spelling of an exact integer
+;;; outside int64; the arithmetic is the C of stdlib/r7rs/bignum.tur (the
+;;; interpreter's natives run the same file).  r7rs-big-norm__ is the one
+;;; constructor, so a value that fits is always an int.
+(defstruct R7rsBig :heap [digits : cstr])
+(defn r7rs-big? [x] : bool (is? x R7rsBig))
+(defn r7rs-big-digits__ [b : R7rsBig] : cstr (.digits b))
+(defn r7rs-big-norm__ [s : cstr] : any
+  (if (r7rs-big-fits?__ s) (:: (r7rs-big-int__ s) any) (:: (R7rsBig s) any)))
+;;; r7rs-big__ -- the reader's constructor: a literal outside int64 reads as
+;;; `(r7rs-big__ "<digits>")`, as a char reads as `(r7rs-char__ n)`.
+(defn r7rs-big__ [s : cstr] : any (r7rs-big-norm__ s))
+;;; r7rs-exint? -- an exact integer: an int or a bignum.
+(defn r7rs-exint? [x] : bool (if (is? x int) true (is? x R7rsBig)))
+(defn r7rs-any-big?__ [a b] : bool (if (is? a R7rsBig) true (is? b R7rsBig)))
+;;; r7rs-any-exotic?__ -- either operand is a bignum or a ratio: off the
+;;; int64/double fast paths.
+(defn r7rs-any-exotic?__ [a b] : bool
+  (if (r7rs-any-big?__ a b) true (if (r7rs-ratio? a) true (if (r7rs-ratio? b) true (r7rs-any-cplx?__ a b)))))
+;;; r7rs-dec__ -- an exact integer's decimal spelling, for the bignum core.
+(defn r7rs-dec__ [x] : cstr (if (is? x int) (r7rs-int->string-radix__ x 10) (r7rs-big-digits__ x)))
+;;; r7rs-dec-done__ -- T8: release what r7rs-dec__ made: an int's spelling is
+;;; fresh, a bignum's is its own digits.
+(defn r7rs-dec-done__ [x s : cstr] : nil (if (is? x int) (r7rs-cstr-free__ s) nil))
+;;; r7rs-big2__ -- one bignum-core operation (the R7BN_* codes of
+;;; bignum.tur) on two exact integers, normalized.  The operand spellings are
+;;; released, and so is the result's when it fits an int (a bignum keeps it).
+(defn r7rs-big2__ [op : int a b] : any
+  (let [da (r7rs-dec__ a)
+        db (r7rs-dec__ b)
+        r  (r7rs-big-op__ op da db)
+        v  (r7rs-big-norm__ r)]
+    (r7rs-dec-done__ a da)
+    (r7rs-dec-done__ b db)
+    (if (is? v int) (r7rs-cstr-free__ r) nil)
+    v))
+;;; r7rs-big-cmp-of__ -- two exact integers compared by the core.
+(defn r7rs-big-cmp-of__ [a b] : int
+  (let [da (r7rs-dec__ a)
+        db (r7rs-dec__ b)
+        c  (r7rs-big-cmp__ da db)]
+    (r7rs-dec-done__ a da)
+    (r7rs-dec-done__ b db)
+    c))
+(defn r7rs-big-cmp-float-of__ [a d : float] : int
+  (let [da (r7rs-dec__ a)
+        c  (r7rs-big-cmp-float__ da d)]
+    (r7rs-dec-done__ a da)
+    c))
+(defn r7rs-big-neg?__ [x] : bool (< (r7rs-big-cmp__ (r7rs-big-digits__ x) "0") 0))
+
+;;; ---- exact rationals (T2) ---------------------------------------------------
+;;;
+;;; An `R7rsRatio` is an exact non-integer: numerator and denominator are
+;;; exact integers (an int or a bignum), in lowest terms, the denominator
+;;; greater than 1 and the sign on the numerator.  r7rs-make-ratio__ is the
+;;; one constructor, so a ratio is never a number an integer could be, and
+;;; `(/ 6 3)` is the integer 2.  Tests go through r7rs-ratio?, not a bare
+;;; `is?`, which would narrow the value to the (unique) heap struct.
+(defstruct R7rsRatio :heap [num : any den : any])
+(defn r7rs-ratio? [x] : bool (is? x R7rsRatio))
+(defn r7rs-ratio-num__ [r : R7rsRatio] : any (.num r))
+(defn r7rs-ratio-den__ [r : R7rsRatio] : any (.den r))
+;;; r7rs-exrat? -- an exact rational: an exact integer or a ratio.
+(defn r7rs-exrat? [x] : bool (if (r7rs-exint? x) true (r7rs-ratio? x)))
+;;; r7rs-num-of__ / r7rs-den-of__ -- an exact rational's parts (an integer
+;;; is itself over 1).
+(defn r7rs-num-of__ [x] : any (if (r7rs-ratio? x) (r7rs-ratio-num__ x) x))
+(defn r7rs-den-of__ [x] : any (if (r7rs-ratio? x) (r7rs-ratio-den__ x) (:: 1 any)))
+;;; r7rs-make-ratio__ -- n/d in lowest terms; n and d exact integers, d
+;;; nonzero.  An integer when d divides n.
+(defn r7rs-make-ratio__ [n d] : any
+  (let [g (r7rs-gcd2__ n d)
+        sg (if (r7rs-negative? d) (r7rs-sub2__ 0 g) g)
+        nn (r7rs-quotient-i__ n sg)
+        dd (r7rs-quotient-i__ d sg)]
+    (if (r7rs-numeq2__ dd 1) nn (:: (R7rsRatio nn dd) any))))
+;;; r7rs-ratio-of-str__ -- the value of an "n/d" (or "n") spelling, as the
+;;; number parser and the exact value of a double produce it.
+(defn r7rs-ratio-of-str__ [s : cstr] : any
+  (r7rs-make-ratio__ (r7rs-big-norm__ (r7rs-ratio-part__ s 0)) (r7rs-big-norm__ (r7rs-ratio-part__ s 1))))
+;;; r7rs-ratio__ -- the reader's constructor: an exact non-integer literal
+;;; reads as `(r7rs-ratio__ "<n>/<d>")`, as a char reads as `(r7rs-char__ n)`.
+(defn r7rs-ratio__ [s : cstr] : any (r7rs-ratio-of-str__ s))
+;;; r7rs-exint-cmp__ -- two exact integers: -1, 0 or 1.
+(defn r7rs-exint-cmp__ [a b] : int
+  (if (r7rs-both-int?__ a b)
+    (if (< a b) -1 (if (> a b) 1 0))
+    (r7rs-big-cmp-of__ a b)))
+;;; r7rs-rat-arith__ -- + - * (op 0 1 2) on two exact rationals.
+(defn r7rs-rat-arith__ [op : int a b] : any
+  (let [an (r7rs-num-of__ a) ad (r7rs-den-of__ a) bn (r7rs-num-of__ b) bd (r7rs-den-of__ b)]
+    (if (= op 2)
+      (r7rs-make-ratio__ (r7rs-mul2__ an bn) (r7rs-mul2__ ad bd))
+      (let [l (r7rs-mul2__ an bd) r (r7rs-mul2__ bn ad)]
+        (r7rs-make-ratio__ (if (= op 0) (r7rs-add2__ l r) (r7rs-sub2__ l r)) (r7rs-mul2__ ad bd))))))
+;;; r7rs-rat-cmp__ -- two exact rationals, exactly: -1, 0 or 1 (the
+;;; denominators are positive, so cross-multiplying keeps the order).
+(defn r7rs-rat-cmp__ [a b] : int
+  (r7rs-exint-cmp__ (r7rs-mul2__ (r7rs-num-of__ a) (r7rs-den-of__ b))
+                    (r7rs-mul2__ (r7rs-num-of__ b) (r7rs-den-of__ a))))
+;;; r7rs-cmp-rat-any__ -- a comparison with a ratio: against a double through
+;;; the double's exact value; 2 when a double is a NaN.
+(defn r7rs-cmp-rat-any__ [a b] : int
+  (if (is? a float)
+    (let [c (r7rs-cmp-rat-any__ b a)] (if (= c 2) 2 (- 0 c)))
+    (if (is? b float)
+      (if (r7rs-float-nan?__ b)
+        2
+        (if (r7rs-float-infinite?__ b)
+          (if (> b 0.0) -1 1)
+          (r7rs-rat-cmp__ a (r7rs-exact b))))
+      (r7rs-rat-cmp__ a b))))
+
+;;; ---- complex numbers (T6) ------------------------------------------------
+;;;
+;;; An `R7rsComplex` is a non-real number: its real and imaginary parts are
+;;; reals (an int, a bignum, a ratio or a double).  r7rs-make-rect__ is the one
+;;; constructor, so an exact-zero imaginary part is always the real itself
+;;; (R7RS 6.2.6), and a complex number is exact or inexact as a whole: when
+;;; either part is inexact, both are.  An inexact one keeps a 0.0 imaginary
+;;; part, so `(real? 1.0+0.0i)` is #f.  Tests go through r7rs-cplx?, not a
+;;; bare `is?` (the unique-narrowing reason r7rs-ratio? gives).
+(defstruct R7rsComplex :heap [re : any im : any])
+(defn r7rs-cplx? [x] : bool (is? x R7rsComplex))
+(defn r7rs-cplx-re__ [z : R7rsComplex] : any (.re z))
+(defn r7rs-cplx-im__ [z : R7rsComplex] : any (.im z))
+(defn r7rs-any-cplx?__ [a b] : bool (if (r7rs-cplx? a) true (r7rs-cplx? b)))
+;;; r7rs-re-of__ / r7rs-im-of__ -- any number's parts; a real's imaginary
+;;; part is exact 0.
+(defn r7rs-re-of__ [x] : any (if (r7rs-cplx? x) (r7rs-cplx-re__ x) x))
+(defn r7rs-im-of__ [x] : any (if (r7rs-cplx? x) (r7rs-cplx-im__ x) (:: 0 any)))
+(defn r7rs-exact-zero?__ [x] : bool (if (is? x int) (= x 0) false))
+;;; r7rs-make-rect__ -- re + im i, from two reals.
+(defn r7rs-make-rect__ [re im] : any
+  (if (r7rs-exact-zero?__ im)
+    re
+    (if (if (is? re float) true (is? im float))
+      (:: (R7rsComplex (:: (r7rs-to-float__ re) any) (:: (r7rs-to-float__ im) any)) any)
+      (:: (R7rsComplex re im) any))))
+;;; r7rs-complex__ -- the reader's constructor: a non-real literal reads as
+;;; `(r7rs-complex__ "<re> <im>")`, each part a real's spelling.
+(defn r7rs-complex-of-str__ [s : cstr] : any
+  (r7rs-make-rect__ (r7rs-number-of__ (r7rs-numsyn-part__ s 0) 10 "complex: `")
+                    (r7rs-number-of__ (r7rs-numsyn-part__ s 1) 10 "complex: `")))
+(defn r7rs-complex__ [s : cstr] : any (r7rs-complex-of-str__ s))
+
+(defn r7rs-ratio-to-float__ [n d] : float
+  (let [dn (r7rs-dec__ n)
+        dd (r7rs-dec__ d)
+        f  (r7rs-ratio->float__ dn dd)]
+    (r7rs-dec-done__ n dn)
+    (r7rs-dec-done__ d dd)
+    f))
+(defn r7rs-to-float__ [x] : float
+  (if (is? x float)
+    x
+    (if (is? x int)
+      (r7rs-int->float__ x)
+      (if (r7rs-ratio? x)
+        (r7rs-ratio-to-float__ (r7rs-ratio-num__ x) (r7rs-ratio-den__ x))
+        (r7rs-big->float__ (r7rs-big-digits__ x))))))
+
+(defn r7rs-real? [x] : bool (if (is? x int) true (if (is? x float) true (if (is? x R7rsBig) true (r7rs-ratio? x)))))
+(defn r7rs-number? [x] : bool (if (r7rs-real? x) true (r7rs-cplx? x)))
+(defn r7rs-complex? [x] : bool (r7rs-number? x))
+;;; T6: a complex number is finite when both parts are, infinite or a NaN
+;;; when either is.
+(defn r7rs-real-finite?__ [x] : bool
+  (if (is? x float) (if (r7rs-float-nan?__ x) false (if (r7rs-float-infinite?__ x) false true)) (r7rs-exrat? x)))
+(defn r7rs-finite? [x] : bool
+  (if (r7rs-cplx? x)
+    (if (r7rs-real-finite?__ (r7rs-cplx-re__ x)) (r7rs-real-finite?__ (r7rs-cplx-im__ x)) false)
+    (r7rs-real-finite?__ x)))
+(defn r7rs-real-infinite?__ [x] : bool (if (is? x float) (r7rs-float-infinite?__ x) false))
+(defn r7rs-infinite? [x] : bool
+  (if (r7rs-cplx? x)
+    (if (r7rs-real-infinite?__ (r7rs-cplx-re__ x)) true (r7rs-real-infinite?__ (r7rs-cplx-im__ x)))
+    (r7rs-real-infinite?__ x)))
+(defn r7rs-real-nan?__ [x] : bool (if (is? x float) (r7rs-float-nan?__ x) false))
+(defn r7rs-nan? [x] : bool
+  (if (r7rs-cplx? x)
+    (if (r7rs-real-nan?__ (r7rs-cplx-re__ x)) true (r7rs-real-nan?__ (r7rs-cplx-im__ x)))
+    (r7rs-real-nan?__ x)))
+(defn r7rs-rational? [x] : bool (if (r7rs-cplx? x) false (r7rs-finite? x)))
+(defn r7rs-integer? [x] : bool (if (r7rs-exint? x) true (if (is? x float) (r7rs-float-integral?__ x) false)))
+;;; A complex number is exact or inexact as a whole (r7rs-make-rect__), so
+;;; its real part answers for it.
+(defn r7rs-exact? [x] : bool
+  (if (r7rs-number? x) (r7rs-exrat? (r7rs-re-of__ x)) (r7rs-fail-bool__ "exact?: not a number")))
+(defn r7rs-inexact? [x] : bool
+  (if (r7rs-number? x) (is? (r7rs-re-of__ x) float) (r7rs-fail-bool__ "inexact?: not a number")))
+(defn r7rs-exact-integer? [x] : bool (r7rs-exint? x))
+(defn r7rs-exact-rational? [x] : bool (r7rs-exrat? x))
+
+;;; ---- exact arithmetic: int64, then bignums (T1) --------------------------
+
+(defn r7rs-both-int?__ [a b] : bool (if (is? a int) (is? b int) false))
+;;; r7rs-big-arith__ -- + - * (op 0 1 2) with a bignum or ratio operand:
+;;; inexact when the other one is, exact rationals (T2) when either is a
+;;; ratio, else the bignum core.
+(defn r7rs-big-arith__ [op : int a b] : any
+  (if (r7rs-any-cplx?__ a b)
+    (r7rs-cplx-arith__ op a b)
+    (r7rs-real-arith__ op a b)))
+;;; T6: + - * on complex numbers, part by part through the real operators.
+(defn r7rs-cplx-arith__ [op : int a b] : any
+  (let [ar (r7rs-re-of__ a) ai (r7rs-im-of__ a) br (r7rs-re-of__ b) bi (r7rs-im-of__ b)]
+    (if (= op 2)
+      (r7rs-make-rect__ (r7rs-sub2__ (r7rs-mul2__ ar br) (r7rs-mul2__ ai bi))
+                        (r7rs-add2__ (r7rs-mul2__ ar bi) (r7rs-mul2__ ai br)))
+      (if (= op 0)
+        (r7rs-make-rect__ (r7rs-add2__ ar br) (r7rs-add2__ ai bi))
+        (r7rs-make-rect__ (r7rs-sub2__ ar br) (r7rs-sub2__ ai bi))))))
+(defn r7rs-real-arith__ [op : int a b] : any
+  (if (if (is? a float) true (is? b float))
+    (let [x (r7rs-to-float__ a) y (r7rs-to-float__ b)]
+      (:: (if (= op 0) (+ x y) (if (= op 1) (- x y) (* x y))) any))
+    (if (if (r7rs-ratio? a) true (r7rs-ratio? b))
+      (r7rs-rat-arith__ op a b)
+      (r7rs-big2__ op a b))))
+
+;;; r7rs-add2__ ... -- the binary operators the lowering emits.  Two ints
+;;; take the int64 path unless it overflows (T1: then the bignum core, where
+;;; D8 had a panic); a bignum operand goes to the core; anything else is the
+;;; dynamic operator, which promotes a mixed pair to inexact.
+(defn r7rs-add2__ [a b] : any
+  (if (r7rs-both-int?__ a b)
+    (if (r7rs-int-ovf?__ 0 a b) (r7rs-big2__ 0 a b) (+ a b))
+    (if (r7rs-any-exotic?__ a b) (r7rs-big-arith__ 0 a b) (+ a b))))
+(defn r7rs-sub2__ [a b] : any
+  (if (r7rs-both-int?__ a b)
+    (if (r7rs-int-ovf?__ 1 a b) (r7rs-big2__ 1 a b) (- a b))
+    (if (r7rs-any-exotic?__ a b) (r7rs-big-arith__ 1 a b) (- a b))))
+(defn r7rs-mul2__ [a b] : any
+  (if (r7rs-both-int?__ a b)
+    (if (r7rs-int-ovf?__ 2 a b) (r7rs-big2__ 2 a b) (* a b))
+    (if (r7rs-any-exotic?__ a b) (r7rs-big-arith__ 2 a b) (* a b))))
+;;; r7rs-div2__ -- T2: exact on exact operands, a ratio when the quotient is
+;;; not an integer (`(/ 7 2)` is 7/2, where it was 3.5), and division by
+;;; exact zero is an error.  Two ints that divide stay on int64 (-1 aside:
+;;; INT64_MIN / -1 leaves it).
+(defn r7rs-div-exact__ [a b] : any
+  (if (r7rs-zero? b)
+    (r7rs-fail-any__ "/: division by exact zero")
+    (if (if (r7rs-both-int?__ a b) (if (= b -1) false (= (mod a b) 0)) false)
+      (:: (/ a b) any)
+      (r7rs-make-ratio__ (r7rs-mul2__ (r7rs-num-of__ a) (r7rs-den-of__ b))
+                         (r7rs-mul2__ (r7rs-den-of__ a) (r7rs-num-of__ b))))))
+(defn r7rs-div2__ [a b] : any
+  (if (r7rs-any-cplx?__ a b)
+    (r7rs-cplx-div__ a b)
+    (if (if (r7rs-exrat? a) (r7rs-exrat? b) false)
+      (r7rs-div-exact__ a b)
+      (:: (/ (r7rs-to-float__ a) (r7rs-to-float__ b)) any))))
+;;; T6: (a+bi)/(c+di) = ((ac+bd) + (bc-ad)i) / (c^2+d^2).
+(defn r7rs-cplx-div__ [a b] : any
+  (let [ar  (r7rs-re-of__ a)
+        ai  (r7rs-im-of__ a)
+        br  (r7rs-re-of__ b)
+        bi  (r7rs-im-of__ b)
+        den (r7rs-add2__ (r7rs-mul2__ br br) (r7rs-mul2__ bi bi))]
+    (r7rs-make-rect__ (r7rs-div2__ (r7rs-add2__ (r7rs-mul2__ ar br) (r7rs-mul2__ ai bi)) den)
+                      (r7rs-div2__ (r7rs-sub2__ (r7rs-mul2__ ai br) (r7rs-mul2__ ar bi)) den))))
+;;; R10: an exact integer and an inexact real compare EXACTLY (R7RS 6.2.6
+;;; asks comparisons to be transitive): `(= 9007199254740992.0
+;;; 9007199254740993)` is #f, where converting the integer to a double made
+;;; the two equal.  r7rs-cmp-int-float__ answers -1, 0 or 1 for i against d,
+;;; and 2 when d is a NaN (every comparison false).
+(defn r7rs-cmp-int-float__ [i : int d : float] : int
+  (if (r7rs-float-nan?__ d)
+    2
+    (if (>= d 9223372036854775807.0)
+      -1
+      (if (< d -9223372036854775807.0)
+        1
+        (let [t (r7rs-float->int__ (trunc d))]
+          (if (< i t)
+            -1
+            (if (> i t)
+              1
+              (let [f (- d (r7rs-int->float__ t))]
+                (if (> f 0.0) -1 (if (< f 0.0) 1 0))))))))))
+(defn r7rs-mixed?__ [a b] : bool
+  (if (is? a int) (is? b float) (if (is? a float) (is? b int) false)))
+(defn r7rs-cmp-mixed__ [a b] : int
+  (if (is? a int)
+    (r7rs-cmp-int-float__ a b)
+    (let [c (r7rs-cmp-int-float__ b a)] (if (= c 2) 2 (- 0 c)))))
+;;; T1: a comparison with a bignum is exact too -- against a double through
+;;; the double's exact value -- so `(= (- (expt 2 1000) 1) (inexact (expt 2
+;;; 1000)))` is #f.  -1, 0 or 1, and 2 when a double is a NaN.
+(defn r7rs-cmp-big__ [a b] : int
+  (if (is? a float)
+    (let [c (r7rs-big-cmp-float-of__ b a)] (if (= c 2) 2 (- 0 c)))
+    (if (is? b float)
+      (r7rs-big-cmp-float-of__ a b)
+      (r7rs-big-cmp-of__ a b))))
+(defn r7rs-cmp-slow__ [a b] : int
+  (if (r7rs-any-cplx?__ a b)
+    (r7rs-cmp-cplx__ a b)
+    (r7rs-cmp-real__ a b)))
+;;; T6: complex numbers are equal part by part and otherwise unordered (2,
+;;; as a NaN is): `<` on a non-real is #f.
+(defn r7rs-cmp-cplx__ [a b] : int
+  (if (if (r7rs-numeq2__ (r7rs-re-of__ a) (r7rs-re-of__ b)) (r7rs-numeq2__ (r7rs-im-of__ a) (r7rs-im-of__ b)) false)
+    0
+    2))
+(defn r7rs-cmp-real__ [a b] : int
+  (if (if (r7rs-ratio? a) true (r7rs-ratio? b))
+    (r7rs-cmp-rat-any__ a b)
+    (if (r7rs-any-big?__ a b) (r7rs-cmp-big__ a b) (r7rs-cmp-mixed__ a b))))
+(defn r7rs-slow?__ [a b] : bool (if (r7rs-mixed?__ a b) true (r7rs-any-exotic?__ a b)))
+(defn r7rs-numeq2__ [a b] : bool (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) 0) (= a b)))
+(defn r7rs-lt2__ [a b] : bool (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) -1) (< a b)))
+(defn r7rs-gt2__ [a b] : bool (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) 1) (> a b)))
+(defn r7rs-le2__ [a b] : bool
+  (if (r7rs-slow?__ a b) (let [c (r7rs-cmp-slow__ a b)] (if (= c -1) true (= c 0))) (<= a b)))
+(defn r7rs-ge2__ [a b] : bool
+  (if (r7rs-slow?__ a b) (let [c (r7rs-cmp-slow__ a b)] (if (= c 1) true (= c 0))) (>= a b)))
+
+;;; The variadic procedures a bare operator names in value position.
+(defn r7rs-fold-num__ [f l acc]
+  (if (r7rs-null? l) acc (r7rs-fold-num__ f (r7rs-cdr l) (f acc (r7rs-car l)))))
+(defn r7rs-args__ [xs : (Cons any)] : any (r7rs-chain->list__ xs))
+(defn r7rs-+ [& xs : any] (r7rs-fold-num__ r7rs-add2__ (r7rs-args__ (:: xs (Cons any))) (:: 0 any)))
+(defn r7rs-* [& xs : any] (r7rs-fold-num__ r7rs-mul2__ (r7rs-args__ (:: xs (Cons any))) (:: 1 any)))
+(defn r7rs-- [x & xs : any]
+  (let [l (r7rs-args__ (:: xs (Cons any)))]
+    (if (r7rs-null? l) (r7rs-sub2__ 0 x) (r7rs-fold-num__ r7rs-sub2__ l x))))
+(defn r7rs-/ [x & xs : any]
+  (let [l (r7rs-args__ (:: xs (Cons any)))]
+    (if (r7rs-null? l) (r7rs-div2__ 1 x) (r7rs-fold-num__ r7rs-div2__ l x))))
+(defn r7rs-chain-cmp__ [f x l] : bool
+  (if (r7rs-null? l) true (if (f x (r7rs-car l)) (r7rs-chain-cmp__ f (r7rs-car l) (r7rs-cdr l)) false)))
+(defn r7rs-= [x & xs : any] : bool (r7rs-chain-cmp__ r7rs-numeq2__ x (r7rs-args__ (:: xs (Cons any)))))
+(defn r7rs-< [x & xs : any] : bool (r7rs-chain-cmp__ r7rs-lt2__ x (r7rs-args__ (:: xs (Cons any)))))
+(defn r7rs-> [x & xs : any] : bool (r7rs-chain-cmp__ r7rs-gt2__ x (r7rs-args__ (:: xs (Cons any)))))
+(defn r7rs-<= [x & xs : any] : bool (r7rs-chain-cmp__ r7rs-le2__ x (r7rs-args__ (:: xs (Cons any)))))
+(defn r7rs->= [x & xs : any] : bool (r7rs-chain-cmp__ r7rs-ge2__ x (r7rs-args__ (:: xs (Cons any)))))
+
+;;; ---- predicates, min/max, abs -------------------------------------------
+
+;;; A bignum or a ratio is never zero (a zero is an int); a bignum's sign is
+;;; its spelling's, a ratio's its numerator's.
+(defn r7rs-zero? [x] : bool
+  (if (r7rs-cplx? x)
+    (if (r7rs-zero? (r7rs-cplx-re__ x)) (r7rs-zero? (r7rs-cplx-im__ x)) false)
+    (if (is? x R7rsBig) false (if (r7rs-ratio? x) false (= x 0)))))
+(defn r7rs-positive? [x] : bool
+  (if (r7rs-cplx? x)
+    (r7rs-fail-bool__ "positive?: not a real number")
+    (if (is? x R7rsBig) (r7rs-not (r7rs-big-neg?__ x)) (if (r7rs-ratio? x) (r7rs-positive? (r7rs-ratio-num__ x)) (> x 0)))))
+(defn r7rs-negative? [x] : bool
+  (if (r7rs-cplx? x)
+    (r7rs-fail-bool__ "negative?: not a real number")
+    (if (is? x R7rsBig) (r7rs-big-neg?__ x) (if (r7rs-ratio? x) (r7rs-negative? (r7rs-ratio-num__ x)) (< x 0)))))
+;;; r7rs-int-of__ -- an integer argument that must fit int64 (an index, a
+;;; count, a character code): a bignum there is the error `who`.
+(defn r7rs-int-of__ [x who : cstr] : int
+  (if (is? x int) x (if (is? x float) (if (r7rs-integer? x) (r7rs-float->int__ x) (r7rs-fail-int__ who)) (r7rs-fail-int__ who))))
+;;; r7rs-exint-of__ -- an integer argument as an exact integer (an int or a
+;;; bignum); an inexact integer converts exactly, anything else (a ratio, T2)
+;;; is the panic `who`.  Not a raised condition: this is reachable from `=`
+;;; (through the exact comparison of a ratio and a double), and a `raise`
+;;; there makes every procedure that compares numbers effectful, which
+;;; compiles it to CPS and costs the tail-call trampoline
+;;; (tests/fixtures/r7rs-tail-calls).
+(defn r7rs-exint-of__ [x who : cstr] : any
+  (if (r7rs-exint? x) x (if (r7rs-integer? x) (r7rs-exact x) (r7rs-fail-any__ who))))
+(defn r7rs-fail-int__ [msg : cstr] : int
+  (panic msg)
+  0)
+;;; r7rs-even? -- an inexact integer is tested as a double, so a large one
+;;; (1e30, which is even) needs no int64 conversion.
+(defn r7rs-even? [x] : bool
+  (if (if (is? x float) (r7rs-integer? x) false)
+    (let [h (* (r7rs-to-float__ x) 0.5)] (= h (trunc h)))
+    (r7rs-zero? (r7rs-remainder (r7rs-exint-of__ x "even?: not an integer") 2))))
+(defn r7rs-odd? [x] : bool (if (r7rs-even? x) false true))
+(defn r7rs-abs [x] (if (r7rs-negative? x) (r7rs-sub2__ 0 x) x))
+;;; r7rs-min / r7rs-max -- inexact contagion (R7RS 6.2.6): if any argument
+;;; is inexact the result is inexact.
+(defn r7rs-min2__ [a b] (if (r7rs-lt2__ b a) b a))
+(defn r7rs-max2__ [a b] (if (r7rs-gt2__ b a) b a))
+(defn r7rs-any-inexact?__ [l] : bool
+  (if (r7rs-null? l) false (if (is? (r7rs-car l) float) true (r7rs-any-inexact?__ (r7rs-cdr l)))))
+(defn r7rs-contagion__ [r l]
+  (if (r7rs-any-inexact?__ l) (:: (r7rs-to-float__ r) any) r))
+(defn r7rs-min [x & xs : any]
+  (let [l (r7rs-args__ (:: xs (Cons any)))]
+    (r7rs-contagion__ (r7rs-fold-num__ r7rs-min2__ l x) (r7rs-cons x l))))
+(defn r7rs-max [x & xs : any]
+  (let [l (r7rs-args__ (:: xs (Cons any)))]
+    (r7rs-contagion__ (r7rs-fold-num__ r7rs-max2__ l x) (r7rs-cons x l))))
+
+;;; ---- integer division (R7RS 6.2.6) -------------------------------------
+
+;;; r7rs-idiv__ -- quotient, remainder or modulo (the bignum core's codes 3,
+;;; 4, 5) on two integers, exactly: int64 when both are ints (INT64_MIN / -1
+;;; is the one quotient that leaves int64, so -1 goes to the core), the
+;;; bignum core otherwise.
+(defn r7rs-idiv-int__ [op : int x : int y : int] : any
+  (if (= op 3)
+    (:: (/ x y) any)
+    (let [r (mod x y)]
+      (if (= op 4)
+        (:: r any)
+        (:: (if (= r 0) r (if (if (< r 0) (> y 0) (< y 0)) (+ r y) r)) any)))))
+;;; r7rs-idiv-arg__ -- T8: the message is built only on the failing path (it
+;;; was built, and leaked, on every call).
+(defn r7rs-idiv-arg__ [x who : cstr] : any
+  (if (r7rs-integer? x) (r7rs-exint-of__ x who) (r7rs-fail-any__ (r7rs-string-append2__ who ": not an integer"))))
+(defn r7rs-idiv__ [op : int a b who : cstr] : any
+  (let [x (r7rs-idiv-arg__ a who)
+        y (r7rs-idiv-arg__ b who)]
+    (if (r7rs-zero? y)
+      (r7rs-fail-any__ (r7rs-string-append2__ who ": division by zero"))
+      (if (if (r7rs-both-int?__ x y) (r7rs-not (= y -1)) false)
+        (r7rs-idiv-int__ op x y)
+        (r7rs-big2__ op x y)))))
+(defn r7rs-quotient-i__ [a b] : any (r7rs-idiv__ 3 a b "quotient"))
+(defn r7rs-remainder-i__ [a b] : any (r7rs-idiv__ 4 a b "remainder"))
+(defn r7rs-modulo-i__ [a b] : any (r7rs-idiv__ 5 a b "modulo"))
+(defn r7rs-floor-quotient-i__ [a b] : any
+  (r7rs-idiv__ 3 (r7rs-sub2__ (r7rs-exint-of__ a "floor-quotient: not an integer") (r7rs-modulo-i__ a b)) b "floor-quotient"))
+(defn r7rs-floor-remainder-i__ [a b] : any (r7rs-modulo-i__ a b))
+(defn r7rs-truncate-quotient-i__ [a b] : any (r7rs-quotient-i__ a b))
+(defn r7rs-truncate-remainder-i__ [a b] : any (r7rs-remainder-i__ a b))
+;;; The public integer divisions: R10 -- an inexact argument makes the result
+;;; inexact (R7RS 6.2.6, `(truncate/ -5.0 -2)` is 2.0 and -1.0); the `-i__`
+;;; forms above compute on the exact integers.
+(defn r7rs-idiv-result__ [r a b] : any
+  (if (if (is? a float) true (is? b float)) (:: (r7rs-to-float__ r) any) r))
+(defn r7rs-quotient [a b] : any (r7rs-idiv-result__ (r7rs-quotient-i__ a b) a b))
+(defn r7rs-remainder [a b] : any (r7rs-idiv-result__ (r7rs-remainder-i__ a b) a b))
+(defn r7rs-modulo [a b] : any (r7rs-idiv-result__ (r7rs-modulo-i__ a b) a b))
+(defn r7rs-floor-quotient [a b] : any (r7rs-idiv-result__ (r7rs-floor-quotient-i__ a b) a b))
+(defn r7rs-floor-remainder [a b] : any (r7rs-idiv-result__ (r7rs-floor-remainder-i__ a b) a b))
+(defn r7rs-truncate-quotient [a b] : any (r7rs-idiv-result__ (r7rs-truncate-quotient-i__ a b) a b))
+(defn r7rs-truncate-remainder [a b] : any (r7rs-idiv-result__ (r7rs-truncate-remainder-i__ a b) a b))
+;;; gcd and lcm on the bignum core (code 6); the answers are non-negative.
+;;; T2: every ratio operation normalizes through gcd, so two ints (INT64_MIN
+;;; aside, whose magnitude leaves int64) take Euclid's loop on int64.
+(defn r7rs-igcd__ [a : int b : int] : int (if (= b 0) (if (< a 0) (- 0 a) a) (r7rs-igcd__ b (mod a b))))
+(defn r7rs-gcd2__ [a b] : any
+  (let [x (r7rs-exint-of__ a "gcd: not an integer") y (r7rs-exint-of__ b "gcd: not an integer")]
+    (if (if (r7rs-both-int?__ x y) (if (= x -9223372036854775808) false (r7rs-not (= y -9223372036854775808))) false)
+      (:: (r7rs-igcd__ x y) any)
+      (r7rs-big2__ 6 x y))))
+(defn r7rs-gcd-go__ [l acc] : any
+  (if (r7rs-null? l) acc (r7rs-gcd-go__ (r7rs-cdr l) (r7rs-gcd2__ acc (r7rs-car l)))))
+(defn r7rs-gcd [& xs : any] : any
+  (let [l (r7rs-args__ (:: xs (Cons any)))]
+    (r7rs-contagion__ (r7rs-gcd-go__ l (:: 0 any)) l)))
+(defn r7rs-lcm2__ [a b] : any
+  (let [x (r7rs-exint-of__ a "lcm: not an integer") y (r7rs-exint-of__ b "lcm: not an integer")]
+    (if (if (r7rs-zero? x) true (r7rs-zero? y))
+      (:: 0 any)
+      (r7rs-abs (r7rs-quotient-i__ (r7rs-mul2__ x y) (r7rs-gcd2__ x y))))))
+(defn r7rs-lcm-go__ [l acc] : any
+  (if (r7rs-null? l) acc (r7rs-lcm-go__ (r7rs-cdr l) (r7rs-lcm2__ acc (r7rs-car l)))))
+(defn r7rs-lcm [& xs : any] : any
+  (let [l (r7rs-args__ (:: xs (Cons any)))]
+    (r7rs-contagion__ (r7rs-lcm-go__ l (:: 1 any)) l)))
+
+;;; ---- rounding and exactness ----------------------------------------------
+
+;;; T2: a ratio rounds exactly to an exact integer: floor is the floor
+;;; quotient of its parts (the denominator is positive), round takes ties to
+;;; even.
+(defn r7rs-rat-floor__ [x] : any (r7rs-floor-quotient-i__ (r7rs-ratio-num__ x) (r7rs-ratio-den__ x)))
+(defn r7rs-rat-round__ [x] : any
+  (let [fl (r7rs-rat-floor__ x)
+        d (r7rs-ratio-den__ x)
+        twice (r7rs-mul2__ 2 (r7rs-sub2__ (r7rs-ratio-num__ x) (r7rs-mul2__ fl d)))
+        c (r7rs-exint-cmp__ twice d)]
+    (if (= c -1) fl (if (= c 1) (r7rs-add2__ fl 1) (if (r7rs-even? fl) fl (r7rs-add2__ fl 1))))))
+(defn r7rs-floor [x] : any
+  (if (r7rs-exint? x) x (if (r7rs-ratio? x) (r7rs-rat-floor__ x) (:: (floor (r7rs-to-float__ x)) any))))
+(defn r7rs-ceiling [x] : any
+  (if (r7rs-exint? x)
+    x
+    (if (r7rs-ratio? x)
+      (r7rs-sub2__ 0 (r7rs-rat-floor__ (r7rs-sub2__ 0 x)))
+      (:: (ceil (r7rs-to-float__ x)) any))))
+(defn r7rs-truncate [x] : any
+  (if (r7rs-exint? x)
+    x
+    (if (r7rs-ratio? x)
+      (r7rs-quotient-i__ (r7rs-ratio-num__ x) (r7rs-ratio-den__ x))
+      (:: (trunc (r7rs-to-float__ x)) any))))
+;;; r7rs-round -- to the nearest integer, ties to even (rint for a double).
+(defn r7rs-round [x] : any
+  (if (r7rs-exint? x) x (if (r7rs-ratio? x) (r7rs-rat-round__ x) (:: (rint (r7rs-to-float__ x)) any))))
+;;; r7rs-exact -- a finite double's exact value: an int, a bignum at any size
+;;; (T1), or the ratio it is (T2: `(exact .5)` is 1/2; a double is a dyadic
+;;; fraction, so `(exact .3)` is 5404319552844595/18014398509481984).
+(defn r7rs-exact [x] : any
+  (if (r7rs-cplx? x)
+    (r7rs-make-rect__ (r7rs-exact-real__ (r7rs-cplx-re__ x)) (r7rs-exact-real__ (r7rs-cplx-im__ x)))
+    (r7rs-exact-real__ x)))
+(defn r7rs-exact-real__ [x] : any
+  (if (r7rs-exrat? x) x
+    (if (r7rs-finite? x)
+      (let [f (r7rs-to-float__ x)]
+        (if (if (r7rs-float-integral?__ f) (if (< f 9223372036854775808.0) (>= f -9223372036854775808.0) false) false)
+          (:: (float->int f) any)
+          (r7rs-ratio-of-str__ (r7rs-exact-of-float__ f))))
+      (r7rs-fail-any__ "exact: an infinity or NaN has no exact representation"))))
+(defn r7rs-inexact [x] : any
+  (if (is? x float)
+    x
+    (if (r7rs-cplx? x)
+      (r7rs-make-rect__ (:: (r7rs-to-float__ (r7rs-cplx-re__ x)) any) (:: (r7rs-to-float__ (r7rs-cplx-im__ x)) any))
+      (:: (r7rs-to-float__ x) any))))
+(defn r7rs-exact->inexact [x] (r7rs-inexact x))
+(defn r7rs-inexact->exact [x] (r7rs-exact x))
+;;; r7rs-numerator / r7rs-denominator -- an exact integer is its own
+;;; numerator over 1, and a ratio (T2) has its parts.  R10: an inexact real
+;;; is a dyadic fraction, so its lowest terms are found by doubling until it
+;;; is integral -- (numerator 5.5) is 11.0 and (denominator 5.5) 2.0 -- with
+;;; the answer inexact (R7RS 6.2.6).
+(defn r7rs-num-den__ [x : float d : float] : any
+  (if (= x (trunc x)) (R7rsPair (:: x any) (:: d any)) (r7rs-num-den__ (* x 2.0) (* d 2.0))))
+(defn r7rs-num-den-of__ [x] : any
+  (let [f (r7rs-to-float__ x)]
+    (if (if (r7rs-nan? x) true (r7rs-infinite? x)) (R7rsPair x (:: 1.0 any)) (r7rs-num-den__ f 1.0))))
+(defn r7rs-numerator [x] : any (if (r7rs-exrat? x) (r7rs-num-of__ x) (r7rs-car (r7rs-num-den-of__ x))))
+(defn r7rs-denominator [x] : any (if (r7rs-exrat? x) (r7rs-den-of__ x) (r7rs-cdr (r7rs-num-den-of__ x))))
+
+;;; ---- powers, roots, transcendental --------------------------------------
+
+(defn r7rs-square [x] (r7rs-mul2__ x x))
+;;; r7rs-isqrt__ -- floor of the square root of a non-negative exact
+;;; integer, exact (the bignum core's code 8; Newton's iteration).
+(defn r7rs-isqrt__ [n] : any (r7rs-big2__ 8 n (:: 0 any)))
+;;; r7rs-sqrt -- exact when the argument is an exact perfect square (T2: or
+;;; a ratio of two, `(sqrt 4/9)` is 2/3), else inexact.  T6: a negative real
+;;; has an imaginary root, exact when its negation's root is (`(sqrt -4)` is
+;;; +2i), and a complex argument takes the principal root.
+(defn r7rs-exact-sqrt?__ [n] : bool
+  (let [r (r7rs-isqrt__ n)] (r7rs-numeq2__ (r7rs-mul2__ r r) n)))
+(defn r7rs-sqrt [x] : any
+  (if (r7rs-cplx? x)
+    (r7rs-cplx-sqrt__ (r7rs-cf-re__ x) (r7rs-cf-im__ x))
+    (if (r7rs-negative? x)
+      (r7rs-make-rect__ (if (r7rs-exrat? x) (:: 0 any) (:: 0.0 any)) (r7rs-sqrt (r7rs-sub2__ 0 x)))
+      (if (r7rs-exrat? x)
+        (if (if (r7rs-exact-sqrt?__ (r7rs-num-of__ x)) (r7rs-exact-sqrt?__ (r7rs-den-of__ x)) false)
+          (r7rs-make-ratio__ (r7rs-isqrt__ (r7rs-num-of__ x)) (r7rs-isqrt__ (r7rs-den-of__ x)))
+          (:: (sqrt (r7rs-to-float__ x)) any))
+        (:: (sqrt (r7rs-to-float__ x)) any)))))
+
+;;; ---- complex transcendental (T6) -----------------------------------------
+;;;
+;;; On doubles, part by part: r7rs-cf__ builds a+bi from two of them.  A
+;;; complex answer is inexact (R7RS 6.2.6 lets a transcendental function be).
+(defn r7rs-cf-re__ [z] : float (r7rs-to-float__ (r7rs-re-of__ z)))
+(defn r7rs-cf-im__ [z] : float (r7rs-to-float__ (r7rs-im-of__ z)))
+(defn r7rs-cf__ [a : float b : float] : any (r7rs-make-rect__ (:: a any) (:: b any)))
+(defn r7rs-cosh__ [x : float] : float (* 0.5 (+ (exp x) (exp (- 0.0 x)))))
+(defn r7rs-sinh__ [x : float] : float (* 0.5 (- (exp x) (exp (- 0.0 x)))))
+;;; r7rs-cplx-sqrt__ -- the principal root of a+bi: the real part is never
+;;; negative, and the imaginary part takes b's sign (-0.0 counts as +, so
+;;; `(sqrt -1.0-0.0i)` is +1.0i, as the conformance suite has it).
+(defn r7rs-cplx-sqrt__ [a : float b : float] : any
+  (let [m (sqrt (+ (* a a) (* b b)))
+        r (sqrt (* 0.5 (+ m a)))
+        i (sqrt (* 0.5 (- m a)))]
+    (r7rs-cf__ r (if (< b 0.0) (- 0.0 i) i))))
+(defn r7rs-cplx-exp__ [z] : any
+  (let [e (exp (r7rs-cf-re__ z)) b (r7rs-cf-im__ z)]
+    (r7rs-cf__ (* e (cos b)) (* e (sin b)))))
+;;; r7rs-cplx-log__ -- log|z| + i arg z, the principal branch; a negative real
+;;; lands here too, with arg pi.
+(defn r7rs-cplx-log__ [z] : any
+  (let [a (r7rs-cf-re__ z) b (r7rs-cf-im__ z)]
+    (r7rs-cf__ (log (sqrt (+ (* a a) (* b b)))) (atan2 b a))))
+(defn r7rs-cplx-sin__ [z] : any
+  (let [a (r7rs-cf-re__ z) b (r7rs-cf-im__ z)]
+    (r7rs-cf__ (* (sin a) (r7rs-cosh__ b)) (* (cos a) (r7rs-sinh__ b)))))
+(defn r7rs-cplx-cos__ [z] : any
+  (let [a (r7rs-cf-re__ z) b (r7rs-cf-im__ z)]
+    (r7rs-cf__ (* (cos a) (r7rs-cosh__ b)) (- 0.0 (* (sin a) (r7rs-sinh__ b))))))
+;;; asin z = -i log(iz + sqrt(1 - z^2)); acos z = pi/2 - asin z;
+;;; atan z = (log(1 + iz) - log(1 - iz)) / 2i.
+(defn r7rs-cplx-asin__ [z] : any
+  (let [iz (r7rs-mul2__ (r7rs-cf__ 0.0 1.0) z)
+        w  (r7rs-cplx-log__ (r7rs-add2__ iz (r7rs-sqrt (r7rs-sub2__ 1 (r7rs-mul2__ z z)))))]
+    (r7rs-mul2__ (r7rs-cf__ 0.0 -1.0) w)))
+(defn r7rs-cplx-atan__ [z] : any
+  (let [iz (r7rs-mul2__ (r7rs-cf__ 0.0 1.0) z)]
+    (r7rs-div2__ (r7rs-sub2__ (r7rs-cplx-log__ (r7rs-add2__ 1 iz)) (r7rs-cplx-log__ (r7rs-sub2__ 1 iz)))
+                 (r7rs-cf__ 0.0 2.0))))
+
+;;; ---- number <-> string ---------------------------------------------------
+
+(defn r7rs-int->string-radix__ [x : int radix : int] : cstr
+  ```c
+  char *r = (char *)malloc(80);
+  if (radix < 2 || radix > 36) { snprintf(r, 80, "%lld", (long long)x); return r; }
+  char buf[72]; int i = 71; buf[i] = 0;
+  uint64_t u = x < 0 ? (uint64_t)0 - (uint64_t)x : (uint64_t)x;
+  if (u == 0) buf[--i] = '0';
+  while (u) { int d = (int)(u % (uint64_t)radix); buf[--i] = (char)(d < 10 ? '0' + d : 'a' + d - 10); u /= (uint64_t)radix; }
+  if (x < 0) buf[--i] = '-';
+  snprintf(r, 80, "%s", buf + i);
+  return r;
+  ```)
+(defn r7rs-radix-of__ [xs : (Cons any) who : cstr] : int
+  (if (tnil? xs) 10
+    (let [r (r7rs-int-of__ (.head xs) "radix must be an exact integer")]
+      (if (if (= r 2) true (if (= r 8) true (if (= r 10) true (= r 16))))
+        r
+        (r7rs-fail-int__ who)))))
+(defn r7rs-number->string [x & xs : any] : cstr
+  (let [radix (r7rs-radix-of__ (:: xs (Cons any)) "number->string: radix must be 2, 8, 10 or 16")]
+    (if (is? x int)
+      (r7rs-int->string-radix__ x radix)
+      (if (r7rs-cplx? x)
+        (r7rs-cplx->string__ x radix)
+        (if (is? x R7rsBig)
+          (r7rs-big-radix__ (r7rs-big-digits__ x) radix)
+          (if (r7rs-ratio? x)
+            (r7rs-join-fresh__ (r7rs-number->string (r7rs-ratio-num__ x) radix)
+                               "/"
+                               (r7rs-number->string (r7rs-ratio-den__ x) radix))
+            (if (= radix 10)
+              (r7rs-float->string__ (r7rs-to-float__ x))
+              (r7rs-fail-cstr__ "number->string: an inexact number takes radix 10 only"))))))))
+;;; r7rs-cplx->string__ -- T6: `<re><sign><im>i`, the imaginary part signed
+;;; ("+inf.0" and "-2" already are).  As chibi writes it, an exact-zero real
+;;; part is left out and an exact unit imaginary part is bare: `+2i`, `1-i`,
+;;; `+i`.  An inexact zero real part stays, so 0.0+1.0i reads back inexact.
+(defn r7rs-cplx->string__ [z radix : int] : cstr
+  (let [re (r7rs-cplx-re__ z)
+        ip (r7rs-cplx-im-spelling__ (r7rs-cplx-im__ z) radix)]
+    (if (r7rs-exact-zero?__ re)
+      ip
+      (r7rs-join-fresh__ (r7rs-number->string re radix) "" ip))))
+;;; r7rs-cplx-im-spelling__ -- the signed imaginary part and its `i`, fresh.
+(defn r7rs-cplx-im-spelling__ [im radix : int] : cstr
+  (if (r7rs-exact-unit?__ im 1)
+    (r7rs-string-append2__ "+" "i")
+    (if (r7rs-exact-unit?__ im -1)
+      (r7rs-string-append2__ "-" "i")
+      (let [t (r7rs-number->string im radix)
+            c (r7rs-string-ref-code__ t 0)
+            r (if (if (= c 43) true (= c 45))
+                (r7rs-string-append2__ t "i")
+                (let [u (r7rs-string-append2__ t "i")
+                      v (r7rs-string-append2__ "+" u)]
+                  (r7rs-cstr-free__ u)
+                  v))]
+        (r7rs-cstr-free__ t)
+        r))))
+;;; r7rs-join-fresh__ -- T8: a ++ sep ++ b, freeing the fresh a and b (sep is
+;;; a literal).
+(defn r7rs-join-fresh__ [a : cstr sep : cstr b : cstr] : cstr
+  (let [t (r7rs-string-append2__ a sep)
+        r (r7rs-string-append2__ t b)]
+    (r7rs-cstr-free__ a)
+    (r7rs-cstr-free__ t)
+    (r7rs-cstr-free__ b)
+    r))
+(defn r7rs-exact-unit?__ [x v : int] : bool (if (is? x int) (= x v) false))
+(defn r7rs-fail-cstr__ [msg : cstr] : cstr
+  (panic msg)
+  "")
+;;; r7rs-number-of__ -- internal: T0 -- s read as a number in radix, through
+;;; the one R7RS number parser (stdlib/r7rs/numsyntax.tur, the source reader's
+;;; too): the number, #f when s is not number syntax, and an error a program
+;;; can `guard` -- `who` and the reason -- when s IS a number the tower cannot
+;;; hold.  A long integer is a bignum (T1), `1/2` a ratio (T2) and `1+2i` a
+;;; complex number (T6).  Never a different number.
+(defn r7rs-number-of__ [s : cstr radix : int who : cstr] : any
+  (let [k (r7rs-numsyn-kind__ s radix)]
+    (if (= k 1)
+      (:: (r7rs-numsyn-int__ s radix) any)
+      (if (= k 2)
+        (:: (r7rs-numsyn-float__ s radix) any)
+        (if (= k 3)
+          (r7rs-signal__ (r7rs-string-append2__ who
+                                                (r7rs-string-append2__ s
+                                                                       (r7rs-string-append2__ "`: " (r7rs-numsyn-why__ s radix)))))
+          (if (= k 4)
+            (r7rs-big-norm__ (r7rs-numsyn-big__ s radix))
+            (if (= k 5)
+              (r7rs-ratio-of-str__ (r7rs-numsyn-big__ s radix))
+              (if (= k 6)
+                (r7rs-complex-of-str__ (r7rs-numsyn-big__ s radix))
+                (:: false any)))))))))
+;;; r7rs-number-syntax?__ -- internal: s is number syntax at all, refused or
+;;; not (write bars such a symbol: '|1/2|).
+(defn r7rs-number-syntax?__ [s : cstr] : bool (> (r7rs-numsyn-kind__ s 10) 0))
+;;; r7rs-string->number -- #f when the string is not a number in the radix.
+(defn r7rs-string->number [s0 & xs : any]
+  (let [radix (r7rs-radix-of__ (:: xs (Cons any)) "string->number: radix must be 2, 8, 10 or 16")
+        s (r7rs-str__ s0)]
+    (r7rs-number-of__ s radix "string->number: `")))
+
+;;; ---- characters --------------------------------------------------------
+
+;;; r7rs-char__ -- the reader's constructor: `#\a` reads as (r7rs-char__ 97).
+(defn r7rs-char__ [c : int] : R7rsChar (:: c R7rsChar))
+(defn r7rs-char->integer [c : R7rsChar] : int (:: c :int))
+(defn r7rs-integer->char [n : int] : R7rsChar (:: n R7rsChar))
+(defn r7rs-char=2__ [a : R7rsChar b : R7rsChar] : bool (= (:: a :int) (:: b :int)))
+(defn r7rs-char<2__ [a : R7rsChar b : R7rsChar] : bool (< (:: a :int) (:: b :int)))
+(defn r7rs-char>2__ [a : R7rsChar b : R7rsChar] : bool (> (:: a :int) (:: b :int)))
+(defn r7rs-char<=2__ [a : R7rsChar b : R7rsChar] : bool (<= (:: a :int) (:: b :int)))
+(defn r7rs-char>=2__ [a : R7rsChar b : R7rsChar] : bool (>= (:: a :int) (:: b :int)))
+;;; The char comparisons take two or more arguments (R7: they were binary).
+(defn r7rs-char=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-char<? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char<2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-char>? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char>2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-char<=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char<=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-char>=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char>=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+;;; (scheme char): ASCII answers inline, everything else from the Unicode
+;;; tables of stdlib/r7rs/unicode.tur (R10; generated, see
+;;; tools/gen-r7rs-unicode.py).
+(defn r7rs-char-upcase [c : R7rsChar] : R7rsChar
+  (let [n (:: c :int)]
+    (if (< n 128)
+      (if (if (>= n 97) (<= n 122) false) (:: (- n 32) R7rsChar) c)
+      (:: (r7rs-uc-map__ n 0) R7rsChar))))
+(defn r7rs-char-downcase [c : R7rsChar] : R7rsChar
+  (let [n (:: c :int)]
+    (if (< n 128)
+      (if (if (>= n 65) (<= n 90) false) (:: (+ n 32) R7rsChar) c)
+      (:: (r7rs-uc-map__ n 1) R7rsChar))))
+(defn r7rs-char-alphabetic? [c : R7rsChar] : bool
+  (let [n (:: c :int)]
+    (if (< n 128)
+      (if (if (>= n 65) (<= n 90) false) true (if (>= n 97) (<= n 122) false))
+      (= (r7rs-uc-prop__ n 0) 1))))
+(defn r7rs-char-numeric? [c : R7rsChar] : bool
+  (let [n (:: c :int)]
+    (if (< n 128) (if (>= n 48) (<= n 57) false) (>= (r7rs-uc-prop__ n 4) 0))))
+(defn r7rs-char-whitespace? [c : R7rsChar] : bool
+  (let [n (:: c :int)]
+    (if (< n 128)
+      (if (= n 32) true (if (= n 9) true (if (= n 10) true (if (= n 13) true (if (= n 12) true (= n 11))))))
+      (= (r7rs-uc-prop__ n 3) 1))))
+
+;;; ---- strings: the byte-level primitives (inline C with interpreter twins
+;;; in interpreter_natives.c) ---------------------------------------------------
+;;;
+;;; T3: these count and cut BYTES of a cstr.  The prelude uses them on text it
+;;; built itself (tokens, escapes, number spellings); a Scheme program's
+;;; strings go through the character-level procedures of the T3 section below.
+
+;;; r7rs-blen__ -- a cstr's length in bytes.
+(defn r7rs-blen__ [s : cstr] : int
+  ```c
+  return (int64_t)strlen(s);
+  ```)
+;;; r7rs-utf8-count__ -- T3: the number of characters in UTF-8 text.
+(defn r7rs-utf8-count__ [s : cstr] : int
+  ```c
+  int64_t c = 0;
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) if ((*p & 0xC0) != 0x80) c++;
+  return c;
+  ```)
+;;; r7rs-utf8-at__ -- T3: the character at byte offset off of UTF-8 text and
+;;; its width, packed as scalar * 8 + width (a stray byte is itself, width 1).
+(defn r7rs-utf8-at__ [s : cstr off : int] : int
+  ```c
+  const unsigned char *p = (const unsigned char *)s + off;
+  int w = *p < 0xC0 ? 1 : *p < 0xE0 ? 2 : *p < 0xF0 ? 3 : 4;
+  uint32_t cp = w == 1 ? *p : w == 2 ? (*p & 0x1Fu) : w == 3 ? (*p & 0x0Fu) : (*p & 0x07u);
+  int k = 1;
+  for (; k < w && p[k]; k++) cp = (cp << 6) | (p[k] & 0x3Fu);
+  return (int64_t)cp * 8 + k;
+  ```)
+;;; r7rs-utf8-ref__ -- T3: the scalar value of the i-th character of UTF-8
+;;; text (a scan from the start: a literal is short, and a program that
+;;; indexes a long string builds a mutable one).
+(defn r7rs-utf8-ref__ [s : cstr i : int] : int
+  ```c
+  const unsigned char *p = (const unsigned char *)s;
+  int64_t k = 0;
+  while (i >= 0 && *p) {
+    int w = *p < 0xC0 ? 1 : *p < 0xE0 ? 2 : *p < 0xF0 ? 3 : 4;
+    if (k == i) {
+      uint32_t cp = w == 1 ? *p : w == 2 ? (*p & 0x1Fu) : w == 3 ? (*p & 0x0Fu) : (*p & 0x07u);
+      for (int j = 1; j < w && p[j]; j++) cp = (cp << 6) | (p[j] & 0x3Fu);
+      return (int64_t)cp;
+    }
+    for (int j = 0; j < w && *p; j++) p++;
+    k++;
+  }
+  tur_panic("string-ref: index out of range");
+  return 0;
+  ```)
+(defn r7rs-string-ref-code__ [s : cstr i : int] : int
+  ```c
+  if (i < 0 || (size_t)i >= strlen(s)) tur_panic("string-ref: index out of range");
+  return (int64_t)(unsigned char)s[i];
+  ```)
+;;; r7rs-cstr-free__ -- T8: release a scratch string the caller made and no
+;;; value holds (a spelling already copied into a port buffer, a decimal
+;;; spelling the bignum core has read).  Never a string a Scheme value owns.
+(defn r7rs-cstr-free__ [s : cstr] : nil
+  ```c
+  free((void *)s);
+  ```)
+(defn r7rs-string-append2__ [a : cstr b : cstr] : cstr
+  ```c
+  size_t la = strlen(a), lb = strlen(b);
+  char *r = (char *)malloc(la + lb + 1);
+  memcpy(r, a, la); memcpy(r + la, b, lb + 1);
+  return r;
+  ```)
+(defn r7rs-bsubstring__ [s : cstr start : int end : int] : cstr
+  ```c
+  size_t n = strlen(s);
+  if (start < 0 || end < start || (size_t)end > n) tur_panic("substring: range out of bounds");
+  char *r = (char *)malloc((size_t)(end - start) + 1);
+  memcpy(r, s + start, (size_t)(end - start)); r[end - start] = 0;
+  return r;
+  ```)
+(defn r7rs-cstr<__ [a : cstr b : cstr] : bool
+  ```c
+  return strcmp(a, b) < 0;
+  ```)
+(defn r7rs-string-of-code__ [c : int] : cstr
+  ```c
+  char *r = (char *)malloc(5); int n = 0;
+  uint32_t cp = (uint32_t)c;
+  if (cp < 0x80) r[n++] = (char)cp;
+  else if (cp < 0x800) { r[n++] = (char)(0xC0 | (cp >> 6)); r[n++] = (char)(0x80 | (cp & 0x3F)); }
+  else if (cp < 0x10000) { r[n++] = (char)(0xE0 | (cp >> 12)); r[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); r[n++] = (char)(0x80 | (cp & 0x3F)); }
+  else { r[n++] = (char)(0xF0 | (cp >> 18)); r[n++] = (char)(0x80 | ((cp >> 12) & 0x3F)); r[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); r[n++] = (char)(0x80 | (cp & 0x3F)); }
+  r[n] = 0;
+  return r;
+  ```)
+(defn r7rs-int->string__ [x : int] : cstr
+  ```c
+  char *r = (char *)malloc(32); snprintf(r, 32, "%lld", (long long)x); return r;
+  ```)
+(defn r7rs-float->string__ [x : float] : cstr
+  ```c
+  /* The one spelling of a float (R7RS 6.2.7 / 7.1.1): +nan.0, +inf.0 and
+   * -inf.0 by name, the shortest of %.15g / %.17g that reads back to the
+   * same double, and `.0` on an integral value so 7.0 never prints as 7.
+   * The interpreter twin is r7rs_fmt_double in interpreter_natives.c. */
+  char *r = (char *)malloc(48);
+  if (x != x) { snprintf(r, 48, "+nan.0"); return r; }
+  if (__builtin_isinf(x)) { snprintf(r, 48, "%s", x > 0 ? "+inf.0" : "-inf.0"); return r; }
+  snprintf(r, 48, "%.15g", x);
+  if (strtod(r, NULL) != x) snprintf(r, 48, "%.16g", x);
+  if (strtod(r, NULL) != x) snprintf(r, 48, "%.17g", x);
+  { /* 1e+21 -> 1e21, 1e-07 -> 1e-7: R7RS spells the exponent bare. */
+    char *e = strchr(r, 'e');
+    if (e) { char *d = e + 1; char sign = 0; if (*d == '+' || *d == '-') { sign = *d; d++; }
+             while (*d == '0' && d[1]) d++;
+             char tail[32]; snprintf(tail, sizeof tail, "%s", d);
+             if (sign == '-') snprintf(e + 1, 48 - (size_t)(e + 1 - r), "-%s", tail);
+             else snprintf(e + 1, 48 - (size_t)(e + 1 - r), "%s", tail); }
+  }
+  if (!strpbrk(r, ".eE")) { size_t l = strlen(r); r[l] = '.'; r[l + 1] = '0'; r[l + 2] = 0; }
+  return r;
+  ```)
+
+;;; r7rs-range-start__ / r7rs-range-end__ -- R7: the optional [start [end]]
+;;; tail most sequence procedures take, defaulting to 0 and len.
+(defn r7rs-range-start__ [r] : int (if (r7rs-null? r) 0 (r7rs-int-of__ (r7rs-car r) "range start must be an exact integer")))
+(defn r7rs-range-end__ [r len : int] : int
+  (if (r7rs-null? r) len (if (r7rs-null? (r7rs-cdr r)) len (r7rs-int-of__ (r7rs-car (r7rs-cdr r)) "range end must be an exact integer"))))
+(defn r7rs-range-check__ [who : cstr start : int end : int len : int] : nil
+  (if (if (>= start 0) (if (<= start end) (<= end len) false) false)
+    nil
+    (panic "sequence range out of bounds (start must be <= end <= length)")))
+
+;;; ---- strings (T3): characters, and mutable ones ---------------------------
+;;;
+;;; A Scheme string is one of two things.  A literal -- and a string from
+;;; Turmeric, `symbol->string`, `number->string`, the case procedures,
+;;; `read` -- is a `cstr`: immutable UTF-8, which R7RS allows of a literal.
+;;; A string a procedure newly allocates -- `make-string`, `string`,
+;;; `string-copy`, `substring`, `string-append`, `list->string`,
+;;; `vector->string`, `string-map`, `utf8->string`, `read-string` -- is an
+;;; `R7rsString`: its characters as code points in a vector, so `string-ref`
+;;; and `string-set!` are constant time.  Every string procedure takes
+;;; either and counts characters, never bytes: `(string-length "\x3BB;")` is
+;;; 1.  Turmeric's `cstr` is unchanged (9.1): an R7rsString crosses into a
+;;; Turmeric `cstr` parameter as a fresh UTF-8 copy (the elaborator's Scheme
+;;; seam calls r7rs-str__, elab_call.c), and mutating a `cstr` string is the
+;;; named error.  Tests go through r7rs-mstring?, not a bare `is?`, which
+;;; would narrow the value to the (unique) heap struct.
+(defstruct R7rsString :heap [cps : (Vec int)])
+(defn r7rs-mstring? [x] : bool (is? x R7rsString))
+(defn r7rs-mstring-cps__ [s : R7rsString] : (Vec int) (.cps s))
+(defn r7rs-mk-string__ [v : (Vec int)] : any (:: (R7rsString v) any))
+;;; r7rs-cps-of-cstr__ -- UTF-8 text's characters as a fresh code-point
+;;; vector.  A cstr is walked by byte offset (r7rs-utf8-at__ answers the
+;;; character there and its width); a port buffer would do the decoding too,
+;;; but an R7rsIo is a unique handle, and a loop that reads from it and
+;;; passes it on uses it twice where a Turmeric entry checks ownership.
+(defn r7rs-cps-go__ [s : cstr off : int n : int v : (Vec int)] : (Vec int)
+  (if (>= off n)
+    v
+    (let [x (r7rs-utf8-at__ s off)]
+      (vec-push! v (/ x 8))
+      (r7rs-cps-go__ s (+ off (mod x 8)) n v))))
+(defn r7rs-cps-of-cstr__ [s : cstr] : (Vec int)
+  (r7rs-cps-go__ s 0 (r7rs-blen__ s) (:: (vec-new) (Vec int))))
+;;; r7rs-cps__ -- any string's characters: an R7rsString's own vector (read
+;;; it, do not keep it), a cstr's decoded afresh.
+(defn r7rs-cps__ [s] : (Vec int) (if (r7rs-mstring? s) (r7rs-mstring-cps__ s) (r7rs-cps-of-cstr__ s)))
+;;; r7rs-cps->cstr__ -- characters [a, b) of a code-point vector as UTF-8,
+;;; by halves (each byte is copied log n times, never n).
+;;; r7rs-str__ -- any string as a cstr: a cstr is itself, an R7rsString is
+;;; encoded afresh.  The conversion at every seam: the prelude's own C and
+;;; ports take cstr, and the elaborator calls it where a Scheme call passes a
+;;; string to a Turmeric `cstr` parameter.
+(defn r7rs-str__ [x] : cstr
+  (if (r7rs-mstring? x) (let [v (r7rs-mstring-cps__ x)] (r7rs-cps->cstr__ v 0 (vec-len v))) x))
+;;; r7rs-cps-range__ -- characters [a, b) of a vector as a fresh vector.
+(defn r7rs-cps-range-go__ [v : (Vec int) i : int end : int out : (Vec int)] : (Vec int)
+  (if (>= i end) out (do (vec-push! out (vec-get v i)) (r7rs-cps-range-go__ v (+ i 1) end out))))
+(defn r7rs-cps-range__ [v : (Vec int) a : int b : int] : (Vec int)
+  (r7rs-cps-range-go__ v a b (:: (vec-new) (Vec int))))
+;;; r7rs-immutable__ -- the named error for mutating a cstr-backed string.
+(defn r7rs-immutable__ [who : cstr] : nil
+  (panic (r7rs-string-append2__ who ": this string is immutable -- a literal, or a string from symbol->string, number->string, read or Turmeric (R7RS 6.7: it is an error to mutate it); string-copy it first")))
+(defn r7rs-fail-char__ [msg : cstr] : R7rsChar (:: (r7rs-fail-int__ msg) R7rsChar))
+
+(defn r7rs-string-length [s] : int
+  (if (r7rs-mstring? s) (vec-len (r7rs-mstring-cps__ s)) (r7rs-utf8-count__ s)))
+(defn r7rs-string-ref [s i : int] : R7rsChar
+  (if (r7rs-mstring? s)
+    (let [v (r7rs-mstring-cps__ s)]
+      (if (if (>= i 0) (< i (vec-len v)) false) (:: (vec-get v i) R7rsChar) (r7rs-fail-char__ "string-ref: index out of range")))
+    (:: (r7rs-utf8-ref__ s i) R7rsChar)))
+;;; r7rs-string-set! / r7rs-string-fill! / r7rs-string-copy! -- T3: the
+;;; mutators, on an R7rsString; a cstr-backed string is the named error.
+(defn r7rs-string-set! [s i : int c : R7rsChar] : nil
+  (if (r7rs-mstring? s)
+    (let [v (r7rs-mstring-cps__ s)]
+      (if (if (>= i 0) (< i (vec-len v)) false)
+        (vec-set! v i (r7rs-char-code__ c))
+        (panic "string-set!: index out of range")))
+    (r7rs-immutable__ "string-set!")))
+(defn r7rs-fill-go-lp__ [v : (Vec int) i : int end : int c : int] : bool
+  (if (>= i end) true (do (vec-set! v i c) (r7rs-fill-go-lp__ v (+ i 1) end c))))
+(defn r7rs-fill-go__ [v : (Vec int) i : int end : int c : int] : nil (r7rs-fill-go-lp__ v i end c) nil)
+(defn r7rs-string-fill! [s c : R7rsChar & r : any] : nil
+  (if (r7rs-mstring? s)
+    (let [v (r7rs-mstring-cps__ s)
+          rl (r7rs-chain->list__ (:: r (Cons any)))
+          a (r7rs-range-start__ rl)
+          b (r7rs-range-end__ rl (vec-len v))]
+      (r7rs-range-check__ "string-fill!" a b (vec-len v))
+      (r7rs-fill-go__ v a b (r7rs-char-code__ c)))
+    (r7rs-immutable__ "string-fill!")))
+;;; string-copy! copies front to back when the destination starts at or
+;;; before the source and back to front otherwise, so a copy within one
+;;; string is right when the ranges overlap (R7RS 6.7).
+(defn r7rs-copy-fwd-lp__ [dst : (Vec int) at : int src : (Vec int) i : int end : int] : bool
+  (if (>= i end) true (do (vec-set! dst at (vec-get src i)) (r7rs-copy-fwd-lp__ dst (+ at 1) src (+ i 1) end))))
+(defn r7rs-copy-fwd__ [dst : (Vec int) at : int src : (Vec int) i : int end : int] : nil (r7rs-copy-fwd-lp__ dst at src i end) nil)
+(defn r7rs-copy-bwd-lp__ [dst : (Vec int) at : int src : (Vec int) start : int i : int] : bool
+  (if (< i start) true (do (vec-set! dst (+ at (- i start)) (vec-get src i)) (r7rs-copy-bwd-lp__ dst at src start (- i 1)))))
+(defn r7rs-copy-bwd__ [dst : (Vec int) at : int src : (Vec int) start : int i : int] : nil (r7rs-copy-bwd-lp__ dst at src start i) nil)
+(defn r7rs-string-copy! [to at : int from & r : any] : nil
+  (if (r7rs-mstring? to)
+    (let [dst (r7rs-mstring-cps__ to)
+          src (r7rs-cps__ from)
+          rl (r7rs-chain->list__ (:: r (Cons any)))
+          a (r7rs-range-start__ rl)
+          b (r7rs-range-end__ rl (vec-len src))]
+      (r7rs-range-check__ "string-copy!" a b (vec-len src))
+      (r7rs-range-check__ "string-copy!" at (+ at (- b a)) (vec-len dst))
+      (if (<= at a) (r7rs-copy-fwd__ dst at src a b) (r7rs-copy-bwd__ dst at src a (- b 1))))
+    (r7rs-immutable__ "string-copy!")))
+(defn r7rs-string-append-go__ [c : (Cons any) out : (Vec int)] : (Vec int)
+  (if (tnil? c)
+    out
+    (let [v (r7rs-cps__ (.head c))]
+      (r7rs-cps-range-go__ v 0 (vec-len v) out)
+      (r7rs-string-append-go__ (.tail c) out))))
+;;; r7rs-string-append -- a new (mutable) string.
+(defn r7rs-string-append [& xs : any] : any
+  (r7rs-mk-string__ (r7rs-string-append-go__ (:: xs (Cons any)) (:: (vec-new) (Vec int)))))
+;;; r7rs-string-copy / r7rs-substring -- a new (mutable) string of the
+;;; characters [start, end).
+(defn r7rs-string-copy [s & r : any] : any
+  (let [v (r7rs-cps__ s)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "string-copy" a b (vec-len v))
+    (r7rs-mk-string__ (r7rs-cps-range__ v a b))))
+(defn r7rs-substring [s start : int end : int] : any
+  (let [v (r7rs-cps__ s)]
+    (r7rs-range-check__ "substring" start end (vec-len v))
+    (r7rs-mk-string__ (r7rs-cps-range__ v start end))))
+;;; The string comparisons take two or more arguments (R7).  Characters
+;;; compare by scalar value, which is UTF-8's byte order, so both sides are
+;;; compared as UTF-8.
+(defn r7rs-string<2__ [a b] : bool (r7rs-cstr<__ (r7rs-str__ a) (r7rs-str__ b)))
+(defn r7rs-string=2__ [a b] : bool
+  (let [x (r7rs-str__ a) y (r7rs-str__ b)] (if (r7rs-cstr<__ x y) false (r7rs-not (r7rs-cstr<__ y x)))))
+(defn r7rs-string>2__ [a b] : bool (r7rs-string<2__ b a))
+(defn r7rs-string<=2__ [a b] : bool (not (r7rs-string<2__ b a)))
+(defn r7rs-string>=2__ [a b] : bool (not (r7rs-string<2__ a b)))
+(defn r7rs-string=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-string<? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string<2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-string>? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string>2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-string<=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string<=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-string>=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string>=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-string->symbol [s] : Sym (str->sym (r7rs-str__ s)))
+(defn r7rs-symbol->string [s : Sym] : cstr (sym->str s))
+;;; T8: from the end back, consing onto acc -- a loop (see r7rs-snoc__).
+(defn r7rs-string->list-acc__ [v : (Vec int) i : int j : int acc] : any
+  (if (< j i) acc (r7rs-string->list-acc__ v i (- j 1) (R7rsPair (:: (r7rs-char__ (vec-get v j)) any) acc))))
+(defn r7rs-string->list-go__ [v : (Vec int) i : int end : int] : any
+  (r7rs-string->list-acc__ v i (- end 1) r7rs-null-value__))
+(defn r7rs-string->list [s & r : any] : any
+  (let [v (r7rs-cps__ s)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "string->list" a b (vec-len v))
+    (r7rs-string->list-go__ v a b)))
+(defn r7rs-list->string-go__ [l out : (Vec int)] : (Vec int)
+  (if (r7rs-null? l)
+    out
+    (do (vec-push! out (r7rs-char->integer (r7rs-car l)))
+        (r7rs-list->string-go__ (r7rs-cdr l) out))))
+;;; r7rs-list->string -- a new (mutable) string of the chars.
+(defn r7rs-list->string [l] : any (r7rs-mk-string__ (r7rs-list->string-go__ l (:: (vec-new) (Vec int)))))
+
+;;; ---- vectors and bytevectors -------------------------------------------
+
+(defn r7rs-vector-from-chain__ [c : (Cons any) v : (Vec any)] : (Vec any)
+  (if (tnil? c) v (do (vec-push! v (.head c)) (r7rs-vector-from-chain__ (.tail c) v))))
+(defn r7rs-vector [& xs : any] : (Vec any)
+  (r7rs-vector-from-chain__ (:: xs (Cons any)) (:: (vec-new) (Vec any))))
+(defn r7rs-make-vector-go__ [n : int fill v : (Vec any)] : (Vec any)
+  (if (<= n 0) v (do (vec-push! v fill) (r7rs-make-vector-go__ (- n 1) fill v))))
+(defn r7rs-make-vector [n : int & fill : any] : (Vec any)
+  (let [fl (r7rs-chain->list__ (:: fill (Cons any)))]
+    (r7rs-make-vector-go__ n (if (r7rs-null? fl) (:: false any) (r7rs-car fl)) (:: (vec-new) (Vec any)))))
+(defn r7rs-vector-ref [v : (Vec any) i : int] : any (vec-get v i))
+(defn r7rs-vector-set! [v : (Vec any) i : int x] : nil (vec-set! v i x))
+(defn r7rs-vector-length [v : (Vec any)] : int (vec-len v))
+(defn r7rs-vector->list-acc__ [v : (Vec any) i : int j : int acc] : any
+  (if (< j i) acc (r7rs-vector->list-acc__ v i (- j 1) (R7rsPair (vec-get v j) acc))))
+(defn r7rs-vector->list-go__ [v : (Vec any) i : int end : int] : any
+  (r7rs-vector->list-acc__ v i (- end 1) r7rs-null-value__))
+(defn r7rs-vector->list [v : (Vec any) & r : any] : any
+  (let [rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "vector->list" a b (vec-len v))
+    (r7rs-vector->list-go__ v a b)))
+(defn r7rs-list->vector-go__ [l v : (Vec any)] : (Vec any)
+  (if (r7rs-null? l) v (do (vec-push! v (r7rs-car l)) (r7rs-list->vector-go__ (r7rs-cdr l) v))))
+(defn r7rs-list->vector [l] : (Vec any) (r7rs-list->vector-go__ l (:: (vec-new) (Vec any))))
+(defn r7rs-vector-fill-go-lp__ [v : (Vec any) x i : int end : int] : bool
+  (if (>= i end) true (do (vec-set! v i x) (r7rs-vector-fill-go-lp__ v x (+ i 1) end))))
+(defn r7rs-vector-fill-go__ [v : (Vec any) x i : int end : int] : nil (r7rs-vector-fill-go-lp__ v x i end) nil)
+(defn r7rs-vector-fill! [v : (Vec any) x & r : any] : nil
+  (let [rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "vector-fill!" a b (vec-len v))
+    (r7rs-vector-fill-go__ v x a b)))
+
+(defn r7rs-bytes-from-chain__ [c : (Cons any) v : (Vec int)] : (Vec int)
+  (if (tnil? c)
+    v
+    (let [b (cast (.head c) int)]
+      (if (if (>= b 0) (<= b 255) false) nil (panic "bytevector: byte out of range 0..255"))
+      (vec-push! v b)
+      (r7rs-bytes-from-chain__ (.tail c) v))))
+(defn r7rs-bytevector [& xs : any] : any
+  (R7rsBytevector (r7rs-bytes-from-chain__ (:: xs (Cons any)) (:: (vec-new) (Vec int)))))
+(defn r7rs-make-bytevector-go__ [n : int fill : int v : (Vec int)] : (Vec int)
+  (if (<= n 0) v (do (vec-push! v fill) (r7rs-make-bytevector-go__ (- n 1) fill v))))
+(defn r7rs-make-bytevector [n : int & fill : any] : any
+  (let [fl (r7rs-chain->list__ (:: fill (Cons any)))]
+    (R7rsBytevector (r7rs-make-bytevector-go__ n (if (r7rs-null? fl) 0 (cast (r7rs-car fl) int))
+                                               (:: (vec-new) (Vec int))))))
+(defn r7rs-bytevector-bytes__ [b : R7rsBytevector] : (Vec int) (.bytes b))
+(defn r7rs-bytevector-u8-ref [b : R7rsBytevector i : int] : int (vec-get (.bytes b) i))
+(defn r7rs-bytevector-u8-set! [b : R7rsBytevector i : int x : int] : nil (vec-set! (.bytes b) i x))
+(defn r7rs-bytevector-length [b : R7rsBytevector] : int (vec-len (.bytes b)))
+
+;;; ---- multiple values (plan Section 8, Q1: a carrier over a list) --------
+
+(defn r7rs-values [& xs : any]
+  (let [l (r7rs-chain->list__ (:: xs (Cons any)))]
+    (if (r7rs-null? l)
+      (R7rsValues l)
+      (if (is? (r7rs-cdr l) R7rsNull) (r7rs-car l) (R7rsValues l)))))
+(defn r7rs-values-items__ [v : R7rsValues] : any (.items v))
+;;; R5: the procedures that return two values sit after r7rs-values.  (They
+;;; had to, then: a variadic's forward declaration did not carry its rest
+;;; parameter.  R7 fixed that, so the ordering is now only tidiness.)
+(defn r7rs-floor/ [a b] (r7rs-values (r7rs-floor-quotient a b) (r7rs-modulo a b)))
+(defn r7rs-truncate/ [a b] (r7rs-values (r7rs-quotient a b) (r7rs-remainder a b)))
+(defn r7rs-exact-integer-sqrt [x]
+  (let [n (r7rs-exint-of__ x "exact-integer-sqrt: not an exact integer")]
+    (if (r7rs-negative? n)
+      (r7rs-fail-any__ "exact-integer-sqrt: a negative argument")
+      (let [s (r7rs-isqrt__ n)]
+        (r7rs-values s (r7rs-sub2__ n (r7rs-mul2__ s s)))))))
+;;; r7rs-expt -- exact for an exact base and a non-negative exact exponent
+;;; (the bignum core's code 7, square-and-multiply; T1: any size, where D8
+;;; stopped at int64); inexact through pow otherwise.  An exponent outside
+;;; int64 is refused unless the base is 0, 1 or -1: the answer could not be
+;;; stored.
+(defn r7rs-expt-exact__ [b e] : any
+  (if (r7rs-ratio? b)
+    (r7rs-make-ratio__ (r7rs-expt-exact__ (r7rs-ratio-num__ b) e) (r7rs-expt-exact__ (r7rs-ratio-den__ b) e))
+    (if (is? e R7rsBig)
+      (if (r7rs-zero? b)
+        (:: 0 any)
+        (if (r7rs-numeq2__ b 1)
+          (:: 1 any)
+          (if (r7rs-numeq2__ b -1)
+            (if (r7rs-even? e) (:: 1 any) (:: -1 any))
+            (r7rs-fail-any__ "expt: the exponent is too large for an exact answer"))))
+      (r7rs-big2__ 7 b e))))
+;;; T2: an exact base to a negative exact integer power is the exact
+;;; reciprocal, `(expt 2 -10)` is 1/1024.
+(defn r7rs-expt [b e] : any
+  (if (if (r7rs-exrat? b) (r7rs-exint? e) false)
+    (if (r7rs-negative? e)
+      (if (r7rs-zero? b)
+        (r7rs-fail-any__ "expt: exact zero to a negative power")
+        (r7rs-div2__ 1 (r7rs-expt-exact__ b (r7rs-sub2__ 0 e))))
+      (r7rs-expt-exact__ b e))
+    (if (r7rs-cplx-expt?__ b e)
+      (r7rs-cplx-expt__ b e)
+      (:: (pow (r7rs-to-float__ b) (r7rs-to-float__ e)) any))))
+;;; T6: a complex base or exponent, or a negative base to a non-integer
+;;; power, is complex: square-and-multiply for an exact complex base and a
+;;; fixnum exponent (`(expt +i 2)` is -1), else exp(e log b).  Zero to any
+;;; power is 0 (1 when the power is zero).
+(defn r7rs-cplx-expt?__ [b e] : bool
+  (if (r7rs-any-cplx?__ b e) true (if (r7rs-negative? b) (r7rs-not (r7rs-integer? e)) false)))
+(defn r7rs-expt-mul__ [b e : int acc] : any
+  (if (= e 0)
+    acc
+    (r7rs-expt-mul__ (r7rs-mul2__ b b) (/ e 2) (if (= (mod e 2) 1) (r7rs-mul2__ acc b) acc))))
+(defn r7rs-cplx-expt__ [b e] : any
+  (if (r7rs-zero? b)
+    (if (r7rs-zero? e) (:: 1 any) b)
+    (if (if (r7rs-exact? b) (is? e int) false)
+      (if (< e 0)
+        (r7rs-div2__ 1 (r7rs-expt-mul__ b (- 0 e) (:: 1 any)))
+        (r7rs-expt-mul__ b e (:: 1 any)))
+      (r7rs-cplx-exp__ (r7rs-mul2__ e (r7rs-cplx-log__ b))))))
+(defn r7rs-exp [x] : any
+  (if (r7rs-cplx? x) (r7rs-cplx-exp__ x) (:: (exp (r7rs-to-float__ x)) any)))
+;;; r7rs-log -- T6: a negative real's logarithm is complex (log|x| + pi i);
+;;; the two-argument form is the quotient of two logarithms.
+(defn r7rs-log1__ [x] : any
+  (if (if (r7rs-cplx? x) true (r7rs-negative? x)) (r7rs-cplx-log__ x) (:: (log (r7rs-to-float__ x)) any)))
+(defn r7rs-log [x & xs : any] : any
+  (let [l (:: xs (Cons any))]
+    (if (tnil? l) (r7rs-log1__ x) (r7rs-div2__ (r7rs-log1__ x) (r7rs-log1__ (.head l))))))
+(defn r7rs-sin [x] : any (if (r7rs-cplx? x) (r7rs-cplx-sin__ x) (:: (sin (r7rs-to-float__ x)) any)))
+(defn r7rs-cos [x] : any (if (r7rs-cplx? x) (r7rs-cplx-cos__ x) (:: (cos (r7rs-to-float__ x)) any)))
+(defn r7rs-tan [x] : any
+  (if (r7rs-cplx? x) (r7rs-div2__ (r7rs-cplx-sin__ x) (r7rs-cplx-cos__ x)) (:: (tan (r7rs-to-float__ x)) any)))
+;;; asin and acos leave the reals outside [-1, 1] (T6: `(asin 2)` is complex).
+(defn r7rs-real-unit?__ [x] : bool (if (r7rs-cplx? x) false (<= (fabs (r7rs-to-float__ x)) 1.0)))
+(defn r7rs-asin [x] : any (if (r7rs-real-unit?__ x) (:: (asin (r7rs-to-float__ x)) any) (r7rs-cplx-asin__ x)))
+(defn r7rs-acos [x] : any
+  (if (r7rs-real-unit?__ x)
+    (:: (acos (r7rs-to-float__ x)) any)
+    (r7rs-sub2__ 1.5707963267948966 (r7rs-cplx-asin__ x))))
+(defn r7rs-atan [y & xs : any] : any
+  (let [l (:: xs (Cons any))]
+    (if (tnil? l)
+      (if (r7rs-cplx? y) (r7rs-cplx-atan__ y) (:: (atan (r7rs-to-float__ y)) any))
+      (:: (atan2 (r7rs-to-float__ y) (r7rs-to-float__ (.head l))) any))))
+(defn r7rs-values-ref [v i : int] : any
+  (if (r7rs-values?__ v)
+    (r7rs-list-ref (r7rs-values-items__ v) i)
+    (if (= i 0) v (r7rs-fail-any__ "values: too few values"))))
+(defn r7rs-values-rest [v i : int] : any
+  (if (r7rs-values?__ v)
+    (r7rs-list-tail (r7rs-values-items__ v) i)
+    (if (= i 0) (r7rs-list v) (r7rs-list))))
+
+;;; r7rs-apply -- call f with the elements of l as its arguments.  Up to four:
+;;; the compiled back end's dynamic call stops at 4 arguments (emit_dyn_call,
+;;; the TUR_APPLYn_T table), and the prelude is compiled on both back ends,
+;;; so the limit is the compiled one.  R6: a variadic f is fine -- the
+;;; dynamic call packs the surplus arguments into its rest list.
+(defn r7rs-apply-list__ [f l] : any
+  (let [n (r7rs-length l)]
+    (if (= n 0) (f)
+      (if (= n 1) (f (r7rs-list-ref l 0))
+        (if (= n 2) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1))
+          (if (= n 3) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2))
+            (if (= n 4) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3))
+              (r7rs-fail-any__ "apply: more than 4 arguments is not supported yet (r7rs-lang-plan R6)"))))))))
+;;; r7rs-spread-args__ -- (a b (c d)) to (a b c d): every argument but the
+;;; last, then the last as the tail.
+(defn r7rs-spread-args-go__ [l last] : any
+  (if (r7rs-null? (r7rs-cdr l))
+    (do (r7rs-set-cdr! last (r7rs-car l)) last)
+    (r7rs-spread-args-go__ (r7rs-cdr l) (r7rs-snoc__ last (r7rs-car l)))))
+(defn r7rs-spread-args__ [l] : any
+  (if (r7rs-null? (r7rs-cdr l))
+    (r7rs-car l)
+    (let [h (R7rsPair (r7rs-car l) r7rs-null-value__)]
+      (r7rs-spread-args-go__ (r7rs-cdr l) h)
+      h)))
+;;; r7rs-apply -- (apply f a ... l): R7: the leading arguments are consed
+;;; onto the final list.
+(defn r7rs-apply [f & args : any] : any
+  (let [l (r7rs-chain->list__ (:: args (Cons any)))]
+    (if (r7rs-null? l) (r7rs-signal__ "apply: needs a list of arguments")
+      (let [spread (r7rs-spread-args__ l)]
+        (if (r7rs-list? spread)
+          (r7rs-apply-list__ f spread)
+          (r7rs-signal__ "apply: the last argument must be a proper list"))))))
+(defn r7rs-call-with-values [producer consumer]
+  (let [v (producer)]
+    (if (r7rs-values?__ v)
+      (r7rs-apply-list__ consumer (r7rs-values-items__ v))
+      (consumer v))))
+
+;;; r7rs-exit__ -- internal: flush and leave with a status.
+(defn r7rs-exit__ [code : int] : nil
+  ```c
+  fflush(stdout);
+  fflush(stderr);
+  exit((int)code);
+  ```)
+
+;;; Output goes through ports; the ports and the printer are the R8 section
+;;; at the end of this file.
+
+;;; r7rs-void -- the unspecified value.
+(defn r7rs-void [] nil)
+
+;;; ---- control (R6) ------------------------------------------------------
+;;;
+;;; Continuations are Turmeric's `call/cc` -- one-shot, upward, an escape --
+;;; wrapped so Scheme sees a procedure (plan D7).  `dynamic-wind` keeps a
+;;; wind stack that an escape unwinds; exceptions are a handler stack over
+;;; the same escapes (D10 named effects, but a `handle` around a dynamic
+;;; thunk is not lowered by the compiled back end, and the escape encoding
+;;; is exactly what R7RS 6.11 describes); `parameterize` is a struct cell
+;;; swapped under `dynamic-wind`; a promise is a shared box.
+
+;;; R7rsWind -- one `dynamic-wind` frame: its before and after thunks.
+(defstruct R7rsWind :heap [before : any after : any])
+;;; r7rs-winders__ -- the wind stack, innermost first, as a Scheme list.
+(def ^mut r7rs-winders__ : any (R7rsNull 0))
+(defn r7rs-wind-after__ [w : R7rsWind] : any (.after w))
+
+;;; r7rs-dynamic-wind -- run before, thunk, after; the frame is on the wind
+;;; stack while thunk runs, so an escape out of thunk runs `after`.
+(defn r7rs-dynamic-wind [before thunk after] : any
+  (before)
+  (set! r7rs-winders__ (r7rs-cons (R7rsWind before after) r7rs-winders__))
+  (let [r (thunk)]
+    (set! r7rs-winders__ (r7rs-cdr r7rs-winders__))
+    (after)
+    r))
+
+;;; r7rs-rewind-to__ -- internal: pop wind frames, running each `after`,
+;;; until the stack is the one captured with the continuation.  The saved
+;;; stack is always a tail of the current one for an escape; if it is not
+;;; reached the continuation is being re-entered, which the underlying
+;;; escape reports itself.
+(defn r7rs-rewind-to__ [saved] : nil
+  (if (r7rs-same-ref__ r7rs-winders__ saved)
+    nil
+    (if (r7rs-null? r7rs-winders__)
+      nil
+      (let [w (r7rs-car r7rs-winders__)]
+        (set! r7rs-winders__ (r7rs-cdr r7rs-winders__))
+        ((r7rs-wind-after__ w))
+        (r7rs-rewind-to__ saved)))))
+
+;;; r7rs-values-of-list__ -- internal: the value a `(values ...)` denotes:
+;;; one value is itself, any other count is the R7rsValues carrier.
+(defn r7rs-values-of-list__ [l] : any
+  (if (r7rs-null? l)
+    (R7rsValues l)
+    (if (is? (r7rs-cdr l) R7rsNull) (r7rs-car l) (R7rsValues l))))
+
+;;; r7rs-call/ec__ -- internal: an ESCAPE-only call/cc (R6, D7).  The
+;;; receiver gets a variadic procedure; invoking it unwinds the wind stack to
+;;; the capture point and delivers its arguments as the value of the call.
+;;; Invoking it after the call has returned is the named error
+;;; "continuation invoked after its call/cc prompt returned".  `guard` and the
+;;; eval bridge escape through this, which costs nothing per call; the
+;;; public `call/cc` below is re-entrant and copies the stack.
+(defn r7rs-call/ec__ [f] : any
+  (let [saved r7rs-winders__]
+    (call/cc (fn [k]
+               (f (fn [& vs : any] : any
+                    (r7rs-rewind-to__ saved)
+                    (k (r7rs-values-of-list__ (r7rs-chain->list__ (:: vs (Cons any)))))))))))
+
+;;; ---- T5: re-entrant continuations ----------------------------------------
+;;;
+;;; A continuation is a copy of the C stack from the call/cc to the stack's
+;;; base, taken when call/cc is called, plus the runtime state that tracks the
+;;; stack (the tail-call trampoline, the CPS driver, the live escapes).
+;;; Invoking it travels the wind stack to the captured one -- `after` thunks
+;;; out, `before` thunks in -- then copies the stack back and jumps into it, so
+;;; the call/cc returns again, however many times and whenever.  Heap data is
+;;; shared, as Scheme requires: a continuation restores control, not state.
+;;; This is the classic copying implementation (SCM, early Guile); it keeps
+;;; every frame between the call/cc and the base, C frames included, which is
+;;; what a Scheme continuation is.  Where the stack's base cannot be found the
+;;; public call/cc is the escape above.
+
+;;; r7rs-cont-capture__ -- internal: capture; returns the handle, and returns
+;;; AGAIN, tagged (low bit set), each time the continuation is re-entered.
+(defn r7rs-cont-capture__ [] : ptr<void>
+  ```c
+  /* __tur_include__: #include <setjmp.h> */
+  /* __tur_include__: #include <pthread.h> */
+  /* __tur_include__: #include <stdint.h> */
+  /* __tur_include__: #include <stdlib.h> */
+  /* __tur_include__: typedef struct r7k_cont {
+      jmp_buf jb;
+      unsigned char *lo, *img;
+      size_t n;
+      void *tb_root, *tb_armed, *dk_driver, **esc;
+      int dk_depth, esc_n;
+  } r7k_cont;
+  #if defined(__SANITIZE_ADDRESS__)
+  #define R7K_ASAN 1
+  #elif defined(__has_feature)
+  #if __has_feature(address_sanitizer)
+  #define R7K_ASAN 1
+  #endif
+  #endif
+  #ifdef R7K_ASAN
+  void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
+  // ASan's use-after-return detection moves address-taken locals to a heap
+  // "fake stack" that a copy of the real stack cannot see, so an ASan build
+  // of a Scheme program runs with it off (ASAN_OPTIONS still overrides this).
+  const char *__asan_default_options(void) { return "detect_stack_use_after_return=0"; }
+  #define R7K_NOASAN __attribute__((no_sanitize_address))
+  #else
+  #define R7K_NOASAN
+  #endif
+  #if defined(__GLIBC__)
+  extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
+  #endif
+  static _Thread_local unsigned char *r7k_base_tls;
+  static unsigned char *r7k_stack_base(void) {
+      if (r7k_base_tls) return r7k_base_tls;
+  #if defined(__GLIBC__)
+      pthread_attr_t a; void *addr = 0; size_t sz = 0;
+      if (pthread_getattr_np(pthread_self(), &a) == 0) {
+          if (pthread_attr_getstack(&a, &addr, &sz) == 0 && addr)
+              r7k_base_tls = (unsigned char *)addr + sz;
+          pthread_attr_destroy(&a);
+      }
+  #elif defined(__APPLE__)
+      r7k_base_tls = (unsigned char *)pthread_get_stackaddr_np(pthread_self());
+  #endif
+      return r7k_base_tls;
+  }
+  __attribute__((noinline)) R7K_NOASAN
+  static void r7k_copy(unsigned char *dst, const unsigned char *src, size_t n) {
+      volatile uintptr_t *d = (volatile uintptr_t *)dst;
+      const volatile uintptr_t *s = (const volatile uintptr_t *)src;
+      for (size_t i = 0; i < n / sizeof(uintptr_t); i++) d[i] = s[i];
+  }
+  // The extent of the image: from just below the capture to the stack base.
+  // The body allocates and fills it, AFTER the preamble's allocator macros,
+  // so under the r7rs-gc experiment the image is on the collected heap and
+  // scanned -- a continuation keeps everything its stack points at alive.
+  static int r7k_measure(r7k_cont *c, unsigned char *mark) {
+      unsigned char *base = r7k_stack_base();
+      unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
+      if (!base || base <= lo) return 0;
+      c->lo = lo;
+      c->n = (size_t)(base - lo) & ~(sizeof(uintptr_t) - 1);
+      return 1;
+  }
+  __attribute__((noinline, noreturn)) R7K_NOASAN
+  static void r7k_jump(r7k_cont *c) {
+      r7k_copy(c->lo, c->img, c->n);
+  #ifdef R7K_ASAN
+      __asan_unpoison_memory_region(c->lo, c->n);
+  #endif
+      longjmp(c->jb, 1);
+  }
+  __attribute__((noinline, noreturn))
+  static void r7k_restore(r7k_cont *c) {
+      unsigned char here;
+      uintptr_t sp = (uintptr_t)&here, want = (uintptr_t)c->lo - 4096;
+      if (sp > want) {
+          volatile unsigned char *pad = (volatile unsigned char *)__builtin_alloca(sp - want);
+          pad[0] = 0;
+      }
+      r7k_jump(c);
+  } */
+  r7k_cont *volatile c = (r7k_cont *)calloc(1, sizeof(r7k_cont));
+  tur_dk_pinned = 1;
+  volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
+  mark[0] = 0;
+  c->tb_root = tur_tb_root;
+  c->tb_armed = tur_tb_armed_for;
+  c->dk_driver = (void *)g_dk_driver;
+  c->dk_depth = __dk_entry_depth;
+  c->esc_n = tur_escape_live_n;
+  if (c->esc_n > 0) {
+    c->esc = (void **)malloc((size_t)c->esc_n * sizeof(void *));
+    for (int i = 0; i < c->esc_n; i++) c->esc[i] = (void *)tur_escape_live[i];
+  }
+  if (setjmp(c->jb) != 0) {
+    r7k_cont *rc = c;
+    tur_tb_root = rc->tb_root;
+    tur_tb_armed_for = rc->tb_armed;
+    g_dk_driver = (tur_jmp_buf *)rc->dk_driver;
+    __dk_entry_depth = rc->dk_depth;
+    for (int i = 0; i < rc->esc_n; i++) tur_escape_live_push((tur_escape_cont *)rc->esc[i]);
+    return (void *)((uintptr_t)rc | 1);
+  }
+  if (!r7k_measure(c, (unsigned char *)mark)) return NULL;
+  c->img = (unsigned char *)malloc(c->n);
+  if (!c->img) return NULL;
+  r7k_copy(c->img, c->lo, c->n);
+  /* T8, the region store-hook rule: the image is a store of every word on the
+   * stack into memory that outlives any bracket around this call/cc.  A word
+   * that points into a live region generation marks it escaped, so a bracket
+   * never rewinds memory a re-entry would bring back.  A no-op when no region
+   * is live, and under TUR_REGIONS=0. */
+  TUR_REGION_NOTE_WORDS(c->img, c->n);
+  return (void *)c;
+  ```)
+;;; r7rs-cont-resumed?__ -- internal: #t for the tagged handle a re-entry
+;;; returns.
+(defn r7rs-cont-resumed?__ [c : ptr<void>] : bool
+  ```c
+  return ((uintptr_t)c & 1) != 0;
+  ```)
+;;; r7rs-cont-null?__ -- internal: #t when no copy could be taken (no stack
+;;; base on this platform).
+(defn r7rs-cont-null?__ [c : ptr<void>] : bool
+  ```c
+  return c == NULL;
+  ```)
+;;; r7rs-cont-restore__ -- internal: copy the captured stack back and jump in.
+(defn r7rs-cont-restore__ [c : ptr<void>] : nil
+  ```c
+  r7k_cont *k = (r7k_cont *)((uintptr_t)c & ~(uintptr_t)1);
+  tur_escape_live_n = 0;
+  r7k_restore(k);
+  ```)
+
+;;; r7rs-cont-delivered__ -- the value an invoked continuation hands its
+;;; call/cc; set just before the jump, read just after it.
+(def ^mut r7rs-cont-delivered__ : any (R7rsNull 0))
+
+;;; r7rs-wind-depth__ -- internal: a wind stack's length.
+(defn r7rs-wind-depth__ [l] : int (if (r7rs-null? l) 0 (+ 1 (r7rs-wind-depth__ (r7rs-cdr l)))))
+(defn r7rs-wind-drop__ [l n : int] : any (if (<= n 0) l (r7rs-wind-drop__ (r7rs-cdr l) (- n 1))))
+;;; r7rs-wind-common__ -- internal: the longest common tail of two wind stacks.
+(defn r7rs-wind-common__ [a b] : any
+  (if (r7rs-null? a) a (if (r7rs-same-ref__ a b) a (r7rs-wind-common__ (r7rs-cdr a) (r7rs-cdr b)))))
+(defn r7rs-wind-before__ [w : R7rsWind] : any (.before w))
+;;; r7rs-rewind-into__ -- internal: enter the frames of `target` above
+;;; `common`, outermost first: each `before` runs, then its frame is pushed.
+(defn r7rs-rewind-into__ [target common] : nil
+  (if (if (r7rs-null? target) true (r7rs-same-ref__ target common))
+    nil
+    (do (r7rs-rewind-into__ (r7rs-cdr target) common)
+        ((r7rs-wind-before__ (r7rs-car target)))
+        (set! r7rs-winders__ target)
+        nil)))
+;;; r7rs-travel-to__ -- internal: R7RS 6.10 -- leave the current extent to
+;;; the common ancestor (each `after`, innermost first), then enter the
+;;; target's (each `before`, outermost first).
+(defn r7rs-travel-to__ [target] : nil
+  (let [la     (r7rs-wind-depth__ r7rs-winders__)
+        lb     (r7rs-wind-depth__ target)
+        common (r7rs-wind-common__ (r7rs-wind-drop__ r7rs-winders__ (- la lb))
+                                   (r7rs-wind-drop__ target (- lb la)))]
+    (r7rs-rewind-to__ common)
+    (r7rs-rewind-into__ target common)))
+
+;;; r7rs-call/cc -- `call-with-current-continuation`, re-entrant.  The
+;;; receiver gets a variadic procedure; invoking it -- while the call/cc is
+;;; running, after it has returned, any number of times -- travels the wind
+;;; stack to the captured one and returns its arguments from the call/cc.
+;;; The escape, as a procedure VALUE: a direct call would make r7rs-call/cc
+;;; itself a CPS function (it would reach Turmeric's call/cc), and a CPS
+;;; entry's heap frames are freed when it returns -- exactly what a re-entry
+;;; must not find.
+(def r7rs-call/ec-proc__ : any r7rs-call/ec__)
+(defn r7rs-call/cc [f] : any
+  (let [saved r7rs-winders__
+        c     (r7rs-cont-capture__)]
+    (if (r7rs-cont-null?__ c)
+      (r7rs-call/ec-proc__ f)
+      (if (r7rs-cont-resumed?__ c)
+        r7rs-cont-delivered__
+        (f (fn [& vs : any] : any
+             (r7rs-travel-to__ saved)
+             (set! r7rs-cont-delivered__ (r7rs-values-of-list__ (r7rs-chain->list__ (:: vs (Cons any)))))
+             (r7rs-cont-restore__ c)))))))
+
+;;; read-error? / file-error? -- R7: an error object of that kind; (scheme
+;;; file) raises file errors, the reader's arrive with R8.
+(defn r7rs-read-error? [x] : bool (if (r7rs-error-object? x) (= (r7rs-error-kind__ x) 2) false))
+(defn r7rs-file-error? [x] : bool (if (r7rs-error-object? x) (= (r7rs-error-kind__ x) 1) false))
+
+;;; r7rs-handlers__ -- the exception handler stack, innermost first.
+(def ^mut r7rs-handlers__ : any (R7rsNull 0))
+
+;;; r7rs-with-exception-handler -- install handler for the extent of thunk.
+;;; The install and the uninstall are wind frames, so an escape out of thunk
+;;; leaves the stack as it found it.
+(defn r7rs-with-exception-handler [handler thunk] : any
+  (let [saved r7rs-handlers__]
+    (r7rs-dynamic-wind
+     (fn [] : any (set! r7rs-handlers__ (r7rs-cons handler saved)))
+     thunk
+     (fn [] : any (set! r7rs-handlers__ saved)))))
+
+;;; r7rs-raise-continuable -- call the innermost handler with obj, with the
+;;; outer handlers installed while it runs (R7RS 6.11); its value is the
+;;; value of the raise.
+(defn r7rs-raise-continuable [obj] : any
+  (if (r7rs-null? r7rs-handlers__)
+    (r7rs-uncaught__ obj)
+    (let [saved r7rs-handlers__
+          h (r7rs-car saved)]
+      (r7rs-dynamic-wind
+       (fn [] : any (set! r7rs-handlers__ (r7rs-cdr saved)))
+       (fn [] : any (h obj))
+       (fn [] : any (set! r7rs-handlers__ saved))))))
+
+;;; r7rs-raise -- like raise-continuable, but a handler that returns is an
+;;; error: a secondary exception is raised to the outer handlers.
+(defn r7rs-raise [obj] : any
+  (if (r7rs-null? r7rs-handlers__)
+    (r7rs-uncaught__ obj)
+    (let [saved r7rs-handlers__]
+      (r7rs-raise-continuable obj)
+      (set! r7rs-handlers__ (r7rs-cdr saved))
+      (r7rs-raise (R7rsError "exception handler returned from a non-continuable raise"
+                             (r7rs-cons obj (R7rsNull 0)) 0)))))
+
+;;; r7rs-error -- R7RS `error`: raise a fresh error object.
+(defn r7rs-error [msg & irritants : any] : any
+  (r7rs-raise (R7rsError msg (r7rs-chain->list__ (:: irritants (Cons any))) 0)))
+
+;;; R7rsParam -- a parameter object's cell: the current value and converter.
+(defstruct R7rsParam :heap [value : any converter : any])
+;;; R7rsParamMarker -- the private argument that asks a parameter for its cell.
+(defstruct R7rsParamMarker [tag : int])
+(def r7rs-param-marker__ (R7rsParamMarker 0))
+(defn r7rs-param-get__ [c : R7rsParam] : any (.value c))
+(defn r7rs-param-conv__ [c : R7rsParam] : any (.converter c))
+(defn r7rs-param-set__ [c : R7rsParam v] : nil (set! (.value c) v))
+(defn r7rs-identity__ [x] : any x)
+
+;;; r7rs-make-parameter -- a parameter is a procedure: `(p)` reads it, and
+;;; `parameterize` reaches its cell through the private marker.
+(defn r7rs-make-parameter [init & xs : any] : any
+  (let [l (r7rs-chain->list__ (:: xs (Cons any)))
+        conv (if (r7rs-null? l) (:: r7rs-identity__ any) (r7rs-car l))
+        first (conv init)
+        cell (:: (R7rsParam first conv) any)]
+    (fn [& args : any] : any
+      (let [a (r7rs-chain->list__ (:: args (Cons any)))]
+        (if (r7rs-null? a)
+          (r7rs-param-get__ cell)
+          (if (is? (r7rs-car a) R7rsParamMarker)
+            cell
+            (r7rs-param-set__ cell (r7rs-car a))))))))
+
+(defn r7rs-param-cell__ [p] : any (p r7rs-param-marker__))
+(defn r7rs-params-set-all__ [cells vals] : nil
+  (if (r7rs-null? cells)
+    nil
+    (do (r7rs-param-set__ (r7rs-car cells) (r7rs-car vals))
+        (r7rs-params-set-all__ (r7rs-cdr cells) (r7rs-cdr vals)))))
+;;; r7rs-parameterize__ -- `(parameterize ((p v) ...) body...)`: bindings is
+;;; the list of `(p . v)`; each new value goes through the parameter's
+;;; converter, the swap in and the swap back are wind frames.
+(defn r7rs-parameterize__ [bindings thunk] : any
+  (let [cells (r7rs-map (fn [b] : any (r7rs-param-cell__ (r7rs-car b))) bindings)
+        news (r7rs-map (fn [b] : any
+                         (let [c (r7rs-param-cell__ (r7rs-car b))]
+                           ((r7rs-param-conv__ c) (r7rs-cdr b))))
+                       bindings)
+        olds (r7rs-map (fn [c] : any (r7rs-param-get__ c)) cells)]
+    (r7rs-dynamic-wind
+     (fn [] : any (r7rs-params-set-all__ cells news))
+     thunk
+     (fn [] : any (r7rs-params-set-all__ cells olds)))))
+
+;;; R7rsPBox / R7rsPromise -- a promise shares its box with the promise a
+;;; `delay-force` chain yields, the R7RS 7.3 reference shape.
+(defstruct R7rsPBox :heap [done : bool value : any])
+(defstruct R7rsPromise :heap [box : any])
+(defn r7rs-promise? [x] : bool (is? x R7rsPromise))
+(defn r7rs-pbox__ [p : R7rsPromise] : any (.box p))
+(defn r7rs-pbox-done__ [b : R7rsPBox] : bool (.done b))
+(defn r7rs-pbox-value__ [b : R7rsPBox] : any (.value b))
+(defn r7rs-pbox-set__ [b : R7rsPBox done : bool v] : nil
+  (set! (.done b) done)
+  (set! (.value b) v))
+(defn r7rs-promise-share__ [p : R7rsPromise b] : nil (set! (.box p) b))
+;;; r7rs-delay-force__ -- `(delay-force expr)`: thunk yields a promise.
+(defn r7rs-delay-force__ [thunk] : any (R7rsPromise (:: (R7rsPBox false thunk) any)))
+;;; r7rs-make-promise -- a promise already forced to v (a promise is itself).
+(defn r7rs-make-promise [v] : any
+  (if (r7rs-promise? v) v (R7rsPromise (:: (R7rsPBox true v) any))))
+;;; r7rs-force -- iterative: each step runs the pending thunk and, unless
+;;; that forced the promise already, adopts the resulting promise's state
+;;; and makes the two share one box, so a `delay-force` loop runs in
+;;; constant space (the self call is a tail call).
+(defn r7rs-force [p] : any
+  (if (r7rs-promise? p)
+    (let [b (r7rs-pbox__ p)]
+      (if (r7rs-pbox-done__ b)
+        (r7rs-pbox-value__ b)
+        (let [p2 ((r7rs-pbox-value__ b))]
+          (if (r7rs-pbox-done__ b)
+            nil
+            (let [b2 (r7rs-pbox__ p2)]
+              (r7rs-pbox-set__ b (r7rs-pbox-done__ b2) (r7rs-pbox-value__ b2))
+              (r7rs-promise-share__ p2 b)))
+          (r7rs-force p))))
+    p))
+
+;;; ---- R7: the rest of (scheme base) that is not a port -----------------
+
+(defn r7rs-boolean=2__ [a b] : bool
+  (if (r7rs-boolean? a) (if (r7rs-boolean? b) (r7rs-eqv? a b) false) false))
+;;; r7rs-boolean=? -- #t when every argument is #t, or every one is #f.
+(defn r7rs-boolean=? [a b & xs : any] : bool
+  (r7rs-chain-cmp__ r7rs-boolean=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-symbol=2__ [a b] : bool
+  (if (r7rs-symbol? a) (if (r7rs-symbol? b) (r7rs-eqv? a b) false) false))
+;;; r7rs-symbol=? -- #t when every argument is the same symbol.
+(defn r7rs-symbol=? [a b & xs : any] : bool
+  (r7rs-chain-cmp__ r7rs-symbol=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+
+;;; r7rs-list-set! -- store x as the k-th element.
+(defn r7rs-list-set! [l k : int x] : nil (r7rs-set-car! (r7rs-list-tail l k) x))
+(defn r7rs-make-list-go__ [k : int x acc] : any
+  (if (<= k 0) acc (r7rs-make-list-go__ (- k 1) x (R7rsPair x acc))))
+;;; r7rs-make-list -- k elements, each fill (default #f).
+(defn r7rs-make-list [k : int & fill : any] : any
+  (let [fl (r7rs-chain->list__ (:: fill (Cons any)))]
+    (r7rs-make-list-go__ k (if (r7rs-null? fl) (:: false any) (r7rs-car fl)) r7rs-null-value__)))
+;;; r7rs-make-string -- a new (mutable) string of k copies of char (default
+;;; #\space).
+(defn r7rs-make-string-go__ [v : (Vec int) k : int c : int] : (Vec int)
+  (if (<= k 0) v (do (vec-push! v c) (r7rs-make-string-go__ v (- k 1) c))))
+(defn r7rs-make-string [k : int & c : any] : any
+  (let [cl (r7rs-chain->list__ (:: c (Cons any)))]
+    (r7rs-mk-string__ (r7rs-make-string-go__ (:: (vec-new) (Vec int)) k
+                                             (if (r7rs-null? cl) 32 (r7rs-char->integer (r7rs-car cl)))))))
+;;; r7rs-string -- a new (mutable) string of the given chars.
+(defn r7rs-string [& cs : any] : any (r7rs-list->string (r7rs-chain->list__ (:: cs (Cons any)))))
+
+(defn r7rs-string->vector [s & r : any] : any
+  (let [v (r7rs-cps__ s)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "string->vector" a b (vec-len v))
+    (r7rs-list->vector (r7rs-string->list-go__ v a b))))
+(defn r7rs-vector->string [v : (Vec any) & r : any] : any
+  (let [rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "vector->string" a b (vec-len v))
+    (r7rs-list->string (r7rs-vector->list-go__ v a b))))
+
+;;; r7rs-seq-lists__ -- the list form of each sequence in a chain, through
+;;; `conv` (string->list / vector->list): the multi-sequence map/for-each
+;;; below run over lists.
+(defn r7rs-seq-lists__ [conv first rest : (Cons any)] : any
+  (R7rsPair (conv first) (r7rs-map1__ conv (r7rs-chain->list__ rest))))
+(defn r7rs-string-list1__ [s] : any (r7rs-string->list s))
+(defn r7rs-vector-list1__ [v] : any (r7rs-vector->list v))
+;;; r7rs-string-map -- (string-map f s1 s2 ...): f's results are chars.
+(defn r7rs-string-map [f s & ss : any] : any
+  (r7rs-list->string (r7rs-mapn__ f (r7rs-seq-lists__ r7rs-string-list1__ s (:: ss (Cons any))))))
+(defn r7rs-string-for-each [f s & ss : any] : nil
+  (r7rs-for-eachn__ f (r7rs-seq-lists__ r7rs-string-list1__ s (:: ss (Cons any)))))
+(defn r7rs-vector-map [f v & vs : any] : any
+  (r7rs-list->vector (r7rs-mapn__ f (r7rs-seq-lists__ r7rs-vector-list1__ v (:: vs (Cons any))))))
+(defn r7rs-vector-for-each [f v & vs : any] : nil
+  (r7rs-for-eachn__ f (r7rs-seq-lists__ r7rs-vector-list1__ v (:: vs (Cons any)))))
+
+(defn r7rs-vec-push-range-lp__ [out : (Vec any) v : (Vec any) i : int end : int] : bool
+  (if (>= i end) true (do (vec-push! out (vec-get v i)) (r7rs-vec-push-range-lp__ out v (+ i 1) end))))
+(defn r7rs-vec-push-range__ [out : (Vec any) v : (Vec any) i : int end : int] : nil (r7rs-vec-push-range-lp__ out v i end) nil)
+(defn r7rs-vector-append-go__ [out : (Vec any) c : (Cons any)] : (Vec any)
+  (if (tnil? c) out
+    (let [v (cast (.head c) (Vec any))]
+      (r7rs-vec-push-range__ out v 0 (vec-len v))
+      (r7rs-vector-append-go__ out (.tail c)))))
+;;; r7rs-vector-append -- a fresh vector of every argument's elements.
+(defn r7rs-vector-append [& vs : any] : any
+  (r7rs-vector-append-go__ (:: (vec-new) (Vec any)) (:: vs (Cons any))))
+;;; r7rs-vector-copy -- a fresh vector of [start, end).
+(defn r7rs-vector-copy [v : (Vec any) & r : any] : any
+  (let [rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len v))
+        out (:: (vec-new) (Vec any))]
+    (r7rs-range-check__ "vector-copy" a b (vec-len v))
+    (r7rs-vec-push-range__ out v a b)
+    out))
+(defn r7rs-vec-store-list-lp__ [to : (Vec any) at : int l] : bool
+  (if (r7rs-null? l) true (do (vec-set! to at (r7rs-car l)) (r7rs-vec-store-list-lp__ to (+ at 1) (r7rs-cdr l)))))
+(defn r7rs-vec-store-list__ [to : (Vec any) at : int l] : nil (r7rs-vec-store-list-lp__ to at l) nil)
+;;; r7rs-vector-copy! -- copy [start, end) of from into to at `at`; the
+;;; source range is read out first, so overlapping ranges copy correctly.
+(defn r7rs-vector-copy! [to : (Vec any) at : int from : (Vec any) & r : any] : nil
+  (let [rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len from))]
+    (r7rs-range-check__ "vector-copy!" a b (vec-len from))
+    (r7rs-range-check__ "vector-copy!" at (+ at (- b a)) (vec-len to))
+    (r7rs-vec-store-list__ to at (r7rs-vector->list-go__ from a b))))
+
+(defn r7rs-bytes-push-range-lp__ [out : (Vec int) v : (Vec int) i : int end : int] : bool
+  (if (>= i end) true (do (vec-push! out (vec-get v i)) (r7rs-bytes-push-range-lp__ out v (+ i 1) end))))
+(defn r7rs-bytes-push-range__ [out : (Vec int) v : (Vec int) i : int end : int] : nil (r7rs-bytes-push-range-lp__ out v i end) nil)
+(defn r7rs-bytevector-append-go__ [out : (Vec int) c : (Cons any)] : (Vec int)
+  (if (tnil? c) out
+    (let [v (r7rs-bytevector-bytes__ (.head c))]
+      (r7rs-bytes-push-range__ out v 0 (vec-len v))
+      (r7rs-bytevector-append-go__ out (.tail c)))))
+(defn r7rs-bytevector-append [& bs : any] : any
+  (R7rsBytevector (r7rs-bytevector-append-go__ (:: (vec-new) (Vec int)) (:: bs (Cons any)))))
+(defn r7rs-bytevector-copy [bv & r : any] : any
+  (let [v (r7rs-bytevector-bytes__ bv)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len v))
+        out (:: (vec-new) (Vec int))]
+    (r7rs-range-check__ "bytevector-copy" a b (vec-len v))
+    (r7rs-bytes-push-range__ out v a b)
+    (R7rsBytevector out)))
+(defn r7rs-bytes-read-acc__ [v : (Vec int) i : int j : int acc] : any
+  (if (< j i) acc (r7rs-bytes-read-acc__ v i (- j 1) (R7rsPair (:: (vec-get v j) any) acc))))
+(defn r7rs-bytes-read-range__ [v : (Vec int) i : int end : int] : any
+  (r7rs-bytes-read-acc__ v i (- end 1) r7rs-null-value__))
+(defn r7rs-bytes-store-list-lp__ [to : (Vec int) at : int l] : bool
+  (if (r7rs-null? l) true
+    (do (vec-set! to at (cast (r7rs-car l) int)) (r7rs-bytes-store-list-lp__ to (+ at 1) (r7rs-cdr l)))))
+(defn r7rs-bytes-store-list__ [to : (Vec int) at : int l] : nil (r7rs-bytes-store-list-lp__ to at l) nil)
+(defn r7rs-bytevector-copy! [to at : int from & r : any] : nil
+  (let [tv (r7rs-bytevector-bytes__ to)
+        fv (r7rs-bytevector-bytes__ from)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len fv))]
+    (r7rs-range-check__ "bytevector-copy!" a b (vec-len fv))
+    (r7rs-range-check__ "bytevector-copy!" at (+ at (- b a)) (vec-len tv))
+    (r7rs-bytes-store-list__ tv at (r7rs-bytes-read-range__ fv a b))))
+
+;;; r7rs-string->utf8 -- the UTF-8 bytes of characters [start, end) (T3:
+;;; start and end count characters, as every string procedure does).
+(defn r7rs-utf8-bytes-go__ [s : cstr i : int end : int out : (Vec int)] : (Vec int)
+  (if (>= i end) out
+    (do (vec-push! out (r7rs-string-ref-code__ s i)) (r7rs-utf8-bytes-go__ s (+ i 1) end out))))
+(defn r7rs-string->utf8 [s & r : any] : any
+  (let [v (r7rs-cps__ s)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "string->utf8" a b (vec-len v))
+    (let [t  (r7rs-cps->cstr__ v a b)
+          bv (R7rsBytevector (r7rs-utf8-bytes-go__ t 0 (r7rs-blen__ t) (:: (vec-new) (Vec int))))]
+      (r7rs-cstr-free__ t)
+      bv)))
+(defn r7rs-utf8-cont__ [v : (Vec int) i : int end : int] : int
+  (if (>= i end) (r7rs-fail-int__ "utf8->string: truncated UTF-8 sequence")
+    (let [b (vec-get v i)]
+      (if (if (>= b 128) (< b 192) false) (- b 128) (r7rs-fail-int__ "utf8->string: invalid UTF-8 continuation byte")))))
+;;; r7rs-utf8->string -- decode the bytes, checking the encoding: a string is
+;;; built from code points, so an invalid sequence is an error, not garbage.
+;;; T8: straight into code points; it appended one character at a time, a
+;;; quadratic that leaked every intermediate string.
+(defn r7rs-utf8-go__ [v : (Vec int) i : int end : int out : (Vec int)] : (Vec int)
+  (if (>= i end) out
+    (let [b (vec-get v i)]
+      (if (< b 128)
+        (do (vec-push! out b) (r7rs-utf8-go__ v (+ i 1) end out))
+        (if (if (>= b 192) (< b 224) false)
+          (do (vec-push! out (+ (* (- b 192) 64) (r7rs-utf8-cont__ v (+ i 1) end)))
+              (r7rs-utf8-go__ v (+ i 2) end out))
+          (if (if (>= b 224) (< b 240) false)
+            (do (vec-push! out (+ (* (- b 224) 4096) (+ (* (r7rs-utf8-cont__ v (+ i 1) end) 64) (r7rs-utf8-cont__ v (+ i 2) end))))
+                (r7rs-utf8-go__ v (+ i 3) end out))
+            (if (if (>= b 240) (< b 245) false)
+              (do (vec-push! out (+ (* (- b 240) 262144)
+                                    (+ (* (r7rs-utf8-cont__ v (+ i 1) end) 4096)
+                                       (+ (* (r7rs-utf8-cont__ v (+ i 2) end) 64) (r7rs-utf8-cont__ v (+ i 3) end)))))
+                  (r7rs-utf8-go__ v (+ i 4) end out))
+              (do (r7rs-fail-int__ "utf8->string: invalid UTF-8 lead byte") out))))))))
+(defn r7rs-utf8->string [bv & r : any] : any
+  (let [v (r7rs-bytevector-bytes__ bv)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
+        a (r7rs-range-start__ rl)
+        b (r7rs-range-end__ rl (vec-len v))]
+    (r7rs-range-check__ "utf8->string" a b (vec-len v))
+    (r7rs-mk-string__ (r7rs-utf8-go__ v a b (:: (vec-new) (Vec int))))))
+
+;;; r7rs-features -- the feature identifiers cond-expand tests (scheme_lower.c
+;;; feature_holds holds the same list).  `exact-closed`: + - * on exact
+;;; integers are exact (or signal); only `/` may be inexact.
+(defn r7rs-features [] : any
+  (r7rs-list (:: (str->sym "r7rs") any) (:: (str->sym "exact-closed") any) (:: (str->sym "ratios") any)
+             (:: (str->sym "turmeric") any)))
+
+;;; r7rs-rationalize -- the simplest rational within y of x (R7RS 6.2.6), by
+;;; the continued-fraction walk.  T2: the walk is written over the generic
+;;; operators, so exact arguments give the exact answer (`(rationalize
+;;; (exact .3) 1/10)` is 1/3) and an inexact one the inexact answer, from one
+;;; definition.
+(defn r7rs-simplest-pos__ [lo hi] : any
+  (let [fl (r7rs-floor lo)]
+    (if (r7rs-numeq2__ fl lo)
+      fl
+      (if (r7rs-lt2__ fl (r7rs-floor hi))
+        (r7rs-add2__ fl 1)
+        (r7rs-add2__ fl (r7rs-div2__ 1 (r7rs-simplest-pos__ (r7rs-div2__ 1 (r7rs-sub2__ hi fl))
+                                                            (r7rs-div2__ 1 (r7rs-sub2__ lo fl)))))))))
+(defn r7rs-simplest__ [lo hi] : any
+  (if (if (r7rs-le2__ lo 0) (r7rs-ge2__ hi 0) false)
+    (if (if (is? lo float) true (is? hi float)) (:: 0.0 any) (:: 0 any))
+    (if (r7rs-gt2__ lo 0)
+      (r7rs-simplest-pos__ lo hi)
+      (r7rs-sub2__ 0 (r7rs-simplest-pos__ (r7rs-sub2__ 0 hi) (r7rs-sub2__ 0 lo))))))
+(defn r7rs-rationalize [x y] : any
+  (if (if (r7rs-nan? x) true (r7rs-nan? y))
+    (:: (r7rs-add2__ (r7rs-to-float__ x) (r7rs-to-float__ y)) any)
+    (let [ay (r7rs-abs y)] (r7rs-simplest__ (r7rs-sub2__ x ay) (r7rs-add2__ x ay)))))
+
+;;; ---- R7: (scheme char) -- case mapping ---------------------------------
+;;;
+;;; Chars are Unicode scalar values.  R10: non-ASCII answers come from the
+;;; Unicode tables (stdlib/r7rs/unicode.tur): a char's simple case mapping,
+;;; the Uppercase/Lowercase properties, Nd digits, and a string's FULL case
+;;; mapping (`(string-upcase "\xDF;")` is "SS").  Strings stay byte strings,
+;;; so the string procedures map the UTF-8 in place rather than per char.
+
+(defn r7rs-char-upper-case? [c : R7rsChar] : bool
+  (let [n (:: c :int)]
+    (if (< n 128) (if (>= n 65) (<= n 90) false) (= (r7rs-uc-prop__ n 1) 1))))
+(defn r7rs-char-lower-case? [c : R7rsChar] : bool
+  (let [n (:: c :int)]
+    (if (< n 128) (if (>= n 97) (<= n 122) false) (= (r7rs-uc-prop__ n 2) 1))))
+(defn r7rs-char-foldcase [c : R7rsChar] : R7rsChar
+  (let [n (:: c :int)]
+    (if (< n 128) (r7rs-char-downcase c) (:: (r7rs-uc-map__ n 2) R7rsChar))))
+;;; r7rs-digit-value -- the value of a decimal digit (any Nd), #f otherwise.
+(defn r7rs-digit-value [c : R7rsChar] : any
+  (let [n (:: c :int)]
+    (if (< n 128)
+      (if (if (>= n 48) (<= n 57) false) (:: (- n 48) any) (:: false any))
+      (let [v (r7rs-uc-prop__ n 4)] (if (>= v 0) (:: v any) (:: false any))))))
+(defn r7rs-fold-code__ [c] : int (:: (r7rs-char-foldcase c) :int))
+(defn r7rs-char-ci=2__ [a b] : bool (= (r7rs-fold-code__ a) (r7rs-fold-code__ b)))
+(defn r7rs-char-ci<2__ [a b] : bool (< (r7rs-fold-code__ a) (r7rs-fold-code__ b)))
+(defn r7rs-char-ci>2__ [a b] : bool (> (r7rs-fold-code__ a) (r7rs-fold-code__ b)))
+(defn r7rs-char-ci<=2__ [a b] : bool (<= (r7rs-fold-code__ a) (r7rs-fold-code__ b)))
+(defn r7rs-char-ci>=2__ [a b] : bool (>= (r7rs-fold-code__ a) (r7rs-fold-code__ b)))
+(defn r7rs-char-ci=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-char-ci<? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci<2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-char-ci>? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci>2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-char-ci<=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci<=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-char-ci>=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci>=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-string-upcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 0))
+(defn r7rs-string-downcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 1))
+(defn r7rs-string-foldcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 2))
+(defn r7rs-string-ci=2__ [a b] : bool (r7rs-string=2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
+(defn r7rs-string-ci<2__ [a b] : bool (r7rs-string<2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
+(defn r7rs-string-ci>2__ [a b] : bool (r7rs-string>2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
+(defn r7rs-string-ci<=2__ [a b] : bool (r7rs-string<=2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
+(defn r7rs-string-ci>=2__ [a b] : bool (r7rs-string>=2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
+(defn r7rs-string-ci=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string-ci=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-string-ci<? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string-ci<2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-string-ci>? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string-ci>2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-string-ci<=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string-ci<=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+(defn r7rs-string-ci>=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-string-ci>=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
+
+;;; ---- R7: (scheme cxr) -- the three- and four-deep compositions ----------
+
+(defn r7rs-caaar [p] : any (r7rs-car (r7rs-car (r7rs-car p))))
+(defn r7rs-caadr [p] : any (r7rs-car (r7rs-car (r7rs-cdr p))))
+(defn r7rs-cadar [p] : any (r7rs-car (r7rs-cdr (r7rs-car p))))
+(defn r7rs-cdaar [p] : any (r7rs-cdr (r7rs-car (r7rs-car p))))
+(defn r7rs-cdadr [p] : any (r7rs-cdr (r7rs-car (r7rs-cdr p))))
+(defn r7rs-cddar [p] : any (r7rs-cdr (r7rs-cdr (r7rs-car p))))
+(defn r7rs-cdddr [p] : any (r7rs-cdr (r7rs-cdr (r7rs-cdr p))))
+(defn r7rs-caaaar [p] : any (r7rs-car (r7rs-car (r7rs-car (r7rs-car p)))))
+(defn r7rs-caaadr [p] : any (r7rs-car (r7rs-car (r7rs-car (r7rs-cdr p)))))
+(defn r7rs-caadar [p] : any (r7rs-car (r7rs-car (r7rs-cdr (r7rs-car p)))))
+(defn r7rs-caaddr [p] : any (r7rs-car (r7rs-car (r7rs-cdr (r7rs-cdr p)))))
+(defn r7rs-cadaar [p] : any (r7rs-car (r7rs-cdr (r7rs-car (r7rs-car p)))))
+(defn r7rs-cadadr [p] : any (r7rs-car (r7rs-cdr (r7rs-car (r7rs-cdr p)))))
+(defn r7rs-caddar [p] : any (r7rs-car (r7rs-cdr (r7rs-cdr (r7rs-car p)))))
+(defn r7rs-cadddr [p] : any (r7rs-car (r7rs-cdr (r7rs-cdr (r7rs-cdr p)))))
+(defn r7rs-cdaaar [p] : any (r7rs-cdr (r7rs-car (r7rs-car (r7rs-car p)))))
+(defn r7rs-cdaadr [p] : any (r7rs-cdr (r7rs-car (r7rs-car (r7rs-cdr p)))))
+(defn r7rs-cdadar [p] : any (r7rs-cdr (r7rs-car (r7rs-cdr (r7rs-car p)))))
+(defn r7rs-cdaddr [p] : any (r7rs-cdr (r7rs-car (r7rs-cdr (r7rs-cdr p)))))
+(defn r7rs-cddaar [p] : any (r7rs-cdr (r7rs-cdr (r7rs-car (r7rs-car p)))))
+(defn r7rs-cddadr [p] : any (r7rs-cdr (r7rs-cdr (r7rs-car (r7rs-cdr p)))))
+(defn r7rs-cdddar [p] : any (r7rs-cdr (r7rs-cdr (r7rs-cdr (r7rs-car p)))))
+(defn r7rs-cddddr [p] : any (r7rs-cdr (r7rs-cdr (r7rs-cdr (r7rs-cdr p)))))
+
+;;; ---- (scheme complex) -----------------------------------------------------
+;;;
+;;; T6: over R7rsComplex (above).  A real's imaginary part is exact 0.
+
+(defn r7rs-real-part [x] : any (if (r7rs-number? x) (r7rs-re-of__ x) (r7rs-fail-any__ "real-part: not a number")))
+(defn r7rs-imag-part [x] : any (if (r7rs-number? x) (r7rs-im-of__ x) (r7rs-fail-any__ "imag-part: not a number")))
+;;; r7rs-magnitude -- |z|: exact for an exact complex number whose squared
+;;; magnitude is a perfect square (`(magnitude 3+4i)` is 5).
+(defn r7rs-magnitude [x] : any
+  (if (r7rs-cplx? x)
+    (let [a (r7rs-cplx-re__ x) b (r7rs-cplx-im__ x)]
+      (r7rs-sqrt (r7rs-add2__ (r7rs-mul2__ a a) (r7rs-mul2__ b b))))
+    (r7rs-abs x)))
+;;; r7rs-angle -- arg z; for a real, 0 when non-negative and pi when negative.
+(defn r7rs-angle [x] : any
+  (if (r7rs-cplx? x)
+    (:: (atan2 (r7rs-cf-im__ x) (r7rs-cf-re__ x)) any)
+    (if (r7rs-negative? x) (:: 3.141592653589793 any) (if (r7rs-exrat? x) (:: 0 any) (:: 0.0 any)))))
+(defn r7rs-make-rectangular [re im] : any
+  (if (if (r7rs-real? re) (r7rs-real? im) false)
+    (r7rs-make-rect__ re im)
+    (r7rs-fail-any__ "make-rectangular: the parts must be real numbers")))
+;;; r7rs-make-polar -- m e^(ia); exact m when the angle is exact zero.
+(defn r7rs-make-polar [m a] : any
+  (if (if (r7rs-real? m) (r7rs-real? a) false)
+    (if (r7rs-exact-zero?__ a)
+      m
+      (let [mf (r7rs-to-float__ m) af (r7rs-to-float__ a)]
+        (r7rs-cf__ (* mf (cos af)) (* mf (sin af)))))
+    (r7rs-fail-any__ "make-polar: the magnitude and angle must be real numbers")))
+
+;;; ---- R8: ports ------------------------------------------------------------
+;;;
+;;; A port is an R7rsPort over an R7rsIo: one C byte buffer with a read
+;;; position and, for a file port, the FILE it reads or writes.  A string or
+;;; bytevector port is the buffer alone; an input file port fills the buffer
+;;; from its FILE on demand (so peeking a multi-byte character needs no
+;;; ungetc) and reclaims it once it is drained; an output file port writes
+;;; straight through.  The primitives are inline C with interpreter twins in
+;;; interpreter_natives.c (keep them equal).  Text is UTF-8: a char is read
+;;; by decoding, written by encoding.
+;;;
+;;; The current ports are parameter objects (R7RS 6.13.1), so `parameterize`
+;;; and `with-output-to-file` rebind them with the R6 machinery.
+
+;;; R7rsIo -- the C buffer behind a port.
+(defopaque R7rsIo :ptr<void>)
+;;; R7rsIdTab -- an identity hash table from a heap value to an int: the
+;;; printer's datum-label bookkeeping and the reader's patch walk.  Keys are
+;;; compared by address and never dereferenced, and a table lives for one
+;;; `write` or `read` call, so no key outlives the value it names.
+(defopaque R7rsIdTab :ptr<void>)
+
+;;; r7rs-io-new__ -- an empty in-memory buffer.
+(defn r7rs-io-new__ [] : R7rsIo
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  return calloc(1, sizeof(r7rs_io));
+  ```)
+;;; r7rs-io-std__ -- the buffer over stdin (0), stdout (1) or stderr (2).
+(defn r7rs-io-std__ [k : int] : R7rsIo
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  static r7rs_io s[3];
+  static int init = 0;
+  if (!init) { init = 1; s[0].f = stdin; s[1].f = stdout; s[2].f = stderr; s[0].std = s[1].std = s[2].std = 1; }
+  return &s[k < 0 || k > 2 ? 1 : k];
+  ```)
+;;; r7rs-io-open__ -- a buffer over fopen(path, mode); r7rs-io-ok?__ says
+;;; whether the open succeeded.
+(defn r7rs-io-open__ [path : cstr mode : cstr] : R7rsIo
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)calloc(1, sizeof(r7rs_io));
+  b->f = fopen(path, mode);
+  return b;
+  ```)
+(defn r7rs-io-ok?__ [io : R7rsIo] : bool
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  return ((r7rs_io *)io)->f != NULL;
+  ```)
+;;; r7rs-io-add__ -- write a string: through to the FILE, or onto the buffer.
+;;; stdout is flushed before anything goes to stderr, so the two interleave
+;;; in program order.
+(defn r7rs-io-add__ [io : R7rsIo s : cstr] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  size_t l = strlen(s);
+  if (b->f) { if (b->f == stderr) fflush(stdout); fwrite(s, 1, l, b->f); return; }
+  if (b->n + l + 1 > b->cap) {
+    size_t c = b->cap ? b->cap : 64;
+    while (b->n + l + 1 > c) c *= 2;
+    b->p = (unsigned char *)realloc(b->p, c); b->cap = c;
+  }
+  memcpy(b->p + b->n, s, l); b->n += l;
+  ```)
+;;; r7rs-io-add-byte__ -- write one byte.
+(defn r7rs-io-add-byte__ [io : R7rsIo x : int] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  if (b->f) { if (b->f == stderr) fflush(stdout); fputc((int)(x & 0xFF), b->f); return; }
+  if (b->n + 2 > b->cap) { size_t c = b->cap ? b->cap * 2 : 64; b->p = (unsigned char *)realloc(b->p, c); b->cap = c; }
+  b->p[b->n++] = (unsigned char)(x & 0xFF);
+  ```)
+;;; r7rs-io-add-code__ -- T8: a code point, UTF-8 encoded, byte by byte (no
+;;; scratch string per character).
+(defn r7rs-io-add-code__ [io : R7rsIo c : int] : nil
+  (if (< c 128)
+    (r7rs-io-add-byte__ io c)
+    (if (< c 2048)
+      (do (r7rs-io-add-byte__ io (+ 192 (/ c 64)))
+          (r7rs-io-add-byte__ io (+ 128 (mod c 64))))
+      (if (< c 65536)
+        (do (r7rs-io-add-byte__ io (+ 224 (/ c 4096)))
+            (r7rs-io-add-byte__ io (+ 128 (mod (/ c 64) 64)))
+            (r7rs-io-add-byte__ io (+ 128 (mod c 64))))
+        (do (r7rs-io-add-byte__ io (+ 240 (/ c 262144)))
+            (r7rs-io-add-byte__ io (+ 128 (mod (/ c 4096) 64)))
+            (r7rs-io-add-byte__ io (+ 128 (mod (/ c 64) 64)))
+            (r7rs-io-add-byte__ io (+ 128 (mod c 64))))))))
+;;; T8: encoded into one buffer.  It was a divide-and-conquer of appends,
+;;; every intermediate string leaked: O(n log n) bytes of garbage per
+;;; conversion, and every seam crossing of a mutable string converts.
+(defn r7rs-cps-encode-lp__ [v : (Vec int) i : int end : int io : R7rsIo] : bool
+  (if (>= i end) true (do (r7rs-io-add-code__ io (vec-get v i)) (r7rs-cps-encode-lp__ v (+ i 1) end io))))
+(defn r7rs-cps->cstr__ [v : (Vec int) a : int b : int] : cstr
+  (let [io (r7rs-io-new__)]
+    (r7rs-cps-encode-lp__ v a b io)
+    (r7rs-io-take-str__ io)))
+;;; r7rs-io-peek__ -- the byte k places past the read position, or -1 at
+;;; end of input.  A file buffer is filled from its FILE as far as needed;
+;;; stdout is flushed before stdin is read, so a prompt shows.
+(defn r7rs-io-peek__ [io : R7rsIo k : int] : int
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  if (b->f && b->pos == b->n) b->pos = b->n = 0;
+  while (b->pos + (size_t)k >= b->n) {
+    if (!b->f) return -1;
+    if (b->f == stdin) fflush(stdout);
+    int c = fgetc(b->f);
+    if (c == EOF) return -1;
+    if (b->n + 2 > b->cap) { size_t cc = b->cap ? b->cap * 2 : 64; b->p = (unsigned char *)realloc(b->p, cc); b->cap = cc; }
+    b->p[b->n++] = (unsigned char)c;
+  }
+  return (int64_t)b->p[b->pos + (size_t)k];
+  ```)
+;;; r7rs-io-skip__ -- advance the read position by k bytes (after a peek).
+(defn r7rs-io-skip__ [io : R7rsIo k : int] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  b->pos += (size_t)k;
+  if (b->pos > b->n) b->pos = b->n;
+  ```)
+;;; r7rs-io-str__ -- the buffer's bytes as a fresh string.
+(defn r7rs-io-str__ [io : R7rsIo] : cstr
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  char *r = (char *)malloc(b->n + 1);
+  if (b->n) memcpy(r, b->p, b->n);
+  r[b->n] = 0;
+  return r;
+  ```)
+(defn r7rs-io-len__ [io : R7rsIo] : int
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  return (int64_t)((r7rs_io *)io)->n;
+  ```)
+(defn r7rs-io-byte-ref__ [io : R7rsIo i : int] : int
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  return (int64_t)((r7rs_io *)io)->p[i];
+  ```)
+(defn r7rs-io-flush__ [io : R7rsIo] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  if (b->f) fflush(b->f);
+  ```)
+;;; r7rs-io-close__ -- close a file buffer's FILE (never a standard stream).
+(defn r7rs-io-close__ [io : R7rsIo] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  if (b->std) { if (b->f) fflush(b->f); return; }
+  if (b->f) { fclose(b->f); b->f = NULL; }
+  b->pos = b->n;
+  ```)
+;;; r7rs-io-free__ -- release a scratch buffer (a string builder).
+(defn r7rs-io-free__ [io : R7rsIo] : nil
+  ```c
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  if (b->std || b->f) return;
+  free(b->p); free(b);
+  ```)
+;;; r7rs-io-take-str__ -- a builder's contents, and the builder released.
+(defn r7rs-io-take-str__ [io : R7rsIo] : cstr
+  (let [s (r7rs-io-str__ io)]
+    (r7rs-io-free__ io)
+    s))
+
+;;; r7rs-idtab-new__ ... -- the identity table (open addressing, key 0 empty).
+;;; A missing key reads as -2.
+(defn r7rs-idtab-new__ [] : R7rsIdTab
+  ```c
+  typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
+  r7rs_idtab *t = (r7rs_idtab *)calloc(1, sizeof(r7rs_idtab));
+  t->cap = 16;
+  t->k = (uintptr_t *)calloc(t->cap, sizeof(uintptr_t));
+  t->v = (int64_t *)calloc(t->cap, sizeof(int64_t));
+  return t;
+  ```)
+(defn r7rs-idtab-get__ [tab : R7rsIdTab x] : int
+  ```c
+  typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
+  r7rs_idtab *t = (r7rs_idtab *)tab;
+  uintptr_t key = (uintptr_t)TUR_UNTAG(x);
+  size_t m = t->cap - 1, i = (size_t)(((key >> 4) ^ (key >> 13)) & m);
+  while (t->k[i]) { if (t->k[i] == key) return t->v[i]; i = (i + 1) & m; }
+  return -2;
+  ```)
+(defn r7rs-idtab-put__ [tab : R7rsIdTab x v : int] : nil
+  ```c
+  typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
+  r7rs_idtab *t = (r7rs_idtab *)tab;
+  uintptr_t key = (uintptr_t)TUR_UNTAG(x);
+  if ((t->cnt + 1) * 2 > t->cap) {
+    size_t oc = t->cap, nc = oc * 2;
+    uintptr_t *ok = t->k; int64_t *ov = t->v;
+    t->k = (uintptr_t *)calloc(nc, sizeof(uintptr_t));
+    t->v = (int64_t *)calloc(nc, sizeof(int64_t));
+    t->cap = nc;
+    for (size_t j = 0; j < oc; j++) if (ok[j]) {
+      size_t q = (size_t)(((ok[j] >> 4) ^ (ok[j] >> 13)) & (nc - 1));
+      while (t->k[q]) q = (q + 1) & (nc - 1);
+      t->k[q] = ok[j]; t->v[q] = ov[j];
+    }
+    free(ok); free(ov);
+  }
+  size_t m = t->cap - 1, i = (size_t)(((key >> 4) ^ (key >> 13)) & m);
+  while (t->k[i] && t->k[i] != key) i = (i + 1) & m;
+  if (!t->k[i]) { t->k[i] = key; t->cnt++; }
+  t->v[i] = v;
+  ```)
+(defn r7rs-idtab-count__ [tab : R7rsIdTab] : int
+  ```c
+  typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
+  return (int64_t)((r7rs_idtab *)tab)->cnt;
+  ```)
+(defn r7rs-idtab-free__ [tab : R7rsIdTab] : nil
+  ```c
+  typedef struct { uintptr_t *k; int64_t *v; size_t cap, cnt; } r7rs_idtab;
+  r7rs_idtab *t = (r7rs_idtab *)tab;
+  free(t->k); free(t->v); free(t);
+  ```)
+;;; r7rs-equal? -- structural on pairs, vectors and bytevectors, eqv? on
+;;; everything else, and it TERMINATES ON CYCLES (R7RS 6.1).  T8: the pairs and
+;;; vectors under comparison are merged into classes (union-find, as in Adams
+;;; and Dybvig's "Efficient nondestructive equality checking for trees and
+;;; graphs"): two nodes already in one class are assumed equal, the
+;;; coinductive reading the standard specifies.  Any difference makes the
+;;; whole answer #f, so an assumption that turns out wrong is never kept.
+;;; Linear, where the list of pairs under comparison it replaces made two
+;;; equal lists of 10^5 elements take half a minute; and a cycle through
+;;; vectors now terminates too.
+(defn r7rs-uf-add__ [x tab : R7rsIdTab parent : (Vec int)] : int
+  (let [n (vec-len parent)]
+    (vec-push! parent n)
+    (r7rs-idtab-put__ tab x n)
+    n))
+(defn r7rs-uf-id-of__ [x tab : R7rsIdTab parent : (Vec int) i : int] : int
+  (if (= i -2) (r7rs-uf-add__ x tab parent) i))
+(defn r7rs-uf-id__ [x tab : R7rsIdTab parent : (Vec int)] : int
+  (r7rs-uf-id-of__ x tab parent (r7rs-idtab-get__ tab x)))
+(defn r7rs-uf-find__ [parent : (Vec int) i : int] : int
+  (let [p (vec-get parent i)]
+    (if (= p i)
+      i
+      (do (vec-set! parent i (vec-get parent p))
+          (r7rs-uf-find__ parent p)))))
+;;; r7rs-uf-same?__ -- #t when a and b are already one class; else joins them.
+(defn r7rs-uf-same?__ [a b tab : R7rsIdTab parent : (Vec int)] : bool
+  (let [ra (r7rs-uf-find__ parent (r7rs-uf-id__ a tab parent))
+        rb (r7rs-uf-find__ parent (r7rs-uf-id__ b tab parent))]
+    (if (= ra rb)
+      true
+      (do (vec-set! parent ra rb) false))))
+(defn r7rs-equal-go__ [a b tab : R7rsIdTab parent : (Vec int)] : bool
+  (if (r7rs-eqv? a b)
+    true
+    (if (if (r7rs-pair? a) (r7rs-pair? b) false)
+      (if (r7rs-uf-same?__ a b tab parent)
+        true
+        (if (r7rs-equal-go__ (r7rs-car a) (r7rs-car b) tab parent)
+          (r7rs-equal-go__ (r7rs-cdr a) (r7rs-cdr b) tab parent)
+          false))
+      (if (if (r7rs-vector? a) (r7rs-vector? b) false)
+        (if (r7rs-uf-same?__ a b tab parent) true (r7rs-equal-vec__ a b 0 tab parent))
+        (if (if (r7rs-bytevector? a) (r7rs-bytevector? b) false)
+          (r7rs-equal-bytes__ (r7rs-bytevector-bytes__ a) (r7rs-bytevector-bytes__ b) 0)
+          ;; T3: a literal and a mutable string with the same characters
+          ;; are equal.
+          (if (if (r7rs-string? a) (r7rs-string? b) false)
+            (r7rs-string=2__ a b)
+            false))))))
+(defn r7rs-equal-vec__ [a : (Vec any) b : (Vec any) i : int tab : R7rsIdTab parent : (Vec int)] : bool
+  (if (= (vec-len a) (vec-len b))
+    (if (>= i (vec-len a))
+      true
+      (if (r7rs-equal-go__ (vec-get a i) (vec-get b i) tab parent)
+        (r7rs-equal-vec__ a b (+ i 1) tab parent)
+        false))
+    false))
+(defn r7rs-equal-bytes__ [a : (Vec int) b : (Vec int) i : int] : bool
+  (if (= (vec-len a) (vec-len b))
+    (if (>= i (vec-len a))
+      true
+      (if (= (vec-get a i) (vec-get b i)) (r7rs-equal-bytes__ a b (+ i 1)) false))
+    false))
+(defn r7rs-equal? [a b] : bool
+  (let [tab    (r7rs-idtab-new__)
+        parent (:: (vec-new) (Vec int))
+        r      (r7rs-equal-go__ a b tab parent)]
+    (r7rs-idtab-free__ tab)
+    (vec-free-o parent 0)
+    r))
+
+
+;;; R7rsPort -- kind 0 is a file, 1 a string, 2 a bytevector.  A port is an
+;;; input port or an output port, never both, so one `open` flag serves.
+;;; `fold` is the port's `#!fold-case` state, which `read` keeps (R7RS 2.1:
+;;; the directive affects later data read from the same port).
+(defstruct R7rsPort :heap [kind : int input : bool output : bool binary : bool open : bool fold : bool io : R7rsIo])
+(defn r7rs-port? [x] : bool (is? x R7rsPort))
+(defn r7rs-port-kind__ [p : R7rsPort] : int (.kind p))
+(defn r7rs-port-in__ [p : R7rsPort] : bool (.input p))
+(defn r7rs-port-out__ [p : R7rsPort] : bool (.output p))
+(defn r7rs-port-bin__ [p : R7rsPort] : bool (.binary p))
+(defn r7rs-port-open__ [p : R7rsPort] : bool (.open p))
+(defn r7rs-port-io__ [p : R7rsPort] : R7rsIo (.io p))
+(defn r7rs-port-mark-closed__ [p : R7rsPort] : nil (set! (.open p) false))
+(defn r7rs-port-fold__ [p : R7rsPort] : bool (.fold p))
+(defn r7rs-port-set-fold__ [p : R7rsPort v : bool] : nil (set! (.fold p) v))
+(defn r7rs-make-port__ [kind : int input : bool binary : bool io : R7rsIo] : any
+  (R7rsPort kind input (not input) binary true false io))
+
+(defn r7rs-input-port? [x] : bool (if (r7rs-port? x) (r7rs-port-in__ x) false))
+(defn r7rs-output-port? [x] : bool (if (r7rs-port? x) (r7rs-port-out__ x) false))
+(defn r7rs-textual-port? [x] : bool (if (r7rs-port? x) (not (r7rs-port-bin__ x)) false))
+(defn r7rs-binary-port? [x] : bool (if (r7rs-port? x) (r7rs-port-bin__ x) false))
+(defn r7rs-input-port-open? [p] : bool (if (r7rs-port-in__ p) (r7rs-port-open__ p) false))
+(defn r7rs-output-port-open? [p] : bool (if (r7rs-port-out__ p) (r7rs-port-open__ p) false))
+
+;;; The standard ports and the current-port parameters.
+(def r7rs-stdin-port__ (r7rs-make-port__ 0 true false (r7rs-io-std__ 0)))
+(def r7rs-stdout-port__ (r7rs-make-port__ 0 false false (r7rs-io-std__ 1)))
+(def r7rs-stderr-port__ (r7rs-make-port__ 0 false false (r7rs-io-std__ 2)))
+(def r7rs-current-input-port (r7rs-make-parameter r7rs-stdin-port__))
+(def r7rs-current-output-port (r7rs-make-parameter r7rs-stdout-port__))
+(def r7rs-current-error-port (r7rs-make-parameter r7rs-stderr-port__))
+
+;;; r7rs-port-arg__ -- the optional port argument: the first of rl, or the
+;;; current port the parameter holds.
+(defn r7rs-port-arg__ [rl param] : any (if (r7rs-null? rl) (param) (r7rs-car rl)))
+;;; r7rs-port-of-chain__ -- T8: the same, read off the rest-argument chain
+;;; itself, so an I/O call builds no scratch list to find its port.
+(defn r7rs-port-of-chain__ [c : (Cons any) param] : any (if (tnil? c) (param) (.head c)))
+(defn r7rs-after-port__ [rl] : any (if (r7rs-null? rl) rl (r7rs-cdr rl)))
+
+;;; r7rs-out-io__ / r7rs-in-io__ -- the buffer of an open port of the right
+;;; direction; anything else is an error a `guard` can catch.
+(defn r7rs-out-io__ [port] : R7rsIo
+  (if (if (r7rs-output-port? port) (r7rs-port-open__ port) false)
+    (r7rs-port-io__ port)
+    (do (r7rs-error "not an open output port" port)
+        (r7rs-io-std__ 1))))
+(defn r7rs-in-io__ [port] : R7rsIo
+  (if (if (r7rs-input-port? port) (r7rs-port-open__ port) false)
+    (r7rs-port-io__ port)
+    (do (r7rs-error "not an open input port" port)
+        (r7rs-io-std__ 0))))
+
+;;; r7rs-port-put__ -- internal: a string onto an output port.
+(defn r7rs-port-put__ [port s : cstr] : nil (r7rs-io-add__ (r7rs-out-io__ port) s))
+
+;;; ---- output ---------------------------------------------------------------
+
+;;; r7rs-newline -- (newline [port]).
+(defn r7rs-newline [& r : any] : nil
+  (r7rs-port-put__ (r7rs-port-of-chain__ (:: r (Cons any)) r7rs-current-output-port) "\n"))
+;;; r7rs-write-char -- (write-char char [port]).
+(defn r7rs-write-char [c : R7rsChar & r : any] : nil
+  (r7rs-io-add-code__ (r7rs-out-io__ (r7rs-port-of-chain__ (:: r (Cons any)) r7rs-current-output-port))
+                      (:: c :int)))
+;;; r7rs-write-string -- (write-string string [port [start [end]]]); start
+;;; and end count characters.
+(defn r7rs-write-string [s & r : any] : nil
+  (let [rl (r7rs-chain->list__ (:: r (Cons any)))
+        port (r7rs-port-arg__ rl r7rs-current-output-port)
+        rng (r7rs-after-port__ rl)]
+    (if (r7rs-null? rng)
+      (r7rs-port-put__ port (r7rs-str__ s))
+      (let [v (r7rs-cps__ s)
+            a (r7rs-range-start__ rng)
+            b (r7rs-range-end__ rng (vec-len v))]
+        (r7rs-range-check__ "write-string" a b (vec-len v))
+        (r7rs-port-put__ port (r7rs-cps->cstr__ v a b))))))
+;;; r7rs-write-u8 -- (write-u8 byte [port]).
+(defn r7rs-write-u8 [x : int & r : any] : nil
+  (r7rs-io-add-byte__ (r7rs-out-io__ (r7rs-port-of-chain__ (:: r (Cons any)) r7rs-current-output-port)) x))
+(defn r7rs-write-bytes-go-lp__ [io : R7rsIo v : (Vec int) i : int end : int] : bool
+  (if (>= i end) true (do (r7rs-io-add-byte__ io (vec-get v i)) (r7rs-write-bytes-go-lp__ io v (+ i 1) end))))
+(defn r7rs-write-bytes-go__ [io : R7rsIo v : (Vec int) i : int end : int] : nil (r7rs-write-bytes-go-lp__ io v i end) nil)
+;;; r7rs-write-bytevector -- (write-bytevector bv [port [start [end]]]).
+(defn r7rs-write-bytevector [bv & r : any] : nil
+  (let [v (r7rs-bytevector-bytes__ bv)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
+        io (r7rs-out-io__ (r7rs-port-arg__ rl r7rs-current-output-port))
+        rng (r7rs-after-port__ rl)
+        a (r7rs-range-start__ rng)
+        b (r7rs-range-end__ rng (vec-len v))]
+    (r7rs-range-check__ "write-bytevector" a b (vec-len v))
+    (r7rs-write-bytes-go__ io v a b)))
+;;; r7rs-flush-output-port -- (flush-output-port [port]).
+(defn r7rs-flush-output-port [& r : any] : nil
+  (r7rs-io-flush__ (r7rs-out-io__ (r7rs-port-of-chain__ (:: r (Cons any)) r7rs-current-output-port))))
+
+;;; ---- input ----------------------------------------------------------------
+
+;;; r7rs-utf8-width__ -- the byte length of the character a lead byte starts.
+(defn r7rs-utf8-width__ [b : int] : int (if (< b 192) 1 (if (< b 224) 2 (if (< b 240) 3 4))))
+(defn r7rs-io-cont__ [io : R7rsIo k : int] : int
+  (let [b (r7rs-io-peek__ io k)] (if (< b 128) 0 (- b 128))))
+;;; r7rs-io-peek-code__ -- the next character's scalar value, -1 at the end.
+(defn r7rs-io-peek-code__ [io : R7rsIo] : int
+  (let [b (r7rs-io-peek__ io 0)
+        w (r7rs-utf8-width__ b)]
+    (if (< b 128) b
+      (if (= w 1) b
+        (if (= w 2) (+ (* (- b 192) 64) (r7rs-io-cont__ io 1))
+          (if (= w 3) (+ (* (- b 224) 4096) (+ (* (r7rs-io-cont__ io 1) 64) (r7rs-io-cont__ io 2)))
+            (+ (* (- b 240) 262144)
+               (+ (* (r7rs-io-cont__ io 1) 4096) (+ (* (r7rs-io-cont__ io 2) 64) (r7rs-io-cont__ io 3))))))))))
+(defn r7rs-io-read-code__ [io : R7rsIo] : int
+  (let [b (r7rs-io-peek__ io 0)
+        c (r7rs-io-peek-code__ io)]
+    (if (< b 0) nil (r7rs-io-skip__ io (r7rs-utf8-width__ b)))
+    c))
+(defn r7rs-in-port-io__ [r : (Cons any)] : R7rsIo
+  (r7rs-in-io__ (r7rs-port-of-chain__ r r7rs-current-input-port)))
+(defn r7rs-code->char-or-eof__ [c : int] : any
+  (if (< c 0) r7rs-eof-value__ (:: (r7rs-char__ c) any)))
+
+;;; r7rs-read-char / r7rs-peek-char -- the next character, or the eof object.
+(defn r7rs-read-char [& r : any] : any
+  (r7rs-code->char-or-eof__ (r7rs-io-read-code__ (r7rs-in-port-io__ (:: r (Cons any))))))
+(defn r7rs-peek-char [& r : any] : any
+  (r7rs-code->char-or-eof__ (r7rs-io-peek-code__ (r7rs-in-port-io__ (:: r (Cons any))))))
+;;; r7rs-read-u8 / r7rs-peek-u8 -- the next byte, or the eof object.
+(defn r7rs-read-u8 [& r : any] : any
+  (let [io (r7rs-in-port-io__ (:: r (Cons any)))
+        b (r7rs-io-peek__ io 0)]
+    (if (< b 0) r7rs-eof-value__ (do (r7rs-io-skip__ io 1) (:: b any)))))
+(defn r7rs-peek-u8 [& r : any] : any
+  (let [b (r7rs-io-peek__ (r7rs-in-port-io__ (:: r (Cons any))) 0)]
+    (if (< b 0) r7rs-eof-value__ (:: b any))))
+;;; r7rs-char-ready? / r7rs-u8-ready? -- #t: a read never blocks forever on
+;;; these ports except at a terminal, where R7RS leaves the answer open.
+(defn r7rs-char-ready? [& r : any] : bool (do (r7rs-in-port-io__ (:: r (Cons any))) true))
+(defn r7rs-u8-ready? [& r : any] : bool (do (r7rs-in-port-io__ (:: r (Cons any))) true))
+
+;;; r7rs-read-line -- the characters up to a line end (LF, CR or CR LF, which
+;;; is consumed and not included), or the eof object at the end of input.
+(defn r7rs-read-line-go-lp__ [io : R7rsIo out : R7rsIo] : bool
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (< b 0)
+      true
+      (do (r7rs-io-skip__ io 1)
+          (if (= b 10)
+            true
+            (if (= b 13)
+              (do (if (= (r7rs-io-peek__ io 0) 10) (r7rs-io-skip__ io 1) nil) true)
+              (do (r7rs-io-add-byte__ out b)
+                  (r7rs-read-line-go-lp__ io out))))))))
+(defn r7rs-read-line-go__ [io : R7rsIo out : R7rsIo] : nil (r7rs-read-line-go-lp__ io out) nil)
+(defn r7rs-read-line [& r : any] : any
+  (let [io (r7rs-in-port-io__ (:: r (Cons any)))]
+    (if (< (r7rs-io-peek__ io 0) 0)
+      r7rs-eof-value__
+      (let [out (r7rs-io-new__)]
+        (r7rs-read-line-go__ io out)
+        (:: (r7rs-io-take-str__ out) any)))))
+;;; r7rs-read-string -- (read-string k [port]): up to k characters, or the
+;;; eof object when none are left.
+(defn r7rs-read-string-go-lp__ [io : R7rsIo out : R7rsIo k : int] : bool
+  (if (<= k 0)
+    true
+    (let [c (r7rs-io-read-code__ io)]
+      (if (< c 0)
+        true
+        (do (r7rs-io-add-code__ out c)
+            (r7rs-read-string-go-lp__ io out (- k 1)))))))
+(defn r7rs-read-string-go__ [io : R7rsIo out : R7rsIo k : int] : nil (r7rs-read-string-go-lp__ io out k) nil)
+(defn r7rs-read-string [k : int & r : any] : any
+  (let [io (r7rs-in-port-io__ (:: r (Cons any)))]
+    (if (< (r7rs-io-peek__ io 0) 0)
+      r7rs-eof-value__
+      (let [out (r7rs-io-new__)]
+        (r7rs-read-string-go__ io out k)
+        (r7rs-mk-string__ (r7rs-cps-of-cstr__ (r7rs-io-take-str__ out)))))))
+;;; r7rs-read-bytevector -- (read-bytevector k [port]): up to k bytes.
+(defn r7rs-read-bytes-go__ [io : R7rsIo v : (Vec int) k : int] : (Vec int)
+  (if (<= k 0)
+    v
+    (let [b (r7rs-io-peek__ io 0)]
+      (if (< b 0) v (do (r7rs-io-skip__ io 1) (vec-push! v b) (r7rs-read-bytes-go__ io v (- k 1)))))))
+(defn r7rs-read-bytevector [k : int & r : any] : any
+  (let [io (r7rs-in-port-io__ (:: r (Cons any)))]
+    (if (< (r7rs-io-peek__ io 0) 0)
+      r7rs-eof-value__
+      (R7rsBytevector (r7rs-read-bytes-go__ io (:: (vec-new) (Vec int)) k)))))
+;;; r7rs-read-bytevector! -- (read-bytevector! bv [port [start [end]]]):
+;;; the number of bytes stored, or the eof object.
+(defn r7rs-read-into-go__ [io : R7rsIo v : (Vec int) i : int end : int n : int] : int
+  (if (>= i end)
+    n
+    (let [b (r7rs-io-peek__ io 0)]
+      (if (< b 0) n (do (r7rs-io-skip__ io 1) (vec-set! v i b) (r7rs-read-into-go__ io v (+ i 1) end (+ n 1)))))))
+(defn r7rs-read-bytevector! [bv & r : any] : any
+  (let [v (r7rs-bytevector-bytes__ bv)
+        rl (r7rs-chain->list__ (:: r (Cons any)))
+        io (r7rs-in-io__ (r7rs-port-arg__ rl r7rs-current-input-port))
+        rng (r7rs-after-port__ rl)
+        a (r7rs-range-start__ rng)
+        b (r7rs-range-end__ rng (vec-len v))]
+    (r7rs-range-check__ "read-bytevector!" a b (vec-len v))
+    (if (if (< a b) (< (r7rs-io-peek__ io 0) 0) false)
+      r7rs-eof-value__
+      (:: (r7rs-read-into-go__ io v a b 0) any))))
+
+;;; ---- string and bytevector ports, closing ---------------------------------
+
+(defn r7rs-open-input-string [s] : any
+  (let [io (r7rs-io-new__)]
+    (r7rs-io-add__ io (r7rs-str__ s))
+    (r7rs-make-port__ 1 true false io)))
+(defn r7rs-open-output-string [] : any (r7rs-make-port__ 1 false false (r7rs-io-new__)))
+;;; r7rs-get-output-string -- everything written to a string port so far.
+(defn r7rs-get-output-string [p] : cstr
+  (if (if (r7rs-output-port? p) (= (r7rs-port-kind__ p) 1) false)
+    (r7rs-io-str__ (r7rs-port-io__ p))
+    (do (r7rs-error "get-output-string: not a string output port" p) "")))
+(defn r7rs-open-input-bytevector [bv] : any
+  (let [io (r7rs-io-new__)]
+    (r7rs-write-bytes-go__ io (r7rs-bytevector-bytes__ bv) 0 (r7rs-bytevector-length bv))
+    (r7rs-make-port__ 2 true true io)))
+(defn r7rs-open-output-bytevector [] : any (r7rs-make-port__ 2 false true (r7rs-io-new__)))
+(defn r7rs-io-bytes-go__ [io : R7rsIo i : int n : int v : (Vec int)] : (Vec int)
+  (if (>= i n) v (do (vec-push! v (r7rs-io-byte-ref__ io i)) (r7rs-io-bytes-go__ io (+ i 1) n v))))
+;;; r7rs-get-output-bytevector -- everything written to a bytevector port.
+(defn r7rs-get-output-bytevector [p] : any
+  (if (if (r7rs-output-port? p) (= (r7rs-port-kind__ p) 2) false)
+    (let [io (r7rs-port-io__ p)]
+      (R7rsBytevector (r7rs-io-bytes-go__ io 0 (r7rs-io-len__ io) (:: (vec-new) (Vec int)))))
+    (r7rs-error "get-output-bytevector: not a bytevector output port" p)))
+
+;;; r7rs-close-port -- close either direction (closing twice is harmless).
+(defn r7rs-close-port [p] : nil
+  (if (r7rs-port-open__ p)
+    (do (r7rs-port-mark-closed__ p)
+        (if (= (r7rs-port-kind__ p) 0) (r7rs-io-close__ (r7rs-port-io__ p)) nil))
+    nil))
+(defn r7rs-close-input-port [p] : nil (if (r7rs-input-port? p) (r7rs-close-port p) nil))
+(defn r7rs-close-output-port [p] : nil (if (r7rs-output-port? p) (r7rs-close-port p) nil))
+;;; r7rs-call-with-port -- (proc port), then close it and return proc's value.
+(defn r7rs-call-with-port [p proc] : any
+  (let [r (proc p)]
+    (r7rs-close-port p)
+    r))
+
+;;; ---- the printer: display, write, write-shared, write-simple -------------
+;;;
+;;; R7RS 6.13.3: `write` and `display` label only the pairs and vectors that
+;;; are part of a cycle (`#0=` defines a label, `#0#` refers back), so they
+;;; always terminate; `write-shared` labels every pair and vector that
+;;; appears more than once; `write-simple` labels nothing and loops on a
+;;; cycle.  A pre-pass fills an identity table: 1 while a node is on the
+;;; current path, 2 when done, 3 / 4 for the same states of a node that needs
+;;; a label.  List spines are walked iteratively (a long list is not a deep
+;;; recursion); only car nesting recurses.
+
+(defn r7rs-node?__ [x] : bool (if (r7rs-pair? x) true (r7rs-vector? x)))
+
+;;; The cycle pre-pass: a node met again while it is still on the path is a
+;;; back edge, so it gets a label.  A spine marks each new pair as on the
+;;; path, then finishes exactly the pairs it marked.
+(defn r7rs-cyc-spine__ [p tab : R7rsIdTab n : int] : int
+  (if (r7rs-pair? p)
+    (let [s (r7rs-idtab-get__ tab p)]
+      (if (= s -2)
+        (do (r7rs-idtab-put__ tab p 1)
+            (r7rs-mark-cycles__ (r7rs-car p) tab)
+            (r7rs-cyc-spine__ (r7rs-cdr p) tab (+ n 1)))
+        (do (if (if (= s 1) true (= s 3)) (r7rs-idtab-put__ tab p 3) nil)
+            n)))
+    (do (r7rs-mark-cycles__ p tab)
+        n)))
+(defn r7rs-cyc-finish-lp__ [p tab : R7rsIdTab n : int] : bool
+  (if (<= n 0)
+    true
+    (do (r7rs-idtab-put__ tab p (if (= (r7rs-idtab-get__ tab p) 3) 4 2))
+        (r7rs-cyc-finish-lp__ (r7rs-cdr p) tab (- n 1)))))
+(defn r7rs-cyc-finish__ [p tab : R7rsIdTab n : int] : nil (r7rs-cyc-finish-lp__ p tab n) nil)
+(defn r7rs-cyc-vec-go-lp__ [v : (Vec any) i : int tab : R7rsIdTab] : bool
+  (if (>= i (vec-len v)) true (do (r7rs-mark-cycles__ (vec-get v i) tab) (r7rs-cyc-vec-go-lp__ v (+ i 1) tab))))
+(defn r7rs-cyc-vec-go__ [v : (Vec any) i : int tab : R7rsIdTab] : nil (r7rs-cyc-vec-go-lp__ v i tab) nil)
+(defn r7rs-mark-cycles__ [x tab : R7rsIdTab] : nil
+  (if (r7rs-pair? x)
+    (r7rs-cyc-finish__ x tab (r7rs-cyc-spine__ x tab 0))
+    (if (r7rs-vector? x)
+      (let [s (r7rs-idtab-get__ tab x)]
+        (if (= s -2)
+          (do (r7rs-idtab-put__ tab x 1)
+              (r7rs-cyc-vec-go__ x 0 tab)
+              (r7rs-idtab-put__ tab x (if (= (r7rs-idtab-get__ tab x) 3) 4 2)))
+          (if (= s 1) (r7rs-idtab-put__ tab x 3) nil)))
+      nil)))
+
+;;; The sharing pre-pass: any pair or vector met twice gets a label.
+(defn r7rs-shr-spine-lp__ [p tab : R7rsIdTab] : bool
+  (if (r7rs-pair? p)
+    (if (= (r7rs-idtab-get__ tab p) -2)
+      (do (r7rs-idtab-put__ tab p 2)
+          (r7rs-mark-shared__ (r7rs-car p) tab)
+          (r7rs-shr-spine-lp__ (r7rs-cdr p) tab))
+      (do (r7rs-idtab-put__ tab p 4) true))
+    (do (r7rs-mark-shared__ p tab) true)))
+(defn r7rs-shr-spine__ [p tab : R7rsIdTab] : nil (r7rs-shr-spine-lp__ p tab) nil)
+(defn r7rs-shr-vec-go-lp__ [v : (Vec any) i : int tab : R7rsIdTab] : bool
+  (if (>= i (vec-len v)) true (do (r7rs-mark-shared__ (vec-get v i) tab) (r7rs-shr-vec-go-lp__ v (+ i 1) tab))))
+(defn r7rs-shr-vec-go__ [v : (Vec any) i : int tab : R7rsIdTab] : nil (r7rs-shr-vec-go-lp__ v i tab) nil)
+(defn r7rs-mark-shared__ [x tab : R7rsIdTab] : nil
+  (if (r7rs-pair? x)
+    (r7rs-shr-spine__ x tab)
+    (if (r7rs-vector? x)
+      (if (= (r7rs-idtab-get__ tab x) -2)
+        (do (r7rs-idtab-put__ tab x 2) (r7rs-shr-vec-go__ x 0 tab))
+        (r7rs-idtab-put__ tab x 4))
+      nil)))
+
+;;; The spellings `write` needs (inline C with interpreter twins).
+;;; r7rs-escape-string__ -- a string literal: quoted, with \" \\ \a \b \t \n
+;;; \r and \xHH; for any other control byte.
+(defn r7rs-escape-string__ [s : cstr] : cstr
+  ```c
+  size_t l = strlen(s);
+  char *r = (char *)malloc(l * 6 + 3), *o = r;
+  *o++ = '"';
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    switch (*p) {
+    case '"': *o++ = '\\'; *o++ = '"'; break;
+    case '\\': *o++ = '\\'; *o++ = '\\'; break;
+    case 7: *o++ = '\\'; *o++ = 'a'; break;
+    case 8: *o++ = '\\'; *o++ = 'b'; break;
+    case 9: *o++ = '\\'; *o++ = 't'; break;
+    case 10: *o++ = '\\'; *o++ = 'n'; break;
+    case 13: *o++ = '\\'; *o++ = 'r'; break;
+    default:
+      if (*p < 32 || *p == 127) o += sprintf(o, "\\x%x;", (unsigned)*p);
+      else *o++ = (char)*p;
+    }
+  }
+  *o++ = '"'; *o = 0;
+  return r;
+  ```)
+;;; r7rs-symbol-plain?__ -- a symbol whose name reads back as itself without
+;;; bars: not empty, not `.`, no delimiter, whitespace, control byte or
+;;; backslash, not starting with `#`, and not `+i`/`-i` or led by a signed
+;;; `inf.`/`nan.`.  (Names that read as numbers are the caller's.)
+(defn r7rs-symbol-plain?__ [s : cstr] : bool
+  ```c
+  if (!*s || (s[0] == '.' && !s[1]) || s[0] == '#') return false;
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++)
+    if (*p <= 32 || *p == 127 || strchr("()[]{}\"';`,|", *p)) return false;
+  /* R10: a backslash reads as an escape, and a name spelled like a
+   * number's sign-led forms -- `+i`, `-i`, `+inf.0...`, `-nan.0...` in any
+   * case -- reads as (or begins) a number in other readers, so both are
+   * written with bars (chibi's suite: '|+i|, '|\\123|, '|+NaN.0abc|). */
+  if (strchr(s, '\\')) return false;
+  if ((s[0] == '+' || s[0] == '-') && s[1]) {
+    char lo[6] = {0};
+    for (int i = 0; i < 5 && s[1 + i]; i++) lo[i] = (char)((s[1 + i] >= 'A' && s[1 + i] <= 'Z') ? s[1 + i] + 32 : s[1 + i]);
+    if (!strcmp(lo, "i") || !strncmp(lo, "inf.", 4) || !strncmp(lo, "nan.", 4)) return false;
+  }
+  return true;
+  ```)
+;;; r7rs-bar-symbol__ -- `|name|`, with `|` and `\` escaped.
+(defn r7rs-bar-symbol__ [s : cstr] : cstr
+  ```c
+  size_t l = strlen(s);
+  char *r = (char *)malloc(l * 6 + 3), *o = r;
+  *o++ = '|';
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    if (*p == '|' || *p == '\\') { *o++ = '\\'; *o++ = (char)*p; }
+    else if (*p < 32 || *p == 127) o += sprintf(o, "\\x%x;", (unsigned)*p);
+    else *o++ = (char)*p;
+  }
+  *o++ = '|'; *o = 0;
+  return r;
+  ```)
+(defn r7rs-symbol-spelling__ [s : cstr] : cstr
+  (if (if (r7rs-symbol-plain?__ s) (r7rs-not (r7rs-number-syntax?__ s)) false)
+    s
+    (r7rs-bar-symbol__ s)))
+;;; r7rs-char-spelling__ -- `#\a`, the R7RS names, or `#\xHH` for the other
+;;; control characters.
+(defn r7rs-char-spelling__ [n : int] : cstr
+  (if (= n 0) "#\\null"
+    (if (= n 7) "#\\alarm"
+      (if (= n 8) "#\\backspace"
+        (if (= n 9) "#\\tab"
+          (if (= n 10) "#\\newline"
+            (if (= n 13) "#\\return"
+              (if (= n 27) "#\\escape"
+                (if (= n 32) "#\\space"
+                  (if (= n 127) "#\\delete"
+                    (if (< n 32)
+                      (r7rs-string-append2__ "#\\x" (r7rs-int->string-radix__ n 16))
+                      (r7rs-string-append2__ "#\\" (r7rs-string-of-code__ n)))))))))))))
+
+;;; r7rs-atom-spelling__ -- a value that is not a pair, vector or error object.
+(defn r7rs-atom-spelling__ [x quoted : bool] : cstr
+  (if (r7rs-fixnum?__ x) (r7rs-int->string__ x)
+    (if (if (r7rs-big? x) true (if (r7rs-ratio? x) true (r7rs-cplx? x))) (r7rs-number->string x)   ; T1/T2/T6
+      (if (r7rs-flonum?__ x) (r7rs-float->string__ x)
+        (if (r7rs-string? x) (if quoted (r7rs-escape-string__ (r7rs-str__ x)) (r7rs-str__ x))
+          (if (r7rs-boolean? x) (if x "#t" "#f")
+            (if (r7rs-null? x) "()"
+              (if (r7rs-symbol? x) (if quoted (r7rs-symbol-spelling__ (sym->str x)) (sym->str x))
+                (if (r7rs-char? x)
+                  (if quoted (r7rs-char-spelling__ (r7rs-char-code__ x)) (r7rs-string-of-code__ (r7rs-char-code__ x)))
+                  (if (r7rs-eof-object? x) "#<eof>"
+                    (if (r7rs-promise? x) "#<promise>"
+                      (if (r7rs-port? x) "#<port>"
+                        (if (r7rs-procedure? x) "#<procedure>"
+                          (r7rs-string-append2__ "#<" (r7rs-string-append2__ (type-of x) ">")))))))))))))))
+
+;;; r7rs-put-fresh__ -- T8: write a spelling made for this write, then free
+;;; it (port-put copies the bytes).
+(defn r7rs-put-fresh__ [port s : cstr] : nil
+  (r7rs-port-put__ port s)
+  (r7rs-cstr-free__ s))
+;;; r7rs-pr-atom__ -- an atom's spelling into the port.  The spellings made
+;;; afresh for this write -- a number's, an escaped or re-encoded string --
+;;; are freed once written (T8: every printed number leaked its digits); the
+;;; rest (a literal, a symbol's own name, a cstr string's own bytes) belong to
+;;; something else and are written as they are.
+(defn r7rs-pr-atom__ [x port quoted : bool] : nil
+  (if (r7rs-fixnum?__ x)
+    (r7rs-put-fresh__ port (r7rs-int->string__ x))
+    (if (if (r7rs-big? x) true (if (r7rs-ratio? x) true (r7rs-cplx? x)))
+      (r7rs-put-fresh__ port (r7rs-number->string x))
+      (if (r7rs-flonum?__ x)
+        (r7rs-put-fresh__ port (r7rs-float->string__ x))
+        (if (r7rs-string? x)
+          (let [t (r7rs-str__ x)]
+            (if quoted (r7rs-put-fresh__ port (r7rs-escape-string__ t)) (r7rs-port-put__ port t))
+            (if (r7rs-mstring? x) (r7rs-cstr-free__ t) nil))
+          (r7rs-port-put__ port (r7rs-atom-spelling__ x quoted)))))))
+(defn r7rs-label-put__ [port n : int suffix : cstr] : nil
+  (r7rs-port-put__ port "#")
+  (r7rs-put-fresh__ port (r7rs-int->string__ n))
+  (r7rs-port-put__ port suffix))
+
+;;; r7rs-pr__ -- one value.  A labelled node prints `#n=` the first time
+;;; (numbered in print order) and `#n#` after.
+(defn r7rs-pr__ [x port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil
+  (if (r7rs-node?__ x)
+    (if (= (r7rs-idtab-get__ tab x) 4)
+      (let [l (r7rs-idtab-get__ labels x)]
+        (if (= l -2)
+          (let [n (r7rs-idtab-count__ labels)]
+            (r7rs-idtab-put__ labels x n)
+            (r7rs-label-put__ port n "=")
+            (r7rs-pr-node__ x port quoted tab labels))
+          (r7rs-label-put__ port l "#")))
+      (r7rs-pr-node__ x port quoted tab labels))
+    (if (r7rs-bytevector? x)
+      (do (r7rs-port-put__ port "#u8(")
+          (r7rs-pr-bytes__ (r7rs-bytevector-bytes__ x) 0 port)
+          (r7rs-port-put__ port ")"))
+      (if (r7rs-error-object? x)
+        (do (r7rs-port-put__ port "#<error ")
+            (r7rs-pr__ (r7rs-error-object-message x) port true tab labels)
+            (r7rs-pr-irritants__ (r7rs-error-object-irritants x) port tab labels)
+            (r7rs-port-put__ port ">"))
+        (r7rs-pr-atom__ x port quoted)))))
+(defn r7rs-pr-node__ [x port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil
+  (if (r7rs-pair? x)
+    (do (r7rs-port-put__ port "(")
+        (r7rs-pr__ (r7rs-car x) port quoted tab labels)
+        (r7rs-pr-tail__ (r7rs-cdr x) port quoted tab labels))
+    (do (r7rs-port-put__ port "#(")
+        (r7rs-pr-vec__ x 0 port quoted tab labels)
+        (r7rs-port-put__ port ")"))))
+;;; r7rs-pr-tail__ -- the rest of a list: ` b c)`, or ` . d)` for an improper
+;;; tail or a tail that carries a label.
+(defn r7rs-pr-tail-lp__ [d port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : bool
+  (if (r7rs-null? d)
+    (do (r7rs-port-put__ port ")") true)
+    (if (if (r7rs-pair? d) (not (= (r7rs-idtab-get__ tab d) 4)) false)
+      (do (r7rs-port-put__ port " ")
+          (r7rs-pr__ (r7rs-car d) port quoted tab labels)
+          (r7rs-pr-tail-lp__ (r7rs-cdr d) port quoted tab labels))
+      (do (r7rs-port-put__ port " . ")
+          (r7rs-pr__ d port quoted tab labels)
+          (r7rs-port-put__ port ")")
+          true))))
+(defn r7rs-pr-tail__ [d port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil (r7rs-pr-tail-lp__ d port quoted tab labels) nil)
+(defn r7rs-pr-vec-lp__ [v : (Vec any) i : int port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : bool
+  (if (>= i (vec-len v))
+    true
+    (do (if (= i 0) true (r7rs-port-put__ port " "))
+        (r7rs-pr__ (vec-get v i) port quoted tab labels)
+        (r7rs-pr-vec-lp__ v (+ i 1) port quoted tab labels))))
+(defn r7rs-pr-vec__ [v : (Vec any) i : int port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil (r7rs-pr-vec-lp__ v i port quoted tab labels) nil)
+(defn r7rs-pr-bytes-lp__ [v : (Vec int) i : int port] : bool
+  (if (>= i (vec-len v))
+    true
+    (do (if (= i 0) true (r7rs-port-put__ port " "))
+        (r7rs-port-put__ port (r7rs-int->string__ (vec-get v i)))
+        (r7rs-pr-bytes-lp__ v (+ i 1) port))))
+(defn r7rs-pr-bytes__ [v : (Vec int) i : int port] : nil (r7rs-pr-bytes-lp__ v i port) nil)
+(defn r7rs-pr-irritants-lp__ [l port tab : R7rsIdTab labels : R7rsIdTab] : bool
+  (if (r7rs-pair? l)
+    (do (r7rs-port-put__ port " ")
+        (r7rs-pr__ (r7rs-car l) port true tab labels)
+        (r7rs-pr-irritants-lp__ (r7rs-cdr l) port tab labels))
+    true))
+(defn r7rs-pr-irritants__ [l port tab : R7rsIdTab labels : R7rsIdTab] : nil (r7rs-pr-irritants-lp__ l port tab labels) nil)
+
+;;; r7rs-print__ -- mode 0 labels nothing, 1 labels cycles, 2 labels sharing.
+(defn r7rs-print__ [x port quoted : bool mode : int] : nil
+  (let [tab (r7rs-idtab-new__)
+        labels (r7rs-idtab-new__)]
+    (if (r7rs-node?__ x)
+      (if (= mode 1) (r7rs-mark-cycles__ x tab) (if (= mode 2) (r7rs-mark-shared__ x tab) nil))
+      nil)
+    (r7rs-pr__ x port quoted tab labels)
+    (r7rs-idtab-free__ tab)
+    (r7rs-idtab-free__ labels)))
+(defn r7rs-out-port-of__ [r : (Cons any)] : any
+  (r7rs-port-of-chain__ r r7rs-current-output-port))
+
+;;; r7rs-display -- (display obj [port]): strings and chars bare, cycles labelled.
+(defn r7rs-display [x & r : any] : nil (r7rs-print__ x (r7rs-out-port-of__ (:: r (Cons any))) false 1))
+;;; r7rs-write -- (write obj [port]): for reading back, cycles labelled.
+(defn r7rs-write [x & r : any] : nil (r7rs-print__ x (r7rs-out-port-of__ (:: r (Cons any))) true 1))
+;;; r7rs-write-shared -- (write-shared obj [port]): every shared node labelled.
+(defn r7rs-write-shared [x & r : any] : nil (r7rs-print__ x (r7rs-out-port-of__ (:: r (Cons any))) true 2))
+;;; r7rs-write-simple -- (write-simple obj [port]): no labels (loops on a cycle).
+(defn r7rs-write-simple [x & r : any] : nil (r7rs-print__ x (r7rs-out-port-of__ (:: r (Cons any))) true 0))
+
+;;; r7rs-display-irritants__ -- internal: ` irritant` for each, written.
+(defn r7rs-display-irritants__ [l port] : nil
+  (if (r7rs-null? l)
+    nil
+    (do (r7rs-port-put__ port " ")
+        (r7rs-write (r7rs-car l) port)
+        (r7rs-display-irritants__ (r7rs-cdr l) port))))
+
+;;; r7rs-uncaught__ -- internal: no handler is installed.  Report on the
+;;; current error port the way `error` objects are conventionally shown and
+;;; exit 70 (EX_SOFTWARE).
+(defn r7rs-uncaught__ [obj] : any
+  (let [port (r7rs-current-error-port)]
+    (if (r7rs-error-object? obj)
+      (do (r7rs-port-put__ port "error: ")
+          (r7rs-display (r7rs-error-object-message obj) port)
+          (r7rs-display-irritants__ (r7rs-error-object-irritants obj) port))
+      (do (r7rs-port-put__ port "uncaught exception: ")
+          (r7rs-write obj port)))
+    (r7rs-newline port))
+  (r7rs-exit__ 70)
+  (:: 0 any))

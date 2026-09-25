@@ -1,6 +1,6 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include "elab_internal.h"
-#include "lang_dialects.h"   /* saffron-lang-plan S2: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-lang-plan S2: lang_span_is_dynamic */
 #include "cps.h"          /* cps_expr_uses_control -- the control-cast hoist */
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
@@ -5643,10 +5643,10 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
  * above, so there was never a reason for it to diverge.
  *
  * Keyed on the span's file, so a Saffron program that loads a Turmeric module
- * gets each file's own default -- see lang_span_is_saffron.  Not static: also
+ * gets each file's own default -- see lang_span_is_dynamic.  Not static: also
  * read by defeffect elaboration in elab_effects.c. */
 TypeKind saffron_default_param_kind(Span sp) {
-    return lang_span_is_saffron(sp) ? TY_ANY : TY_INT;
+    return lang_span_is_dynamic(sp) ? TY_ANY : TY_INT;
 }
 
 
@@ -7865,7 +7865,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * it cannot cover, because the type is needed before the body is
          * analysed. */
         if (return_kind == TY_NIL && !return_annotated &&
-            lang_span_is_saffron(call->span)) {
+            lang_span_is_dynamic(call->span)) {
             existing->type.as.fn.result_kind = TY_ANY;
         } else if (return_kind != TY_NIL && return_kind != TY_TYVAR) {
             existing->type.as.fn.result_kind = return_kind;
@@ -8391,7 +8391,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * Placed before the widen below on purpose, so the body is boxed by the
      * existing return-position coercion rather than a second one written here. */
     if (return_kind == TY_NIL && !return_annotated && body &&
-        body->type.kind != TY_NEVER && lang_span_is_saffron(call->span)) {
+        body->type.kind != TY_NEVER && lang_span_is_dynamic(call->span)) {
         /* saffron-lang-plan open question 3: `main` is the ONE unannotated
          * Saffron function that does not default to `any`.
          *
@@ -8454,7 +8454,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * target.  Placed before the conflict check below so that check sees the
      * narrowed type and stays quiet. */
     if (body && return_annotated && body->type.kind == TY_ANY &&
-        lang_span_is_saffron(body->span) &&
+        lang_span_is_dynamic(body->span) &&
         return_kind != TY_ANY && return_kind != TY_NIL &&
         return_kind != TY_UNION && return_kind != TY_NEVER &&
         return_kind != TY_TYVAR && return_kind != TY_UNKNOWN) {
@@ -10522,7 +10522,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * side-effect lambda keeps the shape a `(fn [T] nil)` slot wants. */
     if (!return_annotated && return_kind == TY_NIL && body &&
         body->type.kind != TY_NIL && body->type.kind != TY_NEVER &&
-        body->type.kind != TY_ANY && lang_span_is_saffron(call->span) &&
+        body->type.kind != TY_ANY && lang_span_is_dynamic(call->span) &&
         !is_callcc_receiver &&
         !(e->expected_type && e->expected_type->kind == TY_FN)) {
         return_kind = TY_ANY;
@@ -10981,6 +10981,16 @@ Expr *elab_fn(Elab *e, const Form *call) {
         for (uint32_t i = 0; i < n_params; i++) clo_arg_kinds[i] = param_kinds[i];
         Type clo_ty = type_fn(clo_arg_kinds, n_params, return_kind);
         clo_ty.as.fn.boxed = true;
+        /* r7rs-lang-plan R6: the closure VALUE's type carries the rest marker
+         * too.  Without it a capturing variadic closure was typed as a fixed
+         * arity: a static call passed the surplus unpacked, its `any` box id
+         * was the fixed signature's (so a dynamic call could not pack for
+         * it), and `(apply f xs)` on a Scheme closure over its environment --
+         * a continuation wrapper, a parameter object -- read a bare word as
+         * its rest chain. */
+        clo_ty.as.fn.is_variadic    = fn_is_variadic;
+        clo_ty.as.fn.rest_kind      = fn_rest_kind;
+        clo_ty.as.fn.rest_full_type = fn_rest_full_type;
         /* curried-fn-typed-param: preserve the closure's full result type so a
          * closure that *returns a function* keeps the inner (fn ...) type on
          * its first-class value.  Without this, a let-bound closure value

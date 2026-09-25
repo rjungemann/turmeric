@@ -1,0 +1,11 @@
+;; r7rs-lang-plan R10: a global `def` holding a CAPTURING closure, called
+;; from inside a lambda.  A lifted lambda is emitted ahead of the def, and the
+;; forward-declaration band did not count a call through `fn_binding` as a
+;; reference, so the C read `add4_N` before its storage was declared (cc:
+;; undeclared). 
+(def add4 (let [x 4] (fn [y : int] : int (+ x y))))
+
+(defn main [] : int
+  (println ((fn [] : int (add4 6))))
+  (println (add4 7))
+  0)

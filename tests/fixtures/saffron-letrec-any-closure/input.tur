@@ -1,0 +1,17 @@
+#lang saffron
+; r7rs-lang-plan R6 (docs/archive/r7rs-compiled-dynamic-shapes.md, section 1):
+; a letrec-bound lambda over `any` that calls itself.  The letrec placeholder
+; typed the recursive call `int` in a dynamic file while the lambda returned
+; `any`, so cc rejected the emitted C.  The placeholder is `any` now and the
+; lambda's own return is pinned to match -- including a nil-tailed loop.
+(defn main [] : int
+  (letrec [loop (fn [i acc] (if (< i 5) (loop (+ i 1) (+ acc i)) acc))]
+    (println (loop 0 0)))
+  (letrec [ev (fn [n] (if (= n 0) true (od (- n 1))))
+           od (fn [n] (if (= n 0) false (ev (- n 1))))]
+    (println (ev 10)))
+  (letrec [show (fn [i] (if (< i 3) (do (println i) (show (+ i 1))) (println "end")))]
+    (show 0))
+  (let loop [i 0 acc 0]
+    (if (< i 4) (loop (+ i 1) (+ acc 7.1)) (println acc)))
+  0)

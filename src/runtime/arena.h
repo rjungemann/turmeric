@@ -44,4 +44,11 @@ TUR_RT_API void  arena_reset(Arena *a);
  * and must be left untouched.  O(slabs). */
 TUR_RT_API bool  arena_owns(const Arena *a, const void *p);
 
+/* Call `cb` on the used bytes of every slab -- the memory a conservative
+ * collector must read as roots (the r7rs-gc experiment scans region memory
+ * this way, since an object built in a region can point into its heap). */
+TUR_RT_API void  arena_each_used(const Arena *a,
+                                 void (*cb)(const void *p, size_t n, void *ud),
+                                 void *ud);
+
 #endif

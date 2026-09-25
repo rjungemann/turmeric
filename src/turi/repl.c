@@ -35,6 +35,7 @@
 #include "elab_internal.h" /* :expand -- MacroDef registry + elab_expand_macro */
 #include "ffi_thunk.h"     /* RP4: install per-export TuriNativeFn bindings */
 #include "platform_fs.h"   /* setenv/unsetenv on Windows */
+#include "lang_dialects.h" /* lang_traits: a dialect's prelude and name */
 
 #include <ctype.h>
 #include <errno.h>
@@ -876,6 +877,30 @@ static char *unquote_literal(const char **pp) {
     return out;
 }
 
+/* r7rs-lang-plan R9: a fresh session in dialect `d` read by `r`.
+ *
+ * The language's prelude (LangTraits.prelude) is part of the stdlib preload,
+ * and the preload is PINNED -- a `#lang` switch at the prompt rewinds to it.
+ * So the dialect has to be seeded BEFORE the preload runs, and a switch to a
+ * dialect whose prelude differs cannot be a rewind: it needs a new preload.
+ * `#lang r7rs` at the prompt used to switch the reader and the language and
+ * keep Turmeric's preload, so `(display ...)` met Turmeric's `display` method
+ * rather than the R7RS prelude's.  Every route that builds a session --
+ * startup, :reset, :run, and a prelude-changing `#lang` -- comes through here.
+ * The fields are assigned directly rather than through
+ * turi_env_apply_lang_dialect, which rewinds to a preload that does not exist
+ * yet. */
+static TuriEnv *repl_fresh_env(LangDialect d, ReaderType r) {
+    TuriEnv *env = turi_env_new();
+    if (!env) return NULL;
+    repl_configure_env(env);   /* TR2.4 */
+    env->lang        = d;
+    env->reader_type = r;
+    g_lang_prelude   = lang_traits(d)->prelude;
+    repl_preload_stdlib_and_natives(env);
+    return env;
+}
+
 /* -------------------------------------------------------------------------
  * :run <file>  -- DrRacket-style "press Run" semantic.
  *
@@ -891,15 +916,16 @@ static void cmd_run(TuriEnv **env_io, const char *path) {
     if (!env_io || !*env_io) return;
 
     TuriEnv *env = *env_io;
+    /* r7rs-lang-plan R9: the fresh session keeps the session's dialect. */
+    LangDialect keep_lang = env->lang;
+    ReaderType  keep_rt   = env->reader_type;
     turi_env_free(env);
-    env = turi_env_new();
+    env = repl_fresh_env(keep_lang, keep_rt);
     if (!env) {
         fprintf(stderr, "tur repl: failed to allocate fresh environment\n");
         *env_io = NULL;
         return;
     }
-    repl_configure_env(env);   /* TR2.4 */
-    repl_preload_stdlib_and_natives(env);
     *env_io = env;
 
     printf(";; run: %s\n", path);
@@ -1283,40 +1309,24 @@ int turi_repl_run(bool watch_mode) {
     printf("Turmeric v" TUR_VERSION "  (type :help for help, :quit to exit)\n");
     fflush(stdout);
 
-    TuriEnv *env = turi_env_new();
+    /* saffron-lang-plan S8 / r7rs-lang-plan R9: `tur repl --lang <base>`
+     * (main.c validated the token), seeded before the preload -- see
+     * repl_fresh_env. */
+    LangDialect start_lang = LANG_TURMERIC;
+    ReaderType  start_rt   = READER_TURMERIC;
+    if (g_repl_start_lang)
+        (void)lang_base_lookup(g_repl_start_lang, strlen(g_repl_start_lang),
+                               &start_lang, &start_rt);
+    TuriEnv *env = repl_fresh_env(start_lang, start_rt);
     if (!env) {
         fprintf(stderr, "tur repl: failed to create eval environment\n");
         return 1;
     }
-    repl_configure_env(env);   /* TR2.4: diag sink + scratch promotion */
 
-    /* saffron-lang-plan S8: `tur repl --lang saffron`.
-     *
-     * Set BEFORE the preload below, because `g_saffron_prelude` selects the
-     * stdlib autoload list -- flipping it afterwards would leave the session
-     * without stdlib/saffron/prelude.tur.  The fields are assigned directly
-     * rather than through turi_env_apply_lang_dialect: that helper resets the
-     * session to its prelude, which at startup has not been loaded yet. */
-    if (g_repl_start_saffron) {
-        env->lang         = LANG_SAFFRON;
-        g_saffron_prelude = true;
-    }
-
-    /* Preload the core macros (when/cond/for/and/or + assert!/require!/...) and
-     * the typed-collection stdlib so the interactive prompt matches the
-     * `--interpret` path -- without this, `#map{...}`/`#set{...}` and every
-     * macro read as "unknown function or operator" (web-repl-missing-stdlib-
-     * preload; the report's fix direction 3 names the REPL as a drift point).
-     * TUR_STDLIB_DIR is set by main.c's resolve_stdlib_root(); the helper
-     * defaults to a cwd-relative "stdlib" when it is unset. */
-    /* Preload the core macros (when/cond/for/and/or + assert!/require!/...),
-     * the typed-collection stdlib (so `#map{...}`/`#set{...}` and the carrier
-     * list helpers resolve), and the REPL-only typeclass surface, then register
-     * the inline-C native overrides and the `(reload)` native.  :reset and :run
-     * recreate the env and re-run this exact sequence via the shared helper --
-     * see repl_preload_stdlib_and_natives.  (web-repl-missing-stdlib-preload,
-     * web-repl-repl-inline-c-native-gap.) */
-    repl_preload_stdlib_and_natives(env);
+    /* The stdlib preload (macros, native stubs, collections, typeclasses,
+     * natives, `(reload)`) ran inside repl_fresh_env above: see
+     * repl_preload_stdlib_and_natives, and web-repl-missing-stdlib-preload
+     * for why the prompt must match the `--interpret` path. */
 
     /* RP3: auto-discover an enclosing spice project and load its
      * shared library. Skipped silently when:
@@ -1437,12 +1447,11 @@ int turi_repl_run(bool watch_mode) {
             }
             /* 2d: :reset — clear session and restart with a fresh environment */
             if (strcmp(line, ":reset") == 0) {
+                /* r7rs-lang-plan R9: a cleared session keeps its dialect. */
+                LangDialect keep_lang = env ? env->lang : LANG_TURMERIC;
+                ReaderType  keep_rt   = env ? env->reader_type : READER_TURMERIC;
                 turi_env_free(env);
-                env = turi_env_new();
-                if (env) {
-                    repl_configure_env(env);   /* TR2.4 */
-                    repl_preload_stdlib_and_natives(env);
-                }
+                env = repl_fresh_env(keep_lang, keep_rt);
                 balance = 0;
                 multi.len = 0;
                 in_sweet_form = false;
@@ -1646,6 +1655,25 @@ int turi_repl_run(bool watch_mode) {
                     fprintf(stderr,
                             "#lang takes a single base dialect; unexpected "
                             "trailing token: '%.*s'\n", (int)bad_len, bad);
+                } else if (lang_traits(dialect)->prelude != lang_traits(env->lang)->prelude) {
+                    /* r7rs-lang-plan R9: the new language has a different
+                     * prelude, which the pinned preload does not hold -- a
+                     * new session, as :reset builds one (repl_fresh_env). */
+                    turi_env_free(env);
+                    env = repl_fresh_env(dialect, rt);
+                    balance = 0;
+                    multi.len = 0;
+                    in_sweet_form = false;
+#ifdef TURI_HAVE_EDITLINE
+                    g_completion_env = env;
+#endif
+                    if (dialect != LANG_TURMERIC)
+                        printf("; language set to %s, reader %s "
+                               "(session reset)\n", lang_dialect_name(dialect),
+                               reader_type_name(rt));
+                    else
+                        printf("; reader set to %s (session reset)\n",
+                               reader_type_name(rt));
                 } else if (rt != env->reader_type || dialect != env->lang) {
                     /* Full switch: rewinds to the pinned stdlib preload
                      * (accumulated USER source may be incompatible with the
@@ -1653,9 +1681,10 @@ int turi_repl_run(bool watch_mode) {
                      * reader-macro registry, whose user macros came from the
                      * source being discarded. */
                     turi_env_apply_lang_dialect(env, rt, dialect);
-                    if (dialect == LANG_SAFFRON)
-                        printf("; language set to saffron, reader %s "
-                               "(session reset)\n", reader_type_name(rt));
+                    if (dialect != LANG_TURMERIC)
+                        printf("; language set to %s, reader %s "
+                               "(session reset)\n", lang_dialect_name(dialect),
+                               reader_type_name(rt));
                     else
                         printf("; reader set to %s (session reset)\n",
                                reader_type_name(rt));
@@ -1664,8 +1693,10 @@ int turi_repl_run(bool watch_mode) {
                      * (tests/run-flags.sh reader-name-canonical and
                      * lang-same-base-no-reset); the language axis rides
                      * along as a suffix rather than reshaping the line. */
-                    printf("; reader already set to %s%s\n", reader_type_name(rt),
-                           dialect == LANG_SAFFRON ? " (saffron)" : "");
+                    printf("; reader already set to %s", reader_type_name(rt));
+                    if (dialect != LANG_TURMERIC)
+                        printf(" (%s)", lang_dialect_name(dialect));
+                    printf("\n");
                 }
                 free(line);
                 continue;
@@ -1749,8 +1780,33 @@ int turi_repl_run(bool watch_mode) {
                         fprintf(stderr, "error: %s\n", msg);
                 }
             } else {
+                /* r7rs-lang-plan R9: an R7RS session echoes in Scheme's own
+                 * spelling -- through the prelude's `write`, so a symbol is
+                 * `a` rather than `#<struct Sym>` and a list is `(1 2)` --
+                 * and prints nothing for the unspecified value, as a Scheme
+                 * REPL does after `(display ...)`. */
+                bool scheme_echoed = false;
+                if (env->lang == LANG_R7RS) {
+                    TuriValue wr = turi_env_get(env, "r7rs-write");
+                    if (wr.tag == TURI_CLOSURE) {
+                        if (result.tag != TURI_NIL) {
+                            printf("=> ");
+                            fflush(stdout);
+                            /* `write` is variadic (`[x & port]`), and
+                             * turi_call does not pack a rest list: pass the
+                             * empty one, so the current output port is used. */
+                            TuriValue arg[2] = { result, turi_int(0) };   /* nil rest = 0 */
+                            TuriValue wres = turi_call(env, wr, arg, 2);
+                            if (turi_is_error(wres) && turi_error_message(wres))
+                                fprintf(stderr, "write: %s\n", turi_error_message(wres));
+                            printf("\n");
+                            turi_env_set(env, "_", result);
+                        }
+                        scheme_echoed = true;
+                    }
+                }
                 /* 2h: for type-level forms that return nil, show a sentinel */
-                bool type_sentinel = false;
+                bool type_sentinel = scheme_echoed;
                 if (result.tag == TURI_NIL) {
                     char kind[32] = {0}, name[64] = {0};
                     if (detect_type_form(multi.data, kind, sizeof(kind),

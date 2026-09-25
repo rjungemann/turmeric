@@ -1,0 +1,3 @@
+#lang r7rs
+(define-syntax two (syntax-rules () ((_ a b) (+ a b))))
+(display (two 1))

@@ -118,11 +118,14 @@ bool g_sized_types_enabled = true;
 bool g_dump_sizes = false;
 bool g_dump_refine_json = false;
 bool g_trail_autoloaded = false;
-bool g_saffron_prelude = false;   /* saffron-lang-plan S6; set per entry-file detection */
-bool g_repl_start_saffron = false; /* saffron-lang-plan S8; `tur repl --lang saffron` */
+const char *g_lang_prelude = NULL;   /* saffron-lang-plan S6 / r7rs R1: LangTraits.prelude of the entry file */
+uint32_t g_synthetic_user_from_line = 0; /* r7rs-lang-plan R9; see globals.h */
+const char *g_repl_start_lang = NULL; /* saffron-lang-plan S8 / r7rs R9: `tur repl --lang <base>`, validated by main.c */
 bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
 bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc + unbracketed calls */
-bool g_opt_saffron = false;      /* graduated 2026-09-10; set by a `#lang saffron` file, not by a flag */
+bool g_opt_r7rs = false;         /* r7rs-lang-plan D11: set by the `#lang r7rs` line, never by a flag */
+bool g_opt_r7rs_gc = false;      /* --enable=r7rs-gc: a compiled Scheme program's allocator is the collector (docs/upcoming/r7rs-gc-plan.md) */
+bool g_opt_dynamic_any = false;  /* graduated 2026-09-10 as g_opt_saffron; set by any dynamic-language `#lang` file, not by a flag */
 bool g_opt_class_superclasses = false;  /* --enable=class-superclasses (prototype) */
 bool g_adt_slab = false;
 bool g_sr1_sum_byvalue = true;

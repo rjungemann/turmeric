@@ -71,8 +71,9 @@ static const char *const autoload_files_[] = {
  * tur_stdlib_prepend_forms reads the list through this accessor -- reading the
  * raw array there once made the single-file path disagree with project mode
  * about what was in scope. */
-/* saffron-lang-plan S6: when the ENTRY file is `#lang saffron`, the same list
- * with `saffron/prelude.tur` appended.
+/* saffron-lang-plan S6 / r7rs-lang-plan R1: when the ENTRY file's language
+ * has a prelude (`g_lang_prelude`, from LangTraits.prelude), the same list
+ * with that prelude appended.
  *
  * COPIED from `autoload_files_` at first use rather than written out a second
  * time, so a file added to the base list is picked up here with no second edit
@@ -83,25 +84,27 @@ static const char *const autoload_files_[] = {
  * The prelude goes LAST so every stdlib name it adapts -- `Vec`, `Map`,
  * `Option`, the typeclasses -- is already in scope when it is read.
  *
- * Built once and never mutated after: `g_saffron_prelude` selects between two
- * finished lists, so what a compile loads cannot depend on what ran before it
- * in the same process. */
-static const char *autoload_files_saffron_[64];
+ * The copy is rebuilt only when the prelude it was built for changes (the
+ * REPL can switch languages mid-process), so what a compile loads depends on
+ * the current entry file alone, never on what ran before it. */
+static const char *autoload_files_prelude_[64];
+static const char *autoload_files_prelude_for_ = NULL;
 
 const char *const *tur_stdlib_autoload_files(void) {
-    if (!g_saffron_prelude) return autoload_files_;
-    if (!autoload_files_saffron_[0]) {
+    if (!g_lang_prelude) return autoload_files_;
+    if (autoload_files_prelude_for_ != g_lang_prelude) {
         size_t n = 0;
         while (autoload_files_[n] != NULL &&
-               n + 2 < sizeof(autoload_files_saffron_) /
-                       sizeof(autoload_files_saffron_[0])) {
-            autoload_files_saffron_[n] = autoload_files_[n];
+               n + 2 < sizeof(autoload_files_prelude_) /
+                       sizeof(autoload_files_prelude_[0])) {
+            autoload_files_prelude_[n] = autoload_files_[n];
             n++;
         }
-        autoload_files_saffron_[n++] = "saffron/prelude.tur";
-        autoload_files_saffron_[n]   = NULL;
+        autoload_files_prelude_[n++] = g_lang_prelude;
+        autoload_files_prelude_[n]   = NULL;
+        autoload_files_prelude_for_  = g_lang_prelude;
     }
-    return (const char *const *)autoload_files_saffron_;
+    return (const char *const *)autoload_files_prelude_;
 }
 
 void tur_source_file_apply_lang_header(SourceFile *sf, const char *whole_src,

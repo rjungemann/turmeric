@@ -289,26 +289,38 @@ extern bool g_sr1_sum_byvalue;
  * also in the output pulling src/runtime/trail.c into the link.  Emitting the
  * guard off any looser signal is an undefined symbol at cc time. */
 extern bool g_trail_autoloaded;
-/* saffron-lang-plan S6: the ENTRY file is `#lang saffron`, so the Saffron
- * prelude joins the stdlib autoload list.
+/* saffron-lang-plan S6 / r7rs-lang-plan R1: the ENTRY file's language
+ * autoloads a prelude -- `LangTraits.prelude`, a stdlib-relative tail such as
+ * "saffron/prelude.tur" -- so that tail joins the stdlib autoload list.  NULL
+ * for a language with no prelude (Turmeric).  Was the bool
+ * `g_saffron_prelude`; it became the path when a second language with a
+ * prelude arrived, so the autoloaders read the trait instead of a name.
  *
  * Set by every path that detects the entry file's dialect, and set on EVERY
- * such call (true or false) rather than only when true -- the REPL and the
- * harnesses run several compiles in one process, and a sticky flag would let a
- * Saffron file license the prelude for the next Turmeric one.  Same hazard
- * `g_trail_autoloaded` records above, handled by being self-resetting rather
- * than by a separate clear.
+ * such call (a path or NULL) rather than only when non-NULL -- the REPL and
+ * the harnesses run several compiles in one process, and a sticky value would
+ * let a Saffron file license the prelude for the next Turmeric one.  Same
+ * hazard `g_trail_autoloaded` records above, handled by being self-resetting
+ * rather than by a separate clear.
  *
  * The prelude is scoped to the ENTRY file on purpose: a Saffron file IMPORTED
  * by a Turmeric program does not drag it in.  That keeps the prelude's names
  * out of a program that never asked for the dialect, and matches how the
  * `#lang` line already scopes the reader and the semantic layers. */
-extern bool g_saffron_prelude;
+extern const char *g_lang_prelude;
 /* saffron-lang-plan S8: `tur repl --lang saffron` -- start the interactive
  * session in Saffron instead of making the user type `#lang saffron` as their
  * first line.  Read once at REPL startup; `#lang` at the prompt is the other
  * route to the same env state. */
-extern bool g_repl_start_saffron;
+extern const char *g_repl_start_lang;
+/* r7rs-lang-plan R9: in a synthetic `<...>` source (the interpreter's `<eval>`
+ * blob), the first line that is USER input rather than the pinned stdlib
+ * preload, or 0 when nothing is pinned.  The REPL compiles the pinned preload
+ * and the prompt's input as one `<eval>` text, so a `#lang r7rs` session needs
+ * the Scheme renames on the second part and none on the first (the preload's
+ * native stubs are Turmeric).  Read by scheme_lower.c prelude_span; set around
+ * each interpreter eval (turi_eval_with_sink). */
+extern uint32_t g_synthetic_user_from_line;
 /* SR3 slice B (the Option niche -- default since 2026-09-03, TUR_OPTION_NICHE=0
  * restores the tagged form; docs/archive/sr3-option-niche-plan.md):
  * an `(Option P)` whose payload is a NON-NULLABLE pointer is carried AS that
@@ -344,19 +356,24 @@ extern bool g_opt_option_niche;
  * hatch; tests/run-regions-seam.sh keeps that off path green. */
 extern bool g_opt_regions;
 
-/* "This build contains a Saffron translation unit."  Set by lang_dialect_apply
- * when the reader takes a `#lang saffron` line; never by a user-facing flag.
+/* "This build contains a DYNAMICALLY TYPED translation unit."  Set by
+ * lang_dialect_apply when the reader takes a `#lang` line whose language's
+ * trait row says `dynamic` (Saffron today; r7rs-lang-plan's `#lang r7rs`
+ * next); never by a user-facing flag.
  *
- * GRADUATED 2026-09-10, at 0.46.0.  This WAS the `saffron` experiment's enable
- * bit, flipped by `--enable=saffron` / `:experiments` / the `#lang` line (D9);
- * the experiment is gone and `--enable=saffron` is a TUR-W0063 no-op, but the
- * bit stays because the emitter reads it for a reason unrelated to gating: it
- * decides whether to emit the `any` type registry, the instance registry and
- * the dynamic-dispatch panic (emit_module.c).  A plain Turmeric program's
- * emitted C is byte-for-byte what it was before Saffron existed, and that is
- * what this bit buys.  It is NOT an on/off switch for the dialect -- the
- * per-file `SourceFile.lang` is (lang_span_is_saffron). */
-extern bool g_opt_saffron;
+ * GRADUATED 2026-09-10, at 0.46.0, as `g_opt_saffron`.  This WAS the
+ * `saffron` experiment's enable bit, flipped by `--enable=saffron` /
+ * `:experiments` / the `#lang` line (D9); the experiment is gone and
+ * `--enable=saffron` is a TUR-W0063 no-op, but the bit stays because the
+ * emitter reads it for a reason unrelated to gating: it decides whether to
+ * emit the `any` type registry, the instance registry and the
+ * dynamic-dispatch panic (emit_module.c).  A plain Turmeric program's emitted
+ * C is byte-for-byte what it was before Saffron existed, and that is what
+ * this bit buys.  It is NOT an on/off switch for a dialect -- the per-file
+ * `SourceFile.lang` is (lang_span_is_dynamic).  Renamed in r7rs-lang-plan R0
+ * because the fact it records is "the `any` machinery is needed", which is a
+ * trait shared by every dynamic language, not Saffron's identity. */
+extern bool g_opt_dynamic_any;
 /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md): the
  * `defclass` constraint preamble `[(Super var)...]` and the entailment it
  * licenses.  Off by default and gated behind `--enable=class-superclasses`;
@@ -364,6 +381,15 @@ extern bool g_opt_saffron;
  * is rejected (TUR-E0390) rather than silently changing entailment for a
  * program that did not ask for it. */
 extern bool g_opt_class_superclasses;
+/* r7rs (docs/upcoming/r7rs-lang-plan.md): the `#lang r7rs` dialect's enable
+ * bit.  Never set by a flag a user has to write -- lang_dialect_apply sets it
+ * (through experiment_enable) the moment a `#lang r7rs` file is read, because
+ * the directive is itself the enable (D11).  Nothing gates on it beyond the
+ * lifecycle warning today: the dialect's semantics ride
+ * LangTraits.dynamic (g_opt_dynamic_any) and its reader rides
+ * SourceFile.reader_type == READER_R7RS, both per-file. */
+extern bool g_opt_r7rs;
+extern bool g_opt_r7rs_gc;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value
  * instead of riding the int64 heap-pointer carrier.  The parametric sibling of

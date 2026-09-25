@@ -1,0 +1,5 @@
+docs/reported/dynamic-returned-closure-env-is-never-freed.md
+
+The `make-counter` closure env (32 bytes) is never freed: a capturing
+closure returned as `any` has no owner in a dynamic file.  The fixture passed
+on stale-pointer luck until r7rs-lang-plan R6 moved the words that masked it.

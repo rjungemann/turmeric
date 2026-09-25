@@ -1,0 +1,11 @@
+#t
+((1 "two" #\3 (4 . 5)) "" "second line" #t)
+#t
+"written via the current output port"
+"#f"
+(#t #t)
+#u8(1 2 3 250 255)
+#t
+(file-error ("/nonexistent-dir/none.txt"))
+cannot-create
+#f

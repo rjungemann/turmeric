@@ -117,19 +117,38 @@ int main(void) {
                   "registry offers this specific base spelling");
         }
         /* saffron GRADUATED at 0.46.0, so it is offered UNBADGED.  Both halves
-         * are asserted: that the base is still there, and that no base carries
-         * a non-null `experiment` -- a stray badge would tell every playground
-         * visitor the language is still a prototype. */
+         * are asserted: that the base is still there, and that no Saffron base
+         * carries a non-null `experiment` -- a stray badge would tell every
+         * playground visitor the language is still a prototype. */
         CHECK(strstr(reg, "\"name\":\"saffron\"") != NULL,
               "the Saffron bases are offered");
         CHECK(strstr(reg, "\"experiment\":\"saffron\"") == NULL,
               "no base is badged with the graduated saffron experiment");
+        /* r7rs-lang-plan R1 / D11: `r7rs` is the first base to fill the
+         * `experiment` slot, and it is BADGED rather than hidden -- the
+         * `#lang` line is itself the enable, so the row stays selectable.
+         * Exactly that one row carries a badge, and it names its own
+         * EXPERIMENTS[] row. */
+        CHECK(strstr(reg, "\"name\":\"r7rs\"") != NULL,
+              "the r7rs base is offered (badged, not hidden)");
+        CHECK(strstr(reg, "\"language\":\"r7rs\",\"experiment\":\"r7rs\"") != NULL,
+              "the r7rs base is badged with the r7rs experiment");
+        CHECK(strstr(reg, "\"label\":\"Scheme\"") != NULL,
+              "the r7rs base carries a label for its own reader");
+        size_t n_badged = 0;
         for (size_t i = 0; i < lang_bases_count(); i++) {
             LangBaseDescriptor d;
             if (!lang_base_at(i, &d)) continue;
-            CHECK(d.experiment == NULL,
-                  "no base is experiment-gated (all eight are stable)");
+            if (d.experiment) {
+                n_badged++;
+                CHECK(strcmp(d.language, "r7rs") == 0 &&
+                      strcmp(d.experiment, "r7rs") == 0,
+                      "only the r7rs base is experiment-gated");
+            }
         }
+        CHECK(n_badged == 1, "exactly one base is badged (r7rs)");
+        CHECK(lang_bases_count() == 9,
+              "nine bases: four turmeric, four saffron, one r7rs");
     }
 
     /* The LANGUAGE axis survives a set_lang.  `saffron` reads with the
@@ -145,6 +164,30 @@ int main(void) {
           "set_lang accepts a slash-namespaced Saffron base");
     CHECK(strcmp(turi_wasm_get_lang(), "saffron/sweet") == 0,
           "get_lang reports the Saffron sweet base");
+
+    /* r7rs-lang-plan R1: the Scheme base switches both axes -- the language
+     * (dynamic, like Saffron) and its own reader (`#t` reads, `,` is not
+     * whitespace) -- and has no reader axis to spell. */
+    CHECK(turi_wasm_set_lang("r7rs") == 0, "set_lang accepts the r7rs base");
+    CHECK(strcmp(turi_wasm_get_lang(), "r7rs") == 0,
+          "get_lang reports the r7rs base");
+    CHECK(eval_contains("(defn add [a b] (+ a b))", "add") &&
+          eval_contains("(add 7.1 0.5)", "7.6"),
+          "an unannotated r7rs parameter takes a float (the dynamic trait)");
+    CHECK(eval_contains("#t", "true") && !eval_contains("#t", "#<error"),
+          "#t reads under the Scheme reader");
+    CHECK(eval_contains("#x1F", "31"),
+          "a radix prefix reads under the Scheme reader");
+    /* r7rs-lang-plan R9: and the PRELUDE came with it.  The switch rewound to
+     * the pinned Turmeric preload, which has no R7RS prelude, so `null?` (the
+     * prelude's r7rs-null?, reached through the rename) was an unknown name. */
+    CHECK(eval_contains("(null? (quote ()))", "true") &&
+          !eval_contains("(null? (quote ()))", "unknown"),
+          "set_lang r7rs brings the R7RS prelude: null? resolves through the rename");
+    CHECK(turi_wasm_set_lang("r7rs/sweet") == 1,
+          "r7rs has no reader axis: a slash spelling is rejected");
+    CHECK(strcmp(turi_wasm_get_lang(), "r7rs") == 0,
+          "a rejected r7rs/sweet leaves the session in r7rs");
 
     turi_wasm_shutdown();
 

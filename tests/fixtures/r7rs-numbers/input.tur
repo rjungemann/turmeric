@@ -1,0 +1,28 @@
+#lang r7rs
+;; r7rs-lang-plan R5: the numeric tower over int64 and double, on both back
+;; ends.  Every probe leads with 7.1 (CLAUDE.md): the stage is about the
+;; exact/inexact divergence, and an integral literal cannot show it.
+;; (+) (*) (- x) (/ x) and n-ary comparison chains are the lowering's; a
+;; mixed literal pair promotes; (/ 7 2) is the inexact 3.5 (no rationals);
+;; sqrt of a perfect square is exact; round is ties-to-even; min/max carry
+;; inexact contagion; number->string / string->number take a radix; an
+;; inexact integer prints with its .0 and the non-finite values by name.
+;; The two-value procedures (floor/ truncate/ exact-integer-sqrt) are in
+;; r7rs-numbers-values, and exact integers past int64 in r7rs-bignums (T1).
+(display (+ 1 2 3)) (display " ") (display (+)) (display " ") (display (*)) (display " ") (display (- 5)) (display " ") (display (- 10 1 2)) (display " ") (display (/ 2)) (newline)
+(display (+ 1 7.1)) (display " ") (display (* 2 7.1)) (display " ") (display (- 7.1 1)) (newline)
+(display (/ 7 2)) (display " ") (display (/ 7.1 2)) (display " ") (display (/ 8 2)) (display " ") (display (/ 1 3)) (newline)
+(display (< 1 2 3)) (display (< 1 3 2)) (display (= 1 1.0)) (display (= 1 1 1)) (display (<= 1 1 2)) (display (> 3 2 2)) (newline)
+(display (quotient 7 2)) (display (remainder -7 2)) (display (modulo -7 2)) (display (modulo 7 -2)) (newline)
+(display (abs -7.1)) (display " ") (display (min 1 7.1)) (display " ") (display (max 1 2 3)) (display " ") (display (max 1 2.0)) (newline)
+(display (exact? 7.1)) (display (inexact? 7.1)) (display (exact? 7)) (display (integer? 7.0)) (display (exact-integer? 7.0)) (display (rational? 7.1)) (newline)
+(display (exact->inexact 7)) (display " ") (display (inexact->exact 7.0)) (display " ") (display (inexact 3)) (display " ") (display (exact 7.0)) (newline)
+(display (number->string 255 16)) (display " ") (display (string->number "ff" 16)) (display " ") (display (string->number "7.1")) (display " ") (display (string->number "abc")) (display " ") (display (number->string 7.1)) (display " ") (display (number->string -42 2)) (newline)
+(display (floor 7.1)) (display " ") (display (ceiling 7.1)) (display " ") (display (round 7.5)) (display " ") (display (round 6.5)) (display " ") (display (truncate -7.1)) (display " ") (display (floor 7)) (newline)
+(display (sqrt 16)) (display " ") (display (sqrt 2)) (display " ") (display (expt 2 10)) (display " ") (display (expt 2.0 0.5)) (display " ") (display (expt 2 -1)) (newline)
+(display (zero? 0)) (display (positive? 7.1)) (display (negative? -1)) (display (odd? 7)) (display (even? 7)) (display (number? 7.1)) (display (number? "x")) (newline)
+(display (gcd 12 18)) (display " ") (display (lcm 4 6)) (display " ") (display (square 7)) (display " ") (display (exp 0)) (display " ") (display (log 1)) (display " ") (display (log 8 2)) (newline)
+(display (nan? (/ 0.0 0.0))) (display (infinite? (/ 1.0 0.0))) (display (finite? 7.1)) (display " ") (display (/ 1.0 0.0)) (display " ") (display (- (/ 1.0 0.0))) (newline)
+(display 7.0) (display " ") (display 0.1) (display " ") (display 3.14159265358979) (display " ") (display 1e21) (display " ") (display -0.5) (newline)
+(display (eqv? 2 2.0)) (display (= 2 2.0)) (display (equal? 2.0 2.0)) (newline)
+(display (atan 1 1)) (display " ") (display (atan 1)) (display " ") (display (sin 0)) (newline)

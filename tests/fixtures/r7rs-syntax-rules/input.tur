@@ -1,0 +1,123 @@
+#lang r7rs
+;; r7rs-lang-plan R4: syntax-rules.  The standard's own definitions of `or`
+;; and `let*` (R7RS 7.3, renamed so they do not collide with the core forms
+;; the lowering knows), then the pattern language -- literals, `_`, nested
+;; ellipses, `x ... ...`, an element after an ellipsis, an improper tail, a
+;; vector pattern, a datum literal -- the template language (dotted tails,
+;; the `(... ...)` escape, a custom ellipsis, quote), define-syntax at body
+;; start expanding to defines, let-syntax / letrec-syntax, and renaming
+;; hygiene (D5a): `swap!`'s tmp, `my-or`'s x and `my-or2`'s t never capture
+;; the use site's.  Runs on both back ends.  The standard's `do` is
+;; r7rs-syntax-rules-do (its expansion is a letrec-bound lambda over `any`,
+;; the compiled gap in docs/archive/r7rs-compiled-dynamic-shapes.md).
+(define-syntax my-or
+  (syntax-rules ()
+    ((my-or) #f)
+    ((my-or test) test)
+    ((my-or test1 test2 ...)
+     (let ((x test1))
+       (if x x (my-or test2 ...))))))
+
+(define-syntax my-let*
+  (syntax-rules ()
+    ((my-let* () body1 body2 ...)
+     (let () body1 body2 ...))
+    ((my-let* ((name1 val1) (name2 val2) ...)
+       body1 body2 ...)
+     (let ((name1 val1))
+       (my-let* ((name2 val2) ...)
+         body1 body2 ...)))))
+
+(display (my-or)) (display " ")
+(display (my-or #f 7)) (display " ")
+(display (my-or #f #f)) (display " ")
+(define x 10)
+(display (my-or #f x)) (newline)
+
+(display (my-let* ((a 1) (b (+ a 1)) (c (* b 3))) (list a b c))) (newline)
+(display (my-let* () 5)) (newline)
+
+(define-syntax swap!
+  (syntax-rules ()
+    ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+(define tmp 1) (define other 2)
+(swap! tmp other)
+(display (list tmp other)) (newline)
+
+;; literals, else, =>
+(define-syntax my-cond
+  (syntax-rules (else)
+    ((_ (else e ...)) (begin e ...))
+    ((_ (c e ...) rest ...) (if c (begin e ...) (my-cond rest ...)))))
+(display (my-cond (#f 1) ((= 1 1) 2) (else 3))) (display " ")
+(display (my-cond (#f 1) (else 3))) (newline)
+
+;; nested ellipsis
+(define-syntax my-let-values-ish
+  (syntax-rules ()
+    ((_ ((name val) ...) ((n2 v2) ...) body ...)
+     (let ((name val) ... (n2 v2) ...) body ...))))
+(display (my-let-values-ish ((a 1) (b 2)) ((c 3)) (list a b c))) (newline)
+
+(define-syntax flatten
+  (syntax-rules ()
+    ((_ (x ...) ...) (list x ... ...))))
+(display (flatten (1 2) () (3))) (newline)
+
+;; element after ellipsis, and an improper tail
+(define-syntax last-of
+  (syntax-rules ()
+    ((_ x ... y) y)))
+(display (last-of 1 2 3)) (display " ")
+(define-syntax rest-of
+  (syntax-rules ()
+    ((_ a . r) 'r)))
+(display (rest-of 1 2 3)) (display " ")
+(display (rest-of 1)) (newline)
+
+;; vectors, datum literals, _ wildcard
+(define-syntax vsum
+  (syntax-rules ()
+    ((_ #(a b)) (+ a b))
+    ((_ #(a b c)) (+ a b c))))
+(display (vsum #(1 2))) (display " ") (display (vsum #(1 2 3))) (display " ")
+(define-syntax is-zero
+  (syntax-rules ()
+    ((_ 0) "zero")
+    ((_ _) "other")))
+(display (is-zero 0)) (display " ") (display (is-zero 5)) (newline)
+
+;; recursive macro producing a define, at body start
+(define (f)
+  (define-syntax def2
+    (syntax-rules ()
+      ((_ a b v) (begin (define a v) (define b v)))))
+  (def2 p q 4)
+  (+ p q))
+(display (f)) (newline)
+
+;; let-syntax / letrec-syntax
+(display (let-syntax ((twice (syntax-rules () ((_ e) (* 2 e)))))
+           (twice 21)))
+(display " ")
+(display (letrec-syntax ((my-or2 (syntax-rules ()
+                                    ((_) #f)
+                                    ((_ e) e)
+                                    ((_ e r ...) (let ((t e)) (if t t (my-or2 r ...)))))))
+           (let ((t 5)) (my-or2 #f t))))
+(newline)
+
+;; (... ...) escape and a custom ellipsis
+(define-syntax def-list-macro
+  (syntax-rules ()
+    ((_ name) (define-syntax name (syntax-rules () ((_ x (... ...)) (list x (... ...))))))))
+(def-list-macro my-list)
+(display (my-list 1 2 3)) (display " ")
+(define-syntax my-list2
+  (syntax-rules dots ()
+    ((_ x dots) (list x dots))))
+(display (my-list2 4 5)) (newline)
+
+;; quote inside a template keeps the introduced symbol's name
+(define-syntax q (syntax-rules () ((_) (let ((t 1)) (list 't t)))))
+(display (q)) (newline)

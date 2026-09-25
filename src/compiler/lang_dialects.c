@@ -9,8 +9,14 @@
  * (reader_macros_install_builtins); a one-off syntax convenience belongs in a
  * `#use-reader-macros` file, and a semantic gate belongs in EXPERIMENTS[].
  *
- * The base set itself is rendered from the two enums below rather than
- * tabulated, because the legal bases are exactly their cross-product. */
+ * r7rs-lang-plan R1 (D1): the base set is a TABLE again, LANG_BASES[] below.
+ * It used to be rendered as the cross-product of {language} x {reader}, on
+ * the argument that "the legal bases are exactly their cross-product, and a
+ * table would have to be kept in step with both".  That stopped being true
+ * the moment a language arrived with its own reader: `r7rs/sweet` is not a
+ * thing, and `turmeric/r7rs` is not a thing either.  The table has one row
+ * per legal pair, and a language's LangTraits row says whether it spans the
+ * four Turmeric readers (`reader_axis_free`) or brings exactly one. */
 #include "lang_dialects.h"
 
 #include <stdio.h>
@@ -22,122 +28,207 @@
 #include "runtime/experiments.h"
 #include "runtime/globals.h"
 
-/* saffron-lang-plan S1: the base axis, for `tur dialects`.
- *
- * Rendered from the two enums rather than a table: the legal bases are the
- * cross-product of {language} x {reader}, and a table would have to be kept in
- * step with both.  `sweet-exp` is omitted on purpose -- it is a legacy alias
- * accepted on input and never generated (reader_type_name), so listing it would
- * advertise a spelling new code should not use. */
-static const LangDialect DIALECTS[] = { LANG_TURMERIC, LANG_SAFFRON };
-static const ReaderType  READERS[]  = { READER_TURMERIC, READER_CURLY_INFIX,
-                                        READER_NEOTERIC, READER_SWEET };
+/* r7rs-lang-plan R0 / D1: one trait row per language, indexed by LangDialect.
+ * The order MUST match the enum in diag.h; lang_traits() bounds-checks so a
+ * stray value degrades to the Turmeric row rather than past the array. */
+static const LangTraits LANG_TRAITS[] = {
+    /* LANG_TURMERIC */
+    { "turmeric", READER_TURMERIC, /*reader_axis_free=*/true,
+      /*dynamic=*/false, /*scheme_truthiness=*/false,
+      /*prelude=*/NULL, /*experiment=*/NULL },
+    /* LANG_SAFFRON: the dynamic substrate.  An unannotated parameter or
+     * return defaults to `any`; the prelude adapts the typed stdlib. */
+    { "saffron",  READER_TURMERIC, /*reader_axis_free=*/true,
+      /*dynamic=*/true,  /*scheme_truthiness=*/false,
+      /*prelude=*/"saffron/prelude.tur", /*experiment=*/NULL },
+    /* LANG_R7RS: Saffron's substrate under a Scheme reader (r7rs-lang-plan
+     * thesis, Section 1).  `dynamic` is the whole inheritance: unannotated
+     * means `any`, the dynamic operator/call/field/match surface and the
+     * `any` type-id machinery all come from that one bit.  The reader is its
+     * own and there is no reader axis (D1; `r7rs/sweet` is a deliberate
+     * deferral, Section 8 Q5).  Truthiness is Scheme's (R2): only `#f` is
+     * false.  The prelude is `stdlib/r7rs/prelude.tur` -- R2's core
+     * procedures, spelled `r7rs-<name>` and reached through
+     * scheme_lower.c's rename table; R7 grows it into `(scheme base)` and
+     * its siblings.  `experiment` is the EXPERIMENTS[] row that gates the
+     * dialect; the `#lang` line is itself the enable (D11). */
+    { "r7rs",     READER_R7RS,     /*reader_axis_free=*/false,
+      /*dynamic=*/true,  /*scheme_truthiness=*/true,
+      /*prelude=*/"r7rs/prelude.tur", /*experiment=*/"r7rs" },
+};
+
+const LangTraits *lang_traits(LangDialect d) {
+    size_t i = (size_t)d;
+    if (i >= sizeof(LANG_TRAITS) / sizeof(LANG_TRAITS[0])) i = 0;
+    return &LANG_TRAITS[i];
+}
+
+/* The base set: one row per legal (language, reader) pair, in the order
+ * `tur dialects` prints them.  A `reader_axis_free` language contributes one
+ * row per Turmeric reader; a language with its own reader contributes one.
+ * `sweet-exp` is omitted on purpose -- it is a legacy alias accepted on input
+ * and never generated (reader_type_name), so listing it would advertise a
+ * spelling new code should not use. */
+typedef struct LangBase {
+    LangDialect lang;
+    ReaderType  reader;
+} LangBase;
+
+static const LangBase LANG_BASES[] = {
+    { LANG_TURMERIC, READER_TURMERIC    },
+    { LANG_TURMERIC, READER_CURLY_INFIX },
+    { LANG_TURMERIC, READER_NEOTERIC    },
+    { LANG_TURMERIC, READER_SWEET       },
+    { LANG_SAFFRON,  READER_TURMERIC    },
+    { LANG_SAFFRON,  READER_CURLY_INFIX },
+    { LANG_SAFFRON,  READER_NEOTERIC    },
+    { LANG_SAFFRON,  READER_SWEET       },
+    { LANG_R7RS,     READER_R7RS        },
+};
+
+#define N_LANG_BASES (sizeof(LANG_BASES) / sizeof(LANG_BASES[0]))
+
+/* The reader half, unqualified.  reader_type_name returns the fully-qualified
+ * "turmeric/<suffix>" for the Turmeric readers, which reads as a
+ * contradiction in a Saffron row; the language already has its own column.
+ * A language-owned reader (READER_R7RS) has no slash and no Turmeric
+ * spelling, so it gets a descriptive word instead. */
+static const char *lang_reader_suffix(ReaderType r) {
+    if (r == READER_R7RS) return "scheme";
+    const char *full = reader_type_name(r);
+    const char *slash = strchr(full, '/');
+    return slash ? slash + 1 : "s-expr";
+}
 
 /* The base token for a (language, reader) pair: the bare language name when
  * the reader is that language's default, else "<language>/<reader-suffix>". */
 static void lang_base_spelling(LangDialect d, ReaderType r,
                                char *out, size_t cap) {
     const char *lang = lang_dialect_name(d);
-    if (r == READER_TURMERIC) { snprintf(out, cap, "%s", lang); return; }
-    /* reader_type_name is the fully-qualified "turmeric/<suffix>"; take the
-     * suffix and re-qualify it under this language. */
-    const char *full = reader_type_name(r);
-    const char *slash = strchr(full, '/');
-    snprintf(out, cap, "%s/%s", lang, slash ? slash + 1 : full);
-}
-
-/* The reader half, unqualified.  reader_type_name returns the fully-qualified
- * "turmeric/<suffix>", which reads as a contradiction in a Saffron row; the
- * language already has its own column. */
-static const char *lang_reader_suffix(ReaderType r) {
-    const char *full = reader_type_name(r);
-    const char *slash = strchr(full, '/');
-    return slash ? slash + 1 : "s-expr";
+    if (r == lang_traits(d)->default_reader) {
+        snprintf(out, cap, "%s", lang);
+        return;
+    }
+    snprintf(out, cap, "%s/%s", lang, lang_reader_suffix(r));
 }
 
 void lang_base_spelling_of(LangDialect d, ReaderType r, char *out, size_t cap) {
     lang_base_spelling(d, r, out, cap);
 }
 
+bool lang_base_lookup(const char *name, size_t len,
+                      LangDialect *out_dialect, ReaderType *out_reader) {
+    if (!name) return false;
+    for (size_t i = 0; i < N_LANG_BASES; i++) {
+        char base[64];
+        lang_base_spelling(LANG_BASES[i].lang, LANG_BASES[i].reader,
+                           base, sizeof base);
+        if (strlen(base) == len && memcmp(base, name, len) == 0) {
+            if (out_dialect) *out_dialect = LANG_BASES[i].lang;
+            if (out_reader)  *out_reader  = LANG_BASES[i].reader;
+            return true;
+        }
+    }
+    return false;
+}
+
 size_t lang_bases_count(void) {
-    return (sizeof(DIALECTS) / sizeof(DIALECTS[0]))
-         * (sizeof(READERS)  / sizeof(READERS[0]));
+    return N_LANG_BASES;
+}
+
+/* The STATUS a row prints and the badge a picker shows: the gating
+ * EXPERIMENTS[] name when the LANGUAGE half is gated, else NULL.  A gated
+ * base is badged, never hidden -- the `#lang` line is itself the enable, so
+ * the row stays selectable (D11). */
+static const char *lang_base_experiment(LangDialect d) {
+    return lang_traits(d)->experiment;
 }
 
 bool lang_base_at(size_t i, LangBaseDescriptor *out) {
-    if (!out || i >= lang_bases_count()) return false;
-    size_t nreaders = sizeof(READERS) / sizeof(READERS[0]);
-    LangDialect d = DIALECTS[i / nreaders];
-    ReaderType  r = READERS[i % nreaders];
+    if (!out || i >= N_LANG_BASES) return false;
+    LangDialect d = LANG_BASES[i].lang;
+    ReaderType  r = LANG_BASES[i].reader;
     lang_base_spelling(d, r, out->base, sizeof out->base);
-    out->language = lang_dialect_name(d);
-    out->reader   = lang_reader_suffix(r);
-    /* No dialect is experiment-gated any more: `saffron` graduated at 0.46.0
-     * and every base is stable.  The field stays because the SHAPE is what the
-     * playground picker and `tur dialects --json` consume -- a future gated
-     * dialect fills it in here and is badged rather than hidden, with no
-     * consumer change.  NULL means "no badge". */
-    out->experiment = NULL;
+    out->language   = lang_dialect_name(d);
+    out->reader     = lang_reader_suffix(r);
+    out->experiment = lang_base_experiment(d);
     return true;
 }
 
 void lang_dialects_print(void) {
     printf("%-22s %-9s %-12s %s\n", "BASE", "LANGUAGE", "READER", "STATUS");
-    for (size_t di = 0; di < sizeof(DIALECTS) / sizeof(DIALECTS[0]); di++) {
-        for (size_t ri = 0; ri < sizeof(READERS) / sizeof(READERS[0]); ri++) {
-            char base[64];
-            lang_base_spelling(DIALECTS[di], READERS[ri], base, sizeof base);
-            /* Every base is stable since saffron graduated at 0.46.0.  The
-             * column stays so a future gated dialect has somewhere to say so. */
-            const char *status = "stable";
-            printf("%-22s %-9s %-12s %s\n", base,
-                   lang_dialect_name(DIALECTS[di]),
-                   lang_reader_suffix(READERS[ri]), status);
-        }
+    for (size_t i = 0; i < N_LANG_BASES; i++) {
+        LangBaseDescriptor d;
+        if (!lang_base_at(i, &d)) continue;
+        /* A gated language says so in the column that was kept for it.  The
+         * name of the row is what `tur experiments` lists and what the
+         * lifecycle warning (TUR-W0060/W0061) cites. */
+        char status[80];
+        if (d.experiment)
+            snprintf(status, sizeof status, "experimental (%s)", d.experiment);
+        else
+            snprintf(status, sizeof status, "stable");
+        printf("%-22s %-9s %-12s %s\n", d.base, d.language, d.reader, status);
     }
 }
 
 void lang_dialects_print_json(void) {
     printf("[");
-    bool first = true;
-    for (size_t di = 0; di < sizeof(DIALECTS) / sizeof(DIALECTS[0]); di++) {
-        for (size_t ri = 0; ri < sizeof(READERS) / sizeof(READERS[0]); ri++) {
-            char base[64];
-            lang_base_spelling(DIALECTS[di], READERS[ri], base, sizeof base);
-            if (!first) printf(",");
-            first = false;
-            printf("\n    {\"base\":\"%s\",\"language\":\"%s\",\"reader\":\"%s\"",
-                   base, lang_dialect_name(DIALECTS[di]),
-                   lang_reader_suffix(READERS[ri]));
-            /* No `"experiment"` key on any base since saffron graduated at
-             * 0.46.0; a future gated dialect adds it back here. */
-            printf("}");
-        }
+    for (size_t i = 0; i < N_LANG_BASES; i++) {
+        LangBaseDescriptor d;
+        if (!lang_base_at(i, &d)) continue;
+        if (i) printf(",");
+        printf("\n    {\"base\":\"%s\",\"language\":\"%s\",\"reader\":\"%s\"",
+               d.base, d.language, d.reader);
+        /* The `"experiment"` key is present only on a gated base, so a
+         * consumer that keys on its presence sees exactly the badged rows. */
+        if (d.experiment) printf(",\"experiment\":\"%s\"", d.experiment);
+        printf("}");
     }
     printf("\n  ]");
 }
 
-/* saffron-lang-plan S2: see lang_dialects.h for why this is a registry lookup
- * rather than threaded state. */
-bool lang_span_is_saffron(Span sp) {
+/* saffron-lang-plan S2 / r7rs-lang-plan R0: see lang_dialects.h for why this
+ * is a registry lookup rather than threaded state, and why it asks the trait
+ * rather than the dialect's name. */
+bool lang_span_is_dynamic(Span sp) {
     const SourceFile *f = diag_source_file(sp.file_id);
-    return f != NULL && f->lang == LANG_SAFFRON;
+    return f != NULL && lang_traits(f->lang)->dynamic;
+}
+
+bool lang_span_is_scheme(Span sp) {
+    const SourceFile *f = diag_source_file(sp.file_id);
+    return f != NULL && lang_traits(f->lang)->scheme_truthiness;
 }
 
 /* saffron GRADUATED at 0.46.0: a non-default dialect is no longer gated, warns
  * nothing, and cannot be switched off by a manifest.  What remains is the one
- * side effect the gate used to carry incidentally -- flipping `g_opt_saffron`,
- * which the emitter reads to decide whether this build emits the `any` type and
- * instance registries and the dynamic-dispatch panic (emit_module.c).  Setting
- * it HERE, at the moment a `#lang saffron` file is read, is exactly when
- * `experiment_enable` used to set it, so the emitted C is unchanged on both
- * arms: a build with no Saffron TU still emits none of it.
+ * side effect the gate used to carry incidentally -- flipping
+ * `g_opt_dynamic_any`, which the emitter reads to decide whether this build
+ * emits the `any` type and instance registries and the dynamic-dispatch panic
+ * (emit_module.c).  Setting it HERE, at the moment a dynamic-language file is
+ * read, is exactly when `experiment_enable` used to set it, so the emitted C
+ * is unchanged on both arms: a build with no dynamic TU still emits none of
+ * it.  Keyed on the trait, not the dialect's identity (r7rs-lang-plan D2):
+ * any language whose row says `dynamic` needs the registries.
+ *
+ * r7rs-lang-plan D11: a language whose trait row names an EXPERIMENTS[] row
+ * is gated, and the `#lang` line is itself the enable -- a user who wrote
+ * `#lang r7rs` has opted in, and requiring `--enable=r7rs` as well is
+ * ceremony.  Enabled at CLI precedence, so a manifest cannot silently refuse
+ * a directive the file itself carries; the lifecycle warning
+ * (TUR-W0060/W0061) then fires once per compile from here, which is the
+ * dialect's elaboration entry point as far as the registry is concerned.
  *
  * Returns bool, and every caller still checks it, because that is the shape a
  * future gated dialect needs; today no dialect can fail. */
 bool lang_dialect_apply(LangDialect d, const char *path) {
     (void)path;
-    if (d == LANG_TURMERIC) return true;           /* the default: nothing to do */
-    g_opt_saffron = true;
+    const LangTraits *t = lang_traits(d);
+    if (t->experiment) {
+        (void)experiment_enable(t->experiment, XF_SRC_CLI);
+        experiment_warn_if_used(t->experiment);
+    }
+    if (t->dynamic) g_opt_dynamic_any = true;
     return true;
 }

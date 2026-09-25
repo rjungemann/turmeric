@@ -29,9 +29,32 @@ void emit_cps_callcc_prelude(Buf *out) {
 "    int64_t result;  /* value delivered by tur_escape_resume */\n"
 "    bool    valid;   /* false once the call/cc prompt has returned */\n"
 "} tur_escape_cont;\n"
+"/* r7rs-lang-plan R6 (D7): the prompts currently on the stack.  `valid` lives\n"
+" * in the prompt's own frame, so once that frame has returned the flag is a\n"
+" * dead stack word and reads as whatever ran there since -- a stale (k v)\n"
+" * then longjmp'd into garbage instead of reporting.  A continuation is live\n"
+" * iff its prompt is in this set; a landing truncates the set to itself, since\n"
+" * everything pushed above it was escaped over. */\n"
+"static TUR_THREAD_LOCAL tur_escape_cont **tur_escape_live;\n"
+"static TUR_THREAD_LOCAL int tur_escape_live_n, tur_escape_live_cap;\n"
+"static void tur_escape_live_push(tur_escape_cont *cc) {\n"
+"    if (tur_escape_live_n == tur_escape_live_cap) {\n"
+"        tur_escape_live_cap = tur_escape_live_cap ? tur_escape_live_cap * 2 : 16;\n"
+"        tur_escape_live = (tur_escape_cont **)realloc(tur_escape_live, (size_t)tur_escape_live_cap * sizeof *tur_escape_live);\n"
+"        if (!tur_escape_live) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+"    }\n"
+"    tur_escape_live[tur_escape_live_n++] = cc;\n"
+"}\n"
+"static void tur_escape_live_pop(tur_escape_cont *cc) {\n"
+"    for (int i = tur_escape_live_n; i > 0; i--)\n"
+"        if (tur_escape_live[i - 1] == cc) { tur_escape_live_n = i - 1; return; }\n"
+"}\n"
 "static int64_t tur_escape_resume(int64_t k, int64_t v) {\n"
 "    tur_escape_cont *cc = (tur_escape_cont *)(intptr_t)k;\n"
-"    if (!cc || !cc->valid) {\n"
+"    int live = 0;\n"
+"    for (int i = 0; i < tur_escape_live_n && cc; i++) if (tur_escape_live[i] == cc) { live = 1; break; }\n"
+"    if (!live || !cc->valid) {\n"
+"        fflush(stdout);\n"
 "        fprintf(stderr, \"tur: continuation invoked after its call/cc prompt returned\\n\");\n"
 "        abort();\n"
 "    }\n"
@@ -651,13 +674,20 @@ void emit_cps_runtime_prelude(Buf *out) {
  * A borrow_next node ends the walk: its ->next belongs to another chain (with
  * its own reap entry), so following it would double-free -- and by reap time
  * the borrowed tail may already be gone, so it must not even be read. */
-"static void dk_free(DK *k) { while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }\n");
+/* r7rs-lang-plan T5: once a re-entrant continuation exists (the R7RS
+ * prelude's r7rs-cont-capture__ sets tur_dk_pinned), a copy of the C stack may
+ * hold any live DK node, and re-entering it after its CPS entry returned must
+ * find the node intact -- so from then on DK memory is never reclaimed, the
+ * interpreter's process-lifetime policy.  Nothing else sets the flag, so every
+ * other program frees exactly as before. */
+"static int tur_dk_pinned = 0;\n"
+"static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }\n");
     buf_puts(out,
 "/* Free a single spliced node without following ->next -- used to reclaim the\n"
 " * one-off shift/perform node whose ->next points into an enclosing continuation\n"
 " * (dk_free would walk into that continuation and risk a double free).  See\n"
 " * docs/archive/cps-delimited-dk-node-leak.md. */\n"
-"__attribute__((unused)) static void dk_free_node(DK *k) { if (k && k->env_drop) k->env_drop(k->env); free(k); }\n");
+"__attribute__((unused)) static void dk_free_node(DK *k) { if (tur_dk_pinned) return; if (k && k->env_drop) k->env_drop(k->env); free(k); }\n");
     buf_puts(out,
 "/* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */\n"
 "typedef intptr_t (*__tur_cps_fn)();\n"
@@ -722,7 +752,7 @@ void emit_cps_runtime_prelude(Buf *out) {
     buf_puts(out,
 "__attribute__((unused)) static intptr_t __dk_reap_closure(intptr_t p) { __dk_reap_push((void *)p, 2); return p; }\n"
 "static void __dk_reap_run(void) {\n"
-"    for (size_t i = 0; i < __dk_reap_n; i++) {\n"
+"    for (size_t i = 0; i < __dk_reap_n && !tur_dk_pinned; i++) {\n"
 "        if (__dk_reap_kind[i] == 1) dk_free((DK *)__dk_reap_v[i]);\n"
 "        else if (__dk_reap_kind[i] == 2) TUR_CLOSURE_DROP(__dk_reap_v[i]);\n"
 "        else free(__dk_reap_v[i]);\n"

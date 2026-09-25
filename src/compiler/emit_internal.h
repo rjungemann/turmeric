@@ -314,8 +314,8 @@ typedef struct EmitCtx {
      * `int64_t` field ("makes integer from pointer without a cast").  Record
      * the decision once here and have the assignment read it back. */
     char     **env_struct_fn_typedefs;
-    uint8_t   n_env_struct_names;
-    uint8_t   cap_env_struct_names;
+    uint32_t  n_env_struct_names;
+    uint32_t  cap_env_struct_names;
     /* TS1: per-signature thunk typedef tracking */
     char    **thunk_typedef_names;
     uint32_t  n_thunk_typedef_names;
@@ -1260,6 +1260,9 @@ void tcg_reset_group_registry(void);
 bool fn_may_bounce(const struct FnDef *fd);
 void tb_register_fatbox(EmitCtx *ctx, const char *box, const char *fnptr);
 void tb_register_thunk(EmitCtx *ctx, const char *thunk);
+/* r7rs-lang-plan R6: register a boxed variadic fn type's id with its fixed
+ * parameter count, for the dynamic call's rest packing. */
+void dyn_register_variadic(EmitCtx *ctx, int64_t id, int fixed);
 void emit_frame_push_defer(EmitCtx *ctx, Buf *body, const char *frame_var,
                            const Expr *it);
 char *fresh_defer_thunk(EmitCtx *ctx);

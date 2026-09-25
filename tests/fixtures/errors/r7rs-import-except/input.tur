@@ -1,0 +1,6 @@
+#lang r7rs
+;; r7rs-lang-plan R3 / D9: `(except <set> name ...)` has no Turmeric import
+;; shape ("all but" is not something `import` can say), so it is a diagnostic
+;; that names the alternative rather than a silent full import.
+(import (except (scheme base) car))
+(display 1)

@@ -1,0 +1,428 @@
+#lang r7rs
+;;; r7rs/read -- (scheme read): `read`, the datum reader over a textual port.
+;;;
+;;; An on-demand R7RS library (see stdlib/r7rs/time.tur): the load expander
+;;; splices this file in when a Scheme file imports (scheme read).  It reads
+;;; the R7RS external representation (7.1.2) from a port's bytes, which is
+;;; enough because every delimiter is ASCII -- the bytes of a UTF-8 character
+;;; ride through tokens and strings untouched, and a `#\` character is
+;;; decoded.
+;;;
+;;; Covered: lists, dotted pairs and `[...]`; vectors `#(...)` and
+;;; bytevectors `#u8(...)`; strings with every R7RS escape and the line
+;;; continuation; `|...|` symbols; `#\` characters by glyph, name or `#\xHH`;
+;;; `#t`/`#true`/`#f`/`#false`; numbers with `#e #i #x #b #o #d` prefixes;
+;;; `'` `` ` `` `,` `,@`; `;` line comments, nested `#| |#` and `#;` datum
+;;; comments; `#!fold-case` / `#!no-fold-case`; and datum labels `#n=` /
+;;; `#n#`, including cycles.  A malformed datum raises an error object that
+;;; `read-error?` recognizes.  At end of input `read` returns the eof object.
+;;;
+;;; Since: r7rs-lang-plan R8
+;; (scheme read)
+
+;;; R7rsRd -- one `read` call's state: the port (whose fold-case flag the
+;;; `#!` directives set) and the datum labels seen so far, as a list of
+;;; `(n . R7rsLabelRef)`.
+(defstruct R7rsRd :heap [port : any labels : any])
+;;; R7rsLabelRef -- label n: a placeholder until its datum is complete.
+(defstruct R7rsLabelRef :heap [n : int done : bool value : any])
+(defn r7rs-rd-port__ [st : R7rsRd] : any (.port st))
+(defn r7rs-rd-fold?__ [st] : bool (r7rs-port-fold__ (r7rs-rd-port__ st)))
+(defn r7rs-rd-set-fold__ [st v : bool] : nil (r7rs-port-set-fold__ (r7rs-rd-port__ st) v))
+(defn r7rs-rd-labels__ [st : R7rsRd] : any (.labels st))
+(defn r7rs-rd-set-labels__ [st : R7rsRd v] : nil (set! (.labels st) v))
+(defn r7rs-label-ref?__ [x] : bool (is? x R7rsLabelRef))
+(defn r7rs-label-n__ [r : R7rsLabelRef] : int (.n r))
+(defn r7rs-label-done?__ [r : R7rsLabelRef] : bool (.done r))
+(defn r7rs-label-value__ [r : R7rsLabelRef] : any (.value r))
+(defn r7rs-label-finish__ [r : R7rsLabelRef v] : nil
+  (set! (.done r) true)
+  (set! (.value r) v))
+
+;;; r7rs-rd-fail__ -- raise a read error.
+(defn r7rs-rd-fail__ [msg : cstr] : any
+  (r7rs-raise (R7rsError msg r7rs-null-value__ 2)))
+
+(defn r7rs-rd-space?__ [b : int] : bool
+  (if (= b 32) true (if (>= b 9) (<= b 13) false)))
+;;; r7rs-rd-delim?__ -- whitespace, a bracket, `"`, `;`, `|`, or the end.
+(defn r7rs-rd-bracket?__ [b : int] : bool
+  (if (= b 40) true (if (= b 41) true (if (= b 91) true (= b 93)))))
+(defn r7rs-rd-delim?__ [b : int] : bool
+  (if (< b 0) true
+    (if (r7rs-rd-space?__ b) true
+      (if (r7rs-rd-bracket?__ b) true
+        (if (= b 34) true (if (= b 59) true (= b 124)))))))
+
+;;; r7rs-rd-token__ -- the bytes up to the next delimiter.
+(defn r7rs-rd-token-go-lp__ [io : R7rsIo out : R7rsIo] : bool
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (r7rs-rd-delim?__ b)
+      true
+      (do (r7rs-io-skip__ io 1)
+          (r7rs-io-add-byte__ out b)
+          (r7rs-rd-token-go-lp__ io out)))))
+(defn r7rs-rd-token-go__ [io : R7rsIo out : R7rsIo] : nil (r7rs-rd-token-go-lp__ io out) nil)
+(defn r7rs-rd-token__ [io : R7rsIo] : cstr
+  (let [out (r7rs-io-new__)]
+    (r7rs-rd-token-go__ io out)
+    (r7rs-io-take-str__ out)))
+
+;;; ---- atmosphere: whitespace and comments --------------------------------
+
+(defn r7rs-rd-line-comment-lp__ [io : R7rsIo] : bool
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (< b 0) true (do (r7rs-io-skip__ io 1) (if (= b 10) true (r7rs-rd-line-comment-lp__ io))))))
+(defn r7rs-rd-line-comment__ [io : R7rsIo] : nil (r7rs-rd-line-comment-lp__ io) nil)
+;;; r7rs-rd-block-comment__ -- after `#|`: to the matching `|#`, nesting.
+(defn r7rs-rd-block-comment-lp__ [io : R7rsIo depth : int] : bool
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (< b 0)
+      (do (r7rs-rd-fail__ "read: end of input inside a #| comment") true)
+      (if (if (= b 124) (= (r7rs-io-peek__ io 1) 35) false)
+        (do (r7rs-io-skip__ io 2) (if (= depth 1) true (r7rs-rd-block-comment-lp__ io (- depth 1))))
+        (if (if (= b 35) (= (r7rs-io-peek__ io 1) 124) false)
+          (do (r7rs-io-skip__ io 2) (r7rs-rd-block-comment-lp__ io (+ depth 1)))
+          (do (r7rs-io-skip__ io 1) (r7rs-rd-block-comment-lp__ io depth)))))))
+(defn r7rs-rd-block-comment__ [io : R7rsIo depth : int] : nil (r7rs-rd-block-comment-lp__ io depth) nil)
+;;; r7rs-rd-skip__ -- whitespace, comments and directives before a datum.
+(defn r7rs-rd-skip-lp__ [io : R7rsIo st] : bool
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (r7rs-rd-space?__ b)
+      (do (r7rs-io-skip__ io 1) (r7rs-rd-skip-lp__ io st))
+      (if (= b 59)
+        (do (r7rs-rd-line-comment__ io) (r7rs-rd-skip-lp__ io st))
+        (if (= b 35)
+          (let [c (r7rs-io-peek__ io 1)]
+            (if (= c 124)
+              (do (r7rs-io-skip__ io 2) (r7rs-rd-block-comment__ io 1) (r7rs-rd-skip-lp__ io st))
+              (if (= c 59)
+                (do (r7rs-io-skip__ io 2) (r7rs-rd-datum-req__ io st) (r7rs-rd-skip-lp__ io st))
+                (if (= c 33)
+                  (do (r7rs-io-skip__ io 2)
+                      (let [d (r7rs-rd-token__ io)]
+                        (if (r7rs-string=2__ d "fold-case") (r7rs-rd-set-fold__ st true)
+                          (if (r7rs-string=2__ d "no-fold-case") (r7rs-rd-set-fold__ st false)
+                            (do (r7rs-rd-fail__ "read: unknown #! directive") true))))
+                      (r7rs-rd-skip-lp__ io st))
+                  true))))
+          true)))))
+(defn r7rs-rd-skip__ [io : R7rsIo st] : nil (r7rs-rd-skip-lp__ io st) nil)
+
+;;; ---- strings, symbols, characters ----------------------------------------
+
+(defn r7rs-rd-hex-go__ [io : R7rsIo acc : int] : int
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (= b 59)
+      (do (r7rs-io-skip__ io 1) acc)
+      (let [d (if (if (>= b 48) (<= b 57) false) (- b 48)
+                (if (if (>= b 97) (<= b 102) false) (- b 87)
+                  (if (if (>= b 65) (<= b 70) false) (- b 55) -1)))]
+        (if (< d 0)
+          (do (r7rs-rd-fail__ "read: bad \\x escape (hex digits, then ;)") 0)
+          (do (r7rs-io-skip__ io 1) (r7rs-rd-hex-go__ io (+ (* acc 16) d))))))))
+(defn r7rs-rd-intraline-lp__ [io : R7rsIo] : bool
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (if (= b 32) true (= b 9)) (do (r7rs-io-skip__ io 1) (r7rs-rd-intraline-lp__ io)) true)))
+(defn r7rs-rd-intraline__ [io : R7rsIo] : nil (r7rs-rd-intraline-lp__ io) nil)
+;;; r7rs-rd-escape__ -- after `\` in a string or `|symbol|`.
+(defn r7rs-rd-escape__ [io : R7rsIo out : R7rsIo] : nil
+  (let [b (r7rs-io-peek__ io 0)]
+    (r7rs-io-skip__ io 1)
+    (if (= b 97) (r7rs-io-add-byte__ out 7)
+      (if (= b 98) (r7rs-io-add-byte__ out 8)
+        (if (= b 116) (r7rs-io-add-byte__ out 9)
+          (if (= b 110) (r7rs-io-add-byte__ out 10)
+            (if (= b 114) (r7rs-io-add-byte__ out 13)
+              (if (= b 120) (r7rs-io-add-code__ out (r7rs-rd-hex-go__ io 0))
+                (if (if (= b 32) true (if (= b 9) true (if (= b 10) true (= b 13))))
+                  ;; the line continuation: \ <intraline ws> newline <intraline ws>
+                  (do (if (= b 10) nil
+                        (do (r7rs-rd-intraline__ io)
+                            (if (= (r7rs-io-peek__ io 0) 13) (r7rs-io-skip__ io 1) nil)
+                            (if (= (r7rs-io-peek__ io 0) 10) (r7rs-io-skip__ io 1) nil)))
+                      (r7rs-rd-intraline__ io))
+                  (if (< b 0)
+                    (do (r7rs-rd-fail__ "read: end of input after \\") nil)
+                    (r7rs-io-add-byte__ out b)))))))))))
+;;; r7rs-rd-delimited__ -- a string (`"`) or a `|symbol|`, after the opener.
+(defn r7rs-rd-delimited-go-lp__ [io : R7rsIo out : R7rsIo close : int] : bool
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (< b 0)
+      (do (r7rs-rd-fail__ "read: end of input inside a string or |symbol|") true)
+      (do (r7rs-io-skip__ io 1)
+          (if (= b close)
+            true
+            (do (if (= b 92) (r7rs-rd-escape__ io out) (r7rs-io-add-byte__ out b))
+                (r7rs-rd-delimited-go-lp__ io out close)))))))
+(defn r7rs-rd-delimited-go__ [io : R7rsIo out : R7rsIo close : int] : nil (r7rs-rd-delimited-go-lp__ io out close) nil)
+(defn r7rs-rd-delimited__ [io : R7rsIo close : int] : cstr
+  (let [out (r7rs-io-new__)]
+    (r7rs-rd-delimited-go__ io out close)
+    (r7rs-io-take-str__ out)))
+
+;;; r7rs-rd-char-name__ -- the character a multi-letter `#\name` spells.
+(defn r7rs-rd-char-name__ [s : cstr] : any
+  (if (r7rs-string=2__ s "alarm") (:: (r7rs-char__ 7) any)
+    (if (r7rs-string=2__ s "backspace") (:: (r7rs-char__ 8) any)
+      (if (r7rs-string=2__ s "delete") (:: (r7rs-char__ 127) any)
+        (if (r7rs-string=2__ s "escape") (:: (r7rs-char__ 27) any)
+          (if (r7rs-string=2__ s "newline") (:: (r7rs-char__ 10) any)
+            (if (r7rs-string=2__ s "null") (:: (r7rs-char__ 0) any)
+              (if (r7rs-string=2__ s "return") (:: (r7rs-char__ 13) any)
+                (if (r7rs-string=2__ s "space") (:: (r7rs-char__ 32) any)
+                  (if (r7rs-string=2__ s "tab") (:: (r7rs-char__ 9) any)
+                    (let [h (if (= (r7rs-string-ref-code__ s 0) 120)
+                              (r7rs-string->number (r7rs-bsubstring__ s 1 (r7rs-blen__ s)) 16)
+                              false)]
+                      (if (r7rs-exact-integer? h)
+                        (:: (r7rs-char__ (r7rs-int-of__ h "char")) any)
+                        (r7rs-rd-fail__ "read: unknown character name")))))))))))))
+;;; r7rs-rd-char__ -- after `#\`: one character, then any name letters.
+(defn r7rs-rd-char__ [io : R7rsIo st] : any
+  (let [c (r7rs-io-read-code__ io)]
+    (if (< c 0)
+      (r7rs-rd-fail__ "read: end of input after #\\")
+      (let [rest (r7rs-rd-token__ io)]
+        (if (r7rs-string=2__ rest "")
+          (:: (r7rs-char__ c) any)
+          (let [name (r7rs-string-append2__ (r7rs-string-of-code__ c) rest)]
+            (r7rs-rd-char-name__ (if (r7rs-rd-fold?__ st) (r7rs-string-foldcase name) name))))))))
+
+;;; ---- tokens: numbers, symbols, booleans ------------------------------------
+
+;;; r7rs-rd-number__ -- T0: a number token through the one R7RS number parser
+;;; (stdlib/r7rs/numsyntax.tur; the source reader's too), so `1/2` and `1+2i`
+;;; are one token (T6: `1+2i` a complex number).  A number the tower cannot
+;;; hold is a read error naming the reason, never a symbol and never a
+;;; different number.  `none` is what
+;;; a token that is not number syntax at all reads as.
+(defn r7rs-rd-number__ [s : cstr none] : any
+  (let [k (r7rs-numsyn-kind__ s 10)]
+    (if (= k 1)
+      (:: (r7rs-numsyn-int__ s 10) any)
+      (if (= k 2)
+        (:: (r7rs-numsyn-float__ s 10) any)
+        (if (= k 3)
+          (r7rs-rd-fail__ (r7rs-string-append2__ "read: `"
+                                                 (r7rs-string-append2__ s
+                                                                        (r7rs-string-append2__ "`: " (r7rs-numsyn-why__ s 10)))))
+          (if (= k 4)
+            (r7rs-big-norm__ (r7rs-numsyn-big__ s 10))
+            (if (= k 5)
+              (r7rs-ratio-of-str__ (r7rs-numsyn-big__ s 10))
+              (if (= k 6)
+                (r7rs-complex-of-str__ (r7rs-numsyn-big__ s 10))
+                none))))))))
+;;; r7rs-rd-hash-token__ -- a `#` token that is not a bracket or a char.
+(defn r7rs-rd-hash-token__ [s : cstr] : any
+  (if (if (r7rs-string=2__ s "#t") true (r7rs-string=2__ s "#true")) (:: true any)
+    (if (if (r7rs-string=2__ s "#f") true (r7rs-string=2__ s "#false")) (:: false any)
+      (let [n (r7rs-rd-number__ s (:: false any))]
+        (if (r7rs-number? n) n (r7rs-rd-fail__ "read: bad # syntax"))))))
+;;; r7rs-rd-atom__ -- a token: a number if it reads as one, else a symbol.
+(defn r7rs-rd-atom__ [s : cstr st] : any
+  (if (> (r7rs-numsyn-kind__ s 10) 0)
+    (r7rs-rd-number__ s (:: false any))
+    (:: (str->sym (if (r7rs-rd-fold?__ st) (r7rs-string-foldcase s) s)) any)))
+
+;;; ---- datum labels ------------------------------------------------------------
+
+(defn r7rs-rd-label-find__ [l n : int] : any
+  (if (r7rs-null? l)
+    (r7rs-rd-fail__ "read: reference to an undefined datum label")
+    (if (= (r7rs-label-n__ (r7rs-cdr (r7rs-car l))) n)
+      (r7rs-cdr (r7rs-car l))
+      (r7rs-rd-label-find__ (r7rs-cdr l) n))))
+;;; r7rs-rd-patch__ -- replace the placeholder `ref` by `val` inside x, once
+;;; per pair or vector (the value may already be cyclic through an earlier
+;;; label, so the walk keeps a visited table).
+(defn r7rs-rd-is__ [x ref] : bool (if (r7rs-label-ref?__ x) (r7rs-same-ref__ x ref) false))
+(defn r7rs-rd-patch-vec-lp__ [v : (Vec any) i : int ref val seen : R7rsIdTab] : bool
+  (if (>= i (vec-len v))
+    true
+    (do (if (r7rs-rd-is__ (vec-get v i) ref) (vec-set! v i val) (r7rs-rd-patch__ (vec-get v i) ref val seen))
+        (r7rs-rd-patch-vec-lp__ v (+ i 1) ref val seen))))
+(defn r7rs-rd-patch-vec__ [v : (Vec any) i : int ref val seen : R7rsIdTab] : nil (r7rs-rd-patch-vec-lp__ v i ref val seen) nil)
+(defn r7rs-rd-patch-lp__ [x ref val seen : R7rsIdTab] : bool
+  (if (r7rs-node?__ x)
+    (if (= (r7rs-idtab-get__ seen x) -2)
+      (do (r7rs-idtab-put__ seen x 1)
+          (if (r7rs-pair? x)
+            (do (if (r7rs-rd-is__ (r7rs-car x) ref) (r7rs-set-car! x val) (r7rs-rd-patch-lp__ (r7rs-car x) ref val seen))
+                (if (r7rs-rd-is__ (r7rs-cdr x) ref) (do (r7rs-set-cdr! x val) true) (r7rs-rd-patch-lp__ (r7rs-cdr x) ref val seen)))
+            (do (r7rs-rd-patch-vec__ x 0 ref val seen) true)))
+      true)
+    true))
+(defn r7rs-rd-patch__ [x ref val seen : R7rsIdTab] : nil (r7rs-rd-patch-lp__ x ref val seen) nil)
+;;; r7rs-rd-label__ -- after `#`, digits then `=` (define) or `#` (refer).
+(defn r7rs-rd-label__ [io : R7rsIo st] : any
+  (let [digits (r7rs-rd-label-digits__ io (r7rs-io-new__))
+        n (r7rs-int-of__ (r7rs-string->number digits) "label")
+        b (r7rs-io-peek__ io 0)]
+    (r7rs-io-skip__ io 1)
+    (if (= b 61)
+      (let [ref (:: (R7rsLabelRef n false false) any)]
+        (r7rs-rd-set-labels__ st (r7rs-cons (r7rs-cons n ref) (r7rs-rd-labels__ st)))
+        (let [d (r7rs-rd-datum-req__ io st)
+              seen (r7rs-idtab-new__)]
+          (r7rs-label-finish__ ref d)
+          (r7rs-rd-patch__ d ref d seen)
+          (r7rs-idtab-free__ seen)
+          d))
+      (if (= b 35)
+        (let [ref (r7rs-rd-label-find__ (r7rs-rd-labels__ st) n)]
+          (if (r7rs-label-done?__ ref) (r7rs-label-value__ ref) ref))
+        (r7rs-rd-fail__ "read: a datum label is #n= or #n#")))))
+(defn r7rs-rd-label-digits__ [io : R7rsIo out : R7rsIo] : cstr
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (if (>= b 48) (<= b 57) false)
+      (do (r7rs-io-skip__ io 1) (r7rs-io-add-byte__ out b) (r7rs-rd-label-digits__ io out))
+      (r7rs-io-take-str__ out))))
+
+;;; ---- lists and the datum ------------------------------------------------------
+
+(defn r7rs-rd-close?__ [b : int] : bool (if (= b 41) true (= b 93)))
+;;; r7rs-rd-dot?__ -- a lone `.` (the dotted-pair marker, not `...`).
+(defn r7rs-rd-dot?__ [io : R7rsIo] : bool
+  (if (= (r7rs-io-peek__ io 0) 46) (r7rs-rd-delim?__ (r7rs-io-peek__ io 1)) false))
+(defn r7rs-rd-reverse-onto__ [acc tail] : any
+  (if (r7rs-null? acc) tail (r7rs-rd-reverse-onto__ (r7rs-cdr acc) (R7rsPair (r7rs-car acc) tail))))
+;;; r7rs-rd-list__ -- after `(` or `[`: the elements, a dotted tail, the close.
+(defn r7rs-rd-list__ [io : R7rsIo st acc] : any
+  (r7rs-rd-skip__ io st)
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (< b 0)
+      (r7rs-rd-fail__ "read: end of input inside a list")
+      (if (r7rs-rd-close?__ b)
+        (do (r7rs-io-skip__ io 1) (r7rs-rd-reverse-onto__ acc r7rs-null-value__))
+        (if (r7rs-rd-dot?__ io)
+          (if (r7rs-null? acc)
+            (r7rs-rd-fail__ "read: a dot must follow at least one element")
+            (do (r7rs-io-skip__ io 1)
+                (let [tail (r7rs-rd-datum-req__ io st)]
+                  (r7rs-rd-skip__ io st)
+                  (if (r7rs-rd-close?__ (r7rs-io-peek__ io 0))
+                    (do (r7rs-io-skip__ io 1) (r7rs-rd-reverse-onto__ acc tail))
+                    (r7rs-rd-fail__ "read: expected ) after the dotted tail")))))
+          (r7rs-rd-list__ io st (R7rsPair (r7rs-rd-datum-req__ io st) acc)))))))
+(defn r7rs-rd-bytes__ [l v : (Vec int)] : (Vec int)
+  (if (r7rs-null? l)
+    v
+    (let [x (r7rs-car l)]
+      (if (if (r7rs-exact-integer? x) (if (>= x 0) (<= x 255) false) false)
+        (do (vec-push! v (r7rs-int-of__ x "byte")) (r7rs-rd-bytes__ (r7rs-cdr l) v))
+        (do (r7rs-rd-fail__ "read: a bytevector element must be a byte 0..255") v)))))
+(defn r7rs-rd-quoted__ [io : R7rsIo st name : cstr] : any
+  (R7rsPair (:: (str->sym name) any) (R7rsPair (r7rs-rd-datum-req__ io st) r7rs-null-value__)))
+
+;;; r7rs-rd-datum__ -- one datum, or the eof object at the end of input.
+(defn r7rs-rd-datum__ [io : R7rsIo st] : any
+  (r7rs-rd-skip__ io st)
+  (let [b (r7rs-io-peek__ io 0)]
+    (if (< b 0) r7rs-eof-value__
+      (if (if (= b 40) true (= b 91))
+        (do (r7rs-io-skip__ io 1) (r7rs-rd-list__ io st r7rs-null-value__))
+        (if (r7rs-rd-close?__ b)
+          (do (r7rs-io-skip__ io 1) (r7rs-rd-fail__ "read: unexpected )"))
+          (if (= b 39) (do (r7rs-io-skip__ io 1) (r7rs-rd-quoted__ io st "quote"))
+            (if (= b 96) (do (r7rs-io-skip__ io 1) (r7rs-rd-quoted__ io st "quasiquote"))
+              (if (= b 44)
+                (if (= (r7rs-io-peek__ io 1) 64)
+                  (do (r7rs-io-skip__ io 2) (r7rs-rd-quoted__ io st "unquote-splicing"))
+                  (do (r7rs-io-skip__ io 1) (r7rs-rd-quoted__ io st "unquote")))
+                (if (= b 34)
+                  (do (r7rs-io-skip__ io 1) (:: (r7rs-rd-delimited__ io 34) any))
+                  (if (= b 124)
+                    (do (r7rs-io-skip__ io 1) (:: (str->sym (r7rs-rd-delimited__ io 124)) any))
+                    (if (= b 35)
+                      (r7rs-rd-hash__ io st)
+                      ;; R10: a lone `.` is never a datum -- the list reader
+                      ;; takes it before asking for one, so here it is after
+                      ;; a `#;` (`(a #;. b)`), a quote or a label.
+                      (if (r7rs-rd-dot?__ io)
+                        (r7rs-rd-fail__ "read: a datum was expected, not a lone .")
+                        (r7rs-rd-atom__ (r7rs-rd-token__ io) st)))))))))))))
+;;; r7rs-rd-hash__ -- a datum that starts with `#`.
+(defn r7rs-rd-hash__ [io : R7rsIo st] : any
+  (let [c (r7rs-io-peek__ io 1)]
+    (if (= c 40)
+      (do (r7rs-io-skip__ io 2) (:: (r7rs-list->vector (r7rs-rd-list__ io st r7rs-null-value__)) any))
+      (if (if (= c 117) (if (= (r7rs-io-peek__ io 2) 56) (= (r7rs-io-peek__ io 3) 40) false) false)
+        (do (r7rs-io-skip__ io 4)
+            (R7rsBytevector (r7rs-rd-bytes__ (r7rs-rd-list__ io st r7rs-null-value__) (:: (vec-new) (Vec int)))))
+        (if (= c 92)
+          (do (r7rs-io-skip__ io 2) (r7rs-rd-char__ io st))
+          (if (if (>= c 48) (<= c 57) false)
+            (do (r7rs-io-skip__ io 1) (r7rs-rd-label__ io st))
+            (r7rs-rd-hash-token__ (r7rs-rd-token__ io))))))))
+;;; r7rs-rd-datum-req__ -- a datum that must be there (inside a list, after
+;;; a quote or a label).
+(defn r7rs-rd-datum-req__ [io : R7rsIo st] : any
+  (let [d (r7rs-rd-datum__ io st)]
+    (if (r7rs-eof-object? d) (r7rs-rd-fail__ "read: unexpected end of input") d)))
+
+;;; r7rs-read -- (read [port]): the next datum, or the eof object.
+(defn r7rs-read [& r : any] : any
+  (let [port (r7rs-port-of-chain__ (:: r (Cons any)) r7rs-current-input-port)]
+    (r7rs-rd-datum__ (r7rs-in-io__ port) (:: (R7rsRd port r7rs-null-value__) any))))
+
+;;; ---- T4: the eval bridge -----------------------------------------------
+
+;;; r7rs-bridge-write__ -- internal (r7rs-lang-plan T4): x as `write` text,
+;;; the form a datum crosses to or from the embedded evaluator in.
+(defn r7rs-bridge-write__ [x] : cstr
+  (let [p (r7rs-open-output-string)]
+    (r7rs-write x p)
+    (r7rs-get-output-string p)))
+;;; r7rs-bridge-read__ -- internal (T4): the datum `text` writes.
+(defn r7rs-bridge-read__ [text : cstr] : any (r7rs-read (r7rs-open-input-string text)))
+;;; r7rs-bridge-value__ -- internal (T4): an evaluated expression's value as
+;;; an `any`.  A top-level expression's value is its elaborated type's
+;;; representation (a `let` yielding a vector is the bare Vec), which `write`
+;;; cannot read as a Scheme value; passing it through an `any` parameter
+;;; widens it the way a procedure's result is.
+(defn r7rs-bridge-value__ [x] : any x)
+
+;;; R7rsBridgeRaised -- internal (T4): an object raised on one side of the
+;;; eval bridge, caught there to be raised again on the other.
+(defstruct R7rsBridgeRaised :heap [obj : any])
+(defn r7rs-bridge-raised__ [obj] : any (R7rsBridgeRaised obj))
+(defn r7rs-bridge-raised?__ [x] : bool (is? x R7rsBridgeRaised))
+(defn r7rs-bridge-raised-obj__ [x : R7rsBridgeRaised] : any (.obj x))
+;;; r7rs-bridge-catch__ -- internal (T4): (thunk)'s value, or the object it
+;;; raised, as an R7rsBridgeRaised.
+(defn r7rs-bridge-catch__ [thunk] : any
+  (r7rs-call/ec__ (fn [k] : any
+                    (r7rs-with-exception-handler (fn [e] : any (k (R7rsBridgeRaised e))) thunk))))
+;;; r7rs-bridge-catch-apply__ -- internal (T4): (apply f l), caught.
+(defn r7rs-bridge-catch-apply__ [f l] : any
+  (r7rs-bridge-catch__ (fn [] : any (r7rs-apply-list__ f l))))
+;;; r7rs-bridge-condition__ -- internal (T4): a caught object as text: an
+;;; error object is (#t kind message . irritants), anything else (#f . obj).
+(defn r7rs-bridge-condition__ [r] : cstr
+  (let [o (r7rs-bridge-raised-obj__ r)]
+    (r7rs-bridge-write__ (if (r7rs-error-object? o)
+                           (R7rsPair true
+                                     (R7rsPair (r7rs-error-kind__ o)
+                                               (R7rsPair (r7rs-error-object-message o)
+                                                         (r7rs-error-object-irritants o))))
+                           (R7rsPair false o)))))
+;;; r7rs-bridge-reraise__ -- internal (T4): raise what a condition text names.
+(defn r7rs-bridge-reraise__ [text : cstr] : any
+  (let [c (r7rs-bridge-read__ text)]
+    (if (r7rs-eqv? (r7rs-car c) (:: true any))
+      (r7rs-bridge-reraise-error__ (r7rs-cdr c))
+      (r7rs-raise (r7rs-cdr c)))))
+(defn r7rs-bridge-reraise-error__ [c] : any
+  (r7rs-raise (R7rsError (r7rs-car (r7rs-cdr c)) (r7rs-cdr (r7rs-cdr c)) (cast (r7rs-car c) int))))
+;;; r7rs-bridge-host-wrap__ -- internal (T4): the procedure evaluated code
+;;; sees for a program procedure: it calls the registered native and raises
+;;; again what the program procedure raised.
+(defn r7rs-bridge-host-wrap__ [native] : any
+  (fn [& args : any] : any
+    (r7rs-bridge-host-result__ (r7rs-apply-list__ native (r7rs-chain->list__ (:: args (Cons any)))))))
+(defn r7rs-bridge-host-result__ [r] : any
+  (if (r7rs-bridge-raised?__ r)
+    (r7rs-bridge-reraise__ (r7rs-str__ (r7rs-bridge-raised-obj__ r)))
+    r))

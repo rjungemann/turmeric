@@ -6,6 +6,9 @@
 #     input.tur (or <name>.tur)
 #     expected.stdout
 #     expected.c          (optional codegen snapshot)
+#     expected.xfail      (optional: a named failing test -- the stdout
+#                          mismatch is expected and passes; a match fails
+#                          and says to delete the marker)
 #
 #   tests/fixtures/errors/<name>/          — negative fixture
 #     input.tur
@@ -459,7 +462,12 @@ write_result() {
     # Single-line echo calls are atomic on Linux/macOS (under PIPE_BUF),
     # so lines from concurrent workers do not interleave.
     if [ "$kind" = "PASS" ]; then
-        echo "PASS $name"
+        # A named failing test says so on its PASS line, so a reader of the
+        # log sees the gap is still open; skips stay terse.
+        case "$detail" in
+            *xfail*) echo "PASS $name $detail" ;;
+            *)       echo "PASS $name" ;;
+        esac
     elif [ "$kind" = "FAIL" ]; then
         echo "FAIL $name${detail:+ — $detail}"
     fi
@@ -920,13 +928,35 @@ run_happy() {
         return
     fi
 
+    # expected.xfail: a NAMED FAILING TEST.  expected.stdout holds the answer
+    # the language spec requires and the marker (whose contents say why) says
+    # the implementation does not produce it yet -- a stdout mismatch is the
+    # expected outcome and PASSES as "(xfail)"; a match is a FAIL that says to
+    # delete the marker, because the gap it recorded has closed.  Only the
+    # stdout diff is excused: a build failure, a crash or a timeout on such a
+    # fixture is still a failure, so a regression cannot hide behind the
+    # marker.  First use: r7rs-lang-plan D5's referential-transparency gap
+    # (tests/fixtures/r7rs-syntax-rules-referential-transparency).  Never
+    # stamped, so it re-runs every time.
     if [ -f "$dir/expected.stdout" ]; then
         if ! diff -u "$dir/expected.stdout" "$actual_stdout" > /dev/null; then
+            if [ -f "$dir/expected.xfail" ]; then
+                write_result "PASS" "$name" "(xfail: still fails, as expected.xfail says)" ""
+                return
+            fi
             {
                 echo "FAIL $name — stdout mismatch"
                 diff -u "$dir/expected.stdout" "$actual_stdout" | sed 's/^/    /'
             } > "$log_file"
             write_result "FAIL" "$name" "stdout mismatch" "$log_file"
+            return
+        elif [ -f "$dir/expected.xfail" ]; then
+            {
+                echo "FAIL $name — expected to fail (expected.xfail) but its stdout now matches expected.stdout"
+                echo "    The gap the marker records has closed: delete expected.xfail and keep the fixture."
+                sed 's/^/    marker: /' "$dir/expected.xfail"
+            } > "$log_file"
+            write_result "FAIL" "$name" "unexpectedly passed -- delete expected.xfail" "$log_file"
             return
         fi
     fi

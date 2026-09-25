@@ -2,7 +2,7 @@
 #include "elab_internal.h"
 #include "globals.h"         /* class-superclasses: g_opt_class_superclasses */
 #include "experiments.h"     /* class-superclasses: experiment_warn_if_used */
-#include "lang_dialects.h"   /* saffron-lang-plan S4: lang_span_is_saffron */
+#include "lang_dialects.h"   /* saffron-lang-plan S4: lang_span_is_dynamic */
 #include "refine_discharge.h"     /* RT1: instance/class refinement variance */
 #include "refine_solver.h"        /* RT1: refine_model_search, for the variance witness */
 #include "forms.h"
@@ -7505,9 +7505,10 @@ found_method:;
          * program with a CONCRETE receiver still gets ordinary static field
          * access and ordinary method dispatch; only a genuinely dynamic
          * receiver defers. */
-        if (obj && obj->type.kind == TY_ANY && lang_span_is_saffron(call->span)) {
+        if (obj && obj->type.kind == TY_ANY && lang_span_is_dynamic(call->span)) {
             Type any_t;
             memset(&any_t, 0, sizeof(any_t));
+    any_t.copy_kind = CK_COPY;   /* CK_UNIQUE is 0: a zeroed type is unique-kinded (saffron-any-let-binding-is-unique) */
             any_t.kind = TY_ANY;
             Expr *df = expr_new(e->arena, EX_DYN_FIELD, any_t, call->span);
             df->as.dyn_field_.obj   = obj;
@@ -7687,7 +7688,7 @@ found_method:;
          * runtime would be the wrong default: there `narrow it first` really is
          * the answer.  So the two dialects differ in what they do with the same
          * resolution state, not in how they reach it. */
-        if (lang_span_is_saffron(call->span)) {
+        if (lang_span_is_dynamic(call->span)) {
             TypeClass *tc = best_inst->typeclass;
             uint8_t slot = 0;
             bool found_slot = false;

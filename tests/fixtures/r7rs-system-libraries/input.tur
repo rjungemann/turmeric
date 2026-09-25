@@ -1,0 +1,22 @@
+#lang r7rs
+;; r7rs-lang-plan R7: the on-demand libraries.  Importing (scheme time),
+;; (scheme process-context) or (scheme file) splices stdlib/r7rs/<lib>.tur
+;; into the program before the lowering; a program that does not import one
+;; carries none of it, and its names stay free.  `exit` runs the outstanding
+;; dynamic-wind afters (the `out` below) and leaves with its status.
+(import (scheme base) (scheme write) (scheme time) (scheme process-context) (scheme file))
+(define t0 (current-second))
+(display (and (inexact? t0) (> t0 1700000000.0))) (newline)
+(define j0 (current-jiffy))
+(display (list (exact-integer? j0) (jiffies-per-second) (>= (current-jiffy) j0))) (newline)
+(display (command-line)) (newline)
+(display (string? (get-environment-variable "PATH"))) (newline)
+(display (get-environment-variable "R7RS_FIXTURE_SURELY_UNSET")) (newline)
+(display (pair? (assoc "PATH" (get-environment-variables)))) (newline)
+(display (list (file-exists? "/") (file-exists? "/no/such/path/here"))) (newline)
+(display (guard (e ((file-error? e) (list 'file-error (error-object-message e))))
+  (delete-file "/no/such/path/here")))
+(newline)
+(display (guard (e ((file-error? e) 'file) ((error-object? e) 'plain)) (error "x"))) (newline)
+(dynamic-wind (lambda () (display "in ")) (lambda () (exit 3)) (lambda () (display "out") (newline)))
+(display "not reached") (newline)

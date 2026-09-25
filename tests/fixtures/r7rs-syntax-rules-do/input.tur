@@ -1,0 +1,38 @@
+#lang r7rs
+;; r7rs-lang-plan R4: the standard's own `do` (R7RS 7.3), including the
+;; "step" literal-string rules and the `(if #f #f)` unspecified value.  Its
+;; expansion is a letrec-bound lambda over `any`, which was a compiled
+;; back end gap until R6 closed it (docs/archive/r7rs-compiled-dynamic-
+;; shapes.md), so this runs on both back ends now; r7rs-syntax-rules holds
+;; the rest of the syntax-rules coverage.
+(define-syntax my-do
+  (syntax-rules ()
+    ((my-do ((var init step ...) ...)
+         (test expr ...)
+         command ...)
+     (letrec
+       ((loop
+         (lambda (var ...)
+           (if test
+               (begin
+                 (if #f #f)
+                 expr ...)
+               (begin
+                 command
+                 ...
+                 (loop (my-do "step" var step ...)
+                       ...))))))
+       (loop init ...)))
+    ((my-do "step" x)
+     x)
+    ((my-do "step" x y)
+     y)))
+
+(display (my-do ((vec (make-vector 5 0)) (i 0 (+ i 1)))
+            ((= i 5) vec)
+            (vector-set! vec i i)))
+(newline)
+(display (let ((x '(1 3 5 7 9)))
+           (my-do ((x x (cdr x)) (sum 0 (+ sum (car x))))
+               ((null? x) sum))))
+(newline)

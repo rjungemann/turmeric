@@ -68,7 +68,58 @@ for line, want in [('(defn g [a : int] : int', ':int'),
         fails += 1
         print(f"FAIL gendocs-parse: _extract_return_type({line!r}) = {got!r}, want {want!r}")
 
+# r7rs-lang-plan R9: a `#lang r7rs` library.  Measured before the fix: the
+# parser found the exports and NO definitions, and named the module after the
+# file (`tur/shapes`) instead of the library (`geo/shapes`) -- so a Scheme
+# library documented as an empty page.
+import tempfile  # noqa: E402
+from gendocs import parse_tur_file, _parse_scheme_def  # noqa: E402
+
+SCHEME_CASES = [
+    ('define', '(define (area w h) (* w h))', ('defn', 'area', [('w', None), ('h', None)])),
+    ('define', '(define (sum . xs) (apply + xs))', ('defn', 'sum', [('. xs', None)])),
+    ('define', '(define (f a . more) a)', ('defn', 'f', [('a', None), ('. more', None)])),
+    ('define', '(define pi 3.25)', None),
+    ('define-syntax', '(define-syntax swap! (syntax-rules () ...))', ('defmacro', 'swap!', [])),
+    ('define-record-type', '(define-record-type point (make-point x y) point? (x px))',
+     ('defstruct', 'point', [('x', None), ('y', None)])),
+]
+for form, text, want in SCHEME_CASES:
+    got = _parse_scheme_def(form, text)
+    if got != want:
+        fails += 1
+        print(f"FAIL gendocs-parse (scheme): {text}\n     got {got!r}, want {want!r}")
+
+LIB = """#lang r7rs
+;;; shapes -- area helpers.
+;;
+(define-library (geo shapes)
+  (export area)
+  (import (scheme base))
+  (begin
+    ;;; area -- a rectangle's area.
+    (define (area w h) (* w h))
+    (define (helper y) y)))
+"""
+with tempfile.NamedTemporaryFile('w', suffix='.tur', delete=False) as tf:
+    tf.write(LIB)
+mod = parse_tur_file(tf.name)
+os.unlink(tf.name)
+defs = {d['name']: d for d in mod['definitions']}
+checks = [
+    (mod['name'] == 'geo/shapes', f"library name: got {mod['name']!r}"),
+    (mod['docstring'] is not None, "the module docstring is promoted"),
+    ('area' in defs and defs['area']['exported'], "area is found and exported"),
+    ('area' in defs and defs['area']['docstring'] is not None, "area keeps its ;;; docstring"),
+    ('helper' in defs and not defs['helper']['exported'], "helper is found and not exported"),
+]
+for ok, what in checks:
+    if not ok:
+        fails += 1
+        print(f"FAIL gendocs-parse (scheme library): {what}")
+
 if fails:
     print(f"gendocs-parse: {fails} case(s) failed")
     sys.exit(1)
-print(f"PASS check-gendocs-parse ({len(CASES)} signatures, both spellings)")
+print(f"PASS check-gendocs-parse ({len(CASES)} signatures, both spellings; "
+      f"{len(SCHEME_CASES)} Scheme forms and a define-library)")

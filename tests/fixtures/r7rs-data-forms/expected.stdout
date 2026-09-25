@@ -1,0 +1,24 @@
+(1 2 3)
+(a (b c) s #t 2.5)
+(1 . 2) (1 2 . 3)
+() #t#t
+#(1 2 3) 2
+(quote a) quote
+(1 5 7 8 9)
+(a . 5) #(1 5)
+(nested (quasiquote (inner (unquote (outer 5)))))
+(10 20) 10 20
+(1 two 3)
+#t#t#t#f#t#t
+#t#f#t
+a λ#\a#\space
+#t#f65B
+A#t#f#t
+5 abcde el e #t#t
+(a b c) xy sym #t 422.5
+#(0 mid 0)3(0 mid 0)#(1 2)#t
+#u8(9 2 255)2553#t
+304#t#f
+on-turmeric
+#t#<eof>
+("s" #\c q 1.5)

@@ -1,0 +1,12 @@
+#lang r7rs
+;; r7rs-lang-plan R4 / D5: referential transparency.  `my-list`'s template
+;; refers to `list` free; R7RS says that identifier means what it meant where
+;; the macro was DEFINED, so shadowing `list` at the use site must not change
+;; the expansion and this prints (1).  R4's renaming hygiene (D5a) renamed
+;; only the identifiers a template BINDS and printed #(1); this fixture was
+;; its named failing test (an expected.xfail marker).  R10 closed it: the
+;; lowering tracks lexical scope, local binders get unique names, and a
+;; template's free identifiers are resolved in the macro's definition scope.
+(define-syntax my-list (syntax-rules () ((_ x) (list x))))
+(display (let ((list vector)) (my-list 1)))
+(newline)

@@ -1,0 +1,13 @@
+#lang r7rs
+;; r7rs-lang-plan T5: a continuation can be invoked after its call/cc has
+;; returned -- the call/cc returns again, with the new value.  At top level
+;; the continuation is the rest of the PROGRAM (it is not delimited per form),
+;; so re-entering it runs the forms after it again; the counter stops it.
+;; (Until T5 this was the named error "continuation invoked after its call/cc
+;; prompt returned".)
+(define saved #f)
+(define count 0)
+(display (call/cc (lambda (k) (set! saved k) 1))) (newline)
+(set! count (+ count 1))
+(if (< count 3) (saved (* 10 count)))
+(display "done after ") (display count) (display " entries") (newline)

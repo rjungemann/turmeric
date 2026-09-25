@@ -1,0 +1,15 @@
+#lang r7rs
+;; r7rs-lang-plan R3 / D9 exit criterion: a Scheme program calling stdlib's
+;; persistent map (stdlib/hamt behind stdlib/map) and vec through the
+;; `(turmeric <module>)` import head, and getting the right answer on both
+;; back ends.  Each argument crosses the seam through Saffron's checked cast.
+(import (scheme base) (scheme write)
+        (turmeric stdlib/map)
+        (only (turmeric stdlib/vec) vec-new vec-push! vec-len vec-get))
+(define m (map-assoc #map{:a 1} :k 42))
+(display (map-get m :k)) (newline)
+(display (map-count m)) (newline)
+(define v (vec-new))
+(vec-push! v 7)
+(vec-push! v 8)
+(display (vec-len v)) (display " ") (display (vec-get v 1)) (newline)

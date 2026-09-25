@@ -6,6 +6,511 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: an experimental collector (`--enable=r7rs-gc`).** A
+  conservative mark-sweep collector (`src/runtime/r7gc.c`) for compiled
+  `#lang r7rs` programs on Linux/glibc. Under the flag the emitter pastes it
+  into the program and routes that translation unit's `malloc` family and
+  the region allocator's fallback through it; roots are the stack, the data
+  segment and live region generations. A loop building a million dead lists
+  drops from 429 MB to 10 MB, 100,000 escaping `call/cc`s from 527 MB to
+  10 MB, and both run faster; programs with a large live set pay 1.2x-1.8x.
+  Every Scheme fixture and chibi's suite pass with it, including with a
+  collection on every allocation (`TUR_GC_TORTURE=1`). New
+  `tests/run-r7rs-gc.sh` (ctest `tur_r7rs_gc`) and fixture `r7rs-gc-basic`.
+  Limits: single-threaded, single translation unit, the interpreter is
+  unchanged, and Scheme values held in Turmeric maps or `rc<T>` cells are
+  not seen. Plan: docs/upcoming/r7rs-gc-plan.md. A `call/cc` image is now
+  malloc'd in the capture body rather than hoisted C (both builds).
+
+- **`#lang r7rs`: memory audit (r7rs-lang-plan T8).** Every Scheme fixture
+  was run under ASan, UBSan and LeakSanitizer on both back ends, and the
+  prelude was stressed with million-element inputs.
+  - **Stack.** `append`, `list-copy`, `list`, `map` (one to four lists),
+    `string-map`, `vector-map`, `string->list`, `vector->list`, `equal?`,
+    `read-line`, `read` and `write` handle a million elements at the default
+    `-O2` and interpreted; several overflowed the C stack before.
+  - **`equal?` is linear** (union-find), where two equal 10^5-element lists
+    took half a minute, and a cycle through vectors now terminates.
+  - **Scratch leaks fixed.** The printer's number spellings (3.2 MB in one
+    fixture), `quotient`'s per-call message, the bignum core's temporaries,
+    the re-encoding of mutable strings, `utf8->string`'s per-character
+    appends, and the rest-argument lists `display` and friends built.
+  - **Regions.** A `call/cc` captured inside a Turmeric `with-region`
+    bracket kept pointers into memory the bracket then rewound, a silent
+    wrong answer. The capture now notes its stack image
+    (`region-escape-via-callcc`).
+  - **`TUR_REGIONS=0`.** A variadic dynamic call (any dialect) called an
+    undeclared region allocator on that arm and segfaulted; it uses
+    `malloc` there now.
+  - **Gate.** New `tests/run-r7rs-sanitize.sh`, ctest `tur_r7rs_sanitize`:
+    every Scheme fixture compiled with ASan and UBSan and run.
+  - **Known and filed.** A Scheme program's data is never freed (no
+    collector); a caught `raise` leaks about 1 KB; a `: nil` self tail call,
+    and a CPS one below `-O2`, is not a loop (the prelude works around the
+    first). No output of any fixture changes.
+
+- **R7RS conformance: settled tests (r7rs-lang-plan T7).** The conformance
+  runner now reports `P passed, S settled, F failed`. A settled test fails on
+  a difference kept on purpose, where R7RS allows both answers and chibi's
+  test accepts only its own. Today there are two: `#lang r7rs` writes
+  `1.7976931348623157e308` where chibi's tests want `e+308`, and both
+  spellings are R7RS and read back the same. The runner checks each settled
+  test's reason at the end of every run, and a settled test that starts
+  passing fails the run. Chibi's suite: 1223 passed, 2 settled, 0 failed on
+  both back ends. No Scheme program's output changes.
+
+- **`#lang r7rs`: complex numbers (r7rs-lang-plan T6).** `3+4i`, `-i`,
+  `1/2+3/4i`, `1.5+2i` and polar `1@0.5` are numbers, on both back ends,
+  in source, `read` and `string->number`.
+  - **The value.** The parts are any reals, and a complex number is exact or
+    inexact as a whole. An exact-zero imaginary part leaves the real, so
+    `(* +i +i)` is -1; an inexact one stays, so `(real? 1.0+0.0i)` is #f.
+  - **The tower.** `+ - * /` and `=` work part by part, exactly on exact
+    parts. `<` and the other orderings on a non-real are #f. `eqv?`,
+    `zero?`, `nan?`, `finite?`, `infinite?`, `exact` and `inexact` take
+    complex arguments; `number?` and `complex?` include them, `real?` and
+    `rational?` do not.
+  - **Functions.** `sqrt`, `exp`, `log`, `expt`, `sin`, `cos`, `tan`,
+    `asin`, `acos` and `atan` leave the reals when they have to, and
+    `(scheme complex)` has `real-part`, `imag-part`, `magnitude`, `angle`,
+    `make-rectangular` and `make-polar`.
+  - **Writing.** `write` and `number->string` spell a number as chibi does:
+    `+2i`, `1-i`, `0.0+1.0i`.
+  - **Visible changes.** `(sqrt -4)` is `+2i`, where it was `+nan.0`. The
+    log of a negative number, and `asin`/`acos` outside [-1, 1], are complex,
+    where they were NaN. A non-real literal compiles, where it was refused.
+    The inexact functions return any number, not only a float.
+
+  Turmeric has no complex type, and `math.tur`'s `sqrt` of a negative stays
+  NaN. Chibi's suite: 1223 passing invocations on both back ends, up from
+  1152; the 2 failures left are float spellings (T7). Fixtures:
+  `r7rs-complex`, and `r7rs-number-syntax` regenerated;
+  `errors/r7rs-reader-complex` is gone.
+
+- **`#lang r7rs`: re-entrant `call/cc` (r7rs-lang-plan T5).** A continuation
+  can be invoked after its `call/cc` has returned, any number of times, on
+  both back ends. Generators, coroutines and same-fringe written with
+  `call/cc` work.
+  - **Winding.** Invoking a continuation travels the `dynamic-wind` stack:
+    `after` thunks out, `before` thunks back in.
+  - **How it works.** A continuation is a copy of the C stack, taken at the
+    `call/cc` and copied back on re-entry, plus the runtime state that tracks
+    the stack. `guard` and `raise` keep the old one-shot escape, which copies
+    nothing.
+  - **Visible change: every `set!` variable is now a heap cell.** Before,
+    only variables that a closure captures were. A re-entry must see the
+    latest value, not the value a stack copy saved.
+  - **Visible change: re-entry after return no longer errors.** Invoking a
+    continuation after its `call/cc` has returned used to be the named error
+    "continuation invoked after its call/cc prompt returned". At top level a
+    continuation is the rest of the program.
+  - **DK runtime.** The runtime gains a `tur_dk_pinned` flag. Only the R7RS
+    `call/cc` sets it, and once set, DK frames are never freed. 154 codegen
+    snapshots change by those lines.
+  - **Interpreter.** The driver's heap work stacks and per-call temporaries
+    survive a re-entry.
+  - **ASan.** A sanitized `tur`, and a sanitized compiled Scheme program,
+    default `detect_stack_use_after_return=0`. ASan's fake stack is
+    invisible to a stack copy. `ASAN_OPTIONS` still overrides the default.
+
+  Turmeric's `call/cc`, `call/cc*`, `reset`/`shift` and cloneable
+  continuations are unchanged. Chibi's suite: 1152 of 1216 on both back
+  ends, up from 1151. Fixtures: `r7rs-continuations`, and a rewritten
+  `r7rs-continuation-after-return`.
+
+- **`#lang r7rs`: `eval`, with the interpreter linked in on demand
+  (r7rs-lang-plan T4).** `(scheme eval)`, `(scheme repl)`, `(scheme load)`
+  and `(scheme r5rs)` are no longer refused. They give `eval`,
+  `environment`, `interaction-environment`, `null-environment`,
+  `scheme-report-environment` and `load`.
+  - **Linking.** Importing one of the four links the interpreter (libturi)
+    into a compiled program, through an autolink marker in
+    `stdlib/r7rs/eval.tur`. A program that imports none of them links
+    nothing extra (`tests/check-r7rs-eval-link.sh`, ctest
+    `tur_r7rs_eval_link`).
+  - **The embedded session.** Evaluated code runs in one embedded R7RS
+    session per run (`src/turi/r7rs_embed.c`), and `tur --interpret` uses
+    the same one through native twins, so both back ends agree.
+    Definitions evaluated in `(interaction-environment)` persist for later
+    `eval`s.
+  - **Crossing values.** Data crosses by copy, as `write` text. Procedures
+    cross as handles in both directions: an evaluated procedure is callable
+    from the program, and a program procedure is callable from evaluated
+    code. A raise crosses both ways, so a `guard` on either side catches it.
+  - **Finding the stdlib.** A built program finds the stdlib it was built
+    against without `TUR_STDLIB_DIR`. The token `@TUR_STDLIB_ROOT@` in an
+    autolink marker is resolved to that root.
+  - **In-tree builds.** `tur run` / `tur build` of a program that links
+    `-lturi` find the archive in an in-tree build (`<build>/src/libturi.a`)
+    without `TUR_CC_FLAGS`.
+  - **Two envs in one process.** The builtin operator table and the
+    diagnostic file registry are process-global. Every crossing between the
+    program's interpreter and the embedded one swaps them, as the macro env
+    already does.
+
+  Chibi's suite: 1151 of 1216 on both back ends, up from 1147. Fixture:
+  `r7rs-eval`, and `docs-r7rs-guide-examples` gains the guide's `eval`
+  example.
+
+- **`#lang r7rs`: mutable, character-indexed strings (r7rs-lang-plan T3).**
+  A Scheme string is a sequence of characters. `string-length`,
+  `string-ref`, `substring` and every other string procedure count
+  characters, not bytes, so `(string-length "\x3BB;")` is 1.
+  - A string a procedure makes is mutable, and `string-set!`, `string-fill!`
+    and `string-copy!` (overlap-safe) work on it. This covers
+    `make-string`, `string`, `string-copy`, `substring`, `string-append`,
+    `list->string` and the like.
+  - A literal is an immutable Turmeric `cstr` (R7RS allows this), and
+    mutating one is a named error.
+  - **Visible change:** `string-length` of non-ASCII text used to count
+    bytes.
+  - A Scheme string crosses into a Turmeric `cstr` as a fresh UTF-8 copy,
+    through the prelude's `r7rs-str__`. The same holds for a Turmeric module
+    `cast`ing a Scheme library's string result to `cstr`. Both are handled
+    in `elab_any_unbox_to`, only when the Scheme prelude is in the program.
+  - Turmeric's `cstr` is unchanged.
+
+  Chibi's suite: 1147 of 1216 on both back ends, up from 1134. Fixtures:
+  `r7rs-strings`, `r7rs-string-literal-immutable`, and the
+  `strings-cross-the-seam` case of `tests/run-r7rs-import.sh`. The
+  `errors/r7rs-string-mutation` refusal is removed.
+- **`#lang r7rs`: exact rationals (r7rs-lang-plan T2).** An exact
+  non-integer is a ratio in lowest terms, and its numerator and denominator
+  are int64 or bignum.
+  - **Visible change:** `(/ 7 2)` is now 7/2. It used to be the inexact 3.5.
+    A quotient that divides is still an integer (`(/ 6 2)` is 3).
+  - Ratios work through the whole tower:
+    - exact arithmetic and comparison, with a double compared by its exact
+      value;
+    - `floor`/`ceiling`/`truncate`/`round`, which give exact integers
+      (`round` ties to even);
+    - `numerator`/`denominator`;
+    - `exact` of any finite double, which gives its exact value
+      (`(exact .5)` is 1/2);
+    - a correctly rounded `inexact`;
+    - `(expt 2 -10)` is 1/1024 and `(sqrt 4/9)` is 2/3;
+    - an exact `rationalize`;
+    - `number->string` and `write` in `n/d` form.
+  - Literals (`1/2`, `#x11/2`), `read` and `string->number` read ratios
+    through the shared parser. `#e` reads a decimal exactly: `#e1.2` is 6/5,
+    and `#e1e30` is exactly 10^30.
+  - `(features)` lists `ratios`.
+  - A ratio passed to a Turmeric `int` or `float` parameter is a checked
+    cast error.
+
+  Turmeric's and Saffron's `/` are unchanged. Chibi's suite: 1134 of 1216 on
+  both back ends, up from 1103. Fixture: `r7rs-rationals`. The reader error
+  fixtures for `1/2` and `#e1.5` are removed.
+- **`#lang r7rs`: bignums (r7rs-lang-plan T1).** Exact integers are
+  unbounded. An exact integer is an int64 while it fits. Arithmetic that
+  leaves int64 continues as a bignum (`R7rsBig`), and a result that fits is an
+  int again, so the int64 path stays the fast one.
+  - Bignums work through the whole tower:
+    - literals, `read`, `string->number`, and `number->string` in any radix;
+    - `quotient`/`remainder`/`modulo` and `floor/`;
+    - `/`, `gcd`/`lcm`, `expt`, `exact-integer-sqrt`, `sqrt`;
+    - `exact` of any integral double;
+    - `eqv?`/`equal?` and `write`.
+  - A comparison with a double is exact:
+    `(= (- (expt 2 1000) 1) (inexact (expt 2 1000)))` is `#f`.
+  - The arithmetic is one C file, `src/compiler/r7rs_bignum.inc`, shared by
+    both back ends. The interpreter includes it, and
+    `tools/gen-r7rs-inc.py` copies it into `stdlib/r7rs/bignum.tur`. ctest
+    `tur_r7rs_inc_sync` replaces `tur_r7rs_numsyntax_sync` and checks both
+    copies.
+  - **Visible change:** `(* 3037000500 3037000500)`, `(expt 2 64)` and the
+    like used to panic (D8). They now answer.
+  - A bignum passed where an int64 is required (a Turmeric `int` parameter, a
+    vector index) is the checked cast error `cast: any holds R7rsBig, not
+    int`. It is never truncated.
+
+  Turmeric's and Saffron's `int` are unchanged. Chibi's suite: 1103 of 1216
+  on both back ends, up from 1096. Fixtures: `r7rs-bignums`,
+  `r7rs-bignum-int-seam`. They replace `r7rs-exact-overflow`.
+- **`#lang r7rs`: one number parser, and two wrong answers fixed (r7rs-lang-plan
+  T0).** `src/compiler/r7rs_numsyntax.inc` parses the whole R7RS number syntax
+  for the source reader, `read` and `string->number` on both back ends. The
+  compiled back end's copy is `stdlib/r7rs/numsyntax.tur`, written by
+  `tools/gen-r7rs-inc.py`; `tur_r7rs_inc_sync` keeps the two equal.
+  - `1/2` and `3+4i` are one token each. They used to split into `1` and the
+    symbol `/2`, or into `3`, `+4` and `i`, and the error named the wrong thing.
+  - A ratio or complex number the tower holds reads as its value: `10/2` is 5,
+    `#i3/2` is 1.5, and `3+0i` is 3.
+  - One it cannot hold yet is refused with the reason and the plan task that
+    brings it: complex numbers (T6), and rationals until T2 (above). A source
+    literal gets a compile-time error. `read` and `string->number` raise an
+    error `guard` can catch.
+  - `(exact 1e30)` used to answer 9223372036854775807; it is exact now (see
+    bignums above).
+
+  Chibi's suite: 1096 of 1216 on both back ends, up from 1082.
+  Fixtures: `r7rs-number-syntax`, `errors/r7rs-reader-complex`.
+- **`#lang r7rs`: referential transparency.** A `syntax-rules` template's
+  free identifiers now mean what they meant where the macro was defined. The
+  lowering tracks lexical scope, gives local binders unique names, and resolves
+  each template identifier in the macro's definition scope. So
+  `(let ((list vector)) (my-list 1))` is `(1)`, and a local variable shadows a
+  keyword or macro of its name. The R4 named failing test
+  `r7rs-syntax-rules-referential-transparency` now passes and its
+  `expected.xfail` is gone. Diagnostics on Scheme files show source names.
+  Chibi's suite: 1082 of 1216 on both back ends.
+  `tests/fixtures/r7rs-syntax-rules-hygiene`.
+- **`#lang r7rs`: Unicode `(scheme char)`, and 1077 conformance tests.**
+  Char case mapping and classification, `digit-value`, and full string case
+  mapping (`"\xDF;"` upcases to "SS") now cover Unicode. The tables come from
+  `tools/gen-r7rs-unicode.py`, which writes the same C into the prelude's
+  `stdlib/r7rs/unicode.tur` and the interpreter's
+  `src/turi/r7rs_unicode.inc`; `tur_r7rs_unicode_sync` keeps them equal.
+  Also fixed:
+  - `'nil`, `'true` and `'false` are symbols.
+  - An exact integer and a double compare exactly.
+  - `#;` before a lone `.` is a read error.
+  - The interpreter ignores a top-level C block instead of failing the load.
+
+  The chibi count is 1077 of 1216 on both back ends, up from 1036, and is the
+  ctest floor.
+- **`#lang r7rs` conformance (R10).** chibi-scheme's R7RS test suite
+  (vendored under `tests/r7rs/` with its BSD licence) runs as the ctest target
+  `tur_r7rs_conformance`, which reports a pass count with a regression floor:
+  1036 of 1216 tests pass on both back ends. The first run passed 887 on the
+  interpreter, and the compiled program did not build. The suite found, and
+  R10 fixes:
+  - `set!` of a variable a lambda captures was lost on the compiled back end
+    (a `do` loop summing into an outer variable answered 0); the Scheme
+    lowering now boxes such variables.
+  - A binder named `return` (or any Turmeric special form) was that form.
+  - A program could not define a name an auto-loaded stdlib module defines
+    (`list-length`).
+  - Vector literals evaluated their elements.
+  - Quasiquote ignored an unquote under a quote and the long forms.
+  - `syntax-rules` treated a literal `_` as the wildcard and a literal
+    ellipsis as the ellipsis.
+  - Internal defines were not `letrec*`.
+  - Numeric fixes: inexact integer division; inexact `numerator` and
+    `denominator`; case-insensitive `+nan.0`/`+inf.0` and the R5RS exponent
+    markers.
+  - Catchable `apply` errors, `write`'s bars for number-like symbols, and
+    `make-bytevector`'s optional fill.
+
+  Outside the dialect:
+  - A typed parameter naming a record, forward-declared as `int`, was cast to
+    int from `any`.
+  - The interpreter's lifted lambdas could not see an enclosing `letrec`.
+  - A global `def` holding a closure was read in C before its declaration.
+  - `+inf.0` was emitted as the C identifier `inf`.
+  - The closure-env registry overflowed a `uint8_t` and crashed `tur` at 256
+    environments.
+  - `emit-c` spent quadratic time resolving callees; a table now makes the
+    suite's four-minute build take 42 seconds.
+
+  The one finding left open: a compiled closure still copies a captured
+  `^mut` in typed Turmeric and Saffron, so the two back ends disagree there
+  ([compiled-closure-copies-a-captured-mut](docs/reported/compiled-closure-copies-a-captured-mut.md)).
+  `tests/fixtures/r7rs-conformance-fixes`, `letrec-lifted-lambda-frame`,
+  `global-closure-def-called-in-lambda`; `r7rs-control`'s expected output had
+  recorded the `return` bug and is corrected.
+- **`#lang r7rs` tooling (R9).** `tur repl --lang r7rs` (and `#lang r7rs` at
+  the prompt, which switched the language but kept Turmeric's preload and
+  skipped the Scheme renames) with results echoed in Scheme's spelling; `tur
+  fmt` re-indents a Scheme file and never rewrites a token (the form printer
+  turned `#\x`, `|two words|` and `#t` into a different program), with
+  `--stdin --lang r7rs`; `tur init --r7rs` scaffolds a program or, with
+  `--lib`, a `define-library`, both of which build and test; the LSP analyses
+  and formats Scheme (formatting answered "no edits" for every `#lang`
+  document) and the browser LSP and REPL picker learn the dialect; the vim and
+  VS Code packs highlight Scheme lexemes in `#lang r7rs` files; `gendocs`
+  reads Scheme definitions and library names; and
+  `docs/guides/r7rs-guide.md`. Fixed on the way, in project mode (`tur build
+  .`): a Scheme program built a shared library instead of a binary, a Scheme
+  library was refused over the prelude's own definitions, and per-module C
+  emission lacked the forward declarations for globals. `fmt-bootstrap-stdlib`
+  is green again. `tests/turi/repl-lang-r7rs.sh`, `tests/run-init-r7rs.sh`,
+  `tests/lsp/r7rs-diagnostics.py`, new cases in `run-fmt.sh`,
+  `run-editor-syntax.sh`, `check-gendocs-parse.sh` and the two wasm unit
+  tests, and `tests/fixtures/docs-r7rs-guide-examples`. Also green again:
+  `tur_regions_fuzz_src` (its self-test predated R3's new region-escape case)
+  and `tur_leak_check` (`tailcall-dyn-leak` had passed on stale-pointer luck;
+  filed as `docs/reported/dynamic-returned-closure-env-is-never-freed.md`).
+- **`#lang r7rs` ports and I/O (R8).** String, bytevector and file ports
+  over one C buffer (`defopaque` handles, inline C with interpreter twins),
+  the whole R7RS I/O surface of `(scheme base)` with UTF-8 characters, and
+  the current ports as parameter objects. `write` and `display` label cycles
+  (`#0=(1 2 . #0#)`), `write-shared` labels all sharing, `write-simple`
+  labels nothing, and `write` escapes strings, names characters and bars
+  symbols that would not read back. `(scheme read)` reads the R7RS external
+  representation, datum labels and cycles included, and raises a
+  `read-error?` object on a malformed datum; `(scheme file)` gains its file
+  ports and the `call-with-`/`with-` forms. Fixed on the way: a record field
+  typed as a pointer opaque (constructor argument spelling, and `set!` of a
+  field of such a record emitted invalid C); a vector was not `eq?` to itself
+  under the interpreter; `eqv?` on two records panicked; binding a
+  `nil`-returning call in a Scheme `let` or `guard` body was TUR-E0023; a
+  module program whose modules use `call/cc` was emitted without the escape
+  runtime (the presence scan skipped module bodies), which had left
+  `tests/run-r7rs-import.sh` red on its compiled cases since R6.
+  Filed: a compiled top-level `def` initializer runs before every top-level
+  expression (`docs/reported/toplevel-def-initializers-run-before-toplevel-expressions.md`).
+  `tests/fixtures/r7rs-ports`, `r7rs-write-labels`, `r7rs-read`,
+  `r7rs-file-ports`.
+- **`#lang r7rs` libraries (R7).** Every R7RS-small procedure that is not a
+  port. The rest of `(scheme base)` (variadic char/string comparisons,
+  `boolean=?`/`symbol=?`, `list-set!`/`make-list`/`make-string`/`string`,
+  `[start [end]]` ranges, multi-list `map`/`for-each`, `string-map`,
+  `vector-map`/`-for-each`/`-append`/`-copy`/`-copy!`, bytevector copies,
+  checked `utf8->string`, `member`/`assoc` with a comparison, `apply` with
+  leading arguments, `rationalize`, `features`, `write-simple`), `(scheme
+  char)` with ASCII case mapping, the 24 `(scheme cxr)` compositions and
+  `(scheme complex)` over the reals live in the prelude. `(scheme time)`,
+  `(scheme process-context)` (`exit` runs the outstanding `dynamic-wind`
+  afters) and `(scheme file)`'s `file-exists?`/`delete-file` (a failure
+  raises a `file-error?` object) are files under `stdlib/r7rs/` spliced in
+  only when imported. `(scheme eval)`/`repl`/`load`/`read`, `include` and
+  string mutation are refused with the reason; an unknown `(scheme ...)`
+  library is an error. Fixed on the way, most of it outside Scheme: a
+  static variadic call now narrows an `any` argument into a concrete fixed
+  parameter; a typed variadic passed as a value gets an all-`any` adaptor
+  that forwards its rest list (it was called through the wrong convention);
+  a variadic's forward declaration carries its rest shape and an annotated
+  `: any` result forward-declares as `any`, so callers may precede their
+  callees; import/load file ids no longer collide with the compiled
+  driver's auto-loaded files (a `(load ...)` overwrote one's source record),
+  and the source-file registry holds 512 files instead of 64;
+  float literals are emitted with the shortest round-trip spelling
+  (`3.141592653589793` compiled as a different double); and a Scheme vector
+  literal is self-evaluating. `tests/fixtures/r7rs-base-library`,
+  `r7rs-system-libraries`, `float-literal-round-trip`,
+  `saffron-variadic-fixed-arg-narrow`, `saffron-forward-ref-any-and-variadic`,
+  and four `errors/r7rs-*` fixtures.
+- **`#lang r7rs` control (R6), and the compiled back end catches up.**
+  `call/cc`/`call-with-current-continuation` as a one-shot upward escape --
+  the receiver's continuation is a procedure, `(k 1 2)` delivers two values,
+  invoking it after its call/cc has returned is the named error on both back
+  ends (the compiled runtime keeps a live-prompt set instead of reading a
+  dead frame's flag) -- `dynamic-wind` with a wind stack that escapes
+  unwind, `with-exception-handler`/`raise`/`raise-continuable`/`guard` and
+  error objects (`error`, `error-object?`, `-message`, `-irritants`; an
+  uncaught raise reports on stderr after flushing stdout and exits 70),
+  `parameterize`/`make-parameter` with converters, and
+  `delay`/`delay-force`/`force`/`make-promise`/`promise?` in constant space.
+  The three compiled dynamic-closure gaps that kept every named `let`, `do`,
+  `letrec`, `call-with-values`, `apply` and `for-each` interpreter-only
+  since R2 are closed (`docs/archive/r7rs-compiled-dynamic-shapes.md`): the
+  letrec placeholder in a dynamic file is `any`, every Scheme lambda returns
+  `any`, and a dynamic call packs surplus arguments for a variadic callee --
+  a fn type's `any` box id now spells its rest slot, boxed variadics are
+  registered with their fixed count, `__tur_dyn_call_var` and the T6
+  trampoline build the `(Cons any)` chain, the fat shim types the rest slot
+  as the chain pointer, a capturing closure's value type carries the rest
+  marker, and the interpreter packs at its dynamic call. Every Scheme
+  procedure call is therefore a proper tail call compiled too
+  (`tests/fixtures/r7rs-tail-calls`, 1e7 at `-O0`). Fixed on the way: a
+  closure that `set!`s a mutable global read it before its declaration in
+  the emitted C, a two-clause `case-lambda` lost its second clause's value
+  compiled, and a top-level `(define f (lambda ...))` is a `defn`.
+  `tests/fixtures/r7rs-control`, `r7rs-uncaught-error`,
+  `r7rs-continuation-after-return`, `saffron-letrec-any-closure`,
+  `saffron-variadic-dynamic-call`, `saffron-closure-sets-global`,
+  `saffron-callcc-stale-prompt`; the four r7rs fixtures that carried
+  `requires.interp-only` run on both back ends. Found and filed, not fixed:
+  `list-length` on a `(Cons any)` chain
+  (`docs/reported/list-length-on-cons-any-segfaults.md`).
+- **`#lang r7rs` -- the Scheme base, reader only, behind the `r7rs`
+  experiment.** R0 and R1 of
+  [r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-lang-plan.md).
+  R0 de-Saffronized the dynamic substrate: every "is this file Saffron?"
+  test in the elaborator and emitter now asks a per-language trait row
+  (`lang_traits`, `lang_span_is_dynamic`, `g_opt_dynamic_any`) instead,
+  with no change to any emitted C. R1 adds the ninth `#lang` base: `tur
+  dialects` lists `r7rs` as `experimental (r7rs)`, the directive is itself
+  the enable (no `--enable=r7rs`; TUR-W0060 prints once per compile), and
+  the file is read by a Scheme variant of the reader -- `#t`/`#f`, `#\c`
+  with the R7RS names and `#\x<hex>`, `#(...)`, `#u8(...)`, `,`/`,@`,
+  dotted pairs, `|sym|`, the `#x`/`#o`/`#b`/`#d`/`#e`/`#i` prefixes, `+5`
+  and `.5`, `+inf.0`, the R7RS string escapes and `#!fold-case`. There are
+  no Scheme semantics yet: a `#lang r7rs` file elaborates exactly as the
+  same forms would under `#lang saffron` (pinned by
+  `tests/fixtures/r7rs-elaborates-as-saffron`), and the playground picker
+  badges the row rather than hiding it. `r7rs` has no reader axis, so
+  `#lang r7rs/sweet` is TUR-E0331.
+- **`#lang r7rs` core forms (R2).** `define`, `lambda`, `let`/`let*`/`letrec`/
+  `letrec*` and named `let`, `do`, `begin`, `set!`, `if`, `cond` (with `=>`),
+  `case`, `and`/`or`, `when`/`unless`, `case-lambda`, `define-values`/
+  `let-values`/`let*-values` and internal defines are lowered onto Turmeric's
+  own forms before elaboration (`src/compiler/scheme_lower.c`), with Scheme
+  truthiness -- only `#f` is false -- as a per-file trait on both back ends.
+  A new `stdlib/r7rs/prelude.tur` supplies the core procedures (`car`, `cdr`,
+  `cons`, `list`, `length`, `append`, `reverse`, `map`, `for-each`, `eqv?`,
+  `equal?`, `display`, `write`, `newline`, `values`, `call-with-values`,
+  `apply`, the type and numeric predicates). Two dynamic-substrate gaps this
+  surfaced are fixed for Saffron too: `set!` into an `any` cell now widens a
+  concrete value instead of rejecting it, and Scheme's `if` accepts a
+  statically typed condition. The compiled back end runs the definitions,
+  conditionals, closures over mutable locals and list procedures; a
+  letrec-bound closure over `any` (named `let`, `do`) and dynamic
+  multi-argument apply are interpreter-only until R6
+  (`docs/archive/r7rs-compiled-dynamic-shapes.md`).
+- **`#lang r7rs` data and the Turmeric seam (R3).** Pairs are a mutable heap
+  struct of two `any` fields (`set-car!`/`set-cdr!` are the region-noted
+  field store), with the null and eof singletons, chars as an opaque over
+  the scalar value, vectors over `(Vec any)`, bytevectors, symbols,
+  `define-record-type`, `quote`/`quasiquote`/`unquote-splicing` as runtime
+  constructors, `cond-expand`, and `eq?`/`eqv?`/`equal?` with `equal?`
+  terminating on a cycle. A rest parameter is a Scheme list. Strings stay
+  `cstr` and immutable: `string-set!`/`string-fill!` are declined, not
+  aliased. The seam is open in both directions: `(define-library (a b) ...)`
+  is `(defmodule a/b ...)`, `(import (turmeric x/y))` is `(import x/y)`
+  with `only`/`prefix`/`rename` (`except` is a diagnostic naming `only`),
+  `(scheme base)` and its siblings map onto the prelude, and an imported
+  `#lang r7rs` module gets the prelude on the import path.
+  `tests/run-r7rs-import.sh` (ctest `tur_r7rs_import`) runs both
+  directions on both back ends; `tests/fixtures/r7rs-stdlib-seam` is the
+  plan's D9 exit criterion (a Scheme program calling the stdlib map);
+  `tests/fixtures/r7rs-data-forms` runs every R3 shape compiled and
+  interpreted with identical output.
+- **`#lang r7rs` `syntax-rules` (R4).** `define-syntax`, `let-syntax`,
+  `letrec-syntax` and `syntax-error`, with the full pattern language (`_`,
+  literals, `...` at any depth and after a subpattern, elements after an
+  ellipsis, improper tails, vector patterns, datum literals, a custom
+  ellipsis, the `(... ...)` escape) and renaming hygiene: an identifier a
+  template introduces in a binding position is renamed fresh, so the
+  standard's own `or`, `let*` and `do` expand correctly and `swap!` cannot
+  capture. The expander is part of the Scheme lowering pass, so every
+  expansion is lowered on the spot; a macro may expand to a `define` at
+  body start. The referential-transparency gap of renaming hygiene (a free
+  identifier the use site shadows) is on record as a named failing test,
+  `tests/fixtures/r7rs-syntax-rules-referential-transparency`, under a new
+  `expected.xfail` fixture marker that both `tests/run.sh` and
+  `tests/run-turi.sh` honour: the expected mismatch passes as `(xfail)` and a
+  match fails until the marker is deleted. `er-macro-transformer` is
+  deferred with a diagnostic.
+- **`#lang r7rs` numbers (R5).** R7RS 6.2 over int64 and double: `(+)`,
+  `(*)`, `(- x)`, `(/ x)`, n-ary comparison chains, a mixed exact/inexact
+  literal pair promotes, `(/ 7 2)` is the inexact 3.5 (no rationals), and
+  exact `+`/`-`/`*`/`expt` SIGNAL on overflow instead of wrapping (D8; a
+  panic until R6's `raise`/`guard`). The exactness predicates and
+  conversions (`exact?`, `inexact?`, `exact-integer?`, `integer?` on 7.0,
+  `exact`, `inexact`, `nan?`, `infinite?`, `finite?`), `floor`/`ceiling`/
+  `round` (ties to even)/`truncate`, `quotient`/`remainder`/`modulo` and
+  `floor/`, `truncate/`, `gcd`/`lcm`, `min`/`max` with inexact contagion,
+  `sqrt` (exact for a perfect square), `exact-integer-sqrt`, `expt`, the
+  transcendental set, `square`, and `number->string`/`string->number` with
+  a radix. A float prints as R7RS spells it on both back ends (`7.0`,
+  `1e21`, `+inf.0`). `stdlib/math.tur` gains `tan`, `asin`, `acos`, `atan`,
+  `trunc` and `rint`. A bare operator in value position is a variadic
+  procedure, but `(apply + xs)` hits the variadic-through-`apply` gap on both
+  back ends (`docs/archive/r7rs-compiled-dynamic-shapes.md`).
+- **Fixed: a forward-referenced callee with a compound parameter type in a
+  Saffron (or R7RS) file unboxed its `any` argument to `int`.** The pass-1
+  forward declaration recorded `[v : (Vec any)]` as the `int` placeholder,
+  and the dynamic seam took that placeholder at its word: "cast: any holds
+  Vec, not int" at runtime, and C passing an int64 to a `tur_adt_Vec__any
+  *`, whenever the callee was defined below its caller. Defining the callee
+  first avoided it, which made it look like an ordering rule. In a dynamic
+  file the forward declaration now carries the full type of a closed
+  compound parameter -- and, inside a `defmodule`, a closed compound return
+  -- so both orders agree (`tests/fixtures/saffron-fwd-decl-app-param-seam`).
+  Typed files keep their placeholders.
+
 - **`^tailcall` -- a checked tail-call annotation.** Whether a call became a
   real tail call was invisible in the source: you either got the backedge or you
   did not, nothing said which, and the failure mode was a stack overflow at an

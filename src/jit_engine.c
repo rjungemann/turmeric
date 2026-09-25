@@ -142,6 +142,10 @@ static int jit_getc (void *data) {
  * clean compile error for silent corruption under spawn.  Inline C that uses
  * them fails c2mir loudly and takes the step-6 fallback to cc instead. */
 static const char JIT_PRELUDE[] =
+  /* Tells runtime C it is being compiled by this engine: r7gc.c (the
+   * r7rs-gc experiment) switches its collector off, since a JIT'd
+   * program's globals are not in the data segment it scans. */
+  "#define TUR_JIT_ENGINE 1\n"
   /* MIR's Apple/aarch64 prelude spells `#define __arm64__` with NO
    * replacement list (c2mir/aarch64/mirc_aarch64_linux.h:135), where Apple
    * clang defines it as 1.  Every SDK `#if __arm64__` therefore expands to a
@@ -203,6 +207,16 @@ static const char JIT_PRELUDE[] =
   "double __builtin_exp (double);\n"
   "double __builtin_log (double);\n"
   "double __builtin_atan2 (double, double);\n"
+  "double __builtin_tan (double);\n"
+  "double __builtin_asin (double);\n"
+  "double __builtin_acos (double);\n"
+  "double __builtin_atan (double);\n"
+  "double __builtin_trunc (double);\n"
+  "double __builtin_rint (double);\n"
+  "int __builtin_isinf (double);\n"
+  "int __builtin_isfinite (double);\n"
+  "double __builtin_nan (const char *);\n"
+  "double __builtin_inf (void);\n"
   "unsigned short _OSSwapInt16 (unsigned short);\n"
   "unsigned int _OSSwapInt32 (unsigned int);\n"
   "unsigned long long _OSSwapInt64 (unsigned long long);\n";
@@ -229,6 +243,21 @@ static double jit_builtin_cos (double x) { return cos (x); }
 static double jit_builtin_exp (double x) { return exp (x); }
 static double jit_builtin_log (double x) { return log (x); }
 static double jit_builtin_atan2 (double y, double x) { return atan2 (y, x); }
+/* r7rs-lang-plan R5/T0 grew stdlib/math.tur (tan, asin, acos, atan, trunc,
+ * rint) and the #lang r7rs numeric C (isinf, isfinite, nan, inf -- every use
+ * is on a double).  Without these, every program that loads stdlib/math.tur
+ * took the cc fallback on macOS.  c2mir itself handles the __builtin_*_overflow
+ * family and __builtin_alloca. */
+static double jit_builtin_tan (double x) { return tan (x); }
+static double jit_builtin_asin (double x) { return asin (x); }
+static double jit_builtin_acos (double x) { return acos (x); }
+static double jit_builtin_atan (double x) { return atan (x); }
+static double jit_builtin_trunc (double x) { return trunc (x); }
+static double jit_builtin_rint (double x) { return rint (x); }
+static int jit_builtin_isinf (double x) { return isinf (x) ? 1 : 0; }
+static int jit_builtin_isfinite (double x) { return isfinite (x) ? 1 : 0; }
+static double jit_builtin_nan (const char *tag) { return nan (tag); }
+static double jit_builtin_inf (void) { return HUGE_VAL; }
 
 /* ------------------------------------------------------------------ */
 /* atexit interception (findings 9.4)                                  */
@@ -297,6 +326,16 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"__builtin_exp", (void *) jit_builtin_exp},
   {"__builtin_log", (void *) jit_builtin_log},
   {"__builtin_atan2", (void *) jit_builtin_atan2},
+  {"__builtin_tan", (void *) jit_builtin_tan},
+  {"__builtin_asin", (void *) jit_builtin_asin},
+  {"__builtin_acos", (void *) jit_builtin_acos},
+  {"__builtin_atan", (void *) jit_builtin_atan},
+  {"__builtin_trunc", (void *) jit_builtin_trunc},
+  {"__builtin_rint", (void *) jit_builtin_rint},
+  {"__builtin_isinf", (void *) jit_builtin_isinf},
+  {"__builtin_isfinite", (void *) jit_builtin_isfinite},
+  {"__builtin_nan", (void *) jit_builtin_nan},
+  {"__builtin_inf", (void *) jit_builtin_inf},
   {"atexit", (void *) jit_atexit},
   {"_OSSwapInt16", (void *) jit_osswap16},
   {"_OSSwapInt32", (void *) jit_osswap32},
