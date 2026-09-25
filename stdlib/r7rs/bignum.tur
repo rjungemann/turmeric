@@ -541,8 +541,13 @@ static inline int r7rs_big_fits(const char *as, int64_t *out) {
 ;;; overflows, so the answer is a bignum.
 (defn r7rs-int-ovf?__ [op : int a : int b : int] : bool
   ```c
-  int64_t r;
-  return op == 0 ? __builtin_add_overflow(a, b, &r) : op == 1 ? __builtin_sub_overflow(a, b, &r) : __builtin_mul_overflow(a, b, &r);
+  /* Spelled out: c2mir (the `tur jit` engine) accepts __builtin_*_overflow
+   * and answers 0 for every int64 operand. */
+  if (op == 0) return (b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b);
+  if (op == 1) return (b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b);
+  if (a == 0 || b == 0) return 0;
+  if (a > 0) return b > 0 ? a > INT64_MAX / b : b < INT64_MIN / a;
+  return b > 0 ? a < INT64_MIN / b : b < INT64_MAX / a;
   ```)
 ;;; r7rs-big-op__ -- internal: one exact-integer operation on decimal
 ;;; spellings (the R7BN_* codes: 0 + 1 - 2 * 3 quotient 4 remainder 5 modulo

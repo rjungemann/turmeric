@@ -51,7 +51,11 @@
 #include <stdio.h>
 #include <setjmp.h>
 
-#if defined(__linux__) && defined(__GLIBC__)
+/* Off under `tur jit` (TUR_JIT_ENGINE comes from the engine's prelude): a
+ * JIT'd program's globals live in memory MIR allocates, not in the
+ * executable's data segment, so the root scan would miss them and free live
+ * objects.  The entry points stay; they are libc there. */
+#if defined(__linux__) && defined(__GLIBC__) && !defined(TUR_JIT_ENGINE)
 #define TUR_GC_ON 1
 #include <sys/mman.h>
 #include <pthread.h>

@@ -116,6 +116,9 @@ scan:
   or project build ignores the flag (each unit would have its own heap).
 - **The interpreter.** `tur --interpret` keeps its values for the life of the
   process by design (gc-guide); the flag changes nothing there.
+- **The JIT.** Under `tur jit` the collector compiles to plain libc: a
+  JIT'd program's globals live in memory MIR allocates, not in the data
+  segment the root scan reads (`TUR_JIT_ENGINE`, set by the engine's prelude).
 - **Hoisted inline C** that allocates at file scope runs before the macros,
   so its memory is libc's and not scanned. The prelude's own `call/cc` helper
   was moved for this reason; a user's inline C would have to be too.

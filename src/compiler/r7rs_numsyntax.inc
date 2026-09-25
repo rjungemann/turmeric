@@ -26,6 +26,16 @@
  * those names, and MinGW's <math.h> DEFINES fabs inline -- a redefinition
  * error there.  The builtins below need no header. */
 
+/* m = m * radix + v, and whether that left 64 bits (m wraps; the caller
+ * then reads the digit text instead).  Spelled out rather than with
+ * __builtin_*_overflow, which c2mir -- the `tur jit` engine -- accepts
+ * and answers 0 for every int64 operand. */
+static int r7rs_ns_acc(uint64_t *m, unsigned radix, unsigned v) {
+    int ovf = *m > (UINT64_MAX - v) / radix;
+    *m = *m * radix + v;
+    return ovf;
+}
+
 enum { R7NS_NONE = 0, R7NS_INT = 1, R7NS_FLOAT = 2, R7NS_REFUSED = 3, R7NS_BIG = 4,
        R7NS_RATIO = 5, R7NS_COMPLEX = 6 };
 
@@ -124,7 +134,7 @@ static int r7rs_ns_ureal(const char *s, size_t n, size_t *p, int radix, r7rs_ns_
     uint64_t m = 0; int big = 0;
     for (size_t k = d0; k < q; k++) {
         int v = r7rs_ns_digit((unsigned char)s[k], radix);
-        if (__builtin_mul_overflow(m, (uint64_t)radix, &m) || __builtin_add_overflow(m, (uint64_t)v, &m)) big = 1;
+        if (r7rs_ns_acc(&m, (unsigned)radix, (unsigned)v)) big = 1;
     }
     x->exact = 1; x->big = big; x->n = m; x->d = 1;
     x->s = s; x->radix = radix; x->ns = d0; x->ne = q; x->ds = x->de = 0;
@@ -133,7 +143,7 @@ static int r7rs_ns_ureal(const char *s, size_t n, size_t *p, int radix, r7rs_ns_
         uint64_t dm = 0;
         while (q < n && r7rs_ns_digit((unsigned char)s[q], radix) >= 0) {
             int v = r7rs_ns_digit((unsigned char)s[q], radix);
-            if (__builtin_mul_overflow(dm, (uint64_t)radix, &dm) || __builtin_add_overflow(dm, (uint64_t)v, &dm)) x->big = 1;
+            if (r7rs_ns_acc(&dm, (unsigned)radix, (unsigned)v)) x->big = 1;
             q++;
         }
         if (q == e0) return 0;

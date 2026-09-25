@@ -1797,7 +1797,7 @@
   #if defined(__GLIBC__)
   extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
   #endif
-  static __thread unsigned char *r7k_base_tls;
+  static _Thread_local unsigned char *r7k_base_tls;
   static unsigned char *r7k_stack_base(void) {
       if (r7k_base_tls) return r7k_base_tls;
   #if defined(__GLIBC__)
