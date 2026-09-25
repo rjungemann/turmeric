@@ -177,8 +177,9 @@ scan:
   was moved for this reason; a user's inline C would have to be too.
 - **Linux/glibc and macOS.** Elsewhere (Windows) the entry points are plain
   libc and nothing is collected. The macOS roots were written without a
-  macOS box to run them on; the `macos-latest` CI leg's `tur_r7rs_gc` is the
-  test, and a red there is this plan's to fix before default-on.
+  macOS box to run them on; the `macos-latest` CI leg's `tur_r7rs_gc` ran
+  them green on 2026-09-25 (run 36113659875, and again on the head of PR
+  927), so they are confirmed, not only written.
 - Conservatism retains a little: a stale stack word or an integer that happens
   to look like a heap address keeps its object alive.
 
@@ -186,8 +187,7 @@ scan:
 
 - ~~The archive-allocation hook, so a Scheme program may keep Scheme values in
   Turmeric maps and `rc<T>` cells.~~ Done (second pass, `rt_alloc.h`).
-- ~~macOS.~~ Written; confirmed once the `macos-latest` leg runs `tur_r7rs_gc`
-  green.
+- ~~macOS.~~ Done; the `macos-latest` leg runs `tur_r7rs_gc` green.
 - ~~A decision about threads: refuse the flag in a program that spawns them, or
   stop the world.~~ Refused, at the start site, with the reason.
 - Default on for `#lang r7rs` compiled programs on Linux and macOS (an

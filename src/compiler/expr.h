@@ -239,6 +239,10 @@ struct Binding {
      * and the key's destructor frees the per-thread block on thread exit, which
      * `__thread` in C would not give us.  See the plan's §11. */
     bool          is_thread_local;
+    /* toplevel-def-initializers-run-before-toplevel-expressions: a
+     * `^deferred-init` def's elaborated initializer, parked here (the EX_DEF
+     * carries no init) until `(__tur-deferred-init__ name)` takes it, once. */
+    struct Expr  *deferred_init;
     const Symbol *defining_module_name; /* owning module's name, or NULL for top-level */
     /* Phase M6: explicit C symbol name from ^:export-as attribute, or NULL */
     const char   *c_export_name;

@@ -1405,7 +1405,7 @@ The port taxonomy, string ports, `read`, `write`, `display`, `write-shared` and
 >
 > Found and filed, not fixed: on the compiled path a top-level `define`'s
 > initializer runs before every top-level expression, in every dialect
-> ([toplevel-def-initializers-run-before-toplevel-expressions](../reported/toplevel-def-initializers-run-before-toplevel-expressions.md)).
+> ([toplevel-def-initializers-run-before-toplevel-expressions](../archive/toplevel-def-initializers-run-before-toplevel-expressions.md)).
 > It matters once initializers have effects -- `(define p
 > (open-output-file ...))` opens the file before an earlier top-level write.
 >
@@ -1748,6 +1748,17 @@ expectation from a demo.
    learns a new file type. The Saffron plan deferred `.saf` for exactly this
    reason, and R7RS should defer `.scm` the same way -- `#lang r7rs` inside a
    `.tur` file until the semantics settle.
+   **Decided 2026-09-25: `.scm` is accepted.** The semantics settled with
+   T8. A `.scm` file is `#lang r7rs` without the line, the way `.tur.sweet`
+   is `turmeric/sweet`: `reader_type_from_extension` picks the Scheme reader
+   and `lang_dialect_from_extension` the Scheme language, applied at every
+   site that pairs the extension with the directive (the entry file,
+   `(import ...)`, `(load ...)`, `tur --interpret`). A `#lang` line in a
+   `.scm` file is a redundant hint. A module name resolves to `<name>.tur`,
+   then `<name>.scm`, so a `define-library` in a `.scm` file is importable
+   by its name; `tur run`, `tur build` (its default output name), `tur check`
+   and `tur --interpret` take `.scm` entries. `tur fmt` does not format
+   Scheme and skips them.
 5. **Does `#lang r7rs` get the reader axis at all?** D1 says no
    (`reader_axis_free = false`). But `r7rs/sweet` is arguably meaningful --
    sweet-expressions were designed for Scheme, and SRFI-110 is a Scheme SRFI.
@@ -2310,7 +2321,7 @@ task.*
 >   - An `(except ...)` set is refused, as everywhere.
 >   - A top-level `define` whose initializer calls `eval` runs early on the
 >     compiled back end
->     ([toplevel-def-initializers-run-before-toplevel-expressions](../reported/toplevel-def-initializers-run-before-toplevel-expressions.md)),
+>     ([toplevel-def-initializers-run-before-toplevel-expressions](../archive/toplevel-def-initializers-run-before-toplevel-expressions.md)),
 >     so the fixture's program is one procedure body.
 > - **Fixtures:**
 >   - `r7rs-eval`, on both back ends: the four chibi tests, a persistent
@@ -2398,13 +2409,15 @@ re-entered continuation).**
 >     [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md).
 >   - `r7rs-call/cc` calls the escape fallback through a procedure value,
 >     since a direct call would make it a CPS function.
-> - **Top level is not delimited.** A continuation is the rest of the
->   program, as the image includes `main`'s frame (and the interpreter's
->   loop over the forms). `r7rs-continuation-after-return`, which pinned
->   D7's named error, now shows a re-entry after return re-running the forms
->   after it, stopped by a counter. Filed as
->   [r7rs-toplevel-reentry-reruns-forms](../reported/r7rs-toplevel-reentry-reruns-forms.md)
->   (chibi and Racket delimit each top-level form).
+> - ~~**Top level is not delimited.**~~ A continuation was the rest of the
+>   program, as the image included `main`'s frame (and the interpreter's
+>   loop over the forms); filed as
+>   [r7rs-toplevel-reentry-reruns-forms](../archive/r7rs-toplevel-reentry-reruns-forms.md)
+>   and resolved 2026-09-25: each top-level statement runs under its own
+>   prompt (`r7rs-toplevel__`), so a re-entry finishes the captured form and
+>   continues after the invoking one, as chibi and Racket do.
+>   `r7rs-continuation-after-return` pins the delimited answer;
+>   `r7rs-toplevel-reentry` is the report's repro.
 > - **Found and filed:**
 >   - [r7rs-internal-define-forward-set](../archive/r7rs-internal-define-forward-set.md)
 >     -- `set!` on a later internal define is "not bound" (resolved 2026-09-25);
@@ -2665,7 +2678,7 @@ task.*
 >     `: nil` names: a `: nil` self tail call is not a loop
 >     ([void-self-tail-call-not-lowered](../archive/void-self-tail-call-not-lowered.md);
 >     the cleanup is
->     [r7rs-prelude-value-returning-loop-workaround](../reported/r7rs-prelude-value-returning-loop-workaround.md)).
+>     [r7rs-prelude-value-returning-loop-workaround](../archive/r7rs-prelude-value-returning-loop-workaround.md)).
 >   - A CPS loop is still only as deep as gcc's sibling calls make it: it
 >     overflows at `-O1`
 >     ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md)).
@@ -2768,10 +2781,15 @@ differences, as reports"):
 - ~~**`include` and `include-ci` are refused**~~ -- resolved 2026-09-25:
   the lowering reads the file with the Scheme reader and splices it
   ([archived](../archive/r7rs-include-refused.md)).
-- **Compiled top-level order.** A top-level `define` whose initializer has an
-  effect runs before the program's top-level expressions
-  ([toplevel-def-initializers-run-before-toplevel-expressions](../reported/toplevel-def-initializers-run-before-toplevel-expressions.md);
-  every dialect).
+- ~~**Compiled top-level order.** A top-level `define` whose initializer has an
+  effect runs before the program's top-level expressions~~ -- resolved
+  2026-09-25 for every dialect: the initializer is a statement of the
+  synthesized main at its position, and a Scheme module program assigns
+  such a define in its body
+  ([archived](../archive/toplevel-def-initializers-run-before-toplevel-expressions.md)).
+- **A procedure body cannot name a top-level variable defined after it**
+  ([r7rs-procedure-body-forward-reference](../reported/r7rs-procedure-body-forward-reference.md);
+  found writing the fixture for the item above).
 - **`map` and `for-each` take at most four sequences**, the `-map`/`-for-each`
   pair over vectors and strings with them
   ([r7rs-map-for-each-at-most-four-sequences](../reported/r7rs-map-for-each-at-most-four-sequences.md)).
@@ -2786,9 +2804,10 @@ differences, as reports"):
   ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md);
   every dialect with effectful functions).
 - **Re-entrant `call/cc` is Linux and macOS only**
-  ([r7rs-reentrant-callcc-not-on-windows](../reported/r7rs-reentrant-callcc-not-on-windows.md)),
-  and **a top-level re-entry re-runs the forms after it**
-  ([r7rs-toplevel-reentry-reruns-forms](../reported/r7rs-toplevel-reentry-reruns-forms.md)).
+  ([r7rs-reentrant-callcc-not-on-windows](../reported/r7rs-reentrant-callcc-not-on-windows.md)).
+  ~~A top-level re-entry re-runs the forms after it~~ -- resolved 2026-09-25:
+  each top-level form runs under its own prompt
+  ([archived](../archive/r7rs-toplevel-reentry-reruns-forms.md)).
 - **A Scheme program's data is never freed**
   ([r7rs-heap-data-never-reclaimed](../reported/r7rs-heap-data-never-reclaimed.md),
   with the `call/cc` images, the caught-`raise` records and the leftover

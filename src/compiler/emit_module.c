@@ -17024,9 +17024,10 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                     emit_sig_record_ret_ctype(bn, e->as.def_.binding->type.as.fn.arity,
                                               fp_ret);
                     if (e->as.def_.init) {
-                        char *iv = emit_value(&ctx, &def_init_body, e->as.def_.init);
-                        indent_buf(&def_init_body, ctx.indent);
-                        buf_printf(&def_init_body, "%s = (%s (*)(%s))(intptr_t)(%s);\n",
+                        Buf *init_sink = user_has_main ? &def_init_body : &body;
+                        char *iv = emit_value(&ctx, init_sink, e->as.def_.init);
+                        indent_buf(init_sink, ctx.indent);
+                        buf_printf(init_sink, "%s = (%s (*)(%s))(intptr_t)(%s);\n",
                                    bn, fp_ret, fp_args, iv);
                         free(iv);
                     }
@@ -17039,15 +17040,23 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                        type_c_name(e->as.def_.binding->type), bn);
             if (e->as.def_.init) {
                 /* Gap F: route to def_init_body so user-has-main programs
-                 * still execute the initializer via __constructor__. */
-                char *iv = emit_value(&ctx, &def_init_body, e->as.def_.init);
+                 * still execute the initializer via __constructor__.
+                 *
+                 * toplevel-def-initializers-run-before-toplevel-expressions:
+                 * with no user main, the initializer is a statement of the
+                 * synthesized main() at its SOURCE position, interleaved with
+                 * the top-level expressions in `body`, so a program's forms
+                 * run in the order they are written -- what the interpreter
+                 * does, and what R7RS 5.1 requires of a Scheme program. */
+                Buf *init_sink = user_has_main ? &def_init_body : &body;
+                char *iv = emit_value(&ctx, init_sink, e->as.def_.init);
                 /* global-def-store-misses-int-ptr-bridge: same bridge the
                  * `let` binder applies -- the def's declared carrier and the
                  * init temp's real C type may straddle int64/pointer. */
                 char *biv = emit_store_int_ptr_bridge(&ctx,
                     type_c_name(e->as.def_.binding->type), iv, e->as.def_.init);
-                indent_buf(&def_init_body, ctx.indent);
-                buf_printf(&def_init_body, "%s = %s;\n", bn, biv ? biv : iv);
+                indent_buf(init_sink, ctx.indent);
+                buf_printf(init_sink, "%s = %s;\n", bn, biv ? biv : iv);
                 free(biv);
                 free(iv);
             }
@@ -17133,9 +17142,10 @@ static int emit_program_inner(Buf *out, const Expr *program) {
              * still execute the initializer via __constructor__. */
             DynVarEntry *entry = e->as.defdynamic_.entry;
             char *mname = mangle_dynvar_name(entry->name->name);
-            char *rv = emit_value(&ctx, &def_init_body, e->as.defdynamic_.root_expr);
-            indent_buf(&def_init_body, ctx.indent);
-            buf_printf(&def_init_body, "_dynvar_root_%s = %s;\n", mname, rv);
+            Buf *init_sink = user_has_main ? &def_init_body : &body;
+            char *rv = emit_value(&ctx, init_sink, e->as.defdynamic_.root_expr);
+            indent_buf(init_sink, ctx.indent);
+            buf_printf(init_sink, "_dynvar_root_%s = %s;\n", mname, rv);
             free(rv);
             free(mname);
         } else if (e->kind == EX_INLINE_C) {
@@ -17891,8 +17901,10 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         buf_puts(out, "        _c->next = g_tur_args;\n");
         buf_puts(out, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
         buf_puts(out, "    }\n");
-        /* Gap F: def initializers run before any other top-level
-         * statements so by the time `(println x)` runs `x` is set. */
+        /* Gap F: def initializers used to run here, ahead of every
+         * top-level statement; they are now statements of `body` at their
+         * source position (see the EX_DEF arm above), so `def_init_body` is
+         * empty on this path and the write is kept for the shape only. */
         if (def_init_body.len) buf_write(out, def_init_body.data, def_init_body.len);
         if (body.len) buf_write(out, body.data, body.len);
         buf_puts(out, "    return 0;\n");

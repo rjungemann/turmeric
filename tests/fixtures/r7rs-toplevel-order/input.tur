@@ -1,0 +1,23 @@
+#lang r7rs
+;; toplevel-def-initializers-run-before-toplevel-expressions, the Scheme
+;; case: R7RS 5.1 runs a program's top-level forms in order, so a `define`
+;; after an expression runs its initializer where it stands.  A program with
+;; imports lowers to a module whose `def` initializers all run before main,
+;; so the lowering declares such a define unset and assigns it in the body
+;; (a `set!` in order with its neighbours).  A define before any expression
+;; keeps the plain `def`.
+(import (scheme base) (scheme write))
+(define (show x) (display x) (newline))
+(define y 21)
+(define (f) (* y 2))
+(show "one")
+(define x (begin (show "two") 2))
+(show "three")
+(show x)
+(show (f))
+(define z (f))
+(set! x (+ x z))
+(show x)
+(define p (open-output-string))
+(write 'later p)
+(show (get-output-string p))

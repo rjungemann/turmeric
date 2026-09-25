@@ -273,6 +273,11 @@ Expr *elab_load(Elab *e, const Form *call) {
 /* Phase M2: Load and elaborate an imported module file.
  * Returns the registry entry (may have 0 exports on parse/elab failure).
  * Returns NULL only on fatal error (circular import or OOM). */
+/* Defined with elab_module_resolve_path below: the `.tur`-then-`.scm` read. */
+static int module_read_named(const char *dir, const char *name,
+                             char *out, size_t cap, int *out_len,
+                             char **src, size_t *src_len);
+
 static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_span) {
     /* SB2: Reject imports in sandboxed environments. */
     if (e->sandboxed) {
@@ -311,7 +316,10 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     slot->is_loading = true;
 
     /* Build file path: 'geom/vector' -> '{base_dir}/geom/vector.tur'
-     * The '/' in module names maps directly to directory separators. */
+     * The '/' in module names maps directly to directory separators.
+     * A `.scm` file answers the same name when no `.tur` does
+     * (module_read_named): a Scheme `define-library` needs no `.tur`
+     * spelling to be importable. */
     char path_buf[4096];
     const char *base = e->module_base_dir ? e->module_base_dir : ".";
     int plen = snprintf(path_buf, sizeof(path_buf), "%s/%s.tur", base, name->name);
@@ -325,7 +333,8 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     /* Read source file. */
     char *src_raw = NULL;
     size_t src_len = 0;
-    if (elab_read_file(path_buf, &src_raw, &src_len) != 0) {
+    if (module_read_named(base, name->name, path_buf, sizeof(path_buf), &plen,
+                          &src_raw, &src_len) != 0) {
         /* SC0: collect every path we attempt so a final failure can list
          * the full search. `attempted` grows via snprintf; we leave headroom
          * for one more append and the trailing NUL so overflow truncates
@@ -343,7 +352,8 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
             int splen = snprintf(stdlib_path, sizeof(stdlib_path), "%s/%s.tur",
                                  e->module_stdlib_dir, name->name);
             if (splen > 0 && (size_t)splen < sizeof(stdlib_path)) {
-                if (elab_read_file(stdlib_path, &src_raw, &src_len) == 0) {
+                if (module_read_named(e->module_stdlib_dir, name->name, stdlib_path,
+                                      sizeof(stdlib_path), &splen, &src_raw, &src_len) == 0) {
                     memcpy(path_buf, stdlib_path, (size_t)splen + 1);
                     plen = splen;
                     found_in_stdlib = true;
@@ -363,7 +373,8 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
                 int iplen = snprintf(inc_path, sizeof(inc_path), "%s/%s.tur",
                                      e->module_include_dirs[ii], name->name);
                 if (iplen > 0 && (size_t)iplen < sizeof(inc_path)) {
-                    if (elab_read_file(inc_path, &src_raw, &src_len) == 0) {
+                    if (module_read_named(e->module_include_dirs[ii], name->name, inc_path,
+                                          sizeof(inc_path), &iplen, &src_raw, &src_len) == 0) {
                         memcpy(path_buf, inc_path, (size_t)iplen + 1);
                         plen = iplen;
                         found_in_includes = true;
@@ -510,6 +521,11 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
                       "#lang %s in imported module '%s' is not yet implemented",
                       reader_type_name(chosen), path_copy);
             return false;
+        }
+        /* `.scm` names the Scheme language as well as its reader. */
+        {
+            LangDialect ext_dialect = lang_dialect_from_extension(path_copy);
+            if (ext_dialect != LANG_TURMERIC) dialect = ext_dialect;
         }
         sfile->src         = msrc;
         sfile->len         = mlen;
@@ -922,19 +938,46 @@ static bool module_path_exists(const char *path) {
     return true;
 }
 
+/* The spellings a module name resolves to under a directory, in order: the
+ * `.tur` file, then the `.scm` file (a Scheme `define-library`, r7rs-lang-plan
+ * open question 4).  Each formats "<dir>/<name><ext>" into `out`. */
+static const char *const MODULE_FILE_EXTS[] = { ".tur", ".scm" };
+#define MODULE_FILE_EXT_COUNT 2
+
+/* Read the module `name` under `dir` by either spelling.  On success `out`
+ * holds the path read, `*out_len` its length, and the source is in
+ * `*src`/`*src_len`; returns 0.  On failure `out` holds the `.tur` spelling
+ * (what a "not found" message names) and returns -1. */
+static int module_read_named(const char *dir, const char *name,
+                             char *out, size_t cap, int *out_len,
+                             char **src, size_t *src_len) {
+    for (int k = 0; k < MODULE_FILE_EXT_COUNT; k++) {
+        int n = snprintf(out, cap, "%s/%s%s", dir, name, MODULE_FILE_EXTS[k]);
+        if (n <= 0 || (size_t)n >= cap) continue;
+        if (elab_read_file(out, src, src_len) == 0) { *out_len = n; return 0; }
+    }
+    int n = snprintf(out, cap, "%s/%s.tur", dir, name);
+    *out_len = n;
+    return -1;
+}
+
+static bool module_path_exists_named(const char *dir, const char *name,
+                                     char *out, size_t cap) {
+    for (int k = 0; k < MODULE_FILE_EXT_COUNT; k++) {
+        int n = snprintf(out, cap, "%s/%s%s", dir, name, MODULE_FILE_EXTS[k]);
+        if (n > 0 && (size_t)n < cap && module_path_exists(out)) return true;
+    }
+    return false;
+}
+
 bool elab_module_resolve_path(Elab *e, const Symbol *name,
                               char *out, size_t cap) {
     const char *base = e->module_base_dir ? e->module_base_dir : ".";
-    int n = snprintf(out, cap, "%s/%s.tur", base, name->name);
-    if (n > 0 && (size_t)n < cap && module_path_exists(out)) return true;
-    if (e->module_stdlib_dir) {
-        n = snprintf(out, cap, "%s/%s.tur", e->module_stdlib_dir, name->name);
-        if (n > 0 && (size_t)n < cap && module_path_exists(out)) return true;
-    }
+    if (module_path_exists_named(base, name->name, out, cap)) return true;
+    if (e->module_stdlib_dir
+        && module_path_exists_named(e->module_stdlib_dir, name->name, out, cap)) return true;
     for (int ii = 0; ii < e->n_module_include_dirs; ii++) {
-        n = snprintf(out, cap, "%s/%s.tur",
-                     e->module_include_dirs[ii], name->name);
-        if (n > 0 && (size_t)n < cap && module_path_exists(out)) return true;
+        if (module_path_exists_named(e->module_include_dirs[ii], name->name, out, cap)) return true;
     }
     return false;
 }

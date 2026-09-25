@@ -598,8 +598,15 @@ ReaderType detect_lang_dialect(const char *src, size_t len,
  * future gated dialect needs; today it cannot fail. */
 bool lang_dialect_apply(LangDialect d, const char *path);
 
-/* Get reader type from file extension (Phase S0) */
+/* Get reader type from file extension (Phase S0); `.scm` is the Scheme reader. */
 ReaderType reader_type_from_extension(const char *path);
+
+/* The language an extension selects on its own: LANG_R7RS for `.scm`, else
+ * LANG_TURMERIC ("the directive decides").  Every site that pairs
+ * reader_type_from_extension with detect_lang_dialect applies this after
+ * the directive, so a `.scm` file elaborates as Scheme with or without a
+ * `#lang r7rs` line. */
+LangDialect lang_dialect_from_extension(const char *path);
 
 /* Get reader type name as string (Phase S0) */
 const char *reader_type_name(ReaderType type);

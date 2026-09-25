@@ -6,6 +6,64 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: `.scm` files.** A `.scm` file is Scheme without the
+  `#lang r7rs` line (r7rs-lang-plan open question 4, decided): the
+  extension selects the Scheme reader and the Scheme language at every site
+  that pairs an extension with the directive -- the entry file, `(import
+  ...)`, `(load ...)`, `tur --interpret` -- and a module name resolves to
+  `<name>.tur`, then `<name>.scm`, so a `define-library` in a `.scm` file is
+  importable by its name. `tur run`, `tur build` (default output name),
+  `tur check` and `tur --interpret` take `.scm` entries; a `#lang` line in
+  one is a redundant hint. `tests/run-r7rs-import.sh` covers a `.scm`
+  program importing a `.scm` library on both back ends.
+
+### Fixed
+
+- **Top-level `def` initializers run in source order, compiled.** A
+  top-level `def` whose initializer has an effect used to run in
+  `__tur_static_init`, before every top-level expression; the interpreter
+  ran the forms in order. With no user `main` the initializer is now a
+  statement of the synthesized `int main()` at its source position, and the
+  synthesized-main fold steps aside for a `def` after a statement whose
+  initializer is a call. A `#lang r7rs` program with imports (a module,
+  whose `def` initializers all precede its body) declares a `define` after
+  the first expression unset and assigns it in the body. Fixtures
+  `toplevel-def-init-order` (both back ends) and `r7rs-toplevel-order`;
+  archived: toplevel-def-initializers-run-before-toplevel-expressions.
+  Found on the way: a Scheme procedure body cannot name a top-level
+  variable defined after it (r7rs-procedure-body-forward-reference).
+- **`#lang r7rs`: each top-level form runs under its own prompt.** A
+  continuation captured in a top-level form was the rest of the program
+  (the stack image reached `main`'s frame, or the interpreter's loop over
+  the forms), so re-entering it from a later form re-ran the forms after
+  it. The lowering now wraps every statement of a program in
+  `r7rs-toplevel__`, whose frame bounds a capture and, in the interpreter,
+  the drive snapshot; a re-entry finishes the captured form and continues
+  after the invoking one, as chibi and Racket do. Fixture
+  `r7rs-toplevel-reentry`; `r7rs-continuation-after-return` pins the
+  delimited answer. Archived: r7rs-toplevel-reentry-reruns-forms. The
+  prompt's frame (`r7k_run_form`) is reached through a volatile function
+  pointer, so no compiler folds it into `main` (clang and MIR did, which
+  re-ran later forms), and it runs the form between a `setjmp` and a
+  `longjmp` back into itself so the registers a re-entry's restored frames
+  hand back are its own; a capture declines without a stack base, so
+  Windows keeps its escape-only `call/cc`.
+
+### Changed
+
+- **Every `cc` over emitted C runs with `-Wno-misleading-indentation`.**
+  GCC's check is quadratic on the long brace-less `if` chains the Scheme
+  lowering emits and was 71% of a `#lang r7rs` build's C compile: a
+  one-line Scheme program built in 6.4 s and builds in 3.1 s. The driver
+  appends the flag after the user's `TUR_CC_FLAGS` (`TUR_EMITTED_C_CC_FLAGS`,
+  src/main.c), so a harness's own `-Wall` still gets it
+  (docs/reported/r7rs-programs-compile-slowly.md).
+- **The R7RS prelude's `-lp__` loops are folded back** into their `: nil`
+  originals (28 in stdlib/r7rs/prelude.tur and read.tur), now that a `: nil`
+  self tail call lowers to a loop; the wrappers are gone and no caller
+  changed. A million-element `string-fill!`, `write`, `read` and `read-line`
+  pass at `-O1` (archived: r7rs-prelude-value-returning-loop-workaround).
+
 - **`#lang r7rs`: the collector sees the runtime archive, refuses threads,
   and has its macOS roots (r7rs-gc-plan, second pass).** The TUs of
   `libturt_runtime.a` (the HAMT behind `stdlib/map`, rc<T> and its cycle

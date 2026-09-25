@@ -1385,9 +1385,8 @@
         (vec-set! v i (r7rs-char-code__ c))
         (panic "string-set!: index out of range")))
     (r7rs-immutable__ "string-set!")))
-(defn r7rs-fill-go-lp__ [v : (Vec int) i : int end : int c : int] : bool
-  (if (>= i end) true (do (vec-set! v i c) (r7rs-fill-go-lp__ v (+ i 1) end c))))
-(defn r7rs-fill-go__ [v : (Vec int) i : int end : int c : int] : nil (r7rs-fill-go-lp__ v i end c) nil)
+(defn r7rs-fill-go__ [v : (Vec int) i : int end : int c : int] : nil
+  (if (>= i end) nil (do (vec-set! v i c) (r7rs-fill-go__ v (+ i 1) end c))))
 (defn r7rs-string-fill! [s c : R7rsChar & r : any] : nil
   (if (r7rs-mstring? s)
     (let [v (r7rs-mstring-cps__ s)
@@ -1400,12 +1399,10 @@
 ;;; string-copy! copies front to back when the destination starts at or
 ;;; before the source and back to front otherwise, so a copy within one
 ;;; string is right when the ranges overlap (R7RS 6.7).
-(defn r7rs-copy-fwd-lp__ [dst : (Vec int) at : int src : (Vec int) i : int end : int] : bool
-  (if (>= i end) true (do (vec-set! dst at (vec-get src i)) (r7rs-copy-fwd-lp__ dst (+ at 1) src (+ i 1) end))))
-(defn r7rs-copy-fwd__ [dst : (Vec int) at : int src : (Vec int) i : int end : int] : nil (r7rs-copy-fwd-lp__ dst at src i end) nil)
-(defn r7rs-copy-bwd-lp__ [dst : (Vec int) at : int src : (Vec int) start : int i : int] : bool
-  (if (< i start) true (do (vec-set! dst (+ at (- i start)) (vec-get src i)) (r7rs-copy-bwd-lp__ dst at src start (- i 1)))))
-(defn r7rs-copy-bwd__ [dst : (Vec int) at : int src : (Vec int) start : int i : int] : nil (r7rs-copy-bwd-lp__ dst at src start i) nil)
+(defn r7rs-copy-fwd__ [dst : (Vec int) at : int src : (Vec int) i : int end : int] : nil
+  (if (>= i end) nil (do (vec-set! dst at (vec-get src i)) (r7rs-copy-fwd__ dst (+ at 1) src (+ i 1) end))))
+(defn r7rs-copy-bwd__ [dst : (Vec int) at : int src : (Vec int) start : int i : int] : nil
+  (if (< i start) nil (do (vec-set! dst (+ at (- i start)) (vec-get src i)) (r7rs-copy-bwd__ dst at src start (- i 1)))))
 (defn r7rs-string-copy! [to at : int from & r : any] : nil
   (if (r7rs-mstring? to)
     (let [dst (r7rs-mstring-cps__ to)
@@ -1502,9 +1499,8 @@
 (defn r7rs-list->vector-go__ [l v : (Vec any)] : (Vec any)
   (if (r7rs-null? l) v (do (vec-push! v (r7rs-car l)) (r7rs-list->vector-go__ (r7rs-cdr l) v))))
 (defn r7rs-list->vector [l] : (Vec any) (r7rs-list->vector-go__ l (:: (vec-new) (Vec any))))
-(defn r7rs-vector-fill-go-lp__ [v : (Vec any) x i : int end : int] : bool
-  (if (>= i end) true (do (vec-set! v i x) (r7rs-vector-fill-go-lp__ v x (+ i 1) end))))
-(defn r7rs-vector-fill-go__ [v : (Vec any) x i : int end : int] : nil (r7rs-vector-fill-go-lp__ v x i end) nil)
+(defn r7rs-vector-fill-go__ [v : (Vec any) x i : int end : int] : nil
+  (if (>= i end) nil (do (vec-set! v i x) (r7rs-vector-fill-go__ v x (+ i 1) end))))
 (defn r7rs-vector-fill! [v : (Vec any) x & r : any] : nil
   (let [rl (r7rs-chain->list__ (:: r (Cons any)))
         a (r7rs-range-start__ rl)
@@ -1802,6 +1798,11 @@
   extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
   #endif
   static _Thread_local unsigned char *r7k_base_tls;
+  // r7rs-toplevel-reentry-reruns-forms: the top of the current top-level
+  // form's frames (r7rs-toplevel__ sets it), which bounds a capture in place
+  // of the thread's stack base: a continuation is the rest of the FORM, not
+  // the rest of the program.
+  static _Thread_local unsigned char *r7k_form_base;
   static unsigned char *r7k_stack_base(void) {
       if (r7k_base_tls) return r7k_base_tls;
   #if defined(__GLIBC__)
@@ -1826,8 +1827,50 @@
   // The body allocates and fills it, AFTER the preamble's allocator macros,
   // so under the r7rs-gc experiment the image is on the collected heap and
   // scanned -- a continuation keeps everything its stack points at alive.
+  // r7rs-toplevel-reentry-reruns-forms: the per-form prompt's frame, a
+  // function of its own that nothing inlines: it is reached only through
+  // the volatile function pointer below, and calls its trampoline through
+  // a pointer too.  clang inlined the prompt into the program's main, which
+  // put main's return address for the form below the mark, inside the
+  // image, so a re-entry returned into main after the CAPTURED form and
+  // re-ran everything after it (macOS CI); MIR (`tur jit`) inlines every
+  // small callee and would do the same.  An indirect call is the one thing
+  // no compiler folds.
+  //
+  // The mark is this frame's jmp_buf, and the body runs between a setjmp
+  // and a longjmp back into this same, still-live frame.  The frames a
+  // re-entry restores below the mark hand back the callee-saved registers
+  // they saved during the CAPTURED form, so when the captured form's body
+  // finishes and returns into this frame -- the INVOKING form's -- the
+  // registers hold that older form's values, and whatever main kept in one
+  // across the call is stale (under `tur jit` the next statement's thunk
+  // was "an unknown value"; gcc and clang happened to spill).  The longjmp
+  // reinstates this frame's own registers, as saved at its setjmp, before
+  // the return to main.  What this frame keeps for after the body -- the
+  // previous form base -- lives in a static stack, since frame slots below
+  // the mark are overwritten by the image.  (Untyped: this block precedes
+  // the preamble's tagged-word typedef; r7rs-run-toplevel-thunk-ptr is the
+  // typed trampoline.)
+  static unsigned char *r7k_form_saved[64];
+  static int r7k_form_depth;
+  static void r7k_run_form(void (*run)(void *), void *thunk) {
+      jmp_buf jb;
+      if (r7k_form_depth >= 64) abort();
+      r7k_form_saved[r7k_form_depth++] = r7k_form_base;
+      r7k_form_base = (unsigned char *)&jb;
+      if (setjmp(jb) == 0) {
+          run(thunk);
+          longjmp(jb, 1);
+      }
+      r7k_form_base = r7k_form_saved[--r7k_form_depth];
+  }
+  static void (*volatile r7k_run_form_p)(void (*)(void *), void *) = r7k_run_form;
   static int r7k_measure(r7k_cont *c, unsigned char *mark) {
-      unsigned char *base = r7k_stack_base();
+      // r7rs-reentrant-callcc-not-on-windows: no image without a stack base,
+      // whatever the form base says -- call/cc is the escape there.
+      unsigned char *sb = r7k_stack_base();
+      if (!sb) return 0;
+      unsigned char *base = (r7k_form_base && r7k_form_base > mark) ? r7k_form_base : sb;
       unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
       if (!base || base <= lo) return 0;
       c->lo = lo;
@@ -1909,6 +1952,31 @@
 ;;; r7rs-cont-delivered__ -- the value an invoked continuation hands its
 ;;; call/cc; set just before the jump, read just after it.
 (def ^mut r7rs-cont-delivered__ : any (R7rsNull 0))
+
+;;; r7rs-run-toplevel-thunk -- internal: call a top-level form's thunk.  Its
+;;; own function so the runner below can call it by C name from inline C.
+(defn r7rs-run-toplevel-thunk [thunk] : nil (thunk) nil)
+;;; r7rs-run-toplevel-thunk-ptr -- internal: the trampoline r7k_run_form
+;;; calls, `void (*)(void *)`, over the thunk's address.
+(defn r7rs-run-toplevel-thunk-ptr [p : ptr<void>] : nil
+  ```c
+  __TUR_CNAME_r7rs-run-toplevel-thunk__(*(tur_tagged_t *)p);
+  ```)
+;;; r7rs-toplevel__ -- internal: run one top-level form under its own prompt
+;;; (r7rs-toplevel-reentry-reruns-forms).  The Scheme lowering wraps every
+;;; statement of a program in it.  A continuation captured inside the form
+;;; copies the stack only up to the mark r7k_run_form takes (r7k_measure),
+;;; so a re-entry from a later form restores this form's frames over that
+;;; form's -- every statement is called from the same depth, so the mark is
+;;; the same address for each -- finishes this form, and returns into the
+;;; runner frame of the INVOKING form, which carries on after it: the way
+;;; chibi's loader and Racket's per-form prompt behave.  The mark lives in
+;;; r7k_run_form, reached through a volatile function pointer so that no
+;;; compiler folds that frame into the program's main (see its comment).
+(defn r7rs-toplevel__ [thunk] : nil
+  ```c
+  r7k_run_form_p(__TUR_CNAME_r7rs-run-toplevel-thunk-ptr__, (void *)&thunk);
+  ```)
 
 ;;; r7rs-wind-depth__ -- internal: a wind stack's length.
 (defn r7rs-wind-depth__ [l] : int (if (r7rs-null? l) 0 (+ 1 (r7rs-wind-depth__ (r7rs-cdr l)))))
@@ -2148,9 +2216,8 @@
 (defn r7rs-vector-for-each [f v & vs : any] : nil
   (r7rs-for-eachn__ f (r7rs-seq-lists__ r7rs-vector-list1__ v (:: vs (Cons any)))))
 
-(defn r7rs-vec-push-range-lp__ [out : (Vec any) v : (Vec any) i : int end : int] : bool
-  (if (>= i end) true (do (vec-push! out (vec-get v i)) (r7rs-vec-push-range-lp__ out v (+ i 1) end))))
-(defn r7rs-vec-push-range__ [out : (Vec any) v : (Vec any) i : int end : int] : nil (r7rs-vec-push-range-lp__ out v i end) nil)
+(defn r7rs-vec-push-range__ [out : (Vec any) v : (Vec any) i : int end : int] : nil
+  (if (>= i end) nil (do (vec-push! out (vec-get v i)) (r7rs-vec-push-range__ out v (+ i 1) end))))
 (defn r7rs-vector-append-go__ [out : (Vec any) c : (Cons any)] : (Vec any)
   (if (tnil? c) out
     (let [v (cast (.head c) (Vec any))]
@@ -2168,9 +2235,8 @@
     (r7rs-range-check__ "vector-copy" a b (vec-len v))
     (r7rs-vec-push-range__ out v a b)
     out))
-(defn r7rs-vec-store-list-lp__ [to : (Vec any) at : int l] : bool
-  (if (r7rs-null? l) true (do (vec-set! to at (r7rs-car l)) (r7rs-vec-store-list-lp__ to (+ at 1) (r7rs-cdr l)))))
-(defn r7rs-vec-store-list__ [to : (Vec any) at : int l] : nil (r7rs-vec-store-list-lp__ to at l) nil)
+(defn r7rs-vec-store-list__ [to : (Vec any) at : int l] : nil
+  (if (r7rs-null? l) nil (do (vec-set! to at (r7rs-car l)) (r7rs-vec-store-list__ to (+ at 1) (r7rs-cdr l)))))
 ;;; r7rs-vector-copy! -- copy [start, end) of from into to at `at`; the
 ;;; source range is read out first, so overlapping ranges copy correctly.
 (defn r7rs-vector-copy! [to : (Vec any) at : int from : (Vec any) & r : any] : nil
@@ -2181,9 +2247,8 @@
     (r7rs-range-check__ "vector-copy!" at (+ at (- b a)) (vec-len to))
     (r7rs-vec-store-list__ to at (r7rs-vector->list-go__ from a b))))
 
-(defn r7rs-bytes-push-range-lp__ [out : (Vec int) v : (Vec int) i : int end : int] : bool
-  (if (>= i end) true (do (vec-push! out (vec-get v i)) (r7rs-bytes-push-range-lp__ out v (+ i 1) end))))
-(defn r7rs-bytes-push-range__ [out : (Vec int) v : (Vec int) i : int end : int] : nil (r7rs-bytes-push-range-lp__ out v i end) nil)
+(defn r7rs-bytes-push-range__ [out : (Vec int) v : (Vec int) i : int end : int] : nil
+  (if (>= i end) nil (do (vec-push! out (vec-get v i)) (r7rs-bytes-push-range__ out v (+ i 1) end))))
 (defn r7rs-bytevector-append-go__ [out : (Vec int) c : (Cons any)] : (Vec int)
   (if (tnil? c) out
     (let [v (r7rs-bytevector-bytes__ (.head c))]
@@ -2204,10 +2269,9 @@
   (if (< j i) acc (r7rs-bytes-read-acc__ v i (- j 1) (R7rsPair (:: (vec-get v j) any) acc))))
 (defn r7rs-bytes-read-range__ [v : (Vec int) i : int end : int] : any
   (r7rs-bytes-read-acc__ v i (- end 1) r7rs-null-value__))
-(defn r7rs-bytes-store-list-lp__ [to : (Vec int) at : int l] : bool
-  (if (r7rs-null? l) true
-    (do (vec-set! to at (cast (r7rs-car l) int)) (r7rs-bytes-store-list-lp__ to (+ at 1) (r7rs-cdr l)))))
-(defn r7rs-bytes-store-list__ [to : (Vec int) at : int l] : nil (r7rs-bytes-store-list-lp__ to at l) nil)
+(defn r7rs-bytes-store-list__ [to : (Vec int) at : int l] : nil
+  (if (r7rs-null? l) nil
+    (do (vec-set! to at (cast (r7rs-car l) int)) (r7rs-bytes-store-list__ to (+ at 1) (r7rs-cdr l)))))
 (defn r7rs-bytevector-copy! [to at : int from & r : any] : nil
   (let [tv (r7rs-bytevector-bytes__ to)
         fv (r7rs-bytevector-bytes__ from)
@@ -2497,11 +2561,11 @@
 ;;; T8: encoded into one buffer.  It was a divide-and-conquer of appends,
 ;;; every intermediate string leaked: O(n log n) bytes of garbage per
 ;;; conversion, and every seam crossing of a mutable string converts.
-(defn r7rs-cps-encode-lp__ [v : (Vec int) i : int end : int io : R7rsIo] : bool
-  (if (>= i end) true (do (r7rs-io-add-code__ io (vec-get v i)) (r7rs-cps-encode-lp__ v (+ i 1) end io))))
+(defn r7rs-cps-encode__ [v : (Vec int) i : int end : int io : R7rsIo] : nil
+  (if (>= i end) nil (do (r7rs-io-add-code__ io (vec-get v i)) (r7rs-cps-encode__ v (+ i 1) end io))))
 (defn r7rs-cps->cstr__ [v : (Vec int) a : int b : int] : cstr
   (let [io (r7rs-io-new__)]
-    (r7rs-cps-encode-lp__ v a b io)
+    (r7rs-cps-encode__ v a b io)
     (r7rs-io-take-str__ io)))
 ;;; r7rs-io-peek__ -- the byte k places past the read position, or -1 at
 ;;; end of input.  A file buffer is filled from its FILE as far as needed;
@@ -2787,9 +2851,8 @@
 ;;; r7rs-write-u8 -- (write-u8 byte [port]).
 (defn r7rs-write-u8 [x : int & r : any] : nil
   (r7rs-io-add-byte__ (r7rs-out-io__ (r7rs-port-of-chain__ (:: r (Cons any)) r7rs-current-output-port)) x))
-(defn r7rs-write-bytes-go-lp__ [io : R7rsIo v : (Vec int) i : int end : int] : bool
-  (if (>= i end) true (do (r7rs-io-add-byte__ io (vec-get v i)) (r7rs-write-bytes-go-lp__ io v (+ i 1) end))))
-(defn r7rs-write-bytes-go__ [io : R7rsIo v : (Vec int) i : int end : int] : nil (r7rs-write-bytes-go-lp__ io v i end) nil)
+(defn r7rs-write-bytes-go__ [io : R7rsIo v : (Vec int) i : int end : int] : nil
+  (if (>= i end) nil (do (r7rs-io-add-byte__ io (vec-get v i)) (r7rs-write-bytes-go__ io v (+ i 1) end))))
 ;;; r7rs-write-bytevector -- (write-bytevector bv [port [start [end]]]).
 (defn r7rs-write-bytevector [bv & r : any] : nil
   (let [v (r7rs-bytevector-bytes__ bv)
@@ -2883,18 +2946,17 @@
 
 ;;; r7rs-read-line -- the characters up to a line end (LF, CR or CR LF, which
 ;;; is consumed and not included), or the eof object at the end of input.
-(defn r7rs-read-line-go-lp__ [io : R7rsIo out : R7rsIo] : bool
+(defn r7rs-read-line-go__ [io : R7rsIo out : R7rsIo] : nil
   (let [b (r7rs-io-peek__ io 0)]
     (if (< b 0)
-      true
+      nil
       (do (r7rs-io-skip__ io 1)
           (if (= b 10)
-            true
+            nil
             (if (= b 13)
-              (do (if (= (r7rs-io-peek__ io 0) 10) (r7rs-io-skip__ io 1) nil) true)
+              (do (if (= (r7rs-io-peek__ io 0) 10) (r7rs-io-skip__ io 1) nil) nil)
               (do (r7rs-io-add-byte__ out b)
-                  (r7rs-read-line-go-lp__ io out))))))))
-(defn r7rs-read-line-go__ [io : R7rsIo out : R7rsIo] : nil (r7rs-read-line-go-lp__ io out) nil)
+                  (r7rs-read-line-go__ io out))))))))
 (defn r7rs-read-line [& r : any] : any
   (let [io (r7rs-in-port-io__ (:: r (Cons any)))]
     (if (< (r7rs-io-peek__ io 0) 0)
@@ -2904,15 +2966,14 @@
         (:: (r7rs-io-take-str__ out) any)))))
 ;;; r7rs-read-string -- (read-string k [port]): up to k characters, or the
 ;;; eof object when none are left.
-(defn r7rs-read-string-go-lp__ [io : R7rsIo out : R7rsIo k : int] : bool
+(defn r7rs-read-string-go__ [io : R7rsIo out : R7rsIo k : int] : nil
   (if (<= k 0)
-    true
+    nil
     (let [c (r7rs-io-read-code__ io)]
       (if (< c 0)
-        true
+        nil
         (do (r7rs-io-add-code__ out c)
-            (r7rs-read-string-go-lp__ io out (- k 1)))))))
-(defn r7rs-read-string-go__ [io : R7rsIo out : R7rsIo k : int] : nil (r7rs-read-string-go-lp__ io out k) nil)
+            (r7rs-read-string-go__ io out (- k 1)))))))
 (defn r7rs-read-string [k : int & r : any] : any
   (let [io (r7rs-in-port-io__ (:: r (Cons any)))]
     (if (< (r7rs-io-peek__ io 0) 0)
@@ -3017,15 +3078,13 @@
             n)))
     (do (r7rs-mark-cycles__ p tab)
         n)))
-(defn r7rs-cyc-finish-lp__ [p tab : R7rsIdTab n : int] : bool
+(defn r7rs-cyc-finish__ [p tab : R7rsIdTab n : int] : nil
   (if (<= n 0)
-    true
+    nil
     (do (r7rs-idtab-put__ tab p (if (= (r7rs-idtab-get__ tab p) 3) 4 2))
-        (r7rs-cyc-finish-lp__ (r7rs-cdr p) tab (- n 1)))))
-(defn r7rs-cyc-finish__ [p tab : R7rsIdTab n : int] : nil (r7rs-cyc-finish-lp__ p tab n) nil)
-(defn r7rs-cyc-vec-go-lp__ [v : (Vec any) i : int tab : R7rsIdTab] : bool
-  (if (>= i (vec-len v)) true (do (r7rs-mark-cycles__ (vec-get v i) tab) (r7rs-cyc-vec-go-lp__ v (+ i 1) tab))))
-(defn r7rs-cyc-vec-go__ [v : (Vec any) i : int tab : R7rsIdTab] : nil (r7rs-cyc-vec-go-lp__ v i tab) nil)
+        (r7rs-cyc-finish__ (r7rs-cdr p) tab (- n 1)))))
+(defn r7rs-cyc-vec-go__ [v : (Vec any) i : int tab : R7rsIdTab] : nil
+  (if (>= i (vec-len v)) nil (do (r7rs-mark-cycles__ (vec-get v i) tab) (r7rs-cyc-vec-go__ v (+ i 1) tab))))
 (defn r7rs-mark-cycles__ [x tab : R7rsIdTab] : nil
   (if (r7rs-pair? x)
     (r7rs-cyc-finish__ x tab (r7rs-cyc-spine__ x tab 0))
@@ -3039,18 +3098,16 @@
       nil)))
 
 ;;; The sharing pre-pass: any pair or vector met twice gets a label.
-(defn r7rs-shr-spine-lp__ [p tab : R7rsIdTab] : bool
+(defn r7rs-shr-spine__ [p tab : R7rsIdTab] : nil
   (if (r7rs-pair? p)
     (if (= (r7rs-idtab-get__ tab p) -2)
       (do (r7rs-idtab-put__ tab p 2)
           (r7rs-mark-shared__ (r7rs-car p) tab)
-          (r7rs-shr-spine-lp__ (r7rs-cdr p) tab))
-      (do (r7rs-idtab-put__ tab p 4) true))
-    (do (r7rs-mark-shared__ p tab) true)))
-(defn r7rs-shr-spine__ [p tab : R7rsIdTab] : nil (r7rs-shr-spine-lp__ p tab) nil)
-(defn r7rs-shr-vec-go-lp__ [v : (Vec any) i : int tab : R7rsIdTab] : bool
-  (if (>= i (vec-len v)) true (do (r7rs-mark-shared__ (vec-get v i) tab) (r7rs-shr-vec-go-lp__ v (+ i 1) tab))))
-(defn r7rs-shr-vec-go__ [v : (Vec any) i : int tab : R7rsIdTab] : nil (r7rs-shr-vec-go-lp__ v i tab) nil)
+          (r7rs-shr-spine__ (r7rs-cdr p) tab))
+      (do (r7rs-idtab-put__ tab p 4) nil))
+    (do (r7rs-mark-shared__ p tab) nil)))
+(defn r7rs-shr-vec-go__ [v : (Vec any) i : int tab : R7rsIdTab] : nil
+  (if (>= i (vec-len v)) nil (do (r7rs-mark-shared__ (vec-get v i) tab) (r7rs-shr-vec-go__ v (+ i 1) tab))))
 (defn r7rs-mark-shared__ [x tab : R7rsIdTab] : nil
   (if (r7rs-pair? x)
     (r7rs-shr-spine__ x tab)
@@ -3217,39 +3274,35 @@
         (r7rs-port-put__ port ")"))))
 ;;; r7rs-pr-tail__ -- the rest of a list: ` b c)`, or ` . d)` for an improper
 ;;; tail or a tail that carries a label.
-(defn r7rs-pr-tail-lp__ [d port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : bool
+(defn r7rs-pr-tail__ [d port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil
   (if (r7rs-null? d)
-    (do (r7rs-port-put__ port ")") true)
+    (do (r7rs-port-put__ port ")") nil)
     (if (if (r7rs-pair? d) (not (= (r7rs-idtab-get__ tab d) 4)) false)
       (do (r7rs-port-put__ port " ")
           (r7rs-pr__ (r7rs-car d) port quoted tab labels)
-          (r7rs-pr-tail-lp__ (r7rs-cdr d) port quoted tab labels))
+          (r7rs-pr-tail__ (r7rs-cdr d) port quoted tab labels))
       (do (r7rs-port-put__ port " . ")
           (r7rs-pr__ d port quoted tab labels)
           (r7rs-port-put__ port ")")
-          true))))
-(defn r7rs-pr-tail__ [d port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil (r7rs-pr-tail-lp__ d port quoted tab labels) nil)
-(defn r7rs-pr-vec-lp__ [v : (Vec any) i : int port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : bool
+          nil))))
+(defn r7rs-pr-vec__ [v : (Vec any) i : int port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil
   (if (>= i (vec-len v))
-    true
+    nil
     (do (if (= i 0) true (r7rs-port-put__ port " "))
         (r7rs-pr__ (vec-get v i) port quoted tab labels)
-        (r7rs-pr-vec-lp__ v (+ i 1) port quoted tab labels))))
-(defn r7rs-pr-vec__ [v : (Vec any) i : int port quoted : bool tab : R7rsIdTab labels : R7rsIdTab] : nil (r7rs-pr-vec-lp__ v i port quoted tab labels) nil)
-(defn r7rs-pr-bytes-lp__ [v : (Vec int) i : int port] : bool
+        (r7rs-pr-vec__ v (+ i 1) port quoted tab labels))))
+(defn r7rs-pr-bytes__ [v : (Vec int) i : int port] : nil
   (if (>= i (vec-len v))
-    true
+    nil
     (do (if (= i 0) true (r7rs-port-put__ port " "))
         (r7rs-port-put__ port (r7rs-int->string__ (vec-get v i)))
-        (r7rs-pr-bytes-lp__ v (+ i 1) port))))
-(defn r7rs-pr-bytes__ [v : (Vec int) i : int port] : nil (r7rs-pr-bytes-lp__ v i port) nil)
-(defn r7rs-pr-irritants-lp__ [l port tab : R7rsIdTab labels : R7rsIdTab] : bool
+        (r7rs-pr-bytes__ v (+ i 1) port))))
+(defn r7rs-pr-irritants__ [l port tab : R7rsIdTab labels : R7rsIdTab] : nil
   (if (r7rs-pair? l)
     (do (r7rs-port-put__ port " ")
         (r7rs-pr__ (r7rs-car l) port true tab labels)
-        (r7rs-pr-irritants-lp__ (r7rs-cdr l) port tab labels))
-    true))
-(defn r7rs-pr-irritants__ [l port tab : R7rsIdTab labels : R7rsIdTab] : nil (r7rs-pr-irritants-lp__ l port tab labels) nil)
+        (r7rs-pr-irritants__ (r7rs-cdr l) port tab labels))
+    nil))
 
 ;;; r7rs-print__ -- mode 0 labels nothing, 1 labels cycles, 2 labels sharing.
 (defn r7rs-print__ [x port quoted : bool mode : int] : nil

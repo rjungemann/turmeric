@@ -40,6 +40,11 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
 
 - **A program** is a file of top-level forms. `tur run prog.tur` builds and
   runs it; there is no `main` to write.
+- **`.scm` files** are Scheme without the `#lang r7rs` line: `tur run
+  prog.scm`, `tur build prog.scm` (the binary is `prog`), `tur check` and
+  `tur --interpret` all take one, a `(load "util.scm")` reads one, and
+  `(import (mylib))` finds `mylib.scm` when there is no `mylib.tur`. A
+  `#lang r7rs` line in a `.scm` file is allowed and changes nothing.
 - **A project**: `tur init --r7rs demo` scaffolds one that builds with
   `tur build .` and tests with `tur test tests`. Add `--lib` for a
   `define-library` instead of a program.
@@ -253,8 +258,10 @@ of the extent being left run first, innermost first. Then the `before` thunks
 of the extent being re-entered run, outermost first.
 
 A variable keeps its latest value across a re-entry, since a continuation
-restores control, not state. At top level a continuation is the rest of the
-program, so re-entering one runs the top-level forms after it again.
+restores control, not state. Each top-level form runs under its own prompt,
+so a continuation captured in one is the rest of that form: re-entering it
+from a later form finishes the earlier form and then continues after the
+form that invoked it, as chibi and Racket do.
 
 `guard` and `raise` escape without copying anything. `call/cc` copies the
 stack between it and the program's start, so it costs time and memory in
@@ -395,11 +402,11 @@ library's string result to `cstr` gets the same copy.
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.
-- **Compiled top-level order.** On the compiled back end a top-level
-  `define` whose initializer has an effect runs before the program's
-  top-level expressions. Opening a file or reading input in a top-level
-  `define` is the case to watch. Put such code inside a procedure; the
-  interpreter evaluates in order either way.
+- **A procedure body cannot name a variable defined after it.**
+  `(define (f) y)` before `(define y 1)` is "unbound symbol 'y'" on both
+  back ends; define the variable first, or read it through a procedure
+  defined after it. (Top-level forms otherwise run in source order on both
+  back ends, a `define` with an effectful initializer included.)
 - **Data is never freed.** There is no collector on by default: every pair,
   vector, string, record and procedure a program makes stays allocated until
   it exits, so a long-running program's memory only grows -- a loop that

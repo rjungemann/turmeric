@@ -1,5 +1,24 @@
 # `#lang r7rs`: re-entering a continuation at top level re-runs the forms after it
 
+> **RESOLVED 2026-09-25.** Each top-level statement of a Scheme program runs
+> under its own prompt: the lowering wraps it as
+> `(r7rs-toplevel__ (lambda () <stmt>))` (`lower_toplevel_stmt`,
+> scheme_lower.c), and the runner -- inline C in the prelude, a native twin
+> in the interpreter -- marks its frame and calls the thunk. A capture inside
+> the form copies the stack only up to that mark (`r7k_form_base` in
+> `r7k_measure` / `r7k_snapshot`), and the interpreter's drive snapshot stops
+> at the runner's drive (`turi_cont_set_drive_boundary`). Every statement is
+> called from the same depth, so a re-entry from a later form restores the
+> captured form's frames over the current one's, finishes it, and returns
+> into the invoking form's runner, which carries on after it -- the repro
+> prints `1`, `2`, `not reached` on both back ends. A define after the first
+> expression is a statement too (its `set!`, see
+> toplevel-def-initializers-run-before-toplevel-expressions), so it is
+> delimited the same way; a define before any expression initializes ahead of
+> the body, outside any prompt, so a continuation captured THERE is still the
+> rest of the program. Fixture `r7rs-toplevel-reentry`;
+> `r7rs-continuation-after-return` now pins the delimited answer.
+
 **Severity:** low-medium. A behavior change from r7rs-lang-plan T5, not a
 crash, and R7RS does not pin it down. But it differs from what chibi and
 Racket do, and the obvious test of re-entry after return no longer ends.
@@ -60,7 +79,7 @@ Delimit each top-level form the Racket way, with a prompt per form:
   fixed depth too.
 - A top-level `define` initializer also runs before the program's
   expressions on the compiled back end
-  ([toplevel-def-initializers-run-before-toplevel-expressions](toplevel-def-initializers-run-before-toplevel-expressions.md)).
+  ([toplevel-def-initializers-run-before-toplevel-expressions](../archive/toplevel-def-initializers-run-before-toplevel-expressions.md)).
   Any per-form prompt has to follow the order the forms actually run in.
 
 ## Guide upkeep

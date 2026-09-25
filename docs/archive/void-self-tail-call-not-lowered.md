@@ -13,7 +13,7 @@
 > `tests/fixtures/void-self-tail-call-loop` (snapshot + `requires.leak-check`,
 > whose `-O1` build is the one that used to overflow).  The repro above runs
 > at `-O0`.  No existing snapshot moved.  The prelude cleanup it blocked,
-> [r7rs-prelude-value-returning-loop-workaround](../reported/r7rs-prelude-value-returning-loop-workaround.md),
+> [r7rs-prelude-value-returning-loop-workaround](r7rs-prelude-value-returning-loop-workaround.md),
 > is unblocked.
 
 

@@ -159,6 +159,25 @@ static const char *basename_of(const char *path) {
     return s ? s + 1 : path;
 }
 
+/* The length of `name` without its source extension: `.tur` and `.scm`
+ * (r7rs-lang-plan open question 4: a `.scm` file is a Scheme program or
+ * library) are stripped for a module or output name; anything else is kept
+ * whole.  `.tur.sweet` keeps its `.tur` stem on purpose, as before. */
+static size_t source_stem_len(const char *name, size_t len) {
+    if (len >= 4 && (strcmp(name + len - 4, ".tur") == 0 ||
+                     strcmp(name + len - 4, ".scm") == 0)) return len - 4;
+    return len;
+}
+
+/* Every `cc` the driver runs over EMITTED C gets this after the user's flags.
+ * GCC's -Wmisleading-indentation (in -Wall) is quadratic on the long
+ * brace-less `if` chains a Scheme program's prelude lowers to: with it, the
+ * parse of a one-line `#lang r7rs` program took 2.9 s of a 6.4 s build; without
+ * it, 0.1 s (docs/reported/r7rs-programs-compile-slowly.md).  Nobody reads the
+ * indentation of generated C, and a harness's own TUR_CC_FLAGS still carry
+ * -Wall, so the driver adds the opt-out itself rather than to each default. */
+#define TUR_EMITTED_C_CC_FLAGS " -Wno-misleading-indentation"
+
 /* Global configuration variables — defined in globals.c (part of tur_core) */
 /* Phase HKT-P6: --dump-kinds flag: print kind annotations after kind-check */
 static bool g_dump_kinds = false;
@@ -208,6 +227,12 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
     }
 
     ReaderType detected_type = (ext_type != READER_TURMERIC) ? ext_type : lang_type;
+    /* `.scm` selects the language as well as the reader (r7rs-lang-plan,
+     * open question 4): a Scheme file needs no `#lang r7rs` line. */
+    {
+        LangDialect ext_dialect = lang_dialect_from_extension(path);
+        if (ext_dialect != LANG_TURMERIC) dialect = ext_dialect;
+    }
 
     /* Check if the reader is implemented */
     if (!reader_type_is_implemented(detected_type)) {
@@ -1525,8 +1550,7 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
     for (int i = 0; i < n_inputs; i++) {
         const char *base = basename_of(inputs[i]);
         size_t base_len = strlen(base);
-        size_t n = (base_len >= 4 && strcmp(base + base_len - 4, ".tur") == 0)
-                   ? base_len - 4 : base_len;
+        size_t n = source_stem_len(base, base_len);
         ecd_mod_names[i] = (char *)malloc(n + 1);
         memcpy(ecd_mod_names[i], base, n);
         ecd_mod_names[i][n] = '\0';
@@ -1681,8 +1705,7 @@ static int cmd_emit_h(const char *path,
     const char *base = basename_of(path);
     size_t base_len = strlen(base);
     char mod_name[256];
-    size_t n = (base_len >= 4 && strcmp(base + base_len - 4, ".tur") == 0)
-               ? base_len - 4 : base_len;
+    size_t n = source_stem_len(base, base_len);
     if (n >= sizeof(mod_name)) n = sizeof(mod_name) - 1;
     memcpy(mod_name, base, n);
     mod_name[n] = '\0';
@@ -2748,7 +2771,7 @@ static int link_command_run(const char *cc, const char *cc_flags,
                             const char *out_path) {
     Buf cmd;
     buf_init(&cmd);
-    buf_printf(&cmd, "%s %s -o %s %s", cc, cc_flags, out_path, inputs);
+    buf_printf(&cmd, "%s %s" TUR_EMITTED_C_CC_FLAGS " -o %s %s", cc, cc_flags, out_path, inputs);
     if (aux_includes && aux_includes->len > 0) buf_puts(&cmd, aux_includes->data);
     if (aux_sources  && aux_sources->len  > 0) buf_puts(&cmd, aux_sources->data);
     if (autolink && autolink->len > 0) buf_printf(&cmd, " %s", autolink->data);
@@ -5763,7 +5786,7 @@ static char *derive_module_name(const char *file, const char *src_root) {
             const char *rel = file + rlen;
             while (*rel == '/') rel++;
             size_t len = strlen(rel);
-            if (len >= 4 && strcmp(rel + len - 4, ".tur") == 0) len -= 4;
+            len = source_stem_len(rel, len);
             char *m = (char *)malloc(len + 1);
             memcpy(m, rel, len);
             m[len] = '\0';
@@ -5772,7 +5795,7 @@ static char *derive_module_name(const char *file, const char *src_root) {
     }
     const char *base = basename_of(file);
     size_t len = strlen(base);
-    if (len >= 4 && strcmp(base + len - 4, ".tur") == 0) len -= 4;
+    len = source_stem_len(base, len);
     char *m = (char *)malloc(len + 1);
     memcpy(m, base, len);
     m[len] = '\0';
@@ -5892,7 +5915,7 @@ static char **collect_used_attr_modules(const char *entry_path,
             else
                 rel = basename_of(files[j]);
             size_t rlen = strlen(rel);
-            if (rlen > 4 && strcmp(rel + rlen - 4, ".tur") == 0) rlen -= 4;
+            if (rlen > 4) rlen = source_stem_len(rel, rlen);
             if (rlen == 0) continue;
             char *mod = (char *)malloc(rlen + 1);
             if (!mod) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -6394,7 +6417,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
 
     Buf cmd;
     buf_init(&cmd);
-    buf_printf(&cmd, "%s %s", cc, cc_flags);
+    buf_printf(&cmd, "%s %s" TUR_EMITTED_C_CC_FLAGS, cc, cc_flags);
     /* Vendored C include dirs come early so both the generated module .c
      * (carrying inline-C) and the aux .c sources can find their headers. */
     if (aux_includes.len > 0) buf_puts(&cmd, aux_includes.data);
@@ -7127,7 +7150,7 @@ static int cmd_compile(const char *input, const char *out_obj,
      * -I.  -l/-L and bare .c sources are link-time only and stay out of here. */
     Buf cmd;
     buf_init(&cmd);
-    buf_printf(&cmd, "%s %s", cc, cc_flags);
+    buf_printf(&cmd, "%s %s" TUR_EMITTED_C_CC_FLAGS, cc, cc_flags);
     if (aux_includes.len > 0) buf_puts(&cmd, aux_includes.data);
     if (cmake_flags.len > 0)  buf_puts(&cmd, cmake_flags.data);
     append_include_tokens(&cmd, autolink.len > 0 ? autolink.data : NULL);
@@ -7993,7 +8016,17 @@ static int cmd_eval_h(const char *path, bool use_color,
             LangDialect dialect = LANG_TURMERIC;
             ReaderType rt = detect_lang_dialect(head, hn, &rest, &rest_len,
                                                 NULL, NULL, &dialect);
-            if (rest != head && reader_type_is_implemented(rt)) {
+            /* A `.scm` file is Scheme with no directive to find: the
+             * extension seeds the same three things a `#lang r7rs` line
+             * would.  Without this the Scheme prelude was not the language
+             * prelude, so an on-demand `(import (scheme read))` spliced a
+             * second copy of it and failed to elaborate. */
+            LangDialect ext_dialect = lang_dialect_from_extension(path);
+            if (ext_dialect != LANG_TURMERIC && rest == head) {
+                rt = reader_type_from_extension(path);
+                dialect = ext_dialect;
+            }
+            if ((rest != head || ext_dialect != LANG_TURMERIC) && reader_type_is_implemented(rt)) {
                 env->reader_type = rt;
                 /* saffron-lang-plan S1: seed the LANGUAGE axis here for the
                  * same reason the reader is seeded -- the prelude must load
@@ -12117,6 +12150,7 @@ static int tur_main_inner(int argc, char **argv) {
                 size_t an = strlen(a);
                 if ((an > 4  && strcmp(a + an - 4,  ".tur")      == 0) ||
                     (an > 10 && strcmp(a + an - 10, ".tur.sweet") == 0) ||
+                    (an > 4  && strcmp(a + an - 4,  ".scm")      == 0) ||
                     strcmp(a, "-") == 0) {
                     use_classic = true;
                 }
