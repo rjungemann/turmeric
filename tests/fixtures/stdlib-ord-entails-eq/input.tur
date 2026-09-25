@@ -1,0 +1,33 @@
+;; typeclass-superclasses-plan SC8b step 1: the auto-loaded Ord is declared
+;; over Eq, so a `[^Ord A]` body may call `eq?` without also naming Eq.
+;;
+;; `clamp-eq` is called at several instances on purpose: an `eq?` that bound
+;; to the first registered Eq instance would compare the wrong way for at
+;; least one of them.  No cstr case: `Ord [cstr]` is inline C with no
+;; interpreter twin, and this fixture runs under run-turi.sh too.
+(defn clamp-eq [^Ord A] [x : A lo : A hi : A] : A
+  (if (lt? x lo) lo (if (eq? x hi) hi (if (gt? x hi) hi x))))
+
+;; `eq?` and `gte?` in one body, both reached through the one constraint.
+(defn at-least? [^Ord A] [x : A floor : A] : bool
+  (or (eq? x floor) (gte? x floor)))
+
+;; A user type joins the hierarchy with both instances.
+(defopaque Rank :int)
+(definstance Eq [Rank] (eq? [x y] (= (:: x int) (:: y int))))
+(definstance Ord [Rank]
+  (lt? [x y] (< (:: x int) (:: y int)))
+  (lte? [x y] (<= (:: x int) (:: y int)))
+  (gt? [x y] (> (:: x int) (:: y int)))
+  (gte? [x y] (>= (:: x int) (:: y int))))
+
+(defn main [] : int
+  (println (clamp-eq 15 0 10))                              ; 10
+  (println (clamp-eq -4 0 10))                              ; 0
+  (println (clamp-eq 7 0 10))                               ; 7
+  (println (clamp-eq 7.1 0.5 3.25))                         ; 3.25
+  (println (:: (clamp-eq (:: 12 Rank) (:: 1 Rank) (:: 9 Rank)) int))  ; 9
+  (println (if (at-least? 3 3) 1 0))                        ; 1
+  (println (if (at-least? 2.5 7.1) 1 0))                    ; 0
+  (println (if (at-least? (:: 4 Rank) (:: 4 Rank)) 1 0))    ; 1
+  0)

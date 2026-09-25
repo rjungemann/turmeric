@@ -22,6 +22,15 @@ All notable changes to Turmeric are documented here.
   auto-loaded classes (`Eq`, `Ord`, `Functor`, `Monad` and the rest) stay
   flat for now. SC8a of typeclass-superclasses-plan.
 
+- **`Ord` is declared over `Eq`.** The auto-loaded `Ord` carries the
+  preamble `[(Eq a)]`, so a `[^Ord A]` function may call `eq?` without also
+  writing `^Eq A`. **Breaking for downstream instances:** an `Ord` instance now
+  needs an `Eq` instance for the same type somewhere in the program, or the
+  build stops with TUR-E0393. Every stdlib `Ord` instance already has one, and
+  no spice declares an `Ord` instance. A program that re-declares `Ord` itself
+  must now spell the same preamble, or it is "typeclass 'Ord' is already
+  defined". SC8b step 1 of typeclass-superclasses-plan.
+
 ### Added
 
 - **`Result` is an `Applicative`.** `stdlib/result.tur` ships
