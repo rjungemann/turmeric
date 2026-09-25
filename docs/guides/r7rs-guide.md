@@ -371,7 +371,9 @@ library's string result to `cstr` gets the same copy.
   `delay-force` stream) runs in constant stack at the default `-O2`, and can
   overflow the stack on a million elements in an `-O1` build.
 - **`apply` and dynamic calls take at most four arguments.**
-- **`char-ready?` and `u8-ready?` always answer `#t`.**
+- **`char-ready?` and `u8-ready?` on Windows always answer `#t`.** Elsewhere
+  they ask the descriptor (a zero-timeout poll), so an idle console or an
+  empty pipe answers `#f`.
 - **`(except ...)` in an import is refused.** A Turmeric import cannot say
   "all but these names"; the error says to list them with `(only ...)`.
 - **`include` is refused**, with the reason.

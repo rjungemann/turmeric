@@ -2408,8 +2408,8 @@ re-entered continuation).**
 > - **Found and filed:**
 >   - [r7rs-internal-define-forward-set](../reported/r7rs-internal-define-forward-set.md)
 >     -- `set!` on a later internal define is "not bound";
->   - [r7rs-toplevel-define-named-like-a-turmeric-form](../reported/r7rs-toplevel-define-named-like-a-turmeric-form.md)
->     -- `(define gen ...)` is the `gen` form.
+>   - [r7rs-toplevel-define-named-like-a-turmeric-form](../archive/r7rs-toplevel-define-named-like-a-turmeric-form.md)
+>     -- `(define gen ...)` is the `gen` form (resolved 2026-09-25).
 > - **Fixtures:**
 >   - `r7rs-continuations`, on both back ends: test 1772, an escape, a
 >     generator over `for-each`, same-fringe with two tree walkers, re-entry
@@ -2757,9 +2757,10 @@ differences, as reports"):
   dynamic call's apply table stops at 4 (`emit_dyn_call`), and the prelude is
   compiled on both back ends. Lift it, or pack the surplus into a rest list,
   in a Scheme-only path.
-- **`char-ready?` and `u8-ready?` always answer `#t`**
-  ([r7rs-char-ready-always-true](../reported/r7rs-char-ready-always-true.md)). Honest readiness needs
-  a non-blocking check on file and console ports.
+- ~~**`char-ready?` and `u8-ready?` always answer `#t`**~~ -- resolved
+  2026-09-25 with a zero-timeout `poll()` on file, pipe and console ports
+  ([archived](../archive/r7rs-char-ready-always-true.md)); Windows still
+  answers `#t`.
 - **`(except ...)` in an import is refused**
   ([r7rs-import-except-refused](../reported/r7rs-import-except-refused.md)), because a Turmeric import cannot
   say "all but these". A Scheme-side expansion of the library's export list

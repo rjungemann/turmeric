@@ -685,6 +685,12 @@ static void note_mut(SL *sl, const Symbol *s) {
 }
 static bool is_mut(const SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_muts; i++) if (sl->muts[i] == s) return true;
+    /* The scan records the target as written; a global renamed for a clash
+     * with a Turmeric form (`return` -> `return--user`) is asked for by its
+     * renamed spelling. */
+    for (uint32_t i = 0; i < sl->n_clash; i++)
+        if (sl->clash_to[i] == s)
+            for (uint32_t j = 0; j < sl->n_muts; j++) if (sl->muts[j] == sl->clash_from[i]) return true;
     return false;
 }
 /* R4: the mutability scan runs BEFORE expansion (a top-level `define` is
@@ -3708,6 +3714,11 @@ static void user_define_names(SL *sl, const Form *f, FB *out) {
         for (uint32_t i = 1; i < f->as.list.len; i++) user_define_names(sl, f->as.list.items[i], out);
         return;
     }
+    if (head_is(f, sl->s_define_library)) {
+        for (uint32_t i = 2; i < f->as.list.len; i++)
+            if (head_is(f->as.list.items[i], sl->s_begin)) user_define_names(sl, f->as.list.items[i], out);
+        return;
+    }
     if (!head_is(f, sl->s_define) || f->as.list.len < 2) return;
     Form *t = f->as.list.items[1];
     while (t->tag == F_LIST && t->as.list.len >= 1) t = t->as.list.items[0];  /* (define ((f a) b) ...) */
@@ -3760,6 +3771,56 @@ static void user_binders(SL *sl, const Form *f, FB *out) {
     }
     for (uint32_t i = 0; i < len; i++) user_binders(sl, f->as.list.items[i], out);
 }
+/* The names an `(import ...)` binds by spelling them: an `(only ...)` list
+ * and the new names of a `(rename ...)`.  A global spelled like a Turmeric
+ * special form (`gen`, `handle`, `return`, ...) that the user defines or
+ * imports this way is the user's own binding, and is renamed wherever it
+ * occurs -- the definition, its uses, a library's export of it, the
+ * importer's `only` -- so a library and its importer stay in step
+ * (r7rs-toplevel-define-named-like-a-turmeric-form).  A Turmeric form
+ * written in a Scheme file (r7rs-elaborates-as-saffron) stays reachable,
+ * since nothing defines or imports its name. */
+static bool is_scheme_syntax_name(const char *name) {
+    /* The heads this lowering matches itself (R7RS 4.1-4.3, 5, 7.3): a
+     * spelling shared with a Turmeric form (`define`, `let`, `if`, `do`,
+     * `set!`, `case`, `quote`, `import`, `export`) is Scheme syntax here,
+     * matched after the import-rename step, so it must not be renamed. */
+    static const char *const syntax[] = {
+        "define", "lambda", "let", "let*", "letrec", "letrec*", "do", "begin",
+        "set!", "if", "cond", "case", "and", "or", "when", "unless",
+        "case-lambda", "define-values", "let-values", "let*-values",
+        "define-syntax", "let-syntax", "letrec-syntax", "syntax-rules",
+        "syntax-error", "er-macro-transformer", "import", "export",
+        "define-library", "define-record-type", "include", "include-ci",
+        "cond-expand", "quote", "quasiquote", "unquote", "unquote-splicing",
+        "guard", "parameterize", "delay", "delay-force", "make-promise",
+    };
+    for (size_t i = 0; i < sizeof syntax / sizeof syntax[0]; i++)
+        if (strcmp(name, syntax[i]) == 0) return true;
+    return false;
+}
+static void import_bound_names(SL *sl, const Form *f, FB *out) {
+    if (head_is(f, sl->s_define_library)) {
+        for (uint32_t i = 2; i < f->as.list.len; i++) import_bound_names(sl, f->as.list.items[i], out);
+        return;
+    }
+    if (!head_is(f, sl->s_import)) return;
+    for (uint32_t i = 1; i < f->as.list.len; i++) {
+        const Form *set = f->as.list.items[i];
+        if (set->tag != F_LIST || set->as.list.len < 3 || set->as.list.items[0]->tag != F_SYM) continue;
+        const char *h = set->as.list.items[0]->as.sym->name;
+        if (strcmp(h, "only") == 0) {
+            for (uint32_t k = 2; k < set->as.list.len; k++)
+                if (set->as.list.items[k]->tag == F_SYM) fb_push(out, set->as.list.items[k]);
+        } else if (strcmp(h, "rename") == 0) {
+            for (uint32_t k = 2; k < set->as.list.len; k++) {
+                const Form *pr = set->as.list.items[k];
+                if (pr->tag == F_LIST && pr->as.list.len == 2 && pr->as.list.items[1]->tag == F_SYM)
+                    fb_push(out, pr->as.list.items[1]);
+            }
+        }
+    }
+}
 static void add_clash(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_clash; i++) if (sl->clash_from[i] == s) return;
     if (sl->n_clash == sl->cap_clash) {
@@ -3784,14 +3845,13 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
         }
     }
     /* A library's names live in its module and are exported by name. */
-    if (!library) {
-        for (uint32_t u = 0; u < user.n; u++) {
-            const Symbol *s = user.items[u]->as.sym;
-            if (rn(sl, s) != s) continue;   /* a standard name: R7RS 5.2 */
-            bool clash = false;
-            for (uint32_t k = 0; k < lib.n && !clash; k++) clash = lib.items[k]->as.sym == s;
-            if (clash) add_clash(sl, s);
-        }
+    for (uint32_t u = 0; u < user.n; u++) {
+        const Symbol *s = user.items[u]->as.sym;
+        if (rn(sl, s) != s) continue;   /* a standard name: R7RS 5.2 */
+        if (library) continue;
+        bool clash = false;
+        for (uint32_t k = 0; k < lib.n && !clash; k++) clash = lib.items[k]->as.sym == s;
+        if (clash) add_clash(sl, s);
     }
     FB binders = {0};
     for (uint32_t i = 0; i < n; i++)
@@ -3801,6 +3861,18 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
         if (rn(sl, s) == s && tur_name_is_reserved_special_form(s->name)) add_clash(sl, s);
     }
     free(binders.items);
+    /* ... and a global the user defines (a program's, a library's) or
+     * imports by name, whose uses then follow the definition. */
+    FB reserved = {0};
+    for (uint32_t u = 0; u < user.n; u++) fb_push(&reserved, user.items[u]);
+    for (uint32_t i = 0; i < n; i++)
+        if (is_scheme_file(forms[i]) && !prelude_span(forms[i]->span)) import_bound_names(sl, forms[i], &reserved);
+    for (uint32_t r = 0; r < reserved.n; r++) {
+        const Symbol *s = reserved.items[r]->as.sym;
+        if (rn(sl, s) == s && tur_name_is_reserved_special_form(s->name) && !is_scheme_syntax_name(s->name))
+            add_clash(sl, s);
+    }
+    free(reserved.items);
     free(lib.items);
     free(user.items);
 }

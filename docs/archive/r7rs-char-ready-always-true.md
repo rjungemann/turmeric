@@ -1,5 +1,13 @@
 # `#lang r7rs`: `char-ready?` and `u8-ready?` always answer `#t`
 
+**RESOLVED 2026-09-25, archived.** `r7rs-io-ready?__` (prelude inline C, with
+its interpreter twin) answers from the buffer: a buffered byte, a string or
+bytevector buffer, a FILE at end of file, else a zero-timeout `poll()` on
+the descriptor, so an empty pipe or an idle console answers `#f` on both
+back ends (`sleep 3 | prog` prints `#f`, `echo hi | prog` prints `#t`).
+Windows has no `poll()` over a FILE and keeps answering `#t`. The `#t`
+cases stay pinned in `tests/fixtures/r7rs-ports`. Original report follows.
+
 **Severity:** low. Both back ends. A program that polls a port before
 reading, to avoid blocking on a terminal or a pipe, gets `#t` and then
 blocks in the read. R7RS 6.13.2: `char-ready?` returns `#t` if a character

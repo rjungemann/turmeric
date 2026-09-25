@@ -141,6 +141,30 @@ EOF
 
 run_case "strings-cross-the-seam" prog3.tur '("jλ" "hλ" 2)'
 
+# ---- Direction 3: a library exports a global spelled like a Turmeric form. --
+# `gen` and `handle` are Turmeric special forms and R7RS names nothing by
+# them, so the lowering renames every occurrence -- the library's definition
+# and export, the importer's `only` list and uses -- in step
+# (r7rs-toplevel-define-named-like-a-turmeric-form).  A Turmeric importer
+# could not call a `gen` by that name anyway (TUR-W0042).
+cat > "$TMP/genlib.tur" <<'EOF'
+#lang r7rs
+(define-library (genlib)
+  (export gen handle)
+  (import (scheme base))
+  (begin
+    (define gen (lambda () 42))
+    (define (handle x) (+ x 1))))
+EOF
+
+cat > "$TMP/prog4.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (only (genlib) gen handle))
+(write (list (gen) (handle 1))) (newline)
+EOF
+
+run_case "form-named-exports" prog4.tur '(42 2)'
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1
