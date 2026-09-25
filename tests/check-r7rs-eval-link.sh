@@ -10,6 +10,9 @@
 #      TUR_STDLIB_DIR unset -- the stdlib root is baked in at build time
 #      (`@TUR_STDLIB_ROOT@` in stdlib/r7rs/eval.tur's autolink marker).
 #
+# nm prints C symbols with a leading underscore on macOS (Mach-O), so the
+# symbol patterns accept one.
+#
 # Usage: bash tests/check-r7rs-eval-link.sh
 # Environment: TUR  path to the compiler (default: ./build/tur)
 
@@ -52,7 +55,7 @@ if "$TUR" emit-c "$TMP/plain.tur" 2>/dev/null | grep -q -- '__tur_autolink__: -l
 fi
 if ! "$TUR" build "$TMP/plain.tur" -o "$TMP/plain" >/dev/null 2>"$TMP/plain.err"; then
     fail "the program without (scheme eval) did not build: $(tail -3 "$TMP/plain.err")"
-elif nm "$TMP/plain" 2>/dev/null | grep -Eq ' T (turi_eval|turi_env_new|turi_r7rs_embed_eval)$'; then
+elif nm "$TMP/plain" 2>/dev/null | grep -Eq ' T _?(turi_eval|turi_env_new|turi_r7rs_embed_eval)$'; then
     fail "a program without (scheme eval) links libturi symbols"
 fi
 
@@ -60,7 +63,7 @@ fi
 if ! "$TUR" build "$TMP/with-eval.tur" -o "$TMP/with-eval" >/dev/null 2>"$TMP/with-eval.err"; then
     fail "the program importing (scheme eval) did not build: $(tail -3 "$TMP/with-eval.err")"
 else
-    if ! nm "$TMP/with-eval" 2>/dev/null | grep -Eq ' T turi_r7rs_embed_eval$'; then
+    if ! nm "$TMP/with-eval" 2>/dev/null | grep -Eq ' T _?turi_r7rs_embed_eval$'; then
         fail "a program importing (scheme eval) does not carry the embedded evaluator"
     fi
     out="$(cd / && env -u TUR_STDLIB_DIR "$TMP/with-eval" 2>"$TMP/run.err")"
