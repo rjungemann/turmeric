@@ -1,7 +1,5 @@
 /* elab_typeclasses.c -- typeclass declarations, instances, and method-call dispatch. */
 #include "elab_internal.h"
-#include "globals.h"         /* class-superclasses: g_opt_class_superclasses */
-#include "experiments.h"     /* class-superclasses: experiment_warn_if_used */
 #include "lang_dialects.h"   /* saffron-lang-plan S4: lang_span_is_dynamic */
 #include "refine_discharge.h"     /* RT1: instance/class refinement variance */
 #include "refine_solver.h"        /* RT1: refine_model_search, for the variance witness */
@@ -1434,9 +1432,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
      * The elements are STORED, not resolved: a superclass may be declared
      * below its subclass, and the post-unit pass (elab_typeclass_superclasses_
      * finish) resolves, cycle-checks, and enforces the instance obligation once
-     * every form in the unit is registered.  The gate is on the PARSE, so a
-     * program that did not opt in sees a diagnostic rather than a silently
-     * changed entailment. */
+     * every form in the unit is registered. */
     const Form **super_forms   = NULL;
     uint8_t     *super_n_args  = NULL;
     uint8_t     *super_arg_idx = NULL;
@@ -1444,17 +1440,6 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     if (methods_start < call->as.list.len &&
         call->as.list.items[methods_start]->tag == F_VEC) {
         Form *sv = call->as.list.items[methods_start];
-        if (!g_opt_class_superclasses) {
-            diag_emit_with_code(DIAG_ERROR, sv->span,
-                TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
-                "defclass '%s': a superclass constraint vector `[(Class var)]` "
-                "is experimental; enable it with --enable=class-superclasses "
-                "(or `:experiments [:class-superclasses]` in build.tur). "
-                "See docs/upcoming/typeclass-superclasses-plan.md.",
-                name->name);
-            return NULL;
-        }
-        experiment_warn_if_used("class-superclasses");
         if (sv->as.list.len == 0) {
             diag_emit_with_code(DIAG_ERROR, sv->span,
                 TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,

@@ -5,10 +5,13 @@
 # Drives the built `tur` against a synthetic $XDG_CONFIG_HOME so no real user
 # file is touched.
 #
-# The registry was EMPTY from 2026-07-06 (forall-dict-pass, the probe this
-# test used to key on, graduated) until 2026-09-16, when `class-superclasses`
-# registered.  The registry-INDEPENDENT paths -- the parts of the mechanism
-# that must hold regardless of what is registered -- are covered first:
+# The registry has twice had no probe-able row: from 2026-07-06 (forall-dict-pass,
+# the probe this test used to key on, graduated) to 2026-09-16, when
+# `class-superclasses` registered, and again from 2026-09-25, when
+# `class-superclasses` graduated in turn (SC7 of
+# docs/upcoming/typeclass-superclasses-plan.md).  The registry-INDEPENDENT
+# paths -- the parts of the mechanism that must hold regardless of what is
+# registered -- are covered first:
 #
 #   A. manifest with an unknown :experiments name  -> TUR-E0310, exit 2
 #   B. user file with an unknown experiment name    -> TUR-E0310 + path, exit 2
@@ -23,9 +26,16 @@
 #   G. same user file + manifest `:experiments []`    -> user file suppressed,
 #                                                        refused again
 #
-# E-G run only while a gated probe source exists for the first registered
-# experiment (GATED_SRC below); if the registry empties again they skip, and
-# the next experiment to register should point GATED_SRC at its own fixture.
+# E-G run only while a gated probe source exists for the named experiment
+# (PROBE_NAME / GATED_SRC below); with no such row they skip, and the next
+# experiment to register should point them at its own fixture.
+#
+# They are skipping as of 2026-09-25.  The one live row, `r7rs`, cannot serve:
+# its `#lang r7rs` line is itself the enable (plan D11), applied at CLI
+# precedence, so no `#lang r7rs` source is ever refused for want of an enable
+# and no manifest `:experiments []` can suppress it -- which is exactly what E,
+# F and G assert.  Point PROBE_NAME at the next row that is enabled by a flag
+# a user writes.
 
 set -u
 cd "$(dirname "$0")/.."
@@ -120,11 +130,14 @@ fi
 rm -f "$key_err"
 
 # --- E-G. gated-source probe (only with a live experiment) ------------------
-# `class-superclasses` gates the defclass constraint preamble; the fixture
-# below is a hard error without the enable (TUR-E0390) and compiles with it.
-PROBE_NAME="class-superclasses"
-GATED_SRC="tests/fixtures/class-superclass-entails/input.tur"
-if "$TUR" experiments 2>/dev/null | grep -q "^$PROBE_NAME " && [ -f "$GATED_SRC" ]; then
+# A probe needs a row enabled by a flag the user writes, plus a source that is
+# a hard error without the enable and compiles with it.  There is no such pair
+# today (see the header); `class-superclasses` was the last one and graduated
+# 2026-09-25, so the guard below skips.
+PROBE_NAME=""
+GATED_SRC=""
+if [ -n "$PROBE_NAME" ] && [ -f "$GATED_SRC" ] && \
+   "$TUR" experiments 2>/dev/null | grep -q "^$PROBE_NAME "; then
     S5="$WORK/s5"; mkdir -p "$S5"; cp "$GATED_SRC" "$S5/input.tur"
     assert_exit 1 "E. gated source refused with nothing enabled" \
         "$XDG_EMPTY" "$S5" emit-c input.tur
@@ -140,7 +153,7 @@ if "$TUR" experiments 2>/dev/null | grep -q "^$PROBE_NAME " && [ -f "$GATED_SRC"
     assert_exit 1 "G. manifest :experiments [] suppresses the user file" \
         "$XDG_ON" "$S6" emit-c src/input.tur
 else
-    echo "skip  E-G. no gated probe source for the first registered experiment"
+    echo "skip  E-G. no flag-enabled experiment with a gated probe source"
 fi
 
 echo

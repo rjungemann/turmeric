@@ -16,7 +16,7 @@ Turmeric's typeclasses are resolved entirely at **compile time** using static di
 
 - **`defclass`** -- Declares a typeclass name, its type parameters, and its method signatures.
 - **`definstance`** -- Implements a typeclass for a specific type or type constructor, optionally requiring constraints.
-- **Superclasses** (experimental, `--enable=class-superclasses`) -- A `defclass` may list the classes a constraint on it entails, `(defclass Monoid [a] [(Semigroup a)] ...)`; every instance of it must then have the superclass instance too. See [Superclasses](#superclasses).
+- **Superclasses** -- A `defclass` may list the classes a constraint on it entails, `(defclass Monoid [a] [(Semigroup a)] ...)`; every instance of it must then have the superclass instance too. See [Superclasses](#superclasses).
 - **Idempotency** -- Re-running or reloading a `definstance` replaces the existing entry in the dispatch table, making it safe for interactive REPL-based development.
 - **Stdlib classes** -- `Eq`, `Ord`, `Show`, `Hash`, `Functor`, `Monad` and friends each ship in their own `stdlib/typeclass-*.tur` file and are **auto-loaded**. The algebraic combining classes (`Semigroup`, `Monoid`, and the join/meet lattice family) are the exception: they live in `stdlib/typeclass-lattice.tur`, which you `load` explicitly -- see the [Lattice Guide](lattice-guide.md).
 - **Shadowing Warnings (TUR-W0039)** -- If a typeclass method shares a name with an ordinary function (`defn`) in the same scope, the compiler emits a warning. Both coexist, but rename one if the clash is accidental.
@@ -304,12 +304,6 @@ two load paths stays a silent no-op.
 
 ## Superclasses
 
-> **Experimental** -- behind `--enable=class-superclasses` (or
-> `:experiments [:class-superclasses]` in `build.tur`). The build prints a
-> `TUR-W0060` notice while the gate is live; writing the preamble without
-> the enable is `TUR-E0390`. The plan is
-> [typeclass-superclasses-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/typeclass-superclasses-plan.md).
-
 A `defclass` may declare that a constraint on it **entails** other classes.
 The declaration is a constraint vector right after the type-parameter vector
 -- character for character the `[(Class var)]` form `definstance` and `defn`
@@ -414,6 +408,8 @@ The rules the compiler enforces, each with its own code:
 
 - Every variable in an element must be one of the class's own type
   parameters, and every element must be `(Class var...)` -- `TUR-E0390`.
+  An empty vector is `TUR-E0390` too: list at least one class, or drop the
+  vector.
 - The vector goes *before* the `|` clause; the other order is `TUR-E0390`
   naming the canonical order, not a silent accept.
 - Each superclass must be a defined class whose parameter count and kinds fit
@@ -428,12 +424,13 @@ the entailment only decides whether the call is *allowed*, exactly like an
 explicitly written constraint. The interpreter carries the same rule by
 binding a superclass's dictionary alongside the subclass's.
 
-The stdlib's own classes are still flat -- `Monoid` is not declared over
-`Semigroup` in `typeclass-lattice.tur` -- because adding a preamble to an
-existing class obliges every existing instance of it, in every downstream
-spice, to carry the superclass instance. That adoption waits for the
-experiment to graduate; until then a function needing both lists both
-constraints, as the [lattice guide](lattice-guide.md) shows.
+The stdlib's own classes are flat -- `Monoid` is not declared over `Semigroup`
+in `typeclass-lattice.tur` -- because adding a preamble to an existing class
+obliges every existing instance of it, in every downstream spice, to carry the
+superclass instance. So a function needing both lists both constraints, as the
+[lattice guide](lattice-guide.md) shows. The preamble is for classes you
+declare yourself, where the obligation costs nothing because there are no
+instances yet.
 
 ## Associated Types
 

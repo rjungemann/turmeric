@@ -381,10 +381,10 @@ typedef enum DiagCode {
     TUR_W0383_READS_FRAME_OMITS_MUTABLE,
     /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md), the
      * `defclass` constraint preamble `[(Super var)...]`:
-     * E0390 -- the preamble itself: written without --enable=class-superclasses,
-     *          malformed (an element that is not `(Class var...)`), naming a
-     *          variable that is not one of the class's type params, or placed
-     *          after the `|` fundep clause instead of before it.
+     * E0390 -- the preamble itself: empty, malformed (an element that is not
+     *          `(Class var...)`), naming a variable that is not one of the
+     *          class's type params, or placed after the `|` fundep clause
+     *          instead of before it.
      * E0391 -- a superclass name does not resolve to a defined typeclass, or
      *          its parameter count / kinds do not fit the arguments given.
      * E0392 -- the superclass graph has a cycle (a class may not, directly

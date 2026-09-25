@@ -1,13 +1,13 @@
 # Typeclass superclasses: `defclass` constraint preambles
 
 > **Status:** SC0-SC6 **landed 2026-09-16** behind the gate (see section 7);
-> SC7-SC9 (graduation, stdlib adoption, post-adoption docs) remain open and
-> are post-v1.
+> **SC7 (graduation) landed 2026-09-25** (see section 8). SC8-SC9 (stdlib
+> adoption, post-adoption docs) remain open and are post-v1.
 > **Type:** compiler feature (elaboration only, no codegen), plus a
 > **documentation correction that is independently shippable and should land
 > first**.
-> **Gate:** `--enable=class-superclasses` (`EXPERIMENTS[]` row, prototype,
-> introduced 0.49.0, expires 0.55.0).
+> **Gate:** none -- graduated. The constraint preamble is unconditional as of
+> 0.53.0; `--enable=class-superclasses` is a TUR-W0063 no-op.
 
 ## 0. Summary
 
@@ -585,3 +585,57 @@ What shipped, and where it departs from the phases above.
   parity-table edits (SC9), which are gated on SC7 and on the retrofit audit
   in 4.1. The two stdlib comments at `typeclass-lattice.tur:60` and `:258`
   remain true and stay.
+
+## 8. Landed (2026-09-25): SC7 -- graduation
+
+The feature is unconditional. `--enable=class-superclasses` is accepted as a
+TUR-W0063 no-op for the usual one-minor-line window (eligible to age out of
+`GRADUATED[]` at 0.54.0).
+
+Where it departs from the phases above:
+
+- **Straight from `prototype`, with no `beta` hop.** The phase list's step 1
+  (flip the lifecycle so TUR-W0061 replaces TUR-W0060) and step 2 (soak one
+  release cycle) describe a soak this row had already served in `prototype`:
+  it registered at 0.49.0 and the implementation landed 2026-09-16, four minor
+  lines back, with the surface frozen since -- `defclass` gained no new
+  preamble syntax after SC1. A beta hop would have been a second soak of a
+  surface nothing had moved, and graduating ahead of `expires_at` (0.55.0) is
+  routine per
+  [experimental-flags-guide.md](../guides/experimental-flags-guide.md)
+  (`closure-drop-glue` graduated at 0.30.2 carrying 0.34.0; `r7rs-gc`
+  graduated in the line it was introduced).
+- **No bisection hatch, as SC7 recommended, and the reasoning held on
+  contact.** The guide's inversion trap is about a graduation that flips a
+  *representation* default, where both paths compiled and the old one quietly
+  loses its cover. This is purely additive syntax: before graduation the
+  preamble did not parse at all, so there is no old path and no
+  `TUR_CLASS_SUPERCLASSES=0` worth carrying. `g_opt_class_superclasses` is
+  retired with the row rather than kept as an A/B switch.
+- **`errors/class-superclass-gate-off` is deleted.** It asserted the gate's
+  refusal, and there is no gate to refuse. Its slot is taken by
+  `errors/class-superclass-empty-preamble`, which pins a real TUR-E0390 branch
+  that had no fixture: `[]` is rejected rather than read as "declares no
+  superclasses". The other fifteen fixtures lost their `flags` file and now
+  compile ungated; none of their assertions changed.
+- **TUR-E0390 lost a cause.** Its title ("Malformed **or unavailable**") and
+  the first bullet of `tur explain` both named the missing enable. The code now
+  covers only malformed preambles: empty vector, an element that is not
+  `(Class var...)`, a variable that is not one of the class's own parameters,
+  or the vector placed after the `|` clause.
+- **The E-G probe in `tests/run-experiments-user-config.sh` skips again.**
+  That probe needs a row enabled by a flag a user writes plus a source that is
+  refused without it; `class-superclasses` was the last such pair. The one
+  remaining row, `r7rs`, cannot serve -- its `#lang` line is itself the enable
+  at CLI precedence, so no `#lang r7rs` source is ever refused and no manifest
+  `:experiments []` suppresses it, which is exactly what E, F and G assert. The
+  registry-independent cases (A-D) still run. Noted in the script's header so
+  the next flag-enabled row repoints it rather than rediscovering this.
+- **Still not done, and unchanged by graduation: SC8.** The stdlib's classes
+  stay flat and the two comments at `typeclass-lattice.tur:60` and `:258`
+  remain true. Retrofitting `[(Semigroup a)]` onto the existing `Monoid`
+  obliges every existing instance, in-tree and across the spices, to carry a
+  `Semigroup` instance (4.1). Graduation *unblocked* that audit; it did not
+  perform it, and SC9's `lattice-guide.md` and parity-table edits stay gated
+  on it. `typeclass-guide.md` now says the stdlib is flat as a statement of
+  current behavior rather than "waits for the experiment to graduate".
