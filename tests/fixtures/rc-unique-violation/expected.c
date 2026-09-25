@@ -760,6 +760,7 @@ TUR_RT_API void  arena_each_used(const Arena *a,
 /* ---- begin src/runtime/arena.c (embedded verbatim) ---- */
 /* (local #include dropped: that header is pasted above) */
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -927,6 +928,11 @@ TUR_RT_API void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
     if (size + align > cap) cap = size + align;
     ArenaSlab *fresh = slab_new(cap);
     fresh->next = a->head;
+    /* The link before the publication, as a signal handler on this thread
+     * sees it: the r7rs-gc collector stops a thread anywhere and then walks
+     * its region generations (r7gc.c, tur_region_each_registered), and a
+     * head published ahead of its link would hide every older slab. */
+    atomic_signal_fence(memory_order_seq_cst);
     a->head = fresh;
 
     uintptr_t base = (uintptr_t)fresh->data;
@@ -1402,7 +1408,7 @@ TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *u
 }
 
 /* Every thread's live and retired generations, through the ownership
- * registry.  For the r7rs-gc collector (docs/upcoming/r7rs-gc-threads-plan.md):
+ * registry.  For the r7rs-gc collector (docs/archive/r7rs-gc-threads-plan.md):
  * it stops every other thread before it reads roots, so the arenas hold
  * still; but a stopped thread may be inside reg_add/reg_remove holding the
  * registry's spinlock, so the collector TRIES the lock, and on a refusal
