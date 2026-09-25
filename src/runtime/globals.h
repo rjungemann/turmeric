@@ -374,13 +374,6 @@ extern bool g_opt_regions;
  * because the fact it records is "the `any` machinery is needed", which is a
  * trait shared by every dynamic language, not Saffron's identity. */
 extern bool g_opt_dynamic_any;
-/* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md): the
- * `defclass` constraint preamble `[(Super var)...]` and the entailment it
- * licenses.  Off by default and gated behind `--enable=class-superclasses`;
- * elab_defclass reads it at the preamble parse.  With the bit off the vector
- * is rejected (TUR-E0390) rather than silently changing entailment for a
- * program that did not ask for it. */
-extern bool g_opt_class_superclasses;
 /* r7rs (docs/upcoming/r7rs-lang-plan.md): the `#lang r7rs` dialect's enable
  * bit.  Never set by a flag a user has to write -- lang_dialect_apply sets it
  * (through experiment_enable) the moment a `#lang r7rs` file is read, because

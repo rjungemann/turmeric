@@ -1849,7 +1849,7 @@ static const DiagExplanation diag_explanations_[] = {
       "docs/upcoming/trusted-refinement-claims-plan.md.\n" },
     /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md) */
     { TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
-      "TUR-E0390: Malformed or unavailable `defclass` superclass preamble\n"
+      "TUR-E0390: Malformed `defclass` superclass preamble\n"
       "\n"
       "A `defclass` may list the classes a constraint on it entails, in a\n"
       "constraint vector right after the type-parameter vector -- the same\n"
@@ -1860,9 +1860,7 @@ static const DiagExplanation diag_explanations_[] = {
       "      (mempty [] : a))\n"
       "\n"
       "This code means the vector was written but cannot be accepted:\n"
-      "  - the feature is experimental and the build did not pass\n"
-      "    `--enable=class-superclasses` (or `:experiments [:class-superclasses]`\n"
-      "    in build.tur);\n"
+      "  - the vector is empty (list at least one `(Class var)`, or drop it);\n"
       "  - an element is not of the form `(Class var...)`;\n"
       "  - a variable named is not one of this class's own type parameters;\n"
       "  - the vector was placed AFTER the `|` functional-dependency clause.\n"
