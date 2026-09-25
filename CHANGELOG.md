@@ -24,6 +24,17 @@ All notable changes to Turmeric are documented here.
   tree-walking evaluator already trampolines every tail call. This is T1 of
   [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md),
   and it is the test instrument the later stages are verified with.
+- **A Recently Updated section, under Recently Added, in the guides index and
+  Try Turmeric's docs pane.** Recently Added answers "what is new?"; nothing
+  answered "what changed under me?" -- a guide rewritten last week looked
+  exactly like one untouched since May. Both surfaces now carry a second dated
+  list of the ten most recently edited pages: a card beneath the first on
+  turmeric-lang.com/docs/html/guides/, and a second `<details>` -- collapsed on
+  load, like its neighbour -- beneath the first in the pane's nav. The dates are
+  the two ends of each page's git history, read at generation time in a single
+  traversal, so the pack now carries `updated` alongside `added`. A page whose
+  last commit is the one that added it is left out of the second list: it is
+  new, not updated, and the section above already says so.
 
 ### Changed
 
