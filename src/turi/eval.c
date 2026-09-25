@@ -11622,6 +11622,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (turi_is_error(r) || env_signaled(env)) return r;
         if (r.tag == TURI_REF && r.as_ref)
             return ((EvalBinding *)r.as_ref)->value;
+        /* rc-deref-emits-control-block-pointer: an rc<T> is the __rc
+         * {counter, value} pair EX_RC_OF builds; `@` reads the value, not the
+         * pair (which printed as the counter's address). */
+        if (r.tag == TURI_STRUCT && r.as_struct && r.as_struct->name
+            && strcmp(r.as_struct->name, "__rc") == 0 && r.as_struct->n_fields >= 2)
+            return r.as_struct->fields[1];
         return r;
     }
     case EX_SET_DEREF: {

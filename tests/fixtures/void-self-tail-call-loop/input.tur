@@ -1,0 +1,43 @@
+;; void-self-tail-call-not-lowered: a self tail call in a `: nil` function is
+;; a backedge, like one in a value-returning function.  It used to be emitted
+;; as a plain C call, so the loop grew the stack by a frame per iteration
+;; unless the C compiler made the sibling call itself (gcc does at -O2, not at
+;; -O1 -- every sanitized build).
+;;
+;; The snapshot pins each shape: a two-armed `if`, a one-armed `when` (the
+;; missing arm is the empty return), a `let` spine, an owned local whose drop
+;; glue fires before the backedge and before the `return;`, an `any` local
+;; dropped on both exits, and a `^tailcall` that is accepted in a `: nil` body.
+
+(defn count-down [n : int] : nil
+  (if (= n 0) nil (count-down (- n 1))))
+
+(defn count-up [i : int n : int] : nil
+  (when (< i n)
+    (when (= (mod i 250000) 0) (println i))
+    ^tailcall (count-up (+ i 1) n)))
+
+(defn walk [i : int n : int] : nil
+  (let [j (+ i 1)]
+    (if (< j n) (walk j n) (println "walked"))))
+
+(defn with-ref [n : int] : nil
+  (let [b (ref 1)]
+    (if (= n 0)
+      (println "ref done")
+      ^tailcall (with-ref (- n 1)))))
+
+(defn with-any [n : int] : nil
+  (let [a : any n]
+    (if (= n 0)
+      (println "any done")
+      (with-any (- n 1)))))
+
+(defn main [] : int
+  (count-down 1000000)
+  (println "count-down done")
+  (count-up 0 1000000)
+  (walk 0 1000000)
+  (with-ref 1000000)
+  (with-any 1000000)
+  0)

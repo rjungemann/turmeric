@@ -314,6 +314,14 @@ typedef struct EmitCtx {
      * `int64_t` field ("makes integer from pointer without a cast").  Record
      * the decision once here and have the assignment read it back. */
     char     **env_struct_fn_typedefs;
+    /* generic-closure-capture-of-float-truncates: the C type each CAPTURE
+     * field of a registered env struct was declared with, '\n'-joined in
+     * capture order ("" for a capture that got no field), parallel to
+     * env_struct_names; NULL until the emit site records it.  Same reason as
+     * the `__fn` record above: a spec body fills the shared struct a generic
+     * site declared, so a tyvar capture's value (`const char *`, `double`)
+     * can differ from its field (`int64_t`) and the fill has to bridge. */
+    char     **env_struct_cap_ctypes;
     uint32_t  n_env_struct_names;
     uint32_t  cap_env_struct_names;
     /* TS1: per-signature thunk typedef tracking */
@@ -730,6 +738,11 @@ typedef struct EmitCtx {
     /* Set by tco_mark when the tail spine reaches a dynamic call, so the body
      * is routed through emit_tail, where that call is recognised. */
     bool         tail_dyn_seen;
+    /* void-self-tail-call-not-lowered: the function whose tail spine tco_mark /
+     * emit_tail / tc_check are walking returns nothing (`: nil`, C `void`).
+     * Its leaves end in a bare `return;` rather than a value, and a one-armed
+     * `if` is a tail position (the missing arm is the empty return). */
+    bool         tail_void;
     /* proper-tail-calls T2b: the C name and body buffer of the function being
      * emitted, and where its body starts in that buffer -- what a checkless
      * tail call needs to decide whether it may also be `musttail` (identical
@@ -1391,6 +1404,10 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
 void emit_env_struct_register(EmitCtx *ctx, const Symbol *env_name,
                               const char *typedef_name);
 const char *emit_env_struct_fn_typedef(EmitCtx *ctx, const Symbol *env_name);
+void emit_env_struct_set_cap_ctypes(EmitCtx *ctx, const Symbol *env_name,
+                                    const char *joined);
+char *emit_env_struct_cap_ctype(EmitCtx *ctx, const Symbol *env_name,
+                                uint32_t cap_idx);
 /* closure-typed-invocation-abi-plan: ensure a typed fat-shim exists for the
  * given closure signature, returning its C function name.  Returns NULL when
  * the signature is the all-int64_t carrier case (caller uses the preamble

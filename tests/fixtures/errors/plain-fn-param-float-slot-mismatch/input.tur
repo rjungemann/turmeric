@@ -1,0 +1,9 @@
+;; plain-fn-typed-params-are-kind-matched: the register-class half.  A
+;; `(fn [float] int)` passed where `(fn [int] int)` is declared used to be
+;; accepted and called with the int in the wrong register.  The check compares
+;; carrier class (arity, and a float against a word), the same rule a ^fat
+;; parameter gets.
+(defn takes-plain [f : (fn [int] int)] : int (f 1))
+(defn main [] : int
+  (println (takes-plain (fn [a : float] : int 1)))
+  0)

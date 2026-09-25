@@ -1,0 +1,8 @@
+;; plain-fn-typed-params-are-kind-matched: a plain (non-^fat) fn-typed
+;; parameter is routed onto the typed poly carrier, so its slot read as
+;; ptr<void> and the structural check the ^fat path runs never saw it -- a
+;; two-argument lambda was accepted where `(fn [int] int)` was declared.
+(defn takes-plain [f : (fn [int] int)] : int (f 1))
+(defn main [] : int
+  (println (takes-plain (fn [a : int b : int] : int a)))
+  0)

@@ -10547,6 +10547,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
             Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
             *rft = body->type;
             return_fn_type = rft;
+        } else if (!return_full_type && body->type.kind == TY_TYVAR &&
+                   body->type.as.tyvar_.name) {
+            /* generic-closure-capture-of-float-truncates: an unannotated lambda
+             * whose body is a value of the enclosing defn's type parameter --
+             * `(fn [] v)` with `v : A` -- records `A` exactly as an explicit
+             * `: A` would.  Dropping it left a bare TY_TYVAR result kind with no
+             * name, which nothing can instantiate: `((capture 7.25))` read the
+             * result as the int carrier and printed 7, and the float spec's env
+             * fill numerically converted 7.25 into the int64 slot. */
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = body->type;
+            return_full_type = rft;
         } else if (!return_full_type &&
                    (body->type.kind == TY_APP || body->type.kind == TY_ADT) &&
                    !fn_type_has_named_tyvar(&body->type)) {

@@ -1,5 +1,13 @@
 # Every program fails to link at `-O0`: `tur_set_contract_handler` unresolved
 
+> **RESOLVED 2026-09-25.** `runtime/contract_handler.c` is in
+> `TURT_RUNTIME_SOURCES` (`src/CMakeLists.txt`), so `libturt_runtime.a`
+> defines both symbols; the repro builds and prints `hi` at `-O0`.  The
+> release and Windows archives ship the same CMake target, so they pick it up
+> with no layout change.  As with every member of that archive, a program that
+> never references the pair never extracts it.
+
+
 **Severity:** low-medium. `-O2` (the default) links, so the suites never see
 it; a developer building with `TUR_CC_FLAGS="-O0 ..."` to debug emitted C
 cannot link any program, Turmeric or Scheme.

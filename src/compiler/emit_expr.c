@@ -42,9 +42,12 @@ void emit_env_struct_register(EmitCtx *ctx, const Symbol *env_name,
             ctx->cap_env_struct_names * sizeof(const Symbol *));
         ctx->env_struct_fn_typedefs = (char **)realloc(ctx->env_struct_fn_typedefs,
             ctx->cap_env_struct_names * sizeof(char *));
+        ctx->env_struct_cap_ctypes = (char **)realloc(ctx->env_struct_cap_ctypes,
+            ctx->cap_env_struct_names * sizeof(char *));
     }
     ctx->env_struct_fn_typedefs[ctx->n_env_struct_names] =
         typedef_name ? strdup(typedef_name) : NULL;
+    ctx->env_struct_cap_ctypes[ctx->n_env_struct_names] = NULL;
     ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
 }
 
@@ -56,6 +59,44 @@ const char *emit_env_struct_fn_typedef(EmitCtx *ctx, const Symbol *env_name) {
     for (uint32_t i = 0; i < ctx->n_env_struct_names; i++)
         if (ctx->env_struct_names[i] == env_name)
             return ctx->env_struct_fn_typedefs[i];
+    return NULL;
+}
+
+/* Record the capture fields' declared C types for `env_name` (see
+ * env_struct_cap_ctypes).  Both env-struct emit sites call this right after
+ * writing the struct. */
+void emit_env_struct_set_cap_ctypes(EmitCtx *ctx, const Symbol *env_name,
+                                    const char *joined) {
+    if (!ctx->env_struct_names || !ctx->env_struct_cap_ctypes) return;
+    for (uint32_t i = 0; i < ctx->n_env_struct_names; i++)
+        if (ctx->env_struct_names[i] == env_name) {
+            free(ctx->env_struct_cap_ctypes[i]);
+            ctx->env_struct_cap_ctypes[i] = strdup(joined);
+            return;
+        }
+}
+
+/* The declared C type of capture `cap_idx` of `env_name`'s struct (malloc'd),
+ * or NULL when unrecorded. */
+char *emit_env_struct_cap_ctype(EmitCtx *ctx, const Symbol *env_name,
+                                uint32_t cap_idx) {
+    if (!ctx->env_struct_names || !ctx->env_struct_cap_ctypes) return NULL;
+    for (uint32_t i = 0; i < ctx->n_env_struct_names; i++) {
+        if (ctx->env_struct_names[i] != env_name) continue;
+        const char *p = ctx->env_struct_cap_ctypes[i];
+        if (!p) return NULL;
+        for (uint32_t k = 0; k < cap_idx; k++) {
+            p = strchr(p, '\n');
+            if (!p) return NULL;
+            p++;
+        }
+        const char *end = strchr(p, '\n');
+        size_t n = end ? (size_t)(end - p) : strlen(p);
+        char *out = (char *)malloc(n + 1);
+        memcpy(out, p, n);
+        out[n] = '\0';
+        return out;
+    }
     return NULL;
 }
 
@@ -92,8 +133,10 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
     } else {
         buf_printf(out, "struct %s { int64_t __fn; ", env_name->name);
     }
+    Buf capty; buf_init(&capty);
     for (uint8_t i = 0; i < closure->n_captures; i++) {
         Binding *captured = closure->captures[i];
+        if (i > 0) buf_putc(&capty, '\n');
         /* Edge 1: a letrec/named-let member referenced from a nested
          * closure is captured eagerly (its globalness is unknown when
          * collect_free_vars runs), but if it turned out captureless it
@@ -118,9 +161,13 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
             ? "int64_t"
             : emit_type_c_name(ctx, captured->type);
         buf_printf(out, "%s %s; ", field_ctype, field);
+        buf_puts(&capty, field_ctype);
         free(field);
     }
     buf_puts(out, "};\n");
+    buf_putc(&capty, '\0');
+    emit_env_struct_set_cap_ctypes(ctx, env_name, capty.data ? capty.data : "");
+    buf_free(&capty);
     free(thunk_typedef);
 
     /* closure-drop-glue (Model R): per-env drop-glue so an escaping env
@@ -12601,6 +12648,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                            inner_type_c, tmp, inner_type_c, inner);
                 free(inner);
                 return tmp;
+            } else if (e->as.deref_.expr->type.kind == TY_RC) {
+                /* rc-deref-emits-control-block-pointer: the operand is the
+                 * RcControlBlock, not the value.  Read the payload through
+                 * cb->value with the layout EX_RC_OF chose: a boxed or `:heap`
+                 * ADT's control block ADOPTS the ctor's pointer, so cb->value
+                 * IS the carrier; every other payload sits in a cell that
+                 * cb->value points at. */
+                Type rt = e->type;
+                bool adopted = rt.kind == TY_ADT && rt.as.adt_.def &&
+                               (rt.as.adt_.def->is_heap ||
+                                !adt_is_byvalue_product(rt.as.adt_.def));
+                const char *inner_type_c = type_c_name(rt);
+                char *tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                if (adopted) {
+                    buf_printf(body,
+                               "%s %s = (%s)(intptr_t)rc_get_value((RcControlBlock *)(intptr_t)(%s));\n",
+                               inner_type_c, tmp, inner_type_c, inner);
+                } else {
+                    buf_printf(body,
+                               "%s %s = *((%s *)rc_get_value((RcControlBlock *)(intptr_t)(%s)));\n",
+                               inner_type_c, tmp, inner_type_c, inner);
+                }
+                free(inner);
+                return tmp;
             } else {
                 /* For ptr<T>, just cast to the appropriate type and dereference */
                 /* For now, ptr<void> stays as void* */
@@ -12765,8 +12837,39 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "%s->%s = (%s)(intptr_t)%s;\n",
                                fat_tmp, field, fcty, cn);
                 } else {
-                    buf_printf(body, "%s->%s = %s%s;\n",
-                               fat_tmp, field, captured_is_pbp ? "*" : "", cn);
+                    /* generic-closure-capture-of-float-truncates: a spec body
+                     * filling the shared env a generic site declared.  A tyvar
+                     * capture's field is the int64 carrier there, while the
+                     * value here is the spec's concrete C type: a plain
+                     * assignment numerically converts a `double` (7.25 -> 7)
+                     * and is a -Wint-conversion (a gcc 14 error) for a pointer.
+                     * Bridge it the way every other carrier slot is filled --
+                     * the bits, not the number. */
+                    char *decl_cty = captured_is_pbp ? NULL
+                        : emit_env_struct_cap_ctype(ctx, env_name, i);
+                    const char *val_cty = (captured->type.kind == TY_FN ||
+                                           captured->is_poly_fn)
+                        ? NULL : emit_type_c_name(ctx, captured->type);
+                    bool into_carrier = decl_cty && val_cty &&
+                        strcmp(decl_cty, "int64_t") == 0 &&
+                        strcmp(val_cty, "int64_t") != 0;
+                    size_t vl = val_cty ? strlen(val_cty) : 0;
+                    if (into_carrier && vl && val_cty[vl - 1] == '*') {
+                        buf_printf(body, "%s->%s = (int64_t)(intptr_t)(%s);\n",
+                                   fat_tmp, field, cn);
+                    } else if (into_carrier && strcmp(val_cty, "double") == 0) {
+                        buf_printf(body,
+                            "%s->%s = ((union { double f; int64_t u; }){ .f = (%s) }).u;\n",
+                            fat_tmp, field, cn);
+                    } else if (into_carrier && strcmp(val_cty, "float") == 0) {
+                        buf_printf(body,
+                            "%s->%s = (int64_t)((union { float f; uint32_t u; }){ .f = (%s) }).u;\n",
+                            fat_tmp, field, cn);
+                    } else {
+                        buf_printf(body, "%s->%s = %s%s;\n",
+                                   fat_tmp, field, captured_is_pbp ? "*" : "", cn);
+                    }
+                    free(decl_cty);
                 }
                 /* region-lock-hardening: the env is malloc'd and can outlive
                  * the bracket the closure was built in (stored into an outer
