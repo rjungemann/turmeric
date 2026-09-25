@@ -14,9 +14,9 @@ All four reports stay open until this graduates.
 Progress since the first cut (2026-09-25, second pass): the runtime archive
 allocates through the collector, so a Scheme value kept in a Turmeric map or
 `rc<T>` cell is seen; a thread start under the flag is refused with the
-reason; the collector has its macOS roots (untested on macOS at the time of
-writing: CI's `macos-latest` leg runs `tur_r7rs_gc` and is the first
-evidence either way). What remains is section 5.
+reason; the collector has its macOS roots, and CI's `macos-latest` leg ran
+`tur_r7rs_gc` green on them (105 s, run 36113659875), which was the first
+evidence either way. What remains is section 5.
 
 ## 1. The problem
 

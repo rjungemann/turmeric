@@ -69,8 +69,8 @@ fixture under it with frequent collections, and checks that the repro fits
 in 256 MiB with it and not without. This report stays open until the
 collector graduates: it is compiled only, single-threaded (a thread start
 under the flag is refused with the reason), Linux/glibc and macOS (the
-macOS roots await their first CI run), and it does not scan memory libc or
-the backtracking trail allocate (the plan's Limits). Since the second pass
+macOS roots ran green on CI's `macos-latest` leg, 105 s), and it does not
+scan memory libc or the backtracking trail allocate (the plan's Limits). Since the second pass
 (2026-09-25) the runtime archive allocates through it, so a Scheme value
 kept in a Turmeric map or `rc<T>` cell is seen.
 
