@@ -649,6 +649,10 @@ bool diag_use_color(void);
 bool stderr_is_tty(void);
 
 void diag_register_file(const SourceFile *file);
+/* A fresh file id for a SourceFile a pass reads on its own, outside the
+ * elaborator's import/load counter (an R7RS `include`): handed out from the
+ * top of the range downwards, so the two never meet. */
+uint16_t diag_alloc_file_id(void);
 
 /* Return the filesystem path registered for file_id, or NULL. */
 const char *diag_file_path(uint16_t file_id);

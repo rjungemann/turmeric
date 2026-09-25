@@ -1,0 +1,4 @@
+#lang r7rs
+;; include names a file that is not there: the error names the resolved path.
+(import (scheme base))
+(include "no-such-file.scm")

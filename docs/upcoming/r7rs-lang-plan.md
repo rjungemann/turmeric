@@ -39,7 +39,7 @@ ports: the rest of `(scheme base)`, `(scheme char)`, `(scheme cxr)` and
 process-context)` and the non-port half of `(scheme file)` as files spliced
 in only when imported (`tests/fixtures/r7rs-base-library`,
 `r7rs-system-libraries`); `(scheme eval)`, `(scheme repl)`, `(scheme load)`
-and `include` are refused with their reason (the first three until T4). R8 gives the ports: string,
+and `include` are refused with their reason (the first three until T4, `include` until 2026-09-25). R8 gives the ports: string,
 bytevector and file ports over one C buffer, the current ports as parameter
 objects, the whole R7RS I/O surface, `write`/`display` with datum labels for
 cycles, `write-shared`/`write-simple`, and `(scheme read)`
@@ -2765,9 +2765,9 @@ differences, as reports"):
   ([r7rs-import-except-refused](../reported/r7rs-import-except-refused.md)), because a Turmeric import cannot
   say "all but these". A Scheme-side expansion of the library's export list
   can.
-- **`include` and `include-ci` are refused**
-  ([r7rs-include-refused](../reported/r7rs-include-refused.md)). They need a way to read a file
-  as Scheme without its own `#lang` line.
+- ~~**`include` and `include-ci` are refused**~~ -- resolved 2026-09-25:
+  the lowering reads the file with the Scheme reader and splices it
+  ([archived](../archive/r7rs-include-refused.md)).
 - **Compiled top-level order.** A top-level `define` whose initializer has an
   effect runs before the program's top-level expressions
   ([toplevel-def-initializers-run-before-toplevel-expressions](../reported/toplevel-def-initializers-run-before-toplevel-expressions.md);

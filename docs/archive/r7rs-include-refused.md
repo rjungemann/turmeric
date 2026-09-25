@@ -1,5 +1,18 @@
 # `#lang r7rs`: `include` and `include-ci` are refused
 
+**RESOLVED 2026-09-25, archived.** `include` and `include-ci` read each
+named file with the Scheme reader (a `#lang` line of its own is stripped),
+relative to the including file's directory, and splice its forms where the
+include stood: at top level (a pre-pass, so an included `define` or `set!`
+is seen by the whole-program scans), in expression position (a `begin`), and
+as a `define-library` declaration. The file is registered with the
+diagnostic registry, so an error inside it names it and its line; an
+unreadable file is `include: cannot open '<path>'`. `include-ci` reads with
+`#!fold-case` in force. Pinned by `tests/fixtures/r7rs-include` (both back
+ends, all three positions plus a `set!` of the includer's global) and
+`errors/r7rs-include-missing`; `errors/r7rs-include-deferred` is gone.
+Original report follows.
+
 **Severity:** low-medium. Both back ends. R7RS 4.1.7 `include` splices the
 forms of a file into the program, and 5.6.1 allows `(include ...)` as a
 `define-library` declaration -- the standard way to keep a library's body in

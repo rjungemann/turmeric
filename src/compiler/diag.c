@@ -45,6 +45,15 @@ void diag_register_file(const SourceFile *file) {
     if (file->file_id >= file_count_) file_count_ = (size_t)file->file_id + 1;
 }
 
+uint16_t diag_alloc_file_id(void) {
+    static uint16_t next_high = MAX_FILES - 1;
+    if (next_high == 0 || files_[next_high] != NULL) {
+        fprintf(stderr, "tur: too many source files\n");
+        abort();
+    }
+    return next_high--;
+}
+
 bool diag_had_error(void) { return had_error_; }
 
 /* Re-mark the error flag after a nested evaluation's diag_reset cleared it.

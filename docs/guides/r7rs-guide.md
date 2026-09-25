@@ -376,7 +376,6 @@ library's string result to `cstr` gets the same copy.
   empty pipe answers `#f`.
 - **`(except ...)` in an import is refused.** A Turmeric import cannot say
   "all but these names"; the error says to list them with `(only ...)`.
-- **`include` is refused**, with the reason.
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.

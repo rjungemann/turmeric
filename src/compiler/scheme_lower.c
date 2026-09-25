@@ -10,6 +10,7 @@
 
 #include "diag.h"
 #include "lang_dialects.h"
+#include "reader.h"            /* include / include-ci: read a file as Scheme */
 #include "expr.h"              /* R10: tur_name_is_reserved_special_form */
 #include "stdlib_autoload.h"   /* R3: which `(turmeric stdlib/x)` imports are no-ops */
 
@@ -1690,6 +1691,8 @@ static Form *lower_operator(SL *sl, Form *f, int op) {
 static Form *lower(SL *sl, Form *f);
 static Form *lower_body(SL *sl, Form **items, uint32_t n, Span sp);
 static void lower_toplevel(SL *sl, Form *f, FB *out);
+static bool is_include_head(const SL *sl, const Form *f, bool *fold);
+static bool include_files(SL *sl, Form *f, bool fold, FB *out);
 static void lower_import_set(SL *sl, Form *set);
 static const Symbol *library_module(SL *sl, Form *set, bool *ok);
 static Form *cond_expand_clause(SL *sl, Form *f, uint32_t *out_n, Form ***out_items);
@@ -3000,10 +3003,15 @@ static Form *lower(SL *sl, Form *f) {
         if (!prelude_span(f->span)) {
             /* R7: named refusals rather than an unbound-name error. */
             const char *hn = h->name;
-            if (h == sl->s_include || strcmp(hn, "include-ci") == 0) {
-                err(f, "%s is not supported yet: an included file would have to be read as Scheme "
-                       "without its own #lang line; put the definitions in a define-library and import it", hn);
-                return Nil(sl, f->span);
+            (void)hn;
+            bool fold;
+            if (is_include_head(sl, f, &fold)) {
+                /* In expression position the included forms are a `begin`. */
+                FB got = {0};
+                Form *r = Nil(sl, f->span);
+                if (include_files(sl, f, fold, &got) && got.n > 0) r = lower_seq(sl, got.items, got.n, f->span);
+                free(got.items);
+                return r;
             }
         }
         if (h == sl->s_guard)        return lower_guard(sl, f);
@@ -3033,8 +3041,142 @@ static Form *lower(SL *sl, Form *f) {
 }
 
 /* One top-level Scheme form -> zero or more Turmeric top-level forms. */
+/* R7RS 4.1.7 `include` / `include-ci`, and 5.6.1's `(include ...)` library
+ * declaration: each named file is read as Scheme -- the Scheme reader, with
+ * or without a `#lang` line of its own (one is stripped) -- relative to the
+ * including file's directory, and its forms are spliced where the include
+ * stood.  The file is registered with the diagnostic registry, so an error
+ * inside it names it.  `include-ci` reads with `#!fold-case` in force. */
+static bool is_include_head(const SL *sl, const Form *f, bool *fold) {
+    if (f->tag != F_LIST || f->as.list.len < 1 || f->as.list.items[0]->tag != F_SYM) return false;
+    const Symbol *h = f->as.list.items[0]->as.sym;
+    if (h == sl->s_include) { *fold = false; return true; }
+    if (strcmp(h->name, "include-ci") == 0) { *fold = true; return true; }
+    return false;
+}
+static bool include_files(SL *sl, Form *f, bool fold, FB *out) {
+    const char *what = fold ? "include-ci" : "include";
+    if (f->as.list.len < 2) { err(f, "%s expects one or more file names: (%s \"file\" ...)", what, what); return false; }
+    const SourceFile *from = diag_source_file(f->span.file_id);
+    for (uint32_t i = 1; i < f->as.list.len; i++) {
+        Form *pf = f->as.list.items[i];
+        if (pf->tag != F_STR) { err(pf, "%s takes string file names", what); return false; }
+        char path[4096];
+        size_t dlen = 0;
+        const char *dir = NULL;
+        if (from && from->base_dir) { dir = from->base_dir; dlen = strlen(dir); }
+        else if (from && from->path) {
+            const char *slash = strrchr(from->path, '/');
+            if (slash) { dir = from->path; dlen = (size_t)(slash - from->path); }
+        }
+        bool absolute = pf->as.s.len > 0 && pf->as.s.p[0] == '/';
+        int pn;
+        if (dir && dlen && !absolute)
+            pn = snprintf(path, sizeof path, "%.*s/%.*s", (int)dlen, dir, (int)pf->as.s.len, pf->as.s.p);
+        else
+            pn = snprintf(path, sizeof path, "%.*s", (int)pf->as.s.len, pf->as.s.p);
+        if (pn <= 0 || (size_t)pn >= sizeof path) { err(pf, "%s: file name too long", what); return false; }
+        FILE *fp = fopen(path, "rb");
+        if (!fp) { err(pf, "%s: cannot open '%s'", what, path); return false; }
+        size_t cap = 4096, len = 0;
+        char *raw = (char *)malloc(cap);
+        if (!raw) { fclose(fp); fprintf(stderr, "tur: oom\n"); abort(); }
+        size_t got;
+        while ((got = fread(raw + len, 1, cap - len - 1, fp)) > 0) {
+            len += got;
+            if (cap - len < 2) {
+                cap *= 2;
+                raw = (char *)realloc(raw, cap);
+                if (!raw) { fclose(fp); fprintf(stderr, "tur: oom\n"); abort(); }
+            }
+        }
+        fclose(fp);
+        raw[len] = '\0';
+        /* An included file is Scheme by definition; a `#lang` line of its own
+         * is stripped, and the dialect it names is not consulted. */
+        const char *body = raw; size_t blen = len;
+        const char *bad = NULL; size_t bad_len = 0;
+        LangDialect dialect = LANG_TURMERIC;
+        (void)detect_lang_dialect(raw, len, &body, &blen, &bad, &bad_len, &dialect);
+        if (bad) { err(pf, "%s: bad #lang line in '%s' ('%.*s')", what, path, (int)bad_len, bad); free(raw); return false; }
+        const char *prefix = fold ? "#!fold-case " : "";
+        size_t plen = strlen(prefix);
+        char *src = (char *)arena_alloc(sl->a, plen + blen + 1);
+        memcpy(src, prefix, plen);
+        memcpy(src + plen, body, blen);
+        src[plen + blen] = '\0';
+        free(raw);
+        char *path_copy = (char *)arena_alloc(sl->a, (size_t)pn + 1);
+        memcpy(path_copy, path, (size_t)pn + 1);
+        SourceFile *sf = (SourceFile *)arena_alloc(sl->a, sizeof(SourceFile));
+        *sf = (SourceFile){0};
+        sf->path        = path_copy;
+        sf->src         = src;
+        sf->len         = plen + blen;
+        sf->file_id     = diag_alloc_file_id();
+        sf->reader_type = READER_R7RS;
+        sf->lang        = LANG_R7RS;
+        diag_register_file(sf);
+        uint32_t nf = 0;
+        Form **fs = read_all_with_registry(sl->a, sl->st, sf, NULL, &nf);
+        if (!fs) return false;
+        for (uint32_t k = 0; k < nf; k++) {
+            bool sub_fold;
+            if (is_include_head(sl, fs[k], &sub_fold)) { if (!include_files(sl, fs[k], sub_fold, out)) return false; }
+            else fb_push(out, fs[k]);
+        }
+    }
+    return true;
+}
+/* The pre-pass: splice top-level includes, and a library's `(include ...)`
+ * declarations as `(begin ...)`, BEFORE the scans that read the whole
+ * program (the `set!` targets, the clash table), so an included definition
+ * is seen by them like one written in place. */
+static Form *expand_library_includes(SL *sl, Form *f) {
+    bool any = false, fold;
+    for (uint32_t i = 2; i < f->as.list.len && !any; i++) any = is_include_head(sl, f->as.list.items[i], &fold);
+    if (!any) return f;
+    FB decls = {0};
+    for (uint32_t i = 0; i < f->as.list.len; i++) {
+        Form *d = f->as.list.items[i];
+        if (i >= 2 && is_include_head(sl, d, &fold)) {
+            FB body = {0};
+            fb_push(&body, Sym(sl, d->span, sl->s_begin));
+            if (include_files(sl, d, fold, &body)) fb_push(&decls, fb_list(sl, &body, d->span));
+            else free(body.items);
+        } else fb_push(&decls, d);
+    }
+    return fb_list(sl, &decls, f->span);
+}
+static void expand_includes(SL *sl, Form *const *forms, uint32_t n, FB *out) {
+    for (uint32_t i = 0; i < n; i++) {
+        Form *f = forms[i];
+        bool fold;
+        if (is_scheme_file(f) && !prelude_span(f->span)) {
+            if (is_include_head(sl, f, &fold)) {
+                FB got = {0};
+                if (include_files(sl, f, fold, &got)) expand_includes(sl, got.items, got.n, out);
+                free(got.items);
+                continue;
+            }
+            if (head_is(f, sl->s_define_library)) f = expand_library_includes(sl, f);
+        }
+        fb_push(out, f);
+    }
+}
+
 static void lower_toplevel(SL *sl, Form *f, FB *out) {
     Span sp = f->span;
+    {
+        bool fold;
+        if (is_include_head(sl, f, &fold) && !prelude_span(sp)) {
+            FB got = {0};
+            if (include_files(sl, f, fold, &got))
+                for (uint32_t i = 0; i < got.n; i++) lower_toplevel(sl, got.items[i], out);
+            free(got.items);
+            return;
+        }
+    }
     if (head_is(f, sl->s_define_syntax)) { sr_define(sl, f); return; }
     if (f->tag == F_LIST && f->as.list.len > 0 && f->as.list.items[0]->tag == F_SYM &&
         sr_lookup(sl, f->as.list.items[0]->as.sym)) {
@@ -3160,6 +3302,7 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
         if (!name) { err(f->as.list.items[1], "a (scheme ...) or auto-loaded stdlib name cannot be defined here"); return; }
         sl->has_library = true;
         sl->lib_name = name;
+        bool lib_fold = false;
         for (uint32_t i = 2; i < f->as.list.len; i++) {
             Form *decl = f->as.list.items[i];
             if (head_is(decl, sl->s_export)) {
@@ -3188,8 +3331,11 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
                             for (uint32_t k = 1; k < d->as.list.len; k++) lower_import_set(sl, d->as.list.items[k]);
                         else err(d, "cond-expand inside define-library takes (import ...) and (begin ...) declarations");
                     }
-            } else if (head_is(decl, sl->s_include)) {
-                err(decl, "(include \"file\") in a library is not supported yet; write the definitions in a (begin ...)");
+            } else if (is_include_head(sl, decl, &lib_fold)) {
+                FB got = {0};
+                if (include_files(sl, decl, lib_fold, &got))
+                    for (uint32_t j = 0; j < got.n; j++) lower_toplevel(sl, got.items[j], &sl->lib_body);
+                free(got.items);
             } else {
                 err(decl, "define-library declarations are (export ...), (import ...), (begin ...) and (cond-expand ...)");
             }
@@ -3881,6 +4027,10 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
                             Form *const *forms, uint32_t n, uint32_t *out_n) {
     SL sl;
     sl_init(&sl, a, st);
+    FB included = {0};
+    expand_includes(&sl, forms, n, &included);
+    forms = included.items;
+    n = included.n;
     for (uint32_t i = 0; i < n; i++)
         if (is_scheme_file(forms[i])) collect_setter_macros(&sl, forms[i]);
     for (uint32_t i = 0; i < n; i++)
@@ -3985,6 +4135,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     *out_n = out.n;
     free(out.items);
     free((void *)sl.muts);
+    free(included.items);
     free((void *)sl.clash_from);
     free((void *)sl.clash_to);
     free((void *)sl.setters);
