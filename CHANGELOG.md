@@ -57,7 +57,13 @@ All notable changes to Turmeric are documented here.
   the drive snapshot; a re-entry finishes the captured form and continues
   after the invoking one, as chibi and Racket do. Fixture
   `r7rs-toplevel-reentry`; `r7rs-continuation-after-return` pins the
-  delimited answer. Archived: r7rs-toplevel-reentry-reruns-forms.
+  delimited answer. Archived: r7rs-toplevel-reentry-reruns-forms. The
+  prompt's frame (`r7k_run_form`) is reached through a volatile function
+  pointer, so no compiler folds it into `main` (clang and MIR did, which
+  re-ran later forms), and it runs the form between a `setjmp` and a
+  `longjmp` back into itself so the registers a re-entry's restored frames
+  hand back are its own; a capture declines without a stack base, so
+  Windows keeps its escape-only `call/cc`.
 
 ### Changed
 
