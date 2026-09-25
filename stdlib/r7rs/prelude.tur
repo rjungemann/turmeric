@@ -2863,6 +2863,14 @@
   return r > 0;
 #endif
   ```)
+;;; r7rs-repl-value__ -- internal: a REPL top-level expression's value as an
+;;; `any`.  A top-level expression's value is its elaborated type's
+;;; representation (a `let` yielding a vector is the bare Vec), which the
+;;; prompt's `write` cannot read as a Scheme value; passing it through an
+;;; `any` parameter widens it the way a procedure's result is
+;;; (r7rs-repl-toplevel-expression-value-not-widened).
+(defn r7rs-repl-value__ [x] : any x)
+
 ;;; r7rs-char-ready? / r7rs-u8-ready? -- whether a read would not block now.
 ;;; A string or bytevector port is always ready; a file, pipe or console port
 ;;; is asked (r7rs-io-ready?__).

@@ -2406,8 +2406,8 @@ re-entered continuation).**
 >   [r7rs-toplevel-reentry-reruns-forms](../reported/r7rs-toplevel-reentry-reruns-forms.md)
 >   (chibi and Racket delimit each top-level form).
 > - **Found and filed:**
->   - [r7rs-internal-define-forward-set](../reported/r7rs-internal-define-forward-set.md)
->     -- `set!` on a later internal define is "not bound";
+>   - [r7rs-internal-define-forward-set](../archive/r7rs-internal-define-forward-set.md)
+>     -- `set!` on a later internal define is "not bound" (resolved 2026-09-25);
 >   - [r7rs-toplevel-define-named-like-a-turmeric-form](../archive/r7rs-toplevel-define-named-like-a-turmeric-form.md)
 >     -- `(define gen ...)` is the `gen` form (resolved 2026-09-25).
 > - **Fixtures:**

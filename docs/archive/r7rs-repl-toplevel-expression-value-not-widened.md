@@ -1,5 +1,14 @@
 # `tur repl --lang r7rs` prints a top-level `let`'s vector as a number
 
+**RESOLVED 2026-09-25, archived.** At the prompt (a synthetic `<eval>`
+source, the user's lines after the pinned preload) the Scheme lowering
+passes a top-level expression through `r7rs-repl-value__`, an identity
+with an `any` parameter, so its value is widened the way a procedure's
+result is and `write` reads it as a Scheme value. A program's top-level
+expressions, and a Turmeric form typed at the prompt, are left alone.
+Pinned by `tests/fixtures/r7rs-repl-echo-widened` (a hook fixture driving
+`tur repl --lang r7rs`). Original report follows.
+
 **Severity:** low-medium. The R7RS prompt echoes the wrong value for any
 top-level expression whose elaborated type is a collection or other
 representation the prelude's `write` cannot read as a Scheme value. Programs

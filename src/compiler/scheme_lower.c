@@ -1708,6 +1708,7 @@ static Form *lower(SL *sl, Form *f);
 static Form *lower_body(SL *sl, Form **items, uint32_t n, Span sp);
 static void lower_toplevel(SL *sl, Form *f, FB *out);
 static bool is_include_head(const SL *sl, const Form *f, bool *fold);
+static bool is_scheme_syntax_name(const char *name);
 static bool include_files(SL *sl, Form *f, bool fold, FB *out);
 static void lower_import_set(SL *sl, Form *set);
 static const Symbol *library_module(SL *sl, Form *set, bool *ok);
@@ -2694,10 +2695,34 @@ static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp) {
         for (uint32_t k = 0; k < n; k++)
             if (form_sets(sl, rn(sl, names[i]), items[k])) { is_lam[i] = false; break; }
     }
+    /* letrec* (R7RS 5.3.2): every name a body defines is in scope throughout
+     * it.  The nesting below binds a value define INSIDE the definitions
+     * before it, so an earlier define whose init mentions a later value
+     * define -- `(define (a) (set! b 1)) (define b 0)` -- would find `b`
+     * unbound.  Such a value define is hoisted: a mutable cell bound around
+     * the whole body, assigned in place
+     * (r7rs-internal-define-forward-set). */
+    bool *hoist = (bool *)arena_alloc(sl->a, ndef * sizeof(bool));
+    bool any_hoist = false;
+    for (uint32_t j = 0; j < ndef; j++) {
+        hoist[j] = false;
+        if (is_lam[j]) continue;
+        const Symbol *nj = rn(sl, names[j]);
+        for (uint32_t i = 0; i < j && !hoist[j]; i++)
+            if (form_mentions_sym(inits[i], nj)) hoist[j] = true;
+        if (hoist[j]) any_hoist = true;
+    }
     free(seq.items);
     Form *body = rest;
     int32_t i = (int32_t)ndef - 1;
     while (i >= 0) {
+        if (!is_lam[i] && hoist[i]) {
+            const Symbol *self = rn(sl, names[i]);
+            Form *store = Ln(sl, sp, 3, Sym(sl, sp, sl->s_set), Sym(sl, sp, self), inits[i]);
+            body = Ln(sl, sp, 3, Sym(sl, sp, sl->t_do), store, body);
+            i--;
+            continue;
+        }
         if (is_lam[i]) {
             int32_t j = i;
             while (j > 0 && is_lam[j - 1]) j--;
@@ -2725,6 +2750,12 @@ static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp) {
             }
             i--;
         }
+    }
+    if (any_hoist) {
+        FB b = {0};
+        for (uint32_t j = 0; j < ndef; j++)
+            if (hoist[j]) push_binding(sl, &b, sp, names[j], Bool(sl, sp, false), true);
+        body = Ln(sl, sp, 3, Sym(sl, sp, sl->t_let), fb_vec(sl, &b, sp), body);
     }
     return body;
 }
@@ -3372,7 +3403,25 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
         f->as.list.items[1]->as.list.len >= 1 && is_sym(f->as.list.items[1]->as.list.items[0], sl->s_main) &&
         f->as.list.items[1]->as.list.len == 1)
         sl->user_main = true;
-    fb_push(out, lower(sl, f));
+    Form *lowered = lower(sl, f);
+    /* R9 / r7rs-repl-toplevel-expression-value-not-widened: at the REPL
+     * prompt (a synthetic `<eval>` source, the user's lines after the pinned
+     * preload) a top-level expression's value is what the prompt echoes, and
+     * it must be a Scheme value: pass it through an `any` parameter, as a
+     * procedure's result is.  A program's top-level expression value is
+     * discarded, so a program is left alone; so is a Turmeric form typed at
+     * the prompt, whose value is Turmeric's. */
+    {
+        const SourceFile *sf = diag_source_file(sp.file_id);
+        bool at_prompt = sf && sf->path && sf->path[0] == '<' &&
+                         g_synthetic_user_from_line && sp.line >= g_synthetic_user_from_line;
+        bool turmeric_form = f->tag == F_LIST && f->as.list.len > 0 && f->as.list.items[0]->tag == F_SYM &&
+                             tur_name_is_reserved_special_form(f->as.list.items[0]->as.sym->name) &&
+                             !is_scheme_syntax_name(f->as.list.items[0]->as.sym->name);
+        if (at_prompt && !turmeric_form)
+            lowered = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-repl-value__")), lowered);
+    }
+    fb_push(out, lowered);
 }
 
 /* ---------------------------------------------------------------------------
