@@ -674,6 +674,12 @@ set(TURT_RUNTIME_SOURCES
     # extracts this member.
     runtime/region.c
     runtime/arena.c
+    # o0-build-cannot-link-contract-handler: stdlib/contract.tur's
+    # set-contract-handler! / with-contract-handler call these by extern.  At
+    # -O2 the unused helpers are dropped and nothing references them, which hid
+    # that no archive a program links defined them; at -O0 every program failed
+    # to link.  Same "only extracted when referenced" reasoning as above.
+    runtime/contract_handler.c
 )
 add_library(turt_runtime STATIC ${TURT_RUNTIME_SOURCES})
 set_target_properties(turt_runtime PROPERTIES OUTPUT_NAME "turt_runtime")

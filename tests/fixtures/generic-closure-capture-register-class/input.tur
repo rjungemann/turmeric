@@ -1,0 +1,33 @@
+;; generic-closure-capture-of-float-truncates: a type parameter captured into a
+;; closure keeps its value at every instantiation.  `((capture 7.25))` used to
+;; print 7: the unannotated lambda `(fn [] v)` dropped the name of its `A`
+;; result, so the call read it as the int carrier, and the float spec filled
+;; the shared env's int64 slot with a numeric conversion.  The same shared
+;; slot was a -Wint-conversion for a `cstr` and a hard C error for a by-value
+;; struct.  An explicit `: A` on the lambda is the control -- it always worked.
+
+(defstruct Pt [x : int y : float])
+
+(defn capture [A] [v : A] : (fn [] A)
+  (fn [] v))
+
+(defn capture-annotated [A] [v : A] : (fn [] A)
+  (fn [] : A v))
+
+(defn capture-with [A] [v : A x : int] : (fn [int] A)
+  (fn [k : int] v))
+
+(defn main [] : int
+  (println ((capture 42)))
+  (println ((capture 7.25)))
+  (println ((capture-annotated 7.25)))
+  (println ((capture-with 7.25 3) 1))
+  (println ((capture (:: 3.5 float32))))
+  (println ((capture "hi")))
+  (println ((capture true)))
+  (let [f (capture 7.1)]
+    (println (+ (f) 0.5)))
+  (let [p ((capture (make-struct Pt 2 3.25)))]
+    (println (.x p))
+    (println (.y p)))
+  0)

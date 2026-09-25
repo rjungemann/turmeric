@@ -1,10 +1,44 @@
 ---
 title: A generic type parameter bound to float is TRUNCATED when captured into a closure
-category: Reported
+category: Archive
 description: (capture 7.25) returns 7. The monomorphized spec assigns a `double` parameter into the shared closure-env struct's `int64_t` field, which numerically converts instead of bit-reinterpreting. The same spec also drops the TUR_REGION_NOTE_WORDS the carrier base emits. Silent, exit 0, no diagnostic.
 ---
 
 # A generic type parameter bound to `float` is truncated when captured into a closure
+
+> **RESOLVED 2026-09-25.** The root cause was one level up from the emitter:
+> `elab_fn` dropped the NAME of an unannotated lambda's tyvar result (`(fn []
+> v)` with `v : A`), leaving a nameless `TY_TYVAR` result the call could not
+> instantiate, so `((capture 7.25))` was typed `int` and never reached the
+> per-spec clone machinery (poly-closure-result-specialization) that an
+> explicit `(fn [] : A v)` already went through -- that spelling always
+> printed 7.25.  It now records the tyvar exactly as the annotation would.
+> Three more pieces at the emission site:
+>
+> - the per-spec clone (`emit_inner_closure_needs_float_spec`) also covers a
+>   tyvar bound to a by-value aggregate, which was a hard C error at the
+>   shared env's `int64_t` slot;
+> - a spec body filling a shared env's int64 carrier slot bridges the bits --
+>   fix direction 1 -- a pointer through `intptr_t` (was a `-Wint-conversion`
+>   for a `cstr`, an error under gcc 14) and a `double`/`float` by union
+>   reinterpret.  Each env struct records its capture fields' declared C
+>   types (`emit_env_struct_set_cap_ctypes`) so the fill can tell;
+> - the "dropped region note" is not a defect: the float spec now fills a
+>   `double` field, and a double cannot be a region node, so
+>   `emit_region_note_lvalue` skips it by design.  The aggregate and pointer
+>   specs are noted.
+>
+> Pinned by `tests/fixtures/generic-closure-capture-register-class` (int,
+> float, float32, cstr, bool, a struct, an extra parameter, the annotated
+> control; identical under `--interpret`).  No snapshot moved.
+>
+> **Not covered, filed separately:** a captured float passed to a
+> **fn-typed callback** inside the closure -- a different defect (the shared
+> thunk dispatches the callback through the carrier ABI into a typed
+> `double` shim), see
+> [generic-closure-float-passed-to-fn-typed-callback](../reported/generic-closure-float-passed-to-fn-typed-callback.md).
+> The `dfs-set` shape S2 was blocked on (a captured value handed to a carrier
+> store) works: a `vec-push!` of a captured `7.25` reads back `7.25`.
 
 **Severity: high.** A **silent wrong answer** -- the worst class. No
 diagnostic, exit 0, and the value is off by the fractional part. A second,

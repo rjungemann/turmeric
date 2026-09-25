@@ -93,7 +93,13 @@ Expr *elab_deref(Elab *e, const Form *call) {
     if (inner->type.kind == TY_REF || inner->type.kind == TY_LREF) {
         result_type = type_from_kind(inner->type.as.ref.inner);
     } else if (inner->type.kind == TY_RC) {
-        result_type = type_from_kind(inner->type.as.rc.inner);
+        /* rc-deref-emits-control-block-pointer: an rc over an ADT carries its
+         * AdtDef (elab_rc_of), so hand the reader the full ADT type rather than
+         * a def-less TY_ADT that no field access or match can resolve. */
+        if (inner->type.as.rc.inner == TY_ADT && inner->type.as.rc.adt_def)
+            result_type = type_adt(inner->type.as.rc.adt_def);
+        else
+            result_type = type_from_kind(inner->type.as.rc.inner);
     } else if (inner->type.kind == TY_REF_IMMUT || inner->type.kind == TY_REF_MUT) {
         /* Phase 12: &T and &mut T dereference to T */
         result_type = type_from_kind(inner->type.as.ref_borrow.target);

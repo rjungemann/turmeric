@@ -4226,10 +4226,33 @@ static void emit_assign_inner_env_override(EmitCtx *ctx, FnDef *inner_fd,
     buf_free(&en);
 }
 
+/* generic-closure-capture-of-float-truncates: a tyvar bound to a BY-VALUE
+ * aggregate has the same problem as a float, one register class over -- the
+ * shared thunk returns the int64 carrier and the shared env holds an int64
+ * slot, neither of which a `tur_adt_Pt` fits in -- and the per-spec clone is
+ * the same answer. */
+static bool abi_type_binds_to_byval_aggregate(const Type *t,
+        const AbiTypeBinding *bindings, uint8_t n_bindings) {
+    if (!t || t->kind != TY_TYVAR || !t->as.tyvar_.name) return false;
+    for (uint8_t i = 0; i < n_bindings; i++) {
+        if (!bindings[i].name || strcmp(bindings[i].name, t->as.tyvar_.name) != 0)
+            continue;
+        const Type *bt = &bindings[i].type;
+        if (bt->kind == TY_ADT && bt->as.adt_.def)
+            return !bt->as.adt_.def->is_heap && adt_is_byvalue_product(bt->as.adt_.def);
+        if (bt->kind == TY_APP) return adt_app_is_byvalue_product(*bt);
+        return false;
+    }
+    return false;
+}
+
 static bool emit_inner_closure_needs_float_spec(Binding *inner,
         const AbiTypeBinding *bindings, uint8_t n_bindings) {
     if (!inner || inner->type.kind != TY_FN) return false;
     if (abi_type_binds_to_float(inner->type.as.fn.result_full_type, bindings, n_bindings))
+        return true;
+    if (abi_type_binds_to_byval_aggregate(inner->type.as.fn.result_full_type,
+                                          bindings, n_bindings))
         return true;
     for (uint32_t i = 0; i < inner->type.as.fn.arity; i++) {
         const Type *at = inner->type.as.fn.arg_full_types
@@ -16476,6 +16499,14 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             if (td_guard)
                 buf_printf(&early_file, "#ifndef TUR_TD_%s\n#define TUR_TD_%s\n",
                            adt_c_name, adt_c_name);
+            else if (def->n_type_params == 0)
+                /* nonparametric-adt-forward-typedef-redefinition: unguarded,
+                 * but still announce the full layout.  types.c's dependency
+                 * pre-pass emits a forward `typedef struct X X;` guarded on
+                 * !TUR_TD_X, and without the macro it re-typedef'd a name this
+                 * layout had already introduced -- a C11-only redefinition
+                 * (-Wtypedef-redefinition under clang -std=c99). */
+                buf_printf(&early_file, "#define TUR_TD_%s\n", adt_c_name);
             if (named) {
                 CtorDef *ctor = def->ctors[0];
                 buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
@@ -17958,6 +17989,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     free(ctx.exbox_dict_names);
     for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
     free(ctx.env_struct_fn_typedefs);
+    for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_cap_ctypes[i]);
+    free(ctx.env_struct_cap_ctypes);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
     /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope
@@ -19494,6 +19527,8 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     free(ctx.exbox_dict_names);
     for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
     free(ctx.env_struct_fn_typedefs);
+    for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_cap_ctypes[i]);
+    free(ctx.env_struct_cap_ctypes);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
     /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope

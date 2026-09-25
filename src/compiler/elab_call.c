@@ -7302,6 +7302,35 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 a->sum_box_drop_after = true;
         }
 
+        /* plain-fn-typed-params-are-kind-matched: a plain `(fn [int] int)`
+         * parameter is routed onto the typed poly carrier (elab_fns.c F5), so
+         * its arg_kinds slot reads TY_PTR_VOID and the LT2 gate below -- which
+         * asks for TY_FN on both sides -- never ran the structural check: a
+         * `(fn [cstr] cstr)` or a wrong-arity lambda was accepted, exit 0.
+         * The declared signature is right there in arg_full_types (the F5
+         * route stores it); check it the same way LT2 checks a ^fat slot. */
+        if (arg_ok && args[i]->type.kind == TY_FN &&
+            expected_arg_kind != TY_FN && fn_type.kind == TY_FN &&
+            fn_type.as.fn.arg_full_types) {
+            uint32_t pidx = fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *declared_fn = pidx < fn_type.as.fn.arity
+                ? fn_type.as.fn.arg_full_types[pidx] : NULL;
+            if (declared_fn && declared_fn->kind == TY_FN &&
+                !fn_type_structurally_compatible(args[i]->type, *declared_fn)) {
+                Buf sx; buf_init(&sx);
+                type_print(&sx, *declared_fn); buf_putc(&sx, '\0');
+                Buf sa; buf_init(&sa);
+                type_print(&sa, args[i]->type); buf_putc(&sa, '\0');
+                diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                    TUR_E0001_TYPE_MISMATCH,
+                                    "function '%s' arg %u: expected a function of type %s, "
+                                    "got %s -- arity, argument types and result type must match",
+                                    fn_binding->name->name, i + 1, sx.data, sa.data);
+                buf_free(&sx); buf_free(&sa);
+                return NULL;
+            }
+        }
+
         /* LT2: When both expected and actual argument types are function types,
          * verify that their arg_linear flags match.  This catches attempts to
          * pass a (-> T R) function where (-> ^linear T R) is required (or vice

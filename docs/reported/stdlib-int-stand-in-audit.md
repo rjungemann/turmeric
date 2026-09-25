@@ -306,13 +306,22 @@ S2 landed 13 of 19 sites (ref, chan, atomic). The other 6 were left with
 
 ### `dfs-set` (1 site) -- BLOCKED, and parameterising it today is a REGRESSION
 
+> **Unblocked 2026-09-25.** The capture bug is fixed
+> ([archived](../archive/generic-closure-capture-of-float-truncates.md)): a
+> generic closure that captures a `7.25` and hands it to a carrier store
+> (`vec-push!` in the measured stand-in for `bt-set!`) reads back `7.25`.
+> Re-measure `(dfs-set c 7.25)` when parameterising.  One adjacent shape is
+> still wrong -- a captured float passed to a fn-typed CALLBACK
+> ([generic-closure-float-passed-to-fn-typed-callback](generic-closure-float-passed-to-fn-typed-callback.md))
+> -- which `dfs-set` does not do (its `k` takes no argument).
+
 Mechanically the smallest of the three: `(defopaque BtCell [A] :ptr)` plus
 seven signatures in `trail.tur` and three in `backtrack-dfs.tur`, ~20 lines.
 It was **written, measured and reverted**.
 
 `dfs-set` returns a closure capturing its payload, and a generic type parameter
 bound to `float` is **truncated when captured into a closure** --
-[generic-closure-capture-of-float-truncates](generic-closure-capture-of-float-truncates.md),
+[generic-closure-capture-of-float-truncates](../archive/generic-closure-capture-of-float-truncates.md),
 a pre-existing compiler bug this investigation found and filed. Same program,
 both ways:
 

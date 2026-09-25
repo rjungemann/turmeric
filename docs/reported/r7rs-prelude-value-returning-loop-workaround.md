@@ -1,7 +1,8 @@
 # Cleanup: write the R7RS prelude's `-lp__` loops as `nil` loops again
 
-**Severity:** low (cleanup; no wrong answer). **Blocked on**
-[void-self-tail-call-not-lowered](void-self-tail-call-not-lowered.md).
+**Severity:** low (cleanup; no wrong answer). **Unblocked 2026-09-25:**
+[void-self-tail-call-not-lowered](../archive/void-self-tail-call-not-lowered.md)
+is resolved, so a `: nil` self tail call is a loop now.
 
 ## What and why
 

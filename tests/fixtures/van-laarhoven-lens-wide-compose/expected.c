@@ -5081,6 +5081,7 @@ static int64_t ctor_Identity_Identity(int64_t _0, int64_t _1) {
 #define TUR_CTORALIAS_Identity
 #define ctor_Identity ctor_Identity_Identity
 #endif
+#define TUR_TD_tur_adt_Point
 typedef struct tur_adt_Point {
     int64_t x;
     int64_t y;
@@ -5098,6 +5099,7 @@ static tur_adt_Point * ctor_Point_Point(int64_t _0, int64_t _1) {
 #define TUR_CTORALIAS_Point
 #define ctor_Point ctor_Point_Point
 #endif
+#define TUR_TD_tur_adt_Line
 typedef struct tur_adt_Line {
     int64_t a;
     int64_t b;

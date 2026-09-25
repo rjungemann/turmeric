@@ -1,0 +1,32 @@
+;; rc-deref-emits-control-block-pointer: `@x` on an rc<T> used to hand back the
+;; RcControlBlock pointer on the compiled path (and the __rc pair under
+;; --interpret), so `(+ @x 1)` printed an address.  It must read the payload,
+;; for each layout rc/of chooses: a scalar cell (int, float), a by-value record
+;; ADT, a boxed sum, a `:heap` struct, and an rc made from a ref.
+
+(defstruct Pt [x : int y : float])
+(defstruct H :heap [tag : int w : float])
+(defdata Shape (Circle float) (Sq int int))
+
+(defn zero? [r : rc<int>] : bool
+  (= @r 0))
+
+(defn main [] : int
+  (let [i (rc/of 5)
+        f (rc/of 7.1)
+        p (rc/of (make-struct Pt 2 3.25))
+        s (rc/of (Sq 3 4))
+        h (rc/of (make-struct H 9 7.25))
+        z (rc/of 0)
+        r (ref 123)]
+    (println (+ @i 1))
+    (println (+ @f 1.0))
+    (let [q @p] (println (.x q)) (println (.y q)))
+    (match @s
+      (Circle c) (println c)
+      (Sq a b) (println (+ a b)))
+    (let [g @h] (println (.tag g)) (println (.w g)))
+    (println (zero? z))
+    (let [rr (rc/from-ref r)]
+      (println (+ @rr 1))))
+  0)

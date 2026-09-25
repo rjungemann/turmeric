@@ -1,10 +1,18 @@
 ---
 title: tests/run.sh's stamp cache ignores the stdlib, so a stdlib-only change is reported green without being run
-category: Reported
+category: Archive
 description: stamp_key is hash(input) + hash(expected.c) + mtime(tur). Editing stdlib/*.tur invalidates nothing, so every fixture PASS-skips from cache and the summary reports a full green run that never recompiled anything. Cost a full CI round on PR #909.
 ---
 
 # `tests/run.sh`'s stamp cache ignores the stdlib
+
+> **RESOLVED 2026-09-25.** Fix direction 1: `tests/run.sh` hashes every file
+> under `stdlib/` once at startup (`TUR_STDLIB_HASH`, ~0.2s) and appends it
+> to `stamp_key`, so a stdlib-only edit invalidates every stamp.  The harness
+> comment now says what the stamp covers and what it still does not (a
+> `load` from outside `stdlib/` and the fixture's own directory, and the C
+> compiler).
+
 
 **Severity: medium.** No wrong answers in the compiler -- but the suite reports
 **`N passed, 0 failed` for a run that did not happen**, which is worse than a
