@@ -2775,16 +2775,12 @@ differences, as reports"):
 - ~~**`command-line` starts with `"tur"`**, not the program's own path~~
   -- resolved 2026-09-25 through a pre-declared `*argv0*` global
   ([archived](../archive/r7rs-command-line-first-element-is-tur.md)).
-- **Case mapping details**
-  ([r7rs-unicode-case-mapping-gaps](../reported/r7rs-unicode-case-mapping-gaps.md)).
-  - `string-downcase` does not apply the context-sensitive final sigma.
-  - A character's simple case mapping is taken from its full mapping when
-    that is one character, so a few Greek iota-subscript letters map to
-    themselves.
-  - `char-alphabetic?` is General Category L* and Nl, without
-    Other_Alphabetic.
-  - The tables follow the Unicode version of the Python that generated them
-    (14.0.0).
+- ~~**Case mapping details**~~ -- resolved 2026-09-25: the tables are
+  generated from the UCD files at a pinned ICU release tag (Unicode 16.0.0),
+  with Final_Sigma, the UCD's simple mappings and the Alphabetic property
+  ([archived](../archive/r7rs-unicode-case-mapping-gaps.md)). The
+  language-specific SpecialCasing entries (Lithuanian, Turkish, Azeri) are
+  not applied, as R7RS does not ask for them.
 
 ### 9.4 Related: the shared-variable difference, kept on purpose
 

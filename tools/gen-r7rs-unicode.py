@@ -11,26 +11,34 @@ Writes ONE block of C twice, byte for byte:
                              interpreter cannot run inline C)
 
 tests/check-r7rs-unicode-sync.sh checks the two copies agree, so the back ends
-cannot drift.  The data comes from this Python's `unicodedata` (its Unicode
-version is recorded in both files); regenerate with a newer Python to move the
-Unicode version:
+cannot drift.  The data comes from the Unicode Character Database files
+(r7rs-unicode-case-mapping-gaps): fetch them with tools/fetch-ucd.sh, which
+pins one ICU release tag so the Unicode version the tables carry moves only
+when that tag does, then
 
-  python3 tools/gen-r7rs-unicode.py
+  bash tools/fetch-ucd.sh
+  python3 tools/gen-r7rs-unicode.py --ucd build/ucd
 
 What is covered, and how it is derived:
   - simple case mapping of a character (char-upcase / -downcase / -foldcase):
-    the character's full mapping when that is a single character, else the
-    character itself (so `(char-upcase #\\xDF)` is #\\xDF, as R7RS wants);
-  - full case mapping of a string (string-upcase / -downcase / -foldcase),
-    special casing included (`"\\xDF;"` upcases to "SS"), without the
-    context-sensitive final sigma;
-  - char-alphabetic? (General Category L* or Nl), char-upper-case? and
-    char-lower-case? (the Uppercase / Lowercase properties), char-numeric?
-    and digit-value (Nd), char-whitespace? (the White_Space property).
+    UnicodeData.txt fields 12-13 and CaseFolding.txt's C+S entries, so
+    `(char-upcase #\x1F80)` is #\x1F88 while `(char-upcase #\xDF)` stays
+    #\xDF, as R7RS wants;
+  - full case mapping of a string (string-upcase / -downcase / -foldcase):
+    SpecialCasing.txt's unconditional entries (`"\xDF;"` upcases to "SS")
+    and CaseFolding.txt's F entries, plus the Final_Sigma context of
+    string-downcase (U+03A3 at the end of a word is U+03C2), decided with the
+    Cased and Case_Ignorable properties; the language-specific entries
+    (Lithuanian, Turkish, Azeri) are not applied;
+  - char-alphabetic? (the Alphabetic property, Other_Alphabetic included),
+    char-upper-case? and char-lower-case? (the Uppercase / Lowercase
+    properties), char-numeric? and digit-value (Nd), char-whitespace? (the
+    White_Space property, whose list is fixed here since PropList.txt is
+    not among the files ICU ships).
 """
 import os
+import re
 import sys
-import unicodedata
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 N = 0x110000
@@ -78,25 +86,6 @@ def map_runs(single):
     return out
 
 
-def simple(fn, fallback=None):
-    def f(c):
-        s = fn(chr(c))
-        if len(s) == 1:
-            return ord(s)
-        if fallback:
-            t = fallback(chr(c))
-            if len(t) == 1:
-                return ord(t)
-        return c
-    return f
-
-
-def specials(fn):
-    """codepoints whose full mapping is several codepoints."""
-    return [(c, [ord(x) for x in fn(chr(c))]) for c in range(N)
-            if is_char(c) and len(fn(chr(c))) > 1]
-
-
 def c_srange(name, runs):
     rows = ",".join("{0x%X,0x%X,%d}" % r for r in runs)
     return ("static const r7rs_uc_srange %s[%d] = {%s};\n" % (name, len(runs), rows))
@@ -127,28 +116,104 @@ def wrap(text, width=100):
     return "\n".join(out)
 
 
-def c_block():
-    cat = unicodedata.category
-    alpha = strided(lambda c: cat(chr(c))[0] == "L" or cat(chr(c)) == "Nl")
-    upper = strided(lambda c: chr(c).isupper())
-    lower = strided(lambda c: chr(c).islower())
-    nd = [c for c in range(N) if is_char(c) and cat(chr(c)) == "Nd"
-          and unicodedata.decimal(chr(c)) == 0]
-    to_upper = map_runs(simple(str.upper))
-    to_lower = map_runs(simple(str.lower))
-    to_fold = map_runs(simple(str.casefold, str.lower))
-    sp_upper = specials(str.upper)
-    sp_lower = specials(str.lower)
-    sp_fold = specials(str.casefold)
+class UCD:
+    """The four files, parsed once."""
+    def __init__(self, d):
+        self.gc = {}
+        self.decimal = {}
+        self.upper = {}
+        self.lower = {}
+        first = None
+        for line in open(os.path.join(d, "UnicodeData.txt"), encoding="ascii"):
+            f = line.rstrip("\n").split(";")
+            if len(f) < 15:
+                continue
+            c = int(f[0], 16)
+            if f[1].endswith(", First>"):
+                first = c
+                continue
+            if f[1].endswith(", Last>"):
+                for x in range(first, c + 1):
+                    self.gc[x] = f[2]
+                first = None
+                continue
+            self.gc[c] = f[2]
+            if f[6]:
+                self.decimal[c] = int(f[6])
+            if f[12]:
+                self.upper[c] = int(f[12], 16)
+            if f[13]:
+                self.lower[c] = int(f[13], 16)
+        self.props = {}
+        rx = re.compile(r"^([0-9A-F]+)(?:\.\.([0-9A-F]+))?\s*;\s*(\w+)")
+        for line in open(os.path.join(d, "DerivedCoreProperties.txt"), encoding="utf-8"):
+            m = rx.match(line)
+            if not m:
+                continue
+            lo, hi, name = int(m.group(1), 16), int(m.group(2) or m.group(1), 16), m.group(3)
+            self.props.setdefault(name, set()).update(range(lo, hi + 1))
+        self.fold_simple = {}
+        self.fold_full = {}
+        for line in open(os.path.join(d, "CaseFolding.txt"), encoding="utf-8"):
+            if not line or line[0] == "#":
+                continue
+            f = [x.strip() for x in line.split("#")[0].split(";")]
+            if len(f) < 3 or not f[0]:
+                continue
+            c, status, out = int(f[0], 16), f[1], [int(x, 16) for x in f[2].split()]
+            if status in ("C", "S"):
+                self.fold_simple[c] = out[0]
+            elif status == "F":
+                self.fold_full[c] = out
+        self.sp_lower = {}
+        self.sp_upper = {}
+        for line in open(os.path.join(d, "SpecialCasing.txt"), encoding="utf-8"):
+            body = line.split("#")[0].strip()
+            if not body:
+                continue
+            f = [x.strip() for x in body.split(";")]
+            if len(f) < 4:
+                continue
+            if len(f) >= 5 and f[4]:
+                continue   # conditional: Final_Sigma is decided in C; lt/tr/az not applied
+            c = int(f[0], 16)
+            self.sp_lower[c] = [int(x, 16) for x in f[1].split()]
+            self.sp_upper[c] = [int(x, 16) for x in f[3].split()]
+        head = open(os.path.join(d, "SpecialCasing.txt"), encoding="utf-8").readline()
+        m = re.search(r"SpecialCasing-([0-9.]+)\.txt", head)
+        self.version = m.group(1) if m else "unknown"
+
+
+def c_block(u):
+    def has(name):
+        ps = u.props.get(name, set())
+        return lambda c: c in ps
+    alpha = strided(has("Alphabetic"))
+    upper = strided(has("Uppercase"))
+    lower = strided(has("Lowercase"))
+    cased = strided(has("Cased"))
+    ci = strided(has("Case_Ignorable"))
+    nd = [c for c in range(N) if is_char(c) and u.gc.get(c) == "Nd" and u.decimal.get(c) == 0]
+    to_upper = map_runs(lambda c: u.upper.get(c, c))
+    to_lower = map_runs(lambda c: u.lower.get(c, c))
+    to_fold = map_runs(lambda c: u.fold_simple.get(c, c))
+    def full(table, simple):
+        return sorted((c, out) for c, out in table.items()
+                      if is_char(c) and out != [simple.get(c, c)])
+    sp_upper = full(u.sp_upper, u.upper)
+    sp_lower = full(u.sp_lower, u.lower)
+    sp_fold = full(u.fold_full, u.fold_simple)
+    version = u.version
     head = """/* r7rs-lang-plan R10 -- GENERATED by tools/gen-r7rs-unicode.py from Unicode %s.
  * Do not edit: regenerate.  The same text is in stdlib/r7rs/unicode.tur and
  * src/turi/r7rs_unicode.inc (tests/check-r7rs-unicode-sync.sh). */
 typedef struct { uint32_t lo, hi; uint8_t stride; } r7rs_uc_srange;
 typedef struct { uint32_t lo, hi; uint8_t stride; int32_t delta; } r7rs_uc_map;
 typedef struct { uint32_t cp; uint32_t out[3]; } r7rs_uc_special;
-""" % unicodedata.unidata_version
+""" % version
     tables = (c_srange("r7rs_uc_alpha", alpha) + c_srange("r7rs_uc_upper", upper) +
               c_srange("r7rs_uc_lower", lower) +
+              c_srange("r7rs_uc_cased", cased) + c_srange("r7rs_uc_ci", ci) +
               "static const uint32_t r7rs_uc_nd0[%d] = {%s};\n"
               % (len(nd), ",".join("0x%X" % c for c in nd)) +
               c_srange("r7rs_uc_space", [(lo, hi, 1) for lo, hi in WHITE_SPACE]) +
@@ -228,17 +293,35 @@ static char *r7rs_uc_string(const char *s, int64_t op) {
     size_t len = strlen(s);
     char *r = (char *)malloc(len * 12 + 1), *o = r;
     const unsigned char *p = (const unsigned char *)s;
+    int prev_cased = 0;   /* Final_Sigma: a cased letter before, case-ignorables skipped */
     while (*p) {
         uint32_t cp;
         int n = r7rs_uc_get(p, &cp);
-        if (!n) { *o++ = (char)*p++; continue; }
+        if (!n) { *o++ = (char)*p++; prev_cased = 0; continue; }
         p += n;
+        if (op == 1 && cp == 0x3A3 && prev_cased) {
+            /* SpecialCasing Final_Sigma: not followed by a cased letter,
+             * case-ignorables skipped (SpecialCasing.txt's condition). */
+            const unsigned char *q = p;
+            int next_cased = 0;
+            while (*q) {
+                uint32_t c2;
+                int m = r7rs_uc_get(q, &c2);
+                if (!m) break;
+                if (r7rs_uc_in(r7rs_uc_ci, sizeof r7rs_uc_ci / sizeof *r7rs_uc_ci, c2)) { q += m; continue; }
+                next_cased = r7rs_uc_in(r7rs_uc_cased, sizeof r7rs_uc_cased / sizeof *r7rs_uc_cased, c2);
+                break;
+            }
+            if (!next_cased) { o += r7rs_uc_put(o, 0x3C2); prev_cased = 1; continue; }
+        }
         long k = r7rs_uc_find(sp, nsp, sizeof *sp, cp);
         if (k >= 0 && sp[k].cp == cp) {
             for (int i = 0; i < 3 && sp[k].out[i]; i++) o += r7rs_uc_put(o, sp[k].out[i]);
         } else {
             o += r7rs_uc_put(o, (uint32_t)r7rs_uc_mapc(cp, op));
         }
+        if (r7rs_uc_in(r7rs_uc_cased, sizeof r7rs_uc_cased / sizeof *r7rs_uc_cased, cp)) prev_cased = 1;
+        else if (!r7rs_uc_in(r7rs_uc_ci, sizeof r7rs_uc_ci / sizeof *r7rs_uc_ci, cp)) prev_cased = 0;
     }
     *o = 0;
     return r;
@@ -280,13 +363,19 @@ TUR_TAIL = """
 
 
 def main():
-    block = c_block()
+    args = sys.argv[1:]
+    if len(args) != 2 or args[0] != "--ucd":
+        sys.stderr.write("usage: gen-r7rs-unicode.py --ucd <dir>   "
+                         "(bash tools/fetch-ucd.sh fetches the files into build/ucd)\n")
+        return 2
+    u = UCD(args[1])
+    block = c_block(u)
     with open(os.path.join(ROOT, "stdlib", "r7rs", "unicode.tur"), "w") as f:
         f.write(TUR_HEAD + "```c\n" + block + "```\n" + TUR_TAIL)
     with open(os.path.join(ROOT, "src", "turi", "r7rs_unicode.inc"), "w") as f:
         f.write(block)
-    print("wrote stdlib/r7rs/unicode.tur and src/turi/r7rs_unicode.inc (Unicode %s)"
-          % unicodedata.unidata_version)
+    print("wrote stdlib/r7rs/unicode.tur and src/turi/r7rs_unicode.inc (Unicode %s)" % u.version)
+    return 0
 
 
 if __name__ == "__main__":

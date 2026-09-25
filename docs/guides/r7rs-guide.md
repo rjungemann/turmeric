@@ -61,7 +61,7 @@ All of R7RS-small, and `(scheme r5rs)`'s environments:
 |---|---|
 | `(scheme base)` | complete, including string, bytevector and file ports |
 | `(scheme case-lambda)`, `(scheme lazy)`, `(scheme inexact)` | complete |
-| `(scheme char)` | complete, Unicode case mapping and classification included |
+| `(scheme char)` | complete, Unicode 16.0.0 case mapping and classification included (`tools/fetch-ucd.sh`, one pinned ICU release) |
 | `(scheme cxr)`, `(scheme complex)` | complete |
 | `(scheme write)` | `write` and `display` label cycles; `write-shared`, `write-simple` |
 | `(scheme read)` | `read`, datum labels and cycles included |

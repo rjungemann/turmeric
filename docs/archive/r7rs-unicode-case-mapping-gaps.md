@@ -1,5 +1,18 @@
 # `#lang r7rs`: four gaps in the `(scheme char)` case mapping tables
 
+**RESOLVED 2026-09-25, archived.** The generator reads the Unicode
+Character Database files now (`tools/gen-r7rs-unicode.py --ucd`), fetched by
+`tools/fetch-ucd.sh` from ICU's copy at one pinned release tag
+(`release-76-1`, Unicode 16.0.0; unicode.org is not reachable from every
+build box, and the open-i18n mirror stops at 12.0.0). Simple case mappings
+come from UnicodeData.txt and CaseFolding.txt's C+S entries, full ones from
+SpecialCasing.txt's unconditional entries and CaseFolding.txt's F entries,
+`char-alphabetic?` is the Alphabetic property (Other_Alphabetic included),
+and `string-downcase` applies Final_Sigma with the Cased and Case_Ignorable
+properties. The Unicode version moves only when the tag in the fetch script
+does. Pinned by `tests/fixtures/r7rs-unicode-case` (both back ends); the
+chibi count is unchanged. Original report follows.
+
 **Severity:** low. Both back ends (the tables are one generated C block
 shared by both, `tests/check-r7rs-unicode-sync.sh`). Four documented
 differences from Unicode, each a consequence of how
