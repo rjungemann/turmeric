@@ -2179,6 +2179,14 @@ live elsewhere in this index: compiled top-level order was
 | --- | --- | --- |
 | [saffron-open-generic-result-not-grounded](saffron-open-generic-result-not-grounded.md) | medium | Pre-existing on `main`. A generic constructor called with nothing to bind its type parameters -- `(map-new)` -- hands a Saffron (or `#lang r7rs`) program an OPEN `(Map K V)` that nothing ever grounds to `any`: `(map-assoc m "k" 42)` on it is a static `TUR-E0001` reported inside stdlib/map.tur (`expected &?, got &cstr`), and the same map returned through an unannotated function is a compiled `cast: any holds a different instantiation of Map` where `--interpret` prints the right answer. The seam grounds open type arguments on the target side only; the value side (the let/def binding, the return widen) keeps the open type. Workaround is an ascription the dynamic-language user has no reason to know about; the R3 seam fixture builds its map from a `#map{}` literal for this reason |
 
+## Found landing the r7rs-gc threads plan (filed 2026-09-25)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [jit-fork-child-hangs-with-threads](jit-fork-child-hangs-with-threads.md) | low | Under `tur jit`, a child forked while another thread runs can hang in the engine (SIGALRM after its alarm). Compiled builds, with or without the collector, never do. `r7rs-threads-lifecycle` skips its fork check under `TUR_JIT_ENGINE` until this is fixed |
+| [keyword-seed-collides-with-symbol-seeder](keyword-seed-collides-with-symbol-seeder.md) | medium | In a unit with the runtime symbol registry (every `#lang r7rs` program), the keyword `:seed` fails the C compile: the symbol table's seeder is also named `__tur_sym_seed` (src/compiler/emit_core.c:6291) |
+| [tur-ret-disagrees-with-inline-c-signature](tur-ret-disagrees-with-inline-c-signature.md) | low | In a non-generic inline-C function returning a concrete `(Map K V)`, `__TUR_RET__` expands to the map's pointer type while the function is declared `int64_t`, so the documented `return (__TUR_RET__)(intptr_t)v;` draws a -Wint-conversion |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
