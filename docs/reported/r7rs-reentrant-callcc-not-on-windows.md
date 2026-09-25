@@ -4,9 +4,13 @@
 its `call/cc` has returned (r7rs-lang-plan T5), so generators and coroutines
 work. On Windows (MinGW/UCRT) the same program stops at the first re-entry
 with the escape-level error, because `call/cc` there is the one-shot escape.
-Found by PR 923's Windows CI; five fixtures are skipped there with
+Found by PR 923's Windows CI; six fixtures are skipped there with
 `requires.posix-apis` (r7rs-continuations, r7rs-continuation-after-return,
-r7rs-gc-basic, region-escape-via-callcc, docs-r7rs-guide-examples).
+r7rs-gc-basic, region-escape-via-callcc, docs-r7rs-guide-examples, and
+since the per-form prompt, r7rs-toplevel-reentry). A capture declines
+without a stack base whatever the per-form base says (PR 928's Windows CI
+found the prompt's base letting one through, which crashed every program
+that used call/cc as an escape).
 
 ## Repro
 

@@ -2954,8 +2954,12 @@ static void r7k_copy(unsigned char *dst, const unsigned char *src, size_t n) {
     for (size_t i = 0; i < n / sizeof(uintptr_t); i++) d[i] = s[i];
 }
 static int r7k_snapshot(R7kCont *c, unsigned char *mark) {
+    /* r7rs-reentrant-callcc-not-on-windows: no image without a stack base,
+     * whatever the form base says -- call/cc is the escape there. */
+    unsigned char *sb = r7k_stack_base();
+    if (!sb) return 0;
     unsigned char *base = (g_r7k_form_base && g_r7k_form_base > mark)
-                          ? g_r7k_form_base : r7k_stack_base();
+                          ? g_r7k_form_base : sb;
     unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
     if (!base || base <= lo) return 0;
     c->lo  = lo;
@@ -3014,7 +3018,10 @@ static TuriValue native_r7rs_cont_null(TuriEnv *env, TuriValue *a, uint32_t n, v
  * that invoked it (chibi, Racket).  Every top-level form of a Scheme
  * program is evaluated from the same C depth -- the interpreter's loop over
  * the forms, or a module main's `do` -- so the mark is at the same address
- * for every form, and a restored image lands where it was taken. */
+ * for every form, and a restored image lands where it was taken.  Never
+ * inlined, so the mark is this frame's and not a caller's (the compiled
+ * twin, r7k_run_form in the prelude, says why). */
+__attribute__((noinline))
 static TuriValue native_r7rs_toplevel(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 1) return turi_error("r7rs-toplevel__: expected a thunk");

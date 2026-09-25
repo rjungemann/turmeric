@@ -1,0 +1,6 @@
+Re-entering a continuation after its call/cc returned needs the stack-image
+continuation (r7rs-lang-plan T5), which needs the thread's stack base:
+pthread_getattr_np on glibc, pthread_get_stackaddr_np on macOS. MinGW has
+neither, so call/cc is escape-only there and this fixture's re-entry from a
+later top-level form stops with the escape-level error
+(docs/reported/r7rs-reentrant-callcc-not-on-windows.md).

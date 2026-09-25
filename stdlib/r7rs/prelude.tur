@@ -1827,8 +1827,31 @@
   // The body allocates and fills it, AFTER the preamble's allocator macros,
   // so under the r7rs-gc experiment the image is on the collected heap and
   // scanned -- a continuation keeps everything its stack points at alive.
+  // r7rs-toplevel-reentry-reruns-forms: the per-form prompt's frame, in a
+  // function of its own that is never inlined.  clang inlined the prompt
+  // into the program's main (gcc never inlines an alloca user), which put
+  // main's return address for the form BELOW the mark, inside the image: a
+  // re-entry then returned into main after the captured form and re-ran
+  // everything after it (macOS CI).  Here the frames between the mark and
+  // the form's body are the trampoline's and the runner's, whose return
+  // addresses are the same for every form.  (Untyped: this block precedes
+  // the preamble's tagged-word typedef; r7rs-run-toplevel-thunk-ptr is the
+  // typed trampoline.)
+  __attribute__((noinline)) static void r7k_run_form(void (*run)(void *), void *thunk) {
+      volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
+      mark[0] = 0;
+      unsigned char *saved = r7k_form_base;
+      r7k_form_base = (unsigned char *)mark;
+      run(thunk);
+      r7k_form_base = saved;
+      __asm__ __volatile__("" ::: "memory");
+  }
   static int r7k_measure(r7k_cont *c, unsigned char *mark) {
-      unsigned char *base = (r7k_form_base && r7k_form_base > mark) ? r7k_form_base : r7k_stack_base();
+      // r7rs-reentrant-callcc-not-on-windows: no image without a stack base,
+      // whatever the form base says -- call/cc is the escape there.
+      unsigned char *sb = r7k_stack_base();
+      if (!sb) return 0;
+      unsigned char *base = (r7k_form_base && r7k_form_base > mark) ? r7k_form_base : sb;
       unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
       if (!base || base <= lo) return 0;
       c->lo = lo;
@@ -1914,23 +1937,26 @@
 ;;; r7rs-run-toplevel-thunk -- internal: call a top-level form's thunk.  Its
 ;;; own function so the runner below can call it by C name from inline C.
 (defn r7rs-run-toplevel-thunk [thunk] : nil (thunk) nil)
+;;; r7rs-run-toplevel-thunk-ptr -- internal: the trampoline r7k_run_form
+;;; calls, `void (*)(void *)`, over the thunk's address.
+(defn r7rs-run-toplevel-thunk-ptr [p : ptr<void>] : nil
+  ```c
+  __TUR_CNAME_r7rs-run-toplevel-thunk__(*(tur_tagged_t *)p);
+  ```)
 ;;; r7rs-toplevel__ -- internal: run one top-level form under its own prompt
 ;;; (r7rs-toplevel-reentry-reruns-forms).  The Scheme lowering wraps every
 ;;; statement of a program in it.  A continuation captured inside the form
-;;; copies the stack only up to this frame's mark (r7k_measure), so a
-;;; re-entry from a later form restores this form's frames over that form's
-;;; -- every statement is called from the same depth, so the mark is the
-;;; same address for each -- finishes this form, and returns into the
+;;; copies the stack only up to the mark r7k_run_form takes (r7k_measure),
+;;; so a re-entry from a later form restores this form's frames over that
+;;; form's -- every statement is called from the same depth, so the mark is
+;;; the same address for each -- finishes this form, and returns into the
 ;;; runner frame of the INVOKING form, which carries on after it: the way
-;;; chibi's loader and Racket's per-form prompt behave.
+;;; chibi's loader and Racket's per-form prompt behave.  The mark lives in
+;;; r7k_run_form, a noinline C function, so that no compiler folds it into
+;;; the program's main (see its comment).
 (defn r7rs-toplevel__ [thunk] : nil
   ```c
-  volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
-  mark[0] = 0;
-  unsigned char *saved = r7k_form_base;
-  r7k_form_base = (unsigned char *)mark;
-  __TUR_CNAME_r7rs-run-toplevel-thunk__(thunk);
-  r7k_form_base = saved;
+  r7k_run_form(__TUR_CNAME_r7rs-run-toplevel-thunk-ptr__, (void *)&thunk);
   ```)
 
 ;;; r7rs-wind-depth__ -- internal: a wind stack's length.
