@@ -55,13 +55,14 @@
         (if (= b 34) true (if (= b 59) true (= b 124)))))))
 
 ;;; r7rs-rd-token__ -- the bytes up to the next delimiter.
-(defn r7rs-rd-token-go__ [io : R7rsIo out : R7rsIo] : nil
+(defn r7rs-rd-token-go-lp__ [io : R7rsIo out : R7rsIo] : bool
   (let [b (r7rs-io-peek__ io 0)]
     (if (r7rs-rd-delim?__ b)
-      nil
+      true
       (do (r7rs-io-skip__ io 1)
           (r7rs-io-add-byte__ out b)
-          (r7rs-rd-token-go__ io out)))))
+          (r7rs-rd-token-go-lp__ io out)))))
+(defn r7rs-rd-token-go__ [io : R7rsIo out : R7rsIo] : nil (r7rs-rd-token-go-lp__ io out) nil)
 (defn r7rs-rd-token__ [io : R7rsIo] : cstr
   (let [out (r7rs-io-new__)]
     (r7rs-rd-token-go__ io out)
@@ -69,41 +70,44 @@
 
 ;;; ---- atmosphere: whitespace and comments --------------------------------
 
-(defn r7rs-rd-line-comment__ [io : R7rsIo] : nil
+(defn r7rs-rd-line-comment-lp__ [io : R7rsIo] : bool
   (let [b (r7rs-io-peek__ io 0)]
-    (if (< b 0) nil (do (r7rs-io-skip__ io 1) (if (= b 10) nil (r7rs-rd-line-comment__ io))))))
+    (if (< b 0) true (do (r7rs-io-skip__ io 1) (if (= b 10) true (r7rs-rd-line-comment-lp__ io))))))
+(defn r7rs-rd-line-comment__ [io : R7rsIo] : nil (r7rs-rd-line-comment-lp__ io) nil)
 ;;; r7rs-rd-block-comment__ -- after `#|`: to the matching `|#`, nesting.
-(defn r7rs-rd-block-comment__ [io : R7rsIo depth : int] : nil
+(defn r7rs-rd-block-comment-lp__ [io : R7rsIo depth : int] : bool
   (let [b (r7rs-io-peek__ io 0)]
     (if (< b 0)
-      (do (r7rs-rd-fail__ "read: end of input inside a #| comment") nil)
+      (do (r7rs-rd-fail__ "read: end of input inside a #| comment") true)
       (if (if (= b 124) (= (r7rs-io-peek__ io 1) 35) false)
-        (do (r7rs-io-skip__ io 2) (if (= depth 1) nil (r7rs-rd-block-comment__ io (- depth 1))))
+        (do (r7rs-io-skip__ io 2) (if (= depth 1) true (r7rs-rd-block-comment-lp__ io (- depth 1))))
         (if (if (= b 35) (= (r7rs-io-peek__ io 1) 124) false)
-          (do (r7rs-io-skip__ io 2) (r7rs-rd-block-comment__ io (+ depth 1)))
-          (do (r7rs-io-skip__ io 1) (r7rs-rd-block-comment__ io depth)))))))
+          (do (r7rs-io-skip__ io 2) (r7rs-rd-block-comment-lp__ io (+ depth 1)))
+          (do (r7rs-io-skip__ io 1) (r7rs-rd-block-comment-lp__ io depth)))))))
+(defn r7rs-rd-block-comment__ [io : R7rsIo depth : int] : nil (r7rs-rd-block-comment-lp__ io depth) nil)
 ;;; r7rs-rd-skip__ -- whitespace, comments and directives before a datum.
-(defn r7rs-rd-skip__ [io : R7rsIo st] : nil
+(defn r7rs-rd-skip-lp__ [io : R7rsIo st] : bool
   (let [b (r7rs-io-peek__ io 0)]
     (if (r7rs-rd-space?__ b)
-      (do (r7rs-io-skip__ io 1) (r7rs-rd-skip__ io st))
+      (do (r7rs-io-skip__ io 1) (r7rs-rd-skip-lp__ io st))
       (if (= b 59)
-        (do (r7rs-rd-line-comment__ io) (r7rs-rd-skip__ io st))
+        (do (r7rs-rd-line-comment__ io) (r7rs-rd-skip-lp__ io st))
         (if (= b 35)
           (let [c (r7rs-io-peek__ io 1)]
             (if (= c 124)
-              (do (r7rs-io-skip__ io 2) (r7rs-rd-block-comment__ io 1) (r7rs-rd-skip__ io st))
+              (do (r7rs-io-skip__ io 2) (r7rs-rd-block-comment__ io 1) (r7rs-rd-skip-lp__ io st))
               (if (= c 59)
-                (do (r7rs-io-skip__ io 2) (r7rs-rd-datum-req__ io st) (r7rs-rd-skip__ io st))
+                (do (r7rs-io-skip__ io 2) (r7rs-rd-datum-req__ io st) (r7rs-rd-skip-lp__ io st))
                 (if (= c 33)
                   (do (r7rs-io-skip__ io 2)
                       (let [d (r7rs-rd-token__ io)]
                         (if (r7rs-string=2__ d "fold-case") (r7rs-rd-set-fold__ st true)
                           (if (r7rs-string=2__ d "no-fold-case") (r7rs-rd-set-fold__ st false)
-                            (do (r7rs-rd-fail__ "read: unknown #! directive") nil))))
-                      (r7rs-rd-skip__ io st))
-                  nil))))
-          nil)))))
+                            (do (r7rs-rd-fail__ "read: unknown #! directive") true))))
+                      (r7rs-rd-skip-lp__ io st))
+                  true))))
+          true)))))
+(defn r7rs-rd-skip__ [io : R7rsIo st] : nil (r7rs-rd-skip-lp__ io st) nil)
 
 ;;; ---- strings, symbols, characters ----------------------------------------
 
@@ -117,9 +121,10 @@
         (if (< d 0)
           (do (r7rs-rd-fail__ "read: bad \\x escape (hex digits, then ;)") 0)
           (do (r7rs-io-skip__ io 1) (r7rs-rd-hex-go__ io (+ (* acc 16) d))))))))
-(defn r7rs-rd-intraline__ [io : R7rsIo] : nil
+(defn r7rs-rd-intraline-lp__ [io : R7rsIo] : bool
   (let [b (r7rs-io-peek__ io 0)]
-    (if (if (= b 32) true (= b 9)) (do (r7rs-io-skip__ io 1) (r7rs-rd-intraline__ io)) nil)))
+    (if (if (= b 32) true (= b 9)) (do (r7rs-io-skip__ io 1) (r7rs-rd-intraline-lp__ io)) true)))
+(defn r7rs-rd-intraline__ [io : R7rsIo] : nil (r7rs-rd-intraline-lp__ io) nil)
 ;;; r7rs-rd-escape__ -- after `\` in a string or `|symbol|`.
 (defn r7rs-rd-escape__ [io : R7rsIo out : R7rsIo] : nil
   (let [b (r7rs-io-peek__ io 0)]
@@ -141,15 +146,16 @@
                     (do (r7rs-rd-fail__ "read: end of input after \\") nil)
                     (r7rs-io-add-byte__ out b)))))))))))
 ;;; r7rs-rd-delimited__ -- a string (`"`) or a `|symbol|`, after the opener.
-(defn r7rs-rd-delimited-go__ [io : R7rsIo out : R7rsIo close : int] : nil
+(defn r7rs-rd-delimited-go-lp__ [io : R7rsIo out : R7rsIo close : int] : bool
   (let [b (r7rs-io-peek__ io 0)]
     (if (< b 0)
-      (do (r7rs-rd-fail__ "read: end of input inside a string or |symbol|") nil)
+      (do (r7rs-rd-fail__ "read: end of input inside a string or |symbol|") true)
       (do (r7rs-io-skip__ io 1)
           (if (= b close)
-            nil
+            true
             (do (if (= b 92) (r7rs-rd-escape__ io out) (r7rs-io-add-byte__ out b))
-                (r7rs-rd-delimited-go__ io out close)))))))
+                (r7rs-rd-delimited-go-lp__ io out close)))))))
+(defn r7rs-rd-delimited-go__ [io : R7rsIo out : R7rsIo close : int] : nil (r7rs-rd-delimited-go-lp__ io out close) nil)
 (defn r7rs-rd-delimited__ [io : R7rsIo close : int] : cstr
   (let [out (r7rs-io-new__)]
     (r7rs-rd-delimited-go__ io out close)
@@ -232,21 +238,23 @@
 ;;; per pair or vector (the value may already be cyclic through an earlier
 ;;; label, so the walk keeps a visited table).
 (defn r7rs-rd-is__ [x ref] : bool (if (r7rs-label-ref?__ x) (r7rs-same-ref__ x ref) false))
-(defn r7rs-rd-patch-vec__ [v : (Vec any) i : int ref val seen : R7rsIdTab] : nil
+(defn r7rs-rd-patch-vec-lp__ [v : (Vec any) i : int ref val seen : R7rsIdTab] : bool
   (if (>= i (vec-len v))
-    nil
+    true
     (do (if (r7rs-rd-is__ (vec-get v i) ref) (vec-set! v i val) (r7rs-rd-patch__ (vec-get v i) ref val seen))
-        (r7rs-rd-patch-vec__ v (+ i 1) ref val seen))))
-(defn r7rs-rd-patch__ [x ref val seen : R7rsIdTab] : nil
+        (r7rs-rd-patch-vec-lp__ v (+ i 1) ref val seen))))
+(defn r7rs-rd-patch-vec__ [v : (Vec any) i : int ref val seen : R7rsIdTab] : nil (r7rs-rd-patch-vec-lp__ v i ref val seen) nil)
+(defn r7rs-rd-patch-lp__ [x ref val seen : R7rsIdTab] : bool
   (if (r7rs-node?__ x)
     (if (= (r7rs-idtab-get__ seen x) -2)
       (do (r7rs-idtab-put__ seen x 1)
           (if (r7rs-pair? x)
-            (do (if (r7rs-rd-is__ (r7rs-car x) ref) (r7rs-set-car! x val) (r7rs-rd-patch__ (r7rs-car x) ref val seen))
-                (if (r7rs-rd-is__ (r7rs-cdr x) ref) (r7rs-set-cdr! x val) (r7rs-rd-patch__ (r7rs-cdr x) ref val seen)))
-            (r7rs-rd-patch-vec__ x 0 ref val seen)))
-      nil)
-    nil))
+            (do (if (r7rs-rd-is__ (r7rs-car x) ref) (r7rs-set-car! x val) (r7rs-rd-patch-lp__ (r7rs-car x) ref val seen))
+                (if (r7rs-rd-is__ (r7rs-cdr x) ref) (do (r7rs-set-cdr! x val) true) (r7rs-rd-patch-lp__ (r7rs-cdr x) ref val seen)))
+            (do (r7rs-rd-patch-vec__ x 0 ref val seen) true)))
+      true)
+    true))
+(defn r7rs-rd-patch__ [x ref val seen : R7rsIdTab] : nil (r7rs-rd-patch-lp__ x ref val seen) nil)
 ;;; r7rs-rd-label__ -- after `#`, digits then `=` (define) or `#` (refer).
 (defn r7rs-rd-label__ [io : R7rsIo st] : any
   (let [digits (r7rs-rd-label-digits__ io (r7rs-io-new__))

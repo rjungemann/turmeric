@@ -2135,6 +2135,14 @@ from it -- the second reproduces on `vec-push!`, parametric since long before.
 | [r7rs-toplevel-reentry-reruns-forms](r7rs-toplevel-reentry-reruns-forms.md) | low-medium | Filed 2026-09-24 (r7rs-lang-plan T5 behavior change). A continuation captured at top level is the rest of the whole program, so re-entering it from a later form re-runs the forms in between -- `(saved 2)` after the capturing form loops forever, where chibi and Racket (a prompt per top-level form) print once and go on |
 | [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md) | medium | Filed 2026-09-24 (r7rs-lang-plan T5 behavior change). Every `call/cc` mallocs a copy of the C stack that is never freed, and the first one pins DK frames (compiled) and the driver's temporaries (interpreter) for the rest of the run: 100,000 escapes grow a compiled program to 366 MB; 10,000 take the Debug interpreter to 1.3 GB |
 
+## Found executing r7rs-lang-plan T8, the memory audit (filed 2026-09-25)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [void-self-tail-call-not-lowered](void-self-tail-call-not-lowered.md) | medium | Every dialect. A self tail call in a `: nil` function is not a loop (`tco_spine_ok` excludes `TY_NIL`, emit_fns.c:5990), so it grows the C stack unless gcc makes the sibling call -- it does at `-O2`, not at `-O1`, and every ASan build is `-O1`. A 10^7-step `: nil` countdown segfaults at gcc `-O1`; the `: int` twin is a loop. The R7RS prelude works around it with value-returning `-lp__` loops |
+| [cps-self-tail-call-relies-on-sibling-call](cps-self-tail-call-relies-on-sibling-call.md) | medium | A CPS (`__cps`) function's self tail call is emitted as `return f__cps(...)` (emit_cps_ir.c:6920), never a backedge, and gcc 13 has no `musttail`: a million-element Scheme `for-each`, `map`, `member` or `delay-force` stream segfaults at gcc `-O1`, passes at `-O2` and interpreted |
+| [r7rs-prelude-value-returning-loop-workaround](r7rs-prelude-value-returning-loop-workaround.md) | low | Cleanup, blocked on `void-self-tail-call-not-lowered`: fold the 27 `-lp__` loops T8 added to stdlib/r7rs back into their `: nil` originals and drop the wrappers |
+
 ## Found landing r7rs-lang-plan R3 (filed 2026-09-23)
 
 | Report | Severity | One line |

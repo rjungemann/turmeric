@@ -19,8 +19,12 @@
   ```c
   return ((int64_t *)(intptr_t)c)[1];
   ```)
+(defn r7rs-args-loop__ [c : int last] : any
+  (if (= c 0) last (r7rs-args-loop__ (r7rs-args-tail__ c) (r7rs-snoc__ last (r7rs-args-head__ c)))))
 (defn r7rs-args-go__ [c : int] : any
-  (if (= c 0) r7rs-null-value__ (R7rsPair (r7rs-args-head__ c) (r7rs-args-go__ (r7rs-args-tail__ c)))))
+  (let [h (r7rs-build-head__)]
+    (r7rs-args-loop__ c h)
+    (r7rs-cdr h)))
 ;;; r7rs-command-line -- the command name, then the arguments.  The name is
 ;;; implementation-dependent in R7RS; `*args*` does not carry argv[0], so it
 ;;; is the constant "tur".
