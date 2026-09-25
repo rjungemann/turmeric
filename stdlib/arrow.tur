@@ -492,9 +492,12 @@
 ;;;   first  -- act on the first component of a pair, passing the second through.
 ;;;   second -- act on the second component of a pair, passing the first through.
 ;;;
+;;; Superclass: Category, so an `[^Arrow A]` body may also use `ident`/`comp`.
+;;;
 ;;; Since: Phase CA1
 
 (defclass Arrow [a]
+  [(Category a)]
   (arr [f] : a)
   (>>> [f g] : a)
   (<<< [f g] : a)
@@ -510,9 +513,14 @@
 ;;; (->) cannot do generically.  The class is declared so other arrow
 ;;; constructors (e.g. a future Kleisli) can instantiate it.
 ;;;
+;;; Superclass: Category -- not Arrow, as Haskell has it.  stdlib/kleisli.tur's
+;;; Kleisli is a Category with an honest zero arrow and deliberately no Arrow
+;;; instance, and the zero-arrow laws (`zero >>> f = zero`) need only
+;;; composition.
+;;;
 ;;; Since: Phase CA1
 
-(defclass ArrowZero [a] (zero-arrow [] : a))
+(defclass ArrowZero [a] [(Category a)] (zero-arrow [] : a))
 ;;; ArrowPlus [a] -- an ArrowZero whose arrows form a monoid under choice.
 ;;;
 ;;; Methods:
@@ -521,9 +529,11 @@
 ;;; Like ArrowZero, (->) is not instantiated here; the class exists for arrow
 ;;; constructors that carry a sensible alternative/merge.
 ;;;
+;;; Superclass: ArrowZero.
+;;;
 ;;; Since: Phase CA1
 
-(defclass ArrowPlus [a] (plus-arrow [f g] : a))
+(defclass ArrowPlus [a] [(ArrowZero a)] (plus-arrow [f g] : a))
 ;;; ArrowChoice [a] -- route an arrow over one arm of a sum (Either).
 ;;;
 ;;; Methods:
@@ -534,9 +544,12 @@
 ;;;
 ;;; Requires the Either sum type (stdlib/either.tur).
 ;;;
+;;; Superclass: Arrow.
+;;;
 ;;; Since: Phase CA1
 
 (defclass ArrowChoice [a]
+  [(Arrow a)]
   (left [f] : a)
   (right [f] : a)
   (+++ [f g] : a)
@@ -559,18 +572,22 @@
 ;;; arrow-loop-fix (iterate to a fixpoint) or arrow-loop-delay (a unit delay in
 ;;; the feedback path) below.
 ;;;
+;;; Superclass: Arrow.
+;;;
 ;;; Since: Phase CA1 (lazy feedback: arrowloop-lazy-feedback)
 
-(defclass ArrowLoop [a] (arrow-loop [f] : a))
+(defclass ArrowLoop [a] [(Arrow a)] (arrow-loop [f] : a))
 ;;; ArrowApply [a] -- apply an arrow that is itself a value flowing through.
 ;;;
 ;;; Methods:
 ;;;   app -- the arrow a (a b c, b) c that applies its first component (an
 ;;;          arrow) to its second (nullary; result is the arrow).
 ;;;
+;;; Superclass: Arrow.
+;;;
 ;;; Since: Phase CA1
 
-(defclass ArrowApply [a] (app [] : a))
+(defclass ArrowApply [a] [(Arrow a)] (app [] : a))
 ;;; Arrow [(->)] -- the function arrow: arr is the identity (a plain function
 ;;; is already an arrow), >>> / <<< are composition, first / second act on a
 ;;; heap pair.

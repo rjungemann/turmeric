@@ -438,13 +438,16 @@ The stdlib uses the preamble where the relation is real:
 | `Alternative` | `Applicative` | `typeclass-alternative.tur` (auto-loaded) |
 | `MonadError` | `Monad` | `typeclass-monaderror.tur` (auto-loaded) |
 | `Traversable` | `Functor`, `Foldable` | `typeclass.tur` |
+| `Arrow`, `ArrowZero` | `Category` | `arrow.tur` |
+| `ArrowChoice`, `ArrowLoop`, `ArrowApply` | `Arrow` | `arrow.tur` |
+| `ArrowPlus` | `ArrowZero` | `arrow.tur` |
 | `Monoid` | `Semigroup` | `typeclass-lattice.tur` |
 | `BoundedJoin` | `JoinSemilattice` | `typeclass-lattice.tur` |
 | `BoundedMeet` | `MeetSemilattice` | `typeclass-lattice.tur` |
 
 So a `[^Ord A]` function may call `eq?`, and `mconcat` carries one constraint
-rather than two (see the [lattice guide](lattice-guide.md)). `Monad` and the
-arrow classes are still flat. Each is retrofitted separately, because adding a preamble to an existing
+rather than two (see the [lattice guide](lattice-guide.md)). `Monad` is still
+flat. Each is retrofitted separately, because adding a preamble to an existing
 class obliges every existing instance of it, in every downstream spice, to
 carry the superclass instance. Until a class is retrofitted, a function needing
 both lists both constraints.

@@ -202,8 +202,7 @@ Rules and representation:
 
 The arrow surface in `stdlib/arrow.tur` and `stdlib/kleisli.tur` is a
 production-grade example of the dictionary-lowering rules above: `Category`
-(which `Arrow` restates as a constraint rather than declaring as a superclass;
-the arrow classes have not been retrofitted with preambles yet), `Arrow`,
+(the superclass of `Arrow` and `ArrowZero`), `Arrow`,
 `ArrowChoice`, `ArrowZero`, and a
 second
 `Category` instance (`Kleisli`) all share method names and exercise both the

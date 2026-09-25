@@ -51,6 +51,14 @@ All notable changes to Turmeric are documented here.
   to it still lines up dictionary for dictionary. SC8b step 3 of
   typeclass-superclasses-plan.
 
+- **The arrow classes declare their superclasses.** In `stdlib/arrow.tur`,
+  `Arrow` is declared over `Category`; `ArrowChoice`, `ArrowLoop` and
+  `ArrowApply` over `Arrow`; `ArrowZero` over `Category`; and `ArrowPlus` over
+  `ArrowZero`. `ArrowZero` departs from Haskell's `Arrow` superclass because
+  `Kleisli` is a `Category` with an honest zero arrow and no `Arrow` instance.
+  Every stdlib instance satisfies the new obligations. SC8b step 4 of
+  typeclass-superclasses-plan.
+
 ### Added
 
 - **`Result` is an `Applicative`.** `stdlib/result.tur` ships
