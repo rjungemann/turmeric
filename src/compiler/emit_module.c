@@ -10150,7 +10150,7 @@ static void emit_rt_global(Buf *out, bool shared,
  * type back via `cast` here (NULL for a slot whose host type is already
  * exact).  Shared mode takes the same #else branch -- accessors are
  * process-global, which collapses the per-TU-static-TLS split for free. */
-/* r7rs-gc threads (stage A, docs/upcoming/r7rs-gc-threads-plan.md): the
+/* r7rs-gc threads (stage A, docs/archive/r7rs-gc-threads-plan.md): the
  * collector cannot scan thread-local storage, so every TUR_THREAD_LOCAL
  * variable the unit declares is registered here as it is emitted, and
  * emit_r7rs_gc_tls_roots writes one function at the end of the unit that

@@ -1,8 +1,8 @@
 # Threads under the r7rs-gc collector: a collector lock first, a Boehm-style collector after
 
-Status: **stages A and B shipped** (2026-09-25); stages C and D proposed.
-Follows
-[docs/archive/r7rs-gc-plan.md](../archive/r7rs-gc-plan.md), whose collector
+Status: **complete**. Stages A, B, C and D all shipped on 2026-09-25, and
+the plan moved to docs/archive/. Follows
+[docs/archive/r7rs-gc-plan.md](r7rs-gc-plan.md), whose collector
 graduated the same day with one limit left standing: a compiled `#lang r7rs`
 program that starts a thread stopped at the start site (exit 70) and was
 told to build with `TUR_R7RS_GC=0`. This plan removes that limit in stages,
@@ -114,6 +114,110 @@ Section 3 with these differences, all in src/runtime/r7gc.c:
   collections stop the other in the allocator's fast path; `threads-syscall`
   stops a thread blocked in `fgetc` three hundred times and then feeds it
   the byte.
+
+### Stage C as built
+
+The review of section 4 found the heap's own structures already safe after
+stage B. The chunk map, `free`, `realloc` and large objects all run under
+`G->heap`, which is section 4's "take the lock" choice. The counters are
+summed at refill, and the mark stack belongs to the one collector. What the
+review did find was at the edges: how a thread starts, ends and forks, and
+what its allocations are reachable from in between. All the fixes are in
+src/runtime/r7gc.c unless said otherwise.
+
+- **A large object in flight.** `tur_gc_alloc_large` read `pg->base` after
+  releasing `G->heap`. A collection could stop the thread between the
+  unlock and the read. The object was then reachable only through its page
+  descriptor, which is metadata and never scanned, so the collector
+  unmapped it. The address is now a local taken before the page is
+  published.
+- **Unlocked counters.** `since`, `threshold` and `off` are read on every
+  allocation with no lock. They were written as plain stores under a lock
+  and read atomically; now every access to them is atomic.
+- **Threads crossing the threshold together** each ran a collection, one
+  after the other. A threshold collection now re-checks once it holds
+  `G->world`, and returns if another thread's collection has already reset
+  the count.
+- **Detached threads.** The stdlib's futures, task groups and
+  `thread-detach` all detach threads, and those threads never left the
+  registry. Their record, result and key values stayed roots for the life
+  of the process. A later join could also retire the wrong record once
+  glibc reused the `pthread_t`. Now `pthread_detach` is wrapped, the
+  detach-state attribute is read at creation, and a detached thread's
+  record is retired when the thread is gone.
+- **When a thread is gone.** The collector has its own pthread key, created
+  before any of the program's, whose destructor runs when the thread ends.
+  That destructor re-arms itself once, so it does its work in the next
+  round, after the program's destructors have read their values. It also
+  finishes a thread that left without returning or calling the wrapped
+  `pthread_exit`, such as a cancelled thread.
+- **The creator's record.** A detached thread can finish, and have its
+  record reused, before `pthread_create` returns to its creator. So the
+  thread sets its own `tid` under `G->world`, and the creator writes the
+  `tid` only if the record's generation is unchanged.
+- **`pthread_setspecific` values are roots.** The emitted runtime keeps
+  heap blocks under pthread keys: the `^thread-local` block, and a spawned
+  thread's conveyed dynamic bindings. libc stores those values in the
+  thread descriptor, which nothing scans. So a `#lang r7rs` unit with a
+  `^thread-local` global lost the block at the first collection, even with
+  one thread. The call is now wrapped, and each thread records its own
+  values. The stores are
+  ordered so that a thread stopped at any instruction is read consistently.
+  The values stay roots until the record is retired, because the key
+  destructors run after the start routine returns.
+- **A free from a thread the collector does not know** leaves the object to
+  the collector instead of stopping the program. That covers a library's
+  own thread, and one of ours freeing its dynamic bindings in its key
+  destructors.
+- **`fork`.** A child forked while another thread was refilling its cache
+  inherited `G->heap` locked, and deadlocked at its first allocation. Now
+  `pthread_atfork` handlers take `G->world`, `G->heap`, the metadata lock
+  and the region registry's spinlock before the fork, in the collector's
+  own lock order, and release them on both sides after it. The child also
+  retires every other thread's record.
+- **Regions**, section 4's last item. The collector walks the generations
+  of a thread stopped in the middle of a `with-region`, and that walk is
+  safe on every path but one. The bump pointer is published only after the
+  object's memory is carved. Resets and registry changes happen while the
+  world runs. The exception was `arena_alloc_aligned` (src/runtime/arena.c),
+  which linked a new slab and then published it as the head, with nothing
+  ordering the two stores as a signal handler on the same thread sees them.
+  Published first, the head would hide every older slab. A signal fence now
+  orders them.
+
+The gate (4.1):
+
+- **`threads-stress`** is 4.1's fixture, bounded by a turn count instead of
+  ten seconds of wall clock, as stage D asks. Eight threads take 500 turns
+  each on a shared `(Map int any)` through a mutex. A ninth churns garbage,
+  with a large object every 500 steps. At the end, the map's contents are
+  checked value by value. It runs at `TUR_GC_TORTURE=31` in the gate, and
+  under ASan and UBSan in `run-r7rs-sanitize.sh`, which reads the fixture's
+  new `sanitize.torture` marker. At torture 31 it runs about 20,500
+  collections in 2.3 s on four cores, freeing 26 MB around a live set of
+  97 KB.
+- **`threads-lifecycle`** covers the rest, also at torture 31:
+  - a list kept only under a pthread key, on the main thread and on a
+    worker;
+  - 60 forks while another thread allocates flat out;
+  - 40 detached threads, half by attribute and half by `pthread_detach`,
+    which must leave the registry empty.
+
+  Each part was run with its fix disabled and failed: a panic, a
+  deadlocked child, and 40 records left behind.
+- **Under `tur jit`** the fork part is skipped. The collector is off there,
+  and a child forked while another thread runs hangs in the engine itself
+  (docs/reported/jit-fork-child-hangs-with-threads.md).
+
+### Stage D as built
+
+- The refusal went in stage A and the warning in stage B.
+- The guide's Memory section now describes threads as covered. The Threads
+  paragraph moved out of "What it does not cover" and carries the stage C
+  facts.
+- This plan moved to docs/archive/, and every reference to it followed.
+- The gate keeps every case, and its CMake target keeps the 720 s timeout.
+- CHANGELOG entries cover stages A and B, then C and D.
 
 ## 0. The shape of the plan
 

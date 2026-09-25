@@ -7,7 +7,7 @@ All notable changes to Turmeric are documented here.
 ### Added
 
 - **`#lang r7rs`: threads run under the collector, in parallel** (stages A
-  and B of docs/upcoming/r7rs-gc-threads-plan.md). A compiled Scheme
+  and B of docs/archive/r7rs-gc-threads-plan.md). A compiled Scheme
   program that starts a thread -- through `stdlib/thread`, a session, a
   task group, the multi-threaded scheduler, or a Turmeric module's own
   `pthread_create` -- no longer stops with exit 70. The r7rs-gc collector
@@ -37,6 +37,30 @@ All notable changes to Turmeric are documented here.
   program importing a `.scm` library on both back ends.
 
 ### Fixed
+
+- **`#lang r7rs` threads: the collected heap under contention** (stages C
+  and D of docs/archive/r7rs-gc-threads-plan.md, which is now complete and
+  archived). In a compiled Scheme program under the r7rs-gc collector:
+  - A detached thread (a future's timeout, a task group's, `thread-detach`)
+    leaves the collector's registry once it is gone. Before, its record,
+    result and key values stayed for the life of the process.
+  - A child forked while another thread allocates no longer deadlocks at
+    its first allocation. The collector's locks are taken around `fork`.
+  - A value kept with `pthread_setspecific` is a root. The `^thread-local`
+    block and a spawned thread's conveyed dynamic bindings live there. The
+    block went at the first collection, even in a one-thread program.
+  - A large object can no longer be freed in the instant between its
+    allocation and its return.
+  - Threads that cross the collection threshold together run one
+    collection, not one each.
+  - The region walker cannot miss a slab a stopped thread was adding
+    (src/runtime/arena.c).
+
+  Gate: `tests/run-r7rs-gc.sh` gains `threads-stress` (eight threads assoc
+  and dissoc Scheme values in one shared persistent map while a ninth
+  churns, every value checked) and `threads-lifecycle`. Both also run under
+  ASan in `tests/run-r7rs-sanitize.sh`, at a collection every 31
+  allocations.
 
 - **Top-level `def` initializers run in source order, compiled.** A
   top-level `def` whose initializer has an effect used to run in

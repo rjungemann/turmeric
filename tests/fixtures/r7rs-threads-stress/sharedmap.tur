@@ -1,0 +1,18 @@
+;; sharedmap -- the one Turmeric persistent map the crew shares, keyed by
+;; int, holding Scheme values.  Every assoc copies a path of HAMT nodes the
+;; runtime archive allocates on the collected heap, and every dissoc frees
+;; the nodes the old version no longer shares -- the archive's slow paths.
+;; Callers hold the crew's mutex.
+(defmodule sharedmap
+  (export sm-assoc! sm-dissoc! sm-get sm-count)
+  (def ^mut shared : (Map int any) (map-new))
+  (defn sm-assoc! [k : int v : any] : bool
+    (set! shared (map-assoc shared k v))
+    true)
+  (defn sm-dissoc! [k : int] : bool
+    (set! shared (map-dissoc shared k))
+    true)
+  (defn sm-get [k : int] : any
+    (map-get shared k))
+  (defn sm-count [] : int
+    (map-count shared)))

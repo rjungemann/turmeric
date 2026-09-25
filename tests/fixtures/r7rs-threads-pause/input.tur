@@ -1,5 +1,5 @@
 #lang r7rs
-;; r7rs-gc threads, stage B (docs/upcoming/r7rs-gc-threads-plan.md): the
+;; r7rs-gc threads, stage B (docs/archive/r7rs-gc-threads-plan.md): the
 ;; worker walks a list allocating a pair per element while this thread
 ;; churns garbage; every collection either thread triggers stops the other
 ;; wherever it is -- in the allocator's fast path, mid-memset, holding a

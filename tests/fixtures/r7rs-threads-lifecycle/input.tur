@@ -1,0 +1,18 @@
+#lang r7rs
+;; r7rs-gc threads, stage C (docs/archive/r7rs-gc-threads-plan.md): the
+;; parts of a thread's life the heap has to follow.
+;;   kept      a list reachable only through pthread_setspecific (where the
+;;             emitted runtime keeps dynamic bindings and the ^thread-local
+;;             block), on the main thread and on a worker, survives churn.
+;;   fork      a child forked while another thread allocates flat out can
+;;             allocate: it never inherits a heap lock that thread held.
+;;   detached  threads detached by attribute and by pthread_detach leave
+;;             nothing in the collector's registry once they are gone.
+(import (scheme base) (scheme write) (lifework) (turmeric lifec) (turmeric life))
+(keep! (build!))
+(define keeper (life-keeper-start))
+(churn!)
+(life-keeper-join keeper)
+(write (list 'kept (walk (kept)) (get!))) (newline)
+(write (list 'fork-failures (life-fork-run 60))) (newline)
+(write (list 'detached-records-left (life-detach-run 40))) (newline)

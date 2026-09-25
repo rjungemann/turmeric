@@ -362,7 +362,7 @@ TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *u
 }
 
 /* Every thread's live and retired generations, through the ownership
- * registry.  For the r7rs-gc collector (docs/upcoming/r7rs-gc-threads-plan.md):
+ * registry.  For the r7rs-gc collector (docs/archive/r7rs-gc-threads-plan.md):
  * it stops every other thread before it reads roots, so the arenas hold
  * still; but a stopped thread may be inside reg_add/reg_remove holding the
  * registry's spinlock, so the collector TRIES the lock, and on a refusal

@@ -1,5 +1,5 @@
 #lang r7rs
-;; r7rs-gc threads, stage A (docs/upcoming/r7rs-gc-threads-plan.md): the
+;; r7rs-gc threads, stage A (docs/archive/r7rs-gc-threads-plan.md): the
 ;; worker thread takes a list out of the crossing cell and then waits, so
 ;; its own parked stack holds the only reference, while this thread churns
 ;; garbage through many collections; the list is intact after.  Without the
