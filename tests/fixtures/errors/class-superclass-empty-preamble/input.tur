@@ -1,0 +1,6 @@
+;; class-superclasses SC1: an EMPTY constraint vector is not a no-op.  The
+;; vector is the preamble by form tag alone, so `[]` would otherwise read as
+;; "declares no superclasses" and silently swallow a typo; say so instead.
+(defclass Sg [a] (sg-combine [x : a y : a] : a))
+(defclass Mo [a] [] (sg-empty [] : a))
+(defn main [] : int 0)

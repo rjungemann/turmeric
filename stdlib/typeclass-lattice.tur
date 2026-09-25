@@ -57,7 +57,9 @@
 ;;;
 ;;; Since: lattice-vocabulary-plan L2
 ;;
-;; Flat, not a subclass of Semigroup: defclass has no superclasses, so a
+;; Flat, not a subclass of Semigroup.  defclass does take a superclass
+;; preamble, but adding one to a class that already has instances obliges every
+;; one of them -- here and downstream -- to carry the superclass instance, so a
 ;; function needing both lists both constraints (`[^Semigroup A ^Monoid A]`).
 (defclass Monoid [a] (mempty [] : a))
 
@@ -255,10 +257,11 @@
 ;; not an afterthought.  Without them a JoinSemilattice is a Semigroup with a
 ;; longer name.
 ;;
-;; There is no superclass relating them (defclass has none), so `join`'s
-;; associativity law is restated here rather than borrowed from
-;; `law-associative?`.  That duplication is the honest cost; a constraint-alias
-;; feature would remove it, and is worth considering only if it is felt again.
+;; No superclass relates them -- these two are flat like the rest of the
+;; stdlib's classes -- so `join`'s associativity law is restated here rather
+;; than borrowed from `law-associative?`.  That duplication is the honest cost;
+;; a constraint-alias feature would remove it, and is worth considering only if
+;; it is felt again.
 
 ;;; JoinSemilattice -- associative, commutative, IDEMPOTENT combine (least upper bound).
 ;;;
