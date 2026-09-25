@@ -67,13 +67,6 @@
     arg)
   (defn life-forks [n : int b : ptr<void> c : ptr<void>] : int
     ```c
-  #if defined(TUR_JIT_ENGINE)
-    /* Under `tur jit` the collector is off, so there is no lock of ours for
-     * a child to inherit; and a child forked while another thread runs hangs
-     * in the engine itself (docs/reported/jit-fork-child-hangs-with-threads.md). */
-    (void)n; (void)b; (void)c;
-    return 0;
-  #else
     int fails = 0;
     pthread_mutex_lock(&life_mu); life_burning = 1; pthread_mutex_unlock(&life_mu);
     if (pthread_create(&life_burner_tid, NULL, (void *(*)(void *))b, NULL) != 0) abort();
@@ -91,7 +84,6 @@
     pthread_mutex_lock(&life_mu); life_burning = 0; pthread_mutex_unlock(&life_mu);
     pthread_join(life_burner_tid, NULL);
     return fails;
-  #endif
     ```)
   (defn life-fork-run [n : int] : int
     (life-forks n life-burner life-child))

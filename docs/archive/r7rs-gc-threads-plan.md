@@ -205,9 +205,10 @@ The gate (4.1):
 
   Each part was run with its fix disabled and failed: a panic, a
   deadlocked child, and 40 records left behind.
-- **Under `tur jit`** the fork part is skipped. The collector is off there,
-  and a child forked while another thread runs hangs in the engine itself
-  (docs/reported/jit-fork-child-hangs-with-threads.md).
+- **Under `tur jit`** the fork part was skipped at first: a child forked
+  while another thread ran hung in the engine itself. That was the JIT's
+  lazy-generation lock (docs/archive/jit-fork-child-hangs-with-threads.md),
+  since fixed, so the fork part now runs under the JIT too.
 
 ### Stage D as built
 

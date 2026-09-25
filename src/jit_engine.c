@@ -418,6 +418,21 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
  * microseconds on a path that runs once per function. */
 static pthread_mutex_t g_gen_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* fork (docs/archive/jit-fork-child-hangs-with-threads.md): a child forked
+ * while another thread was generating inherited g_gen_lock held by a thread
+ * that does not exist in it, and hung on the first function it called that
+ * was not yet generated.  The lock is taken before the fork, so generation
+ * is never mid-way when the address space is copied, and released on both
+ * sides after.  No fork on Windows. */
+#ifndef _WIN32
+static void jit_gen_atfork_prepare (void) { pthread_mutex_lock (&g_gen_lock); }
+static void jit_gen_atfork_release (void) { pthread_mutex_unlock (&g_gen_lock); }
+static pthread_once_t g_gen_atfork_once = PTHREAD_ONCE_INIT;
+static void jit_gen_atfork_register (void) {
+  pthread_atfork (jit_gen_atfork_prepare, jit_gen_atfork_release, jit_gen_atfork_release);
+}
+#endif
+
 static void *jit_lazy_gen_locked (MIR_context_t ctx, MIR_item_t func_item) {
   pthread_mutex_lock (&g_gen_lock);
   void *code = func_item->u.func->machine_code;
@@ -432,6 +447,9 @@ static void jit_set_lazy_gen_interface (MIR_context_t ctx, MIR_item_t func_item)
   void *addr;
 
   if (func_item == NULL) return;
+#ifndef _WIN32
+  pthread_once (&g_gen_atfork_once, jit_gen_atfork_register);
+#endif
   addr = _MIR_get_wrapper (ctx, func_item, jit_lazy_gen_locked);
   _MIR_redirect_thunk (ctx, func_item->addr, addr);
 }
