@@ -165,6 +165,21 @@ EOF
 
 run_case "form-named-exports" prog4.tur '(42 2)'
 
+# ---- Direction 4: nested import sets over a user library (R7RS 5.2). -------
+# `only`, `except`, `prefix` and `rename` compose in any order; the fold
+# unwinds each name to the library's spelling, and a prefixed user module is
+# `:as`, a kept list `:refer`, an excluded name the program's own.
+cat > "$TMP/prog5.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write)
+        (prefix (only (mylib) twice) m:)
+        (rename (except (mylib) twice) (greet hello))
+        (rename (prefix (genlib) g:) (g:gen forty-two)))
+(write (list (m:twice 4) (hello "ann") (forty-two))) (newline)
+EOF
+
+run_case "nested-import-sets" prog5.tur '(8 "hi ann" 42)'
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1

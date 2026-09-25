@@ -71,7 +71,7 @@ All of R7RS-small, and `(scheme r5rs)`'s environments:
 The core forms are all there: `define`, `lambda`, the `let` family and named
 `let`, `do`, `case`, `cond` with `=>`, `when`/`unless`, `case-lambda`, the
 `-values` forms, `define-record-type`, `define-library` and `import` with
-`only`/`prefix`/`rename`, `cond-expand`, `syntax-rules`, `guard`,
+`only`/`except`/`prefix`/`rename` (nested freely), `cond-expand`, `syntax-rules`, `guard`,
 `parameterize`, `delay`, `delay-force`, quasiquote.
 
 ## Lists, vectors, strings
@@ -374,8 +374,9 @@ library's string result to `cstr` gets the same copy.
 - **`char-ready?` and `u8-ready?` on Windows always answer `#t`.** Elsewhere
   they ask the descriptor (a zero-timeout poll), so an idle console or an
   empty pipe answers `#f`.
-- **`(except ...)` in an import is refused.** A Turmeric import cannot say
-  "all but these names"; the error says to list them with `(only ...)`.
+- **`(except ...)` over a user library or a Turmeric module hides nothing.**
+  Turmeric's import has no "all but", so the module is imported whole; over
+  a `(scheme ...)` library an excluded name is the program's own to define.
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.

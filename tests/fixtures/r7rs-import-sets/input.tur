@@ -1,0 +1,22 @@
+#lang r7rs
+;; R7RS 5.2 import sets: except, and only/except/prefix/rename under any
+;; nesting, over a (scheme ...) library and a Turmeric module.
+(import (except (scheme base) assoc) (scheme write)
+        (prefix (rename (only (scheme base) car cdr) (car kar)) p:)
+        (rename (prefix (scheme char) c:) (c:char-upcase up))
+        (except (prefix (scheme cxr) x:) x:caddr)
+        (prefix (turmeric stdlib/vec) v:)
+        (rename (only (turmeric stdlib/vec) vec-len) (vec-len vlen)))
+;; (except (scheme base) assoc): assoc is the program's own name now.
+(define (assoc key alist) (list 'mine key))
+(write (list (assoc 1 '((1 . 2))) (cdr '(1 2))))
+(newline)
+;; prefix over rename over only; rename over prefix.
+(write (list (p:kar '(1 2)) (p:cdr '(1 2)) (up #\a) (x:cadr '(1 2 3))))
+(newline)
+;; a Turmeric module, prefixed and renamed.
+(define v (v:vec-new))
+(v:vec-push! v 1)
+(v:vec-push! v 2)
+(write (list (v:vec-len v) (vlen v)))
+(newline)

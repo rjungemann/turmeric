@@ -1,5 +1,19 @@
 # `#lang r7rs`: `(except ...)` in an import set is refused
 
+**RESOLVED 2026-09-25, archived.** The import lowering folds an import set
+of any nesting (`only`, `except`, `prefix`, `rename`, in any order) into one
+spec, unwinding each name to the library's spelling through the modifiers
+inside it, and emits it once. Over a `(scheme ...)` library, whose names
+are global, an excluded name stops meaning the library's -- so
+`(except (scheme base) assoc)` lets the program define its own `assoc` --
+and `only` keeps a name the library's. Over a user library or a Turmeric
+module, `only` is a `:refer` list, `prefix` an `:as` alias, `rename` a
+refer plus a read-time rename, and `except` a full import (Turmeric's
+import has no "all but"; an excluded name of such a module is simply not
+hidden). Pinned by `tests/fixtures/r7rs-import-sets` (both back ends) and
+the `nested-import-sets` case of `tests/run-r7rs-import.sh`;
+`errors/r7rs-import-except` is gone. Original report follows.
+
 **Severity:** low-medium. Both back ends. R7RS 5.2 gives four import-set
 modifiers -- `only`, `except`, `prefix`, `rename` -- and lets them nest.
 `#lang r7rs` accepts three, refuses `except` with a named error, and refuses

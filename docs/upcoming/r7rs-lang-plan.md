@@ -2761,10 +2761,11 @@ differences, as reports"):
   2026-09-25 with a zero-timeout `poll()` on file, pipe and console ports
   ([archived](../archive/r7rs-char-ready-always-true.md)); Windows still
   answers `#t`.
-- **`(except ...)` in an import is refused**
-  ([r7rs-import-except-refused](../reported/r7rs-import-except-refused.md)), because a Turmeric import cannot
-  say "all but these". A Scheme-side expansion of the library's export list
-  can.
+- ~~**`(except ...)` in an import is refused**~~ -- resolved 2026-09-25:
+  import sets nest in any order, and an excluded name is the program's own
+  ([archived](../archive/r7rs-import-except-refused.md)); over a user
+  library or Turmeric module `except` is a full import, since Turmeric's
+  import has no "all but".
 - ~~**`include` and `include-ci` are refused**~~ -- resolved 2026-09-25:
   the lowering reads the file with the Scheme reader and splices it
   ([archived](../archive/r7rs-include-refused.md)).

@@ -433,6 +433,9 @@ typedef struct SL {
     uint32_t n_prefixes;
     struct { const Symbol *from, *to; } renames[64];
     uint32_t n_renames;
+    /* R7RS 5.2 `except`: a library name the program keeps for itself. */
+    const Symbol *excluded[64];
+    uint32_t n_excluded;
     /* R10: a program's top-level define whose name an auto-loaded Turmeric
      * stdlib module also defines (`list-length`, from tur/list) -- the
      * program's name is spelled `<name>--user` throughout, so the two do not
@@ -869,12 +872,25 @@ static const Symbol *rn_global(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_prefixes; i++) {
         if (s->len > sl->prefixes[i].plen &&
             memcmp(s->name, sl->prefixes[i].prefix, sl->prefixes[i].plen) == 0) {
+            if (!sl->prefixes[i].alias) {
+                /* Alias-less (a global library): the prefix comes off, and the
+                 * bare name resolves as written -- through a rename inside
+                 * the prefix, `(prefix (rename (scheme base) (car kar)) p:)`. */
+                return rn_global(sl, I(sl, s->name + sl->prefixes[i].plen));
+            }
+            /* The rest is the module's spelling: a form-named export was
+             * renamed in the library (`gen` -> `gen--user`), so it is here. */
+            const Symbol *rest = I(sl, s->name + sl->prefixes[i].plen);
+            if (sl->in_user)
+                for (uint32_t c = 0; c < sl->n_clash; c++)
+                    if (sl->clash_from[c] == rest) { rest = sl->clash_to[c]; break; }
             char buf[256];
-            snprintf(buf, sizeof buf, "%s/%s", sl->prefixes[i].alias->name,
-                     s->name + sl->prefixes[i].plen);
+            snprintf(buf, sizeof buf, "%s/%s", sl->prefixes[i].alias->name, rest->name);
             return I(sl, buf);
         }
     }
+    for (uint32_t i = 0; i < sl->n_excluded; i++)
+        if (sl->excluded[i] == s) return s;   /* (except ...): the program's own */
     for (size_t i = 0; i < N_RENAMES; i++)
         if (sl->rn_from[i] == s) return sl->rn_to[i];
     /* R7: an on-demand library's name means its procedure only in a unit
@@ -3432,6 +3448,169 @@ static const Symbol *library_module(SL *sl, Form *set, bool *ok) {
     return I(sl, buf);
 }
 
+/* R7RS 5.2: an import set is a library name under any nesting of `only`,
+ * `except`, `prefix` and `rename`.  The nest is folded inside out into one
+ * spec -- the library, the kept names (or all), the excluded names, one
+ * prefix, the renames -- each name unwound to the LIBRARY's spelling
+ * through the modifiers inside it, and the spec is emitted once.  Where a
+ * (scheme ...) library's names are global, `only` and `except` change what
+ * a name MEANS, not what is visible: an excluded name is no longer the
+ * library's (`(except (scheme base) assoc)` lets the program define its own
+ * `assoc`), and a kept name stays the library's.  A user library or a
+ * Turmeric module gets a `:refer` list from `only`, `:as` from `prefix`, and
+ * a full import from `except` (Turmeric's import has no "all but"). */
+typedef struct {
+    Form *lib;               /* the library name */
+    bool  has_only;
+    FB    only;              /* library-spelling names kept (has_only) */
+    FB    except;            /* library-spelling names dropped */
+    const Symbol *prefix;    /* one prefix, or NULL */
+    FB    renames;           /* pairs: new name, library-spelling name */
+} SchemeImportSpec;
+/* The library's spelling of a name written at the spec's current level:
+ * take the spec's renames and prefix off, innermost first. */
+static const Symbol *import_unwind(SL *sl, const SchemeImportSpec *spec, const Symbol *s) {
+    for (int guard = 0; guard < 64; guard++) {
+        bool moved = false;
+        for (uint32_t i = 0; i + 1 < spec->renames.n; i += 2)
+            if (spec->renames.items[i]->as.sym == s) { s = spec->renames.items[i + 1]->as.sym; moved = true; break; }
+        if (!moved && spec->prefix && s->len > spec->prefix->len &&
+            memcmp(s->name, spec->prefix->name, spec->prefix->len) == 0) {
+            s = I(sl, s->name + spec->prefix->len);
+            moved = true;
+        }
+        if (!moved) return s;
+    }
+    return s;
+}
+static bool resolve_import_set(SL *sl, Form *set, SchemeImportSpec *spec) {
+    if (set->tag != F_LIST || set->as.list.len == 0) { err(set, "malformed import set"); return false; }
+    Form *head = set->as.list.items[0];
+    const char *h = head->tag == F_SYM ? head->as.sym->name : "";
+    bool mod = strcmp(h, "only") == 0 || strcmp(h, "except") == 0 || strcmp(h, "prefix") == 0 ||
+               strcmp(h, "rename") == 0;
+    if (!mod) { spec->lib = set; return true; }
+    if (set->as.list.len < 2) { err(set, "(%s <import set> ...) needs an import set", h); return false; }
+    if (!resolve_import_set(sl, set->as.list.items[1], spec)) return false;
+    if (strcmp(h, "only") == 0) {
+        FB kept = {0};
+        for (uint32_t i = 2; i < set->as.list.len; i++) {
+            Form *nm = set->as.list.items[i];
+            if (nm->tag != F_SYM) { err(nm, "(only ...) names must be identifiers"); free(kept.items); return false; }
+            fb_push(&kept, Sym(sl, nm->span, import_unwind(sl, spec, nm->as.sym)));
+        }
+        /* `only` inside `only`: the intersection is the outer list. */
+        free(spec->only.items);
+        spec->only = kept;
+        spec->has_only = true;
+        return true;
+    }
+    if (strcmp(h, "except") == 0) {
+        for (uint32_t i = 2; i < set->as.list.len; i++) {
+            Form *nm = set->as.list.items[i];
+            if (nm->tag != F_SYM) { err(nm, "(except ...) names must be identifiers"); return false; }
+            fb_push(&spec->except, Sym(sl, nm->span, import_unwind(sl, spec, nm->as.sym)));
+        }
+        return true;
+    }
+    if (strcmp(h, "rename") == 0) {
+        for (uint32_t i = 2; i < set->as.list.len; i++) {
+            Form *pr = set->as.list.items[i];
+            if (pr->tag != F_LIST || pr->as.list.len != 2 || pr->as.list.items[0]->tag != F_SYM ||
+                pr->as.list.items[1]->tag != F_SYM) {
+                err(pr, "(rename <set> (from to) ...) takes identifier pairs"); return false;
+            }
+            const Symbol *orig = import_unwind(sl, spec, pr->as.list.items[0]->as.sym);
+            fb_push(&spec->renames, pr->as.list.items[1]);
+            fb_push(&spec->renames, Sym(sl, pr->span, orig));
+        }
+        return true;
+    }
+    /* prefix */
+    if (set->as.list.len != 3 || set->as.list.items[2]->tag != F_SYM) {
+        err(set, "(prefix <set> <identifier>) takes one prefix identifier"); return false;
+    }
+    if (spec->prefix) { err(set, "an import set takes one (prefix ...)"); return false; }
+    spec->prefix = set->as.list.items[2]->as.sym;
+    return true;
+}
+static bool spec_excludes(const SchemeImportSpec *spec, const Symbol *s) {
+    for (uint32_t i = 0; i < spec->except.n; i++) if (spec->except.items[i]->as.sym == s) return true;
+    return false;
+}
+static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
+    bool ok;
+    const Symbol *mod = library_module(sl, spec->lib, &ok);
+    if (!ok) return;
+    /* An excluded name is no longer the library's: it resolves as the
+     * program's own (rn_global skips the standard map for it). */
+    for (uint32_t i = 0; i < spec->except.n; i++) {
+        const Symbol *x = spec->except.items[i]->as.sym;
+        if (sl->n_excluded < 64) sl->excluded[sl->n_excluded++] = x;
+        else { err(spec->except.items[i], "too many (except ...) names"); return; }
+    }
+    /* Renames: the new name means the library's (rn'd) name. */
+    FB refer = {0};
+    for (uint32_t i = 0; i + 1 < spec->renames.n; i += 2) {
+        const Symbol *orig = spec->renames.items[i + 1]->as.sym;
+        const Symbol *to = rn(sl, orig);
+        if (sl->n_renames < 64) {
+            sl->renames[sl->n_renames].from = spec->renames.items[i]->as.sym;
+            sl->renames[sl->n_renames].to   = to;
+            sl->n_renames++;
+        } else { err(spec->renames.items[i], "too many (rename ...) names"); free(refer.items); return; }
+        if (!spec->has_only) fb_push(&refer, Sym(sl, spec->renames.items[i + 1]->span, to));
+    }
+    if (spec->has_only)
+        for (uint32_t i = 0; i < spec->only.n; i++) {
+            const Symbol *o = spec->only.items[i]->as.sym;
+            if (!spec_excludes(spec, o)) fb_push(&refer, Sym(sl, spec->only.items[i]->span, rn(sl, o)));
+        }
+    if (spec->prefix) {
+        const Symbol *pfx = spec->prefix;
+        if (sl->n_prefixes >= 16) { err(spec->lib, "too many (prefix ...) imports"); free(refer.items); return; }
+        if (!mod) {
+            /* Auto-loaded: the names are global and bare, so the prefix just
+             * comes off.  Recorded as an alias-less rule. */
+            sl->prefixes[sl->n_prefixes].prefix = pfx->name;
+            sl->prefixes[sl->n_prefixes].plen   = pfx->len;
+            sl->prefixes[sl->n_prefixes].alias  = NULL;
+            sl->n_prefixes++;
+            free(refer.items);
+            return;
+        }
+        /* The alias is the prefix without a trailing ':' or '-'; `p:name` then
+         * reads as `p/name`, which is Turmeric's `:as p` spelling. */
+        char alias[128];
+        snprintf(alias, sizeof alias, "%s", pfx->name);
+        size_t al = strlen(alias);
+        while (al > 0 && (alias[al - 1] == ':' || alias[al - 1] == '-')) alias[--al] = '\0';
+        if (al == 0) { err(spec->lib, "(prefix ...) needs a non-empty prefix"); free(refer.items); return; }
+        sl->prefixes[sl->n_prefixes].prefix = pfx->name;
+        sl->prefixes[sl->n_prefixes].plen   = pfx->len;
+        sl->prefixes[sl->n_prefixes].alias  = I(sl, alias);
+        sl->n_prefixes++;
+        fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
+                                 Kw(sl, sp, sl->t_as), Sym(sl, sp, I(sl, alias))));
+        sl->needs_module = true;
+        /* A renamed name of a prefixed module still needs the bare export. */
+        if (refer.n > 0) {
+            fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
+                                     Kw(sl, sp, sl->t_refer), fb_vec(sl, &refer, sp)));
+        } else free(refer.items);
+        return;
+    }
+    if (!mod) { free(refer.items); return; }   /* a (scheme ...) library: already global */
+    if (spec->has_only || refer.n > 0) {
+        fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
+                                 Kw(sl, sp, sl->t_refer), fb_vec(sl, &refer, sp)));
+    } else {
+        free(refer.items);
+        fb_push(&sl->imports, Ln(sl, sp, 2, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod)));
+    }
+    sl->needs_module = true;
+}
+
 /* One import set -> zero or one Turmeric `(import ...)` form in sl->imports,
  * plus the rename/prefix rules `rename`/`prefix` need. */
 static void lower_import_set(SL *sl, Form *set) {
@@ -3442,86 +3621,10 @@ static void lower_import_set(SL *sl, Form *set) {
     bool ok;
     if (strcmp(h, "only") == 0 || strcmp(h, "rename") == 0 || strcmp(h, "prefix") == 0 ||
         strcmp(h, "except") == 0) {
-        if (set->as.list.len < 2) { err(set, "(%s <import set> ...) needs an import set", h); return; }
-        Form *inner = set->as.list.items[1];
-        if (inner->tag == F_LIST && inner->as.list.len > 0 && inner->as.list.items[0]->tag == F_SYM) {
-            const char *ih = inner->as.list.items[0]->as.sym->name;
-            if (strcmp(ih, "only") == 0 || strcmp(ih, "rename") == 0 || strcmp(ih, "prefix") == 0 ||
-                strcmp(ih, "except") == 0) {
-                err(set, "nested import sets are not supported yet; use one of only/prefix/rename directly on the library name");
-                return;
-            }
-        }
-        if (strcmp(h, "except") == 0) {
-            err(set, "(except ...) is not supported: Turmeric's import has no \"all but\"; list the names with (only ...) instead");
-            return;
-        }
-        const Symbol *mod = library_module(sl, inner, &ok);
-        if (!ok) return;
-        if (strcmp(h, "only") == 0) {
-            FB names = {0};
-            for (uint32_t i = 2; i < set->as.list.len; i++) {
-                Form *nm = set->as.list.items[i];
-                if (nm->tag != F_SYM) { err(nm, "(only ...) names must be identifiers"); free(names.items); return; }
-                fb_push(&names, Sym(sl, nm->span, rn(sl, nm->as.sym)));
-            }
-            if (!mod) { free(names.items); return; }   /* already global */
-            fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
-                                     Kw(sl, sp, sl->t_refer), fb_vec(sl, &names, sp)));
-            sl->needs_module = true;
-            return;
-        }
-        if (strcmp(h, "rename") == 0) {
-            FB names = {0};
-            for (uint32_t i = 2; i < set->as.list.len; i++) {
-                Form *pr = set->as.list.items[i];
-                if (pr->tag != F_LIST || pr->as.list.len != 2 || pr->as.list.items[0]->tag != F_SYM ||
-                    pr->as.list.items[1]->tag != F_SYM) {
-                    err(pr, "(rename <set> (from to) ...) takes identifier pairs"); free(names.items); return;
-                }
-                const Symbol *from = rn(sl, pr->as.list.items[0]->as.sym);
-                if (sl->n_renames < 64) {
-                    sl->renames[sl->n_renames].from = pr->as.list.items[1]->as.sym;
-                    sl->renames[sl->n_renames].to   = from;
-                    sl->n_renames++;
-                }
-                fb_push(&names, Sym(sl, pr->span, from));
-            }
-            if (!mod) { free(names.items); return; }
-            fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
-                                     Kw(sl, sp, sl->t_refer), fb_vec(sl, &names, sp)));
-            sl->needs_module = true;
-            return;
-        }
-        /* prefix */
-        if (set->as.list.len != 3 || set->as.list.items[2]->tag != F_SYM) {
-            err(set, "(prefix <set> <identifier>) takes one prefix identifier"); return;
-        }
-        const Symbol *pfx = set->as.list.items[2]->as.sym;
-        if (sl->n_prefixes >= 16) { err(set, "too many (prefix ...) imports"); return; }
-        if (!mod) {
-            /* Auto-loaded: the names are global and bare, so the prefix just
-             * comes off.  Recorded as an alias-less rule. */
-            sl->prefixes[sl->n_prefixes].prefix = pfx->name;
-            sl->prefixes[sl->n_prefixes].plen   = pfx->len;
-            sl->prefixes[sl->n_prefixes].alias  = NULL;
-            sl->n_prefixes++;
-            return;
-        }
-        /* The alias is the prefix without a trailing ':' or '-'; `p:name` then
-         * reads as `p/name`, which is Turmeric's `:as p` spelling. */
-        char alias[128];
-        snprintf(alias, sizeof alias, "%s", pfx->name);
-        size_t al = strlen(alias);
-        while (al > 0 && (alias[al - 1] == ':' || alias[al - 1] == '-')) alias[--al] = '\0';
-        if (al == 0) { err(set, "(prefix ...) needs a non-empty prefix"); return; }
-        sl->prefixes[sl->n_prefixes].prefix = pfx->name;
-        sl->prefixes[sl->n_prefixes].plen   = pfx->len;
-        sl->prefixes[sl->n_prefixes].alias  = I(sl, alias);
-        sl->n_prefixes++;
-        fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
-                                 Kw(sl, sp, sl->t_as), Sym(sl, sp, I(sl, alias))));
-        sl->needs_module = true;
+        SchemeImportSpec spec = {0};
+        if (!resolve_import_set(sl, set, &spec)) { free(spec.only.items); free(spec.except.items); free(spec.renames.items); return; }
+        emit_import_spec(sl, sp, &spec);
+        free(spec.only.items); free(spec.except.items); free(spec.renames.items);
         return;
     }
     const Symbol *mod = library_module(sl, set, &ok);
@@ -3945,27 +4048,53 @@ static bool is_scheme_syntax_name(const char *name) {
         if (strcmp(name, syntax[i]) == 0) return true;
     return false;
 }
+/* The names one import set spells, through any nesting: an `only` list,
+ * both sides of a `rename` pair (the library's spelling, which the library
+ * renamed the same way, and the new name). */
+static const Symbol *import_set_prefix(const Form *set) {
+    if (set->tag != F_LIST || set->as.list.len < 2 || set->as.list.items[0]->tag != F_SYM) return NULL;
+    const char *h = set->as.list.items[0]->as.sym->name;
+    if (strcmp(h, "prefix") == 0 && set->as.list.len == 3 && set->as.list.items[2]->tag == F_SYM)
+        return set->as.list.items[2]->as.sym;
+    if (strcmp(h, "only") == 0 || strcmp(h, "except") == 0 || strcmp(h, "rename") == 0)
+        return import_set_prefix(set->as.list.items[1]);
+    return NULL;
+}
+/* A name written outside a `prefix` names the library's `name` less the
+ * prefix; push both spellings, since the library's is the one that clashes. */
+static void push_name_and_unprefixed(SL *sl, Form *nm, const Symbol *pfx, FB *out) {
+    fb_push(out, nm);
+    if (pfx && nm->as.sym->len > pfx->len && memcmp(nm->as.sym->name, pfx->name, pfx->len) == 0)
+        fb_push(out, Sym(sl, nm->span, I(sl, nm->as.sym->name + pfx->len)));
+}
+static void import_set_bound_names(SL *sl, const Form *set, FB *out) {
+    if (set->tag != F_LIST || set->as.list.len < 2 || set->as.list.items[0]->tag != F_SYM) return;
+    const char *h = set->as.list.items[0]->as.sym->name;
+    bool mod = strcmp(h, "only") == 0 || strcmp(h, "except") == 0 || strcmp(h, "prefix") == 0 ||
+               strcmp(h, "rename") == 0;
+    if (!mod) return;
+    import_set_bound_names(sl, set->as.list.items[1], out);
+    const Symbol *pfx = import_set_prefix(set->as.list.items[1]);
+    if (strcmp(h, "only") == 0 || strcmp(h, "except") == 0) {
+        for (uint32_t k = 2; k < set->as.list.len; k++)
+            if (set->as.list.items[k]->tag == F_SYM) push_name_and_unprefixed(sl, set->as.list.items[k], pfx, out);
+    } else if (strcmp(h, "rename") == 0) {
+        for (uint32_t k = 2; k < set->as.list.len; k++) {
+            const Form *pr = set->as.list.items[k];
+            if (pr->tag == F_LIST && pr->as.list.len == 2) {
+                if (pr->as.list.items[0]->tag == F_SYM) push_name_and_unprefixed(sl, pr->as.list.items[0], pfx, out);
+                if (pr->as.list.items[1]->tag == F_SYM) fb_push(out, pr->as.list.items[1]);
+            }
+        }
+    }
+}
 static void import_bound_names(SL *sl, const Form *f, FB *out) {
     if (head_is(f, sl->s_define_library)) {
         for (uint32_t i = 2; i < f->as.list.len; i++) import_bound_names(sl, f->as.list.items[i], out);
         return;
     }
     if (!head_is(f, sl->s_import)) return;
-    for (uint32_t i = 1; i < f->as.list.len; i++) {
-        const Form *set = f->as.list.items[i];
-        if (set->tag != F_LIST || set->as.list.len < 3 || set->as.list.items[0]->tag != F_SYM) continue;
-        const char *h = set->as.list.items[0]->as.sym->name;
-        if (strcmp(h, "only") == 0) {
-            for (uint32_t k = 2; k < set->as.list.len; k++)
-                if (set->as.list.items[k]->tag == F_SYM) fb_push(out, set->as.list.items[k]);
-        } else if (strcmp(h, "rename") == 0) {
-            for (uint32_t k = 2; k < set->as.list.len; k++) {
-                const Form *pr = set->as.list.items[k];
-                if (pr->tag == F_LIST && pr->as.list.len == 2 && pr->as.list.items[1]->tag == F_SYM)
-                    fb_push(out, pr->as.list.items[1]);
-            }
-        }
-    }
+    for (uint32_t i = 1; i < f->as.list.len; i++) import_set_bound_names(sl, f->as.list.items[i], out);
 }
 static void add_clash(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_clash; i++) if (sl->clash_from[i] == s) return;
