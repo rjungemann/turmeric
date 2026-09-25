@@ -3,8 +3,8 @@
 > **Status:** SC0-SC6 **landed 2026-09-16** behind the gate (see section 7);
 > **SC7 (graduation) landed 2026-09-25** (see section 8). **SC8a (the lattice
 > classes) and its SC9 docs landed 2026-09-25**, unreleased (see section 10).
-> SC8b (the auto-loaded classes) is measured and staged; four of its five steps
-> are ready and one waits on a compiler fix.
+> SC8b (the auto-loaded classes) is measured and staged; all five steps are
+> ready, the last since the partial-head `ap` fix (section 10).
 > **Type:** compiler feature (elaboration only, no codegen), plus a
 > **documentation correction that is independently shippable and should land
 > first**.
@@ -476,18 +476,17 @@ In order, cheapest first:
    `ArrowZero` but deliberately no `Arrow`. Declare `ArrowZero` over
    `Category` instead, which every instance satisfies and which is all its
    laws need.
-5. **`Monad` over `Applicative` -- blocked on a compiler fix.**
-   `stdlib/result.tur` has `Functor` and `Monad` for `(Result _ B)` and no
-   `Applicative`. Adding the instance is the right fix, but compiled `ap` over
-   a partial head segfaults today
-   ([partial-head-ap-calls-fat-closure-as-thin-pointer](../reported/partial-head-ap-calls-fat-closure-as-thin-pointer.md)),
-   so shipping it would turn a clean "no instance" error into a crash for
-   anyone who calls `ap` on a `Result`. **Do not** take `Monad` over
-   `Functor` as a stopgap: moving it to `Applicative` later would be a
-   second breaking change for every downstream `Monad` instance. Hold
-   `Monad` flat until the report is fixed, then add the instance and the
-   `Applicative` preamble together. One fixture, `hkt-constrained-wide-byvalue-carrier`
-   (`Pad2`), also gains `Functor` and `Applicative` instances in that change.
+5. **`Monad` over `Applicative` -- ready, with one fixture edit.** It was
+   blocked because `stdlib/result.tur` had `Functor` and `Monad` for
+   `(Result _ B)` but no `Applicative`, and compiled `ap` over a partial head
+   segfaulted. That was fixed on 2026-09-25
+   ([partial-head-ap-calls-fat-closure-as-thin-pointer](../archive/partial-head-ap-calls-fat-closure-as-thin-pointer.md))
+   and `Applicative [(Result _ B)]` now ships. Measured with the preamble
+   applied: the full suite has one failure, `hkt-constrained-wide-byvalue-carrier`,
+   whose `Pad2` declares `Monad` with no `Functor` or `Applicative`; it gains
+   both instances in the same change. **Do not** take `Monad` over `Functor`
+   as a stopgap: moving it to `Applicative` later would be a second breaking
+   change for every downstream `Monad` instance.
 
 `Eq`, `Functor`, `Hash`, `Show`, `Clone`, `Drop`, `Bifunctor`, `Num`,
 `From`/`Into` have no natural superclass and stay flat.
@@ -587,8 +586,9 @@ graduated the feature in 0.54.0 (section 8); SC8a retrofitted the lattice
 classes and SC9 updated the guides, unreleased (section 10). Graduation was
 the gate to stdlib adoption, not an end state, and adoption has started.
 Next is SC8b, one auto-loaded class per change: `Ord` over `Eq` first,
-because it is free and the most used. `Monad` over `Applicative` waits on
-[partial-head-ap-calls-fat-closure-as-thin-pointer](../reported/partial-head-ap-calls-fat-closure-as-thin-pointer.md).
+because it is free and the most used. All five SC8b steps are ready: the
+`ap` crash that held `Monad` over `Applicative` is fixed and `Result` has its
+`Applicative` instance (section 10).
 
 ## 6. See also
 
@@ -809,7 +809,7 @@ by the class its TUR-E0393 names):
 | `ArrowZero` <- `Category` | none | none | none (no instances) |
 | `ArrowChoice`/`ArrowLoop`/`ArrowApply` <- `Arrow`, `ArrowPlus` <- `ArrowZero` | none | none | none (no instances) |
 | `Monad` <- `Functor` | none (6/6) | `Pad2` in `hkt-constrained-wide-byvalue-carrier` (grep audit; not in the suite run) | none (no instances) |
-| `Monad` <- `Applicative` | `(Result _ B)` in `stdlib/result.tur` | not measured: the stdlib stops compiling | none (no instances) |
+| `Monad` <- `Applicative` | none, once `Applicative [(Result _ B)]` shipped (was: `(Result _ B)`) | `Pad2` in `hkt-constrained-wide-byvalue-carrier` (full suite, re-measured) | none (no instances) |
 
 The `crdt` spice is the only one that loads the lattice file. Its own test
 suite (`tur test tests/crdt`, 8 tests including a 400-seed convergence run)
@@ -845,12 +845,21 @@ The first stdlib adoption, unreleased at the time of writing.
   turi parity guide, and the changelog's `[Unreleased]` entry, which names
   the breaking half: a downstream `Monoid`, `BoundedJoin` or `BoundedMeet`
   instance without its superclass instance now stops at TUR-E0393.
-- **Found while measuring SC8b, not fixed here:** compiled `ap` over a
-  partial-head instance segfaults
-  ([report](../reported/partial-head-ap-calls-fat-closure-as-thin-pointer.md)),
-  which is what holds `Monad` over `Applicative`; and `Kleisli`'s missing
-  `Arrow` instance is by design, which moved `ArrowZero`'s planned
-  superclass from `Arrow` to `Category`.
+- **Found while measuring SC8b, and fixed the same day:** compiled `ap` over
+  a partial-head instance segfaulted, which held `Monad` over `Applicative`.
+  The instance body read a hole-at-0 head with its arms swapped, the call site
+  could not ground `ap`'s result, and the head binding ran inside generics;
+  all three are fixed in `src/compiler/elab_typeclasses.c`, and
+  `Applicative [(Result _ B)]` ships in `stdlib/result.tur`
+  ([resolved report](../archive/partial-head-ap-calls-fat-closure-as-thin-pointer.md)).
+  Two older defects surfaced on the way and are filed, not fixed:
+  [a `bool` closure read through the int64 carrier](../reported/narrow-closure-result-read-through-int64-carrier.md)
+  can print true for false on the compiled path, through `Result`'s `fmap`
+  already and now through its `ap`; and
+  [a user constructor holding a capturing closure](../reported/defdata-ctor-fn-field-passes-pointer-as-int.md)
+  emits a C warning. Separately, `Kleisli`'s missing `Arrow` instance is by
+  design, which moved `ArrowZero`'s planned superclass from `Arrow` to
+  `Category`.
 - **A diagnostic nit for whoever next touches TUR-E0393:** the message
   reads "requires a Applicative [T] instance" and "requires a Arrow [T]
   instance". Fixture `expected.diag` files match on the "requires a

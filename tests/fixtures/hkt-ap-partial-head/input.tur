@@ -1,0 +1,49 @@
+;; partial-head-ap-calls-fat-closure-as-thin-pointer: `ap` over a hole-at-0
+;; instance head `(Either _ E)` on a user type.
+;;
+;; T4 stores the head `(Either _ E)` as `app(Either, E)` plus a hole index.
+;; The instance body used to substitute the class method's `(f X)` as
+;; `(Either E X)` -- arms swapped -- so in `ap` the `Right` payload was typed as
+;; the fixed arm `E`, not the function.  Calling it was "'f' is not a
+;; function", and the ascription that worked around that emitted a thin C call
+;; on a fat closure box: a segfault on the compiled path, the right answer
+;; under --interpret.  The body below is the natural spelling, with no
+;; ascription, and must print the same on both paths.
+;;
+;; No capturing closure here: building a user defdata whose field holds one
+;; trips a separate, pre-existing -Wint-conversion at the constructor call
+;; (docs/reported/defdata-ctor-fn-field-passes-pointer-as-int.md).
+;; hkt-ap-result-instance covers a capturing closure through `ap`.
+(defdata Either :copy [A E] (Right A) (Left E))
+
+(definstance Functor [(Either _ E)]
+  (fmap [c g] (match c (Right v) (Right (g v)) (Left e) (Left e))))
+
+(definstance Applicative [(Either _ E)]
+  (pure [x] (Right x))
+  (ap [ff fa]
+    (match ff
+      (Right f)
+      (match fa (Right a) (Right (f a)) (Left e) (Left e))
+      (Left e)
+      (Left e))))
+
+(defn show [r : (Either int int)] : int
+  (match r (Right v) (do (println v) 0) (Left e) (do (println (- 0 e)) 0)))
+
+;; Dispatch through the class, not a statically resolved instance.
+(defn ap-twice [^Applicative F] [ff : (F (fn [int] int)) fa : (F int)] : (F int)
+  (ap ff (ap ff fa)))
+
+(defn main [] : int
+  (let [dbl (:: (Right (fn [x : int] : int (* x 2))) (Either (fn [int] int) int))
+        inc (:: (Right (fn [x : int] : int (+ x 1))) (Either (fn [int] int) int))
+        bad (:: (Left 9) (Either (fn [int] int) int))
+        a21 (:: (Right 21) (Either int int))
+        e5  (:: (Left 5) (Either int int))]
+    (show (ap dbl a21))         ; 42  -- non-capturing function
+    (show (ap inc a21))         ; 22  -- a second function, same instance
+    (show (ap dbl e5))          ; -5  -- the argument's Left
+    (show (ap bad a21))         ; -9  -- the function's Left
+    (show (ap-twice inc a21)))  ; 23  -- through the Applicative dictionary
+  0)

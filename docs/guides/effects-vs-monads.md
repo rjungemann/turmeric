@@ -377,7 +377,7 @@ Reach for a monad value when the computation must be reified:
 | Type | Instances |
 |---|---|
 | `Option` | `Functor`, `Applicative`, `Monad`, `Alternative` |
-| `(Result _ B)` | `Functor`, `Monad`, `MonadError`, `Bifunctor` |
+| `(Result _ B)` | `Functor`, `Applicative`, `Monad`, `MonadError`, `Bifunctor` |
 | `Parser` | `Functor`, `Applicative`, `Monad`, `Alternative` |
 | `Backtrack` | `Functor`, `Applicative`, `Monad` |
 | `Goal` | `Functor`, `Applicative`, `Monad` |

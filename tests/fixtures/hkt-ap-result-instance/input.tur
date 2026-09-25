@@ -1,0 +1,33 @@
+;; The stdlib's `Applicative [(Result _ B)]` (stdlib/result.tur).  It could not
+;; ship while compiled `ap` over a partial head segfaulted
+;; (partial-head-ap-calls-fat-closure-as-thin-pointer); it is what lets
+;; `Monad` take `Applicative` as a superclass (typeclass-superclasses-plan
+;; SC8b).
+;;
+;; Each `ap` result below is handed to a parameter typed `(Result int int)`.
+;; That needs the call to ground its result type: before, `ap`'s `b` was read
+;; only from a function PARAMETER, and `ap` states it inside the receiver
+;; (`ff : (f (fn [a] b))`), so the result stayed `(type-app ? ?)` and the call
+;; was a TUR-E0001.
+(defn show [r : (Result int int)] : int
+  (match r (Ok v) (do (println v) 0) (Err e) (do (println (- 0 e)) 0)))
+
+(defn ap-twice [^Applicative F] [ff : (F (fn [int] int)) fa : (F int)] : (F int)
+  (ap ff (ap ff fa)))
+
+(defn main [] : int
+  (let [bump 5
+        dbl (:: (ok (fn [x : int] : int (* x 2))) (Result (fn [int] int) int))
+        cap (:: (ok (fn [x : int] : int (+ x bump))) (Result (fn [int] int) int))
+        bad (:: (err 9) (Result (fn [int] int) int))
+        a21 (:: (ok 21) (Result int int))
+        e5  (:: (err 5) (Result int int))
+        r1  : (Result int int) (ap dbl a21)]
+    (show r1)                               ; 42  -- let with a declared type
+    (show (ap cap a21))                     ; 26  -- capturing closure
+    (show (ap dbl e5))                      ; -5  -- the argument's err
+    (show (ap bad a21))                     ; -9  -- the function's err
+    (show (ap bad e5))                      ; -9  -- the function's err wins
+    (show (:: (pure 7) (Result int int)))   ; 7
+    (show (ap-twice cap a21)))              ; 31  -- through the dictionary
+  0)

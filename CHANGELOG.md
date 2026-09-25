@@ -22,6 +22,29 @@ All notable changes to Turmeric are documented here.
   auto-loaded classes (`Eq`, `Ord`, `Functor`, `Monad` and the rest) stay
   flat for now. SC8a of typeclass-superclasses-plan.
 
+### Added
+
+- **`Result` is an `Applicative`.** `stdlib/result.tur` ships
+  `Applicative [(Result _ B)]`: `pure` is `ok`, and `ap` applies an `ok`
+  function to an `ok` argument and returns the first `err` it meets, the
+  function's before the argument's. `(ap ff fa)` on a
+  `(Result (fn [int] int) int)` has the type `(Result int int)`, so its result
+  can go straight to a typed parameter.
+
+### Fixed
+
+- **Compiled `ap` over a partially applied instance head no longer
+  segfaults.** An instance over a head such as `(Result _ B)` or a user
+  `(Either _ E)` typed its own body with the arms swapped, so in `ap` the
+  function was typed as the fixed arm. The natural body did not type-check
+  ("'f' is not a function"), and the ascription that worked around it called
+  a fat closure as a plain C function pointer, crashing the compiled program
+  while `--interpret` printed the right answer. The instance body now puts the
+  applied type in the hole slot, and the call site grounds `ap`'s result from
+  the function inside the receiver. A related binding that ran inside
+  constrained generics, and paired a partial head's fixed variable with the
+  function, is now limited to statically resolved calls.
+
 ## [0.54.0] -- 2026-09-25
 
 ### Changed

@@ -309,6 +309,24 @@
 
 (definstance Functor [(Result _ B)]
   (fmap [container g] (match container (Ok v) (ok (g v)) (Err e) (err e))))
+;;; Applicative [(Result _ B)] -- pure is ok; ap applies an ok function to an ok
+;;; argument and returns the first err it meets (the function's before the
+;;; argument's).
+;;;
+;;; Example:
+;;;   (ap (ok (fn [x] (* x 2))) (ok 21))  ; => ok(42)
+;;;   (ap (ok (fn [x] (* x 2))) (err 5))  ; => err(5)
+;;;
+;;; Since: typeclass-superclasses-plan SC8b
+
+(definstance Applicative [(Result _ B)]
+  (pure [x] (ok x))
+  (ap [ff fa]
+    (match ff
+      (Ok f)
+      (match fa (Ok a) (ok (f a)) (Err e) (err e))
+      (Err e)
+      (err e))))
 ;;; Monad [(Result _ B)] -- bind sequences through ok; short-circuits on err.
 ;;;
 ;;; Example:
