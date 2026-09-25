@@ -51,6 +51,23 @@ All notable changes to Turmeric are documented here.
   ASan in `tests/run-r7rs-sanitize.sh`, at a collection every 31
   allocations.
 
+- **The keyword `:seed` compiles.** The symbol table's seeder shared the C
+  name `__tur_sym_seed` with the keyword's interned record, so every unit
+  with the runtime symbol registry (every `#lang r7rs` program) that spelled
+  `:seed` failed at the C compile. The seeder is now `__tur_symtab_seed`.
+  Fixture `r7rs-keyword-seed`.
+
+- **`(__TUR_RET__)` names the type an inline-C function returns.** A
+  non-generic inline-C function with a `:heap` result, such as
+  `(Map int int)` or `(Vec int)`, is declared `int64_t`, but `__TUR_RET__`
+  expanded to the typed pointer. The documented
+  `return (__TUR_RET__)(intptr_t)v;` drew a -Wint-conversion. Fixture
+  `inline-c-tur-ret-heap-result`.
+
+- **`tur jit`: a child forked while another thread generates code no longer
+  hangs.** The engine's lazy-generation lock is now taken around `fork`
+  (src/jit_engine.c).
+
 ## [0.54.0] -- 2026-09-25
 
 ### Changed

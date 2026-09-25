@@ -1,0 +1,36 @@
+;; `(__TUR_RET__)` in a non-generic inline-C body whose result is a `:heap`
+;; type names the type the emitted signature returns (the int64 carrier), so
+;; the documented `return (__TUR_RET__)(intptr_t)v;` compiles without a
+;; -Wint-conversion (docs/archive/tur-ret-disagrees-with-inline-c-signature.md).
+```c
+static void *stash_map, *stash_vec;
+```
+
+(defn keep-map [m : (Map int int)] : nil
+  ```c
+  stash_map = (void *)(intptr_t)m;
+  ```)
+(defn kept-map [] : (Map int int)
+  ```c
+  return (__TUR_RET__)(intptr_t)stash_map;
+  ```)
+(defn keep-vec [v : (Vec int)] : nil
+  ```c
+  stash_vec = (void *)(intptr_t)v;
+  ```)
+(defn kept-vec [] : (Vec int)
+  ```c
+  return (__TUR_RET__)(intptr_t)stash_vec;
+  ```)
+
+(defn main [] : int
+  (let [m : (Map int int) (map-new)
+        v : (Vec int) (vec-new)]
+    (keep-map (map-assoc (map-assoc m 1 10) 2 20))
+    (vec-push! v 7)
+    (vec-push! v 8)
+    (keep-vec v)
+    (println (map-get (kept-map) 2))
+    (println (map-count (kept-map)))
+    (println (vec-get (kept-vec) 1))
+    0))

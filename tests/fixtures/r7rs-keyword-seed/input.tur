@@ -1,0 +1,9 @@
+#lang r7rs
+;; The keyword `:seed` is the interned record `__tur_sym_seed`; the symbol
+;; table's seeder used to carry the same C name, so any unit with the runtime
+;; registry (every #lang r7rs one) failed to compile
+;; (docs/archive/keyword-seed-collides-with-symbol-seeder.md).
+(import (scheme base) (scheme write) (turmeric stdlib/map))
+(define m #map{:seed 1 :other 2})
+(write (list (map-get m :seed) (map-count m) (eq? (string->symbol "seed") 'seed)))
+(newline)
