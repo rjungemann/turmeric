@@ -1,6 +1,6 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 through R10 landed 2026-09-23/24; Section 9's T0-T7 since.** `#lang r7rs` is a base
+Status: **R0 through R10 landed 2026-09-23/24; Section 9's T0-T8 since -- the plan is complete.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -55,9 +55,10 @@ written in the suite (a `test-numeric-syntax` form counts two). It was 887 on
 the interpreter, and a compiled build that did not finish, when it was first
 wired; 1082 at the end of R10, then 1096, 1103, 1134, 1147, 1151, 1152 and
 1223 after Section 9's T0-T6. Each landed stage carries a "What shipped" note
-below. What is left -- a memory audit (T8) -- is Section 9, with the tasks
-that changed what a Scheme program means and left Turmeric's and Saffron's
-semantics as they are.
+below. Section 9's tasks, which changed what a Scheme program means and left
+Turmeric's and Saffron's semantics as they are, are all landed; T8's audit
+closed them with a sanitizer gate (`tur_r7rs_sanitize`) and the reports it
+filed.
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -1764,7 +1765,7 @@ What `#lang r7rs` still does differently from R7RS, measured on 2026-09-24:
 chibi's suite passed 1082 of the 1216 tests written in it, on both back ends,
 and the runner counted 143 failed test invocations (a test-numeric-syntax
 form counts two). Every one of those 143 belonged to a task below; the counts
-per task are the runner's, as written before T0. T0-T7 have landed since:
+per task are the runner's, as written before T0. T0-T8 have landed since:
 1223 pass, 2 are settled (T7) and none fail, and the test lines each task
 turned green are struck from the tasks below (each task says so). Section
 9.3 lists the documented differences no chibi test reaches.
@@ -2556,7 +2557,8 @@ see "What shipped" at the end of the task.*
 >   "settled".
 
 **T8 -- a memory-safety and memory-leak audit of the R7RS features (0
-tests; last).**
+tests; last).** *Landed 2026-09-25; see "What shipped" at the end of the
+task.*
 
 - **Why:** T0-T5 added a lot of hand-written C and ownership decisions, and
   the suites cannot see most of what could go wrong with them:
@@ -2620,6 +2622,128 @@ tests; last).**
   - each finding fixed or filed under `docs/reported/`;
   - a short table in this task's "What shipped" of what each feature
     allocates, who frees it, and what is deliberately never freed.
+
+> **What shipped (T8, 2026-09-25).** The audit, its fixes, a standing gate,
+> and eight reports. No chibi count moves (1223 passed, 2 settled, 0 failed).
+>
+> - **How it was measured.** Every `r7rs-*` fixture was compiled with
+>   `-fsanitize=address,undefined` and run twice, once with leak detection
+>   off (for memory errors and output) and once with LeakSanitizer on; and
+>   run under `tur --interpret` (the sanitized Debug binary) both ways. The
+>   instrument was proved first with a planted `malloc(1234)`. Then each
+>   configuration was stressed with million-element inputs, at `-O2`, `-O1`
+>   and interpreted.
+> - **Memory errors: none in the fixtures**, on either back end, once the
+>   stack findings below were fixed. No ASan error, no UBSan finding, no
+>   output difference under the sanitizers.
+> - **Use-after-return.** With `detect_stack_use_after_return=1` forced on,
+>   the only failures, compiled and interpreted, are the two fixtures that
+>   RE-ENTER a continuation (`r7rs-continuations`,
+>   `r7rs-continuation-after-return`). ASan's fake stack is invisible to a
+>   stack copy, as T5 expected. `r7rs-eval`, and the fixtures that use
+>   `call/cc` only to escape, are clean. So T5's
+>   `detect_stack_use_after_return=0` default hides nothing else.
+> - **The stack: the largest finding.** The prelude overflowed the C stack on
+>   long inputs, and at the default `-O2`, not only in sanitized builds.
+>   - The list builders -- `append`, `list-copy`, `list`, `map`,
+>     `string->list`, `vector->list`, bytevector reads, `apply`'s spread,
+>     `command-line` -- recursed as `(R7rsPair x (self ...))`, one C frame per
+>     element. They now append at a tail pointer (`r7rs-snoc__`), a self tail
+>     call the compiler lowers to a loop. `map` builds in reverse and
+>     reverses instead: `f` may capture a continuation, and re-entering it
+>     must not change a list `map` already returned (`r7rs-continuations`
+>     caught the first version).
+>   - The many-list `map`/`for-each` (so `string-map`, `vector-map`) called
+>     `f` through `r7rs-apply-list__`, a separate CPS procedure that resumed
+>     the loop from inside its own frame. They call it in the loop body now.
+>   - `equal?` was quadratic (it searched a list of the pairs under
+>     comparison): two equal 10^5-element lists took half a minute. It is
+>     union-find now (Adams and Dybvig), linear, and a cycle through vectors
+>     terminates.
+>   - 27 statement loops (fills, copies, port readers, the printer's walks,
+>     the reader's skips) became value-returning `-lp__` loops behind their
+>     `: nil` names: a `: nil` self tail call is not a loop
+>     ([void-self-tail-call-not-lowered](../reported/void-self-tail-call-not-lowered.md);
+>     the cleanup is
+>     [r7rs-prelude-value-returning-loop-workaround](../reported/r7rs-prelude-value-returning-loop-workaround.md)).
+>   - A CPS loop is still only as deep as gcc's sibling calls make it: it
+>     overflows at `-O1`
+>     ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md)).
+>   - A million-element `append`, `map` (one to four lists), `string-map`,
+>     `vector-map`, `list-copy`, `string->list`, `vector->list`, `equal?`,
+>     `read-line`, `read` and `write` now pass compiled at `-O2` and
+>     interpreted.
+> - **Scratch leaks fixed**: memory the prelude made for one call that
+>   nothing could reach afterwards.
+>   - The printer freed none of the number spellings it wrote: 3.2 MB in
+>     `r7rs-write-labels`. `r7rs-pr-atom__` frees the ones it made.
+>   - `quotient`, `remainder` and `modulo` built their error message on every
+>     call; it is built on the failing path only.
+>   - The bignum core's decimal temporaries (`r7rs-dec-done__`), and its
+>     result's spelling when that fits an int.
+>   - A mutable string's re-encoding (every seam crossing) was a
+>     divide-and-conquer of appends, O(n log n) garbage. It is one buffer
+>     (`r7rs-io-add-code__`). `utf8->string` appended a character at a time,
+>     quadratic in time and garbage; it decodes straight to code points.
+>     `write-char` and `read-string` no longer make a string per character.
+>   - `display`, `write`, `newline` and the rest built a list of their rest
+>     arguments to find the port (`r7rs-port-of-chain__` reads the chain).
+>   - `number->string` on a ratio or a complex number freed none of its
+>     parts.
+>   - A new `r7rs-cstr-free__` (with its interpreter twin) is the one way the
+>     prelude releases a string.
+> - **Found and fixed in this plan's own shared code:** the dynamic call's
+>   rest packing (R6) called the region allocator unconditionally, an
+>   undeclared function under `TUR_REGIONS=0`, whose implicit `int`
+>   truncated the pointer. Any program that made a variadic dynamic call
+>   segfaulted on that arm. It chooses `malloc` there now, as every other
+>   allocation site does.
+> - **Region store hooks.** The `call/cc` stack image is a store of every
+>   word on the stack into memory that outlives any bracket around it, and
+>   carried no note. A Turmeric caller that called a Scheme library inside
+>   `with-region` got back a node whose memory the bracket had rewound -- a
+>   silent wrong answer (`-2387225703656530210` where `TUR_REGIONS=0` printed
+>   7). The capture notes its image now (`TUR_REGION_NOTE_WORDS`). New
+>   fixture `region-escape-via-callcc`, in `tests/run-regions-seam.sh` too;
+>   CLAUDE.md's hooked-store list names it. No other inline C under
+>   `stdlib/r7rs/` stores an erased word: the identity table keeps addresses
+>   it never dereferences, for one call.
+> - **A regression caught on the way.** Under a Turmeric entry file the
+>   prelude is checked with the affine rules, and handing an `R7rsIo` or
+>   `R7rsIdTab` to a procedure defined LATER in the file reads as a move
+>   (TUR-E0005). The first union-find broke every Turmeric program that
+>   imports a Scheme library (`tests/run-r7rs-import.sh`), so the helpers now
+>   sit after the table they use.
+> - **The gate.** `tests/run-r7rs-sanitize.sh` (ctest `tur_r7rs_sanitize`)
+>   compiles every Scheme fixture with ASan and UBSan (UB fatal) and runs it
+>   with leak detection off, checking its output and exit. A planted double
+>   free fails it. The interpreter side needs nothing new: `run-turi.sh`
+>   already runs every r7rs fixture under the sanitized `tur`.
+> - **Leaks are not gated, by a named exemption.** Every Scheme heap value is
+>   a `:heap` box, which the memory model never frees
+>   ([r7rs-heap-data-never-reclaimed](../reported/r7rs-heap-data-never-reclaimed.md)):
+>   a loop building a dead four-element list peaks at 429 MB for 10^6
+>   iterations. So no `r7rs-*` fixture is opted into `run-leak-check.sh`;
+>   with `known-leak` it could only assert that it leaks. Also filed:
+>   [r7rs-caught-raise-leaks-runtime-records](../reported/r7rs-caught-raise-leaks-runtime-records.md)
+>   (about 1 KB per caught `raise`) and
+>   [r7rs-remaining-scratch-leaks](../reported/r7rs-remaining-scratch-leaks.md).
+>
+> **What each feature allocates, and who frees it:**
+>
+> | feature | allocates | freed by | never freed |
+> |---|---|---|---|
+> | pairs, vectors, strings, records, boxes, promises, parameters | `:heap` boxes (`ctor_R7rs*`), `Vec` buffers | -- | all of it (the memory model; `r7rs-heap-data-never-reclaimed`) |
+> | numbers (T1, T2, T6) | `R7rsBig` digits, `R7rsRatio`, `R7rsComplex` | the core's scratch spellings (`r7rs-dec-done__`, `r7rs-big2__`) | the values themselves (Scheme data) |
+> | strings (T3) | code-point `Vec`s, re-encoded C strings | a seam crossing's re-encoding when the printer made it; `utf8->string`'s decode | the values; a literal's decode for one string operation (`r7rs-remaining-scratch-leaks`) |
+> | ports (R8) | `R7rsIo` buffers, `FILE`s | a scratch builder (`r7rs-io-take-str__`); a file's `FILE` at `close-port` | a port's buffer (it is Scheme data) |
+> | `write` / `display` | spellings, the label and seen tables | spellings (`r7rs-pr-atom__`), both tables (`r7rs-idtab-free__`) | -- |
+> | `read` | tokens, the label table | tokens (`r7rs-io-take-str__`), the table | the datum (Scheme data) |
+> | `equal?` | the identity table, the union-find `Vec` | both, on return | -- |
+> | `guard` / `raise` (R6) | escape records, DK frames | the frames, on a normal return | the lot, when the escape longjmps (`r7rs-caught-raise-leaks-runtime-records`) |
+> | `call/cc` (T5) | the stack image, a restore record; pins DK and driver memory | -- | all of it (`r7rs-callcc-memory-never-freed`) |
+> | `eval` (T4) | the embedded env, the bridge's texts | -- | the embedded env (process-lifetime, like the interpreter's); the result texts (`r7rs-remaining-scratch-leaks`) |
+> | the interpreter | frames, closures, driver temporaries | at `turi_env_free` (process exit) | all of it until then (gc-guide) |
 
 ### 9.3 Documented differences no chibi test reaches
 

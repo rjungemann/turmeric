@@ -134,7 +134,7 @@
         (if (= b 116) (r7rs-io-add-byte__ out 9)
           (if (= b 110) (r7rs-io-add-byte__ out 10)
             (if (= b 114) (r7rs-io-add-byte__ out 13)
-              (if (= b 120) (r7rs-io-add__ out (r7rs-string-of-code__ (r7rs-rd-hex-go__ io 0)))
+              (if (= b 120) (r7rs-io-add-code__ out (r7rs-rd-hex-go__ io 0))
                 (if (if (= b 32) true (if (= b 9) true (if (= b 10) true (= b 13))))
                   ;; the line continuation: \ <intraline ws> newline <intraline ws>
                   (do (if (= b 10) nil
@@ -364,7 +364,7 @@
 
 ;;; r7rs-read -- (read [port]): the next datum, or the eof object.
 (defn r7rs-read [& r : any] : any
-  (let [port (r7rs-port-arg__ (r7rs-chain->list__ (:: r (Cons any))) r7rs-current-input-port)]
+  (let [port (r7rs-port-of-chain__ (:: r (Cons any)) r7rs-current-input-port)]
     (r7rs-rd-datum__ (r7rs-in-io__ port) (:: (R7rsRd port r7rs-null-value__) any))))
 
 ;;; ---- T4: the eval bridge -----------------------------------------------

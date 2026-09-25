@@ -1,0 +1,37 @@
+;; r7rs-lang-plan T8: a Scheme `call/cc` copies the C stack into a heap image
+;; (r7rs-cont-capture__ in stdlib/r7rs/prelude.tur).  That copy is a store of
+;; every word on the stack into memory that outlives the bracket around it,
+;; and before T8 it carried no region note: `stash` below rewound its
+;; generation, `churn` reused the memory, and re-entering the continuation
+;; handed back a node whose field printed garbage, where TUR_REGIONS=0
+;; printed 7.  The capture notes its image now (TUR_REGION_NOTE_WORDS), so the
+;; generation retires and the node survives.
+;;
+;; A Scheme file cannot open a region (TUR-E0312); a Turmeric caller can call
+;; a Scheme library inside one, which is the case here.  resume! re-enters the
+;; continuation only to hand the node back through an escape continuation, so
+;; the first bracket's exit never runs twice.
+
+(defmodule main
+  (import ccreg :refer [capture! resume!])
+  (defdata Link :heap (Link [v : int nxt : int]))
+  (defdata TL :heap (TNil) (TCons :int :TL))
+  (defn tbuild [n : int acc : TL] : TL
+    (if (<= n 0) acc (tbuild (- n 1) (TCons 99 acc))))
+  (defn tsum [t : TL] : int
+    (match t
+      (TNil) 0
+      (TCons v r) (+ v (tsum r))))
+  ;; The node is built in the bracket and reaches Scheme only as an `any`
+  ;; argument, so the continuation's stack image is what holds it.
+  (defn stash [] : int
+    (with-region (fn [] (cast (capture! (:: (Link 7 0) any)) int))))
+  ;; A second bracket that reuses whatever the first one rewound.
+  (defn churn [] : int
+    (with-region (fn [] (tsum (tbuild 50 (TNil))))))
+  (defn main [] : int
+    (println (stash))
+    (println (churn))
+    (let [n (cast (resume!) Link)]
+      (println (match n (Link v x) v)))
+    0))

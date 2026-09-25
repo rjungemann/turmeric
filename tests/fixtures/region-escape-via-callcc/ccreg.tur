@@ -1,0 +1,15 @@
+#lang r7rs
+;; The Scheme half of region-escape-via-callcc (see input.tur): capture! keeps
+;; a continuation that holds `node`, and resume! re-enters it later to hand the
+;; node back out.
+(define-library (ccreg)
+  (export capture! resume!)
+  (import (scheme base))
+  (begin
+    (define saved #f)
+    (define out #f)
+    (define (capture! node)
+      (let ((r (call/cc (lambda (k) (set! saved k) 'first))))
+        (if (eq? r 'first) 1 (out node))))
+    (define (resume!)
+      (call/cc (lambda (k) (set! out k) (saved 'again))))))

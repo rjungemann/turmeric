@@ -2697,6 +2697,14 @@ static TuriValue native_r7rs_io_free(TuriEnv *env, TuriValue *a, uint32_t n, voi
 static size_t r7rs_idtab_slot(uintptr_t key, size_t cap) {
     return (size_t)(((key >> 4) ^ (key >> 13)) & (cap - 1));
 }
+/* r7rs-cstr-free__ (T8) -- release a scratch string the prelude made and no
+ * value holds; the twin of the prelude's inline C.  turi_cstr wraps the
+ * pointer without copying, so this is the native's own malloc. */
+static TuriValue native_r7rs_cstr_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) free((void *)a[0].as_cstr);
+    return turi_nil();
+}
 static TuriValue native_r7rs_idtab_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)a; (void)n; (void)ud;
     r7rs_idtab *t = (r7rs_idtab *)calloc(1, sizeof(r7rs_idtab));
@@ -3999,6 +4007,7 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-io-flush__", native_r7rs_io_flush, NULL);
     turi_env_register_native(env, "r7rs-io-close__", native_r7rs_io_close, NULL);
     turi_env_register_native(env, "r7rs-io-free__", native_r7rs_io_free, NULL);
+    turi_env_register_native(env, "r7rs-cstr-free__", native_r7rs_cstr_free, NULL);
     turi_env_register_native(env, "r7rs-idtab-new__", native_r7rs_idtab_new, NULL);
     turi_env_register_native(env, "r7rs-idtab-get__", native_r7rs_idtab_get, NULL);
     turi_env_register_native(env, "r7rs-idtab-put__", native_r7rs_idtab_put, NULL);

@@ -354,6 +354,15 @@ library's string result to `cstr` gets the same copy.
 
 - **String literals are immutable.** R7RS allows this. See Lists,
   vectors, strings above.
+- **Data is never freed.** There is no collector yet: every pair, vector,
+  string, record and procedure a program makes stays allocated until it
+  exits, so a long-running program's memory only grows (a loop that builds a
+  dead four-element list reaches 429 MB after a million iterations). Scratch
+  memory the runtime makes for one call is freed; your data is not.
+- **Very long loops need the default optimization level.** A prelude loop
+  that calls one of your procedures (`for-each`, `map`, `member`, a
+  `delay-force` stream) runs in constant stack at the default `-O2`, and can
+  overflow the stack on a million elements in an `-O1` build.
 - **`apply` and dynamic calls take at most four arguments.**
 - **`char-ready?` and `u8-ready?` always answer `#t`.**
 - **`(except ...)` in an import is refused.** A Turmeric import cannot say

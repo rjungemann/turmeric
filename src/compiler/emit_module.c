@@ -11330,8 +11330,16 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "typedef struct __tur_dyn_cons { tur_tagged_t head; struct __tur_dyn_cons *tail; } __tur_dyn_cons;\n"
         "static int64_t __tur_dyn_pack_rest(int __fixed, int __n, const tur_tagged_t *__a) {\n"
         "    __tur_dyn_cons *__t = NULL;\n"
-        "    for (int __i = __n - 1; __i >= __fixed; __i--) {\n"
-        "        __tur_dyn_cons *__c = (__tur_dyn_cons *)tur_region_alloc_or_malloc(sizeof *__c);\n"
+        "    for (int __i = __n - 1; __i >= __fixed; __i--) {\n");
+    /* r7rs-lang-plan T8: `malloc` under TUR_REGIONS=0, as every other
+     * allocation site here chooses.  The unconditional region call was an
+     * undeclared function on that arm -- an implicit `int` that truncated the
+     * pointer, and a segfault in any program that made a variadic dynamic
+     * call. */
+    buf_printf(out,
+        "        __tur_dyn_cons *__c = (__tur_dyn_cons *)%s(sizeof *__c);\n",
+        regions_enabled() ? "tur_region_alloc_or_malloc" : "malloc");
+    buf_puts(out,
         "        __c->head = __a[__i]; __c->tail = __t; __t = __c;\n"
         "    }\n"
         "    return (int64_t)(intptr_t)__t;\n"

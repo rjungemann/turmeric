@@ -6,6 +6,33 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: memory audit (r7rs-lang-plan T8).** Every Scheme fixture
+  was run under ASan, UBSan and LeakSanitizer on both back ends, and the
+  prelude was stressed with million-element inputs.
+  - **Stack.** `append`, `list-copy`, `list`, `map` (one to four lists),
+    `string-map`, `vector-map`, `string->list`, `vector->list`, `equal?`,
+    `read-line`, `read` and `write` handle a million elements at the default
+    `-O2` and interpreted; several overflowed the C stack before.
+  - **`equal?` is linear** (union-find), where two equal 10^5-element lists
+    took half a minute, and a cycle through vectors now terminates.
+  - **Scratch leaks fixed.** The printer's number spellings (3.2 MB in one
+    fixture), `quotient`'s per-call message, the bignum core's temporaries,
+    the re-encoding of mutable strings, `utf8->string`'s per-character
+    appends, and the rest-argument lists `display` and friends built.
+  - **Regions.** A `call/cc` captured inside a Turmeric `with-region`
+    bracket kept pointers into memory the bracket then rewound, a silent
+    wrong answer. The capture now notes its stack image
+    (`region-escape-via-callcc`).
+  - **`TUR_REGIONS=0`.** A variadic dynamic call (any dialect) called an
+    undeclared region allocator on that arm and segfaulted; it uses
+    `malloc` there now.
+  - **Gate.** New `tests/run-r7rs-sanitize.sh`, ctest `tur_r7rs_sanitize`:
+    every Scheme fixture compiled with ASan and UBSan and run.
+  - **Known and filed.** A Scheme program's data is never freed (no
+    collector); a caught `raise` leaks about 1 KB; a `: nil` self tail call,
+    and a CPS one below `-O2`, is not a loop (the prelude works around the
+    first). No output of any fixture changes.
+
 - **R7RS conformance: settled tests (r7rs-lang-plan T7).** The conformance
   runner now reports `P passed, S settled, F failed`. A settled test fails on
   a difference kept on purpose, where R7RS allows both answers and chibi's

@@ -740,7 +740,9 @@ written in it pass, on both back ends, and the rest are the named carve-outs
 (bignums, exact rationals, complex numbers, mutable strings, `eval`,
 re-entrant `call/cc`); Section 9's tasks have since closed all of them, for
 1223 passing invocations and none failing (two tests of chibi's own float
-spelling, `e+308`, are counted as settled: R7RS allows both). `(scheme char)` maps and
+spelling, `e+308`, are counted as settled: R7RS allows both). A Scheme
+program's data is never freed -- there is no collector yet -- and every
+Scheme fixture runs under ASan and UBSan in `tur_r7rs_sanitize` (T8). `(scheme char)` maps and
 classifies all of Unicode, from tables generated out of the Unicode
 database. The full
 reference is [r7rs-guide.md](r7rs-guide.md).

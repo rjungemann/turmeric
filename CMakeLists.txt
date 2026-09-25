@@ -226,6 +226,17 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_leak_check PROPERTIES RUN_SERIAL TRUE)
+# r7rs-lang-plan T8: every `#lang r7rs` fixture compiled with ASan and UBSan
+# (UB fatal) and run -- a memory error in the prelude's inline C, the emitted
+# Scheme code or the runtime fails it.  Leaks are not checked: Scheme heap data
+# is never freed by design (docs/reported/r7rs-heap-data-never-reclaimed.md).
+# Fans out across nproc on its own, so RUN_SERIAL.
+add_test(
+  NAME tur_r7rs_sanitize
+  COMMAND bash tests/run-r7rs-sanitize.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_sanitize PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
 add_test(
   NAME tur_cli_tests
   COMMAND bash tests/run-cli.sh

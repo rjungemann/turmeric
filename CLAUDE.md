@@ -330,7 +330,8 @@ The hooked set today: `vec-push!`/`vec-set-o!`, `mutmap-set!`, the HAMT
 setters, `bt-set!`/`g-set!`, `atomic-store!/swap!/cas!`, `gen-arr-push!`,
 `grid-set!`, `rcvec-push!`, `set!` on a global or shared cell, `set-field!`,
 `set-deref!`, the closure-env fill, the malloc'd ctor boxes, the element-box
-helpers, `rc/of`, and every erasing ascription. A new `-set!`/`-push!`/insert
+helpers, `rc/of`, every erasing ascription, and the `#lang r7rs` `call/cc`
+stack image (`TUR_REGION_NOTE_WORDS` over the copy; `region-escape-via-callcc`). A new `-set!`/`-push!`/insert
 primitive, a new boxing site, or a new cell type joins the list in the same
 change, and `tests/fixtures/region-escape-via-store` gets the case. A missed
 hook is a silent use-after-rewind on the default build -- exactly what
