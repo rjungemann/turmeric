@@ -6,8 +6,8 @@ description: Why Turmeric chose the type system features it did, why dependent t
 
 # Advanced Type System -- Design Rationale
 
-Turmeric's type system evolved through a deliberate process of evaluating a large
-set of candidate features against a small set of fixed constraints. This guide
+Turmeric's type system evolved through a deliberate process of evaluating a
+large set of candidate features against a set of fixed constraints. This guide
 explains what those constraints are, why each shipped feature clears them, and
 what happened to the two well-known features that were deferred for v1.0.0:
 dependent types, which remain deferred, and refinement types, which shipped in
@@ -20,16 +20,12 @@ Every advanced type system feature was measured against four tests:
 
 1. **Aligns with Turmeric's goals** -- Lisp expressiveness, systems-level
    control, zero-cost abstractions.
-2. **Fits the C99 target** -- no garbage collector, manual or ownership-based
-   memory, predictable performance, debuggable output.
+2. **Fits the C99 target** -- no required garbage collector, manual or
+   ownership-based memory, predictable performance, debuggable output.
 3. **Composes with existing features** -- borrow checking, RC, typeclasses,
    algebraic effects. A feature that breaks the others is not worth having.
 4. **Justifiable complexity** -- the elaborator and codegen changes must be
    proportionate to the user-facing benefit.
-
-"Justifiable" depends on demand. A feature with Very High complexity needs clear,
-concrete use cases from actual Turmeric programs. One with Low complexity can
-ship even if demand is speculative.
 
 > **A note on flags.** All features described below are enabled by default
 > in the compiler -- there is no opt-in flag to set. Historical `-X`
@@ -43,9 +39,9 @@ ship even if demand is speculative.
 
 ### Why these features fit
 
-Turmeric already had `ref<T>` (move-only, unique ownership) from Phase 5.
-Linear, affine, and relevant types are a natural extension of that discipline to
-the full substructural lattice:
+Turmeric already had `ref<T>` (move-only, unique ownership). Linear, affine,
+and relevant types are a natural extension of that discipline to the full
+substructural lattice:
 
 | Annotation | Can be dropped | Can be duplicated | Use case |
 |---|---|---|---|
@@ -146,8 +142,8 @@ abandons a live linear channel.
 
 ## Effect types and row polymorphism
 
-Turmeric's algebraic effects (Phase 19) were untyped in their first iteration:
-any function could perform any effect, and the type system did not track which
+Turmeric's algebraic effects were untyped in their first iteration: any
+function could perform any effect, and the type system did not track which
 effects a computation used. Effect types make effect rows first-class.
 
 ```turmeric
@@ -180,9 +176,9 @@ Effect rows are compile-time only. They carry no runtime representation --
 nothing is boxed, tagged, or heap-allocated because of an effect annotation.
 This satisfies the zero-cost constraint.
 
-The `forall [e]` quantifier (effect polymorphism) requires Rank-2 types (HRT
-Phase 1). HKT and HRT were prerequisites for this reason. The dependency is
-explicit and documented.
+The `forall [e]` quantifier (effect polymorphism) requires Rank-2 types. HKT
+and HRT were prerequisites for this reason. The dependency is explicit and
+documented.
 
 Linear continuations (`^linear k`) and multi-shot continuations (`^multishot`)
 extend effect handling to resource-safe and nondeterministic use cases
@@ -382,13 +378,12 @@ defn print-it [e : (exists [a] [(Show a)] a)] :unit
 
 ### Why these features fit
 
-Existentials are the missing half of Turmeric's quantifier story. HKT (Phase
-S1--S8) gave the language `forall` and Rank-2 polymorphism; existentials
-complete the pair by giving callees a way to return values whose concrete type
-is private. Heterogeneous collections (`(vec (exists [a] [(Show a)] a))`),
-plugin APIs that hand back opaque handles, and abstract data types whose
-representation is sealed at the module boundary all fall out of the same
-construct.
+Existentials are the missing half of Turmeric's quantifier story. HKT gave the
+language `forall` and Rank-2 polymorphism; existentials complete the pair by
+giving callees a way to return values whose concrete type is private.
+Heterogeneous collections (`(vec (exists [a] [(Show a)] a))`), plugin APIs that
+hand back opaque handles, and abstract data types whose representation is
+sealed at the module boundary all fall out of the same construct.
 
 The codegen story reuses infrastructure that already exists. A packed
 existential is a `struct` holding the inner value (or a pointer to it) and one
@@ -481,8 +476,6 @@ it prove that `(>= (+ x 1) 0)` holds? The assumption at the time was that this
 means an SMT solver -- Z3 or equivalent -- integrated into the elaborator, and
 so a hard external dependency on the compiler's critical path.
 
-The v4 infrastructure had already reduced the surrounding work:
-
 | Phase | Status after v4 |
 |---|---|
 | Syntax (`#refine{ x : T \| p }`) | Done -- Contract Types use the same syntax |
@@ -539,7 +532,7 @@ The shipped features are not independent additions. They form a dependency
 graph:
 
 ```
-Algebraic effects (Phase 19)
+Algebraic effects
   +-- Effect Types / Row Polymorphism
         +-- Linear Continuations, Multi-Shot Continuations
 
