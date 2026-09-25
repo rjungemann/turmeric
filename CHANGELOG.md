@@ -32,6 +32,14 @@ All notable changes to Turmeric are documented here.
   archived: toplevel-def-initializers-run-before-toplevel-expressions.
   Found on the way: a Scheme procedure body cannot name a top-level
   variable defined after it (r7rs-procedure-body-forward-reference).
+- **`#lang r7rs`: `map` and `for-each` take up to eight sequences**, the
+  shim arity, where a fifth was a runtime error; `vector-map`,
+  `vector-for-each`, `string-map` and `string-for-each` share the walker
+  and the new cap. The arms are spelled inline like the first four, so the
+  million-element `(map + a b)` still runs at `-O2` (a helper call per
+  element overflowed the stack, r7rs-lang-plan T8). Five- and
+  eight-sequence cases in `tests/fixtures/r7rs-base-library`; archived:
+  r7rs-map-for-each-at-most-four-sequences.
 - **`#lang r7rs`: each top-level form runs under its own prompt.** A
   continuation captured in a top-level form was the rest of the program
   (the stack image reached `main`'s frame, or the interpreter's loop over

@@ -364,10 +364,6 @@ library's string result to `cstr` gets the same copy.
 
 - **String literals are immutable.** R7RS allows this. See Lists,
   vectors, strings above.
-- **`map` and `for-each` take at most four sequences.** A fifth is an error
-  naming the limit, on both back ends, and `vector-map`, `vector-for-each`,
-  `string-map` and `string-for-each` share it. Past four, walk the sequences
-  yourself.
 - **`define-record-type` is a top-level or library-body form.** R7RS counts it
   a definition, so it may open any body; here one inside a `lambda` or `let`
   body is an error naming the restriction. Define the type at the top level

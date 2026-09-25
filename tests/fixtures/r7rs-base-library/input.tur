@@ -50,3 +50,11 @@
 (define (f . xs) xs)
 (display (apply f 1 '(2 3))) (newline)
 (display (vector-append #(1) #())) (newline)
+;; r7rs-map-for-each-at-most-four-sequences: the cap is the shim arity (8).
+(display (map + '(1 2) '(10 20) '(100 200) '(1000 2000) '(10000 20000))) (newline)
+(display (map list '(1) '(2) '(3) '(4) '(5) '(6) '(7) '(8))) (newline)
+(for-each (lambda (a b c d e) (display (list a b c d e))) '(1 2) '(3 4) '(5 6) '(7 8) '(9 10)) (newline)
+(display (string-map (lambda (a b c d e) e) "ab" "cd" "ef" "gh" "ij")) (newline)
+(string-for-each (lambda (a b c d e) (display e)) "ab" "cd" "ef" "gh" "ij") (newline)
+(display (vector-map (lambda (a b c d e) (+ a b c d e)) #(1 2) #(1 2) #(1 2) #(1 2) #(1 2))) (newline)
+(vector-for-each (lambda (a b c d e) (display (+ a b c d e))) #(1 2) #(1 2) #(1 2) #(1 2) #(1 2)) (newline)

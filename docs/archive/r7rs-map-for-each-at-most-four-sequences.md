@@ -1,5 +1,16 @@
 # `#lang r7rs`: `map` and `for-each` take at most four sequences
 
+**RESOLVED 2026-09-25.** `r7rs-mapn-go__` and `r7rs-for-eachn-go__` carry
+arms 5 through 8, spelled inline like 1 through 4 (`r7rs-head-of__` reads a
+head past the fourth), so the cap is the shim arity
+(`TUR_FAT_SHIM_MAX_ARITY`, eight) and the fall-through message names it. The
+five- and eight-sequence cases of `map`, `for-each`, `string-map`,
+`string-for-each`, `vector-map` and `vector-for-each` are in
+`tests/fixtures/r7rs-base-library`; the million-element `(map + a b)` still
+runs at the default `-O2` (4.1 s wall for two 10^6-element lists, most of it
+building them). The guide's bullet is deleted. Original report follows.
+
+
 **Severity:** low-medium. R7RS 6.10 puts no limit on the number of lists
 `map` and `for-each` accept; a fifth is a runtime error on both back ends.
 `vector-map`, `vector-for-each`, `string-map` and `string-for-each` share the

@@ -2790,9 +2790,11 @@ differences, as reports"):
 - **A procedure body cannot name a top-level variable defined after it**
   ([r7rs-procedure-body-forward-reference](../reported/r7rs-procedure-body-forward-reference.md);
   found writing the fixture for the item above).
-- **`map` and `for-each` take at most four sequences**, the `-map`/`-for-each`
-  pair over vectors and strings with them
-  ([r7rs-map-for-each-at-most-four-sequences](../reported/r7rs-map-for-each-at-most-four-sequences.md)).
+- ~~**`map` and `for-each` take at most four sequences**, the `-map`/`-for-each`
+  pair over vectors and strings with them~~ -- resolved 2026-09-25: the cap
+  is the shim arity, eight, on both back ends
+  ([archived](../archive/r7rs-map-for-each-at-most-four-sequences.md)); past
+  eight is the `apply` bullet's limit.
 - **`define-record-type` is not an internal definition** -- top level or a
   library body only
   ([r7rs-define-record-type-not-an-internal-definition](../reported/r7rs-define-record-type-not-an-internal-definition.md)).
