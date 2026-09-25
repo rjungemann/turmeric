@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.52.0` -- `#lang r7rs` is a working R7RS-small Scheme -- the full numeric tower, mutable strings, `eval`, re-entrant `call/cc` and ports, 1223 of chibi's 1225 conformance tests on both back ends -- and self, mutual and dynamic tail calls run in constant stack.
+**Latest release:** `v0.53.0` -- `#lang r7rs` programs are garbage-collected by default on Linux and macOS, each top-level form runs under its own prompt so a re-entered continuation no longer re-runs the program, and a `.scm` file is Scheme without the `#lang` line.
 
 ## What
 

@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.53.0] -- 2026-09-25
 
 ### Added
 
@@ -16,6 +16,52 @@ All notable changes to Turmeric are documented here.
   `tur check` and `tur --interpret` take `.scm` entries; a `#lang` line in
   one is a redundant hint. `tests/run-r7rs-import.sh` covers a `.scm`
   program importing a `.scm` library on both back ends.
+
+### Changed
+
+- **`#lang r7rs`: the collector is on by default (r7rs-gc graduated).** A
+  compiled single-unit `#lang r7rs` program on Linux or macOS now allocates
+  everything through the conservative mark-sweep collector that was behind
+  `--enable=r7rs-gc` (a no-op now, on the GRADUATED list): a Scheme
+  program's data is reclaimed, as are its `call/cc` images, the records a
+  caught `raise` abandons and the prelude's scratch -- a loop building a
+  dead four-element list a million times peaks at 10 MB (from 429 MB),
+  100,000 escaping `call/cc`s at 10 MB (from 527 MB), 200,000 caught raises
+  at 30 MB (from 266 MB). The TUs of `libturt_runtime.a` (the HAMT behind
+  `stdlib/map`, rc<T> and its cycle collector, owned strings, symbols)
+  allocate through a new hook, `src/runtime/rt_alloc.h` -- libc unless
+  something installs another -- so a Scheme value kept only in a Turmeric
+  map is scanned through the node that holds it instead of freed under it
+  (it segfaulted under `TUR_GC_TORTURE=1`; fixture `r7rs-gc-seam`); the same
+  files compiled beside a program by a stdlib autolink marker carry
+  `rt_alloc.c` on the marker, and the link driver keeps a repeated bare `.c`
+  source once. On macOS the roots are the main image's writable segments and
+  `pthread_get_stackaddr_np`'s stack base. `TUR_R7RS_GC=0`, or
+  `--no-r7rs-gc` on `tur build`, builds a program without it; a program that
+  starts a thread under the collector (any `pthread_create` in the unit)
+  stops at the start site with the reason and that opt-out (exit 70).
+  `--shared`, a project build, `tur jit`, the interpreter and every other
+  platform are unchanged; the trail (`stdlib/trail`) stays on libc, its
+  arrays being rooted in `__thread` storage. Every `#lang r7rs` fixture of
+  the ordinary suite now runs under the collector, and
+  `tests/run-r7rs-gc.sh` keeps the torture, seam, thread and reclamation
+  gates -- it runs on macOS too, its address-space check staying Linux-only.
+  Archived: r7rs-heap-data-never-reclaimed,
+  r7rs-caught-raise-leaks-runtime-records, r7rs-remaining-scratch-leaks and
+  the plan (docs/archive/r7rs-gc-plan.md); r7rs-callcc-memory-never-freed
+  stays open for the interpreter.
+- **Every `cc` over emitted C runs with `-Wno-misleading-indentation`.**
+  GCC's check is quadratic on the long brace-less `if` chains the Scheme
+  lowering emits and was 71% of a `#lang r7rs` build's C compile: a
+  one-line Scheme program built in 6.4 s and builds in 3.1 s. The driver
+  appends the flag after the user's `TUR_CC_FLAGS` (`TUR_EMITTED_C_CC_FLAGS`,
+  src/main.c), so a harness's own `-Wall` still gets it
+  (docs/reported/r7rs-programs-compile-slowly.md).
+- **The R7RS prelude's `-lp__` loops are folded back** into their `: nil`
+  originals (28 in stdlib/r7rs/prelude.tur and read.tur), now that a `: nil`
+  self tail call lowers to a loop; the wrappers are gone and no caller
+  changed. A million-element `string-fill!`, `write`, `read` and `read-line`
+  pass at `-O1` (archived: r7rs-prelude-value-returning-loop-workaround).
 
 ### Fixed
 
@@ -65,58 +111,18 @@ All notable changes to Turmeric are documented here.
   hand back are its own; a capture declines without a stack base, so
   Windows keeps its escape-only `call/cc`.
 
-### Changed
+### Docs
 
-- **`#lang r7rs`: the collector is on by default (r7rs-gc graduated).** A
-  compiled single-unit `#lang r7rs` program on Linux or macOS now allocates
-  everything through the conservative mark-sweep collector that was behind
-  `--enable=r7rs-gc` (a no-op now, on the GRADUATED list): a Scheme
-  program's data is reclaimed, as are its `call/cc` images, the records a
-  caught `raise` abandons and the prelude's scratch -- a loop building a
-  dead four-element list a million times peaks at 10 MB (from 429 MB),
-  100,000 escaping `call/cc`s at 10 MB (from 527 MB). `TUR_R7RS_GC=0`, or
-  `--no-r7rs-gc` on `tur build`, builds a program without it; a program
-  that starts a thread under the collector stops at the start site with the
-  reason and that opt-out (exit 70). `--shared`, a project build, `tur jit`,
-  the interpreter and every other platform are unchanged. Every `#lang r7rs`
-  fixture of the ordinary suite now runs under the collector, and
-  `tests/run-r7rs-gc.sh` keeps the torture, seam, thread and reclamation
-  gates. Archived: r7rs-heap-data-never-reclaimed,
-  r7rs-caught-raise-leaks-runtime-records, r7rs-remaining-scratch-leaks and
-  the plan (docs/archive/r7rs-gc-plan.md); r7rs-callcc-memory-never-freed
-  stays open for the interpreter.
-- **Every `cc` over emitted C runs with `-Wno-misleading-indentation`.**
-  GCC's check is quadratic on the long brace-less `if` chains the Scheme
-  lowering emits and was 71% of a `#lang r7rs` build's C compile: a
-  one-line Scheme program built in 6.4 s and builds in 3.1 s. The driver
-  appends the flag after the user's `TUR_CC_FLAGS` (`TUR_EMITTED_C_CC_FLAGS`,
-  src/main.c), so a harness's own `-Wall` still gets it
-  (docs/reported/r7rs-programs-compile-slowly.md).
-- **The R7RS prelude's `-lp__` loops are folded back** into their `: nil`
-  originals (28 in stdlib/r7rs/prelude.tur and read.tur), now that a `: nil`
-  self tail call lowers to a loop; the wrappers are gone and no caller
-  changed. A million-element `string-fill!`, `write`, `read` and `read-line`
-  pass at `-O1` (archived: r7rs-prelude-value-returning-loop-workaround).
-
-- **`#lang r7rs`: the collector sees the runtime archive, refuses threads,
-  and has its macOS roots (r7rs-gc-plan, second pass).** The TUs of
-  `libturt_runtime.a` (the HAMT behind `stdlib/map`, rc<T> and its cycle
-  collector, owned strings, symbols) allocate through a new hook,
-  `src/runtime/rt_alloc.h` -- libc unless something installs another -- and
-  under `--enable=r7rs-gc` the collector installs itself at program start,
-  so a Scheme value kept only in a Turmeric map is scanned through the node
-  that holds it instead of freed under it (it segfaulted under
-  `TUR_GC_TORTURE=1`; new fixture `r7rs-gc-seam`). The same files compiled
-  beside a program by a stdlib autolink marker carry `rt_alloc.c` on the
-  marker, and the link driver keeps a repeated bare `.c` source once. A
-  thread start under the flag (any `pthread_create` in the unit) prints why
-  the collector cannot support it and exits 70. On macOS the roots are the
-  main image's writable segments and `pthread_get_stackaddr_np`'s stack
-  base; `tests/run-r7rs-gc.sh` runs there too (its address-space check
-  stays Linux-only) and gains the map-seam and thread cases. The caught
-  `raise` records and the prelude's remaining scratch are collected as well
-  (200,000 caught raises: 266 MB -> 30 MB). The trail (`stdlib/trail`)
-  stays on libc, its arrays being rooted in `__thread` storage.
+- **The R7RS guide's "Where it differs from R7RS" is re-measured** against a
+  v0.52.0 `tur` on both back ends. Six bullets held; two were imprecise --
+  `apply`'s eight-argument cap is both back ends, while the same cap on a
+  call through a procedure variable is the compiled back end only, and the
+  optimization-level bullet named the wrong mechanism and the wrong
+  threshold (it is a non-tail call through a procedure variable, which is
+  CPS; `-O1` is gcc's threshold, where Apple clang 21 keeps the sibling call
+  and loses it at `-O0`). Four differences were missing and were filed as
+  reports, two of them fixed in this release. Generated guides also
+  syntax-highlight Scheme (`tools/genguides.py`).
 
 ## [0.52.0] -- 2026-09-25
 
