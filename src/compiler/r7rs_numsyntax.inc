@@ -19,8 +19,12 @@
  * `big` ("RE IM"), which the same parser reads back in radix 10.  A polar
  * number `m@a` is converted to its rectangular parts, inexact.  What is not
  * a number (a zero denominator, `#e+inf.0`) is REFUSED with the reason, never
- * read as something else. */
-#include <math.h>
+ * read as something else.
+ *
+ * No <math.h>: the compiled copy shares a translation unit with
+ * stdlib/math.tur, whose `fabs`/`sqrt`/`floor` are static functions of
+ * those names, and MinGW's <math.h> DEFINES fabs inline -- a redefinition
+ * error there.  The builtins below need no header. */
 
 enum { R7NS_NONE = 0, R7NS_INT = 1, R7NS_FLOAT = 2, R7NS_REFUSED = 3, R7NS_BIG = 4,
        R7NS_RATIO = 5, R7NS_COMPLEX = 6 };
@@ -297,8 +301,8 @@ static void r7rs_ns_complex(r7rs_ns_real *re, r7rs_ns_real *im, int polar, int e
     }
     if (polar) {
         double m = a.f, t = b.f;
-        a.f = m * cos(t);
-        b.f = m * sin(t);
+        a.f = m * __builtin_cos(t);
+        b.f = m * __builtin_sin(t);
     }
     char *ra = r7rs_ns_part_spell(&a), *rb = r7rs_ns_part_spell(&b);
     size_t la = strlen(ra), lb = strlen(rb);
