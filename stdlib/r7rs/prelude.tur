@@ -1827,24 +1827,44 @@
   // The body allocates and fills it, AFTER the preamble's allocator macros,
   // so under the r7rs-gc experiment the image is on the collected heap and
   // scanned -- a continuation keeps everything its stack points at alive.
-  // r7rs-toplevel-reentry-reruns-forms: the per-form prompt's frame, in a
-  // function of its own that is never inlined.  clang inlined the prompt
-  // into the program's main (gcc never inlines an alloca user), which put
-  // main's return address for the form BELOW the mark, inside the image: a
-  // re-entry then returned into main after the captured form and re-ran
-  // everything after it (macOS CI).  Here the frames between the mark and
-  // the form's body are the trampoline's and the runner's, whose return
-  // addresses are the same for every form.  (Untyped: this block precedes
+  // r7rs-toplevel-reentry-reruns-forms: the per-form prompt's frame, a
+  // function of its own that nothing inlines: it is reached only through
+  // the volatile function pointer below, and calls its trampoline through
+  // a pointer too.  clang inlined the prompt into the program's main, which
+  // put main's return address for the form below the mark, inside the
+  // image, so a re-entry returned into main after the CAPTURED form and
+  // re-ran everything after it (macOS CI); MIR (`tur jit`) inlines every
+  // small callee and would do the same.  An indirect call is the one thing
+  // no compiler folds.
+  //
+  // The mark is this frame's jmp_buf, and the body runs between a setjmp
+  // and a longjmp back into this same, still-live frame.  The frames a
+  // re-entry restores below the mark hand back the callee-saved registers
+  // they saved during the CAPTURED form, so when the captured form's body
+  // finishes and returns into this frame -- the INVOKING form's -- the
+  // registers hold that older form's values, and whatever main kept in one
+  // across the call is stale (under `tur jit` the next statement's thunk
+  // was "an unknown value"; gcc and clang happened to spill).  The longjmp
+  // reinstates this frame's own registers, as saved at its setjmp, before
+  // the return to main.  What this frame keeps for after the body -- the
+  // previous form base -- lives in a static stack, since frame slots below
+  // the mark are overwritten by the image.  (Untyped: this block precedes
   // the preamble's tagged-word typedef; r7rs-run-toplevel-thunk-ptr is the
   // typed trampoline.)
-  __attribute__((noinline)) static void r7k_run_form(void (*run)(void *), void *thunk) {
-      volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
-      mark[0] = 0;
-      unsigned char *saved = r7k_form_base;
-      r7k_form_base = (unsigned char *)mark;
-      run(thunk);
-      r7k_form_base = saved;   // a store after the call: never a tail call
+  static unsigned char *r7k_form_saved[64];
+  static int r7k_form_depth;
+  static void r7k_run_form(void (*run)(void *), void *thunk) {
+      jmp_buf jb;
+      if (r7k_form_depth >= 64) abort();
+      r7k_form_saved[r7k_form_depth++] = r7k_form_base;
+      r7k_form_base = (unsigned char *)&jb;
+      if (setjmp(jb) == 0) {
+          run(thunk);
+          longjmp(jb, 1);
+      }
+      r7k_form_base = r7k_form_saved[--r7k_form_depth];
   }
+  static void (*volatile r7k_run_form_p)(void (*)(void *), void *) = r7k_run_form;
   static int r7k_measure(r7k_cont *c, unsigned char *mark) {
       // r7rs-reentrant-callcc-not-on-windows: no image without a stack base,
       // whatever the form base says -- call/cc is the escape there.
@@ -1951,11 +1971,11 @@
 ;;; the same address for each -- finishes this form, and returns into the
 ;;; runner frame of the INVOKING form, which carries on after it: the way
 ;;; chibi's loader and Racket's per-form prompt behave.  The mark lives in
-;;; r7k_run_form, a noinline C function, so that no compiler folds it into
-;;; the program's main (see its comment).
+;;; r7k_run_form, reached through a volatile function pointer so that no
+;;; compiler folds that frame into the program's main (see its comment).
 (defn r7rs-toplevel__ [thunk] : nil
   ```c
-  r7k_run_form(__TUR_CNAME_r7rs-run-toplevel-thunk-ptr__, (void *)&thunk);
+  r7k_run_form_p(__TUR_CNAME_r7rs-run-toplevel-thunk-ptr__, (void *)&thunk);
   ```)
 
 ;;; r7rs-wind-depth__ -- internal: a wind stack's length.
