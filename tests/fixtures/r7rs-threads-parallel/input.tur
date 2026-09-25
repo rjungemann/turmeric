@@ -1,0 +1,9 @@
+#lang r7rs
+;; r7rs-gc threads, stage B (docs/archive/r7rs-gc-threads-plan.md): two
+;; threads rendezvous by spinning on flags with no release point between
+;; them, allocating as they spin.  Under a collector lock (stage A) the
+;; thread holding it would spin forever; under the stop-the-world collector
+;; both run, and the gate's collection on every allocation stops each in
+;; the middle of its spin.
+(import (scheme base) (scheme write) (turmeric rendez))
+(display (rendezvous)) (newline)

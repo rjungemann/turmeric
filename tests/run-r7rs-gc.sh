@@ -14,9 +14,12 @@
 #      collection on EVERY allocation.  Before the archive allocated through
 #      the collector's hook (src/runtime/rt_alloc.h) this segfaulted: the
 #      nodes were libc's, unscanned, and the values were freed under them.
-#   3. Threads are refused: a program that starts one under the collector
-#      exits 70 with a diagnostic naming the plan and the opt-out, and runs
-#      under TUR_R7RS_GC=0.
+#   3. Threads (docs/archive/r7rs-gc-threads-plan.md, stages A to C): a
+#      program that starts threads runs them in parallel under the
+#      collector, which stops them by signal to collect; ten cases, eight of
+#      them the r7rs-threads-* fixtures under frequent collections (every
+#      allocation, or every 31st for the two long ones), plus a lint over
+#      the release points.
 #   4. Reclamation (Linux only, where `ulimit -v` binds): a loop that builds
 #      and drops a million small lists runs under a 256 MiB address-space
 #      limit.  With the collector it fits; the same program without it
@@ -121,7 +124,46 @@ else
     fi
 fi | tee -a "$WORK/results"
 
-# 3. A thread start is refused under the collector, and fine under TUR_R7RS_GC=0.
+# 3. Threads (docs/archive/r7rs-gc-threads-plan.md, stages A to C).  A
+# program that starts threads runs them in parallel under the collector,
+# which stops the others by signal when it collects: the thread registry,
+# the release points around every blocking call, and every thread's stack,
+# registers, thread-local state, key values and allocation cache as roots.
+# Each case below runs with a collection on EVERY allocation, except the two
+# stage C cases, which run a collection every 31st (at every allocation they
+# take minutes, and neither needs it: a lost root is lost at the first
+# collection, and the fork check is about locks, not collections).
+#   threads-run    a C thread started through a Turmeric module starts,
+#                  joins and prints, under the collector as without it.
+#   threads-share  tests/fixtures/r7rs-threads-share: a list built on the
+#                  main thread crosses to a worker thread, which walks it
+#                  with a Scheme procedure and hands the sum back.
+#   threads-roots  tests/fixtures/r7rs-threads-roots: the worker holds the
+#                  only reference to a large list on its parked stack while
+#                  the main thread churns garbage through thousands of
+#                  collections.
+#   threads-tls    tests/fixtures/r7rs-threads-tls: two threads each read
+#                  their own thread-local runtime state.
+#   threads-parallel, threads-pause, threads-syscall (stage B, the
+#                  stop-the-world collector): tests/fixtures/r7rs-threads-*:
+#                  two threads rendezvous by spinning with no release point
+#                  between them; a thread in a tight allocation loop is
+#                  stopped by the other's collections thousands of times; a
+#                  thread blocked in a read the collector does not wrap is
+#                  stopped and resumed across hundreds of collections.
+#   threads-stress, threads-lifecycle (stage C, the heap under contention):
+#                  tests/fixtures/r7rs-threads-*: eight threads assoc and
+#                  dissoc Scheme values in one shared Turmeric persistent map
+#                  through a mutex while a ninth churns garbage and large
+#                  objects, and every value is intact after; a value kept
+#                  only under a pthread key survives, on the main thread and
+#                  a worker; a child forked while another thread allocates
+#                  flat out can allocate; detached threads leave nothing in
+#                  the registry.
+#   threads-lint   every blocking libc call the stdlib and the emitter
+#                  spell is one the collector's release-point macros route
+#                  (src/runtime/r7gc.c); a new one that is not would be a
+#                  deadlock the day a program blocked there.
 cat > "$WORK/spawner.tur" <<'EOF'
 (defmodule spawner
   (export spawn-one)
@@ -155,21 +197,67 @@ thread_case() {
     if ! (cd "$WORK" && env "$@" "$TUR" build threaded.tur -o "threaded-$tag") > "$WORK/threaded-$tag.build" 2>&1; then
         echo "build-failed"; return
     fi
-    "$WORK/threaded-$tag" > "$WORK/threaded-$tag.out" 2> "$WORK/threaded-$tag.err"
+    TUR_GC_TORTURE=1 timeout 300 "$WORK/threaded-$tag" > "$WORK/threaded-$tag.out" 2> "$WORK/threaded-$tag.err"
     echo "$?"
 }
 plain_rc="$(thread_case plain TUR_R7RS_GC=0)"
 gc_rc="$(thread_case gc TUR_R7RS_GC=1)"
 if [ "$plain_rc" != 0 ] || [ "$(cat "$WORK/threaded-plain.out" 2>/dev/null)" != 1 ]; then
-    echo "FAIL threads -- under TUR_R7RS_GC=0 the program should start and join a thread (exit $plain_rc)"
-elif [ "$gc_rc" != 70 ]; then
-    echo "FAIL threads -- under the collector a thread start should exit 70, got $gc_rc: $(tail -1 "$WORK/threaded-gc.err" | cut -c1-120)"
-elif ! grep -q "r7rs-gc: this program starts a thread" "$WORK/threaded-gc.err"; then
-    echo "FAIL threads -- the refusal did not say why: $(tail -1 "$WORK/threaded-gc.err" | cut -c1-120)"
-elif ! grep -q "TUR_R7RS_GC=0" "$WORK/threaded-gc.err"; then
-    echo "FAIL threads -- the refusal did not name the opt-out: $(tail -1 "$WORK/threaded-gc.err" | cut -c1-120)"
+    echo "FAIL threads-run -- under TUR_R7RS_GC=0 the program should start and join a thread (exit $plain_rc)"
+elif [ "$gc_rc" != 0 ] || [ "$(cat "$WORK/threaded-gc.out" 2>/dev/null)" != 1 ]; then
+    echo "FAIL threads-run -- under the collector the program should start and join a thread (exit $gc_rc): $(tail -1 "$WORK/threaded-gc.err" | cut -c1-120)"
+elif grep -q "r7rs-gc" "$WORK/threaded-gc.err"; then
+    echo "FAIL threads-run -- the collector had something to say about a thread start: $(grep -m1 r7rs-gc "$WORK/threaded-gc.err" | cut -c1-120)"
 else
-    echo "PASS threads (a thread start is refused under the collector, with the reason and the opt-out)"
+    echo "PASS threads-run (a thread starts, joins and prints under the collector, silently, as without it)"
+fi | tee -a "$WORK/results"
+
+fixture_case() {
+    local tag="$1" dir="tests/fixtures/$2" torture="${4:-1}" want got rc
+    if ! "$TUR" build "$dir/input.tur" -o "$WORK/$tag" > "$WORK/$tag.build" 2>&1; then
+        echo "FAIL $tag -- build failed: $(grep -m1 -i error "$WORK/$tag.build" | cut -c1-160)"
+        return
+    fi
+    got="$(TUR_GC_TORTURE="$torture" timeout 300 "$WORK/$tag" 2> "$WORK/$tag.err")"; rc=$?
+    want="$(cat "$dir/expected.stdout")"
+    if [ "$rc" = 124 ]; then
+        echo "FAIL $tag -- timed out (>300s) under TUR_GC_TORTURE=$torture (a missing root can read as a hang: a freed list walked in a cycle)"
+    elif [ "$rc" != 0 ]; then
+        echo "FAIL $tag -- exit $rc under TUR_GC_TORTURE=$torture: $(tail -1 "$WORK/$tag.err" | cut -c1-120)"
+    elif [ "$got" != "$want" ]; then
+        echo "FAIL $tag -- expected '$want', got '$got'"
+    else
+        echo "PASS $tag ($3)"
+    fi
+}
+fixture_case threads-share r7rs-threads-share "a list crosses to a worker thread and its sum comes back, under a collection on every allocation" | tee -a "$WORK/results"
+fixture_case threads-roots r7rs-threads-roots "a list held only on a parked thread's stack survives the main thread's churn" | tee -a "$WORK/results"
+fixture_case threads-tls   r7rs-threads-tls   "each thread reads its own thread-local runtime state" | tee -a "$WORK/results"
+fixture_case threads-parallel r7rs-threads-parallel "two threads rendezvous by spinning, with no release point between them: they run at the same time" | tee -a "$WORK/results"
+fixture_case threads-pause r7rs-threads-pause "a thread allocating in a tight loop is stopped by the other thread's collections, thousands of times" | tee -a "$WORK/results"
+fixture_case threads-syscall r7rs-threads-syscall "a thread blocked in an unwrapped read is stopped and resumed across hundreds of collections, and the read completes" | tee -a "$WORK/results"
+fixture_case threads-stress r7rs-threads-stress "nine threads on the heap at once -- eight on one shared persistent map, one churning -- and every value intact" 31 | tee -a "$WORK/results"
+fixture_case threads-lifecycle r7rs-threads-lifecycle "key values are roots, a fork mid-allocation is safe, detached threads leave the registry" 31 | tee -a "$WORK/results"
+
+# threads-lint: the blocking calls (a broad list; the stdio reads are left
+# out on purpose -- a read from a FILE holds the world, docs/guides/r7rs-guide.md).
+lint_missing=""
+for n in pthread_join pthread_cond_wait pthread_cond_timedwait pthread_mutex_lock \
+         pthread_barrier_wait pthread_exit sem_wait sem_timedwait nanosleep usleep sleep \
+         poll ppoll select pselect epoll_wait epoll_pwait kevent accept accept4 connect \
+         recv recvfrom recvmsg read readv pread waitpid wait waitid sigwait pause \
+         flock msgrcv mq_receive; do
+    # a call as written: the name, an open paren, not a struct member (`->name(`)
+    if grep -rqE "(^|[^A-Za-z0-9_>.])$n\(" stdlib src/compiler/emit_module.c src/compiler/emit_dk_runtime.c \
+            src/compiler/emit_expr.c src/compiler/emit_fns.c src/compiler/emit_cps_ir.c src/compiler/emit_core.c \
+            --include='*.tur' --include='*.c' 2>/dev/null; then
+        grep -qE "^#define $n\(" src/runtime/r7gc.c || lint_missing="$lint_missing $n"
+    fi
+done
+if [ -n "$lint_missing" ]; then
+    echo "FAIL threads-lint -- blocking call(s) spelled in the stdlib or the emitter with no release point in src/runtime/r7gc.c:$lint_missing"
+else
+    echo "PASS threads-lint (every blocking call the unit spells is routed through a release point)"
 fi | tee -a "$WORK/results"
 
 # 4. Reclamation under an address-space limit.  `ulimit -v` binds nothing on

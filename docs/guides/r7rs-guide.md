@@ -371,16 +371,37 @@ same. Values you keep in Turmeric maps or `rc<T>` cells through the
 `(turmeric ...)` seam are seen through the node that holds them. A
 collection runs when 8 MiB, or twice the live size, has been allocated since
 the last one; `TUR_GC_TORTURE=N` collects every N allocations, for shaking
-out a missing root.
+out a missing root. `TUR_R7RS_GC=0 tur build prog.tur`, or `tur --no-r7rs-gc
+build prog.tur`, builds without the collector; the data then stays
+allocated until the process exits, the way a Turmeric `:heap` box does.
+
+**Threads** run in parallel under the collector, and their memory is
+reclaimed too. A program starts them through the seam: `thread-spawn-fn`,
+`session-spawn`, a task group, a future's timeout, or a Turmeric module's
+own `pthread_create`. Each thread allocates from its own cache of slots. A
+collection stops the other threads by signal wherever they are, the way the
+Boehm collector does, so nothing is compiled into the program's loops. Nine
+threads on one heap, eight of them taking turns on a shared persistent map
+and one churning garbage, is a gate case
+(`tests/fixtures/r7rs-threads-stress`).
+
+- The stop signal restarts the system call it interrupts. The runtime knows
+  these blocking calls: the joins, the condition waits, `nanosleep`,
+  `poll`, `select`, `accept`, `connect`, `recv`, `read`, `waitpid`,
+  `sem_wait`, `epoll_wait` and `kevent`. A program's own inline C that
+  calls any other blocking function may see EINTR from it, and should
+  retry.
+- Detached threads leave nothing behind once they are gone.
+- After a `fork`, the child can allocate, whatever the other threads were
+  doing at that moment.
+- A value kept with `pthread_setspecific` is kept alive. That is where
+  `^thread-local` globals and a spawned thread's conveyed dynamic bindings
+  live.
+- A thread the program did not start (a library's own, calling back in)
+  stops with the reason at its first allocation.
 
 What it does not cover:
 
-- **Threads.** The collector is single-threaded. A program that starts a
-  thread (through the seam: `thread-spawn-fn`, `session-spawn`, a task
-  group) stops at the start with the reason and exits 70. Build such a
-  program without the collector: `TUR_R7RS_GC=0 tur build prog.tur`, or
-  `tur --no-r7rs-gc build prog.tur`. Its data then stays allocated until the
-  process exits, the way a Turmeric `:heap` box does.
 - **Other builds.** `--shared`, a project build (`tur build <dir>`), `tur
   jit` and the interpreter (`tur --interpret`) do not use it; the
   interpreter keeps its values for the life of the process by design.

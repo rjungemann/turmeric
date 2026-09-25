@@ -1,0 +1,96 @@
+;; relay -- a worker thread that takes Scheme values through the `work`
+;; library's cells, walks them with a Scheme procedure, and hands the answer
+;; back.  The signalling is a mutex and a condition variable; the thread is
+;; a raw pthread, which is what stdlib/thread and stdlib/chan are underneath.
+(defmodule relay
+  (import work :refer [walk take! answer!])
+  (export relay-start relay-signal-in relay-go relay-wait-out relay-stop)
+  ```c
+  typedef struct {
+      pthread_mutex_t mu; pthread_cond_t cv;
+      int has_in, has_out, go, stop;
+      pthread_t tid;
+  } RelayBlock;
+  static void relay_wait(RelayBlock *b, int *flag) {
+      pthread_mutex_lock(&b->mu);
+      while (!*flag && !b->stop) pthread_cond_wait(&b->cv, &b->mu);
+      *flag = 0;
+      pthread_mutex_unlock(&b->mu);
+  }
+  static void relay_signal(RelayBlock *b, int *flag) {
+      pthread_mutex_lock(&b->mu);
+      *flag = 1;
+      pthread_cond_broadcast(&b->cv);
+      pthread_mutex_unlock(&b->mu);
+  }
+  ```
+  (defn relay-alloc [] : ptr<void>
+    ```c
+    RelayBlock *b = (RelayBlock *)calloc(1, sizeof *b);
+    pthread_mutex_init(&b->mu, NULL); pthread_cond_init(&b->cv, NULL);
+    return (void *)b;
+    ```)
+  (defn relay-spawn [r : ptr<void> f : ptr<void>] : nil
+    ```c
+    RelayBlock *b = (RelayBlock *)r;
+    if (pthread_create(&b->tid, NULL, (void *(*)(void *))f, r) != 0) abort();
+    ```)
+  ;; The worker's side.  Waits for a value to be in the cell; false on stop.
+  (defn relay-wait-in [r : ptr<void>] : bool
+    ```c
+    RelayBlock *b = (RelayBlock *)r;
+    relay_wait(b, &b->has_in);
+    return !b->stop;
+    ```)
+  (defn relay-wait-go [r : ptr<void>] : nil
+    ```c
+    RelayBlock *b = (RelayBlock *)r;
+    relay_wait(b, &b->go);
+    ```)
+  (defn relay-signal-out [r : ptr<void>] : nil
+    ```c
+    RelayBlock *b = (RelayBlock *)r;
+    relay_signal(b, &b->has_out);
+    ```)
+  (defn relay-loop [r : ptr<void>] : bool
+    (if (relay-wait-in r)
+      (let [v (take!)]
+        (relay-wait-go r)
+        (answer! (walk v))
+        (relay-signal-out r)
+        (relay-loop r))
+      false))
+  (defn relay-worker [arg : ptr<void>] : ptr<void>
+    (relay-loop arg)
+    arg)
+  ;; The program's side.
+  (defn relay-start [] : ptr<void>
+    (let [r (relay-alloc)]
+      (relay-spawn r relay-worker)
+      r))
+  (defn relay-signal-in [r : ptr<void>] : nil
+    ```c
+    RelayBlock *b = (RelayBlock *)r;
+    relay_signal(b, &b->has_in);
+    ```)
+  (defn relay-go [r : ptr<void>] : nil
+    ```c
+    RelayBlock *b = (RelayBlock *)r;
+    relay_signal(b, &b->go);
+    ```)
+  (defn relay-wait-out [r : ptr<void>] : nil
+    ```c
+    RelayBlock *b = (RelayBlock *)r;
+    relay_wait(b, &b->has_out);
+    ```)
+  (defn relay-stop [r : ptr<void>] : nil
+    ```c
+    RelayBlock *b = (RelayBlock *)r;
+    pthread_mutex_lock(&b->mu);
+    b->stop = 1;
+    pthread_cond_broadcast(&b->cv);
+    pthread_mutex_unlock(&b->mu);
+    pthread_join(b->tid, NULL);
+    pthread_mutex_destroy(&b->mu); pthread_cond_destroy(&b->cv);
+    free(b);
+    ```))

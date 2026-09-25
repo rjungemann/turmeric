@@ -1,0 +1,53 @@
+;; crew -- eight workers taking turns on the shared map through one mutex,
+;; and a churner, as raw pthreads (what stdlib/thread is underneath).  The
+;; mutex is the unit's pthread_mutex_lock, so a worker that finds it taken
+;; parks while it waits.
+(defmodule crew
+  (import stress :refer [step! garbage! churn!])
+  (export crew-run)
+  ```c
+  #define CREW_WORKERS 8
+  #define CREW_TURNS   500
+  static pthread_mutex_t crew_mu = PTHREAD_MUTEX_INITIALIZER;
+  static pthread_t crew_tids[CREW_WORKERS + 1];
+  ```
+  (defn crew-lock [] : nil
+    ```c
+    pthread_mutex_lock(&crew_mu);
+    ```)
+  (defn crew-unlock [] : nil
+    ```c
+    pthread_mutex_unlock(&crew_mu);
+    ```)
+  (defn crew-turns [] : int
+    ```c
+    return CREW_TURNS;
+    ```)
+  (defn crew-loop [j : int] : bool
+    (if (= j 0)
+      true
+      (do
+        (crew-lock)
+        (step!)
+        (crew-unlock)
+        (garbage!)
+        (crew-loop (- j 1)))))
+  (defn crew-worker [arg : ptr<void>] : ptr<void>
+    (crew-loop (crew-turns))
+    arg)
+  (defn crew-churner [arg : ptr<void>] : ptr<void>
+    (churn!)
+    arg)
+  (defn crew-start [w : ptr<void> c : ptr<void>] : nil
+    ```c
+    for (int i = 0; i < CREW_WORKERS; i++)
+        if (pthread_create(&crew_tids[i], NULL, (void *(*)(void *))w, NULL) != 0) abort();
+    if (pthread_create(&crew_tids[CREW_WORKERS], NULL, (void *(*)(void *))c, NULL) != 0) abort();
+    ```)
+  (defn crew-join [] : nil
+    ```c
+    for (int i = 0; i <= CREW_WORKERS; i++) pthread_join(crew_tids[i], NULL);
+    ```)
+  (defn crew-run [] : nil
+    (crew-start crew-worker crew-churner)
+    (crew-join)))

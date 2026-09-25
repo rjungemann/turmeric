@@ -10150,10 +10150,34 @@ static void emit_rt_global(Buf *out, bool shared,
  * type back via `cast` here (NULL for a slot whose host type is already
  * exact).  Shared mode takes the same #else branch -- accessors are
  * process-global, which collapses the per-TU-static-TLS split for free. */
+/* r7rs-gc threads (stage A, docs/archive/r7rs-gc-threads-plan.md): the
+ * collector cannot scan thread-local storage, so every TUR_THREAD_LOCAL
+ * variable the unit declares is registered here as it is emitted, and
+ * emit_r7rs_gc_tls_roots writes one function at the end of the unit that
+ * hands each one's address and size to the collector, which every thread
+ * calls on itself when it starts. */
+static Buf g_r7gc_tls_roots;
+static bool g_r7gc_tls_roots_live;
+static void r7gc_note_tls_root(const char *name) {
+    if (!g_r7gc_tls_roots_live) { buf_init(&g_r7gc_tls_roots); g_r7gc_tls_roots_live = true; }
+    buf_printf(&g_r7gc_tls_roots, "    add((void *)&%s, sizeof %s);\n", name, name);
+}
+static void r7gc_tls_roots_reset(void) {
+    if (g_r7gc_tls_roots_live) g_r7gc_tls_roots.len = 0;
+}
+static void emit_r7rs_gc_tls_roots(Buf *out) {
+    buf_puts(out, "/* r7rs-gc: the calling thread's thread-local roots (src/runtime/r7gc.c). */\n"
+                  "static void tur_rt_tls_roots(void (*add)(void *p, size_t n)) {\n"
+                  "    (void)add;\n");
+    if (g_r7gc_tls_roots_live) buf_puts(out, g_r7gc_tls_roots.data);
+    buf_puts(out, "}\n\n");
+}
+
 static void emit_rt_tls(Buf *out, bool shared,
                         const char *owner_body, const char *extern_decl,
                         const char *name, const char *accessor_ret,
                         const char *accessor, const char *cast) {
+    r7gc_note_tls_root(name);
     buf_puts(out, "#if defined(__GNUC__) || defined(__clang__)\n");
     emit_rt_global(out, shared, owner_body, extern_decl);
     buf_puts(out, "#else\n");
@@ -11479,7 +11503,12 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "static TUR_TB_TLS tur_tb_desc_t tur_tb_desc;\n"
         "static TUR_TB_TLS void *tur_tb_armed_for;\n"
         "static TUR_TB_TLS void *tur_tb_root;\n"
-        "static TUR_TB_TLS tur_tagged_t tur_tb_sentinel_box;\n"
+        "static TUR_TB_TLS tur_tagged_t tur_tb_sentinel_box;\n");
+    r7gc_note_tls_root("tur_tb_desc");
+    r7gc_note_tls_root("tur_tb_armed_for");
+    r7gc_note_tls_root("tur_tb_root");
+    r7gc_note_tls_root("tur_tb_sentinel_box");
+    buf_puts(out,
         "/* The bouncer registry: an open-addressing hash from a static fat\n"
         " * box's env (its value is the function the box calls) or a capturing\n"
         " * closure's thunk (its value is itself) to the function to arm.  Filled\n"
@@ -11676,17 +11705,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * that across every supported cc buys nothing -- this way the cc path keeps
      * the exact spelling it has always used, and only a C11-or-later front end
      * (c2mir reports 201112) sees the standard one. */
-    if (r7rs_gc_active(shared)) {
-        /* r7rs-gc: per-thread runtime state becomes plain statics, which the
-         * collector scans as part of the data segment. */
-        buf_puts(out, "#define TUR_THREAD_LOCAL\n");
-        emit_r7rs_gc_prologue(out);
-    } else {
-        buf_puts(out, "#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L\n");
-        buf_puts(out, "#  define TUR_THREAD_LOCAL _Thread_local\n");
-        buf_puts(out, "#else\n");
-        buf_puts(out, "#  define TUR_THREAD_LOCAL __thread\n");
-        buf_puts(out, "#endif\n");
+    buf_puts(out, "#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L\n");
+    buf_puts(out, "#  define TUR_THREAD_LOCAL _Thread_local\n");
+    buf_puts(out, "#else\n");
+    buf_puts(out, "#  define TUR_THREAD_LOCAL __thread\n");
+    buf_puts(out, "#endif\n");
+    if (!r7rs_gc_active(shared)) {
+        /* r7rs-gc's fiber hooks (tur_fiber_block_resume); the collector's
+         * prologue, pasted after the system includes below, defines the real
+         * ones. */
+        buf_puts(out, "#define TUR_GC_FIBER_ENTER(sp) ((void)0)\n");
+        buf_puts(out, "#define TUR_GC_FIBER_LEAVE()   ((void)0)\n");
     }
     /* 6(a) (jit-engine-plan section 4): atomics, spelled through a macro layer.
      *
@@ -11832,6 +11861,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* DEDUP-1: offsetof, used by the RcControlBlock layout guard below. */
     buf_puts(out, "#include <stddef.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* r7rs-gc: the collector, pasted HERE -- after the system includes above
+     * (whose order macOS's ucontext_t depends on) and before any code that
+     * allocates.  Its redirecting macros cover every call below; the
+     * function-like ones for the blocking calls need each name's own header
+     * included first, which r7gc.c does, so a later include is a no-op
+     * rather than a mangled prototype.  Per-thread runtime state stays
+     * thread-local; each thread registers its instances as roots
+     * (emit_r7rs_gc_tls_roots). */
+    if (r7rs_gc_active(shared)) emit_r7rs_gc_prologue(out);
     /* Three CRT functions whose declarations c2mir does not pick up from the
      * MinGW headers.  Without a prototype the call is implicit-int, so a 64-bit
      * pointer comes back truncated to 32 bits and sign-extended: non-NULL, so a
@@ -13193,6 +13231,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the program uses (call/cc f) / (escape f). */
     if (shared || cps_uses_callcc) {
         emit_cps_callcc_prelude(out);
+        r7gc_note_tls_root("tur_escape_live");   /* a realloc'd (collected) array */
     }
 
     /* Phase 19 fiber effect runtime (TurContK / TurEffectCaptureCtx /
@@ -13429,7 +13468,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * out.  The trampoline path declares g_dk_driver / g_dk_meta_n and is the
      * only path since cps-tramp-resume graduated (2026-07-19). */
     buf_puts(out, "    tur_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+    /* r7rs-gc: the collector scans this thread's own stack from here while
+     * the fiber runs on its (heap-allocated) stack. */
+    buf_puts(out, "    TUR_GC_FIBER_ENTER((void *)&_dk_save);\n");
     buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+    buf_puts(out, "    TUR_GC_FIBER_LEAVE();\n");
     buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
     buf_puts(out, "    tur_current_fiber = _prev;\n");
     buf_puts(out, "    return f->result;\n");
@@ -16235,6 +16278,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     emit_sig_reset();
     emit_localvar_reset();
     static_init_reset();   /* S1b: per-program explicit-init registry */
+    r7gc_tls_roots_reset();
     /* S1: record every extern-c return type BEFORE any body is emitted.  The
      * per-item record below still runs, but it is too late for bodies the
      * emitter lifts ahead of the item loop -- a partially-applied printf's pap
@@ -17943,6 +17987,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * every dict singleton, whose addresses they take, and before
      * static_init_emit, which needs __tur_inst_rows_init already registered. */
     emit_instance_row_table(&ctx, out);
+
+    /* r7rs-gc: after every thread-local declaration in the unit. */
+    if (r7rs_gc_active(false)) emit_r7rs_gc_tls_roots(out);
 
     /* S1b: after every registered initializer's own definition (they are all
      * `static`), and after `main` -- the preamble carries the declaration. */

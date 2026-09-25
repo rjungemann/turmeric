@@ -1,0 +1,19 @@
+#lang r7rs
+;; r7rs-gc threads, stage A (docs/archive/r7rs-gc-threads-plan.md): the
+;; worker thread takes a list out of the crossing cell and then waits, so
+;; its own parked stack holds the only reference, while this thread churns
+;; garbage through many collections; the list is intact after.  Without the
+;; parked thread's registers and stack as roots the sum comes back wrong or
+;; the program crashes (the gate runs this with a collection on every
+;; allocation).
+(import (scheme base) (scheme write) (work) (turmeric relay))
+(define (iota* n) (let lp ((i n) (acc '())) (if (= i 0) acc (lp (- i 1) (cons i acc)))))
+(define (churn i) (if (= i 0) 'done (begin (list i i i i) (churn (- i 1)))))
+(define r (relay-start))
+(define (hand-over n) (put! (iota* n)) (relay-signal-in r) (churn 10))
+(hand-over 10000)
+(churn 2000)
+(relay-go r)
+(relay-wait-out r)
+(display (get!)) (newline)
+(relay-stop r)

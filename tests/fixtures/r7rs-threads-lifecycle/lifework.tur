@@ -1,0 +1,23 @@
+#lang r7rs
+;; The Scheme half: the list every check builds and sums, the churn, the
+;; burner's allocation, a forked child's whole life, and the cell a worker
+;; hands its answer back through.
+(define-library (lifework)
+  (export build! walk churn! burn! child! answer! get!)
+  (import (scheme base) (turmeric lifec))
+  (begin
+    (define out-cell #f)
+    (define (build!)
+      (let lp ((i 1000) (acc '())) (if (= i 0) acc (lp (- i 1) (cons i acc)))))
+    (define (walk l)
+      (let lp ((l l) (a 0)) (if (null? l) a (lp (cdr l) (+ a (car l))))))
+    (define (churn!)
+      (let lp ((i 3000)) (if (= i 0) #t (begin (list i i i i) (lp (- i 1))))))
+    (define (burn!)
+      (make-vector 600 0)
+      (list 1 2 3)
+      #t)
+    (define (child!)
+      (child-exit (if (= (walk (build!)) 500500) 0 1)))
+    (define (answer! v) (set! out-cell v) #t)
+    (define (get!) out-cell)))
