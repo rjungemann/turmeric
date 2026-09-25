@@ -75,8 +75,11 @@ println $ (:: combine((:: 3 Product) (:: 7 Product)) int)  ; => 21
 ## Monoid
 
 A `Monoid` adds an identity. It is declared **flat**, not as a subclass of
-`Semigroup`, because `defclass` has no superclasses -- so a function needing
-both lists both constraints:
+`Semigroup`: `defclass` does take a superclass preamble (see
+[typeclass-guide.md](typeclass-guide.md#superclasses)), but adding one to a
+class that already has instances obliges every one of them -- in-tree and in
+every downstream spice -- to carry the superclass instance, so the stdlib's
+classes stay flat. A function needing both lists both constraints:
 
 ```turmeric
 (defclass Monoid [a] (mempty [] : a))

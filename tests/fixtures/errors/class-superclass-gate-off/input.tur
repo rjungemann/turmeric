@@ -1,7 +1,0 @@
-;; class-superclasses is experimental: without --enable=class-superclasses the
-;; preamble is rejected with a diagnostic pointing at the flag, rather than
-;; silently changing entailment for a program that did not opt in.  (No
-;; `flags` file here, on purpose.)
-(defclass Sg [a] (sg-combine [x : a y : a] : a))
-(defclass Mo [a] [(Sg a)] (sg-empty [] : a))
-(defn main [] : int 0)

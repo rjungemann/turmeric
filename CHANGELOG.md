@@ -2,6 +2,27 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.54.0] -- 2026-09-25
+
+### Changed
+
+- **`defclass` superclass preambles graduate.** The constraint preamble
+  `(defclass Monoid [a] [(Semigroup a)] ...)`, the entailment it licenses (a
+  `[^Monoid A]` body may call `combine`) and the instance obligation that
+  makes it sound are unconditional -- `--enable=class-superclasses` is no
+  longer needed and is accepted as the TUR-W0063 graduated no-op. Elaboration
+  only: no codegen change and no snapshot moved. The fifteen
+  `class-superclass-*` fixtures lose their `flags` file and run ungated on
+  both back ends; `errors/class-superclass-gate-off` is deleted with the gate
+  and `errors/class-superclass-empty-preamble` takes its place, pinning the
+  TUR-E0390 branch that rejects `[]` rather than reading it as "declares no
+  superclasses". No bisection hatch: the preamble did not parse at all before
+  graduation, so there is no old path to cover and `g_opt_class_superclasses`
+  retires with the row. The stdlib's own classes stay flat -- retrofitting a
+  preamble obliges every existing instance, in-tree and downstream, which is a
+  separate audit (typeclass-superclasses-plan SC8). SC7 of
+  typeclass-superclasses-plan.
+
 ## [0.53.0] -- 2026-09-25
 
 ### Added

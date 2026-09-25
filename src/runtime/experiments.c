@@ -349,21 +349,28 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * decision is identical either side of this change.  Do NOT re-add a row
      * for it; the bit is a "this build contains a Saffron TU" fact, not a gate.
      * See docs/upcoming/saffron-lang-plan.md (still live for D4/G3-G9). */
-    /* class-superclasses -- the `defclass` constraint preamble
-     * `(defclass Monoid [a] [(Semigroup a)] ...)`, the entailment it licenses
-     * (a `[^Monoid A]` body may call `combine`) and the instance obligation
-     * that makes the entailment sound (`Monoid [int]` requires `Semigroup
-     * [int]`).  Elaboration only; no codegen.  Gated because retrofitting a
-     * preamble onto an existing class is a breaking change for every
-     * downstream instance of it (plan section 4.1), so the stdlib does not
-     * adopt it until graduation. */
-    { "class-superclasses",
-      "defclass constraint preambles (superclass entailment)",
-      "docs/upcoming/typeclass-superclasses-plan.md",
-      "0.49.0",                  /* introduced */
-      "0.55.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_class_superclasses },
+    /* class-superclasses GRADUATED 2026-09-25 (SC7 of
+     * docs/upcoming/typeclass-superclasses-plan.md) -- the `defclass`
+     * constraint preamble `(defclass Monoid [a] [(Semigroup a)] ...)`, the
+     * entailment it licenses (a `[^Monoid A]` body may call `combine`) and the
+     * instance obligation that makes the entailment sound (`Monoid [int]`
+     * requires `Semigroup [int]`) are now unconditional.  Elaboration only; no
+     * codegen, and no fixture snapshot moved at graduation.
+     *
+     * NO BISECTION HATCH, deliberately (plan SC7).  The guide's warning is
+     * about a graduation that flips a REPRESENTATION default, where both paths
+     * compiled and the old one silently loses its cover
+     * (docs/archive/sr2-carrier-seam-rotted.md).  This is purely additive
+     * syntax: before graduation the preamble did not parse at all, so there is
+     * no old path to keep covered and no `TUR_CLASS_SUPERCLASSES=0` worth
+     * carrying.  `g_opt_class_superclasses` is retired with the row.
+     *
+     * What graduation does NOT do: the stdlib's own classes stay flat.
+     * Retrofitting a preamble onto an existing `Monoid` retroactively obliges
+     * every existing instance -- including downstream spices -- to carry a
+     * `Semigroup` instance (plan 4.1).  That audit is SC8 and is still open;
+     * graduation deferred it, it did not remove it.  The name moves to
+     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op). */
     /* r7rs -- R7RS-small Scheme as a `#lang` base over the Turmeric runtime
      * (Saffron's dynamic substrate under a Scheme reader).  Gated because the
      * plan is staged R0-R10 and everything past R1 -- Scheme core forms, a
@@ -462,6 +469,12 @@ static const char *const GRADUATED[] = {
      * `tur experiments` row for a full release, which is enough for a
      * build.tur somewhere to name it. */
     "saffron",
+    /* graduated 2026-09-25, in the 0.53 line (introduced 0.49.0, carrying an
+     * advisory expires_at of 0.55.0 -- graduating early is routine).  Source
+     * syntax someone had to write into a file and then enable, so a lingering
+     * enable is exactly what a real adopter's config looks like: it keeps the
+     * full migration window.  Eligible to age out at 0.54.0. */
+    "class-superclasses",
     NULL,
 };
 
