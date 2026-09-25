@@ -1,0 +1,8 @@
+;; *argv0* is the program's own name: argv[0] of the compiled binary, the
+;; script path under the interpreter.  Either is a path the harness chooses,
+;; so the fixture checks the shape, not the spelling.
+(load "stdlib/cstr.tur")
+(defn main [] : int
+  (println (> (cstr-len *argv0*) 0))
+  (println (list-length *args*))
+  0)

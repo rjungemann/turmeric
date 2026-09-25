@@ -9,7 +9,8 @@
 (display (and (inexact? t0) (> t0 1700000000.0))) (newline)
 (define j0 (current-jiffy))
 (display (list (exact-integer? j0) (jiffies-per-second) (>= (current-jiffy) j0))) (newline)
-(display (command-line)) (newline)
+;; (command-line): the program's own name (a path, so not printed), then the arguments.
+(display (list (string? (car (command-line))) (> (string-length (car (command-line))) 0) (cdr (command-line)))) (newline)
 (display (string? (get-environment-variable "PATH"))) (newline)
 (display (get-environment-variable "R7RS_FIXTURE_SURELY_UNSET")) (newline)
 (display (pair? (assoc "PATH" (get-environment-variables)))) (newline)

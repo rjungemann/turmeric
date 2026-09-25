@@ -2771,8 +2771,9 @@ differences, as reports"):
   effect runs before the program's top-level expressions
   ([toplevel-def-initializers-run-before-toplevel-expressions](../reported/toplevel-def-initializers-run-before-toplevel-expressions.md);
   every dialect).
-- **`command-line` starts with `"tur"`**, not the program's own path
-  ([r7rs-command-line-first-element-is-tur](../reported/r7rs-command-line-first-element-is-tur.md)).
+- ~~**`command-line` starts with `"tur"`**, not the program's own path~~
+  -- resolved 2026-09-25 through a pre-declared `*argv0*` global
+  ([archived](../archive/r7rs-command-line-first-element-is-tur.md)).
 - **Case mapping details**
   ([r7rs-unicode-case-mapping-gaps](../reported/r7rs-unicode-case-mapping-gaps.md)).
   - `string-downcase` does not apply the context-sensitive final sigma.

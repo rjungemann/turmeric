@@ -8114,6 +8114,9 @@ static int cmd_eval_h(const char *path, bool use_color,
         args_val.tag    = TURI_INT;
         args_val.as_int = args_list;
         turi_env_set(env, "*args*", args_val);
+        /* *argv0*: the script path, the nearest thing to a compiled binary's
+         * argv[0] (r7rs-command-line-first-element-is-tur). */
+        turi_env_set(env, "*argv0*", turi_cstr(path));
     }
     /* Set module_base_dir so (import ...) resolves relative to the script.
      *

@@ -12639,6 +12639,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     emit_rt_global(out, shared, "int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */\n", "int g_panic_trace");
     /* CLI-ARGS: g_tur_args holds the *args* list (linked list of argv strings, built in main). */
     emit_rt_global(out, shared, "int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */\n", "int64_t g_tur_args");
+    emit_rt_global(out, shared, "const char *g_tur_argv0 = \"\";  /* *argv0*: the program's own name, argv[0] (set in main) */\n", "const char *g_tur_argv0");
     buf_puts(out, "static void tur_panic_set_frame(tur_frame *f) {\n");
     buf_puts(out, "    global_panic_frame = f;\n");
     buf_puts(out, "}\n");
@@ -17838,7 +17839,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             buf_puts(out, "    g_panic_trace = 1;\n");
         }
         /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
-        buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1] */\n");
+        buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
+        buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
         buf_puts(out, "    g_tur_args = 0;\n");
         buf_puts(out, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
         buf_puts(out, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
@@ -19399,7 +19401,8 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
             buf_puts(out, "    g_panic_trace = 1;\n");
         }
         /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
-        buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1] */\n");
+        buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
+        buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
         buf_puts(out, "    g_tur_args = 0;\n");
         buf_puts(out, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
         buf_puts(out, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");

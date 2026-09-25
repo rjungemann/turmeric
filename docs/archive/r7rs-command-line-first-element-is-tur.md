@@ -1,5 +1,14 @@
 # `#lang r7rs`: `(command-line)` starts with `"tur"`, not the program's path
 
+**RESOLVED 2026-09-25, archived.** A new pre-declared global `*argv0*`
+(`:cstr`, backed by `g_tur_argv0`) carries the program's own name: every
+emitted `main` sets it from `argv[0]`, the interpreter from the script path,
+and `r7rs-command-line` conses it in place of `"tur"`. Pinned by
+`tests/fixtures/argv0-global` (Turmeric, both back ends) and the
+`command-line` line of `tests/fixtures/r7rs-system-libraries`. Original
+report follows.
+
+
 **Severity:** low. Both back ends. R7RS 6.14 says the first element of
 `(command-line)` is the command name, implementation-dependent, and every
 other implementation puts `argv[0]` (chibi, Guile, Chicken, Racket) or the

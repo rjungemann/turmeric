@@ -13,6 +13,10 @@ builder-pattern API.
 
 ## Passing Arguments to a Script
 
+The program's own name is a second pre-declared global, `*argv0*` (a
+`:cstr`): `argv[0]` of a compiled binary, the script path under
+`tur --interpret`. `*args*` never includes it.
+
 Use `--` to separate `tur run` flags from your script's arguments:
 
 ```sh

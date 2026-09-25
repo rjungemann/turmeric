@@ -10023,7 +10023,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         emit_win_binary_stdio_prologue(file);
         if (g_emit_panic_trace)
             buf_puts(file, "    g_panic_trace = 1;\n");
-        buf_puts(file, "    /* *args*: build cons list from argv[1..argc-1] */\n");
+        buf_puts(file, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
+        buf_puts(file, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
         buf_puts(file, "    g_tur_args = 0;\n");
         buf_puts(file, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
         buf_puts(file, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");

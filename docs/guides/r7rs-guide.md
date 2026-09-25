@@ -383,7 +383,6 @@ library's string result to `cstr` gets the same copy.
   top-level expressions. Opening a file or reading input in a top-level
   `define` is the case to watch. Put such code inside a procedure; the
   interpreter evaluates in order either way.
-- **`command-line`** starts with `"tur"`, not the program's own path.
 
 ## Conformance
 
