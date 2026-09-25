@@ -13,6 +13,8 @@
 #else
 #  define TUR_THREAD_LOCAL __thread
 #endif
+#define TUR_GC_FIBER_ENTER(sp) ((void)0)
+#define TUR_GC_FIBER_LEAVE()   ((void)0)
 #if defined(__GNUC__) || defined(__clang__)
 #  define TUR_ATOMIC_LOAD_U64(p, mo)        __atomic_load_n((p), (mo))
 #  define TUR_ATOMIC_STORE_U64(p, v, mo)    __atomic_store_n((p), (v), (mo))
@@ -550,6 +552,11 @@ TUR_RT_API void tur_region_shutdown(void);
  * point at an object on the collected heap. */
 TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud),
                                      void *ud);
+
+/* The same over every thread's generations (the ownership registry), for a
+ * collector that has parked the other threads. */
+TUR_RT_API void tur_region_each_used_all(void (*cb)(const void *p, size_t n, void *ud),
+                                         void *ud);
 
 #endif
 /* ---- end src/runtime/region.h ---- */
@@ -1387,6 +1394,18 @@ TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *u
                                      void *ud) {
     for (int i = 0; i < g_live_n; i++) arena_each_used(g_live[i], cb, ud);
     for (int i = 0; i < g_retired_n; i++) arena_each_used(g_retired[i], cb, ud);
+}
+
+/* Every thread's live and retired generations, through the ownership
+ * registry.  For the r7rs-gc collector once it runs threads (stage A of
+ * docs/upcoming/r7rs-gc-threads-plan.md): every other thread is parked while
+ * it collects, so the arenas hold still; the lock is against a thread that
+ * is exiting and unregistering its arenas meanwhile. */
+TUR_RT_API void tur_region_each_used_all(void (*cb)(const void *p, size_t n, void *ud),
+                                         void *ud) {
+    reg_lock();
+    for (int i = 0; i < g_reg_n; i++) arena_each_used(g_reg[i], cb, ud);
+    reg_unlock();
 }
 
 TUR_RT_API int tur_region_depth(void) { return g_live_n; }
@@ -2719,7 +2738,9 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     tur_current_fiber = f;
     f->arg = arg;
     tur_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;
+    TUR_GC_FIBER_ENTER((void *)&_dk_save);
     swapcontext(&f->caller_ctx, &f->ctx);
+    TUR_GC_FIBER_LEAVE();
     g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;
     tur_current_fiber = _prev;
     return f->result;
