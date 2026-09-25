@@ -211,6 +211,7 @@
 ;;   ap   :: f (a -> b) -> f a -> f b
 
 (defclass Applicative [^f]
+  [(Functor f)]
   (pure [x : a] : (f a))
   (ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)))
 ;;; Monad -- typeclass for sequencing computations with bind.

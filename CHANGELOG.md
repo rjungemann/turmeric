@@ -41,6 +41,16 @@ All notable changes to Turmeric are documented here.
   declares an instance of these classes. SC8b step 2 of
   typeclass-superclasses-plan.
 
+- **`Applicative` is declared over `Functor`.** An `[^Applicative F]` function
+  may call `fmap`. **Breaking for downstream instances:** an `Applicative`
+  instance now needs a `Functor` instance for the same type (TUR-E0393).
+  Every stdlib instance has one and no spice declares an `Applicative`
+  instance; six test fixtures that declared `Applicative` for a toy type
+  gained a one-line `Functor`. A constrained rank-2 `forall` implies its
+  constraints' superclasses the same way a `defn` does, so a function passed
+  to it still lines up dictionary for dictionary. SC8b step 3 of
+  typeclass-superclasses-plan.
+
 ### Added
 
 - **`Result` is an `Applicative`.** `stdlib/result.tur` ships

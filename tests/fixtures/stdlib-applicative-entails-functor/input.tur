@@ -1,0 +1,27 @@
+;; typeclass-superclasses-plan SC8b step 3: Applicative is declared over
+;; Functor, so an `[^Applicative F]` body may call `fmap`.
+(defn inc-all [^Applicative F] [x : (F int)] : (F int)
+  (fmap x (fn [v : int] : int (+ v 1))))
+
+;; `pure` and `fmap` in one body, both through the one constraint.
+(defn lifted-double [^Applicative F] [d : int] : (F int)
+  (fmap (pure d) (fn [v : int] : int (* v 2))))
+
+;; A constrained rank-2 forall carries one dictionary per constraint, aligned
+;; by position with the function passed in.  `inc-all`'s `^Applicative F`
+;; implies `^Functor F`, so the forall's `(Applicative m)` must imply it too,
+;; or the two dictionary lists differ in length ("forall-dict-pass: constraint
+;; count mismatch").
+(defn at-option [g (forall [(m :: * -> *)] [(Applicative m)] (-> (m int) (m int)))] : int
+  (match (g (some 41)) (Some v) v (None) -1))
+
+(defn show-r [r : (Result int int)] : int
+  (match r (Ok v) (do (println v) 0) (Err e) (do (println (- 0 e)) 0)))
+
+(defn main [] : int
+  (println (match (inc-all (some 9)) (Some v) v (None) -1))        ; 10
+  (show-r (inc-all (:: (ok 41) (Result int int))))                  ; 42
+  (show-r (inc-all (:: (err 3) (Result int int))))                  ; -3
+  (println (match (:: (lifted-double 21) (Option int)) (Some v) v (None) -1))  ; 42
+  (println (at-option inc-all))                                     ; 42
+  0)

@@ -424,7 +424,9 @@ statically resolved call is unchanged, since dispatch still finds the instance
 from the concrete type. A generic compiled by dictionary passing, or run by the
 interpreter, receives a dictionary for each implied superclass as well, which
 is what lets a return-directed method such as `pure` resolve under
-`[^Alternative F]`. The instance obligation guarantees each of those
+`[^Alternative F]`. The same holds for a constrained rank-2 `forall`: its
+`[(Applicative m)]` implies `(Functor m)` too, so a function passed to it lines
+up dictionary for dictionary. The instance obligation guarantees each of those
 dictionaries exists.
 
 The stdlib uses the preamble where the relation is real:
@@ -432,6 +434,7 @@ The stdlib uses the preamble where the relation is real:
 | Class | Superclass | File |
 |---|---|---|
 | `Ord` | `Eq` | `typeclass-ord.tur` (auto-loaded) |
+| `Applicative` | `Functor` | `typeclass-applicative.tur` (auto-loaded) |
 | `Alternative` | `Applicative` | `typeclass-alternative.tur` (auto-loaded) |
 | `MonadError` | `Monad` | `typeclass-monaderror.tur` (auto-loaded) |
 | `Traversable` | `Functor`, `Foldable` | `typeclass.tur` |
@@ -440,8 +443,8 @@ The stdlib uses the preamble where the relation is real:
 | `BoundedMeet` | `MeetSemilattice` | `typeclass-lattice.tur` |
 
 So a `[^Ord A]` function may call `eq?`, and `mconcat` carries one constraint
-rather than two (see the [lattice guide](lattice-guide.md)). `Applicative`,
-`Monad` and the arrow classes are still flat. Each is retrofitted separately, because adding a preamble to an existing
+rather than two (see the [lattice guide](lattice-guide.md)). `Monad` and the
+arrow classes are still flat. Each is retrofitted separately, because adding a preamble to an existing
 class obliges every existing instance of it, in every downstream spice, to
 carry the superclass instance. Until a class is retrofitted, a function needing
 both lists both constraints.

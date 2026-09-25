@@ -25,7 +25,10 @@
 (defdata B1 [a] (Mk1 :int a))
 (defdata B2 [a] (Mk2 :int a))
 
+;; Functor instance: Applicative is declared over Functor (typeclass-superclasses-plan SC8b step 3).
+(definstance Functor [B1] (fmap [c g] (match c (Mk1 t v) (Mk1 t (g v)))))
 (definstance Applicative [B1] (pure [x] (Mk1 100 x)) (ap [ff fa] fa))
+(definstance Functor [B2] (fmap [c g] (match c (Mk2 t v) (Mk2 t (g v)))))
 (definstance Applicative [B2] (pure [x] (Mk2 200 x)) (ap [ff fa] fa))
 
 (defn un-1 [b : (B1 int)] : int (match b (Mk1 t v) (+ t v)))

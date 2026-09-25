@@ -1490,6 +1490,48 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     }
                 }
 
+                /* class-superclasses: a forall's constraints imply their
+                 * superclasses exactly as a defn's do (elab_defn applies the
+                 * same typeclass_constraints_with_supers).  A constrained
+                 * rank-2 forall carries one dictionary per constraint and
+                 * forall-dict-pass aligns those slots positionally with the
+                 * inner function's constraint list, so the two lists must be
+                 * expanded the same way or `[^Applicative m]` (three after
+                 * expansion, with Functor) would no longer line up with
+                 * `[(Applicative m)]`.  Existentials keep their declared list:
+                 * their pack layout is a separate ABI. */
+                if (is_forall_form && n_constraints > 0) {
+                    TypeConstraint *tmp = (TypeConstraint *)arena_alloc(
+                        e->arena, n_constraints * sizeof(TypeConstraint));
+                    for (uint8_t i = 0; i < n_constraints; i++) {
+                        memset(&tmp[i], 0, sizeof(tmp[i]));
+                        tmp[i].typeclass = cclasses[i];
+                        tmp[i].type_arg  = TYPE_UNKNOWN;
+                        tmp[i].param_idx = -1;
+                        tmp[i].tyvar     = ext_params[n_type_params + cvar_idx[i]];
+                    }
+                    uint8_t n_exp = n_constraints;
+                    TypeConstraint *exp = typeclass_constraints_with_supers(
+                        &e->typeclass_env, tmp, n_constraints, &n_exp);
+                    if (n_exp > n_constraints) {
+                        TypeClass **ncls = (TypeClass **)arena_alloc(
+                            e->arena, n_exp * sizeof(TypeClass *));
+                        uint8_t *nidx = (uint8_t *)arena_alloc(e->arena, n_exp);
+                        for (uint8_t i = 0; i < n_exp; i++) {
+                            ncls[i] = exp[i].typeclass;
+                            nidx[i] = 0;
+                            for (uint8_t j = 0; j < n_bound; j++)
+                                if (ext_params[n_type_params + j] == exp[i].tyvar) {
+                                    nidx[i] = j;
+                                    break;
+                                }
+                        }
+                        cclasses = ncls;
+                        cvar_idx = nidx;
+                        n_constraints = n_exp;
+                    }
+                }
+
                 /* Build the TY_FORALL or TY_EXISTS node */
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 memset(t, 0, sizeof(Type));
