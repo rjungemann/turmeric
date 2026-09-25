@@ -1,0 +1,1 @@
+The threads and the collector are compiled-program things: the modules are inline C over pthreads, and the interpreter has no r7rs-gc.
