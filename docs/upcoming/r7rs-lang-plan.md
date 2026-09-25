@@ -2419,7 +2419,7 @@ re-entered continuation).**
 >   - Verified by hand at `-O1` and under ASan, and on a Release build's
 >     both back ends. (`-O0` links no program at all today, Turmeric or
 >     Scheme, before and after T5 -- filed as
->     [o0-build-cannot-link-contract-handler](../reported/o0-build-cannot-link-contract-handler.md).)
+>     [o0-build-cannot-link-contract-handler](../archive/o0-build-cannot-link-contract-handler.md).)
 
 **T6 -- complex numbers, deliberately after the others (73 tests before T0,
 71 after: 756, 760, 784, 789, 794, 796, 797, 849, 903, 1016, 1017,

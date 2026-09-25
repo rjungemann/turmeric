@@ -1,5 +1,21 @@
 # `@x` on an `rc<T>` emits the control-block pointer, not the value
 
+> **RESOLVED 2026-09-25.** `EX_DEREF` has a `TY_RC` arm
+> (`src/compiler/emit_expr.c`) that reads the payload through
+> `rc_get_value`, in the layout `EX_RC_OF` chose: a boxed or `:heap` ADT's
+> control block adopts the ctor's pointer, so `cb->value` IS the carrier;
+> every other payload is `*(T *)cb->value`.  Two more halves turned up while
+> fixing it: `elab_deref` typed `@` on an `rc<ADT>` as a def-less `TY_ADT`
+> (so `(match @s ...)` and a field read of the result could not resolve --
+> it now uses the rc's `adt_def`), and the interpreter had the same bug as
+> the emitter (`EX_DEREF` returned the `__rc` pair, which printed as the
+> counter's address) -- it now returns the pair's value.  The CPS emitter has
+> no `EX_DEREF` lowering of its own (it walks the operand and defers to
+> `emit_value`), so it needed nothing.  Pinned by
+> `tests/fixtures/rc-deref-reads-payload` (int, float, record, sum, `:heap`,
+> and `rc/from-ref`; identical under `--interpret`; leak-checked).
+
+
 **Severity: high** (silent wrong answer, no diagnostic). Found 2026-09-23 while
 landing proper-tail-calls T4; pre-existing on `main` (reproduced with the T4
 changes stashed).

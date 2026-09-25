@@ -12601,6 +12601,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                            inner_type_c, tmp, inner_type_c, inner);
                 free(inner);
                 return tmp;
+            } else if (e->as.deref_.expr->type.kind == TY_RC) {
+                /* rc-deref-emits-control-block-pointer: the operand is the
+                 * RcControlBlock, not the value.  Read the payload through
+                 * cb->value with the layout EX_RC_OF chose: a boxed or `:heap`
+                 * ADT's control block ADOPTS the ctor's pointer, so cb->value
+                 * IS the carrier; every other payload sits in a cell that
+                 * cb->value points at. */
+                Type rt = e->type;
+                bool adopted = rt.kind == TY_ADT && rt.as.adt_.def &&
+                               (rt.as.adt_.def->is_heap ||
+                                !adt_is_byvalue_product(rt.as.adt_.def));
+                const char *inner_type_c = type_c_name(rt);
+                char *tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                if (adopted) {
+                    buf_printf(body,
+                               "%s %s = (%s)(intptr_t)rc_get_value((RcControlBlock *)(intptr_t)(%s));\n",
+                               inner_type_c, tmp, inner_type_c, inner);
+                } else {
+                    buf_printf(body,
+                               "%s %s = *((%s *)rc_get_value((RcControlBlock *)(intptr_t)(%s)));\n",
+                               inner_type_c, tmp, inner_type_c, inner);
+                }
+                free(inner);
+                return tmp;
             } else {
                 /* For ptr<T>, just cast to the appropriate type and dereference */
                 /* For now, ptr<void> stays as void* */
