@@ -1,0 +1,47 @@
+#lang r7rs
+;; The r7rs-gc experiment (docs/upcoming/r7rs-gc-plan.md), built with
+;; --enable=r7rs-gc by this fixture's `flags`: Scheme values kept in memory
+;; the RUNTIME ARCHIVE allocates.  A Turmeric persistent map is a HAMT whose
+;; nodes libturt_runtime.a (or the autolinked hamt.c) allocates -- with libc,
+;; before the archive's allocator hook (src/runtime/rt_alloc.h) -- so the
+;; collector never scanned them, and a value only the map still referred to
+;; was freed under it: this program segfaulted under TUR_GC_TORTURE=1.  Now
+;; the archive allocates through the collector, a node is a collected object,
+;; and the values it holds are found through it.  tests/run-r7rs-gc.sh runs
+;; this under torture; here it must simply be right.
+(import (scheme base) (scheme write)
+        (turmeric stdlib/map)
+        (only (turmeric stdlib/vec) vec-new vec-push! vec-len vec-get))
+(define (show x) (write x) (newline))
+
+;; Enough garbage to make the collector run many times between the stores
+;; and the reads.
+(define (churn i)
+  (if (= i 0) 'done
+      (begin (list i i i i) (churn (- i 1)))))
+
+;; A list, a string and a vector that live only in the map.
+(define m (map-assoc #map{:a 1} :k (list 1 2 3 "four" (vector 5 6))))
+(churn 200000)
+(show (map-get m :k))
+(define m2 (map-assoc m :s (string-append "hello" " world")))
+(churn 200000)
+(show (map-get m2 :s))
+(show (map-get m2 :k))
+(show (map-count m2))
+
+;; Values that live only in a Turmeric vec's buffer: the buffer is the
+;; program's own (stdlib/vec is inline C in this unit), the elements are
+;; Scheme data.
+(define v (vec-new))
+(vec-push! v (list 'p 'q))
+(vec-push! v (string-copy "r"))
+(churn 200000)
+(show (vec-len v))
+(show (vec-get v 0))
+(show (vec-get v 1))
+
+;; The map itself, reachable only through a Scheme pair, survives too.
+(define holder (cons (map-assoc #map{:y 0} :z (list 'deep)) '()))
+(churn 200000)
+(show (map-get (car holder) :z))

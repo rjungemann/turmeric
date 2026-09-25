@@ -49,6 +49,23 @@ The pairs are Scheme data and fall under
 [r7rs-heap-data-never-reclaimed](r7rs-heap-data-never-reclaimed.md); the DK
 frames, the escape records and the packed rest chains do not.
 
+## The experiment (`--enable=r7rs-gc`)
+
+Under the r7rs-gc experiment ([docs/upcoming/r7rs-gc-plan.md](../upcoming/r7rs-gc-plan.md))
+every record above is a collected object: the abandoned DK frames, the
+escape and `raise-continuable` records and the packed rest chain are
+garbage once the escape has jumped over them, and the next collection
+reclaims them. Peak RSS of the repro at 200,000 caught raises, measured
+2026-09-25 (default `-O2`):
+
+| build | peak RSS | time |
+|---|---|---|
+| plain | 266 MB | 0.25 s |
+| `--enable=r7rs-gc` | 30 MB | 0.28 s |
+
+This report stays open until the collector graduates; the fix directions
+below are what a build without it would need.
+
 ## Fix directions
 
 - Have the escape unwind what it skips. The runtime already keeps the live

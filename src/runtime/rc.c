@@ -23,6 +23,15 @@
 /* Phase 9: Include deferred free queue to avoid deep recursion */
 #include "rc_free_queue.h"
 
+/* r7rs-gc: allocate through the archive's hook (rt_alloc.h) -- libc unless a
+ * collector installed itself.  Object-like, so a `free` passed by name is the
+ * hook's too. */
+#include "rt_alloc.h"
+#define malloc  tur_rt_malloc
+#define calloc  tur_rt_calloc
+#define realloc tur_rt_realloc
+#define free    tur_rt_free
+
 /* Default drop function: just call free() on the value.  Correct only for a
  * payload that is its own allocation (tur_rc_from_ref, rc_set_value) -- see
  * inline_scalar_drop_fn for the inline case. */

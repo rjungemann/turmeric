@@ -253,6 +253,8 @@ set(TUR_CORE_SOURCES
     runtime/image.c
     runtime/interp.c
     runtime/rc.c
+    # r7rs-gc: the archive TUs' allocator hook (rt_alloc.h); dual-listed below.
+    runtime/rt_alloc.c
     runtime/sha256.c
     runtime/rc_free_queue.c
     runtime/region.c
@@ -667,6 +669,11 @@ set(TURT_RUNTIME_SOURCES
     runtime/rc.c
     runtime/gc.c
     runtime/rc_free_queue.c
+    # r7rs-gc (docs/upcoming/r7rs-gc-plan.md): the allocator hook the members
+    # above allocate through, so a program's collector can own their blocks.
+    # libc until installed; a stdlib autolink marker compiles it beside hamt.c,
+    # tur_string.c and symbols.c in bare-source mode.
+    runtime/rt_alloc.c
     # RM3 regions: an emitted spine ctor calls tur_region_alloc_or_malloc when
     # --enable=regions is on, so the definition has to be linkable by the
     # program, not only by the compiler.  Same reasoning as the rc/gc members

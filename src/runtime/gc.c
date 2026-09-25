@@ -15,6 +15,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* r7rs-gc: allocate through the archive's hook (rt_alloc.h) -- libc unless a
+ * collector installed itself.  Object-like, so a `free` passed by name is the
+ * hook's too. */
+#include "rt_alloc.h"
+#define malloc  tur_rt_malloc
+#define calloc  tur_rt_calloc
+#define realloc tur_rt_realloc
+#define free    tur_rt_free
+
 /* ========== Global state ========== */
 
 /* Suspect roots buffer - global for v1 (per-thread in future).

@@ -67,8 +67,12 @@ through it, and the repro above peaks at 10 MB in 0.23 s (from 429 MB,
 0.39 s). `tests/run-r7rs-gc.sh` (ctest `tur_r7rs_gc`) runs every Scheme
 fixture under it with frequent collections, and checks that the repro fits
 in 256 MiB with it and not without. This report stays open until the
-collector graduates: it is Linux/glibc only, single-threaded, compiled only,
-and does not scan memory the runtime archive allocates (the plan's Limits).
+collector graduates: it is compiled only, single-threaded (a thread start
+under the flag is refused with the reason), Linux/glibc and macOS (the
+macOS roots await their first CI run), and it does not scan memory libc or
+the backtracking trail allocate (the plan's Limits). Since the second pass
+(2026-09-25) the runtime archive allocates through it, so a Scheme value
+kept in a Turmeric map or `rc<T>` cell is seen.
 
 ## Fix directions
 

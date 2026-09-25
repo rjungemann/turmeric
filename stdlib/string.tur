@@ -371,6 +371,6 @@
   #fx{Unsafe}
   : int
   ```c
-  /* __tur_autolink__: src/runtime/tur_string.c -Isrc/runtime */
+  /* __tur_autolink__: src/runtime/tur_string.c src/runtime/rt_alloc.c -Isrc/runtime */
   return 0;
   ```)

@@ -23,6 +23,15 @@ rest-argument chains a variadic call builds (the same model), and the records
 a caught `raise` leaves
 ([r7rs-caught-raise-leaks-runtime-records](r7rs-caught-raise-leaks-runtime-records.md)).
 
+## The experiment (`--enable=r7rs-gc`)
+
+Under the r7rs-gc experiment ([docs/upcoming/r7rs-gc-plan.md](../upcoming/r7rs-gc-plan.md))
+a scratch string or vector nobody frees is garbage like any other: the
+compiled program's allocator is the collector, so each site above is
+reclaimed at the next collection. The interpreter is unchanged, and a build
+without the flag still leaks them, so this report stays open until the
+collector graduates.
+
 ## Fix directions
 
 Each is the pattern T8 used for the others: free the scratch string with

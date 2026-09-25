@@ -6,6 +6,26 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: the collector sees the runtime archive, refuses threads,
+  and has its macOS roots (r7rs-gc-plan, second pass).** The TUs of
+  `libturt_runtime.a` (the HAMT behind `stdlib/map`, rc<T> and its cycle
+  collector, owned strings, symbols) allocate through a new hook,
+  `src/runtime/rt_alloc.h` -- libc unless something installs another -- and
+  under `--enable=r7rs-gc` the collector installs itself at program start,
+  so a Scheme value kept only in a Turmeric map is scanned through the node
+  that holds it instead of freed under it (it segfaulted under
+  `TUR_GC_TORTURE=1`; new fixture `r7rs-gc-seam`). The same files compiled
+  beside a program by a stdlib autolink marker carry `rt_alloc.c` on the
+  marker, and the link driver keeps a repeated bare `.c` source once. A
+  thread start under the flag (any `pthread_create` in the unit) prints why
+  the collector cannot support it and exits 70. On macOS the roots are the
+  main image's writable segments and `pthread_get_stackaddr_np`'s stack
+  base; `tests/run-r7rs-gc.sh` runs there too (its address-space check
+  stays Linux-only) and gains the map-seam and thread cases. The caught
+  `raise` records and the prelude's remaining scratch are collected as well
+  (200,000 caught raises: 266 MB -> 30 MB). The trail (`stdlib/trail`)
+  stays on libc, its arrays being rooted in `__thread` storage.
+
 - **`#lang r7rs`: an experimental collector (`--enable=r7rs-gc`).** A
   conservative mark-sweep collector (`src/runtime/r7gc.c`) for compiled
   `#lang r7rs` programs on Linux/glibc. Under the flag the emitter pastes it

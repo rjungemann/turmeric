@@ -6843,7 +6843,7 @@ static void * hamt_slpersistent_ex(void * t) {
 }
 
 static int64_t hamt_slautolink_hyhint() {
-        /* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */
+        /* __tur_autolink__: src/runtime/hamt.c src/runtime/rt_alloc.c -Isrc/runtime */
   return 0;
   
 }
