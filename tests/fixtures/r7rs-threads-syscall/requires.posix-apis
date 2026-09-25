@@ -1,0 +1,1 @@
+pipe(), fdopen() on a pipe and write() to it: POSIX, which MinGW lacks (Windows builds this fixture without the collector anyway).

@@ -10,7 +10,10 @@
 #   - ASan aborts on the first memory error;
 #   - UBSan is built with -fno-sanitize-recover, so a finding aborts too;
 #   - each fixture must still print its expected.stdout and exit with its
-#     expected.exit (0 when there is none).
+#     expected.exit (0 when there is none);
+#   - a fixture carrying `sanitize.torture` (an interval) runs with
+#     TUR_GC_TORTURE set to it: the r7rs-threads-* stress cases, whose point
+#     is the collector stopping threads mid-allocation, under ASan.
 #
 # LEAKS ARE NOT CHECKED here (detect_leaks=0), on purpose: a Scheme program's
 # pairs, vectors, strings and procedures are never freed -- the memory model
@@ -76,8 +79,12 @@ one_case() {
         echo "FAIL $name -- build failed: $(grep -m1 -i error "$WORK/$name.build" | cut -c1-160)"
         return
     fi
+    # A fixture that is about the collector under contention asks for
+    # frequent collections here too (sanitize.torture: the interval).
+    local torture=""; [ -f "$dir/sanitize.torture" ] && torture="$(tr -d '[:space:]' < "$dir/sanitize.torture")"
     (cd "$dir" && ASAN_OPTIONS="detect_leaks=0:halt_on_error=1" \
         UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" \
+        env ${torture:+TUR_GC_TORTURE="$torture"} \
         timeout 120 "$WORK/$name" "${args[@]}" < "$stdin" \
         > "$WORK/$name.out" 2> "$WORK/$name.err") 2> /dev/null
     rc=$?

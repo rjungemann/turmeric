@@ -1,0 +1,63 @@
+;; tlsmod -- two threads started the way stdlib/thread starts them (through
+;; the runtime's tur_thread_trampoline, which sets the per-thread state), each
+;; reading its own cancellation flag after both have parked: only the
+;; cancelled one sees it.  Under a shared (non-thread-local) state both would
+;; read the last thread's.
+(defmodule tlsmod
+  (export tls-run)
+  ```c
+  typedef struct { pthread_mutex_t mu; pthread_cond_t cv; int arrived; int open; int64_t seen[2]; } TlsGate;
+  typedef struct { TlsGate *g; int slot; } TlsArg;
+  typedef struct { TurThreadHandle *h; } TlsThread;
+  static void *tls_worker(void *raw) {
+      TlsArg *a = (TlsArg *)raw;
+      TlsGate *g = a->g;
+      pthread_mutex_lock(&g->mu);
+      g->arrived++;
+      pthread_cond_broadcast(&g->cv);
+      while (!g->open) pthread_cond_wait(&g->cv, &g->mu);
+      pthread_mutex_unlock(&g->mu);
+      g->seen[a->slot] = tur_thread_cancel_requested() ? 1 : 0;
+      return NULL;
+  }
+  static TurThreadHandle *tls_spawn(TlsGate *g, int slot) {
+      TurThreadState *state = (TurThreadState *)calloc(1, sizeof *state);
+      pthread_mutex_init(&state->cancel_mutex, NULL);
+      pthread_cond_init(&state->cancel_cond, NULL);
+      TlsArg *a = (TlsArg *)malloc(sizeof *a);
+      a->g = g; a->slot = slot;
+      TurThreadSpawnArg *sa = (TurThreadSpawnArg *)malloc(sizeof *sa);
+      sa->user_fn = tls_worker; sa->user_arg = a; sa->state = state;
+      TurThreadHandle *h = (TurThreadHandle *)malloc(sizeof *h);
+      h->state = state;
+      if (pthread_create(&h->tid, NULL, tur_thread_trampoline, sa) != 0) abort();
+      return h;
+  }
+  ```
+  ;; seen[0] * 10 + seen[1]: 10 when only the first thread saw its
+  ;; cancellation.
+  (defn tls-run [] : int
+    ```c
+    TlsGate *g = (TlsGate *)calloc(1, sizeof *g);
+    pthread_mutex_init(&g->mu, NULL); pthread_cond_init(&g->cv, NULL);
+    g->seen[0] = g->seen[1] = -1;
+    TurThreadHandle *a = tls_spawn(g, 0);
+    TurThreadHandle *b = tls_spawn(g, 1);
+    pthread_mutex_lock(&g->mu);
+    while (g->arrived < 2) pthread_cond_wait(&g->cv, &g->mu);
+    pthread_mutex_unlock(&g->mu);
+    /* cancel-thread does this with an atomic store; a plain store under the
+       thread's cancel mutex is what c2mir (tur jit) can compile. */
+    pthread_mutex_lock(&a->state->cancel_mutex);
+    a->state->cancel_requested = 1;
+    pthread_mutex_unlock(&a->state->cancel_mutex);
+    pthread_mutex_lock(&g->mu);
+    g->open = 1;
+    pthread_cond_broadcast(&g->cv);
+    pthread_mutex_unlock(&g->mu);
+    pthread_join(a->tid, NULL);
+    pthread_join(b->tid, NULL);
+    int64_t r = g->seen[0] * 10 + g->seen[1];
+    free(a->state); free(a); free(b->state); free(b); free(g);
+    return r;
+    ```))

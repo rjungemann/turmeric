@@ -1,0 +1,13 @@
+#lang r7rs
+;; r7rs-gc threads, stage C (docs/archive/r7rs-gc-threads-plan.md): eight
+;; threads assoc and dissoc Scheme values in one shared Turmeric persistent
+;; map through a mutex, and allocate garbage between turns, while a ninth
+;; churns garbage and large objects.  Every slow path of the heap runs under
+;; contention: refills, the HAMT's frees on dissoc, large objects, and the
+;; collections all nine trigger, each stopping the other eight wherever they
+;; are.  The turns are serialized by the mutex, so the map's final contents
+;; are the same whichever thread took which turn, and every value is checked
+;; whole.
+(import (scheme base) (scheme write) (stress) (turmeric crew))
+(crew-run)
+(write (checksum)) (newline)

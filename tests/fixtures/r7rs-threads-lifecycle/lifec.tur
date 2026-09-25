@@ -1,0 +1,33 @@
+;; lifec -- the C the Scheme half calls: a per-thread value kept only under a
+;; pthread key, and a forked child's exit.  The value sits in a one-entry
+;; Turmeric map whose handle is the key's value, so nothing but libc's
+;; per-thread storage points at the map, and nothing but the map at the list.
+(defmodule lifec
+  (export keep! kept child-exit)
+  ```c
+  #include <unistd.h>
+  static pthread_key_t lifec_key;
+  static pthread_once_t lifec_once = PTHREAD_ONCE_INIT;
+  static void lifec_key_init(void) { pthread_key_create(&lifec_key, NULL); }
+  ```
+  (defn keep-map! [m : (Map int any)] : nil
+    ```c
+    pthread_once(&lifec_once, lifec_key_init);
+    pthread_setspecific(lifec_key, (void *)(intptr_t)m);
+    ```)
+  ;; The carrier cast, not (__TUR_RET__): the emitter declares this function
+  ;; int64_t while __TUR_RET__ names the map's pointer type here
+  ;; (docs/reported/tur-ret-disagrees-with-inline-c-signature.md).
+  (defn kept-map [] : (Map int any)
+    ```c
+    return (int64_t)(intptr_t)pthread_getspecific(lifec_key);
+    ```)
+  (defn keep! [v : any] : nil
+    (let [m : (Map int any) (map-new)]
+      (keep-map! (map-assoc m 0 v))))
+  (defn kept [] : any
+    (map-get (kept-map) 0))
+  (defn child-exit [code : int] : nil
+    ```c
+    _exit((int)code);
+    ```))

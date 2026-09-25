@@ -1,0 +1,138 @@
+;; life -- the threads: a keeper that runs the per-thread key check on a
+;; worker, a burner that allocates flat out while the main thread forks, and
+;; a crowd of detached threads.  Raw pthreads, as stdlib/thread is.
+(defmodule life
+  (import lifework :refer [build! walk churn! burn! child! answer!])
+  (import lifec :refer [keep! kept])
+  (export life-keeper-start life-keeper-join life-fork-run life-detach-run)
+  ```c
+  #include <unistd.h>
+  #include <sys/wait.h>
+  static pthread_mutex_t life_mu = PTHREAD_MUTEX_INITIALIZER;
+  static pthread_cond_t life_cv = PTHREAD_COND_INITIALIZER;
+  static int life_burning, life_finished;
+  static pthread_t life_keeper_tid, life_burner_tid;
+  /* The records in the collector's registry besides the main thread's
+   * (r7gc.c is pasted ahead of this unit's code).  Without the collector
+   * there is no registry, and nothing left in it. */
+  static int life_extra_records(void) {
+  #if defined(TUR_GC_ON) && TUR_GC_ON
+      int n = 0;
+      pthread_mutex_lock(&tur_gc_G->world);
+      for (tur_gc_thread *t = tur_gc_G->threads; t; t = t->next) n++;
+      pthread_mutex_unlock(&tur_gc_G->world);
+      return n - 1;
+  #else
+      return 0;
+  #endif
+  }
+  ```
+  ;; kept, on a worker: its own value under the same key, through churn.
+  (defn life-keeper [arg : ptr<void>] : ptr<void>
+    (keep! (build!))
+    (churn!)
+    (answer! (walk (kept)))
+    arg)
+  (defn life-spawn-keeper [f : ptr<void>] : nil
+    ```c
+    if (pthread_create(&life_keeper_tid, NULL, (void *(*)(void *))f, NULL) != 0) abort();
+    ```)
+  (defn life-keeper-start [] : bool
+    (life-spawn-keeper life-keeper)
+    true)
+  (defn life-keeper-join [k : bool] : nil
+    ```c
+    (void)k;
+    pthread_join(life_keeper_tid, NULL);
+    ```)
+  ;; fork, while the burner allocates.
+  (defn life-burning? [] : bool
+    ```c
+    pthread_mutex_lock(&life_mu);
+    int b = life_burning;
+    pthread_mutex_unlock(&life_mu);
+    return b != 0;
+    ```)
+  (defn life-burn-loop [] : bool
+    (if (life-burning?)
+      (do
+        (burn!)
+        (life-burn-loop))
+      true))
+  (defn life-burner [arg : ptr<void>] : ptr<void>
+    (life-burn-loop)
+    arg)
+  (defn life-child [arg : ptr<void>] : ptr<void>
+    (child!)
+    arg)
+  (defn life-forks [n : int b : ptr<void> c : ptr<void>] : int
+    ```c
+  #if defined(TUR_JIT_ENGINE)
+    /* Under `tur jit` the collector is off, so there is no lock of ours for
+     * a child to inherit; and a child forked while another thread runs hangs
+     * in the engine itself (docs/reported/jit-fork-child-hangs-with-threads.md). */
+    (void)n; (void)b; (void)c;
+    return 0;
+  #else
+    int fails = 0;
+    pthread_mutex_lock(&life_mu); life_burning = 1; pthread_mutex_unlock(&life_mu);
+    if (pthread_create(&life_burner_tid, NULL, (void *(*)(void *))b, NULL) != 0) abort();
+    for (int64_t i = 0; i < n; i++) {
+        pid_t pid = fork();
+        if (pid < 0) { fails++; break; }
+        if (pid == 0) {
+            alarm(5);   /* a child stuck on an inherited lock dies, and counts */
+            ((void *(*)(void *))c)(NULL);
+            _exit(2);
+        }
+        int st = 0;
+        if (waitpid(pid, &st, 0) != pid || !WIFEXITED(st) || WEXITSTATUS(st) != 0) { fails++; break; }
+    }
+    pthread_mutex_lock(&life_mu); life_burning = 0; pthread_mutex_unlock(&life_mu);
+    pthread_join(life_burner_tid, NULL);
+    return fails;
+  #endif
+    ```)
+  (defn life-fork-run [n : int] : int
+    (life-forks n life-burner life-child))
+  ;; detached: half by attribute, half by pthread_detach after the start.
+  (defn life-note-finished [] : nil
+    ```c
+    pthread_mutex_lock(&life_mu);
+    life_finished++;
+    pthread_cond_broadcast(&life_cv);
+    pthread_mutex_unlock(&life_mu);
+    ```)
+  (defn life-detached [arg : ptr<void>] : ptr<void>
+    (build!)
+    (life-note-finished)
+    arg)
+  (defn life-detaches [n : int w : ptr<void>] : int
+    ```c
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    for (int64_t i = 0; i < n; i++) {
+        pthread_t t;
+        if (i % 2) {
+            if (pthread_create(&t, &at, (void *(*)(void *))w, NULL) != 0) abort();
+        } else {
+            if (pthread_create(&t, NULL, (void *(*)(void *))w, NULL) != 0) abort();
+            pthread_detach(t);
+        }
+    }
+    pthread_attr_destroy(&at);
+    pthread_mutex_lock(&life_mu);
+    while (life_finished < n) pthread_cond_wait(&life_cv, &life_mu);
+    pthread_mutex_unlock(&life_mu);
+    /* A record goes when its thread is gone, a moment after it finished. */
+    int extra = life_extra_records();
+    for (int i = 0; i < 5000 && extra > 0; i++) {
+        struct timespec ts = { 0, 1000000 };
+        nanosleep(&ts, NULL);
+        extra = life_extra_records();
+    }
+    return extra;
+    ```)
+  (defn life-detach-run [n : int] : int
+    (life-detaches n life-detached)))

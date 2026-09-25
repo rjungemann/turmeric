@@ -1,0 +1,24 @@
+;; rendez -- two threads meet by spinning on flags, allocating as they spin,
+;; with no blocking call between them: only threads that run at the same
+;; time can both arrive.
+(defmodule rendez
+  (export rendezvous)
+  ```c
+  typedef struct { volatile int a, b; } Rendez;
+  static void *rz_other(void *raw) {
+      Rendez *r = (Rendez *)raw;
+      r->b = 1;
+      while (!r->a) { void *junk = malloc(64); (void)junk; }
+      return NULL;
+  }
+  ```
+  (defn rendezvous [] : int
+    ```c
+    Rendez *r = (Rendez *)calloc(1, sizeof *r);
+    pthread_t t;
+    if (pthread_create(&t, NULL, rz_other, r) != 0) abort();
+    r->a = 1;
+    while (!r->b) { void *junk = malloc(64); (void)junk; }
+    pthread_join(t, NULL);
+    return 1;
+    ```))

@@ -2,6 +2,55 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **`#lang r7rs`: threads run under the collector, in parallel** (stages A
+  and B of docs/archive/r7rs-gc-threads-plan.md). A compiled Scheme
+  program that starts a thread -- through `stdlib/thread`, a session, a
+  task group, the multi-threaded scheduler, or a Turmeric module's own
+  `pthread_create` -- no longer stops with exit 70. The r7rs-gc collector
+  registers every thread; allocation is a per-thread cache of slots
+  refilled from the shared free lists under a heap lock; a collection stops
+  every other thread by signal wherever it is (Boehm's design, `SIGPWR` /
+  `SIGXCPU` on Linux, `SIGXCPU` / `SIGXFSZ` on macOS) or leaves it where it
+  parked itself in a blocking call, and scans every thread's stack,
+  registers, thread-local runtime state (thread-local again under the
+  collector; each thread registers its instances through
+  `tur_rt_tls_roots`), allocation cache and region generations. A
+  collection on a fiber's stack scans the right memory. The blocking calls
+  the unit spells are release points that also retry an EINTR the stop
+  signal caused. Gate: `tests/run-r7rs-gc.sh` section 3
+  (threads-run/share/roots/tls/parallel/pause/syscall/lint) and
+  `tests/fixtures/r7rs-threads-*`.
+
+### Fixed
+
+- **`#lang r7rs` threads: the collected heap under contention** (stages C
+  and D of docs/archive/r7rs-gc-threads-plan.md, which is now complete and
+  archived). In a compiled Scheme program under the r7rs-gc collector:
+  - A detached thread (a future's timeout, a task group's, `thread-detach`)
+    leaves the collector's registry once it is gone. Before, its record,
+    result and key values stayed for the life of the process.
+  - A child forked while another thread allocates no longer deadlocks at
+    its first allocation. The collector's locks are taken around `fork`.
+  - A value kept with `pthread_setspecific` is a root. The `^thread-local`
+    block and a spawned thread's conveyed dynamic bindings live there. The
+    block went at the first collection, even in a one-thread program.
+  - A large object can no longer be freed in the instant between its
+    allocation and its return.
+  - Threads that cross the collection threshold together run one
+    collection, not one each.
+  - The region walker cannot miss a slab a stopped thread was adding
+    (src/runtime/arena.c).
+
+  Gate: `tests/run-r7rs-gc.sh` gains `threads-stress` (eight threads assoc
+  and dissoc Scheme values in one shared persistent map while a ninth
+  churns, every value checked) and `threads-lifecycle`. Both also run under
+  ASan in `tests/run-r7rs-sanitize.sh`, at a collection every 31
+  allocations.
+
 ## [0.54.0] -- 2026-09-25
 
 ### Changed

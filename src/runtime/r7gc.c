@@ -7,7 +7,8 @@
  * data is the case only a tracing collector handles well.
  *
  * How it plugs in: the emitter pastes this file into the program's
- * translation unit, ahead of everything else in the preamble, and then
+ * translation unit, right after the preamble's system includes and ahead of
+ * everything that allocates, and then
  * redirects that unit's allocator -- `malloc`, `calloc`, `realloc`, `free`,
  * `strdup`, `strndup`, and the region fallbacks -- to the `tur_gc_*` entry
  * points below (emit_module.c, emit_r7rs_gc_prologue).  Every object the
@@ -16,24 +17,51 @@
  *
  * Conservative: any aligned word that points into an allocated object (its
  * first byte or any byte inside it) keeps the object alive.  The roots are
- *   - the C stack from the collector's frame to the thread's stack base, with
- *     the callee-saved registers spilled into a jmp_buf on that stack;
- *   - the executable's writable data and bss (`__data_start` .. `_end`),
- *     which includes the emitted runtime's per-thread state, because the
- *     emitter makes TUR_THREAD_LOCAL plain static storage when the collector
- *     is on (the collector is single-threaded);
- *   - the used bytes of every live and retired region generation
- *     (tur_region_each_used), since a node built in a bracket can point here.
+ *   - every registered thread's C stack and registers: the collecting
+ *     thread's from its own frame, with the callee-saved registers spilled
+ *     into a jmp_buf there; a thread parked in a blocking call from the point
+ *     it parked at, with the registers it spilled there; any other thread
+ *     from the frame of the signal handler that stopped it (below), with the
+ *     registers the kernel saved on its stack;
+ *   - each thread's thread-local runtime state (the emitted runtime's
+ *     TUR_THREAD_LOCAL variables), whose addresses the thread registers when
+ *     it starts (tur_rt_tls_roots, emitted after the preamble), and every
+ *     value it stored through pthread_setspecific (dynamic variables, the
+ *     ^thread-local block), which libc keeps where no scan reaches;
+ *   - the executable's writable data and bss (`__data_start` .. `_end`);
+ *   - the used bytes of every live and retired region generation on every
+ *     thread (the region runtime's ownership registry);
+ *   - each thread's allocation cache: slots it holds but has not handed out
+ *     are kept, not scanned.
  * Objects are scanned whole, word by word.
+ *
+ * Threads (docs/archive/r7rs-gc-threads-plan.md, stages A to C): threads
+ * run in parallel.  Allocation is a per-thread cache of slots per size
+ * class, refilled from the shared free lists under `G->heap`; a collection
+ * takes `G->world` (one collector at a time), then `G->heap` (no thread is
+ * inside the allocator's slow path), then stops every other thread: a thread
+ * parked in a blocking call (tur_gc_park, the release points at the end of
+ * this file) has already spilled its registers and stack pointer and is left
+ * where it is; any other thread is sent a signal whose handler spills the
+ * same and waits, on its own stack, for the resume signal.  This is the
+ * Boehm collector's design: a thread can be stopped anywhere, so no safe
+ * points are compiled in.  The stop signal restarts the interrupted system
+ * call (SA_RESTART); the few that do not restart are the wrapped ones, whose
+ * wrappers retry an EINTR the collector caused.  A thread's record outlives
+ * its start routine until nothing of the thread is left: a joinable thread's
+ * until the join, a detached one's until its key destructors have run (the
+ * collector's own key, re-armed to run last).  A fork takes every collector
+ * lock first, so the child never inherits one another thread held.
  *
  * The runtime archive (libturt_runtime.a: the HAMT, rc<T>, strings, symbols)
  * allocates through the hook in src/runtime/rt_alloc.h, which the
  * constructor below points at this heap, so a Scheme value kept in a
  * Turmeric map or cell is scanned through the node that holds it.  What it
  * still cannot see, and so must not be relied on (the plan's limits): memory
- * libc allocates, the trail's `__thread`-rooted arrays (trail.c), and any
- * other thread.  A pure Scheme program allocates nothing there that points
- * back.
+ * libc allocates, the trail's `__thread`-rooted arrays (trail.c), and a
+ * thread the unit did not start (a library's own thread calling back in
+ * stops here with the reason).  A pure Scheme program allocates nothing
+ * there that points back.
  *
  * Linux/glibc and macOS.  Elsewhere every entry point is the libc call it
  * replaces, and nothing is collected.
@@ -63,6 +91,24 @@
 #define TUR_GC_ON 1
 #include <sys/mman.h>
 #include <pthread.h>
+#include <errno.h>
+#include <signal.h>
+#include <sched.h>
+/* Every header that declares a call the macros at the end of this file
+ * wrap, included here so that a later include of it is a no-op (guarded) and
+ * never a prototype the function-like macro would mangle. */
+#include <unistd.h>
+#include <time.h>
+#include <poll.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <semaphore.h>
+#if defined(__linux__)
+#include <sys/epoll.h>
+#else
+#include <sys/event.h>
+#endif
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
 #endif
@@ -94,6 +140,16 @@
 #define TUR_GC_MAXSMALL 32768
 #define TUR_GC_NCLASS  36
 
+/* The stop-the-world signals: Boehm's choices, which no library sends and
+ * the kernel sends only under a resource limit the program set itself. */
+#if defined(__linux__)
+#define TUR_GC_SIG_STOP   SIGPWR
+#define TUR_GC_SIG_RESUME SIGXCPU
+#else
+#define TUR_GC_SIG_STOP   SIGXCPU
+#define TUR_GC_SIG_RESUME SIGXFSZ
+#endif
+
 /* Up to half a chunk.  The large classes matter for continuations: a stack
  * image is a few KiB, and as a large object each one cost a 64 KiB mapping. */
 static const uint32_t tur_gc_class_size[TUR_GC_NCLASS] = {
@@ -112,15 +168,59 @@ typedef struct tur_gc_page {
     uint32_t  nchunks;    /* 1 for a small page */
     uint32_t  cls;        /* size class, or TUR_GC_NCLASS for large */
     uint32_t  used;       /* slots handed out so far (bump) */
-    uint64_t *alloc;      /* bit per slot: allocated */
+    uint64_t *alloc;      /* bit per slot: allocated (to the program, or to a thread's cache) */
     uint64_t *mark;       /* bit per slot: reached this collection */
     struct tur_gc_page *next;   /* every page, for the sweep */
     bool      dead;       /* a released large object's descriptor */
 } tur_gc_page;
 
+/* One registered thread.  Records live in mmap'd metadata: never scanned as
+ * data (the collector reads the fields it wants), never collected, reused
+ * from a free list once the thread is retired (joined, or gone if detached).
+ * The registry (the list, and `tid`, `started`, `done`, `detached`, `gone`)
+ * is under G->world; `parked`, `stopped` and `gc_intr` are atomics the
+ * thread and the collector share. */
+typedef struct tur_gc_thread {
+    struct tur_gc_thread *next;
+    pthread_t      tid;          /* written by the creator and by the thread, both under G->world */
+    unsigned long  gen;          /* bumped at each retirement, so a creator can tell its record was reused */
+    unsigned char *stack_base;   /* the top of its stack, taken on the thread */
+    unsigned char *stack_sp;     /* its stack pointer at its last park */
+    unsigned char *sig_sp;       /* its stack pointer in the stop handler */
+    unsigned char *os_sp;        /* where it left its own stack for a fiber's, or NULL */
+    int            fiber_depth;
+    int            park_depth;   /* nesting of parks; `parked` follows the outermost */
+    volatile int   parked;       /* in a blocking call: regs and stack_sp are current */
+    volatile int   stopped;      /* in the stop handler, waiting for the resume signal */
+    volatile int   gc_intr;      /* the stop signal landed since the wrapper last cleared it */
+    int            stop_state;   /* this collection: 0 untouched, 1 signaled, 2 parked */
+    jmp_buf        regs;         /* its callee-saved registers, spilled at the park */
+    jmp_buf        sig_regs;     /* the same, spilled by the stop handler */
+    void         **tls_roots;    /* addresses of its TUR_THREAD_LOCAL variables */
+    size_t        *tls_sizes;
+    size_t         n_tls, cap_tls;
+    /* Its pthread_setspecific values, one per key, written only by the thread
+     * (tur_gc_setspecific), in an order a stop at any instruction reads
+     * consistently.  Roots until the record is retired, since the key
+     * destructors that read them run after the start routine returns. */
+    pthread_key_t *spec_keys;
+    void         **spec_vals;
+    size_t         n_spec, cap_spec;
+    void          *cache[TUR_GC_NCLASS];   /* its slots, per class, linked through their first word */
+    bool           has_tid;      /* `tid` is set */
+    bool           started;      /* it took the world once: its stack and TLS are roots */
+    bool           done;         /* fn returned: `result` and its key values are roots, until retired */
+    bool           detached;     /* retired when gone, not by a join */
+    bool           gone;         /* its key destructors have run: nothing of it is left */
+    int            exit_rounds;  /* key-destructor rounds tur_gc_thread_gone has seen */
+    void *(*fn)(void *);
+    void          *arg;          /* a root until the thread starts */
+    void          *result;       /* a root from `done` until the join */
+} tur_gc_thread;
+
 typedef struct tur_gc_state {
     bool       ready, off;
-    uintptr_t  lo, hi;                 /* heap bounds, for a fast reject */
+    uintptr_t  lo, hi;                 /* heap bounds, for a fast reject (under heap) */
     tur_gc_page *pages;
     /* chunk index (base >> 16) -> page, open addressing, power-of-two size */
     uintptr_t *map_key;
@@ -130,19 +230,38 @@ typedef struct tur_gc_state {
     tur_gc_page *bump[TUR_GC_NCLASS];  /* the page being carved for a class */
     /* metadata bump allocator */
     unsigned char *meta, *meta_end;
+    pthread_mutex_t meta_lock;
     /* mark stack */
     uintptr_t *mstack;
     size_t     mstack_n, mstack_cap;
-    /* accounting */
+    /* accounting.  `since`, `threshold` and `off` are read on every
+     * allocation with no lock held, so every access to them is atomic. */
     size_t     since, threshold, floor, live, heap_bytes, heap_peak;
     size_t     n_collect, freed_total;
-    unsigned long torture, torture_count;
+    unsigned long torture;
+    volatile unsigned long torture_count;
     bool       stats;
-    unsigned char *stack_base;
-    bool       collecting;
+    /* threads */
+    pthread_mutex_t world;             /* the registry; held by the collector for a collection */
+    pthread_mutex_t heap;              /* the free lists, the bump pages, the chunk map, the bounds */
+    tur_gc_thread *threads;            /* every registered thread, the initial one included */
+    tur_gc_thread *free_threads;       /* retired threads' records, for reuse */
+    volatile long  acks;               /* threads that have reached the stop handler */
+    pthread_key_t  exit_key;           /* each thread's record, for tur_gc_thread_gone */
 } tur_gc_state;
 
 static tur_gc_state *tur_gc_G;          /* points into mmap'd metadata */
+/* The calling thread's record.  A real thread-local: it holds no heap
+ * pointer and is read on every allocation. */
+static __thread tur_gc_thread *tur_gc_self;
+
+/* The thread-local roots of the emitted runtime: defined after the preamble
+ * (emit_module.c, emit_r7rs_gc_tls_roots), it calls `add` once per
+ * TUR_THREAD_LOCAL variable with the calling thread's instance. */
+static void tur_rt_tls_roots(void (*add)(void *p, size_t n));
+
+#define TUR_GC_LOAD(p)     __atomic_load_n((p), __ATOMIC_SEQ_CST)
+#define TUR_GC_STORE(p, v) __atomic_store_n((p), (v), __ATOMIC_SEQ_CST)
 
 static void *tur_gc_os(size_t n) {
     void *p = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -150,9 +269,12 @@ static void *tur_gc_os(size_t n) {
     return p;
 }
 
+/* Metadata: under its own lock, since thread records are made under
+ * G->world and pages under G->heap. */
 static void *tur_gc_meta(size_t n) {
     tur_gc_state *G = tur_gc_G;
     n = (n + 15) & ~(size_t)15;
+    pthread_mutex_lock(&G->meta_lock);
     if (!G->meta || (size_t)(G->meta_end - G->meta) < n) {
         size_t sz = n > (1u << 20) ? n : (1u << 20);
         G->meta = (unsigned char *)tur_gc_os(sz);
@@ -160,6 +282,7 @@ static void *tur_gc_meta(size_t n) {
     }
     void *p = G->meta;
     G->meta += n;
+    pthread_mutex_unlock(&G->meta_lock);
     return p;
 }
 
@@ -180,6 +303,9 @@ static size_t tur_gc_hash(uintptr_t k, size_t cap) {
     return (size_t)k & (cap - 1);
 }
 
+/* The chunk map: every reader and writer holds G->heap (the allocator's
+ * slow path, free, realloc, and the collector, which takes G->heap before
+ * it stops the world). */
 static void tur_gc_map_put(uintptr_t key, tur_gc_page *pg);
 static void tur_gc_map_grow(void) {
     tur_gc_state *G = tur_gc_G;
@@ -211,6 +337,80 @@ static tur_gc_page *tur_gc_map_get(uintptr_t key) {
     return NULL;
 }
 
+/* The top of the calling thread's stack: the same two calls the prelude's
+ * r7k_stack_base makes (glibc and macOS). */
+static unsigned char *tur_gc_stack_base_here(void) {
+    unsigned char *base = NULL;
+#if defined(__APPLE__)
+    base = (unsigned char *)pthread_get_stackaddr_np(pthread_self());
+#else
+    pthread_attr_t a; void *addr = NULL; size_t sz = 0;
+    extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
+    if (pthread_getattr_np(pthread_self(), &a) == 0) {
+        if (pthread_attr_getstack(&a, &addr, &sz) == 0 && addr)
+            base = (unsigned char *)addr + sz;
+        pthread_attr_destroy(&a);
+    }
+#endif
+    return base;
+}
+
+/* Under G->world. */
+static tur_gc_thread *tur_gc_thread_new(void) {
+    tur_gc_state *G = tur_gc_G;
+    tur_gc_thread *t = G->free_threads;
+    if (t) {
+        G->free_threads = t->next;
+        void **roots = t->tls_roots; size_t *sizes = t->tls_sizes; size_t cap = t->cap_tls;
+        pthread_key_t *keys = t->spec_keys; void **vals = t->spec_vals; size_t scap = t->cap_spec;
+        unsigned long gen = t->gen;
+        memset(t, 0, sizeof *t);
+        t->tls_roots = roots; t->tls_sizes = sizes; t->cap_tls = cap;
+        t->spec_keys = keys; t->spec_vals = vals; t->cap_spec = scap;
+        t->gen = gen;
+    } else {
+        t = (tur_gc_thread *)tur_gc_meta(sizeof *t);
+        memset(t, 0, sizeof *t);
+    }
+    return t;
+}
+
+/* Under G->world: take a record out of the registry for reuse.  Nothing of
+ * its thread is a root any more. */
+static void tur_gc_retire(tur_gc_thread *t) {
+    tur_gc_state *G = tur_gc_G;
+    for (tur_gc_thread **pp = &G->threads; *pp; pp = &(*pp)->next)
+        if (*pp == t) { *pp = t->next; break; }
+    t->gen++;
+    t->next = G->free_threads; G->free_threads = t;
+}
+
+/* Under G->world, on the thread itself. */
+static void tur_gc_add_tls_root(void *p, size_t n) {
+    tur_gc_thread *t = tur_gc_self;
+    if (!t) return;
+    if (t->n_tls == t->cap_tls) {
+        size_t nc = t->cap_tls ? t->cap_tls * 2 : 16;
+        void **nr = (void **)tur_gc_meta(nc * sizeof *nr);
+        size_t *ns = (size_t *)tur_gc_meta(nc * sizeof *ns);
+        if (t->n_tls) {
+            memcpy(nr, t->tls_roots, t->n_tls * sizeof *nr);
+            memcpy(ns, t->tls_sizes, t->n_tls * sizeof *ns);
+        }
+        t->tls_roots = nr; t->tls_sizes = ns; t->cap_tls = nc;
+    }
+    t->tls_roots[t->n_tls] = p;
+    t->tls_sizes[t->n_tls] = n;
+    t->n_tls++;
+}
+
+static void tur_gc_stop_handler(int sig);
+static void tur_gc_resume_handler(int sig);
+static void tur_gc_thread_gone(void *raw);
+static void tur_gc_atfork_prepare(void);
+static void tur_gc_atfork_parent(void);
+static void tur_gc_atfork_child(void);
+
 static void tur_gc_init(void) {
     tur_gc_state *G = (tur_gc_state *)tur_gc_os(sizeof(tur_gc_state));
     memset(G, 0, sizeof *G);
@@ -223,28 +423,81 @@ static void tur_gc_init(void) {
     G->stats = (e = getenv("TUR_GC_STATS")) && e[0] == '1';
     G->mstack_cap = 1u << 16;
     G->mstack = (uintptr_t *)tur_gc_os(G->mstack_cap * sizeof(uintptr_t));
-#if defined(__APPLE__)
-    G->stack_base = (unsigned char *)pthread_get_stackaddr_np(pthread_self());
-#else
-    pthread_attr_t a; void *addr = NULL; size_t sz = 0;
-    extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
-    if (pthread_getattr_np(pthread_self(), &a) == 0) {
-        if (pthread_attr_getstack(&a, &addr, &sz) == 0 && addr)
-            G->stack_base = (unsigned char *)addr + sz;
-        pthread_attr_destroy(&a);
+    pthread_mutex_init(&G->meta_lock, NULL);
+    pthread_mutex_init(&G->world, NULL);
+    pthread_mutex_init(&G->heap, NULL);
+    /* The stop signal's handler blocks everything but the resume signal
+     * while it runs (its sigsuspend unblocks that one), and restarts the
+     * system call it interrupted. */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = tur_gc_stop_handler;
+    sigfillset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(TUR_GC_SIG_STOP, &sa, NULL);
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = tur_gc_resume_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(TUR_GC_SIG_RESUME, &sa, NULL);
+    /* Created before any key the program makes, so its destructor runs
+     * first in a round; it re-arms itself to run in the next one, after
+     * theirs (tur_gc_thread_gone). */
+    if (pthread_key_create(&G->exit_key, tur_gc_thread_gone) != 0) {
+        fputs("tur: r7rs-gc: pthread_key_create failed\n", stderr);
+        abort();
     }
-#endif
+    pthread_atfork(tur_gc_atfork_prepare, tur_gc_atfork_parent, tur_gc_atfork_child);
+    /* The initial thread: registered first.  Its thread-local roots are
+     * added by the constructor below, once the emitted runtime's variables
+     * exist to take the address of. */
+    pthread_mutex_lock(&G->world);
+    tur_gc_thread *t = tur_gc_thread_new();
+    t->tid = pthread_self();
+    t->has_tid = true;
+    t->stack_base = tur_gc_stack_base_here();
+    t->started = true;
+    t->next = G->threads; G->threads = t;
+    tur_gc_self = t;
     /* No stack base, no collection: every object is simply kept. */
-    if (!G->stack_base) G->off = true;
+    if (!t->stack_base) TUR_GC_STORE(&G->off, true);
+    pthread_mutex_unlock(&G->world);
     G->ready = true;
 }
 
+/* The one rule a thread must keep: it touches the heap only between its
+ * registration and its end, and never while parked.  A thread the collector
+ * never registered (a library's own, calling back in) has no roots the
+ * collector could scan; a registered thread allocating while parked is an
+ * inline-C callback out of a blocking call that did not tur_gc_unpark()
+ * first.  Either would be a silent use-after-free, so both stop here. */
+static void tur_gc_bad_thread(const char *what) {
+    fputs("tur: r7rs-gc: ", stderr);
+    fputs(what, stderr);
+    fputs(!tur_gc_self
+          ? " on a thread the collector does not know (not started through the "
+            "program's pthread_create); its roots cannot be scanned. See "
+            "docs/archive/r7rs-gc-threads-plan.md, or build with TUR_R7RS_GC=0\n"
+          : " while the thread is parked in a blocking call; inline C called "
+            "back from such a call must tur_gc_unpark() first. See "
+            "docs/archive/r7rs-gc-threads-plan.md, or build with TUR_R7RS_GC=0\n",
+          stderr);
+    abort();
+}
+static inline tur_gc_thread *tur_gc_check_thread(const char *what) {
+    tur_gc_thread *t = tur_gc_self;
+    if (__builtin_expect(!t || t->park_depth > 0, 0)) tur_gc_bad_thread(what);
+    return t;
+}
+
+/* Under G->heap. */
 static void tur_gc_note_bounds(uintptr_t base, size_t len) {
     tur_gc_state *G = tur_gc_G;
     if (!G->lo || base < G->lo) G->lo = base;
     if (base + len > G->hi) G->hi = base + len;
 }
 
+/* Under G->heap. */
 static tur_gc_page *tur_gc_new_small(uint32_t cls) {
     tur_gc_state *G = tur_gc_G;
     tur_gc_page *pg = (tur_gc_page *)tur_gc_meta(sizeof *pg);
@@ -267,16 +520,21 @@ static tur_gc_page *tur_gc_new_small(uint32_t cls) {
     return pg;
 }
 
-TUR_GC_NOASAN static void tur_gc_collect_now(void);
+TUR_GC_NOASAN static void tur_gc_collect_now(bool if_due);
 
-static void tur_gc_maybe_collect(size_t n) {
+/* Called with no lock held, at every allocation.  `since` is added to at
+ * refill time and read here without a lock: a stale read costs one refill's
+ * worth of delay.  Threads that cross the threshold together all ask; the
+ * first collects and the others find it no longer due (tur_gc_collect_now). */
+static void tur_gc_maybe_collect(void) {
     tur_gc_state *G = tur_gc_G;
-    if (G->off || G->collecting) return;
+    if (TUR_GC_LOAD(&G->off)) return;
     if (G->torture) {
-        if (++G->torture_count >= G->torture) { G->torture_count = 0; tur_gc_collect_now(); }
+        if (__atomic_add_fetch(&G->torture_count, 1, __ATOMIC_RELAXED) % G->torture == 0)
+            tur_gc_collect_now(false);
         return;
     }
-    if (G->since + n > G->threshold) tur_gc_collect_now();
+    if (TUR_GC_LOAD(&G->since) > TUR_GC_LOAD(&G->threshold)) tur_gc_collect_now(true);
 }
 
 static uint32_t tur_gc_class_of(size_t n) {
@@ -288,34 +546,64 @@ static uint32_t tur_gc_class_of(size_t n) {
     return lo;
 }
 
-static void *tur_gc_alloc_small(size_t n) {
+/* The allocator's slow path: move a batch of slots of one class from the
+ * shared lists (or the class's bump page) into the calling thread's cache,
+ * marking each allocated in its page's bitmap -- to the cache, from the
+ * heap's point of view, until the thread hands it out.  Returns the first. */
+static void *tur_gc_refill(tur_gc_thread *t, uint32_t cls) {
     tur_gc_state *G = tur_gc_G;
-    uint32_t cls = tur_gc_class_of(n ? n : 1);
-    void *p = G->freelist[cls];
-    tur_gc_page *pg;
-    uint32_t idx;
-    if (p) {
-        G->freelist[cls] = *(void **)p;
-        pg = tur_gc_map_get((uintptr_t)p >> 16);
-        idx = (uint32_t)(((uintptr_t)p - pg->base) / pg->size);
-    } else {
-        pg = G->bump[cls];
-        if (!pg || pg->used >= pg->nslots) pg = G->bump[cls] = tur_gc_new_small(cls);
-        idx = pg->used++;
-        p = (void *)(pg->base + (uintptr_t)idx * pg->size);
+    size_t sz = tur_gc_class_size[cls];
+    unsigned want = sz <= 256 ? 32 : sz <= 4096 ? 8 : 2, got = 0;
+    void *head = NULL;
+    pthread_mutex_lock(&G->heap);
+    while (got < want) {
+        tur_gc_page *pg;
+        uint32_t idx;
+        void *p = G->freelist[cls];
+        if (p) {
+            G->freelist[cls] = *(void **)p;
+            pg = tur_gc_map_get((uintptr_t)p >> 16);
+            idx = (uint32_t)(((uintptr_t)p - pg->base) / pg->size);
+        } else {
+            pg = G->bump[cls];
+            if (!pg || pg->used >= pg->nslots) pg = G->bump[cls] = tur_gc_new_small(cls);
+            idx = pg->used++;
+            p = (void *)(pg->base + (uintptr_t)idx * pg->size);
+        }
+        pg->alloc[idx / 64] |= (uint64_t)1 << (idx % 64);
+        *(void **)p = head;
+        head = p;
+        got++;
     }
-    pg->alloc[idx / 64] |= (uint64_t)1 << (idx % 64);
-    memset(p, 0, pg->size);
-    G->since += pg->size;
+    __atomic_add_fetch(&G->since, got * sz, __ATOMIC_RELAXED);
+    pthread_mutex_unlock(&G->heap);
+    t->cache[cls] = *(void **)head;
+    return head;
+}
+
+/* The fast path: pop the calling thread's cache.  No lock; a collection can
+ * stop the thread anywhere in here, and the slot in flight is then in its
+ * registers or on its stack, which the collector scans. */
+static void *tur_gc_alloc_small(tur_gc_thread *t, size_t n) {
+    uint32_t cls = tur_gc_class_of(n ? n : 1);
+    void *p = t->cache[cls];
+    if (p) t->cache[cls] = *(void **)p;
+    else p = tur_gc_refill(t, cls);
+    memset(p, 0, tur_gc_class_size[cls]);
     return p;
 }
 
+/* The object's address is kept in a local from before the page is
+ * published: once G->heap is released a collection can stop this thread,
+ * and the object must be reachable from its registers or stack then, not
+ * only through the page descriptor (metadata, never scanned). */
 static void *tur_gc_alloc_large(size_t n) {
     tur_gc_state *G = tur_gc_G;
     size_t nch = (n + TUR_GC_CHUNK - 1) / TUR_GC_CHUNK;
+    uintptr_t base = tur_gc_chunks(nch);
     tur_gc_page *pg = (tur_gc_page *)tur_gc_meta(sizeof *pg);
     memset(pg, 0, sizeof *pg);
-    pg->base = tur_gc_chunks(nch);
+    pg->base = base;
     pg->size = n;
     pg->nslots = 1;
     pg->nchunks = (uint32_t)nch;
@@ -324,22 +612,26 @@ static void *tur_gc_alloc_large(size_t n) {
     pg->alloc = (uint64_t *)tur_gc_meta(8);
     pg->mark = (uint64_t *)tur_gc_meta(8);
     pg->alloc[0] = 1; pg->mark[0] = 0;
+    pthread_mutex_lock(&G->heap);
     pg->next = G->pages; G->pages = pg;
     for (size_t i = 0; i < nch; i++) tur_gc_map_put((pg->base >> 16) + i, pg);
     tur_gc_note_bounds(pg->base, nch * TUR_GC_CHUNK);
     G->heap_bytes += nch * TUR_GC_CHUNK;
     if (G->heap_bytes > G->heap_peak) G->heap_peak = G->heap_bytes;
-    G->since += nch * TUR_GC_CHUNK;
-    return (void *)pg->base;   /* fresh mmap memory is already zero */
+    __atomic_add_fetch(&G->since, nch * TUR_GC_CHUNK, __ATOMIC_RELAXED);
+    pthread_mutex_unlock(&G->heap);
+    return (void *)base;   /* fresh mmap memory is already zero */
 }
 
 static void *tur_gc_malloc(size_t n) {
     if (!tur_gc_G) tur_gc_init();
-    tur_gc_maybe_collect(n);
-    return n <= TUR_GC_MAXSMALL ? tur_gc_alloc_small(n) : tur_gc_alloc_large(n);
+    tur_gc_thread *t = tur_gc_check_thread("an allocation");
+    tur_gc_maybe_collect();
+    return n <= TUR_GC_MAXSMALL ? tur_gc_alloc_small(t, n) : tur_gc_alloc_large(n);
 }
 
-/* The object `p` points into, or NULL: its start, size, page and slot. */
+/* The object `p` points into, or NULL: its start, size, page and slot.
+ * Under G->heap. */
 static bool tur_gc_find(uintptr_t w, uintptr_t *start, tur_gc_page **pgo, uint32_t *idxo) {
     tur_gc_state *G = tur_gc_G;
     if (w < G->lo || w >= G->hi) return false;
@@ -353,6 +645,7 @@ static bool tur_gc_find(uintptr_t w, uintptr_t *start, tur_gc_page **pgo, uint32
     return true;
 }
 
+/* Under G->heap. */
 static void tur_gc_release_large(tur_gc_page *pg) {
     tur_gc_state *G = tur_gc_G;
     for (uint32_t i = 0; i < pg->nchunks; i++) tur_gc_map_put((pg->base >> 16) + i, NULL);
@@ -364,19 +657,31 @@ static void tur_gc_release_large(tur_gc_page *pg) {
 
 static void tur_gc_free(void *p) {
     if (!p) return;
+    tur_gc_state *G = tur_gc_G;
+    if (!G) { free(p); return; }
     uintptr_t start; tur_gc_page *pg; uint32_t idx;
-    if (!tur_gc_G || !tur_gc_find((uintptr_t)p, &start, &pg, &idx)) {
-        /* Not ours: libc's, from before the redirect or from a library. */
-        if (!tur_gc_G || (uintptr_t)p < tur_gc_G->lo || (uintptr_t)p >= tur_gc_G->hi
-            || !tur_gc_map_get((uintptr_t)p >> 16))
-            free(p);
-        return;   /* ours but already free: a double free, ignored */
+    pthread_mutex_lock(&G->heap);
+    if (!tur_gc_find((uintptr_t)p, &start, &pg, &idx)) {
+        /* Not ours: libc's, from before the redirect or from a library.
+         * Ours but already free: a double free, ignored. */
+        bool foreign = (uintptr_t)p < G->lo || (uintptr_t)p >= G->hi
+                       || !tur_gc_map_get((uintptr_t)p >> 16);
+        pthread_mutex_unlock(&G->heap);
+        if (foreign) free(p);
+        return;
     }
-    if (start != (uintptr_t)p) return;   /* an interior pointer is not a malloc result */
-    if (pg->cls == TUR_GC_NCLASS) { tur_gc_release_large(pg); return; }
+    if (start != (uintptr_t)p) { pthread_mutex_unlock(&G->heap); return; }   /* interior: not a malloc result */
+    /* A thread the collector does not know -- a library's, or one of ours
+     * past its start routine, in the key destructors that free its dynamic
+     * bindings -- leaves the object to the collector.  Never freeing is
+     * always safe here, and the destructor may still read what it frees. */
+    if (!tur_gc_self) { pthread_mutex_unlock(&G->heap); return; }
+    tur_gc_check_thread("a free");
+    if (pg->cls == TUR_GC_NCLASS) { tur_gc_release_large(pg); pthread_mutex_unlock(&G->heap); return; }
     pg->alloc[idx / 64] &= ~((uint64_t)1 << (idx % 64));
-    *(void **)p = tur_gc_G->freelist[pg->cls];
-    tur_gc_G->freelist[pg->cls] = p;
+    *(void **)p = G->freelist[pg->cls];
+    G->freelist[pg->cls] = p;
+    pthread_mutex_unlock(&G->heap);
 }
 
 static void *tur_gc_calloc(size_t n, size_t m) {
@@ -386,11 +691,16 @@ static void *tur_gc_calloc(size_t n, size_t m) {
 
 static void *tur_gc_realloc(void *p, size_t n) {
     if (!p) return tur_gc_malloc(n);
+    tur_gc_state *G = tur_gc_G;
+    if (!G) return realloc(p, n);
     uintptr_t start; tur_gc_page *pg; uint32_t idx;
-    if (!tur_gc_G || !tur_gc_find((uintptr_t)p, &start, &pg, &idx) || start != (uintptr_t)p)
-        return realloc(p, n);   /* libc's block stays libc's */
-    size_t have = pg->size;
-    if (n <= have && (pg->cls == TUR_GC_NCLASS || n > have / 2 || have <= 16)) return p;
+    pthread_mutex_lock(&G->heap);
+    bool ours = tur_gc_find((uintptr_t)p, &start, &pg, &idx) && start == (uintptr_t)p;
+    size_t have = ours ? pg->size : 0;
+    bool keep = ours && n <= have && (pg->cls == TUR_GC_NCLASS || n > have / 2 || have <= 16);
+    pthread_mutex_unlock(&G->heap);
+    if (!ours) return realloc(p, n);   /* libc's block stays libc's */
+    if (keep) return p;
     void *q = tur_gc_malloc(n);
     memcpy(q, p, have < n ? have : n);
     tur_gc_free(p);
@@ -455,7 +765,7 @@ TUR_GC_NOASAN static void tur_gc_drain(void) {
 }
 
 /* The executable's writable data: every static the program and the linked
- * runtime keep, the emitted runtime's per-thread state among them. */
+ * runtime keep. */
 #if defined(__APPLE__)
 TUR_GC_NOASAN static void tur_gc_scan_data(void) {
     const struct mach_header_64 *mh = (const struct mach_header_64 *)_dyld_get_image_header(0);
@@ -482,12 +792,56 @@ TUR_GC_NOASAN static void tur_gc_scan_data(void) {
     if (ds && de > ds) tur_gc_scan((const void *)ds, (size_t)(de - ds));
 }
 #endif
-/* The region runtime: live and retired generations are roots.  Declared here
- * (the preamble's region.h comes later) with the header's linkage. */
+/* The region runtime: live and retired generations on every thread are
+ * roots, through its ownership registry.  Declared here (the preamble's
+ * region.h comes later) with the header's linkage.  The registry's lock is
+ * tried, never waited for: a stopped thread may hold it (region.c). */
 #ifndef TUR_RT_API
 #define TUR_RT_API
 #endif
-TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud), void *ud);
+TUR_RT_API bool tur_region_registry_trylock(void);
+TUR_RT_API void tur_region_registry_unlock(void);
+TUR_RT_API void tur_region_each_registered(void (*cb)(const void *p, size_t n, void *ud), void *ud);
+
+/* A thread's stack from `sp` up.  A thread running a fiber has `sp` on the
+ * fiber's stack, a heap object: the rest of that object is scanned from
+ * `sp`, and the thread's own stack from the point it left it
+ * (tur_gc_fiber_enter, called by tur_fiber_block_resume before its
+ * swapcontext).  The fiber's saved registers are in its FiberBlock, reached
+ * through tur_current_fiber. */
+TUR_GC_NOASAN static void tur_gc_scan_stack(tur_gc_thread *t, unsigned char *sp) {
+    if (t->os_sp) {
+        uintptr_t start; tur_gc_page *pg; uint32_t idx;
+        if (tur_gc_find((uintptr_t)sp, &start, &pg, &idx)) {
+            uintptr_t end = start + pg->size;
+            tur_gc_mark_word(start);
+            if ((uintptr_t)sp < end) tur_gc_scan(sp, end - (uintptr_t)sp);
+        }
+        sp = t->os_sp;
+    }
+    if (t->stack_base && sp < t->stack_base) tur_gc_scan(sp, (size_t)(t->stack_base - sp));
+}
+
+/* A thread's cache slots are its, not garbage: marked, not scanned (their
+ * contents are a free-list link and whatever the last owner left). */
+TUR_GC_NOASAN static void tur_gc_mark_cache(tur_gc_thread *t) {
+    for (int c = 0; c < TUR_GC_NCLASS; c++)
+        for (void *p = t->cache[c]; p; p = *(void **)p) {
+            uintptr_t start; tur_gc_page *pg; uint32_t idx;
+            if (tur_gc_find((uintptr_t)p, &start, &pg, &idx))
+                pg->mark[idx / 64] |= (uint64_t)1 << (idx % 64);
+        }
+}
+
+/* A thread's pthread_setspecific values.  The count is read before the
+ * arrays, and the writer publishes an entry before the count and a grown
+ * array before its use (tur_gc_setspecific), so a thread stopped anywhere
+ * in there is read consistently. */
+TUR_GC_NOASAN static void tur_gc_mark_specific(tur_gc_thread *t) {
+    size_t n = t->n_spec;
+    void **vals = t->spec_vals;
+    for (size_t i = 0; i < n; i++) tur_gc_mark_word((uintptr_t)vals[i]);
+}
 
 TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_mark_roots(void) {
     tur_gc_state *G = tur_gc_G;
@@ -495,22 +849,121 @@ TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_mark_roots(void) {
     setjmp(regs);                       /* callee-saved registers, onto this frame */
     volatile unsigned char here = 0;
     tur_gc_scan((const void *)&regs, sizeof regs);
-    unsigned char *sp = (unsigned char *)&here;
-    if (sp < G->stack_base) tur_gc_scan(sp, (size_t)(G->stack_base - sp));
+    tur_gc_thread *self = tur_gc_self;
+    for (tur_gc_thread *t = G->threads; t; t = t->next) {
+        if (t == self) {
+            tur_gc_scan_stack(t, (unsigned char *)&here);
+        } else if (t->done) {
+            /* Past its start routine, before its retirement: the result for
+             * the join, and the key values its destructors will read. */
+            tur_gc_mark_word((uintptr_t)t->result);
+            tur_gc_mark_specific(t);
+            continue;
+        } else if (!t->started) {
+            tur_gc_mark_word((uintptr_t)t->arg);
+            continue;
+        } else if (t->stop_state == 2) {
+            /* Parked: its registers and stack are as it left them. */
+            tur_gc_scan((const void *)&t->regs, sizeof t->regs);
+            tur_gc_scan_stack(t, t->stack_sp);
+        } else if (t->stop_state == 1) {
+            /* Stopped by the signal: the handler's spill, and the stack from
+             * the handler's frame, which has the kernel's register save above it. */
+            tur_gc_scan((const void *)&t->sig_regs, sizeof t->sig_regs);
+            tur_gc_scan_stack(t, t->sig_sp);
+        }
+        /* (stop_state 0 on a started, live thread: its tid was gone to
+         * pthread_kill -- the child of a fork, say -- and it runs nothing.) */
+        for (size_t i = 0; i < t->n_tls; i++) tur_gc_scan(t->tls_roots[i], t->tls_sizes[i]);
+        tur_gc_mark_specific(t);
+        tur_gc_mark_cache(t);
+    }
     tur_gc_scan_data();
-    tur_region_each_used(tur_gc_scan_cb, NULL);
+    tur_region_each_registered(tur_gc_scan_cb, NULL);
     tur_gc_drain();
 }
 
-TUR_GC_NOASAN static void tur_gc_collect_now(void) {
+/* ---- stopping the world -------------------------------------------------- */
+
+/* On the thread being stopped: spill, say so, and wait on this stack for the
+ * resume signal.  Everything but that signal is blocked meanwhile (the
+ * handler's mask), so sigsuspend cannot miss it: sent before, it is pending
+ * and delivered the moment sigsuspend unblocks it.  The collector clears
+ * `stopped` before it sends the resume, so a thread that has not yet reached
+ * the loop skips it.  Only async-signal-safe calls, and errno kept. */
+static void tur_gc_stop_handler(int sig) {
+    (void)sig;
+    int e = errno;
+    tur_gc_thread *t = tur_gc_self;
+    if (t) {
+        setjmp(t->sig_regs);
+        volatile unsigned char here = 0;
+        t->sig_sp = (unsigned char *)&here;
+        t->gc_intr = 1;
+        TUR_GC_STORE(&t->stopped, 1);
+        __atomic_fetch_add(&tur_gc_G->acks, 1, __ATOMIC_SEQ_CST);
+        sigset_t m;
+        sigfillset(&m);
+        sigdelset(&m, TUR_GC_SIG_RESUME);
+        while (TUR_GC_LOAD(&t->stopped)) sigsuspend(&m);
+    }
+    errno = e;
+}
+static void tur_gc_resume_handler(int sig) { (void)sig; }
+
+/* Under G->world and G->heap.  Every registered, running thread other than
+ * the caller is either parked -- left alone, its roots are spilled -- or
+ * signaled and waited for. */
+static void tur_gc_stop_world(void) {
     tur_gc_state *G = tur_gc_G;
-    if (G->off || G->collecting) return;
-    G->collecting = true;
+    tur_gc_thread *self = tur_gc_self;
+    long want = 0;
+    TUR_GC_STORE(&G->acks, 0);
+    for (tur_gc_thread *t = G->threads; t; t = t->next) {
+        t->stop_state = 0;
+        if (t == self || !t->started || t->done) continue;
+        if (TUR_GC_LOAD(&t->parked)) { t->stop_state = 2; continue; }
+        if (pthread_kill(t->tid, TUR_GC_SIG_STOP) == 0) { t->stop_state = 1; want++; }
+    }
+    while (TUR_GC_LOAD(&G->acks) < want) sched_yield();
+}
+
+static void tur_gc_start_world(void) {
+    tur_gc_state *G = tur_gc_G;
+    for (tur_gc_thread *t = G->threads; t; t = t->next) {
+        if (t->stop_state != 1) continue;
+        TUR_GC_STORE(&t->stopped, 0);
+        pthread_kill(t->tid, TUR_GC_SIG_RESUME);
+        t->stop_state = 0;
+    }
+}
+
+/* `if_due`: collect only if the threshold is still crossed once this thread
+ * holds the world -- another thread that crossed it too may have collected
+ * meanwhile, and a second collection back to back would find nothing. */
+TUR_GC_NOASAN static void tur_gc_collect_now(bool if_due) {
+    tur_gc_state *G = tur_gc_G;
+    if (TUR_GC_LOAD(&G->off)) return;
+    pthread_mutex_lock(&G->world);
+    if (if_due && TUR_GC_LOAD(&G->since) <= TUR_GC_LOAD(&G->threshold)) {
+        pthread_mutex_unlock(&G->world);
+        return;
+    }
+    pthread_mutex_lock(&G->heap);
+    /* Stop the world; if a thread was stopped inside the region registry's
+     * short critical section, let it out and stop again. */
+    for (;;) {
+        tur_gc_stop_world();
+        if (tur_region_registry_trylock()) break;
+        tur_gc_start_world();
+        sched_yield();
+    }
     for (tur_gc_page *pg = G->pages; pg; pg = pg->next) {
         if (pg->dead) continue;
         memset(pg->mark, 0, ((pg->nslots + 63) / 64) * 8);
     }
     tur_gc_mark_roots();
+    tur_region_registry_unlock();
     /* Sweep: rebuild every free list from the slots nobody reached. */
     for (int c = 0; c < TUR_GC_NCLASS; c++) G->freelist[c] = NULL;
     size_t live = 0, freed = 0;
@@ -536,9 +989,11 @@ TUR_GC_NOASAN static void tur_gc_collect_now(void) {
     G->live = live;
     G->freed_total += freed;
     G->n_collect++;
-    G->since = 0;
-    G->threshold = 2 * live > G->floor ? 2 * live : G->floor;
-    G->collecting = false;
+    TUR_GC_STORE(&G->since, 0);
+    TUR_GC_STORE(&G->threshold, 2 * live > G->floor ? 2 * live : G->floor);
+    tur_gc_start_world();
+    pthread_mutex_unlock(&G->heap);
+    pthread_mutex_unlock(&G->world);
 }
 
 static void tur_gc_report(void) {
@@ -567,7 +1022,7 @@ static __attribute__((unused)) void tur_gc_region_free(void *p) {
 /* Public for tests and the stats line. */
 static __attribute__((unused)) void tur_gc_collect(void) {
     if (!tur_gc_G) tur_gc_init();
-    tur_gc_collect_now();
+    tur_gc_collect_now(false);
 }
 
 /* The runtime archive's allocator hook (src/runtime/rt_alloc.h): with it
@@ -585,25 +1040,303 @@ typedef struct tur_gc_rt_allocator {
 } tur_gc_rt_allocator;
 extern void tur_rt_set_allocator(const tur_gc_rt_allocator *a) __attribute__((weak));
 
-/* Threads (the plan's limit, decided): the collector stops no other thread
- * and reads the runtime's per-thread state as plain statics, so a second
- * thread would allocate from an unlocked heap and hold roots nowhere the
- * collector looks.  Rather than a silent use-after-free, a program that
- * starts one under the collector stops here with the reason.  Every start site in
- * the unit -- the stdlib's thread/session/task-group wrappers, the emitted
- * multi-threaded scheduler -- spells `pthread_create`, which the macro below
- * routes here; <pthread.h> is already included above, so the macro never
- * meets the declaration. */
-static int tur_gc_pthread_create(pthread_t *t, const pthread_attr_t *a,
-                                 void *(*fn)(void *), void *arg) {
-    (void)t; (void)a; (void)fn; (void)arg;
-    fputs("tur: r7rs-gc: this program starts a thread, which the collector does not "
-          "support (docs/archive/r7rs-gc-plan.md); build it without the collector: "
-          "TUR_R7RS_GC=0, or `tur --no-r7rs-gc build`\n",
-          stderr);
-    exit(70);   /* EX_SOFTWARE */
+/* ---- threads ------------------------------------------------------------ */
+
+/* Before blocking: spill the registers and the stack pointer into this
+ * thread's record, where the collector reads them, then say so; the
+ * collector leaves a parked thread alone.  A park inside a park (a wrapped
+ * call reached from a wrapped call) changes nothing.  Unparking takes
+ * G->world for an instant, so it cannot happen in the middle of a
+ * collection.  A thread the collector does not know parks nothing. */
+TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_park(void) {
+    tur_gc_thread *t = tur_gc_self;
+    if (!t) return;
+    if (t->park_depth++ > 0) return;
+    setjmp(t->regs);                    /* callee-saved registers */
+    volatile unsigned char here = 0;
+    t->stack_sp = (unsigned char *)&here;
+    TUR_GC_STORE(&t->parked, 1);
 }
+static void tur_gc_unpark(void) {
+    tur_gc_thread *t = tur_gc_self;
+    if (!t) return;
+    if (--t->park_depth > 0) return;
+    pthread_mutex_lock(&tur_gc_G->world);
+    TUR_GC_STORE(&t->parked, 0);
+    pthread_mutex_unlock(&tur_gc_G->world);
+}
+
+/* A thread leaving its own stack for a fiber's (tur_fiber_block_resume,
+ * around its swapcontext): remember where, so the collector scans the part
+ * of this stack that is still live.  The point recorded is this function's
+ * own frame, below every local of the resuming frame (the caller's `sp`
+ * would be one local among them, with others laid out under it).  Nested
+ * resumes keep the outermost point. */
+__attribute__((noinline)) static void tur_gc_fiber_enter(void *sp) {
+    (void)sp;
+    tur_gc_thread *t = tur_gc_self;
+    if (!t) return;
+    volatile unsigned char here = 0;
+    if (t->fiber_depth++ == 0) t->os_sp = (unsigned char *)&here;
+}
+static void tur_gc_fiber_leave(void) {
+    tur_gc_thread *t = tur_gc_self;
+    if (!t) return;
+    if (--t->fiber_depth == 0) t->os_sp = NULL;
+}
+#define TUR_GC_FIBER_ENTER(sp) tur_gc_fiber_enter(sp)
+#define TUR_GC_FIBER_LEAVE()   tur_gc_fiber_leave()
+
+/* The end of a thread's start routine, by return or through the wrapped
+ * pthread_exit: its stack and thread-locals stop being roots; its result and
+ * its key values stay roots until the record is retired. */
+static void tur_gc_thread_end(tur_gc_thread *t, void *r) {
+    tur_gc_state *G = tur_gc_G;
+    pthread_mutex_lock(&G->world);
+    t->result = r;
+    t->done = true;
+    t->n_tls = 0;                        /* its thread-locals die with it */
+    pthread_mutex_unlock(&G->world);
+    tur_gc_self = NULL;
+}
+
+/* Every OS thread the unit starts runs on this trampoline: it records its
+ * identity, stack base and thread-local roots, runs what the program asked
+ * for, and hands the result to the collector's record until the join.
+ * Between pthread_create and its registration it runs none of the unit's
+ * code, so `arg` is the record's root for it meanwhile.  `tid` is set here
+ * as well as by the creator: which of the two gets there first is the OS's
+ * choice, and a collection signals the thread from the moment it is
+ * `started`. */
+static void *tur_gc_thread_main(void *raw) {
+    tur_gc_thread *t = (tur_gc_thread *)raw;
+    tur_gc_state *G = tur_gc_G;
+    unsigned char *base = tur_gc_stack_base_here();
+    pthread_setspecific(G->exit_key, t);
+    pthread_mutex_lock(&G->world);
+    t->tid = pthread_self();
+    t->has_tid = true;
+    t->stack_base = base;
+    if (!base) TUR_GC_STORE(&G->off, true);   /* a stack it cannot see: keep everything */
+    tur_gc_self = t;
+    t->started = true;
+    tur_rt_tls_roots(tur_gc_add_tls_root);
+    pthread_mutex_unlock(&G->world);
+    void *r = t->fn(t->arg);
+    tur_gc_thread_end(t, r);
+    return r;
+}
+
+/* The collector's key destructor: the thread is past everything that reads
+ * its key values.  The key was created before any of the program's, so libc
+ * runs this first in a round; it re-arms once and does its work in the next
+ * round, after every other destructor has run.  A thread that left without
+ * returning or calling the wrapped pthread_exit -- a cancellation, a
+ * library's own pthread_exit -- is finished here as well.  A detached
+ * thread's record is retired now; a joinable one's waits for the join. */
+static void tur_gc_thread_gone(void *raw) {
+    tur_gc_thread *t = (tur_gc_thread *)raw;
+    tur_gc_state *G = tur_gc_G;
+    if (t->exit_rounds++ == 0) { pthread_setspecific(G->exit_key, t); return; }
+    pthread_mutex_lock(&G->world);
+    if (!t->done) { t->done = true; t->n_tls = 0; }
+    t->gone = true;
+    if (t->detached) tur_gc_retire(t);
+    pthread_mutex_unlock(&G->world);
+    tur_gc_self = NULL;
+}
+
+/* The record is linked before the thread exists, so its `arg` is a root
+ * from the start.  After pthread_create the creator touches the record only
+ * if it is still the same incarnation: a detached thread can finish and be
+ * retired, and its record reused, before pthread_create returns. */
+static int tur_gc_pthread_create(pthread_t *tp, const pthread_attr_t *a,
+                                 void *(*fn)(void *), void *arg) {
+    if (!tur_gc_G) tur_gc_init();
+    tur_gc_state *G = tur_gc_G;
+    tur_gc_check_thread("a thread start");
+    int ds = PTHREAD_CREATE_JOINABLE;
+    if (a && pthread_attr_getdetachstate(a, &ds) != 0) ds = PTHREAD_CREATE_JOINABLE;
+    pthread_mutex_lock(&G->world);
+    tur_gc_thread *t = tur_gc_thread_new();
+    t->fn = fn; t->arg = arg;
+    t->detached = ds == PTHREAD_CREATE_DETACHED;
+    unsigned long gen = t->gen;
+    t->next = G->threads; G->threads = t;
+    pthread_mutex_unlock(&G->world);
+    pthread_t tid;
+    int rc = pthread_create(&tid, a, tur_gc_thread_main, t);
+    pthread_mutex_lock(&G->world);
+    if (rc != 0) tur_gc_retire(t);
+    else if (t->gen == gen) { t->tid = tid; t->has_tid = true; }
+    pthread_mutex_unlock(&G->world);
+    if (rc == 0) *tp = tid;
+    return rc;
+}
+
+/* A thread leaving through pthread_exit never returns to the trampoline, so
+ * the start routine's end is recorded here (the emitted tur_thread_do_cancel
+ * exits a cancelled thread this way). */
+static void tur_gc_pthread_exit(void *r) __attribute__((noreturn));
+static void tur_gc_pthread_exit(void *r) {
+    tur_gc_thread *t = tur_gc_self;
+    if (t) tur_gc_thread_end(t, r);
+    pthread_exit(r);
+}
+
+/* The joiner is parked while it waits; the joined thread is gone by the time
+ * pthread_join returns, so its record is retired. */
+static int tur_gc_pthread_join(pthread_t tid, void **out) {
+    tur_gc_park();
+    int rc = pthread_join(tid, out);
+    tur_gc_unpark();
+    if (rc == 0 && tur_gc_G) {
+        tur_gc_state *G = tur_gc_G;
+        pthread_mutex_lock(&G->world);
+        for (tur_gc_thread *t = G->threads; t; t = t->next)
+            if (t->has_tid && !t->detached && pthread_equal(t->tid, tid)) { tur_gc_retire(t); break; }
+        pthread_mutex_unlock(&G->world);
+    }
+    return rc;
+}
+
+/* A detached thread is retired when it is gone (tur_gc_thread_gone); one
+ * already gone -- finished, waiting for a join that will not come -- is
+ * retired now.  Without this a detached thread's record, result and key
+ * values would stay in the registry for the life of the process (stdlib
+ * futures and task groups detach their timeout threads). */
+static int tur_gc_pthread_detach(pthread_t tid) {
+    tur_gc_state *G = tur_gc_G;
+    if (G) {
+        pthread_mutex_lock(&G->world);
+        for (tur_gc_thread *t = G->threads; t; t = t->next)
+            if (t->has_tid && !t->detached && pthread_equal(t->tid, tid)) {
+                if (t->gone) tur_gc_retire(t); else t->detached = true;
+                break;
+            }
+        pthread_mutex_unlock(&G->world);
+    }
+    return pthread_detach(tid);
+}
+
+/* pthread_setspecific, keeping the value as a root of the calling thread:
+ * libc stores it where no scan reaches (the thread descriptor), and the
+ * emitted runtime keeps heap blocks there -- a dynamic variable's conveyed
+ * frames, the ^thread-local globals' block.  The value is still in the
+ * caller's registers until it is recorded.  The stores are ordered for a
+ * stop at any instruction: a grown array is filled before it is published,
+ * and an entry is written before the count that covers it. */
+static int tur_gc_setspecific(pthread_key_t k, const void *v) {
+    int r = pthread_setspecific(k, v);
+    tur_gc_thread *t = tur_gc_self;
+    if (r != 0 || !t) return r;
+    for (size_t i = 0; i < t->n_spec; i++)
+        if (t->spec_keys[i] == k) { t->spec_vals[i] = (void *)v; return r; }
+    if (t->n_spec == t->cap_spec) {
+        size_t nc = t->cap_spec ? t->cap_spec * 2 : 8;
+        pthread_key_t *nk = (pthread_key_t *)tur_gc_meta(nc * sizeof *nk);
+        void **nv = (void **)tur_gc_meta(nc * sizeof *nv);
+        if (t->n_spec) {
+            memcpy(nk, t->spec_keys, t->n_spec * sizeof *nk);
+            memcpy(nv, t->spec_vals, t->n_spec * sizeof *nv);
+        }
+        __atomic_signal_fence(__ATOMIC_SEQ_CST);
+        t->spec_keys = nk;
+        t->spec_vals = nv;
+        t->cap_spec = nc;
+    }
+    t->spec_keys[t->n_spec] = k;
+    t->spec_vals[t->n_spec] = (void *)v;
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    t->n_spec++;
+    return r;
+}
+
+/* fork: the child has only the forking thread, and must not inherit a lock
+ * another thread held -- the heap lock mid-refill would stop the child's
+ * first allocation for good.  So every lock the collector uses is taken
+ * before the fork, in the collector's own order (world, heap, metadata, the
+ * region registry), and released on both sides after; in the child every
+ * other thread's record is retired, its stack and its cache with it. */
+static void tur_gc_atfork_prepare(void) {
+    tur_gc_state *G = tur_gc_G;
+    pthread_mutex_lock(&G->world);
+    pthread_mutex_lock(&G->heap);
+    pthread_mutex_lock(&G->meta_lock);
+    while (!tur_region_registry_trylock()) sched_yield();
+}
+static void tur_gc_atfork_parent(void) {
+    tur_gc_state *G = tur_gc_G;
+    tur_region_registry_unlock();
+    pthread_mutex_unlock(&G->meta_lock);
+    pthread_mutex_unlock(&G->heap);
+    pthread_mutex_unlock(&G->world);
+}
+static void tur_gc_atfork_child(void) {
+    tur_gc_state *G = tur_gc_G;
+    tur_gc_thread *self = tur_gc_self, *next;
+    for (tur_gc_thread *t = G->threads; t; t = next) {
+        next = t->next;
+        if (t != self) tur_gc_retire(t);
+    }
+    tur_gc_atfork_parent();
+}
+
+/* The release points.  Each blocking libc call the unit can spell is routed
+ * through a wrapper that parks around it; the function-like macros below do
+ * the routing for every site in the stdlib, the emitted runtime and the
+ * program, with no change to their text.  A contended mutex parks too (a
+ * thread that spins on one a stopped thread holds would stop the world
+ * forever); the uncontended lock stays a try.  A stop signal that lands in
+ * the instant between the park and the call interrupts a call that does
+ * not restart (nanosleep, poll, select, sem_wait ...): the wrapper retries
+ * that EINTR, and only that one.  errno is what the call left. */
+static int tur_gc_cond_wait(pthread_cond_t *c, pthread_mutex_t *m) {
+    tur_gc_park(); int r = pthread_cond_wait(c, m); tur_gc_unpark(); return r;
+}
+static int tur_gc_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m, const struct timespec *ts) {
+    tur_gc_park(); int r = pthread_cond_timedwait(c, m, ts); tur_gc_unpark(); return r;
+}
+static int tur_gc_mutex_lock(pthread_mutex_t *m) {
+    if (pthread_mutex_trylock(m) == 0) return 0;
+    tur_gc_park(); int r = pthread_mutex_lock(m); tur_gc_unpark(); return r;
+}
+static inline void tur_gc_intr_clear(void) { if (tur_gc_self) tur_gc_self->gc_intr = 0; }
+static inline bool tur_gc_intr_ours(void) { return tur_gc_self && tur_gc_self->gc_intr; }
+/* The other blocking calls are wrapped at the call site, as a statement
+ * expression around the call as written, whatever its signature.  The
+ * macros are function-like, so a struct member of the same name is left
+ * alone; and every header that declares one of these names is included at
+ * the top of this file, so a later include is a guarded no-op and the macro
+ * never meets a prototype it would mangle. */
+#define TUR_GC_BLOCKING(call) __extension__ ({                           \
+        tur_gc_park(); __typeof__(call) r_; int e_;                       \
+        do { tur_gc_intr_clear(); r_ = (call); e_ = errno; }              \
+        while (r_ == (__typeof__(call))-1 && e_ == EINTR && tur_gc_intr_ours()); \
+        tur_gc_unpark(); errno = e_; r_; })
+/* The thread calls: the lifecycle the registry follows, and the key store
+ * whose values it roots. */
 #define pthread_create tur_gc_pthread_create
+#define pthread_join(t, o)              tur_gc_pthread_join((t), (o))
+#define pthread_exit(r)                 tur_gc_pthread_exit(r)
+#define pthread_detach(t)               tur_gc_pthread_detach(t)
+#define pthread_setspecific(k, v)       tur_gc_setspecific((k), (v))
+#define pthread_cond_wait(c, m)         tur_gc_cond_wait((c), (m))
+#define pthread_cond_timedwait(c, m, t) tur_gc_cond_timedwait((c), (m), (t))
+#define pthread_mutex_lock(m)           tur_gc_mutex_lock(m)
+#define nanosleep(a, b)                 TUR_GC_BLOCKING(nanosleep((a), (b)))
+#define usleep(u)                       TUR_GC_BLOCKING(usleep(u))
+#define poll(f, n, ms)                  TUR_GC_BLOCKING(poll((f), (n), (ms)))
+#define select(n, r, w, x, tv)          TUR_GC_BLOCKING(select((n), (r), (w), (x), (tv)))
+#define accept(fd, a, l)                TUR_GC_BLOCKING(accept((fd), (a), (l)))
+#define connect(fd, a, l)               TUR_GC_BLOCKING(connect((fd), (a), (l)))
+#define recv(fd, b, n, f)               TUR_GC_BLOCKING(recv((fd), (b), (n), (f)))
+#define recvfrom(fd, b, n, f, a, l)     TUR_GC_BLOCKING(recvfrom((fd), (b), (n), (f), (a), (l)))
+#define read(fd, b, n)                  TUR_GC_BLOCKING(read((fd), (b), (n)))
+#define waitpid(p, s, o)                TUR_GC_BLOCKING(waitpid((p), (s), (o)))
+#define sem_wait(s)                     TUR_GC_BLOCKING(sem_wait(s))
+#define epoll_wait(ep, ev, n, ms)       TUR_GC_BLOCKING(epoll_wait((ep), (ev), (n), (ms)))
+#define kevent(kq, c, nc, ev, nev, ts)  TUR_GC_BLOCKING(kevent((kq), (c), (nc), (ev), (nev), (ts)))
 
 /* Before every other constructor in the unit (101 is the first user
  * priority), so the archive's first allocation already goes through us. */
@@ -615,10 +1348,16 @@ static __attribute__((constructor(101))) void tur_gc_ctor(void) {
         };
         tur_rt_set_allocator(&ours);
     }
+    pthread_mutex_lock(&tur_gc_G->world);
+    tur_rt_tls_roots(tur_gc_add_tls_root);
+    pthread_mutex_unlock(&tur_gc_G->world);
     atexit(tur_gc_report);
 }
 
 #else  /* !TUR_GC_ON: libc, and nothing is ever collected */
+
+#define TUR_GC_FIBER_ENTER(sp) ((void)0)
+#define TUR_GC_FIBER_LEAVE()   ((void)0)
 
 static void *tur_gc_malloc(size_t n) { return malloc(n); }
 static void *tur_gc_calloc(size_t n, size_t m) { return calloc(n, m); }

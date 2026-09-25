@@ -13,6 +13,8 @@
 #else
 #  define TUR_THREAD_LOCAL __thread
 #endif
+#define TUR_GC_FIBER_ENTER(sp) ((void)0)
+#define TUR_GC_FIBER_LEAVE()   ((void)0)
 #if defined(__GNUC__) || defined(__clang__)
 #  define TUR_ATOMIC_LOAD_U64(p, mo)        __atomic_load_n((p), (mo))
 #  define TUR_ATOMIC_STORE_U64(p, v, mo)    __atomic_store_n((p), (v), (mo))
@@ -551,6 +553,16 @@ TUR_RT_API void tur_region_shutdown(void);
 TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud),
                                      void *ud);
 
+/* The same over every thread's generations (the ownership registry), for a
+ * collector that has stopped the other threads.  The lock is a spinlock a
+ * stopped thread may hold, so the collector tries it and walks under it. */
+TUR_RT_API bool tur_region_registry_trylock(void);
+TUR_RT_API void tur_region_registry_unlock(void);
+TUR_RT_API void tur_region_each_registered(void (*cb)(const void *p, size_t n, void *ud),
+                                           void *ud);
+TUR_RT_API void tur_region_each_used_all(void (*cb)(const void *p, size_t n, void *ud),
+                                         void *ud);
+
 #endif
 /* ---- end src/runtime/region.h ---- */
 #define TUR_REGION_NOTE(w) tur_region_note_escape((const void *)(intptr_t)(w))
@@ -748,6 +760,7 @@ TUR_RT_API void  arena_each_used(const Arena *a,
 /* ---- begin src/runtime/arena.c (embedded verbatim) ---- */
 /* (local #include dropped: that header is pasted above) */
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -915,6 +928,11 @@ TUR_RT_API void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
     if (size + align > cap) cap = size + align;
     ArenaSlab *fresh = slab_new(cap);
     fresh->next = a->head;
+    /* The link before the publication, as a signal handler on this thread
+     * sees it: the r7rs-gc collector stops a thread anywhere and then walks
+     * its region generations (r7gc.c, tur_region_each_registered), and a
+     * head published ahead of its link would hide every older slab. */
+    atomic_signal_fence(memory_order_seq_cst);
     a->head = fresh;
 
     uintptr_t base = (uintptr_t)fresh->data;
@@ -1387,6 +1405,27 @@ TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *u
                                      void *ud) {
     for (int i = 0; i < g_live_n; i++) arena_each_used(g_live[i], cb, ud);
     for (int i = 0; i < g_retired_n; i++) arena_each_used(g_retired[i], cb, ud);
+}
+
+/* Every thread's live and retired generations, through the ownership
+ * registry.  For the r7rs-gc collector (docs/archive/r7rs-gc-threads-plan.md):
+ * it stops every other thread before it reads roots, so the arenas hold
+ * still; but a stopped thread may be inside reg_add/reg_remove holding the
+ * registry's spinlock, so the collector TRIES the lock, and on a refusal
+ * lets the world run and stops it again. */
+TUR_RT_API bool tur_region_registry_trylock(void) {
+    return !atomic_flag_test_and_set_explicit(&g_reg_lock, memory_order_acquire);
+}
+TUR_RT_API void tur_region_registry_unlock(void) { reg_unlock(); }
+TUR_RT_API void tur_region_each_registered(void (*cb)(const void *p, size_t n, void *ud),
+                                           void *ud) {
+    for (int i = 0; i < g_reg_n; i++) arena_each_used(g_reg[i], cb, ud);
+}
+TUR_RT_API void tur_region_each_used_all(void (*cb)(const void *p, size_t n, void *ud),
+                                         void *ud) {
+    reg_lock();
+    tur_region_each_registered(cb, ud);
+    reg_unlock();
 }
 
 TUR_RT_API int tur_region_depth(void) { return g_live_n; }
@@ -2733,7 +2772,9 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     tur_current_fiber = f;
     f->arg = arg;
     tur_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;
+    TUR_GC_FIBER_ENTER((void *)&_dk_save);
     swapcontext(&f->caller_ctx, &f->ctx);
+    TUR_GC_FIBER_LEAVE();
     g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;
     tur_current_fiber = _prev;
     return f->result;

@@ -164,9 +164,12 @@ scan:
   seam and stores a Scheme value in a `bt` cell would. The runtime archive's
   other blocks -- HAMT nodes, rc<T> blocks, strings, symbols -- ARE seen
   since the second pass (section 2).
-- **Threads** are refused at the start site (section 2), not supported.
-  A program that starts threads (Turmeric concurrency through the seam)
-  builds without the flag.
+- **Threads** were refused at the start site (section 2) until
+  [docs/archive/r7rs-gc-threads-plan.md](r7rs-gc-threads-plan.md)
+  (stages A to D, 2026-09-25): they now run in parallel under the
+  collector, which stops the others by signal to collect, with every
+  thread's stack, registers, thread-local state, key values and allocation
+  cache as roots.
 - **Other translation units.** Only a single-unit build uses it. A `--shared`
   or project build ignores the flag (each unit would have its own heap).
 - **The interpreter.** `tur --interpret` keeps its values for the life of the

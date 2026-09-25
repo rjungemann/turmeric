@@ -1,0 +1,17 @@
+#lang r7rs
+;; The Scheme half of the relay, with a walk that allocates on every
+;; element, so the worker thread is in the allocator's fast path when the
+;; main thread's collections stop it.
+(define-library (work)
+  (export walk put! take! answer! get!)
+  (import (scheme base))
+  (begin
+    (define in-cell #f)
+    (define out-cell #f)
+    (define (walk lst)
+      (let lp ((l lst) (acc 0))
+        (if (null? l) acc (lp (cdr l) (+ acc (car (list (car l))))))))
+    (define (put! v) (set! in-cell v) #t)
+    (define (take!) (let ((v in-cell)) (set! in-cell #f) v))
+    (define (answer! v) (set! out-cell v) #t)
+    (define (get!) (let ((v out-cell)) (set! out-cell #f) v))))
