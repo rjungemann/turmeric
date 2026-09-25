@@ -27,7 +27,7 @@ and generates all of the CMake files a consumer needs.
 Open `build.tur` and add an `:exports` field listing the `.tur` source files
 that form the public API of your library:
 
-```scheme
+```turmeric
 (defpackage my-geom
   :version "0.3.0"
   :description "2-D geometry primitives"
