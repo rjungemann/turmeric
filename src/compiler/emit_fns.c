@@ -5183,8 +5183,10 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             } else {
                 buf_printf(file, "struct %s { int64_t __fn; ", env_name->name);
             }
+            Buf capty; buf_init(&capty);
             for (uint8_t i = 0; i < fd->closure->n_captures; i++) {
                 Binding *captured = fd->closure->captures[i];
+                if (i > 0) buf_putc(&capty, '\n');
                 /* CY4: rank-2 captures must live as tur_poly_fn_t. */
                 /* A captured fn value (fat closure or bare fn ptr) is carried as
                  * the int64_t fn-ABI carrier -- the same C type fn-typed
@@ -5201,9 +5203,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                                                : emit_type_c_name(ctx, captured->type));
                 char *field = raw_name_for_binding(captured);
                 buf_printf(file, "%s %s; ", cap_ctype, field);
+                buf_puts(&capty, cap_ctype);
                 free(field);
             }
             buf_puts(file, "};\n");
+            buf_putc(&capty, '\0');
+            emit_env_struct_set_cap_ctypes(ctx, env_name, capty.data ? capty.data : "");
+            buf_free(&capty);
             free(thunk_typedef);
 
             /* closure-drop-glue (Model R): emit the env's drop-glue beside its
