@@ -166,7 +166,9 @@ scan:
   since the second pass (section 2).
 - **Threads** are refused at the start site (section 2), not supported.
   A program that starts threads (Turmeric concurrency through the seam)
-  builds without the flag.
+  builds without the flag. Lifting this, first with a collector lock and
+  then with a stop-the-world pause, is
+  [docs/upcoming/r7rs-gc-threads-plan.md](../upcoming/r7rs-gc-threads-plan.md).
 - **Other translation units.** Only a single-unit build uses it. A `--shared`
   or project build ignores the flag (each unit would have its own heap).
 - **The interpreter.** `tur --interpret` keeps its values for the life of the

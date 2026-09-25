@@ -380,7 +380,8 @@ What it does not cover:
   group) stops at the start with the reason and exits 70. Build such a
   program without the collector: `TUR_R7RS_GC=0 tur build prog.tur`, or
   `tur --no-r7rs-gc build prog.tur`. Its data then stays allocated until the
-  process exits, the way a Turmeric `:heap` box does.
+  process exits, the way a Turmeric `:heap` box does. Threads under the
+  collector are planned (docs/upcoming/r7rs-gc-threads-plan.md).
 - **Other builds.** `--shared`, a project build (`tur build <dir>`), `tur
   jit` and the interpreter (`tur --interpret`) do not use it; the
   interpreter keeps its values for the life of the process by design.
