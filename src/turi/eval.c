@@ -6761,8 +6761,10 @@ TuriContState *turi_cont_state_capture(TuriEnv *env) {
     s->firing_panic_defer = g_firing_panic_defer;
     s->catch_stack        = g_catch_stack;
     s->reset_stack        = g_reset_stack;
+#ifndef __EMSCRIPTEN__
     s->pending_cont       = g_pending_cont;
     s->pending_gen        = g_pending_gen;
+#endif
     s->current_gen        = g_current_gen;
     s->drive_regs         = g_drive_regs;
     for (DriveReg *r = g_drive_regs; r; r = r->prev)
@@ -6807,8 +6809,10 @@ void turi_cont_state_restore(TuriEnv *env, const TuriContState *s) {
     g_firing_panic_defer   = s->firing_panic_defer;
     g_catch_stack          = s->catch_stack;
     g_reset_stack          = s->reset_stack;
+#ifndef __EMSCRIPTEN__
     g_pending_cont         = s->pending_cont;
     g_pending_gen          = s->pending_gen;
+#endif
     g_current_gen          = s->current_gen;
     g_drive_regs           = s->drive_regs;
     /* The restored drives point at the heap stacks they had; those have been
