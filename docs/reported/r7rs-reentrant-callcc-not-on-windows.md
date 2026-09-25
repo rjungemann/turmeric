@@ -43,3 +43,11 @@ base, `r7rs-cont-capture__` declines and `r7rs-call/cc` uses the escape.
   already grows the stack past the image with alloca, which `__chkstk`
   probes.
 - Test on a Windows runner before un-skipping the fixtures.
+
+## Guide upkeep
+
+Two places in `docs/guides/r7rs-guide.md` say this, and both go when it
+resolves: the "Where it differs from R7RS" bullet beginning "**Re-entrant
+`call/cc` is Linux and macOS only.**" (delete whole), and the sentence in
+Control starting "On Windows it is escape-only for now" (delete; the paragraph
+above it already states the re-entrant behavior).
