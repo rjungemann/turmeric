@@ -1,0 +1,17 @@
+#lang r7rs
+;; r7rs-gc threads, stage B (docs/upcoming/r7rs-gc-threads-plan.md): the
+;; worker walks a list allocating a pair per element while this thread
+;; churns garbage; every collection either thread triggers stops the other
+;; wherever it is -- in the allocator's fast path, mid-memset, holding a
+;; slot in a register -- and the sum is right after.
+(import (scheme base) (scheme write) (work) (turmeric relay))
+(define (iota* n) (let lp ((i n) (acc '())) (if (= i 0) acc (lp (- i 1) (cons i acc)))))
+(define (churn i) (if (= i 0) 'done (begin (list i i i i) (churn (- i 1)))))
+(define r (relay-start))
+(put! (iota* 5000))
+(relay-signal-in r)
+(relay-go r)
+(churn 5000)
+(relay-wait-out r)
+(display (get!)) (newline)
+(relay-stop r)

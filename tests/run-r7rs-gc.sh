@@ -14,11 +14,11 @@
 #      collection on EVERY allocation.  Before the archive allocated through
 #      the collector's hook (src/runtime/rt_alloc.h) this segfaulted: the
 #      nodes were libc's, unscanned, and the values were freed under them.
-#   3. Threads (docs/upcoming/r7rs-gc-threads-plan.md, stage A): a program
-#      that starts one runs under the collector, one thread at a time, with
-#      every thread's stack and thread-local state as roots; five cases,
-#      three of them the r7rs-threads-* fixtures under a collection on
-#      every allocation, plus a lint over the release points.
+#   3. Threads (docs/upcoming/r7rs-gc-threads-plan.md, stages A and B): a
+#      program that starts threads runs them in parallel under the
+#      collector, which stops them by signal to collect; eight cases, six of
+#      them the r7rs-threads-* fixtures under a collection on every
+#      allocation, plus a lint over the release points.
 #   4. Reclamation (Linux only, where `ulimit -v` binds): a loop that builds
 #      and drops a million small lists runs under a 256 MiB address-space
 #      limit.  With the collector it fits; the same program without it
@@ -123,15 +123,14 @@ else
     fi
 fi | tee -a "$WORK/results"
 
-# 3. Threads (stage A of docs/upcoming/r7rs-gc-threads-plan.md).  A program
-# that starts a thread runs under the collector, one thread of the unit's
-# code at a time: the thread registry, the release points around every
-# blocking call, and every thread's stack, registers and thread-local state
-# as roots.  Each case below runs with a collection on EVERY allocation.
+# 3. Threads (docs/upcoming/r7rs-gc-threads-plan.md, stages A and B).  A
+# program that starts threads runs them in parallel under the collector,
+# which stops the others by signal when it collects: the thread registry,
+# the release points around every blocking call, and every thread's stack,
+# registers, thread-local state and allocation cache as roots.  Each case
+# below runs with a collection on EVERY allocation.
 #   threads-run    a C thread started through a Turmeric module starts,
-#                  joins and prints, with the one-time TUR-W0072 warning that
-#                  names the cost and the opt-out; under TUR_R7RS_GC=0 the
-#                  same program runs with neither.
+#                  joins and prints, under the collector as without it.
 #   threads-share  tests/fixtures/r7rs-threads-share: a list built on the
 #                  main thread crosses to a worker thread, which walks it
 #                  with a Scheme procedure and hands the sum back.
@@ -141,6 +140,13 @@ fi | tee -a "$WORK/results"
 #                  collections.
 #   threads-tls    tests/fixtures/r7rs-threads-tls: two threads each read
 #                  their own thread-local runtime state.
+#   threads-parallel, threads-pause, threads-syscall (stage B, the
+#                  stop-the-world collector): tests/fixtures/r7rs-threads-*:
+#                  two threads rendezvous by spinning with no release point
+#                  between them; a thread in a tight allocation loop is
+#                  stopped by the other's collections thousands of times; a
+#                  thread blocked in a read the collector does not wrap is
+#                  stopped and resumed across hundreds of collections.
 #   threads-lint   every blocking libc call the stdlib and the emitter
 #                  spell is one the collector's release-point macros route
 #                  (src/runtime/r7gc.c); a new one that is not would be a
@@ -185,18 +191,12 @@ plain_rc="$(thread_case plain TUR_R7RS_GC=0)"
 gc_rc="$(thread_case gc TUR_R7RS_GC=1)"
 if [ "$plain_rc" != 0 ] || [ "$(cat "$WORK/threaded-plain.out" 2>/dev/null)" != 1 ]; then
     echo "FAIL threads-run -- under TUR_R7RS_GC=0 the program should start and join a thread (exit $plain_rc)"
-elif grep -q "TUR-W0072" "$WORK/threaded-plain.err"; then
-    echo "FAIL threads-run -- without the collector there is no one-thread-at-a-time warning to print"
 elif [ "$gc_rc" != 0 ] || [ "$(cat "$WORK/threaded-gc.out" 2>/dev/null)" != 1 ]; then
     echo "FAIL threads-run -- under the collector the program should start and join a thread (exit $gc_rc): $(tail -1 "$WORK/threaded-gc.err" | cut -c1-120)"
-elif ! grep -q "TUR-W0072" "$WORK/threaded-gc.err"; then
-    echo "FAIL threads-run -- the first thread start should warn (TUR-W0072) that threads run one at a time"
-elif ! grep -q "TUR_R7RS_GC=0" "$WORK/threaded-gc.err"; then
-    echo "FAIL threads-run -- the warning did not name the opt-out: $(tail -1 "$WORK/threaded-gc.err" | cut -c1-120)"
-elif [ "$(grep -c "TUR-W0072" "$WORK/threaded-gc.err")" != 1 ]; then
-    echo "FAIL threads-run -- the warning should print once"
+elif grep -q "r7rs-gc" "$WORK/threaded-gc.err"; then
+    echo "FAIL threads-run -- the collector had something to say about a thread start: $(grep -m1 r7rs-gc "$WORK/threaded-gc.err" | cut -c1-120)"
 else
-    echo "PASS threads-run (a thread starts, joins and prints under the collector, warned once; silent under TUR_R7RS_GC=0)"
+    echo "PASS threads-run (a thread starts, joins and prints under the collector, silently, as without it)"
 fi | tee -a "$WORK/results"
 
 fixture_case() {
@@ -220,6 +220,9 @@ fixture_case() {
 fixture_case threads-share r7rs-threads-share "a list crosses to a worker thread and its sum comes back, under a collection on every allocation" | tee -a "$WORK/results"
 fixture_case threads-roots r7rs-threads-roots "a list held only on a parked thread's stack survives the main thread's churn" | tee -a "$WORK/results"
 fixture_case threads-tls   r7rs-threads-tls   "each thread reads its own thread-local runtime state" | tee -a "$WORK/results"
+fixture_case threads-parallel r7rs-threads-parallel "two threads rendezvous by spinning, with no release point between them: they run at the same time" | tee -a "$WORK/results"
+fixture_case threads-pause r7rs-threads-pause "a thread allocating in a tight loop is stopped by the other thread's collections, thousands of times" | tee -a "$WORK/results"
+fixture_case threads-syscall r7rs-threads-syscall "a thread blocked in an unwrapped read is stopped and resumed across hundreds of collections, and the read completes" | tee -a "$WORK/results"
 
 # threads-lint: the blocking calls (a broad list; the stdio reads are left
 # out on purpose -- a read from a FILE holds the world, docs/guides/r7rs-guide.md).

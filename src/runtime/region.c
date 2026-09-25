@@ -362,14 +362,23 @@ TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *u
 }
 
 /* Every thread's live and retired generations, through the ownership
- * registry.  For the r7rs-gc collector once it runs threads (stage A of
- * docs/upcoming/r7rs-gc-threads-plan.md): every other thread is parked while
- * it collects, so the arenas hold still; the lock is against a thread that
- * is exiting and unregistering its arenas meanwhile. */
+ * registry.  For the r7rs-gc collector (docs/upcoming/r7rs-gc-threads-plan.md):
+ * it stops every other thread before it reads roots, so the arenas hold
+ * still; but a stopped thread may be inside reg_add/reg_remove holding the
+ * registry's spinlock, so the collector TRIES the lock, and on a refusal
+ * lets the world run and stops it again. */
+TUR_RT_API bool tur_region_registry_trylock(void) {
+    return !atomic_flag_test_and_set_explicit(&g_reg_lock, memory_order_acquire);
+}
+TUR_RT_API void tur_region_registry_unlock(void) { reg_unlock(); }
+TUR_RT_API void tur_region_each_registered(void (*cb)(const void *p, size_t n, void *ud),
+                                           void *ud) {
+    for (int i = 0; i < g_reg_n; i++) arena_each_used(g_reg[i], cb, ud);
+}
 TUR_RT_API void tur_region_each_used_all(void (*cb)(const void *p, size_t n, void *ud),
                                          void *ud) {
     reg_lock();
-    for (int i = 0; i < g_reg_n; i++) arena_each_used(g_reg[i], cb, ud);
+    tur_region_each_registered(cb, ud);
     reg_unlock();
 }
 

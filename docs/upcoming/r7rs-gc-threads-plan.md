@@ -1,6 +1,7 @@
 # Threads under the r7rs-gc collector: a collector lock first, a Boehm-style collector after
 
-Status: **stage A shipped** (2026-09-25); stages B-D proposed. Follows
+Status: **stages A and B shipped** (2026-09-25); stages C and D proposed.
+Follows
 [docs/archive/r7rs-gc-plan.md](../archive/r7rs-gc-plan.md), whose collector
 graduated the same day with one limit left standing: a compiled `#lang r7rs`
 program that starts a thread stopped at the start site (exit 70) and was
@@ -57,6 +58,62 @@ src/runtime/r7gc.c unless said otherwise:
 - Fixtures: `tests/fixtures/r7rs-threads-{share,roots,tls}` run in the
   ordinary suite and, under a collection on every allocation, as the
   gate's section 3.
+
+### Stage B as built
+
+Section 3 with these differences, all in src/runtime/r7gc.c:
+
+- **The world lock is held only for a collection and for registry
+  changes** (a thread's registration, its end, a join's retirement, and
+  the instant an unpark clears the thread's parked flag, which is what keeps
+  an unpark from landing in the middle of a collection). Between
+  collections nothing is locked on the allocation fast path.
+- **Signals on both platforms**, Boehm's choices: `SIGPWR`/`SIGXCPU` on
+  Linux, `SIGXCPU`/`SIGXFSZ` on macOS. The stop handler spills the
+  registers into the thread's record, takes its stack pointer (the kernel's
+  register save sits above that frame, so the stack scan covers it too),
+  counts itself in, and waits in `sigsuspend` with everything but the resume
+  signal blocked; the collector clears the thread's stopped flag before it
+  sends the resume, so a thread that has not reached its loop yet skips it.
+  The collector waits for the acknowledgements with `sched_yield`, not a
+  semaphore (macOS has no unnamed ones). `thread_suspend` was not tried:
+  one mechanism, exercised on CI's macOS leg, over two.
+- **A parked thread is not signaled.** Its parked flag is set after its
+  spill, so the collector's read of it is the handshake; a stop signal that
+  lands in the instant between the flag and the system call interrupts a
+  call that does not restart, and the wrapper retries that one EINTR (the
+  handler leaves a mark on the record; the wrapper clears it before each
+  attempt). Calls the stop signal interrupts elsewhere restart
+  (`SA_RESTART`); the guide tells inline C that calls an unknown blocking
+  function to expect EINTR.
+- **The heap lock is taken before the world is stopped**, so no stopped
+  thread is inside the allocator's slow path, and the chunk map, free
+  lists, bump pages and bounds are consistent while the collector reads
+  them. `free` and `realloc` take it too (their lookups read the map).
+- **Per-thread caches**: 32 slots per refill for classes up to 256 bytes,
+  8 up to 4 KiB, 2 above. A cached slot is allocated in its page's bitmap
+  and the collector marks every cached slot live (not scanned), so a thread
+  stopped between popping a slot and handing it out loses nothing: the slot
+  in flight is in its registers or on its stack. The allocation counter
+  that drives the threshold is advanced at refill time. `free` of a small
+  object goes to the shared list, not the cache.
+- **The region registry's spinlock is tried, not taken** (region.c:
+  `tur_region_registry_trylock`): a stopped thread may hold it inside
+  `reg_add`/`reg_remove`, so on a refusal the collector resumes the world,
+  yields, and stops it again. Nothing else a stopped thread can hold is
+  needed by a collection: the collector allocates through `mmap` only.
+- **The fiber-enter point** is the hook function's own frame, below every
+  local of the resuming frame; a stopped thread's `os_sp` is read the same
+  way as a parked one's.
+- The TUR-W0072 warning is gone, as planned for this stage.
+- Fixtures `tests/fixtures/r7rs-threads-{parallel,pause,syscall}`:
+  `threads-parallel` is not a timing test but a rendezvous of two threads
+  spinning on flags with no release point between them, which a collector
+  lock can never complete; `threads-pause` has a worker allocating a pair
+  per list element while the main thread churns, so each thread's
+  collections stop the other in the allocator's fast path; `threads-syscall`
+  stops a thread blocked in `fgetc` three hundred times and then feeds it
+  the byte.
 
 ## 0. The shape of the plan
 

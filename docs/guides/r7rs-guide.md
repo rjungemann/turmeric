@@ -375,23 +375,22 @@ out a missing root.
 
 What it does not cover:
 
-- **Threads run one at a time.** A program that starts a thread (through
-  the seam: `thread-spawn-fn`, `session-spawn`, a task group, a Turmeric
-  module's own `pthread_create`) runs, and its memory is reclaimed, but one
-  thread runs the program's code at a time, the way Python's interpreter
-  lock works: a thread gives the turn up when it blocks (a join, a channel
-  or condition wait, a contended mutex, a sleep, `poll`, `accept`, `recv`,
-  `read`, `waitpid`) and takes it back after. A program that blocks keeps
-  its concurrency; one that computes on several threads does not, and the
-  first thread start says so once (TUR-W0072; `TUR_GC_QUIET=1` silences
-  it). For parallelism build without the collector: `TUR_R7RS_GC=0 tur
-  build prog.tur`, or `tur --no-r7rs-gc build prog.tur`; the data then
-  stays allocated until the process exits, the way a Turmeric `:heap` box
-  does. Two things to know: a read through a `FILE` (`read-line` on a
-  terminal, `fgetc`) holds the turn while it waits, and a thread the
-  program did not start (a library's own, calling back in) stops with the
-  reason at its first allocation. Parallel threads under the collector are
-  the plan's next stage (docs/upcoming/r7rs-gc-threads-plan.md).
+- **Threads.** A program that starts threads (through the seam:
+  `thread-spawn-fn`, `session-spawn`, a task group, a Turmeric module's own
+  `pthread_create`) runs them in parallel, and its memory is reclaimed: each
+  thread allocates from its own cache of slots, and a collection stops the
+  other threads by signal wherever they are, the way the Boehm collector
+  does, so nothing is compiled into the program's loops. The stop signal
+  restarts the system call it interrupts; a program's own inline C that
+  calls a blocking function the runtime does not know (the known ones are
+  the joins, the condition waits, `nanosleep`, `poll`, `select`, `accept`,
+  `connect`, `recv`, `read`, `waitpid`, `sem_wait`, `epoll_wait`, `kevent`)
+  may see EINTR from it and should retry. A thread the program did not
+  start (a library's own, calling back in) stops with the reason at its
+  first allocation. `TUR_R7RS_GC=0 tur build prog.tur`, or `tur
+  --no-r7rs-gc build prog.tur`, still builds without the collector; the
+  data then stays allocated until the process exits, the way a Turmeric
+  `:heap` box does.
 - **Other builds.** `--shared`, a project build (`tur build <dir>`), `tur
   jit` and the interpreter (`tur --interpret`) do not use it; the
   interpreter keeps its values for the life of the process by design.

@@ -176,7 +176,12 @@ TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *u
                                      void *ud);
 
 /* The same over every thread's generations (the ownership registry), for a
- * collector that has parked the other threads. */
+ * collector that has stopped the other threads.  The lock is a spinlock a
+ * stopped thread may hold, so the collector tries it and walks under it. */
+TUR_RT_API bool tur_region_registry_trylock(void);
+TUR_RT_API void tur_region_registry_unlock(void);
+TUR_RT_API void tur_region_each_registered(void (*cb)(const void *p, size_t n, void *ud),
+                                           void *ud);
 TUR_RT_API void tur_region_each_used_all(void (*cb)(const void *p, size_t n, void *ud),
                                          void *ud);
 
