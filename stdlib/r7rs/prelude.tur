@@ -1843,8 +1843,7 @@
       unsigned char *saved = r7k_form_base;
       r7k_form_base = (unsigned char *)mark;
       run(thunk);
-      r7k_form_base = saved;
-      __asm__ __volatile__("" ::: "memory");
+      r7k_form_base = saved;   // a store after the call: never a tail call
   }
   static int r7k_measure(r7k_cont *c, unsigned char *mark) {
       // r7rs-reentrant-callcc-not-on-windows: no image without a stack base,
