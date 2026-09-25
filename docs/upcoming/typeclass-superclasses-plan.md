@@ -1,8 +1,10 @@
 # Typeclass superclasses: `defclass` constraint preambles
 
 > **Status:** SC0-SC6 **landed 2026-09-16** behind the gate (see section 7);
-> **SC7 (graduation) landed 2026-09-25** (see section 8). SC8-SC9 (stdlib
-> adoption, post-adoption docs) remain open and are post-v1.
+> **SC7 (graduation) landed 2026-09-25** (see section 8). **SC8a (the lattice
+> classes) and its SC9 docs landed 2026-09-25**, unreleased (see section 10).
+> SC8b (the auto-loaded classes) is measured and staged; four of its five steps
+> are ready and one waits on a compiler fix.
 > **Type:** compiler feature (elaboration only, no codegen), plus a
 > **documentation correction that is independently shippable and should land
 > first**.
@@ -415,9 +417,9 @@ superclasses.** The phase is staged so that each step's blast radius is
 known before it lands, and the audit that sizes each step was run once
 already (section 9.3) so the numbers below are measured, not assumed.
 
-**SC8a -- the lattice file (first release after graduation).**
+**SC8a -- the lattice file. LANDED 2026-09-25 (unreleased; section 10).**
 `stdlib/typeclass-lattice.tur` is loaded explicitly, never auto-loaded, so
-its classes have the smallest downstream footprint of any candidate. Four
+its classes have the smallest downstream footprint of any candidate. Three
 preambles, all of which the file's own instances already satisfy:
 
 | Class | Preamble | Own instances | Each has the superclass instance? |
@@ -425,87 +427,99 @@ preambles, all of which the file's own instances already satisfy:
 | `Monoid` | `[(Semigroup a)]` | `Sum Product MinI MaxI Any All` | yes, all six |
 | `BoundedJoin` | `[(JoinSemilattice a)]` | `MaxI Any` | yes |
 | `BoundedMeet` | `[(MeetSemilattice a)]` | `MinI All` | yes |
-| `JoinSemilattice`, `MeetSemilattice` | none | | see below |
+| `JoinSemilattice`, `MeetSemilattice` | none | | withheld on purpose |
 
-The two in-source comments at `:60` ("Flat, not a subclass of Semigroup")
-and `:258` ("There is no superclass relating them") come out with the
-preambles; the `:258` law duplication (the join associativity law restated
-rather than borrowed) is *not* removed by this step, because a
-`JoinSemilattice` is deliberately **not** declared over `Semigroup` -- the
-two classes have the same shape and differ only in laws, and a preamble
-would let a `[^JoinSemilattice A]` body call `combine`, which is the wrong
-name for a join. That comment is reworded to say the relation is withheld
-on purpose, not that the feature is missing.
+`JoinSemilattice` is deliberately **not** declared over `Semigroup`: the two
+classes have the same shape and differ only in laws, and a preamble would
+let a `[^JoinSemilattice A]` body call `combine`, which is the wrong name
+for a join. The file's comment says the relation is withheld on purpose,
+and the join associativity law stays restated rather than borrowed.
 
-The fixture that pins this step: `stdlib-monoid-entails-semigroup`, a
-`[^Monoid A]` function calling `combine` against the stdlib `Monoid`, in
-both `run.sh` and `run-turi.sh`.
+**SC8b -- the auto-loaded hierarchy (one class per change, after SC8a
+ships).** These are the classes every program sees. Every candidate was
+applied together on 2026-09-25 and measured against the full `run.sh`
+suite (3182 fixtures), the stdlib itself, and every spice at
+`turmeric-spices` `origin/main` (section 9.3). Two facts shape the order:
 
-**SC8b -- the auto-loaded hierarchy (a later release, one class per
-change).** These are the classes every program sees, so each retrofit is
-its own PR with its own audit. In order of measured risk:
+- **Every retrofit lands in two files.** `stdlib/typeclass.tur` (loaded
+  explicitly) re-declares `Functor`, `Applicative`, `Monad`, `Alternative`,
+  `Bifunctor` and `Clone` alongside the auto-loaded `typeclass-*.tur`
+  copies, and the idempotent-redeclaration check compares preambles, so a
+  preamble on one copy and not the other is a redeclaration conflict for any
+  program that loads both.
+- **The spices use almost none of these classes.** Across all 48 spices
+  there are 5 `Functor` and 9 `Eq` instances, and no `Ord`, `Applicative`,
+  `Monad`, `Alternative`, `MonadError`, `Traversable` or arrow instances.
+  The downstream cost of every SC8b step below is zero today.
 
-1. `Ord` over `Eq` -- every `Ord` instance in the stdlib already has an
-   `Eq` instance (15 of 15). Zero-cost in tree; the audit is the spices.
-2. `Applicative` over `Functor` -- 6 of 6 in tree.
-3. `MonadError` over `Monad`, `Alternative` over `Applicative` -- 2 of 2
-   and 6 of 6 in tree.
-4. `Monad` over `Functor` -- 6 of 6 in the stdlib, but **one fixture breaks**
-   (`hkt-constrained-wide-byvalue-carrier`'s `Pad2` declares `Monad` with no
-   `Functor`). That fixture gains the instance in the same PR.
-5. `Monad` over `Applicative` -- **breaks the stdlib today**:
-   `stdlib/result.tur` declares `Functor` and `Monad` for `(Result _ B)` and
-   no `Applicative`. Either add the `Applicative [(Result _ B)]` instance
-   first or leave `Monad`'s preamble at `[(Functor m)]`. Haskell's
-   `Applicative m => Monad m` is the shape to aim for, so prefer adding the
-   instance.
+In order, cheapest first:
 
-`Hash`, `Show`, `Clone`, `Drop`, `Num`, `From`/`Into` have no natural
-superclass and stay flat.
+1. **`Ord` over `Eq` -- ready.** Zero breakage: stdlib 15/15, no fixture
+   failed, no spice has an `Ord` instance. The single most useful retrofit,
+   since `[^Ord A]` bodies routinely want `eq?`.
+2. **`Alternative` over `Applicative`, `MonadError` over `Monad`, and
+   `Traversable` over `Functor` and `Foldable` -- ready.** Zero breakage on
+   all three counts. `Monad` itself can stay flat while `MonadError` points
+   at it.
+3. **`Applicative` over `Functor` -- ready, with six fixture edits.** The
+   stdlib is clean (6/6), but six HKT fixtures declare `Applicative` for a
+   toy type with no `Functor`: `hkt-constrained-continuation-dict`,
+   `hkt-constrained-middle-vector-dict`,
+   `hkt-constrained-pure-return-dispatch`, `hkt-constrained-pure-two-instances`,
+   `hkt-rank2-forall-pure-two-instances`, `hkt-rank2-result-only-pin`. Each
+   gains a one-line `Functor` instance in the same change.
+4. **The arrow hierarchy in `stdlib/arrow.tur` (not auto-loaded) -- ready,
+   with one correction.** `Arrow` over `Category`, and `ArrowChoice`,
+   `ArrowLoop`, `ArrowApply` over `Arrow`, and `ArrowPlus` over `ArrowZero`,
+   break nothing. **`ArrowZero` over `Arrow` breaks the stdlib**:
+   `stdlib/kleisli.tur` gives `Kleisli` a `Category` and an honest
+   `ArrowZero` but deliberately no `Arrow`. Declare `ArrowZero` over
+   `Category` instead, which every instance satisfies and which is all its
+   laws need.
+5. **`Monad` over `Applicative` -- blocked on a compiler fix.**
+   `stdlib/result.tur` has `Functor` and `Monad` for `(Result _ B)` and no
+   `Applicative`. Adding the instance is the right fix, but compiled `ap` over
+   a partial head segfaults today
+   ([partial-head-ap-calls-fat-closure-as-thin-pointer](../reported/partial-head-ap-calls-fat-closure-as-thin-pointer.md)),
+   so shipping it would turn a clean "no instance" error into a crash for
+   anyone who calls `ap` on a `Result`. **Do not** take `Monad` over
+   `Functor` as a stopgap: moving it to `Applicative` later would be a
+   second breaking change for every downstream `Monad` instance. Hold
+   `Monad` flat until the report is fixed, then add the instance and the
+   `Applicative` preamble together. One fixture, `hkt-constrained-wide-byvalue-carrier`
+   (`Pad2`), also gains `Functor` and `Applicative` instances in that change.
 
-**The spices audit (4.1) happens at each SC8 step, and it is the real
-cost.** A preamble on an existing class obliges every existing instance of
-it, in every downstream spice, to have the superclass instance -- the
-TUR-E0393 arm fires in *their* build, not ours. Before each step, clone
-`turmeric-spices` at `origin/main` (the sibling checkout is absent on CI
-and often stale locally), run the same `definstance` set-difference the
-in-tree audit used (section 9.3), and land the missing superclass
-instances in the spice **before** the stdlib preamble ships. Graduation
-defers this; it does not remove it.
+`Eq`, `Functor`, `Hash`, `Show`, `Clone`, `Drop`, `Bifunctor`, `Num`,
+`From`/`Into` have no natural superclass and stay flat.
+
+**The spices audit (4.1) happens at each SC8 step.** A preamble on an
+existing class obliges every existing instance of it, in every downstream
+spice, to have the superclass instance -- the TUR-E0393 arm fires in
+*their* build, not ours. The 2026-09-25 audit found nothing to fix, but
+spices keep landing: before each step, clone `turmeric-spices` at
+`origin/main`, re-run the script in section 9.3, and land any missing
+superclass instances in the spice **before** the stdlib preamble ships.
 
 ### SC9 -- Documentation after stdlib adoption
 
 The half of the doc work that could not be written earlier, because a guide
-must describe what the stdlib *does*, not what it could do:
+must describe what the stdlib *does*, not what it could do. **Landed with
+SC8a** (section 10):
 
-- **`docs/guides/lattice-guide.md` -- the explicitly requested update.** The
-  `## Monoid` prose at :77-79 currently reads "It is declared **flat**, not as
-  a subclass of `Semigroup`, because `defclass` has no superclasses -- so a
-  function needing both lists both constraints." That is **true until SC8
-  lands**; editing it any earlier makes the guide wrong in the other
-  direction. Replace it with the subclass declaration and the
-  single-constraint function:
+- `docs/guides/lattice-guide.md` -- the class table has a Superclass column,
+  and the `## Monoid` section shows the subclass declaration and the
+  single-constraint `double-up`, in both spellings, plus the instance
+  obligation. Current behavior only, per the no-archeology rule.
+- `docs/guides/turi-parity-guide.md` -- the typeclass row's notes list
+  superclasses, backed by the `class-superclass-*` and `stdlib-*` fixtures
+  passing under both harnesses with no `requires.*` markers.
+- `docs/guides/typeclass-guide.md` and `typeclass-internals-guide.md` -- no
+  longer call the whole stdlib flat; they say which classes carry preambles
+  and that the auto-loaded ones are retrofitted one at a time.
 
-  ```turmeric
-  (defclass Monoid [a]
-    [(Semigroup a)]
-    (mempty [] : a))
-
-  (defn double-up [^Monoid A] [x : A] : A
-    (combine x x))
-  ```
-
-  Update the paired `sweet-exp` block directly beneath it -- the guide carries
-  both spellings for every example, `check-guide-pairs.py` enforces it in CI,
-  and a half-updated pair is its own defect.
-
-  Per the repo's no-archeology rule, the guide states current behavior only --
-  no "this used to be flat" note. The history belongs on this plan.
-
-- `docs/guides/turi-parity-guide.md` -- re-add a `superclasses` row. It waits
-  until here because a parity table describes the shipped language, and a
-  gated feature is not that. SC0 removed the row precisely because it claimed
-  parity for something absent.
+Each SC8b step carries its own doc edit in the same change: the
+typeclass guide's sentence listing which stdlib classes have preambles, and
+the arrows guide for step 4.
 
 ## 4. Risks and decisions
 
@@ -568,14 +582,13 @@ the one-track-to-v1 rule, it should not displace v1 work. The `crdt-spice-plan`
 disposition remains right: if constraint-list ergonomics turn out to block
 adoption, that is the data point that promotes this plan.
 
-**Where this stands (2026-09-25).** SC0-SC6 landed in 0.49.0 and the 16
-fixtures still pass on both harnesses at 0.53.0. SC7 (graduation) landed and
-shipped in 0.54.0 (section 8). The destination after that is **stdlib
-adoption, staged as SC8a then SC8b** -- graduation is the gate to that
-work, not an end state. The measured audit in section 9.3 says SC8a is
-free in tree and SC8b needs exactly two instances added (one stdlib, one
-fixture) before `Monad` can take a preamble, so neither step waits on
-anything but the spices audit.
+**Where this stands (2026-09-25).** SC0-SC6 landed in 0.49.0; SC7
+graduated the feature in 0.54.0 (section 8); SC8a retrofitted the lattice
+classes and SC9 updated the guides, unreleased (section 10). Graduation was
+the gate to stdlib adoption, not an end state, and adoption has started.
+Next is SC8b, one auto-loaded class per change: `Ord` over `Eq` first,
+because it is free and the most used. `Monad` over `Applicative` waits on
+[partial-head-ap-calls-fat-closure-as-thin-pointer](../reported/partial-head-ap-calls-fat-closure-as-thin-pointer.md).
 
 ## 6. See also
 
@@ -776,22 +789,70 @@ comm -23 <(inst Ord stdlib)    <(inst Eq stdlib)          # -> empty
 comm -23 <(inst Monad stdlib)  <(inst Applicative stdlib) # -> [(Result _ B)]
 ```
 
-| Pair | stdlib misses | tests misses |
-| --- | --- | --- |
-| `Monoid` <- `Semigroup` | none (6/6) | none |
-| `BoundedJoin` <- `JoinSemilattice` | none (2/2) | none |
-| `BoundedMeet` <- `MeetSemilattice` | none (2/2) | none |
-| `Ord` <- `Eq` | none (15/15) | none |
-| `Applicative` <- `Functor` | none (6/6) | -- |
-| `MonadError` <- `Monad` | none (2/2) | -- |
-| `Alternative` <- `Applicative` | none (6/6) | -- |
-| `Monad` <- `Functor` | none (6/6) | `Pad2` in `hkt-constrained-wide-byvalue-carrier` |
-| `Monad` <- `Applicative` | `(Result _ B)` in `stdlib/result.tur` | `Pad2` |
+The same script over `turmeric-spices` (48 spices, `origin/main` at
+`ebd1f81`, 2026-09-17), and the full `run.sh` suite with every candidate
+preamble applied at once (3182 fixtures, 7 failures, each attributed below
+by the class its TUR-E0393 names):
 
-The spices side of the same audit is outstanding: `../turmeric-spices` was
-absent from the checkout when this was run. Re-run the same script against
-a fresh clone of its `origin/main` before each SC8 step, per SC8's last
-paragraph. Head-shape matching (`[(Result _ B)]` vs a differently named
-variable) is by structure in the compiler's `typeclass_env_lookup_instance`,
-so a mismatch the script reports on variable *names* alone is a false
-positive; a missing head is not.
+| Pair | stdlib misses | tests misses (full suite) | spices misses |
+| --- | --- | --- | --- |
+| `Monoid` <- `Semigroup` | none (6/6) | none | none (no instances) |
+| `BoundedJoin` <- `JoinSemilattice` | none (2/2) | none | none (6/6, `crdt`) |
+| `BoundedMeet` <- `MeetSemilattice` | none (2/2) | none | none (no instances) |
+| `Ord` <- `Eq` | none (15/15) | none | none (no instances) |
+| `Applicative` <- `Functor` | none (6/6) | six `hkt-*` fixtures (SC8b step 3) | none (no instances) |
+| `Alternative` <- `Applicative` | none (6/6) | none | none (no instances) |
+| `MonadError` <- `Monad` | none (2/2) | none | none (no instances) |
+| `Traversable` <- `Functor`, `Foldable` | none | none | none (no instances) |
+| `Arrow` <- `Category` | none | none | none (no instances) |
+| `ArrowZero` <- `Arrow` | **`Kleisli`** in `stdlib/kleisli.tur` | `kleisli-arrow-instance` | none (no instances) |
+| `ArrowZero` <- `Category` | none | none | none (no instances) |
+| `ArrowChoice`/`ArrowLoop`/`ArrowApply` <- `Arrow`, `ArrowPlus` <- `ArrowZero` | none | none | none (no instances) |
+| `Monad` <- `Functor` | none (6/6) | `Pad2` in `hkt-constrained-wide-byvalue-carrier` (grep audit; not in the suite run) | none (no instances) |
+| `Monad` <- `Applicative` | `(Result _ B)` in `stdlib/result.tur` | not measured: the stdlib stops compiling | none (no instances) |
+
+The `crdt` spice is the only one that loads the lattice file. Its own test
+suite (`tur test tests/crdt`, 8 tests including a 400-seed convergence run)
+passes against SC8a with every SC8b candidate applied.
+
+Head-shape matching (`[(Result _ B)]` vs a differently named variable) is by
+structure in the compiler's `typeclass_env_lookup_instance`, so a mismatch
+the script reports on variable *names* alone is a false positive; a missing
+head is not.
+
+## 10. Landed (2026-09-25): SC8a and its SC9 docs
+
+The first stdlib adoption, unreleased at the time of writing.
+
+- **`stdlib/typeclass-lattice.tur`.** `Monoid` is declared over `Semigroup`,
+  `BoundedJoin` over `JoinSemilattice`, `BoundedMeet` over `MeetSemilattice`.
+  `mconcat`, `mconcat-from`, `law-identity?`, `law-bottom-identity?` and
+  `law-top-identity?` dropped to a single constraint. `JoinSemilattice` and
+  `MeetSemilattice` stay flat on purpose, and the file says so.
+- **No instance had to be added.** Every stdlib `Monoid`, `BoundedJoin` and
+  `BoundedMeet` instance already sat beside its superclass instance, and the
+  only spice that loads the file, `crdt`, was in the same position.
+  Existing two-constraint signatures such as `[^Semigroup A ^Monoid A]` keep
+  compiling (`typeclass-nullary-method-newtype-tyvar` is one).
+- **Fixtures.** `stdlib-lattice-superclass-entails` calls each
+  single-constraint generic at two or more instances, so a superclass call
+  that bound to the first registered instance would print a wrong line.
+  `errors/stdlib-monoid-requires-semigroup` pins TUR-E0393 against the
+  stdlib's own `Monoid`. Both pass under `run.sh` and `run-turi.sh`, as do the
+  existing lattice, nullary-method and `class-superclass-*` fixtures. The
+  stdlib doctest totals did not move.
+- **Docs (SC9).** Lattice guide, typeclass guide, typeclass internals guide,
+  turi parity guide, and the changelog's `[Unreleased]` entry, which names
+  the breaking half: a downstream `Monoid`, `BoundedJoin` or `BoundedMeet`
+  instance without its superclass instance now stops at TUR-E0393.
+- **Found while measuring SC8b, not fixed here:** compiled `ap` over a
+  partial-head instance segfaults
+  ([report](../reported/partial-head-ap-calls-fat-closure-as-thin-pointer.md)),
+  which is what holds `Monad` over `Applicative`; and `Kleisli`'s missing
+  `Arrow` instance is by design, which moved `ArrowZero`'s planned
+  superclass from `Arrow` to `Category`.
+- **A diagnostic nit for whoever next touches TUR-E0393:** the message
+  reads "requires a Applicative [T] instance" and "requires a Arrow [T]
+  instance". Fixture `expected.diag` files match on the "requires a
+  <Class> [<T>] instance" substring, so rewording it means updating them in
+  the same change.
