@@ -2168,6 +2168,38 @@ static void scan_autolink_markers(const Buf *csrc, Buf *autolink) {
         buf_write(autolink, p, (size_t)(end - p));
         p = end + 3;
     }
+    /* Two markers may name the same bare runtime source -- src/runtime/
+     * rt_alloc.c rides hamt.tur's, string.tur's and sym-dynamic.tur's -- and
+     * cc would then define its symbols twice.  A bare `.c` token keeps its
+     * first occurrence only; every flag passes through as it came. */
+    if (autolink->len > 0) {
+        Buf keep; buf_init(&keep);
+        const char *q = autolink->data, *lim = autolink->data + autolink->len;
+        while (q < lim) {
+            while (q < lim && *q == ' ') q++;
+            const char *tok = q;
+            while (q < lim && *q != ' ') q++;
+            size_t tlen = (size_t)(q - tok);
+            if (tlen == 0) continue;
+            bool bare_c = tlen > 2 && tok[0] != '-'
+                          && tok[tlen - 2] == '.' && tok[tlen - 1] == 'c';
+            if (bare_c) {
+                bool seen = false;
+                const char *k = keep.data, *klim = keep.data + keep.len;
+                while (k && k < klim) {
+                    while (k < klim && *k == ' ') k++;
+                    const char *kt = k;
+                    while (k < klim && *k != ' ') k++;
+                    if ((size_t)(k - kt) == tlen && memcmp(kt, tok, tlen) == 0) { seen = true; break; }
+                }
+                if (seen) continue;
+            }
+            if (keep.len > 0) buf_putc(&keep, ' ');
+            buf_write(&keep, tok, tlen);
+        }
+        buf_free(autolink);
+        *autolink = keep;
+    }
 #ifdef _WIN32
     /* Windows has no libdl.  dlopen/dlsym/dlclose are not a separate library
      * there; the emitted C reaches them through the tree's platform_dl.h shim

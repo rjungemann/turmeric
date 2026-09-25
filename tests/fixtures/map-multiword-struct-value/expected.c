@@ -7808,7 +7808,7 @@ static void * hamt_slpersistent_ex(void * t) {
 }
 
 static int64_t hamt_slautolink_hyhint() {
-        /* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */
+        /* __tur_autolink__: src/runtime/hamt.c src/runtime/rt_alloc.c -Isrc/runtime */
   return 0;
   
 }
@@ -10298,7 +10298,7 @@ static void * builder_slfinish(void * b) {
 }
 
 static int64_t string_slautolink_hyhint() {
-        /* __tur_autolink__: src/runtime/tur_string.c -Isrc/runtime */
+        /* __tur_autolink__: src/runtime/tur_string.c src/runtime/rt_alloc.c -Isrc/runtime */
   return 0;
   
 }

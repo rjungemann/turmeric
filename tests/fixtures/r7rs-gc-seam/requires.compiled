@@ -1,0 +1,6 @@
+The r7rs-gc collector is compiled-only; --interpret ignores the flag, so the
+seam this fixture pins -- a Scheme value the runtime archive's HAMT nodes are
+the only thing still referring to -- is not reachable from the interpreter,
+which frees nothing either way.  The 800,000 churn steps are also pure cost
+there: the tree-walking interpreter retains about 4 KiB per trampolined step,
+so the run reaches gigabytes of RSS and times out.

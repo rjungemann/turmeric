@@ -410,12 +410,14 @@ library's string result to `cstr` gets the same copy.
   about a kilobyte of runtime records. Scratch memory the runtime makes for
   one call is freed, on all but a few prelude paths.
   An experimental collector fixes all of that for a single-file compiled
-  program on Linux: build with `tur --enable=r7rs-gc build prog.tur` and both
-  of those loops run in 10 MB. It is single-threaded, it does not see Scheme
-  values you store in Turmeric maps or `rc<T>` cells, and `--shared`, a
-  project build, `tur jit` and the interpreter ignore it -- as does every
-  platform but Linux, where the flag is accepted and collects nothing. See
-  docs/upcoming/r7rs-gc-plan.md.
+  program on Linux and macOS: build with `tur --enable=r7rs-gc build prog.tur`
+  and both of those loops run in 10 MB. Values you keep in Turmeric maps or
+  `rc<T>` cells through the `(turmeric ...)` seam are seen. It is
+  single-threaded: a program that starts a thread under the flag stops at the
+  start with the reason (exit 70), so build one that needs threads without the
+  flag. `--shared`, a project build, `tur jit` and the interpreter ignore it --
+  as does every platform but Linux and macOS, where the flag is accepted and
+  collects nothing. See docs/upcoming/r7rs-gc-plan.md.
 - **A loop through a procedure variable needs the C compiler's tail call.** A
   procedure that calls another through a *variable* rather than by name, in a
   non-tail position -- which is what `for-each`, `map`, `member` and a

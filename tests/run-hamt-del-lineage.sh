@@ -22,7 +22,7 @@ BIN="$(mktemp -t tur-del-lineage-XXXXXX)"
 # standalone compile links it (and arena.c under it) exactly as every library
 # that carries hamt.c does.
 if ! "$CC" -std=c11 -fsanitize=address,undefined -I "$SRC_RUNTIME" \
-        "$TEST_SRC" "$SRC_RUNTIME/hamt.c" "$SRC_RUNTIME/region.c" "$SRC_RUNTIME/arena.c" -pthread -o "$BIN" 2>/tmp/del-lineage-cc.log; then
+        "$TEST_SRC" "$SRC_RUNTIME/hamt.c" "$SRC_RUNTIME/rt_alloc.c" "$SRC_RUNTIME/region.c" "$SRC_RUNTIME/arena.c" -pthread -o "$BIN" 2>/tmp/del-lineage-cc.log; then
     echo "FAIL hamt-del-lineage -- compile failed"
     cat /tmp/del-lineage-cc.log
     rm -f "$BIN"

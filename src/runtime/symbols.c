@@ -13,6 +13,15 @@
 
 #include "hamt.h"   /* tur_hamt_hash_str -- match the codegen hash exactly */
 
+/* r7rs-gc: allocate through the archive's hook (rt_alloc.h) -- libc unless a
+ * collector installed itself.  Object-like, so a `free` passed by name is the
+ * hook's too. */
+#include "rt_alloc.h"
+#define malloc  tur_rt_malloc
+#define calloc  tur_rt_calloc
+#define realloc tur_rt_realloc
+#define free    tur_rt_free
+
 static pthread_mutex_t        g_sym_mu  = PTHREAD_MUTEX_INITIALIZER;
 static const struct __tur_sym **g_sym_tab = NULL;  /* open-addressed slots */
 static size_t                 g_sym_cap = 0;        /* always a power of two */

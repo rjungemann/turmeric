@@ -26,12 +26,16 @@
  *     (tur_region_each_used), since a node built in a bracket can point here.
  * Objects are scanned whole, word by word.
  *
- * What it cannot see, and so must not be relied on (the plan's limits):
- * memory the RUNTIME ARCHIVE or libc allocate -- an rc<T> block, a HAMT
- * node, a buffer libc keeps -- holding the only pointer to an object here.
- * A pure Scheme program allocates nothing there that points back.
+ * The runtime archive (libturt_runtime.a: the HAMT, rc<T>, strings, symbols)
+ * allocates through the hook in src/runtime/rt_alloc.h, which the
+ * constructor below points at this heap, so a Scheme value kept in a
+ * Turmeric map or cell is scanned through the node that holds it.  What it
+ * still cannot see, and so must not be relied on (the plan's limits): memory
+ * libc allocates, the trail's `__thread`-rooted arrays (trail.c), and any
+ * other thread.  A pure Scheme program allocates nothing there that points
+ * back.
  *
- * Linux/glibc only.  Elsewhere every entry point is the libc call it
+ * Linux/glibc and macOS.  Elsewhere every entry point is the libc call it
  * replaces, and nothing is collected.
  *
  * Knobs (environment, read once):
@@ -55,10 +59,20 @@
  * JIT'd program's globals live in memory MIR allocates, not in the
  * executable's data segment, so the root scan would miss them and free live
  * objects.  The entry points stay; they are libc there. */
-#if defined(__linux__) && defined(__GLIBC__) && !defined(TUR_JIT_ENGINE)
+#if ((defined(__linux__) && defined(__GLIBC__)) || defined(__APPLE__)) && !defined(TUR_JIT_ENGINE)
 #define TUR_GC_ON 1
 #include <sys/mman.h>
 #include <pthread.h>
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+#if defined(__APPLE__)
+/* The data roots are the main image's writable segments, walked from its
+ * Mach-O header (there is no __data_start/_end pair to bracket them). */
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <mach/vm_prot.h>
+#endif
 #else
 #define TUR_GC_ON 0
 #endif
@@ -209,6 +223,9 @@ static void tur_gc_init(void) {
     G->stats = (e = getenv("TUR_GC_STATS")) && e[0] == '1';
     G->mstack_cap = 1u << 16;
     G->mstack = (uintptr_t *)tur_gc_os(G->mstack_cap * sizeof(uintptr_t));
+#if defined(__APPLE__)
+    G->stack_base = (unsigned char *)pthread_get_stackaddr_np(pthread_self());
+#else
     pthread_attr_t a; void *addr = NULL; size_t sz = 0;
     extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
     if (pthread_getattr_np(pthread_self(), &a) == 0) {
@@ -216,6 +233,7 @@ static void tur_gc_init(void) {
             G->stack_base = (unsigned char *)addr + sz;
         pthread_attr_destroy(&a);
     }
+#endif
     /* No stack base, no collection: every object is simply kept. */
     if (!G->stack_base) G->off = true;
     G->ready = true;
@@ -436,8 +454,34 @@ TUR_GC_NOASAN static void tur_gc_drain(void) {
     }
 }
 
+/* The executable's writable data: every static the program and the linked
+ * runtime keep, the emitted runtime's per-thread state among them. */
+#if defined(__APPLE__)
+TUR_GC_NOASAN static void tur_gc_scan_data(void) {
+    const struct mach_header_64 *mh = (const struct mach_header_64 *)_dyld_get_image_header(0);
+    if (!mh) return;
+    intptr_t slide = _dyld_get_image_vmaddr_slide(0);
+    const struct load_command *lc = (const struct load_command *)(mh + 1);
+    for (uint32_t i = 0; i < mh->ncmds; i++) {
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *sg = (const struct segment_command_64 *)lc;
+            /* __DATA, __DATA_CONST (relocated on load; read-only after, which
+             * a read does not mind) and any other segment loaded writable.
+             * __TEXT, __LINKEDIT and __PAGEZERO are not. */
+            if ((sg->initprot & VM_PROT_WRITE) && sg->vmsize)
+                tur_gc_scan((const void *)((uintptr_t)sg->vmaddr + (uintptr_t)slide), (size_t)sg->vmsize);
+        }
+        lc = (const struct load_command *)((const char *)lc + lc->cmdsize);
+    }
+}
+#else
 extern char __data_start[] __attribute__((weak));
 extern char _end[] __attribute__((weak));
+TUR_GC_NOASAN static void tur_gc_scan_data(void) {
+    uintptr_t ds = (uintptr_t)&__data_start[0], de = (uintptr_t)&_end[0];
+    if (ds && de > ds) tur_gc_scan((const void *)ds, (size_t)(de - ds));
+}
+#endif
 /* The region runtime: live and retired generations are roots.  Declared here
  * (the preamble's region.h comes later) with the header's linkage. */
 #ifndef TUR_RT_API
@@ -453,8 +497,7 @@ TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_mark_roots(void) {
     tur_gc_scan((const void *)&regs, sizeof regs);
     unsigned char *sp = (unsigned char *)&here;
     if (sp < G->stack_base) tur_gc_scan(sp, (size_t)(G->stack_base - sp));
-    uintptr_t ds = (uintptr_t)&__data_start[0], de = (uintptr_t)&_end[0];
-    if (ds && de > ds) tur_gc_scan((const void *)ds, (size_t)(de - ds));
+    tur_gc_scan_data();
     tur_region_each_used(tur_gc_scan_cb, NULL);
     tur_gc_drain();
 }
@@ -526,8 +569,51 @@ static __attribute__((unused)) void tur_gc_collect(void) {
     if (!tur_gc_G) tur_gc_init();
     tur_gc_collect_now();
 }
-static __attribute__((constructor)) void tur_gc_ctor(void) {
+
+/* The runtime archive's allocator hook (src/runtime/rt_alloc.h): with it
+ * installed, a HAMT node or an rc<T> block the archive allocates is a
+ * collected object too, so a Scheme value kept in a Turmeric map or cell is
+ * scanned through it instead of freed under it.  A weak reference, because
+ * the program links the archive only when something in it is used: with no
+ * archive (or the bare-source autolink) there is nothing to hook, and the
+ * symbol resolves to NULL. */
+typedef struct tur_gc_rt_allocator {
+    void *(*malloc)(size_t n);
+    void *(*calloc)(size_t n, size_t m);
+    void *(*realloc)(void *p, size_t n);
+    void  (*free)(void *p);
+} tur_gc_rt_allocator;
+extern void tur_rt_set_allocator(const tur_gc_rt_allocator *a) __attribute__((weak));
+
+/* Threads (the plan's limit, decided): the collector stops no other thread
+ * and reads the runtime's per-thread state as plain statics, so a second
+ * thread would allocate from an unlocked heap and hold roots nowhere the
+ * collector looks.  Rather than a silent use-after-free, a program that
+ * starts one under the flag stops here with the reason.  Every start site in
+ * the unit -- the stdlib's thread/session/task-group wrappers, the emitted
+ * multi-threaded scheduler -- spells `pthread_create`, which the macro below
+ * routes here; <pthread.h> is already included above, so the macro never
+ * meets the declaration. */
+static int tur_gc_pthread_create(pthread_t *t, const pthread_attr_t *a,
+                                 void *(*fn)(void *), void *arg) {
+    (void)t; (void)a; (void)fn; (void)arg;
+    fputs("tur: r7rs-gc: this program starts a thread, which the collector does not "
+          "support (docs/upcoming/r7rs-gc-plan.md); build it without --enable=r7rs-gc\n",
+          stderr);
+    exit(70);   /* EX_SOFTWARE */
+}
+#define pthread_create tur_gc_pthread_create
+
+/* Before every other constructor in the unit (101 is the first user
+ * priority), so the archive's first allocation already goes through us. */
+static __attribute__((constructor(101))) void tur_gc_ctor(void) {
     if (!tur_gc_G) tur_gc_init();
+    if (tur_rt_set_allocator) {
+        static const tur_gc_rt_allocator ours = {
+            tur_gc_malloc, tur_gc_calloc, tur_gc_realloc, tur_gc_free
+        };
+        tur_rt_set_allocator(&ours);
+    }
     atexit(tur_gc_report);
 }
 

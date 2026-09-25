@@ -1,0 +1,8 @@
+(1 2 3 "four" #(5 6))
+"hello world"
+(1 2 3 "four" #(5 6))
+3
+2
+(p q)
+"r"
+(deep)

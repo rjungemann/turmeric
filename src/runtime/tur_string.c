@@ -7,6 +7,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* r7rs-gc: allocate through the archive's hook (rt_alloc.h) -- libc unless a
+ * collector installed itself.  Object-like, so a `free` passed by name is the
+ * hook's too. */
+#include "rt_alloc.h"
+#define malloc  tur_rt_malloc
+#define calloc  tur_rt_calloc
+#define realloc tur_rt_realloc
+#define free    tur_rt_free
+
 /* Heap payload: [rc | len | bytes[len+1]].  The public handle points at the
  * header; the NUL-terminated bytes follow immediately after it. */
 typedef struct {
