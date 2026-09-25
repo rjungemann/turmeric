@@ -2142,10 +2142,11 @@ from it -- the second reproduces on `vec-push!`, parametric since long before.
 r7rs-lang-plan 9.3 and the guide's "Where it differs" list the ways
 `#lang r7rs` knowingly departs from R7RS-small that no chibi test reaches.
 Each is now a report with a repro measured on both back ends, so it can be
-picked up, or archived, like any other finding. The seventh item on that
-list, compiled top-level order, was
+picked up, or archived, like any other finding. Two of the guide's bullets
+live elsewhere in this index: compiled top-level order was
 `toplevel-def-initializers-run-before-toplevel-expressions` above (resolved
-2026-09-25).
+2026-09-25), and the loop-through-a-procedure-variable bullet is
+`cps-self-tail-call-relies-on-sibling-call`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
@@ -2155,6 +2156,9 @@ list, compiled top-level order, was
 | ~~[r7rs-include-refused](../archive/r7rs-include-refused.md)~~ | low-medium | **RESOLVED 2026-09-25** (archived): the lowering reads the file with the Scheme reader, relative to the includer, and splices it at top level, in expression position and as a library declaration; pinned by `tests/fixtures/r7rs-include`. Original row: `include` / `include-ci` at top level and `(include ...)` in a `define-library` are refused: the lowering cannot read a second file under the Scheme reader without its own `#lang` line. Fix is a read-as-Scheme entry point that splices the forms and registers the path for diagnostics |
 | ~~[r7rs-command-line-first-element-is-tur](../archive/r7rs-command-line-first-element-is-tur.md)~~ | low | **RESOLVED 2026-09-25** (archived): a pre-declared `*argv0*` global (`:cstr`) set by every emitted `main` and by the interpreter; `command-line` conses it. Pinned by `tests/fixtures/argv0-global`. Original row: `(command-line)` conses the literal `"tur"` onto `*args*`; the emitted `main` and the interpreter both drop `argv[0]`, so nothing records it. Fix is a runtime `argv[0]` global set by both, exposed to the stdlib without reading `g_tur_args` raw |
 | ~~[r7rs-unicode-case-mapping-gaps](../archive/r7rs-unicode-case-mapping-gaps.md)~~ | low | **RESOLVED 2026-09-25** (archived): the tables are generated from the UCD files, fetched from ICU at a pinned release tag (Unicode 16.0.0), with Final_Sigma, UCD simple mappings and the Alphabetic property; pinned by `tests/fixtures/r7rs-unicode-case`. Original row: Four gaps from deriving the `(scheme char)` tables through Python's `unicodedata`: no Final_Sigma in `string-downcase` ("ΟΔΥΣΣΕΥΣ" downcases to a non-final sigma), a simple case mapping taken from the full one so `(char-upcase #\x1F80)` is itself, `char-alphabetic?` without Other_Alphabetic (`#\x0345` is `#f`), and a Unicode version that follows the generating Python (14.0.0). Fix is generating from the UCD files |
+| [r7rs-map-for-each-at-most-four-sequences](r7rs-map-for-each-at-most-four-sequences.md) | low-medium | Filed 2026-09-25 (found revisiting the guide's "Where it differs"). `map` and `for-each` take at most four sequences on both back ends -- R7RS 6.10 has no limit -- and `vector-map`, `vector-for-each`, `string-map` and `string-for-each` share the walker and the cap. `r7rs-mapn-go__` spells `f`'s arguments out inline, one arm per count, deliberately: T8 found that calling through a helper nested a C frame per element and overflowed a million-element `(map + a b)` even at `-O2`. The cheap fix is arms 5-8, since the shim arity is eight now, not the four the stale comment names |
+| [r7rs-define-record-type-not-an-internal-definition](r7rs-define-record-type-not-an-internal-definition.md) | low-medium | Filed 2026-09-25 (found revisiting the guide's "Where it differs"). `define-record-type` is accepted only at the top level or in a `define-library` body; R7RS 5.5 makes it a definition, so it may open any body. `lower_record_type` emits a `defstruct` plus top-level defns into the declaration stream, and expression position has nowhere to put them. Fix is lifting them to the top level under a per-occurrence gensym (the struct name is `R7rsRec_<record name>` today, so two bodies naming one record type would also collide) |
+| [r7rs-library-file-shape-and-export-rename](r7rs-library-file-shape-and-export-rename.md) | low-medium | Filed 2026-09-25 (found revisiting the guide's "Where it differs"). Three `define-library` restrictions R7RS does not impose, all from lowering a library to one `defmodule` per file: only one library per file (`sl->has_library`), the library's name IS its file path (`library_module` slash-joins the parts and module resolution looks for that `.tur`), and `(export (rename internal public))` is refused because `:exports` is bare names. The export rename is the cheapest and the one a port hits most |
 
 ## Found executing r7rs-lang-plan T8, the memory audit (filed 2026-09-25)
 

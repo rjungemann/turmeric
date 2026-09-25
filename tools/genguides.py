@@ -425,6 +425,49 @@ GUIDE_JS_CORE = '''\
     'delay','force','thunk','error','raise','λ',
   ]);
   var RKT_LIT = new Set(['#t','#f','#true','#false','null','empty','eof','void']);
+
+  // ---- R7RS Scheme -------------------------------------------------------
+  // `#lang r7rs` is a first-class dialect, so r7rs-guide.md is written in
+  // Scheme throughout and quotes it in ```scheme fences. Scheme is close
+  // enough to Turmeric to share the tokenizer, as Racket is; what it needs on
+  // top is the number syntax (ratios, complex, `.5`, `#i3/2`), `#\\c`
+  // characters, `#(...)` vectors and `#;` -- each a spec flag below rather
+  // than a scanner of its own.
+  var SCM_KW = new Set([
+    'define','define-values','define-syntax','define-record-type',
+    'define-library','import','export','include','include-ci','cond-expand',
+    'lambda','case-lambda','let','let*','letrec','letrec*','let-values',
+    'let*-values','let-syntax','letrec-syntax','parameterize','guard',
+    'if','cond','case','when','unless','else','and','or','not','begin','do',
+    'set!','quote','quasiquote','unquote','unquote-splicing',
+    'syntax-rules','syntax-error','#lang','#!fold-case','#!no-fold-case',
+    'delay','delay-force','force','make-promise','make-parameter',
+    'call/cc','call-with-current-continuation','call-with-values','values',
+    'dynamic-wind','with-exception-handler','raise','raise-continuable',
+    'error','apply','eval','environment','interaction-environment','load',
+    'car','cdr','cons','list','append','reverse','length','map','for-each',
+    'display','write','newline','vector','string','features',
+  ]);
+  var SCM_LIT = new Set(['#t','#f','#true','#false']);
+
+  // One anchored pattern for the whole R7RS number grammar, tried ahead of
+  // the symbol rule and accepted only when a delimiter follows -- which is
+  // what keeps the `+` in `(+ i 1)` and the `-` in `(- n 1)` the procedures
+  // they are, while `1+2i`, `-4/3`, `.5`, `#i3/2` and `+inf.0` read as one
+  // number each.
+  var SCM_UREAL = '(?:[0-9]+/[0-9]+|(?:[0-9]+\\\\.?[0-9]*|\\\\.[0-9]+)(?:e[+-]?[0-9]+)?)';
+  // A radix prefix changes the digit class, so `#x11/2` is its own branch
+  // rather than a flag threaded through the decimal one.
+  var SCM_HEX = '#(?:[ei]#)?x[+-]?[0-9a-f]+(?:/[0-9a-f]+)?';
+  var SCM_NUM = new RegExp(
+    '^(?:' + SCM_HEX + '|(?:#[eibodx])*' +
+    '(?:(?:[+-]?' + SCM_UREAL + '|[+-](?:inf|nan)\\\\.0)' +
+    // `|i` is what makes the pure imaginary `+2i` one number: without it the
+    // real branch matches `+2` and the trailing `i` fails the delimiter test.
+    '(?:[+-](?:' + SCM_UREAL + '|(?:inf|nan)\\\\.0)?i|i)?' +
+    '|[+-](?:' + SCM_UREAL + ')?i))', 'i');
+  var SCM_DELIM = /[\\s()\\[\\]{}";'`,|]/;
+
   var TUR_LIT = new Set(['true','false','nil']);
 
   function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -576,6 +619,47 @@ GUIDE_JS_CORE = '''\
         }
         out+='<span class="hl-comment">'+esc(code.slice(i,bj))+'</span>'; i=bj; continue;
       }
+      // Datum comment: `#;` removes the datum that follows it, not the rest
+      // of the line. Without this the `#` falls out of the symbol rule as
+      // bare punctuation and the `;` behind it greys everything to the end of
+      // the line -- a comment the program does not have.
+      if(spec.datumComment && code.substr(i,2)==='#;'){
+        var dj=i+2;
+        while(dj<n&&/[ \\t\\n]/.test(code[dj]))dj++;
+        if(code[dj]==='('||code[dj]==='['){
+          var open=code[dj], close=(open==='(')?')':']', depth2=0;
+          while(dj<n){
+            var d2=code[dj];
+            if(d2==='"'){ dj++; while(dj<n&&code[dj]!=='"'){ if(code[dj]==='\\\\')dj++; dj++; } }
+            else if(d2===open){ depth2++; }
+            else if(d2===close){ depth2--; if(depth2===0){ dj++; break; } }
+            dj++;
+          }
+        } else {
+          while(dj<n&&!SCM_DELIM.test(code[dj]))dj++;
+        }
+        out+='<span class="hl-comment">'+esc(code.slice(i,dj))+'</span>'; i=dj; continue;
+      }
+      // Character literal: #\\a, #\\space, #\\x41. The backslash is outside the
+      // symbol character class, so without this `#\\c` scans as three separate
+      // pieces and the character reads as a stray identifier.
+      if(spec.charLit && code.substr(i,2)==='#\\\\'){
+        var cj=i+2;
+        if(cj<n){
+          cj++;
+          while(cj<n&&/[a-zA-Z0-9]/.test(code[cj])&&/[a-zA-Z]/.test(code[i+2]))cj++;
+        }
+        out+='<span class="hl-string">'+esc(code.slice(i,cj))+'</span>'; i=cj; continue;
+      }
+      // Vector and bytevector prefixes: #(1 2), #u8(0 255). Marked so the
+      // literal is visibly one, rather than a lone `#` beside a list.
+      if(spec.hashVector){
+        var hv=/^#(?:u8)?\\(/.exec(code.slice(i,i+5));
+        if(hv){
+          out+='<span class="hl-type">'+esc(hv[0].slice(0,-1))+'</span>'+esc('(');
+          i+=hv[0].length; continue;
+        }
+      }
       // Racket keyword argument: #:mode, #:when. Scanned before the symbol
       // rule, whose character class stops at the colon and would leave the
       // `#` stranded as bare punctuation.
@@ -610,6 +694,18 @@ GUIDE_JS_CORE = '''\
         while(j<n&&/[a-zA-Z0-9_\\-?!]/.test(code[j]))j++;
         out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
       }
+      // R7RS number: one match for the whole grammar (SCM_NUM), gated on a
+      // plausible first character and on a delimiter after the match, so the
+      // bare `+` and `-` of `(+ i 1)` stay procedures.
+      if(spec.schemeNum && /[0-9+\\-.#]/.test(c)){
+        var sm=SCM_NUM.exec(code.slice(i));
+        if(sm){
+          var after=code[i+sm[0].length];
+          if(after===undefined||SCM_DELIM.test(after)){
+            out+='<span class="hl-number">'+esc(sm[0])+'</span>'; i+=sm[0].length; continue;
+          }
+        }
+      }
       // Number (integer or float, possibly negative)
       if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
         var j=i; if(code[j]==='-')j++;
@@ -635,14 +731,26 @@ GUIDE_JS_CORE = '''\
     return out;
   }
 
+  // The five Scheme-family flags are off for Turmeric, which has none of that
+  // syntax, and on for both Racket and Scheme, which share all of it.
   var TUR_SPEC = { kw:KW,     lit:TUR_LIT, inlineC:true,  colonType:true,
-                   blockComment:false, hashKeyword:false };
+                   blockComment:false, hashKeyword:false,
+                   datumComment:false, charLit:false, hashVector:false,
+                   schemeNum:false };
   var RKT_SPEC = { kw:RKT_KW, lit:RKT_LIT, inlineC:false, colonType:false,
-                   blockComment:true,  hashKeyword:true  };
+                   blockComment:true,  hashKeyword:true,
+                   datumComment:true,  charLit:true,  hashVector:true,
+                   schemeNum:true  };
+  var SCM_SPEC = { kw:SCM_KW, lit:SCM_LIT, inlineC:false, colonType:false,
+                   blockComment:true,  hashKeyword:false,
+                   datumComment:true,  charLit:true,  hashVector:true,
+                   schemeNum:true  };
   var LISP_LANGS = {
     'language-turmeric':  TUR_SPEC,
     'language-sweet-exp': TUR_SPEC,
     'language-racket':    RKT_SPEC,
+    'language-scheme':    SCM_SPEC,
+    'language-r7rs':      SCM_SPEC,
   };
 
 

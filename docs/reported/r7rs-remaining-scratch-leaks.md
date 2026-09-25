@@ -43,3 +43,10 @@ buffer, and free a scratch `Vec` with `vec-free-o`. Two cautions T8 ran into:
 - Under a Turmeric entry file the prelude is checked with the affine rules,
   and a procedure that hands an `R7rsIo` or `R7rsIdTab` to one defined LATER
   in the file is read as giving it away (TUR-E0005). Define the helper first.
+
+## Guide upkeep
+
+One clause of `docs/guides/r7rs-guide.md`'s "**Data is never freed.**" bullet
+("Where it differs from R7RS") is this report; see the Guide upkeep section of
+[r7rs-heap-data-never-reclaimed](r7rs-heap-data-never-reclaimed.md), which
+maps each clause of that bullet to its report.

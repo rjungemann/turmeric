@@ -3343,7 +3343,26 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
          * path, like every other Scheme procedure value. */
         if (init->tag == F_SYM && !is_mut(sl, name))
             init = Ln(sl, sp, 3, Sym(sl, sp, I(sl, "::")), init, Sym(sl, sp, sl->t_any));
+        /* toplevel-def-initializers-run-before-toplevel-expressions: which
+         * initializers a define after the first expression defers.  A lambda,
+         * a case-lambda, a quotation or a literal does no work and needs no
+         * ordering -- and a deferred procedure value would be a `^mut` fn
+         * global, a fat cell, which a variadic case-lambda's thunk type does
+         * not survive (cc: int-conversion on the rest chain).  A symbol IS
+         * deferred: `(define x y)` after a deferred `y` must read it after
+         * its assignment. */
+        bool defer_init = false;
         if (sl->toplevel_expr_seen && out != &sl->lib_body) {
+            const Form *raw = f->as.list.items[2];
+            if (raw->tag == F_SYM) defer_init = true;
+            else if (raw->tag == F_LIST && raw->as.list.len > 0) {
+                const Form *h = raw->as.list.items[0];
+                defer_init = !(h->tag == F_SYM
+                               && (h->as.sym == sl->s_lambda || is_sym(h, sl->s_case_lambda)
+                                   || is_sym(h, sl->s_quote) || is_sym(h, sl->s_quasiquote)));
+            }
+        }
+        if (defer_init) {
             /* toplevel-def-initializers-run-before-toplevel-expressions: a
              * define AFTER the program's first top-level expression.  Its
              * initializer must run in source order (R7RS 5.1), but a

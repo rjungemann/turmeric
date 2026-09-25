@@ -240,7 +240,7 @@ rather than embedding a string literal in the HTML.
 
 Create `program.tur` in your project directory:
 
-```scheme
+```turmeric
 (defn greet [name] : str
   (str-append "Hello, " name "!"))
 

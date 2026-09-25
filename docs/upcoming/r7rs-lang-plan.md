@@ -2790,6 +2790,29 @@ differences, as reports"):
 - **A procedure body cannot name a top-level variable defined after it**
   ([r7rs-procedure-body-forward-reference](../reported/r7rs-procedure-body-forward-reference.md);
   found writing the fixture for the item above).
+- **`map` and `for-each` take at most four sequences**, the `-map`/`-for-each`
+  pair over vectors and strings with them
+  ([r7rs-map-for-each-at-most-four-sequences](../reported/r7rs-map-for-each-at-most-four-sequences.md)).
+- **`define-record-type` is not an internal definition** -- top level or a
+  library body only
+  ([r7rs-define-record-type-not-an-internal-definition](../reported/r7rs-define-record-type-not-an-internal-definition.md)).
+- **One library per file, named after the file, and no `(export (rename ...))`**
+  ([r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md)).
+- **A loop whose non-tail call goes through a procedure variable** is CPS, and
+  its constant stack is the C compiler's sibling call -- the default `-O2` has
+  it, `-O0` does not
+  ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md);
+  every dialect with effectful functions).
+- **Re-entrant `call/cc` is Linux and macOS only**
+  ([r7rs-reentrant-callcc-not-on-windows](../reported/r7rs-reentrant-callcc-not-on-windows.md)).
+  ~~A top-level re-entry re-runs the forms after it~~ -- resolved 2026-09-25:
+  each top-level form runs under its own prompt
+  ([archived](../archive/r7rs-toplevel-reentry-reruns-forms.md)).
+- **A Scheme program's data is never freed**
+  ([r7rs-heap-data-never-reclaimed](../reported/r7rs-heap-data-never-reclaimed.md),
+  with the `call/cc` images, the caught-`raise` records and the leftover
+  prelude scratch as their own reports), answered for a single-file compiled
+  Linux build by `--enable=r7rs-gc`.
 - ~~**`command-line` starts with `"tur"`**, not the program's own path~~
   -- resolved 2026-09-25 through a pre-declared `*argv0*` global
   ([archived](../archive/r7rs-command-line-first-element-is-tur.md)).
