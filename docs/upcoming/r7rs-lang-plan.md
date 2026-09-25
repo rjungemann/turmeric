@@ -2663,7 +2663,7 @@ task.*
 >   - 27 statement loops (fills, copies, port readers, the printer's walks,
 >     the reader's skips) became value-returning `-lp__` loops behind their
 >     `: nil` names: a `: nil` self tail call is not a loop
->     ([void-self-tail-call-not-lowered](../reported/void-self-tail-call-not-lowered.md);
+>     ([void-self-tail-call-not-lowered](../archive/void-self-tail-call-not-lowered.md);
 >     the cleanup is
 >     [r7rs-prelude-value-returning-loop-workaround](../reported/r7rs-prelude-value-returning-loop-workaround.md)).
 >   - A CPS loop is still only as deep as gcc's sibling calls make it: it

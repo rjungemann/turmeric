@@ -475,13 +475,21 @@ write_result() {
 
 # ---------------------------------------------------------------------------
 # Stamp-file caching (T2-C)
-# After a fixture passes, record a stamp: content-hash of input.tur plus the
-# mtime of the tur binary.  On the next run, if both are unchanged the fixture
+# After a fixture passes, record a stamp: content-hash of input.tur, of its
+# expected.c snapshot, the mtime of the tur binary, and one hash over every
+# file under stdlib/.  On the next run, if all four are unchanged the fixture
 # is skipped without rebuilding.
 # Disable with TUR_FORCE=1 or by setting TUR_STAMP_CACHE="".
 # Stamps are stored in tests/.stamp-cache/ (listed in .gitignore).
-# NOTE: changes to stdlib/ files other than macros.tur are not tracked; run
-#       with TUR_FORCE=1 after editing stdlib sources.
+#
+# The stdlib hash is there because the stdlib is data the compiler reads at
+# elaboration time, not code linked into `tur`: a stdlib-only edit changes
+# neither the binary's mtime nor any fixture file, so without it every stamp
+# stayed valid and the run reported a full green that recompiled nothing
+# (docs/archive/run-sh-stamp-cache-ignores-the-stdlib.md).  What the stamp
+# still does NOT cover: a fixture's `load` of a file outside stdlib/ and
+# outside its own directory, and the C compiler.  TUR_FORCE=1 after changing
+# either.
 # ---------------------------------------------------------------------------
 TUR_FORCE="${TUR_FORCE:-0}"
 TUR_STAMP_CACHE="${TUR_STAMP_CACHE:-tests/.stamp-cache}"
@@ -505,6 +513,20 @@ _tur_mtime() {
 # at startup so we do not spawn a redundant stat process for every single fixture.
 export TUR_MTIME="$(_tur_mtime "$TUR")"
 
+# ...and hash the stdlib once, for the same reason: one pass over the tree per
+# run, not per fixture.  Sorted so the order find(1) walks in cannot change it.
+_tur_hash_stdin() {
+    if command -v md5 >/dev/null 2>&1; then
+        md5 -q
+    elif command -v md5sum >/dev/null 2>&1; then
+        md5sum | awk '{print $1}'
+    else
+        echo "nohash"
+    fi
+}
+export TUR_STDLIB_HASH="$(find stdlib -type f 2>/dev/null | LC_ALL=C sort |
+    while IFS= read -r _f; do printf '%s\n' "$_f"; cat "$_f"; done | _tur_hash_stdin)"
+
 stamp_key() {
     local input="$1"
     local dir
@@ -513,7 +535,7 @@ stamp_key() {
     # snapshots invalidates the stamp and forces a fresh codegen check.
     local ec_hash=""
     [ -f "$dir/expected.c" ] && ec_hash="$(_tur_hash_file "$dir/expected.c")"
-    echo "$(_tur_hash_file "$input")-${ec_hash}-${TUR_MTIME}"
+    echo "$(_tur_hash_file "$input")-${ec_hash}-${TUR_MTIME}-${TUR_STDLIB_HASH}"
 }
 
 stamp_check() {
@@ -1140,7 +1162,7 @@ export TUR BUILD_CC RESULTS_DIR TUR_EMIT_C_MODE
 export TUR_TEST_FILTER
 export TUR_TEST_SHARD SHARD_INDEX SHARD_TOTAL
 export TUR_FORCE TUR_STAMP_CACHE
-export TUR_TSAN _tur_timeout_bin TUR_MTIME
+export TUR_TSAN _tur_timeout_bin TUR_MTIME TUR_STDLIB_HASH
 export -f matches_filter matches_shard write_result no_input_fail run_happy run_negative run_happy_worker run_negative_worker
 export -f note_sanitizer
 export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed

@@ -561,7 +561,12 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
             return 0;
         }
         case EX_IF: {
-            if (!e->as.if_.else_or_null) return 0;  /* default path; no recursion */
+            /* void-self-tail-call-not-lowered: in a `: nil` function the
+             * missing arm of a one-armed `if` is the empty return, so the
+             * `then` arm is a tail position. */
+            if (!e->as.if_.else_or_null)
+                return ctx->tail_void ? tco_mark(ctx, fd, fn_cname, e->as.if_.then_, n_ok)
+                                      : 0;
             int n = tco_mark(ctx, fd, fn_cname, e->as.if_.then_, n_ok);
             n += tco_mark(ctx, fd, fn_cname, e->as.if_.else_or_null, n_ok);
             return n;
@@ -767,7 +772,8 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                 tc_check(ctx, fd, fn_cname, e->as.if_.else_or_null, why, fn_block);
             } else {
                 tc_check(ctx, fd, fn_cname, e->as.if_.then_,
-                         why ? why : TC_IF_ONE_ARM, fn_block);
+                         why ? why : (ctx->tail_void ? NULL : TC_IF_ONE_ARM),
+                         fn_block);
             }
             return;
         case EX_DO:
@@ -888,6 +894,17 @@ static void emit_tail_fire_frames(EmitCtx *ctx, Buf *body) {
         indent_buf(body, ctx->indent);
         buf_printf(body, "tur_frame_fire_lifo(&%s);\n", f);
     }
+}
+
+/* void-self-tail-call-not-lowered: leave a `: nil` function from its tail
+ * path.  Everything a backedge releases on the way round is released here on
+ * the way out -- the open drop-glue frames and the enclosing scopes' `any`
+ * locals, which emit_tail's inline `let` arm deferred to the exit. */
+static void emit_tail_void_return(EmitCtx *ctx, Buf *body) {
+    emit_tail_fire_frames(ctx, body);
+    emit_any_scope_drops(ctx, body);
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "return;\n");
 }
 
 /* Emit a self-tail-call as a backedge: evaluate all args into temporaries
@@ -1560,6 +1577,21 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                 buf_puts(body, "}\n");
                 return;
             }
+            if (ctx->tail_void) {
+                /* void-self-tail-call-not-lowered: the one-armed `if` of a
+                 * `: nil` body -- the absent arm is the empty return. */
+                char *cond = emit_value(ctx, body, e->as.if_.cond);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "if (%s) {\n", cond);
+                free(cond);
+                ctx->indent += 4;
+                emit_tail(ctx, body, fn_e, fd, e->as.if_.then_, result_kind, is_main);
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "}\n");
+                emit_tail_void_return(ctx, body);
+                return;
+            }
             break;
         case EX_DO: {
             bool has_defer = false;
@@ -1711,6 +1743,16 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         }
         default:
             break;
+    }
+
+    /* void-self-tail-call-not-lowered: a leaf of a `: nil` body is a
+     * statement followed by the empty return -- there is no value to spell,
+     * and a non-self call is not made a C tail call (`want_tail_call` below
+     * refuses a void return anyway). */
+    if (ctx->tail_void) {
+        emit_stmt(ctx, body, e);
+        emit_tail_void_return(ctx, body);
+        return;
     }
 
     /* proper-tail-calls T2 (T-D2): a non-self call in tail position becomes a
@@ -5986,11 +6028,21 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * what the spine then contains decides how the body is emitted.  Split out
      * of the old single `tco_eligible` expression so the two kinds of tail call
      * can be counted separately (proper-tail-calls T2 / T-D2). */
+    /* void-self-tail-call-not-lowered: a `: nil` function walks the same
+     * spine, as long as it really is emitted `void` -- its leaves then end in
+     * a bare `return;` (emit_tail_void_return).  Only a genuine backedge
+     * routes it through emit_tail: a void return cannot be a C tail call, so a
+     * spine of non-self calls alone gains nothing there. */
+    const char *fn_ret_c = ctx->current_fn_ret_ctype;
+    bool fn_ret_c_void = !fn_ret_c || !*fn_ret_c || strcmp(fn_ret_c, "void") == 0;
+    bool tail_void = result_kind == TY_NIL && !is_main && fn_ret_c_void;
     bool tco_spine_ok = !body_diverges && fd->body->kind != EX_INLINE_C &&
-        !(result_kind == TY_NIL && !is_main) && !is_main &&
+        !(result_kind == TY_NIL && !tail_void) && !is_main &&
         tco_params_simple(ctx, e, fd);
     int n_tco_self = 0, n_tco_tail = 0;
     ctx->tail_dyn_seen = false;
+    bool saved_tail_void = ctx->tail_void;
+    ctx->tail_void = tail_void;
     if (tco_spine_ok)
         n_tco_self = tco_mark(ctx, fd, fn_name, fd->body, &n_tco_tail);
     /* T2: a body whose tail spine holds ONLY non-self tail calls still goes
@@ -6005,7 +6057,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * share emit_fn_return_spelling now, so a refused leaf is emitted exactly as
      * it always was. */
     bool tco_eligible = tco_spine_ok &&
-        (n_tco_self > 0 || n_tco_tail > 0 || ctx->tail_dyn_seen);
+        (tail_void ? n_tco_self > 0
+                   : (n_tco_self > 0 || n_tco_tail > 0 || ctx->tail_dyn_seen));
     bool tco_wants_label = n_tco_self > 0;
 
     /* proper-tail-calls T1 (T-D1): now that tco_mark has had its say, work out
@@ -6024,9 +6077,10 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     else if (fd->body->kind == EX_INLINE_C)
         tc_fn_block = "the enclosing function has an inline-C body, which the "
                       "emitter passes through verbatim";
-    else if (result_kind == TY_NIL)
-        tc_fn_block = "the enclosing function returns nothing, so its body is "
-                      "emitted as statements rather than through the tail path";
+    else if (result_kind == TY_NIL && !tail_void)
+        tc_fn_block = "the enclosing function returns nothing but is not "
+                      "emitted as a C `void` function, so its body is emitted "
+                      "as statements rather than through the tail path";
     else if (body_diverges)
         tc_fn_block = "every path of the enclosing function diverges (`return` "
                       "or `panic`), so no tail path is emitted";
@@ -6194,7 +6248,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         }
         /* Inline C body - emit as-is (it contains its own return statements) */
         emit_stmt(ctx, file, fd->body);
-    } else if (result_kind == TY_NIL && !is_main) {
+    } else if (result_kind == TY_NIL && !is_main && !tco_eligible) {
         /* void function - emit body as statements */
         emit_stmt(ctx, file, fd->body);
     } else if (tco_eligible) {
@@ -6244,6 +6298,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     free((void*)ctx->env_var_name);
     ctx->env_var_name = saved_env_var_name;
     ctx->current_fn_ret_ctype = saved_current_fn_ret_ctype;
+    ctx->tail_void = saved_tail_void;
 
     ctx->indent -= 4;
     buf_printf(file, "}\n\n");

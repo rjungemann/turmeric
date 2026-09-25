@@ -5035,6 +5035,7 @@ static int64_t ctor_Schema_Schema(int64_t _0) {
 #define TUR_CTORALIAS_Schema
 #define ctor_Schema ctor_Schema_Schema
 #endif
+#define TUR_TD_tur_adt_HRow2
 typedef struct tur_adt_HRow2 {
     int64_t h;
 } tur_adt_HRow2;

@@ -16464,6 +16464,14 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             if (td_guard)
                 buf_printf(&early_file, "#ifndef TUR_TD_%s\n#define TUR_TD_%s\n",
                            adt_c_name, adt_c_name);
+            else if (def->n_type_params == 0)
+                /* nonparametric-adt-forward-typedef-redefinition: unguarded,
+                 * but still announce the full layout.  types.c's dependency
+                 * pre-pass emits a forward `typedef struct X X;` guarded on
+                 * !TUR_TD_X, and without the macro it re-typedef'd a name this
+                 * layout had already introduced -- a C11-only redefinition
+                 * (-Wtypedef-redefinition under clang -std=c99). */
+                buf_printf(&early_file, "#define TUR_TD_%s\n", adt_c_name);
             if (named) {
                 CtorDef *ctor = def->ctors[0];
                 buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);

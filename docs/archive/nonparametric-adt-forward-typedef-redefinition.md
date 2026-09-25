@@ -1,5 +1,15 @@
 # A non-parametric ADT's forward typedef re-declares its already-emitted typedef name
 
+> **RESOLVED 2026-09-25.** The third emitter was `emit_module.c`'s early-file
+> ADT pass, which wraps a layout in the `TUR_TD_` guard only when the by-value
+> sum ordering needs it (`td_guard`).  When it does not, it now still writes
+> `#define TUR_TD_<Name>` ahead of a non-parametric layout, so the pre-pass
+> guard sees it -- the first fix direction, one line per such ADT.  All 155
+> snapshots carrying a `TUR_FWD_tur_adt_*` forward decl are clean under
+> `clang -std=c99 -fsyntax-only -Wtypedef-redefinition`; 16 snapshots moved,
+> each by that one line.
+
+
 **Severity: low** (a `-Wtypedef-redefinition` warning under `clang -std=c99`,
 the flags `tur build` passes; a hard error for a strict-C99 compiler; silent
 under gcc). Found 2026-09-19 while fixing the parametric twin of this in

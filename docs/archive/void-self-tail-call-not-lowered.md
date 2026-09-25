@@ -1,5 +1,22 @@
 # A self tail call in a `nil`-returning function is not lowered to a loop
 
+> **RESOLVED 2026-09-25.** A `: nil` function that is emitted as a C `void`
+> walks the tail spine too (`emit_fn_def`'s `tail_void`, `src/compiler/emit_fns.c`).
+> `emit_tail` gained a void leaf -- the statement, then `emit_tail_void_return`,
+> which fires the open drop-glue frames and the scopes' `any` drops before a
+> bare `return;` -- and, for a void body only, a one-armed `if` is a tail
+> position (the missing arm is the empty return), so the `when`-loop shape is
+> a loop too.  `tco_mark` and `tc_check` agree on that, so `^tailcall` is
+> accepted in a `: nil` body.  Only a genuine backedge routes a void body
+> through `emit_tail`: a void return cannot be a C tail call, so a spine of
+> non-self calls alone keeps the statement path.  Pinned by
+> `tests/fixtures/void-self-tail-call-loop` (snapshot + `requires.leak-check`,
+> whose `-O1` build is the one that used to overflow).  The repro above runs
+> at `-O0`.  No existing snapshot moved.  The prelude cleanup it blocked,
+> [r7rs-prelude-value-returning-loop-workaround](../reported/r7rs-prelude-value-returning-loop-workaround.md),
+> is unblocked.
+
+
 **Severity:** medium. Every dialect. A `: nil` function that loops by calling
 itself grows the C stack by one frame per iteration unless the C compiler
 happens to turn the call into a jump, which gcc does at `-O2` and not at

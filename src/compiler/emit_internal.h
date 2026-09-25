@@ -730,6 +730,11 @@ typedef struct EmitCtx {
     /* Set by tco_mark when the tail spine reaches a dynamic call, so the body
      * is routed through emit_tail, where that call is recognised. */
     bool         tail_dyn_seen;
+    /* void-self-tail-call-not-lowered: the function whose tail spine tco_mark /
+     * emit_tail / tc_check are walking returns nothing (`: nil`, C `void`).
+     * Its leaves end in a bare `return;` rather than a value, and a one-armed
+     * `if` is a tail position (the missing arm is the empty return). */
+    bool         tail_void;
     /* proper-tail-calls T2b: the C name and body buffer of the function being
      * emitted, and where its body starts in that buffer -- what a checkless
      * tail call needs to decide whether it may also be `musttail` (identical
