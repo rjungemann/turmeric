@@ -1,0 +1,31 @@
+;; typeclass-superclasses-plan SC8b step 2: the auto-loaded Alternative is
+;; declared over Applicative and MonadError over Monad.  Each generic below
+;; writes only the subclass constraint and calls a method of the superclass.
+;; Traversable, which lives in the explicitly loaded stdlib/typeclass.tur, is
+;; covered by stdlib-traversable-entails.
+
+;; Alternative entails Applicative: `pure` is return-directed, so it needs the
+;; Applicative dictionary the generic now receives.
+(defn or-default [^Alternative F] [x : (F int) d : int] : (F int)
+  (alt-or x (pure d)))
+
+;; MonadError entails Monad: `bind` under `^MonadError`.  `pure` is still
+;; written out as `^Applicative M` because Monad does not yet entail
+;; Applicative (SC8b step 5).  The continuation is a lambda in the body: a
+;; generic that forwards a continuation PARAMETER to `bind` segfaults compiled,
+;; a separate, pre-existing gap
+;; (docs/reported/hkt-generic-forwarded-bind-continuation-segfaults.md).
+(defn add-one [^MonadError M ^Applicative M] [m : (M int)] : (M int)
+  (bind m (fn [x : int] : (M int) (pure (+ x 1)))))
+
+(defn show-o [o : (Option int)] : int
+  (match o (Some v) (do (println v) 0) (None) (do (println -1) 0)))
+(defn show-r [r : (Result int int)] : int
+  (match r (Ok v) (do (println v) 0) (Err e) (do (println (- 0 e)) 0)))
+
+(defn main [] : int
+  (show-o (or-default (:: (none) (Option int)) 5))      ; 5
+  (show-o (or-default (:: (some 3) (Option int)) 5))    ; 3
+  (show-r (add-one (:: (ok 41) (Result int int))))      ; 42
+  (show-r (add-one (:: (err 4) (Result int int))))      ; -4
+  0)

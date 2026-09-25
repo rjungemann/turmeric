@@ -256,7 +256,8 @@
 ;;   traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
 ;;   In v1: simplified to traverse [ta fn] :int
 
-(defclass Traversable [^t] (traverse [ta fn] : int))
+;; Superclasses: Functor and Foldable, as in Haskell.
+(defclass Traversable [^t] [(Functor t) (Foldable t)] (traverse [ta fn] : int))
 ;;; SINCE: Phase HKT H7
 ;; Alternative — typeclass for types with an "empty" value and a way to combine alternatives.
 ;; Similar to MonadPlus/ApplicativePlus in Haskell.
@@ -275,6 +276,7 @@
 
 
 (defclass Alternative [^f]
+  [(Applicative f)]
   (empty [a] : (f a))
   (alt-or [x : (f a) y : (f a)] : (f a)))
 ;;; SINCE: Phase HKT H5

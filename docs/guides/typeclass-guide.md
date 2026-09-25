@@ -418,25 +418,30 @@ The rules the compiler enforces, each with its own code:
 - The graph must be acyclic; a class may not list itself, directly or
   through others -- `TUR-E0392`, naming the cycle.
 
-There is no runtime cost and no emitted-C change: static dispatch still
-resolves the instance at each call site from the concrete instantiation, so
-the entailment only decides whether the call is *allowed*, exactly like an
-explicitly written constraint. The interpreter carries the same rule by
-binding a superclass's dictionary alongside the subclass's.
+A constraint on a subclass behaves exactly as if its superclasses were written
+out too: `[^Alternative F]` is read as `[^Alternative F ^Applicative F]`. A
+statically resolved call is unchanged, since dispatch still finds the instance
+from the concrete type. A generic compiled by dictionary passing, or run by the
+interpreter, receives a dictionary for each implied superclass as well, which
+is what lets a return-directed method such as `pure` resolve under
+`[^Alternative F]`. The instance obligation guarantees each of those
+dictionaries exists.
 
 The stdlib uses the preamble where the relation is real:
 
 | Class | Superclass | File |
 |---|---|---|
 | `Ord` | `Eq` | `typeclass-ord.tur` (auto-loaded) |
+| `Alternative` | `Applicative` | `typeclass-alternative.tur` (auto-loaded) |
+| `MonadError` | `Monad` | `typeclass-monaderror.tur` (auto-loaded) |
+| `Traversable` | `Functor`, `Foldable` | `typeclass.tur` |
 | `Monoid` | `Semigroup` | `typeclass-lattice.tur` |
 | `BoundedJoin` | `JoinSemilattice` | `typeclass-lattice.tur` |
 | `BoundedMeet` | `MeetSemilattice` | `typeclass-lattice.tur` |
 
 So a `[^Ord A]` function may call `eq?`, and `mconcat` carries one constraint
-rather than two (see the [lattice guide](lattice-guide.md)). The other
-auto-loaded classes (`Functor`, `Applicative`, `Monad` and friends) are still
-flat. Each is retrofitted separately, because adding a preamble to an existing
+rather than two (see the [lattice guide](lattice-guide.md)). `Applicative`,
+`Monad` and the arrow classes are still flat. Each is retrofitted separately, because adding a preamble to an existing
 class obliges every existing instance of it, in every downstream spice, to
 carry the superclass instance. Until a class is retrofitted, a function needing
 both lists both constraints.

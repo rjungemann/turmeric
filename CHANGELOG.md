@@ -31,6 +31,16 @@ All notable changes to Turmeric are documented here.
   must now spell the same preamble, or it is "typeclass 'Ord' is already
   defined". SC8b step 1 of typeclass-superclasses-plan.
 
+- **`Alternative`, `MonadError` and `Traversable` declare their
+  superclasses.** The auto-loaded `Alternative` is declared over
+  `Applicative` and `MonadError` over `Monad`; `Traversable` in
+  `stdlib/typeclass.tur` over `Functor` and `Foldable`. So
+  `[^Alternative F]` licenses `pure`, `[^MonadError M]` licenses `bind`, and
+  `[^Traversable T]` licenses `fmap` and `foldl`. The same instance obligation
+  applies (TUR-E0393); every stdlib instance already satisfies it and no spice
+  declares an instance of these classes. SC8b step 2 of
+  typeclass-superclasses-plan.
+
 ### Added
 
 - **`Result` is an `Applicative`.** `stdlib/result.tur` ships
@@ -41,6 +51,14 @@ All notable changes to Turmeric are documented here.
   can go straight to a typed parameter.
 
 ### Fixed
+
+- **A subclass constraint now carries its superclasses' dictionaries.** A
+  higher-kinded generic constrained only by a subclass could not call a
+  return-directed superclass method such as `pure` under `[^Alternative F]`.
+  Compiled, the generic received only the subclass's dictionary and called
+  the method through the wrong one (a C type error, or with matching slot
+  types a wrong method); the interpreter found no dictionary at all. A
+  declared constraint now implies its superclass closure, as if written out.
 
 - **Compiled `ap` over a partially applied instance head no longer
   segfaults.** An instance over a head such as `(Result _ B)` or a user
