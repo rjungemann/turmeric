@@ -1,5 +1,18 @@
 # Cleanup: write the R7RS prelude's `-lp__` loops as `nil` loops again
 
+> **RESOLVED 2026-09-25.** Every `-lp__` loop in stdlib/r7rs/prelude.tur
+> (20, `r7rs-cps-encode-lp__` included) and stdlib/r7rs/read.tur (8) is
+> folded back into a single `: nil` function with its original body -- the
+> self call renamed, each `true` leaf of the workaround a `nil` -- and the
+> wrapper is gone; no caller changed. `tur emit-c` shows each one as a
+> `goto __tur_tailcall` loop, and a million-element `string-fill!`,
+> `vector-fill!`, `write` of a list, `read` of it back, `read-line` and
+> `read-string` pass built at `-O1` (the build that used to overflow) and at
+> `-O2`. `r7rs-for-eachn-go__` stays `: bool`: it is CPS and waits on
+> [cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md),
+> which also still overflows a 100,000-element `map` with a lambda at `-O1`
+> (pre-existing; measured the same before and after this fold).
+
 **Severity:** low (cleanup; no wrong answer). **Unblocked 2026-09-25:**
 [void-self-tail-call-not-lowered](../archive/void-self-tail-call-not-lowered.md)
 is resolved, so a `: nil` self tail call is a loop now.

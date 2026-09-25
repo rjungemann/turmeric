@@ -5522,14 +5522,35 @@ ReaderType detect_lang(const char *src, size_t len,
                                out_bad, out_bad_len, NULL);
 }
 
-/* Get reader type from file extension */
+/* Get reader type from file extension.
+ *
+ * `.scm` is `#lang r7rs` without the line (r7rs-lang-plan, open question 4,
+ * decided 2026-09-25): the Scheme reader, and -- through
+ * lang_dialect_from_extension below -- the Scheme language.  A `.scm` file
+ * that carries a `#lang` line keeps it as a redundant hint, as a `.tur.sweet`
+ * file does. */
 ReaderType reader_type_from_extension(const char *path) {
     if (!path) return READER_TURMERIC;
     size_t n = strlen(path);
     if (n >= 10 && strcmp(path + n - 10, ".tur.sweet") == 0) {
         return READER_SWEET;
     }
+    if (n >= 4 && strcmp(path + n - 4, ".scm") == 0) {
+        return READER_R7RS;
+    }
     return READER_TURMERIC;
+}
+
+/* The language an extension selects on its own: LANG_R7RS for `.scm`,
+ * LANG_TURMERIC (meaning "the directive decides, else Turmeric") for every
+ * other spelling.  The reader-only override above is deliberately not
+ * enough for `.scm`: a Scheme file read by the Scheme reader but elaborated
+ * as Turmeric would have no prelude and no Scheme truthiness. */
+LangDialect lang_dialect_from_extension(const char *path) {
+    if (!path) return LANG_TURMERIC;
+    size_t n = strlen(path);
+    if (n >= 4 && strcmp(path + n - 4, ".scm") == 0) return LANG_R7RS;
+    return LANG_TURMERIC;
 }
 
 /* Get reader type name as string.  Always the canonical slash-namespaced

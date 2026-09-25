@@ -24,6 +24,25 @@ of the build; `cc -O2` over that one translation unit takes the rest.
 `TUR_RUNTIME=split` does not help: a Scheme program's preamble never matches
 the committed split artifact (measured the same with and without it).
 
+**Measured 2026-09-25, second look: most of the `cc` time was one warning.**
+`gcc -ftime-report` on `r7rs-named-let-sum`'s 1.2 MB of C put 71% of the
+5.2 s in "phase parsing", and `-fsyntax-only` alone took 2.85 s with `-Wall`
+and 0.13 s without. Bisecting `-Wall`: `-Wno-misleading-indentation` takes
+the syntax check to 0.11 s; no other `-Wno-` moves it. GCC's
+misleading-indentation check is quadratic on the long brace-less `if`
+chains the Scheme lowering emits. The driver now appends
+`-Wno-misleading-indentation` after the user's flags on every `cc` it runs
+over emitted C (`TUR_EMITTED_C_CC_FLAGS`, src/main.c), so a harness's own
+`TUR_CC_FLAGS` with `-Wall` gets it too:
+
+| program | before | after |
+|---|---|---|
+| `r7rs-named-let-sum`, `tur build` end to end | 6.4 s | 3.1 s |
+
+What is left: about 0.9 s of `tur emit-c`, 1.4 s of gcc's optimize-and-
+generate at `-O2` (1.2 s at `-O0`: the size, not the level), and the link.
+The directions below are what the rest would take.
+
 ## Fix directions
 
 - Precompile the prelude once: build it as a library (`libr7rs.a`, or an

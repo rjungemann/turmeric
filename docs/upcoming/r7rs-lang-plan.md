@@ -1748,6 +1748,17 @@ expectation from a demo.
    learns a new file type. The Saffron plan deferred `.saf` for exactly this
    reason, and R7RS should defer `.scm` the same way -- `#lang r7rs` inside a
    `.tur` file until the semantics settle.
+   **Decided 2026-09-25: `.scm` is accepted.** The semantics settled with
+   T8. A `.scm` file is `#lang r7rs` without the line, the way `.tur.sweet`
+   is `turmeric/sweet`: `reader_type_from_extension` picks the Scheme reader
+   and `lang_dialect_from_extension` the Scheme language, applied at every
+   site that pairs the extension with the directive (the entry file,
+   `(import ...)`, `(load ...)`, `tur --interpret`). A `#lang` line in a
+   `.scm` file is a redundant hint. A module name resolves to `<name>.tur`,
+   then `<name>.scm`, so a `define-library` in a `.scm` file is importable
+   by its name; `tur run`, `tur build` (its default output name), `tur check`
+   and `tur --interpret` take `.scm` entries. `tur fmt` does not format
+   Scheme and skips them.
 5. **Does `#lang r7rs` get the reader axis at all?** D1 says no
    (`reader_axis_free = false`). But `r7rs/sweet` is arguably meaningful --
    sweet-expressions were designed for Scheme, and SRFI-110 is a Scheme SRFI.
@@ -2665,7 +2676,7 @@ task.*
 >     `: nil` names: a `: nil` self tail call is not a loop
 >     ([void-self-tail-call-not-lowered](../archive/void-self-tail-call-not-lowered.md);
 >     the cleanup is
->     [r7rs-prelude-value-returning-loop-workaround](../reported/r7rs-prelude-value-returning-loop-workaround.md)).
+>     [r7rs-prelude-value-returning-loop-workaround](../archive/r7rs-prelude-value-returning-loop-workaround.md)).
 >   - A CPS loop is still only as deep as gcc's sibling calls make it: it
 >     overflows at `-O1`
 >     ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md)).

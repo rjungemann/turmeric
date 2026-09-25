@@ -1187,6 +1187,11 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
                 lx->rc = -1;
                 continue;
             }
+            /* `.scm` names the Scheme language as well as its reader. */
+            {
+                LangDialect ext_dialect = lang_dialect_from_extension(path_buf);
+                if (ext_dialect != LANG_TURMERIC) dialect = ext_dialect;
+            }
             sfile->src         = lsrc;
             sfile->len         = llen;
             sfile->reader_type = chosen;

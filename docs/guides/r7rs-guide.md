@@ -40,6 +40,11 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
 
 - **A program** is a file of top-level forms. `tur run prog.tur` builds and
   runs it; there is no `main` to write.
+- **`.scm` files** are Scheme without the `#lang r7rs` line: `tur run
+  prog.scm`, `tur build prog.scm` (the binary is `prog`), `tur check` and
+  `tur --interpret` all take one, a `(load "util.scm")` reads one, and
+  `(import (mylib))` finds `mylib.scm` when there is no `mylib.tur`. A
+  `#lang r7rs` line in a `.scm` file is allowed and changes nothing.
 - **A project**: `tur init --r7rs demo` scaffolds one that builds with
   `tur build .` and tests with `tur test tests`. Add `--lib` for a
   `define-library` instead of a program.

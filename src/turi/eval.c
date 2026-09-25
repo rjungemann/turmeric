@@ -14335,6 +14335,12 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path) {
         turi_env_reset_to_prelude(env);
         env->reader_type = ext_type;
     }
+    /* `.scm` is the Scheme LANGUAGE too, not only its reader: the same
+     * sticky assignment a `#lang r7rs` line makes in turi_eval. */
+    {
+        LangDialect ext_dialect = lang_dialect_from_extension(path);
+        if (ext_dialect != LANG_TURMERIC) env->lang = ext_dialect;
+    }
 
     TuriValue v = turi_eval(env, buf);
     free(buf);

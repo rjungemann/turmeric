@@ -6,6 +6,32 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: `.scm` files.** A `.scm` file is Scheme without the
+  `#lang r7rs` line (r7rs-lang-plan open question 4, decided): the
+  extension selects the Scheme reader and the Scheme language at every site
+  that pairs an extension with the directive -- the entry file, `(import
+  ...)`, `(load ...)`, `tur --interpret` -- and a module name resolves to
+  `<name>.tur`, then `<name>.scm`, so a `define-library` in a `.scm` file is
+  importable by its name. `tur run`, `tur build` (default output name),
+  `tur check` and `tur --interpret` take `.scm` entries; a `#lang` line in
+  one is a redundant hint. `tests/run-r7rs-import.sh` covers a `.scm`
+  program importing a `.scm` library on both back ends.
+
+### Changed
+
+- **Every `cc` over emitted C runs with `-Wno-misleading-indentation`.**
+  GCC's check is quadratic on the long brace-less `if` chains the Scheme
+  lowering emits and was 71% of a `#lang r7rs` build's C compile: a
+  one-line Scheme program built in 6.4 s and builds in 3.1 s. The driver
+  appends the flag after the user's `TUR_CC_FLAGS` (`TUR_EMITTED_C_CC_FLAGS`,
+  src/main.c), so a harness's own `-Wall` still gets it
+  (docs/reported/r7rs-programs-compile-slowly.md).
+- **The R7RS prelude's `-lp__` loops are folded back** into their `: nil`
+  originals (28 in stdlib/r7rs/prelude.tur and read.tur), now that a `: nil`
+  self tail call lowers to a loop; the wrappers are gone and no caller
+  changed. A million-element `string-fill!`, `write`, `read` and `read-line`
+  pass at `-O1` (archived: r7rs-prelude-value-returning-loop-workaround).
+
 - **`#lang r7rs`: the collector sees the runtime archive, refuses threads,
   and has its macOS roots (r7rs-gc-plan, second pass).** The TUs of
   `libturt_runtime.a` (the HAMT behind `stdlib/map`, rc<T> and its cycle

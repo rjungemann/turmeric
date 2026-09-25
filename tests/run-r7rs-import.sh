@@ -180,6 +180,25 @@ EOF
 
 run_case "nested-import-sets" prog5.tur '(8 "hi ann" 42)'
 
+# ---- Direction 5: `.scm` files (r7rs-lang-plan open question 4). ----------
+# No `#lang` line anywhere: the extension is the directive, for the entry
+# file and for the library `(import (scmlib))` resolves to `scmlib.scm` when
+# no `scmlib.tur` exists.  Scheme truthiness proves the LANGUAGE followed the
+# reader (under Turmeric rules `(if 0 ...)` takes the else branch).
+cat > "$TMP/scmlib.scm" <<'EOF'
+(define-library (scmlib)
+  (export thrice)
+  (import (scheme base))
+  (begin (define (thrice x) (* x 3))))
+EOF
+
+cat > "$TMP/prog6.scm" <<'EOF'
+(import (scheme base) (scheme write) (scheme read) (scmlib))
+(write (list (thrice 5) (if 0 'truthy 'falsy) (read (open-input-string "(a . b)")))) (newline)
+EOF
+
+run_case "scm-extension" prog6.scm "(15 truthy (a . b))"
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1
