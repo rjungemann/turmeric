@@ -1232,7 +1232,15 @@ static char *emit_agg_unbox(EmitCtx *ctx, Type t, const char *val) {
     if (g_emit_abi_trace)
         fprintf(stderr, "repr-trace bridge agg-unbox %s\n", cn);
     Buf b; buf_init(&b);
-    buf_printf(&b, "(*(%s *)(intptr_t)(%s))", cn, val);
+    /* A sum whose nullary tag-0 value rides the carrier as 0 (Option's
+     * `none`) goes through the NULL-safe helper; anything else keeps the
+     * plain dereference (hkt-generic-none-to-typed-param-segfaults). */
+    const char *nullsafe = ensure_agg_unbox_nullsafe(
+        ctx, emit_resolve_type(ctx, t), cn);
+    if (nullsafe)
+        buf_printf(&b, "%s((int64_t)(intptr_t)(%s))", nullsafe, val);
+    else
+        buf_printf(&b, "(*(%s *)(intptr_t)(%s))", cn, val);
     buf_putc(&b, '\0');
     char *out = strdup(b.data);
     buf_free(&b);

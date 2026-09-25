@@ -99,6 +99,15 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A `none` returned by a constrained generic no longer crashes at a typed
+  `Option` parameter.** A higher-kinded generic returns the carrier, and the
+  call site converts it back to the by-value `(Option int)`. That conversion
+  dereferenced the carrier unconditionally, and `none` rides it as 0, so
+  `(show (add-one (:: (none) (Option int))))` segfaulted compiled while an
+  inline `match` and `--interpret` were fine. For a sum whose tag-0
+  constructor is nullary, the conversion now answers the tag-0 value for a 0
+  carrier -- the reading `match` already gives.
+
 - **A subclass constraint now carries its superclasses' dictionaries.** A
   higher-kinded generic constrained only by a subclass could not call a
   return-directed superclass method such as `pure` under `[^Alternative F]`.

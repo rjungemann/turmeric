@@ -11064,6 +11064,66 @@ void ensure_any_carrier_bridge(EmitCtx *ctx) {
         "}\n", (int)TY_NIL);
 }
 
+/* hkt-generic-none-to-typed-param-segfaults: the carrier -> by-value bridge
+ * for a sum whose tag-0 constructor is nullary.
+ *
+ * Such a sum's nullary value may ride the carrier as 0: `none()` returns
+ * TUR_NONE, and every `match` already reads a NULL scrutinee as tag 0
+ * (`switch (__scrut ? __scrut->tag : 0)`).  The bridges that turn a carrier
+ * back into the by-value monomorph dereferenced it unconditionally, so a
+ * `none` returned by a dictionary-passing generic and handed to a parameter
+ * typed `(Option int)` was a NULL dereference.  This answers the zeroed value
+ * -- tag 0, no payload, the same reading `match` gives -- for a 0 carrier.
+ *
+ * A function, not an expression, for the reasons ensure_any_carrier_bridge
+ * gives (a struct-valued `?:` or `({ ... })` miscompiles in the JIT engine on
+ * x86-64, and a ternary would evaluate the carrier twice).  One per
+ * monomorph, deduplicated through the shim-name list; `static inline` so an
+ * unused one costs no warning.  Returns NULL when the type is not such a sum,
+ * and the caller keeps its plain dereference: for any other type a 0 carrier
+ * is a bug, and crashing on it is more honest than a zeroed value. */
+const char *ensure_agg_unbox_nullsafe(EmitCtx *ctx, Type t, const char *cname) {
+    if (!ctx || !cname || !*cname) return NULL;
+    const AdtDef *def = NULL;
+    if (t.kind == TY_ADT) def = t.as.adt_.def;
+    else if (t.kind == TY_APP) def = type_adt_app_def(&t);
+    if (!def || def->n_ctors < 2 || !def->ctors || !def->ctors[0] ||
+        def->ctors[0]->n_fields != 0)
+        return NULL;
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_agg_unbox0_");
+    append_sanitized_c_token(&nb, cname);
+    buf_putc(&nb, '\0');
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], nb.data) == 0) {
+            const char *found = ctx->fatshim_names[i];
+            buf_free(&nb);
+            return found;
+        }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = name;
+    Buf *out = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(out,
+        "/* carrier -> %s: a 0 carrier is the tag-0 nullary constructor */\n"
+        "static inline %s %s(int64_t __p) {\n"
+        "    %s __v;\n"
+        "    if (__p) { __v = *(%s *)(intptr_t)__p; }\n"
+        "    else { memset(&__v, 0, sizeof __v); }\n"
+        "    return __v;\n"
+        "}\n", cname, cname, name, cname, cname);
+    return name;
+}
+
 void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
     if (!ctx || ctx->saffron_dyn_emitted) return;
     ctx->saffron_dyn_emitted = true;

@@ -921,8 +921,9 @@ Where it departs from the plan above:
   spelled out, prints the right answer under `--interpret`, and is filed:
   - [hkt-generic-forwarded-bind-continuation-segfaults](../reported/hkt-generic-forwarded-bind-continuation-segfaults.md)
     (high) -- a generic forwarding a continuation parameter to `bind`.
-  - [hkt-generic-none-to-typed-param-segfaults](../reported/hkt-generic-none-to-typed-param-segfaults.md)
+  - [hkt-generic-none-to-typed-param-segfaults](../archive/hkt-generic-none-to-typed-param-segfaults.md)
     (high) -- a `none` from a generic passed to a typed `Option` parameter.
+    **Fixed** in the follow-up bug-fix PR.
   - [hkt-generic-nested-bind-result-type](../reported/hkt-generic-nested-bind-result-type.md)
     (medium) -- a two-binding `do-m` in a generic does not compile.
   - [hkt-dict-generic-byvalue-result-to-typed-param](../reported/hkt-dict-generic-byvalue-result-to-typed-param.md)

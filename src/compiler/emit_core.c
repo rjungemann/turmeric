@@ -6016,8 +6016,16 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                     buf_printf(&out, "__tur_any_of_carrier((int64_t)(intptr_t)(%s))",
                                src_str);
                 } else {
-                    /* Pointer carrier: dereference the heap pointer. */
-                    buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);
+                    /* Pointer carrier: dereference the heap pointer -- NULL-safely
+                     * for a sum whose nullary tag-0 value rides as 0 (Option's
+                     * `none`; hkt-generic-none-to-typed-param-segfaults). */
+                    const char *nullsafe =
+                        ensure_agg_unbox_nullsafe(ctx, concrete_ty, cname);
+                    if (nullsafe)
+                        buf_printf(&out, "%s((int64_t)(intptr_t)(%s))", nullsafe,
+                                   src_str);
+                    else
+                        buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);
                 }
             }
         }

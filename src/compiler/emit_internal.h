@@ -1439,6 +1439,10 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t);
  * helpers are declared before any body can call them. */
 void ensure_saffron_dyn_runtime(EmitCtx *ctx);
 void ensure_any_carrier_bridge(EmitCtx *ctx);
+/* hkt-generic-none-to-typed-param-segfaults: name of a NULL-safe carrier ->
+ * by-value unbox for a sum whose tag-0 constructor is nullary (emitted on
+ * demand), or NULL when `t` is not such a sum. */
+const char *ensure_agg_unbox_nullsafe(EmitCtx *ctx, Type t, const char *cname);
 /* any-struct-box-leak-per-widen: the predicate the `any` widen uses to decide
  * whether a payload is heap-boxed.  Exported so emit_any_type_id can intern the
  * same answer for the drop side -- one predicate, not two that can drift. */

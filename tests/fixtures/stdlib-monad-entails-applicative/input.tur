@@ -21,20 +21,19 @@
 (defn triple [^Monad M] [m : (M int)] : (M int)
   (fmap m (fn [x : int] : int (* x 3))))
 
+(defn show-o [o : (Option int)] : int
+  (match o (Some v) (do (println v) 0) (None) (do (println -1) 0)))
 (defn show-r [r : (Result int int)] : int
   (match r (Ok v) (do (println v) 0) (Err e) (do (println (- 0 e)) 0)))
 
-;; Option results are matched in place: handing a `none` from a constrained
-;; generic to a typed `(Option int)` parameter segfaults compiled, a separate,
-;; pre-existing gap (docs/reported/hkt-generic-none-to-typed-param-segfaults.md).
 (defn main [] : int
-  (println (match (add-one (some 41)) (Some v) v (None) -1))  ; 42
+  (show-o (add-one (some 41)))  ; 42
   (show-r (add-one (:: (ok 41) (Result int int))))  ; 42
   (show-r (add-one (:: (err 5) (Result int int))))  ; -5
-  (println (match (doubled (some 21)) (Some v) v (None) -1))  ; 42
-  (println (match (doubled (:: (none) (Option int))) (Some v) v (None) -1))  ; -1
+  (show-o (doubled (some 21)))  ; 42
+  (show-o (doubled (:: (none) (Option int))))  ; -1
   (show-r (doubled (:: (ok 21) (Result int int))))  ; 42
   (show-r (doubled (:: (err 7) (Result int int))))  ; -7
-  (println (match (triple (some 14)) (Some v) v (None) -1))  ; 42
+  (show-o (triple (some 14)))  ; 42
   (show-r (triple (:: (ok 14) (Result int int))))  ; 42
   0)

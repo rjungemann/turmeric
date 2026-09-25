@@ -1,0 +1,29 @@
+;; hkt-generic-none-to-typed-param-segfaults: a constrained generic returning
+;; `none` at Option, its result handed to a parameter typed `(Option int)`.
+;;
+;; The generic returns the int64 carrier and the call site bridges it back to
+;; the by-value `tur_adt_Option__int` for `show`.  `none` rides the carrier as
+;; 0 (TUR_NONE), and the bridge dereferenced it unconditionally -- a NULL
+;; dereference on the compiled path, while `--interpret` and an inline `match`
+;; (which reads a NULL scrutinee as tag 0) were fine.  The bridge now answers
+;; the tag-0 value for a 0 carrier, for any sum whose tag-0 constructor is
+;; nullary.
+(defn add-one [^Monad M] [m : (M int)] : (M int)
+  (bind m (fn [x : int] : (M int) (pure (+ x 1)))))
+
+(defn doubled [^Monad M] [a : (M int)] : (M int)
+  (do-m x a
+        (pure (* x 2))))
+
+(defn show [o : (Option int)] : int
+  (match o (Some v) (do (println v) 0) (None) (do (println -1) 0)))
+
+(defn main [] : int
+  (show (add-one (some 41)))                    ; 42
+  (show (add-one (:: (none) (Option int))))     ; -1
+  (show (doubled (some 21)))                    ; 42
+  (show (doubled (:: (none) (Option int))))     ; -1
+  ;; bound first, then passed on
+  (let [n : (Option int) (add-one (:: (none) (Option int)))]
+    (show n))                                   ; -1
+  0)
