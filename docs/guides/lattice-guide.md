@@ -18,14 +18,18 @@ can run against your own instances.
 
 ## At a Glance
 
-| Class | Method | Means |
-|---|---|---|
-| `Semigroup` | `combine [x y] : a` | associative binary operation |
-| `Monoid` | `mempty [] : a` | identity element for `combine` |
-| `JoinSemilattice` | `join [x y] : a` | least upper bound -- associative, commutative, **idempotent** |
-| `MeetSemilattice` | `meet [x y] : a` | greatest lower bound (the dual) |
-| `BoundedJoin` | `bottom [] : a` | least element; identity for `join` |
-| `BoundedMeet` | `top [] : a` | greatest element; identity for `meet` |
+| Class | Superclass | Method | Means |
+|---|---|---|---|
+| `Semigroup` | -- | `combine [x y] : a` | associative binary operation |
+| `Monoid` | `Semigroup` | `mempty [] : a` | identity element for `combine` |
+| `JoinSemilattice` | -- | `join [x y] : a` | least upper bound -- associative, commutative, **idempotent** |
+| `MeetSemilattice` | -- | `meet [x y] : a` | greatest lower bound (the dual) |
+| `BoundedJoin` | `JoinSemilattice` | `bottom [] : a` | least element; identity for `join` |
+| `BoundedMeet` | `MeetSemilattice` | `top [] : a` | greatest element; identity for `meet` |
+
+A constraint on a class entails the class in its Superclass column, so
+`[^Monoid A]` alone licenses `combine` and `[^BoundedJoin A]` alone licenses
+`join`. See [Superclasses](typeclass-guide.md#superclasses) for the rule.
 
 `JoinSemilattice` declares exactly the shape `Semigroup` does -- both are
 `a -> a -> a`. What separates them is **commutativity and idempotence**, which
@@ -74,26 +78,31 @@ println $ (:: combine((:: 3 Product) (:: 7 Product)) int)  ; => 21
 
 ## Monoid
 
-A `Monoid` adds an identity. It is declared **flat**, not as a subclass of
-`Semigroup`: `defclass` does take a superclass preamble (see
-[typeclass-guide.md](typeclass-guide.md#superclasses)), but adding one to a
-class that already has instances obliges every one of them -- in-tree and in
-every downstream spice -- to carry the superclass instance, so the stdlib's
-classes stay flat. A function needing both lists both constraints:
+A `Monoid` is a `Semigroup` with an identity, and it is declared that way.
+A function constrained by `Monoid` may call `combine` without also naming
+`Semigroup`:
 
 ```turmeric
-(defclass Monoid [a] (mempty [] : a))
+(defclass Monoid [a]
+  [(Semigroup a)]
+  (mempty [] : a))
 
-(defn double-up [^Semigroup A ^Monoid A] [x : A] : A
+(defn double-up [^Monoid A] [x : A] : A
   (combine x x))
 ```
 ```sweet-exp
 defclass Monoid [a]
+  [(Semigroup a)]
   mempty [] : a
 
-defn double-up [^Semigroup A ^Monoid A] [x : A] : A
+defn double-up [^Monoid A] [x : A] : A
   combine(x x)
 ```
+
+The other side of that is an obligation on instances. Every
+`(definstance Monoid [T] ...)` needs a `(definstance Semigroup [T] ...)` beside
+it, anywhere in the program, or the build stops with `TUR-E0393`. The
+`Monoid` instance does not supply `combine`; the `Semigroup` one does.
 
 > **identity** -- `(combine (mempty) x)` = `x` = `(combine x (mempty))`
 

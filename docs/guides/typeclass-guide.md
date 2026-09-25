@@ -424,13 +424,16 @@ the entailment only decides whether the call is *allowed*, exactly like an
 explicitly written constraint. The interpreter carries the same rule by
 binding a superclass's dictionary alongside the subclass's.
 
-The stdlib's own classes are flat -- `Monoid` is not declared over `Semigroup`
-in `typeclass-lattice.tur` -- because adding a preamble to an existing class
-obliges every existing instance of it, in every downstream spice, to carry the
-superclass instance. So a function needing both lists both constraints, as the
-[lattice guide](lattice-guide.md) shows. The preamble is for classes you
-declare yourself, where the obligation costs nothing because there are no
-instances yet.
+The stdlib uses the preamble where the relation is real. In
+`typeclass-lattice.tur`, `Monoid` is declared over `Semigroup`, and
+`BoundedJoin` and `BoundedMeet` over `JoinSemilattice` and `MeetSemilattice`,
+so `mconcat` and the identity laws carry one constraint rather than two (see
+the [lattice guide](lattice-guide.md)). The auto-loaded classes (`Eq`, `Ord`,
+`Functor`, `Monad` and friends) are still flat; each is retrofitted
+separately, because adding a preamble to an existing class obliges every
+existing instance of it, in every downstream spice, to carry the superclass
+instance. Until a class is retrofitted, a function needing both lists both
+constraints.
 
 ## Associated Types
 

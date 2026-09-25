@@ -2,6 +2,26 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **The lattice classes declare their superclasses.** In
+  `stdlib/typeclass-lattice.tur`, `Monoid` is now declared over `Semigroup`,
+  `BoundedJoin` over `JoinSemilattice`, and `BoundedMeet` over
+  `MeetSemilattice`. A `[^Monoid A]` function may call `combine` without also
+  writing `^Semigroup A`, and `mconcat`, `mconcat-from`, `law-identity?`,
+  `law-bottom-identity?` and `law-top-identity?` now carry the single
+  constraint. **Breaking for downstream instances:** a `Monoid`,
+  `BoundedJoin` or `BoundedMeet` instance now needs the superclass instance
+  for the same type somewhere in the program, or the build stops with
+  TUR-E0393. Every instance the stdlib ships already has one. Existing
+  two-constraint signatures such as `[^Semigroup A ^Monoid A]` still compile.
+  `JoinSemilattice` is deliberately not declared over `Semigroup`: the two
+  share a shape but not a meaning, and a join is not spelled `combine`. The
+  auto-loaded classes (`Eq`, `Ord`, `Functor`, `Monad` and the rest) stay
+  flat for now. SC8a of typeclass-superclasses-plan.
+
 ## [0.54.0] -- 2026-09-25
 
 ### Changed

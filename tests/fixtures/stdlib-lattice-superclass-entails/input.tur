@@ -1,0 +1,57 @@
+;; typeclass-superclasses-plan SC8a: the stdlib lattice classes carry
+;; superclass preambles.
+;;
+;;   Monoid      over Semigroup
+;;   BoundedJoin over JoinSemilattice
+;;   BoundedMeet over MeetSemilattice
+;;
+;; Each generic below writes ONE constraint and calls a method of the
+;; superclass it entails.  Each is called at two or more instances on purpose:
+;; a superclass call that silently bound to the first-registered instance would
+;; print the same answer for Sum and Product, so a single instantiation could
+;; not tell the right dispatch from the wrong one.
+(load "stdlib/typeclass-lattice.tur")
+
+;; Receiver-directed superclass call under a subclass constraint.
+(defn twice [^Monoid A] [x : A] : A
+  (combine x x))
+
+;; Return-directed subclass method and receiver-directed superclass method in
+;; one body.
+(defn with-unit [^Monoid A] [x : A] : A
+  (let [u : A (mempty)]
+    (combine u x)))
+
+(defn join-bottom [^BoundedJoin A] [x : A] : A
+  (let [z : A (bottom)]
+    (join z x)))
+
+(defn meet-top [^BoundedMeet A] [x : A] : A
+  (let [t : A (top)]
+    (meet t x)))
+
+;; A user type joins the hierarchy the way the stdlib's own newtypes do: one
+;; Semigroup instance, one Monoid instance.
+(defopaque Len :int)
+(definstance Eq [Len] (eq? [x y] (= (:: x int) (:: y int))))
+(definstance Semigroup [Len] (combine [x y] (:: (+ (:: x int) (:: y int)) Len)))
+(definstance Monoid [Len] (mempty [] (:: 0 Len)))
+
+(defn main [] : int
+  (println (:: (twice (:: 7 Sum)) int))                      ; 14
+  (println (:: (twice (:: 7 Product)) int))                  ; 49
+  (println (:: (twice (:: 7 MaxI)) int))                     ; 7
+  (println (:: (twice (:: 5 Len)) int))                      ; 10
+  (println (:: (with-unit (:: 3 Sum)) int))                  ; 3
+  (println (:: (with-unit (:: 3 Product)) int))              ; 3
+  (println (if (:: (with-unit (:: true All)) bool) 1 0))     ; 1
+  (println (:: (mconcat (vec-of (:: 1 Sum) (:: 2 Sum) (:: 3 Sum))) int))           ; 6
+  (println (:: (mconcat (vec-of (:: 2 Product) (:: 3 Product) (:: 4 Product))) int)) ; 24
+  (println (:: (join-bottom (:: 4 MaxI)) int))               ; 4
+  (println (if (:: (join-bottom (:: true Any)) bool) 1 0))   ; 1
+  (println (:: (meet-top (:: 4 MinI)) int))                  ; 4
+  (println (if (:: (meet-top (:: false All)) bool) 1 0))     ; 0
+  (println (if (law-identity? (:: 5 Product)) 1 0))          ; 1
+  (println (if (law-bottom-identity? (:: 3 MaxI)) 1 0))      ; 1
+  (println (if (law-top-identity? (:: 3 MinI)) 1 0))         ; 1
+  0)
