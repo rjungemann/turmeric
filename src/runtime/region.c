@@ -355,6 +355,12 @@ TUR_RT_API void tur_region_free(void *p) {
 
 TUR_RT_API bool tur_region_active(void) { return g_live_n > 0; }
 
+TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud),
+                                     void *ud) {
+    for (int i = 0; i < g_live_n; i++) arena_each_used(g_live[i], cb, ud);
+    for (int i = 0; i < g_retired_n; i++) arena_each_used(g_retired[i], cb, ud);
+}
+
 TUR_RT_API int tur_region_depth(void) { return g_live_n; }
 
 TUR_RT_API void tur_region_shutdown(void) {

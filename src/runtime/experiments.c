@@ -385,6 +385,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.70.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_r7rs },
+    { "r7rs-gc",
+      "a conservative mark-sweep collector for compiled `#lang r7rs` programs",
+      "docs/upcoming/r7rs-gc-plan.md",
+      "0.52.0",                  /* introduced */
+      "0.60.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_r7rs_gc },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

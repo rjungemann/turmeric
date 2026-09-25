@@ -237,6 +237,16 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_sanitize PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
+# The r7rs-gc experiment (docs/upcoming/r7rs-gc-plan.md): every Scheme fixture
+# built with --enable=r7rs-gc and run in torture mode (a collection every 31
+# allocations), and a churn loop that must fit a 256 MiB address space with
+# the collector and not without it.
+add_test(
+  NAME tur_r7rs_gc
+  COMMAND bash tests/run-r7rs-gc.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_gc PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
 add_test(
   NAME tur_cli_tests
   COMMAND bash tests/run-cli.sh

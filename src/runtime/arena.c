@@ -261,6 +261,13 @@ TUR_RT_API void arena_reset(Arena *a) {
     a->total_allocs = 0;
 }
 
+TUR_RT_API void arena_each_used(const Arena *a,
+                                void (*cb)(const void *p, size_t n, void *ud),
+                                void *ud) {
+    for (const ArenaSlab *s = a->head; s; s = s->next)
+        if (s->used) cb(s->data, s->used, ud);
+}
+
 TUR_RT_API bool arena_owns(const Arena *a, const void *p) {
     if (!p) return false;
     const unsigned char *cp = (const unsigned char *)p;

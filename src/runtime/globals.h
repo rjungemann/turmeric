@@ -389,6 +389,7 @@ extern bool g_opt_class_superclasses;
  * LangTraits.dynamic (g_opt_dynamic_any) and its reader rides
  * SourceFile.reader_type == READER_R7RS, both per-file. */
 extern bool g_opt_r7rs;
+extern bool g_opt_r7rs_gc;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value
  * instead of riding the int64 heap-pointer carrier.  The parametric sibling of

@@ -291,6 +291,11 @@ def settled_checks(out):
     return got
 
 
+# --enable NAME: experiments to turn on for every run (r7rs-gc's validation
+# runs the whole suite with its collector).
+ENABLES = []
+
+
 def run_program(tur, backend, text, timeout):
     with tempfile.NamedTemporaryFile("w", suffix=".tur", prefix="conformance-",
                                      delete=False, encoding="utf-8") as f:
@@ -298,7 +303,8 @@ def run_program(tur, backend, text, timeout):
         path = f.name
     env = dict(os.environ)
     env.setdefault("ASAN_OPTIONS", "detect_leaks=0")
-    cmd = [tur, "--interpret", path] if backend == "interp" else [tur, "run", path]
+    en = ["--enable=" + e for e in ENABLES]
+    cmd = [tur] + en + (["--interpret", path] if backend == "interp" else ["run", path])
     try:
         p = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env,
                            cwd=ROOT)
@@ -451,7 +457,10 @@ def main():
     ap.add_argument("--timeout", type=int, default=240, help="seconds per program run")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--list-failures", action="store_true")
+    ap.add_argument("--enable", action="append", default=[],
+                    help="an experiment to turn on for every run (repeatable)")
     args = ap.parse_args()
+    ENABLES.extend(args.enable)
 
     with open(SUITE, encoding="utf-8") as f:
         text = f.read()

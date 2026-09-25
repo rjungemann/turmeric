@@ -359,6 +359,10 @@ library's string result to `cstr` gets the same copy.
   exits, so a long-running program's memory only grows (a loop that builds a
   dead four-element list reaches 429 MB after a million iterations). Scratch
   memory the runtime makes for one call is freed; your data is not.
+  An experimental collector fixes this for compiled programs on Linux:
+  build with `tur --enable=r7rs-gc build prog.scm` and the same loop runs in
+  10 MB. It is single-threaded and does not see Scheme values you store in
+  Turmeric maps or `rc<T>` cells; see docs/upcoming/r7rs-gc-plan.md.
 - **Very long loops need the default optimization level.** A prelude loop
   that calls one of your procedures (`for-each`, `map`, `member`, a
   `delay-force` stream) runs in constant stack at the default `-O2`, and can

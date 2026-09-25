@@ -51,6 +51,14 @@ stops freeing that runtime memory.
 `guard`, `raise` and the eval bridge use the one-shot escape
 `r7rs-call/ec__`, which copies nothing and pins nothing.
 
+## The experiment (`--enable=r7rs-gc`)
+
+Under the r7rs-gc experiment ([docs/upcoming/r7rs-gc-plan.md](../upcoming/r7rs-gc-plan.md))
+the compiled image is a collected object: it is scanned while a continuation
+refers to it and reclaimed after, and the pinned DK frames are reclaimed the
+same way. The repro above runs in 10 MB (from 527 MB with today's build,
+0.13 s from 0.40 s). The interpreter is unchanged, so this report stays open.
+
 ## Fix directions
 
 - **Cheap: don't copy for an escape.** Take the image lazily, or keep the

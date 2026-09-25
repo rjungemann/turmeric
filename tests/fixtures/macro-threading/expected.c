@@ -544,6 +544,13 @@ TUR_RT_API int  tur_region_depth(void);
  * blanket refusal shows up as a savings regression rather than as nothing. */
 TUR_RT_API void tur_region_shutdown(void);
 
+/* Call `cb` on the used memory of every live and retired generation on this
+ * thread (a pooled, rewound one is dead memory and is skipped).  The r7rs-gc
+ * experiment's collector reads these as roots: a node built in a bracket can
+ * point at an object on the collected heap. */
+TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud),
+                                     void *ud);
+
 #endif
 /* ---- end src/runtime/region.h ---- */
 #define TUR_REGION_NOTE(w) tur_region_note_escape((const void *)(intptr_t)(w))
@@ -702,6 +709,13 @@ TUR_RT_API void  arena_reset(Arena *a);
  * or lives elsewhere -- permanent pool, eval arenas, sym arena, static data --
  * and must be left untouched.  O(slabs). */
 TUR_RT_API bool  arena_owns(const Arena *a, const void *p);
+
+/* Call `cb` on the used bytes of every slab -- the memory a conservative
+ * collector must read as roots (the r7rs-gc experiment scans region memory
+ * this way, since an object built in a region can point into its heap). */
+TUR_RT_API void  arena_each_used(const Arena *a,
+                                 void (*cb)(const void *p, size_t n, void *ud),
+                                 void *ud);
 
 #endif
 /* ---- end src/runtime/arena.h ---- */
@@ -967,6 +981,13 @@ TUR_RT_API void arena_reset(Arena *a) {
     }
     a->total_bytes = 0;
     a->total_allocs = 0;
+}
+
+TUR_RT_API void arena_each_used(const Arena *a,
+                                void (*cb)(const void *p, size_t n, void *ud),
+                                void *ud) {
+    for (const ArenaSlab *s = a->head; s; s = s->next)
+        if (s->used) cb(s->data, s->used, ud);
 }
 
 TUR_RT_API bool arena_owns(const Arena *a, const void *p) {
@@ -1335,6 +1356,12 @@ TUR_RT_API void tur_region_free(void *p) {
 }
 
 TUR_RT_API bool tur_region_active(void) { return g_live_n > 0; }
+
+TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud),
+                                     void *ud) {
+    for (int i = 0; i < g_live_n; i++) arena_each_used(g_live[i], cb, ud);
+    for (int i = 0; i < g_retired_n; i++) arena_each_used(g_retired[i], cb, ud);
+}
 
 TUR_RT_API int tur_region_depth(void) { return g_live_n; }
 

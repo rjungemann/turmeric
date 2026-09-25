@@ -1818,15 +1818,16 @@
       const volatile uintptr_t *s = (const volatile uintptr_t *)src;
       for (size_t i = 0; i < n / sizeof(uintptr_t); i++) d[i] = s[i];
   }
-  static int r7k_snapshot(r7k_cont *c, unsigned char *mark) {
+  // The extent of the image: from just below the capture to the stack base.
+  // The body allocates and fills it, AFTER the preamble's allocator macros,
+  // so under the r7rs-gc experiment the image is on the collected heap and
+  // scanned -- a continuation keeps everything its stack points at alive.
+  static int r7k_measure(r7k_cont *c, unsigned char *mark) {
       unsigned char *base = r7k_stack_base();
       unsigned char *lo = (unsigned char *)(((uintptr_t)mark - 64) & ~(uintptr_t)15);
       if (!base || base <= lo) return 0;
       c->lo = lo;
       c->n = (size_t)(base - lo) & ~(sizeof(uintptr_t) - 1);
-      c->img = (unsigned char *)malloc(c->n);
-      if (!c->img) return 0;
-      r7k_copy(c->img, lo, c->n);
       return 1;
   }
   __attribute__((noinline, noreturn)) R7K_NOASAN
@@ -1869,7 +1870,10 @@
     for (int i = 0; i < rc->esc_n; i++) tur_escape_live_push((tur_escape_cont *)rc->esc[i]);
     return (void *)((uintptr_t)rc | 1);
   }
-  if (!r7k_snapshot(c, (unsigned char *)mark)) return NULL;
+  if (!r7k_measure(c, (unsigned char *)mark)) return NULL;
+  c->img = (unsigned char *)malloc(c->n);
+  if (!c->img) return NULL;
+  r7k_copy(c->img, c->lo, c->n);
   /* T8, the region store-hook rule: the image is a store of every word on the
    * stack into memory that outlives any bracket around this call/cc.  A word
    * that points into a live region generation marks it escaped, so a bracket

@@ -442,6 +442,7 @@ add_custom_command(
     DEPENDS
         ${CMAKE_SOURCE_DIR}/cmake/embed_region_runtime.cmake
         runtime/region.h runtime/region.c runtime/arena.h runtime/arena.c
+        runtime/r7gc.c
     COMMENT "Embedding src/runtime/{arena,region}.{h,c} for the emitter"
     VERBATIM
 )

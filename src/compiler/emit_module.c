@@ -9750,6 +9750,7 @@ static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
  * path to find them.  System includes stay -- they are what the bodies were
  * written against, and repeating a system header is harmless. */
 #include "runtime/region_rt_embed.h"
+#include "runtime/experiments.h"   /* experiment_warn_if_used: r7rs-gc */
 
 static void emit_embedded_runtime_source(Buf *out, const char *what,
                                          const unsigned char *src) {
@@ -10267,6 +10268,49 @@ static void emit_rcgc_global(Buf *out, bool shared,
  *
  * The S2 split (emit_rt_split_source) forces the archive posture, so the
  * generated runtime TU never carries these -- the host links region.c. */
+/* ---------------------------------------------------------------------------
+ * The r7rs-gc experiment (docs/upcoming/r7rs-gc-plan.md).
+ *
+ * A compiled `#lang r7rs` program's own allocator becomes the conservative
+ * collector in src/runtime/r7gc.c: the source is pasted into the unit ahead of
+ * the preamble proper, and every later `malloc`/`calloc`/`realloc`/`free`/
+ * `strdup`/`strndup` -- plus the region allocator's malloc fallback and its
+ * free -- is redirected to it by object-like macros (so `free` passed as a
+ * function pointer is the collector's too).  TUR_THREAD_LOCAL is plain static
+ * storage while it is on: the collector scans the data segment, not TLS, and
+ * is single-threaded.
+ *
+ * Only for a single-unit build: a --shared build would give each unit its own
+ * heap, and one unit's free() of another's object would reach libc. */
+static bool r7rs_gc_active(bool shared) {
+    return g_opt_r7rs_gc && g_opt_r7rs && !shared;
+}
+
+/* The redirecting macros, defined (on) or withdrawn (off) -- withdrawn around
+ * runtime sources pasted verbatim, whose own allocations are not the
+ * program's and must not move onto the collected heap. */
+static void emit_r7rs_gc_macros(Buf *out, bool on) {
+    static const char *const names[][2] = {
+        { "malloc", "tur_gc_malloc" },   { "calloc", "tur_gc_calloc" },
+        { "realloc", "tur_gc_realloc" }, { "free", "tur_gc_free" },
+        { "strdup", "tur_gc_strdup" },   { "strndup", "tur_gc_strndup" },
+        { "tur_region_alloc_or_malloc", "tur_gc_region_alloc" },
+        { "tur_region_free", "tur_gc_region_free" },
+    };
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+        if (on) buf_printf(out, "#define %s %s\n", names[i][0], names[i][1]);
+        else    buf_printf(out, "#undef %s\n", names[i][0]);
+    }
+}
+
+static void emit_r7rs_gc_prologue(Buf *out) {
+    experiment_warn_if_used("r7rs-gc");
+    buf_puts(out, "/* r7rs-gc: this unit allocates from the collector below "
+                  "(docs/upcoming/r7rs-gc-plan.md). */\n");
+    emit_embedded_runtime_source(out, "r7gc.c", tur_rt_embed_r7gc_c);
+    emit_r7rs_gc_macros(out, true);
+}
+
 static void emit_region_runtime_bodies(Buf *out, bool shared) {
     if (!regions_enabled()) return;
     if (rt_global_from_archive()) {
@@ -10274,9 +10318,12 @@ static void emit_region_runtime_bodies(Buf *out, bool shared) {
         return;
     }
     if (shared) buf_puts(out, "#ifdef TUR_RT_OWNER\n");
+    /* r7rs-gc: the region runtime's own slabs and tables are libc's. */
+    if (r7rs_gc_active(shared)) emit_r7rs_gc_macros(out, false);
     emit_embedded_runtime_source(out, "arena.h",  tur_rt_embed_arena_h);
     emit_embedded_runtime_source(out, "arena.c",  tur_rt_embed_arena_c);
     emit_embedded_runtime_source(out, "region.c", tur_rt_embed_region_c);
+    if (r7rs_gc_active(shared)) emit_r7rs_gc_macros(out, true);
     if (shared) buf_puts(out, "#endif /* TUR_RT_OWNER */\n");
 }
 
@@ -11594,11 +11641,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * that across every supported cc buys nothing -- this way the cc path keeps
      * the exact spelling it has always used, and only a C11-or-later front end
      * (c2mir reports 201112) sees the standard one. */
-    buf_puts(out, "#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L\n");
-    buf_puts(out, "#  define TUR_THREAD_LOCAL _Thread_local\n");
-    buf_puts(out, "#else\n");
-    buf_puts(out, "#  define TUR_THREAD_LOCAL __thread\n");
-    buf_puts(out, "#endif\n");
+    if (r7rs_gc_active(shared)) {
+        /* r7rs-gc: per-thread runtime state becomes plain statics, which the
+         * collector scans as part of the data segment. */
+        buf_puts(out, "#define TUR_THREAD_LOCAL\n");
+        emit_r7rs_gc_prologue(out);
+    } else {
+        buf_puts(out, "#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L\n");
+        buf_puts(out, "#  define TUR_THREAD_LOCAL _Thread_local\n");
+        buf_puts(out, "#else\n");
+        buf_puts(out, "#  define TUR_THREAD_LOCAL __thread\n");
+        buf_puts(out, "#endif\n");
+    }
     /* 6(a) (jit-engine-plan section 4): atomics, spelled through a macro layer.
      *
      * The preamble needs atomics in 18 places -- STM's version clock and each

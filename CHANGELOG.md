@@ -6,6 +6,22 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: an experimental collector (`--enable=r7rs-gc`).** A
+  conservative mark-sweep collector (`src/runtime/r7gc.c`) for compiled
+  `#lang r7rs` programs on Linux/glibc. Under the flag the emitter pastes it
+  into the program and routes that translation unit's `malloc` family and
+  the region allocator's fallback through it; roots are the stack, the data
+  segment and live region generations. A loop building a million dead lists
+  drops from 429 MB to 10 MB, 100,000 escaping `call/cc`s from 527 MB to
+  10 MB, and both run faster; programs with a large live set pay 1.2x-1.8x.
+  Every Scheme fixture and chibi's suite pass with it, including with a
+  collection on every allocation (`TUR_GC_TORTURE=1`). New
+  `tests/run-r7rs-gc.sh` (ctest `tur_r7rs_gc`) and fixture `r7rs-gc-basic`.
+  Limits: single-threaded, single translation unit, the interpreter is
+  unchanged, and Scheme values held in Turmeric maps or `rc<T>` cells are
+  not seen. Plan: docs/upcoming/r7rs-gc-plan.md. A `call/cc` image is now
+  malloc'd in the capture body rather than hoisted C (both builds).
+
 - **`#lang r7rs`: memory audit (r7rs-lang-plan T8).** Every Scheme fixture
   was run under ASan, UBSan and LeakSanitizer on both back ends, and the
   prelude was stressed with million-element inputs.

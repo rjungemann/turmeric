@@ -1,0 +1,57 @@
+#lang r7rs
+;; The r7rs-gc experiment (docs/upcoming/r7rs-gc-plan.md), built with
+;; --enable=r7rs-gc by this fixture's `flags`: a Scheme program whose memory is
+;; reclaimed.  Nothing here prints what the collector did -- the answers must
+;; simply be right while it runs; tests/run-r7rs-gc.sh adds torture mode and
+;; the memory bound.  Under `tur --interpret` the flag changes nothing.
+(import (scheme base) (scheme write))
+(define (show x) (write x) (newline))
+
+;; Garbage: 200,000 short-lived lists, and a long-lived one that must survive
+;; every collection they cause.
+(define keep (list 'a "b" #\c 1.5 (vector 1 2 3)))
+(define (churn i acc)
+  (if (= i 0) acc
+      (churn (- i 1) (+ acc (length (list i i i))))))
+(show (churn 200000 0))
+(show keep)
+
+;; Strings and vectors, built and dropped.
+(define (strings i)
+  (if (= i 0) 'ok
+      (begin (string-append "x" (number->string i) (make-string 40 #\y))
+             (strings (- i 1)))))
+(show (strings 20000))
+(define big (make-vector 20000 0))
+(let loop ((i 0))
+  (when (< i 20000) (vector-set! big i (list i)) (loop (+ i 1))))
+(show (car (vector-ref big 19999)))
+
+;; A continuation keeps what its stack points at.
+(define (tree-walk t yield)
+  (if (pair? t) (begin (tree-walk (car t) yield) (tree-walk (cdr t) yield))
+      (if (null? t) #f (yield t))))
+(define (generator t)
+  (define return #f)
+  (define resume #f)
+  (lambda ()
+    (call/cc
+      (lambda (r)
+        (set! return r)
+        (if resume
+            (resume 'go)
+            (begin (tree-walk t (lambda (x) (call/cc (lambda (k) (set! resume k) (return x)))))
+                   (return 'done)))))))
+(define g (generator '((1 2) (3 (4 5)) 6)))
+(let loop ((acc '()))
+  (let ((x (g)))
+    (if (eq? x 'done) (show (reverse acc))
+        (begin (churn 1000 0) (loop (cons x acc))))))
+
+;; Cycles and equal?.
+(define c1 (list 1 2 3))
+(set-cdr! (cddr c1) c1)
+(define c2 (list 1 2 3))
+(set-cdr! (cddr c2) c2)
+(show (equal? c1 c2))
+(show keep)

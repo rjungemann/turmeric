@@ -58,13 +58,26 @@ individually").
   (ctest `tur_r7rs_sanitize`) runs every Scheme fixture under ASan and UBSan
   with leak detection off, because of this report.
 
+## The experiment (`--enable=r7rs-gc`)
+
+A conservative mark-sweep collector now exists as an experiment,
+[docs/upcoming/r7rs-gc-plan.md](../upcoming/r7rs-gc-plan.md): built with
+`--enable=r7rs-gc`, a compiled `#lang r7rs` program allocates everything
+through it, and the repro above peaks at 10 MB in 0.23 s (from 429 MB,
+0.39 s). `tests/run-r7rs-gc.sh` (ctest `tur_r7rs_gc`) runs every Scheme
+fixture under it with frequent collections, and checks that the repro fits
+in 256 MiB with it and not without. This report stays open until the
+collector graduates: it is Linux/glibc only, single-threaded, compiled only,
+and does not scan memory the runtime archive allocates (the plan's Limits).
+
 ## Fix directions
 
 - Allocate the Scheme types through the RC runtime (`rc<T>` layout,
   `RCK_*` walkers per struct) and turn the Bacon-Rajan cycle collector on for
   `#lang r7rs` programs. The dynamic substrate's `any` words would need
   retain/release at every copy, which is the cost.
-- Or a conservative tracing collector for the Scheme heap only (Boehm-style),
+- Or a conservative tracing collector for the Scheme heap only (Boehm-style) --
+  the direction the experiment above took --
   with the prelude's inline C allocating through it. The T5 continuation
   images and the DK frames are then roots, which also retires
   [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md).
