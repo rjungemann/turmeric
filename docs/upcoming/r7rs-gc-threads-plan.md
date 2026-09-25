@@ -1,12 +1,62 @@
 # Threads under the r7rs-gc collector: a collector lock first, a Boehm-style collector after
 
-Status: **proposed** (2026-09-25). Follows
+Status: **stage A shipped** (2026-09-25); stages B-D proposed. Follows
 [docs/archive/r7rs-gc-plan.md](../archive/r7rs-gc-plan.md), whose collector
 graduated the same day with one limit left standing: a compiled `#lang r7rs`
-program that starts a thread stops at the start site (exit 70) and is told to
-build with `TUR_R7RS_GC=0`. This plan removes that limit in stages, each of
-which ships on its own, and ends at a collector that runs threads in
+program that starts a thread stopped at the start site (exit 70) and was
+told to build with `TUR_R7RS_GC=0`. This plan removes that limit in stages,
+each of which ships on its own, and ends at a collector that runs threads in
 parallel the way Boehm's does.
+
+### Stage A as built
+
+The implementation is section 2 with these differences, all in
+src/runtime/r7gc.c unless said otherwise:
+
+- **Release points are macros, not per-site edits.** Every blocking libc
+  call the unit can spell is a function-like macro at the end of r7gc.c
+  that parks around the call as written (`TUR_GC_BLOCKING`, a statement
+  expression), so the stdlib, the emitted runtime and a program's own
+  inline C are covered with no change to their text, and a later `#include`
+  of the name's header is a guarded no-op rather than a mangled prototype
+  (r7gc.c includes each such header first, and the emitter pastes it after
+  the preamble's own system includes, whose order macOS's `ucontext_t`
+  depends on). The set: `pthread_join`, `pthread_exit`,
+  `pthread_cond_wait`, `pthread_cond_timedwait`, `pthread_mutex_lock`,
+  `nanosleep`, `usleep`, `poll`, `select`, `accept`, `connect`, `recv`,
+  `recvfrom`, `read`, `waitpid`, `sem_wait`, `epoll_wait`, `kevent`. The
+  gate's `threads-lint` case greps the stdlib and the emitter for a broad
+  list of blocking calls and fails on one with no macro.
+- **A contended mutex is a release point** (not in 2.3): a thread holding
+  the world and blocking on a mutex a parked thread holds would deadlock,
+  so `pthread_mutex_lock` tries first and parks only when the try fails.
+  `pthread_exit` finishes the thread's record (the emitted
+  `tur_thread_do_cancel` leaves a cancelled thread that way).
+- **Fibers**: `tur_fiber_block_resume` brackets its `swapcontext` with
+  `TUR_GC_FIBER_ENTER`/`LEAVE`, so a thread collecting or parked on a
+  fiber's (heap-allocated) stack scans the rest of that object and its own
+  stack from where it left it. Without this a collection on a fiber stack
+  read from the fiber's heap address up to the OS stack base.
+- **Regions**: `tur_region_each_used_all` (region.c) walks every thread's
+  generations through the ownership registry; the per-thread walker only
+  saw the collecting thread's.
+- **A thread the unit did not start** (a library's own, calling back in)
+  has no record and stops with the reason at its first allocation, as does
+  a registered thread allocating while parked (an inline-C callback out of
+  a blocking call that did not unpark). Loud, not silent.
+- **The warning is TUR-W0072** (W0070/W0071 were taken by the JIT);
+  `TUR_GC_QUIET=1` silences it.
+- **The threads-tls gate case** reads the per-thread cancellation state
+  (`tur_current_thread_state`, set by the runtime's thread trampoline)
+  rather than an effect handler chain: the DK driver landing
+  (`g_dk_driver`) is a plain static, so effects on two threads are not a
+  supported Turmeric configuration today, collector or not.
+- **A read through a `FILE`** (`fgetc`, `fgets`, `fread`) holds the world:
+  stdio is not wrapped (`getc` is a macro in some libcs, and a char-at-a-
+  time port read is the hot path). Documented in the guide.
+- Fixtures: `tests/fixtures/r7rs-threads-{share,roots,tls}` run in the
+  ordinary suite and, under a collection on every allocation, as the
+  gate's section 3.
 
 ## 0. The shape of the plan
 

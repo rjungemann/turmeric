@@ -361,6 +361,18 @@ TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *u
     for (int i = 0; i < g_retired_n; i++) arena_each_used(g_retired[i], cb, ud);
 }
 
+/* Every thread's live and retired generations, through the ownership
+ * registry.  For the r7rs-gc collector once it runs threads (stage A of
+ * docs/upcoming/r7rs-gc-threads-plan.md): every other thread is parked while
+ * it collects, so the arenas hold still; the lock is against a thread that
+ * is exiting and unregistering its arenas meanwhile. */
+TUR_RT_API void tur_region_each_used_all(void (*cb)(const void *p, size_t n, void *ud),
+                                         void *ud) {
+    reg_lock();
+    for (int i = 0; i < g_reg_n; i++) arena_each_used(g_reg[i], cb, ud);
+    reg_unlock();
+}
+
 TUR_RT_API int tur_region_depth(void) { return g_live_n; }
 
 TUR_RT_API void tur_region_shutdown(void) {

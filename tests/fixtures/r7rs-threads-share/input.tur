@@ -1,0 +1,21 @@
+#lang r7rs
+;; r7rs-gc threads, stage A (docs/upcoming/r7rs-gc-threads-plan.md): a list
+;; built on this thread crosses to a Turmeric worker thread, which walks it
+;; with a Scheme procedure (allocating on that thread) and hands the sum
+;; back; both directions, with garbage churned in between.  The gate
+;; (tests/run-r7rs-gc.sh) runs this with a collection on every allocation.
+(import (scheme base) (scheme write) (work) (turmeric relay))
+(define (iota* n) (let lp ((i n) (acc '())) (if (= i 0) acc (lp (- i 1) (cons i acc)))))
+(define (churn i) (if (= i 0) 'done (begin (list i i i i) (churn (- i 1)))))
+(define r (relay-start))
+(define (round-trip n)
+  (put! (iota* n))
+  (relay-signal-in r)
+  (relay-go r)
+  (churn 2000)
+  (relay-wait-out r)
+  (get!))
+(display (round-trip 2000)) (newline)
+(display (round-trip 10)) (newline)
+(display (round-trip 0)) (newline)
+(relay-stop r)

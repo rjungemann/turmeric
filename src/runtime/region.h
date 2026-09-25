@@ -175,4 +175,9 @@ TUR_RT_API void tur_region_shutdown(void);
 TUR_RT_API void tur_region_each_used(void (*cb)(const void *p, size_t n, void *ud),
                                      void *ud);
 
+/* The same over every thread's generations (the ownership registry), for a
+ * collector that has parked the other threads. */
+TUR_RT_API void tur_region_each_used_all(void (*cb)(const void *p, size_t n, void *ud),
+                                         void *ud);
+
 #endif

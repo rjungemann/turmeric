@@ -1,0 +1,9 @@
+#lang r7rs
+;; r7rs-gc threads, stage A (docs/upcoming/r7rs-gc-threads-plan.md): the
+;; emitted runtime's per-thread state is thread-local under the collector
+;; (each thread registers its instances as roots), so two threads started
+;; the way stdlib/thread starts them each see their own cancellation flag:
+;; 10 means only the cancelled one saw it.  With that state shared, as it
+;; was while the collector refused threads, both read the last thread's.
+(import (scheme base) (scheme write) (turmeric tlsmod))
+(display (tls-run)) (newline)

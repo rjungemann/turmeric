@@ -6,6 +6,22 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`#lang r7rs`: threads run under the collector** (stage A of
+  docs/upcoming/r7rs-gc-threads-plan.md). A compiled Scheme program that
+  starts a thread -- through `stdlib/thread`, a session, a task group, the
+  multi-threaded scheduler, or a Turmeric module's own `pthread_create` --
+  no longer stops with exit 70: the r7rs-gc collector runs it behind a
+  collector lock, one thread of the unit's code at a time (a thread gives
+  the turn up at every blocking call and takes it back after), with every
+  thread's stack, registers and thread-local runtime state as roots. The
+  emitted runtime's per-thread state is thread-local again under the
+  collector, each thread registering its instances (`tur_rt_tls_roots`);
+  a collection on a fiber's stack scans the right memory; region
+  generations of every thread are roots. The first thread start warns
+  once (TUR-W0072) that threads run one at a time and names
+  `TUR_R7RS_GC=0` for parallelism. Gate: `tests/run-r7rs-gc.sh` section 3
+  (threads-run/share/roots/tls/lint) and `tests/fixtures/r7rs-threads-*`.
+
 - **`#lang r7rs`: `.scm` files.** A `.scm` file is Scheme without the
   `#lang r7rs` line (r7rs-lang-plan open question 4, decided): the
   extension selects the Scheme reader and the Scheme language at every site
