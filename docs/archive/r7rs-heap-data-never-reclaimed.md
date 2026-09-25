@@ -1,5 +1,14 @@
 # `#lang r7rs`: a Scheme program never frees its data
 
+**RESOLVED 2026-09-25 (compiled back end).** The r7rs-gc collector graduated
+([r7rs-gc-plan](r7rs-gc-plan.md)): it is the allocator of every compiled
+single-unit `#lang r7rs` program on Linux and macOS, so what this report
+describes is garbage the next collection reclaims. `TUR_R7RS_GC=0` or
+`--no-r7rs-gc` builds without it (a program that starts threads). The
+interpreter keeps its values for the life of the process by design
+(gc-guide). Original report follows.
+
+
 **Severity:** medium. By design today, and the largest memory finding of
 r7rs-lang-plan T8's audit: every pair, vector, string, bytevector, record,
 promise, parameter, box, bignum, ratio, complex number and procedure a
@@ -61,7 +70,7 @@ individually").
 ## The experiment (`--enable=r7rs-gc`)
 
 A conservative mark-sweep collector now exists as an experiment,
-[docs/upcoming/r7rs-gc-plan.md](../upcoming/r7rs-gc-plan.md): built with
+[docs/archive/r7rs-gc-plan.md](r7rs-gc-plan.md): built with
 `--enable=r7rs-gc`, a compiled `#lang r7rs` program allocates everything
 through it, and the repro above peaks at 10 MB in 0.23 s (from 429 MB,
 0.39 s). `tests/run-r7rs-gc.sh` (ctest `tur_r7rs_gc`) runs every Scheme
@@ -84,7 +93,7 @@ kept in a Turmeric map or `rc<T>` cell is seen.
   the direction the experiment above took --
   with the prelude's inline C allocating through it. The T5 continuation
   images and the DK frames are then roots, which also retires
-  [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md).
+  [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md).
 - Either way the fixture gate can then check leaks again: opt the `r7rs-*`
   fixtures into `tests/run-leak-check.sh` (`requires.leak-check`).
 
@@ -92,7 +101,7 @@ kept in a Turmeric map or `rc<T>` cell is seen.
 
 `docs/guides/r7rs-guide.md` ("Where it differs from R7RS") carries one bullet,
 beginning "**Data is never freed.**", for this report and three others: the
-`call/cc` clause is [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md),
+`call/cc` clause is [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md),
 the caught-`raise` clause is
 [r7rs-caught-raise-leaks-runtime-records](r7rs-caught-raise-leaks-runtime-records.md),
 and "on all but a few prelude paths" is

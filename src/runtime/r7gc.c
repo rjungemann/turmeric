@@ -1,5 +1,5 @@
 /* r7gc.c -- the r7rs-gc experiment: a conservative mark-sweep collector for a
- * compiled `#lang r7rs` program (docs/upcoming/r7rs-gc-plan.md).
+ * compiled `#lang r7rs` program (docs/archive/r7rs-gc-plan.md).
  *
  * Why it exists: a Scheme value is a `:heap` box, and the memory model never
  * frees one (docs/guides/gc-guide.md), so a Scheme program's memory only grows
@@ -589,7 +589,7 @@ extern void tur_rt_set_allocator(const tur_gc_rt_allocator *a) __attribute__((we
  * and reads the runtime's per-thread state as plain statics, so a second
  * thread would allocate from an unlocked heap and hold roots nowhere the
  * collector looks.  Rather than a silent use-after-free, a program that
- * starts one under the flag stops here with the reason.  Every start site in
+ * starts one under the collector stops here with the reason.  Every start site in
  * the unit -- the stdlib's thread/session/task-group wrappers, the emitted
  * multi-threaded scheduler -- spells `pthread_create`, which the macro below
  * routes here; <pthread.h> is already included above, so the macro never
@@ -598,7 +598,8 @@ static int tur_gc_pthread_create(pthread_t *t, const pthread_attr_t *a,
                                  void *(*fn)(void *), void *arg) {
     (void)t; (void)a; (void)fn; (void)arg;
     fputs("tur: r7rs-gc: this program starts a thread, which the collector does not "
-          "support (docs/upcoming/r7rs-gc-plan.md); build it without --enable=r7rs-gc\n",
+          "support (docs/archive/r7rs-gc-plan.md); build it without the collector: "
+          "TUR_R7RS_GC=0, or `tur --no-r7rs-gc build`\n",
           stderr);
     exit(70);   /* EX_SOFTWARE */
 }

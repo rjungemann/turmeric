@@ -1,6 +1,6 @@
 #lang r7rs
-;; The r7rs-gc experiment (docs/upcoming/r7rs-gc-plan.md), built with
-;; --enable=r7rs-gc by this fixture's `flags`: a Scheme program whose memory is
+;; The r7rs-gc collector (docs/archive/r7rs-gc-plan.md), on by default since
+;; it graduated (this fixture carried --enable=r7rs-gc in a `flags` file before): a Scheme program whose memory is
 ;; reclaimed.  Nothing here prints what the collector did -- the answers must
 ;; simply be right while it runs; tests/run-r7rs-gc.sh adds torture mode and
 ;; the memory bound.  Under `tur --interpret` the flag changes nothing.

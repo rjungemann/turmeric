@@ -1,6 +1,7 @@
 #lang r7rs
-;; The r7rs-gc experiment (docs/upcoming/r7rs-gc-plan.md), built with
-;; --enable=r7rs-gc by this fixture's `flags`: Scheme values kept in memory
+;; The r7rs-gc collector (docs/archive/r7rs-gc-plan.md), on by default since
+;; it graduated (this fixture carried --enable=r7rs-gc in a `flags` file
+;; before): Scheme values kept in memory
 ;; the RUNTIME ARCHIVE allocates.  A Turmeric persistent map is a HAMT whose
 ;; nodes libturt_runtime.a (or the autolinked hamt.c) allocates -- with libc,
 ;; before the archive's allocator hook (src/runtime/rt_alloc.h) -- so the

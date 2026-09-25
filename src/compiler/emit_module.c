@@ -9773,7 +9773,7 @@ static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
  * path to find them.  System includes stay -- they are what the bodies were
  * written against, and repeating a system header is harmless. */
 #include "runtime/region_rt_embed.h"
-#include "runtime/experiments.h"   /* experiment_warn_if_used: r7rs-gc */
+#include "runtime/experiments.h"   /* experiment_warn_if_used */
 
 static void emit_embedded_runtime_source(Buf *out, const char *what,
                                          const unsigned char *src) {
@@ -10288,7 +10288,9 @@ static void emit_rcgc_global(Buf *out, bool shared,
  * The S2 split (emit_rt_split_source) forces the archive posture, so the
  * generated runtime TU never carries these -- the host links region.c. */
 /* ---------------------------------------------------------------------------
- * The r7rs-gc experiment (docs/upcoming/r7rs-gc-plan.md).
+ * The r7rs-gc collector (docs/archive/r7rs-gc-plan.md; graduated 2026-09-25,
+ * on by default for a single-unit `#lang r7rs` program; TUR_R7RS_GC=0 or
+ * --no-r7rs-gc opts out).
  *
  * A compiled `#lang r7rs` program's own allocator becomes the conservative
  * collector in src/runtime/r7gc.c: the source is pasted into the unit ahead of
@@ -10323,9 +10325,8 @@ static void emit_r7rs_gc_macros(Buf *out, bool on) {
 }
 
 static void emit_r7rs_gc_prologue(Buf *out) {
-    experiment_warn_if_used("r7rs-gc");
     buf_puts(out, "/* r7rs-gc: this unit allocates from the collector below "
-                  "(docs/upcoming/r7rs-gc-plan.md). */\n");
+                  "(docs/archive/r7rs-gc-plan.md). */\n");
     emit_embedded_runtime_source(out, "r7gc.c", tur_rt_embed_r7gc_c);
     emit_r7rs_gc_macros(out, true);
 }

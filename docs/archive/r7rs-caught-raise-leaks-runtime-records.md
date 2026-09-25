@@ -1,5 +1,14 @@
 # `#lang r7rs`: every `raise` caught by `guard` leaks about 1 KB of runtime records
 
+**RESOLVED 2026-09-25 (compiled back end).** The r7rs-gc collector graduated
+([r7rs-gc-plan](r7rs-gc-plan.md)): it is the allocator of every compiled
+single-unit `#lang r7rs` program on Linux and macOS, so what this report
+describes is garbage the next collection reclaims. `TUR_R7RS_GC=0` or
+`--no-r7rs-gc` builds without it (a program that starts threads). The
+interpreter keeps its values for the life of the process by design
+(gc-guide). Original report follows.
+
+
 **Severity:** low-medium. Compiled back end. A program that raises and
 catches in a loop (a parser that reports errors, a retry loop) grows by about
 1 KB per caught raise, most of it runtime bookkeeping rather than Scheme
@@ -51,7 +60,7 @@ frames, the escape records and the packed rest chains do not.
 
 ## The experiment (`--enable=r7rs-gc`)
 
-Under the r7rs-gc experiment ([docs/upcoming/r7rs-gc-plan.md](../upcoming/r7rs-gc-plan.md))
+Under the r7rs-gc experiment ([docs/archive/r7rs-gc-plan.md](r7rs-gc-plan.md))
 every record above is a collected object: the abandoned DK frames, the
 escape and `raise-continuable` records and the packed rest chain are
 garbage once the escape has jumped over them, and the next collection

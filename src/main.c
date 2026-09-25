@@ -9536,6 +9536,7 @@ static int usage(void) {
         "  --cps-path                       emit CPS wrappers for colored functions (CPS3)\n"
         "  --emit-abi-trace                 print the resolved ABI path per call site during emit-c (Phase I)\n"
         "  --no-abi-cache                   disable the persistent cross-module ABI cache (.tur-abi-cache/) (Phase J6)\n"
+        "  --no-r7rs-gc                     build a #lang r7rs program without its collector (TUR_R7RS_GC=0; for a program that starts threads)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
         "  --panic-trace                   print scope chain on panic (Phase R6)\n"
         "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
@@ -10285,6 +10286,23 @@ static bool parse_no_abi_cache(int argc, char **argv) {
         if (strcmp(argv[i], "--no-abi-cache") == 0) return true;
     }
     return false;
+}
+
+/* r7rs-gc (graduated 2026-09-25): the collector is the allocator of every
+ * compiled single-unit `#lang r7rs` program (g_opt_r7rs_gc defaults true).
+ * `TUR_R7RS_GC=0` or `--no-r7rs-gc` builds one without it -- the way out for
+ * a program that starts threads, which the collector refuses at the start
+ * site (docs/archive/r7rs-gc-plan.md).  `TUR_R7RS_GC=1` is the default
+ * spelled out (tests/run-r7rs-gc.sh's "with" arm). */
+static bool parse_no_r7rs_gc(int argc, char **argv) {
+    bool off = false;
+    const char *env = getenv("TUR_R7RS_GC");
+    if (env && env[0] == '0') off = true;
+    else if (env && env[0] == '1') off = false;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--no-r7rs-gc") == 0) off = true;
+    }
+    return off;
 }
 
 /* Phase R5: Handle --panic-abort flag */
@@ -11074,6 +11092,9 @@ static int tur_main_inner(int argc, char **argv) {
     /* J6: --no-abi-cache / TUR_NO_ABI_CACHE disables the persistent
      * cross-module ABI specialization cache (.tur-abi-cache/). */
     g_no_abi_cache = parse_no_abi_cache(argc, argv);
+    /* r7rs-gc: TUR_R7RS_GC=0 / --no-r7rs-gc builds a Scheme program without
+     * the collector (a program that starts threads). */
+    if (parse_no_r7rs_gc(argc, argv)) g_opt_r7rs_gc = false;
     /* tur-link-and-build-split-plan Phase 2/3c/6: TUR_RUNTIME overrides the
      * default runtime-linkage mode (auto).  A CLI --runtime= flag, parsed
      * later, still wins. */
@@ -11097,6 +11118,13 @@ static int tur_main_inner(int argc, char **argv) {
             i--;
         } else if (strcmp(argv[i], "--no-auto-spice") == 0) {
             /* SC4: already parsed into g_no_auto_spice; strip from argv. */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--no-r7rs-gc") == 0) {
+            /* r7rs-gc: already parsed into g_opt_r7rs_gc; strip from argv. */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -11513,6 +11541,7 @@ static int tur_main_inner(int argc, char **argv) {
                 if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
                 if (i == od_idx) { i++; continue; }   /* skip --output-dir and its value */
                 if (strcmp(argv[i], "--no-abi-cache") == 0) continue; /* J6: global, skip */
+                if (strcmp(argv[i], "--no-r7rs-gc") == 0) continue;   /* r7rs-gc: global, skip */
                 if (argv[i][0] == '-') { free(inputs); free(emit_inc); return usage_error(usage_build); }
                 inputs[n_inputs++] = argv[i];
             }
@@ -11883,6 +11912,8 @@ static int tur_main_inner(int argc, char **argv) {
                 }
             } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
                 /* J6: consumed globally by parse_no_abi_cache; no-op here. */
+            } else if (strcmp(argv[i], "--no-r7rs-gc") == 0) {
+                /* r7rs-gc: consumed globally by parse_no_r7rs_gc; no-op here. */
             } else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) {
                 manifest_out = argv[++i];
             } else if ((strcmp(argv[i], "--build-dir") == 0 ||
@@ -12034,7 +12065,8 @@ static int tur_main_inner(int argc, char **argv) {
                             "(supported: auto, lib, source)\n", mode);
                     free(comp_inc); return 1;
                 }
-            } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
+            } else if (strcmp(argv[i], "--no-abi-cache") == 0 ||
+                       strcmp(argv[i], "--no-r7rs-gc") == 0) {
                 /* global, consumed elsewhere */
             } else if (argv[i][0] != '-') {
                 if (input) { free(comp_inc); return usage_error(usage_build); }

@@ -5,7 +5,7 @@
  * directly.  That is the right default, and it stays the default: nothing
  * changes for the compiler, the interpreter, or an ordinary compiled program.
  *
- * The r7rs-gc experiment (docs/upcoming/r7rs-gc-plan.md) is the one consumer
+ * The r7rs-gc collector (docs/archive/r7rs-gc-plan.md) is the one consumer
  * that needs a say.  A compiled `#lang r7rs` program allocates from a
  * conservative collector that scans its own heap and the executable's data
  * segment -- and nothing else.  A HAMT node holding a Scheme value, or an
