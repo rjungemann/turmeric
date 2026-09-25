@@ -408,20 +408,70 @@ Precedent for the whole shape: `backtrackable-state` (`experiments.c:34`)
 graduated 2026-08-29, and only then did `stdlib/trail.tur` become
 unconditionally autoloaded. Gate -> graduate -> stdlib, in that order.
 
-### SC8 -- stdlib adoption (conditional on 4.2)
+### SC8 -- stdlib adoption
 
-Gated on SC7, and on the 4.2 decision actually going the adopting way -- this
-phase is conditional, not assumed.
+Gated on SC7 only. The 4.2 decision is made: **the stdlib adopts
+superclasses.** The phase is staged so that each step's blast radius is
+known before it lands, and the audit that sizes each step was run once
+already (section 8.3) so the numbers below are measured, not assumed.
 
-- `stdlib/typeclass-lattice.tur` grows the preamble on the classes that want
-  it, and the two in-source comments at `:60` and `:258` asserting "defclass
-  has no superclasses" come out.
-- **The retrofit audit (4.1) happens here, and it is the real cost.** Adding
-  `[(Semigroup a)]` to an existing `Monoid` retroactively obliges every
-  existing `Monoid` instance -- including ones in downstream spices -- to have
-  a `Semigroup` instance. Graduation defers this; it does not remove it. Audit
-  `/Users/rjungemann/Projects/turmeric-spices` against `origin/main`, not a
-  stale working tree.
+**SC8a -- the lattice file (first release after graduation).**
+`stdlib/typeclass-lattice.tur` is loaded explicitly, never auto-loaded, so
+its classes have the smallest downstream footprint of any candidate. Four
+preambles, all of which the file's own instances already satisfy:
+
+| Class | Preamble | Own instances | Each has the superclass instance? |
+| --- | --- | --- | --- |
+| `Monoid` | `[(Semigroup a)]` | `Sum Product MinI MaxI Any All` | yes, all six |
+| `BoundedJoin` | `[(JoinSemilattice a)]` | `MaxI Any` | yes |
+| `BoundedMeet` | `[(MeetSemilattice a)]` | `MinI All` | yes |
+| `JoinSemilattice`, `MeetSemilattice` | none | | see below |
+
+The two in-source comments at `:60` ("Flat, not a subclass of Semigroup")
+and `:258` ("There is no superclass relating them") come out with the
+preambles; the `:258` law duplication (the join associativity law restated
+rather than borrowed) is *not* removed by this step, because a
+`JoinSemilattice` is deliberately **not** declared over `Semigroup` -- the
+two classes have the same shape and differ only in laws, and a preamble
+would let a `[^JoinSemilattice A]` body call `combine`, which is the wrong
+name for a join. That comment is reworded to say the relation is withheld
+on purpose, not that the feature is missing.
+
+The fixture that pins this step: `stdlib-monoid-entails-semigroup`, a
+`[^Monoid A]` function calling `combine` against the stdlib `Monoid`, in
+both `run.sh` and `run-turi.sh`.
+
+**SC8b -- the auto-loaded hierarchy (a later release, one class per
+change).** These are the classes every program sees, so each retrofit is
+its own PR with its own audit. In order of measured risk:
+
+1. `Ord` over `Eq` -- every `Ord` instance in the stdlib already has an
+   `Eq` instance (15 of 15). Zero-cost in tree; the audit is the spices.
+2. `Applicative` over `Functor` -- 6 of 6 in tree.
+3. `MonadError` over `Monad`, `Alternative` over `Applicative` -- 2 of 2
+   and 6 of 6 in tree.
+4. `Monad` over `Functor` -- 6 of 6 in the stdlib, but **one fixture breaks**
+   (`hkt-constrained-wide-byvalue-carrier`'s `Pad2` declares `Monad` with no
+   `Functor`). That fixture gains the instance in the same PR.
+5. `Monad` over `Applicative` -- **breaks the stdlib today**:
+   `stdlib/result.tur` declares `Functor` and `Monad` for `(Result _ B)` and
+   no `Applicative`. Either add the `Applicative [(Result _ B)]` instance
+   first or leave `Monad`'s preamble at `[(Functor m)]`. Haskell's
+   `Applicative m => Monad m` is the shape to aim for, so prefer adding the
+   instance.
+
+`Hash`, `Show`, `Clone`, `Drop`, `Num`, `From`/`Into` have no natural
+superclass and stay flat.
+
+**The spices audit (4.1) happens at each SC8 step, and it is the real
+cost.** A preamble on an existing class obliges every existing instance of
+it, in every downstream spice, to have the superclass instance -- the
+TUR-E0393 arm fires in *their* build, not ours. Before each step, clone
+`turmeric-spices` at `origin/main` (the sibling checkout is absent on CI
+and often stale locally), run the same `definstance` set-difference the
+in-tree audit used (section 8.3), and land the missing superclass
+instances in the spice **before** the stdlib preamble ships. Graduation
+defers this; it does not remove it.
 
 ### SC9 -- Documentation after stdlib adoption
 
@@ -468,7 +518,7 @@ contains this during the prototype, but graduation needs an audit of any class
 that grows a preamble. This is the single biggest reason the feature is
 post-v1 rather than opportunistic.
 
-### 4.2 Open: does the stdlib adopt it?
+### 4.2 Decided: the stdlib adopts it
 
 `stdlib/typeclass-lattice.tur` is the obvious first consumer, and
 `crdt-spice-plan.md:586` names the ergonomic cost it would relieve
@@ -476,9 +526,15 @@ post-v1 rather than opportunistic.
 But a gated feature cannot be a load-bearing stdlib dependency -- the stdlib
 must compile with the experiment off. So either the stdlib waits for
 graduation, or it carries both spellings behind the gate, which is worse.
-**Recommendation: stdlib adoption waits for graduation.** That is SC7 -> SC8
-in the phase list; SC9's `lattice-guide.md` edit is gated on SC8 in turn, which
-is why it cannot be written earlier.
+**Decision: the stdlib adopts superclasses, and adoption waits for
+graduation.** That is SC7 -> SC8 in the phase list; SC9's
+`lattice-guide.md` edit is gated on SC8 in turn, which is why it cannot be
+written earlier. The question is no longer *whether* but *in what order*,
+and SC8 is staged accordingly. A flat stdlib after graduation would leave
+the feature shipped and unused, which is the worst of the three outcomes:
+every language surveyed in section 8 that has superclasses uses them in its
+own prelude (`Ord` over `Eq`, `Monad` over `Applicative`), and a user
+reading the stdlib learns the idiom from what the stdlib does.
 
 ### 4.3 Out of scope
 
@@ -511,6 +567,15 @@ constraints, which the lattice guide documents and which compiles today. Per
 the one-track-to-v1 rule, it should not displace v1 work. The `crdt-spice-plan`
 disposition remains right: if constraint-list ergonomics turn out to block
 adoption, that is the data point that promotes this plan.
+
+**Where this stands (2026-09-25).** SC0-SC6 landed in 0.49.0 and the 16
+fixtures still pass on both harnesses at 0.53.0. SC7 (graduation) is in
+progress and a release follows it. The destination after that is **stdlib
+adoption, staged as SC8a then SC8b** -- graduation is the gate to that
+work, not an end state. The measured audit in section 8.3 says SC8a is
+free in tree and SC8b needs exactly two instances added (one stdlib, one
+fixture) before `Monad` can take a preamble, so neither step waits on
+anything but the spices audit.
 
 ## 6. See also
 
@@ -585,3 +650,94 @@ What shipped, and where it departs from the phases above.
   parity-table edits (SC9), which are gated on SC7 and on the retrofit audit
   in 4.1. The two stdlib comments at `typeclass-lattice.tur:60` and `:258`
   remain true and stay.
+
+## 8. Prior art, and what it settles
+
+A survey of the languages that have typeclasses or a typeclass-shaped
+dispatch, taken 2026-09-25 to check the design above against what ships
+elsewhere. Two findings bear on this plan directly and are recorded here so
+they are not re-derived.
+
+### 8.1 Every implicit-instance language ships both halves together
+
+| Language | Spelling | Entailment | Instance obligation |
+| --- | --- | --- | --- |
+| Haskell | `class Eq a => Ord a` | yes | yes |
+| PureScript | `class Eq a <= Ord a` | yes | yes |
+| Idris 1 / 2 | `interface Eq a => Ord a` | yes | yes |
+| Lean 4 | `class Ord a extends Eq a` | yes | yes (parent projection) |
+| Rocq (Coq) | `Class Ord A := { ord_eq :> Eq A; ... }` | yes | yes |
+| Mercury | `:- typeclass ord(T) <= eq(T)` | yes | yes |
+| Clean, Frege | Haskell-style | yes | yes |
+| Rust | `trait Ord: Eq + PartialOrd` | yes | yes (`impl Ord` without `impl Eq` is an error) |
+| Swift | `protocol Comparable: Equatable` | yes | yes |
+| Scala 3 | `trait Ord[A] extends Eq[A]` + `given` | yes (subtyping) | yes (the given implements the parent) |
+
+**Nobody ships entailment without the obligation.** Every language in the
+table that resolves instances implicitly *and* has an instance declaration
+form implements Half A and Half B together. That is independent
+confirmation of section 2.2's "A and B land together or not at all"; the
+languages that skipped superclasses altogether did so by having no
+user-defined classes (Elm's fixed `comparable`/`number`), or by choosing
+flat abilities as a young-language simplification (Roc, Carp, Koka's
+implicits, Gleam's explicit dictionaries). Structural systems with
+entailment but no instances (Go interface embedding, C++ concept
+subsumption, ML signature `include`) are a different shape and not a
+counterexample: with no instance declaration there is nothing to oblige.
+
+Rust's rule is the closest match to this plan, down to "the superclass
+instance is *required*, never inherited" (section 4.3, last bullet): an
+`impl Ord` does not supply `eq`, an `impl Eq` does.
+
+### 8.2 Dictionary placement: two designs, and which one this is
+
+Haskell and PureScript store the superclass dictionary **inside** the
+subclass dictionary: a `Monoid` dictionary carries its `Semigroup`
+dictionary as a field, and `combine` under a `Monoid` constraint is one
+projection away. Rust and Swift instead resolve the superclass instance
+**separately at the use site** from the concrete type, with no link in the
+emitted representation.
+
+Turmeric's implementation is the second design. That is why section 2.4's
+"no codegen change" held (static dispatch already reaches `Semigroup [int]`
+by ordinary lookup once entailment lets the call through), and it is
+exactly why the interpreter needed its own fix (section 7, "Interpreter"):
+turi's frames bind one dictionary per constraint, so there was no embedded
+`Semigroup` dictionary to project out of the `Monoid` one, and the closure's
+dictionaries had to be bound alongside the subclass's. Anyone tempted to
+"optimise" by embedding superclass dictionaries later should know that
+would be a change of design, not a refinement, and would put codegen back in
+scope.
+
+### 8.3 The in-tree retrofit audit (measured 2026-09-25)
+
+The set-difference that sizes each SC8 step, run over `stdlib/` and
+`tests/`: for each candidate `(Sub, Super)` pair, every type with a
+`definstance Sub` head must also have a `definstance Super` head.
+
+```sh
+inst(){ grep -rhoE "\(definstance $1 \[[^]]*\]" $2 | sed -E "s/\(definstance $1 //" | sort -u; }
+comm -23 <(inst Monoid stdlib) <(inst Semigroup stdlib)   # -> empty
+comm -23 <(inst Ord stdlib)    <(inst Eq stdlib)          # -> empty
+comm -23 <(inst Monad stdlib)  <(inst Applicative stdlib) # -> [(Result _ B)]
+```
+
+| Pair | stdlib misses | tests misses |
+| --- | --- | --- |
+| `Monoid` <- `Semigroup` | none (6/6) | none |
+| `BoundedJoin` <- `JoinSemilattice` | none (2/2) | none |
+| `BoundedMeet` <- `MeetSemilattice` | none (2/2) | none |
+| `Ord` <- `Eq` | none (15/15) | none |
+| `Applicative` <- `Functor` | none (6/6) | -- |
+| `MonadError` <- `Monad` | none (2/2) | -- |
+| `Alternative` <- `Applicative` | none (6/6) | -- |
+| `Monad` <- `Functor` | none (6/6) | `Pad2` in `hkt-constrained-wide-byvalue-carrier` |
+| `Monad` <- `Applicative` | `(Result _ B)` in `stdlib/result.tur` | `Pad2` |
+
+The spices side of the same audit is outstanding: `../turmeric-spices` was
+absent from the checkout when this was run. Re-run the same script against
+a fresh clone of its `origin/main` before each SC8 step, per SC8's last
+paragraph. Head-shape matching (`[(Result _ B)]` vs a differently named
+variable) is by structure in the compiler's `typeclass_env_lookup_instance`,
+so a mismatch the script reports on variable *names* alone is a false
+positive; a missing head is not.
