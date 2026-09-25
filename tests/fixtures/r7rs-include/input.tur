@@ -1,0 +1,13 @@
+#lang r7rs
+;; include / include-ci (R7RS 4.1.7) and a library's (include ...) (5.6.1):
+;; the named file is read as Scheme, relative to the including file, and its
+;; forms are spliced where the include stood -- at top level, in expression
+;; position, and as a define-library declaration (inclib.tur).
+(import (scheme base) (scheme write) (inclib))
+(define counter 0)
+(include "inc-defs.scm")
+(include-ci "inc-ci.scm")
+(write (list (twice 21) (bump!) (bump!) counter shouting (include "inc-expr.scm")))
+(newline)
+(write (list (lib-square 7) lib-name))
+(newline)

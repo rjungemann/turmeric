@@ -27,6 +27,9 @@
 #include <limits.h>
 #include <math.h>
 #include <pthread.h>
+#if !defined(_WIN32)
+#include <poll.h>     /* r7rs-io-ready?__ */
+#endif
 #include <setjmp.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -2616,6 +2619,24 @@ static TuriValue native_r7rs_io_ok(TuriEnv *env, TuriValue *a, uint32_t n, void 
     (void)env; (void)ud;
     return turi_bool(r7rs_arg_io(a, n, 0)->f != NULL);
 }
+/* r7rs-io-ready?__: the prelude's twin (stdlib/r7rs/prelude.tur) -- would a
+ * read not block now?  A buffered byte, a string/bytevector buffer, a FILE
+ * at eof, or a descriptor with input (zero-timeout poll). */
+static TuriValue native_r7rs_io_ready(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    r7rs_io *b = r7rs_arg_io(a, n, 0);
+    if (b->pos < b->n) return turi_bool(true);
+    if (!b->f) return turi_bool(true);
+    if (feof(b->f)) return turi_bool(true);
+#if defined(_WIN32)
+    return turi_bool(true);
+#else
+    struct pollfd pd; pd.fd = fileno(b->f); pd.events = POLLIN; pd.revents = 0;
+    int r = poll(&pd, 1, 0);
+    if (r < 0) return turi_bool(true);
+    return turi_bool(r > 0);
+#endif
+}
 static TuriValue native_r7rs_io_add(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     r7rs_io *b = r7rs_arg_io(a, n, 0);
@@ -3997,6 +4018,7 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-io-std__", native_r7rs_io_std, NULL);
     turi_env_register_native(env, "r7rs-io-open__", native_r7rs_io_open, NULL);
     turi_env_register_native(env, "r7rs-io-ok?__", native_r7rs_io_ok, NULL);
+    turi_env_register_native(env, "r7rs-io-ready?__", native_r7rs_io_ready, NULL);
     turi_env_register_native(env, "r7rs-io-add__", native_r7rs_io_add, NULL);
     turi_env_register_native(env, "r7rs-io-add-byte__", native_r7rs_io_add_byte, NULL);
     turi_env_register_native(env, "r7rs-io-peek__", native_r7rs_io_peek, NULL);

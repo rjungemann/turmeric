@@ -1,5 +1,19 @@
 # `#lang r7rs`: a top-level `define` named like a Turmeric form is that form
 
+**RESOLVED 2026-09-25, archived.** The lowering's clash table now also
+covers a global the user DEFINES (in a program or a `define-library` body)
+or IMPORTS by name (`only`, `rename`) when it is spelled like a Turmeric
+special form, so its definition, uses, export and the importer's `only`
+are renamed in step (`gen` -> `gen--user`). Scheme syntax that shares a
+spelling (`set!`, `do`, `let`, `if`, ...) is exempt, as is a Turmeric form
+written in a Scheme file with nothing defining its name
+(`r7rs-elaborates-as-saffron`). A `set!` on such a global is looked up
+through the rename. Pinned by `tests/fixtures/r7rs-toplevel-form-names`
+(both back ends) and the `form-named-exports` case of
+`tests/run-r7rs-import.sh`. A Turmeric importer cannot refer such an export
+by its bare name (it is `gen--user` in the module), which it could not call
+by that name anyway (TUR-W0042). Original report follows.
+
 **Severity:** low-medium. A Scheme program that names a global `gen`,
 `handle`, `perform`, `resume`, `return`, ... gets a Turmeric special-form
 error at the use site, on both back ends.

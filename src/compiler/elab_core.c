@@ -2445,6 +2445,15 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
         Binding *b_args = binding_new(e, sym_args, TYPE_INT, false, true, SPAN_UNKNOWN);
         b_args->c_export_name = "g_tur_args";
         scope_add(&e->global, b_args);
+        /* *argv0*: the program's own name (argv[0] of a compiled binary, the
+         * script path under the interpreter), a :cstr global backed by
+         * g_tur_argv0.  *args* keeps its meaning -- the arguments only --
+         * so this is a second value, not a change to the list
+         * (r7rs-command-line-first-element-is-tur). */
+        const Symbol *sym_argv0 = intern_cstr(st, "*argv0*");
+        Binding *b_argv0 = binding_new(e, sym_argv0, TYPE_CSTR, false, true, SPAN_UNKNOWN);
+        b_argv0->c_export_name = "g_tur_argv0";
+        scope_add(&e->global, b_argv0);
     }
 }
 

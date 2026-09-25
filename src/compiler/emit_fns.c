@@ -5920,7 +5920,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (emit_main_argv) {
         ctx->indent += 4;
         indent_buf(file, ctx->indent);
-        buf_puts(file, "/* *args*: build cons list from argv[1..argc-1] */\n");
+        buf_puts(file, "/* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
         indent_buf(file, ctx->indent);
         buf_puts(file, "g_tur_args = 0;\n");
         indent_buf(file, ctx->indent);

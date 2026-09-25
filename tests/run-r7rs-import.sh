@@ -141,6 +141,45 @@ EOF
 
 run_case "strings-cross-the-seam" prog3.tur '("jλ" "hλ" 2)'
 
+# ---- Direction 3: a library exports a global spelled like a Turmeric form. --
+# `gen` and `handle` are Turmeric special forms and R7RS names nothing by
+# them, so the lowering renames every occurrence -- the library's definition
+# and export, the importer's `only` list and uses -- in step
+# (r7rs-toplevel-define-named-like-a-turmeric-form).  A Turmeric importer
+# could not call a `gen` by that name anyway (TUR-W0042).
+cat > "$TMP/genlib.tur" <<'EOF'
+#lang r7rs
+(define-library (genlib)
+  (export gen handle)
+  (import (scheme base))
+  (begin
+    (define gen (lambda () 42))
+    (define (handle x) (+ x 1))))
+EOF
+
+cat > "$TMP/prog4.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (only (genlib) gen handle))
+(write (list (gen) (handle 1))) (newline)
+EOF
+
+run_case "form-named-exports" prog4.tur '(42 2)'
+
+# ---- Direction 4: nested import sets over a user library (R7RS 5.2). -------
+# `only`, `except`, `prefix` and `rename` compose in any order; the fold
+# unwinds each name to the library's spelling, and a prefixed user module is
+# `:as`, a kept list `:refer`, an excluded name the program's own.
+cat > "$TMP/prog5.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write)
+        (prefix (only (mylib) twice) m:)
+        (rename (except (mylib) twice) (greet hello))
+        (rename (prefix (genlib) g:) (g:gen forty-two)))
+(write (list (m:twice 4) (hello "ann") (forty-two))) (newline)
+EOF
+
+run_case "nested-import-sets" prog5.tur '(8 "hi ann" 42)'
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1

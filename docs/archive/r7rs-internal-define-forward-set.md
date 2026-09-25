@@ -1,5 +1,15 @@
 # `#lang r7rs`: `set!` on a later internal `define` is "not bound"
 
+**RESOLVED 2026-09-25, archived.** A body's value define that an earlier
+definition's init mentions (`(define (a) (set! b 1)) (define b 0)`, a
+closure reading a later variable) is hoisted: a mutable cell bound around
+the whole body, assigned in place, so every name the body defines is in
+scope throughout it (letrec*). The Scheme lowering's assignment conversion
+then boxes it as it does every assigned-and-captured variable, so the
+closure sees the assignment on both back ends. Pinned by
+`tests/fixtures/r7rs-internal-define-forward-set`. Original report
+follows.
+
 **Severity:** low-medium. Legal R7RS is refused on both back ends. Internal
 definitions are `letrec*` (R7RS 5.3.2): every name a body defines is in scope
 throughout the body, so a procedure defined early may `set!` a variable

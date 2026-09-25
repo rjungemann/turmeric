@@ -713,7 +713,7 @@ static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
         return NULL;
     if (!(e->toplevel_dynamic || lang_span_is_dynamic(value->span))) return NULL;
     const Type *ft = &value->type;
-    if (ft->as.fn.cfnptr || ft->as.fn.arity > 5) return NULL;
+    if (ft->as.fn.cfnptr || ft->as.fn.arity > TUR_FAT_SHIM_MAX_ARITY) return NULL;
     /* r7rs-lang-plan R6/R7: a VARIADIC function.  Its rest slot is a chain
      * pointer, which the dynamic call packs (emit_dyn_call / the
      * interpreter's EX_DYN_CALL) -- but only for the all-`any` calling
@@ -813,7 +813,7 @@ static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
 Expr *elab_fn_value_to_fat(Elab *e, Expr *value) {
     if (!value) return NULL;
     if (value->type.kind == TY_FN && !value->type.as.fn.boxed &&
-        !value->type.as.fn.cfnptr && value->type.as.fn.arity <= 5) {
+        !value->type.as.fn.cfnptr && value->type.as.fn.arity <= TUR_FAT_SHIM_MAX_ARITY) {
         Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
         *bt = value->type;
         bt->as.fn.boxed = true;
@@ -4460,7 +4460,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                     /* Arity 0 admitted alongside the field-boxing change in
                      * resolve_ctor_field: a thunk field is boxed now, so a
                      * thin nullary fn stored into it needs the same shim. */
-                    if (inner_arity > 5) continue;
+                    if (inner_arity > TUR_FAT_SHIM_MAX_ARITY) continue;
                     Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
                     *bt = fa->type;
                     bt->as.fn.boxed = true;
@@ -6796,7 +6796,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * TY_FN is shimmed.  Mirrors the ^fat auto-shim arity bound (<=5). */
             if (args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed) {
                 uint32_t inner_arity = args[i]->type.as.fn.arity;
-                if (inner_arity >= 1 && inner_arity <= 5) {
+                if (inner_arity >= 1 && inner_arity <= TUR_FAT_SHIM_MAX_ARITY) {
                     /* M7 fix direction 1: keep the precise fn signature on the
                      * boxed shim's static type so a function value escaping into
                      * a type-variable parameter -- e.g. `(some add1)` binding

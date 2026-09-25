@@ -6650,7 +6650,7 @@ static bool tb_tail_reaches_dyn_call(const Expr *e) {
     while (e) {
         switch (e->kind) {
             case EX_DYN_CALL:
-                return e->as.dyn_call_.n_args <= 4;
+                return e->as.dyn_call_.n_args <= TUR_FAT_SHIM_MAX_ARITY;   /* the trampoline's slots */
             case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
             case EX_IF:
                 if (!e->as.if_.else_or_null) return false;
@@ -6748,14 +6748,15 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
     ctx->dyn_tail_mode = DYN_TAIL_NONE;
     ctx->dyn_tail_guard = NULL;
     uint32_t n = e->as.dyn_call_.n_args;
-    /* TUR_APPLYn_T covers arities 0..4.  Beyond that the fat protocol has no
-     * macro to borrow, and inventing a sixth here would duplicate the shim
-     * table's own ceiling in a second place; say so instead. */
-    if (n > 4) {
+    /* The dynamic runtime's fixed-slot helpers (the trampoline's descriptor,
+     * __tur_dyn_call_var, __tur_tb_call) carry eight arguments; the direct
+     * call below is spelled for any n.  Beyond eight say so
+     * (r7rs-apply-more-than-four-arguments lifted the old ceiling of four). */
+    if (n > 8) {
         diag_emit(DIAG_ERROR, e->span,
                   "calling a dynamic value with %u arguments is not supported by "
-                  "the compiled back end (the fat-closure apply helpers stop at "
-                  "4); `tur --interpret` has no such limit",
+                  "the compiled back end (the dynamic-call helpers carry at most "
+                  "8); pass the rest as a list, or use `tur --interpret`",
                   n);
         return atom_nil();
     }
@@ -6830,11 +6831,11 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
     }
     if (tail_mode != DYN_TAIL_NONE) {
-        /* T6: the trampoline takes the callee and up to four arguments; the
+        /* T6: the trampoline takes the callee and up to eight arguments; the
          * unused slots ride as the nil word.  In the CPS spelling each argument
          * is read twice (the bounce and the drive), so it is bound once. */
-        char *av[4];
-        for (uint32_t i = 0; i < 4; i++) {
+        char *av[8];
+        for (uint32_t i = 0; i < 8; i++) {
             if (i >= n) { av[i] = strdup("TUR_TAG(0, 0)"); continue; }
             if (tail_mode == DYN_TAIL_CPS) {
                 av[i] = fresh_tmp(ctx);
@@ -6849,20 +6850,20 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_printf(body,
                        "if ((void *)__kont == tur_tb_root) return (int64_t)(intptr_t)"
-                       "__tur_tb_bounce_box(%s, %u, %s, %s, %s, %s);\n",
-                       dc, (unsigned)n, av[0], av[1], av[2], av[3]);
-            buf_printf(&tc, "__tur_tb_call(%s, %u, %s, %s, %s, %s)",
-                       dc, (unsigned)n, av[0], av[1], av[2], av[3]);
+                       "__tur_tb_bounce_box(%s, %u, %s, %s, %s, %s, %s, %s, %s, %s);\n",
+                       dc, (unsigned)n, av[0], av[1], av[2], av[3], av[4], av[5], av[6], av[7]);
+            buf_printf(&tc, "__tur_tb_call(%s, %u, %s, %s, %s, %s, %s, %s, %s, %s)",
+                       dc, (unsigned)n, av[0], av[1], av[2], av[3], av[4], av[5], av[6], av[7]);
         } else if (tail_mode == DYN_TAIL_DIRECT) {
-            buf_printf(&tc, "__tur_tb_tail((%s), %s, %u, %s, %s, %s, %s)",
+            buf_printf(&tc, "__tur_tb_tail((%s), %s, %u, %s, %s, %s, %s, %s, %s, %s, %s)",
                        tail_guard ? tail_guard : "0", dc, (unsigned)n,
-                       av[0], av[1], av[2], av[3]);
+                       av[0], av[1], av[2], av[3], av[4], av[5], av[6], av[7]);
         } else {
-            buf_printf(&tc, "__tur_tb_call(%s, %u, %s, %s, %s, %s)",
-                       dc, (unsigned)n, av[0], av[1], av[2], av[3]);
+            buf_printf(&tc, "__tur_tb_call(%s, %u, %s, %s, %s, %s, %s, %s, %s, %s)",
+                       dc, (unsigned)n, av[0], av[1], av[2], av[3], av[4], av[5], av[6], av[7]);
         }
         buf_putc(&tc, '\0');
-        for (uint32_t i = 0; i < 4; i++) free(av[i]);
+        for (uint32_t i = 0; i < 8; i++) free(av[i]);
         free(dc);
         free(fnv);
         for (uint32_t i = 0; i < n; i++) free(argv[i]);
@@ -6878,7 +6879,7 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
                      "((void *)(intptr_t)TUR_UNTAG(%s)", dc, dc);
     for (uint32_t i = 0; i < n; i++) buf_printf(&out, ", %s", argv[i]);
     buf_printf(&out, ") : __tur_dyn_call_var(%s, %s_v, %u", dc, dc, (unsigned)n);
-    for (uint32_t i = 0; i < 4; i++)
+    for (uint32_t i = 0; i < 8; i++)
         buf_printf(&out, ", %s", i < n ? argv[i] : "TUR_TAG(0, 0)");
     buf_puts(&out, "))");
     buf_putc(&out, '\0');

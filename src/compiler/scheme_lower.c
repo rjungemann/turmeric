@@ -10,6 +10,7 @@
 
 #include "diag.h"
 #include "lang_dialects.h"
+#include "reader.h"            /* include / include-ci: read a file as Scheme */
 #include "expr.h"              /* R10: tur_name_is_reserved_special_form */
 #include "stdlib_autoload.h"   /* R3: which `(turmeric stdlib/x)` imports are no-ops */
 
@@ -432,6 +433,9 @@ typedef struct SL {
     uint32_t n_prefixes;
     struct { const Symbol *from, *to; } renames[64];
     uint32_t n_renames;
+    /* R7RS 5.2 `except`: a library name the program keeps for itself. */
+    const Symbol *excluded[64];
+    uint32_t n_excluded;
     /* R10: a program's top-level define whose name an auto-loaded Turmeric
      * stdlib module also defines (`list-length`, from tur/list) -- the
      * program's name is spelled `<name>--user` throughout, so the two do not
@@ -685,6 +689,12 @@ static void note_mut(SL *sl, const Symbol *s) {
 }
 static bool is_mut(const SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_muts; i++) if (sl->muts[i] == s) return true;
+    /* The scan records the target as written; a global renamed for a clash
+     * with a Turmeric form (`return` -> `return--user`) is asked for by its
+     * renamed spelling. */
+    for (uint32_t i = 0; i < sl->n_clash; i++)
+        if (sl->clash_to[i] == s)
+            for (uint32_t j = 0; j < sl->n_muts; j++) if (sl->muts[j] == sl->clash_from[i]) return true;
     return false;
 }
 /* R4: the mutability scan runs BEFORE expansion (a top-level `define` is
@@ -862,12 +872,25 @@ static const Symbol *rn_global(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_prefixes; i++) {
         if (s->len > sl->prefixes[i].plen &&
             memcmp(s->name, sl->prefixes[i].prefix, sl->prefixes[i].plen) == 0) {
+            if (!sl->prefixes[i].alias) {
+                /* Alias-less (a global library): the prefix comes off, and the
+                 * bare name resolves as written -- through a rename inside
+                 * the prefix, `(prefix (rename (scheme base) (car kar)) p:)`. */
+                return rn_global(sl, I(sl, s->name + sl->prefixes[i].plen));
+            }
+            /* The rest is the module's spelling: a form-named export was
+             * renamed in the library (`gen` -> `gen--user`), so it is here. */
+            const Symbol *rest = I(sl, s->name + sl->prefixes[i].plen);
+            if (sl->in_user)
+                for (uint32_t c = 0; c < sl->n_clash; c++)
+                    if (sl->clash_from[c] == rest) { rest = sl->clash_to[c]; break; }
             char buf[256];
-            snprintf(buf, sizeof buf, "%s/%s", sl->prefixes[i].alias->name,
-                     s->name + sl->prefixes[i].plen);
+            snprintf(buf, sizeof buf, "%s/%s", sl->prefixes[i].alias->name, rest->name);
             return I(sl, buf);
         }
     }
+    for (uint32_t i = 0; i < sl->n_excluded; i++)
+        if (sl->excluded[i] == s) return s;   /* (except ...): the program's own */
     for (size_t i = 0; i < N_RENAMES; i++)
         if (sl->rn_from[i] == s) return sl->rn_to[i];
     /* R7: an on-demand library's name means its procedure only in a unit
@@ -1684,6 +1707,9 @@ static Form *lower_operator(SL *sl, Form *f, int op) {
 static Form *lower(SL *sl, Form *f);
 static Form *lower_body(SL *sl, Form **items, uint32_t n, Span sp);
 static void lower_toplevel(SL *sl, Form *f, FB *out);
+static bool is_include_head(const SL *sl, const Form *f, bool *fold);
+static bool is_scheme_syntax_name(const char *name);
+static bool include_files(SL *sl, Form *f, bool fold, FB *out);
 static void lower_import_set(SL *sl, Form *set);
 static const Symbol *library_module(SL *sl, Form *set, bool *ok);
 static Form *cond_expand_clause(SL *sl, Form *f, uint32_t *out_n, Form ***out_items);
@@ -2669,10 +2695,34 @@ static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp) {
         for (uint32_t k = 0; k < n; k++)
             if (form_sets(sl, rn(sl, names[i]), items[k])) { is_lam[i] = false; break; }
     }
+    /* letrec* (R7RS 5.3.2): every name a body defines is in scope throughout
+     * it.  The nesting below binds a value define INSIDE the definitions
+     * before it, so an earlier define whose init mentions a later value
+     * define -- `(define (a) (set! b 1)) (define b 0)` -- would find `b`
+     * unbound.  Such a value define is hoisted: a mutable cell bound around
+     * the whole body, assigned in place
+     * (r7rs-internal-define-forward-set). */
+    bool *hoist = (bool *)arena_alloc(sl->a, ndef * sizeof(bool));
+    bool any_hoist = false;
+    for (uint32_t j = 0; j < ndef; j++) {
+        hoist[j] = false;
+        if (is_lam[j]) continue;
+        const Symbol *nj = rn(sl, names[j]);
+        for (uint32_t i = 0; i < j && !hoist[j]; i++)
+            if (form_mentions_sym(inits[i], nj)) hoist[j] = true;
+        if (hoist[j]) any_hoist = true;
+    }
     free(seq.items);
     Form *body = rest;
     int32_t i = (int32_t)ndef - 1;
     while (i >= 0) {
+        if (!is_lam[i] && hoist[i]) {
+            const Symbol *self = rn(sl, names[i]);
+            Form *store = Ln(sl, sp, 3, Sym(sl, sp, sl->s_set), Sym(sl, sp, self), inits[i]);
+            body = Ln(sl, sp, 3, Sym(sl, sp, sl->t_do), store, body);
+            i--;
+            continue;
+        }
         if (is_lam[i]) {
             int32_t j = i;
             while (j > 0 && is_lam[j - 1]) j--;
@@ -2700,6 +2750,12 @@ static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp) {
             }
             i--;
         }
+    }
+    if (any_hoist) {
+        FB b = {0};
+        for (uint32_t j = 0; j < ndef; j++)
+            if (hoist[j]) push_binding(sl, &b, sp, names[j], Bool(sl, sp, false), true);
+        body = Ln(sl, sp, 3, Sym(sl, sp, sl->t_let), fb_vec(sl, &b, sp), body);
     }
     return body;
 }
@@ -2994,10 +3050,15 @@ static Form *lower(SL *sl, Form *f) {
         if (!prelude_span(f->span)) {
             /* R7: named refusals rather than an unbound-name error. */
             const char *hn = h->name;
-            if (h == sl->s_include || strcmp(hn, "include-ci") == 0) {
-                err(f, "%s is not supported yet: an included file would have to be read as Scheme "
-                       "without its own #lang line; put the definitions in a define-library and import it", hn);
-                return Nil(sl, f->span);
+            (void)hn;
+            bool fold;
+            if (is_include_head(sl, f, &fold)) {
+                /* In expression position the included forms are a `begin`. */
+                FB got = {0};
+                Form *r = Nil(sl, f->span);
+                if (include_files(sl, f, fold, &got) && got.n > 0) r = lower_seq(sl, got.items, got.n, f->span);
+                free(got.items);
+                return r;
             }
         }
         if (h == sl->s_guard)        return lower_guard(sl, f);
@@ -3027,8 +3088,142 @@ static Form *lower(SL *sl, Form *f) {
 }
 
 /* One top-level Scheme form -> zero or more Turmeric top-level forms. */
+/* R7RS 4.1.7 `include` / `include-ci`, and 5.6.1's `(include ...)` library
+ * declaration: each named file is read as Scheme -- the Scheme reader, with
+ * or without a `#lang` line of its own (one is stripped) -- relative to the
+ * including file's directory, and its forms are spliced where the include
+ * stood.  The file is registered with the diagnostic registry, so an error
+ * inside it names it.  `include-ci` reads with `#!fold-case` in force. */
+static bool is_include_head(const SL *sl, const Form *f, bool *fold) {
+    if (f->tag != F_LIST || f->as.list.len < 1 || f->as.list.items[0]->tag != F_SYM) return false;
+    const Symbol *h = f->as.list.items[0]->as.sym;
+    if (h == sl->s_include) { *fold = false; return true; }
+    if (strcmp(h->name, "include-ci") == 0) { *fold = true; return true; }
+    return false;
+}
+static bool include_files(SL *sl, Form *f, bool fold, FB *out) {
+    const char *what = fold ? "include-ci" : "include";
+    if (f->as.list.len < 2) { err(f, "%s expects one or more file names: (%s \"file\" ...)", what, what); return false; }
+    const SourceFile *from = diag_source_file(f->span.file_id);
+    for (uint32_t i = 1; i < f->as.list.len; i++) {
+        Form *pf = f->as.list.items[i];
+        if (pf->tag != F_STR) { err(pf, "%s takes string file names", what); return false; }
+        char path[4096];
+        size_t dlen = 0;
+        const char *dir = NULL;
+        if (from && from->base_dir) { dir = from->base_dir; dlen = strlen(dir); }
+        else if (from && from->path) {
+            const char *slash = strrchr(from->path, '/');
+            if (slash) { dir = from->path; dlen = (size_t)(slash - from->path); }
+        }
+        bool absolute = pf->as.s.len > 0 && pf->as.s.p[0] == '/';
+        int pn;
+        if (dir && dlen && !absolute)
+            pn = snprintf(path, sizeof path, "%.*s/%.*s", (int)dlen, dir, (int)pf->as.s.len, pf->as.s.p);
+        else
+            pn = snprintf(path, sizeof path, "%.*s", (int)pf->as.s.len, pf->as.s.p);
+        if (pn <= 0 || (size_t)pn >= sizeof path) { err(pf, "%s: file name too long", what); return false; }
+        FILE *fp = fopen(path, "rb");
+        if (!fp) { err(pf, "%s: cannot open '%s'", what, path); return false; }
+        size_t cap = 4096, len = 0;
+        char *raw = (char *)malloc(cap);
+        if (!raw) { fclose(fp); fprintf(stderr, "tur: oom\n"); abort(); }
+        size_t got;
+        while ((got = fread(raw + len, 1, cap - len - 1, fp)) > 0) {
+            len += got;
+            if (cap - len < 2) {
+                cap *= 2;
+                raw = (char *)realloc(raw, cap);
+                if (!raw) { fclose(fp); fprintf(stderr, "tur: oom\n"); abort(); }
+            }
+        }
+        fclose(fp);
+        raw[len] = '\0';
+        /* An included file is Scheme by definition; a `#lang` line of its own
+         * is stripped, and the dialect it names is not consulted. */
+        const char *body = raw; size_t blen = len;
+        const char *bad = NULL; size_t bad_len = 0;
+        LangDialect dialect = LANG_TURMERIC;
+        (void)detect_lang_dialect(raw, len, &body, &blen, &bad, &bad_len, &dialect);
+        if (bad) { err(pf, "%s: bad #lang line in '%s' ('%.*s')", what, path, (int)bad_len, bad); free(raw); return false; }
+        const char *prefix = fold ? "#!fold-case " : "";
+        size_t plen = strlen(prefix);
+        char *src = (char *)arena_alloc(sl->a, plen + blen + 1);
+        memcpy(src, prefix, plen);
+        memcpy(src + plen, body, blen);
+        src[plen + blen] = '\0';
+        free(raw);
+        char *path_copy = (char *)arena_alloc(sl->a, (size_t)pn + 1);
+        memcpy(path_copy, path, (size_t)pn + 1);
+        SourceFile *sf = (SourceFile *)arena_alloc(sl->a, sizeof(SourceFile));
+        *sf = (SourceFile){0};
+        sf->path        = path_copy;
+        sf->src         = src;
+        sf->len         = plen + blen;
+        sf->file_id     = diag_alloc_file_id();
+        sf->reader_type = READER_R7RS;
+        sf->lang        = LANG_R7RS;
+        diag_register_file(sf);
+        uint32_t nf = 0;
+        Form **fs = read_all_with_registry(sl->a, sl->st, sf, NULL, &nf);
+        if (!fs) return false;
+        for (uint32_t k = 0; k < nf; k++) {
+            bool sub_fold;
+            if (is_include_head(sl, fs[k], &sub_fold)) { if (!include_files(sl, fs[k], sub_fold, out)) return false; }
+            else fb_push(out, fs[k]);
+        }
+    }
+    return true;
+}
+/* The pre-pass: splice top-level includes, and a library's `(include ...)`
+ * declarations as `(begin ...)`, BEFORE the scans that read the whole
+ * program (the `set!` targets, the clash table), so an included definition
+ * is seen by them like one written in place. */
+static Form *expand_library_includes(SL *sl, Form *f) {
+    bool any = false, fold;
+    for (uint32_t i = 2; i < f->as.list.len && !any; i++) any = is_include_head(sl, f->as.list.items[i], &fold);
+    if (!any) return f;
+    FB decls = {0};
+    for (uint32_t i = 0; i < f->as.list.len; i++) {
+        Form *d = f->as.list.items[i];
+        if (i >= 2 && is_include_head(sl, d, &fold)) {
+            FB body = {0};
+            fb_push(&body, Sym(sl, d->span, sl->s_begin));
+            if (include_files(sl, d, fold, &body)) fb_push(&decls, fb_list(sl, &body, d->span));
+            else free(body.items);
+        } else fb_push(&decls, d);
+    }
+    return fb_list(sl, &decls, f->span);
+}
+static void expand_includes(SL *sl, Form *const *forms, uint32_t n, FB *out) {
+    for (uint32_t i = 0; i < n; i++) {
+        Form *f = forms[i];
+        bool fold;
+        if (is_scheme_file(f) && !prelude_span(f->span)) {
+            if (is_include_head(sl, f, &fold)) {
+                FB got = {0};
+                if (include_files(sl, f, fold, &got)) expand_includes(sl, got.items, got.n, out);
+                free(got.items);
+                continue;
+            }
+            if (head_is(f, sl->s_define_library)) f = expand_library_includes(sl, f);
+        }
+        fb_push(out, f);
+    }
+}
+
 static void lower_toplevel(SL *sl, Form *f, FB *out) {
     Span sp = f->span;
+    {
+        bool fold;
+        if (is_include_head(sl, f, &fold) && !prelude_span(sp)) {
+            FB got = {0};
+            if (include_files(sl, f, fold, &got))
+                for (uint32_t i = 0; i < got.n; i++) lower_toplevel(sl, got.items[i], out);
+            free(got.items);
+            return;
+        }
+    }
     if (head_is(f, sl->s_define_syntax)) { sr_define(sl, f); return; }
     if (f->tag == F_LIST && f->as.list.len > 0 && f->as.list.items[0]->tag == F_SYM &&
         sr_lookup(sl, f->as.list.items[0]->as.sym)) {
@@ -3154,6 +3349,7 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
         if (!name) { err(f->as.list.items[1], "a (scheme ...) or auto-loaded stdlib name cannot be defined here"); return; }
         sl->has_library = true;
         sl->lib_name = name;
+        bool lib_fold = false;
         for (uint32_t i = 2; i < f->as.list.len; i++) {
             Form *decl = f->as.list.items[i];
             if (head_is(decl, sl->s_export)) {
@@ -3182,8 +3378,11 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
                             for (uint32_t k = 1; k < d->as.list.len; k++) lower_import_set(sl, d->as.list.items[k]);
                         else err(d, "cond-expand inside define-library takes (import ...) and (begin ...) declarations");
                     }
-            } else if (head_is(decl, sl->s_include)) {
-                err(decl, "(include \"file\") in a library is not supported yet; write the definitions in a (begin ...)");
+            } else if (is_include_head(sl, decl, &lib_fold)) {
+                FB got = {0};
+                if (include_files(sl, decl, lib_fold, &got))
+                    for (uint32_t j = 0; j < got.n; j++) lower_toplevel(sl, got.items[j], &sl->lib_body);
+                free(got.items);
             } else {
                 err(decl, "define-library declarations are (export ...), (import ...), (begin ...) and (cond-expand ...)");
             }
@@ -3204,7 +3403,25 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
         f->as.list.items[1]->as.list.len >= 1 && is_sym(f->as.list.items[1]->as.list.items[0], sl->s_main) &&
         f->as.list.items[1]->as.list.len == 1)
         sl->user_main = true;
-    fb_push(out, lower(sl, f));
+    Form *lowered = lower(sl, f);
+    /* R9 / r7rs-repl-toplevel-expression-value-not-widened: at the REPL
+     * prompt (a synthetic `<eval>` source, the user's lines after the pinned
+     * preload) a top-level expression's value is what the prompt echoes, and
+     * it must be a Scheme value: pass it through an `any` parameter, as a
+     * procedure's result is.  A program's top-level expression value is
+     * discarded, so a program is left alone; so is a Turmeric form typed at
+     * the prompt, whose value is Turmeric's. */
+    {
+        const SourceFile *sf = diag_source_file(sp.file_id);
+        bool at_prompt = sf && sf->path && sf->path[0] == '<' &&
+                         g_synthetic_user_from_line && sp.line >= g_synthetic_user_from_line;
+        bool turmeric_form = f->tag == F_LIST && f->as.list.len > 0 && f->as.list.items[0]->tag == F_SYM &&
+                             tur_name_is_reserved_special_form(f->as.list.items[0]->as.sym->name) &&
+                             !is_scheme_syntax_name(f->as.list.items[0]->as.sym->name);
+        if (at_prompt && !turmeric_form)
+            lowered = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-repl-value__")), lowered);
+    }
+    fb_push(out, lowered);
 }
 
 /* ---------------------------------------------------------------------------
@@ -3280,6 +3497,169 @@ static const Symbol *library_module(SL *sl, Form *set, bool *ok) {
     return I(sl, buf);
 }
 
+/* R7RS 5.2: an import set is a library name under any nesting of `only`,
+ * `except`, `prefix` and `rename`.  The nest is folded inside out into one
+ * spec -- the library, the kept names (or all), the excluded names, one
+ * prefix, the renames -- each name unwound to the LIBRARY's spelling
+ * through the modifiers inside it, and the spec is emitted once.  Where a
+ * (scheme ...) library's names are global, `only` and `except` change what
+ * a name MEANS, not what is visible: an excluded name is no longer the
+ * library's (`(except (scheme base) assoc)` lets the program define its own
+ * `assoc`), and a kept name stays the library's.  A user library or a
+ * Turmeric module gets a `:refer` list from `only`, `:as` from `prefix`, and
+ * a full import from `except` (Turmeric's import has no "all but"). */
+typedef struct {
+    Form *lib;               /* the library name */
+    bool  has_only;
+    FB    only;              /* library-spelling names kept (has_only) */
+    FB    except;            /* library-spelling names dropped */
+    const Symbol *prefix;    /* one prefix, or NULL */
+    FB    renames;           /* pairs: new name, library-spelling name */
+} SchemeImportSpec;
+/* The library's spelling of a name written at the spec's current level:
+ * take the spec's renames and prefix off, innermost first. */
+static const Symbol *import_unwind(SL *sl, const SchemeImportSpec *spec, const Symbol *s) {
+    for (int guard = 0; guard < 64; guard++) {
+        bool moved = false;
+        for (uint32_t i = 0; i + 1 < spec->renames.n; i += 2)
+            if (spec->renames.items[i]->as.sym == s) { s = spec->renames.items[i + 1]->as.sym; moved = true; break; }
+        if (!moved && spec->prefix && s->len > spec->prefix->len &&
+            memcmp(s->name, spec->prefix->name, spec->prefix->len) == 0) {
+            s = I(sl, s->name + spec->prefix->len);
+            moved = true;
+        }
+        if (!moved) return s;
+    }
+    return s;
+}
+static bool resolve_import_set(SL *sl, Form *set, SchemeImportSpec *spec) {
+    if (set->tag != F_LIST || set->as.list.len == 0) { err(set, "malformed import set"); return false; }
+    Form *head = set->as.list.items[0];
+    const char *h = head->tag == F_SYM ? head->as.sym->name : "";
+    bool mod = strcmp(h, "only") == 0 || strcmp(h, "except") == 0 || strcmp(h, "prefix") == 0 ||
+               strcmp(h, "rename") == 0;
+    if (!mod) { spec->lib = set; return true; }
+    if (set->as.list.len < 2) { err(set, "(%s <import set> ...) needs an import set", h); return false; }
+    if (!resolve_import_set(sl, set->as.list.items[1], spec)) return false;
+    if (strcmp(h, "only") == 0) {
+        FB kept = {0};
+        for (uint32_t i = 2; i < set->as.list.len; i++) {
+            Form *nm = set->as.list.items[i];
+            if (nm->tag != F_SYM) { err(nm, "(only ...) names must be identifiers"); free(kept.items); return false; }
+            fb_push(&kept, Sym(sl, nm->span, import_unwind(sl, spec, nm->as.sym)));
+        }
+        /* `only` inside `only`: the intersection is the outer list. */
+        free(spec->only.items);
+        spec->only = kept;
+        spec->has_only = true;
+        return true;
+    }
+    if (strcmp(h, "except") == 0) {
+        for (uint32_t i = 2; i < set->as.list.len; i++) {
+            Form *nm = set->as.list.items[i];
+            if (nm->tag != F_SYM) { err(nm, "(except ...) names must be identifiers"); return false; }
+            fb_push(&spec->except, Sym(sl, nm->span, import_unwind(sl, spec, nm->as.sym)));
+        }
+        return true;
+    }
+    if (strcmp(h, "rename") == 0) {
+        for (uint32_t i = 2; i < set->as.list.len; i++) {
+            Form *pr = set->as.list.items[i];
+            if (pr->tag != F_LIST || pr->as.list.len != 2 || pr->as.list.items[0]->tag != F_SYM ||
+                pr->as.list.items[1]->tag != F_SYM) {
+                err(pr, "(rename <set> (from to) ...) takes identifier pairs"); return false;
+            }
+            const Symbol *orig = import_unwind(sl, spec, pr->as.list.items[0]->as.sym);
+            fb_push(&spec->renames, pr->as.list.items[1]);
+            fb_push(&spec->renames, Sym(sl, pr->span, orig));
+        }
+        return true;
+    }
+    /* prefix */
+    if (set->as.list.len != 3 || set->as.list.items[2]->tag != F_SYM) {
+        err(set, "(prefix <set> <identifier>) takes one prefix identifier"); return false;
+    }
+    if (spec->prefix) { err(set, "an import set takes one (prefix ...)"); return false; }
+    spec->prefix = set->as.list.items[2]->as.sym;
+    return true;
+}
+static bool spec_excludes(const SchemeImportSpec *spec, const Symbol *s) {
+    for (uint32_t i = 0; i < spec->except.n; i++) if (spec->except.items[i]->as.sym == s) return true;
+    return false;
+}
+static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
+    bool ok;
+    const Symbol *mod = library_module(sl, spec->lib, &ok);
+    if (!ok) return;
+    /* An excluded name is no longer the library's: it resolves as the
+     * program's own (rn_global skips the standard map for it). */
+    for (uint32_t i = 0; i < spec->except.n; i++) {
+        const Symbol *x = spec->except.items[i]->as.sym;
+        if (sl->n_excluded < 64) sl->excluded[sl->n_excluded++] = x;
+        else { err(spec->except.items[i], "too many (except ...) names"); return; }
+    }
+    /* Renames: the new name means the library's (rn'd) name. */
+    FB refer = {0};
+    for (uint32_t i = 0; i + 1 < spec->renames.n; i += 2) {
+        const Symbol *orig = spec->renames.items[i + 1]->as.sym;
+        const Symbol *to = rn(sl, orig);
+        if (sl->n_renames < 64) {
+            sl->renames[sl->n_renames].from = spec->renames.items[i]->as.sym;
+            sl->renames[sl->n_renames].to   = to;
+            sl->n_renames++;
+        } else { err(spec->renames.items[i], "too many (rename ...) names"); free(refer.items); return; }
+        if (!spec->has_only) fb_push(&refer, Sym(sl, spec->renames.items[i + 1]->span, to));
+    }
+    if (spec->has_only)
+        for (uint32_t i = 0; i < spec->only.n; i++) {
+            const Symbol *o = spec->only.items[i]->as.sym;
+            if (!spec_excludes(spec, o)) fb_push(&refer, Sym(sl, spec->only.items[i]->span, rn(sl, o)));
+        }
+    if (spec->prefix) {
+        const Symbol *pfx = spec->prefix;
+        if (sl->n_prefixes >= 16) { err(spec->lib, "too many (prefix ...) imports"); free(refer.items); return; }
+        if (!mod) {
+            /* Auto-loaded: the names are global and bare, so the prefix just
+             * comes off.  Recorded as an alias-less rule. */
+            sl->prefixes[sl->n_prefixes].prefix = pfx->name;
+            sl->prefixes[sl->n_prefixes].plen   = pfx->len;
+            sl->prefixes[sl->n_prefixes].alias  = NULL;
+            sl->n_prefixes++;
+            free(refer.items);
+            return;
+        }
+        /* The alias is the prefix without a trailing ':' or '-'; `p:name` then
+         * reads as `p/name`, which is Turmeric's `:as p` spelling. */
+        char alias[128];
+        snprintf(alias, sizeof alias, "%s", pfx->name);
+        size_t al = strlen(alias);
+        while (al > 0 && (alias[al - 1] == ':' || alias[al - 1] == '-')) alias[--al] = '\0';
+        if (al == 0) { err(spec->lib, "(prefix ...) needs a non-empty prefix"); free(refer.items); return; }
+        sl->prefixes[sl->n_prefixes].prefix = pfx->name;
+        sl->prefixes[sl->n_prefixes].plen   = pfx->len;
+        sl->prefixes[sl->n_prefixes].alias  = I(sl, alias);
+        sl->n_prefixes++;
+        fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
+                                 Kw(sl, sp, sl->t_as), Sym(sl, sp, I(sl, alias))));
+        sl->needs_module = true;
+        /* A renamed name of a prefixed module still needs the bare export. */
+        if (refer.n > 0) {
+            fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
+                                     Kw(sl, sp, sl->t_refer), fb_vec(sl, &refer, sp)));
+        } else free(refer.items);
+        return;
+    }
+    if (!mod) { free(refer.items); return; }   /* a (scheme ...) library: already global */
+    if (spec->has_only || refer.n > 0) {
+        fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
+                                 Kw(sl, sp, sl->t_refer), fb_vec(sl, &refer, sp)));
+    } else {
+        free(refer.items);
+        fb_push(&sl->imports, Ln(sl, sp, 2, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod)));
+    }
+    sl->needs_module = true;
+}
+
 /* One import set -> zero or one Turmeric `(import ...)` form in sl->imports,
  * plus the rename/prefix rules `rename`/`prefix` need. */
 static void lower_import_set(SL *sl, Form *set) {
@@ -3290,86 +3670,10 @@ static void lower_import_set(SL *sl, Form *set) {
     bool ok;
     if (strcmp(h, "only") == 0 || strcmp(h, "rename") == 0 || strcmp(h, "prefix") == 0 ||
         strcmp(h, "except") == 0) {
-        if (set->as.list.len < 2) { err(set, "(%s <import set> ...) needs an import set", h); return; }
-        Form *inner = set->as.list.items[1];
-        if (inner->tag == F_LIST && inner->as.list.len > 0 && inner->as.list.items[0]->tag == F_SYM) {
-            const char *ih = inner->as.list.items[0]->as.sym->name;
-            if (strcmp(ih, "only") == 0 || strcmp(ih, "rename") == 0 || strcmp(ih, "prefix") == 0 ||
-                strcmp(ih, "except") == 0) {
-                err(set, "nested import sets are not supported yet; use one of only/prefix/rename directly on the library name");
-                return;
-            }
-        }
-        if (strcmp(h, "except") == 0) {
-            err(set, "(except ...) is not supported: Turmeric's import has no \"all but\"; list the names with (only ...) instead");
-            return;
-        }
-        const Symbol *mod = library_module(sl, inner, &ok);
-        if (!ok) return;
-        if (strcmp(h, "only") == 0) {
-            FB names = {0};
-            for (uint32_t i = 2; i < set->as.list.len; i++) {
-                Form *nm = set->as.list.items[i];
-                if (nm->tag != F_SYM) { err(nm, "(only ...) names must be identifiers"); free(names.items); return; }
-                fb_push(&names, Sym(sl, nm->span, rn(sl, nm->as.sym)));
-            }
-            if (!mod) { free(names.items); return; }   /* already global */
-            fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
-                                     Kw(sl, sp, sl->t_refer), fb_vec(sl, &names, sp)));
-            sl->needs_module = true;
-            return;
-        }
-        if (strcmp(h, "rename") == 0) {
-            FB names = {0};
-            for (uint32_t i = 2; i < set->as.list.len; i++) {
-                Form *pr = set->as.list.items[i];
-                if (pr->tag != F_LIST || pr->as.list.len != 2 || pr->as.list.items[0]->tag != F_SYM ||
-                    pr->as.list.items[1]->tag != F_SYM) {
-                    err(pr, "(rename <set> (from to) ...) takes identifier pairs"); free(names.items); return;
-                }
-                const Symbol *from = rn(sl, pr->as.list.items[0]->as.sym);
-                if (sl->n_renames < 64) {
-                    sl->renames[sl->n_renames].from = pr->as.list.items[1]->as.sym;
-                    sl->renames[sl->n_renames].to   = from;
-                    sl->n_renames++;
-                }
-                fb_push(&names, Sym(sl, pr->span, from));
-            }
-            if (!mod) { free(names.items); return; }
-            fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
-                                     Kw(sl, sp, sl->t_refer), fb_vec(sl, &names, sp)));
-            sl->needs_module = true;
-            return;
-        }
-        /* prefix */
-        if (set->as.list.len != 3 || set->as.list.items[2]->tag != F_SYM) {
-            err(set, "(prefix <set> <identifier>) takes one prefix identifier"); return;
-        }
-        const Symbol *pfx = set->as.list.items[2]->as.sym;
-        if (sl->n_prefixes >= 16) { err(set, "too many (prefix ...) imports"); return; }
-        if (!mod) {
-            /* Auto-loaded: the names are global and bare, so the prefix just
-             * comes off.  Recorded as an alias-less rule. */
-            sl->prefixes[sl->n_prefixes].prefix = pfx->name;
-            sl->prefixes[sl->n_prefixes].plen   = pfx->len;
-            sl->prefixes[sl->n_prefixes].alias  = NULL;
-            sl->n_prefixes++;
-            return;
-        }
-        /* The alias is the prefix without a trailing ':' or '-'; `p:name` then
-         * reads as `p/name`, which is Turmeric's `:as p` spelling. */
-        char alias[128];
-        snprintf(alias, sizeof alias, "%s", pfx->name);
-        size_t al = strlen(alias);
-        while (al > 0 && (alias[al - 1] == ':' || alias[al - 1] == '-')) alias[--al] = '\0';
-        if (al == 0) { err(set, "(prefix ...) needs a non-empty prefix"); return; }
-        sl->prefixes[sl->n_prefixes].prefix = pfx->name;
-        sl->prefixes[sl->n_prefixes].plen   = pfx->len;
-        sl->prefixes[sl->n_prefixes].alias  = I(sl, alias);
-        sl->n_prefixes++;
-        fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
-                                 Kw(sl, sp, sl->t_as), Sym(sl, sp, I(sl, alias))));
-        sl->needs_module = true;
+        SchemeImportSpec spec = {0};
+        if (!resolve_import_set(sl, set, &spec)) { free(spec.only.items); free(spec.except.items); free(spec.renames.items); return; }
+        emit_import_spec(sl, sp, &spec);
+        free(spec.only.items); free(spec.except.items); free(spec.renames.items);
         return;
     }
     const Symbol *mod = library_module(sl, set, &ok);
@@ -3708,6 +4012,11 @@ static void user_define_names(SL *sl, const Form *f, FB *out) {
         for (uint32_t i = 1; i < f->as.list.len; i++) user_define_names(sl, f->as.list.items[i], out);
         return;
     }
+    if (head_is(f, sl->s_define_library)) {
+        for (uint32_t i = 2; i < f->as.list.len; i++)
+            if (head_is(f->as.list.items[i], sl->s_begin)) user_define_names(sl, f->as.list.items[i], out);
+        return;
+    }
     if (!head_is(f, sl->s_define) || f->as.list.len < 2) return;
     Form *t = f->as.list.items[1];
     while (t->tag == F_LIST && t->as.list.len >= 1) t = t->as.list.items[0];  /* (define ((f a) b) ...) */
@@ -3760,6 +4069,82 @@ static void user_binders(SL *sl, const Form *f, FB *out) {
     }
     for (uint32_t i = 0; i < len; i++) user_binders(sl, f->as.list.items[i], out);
 }
+/* The names an `(import ...)` binds by spelling them: an `(only ...)` list
+ * and the new names of a `(rename ...)`.  A global spelled like a Turmeric
+ * special form (`gen`, `handle`, `return`, ...) that the user defines or
+ * imports this way is the user's own binding, and is renamed wherever it
+ * occurs -- the definition, its uses, a library's export of it, the
+ * importer's `only` -- so a library and its importer stay in step
+ * (r7rs-toplevel-define-named-like-a-turmeric-form).  A Turmeric form
+ * written in a Scheme file (r7rs-elaborates-as-saffron) stays reachable,
+ * since nothing defines or imports its name. */
+static bool is_scheme_syntax_name(const char *name) {
+    /* The heads this lowering matches itself (R7RS 4.1-4.3, 5, 7.3): a
+     * spelling shared with a Turmeric form (`define`, `let`, `if`, `do`,
+     * `set!`, `case`, `quote`, `import`, `export`) is Scheme syntax here,
+     * matched after the import-rename step, so it must not be renamed. */
+    static const char *const syntax[] = {
+        "define", "lambda", "let", "let*", "letrec", "letrec*", "do", "begin",
+        "set!", "if", "cond", "case", "and", "or", "when", "unless",
+        "case-lambda", "define-values", "let-values", "let*-values",
+        "define-syntax", "let-syntax", "letrec-syntax", "syntax-rules",
+        "syntax-error", "er-macro-transformer", "import", "export",
+        "define-library", "define-record-type", "include", "include-ci",
+        "cond-expand", "quote", "quasiquote", "unquote", "unquote-splicing",
+        "guard", "parameterize", "delay", "delay-force", "make-promise",
+    };
+    for (size_t i = 0; i < sizeof syntax / sizeof syntax[0]; i++)
+        if (strcmp(name, syntax[i]) == 0) return true;
+    return false;
+}
+/* The names one import set spells, through any nesting: an `only` list,
+ * both sides of a `rename` pair (the library's spelling, which the library
+ * renamed the same way, and the new name). */
+static const Symbol *import_set_prefix(const Form *set) {
+    if (set->tag != F_LIST || set->as.list.len < 2 || set->as.list.items[0]->tag != F_SYM) return NULL;
+    const char *h = set->as.list.items[0]->as.sym->name;
+    if (strcmp(h, "prefix") == 0 && set->as.list.len == 3 && set->as.list.items[2]->tag == F_SYM)
+        return set->as.list.items[2]->as.sym;
+    if (strcmp(h, "only") == 0 || strcmp(h, "except") == 0 || strcmp(h, "rename") == 0)
+        return import_set_prefix(set->as.list.items[1]);
+    return NULL;
+}
+/* A name written outside a `prefix` names the library's `name` less the
+ * prefix; push both spellings, since the library's is the one that clashes. */
+static void push_name_and_unprefixed(SL *sl, Form *nm, const Symbol *pfx, FB *out) {
+    fb_push(out, nm);
+    if (pfx && nm->as.sym->len > pfx->len && memcmp(nm->as.sym->name, pfx->name, pfx->len) == 0)
+        fb_push(out, Sym(sl, nm->span, I(sl, nm->as.sym->name + pfx->len)));
+}
+static void import_set_bound_names(SL *sl, const Form *set, FB *out) {
+    if (set->tag != F_LIST || set->as.list.len < 2 || set->as.list.items[0]->tag != F_SYM) return;
+    const char *h = set->as.list.items[0]->as.sym->name;
+    bool mod = strcmp(h, "only") == 0 || strcmp(h, "except") == 0 || strcmp(h, "prefix") == 0 ||
+               strcmp(h, "rename") == 0;
+    if (!mod) return;
+    import_set_bound_names(sl, set->as.list.items[1], out);
+    const Symbol *pfx = import_set_prefix(set->as.list.items[1]);
+    if (strcmp(h, "only") == 0 || strcmp(h, "except") == 0) {
+        for (uint32_t k = 2; k < set->as.list.len; k++)
+            if (set->as.list.items[k]->tag == F_SYM) push_name_and_unprefixed(sl, set->as.list.items[k], pfx, out);
+    } else if (strcmp(h, "rename") == 0) {
+        for (uint32_t k = 2; k < set->as.list.len; k++) {
+            const Form *pr = set->as.list.items[k];
+            if (pr->tag == F_LIST && pr->as.list.len == 2) {
+                if (pr->as.list.items[0]->tag == F_SYM) push_name_and_unprefixed(sl, pr->as.list.items[0], pfx, out);
+                if (pr->as.list.items[1]->tag == F_SYM) fb_push(out, pr->as.list.items[1]);
+            }
+        }
+    }
+}
+static void import_bound_names(SL *sl, const Form *f, FB *out) {
+    if (head_is(f, sl->s_define_library)) {
+        for (uint32_t i = 2; i < f->as.list.len; i++) import_bound_names(sl, f->as.list.items[i], out);
+        return;
+    }
+    if (!head_is(f, sl->s_import)) return;
+    for (uint32_t i = 1; i < f->as.list.len; i++) import_set_bound_names(sl, f->as.list.items[i], out);
+}
 static void add_clash(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_clash; i++) if (sl->clash_from[i] == s) return;
     if (sl->n_clash == sl->cap_clash) {
@@ -3784,14 +4169,13 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
         }
     }
     /* A library's names live in its module and are exported by name. */
-    if (!library) {
-        for (uint32_t u = 0; u < user.n; u++) {
-            const Symbol *s = user.items[u]->as.sym;
-            if (rn(sl, s) != s) continue;   /* a standard name: R7RS 5.2 */
-            bool clash = false;
-            for (uint32_t k = 0; k < lib.n && !clash; k++) clash = lib.items[k]->as.sym == s;
-            if (clash) add_clash(sl, s);
-        }
+    for (uint32_t u = 0; u < user.n; u++) {
+        const Symbol *s = user.items[u]->as.sym;
+        if (rn(sl, s) != s) continue;   /* a standard name: R7RS 5.2 */
+        if (library) continue;
+        bool clash = false;
+        for (uint32_t k = 0; k < lib.n && !clash; k++) clash = lib.items[k]->as.sym == s;
+        if (clash) add_clash(sl, s);
     }
     FB binders = {0};
     for (uint32_t i = 0; i < n; i++)
@@ -3801,6 +4185,18 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
         if (rn(sl, s) == s && tur_name_is_reserved_special_form(s->name)) add_clash(sl, s);
     }
     free(binders.items);
+    /* ... and a global the user defines (a program's, a library's) or
+     * imports by name, whose uses then follow the definition. */
+    FB reserved = {0};
+    for (uint32_t u = 0; u < user.n; u++) fb_push(&reserved, user.items[u]);
+    for (uint32_t i = 0; i < n; i++)
+        if (is_scheme_file(forms[i]) && !prelude_span(forms[i]->span)) import_bound_names(sl, forms[i], &reserved);
+    for (uint32_t r = 0; r < reserved.n; r++) {
+        const Symbol *s = reserved.items[r]->as.sym;
+        if (rn(sl, s) == s && tur_name_is_reserved_special_form(s->name) && !is_scheme_syntax_name(s->name))
+            add_clash(sl, s);
+    }
+    free(reserved.items);
     free(lib.items);
     free(user.items);
 }
@@ -3809,6 +4205,10 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
                             Form *const *forms, uint32_t n, uint32_t *out_n) {
     SL sl;
     sl_init(&sl, a, st);
+    FB included = {0};
+    expand_includes(&sl, forms, n, &included);
+    forms = included.items;
+    n = included.n;
     for (uint32_t i = 0; i < n; i++)
         if (is_scheme_file(forms[i])) collect_setter_macros(&sl, forms[i]);
     for (uint32_t i = 0; i < n; i++)
@@ -3913,6 +4313,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     *out_n = out.n;
     free(out.items);
     free((void *)sl.muts);
+    free(included.items);
     free((void *)sl.clash_from);
     free((void *)sl.clash_to);
     free((void *)sl.setters);

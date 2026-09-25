@@ -39,7 +39,7 @@ ports: the rest of `(scheme base)`, `(scheme char)`, `(scheme cxr)` and
 process-context)` and the non-port half of `(scheme file)` as files spliced
 in only when imported (`tests/fixtures/r7rs-base-library`,
 `r7rs-system-libraries`); `(scheme eval)`, `(scheme repl)`, `(scheme load)`
-and `include` are refused with their reason (the first three until T4). R8 gives the ports: string,
+and `include` are refused with their reason (the first three until T4, `include` until 2026-09-25). R8 gives the ports: string,
 bytevector and file ports over one C buffer, the current ports as parameter
 objects, the whole R7RS I/O surface, `write`/`display` with datum labels for
 cycles, `write-shared`/`write-simple`, and `(scheme read)`
@@ -2406,10 +2406,10 @@ re-entered continuation).**
 >   [r7rs-toplevel-reentry-reruns-forms](../reported/r7rs-toplevel-reentry-reruns-forms.md)
 >   (chibi and Racket delimit each top-level form).
 > - **Found and filed:**
->   - [r7rs-internal-define-forward-set](../reported/r7rs-internal-define-forward-set.md)
->     -- `set!` on a later internal define is "not bound";
->   - [r7rs-toplevel-define-named-like-a-turmeric-form](../reported/r7rs-toplevel-define-named-like-a-turmeric-form.md)
->     -- `(define gen ...)` is the `gen` form.
+>   - [r7rs-internal-define-forward-set](../archive/r7rs-internal-define-forward-set.md)
+>     -- `set!` on a later internal define is "not bound" (resolved 2026-09-25);
+>   - [r7rs-toplevel-define-named-like-a-turmeric-form](../archive/r7rs-toplevel-define-named-like-a-turmeric-form.md)
+>     -- `(define gen ...)` is the `gen` form (resolved 2026-09-25).
 > - **Fixtures:**
 >   - `r7rs-continuations`, on both back ends: test 1772, an escape, a
 >     generator over `for-each`, same-fringe with two tree walkers, re-entry
@@ -2747,33 +2747,40 @@ task.*
 
 ### 9.3 Documented differences no chibi test reaches
 
-Each one is in `docs/guides/r7rs-guide.md` ("Where it differs") today:
+Each one is in `docs/guides/r7rs-guide.md` ("Where it differs") today, and
+since 2026-09-25 each is a report under `docs/reported/` with a repro
+measured on both back ends (README section "The documented R7RS
+differences, as reports"):
 
-- **`apply` and dynamic calls take at most four arguments.** The compiled
-  dynamic call's apply table stops at 4 (`emit_dyn_call`), and the prelude is
-  compiled on both back ends. Lift it, or pack the surplus into a rest list,
-  in a Scheme-only path.
-- **`char-ready?` and `u8-ready?` always answer `#t`.** Honest readiness needs
-  a non-blocking check on file and console ports.
-- **`(except ...)` in an import is refused**, because a Turmeric import cannot
-  say "all but these". A Scheme-side expansion of the library's export list
-  can.
-- **`include` and `include-ci` are refused.** They need a way to read a file
-  as Scheme without its own `#lang` line.
+- ~~**`apply` and dynamic calls take at most four arguments**~~ -- resolved
+  2026-09-25: eight, on every path, behind `TUR_FAT_SHIM_MAX_ARITY`
+  ([archived](../archive/r7rs-apply-more-than-four-arguments.md)); past
+  eight, pass the rest as a list.
+- ~~**`char-ready?` and `u8-ready?` always answer `#t`**~~ -- resolved
+  2026-09-25 with a zero-timeout `poll()` on file, pipe and console ports
+  ([archived](../archive/r7rs-char-ready-always-true.md)); Windows still
+  answers `#t`.
+- ~~**`(except ...)` in an import is refused**~~ -- resolved 2026-09-25:
+  import sets nest in any order, and an excluded name is the program's own
+  ([archived](../archive/r7rs-import-except-refused.md)); over a user
+  library or Turmeric module `except` is a full import, since Turmeric's
+  import has no "all but".
+- ~~**`include` and `include-ci` are refused**~~ -- resolved 2026-09-25:
+  the lowering reads the file with the Scheme reader and splices it
+  ([archived](../archive/r7rs-include-refused.md)).
 - **Compiled top-level order.** A top-level `define` whose initializer has an
   effect runs before the program's top-level expressions
   ([toplevel-def-initializers-run-before-toplevel-expressions](../reported/toplevel-def-initializers-run-before-toplevel-expressions.md);
   every dialect).
-- **`command-line` starts with `"tur"`**, not the program's own path.
-- **Case mapping details.**
-  - `string-downcase` does not apply the context-sensitive final sigma.
-  - A character's simple case mapping is taken from its full mapping when
-    that is one character, so a few Greek iota-subscript letters map to
-    themselves.
-  - `char-alphabetic?` is General Category L* and Nl, without
-    Other_Alphabetic.
-  - The tables follow the Unicode version of the Python that generated them
-    (14.0.0).
+- ~~**`command-line` starts with `"tur"`**, not the program's own path~~
+  -- resolved 2026-09-25 through a pre-declared `*argv0*` global
+  ([archived](../archive/r7rs-command-line-first-element-is-tur.md)).
+- ~~**Case mapping details**~~ -- resolved 2026-09-25: the tables are
+  generated from the UCD files at a pinned ICU release tag (Unicode 16.0.0),
+  with Final_Sigma, the UCD's simple mappings and the Alphabetic property
+  ([archived](../archive/r7rs-unicode-case-mapping-gaps.md)). The
+  language-specific SpecialCasing entries (Lithuanian, Turkish, Azeri) are
+  not applied, as R7RS does not ask for them.
 
 ### 9.4 Related: the shared-variable difference, kept on purpose
 

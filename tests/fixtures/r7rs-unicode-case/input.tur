@@ -1,0 +1,26 @@
+#lang r7rs
+;; (scheme char) over the Unicode Character Database (tools/fetch-ucd.sh,
+;; tools/gen-r7rs-unicode.py --ucd): the simple mappings from UnicodeData.txt,
+;; the full ones from SpecialCasing.txt and CaseFolding.txt, Final_Sigma in
+;; string-downcase, and the Alphabetic property behind char-alphabetic?.
+(import (scheme base) (scheme write) (scheme char))
+;; Final_Sigma: a sigma at the end of a word downcases to U+03C2, a lone one
+;; and one followed (through a case-ignorable) by a cased letter do not.
+(write (list (string-downcase "\x39F;\x394;\x3A5;\x3A3;\x3A3;\x395;\x3A5;\x3A3;")
+             (string-downcase "\x39C;\x388;\x39B;\x39F;\x3A3; \x395;\x39D;\x38C;\x3A3;")
+             (string-downcase "\x3A3;")
+             (string-downcase "A\x3A3;.B")
+             (string-foldcase "\x39C;\x388;\x39B;\x39F;\x3A3;")))
+(newline)
+;; Full mappings: sharp s, dotted capital I; the simple mapping of a
+;; character whose full one is several characters (U+1F80 -> U+1F88).
+(write (list (string-upcase "\xDF;") (string-foldcase "\xDF;") (string-upcase "\x1F80;")
+             (char-upcase #\x1F80) (char-downcase #\x1F88) (char-upcase #\x1FB3)
+             (char-upcase #\xDF) (char-foldcase #\x1E9E)))
+(newline)
+;; Alphabetic includes Other_Alphabetic (U+0345) and Nl (U+2160); a Thai
+;; digit is numeric, not alphabetic.
+(write (list (char-alphabetic? #\x0345) (char-alphabetic? #\x02B0) (char-alphabetic? #\x2160)
+             (char-alphabetic? #\x0E50) (char-numeric? #\x0E50) (digit-value #\x0E53)
+             (char-upper-case? #\x2160) (char-lower-case? #\x2170) (char-whitespace? #\x3000)))
+(newline)

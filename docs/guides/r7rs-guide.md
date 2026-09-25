@@ -61,7 +61,7 @@ All of R7RS-small, and `(scheme r5rs)`'s environments:
 |---|---|
 | `(scheme base)` | complete, including string, bytevector and file ports |
 | `(scheme case-lambda)`, `(scheme lazy)`, `(scheme inexact)` | complete |
-| `(scheme char)` | complete, Unicode case mapping and classification included |
+| `(scheme char)` | complete, Unicode 16.0.0 case mapping and classification included (`tools/fetch-ucd.sh`, one pinned ICU release) |
 | `(scheme cxr)`, `(scheme complex)` | complete |
 | `(scheme write)` | `write` and `display` label cycles; `write-shared`, `write-simple` |
 | `(scheme read)` | `read`, datum labels and cycles included |
@@ -71,7 +71,7 @@ All of R7RS-small, and `(scheme r5rs)`'s environments:
 The core forms are all there: `define`, `lambda`, the `let` family and named
 `let`, `do`, `case`, `cond` with `=>`, `when`/`unless`, `case-lambda`, the
 `-values` forms, `define-record-type`, `define-library` and `import` with
-`only`/`prefix`/`rename`, `cond-expand`, `syntax-rules`, `guard`,
+`only`/`except`/`prefix`/`rename` (nested freely), `cond-expand`, `syntax-rules`, `guard`,
 `parameterize`, `delay`, `delay-force`, quasiquote.
 
 ## Lists, vectors, strings
@@ -370,11 +370,15 @@ library's string result to `cstr` gets the same copy.
   that calls one of your procedures (`for-each`, `map`, `member`, a
   `delay-force` stream) runs in constant stack at the default `-O2`, and can
   overflow the stack on a million elements in an `-O1` build.
-- **`apply` and dynamic calls take at most four arguments.**
-- **`char-ready?` and `u8-ready?` always answer `#t`.**
-- **`(except ...)` in an import is refused.** A Turmeric import cannot say
-  "all but these names"; the error says to list them with `(only ...)`.
-- **`include` is refused**, with the reason.
+- **`apply` and a call through a variable take at most eight arguments.**
+  A direct call to a named procedure has no limit; past eight, pass the rest
+  as a list.
+- **`char-ready?` and `u8-ready?` on Windows always answer `#t`.** Elsewhere
+  they ask the descriptor (a zero-timeout poll), so an idle console or an
+  empty pipe answers `#f`.
+- **`(except ...)` over a user library or a Turmeric module hides nothing.**
+  Turmeric's import has no "all but", so the module is imported whole; over
+  a `(scheme ...)` library an excluded name is the program's own to define.
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.
@@ -383,7 +387,6 @@ library's string result to `cstr` gets the same copy.
   top-level expressions. Opening a file or reading input in a top-level
   `define` is the case to watch. Put such code inside a procedure; the
   interpreter evaluates in order either way.
-- **`command-line`** starts with `"tur"`, not the program's own path.
 
 ## Conformance
 

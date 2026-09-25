@@ -1644,7 +1644,11 @@
         (if (= n 2) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1))
           (if (= n 3) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2))
             (if (= n 4) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3))
-              (r7rs-fail-any__ "apply: more than 4 arguments is not supported yet (r7rs-lang-plan R6)"))))))))
+              (if (= n 5) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3) (r7rs-list-ref l 4))
+                (if (= n 6) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3) (r7rs-list-ref l 4) (r7rs-list-ref l 5))
+                  (if (= n 7) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3) (r7rs-list-ref l 4) (r7rs-list-ref l 5) (r7rs-list-ref l 6))
+                    (if (= n 8) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3) (r7rs-list-ref l 4) (r7rs-list-ref l 5) (r7rs-list-ref l 6) (r7rs-list-ref l 7))
+                      (r7rs-fail-any__ "apply: more than 8 arguments is not supported; pass the rest as a list"))))))))))))
 ;;; r7rs-spread-args__ -- (a b (c d)) to (a b c d): every argument but the
 ;;; last, then the last as the tail.
 (defn r7rs-spread-args-go__ [l last] : any
@@ -2839,10 +2843,43 @@
 (defn r7rs-peek-u8 [& r : any] : any
   (let [b (r7rs-io-peek__ (r7rs-in-port-io__ (:: r (Cons any))) 0)]
     (if (< b 0) r7rs-eof-value__ (:: b any))))
-;;; r7rs-char-ready? / r7rs-u8-ready? -- #t: a read never blocks forever on
-;;; these ports except at a terminal, where R7RS leaves the answer open.
-(defn r7rs-char-ready? [& r : any] : bool (do (r7rs-in-port-io__ (:: r (Cons any))) true))
-(defn r7rs-u8-ready? [& r : any] : bool (do (r7rs-in-port-io__ (:: r (Cons any))) true))
+;;; r7rs-io-ready?__ -- internal: whether a read on the buffer would not
+;;; block (R7RS 6.13.2): a buffered byte, a string or bytevector buffer (its
+;;; end of input counts as ready), a FILE at end of file, or a FILE whose
+;;; descriptor has input now (a zero-timeout poll, so a terminal or an empty
+;;; pipe answers #f).  Windows has no poll over a FILE; it answers #t.
+(defn r7rs-io-ready?__ [io : R7rsIo] : bool
+  ```c
+  /* __tur_include__: #if !defined(_WIN32)
+  #include <poll.h>
+  #endif */
+  typedef struct { unsigned char *p; size_t n, cap, pos; FILE *f; int std; } r7rs_io;
+  r7rs_io *b = (r7rs_io *)io;
+  if (b->pos < b->n) return 1;
+  if (!b->f) return 1;
+  if (feof(b->f)) return 1;
+#if defined(_WIN32)
+  return 1;
+#else
+  struct pollfd pd; pd.fd = fileno(b->f); pd.events = POLLIN; pd.revents = 0;
+  int r = poll(&pd, 1, 0);
+  if (r < 0) return 1;
+  return r > 0;
+#endif
+  ```)
+;;; r7rs-repl-value__ -- internal: a REPL top-level expression's value as an
+;;; `any`.  A top-level expression's value is its elaborated type's
+;;; representation (a `let` yielding a vector is the bare Vec), which the
+;;; prompt's `write` cannot read as a Scheme value; passing it through an
+;;; `any` parameter widens it the way a procedure's result is
+;;; (r7rs-repl-toplevel-expression-value-not-widened).
+(defn r7rs-repl-value__ [x] : any x)
+
+;;; r7rs-char-ready? / r7rs-u8-ready? -- whether a read would not block now.
+;;; A string or bytevector port is always ready; a file, pipe or console port
+;;; is asked (r7rs-io-ready?__).
+(defn r7rs-char-ready? [& r : any] : bool (r7rs-io-ready?__ (r7rs-in-port-io__ (:: r (Cons any)))))
+(defn r7rs-u8-ready? [& r : any] : bool (r7rs-io-ready?__ (r7rs-in-port-io__ (:: r (Cons any)))))
 
 ;;; r7rs-read-line -- the characters up to a line end (LF, CR or CR LF, which
 ;;; is consumed and not included), or the eof object at the end of input.

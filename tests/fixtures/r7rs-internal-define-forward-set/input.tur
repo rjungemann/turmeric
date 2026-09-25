@@ -1,0 +1,24 @@
+#lang r7rs
+;; Internal definitions are letrec* (R7RS 5.3.2): every name a body defines
+;; is in scope throughout it, so a procedure defined early may set! or read a
+;; variable defined after it, and a value define may refer to a later one
+;; through a closure.
+(import (scheme base) (scheme write))
+(define (f)
+  (define (a) (set! b (+ b 1)))
+  (define b 0)
+  (a)
+  (a)
+  b)
+(define (g)
+  (define (get) later)
+  (define later 'ready)
+  (get))
+(define (h)
+  (define thunk (lambda () (* k 2)))
+  (define k 21)
+  (define (bump!) (set! k (+ k 1)))
+  (bump!)
+  (list (thunk) k))
+(write (list (f) (g) (h)))
+(newline)

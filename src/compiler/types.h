@@ -616,6 +616,13 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
  * which falls back gracefully for wider functions rather than rejecting them.
  * The house-style nudge lives in HIGH_ARITY_SOFT_LIMIT, not here. */
 #define MAX_FN_ARITY 64
+/* The widest function the fat-closure shim family covers: __tur_fatshim0..N
+ * and __tur_poly_to_fat0..N in the emitted preamble, the ^fat auto-shim, the
+ * `any` widen of a bare fn, and the dynamic call's fixed slots all stop
+ * here.  Was 5 until r7rs-apply-more-than-four-arguments raised it, so a
+ * Scheme procedure of up to eight parameters can be a first-class value on
+ * the compiled back end. */
+#define TUR_FAT_SHIM_MAX_ARITY 8
 
 /* arbitrary-fn-arity: the historical hand-written-arity soft ceiling of 16.
  * Declaring more than this many positional params is NOT an error -- arity is
