@@ -59,3 +59,44 @@ SEPARATE CPS procedure resumes the loop from inside that procedure's frame
   it needs no reassignment.
 - Or put `TUR_MUSTTAIL` on these returns. That covers clang only (gcc gained
   `musttail` in 15), so it is a partial answer.
+
+## Also measured, Apple clang 21 (macOS arm64, 2026-09-25)
+
+The `-O1` row above is gcc's, not the shape's. clang keeps the sibling call
+lower down, so the threshold moves:
+
+| build | gcc 13 | Apple clang 21 |
+|---|---|---|
+| `-O2` (the default) | constant stack | constant stack |
+| `-O1` | segfault | constant stack |
+| `-O0` | segfault | segfault |
+
+Two probes that pin the shape rather than the library. A loop whose non-tail
+call is to a NAMED procedure is not CPS and is lowered to a backedge, so it
+holds at `-O0`:
+
+```scheme
+(define (noop x) x)
+(define (go i acc) (if (= i 0) acc (go (- i 1) (+ acc (noop 1)))))
+(write (go 1000000 0))                      ; 1000000 at -O0
+```
+
+The same loop calling through a VARIABLE is CPS (`run__cps` in the emitted C)
+and overflows at `-O0`:
+
+```scheme
+(define (run f i acc) (if (= i 0) acc (run f (- i 1) (+ acc (f 1)))))
+(write (run (lambda (x) x) 1000000 0))      ; segfault at -O0, 1000000 at -O2
+```
+
+Tail calls themselves are unaffected at any level: `tests/fixtures/r7rs-tail-calls`
+runs self, mutual and through-a-variable tail calls 10,000,000 deep with its
+`--debug` flags file (`-O0`).
+
+## Guide upkeep
+
+`docs/guides/r7rs-guide.md` ("Where it differs from R7RS") carries a bullet
+beginning "**A loop through a procedure variable needs the C compiler's tail
+call.**" When the backedge lands, delete that bullet whole -- the guide's
+"Lists, vectors, strings" section already states that every Scheme call is a
+proper tail call, which becomes the complete story.

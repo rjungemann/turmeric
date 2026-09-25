@@ -58,3 +58,10 @@ frames, the escape records and the packed rest chains do not.
   (a T5 continuation may still point at them).
 - Free the escape record when its `call/ec` returns or is escaped to, since a
   one-shot escape cannot be invoked twice.
+
+## Guide upkeep
+
+One clause of `docs/guides/r7rs-guide.md`'s "**Data is never freed.**" bullet
+("Where it differs from R7RS") is this report; see the Guide upkeep section of
+[r7rs-heap-data-never-reclaimed](r7rs-heap-data-never-reclaimed.md), which
+maps each clause of that bullet to its report.

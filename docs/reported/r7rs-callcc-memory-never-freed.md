@@ -73,3 +73,10 @@ same way. The repro above runs in 10 MB (from 527 MB with today's build,
   object, which Scheme values are not today
   ([dynamic-returned-closure-env-is-never-freed](dynamic-returned-closure-env-is-never-freed.md)
   is the same gap for closures).
+
+## Guide upkeep
+
+One clause of `docs/guides/r7rs-guide.md`'s "**Data is never freed.**" bullet
+("Where it differs from R7RS") is this report; see the Guide upkeep section of
+[r7rs-heap-data-never-reclaimed](r7rs-heap-data-never-reclaimed.md), which
+maps each clause of that bullet to its report.
