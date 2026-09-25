@@ -2747,25 +2747,34 @@ task.*
 
 ### 9.3 Documented differences no chibi test reaches
 
-Each one is in `docs/guides/r7rs-guide.md` ("Where it differs") today:
+Each one is in `docs/guides/r7rs-guide.md` ("Where it differs") today, and
+since 2026-09-25 each is a report under `docs/reported/` with a repro
+measured on both back ends (README section "The documented R7RS
+differences, as reports"):
 
-- **`apply` and dynamic calls take at most four arguments.** The compiled
+- **`apply` and dynamic calls take at most four arguments**
+  ([r7rs-apply-more-than-four-arguments](../reported/r7rs-apply-more-than-four-arguments.md)). The compiled
   dynamic call's apply table stops at 4 (`emit_dyn_call`), and the prelude is
   compiled on both back ends. Lift it, or pack the surplus into a rest list,
   in a Scheme-only path.
-- **`char-ready?` and `u8-ready?` always answer `#t`.** Honest readiness needs
+- **`char-ready?` and `u8-ready?` always answer `#t`**
+  ([r7rs-char-ready-always-true](../reported/r7rs-char-ready-always-true.md)). Honest readiness needs
   a non-blocking check on file and console ports.
-- **`(except ...)` in an import is refused**, because a Turmeric import cannot
+- **`(except ...)` in an import is refused**
+  ([r7rs-import-except-refused](../reported/r7rs-import-except-refused.md)), because a Turmeric import cannot
   say "all but these". A Scheme-side expansion of the library's export list
   can.
-- **`include` and `include-ci` are refused.** They need a way to read a file
+- **`include` and `include-ci` are refused**
+  ([r7rs-include-refused](../reported/r7rs-include-refused.md)). They need a way to read a file
   as Scheme without its own `#lang` line.
 - **Compiled top-level order.** A top-level `define` whose initializer has an
   effect runs before the program's top-level expressions
   ([toplevel-def-initializers-run-before-toplevel-expressions](../reported/toplevel-def-initializers-run-before-toplevel-expressions.md);
   every dialect).
-- **`command-line` starts with `"tur"`**, not the program's own path.
-- **Case mapping details.**
+- **`command-line` starts with `"tur"`**, not the program's own path
+  ([r7rs-command-line-first-element-is-tur](../reported/r7rs-command-line-first-element-is-tur.md)).
+- **Case mapping details**
+  ([r7rs-unicode-case-mapping-gaps](../reported/r7rs-unicode-case-mapping-gaps.md)).
   - `string-downcase` does not apply the context-sensitive final sigma.
   - A character's simple case mapping is taken from its full mapping when
     that is one character, so a few Greek iota-subscript letters map to

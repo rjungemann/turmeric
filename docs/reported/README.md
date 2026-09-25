@@ -2135,6 +2135,24 @@ from it -- the second reproduces on `vec-push!`, parametric since long before.
 | [r7rs-toplevel-reentry-reruns-forms](r7rs-toplevel-reentry-reruns-forms.md) | low-medium | Filed 2026-09-24 (r7rs-lang-plan T5 behavior change). A continuation captured at top level is the rest of the whole program, so re-entering it from a later form re-runs the forms in between -- `(saved 2)` after the capturing form loops forever, where chibi and Racket (a prompt per top-level form) print once and go on |
 | [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md) | medium | Filed 2026-09-24 (r7rs-lang-plan T5 behavior change). Every `call/cc` mallocs a copy of the C stack that is never freed, and the first one pins DK frames (compiled) and the driver's temporaries (interpreter) for the rest of the run: 100,000 escapes grow a compiled program to 366 MB; 10,000 take the Debug interpreter to 1.3 GB. The `--enable=r7rs-gc` experiment reclaims images compiled (10 MB); the interpreter is unchanged |
 
+## The documented R7RS differences, as reports (filed 2026-09-25)
+
+r7rs-lang-plan 9.3 and the guide's "Where it differs" list the ways
+`#lang r7rs` knowingly departs from R7RS-small that no chibi test reaches.
+Each is now a report with a repro measured on both back ends, so it can be
+picked up, or archived, like any other finding. The seventh item on that
+list, compiled top-level order, is
+`toplevel-def-initializers-run-before-toplevel-expressions` above.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [r7rs-apply-more-than-four-arguments](r7rs-apply-more-than-four-arguments.md) | low-medium | `(apply f '(1 2 3 4 5))` and `call-with-values` past four values panic on both back ends (`r7rs-apply-list__` has arms for 0-4); a dynamic call `(g 1 2 3 4 5)` is a compile-time refusal on the compiled back end (`emit_dyn_call`, `TUR_APPLY4_T`) and works interpreted. A direct call is fine. Fix is the R6 rest-chain packing for the surplus, in a Scheme-gated path |
+| [r7rs-char-ready-always-true](r7rs-char-ready-always-true.md) | low | `char-ready?` / `u8-ready?` resolve the port and answer `#t`, so a poll on the console or a pipe says ready and the read blocks. String and bytevector ports are genuinely always ready; a file port needs a zero-timeout `poll()` behind an inline-C helper |
+| [r7rs-import-except-refused](r7rs-import-except-refused.md) | low-medium | `(except <lib> name...)` and any nested import set are refused because the lowering maps one modifier onto Turmeric's `:refer`/`:as`. The Scheme side knows every export list, so the set can be folded (except removes, only keeps, prefix/rename re-spell) into one `:refer` before the Turmeric import is written |
+| [r7rs-include-refused](r7rs-include-refused.md) | low-medium | `include` / `include-ci` at top level and `(include ...)` in a `define-library` are refused: the lowering cannot read a second file under the Scheme reader without its own `#lang` line. Fix is a read-as-Scheme entry point that splices the forms and registers the path for diagnostics |
+| [r7rs-command-line-first-element-is-tur](r7rs-command-line-first-element-is-tur.md) | low | `(command-line)` conses the literal `"tur"` onto `*args*`; the emitted `main` and the interpreter both drop `argv[0]`, so nothing records it. Fix is a runtime `argv[0]` global set by both, exposed to the stdlib without reading `g_tur_args` raw |
+| [r7rs-unicode-case-mapping-gaps](r7rs-unicode-case-mapping-gaps.md) | low | Four gaps from deriving the `(scheme char)` tables through Python's `unicodedata`: no Final_Sigma in `string-downcase` ("ΟΔΥΣΣΕΥΣ" downcases to a non-final sigma), a simple case mapping taken from the full one so `(char-upcase #\x1F80)` is itself, `char-alphabetic?` without Other_Alphabetic (`#\x0345` is `#f`), and a Unicode version that follows the generating Python (14.0.0). Fix is generating from the UCD files |
+
 ## Found executing r7rs-lang-plan T8, the memory audit (filed 2026-09-25)
 
 | Report | Severity | One line |
