@@ -3021,18 +3021,37 @@ static TuriValue native_r7rs_cont_null(TuriEnv *env, TuriValue *a, uint32_t n, v
  * for every form, and a restored image lands where it was taken.  Never
  * inlined, so the mark is this frame's and not a caller's (the compiled
  * twin, r7k_run_form in the prelude, says why). */
+static unsigned char *g_r7k_form_saved[64];
+static void          *g_r7k_boundary_saved[64];
+static int            g_r7k_form_depth;
 __attribute__((noinline))
 static TuriValue native_r7rs_toplevel(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 1) return turi_error("r7rs-toplevel__: expected a thunk");
-    volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
-    mark[0] = 0;
-    unsigned char *saved_base = g_r7k_form_base;
-    void *saved_boundary = turi_cont_set_drive_boundary(turi_cont_drive_mark());
-    g_r7k_form_base = (unsigned char *)mark;
-    TuriValue r = turi_call(env, a[0], NULL, 0);
-    g_r7k_form_base = saved_base;
-    turi_cont_set_drive_boundary(saved_boundary);
+    if (g_r7k_form_depth >= 64) return turi_error("r7rs-toplevel__: prompts nested too deep");
+    /* The mark is this frame's jmp_buf, and the body runs between a setjmp
+     * and a longjmp back into this same, still-live frame: the frames a
+     * re-entry restores below the mark hand back the callee-saved registers
+     * they saved during the CAPTURED form, so the return into this frame --
+     * the INVOKING form's -- would carry that older form's registers up to
+     * the caller.  The longjmp reinstates this frame's own.  What is needed
+     * after the body lives in static stacks, since frame slots below the
+     * mark are overwritten by the image.  The compiled twin, r7k_run_form
+     * in the prelude, is the same shape. */
+    jmp_buf jb;
+    int d = g_r7k_form_depth++;
+    g_r7k_form_saved[d] = g_r7k_form_base;
+    g_r7k_boundary_saved[d] = turi_cont_set_drive_boundary(turi_cont_drive_mark());
+    g_r7k_form_base = (unsigned char *)&jb;
+    static TuriValue r_static[64];
+    if (setjmp(jb) == 0) {
+        r_static[d] = turi_call(env, a[0], NULL, 0);
+        longjmp(jb, 1);
+    }
+    d = --g_r7k_form_depth;
+    g_r7k_form_base = g_r7k_form_saved[d];
+    turi_cont_set_drive_boundary(g_r7k_boundary_saved[d]);
+    TuriValue r = r_static[d];
     if (turi_is_error(r)) return r;
     return turi_nil();
 }
