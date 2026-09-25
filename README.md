@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.51.0` -- `when`, `unless`, `defer` and eleven other forms take a multi-form body instead of demanding an explicit `(do ...)`, and `(defer a b)` no longer silently drops `b`.
+**Latest release:** `v0.52.0` -- `#lang r7rs` is a working R7RS-small Scheme -- the full numeric tower, mutable strings, `eval`, re-entrant `call/cc` and ports, 1223 of chibi's 1225 conformance tests on both back ends -- and self, mutual and dynamic tail calls run in constant stack.
 
 ## What
 

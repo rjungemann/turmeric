@@ -2,9 +2,32 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.52.0] -- 2026-09-25
 
 ### Added
+
+- **`*argv0*` -- the running program's own name.** A new pre-declared global
+  (`:cstr`) carrying `argv[0]` of a compiled binary, and the script path under
+  `--interpret`; every emitted `main` sets it. `*args*` keeps its meaning (the
+  arguments after the program name). `#lang r7rs`'s `(command-line)` conses
+  `*argv0*` in place of the constant `"tur"`.
+
+- **`#lang r7rs`: `include` and `include-ci`.** Each named file is read with the
+  Scheme reader, relative to the including file's directory, and its forms are
+  spliced where the `include` stood: at top level (ahead of the whole-program
+  scans, so an included `define` or `set!` is seen like one written in place), in
+  expression position, and as a `define-library` declaration. The file is
+  registered with the diagnostic registry, so an error inside it names it.
+  `include-ci` reads with `#!fold-case` in force.
+
+- **`#lang r7rs`: `except`, and import sets nested in any order.** The import
+  lowering folds a set of any nesting -- `only`, `except`, `prefix`, `rename` --
+  into one spec, unwinding each name to the library's spelling through the
+  modifiers inside it. Over a `(scheme ...)` library an excluded name stops
+  meaning the library's, so `(except (scheme base) assoc)` lets the program
+  define its own `assoc`. Over a user library or Turmeric module, `only` is
+  `:refer`, `prefix` is `:as`, `rename` is a refer plus a read-time rename, and
+  `except` is a full import.
 
 - **`#lang r7rs`: an experimental collector (`--enable=r7rs-gc`).** A
   conservative mark-sweep collector (`src/runtime/r7gc.c`) for compiled
@@ -543,6 +566,28 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
+- **A dynamic call carries eight arguments, where it stopped at four or five.**
+  One constant now bounds every path: the preamble's fat shims, the `any` widen
+  of a bare function, the `^fat` auto-shim, the fat-normalization rule, the
+  dynamic call's fixed slots, the tail-call trampoline's descriptor, and the
+  R7RS `apply`. A `#lang r7rs` procedure of up to eight parameters is therefore
+  a first-class value on the compiled back end -- through `apply`, a variable, a
+  parameter, `call-with-values`, a variadic callee, and a 100,000-deep dynamic
+  tail call. Past eight, a dynamic call is refused at compile time and `apply`
+  panics, each saying to pass the rest as a list.
+
+- **`#lang r7rs`: the Unicode tables come from the UCD at a pinned release.**
+  `tools/fetch-ucd.sh` fetches `UnicodeData`, `SpecialCasing`, `CaseFolding` and
+  `DerivedCoreProperties` from ICU's copy at one tag (release-76-1, Unicode
+  16.0.0), and the generator reads those files instead of the build host's
+  Python, so the Unicode version moves only when the tag does. The gaps that
+  closes: simple case mapping is `UnicodeData`'s fields 12-13 plus
+  `CaseFolding`'s C+S entries, so `(char-upcase #\x1F80)` is `#\x1F88` while
+  `#\xDF` stays itself; full mapping is `SpecialCasing`'s unconditional entries;
+  `char-alphabetic?` is the Alphabetic property, `Other_Alphabetic` included;
+  and `string-downcase` applies Final_Sigma. The language-specific
+  `SpecialCasing` entries are not applied.
+
 - **A loop that owns a `ref<T>` or `rc<T>` local is a real loop again.** A
   self tail call under a `let` that owns a value with drop glue -- a `ref<T>`,
   an `rc<T>`, a move-only Drop value, or a by-value ADT with an owning field --
@@ -598,6 +643,72 @@ All notable changes to Turmeric are documented here.
   [proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
 
 ### Fixed
+
+- **A `: nil` self tail call is a loop.** A void-returning function's tail spine
+  was never walked, so a `when` loop in a `: nil` body was an ordinary recursive
+  call. Each leaf now ends in a statement plus a bare return (firing open
+  drop-glue frames and any scope drops first), and in a void body a one-armed
+  `if` is a tail position. `^tailcall` is accepted in a `: nil` body.
+
+- **`@` on an `rc<T>` returned the control block, not the payload.** `EX_DEREF`
+  had no `rc` arm, so `(+ @x 1)` printed an address. It reads through to the
+  value now, in whichever layout `rc/of` chose, and the `rc`'s ADT definition is
+  kept so a `match` or a field read of `@s` resolves. Also: an `-O0` build could
+  not link the contract handler, which `libturt_runtime.a` now defines.
+
+- **A generic closure capturing a float truncated it.** `((capture 7.25))`
+  printed 7. An unannotated lambda whose body is a value of a named type
+  parameter now records that parameter as its result type, as an explicit `: A`
+  does, so the call can instantiate it instead of reading the int carrier. The
+  per-specialization inner-closure clone also covers a type parameter bound to a
+  by-value aggregate, and a specialization body filling a shared environment's
+  carrier slot bridges the bits -- a pointer through `intptr_t`, a double or
+  float by union reinterpret -- rather than performing a numeric conversion.
+
+- **A plain `fn`-typed parameter's shape is checked, as a `^fat` one's was.** A
+  wrong-arity or float-slot function passed to an `(fn [int] int)` parameter was
+  accepted and ran, because the parameter is routed onto the typed poly carrier
+  and the structural check was gated on the slot's kind. The declared signature
+  was already recorded; the call now checks a function argument against it for a
+  non-function slot too, under the same carrier-class rule as `^fat`.
+
+- **A non-parametric ADT's forward typedef is no longer emitted twice**, which is
+  C11-only and which clang rejects under `-std=c99`.
+
+- **`#lang r7rs`: `letrec*` forward references, and a widened REPL echo.** A
+  body's `define` that an earlier definition's initializer mentions --
+  `(define (a) (set! b 1))` before `(define b 0)`, or a closure reading a later
+  variable -- is hoisted as a mutable cell bound around the whole body and
+  assigned in place, so every name a body defines is in scope throughout it
+  (R7RS 5.3.2). At the R7RS prompt a top-level expression is passed through an
+  identity with an `any` parameter, so a `let` yielding a vector echoes as
+  `#(1 2)` rather than a pointer; programs and Turmeric forms typed at the
+  prompt are left alone.
+
+- **`#lang r7rs`: `char-ready?` asks the descriptor.** It answers from the
+  buffer, a string or bytevector port, a `FILE` at eof, else a zero-timeout
+  `poll()` on the descriptor, so an empty pipe or an idle console answers `#f`.
+  It used to be `#t` always. Windows keeps `#t` (no `poll` over a `FILE`).
+
+- **`#lang r7rs`: a global spelled like a Turmeric special form.** A program or
+  `define-library` body that defines -- or imports by name -- `gen`, `handle`,
+  `return` and the like now goes through the lowering's clash table wherever the
+  name occurs, so a library and its importer stay in step, and a `set!` on such a
+  global is looked up through the rename. Scheme syntax sharing a spelling
+  (`set!`, `do`, `let`) is exempt, and a Turmeric form written in a Scheme file
+  stays reachable.
+
+- **JIT: `math.tur` and `#lang r7rs` programs run on the engine, not the `cc`
+  fallback.** c2mir knew none of `math.tur`'s new `__builtin_*` trig, nor the
+  `__builtin_isinf`/`isfinite`/`nan`/`inf` the Scheme runtime uses; the engine
+  declares and shims all ten. The prelude's `call/cc` helper spelled its
+  thread-local `__thread`, which c2mir cannot parse, so no `#lang r7rs` program
+  ever reached the engine. With the engine really running them, two wrong answers
+  surfaced and are fixed: c2mir accepts `__builtin_{add,sub,mul}_overflow` and
+  answers 0 for every int64 operand, so `(abs INT64_MIN)` and 2^32 * 2^32 never
+  promoted to bignums (the overflow tests are spelled out now), and the
+  `r7rs-gc` collector scanned the executable's data segment, where a JIT'd
+  program's globals are not.
 
 - **A call to a `: float` function defined later in the file is typed
   `float`.** The top-level forward-declaration pass had no `float` arm, so such
