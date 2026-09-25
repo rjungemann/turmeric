@@ -1,0 +1,40 @@
+;; typeclass-superclasses-plan SC8b step 5: Monad is declared over
+;; Applicative, which is over Functor.  So a `[^Monad M]` body may call `pure`
+;; and `fmap` -- the Haskell `Applicative m => Monad m` shape, and the reason
+;; this step waited for `Applicative [(Result _ B)]` to ship.
+;;
+;; Each generic is called at Option and at Result, so a `pure` that resolved
+;; to one instance for both would print a wrong line.
+
+;; `bind` plus `pure` in the continuation: the everyday monadic shape.
+(defn add-one [^Monad M] [m : (M int)] : (M int)
+  (bind m (fn [x : int] : (M int) (pure (+ x 1)))))
+
+;; `do-m` desugars to `bind`; its last line is a `pure`.  One binding: a
+;; two-binding `do-m` in a constrained generic does not compile yet, with or
+;; without superclasses (docs/reported/hkt-generic-nested-bind-result-type.md).
+(defn doubled [^Monad M] [a : (M int)] : (M int)
+  (do-m x a
+        (pure (* x 2))))
+
+;; Functor, two superclass steps away.
+(defn triple [^Monad M] [m : (M int)] : (M int)
+  (fmap m (fn [x : int] : int (* x 3))))
+
+(defn show-r [r : (Result int int)] : int
+  (match r (Ok v) (do (println v) 0) (Err e) (do (println (- 0 e)) 0)))
+
+;; Option results are matched in place: handing a `none` from a constrained
+;; generic to a typed `(Option int)` parameter segfaults compiled, a separate,
+;; pre-existing gap (docs/reported/hkt-generic-none-to-typed-param-segfaults.md).
+(defn main [] : int
+  (println (match (add-one (some 41)) (Some v) v (None) -1))  ; 42
+  (show-r (add-one (:: (ok 41) (Result int int))))  ; 42
+  (show-r (add-one (:: (err 5) (Result int int))))  ; -5
+  (println (match (doubled (some 21)) (Some v) v (None) -1))  ; 42
+  (println (match (doubled (:: (none) (Option int))) (Some v) v (None) -1))  ; -1
+  (show-r (doubled (:: (ok 21) (Result int int))))  ; 42
+  (show-r (doubled (:: (err 7) (Result int int))))  ; -7
+  (println (match (triple (some 14)) (Some v) v (None) -1))  ; 42
+  (show-r (triple (:: (ok 14) (Result int int))))  ; 42
+  0)

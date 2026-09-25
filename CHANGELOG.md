@@ -59,6 +59,16 @@ All notable changes to Turmeric are documented here.
   Every stdlib instance satisfies the new obligations. SC8b step 4 of
   typeclass-superclasses-plan.
 
+- **`Monad` is declared over `Applicative`.** With `Applicative` over
+  `Functor`, a `[^Monad M]` function may call `pure` and `fmap` -- the
+  Haskell `Applicative m => Monad m` shape, and what makes a `do-m` block
+  ending in `pure` generic over any monad. **Breaking for downstream
+  instances:** a `Monad` instance now needs `Applicative` (and so `Functor`)
+  instances for the same type (TUR-E0393). Every stdlib `Monad` has them, now
+  that `Result` is an `Applicative`; no spice declares a `Monad` instance; one
+  test fixture's toy monad gained both. SC8b step 5, the last step of
+  typeclass-superclasses-plan's stdlib adoption.
+
 ### Added
 
 - **`Result` is an `Applicative`.** `stdlib/result.tur` ships

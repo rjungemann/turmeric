@@ -435,6 +435,7 @@ The stdlib uses the preamble where the relation is real:
 |---|---|---|
 | `Ord` | `Eq` | `typeclass-ord.tur` (auto-loaded) |
 | `Applicative` | `Functor` | `typeclass-applicative.tur` (auto-loaded) |
+| `Monad` | `Applicative` | `typeclass-monad.tur` (auto-loaded) |
 | `Alternative` | `Applicative` | `typeclass-alternative.tur` (auto-loaded) |
 | `MonadError` | `Monad` | `typeclass-monaderror.tur` (auto-loaded) |
 | `Traversable` | `Functor`, `Foldable` | `typeclass.tur` |
@@ -445,12 +446,13 @@ The stdlib uses the preamble where the relation is real:
 | `BoundedJoin` | `JoinSemilattice` | `typeclass-lattice.tur` |
 | `BoundedMeet` | `MeetSemilattice` | `typeclass-lattice.tur` |
 
-So a `[^Ord A]` function may call `eq?`, and `mconcat` carries one constraint
-rather than two (see the [lattice guide](lattice-guide.md)). `Monad` is still
-flat. Each is retrofitted separately, because adding a preamble to an existing
-class obliges every existing instance of it, in every downstream spice, to
-carry the superclass instance. Until a class is retrofitted, a function needing
-both lists both constraints.
+So a `[^Ord A]` function may call `eq?`, a `[^Monad M]` function may call
+`pure` and `fmap`, and `mconcat` carries one constraint rather than two (see
+the [lattice guide](lattice-guide.md)). A class with no natural superclass --
+`Eq`, `Functor`, `Hash`, `Show`, `Clone`, `Drop`, `Bifunctor`, `Num` -- stays
+flat. Adding a preamble to an existing class obliges every existing instance of
+it, in every downstream spice, to carry the superclass instance, which is why
+each of these was retrofitted and audited separately.
 
 ## Associated Types
 

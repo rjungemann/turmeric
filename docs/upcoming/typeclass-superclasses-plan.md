@@ -3,9 +3,11 @@
 > **Status:** SC0-SC6 **landed 2026-09-16** behind the gate (see section 7);
 > **SC7 (graduation) landed 2026-09-25** (see section 8). **SC8a (the lattice
 > classes) and its SC9 docs landed 2026-09-25**, unreleased (see section 10).
-> SC8b (the auto-loaded classes) is measured and staged; all five steps are
-> ready, the last since the partial-head `ap` fix (section 10).
-> **Type:** compiler feature (elaboration only, no codegen), plus a
+> **SC8b (the auto-loaded classes and the arrows) landed 2026-09-25**,
+> unreleased, as five commits (see section 11). Stdlib adoption is complete;
+> nothing in this plan remains open.
+> **Type:** compiler feature (elaboration, plus superclass dictionaries for
+> dictionary-passing generics -- section 11), plus a
 > **documentation correction that is independently shippable and should land
 > first**.
 > **Gate:** none -- graduated. The constraint preamble is unconditional as of
@@ -218,6 +220,12 @@ the class and resolve to `TypeClass*` in the post-unit pass, mirroring how
 `default_method_form` is deliberately kept unelaborated (`typeclass.h:83`).
 
 ### 2.4 No codegen, no runtime cost
+
+> **Revised by SC8b (section 11).** True for a statically resolved call. A
+> higher-kinded generic compiled by dictionary passing needs a dictionary per
+> implied superclass, so a declared constraint now carries its superclass
+> closure and such a generic takes one extra dictionary argument per implied
+> class. No snapshot moved, because no snapshot fixture has such a generic.
 
 Static dispatch resolves the instance at the call site from the concrete
 instantiation, so a `[^Monoid A]` body calling `combine` at `A = int` reaches
@@ -435,8 +443,8 @@ let a `[^JoinSemilattice A]` body call `combine`, which is the wrong name
 for a join. The file's comment says the relation is withheld on purpose,
 and the join associativity law stays restated rather than borrowed.
 
-**SC8b -- the auto-loaded hierarchy (one class per change, after SC8a
-ships).** These are the classes every program sees. Every candidate was
+**SC8b -- the auto-loaded hierarchy. LANDED 2026-09-25 (unreleased; section
+11), one commit per step, in the order below.** These are the classes every program sees. Every candidate was
 applied together on 2026-09-25 and measured against the full `run.sh`
 suite (3182 fixtures), the stdlib itself, and every spice at
 `turmeric-spices` `origin/main` (section 9.3). Two facts shape the order:
@@ -582,13 +590,14 @@ disposition remains right: if constraint-list ergonomics turn out to block
 adoption, that is the data point that promotes this plan.
 
 **Where this stands (2026-09-25).** SC0-SC6 landed in 0.49.0; SC7
-graduated the feature in 0.54.0 (section 8); SC8a retrofitted the lattice
-classes and SC9 updated the guides, unreleased (section 10). Graduation was
-the gate to stdlib adoption, not an end state, and adoption has started.
-Next is SC8b, one auto-loaded class per change: `Ord` over `Eq` first,
-because it is free and the most used. All five SC8b steps are ready: the
-`ap` crash that held `Monad` over `Applicative` is fixed and `Result` has its
-`Applicative` instance (section 10).
+graduated the feature in 0.54.0 (section 8); SC8a, SC8b and the SC9 docs
+landed after it, unreleased (sections 10 and 11). The stdlib now declares
+Haskell's hierarchy wherever the relation is real: `Ord` over `Eq`, the
+`Functor`/`Applicative`/`Monad` chain with `Alternative`, `MonadError` and
+`Traversable`, the lattice classes, and the arrows. The recommendation to
+hold SC1-SC9 until after v1 was overtaken by the decision to adopt (4.2); the
+work is done. What remains are the pre-existing compiled-path gaps section 11
+lists, which the fixtures route around and which are filed as reports.
 
 ## 6. See also
 
@@ -865,3 +874,64 @@ The first stdlib adoption, unreleased at the time of writing.
   instance". Fixture `expected.diag` files match on the "requires a
   <Class> [<T>] instance" substring, so rewording it means updating them in
   the same change.
+
+## 11. Landed (2026-09-25): SC8b
+
+Five commits, one per step, each with its own fixture, docs and changelog
+entry. The spices audit ran against `turmeric-spices` `origin/main` at
+`ebd1f81`: no spice declares an instance of any retrofitted class other than
+`crdt`'s six `BoundedJoin` instances (SC8a), all satisfied.
+
+| Step | Preambles | Needed to satisfy the obligation |
+| --- | --- | --- |
+| 1 | `Ord` over `Eq` | nothing |
+| 2 | `Alternative` over `Applicative`; `MonadError` over `Monad`; `Traversable` over `Functor`, `Foldable` | nothing |
+| 3 | `Applicative` over `Functor` | a `Functor` instance in six test fixtures |
+| 4 | `Arrow`, `ArrowZero` over `Category`; `ArrowChoice`, `ArrowLoop`, `ArrowApply` over `Arrow`; `ArrowPlus` over `ArrowZero` | nothing |
+| 5 | `Monad` over `Applicative` | `Applicative [(Result _ B)]` (shipped with the `ap` fix); `Functor` and `Applicative` in one test fixture |
+
+Where it departs from the plan above:
+
+- **A declared constraint now implies its superclasses (step 2).** Section
+  2.4 held for statically resolved calls only. A higher-kinded generic is
+  compiled by dictionary passing, and it received only the dictionaries its
+  constraints named: `(defn f [^Alternative F] ... (pure d))` called `pure`
+  through the `Alternative` dictionary's slot (a C type error, or a wrong
+  method if the slots had matched), and the interpreter, which binds frame
+  dictionaries from the same list, found no `Applicative` dictionary for a
+  return-directed method. `typeclass_constraints_with_supers` (typeclass.c)
+  now appends each single-parameter constraint's superclass closure at the
+  same type variable, after the declared constraints, and `elab_defn` applies
+  it once every constraint spelling is collected. Pinned by
+  `class-superclass-hkt-dict-passing`, which uses user classes and two
+  instances so a wrong dictionary shows. The earlier `class-superclass-return-directed`
+  fixture had covered only a kind-`*` class, which resolves statically.
+- **A constrained rank-2 `forall` expands the same way (step 3).**
+  forall-dict-pass aligns a forall's dictionary slots with the inner
+  function's constraint list by position, so once `[^Applicative m]` implied
+  `^Functor m` the forall's `[(Applicative m)]` had to imply it too
+  ("constraint count mismatch" otherwise). `elab_types.c` applies the same
+  function. Existential constraint lists are left as declared: their pack
+  layout is a separate ABI and nothing in the stdlib needs it.
+- **`ArrowZero` is over `Category`, not `Arrow` (step 4)**, as measured in
+  section 9.3: `Kleisli` is a `Category` with an honest zero arrow and no
+  `Arrow` instance.
+- **Fixture shapes route around pre-existing compiled-path gaps.** Each gap
+  below reproduces on the compiler before SC8b with every constraint
+  spelled out, prints the right answer under `--interpret`, and is filed:
+  - [hkt-generic-forwarded-bind-continuation-segfaults](../reported/hkt-generic-forwarded-bind-continuation-segfaults.md)
+    (high) -- a generic forwarding a continuation parameter to `bind`.
+  - [hkt-generic-none-to-typed-param-segfaults](../reported/hkt-generic-none-to-typed-param-segfaults.md)
+    (high) -- a `none` from a generic passed to a typed `Option` parameter.
+  - [hkt-generic-nested-bind-result-type](../reported/hkt-generic-nested-bind-result-type.md)
+    (medium) -- a two-binding `do-m` in a generic does not compile.
+  - [hkt-dict-generic-byvalue-result-to-typed-param](../reported/hkt-dict-generic-byvalue-result-to-typed-param.md)
+    (medium) -- a user by-value type from a generic at a typed parameter.
+  - [generic-category-base-passes-carrier-to-arrow-instance](../reported/generic-category-base-passes-carrier-to-arrow-instance.md)
+    (low) -- a C warning in a generic's base clone at the function arrow,
+    which is why step 4 has no positive generic fixture.
+  - Also pre-existing and not filed: `Ord [cstr]` is inline C with no
+    interpreter twin, so `stdlib-ord-entails-eq` leaves out `cstr`.
+- **Full suites at the end of step 5:** 3192 compiled and 2276 interpreted
+  fixtures, 0 failures; doctests unchanged at 190 passed; no snapshot moved
+  across SC8b; the generated docstring table is unchanged.
