@@ -357,31 +357,41 @@ library's string result to `cstr` gets the same copy.
 
 - **String literals are immutable.** R7RS allows this. See Lists,
   vectors, strings above.
-- **Data is never freed.** There is no collector yet: every pair, vector,
-  string, record and procedure a program makes stays allocated until it
-  exits, so a long-running program's memory only grows (a loop that builds a
-  dead four-element list reaches 429 MB after a million iterations). Scratch
-  memory the runtime makes for one call is freed; your data is not.
-  An experimental collector fixes this for compiled programs on Linux and
-  macOS: build with `tur --enable=r7rs-gc build prog.scm` and the same loop
-  runs in 10 MB. Values you keep in Turmeric maps or `rc<T>` cells through
-  the `(turmeric ...)` seam are seen. It is single-threaded: a program that
-  starts a thread under the flag stops at the start with the reason (exit
-  70), so build one that needs threads without the flag. See
-  docs/upcoming/r7rs-gc-plan.md.
-- **Very long loops need the default optimization level.** A prelude loop
-  that calls one of your procedures (`for-each`, `map`, `member`, a
-  `delay-force` stream) runs in constant stack at the default `-O2`, and can
-  overflow the stack on a million elements in an `-O1` build.
-- **`apply` and a call through a variable take at most eight arguments.**
-  A direct call to a named procedure has no limit; past eight, pass the rest
-  as a list.
-- **`char-ready?` and `u8-ready?` on Windows always answer `#t`.** Elsewhere
-  they ask the descriptor (a zero-timeout poll), so an idle console or an
-  empty pipe answers `#f`.
+- **`map` and `for-each` take at most four sequences.** A fifth is an error
+  naming the limit, on both back ends, and `vector-map`, `vector-for-each`,
+  `string-map` and `string-for-each` share it. Past four, walk the sequences
+  yourself.
+- **`define-record-type` is a top-level or library-body form.** R7RS counts it
+  a definition, so it may open any body; here one inside a `lambda` or `let`
+  body is an error naming the restriction. Define the type at the top level
+  and its constructor, predicate and accessors are in scope everywhere.
+- **A file holds one library, named after the file.** `(define-library (two
+  a) ...)` lives in `two/a.tur`, the way a Turmeric module's path is its name,
+  and a second `define-library` in the same file is an error. `(export (rename
+  internal exported))` is refused too: export the name and rename it at the
+  import.
 - **`(except ...)` over a user library or a Turmeric module hides nothing.**
   Turmeric's import has no "all but", so the module is imported whole; over
   a `(scheme ...)` library an excluded name is the program's own to define.
+- **`apply` takes at most eight arguments**, on both back ends, and so does a
+  call through a variable on the compiled back end (`tur --interpret` has no
+  such limit). A direct call to a named procedure has no limit. Past eight,
+  pass the rest as a list.
+- **`char-ready?` and `u8-ready?` on Windows always answer `#t`.** Elsewhere
+  they ask the descriptor (a zero-timeout poll), so an idle console, or an
+  open pipe with nothing in it, answers `#f`. A port at end of input answers
+  `#t`, since a read there does not block.
+- **Re-entrant `call/cc` is Linux and macOS only.** On Windows, invoking a
+  continuation after its `call/cc` has returned is an error, because the
+  runtime cannot find the stack it would copy there. Escaping continuations,
+  `dynamic-wind` and `guard` work everywhere. See Control above.
+- **A top-level re-entry re-runs the forms after it.** At top level a
+  continuation is the rest of the program, so invoking one from a later form
+  re-runs that form and everything following it, and repeats until something
+  in the program stops it. chibi and Racket put a boundary around each
+  top-level form and carry on past the re-entry instead. Inside a procedure,
+  re-entry is what R7RS describes; wrap the capture in one when the difference
+  matters.
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.
@@ -390,6 +400,33 @@ library's string result to `cstr` gets the same copy.
   top-level expressions. Opening a file or reading input in a top-level
   `define` is the case to watch. Put such code inside a procedure; the
   interpreter evaluates in order either way.
+- **Data is never freed.** There is no collector on by default: every pair,
+  vector, string, record and procedure a program makes stays allocated until
+  it exits, so a long-running program's memory only grows -- a loop that
+  builds a dead four-element list a million times reaches a few hundred
+  megabytes. Two things cost more per operation than the data does: an
+  escaping `call/cc` keeps its stack image, so a hundred thousand of them also
+  reach a few hundred megabytes, and a `raise` that a `guard` catches leaves
+  about a kilobyte of runtime records. Scratch memory the runtime makes for
+  one call is freed, on all but a few prelude paths.
+  An experimental collector fixes all of that for a single-file compiled
+  program on Linux and macOS: build with `tur --enable=r7rs-gc build prog.tur`
+  and both of those loops run in 10 MB. Values you keep in Turmeric maps or
+  `rc<T>` cells through the `(turmeric ...)` seam are seen. It is
+  single-threaded: a program that starts a thread under the flag stops at the
+  start with the reason (exit 70), so build one that needs threads without the
+  flag. `--shared`, a project build, `tur jit` and the interpreter ignore it --
+  as does every platform but Linux and macOS, where the flag is accepted and
+  collects nothing. See docs/upcoming/r7rs-gc-plan.md.
+- **A loop through a procedure variable needs the C compiler's tail call.** A
+  procedure that calls another through a *variable* rather than by name, in a
+  non-tail position -- which is what `for-each`, `map`, `member` and a
+  `delay-force` stream do with the procedure you hand them -- compiles to a
+  continuation-passing shape whose own recursion is a C tail call. It runs in
+  constant stack when the C compiler makes that a sibling call, which the
+  default `-O2` does; a `-O0` build overflows on a million elements, and an
+  `-O1` build depends on the C compiler. Tail calls themselves -- self, mutual
+  and through a variable -- are constant stack at every level.
 
 ## Conformance
 

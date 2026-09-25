@@ -50,7 +50,7 @@ program declares `defimage-global`s, a second section holding their values
 
 ## The APIs
 
-```lisp
+```turmeric
 (load "stdlib/image.tur")
 
 ;; Primary combinator: split init from loop.

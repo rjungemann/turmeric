@@ -62,3 +62,11 @@ Delimit each top-level form the Racket way, with a prompt per form:
   expressions on the compiled back end
   ([toplevel-def-initializers-run-before-toplevel-expressions](toplevel-def-initializers-run-before-toplevel-expressions.md)).
   Any per-form prompt has to follow the order the forms actually run in.
+
+## Guide upkeep
+
+`docs/guides/r7rs-guide.md` ("Where it differs from R7RS") carries a bullet
+beginning "**A top-level re-entry re-runs the forms after it.**" Control also
+ends a paragraph with "At top level a continuation is the rest of the program,
+so re-entering one runs the top-level forms after it again." Delete the bullet
+whole and that one sentence when a per-form boundary lands.

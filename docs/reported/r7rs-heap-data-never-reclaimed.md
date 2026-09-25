@@ -87,3 +87,16 @@ kept in a Turmeric map or `rc<T>` cell is seen.
   [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md).
 - Either way the fixture gate can then check leaks again: opt the `r7rs-*`
   fixtures into `tests/run-leak-check.sh` (`requires.leak-check`).
+
+## Guide upkeep
+
+`docs/guides/r7rs-guide.md` ("Where it differs from R7RS") carries one bullet,
+beginning "**Data is never freed.**", for this report and three others: the
+`call/cc` clause is [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md),
+the caught-`raise` clause is
+[r7rs-caught-raise-leaks-runtime-records](r7rs-caught-raise-leaks-runtime-records.md),
+and "on all but a few prelude paths" is
+[r7rs-remaining-scratch-leaks](r7rs-remaining-scratch-leaks.md). Its second
+paragraph is the `--enable=r7rs-gc` escape hatch. When the collector graduates
+(or this is answered another way), delete the bullet whole -- there is nothing
+left to hedge, and the guide should not carry a "it used to grow" note.
