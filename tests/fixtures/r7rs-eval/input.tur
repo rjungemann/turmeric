@@ -3,7 +3,7 @@
 ;; Importing (scheme eval) links libturi into the compiled program; the
 ;; interpreter runs the same program with native twins.  Both print this.
 (import (scheme base) (scheme write) (scheme file) (scheme eval) (scheme repl)
-        (scheme load) (scheme r5rs))
+        (scheme load) (scheme r5rs) (scheme process-context))
 
 (define (show label x)
   (display label) (display ": ") (write x) (newline))
@@ -64,7 +64,11 @@
   (show "file-exists?" (eval '(file-exists? "/") (environment '(scheme file))))
 
   ;; load: every form of a file, evaluated.
-  (let ((path "/tmp/tur-r7rs-eval-fixture-load.scm"))
+  ;; In the temporary directory: TEMP on Windows, TMPDIR, else /tmp.
+  (let ((path (string-append (or (get-environment-variable "TEMP")
+                                 (get-environment-variable "TMPDIR")
+                                 "/tmp")
+                             "/tur-r7rs-eval-fixture-load.scm")))
     (with-output-to-file path
       (lambda () (write '(define loaded-value (* 6 7))) (newline)))
     (load path)

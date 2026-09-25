@@ -244,6 +244,9 @@ A continuation is **re-entrant**. Invoking it while its `call/cc` is still
 running returns from it, which is an escape. Invoking it after the `call/cc`
 has returned makes the `call/cc` return again. Either can happen any number
 of times, so generators and coroutines written with `call/cc` work.
+On Windows it is escape-only for now: invoking a continuation after its
+`call/cc` has returned is an error there, because the runtime cannot yet
+find the stack it would copy.
 
 Invoking a continuation travels the `dynamic-wind` stack. The `after` thunks
 of the extent being left run first, innermost first. Then the `before` thunks

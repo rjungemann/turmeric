@@ -2146,6 +2146,7 @@ from it -- the second reproduces on `vec-push!`, parametric since long before.
 | [r7rs-caught-raise-leaks-runtime-records](r7rs-caught-raise-leaks-runtime-records.md) | low-medium | Compiled: each `raise` a `guard` catches leaks about 1 KB -- DK frames abandoned by the escape's longjmp, the `call/ec` escape record, the `raise-continuable` record, a packed rest chain (1,016,072 bytes for 1,000 raises) |
 | [r7rs-remaining-scratch-leaks](r7rs-remaining-scratch-leaks.md) | low | The prelude's per-call scratch T8 did not fix: ratio and complex literal part spellings, a literal string decoded to code points for a string operation, a few char spellings and error messages |
 | [r7rs-programs-compile-slowly](r7rs-programs-compile-slowly.md) | low-medium | Filed 2026-09-25 (PR 923 CI). Every `#lang r7rs` program builds the whole prelude: 6-8 s locally, over the 10 s fixture budget on CI runners, almost all of it `cc -O2` over ~29,000 emitted lines. The Scheme fixtures carry `expected.timeout` 60 as a stopgap; the fix is a precompiled prelude, an object cache, or emitting only reachable definitions |
+| [r7rs-reentrant-callcc-not-on-windows](r7rs-reentrant-callcc-not-on-windows.md) | medium | Filed 2026-09-25 (PR 923 CI). The T5 copying continuations need the thread's stack base, which the prelude finds only on glibc and macOS; on Windows `call/cc` is the escape, so a re-entry fails. Five fixtures skip there (`requires.posix-apis`); the fix is the TEB stack base plus a non-SEH jump |
 
 ## Found landing r7rs-lang-plan R3 (filed 2026-09-23)
 

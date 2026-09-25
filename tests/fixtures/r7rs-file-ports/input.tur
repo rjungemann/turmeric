@@ -4,9 +4,14 @@
 ;; Everything runs inside procedures: a top-level `define` whose initializer
 ;; opens a file runs before the top-level expressions on the compiled path
 ;; (docs/reported/toplevel-def-initializers-run-before-toplevel-expressions.md).
-(import (scheme base) (scheme write) (scheme read) (scheme file))
+(import (scheme base) (scheme write) (scheme read) (scheme file)
+        (scheme process-context))
 (define (show x) (write x) (newline))
-(define path "/tmp/tur-fixture-r7rs-file-ports.txt")
+;; The temporary directory: TEMP on Windows (a native program cannot open
+;; /tmp there), TMPDIR, else /tmp.
+(define (tmp-dir)
+  (or (get-environment-variable "TEMP") (get-environment-variable "TMPDIR") "/tmp"))
+(define path (string-append (tmp-dir) "/tur-fixture-r7rs-file-ports.txt"))
 
 (define (text-round-trip)
   (call-with-output-file path
