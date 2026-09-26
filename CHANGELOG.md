@@ -27,6 +27,16 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`tur jit`: threaded programs no longer hang or crash under load.**
+  Generating a function lazily ends in MIR rewriting its call thunk in place,
+  and a thread executing that thunk at the same moment could jump anywhere.
+  A program's first `pthread_create` now generates every function still
+  pending while the program is single-threaded; a program that never starts
+  a thread stays fully lazy. Five thread-locals that were shared between
+  threads under the JIT now have per-thread host slots: the
+  escape-continuation registry, and the r7rs prelude's two `call/cc` stack
+  bases.
+
 - **`#lang r7rs` threads: the collected heap under contention** (stages C
   and D of docs/archive/r7rs-gc-threads-plan.md, which is now complete and
   archived). In a compiled Scheme program under the r7rs-gc collector:

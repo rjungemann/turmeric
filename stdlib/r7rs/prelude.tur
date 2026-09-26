@@ -1827,12 +1827,21 @@
   #if defined(__GLIBC__)
   extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
   #endif
-  static _Thread_local unsigned char *r7k_base_tls;
-  // r7rs-toplevel-reentry-reruns-forms: the top of the current top-level
+  // r7k_base_tls: this thread's stack top.  r7k_form_base
+  // (r7rs-toplevel-reentry-reruns-forms): the top of the current top-level
   // form's frames (r7rs-toplevel__ sets it), which bounds a capture in place
   // of the thread's stack base: a continuation is the rest of the FORM, not
-  // the rest of the program.
+  // the rest of the program.  Both per thread; `tur jit`'s front end has no
+  // thread-locals, so there the host keeps them (src/runtime/tur_tls.c).
+  #if defined(__GNUC__) || defined(__clang__)
+  static _Thread_local unsigned char *r7k_base_tls;
   static _Thread_local unsigned char *r7k_form_base;
+  #else
+  extern void **tur_tls_r7k_base_ptr(void);
+  extern void **tur_tls_r7k_form_base_ptr(void);
+  #define r7k_base_tls (*(unsigned char **)tur_tls_r7k_base_ptr())
+  #define r7k_form_base (*(unsigned char **)tur_tls_r7k_form_base_ptr())
+  #endif
   static unsigned char *r7k_stack_base(void) {
       if (r7k_base_tls) return r7k_base_tls;
   #if defined(__GLIBC__)

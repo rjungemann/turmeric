@@ -1,5 +1,42 @@
 # A threaded program under `tur jit` can hang under CPU load
 
+**Resolved** (2026-09-26). The root cause was not thread-local storage. It
+was MIR's lazy code generation:
+
+- Generating a function ends in `_MIR_redirect_thunk`, which rewrites the
+  function's 13-byte call thunk in place with a plain `memcpy`
+  (`_MIR_change_code`).
+- The engine's generation lock keeps two generators apart. It does not stop
+  another thread from executing that thunk mid-rewrite, and such a thread can
+  jump through a half-old, half-new displacement.
+
+Measured under load (six busy loops on four cores), `r7rs-threads-pause`:
+
+| Build | Bad runs |
+|---|---|
+| lazy generation (the default) | 6 of 150, plus 2 segfaults in another 150 |
+| `TUR_JIT_GEN=eager` | 0 of 150 |
+
+The fix is in src/jit_engine.c. A `pthread_create` shim generates every
+function not yet generated at a program's first thread start, while the
+program is still single-threaded, so no thunk is rewritten once another
+thread exists. A program that never starts a thread keeps the whole lazy
+saving.
+
+The suspected cause was real too, in part. Five thread-locals had escaped the
+host-accessor treatment the other eleven get, and each thread now has its own
+under the JIT (src/runtime/tur_tls.c):
+
+- the escape-continuation registry: `tur_escape_live`, `_n` and `_cap`;
+- the r7rs prelude's two `call/cc` stack bases: `r7k_base_tls` and
+  `r7k_form_base`.
+
+c2mir no longer warns "Thread local is not implemented" for any of them. That
+alone did not stop the hang (3 of 40 runs still hung), which is what led to
+the thunk.
+
+What follows is the report as filed.
+
 **Severity:** medium. A threaded program run under `tur jit` sometimes never
 finishes when the machine is busy. The compiled build of the same program
 does not. On a loaded CI runner this can read as a flaky JIT leg. Found while
