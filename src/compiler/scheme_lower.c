@@ -3959,16 +3959,23 @@ static void lower_import_set(SL *sl, Form *set) {
     sl->needs_module = true;
 }
 
-/* cond-expand feature requirements: `r7rs`, `turmeric`, `else` and any
+/* R7: the feature identifiers cond-expand holds -- the same list
+ * `(features)` returns (r7rs-features in the prelude).  The two are pinned
+ * equal by tests/fixtures/r7rs-features-agree, which asks cond-expand (through
+ * `eval`) about every identifier `(features)` returns; an identifier added to
+ * one list and not the other fails it
+ * (docs/archive/r7rs-cond-expand-ratios-feature-drift.md). */
+static const char *const R7RS_FEATURES[] = { "r7rs", "exact-closed", "ratios", "turmeric" };
+
+/* cond-expand feature requirements: the R7RS_FEATURES, `else` and any
  * `(library (scheme ...))` hold; `and`/`or`/`not` compose. */
 static bool feature_holds(SL *sl, Form *req) {
     if (req->tag == F_SYM) {
         const char *n = req->as.sym->name;
         if (strcmp(n, "else") == 0) return true;
-        /* R7: the same list `(features)` returns (r7rs-features in the
-         * prelude) -- keep the two equal. */
-        return strcmp(n, "r7rs") == 0 || strcmp(n, "exact-closed") == 0 ||
-               strcmp(n, "turmeric") == 0;
+        for (size_t i = 0; i < sizeof R7RS_FEATURES / sizeof R7RS_FEATURES[0]; i++)
+            if (strcmp(n, R7RS_FEATURES[i]) == 0) return true;
+        return false;
     }
     if (req->tag != F_LIST || req->as.list.len == 0 || req->as.list.items[0]->tag != F_SYM) return false;
     const char *h = req->as.list.items[0]->as.sym->name;

@@ -2419,8 +2419,9 @@
     (r7rs-mk-string__ (r7rs-utf8-go__ v a b (:: (vec-new) (Vec int))))))
 
 ;;; r7rs-features -- the feature identifiers cond-expand tests (scheme_lower.c
-;;; feature_holds holds the same list).  `exact-closed`: + - * on exact
-;;; integers are exact (or signal); only `/` may be inexact.
+;;; R7RS_FEATURES holds the same list; tests/fixtures/r7rs-features-agree pins
+;;; the two equal).  `exact-closed`: + - * on exact integers are exact (or
+;;; signal); only `/` may be inexact.  `ratios`: `/` of exact integers is exact.
 (defn r7rs-features [] : any
   (r7rs-list (:: (str->sym "r7rs") any) (:: (str->sym "exact-closed") any) (:: (str->sym "ratios") any)
              (:: (str->sym "turmeric") any)))

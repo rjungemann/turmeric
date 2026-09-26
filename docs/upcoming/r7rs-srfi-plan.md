@@ -116,7 +116,7 @@ Probed on both back ends, all correct:
 - **`(features)` lists `ratios`, but `cond-expand` says it is absent.** They
   are two hand-kept copies of one list. S1 adds a `srfi-N` identifier per SRFI,
   so it generates both from one table (D4).
-  [docs/reported/r7rs-cond-expand-ratios-feature-drift.md](../reported/r7rs-cond-expand-ratios-feature-drift.md)
+  [docs/archive/r7rs-cond-expand-ratios-feature-drift.md](../archive/r7rs-cond-expand-ratios-feature-drift.md) (resolved: fixture `r7rs-features-agree`)
 
 ### 2.4 What the design can lean on
 

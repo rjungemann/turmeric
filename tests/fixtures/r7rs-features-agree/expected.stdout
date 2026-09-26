@@ -1,0 +1,8 @@
+(r7rs exact-closed ratios turmeric)
+(r7rs #t)
+(exact-closed #t)
+(ratios #t)
+(turmeric #t)
+ratios holds
+the rest hold
+#f

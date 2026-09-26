@@ -1,5 +1,15 @@
 # `#lang r7rs`: `(features)` lists `ratios`, but `cond-expand` says it is absent
 
+**RESOLVED 2026-09-26.** `feature_holds` (src/compiler/scheme_lower.c) now
+reads one array, `R7RS_FEATURES`, which includes `ratios`. The fixture
+`tests/fixtures/r7rs-features-agree` pins the two lists together without
+naming their contents: it asks `cond-expand`, through `eval`, about every
+identifier `(features)` returns, on both back ends. An identifier added to
+either list and not the other fails it. The prelude's list stays hand-written
+Scheme; the fixture is what keeps it honest. When r7rs-srfi-plan S1 adds
+`srfi-N` identifiers, they go into `R7RS_FEATURES` (or the table it grows
+into) and `(features)` together, and the fixture covers them unchanged.
+
 **Severity:** low. R7RS 4.2.1 says `cond-expand` tests the feature
 identifiers that `(features)` returns. Here, the two lists have drifted apart:
 `ratios` is in `(features)` but a `cond-expand` clause on `ratios` does not

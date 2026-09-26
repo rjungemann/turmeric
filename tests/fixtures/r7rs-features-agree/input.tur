@@ -1,0 +1,25 @@
+#lang r7rs
+;; docs/archive/r7rs-cond-expand-ratios-feature-drift.md: `(features)` and
+;; `cond-expand` read two lists (the prelude's r7rs-features, scheme_lower.c's
+;; R7RS_FEATURES), and `ratios` was in the first only.  This asks cond-expand,
+;; through `eval`, about every identifier `(features)` returns, so an
+;; identifier added to one list and not the other fails here -- whichever it
+;; is -- without this file naming it.
+(import (scheme base) (scheme write) (scheme eval))
+
+(define (holds? f)
+  (eval (list 'cond-expand (list f #t) '(else #f)) (environment '(scheme base))))
+
+(define (run)
+  (write (features))
+  (newline)
+  (for-each (lambda (f) (write (list f (holds? f))) (newline)) (features))
+  ;; And a static cond-expand on each, as a program would spell it.
+  (cond-expand (ratios (display "ratios holds")) (else (display "ratios absent")))
+  (newline)
+  (cond-expand ((and r7rs exact-closed turmeric) (display "the rest hold")) (else (display "one is absent")))
+  (newline)
+  ;; An identifier nobody claims holds nowhere.
+  (write (holds? 'no-such-feature))
+  (newline))
+(run)

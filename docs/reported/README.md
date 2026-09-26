@@ -2230,7 +2230,7 @@ All three came from the probes behind `docs/upcoming/r7rs-srfi-plan.md`
 | --- | --- | --- |
 | [r7rs-leading-colon-identifiers](r7rs-leading-colon-identifiers.md) | medium | In a `#lang r7rs` source file, `':x` reads as the symbol `x`, and `':::` or a parameter named `:x` is an error. The runtime `read` gets all three right. Blocks SRFI 42 (`:list`, `:range`, ...) and the `:::` custom ellipsis; a colon inside an identifier (`char-set:letter`) is fine |
 | [r7rs-define-library-cannot-export-syntax](r7rs-define-library-cannot-export-syntax.md) | medium | Exporting a `define-syntax` name from a `define-library` is "exported symbol ... is not defined in this module" (src/compiler/elab_module.c:1580): the macro is consumed by the Scheme expander and never reaches the module interface. The same macro in a `load`ed file works |
-| [r7rs-cond-expand-ratios-feature-drift](r7rs-cond-expand-ratios-feature-drift.md) | low | `(features)` lists `ratios` (stdlib/r7rs/prelude.tur:2424), but `cond-expand` does not hold it (`feature_holds`, src/compiler/scheme_lower.c:3970): two hand-kept copies of one list. r7rs-srfi-plan S1 generates both from one table |
+| ~~[r7rs-cond-expand-ratios-feature-drift](../archive/r7rs-cond-expand-ratios-feature-drift.md)~~ | low | **RESOLVED 2026-09-26** (archived): `feature_holds` reads one array, `R7RS_FEATURES`, and fixture `r7rs-features-agree` asks `cond-expand` (through `eval`) about every identifier `(features)` returns. Original: `(features)` lists `ratios` (stdlib/r7rs/prelude.tur:2424), but `cond-expand` does not hold it (`feature_holds`, src/compiler/scheme_lower.c:3970): two hand-kept copies of one list. r7rs-srfi-plan S1 generates both from one table |
 
 ## Filing conventions
 
