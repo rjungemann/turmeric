@@ -489,10 +489,12 @@ shape gap.
 *Follow-up, same day:* fixed at elaboration. The call is typed with its
 receiver's `A`, not the representative instance's `int`. Fixing it exposed
 a generic-*function* twin, `(let [y (gid x)] y)` returning `9` for `9.75`
-with no typeclass at all. That one is open, as
-[let-bound-generic-call-result-in-generic-truncates](../reported/let-bound-generic-call-result-in-generic-truncates.md).
-The generator gained both shapes: `class_let` in the default pool, and
-`gid_let` behind `--emit-known` while its report is open.
+with no typeclass at all:
+[let-bound-generic-call-result-in-generic-truncates](let-bound-generic-call-result-in-generic-truncates.md).
+It is fixed too, and it reached stdlib: `vec-get` and `unwrap-or`, let-bound
+inside a generic, returned the carrier word or a truncated float. The
+generator gained both shapes, `class_let` and `gid_let`, and both are in the
+default pool.
 
 ### The known-bug table had outlived two of its reports
 

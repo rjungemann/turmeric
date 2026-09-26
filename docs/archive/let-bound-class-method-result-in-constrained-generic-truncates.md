@@ -5,9 +5,9 @@
 no fixture reaches it, so the ratchet never sees it.
 
 **RESOLVED 2026-09-26** -- see Execution at the end. Fixing it turned up a
-second path to the same symptom that needs no typeclass at all. That one is
-filed separately as
-[let-bound-generic-call-result-in-generic-truncates](../reported/let-bound-generic-call-result-in-generic-truncates.md).
+second path to the same symptom that needs no typeclass at all. That one was
+filed separately, and has since been resolved too, as
+[let-bound-generic-call-result-in-generic-truncates](let-bound-generic-call-result-in-generic-truncates.md).
 
 **Status when filed:** open. Found 2026-09-26 while reducing
 [constrained-generic-float-result-into-generic-value-converts](constrained-generic-float-result-into-generic-value-converts.md),
@@ -131,7 +131,7 @@ has always been (TUR-E0006, no `println` for a type variable). A wrong answer
 became a diagnostic. No fixture in the full suite (3191 passed, 0 failed)
 relied on the old behaviour.
 
-### The second path -- split out, not fixed here
+### The second path -- split out, fixed separately
 
 `(let [y (one x)] (n y x))`, with `one` a generic *function*, still truncated
 after the fix. Reduced, it needs no typeclass:
@@ -141,7 +141,7 @@ after the fix. Reduced, it needs no typeclass:
 tried and failed 16 fixtures. The gate cannot tell a caller's tyvar from an
 unbound one, and several emitter paths depend on that `int`. It is filed with
 the full record as
-[let-bound-generic-call-result-in-generic-truncates](../reported/let-bound-generic-call-result-in-generic-truncates.md).
+[let-bound-generic-call-result-in-generic-truncates](let-bound-generic-call-result-in-generic-truncates.md).
 
 ### Pinned
 
@@ -151,4 +151,5 @@ the full record as
   Without the fix it fails on the F0 `-Wfloat-conversion` ratchet.
 - `tests/type-fuzz-src.py`: a new `class_let` crossing in the default pool,
   and a FIXED row in `KNOWN_PROBES`. The generic-function half has a
-  `gid_let` crossing, `--emit-known` only while its report is open.
+  `gid_let` crossing. It was `--emit-known` only while its report was open,
+  and has been in the default pool since that report was resolved.

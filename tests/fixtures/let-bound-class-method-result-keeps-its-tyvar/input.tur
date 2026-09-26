@@ -19,8 +19,8 @@
 ;; a non-zero fractional part: an integer-valued float survives truncation.
 ;;
 ;; NOT covered here: a let-bound GENERIC-FUNCTION result (`(let [y (gid x)]
-;; y)`), which truncates by a different path -- still open, see
-;; docs/reported/let-bound-generic-call-result-in-generic-truncates.md.
+;; y)`), which truncated by a different path -- resolved separately and pinned
+;; by tests/fixtures/let-bound-generic-call-result-keeps-its-tyvar.
 (defclass N [a] (n [x : a y : a] : a))
 
 ;; int FIRST: the representative the result type used to be taken from.

@@ -135,5 +135,5 @@ inside the same kind of constrained generic truncates even without the second
 generic --
 [let-bound-class-method-result-in-constrained-generic-truncates](let-bound-class-method-result-in-constrained-generic-truncates.md)
 (since resolved at elaboration). Its generic-FUNCTION twin, a let-bound
-`(gid x)` result with no typeclass involved, is still open:
-[let-bound-generic-call-result-in-generic-truncates](../reported/let-bound-generic-call-result-in-generic-truncates.md).
+`(gid x)` result with no typeclass involved, is also resolved:
+[let-bound-generic-call-result-in-generic-truncates](let-bound-generic-call-result-in-generic-truncates.md).
