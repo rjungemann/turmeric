@@ -165,6 +165,28 @@ EOF
 
 run_case "form-named-exports" prog4.tur '(42 2)'
 
+# A library global named like a Turmeric builtin type (`any`, `int`) is
+# spelled `<name>--user` wherever user code names it -- in the library and in
+# every importer alike, whatever the import set -- so the stdlib's type
+# annotations never read it (r7rs-srfi-plan S0: chibi's SRFI 1 defines `any`).
+cat > "$TMP/tylib.tur" <<'EOF'
+#lang r7rs
+(define-library (tylib)
+  (export any int)
+  (import (scheme base))
+  (begin
+    (define (any pred ls) (cond ((null? ls) #f) ((pred (car ls)) #t) (else (any pred (cdr ls)))))
+    (define int 5)))
+EOF
+
+cat > "$TMP/prog4b.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (tylib) (prefix (tylib) t:) (rename (only (tylib) int) (int five)))
+(write (list (any odd? '(2 3)) int (t:any even? '(1)) t:int five)) (newline)
+EOF
+
+run_case "type-named-exports" prog4b.tur '(#t 5 #f 5 5)'
+
 # ---- Direction 4: nested import sets over a user library (R7RS 5.2). -------
 # `only`, `except`, `prefix` and `rename` compose in any order; the fold
 # unwinds each name to the library's spelling, and a prefixed user module is

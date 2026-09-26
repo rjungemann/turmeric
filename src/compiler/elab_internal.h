@@ -20,6 +20,7 @@
 #include "effect.h"    /* Phase 19 */
 #include "globals.h"   /* ET4: g_effect_types_enabled */
 #include "refine_collect.h" /* RT1: refinement proof obligations */
+#include "scheme_lower.h"   /* SchemeGlobalKind (elab_scheme_global_kind) */
 /* Phase U5: External declarations for global unsafe linting configuration */
 extern uint32_t g_unsafe_max_lines;
 extern bool g_unsafe_warn_nested;
@@ -1480,6 +1481,7 @@ bool elab_module_resolve_path(Elab *e, const Symbol *name,
  * shape scheme_lower_program takes (`ud` is the Elab), so an importer's
  * Scheme lowering can read a library's macros from its source. */
 bool elab_scheme_library_path(void *ud, const char *module, char *out, size_t cap);
+SchemeGlobalKind elab_scheme_global_kind(void *ud, const char *name);
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);

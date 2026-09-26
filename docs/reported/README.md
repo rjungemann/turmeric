@@ -2227,7 +2227,10 @@ The first three came from the probes behind `docs/upcoming/r7rs-srfi-plan.md`
 (its Section 2.3); chibi's R7RS suite reaches none of them. The syntax-leaks
 report came out of resolving the first: R7RS imports Turmeric libraries, but
 Turmeric's own surface should not leak into Scheme source. The rare-hang note
-came from the wide test run after that work.
+came from the wide test run after that work. The last two came out of S0's
+splice measurement: chibi's SRFI 1, spliced into a program, defines `any`,
+which the stdlib's type annotations read. The program half of that is fixed
+(`r7rs-program-shadows-names`); the library half is the report.
 
 | Report | Severity | One line |
 | --- | --- | --- |
@@ -2235,6 +2238,8 @@ came from the wide test run after that work.
 | [r7rs-gc-threads-lifecycle-rare-hang](r7rs-gc-threads-lifecycle-rare-hang.md) | low | Unconfirmed. One `run-r7rs-gc.sh` run timed out `threads-lifecycle` under `TUR_GC_TORTURE=31`; 60 isolated runs and the harness runs before and after all passed in ~3 s. The branch that saw it changed only the Scheme front end, which this fixture does not exercise. What to capture if it recurs |
 | [r7rs-turmeric-syntax-leaks](r7rs-turmeric-syntax-leaks.md) | medium | Turmeric's surface is live in user `#lang r7rs` source. Keywords, brackets (now parentheses) and Turmeric special forms (now refused; `#lang turmeric` at the REPL) are resolved. Still open: `#map{}`/`#set{}`/`#rat{}`/`#cx{}`/`#?()`, inline C, `^tailcall`, `@`, `true`/`false`/`nil` as literals, and every auto-loaded stdlib name (`println`, `vec-new`, `box`, ...) with no import; `--interpret` also runtime-dispatches a name the compiled back end refuses. Ten measured items, the fixtures that depend on them, and fix directions (namespace first) |
 | ~~[r7rs-define-library-cannot-export-syntax](../archive/r7rs-define-library-cannot-export-syntax.md)~~ | medium | **RESOLVED 2026-09-26** (archived): the library leaves exported macros out of its module exports and exports the helpers their templates name under a hidden spelling; each importer reads the library's source, renames and registers the macros under the import set's names (src/compiler/scheme_lower.c `lib_*`). `tests/run-r7rs-import.sh` `library-exports-macros`, `library-macros-under-import-sets`, `turmeric-imports-macro-library`. Original: exporting a `define-syntax` name from a `define-library` is "exported symbol ... is not defined in this module" (src/compiler/elab_module.c:1580): the macro is consumed by the Scheme expander and never reaches the module interface. The same macro in a `load`ed file works |
+| [r7rs-library-defines-standard-or-stdlib-name](r7rs-library-defines-standard-or-stdlib-name.md) | medium | A `define-library` body defining `square` (a standard name) or `None`/`list-length` (auto-loaded stdlib names) is "already defined by an auto-loaded stdlib module" compiled; interpreted it is unreachable or silently replaces the stdlib's. Programs are fixed (they shadow or respell, both back ends, REPL turns included), and type names (`any`, `int`) are fixed everywhere. Needs the library to respell and the importer to learn each export's spelling (extend `lib_syntax_of`'s source read) |
+| [r7rs-repl-echoes-multiple-values-opaquely](r7rs-repl-echoes-multiple-values-opaquely.md) | low | `tur repl --lang r7rs` echoes `(values 1 2)`, `(values)` and `(exact-integer-sqrt 17)` as `#<R7rsValues>`: the echo writes the prelude's carrier struct. Fix in the echo branch of src/turi/repl.c: one `=> ` line per value, none for zero |
 | ~~[r7rs-cond-expand-ratios-feature-drift](../archive/r7rs-cond-expand-ratios-feature-drift.md)~~ | low | **RESOLVED 2026-09-26** (archived): `feature_holds` reads one array, `R7RS_FEATURES`, and fixture `r7rs-features-agree` asks `cond-expand` (through `eval`) about every identifier `(features)` returns. Original: `(features)` lists `ratios` (stdlib/r7rs/prelude.tur:2424), but `cond-expand` does not hold it (`feature_holds`, src/compiler/scheme_lower.c:3970): two hand-kept copies of one list. r7rs-srfi-plan S1 generates both from one table |
 
 ## Found fixing the captured-`^mut` copy (filed 2026-09-26)

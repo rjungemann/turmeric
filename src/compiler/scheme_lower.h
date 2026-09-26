@@ -70,10 +70,23 @@
  * macros from it, since they are expanded here, before the module is loaded.
  * `resolve` may be NULL: a library's macros are then not importable. */
 typedef bool (*SchemeLibResolveFn)(void *ud, const char *module, char *path, size_t cap);
+/* What a global of the environment the program joins is
+ * (elab_scheme_global_kind).  An interpreter or REPL session elaborated its
+ * stdlib, and the user's earlier prompt turns, in earlier calls, so neither
+ * is among `forms`:
+ *   - a program global spelled like a STDLIB one is respelled for the
+ *     program (`(define (None x) ...)` defines `None--user`), as it is when
+ *     the stdlib's forms are in the stream;
+ *   - a name an EARLIER TURN respelled that way (`square--user`) is what the
+ *     name means in every later turn.
+ * May be NULL (a library's module: its names are not respelled). */
+typedef enum { SCHEME_GLOBAL_NONE, SCHEME_GLOBAL_STDLIB, SCHEME_GLOBAL_EARLIER_TURN } SchemeGlobalKind;
+typedef SchemeGlobalKind (*SchemeGlobalFn)(void *ud, const char *name);
 
 Form **scheme_lower_program(Arena *a, SymbolTable *st,
                             Form *const *forms, uint32_t n, uint32_t *out_n,
-                            SchemeLibResolveFn resolve, void *resolve_ud);
+                            SchemeLibResolveFn resolve, SchemeGlobalFn global_kind,
+                            void *resolve_ud);
 
 /* True when any form in `forms` belongs to a LANG_R7RS file -- a cheap test a
  * caller can make before paying for the pass. */

@@ -539,6 +539,16 @@ What it does not cover:
 - **`(except ...)` over a user library or a Turmeric module hides nothing.**
   Turmeric's import has no "all but", so the module is imported whole; over
   a `(scheme ...)` library an excluded name is the program's own to define.
+- **A program may define a name it imports.** R7RS 5.2 calls
+  `(define (square x) ...)` after `(import (scheme base))` an error; here,
+  as in chibi, the program's definition shadows the standard one for the
+  whole program (earlier uses and `(map square ...)` included), and the
+  prelude and every SRFI keep their own. At the REPL it lasts across turns.
+  A name from an imported SRFI is the exception: redefining it is an error
+  whose message gives the `except` that frees the name. So far this holds
+  for programs only: a `define-library` that defines a standard name, or one
+  the Turmeric stdlib has, does not build yet
+  ([docs/reported/r7rs-library-defines-standard-or-stdlib-name.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/r7rs-library-defines-standard-or-stdlib-name.md)).
 - **`apply` takes at most eight arguments**, on both back ends, and so does a
   call through a variable on the compiled back end (`tur --interpret` has no
   such limit). A direct call to a named procedure has no limit. Past eight,

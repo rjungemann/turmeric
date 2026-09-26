@@ -14,6 +14,9 @@
 #include "expr.h"              /* R10: tur_name_is_reserved_special_form */
 #include "stdlib_autoload.h"   /* R3: which `(turmeric stdlib/x)` imports are no-ops */
 
+/* elab_core.c: the builtin type a name spells, or TY_UNKNOWN (elab_internal.h). */
+TypeKind typekind_from_symbol(const char *name);
+
 /* ---------------------------------------------------------------------------
  * The rename table: Scheme spelling -> prelude spelling.
  *
@@ -605,6 +608,7 @@ typedef struct SL {
      * library this pass imported. */
     SchemeLibResolveFn   lib_resolve;
     void                *lib_resolve_ud;
+    SchemeGlobalFn       global_kind;      /* the joined environment's globals */
     struct LibSyntax   **libsyn;
     uint32_t             n_libsyn, cap_libsyn;
     /* r7rs-srfi-plan S1: what each `(import (srfi N))` bound -- the visible
@@ -1041,6 +1045,21 @@ static bool kw_is(SL *sl, const Form *f, const Symbol *kw) {
     return f->as.sym == kw && !(sl->scope && scope_lookup(sl->scope, kw));
 }
 
+/* A Scheme global named like a Turmeric builtin type (`any`, `int`, `ptr`):
+ * spelled `<name>--user` wherever user code names it, or the stdlib's type
+ * annotations would read the program's definition.  R7RS has no such names,
+ * so in user code the identifier can only mean a Scheme definition -- the
+ * program's, or a library's -- and never the type.  One rule, applied alike
+ * in the defining library and in every importer (by name, `only`, `rename`,
+ * `prefix`), needs no knowledge of which library defines it.  NULL for any
+ * other name. */
+static const Symbol *type_named_global(SL *sl, const Symbol *s) {
+    if (typekind_from_symbol(s->name) == TY_UNKNOWN) return NULL;
+    char buf[256];
+    snprintf(buf, sizeof buf, "%s--user", s->name);
+    return I(sl, buf);
+}
+
 static const Symbol *rn_global(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_renames; i++)
         if (sl->renames[i].from == s) return sl->renames[i].to;
@@ -1052,6 +1071,17 @@ static const Symbol *rn_global(SL *sl, const Symbol *s) {
     if (sl->in_user)
         for (uint32_t i = 0; i < sl->n_clash; i++)
             if (sl->clash_from[i] == s) return sl->clash_to[i];
+    if (sl->in_user && sl->global_kind) {
+        /* A REPL turn: `square` an earlier turn defined for itself is
+         * `square--user`, and still means that definition here. */
+        char buf[256];
+        snprintf(buf, sizeof buf, "%s--user", s->name);
+        if (sl->global_kind(sl->lib_resolve_ud, buf) == SCHEME_GLOBAL_EARLIER_TURN) return I(sl, buf);
+    }
+    if (sl->in_user) {
+        const Symbol *t = type_named_global(sl, s);
+        if (t) return t;
+    }
     for (uint32_t i = 0; i < sl->n_prefixes; i++) {
         if (s->len > sl->prefixes[i].plen &&
             memcmp(s->name, sl->prefixes[i].prefix, sl->prefixes[i].plen) == 0) {
@@ -1067,6 +1097,7 @@ static const Symbol *rn_global(SL *sl, const Symbol *s) {
             if (sl->in_user)
                 for (uint32_t c = 0; c < sl->n_clash; c++)
                     if (sl->clash_from[c] == rest) { rest = sl->clash_to[c]; break; }
+            if (sl->in_user && type_named_global(sl, rest)) rest = type_named_global(sl, rest);
             char buf[256];
             snprintf(buf, sizeof buf, "%s/%s", sl->prefixes[i].alias->name, rest->name);
             return I(sl, buf);
@@ -4512,7 +4543,10 @@ static Form *ac_walk(SL *sl, Form *f) {
 
 /* R10: the names the stdlib forms ahead of the program define -- every
  * `defn`/`def`/`defmacro` at the top of a non-Scheme form or directly inside
- * its `defmodule`. */
+ * its `defmodule`, and every type a form there names: a `defstruct`'s,
+ * a `defdata`'s and its constructors, a `defclass`'s and its methods.  A
+ * program global spelled like any of them would take the stdlib's name
+ * (`(define (Some x) ...)`, `(define (Vec x) ...)`). */
 static void stdlib_names_of(SL *sl, const Form *f, FB *out, int depth) {
     if (!f || f->tag != F_LIST || f->as.list.len < 2 || f->as.list.items[0]->tag != F_SYM) return;
     const char *h = f->as.list.items[0]->as.sym->name;
@@ -4520,13 +4554,29 @@ static void stdlib_names_of(SL *sl, const Form *f, FB *out, int depth) {
         for (uint32_t i = 2; i < f->as.list.len; i++) stdlib_names_of(sl, f->as.list.items[i], out, 1);
         return;
     }
-    if (strcmp(h, "defn") && strcmp(h, "def") && strcmp(h, "defmacro")) return;
-    for (uint32_t i = 1; i < f->as.list.len; i++) {
+    static const char *const VALUE_HEADS[] = { "defn", "def", "defmacro", "defdynamic" };
+    static const char *const TYPE_HEADS[] = { "defstruct", "defopaque", "deftype", "defeffect",
+                                              "defdata", "defgadt", "defclass" };
+    bool value = false, type = false, members = false;
+    for (size_t k = 0; k < sizeof VALUE_HEADS / sizeof *VALUE_HEADS; k++) value |= strcmp(h, VALUE_HEADS[k]) == 0;
+    for (size_t k = 0; k < sizeof TYPE_HEADS / sizeof *TYPE_HEADS; k++) type |= strcmp(h, TYPE_HEADS[k]) == 0;
+    if (!value && !type) return;
+    /* A `defdata`/`defgadt`'s constructors and a `defclass`'s methods are
+     * globals too: `(defdata Option [A] (None) (Some A))`. */
+    members = !strcmp(h, "defdata") || !strcmp(h, "defgadt") || !strcmp(h, "defclass");
+    uint32_t i = 1;
+    for (; i < f->as.list.len; i++) {
         const Form *x = f->as.list.items[i];
         if (x->tag != F_SYM) continue;
         if (x->as.sym->name[0] == '^') continue;
         fb_push(out, (Form *)x);
-        return;
+        break;
+    }
+    if (!members) return;
+    for (i++; i < f->as.list.len; i++) {
+        const Form *c = f->as.list.items[i];
+        if (c->tag == F_LIST && c->as.list.len >= 1 && c->as.list.items[0]->tag == F_SYM)
+            fb_push(out, c->as.list.items[0]);
     }
 }
 static void user_define_names(SL *sl, const Form *f, FB *out) {
@@ -5441,10 +5491,19 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
     /* A library's names live in its module and are exported by name. */
     for (uint32_t u = 0; u < user.n; u++) {
         const Symbol *s = user.items[u]->as.sym;
-        if (rn(sl, s) != s) continue;   /* a standard name: R7RS 5.2 */
         if (library) continue;
+        /* A standard name the program defines for itself -- SICP's
+         * `(define (square x) ...)` -- is the program's own from then on:
+         * it shadows R7RS's, which the prelude and every SRFI keep.  R7RS
+         * 5.2 calls redefining an import an error; like chibi and most
+         * Schemes, a program here may do it.  (`(scheme base)` names are
+         * global whether or not the program imports them, so refusing
+         * would refuse programs that never imported the name.) */
+        if (rn(sl, s) != s) { add_clash(sl, s); continue; }
+        /* (A name Turmeric reserves for a type is rn'd by type_named_global.) */
         bool clash = false;
         for (uint32_t k = 0; k < lib.n && !clash; k++) clash = lib.items[k]->as.sym == s;
+        if (!clash && sl->global_kind) clash = sl->global_kind(sl->lib_resolve_ud, s->name) == SCHEME_GLOBAL_STDLIB;
         if (clash) add_clash(sl, s);
     }
     FB binders = {0};
@@ -5467,8 +5526,8 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
         }
     for (uint32_t r = 0; r < reserved.n; r++) {
         const Symbol *s = reserved.items[r]->as.sym;
-        if (rn(sl, s) == s && tur_name_is_reserved_special_form(s->name) && !is_scheme_syntax_name(s->name))
-            add_clash(sl, s);
+        if (rn(sl, s) != s) continue;
+        if (tur_name_is_reserved_special_form(s->name) && !is_scheme_syntax_name(s->name)) add_clash(sl, s);
     }
     free(reserved.items);
     free(lib.items);
@@ -5477,11 +5536,13 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
 
 Form **scheme_lower_program(Arena *a, SymbolTable *st,
                             Form *const *forms, uint32_t n, uint32_t *out_n,
-                            SchemeLibResolveFn resolve, void *resolve_ud) {
+                            SchemeLibResolveFn resolve, SchemeGlobalFn global_kind,
+                            void *resolve_ud) {
     SL sl;
     sl_init(&sl, a, st);
     sl.lib_resolve = resolve;
     sl.lib_resolve_ud = resolve_ud;
+    sl.global_kind = global_kind;
     FB included = {0};
     expand_includes(&sl, forms, n, &included);
     forms = included.items;
