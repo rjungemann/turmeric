@@ -2188,6 +2188,17 @@ live elsewhere in this index: compiled top-level order was
 | ~~[tur-ret-disagrees-with-inline-c-signature](../archive/tur-ret-disagrees-with-inline-c-signature.md)~~ | low | **RESOLVED 2026-09-25** (archived): when the signature emitter writes the carrier `int64_t` for an inline-C body, `__TUR_RET__` now follows it (src/compiler/emit_fns.c). Fixture `inline-c-tur-ret-heap-result` covers Map and Vec |
 | ~~[jit-threaded-program-hangs-under-load](../archive/jit-threaded-program-hangs-under-load.md)~~ | medium | **RESOLVED 2026-09-26** (archived): the cause was MIR's lazy generation rewriting a function's call thunk in place while another thread ran through it. `tur jit` now generates every remaining function at a program's first `pthread_create`, while it is still single-threaded (src/jit_engine.c). Five thread-locals the JIT shared between threads now have host slots too (src/runtime/tur_tls.c). Under load: 0 bad runs of `r7rs-threads-pause`, where lazy generation had 6 in 150 |
 
+## Found auditing type-confusion-detection-plan (filed 2026-09-26)
+
+The plan's nightly fuzzer had found the first row four times and filed it zero
+times: its issue step used a `fuzz` label that did not exist. See the plan's
+section 5b (`docs/archive/type-confusion-detection-plan.md`).
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[constrained-generic-float-result-into-generic-value-converts](../archive/constrained-generic-float-result-into-generic-value-converts.md)~~ | high | **RESOLVED 2026-09-26** (archived): a carrier-returning spec now bit-casts a float tail when the class-method call in tail position is re-targeted to a float instance, and it reads the tyvar-declared test from `result_full_type` too (src/compiler/emit_fns.c). Fixture `constrained-generic-float-result-into-generic`. Original: a constrained generic's float result passed into another generic printed `-nan` for `-4.25` |
+| [let-bound-class-method-result-in-constrained-generic-truncates](let-bound-class-method-result-in-constrained-generic-truncates.md) | high | Silent wrong answer: inside a constrained generic, `(let [y (n x x)] y)` returns `-4` for `-4.25` when a non-float instance of the class is declared first. The call is typed with the representative instance's `int`, so the binding is an `int64_t` and the next dispatch on it picks the `int` instance. `tur --interpret` is right. The unbound form is right, because emit re-targets a call it can see |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
