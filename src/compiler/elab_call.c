@@ -7972,6 +7972,23 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     !call_type_has_named_tyvar(ct))
                     expected_ty = *ct;
             }
+            /* parametric-stdlib-diagnostics-print-tyvar-internals: a generic
+             * parameter printed as its bare kind -- `(vec-push! v 7.25)` on a
+             * `(Vec int)` read "expected tyvar, got float".  By this argument
+             * the variable is usually bound (`A := int`, from `v`), and the
+             * binding is what the reader needs.  Take the declared type and
+             * substitute this call's bindings into it; a still-unbound
+             * variable prints under its own name. */
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+                uint32_t fti = fn_binding->closure_fn_binding ? i + 1 : i;
+                const Type *ft = (fti < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fti] : NULL;
+                if (expected_ty.kind == TY_TYVAR && ft && ft->kind == TY_TYVAR)
+                    expected_ty = *ft;
+            }
+            if (n_type_bindings > 0 && call_type_has_named_tyvar(&expected_ty))
+                expected_ty = call_instantiate_type(e, &expected_ty, type_bindings,
+                                                    n_type_bindings);
             /* PH2.1: Build the type names into owned local buffers via
              * type_print rather than type_name. type_name returns a strdup-ed
              * heap string for composite kinds (handler, union, fn, ...) that no

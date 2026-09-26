@@ -546,8 +546,8 @@ a compile-time type error**. Calling `schan-close` while the channel is still at
 
 ```
 error [TUR-E0001]: function 'schan-close' arg 1:
-  expected (type-app SChan SClose),
-  got (type-app SChan (type-app (type-app SRecv int) SClose))
+  expected (SChan SClose),
+  got (SChan (SRecv int SClose))
 ```
 
 `SChan` is `:linear`, so the protocol additionally cannot be *replayed* --
