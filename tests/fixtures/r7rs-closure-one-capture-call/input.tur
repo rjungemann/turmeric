@@ -1,0 +1,19 @@
+#lang r7rs
+;; cps-pap-inline-ignores-wrapper-arguments: a lambda over ONE captured variable whose
+;; body is one call to a one-parameter procedure was taken for a partial
+;; application of that procedure to the capture, so calling it ran
+;; `(proc capture)` whatever the body passed.  For `list`, whose one parameter
+;; is its packed rest chain, the C compiler refused the program; for `car` it
+;; read the capture as a pair.
+(import (scheme base) (scheme write))
+
+(define (h v)
+  (let ((p (+ v 1)))
+    (list ((lambda () (list p)))
+          ((lambda () (list p 7)))
+          ((lambda () (car (list p 1))))
+          (let ((f (lambda () (list 7 p)))) (f))
+          ((lambda () (string-append (number->string p) "x"))))))
+
+(write (h 5))
+(newline)

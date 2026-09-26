@@ -43,6 +43,18 @@ What is left: about 0.9 s of `tur emit-c`, 1.4 s of gcc's optimize-and-
 generate at `-O2` (1.2 s at `-O0`: the size, not the level), and the link.
 The directions below are what the rest would take.
 
+**Measured 2026-09-26, third look: dead-definition elimination would not
+help `cc`.** GCC already drops what the program does not reach before it
+optimizes anything: `-fdump-ipa-cgraph` on `r7rs-named-let-sum`'s C lists
+about 1,100 of the ~1,780 emitted functions under "Removing unused symbols"
+in the first pass, ahead of analysis. Its optimize-and-generate time (2.7 s of
+2.9 s at `-O2` on a 4-core container) is spent on the ~680 that remain, which
+a one-line program genuinely reaches -- `write`, the uncaught-error printer
+and the numeric tower pull in most of the prelude. Emitting only reachable
+definitions would save the parse of the rest (about 0.15 s) and some of `tur
+emit-c`'s 1.0 s, not the `cc` time. The first direction below -- a prelude
+compiled once -- is the one that moves the number.
+
 ## Fix directions
 
 - Precompile the prelude once: build it as a library (`libr7rs.a`, or an
@@ -51,4 +63,6 @@ The directions below are what the rest would take.
 - Or cache the prelude's object by content hash, as the ABI cache does for
   modules.
 - Or emit only what the program reaches (dead-definition elimination before
-  emission); a small program uses a fraction of the prelude.
+  emission). Measured above: it saves emit time and parsing, not the `cc`
+  optimization time, because GCC already drops the unreachable functions and
+  a small program reaches ~40% of the prelude.

@@ -1,5 +1,24 @@
 # An untyped defn called before its definition has its `any` result re-tagged as a pointer
 
+**RESOLVED 2026-09-26.** The module path's forward declarations
+(`elab_forward_declare_defns`, src/compiler/elab_module.c) now apply the same
+rule as the entry path's (saffron-dynamic-surface-pass H6, elab_toplevel.c):
+an unannotated return in a dynamic file is `any`, not the `TY_INT`
+placeholder. That was the whole difference between the two entries -- an
+imported module, and the R7RS prelude when a Turmeric module imports a Scheme
+library, go through the module path.
+
+It was broader than filed. Every Scheme `defn` the lowering writes is
+unannotated, so ANY Scheme library whose procedure calls one defined further
+down failed at `cc` when imported, from a Scheme program as much as from a
+Turmeric module; the prelude only escaped because T1 annotated the procedures
+it tripped over. A Saffron module with the same shape failed the same way.
+Pinned by `run-r7rs-import.sh`'s `library-forward-callee` and
+`turmeric-imports-forward-callee` and `run-saffron-import.sh`'s
+`forward-callee` (each fails at `cc` without the fix). With it, the prelude
+also compiles with `r7rs-exact`'s `: any` removed (the repro below); the
+annotations stay, as documentation. Original report follows.
+
 **Severity: low-medium.** The result is a C compile error, not a wrong answer,
 so nothing runs miscompiled. But it depends on which file is the entry: the
 same prelude compiles when a `#lang r7rs` program is the entry, and fails

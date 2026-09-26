@@ -2546,8 +2546,27 @@ static bool pap_extract(const Expr *init, const Binding **target,
      * cps-direct-bt-scope-closure-temp-undeclared; it changed nothing there and
      * would have quietly disabled the optimization.  The real guard is in
      * `pap_calls_saturated` below. */
+    /* The arity match says nothing about WHICH values the body passes: any
+     * closure whose body is one saturated call has it.  The rewrite replaces
+     * the body's arguments with the captures followed by the call site's
+     * arguments, so it is only the same program when the body passes exactly
+     * those, in that order -- capture i as argument i, then the thunk's own
+     * parameters (its params[0] is the env).  An elaborator `__pap` has that
+     * shape by construction; a written lambda may not.  `(fn [] (car (list
+     * p 1)))` over one capture `p` matched the arity test (car takes one) and
+     * was rewritten to `(car p)`; `(fn [x] (g x p))` to `(g p x)`
+     * (cps-pap-inline-ignores-wrapper-arguments). */
+    uint32_t rem = tarity - c->n_captures;
+    if (c->fn->n_params != rem + 1) return false;
+    for (uint32_t i = 0; i < tarity; i++) {
+        const Expr *a = cbody->as.call_.args[i];
+        if (a && a->kind == EX_POLY_WRAP) a = a->as.poly_wrap_.inner;
+        const Binding *want = i < c->n_captures ? c->captures[i]
+                                                : c->fn->params[1 + (i - c->n_captures)];
+        if (!a || a->kind != EX_VAR || a->as.var.binding != want) return false;
+    }
     *target = tgt; *caps = c->captures; *n_caps = c->n_captures;
-    *rem_arity = tarity - c->n_captures; *prelude = pl;
+    *rem_arity = rem; *prelude = pl;
     return true;
 }
 

@@ -461,6 +461,10 @@ typedef struct SL {
     const Symbol *lib_name;
     FB            lib_exports;
     FB            lib_body;
+    /* The top-level stream the form being lowered goes to (the program's,
+     * or a library body): where a body's `define-record-type` lifts its
+     * declarations (r7rs-define-record-type-not-an-internal-definition). */
+    FB           *lift_out;
     bool          user_main;
     /* Rename table, interned. */
     const Symbol *rn_from[N_RENAMES];
@@ -1768,7 +1772,12 @@ static bool include_files(SL *sl, Form *f, bool fold, FB *out);
 static void lower_import_set(SL *sl, Form *set);
 static const Symbol *library_module(SL *sl, Form *set, bool *ok);
 static Form *cond_expand_clause(SL *sl, Form *f, uint32_t *out_n, Form ***out_items);
-static void lower_record_type(SL *sl, Form *f, FB *out);
+static void lower_record_type(SL *sl, Form *f, FB *out, bool local);
+static bool is_export_rename(SL *sl, const Form *nm);
+static void user_define_names(SL *sl, const Form *f, FB *out);
+static void library_defined_names(SL *sl, Form *f, FB *out);
+static void set_clash(SL *sl, const Symbol *from, const Symbol *to);
+static const Symbol *clash_spelling(const SL *sl, const Symbol *s);
 static Form *rebind_rest(SL *sl, Span sp, const Symbol *rest, Form *body);
 
 /* Is `name` (already renamed) the target of a `set!` anywhere in `f`?
@@ -2693,6 +2702,26 @@ static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp) {
     }
     free(pre.items);
     items = seq.items; n = seq.n;
+    /* R7RS 5.5: `define-record-type` is a definition, so a body's leading
+     * definitions may include one.  Its struct and procedures are top-level
+     * declarations, which a body has nowhere to put: they are lifted to the
+     * top level under fresh names, and this body's scope maps the names it
+     * wrote to them.  Nothing outside the body can reach the type, so one
+     * lifted type per source occurrence serves every call of the enclosing
+     * procedure (r7rs-define-record-type-not-an-internal-definition). */
+    {
+        uint32_t w = 0, i = 0;
+        for (; i < n; i++) {
+            if (head_is(items[i], sl->s_define_record_type)) {
+                lower_record_type(sl, items[i], sl->lift_out, true);
+                continue;
+            }
+            if (!head_is(items[i], sl->s_define)) break;
+            items[w++] = items[i];
+        }
+        for (; i < n; i++) items[w++] = items[i];
+        n = w;
+    }
     if (n == 0) { free(seq.items); return Nil(sl, sp); }
 
     uint32_t ndef = 0;
@@ -3130,7 +3159,7 @@ static Form *lower(SL *sl, Form *f) {
             return Nil(sl, f->span);
         }
         if (h == sl->s_define_record_type) {
-            err(f, "define-record-type is only allowed at the top level or in a library body");
+            err(f, "define-record-type is only allowed at the top level or at the beginning of a body (R7RS 5.3.2)");
             return Nil(sl, f->span);
         }
         if (h == sl->s_cond_expand) {
@@ -3281,7 +3310,14 @@ static Form *lower_toplevel_stmt(SL *sl, Form *f) {
     return lower(sl, Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-toplevel__")), thunk));
 }
 
+static void lower_toplevel_1(SL *sl, Form *f, FB *out);
 static void lower_toplevel(SL *sl, Form *f, FB *out) {
+    FB *saved = sl->lift_out;
+    sl->lift_out = out;
+    lower_toplevel_1(sl, f, out);
+    sl->lift_out = saved;
+}
+static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
     Span sp = f->span;
     {
         bool fold;
@@ -3466,13 +3502,92 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
         sl->has_library = true;
         sl->lib_name = name;
         bool lib_fold = false;
+        /* R7RS 5.6.1 `(export (rename internal public))`: importers see the
+         * definition as `public`.  A module's `:exports` are bare names, so
+         * the public spelling has to be a real definition of the module.
+         * When the library defines `internal` and exports it only this way,
+         * the definition itself is spelled `public` -- through the clash
+         * table, so every use in the library and every `set!` scan follows
+         * -- and keeps its static signature.  Otherwise (an imported name,
+         * or one also exported under another name) `public` is an `any`
+         * alias of it, defined at the end of the body.  A library global
+         * that is itself named `public` is respelled out of the way
+         * (r7rs-library-file-shape-and-export-rename). */
+        typedef struct { const Symbol *in, *pub, *out; bool alias; } ExportRename;
+        ExportRename *ren = NULL;
+        uint32_t n_ren = 0;
+        {
+            uint32_t cap = 0;
+            for (uint32_t i = 2; i < f->as.list.len; i++)
+                if (head_is(f->as.list.items[i], sl->s_export))
+                    for (uint32_t j = 1; j < f->as.list.items[i]->as.list.len; j++)
+                        if (is_export_rename(sl, f->as.list.items[i]->as.list.items[j])) cap++;
+            ren = (ExportRename *)arena_alloc(sl->a, (cap ? cap : 1) * sizeof *ren);
+            FB plain = {0}, defined = {0};
+            for (uint32_t i = 2; i < f->as.list.len; i++) {
+                Form *decl = f->as.list.items[i];
+                if (!head_is(decl, sl->s_export)) continue;
+                for (uint32_t j = 1; j < decl->as.list.len; j++) {
+                    Form *nm = decl->as.list.items[j];
+                    const Symbol *pub = NULL;
+                    if (is_export_rename(sl, nm)) {
+                        if (nm->as.list.items[1]->tag != F_SYM || nm->as.list.items[2]->tag != F_SYM) {
+                            err(nm, "(export (rename internal public)) takes two identifiers");
+                            continue;
+                        }
+                        pub = nm->as.list.items[2]->as.sym;
+                        ren[n_ren].in = nm->as.list.items[1]->as.sym;
+                        ren[n_ren].pub = pub;
+                        ren[n_ren].out = clash_spelling(sl, pub);
+                        ren[n_ren].alias = true;
+                        n_ren++;
+                    } else if (nm->tag == F_SYM) {
+                        pub = nm->as.sym;
+                        fb_push(&plain, nm);
+                    } else continue;
+                    /* R7RS 5.6.1: an identifier may be exported once. */
+                    bool twice = false;
+                    for (uint32_t k = 0; k < plain.n && !twice; k++)
+                        twice = plain.items[k]->as.sym == pub && plain.items[k] != nm;
+                    for (uint32_t k = 0; k + (is_export_rename(sl, nm) ? 1 : 0) < n_ren && !twice; k++)
+                        twice = ren[k].pub == pub;
+                    if (twice) err(nm, "'%s' is exported twice", pub->name);
+                }
+            }
+            library_defined_names(sl, f, &defined);
+            for (uint32_t k = 0; k < n_ren; k++) {
+                const Symbol *in = ren[k].in;
+                bool defd = false;
+                for (uint32_t d = 0; d < defined.n && !defd; d++) defd = defined.items[d]->as.sym == in;
+                uint32_t uses = 0;
+                for (uint32_t p = 0; p < plain.n; p++) uses += plain.items[p]->as.sym == in;
+                for (uint32_t r = 0; r < n_ren; r++) uses += ren[r].in == in;
+                if (defd && uses == 1) { ren[k].alias = false; set_clash(sl, in, ren[k].out); }
+            }
+            for (uint32_t k = 0; k < n_ren; k++) {
+                const Symbol *pub = ren[k].pub;
+                bool defd = false, respelled = false;
+                for (uint32_t d = 0; d < defined.n && !defd; d++) defd = defined.items[d]->as.sym == pub;
+                for (uint32_t r = 0; r < n_ren && !respelled; r++) respelled = !ren[r].alias && ren[r].in == pub;
+                if (defd && !respelled) {
+                    char pre[160];
+                    snprintf(pre, sizeof pre, "%s--lib", pub->name);
+                    set_clash(sl, pub, fresh(sl, pre));
+                }
+            }
+            free(plain.items); free(defined.items);
+        }
         for (uint32_t i = 2; i < f->as.list.len; i++) {
             Form *decl = f->as.list.items[i];
             if (head_is(decl, sl->s_export)) {
                 for (uint32_t j = 1; j < decl->as.list.len; j++) {
                     Form *nm = decl->as.list.items[j];
-                    if (nm->tag == F_LIST && nm->as.list.len == 3 && is_sym(nm->as.list.items[0], I(sl, "rename"))) {
-                        err(nm, "(export (rename a b)) is not supported yet; export the name and rename at the import");
+                    if (is_export_rename(sl, nm)) {
+                        for (uint32_t k = 0; k < n_ren; k++)
+                            if (ren[k].in == nm->as.list.items[1]->as.sym && ren[k].pub == nm->as.list.items[2]->as.sym) {
+                                fb_push(&sl->lib_exports, Sym(sl, nm->span, ren[k].out));
+                                break;
+                            }
                         continue;
                     }
                     if (nm->tag != F_SYM) { err(nm, "export names must be identifiers"); continue; }
@@ -3504,6 +3619,41 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
                 err(decl, "define-library declarations are (export ...), (import ...), (begin ...) and (cond-expand ...)");
             }
         }
+        /* The aliases, after every definition they may name.  Of a
+         * fixed-arity procedure the library defines, a forwarding defn, so a
+         * Turmeric importer can call it by name as it calls the original;
+         * of anything else, an `any`. */
+        for (uint32_t k = 0; k < n_ren; k++) {
+            if (!ren[k].alias) continue;
+            const Symbol *target = rn(sl, ren[k].in);
+            const Form *params = NULL;
+            for (uint32_t b = 0; b < sl->lib_body.n && !params; b++) {
+                const Form *d = sl->lib_body.items[b];
+                if (head_is(d, sl->t_defn) && d->as.list.len >= 4 && is_sym(d->as.list.items[1], target) &&
+                    d->as.list.items[2]->tag == F_VEC)
+                    params = d->as.list.items[2];
+            }
+            bool fixed = params != NULL;
+            for (uint32_t p = 0; fixed && p < params->as.list.len; p++) {
+                const Form *x = params->as.list.items[p];
+                fixed = x->tag == F_SYM && x->as.sym->name[0] != '^' && x->as.sym != sl->t_amp;
+            }
+            if (fixed) {
+                FB fp = {0}, call = {0};
+                fb_push(&call, Sym(sl, sp, target));
+                for (uint32_t p = 0; p < params->as.list.len; p++) {
+                    const Symbol *v = fresh(sl, "fwd__");
+                    fb_push(&fp, Sym(sl, sp, v));
+                    fb_push(&call, Sym(sl, sp, v));
+                }
+                fb_push(&sl->lib_body, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, ren[k].out),
+                                          fb_vec(sl, &fp, sp), fb_list(sl, &call, sp)));
+                continue;
+            }
+            Form *val = lower(sl, Sym(sl, sp, ren[k].in));
+            fb_push(&sl->lib_body, Ln(sl, sp, 3, Sym(sl, sp, sl->t_def), Sym(sl, sp, ren[k].out),
+                                      Ln(sl, sp, 3, Sym(sl, sp, I(sl, "::")), val, Sym(sl, sp, sl->t_any))));
+        }
         return;
     }
     if (head_is(f, sl->s_cond_expand)) {
@@ -3513,7 +3663,7 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
         return;
     }
     if (head_is(f, sl->s_define_record_type)) {
-        lower_record_type(sl, f, out);
+        lower_record_type(sl, f, out, false);
         return;
     }
     if (head_is(f, sl->s_define) && f->as.list.len >= 2 && f->as.list.items[1]->tag == F_LIST &&
@@ -3861,35 +4011,68 @@ static Form *cond_expand_clause(SL *sl, Form *f, uint32_t *out_n, Form ***out_it
 
 /* (define-record-type <name> (ctor f...) pred (f accessor [modifier])...)
  * -> a heap defstruct of `any` fields plus the procedures (D3: a record is
- * an ordinary Turmeric type, its predicate an `is?`). */
-static void lower_record_type(SL *sl, Form *f, FB *out) {
+ * an ordinary Turmeric type, its predicate an `is?`).
+ *
+ * `local`: the form is one of a body's definitions.  The declarations still
+ * go to `out` (the top level), but the struct gets a fresh name, and so does
+ * each procedure -- bound in the body's scope, so the body's `(mk 7)` reads
+ * the lifted `mk__vN` and a second body's record type of the same name is a
+ * different type (r7rs-define-record-type-not-an-internal-definition). */
+static void lower_record_type(SL *sl, Form *f, FB *out, bool local) {
     Span sp = f->span;
     if (f->as.list.len < 4 || f->as.list.items[1]->tag != F_SYM || f->as.list.items[2]->tag != F_LIST ||
         f->as.list.items[3]->tag != F_SYM) {
         err(f, "define-record-type expects (define-record-type <name> (ctor field...) pred (field accessor [modifier])...)");
         return;
     }
+    Form *ctor = f->as.list.items[2];
+    if (ctor->as.list.len < 1 || ctor->as.list.items[0]->tag != F_SYM) { err(ctor, "record constructor spec expects (name field...)"); return; }
+    for (uint32_t i = 1; i < ctor->as.list.len; i++)
+        if (ctor->as.list.items[i]->tag != F_SYM) { err(ctor->as.list.items[i], "constructor field must be an identifier"); return; }
+    uint32_t nf = f->as.list.len - 4;
+    for (uint32_t i = 0; i < nf; i++) {
+        Form *spec = f->as.list.items[4 + i];
+        if (spec->tag != F_LIST || spec->as.list.len < 2 || spec->as.list.len > 3 || spec->as.list.items[0]->tag != F_SYM) {
+            err(spec, "record field spec expects (field accessor [modifier])"); return;
+        }
+        if (spec->as.list.items[1]->tag != F_SYM) { err(spec, "accessor must be an identifier"); return; }
+        if (spec->as.list.len == 3 && spec->as.list.items[2]->tag != F_SYM) { err(spec, "modifier must be an identifier"); return; }
+    }
     /* Struct name: the record name with `<`/`>` dropped and a prefix, so it
      * can never collide with a stdlib type. */
     char sbuf[128]; size_t at = 0;
     const char *rn_name = f->as.list.items[1]->as.sym->name;
     at += (size_t)snprintf(sbuf, sizeof sbuf, "R7rsRec_");
-    for (const char *p = rn_name; *p && at + 1 < sizeof sbuf; p++) {
+    for (const char *p = rn_name; *p && at + 3 < sizeof sbuf; p++) {
         char c = *p;
         if (c == '<' || c == '>') continue;
         sbuf[at++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) ? c : '_';
     }
     sbuf[at] = '\0';
-    const Symbol *sname = I(sl, sbuf);
+    if (local) { sbuf[at++] = '_'; sbuf[at++] = '_'; sbuf[at] = '\0'; }
+    const Symbol *sname = local ? fresh(sl, sbuf) : I(sl, sbuf);
+    /* The procedures' names: a local record binds each one in the body's
+     * scope first, then the rest is generated as top-level code, outside
+     * every enclosing scope (a constructor parameter is not the enclosing
+     * procedure's variable of the same name). */
+    #define REC_NAME(s) (local ? bind_name(sl, (s), sp) : rn(sl, (s)))
+    const Symbol *ctor_name = REC_NAME(ctor->as.list.items[0]->as.sym);
+    const Symbol *pred_name = REC_NAME(f->as.list.items[3]->as.sym);
+    const Symbol **acc_names = (const Symbol **)arena_alloc(sl->a, (nf + 1) * sizeof(*acc_names));
+    const Symbol **mod_names = (const Symbol **)arena_alloc(sl->a, (nf + 1) * sizeof(*mod_names));
+    for (uint32_t i = 0; i < nf; i++) {
+        Form *spec = f->as.list.items[4 + i];
+        acc_names[i] = REC_NAME(spec->as.list.items[1]->as.sym);
+        mod_names[i] = spec->as.list.len == 3 ? REC_NAME(spec->as.list.items[2]->as.sym) : NULL;
+    }
+    #undef REC_NAME
+    LFrame *saved_scope = sl->scope;
+    if (local) sl->scope = NULL;
     /* Fields, in declaration order. */
-    uint32_t nf = f->as.list.len - 4;
     const Symbol **fields = (const Symbol **)arena_alloc(sl->a, (nf + 1) * sizeof(*fields));
     FB fvec = {0};
     for (uint32_t i = 0; i < nf; i++) {
         Form *spec = f->as.list.items[4 + i];
-        if (spec->tag != F_LIST || spec->as.list.len < 2 || spec->as.list.len > 3 || spec->as.list.items[0]->tag != F_SYM) {
-            err(spec, "record field spec expects (field accessor [modifier])"); free(fvec.items); return;
-        }
         fields[i] = spec->as.list.items[0]->as.sym;
         fb_push(&fvec, Sym(sl, spec->span, fields[i]));
         fb_push(&fvec, AnyAnn(sl, spec->span));
@@ -3898,12 +4081,9 @@ static void lower_record_type(SL *sl, Form *f, FB *out) {
                     fb_vec(sl, &fvec, sp)));
     /* Constructor: its parameters name a subset of the fields, in any order;
      * an unmentioned field starts as nil. */
-    Form *ctor = f->as.list.items[2];
-    if (ctor->as.list.len < 1 || ctor->as.list.items[0]->tag != F_SYM) { err(ctor, "record constructor spec expects (name field...)"); return; }
     FB params = {0}, args = {0};
     for (uint32_t i = 1; i < ctor->as.list.len; i++) {
         Form *p = ctor->as.list.items[i];
-        if (p->tag != F_SYM) { err(p, "constructor field must be an identifier"); free(params.items); free(args.items); return; }
         fb_push(&params, Sym(sl, p->span, rn(sl, p->as.sym)));
     }
     fb_push(&args, Sym(sl, sp, sname));
@@ -3913,36 +4093,34 @@ static void lower_record_type(SL *sl, Form *f, FB *out) {
             if (ctor->as.list.items[j]->as.sym == fields[i]) { named = true; break; }
         fb_push(&args, named ? Sym(sl, sp, rn(sl, fields[i])) : Nil(sl, sp));
     }
-    fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, ctor->as.list.items[0]->as.sym)),
+    fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, ctor_name),
                     fb_vec(sl, &params, sp), fb_list(sl, &args, sp)));
     /* Predicate. */
     {
         const Symbol *x = I(sl, "x");
         Form *pv[1] = { Sym(sl, sp, x) };
-        fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, f->as.list.items[3]->as.sym)),
+        fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_defn), Sym(sl, sp, pred_name),
                         Vec(sl, sp, pv, 1), form_type_ann(sl->a, sp, Sym(sl, sp, sl->t_bool)),
                         Ln(sl, sp, 3, Sym(sl, sp, sl->t_is), Sym(sl, sp, x), Sym(sl, sp, sname))));
     }
     /* Accessors and modifiers. */
     for (uint32_t i = 0; i < nf; i++) {
-        Form *spec = f->as.list.items[4 + i];
         const Symbol *r = I(sl, "r");
         char fld[128]; snprintf(fld, sizeof fld, ".%s", fields[i]->name);
         Form *sann = form_type_ann(sl->a, sp, Sym(sl, sp, sname));
         Form *acc_params[2] = { Sym(sl, sp, r), sann };
         Form *read = Ln(sl, sp, 2, Sym(sl, sp, I(sl, fld)), Sym(sl, sp, r));
-        if (spec->as.list.items[1]->tag != F_SYM) { err(spec, "accessor must be an identifier"); return; }
-        fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, spec->as.list.items[1]->as.sym)),
+        fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_defn), Sym(sl, sp, acc_names[i]),
                         Vec(sl, sp, acc_params, 2), AnyAnn(sl, sp), read));
-        if (spec->as.list.len == 3) {
-            if (spec->as.list.items[2]->tag != F_SYM) { err(spec, "modifier must be an identifier"); return; }
+        if (mod_names[i]) {
             const Symbol *v = I(sl, "v");
             Form *mod_params[3] = { Sym(sl, sp, r), form_type_ann(sl->a, sp, Sym(sl, sp, sname)), Sym(sl, sp, v) };
             Form *store = Ln(sl, sp, 3, Sym(sl, sp, sl->t_set), read, Sym(sl, sp, v));
-            fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, spec->as.list.items[2]->as.sym)),
+            fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, mod_names[i]),
                             Vec(sl, sp, mod_params, 3), store));
         }
     }
+    sl->scope = saved_scope;
 }
 
 bool scheme_lower_needed(Form *const *forms, uint32_t n) {
@@ -4272,6 +4450,83 @@ static void import_bound_names(SL *sl, const Form *f, FB *out) {
     if (!head_is(f, sl->s_import)) return;
     for (uint32_t i = 1; i < f->as.list.len; i++) import_set_bound_names(sl, f->as.list.items[i], out);
 }
+/* `(rename internal public)` in an `(export ...)` declaration. */
+static bool is_export_rename(SL *sl, const Form *nm) {
+    return nm->tag == F_LIST && nm->as.list.len == 3 && is_sym(nm->as.list.items[0], I(sl, "rename"));
+}
+/* The public names a define-library exports under `(rename a b)`: each is a
+ * global the library defines by spelling it, for the clash table's purposes. */
+static void export_rename_names(SL *sl, const Form *f, FB *out) {
+    if (!head_is(f, sl->s_define_library)) return;
+    for (uint32_t i = 2; i < f->as.list.len; i++) {
+        const Form *d = f->as.list.items[i];
+        if (!head_is(d, sl->s_export)) continue;
+        for (uint32_t j = 1; j < d->as.list.len; j++) {
+            Form *nm = d->as.list.items[j];
+            if (is_export_rename(sl, nm) && nm->as.list.items[2]->tag == F_SYM) fb_push(out, nm->as.list.items[2]);
+        }
+    }
+}
+/* The globals a define-library's body defines by spelling them: `define`,
+ * `define-values` and `define-record-type` in its `(begin ...)` declarations
+ * (an `(include ...)` is one by now) and in a `cond-expand`'s chosen clause.
+ * A definition a macro use expands to is not seen; what that costs is said
+ * where this is read. */
+static void body_defined_names(SL *sl, const Form *f, FB *out) {
+    for (uint32_t i = 1; i < f->as.list.len; i++) {
+        const Form *d = f->as.list.items[i];
+        if (head_is(d, sl->s_begin)) body_defined_names(sl, d, out);
+        else if (head_is(d, sl->s_define)) user_define_names(sl, d, out);
+        else if (head_is(d, sl->s_define_values) && d->as.list.len >= 2) {
+            const Form *fm = d->as.list.items[1];
+            if (fm->tag == F_SYM) fb_push(out, (Form *)fm);
+            else if (fm->tag == F_LIST)
+                for (uint32_t k = 0; k < fm->as.list.len; k++)
+                    if (fm->as.list.items[k]->tag == F_SYM && !is_sym(fm->as.list.items[k], sl->s_dot))
+                        fb_push(out, fm->as.list.items[k]);
+        } else if (head_is(d, sl->s_define_record_type) && d->as.list.len >= 4) {
+            const Form *ctor = d->as.list.items[2];
+            if (ctor->tag == F_LIST && ctor->as.list.len >= 1 && ctor->as.list.items[0]->tag == F_SYM)
+                fb_push(out, ctor->as.list.items[0]);
+            if (d->as.list.items[3]->tag == F_SYM) fb_push(out, d->as.list.items[3]);
+            for (uint32_t k = 4; k < d->as.list.len; k++) {
+                const Form *spec = d->as.list.items[k];
+                if (spec->tag != F_LIST) continue;
+                for (uint32_t m = 1; m < spec->as.list.len; m++)
+                    if (spec->as.list.items[m]->tag == F_SYM) fb_push(out, spec->as.list.items[m]);
+            }
+        }
+    }
+}
+static void library_defined_names(SL *sl, Form *f, FB *out) {
+    for (uint32_t i = 2; i < f->as.list.len; i++) {
+        Form *d = f->as.list.items[i];
+        if (head_is(d, sl->s_begin)) body_defined_names(sl, d, out);
+        else if (head_is(d, sl->s_cond_expand)) {
+            uint32_t n; Form **items;
+            if (cond_expand_clause(sl, d, &n, &items))
+                for (uint32_t k = 0; k < n; k++)
+                    if (head_is(items[k], sl->s_begin)) body_defined_names(sl, items[k], out);
+        }
+    }
+}
+/* Point a global's spelling at `to`, replacing a clash rename it already had. */
+static void set_clash(SL *sl, const Symbol *from, const Symbol *to) {
+    for (uint32_t i = 0; i < sl->n_clash; i++)
+        if (sl->clash_from[i] == from) { sl->clash_to[i] = to; return; }
+    if (sl->n_clash == sl->cap_clash) {
+        sl->cap_clash = sl->cap_clash ? sl->cap_clash * 2 : 8;
+        sl->clash_from = (const Symbol **)realloc((void *)sl->clash_from, sl->cap_clash * sizeof(Symbol *));
+        sl->clash_to = (const Symbol **)realloc((void *)sl->clash_to, sl->cap_clash * sizeof(Symbol *));
+        if (!sl->clash_from || !sl->clash_to) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    sl->clash_from[sl->n_clash] = from;
+    sl->clash_to[sl->n_clash++] = to;
+}
+static const Symbol *clash_spelling(const SL *sl, const Symbol *s) {
+    for (uint32_t i = 0; i < sl->n_clash; i++) if (sl->clash_from[i] == s) return sl->clash_to[i];
+    return s;
+}
 static void add_clash(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_clash; i++) if (sl->clash_from[i] == s) return;
     if (sl->n_clash == sl->cap_clash) {
@@ -4317,7 +4572,10 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
     FB reserved = {0};
     for (uint32_t u = 0; u < user.n; u++) fb_push(&reserved, user.items[u]);
     for (uint32_t i = 0; i < n; i++)
-        if (is_scheme_file(forms[i]) && !prelude_span(forms[i]->span)) import_bound_names(sl, forms[i], &reserved);
+        if (is_scheme_file(forms[i]) && !prelude_span(forms[i]->span)) {
+            import_bound_names(sl, forms[i], &reserved);
+            export_rename_names(sl, forms[i], &reserved);
+        }
     for (uint32_t r = 0; r < reserved.n; r++) {
         const Symbol *s = reserved.items[r]->as.sym;
         if (rn(sl, s) == s && tur_name_is_reserved_special_form(s->name) && !is_scheme_syntax_name(s->name))

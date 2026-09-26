@@ -74,6 +74,42 @@ for mode in compiled interpret; do
     fi
 done
 
+# untyped-forward-callee-result-retagged-as-pointer: an unannotated defn
+# CALLED BEFORE its definition.  The import path's forward declaration gave it
+# the int placeholder (the entry path's has the dynamic `any` default), so the
+# call's `any` result was widened as an int and cc refused the TUR_TAG.
+cat > "$TMP/sfwd.tur" <<'EOF'
+#lang saffron
+(defmodule sfwd
+  (export caller)
+  (defn caller [x] (callee x))
+  (defn callee [x]
+    (let [y x]
+      y)))
+EOF
+
+cat > "$TMP/smain.tur" <<'EOF'
+(defmodule sapp
+  (import sfwd :refer [caller])
+  (defn main [] : int
+    (println (cast (caller (:: "fwd" any)) cstr))
+    0))
+EOF
+
+for mode in compiled interpret; do
+    if [ "$mode" = compiled ]; then
+        out="$(cd "$TMP" && "$TUR" run smain.tur 2>/dev/null)"
+    else
+        out="$(cd "$TMP" && ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret smain.tur 2>/dev/null)"
+    fi
+    if [ "$out" != "fwd" ]; then
+        echo "FAIL saffron-import forward-callee ($mode): expected 'fwd', got '$out'"
+        FAILED=1
+    else
+        echo "PASS saffron-import forward-callee ($mode): a callee defined below its caller"
+    fi
+done
+
 if [ $FAILED -ne 0 ]; then
     echo "run-saffron-import: FAILED"
     exit 1
