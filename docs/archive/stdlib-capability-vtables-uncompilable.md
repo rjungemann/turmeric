@@ -1,5 +1,30 @@
 # `stdlib/capability.tur` does not compile: its four capability structs are block-scoped inside their own `-type` defns
 
+**RESOLVED 2026-09-26.** All four fix directions, and the drive-by.
+
+- The four vtable structs (`__tur_cap_fs`, `__tur_cap_logger`,
+  `__tur_cap_random`, `__tur_cap_time`) live in one file-scope c-block at the
+  top of `stdlib/capability.tur`; the `*-type` defns, whose only purpose was
+  the typedef block scope defeated, are gone (Defect 1).
+- Every defn declares its types. The handles are nominal: `FileSystem`,
+  `Logger` and `Random` are `defopaque ... :ptr<void>` declared here, and
+  `Time` is the `time` module's own (the module is loaded), so a
+  `Real-Time` / `Mock-Time` handle is the same capability `time-now` takes.
+  The make-* constructors take `c-fn` callbacks spelled with the vtable's C
+  signatures (`i32`, `ptr<u8>`, `ptr<i32>`) and return their handle; the
+  *-free and helper defns return `nil` or `int` (Defects 2 and 3).
+- `stdlib/io.tur` now loads `stdlib/capability.tur` for `FileSystem` rather
+  than declaring its own, so a `Real-FileSystem` is exactly what `fs-read` /
+  `fs-write` / `fs-delete` / `fs-list` call through (the two layouts were
+  already identical).
+- `with-capability` takes a `let`-shaped binding vector, like every other
+  `with-*` form, so its docstring example is now the working spelling.
+
+Pinned by `tests/fixtures/capability-module-roundtrip`, which loads the
+module and drives every capability end to end: Turmeric defns passed as
+`c-fn` callbacks, the Logger through `with-capability`, a `Mock-Time` read by
+`time-now`, and a `Real-FileSystem` read by `fs-delete`.
+
 **Severity: medium.** Nothing computes a wrong answer -- the module cannot be
 loaded into a compiled program at all. `(load "stdlib/capability.tur")` plus a
 bare `main` is 36 C errors and a failed `cc` invocation. It is latent because

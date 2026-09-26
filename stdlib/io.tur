@@ -36,10 +36,15 @@
 ;; handle-types the per-file read/close path.)
 ;; FileStream is a non-linear handle over a stdio FILE* for the file-size query
 ;; path: open / size / close without the move-only obligations of FileHandle.
+;;
+;; FileSystem itself is declared by stdlib/capability.tur, the module whose
+;; fs-read / fs-write / fs-delete / fs-list call through it -- a Real-FileSystem
+;; is exactly the capability those helpers take
+;; (stdlib-capability-vtables-uncompilable).
+
+(load "stdlib/capability.tur")
 
 (defopaque DirListing :ptr<void>)
-
-(defopaque FileSystem :ptr<void>)
 
 (defopaque FileStream :ptr<void>)
 ;;; file-stream-open -- open a file as a non-linear FileStream handle.
