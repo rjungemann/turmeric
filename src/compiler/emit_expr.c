@@ -15062,6 +15062,48 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             Type fnty = inner->type;
             uint32_t arity = (fnty.kind == TY_FN) ? fnty.as.fn.arity : 0;
 
+            /* hkt-generic-forwarded-bind-continuation-segfaults: `inner` is
+             * already a fat closure handle whose result is a by-value
+             * aggregate, headed for an erased-result sink.  Wrap it in a
+             * { boxres shim, handle } box; the shim fat-calls the handle and
+             * boxes the result into the carrier.  The wrapper owns nothing
+             * (NULL drop-glue header, as a bare-fn box), and when the
+             * signature does not qualify the handle passes through as before. */
+            if (e->as.fn_to_fat_.inner_is_fat) {
+                char *hv = emit_value(ctx, body, inner);
+                char *wshim = NULL;
+                if (fnty.kind == TY_FN && fnty.as.fn.result_full_type &&
+                    arity <= MAX_FN_ARITY) {
+                    Type wparams[MAX_FN_ARITY];
+                    for (uint8_t i = 0; i < arity; i++)
+                        wparams[i] = (fnty.as.fn.arg_full_types &&
+                                      fnty.as.fn.arg_full_types[i])
+                            ? *fnty.as.fn.arg_full_types[i]
+                            : emit_type_from_kind(fnty.as.fn.arg_kinds[i]);
+                    wshim = ensure_boxres_fatshim_ex(ctx,
+                        *fnty.as.fn.result_full_type, wparams, (uint8_t)arity,
+                        /*inner_is_fat=*/true);
+                }
+                if (!wshim) return hv;
+                char *base = fresh_tmp(ctx);
+                char *slots = fresh_tmp(ctx);
+                char *out = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "void *%s = malloc(sizeof(void *) + 2 * sizeof(int64_t));\n", base);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*(void (**)(void *))%s = 0;\n", base);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t *%s = (int64_t *)((char *)%s + sizeof(void *));\n", slots, base);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s[0] = (int64_t)(intptr_t)%s;\n", slots, wshim);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s[1] = (int64_t)(intptr_t)(%s);\n", slots, hv);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "void *%s = %s;\n", out, slots);
+                free(hv); free(wshim); free(base); free(slots);
+                return out;
+            }
+
             /* Emit the bare fn pointer value (typically the lifted fn's C name). */
             char *fnptr = emit_value(ctx, body, inner);
 
@@ -15090,7 +15132,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (fnty.as.fn.is_variadic && (uint32_t)i + 1 == (uint32_t)arity)
                     fnt_params[i] = emit_type_from_kind(TY_INT);
             }
-            char *typed_shim = ensure_typed_fatshim(ctx, fnt_result, fnt_params, arity);
+            char *typed_shim = NULL;
+            /* An erased-result sink reads slot 0's result as a carrier: box a
+             * by-value aggregate result there
+             * (hkt-generic-forwarded-bind-continuation-segfaults). */
+            if (e->as.fn_to_fat_.erased_result)
+                typed_shim = ensure_boxres_fatshim(ctx, fnt_result, fnt_params,
+                                                   (uint8_t)arity);
+            if (!typed_shim)
+                typed_shim = ensure_typed_fatshim(ctx, fnt_result, fnt_params, arity);
 
             /* arrow-struct-typed-arrow-abi: when the typed shim is declined but
              * a parameter is a wide by-value aggregate, the generic

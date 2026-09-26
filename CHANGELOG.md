@@ -108,6 +108,14 @@ All notable changes to Turmeric are documented here.
   constructor is nullary, the conversion now answers the tag-0 value for a 0
   carrier -- the reading `match` already gives.
 
+- **A generic that forwards a continuation to `bind` no longer crashes.**
+  `(defn chain [^Monad M] [m : (M int) k : (fn [int] (M int))] : (M int)
+  (bind m k))` segfaulted compiled when `k` returned a by-value `Option` or
+  `Result`: the monad's `bind` reads the continuation's result as a boxed
+  carrier, and got the aggregate in registers. The call site now boxes such a
+  result in the continuation's calling shim, for a plain function and for a
+  capturing closure.
+
 - **A subclass constraint now carries its superclasses' dictionaries.** A
   higher-kinded generic constrained only by a subclass could not call a
   return-directed superclass method such as `pure` under `[^Alternative F]`.

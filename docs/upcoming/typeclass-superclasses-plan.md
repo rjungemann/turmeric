@@ -919,8 +919,9 @@ Where it departs from the plan above:
 - **Fixture shapes route around pre-existing compiled-path gaps.** Each gap
   below reproduces on the compiler before SC8b with every constraint
   spelled out, prints the right answer under `--interpret`, and is filed:
-  - [hkt-generic-forwarded-bind-continuation-segfaults](../reported/hkt-generic-forwarded-bind-continuation-segfaults.md)
+  - [hkt-generic-forwarded-bind-continuation-segfaults](../archive/hkt-generic-forwarded-bind-continuation-segfaults.md)
     (high) -- a generic forwarding a continuation parameter to `bind`.
+    **Fixed** in the follow-up bug-fix PR.
   - [hkt-generic-none-to-typed-param-segfaults](../archive/hkt-generic-none-to-typed-param-segfaults.md)
     (high) -- a `none` from a generic passed to a typed `Option` parameter.
     **Fixed** in the follow-up bug-fix PR.

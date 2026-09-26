@@ -1758,7 +1758,16 @@ struct Expr {
          * returns and may live on the stack.  static_ok alone also covers a
          * normalized nominal param, which never drops but MAY store the
          * value -- fine for an immortal static box, not for a stack one. */
-        struct { struct Expr *inner; bool static_ok; bool stack_ok; } fn_to_fat_;
+        /* erased_result (hkt-generic-forwarded-bind-continuation-segfaults):
+         * the sink's declared fn type returns an HKT-erased `(M b)`, so every
+         * consumer of this box calls slot 0 through the erased int64 cast and
+         * reads the result as a carrier; a by-value aggregate result must be
+         * boxed by the slot-0 shim (ensure_boxres_fatshim). */
+        /* inner_is_fat: `inner` is already a fat closure handle (a capturing
+         * closure); the node wraps it in a { boxres shim, inner } box instead
+         * of shimming a bare fn pointer.  Only set together with
+         * erased_result. */
+        struct { struct Expr *inner; bool static_ok; bool stack_ok; bool erased_result; bool inner_is_fat; } fn_to_fat_;
         /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
          * param) into a single-int64 fat-closure handle so a ^fat consumer can
          * fat-call it.  inner is the tur_poly_fn_t value; the emitter heap-boxes

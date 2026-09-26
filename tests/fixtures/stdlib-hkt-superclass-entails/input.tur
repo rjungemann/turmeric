@@ -10,11 +10,9 @@
   (alt-or x (pure d)))
 
 ;; MonadError entails Monad, which entails Applicative (SC8b step 5): `bind`
-;; and `pure` under a lone `^MonadError`, two superclass steps apart.  The
-;; continuation is a lambda in the body: a generic that forwards a
-;; continuation PARAMETER to `bind` segfaults compiled, a separate,
-;; pre-existing gap
-;; (docs/reported/hkt-generic-forwarded-bind-continuation-segfaults.md).
+;; and `pure` under a lone `^MonadError`, two superclass steps apart.
+;; (A continuation forwarded as a parameter is covered by
+;; hkt-generic-forwarded-continuation.)
 (defn add-one [^MonadError M] [m : (M int)] : (M int)
   (bind m (fn [x : int] : (M int) (pure (+ x 1)))))
 

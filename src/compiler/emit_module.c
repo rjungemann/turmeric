@@ -1459,6 +1459,95 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
     return name;
 }
 
+/* hkt-generic-forwarded-bind-continuation-segfaults: the RESULT-BOXING
+ * fatshim.  A function returning a by-value aggregate -- `(fn [int] (Option
+ * int))` -- passed where the sink's declared type returns an HKT-erased
+ * `(M b)`: a constrained generic's continuation parameter, handed on to a
+ * dictionary's `bind`.  Every consumer of that box calls slot 0 through the
+ * erased `int64_t (*)(void *, int64_t...)` cast and reads the result as a
+ * carrier -- a pointer to a boxed value, what `some()` returns.  The generic
+ * forwarding shim instead handed back the aggregate's first eightbyte (the
+ * tag), which the carrier consumer dereferenced: a segfault on the compiled
+ * path, the right answer under the interpreter.
+ *
+ * This shim calls the function through its real aggregate signature (so a
+ * wide, sret-returned aggregate is right too), heap-boxes the result exactly
+ * as a constructor's carrier box is, notes its words for regions, and
+ * returns the box pointer.  Admitted only when every parameter is already
+ * the int64_t carrier word, so no argument needs converting; anything else
+ * returns NULL and keeps today's shim.  The name is caller-owned. */
+char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
+                               Type *param_types, uint8_t n_params,
+                               bool inner_is_fat);
+char *ensure_boxres_fatshim(EmitCtx *ctx,
+                            Type result_type, Type *param_types, uint8_t n_params) {
+    return ensure_boxres_fatshim_ex(ctx, result_type, param_types, n_params, false);
+}
+/* `inner_is_fat`: slot 1 holds a fat closure HANDLE (a capturing closure)
+ * rather than a bare fn pointer, so the shim calls the handle's own slot 0
+ * with the handle as its env -- the TUR_APPLY convention. */
+char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
+                               Type *param_types, uint8_t n_params,
+                               bool inner_is_fat) {
+    if (!ctx) return NULL;
+    bool agg = false;
+    if (result_type.kind == TY_APP)
+        agg = type_app_is_concrete_adt(&result_type) &&
+              !type_is_heap_adt(result_type) && !type_is_heap_struct(result_type);
+    else if (result_type.kind == TY_ADT)
+        agg = result_type.as.adt_.def != NULL &&
+              !type_is_heap_adt(result_type) && !type_is_heap_struct(result_type);
+    if (!agg) return NULL;
+    const char *rc = type_c_name(result_type);
+    if (!rc || !*rc || strcmp(rc, "int64_t") == 0) return NULL;
+    for (uint32_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        if (!pc || strcmp(pc, "int64_t") != 0) return NULL;
+    }
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, inner_is_fat ? "__tur_fatshim_boxres_fat_" : "__tur_fatshim_boxres_");
+    append_sanitized_c_token(&nb, rc);
+    for (uint32_t i = 0; i < n_params; i++) buf_puts(&nb, "_int64_t");
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", int64_t a%u", (unsigned)i);
+    buf_puts(target, ") {\n");
+    buf_printf(target, "    %s *__b = (%s *)malloc(sizeof(%s));\n", rc, rc, rc);
+    if (inner_is_fat) {
+        buf_puts(target, "    void *__in = (void *)(intptr_t)((int64_t *)__e)[1];\n");
+        buf_printf(target, "    *__b = ((%s (*)(void *", rc);
+        for (uint32_t i = 0; i < n_params; i++) buf_puts(target, ", int64_t");
+        buf_puts(target, "))(intptr_t)((int64_t *)__in)[0])(__in");
+        for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
+        buf_puts(target, ");\n");
+    } else {
+        buf_printf(target, "    *__b = ((%s (*)(", rc);
+        if (n_params == 0) buf_puts(target, "void");
+        for (uint32_t i = 0; i < n_params; i++) buf_puts(target, i ? ", int64_t" : "int64_t");
+        buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
+        for (uint32_t i = 0; i < n_params; i++) buf_printf(target, i ? ", a%u" : "a%u", (unsigned)i);
+        buf_puts(target, ");\n");
+    }
+    buf_puts(target, "    TUR_REGION_NOTE_WORDS(__b, sizeof *__b);\n");
+    buf_puts(target, "    return (int64_t)(intptr_t)__b;\n}\n");
+    return name;
+}
+
 /* arrow-struct-typed-arrow-abi: the CARRIER fatshim -- slot 0 spelled exactly
  * as an erased consumer casts it (`int64_t (*)(void *, int64_t...)`), with each
  * wide by-value parameter unboxed and a wide by-value result boxed.

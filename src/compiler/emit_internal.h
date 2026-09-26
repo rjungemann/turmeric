@@ -1471,6 +1471,14 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
  * signature is not in that set (the generic `__tur_fatshim<arity>` stands). */
 char *ensure_carrier_fatshim(EmitCtx *ctx,
                              Type result_type, Type *param_types, uint8_t n_params);
+/* hkt-generic-forwarded-bind-continuation-segfaults: slot-0 shim that boxes a
+ * by-value aggregate result into the carrier for an erased-result sink; NULL
+ * when the signature does not qualify.  Caller-owned name. */
+char *ensure_boxres_fatshim(EmitCtx *ctx,
+                            Type result_type, Type *param_types, uint8_t n_params);
+char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
+                               Type *param_types, uint8_t n_params,
+                               bool inner_is_fat);
 /* constrained-byval dispatch: ensure a carrier-adapter witness dict exists for a
  * by-value struct payload boxed into a constrained existential, returning the
  * dict's base name (caller references `&<name>_singleton`).  Each method slot is

@@ -37,6 +37,33 @@ bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h *
 /* Does this forall quantify a higher-kinded (arrow-kind) bound variable?
  * KIND_STAR (plain type var) and KIND_ROW/KIND_TYPEROW (effect/type rows) do
  * not count. */
+
+/* hkt-generic-forwarded-bind-continuation-segfaults: does the callee's
+ * declared type for argument slot `idx` return an HKT-erased `(M b)` -- a
+ * tyvar-headed application?  Every consumer of a function passed there calls
+ * it through the erased carrier cast and reads its result as a carrier. */
+static bool sink_fn_result_is_hkt_erased(const Type *fn_type, uint32_t idx) {
+    if (!fn_type || fn_type->kind != TY_FN || !fn_type->as.fn.arg_full_types ||
+        idx >= fn_type->as.fn.arity)
+        return false;
+    const Type *decl = fn_type->as.fn.arg_full_types[idx];
+    const Type *dr = (decl && decl->kind == TY_FN) ? decl->as.fn.result_full_type : NULL;
+    const Type *hh = dr;
+    while (hh && hh->kind == TY_APP) hh = hh->as.app.fn;
+    return dr && dr->kind == TY_APP && hh && hh->kind == TY_TYVAR;
+}
+
+/* ...and is `t` a by-value aggregate (a concrete ADT monomorph or ADT, not a
+ * :heap one) -- the result shape the boxing shim bridges? */
+static bool type_is_byvalue_aggregate_result(Type t) {
+    if (t.kind == TY_APP)
+        return type_app_is_concrete_adt(&t) && !type_is_heap_adt(t) &&
+               !type_is_heap_struct(t);
+    if (t.kind == TY_ADT)
+        return t.as.adt_.def != NULL && !type_is_heap_adt(t) && !type_is_heap_struct(t);
+    return false;
+}
+
 static bool forall_has_higher_kinded_var(const Type *forall_ty) {
     if (!forall_ty || forall_ty->kind != TY_FORALL) return false;
     if (!forall_ty->as.forall_.var_kinds) return false;
@@ -8299,6 +8326,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
                                           args[i]->span);
                     shim->as.fn_to_fat_.inner = args[i];
+                    /* hkt-generic-forwarded-bind-continuation-segfaults: when
+                     * this slot's declared fn type returns an HKT-erased
+                     * `(M b)` (a tyvar-headed application), its consumers read
+                     * the result as a carrier, so a by-value aggregate result
+                     * must be boxed by slot 0's shim. */
+                    shim->as.fn_to_fat_.erased_result =
+                        sink_fn_result_is_hkt_erased(&fn_type, fn_arg_idx_fat);
                     /* A normalized NOMINAL param never drops its argument --
                      * which is precisely why this shim leaked a box per call --
                      * so its box may be the shared file-scope one.
@@ -8342,6 +8376,23 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                            (ak == TY_INT && args[i]->kind == EX_INT_LIT &&
                             args[i]->as.i == 0) ||
                            (ak == TY_INT && args[i]->kind != EX_INT_LIT)) {
+                    /* hkt-generic-forwarded-bind-continuation-segfaults: a
+                     * capturing closure whose result is a by-value aggregate,
+                     * headed for a slot whose declared result is an HKT-erased
+                     * `(M b)`, is wrapped so the wrapper's shim boxes the
+                     * result into the carrier its consumers read. */
+                    if (ak == TY_FN && args[i]->type.as.fn.boxed &&
+                        args[i]->type.as.fn.result_full_type &&
+                        type_is_byvalue_aggregate_result(
+                            *args[i]->type.as.fn.result_full_type) &&
+                        sink_fn_result_is_hkt_erased(&fn_type, fn_arg_idx_fat)) {
+                        Expr *w = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
+                                           args[i]->span);
+                        w->as.fn_to_fat_.inner = args[i];
+                        w->as.fn_to_fat_.erased_result = true;
+                        w->as.fn_to_fat_.inner_is_fat = true;
+                        args[i] = w;
+                    }
                     /* Pass through unchanged: a fat closure (TY_PTR_VOID), nil, a
                      * null (literal 0) callback, or an already-erased :int
                      * fat-closure handle (a computed value, e.g. a handler that
