@@ -63,9 +63,7 @@
 ;; and downstream, must sit beside a `Semigroup` instance for the same type
 ;; (TUR-E0393 otherwise) -- a Monoid IS a Semigroup with an identity, so any
 ;; instance that lacked one was not a lawful Monoid to begin with.
-(defclass Monoid [a]
-  [(Semigroup a)]
-  (mempty [] : a))
+(defclass Monoid [a] [(Semigroup a)] (mempty [] : a))
 
 ;; -- selection newtypes -------------------------------------------------------
 ;;
@@ -215,10 +213,7 @@
 ;;;   acc combined with v[i..n).
 ;;;
 ;;; Since: lattice-vocabulary-plan L4
-(defn mconcat-from [^Monoid A] [v   : (Vec A)
-                                i   : int
-                                n   : int
-                                acc : A] : A
+(defn mconcat-from [^Monoid A] [v : (Vec A) i : int n : int acc : A] : A
   (if (>= i n) acc (mconcat-from v (+ i 1) n (combine acc (vec-get v i)))))
 
 ;;; mconcat -- combine every element of a Vec, left to right, from mempty.
@@ -313,9 +308,7 @@
 ;;;   (let [z : MaxI (bottom)] (join z (:: 3 MaxI)))   ; => MaxI 3
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
-(defclass BoundedJoin [a]
-  [(JoinSemilattice a)]
-  (bottom [] : a))
+(defclass BoundedJoin [a] [(JoinSemilattice a)] (bottom [] : a))
 
 ;;; BoundedMeet -- a MeetSemilattice with a greatest element.
 ;;;
@@ -326,9 +319,7 @@
 ;;;   (let [t : MinI (top)] (meet t (:: 3 MinI)))   ; => MinI 3
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
-(defclass BoundedMeet [a]
-  [(MeetSemilattice a)]
-  (top [] : a))
+(defclass BoundedMeet [a] [(MeetSemilattice a)] (top [] : a))
 
 ;; -- instances ----------------------------------------------------------------
 ;;
