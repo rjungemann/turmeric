@@ -55,6 +55,15 @@
 >   fails on the fallback notice or any `lib-*` artifact. The `windows-jit` CI
 >   job runs it, so the real-Windows confirmation is the next CI run of that
 >   job.
+>
+>   **Confirmed on real Windows 2026-09-26** (Windows 11, MSYS2/UCRT64, gcc
+>   16.1), with one correction. Scenarios 1-3 passed as they did under Wine.
+>   Scenario 4 killed the script with SIGPIPE (exit 141) under both Git Bash
+>   and MSYS2 bash, which is what that CI job would have hit. It fed the REPL
+>   through a `mkfifo`, and a native `tur.exe` cannot hold an MSYS FIFO open;
+>   Wine's host bash has real FIFOs, which is why this did not show there. The
+>   scenario now writes into an ordinary pipe after fixing the source, and the
+>   script is 4 passed / 0 failed under both shells.
 
 **Severity: high for anyone actually using `tur` on Windows.** `tur.exe` now
 builds and compiles-and-runs programs, but the commands that shell out or
