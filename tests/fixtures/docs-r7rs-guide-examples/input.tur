@@ -103,5 +103,5 @@
 ;; --- SRFIs ---------------------------------------------------------------
 (define (from n) (lazy (eager (cons n (from (+ n 1))))))
 (define (nth s n) (if (= n 0) (car (force s)) (nth (cdr (force s)) (- n 1))))
-(write (nth (from 0) 100000))
+(write (nth (from 0) 1000))
 (newline)

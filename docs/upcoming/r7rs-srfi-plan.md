@@ -500,6 +500,10 @@ fixture itself runs on both back ends.
 > the plan as written. The exit criterion holds:
 > `r7rs-srfi-builtins-emit-nothing` compares `tur emit-c` with and without
 > the ten built-in imports (29,196 lines, identical).
+>   The stream walks in `r7rs-srfi-builtins` (10,000 steps) and the guide's
+>   example (1,000) are sized for `run-r7rs-gc.sh`, which runs every r7rs
+>   fixture with a collection every 31 allocations; 100,000 took 124 s there
+>   alone and the guide fixture, which links the evaluator, over 600 s.
 >
 > - **Where the files are.** `stdlib/srfi/<N>.scm`, not
 >   `stdlib/r7rs/srfi/<N>.tur`. `prelude_span` treats everything under

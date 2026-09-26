@@ -35,7 +35,7 @@
 (show (promise? (eager 1)))
 (define (stream-ref s n) (if (= n 0) (car (force s)) (stream-ref (cdr (force s)) (- n 1))))
 (define (from n) (lazy (eager (cons n (from (+ n 1))))))
-(show (stream-ref (from 0) 100000))
+(show (stream-ref (from 0) 10000))
 ;; Through only / except / prefix / rename.
 (show (s6:get-output-string (let ((q (s6:open-output-string))) (write 7 q) q)))
 (show (force (later (ready 3))))

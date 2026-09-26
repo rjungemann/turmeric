@@ -386,7 +386,7 @@ R7RS imports it:
 (import (scheme base) (scheme write) (srfi 45))
 (define (from n) (lazy (eager (cons n (from (+ n 1))))))
 (define (nth s n) (if (= n 0) (car (force s)) (nth (cdr (force s)) (- n 1))))
-(write (nth (from 0) 100000))                ; 100000
+(write (nth (from 0) 1000))                  ; 1000
 ```
 
 What an import does depends on the SRFI, and the table below says which
