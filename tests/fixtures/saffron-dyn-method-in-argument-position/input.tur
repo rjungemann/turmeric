@@ -7,6 +7,11 @@
 ;; of them sit in ONE call's argument list, with float payloads so a swapped
 ;; or clobbered argument prints a different number.  run-jit.sh runs this in
 ;; the engine; it must answer exactly as `tur run` and `--interpret` do.
+;;
+;; Every receiver is an unannotated parameter, so it is `any` and every
+;; `.foldl`/`.foldr` goes through `__tur_dm`.  (A let-bound `(Two 1.5 2.25)`
+;; would resolve to the static instance specialization instead, which is not
+;; what this fixture pins.)
 (load "stdlib/rc.tur")
 (defdata Two [a] (Two [l : a r : a]))
 (definstance Foldable [Two]
@@ -15,13 +20,13 @@
 (defn diff2 [p q] (- p q))
 (defn tri [p q r] (+ p (* q r)))
 (defn sum-of [t] (.foldl t 0.0 (fn [acc x] (+ acc x))))
+(defn show-all [t u]
+  (println (diff2 (.foldl t 0.0 (fn [acc x] (+ acc x)))
+                  (.foldl u 0.0 (fn [acc x] (+ acc x)))))
+  (println (tri (.foldr t 0.5 (fn [x acc] (- x acc)))
+                (.foldl u 1.0 (fn [acc x] (* acc x)))
+                (sum-of t)))
+  (println (diff2 (sum-of u) (sum-of t))))
 (defn main []
-  (let [t (Two 1.5 2.25)
-        u (Two 7.25 3.5)]
-    (println (diff2 (.foldl t 0.0 (fn [acc x] (+ acc x)))
-                   (.foldl u 0.0 (fn [acc x] (+ acc x)))))
-    (println (tri (.foldr t 0.5 (fn [x acc] (- x acc)))
-                  (.foldl u 1.0 (fn [acc x] (* acc x)))
-                  (sum-of t)))
-    (println (diff2 (sum-of u) (sum-of t))))
+  (show-all (Two 1.5 2.25) (Two 7.25 3.5))
   0)

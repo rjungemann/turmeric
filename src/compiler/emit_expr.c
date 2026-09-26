@@ -1182,6 +1182,18 @@ static const char *catch_thunk_box_shim(EmitCtx *ctx, const Expr *thunk, int *ow
         if (owns) *owns = 0;
         return ensure_catch_bits_shim(ctx, rr);
     }
+    /* An `any` result is a 16-byte `tur_tagged_t` returned BY VALUE, so the
+     * generic `int64_t (*)(void *)` call is the same mismatch -- and on Win64
+     * it is not a wrong value but a crash: a struct that size comes back
+     * through a hidden result pointer passed in the first argument register,
+     * so the thunk wrote its result through the fat box's env and read its
+     * env from the next register (saffron-catch-unwind-cps-panic, which only
+     * ever passed on SysV, where the struct rides rax:rdx).  Box it like any
+     * other by-value aggregate. */
+    if (rr.kind == TY_ANY) {
+        if (owns) *owns = 1;
+        return ensure_catch_box_shim(ctx, rr);
+    }
     if (!emit_type_is_byvalue_adt(ctx, ret)) return NULL;
     if (owns) *owns = 1;
     return ensure_catch_box_shim(ctx, rr);
@@ -7246,18 +7258,31 @@ static char *emit_dyn_method(EmitCtx *ctx, Buf *body, const Expr *e) {
     char **av = na ? (char **)calloc(na, sizeof(char *)) : NULL;
     for (uint32_t i = 0; i < na; i++) av[i] = emit_value(ctx, body, e->as.dyn_method_.args[i]);
 
+    /* The receiver box and the looked-up slot are bound by STATEMENTS, and the
+     * call is left a bare prototype-cast call -- the same hoist emit_dyn_call
+     * makes for its callee box.  This used to be one struct-valued
+     * `({ tur_tagged_t __tur_dm = ...; ... })`, and c2mir/MIR-gen on x86-64
+     * miscompiles that in a call's ARGUMENT LIST
+     * (jit-x86-64-struct-valued-statement-expression-miscompiles): with two
+     * such calls in `(tri (.foldr t ...) (.foldl u ...) ...)` the engine
+     * handed the second one a float for a receiver and panicked `no instance
+     * of Foldable for float` (saffron-dyn-method-in-argument-position).
+     * Evaluation order is unchanged: the receiver was already emitted before
+     * the arguments, and the slot lookup still runs before any is read. */
+    char *dm = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body,
+        "tur_tagged_t %s = (%s); "
+        "const void *%s_f = __tur_inst_slot(\"%s\", \"%s\", TUR_GETTAG(%s), %d);\n",
+        dm, recv, dm, cls, meth, dm, (int)slot);
     Buf out; buf_init(&out);
-    buf_printf(&out,
-        "({ tur_tagged_t __tur_dm = (%s); "
-        "const void *__tur_df = __tur_inst_slot(\"%s\", \"%s\", "
-        "TUR_GETTAG(__tur_dm), %d); "
-        "((%s (*)(int64_t",
-        recv, cls, meth, (int)slot, rcn);
+    buf_printf(&out, "((%s (*)(int64_t", rcn);
     for (uint32_t i = 0; i < na; i++) buf_puts(&out, ", tur_tagged_t");
-    buf_puts(&out, "))__tur_df)(TUR_UNTAG(__tur_dm)");
+    buf_printf(&out, "))%s_f)(TUR_UNTAG(%s)", dm, dm);
     for (uint32_t i = 0; i < na; i++) buf_printf(&out, ", %s", av[i]);
-    buf_puts(&out, "); })");
+    buf_puts(&out, ")");
     buf_putc(&out, '\0');
+    free(dm);
     free(recv);
     for (uint32_t i = 0; i < na; i++) free(av[i]);
     free(av);

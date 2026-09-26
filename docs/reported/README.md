@@ -2227,6 +2227,12 @@ section 5b (`docs/archive/type-confusion-detection-plan.md`).
 | --- | --- | --- |
 | [mut-cell-is-never-freed](mut-cell-is-never-freed.md) | low | The shared heap cell a lambda-captured `^mut` now lives in (`TurMutCell`) is allocated like any `:heap` value and never freed: 8 bytes (16 for `any`) per evaluation of the `let`, one per iteration in a loop. Fix: free it at the `let`'s scope end when every capturing closure's env is freed there (the emitter already decides that per closure), or make it an `rc` cell once `set!` through an `rc` of a parametric struct is allowed |
 
+## Found driving the open-reports PR's Windows suite (filed 2026-09-26)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [static-instance-spec-calls-any-lambda-as-concrete-result](static-instance-spec-calls-any-lambda-as-concrete-result.md) | high | A typeclass method call that resolves to a static instance specialization (`(.foldl t 0.0 f)` on a let-bound `(Two 1.5 2.25)`) calls the unannotated Saffron lambda -- whose result is `any`, a `tur_tagged_t` -- through a prototype that says it returns `double`. Linux reads `xmm0` (right by accident for `(+ acc x)`, garbage otherwise: `4.68416e-310` for `9.75`); Win64 returns the struct through a hidden pointer and crashes. Fix: unify the lambda result with the specialization's `b`, or pass an unboxing adaptor as the typed-fn seam does |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
