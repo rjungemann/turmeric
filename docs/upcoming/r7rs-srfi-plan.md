@@ -1,8 +1,11 @@
 # SRFI libraries for `#lang r7rs`, after Racket's
 
-Status: **plan, nothing landed.** Every "today" claim below was measured on
+Status: **S1 landed 2026-09-26** (see its "What shipped" note); S0 and S2-S8
+to come. `(import (srfi N))` resolves for every SRFI in the table: the ten
+built-in rows and the two alias rows import, and the rest are refused with
+their reason. Every "today" claim in Sections 1-2 was measured on
 2026-09-26 against `./build/tur` at fdd51fc9 (Debug build), on both back ends
-(`tur run` and `tur --interpret`). The transcript is in
+(`tur run` and `tur --interpret`), before S1. The transcript is in
 [Appendix A](#appendix-a----probe-transcript). Every claim about Racket was
 read from Racket's own sources on the same day ([Appendix B](#appendix-b----racket-evidence)).
 
@@ -209,8 +212,10 @@ import.
 
 ### D3 -- an SRFI is a `define-library` file spliced into its importer, not a module
 
-Each supported SRFI is one file, `stdlib/r7rs/srfi/<N>.tur`, holding one
-`(define-library (srfi N) ...)` written in plain R7RS. That mirrors Racket's
+Each supported SRFI is one file, `stdlib/srfi/<N>.scm`, holding one
+`(define-library (srfi N) ...)` written in plain R7RS. (Not under
+`stdlib/r7rs/`: files there are Turmeric-shaped, and the lowering exempts
+them from Scheme semantics; see S1's "What shipped".) That mirrors Racket's
 `srfi/<N>.rkt`: one file per SRFI, and a built-in row's file is only an
 export list, as `srfi/6.rkt` is. Importing `(srfi N)` splices the file in
 through the load expander, as `(scheme time)` is spliced today
@@ -264,8 +269,9 @@ refusal (if any), and the stage that lands it. From it:
 - `cond-expand`'s `(library (srfi N))`, which holds for built in, alias and
   library rows;
 - a `srfi-N` feature identifier per importable row, the naming convention
-  SRFI 0 introduced. It goes into `feature_holds` and into `(features)`'s list, both
-  generated from the table, which also fixes the `ratios` drift (2.3);
+  SRFI 0 introduced. `feature_holds` reads it from the table. `(features)`'s
+  list is written out in the prelude, and the sync check below fails when it
+  differs (S1's "What shipped" says why it is not generated);
 - the guide's support table, which a sync check compares against the table.
 
 `tests/check-r7rs-srfi-sync.sh`, alongside the existing
@@ -302,7 +308,7 @@ decides.
 
 - **Port the reference implementation** when it is portable R5RS/R7RS under an
   MIT-style licence, which covers most of Racket's list. Keep its copyright
-  header, with a licence note in `stdlib/r7rs/srfi/COPYING` as
+  header, with a licence note in `stdlib/srfi/COPYING` as
   `tests/r7rs/CHIBI-COPYING` does for chibi.
 - **Write our own** when the reference is tied to one implementation's
   primitives (SLIB) or is slow over our representation. That covers the
@@ -489,6 +495,63 @@ one file and one fixture on the machinery S1 builds, taken when asked for:
 byte for byte (`tur emit-c`), as the same program without those imports. That
 is the no-op made literal, checked by a small script next to the fixture. The
 fixture itself runs on both back ends.
+
+> **What shipped (2026-09-26).** Everything above, with these differences from
+> the plan as written. The exit criterion holds:
+> `r7rs-srfi-builtins-emit-nothing` compares `tur emit-c` with and without
+> the ten built-in imports (29,196 lines, identical).
+>
+> - **Where the files are.** `stdlib/srfi/<N>.scm`, not
+>   `stdlib/r7rs/srfi/<N>.tur`. `prelude_span` treats everything under
+>   `stdlib/r7rs/` as Turmeric-shaped: no rename table, no operator rewrite,
+>   Turmeric's lexemes. An SRFI file is real Scheme, so it lives beside that
+>   directory, and `srfi_span` marks it instead. The release archives and the
+>   WASM bundle take `stdlib/` whole, so nothing else changed to ship it.
+> - **"Inline mode" is a pre-pass.** `srfi_source_forms` turns a spliced SRFI
+>   file's `define-library` into its body's forms before any scan reads the
+>   program. Every name is spelled onto its target: the body's definitions
+>   become `srfi<N>--<name>`, and an on-demand `(scheme ...)` import's names
+>   become that library's procedures, so the SRFI's import does not make them
+>   visible to the program. The lowering emits those forms in place, like the
+>   prelude's, outside a program's module wrapper, so every module of the
+>   compile sees them. Macros are left out of the splice. Every lowering pass
+>   that imports the SRFI registers them (`srfi_import` / `SrfiLib`, the
+>   same idea as a user library's macro export), under hidden spellings with
+>   the import set's names as aliases. A re-export of R7RS syntax under a new
+>   name (`(rename (srfi 87) (case kase))`) becomes a forwarding macro.
+> - **An SRFI file imports `(scheme ...)` libraries only, for now.** SRFI 13
+>   importing SRFI 14 (S5) needs the pre-pass to spell another SRFI's names
+>   into the body too. It refuses anything else until then.
+> - **`(features)` is written out, not generated.** The prelude is
+>   Turmeric-shaped and is loaded unlowered when a Turmeric program imports a
+>   Scheme library, so a placeholder the lowering fills in broke every
+>   Turmeric importer (caught by `run-r7rs-import.sh`). Its list stays
+>   written out. `tests/check-r7rs-srfi-sync.sh` fails when it differs from
+>   `R7RS_FEATURES` plus `srfi-N` for every supported row, and
+>   `r7rs-features-agree` asks `cond-expand` about each entry at run time.
+> - **D5 is pinned by fixtures, not a unit test.** No incompatible SRFI has
+>   landed yet, but a rename onto an R7RS name shows the check:
+>   `errors/r7rs-srfi-conflict` renames SRFI 45's `eager` to `force` next to
+>   `(scheme base)`. `errors/r7rs-srfi-redefine` (defining an imported name)
+>   and `errors/r7rs-srfi-not-exported` (an import set naming a non-export)
+>   ride along.
+> - **The two-pass macro fixture is two `run-r7rs-import.sh` cases**
+>   (`srfi-in-program-and-library`, `srfi-in-library-only`), since a
+>   multi-module test needs that runner.
+> - **Integer library-name parts** work for user libraries too:
+>   `(import (mylib 2))` is the module `mylib/2`, as in Racket's R7RS.
+> - **Found and fixed on the way:** the load expander took at most eight
+>   library files from one `import` form and silently dropped the rest
+>   (`libs[8]` in elab_toplevel.c). A program importing twelve SRFIs lost
+>   four. It takes 128 now.
+> - **SRFI 45's `eager` is `make-promise`.** R7RS adopted it that way, and
+>   `delay` of a promise chains here too. So `(force (eager (delay 7)))` is 7,
+>   where SRFI 45's reference implementation would give the inner promise.
+>   stdlib/srfi/45.scm says so.
+>
+> S0's inventory and build-time measurement did not come first, because S1
+> needed neither. Both are still owed before S3 (SRFI 1), where the
+> build-time question is real.
 
 ### S2 -- the small syntax SRFIs (small)
 

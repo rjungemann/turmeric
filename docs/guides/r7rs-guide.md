@@ -80,6 +80,10 @@ The core forms are all there: `define`, `lambda`, the `let` family and named
 `only`/`except`/`prefix`/`rename` (nested freely), `cond-expand`, `syntax-rules`, `guard`,
 `parameterize`, `delay`, `delay-force`, quasiquote.
 
+SRFIs are imported as `(srfi N)`, the way Racket's R7RS imports them. The
+SRFIs that R7RS already includes import at no cost; see SRFIs below for the
+full table.
+
 ## Lists, vectors, strings
 
 ```scheme
@@ -372,6 +376,107 @@ Turmeric's strings stay immutable, so mutating the Scheme string afterwards
 changes nothing on the Turmeric side. A Turmeric module `cast`ing a Scheme
 library's string result to `cstr` gets the same copy.
 `tests/run-r7rs-import.sh` pins both directions on both back ends.
+
+## SRFIs
+
+An SRFI is imported by its number, `(import (srfi N))`, the way Racket's
+R7RS imports it:
+
+```scheme
+(import (scheme base) (scheme write) (srfi 45))
+(define (from n) (lazy (eager (cons n (from (+ n 1))))))
+(define (nth s n) (if (= n 0) (car (force s)) (nth (cdr (force s)) (- n 1))))
+(write (nth (from 0) 100000))                ; 100000
+```
+
+What an import does depends on the SRFI, and the table below says which
+kind each one is:
+
+- **built in**: R7RS adopted the SRFI, so its names are R7RS's own. The
+  import is accepted and costs nothing; the program compiles to exactly the
+  same code without it. Importing it next to `(scheme base)` is fine.
+- **alias**: a few new names for R7RS procedures.
+- **library**: an implementation, loaded when imported.
+- **no library**: the syntax is always on, so there is nothing to import.
+  The import is an error that says so, as in Racket.
+- **not planned**: refused, with the reason.
+- **not yet**: planned, and refused until the stage in parentheses lands
+  ([docs/upcoming/r7rs-srfi-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-srfi-plan.md)).
+
+`only`, `except`, `prefix` and `rename` work on an SRFI as on any library,
+and their names are checked against its export list. One imported name has
+one binding (R7RS 5.2). Renaming an SRFI's procedure onto a name R7RS already
+has, next to `(scheme base)`, is an error that names both, and so is defining
+a name an SRFI import binds. `(except (srfi N) name)` keeps the name for the
+program.
+
+`cond-expand` knows the table too. `srfi-N` holds for every SRFI marked built
+in, alias, library or no library, and `(library (srfi N))` holds for the ones
+that can be imported. `(features)` lists the same `srfi-N` identifiers.
+
+The Racket column says what Racket's `srfi` collection has for each one.
+"re-export" means Racket's module only re-exports its core, and "library"
+means it has an implementation of its own. For SRFIs that R7RS adopted,
+Racket needs its own library where its core differs from the SRFI; here,
+R7RS's own forms already are the SRFI's.
+
+| SRFI | Title | Here | Racket | Notes |
+|---|---|---|---|---|
+| 0 | Feature-based conditional expansion construct | no library | no module | `cond-expand` is R7RS syntax; `srfi-N` identifiers answer for each SRFI here |
+| 1 | List Library | not yet (S3) | library |  |
+| 2 | AND-LET* | not yet (S2) | library |  |
+| 4 | Homogeneous numeric vector datatypes | not yet (S7) | library, no reader syntax | `u8vector` will be the bytevector type |
+| 5 | A compatible let form with signatures and rest arguments | not yet (S8) | library |  |
+| 6 | Basic String Ports | built in | re-export | `(scheme base)`'s own |
+| 7 | Feature-based program configuration language | not yet (S8) | library |  |
+| 8 | RECEIVE: Binding to multiple values | not yet (S2) | library |  |
+| 9 | Defining Record Types | built in | library | R7RS `define-record-type` is SRFI 9's |
+| 11 | Syntax for receiving multiple values | built in | library | R7RS `let-values` takes dotted rest formals |
+| 13 | String Libraries | not yet (S5) | library |  |
+| 14 | Character-set Library | not yet (S5) | library |  |
+| 16 | Syntax for procedures of variable arity | built in | re-export | `(scheme case-lambda)` |
+| 17 | Generalized set! | not yet (S2) | library |  |
+| 19 | Time Data Types and Procedures | not yet (S8) | library |  |
+| 23 | Error reporting mechanism | built in | re-export | R7RS `error` is SRFI 23's |
+| 25 | Multi-dimensional Array Primitives | not yet (S8) | library |  |
+| 26 | Notation for Specializing Parameters without Currying | not yet (S2) | library |  |
+| 27 | Sources of Random Bits | not yet (S7) | library |  |
+| 28 | Basic Format Strings | not yet (S6) | re-export (Racket's `format`) | not in R7RS, so a library here |
+| 29 | Localization | not yet (S8) | library |  |
+| 30 | Nested Multi-line Comments | built in | empty module | `#\| \|#` nests; the library is empty, as Racket's is |
+| 31 | A special form rec for recursive evaluation | not yet (S2) | library |  |
+| 34 | Exception Handling for Programs | built in | library | R7RS `guard`, `raise` and `with-exception-handler` are SRFI 34's |
+| 35 | Conditions | not yet (S7) | library |  |
+| 38 | External Representation for Data With Shared Structure | alias | library | `write-with-shared-structure` is `write-shared`; `read-with-shared-structure` is `read` |
+| 39 | Parameter objects | built in | re-export | the converter runs on the initial value and on each `parameterize` |
+| 40 | A Library of Streams | not planned | library | deprecated by its author in favour of SRFI 41 |
+| 41 | Streams | not yet (S7) | library |  |
+| 42 | Eager Comprehensions | not yet (S7) | library |  |
+| 43 | Vector Library | not yet (S8) | library | its index-first `vector-map` differs from R7RS's |
+| 45 | Primitives for Expressing Iterative Lazy Algorithms | alias | library | `lazy` is `delay-force`, `eager` is `make-promise` |
+| 48 | Intermediate Format Strings | not yet (S6) | library |  |
+| 54 | Formatting | not yet (S8) | library |  |
+| 57 | Records | not yet (S8) | library |  |
+| 59 | Vicinity | not yet (S8) | library |  |
+| 60 | Integers as Bits | not yet (S7) | library |  |
+| 61 | A more general cond clause | not yet (S2) | library |  |
+| 62 | S-expression comments | no library | no module | `#;` is always on; the import is an error that says so, as in Racket |
+| 63 | Homogeneous and Heterogeneous Arrays | not yet (S8) | library |  |
+| 64 | A Scheme API for test suites | not yet (S6) | library |  |
+| 66 | Octet Vectors | not yet (S7) | library |  |
+| 67 | Compare Procedures | not yet (S8) | library |  |
+| 69 | Basic hash tables | not yet (S4) | library |  |
+| 71 | Extended LET-syntax for multiple values | not yet (S8) | library |  |
+| 74 | Octet-Addressed Binary Blocks | not yet (S8) | library |  |
+| 78 | Lightweight testing | not yet (S6) | library |  |
+| 86 | MU and NU simulating VALUES and CALL-WITH-VALUES | not yet (S8) | library |  |
+| 87 | => in case clauses | built in | library | R7RS `case` takes `=>` |
+| 98 | An interface to access environment variables | built in | library | re-exports `(scheme process-context)`'s two procedures |
+| 105 | Curly-infix-expressions | no library | no module | `{a + b}` reads in every `#lang` |
+
+Each built-in or alias row is one file, `stdlib/srfi/<N>.scm`, holding a
+`(define-library (srfi N) ...)`. `tests/check-r7rs-srfi-sync.sh` checks this
+table, those files, and the compiler's own table against each other.
 
 ## Memory
 

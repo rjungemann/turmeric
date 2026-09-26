@@ -397,6 +397,40 @@ EOF
 
 run_case "turmeric-imports-macro-library" tmain4.tur "42"
 
+# ---- (srfi N) across modules. ----------------------------------------------
+# r7rs-srfi-plan S1 (D3).  An SRFI's definitions are spliced in once per
+# compile and emitted where every module sees them; its macros are
+# registered by every lowering pass that imports it.  So a user library and
+# the program can both import (srfi 45) and both use its `lazy` macro, and a
+# library can import an SRFI the program never names -- the splice then lands
+# in the library's pass, and the program still links.
+cat > "$TMP/lazylib.scm" <<'EOF'
+(define-library (lazylib)
+  (export later-sum ready)
+  (import (scheme base) (srfi 45) (srfi 38))
+  (begin
+    (define (later-sum a b) (lazy (eager (+ a b))))
+    (define (ready x) (eager x))))
+EOF
+
+cat > "$TMP/prog12.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (srfi 45) (lazylib))
+(write (list (force (later-sum 1 2)) (force (lazy (ready 5))) (force (lazy (eager 7)))))
+(newline)
+EOF
+
+run_case "srfi-in-program-and-library" prog12.tur "(3 5 7)"
+
+cat > "$TMP/prog13.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (lazylib))
+(write (list (force (later-sum 10 20)) (force (ready 4))))
+(newline)
+EOF
+
+run_case "srfi-in-library-only" prog13.tur "(30 4)"
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1

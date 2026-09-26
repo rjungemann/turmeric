@@ -4,7 +4,10 @@
 ;; R7RS_FEATURES), and `ratios` was in the first only.  This asks cond-expand,
 ;; through `eval`, about every identifier `(features)` returns, so an
 ;; identifier added to one list and not the other fails here -- whichever it
-;; is -- without this file naming it.
+;; is -- without this file naming it.  Since r7rs-srfi-plan S1 both lists come
+;; from scheme_lower.c (the prelude's is generated from it), and they include
+;; `srfi-N` for every SRFI that is here, so the first line grows as SRFIs
+;; land.
 (import (scheme base) (scheme write) (scheme eval))
 
 (define (holds? f)

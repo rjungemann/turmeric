@@ -1,0 +1,43 @@
+#lang r7rs
+;; r7rs-srfi-plan S1: every built-in and alias SRFI, imported next to
+;; (scheme base) -- which is never a conflict, since a built-in SRFI's names
+;; ARE R7RS's -- and one name of each used.  The second half reaches them
+;; again through only / except / prefix / rename: a prefixed procedure, a
+;; renamed macro, a renamed procedure, and prefixed and renamed syntax.
+;; r7rs-srfi-builtins-emit-nothing pins that the built-in imports cost
+;; nothing at all.
+(import (scheme base) (scheme write) (scheme char)
+        (srfi 6) (srfi 9) (srfi 11) (srfi 16) (srfi 23) (srfi 30) (srfi 34)
+        (srfi 38) (srfi 39) (srfi 45) (srfi 87) (srfi 98)
+        (prefix (srfi 6) s6:) (rename (srfi 45) (eager ready) (lazy later))
+        (except (srfi 38) read-with-shared-structure)
+        (rename (srfi 87) (case kase)) (prefix (srfi 11) s11:))
+(define (show x) (write x) (newline))
+;; SRFI 6, 9, 11, 16, 23, 34, 39, 87, 98: R7RS's own.
+(show (let ((p (open-output-string))) (write 'hi p) (get-output-string p)))
+(define-record-type point (make-point x y) point? (x point-x))
+(show (point-x (make-point 1 2)))
+(show (let-values (((a . r) (values 1 2 3))) (list a r)))
+(show ((case-lambda ((a) 1) ((a b) 2)) 'x 'y))
+(show (guard (e ((error-object? e) (error-object-message e))) (error "boom" 1)))
+(define p (make-parameter 1 (lambda (x) (* x 10))))
+(show (list (p) (parameterize ((p 2)) (p))))
+(show (case 3 ((3) => (lambda (x) (* x 2))) (else 0)))
+(show (string? (get-environment-variable "HOME")))
+;; SRFI 30: `#| |#` nests.
+#| outer #| inner |# still outer |#
+;; SRFI 38: R7RS's datum-label writer and reader under SRFI 38's names.
+(let ((l (list 1 2))) (set-cdr! (cdr l) l) (write-with-shared-structure l)) (newline)
+(show (let ((x (read-with-shared-structure (open-input-string "#0=(a . #0#)"))))
+        (eq? x (cdr x))))
+;; SRFI 45: lazy is delay-force, eager is make-promise.
+(show (force (lazy (eager 5))))
+(show (promise? (eager 1)))
+(define (stream-ref s n) (if (= n 0) (car (force s)) (stream-ref (cdr (force s)) (- n 1))))
+(define (from n) (lazy (eager (cons n (from (+ n 1))))))
+(show (stream-ref (from 0) 100000))
+;; Through only / except / prefix / rename.
+(show (s6:get-output-string (let ((q (s6:open-output-string))) (write 7 q) q)))
+(show (force (later (ready 3))))
+(show (kase 2 ((2) => (lambda (x) (+ x 1))) (else 0)))
+(show (s11:let-values (((a b) (values 1 2))) (+ a b)))

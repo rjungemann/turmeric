@@ -1155,6 +1155,13 @@ add_test(
   COMMAND bash tests/check-r7rs-inc-sync.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# r7rs-srfi-plan D4: SRFI_LIBS[] in scheme_lower.c, the stdlib/srfi/<N>.scm
+# files, and the guide's SRFI table say the same thing about every SRFI.
+add_test(
+  NAME tur_r7rs_srfi_sync
+  COMMAND bash tests/check-r7rs-srfi-sync.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
 # LOADED in a real Vim and queried for highlight groups -- which is what caught
 # the fused-vs-spaced annotation bug.  The vscode half is structure and pattern

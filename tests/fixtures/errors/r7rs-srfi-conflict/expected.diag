@@ -1,0 +1,2 @@
+'force' would name both R7RS's own 'force' and (srfi 45)'s
+(except (scheme base) force)

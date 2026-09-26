@@ -1,7 +1,8 @@
 # `#lang r7rs`: an identifier that starts with `:` does not read as a symbol in source
 
 **RESOLVED 2026-09-26.** In a user Scheme source, a token that starts with `:`
-now reads as an identifier (`scheme_colon_is_identifier`, src/compiler/reader.c).
+now reads as an identifier (`scheme_user_source`, src/compiler/reader.c; first named
+`scheme_colon_is_identifier`, generalised when brackets followed).
 So `':x` is the symbol `:x`, `:::` works as a custom ellipsis, and `:x` can be
 bound, defined, or named as a macro (SRFI 42's `:range`). The source reader
 and `read` agree. Fixtures: `r7rs-colon-identifiers` (both back ends) and

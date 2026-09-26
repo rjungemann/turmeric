@@ -1,0 +1,20 @@
+#lang r7rs
+;; r7rs-srfi-plan D4: cond-expand knows the SRFIs from the same table the
+;; import does.  `srfi-N` holds for every SRFI that is here -- importable, or
+;; always on with no library (0, 62, 105) -- and `(library (srfi N))` for the
+;; importable ones.  A portable program picks its SRFI with it.
+(import (scheme base) (scheme write))
+(define (show x) (write x) (newline))
+(show (cond-expand (srfi-6 'srfi-6) (else 'no)))
+(show (cond-expand (srfi-62 'srfi-62-supported) (else 'no)))
+(show (cond-expand ((library (srfi 62)) 'library) (else 'no-library-for-62)))
+(show (cond-expand ((library (srfi 45)) 'library-45) (else 'no)))
+(show (cond-expand (srfi-1 'yes) (else 'srfi-1-not-yet)))
+(show (cond-expand ((library (srfi 40)) 'yes) (else 'srfi-40-not-planned)))
+(show (cond-expand ((library (srfi 999)) 'yes) (else 'no-such-srfi)))
+(show (cond-expand ((and srfi-9 srfi-23 (not srfi-13)) 'combined) (else 'no)))
+;; A program choosing its string ports portably.
+(cond-expand
+  ((library (srfi 6)) (import (srfi 6)))
+  (else (define (open-output-string) #f)))
+(show (let ((p (open-output-string))) (display "ok" p) (get-output-string p)))

@@ -6,7 +6,7 @@
 ;; No requires.* marker -- the guide describes the language, not a back end,
 ;; so both suites run it.  Floats carry a non-zero fractional part.
 (import (scheme base) (scheme write) (scheme char) (scheme read) (scheme eval) (scheme repl)
-        (scheme complex) (scheme inexact))
+        (scheme complex) (scheme inexact) (srfi 45))
 
 ;; --- A first program ---------------------------------------------------------
 (define (fact n)
@@ -98,4 +98,10 @@
   (write l)
   (newline))
 (write (read (open-input-string "(1 (2 . 3) #(4))")))
+(newline)
+
+;; --- SRFIs ---------------------------------------------------------------
+(define (from n) (lazy (eager (cons n (from (+ n 1))))))
+(define (nth s n) (if (= n 0) (car (force s)) (nth (cdr (force s)) (- n 1))))
+(write (nth (from 0) 100000))
 (newline)

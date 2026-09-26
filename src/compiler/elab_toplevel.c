@@ -1074,8 +1074,10 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
          * process-context / file) splices in that library's file first, as a
          * `(load ...)` would -- once per compile, through the visited set. */
         {
-            const char *libs[8];
-            uint32_t nl = scheme_import_library_files(f, libs, 8);
+            /* Room for every on-demand library and every SRFI in one import
+             * form (r7rs-srfi-plan S1: eight silently dropped the rest). */
+            const char *libs[128];
+            uint32_t nl = scheme_import_library_files(f, libs, 128);
             for (uint32_t li = 0; li < nl; li++) {
                 Form *ld_items[2];
                 ld_items[0] = form_sym(arena, f->span, e->sym_load);

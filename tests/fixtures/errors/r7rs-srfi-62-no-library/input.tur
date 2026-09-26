@@ -1,0 +1,5 @@
+#lang r7rs
+;; r7rs-srfi-plan D2: SRFI 62's `#;` is part of the reader and always on,
+;; and Racket has no library for it, so neither does #lang r7rs: the import
+;; is refused with the reason, and the message says it can be deleted.
+(import (scheme base) (srfi 62))

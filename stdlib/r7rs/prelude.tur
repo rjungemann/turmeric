@@ -2419,12 +2419,21 @@
     (r7rs-mk-string__ (r7rs-utf8-go__ v a b (:: (vec-new) (Vec int))))))
 
 ;;; r7rs-features -- the feature identifiers cond-expand tests (scheme_lower.c
-;;; R7RS_FEATURES holds the same list; tests/fixtures/r7rs-features-agree pins
-;;; the two equal).  `exact-closed`: + - * on exact integers are exact (or
+;;; R7RS_FEATURES, then `srfi-N` for every SRFI_LIBS row that is here, in table
+;;; order).  tests/check-r7rs-srfi-sync.sh fails when this list and that one
+;;; differ, and tests/fixtures/r7rs-features-agree asks cond-expand about each
+;;; (r7rs-srfi-plan D4).  `exact-closed`: + - * on exact integers are exact (or
 ;;; signal); only `/` may be inexact.  `ratios`: `/` of exact integers is exact.
 (defn r7rs-features [] : any
-  (r7rs-list (:: (str->sym "r7rs") any) (:: (str->sym "exact-closed") any) (:: (str->sym "ratios") any)
-             (:: (str->sym "turmeric") any)))
+  (r7rs-list (:: (str->sym "r7rs") any) (:: (str->sym "exact-closed") any)
+             (:: (str->sym "ratios") any) (:: (str->sym "turmeric") any)
+             (:: (str->sym "srfi-0") any) (:: (str->sym "srfi-6") any) (:: (str->sym "srfi-9") any)
+             (:: (str->sym "srfi-11") any) (:: (str->sym "srfi-16") any)
+             (:: (str->sym "srfi-23") any) (:: (str->sym "srfi-30") any)
+             (:: (str->sym "srfi-34") any) (:: (str->sym "srfi-38") any)
+             (:: (str->sym "srfi-39") any) (:: (str->sym "srfi-45") any)
+             (:: (str->sym "srfi-62") any) (:: (str->sym "srfi-87") any)
+             (:: (str->sym "srfi-98") any) (:: (str->sym "srfi-105") any)))
 
 ;;; r7rs-rationalize -- the simplest rational within y of x (R7RS 6.2.6), by
 ;;; the continued-fraction walk.  T2: the walk is written over the generic
