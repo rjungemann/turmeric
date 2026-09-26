@@ -925,10 +925,13 @@ Where it departs from the plan above:
   - [hkt-generic-none-to-typed-param-segfaults](../archive/hkt-generic-none-to-typed-param-segfaults.md)
     (high) -- a `none` from a generic passed to a typed `Option` parameter.
     **Fixed** in the follow-up bug-fix PR.
-  - [hkt-generic-nested-bind-result-type](../reported/hkt-generic-nested-bind-result-type.md)
+  - [hkt-generic-nested-bind-result-type](../archive/hkt-generic-nested-bind-result-type.md)
     (medium) -- a two-binding `do-m` in a generic does not compile.
-  - [hkt-dict-generic-byvalue-result-to-typed-param](../reported/hkt-dict-generic-byvalue-result-to-typed-param.md)
+    **Fixed** in the follow-up bug-fix PR, along with a constrained generic
+    calling another constrained generic.
+  - [hkt-dict-generic-byvalue-result-to-typed-param](../archive/hkt-dict-generic-byvalue-result-to-typed-param.md)
     (medium) -- a user by-value type from a generic at a typed parameter.
+    **Fixed** in the follow-up bug-fix PR.
   - [generic-category-base-passes-carrier-to-arrow-instance](../reported/generic-category-base-passes-carrier-to-arrow-instance.md)
     (low) -- a C warning in a generic's base clone at the function arrow,
     which is why step 4 has no positive generic fixture.

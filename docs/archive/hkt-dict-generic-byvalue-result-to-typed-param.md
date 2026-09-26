@@ -1,5 +1,8 @@
 # A dictionary-passing generic's by-value result does not reach a typed parameter
 
+> **RESOLVED 2026-09-26.** See [Resolution](#resolution) at the end. The
+> analysis below is the original filing.
+
 **Severity:** medium -- the program fails to compile with a C type error (no
 wrong answer); `tur --interpret` prints the right answer. Found 2026-09-25
 while writing the SC8b fixtures for typeclass-superclasses-plan; reproduces on
@@ -50,3 +53,24 @@ Apply the same carrier-to-by-value bridge at an argument position and at a
 temp initializer that the `match` scrutinee already gets. Pin both shapes
 under `run.sh`; `tests/fixtures/class-superclass-hkt-dict-passing` can then
 use a typed consumer again.
+
+## Resolution
+
+Both shapes had one cause: a dict clone returns the int64 carrier, and two
+consumers treated that word as if it were already the by-value aggregate.
+
+- **Typed parameter.** The argument bridge that unboxes a carrier word for a
+  by-value parameter (`src/compiler/emit_expr.c`, the SR1 "other direction"
+  block) was restricted to multi-variant sums. That keeps it off by-value
+  products whose crossings other rules own, and it is why `Option` worked while
+  `Tally` did not. A call to a dict clone is the one argument whose C value is
+  known to be the carrier, and no other rule unboxes it, so the bridge now
+  admits any by-value ADT parameter for exactly that argument.
+- **`fmap` into `foldl`.** An argument that is itself a method call dispatched
+  through a dictionary (`emit_call_is_dict_param_dispatch`) is marked as
+  already on the carrier, so the by-value seams no longer spill it into a
+  concrete temp.
+
+`tests/fixtures/class-superclass-hkt-dict-passing` uses a typed consumer again.
+Pinned by `tests/fixtures/hkt-dict-generic-byvalue-result-to-typed-param`
+(both shapes) under `run.sh` and `run-turi.sh`.

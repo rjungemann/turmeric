@@ -1528,10 +1528,40 @@ static bool closure_call_emits_byval_aggregate(EmitCtx *ctx, const Expr *e) {
            strcmp(emit_type_c_name(ctx, rt), "int64_t") != 0;
 }
 
+/* hkt-generic-calls-generic: an ascription `(:: <dict-clone call> (M int))`
+ * built by elab_call.c's dict_clone_forward_generic_calls, inside a spec whose
+ * binding grounds `(M int)` to a by-value aggregate.  The clone returns the
+ * carrier, so the EX_ASCRIBE emission unboxes it to that aggregate; the tail
+ * predicates below must report the same so a merge or a carrier return
+ * re-boxes rather than reading the aggregate as a word.  The one owner of the
+ * condition -- the emission and both predicates call it. */
+static bool ascribe_unboxes_dict_clone_call(EmitCtx *ctx, const Expr *e,
+                                            Type *out) {
+    if (!ctx || !e || e->kind != EX_ASCRIBE || !ctx->current_abi_specialization)
+        return false;
+    const Expr *in = e->as.ascribe_.inner;
+    if (!in || in->kind != EX_CALL || in->type.kind != TY_INT ||
+        !in->as.call_.fn_binding || !in->as.call_.fn_binding->source_fn_def ||
+        in->as.call_.fn_binding->source_fn_def->n_dict_clone == 0)
+        return false;
+    if (e->type.kind == TY_TYVAR ||
+        (e->type.kind == TY_ADT && e->type.as.adt_.def &&
+         e->type.as.adt_.def->is_opaque))
+        return false;
+    Type rt = emit_resolve_type(ctx, e->type);
+    const char *rcn = emit_type_c_name(ctx, rt);
+    if (!emit_type_is_byvalue_adt(ctx, rt) || !rcn ||
+        strcmp(rcn, "int64_t") == 0)
+        return false;
+    if (out) *out = rt;
+    return true;
+}
+
 bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     if (!e) return false;
     switch (e->kind) {
         case EX_ASCRIBE:
+            if (ascribe_unboxes_dict_clone_call(ctx, e, NULL)) return true;
             return fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.ascribe_.inner);
         case EX_DO:
             return e->as.do_.n > 0 &&
@@ -1639,6 +1669,8 @@ static Type fn_body_tail_byvalue_carrier_type_inner(EmitCtx *ctx,
     if (!e) return unknown;
     switch (e->kind) {
         case EX_ASCRIBE: {
+            Type dct;
+            if (ascribe_unboxes_dict_clone_call(ctx, e, &dct)) return dct;
             Type inner_t =
                 fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.ascribe_.inner);
             if (inner_t.kind != TY_UNKNOWN) return inner_t;
@@ -10964,6 +10996,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_carrier_boxed = true;
                     }
                 }
+                /* hkt-dict-generic-byvalue-result-to-typed-param (second shape):
+                 * an argument that is itself a method call dispatched through a
+                 * dict (`(foldl (fmap t g) ...)` in a dict-clone body) hands back
+                 * the int64 carrier, whatever by-value type its elaborated type
+                 * resolves to under the active spec.  It is already what a
+                 * carrier slot wants; the seams below would spill it into a
+                 * `tur_adt_Pair2__int` temp ("invalid initializer"). */
+                if (!arg_carrier_boxed && emit_arg && emit_arg->kind == EX_CALL &&
+                    emit_call_is_dict_param_dispatch(ctx, emit_arg))
+                    arg_carrier_boxed = true;
                 /* CONV-S1: a by-value parametric ADT-app argument
                  * (`tur_adt_Option__int`) passed to a uniform-carrier (int64)
                  * parameter -- e.g. the parametric typeclass instance method
@@ -11255,6 +11297,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     emit_arg && fn_binding->source_fn_def) {
                     const FnDef *fd = fn_binding->source_fn_def;
                     TypeKind ak = emit_resolve_type(ctx, emit_arg->type).kind;
+                    /* hkt-dict-generic-byvalue-result-to-typed-param: a call to
+                     * a DICT-CLONE is the one argument shape whose C value is
+                     * known to be the carrier box whatever the element type --
+                     * every dict-clone returns `int64_t` (emit_fn_return_
+                     * spelling boxes a by-value tail).  No other rule unboxes
+                     * it, so the product exclusion below does not apply to it:
+                     * `(show-t (or-default (Tally 7 2) 5))` handed the box word
+                     * to a `tur_adt_Tally__int` parameter.  Admit a by-value
+                     * product too for exactly this argument. */
+                    const FnDef *afd =
+                        (emit_arg->kind == EX_CALL &&
+                         emit_arg->as.call_.fn_binding)
+                            ? emit_arg->as.call_.fn_binding->source_fn_def
+                            : NULL;
+                    bool arg_is_dict_clone_call = afd && afd->n_dict_clone > 0;
                     /* This bridge and the return-side unbox below cannot stack
                      * on one node: this one requires the arg's e->type to be a
                      * carrier word, that one requires the call's e->type to be
@@ -11262,7 +11319,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * composed eraser `(eat (unwrap2 ...))` -- exactly one
                      * fires.) */
                     if (i < fd->n_params && fd->param_types &&
-                        emit_type_is_byvalue_sum(ctx, fd->param_types[i]) &&
+                        (emit_type_is_byvalue_sum(ctx, fd->param_types[i]) ||
+                         (arg_is_dict_clone_call &&
+                          emit_type_is_byvalue_adt(ctx, fd->param_types[i]))) &&
                         (ak == TY_INT || ak == TY_INT64 || ak == TY_UINT64 ||
                          ak == TY_PTR_VOID)) {
                         Type rpt = emit_resolve_type(ctx, fd->param_types[i]);
@@ -12874,6 +12933,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(body,
                             "%s->%s = (int64_t)((union { float f; uint32_t u; }){ .f = (%s) }).u;\n",
                             fat_tmp, field, cn);
+                    } else if (into_carrier &&
+                               emit_type_is_byvalue_adt(ctx, captured->type)) {
+                        /* hkt-generic-nested-bind-result-type: the same shared
+                         * env, a by-value AGGREGATE capture.  A dict-clone spec
+                         * holds `b : (M int)` as `tur_adt_Option__int` while the
+                         * lambda built in the generic body reads the field as
+                         * the carrier word and hands it to the Monad dict's
+                         * `bind`, which dereferences a box.  Heap-box it, as
+                         * every aggregate entering a carrier slot is
+                         * (emit_agg_box), and note the box's words. */
+                        buf_printf(body,
+                            "{ %s *__tur_cbox = (%s *)malloc(sizeof(%s)); "
+                            "*__tur_cbox = %s; "
+                            "TUR_REGION_NOTE_WORDS(__tur_cbox, sizeof *__tur_cbox); "
+                            "%s->%s = (int64_t)(intptr_t)__tur_cbox; }\n",
+                            val_cty, val_cty, val_cty, cn, fat_tmp, field);
                     } else {
                         buf_printf(body, "%s->%s = %s%s;\n",
                                    fat_tmp, field, captured_is_pbp ? "*" : "", cn);
@@ -15619,6 +15694,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     return emit_carrier_bridge(ctx, body, inner_val,
                                                CK_CARRIER, CK_CONCRETE, rtv);
                 }
+            }
+            /* hkt-generic-calls-generic: a call redirected to a dict clone
+             * inside another dict clone's body (elab_call.c's
+             * dict_clone_forward_generic_calls) is ascribed back to the call's
+             * own `(M int)`.  That type is abstract until the active spec
+             * grounds it, so the static gate below reads it as the carrier and
+             * passes the box word through -- into a `tur_adt_Option__int` let
+             * or if temp.  Resolve under the spec and unbox when it grounds to
+             * a by-value aggregate; the carrier base stays a relabel. */
+            {
+                Type rt;
+                if (ascribe_unboxes_dict_clone_call(ctx, e, &rt))
+                    return emit_carrier_bridge(ctx, body, inner_val,
+                                               CK_CARRIER, CK_CONCRETE, rt);
             }
             if (!ascribe_to_opaque &&
                 e->as.ascribe_.inner->type.kind == TY_INT &&

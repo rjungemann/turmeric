@@ -116,6 +116,28 @@ All notable changes to Turmeric are documented here.
   result in the continuation's calling shim, for a plain function and for a
   capturing closure.
 
+- **A `do-m` with two or more bindings compiles inside a constrained
+  generic.** The second `bind` runs inside the first continuation, on a
+  captured `(M int)`. It was not recognized as a dispatch on the constrained
+  variable, so it kept a fixed instance, and the captured value was stored as
+  an aggregate into a carrier slot, a C type error. The continuation now
+  captures the Monad dictionary, and the capture is boxed.
+
+- **A constrained generic can call another constrained generic.**
+  `(defn add-two [^Monad M ^Applicative M] [m : (M int)] : (M int)
+  (add-one (add-one m)))` failed to compile or link. The inner call now goes
+  through the callee's dictionary-passing version with the caller's
+  dictionaries, and its result converts back to the caller's by-value type in
+  an argument, a `let`, an `if` arm, the caller's own result and direct
+  recursion.
+
+- **A dictionary-passing generic's result reaches a typed parameter of a
+  user type.** `(show-t (or-default (Tally 7 2) 5))` with
+  `show-t [t : (Tally int)]` was a C type error, because the conversion back
+  from the carrier covered `Option` and `Result` but not a single-constructor
+  user type. Inside such a generic, one dispatched method's result fed to
+  another (a map into a fold) is no longer re-spilled as an aggregate.
+
 - **A subclass constraint now carries its superclasses' dictionaries.** A
   higher-kinded generic constrained only by a subclass could not call a
   return-directed superclass method such as `pure` under `[^Alternative F]`.

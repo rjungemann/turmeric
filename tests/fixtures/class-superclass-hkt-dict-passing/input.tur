@@ -27,13 +27,12 @@
 
 (defn show-o [o : (Option int)] : int
   (match o (Some v) (do (println v) 0) (None) (do (println -1) 0)))
+(defn show-t [t : (Tally int)] : int
+  (match t (Tally v n) (do (println (+ (* 100 v) n)) 0)))
 
 (defn main [] : int
   (show-o (or-default (:: (none) (Option int)) 5))     ; 5
   (show-o (or-default (:: (some 3) (Option int)) 5))   ; 3
-  ;; Matched in place: handing a user by-value type from a dictionary-passing
-  ;; generic to a typed parameter is a separate, pre-existing gap
-  ;; (docs/reported/hkt-dict-generic-byvalue-result-to-typed-param.md).
-  (println (match (or-default (Tally 7 2) 5) (Tally v n) (+ (* 100 v) n)))  ; 702
-  (println (match (or-default (Tally 7 0) 5) (Tally v n) (+ (* 100 v) n)))  ; 500
+  (show-t (or-default (Tally 7 2) 5))                  ; 702
+  (show-t (or-default (Tally 7 0) 5))                  ; 500
   0)

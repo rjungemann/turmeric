@@ -3414,10 +3414,16 @@ int emit_call_dict_env_dispatch_index(EmitCtx *ctx, const Expr *call) {
      * constrained-hkt-lifted-lambda-keeps-representative-instance) keys on the
      * result being tyvar-headed. */
     {
-        bool recv_is_tyvar =
-            call->as.call_.n_args >= 1 && call->as.call_.args &&
-            call->as.call_.args[0] &&
-            call->as.call_.args[0]->type.kind == TY_TYVAR;
+        /* The receiver test keys on the HEAD of the receiver's type, so a
+         * higher-kinded `(m a)` receiver qualifies (hkt-generic-nested-bind-
+         * result-type); it must match call_dispatched_constraint_class. */
+        bool recv_is_tyvar = false;
+        if (call->as.call_.n_args >= 1 && call->as.call_.args &&
+            call->as.call_.args[0]) {
+            const Type *rh = &call->as.call_.args[0]->type;
+            while (rh->kind == TY_APP && rh->as.app.fn) rh = rh->as.app.fn;
+            recv_is_tyvar = (rh->kind == TY_TYVAR);
+        }
         const Type *h = &call->type;
         while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
         if (!recv_is_tyvar && h->kind != TY_TYVAR) return -1;

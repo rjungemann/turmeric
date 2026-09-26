@@ -10,12 +10,13 @@
 (defn add-one [^Monad M] [m : (M int)] : (M int)
   (bind m (fn [x : int] : (M int) (pure (+ x 1)))))
 
-;; `do-m` desugars to `bind`; its last line is a `pure`.  One binding: a
-;; two-binding `do-m` in a constrained generic does not compile yet, with or
-;; without superclasses (docs/reported/hkt-generic-nested-bind-result-type.md).
+;; `do-m` desugars to `bind`; its last line is a `pure`.  Two bindings, so the
+;; second `bind` runs inside the first continuation and reaches the Monad
+;; dictionary through the closure (docs/archive/hkt-generic-nested-bind-result-type.md).
 (defn doubled [^Monad M] [a : (M int)] : (M int)
   (do-m x a
-        (pure (* x 2))))
+        y a
+        (pure (+ x y))))
 
 ;; Functor, two superclass steps away.
 (defn triple [^Monad M] [m : (M int)] : (M int)
