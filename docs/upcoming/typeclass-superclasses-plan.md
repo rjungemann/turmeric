@@ -861,12 +861,13 @@ The first stdlib adoption, unreleased at the time of writing.
   all three are fixed in `src/compiler/elab_typeclasses.c`, and
   `Applicative [(Result _ B)]` ships in `stdlib/result.tur`
   ([resolved report](../archive/partial-head-ap-calls-fat-closure-as-thin-pointer.md)).
-  Two older defects surfaced on the way and are filed, not fixed:
-  [a `bool` closure read through the int64 carrier](../reported/narrow-closure-result-read-through-int64-carrier.md)
-  can print true for false on the compiled path, through `Result`'s `fmap`
+  Two older defects surfaced on the way and were filed, then fixed in the
+  follow-up bug-fix PR:
+  [a `bool` closure read through the int64 carrier](../archive/narrow-closure-result-read-through-int64-carrier.md)
+  could print true for false on the compiled path, through `Result`'s `fmap`
   already and now through its `ap`; and
-  [a user constructor holding a capturing closure](../reported/defdata-ctor-fn-field-passes-pointer-as-int.md)
-  emits a C warning. Separately, `Kleisli`'s missing `Arrow` instance is by
+  [a user constructor holding a capturing closure](../archive/defdata-ctor-fn-field-passes-pointer-as-int.md)
+  emitted a C warning. Separately, `Kleisli`'s missing `Arrow` instance is by
   design, which moved `ArrowZero`'s planned superclass from `Arrow` to
   `Category`.
 - **A diagnostic nit for whoever next touches TUR-E0393:** the message
@@ -919,17 +920,24 @@ Where it departs from the plan above:
 - **Fixture shapes route around pre-existing compiled-path gaps.** Each gap
   below reproduces on the compiler before SC8b with every constraint
   spelled out, prints the right answer under `--interpret`, and is filed:
-  - [hkt-generic-forwarded-bind-continuation-segfaults](../reported/hkt-generic-forwarded-bind-continuation-segfaults.md)
+  - [hkt-generic-forwarded-bind-continuation-segfaults](../archive/hkt-generic-forwarded-bind-continuation-segfaults.md)
     (high) -- a generic forwarding a continuation parameter to `bind`.
-  - [hkt-generic-none-to-typed-param-segfaults](../reported/hkt-generic-none-to-typed-param-segfaults.md)
+    **Fixed** in the follow-up bug-fix PR.
+  - [hkt-generic-none-to-typed-param-segfaults](../archive/hkt-generic-none-to-typed-param-segfaults.md)
     (high) -- a `none` from a generic passed to a typed `Option` parameter.
-  - [hkt-generic-nested-bind-result-type](../reported/hkt-generic-nested-bind-result-type.md)
+    **Fixed** in the follow-up bug-fix PR.
+  - [hkt-generic-nested-bind-result-type](../archive/hkt-generic-nested-bind-result-type.md)
     (medium) -- a two-binding `do-m` in a generic does not compile.
-  - [hkt-dict-generic-byvalue-result-to-typed-param](../reported/hkt-dict-generic-byvalue-result-to-typed-param.md)
+    **Fixed** in the follow-up bug-fix PR, along with a constrained generic
+    calling another constrained generic.
+  - [hkt-dict-generic-byvalue-result-to-typed-param](../archive/hkt-dict-generic-byvalue-result-to-typed-param.md)
     (medium) -- a user by-value type from a generic at a typed parameter.
-  - [generic-category-base-passes-carrier-to-arrow-instance](../reported/generic-category-base-passes-carrier-to-arrow-instance.md)
+    **Fixed** in the follow-up bug-fix PR.
+  - [generic-category-base-passes-carrier-to-arrow-instance](../archive/generic-category-base-passes-carrier-to-arrow-instance.md)
     (low) -- a C warning in a generic's base clone at the function arrow,
-    which is why step 4 has no positive generic fixture.
+    which is why step 4 had no positive generic fixture. **Fixed** in the
+    follow-up bug-fix PR; `stdlib-arrow-generic-entails-category` now covers
+    it.
   - Also pre-existing and not filed: `Ord [cstr]` is inline C with no
     interpreter twin, so `stdlib-ord-entails-eq` leaves out `cstr`.
 - **Full suites at the end of step 5:** 3192 compiled and 2276 interpreted

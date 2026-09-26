@@ -4193,12 +4193,38 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
          * into garbage. */
         TypeKind clone_rk = tail_e
             ? emit_resolve_type(ctx, tail_e->type).kind : TY_UNKNOWN;
+        /* hkt-dict-clone-tail-generic-call: the body is NOT always a single
+         * dispatch.  A constrained generic that calls ANOTHER constrained
+         * generic -- `(defn add-two [^Monad M] ... (add-one (add-one m)))` --
+         * has a tail that resolves to the callee's by-value spec
+         * (`add_one__spec__tur_adt_Option__int...`), a by-value aggregate,
+         * and `(int64_t)(intptr_t)` on a struct is a hard cc error ("aggregate
+         * value used where an integer was expected").  Heap-box it into the
+         * carrier, exactly as the box_aggregate_result branch above does; a
+         * tail that is already the carrier falls through to the bare bridge.
+         * The box outlives any region bracket around the call, so its words
+         * are noted like every other malloc'd carrier box (emit_agg_box). */
+        if (tail_e && fn_body_tail_emits_byvalue_carrier_abi(ctx, tail_e)) {
+            Type src = fn_body_tail_byvalue_carrier_type(ctx, tail_e);
+            if (src.kind == TY_UNKNOWN) src = emit_resolve_type(ctx, tail_e->type);
+            const char *scty = emit_type_c_name(ctx, src);
+            if (scty && strcmp(scty, "int64_t") != 0 && !strchr(scty, '*')) {
+                buf_printf(out,
+                    "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                    "*__tur_ret_p = %s; "
+                    "TUR_REGION_NOTE_WORDS(__tur_ret_p, sizeof *__tur_ret_p); "
+                    "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                    scty, scty, scty, ret_val);
+                goto clone_ret_done;
+            }
+        }
         if (clone_rk == TY_FLOAT || clone_rk == TY_FLOAT64)
             buf_printf(out, "return tur_sc_bits_f64(%s);\n", ret_val);
         else if (clone_rk == TY_FLOAT32)
             buf_printf(out, "return tur_sc_bits_f32(%s);\n", ret_val);
         else
             buf_printf(out, "return (int64_t)(intptr_t)%s;\n", ret_val);
+    clone_ret_done: ;
     } else if (inst_method_carrier_spill) {
         /* Direction (1): instance method whose declared result is a
          * parameterized struct (e.g. (Result T E)) returns the carrier

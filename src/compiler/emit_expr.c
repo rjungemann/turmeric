@@ -1232,7 +1232,15 @@ static char *emit_agg_unbox(EmitCtx *ctx, Type t, const char *val) {
     if (g_emit_abi_trace)
         fprintf(stderr, "repr-trace bridge agg-unbox %s\n", cn);
     Buf b; buf_init(&b);
-    buf_printf(&b, "(*(%s *)(intptr_t)(%s))", cn, val);
+    /* A sum whose nullary tag-0 value rides the carrier as 0 (Option's
+     * `none`) goes through the NULL-safe helper; anything else keeps the
+     * plain dereference (hkt-generic-none-to-typed-param-segfaults). */
+    const char *nullsafe = ensure_agg_unbox_nullsafe(
+        ctx, emit_resolve_type(ctx, t), cn);
+    if (nullsafe)
+        buf_printf(&b, "%s((int64_t)(intptr_t)(%s))", nullsafe, val);
+    else
+        buf_printf(&b, "(*(%s *)(intptr_t)(%s))", cn, val);
     buf_putc(&b, '\0');
     char *out = strdup(b.data);
     buf_free(&b);
@@ -1520,10 +1528,40 @@ static bool closure_call_emits_byval_aggregate(EmitCtx *ctx, const Expr *e) {
            strcmp(emit_type_c_name(ctx, rt), "int64_t") != 0;
 }
 
+/* hkt-generic-calls-generic: an ascription `(:: <dict-clone call> (M int))`
+ * built by elab_call.c's dict_clone_forward_generic_calls, inside a spec whose
+ * binding grounds `(M int)` to a by-value aggregate.  The clone returns the
+ * carrier, so the EX_ASCRIBE emission unboxes it to that aggregate; the tail
+ * predicates below must report the same so a merge or a carrier return
+ * re-boxes rather than reading the aggregate as a word.  The one owner of the
+ * condition -- the emission and both predicates call it. */
+static bool ascribe_unboxes_dict_clone_call(EmitCtx *ctx, const Expr *e,
+                                            Type *out) {
+    if (!ctx || !e || e->kind != EX_ASCRIBE || !ctx->current_abi_specialization)
+        return false;
+    const Expr *in = e->as.ascribe_.inner;
+    if (!in || in->kind != EX_CALL || in->type.kind != TY_INT ||
+        !in->as.call_.fn_binding || !in->as.call_.fn_binding->source_fn_def ||
+        in->as.call_.fn_binding->source_fn_def->n_dict_clone == 0)
+        return false;
+    if (e->type.kind == TY_TYVAR ||
+        (e->type.kind == TY_ADT && e->type.as.adt_.def &&
+         e->type.as.adt_.def->is_opaque))
+        return false;
+    Type rt = emit_resolve_type(ctx, e->type);
+    const char *rcn = emit_type_c_name(ctx, rt);
+    if (!emit_type_is_byvalue_adt(ctx, rt) || !rcn ||
+        strcmp(rcn, "int64_t") == 0)
+        return false;
+    if (out) *out = rt;
+    return true;
+}
+
 bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     if (!e) return false;
     switch (e->kind) {
         case EX_ASCRIBE:
+            if (ascribe_unboxes_dict_clone_call(ctx, e, NULL)) return true;
             return fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.ascribe_.inner);
         case EX_DO:
             return e->as.do_.n > 0 &&
@@ -1631,6 +1669,8 @@ static Type fn_body_tail_byvalue_carrier_type_inner(EmitCtx *ctx,
     if (!e) return unknown;
     switch (e->kind) {
         case EX_ASCRIBE: {
+            Type dct;
+            if (ascribe_unboxes_dict_clone_call(ctx, e, &dct)) return dct;
             Type inner_t =
                 fn_body_tail_byvalue_carrier_type_inner(ctx, e->as.ascribe_.inner);
             if (inner_t.kind != TY_UNKNOWN) return inner_t;
@@ -8285,8 +8325,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (!emit_c_type_is_scalar(arg_ct[i])) any_aggregate = true;
                     }
                     Buf out; buf_init(&out);
+                    /* narrow-closure-result-read-through-int64-carrier: slot
+                     * 0 returns a narrow result widened; call it as such and
+                     * convert back to the declared type. */
+                    const char *slot_rc = thunk_result_slot_c_spelling(ret_c);
+                    bool narrow_back = slot_rc && ret_c && strcmp(slot_rc, ret_c) != 0;
+                    if (narrow_back) buf_printf(&out, "((%s)", ret_c);
                     if (!any_aggregate) {
-                        buf_printf(&out, "TUR_APPLY%u_T(%s", n, ret_c);
+                        buf_printf(&out, "TUR_APPLY%u_T(%s", n, slot_rc);
                         for (uint32_t i = 0; i < n; i++)
                             buf_printf(&out, ", %s", arg_ct[i]);
                         buf_printf(&out, ", %s", fn_ptr_val);
@@ -8319,7 +8365,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * This is the macro's own expansion with that one
                          * change; keep the two in sync (emit_module.c, search
                          * TUR_APPLY0_T). */
-                        buf_printf(&out, "(((%s (*)(void *", ret_c);
+                        buf_printf(&out, "(((%s (*)(void *", slot_rc);
                         for (uint32_t i = 0; i < n; i++)
                             buf_printf(&out, ", %s", arg_ct[i]);
                         buf_printf(&out,
@@ -8340,6 +8386,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                         buf_puts(&out, "))");
                     }
+                    if (narrow_back) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
@@ -9117,12 +9164,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
                         _disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
                     Buf out; buf_init(&out);
+                    /* narrow-closure-result-read-through-int64-carrier: slot 0
+                     * (and the typed-thunk typedef) return a narrow result
+                     * widened; convert back to the declared type. */
+                    const char *slot_rc = thunk_result_slot_c_spelling(ret_c);
+                    bool narrow_back = slot_rc && ret_c && strcmp(slot_rc, ret_c) != 0;
+                    if (narrow_back) buf_printf(&out, "((%s)", ret_c);
                     if (thunk_typedef) {
                         /* TS1: typed fat-closure layout stores __fn as a typed function pointer. */
                         buf_printf(&out, "(*( %s *)(%s))(%s", thunk_typedef, fn_ptr, fn_ptr);
                     } else {
                         /* Legacy fallback: polymorphic fat closures still store __fn as int64_t. */
-                        buf_printf(&out, "((%s (*)(void*", ret_c);
+                        buf_printf(&out, "((%s (*)(void*", slot_rc);
                         for (uint32_t i = 0; i < n; i++) {
                             /* SR-fat-abi: same slot convention as the typed
                              * typedef -- a wide by-value aggregate crosses as
@@ -9156,6 +9209,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                     buf_puts(&out, ")");
+                    if (narrow_back) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
@@ -9301,11 +9355,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
                         disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
                     Buf out; buf_init(&out);
+                    /* narrow-closure-result-read-through-int64-carrier: slot 0
+                     * (and the typed-thunk typedef) return a narrow result
+                     * widened; convert back to the declared type. */
+                    const char *slot_rc = thunk_result_slot_c_spelling(ret_c);
+                    bool narrow_back = slot_rc && ret_c && strcmp(slot_rc, ret_c) != 0;
+                    if (narrow_back) buf_printf(&out, "((%s)", ret_c);
                     if (thunk_typedef) {
                         /* TS1: typed fat-closure layout -- slot 0 is a typed thunk ptr. */
                         buf_printf(&out, "(*( %s *)(%s))(%s", thunk_typedef, fn_ptr, fn_ptr);
                     } else {
-                        buf_printf(&out, "((%s (*)(void*", ret_c);
+                        buf_printf(&out, "((%s (*)(void*", slot_rc);
                         for (uint32_t i = 0; i < n; i++) {
                             /* SR-fat-abi: see the CY2 twin above. */
                             buf_printf(&out, ", %s",
@@ -9360,6 +9420,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                     buf_puts(&out, ")");
+                    if (narrow_back) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
@@ -10304,6 +10365,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             if (emit_var_spec_arg_type(ctx, arg, &sp))
                                 arg_cty = emit_type_c_name(ctx, sp);
                         }
+                        /* defdata-ctor-fn-field-passes-pointer-as-int: a
+                         * capturing closure (or a boxed fn value) lowers to a
+                         * `void *` temp, whatever its type says, so a monomorph
+                         * ctor whose field -- a type variable instantiated to a
+                         * fn type -- is the int64 carrier got the handle
+                         * uncast.  Read the argument's spelling off its
+                         * expression, or off the temp's recorded C type. */
+                        if (!arg_cty && arg) {
+                            const Expr *ac = arg;
+                            while (ac && ac->kind == EX_ASCRIBE)
+                                ac = ac->as.ascribe_.inner;
+                            if (ac && (ac->kind == EX_CLOSURE ||
+                                       ac->kind == EX_FN_TO_FAT))
+                                arg_cty = "void *";
+                            else if (emit_str_is_bare_ident(av))
+                                arg_cty = emit_localvar_lookup_ctype(av);
+                        }
                         if (arg_cty) {
                             size_t sl = strlen(slot_cty);
                             bool slot_is_ptr = sl && slot_cty[sl - 1] == '*';
@@ -10956,6 +11034,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_carrier_boxed = true;
                     }
                 }
+                /* hkt-dict-generic-byvalue-result-to-typed-param (second shape):
+                 * an argument that is itself a method call dispatched through a
+                 * dict (`(foldl (fmap t g) ...)` in a dict-clone body) hands back
+                 * the int64 carrier, whatever by-value type its elaborated type
+                 * resolves to under the active spec.  It is already what a
+                 * carrier slot wants; the seams below would spill it into a
+                 * `tur_adt_Pair2__int` temp ("invalid initializer"). */
+                if (!arg_carrier_boxed && emit_arg && emit_arg->kind == EX_CALL &&
+                    emit_call_is_dict_param_dispatch(ctx, emit_arg))
+                    arg_carrier_boxed = true;
                 /* CONV-S1: a by-value parametric ADT-app argument
                  * (`tur_adt_Option__int`) passed to a uniform-carrier (int64)
                  * parameter -- e.g. the parametric typeclass instance method
@@ -11247,6 +11335,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     emit_arg && fn_binding->source_fn_def) {
                     const FnDef *fd = fn_binding->source_fn_def;
                     TypeKind ak = emit_resolve_type(ctx, emit_arg->type).kind;
+                    /* hkt-dict-generic-byvalue-result-to-typed-param: a call to
+                     * a DICT-CLONE is the one argument shape whose C value is
+                     * known to be the carrier box whatever the element type --
+                     * every dict-clone returns `int64_t` (emit_fn_return_
+                     * spelling boxes a by-value tail).  No other rule unboxes
+                     * it, so the product exclusion below does not apply to it:
+                     * `(show-t (or-default (Tally 7 2) 5))` handed the box word
+                     * to a `tur_adt_Tally__int` parameter.  Admit a by-value
+                     * product too for exactly this argument. */
+                    const FnDef *afd =
+                        (emit_arg->kind == EX_CALL &&
+                         emit_arg->as.call_.fn_binding)
+                            ? emit_arg->as.call_.fn_binding->source_fn_def
+                            : NULL;
+                    bool arg_is_dict_clone_call = afd && afd->n_dict_clone > 0;
                     /* This bridge and the return-side unbox below cannot stack
                      * on one node: this one requires the arg's e->type to be a
                      * carrier word, that one requires the call's e->type to be
@@ -11254,7 +11357,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * composed eraser `(eat (unwrap2 ...))` -- exactly one
                      * fires.) */
                     if (i < fd->n_params && fd->param_types &&
-                        emit_type_is_byvalue_sum(ctx, fd->param_types[i]) &&
+                        (emit_type_is_byvalue_sum(ctx, fd->param_types[i]) ||
+                         (arg_is_dict_clone_call &&
+                          emit_type_is_byvalue_adt(ctx, fd->param_types[i]))) &&
                         (ak == TY_INT || ak == TY_INT64 || ak == TY_UINT64 ||
                          ak == TY_PTR_VOID)) {
                         Type rpt = emit_resolve_type(ctx, fd->param_types[i]);
@@ -12347,9 +12452,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bool arg_slot_is_carrier =
                             emit_arg->kind == EX_VAR && emit_arg->as.var.binding &&
                             emit_arg->as.var.binding->emit_carrier_holds_ptr;
-                        if (rec_is_conc_ptr &&
-                            ((acty && strcmp(acty, "int64_t") == 0) ||
-                             arg_slot_is_carrier)) {
+                        /* generic-category-base-passes-carrier-to-arrow-
+                         * instance: a `void *` formal is the same straddle.  A
+                         * generic's unspecialized base holds `f : A` as the
+                         * int64 carrier and dispatches `comp` to the function
+                         * arrow's instance, whose parameters are `void *`
+                         * fat-closure handles.  Limited to a variable that
+                         * emits as the carrier: a literal 0 is a null pointer
+                         * constant and needs nothing. */
+                        bool rec_is_voidp = strcmp(rec_c, "void *") == 0;
+                        bool voidp_straddle = rec_is_voidp &&
+                            emit_arg->kind == EX_VAR &&
+                            acty && strcmp(acty, "int64_t") == 0 &&
+                            strncmp(raw, "(void *)", 8) != 0;
+                        if ((rec_is_conc_ptr &&
+                             ((acty && strcmp(acty, "int64_t") == 0) ||
+                              arg_slot_is_carrier)) ||
+                            voidp_straddle) {
                             Buf _fb; buf_init(&_fb);
                             buf_printf(&_fb, "(%s)(intptr_t)(%s)", rec_c, raw);
                             buf_putc(&_fb, '\0');
@@ -12803,12 +12922,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * typedef there stores a function pointer through an `int64_t`
              * field. */
             {
+                /* narrow-closure-result-read-through-int64-carrier: a narrow
+                 * result leaves slot 0 widened, through a wrapper that names
+                 * the thunk -- so it needs the file-scope buffer that lands
+                 * after the forward declarations.  Without one, the thunk is
+                 * stored as before. */
+                char *slot0_widen = ctx->pending_handler_fns
+                    ? ensure_closure_slot0_widen(ctx, ctx->pending_handler_fns,
+                                                 thunk_sym, thunk_result,
+                                                 thunk_params, (uint8_t)thunk_arity)
+                    : NULL;
+                const char *slot0 = slot0_widen ? slot0_widen : thunk_sym;
                 const char *decl_typedef = emit_env_struct_fn_typedef(ctx, env_name);
                 if (decl_typedef) {
-                    buf_printf(body, "%s->__fn = (%s)%s;\n", fat_tmp, decl_typedef, thunk_sym);
+                    buf_printf(body, "%s->__fn = (%s)%s;\n", fat_tmp, decl_typedef, slot0);
                 } else {
-                    buf_printf(body, "%s->__fn = (int64_t)(intptr_t)%s;\n", fat_tmp, thunk_sym);
+                    buf_printf(body, "%s->__fn = (int64_t)(intptr_t)%s;\n", fat_tmp, slot0);
                 }
+                free(slot0_widen);
             }
             for (uint8_t i = 0; i < closure->n_captures; i++) {
                 Binding *captured = closure->captures[i];
@@ -12892,6 +13023,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(body,
                             "%s->%s = (int64_t)((union { float f; uint32_t u; }){ .f = (%s) }).u;\n",
                             fat_tmp, field, cn);
+                    } else if (into_carrier &&
+                               emit_type_is_byvalue_adt(ctx, captured->type)) {
+                        /* hkt-generic-nested-bind-result-type: the same shared
+                         * env, a by-value AGGREGATE capture.  A dict-clone spec
+                         * holds `b : (M int)` as `tur_adt_Option__int` while the
+                         * lambda built in the generic body reads the field as
+                         * the carrier word and hands it to the Monad dict's
+                         * `bind`, which dereferences a box.  Heap-box it, as
+                         * every aggregate entering a carrier slot is
+                         * (emit_agg_box), and note the box's words. */
+                        buf_printf(body,
+                            "{ %s *__tur_cbox = (%s *)malloc(sizeof(%s)); "
+                            "*__tur_cbox = %s; "
+                            "TUR_REGION_NOTE_WORDS(__tur_cbox, sizeof *__tur_cbox); "
+                            "%s->%s = (int64_t)(intptr_t)__tur_cbox; }\n",
+                            val_cty, val_cty, val_cty, cn, fat_tmp, field);
                     } else {
                         buf_printf(body, "%s->%s = %s%s;\n",
                                    fat_tmp, field, captured_is_pbp ? "*" : "", cn);
@@ -13342,8 +13489,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(pbuf, "static int64_t %s(void *);\n", wname);
                     buf_printf(pbuf, "static int64_t %s(void *__env) {\n", wname);
                     if (fn_expr->type.as.fn.boxed) {
-                        buf_printf(pbuf, "    %s (*__f)(void *) = *(%s (**)(void *))__env;\n", pc, pc);
-                        buf_printf(pbuf, "    %s __v = __f(__env);\n", pc);
+                        /* narrow-closure-result-read-through-int64-carrier:
+                         * slot 0 returns a narrow result widened. */
+                        const char *spc = thunk_result_slot_c_spelling(pc);
+                        buf_printf(pbuf, "    %s (*__f)(void *) = *(%s (**)(void *))__env;\n", spc, spc);
+                        buf_printf(pbuf, "    %s __v = (%s)__f(__env);\n", pc, pc);
                     } else {
                         buf_printf(pbuf, "    %s (*__f)(void) = (%s (*)(void))(intptr_t)__env;\n", pc, pc);
                         buf_printf(pbuf, "    %s __v = __f();\n", pc);
@@ -14805,8 +14955,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     ctx, emit_fn_arg_type_from_type(bb->type, bi2));
                             Type bres = emit_resolve_type(
                                 ctx, emit_fn_result_type_from_type(bb->type));
+                            /* narrow-closure-result-read-through-int64-carrier:
+                             * an erased sink (the carrier base instance) reads
+                             * the result as a whole int64; widen it there, with
+                             * the same gate the float bridges above use. */
+                            bool bare_erased_result =
+                                e->as.poly_wrap_.carrier_erased_result &&
+                                (e->as.poly_wrap_.boxes_aggregate ||
+                                 ctx->poly_wrap_callee_carrier);
                             bare_shim = ensure_bare_fnptr_poly_shim(
-                                ctx, bres, bn ? bparams : NULL, bn);
+                                ctx, bres, bn ? bparams : NULL, bn,
+                                bare_erased_result);
                         }
                     }
                     indent_buf(body, ctx->indent);
@@ -15080,6 +15239,48 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             Type fnty = inner->type;
             uint32_t arity = (fnty.kind == TY_FN) ? fnty.as.fn.arity : 0;
 
+            /* hkt-generic-forwarded-bind-continuation-segfaults: `inner` is
+             * already a fat closure handle whose result is a by-value
+             * aggregate, headed for an erased-result sink.  Wrap it in a
+             * { boxres shim, handle } box; the shim fat-calls the handle and
+             * boxes the result into the carrier.  The wrapper owns nothing
+             * (NULL drop-glue header, as a bare-fn box), and when the
+             * signature does not qualify the handle passes through as before. */
+            if (e->as.fn_to_fat_.inner_is_fat) {
+                char *hv = emit_value(ctx, body, inner);
+                char *wshim = NULL;
+                if (fnty.kind == TY_FN && fnty.as.fn.result_full_type &&
+                    arity <= MAX_FN_ARITY) {
+                    Type wparams[MAX_FN_ARITY];
+                    for (uint8_t i = 0; i < arity; i++)
+                        wparams[i] = (fnty.as.fn.arg_full_types &&
+                                      fnty.as.fn.arg_full_types[i])
+                            ? *fnty.as.fn.arg_full_types[i]
+                            : emit_type_from_kind(fnty.as.fn.arg_kinds[i]);
+                    wshim = ensure_boxres_fatshim_ex(ctx,
+                        *fnty.as.fn.result_full_type, wparams, (uint8_t)arity,
+                        /*inner_is_fat=*/true);
+                }
+                if (!wshim) return hv;
+                char *base = fresh_tmp(ctx);
+                char *slots = fresh_tmp(ctx);
+                char *out = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "void *%s = malloc(sizeof(void *) + 2 * sizeof(int64_t));\n", base);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*(void (**)(void *))%s = 0;\n", base);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t *%s = (int64_t *)((char *)%s + sizeof(void *));\n", slots, base);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s[0] = (int64_t)(intptr_t)%s;\n", slots, wshim);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s[1] = (int64_t)(intptr_t)(%s);\n", slots, hv);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "void *%s = %s;\n", out, slots);
+                free(hv); free(wshim); free(base); free(slots);
+                return out;
+            }
+
             /* Emit the bare fn pointer value (typically the lifted fn's C name). */
             char *fnptr = emit_value(ctx, body, inner);
 
@@ -15108,7 +15309,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (fnty.as.fn.is_variadic && (uint32_t)i + 1 == (uint32_t)arity)
                     fnt_params[i] = emit_type_from_kind(TY_INT);
             }
-            char *typed_shim = ensure_typed_fatshim(ctx, fnt_result, fnt_params, arity);
+            char *typed_shim = NULL;
+            /* An erased-result sink reads slot 0's result as a carrier: box a
+             * by-value aggregate result there
+             * (hkt-generic-forwarded-bind-continuation-segfaults). */
+            if (e->as.fn_to_fat_.erased_result)
+                typed_shim = ensure_boxres_fatshim(ctx, fnt_result, fnt_params,
+                                                   (uint8_t)arity);
+            if (!typed_shim)
+                typed_shim = ensure_typed_fatshim(ctx, fnt_result, fnt_params, arity);
 
             /* arrow-struct-typed-arrow-abi: when the typed shim is declined but
              * a parameter is a wide by-value aggregate, the generic
@@ -15587,6 +15796,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     return emit_carrier_bridge(ctx, body, inner_val,
                                                CK_CARRIER, CK_CONCRETE, rtv);
                 }
+            }
+            /* hkt-generic-calls-generic: a call redirected to a dict clone
+             * inside another dict clone's body (elab_call.c's
+             * dict_clone_forward_generic_calls) is ascribed back to the call's
+             * own `(M int)`.  That type is abstract until the active spec
+             * grounds it, so the static gate below reads it as the carrier and
+             * passes the box word through -- into a `tur_adt_Option__int` let
+             * or if temp.  Resolve under the spec and unbox when it grounds to
+             * a by-value aggregate; the carrier base stays a relabel. */
+            {
+                Type rt;
+                if (ascribe_unboxes_dict_clone_call(ctx, e, &rt))
+                    return emit_carrier_bridge(ctx, body, inner_val,
+                                               CK_CARRIER, CK_CONCRETE, rt);
             }
             if (!ascribe_to_opaque &&
                 e->as.ascribe_.inner->type.kind == TY_INT &&

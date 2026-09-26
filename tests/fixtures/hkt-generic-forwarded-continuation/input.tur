@@ -1,0 +1,34 @@
+;; hkt-generic-forwarded-bind-continuation-segfaults: a constrained generic
+;; that forwards a continuation PARAMETER to `bind`.
+;;
+;; The continuation's declared type returns the erased `(M int)`, so the
+;; Monad dictionary's `bind` calls it through the carrier cast and reads its
+;; result as a pointer to a boxed value.  A function returning a by-value
+;; `(Option int)` handed back the aggregate in registers instead, and `bind`
+;; dereferenced the tag: a segfault compiled, the right answer interpreted.
+;; The call site now boxes such a result in the continuation's slot-0 shim --
+;; for a bare function, and for a capturing closure by wrapping its handle.
+(defn chain [^Monad M] [m : (M int) k : (fn [int] (M int))] : (M int)
+  (bind m k))
+
+(defn inc-o [x : int] : (Option int) (some (+ x 1)))
+(defn inc-r [x : int] : (Result int int) (ok (+ x 1)))
+
+(defn show-o [o : (Option int)] : int
+  (match o (Some v) (do (println v) 0) (None) (do (println -1) 0)))
+(defn show-r [r : (Result int int)] : int
+  (match r (Ok v) (do (println v) 0) (Err e) (do (println (- 0 e)) 0)))
+
+(defn main [] : int
+  (let [b    5
+        lam  (fn [x : int] : (Option int) (some (* x 2)))
+        capo (fn [x : int] : (Option int) (some (+ x b)))
+        capr (fn [x : int] : (Result int int) (ok (+ x b)))]
+    (show-o (chain (some 41) inc-o))                         ; 42  top-level fn
+    (show-o (chain (some 21) lam))                           ; 42  lambda
+    (show-o (chain (some 37) capo))                          ; 42  capturing closure
+    (show-o (chain (:: (none) (Option int)) capo))           ; -1  short-circuit
+    (show-r (chain (:: (ok 41) (Result int int)) inc-r))     ; 42
+    (show-r (chain (:: (ok 37) (Result int int)) capr))      ; 42
+    (show-r (chain (:: (err 3) (Result int int)) capr)))     ; -3
+  0)

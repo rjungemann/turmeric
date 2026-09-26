@@ -1439,6 +1439,10 @@ int64_t emit_any_type_id(EmitCtx *ctx, Type t);
  * helpers are declared before any body can call them. */
 void ensure_saffron_dyn_runtime(EmitCtx *ctx);
 void ensure_any_carrier_bridge(EmitCtx *ctx);
+/* hkt-generic-none-to-typed-param-segfaults: name of a NULL-safe carrier ->
+ * by-value unbox for a sum whose tag-0 constructor is nullary (emitted on
+ * demand), or NULL when `t` is not such a sum. */
+const char *ensure_agg_unbox_nullsafe(EmitCtx *ctx, Type t, const char *cname);
 /* any-struct-box-leak-per-widen: the predicate the `any` widen uses to decide
  * whether a payload is heap-boxed.  Exported so emit_any_type_id can intern the
  * same answer for the drop side -- one predicate, not two that can drift. */
@@ -1467,6 +1471,14 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
  * signature is not in that set (the generic `__tur_fatshim<arity>` stands). */
 char *ensure_carrier_fatshim(EmitCtx *ctx,
                              Type result_type, Type *param_types, uint8_t n_params);
+/* hkt-generic-forwarded-bind-continuation-segfaults: slot-0 shim that boxes a
+ * by-value aggregate result into the carrier for an erased-result sink; NULL
+ * when the signature does not qualify.  Caller-owned name. */
+char *ensure_boxres_fatshim(EmitCtx *ctx,
+                            Type result_type, Type *param_types, uint8_t n_params);
+char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
+                               Type *param_types, uint8_t n_params,
+                               bool inner_is_fat);
 /* constrained-byval dispatch: ensure a carrier-adapter witness dict exists for a
  * by-value struct payload boxed into a constrained existential, returning the
  * dict's base name (caller references `&<name>_singleton`).  Each method slot is
@@ -1501,7 +1513,17 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
  * tur_poly_fn_t env slot and casts it back to its env-less signature.  See the
  * definition in emit_module.c. */
 char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
-                                  Type *param_types, uint8_t n_params);
+                                  Type *param_types, uint8_t n_params,
+                                  bool erased_result);
+/* narrow-closure-result-read-through-int64-carrier: the C spelling of a fat
+ * closure's slot-0 RESULT (a narrow integer is widened to int64_t), and the
+ * widening wrapper a capturing closure's slot 0 holds for such a result.  See
+ * emit_module.c. */
+const char *thunk_result_slot_c_name(Type t);
+const char *thunk_result_slot_c_spelling(const char *rc);
+char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
+                                 Type result_type, Type *param_types,
+                                 uint8_t n_params);
 char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
                                       Type *param_types, uint8_t n_params);
 /* erased-float-carrier: shims that carry a float-class param/result of a poly

@@ -1,0 +1,42 @@
+;; hkt-generic-nested-bind-result-type: a `do-m` with two or more bindings in
+;; a constrained generic.
+;;
+;; `do-m` with two bindings is a `bind` whose continuation itself calls `bind`
+;; on a captured `b : (M int)`.  Two faults stacked.  The nested `bind` was not
+;; recognized as a dispatch on the constrained variable -- the receiver test
+;; wanted a bare type variable, and `(M int)` is an application headed by one
+;; -- so the continuation captured no Monad dictionary and the call kept the
+;; representative instance.  And the dict clone's spec held `b` as the by-value
+;; `tur_adt_Option__int` while the continuation's env slot is the carrier, so
+;; the capture assigned an aggregate to an int64 ("incompatible types").  The
+;; receiver test now keys on the type's head, and an aggregate capture into a
+;; carrier env slot is heap-boxed.
+(defn sum2 [^Monad M ^Applicative M] [a : (M int) b : (M int)] : (M int)
+  (do-m x a
+        y b
+        (pure (+ x y))))
+
+(defn sum3 [^Monad M ^Applicative M] [a : (M int) b : (M int) c : (M int)] : (M int)
+  (do-m x a
+        y b
+        z c
+        (pure (+ x (+ y z)))))
+
+(defn show-o [o : (Option int)] : int
+  (match o (Some v) (do (println v) 0) (None) (do (println -1) 0)))
+(defn show-r [r : (Result int int)] : int
+  (match r (Ok v) (do (println v) 0) (Err e) (do (println (- 0 e)) 0)))
+
+(defn main [] : int
+  (show-o (sum2 (some 20) (some 22)))                                  ; 42
+  (show-o (sum2 (some 20) (:: (none) (Option int))))                   ; -1
+  (show-o (sum2 (:: (none) (Option int)) (some 22)))                   ; -1
+  (show-o (sum3 (some 10) (some 20) (some 12)))                        ; 42
+  (show-o (sum3 (some 10) (:: (none) (Option int)) (some 12)))         ; -1
+  (show-r (sum2 (:: (ok 20) (Result int int)) (:: (ok 22) (Result int int))))   ; 42
+  (show-r (sum2 (:: (ok 20) (Result int int)) (:: (err 5) (Result int int))))   ; -5
+  (show-r (sum3 (:: (ok 10) (Result int int)) (:: (ok 20) (Result int int))
+                (:: (ok 12) (Result int int))))                        ; 42
+  (show-r (sum3 (:: (ok 10) (Result int int)) (:: (ok 20) (Result int int))
+                (:: (err 3) (Result int int))))                        ; -3
+  0)

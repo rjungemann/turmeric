@@ -1,0 +1,43 @@
+;; narrow-closure-result-read-through-int64-carrier: a closure whose result is
+;; narrower than the 64-bit carrier, called by a caller that reads the carrier.
+;;
+;; `fmap` and `ap` over a mixed-type `Result` run the instance's erased carrier
+;; body, which calls the function through an int64-returning pointer.  A
+;; `bool` return defines only the low byte of the register, so `3 > 10` could
+;; read as true.  Now every entry point such a caller can reach returns a
+;; narrow result widened to int64: the carrier shims at an erased sink, the
+;; typed shim in a boxed function's slot 0, and a wrapper in a capturing
+;; closure's slot 0.  Typed callers cast slot 0 the same way and convert back.
+;;
+;; Covered: a let-bound lambda, a capturing closure, a top-level function, a
+;; function stored in a `Result` and applied by `ap`, and `int8` / `uint16` /
+;; `int32` results (an `int8` of -3 must come back sign-extended).
+(defn big-top? [x : int] : bool (> x 10))
+(defn neg32 [x : int] : int32 (:: (- 0 x) int32))
+(defn neg8 [x : int] : int8 (:: (- 0 x) int8))
+(defn low16 [x : int] : uint16 (:: (+ x 60000) uint16))
+
+(defn show-b [r : (Result bool cstr)] : int
+  (do (println (match r (Ok v) (if v "true" "false") (Err e) e)) 0))
+
+(defn main [] : int
+  (let [lim  10
+        a3   (:: (ok 3) (Result int cstr))
+        a21  (:: (ok 21) (Result int cstr))
+        big? (fn [x : int] : bool (> x 10))
+        capb (fn [x : int] : bool (> x lim))
+        fr   (:: (ok big?) (Result (fn [int] bool) cstr))
+        frc  (:: (ok capb) (Result (fn [int] bool) cstr))]
+    (show-b (fmap a3 big?))                                  ; false
+    (show-b (fmap a21 big?))                                 ; true
+    (show-b (fmap a3 capb))                                  ; false
+    (show-b (fmap a21 capb))                                 ; true
+    (show-b (fmap a3 big-top?))                              ; false
+    (show-b (ap fr a3))                                      ; false
+    (show-b (ap fr a21))                                     ; true
+    (show-b (ap frc a3))                                     ; false
+    (show-b (ap frc a21))                                    ; true
+    (println (match (fmap a3 neg32) (Ok v) (:: v int) (Err e) 0))   ; -3
+    (println (match (fmap a3 neg8) (Ok v) (:: v int) (Err e) 0))    ; -3
+    (println (match (fmap a3 low16) (Ok v) (:: v int) (Err e) 0)))  ; 60003
+  0)

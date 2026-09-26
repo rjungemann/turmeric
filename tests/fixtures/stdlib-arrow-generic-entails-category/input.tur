@@ -1,0 +1,29 @@
+;; typeclass-superclasses-plan SC8b step 4: Arrow is declared over Category,
+;; so a `[^Arrow A]` generic may call `comp`, Category's method.
+;;
+;; This had no positive generic fixture: the generic's unspecialized base
+;; clone holds `f : A` as the int64 carrier and dispatches `comp` to the
+;; function arrow's instance, whose parameters are `void *` fat-closure
+;; handles, and passed the carrier uncast -- a -Wint-conversion the suite's
+;; representation check rejects
+;; (docs/archive/generic-category-base-passes-carrier-to-arrow-instance.md).
+(load "stdlib/arrow.tur")
+
+(defn add1 [x : int] : int (+ x 1))
+
+;; Category's own method, under the subclass constraint alone.
+(defn twice [^Arrow A] [f : A] : A (comp f f))
+
+;; And under the base class, as before.
+(defn thrice [^Category A] [f : A] : A (comp f (comp f f)))
+
+(defn main [] : int
+  (let [bump 10
+        addb (fn [x : int] : int (+ x bump))
+        h    (twice add1)
+        k    (thrice add1)
+        m    (twice addb)]
+    (println (h 5))    ; 7
+    (println (k 5))    ; 8
+    (println (m 5)))   ; 25
+  0)

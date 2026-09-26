@@ -1,0 +1,50 @@
+;; hkt-dict-generic-byvalue-result-to-typed-param: a dictionary-passing
+;; generic's by-value result reaching a consumer that expects the by-value type.
+;;
+;; A dict clone returns the int64 carrier (a box pointer) for every result.
+;; Shape 1: the call handed to a parameter declared `(Tally int)`.  The
+;; carrier-to-by-value bridge at an argument was keyed to multi-variant sums
+;; (Option, Result), so a single-variant user type got the box word:
+;; "incompatible type for argument 1".  A call to a dict clone is now bridged
+;; for any by-value parameter.
+;; Shape 2: inside the generic, a map's result fed to a fold.  Both are
+;; dispatched through dictionaries, so the map already hands back the carrier;
+;; the fold's receiver was spilled into a `tur_adt_Pair2__int` temp as if it were
+;; the by-value aggregate ("invalid initializer").  Local classes stand in for
+;; Functor and Foldable so the fixture loads no inline C and runs under both
+;; harnesses.
+
+(defclass MyAp [^f] (mypure [x : a] : (f a)))
+(defclass MyAlt [^f] [(MyAp f)] (myalt [x : (f a) y : (f a)] : (f a)))
+
+(defdata Tally :copy [A] (Tally A int))
+(definstance MyAp [Tally] (mypure [x] (Tally x 0)))
+(definstance MyAlt [Tally]
+  (myalt [x y] (match x (Tally v n) (if (> n 0) x y))))
+
+(defn or-default [^MyAlt F] [x : (F int) d : int] : (F int)
+  (myalt x (mypure d)))
+
+(defclass MyMap [^f] (mymap [c : (f a) g : (fn [a] b)] : (f b)))
+(defclass MyFold [^f] (myfold [c : (f a) init : b g : (fn [b a] b)] : b))
+
+(defdata Pair2 :copy [A] (Pair2 A A))
+(definstance MyMap [Pair2]
+  (mymap [c g] (match c (Pair2 x y) (Pair2 (g x) (g y)))))
+(definstance MyFold [Pair2]
+  (myfold [c init g] (match c (Pair2 x y) (g (g init x) y))))
+
+(defn sum-doubled [^MyMap T ^MyFold T] [t : (T int)] : int
+  (myfold (mymap t (fn [x : int] : int (* x 2)))
+          0
+          (fn [acc : int x : int] : int (+ acc x))))
+
+(defn show-t [t : (Tally int)] : int
+  (match t (Tally v n) (do (println (+ (* 100 v) n)) 0)))
+
+(defn main [] : int
+  (show-t (or-default (Tally 7 2) 5))    ; 702  first arm kept
+  (show-t (or-default (Tally 7 0) 5))    ; 500  fallback from mypure
+  (println (sum-doubled (Pair2 3 4)))    ; 14
+  (println (sum-doubled (Pair2 10 11)))  ; 42
+  0)

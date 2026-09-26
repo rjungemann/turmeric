@@ -5345,8 +5345,8 @@ static int64_t ctor_Option_Some__Zipper__struct(int64_t _0) {
 #    define TUR_MUSTTAIL
 #  endif
 #endif
-static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
-    return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
+static int64_t __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
+    return (int64_t)(((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1));
 }
 /* fn-value-fat-normalization: no-op drop glue for statically (or, for
  * a proven non-retaining sink, stack-) allocated { shim, orig } boxes.
@@ -5361,7 +5361,7 @@ static union { void *__a; int64_t __b;
                char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }
     __tur_fatbox_1 = { .__a = (void *)__tur_fatbox_keep };
 typedef tur_adt_Point * (*tur_thunk_tur_adt_Point___int64_t_t)(void *, int64_t);
-typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
+typedef int64_t (*tur_thunk_int64_t_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
 #if defined(__GNUC__) && !defined(__clang__)
 #define TUR_ANY_DROP_ATTR __attribute__((noinline, noclone))
@@ -7324,7 +7324,7 @@ static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, i
             if (tur_panicking) return ((int64_t)0);
             int64_t __ps_101 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_1002, (void *)(intptr_t)(k_1003), (void *)(intptr_t)(keyeq)));
             if (tur_panicking) return ((int64_t)0);
-            bool __ps_102 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_100, __ps_101));
+            bool __ps_102 = (((bool)((int64_t (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_100, __ps_101)));
             if (tur_panicking) return ((int64_t)0);
             __t2 = __ps_102;
             if (__t2) {
@@ -7665,7 +7665,7 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
             if (tur_panicking) return ((int64_t)0);
             int64_t __ps_122 = (list_hyhead(l2));
             if (tur_panicking) return ((int64_t)0);
-            bool __ps_123 = ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), __ps_121, __ps_122));
+            bool __ps_123 = (((bool)(*( tur_thunk_int64_t_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), __ps_121, __ps_122)));
             if (tur_panicking) return ((int64_t)0);
             __t3 = __ps_123;
             if (__t3) {
@@ -8247,7 +8247,7 @@ static bool mutmap_hyeq_hyloop(int64_t m1, int64_t m2, int64_t i, int64_t cap, i
                     if (tur_panicking) return ((bool)0);
                     int64_t __ps_176 = (mutmap_hyget(m2, __ps_174, __ps_175));
                     if (tur_panicking) return ((bool)0);
-                    bool __ps_177 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_173, __ps_176));
+                    bool __ps_177 = (((bool)((int64_t (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_173, __ps_176)));
                     if (tur_panicking) return ((bool)0);
                     if (__ps_177) {
                         bool __ps_178 = (mutmap_hyeq_hyloop(m1, m2, (i) + (INT64_C(1)), cap, (int64_t)(intptr_t)(val_cmp)));

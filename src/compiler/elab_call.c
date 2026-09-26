@@ -37,6 +37,33 @@ bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h *
 /* Does this forall quantify a higher-kinded (arrow-kind) bound variable?
  * KIND_STAR (plain type var) and KIND_ROW/KIND_TYPEROW (effect/type rows) do
  * not count. */
+
+/* hkt-generic-forwarded-bind-continuation-segfaults: does the callee's
+ * declared type for argument slot `idx` return an HKT-erased `(M b)` -- a
+ * tyvar-headed application?  Every consumer of a function passed there calls
+ * it through the erased carrier cast and reads its result as a carrier. */
+static bool sink_fn_result_is_hkt_erased(const Type *fn_type, uint32_t idx) {
+    if (!fn_type || fn_type->kind != TY_FN || !fn_type->as.fn.arg_full_types ||
+        idx >= fn_type->as.fn.arity)
+        return false;
+    const Type *decl = fn_type->as.fn.arg_full_types[idx];
+    const Type *dr = (decl && decl->kind == TY_FN) ? decl->as.fn.result_full_type : NULL;
+    const Type *hh = dr;
+    while (hh && hh->kind == TY_APP) hh = hh->as.app.fn;
+    return dr && dr->kind == TY_APP && hh && hh->kind == TY_TYVAR;
+}
+
+/* ...and is `t` a by-value aggregate (a concrete ADT monomorph or ADT, not a
+ * :heap one) -- the result shape the boxing shim bridges? */
+static bool type_is_byvalue_aggregate_result(Type t) {
+    if (t.kind == TY_APP)
+        return type_app_is_concrete_adt(&t) && !type_is_heap_adt(t) &&
+               !type_is_heap_struct(t);
+    if (t.kind == TY_ADT)
+        return t.as.adt_.def != NULL && !type_is_heap_adt(t) && !type_is_heap_struct(t);
+    return false;
+}
+
 static bool forall_has_higher_kinded_var(const Type *forall_ty) {
     if (!forall_ty || forall_ty->kind != TY_FORALL) return false;
     if (!forall_ty->as.forall_.var_kinds) return false;
@@ -8299,6 +8326,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
                                           args[i]->span);
                     shim->as.fn_to_fat_.inner = args[i];
+                    /* hkt-generic-forwarded-bind-continuation-segfaults: when
+                     * this slot's declared fn type returns an HKT-erased
+                     * `(M b)` (a tyvar-headed application), its consumers read
+                     * the result as a carrier, so a by-value aggregate result
+                     * must be boxed by slot 0's shim. */
+                    shim->as.fn_to_fat_.erased_result =
+                        sink_fn_result_is_hkt_erased(&fn_type, fn_arg_idx_fat);
                     /* A normalized NOMINAL param never drops its argument --
                      * which is precisely why this shim leaked a box per call --
                      * so its box may be the shared file-scope one.
@@ -8342,6 +8376,23 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                            (ak == TY_INT && args[i]->kind == EX_INT_LIT &&
                             args[i]->as.i == 0) ||
                            (ak == TY_INT && args[i]->kind != EX_INT_LIT)) {
+                    /* hkt-generic-forwarded-bind-continuation-segfaults: a
+                     * capturing closure whose result is a by-value aggregate,
+                     * headed for a slot whose declared result is an HKT-erased
+                     * `(M b)`, is wrapped so the wrapper's shim boxes the
+                     * result into the carrier its consumers read. */
+                    if (ak == TY_FN && args[i]->type.as.fn.boxed &&
+                        args[i]->type.as.fn.result_full_type &&
+                        type_is_byvalue_aggregate_result(
+                            *args[i]->type.as.fn.result_full_type) &&
+                        sink_fn_result_is_hkt_erased(&fn_type, fn_arg_idx_fat)) {
+                        Expr *w = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
+                                           args[i]->span);
+                        w->as.fn_to_fat_.inner = args[i];
+                        w->as.fn_to_fat_.erased_result = true;
+                        w->as.fn_to_fat_.inner_is_fat = true;
+                        args[i] = w;
+                    }
                     /* Pass through unchanged: a fat closure (TY_PTR_VOID), nil, a
                      * null (literal 0) callback, or an already-erased :int
                      * fat-closure handle (a computed value, e.g. a handler that
@@ -9312,9 +9363,18 @@ static const TypeClass *call_dispatched_constraint_class(const Expr *e,
           e->as.call_.dict_arg->as.dict_.instance &&
           e->as.call_.dict_arg->as.dict_.instance->typeclass))
         return NULL;
-    bool recv_is_tyvar =
-        e->as.call_.n_args >= 1 && e->as.call_.args && e->as.call_.args[0] &&
-        e->as.call_.args[0]->type.kind == TY_TYVAR;
+    /* hkt-generic-nested-bind-result-type: the receiver of a higher-kinded
+     * method is `(m a)`, a TY_APP headed by the constraint var, not a bare
+     * TY_TYVAR.  A `bind` on a captured `b : (M int)` inside a `do-m`
+     * continuation was therefore not seen as a dispatch: the lambda captured
+     * no Monad dict and the call kept the representative instance.  Key on
+     * the receiver's HEAD, as the result test below already does. */
+    bool recv_is_tyvar = false;
+    if (e->as.call_.n_args >= 1 && e->as.call_.args && e->as.call_.args[0]) {
+        const Type *rh = &e->as.call_.args[0]->type;
+        while (rh->kind == TY_APP && rh->as.app.fn) rh = rh->as.app.fn;
+        recv_is_tyvar = (rh->kind == TY_TYVAR);
+    }
     bool result_is_tyvar_headed = false;
     {
         const Type *h = &e->type;
@@ -9859,6 +9919,158 @@ static void dict_clone_lower_nested_mappers(Elab *e, Expr *node,
 #undef LW
 }
 
+/* hkt-generic-calls-generic: a constrained generic calling ANOTHER constrained
+ * generic at its own abstract type constructor --
+ *
+ *   (defn add-two [^Monad M ^Applicative M] [m : (M int)] : (M int)
+ *     (add-one (add-one m)))
+ *
+ * -- elaborates the inner call against `add-one` itself: its constraints pin
+ * `add-two`'s abstract `M`, so no dictionary is known yet and the call keeps
+ * the plain carrier base, whose method calls resolve to a representative
+ * instance.  Worse, a dict clone shares its original's body, and cloning
+ * `add-one` for any other caller converts its continuation into a
+ * dict-capturing closure and retires the captureless wrapper -- which the plain
+ * `add-one` still names, so the program failed to link.
+ *
+ * Gap B above forwards the enclosing dict for a SINGLE-constraint callee at
+ * elaboration.  This covers the rest at clone time, when the caller's dict
+ * params exist: a call in the clone body (not inside a nested lambda, which
+ * has no env slot for them) whose every constraint is higher-kinded, pins a
+ * type variable, and matches one of the caller's own constraints by class and
+ * variable is redirected to the callee's dict clone with the caller's dict
+ * params prepended.  The dict params are memoized on the original, so every
+ * clone of the caller shares the rewrite and the body stays idempotent.  The
+ * clone returns the carrier, so a higher-kinded result is ascribed back to the
+ * call's own type, as Route B does. */
+#define DCF_MAX_ACTIVE 16
+static const FnDef *dcf_active[DCF_MAX_ACTIVE];
+static int dcf_n_active;
+
+static bool dcf_class_is_hkt(const TypeClass *tc) {
+    if (!tc || !tc->type_param_kinds) return false;
+    for (uint8_t k = 0; k < tc->n_type_params; k++)
+        if (tc->type_param_kinds[k] != KIND_STAR) return true;
+    return false;
+}
+
+static void dict_clone_forward_generic_calls(Elab *e, Expr *node,
+                                             const ConstraintSet *cs,
+                                             Binding **dparams,
+                                             const FnDef *self_orig,
+                                             Binding *self_clone, int depth) {
+    if (!node || depth > 64) return;
+#define FW(x) dict_clone_forward_generic_calls(e, (x), cs, dparams, self_orig, \
+                                               self_clone, depth + 1)
+    switch (node->kind) {
+        case EX_CALL: {
+            if (node->as.call_.fn_expr) FW(node->as.call_.fn_expr);
+            for (uint32_t i = 0; i < node->as.call_.n_args; i++)
+                FW(node->as.call_.args[i]);
+            Binding *fb = node->as.call_.fn_binding;
+            if (!fb || !fb->fn_constraints || node->as.call_.dict_arg ||
+                !fb->source_fn_def || fb->source_fn_def->n_dict_clone > 0 ||
+                !node->as.call_.abi_bindings)
+                return;
+            const ConstraintSet *ccs = fb->fn_constraints;
+            uint8_t nc = ccs->n_constraints;
+            if (nc < 1 || nc > MAX_FN_CONSTRAINTS) return;
+            if ((uint32_t)node->as.call_.n_args + nc > MAX_FN_ARITY) return;
+            Binding *fwd[MAX_FN_CONSTRAINTS];
+            for (uint8_t ci = 0; ci < nc; ci++) {
+                const TypeConstraint *con = &ccs->constraints[ci];
+                if (!con->typeclass || !con->tyvar || !con->tyvar->name ||
+                    !dcf_class_is_hkt(con->typeclass))
+                    return;
+                const Type *bt = NULL;
+                for (uint8_t bi = 0; bi < node->as.call_.n_abi_bindings; bi++) {
+                    const AbiTypeBinding *ab = &node->as.call_.abi_bindings[bi];
+                    if (ab->name && strcmp(ab->name, con->tyvar->name) == 0) {
+                        bt = &ab->type;
+                        break;
+                    }
+                }
+                if (!bt) return;
+                while (bt->kind == TY_APP && bt->as.app.fn) bt = bt->as.app.fn;
+                if (bt->kind != TY_TYVAR || !bt->as.tyvar_.name) return;
+                fwd[ci] = NULL;
+                for (uint8_t k = 0; k < cs->n_constraints; k++) {
+                    const TypeConstraint *own = &cs->constraints[k];
+                    if (own->typeclass == con->typeclass && own->tyvar &&
+                        own->tyvar->name &&
+                        strcmp(own->tyvar->name, bt->as.tyvar_.name) == 0) {
+                        fwd[ci] = dparams[k];
+                        break;
+                    }
+                }
+                if (!fwd[ci]) return;
+            }
+            Binding *clone = NULL;
+            if (fb->source_fn_def == self_orig) {
+                clone = self_clone;              /* direct recursion */
+            } else {
+                for (int a = 0; a < dcf_n_active; a++)
+                    if (dcf_active[a] == fb->source_fn_def) return;  /* mutual */
+                clone = make_dict_clone(e, fb, node->span);
+            }
+            if (!clone) return;
+            uint32_t na = node->as.call_.n_args;
+            Expr **nargs = (Expr **)arena_alloc(e->arena,
+                                                (na + nc) * sizeof(Expr *));
+            for (uint8_t ci = 0; ci < nc; ci++) {
+                Expr *dv = expr_new(e->arena, EX_VAR, fwd[ci]->type, node->span);
+                dv->as.var.binding = fwd[ci];
+                nargs[ci] = dv;
+            }
+            for (uint32_t k = 0; k < na; k++) nargs[nc + k] = node->as.call_.args[k];
+            bool box_result = (node->type.kind == TY_APP);
+            Expr *call = expr_new(e->arena, EX_CALL,
+                                  box_result ? type_from_kind(TY_INT) : node->type,
+                                  node->span);
+            call->as.call_.fn_binding = clone;
+            call->as.call_.args = nargs;
+            call->as.call_.n_args = na + nc;
+            call->as.call_.fn_expr = NULL;
+            call->as.call_.abi_bindings = node->as.call_.abi_bindings;
+            call->as.call_.n_abi_bindings = node->as.call_.n_abi_bindings;
+            if (box_result) {
+                memset(&node->as, 0, sizeof node->as);
+                node->kind = EX_ASCRIBE;
+                node->as.ascribe_.inner = call;
+            } else {
+                Type keep = node->type;
+                *node = *call;
+                node->type = keep;
+            }
+            return;
+        }
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < node->as.let_.n; i++) FW(node->as.let_.bindings[i].init);
+            FW(node->as.let_.body);
+            return;
+        case EX_IF: FW(node->as.if_.cond); FW(node->as.if_.then_); FW(node->as.if_.else_or_null); return;
+        case EX_DO:
+            for (uint32_t i = 0; i < node->as.do_.n; i++) FW(node->as.do_.items[i]);
+            return;
+        case EX_WHILE: FW(node->as.while_.cond); FW(node->as.while_.body); return;
+        case EX_MATCH:
+            FW(node->as.match_.scrutinee);
+            for (uint32_t i = 0; i < node->as.match_.n_arms; i++) {
+                FW(node->as.match_.arms[i].body); FW(node->as.match_.arms[i].guard);
+            }
+            return;
+        case EX_ASCRIBE:     FW(node->as.ascribe_.inner); return;
+        case EX_CAST:        FW(node->as.cast_.expr); return;
+        case EX_REINTERPRET: FW(node->as.reinterpret_.expr); return;
+        /* Lambda boundaries (EX_POLY_WRAP, EX_FN, EX_FN_DEF, EX_CLOSURE,
+         * EX_FN_TO_FAT, an EX_VAR naming a lifted lambda): no env slot carries
+         * the caller's dicts there, so leave those calls as they were. */
+        default: return;
+    }
+#undef FW
+}
+
 /* MB1 / forall-dict-pass-multi-constraint-hkt-plan (Task 1.2): build a
  * dict-clone of a polymorphic constrained function `inner_b` (its body
  * dispatches class methods on its constrained type variables).  The clone shares
@@ -9992,6 +10204,14 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
     uint8_t n_top_caps = 0;
     dict_clone_lower_nested_mappers(e, cf->body, inner_b->fn_constraints,
                                     dparams, span, 0, top_caps, &n_top_caps);
+    /* hkt-generic-calls-generic: forward this clone's dicts into a nested
+     * call to another constrained generic (see the walk's comment). */
+    if (dcf_n_active < DCF_MAX_ACTIVE) {
+        dcf_active[dcf_n_active++] = orig;
+        dict_clone_forward_generic_calls(e, cf->body, inner_b->fn_constraints,
+                                         dparams, orig, cb, 0);
+        dcf_n_active--;
+    }
     /* forall-dict-pass-nested-mapper-general-plan (Phase 4): Phases 1-3 lower the
      * reachable nested-mapper shapes -- N classes per mapper, capturing mappers,
      * and deeper nesting where each intermediate lambda forwards the dict through

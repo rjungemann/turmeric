@@ -99,6 +99,65 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A `none` returned by a constrained generic no longer crashes at a typed
+  `Option` parameter.** A higher-kinded generic returns the carrier, and the
+  call site converts it back to the by-value `(Option int)`. That conversion
+  dereferenced the carrier unconditionally, and `none` rides it as 0, so
+  `(show (add-one (:: (none) (Option int))))` segfaulted compiled while an
+  inline `match` and `--interpret` were fine. For a sum whose tag-0
+  constructor is nullary, the conversion now answers the tag-0 value for a 0
+  carrier -- the reading `match` already gives.
+
+- **A generic that forwards a continuation to `bind` no longer crashes.**
+  `(defn chain [^Monad M] [m : (M int) k : (fn [int] (M int))] : (M int)
+  (bind m k))` segfaulted compiled when `k` returned a by-value `Option` or
+  `Result`: the monad's `bind` reads the continuation's result as a boxed
+  carrier, and got the aggregate in registers. The call site now boxes such a
+  result in the continuation's calling shim, for a plain function and for a
+  capturing closure.
+
+- **A `do-m` with two or more bindings compiles inside a constrained
+  generic.** The second `bind` runs inside the first continuation, on a
+  captured `(M int)`. It was not recognized as a dispatch on the constrained
+  variable, so it kept a fixed instance, and the captured value was stored as
+  an aggregate into a carrier slot, a C type error. The continuation now
+  captures the Monad dictionary, and the capture is boxed.
+
+- **A constrained generic can call another constrained generic.**
+  `(defn add-two [^Monad M ^Applicative M] [m : (M int)] : (M int)
+  (add-one (add-one m)))` failed to compile or link. The inner call now goes
+  through the callee's dictionary-passing version with the caller's
+  dictionaries, and its result converts back to the caller's by-value type in
+  an argument, a `let`, an `if` arm, the caller's own result and direct
+  recursion.
+
+- **A `bool` closure called through a generic instance no longer reads as
+  true for false.** `(fmap (:: (ok 3) (Result int cstr)) (fn [x : int] :
+  bool (> x 10)))` answered `ok true` compiled. The instance calls the
+  function through the 64-bit carrier and read the whole return register, of
+  which a `bool` defines one byte. Every closure entry point such a caller can
+  reach now returns a narrow integer result (`bool`, `int8` to `int32` and
+  the unsigned widths) widened to 64 bits: in `fmap` and `ap`, for a lambda,
+  a capturing closure, a top-level function or a function stored in a
+  `Result`. The emitted C for a `bool` closure changes shape, and 155
+  snapshots were regenerated for the stdlib comparator every program carries.
+
+- **Two pointer-to-integer mismatches in emitted C are gone.** A capturing
+  closure stored in a user `defdata` whose field is a type variable
+  (`(Right (fn ...))` in an `(Either (fn [int] int) int)`) was handed to the
+  constructor's 64-bit slot uncast, and a generic over `Category` passed its
+  64-bit argument to the function arrow's instance, which takes closure
+  handles. Both programs ran correctly, but the C carried a
+  `-Wint-conversion` warning, which GCC 14 and macOS clang treat as an error.
+  A `[^Arrow A]` generic calling `comp` is now covered by a test.
+
+- **A dictionary-passing generic's result reaches a typed parameter of a
+  user type.** `(show-t (or-default (Tally 7 2) 5))` with
+  `show-t [t : (Tally int)]` was a C type error, because the conversion back
+  from the carrier covered `Option` and `Result` but not a single-constructor
+  user type. Inside such a generic, one dispatched method's result fed to
+  another (a map into a fold) is no longer re-spilled as an aggregate.
+
 - **A dictionary-passing generic no longer returns a dangling stack
   address.** A by-value argument to a method dispatched through a runtime
   dictionary was spilled to the generic's stack, and a method that returns its

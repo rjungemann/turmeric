@@ -10,10 +10,9 @@
 ;; under --interpret.  The body below is the natural spelling, with no
 ;; ascription, and must print the same on both paths.
 ;;
-;; No capturing closure here: building a user defdata whose field holds one
-;; trips a separate, pre-existing -Wint-conversion at the constructor call
-;; (docs/reported/defdata-ctor-fn-field-passes-pointer-as-int.md).
-;; hkt-ap-result-instance covers a capturing closure through `ap`.
+;; The capturing closure `cap` is stored in a user defdata's field, which used
+;; to hand the constructor its `void *` handle uncast
+;; (docs/archive/defdata-ctor-fn-field-passes-pointer-as-int.md).
 (defdata Either :copy [A E] (Right A) (Left E))
 
 (definstance Functor [(Either _ E)]
@@ -36,14 +35,18 @@
   (ap ff (ap ff fa)))
 
 (defn main [] : int
-  (let [dbl (:: (Right (fn [x : int] : int (* x 2))) (Either (fn [int] int) int))
-        inc (:: (Right (fn [x : int] : int (+ x 1))) (Either (fn [int] int) int))
-        bad (:: (Left 9) (Either (fn [int] int) int))
-        a21 (:: (Right 21) (Either int int))
-        e5  (:: (Left 5) (Either int int))]
+  (let [bump 5
+        dbl  (:: (Right (fn [x : int] : int (* x 2))) (Either (fn [int] int) int))
+        inc  (:: (Right (fn [x : int] : int (+ x 1))) (Either (fn [int] int) int))
+        cap  (:: (Right (fn [x : int] : int (+ x bump))) (Either (fn [int] int) int))
+        bad  (:: (Left 9) (Either (fn [int] int) int))
+        a21  (:: (Right 21) (Either int int))
+        e5   (:: (Left 5) (Either int int))]
     (show (ap dbl a21))         ; 42  -- non-capturing function
     (show (ap inc a21))         ; 22  -- a second function, same instance
     (show (ap dbl e5))          ; -5  -- the argument's Left
     (show (ap bad a21))         ; -9  -- the function's Left
-    (show (ap-twice inc a21)))  ; 23  -- through the Applicative dictionary
+    (show (ap cap a21))         ; 26  -- a capturing closure
+    (show (ap-twice inc a21))   ; 23  -- through the Applicative dictionary
+    (show (ap-twice cap a21)))  ; 31  -- a capturing closure, twice
   0)
