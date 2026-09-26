@@ -610,6 +610,15 @@ add_test(
   COMMAND bash tests/check-no-c-complex.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# The same C11-subset rule for atomics: the emitted runtime spells them through
+# the preamble's TUR_ATOMIC_* layer, never a literal `__atomic_*` builtin --
+# c2mir has none, and one in the preamble sends every `tur jit` program to the
+# cc fallback (TUR-W0070).
+add_test(
+  NAME tur_no_atomic_builtins
+  COMMAND bash tests/check-no-atomic-builtins.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Self-test for run.sh's emitted-C pointer/integer ratchet: builds a canary whose
 # emitted C provably mixes a pointer and an integer and asserts the warning
 # pattern still fires.  A grep that matches nothing is indistinguishable from a

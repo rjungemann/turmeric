@@ -14561,8 +14561,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_handler_chain = __node.parent;\n");
     buf_puts(out, "    free(a);\n");
     buf_puts(out, "    if (!tur_async_reject_if_panicking(future)) {\n");
+    /* A plain store, like tur_future_fulfill's: every reader of a threaded
+     * future joins the thread first (tur_future_join_thread), and the join is
+     * the synchronization.  Not a literal `__atomic_store_n` -- c2mir has no
+     * `__atomic_*` builtins, and one here made every `tur jit` program fall
+     * back to cc (TUR-W0070); the preamble's TUR_ATOMIC_* layer exists for
+     * exactly that reason. */
     buf_puts(out, "        future->value = result;\n");
-    buf_puts(out, "        __atomic_store_n(&future->status, FUTURE_FULFILLED, __ATOMIC_RELEASE);\n");
+    buf_puts(out, "        future->status = FUTURE_FULFILLED;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    return NULL;\n");
     buf_puts(out, "}\n\n");

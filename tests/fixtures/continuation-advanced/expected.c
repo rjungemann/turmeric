@@ -3523,7 +3523,7 @@ static void *tur_async_thread_main(void *p) {
     free(a);
     if (!tur_async_reject_if_panicking(future)) {
         future->value = result;
-        __atomic_store_n(&future->status, FUTURE_FULFILLED, __ATOMIC_RELEASE);
+        future->status = FUTURE_FULFILLED;
     }
     return NULL;
 }
