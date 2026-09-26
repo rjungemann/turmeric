@@ -138,6 +138,14 @@ All notable changes to Turmeric are documented here.
   user type. Inside such a generic, one dispatched method's result fed to
   another (a map into a fold) is no longer re-spilled as an aggregate.
 
+- **A dictionary-passing generic no longer returns a dangling stack
+  address.** A by-value argument to a method dispatched through a runtime
+  dictionary was spilled to the generic's stack, and a method that returns its
+  argument (an `Alternative`-style `myalt` keeping `x`, a `bind` passing
+  `none` through) handed that address back out of the generic. It happened to
+  read correctly on x86-64 and printed garbage under the arm64 JIT. The
+  argument is now heap-allocated.
+
 - **A subclass constraint now carries its superclasses' dictionaries.** A
   higher-kinded generic constrained only by a subclass could not call a
   return-directed superclass method such as `pure` under `[^Alternative F]`.
