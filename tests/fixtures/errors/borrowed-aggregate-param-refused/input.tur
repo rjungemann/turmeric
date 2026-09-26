@@ -1,0 +1,10 @@
+;; borrowed-aggregate-key-skips-the-key-check: a concrete `(& Pt)` parameter
+;; matched ANY borrow of an ADT by kind, so a borrowed Qt was accepted.  The
+;; borrow now records its target, and the call compares it.
+(defdata Pt (Pt [px : int py : int]))
+(defdata Qt (Qt [qx : int]))
+(defn getx [p : (& Pt)] : int (.px (deref p)))
+(defn main [] : int
+  (let [q (Qt 1)]
+    (println (getx (& q))))
+  0)

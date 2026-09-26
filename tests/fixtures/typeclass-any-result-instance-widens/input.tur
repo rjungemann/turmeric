@@ -1,0 +1,14 @@
+;; An instance body is widened to the class's declared `: any` result, as a
+;; defn's body is to its own (P6).  It was not: `(size [x] 3)` returned a raw
+;; int64 from a function typed `tur_tagged_t`, and cc refused the program
+;; ("incompatible types when returning").  Plain Turmeric -- found through
+;; saffron-lang-plan S9, where the class declaration became the dispatch
+;; node's result type.  7.25 rather than 7.0 so a float read as an int shows.
+(defdata Pt (Pt [px : int py : int]))
+(defclass Size [a] (size [x : a] : any))
+(definstance Size [cstr] (size [x] 3))
+(definstance Size [Pt] (size [x] 7.25))
+(defn main [] : int
+  (println (cast (.size "abc") int))
+  (println (cast (.size (Pt 1 2)) float))
+  0)

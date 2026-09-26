@@ -7475,6 +7475,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the final branch: `(pick 7.1)` stored 7.  Keying on the payload
              * type is exactly equivalent for `any` and correct for a union. */
             Type inj_pt = emit_resolve_type(ctx, e->as.union_inject_.value->type);
+            /* S9 (binary-fn witness): a widen of a TYPE-VARIABLE operand is a
+             * no-op in a spec that binds the variable to `any` -- the value is
+             * already the box.  A Saffron instance body calling its fn
+             * parameter (`(f init (.l t))`) widens `init : b` to `any`; at
+             * the witness's `b := any` spec that re-tagged a tur_tagged_t as
+             * the int64 payload of another box ("aggregate value used where
+             * an integer was expected"). */
+            if (e->type.kind == TY_ANY && inj_pt.kind == TY_ANY) {
+                buf_free(&out);
+                return inner;
+            }
             if (inj_pt.kind == TY_FLOAT) {
                 /* TY2.2: a double does not survive an integer cast -- store its
                  * IEEE-754 bit pattern in the payload via a union reinterpret. */
@@ -12866,8 +12877,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 return tmp;
             } else if (e->as.deref_.expr->type.kind == TY_REF_IMMUT
                        || e->as.deref_.expr->type.kind == TY_REF_MUT) {
-                /* Phase 12: &T / &mut T dereference: *((T *)ptr) */
-                const char *inner_type_c = type_c_name(e->type);
+                /* Phase 12: &T / &mut T dereference: *((T *)ptr)
+                 * borrowed-aggregate-key-skips-the-key-check: resolve T
+                 * through the current spec, so `(deref k)` of a `(& K)` read
+                 * at K = any loads the tagged box the caller lent (its whole
+                 * `tur_tagged_t`), not one int64_t word of it. */
+                const char *inner_type_c = type_c_name(emit_resolve_type(ctx, e->type));
                 char *tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s %s = *((%s *)%s);\n",

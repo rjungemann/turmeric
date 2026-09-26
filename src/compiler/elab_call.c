@@ -1028,8 +1028,10 @@ static bool call_type_has_named_tyvar(const Type *t) {
         case TY_TYVAR:
             return t->as.tyvar_.name != NULL;
         case TY_REF_IMMUT: case TY_REF_MUT:
-            /* H9: `(& K)` names K through the borrow. */
-            return t->as.ref_borrow.target_tyvar != NULL;
+            /* H9: `(& K)` names K through the borrow; a `(& (Vec A))` names A
+             * through its recorded full target. */
+            return t->as.ref_borrow.target_tyvar != NULL ||
+                   call_type_has_named_tyvar(t->as.ref_borrow.target_full);
         case TY_APP:
             return call_type_has_named_tyvar(t->as.app.fn) ||
                    call_type_has_named_tyvar(t->as.app.arg);
@@ -1284,22 +1286,32 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
              * contribute K, and an any-held map seamed on argument 0 was
              * grounded to `(Map any any)`. */
             const char *tv = expected->as.ref_borrow.target_tyvar;
-            if (!tv) return true;
+            const Type *ef = expected->as.ref_borrow.target_full;
+            if (!tv && !ef) return true;
             Type target;
             if (actual.kind == TY_REF_IMMUT || actual.kind == TY_REF_MUT) {
-                /* A borrow's target is a bare KIND, which fully names only a
-                 * scalar.  A struct / String / applied key (`&<adt>`) must
-                 * not bind K from its kind -- it would clash with the K the
-                 * map argument already bound with its full type -- so those
-                 * stay unbound here exactly as before this arm existed. */
+                /* A borrow's target KIND fully names only a scalar.  An
+                 * aggregate (`&Pt`, `&String`, `&(Vec int)`) is named by the
+                 * full type the borrow recorded, and is bound / compared
+                 * through it -- borrowed-aggregate-key-skips-the-key-check:
+                 * this arm used to return true for every aggregate, so
+                 * nothing checked a borrowed String against the `int` a
+                 * `(Map int int)` had bound K to.  An aggregate borrow with
+                 * no recorded target (an imported signature, an owning-ref
+                 * reborrow) is still accepted unbound, as before. */
                 TypeKind tk = actual.as.ref_borrow.target;
-                if (!(typekind_is_numeric(tk) || tk == TY_BOOL || tk == TY_CSTR ||
-                      tk == TY_NIL || tk == TY_SYM || tk == TY_PTR_VOID))
+                if (actual.as.ref_borrow.target_full) {
+                    target = *actual.as.ref_borrow.target_full;
+                } else if (typekind_is_numeric(tk) || tk == TY_BOOL || tk == TY_CSTR ||
+                           tk == TY_NIL || tk == TY_SYM || tk == TY_PTR_VOID) {
+                    target = type_from_kind(tk);
+                } else {
                     return true;
-                target = type_from_kind(tk);
+                }
             } else {
                 target = actual;
             }
+            if (!tv) return call_collect_type_bindings(ef, target, bindings, n_bindings);
             Type tvt; memset(&tvt, 0, sizeof tvt);
             tvt.kind = TY_TYVAR; tvt.as.tyvar_.name = tv;
             return call_collect_type_bindings(&tvt, target, bindings, n_bindings);
@@ -7098,6 +7110,16 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                         arg_ok = true;
                     }
                 }
+            } else if (arg_ok &&
+                       (expected_arg_kind == TY_REF_IMMUT || expected_arg_kind == TY_REF_MUT) &&
+                       expected_full && expected_full->kind == expected_arg_kind &&
+                       expected_full->as.ref_borrow.target_full) {
+                /* borrowed-aggregate-key-skips-the-key-check: a concrete
+                 * `(& Pt)` parameter matched any borrow of an ADT by kind, so
+                 * `(& q)` for a Qt -- or a String -- was accepted.  type_eq
+                 * compares the recorded targets (and falls back to the kind
+                 * when the argument has none). */
+                arg_ok = type_eq(args[i]->type, *expected_full);
             }
         }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_FN) {
@@ -7760,9 +7782,16 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                            pr->as.ref_borrow.target_tyvar, &rix) &&
                     type_bindings[rix].type.kind != TY_TYVAR &&
                     type_bindings[rix].type.kind != TY_UNKNOWN)
+                {
                     expected_ty = pr->kind == TY_REF_MUT
                         ? type_ref_mut(type_bindings[rix].type.kind)
                         : type_ref_immut(type_bindings[rix].type.kind);
+                    if (borrow_target_needs_full(type_bindings[rix].type.kind)) {
+                        Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *bt = type_bindings[rix].type;
+                        expected_ty.as.ref_borrow.target_full = bt;
+                    }
+                }
             }
             if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION ||
                  expected_arg_kind == TY_APP || expected_arg_kind == TY_HANDLER ||
@@ -7790,6 +7819,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 Type *ct = (fn_arg_idx5 < fn_type.as.fn.arity)
                     ? fn_type.as.fn.arg_full_types[fn_arg_idx5] : NULL;
                 if (ct && (ct->kind == TY_APP || ct->kind == TY_ADT))
+                    expected_ty = *ct;
+                /* borrowed-aggregate-key-skips-the-key-check: a concrete
+                 * `(& Pt)` prints its target, not `&adt`. */
+                if (ct && ct->kind == expected_arg_kind &&
+                    (ct->kind == TY_REF_IMMUT || ct->kind == TY_REF_MUT) &&
+                    ct->as.ref_borrow.target_full && !ct->as.ref_borrow.target_tyvar &&
+                    !call_type_has_named_tyvar(ct))
                     expected_ty = *ct;
             }
             /* PH2.1: Build the type names into owned local buffers via

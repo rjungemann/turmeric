@@ -1,0 +1,31 @@
+;; borrowed-aggregate-key-skips-the-key-check, the accepting side: a borrow of
+;; an aggregate carries its target's full type, so
+;;   - a matching borrowed key still reaches a `(& K)` (String keys into a
+;;     (Map String int), a struct into a `(& K)` bound to it);
+;;   - `(& (Vec A))` binds A from `&(Vec int)`;
+;;   - `(deref p)` of a `(& Pt)` IS a Pt, so a field read on it resolves --
+;;     it used to be a bare "ADT" with no definition ("no typeclass method
+;;     found for 'px'").
+;; 7.1 in the struct: a float field read through the borrow must stay a float.
+(load "stdlib/string.tur")
+(defdata Pt (Pt [px : int py : int]))
+(defstruct Sz [w : int h : float])
+(defn getx [p : (& Pt)] : int (.px (deref p)))
+(defn geth [s : (& Sz)] : float (.h (deref s)))
+(defn vlen [A] [v : (& (Vec A))] : int (vec-len (deref v)))
+(defn slen [s : (& String)] : int (string/len (deref s)))
+(defn kr [K V] [m : (Map K V) k : (& K)] : (Map K V) m)
+(defn main [] : int
+  (let [m (map-assoc (:: (map-new) (Map String int)) (string/from-cstr "a") 10)
+        k (string/from-cstr "a")
+        p (Pt 7 2)
+        z (make-struct Sz 3 7.1)
+        v (vec-of 1 2 3)]
+    (println (map-has? m k))                                        ; true
+    (println (map-count (map-assoc m (string/from-cstr "b") 20)))   ; 2
+    (println (getx (& p)))                                          ; 7
+    (println (geth (& z)))                                          ; 7.1
+    (println (vlen (& v)))                                          ; 3
+    (println (slen (& k)))                                          ; 1
+    (println (map-count (kr (:: (map-new) (Map Pt int)) (& p)))))   ; 0
+  0)
