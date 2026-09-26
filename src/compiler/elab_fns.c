@@ -10537,10 +10537,17 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * Two gates.  An EXPECTED function type (this lambda is an argument to a
      * typed callee -- `vec-filter`'s predicate, a typed callback) already
      * decides the return, so the default yields to it exactly as the
-     * parameter default above does.  And a nil body stays nil, so a
-     * side-effect lambda keeps the shape a `(fn [T] nil)` slot wants. */
+     * parameter default above does -- which is also what keeps a side-effect
+     * lambda passed straight to a typed `(fn [T] nil)` slot `nil`.
+     *
+     * A nil or diverging body with NO expected function type gets `any` too.
+     * It used to stay `nil`, and a `void` callee is one the dynamic call site
+     * refuses with the same "cannot call this function here": `(each xs (fn
+     * [x] (set! acc (+ acc x))))` through an untyped `each` panicked, the
+     * shape every Saffron accumulate-in-a-lambda loop takes (found fixing
+     * compiled-closure-copies-a-captured-mut).  The body needs no box when it
+     * diverges; a nil body is boxed as the nil tag by the widen below. */
     if (!return_annotated && return_kind == TY_NIL && body &&
-        body->type.kind != TY_NIL && body->type.kind != TY_NEVER &&
         body->type.kind != TY_ANY && lang_span_is_dynamic(call->span) &&
         !is_callcc_receiver &&
         !(e->expected_type && e->expected_type->kind == TY_FN)) {

@@ -4125,6 +4125,17 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     bool fn_qual_err = false;
     Binding *fn_binding = elab_lookup_sym(e, name, head->span, &fn_qual_err);
     if (!fn_binding && fn_qual_err) return NULL;
+    /* compiled-closure-copies-a-captured-mut: a call through a `^mut` moved
+     * into a shared cell calls what the cell holds. */
+    if (fn_binding && fn_binding->cell_hidden_sym) {
+        Form **items = (Form **)arena_alloc(e->arena,
+                                            call->as.list.len * sizeof(Form *));
+        items[0] = elab_mut_cell_read_form(e, fn_binding, head->span);
+        for (uint32_t k = 1; k < call->as.list.len; k++)
+            items[k] = call->as.list.items[k];
+        return elab_form(e, form_list(e->arena, call->span, items,
+                                      call->as.list.len));
+    }
 
     /* constrained-generic-as-value (docs/archive/history/constrained-generic-as-value-
      * bakes-representative.md): a call through an immutable let-bound alias of a

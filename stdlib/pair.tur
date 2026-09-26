@@ -7,6 +7,16 @@
 ;; Phase TC1-F: Typed Pair[A B]
 ;; Generic two-element tuple with typed first and second elements.
 ;; Runtime layout specializes fst/snd for concrete A/B.
+;;; TurMutCell -- internal: the shared heap cell of a `^mut` a lambda captures.
+;;;
+;;; A compiled closure copies each variable it captures into its env, so a
+;;; `set!` in one closure (or in the enclosing scope) was invisible to every
+;;; other copy. The elaborator gives such a variable one of these cells and
+;;; rewrites its reads and writes to the field, so every env shares the cell
+;;; (compiled-closure-copies-a-captured-mut). Not for direct use.
+;;;
+;;; Since: v0.56
+(defstruct TurMutCell :heap [A] (v A))
 ;;; Pair -- parameterized two-element tuple with element types A and B.
 ;;;
 ;;; Since: Phase TC1

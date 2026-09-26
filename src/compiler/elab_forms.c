@@ -536,6 +536,134 @@ static Expr *let_bridge_sig_tyvar_result(Elab *e, Expr *init) {
     return init;
 }
 
+/* ---- compiled-closure-copies-a-captured-mut --------------------------------
+ *
+ * A compiled closure COPIES each variable it captures into its env when the
+ * closure is built; the interpreter's closures share the frame.  So a `^mut`
+ * that a lambda captures and something then `set!`s gave two answers:
+ *
+ *   (let [^mut acc 0]
+ *     (apply3 (fn [x : int] : nil (set! acc (+ acc x))))
+ *     acc)                       ; compiled 0, interpreted 6
+ *
+ * and a lambda that only WRITES the variable did not capture it at all (a cc
+ * error naming an undeclared local).  Shared capture is the semantics the
+ * interpreter, `set!`, and `#lang r7rs` (scheme_lower.c's R10 assignment
+ * conversion) all agree on, so the compiled path is brought to it here, for
+ * every dialect: such a variable lives in a heap cell (`TurMutCell`,
+ * stdlib/pair.tur) bound under a hidden name, and the variable's own name
+ * becomes an alias whose reads elaborate as `(.v <cell>)` and whose `set!`s
+ * as field writes.  Each closure then captures the cell POINTER -- an
+ * ordinary heap pointer every capture path already carries -- and all of them
+ * see one location.
+ *
+ * Which variables: a pure `^mut` (no other substructural annotation) whose
+ * name appears inside a `fn` in the rest of the `let` -- a later initializer
+ * or the body -- and whose type is a scalar (numbers, bool, cstr, sym) or an
+ * `any`.  The scan is syntactic and over-approximates (a shadowing binding
+ * inside the lambda still counts), which only costs a cell.  A lambda a MACRO
+ * introduces is not seen, and keeps the copying behaviour; so do aggregate,
+ * pointer, rc and linear types, whose scope-exit ownership a cell would have
+ * to take over. */
+static bool cell_form_is_listy(const Form *f) {
+    return f && (f->tag == F_LIST || f->tag == F_VEC || f->tag == F_MAP ||
+                 f->tag == F_SET || f->tag == F_MAP_LITERAL ||
+                 f->tag == F_SET_LITERAL);
+}
+
+static bool cell_vec_binds(const Form *v, const Symbol *n) {
+    if (!v || v->tag != F_VEC) return false;
+    for (uint32_t k = 0; k < v->as.list.len; k++)
+        if (v->as.list.items[k]->tag == F_SYM && v->as.list.items[k]->as.sym == n)
+            return true;
+    return false;
+}
+
+/* Does `n` occur free inside a `fn` somewhere in `f`? */
+static bool cell_fn_mentions(Elab *e, const Form *f, const Symbol *n,
+                             bool in_fn, int depth) {
+    if (!f || depth > 256) return false;
+    if (f->tag == F_SYM) return in_fn && f->as.sym == n;
+    if (!cell_form_is_listy(f)) return false;
+    uint32_t len = f->as.list.len;
+    if (f->tag == F_LIST && len >= 1 && f->as.list.items[0]->tag == F_SYM) {
+        const Symbol *h = f->as.list.items[0]->as.sym;
+        if (h == e->sym_quote) return false;
+        if (h == e->sym_fn || h == e->sym_lambda) {
+            for (uint32_t k = 1; k < len && k <= 2; k++) {
+                if (f->as.list.items[k]->tag == F_VEC) {
+                    if (cell_vec_binds(f->as.list.items[k], n)) return false;
+                    break;
+                }
+            }
+            in_fn = true;
+        }
+    }
+    for (uint32_t k = 0; k < len; k++)
+        if (cell_fn_mentions(e, f->as.list.items[k], n, in_fn, depth + 1))
+            return true;
+    return false;
+}
+
+static bool cell_elem_type_ok(Type t) {
+    switch (t.kind) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+        case TY_BOOL: case TY_CSTR: case TY_SYM: case TY_ANY:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* The `(.v <cell>)` read every use of an aliased name elaborates as. */
+Form *elab_mut_cell_read_form(Elab *e, const Binding *alias, Span span) {
+    Form **items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    items[0] = form_sym(e->arena, span, intern_cstr(e->st, ".v"));
+    items[1] = form_sym(e->arena, span, alias->cell_hidden_sym);
+    return form_list(e->arena, span, items, 2);
+}
+
+/* After binding `b` (the `^mut` NAME) has been bound to its initializer as an
+ * ordinary let binding, turn it into the cell form: `b` keeps the initial
+ * value (no longer mutable, and shadowed), a hidden binding holds `(TurMutCell
+ * <name>)`, and the name is re-bound as the alias.  False when the cell type
+ * is not in scope (a :no-stdlib build) -- the binding then stays as it was. */
+static bool elab_let_mut_to_cell(Elab *e, Scope *inner, LetBinding **binds,
+                                 bool **moved, uint32_t *n_binds, uint32_t *cap,
+                                 Binding *b, const Symbol *name, Span name_span,
+                                 bool *ok) {
+    *ok = true;
+    const Symbol *cell_ty = intern_cstr(e->st, "TurMutCell");
+    if (!scope_lookup(e->scope, cell_ty)) return false;
+    char hidden[48];
+    snprintf(hidden, sizeof hidden, "__tur_mutcell_%u", b->id);
+    const Symbol *hidden_sym = intern_cstr(e->st, hidden);
+    Form **items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    items[0] = form_sym(e->arena, name_span, cell_ty);
+    items[1] = form_sym(e->arena, name_span, name);
+    Expr *cell_init = elab_form(e, form_list(e->arena, name_span, items, 2));
+    if (!cell_init) { *ok = false; return false; }
+    b->is_mut = false;
+    Binding *cb = binding_new(e, hidden_sym, cell_init->type, false, false, name_span);
+    scope_add(inner, cb);
+    if (*n_binds == *cap) {
+        *cap = *cap ? *cap * 2 : 4;
+        *binds = (LetBinding *)realloc(*binds, *cap * sizeof(LetBinding));
+        *moved = (bool *)realloc(*moved, *cap * sizeof(bool));
+        if (!*binds || !*moved) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    (*binds)[*n_binds].binding = cb;
+    (*binds)[*n_binds].init = cell_init;
+    (*moved)[*n_binds] = false;
+    (*n_binds)++;
+    Binding *alias = binding_new(e, name, b->type, true, false, name_span);
+    alias->cell_hidden_sym = hidden_sym;
+    scope_add(inner, alias);
+    return true;
+}
+
 Expr *elab_let(Elab *e, const Form *call) {
     /* (let [b1 i1 b2 i2 ...] body...)
      * Named-let: (let name [p1 v1 ...] body...) -- desugar to letrec */
@@ -1484,6 +1612,27 @@ Expr *elab_let(Elab *e, const Form *call) {
         binds[n_binds].init = init;
         binding_moved_during_init[n_binds] = false; /* new binding, not yet moved during init */
         n_binds++;
+
+        /* compiled-closure-copies-a-captured-mut: a `^mut` a lambda in the
+         * rest of this let captures moves into a shared heap cell. */
+        if (is_mut && !is_persistent && !is_linear_ann && !is_unique_ann &&
+            !is_affine_ann && !is_relevant_ann && !is_fat_ann &&
+            !b->is_linear && !b->is_unique && !b->is_global &&
+            cell_elem_type_ok(b->type)) {
+            bool captured = false;
+            for (uint32_t bi = i; !captured && bi < bindings_form->as.list.len; bi++)
+                captured = cell_fn_mentions(e, bindings_form->as.list.items[bi],
+                                            name, false, 0);
+            for (uint32_t bi = 2; !captured && bi < call->as.list.len; bi++)
+                captured = cell_fn_mentions(e, call->as.list.items[bi], name,
+                                            false, 0);
+            bool ok = true;
+            if (captured)
+                (void)elab_let_mut_to_cell(e, &inner, &binds,
+                                           &binding_moved_during_init, &n_binds,
+                                           &cap, b, name, name_span, &ok);
+            if (!ok) { rc = -1; break; }
+        }
     }
 
     /* Phase 5: Check if any binding is a ref and needs auto-defer drop.
@@ -3828,6 +3977,17 @@ Expr *elab_set(Elab *e, const Form *call) {
         return NULL;
     }
     Binding *b = scope_lookup(e->scope, target->as.sym);
+    /* compiled-closure-copies-a-captured-mut: a `^mut` moved into a shared
+     * cell is written through the cell's field. */
+    if (b && b->cell_hidden_sym) {
+        Form *ftarget = elab_mut_cell_read_form(e, b, target->span);
+        Form **items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+        items[0] = call->as.list.items[0];
+        items[1] = ftarget;
+        items[2] = call->as.list.items[2];
+        Form *fcall = form_list(e->arena, call->span, items, 3);
+        return elab_set_field(e, fcall, ftarget);
+    }
     if (!b) {
         diag_emit(DIAG_ERROR, target->span,
                   "set!: '%s' is not bound", target->as.sym->name);
