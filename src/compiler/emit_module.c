@@ -2053,10 +2053,30 @@ static const char *float_carrier_kind(const char *cn) {
     return NULL;
 }
 
+/* narrow-closure-result-read-through-int64-carrier: the integer half of the
+ * same crossing.  A thunk declared `: bool` (or a narrower-than-64-bit int)
+ * defines only the low bits of the return register -- AL for a bool on x86-64
+ * -- and an erased sink reads all of RAX, so a false result could read as
+ * non-zero.  At an erased RESULT position the shim returns the value widened
+ * to the int64 carrier by an ordinary C conversion (zero- or sign-extended);
+ * the erased reader then sees exactly the value.  Arguments need no bridge:
+ * an int64 argument read as a narrower int is its low bits, which is the
+ * value.  Keyed on the C spelling, so a contract over a narrow base counts. */
+static bool narrow_int_carrier(const char *cn) {
+    if (!cn) return false;
+    static const char *narrow[] = { "bool", "_Bool", "int8_t", "int16_t",
+                                    "int32_t", "uint8_t", "uint16_t",
+                                    "uint32_t", NULL };
+    for (int i = 0; narrow[i]; i++)
+        if (strcmp(cn, narrow[i]) == 0) return true;
+    return false;
+}
+
 static bool float_carrier_shim_needed(Type result_type, Type *param_types,
                                       uint8_t n_params, uint64_t erased_mask,
                                       bool erased_result) {
     if (erased_result && float_carrier_kind(type_c_name(result_type))) return true;
+    if (erased_result && narrow_int_carrier(type_c_name(result_type))) return true;
     for (uint8_t i = 0; i < n_params; i++) {
         if ((erased_mask & ARG_IDX_BIT(i)) &&
             float_carrier_kind(type_c_name(param_types[i])))
@@ -2090,7 +2110,8 @@ static void float_carrier_shim_body(Buf *target, const char *name,
                                     uint64_t erased_mask, bool erased_result) {
     const char *rc = type_c_name(result_type);
     const char *rk = erased_result ? float_carrier_kind(rc) : NULL;
-    buf_printf(target, "static %s %s(void *__e", rk ? "int64_t" : rc, name);
+    bool rw = erased_result && !rk && narrow_int_carrier(rc);
+    buf_printf(target, "static %s %s(void *__e", (rk || rw) ? "int64_t" : rc, name);
     for (uint8_t i = 0; i < n_params; i++) {
         const char *pc = type_c_name(param_types[i]);
         bool bits = (erased_mask & ARG_IDX_BIT(i)) && float_carrier_kind(pc);
@@ -2106,6 +2127,7 @@ static void float_carrier_shim_body(Buf *target, const char *name,
     }
     buf_puts(target, ");\n    ");
     if (rk) buf_printf(target, "return tur_sc_bits_%s(__r);\n}\n", rk);
+    else if (rw) buf_puts(target, "return (int64_t)__r;\n}\n");
     else buf_puts(target, "return __r;\n}\n");
 }
 
@@ -2219,7 +2241,8 @@ char *ensure_poly_float_carrier_shim(EmitCtx *ctx, Type result_type,
 
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     const char *rk = erased_result ? float_carrier_kind(rc) : NULL;
-    buf_printf(target, "static %s %s(void *__e", rk ? "int64_t" : rc, name);
+    bool rw = erased_result && !rk && narrow_int_carrier(rc);
+    buf_printf(target, "static %s %s(void *__e", (rk || rw) ? "int64_t" : rc, name);
     for (uint8_t i = 0; i < n_params; i++) {
         const char *pc = type_c_name(param_types[i]);
         bool bits = (erased_mask & ARG_IDX_BIT(i)) && float_carrier_kind(pc);
@@ -2238,6 +2261,7 @@ char *ensure_poly_float_carrier_shim(EmitCtx *ctx, Type result_type,
     }
     buf_puts(target, ");\n    ");
     if (rk) buf_printf(target, "return tur_sc_bits_%s(__r);\n}\n", rk);
+    else if (rw) buf_puts(target, "return (int64_t)__r;\n}\n");
     else buf_puts(target, "return __r;\n}\n");
     return name;
 }
@@ -2260,9 +2284,17 @@ char *ensure_poly_float_carrier_shim(EmitCtx *ctx, Type result_type,
  * by signature and references no local, so it lives at file scope like the
  * spill shims above. */
 char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
-                                  Type *param_types, uint8_t n_params) {
+                                  Type *param_types, uint8_t n_params,
+                                  bool erased_result) {
     const char *rc = type_c_name(result_type);
     if (!rc) return NULL;
+    /* narrow-closure-result-read-through-int64-carrier: an erased sink reads
+     * the result as the whole int64 register, so a narrow integer result is
+     * widened (and a float result carried as its bits) exactly as the carrier
+     * shims above do. */
+    const char *rk = erased_result ? float_carrier_kind(rc) : NULL;
+    bool rw = erased_result && !rk && narrow_int_carrier(rc);
+    const char *sc = (rk || rw) ? "int64_t" : rc;
 
     Buf nb; buf_init(&nb);
     buf_puts(&nb, "__tur_barefn_");
@@ -2273,6 +2305,7 @@ char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
         buf_putc(&nb, '_');
         append_sanitized_c_token(&nb, pc);
     }
+    if (rk || rw) buf_puts(&nb, "_wr");
     buf_putc(&nb, '\0');
     char *name = strdup(nb.data);
     buf_free(&nb);
@@ -2292,7 +2325,7 @@ char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
     if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
 
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
-    buf_printf(target, "static %s %s(void *__e", rc, name);
+    buf_printf(target, "static %s %s(void *__e", sc, name);
     for (uint32_t i = 0; i < n_params; i++)
         buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
     buf_puts(target, ") {\n    ");
@@ -2308,12 +2341,15 @@ char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
         if (i) buf_puts(target, ", ");
         buf_puts(target, type_c_name(param_types[i]));
     }
-    buf_puts(target, "))(intptr_t)__e;\n    return __f(");
+    buf_puts(target, "))(intptr_t)__e;\n    return ");
+    if (rk) buf_printf(target, "tur_sc_bits_%s(", rk);
+    else if (rw) buf_puts(target, "(int64_t)(");
+    buf_puts(target, "__f(");
     for (uint32_t i = 0; i < n_params; i++) {
         if (i) buf_puts(target, ", ");
         buf_printf(target, "a%u", (unsigned)i);
     }
-    buf_puts(target, ");\n}\n");
+    buf_puts(target, (rk || rw) ? "));\n}\n" : ");\n}\n");
     return name;
 }
 

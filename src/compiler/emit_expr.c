@@ -14888,8 +14888,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     ctx, emit_fn_arg_type_from_type(bb->type, bi2));
                             Type bres = emit_resolve_type(
                                 ctx, emit_fn_result_type_from_type(bb->type));
+                            /* narrow-closure-result-read-through-int64-carrier:
+                             * an erased sink (the carrier base instance) reads
+                             * the result as a whole int64; widen it there, with
+                             * the same gate the float bridges above use. */
+                            bool bare_erased_result =
+                                e->as.poly_wrap_.carrier_erased_result &&
+                                (e->as.poly_wrap_.boxes_aggregate ||
+                                 ctx->poly_wrap_callee_carrier);
                             bare_shim = ensure_bare_fnptr_poly_shim(
-                                ctx, bres, bn ? bparams : NULL, bn);
+                                ctx, bres, bn ? bparams : NULL, bn,
+                                bare_erased_result);
                         }
                     }
                     indent_buf(body, ctx->indent);

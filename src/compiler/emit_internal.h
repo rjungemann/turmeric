@@ -1513,7 +1513,8 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
  * tur_poly_fn_t env slot and casts it back to its env-less signature.  See the
  * definition in emit_module.c. */
 char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
-                                  Type *param_types, uint8_t n_params);
+                                  Type *param_types, uint8_t n_params,
+                                  bool erased_result);
 char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
                                       Type *param_types, uint8_t n_params);
 /* erased-float-carrier: shims that carry a float-class param/result of a poly
