@@ -548,9 +548,10 @@
 ;;; Threads (set-add1 s x) over the elements in xs.  Each element appears
 ;;; once in the expansion (set-add1 supplies the duplicate hash slot), so a
 ;;; computed element is evaluated exactly once.  Recursive: each step nests
-;;; one more set-add1.
+;;; one more set-add1.  Its parameters and set-of's are ^syntax, for the
+;;; reason hamt-assoc-each__ gives (map.tur): an element holding a lambda.
 
-(defmacro set-add-each__ [s & xs]
+(defmacro set-add-each__ [^syntax s & ^syntax xs]
   (if (empty? xs)
     s
     (list set-add-each__ (list set-add1 s (first xs)) ~@(rest xs))))
@@ -588,7 +589,7 @@
 
 (defn set-empty-for [^Hash A ^MapKey A] [x :A] : (Set A) (set-new))
 
-(defmacro set-of [& xs]
+(defmacro set-of [& ^syntax xs]
   (if (empty? xs)
     (list set-new)
     (list set-add-each__ (list set-empty-for (first xs)) ~@xs)))

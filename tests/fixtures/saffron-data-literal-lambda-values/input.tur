@@ -1,0 +1,35 @@
+#lang saffron
+;; A dispatch table: a data literal whose values are lambdas.
+;;
+;; 1. `#map{"add" (fn [a b] (+ a b)) ...}` failed to compile ("compile-time
+;;    macro evaluation expected a form value") on both engines: hamt-of's
+;;    helper macros substituted their arguments into a body the compile-time
+;;    evaluator then ran, and an unannotated lambda EVALUATED to a
+;;    compile-time function.  Their parameters are ^syntax now.  set-of had
+;;    the same shape.
+;; 2. A closure read back out of a (Vec any) came back a bare int under
+;;    `tur --interpret` ("cannot call a int value"): the interpreter's vec
+;;    cell retag had no closure case.
+(defn apply-2 [f x] (f x))
+
+(defn main []
+  (let [k 10
+        ops #map{"add" (fn [a b] (+ a b))
+                 "mul" (fn [a b] (* a b))
+                 "off" (fn [a b] (+ a b k))}]
+    (println ((map-get ops "add") 3 4))
+    (println ((map-get ops "mul") 3 4))
+    (println ((map-get ops "off") 3 4)))
+  ;; a computed key, spelled with hamt-of (the literal takes literal keys)
+  (let [m (hamt-of (+ 1 1) "two" 3 "three")]
+    (println (map-get m 2)))
+  ;; a set whose elements are computed through lambdas
+  (let [s (set-of (apply-2 (fn [x] (+ x 1)) 3) 7 (apply-2 (fn [x] x) 4))]
+    (println (set-count s)))
+  ;; closures in a vec, read back and called dynamically
+  (let [fs (vec-new)]
+    (vec-push! fs (fn [y] (+ y 1)))
+    (vec-push! fs (fn [y] (* y 100)))
+    (println ((vec-get fs 0) 2))
+    (println ((vec-get fs 1) 2)))
+  0)
