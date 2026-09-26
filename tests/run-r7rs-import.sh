@@ -280,6 +280,45 @@ EOF
 run_case "turmeric-imports-export-rename" tmain2.tur "42
 42"
 
+# ---- A library procedure calling one defined further down. ---------------
+# untyped-forward-callee-result-retagged-as-pointer: an imported library goes
+# through the module path's forward declarations, which typed an unannotated
+# (every Scheme) defn's result as the int placeholder, so `caller`'s call of
+# the later `callee` was widened to `any` as an int and cc refused it -- from a
+# Scheme program and from a Turmeric module alike.
+cat > "$TMP/fwdlib.tur" <<'EOF'
+#lang r7rs
+(define-library (fwdlib)
+  (export caller first-of)
+  (import (scheme base))
+  (begin
+    (define (caller x) (list (callee x) (callee (- x))))
+    (define (first-of x) (car (caller x)))
+    (define (callee x)
+      (if (> x 0)
+          x
+          (let ((v (vector x 'neg)))
+            v)))))
+EOF
+
+cat > "$TMP/prog9.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (fwdlib))
+(write (caller 5)) (newline)
+EOF
+
+run_case "library-forward-callee" prog9.tur "(5 #(-5 neg))"
+
+cat > "$TMP/tmain3.tur" <<'EOF'
+(defmodule tmain3
+  (import fwdlib :refer [first-of])
+  (defn main [] : int
+    (println (cast (first-of (:: 5 any)) int))
+    0))
+EOF
+
+run_case "turmeric-imports-forward-callee" tmain3.tur "5"
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1

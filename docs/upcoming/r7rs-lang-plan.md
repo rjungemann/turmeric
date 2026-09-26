@@ -1988,7 +1988,9 @@ do first).** *Landed 2026-09-24; see "What shipped" at the end of the task.*
 >     bignum.
 >   - Turmeric's and Saffron's int-overflow fixtures are unchanged, and
 >     `run.sh` and `run-turi.sh` are green.
-> - **Found on the way:** `docs/reported/untyped-forward-callee-result-retagged-as-pointer.md`.
+> - **Found on the way:** `docs/archive/untyped-forward-callee-result-retagged-as-pointer.md`
+>   (resolved 2026-09-26: the module path's forward declarations give an
+>   unannotated dynamic-file return `any`).
 >   - An untyped prelude defn called before its definition had its `any`
 >     result re-tagged as a pointer, but only when a Turmeric module was the
 >     entry. That broke `tests/run-r7rs-import.sh`'s compiled

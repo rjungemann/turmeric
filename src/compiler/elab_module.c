@@ -2,6 +2,7 @@
 #include "scheme_lower.h"
 #include "runtime/globals.h"     /* g_lang_prelude */   /* r7rs-lang-plan R2: Scheme core forms in an imported module */
 #include "elab_internal.h"
+#include "lang_dialects.h"      /* lang_span_is_dynamic: the H6 forward-decl rule */
 
 /* ---- file-local helper forward declarations ---- */
 static bool module_name_valid(const char *name, uint32_t len);
@@ -148,6 +149,31 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
         uint32_t param_arity = (params_idx < (uint32_t)f->as.list.len)
             ? fwd_decl_scan_params(e->arena, f->as.list.items[params_idx], &arg_kinds)
             : 0;
+        /* saffron-dynamic-surface-pass H6, the module half: an UNANNOTATED
+         * return in a dynamic file is `any`, and this forward decl is what a
+         * caller elaborated before the callee sees.  elaborate_program's
+         * pre-pass (elab_toplevel.c) has the rule; this one did not, so the
+         * R7RS prelude compiled when a Scheme program was the entry and not
+         * when a Turmeric module imported a Scheme library -- `r7rs-exint-of__`
+         * calls `r7rs-exact`, defined further down, and the call was typed by
+         * the TY_INT placeholder and re-tagged as a pointer at the `any`
+         * widen (untyped-forward-callee-result-retagged-as-pointer).
+         * Annotation is decided structurally, as there: a `: T` or a keyword
+         * followed by a body; a bare symbol or list here is the body. */
+        {
+            bool ret_annotated = false;
+            if (ret_idx < (uint32_t)f->as.list.len) {
+                const Form *rf = f->as.list.items[ret_idx];
+                ret_annotated = rf->tag == F_TYPE_ANN ||
+                    (rf->tag == F_KEYWORD && (uint32_t)f->as.list.len > ret_idx + 1);
+            }
+            if (!ret_annotated && lang_span_is_dynamic(f->span) &&
+                !(fn_name_f->as.sym->len == 4 && memcmp(fn_name_f->as.sym->name, "main", 4) == 0 &&
+                  param_arity == 0)) {
+                fwd_result_kind = TY_ANY;
+                fwd_result_full = NULL;
+            }
+        }
         /* r7rs-lang-plan R3: a compound parameter type in a dynamic file
          * rides the forward decl in full -- see elab_fwd_param_full_types.
          * This pre-pass is the one an imported `#lang r7rs` prelude goes
