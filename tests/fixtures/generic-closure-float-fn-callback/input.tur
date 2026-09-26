@@ -1,0 +1,62 @@
+;; generic-closure-float-passed-to-fn-typed-callback: a generic closure that
+;; captures an `A` and hands it to a fn-typed parameter `(fn [A] ...)`.  At
+;; A = float the caller boxes the callback with its typed shim (double in
+;; xmm0), so the shared int64-carrier thunk used to pass the bits in the
+;; wrong register and the callback printed 4.7e-310.  Each row must match
+;; `tur --interpret`.
+(defstruct Pt [x : int y : int])
+
+(defn setter [A] [c : int v : A] : (fn [(fn [A] bool)] bool)
+  (fn [k : (fn [A] bool)] (k v)))
+
+(defn pair-with [A] [v : A w : A] : (fn [(fn [A A] int)] int)
+  (fn [k : (fn [A A] int)] (k v w)))
+
+(defn via [A] [v : A] : (fn [(fn [A] A)] A)
+  (fn [k : (fn [A] A)] (k v)))
+
+(defn show [x : float] : bool
+  (println x)
+  true)
+
+(defn show-i [x : int] : bool
+  (println x)
+  false)
+
+(defn show32 [x : float32] : bool
+  (println (as float x))
+  true)
+
+(defn cmp [a : float b : float] : int
+  (if (< a b) -1 1))
+
+(defn bump [x : float] : float {x + 0.5})
+
+(defn show-pt [p : Pt] : bool
+  (println (.x p))
+  (println (.y p))
+  true)
+
+(defn run-it [s : (fn [(fn [float] bool)] bool)] : bool
+  (s show))
+
+(defn main [] : int
+  ;; the report's repro
+  (println ((setter 1 7.25) show))
+  ;; int still rides the carrier
+  (println ((setter 1 42) show-i))
+  ;; two float args, int result
+  (println ((pair-with 1.5 2.25) cmp))
+  ;; float in and out
+  (println ((via 3.25) bump))
+  ;; a let-bound closure, called with a named fn and a lambda
+  (let [s (setter 2 7.1)]
+    (println (s show))
+    (println (s (fn [x : float] : bool (> x 7.0)))))
+  ;; the closure reaches its caller through a fn-typed parameter
+  (println (run-it (setter 1 9.75)))
+  ;; float32
+  (println ((setter 1 (as float32 2.5)) show32))
+  ;; a by-value struct
+  (println ((setter 0 (Pt 3 4)) show-pt))
+  0)

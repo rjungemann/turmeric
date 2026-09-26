@@ -4448,6 +4448,23 @@ static bool abi_type_binds_to_byval_aggregate(const Type *t,
     return false;
 }
 
+/* generic-closure-float-passed-to-fn-typed-callback: does fn type `t` take or
+ * return a float-bound tyvar at the top level of its own signature?  A value of
+ * such a type is a fat box whose slot 0 is the TYPED shim (`double` in xmm0),
+ * so the shared thunk that dispatches it through the int64 carrier passes the
+ * bits in the wrong register class. */
+static bool abi_fn_type_mentions_float_tyvar(const Type *t,
+        const AbiTypeBinding *bindings, uint8_t n_bindings) {
+    if (!t || t->kind != TY_FN) return false;
+    if (abi_type_binds_to_float(t->as.fn.result_full_type, bindings, n_bindings))
+        return true;
+    for (uint32_t i = 0; i < t->as.fn.arity; i++) {
+        const Type *at = t->as.fn.arg_full_types ? t->as.fn.arg_full_types[i] : NULL;
+        if (abi_type_binds_to_float(at, bindings, n_bindings)) return true;
+    }
+    return false;
+}
+
 static bool emit_inner_closure_needs_float_spec(Binding *inner,
         const AbiTypeBinding *bindings, uint8_t n_bindings) {
     if (!inner || inner->type.kind != TY_FN) return false;
@@ -4460,6 +4477,11 @@ static bool emit_inner_closure_needs_float_spec(Binding *inner,
         const Type *at = inner->type.as.fn.arg_full_types
             ? inner->type.as.fn.arg_full_types[i] : NULL;
         if (abi_type_binds_to_float(at, bindings, n_bindings)) return true;
+        /* A fn-typed parameter the body dispatches: `(fn [k : (fn [A] bool)]
+         * (k v))` at A = float.  The clone dispatches `k` with the resolved
+         * signature (emit_expr.c Direction 3), matching the typed shim the
+         * caller boxed it with. */
+        if (abi_fn_type_mentions_float_tyvar(at, bindings, n_bindings)) return true;
     }
     return false;
 }

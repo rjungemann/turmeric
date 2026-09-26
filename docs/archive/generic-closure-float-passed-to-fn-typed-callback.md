@@ -6,7 +6,31 @@ description: (defn setter [A] [v : A] : (fn [(fn [A] bool)] bool) (fn [k] (k v))
 
 # A float type parameter captured by a generic closure reaches a fn-typed callback as garbage
 
-**Severity: medium-high** (silent wrong answer, exit 0). Found 2026-09-25 while
+**RESOLVED 2026-09-26** -- fix direction 1.
+
+- `binding_dispatch_is_untyped` (`src/compiler/elab_core.c`) no longer calls
+  a fat dispatch through a `(fn [..] R)` binding untyped when `R` is a
+  concrete scalar (`bool`, the int and float families, `cstr`, `nil`): the
+  call's own type already is `R`, so Direction 3 has nothing to recover on
+  the result side, and it already resolves the declared ARGUMENT types
+  through the active spec. `(k v)` with `k : (fn [A] bool)` is therefore
+  typed, and `closure_return_dispatches_untyped` stops vetoing the per-spec
+  clone.
+- `emit_inner_closure_needs_float_spec` (`src/compiler/emit_module.c`) also
+  asks for the clone when one of the lifted closure's parameters is itself a
+  fn type that takes or returns a float-bound type variable
+  (`abi_fn_type_mentions_float_tyvar`). The clone dispatches `k` with the
+  resolved signature -- `double` in `xmm0` -- which is what the typed shim in
+  the fat box the caller built expects.
+
+Pinned by `tests/fixtures/generic-closure-float-fn-callback`: the repro, an
+`int` spec that still rides the carrier, two float arguments with an int
+result, float in and out, a let-bound closure called with a named fn and a
+lambda, the closure reaching its caller through a fn-typed parameter,
+`float32`, and a by-value struct -- every row identical compiled and under
+`--interpret`. No `expected.c` snapshot moved.
+
+**Severity at filing: medium-high** (silent wrong answer, exit 0). Found 2026-09-25 while
 fixing [generic-closure-capture-of-float-truncates](../archive/generic-closure-capture-of-float-truncates.md);
 it was broken the same way before that fix (the value was then also
 numerically converted on the way in), so it is pre-existing, not a regression.
