@@ -7,6 +7,33 @@
 > findable by reading the call sites. See "Resolution" at the end for what is
 > fixed, what is still POSIX-only, and what turned out to be misdiagnosed.
 
+> **STATUS 2026-09-26: one item left -- section 3, the REPL JIT shadow
+> symlink.** Re-checked against the source rather than this report's own
+> lists, which had fallen behind:
+>
+> - **Section 1 is done.** The three sites "What is still POSIX-only" names
+>   below were converted after it was written: `git ls-remote`
+>   (`upgrade_ls_remote`, `src/compiler/install.c`) and `git -C ... rev-parse
+>   HEAD` (`pkg_git_resolve`, `src/compiler/pkg.c`) quote through
+>   `pkg_cmd_arg` and redirect to `TUR_DEVNULL`
+>   ([windows-spice-fetch-shell-quoting](../archive/windows-spice-fetch-shell-quoting.md)),
+>   and the `tar | shasum` pair is gone -- the lockfile hash is an in-process
+>   SHA-256
+>   ([pkg-hash-shells-out-to-sha256sum](../archive/pkg-hash-shells-out-to-sha256sum.md)).
+>   `rev-parse` is exercised by `tur fetch`'s lock step, which works against a
+>   `file://` remote on Windows; `ls-remote` (`tur upgrade`) has not been run
+>   there.
+> - **Section 2 is done.** `tur build --shared` names its output `<name>.dll`
+>   on Windows and the spice loader opens `lib-<hash>` + `TUR_SHLIB_EXT`, so
+>   both ends agree.
+> - **Section 4 belongs to
+>   [jit-windows-support-spike](jit-windows-support-spike.md)**, where the
+>   engine port is tracked and largely finished.
+> - **Section 3 is still open**: `repl_jit_build` (`src/main.c`) builds its
+>   module-name shadow directory with `symlink()`, which `src/platform_fs.h`
+>   stubs to `ENOSYS` on Windows, so `tur repl --engine jit` cannot load a
+>   spice there.
+
 **Severity: high for anyone actually using `tur` on Windows.** `tur.exe` now
 builds and compiles-and-runs programs, but the commands that shell out or
 produce/load a shared library fail. `tur install`, `tur fetch`, `tur new`,
@@ -157,7 +184,11 @@ Converted and **verified end to end on Windows**:
   export from the prompt returns `=> 42`
 - `tests/turi/repl-spice-load.sh` -- 9/9 pass
 
-### What is still POSIX-only
+### ~~What is still POSIX-only~~ -- all converted since
+
+**Superseded -- see the 2026-09-26 status at the top.** All three sites below
+have since been converted or removed. Kept as written, because the reasoning
+for not converting them blind still holds.
 
 Not converted, because they cannot be driven end to end here and a change that
 cannot be run is a change that cannot be trusted:

@@ -525,6 +525,12 @@ the same corpus and not three different ones:
 
 ## Remaining Windows JIT work (2026-09-04)
 
+> **Current state, 2026-09-26.** (1) and (2) are resolved and the corpus is
+> 2702 passed / 0 failed / 70 skipped. What is left: **(3) `__va_start`** --
+> a fallback-only defect, uninvestigated -- and **(4)**, whose reason for not
+> running the corpus in CI no longer holds. The rest of this section is the
+> 2026-09-04 record.
+
 Everything left, in one place.  Before this section the answer was spread across
 a passing clause in the text above, an archived report, and a CI comment -- so a
 triage pass could not see it.
@@ -610,3 +616,13 @@ gap closed (turmeric#818), the expected baseline is 2637 + 11 = **2648 passed,
 57 failed** -- still red, and red for one tracked reason: (2) below. A
 permanently-red job teaches people to ignore it, so the corpus stays off until
 c2mir learns `__builtin_setjmp`.
+
+> **Stale reason, 2026-09-26.** The paragraph above was written before (2)
+> was resolved. It was resolved without c2mir learning `__builtin_setjmp`
+> (see "Resolution: the JIT longjmp"), and the corpus on Windows is now
+> **2702 passed / 0 failed / 70 skipped** -- so "permanently red" no longer
+> holds. The job still runs only the smoke test, and its comment in
+> `.github/workflows/ci.yml` gave the same stale reason until today. Running
+> the corpus there is now a question of runner time, not of a red baseline;
+> the `windows-split` job's sharding is the model if it is too slow for one
+> runner.
