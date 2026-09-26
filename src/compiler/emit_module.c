@@ -1601,10 +1601,12 @@ char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
     buf_puts(target, ") {\n");
     buf_printf(target, "    %s *__b = (%s *)malloc(sizeof(%s));\n", rc, rc, rc);
     if (inner_is_fat) {
-        buf_puts(target, "    void *__in = (void *)(intptr_t)((int64_t *)__e)[1];\n");
+        /* Not `__in`: MinGW's headers define it as an empty SAL annotation
+         * macro, which turned the declaration into `void * = ...`. */
+        buf_puts(target, "    void *__tur_inner = (void *)(intptr_t)((int64_t *)__e)[1];\n");
         buf_printf(target, "    *__b = ((%s (*)(void *", rc);
         for (uint32_t i = 0; i < n_params; i++) buf_puts(target, ", int64_t");
-        buf_puts(target, "))(intptr_t)((int64_t *)__in)[0])(__in");
+        buf_puts(target, "))(intptr_t)((int64_t *)__tur_inner)[0])(__tur_inner");
         for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
         buf_puts(target, ");\n");
     } else {
