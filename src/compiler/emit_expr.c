@@ -1182,6 +1182,18 @@ static const char *catch_thunk_box_shim(EmitCtx *ctx, const Expr *thunk, int *ow
         if (owns) *owns = 0;
         return ensure_catch_bits_shim(ctx, rr);
     }
+    /* An `any` result is a 16-byte `tur_tagged_t` returned BY VALUE, so the
+     * generic `int64_t (*)(void *)` call is the same mismatch -- and on Win64
+     * it is not a wrong value but a crash: a struct that size comes back
+     * through a hidden result pointer passed in the first argument register,
+     * so the thunk wrote its result through the fat box's env and read its
+     * env from the next register (saffron-catch-unwind-cps-panic, which only
+     * ever passed on SysV, where the struct rides rax:rdx).  Box it like any
+     * other by-value aggregate. */
+    if (rr.kind == TY_ANY) {
+        if (owns) *owns = 1;
+        return ensure_catch_box_shim(ctx, rr);
+    }
     if (!emit_type_is_byvalue_adt(ctx, ret)) return NULL;
     if (owns) *owns = 1;
     return ensure_catch_box_shim(ctx, rr);
@@ -2846,10 +2858,18 @@ bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
         emit_resolve_type(ctx, init->as.union_inject_.value->type).kind == TY_UNION)
         return false;
     /* Owned-here shapes only.  A frame-boxed widen is a STACK address -- freeing
-     * it would be far worse than the leak this closes. */
+     * it would be far worse than the leak this closes.
+     *
+     * any-scope-drop-frees-an-aliased-call-result: a CALL is owned here only
+     * when the callee mints the box (returns_fresh_any) or forwards one the
+     * caller owned -- the same any_expr_is_owned_temp the move-to-use rule
+     * (elab_forms.c) and the argument drop (elab_call.c) ask.  "Any call" was
+     * a use-after-free: `(let [a (vec-get xs 0)] ...)` over a `(Vec any)`, or
+     * a call returning a global, dropped a box its other holder still reads,
+     * and the next read printed garbage and exited 0. */
     bool owned_here =
         (init->kind == EX_UNION_INJECT && !init->as.union_inject_.frame_box)
-        || (init->kind == EX_CALL);
+        || (init->kind == EX_CALL && any_expr_is_owned_temp(init, 8));
     if (!owned_here) return false;
     if (any_box_binding_escapes(e->as.let_.body, b) &&
         !catch_box_binding_reader_confined(e->as.let_.body, b, e->type.kind))
@@ -5601,6 +5621,42 @@ static bool emit_call_is_region_scope(const Expr *e) {
 
 static char *emit_any_from_carrier(EmitCtx *ctx, Buf *body, char *v,
                                    const Expr *inner);   /* defined below */
+/* region-lock-hardening: is `(:: <from> <to>)` an ERASING ascription -- a
+ * value whose type reaches a region node, relabelled to a type the result
+ * walk reads as a scalar?  From there on the node is invisible to the static
+ * walk, so the erasure itself is the escape and must be noted.  Shared by the
+ * EX_ASCRIBE emit and the direct-call argument path, which strips an
+ * argument's ascriptions before emitting it
+ * (stdlib-region-store-hooks-unswept). */
+static bool region_ascription_erases_node(EmitCtx *ctx, Type from, Type to) {
+    const AdtDef *seen_a[32];
+    uint32_t na = 0;
+    /* `from` must be a type that can HOLD a node -- an ADT or a
+     * type application -- not merely one the walk refuses.  The
+     * walk says "reaches" for a raw pointer, a closure, a type
+     * variable too, and those are refusals of ignorance: a
+     * `(:: <ptr<void>> String)` relabel carries no node and
+     * hoisting it changed the text a downstream cast keyed on
+     * (the `__inst_Clone_clone_String` -Wint-conversion). */
+    bool from_can_hold_node =
+        (from.kind == TY_ADT &&
+         !(from.as.adt_.def && from.as.adt_.def->is_opaque)) ||
+        from.kind == TY_APP || from.kind == TY_STRUCT;
+    /* And `to` must be an ERASURE -- a word type the walk reads
+     * as a scalar -- not a refinement to another typed shape
+     * (`(:: (set-add ..) (Set (Vec int)))` pins a type argument;
+     * the walk still sees the elements afterwards, and hoisting
+     * the inner text there lost a downstream pointer cast). */
+    bool to_is_erasure =
+        to.kind == TY_INT || to.kind == TY_PTR_VOID || to.kind == TY_ANY;
+    /* No "and `to` reaches nothing" test: the walk answers YES for a
+     * `ptr<void>` and an `any` out of ignorance, so that test excluded exactly
+     * the two erasures the list above names -- `(:: node ptr<void>)` and
+     * `(:: node any)` were never noted (stdlib-region-store-hooks-unswept). */
+    return from_can_hold_node && to_is_erasure &&
+           region_type_reaches_node(ctx, from, seen_a, &na, 24);
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* G3 general catch-unwind splitter: a registered hole emits its C temp name
      * verbatim (the suspended sub-expression's already-delivered value). */
@@ -7202,18 +7258,31 @@ static char *emit_dyn_method(EmitCtx *ctx, Buf *body, const Expr *e) {
     char **av = na ? (char **)calloc(na, sizeof(char *)) : NULL;
     for (uint32_t i = 0; i < na; i++) av[i] = emit_value(ctx, body, e->as.dyn_method_.args[i]);
 
+    /* The receiver box and the looked-up slot are bound by STATEMENTS, and the
+     * call is left a bare prototype-cast call -- the same hoist emit_dyn_call
+     * makes for its callee box.  This used to be one struct-valued
+     * `({ tur_tagged_t __tur_dm = ...; ... })`, and c2mir/MIR-gen on x86-64
+     * miscompiles that in a call's ARGUMENT LIST
+     * (jit-x86-64-struct-valued-statement-expression-miscompiles): with two
+     * such calls in `(tri (.foldr t ...) (.foldl u ...) ...)` the engine
+     * handed the second one a float for a receiver and panicked `no instance
+     * of Foldable for float` (saffron-dyn-method-in-argument-position).
+     * Evaluation order is unchanged: the receiver was already emitted before
+     * the arguments, and the slot lookup still runs before any is read. */
+    char *dm = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body,
+        "tur_tagged_t %s = (%s); "
+        "const void *%s_f = __tur_inst_slot(\"%s\", \"%s\", TUR_GETTAG(%s), %d);\n",
+        dm, recv, dm, cls, meth, dm, (int)slot);
     Buf out; buf_init(&out);
-    buf_printf(&out,
-        "({ tur_tagged_t __tur_dm = (%s); "
-        "const void *__tur_df = __tur_inst_slot(\"%s\", \"%s\", "
-        "TUR_GETTAG(__tur_dm), %d); "
-        "((%s (*)(int64_t",
-        recv, cls, meth, (int)slot, rcn);
+    buf_printf(&out, "((%s (*)(int64_t", rcn);
     for (uint32_t i = 0; i < na; i++) buf_puts(&out, ", tur_tagged_t");
-    buf_puts(&out, "))__tur_df)(TUR_UNTAG(__tur_dm)");
+    buf_printf(&out, "))%s_f)(TUR_UNTAG(%s)", dm, dm);
     for (uint32_t i = 0; i < na; i++) buf_printf(&out, ", %s", av[i]);
-    buf_puts(&out, "); })");
+    buf_puts(&out, ")");
     buf_putc(&out, '\0');
+    free(dm);
     free(recv);
     for (uint32_t i = 0; i < na; i++) free(av[i]);
     free(av);
@@ -10603,6 +10672,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         preserve_ascribe_for_bridge = true;
                     }
                 }
+                /* stdlib-region-store-hooks-unswept: the strip below drops the
+                 * argument's ascriptions, and with them the note an ERASING one
+                 * owes -- `(f (:: node :int))` handed the node to `f` with no
+                 * note at all, so a store inside `f` let the generation rewind
+                 * under it.  Remember the erasure here and note the emitted
+                 * value after the emit, exactly as the EX_ASCRIBE case does.
+                 * The elaborator also wraps an implicit node -> `:int` argument
+                 * of an inline-C callee in such an ascription, so this is the
+                 * one place both reach the callee. */
+                bool rgn_erased = false;
+                Type rgn_from = type_simple(TY_UNKNOWN, CK_COPY);
+                if (regions_enabled() && !preserve_ascribe_for_bridge) {
+                    for (const Expr *a = arg_expr;
+                         a && a->kind == EX_ASCRIBE && a->as.ascribe_.inner;
+                         a = a->as.ascribe_.inner) {
+                        Type fr = emit_resolve_type(ctx, a->as.ascribe_.inner->type);
+                        if (region_ascription_erases_node(ctx, fr,
+                                emit_resolve_type(ctx, a->type))) {
+                            rgn_erased = true;
+                            rgn_from = fr;
+                            break;
+                        }
+                    }
+                }
                 if (!preserve_ascribe_for_bridge) {
                     while (arg_expr && arg_expr->kind == EX_ASCRIBE) arg_expr = arg_expr->as.ascribe_.inner;
                 }
@@ -10667,6 +10760,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 char *raw = emit_value(ctx, body, emit_arg);
                 ctx->sum_drop_admit = admit_prev;
+                if (rgn_erased && raw) {
+                    if (emit_str_is_bare_ident(raw)) {
+                        emit_region_note_lvalue(body, ctx->indent,
+                                                emit_type_c_name(ctx, rgn_from), raw);
+                    } else {
+                        const char *ect = emit_binding_repr_c_name(ctx, emit_arg->type,
+                                                                   emit_arg);
+                        if (ect) {
+                            char *et = fresh_tmp(ctx);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "%s %s = (%s);\n", ect, et, raw);
+                            emit_localvar_record_ctype(et, ect);
+                            emit_region_note_lvalue(body, ctx->indent, ect, et);
+                            free(raw);
+                            raw = et;
+                        }
+                    }
+                }
                 /* container-element-form-plan CE1/CE2 (store half): is this
                  * argument a Vec ELEMENT STORE whose slot form is CE_WORD for
                  * a niche element?  Then the bridges below hand the slot the
@@ -13598,8 +13709,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(wbits);
                     buf_puts(pbuf, "}\n\n");
                     indent_buf(body, ctx->indent);
-                    buf_printf(body, "void *%s = (void *)tur_async_fiber_via(%s, (void *)(intptr_t)%s);\n",
-                               tmp, wname, fn_val);
+                    buf_printf(body, "void *%s = (void *)%s(%s, (void *)(intptr_t)%s);\n",
+                               tmp, e->as.async_.on_thread ? "tur_async_thread_via"
+                                                           : "tur_async_fiber_via",
+                               wname, fn_val);
+                } else if (e->as.async_.on_thread && fn_expr->type.as.fn.boxed) {
+                    /* compiled-async-fiber-deadlocks-on-a-session-op: a body
+                     * that drives a session endpoint runs on its own thread. */
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "void *%s = (void *)tur_async_thread_via(__tur_async_call_box, (void *)(intptr_t)%s);\n",
+                               tmp, fn_val);
                 } else {
                     indent_buf(body, ctx->indent);
                     if (fn_expr->type.as.fn.boxed) {
@@ -15774,31 +15893,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * typed `nxt : Link` field, `(Vec Link)`) never takes this path
              * and keeps its rewinds. */
             if (regions_enabled() && inner_val) {
-                const AdtDef *seen_a[32], *seen_b[32];
-                uint32_t na = 0, nb = 0;
                 Type from = emit_resolve_type(ctx, e->as.ascribe_.inner->type);
                 Type to   = emit_resolve_type(ctx, e->type);
-                /* `from` must be a type that can HOLD a node -- an ADT or a
-                 * type application -- not merely one the walk refuses.  The
-                 * walk says "reaches" for a raw pointer, a closure, a type
-                 * variable too, and those are refusals of ignorance: a
-                 * `(:: <ptr<void>> String)` relabel carries no node and
-                 * hoisting it changed the text a downstream cast keyed on
-                 * (the `__inst_Clone_clone_String` -Wint-conversion). */
-                bool from_can_hold_node =
-                    (from.kind == TY_ADT &&
-                     !(from.as.adt_.def && from.as.adt_.def->is_opaque)) ||
-                    from.kind == TY_APP || from.kind == TY_STRUCT;
-                /* And `to` must be an ERASURE -- a word type the walk reads
-                 * as a scalar -- not a refinement to another typed shape
-                 * (`(:: (set-add ..) (Set (Vec int)))` pins a type argument;
-                 * the walk still sees the elements afterwards, and hoisting
-                 * the inner text there lost a downstream pointer cast). */
-                bool to_is_erasure =
-                    to.kind == TY_INT || to.kind == TY_PTR_VOID || to.kind == TY_ANY;
-                if (from_can_hold_node && to_is_erasure &&
-                    region_type_reaches_node(ctx, from, seen_a, &na, 24) &&
-                    !region_type_reaches_node(ctx, to, seen_b, &nb, 24)) {
+                if (region_ascription_erases_node(ctx, from, to)) {
                     /* The note needs an ADDRESSABLE lvalue, and this used to
                      * get one with `__auto_type t = (<inner>);` so the temp
                      * took the inner's exact emitted representation without

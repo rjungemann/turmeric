@@ -1,0 +1,9 @@
+;; parametric-stdlib-diagnostics-print-tyvar-internals: `A` is pinned to int by
+;; the first push, so the second push's mismatch names int -- the binding --
+;; not the bare kind name `tyvar`.
+(defn main [] : int
+  (let [v (vec-new)]
+    (vec-push! v 42)
+    (vec-push! v 7.25)
+    (vec-free v))
+  0)

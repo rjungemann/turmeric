@@ -34,7 +34,7 @@ from `spices/signal` fails `module 'signal/core' not found`, and `-I src` is
 taken as the *filename*. Removing the inline C was still the necessary half (a
 fixture carrying it is PASS-skipped no matter what else is fixed); the CLI half
 is filed separately as
-[interpret-takes-no-include-path-or-spice-discovery](../reported/interpret-takes-no-include-path-or-spice-discovery.md).
+[interpret-takes-no-include-path-or-spice-discovery](interpret-takes-no-include-path-or-spice-discovery.md).
 
 ---
 
@@ -92,7 +92,7 @@ The pairing this section asked for -- "check that the module's own tests then
 run under `--interpret`, since that is the point" -- could not be done, and the
 reason is not inline C. `tur --interpret` has no include path and no spice
 auto-discovery, so no multi-module spice test can be interpreted at all. Filed
-as [interpret-takes-no-include-path-or-spice-discovery](../reported/interpret-takes-no-include-path-or-spice-discovery.md).
+as [interpret-takes-no-include-path-or-spice-discovery](interpret-takes-no-include-path-or-spice-discovery.md).
 
 ## Not this
 

@@ -408,6 +408,15 @@ typedef struct TuriEnv {
     /* Base directory for resolving module imports (NULL = ".").
      * Set this before turi_eval_file when the input uses (import ...). */
     const char  *module_base_dir;
+    /* Extra module-search directories (`-I` flags plus the enclosing spice's
+     * src/ and its :spices deps), searched after the importing file's
+     * directory and the stdlib -- the same list the compiling per-file
+     * commands hand the elaborator.  BORROWED: the embedder owns the array and
+     * its strings and keeps them alive for the env's lifetime; turi_env_free
+     * never touches them.  NULL/0 = none.
+     * See docs/archive/interpret-takes-no-include-path-or-spice-discovery.md */
+    const char **include_dirs;
+    int          n_include_dirs;
     /* Phase R2: catch-unwind support — setjmp boundary for interpreter panic handling */
     jmp_buf     *catch_jmp;           /* active catch-unwind jmp_buf, or NULL */
     char         catch_panic_msg[512]; /* copy of panic message when longjmp fires */

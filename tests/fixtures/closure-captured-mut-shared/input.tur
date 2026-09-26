@@ -1,0 +1,63 @@
+;; compiled-closure-copies-a-captured-mut: a compiled closure COPIED each
+;; variable it captured into its env, so a `set!` in one closure (or in the
+;; enclosing scope) was invisible to every other copy -- the interpreter,
+;; whose closures share the frame, disagreed.  A `^mut` a lambda captures now
+;; lives in one shared heap cell, and every closure's env holds the cell.
+
+(defn apply3 [f : (fn [int] nil)] : nil (f 1) (f 2) (f 3))
+(defn apply3f [f : (fn [float] nil)] : nil (f 7.1) (f 2.5) (f 0.25))
+(defn twice [f : (fn [] nil)] : nil (f) (f))
+
+(defn make-counter [] : (fn [] int)
+  (let [^mut n 0]
+    (fn [] : int (set! n (+ n 1)) n)))
+
+(defn main [] : int
+  ;; The report's typed repro: set! after the closure is built.
+  (let [^mut y : int 1]
+    (let [g (fn [] : int y)]
+      (set! y 3)
+      (println (g))))                                  ;; 3 (was 1)
+  ;; Accumulate through a callback.
+  (let [^mut acc 0]
+    (apply3 (fn [x : int] : nil (set! acc (+ acc x))))
+    (println acc))                                     ;; 6 (was 0)
+  ;; A float cell (non-zero fractions).
+  (let [^mut total : float 0.5]
+    (apply3f (fn [x : float] : nil (set! total (+ total x))))
+    (println total))                                   ;; 10.35
+  ;; A closure that only WRITES the variable (used to be a cc error).
+  (let [^mut n 0
+        setn (fn [] : nil (set! n 5))]
+    (setn)
+    (println n))                                       ;; 5
+  ;; Two closures over one variable, bound in the same let.
+  (let [^mut n 0
+        bump (fn [] : nil (set! n (+ n 1)))
+        peek (fn [] : int n)]
+    (bump) (bump)
+    (println (peek)))                                  ;; 2
+  ;; Escaping counters: each call of make-counter gets its own cell.
+  (let [c1 (make-counter)
+        c2 (make-counter)]
+    (c1) (c1)
+    (println (c1))                                     ;; 3
+    (println (c2)))                                    ;; 1
+  ;; Nested lambdas share the one cell.
+  (let [^mut hits 0]
+    (twice (fn [] : nil (twice (fn [] : nil (set! hits (+ hits 1))))))
+    (println hits))                                    ;; 4
+  ;; A fresh cell per loop iteration.
+  (let [^mut i 0
+        ^mut sum 0]
+    (while (< i 3)
+      (let [^mut k i]
+        (twice (fn [] : nil (set! k (+ k 10))))
+        (set! sum (+ sum k)))
+      (set! i (+ i 1)))
+    (println sum))                                     ;; 63
+  ;; A cstr cell.
+  (let [^mut msg "before"]
+    (twice (fn [] : nil (set! msg "after")))
+    (println msg))                                     ;; after
+  0)

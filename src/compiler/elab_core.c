@@ -3093,12 +3093,34 @@ static bool expr_fat_dispatches_closure(const Expr *e) {
  * result_full_type.  A TY_FN with result_full_type = TY_TYVAR(name) IS handled
  * by Direction 3 (emit derives the real C type from the binding's resolved type)
  * and should NOT trigger the guard or block the inner-spec clone. */
+/* A result kind the fat-dispatch call's own type spells exactly: a scalar is
+ * never erased to the carrier, so the call site's C return type is it. */
+static bool dispatch_result_kind_is_scalar(TypeKind k) {
+    switch (k) {
+        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_CSTR:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool binding_dispatch_is_untyped(const Binding *fb) {
     if (!fb || fb->is_global) return false;
     if (fb->type.kind == TY_PTR_VOID) return true;
     if (fb->type.kind != TY_FN) return false;
     const Type *rfull = fb->type.as.fn.result_full_type;
-    return !(rfull && rfull->kind == TY_TYVAR && rfull->as.tyvar_.name);
+    if (rfull && rfull->kind == TY_TYVAR && rfull->as.tyvar_.name) return false;
+    /* generic-closure-float-passed-to-fn-typed-callback: a CONCRETE scalar
+     * result is not erased either -- the call's own type is that scalar, so
+     * Direction 3 has nothing to recover on the result side, and it already
+     * resolves the declared ARG types through the spec.  `(k v)` with
+     * `k : (fn [A] bool)` is therefore typed; only its A needed the spec. */
+    TypeKind rk = rfull ? rfull->kind : fb->type.as.fn.result_kind;
+    if (dispatch_result_kind_is_scalar(rk)) return false;
+    return true;
 }
 
 static bool expr_fat_dispatches_untyped(const Expr *e) {

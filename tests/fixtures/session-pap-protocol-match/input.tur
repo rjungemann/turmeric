@@ -1,0 +1,47 @@
+;; pap-captured-arg-skips-session-role-protocol-check, positive control: a
+;; session endpoint captured by a partial application is compared against
+;; the slot's protocol, and a MATCHING protocol is accepted -- including an
+;; endpoint partway through a `Rec` protocol, whose unfolded continuation
+;; must still equal the folded form the parameter declares.
+;;
+;; Expected output:
+;; 10
+;; 20
+;; 30
+
+(load "stdlib/session.tur")
+
+(defn server-loop [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
+  (match (offer ch)
+    (Left ch)
+      (let [[n ch] (recv ch)]
+        (let [ch (send ch n)]
+          (server-loop ch)))
+    (Right ch)
+      (close ch)))
+
+;; client-step: send val, recv echo, print it, return updated channel.
+(defn client-step [^linear ch :(Session (Rec self (Choose (Send int (Recv int self)) Close))) val :int] :(Session (Rec self (Choose (Send int (Recv int self)) Close)))
+  (let [ch (choose-left ch)]
+    (let [ch (send ch val)]
+      (let [[r ch] (recv ch)]
+        (println r)
+        ch))))
+
+(defn main [] :int
+  (let [[r s] (make-session (Rec self (Branch (Recv int (Send int self)) Close)))]
+    (let [t (session-spawn (fn [] (server-loop r)))]
+      ;; One round driven by hand, so `s` is the Rec body's continuation.
+      (let [s (choose-left s)]
+        (let [s (send s 10)]
+          (let [[v s] (recv s)]
+            (println v)
+            ;; Captured partway through the Rec: still matches the fold.
+            (let [step20 (client-step s)]
+              (let [s (step20 20)]
+                (let [step30 (client-step s)]
+                  (let [s (step30 30)]
+                    (let [s (choose-right s)]
+                      (close s)
+                      (session-join t)))))))))))
+  0)

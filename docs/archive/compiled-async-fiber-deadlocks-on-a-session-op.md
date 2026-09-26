@@ -1,5 +1,40 @@
 # A session op inside `async` deadlocks the compiled program, with no diagnostic
 
+**RESOLVED 2026-09-26, by a smaller route than direction 1.** Direction 1
+asked for a session op to become an `await`-shaped suspension point in a
+compiled async body -- a CPS colouring of every function on the path. It is
+not needed: the deadlock is only that the body shares the spawner's thread,
+and `session-spawn` already shows the fix for that shape is a thread.
+
+An `(async ...)` whose body **captures** a Session / Role endpoint -- the
+exact condition TUR-W0043 used to warn on -- is now spawned on its own OS
+thread (`tur_async_thread_via`, the emitted async runtime in emit_module.c;
+`on_thread` on the node, set by `elab_async`). The body runs there, fulfills
+its future there, and every `await` of that future (`tur_await_future`, and
+the CPS `__tur_await_body`) joins the thread first, after which it is an
+ordinary completed future. `on_complete` is deliberately not fired from the
+worker: a parked continuation must resume on its own thread. A panic in the
+body rejects the future and re-raises at the `await`, as for the inline
+spawns (`tur_panicking` and the handler chain are thread-local). Every other
+`async` is emitted exactly as before.
+
+TUR-W0043 no longer fires for a captured endpoint. It stays for the one
+shape a thread cannot help: a body that makes BOTH endpoints and spells ops
+on them itself, where both ends of the protocol are in one straight-line
+body. `tur explain TUR-W0043`, the session-types guide and the turi-parity
+guide say so.
+
+Pinned by `tests/fixtures/session-async-peer-on-thread` -- the repro below,
+a typed payload through the thread's future, a recursive `Rec` server loop
+as the async peer, and a multi-party role endpoint -- identical compiled and
+under `--interpret`. `session-async-warn` now pins the lexical shape that
+still warns.
+
+Known limits: a future that is never awaited leaves its thread unjoined
+until exit; and a thread-backed body that itself awaits a still-pending
+future on another thread's scheduler is not a supported shape (the park
+state it would use is process-global).
+
 **Severity: medium-high.** The most natural way to write the peer side of a
 session protocol -- `(async (fn [] (server ch)))` -- compiles clean and then
 **hangs forever** on the compiled path. No warning at elaboration, no runtime

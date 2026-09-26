@@ -134,6 +134,10 @@
 ;;; Since: Phase TC1
 
 (defn ttail [A] [l : (Cons A)] : (Cons A) (.tail l))
+;;; tlength-acc__ -- internal: tail-recursive count behind `tlength`.
+(defn tlength-acc__ [A] [xs : (Cons A) n : int] : int
+  (if (= (:: xs :int) 0) n (tlength-acc__ (.tail xs) (+ n 1))))
+
 ;;; tlength -- count the elements of a typed (Cons A) list.
 ;;;
 ;;; The element-aware sibling of `list-length`. Where `list-length` walks the
@@ -141,6 +145,10 @@
 ;;; reads `(.tail xs)` at the concrete `(Cons A)` layout, so it stays correct
 ;;; when A is a by-value aggregate (e.g. `(Option int)`) whose head pushes the
 ;;; tail link past offset 8 -- the carrier walk segfaults there, this does not.
+;;; The same holds for an `any` element, whose head is a two-word tagged value:
+;;; a call to `list-length` / `length` on such a list is elaborated as a call to
+;;; `tlength` (list-length-on-cons-any-segfaults). The walk is tail-recursive,
+;;; so a long list costs no stack.
 ;;;
 ;;; Parameters:
 ;;;   xs -- the (Cons A) list to measure
@@ -153,9 +161,14 @@
 ;;;
 ;;; Since: Phase G4 (carrier<->concrete ABI crossing audit)
 
-(defn tlength [A] [xs : (Cons A)] : int
-  (if (= (:: xs :int) 0) 0 (+ 1 (tlength (.tail xs)))))
+(defn tlength [A] [xs : (Cons A)] : int (tlength-acc__ xs 0))
 ;;; list-length -- count the number of elements in a typed list.
+;;;
+;;; Walks the carrier cell `{ int64_t head; int64_t tail; }`. A `(Cons A)`
+;;; whose head is wider than that word -- an `any` element (every Saffron
+;;; list) or an inline by-value aggregate -- is counted by `tlength` instead:
+;;; the call is elaborated as `(tlength l)`, and likewise `length`,
+;;; `list-head`/`car` and `list-tail`/`cdr` for their typed twins.
 ;;;
 ;;; Parameters:
 ;;;   l -- List[A]

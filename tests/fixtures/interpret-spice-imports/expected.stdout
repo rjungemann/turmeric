@@ -1,0 +1,15 @@
+compiled control: 42 0 (exit 0)
+interpret, auto-spice: 42 0 (exit 0)
+interpret, abs path: 42 0 (exit 0)
+interpret, -I src: 42 0 (exit 0)
+interpret, -Isrc + args: 42 3 (exit 0)
+interpret, no-auto-spice:  (exit 1)
+    module 'demo/core' not found
+engine=interp: 42 0 (exit 0)
+engine=interp, -I src: 42 0 (exit 0)
+eval --file -I: 42 0 (exit 0)
+bare -I:  (exit 2)
+    -I requires a directory argument
+loose, -I: 42 0 (exit 0)
+loose, no -I:  (exit 1)
+    module 'demo/core' not found

@@ -1,5 +1,28 @@
 # Under-saturating a call bypasses the session/role protocol check
 
+**RESOLVED 2026-09-26.** Fixed as directed: the partial-application gate in
+`src/compiler/elab_call.c` (the capture loop of the PAP builder) now admits
+`TY_SESSION` and `TY_ROLE` alongside `TY_STRUCT`/`TY_ADT`, in both the
+recorded-full-type test and the kind fallback, and the flag is renamed
+`slot_needs_full_type_check` (a protocol is structural, not nominal).
+`type_eq` does the comparing, so no new comparison logic was needed. The
+line numbers below are from the filing; the block has since moved to about
+`elab_call.c:5100`.
+
+Pinned by three fixtures:
+
+- `tests/fixtures/errors/session-protocol-mismatch-at-pap` -- the repro
+  below; `tur check` exited 0 before, now `TUR-E0001 ... expected
+  Session[Close], got Session[Send[int, Close]]` on both engines.
+- `tests/fixtures/errors/role-protocol-mismatch-at-pap` -- the `TY_ROLE`
+  shape: a role-B endpoint captured into a role-A slot. Before the fix only
+  the program's saturated mismatch (`role-b`) was reported; the fixture
+  asserts the partial application's own `function 'role-a' arg 1`.
+- `tests/fixtures/session-pap-protocol-match` -- the positive control the
+  report asked for: an endpoint captured partway through a `Rec` protocol
+  (after one hand-driven round) still matches the parameter's folded form,
+  and the program runs to `10 20 30` compiled and under `--interpret`.
+
 **Summary:** The saturated positional argument check compares a session or role
 endpoint's full protocol (`elab_call.c:6487`, added by
 `session-type-eq-ignores-the-protocol`), but the **partial-application** path

@@ -1,0 +1,92 @@
+;; stdlib-capability-vtables-uncompilable: stdlib/capability.tur declared each
+;; capability struct INSIDE its own `*-type` defn, so the tag had block scope
+;; and every other body named a fresh, incomplete type -- `(load
+;; "stdlib/capability.tur")` plus a bare main was 36 C errors.  No in-tree
+;; program loaded it, which is how it stayed broken; this one does, and drives
+;; each capability end to end through the typed handles and `c-fn` callbacks.
+;;
+;; It also crosses the implementation modules: a Real-FileSystem from
+;; stdlib/io.tur and a Mock-Time from the time module are the same FileSystem /
+;; Time the helpers here take.
+
+(load "stdlib/capability.tur")
+(load "stdlib/io.tur")
+
+;; ---- callbacks, spelled with the vtable's own C types ----
+
+(defn say [level : cstr msg : cstr] : nil
+  ```c printf("%s: %s\n", level, msg); ```)
+(defn say-debug [msg : cstr] : nil (say "debug" msg))
+(defn say-info [msg : cstr] : nil (say "info" msg))
+(defn say-warn [msg : cstr] : nil (say "warn" msg))
+(defn say-error [msg : cstr] : nil (say "error" msg))
+
+(defn fixed-int [lo : i32 hi : i32] : i32 {hi - lo})
+(defn fixed-float [] : i32 2500)
+
+(defn fake-now [] : i32 1234)
+(defn show-slept [ms : int] : nil
+  ```c printf("slept %d\n", (int)ms); ```)
+(defn fake-sleep [ms : i32] : nil (show-slept (as int ms)))
+
+;; The narrow-typed callbacks are pure Turmeric; the byte work is in helpers
+;; that take the carrier int.
+(defn copy-hi [buf : ptr<u8> len : int out : ptr<i32>] : int
+  ```c
+  int n = len < 2 ? (int)len : 2;
+  memcpy(buf, "hi", (size_t)n);
+  *out = n;
+  return 0;
+  ```)
+(defn zero-count [out : ptr<i32>] : int
+  ```c *out = 0; return 0; ```)
+
+(defn mem-read [path : cstr buf : ptr<u8> len : i32 out : ptr<i32>] : i32
+  (as int32 (copy-hi buf (as int len) out)))
+(defn mem-write [path : cstr data : ptr<u8> len : i32] : i32
+  (as int32 {(as int len) - 5}))
+(defn mem-delete [path : cstr] : i32 7)
+(defn mem-list [path : cstr entries : ptr<void> max : i32 out : ptr<i32>] : i32
+  (as int32 (zero-count out)))
+
+(defn make-buf [n : int] : ptr<void>
+  ```c return calloc(1, (size_t)n); ```)
+(defn buf-str [p : ptr<void>] : cstr
+  ```c return (const char *)p; ```)
+(defn free-buf [p : ptr<void>] : nil
+  ```c free(p); ```)
+
+(defn main [] : int
+  (with-capability [lg (make-Logger say-debug say-info say-warn say-error)]
+    (log-debug lg "one")
+    (log-info lg "two")
+    (log-warn lg "three")
+    (log-error lg "four")
+    (Logger-free lg))
+  (let [rng (make-Random fixed-int fixed-float)]
+    (println (rng-next-int rng 1 6))       ;; 5
+    (println (rng-next-float rng))         ;; 2500
+    (Random-free rng))
+  (let [clock (make-Time fake-now fake-sleep)]
+    (println (time-now clock))             ;; 1234
+    (time-sleep clock 250)                 ;; slept 250
+    (Time-free clock))
+  ;; The time module's own handle, read by the same helper.
+  (let [mock (Mock-Time)]
+    (mock-time-set mock 1000)
+    (println (time-now mock))              ;; 1000
+    (Mock-Time-free mock))
+  (let [fs  (make-FileSystem mem-read mem-write mem-delete mem-list)
+        buf (make-buf 8)]
+    (println (fs-read fs "x" buf 8))       ;; 0
+    (println (buf-str buf))                ;; hi
+    (println (fs-write fs "x" buf 5))      ;; 0
+    (println (fs-delete fs "x"))           ;; 7
+    (println (fs-list fs "." buf 0))       ;; 0
+    (free-buf buf)
+    (FileSystem-free fs))
+  ;; stdlib/io.tur's libc-backed FileSystem is the same capability.
+  (let [fs (Real-FileSystem)]
+    (println (fs-delete fs "/nonexistent/tur-capability-fixture"))  ;; -1
+    (Real-FileSystem-free fs))
+  0)

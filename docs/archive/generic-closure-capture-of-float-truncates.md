@@ -36,7 +36,8 @@ description: (capture 7.25) returns 7. The monomorphized spec assigns a `double`
 > **fn-typed callback** inside the closure -- a different defect (the shared
 > thunk dispatches the callback through the carrier ABI into a typed
 > `double` shim), see
-> [generic-closure-float-passed-to-fn-typed-callback](../reported/generic-closure-float-passed-to-fn-typed-callback.md).
+> [generic-closure-float-passed-to-fn-typed-callback](generic-closure-float-passed-to-fn-typed-callback.md)
+> (fixed 2026-09-26).
 > The `dfs-set` shape S2 was blocked on (a captured value handed to a carrier
 > store) works: a `vec-push!` of a captured `7.25` reads back `7.25`.
 

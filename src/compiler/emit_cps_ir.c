@@ -10273,7 +10273,18 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * reap frees it -- copy the value into a local first, then reap. */
     if (!void_ret) {
         char *ld = slot_load(ctx, rt->kind, rt, "__r", false);
-        buf_printf(file, "    %s __ret = %s;\n", rety, ld);
+        /* A boxed (Tier-C) return is read through the box pointer, and a body
+         * that panicked returned before delivering one: its `if
+         * (tur_panicking) return 0;` check leaves __r NULL.  Reading through
+         * it was the SIGSEGV under `catch-unwind` in
+         * saffron-catch-unwind-around-dyn-call-fn-crashes -- the panic never
+         * reached the boundary that was waiting to catch it.  A zero value
+         * goes back instead, and the caller's own panic check propagates. */
+        Type _rr; const Type *rrt = cps_resolve_ty(rt, &_rr);
+        if (slot_box_ty(rrt))
+            buf_printf(file, "    %s __ret = __r ? %s : (%s){0};\n", rety, ld, rety);
+        else
+            buf_printf(file, "    %s __ret = %s;\n", rety, ld);
         free(ld);
     }
     /* cps-async (F3.2/gap-2): if the body PARKED on a pending await, a

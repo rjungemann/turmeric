@@ -44,6 +44,13 @@
   ;; Float element (non-zero fractional part, per the float-probe rule).
   (let [fs (:: (list 7.1 2.5) (Cons float))]
     (println (tlength fs)))                          ;; 2
+  ;; The carrier helpers on the same list: list-length-on-cons-any-segfaults
+  ;; routes them to tlength/thead/ttail for an inline aggregate head, so they
+  ;; no longer read the tail out of the middle of the (Option int).
+  (let [xs (:: (list (some 42) (some 7) (some 100)) (Cons (Option int)))]
+    (println (list-length xs))                     ;; 3
+    (println (length (list-tail xs)))              ;; 2
+    (println (opt-or (list-head xs) 0)))           ;; 42
   ;; Empty list: zero, no walk.
   (let [es (:: (tnil) (Cons (Option int)))]
     (println (tlength es)))                          ;; 0

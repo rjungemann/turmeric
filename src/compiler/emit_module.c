@@ -4448,6 +4448,23 @@ static bool abi_type_binds_to_byval_aggregate(const Type *t,
     return false;
 }
 
+/* generic-closure-float-passed-to-fn-typed-callback: does fn type `t` take or
+ * return a float-bound tyvar at the top level of its own signature?  A value of
+ * such a type is a fat box whose slot 0 is the TYPED shim (`double` in xmm0),
+ * so the shared thunk that dispatches it through the int64 carrier passes the
+ * bits in the wrong register class. */
+static bool abi_fn_type_mentions_float_tyvar(const Type *t,
+        const AbiTypeBinding *bindings, uint8_t n_bindings) {
+    if (!t || t->kind != TY_FN) return false;
+    if (abi_type_binds_to_float(t->as.fn.result_full_type, bindings, n_bindings))
+        return true;
+    for (uint32_t i = 0; i < t->as.fn.arity; i++) {
+        const Type *at = t->as.fn.arg_full_types ? t->as.fn.arg_full_types[i] : NULL;
+        if (abi_type_binds_to_float(at, bindings, n_bindings)) return true;
+    }
+    return false;
+}
+
 static bool emit_inner_closure_needs_float_spec(Binding *inner,
         const AbiTypeBinding *bindings, uint8_t n_bindings) {
     if (!inner || inner->type.kind != TY_FN) return false;
@@ -4460,6 +4477,11 @@ static bool emit_inner_closure_needs_float_spec(Binding *inner,
         const Type *at = inner->type.as.fn.arg_full_types
             ? inner->type.as.fn.arg_full_types[i] : NULL;
         if (abi_type_binds_to_float(at, bindings, n_bindings)) return true;
+        /* A fn-typed parameter the body dispatches: `(fn [k : (fn [A] bool)]
+         * (k v))` at A = float.  The clone dispatches `k` with the resolved
+         * signature (emit_expr.c Direction 3), matching the typed shim the
+         * caller boxed it with. */
+        if (abi_fn_type_mentions_float_tyvar(at, bindings, n_bindings)) return true;
     }
     return false;
 }
@@ -14327,6 +14349,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    const char *error;  /* NULL if no error */\n");
     buf_puts(out, "    FiberBlock *fiber;  /* The fiber running the async task */\n");
     buf_puts(out, "    struct { void (*fn)(TurFuture *, int64_t); void *env; } on_complete;\n");
+    buf_puts(out, "    void *thread;       /* pthread_t * of a thread-backed async; joined by await */\n");
     buf_puts(out, "};\n\n");
     
     buf_puts(out, "/* Create a new pending future */\n");
@@ -14510,10 +14533,71 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return future;\n");
     buf_puts(out, "}\n\n");
 
+    /* compiled-async-fiber-deadlocks-on-a-session-op: the THREAD-backed spawn.
+     *
+     * Compiled `async` runs its body inline on the spawner's stack, so a body
+     * that drives a session endpoint -- `(async (fn [] (recv r)))` -- blocked
+     * the one thread that could ever run the peer's `send`: a hang with no
+     * diagnostic.  An async whose body captures a Session / Role endpoint
+     * (elab_async sets `on_thread`) is spawned here instead: the body runs on
+     * its own OS thread, exactly as a session-spawn peer does, and the future
+     * is fulfilled from that thread.  `on_complete` is NOT fired there -- a
+     * parked continuation must resume on its own thread -- so every await of
+     * such a future joins the thread first (tur_future_join_thread), after
+     * which the future is an ordinary completed one.  A panic in the body
+     * rejects the future, as for the inline spawns (tur_panicking and the
+     * handler chain are thread-local). */
+    buf_puts(out, "typedef struct { int64_t (*call)(void *); void *env; TurFuture *future; } TurAsyncThreadArg;\n\n");
+    buf_puts(out, "static int64_t __tur_async_call_box(void *clos) {\n");
+    buf_puts(out, "    int64_t (*__fn)(void *) = *(int64_t (**)(void *))clos;\n");
+    buf_puts(out, "    return __fn(clos);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void *tur_async_thread_main(void *p) {\n");
+    buf_puts(out, "    TurAsyncThreadArg *a = (TurAsyncThreadArg *)p;\n");
+    buf_puts(out, "    TurFuture *future = a->future;\n");
+    buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
+    buf_puts(out, "    tur_handler_chain = &__node;\n");
+    buf_puts(out, "    int64_t result = a->call(a->env);\n");
+    buf_puts(out, "    tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "    free(a);\n");
+    buf_puts(out, "    if (!tur_async_reject_if_panicking(future)) {\n");
+    /* A plain store, like tur_future_fulfill's: every reader of a threaded
+     * future joins the thread first (tur_future_join_thread), and the join is
+     * the synchronization.  Not a literal `__atomic_store_n` -- c2mir has no
+     * `__atomic_*` builtins, and one here made every `tur jit` program fall
+     * back to cc (TUR-W0070); the preamble's TUR_ATOMIC_* layer exists for
+     * exactly that reason. */
+    buf_puts(out, "        future->value = result;\n");
+    buf_puts(out, "        future->status = FUTURE_FULFILLED;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    return NULL;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static TurFuture *tur_async_thread_via(int64_t (*call)(void *), void *env) {\n");
+    buf_puts(out, "    TurFuture *future = tur_future_new();\n");
+    buf_puts(out, "    if (!tur_scheduler) tur_scheduler = tur_scheduler_new();\n");
+    buf_puts(out, "    TurAsyncThreadArg *a = (TurAsyncThreadArg *)malloc(sizeof(TurAsyncThreadArg));\n");
+    buf_puts(out, "    pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));\n");
+    buf_puts(out, "    if (!a || !tid) { fprintf(stderr, \"async: out of memory\\n\"); abort(); }\n");
+    buf_puts(out, "    a->call = call; a->env = env; a->future = future;\n");
+    buf_puts(out, "    if (pthread_create(tid, NULL, tur_async_thread_main, a) != 0) {\n");
+    buf_puts(out, "        fprintf(stderr, \"async: pthread_create failed\\n\");\n");
+    buf_puts(out, "        abort();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    future->thread = (void *)tid;\n");
+    buf_puts(out, "    return future;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void tur_future_join_thread(TurFuture *f) {\n");
+    buf_puts(out, "    if (!f || !f->thread) return;\n");
+    buf_puts(out, "    pthread_join(*(pthread_t *)f->thread, NULL);\n");
+    buf_puts(out, "    free(f->thread);\n");
+    buf_puts(out, "    f->thread = NULL;\n");
+    buf_puts(out, "}\n\n");
+
     /* Await a future using shift + scheduler. If future is done, return value directly. */
     buf_puts(out, "/* AW-004: await lowering with shift + scheduler callback */\n");
     buf_puts(out, "static int64_t tur_await_future(TurFuture *f) {\n");
     buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
+    buf_puts(out, "    tur_future_join_thread(f);\n");
     buf_puts(out, "    if (tur_future_done(f)) {\n");
     buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
     buf_puts(out, "            /* Re-raise the task's panic at the point that demanded the\n");
@@ -14583,6 +14667,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static intptr_t __tur_await_body(intptr_t env, DK *subk) {\n");
     buf_puts(out, "    TurFuture *f = (TurFuture *)(intptr_t)env;\n");
     buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
+    buf_puts(out, "    tur_future_join_thread(f);\n");
     buf_puts(out, "    if (tur_future_done(f)) {\n");
     buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
     buf_puts(out, "            /* Same re-raise as tur_await_future; the resumed continuation\n");

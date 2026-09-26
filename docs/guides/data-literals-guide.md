@@ -8,7 +8,8 @@ description: Compact literal syntax for maps, vecs, and sets using #map{...}, #s
 
 Turmeric's data literals give map, vec, and set construction a compact
 literal syntax whose slot values are ordinary expressions, evaluated at
-runtime in the surrounding scope. They are sugar over the `hamt-of`,
+runtime in the surrounding scope -- a lambda included, so a `#map{...}` of
+`(fn ...)` values is a dispatch table. They are sugar over the `hamt-of`,
 `vec-of`, and `set-of` stdlib macros.
 
 ```turmeric no-check

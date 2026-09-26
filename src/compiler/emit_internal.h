@@ -1252,6 +1252,10 @@ void emit_pending_drops_drain(EmitCtx *ctx, Buf *body, const uint32_t m[3]);
  * copy out and free) is not counted as an escape.  Used to prove a returned
  * caught box is sole-owned -- it escapes nowhere except that return. */
 bool any_box_binding_escapes(const Expr *e, const Binding *b);
+/* Does `x` evaluate to an `any` whose payload box it owns (a fresh widen, a
+ * returns_fresh_any call, or a passthrough of an owned argument)?  Defined in
+ * elab_call.c; the scope-exit drop asks it of a call initializer. */
+bool any_expr_is_owned_temp(const Expr *x, int depth);
 bool any_box_binding_escapes_except(const Expr *e, const Binding *b,
                                     const Expr *ignore);
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,

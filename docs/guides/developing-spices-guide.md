@@ -1129,7 +1129,10 @@ The per-file subcommands `tur check`, `tur emit-c`, `tur emit-h`,
 `tur build <file>`, and `tur run <file>` get the same module resolution
 automatically -- they walk up from the input file looking for a sibling
 `build.tur` and add that spice's `src/` (and its `:spices` deps' `src/`)
-to the include path.
+to the include path. The interpreter entry points do too: `tur interpret`
+(`tur --interpret`), `tur debug`, `tur eval --file`, and
+`tur run --engine=interp`, so a spice's `tests/` interpret from the spice
+root with no flags.
 
 This means editors, format-on-save hooks, LSP clients, and quick
 "compile this one file" loops work without per-spice configuration:
@@ -1156,7 +1159,8 @@ tur check -I vendor/alternate src/main.tur
 ```
 
 `-I` accepts both the spaced (`-I path`) and concatenated (`-Ipath`)
-forms.
+forms. For `tur interpret` and `tur debug` the flags go before the file:
+everything after the file is the program's `*args*`, a `-I` included.
 
 ### `--no-auto-spice` escape hatch
 

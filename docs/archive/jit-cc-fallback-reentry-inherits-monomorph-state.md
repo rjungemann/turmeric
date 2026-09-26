@@ -1,7 +1,34 @@
 # `tur jit`'s cc fallback re-enters `cmd_run` with the abandoned engine attempt's monomorph state
 
-**Status update 2026-09-10: finding 1 is FIXED. Finding 2 is untouched and
-still open, so this report stays.**
+**RESOLVED 2026-09-26 -- both findings.** Finding 1 was fixed 2026-09-10
+(below). Finding 2 turned out to be a measurement artifact of the fixture, not
+a collector difference, and the fixture is now build-independent:
+
+- **Unsanitized JIT (the failure).** The delta is the engine's own one-off
+  allocation, not a leak: it reads the same 1344 / 688 bytes at 5000 and at
+  50000 iterations, where a leak scales with the count. The in-process engine
+  generates code on a path's first execution, and the first measurement window
+  was the first execution of the tail of `heap-bytes` after its probe and of
+  the subtraction. The fixture now runs one throwaway window before the two
+  real ones, and an unsanitized `tur jit` reads `0 0`, like `tur run`.
+- **Sanitized JIT (CI, which passed).** `mallinfo2` cannot see the ASan
+  allocator at all -- a plain C probe reads 0 for a 100 KB `malloc` under
+  `-fsanitize=address` and 100672 without -- so in-process under a sanitized
+  `tur` this probe is vacuous whatever the program does. The compiled leg
+  (`tur run`, an unsanitized binary) is where the fixture's leak check is
+  real, and it stays so.
+- **Still detects a leak.** A negative control -- a 16-byte `malloc` per
+  `acyclic` call -- reads ~160 KB in the first window on both `tur run` and the
+  unsanitized `tur jit`.
+
+The same session's JIT build also ran the rest of the corpus: 3142 passed,
+this fixture the one failure. (It surfaced a separate regression -- a literal
+`__atomic_store_n` in the threaded-async preamble that sent every `tur jit`
+program to cc -- fixed in the same change set and guarded by
+`tests/check-no-atomic-builtins.sh`.)
+
+**Status update 2026-09-10: finding 1 is FIXED. Finding 2 was untouched and
+still open, so this report stayed.**
 
 Reproduced first, which needed a forcing route: the lens fixtures no longer
 fall back on their own, so `TUR_JIT_FORCE_FALLBACK=1` was added to `cmd_jit`

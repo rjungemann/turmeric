@@ -1,0 +1,27 @@
+;; any-scope-drop-frees-an-aliased-call-result, the other direction: narrowing
+;; the scope-end drop to OWNED call results must not stop it freeing them.
+;; Leak-checked (requires.leak-check): `mint`'s fresh box is dropped when its
+;; let closes, and `fetch`'s alias of the global is left to the global.
+(defstruct P [x : int y : int])
+
+(def g : any (:: (P 1 2) any))
+
+(defn fetch [] : any g)
+
+(defn mint [n : int] : any (:: (P n (+ n 1)) any))
+
+;; A passthrough: forwards its argument, so an owned argument stays owned.
+(defn thru [a : any] : any a)
+
+(defn show [a : any] : int
+  (.x (cast a P)))
+
+(defn main [] : int
+  (let [a (fetch)]
+    (println (show a)))
+  (let [c (mint 11)]
+    (println (show c)))
+  (let [d (thru (mint 21))]
+    (println (show d)))
+  (println (show g))
+  0)

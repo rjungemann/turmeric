@@ -310,10 +310,11 @@ S2 landed 13 of 19 sites (ref, chan, atomic). The other 6 were left with
 > ([archived](../archive/generic-closure-capture-of-float-truncates.md)): a
 > generic closure that captures a `7.25` and hands it to a carrier store
 > (`vec-push!` in the measured stand-in for `bt-set!`) reads back `7.25`.
-> Re-measure `(dfs-set c 7.25)` when parameterising.  One adjacent shape is
-> still wrong -- a captured float passed to a fn-typed CALLBACK
-> ([generic-closure-float-passed-to-fn-typed-callback](generic-closure-float-passed-to-fn-typed-callback.md))
-> -- which `dfs-set` does not do (its `k` takes no argument).
+> Re-measure `(dfs-set c 7.25)` when parameterising.  The one adjacent shape
+> that was still wrong -- a captured float passed to a fn-typed CALLBACK
+> ([generic-closure-float-passed-to-fn-typed-callback](../archive/generic-closure-float-passed-to-fn-typed-callback.md),
+> which `dfs-set` does not do: its `k` takes no argument) -- was fixed
+> 2026-09-26.
 
 Mechanically the smallest of the three: `(defopaque BtCell [A] :ptr)` plus
 seven signatures in `trail.tur` and three in `backtrack-dfs.tur`, ~20 lines.
@@ -337,6 +338,19 @@ preference.
 Two notes for whoever picks it up. `dfs-choose-int` / `dfs-choose-go` enumerate
 `lo..hi` into the cell, so they pin to `(BtCell int)` -- the `atomic-add!` case.
 And `BtCell` lives in `trail.tur`, not the module this report lists.
+
+A third, measured 2026-09-26 and the reason it was not landed with the
+unblocking fix: **parameterising it is a breaking change for every caller that
+spells the type.** A bare parametric name does not unify with an application
+of it -- with `(defopaque AtomicCell [A] :ptr<void>)`, a
+`(defn peek-it [c : AtomicCell] ...)` given `(atomic-new 41)` is
+`expected AtomicCell, got (AtomicCell int)`. So `(BtCell A)` turns every
+`[c : BtCell ...]` in user code into that error: five fixtures here
+(`sx1-trail-basics`, `sx1-bt-row-checked`, `sx2-trail-measure-not-congruent`,
+`self-recursive-goal-into-fat-sink`, `region-escape-via-store`, plus
+`errors/sx1-bt-row-pure-caller-rejected`), the backtrackable-state guide's
+examples, and whatever spices build on the trail. That wants the sibling
+`turmeric-spices` checkout in hand, or bare-`BtCell` acceptance first.
 
 ### `future.tur` (4 sites) -- not 4 functions, 34
 

@@ -1,2 +1,2 @@
 TUR-E0001
-instance method 'wrap-self' declares return type (type-app Option Pt) but its body returns (type-app Option int)
+instance method 'wrap-self' declares return type (Option Pt) but its body returns (Option int)

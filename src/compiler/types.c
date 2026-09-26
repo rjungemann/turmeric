@@ -2929,13 +2929,10 @@ const char *type_name(Type t) {
             return t.as.adt_.def ? t.as.adt_.def->name : "<adt>";
         /* Phase HKT-P1: Type application */
         case TY_APP: {
+            /* The same `(F a b)` spelling type_name_buf prints. */
             Buf tmp;
             buf_init(&tmp);
-            buf_puts(&tmp, "(type-app ");
-            buf_puts(&tmp, t.as.app.fn ? type_name(*t.as.app.fn) : "?");
-            buf_putc(&tmp, ' ');
-            buf_puts(&tmp, t.as.app.arg ? type_name(*t.as.app.arg) : "?");
-            buf_putc(&tmp, ')');
+            type_name_buf(&tmp, t);
             buf_putc(&tmp, '\0');
             const char *r = intern_type_name(tmp.data);
             buf_free(&tmp);
@@ -3298,14 +3295,15 @@ static void type_name_buf(Buf *b, Type t) {
             break;
         case TY_NEVER:   buf_puts(b, "!"); break;
         case TY_TYVAR:
-            /* Include the binder name in the printed form so cross-skolem
-             * mismatches (Direction A of
-             * docs/archive/history/open-binder-skolems-not-distinguishable.md) show
-             * which tyvar is which: "tyvar 'n'" vs "tyvar '__open_skolem_3_0'". */
+            /* A named variable prints as its name -- `A`, the spelling the
+             * signature wrote -- so `(Chan A)` reads as source, not as
+             * `(Chan tyvar 'A')` (parametric-stdlib-diagnostics-print-tyvar-
+             * internals).  The name alone still tells cross-skolem mismatches
+             * apart (Direction A of
+             * docs/archive/history/open-binder-skolems-not-distinguishable.md):
+             * `n` vs `__open_skolem_3_0`.  An anonymous one keeps `tyvar`. */
             if (t.as.tyvar_.name) {
-                buf_puts(b, "tyvar '");
                 buf_puts(b, t.as.tyvar_.name);
-                buf_putc(b, '\'');
             } else {
                 buf_puts(b, "tyvar");
             }
@@ -3455,11 +3453,29 @@ static void type_name_buf(Buf *b, Type t) {
                 buf_putc(b, ')');
                 break;
             }
-            buf_puts(b, "(type-app ");
-            if (t.as.app.fn) type_name_buf(b, *t.as.app.fn); else buf_puts(b, "?");
-            buf_putc(b, ' ');
-            if (t.as.app.arg) type_name_buf(b, *t.as.app.arg); else buf_puts(b, "?");
-            buf_putc(b, ')');
+            /* parametric-stdlib-diagnostics-print-tyvar-internals: the
+             * source spelling `(Chan A)`, `(Map K V)` -- not `(type-app Chan
+             * tyvar 'A')`.  A curried application is flattened along its
+             * spine, so `((Map K) V)` prints as the `(Map K V)` it was
+             * written as; a hole-headed partial application keeps the arm
+             * above. */
+            {
+                const Type *spine[16];
+                uint32_t n = 0;
+                const Type *head = &t;
+                while (head && head->kind == TY_APP && head->as.app.hole_pos_p1 == 0 &&
+                       n < 16) {
+                    spine[n++] = head->as.app.arg;
+                    head = head->as.app.fn;
+                }
+                buf_putc(b, '(');
+                if (head) type_name_buf(b, *head); else buf_puts(b, "?");
+                for (uint32_t k = n; k > 0; k--) {
+                    buf_putc(b, ' ');
+                    if (spine[k - 1]) type_name_buf(b, *spine[k - 1]); else buf_puts(b, "?");
+                }
+                buf_putc(b, ')');
+            }
             break;
         }
         /* Phase HKT-P2: Recursive types */

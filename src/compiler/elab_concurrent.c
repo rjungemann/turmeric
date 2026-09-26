@@ -152,16 +152,22 @@ Expr *elab_async(Elab *e, const Form *call) {
         if (had_error) return NULL;
     }
 
-    /* compiled-async-fiber-deadlocks-on-a-session-op (fix direction 3): a
-     * session op inside a compiled async body blocks the spawning thread on
-     * the session runtime's condvar, and nothing on that thread can then run
-     * the peer, so the program hangs with no further diagnostic.  Warn when
-     * the body captures a session endpoint (the op may be inside a callee,
-     * e.g. `(async (fn [] (server-loop r)))`) or spells a session op itself
-     * (both endpoints made inside the body).  Under --interpret the rendezvous
-     * is cooperative and the shape is correct, so no warning there.  The peer
-     * may legitimately be on another OS thread (a session-spawn peer), so this
-     * is a warning, not a rejection. */
+    /* compiled-async-fiber-deadlocks-on-a-session-op: compiled `async` runs
+     * its body inline on the spawning thread, so a session op in it blocked
+     * that thread on the session runtime's condvar -- and nothing on that
+     * thread could then run the peer.  The program hung, with no diagnostic.
+     *
+     * A body that CAPTURES a session / role endpoint (the op may be inside a
+     * callee, `(async (fn [] (server-loop r)))`) is now spawned on its own OS
+     * thread (`on_thread`, emit_expr.c / tur_async_thread_via), exactly the
+     * shape session-spawn gives a peer, so the peer's ops on this thread and
+     * the body's on that one meet in the channel.  Under --interpret the
+     * rendezvous is cooperative already.
+     *
+     * TUR-W0043 stays for the one shape a thread does not help: a body that
+     * spells session ops on endpoints it makes itself.  Both ends are then in
+     * the same straight-line body, on whichever thread it runs. */
+    bool async_on_thread = false;
     if (!g_interpret_mode) {
         const char *cap_name = NULL;
         if (cl) {
@@ -173,31 +179,22 @@ Expr *elab_async(Elab *e, const Form *call) {
                 }
             }
         }
+        async_on_thread = cap_name != NULL;
         bool lexical = !cap_name && form_mentions_session_op(e, call->as.list.items[1]);
-        if (cap_name || lexical) {
-            if (cap_name)
-                diag_emit_with_code(DIAG_WARNING, call->span,
-                    TUR_W0043_SESSION_OP_IN_ASYNC,
-                    "async body captures the session endpoint `%s`: compiled "
-                    "`async` runs on the spawning thread and a session op blocks "
-                    "that thread until the peer arrives -- unless the peer runs on "
-                    "another OS thread this deadlocks with no further diagnostic "
-                    "(it runs under --interpret); run the peer with session-spawn "
-                    "from stdlib/session.tur instead", cap_name);
-            else
-                diag_emit_with_code(DIAG_WARNING, call->span,
-                    TUR_W0043_SESSION_OP_IN_ASYNC,
-                    "async body performs a session op: compiled `async` runs on "
-                    "the spawning thread and a session op blocks that thread until "
-                    "the peer arrives -- unless the peer runs on another OS thread "
-                    "this deadlocks with no further diagnostic (it runs under "
-                    "--interpret); run the peer with session-spawn from "
-                    "stdlib/session.tur instead");
-        }
+        if (lexical)
+            diag_emit_with_code(DIAG_WARNING, call->span,
+                TUR_W0043_SESSION_OP_IN_ASYNC,
+                "async body performs a session op: compiled `async` runs on "
+                "the spawning thread and a session op blocks that thread until "
+                "the peer arrives -- unless the peer runs on another OS thread "
+                "this deadlocks with no further diagnostic (it runs under "
+                "--interpret); run the peer with session-spawn from "
+                "stdlib/session.tur instead");
     }
 
     Expr *out = expr_new(e->arena, EX_ASYNC, TYPE_PTR_VOID, call->span);
     out->as.async_.fn_expr = fn_expr;
+    out->as.async_.on_thread = async_on_thread && fn_expr->type.kind == TY_FN;
     /* async-await-payload-is-int64-only: the thunk's declared result is the
      * payload the future carries.  A fn value states it in its type; an
      * expression body (the with-handler thunk shape) IS the value. */

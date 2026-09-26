@@ -96,7 +96,7 @@ vcheck() {
   fi
 }
 vcheck "heap reinterpret crossing traced" "^repr-trace bridge concrete->carrier heap-reinterpret "
-vcheck "aggregate crossing traced"        "^repr-trace bridge carrier->concrete aggregate \(type-app Q2 int\)$"
+vcheck "aggregate crossing traced"        "^repr-trace bridge carrier->concrete aggregate \(Q2 int\)$"
 vcheck "agg-box traced"                   "^repr-trace bridge agg-box tur_adt_Q2__int$"
 vcheck "agg-unbox traced"                 "^repr-trace bridge agg-unbox tur_adt_Q2__int$"
 
@@ -299,7 +299,7 @@ fi
 # shape increment 2 chased through the `bind` cell.
 #
 # Liveness comes free on the value probe: `repr-trace bridge carrier->concrete
-# aggregate (type-app Option int)` (asserted above) is emitted by the bridge
+# aggregate (Option int)` (asserted above) is emitted by the bridge
 # that CONSUMES this walker's answer, so the same probe proves the walker ran
 # and that it stayed silent.  Corpus-wide the population is 7211 concrete
 # answers with 0 disagreements -- see the plan.

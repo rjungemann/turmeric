@@ -71,6 +71,21 @@
 (defn main [] : int
   (gc-enable!)
   (run-acyclic 500) (run-ring 500)          ; warm up
+  ;; ...and warm the MEASUREMENT too.  Under `tur jit` the program runs in
+  ;; tur's own process, and the engine generates code on a path's first
+  ;; execution -- the tail of heap-bytes after its probe, the subtraction --
+  ;; so the first window used to count ~1.3 KB of the engine's own one-off
+  ;; allocations (constant, not scaling with the iteration count) and an
+  ;; unsanitized JIT build failed here.  One throwaway window runs every
+  ;; path the real ones do.  A real per-iteration leak still shows: a 16-byte
+  ;; malloc per `acyclic` reads ~160 KB in both engines.
+  ;; (Under a sanitized `tur`, CI's JIT leg, mallinfo2 cannot see the ASan
+  ;; allocator at all and reads 0 either way; the compiled leg is the real
+  ;; check there.)  docs/archive/jit-cc-fallback-reentry-inherits-monomorph-state.md
+  (let [w0 (heap-bytes)]
+    (run-acyclic 10)
+    (run-ring 10)
+    (- (heap-bytes) w0))
   (let [a0 (heap-bytes)]
     (run-acyclic 5000)
     (println (- (heap-bytes) a0)))          ; 0 -- acyclic :heap rc leaks nothing
