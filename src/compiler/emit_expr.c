@@ -13598,8 +13598,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(wbits);
                     buf_puts(pbuf, "}\n\n");
                     indent_buf(body, ctx->indent);
-                    buf_printf(body, "void *%s = (void *)tur_async_fiber_via(%s, (void *)(intptr_t)%s);\n",
-                               tmp, wname, fn_val);
+                    buf_printf(body, "void *%s = (void *)%s(%s, (void *)(intptr_t)%s);\n",
+                               tmp, e->as.async_.on_thread ? "tur_async_thread_via"
+                                                           : "tur_async_fiber_via",
+                               wname, fn_val);
+                } else if (e->as.async_.on_thread && fn_expr->type.as.fn.boxed) {
+                    /* compiled-async-fiber-deadlocks-on-a-session-op: a body
+                     * that drives a session endpoint runs on its own thread. */
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "void *%s = (void *)tur_async_thread_via(__tur_async_call_box, (void *)(intptr_t)%s);\n",
+                               tmp, fn_val);
                 } else {
                     indent_buf(body, ctx->indent);
                     if (fn_expr->type.as.fn.boxed) {

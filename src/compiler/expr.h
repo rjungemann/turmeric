@@ -1631,7 +1631,10 @@ struct Expr {
          * the tree passes it that way), so the type rides the NODE, and a
          * `let`/`def` that binds an `(async ..)` copies it onto the binding
          * (Binding.async_payload) for the `await` to find. */
-        struct { Expr *fn_expr; Type payload; }      async_;       /* (async fn-expr) */
+        /* on_thread: the body captures a session / role endpoint, so it runs on
+         * its own OS thread (tur_async_thread_via) rather than inline --
+         * compiled-async-fiber-deadlocks-on-a-session-op. */
+        struct { Expr *fn_expr; Type payload; bool on_thread; } async_; /* (async fn-expr) */
         /* `payload`: the type the awaited value is read back at (the async's
          * payload when its provenance is known, else the int64 slot's `int`). */
         struct { Expr *fut_expr; Type payload; }     await_;       /* (await fut) */

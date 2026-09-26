@@ -151,7 +151,7 @@ red.
 The blocker for everything downstream. `(async (fn [] (server ch)))` -- the
 obvious way to write a peer -- **hangs the compiled binary forever with no
 diagnostic**, and runs correctly under turi. Filed as
-[compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md).
+[compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md).
 
 That is why 20+ fixtures and the guide's examples all carry:
 
@@ -366,5 +366,5 @@ S4 and S5 are hygiene. Do them when something else is already open in
   the intercepted templates are built.
 - The three reports this plan cites:
   [turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-fiber-recv-timeout-ignores-its-deadline.md),
-  [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md),
+  [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md),
   [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](https://github.com/rjungemann/turmeric/blob/main/docs/archive/awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md).

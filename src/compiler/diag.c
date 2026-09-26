@@ -1072,20 +1072,21 @@ static const DiagExplanation diag_explanations_[] = {
       "  (defn safe-fn [] :int (unsafe (raw-c-helper)))\n",
     },
     { TUR_W0043_SESSION_OP_IN_ASYNC,
-      "TUR-W0043: Session op inside an async body deadlocks the compiled program\n"
+      "TUR-W0043: Session op inside an async body may deadlock the compiled program\n"
       "\n"
-      "An (async ...) body captures a session endpoint (Session / Role) or spells\n"
-      "a session op (send, recv, offer, choose-left, choose-right, recv-timeout,\n"
-      "send-to, recv-from), e.g.\n"
-      "  (async (fn [] (let [[n r] (recv r)] (println n) (close r))))\n"
+      "An (async ...) body spells a session op (send, recv, offer, choose-left,\n"
+      "choose-right, recv-timeout, send-to, recv-from) on endpoints it makes\n"
+      "itself, e.g.\n"
+      "  (async (fn [] (let [[s r] (make-session (Send int Close))] ... (recv r))))\n"
       "\n"
-      "Compiled `async` runs its body on the thread that spawned it, and the\n"
-      "session runtime blocks that thread on a condition variable until the peer\n"
-      "arrives.  If the peer is the spawner (or another async body on the same\n"
-      "thread) nothing can ever run it, and the program hangs with no further\n"
-      "diagnostic.  The same program runs correctly under `tur --interpret`,\n"
-      "whose rendezvous is cooperative, which is why the warning is not emitted\n"
-      "there.\n"
+      "An async body that CAPTURES an endpoint made outside it does not warn: it\n"
+      "runs on its own OS thread, so its peer -- the spawner, or anything else --\n"
+      "can run while it waits.  A body that makes both endpoints has both ends of\n"
+      "the protocol in one straight-line body; a session op then blocks it until\n"
+      "the peer arrives, and if the peer is later in the same body nothing can\n"
+      "ever run it: the program hangs with no further diagnostic.  The same\n"
+      "program runs under `tur --interpret`, whose rendezvous is cooperative,\n"
+      "which is why the warning is not emitted there.\n"
       "\n"
       "Fix: run the peer with session-spawn / session-join from stdlib/session.tur,\n"
       "which is an OS thread compiled and a scheduler fiber under --interpret:\n"
@@ -1094,9 +1095,9 @@ static const DiagExplanation diag_explanations_[] = {
       "    ...\n"
       "    (session-join t))\n"
       "\n"
-      "The warning is a heuristic: an async body whose peer really does run on\n"
-      "another OS thread (a session-spawn peer) works and still warns.\n"
-      "See docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md.\n",
+      "The warning is a heuristic: a body that does hand one end to a peer on\n"
+      "another thread works and still warns.\n"
+      "See docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md.\n",
     },
     { TUR_W0042_SHADOWS_SPECIAL_FORM,
       "TUR-W0042: Definition shadows a special form\n"

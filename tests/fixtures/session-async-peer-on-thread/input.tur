@@ -1,0 +1,68 @@
+;; compiled-async-fiber-deadlocks-on-a-session-op: compiled `async` ran its
+;; body inline on the spawning thread, so a body that drove a session
+;; endpoint blocked the one thread that could run the peer -- the report's
+;; repro hung forever, with no diagnostic.  An async body that captures a
+;; Session / Role endpoint now runs on its own OS thread and `await` joins it.
+;;
+;; Expected output:
+;;   42
+;;   100
+;;   10
+;;   20
+;;   30
+;;   84
+(load "stdlib/session.tur")
+
+(defn server-loop [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
+  (match (offer ch)
+    (Left ch)
+      (let [[n ch] (recv ch)]
+        (let [ch (send ch n)]
+          (server-loop ch)))
+    (Right ch)
+      (close ch)))
+
+(defn client-step [^linear ch :(Session (Rec self (Choose (Send int (Recv int self)) Close))) val :int] :(Session (Rec self (Choose (Send int (Recv int self)) Close)))
+  (let [ch (choose-left ch)]
+    (let [ch (send ch val)]
+      (let [[r ch] (recv ch)]
+        (println r)
+        ch))))
+
+(defprotocol Calc [A B]
+  (-> A B int)
+  (-> B A int))
+
+(defn role-b [^linear ch :(Role Calc B)] : nil
+  (let [[v ch] (recv-from ch A)]
+    (let [ch (send-to ch A (* v 2))]
+      (close ch))))
+
+(defn main [] :int
+  ;; The report's repro: the async body is the receiving peer.
+  (let [[s r] (make-session (Send int Close))]
+    (let [t (async (fn [] (let [[n r] (recv r)] (println n) (close r))))]
+      (let [s (send s 42)] (close s) (await t))))
+  ;; A typed payload comes back through the thread's future.
+  (let [[s r] (make-session (Send int Close))]
+    (let [t (async (fn [] : int (let [[n r] (recv r)] (close r) (* n 10))))]
+      (let [s (send s 10)] (close s))
+      (println (await t))))
+  ;; A recursive server loop as the async peer.
+  (let [[r s] (make-session (Rec self (Branch (Recv int (Send int self)) Close)))]
+    (let [t (async (fn [] (server-loop r)))]
+      (let [s (client-step s 10)]
+        (let [s (client-step s 20)]
+          (let [s (client-step s 30)]
+            (let [s (choose-right s)]
+              (close s)
+              (await t)))))))
+  ;; A multi-party role endpoint.
+  (let [[ra rb] (make-protocol Calc)]
+    (let [t (async (fn [] (role-b rb)))]
+      (let [ra (send-to ra B 42)]
+        (let [[v ra] (recv-from ra B)]
+          (println v)
+          (close ra)
+          (await t)))))
+  0)

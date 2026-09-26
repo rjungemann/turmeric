@@ -264,14 +264,14 @@ somewhere else. `stdlib/session.tur` provides the portable way to do that:
 `tur --interpret` it is a scheduler fiber. The same source runs on both, and
 every example below uses this pair.
 
-> Do not write the peer as `(async (fn [] ...))` in a program you will compile.
-> Compiled `async` runs its body on the spawning thread and the session runtime
-> blocks that thread until the peer arrives, so a session op inside `async`
-> **deadlocks the binary** (it runs correctly under `--interpret`). The
-> compiler warns at the `async` site with `TUR-W0043` when the body captures a
-> session endpoint or spells a session op; the warning is a heuristic, so a
-> body whose peer really is on another OS thread works and still warns. See
-> [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/reported/compiled-async-fiber-deadlocks-on-a-session-op.md).
+> A peer written as `(async (fn [] ...))` works too: an `async` body that
+> captures a session endpoint runs on its own OS thread when compiled (a
+> scheduler fiber under `--interpret`), and `await` joins it -- so
+> `(async (fn [] (server-loop r)))` is the same peer `session-spawn` makes,
+> with a future for its result. The one shape that still hangs is an `async`
+> body that makes BOTH endpoints and waits on itself; the compiler warns at
+> that site with `TUR-W0043`. See
+> [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md).
 
 ## Multi-Party Session Types (SS5-SS8)
 
@@ -493,7 +493,7 @@ through `await`).
 | `TUR-E0221` | Role not declared in the protocol |
 | `TUR-E0222` | Role implementation does not match the projected local type |
 | `TUR-E0223` | Global protocol not well-formed (undeclared role used) |
-| `TUR-W0043` | Session op inside an `async` body: deadlocks the compiled program unless the peer is on another OS thread; use `session-spawn` |
+| `TUR-W0043` | Session op inside an `async` body on endpoints the body makes itself: may deadlock the compiled program; hand one end to a `session-spawn` peer |
 
 ---
 
