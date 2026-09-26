@@ -32,8 +32,12 @@ static bool emit_arg_is_any_carrier_word(EmitCtx *ctx, const char *raw,
                                          const Expr *arg) {
     if (!raw || !arg) return false;
     /* A read the spec already spelled as the box -- a `(Tuple2 any any)`
-     * field, `(tur_tagged_t)(x).e1` -- whose STATIC type is still the `int`
-     * carrier, so the representation query below would call it a word. */
+     * field -- whose STATIC type is still the `int` carrier, so the
+     * representation query below would call it a word.  The field-read
+     * emitter leaves the exact text of such a read in any_field_read_note. */
+    if (ctx->any_field_read_note[0] &&
+        strcmp(raw, ctx->any_field_read_note) == 0)
+        return false;
     if (strncmp(raw, "(tur_tagged_t)", 14) == 0) return false;
     const Expr *tp = arg;
     while (tp && tp->kind == EX_ASCRIBE) tp = tp->as.ascribe_.inner;
@@ -14594,6 +14598,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                    eff_fld_rcty, sv, acc, mp);
                     } else if (inline_byval || rec_aggregate) {
                         buf_printf(&hb, "(%s)%s%s", sv, acc, mp);
+                    } else if (eff_fld_rcty && strcmp(eff_fld_rcty, "tur_tagged_t") == 0) {
+                        /* An `any` field is read at the slot's own type,
+                         * `tur_tagged_t`, so the rvalue cast below would be a
+                         * cast to a non-scalar type: gcc/clang accept it as a
+                         * same-type extension, ISO C and the JIT engine's
+                         * c2mir refuse it ("conversion to non-scalar type
+                         * requested") and the program fell back to cc.  The
+                         * `Eq [Cons]` / `[Tuple2]` / `[Pair]` specs at the
+                         * all-`any` instantiation read their elements this way
+                         * (saffron-lang-plan S9, D8 Q1). */
+                        buf_printf(&hb, "(%s)%s%s", sv, acc, mp);
+                        if (hb.len < sizeof ctx->any_field_read_note)
+                            snprintf(ctx->any_field_read_note,
+                                     sizeof ctx->any_field_read_note, "%.*s",
+                                     (int)hb.len, hb.data);
                     } else if (eff_fld_rcty) {
                         buf_printf(&hb, "(%s)(%s)%s%s", eff_fld_rcty, sv, acc, mp);
                     } else if (use_arrow) {
@@ -14623,10 +14642,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         (fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&
                          cty && strcmp(cty, "int64_t") == 0)
                             ? fld_rcty : cty;
-                    if (fld_aggregate)
+                    /* An `any` field is the 16-byte `tur_tagged_t` -- an
+                     * aggregate too, so it takes the no-cast read for the
+                     * same reason; gcc/clang had accepted the cast as a
+                     * same-type extension, c2mir did not (S9 D8 Q1, the
+                     * `Eq [Cons]` spec at `(Cons any)`).  The read is noted
+                     * for the `C [any]` argument bridge. */
+                    bool fld_tagged = heap_fld_cast &&
+                                      strcmp(heap_fld_cast, "tur_tagged_t") == 0;
+                    if (fld_aggregate || fld_tagged) {
                         buf_printf(&hb, "((%s)(intptr_t)(%s))->%s",
                                    heap_recv_cn, sv, mp);
-                    else
+                        if (fld_tagged && hb.len < sizeof ctx->any_field_read_note)
+                            snprintf(ctx->any_field_read_note,
+                                     sizeof ctx->any_field_read_note, "%.*s",
+                                     (int)hb.len, hb.data);
+                    } else
                         buf_printf(&hb, "(%s)((%s)(intptr_t)(%s))->%s",
                                    heap_fld_cast, heap_recv_cn, sv, mp);
                 } else if (field_byval_unbox) {
