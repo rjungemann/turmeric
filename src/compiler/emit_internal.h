@@ -1018,6 +1018,7 @@ const char *emit_fn_return_typedef(const FnDef *fd, const Type *rft);
  * return -- the fn-ptr typedef for a thin body, else the int64_t closure
  * carrier; NULL for non-method / non-fn returns (see emit_core.c). */
 const char *emit_inst_fn_return_carrier(const FnDef *fd, const Type *rft);
+bool emit_inst_result_rides_carrier(EmitCtx *ctx, const FnDef *fd, const Type *rft);
 /* KB-021: arbiter of which struct-valued types may use the int64_t carrier ABI
  * (see emit_core.c). */
 bool type_uses_carrier_abi(Type t);

@@ -300,8 +300,10 @@ static bool dict_slot_param_is_carrier(EmitCtx *ctx, const FnDef *mi,
 }
 
 /* saffron-applied-class-var-result-takes-one-instances-type: the C return type
- * of an instance-method impl, spelled the way emit_fns.c spells its signature.
- * A declared result that rides the carrier ABI returns `int64_t` there (the
+ * of an instance-method impl, spelled the way emit_fns.c spells its signature
+ * (emit_inst_result_rides_carrier is that one decision, consulted, not
+ * re-derived).  A declared result that rides the carrier ABI returns `int64_t`
+ * there (the
  * dict's uniform slot shape, "Direction (1)"), so the dict slot and the
  * by-value wrapper must say `int64_t` too.  They used type_c_name, which agreed
  * only while such a result was OPEN -- `(Vec a)` -- and so lowered to the
@@ -309,12 +311,8 @@ static bool dict_slot_param_is_carrier(EmitCtx *ctx, const FnDef *mi,
  * `(Vec float)` slot read `tur_adt_Vec__float *` against an `int64_t` impl
  * (-Wincompatible-pointer-types, -Wint-conversion). */
 static const char *dict_slot_ret_c_name(EmitCtx *ctx, const FnDef *mi, Type ret) {
-    if (mi && mi->binding && mi->binding->name && mi->binding->name->name &&
-        strncmp(mi->binding->name->name, "__inst_", 7) == 0 &&
-        mi->binding->type.kind == TY_FN &&
-        mi->binding->type.as.fn.result_full_type &&
-        type_uses_carrier_abi(emit_resolve_type(ctx,
-            *mi->binding->type.as.fn.result_full_type)))
+    if (mi && mi->binding && mi->binding->type.kind == TY_FN &&
+        emit_inst_result_rides_carrier(ctx, mi, mi->binding->type.as.fn.result_full_type))
         return "int64_t";
     return type_c_name(ret);
 }
