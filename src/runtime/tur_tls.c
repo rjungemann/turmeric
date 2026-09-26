@@ -66,3 +66,23 @@ void **tur_tls_current_scheduler_mt_ptr (void) { return &tur_tls_current_schedul
 
 static __thread int64_t tur_tls_rtv = 0;
 int64_t *tur_tls_rtv_ptr (void) { return &tur_tls_rtv; }
+
+/* The DK escape-continuation registry (emit_dk_runtime.c): the prompts live
+ * on THIS thread's stack.  Shared, two threads' call/cc prompts truncated and
+ * realloc'd one array between them
+ * (docs/archive/jit-threaded-program-hangs-under-load.md). */
+static __thread void *tur_tls_escape_live = 0;
+void **tur_tls_escape_live_ptr (void) { return &tur_tls_escape_live; }
+static __thread int tur_tls_escape_live_n = 0;
+int *tur_tls_escape_live_n_ptr (void) { return &tur_tls_escape_live_n; }
+static __thread int tur_tls_escape_live_cap = 0;
+int *tur_tls_escape_live_cap_ptr (void) { return &tur_tls_escape_live_cap; }
+
+/* The r7rs prelude's stack bases for a call/cc image (stdlib/r7rs/prelude.tur):
+ * the calling thread's own stack top, and the current top-level form's frame.
+ * Shared, a worker's capture measured its image against another thread's
+ * stack. */
+static __thread void *tur_tls_r7k_base = 0;
+void **tur_tls_r7k_base_ptr (void) { return &tur_tls_r7k_base; }
+static __thread void *tur_tls_r7k_form_base = 0;
+void **tur_tls_r7k_form_base_ptr (void) { return &tur_tls_r7k_form_base; }

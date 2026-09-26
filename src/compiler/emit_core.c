@@ -6285,16 +6285,18 @@ void sym_codegen_emit(Buf *out, bool external_weak) {
      * of a name wins, so weak-folded cross-TU records register idempotently.
      * Gated on str->sym being defined in this TU (g_sym_intern_used): only then
      * is the table (and tur_sym_register) linked, and only then can anything
-     * query the table -- so a literal-only program emits no constructor. */
+     * query the table -- so a literal-only program emits no constructor.
+     * Named outside the records' `__tur_sym_` prefix: a keyword `:seed` is
+     * the record `__tur_sym_seed`. */
     if (g_n_sym_records > 0 && g_sym_intern_used) {
         buf_puts(out, "extern void tur_sym_register(const struct __tur_sym *);\n");
-        buf_puts(out, "static void __tur_sym_seed(void) {\n");
+        buf_puts(out, "static void __tur_symtab_seed(void) {\n");
         for (uint32_t i = 0; i < g_n_sym_records; i++) {
             buf_printf(out, "    tur_sym_register((const struct __tur_sym *)&%s);\n",
                        g_sym_records[i].cid);
         }
         buf_puts(out, "}\n");
-        static_init_register("__tur_sym_seed", STATIC_INIT_REGISTRY);
+        static_init_register("__tur_symtab_seed", STATIC_INIT_REGISTRY);
     }
     if (g_n_sym_records > 0) buf_putc(out, '\n');
 }

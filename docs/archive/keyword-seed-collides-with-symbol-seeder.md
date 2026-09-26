@@ -1,5 +1,10 @@
 # The keyword `:seed` does not compile: `__tur_sym_seed` is taken
 
+**Resolved** (2026-09-25). The seeder is now `__tur_symtab_seed`, outside
+the records' `__tur_sym_` prefix (src/compiler/emit_core.c). It was the
+only other `__tur_sym_*` name the toolchain spells. Fixture:
+`tests/fixtures/r7rs-keyword-seed`. What follows is the report as filed.
+
 **Severity:** medium. A program whose unit carries the runtime symbol
 registry fails at the C compile step if it spells the keyword `:seed`.
 Every `#lang r7rs` program carries the registry (`string->symbol`). `seed`

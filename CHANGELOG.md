@@ -127,6 +127,16 @@ All notable changes to Turmeric are documented here.
   constrained generics, and paired a partial head's fixed variable with the
   function, is now limited to statically resolved calls.
 
+- **`tur jit`: threaded programs no longer hang or crash under load.**
+  Generating a function lazily ends in MIR rewriting its call thunk in place,
+  and a thread executing that thunk at the same moment could jump anywhere.
+  A program's first `pthread_create` now generates every function still
+  pending while the program is single-threaded; a program that never starts
+  a thread stays fully lazy. Five thread-locals that were shared between
+  threads under the JIT now have per-thread host slots: the
+  escape-continuation registry, and the r7rs prelude's two `call/cc` stack
+  bases.
+
 - **`#lang r7rs` threads: the collected heap under contention** (stages C
   and D of docs/archive/r7rs-gc-threads-plan.md, which is now complete and
   archived). In a compiled Scheme program under the r7rs-gc collector:
@@ -150,6 +160,23 @@ All notable changes to Turmeric are documented here.
   churns, every value checked) and `threads-lifecycle`. Both also run under
   ASan in `tests/run-r7rs-sanitize.sh`, at a collection every 31
   allocations.
+
+- **The keyword `:seed` compiles.** The symbol table's seeder shared the C
+  name `__tur_sym_seed` with the keyword's interned record, so every unit
+  with the runtime symbol registry (every `#lang r7rs` program) that spelled
+  `:seed` failed at the C compile. The seeder is now `__tur_symtab_seed`.
+  Fixture `r7rs-keyword-seed`.
+
+- **`(__TUR_RET__)` names the type an inline-C function returns.** A
+  non-generic inline-C function with a `:heap` result, such as
+  `(Map int int)` or `(Vec int)`, is declared `int64_t`, but `__TUR_RET__`
+  expanded to the typed pointer. The documented
+  `return (__TUR_RET__)(intptr_t)v;` drew a -Wint-conversion. Fixture
+  `inline-c-tur-ret-heap-result`.
+
+- **`tur jit`: a child forked while another thread generates code no longer
+  hangs.** The engine's lazy-generation lock is now taken around `fork`
+  (src/jit_engine.c).
 
 ## [0.54.0] -- 2026-09-25
 

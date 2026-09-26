@@ -2191,9 +2191,10 @@ live elsewhere in this index: compiled top-level order was
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [jit-fork-child-hangs-with-threads](jit-fork-child-hangs-with-threads.md) | low | Under `tur jit`, a child forked while another thread runs can hang in the engine (SIGALRM after its alarm). Compiled builds, with or without the collector, never do. `r7rs-threads-lifecycle` skips its fork check under `TUR_JIT_ENGINE` until this is fixed |
-| [keyword-seed-collides-with-symbol-seeder](keyword-seed-collides-with-symbol-seeder.md) | medium | In a unit with the runtime symbol registry (every `#lang r7rs` program), the keyword `:seed` fails the C compile: the symbol table's seeder is also named `__tur_sym_seed` (src/compiler/emit_core.c:6291) |
-| [tur-ret-disagrees-with-inline-c-signature](tur-ret-disagrees-with-inline-c-signature.md) | low | In a non-generic inline-C function returning a concrete `(Map K V)`, `__TUR_RET__` expands to the map's pointer type while the function is declared `int64_t`, so the documented `return (__TUR_RET__)(intptr_t)v;` draws a -Wint-conversion |
+| ~~[jit-fork-child-hangs-with-threads](../archive/jit-fork-child-hangs-with-threads.md)~~ | low | **RESOLVED 2026-09-25** (archived): the child was waiting on the JIT's lazy-generation lock, `g_gen_lock`. `pthread_atfork` now takes that lock around `fork` (src/jit_engine.c), and `r7rs-threads-lifecycle` runs its fork check under the JIT again |
+| ~~[keyword-seed-collides-with-symbol-seeder](../archive/keyword-seed-collides-with-symbol-seeder.md)~~ | medium | **RESOLVED 2026-09-25** (archived): the seeder is now `__tur_symtab_seed`. Fixture `r7rs-keyword-seed` |
+| ~~[tur-ret-disagrees-with-inline-c-signature](../archive/tur-ret-disagrees-with-inline-c-signature.md)~~ | low | **RESOLVED 2026-09-25** (archived): when the signature emitter writes the carrier `int64_t` for an inline-C body, `__TUR_RET__` now follows it (src/compiler/emit_fns.c). Fixture `inline-c-tur-ret-heap-result` covers Map and Vec |
+| ~~[jit-threaded-program-hangs-under-load](../archive/jit-threaded-program-hangs-under-load.md)~~ | medium | **RESOLVED 2026-09-26** (archived): the cause was MIR's lazy generation rewriting a function's call thunk in place while another thread ran through it. `tur jit` now generates every remaining function at a program's first `pthread_create`, while it is still single-threaded (src/jit_engine.c). Five thread-locals the JIT shared between threads now have host slots too (src/runtime/tur_tls.c). Under load: 0 bad runs of `r7rs-threads-pause`, where lazy generation had 6 in 150 |
 
 ## Filing conventions
 
