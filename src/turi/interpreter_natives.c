@@ -2922,8 +2922,28 @@ void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
 #if defined(__GLIBC__)
 extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
 #endif
+/* r7rs-reentrant-callcc-not-on-windows: the jump into a continuation must not
+ * unwind.  win64 `longjmp` is an SEH unwind that walks every frame between it
+ * and its setjmp, and a re-entry jumps from below a stack image it has just
+ * copied back, so those frames are not the ones that called it.  GCC's
+ * __builtin_setjmp/_longjmp unwind nothing -- the prelude's R7K_SETJMP makes
+ * the same choice.  __builtin_longjmp may not share a function with its
+ * __builtin_setjmp, hence r7k_longjmp. */
+#if defined(_WIN32) && (defined(__GNUC__) || defined(__clang__))
+typedef void *r7k_jmp_buf[5];
+#  define R7K_SETJMP(b)  __builtin_setjmp(b)
+#  define R7K_LONGJMP(b) __builtin_longjmp((b), 1)
+#else
+typedef jmp_buf r7k_jmp_buf;
+#  define R7K_SETJMP(b)  setjmp(b)
+#  define R7K_LONGJMP(b) longjmp((b), 1)
+#endif
+__attribute__((noinline, noreturn))
+static void r7k_longjmp(r7k_jmp_buf jb) {
+    R7K_LONGJMP(jb);
+}
 typedef struct R7kCont {
-    jmp_buf        jb;
+    r7k_jmp_buf    jb;
     unsigned char *lo, *img;
     size_t         n;
     TuriContState *state;
@@ -2944,6 +2964,12 @@ static unsigned char *r7k_stack_base(void) {
     }
 #elif defined(__APPLE__)
     r7k_base_tls = (unsigned char *)pthread_get_stackaddr_np(pthread_self());
+#elif defined(_WIN32) && defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+    /* The TEB's NT_TIB.StackBase, at gs:[0x08] on win64 -- the prelude reads
+     * it the same way. */
+    unsigned char *b;
+    __asm__ ("movq %%gs:0x08, %0" : "=r"(b));
+    r7k_base_tls = b;
 #endif
     return r7k_base_tls;
 }
@@ -2954,8 +2980,8 @@ static void r7k_copy(unsigned char *dst, const unsigned char *src, size_t n) {
     for (size_t i = 0; i < n / sizeof(uintptr_t); i++) d[i] = s[i];
 }
 static int r7k_snapshot(R7kCont *c, unsigned char *mark) {
-    /* r7rs-reentrant-callcc-not-on-windows: no image without a stack base,
-     * whatever the form base says -- call/cc is the escape there. */
+    /* No image without a stack base, whatever the form base says -- call/cc
+     * is the escape wherever r7k_stack_base finds none. */
     unsigned char *sb = r7k_stack_base();
     if (!sb) return 0;
     unsigned char *base = (g_r7k_form_base && g_r7k_form_base > mark)
@@ -2975,7 +3001,7 @@ static void r7k_jump(R7kCont *c) {
 #ifdef R7K_ASAN
     __asan_unpoison_memory_region(c->lo, c->n);
 #endif
-    longjmp(c->jb, 1);
+    R7K_LONGJMP(c->jb);
 }
 __attribute__((noinline, noreturn))
 static void r7k_restore(R7kCont *c) {
@@ -2995,7 +3021,7 @@ static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n
     c->state = turi_cont_state_capture(env);
     volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
     mark[0] = 0;
-    if (setjmp(c->jb) != 0) {
+    if (R7K_SETJMP(c->jb) != 0) {
         R7kCont *rc = c;
         turi_cont_state_restore(venv, rc->state);
         return turi_int((int64_t)((uintptr_t)rc | 1));
@@ -3038,15 +3064,15 @@ static TuriValue native_r7rs_toplevel(TuriEnv *env, TuriValue *a, uint32_t n, vo
      * after the body lives in static stacks, since frame slots below the
      * mark are overwritten by the image.  The compiled twin, r7k_run_form
      * in the prelude, is the same shape. */
-    jmp_buf jb;
+    r7k_jmp_buf jb;
     int d = g_r7k_form_depth++;
     g_r7k_form_saved[d] = g_r7k_form_base;
     g_r7k_boundary_saved[d] = turi_cont_set_drive_boundary(turi_cont_drive_mark());
     g_r7k_form_base = (unsigned char *)&jb;
     static TuriValue r_static[64];
-    if (setjmp(jb) == 0) {
+    if (R7K_SETJMP(jb) == 0) {
         r_static[d] = turi_call(env, a[0], NULL, 0);
-        longjmp(jb, 1);
+        r7k_longjmp(jb);
     }
     d = --g_r7k_form_depth;
     g_r7k_form_base = g_r7k_form_saved[d];

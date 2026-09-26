@@ -2807,8 +2807,9 @@ differences, as reports"):
   it, `-O0` does not
   ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md);
   every dialect with effectful functions).
-- **Re-entrant `call/cc` is Linux and macOS only**
-  ([r7rs-reentrant-callcc-not-on-windows](../reported/r7rs-reentrant-callcc-not-on-windows.md)).
+- ~~**Re-entrant `call/cc` is Linux and macOS only**~~ -- resolved 2026-09-26:
+  the stack base comes from the TEB and the jump unwinds nothing
+  ([archived](../archive/r7rs-reentrant-callcc-not-on-windows.md)).
   ~~A top-level re-entry re-runs the forms after it~~ -- resolved 2026-09-25:
   each top-level form runs under its own prompt
   ([archived](../archive/r7rs-toplevel-reentry-reruns-forms.md)).

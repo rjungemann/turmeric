@@ -99,6 +99,16 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`#lang r7rs`: `call/cc` is re-entrant on Windows.** A continuation
+  can now be invoked after its `call/cc` has returned there too, so
+  generators and coroutines written with `call/cc` work; before, Windows
+  stopped at the first re-entry with "continuation invoked after its
+  call/cc prompt returned". The runtime reads the stack base from the
+  thread's TEB, and jumps into a copied stack with GCC's
+  `__builtin_setjmp`/`__builtin_longjmp`, which unwind nothing, where
+  Windows' `longjmp` would unwind through frames it has just overwritten.
+  Both the compiled program and `tur --interpret` are covered.
+
 - **`tur repl --engine jit` loads a spice in-process on Windows.** The
   in-process build maps module names to source files through a shadow
   directory, and made each entry with `symlink()`, which is an `ENOSYS` stub

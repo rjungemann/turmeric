@@ -249,9 +249,6 @@ A continuation is **re-entrant**. Invoking it while its `call/cc` is still
 running returns from it, which is an escape. Invoking it after the `call/cc`
 has returned makes the `call/cc` return again. Either can happen any number
 of times, so generators and coroutines written with `call/cc` work.
-On Windows it is escape-only for now: invoking a continuation after its
-`call/cc` has returned is an error there, because the runtime cannot yet
-find the stack it would copy.
 
 Invoking a continuation travels the `dynamic-wind` stack. The `after` thunks
 of the extent being left run first, innermost first. Then the `before` thunks
@@ -435,17 +432,11 @@ What it does not cover:
   they ask the descriptor (a zero-timeout poll), so an idle console, or an
   open pipe with nothing in it, answers `#f`. A port at end of input answers
   `#t`, since a read there does not block.
-- **Re-entrant `call/cc` is Linux and macOS only.** On Windows, invoking a
-  continuation after its `call/cc` has returned is an error, because the
-  runtime cannot find the stack it would copy there. Escaping continuations,
-  `dynamic-wind` and `guard` work everywhere. See Control above.
-- **A top-level re-entry re-runs the forms after it.** At top level a
-  continuation is the rest of the program, so invoking one from a later form
-  re-runs that form and everything following it, and repeats until something
-  in the program stops it. chibi and Racket put a boundary around each
-  top-level form and carry on past the re-entry instead. Inside a procedure,
-  re-entry is what R7RS describes; wrap the capture in one when the difference
-  matters.
+- **A top-level continuation is the rest of its form, not of the program.**
+  Each top-level form runs under its own prompt, as in chibi and Racket, so
+  re-entering a continuation from a later form finishes the form that
+  captured it and then carries on after the form that invoked it. Inside a
+  procedure, re-entry is what R7RS describes. See Control above.
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.
