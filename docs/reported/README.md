@@ -1844,7 +1844,7 @@ concrete argument kinds and has no `TY_ANY` row, so `+`, `-`, `=`, `<` and
 `println` all reject an `any` argument with TUR-E0006. That is not filed as a
 defect -- `any` is documented as a storage and reflection type -- but it is the
 single largest gap between what ships and what a dynamic dialect needs, and it
-is scoped as D4/G3-G9 in the Saffron plan.
+is scoped as D4/G3-G9 in the Saffron plan. (All landed: S3-S6, 2026-09-07/08.)
 
 ## Found writing the Saffron tour (filed 2026-09-14)
 
@@ -2177,7 +2177,7 @@ live elsewhere in this index: compiled top-level order was
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [saffron-open-generic-result-not-grounded](saffron-open-generic-result-not-grounded.md) | medium | Pre-existing on `main`. A generic constructor called with nothing to bind its type parameters -- `(map-new)` -- hands a Saffron (or `#lang r7rs`) program an OPEN `(Map K V)` that nothing ever grounds to `any`: `(map-assoc m "k" 42)` on it is a static `TUR-E0001` reported inside stdlib/map.tur (`expected &?, got &cstr`), and the same map returned through an unannotated function is a compiled `cast: any holds a different instantiation of Map` where `--interpret` prints the right answer. The seam grounds open type arguments on the target side only; the value side (the let/def binding, the return widen) keeps the open type. Workaround is an ascription the dynamic-language user has no reason to know about; the R3 seam fixture builds its map from a `#map{}` literal for this reason |
+| [saffron-open-generic-result-not-grounded](saffron-open-generic-result-not-grounded.md) | medium | Pre-existing on `main`. **2026-09-26:** an empty literal `[]` is the same open `(Vec A)` -- a typeclass method dispatched on it through an `any` panics compiled and answers interpreted (section 3). A generic constructor called with nothing to bind its type parameters -- `(map-new)` -- hands a Saffron (or `#lang r7rs`) program an OPEN `(Map K V)` that nothing ever grounds to `any`: `(map-assoc m "k" 42)` on it is a static `TUR-E0001` reported inside stdlib/map.tur (`expected &?, got &cstr`), and the same map returned through an unannotated function is a compiled `cast: any holds a different instantiation of Map` where `--interpret` prints the right answer. The seam grounds open type arguments on the target side only; the value side (the let/def binding, the return widen) keeps the open type. Workaround is an ascription the dynamic-language user has no reason to know about; the R3 seam fixture builds its map from a `#map{}` literal for this reason |
 
 ## Found landing the r7rs-gc threads plan (filed 2026-09-25)
 
