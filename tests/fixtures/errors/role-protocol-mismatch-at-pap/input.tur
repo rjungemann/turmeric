@@ -1,0 +1,29 @@
+;; pap-captured-arg-skips-session-role-protocol-check, multi-party shape: a
+;; role endpoint CAPTURED by a partial application must be checked against
+;; the role the slot declares. `rb` plays role B; `role-a` wants role A.
+
+(load "stdlib/session.tur")
+
+(defprotocol Calc [A B]
+  (-> A B int)
+  (-> B A int))
+
+(defn role-a [^linear ch :(Role Calc A) n :int] : nil
+  (let [ch (send-to ch B n)]
+    (let [[result ch] (recv-from ch B)]
+      (println result)
+      (close ch))))
+
+(defn role-b [^linear ch :(Role Calc B)] : nil
+  (let [[v ch] (recv-from ch A)]
+    (let [ch (send-to ch A (* v 2))]
+      (close ch))))
+
+(defn main [] : int
+  (let [[ra rb] (make-protocol Calc)]
+    ;; `rb` plays role B, but role-a's first slot declares role A.
+    (let [g (role-a rb)
+          t (session-spawn (fn [] (role-b ra)))]
+      (g 42)
+      (session-join t)))
+  0)

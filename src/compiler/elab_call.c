@@ -5094,20 +5094,27 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
          *     different nominal.  The saturated path only re-checks the
          *     *remaining* params, so the captured slot must be validated here.
          * See docs/archive/history/partial-application-skips-captured-arg-type-check.md
-         * and docs/archive/history/positional-nominal-type-identity-fix-plan.md. */
+         * and docs/archive/history/positional-nominal-type-identity-fix-plan.md.
+         *
+         * A session / role endpoint slot is checked the same way: `type_eq`
+         * compares its protocol (equirecursively) and role names, exactly as
+         * the saturated positional check does. A protocol is structural, not
+         * nominal, hence the gate's name. Without it, under-saturating a call
+         * was a way around the protocol check a saturated call performs
+         * (docs/archive/pap-captured-arg-skips-session-role-protocol-check.md). */
         {
             Type *cap_full_chk = PAP_SLOT_FULL(i);
-            bool slot_is_nominal =
-                (cap_full_chk &&
-                 (cap_full_chk->kind == TY_STRUCT || cap_full_chk->kind == TY_ADT)) ||
-                cap_kind == TY_STRUCT || cap_kind == TY_ADT;
-            if (slot_is_nominal) {
-                /* Prefer the recorded full type for an exact nominal compare;
-                 * fall back to a kind-level compare when it is unavailable. */
+            #define PAP_FULL_CHECK_KIND(k) \
+                ((k) == TY_STRUCT || (k) == TY_ADT || (k) == TY_SESSION || (k) == TY_ROLE)
+            bool slot_needs_full_type_check =
+                (cap_full_chk && PAP_FULL_CHECK_KIND(cap_full_chk->kind)) ||
+                PAP_FULL_CHECK_KIND(cap_kind);
+            if (slot_needs_full_type_check) {
+                /* Prefer the recorded full type for an exact compare; fall
+                 * back to a kind-level compare when it is unavailable. */
                 bool mismatch;
                 Type expected_ty;
-                if (cap_full_chk &&
-                        (cap_full_chk->kind == TY_STRUCT || cap_full_chk->kind == TY_ADT)) {
+                if (cap_full_chk && PAP_FULL_CHECK_KIND(cap_full_chk->kind)) {
                     mismatch = !type_eq(elab_args[i]->type, *cap_full_chk);
                     expected_ty = *cap_full_chk;
                 } else {
@@ -5127,6 +5134,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
                     return NULL;
                 }
             }
+            #undef PAP_FULL_CHECK_KIND
         }
         Type cap_type = type_from_kind(cap_kind);
         /* A5: a captured struct/ADT slot must carry its *full* nominal type, not
