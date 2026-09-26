@@ -1,5 +1,43 @@
 # A borrowed aggregate argument is never checked against a `(& K)` parameter
 
+**RESOLVED 2026-09-26** by the first fix direction below: a borrow type now
+records its target's full type. `ref_borrow.target_full`
+(src/compiler/types.h) is set for a struct, ADT or applied target -- by
+`elab_borrow_immut` / `elab_borrow_mut` from the borrowed expression, and by
+the `(& T)` type form from `T` -- and left NULL where the kind already names
+the type (a scalar) or `target_tyvar` does (a tyvar). Then:
+
+- `type_eq` on two borrows compares recorded targets when both have one, and
+  falls back to the kind otherwise (an imported signature, an owning-ref
+  reborrow), so nothing that compared equal by kind alone and has no target
+  changes.
+- The H9 arm of `call_collect_type_bindings` binds / compares K through a
+  borrowed aggregate's full type instead of skipping it, and `(& (Vec A))`
+  binds A from `&(Vec int)`. Both repros are refused -- `expected &int, got
+  &String` and `expected &int, got &Pt` -- and the diagnostic prints the
+  target, not `&adt`.
+- A concrete `(& Pt)` parameter compares its target too. It used to take a
+  borrow of ANY ADT (`(getx (& q))` for a `Qt`), a second face of the same
+  hole found while fixing this one.
+- In a Saffron file the K = `any` refusal now happens, so the borrow seam
+  sees a struct key and passes `&TUR_TAG(...)` -- a box -- where it used to
+  pass `&p`.
+- `(deref p)` of a borrow is the recorded target (`&Pt` derefs to a `Pt`, so
+  `(.px (deref p))` resolves -- it used to be a bare ADT kind, "no typeclass
+  method found for 'px'"), and `(deref k)` of a `(& K)` is the NAMED tyvar,
+  so the emitter resolves it through the spec: at K = `any` it loads the
+  whole `tur_tagged_t` rather than one `int64_t` of it. Without that, the
+  Saffron repro below would have been fixed at the call and broken in the
+  callee.
+
+Pinned by `errors/borrowed-aggregate-key-refused`,
+`errors/borrowed-aggregate-param-refused`, `borrowed-aggregate-target-typed`
+(the accepting side: matching aggregate keys, `(& (Vec A))`, field reads
+through a borrow) and `saffron-borrowed-struct-key-widened` (a `(& K)` callee
+that reads its key: `(& p)`, `(& "s")` and `(& 4.25)`, both back ends).
+
+The original report follows.
+
 **Severity: medium.** A typed map accepts a key of the wrong type, silently, on
 both back ends -- no diagnostic, and the map then holds keys of two types. Not
 Saffron-specific: the repro is plain typed Turmeric. Pre-existing: the code path

@@ -818,6 +818,15 @@ typedef struct Type {
              * kind alone cannot say WHICH tyvar, so a call could never bind
              * K from a borrowed argument.  NULL otherwise. */
             const char *target_tyvar;
+            /* borrowed-aggregate-key-skips-the-key-check: the target's FULL
+             * type when its kind alone does not name it -- `&Pt`, `&String`
+             * and `&(Vec int)` are all "a borrow of an ADT/app" by kind, so
+             * without this a `(& Pt)` parameter took `(& q)` for any other
+             * ADT, and a `(& K)` bound to `int` took a borrowed String.
+             * NULL for a scalar target (the kind is the whole type), for a
+             * tyvar (see target_tyvar), and where no one recorded it; every
+             * comparison falls back to the kind when either side is NULL. */
+            const struct Type *target_full;
         } ref_borrow;
         /* Phase 15: Typeclass types */
         struct {
@@ -1457,6 +1466,13 @@ static inline Type type_ref_mut(TypeKind target) {
     t.as.ref_borrow.target = target;
     t.n_lifetimes = 0;
     return t;
+}
+
+/* borrowed-aggregate-key-skips-the-key-check: the borrow targets whose KIND
+ * does not name the type, so the borrow records it in ref_borrow.target_full.
+ * A scalar is named by its kind; a tyvar by ref_borrow.target_tyvar. */
+static inline bool borrow_target_needs_full(TypeKind tk) {
+    return tk == TY_STRUCT || tk == TY_ADT || tk == TY_APP;
 }
 
 /* Phase 13: Lifetime-annotated borrow type constructors */

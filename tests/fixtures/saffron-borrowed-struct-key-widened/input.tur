@@ -1,0 +1,17 @@
+#lang saffron
+;; borrowed-aggregate-key-skips-the-key-check, the Saffron half.  Every map a
+;; dynamic file builds is a (Map any any), so a `(& K)` callee sees K = any.
+;; A scalar key reached it through the borrow seam as `&TUR_TAG(...)`, the
+;; address of a fresh box; a STRUCT key was accepted by kind before the seam
+;; looked, so the callee got `&p` -- the address of a raw Pt where it expects
+;; a tagged box.  Latent while the only `(& K)` callee (tur-map-kcheck) never
+;; read its key; `peek-key` here does, on both back ends.
+(defdata Pt (Pt [px : int py : int]))
+(defn peek-key [K V] [m : (Map K V) k : (& K)] : K (deref k))
+(defn main [] : int
+  (let [m (map-new)
+        p (Pt 7 2)]
+    (println (.px (peek-key m (& p))))   ; 7
+    (println (peek-key m (& "s")))       ; s
+    (println (peek-key m (& 4.25))))     ; 4.25
+  0)

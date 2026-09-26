@@ -1,0 +1,12 @@
+;; borrowed-aggregate-key-skips-the-key-check: a String key into a
+;; (Map int int).  `map-has?` checks the key through `(tur-map-kcheck m (& k))`,
+;; whose `(& K)` K is bound to `int` by the map.  A borrow used to carry only
+;; its target's KIND, and "a borrow of an ADT" was accepted unchecked -- the
+;; map then held keys of two types.  The scalar twin (a cstr key) was always
+;; refused; the aggregate one is refused now too, and names both types.
+(load "stdlib/string.tur")
+(defn main [] : int
+  (let [m (map-assoc (:: (map-new) (Map int int)) 1 10)
+        k (string/from-cstr "a")]
+    (println (map-has? m k)))
+  0)
