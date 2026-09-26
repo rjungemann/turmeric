@@ -1,5 +1,35 @@
 # A CPS function's self tail call is a C call, not a loop
 
+**Self tail calls resolved 2026-09-26; mutual recursion stays open.** A CPS
+function's self tail call in its own body that hands on its own `__kont` is
+now a backedge: the parameters are rebound (all arguments evaluated first) and
+it jumps to `__tur_cps_self`, a label after the binder declarations
+(`emit_cps_ir.c`, the cps->cps arm of CT_TAILCALL; the label is placed by
+`emit_cps_ir_try_fn` only when used). Every repro below -- `for-each`, `map`,
+`member` with a comparison, a `delay-force` stream a million deep, and the
+loop through a variable -- now runs at `-O0` and `-O1`, and named-let and `do`
+loops, `vector-for-each` and `string-for-each` over a million elements do too.
+Pinned by `tests/fixtures/r7rs-cps-loops-unoptimized` (built at `-O0` by its
+`hook.sh`; `--debug` is `-Og`, where gcc still makes the sibling call, so it
+would not have caught the regression). Not a backedge: a closure's `__cps`
+(its env is param 0), a monomorph, `main`, and a function whose parameter the
+body keeps in a cell or as a loop-carried variable -- those keep the C tail
+call.
+
+What is left is a tail call to ANOTHER CPS function. Two procedures that
+recurse into each other, each calling a procedure variable on the way, still
+overflow below `-O2`:
+
+```scheme
+(define (ping f n) (if (= n 0) 'done (begin (f n) (pong f (- n 1)))))
+(define (pong f n) (if (= n 0) 'done (begin (f n) (ping f (- n 1)))))
+(write (ping (lambda (x) x) 1000000))   ; done at -O2, segfault at -O1 and -O0
+```
+
+A backedge cannot cross functions; this needs the cross-function cps->cps
+tail call to bounce (the T6 trampoline already does it for a dynamic tail
+call) or `TUR_MUSTTAIL` where the compiler has it.
+
 **Severity:** medium. Every dialect that has effectful (CPS-compiled)
 functions; most visible in `#lang r7rs`, where any procedure that calls a
 Scheme procedure is CPS. A CPS function that loops by calling itself grows
@@ -96,7 +126,9 @@ runs self, mutual and through-a-variable tail calls 10,000,000 deep with its
 ## Guide upkeep
 
 `docs/guides/r7rs-guide.md` ("Where it differs from R7RS") carries a bullet
-beginning "**A loop through a procedure variable needs the C compiler's tail
-call.**" When the backedge lands, delete that bullet whole -- the guide's
-"Lists, vectors, strings" section already states that every Scheme call is a
-proper tail call, which becomes the complete story.
+beginning "**Mutual recursion through a procedure variable needs the C
+compiler's tail call.**" (narrowed from the loop bullet on 2026-09-26, when
+the self backedge landed). When cross-function CPS tail calls are constant
+stack at every level, delete that bullet whole -- the guide's "Lists,
+vectors, strings" section already states that every Scheme call is a proper
+tail call, which becomes the complete story.

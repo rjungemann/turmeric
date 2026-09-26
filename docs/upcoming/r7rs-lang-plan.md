@@ -2688,6 +2688,8 @@ task.*
 >   - A CPS loop is still only as deep as gcc's sibling calls make it: it
 >     overflows at `-O1`
 >     ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md)).
+>     *2026-09-26: a self-recursive CPS loop is a backedge now and holds at
+>     `-O0`; mutual recursion between two CPS procedures is what remains.*
 >   - A million-element `append`, `map` (one to four lists), `string-map`,
 >     `vector-map`, `list-copy`, `string->list`, `vector->list`, `equal?`,
 >     `read-line`, `read` and `write` now pass compiled at `-O2` and
@@ -2813,11 +2815,12 @@ differences, as reports"):
   ~~no `(export (rename ...))`~~ -- resolved 2026-09-26: the definition is
   spelled with the public name, or aliased when it is imported or exported
   twice.
-- **A loop whose non-tail call goes through a procedure variable** is CPS, and
-  its constant stack is the C compiler's sibling call -- the default `-O2` has
-  it, `-O0` does not
+- **Mutual recursion whose non-tail calls go through a procedure variable** is
+  CPS, and the tail call between the two procedures is the C compiler's
+  sibling call -- the default `-O2` has it, `-O0` does not
   ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md);
-  every dialect with effectful functions).
+  every dialect with effectful functions). A self-recursive loop of that
+  shape -- `for-each`, `map`, `member` -- is a backedge since 2026-09-26.
 - **Re-entrant `call/cc` is Linux and macOS only**
   ([r7rs-reentrant-callcc-not-on-windows](../reported/r7rs-reentrant-callcc-not-on-windows.md)).
   ~~A top-level re-entry re-runs the forms after it~~ -- resolved 2026-09-25:

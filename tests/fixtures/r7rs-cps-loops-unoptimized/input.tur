@@ -1,0 +1,28 @@
+#lang r7rs
+;; cps-self-tail-call-relies-on-sibling-call: a loop whose step calls a Scheme
+;; procedure through a VARIABLE is CPS-compiled, and its self tail call was
+;; `return f__cps(args, __kont)` -- a C call the optimizer made into a jump at
+;; -O2 but not at -O1 or -O0, so a million elements overflowed the stack.  It
+;; is a backedge now (parameters rebound, goto the top of the body).  Built
+;; at -O0 by hook.sh (`--debug` is -Og, where gcc still makes the sibling
+;; call).  requires.compiled: the interpreter has always looped here, and a
+;; 1e6-step run is a memory multiplier under it (CLAUDE.md, "Memory, not CPU,
+;; inside a single turi run").
+(import (scheme base) (scheme write))
+
+;; for-each over a million elements: the prelude's one-list walker.
+(let ((n 0))
+  (for-each (lambda (x) (set! n (+ n 1))) (make-list 1000000 1))
+  (write n)
+  (newline))
+
+;; A user loop whose non-tail call goes through a parameter.
+(define (run f i acc) (if (= i 0) acc (run f (- i 1) (+ acc (f 1)))))
+(write (run (lambda (x) x) 1000000 0))
+(newline)
+
+;; map, and member with a user comparison.
+(write (length (map (lambda (x) (+ x 1)) (make-list 1000000 1))))
+(newline)
+(write (member 7 (make-list 1000000 1) (lambda (a b) (= a b))))
+(newline)

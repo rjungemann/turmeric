@@ -7073,6 +7073,7 @@ static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, i
     void * k_998;
     bool __t1;
     bool __t2;
+__tur_cps_self:;
     bool __ps_69 = (hamt_sliter_hyadvance_ex((void *)(intptr_t)(iter)));
     if (tur_panicking) return ((int64_t)0);
     __t0 = __ps_69;
@@ -7095,7 +7096,17 @@ static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, i
             if (tur_panicking) return ((int64_t)0);
             __t2 = __ps_75;
             if (__t2) {
-                return map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, (int64_t)(intptr_t)val_cmp, __kont); /* cps->cps */
+                {   /* cps->cps self tail call: a backedge */
+                    void * __tb0 = iter;
+                    void * __tb1 = m2_hamt;
+                    void * __tb2 = keyeq;
+                    int64_t __tb3 = (int64_t)(intptr_t)val_cmp;
+                    iter = __tb0;
+                    m2_hamt = __tb1;
+                    keyeq = __tb2;
+                    val_cmp = __tb3;
+                    goto __tur_cps_self;
+                }
             } else {
                 return dk_run(__kont, (intptr_t)(false));
             }
@@ -7413,6 +7424,7 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
     bool __t3;
     int64_t __t4;
     int64_t __t5;
+__tur_cps_self:;
     bool __ps_91 = (null_qu(l1));
     if (tur_panicking) return ((int64_t)0);
     __t0 = __ps_91;
@@ -7442,7 +7454,15 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
                 int64_t __ps_98 = (list_hytail(l2));
                 if (tur_panicking) return ((int64_t)0);
                 __t5 = __ps_98;
-                return list_hyeq_qu__cps(__t4, __t5, (int64_t)(intptr_t)cmp_fn, __kont); /* cps->cps */
+                {   /* cps->cps self tail call: a backedge */
+                    int64_t __tb0 = __t4;
+                    int64_t __tb1 = __t5;
+                    int64_t __tb2 = (int64_t)(intptr_t)cmp_fn;
+                    l1 = __tb0;
+                    l2 = __tb1;
+                    cmp_fn = __tb2;
+                    goto __tur_cps_self;
+                }
             } else {
                 return dk_run(__kont, (intptr_t)(false));
             }
