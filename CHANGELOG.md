@@ -99,6 +99,14 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`tur repl --engine jit` loads a spice in-process on Windows.** The
+  in-process build maps module names to source files through a shadow
+  directory, and made each entry with `symlink()`, which is an `ENOSYS` stub
+  on Windows. Every load there printed `symlink ... Function not
+  implemented` and quietly used the `tur build --shared` subprocess path
+  instead. On Windows the entries are now hard links, or copies where a hard
+  link cannot reach; POSIX still uses symlinks.
+
 - **A `none` returned by a constrained generic no longer crashes at a typed
   `Option` parameter.** A higher-kinded generic returns the carrier, and the
   call site converts it back to the by-value `(Option int)`. That conversion

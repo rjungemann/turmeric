@@ -75,10 +75,16 @@ run() {
     (cd "$PROJ" && printf '%b' "$1" | "$TUR_BIN" repl --engine jit 2>&1)
 }
 
-# -------- scenario 1: in-process load (no .so artifact) -------------------
+# -------- scenario 1: in-process load (no shared-library artifact) --------
+# A failed in-process build falls back to the subprocess build, which also
+# loads the spice -- so "Loaded" alone cannot tell the two apart.  Check both
+# the fallback notice and every platform's artifact name: on Windows the
+# fallback leaves lib-N.dll, which a `.so`-only check let through while the
+# shadow dir's symlink() was an ENOSYS stub there.
 out=$(run ':quit\n')
 if   grep -q "Loaded spice from .* (4 exports)" <<< "$out" \
-  && ! ls "$PROJ"/.tur-repl-cache/lib-*.so >/dev/null 2>&1; then
+  && ! grep -q "in-process jit load failed" <<< "$out" \
+  && ! ls "$PROJ"/.tur-repl-cache/lib-* >/dev/null 2>&1; then
     pass "j2-load-in-process"
 else
     fail "j2-load-in-process" "$out"

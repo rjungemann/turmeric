@@ -67,8 +67,8 @@ the second analysis in one process or something `definition` reaches that
 Adjacent, and probably the same neighbourhood: the test's own recent history is
 Windows transport work (`fix(win): put the LSP/DAP stdio transport in binary
 mode`, `fix(win): make LSP cross-module resolution work`), and
-[windows-subprocess-and-shared-lib-gaps](windows-subprocess-and-shared-lib-gaps.md)
-is open against Windows subprocess behaviour.
+[windows-subprocess-and-shared-lib-gaps](../archive/windows-subprocess-and-shared-lib-gaps.md)
+was open against Windows subprocess behaviour (resolved 2026-09-26).
 
 ## Fix directions
 

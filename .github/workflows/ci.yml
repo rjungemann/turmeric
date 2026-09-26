@@ -1140,6 +1140,15 @@ jobs:
           done
           exit $fail
 
+      # `tur repl --engine jit` builds a module-name shadow directory for the
+      # spice.  It used symlink(), which platform_fs.h stubs to ENOSYS on
+      # Windows, so the in-process load never happened here -- every load
+      # quietly took the subprocess build instead.  repl_jit_build now hard-
+      # links (or copies) there, and the script's first case fails on any sign
+      # of that fallback.
+      - name: REPL spice load through the JIT
+        run: TUR=./build-win-jit/tur.exe timeout 600 bash tests/turi/repl-spice-jit.sh
+
   # The split runtime on WINDOWS.  A separate job from `split` (Linux) because
   # the two disagree, and the disagreement is the point: on Linux exactly one
   # fixture fails under TUR_RUNTIME=split; on Windows three do, and the extra

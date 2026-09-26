@@ -7,32 +7,54 @@
 > findable by reading the call sites. See "Resolution" at the end for what is
 > fixed, what is still POSIX-only, and what turned out to be misdiagnosed.
 
-> **STATUS 2026-09-26: one item left -- section 3, the REPL JIT shadow
-> symlink.** Re-checked against the source rather than this report's own
-> lists, which had fallen behind:
+> **RESOLVED 2026-09-26 (archived).** Section 3, the last open item, is
+> fixed; sections 1 and 2 had been done for a while, and section 4 lives in
+> [jit-windows-support-spike](../reported/jit-windows-support-spike.md). The
+> report's own lists had fallen behind the source, so each is re-checked here:
 >
 > - **Section 1 is done.** The three sites "What is still POSIX-only" names
 >   below were converted after it was written: `git ls-remote`
 >   (`upgrade_ls_remote`, `src/compiler/install.c`) and `git -C ... rev-parse
 >   HEAD` (`pkg_git_resolve`, `src/compiler/pkg.c`) quote through
 >   `pkg_cmd_arg` and redirect to `TUR_DEVNULL`
->   ([windows-spice-fetch-shell-quoting](../archive/windows-spice-fetch-shell-quoting.md)),
+>   ([windows-spice-fetch-shell-quoting](windows-spice-fetch-shell-quoting.md)),
 >   and the `tar | shasum` pair is gone -- the lockfile hash is an in-process
 >   SHA-256
->   ([pkg-hash-shells-out-to-sha256sum](../archive/pkg-hash-shells-out-to-sha256sum.md)).
+>   ([pkg-hash-shells-out-to-sha256sum](pkg-hash-shells-out-to-sha256sum.md)).
 >   `rev-parse` is exercised by `tur fetch`'s lock step, which works against a
 >   `file://` remote on Windows; `ls-remote` (`tur upgrade`) has not been run
 >   there.
 > - **Section 2 is done.** `tur build --shared` names its output `<name>.dll`
->   on Windows and the spice loader opens `lib-<hash>` + `TUR_SHLIB_EXT`, so
->   both ends agree.
-> - **Section 4 belongs to
->   [jit-windows-support-spike](jit-windows-support-spike.md)**, where the
->   engine port is tracked and largely finished.
-> - **Section 3 is still open**: `repl_jit_build` (`src/main.c`) builds its
->   module-name shadow directory with `symlink()`, which `src/platform_fs.h`
->   stubs to `ENOSYS` on Windows, so `tur repl --engine jit` cannot load a
->   spice there.
+>   on Windows and the spice loader opens `lib-<N>` + `TUR_SHLIB_EXT`, so both
+>   ends agree.
+> - **Section 3 is fixed.** `repl_jit_build` (`src/main.c`) now makes each
+>   shadow entry through `repl_jit_shadow_entry`: a symlink on POSIX as
+>   before, and on Windows a hard link (`CreateHardLinkA` -- no privilege
+>   needed on NTFS, and the same file, so a diagnostic naming the shadow path
+>   still names what the user edits), then a copy (`CopyFileA`) for what a
+>   hard link cannot span. A copy is sound, not just tolerable: the entry is
+>   recreated on every build, `(reload)` included, and nothing reads it in
+>   between. `platform_fs.h` still refuses to fake `symlink()` itself, as its
+>   comment asks.
+>
+>   What the defect did was quieter than a failure: the load itself went
+>   through. `tur_spice_image_load` falls back to the
+>   subprocess build when the JIT hook fails, so every `tur repl --engine jit`
+>   on Windows printed the `symlink ... Function not implemented` line and
+>   then silently used the `tur build --shared` path it was selected to
+>   avoid.
+>
+>   Verified on a MinGW-w64 cross build of `tur.exe` (`-DTUR_JIT=ON`, gcc 13)
+>   running under Wine 9.0 -- NOT on a real Windows box. There
+>   `tests/turi/repl-spice-jit.sh` goes from 1 passed / 3 failed (the
+>   `symlink` line, then the fallback) to 4 passed / 0 failed, with the hard
+>   link confirmed by the shadow entry's link count of 2; a separate
+>   cross-volume probe (`/dev/shm` source) takes the copy branch after
+>   `ERROR_NOT_SAME_DEVICE`. The script's first case used to check only for a
+>   leftover `lib-*.so`, which a Windows fallback (`lib-*.dll`) passes; it now
+>   fails on the fallback notice or any `lib-*` artifact. The `windows-jit` CI
+>   job runs it, so the real-Windows confirmation is the next CI run of that
+>   job.
 
 **Severity: high for anyone actually using `tur` on Windows.** `tur.exe` now
 builds and compiles-and-runs programs, but the commands that shell out or

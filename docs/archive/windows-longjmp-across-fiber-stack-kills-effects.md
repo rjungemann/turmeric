@@ -204,5 +204,5 @@ see [windows-longjmp-remaining-fiber-sites.md](windows-longjmp-remaining-fiber-s
 
 - [windows-longjmp-remaining-fiber-sites.md](windows-longjmp-remaining-fiber-sites.md) -- the sibling sites
 - [windows-posix-inline-c-gaps.md](../reported/windows-posix-inline-c-gaps.md)
-- [windows-subprocess-and-shared-lib-gaps.md](../reported/windows-subprocess-and-shared-lib-gaps.md)
+- [windows-subprocess-and-shared-lib-gaps.md](windows-subprocess-and-shared-lib-gaps.md)
 - [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md)

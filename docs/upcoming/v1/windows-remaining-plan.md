@@ -262,15 +262,14 @@ it.
   their `#include <sys/ioctl.h>` is wrapped in an `#ifdef`. See
   [docs/archive/windows-posix-inline-c-gaps.md](../../archive/windows-posix-inline-c-gaps.md).
 
-## Subprocess and shared-library layers (not fixture-visible)
+## Subprocess and shared-library layers (not fixture-visible) -- RESOLVED
 
-The commands that shell out or produce/load a shared library are unported:
-`tur install`, `tur fetch`, `tur new`, and REPL spice loading. They pass
-`/bin/sh` command strings with single-quote quoting to `cmd.exe`, and the REPL
-JIT module graph hits the deliberate `symlink` `ENOSYS` stub. This is the
-highest-impact group
-for an actual Windows user and is a prerequisite for WIN2 above. See
-[docs/reported/windows-subprocess-and-shared-lib-gaps.md](../../reported/windows-subprocess-and-shared-lib-gaps.md).
+**Resolved 2026-09-26.** `tur install`, `tur fetch`, `tur new`, REPL spice
+loading and `tur build --shared` all work on Windows: the shell-string sites
+quote and redirect through `platform_proc.h` / `pkg_cmd_arg`, the lockfile
+hash is in-process, `--shared` emits a `.dll`, and the REPL JIT module graph
+hard-links or copies where it used to hit the `symlink` `ENOSYS` stub. See
+[docs/archive/windows-subprocess-and-shared-lib-gaps.md](../../archive/windows-subprocess-and-shared-lib-gaps.md).
 
 ---
 

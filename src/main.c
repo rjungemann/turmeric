@@ -4611,14 +4611,14 @@ static int cmd_jit(int argc, char **argv) {
  * Module names come from each file's `(defmodule <name>` (filename stem
  * when absent), and files whose module name does not match their
  * filename are made importable through a SHADOW DIR of symlinks under
- * .tur-repl-cache/jit-mods/ -- module resolution is filename-based, and
+ * .tur-repl-cache/jit-mods/ (hard links or copies on Windows, see
+ * repl_jit_shadow_entry) -- module resolution is filename-based, and
  * on the --shared path a mismatched file was reachable only because each
  * file was compiled separately.
  *
- * v1 limits (recorded, not silent): transitive :spices deps are not
+ * v1 limit (recorded, not silent): transitive :spices deps are not
  * auto-appended (single-spice projects only -- the subprocess path
- * remains the default and handles them), and POSIX symlinks gate this
- * out of Windows along with the engine itself. */
+ * remains the default and handles them). */
 
 /* Peek a source file's defmodule name into out (cap bytes).  Textual scan
  * of the first non-comment occurrence -- both `(defmodule x` and sweet-exp
@@ -4713,6 +4713,36 @@ static void repl_jit_mkdirs_for(const char *shadow, const char *modname) {
     }
 }
 
+/* One shadow entry: `link` (shadow/<modname>.tur) names the source file.
+ *
+ * POSIX: a symlink.  Windows: symlink() is a deliberate ENOSYS stub
+ * (platform_fs.h) -- a real one needs Developer Mode or elevation, and the
+ * header leaves the fallback to the caller, which knows what it can live
+ * with.  This caller can live with any file holding the same bytes: the
+ * entry is unlinked and recreated on every build, (reload) included, and
+ * nothing reads it between builds, so it can never be staler than the
+ * compile that reads it.  So: a HARD link first -- no privilege needed on
+ * NTFS, and it is the same file, so a diagnostic naming the shadow path
+ * still names what the user edits -- then a COPY for what a hard link
+ * cannot span (another volume, FAT).  Returns 0, or -1 after printing why. */
+static int repl_jit_shadow_entry(const char *src, const char *link) {
+#ifdef _WIN32
+    if (CreateHardLinkA(link, src, NULL)) return 0;
+    DWORD link_err = GetLastError();
+    if (CopyFileA(src, link, FALSE)) return 0;
+    fprintf(stderr,
+            "tur repl: jit: cannot shadow %s as %s (hard link: Windows "
+            "error %lu, copy: Windows error %lu)\n",
+            src, link, (unsigned long)link_err,
+            (unsigned long)GetLastError());
+    return -1;
+#else
+    if (symlink(src, link) == 0) return 0;
+    fprintf(stderr, "tur repl: jit: symlink %s: %s\n", link, strerror(errno));
+    return -1;
+#endif
+}
+
 static int repl_jit_build(const char *build_dir, void **out_image,
                           char **out_manifest) {
     *out_image = NULL;
@@ -4751,9 +4781,7 @@ static int repl_jit_build(const char *build_dir, void **out_image,
         char link[4900];
         snprintf(link, sizeof(link), "%s/%s.tur", shadow, mods[i].mod_name);
         unlink(link);
-        if (symlink(mods[i].src_path, link) != 0) {
-            fprintf(stderr, "tur repl: jit: symlink %s: %s\n", link,
-                    strerror(errno));
+        if (repl_jit_shadow_entry(mods[i].src_path, link) != 0) {
             rc = -1;
             break;
         }
