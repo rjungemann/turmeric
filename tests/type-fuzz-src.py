@@ -246,17 +246,14 @@ def known_bug_slug(tags):
     # seconds and keeps each one continuously measured: when a row starts
     # passing it stops matching here, and --known-probes reports it FIXED.
     #
-    # Per-(seam, payload) verdicts measured against v0.48.0 -- the matrix is in
-    # docs/reported/runtime-seams-carry-payloads-as-int64.md.  Bare `int` is the
-    # only payload every broken seam gets right, which is why every fixture and
-    # every guide example for these features sends an int.
-    if "seam_session" in tags or "seam_router" in tags:
-        # float truncates (7.25 -> 7); cstr and by-value struct are cc errors.
-        # int and bool round-trip.
-        if ("payload_box" in tags or "scalar_float" in tags
-                or "scalar_cstr" in tags):
-            return ("session-payloads-are-int64-only" if "seam_session" in tags
-                    else "router-payloads-are-int64-only")
+    # (session-payloads-are-int64-only, router-payloads-are-int64-only:
+    # RESOLVED 2026-09-16 and archived -- float is bit-reinterpreted, cstr
+    # cast through intptr_t, and a by-value struct payload is REJECTED by
+    # design with TUR-E0212.  Rows retired 2026-09-26.  They had outlived
+    # their reports by ten nights: every `payload_box` session/router leg --
+    # a designed rejection, which is what SEAM_REJECT is for -- was being
+    # counted as KNOWN against a closed report.  Both probes below stay as
+    # FIXED regression rows.)
     # The generator and await seams were the worst of the family until
     # 2026-09-17 -- the slot's type reached the SIGNATURE (gen-unwrap / await
     # declared :int), so bool printed 1 and cstr a raw pointer.  Both read
@@ -355,6 +352,18 @@ KNOWN_PROBES = [
      "(definstance MoP [SumP] (mzerop [] (:: 0 SumP)))\n"
      "(defn fq [^SgP A ^MoP A] [x : A] : A (combp x (mzerop)))\n"
      "(defn main [] : int (println (:: (fq (:: 3 SumP)) int)) 0)\n"),
+    # RESOLVED 2026-09-26.  Found by the nightly as class_nested + gid on a
+    # float leg (seeds 20260913/17/18/25), filed by none of them -- see
+    # tests/fuzz-seed-corpus.txt.  A FIXED regression probe: the flat tail is
+    # the minimal shape, and -4.25 printed -nan while it was open.
+    ("constrained-generic-float-result-into-generic-value-converts",
+     "(defclass NvP [a] (nvp [x : a y : a] : a))\n"
+     "(definstance NvP [int]   (nvp [x y] x))\n"
+     "(definstance NvP [float] (nvp [x y] x))\n"
+     "(defn fr [^NvP A] [x : A] : A (nvp x x))\n"
+     "(defn gr [A] [x : A] : A x)\n"
+     "(defn main [] : int (println (gr (fr -4.25))) 0)\n",
+     "-4.25\n"),
     # ---- runtime seams ------------------------------------------------------
     #
     # All four are wrong-ANSWER defects, so all four MUST carry the expected
@@ -724,7 +733,7 @@ class Gen:
         diverge; the method is BINARY over its own class type so one call can
         feed another; and the generic body NESTS the two calls.  All three are
         required by
-        docs/reported/nested-class-method-call-picks-the-first-instance.md.
+        docs/archive/nested-class-method-call-picks-the-first-instance.md.
 
         The method projects its first argument, so nesting is an identity and
         the leg's expected value is unchanged -- resolving to the wrong
@@ -746,7 +755,7 @@ class Gen:
 
     def x_class_nullary_newtype(self, leg, tn, e):
         """A NULLARY class method whose instances are over a `defopaque`
-        newtype -- docs/reported/nullary-class-method-unresolvable-over-newtype-tyvar.md.
+        newtype -- docs/archive/nullary-class-method-unresolvable-over-newtype-tyvar.md.
 
         Both halves are required: every other generated method takes `self`,
         and every other instance head is a plain struct/scalar name.  Applied
@@ -786,9 +795,11 @@ class Gen:
         # Instance heads: plain type names only.
         if not tn.startswith("("):
             xs.append(self.x_class_thru)
-            # class_nested is in the default pool since its report was resolved
-            # (2026-09-11).  class_nullary_newtype is still an open report, so
-            # it stays avoided until --emit-known turns it back on.
+            # Both F1 shapes are in the default pool: their reports were
+            # resolved and archived (2026-09-11).  class_nested is also the
+            # only shape that gives a class a SECOND instance declared before
+            # the leg's own, which is what found
+            # constrained-generic-float-result-into-generic-value-converts.
             xs.append(self.x_class_nested)
             if tn == "int":
                 xs.append(self.x_class_nullary_newtype)

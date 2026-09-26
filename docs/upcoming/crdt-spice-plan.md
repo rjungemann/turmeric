@@ -5,7 +5,7 @@
 > **Type:** spice (in `../turmeric-spices/`), plus one candidate stdlib
 > addition (`map-merge-with`) that the plan deliberately declines to make.
 > **Sequencing:** last of three.
-> [type-confusion-detection-plan.md](type-confusion-detection-plan.md) ->
+> [type-confusion-detection-plan.md](../archive/type-confusion-detection-plan.md) ->
 > [lattice-vocabulary-plan.md](lattice-vocabulary-plan.md) -> this. C1's
 > `JoinSemilattice` comes from the lattice plan rather than being redeclared
 > here, and both are gated on two open typeclass defects filed from this plan's
