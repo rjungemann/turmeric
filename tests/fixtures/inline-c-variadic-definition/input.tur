@@ -1,0 +1,31 @@
+;; inline-c-variadic-definition -- a variadic C function DEFINED in inline C
+;; (hoisted to file scope), read with va_start/va_arg, and called with 3, 5
+;; and 2 arguments.
+;;
+;; On the Windows JIT this never ran in the engine.  c2mir's own stdarg.h
+;; spells va_start as the MSVC intrinsic `__va_start` on _WIN32, which c2mir
+;; does not implement, so the definition compiled to an implicit call that
+;; could not link and the program quietly fell back to cc (TUR-W0070).  Once
+;; va_start reached __builtin_va_start it SEGFAULTED instead: win64's va_list
+;; is a plain char *, which c2mir keeps in a register, and both builtins were
+;; handed its uninitialised value rather than its address.
+;; src/jit_win_prelude.h now passes &(ap) -- see
+;; docs/archive/jit-windows-support-spike.md, "Resolution: the whole-preamble
+;; fallback".  The windows-jit CI job runs this file through the engine and
+;; fails on a fallback.
+;;
+;; Expected: 66 + 1000 * 15 + 100000 * 78 = 7815066
+
+(defn va-probe [] : int
+  ```c
+  /* __tur_include__: #include <stdarg.h> */
+  /* __tur_include__: static long long va_sum(int n, ...) { va_list ap; long long s = 0; va_start(ap, n); for (int i = 0; i < n; i++) s += va_arg(ap, long long); va_end(ap); return s; } */
+  /* __tur_include__: static int va_digits(int n, ...) { va_list ap; int s = 0; va_start(ap, n); for (int i = 0; i < n; i++) s = s * 10 + va_arg(ap, int); va_end(ap); return s; } */
+  return va_sum(3, 11LL, 22LL, 33LL)
+       + 1000 * va_sum(5, 1LL, 2LL, 3LL, 4LL, 5LL)
+       + 100000 * (long long)va_digits(2, 7, 8);
+  ```)
+
+(defn main [] : int
+  (println (va-probe))
+  0)

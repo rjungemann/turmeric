@@ -9680,6 +9680,17 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
     }
 }
 
+/* Drop the program-keyed caches (see the declaration in emit_cps_ir.h). */
+void emit_cps_ir_forget(void) {
+    if (g_arena_live) { arena_free(&g_arena); g_arena_live = false; }
+    free(g_ents); g_ents = NULL; g_ents_n = 0;
+    g_prog = NULL;
+    g_ents_ctx = NULL;
+    fdc_prog = NULL;
+    g_fwd_done = false;
+    g_eff_n = 0;
+}
+
 bool emit_cps_ir_program_has_emittable(const Expr *program) {
     ensure_S(program);
     for (size_t i = 0; i < g_ents_n; i++)

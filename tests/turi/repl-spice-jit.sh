@@ -75,10 +75,16 @@ run() {
     (cd "$PROJ" && printf '%b' "$1" | "$TUR_BIN" repl --engine jit 2>&1)
 }
 
-# -------- scenario 1: in-process load (no .so artifact) -------------------
+# -------- scenario 1: in-process load (no shared-library artifact) --------
+# A failed in-process build falls back to the subprocess build, which also
+# loads the spice -- so "Loaded" alone cannot tell the two apart.  Check both
+# the fallback notice and every platform's artifact name: on Windows the
+# fallback leaves lib-N.dll, which a `.so`-only check let through while the
+# shadow dir's symlink() was an ENOSYS stub there.
 out=$(run ':quit\n')
 if   grep -q "Loaded spice from .* (4 exports)" <<< "$out" \
-  && ! ls "$PROJ"/.tur-repl-cache/lib-*.so >/dev/null 2>&1; then
+  && ! grep -q "in-process jit load failed" <<< "$out" \
+  && ! ls "$PROJ"/.tur-repl-cache/lib-* >/dev/null 2>&1; then
     pass "j2-load-in-process"
 else
     fail "j2-load-in-process" "$out"
@@ -115,27 +121,27 @@ else
 fi
 
 # -------- scenario 4: (reload) self-heal + in-session rebinding -----------
-FIFO="$WORK/fifo"
-mkfifo "$FIFO"
+# The session's input is a pipe that the writer fills only AFTER fixing the
+# source, so the REPL starts on the broken spice and has to (reload) it.  This
+# was a mkfifo: a native Windows tur.exe cannot hold an MSYS FIFO open -- it
+# reads EOF at once and exits -- and the write into the FIFO then died of
+# SIGPIPE, so the script exited 141 under Git Bash and MSYS2 bash alike.  A
+# pipe is a real OS pipe on every platform.
 OUT4="$P2/out.log"
-(cd "$P2" && "$TUR_BIN" repl --engine jit < "$FIFO") >"$OUT4" 2>&1 &
-REPL_PID=$!
-exec 3>"$FIFO"
-sleep 1
-cat > "$P2/src/sh.tur" <<'EOF'
+{
+    sleep 1
+    cat > "$P2/src/sh.tur" <<'EOF'
 (defmodule sh (export f) (defn f [] :int 42))
 EOF
-sleep 1
-printf '(reload)\n(f)\n:quit\n' >&3
-exec 3>&-
-wait "$REPL_PID"
+    sleep 1
+    printf '(reload)\n(f)\n:quit\n'
+} | (cd "$P2" && "$TUR_BIN" repl --engine jit) >"$OUT4" 2>&1
 if   grep -q '(reload) loaded 1 export' "$OUT4" \
   && grep -qx '=> 42' "$OUT4"; then
     pass "j2-reload-self-heal"
 else
     fail "j2-reload-self-heal" "$(cat "$OUT4")"
 fi
-rm -f "$FIFO"
 
 echo
 echo "repl-spice-jit: $PASS passed, $FAIL failed"

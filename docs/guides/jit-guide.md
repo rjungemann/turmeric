@@ -312,12 +312,12 @@ disagree.
   one TU in memory; symbol binding goes through the hook instead of `dlsym`.
   Every load compiles fresh, which is the point -- there is no cached artifact
   to go stale. `repl_jit_build` in `src/main.c` does the interesting work:
-  a shadow symlink directory mapping module name to source file, a synthetic
+  a shadow directory mapping module name to source file (symlinks; hard links
+  or copies on Windows, where `symlink()` is an `ENOSYS` stub), a synthetic
   `__jit_root.tur` so imports dedupe through the ordinary module machinery,
   and a save/clear of `g_interpret_mode` around the compile so the REPL's
   interpreted posture does not select `#?(:turi ...)` branches into native
-  code. Known v1 limits: transitive `:spices` deps are not auto-appended, and
-  the symlinks gate this out of Windows.
+  code. Known v1 limit: transitive `:spices` deps are not auto-appended.
 - **Embedding.** `tur_jit_compile_image` / `tur_jit_image_sym` /
   `tur_jit_image_free` give a plain `libturi` consumer the same engine;
   `tests/turi/jit-embed.c` is the proof, cross-checking `turi_eval` against a

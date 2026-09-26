@@ -387,6 +387,35 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"strdup", (void *) strdup},
   {"strerror", (void *) strerror},
   {"__acrt_iob_func", (void *) __acrt_iob_func},
+  {"sprintf", (void *) sprintf},
+  /* winpthreads is linked into tur.exe STATICALLY and, like the MinGW runtime
+   * above, is left out of --export-all-symbols -- so none of these reach the
+   * RTLD_DEFAULT walk either.  The split path never noticed: its program half
+   * calls no pthread function, the host half does.  The whole-preamble
+   * fallback compiles the runtime too, and died at MIR_link on the first one
+   * (`import of undefined item pthread_cond_timedwait`). */
+  {"pthread_join", (void *) pthread_join},
+  {"pthread_detach", (void *) pthread_detach},
+  {"pthread_exit", (void *) pthread_exit},
+  {"pthread_self", (void *) pthread_self},
+  {"pthread_equal", (void *) pthread_equal},
+  {"pthread_mutex_init", (void *) pthread_mutex_init},
+  {"pthread_mutex_lock", (void *) pthread_mutex_lock},
+  {"pthread_mutex_trylock", (void *) pthread_mutex_trylock},
+  {"pthread_mutex_unlock", (void *) pthread_mutex_unlock},
+  {"pthread_mutex_destroy", (void *) pthread_mutex_destroy},
+  {"pthread_cond_init", (void *) pthread_cond_init},
+  {"pthread_cond_wait", (void *) pthread_cond_wait},
+  {"pthread_cond_timedwait", (void *) pthread_cond_timedwait},
+  {"pthread_cond_signal", (void *) pthread_cond_signal},
+  {"pthread_cond_broadcast", (void *) pthread_cond_broadcast},
+  {"pthread_cond_destroy", (void *) pthread_cond_destroy},
+  {"pthread_once", (void *) pthread_once},
+  {"pthread_key_create", (void *) pthread_key_create},
+  {"pthread_getspecific", (void *) pthread_getspecific},
+  {"pthread_setspecific", (void *) pthread_setspecific},
+  {"clock_gettime", (void *) clock_gettime},
+  {"nanosleep", (void *) nanosleep},
 #endif
 };
 

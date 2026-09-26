@@ -99,7 +99,7 @@ gets exactly what it emitted -- the monolithic behaviour, restored.
 
 Quoted includes only: `<...>` system headers stay the decls region's business,
 and re-emitting those on Windows would hand the JIT the MinGW SDK headers it
-cannot digest ([jit-windows-support-spike](../reported/jit-windows-support-spike.md)).
+cannot digest ([jit-windows-support-spike](jit-windows-support-spike.md)).
 
 ---
 

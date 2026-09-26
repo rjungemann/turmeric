@@ -1558,6 +1558,12 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_reactor_slot_reuse_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Graceful socket close through the reactor (tur_reactor_linger_close)
+add_test(
+  NAME tur_reactor_linger_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_reactor_linger_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice lockfile integrity hash (pkg_hash_dir)
 add_test(
   NAME tur_pkg_hash

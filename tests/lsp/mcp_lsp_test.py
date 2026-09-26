@@ -288,10 +288,22 @@ def test_mcp() -> None:
             crash came to read as a null result.  Say what actually happened,
             and include the exit status and whatever the server put on stderr,
             since on a crash that is the only evidence there is.  See
-            docs/reported/mcp-server-exits-mid-session-on-windows.md.
+            docs/archive/mcp-server-exits-mid-session-on-windows.md.
             """
             if r is None:
-                rc = srv.proc.poll()
+                # WAIT for the status, do not poll for it.  EOF on stdout
+                # arrives while the process is still tearing down, so an
+                # immediate poll() answers None -- which is exactly what the
+                # 2026-09-18 occurrence reported, and it says nothing.  The
+                # real code is what separates a crash (0xC0000005 access
+                # violation, 0xC00000FD stack overflow on Windows; a negative
+                # signal number on POSIX) from a clean early exit.
+                try:
+                    rc = srv.proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    rc = "still running 10s after closing stdout"
+                if isinstance(rc, int) and rc > 0xFFFF:
+                    rc = f"{rc} ({rc & 0xFFFFFFFF:#010x})"
                 err = ""
                 try:
                     if srv.proc.stderr is not None:
@@ -405,6 +417,57 @@ def test_mcp() -> None:
               f"TUR_NO_MCP=1: stderr mentions 'disabled'")
         check(out == b"", f"TUR_NO_MCP=1: no stdout traffic (got {out[:80]!r})")
 
+    finally:
+        os.unlink(good_path)
+        os.unlink(bad_path)
+
+
+def test_mcp_repeated_analysis() -> None:
+    """One server, many analyses: the server must still be there at the end.
+
+    Every MCP tool call compiles its file again in the SAME process, and the
+    CPS emitter cached its classification keyed on the program's and the
+    EmitCtx's ADDRESSES.  Once the allocator handed a later compile the same
+    addresses, the stale cache was emitted and the server died with an access
+    violation -- on Windows after 25-40 calls of exactly this sequence, and on
+    CI as early as the fifth (docs/archive/mcp-server-exits-mid-session-on-windows.md).
+    """
+    print("--- MCP repeated analysis ---")
+    good_path = make_tempfile(GOOD_TUR)
+    bad_path = make_tempfile(BAD_TUR)
+    rounds = 40
+    try:
+        srv = Server([TUR, "mcp"], transport="mcp")
+        srv.call("initialize", {"protocolVersion": "2024-11-05",
+                                "capabilities": {},
+                                "clientInfo": {"name": "py-test", "version": "0"}})
+        seq = [("check_file", {"path": good_path}),
+               ("check_file", {"path": bad_path}),
+               ("symbols", {"path": good_path}),
+               ("hover", {"path": good_path, "line": 4, "col": 8}),
+               ("definition", {"path": good_path, "line": 4, "col": 8})]
+        answered = 0
+        died = None
+        for r in range(rounds):
+            for name, args in seq:
+                resp = srv.call("tools/call", {"name": name, "arguments": args})
+                if resp is None:
+                    try:
+                        rc = srv.proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        rc = "still running"
+                    err = srv.proc.stderr.read().decode("utf-8", "replace")
+                    died = (f"{name} in round {r + 1}, after {answered} answers; "
+                            f"exit {rc!r}; stderr: {err.strip()[-300:]!r}")
+                    break
+                answered += 1
+            if died:
+                break
+        check(died is None,
+              f"mcp repeated analysis: {rounds * len(seq)} calls in one server"
+              + (f" -- server died at {died}" if died else ""))
+        if died is None:
+            srv.close()
     finally:
         os.unlink(good_path)
         os.unlink(bad_path)
@@ -1079,6 +1142,7 @@ def main() -> int:
         print(f"SKIP: {TUR} not built", file=sys.stderr)
         return 0
     test_mcp()
+    test_mcp_repeated_analysis()
     test_lsp()
     test_lsp_encoding_and_deferred_analysis()
     test_lsp_client_gaps()

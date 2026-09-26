@@ -135,7 +135,9 @@ static inline char *tur_realpath(const char *path, char *resolved) {
  * falls back to a COPY when the OS refuses -- which is what answers the
  * privilege requirement, and is the only way to answer it.  Ownership then
  * comes from state.tur rather than readlink, because a copy cannot say who
- * wrote it.
+ * wrote it.  `tur repl --engine jit` makes the same kind of call for its
+ * module shadow directory (repl_jit_shadow_entry, main.c): a hard link, then
+ * a copy.
  *
  * So: do NOT "fix" these shims by making symlink() succeed via
  * CreateSymbolicLinkA on its own.  A shim that works only for elevated users

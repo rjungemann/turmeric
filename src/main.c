@@ -4180,7 +4180,7 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
      * Quoted includes only: `<...>` system headers are the decls region's
      * business, and on Windows re-emitting them is actively harmful (the JIT
      * cannot digest the MinGW SDK headers -- see
-     * docs/reported/jit-windows-support-spike.md). */
+     * docs/archive/jit-windows-support-spike.md). */
     for (const char *p = ps; p < pe; ) {
         const char *eol = (const char *)memchr(p, '\n', (size_t)(pe - p));
         size_t len = eol ? (size_t)(eol - p + 1) : (size_t)(pe - p);
@@ -4611,14 +4611,14 @@ static int cmd_jit(int argc, char **argv) {
  * Module names come from each file's `(defmodule <name>` (filename stem
  * when absent), and files whose module name does not match their
  * filename are made importable through a SHADOW DIR of symlinks under
- * .tur-repl-cache/jit-mods/ -- module resolution is filename-based, and
+ * .tur-repl-cache/jit-mods/ (hard links or copies on Windows, see
+ * repl_jit_shadow_entry) -- module resolution is filename-based, and
  * on the --shared path a mismatched file was reachable only because each
  * file was compiled separately.
  *
- * v1 limits (recorded, not silent): transitive :spices deps are not
+ * v1 limit (recorded, not silent): transitive :spices deps are not
  * auto-appended (single-spice projects only -- the subprocess path
- * remains the default and handles them), and POSIX symlinks gate this
- * out of Windows along with the engine itself. */
+ * remains the default and handles them). */
 
 /* Peek a source file's defmodule name into out (cap bytes).  Textual scan
  * of the first non-comment occurrence -- both `(defmodule x` and sweet-exp
@@ -4713,6 +4713,36 @@ static void repl_jit_mkdirs_for(const char *shadow, const char *modname) {
     }
 }
 
+/* One shadow entry: `link` (shadow/<modname>.tur) names the source file.
+ *
+ * POSIX: a symlink.  Windows: symlink() is a deliberate ENOSYS stub
+ * (platform_fs.h) -- a real one needs Developer Mode or elevation, and the
+ * header leaves the fallback to the caller, which knows what it can live
+ * with.  This caller can live with any file holding the same bytes: the
+ * entry is unlinked and recreated on every build, (reload) included, and
+ * nothing reads it between builds, so it can never be staler than the
+ * compile that reads it.  So: a HARD link first -- no privilege needed on
+ * NTFS, and it is the same file, so a diagnostic naming the shadow path
+ * still names what the user edits -- then a COPY for what a hard link
+ * cannot span (another volume, FAT).  Returns 0, or -1 after printing why. */
+static int repl_jit_shadow_entry(const char *src, const char *link) {
+#ifdef _WIN32
+    if (CreateHardLinkA(link, src, NULL)) return 0;
+    DWORD link_err = GetLastError();
+    if (CopyFileA(src, link, FALSE)) return 0;
+    fprintf(stderr,
+            "tur repl: jit: cannot shadow %s as %s (hard link: Windows "
+            "error %lu, copy: Windows error %lu)\n",
+            src, link, (unsigned long)link_err,
+            (unsigned long)GetLastError());
+    return -1;
+#else
+    if (symlink(src, link) == 0) return 0;
+    fprintf(stderr, "tur repl: jit: symlink %s: %s\n", link, strerror(errno));
+    return -1;
+#endif
+}
+
 static int repl_jit_build(const char *build_dir, void **out_image,
                           char **out_manifest) {
     *out_image = NULL;
@@ -4751,9 +4781,7 @@ static int repl_jit_build(const char *build_dir, void **out_image,
         char link[4900];
         snprintf(link, sizeof(link), "%s/%s.tur", shadow, mods[i].mod_name);
         unlink(link);
-        if (symlink(mods[i].src_path, link) != 0) {
-            fprintf(stderr, "tur repl: jit: symlink %s: %s\n", link,
-                    strerror(errno));
+        if (repl_jit_shadow_entry(mods[i].src_path, link) != 0) {
             rc = -1;
             break;
         }
@@ -12513,7 +12541,38 @@ const char *__asan_default_options(void);
 const char *__asan_default_options(void) { return "detect_stack_use_after_return=0"; }
 #endif
 
+#ifdef _WIN32
+/* A crash in tur.exe is SILENT on Windows: an access violation ends the
+ * process with status 0xC0000005 and nothing on stderr, where POSIX at least
+ * reports the signal.  That is how `tur mcp` came to die mid-session on CI
+ * three times with no evidence at all
+ * (docs/archive/mcp-server-exits-mid-session-on-windows.md).
+ *
+ * Name the exception and where it happened, as an offset into tur.exe --
+ * `addr2line -e tur.exe <ImageBase + offset>` resolves it against the same
+ * build (ImageBase from `objdump -p`, 0x140000000 by default) -- then carry on
+ * exactly as before: EXCEPTION_CONTINUE_SEARCH leaves the default handling --
+ * and so the exit status -- untouched.  Only an exception nothing else
+ * handled reaches this, so it prints only on a process that is already dying.
+ * Kept to a stack buffer and _write: after a stack overflow there is very
+ * little stack left to report with. */
+static LONG WINAPI tur_win_report_crash(EXCEPTION_POINTERS *ep) {
+    char msg[160];
+    uintptr_t at   = (uintptr_t)ep->ExceptionRecord->ExceptionAddress;
+    uintptr_t base = (uintptr_t)GetModuleHandleW(NULL);
+    int n = snprintf(msg, sizeof msg,
+                     "tur: fatal exception 0x%08lx at %p (tur.exe+0x%llx)\n",
+                     (unsigned long)ep->ExceptionRecord->ExceptionCode,
+                     (void *)at, (unsigned long long)(at - base));
+    if (n > 0) (void)_write(2, msg, (unsigned)n);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(tur_win_report_crash);
+#endif
     TurMainArgs a = { argc, argv };
     return tur_run_on_big_stack(tur_main_job, &a);
 }

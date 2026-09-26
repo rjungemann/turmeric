@@ -89,7 +89,7 @@ path use the builtins too and retire the special case entirely.
 ## Related
 
 - [../archive/windows-longjmp-across-fiber-stack-kills-effects.md](windows-longjmp-across-fiber-stack-kills-effects.md) -- the resolved DK site, with the measurements
-- [jit-windows-support-spike.md](../reported/jit-windows-support-spike.md) -- the c2mir fork work this would ride on
+- [jit-windows-support-spike.md](jit-windows-support-spike.md) -- the c2mir fork work this would ride on
 - [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md)
 
 

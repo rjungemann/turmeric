@@ -171,7 +171,11 @@ static inline void r7bn_sub_mag(r7rs_bn *r, const r7rs_bn *a, const r7rs_bn *b) 
     r7bn_reserve(r, a->n);
     int64_t borrow = 0;
     for (size_t i = 0; i < a->n; i++) {
-        int64_t t = (int64_t)a->d[i] - (i < b->n ? b->d[i] : 0) - borrow;
+        /* Both limbs cast, not just the first: c2mir on win64 (the pinned
+         * MIR) computes `int64_t - uint32_t` in 32-bit unsigned, so a borrow
+         * came out as 4294967294 and `tur jit` got bignum subtraction wrong
+         * (docs/reported/c2mir-llp64-long-long-vs-unsigned-int.md). */
+        int64_t t = (int64_t)a->d[i] - (int64_t)(i < b->n ? b->d[i] : 0) - borrow;
         borrow = t < 0;
         r->d[i] = (uint32_t)(borrow ? t + R7BN_BASE : t);
     }

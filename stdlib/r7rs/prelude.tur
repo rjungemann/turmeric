@@ -1800,8 +1800,39 @@
   /* __tur_include__: #include <pthread.h> */
   /* __tur_include__: #include <stdint.h> */
   /* __tur_include__: #include <stdlib.h> */
-  /* __tur_include__: typedef struct r7k_cont {
-      jmp_buf jb;
+  /* __tur_include__: // r7rs-reentrant-callcc-not-on-windows: the jump into a
+  // continuation must not unwind.  win64 `longjmp` is an SEH unwind that
+  // walks every frame between it and its setjmp, and a re-entry jumps from
+  // BELOW a stack image it has just copied back, so the frames that walk
+  // would read are not the ones that called it.  GCC/clang's
+  // __builtin_setjmp/_longjmp unwind nothing -- the preamble's TUR_SETJMP
+  // makes the same choice (emit_tur_jmp_buf_prelude).  __builtin_longjmp may
+  // not share a function with its __builtin_setjmp, which is why r7k_run_form
+  // jumps through r7k_longjmp.  c2mir (`tur jit`) has neither __GNUC__ nor
+  // the builtin, and every Scheme program reaches it on the Windows JIT: a
+  // Scheme program never engages the S2 split (r7rs-programs-compile-slowly),
+  // and the whole-preamble path it takes instead has linked there since
+  // 2026-09-26.  So the middle arm uses the host's no-unwind pair
+  // (src/async/tur_sjlj_x64_win.S, resolved through jit_engine.c's
+  // JIT_SHIMS), the same answer the S2 split gives TUR_SETJMP.
+  #if defined(_WIN32) && (defined(__GNUC__) || defined(__clang__))
+  typedef void *r7k_jmp_buf[5];
+  #define R7K_SETJMP(b)  __builtin_setjmp(b)
+  #define R7K_LONGJMP(b) __builtin_longjmp((b), 1)
+  #elif defined(_WIN32)
+  typedef void *r7k_jmp_buf[30];
+  extern int  tur_sjlj_set(void *);
+  extern void tur_sjlj_jump(void *);
+  extern void *tur_win_stack_base(void);
+  #define R7K_SETJMP(b)  tur_sjlj_set(b)
+  #define R7K_LONGJMP(b) tur_sjlj_jump(b)
+  #else
+  typedef jmp_buf r7k_jmp_buf;
+  #define R7K_SETJMP(b)  setjmp(b)
+  #define R7K_LONGJMP(b) longjmp((b), 1)
+  #endif
+  typedef struct r7k_cont {
+      r7k_jmp_buf jb;
       unsigned char *lo, *img;
       size_t n;
       void *tb_root, *tb_armed, *dk_driver, **esc;
@@ -1853,6 +1884,17 @@
       }
   #elif defined(__APPLE__)
       r7k_base_tls = (unsigned char *)pthread_get_stackaddr_np(pthread_self());
+  #elif defined(_WIN32) && defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+      // The TEB's NT_TIB.StackBase, at gs:[0x08] on win64.  Read directly:
+      // this block precedes the preamble's <windows.h>, and declaring a
+      // kernel32 function ahead of it would clash with its dllimport.
+      unsigned char *b;
+      __asm__ ("movq %%gs:0x08, %0" : "=r"(b));
+      r7k_base_tls = b;
+  #elif defined(_WIN32) && !(defined(__GNUC__) || defined(__clang__))
+      // c2mir has no inline asm; the host reads the same TEB field
+      // (src/runtime/tur_tls.c).
+      r7k_base_tls = (unsigned char *)tur_win_stack_base();
   #endif
       return r7k_base_tls;
   }
@@ -1892,21 +1934,28 @@
   // typed trampoline.)
   static unsigned char *r7k_form_saved[64];
   static int r7k_form_depth;
+  __attribute__((noinline, noreturn))
+  static void r7k_longjmp(r7k_jmp_buf jb) {
+      R7K_LONGJMP(jb);
+  }
   static void r7k_run_form(void (*run)(void *), void *thunk) {
-      jmp_buf jb;
+      r7k_jmp_buf jb;
       if (r7k_form_depth >= 64) abort();
       r7k_form_saved[r7k_form_depth++] = r7k_form_base;
       r7k_form_base = (unsigned char *)&jb;
-      if (setjmp(jb) == 0) {
+      if (R7K_SETJMP(jb) == 0) {
           run(thunk);
-          longjmp(jb, 1);
+          r7k_longjmp(jb);
       }
       r7k_form_base = r7k_form_saved[--r7k_form_depth];
   }
   static void (*volatile r7k_run_form_p)(void (*)(void *), void *) = r7k_run_form;
   static int r7k_measure(r7k_cont *c, unsigned char *mark) {
-      // r7rs-reentrant-callcc-not-on-windows: no image without a stack base,
-      // whatever the form base says -- call/cc is the escape there.
+      // No image without a stack base, whatever the form base says -- call/cc
+      // is the escape wherever r7k_stack_base finds none (a c2mir compile on
+      // Windows).  PR 928's Windows CI found the form base letting a capture
+      // through with no stack base, which crashed every program that used
+      // call/cc as an escape.
       unsigned char *sb = r7k_stack_base();
       if (!sb) return 0;
       unsigned char *base = (r7k_form_base && r7k_form_base > mark) ? r7k_form_base : sb;
@@ -1922,7 +1971,7 @@
   #ifdef R7K_ASAN
       __asan_unpoison_memory_region(c->lo, c->n);
   #endif
-      longjmp(c->jb, 1);
+      R7K_LONGJMP(c->jb);
   }
   __attribute__((noinline, noreturn))
   static void r7k_restore(r7k_cont *c) {
@@ -1947,7 +1996,7 @@
     c->esc = (void **)malloc((size_t)c->esc_n * sizeof(void *));
     for (int i = 0; i < c->esc_n; i++) c->esc[i] = (void *)tur_escape_live[i];
   }
-  if (setjmp(c->jb) != 0) {
+  if (R7K_SETJMP(c->jb) != 0) {
     r7k_cont *rc = c;
     tur_tb_root = rc->tb_root;
     tur_tb_armed_for = rc->tb_armed;

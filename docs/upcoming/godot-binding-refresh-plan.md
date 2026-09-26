@@ -527,7 +527,7 @@ unproven compilation path is how the current situation arose.
 - [godot-language-binding-plan.md](../archive/godot-language-binding-plan.md) -- the completed v1 plan.
 - [godot-binding-aot-plan.md](../archive/godot-binding-aot-plan.md) -- the AOT design this refreshes.
 - [jit-godot-embedding-spike.md](../reported/jit-godot-embedding-spike.md) -- the open spike J1-J10 annotate.
-- [jit-windows-support-spike.md](../reported/jit-windows-support-spike.md) -- run 2026-08-05; its verdict feeds J3.
+- [jit-windows-support-spike.md](../archive/jit-windows-support-spike.md) -- run 2026-08-05; its verdict feeds J3.
 - [godot-binding-shipping-breadth-plan.md](hold/godot-binding-shipping-breadth-plan.md) -- T5.A signing intersects J5.
 - `cc-path-preamble-split-plan.md` -- the split runtime the Windows JIT spike
   named as its route around the MinGW header wall. Deliberately not linked: it

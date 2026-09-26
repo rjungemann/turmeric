@@ -86,3 +86,14 @@ static __thread void *tur_tls_r7k_base = 0;
 void **tur_tls_r7k_base_ptr (void) { return &tur_tls_r7k_base; }
 static __thread void *tur_tls_r7k_form_base = 0;
 void **tur_tls_r7k_form_base_ptr (void) { return &tur_tls_r7k_form_base; }
+
+#ifdef _WIN32
+#include <windows.h>
+/* The calling thread's stack base, for the r7rs prelude's call/cc image under
+ * `tur jit`.  A GCC-compiled program reads the TEB's NT_TIB.StackBase
+ * directly (`movq %gs:0x08`); c2mir has no inline asm, so without this the
+ * prelude found no base on the Windows JIT and call/cc could only escape. */
+void *tur_win_stack_base (void) {
+  return ((NT_TIB *) NtCurrentTeb ())->StackBase;
+}
+#endif

@@ -52,4 +52,18 @@ bool emit_cps_ir_colored_fn_needs_mono(const struct FnDef *fd);
  * emittable subset. */
 bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *fn_def_expr);
 
+/* Forget everything cached for the last program: the classified CTerms and
+ * their arena, and fd_for_binding's table.
+ *
+ * Those caches are keyed on the program's ADDRESS (and the EmitCtx's).  A
+ * process that compiles more than once -- `tur mcp`, `tur lsp`, an embedder --
+ * frees both between compiles, and the allocator is free to hand the next
+ * program the very same addresses.  The key then matches, and the stale
+ * CTerms, whose Bindings were freed with the old program, get emitted: an
+ * access violation in raw_name_for_binding after a few dozen MCP requests
+ * (docs/archive/mcp-server-exits-mid-session-on-windows.md).  The emission
+ * entry points (emit_module.c) call this at the start and end of every
+ * top-level emission. */
+void emit_cps_ir_forget(void);
+
 #endif

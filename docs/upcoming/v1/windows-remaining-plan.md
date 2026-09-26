@@ -59,9 +59,11 @@ has no libdl) reached main in three new `jit-ffi` fixtures and the job stayed
 green through it, because that failure is a LINK error when building a FIXTURE,
 not when building `tur.exe`.
 
-Still missing: `release.yml` ships no Windows artifact, and
-`src/CMakeLists.txt:45-49` disables `-Werror` on Windows pending a warning-clean
-port, so the job runs with warnings unpromoted.
+Still missing: `src/CMakeLists.txt` disables `-Werror` on Windows pending a
+warning-clean port, so the job runs with warnings unpromoted (as of 2026-09-26
+a Debug build still warns, e.g. `signal_shim` defined but unused in
+`src/async/reactor.c`). `release.yml` now has a Windows job; the earlier "ships
+no Windows artifact" is no longer true.
 
 This plan tracks what is left.
 
@@ -214,12 +216,14 @@ Options, in rough order of effort:
 
 Recommendation: option 1 unless a use case forces option 2.
 
-### Concurrency stdout mismatches (2 fixtures)
+### Concurrency stdout mismatches (2 fixtures) -- no longer reproduce
 
-`fiber-effect` and `p19-8-fiber-effect-chain` build and run but produce
-diverging output -- scheduler/timing under the select backend, not yet
-diagnosed. Worth a focused diagnosis pass; start by comparing fiber/worker
-scheduling order against Linux.
+`fiber-effect` and `p19-8-fiber-effect-chain` used to build and run but produce
+diverging output. **Both pass on Windows as of 2026-09-26** (Windows 11,
+MSYS2/UCRT64, gcc 16.1, Debug; `run.sh` in three shards, 3208 passed). They were
+never diagnosed separately. The likeliest fix is the `__builtin_setjmp` fiber
+work ([windows-longjmp-across-fiber-stack-kills-effects](../../archive/windows-longjmp-across-fiber-stack-kills-effects.md)),
+since both run an effect on a fiber.
 
 (An earlier revision named `httpd-h4-keepalive`, `httpd-h6-routing` and
 `taskgroup-async` here. All three now pass -- the first two were collateral of
@@ -262,15 +266,14 @@ it.
   their `#include <sys/ioctl.h>` is wrapped in an `#ifdef`. See
   [docs/archive/windows-posix-inline-c-gaps.md](../../archive/windows-posix-inline-c-gaps.md).
 
-## Subprocess and shared-library layers (not fixture-visible)
+## Subprocess and shared-library layers (not fixture-visible) -- RESOLVED
 
-The commands that shell out or produce/load a shared library are unported:
-`tur install`, `tur fetch`, `tur new`, and REPL spice loading. They pass
-`/bin/sh` command strings with single-quote quoting to `cmd.exe`, and the REPL
-JIT module graph hits the deliberate `symlink` `ENOSYS` stub. This is the
-highest-impact group
-for an actual Windows user and is a prerequisite for WIN2 above. See
-[docs/reported/windows-subprocess-and-shared-lib-gaps.md](../../reported/windows-subprocess-and-shared-lib-gaps.md).
+**Resolved 2026-09-26.** `tur install`, `tur fetch`, `tur new`, REPL spice
+loading and `tur build --shared` all work on Windows: the shell-string sites
+quote and redirect through `platform_proc.h` / `pkg_cmd_arg`, the lockfile
+hash is in-process, `--shared` emits a `.dll`, and the REPL JIT module graph
+hard-links or copies where it used to hit the `symlink` `ENOSYS` stub. See
+[docs/archive/windows-subprocess-and-shared-lib-gaps.md](../../archive/windows-subprocess-and-shared-lib-gaps.md).
 
 ---
 

@@ -19909,9 +19909,22 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
 
 typedef struct { Buf *out; const Expr *program; } EmitProgArgs;
 
+/* Every top-level emission starts and ends with the CPS backend's
+ * program-keyed caches empty.  They are keyed on ADDRESSES, and a process that
+ * compiles repeatedly (`tur mcp`, `tur lsp`, an embedder) can be handed the
+ * previous program's addresses for the next one -- see emit_cps_ir_forget.
+ * Depth-counted so an emission nested inside another does not pull the outer
+ * one's CTerms out from under it. */
+static int g_emission_depth;
+static void emission_enter(void) { if (g_emission_depth++ == 0) emit_cps_ir_forget(); }
+static void emission_leave(void) { if (--g_emission_depth == 0) emit_cps_ir_forget(); }
+
 static int emit_program_job(void *p) {
     EmitProgArgs *a = (EmitProgArgs *)p;
-    return emit_program_inner(a->out, a->program);
+    emission_enter();
+    int rc = emit_program_inner(a->out, a->program);
+    emission_leave();
+    return rc;
 }
 
 int emit_program(Buf *out, const Expr *program) {
@@ -19921,7 +19934,10 @@ int emit_program(Buf *out, const Expr *program) {
 
 static int emit_exports_manifest_job(void *p) {
     EmitProgArgs *a = (EmitProgArgs *)p;
-    return emit_exports_manifest_inner(a->out, a->program);
+    emission_enter();
+    int rc = emit_exports_manifest_inner(a->out, a->program);
+    emission_leave();
+    return rc;
 }
 
 int emit_exports_manifest(Buf *out, const Expr *program) {
@@ -19938,8 +19954,11 @@ typedef struct {
 
 static int emit_header_job(void *p) {
     EmitModArgs *a = (EmitModArgs *)p;
-    return emit_header_inner(a->out, a->module_name, a->program,
-                             a->separate_compilation, a->forced, a->n_forced);
+    emission_enter();
+    int rc = emit_header_inner(a->out, a->module_name, a->program,
+                               a->separate_compilation, a->forced, a->n_forced);
+    emission_leave();
+    return rc;
 }
 
 int emit_header(Buf *out, const char *module_name, const Expr *program,
@@ -19952,10 +19971,13 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
 
 static int emit_implementation_job(void *p) {
     EmitModArgs *a = (EmitModArgs *)p;
-    return emit_implementation_inner(a->out, a->module_name, a->program,
-                                     a->separate_compilation, a->forced,
-                                     a->n_forced, a->out_borrow_specs,
-                                     a->out_n_borrow_specs);
+    emission_enter();
+    int rc = emit_implementation_inner(a->out, a->module_name, a->program,
+                                       a->separate_compilation, a->forced,
+                                       a->n_forced, a->out_borrow_specs,
+                                       a->out_n_borrow_specs);
+    emission_leave();
+    return rc;
 }
 
 int emit_implementation(Buf *out, const char *module_name, const Expr *program,

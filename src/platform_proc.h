@@ -22,7 +22,7 @@
  * On every non-Windows platform this compiles to the POSIX spellings, so it is
  * safe (and cheap) to include unconditionally.
  *
- * See docs/reported/windows-subprocess-and-shared-lib-gaps.md.
+ * See docs/archive/windows-subprocess-and-shared-lib-gaps.md.
  */
 
 #ifndef TUR_PLATFORM_PROC_H

@@ -86,6 +86,13 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`tur` reports its own crashes on Windows.** An access violation or other
+  fatal exception in `tur.exe` used to end the process with nothing on
+  stderr. It now prints `tur: fatal exception 0x... at ... (tur.exe+0x...)`,
+  and `addr2line -e tur.exe` resolves it against the same build once the
+  image base (`objdump -p tur.exe`, usually `0x140000000`) is added to the
+  offset. The exit status is unchanged.
+
 - **`Result` is an `Applicative`.** `stdlib/result.tur` ships
   `Applicative [(Result _ B)]`: `pure` is `ok`, and `ap` applies an `ok`
   function to an `ok` argument and returns the first `err` it meets, the
@@ -129,6 +136,54 @@ All notable changes to Turmeric are documented here.
   `saffron-dyn-constrained-instance`.
 
 ### Fixed
+
+- **`tur mcp` and `tur lsp` no longer crash after a few dozen requests.** Both
+  compile the file again on every request, in one process. The CPS emitter
+  cached its classification keyed on the addresses of the program and the
+  emitter context, both of which are freed between compiles. Once a later
+  compile got the same two addresses back, the server emitted the old
+  program's leftovers and died with an access violation. On Windows that
+  happened 25 to 40 requests in, and on CI as early as the fifth. The cache
+  is now cleared around every compilation.
+
+- **The JIT's whole-preamble path works on Windows.** When `tur jit` cannot use
+  its split runtime, it compiles the whole preamble instead. On Windows that
+  path could not link, so every such program, including every `#lang r7rs`
+  program, silently fell back to `cc`. It now runs in the engine. Variadic
+  functions defined in a program's own inline C also run in the engine there;
+  they used to fall back too. Scheme programs that now run in the engine keep
+  what `cc` gave them: re-entrant `call/cc` works there, and bignum arithmetic
+  gives the same answers.
+
+- **An over-capacity async `httpd` server sends its 503 intact on Windows.**
+  `httpd-new-async-with-limit` answered a connection past its cap with a 503
+  and closed the socket without reading the request. Closing over unread data
+  resets the connection, and a Windows client that had not yet read the 503
+  lost it to the reset: `recv` failed with `WSAECONNRESET` and no bytes
+  arrived. The server now closes such a connection gracefully: it sends the
+  503, signals end-of-stream, and discards what the client sends until the
+  client closes (at most 2 s). The graceful close lives in the reactor as
+  `tur_reactor_linger_close`, which never blocks the event loop. This was
+  also why `httpd-async-limit` hung on two-core Windows CI runners; that
+  fixture runs on Windows again.
+
+- **`#lang r7rs`: `call/cc` is re-entrant on Windows.** A continuation
+  can now be invoked after its `call/cc` has returned there too, so
+  generators and coroutines written with `call/cc` work; before, Windows
+  stopped at the first re-entry with "continuation invoked after its
+  call/cc prompt returned". The runtime reads the stack base from the
+  thread's TEB, and jumps into a copied stack with GCC's
+  `__builtin_setjmp`/`__builtin_longjmp`, which unwind nothing, where
+  Windows' `longjmp` would unwind through frames it has just overwritten.
+  Both the compiled program and `tur --interpret` are covered.
+
+- **`tur repl --engine jit` loads a spice in-process on Windows.** The
+  in-process build maps module names to source files through a shadow
+  directory, and made each entry with `symlink()`, which is an `ENOSYS` stub
+  on Windows. Every load there printed `symlink ... Function not
+  implemented` and quietly used the `tur build --shared` subprocess path
+  instead. On Windows the entries are now hard links, or copies where a hard
+  link cannot reach; POSIX still uses symlinks.
 
 - **A `none` returned by a constrained generic no longer crashes at a typed
   `Option` parameter.** A higher-kinded generic returns the carrier, and the

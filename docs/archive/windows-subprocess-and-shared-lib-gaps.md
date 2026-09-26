@@ -7,6 +7,64 @@
 > findable by reading the call sites. See "Resolution" at the end for what is
 > fixed, what is still POSIX-only, and what turned out to be misdiagnosed.
 
+> **RESOLVED 2026-09-26 (archived).** Section 3, the last open item, is
+> fixed; sections 1 and 2 had been done for a while, and section 4 lives in
+> [jit-windows-support-spike](jit-windows-support-spike.md). The
+> report's own lists had fallen behind the source, so each is re-checked here:
+>
+> - **Section 1 is done.** The three sites "What is still POSIX-only" names
+>   below were converted after it was written: `git ls-remote`
+>   (`upgrade_ls_remote`, `src/compiler/install.c`) and `git -C ... rev-parse
+>   HEAD` (`pkg_git_resolve`, `src/compiler/pkg.c`) quote through
+>   `pkg_cmd_arg` and redirect to `TUR_DEVNULL`
+>   ([windows-spice-fetch-shell-quoting](windows-spice-fetch-shell-quoting.md)),
+>   and the `tar | shasum` pair is gone -- the lockfile hash is an in-process
+>   SHA-256
+>   ([pkg-hash-shells-out-to-sha256sum](pkg-hash-shells-out-to-sha256sum.md)).
+>   `rev-parse` is exercised by `tur fetch`'s lock step, which works against a
+>   `file://` remote on Windows; `ls-remote` (`tur upgrade`) has not been run
+>   there.
+> - **Section 2 is done.** `tur build --shared` names its output `<name>.dll`
+>   on Windows and the spice loader opens `lib-<N>` + `TUR_SHLIB_EXT`, so both
+>   ends agree.
+> - **Section 3 is fixed.** `repl_jit_build` (`src/main.c`) now makes each
+>   shadow entry through `repl_jit_shadow_entry`: a symlink on POSIX as
+>   before, and on Windows a hard link (`CreateHardLinkA` -- no privilege
+>   needed on NTFS, and the same file, so a diagnostic naming the shadow path
+>   still names what the user edits), then a copy (`CopyFileA`) for what a
+>   hard link cannot span. A copy is sound, not just tolerable: the entry is
+>   recreated on every build, `(reload)` included, and nothing reads it in
+>   between. `platform_fs.h` still refuses to fake `symlink()` itself, as its
+>   comment asks.
+>
+>   What the defect did was quieter than a failure: the load itself went
+>   through. `tur_spice_image_load` falls back to the
+>   subprocess build when the JIT hook fails, so every `tur repl --engine jit`
+>   on Windows printed the `symlink ... Function not implemented` line and
+>   then silently used the `tur build --shared` path it was selected to
+>   avoid.
+>
+>   Verified on a MinGW-w64 cross build of `tur.exe` (`-DTUR_JIT=ON`, gcc 13)
+>   running under Wine 9.0 -- NOT on a real Windows box. There
+>   `tests/turi/repl-spice-jit.sh` goes from 1 passed / 3 failed (the
+>   `symlink` line, then the fallback) to 4 passed / 0 failed, with the hard
+>   link confirmed by the shadow entry's link count of 2; a separate
+>   cross-volume probe (`/dev/shm` source) takes the copy branch after
+>   `ERROR_NOT_SAME_DEVICE`. The script's first case used to check only for a
+>   leftover `lib-*.so`, which a Windows fallback (`lib-*.dll`) passes; it now
+>   fails on the fallback notice or any `lib-*` artifact. The `windows-jit` CI
+>   job runs it, so the real-Windows confirmation is the next CI run of that
+>   job.
+>
+>   **Confirmed on real Windows 2026-09-26** (Windows 11, MSYS2/UCRT64, gcc
+>   16.1), with one correction. Scenarios 1-3 passed as they did under Wine.
+>   Scenario 4 killed the script with SIGPIPE (exit 141) under both Git Bash
+>   and MSYS2 bash, which is what that CI job would have hit. It fed the REPL
+>   through a `mkfifo`, and a native `tur.exe` cannot hold an MSYS FIFO open;
+>   Wine's host bash has real FIFOs, which is why this did not show there. The
+>   scenario now writes into an ordinary pipe after fixing the source, and the
+>   script is 4 passed / 0 failed under both shells.
+
 **Severity: high for anyone actually using `tur` on Windows.** `tur.exe` now
 builds and compiles-and-runs programs, but the commands that shell out or
 produce/load a shared library fail. `tur install`, `tur fetch`, `tur new`,
@@ -157,7 +215,11 @@ Converted and **verified end to end on Windows**:
   export from the prompt returns `=> 42`
 - `tests/turi/repl-spice-load.sh` -- 9/9 pass
 
-### What is still POSIX-only
+### ~~What is still POSIX-only~~ -- all converted since
+
+**Superseded -- see the 2026-09-26 status at the top.** All three sites below
+have since been converted or removed. Kept as written, because the reasoning
+for not converting them blind still holds.
 
 Not converted, because they cannot be driven end to end here and a change that
 cannot be run is a change that cannot be trusted:

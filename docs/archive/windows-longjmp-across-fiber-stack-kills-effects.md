@@ -181,7 +181,7 @@ effects on the JIT path stay broken exactly as they were. Lifting that means
 > fiber-free effect fixtures failed. Fixed without touching c2mir, by calling a
 > hand-written save/restore pair through a symbol both halves can name --
 > src/async/tur_sjlj_x64_win.S, and
-> docs/reported/jit-windows-support-spike.md "Resolution: the JIT longjmp".
+> docs/archive/jit-windows-support-spike.md "Resolution: the JIT longjmp".
 teaching c2mir the builtins in the MIR fork.
 
 Regenerating `src/runtime/generated/tur_rt_split*` is **mandatory** with this
@@ -204,5 +204,5 @@ see [windows-longjmp-remaining-fiber-sites.md](windows-longjmp-remaining-fiber-s
 
 - [windows-longjmp-remaining-fiber-sites.md](windows-longjmp-remaining-fiber-sites.md) -- the sibling sites
 - [windows-posix-inline-c-gaps.md](../reported/windows-posix-inline-c-gaps.md)
-- [windows-subprocess-and-shared-lib-gaps.md](../reported/windows-subprocess-and-shared-lib-gaps.md)
+- [windows-subprocess-and-shared-lib-gaps.md](windows-subprocess-and-shared-lib-gaps.md)
 - [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md)

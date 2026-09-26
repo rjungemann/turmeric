@@ -333,7 +333,7 @@ None of these is small; pick deliberately.
    (MSYS2/UCRT64, gcc 16.1):
 
    - **MIR fetches and compiles cleanly under MinGW.** The feared answer from
-     [jit-windows-support-spike.md](jit-windows-support-spike.md) question 1 --
+     [jit-windows-support-spike.md](../archive/jit-windows-support-spike.md) question 1 --
      "MIR-gen only implements the SysV ABI, so Windows is a back-end port" --
      did **not** materialise at build time. Nothing in `_deps/mir-src` failed.
    - **The only thing that fails to compile is our own
@@ -363,7 +363,7 @@ None of these is small; pick deliberately.
    the emitted C drags in via `#include <winsock2.h>` under `_WIN32`. The
    recommended route is the S2 split-runtime path with a windows-header-free
    TU -- see the findings block at the top of
-   [jit-windows-support-spike.md](jit-windows-support-spike.md). Still true:
+   [jit-windows-support-spike.md](../archive/jit-windows-support-spike.md). Still true:
    no JIT-generated code has executed on Windows, so the MS x64 ABI and
    executable-memory questions remain open, and "MIR compiles" is still not
    "the JIT works".
