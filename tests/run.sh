@@ -677,16 +677,6 @@ run_happy() {
         write_result "PASS" "$name" "(posix-apis-skipped)" ""
         return
     fi
-    # requires.win-concurrent-loopback: needs several concurrent loopback HTTP
-    # connections to make progress.  httpd-async-limit HANGS on GitHub's Windows
-    # runners -- no output, killed at the per-fixture timeout at both 10s and
-    # 30s -- while passing on a local Windows box (4/4 in isolation).  Cause not
-    # yet identified; tracked in
-    # docs/reported/windows-httpd-async-limit-hangs-on-ci.md.
-    if [ -f "$dir/requires.win-concurrent-loopback" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
-        write_result "PASS" "$name" "(win-concurrent-loopback-skipped)" ""
-        return
-    fi
 
     # turi-session-types-plan (Slice B): interpreter-only fixtures whose peer
     # runs as a `tur --interpret` async fiber over the cooperative session
@@ -1064,16 +1054,6 @@ run_negative() {
     # POSIX-API skip (mirrors the happy-path guard above).
     if [ -f "$dir/requires.posix-apis" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
         write_result "PASS" "$name" "(posix-apis-skipped)" ""
-        return
-    fi
-    # requires.win-concurrent-loopback: needs several concurrent loopback HTTP
-    # connections to make progress.  httpd-async-limit HANGS on GitHub's Windows
-    # runners -- no output, killed at the per-fixture timeout at both 10s and
-    # 30s -- while passing on a local Windows box (4/4 in isolation).  Cause not
-    # yet identified; tracked in
-    # docs/reported/windows-httpd-async-limit-hangs-on-ci.md.
-    if [ -f "$dir/requires.win-concurrent-loopback" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
-        write_result "PASS" "$name" "(win-concurrent-loopback-skipped)" ""
         return
     fi
 

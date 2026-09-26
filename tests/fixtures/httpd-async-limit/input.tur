@@ -11,6 +11,16 @@
 ;; the server stopped (the latter used to deadlock the fixture -- see
 ;; docs/archive/macos-jit-leg-intermittent-45min-hang.md).
 ;;
+;; A client that ends WITHOUT a 200 or a 503 -- connect failed, the
+;; exchange timed out, the connection was reset -- bumps `lost`, and the
+;; handlers' gate counts it as if it were a rejection.  Without that, one
+;; silent drop-out left busy stuck at 1, both handlers spun on their
+;; timers forever and main never got past chan-recv: a hang with no
+;; output, which is how this fixture failed on Windows while the server
+;; reset its 503 connections (docs/archive/windows-httpd-async-limit-
+;; hangs-on-ci.md).  `lost` is printed only when non-zero, so a drop-out
+;; shows up as an extra line in the diff instead of as a timeout.
+;;
 ;; handler-ran is MEASURED (a counter bumped on handler entry), not the
 ;; constant it used to be: as a literal it stayed "2" in the very output
 ;; that said ok=3, so the one line that looked like it corroborated the
@@ -38,9 +48,10 @@
   int64_t port = args[0];
   int64_t *ok_counter   = (int64_t *)(intptr_t)args[1];
   int64_t *busy_counter = (int64_t *)(intptr_t)args[2];
+  int64_t *lost_counter = (int64_t *)(intptr_t)args[3];
   free(arg);
   int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) return NULL;
+  if (fd < 0) { __sync_fetch_and_add(lost_counter, 1); return NULL; }
   /* Backstop: if the server ever fails to answer, fail the counts inside
    * the fixture's own 10s window instead of blocking in recv() forever
    * (a hung client hangs main's pthread_join, and on a host without a
@@ -52,7 +63,11 @@
   addr.sin_family      = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   addr.sin_port        = htons((uint16_t)port);
-  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      __sync_fetch_and_add(lost_counter, 1);
+      close(fd);
+      return NULL;
+  }
   const char *req = "GET / HTTP/1.0\r\n\r\n";
   send(fd, req, strlen(req), 0);
   char drain[256];
@@ -67,6 +82,8 @@
       __sync_fetch_and_add(ok_counter, 1);
   } else if (strncmp(drain, "HTTP/1.0 503", 12) == 0) {
       __sync_fetch_and_add(busy_counter, 1);
+  } else {
+      __sync_fetch_and_add(lost_counter, 1);
   }
   close(fd);
   return NULL;
@@ -94,12 +111,16 @@
 (defn free-counter [p : ptr<void>] : nil
   ```c free(p); ```)
 
-(defn spawn-client [port : int ok : ptr<void> busy : ptr<void>] : ptr<void>
+(defn spawn-client [port : int
+                    ok : ptr<void>
+                    busy : ptr<void>
+                    lost : ptr<void>] : ptr<void>
   ```c
-  int64_t *args = (int64_t *)malloc(3 * sizeof(int64_t));
+  int64_t *args = (int64_t *)malloc(4 * sizeof(int64_t));
   args[0] = (int64_t)port;
   args[1] = (int64_t)(intptr_t)ok;
   args[2] = (int64_t)(intptr_t)busy;
+  args[3] = (int64_t)(intptr_t)lost;
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)args);
   return (void *)t;
@@ -112,13 +133,15 @@
   (let [donech    (chan-new 4)
         ok        (alloc-counter)
         busy      (alloc-counter)
+        lost      (alloc-counter)
         ran       (alloc-counter)
         handler   (fn [c : ptr<void>] : nil
                     (bump-counter! ran)
                     ;; Hold this in-flight slot until both over-cap
-                    ;; clients have received their 503 and counted it,
-                    ;; then respond. Guarantees exactly two rejections.
-                    (while (< (read-counter busy) 2)
+                    ;; clients have received their 503 and counted it
+                    ;; (or dropped out and said so), then respond.
+                    ;; Guarantees exactly two rejections.
+                    (while (< (+ (read-counter busy) (read-counter lost)) 2)
                       (httpd-await-timer c 10))
                     (httpd-resp-status! c 200)
                     (httpd-resp-body! c "served")
@@ -127,10 +150,10 @@
         h         (httpd-new-async-with-limit 0 handler 2)
         port      (httpd-async-port h)
         server    (spawn-server-async h)
-        c1        (spawn-client port ok busy)
-        c2        (spawn-client port ok busy)
-        c3        (spawn-client port ok busy)
-        c4        (spawn-client port ok busy)]
+        c1        (spawn-client port ok busy lost)
+        c2        (spawn-client port ok busy lost)
+        c3        (spawn-client port ok busy lost)
+        c4        (spawn-client port ok busy lost)]
     ;; Wait for the two handler runs that the cap permits.
     (let [_ (chan-recv donech)] (let [_ (chan-recv donech)] 0))
     ;; Join the clients BEFORE stopping the server: both 503s are
@@ -148,9 +171,12 @@
     (print-tag "ok"          (read-counter ok))
     (print-tag "busy"        (read-counter busy))
     (print-tag "handler-ran" (read-counter ran))
+    (when (> (read-counter lost) 0)
+      (print-tag "lost" (read-counter lost)))
     (println "done")
     (free-counter ok)
     (free-counter busy)
+    (free-counter lost)
     (free-counter ran)
     (httpd-async-free h)
     (chan-free donech)

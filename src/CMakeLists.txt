@@ -1525,6 +1525,29 @@ if(WIN32)
     target_link_libraries(tur_reactor_slot_reuse_unit PRIVATE ws2_32)
 endif()
 
+# tur_reactor_linger_close: a reply sent before the request is read still
+# reaches the peer (no RST), and the linger ends on the peer's close, on its
+# timeout, or at reactor teardown.
+add_executable(tur_reactor_linger_unit
+    ${CMAKE_SOURCE_DIR}/tests/reactor_linger_unit.c
+)
+target_include_directories(tur_reactor_linger_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_reactor_linger_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_reactor_linger_unit PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_reactor_linger_unit PRIVATE libturi m)
+set_target_properties(tur_reactor_linger_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+if(WIN32)
+    target_link_libraries(tur_reactor_linger_unit PRIVATE ws2_32)
+endif()
+
 add_executable(tur_cps_prompt_unit
     ${CMAKE_SOURCE_DIR}/tests/cps_prompt_unit.c
     ${CMAKE_SOURCE_DIR}/src/runtime/cps_prompt.c

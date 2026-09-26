@@ -99,6 +99,18 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **An over-capacity async `httpd` server sends its 503 intact on Windows.**
+  `httpd-new-async-with-limit` answered a connection past its cap with a 503
+  and closed the socket without reading the request. Closing over unread data
+  resets the connection, and a Windows client that had not yet read the 503
+  lost it to the reset: `recv` failed with `WSAECONNRESET` and no bytes
+  arrived. The server now closes such a connection gracefully: it sends the
+  503, signals end-of-stream, and discards what the client sends until the
+  client closes (at most 2 s). The graceful close lives in the reactor as
+  `tur_reactor_linger_close`, which never blocks the event loop. This was
+  also why `httpd-async-limit` hung on two-core Windows CI runners; that
+  fixture runs on Windows again.
+
 - **`#lang r7rs`: `call/cc` is re-entrant on Windows.** A continuation
   can now be invoked after its `call/cc` has returned there too, so
   generators and coroutines written with `call/cc` work; before, Windows

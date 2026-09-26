@@ -1,5 +1,12 @@
 # `httpd-async-limit` hangs on GitHub's Windows runners but passes locally
 
+> **RESOLVED 2026-09-26** -- see "Resolution" at the end. "Defect 1" below
+> was not a fixture defect: the SERVER reset every 503 connection, and on
+> Windows a reset discards the reply the client has not read yet. The 503 path
+> now closes gracefully (`tur_reactor_linger_close`), the fixture counts a
+> client that drops out instead of waiting on it forever, and the
+> `requires.win-concurrent-loopback` skip is gone.
+>
 > **DIAGNOSED 2026-09-04.** Reproduced locally by pinning the process to two
 > cores, exactly as the "next step" below proposed. It is **not** a timing
 > flake and **not** a blocked reactor: the process is SPINNING. Two distinct
@@ -190,3 +197,108 @@ explains why.
 
 Until then the fixture stays skipped on Windows via
 `requires.win-concurrent-loopback`.
+
+## Resolution (2026-09-26)
+
+### Defect 1 was the server, not the fixture
+
+The diagnosis above established that an over-cap client drops out without
+being counted. It did not establish *why* a client on loopback would drop out,
+and the answer is not in the fixture. Instrumenting the client to report how
+each exchange ended, on a 12-core Windows 11 box, unpinned:
+
+```
+client: recv r=-1 errno=10054 total=94     <- 503 client: WSAECONNRESET
+client: recv r=-1 errno=10054 total=94     <- 503 client: WSAECONNRESET
+client: recv r=0  errno=0     total=104    <- 200 client: clean EOF
+client: recv r=0  errno=0     total=104    <- 200 client: clean EOF
+```
+
+**Every** 503 connection ended in a reset, even on passing runs. The async
+accept callback answered an over-cap connection with `send(503)` then
+`close()`, without ever reading the request. Closing a socket that still holds
+unread data sends RST instead of FIN. That is true everywhere. What is
+Windows-specific is the next step: when the RST lands before the client has
+read the reply, Windows **discards** the buffered reply, and `recv()` returns
+`WSAECONNRESET` with nothing delivered.
+
+On an unpinned box the client is already blocked in `recv()` when the 503
+arrives, so it reads the bytes first and only the *next* `recv()` sees the
+reset. Pinned to two cores (`ProcessorAffinity = 3`), the client thread is often
+descheduled between `send()` and `recv()`, and by the time it reads, the reset
+has already landed:
+
+```
+client: recv r=-1 errno=10054 total=0      <- 503 lost to the reset
+client: recv r=-1 errno=10053 total=0      <- WSAECONNABORTED, same story
+client: recv r=-1 errno=10060 total=0      <- 200 clients: the 8s SO_RCVTIMEO
+client: recv r=-1 errno=10060 total=0         backstop, because the handlers
+                                              never stopped waiting for busy=2
+```
+
+12 of 20 runs hung that way. That is the whole mechanism: a 503 lost to the
+reset, `busy` stuck below 2, both handlers spinning on their timers, main
+blocked in `chan-recv`.
+
+This was a real server bug, not a test artefact: any client of an over-cap
+`httpd-new-async-with-limit` server on Windows could get a connection reset in
+place of the 503 it was sent.
+
+### The fix
+
+- **`tur_reactor_linger_close(r, fd, timeout_ms)`** (`src/async/reactor.c`),
+  a lingering close that never blocks the reactor. It shuts down the send side
+  (the client gets the reply and then FIN), sets the fd non-blocking, and
+  drains and discards whatever the client still sends. It closes the fd when
+  the client closes its end, when an error occurs, or when the timeout expires.
+  The linger is an fd source plus a one-shot timer with inline, disowned boxes,
+  so no fiber is needed: spawning a 1 MB fiber stack for every *rejected*
+  connection would work against a cap whose job is to bound per-connection
+  cost. The reactor keeps a list of lingering sockets, so `tur_reactor_free`
+  closes any that are still open. `TUR_LINGER_MAX` (1024) bounds how many
+  descriptors can linger at once; past it, a close is abortive again.
+- **The 503 path** in `httpd-async-accept-cb` (`stdlib/httpd.tur`) calls it
+  with a 2 s deadline instead of `close()`.
+- **The fixture** now counts its own failures. A client that ends with neither
+  a 200 nor a 503 (connect failed, timed out, or was reset) bumps a `lost`
+  counter, and the handlers' gate opens on `busy + lost >= 2`. A drop-out
+  therefore shows up as a `lost=N` line in the diff instead of a timeout with
+  no output. `lost` is printed only when non-zero, so `expected.stdout` is
+  unchanged.
+- **`tests/reactor_linger_unit.c`** (ctest `tur_reactor_linger_unit`) pins the
+  primitive. The server replies to a request it has not read, lingers, and the
+  client reads only after a delay. The test checks that the client gets the
+  reply and then EOF rather than a reset, that the client's close ends the
+  linger early, that the timeout ends it otherwise, and that teardown closes a
+  socket that is still lingering.
+
+### Verified (Windows 11, MSYS2/UCRT64, gcc 16.1, Debug)
+
+| run | result |
+| --- | --- |
+| instrumented fixture, old server, 2 cores | **12 of 20 hung** |
+| instrumented fixture, new server, 2 cores | 0 of 25 bad; every 503 client now ends `r=0` (EOF), not `10054` |
+| the fixture itself, new server, 2 cores | 0 of 25 bad |
+| the hardened fixture against the OLD server, 2 cores | 0 hung, 5 of 15 `busy=1 ... lost=1` -- a legible failure instead of a hang |
+| `tur_reactor_linger_unit` | passes |
+| `tur_reactor_linger_unit` with the linger mutated to a plain `close()` | **fails 3 of 3** ("the peer reads the reply and then EOF, not a reset") |
+
+The last row is the regression check: on Windows the unit test is
+deterministic against the old behaviour, because the client reads only
+after the reset has had time to land.
+
+The `requires.win-concurrent-loopback` marker and both of its guards in
+`tests/run.sh` are removed. This fixture was the marker's only user.
+
+### Not done
+
+The **normal** response path (`httpd-async-fiber-body`, and the blocking
+`httpd-handle`) still ends with a plain `close()`. That is safe for a request
+the server has read in full, which is the common case. It is not safe when the
+client sends more than the server read: a body larger than its
+`Content-Length`, pipelined bytes after a `Connection: close` request, or an
+early error response before the body arrives. Any of those resets the
+connection and can cost a Windows client the response. Routing the async path
+through `tur_reactor_linger_close` is a one-line change. The blocking path has
+no reactor and would need a bounded blocking drain instead. Neither is
+fixture-visible today, so neither was changed here.

@@ -75,6 +75,27 @@ int64_t tur_reactor_remove(void *r, int64_t id);
 void tur_reactor_disown_cb(void *r, int64_t id);
 
 /**
+ * Close a connected socket gracefully without blocking the reactor.
+ *
+ * Shuts down the send side, so the peer reads everything already sent and
+ * then EOF, and keeps the fd open -- reading and discarding whatever the peer
+ * still sends -- until the peer closes its end, an error occurs, or
+ * timeout_ms elapses. Only then is the fd closed.
+ *
+ * A plain close() on a socket that still holds unread data sends RST, not
+ * FIN, and a Windows peer that has not yet read the reply DISCARDS it when the
+ * reset lands: its recv() fails with WSAECONNRESET and none of the bytes
+ * arrive. A server that answers before reading the request -- a 503 sent at
+ * accept time -- has exactly that shape.
+ *
+ * Takes ownership of fd on every path: when the linger cannot be set up (no
+ * reactor, too many already lingering, registration failed) the fd is closed
+ * at once. A socket still lingering at tur_reactor_free is closed there.
+ * Returns 1 if the fd is lingering, 0 if it has already been closed.
+ */
+int64_t tur_reactor_linger_close(void *r, int64_t fd, int64_t timeout_ms);
+
+/**
  * Add a one-shot timer that fires once after delay_ms milliseconds.
  * Returns a source id (>= 0) or -1 on error.
  *

@@ -26,6 +26,12 @@
  *   after chan-send for low-latency delivery.
  */
 
+/* Before anything that might pull in <windows.h>, which would otherwise drag
+ * in the old <winsock.h> and collide with this. */
+#ifdef _WIN32
+#include <winsock2.h>
+#endif
+
 #include "reactor.h"
 #include "local_fiber.h"
 #include "fiber.h"
@@ -36,8 +42,12 @@
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <signal.h>
 #include <pthread.h>
+#ifndef _WIN32
+#include <sys/socket.h>
+#endif
 
 #ifdef IO_BACKEND_EPOLL
 #include <sys/signalfd.h>
@@ -202,6 +212,10 @@ struct TurReactor {
      * is parked here and goes through teardown's existing dedup. */
     int64_t             *orphan_boxes;
     size_t               orphan_len, orphan_cap;
+    /* Sockets closing gracefully (tur_reactor_linger_close).  Listed so that
+     * teardown can close whatever is still lingering. */
+    struct TurLinger    *lingers;
+    size_t               lingers_len;
 };
 
 /* Push a slot index onto one of the two lists; a failed grow just drops the
@@ -347,6 +361,132 @@ static void signal_shim(int fd, int events, void *user_data) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Lingering close                                                      */
+/* ------------------------------------------------------------------ */
+
+/* At most this many sockets linger at once.  Each holds an fd for up to its
+ * timeout, so past the cap a close is abortive again rather than letting a
+ * flood of rejected connections pin descriptors. */
+#define TUR_LINGER_MAX 1024
+
+typedef struct TurLinger {
+    /* Inline { entry, self } fat boxes for the fd and timer sources.  Like the
+     * park boxes they are not heap allocations of their own, so both sources
+     * are disowned. */
+    int64_t           fd_box[2];
+    int64_t           tm_box[2];
+    TurReactor       *r;
+    int               fd;
+    int64_t           fd_src;
+    int64_t           tm_src;
+    struct TurLinger *prev, *next;
+} TurLinger;
+
+static void sock_close(int fd) {
+#ifdef _WIN32
+    closesocket((SOCKET)(intptr_t)fd);
+#else
+    close(fd);
+#endif
+}
+
+/* Read and discard what the peer has sent.  Returns 1 when the linger is over
+ * (EOF, or an error other than would-block) and 0 when it should keep waiting.
+ * Bounded per call so a peer that keeps streaming cannot hold the reactor
+ * thread; the timer bounds the linger as a whole. */
+static int linger_drain(int fd) {
+    char buf[1024];
+    for (int i = 0; i < 64; i++) {
+#ifdef _WIN32
+        int n = recv((SOCKET)(intptr_t)fd, buf, (int)sizeof(buf), 0);
+        if (n > 0) continue;
+        if (n == 0) return 1;
+        return WSAGetLastError() == WSAEWOULDBLOCK ? 0 : 1;
+#else
+        ssize_t n = recv(fd, buf, sizeof(buf), 0);
+        if (n > 0) continue;
+        if (n == 0) return 1;
+        if (errno == EINTR) continue;
+        return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : 1;
+#endif
+    }
+    return 0;
+}
+
+static void linger_finish(TurLinger *l) {
+    TurReactor *r = l->r;
+    /* Removing a source from inside its own callback is the park path's
+     * shape too: the struct stays put and the slot is recycled a poll later. */
+    tur_reactor_remove(r, l->fd_src);
+    tur_reactor_remove(r, l->tm_src);
+    sock_close(l->fd);
+    if (l->prev) l->prev->next = l->next; else r->lingers = l->next;
+    if (l->next) l->next->prev = l->prev;
+    r->lingers_len--;
+    free(l);
+}
+
+/* (env, id, events, user) : nil -- matches TurFdCbFn */
+static void linger_fd_cb(void *self, int64_t id, int64_t events, int64_t user) {
+    (void)id; (void)events; (void)user;
+    TurLinger *l = (TurLinger *)(intptr_t)((int64_t *)self)[1];
+    if (linger_drain(l->fd)) linger_finish(l);
+}
+
+/* (env, id, user) : nil -- matches TurTimerCbFn */
+static void linger_timer_cb(void *self, int64_t id, int64_t user) {
+    (void)id; (void)user;
+    linger_finish((TurLinger *)(intptr_t)((int64_t *)self)[1]);
+}
+
+int64_t tur_reactor_linger_close(void *rp, int64_t fd64, int64_t timeout_ms) {
+    TurReactor *r = (TurReactor *)rp;
+    int fd = (int)fd64;
+    if (fd < 0) return 0;
+#ifdef _WIN32
+    shutdown((SOCKET)(intptr_t)fd, SD_SEND);
+    u_long nb = 1;
+    ioctlsocket((SOCKET)(intptr_t)fd, FIONBIO, &nb);
+#else
+    shutdown(fd, SHUT_WR);
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+#endif
+    /* Discard what has already arrived; if the peer has already closed as
+     * well, there is nothing left to wait for. */
+    if (!r || r->lingers_len >= TUR_LINGER_MAX || linger_drain(fd)) {
+        sock_close(fd);
+        return 0;
+    }
+    TurLinger *l = (TurLinger *)calloc(1, sizeof(TurLinger));
+    if (!l) { sock_close(fd); return 0; }
+    l->r         = r;
+    l->fd        = fd;
+    l->fd_box[0] = (int64_t)(intptr_t)linger_fd_cb;
+    l->fd_box[1] = (int64_t)(intptr_t)l;
+    l->tm_box[0] = (int64_t)(intptr_t)linger_timer_cb;
+    l->tm_box[1] = (int64_t)(intptr_t)l;
+    l->fd_src = tur_reactor_add_fd(r, fd, IO_EVENT_READ,
+                                   (int64_t)(intptr_t)l->fd_box, NULL);
+    if (l->fd_src < 0) { free(l); sock_close(fd); return 0; }
+    tur_reactor_disown_cb(r, l->fd_src);
+    l->tm_src = tur_reactor_add_timer(r, timeout_ms < 0 ? 0 : timeout_ms,
+                                      (int64_t)(intptr_t)l->tm_box, NULL);
+    if (l->tm_src < 0) {
+        tur_reactor_remove(r, l->fd_src);
+        free(l);
+        sock_close(fd);
+        return 0;
+    }
+    tur_reactor_disown_cb(r, l->tm_src);
+    l->next = r->lingers;
+    if (r->lingers) r->lingers->prev = l;
+    r->lingers = l;
+    r->lingers_len++;
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
 /* Lifecycle                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -458,6 +598,14 @@ void tur_reactor_free(void *rp) {
         }
         if (nfreed < freed_cap) freed[nfreed++] = box;
         tur_reactor_release_box(box);
+    }
+    /* Sockets still lingering.  Their sources went with the loop above (the
+     * boxes are inline and disowned), so only the fd and the record remain. */
+    for (TurLinger *l = r->lingers; l; ) {
+        TurLinger *next = l->next;
+        sock_close(l->fd);
+        free(l);
+        l = next;
     }
     free(r->orphan_boxes);
     free(freed);

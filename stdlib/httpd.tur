@@ -139,6 +139,8 @@
 
 (extern-c tur_reactor_disown_cb [r :ptr id :int] :void)
 
+(extern-c tur_reactor_linger_close [r :ptr fd :int timeout-ms :int] :int)
+
 (extern-c tur_reactor_run [r :ptr] :void)
 
 (extern-c tur_reactor_stop [r :ptr] :void)
@@ -2739,7 +2741,11 @@
               "\r\n"
               "server at capacity\n";
           (void)send(cfd, resp, strlen(resp), 0);
-          close(cfd);
+          /* Not close(): the request is still unread, and closing over unread
+           * data sends RST.  A Windows client that has not yet read the 503
+           * discards it on the reset and sees only WSAECONNRESET.  Linger
+           * instead -- FIN, drain until the client closes, then close. */
+          (void)tur_reactor_linger_close(ha->reactor, cfd, 2000);
           continue;
       }
       HttpdAsyncReqCtx *ctx = (HttpdAsyncReqCtx *)malloc(sizeof(HttpdAsyncReqCtx));
