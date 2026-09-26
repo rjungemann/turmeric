@@ -159,6 +159,13 @@ if [ "${TUR_SKIP_CC_WARN_CHECK:-0}" != "1" ]; then
         echo "tests: no-C-_Complex check failed (see above); aborting." >&2
         exit 1
     fi
+    # The same JIT C11-subset rule for atomics: the emitted runtime reaches
+    # them through TUR_ATOMIC_*, never a literal `__atomic_*` builtin (c2mir
+    # has none, and one in the preamble sends every `tur jit` program to cc).
+    if ! bash tests/check-no-atomic-builtins.sh; then
+        echo "tests: no-atomic-builtins check failed (see above); aborting." >&2
+        exit 1
+    fi
 fi
 
 # R4 (carrier-crossing-recovery-routing-plan): the audit registry is the single

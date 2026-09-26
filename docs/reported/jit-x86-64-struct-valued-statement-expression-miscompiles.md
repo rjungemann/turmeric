@@ -102,12 +102,48 @@ and run the tag check as STATEMENTS and leave a plain unbox expression, exactly
 as the by-value ADT arm beside them already did. `inner` already emits its own
 statements into the body, so this changes no evaluation order.
 
+**Shape 5, found 2026-09-26: the dynamic method call (`__tur_dm`).** It was
+the first site on the "none observed to misbehave yet" list. Two `any`
+receivers dispatched in one call's argument list --
+
+```turmeric
+#lang saffron
+(load "stdlib/rc.tur")
+(defdata Two [a] (Two [l : a r : a]))
+(definstance Foldable [Two]
+  (foldl [t init f] (f (f init (.l t)) (.r t)))
+  (foldr [t init f] (f (.l t) (f (.r t) init))))
+(defn tri [p q r] (+ p (* q r)))
+(defn show [t u]
+  (println (tri (.foldr t 0.5 (fn [x acc] (- x acc)))
+                (.foldl u 1.0 (fn [acc x] (* acc x)))
+                2.0)))
+(defn main [] (show (Two 1.5 2.25) (Two 7.25 3.5)) 0)
+```
+
+-- print 50.5 under `tur run` and `--interpret`; `tur jit` on x86-64
+panicked `+: no operator for a value of that type argument`. With a
+`(println (diff2 (.foldl t ...) (.foldl u ...)))` ahead of it and a third
+dispatch (through a helper) in place of the `2.0`, the second dispatch was
+handed a float for its receiver instead: `no instance of Foldable for float
+(dispatching .foldl on an any)`. An earlier re-check the
+same day called this site clean: its fixture let-bound the receivers, which
+resolves `.foldl` to the static instance specialization, so only one
+`__tur_dm` ever ran. `saffron-dyn-method-in-argument-position` now routes
+every receiver through an unannotated (so `any`) parameter. Fixed by fix
+direction 2: `emit_dyn_method` binds the receiver box and the looked-up slot
+as STATEMENTS and leaves a bare prototype-cast call, as `emit_dyn_call`
+already did for its callee box.
+
 Still emitted as struct-valued statement expressions, none observed to
-misbehave yet: the dynamic method call (`__tur_dm`), the union widen
-(`__tur_ua`), `dyn_widen_to_any`'s by-value box (`__tur_fb`), and
-`emit_core.c`'s `__tur_pbox`. If a fixture that reaches one of them starts
-answering differently in the engine on Linux only, this is the first thing to
-suspect -- as shape 4 above did.
+misbehave yet: the union widen (`__tur_ua`), `dyn_widen_to_any`'s by-value
+box (`__tur_fb`), and `emit_core.c`'s `__tur_pbox`. `tests/run-jit.sh` passes
+the fixtures that reach them (`union-to-any-widen-aliases-box` and
+`docs-any-guide-examples` for `__tur_ua`, `forall-dict-byvalue-receiver` and
+`hkt-constrained-byvalue-carrier` for `__tur_pbox`) -- but, as shape 5 shows,
+a fixture passing is only evidence if it puts SEVERAL of these values in one
+argument list. If a fixture that reaches one of them starts answering
+differently in the engine on Linux only, this is the first thing to suspect.
 
 ## Fix directions
 

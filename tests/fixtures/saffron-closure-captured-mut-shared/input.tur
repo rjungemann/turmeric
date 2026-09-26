@@ -1,0 +1,37 @@
+#lang saffron
+;; compiled-closure-copies-a-captured-mut, the Saffron shapes: the report's
+;; repro (0 compiled, 2 interpreted), an accumulate through an UNTYPED
+;; callback -- which also needed a nil-bodied lambda to return `any`, since
+;; the dynamic call site refuses a `void` callee -- and an escaping
+;; accumulator over an `any` cell.
+
+(defn mk []
+  (let [^mut n 0]
+    (let [getn (fn [] n)
+          incn (fn [] (set! n (+ n 1)))]
+      (incn) (incn)
+      (getn))))
+
+(defn each3 [f] (f 1) (f 2.5) (f "three"))
+
+(defn collect []
+  (let [^mut seen nil
+        ^mut count 0]
+    (each3 (fn [x] (set! seen x) (set! count (+ count 1))))
+    (println seen)
+    count))
+
+(defn make-acc [start]
+  (let [^mut total start]
+    (fn [d] (set! total (+ total d)) total)))
+
+(defn main []
+  (println (mk))                  ;; 2
+  (println (collect))             ;; three, then 3
+  (let [acc (make-acc 7.1)]
+    (acc 1)
+    (println (acc 0.5)))          ;; 8.6
+  ;; A nil-bodied lambda through a dynamic call.
+  (each3 (fn [x] nil))
+  (println "ok")
+  0)

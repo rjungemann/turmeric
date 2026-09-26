@@ -1,0 +1,22 @@
+;; pap-captured-arg-skips-session-role-protocol-check: a session endpoint
+;; CAPTURED by a partial application must be checked against the protocol of
+;; the slot it fills, exactly as a saturated call checks it
+;; (errors/session-protocol-mismatch-at-call).
+;;
+;; This used to compile. The partial-application path decided strictness
+;; from a STRUCT/ADT-only test, so a TY_SESSION slot was never compared, and
+;; under-saturating the call was a way around the saturated check.
+
+(load "stdlib/session.tur")
+
+(defn f [^linear ch :(Session Close) n :int] :nil
+  (close ch))
+
+(defn main [] :int
+  (let [[a b] (make-session (Send int Close))]
+    ;; `a` is Session[Send int Close], NOT Session[Close].
+    (let [g (f a)]
+      (g 1))
+    (let [[n b1] (recv b)]
+      (close b1)
+      n)))

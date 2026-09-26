@@ -4,7 +4,10 @@
 **Narrowed 2026-09-06**, same day: the class this was mostly about -- a node
 handed to a hand-written inline-C body -- is fixed, and it was a **silent wrong
 answer**, not the "documented contract" this report first called it. What is
-left is `extern-c` and the erased-word case, neither with a repro.
+left is `extern-c` and the erased-word case, neither with a repro. (Both are
+closed as of 2026-09-26 -- item 2 resolved, item 1 unreachable by the extern-c
+boundary rule. What stays open is the latent item 3 and the longer-term
+direction below.)
 
 ## What was fixed first, and what this was the residue of
 
@@ -67,7 +70,20 @@ rewinds) and by the `store-inline-c` / `inline-c-scalar` cases in
 
 ## What remains open
 
-1. **`extern-c`.** A foreign function declared with `(extern-c f [x :Link] ...)`
+1. **`extern-c`. -- CLOSED 2026-09-26, unreachable by construction.** A
+   foreign function has no emitted body, so there is nowhere to put the
+   callee-side note -- but no region word can reach one by its type. The
+   extern-c boundary (`extern_c_aggregate_ok`, `src/compiler/elab_fns.c`)
+   refuses a `:heap` node parameter, and refuses a by-value record that holds
+   one as well (it is not a by-value product), so the only route in is an
+   erasing ascription -- `(:: node ptr<void>)` or `(:: node :int)` -- which is
+   noted at the erasure (item 2). Pinned by
+   `tests/fixtures/errors/extern-c-refuses-region-node`: if that admission
+   rule ever loosens, the fixture turns red and the call-site note (on the
+   hoisted argument temp, beside the erased-argument note in the direct-call
+   emitter) is the fix. The original text follows.
+
+   A foreign function declared with `(extern-c f [x :Link] ...)`
    has no emitted body, so there is nowhere to put the callee-side note, and
    the call site cannot note an argument without re-emitting it. No repro: the
    `extern-c` declarations in the tree take `:ptr`, `:int` and `:cstr`, none of
@@ -75,7 +91,14 @@ rewinds) and by the `store-inline-c` / `inline-c-scalar` cases in
    node by its ADT type would be unusual. If one appears, the fix is a
    call-site note on the hoisted argument temp.
 
-2. **A stdlib primitive that stores an ERASED word.** The parameter note keys
+2. **A stdlib primitive that stores an ERASED word. -- RESOLVED 2026-09-26**
+   ([stdlib-region-store-hooks-unswept](../archive/stdlib-region-store-hooks-unswept.md)):
+   a typed node passed implicitly into an inline-C `:int` parameter is now an
+   erasing ascription, an erasure written as a call argument is noted where
+   the call emitter strips it, and `(:: node ptr<void>)` / `(:: node any)` are
+   erasures too. The original text follows.
+
+   **A stdlib primitive that stores an ERASED word.** The parameter note keys
    on the type, so a primitive whose `val` arrives as `:int` (which is most of
    them -- `chan-send`, `schan-send`, `work-queue-push`, the `sized-*-set!`
    family, `json/array-push`, `schema/*`) is not covered by it. Those are
@@ -96,7 +119,8 @@ rewinds) and by the `store-inline-c` / `inline-c-scalar` cases in
 
 ## Fix directions
 
-- Leave 1 and 2 until a repro exists; both are one small change at that point.
+- 1 and 2 are closed (see above); 3 is one small change if it ever becomes
+  reachable.
 - Longer term, route the intermediaries a bracket creates (closure envs,
   element boxes) into the generation, so a node stored through one is
   region-to-region and the intermediary itself is what the note sees. That was

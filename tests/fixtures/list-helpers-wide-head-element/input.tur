@@ -1,0 +1,28 @@
+#lang saffron
+;; list-length-on-cons-any-segfaults: the carrier-level list helpers
+;; (list-length, length, list-head/car, list-tail/cdr) walk a cons chain as
+;; { int64_t head; int64_t tail; }.  A (Cons any) cell's head is a two-word
+;; tagged value, so the walk read the tail from the middle of the head:
+;; `length` segfaulted and `list-head` answered the tag.  Every list in a
+;; Saffron program is a (Cons any) -- a rest list, a `(list ...)` literal --
+;; so these calls now elaborate as their element-aware twins (tlength, thead,
+;; ttail), which read the cell at the monomorph's own layout.
+
+(defn count-rest [& xs : any] (length xs))
+(defn count-ascribed [& xs : any] (list-length (:: xs (Cons any))))
+(defn first-rest [& xs : any] (list-head xs))
+(defn second-rest [& xs : any] (car (cdr xs)))
+(defn count-tail [& xs : any] (length (list-tail xs)))
+
+(defn main [] : int
+  (println (count-rest 7.1 2))          ;; 2
+  (println (count-ascribed 7.1 2 "c"))  ;; 3
+  (println (count-rest))                ;; 0
+  (println (first-rest 7.1 2))          ;; 7.1
+  (println (second-rest 7.1 "two"))     ;; two
+  (println (count-tail 1 2 3 4))        ;; 3
+  (let [l (list 1 2.5 "a")]
+    (println (list-length l))           ;; 3
+    (println (list-head l)))            ;; 1
+  (println (length (list)))             ;; 0
+  0)

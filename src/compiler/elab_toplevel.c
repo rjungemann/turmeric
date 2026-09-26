@@ -578,6 +578,10 @@ Expr *elab_form(Elab *e, Form *f) {
                 }
                 return NULL;
             }
+            /* compiled-closure-copies-a-captured-mut: a `^mut` moved into a
+             * shared heap cell is read through the cell. */
+            if (b->cell_hidden_sym)
+                return elab_form(e, elab_mut_cell_read_form(e, b, f->span));
             /* UT1: Check for use-after-consume of a unique binding (more specific than generic move) */
             if (b->is_unique && b->is_moved) {
                 diag_emit_with_code(DIAG_ERROR, f->span,

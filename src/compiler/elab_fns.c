@@ -8400,9 +8400,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * this pins is the SIGNATURE, the one place a caller has to agree.
      *
      * Placed before the widen below on purpose, so the body is boxed by the
-     * existing return-position coercion rather than a second one written here. */
+     * existing return-position coercion rather than a second one written here.
+     *
+     * A DIVERGING body (`(defn fail [n] (panic "boom"))`, type `!`) gets the
+     * same `any` signature.  It used to keep the inferred `!`, which emits as
+     * `void` -- while every caller had already been elaborated against the
+     * `any` default, so a caller returning the call's value (`(fn [] : any
+     * (fail 5))`) was `return fail(...)` of a void: a cc error, found beside
+     * saffron-catch-unwind-around-dyn-call-fn-crashes.  The body needs no box
+     * (the widen below skips `!`); only the signature has to agree. */
     if (return_kind == TY_NIL && !return_annotated && body &&
-        body->type.kind != TY_NEVER && lang_span_is_dynamic(call->span)) {
+        lang_span_is_dynamic(call->span)) {
         /* saffron-lang-plan open question 3: `main` is the ONE unannotated
          * Saffron function that does not default to `any`.
          *
@@ -10529,10 +10537,17 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * Two gates.  An EXPECTED function type (this lambda is an argument to a
      * typed callee -- `vec-filter`'s predicate, a typed callback) already
      * decides the return, so the default yields to it exactly as the
-     * parameter default above does.  And a nil body stays nil, so a
-     * side-effect lambda keeps the shape a `(fn [T] nil)` slot wants. */
+     * parameter default above does -- which is also what keeps a side-effect
+     * lambda passed straight to a typed `(fn [T] nil)` slot `nil`.
+     *
+     * A nil or diverging body with NO expected function type gets `any` too.
+     * It used to stay `nil`, and a `void` callee is one the dynamic call site
+     * refuses with the same "cannot call this function here": `(each xs (fn
+     * [x] (set! acc (+ acc x))))` through an untyped `each` panicked, the
+     * shape every Saffron accumulate-in-a-lambda loop takes (found fixing
+     * compiled-closure-copies-a-captured-mut).  The body needs no box when it
+     * diverges; a nil body is boxed as the nil tag by the widen below. */
     if (!return_annotated && return_kind == TY_NIL && body &&
-        body->type.kind != TY_NIL && body->type.kind != TY_NEVER &&
         body->type.kind != TY_ANY && lang_span_is_dynamic(call->span) &&
         !is_callcc_receiver &&
         !(e->expected_type && e->expected_type->kind == TY_FN)) {

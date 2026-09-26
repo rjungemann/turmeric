@@ -13868,8 +13868,8 @@ static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
                                             /*separate_compilation=*/false,
                                             /*sandboxed=*/import_blocked,
                                             /*out_tc_env=*/NULL,
-                                            /*include_dirs=*/NULL,
-                                            /*n_include_dirs=*/0,
+                                            env->include_dirs,
+                                            env->n_include_dirs,
                                             &n_fsd, env->reader_macros, sess);
         if (!p || diag_had_error()) ok = false;
         if (diag_pop_capture() > 0) ok = false;
@@ -14203,8 +14203,8 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                    /*separate_compilation=*/false,
                                    /*sandboxed=*/import_blocked,
                                    /*out_tc_env=*/tc_env_slot,
-                                   /*include_dirs=*/NULL,
-                                   /*n_include_dirs=*/0,
+                                   /*include_dirs=*/env->include_dirs,
+                                   /*n_include_dirs=*/env->n_include_dirs,
                                    /*out_n_file_scope_defs=*/&actual_n_fsd,
                                    /* RM transitive: REPL/eval reuses the
                                     * env-owned registry so module loads

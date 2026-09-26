@@ -4082,8 +4082,9 @@ static int decode_exit_status(int status) {
 }
 
 static int cmd_run(int argc, char **argv);   /* defined below; J1 fallback */
-static int cmd_eval(const char *path, bool use_color,
-                    char **extra_argv, int extra_argc, bool debug);
+static int cmd_eval_inc(const char *path, bool use_color,
+                        char **user_inc, int n_user_inc,
+                        char **extra_argv, int extra_argc, bool debug);
 static int cmd_jit(int argc, char **argv);
 
 /* NOT under `#ifdef TUR_HAVE_JIT`, deliberately.  These two started as a JIT
@@ -4942,7 +4943,7 @@ static const TurSpiceJitHook g_repl_jit_hook = {
 #endif /* TUR_HAVE_JIT */
 
 /* engine-selection-plan E2/E3: delegate a resolved non-cc engine.
- * The subcommand arms keep their existing bodies (`cmd_jit` / `cmd_eval`);
+ * The subcommand arms keep their existing bodies (`cmd_jit` / `cmd_eval_inc`);
  * this adapts `tur run`'s normalized "entry + includes + program args"
  * request to each.  Unsatisfiable configurations are HARD errors -- a
  * project that declares an engine has declared a semantic requirement,
@@ -4957,15 +4958,19 @@ static int run_delegate_engine(const char *engine, const char *entry,
     if (getenv("TUR_VERBOSE") && *getenv("TUR_VERBOSE"))
         fprintf(stderr, "tur run: engine '%s' for %s\n", engine, entry);
     if (strcmp(engine, "interp") == 0) {
-        /* The tree-walker discovers the enclosing spice itself (per-file
-         * auto-spice), so user -I dirs are not threaded; program args after
-         * `--` become *args*. */
+        /* The user's -I dirs are threaded through, and cmd_eval_h runs the
+         * same per-file spice walk-up `tur check` does (a dir already on the
+         * list is not added twice), so an interpreted spice resolves its
+         * intra- and cross-spice imports; program args after `--` become
+         * *args*.  This comment used to claim the walk-up happened while
+         * dropping -I -- neither was true (see
+         * docs/archive/interpret-takes-no-include-path-or-spice-discovery.md). */
         char **prog_argv = (passthrough_start >= 0) ? argv + passthrough_start
                                                     : NULL;
         int    prog_argc = (passthrough_start >= 0) ? argc - passthrough_start
                                                     : 0;
-        return cmd_eval(entry, stderr_is_tty(), prog_argv, prog_argc,
-                        /*debug=*/false);
+        return cmd_eval_inc(entry, stderr_is_tty(), user_inc, n_user_inc,
+                            prog_argv, prog_argc, /*debug=*/false);
     }
     /* jit */
 #ifndef TUR_HAVE_JIT
@@ -5201,6 +5206,9 @@ static int cmd_run(int argc, char **argv) {
                                               user_inc, n_user_inc,
                                               argc, argv, passthrough_start);
                 free(user_inc);
+                for (int _i = 0; _i < n_auto_run_owned; _i++)
+                    free(auto_run_owned[_i]);
+                free(auto_run_owned);
                 free_reader_macro_paths(rm_paths_owned, n_rm_paths);
                 ls2_resolver_ctx_dispose(&run_ls2);
                 return drc;
@@ -7973,7 +7981,7 @@ static int cmd_fmt(int argc, char **argv) {
  * src/turi/interpreter_natives.c (tur_core); their declarations come in via
  * "turi/interpreter_natives.h" above. */
 
-/* Debugger Phase 3: optional hook fired by cmd_eval (in debug mode) once the
+/* Debugger Phase 3: optional hook fired by cmd_eval_h (in debug mode) once the
  * interpreter env + debugger are constructed but before the program is armed
  * and run.  The DAP launch path uses it to flush staged breakpoints and install
  * the DAP pause / condition handlers.  NULL for the plain `tur debug` REPL. */
@@ -7992,7 +8000,8 @@ typedef struct {
  * to the script as *args* (a cons-cell list of C-string pointers). */
 static int cmd_eval_h(const char *path, bool use_color,
                       char **extra_argv, int extra_argc, bool debug,
-                      const EvalHooks *hooks) {
+                      const EvalHooks *hooks,
+                      char **user_inc, int n_user_inc) {
     g_interpret_mode = true;
     turi_init(use_color);
     TuriEnv *env = turi_env_new();
@@ -8193,10 +8202,11 @@ static int cmd_eval_h(const char *path, bool use_color,
      * keep running that stub body instead of the native. See
      * docs/reported/turi-vec-new-filled-native-override-lost.md. */
     turi_register_collection_natives(env);
-    /* Build *args* as a cons-cell list of C-string pointers. */
+    /* Build *args* as a cons-cell list of C-string pointers.  The cells are
+     * this function's: freed after the env below (the strings are argv's). */
+    typedef struct { int64_t value; int64_t next; } TurCons;
+    int64_t args_list = 0;
     {
-        typedef struct { int64_t value; int64_t next; } TurCons;
-        int64_t args_list = 0;
         for (int i = extra_argc - 1; i >= 0; i--) {
             TurCons *c = (TurCons *)malloc(sizeof(TurCons));
             c->value = (int64_t)(intptr_t)extra_argv[i];
@@ -8233,6 +8243,39 @@ static int cmd_eval_h(const char *path, bool use_color,
             }
         }
     }
+    /* Module search path: the caller's -I dirs first (the elaborator takes the
+     * first match), then the enclosing spice's src/ and every :spices dep's
+     * src/ -- the list `tur check` / `tur run <file>` build, so a program that
+     * compiles from inside a spice also interprets there.  --no-auto-spice
+     * skips the walk-up.  A dir already on the list (the `tur run
+     * --engine=interp` caller has appended the walk-up itself) is dropped.
+     * The env borrows the array; it is freed after the env below.
+     * See docs/archive/interpret-takes-no-include-path-or-spice-discovery.md */
+    char **eval_inc = NULL;
+    int    n_eval_inc = 0;
+    char **eval_inc_owned = NULL;
+    int    n_eval_inc_owned = 0;
+    if (n_user_inc > 0) {
+        eval_inc = (char **)malloc((size_t)n_user_inc * sizeof(char *));
+        if (eval_inc) {
+            memcpy(eval_inc, user_inc, (size_t)n_user_inc * sizeof(char *));
+            n_eval_inc = n_user_inc;
+        }
+    }
+    auto_append_spice_includes(path, &eval_inc, &n_eval_inc,
+                               &eval_inc_owned, &n_eval_inc_owned, NULL);
+    {
+        int w = 0;
+        for (int r = 0; r < n_eval_inc; r++) {
+            bool dup = false;
+            for (int k = 0; k < w && !dup; k++)
+                dup = strcmp(eval_inc[k], eval_inc[r]) == 0;
+            if (!dup) eval_inc[w++] = eval_inc[r];
+        }
+        n_eval_inc = w;
+    }
+    env->include_dirs   = (const char **)eval_inc;
+    env->n_include_dirs = n_eval_inc;
     /* Debugger Phase 2: attach the debugger before top-level eval so the
      * (break) builtin resolves while the file is read; it stays UNARMED so
      * prelude + top-level forms run without stopping.  We arm it right before
@@ -8323,6 +8366,14 @@ static int cmd_eval_h(const char *path, bool use_color,
     }
     if (hooks && hooks->on_done) hooks->on_done(env, hooks->ud);
     turi_env_free(env);
+    while (args_list) {
+        TurCons *c = (TurCons *)(intptr_t)args_list;
+        args_list = c->next;
+        free(c);
+    }
+    free(eval_inc);
+    for (int i = 0; i < n_eval_inc_owned; i++) free(eval_inc_owned[i]);
+    free(eval_inc_owned);
     return rc;
 }
 
@@ -8352,10 +8403,13 @@ static bool file_defines_main(const char *path) {
     return found;
 }
 
-/* Back-compat wrapper: the common case with no embedder hooks. */
-static int cmd_eval(const char *path, bool use_color,
-                    char **extra_argv, int extra_argc, bool debug) {
-    return cmd_eval_h(path, use_color, extra_argv, extra_argc, debug, NULL);
+/* The common case with no embedder hooks; `user_inc` is the caller's -I dirs
+ * (borrowed for the call, may be NULL). */
+static int cmd_eval_inc(const char *path, bool use_color,
+                        char **user_inc, int n_user_inc,
+                        char **extra_argv, int extra_argc, bool debug) {
+    return cmd_eval_h(path, use_color, extra_argv, extra_argc, debug, NULL,
+                      user_inc, n_user_inc);
 }
 
 /* Debugger Phase 3: DAP launch glue.  The DAP server calls dap_launch_cb once
@@ -8379,7 +8433,7 @@ static int dap_launch_cb(const char *program, char **args, int n_args,
     /* use_color=false: stdout is the (captured) debuggee channel; diagnostics go
      * to stderr without colour, matching `tur lsp` / `tur mcp`. */
     return cmd_eval_h(program, /*use_color=*/false, args, n_args,
-                      /*debug=*/true, &hooks);
+                      /*debug=*/true, &hooks, NULL, 0);
 }
 
 static int cmd_dap(void) {
@@ -8428,7 +8482,7 @@ static int cmd_trace(const char *path, const char *out_path,
     /* debug=true is what installs the debugger and arms it; the tracer's
      * pause handler then sees every node. */
     int rc = cmd_eval_h(path, /*use_color=*/false, extra_argv, extra_argc,
-                        /*debug=*/true, &hooks);
+                        /*debug=*/true, &hooks, NULL, 0);
 
     if (!ctx.trace) {
         fprintf(stderr, "tur: trace: could not attach the recorder\n");
@@ -9497,8 +9551,8 @@ static int usage(void) {
         "  tur run <recipe>                  run a Justfile recipe (`tur just` is a synonym)\n"
         "  tur repl                          interactive REPL (Phase S1)\n"
         "  tur worker                        persistent fixture evaluator (Tier 3, reads dirs from stdin)\n"
-        "  tur interpret <file.tur>          run a file through the tree-walking interpreter\n"
-        "  tur debug <file.tur>              run a file under the interactive debugger\n"
+        "  tur interpret [-I dir] <file.tur> run a file through the tree-walking interpreter\n"
+        "  tur debug [-I dir] <file.tur>     run a file under the interactive debugger\n"
         "  tur dap                           Debug Adapter Protocol server (JSON-RPC/stdio) for editors\n"
         "  tur trace <file.tur> [-o f]       record an interpreted run; --dump reads one back\n"
         "  tur lsp-lite                      lightweight completion/calltip/doc backend (NDJSON/stdio)\n"
@@ -9743,6 +9797,39 @@ static int parse_include_flags(int argc, char **argv, int start, char ***out_dir
     }
     *out_dirs = dirs;
     return n;
+}
+
+/* The interpreter arms (`tur --interpret`, `tur debug`): collect the `-I`
+ * flags that come BEFORE the file path, starting at argv[start].  Everything
+ * after the path is the program's *args*, untouched -- a `-I` there belongs to
+ * the program.  Returns the index of the file path (argc when there is none),
+ * or -1 after reporting a bare trailing `-I`.  *out_dirs is malloc'd (caller
+ * frees); its strings are borrowed from argv. */
+static int interp_leading_include_flags(int argc, char **argv, int start,
+                                        char ***out_dirs, int *n_out) {
+    *out_dirs = NULL;
+    *n_out = 0;
+    int i = start;
+    while (i < argc) {
+        int consumed = 0;
+        if (!is_include_flag(argc, argv, i, &consumed)) {
+            if (strcmp(argv[i], "-I") == 0) {
+                free(*out_dirs);
+                *out_dirs = NULL;
+                *n_out = 0;
+                fprintf(stderr, "tur: -I requires a directory argument\n");
+                return -1;
+            }
+            break;
+        }
+        char **bigger = (char **)realloc(*out_dirs,
+                                         (size_t)(*n_out + 1) * sizeof(char *));
+        if (!bigger) break;
+        *out_dirs = bigger;
+        (*out_dirs)[(*n_out)++] = consumed == 2 ? argv[i + 1] : argv[i] + 2;
+        i += consumed;
+    }
+    return i;
 }
 
 static int usage_eval(void) {
@@ -12337,12 +12424,20 @@ static int tur_main_inner(int argc, char **argv) {
         return cmd_worker();
     }
     if (strcmp(cmd, "interpret") == 0 || strcmp(cmd, "--interpret") == 0) {
-        if (argc < 3) {
+        char **inc = NULL;
+        int    n_inc = 0;
+        int    fi = interp_leading_include_flags(argc, argv, 2, &inc, &n_inc);
+        if (fi < 0) return 2;
+        if (fi >= argc) {
+            free(inc);
             fprintf(stderr, "tur: %s requires a file argument\n", cmd);
             return usage();
         }
-        return cmd_eval(argv[2], !no_color && stderr_is_tty(), argv + 3, argc - 3,
-                        /*debug=*/false);
+        int rc = cmd_eval_inc(argv[fi], !no_color && stderr_is_tty(),
+                              inc, n_inc, argv + fi + 1, argc - fi - 1,
+                              /*debug=*/false);
+        free(inc);
+        return rc;
     }
     /* Debugger Phase 2: `tur debug <file.tur> [args...]` -- run a file through
      * the tree-walking interpreter under the interactive debugger.  Drops into
@@ -12357,8 +12452,20 @@ static int tur_main_inner(int argc, char **argv) {
                 "(tur-dbg) prompt for the full command list.\n");
             return argc < 3 ? 1 : 0;
         }
-        return cmd_eval(argv[2], !no_color && stderr_is_tty(), argv + 3, argc - 3,
-                        /*debug=*/true);
+        char **inc = NULL;
+        int    n_inc = 0;
+        int    fi = interp_leading_include_flags(argc, argv, 2, &inc, &n_inc);
+        if (fi < 0) return 2;
+        if (fi >= argc) {
+            free(inc);
+            fprintf(stderr, "tur: debug requires a file argument\n");
+            return 1;
+        }
+        int rc = cmd_eval_inc(argv[fi], !no_color && stderr_is_tty(),
+                              inc, n_inc, argv + fi + 1, argc - fi - 1,
+                              /*debug=*/true);
+        free(inc);
+        return rc;
     }
     /* E3: tur eval '<expr>' or tur eval --file <file> */
     if (strcmp(cmd, "eval") == 0) {
@@ -12368,6 +12475,11 @@ static int tur_main_inner(int argc, char **argv) {
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
                 return usage_eval();
+            int consumed = 0;
+            if (is_include_flag(argc, argv, i, &consumed)) {
+                i += consumed - 1;
+                continue;
+            }
             if (strcmp(argv[i], "--file") == 0 && i + 1 < argc) {
                 is_file = true;
                 src = argv[++i];
@@ -12377,8 +12489,18 @@ static int tur_main_inner(int argc, char **argv) {
         }
         if (!src) return usage_error(usage_eval);
         bool use_color = !no_color && stderr_is_tty();
-        if (is_file)
-            return cmd_eval(src, use_color, NULL, 0, /*debug=*/false);
+        if (is_file) {
+            char **inc = NULL;
+            int    n_inc = parse_include_flags(argc, argv, 2, &inc);
+            if (n_inc < 0) {
+                fprintf(stderr, "tur: -I requires a directory argument\n");
+                return 2;
+            }
+            int rc = cmd_eval_inc(src, use_color, inc, n_inc, NULL, 0,
+                                  /*debug=*/false);
+            free(inc);
+            return rc;
+        }
         return cmd_eval_expr(src, use_color);
     }
     /* E5: tur doc <symbol> */

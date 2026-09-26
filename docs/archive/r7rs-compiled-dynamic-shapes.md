@@ -26,7 +26,8 @@ run compiled now:
 - Section 3 was misdiagnosed: the crash is `list-length` (stdlib/list.tur,
   inline C over 8-byte-head cells) walking a `(Cons any)` chain whose heads
   are 16-byte boxes -- not the boxing of the rest list, which is fine.  That
-  is its own open report, docs/reported/list-length-on-cons-any-segfaults.md.
+  was its own report, docs/archive/list-length-on-cons-any-segfaults.md
+  (resolved 2026-09-26).
 
 The original report follows.
 

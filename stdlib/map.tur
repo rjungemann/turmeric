@@ -952,8 +952,15 @@
 ;;; so the last pair wins on duplicate keys.  Each step also FREES the map it
 ;;; assoc'd into -- see map-assoc-consuming__ for why that is sound here and
 ;;; not in map-assoc itself.
+;;;
+;;; Every parameter of this family (hamt-of, hamt-homog-chain__, this one) is
+;;; ^syntax: bound as the raw argument form.  A plain parameter is substituted
+;;; into the body before the compile-time evaluation, so `m` (or a spliced
+;;; `kvs`) holding an unannotated lambda value was EVALUATED at compile time
+;;; and `#map{"add" (fn [a b] (+ a b))}` failed "compile-time macro
+;;; evaluation expected a form value".
 
-(defmacro hamt-assoc-each__ [m & kvs]
+(defmacro hamt-assoc-each__ [^syntax m & ^syntax kvs]
   (if (empty? kvs)
     m
     (list hamt-assoc-each__
@@ -971,7 +978,7 @@
 ;;; kvs is k0 v0 k1 v1 ...  Chains tur-map-homog__ over adjacent keys and
 ;;; adjacent values so all keys unify to one type and all values to another.
 
-(defmacro hamt-homog-chain__ [& kvs]
+(defmacro hamt-homog-chain__ [& ^syntax kvs]
   (if (empty? kvs)
     0
     (if (empty? (rest (rest kvs)))
@@ -1010,7 +1017,7 @@
 ;;;
 ;;; Since: DL1 (data-literals-plan); typed surface: TMS3
 
-(defmacro hamt-of [& kvs]
+(defmacro hamt-of [& ^syntax kvs]
   (if (empty? kvs)
     (list map-new)
     (list do

@@ -1,0 +1,48 @@
+;; stdlib-region-store-hooks-unswept: a node that reaches an inline-C body
+;; through an ERASED word must be noted, or a store inside the body lets the
+;; bracket's generation rewind under the stored pointer.  Two holes, both
+;; silent use-after-rewinds before this fixture:
+;;
+;;   - the IMPLICIT erasure: a typed node passed straight into an inline-C
+;;     `:int` parameter (the coercion elab_call.c accepts) was never noted;
+;;   - an EXPLICIT `(:: node :int)` / `(:: node ptr<void>)` written as a
+;;     direct call argument lost its note too: the call emitter strips an
+;;     argument's ascriptions before emitting it.
+;;
+;; Stdout alone cannot see this -- a rewound generation's memory is not
+;; necessarily reused before the read -- so hook.sh also prints the
+;; TUR_REGION_STATS line: three storing brackets retire, the control rewinds.
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+(defn link-v [l : Link] : int
+  (match l (Link a b) a))
+
+(defn keep [slot : ptr<void> v : int] : nil
+  ```c *(int64_t *)slot = v; ```)
+
+(defn keep-ptr [slot : ptr<void> v : ptr<void>] : nil
+  ```c *(void **)slot = v; ```)
+
+(defn mk-slot [] : ptr<void>
+  ```c return calloc(1, sizeof(int64_t)); ```)
+
+(defn read-slot [slot : ptr<void>] : int
+  ```c return ((int64_t *)*(int64_t *)slot)[0]; ```)
+
+(defn main [] : int
+  (let [s1 (mk-slot)
+        s2 (mk-slot)
+        s3 (mk-slot)]
+    ;; 1. implicit: a typed node into an inline-C :int parameter.
+    (with-region (fn [] (do (keep s1 (Link 41 0)) 1)))
+    ;; 2. an explicit erasure to :int, written as the call argument.
+    (with-region (fn [] (do (keep s2 (:: (Link 42 0) :int)) 1)))
+    ;; 3. an explicit erasure to ptr<void>, written as the call argument.
+    (with-region (fn [] (do (keep-ptr s3 (:: (Link 43 0) ptr<void>)) 1)))
+    ;; 4. control: nothing escapes, so this bracket still rewinds.
+    (with-region (fn [] (do (link-v (Link 44 0)) 1)))
+    (println (read-slot s1))
+    (println (read-slot s2))
+    (println (read-slot s3)))
+  0)

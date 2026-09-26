@@ -1693,6 +1693,9 @@ Expr *elab_tailcall(Elab *e, const Form *call);
 /* elab_forms.c */
 Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span);
 Expr *elab_let(Elab *e, const Form *call);
+/* compiled-closure-copies-a-captured-mut: the `(.v <cell>)` read a use of a
+ * cell-aliased `^mut` name elaborates as (see Binding.cell_hidden_sym). */
+Form *elab_mut_cell_read_form(Elab *e, const Binding *alias, Span span);
 Expr *elab_letstar(Elab *e, const Form *call);
 Expr *elab_letrec(Elab *e, const Form *call);
 Expr *elab_named_let(Elab *e, const Form *call);

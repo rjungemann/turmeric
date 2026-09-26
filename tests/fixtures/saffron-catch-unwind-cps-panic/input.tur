@@ -1,0 +1,33 @@
+#lang saffron
+;; saffron-catch-unwind-around-dyn-call-fn-crashes: a function that makes a
+;; dynamic call is CPS-lowered, and its direct entry wrapper reads the value
+;; the body delivered out of a heap box.  A body that panicked returned before
+;; delivering one (its `if (tur_panicking) return 0;` check), and the wrapper
+;; read through the NULL box -- a SIGSEGV, so the catch-unwind waiting for the
+;; panic never saw it.  The wrapper now hands back a zero value and the caller's
+;; own panic check carries the panic to the boundary.
+;;
+;; The second half is the report's side note: a function whose body is ONLY a
+;; panic had the inferred `!` return, emitted `void`, while every caller had
+;; been typed against the unannotated-Saffron `any` default -- `return fail(..)`
+;; of a void was a cc error.  It now gets the `any` signature too.
+
+(defn bl [self n] (if (= n 5) (panic "boom") (self self (- n 1))))
+(defn fail [n] (panic "boom"))
+(defn countdown [self n] (if (= n 0) "done" (self self (- n 1))))
+
+(defn main [] : int
+  ;; Panics on entry: caught, not ok.
+  (let [r (catch-unwind (fn [] : any (bl bl 5)))]
+    (println (ok? r)))
+  ;; Panics after two dynamic self-calls: caught, not ok.
+  (let [r (catch-unwind (fn [] : any (bl bl 7)))]
+    (println (ok? r)))
+  ;; A diverging-only body.
+  (let [r (catch-unwind (fn [] : any (fail 5)))]
+    (println (ok? r)))
+  ;; No panic: ok, and the delivered value survives the box read.
+  (let [r (catch-unwind (fn [] : any (countdown countdown 3)))]
+    (println (ok? r)))
+  (println (countdown countdown 3))
+  0)

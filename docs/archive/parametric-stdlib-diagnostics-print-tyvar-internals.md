@@ -10,8 +10,33 @@ description: A payload mismatch on vec-push! / chan-send reads "expected tyvar, 
 **most common mistake** the new parametric containers invite -- putting two
 payload types in one container.
 
-**Status:** OPEN. Filed 2026-09-18 while executing
-[stdlib-int-stand-in-audit](stdlib-int-stand-in-audit.md) S2. **Not a
+**RESOLVED 2026-09-26** -- directions 1 and 2; direction 3 (say where `A`
+was pinned) is not done and is not tracked separately.
+
+- **Direction 1.** The argument-mismatch diagnostic in `elab_call_fn_inner`
+  (`src/compiler/elab_call.c`) now takes the declared parameter type when the
+  expected slot is a bare type variable, and substitutes the call's type
+  bindings into it before printing. The repro reads
+  `function 'vec-push!' arg 2: expected int, got float`; a variable that is
+  still unbound prints under its own name.
+- **Direction 2.** `type_name_buf` (`src/compiler/types.c`) prints a type
+  application in its source spelling, flattened along the spine:
+  `(Chan A)`, `(Map K V)`, `(Option int)` -- no `type-app`. A named type
+  variable prints as its name (`A`) instead of `tyvar 'A'`; the name alone
+  still tells cross-skolem mismatches apart. `type_name`'s `TY_APP` arm routes
+  through the same printer. The hole-headed partial-application arm
+  (`(F _ X)`) is unchanged.
+
+Pinned by `errors/vec-push-bound-payload-mismatch` (the repro below) and by
+the `errors/{atomic,chan,ref}-wrong-handle`,
+`errors/heap-parametric-self-typed-field-int-terminator`,
+`errors/instance-applied-result-mismatch` and `errors/set-of-heterogeneous`
+snapshots, which now spell `(AtomicCell A)`, `(Chan A)`, `(Node int)`,
+`(Option Pt)` and `expected int, got cstr`. `tests/run-repr-trace.sh` matches
+the new spelling. No `expected.c` snapshot moved.
+
+**Status at filing:** OPEN. Filed 2026-09-18 while executing
+[stdlib-int-stand-in-audit](../reported/stdlib-int-stand-in-audit.md) S2. **Not a
 regression from that work**: it reproduces on `vec-push!`, which has been
 parametric all along. S2 widened its reach to `chan`, `ref` and `atomic`.
 

@@ -190,6 +190,94 @@ static const char *stdlib_load_hint_file(const Symbol *name) {
     return tur_stdlib_load_hint(name->name);
 }
 
+/* list-length-on-cons-any-segfaults: the carrier-level list helpers in
+ * stdlib/list.tur walk a cons chain as `struct { int64_t head; int64_t tail;
+ * }`.  A `(Cons A)` coerces to their `:int` parameter in argument position,
+ * and for most A that is sound -- a scalar or pointer head is one word, so the
+ * tail sits at offset 8.  Two element kinds widen the head and push the tail
+ * past offset 8, and the walk then reads the tail out of the middle of the
+ * head:
+ *
+ *   - `any` / a union: the head is a two-word tur_tagged_t.  This is every
+ *     list in a Saffron program -- `(list 1 2 3)`, a `& xs : any` rest list
+ *     -- so `(length xs)` segfaulted and `(list-head xs)` answered the tag.
+ *   - a by-value aggregate laid out inline (`(Cons (Option int))`).
+ *
+ * For those, a call to one of the helpers below is elaborated as a call to
+ * its element-aware twin instead, which reads `.head` / `.tail` at the
+ * monomorph's own layout.  The twins take the same list and answer the same
+ * question, typed: `thead` returns the element (an `any`, a `(Option int)`)
+ * rather than its first word.  Every other element keeps the carrier call
+ * and its emitted C byte-for-byte. */
+static const char *carrier_list_typed_twin(const char *name) {
+    static const struct { const char *carrier; const char *typed; } table[] = {
+        { "list-length", "tlength" }, { "length", "tlength" },
+        { "list-head",   "thead"   }, { "car",    "thead"   },
+        { "list-tail",   "ttail"   }, { "cdr",    "ttail"   },
+    };
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
+        if (strcmp(name, table[i].carrier) == 0) return table[i].typed;
+    }
+    return NULL;
+}
+
+/* Is `t` a stdlib `(Cons A)` whose head is wider than the carrier word? */
+static bool cons_head_shifts_carrier_tail(const Type *t) {
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(t, &def, args, &n_args) || !def || n_args != 1 ||
+            !def->name || strcmp(def->name, "Cons") != 0 || !def->is_heap)
+        return false;
+    const Type *elem = &args[0];
+    if (elem->kind == TY_CONTRACT && elem->as.contract_.base_type)
+        elem = elem->as.contract_.base_type;
+    if (elem->kind == TY_ANY || elem->kind == TY_UNION) return true;
+    return repr_of(elem, REPR_POS_STRUCT_FIELD) == REPR_BYVAL_AGG;
+}
+
+/* Called with the elaborated carrier call; returns the twin call, or NULL to
+ * keep `call_expr`.  The argument is found under the implicit coercions the
+ * call wrapped it in, but NOT under an ascription the source wrote: an
+ * explicit `(:: xs :int)` is the documented escape hatch that discards the
+ * element type, and stays exactly as unsafe as it says it is. */
+static Expr *typed_list_twin_redirect(Elab *e, const Form *call,
+                                      const Binding *fn_binding,
+                                      const Expr *call_expr) {
+    if (!call_expr || call_expr->kind != EX_CALL || call->as.list.len != 2)
+        return NULL;
+    if (!fn_binding || !fn_binding->is_global || !fn_binding->name ||
+            !fn_binding->name->name)
+        return NULL;
+    if (!fn_binding->is_from_stdlib &&
+            !elab_file_is_stdlib(fn_binding->span.file_id))
+        return NULL;
+    const char *twin = carrier_list_typed_twin(fn_binding->name->name);
+    if (!twin || call_expr->as.call_.n_args != 1) return NULL;
+    const Expr *arg = call_expr->as.call_.args[0];
+    while (arg && !cons_head_shifts_carrier_tail(&arg->type)) {
+        if (arg->kind == EX_ASCRIBE && !arg->as.ascribe_.type_form)
+            arg = arg->as.ascribe_.inner;
+        else if (arg->kind == EX_CAST)
+            arg = arg->as.cast_.expr;
+        else if (arg->kind == EX_REINTERPRET)
+            arg = arg->as.reinterpret_.expr;
+        else
+            return NULL;
+    }
+    if (!arg) return NULL;
+    const Symbol *twin_sym = intern_cstr(e->st, twin);
+    bool qual_err = false;
+    Binding *twin_b = elab_lookup_sym(e, twin_sym, call->span, &qual_err);
+    if (!twin_b || !twin_b->is_global || twin_b->type.kind != TY_FN) return NULL;
+    /* The argument form elaborates a second time here.  Only the wide-head
+     * case pays that, and it is the case that used to crash. */
+    Form **items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    items[0] = form_sym(e->arena, call->as.list.items[0]->span, twin_sym);
+    items[1] = call->as.list.items[1];
+    return elab_call(e, form_list(e->arena, call->span, items, 2));
+}
+
 /* docs/archive/history/defn-shadows-return-special-form.md: head-position dispatch in
  * elab_call (below) matches special forms by symbol identity *before* any
  * binding, macro, or typeclass-method lookup.  A user `(defn return ...)` is
@@ -4037,6 +4125,17 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     bool fn_qual_err = false;
     Binding *fn_binding = elab_lookup_sym(e, name, head->span, &fn_qual_err);
     if (!fn_binding && fn_qual_err) return NULL;
+    /* compiled-closure-copies-a-captured-mut: a call through a `^mut` moved
+     * into a shared cell calls what the cell holds. */
+    if (fn_binding && fn_binding->cell_hidden_sym) {
+        Form **items = (Form **)arena_alloc(e->arena,
+                                            call->as.list.len * sizeof(Form *));
+        items[0] = elab_mut_cell_read_form(e, fn_binding, head->span);
+        for (uint32_t k = 1; k < call->as.list.len; k++)
+            items[k] = call->as.list.items[k];
+        return elab_form(e, form_list(e->arena, call->span, items,
+                                      call->as.list.len));
+    }
 
     /* constrained-generic-as-value (docs/archive/history/constrained-generic-as-value-
      * bakes-representative.md): a call through an immutable let-bound alias of a
@@ -4707,6 +4806,10 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                        (fn_binding->type.kind == TY_PTR_VOID && fn_binding->closure_fn_binding) ||
                        fn_binding->closure_fn_binding)) {
         Expr *call_expr = elab_call_fn(e, call, fn_binding);
+        {
+            Expr *twin = typed_list_twin_redirect(e, call, fn_binding, call_expr);
+            if (twin) return twin;
+        }
         /* LT4: patch struct return type with full type containing StructDef pointer,
          * mirroring the G3 patch for TY_ADT above. Without this, the call expression
          * gets TY_STRUCT with def=NULL from type_from_kind(TY_STRUCT).
@@ -5094,20 +5197,27 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
          *     different nominal.  The saturated path only re-checks the
          *     *remaining* params, so the captured slot must be validated here.
          * See docs/archive/history/partial-application-skips-captured-arg-type-check.md
-         * and docs/archive/history/positional-nominal-type-identity-fix-plan.md. */
+         * and docs/archive/history/positional-nominal-type-identity-fix-plan.md.
+         *
+         * A session / role endpoint slot is checked the same way: `type_eq`
+         * compares its protocol (equirecursively) and role names, exactly as
+         * the saturated positional check does. A protocol is structural, not
+         * nominal, hence the gate's name. Without it, under-saturating a call
+         * was a way around the protocol check a saturated call performs
+         * (docs/archive/pap-captured-arg-skips-session-role-protocol-check.md). */
         {
             Type *cap_full_chk = PAP_SLOT_FULL(i);
-            bool slot_is_nominal =
-                (cap_full_chk &&
-                 (cap_full_chk->kind == TY_STRUCT || cap_full_chk->kind == TY_ADT)) ||
-                cap_kind == TY_STRUCT || cap_kind == TY_ADT;
-            if (slot_is_nominal) {
-                /* Prefer the recorded full type for an exact nominal compare;
-                 * fall back to a kind-level compare when it is unavailable. */
+            #define PAP_FULL_CHECK_KIND(k) \
+                ((k) == TY_STRUCT || (k) == TY_ADT || (k) == TY_SESSION || (k) == TY_ROLE)
+            bool slot_needs_full_type_check =
+                (cap_full_chk && PAP_FULL_CHECK_KIND(cap_full_chk->kind)) ||
+                PAP_FULL_CHECK_KIND(cap_kind);
+            if (slot_needs_full_type_check) {
+                /* Prefer the recorded full type for an exact compare; fall
+                 * back to a kind-level compare when it is unavailable. */
                 bool mismatch;
                 Type expected_ty;
-                if (cap_full_chk &&
-                        (cap_full_chk->kind == TY_STRUCT || cap_full_chk->kind == TY_ADT)) {
+                if (cap_full_chk && PAP_FULL_CHECK_KIND(cap_full_chk->kind)) {
                     mismatch = !type_eq(elab_args[i]->type, *cap_full_chk);
                     expected_ty = *cap_full_chk;
                 } else {
@@ -5127,6 +5237,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
                     return NULL;
                 }
             }
+            #undef PAP_FULL_CHECK_KIND
         }
         Type cap_type = type_from_kind(cap_kind);
         /* A5: a captured struct/ADT slot must carry its *full* nominal type, not
@@ -6982,6 +7093,39 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * is expected.  Partial type application values are opaque int64_t at runtime. */
             arg_ok = true;
         }
+        /* stdlib-region-store-hooks-unswept: a typed node handed to an inline-C
+         * callee's erased `:int` parameter is an ERASURE, exactly as `(:: x :int)`
+         * is -- from here the word is invisible to the region walk, and an
+         * inline-C body may store it anywhere.  The explicit ascription notes
+         * the word (emit_expr.c, EX_ASCRIBE); this implicit one did not, so a
+         * node reaching `promise-fulfill`, `work-queue-push`, `httpd-handle`,
+         * ... from inside a bracket let the generation rewind under the stored
+         * pointer.  Make the coercion the same ascription, and the one note
+         * covers every such store, present and future.
+         *
+         * Scoped to an inline-C callee: a Turmeric-bodied callee's own stores
+         * are hooked where they happen.  NOT narrowed by a declared `#fx{}`:
+         * a pure constructor retains its arguments by definition --
+         * zipper-new-raw is `#fx{}` and stores `focus` into the zipper it
+         * builds.  The note only ever turns a rewind into a retire, so a body
+         * that does not retain the word (list-length) costs that generation's
+         * saving, never correctness -- the trade the typed-parameter note at
+         * inline-C body entry already makes. */
+        if (arg_ok && expected_arg_kind == TY_INT && fn_binding &&
+                fn_binding->body_is_inline_c &&
+                (args[i]->type.kind == TY_ADT || args[i]->type.kind == TY_APP ||
+                 args[i]->type.kind == TY_STRUCT)) {
+            uint32_t fai = fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *decl = (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                                fai < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[fai] : NULL;
+            if (!decl || decl->kind == TY_INT) {
+                Expr *asc = expr_new(e->arena, EX_ASCRIBE, TYPE_INT, args[i]->span);
+                asc->as.ascribe_.inner = args[i];
+                asc->as.ascribe_.type_form = NULL;
+                args[i] = asc;
+            }
+        }
         if (!arg_ok && expected_arg_kind == TY_APP && args[i]->type.kind == TY_ADT) {
             /* Phase HKT/G4: Allow passing a TY_ADT where TY_APP is expected.
              * Both lower to int64_t at runtime.  This arises when a function
@@ -7828,6 +7972,23 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     !call_type_has_named_tyvar(ct))
                     expected_ty = *ct;
             }
+            /* parametric-stdlib-diagnostics-print-tyvar-internals: a generic
+             * parameter printed as its bare kind -- `(vec-push! v 7.25)` on a
+             * `(Vec int)` read "expected tyvar, got float".  By this argument
+             * the variable is usually bound (`A := int`, from `v`), and the
+             * binding is what the reader needs.  Take the declared type and
+             * substitute this call's bindings into it; a still-unbound
+             * variable prints under its own name. */
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+                uint32_t fti = fn_binding->closure_fn_binding ? i + 1 : i;
+                const Type *ft = (fti < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fti] : NULL;
+                if (expected_ty.kind == TY_TYVAR && ft && ft->kind == TY_TYVAR)
+                    expected_ty = *ft;
+            }
+            if (n_type_bindings > 0 && call_type_has_named_tyvar(&expected_ty))
+                expected_ty = call_instantiate_type(e, &expected_ty, type_bindings,
+                                                    n_type_bindings);
             /* PH2.1: Build the type names into owned local buffers via
              * type_print rather than type_name. type_name returns a strdup-ed
              * heap string for composite kinds (handler, union, fn, ...) that no

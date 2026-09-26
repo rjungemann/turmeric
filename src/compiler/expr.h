@@ -371,6 +371,14 @@ struct Binding {
      * shadows a stdlib name (which would otherwise produce conflicting
      * static functions of the same C name and break the C compile). */
     bool          is_from_stdlib;
+    /* compiled-closure-copies-a-captured-mut: set on the NAME binding of a
+     * `^mut` local that a lambda captures (elab_let_mut_to_cell).  The value
+     * lives in a shared heap cell bound under this hidden symbol; every read
+     * of the name elaborates as `(.v <hidden>)` and every `set!` as a field
+     * write, so each closure's env holds the one cell pointer instead of a
+     * copy of the value.  The binding itself is never emitted.  NULL for
+     * every ordinary binding. */
+    const Symbol *cell_hidden_sym;
     /* r7rs-procedure-body-forward-reference: a `(def ^mut name : any init)`
      * the Pass-1 pre-pass declared ahead of the bodies, so a procedure
      * written above the def can name it; elab_def fills this binding in
@@ -1623,7 +1631,10 @@ struct Expr {
          * the tree passes it that way), so the type rides the NODE, and a
          * `let`/`def` that binds an `(async ..)` copies it onto the binding
          * (Binding.async_payload) for the `await` to find. */
-        struct { Expr *fn_expr; Type payload; }      async_;       /* (async fn-expr) */
+        /* on_thread: the body captures a session / role endpoint, so it runs on
+         * its own OS thread (tur_async_thread_via) rather than inline --
+         * compiled-async-fiber-deadlocks-on-a-session-op. */
+        struct { Expr *fn_expr; Type payload; bool on_thread; } async_; /* (async fn-expr) */
         /* `payload`: the type the awaited value is read back at (the async's
          * payload when its provenance is known, else the int64 slot's `int`). */
         struct { Expr *fut_expr; Type payload; }     await_;       /* (await fut) */

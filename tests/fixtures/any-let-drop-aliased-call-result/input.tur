@@ -1,0 +1,39 @@
+;; any-scope-drop-frees-an-aliased-call-result: a let-bound `any` is dropped at
+;; its scope's end only when the scope OWNS the box.  A call result is owned
+;; when the callee minted it (its body's tail is a widen) or forwarded one the
+;; caller owned -- not merely because it is a call.  Each read after an inner
+;; scope closes used to print a freed box's garbage and exit 0.
+(defstruct P [x : int y : int])
+
+(def g : any (:: (P 1 2) any))
+
+;; Returns an alias: the global's box.
+(defn fetch [] : any g)
+
+;; Mints a fresh box per call: the scope that binds it owns it (and the leak
+;; check below insists it is still freed).
+(defn mint [n : int] : any (:: (P n (+ n 1)) any))
+
+(defn show [a : any] : int
+  (.x (cast a P)))
+
+(defn main [] : int
+  ;; 1. a call that returns a global's box
+  (let [a (fetch)]
+    (println (show a)))
+  (let [b (P 5 6)]
+    (println (.y b)))
+  (println (show g))
+  ;; 2. an element read from a (Vec any)
+  (let [xs (vec-new)]
+    (vec-push! xs (:: (P 7 8) any))
+    (let [e (vec-get xs 0)]
+      (println (show e)))
+    (let [b (P 9 10)]
+      (println (.y b)))
+    (println (show (vec-get xs 0)))
+    (vec-free xs))
+  ;; 3. a fresh box: owned, dropped at scope end
+  (let [c (mint 11)]
+    (println (show c)))
+  0)

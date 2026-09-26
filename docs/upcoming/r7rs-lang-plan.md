@@ -1236,8 +1236,8 @@ correct only for escapes is a trap.
 > - **Still capped:** a dynamic call with more than four arguments
 >   (`emit_dyn_call`, so `apply` too); the `TUR_APPLYn_T` table stops at 4.
 > - **Not this stage's:** `list-length` on a `(Cons any)` chain
->   (docs/reported/list-length-on-cons-any-segfaults.md, which is what the
->   archived report's section 3 really was).
+>   (docs/archive/list-length-on-cons-any-segfaults.md, which is what the
+>   archived report's section 3 really was; since resolved).
 
 ### R7 -- `(scheme base)` and the other eleven libraries (large; parallelizable)
 
@@ -1556,9 +1556,9 @@ conformance story.
 >   `for-each` lambda updated the closure's copy: `(sum-to 5)` was 0 compiled
 >   and 10 interpreted. `scheme_lower.c` now does assignment conversion: a
 >   `^mut` binding a nested `fn` mentions lives in an `R7rsBox` (prelude), read
->   and written through it. Typed Turmeric and Saffron still disagree between
->   back ends:
->   [compiled-closure-copies-a-captured-mut](../reported/compiled-closure-copies-a-captured-mut.md).
+>   and written through it. Typed Turmeric and Saffron disagreed between back
+>   ends until 2026-09-26:
+>   [compiled-closure-copies-a-captured-mut](../archive/compiled-closure-copies-a-captured-mut.md).
 > - **Names.** A binder named like a Turmeric special form was that form:
 >   `(call/cc (lambda (return) ... (return x)))` compiled `return` as an early
 >   return (invalid C) and interpreted it as one (a wrong answer, which
@@ -2872,11 +2872,18 @@ differences, as reports"):
 A Scheme `set!` of a variable a lambda captures is shared: the Scheme lowering
 boxes it, on both back ends. A compiled Turmeric or Saffron closure COPIES a
 captured `^mut`, and their interpreter shares it
-([compiled-closure-copies-a-captured-mut](../reported/compiled-closure-copies-a-captured-mut.md)).
+([compiled-closure-copies-a-captured-mut](../archive/compiled-closure-copies-a-captured-mut.md)).
 That report is Turmeric's to decide, and whichever way it goes, the Scheme
 behavior does not move with it. If Turmeric settles on copying, Scheme keeps
 its boxes; if it settles on sharing, the Scheme-only `ac_walk` can retire in
 favor of the shared mechanism, with this section's rule deciding that it may.
+
+**Settled 2026-09-26: sharing.** Turmeric and Saffron now move a
+lambda-captured `^mut` into a heap cell in the elaborator
+(`elab_let_mut_to_cell`). `ac_walk` does NOT retire: since T5 it boxes every
+`set!` variable, captured or not, because a re-entered continuation must see
+a variable as a location, and the Turmeric mechanism covers only variables a
+lambda captures. The two agree wherever both apply.
 
 ---
 

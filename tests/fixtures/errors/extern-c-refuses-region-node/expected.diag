@@ -1,0 +1,2 @@
+extern-c: 'Link' cannot cross the C boundary by value
+extern-c: 'Holder' cannot cross the C boundary by value

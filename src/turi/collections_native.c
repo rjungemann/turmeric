@@ -1206,6 +1206,13 @@ static TuriValue vec_retag_cell(void *vec_key, size_t idx, int64_t cell) {
          * carrier).  Guard on non-null to leave a 0/nil carrier alone. */
         case TURI_STRUCT: return cell ? turi_struct_val((TuriStruct *)(intptr_t)cell)
                                       : turi_int(0);
+        /* A closure element rides the cell as its TuriClosure pointer.  Without
+         * this it came back a bare int: typed code re-typed it at its `(fn ...)`
+         * ascription, but a `(Vec any)` element read -- a Saffron program's
+         * `((vec-get fs 0) 2)` -- is called dynamically and panicked "cannot
+         * call a int value" where the compiled program printed the answer. */
+        case TURI_CLOSURE: return cell ? turi_closure((TuriClosure *)(intptr_t)cell)
+                                       : turi_int(0);
         default:         return turi_int(cell);
     }
 }
