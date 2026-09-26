@@ -71,6 +71,13 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
+- **`tur` reports its own crashes on Windows.** An access violation or other
+  fatal exception in `tur.exe` used to end the process with nothing on
+  stderr. It now prints `tur: fatal exception 0x... at ... (tur.exe+0x...)`,
+  and `addr2line -e tur.exe` resolves it against the same build once the
+  image base (`objdump -p tur.exe`, usually `0x140000000`) is added to the
+  offset. The exit status is unchanged.
+
 - **`Result` is an `Applicative`.** `stdlib/result.tur` ships
   `Applicative [(Result _ B)]`: `pure` is `ok`, and `ap` applies an `ok`
   function to an `ok` argument and returns the first `err` it meets, the
@@ -98,6 +105,15 @@ All notable changes to Turmeric are documented here.
   `tests/fixtures/r7rs-threads-*`.
 
 ### Fixed
+
+- **`tur mcp` and `tur lsp` no longer crash after a few dozen requests.** Both
+  compile the file again on every request, in one process. The CPS emitter
+  cached its classification keyed on the addresses of the program and the
+  emitter context, both of which are freed between compiles. Once a later
+  compile got the same two addresses back, the server emitted the old
+  program's leftovers and died with an access violation. On Windows that
+  happened 25 to 40 requests in, and on CI as early as the fifth. The cache
+  is now cleared around every compilation.
 
 - **An over-capacity async `httpd` server sends its 503 intact on Windows.**
   `httpd-new-async-with-limit` answered a connection past its cap with a 503

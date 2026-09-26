@@ -12541,7 +12541,38 @@ const char *__asan_default_options(void);
 const char *__asan_default_options(void) { return "detect_stack_use_after_return=0"; }
 #endif
 
+#ifdef _WIN32
+/* A crash in tur.exe is SILENT on Windows: an access violation ends the
+ * process with status 0xC0000005 and nothing on stderr, where POSIX at least
+ * reports the signal.  That is how `tur mcp` came to die mid-session on CI
+ * three times with no evidence at all
+ * (docs/archive/mcp-server-exits-mid-session-on-windows.md).
+ *
+ * Name the exception and where it happened, as an offset into tur.exe --
+ * `addr2line -e tur.exe <ImageBase + offset>` resolves it against the same
+ * build (ImageBase from `objdump -p`, 0x140000000 by default) -- then carry on
+ * exactly as before: EXCEPTION_CONTINUE_SEARCH leaves the default handling --
+ * and so the exit status -- untouched.  Only an exception nothing else
+ * handled reaches this, so it prints only on a process that is already dying.
+ * Kept to a stack buffer and _write: after a stack overflow there is very
+ * little stack left to report with. */
+static LONG WINAPI tur_win_report_crash(EXCEPTION_POINTERS *ep) {
+    char msg[160];
+    uintptr_t at   = (uintptr_t)ep->ExceptionRecord->ExceptionAddress;
+    uintptr_t base = (uintptr_t)GetModuleHandleW(NULL);
+    int n = snprintf(msg, sizeof msg,
+                     "tur: fatal exception 0x%08lx at %p (tur.exe+0x%llx)\n",
+                     (unsigned long)ep->ExceptionRecord->ExceptionCode,
+                     (void *)at, (unsigned long long)(at - base));
+    if (n > 0) (void)_write(2, msg, (unsigned)n);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(tur_win_report_crash);
+#endif
     TurMainArgs a = { argc, argv };
     return tur_run_on_big_stack(tur_main_job, &a);
 }
