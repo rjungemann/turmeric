@@ -5601,6 +5601,42 @@ static bool emit_call_is_region_scope(const Expr *e) {
 
 static char *emit_any_from_carrier(EmitCtx *ctx, Buf *body, char *v,
                                    const Expr *inner);   /* defined below */
+/* region-lock-hardening: is `(:: <from> <to>)` an ERASING ascription -- a
+ * value whose type reaches a region node, relabelled to a type the result
+ * walk reads as a scalar?  From there on the node is invisible to the static
+ * walk, so the erasure itself is the escape and must be noted.  Shared by the
+ * EX_ASCRIBE emit and the direct-call argument path, which strips an
+ * argument's ascriptions before emitting it
+ * (stdlib-region-store-hooks-unswept). */
+static bool region_ascription_erases_node(EmitCtx *ctx, Type from, Type to) {
+    const AdtDef *seen_a[32];
+    uint32_t na = 0;
+    /* `from` must be a type that can HOLD a node -- an ADT or a
+     * type application -- not merely one the walk refuses.  The
+     * walk says "reaches" for a raw pointer, a closure, a type
+     * variable too, and those are refusals of ignorance: a
+     * `(:: <ptr<void>> String)` relabel carries no node and
+     * hoisting it changed the text a downstream cast keyed on
+     * (the `__inst_Clone_clone_String` -Wint-conversion). */
+    bool from_can_hold_node =
+        (from.kind == TY_ADT &&
+         !(from.as.adt_.def && from.as.adt_.def->is_opaque)) ||
+        from.kind == TY_APP || from.kind == TY_STRUCT;
+    /* And `to` must be an ERASURE -- a word type the walk reads
+     * as a scalar -- not a refinement to another typed shape
+     * (`(:: (set-add ..) (Set (Vec int)))` pins a type argument;
+     * the walk still sees the elements afterwards, and hoisting
+     * the inner text there lost a downstream pointer cast). */
+    bool to_is_erasure =
+        to.kind == TY_INT || to.kind == TY_PTR_VOID || to.kind == TY_ANY;
+    /* No "and `to` reaches nothing" test: the walk answers YES for a
+     * `ptr<void>` and an `any` out of ignorance, so that test excluded exactly
+     * the two erasures the list above names -- `(:: node ptr<void>)` and
+     * `(:: node any)` were never noted (stdlib-region-store-hooks-unswept). */
+    return from_can_hold_node && to_is_erasure &&
+           region_type_reaches_node(ctx, from, seen_a, &na, 24);
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* G3 general catch-unwind splitter: a registered hole emits its C temp name
      * verbatim (the suspended sub-expression's already-delivered value). */
@@ -10603,6 +10639,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         preserve_ascribe_for_bridge = true;
                     }
                 }
+                /* stdlib-region-store-hooks-unswept: the strip below drops the
+                 * argument's ascriptions, and with them the note an ERASING one
+                 * owes -- `(f (:: node :int))` handed the node to `f` with no
+                 * note at all, so a store inside `f` let the generation rewind
+                 * under it.  Remember the erasure here and note the emitted
+                 * value after the emit, exactly as the EX_ASCRIBE case does.
+                 * The elaborator also wraps an implicit node -> `:int` argument
+                 * of an inline-C callee in such an ascription, so this is the
+                 * one place both reach the callee. */
+                bool rgn_erased = false;
+                Type rgn_from = type_simple(TY_UNKNOWN, CK_COPY);
+                if (regions_enabled() && !preserve_ascribe_for_bridge) {
+                    for (const Expr *a = arg_expr;
+                         a && a->kind == EX_ASCRIBE && a->as.ascribe_.inner;
+                         a = a->as.ascribe_.inner) {
+                        Type fr = emit_resolve_type(ctx, a->as.ascribe_.inner->type);
+                        if (region_ascription_erases_node(ctx, fr,
+                                emit_resolve_type(ctx, a->type))) {
+                            rgn_erased = true;
+                            rgn_from = fr;
+                            break;
+                        }
+                    }
+                }
                 if (!preserve_ascribe_for_bridge) {
                     while (arg_expr && arg_expr->kind == EX_ASCRIBE) arg_expr = arg_expr->as.ascribe_.inner;
                 }
@@ -10667,6 +10727,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 char *raw = emit_value(ctx, body, emit_arg);
                 ctx->sum_drop_admit = admit_prev;
+                if (rgn_erased && raw) {
+                    if (emit_str_is_bare_ident(raw)) {
+                        emit_region_note_lvalue(body, ctx->indent,
+                                                emit_type_c_name(ctx, rgn_from), raw);
+                    } else {
+                        const char *ect = emit_binding_repr_c_name(ctx, emit_arg->type,
+                                                                   emit_arg);
+                        if (ect) {
+                            char *et = fresh_tmp(ctx);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "%s %s = (%s);\n", ect, et, raw);
+                            emit_localvar_record_ctype(et, ect);
+                            emit_region_note_lvalue(body, ctx->indent, ect, et);
+                            free(raw);
+                            raw = et;
+                        }
+                    }
+                }
                 /* container-element-form-plan CE1/CE2 (store half): is this
                  * argument a Vec ELEMENT STORE whose slot form is CE_WORD for
                  * a niche element?  Then the bridges below hand the slot the
@@ -15782,31 +15860,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * typed `nxt : Link` field, `(Vec Link)`) never takes this path
              * and keeps its rewinds. */
             if (regions_enabled() && inner_val) {
-                const AdtDef *seen_a[32], *seen_b[32];
-                uint32_t na = 0, nb = 0;
                 Type from = emit_resolve_type(ctx, e->as.ascribe_.inner->type);
                 Type to   = emit_resolve_type(ctx, e->type);
-                /* `from` must be a type that can HOLD a node -- an ADT or a
-                 * type application -- not merely one the walk refuses.  The
-                 * walk says "reaches" for a raw pointer, a closure, a type
-                 * variable too, and those are refusals of ignorance: a
-                 * `(:: <ptr<void>> String)` relabel carries no node and
-                 * hoisting it changed the text a downstream cast keyed on
-                 * (the `__inst_Clone_clone_String` -Wint-conversion). */
-                bool from_can_hold_node =
-                    (from.kind == TY_ADT &&
-                     !(from.as.adt_.def && from.as.adt_.def->is_opaque)) ||
-                    from.kind == TY_APP || from.kind == TY_STRUCT;
-                /* And `to` must be an ERASURE -- a word type the walk reads
-                 * as a scalar -- not a refinement to another typed shape
-                 * (`(:: (set-add ..) (Set (Vec int)))` pins a type argument;
-                 * the walk still sees the elements afterwards, and hoisting
-                 * the inner text there lost a downstream pointer cast). */
-                bool to_is_erasure =
-                    to.kind == TY_INT || to.kind == TY_PTR_VOID || to.kind == TY_ANY;
-                if (from_can_hold_node && to_is_erasure &&
-                    region_type_reaches_node(ctx, from, seen_a, &na, 24) &&
-                    !region_type_reaches_node(ctx, to, seen_b, &nb, 24)) {
+                if (region_ascription_erases_node(ctx, from, to)) {
                     /* The note needs an ADDRESSABLE lvalue, and this used to
                      * get one with `__auto_type t = (<inner>);` so the temp
                      * took the inner's exact emitted representation without

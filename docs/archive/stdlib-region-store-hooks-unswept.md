@@ -6,6 +6,51 @@ description: 29 stdlib stores of an erased caller word carry no region note, ver
 
 # The region store-hook set was never swept across the stdlib
 
+**RESOLVED 2026-09-26, by the recommended shape -- the coercion, not 29
+notes -- plus two holes the recommendation stood on.**
+
+1. **The implicit erasure is now an ascription.** Where `elab_call.c`
+   accepts a typed node (`TY_ADT` / `TY_APP` / `TY_STRUCT`) into an inline-C
+   callee's `:int` parameter, the argument is wrapped in the same internal
+   `(:: x :int)` an explicit erasure is. That covers every listed sink that
+   takes the word as `:int` -- Tier 1's `work-queue-push`,
+   `tchan-cons-append`, Tier 3's `json/*`, `schema/*`, `args/*`,
+   `serial-pair-bytes`, and every future one -- with no per-site note.
+   A `ptr<void>` sink cannot receive a node implicitly at all (TUR-E0001); it
+   takes one only through an explicit ascription, which item 2 covers.
+   Tier 2's closure words need nothing new: a node a closure captures is
+   noted at the env fill, inside the bracket that owns it.
+2. **An explicit erasure written as a call argument was not noted either.**
+   The premise that "an erasing ascription is itself a hooked site" held for
+   the shape the fixture used -- `(:: (Link n acc) :int)` in `build`'s tail
+   -- but the direct-call emitter strips an argument's ascriptions before
+   emitting it, so `(f (:: node :int))` handed the node over with no note.
+   The strip now remembers an erasure it drops and notes the emitted value
+   (`region_ascription_erases_node`, emit_expr.c). This is the one place the
+   implicit case (1) reaches the callee too.
+3. **`(:: node ptr<void>)` and `(:: node any)` were never noted.** The
+   erasure predicate also required that the target type reach no node, and
+   the walk answers "reaches" for `ptr<void>` and `any` out of ignorance --
+   so the two erasures its own comment named were excluded.
+
+Cost, measured: **zero** snapshot changes across the corpus (nothing in it
+hands a node to an erased inline-C parameter), the regions fuzz smoke passes
+its rewind/retire model, and the `TUR_REGIONS=0` seam is green. The note is
+conservative by construction -- a callee that does not retain the word
+(`list-length` on a typed list) now costs that generation's rewind, never
+correctness, the trade the typed-parameter note already makes. A declared
+`#fx{}` is NOT treated as non-retaining: `zipper-new-raw` is `#fx{}` and
+stores its `focus`.
+
+Pinned by `tests/fixtures/region-escape-via-erased-argument`, a `hook.sh`
+fixture that asserts the `TUR_REGION_STATS` line as well as the values, as
+this report asked: an implicit erasure into an inline-C `:int`, an explicit
+`(:: node :int)` argument and an explicit `(:: node ptr<void>)` argument all
+retire; a control bracket still rewinds (`pushes=4 rewinds=1 retires=3`).
+Before the fix, the implicit and the explicit `:int` cases each measured
+`rewinds=1 retires=0` on their own and read back `-2387225703656530210`; the
+`ptr<void>` case read garbage even after the other two were fixed.
+
 **Severity: medium.** Each missing hook is a silent use-after-rewind on the
 default build -- the failure mode
 [region-escape-through-unhooked-stores](region-escape-through-unhooked-stores.md)

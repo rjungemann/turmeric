@@ -4,7 +4,8 @@
 **Narrowed 2026-09-06**, same day: the class this was mostly about -- a node
 handed to a hand-written inline-C body -- is fixed, and it was a **silent wrong
 answer**, not the "documented contract" this report first called it. What is
-left is `extern-c` and the erased-word case, neither with a repro.
+left is `extern-c` and the erased-word case, neither with a repro. (The
+erased-word case was resolved 2026-09-26 -- item 2 below.)
 
 ## What was fixed first, and what this was the residue of
 
@@ -75,7 +76,14 @@ rewinds) and by the `store-inline-c` / `inline-c-scalar` cases in
    node by its ADT type would be unusual. If one appears, the fix is a
    call-site note on the hoisted argument temp.
 
-2. **A stdlib primitive that stores an ERASED word.** The parameter note keys
+2. **A stdlib primitive that stores an ERASED word. -- RESOLVED 2026-09-26**
+   ([stdlib-region-store-hooks-unswept](../archive/stdlib-region-store-hooks-unswept.md)):
+   a typed node passed implicitly into an inline-C `:int` parameter is now an
+   erasing ascription, an erasure written as a call argument is noted where
+   the call emitter strips it, and `(:: node ptr<void>)` / `(:: node any)` are
+   erasures too. The original text follows.
+
+   **A stdlib primitive that stores an ERASED word.** The parameter note keys
    on the type, so a primitive whose `val` arrives as `:int` (which is most of
    them -- `chan-send`, `schan-send`, `work-queue-push`, the `sized-*-set!`
    family, `json/array-push`, `schema/*`) is not covered by it. Those are

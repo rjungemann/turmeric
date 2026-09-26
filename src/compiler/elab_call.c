@@ -7093,6 +7093,39 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * is expected.  Partial type application values are opaque int64_t at runtime. */
             arg_ok = true;
         }
+        /* stdlib-region-store-hooks-unswept: a typed node handed to an inline-C
+         * callee's erased `:int` parameter is an ERASURE, exactly as `(:: x :int)`
+         * is -- from here the word is invisible to the region walk, and an
+         * inline-C body may store it anywhere.  The explicit ascription notes
+         * the word (emit_expr.c, EX_ASCRIBE); this implicit one did not, so a
+         * node reaching `promise-fulfill`, `work-queue-push`, `httpd-handle`,
+         * ... from inside a bracket let the generation rewind under the stored
+         * pointer.  Make the coercion the same ascription, and the one note
+         * covers every such store, present and future.
+         *
+         * Scoped to an inline-C callee: a Turmeric-bodied callee's own stores
+         * are hooked where they happen.  NOT narrowed by a declared `#fx{}`:
+         * a pure constructor retains its arguments by definition --
+         * zipper-new-raw is `#fx{}` and stores `focus` into the zipper it
+         * builds.  The note only ever turns a rewind into a retire, so a body
+         * that does not retain the word (list-length) costs that generation's
+         * saving, never correctness -- the trade the typed-parameter note at
+         * inline-C body entry already makes. */
+        if (arg_ok && expected_arg_kind == TY_INT && fn_binding &&
+                fn_binding->body_is_inline_c &&
+                (args[i]->type.kind == TY_ADT || args[i]->type.kind == TY_APP ||
+                 args[i]->type.kind == TY_STRUCT)) {
+            uint32_t fai = fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *decl = (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                                fai < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[fai] : NULL;
+            if (!decl || decl->kind == TY_INT) {
+                Expr *asc = expr_new(e->arena, EX_ASCRIBE, TYPE_INT, args[i]->span);
+                asc->as.ascribe_.inner = args[i];
+                asc->as.ascribe_.type_form = NULL;
+                args[i] = asc;
+            }
+        }
         if (!arg_ok && expected_arg_kind == TY_APP && args[i]->type.kind == TY_ADT) {
             /* Phase HKT/G4: Allow passing a TY_ADT where TY_APP is expected.
              * Both lower to int64_t at runtime.  This arises when a function
