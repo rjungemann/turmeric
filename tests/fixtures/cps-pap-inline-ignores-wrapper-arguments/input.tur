@@ -1,0 +1,54 @@
+;; cps-pap-inline-ignores-wrapper-arguments: inside a CPS function, a let-bound or
+;; directly applied closure whose body is ONE saturated call was taken for a
+;; partial application `(TARGET cap0 ... rest...)` on arity alone, and each
+;; call to it was rewritten to TARGET applied to the captures followed by the
+;; call's own arguments -- whatever the body actually passed.  So:
+;;
+;;   ((fn [x] (sub x p)) 10)       ran as (sub p 10)          -- order swapped
+;;   ((fn [] (neg (+ p 1))))       ran as (neg p)             -- value dropped
+;;
+;; silently, with no diagnostic.  Under #lang r7rs the same rewrite turned
+;; `((lambda () (list p)))` into `r7rs_hylist(p)` -- a variadic call handed a
+;; bare value for its packed rest chain -- which cc refused.  The rewrite now
+;; requires the body to pass exactly the captures, then the parameters, in
+;; order.  The bt-scope in each function is only there to make it CPS.
+
+(defn sub [a : int b : int] : int (- a b))
+(defn sub3 [a : int b : int c : int] : int (- (- a b) c))
+(defn neg [a : int] : int (- 0 a))
+
+;;; The body passes the parameter first and the capture second.
+(defn order [p : int] : int
+  (bt-scope (fn [] 0))
+  ((fn [x : int] : int (sub x p)) 10))
+
+;;; The body passes an expression over the capture, not the capture.
+(defn value [p : int] : int
+  (bt-scope (fn [] 0))
+  ((fn [] : int (neg (+ p 1)))))
+
+;;; The same, let-bound.
+(defn value-let [p : int] : int
+  (bt-scope (fn [] 0))
+  (let [f (fn [] : int (neg (+ p 1)))]
+    (f)))
+
+;;; Controls: genuine partial applications, which the rewrite exists for and
+;;; still takes -- an under-saturated call, and a lambda that passes its
+;;; capture then its parameter.
+(defn real-pap [p : int] : int
+  (bt-scope (fn [] 0))
+  (let [f (sub3 p)]
+    (f 10 1)))
+
+(defn real-pap-lambda [p : int] : int
+  (bt-scope (fn [] 0))
+  ((fn [x : int] : int (sub p x)) 10))
+
+(defn main [] : int
+  (println (order 3))              ;; 10 - 3 = 7
+  (println (value 3))              ;; -(3 + 1) = -4
+  (println (value-let 3))          ;; -4
+  (println (real-pap 30))          ;; 30 - 10 - 1 = 19
+  (println (real-pap-lambda 30))   ;; 30 - 10 = 20
+  0)

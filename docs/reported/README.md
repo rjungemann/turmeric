@@ -2181,6 +2181,12 @@ live elsewhere in this index: compiled top-level order was
 | [r7rs-programs-compile-slowly](r7rs-programs-compile-slowly.md) | low-medium | Filed 2026-09-25 (PR 923 CI). Every `#lang r7rs` program builds the whole prelude: 6-8 s locally, over the 10 s fixture budget on CI runners, almost all of it `cc -O2` over ~29,000 emitted lines. The Scheme fixtures carry `expected.timeout` 60 as a stopgap; the fix is a precompiled prelude, an object cache, or emitting only reachable definitions. **Halved 2026-09-25**: 71% of the `cc` time was GCC's `-Wmisleading-indentation` (quadratic on the lowering's brace-less `if` chains); the driver now appends `-Wno-misleading-indentation` to every `cc` over emitted C, 6.4 s -> 3.1 s for a one-line program; the rest (emit 0.9 s, codegen 1.4 s) stays open |
 | [r7rs-reentrant-callcc-not-on-windows](r7rs-reentrant-callcc-not-on-windows.md) | medium | Filed 2026-09-25 (PR 923 CI). The T5 copying continuations need the thread's stack base, which the prelude finds only on glibc and macOS; on Windows `call/cc` is the escape, so a re-entry fails. Five fixtures skip there (`requires.posix-apis`); the fix is the TEB stack base plus a non-SEH jump |
 
+## Found executing the open R7RS reports (filed 2026-09-26)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[cps-pap-inline-ignores-wrapper-arguments](../archive/cps-pap-inline-ignores-wrapper-arguments.md)~~ | high | **RESOLVED 2026-09-26** (archived), the day it was found: `pap_extract` now requires the wrapper body to pass exactly the captures, then the parameters. Pinned by `tests/fixtures/cps-pap-inline-ignores-wrapper-arguments` and `r7rs-closure-one-capture-call`. Original row: every dialect. Inside a CPS function a closure called in place or through a `let`, whose body is one saturated call, was taken for a partial application on arity alone and rewritten to `(TARGET captures... args...)`: `((fn [x] (sub x p)) 10)` ran as `(sub p 10)`, `((fn [] (neg (+ p 1))))` as `(neg p)`, silently; under `#lang r7rs` `((lambda () (list p)))` handed `list` a bare value for its rest chain and `cc` refused it |
+
 ## Found landing r7rs-lang-plan R3 (filed 2026-09-23)
 
 | Report | Severity | One line |
