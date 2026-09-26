@@ -10,8 +10,9 @@
 > the file. Names rather than a count, as this report argued. The two
 > findings below that were not this bug -- the fallback re-entry inheriting
 > monomorph state, and `gc-heap-struct-rc`'s sensitivity to
-> `TUR_DEBUG_SANITIZE` -- are still open and now live in
-> `docs/reported/jit-cc-fallback-reentry-inherits-monomorph-state.md`.
+> `TUR_DEBUG_SANITIZE` -- were split out to what is now
+> `docs/archive/jit-cc-fallback-reentry-inherits-monomorph-state.md`; both
+> are resolved (2026-09-10 and 2026-09-26).
 
 **Severity: medium (no wrong answers -- but the suite that exists to test the
 jit engine can go from "engine compiles 2700 programs" to "engine compiles

@@ -339,6 +339,19 @@ Two notes for whoever picks it up. `dfs-choose-int` / `dfs-choose-go` enumerate
 `lo..hi` into the cell, so they pin to `(BtCell int)` -- the `atomic-add!` case.
 And `BtCell` lives in `trail.tur`, not the module this report lists.
 
+A third, measured 2026-09-26 and the reason it was not landed with the
+unblocking fix: **parameterising it is a breaking change for every caller that
+spells the type.** A bare parametric name does not unify with an application
+of it -- with `(defopaque AtomicCell [A] :ptr<void>)`, a
+`(defn peek-it [c : AtomicCell] ...)` given `(atomic-new 41)` is
+`expected AtomicCell, got (AtomicCell int)`. So `(BtCell A)` turns every
+`[c : BtCell ...]` in user code into that error: five fixtures here
+(`sx1-trail-basics`, `sx1-bt-row-checked`, `sx2-trail-measure-not-congruent`,
+`self-recursive-goal-into-fat-sink`, `region-escape-via-store`, plus
+`errors/sx1-bt-row-pure-caller-rejected`), the backtrackable-state guide's
+examples, and whatever spices build on the trail. That wants the sibling
+`turmeric-spices` checkout in hand, or bare-`BtCell` acceptance first.
+
 ### `future.tur` (4 sites) -- not 4 functions, 34
 
 The report counts payload parameters; the module has **34 `defn`s**, and
