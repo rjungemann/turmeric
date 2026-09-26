@@ -6,6 +6,11 @@ Turmeric importer too. The "module not found" error for a Scheme import now
 says the library's name is its path. What is left is several libraries in one
 file and a name independent of the path -- see *Still open* below.
 
+**Held by decision 2026-09-26.** One library per file, named after the file,
+stays for now (docs/upcoming/r7rs-lang-plan.md, Section 8, question 7): no
+work on the two file-shape restrictions until a port needs them. This report
+stays as the record of what lifting them would take.
+
 **Severity:** low-medium. Three restrictions on `define-library` that R7RS
 does not impose, all from the one-`defmodule`-per-file shape a library lowers
 onto. They bite when porting existing Scheme: a file holding a handful of

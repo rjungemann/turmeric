@@ -1771,6 +1771,20 @@ expectation from a demo.
 6. **Which R7RS?** R7RS-small is the target. R7RS-large is a moving set of
    dockets and is explicitly out of scope; if it is ever wanted it is a sibling
    base token (D1), not a flag.
+7. **Several libraries in one file, and a library name that is not its
+   path.** D9 maps a `define-library` onto one `defmodule`, and a module's
+   path is its name, so a file holds one library and `(two a)` lives in
+   `two/a.tur`. Lifting either restriction needs a choice first: several
+   `defmodule`s per file in Turmeric itself (a language change), or a
+   lowering that splits each library into its own generated module and
+   registers where to find it (self-contained, but the emitted files stop
+   being one-to-one with the sources).
+   **Decided 2026-09-26: one library per file, named after the file, for
+   now.** Neither option is taken; `define-library` stays as D9 has it. The
+   restriction is stated where it bites -- the "module not found" error for a
+   Scheme import says the library's name is its path -- and in the guide's
+   "Where it differs". Revisit when a port needs a multi-library file badly
+   enough to pay for one of the two.
 
 ---
 
@@ -2810,7 +2824,8 @@ differences, as reports"):
   definitions is lifted to the top level under fresh names the body's scope
   maps its names to
   ([archived](../archive/r7rs-define-record-type-not-an-internal-definition.md)).
-- **One library per file, named after the file**
+- **One library per file, named after the file** -- kept by decision
+  2026-09-26 (Section 8, question 7)
   ([r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md));
   ~~no `(export (rename ...))`~~ -- resolved 2026-09-26: the definition is
   spelled with the public name, or aliased when it is imported or exported
