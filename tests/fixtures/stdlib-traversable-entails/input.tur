@@ -1,0 +1,24 @@
+;; typeclass-superclasses-plan SC8b step 2: stdlib/typeclass.tur declares
+;; Traversable over Functor and Foldable, so a `[^Traversable T]` body may call
+;; `fmap` and `foldl`.  Compiled only under run.sh: run-turi.sh skips any
+;; program that loads a file with inline C, and typeclass.tur has some.
+(load "stdlib/typeclass.tur")
+
+;; Traversable entails Functor and Foldable.
+(defdata Pair2 :copy [A] (Pair2 A A))
+(definstance Functor [Pair2]
+  (fmap [c g] (match c (Pair2 x y) (Pair2 (g x) (g y)))))
+(definstance Foldable [Pair2]
+  (foldl [c init f] (match c (Pair2 x y) (f (f init x) y)))
+  (foldr [c init f] (match c (Pair2 x y) (f x (f y init)))))
+(definstance Traversable [Pair2] (traverse [ta fn] 0))
+
+(defn total [^Traversable T] [t : (T int)] : int
+  (foldl t 0 (fn [acc : int x : int] : int (+ acc x))))
+(defn doubled [^Traversable T] [t : (T int)] : (T int)
+  (fmap t (fn [x : int] : int (* x 2))))
+
+(defn main [] : int
+  (println (total (Pair2 3 4)))                                        ; 7
+  (println (match (doubled (Pair2 3 4)) (Pair2 x y) (+ (* 100 x) y)))  ; 608
+  0)

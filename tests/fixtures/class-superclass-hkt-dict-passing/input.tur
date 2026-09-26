@@ -1,0 +1,39 @@
+;; class-superclasses: a generic constrained only by a SUBCLASS must still get
+;; the superclass's dictionary.
+;;
+;; `or-default` states `^MyAlt F` and calls `mypure`, a return-directed method
+;; of the superclass MyAp.  A higher-kinded generic like this is compiled by
+;; dictionary passing, and it used to receive only the MyAlt dictionary: the
+;; compiled body called `mypure` through MyAlt's slot (here a C type error;
+;; with matching slot types it would be the wrong method), and the interpreter
+;; had no MyAp dictionary for `mypure` to find.  A declared constraint now
+;; carries its superclass closure (typeclass_constraints_with_supers).
+;;
+;; Two instances, so a call that reached the wrong dictionary would print the
+;; wrong line rather than happen to work.
+(defclass MyAp [^f] (mypure [x : a] : (f a)))
+(defclass MyAlt [^f] [(MyAp f)] (myalt [x : (f a) y : (f a)] : (f a)))
+
+(definstance MyAp [Option] (mypure [x] (some x)))
+(definstance MyAlt [Option] (myalt [x y] (match x (Some v) x (None) y)))
+
+(defdata Tally :copy [A] (Tally A int))
+(definstance MyAp [Tally] (mypure [x] (Tally x 0)))
+(definstance MyAlt [Tally]
+  (myalt [x y] (match x (Tally v n) (if (> n 0) x y))))
+
+(defn or-default [^MyAlt F] [x : (F int) d : int] : (F int)
+  (myalt x (mypure d)))
+
+(defn show-o [o : (Option int)] : int
+  (match o (Some v) (do (println v) 0) (None) (do (println -1) 0)))
+
+(defn main [] : int
+  (show-o (or-default (:: (none) (Option int)) 5))     ; 5
+  (show-o (or-default (:: (some 3) (Option int)) 5))   ; 3
+  ;; Matched in place: handing a user by-value type from a dictionary-passing
+  ;; generic to a typed parameter is a separate, pre-existing gap
+  ;; (docs/reported/hkt-dict-generic-byvalue-result-to-typed-param.md).
+  (println (match (or-default (Tally 7 2) 5) (Tally v n) (+ (* 100 v) n)))  ; 702
+  (println (match (or-default (Tally 7 0) 5) (Tally v n) (+ (* 100 v) n)))  ; 500
+  0)

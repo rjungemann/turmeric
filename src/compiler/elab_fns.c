@@ -8063,6 +8063,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * discipline as the HKT ambient above.  The method-dispatch path reads it
      * to tell "this generic is entitled to call the method" from "this generic
      * just happens to have an instance in scope". */
+    /* class-superclasses: a declared `^C W` also declares C's superclasses
+     * at W, so dictionary passing and turi's frame dictionaries carry them
+     * (see typeclass_constraints_with_supers).  Done here, once every
+     * constraint spelling has been collected and before anything reads the
+     * list; fd->constraints below stores the expanded list. */
+    {
+        uint8_t n_expanded = n_constraints;
+        constraint_list = typeclass_constraints_with_supers(
+            &e->typeclass_env, constraint_list, n_constraints, &n_expanded);
+        n_constraints = n_expanded;
+    }
     TypeConstraint *saved_cur_fn_constraints   = e->cur_fn_constraints;
     uint8_t         saved_cur_fn_n_constraints = e->cur_fn_n_constraints;
     uint32_t        saved_cur_fn_con_param_mask = e->cur_fn_constraint_param_mask;

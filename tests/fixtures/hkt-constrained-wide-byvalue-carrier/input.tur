@@ -14,6 +14,14 @@
 (defn mk-pad [A] [x : A] : (Pad2 A) (make-struct Pad2 :a 11 :b 22 :val x))
 (defn pad-val [A] [p : (Pad2 A)] : A (.val p))
 
+;; Functor and Applicative: Monad is declared over Applicative, which is over
+;; Functor (typeclass-superclasses-plan SC8b step 5).  With them, `poly-bind`'s
+;; `^Monad m` also carries the implied Applicative and Functor dictionaries.
+(definstance Functor [Pad2]
+  (fmap [c g] (make-struct Pad2 :a (.a c) :b (.b c) :val (g (.val c)))))
+(definstance Applicative [Pad2]
+  (pure [x] (mk-pad x))
+  (ap [ff fa] (make-struct Pad2 :a (.a fa) :b (.b fa) :val ((.val ff) (.val fa)))))
 (definstance Monad [Pad2]
   (bind [ma k] (k (.val ma))))
 

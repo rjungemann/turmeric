@@ -29,13 +29,19 @@
 ;;; `max` / `min` are ordinary constrained generics over Ord (defined below),
 ;;; not methods -- so an instance implements nothing extra to get them.
 ;;;
+;;; Superclass: Eq.  A `[^Ord A]` constraint also licenses `eq?`, and every
+;;; `Ord` instance needs an `Eq` instance for the same type (TUR-E0393
+;;; otherwise).
+;;;
 ;;; Example:
 ;;;   (max 2.5 7.1)   ; => 7.1
 ;;;   (min "a" "b")   ; => "a"
 ;;;
 ;;; Since: Phase 15 (max/min: lattice-vocabulary-plan L1)
-;; Ord typeclass - ordering
+;; Ord typeclass - ordering.  typeclass-eq.tur is auto-loaded first, so the
+;; superclass is always in scope here.
 (defclass Ord [a]
+  [(Eq a)]
   (lt? [x y] : bool)
   (lte? [x y] : bool)
   (gt? [x y] : bool)

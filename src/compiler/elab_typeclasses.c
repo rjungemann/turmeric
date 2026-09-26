@@ -2044,6 +2044,82 @@ static Type elab_subst_class_tyvars(Arena *arena, Type t,
     return t;
 }
 
+/* partial-head-ap-calls-fat-closure-as-thin-pointer: the hole-aware twin of
+ * elab_subst_class_tyvars, for an instance whose head is a hole-at-0 partial
+ * application.  T4 stores `(Result _ B)` as `app(Result, B)` with
+ * `partial_hole_pos == 0`, so the plain substitution turns the class method's
+ * `(f X)` into `app(app(Result, B), X)` -- `(Result B X)`, the arms swapped.
+ * Inside the instance body that typed `ap`'s `ff : (f (fn a b))` as
+ * `(Result B (fn a b))`, so the `Ok` payload was the fixed arm `B`, not the
+ * function: calling it was "not a function", and the ascription that worked
+ * around that produced a thin call on what is really a fat closure box.
+ *
+ * Here an application whose head is a class parameter bound to a partial head
+ * puts the applied argument in the HOLE slot instead: `(f X)` becomes
+ * `app(app(Result, X), B)`, i.e. `(Result X B)`.  Every other shape defers to
+ * the plain substitution, and so does every instance without a hole-at-0 head
+ * (hole position 1 and a leftmost partial application `(Either E)` are
+ * already correct under the plain substitution, since their free slot is the
+ * outermost one). */
+static Type elab_subst_class_tyvars_holed(Arena *arena, Type t,
+                                          const Symbol **type_params,
+                                          uint8_t n_type_params,
+                                          const Type *type_args,
+                                          uint8_t n_type_args,
+                                          uint8_t hole_pos) {
+    if (hole_pos != 0)
+        return elab_subst_class_tyvars(arena, t, type_params, n_type_params,
+                                       type_args, n_type_args);
+    if (t.kind == TY_APP && t.as.app.fn && t.as.app.arg &&
+        t.as.app.fn->kind == TY_TYVAR && t.as.app.fn->as.tyvar_.name) {
+        for (uint8_t k = 0; k < n_type_params && k < n_type_args; k++) {
+            if (!type_params[k] ||
+                strcmp(type_params[k]->name, t.as.app.fn->as.tyvar_.name) != 0)
+                continue;
+            const Type *head = &type_args[k];
+            /* A hole-at-0 head over a two-parameter constructor is exactly
+             * `app(C, Fixed)`; anything else is not the shape T4 records. */
+            if (head->kind != TY_APP || !head->as.app.fn || !head->as.app.arg ||
+                head->as.app.fn->kind == TY_APP)
+                break;
+            Type *inner_arg = (Type *)arena_alloc(arena, sizeof(Type));
+            *inner_arg = elab_subst_class_tyvars_holed(
+                arena, *t.as.app.arg, type_params, n_type_params, type_args,
+                n_type_args, hole_pos);
+            Type *inner = (Type *)arena_alloc(arena, sizeof(Type));
+            *inner = *head;                      /* app(C, Fixed) ... */
+            inner->as.app.arg = inner_arg;       /* ... becomes app(C, X) */
+            inner->hkt_kind = kind_apply_one(head->as.app.fn->hkt_kind);
+            Type *fixed = (Type *)arena_alloc(arena, sizeof(Type));
+            *fixed = *head->as.app.arg;
+            Type out = *head;
+            out.as.app.fn = inner;               /* app(app(C, X), Fixed) */
+            out.as.app.arg = fixed;
+            out.hkt_kind = kind_apply_one(inner->hkt_kind);
+            return out;
+        }
+    }
+    if (t.kind == TY_APP) {
+        if (t.as.app.fn) {
+            Type *fn = (Type *)arena_alloc(arena, sizeof(Type));
+            *fn = elab_subst_class_tyvars_holed(arena, *t.as.app.fn, type_params,
+                                                n_type_params, type_args,
+                                                n_type_args, hole_pos);
+            t.as.app.fn = fn;
+        }
+        if (t.as.app.arg) {
+            Type *arg = (Type *)arena_alloc(arena, sizeof(Type));
+            *arg = elab_subst_class_tyvars_holed(arena, *t.as.app.arg, type_params,
+                                                 n_type_params, type_args,
+                                                 n_type_args, hole_pos);
+            t.as.app.arg = arg;
+        }
+        return t;
+    }
+    return elab_subst_class_tyvars(arena, t, type_params, n_type_params,
+                                   type_args, n_type_args);
+}
+
 /* M7 fix direction 1 (flag-gated): a function value stored as an HKT container
  * element (e.g. the `(fn a b)` element of `(Option (fn a b))` in the
  * Applicative `ap` shape) is physically a fat closure box -- it was boxed at
@@ -2053,11 +2129,21 @@ static Type elab_subst_class_tyvars(Arena *arena, Type t,
  * dispatches through the fat-box thunk instead of a bare fn-pointer call (which
  * reads the box address as code and segfaults).  Walk a substituted body param
  * type and box any unboxed TY_FN that sits in HKT-element position. */
-static Type m7_box_hkt_element_fns(Arena *arena, Type t) {
+/* `inner_slots`: also box a fn in a constructor's INNER argument slots, not
+ * just the outermost one.  Needed for a hole-at-0 partial head, where the
+ * hole-aware substitution puts the element -- `ap`'s `(fn a b)` -- in the
+ * innermost slot of `(Result (fn a b) B)`.  Off for every other instance, so
+ * their body param types are unchanged. */
+static Type m7_box_hkt_element_fns_ex(Arena *arena, Type t, bool inner_slots) {
     if (t.kind == TY_APP) {
+        if (inner_slots && t.as.app.fn && t.as.app.fn->kind == TY_APP) {
+            Type *fn = (Type *)arena_alloc(arena, sizeof(Type));
+            *fn = m7_box_hkt_element_fns_ex(arena, *t.as.app.fn, inner_slots);
+            t.as.app.fn = fn;
+        }
         if (t.as.app.arg) {
             Type *arg = (Type *)arena_alloc(arena, sizeof(Type));
-            *arg = m7_box_hkt_element_fns(arena, *t.as.app.arg);
+            *arg = m7_box_hkt_element_fns_ex(arena, *t.as.app.arg, inner_slots);
             t.as.app.arg = arg;
         }
         return t;
@@ -3991,7 +4077,12 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                      * struct param (grounded at the call site).  A naive head
                      * subst would give `((Result B) b)` -- wrong slot order, and
                      * the opaque fixed arm collapses the result to the carrier. */
-                    {
+                    if (hkt_hole_pos == 0) {
+                        return_type = elab_subst_class_tyvars_holed(
+                            e->arena, return_type, tc->type_params,
+                            tc->n_type_params, type_args, n_type_args,
+                            hkt_hole_pos);
+                    } else {
                         Type *new_fn = (Type *)arena_alloc(e->arena, sizeof(Type));
                         *new_fn = type_args[ti];
                         return_type.as.app.fn = new_fn;
@@ -4296,10 +4387,13 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                         }
                         if (param_was_tyvar_subst) {
                             if (n_type_args > 0) {
-                                param_type = elab_subst_class_tyvars(
+                                /* Hole-aware for a `(Result _ B)` head, so
+                                 * `(f X)` lands X in the hole slot (see
+                                 * elab_subst_class_tyvars_holed). */
+                                param_type = elab_subst_class_tyvars_holed(
                                     e->arena, param_type,
                                     tc->type_params, tc->n_type_params,
-                                    type_args, n_type_args);
+                                    type_args, n_type_args, hkt_hole_pos);
                             }
                             if (inst->n_assoc_types > 0) {
                                 param_type = elab_subst_class_tyvars(
@@ -4331,8 +4425,8 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                          * calling an HKT-wrapped function (`((.value ff) x)` in
                          * the Applicative `ap` shape) fat-dispatches through the
                          * box instead of bare-calling the box address. */
-                        elab_param_type = m7_box_hkt_element_fns(e->arena,
-                                                                 elab_param_type);
+                        elab_param_type = m7_box_hkt_element_fns_ex(
+                            e->arena, elab_param_type, hkt_hole_pos == 0);
                         /* The substituted full type (elab_param_type) is what the
                          * method body sees; lower the ABI/signature type to the
                          * int64 carrier for applied/parametric types, matching the
@@ -8407,7 +8501,24 @@ resolved_user_fallback:;
              * `tur_adt_Either__int__cstr m = __ps_N` is an invalid
              * initializer.  Measured; the gate returns Either to its exact
              * prior behaviour. */
-            if (m7_body_byvalue_ok && best_inst->n_type_args >= 1 &&
+            /* partial-head-ap-calls-fat-closure-as-thin-pointer: STATIC
+             * dispatch only, the same rule the hole-result refinement below
+             * states.  Inside a constrained generic the receiver is `(F X)`
+             * with `F` abstract and best_inst is only a REPRESENTATIVE; binding
+             * its head `app(Either, E)` against `(F X)` pairs E with X -- in
+             * `ap` that is the FUNCTION -- and the grounded result committed
+             * `(Either int (fn int int))` to the generic's temp, an invalid
+             * initializer.  Unreachable before, because a hole-at-0 `ap` body
+             * did not type-check. */
+            bool m7_head_bind_concrete = false;
+            {
+                const Type *hh = &obj_orig_type;
+                while (hh && hh->kind == TY_APP) hh = hh->as.app.fn;
+                m7_head_bind_concrete = hh && hh->kind == TY_ADT &&
+                                        hh->as.adt_.def != NULL;
+            }
+            if (m7_body_byvalue_ok && m7_head_bind_concrete &&
+                best_inst->n_type_args >= 1 &&
                 best_inst->type_args[0].kind == TY_APP) {
                 Type head = best_inst->type_args[0];
                 Type recv = obj_orig_type;
@@ -8589,6 +8700,32 @@ resolved_user_fallback:;
                                 }
                             }
                             break;
+                        }
+                    }
+                    /* partial-head-ap-calls-fat-closure-as-thin-pointer: `ap`
+                     * states `b` nowhere in a function PARAMETER -- its function
+                     * is the receiver's element, `ff : (f (fn [a] b))`.  Read
+                     * `b` from the fn in the receiver's hole slot (the same slot
+                     * the result's `b` replaces below), so `(ap ff fa)` on a
+                     * `(Result (fn [int] int) int)` grounds to `(Result int
+                     * int)` instead of the def-less `(type-app ? ?)`. */
+                    if (!belem_ok && cm->param_types[0].as.app.arg &&
+                        cm->param_types[0].as.app.arg->kind == TY_FN &&
+                        cm->param_types[0].as.app.arg->as.fn.result_full_type) {
+                        const Type *pr =
+                            cm->param_types[0].as.app.arg->as.fn.result_full_type;
+                        Type slot;
+                        if (pr->kind == TY_TYVAR && pr->as.tyvar_.name &&
+                            strcmp(pr->as.tyvar_.name, bname) == 0 &&
+                            m7_app_slot_arg(obj_orig_type, hole_layers, &slot) &&
+                            slot.kind == TY_FN) {
+                            Type ar = slot.as.fn.result_full_type
+                                ? *slot.as.fn.result_full_type
+                                : type_from_kind(slot.as.fn.result_kind);
+                            if (ar.kind != TY_TYVAR && ar.kind != TY_UNKNOWN) {
+                                belem = ar;
+                                belem_ok = true;
+                            }
                         }
                     }
                     /* No function parameter states `b`: the collected binding

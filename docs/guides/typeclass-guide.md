@@ -418,19 +418,41 @@ The rules the compiler enforces, each with its own code:
 - The graph must be acyclic; a class may not list itself, directly or
   through others -- `TUR-E0392`, naming the cycle.
 
-There is no runtime cost and no emitted-C change: static dispatch still
-resolves the instance at each call site from the concrete instantiation, so
-the entailment only decides whether the call is *allowed*, exactly like an
-explicitly written constraint. The interpreter carries the same rule by
-binding a superclass's dictionary alongside the subclass's.
+A constraint on a subclass behaves exactly as if its superclasses were written
+out too: `[^Alternative F]` is read as `[^Alternative F ^Applicative F]`. A
+statically resolved call is unchanged, since dispatch still finds the instance
+from the concrete type. A generic compiled by dictionary passing, or run by the
+interpreter, receives a dictionary for each implied superclass as well, which
+is what lets a return-directed method such as `pure` resolve under
+`[^Alternative F]`. The same holds for a constrained rank-2 `forall`: its
+`[(Applicative m)]` implies `(Functor m)` too, so a function passed to it lines
+up dictionary for dictionary. The instance obligation guarantees each of those
+dictionaries exists.
 
-The stdlib's own classes are flat -- `Monoid` is not declared over `Semigroup`
-in `typeclass-lattice.tur` -- because adding a preamble to an existing class
-obliges every existing instance of it, in every downstream spice, to carry the
-superclass instance. So a function needing both lists both constraints, as the
-[lattice guide](lattice-guide.md) shows. The preamble is for classes you
-declare yourself, where the obligation costs nothing because there are no
-instances yet.
+The stdlib uses the preamble where the relation is real:
+
+| Class | Superclass | File |
+|---|---|---|
+| `Ord` | `Eq` | `typeclass-ord.tur` (auto-loaded) |
+| `Applicative` | `Functor` | `typeclass-applicative.tur` (auto-loaded) |
+| `Monad` | `Applicative` | `typeclass-monad.tur` (auto-loaded) |
+| `Alternative` | `Applicative` | `typeclass-alternative.tur` (auto-loaded) |
+| `MonadError` | `Monad` | `typeclass-monaderror.tur` (auto-loaded) |
+| `Traversable` | `Functor`, `Foldable` | `typeclass.tur` |
+| `Arrow`, `ArrowZero` | `Category` | `arrow.tur` |
+| `ArrowChoice`, `ArrowLoop`, `ArrowApply` | `Arrow` | `arrow.tur` |
+| `ArrowPlus` | `ArrowZero` | `arrow.tur` |
+| `Monoid` | `Semigroup` | `typeclass-lattice.tur` |
+| `BoundedJoin` | `JoinSemilattice` | `typeclass-lattice.tur` |
+| `BoundedMeet` | `MeetSemilattice` | `typeclass-lattice.tur` |
+
+So a `[^Ord A]` function may call `eq?`, a `[^Monad M]` function may call
+`pure` and `fmap`, and `mconcat` carries one constraint rather than two (see
+the [lattice guide](lattice-guide.md)). A class with no natural superclass --
+`Eq`, `Functor`, `Hash`, `Show`, `Clone`, `Drop`, `Bifunctor`, `Num` -- stays
+flat. Adding a preamble to an existing class obliges every existing instance of
+it, in every downstream spice, to carry the superclass instance, which is why
+each of these was retrofitted and audited separately.
 
 ## Associated Types
 

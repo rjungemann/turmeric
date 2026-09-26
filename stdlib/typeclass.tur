@@ -211,6 +211,7 @@
 ;;   ap   :: f (a -> b) -> f a -> f b
 
 (defclass Applicative [^f]
+  [(Functor f)]
   (pure [x : a] : (f a))
   (ap [ff : (f (fn [a] b)) fa : (f a)] : (f b)))
 ;;; Monad -- typeclass for sequencing computations with bind.
@@ -226,7 +227,9 @@
 ;;   bind :: m a -> (a -> m b) -> m b
 ;;   Phase CCL: fn is declared :fn so capturing closures can be passed.
 
-(defclass Monad [^m] (bind [ma : (m a) k : (fn [a] (m b))] : (m b)))
+(defclass Monad [^m]
+  [(Applicative m)]
+  (bind [ma : (m a) k : (fn [a] (m b))] : (m b)))
 ;;; Foldable -- reduce a container to a summary value.
 ;;;
 ;;; Parameters:
@@ -256,7 +259,8 @@
 ;;   traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
 ;;   In v1: simplified to traverse [ta fn] :int
 
-(defclass Traversable [^t] (traverse [ta fn] : int))
+;; Superclasses: Functor and Foldable, as in Haskell.
+(defclass Traversable [^t] [(Functor t) (Foldable t)] (traverse [ta fn] : int))
 ;;; SINCE: Phase HKT H7
 ;; Alternative — typeclass for types with an "empty" value and a way to combine alternatives.
 ;; Similar to MonadPlus/ApplicativePlus in Haskell.
@@ -275,6 +279,7 @@
 
 
 (defclass Alternative [^f]
+  [(Applicative f)]
   (empty [a] : (f a))
   (alt-or [x : (f a) y : (f a)] : (f a)))
 ;;; SINCE: Phase HKT H5

@@ -1,0 +1,10 @@
+;; typeclass-superclasses-plan SC8a: the stdlib's Monoid is declared over
+;; Semigroup, so a user Monoid instance without a Semigroup instance for the
+;; same type is refused (TUR-E0393).  This is the obligation that makes a
+;; `[^Monoid A]` body's `combine` call sound.
+(load "stdlib/typeclass-lattice.tur")
+
+(defopaque Len :int)
+(definstance Monoid [Len] (mempty [] (:: 0 Len)))
+
+(defn main [] : int 0)

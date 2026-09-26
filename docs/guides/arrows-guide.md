@@ -167,15 +167,21 @@ When you want to write code that is parametric over the arrow constructor --
 not hard-wired to `(->)` -- use the typeclass layer. It declares the
 Haskell-style hierarchy and instantiates it at the function arrow:
 
-| Class | Methods | `(->)` instance? |
-|-------|---------|------------------|
-| `Category` | `ident`, `comp` | yes |
-| `Arrow` | `arr`, `>>>`, `<<<`, `first`, `second` | yes |
-| `ArrowChoice` | `left`, `right`, `+++`, `\|\|\|` | yes (over `Either`) |
-| `ArrowLoop` | `arrow-loop` | yes (cell-based feedback -- see below) |
-| `ArrowApply` | `app` | yes |
-| `ArrowZero` | `zero-arrow` | no -- `(->)` has no zero (see Kleisli below) |
-| `ArrowPlus` | `plus-arrow` | no -- declared for other arrows |
+| Class | Superclass | Methods | `(->)` instance? |
+|-------|------------|---------|------------------|
+| `Category` | -- | `ident`, `comp` | yes |
+| `Arrow` | `Category` | `arr`, `>>>`, `<<<`, `first`, `second` | yes |
+| `ArrowChoice` | `Arrow` | `left`, `right`, `+++`, `\|\|\|` | yes (over `Either`) |
+| `ArrowLoop` | `Arrow` | `arrow-loop` | yes (cell-based feedback -- see below) |
+| `ArrowApply` | `Arrow` | `app` | yes |
+| `ArrowZero` | `Category` | `zero-arrow` | no -- `(->)` has no zero (see Kleisli below) |
+| `ArrowPlus` | `ArrowZero` | `plus-arrow` | no -- declared for other arrows |
+
+A constraint on a class entails its superclass, so an `[^ArrowChoice A]`
+function may call `comp`, and every instance needs its superclass instance for
+the same arrow (`TUR-E0393` otherwise). `ArrowZero` sits over `Category`
+rather than `Arrow`, as Haskell has it, because `Kleisli` below is a `Category`
+with an honest zero arrow and no `Arrow` instance.
 
 Every call resolves through the instance dictionary rather than a free
 function:
