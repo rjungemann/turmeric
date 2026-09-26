@@ -1,0 +1,50 @@
+#lang saffron
+; saffron-open-generic-result-not-grounded: a Saffron container reaches the
+; stdlib's generic API and answers, on both back ends, with no ascription.
+;
+; Four defects stood in the way, and the report's own diagnosis (an open
+; `(Map K V)` never grounded) was not one of them -- `(map-new)` was already
+; `(Map any any)`:
+;
+;   1. `map-assoc` / `map-get` check the key through `(tur-map-kcheck m (& k))`.
+;      K = any from the map met the key's `&cstr`: a static TUR-E0001 reported
+;      inside stdlib/map.tur.  The key now crosses as a borrowed box.
+;   2. Behind an `any`, the seam bound the container's type variables from a
+;      concrete SIBLING (K := cstr from the key, A := cstr from a pushed
+;      element) and checked a `(Map any any)` / `(Vec any)` box against that:
+;      `cast: any holds a different instantiation`, compiled only.  Only a
+;      container sibling pins the instantiation now.
+;   3. A `#map{...}` literal widened its values but not its keys, so it was a
+;      `(Map cstr any)` that no `any`-grounded seam could accept --
+;      `(map-count (mk))` panicked.  Keys widen too: every Saffron map is
+;      `(Map any any)`, and a mixed literal keeps each key's own type.
+;   4. `[]` expands through `vec-of` to a `(vec-new)` carrying the stdlib's
+;      span, so the open result stayed `(Vec A)` -- the one Saffron vector that
+;      was not `(Vec any)`.
+;
+; 7.25 keeps a fraction so a value read through the wrong type would show.
+
+(defn mk [] (map-new))
+(defn mk2 [] #map{"a" 1 :b 7.25 3 "three"})
+(defn push1 [v] (vec-push! v "x") v)
+(defn first-or [o] (unwrap-or o 0))
+
+(defn main []
+  ; 1. the report's first repro: a let-bound (map-new) and a string key
+  (let [m (map-new)]
+    (println (map-get (map-assoc m "k" 42) "k")))
+  ; 2. the report's second: the map arrives through an `any` return
+  (println (map-get (map-assoc (mk) "k" 42) "k"))
+  ; 3. a literal through an `any`, keyed three ways
+  (println (map-count (mk2)))
+  (println (map-get (mk2) "a"))
+  (println (map-get (mk2) :b))
+  (println (map-get (mk2) 3))
+  (println (map-has? (mk2) "zzz"))
+  ; 2 again, on a vector and an option held in an `any`
+  (println (vec-len (push1 [1 2])))
+  (println (first-or (some 7.25)))
+  ; 4. the empty literal is a (Vec any) like its siblings
+  (println (is? (:: [] any) (Vec any)))
+  (println (vec-len (push1 [])))
+  0)

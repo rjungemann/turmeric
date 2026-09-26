@@ -21,7 +21,6 @@ answer rather than a limit, and was built 2026-09-26.)
 Open reports a Saffron program reaches (none is a stage blocker):
 
 - [saffron-catch-unwind-around-dyn-call-fn-crashes](../reported/saffron-catch-unwind-around-dyn-call-fn-crashes.md) (high)
-- [saffron-open-generic-result-not-grounded](../reported/saffron-open-generic-result-not-grounded.md) (medium)
 - [any-widen-stored-in-an-adt-field-has-no-owner](../reported/any-widen-stored-in-an-adt-field-has-no-owner.md) (medium)
 - [compiled-closure-copies-a-captured-mut](../reported/compiled-closure-copies-a-captured-mut.md) (medium, every dialect)
 - [dynamic-returned-closure-env-is-never-freed](../reported/dynamic-returned-closure-env-is-never-freed.md) (low-medium)
@@ -1586,6 +1585,11 @@ Still to do, and the ORDER is now measured rather than assumed:
    because the earlier text explained why the widen would break it.
    - `#map{...}` takes the same widen as `[...]`, on the VALUES only. The KEYS
      are already normalized to one key type by the lowering above the widen.
+     (**Changed 2026-09-26: the keys widen too**, raw, so a Saffron map literal
+     is `(Map any any)` like `(map-new)`. A `(Map Sym any)` literal behind an
+     `any` could satisfy no seam, which can only ground an open key to `any`
+     -- see
+     [saffron-open-generic-result-not-grounded](../archive/saffron-open-generic-result-not-grounded.md).)
      `tests/fixtures/saffron-map-literal`. (A heterogeneous key needs
      `Hash[any]`/`MapKey[any]`, which now exist -- see the set row -- but the
      key normalization still runs first.  Keying a map by `any` works since
@@ -2065,13 +2069,13 @@ limit, not a silent wrong answer:
   the emitter (`elab_method_call`, where the `EX_DYN_METHOD` node is built).
   The interpreter's dynamic arm now reads the class declaration for one thing
   -- turning an inline-C `bool` result that came back as an int into a bool.
-- **An empty literal is not `(Vec any)`.** `[]` and `(vec-new)` produce an
-  OPEN `(Vec A)`, so the box's tag has no registry row: `(describe [])`
-  panics "no instance of Kind for Vec" compiled while the interpreter
-  answers. Same root cause as
-  [saffron-open-generic-result-not-grounded](../reported/saffron-open-generic-result-not-grounded.md);
-  its fix direction (ground an unbound generic result to `any` in a dynamic
-  file) closes this too.
+- ~~**An empty literal is not `(Vec any)`.**~~ **Fixed 2026-09-26.** `[]`
+  expands to a `(vec-new)` carrying the stdlib's span, so the open-result rule
+  (which gated on the call's span) left it an open `(Vec A)` whose box matched
+  no registry row. The rule now also consults the top-level form's dialect.
+  Fixed with
+  [saffron-open-generic-result-not-grounded](../archive/saffron-open-generic-result-not-grounded.md),
+  whose other three defects were in the same family.
 - **An unannotated extra on a parametric head is read as the class
   variable.** `Eq`'s `(eq? [x y])` records `int` in both the class and the
   impl, which is what a typed `(.eq? v w)` hands a `(Vec any)` to; so the

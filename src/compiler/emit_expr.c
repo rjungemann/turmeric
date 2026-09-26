@@ -11371,7 +11371,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(body, "%s %s = %s;\n", cn, spill, raw);
                         Buf vb; buf_init(&vb);
                         buf_printf(&vb, "(int64_t)(intptr_t)tur_hamt_box_key("
-                                        "(const void*)&%s, sizeof(%s))", spill, cn);
+                                        "(void *)&%s, sizeof(%s))", spill, cn);
                         buf_putc(&vb, '\0');
                         free(raw);
                         raw = strdup(vb.data);

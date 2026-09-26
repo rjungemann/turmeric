@@ -1,0 +1,9 @@
+#lang saffron
+;; saffron-open-generic-result-not-grounded: the key seam is for a map whose
+;; key type is `any`.  A map the program TYPED -- here by ascription -- keeps
+;; its key type in a Saffron file too, and a string key into a Sym-keyed map is
+;; still refused rather than boxed into it.
+(defn main [] : int
+  (let [m (:: (map-new) (Map Sym int))]
+    (println (map-get (map-assoc m "k" 1) "k")))
+  0)

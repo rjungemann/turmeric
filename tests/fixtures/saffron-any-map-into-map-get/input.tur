@@ -8,6 +8,13 @@
 ;; arguments already determine (K := Sym from the key) and grounds only the
 ;; genuinely open V.  The interpreter, which has no instantiation to check,
 ;; always answered.
+;;
+;; saffron-open-generic-result-not-grounded: that sibling binding was the
+;; wrong way round.  A key says nothing about a Saffron map's instantiation,
+;; and binding from it broke every map that was not literal-shaped --
+;; `(map-new)` is `(Map any any)`, and so, now, is every `#map{...}` literal,
+;; keys included.  So K grounds to `any` with V, the Sym key crosses the
+;; `(& K)` key check as a borrowed box, and the map below is `(Map any any)`.
 ;; 7.25 rather than 7.0: the value rides the box by bit pattern.
 (defn lookup [m k : Sym] (map-get m k))
 (defn has [m k : Sym] (map-has? m k))
@@ -19,6 +26,6 @@
     (println (has m :b))
     (println (has m :zzz))
     (let [m2 (put m :c "three")]
-      (println (map-count (cast m2 (Map Sym any))))
+      (println (map-count (cast m2 (Map any any))))
       (println (type-of (lookup m2 :c)))))
   0)

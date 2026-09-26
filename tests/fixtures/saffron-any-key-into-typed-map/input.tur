@@ -7,10 +7,17 @@
 ;; interpreted.  With the Sym arm (H4) the any-key path agrees with the typed
 ;; one on hash, carrier and comparator, and a genuine miss is nil (H2).
 ;; 7.25 rather than 7.0: the value rides the box by bit pattern.
+;;
+;; The Sym-keyed map is built by ascription: a `#map{...}` literal in a Saffron
+;; file is `(Map any any)`, keys included, like every other Saffron container
+;; (saffron-open-generic-result-not-grounded).
 (defn lookup [m : (Map Sym any) k] (map-get m k))
 (defn has [m : (Map Sym any) k] (map-has? m k))
 (defn main [] : int
-  (let [m #map{:a 1 :b "two" :c 7.25}]
+  (let [m (map-assoc (map-assoc (map-assoc (:: (map-new) (Map Sym any))
+                                           :a 1)
+                                :b "two")
+                     :c 7.25)]
     (println (has m :a))
     (println (has m :zzz))
     (println (lookup m :a))
