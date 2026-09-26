@@ -2806,8 +2806,11 @@ differences, as reports"):
   definitions is lifted to the top level under fresh names the body's scope
   maps its names to
   ([archived](../archive/r7rs-define-record-type-not-an-internal-definition.md)).
-- **One library per file, named after the file, and no `(export (rename ...))`**
-  ([r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md)).
+- **One library per file, named after the file**
+  ([r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md));
+  ~~no `(export (rename ...))`~~ -- resolved 2026-09-26: the definition is
+  spelled with the public name, or aliased when it is imported or exported
+  twice.
 - **A loop whose non-tail call goes through a procedure variable** is CPS, and
   its constant stack is the C compiler's sibling call -- the default `-O2` has
   it, `-O0` does not

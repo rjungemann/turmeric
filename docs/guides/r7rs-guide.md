@@ -417,9 +417,7 @@ What it does not cover:
   vectors, strings above.
 - **A file holds one library, named after the file.** `(define-library (two
   a) ...)` lives in `two/a.tur`, the way a Turmeric module's path is its name,
-  and a second `define-library` in the same file is an error. `(export (rename
-  internal exported))` is refused too: export the name and rename it at the
-  import.
+  and a second `define-library` in the same file is an error.
 - **`(except ...)` over a user library or a Turmeric module hides nothing.**
   Turmeric's import has no "all but", so the module is imported whole; over
   a `(scheme ...)` library an excluded name is the program's own to define.

@@ -1,0 +1,10 @@
+#lang r7rs
+;; r7rs-library-file-shape-and-export-rename: R7RS 5.6.1 lets a library export
+;; an identifier once.  `add` here is both a plain export and the public name
+;; of a rename.
+(define-library (export-twice)
+  (export add (rename my-add add))
+  (import (scheme base))
+  (begin
+    (define (add a b) 0)
+    (define (my-add a b) (+ a b))))

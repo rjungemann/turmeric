@@ -1,5 +1,11 @@
 # `#lang r7rs`: one library per file, named after the file, and no `(export (rename ...))`
 
+**`(export (rename ...))` resolved 2026-09-26; the other two stay open.** A
+library exports a definition under a rename, on both back ends and to a
+Turmeric importer too. The "module not found" error for a Scheme import now
+says the library's name is its path. What is left is several libraries in one
+file and a name independent of the path -- see *Still open* below.
+
 **Severity:** low-medium. Three restrictions on `define-library` that R7RS
 does not impose, all from the one-`defmodule`-per-file shape a library lowers
 onto. They bite when porting existing Scheme: a file holding a handful of
@@ -63,29 +69,58 @@ Both on the compiled back end and under `tur --interpret`.
   lowered form for the public spelling; the import side has `:refer` plus a
   read-time rename, which is why `(rename ...)` works there.
 
+## `(export (rename internal public))`: resolved 2026-09-26
+
+`src/compiler/scheme_lower.c`, the define-library arm, before any declaration
+is lowered:
+
+- When the library defines `internal` (a `define`, `define-values` or
+  `define-record-type` in its body) and exports it only this way, the
+  definition itself is spelled `public` in the module, through the clash
+  table (the per-file global respelling `r7rs-toplevel-define-named-like-a-
+  turmeric-form` introduced). Every use in the library follows, and so does
+  `is_mut`, so a `set!` global keeps its cell, and the procedure keeps its
+  static signature for a Turmeric importer.
+- Otherwise -- an imported name, or one also exported under another name --
+  `public` is defined at the end of the body: a forwarding `defn` for a
+  fixed-arity procedure the library defines, else an `any` alias.
+- A library global that is itself named `public` is respelled out of the way
+  (`public--libN`), and a public name spelled like a Turmeric form goes
+  through the clash rename, like a plain export's.
+- An identifier exported twice (plainly and as a rename's public name, say) is
+  an error naming it, per R7RS 5.6.1.
+
+A definition that only a macro use expands to is not seen by the scan, so its
+rename takes the alias path. Pinned by `run-r7rs-import.sh`'s `export-rename`
+and `turmeric-imports-export-rename` and `tests/fixtures/errors/r7rs-export-twice`.
+
+## Still open
+
+The two file-shape restrictions. The "module not found" error for a Scheme
+import (src/compiler/elab_module.c) now ends with a note in the library's own
+spelling -- "a library is found by its name: (two a) must be the file
+two/a.tur (or two/a.scm) on the paths above, holding that one define-library"
+-- so the restriction is stated where it bites. The directions below for the
+other two are unchanged.
+
 ## Fix directions
 
-- **`(export (rename internal public))`** is the cheapest of the three and the
-  one a port hits most: emit the module's export under the internal name, and
-  record the public spelling in the same table the import side's rename uses,
-  so an importer of the library asks for `public` and resolves `internal`. The
-  machinery exists (`lower_import_set`'s rename path); this is the same map in
-  the other direction, applied at the definition site.
+- ~~**`(export (rename internal public))`**~~ -- done, above.
 - **Several libraries in one file** needs either several `defmodule`s per file
   in Turmeric -- a language change, not a Scheme one -- or a split in the
   lowering: emit each `define-library` as its own synthetic module under a
   generated path and register the mapping so imports resolve. The second is
   self-contained but makes the emitted-file layout no longer one-to-one with
   the source, which is worth a decision before coding.
-- **Name/path independence** follows from whichever of those lands; until then
-  it is worth stating in the error, which currently reports only "module not
-  found" with a search list and never says the library's name is its path.
+- **Name/path independence** follows from whichever of those lands. The error
+  states it now (above).
 
 ## Guide upkeep
 
 `docs/guides/r7rs-guide.md` ("Where it differs from R7RS") carries a bullet
-beginning "**A file holds one library, named after the file.**" It covers all
-three restrictions. When one of them resolves, trim that clause out of the
-bullet; when the last one does, delete the bullet whole. The guide's
+beginning "**A file holds one library, named after the file.**" It covers the
+two restrictions still open (the export-rename sentence was trimmed
+2026-09-26). When one of them resolves, trim that clause out of the bullet;
+when the last one does, delete the bullet whole. The guide's
 "Libraries and Turmeric" section states no file-shape rule, so nothing else
 needs amending.

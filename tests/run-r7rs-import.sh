@@ -222,6 +222,64 @@ EOF
 
 run_case "library-internal-record-type" prog7.tur "7"
 
+# ---- (export (rename internal public)). -----------------------------------
+# r7rs-library-file-shape-and-export-rename.  A definition exported once under
+# a rename is itself spelled `public` in the module (so it keeps its signature
+# and its set!s); one exported twice gets a forwarding defn; an imported name
+# gets an `any` alias.  A library's own global named like a public name is
+# moved out of the way, and a public name spelled like a Turmeric form goes
+# through the clash rename on both sides.
+cat > "$TMP/renlib.tur" <<'EOF'
+#lang r7rs
+(define-library (renlib)
+  (export (rename internal-add add)
+          twice (rename twice double)
+          (rename a b) (rename b a)
+          (rename counter-bump bump!) counter-value
+          (rename car head)
+          (rename my-sub sub)
+          (rename my-gen gen)
+          uses-own-sub)
+  (import (scheme base))
+  (begin
+    (define (internal-add a b) (+ a b))
+    (define (twice x) (* 2 x))
+    (define (a) 'was-a)
+    (define (b) 'was-b)
+    (define counter 0)
+    (define (counter-bump) (set! counter (+ counter 1)) counter)
+    (define (counter-value) counter)
+    (define (sub a b) 'not-exported)
+    (define (my-sub a b) (- a b))
+    (define (my-gen) 'generated)
+    (define (uses-own-sub) (sub 1 2))))
+EOF
+
+cat > "$TMP/prog8.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write)
+        (except (renlib) gen)
+        (only (renlib) gen))
+(bump!) (bump!)
+(write (list (add 2 3) (twice 4) (double 5) (a) (b) (counter-value)
+             (head '(p q)) (sub 10 3) (gen) (uses-own-sub)))
+(newline)
+EOF
+
+run_case "export-rename" prog8.tur "(5 8 10 was-b was-a 2 p 7 generated not-exported)"
+
+cat > "$TMP/tmain2.tur" <<'EOF'
+(defmodule tmain2
+  (import renlib :refer [add double])
+  (defn main [] : int
+    (println (cast (add (:: 20 any) (:: 22 any)) int))
+    (println (cast (double (:: 21 any)) int))
+    0))
+EOF
+
+run_case "turmeric-imports-export-rename" tmain2.tur "42
+42"
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1
