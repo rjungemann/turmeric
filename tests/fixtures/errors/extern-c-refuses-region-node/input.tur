@@ -1,0 +1,13 @@
+;; region-escape-through-unhooked-stores (item 1): an `extern-c` function has
+;; no emitted body, so nothing can note a region node it is handed.  That hole
+;; is closed by the boundary itself: a `:heap` node cannot cross it by type,
+;; and neither can a record that holds one (extern_c_aggregate_ok).  A node
+;; reaches foreign code only through an erasing ascription, which is noted.
+(defdata Link :heap (Link [v : int nxt : int]))
+(defstruct Holder [n : Link k : int])
+
+(extern-c keep_node [slot : ptr<void> n : Link] :void)
+(extern-c keep_holder [slot : ptr<void> h : Holder] :void)
+
+(defn main [] : int
+  0)
