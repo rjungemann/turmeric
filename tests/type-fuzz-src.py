@@ -176,7 +176,8 @@ BYVALUE_WRAPPERS = {"box", "adt", "opt", "res", "opt_box", "res_box"}
 
 CROSSING_TAGS = {"through", "deep", "let", "ascribe", "gid", "fat_hof",
                  "thin_hof", "class_thru", "tyvar_run",
-                 "class_nested", "class_nullary_newtype"}
+                 "class_nested", "class_nullary_newtype",
+                 "gid_let", "class_let"}
 
 
 def known_bug_slug(tags):
@@ -230,6 +231,14 @@ def known_bug_slug(tags):
     # carrier-compatible opaque newtype, gated on the class tyvar reaching a
     # parameter -- and archived.  Shape back in the DEFAULT pool; probe below
     # kept as a FIXED regression row.)
+    # (let-bound-class-method-result-in-constrained-generic-truncates:
+    # RESOLVED 2026-09-26 -- a class-method call on an abstract-tyvar receiver
+    # is typed with that receiver's `A` -- and archived.  Its shape,
+    # class_let, is in the DEFAULT pool; probe below kept as a FIXED row.)
+    # let-bound-generic-call-result-in-generic-truncates: OPEN.  The
+    # generic-FUNCTION half of the same symptom; gid_let is --emit-known only.
+    if "gid_let" in tags:
+        return "let-bound-generic-call-result-in-generic-truncates"
     #
     # ---- runtime seams (seam axis, added 2026-09-16) ------------------------
     #
@@ -364,6 +373,20 @@ KNOWN_PROBES = [
      "(defn gr [A] [x : A] : A x)\n"
      "(defn main [] : int (println (gr (fr -4.25))) 0)\n",
      "-4.25\n"),
+    # RESOLVED 2026-09-26.  FIXED regression row: -4.25 printed -4.
+    ("let-bound-class-method-result-in-constrained-generic-truncates",
+     "(defclass LbP [a] (lbp [x : a y : a] : a))\n"
+     "(definstance LbP [int]   (lbp [x y] x))\n"
+     "(definstance LbP [float] (lbp [x y] x))\n"
+     "(defn fl [^LbP A] [x : A] : A (let [y (lbp x x)] (lbp y x)))\n"
+     "(defn main [] : int (println (fl -4.25)) 0)\n",
+     "-4.25\n"),
+    # OPEN.  9.75 prints 9.  No typeclass involved.
+    ("let-bound-generic-call-result-in-generic-truncates",
+     "(defn gl [A] [x : A] : A x)\n"
+     "(defn wl [A] [x : A] : A (let [y (gl x)] y))\n"
+     "(defn main [] : int (println (wl 9.75)) 0)\n",
+     "9.75\n"),
     # ---- runtime seams ------------------------------------------------------
     #
     # All four are wrong-ANSWER defects, so all four MUST carry the expected
@@ -694,6 +717,26 @@ class Gen:
             e = "(%s %s)" % (f, e)
         return e, "gid"
 
+    def x_gid_let(self, leg, tn, e):
+        """A generic whose body LET-BINDS another generic's result.
+
+        Every other crossing hands a call's result straight to the next call,
+        and emit re-targets a call it can see.  A `let` binding instead takes
+        the call's ELABORATED type -- which for an instantiation to the
+        caller's own `A` is `int`, so a float leg truncates (9.75 -> 9).  No
+        generated shape could reach it before this one.
+
+        The class-method half of the symptom is fixed
+        (docs/archive/let-bound-class-method-result-in-constrained-generic-
+        truncates.md; class_let, default pool).  THIS half is open --
+        docs/reported/let-bound-generic-call-result-in-generic-truncates.md --
+        so the shape is --emit-known only, per this harness's discipline.
+        """
+        f, g = self.name("g"), self.name("g")
+        leg.defs.append("(defn %s [A] [x : A] : A x)" % f)
+        leg.defs.append("(defn %s [A] [x : A] : A (let [y (%s x)] y))" % (g, f))
+        return "(%s %s)" % (g, e), "gid_let"
+
     def x_fat_hof(self, leg, tn, e):
         f = self.name("h")
         leg.defs.append("(defn %s [^fat f : (fn [] %s)] : %s (f))" % (f, tn, tn))
@@ -753,6 +796,30 @@ class Gen:
                         % (gen, cls, meth, meth))
         return "(%s %s)" % (gen, e), "class_nested"
 
+    def x_class_let(self, leg, tn, e):
+        """class_nested's shape with the inner result LET-BOUND.
+
+        The decoy instance is declared first, as in class_nested, because the
+        call on an A-typed receiver is elaborated against that carrier
+        representative.  Bound by a `let`, the representative's result type
+        used to become the binding's type: the float instance's double was
+        stored into an int64 and the outer call dispatched on `int`.
+        docs/archive/let-bound-class-method-result-in-constrained-generic-
+        truncates.md.  The method projects its first argument, so the
+        crossing is an identity and a wrong instance is a wrong ANSWER.
+        """
+        n = self.n_names
+        self.n_names += 1
+        cls, meth = "FzL%d%d" % (self.i, n), "fzl%d%d" % (self.i, n)
+        gen = "fzlg%d%d" % (self.i, n)
+        decoy = "float" if tn == "int" else "int"
+        leg.defs.append("(defclass %s [a] (%s [x : a y : a] : a))" % (cls, meth))
+        leg.defs.append("(definstance %s [%s] (%s [x y] x))" % (cls, decoy, meth))
+        leg.defs.append("(definstance %s [%s] (%s [x y] x))" % (cls, tn, meth))
+        leg.defs.append("(defn %s [^%s A] [x : A] : A (let [y (%s x x)] (%s y x)))"
+                        % (gen, cls, meth, meth))
+        return "(%s %s)" % (gen, e), "class_let"
+
     def x_class_nullary_newtype(self, leg, tn, e):
         """A NULLARY class method whose instances are over a `defopaque`
         newtype -- docs/archive/nullary-class-method-unresolvable-over-newtype-tyvar.md.
@@ -801,10 +868,13 @@ class Gen:
             # the leg's own, which is what found
             # constrained-generic-float-result-into-generic-value-converts.
             xs.append(self.x_class_nested)
+            xs.append(self.x_class_let)
             if tn == "int":
                 xs.append(self.x_class_nullary_newtype)
         if self.emit_known:
             xs.append(self.x_tyvar_run)
+            # KNOWN: let-bound-generic-call-result-in-generic-truncates.
+            xs.append(self.x_gid_let)
         return xs
 
     # -- int mutation steps (bare int legs get arithmetic through defns) -------

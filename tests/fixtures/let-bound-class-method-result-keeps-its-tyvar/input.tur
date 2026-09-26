@@ -1,0 +1,61 @@
+;; let-bound-class-method-result-in-constrained-generic-truncates -- RESOLVED.
+;;
+;; Inside a constrained generic, a class-method call on an A-typed receiver
+;; is elaborated against the carrier REPRESENTATIVE instance (`N [int]`,
+;; declared first) and re-targeted per spec at emit.  Its TYPE was still the
+;; representative's `int`, and a `let` binding took it.  In a float spec the
+;; emitted C read
+;;
+;;   double  __ps0 = __inst_N_n_float(x, x);   ;; re-targeted: right
+;;   int64_t y     = __ps0;                    ;; VALUE conversion: wrong
+;;   ... __inst_N_n_int(y, x) ...              ;; and the WRONG instance
+;;
+;; so -4.25 came back -4.  The call is now typed with the receiver's `A`
+;; whenever the class declares both receiver and result as its variable.
+;;
+;; Unbound, the same calls were right -- emit re-targets a call it can see --
+;; which is why only the `let` shapes failed.  `tur --interpret` was right
+;; throughout, so only this compiled fixture pins it.  Every float literal has
+;; a non-zero fractional part: an integer-valued float survives truncation.
+;;
+;; NOT covered here: a let-bound GENERIC-FUNCTION result (`(let [y (gid x)]
+;; y)`), which truncates by a different path -- still open, see
+;; docs/reported/let-bound-generic-call-result-in-generic-truncates.md.
+(defclass N [a] (n [x : a y : a] : a))
+
+;; int FIRST: the representative the result type used to be taken from.
+(definstance N [int]     (n [x y] x))
+(definstance N [float]   (n [x y] x))
+(definstance N [float32] (n [x y] x))
+(definstance N [cstr]    (n [x y] x))
+
+(defclass Sh [a] (sh [x : a] : cstr))
+(definstance Sh [int]   (sh [x] "int"))
+(definstance Sh [float] (sh [x] "float"))
+
+(defn gid [A] [x : A] : A x)
+
+;; class-method results, let-bound
+(defn one   [^N A] [x : A] : A (let [y (n x x)] y))
+(defn two   [^N A] [x : A] : A (let [y (n x x)] (n y x)))
+(defn chain [^N A] [x : A] : A (let [y (n x x) z (n y x) w (n z y)] w))
+(defn dotted [^N A] [x : A] : A (let [y (.n x x)] (.n y x)))
+(defn pick  [^N A] [x : A b : bool] : A (let [y (n x x)] (if b (n y x) y)))
+;; the let-bound value dispatches a SECOND class on the right instance
+(defn which [^N A ^Sh A] [x : A] : cstr (let [y (n x x)] (sh y)))
+
+(defn main [] : int
+  (println (one -4.25))
+  (println (two 7.1))
+  (println (chain 3.25))
+  (println (dotted 1.75))
+  (println (pick 2.5 true))
+  (println (pick 0.125 false))
+  (println (which 6.5))
+  (println (gid (two 5.5)))                ;; into another generic too
+  (println (two (:: 7.1 float32)))         ;; float32
+  ;; controls: non-float instantiations were always right
+  (println (two 7))
+  (println (chain "abc"))
+  (println (which 6))
+  0)

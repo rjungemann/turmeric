@@ -480,11 +480,19 @@ replay never runs fewer than smoke N. The two smoke-reachable seeds
 ### A sibling the fuzzer cannot reach
 
 Reducing the finding turned up a worse sibling:
-[let-bound-class-method-result-in-constrained-generic-truncates](../reported/let-bound-class-method-result-in-constrained-generic-truncates.md).
+[let-bound-class-method-result-in-constrained-generic-truncates](let-bound-class-method-result-in-constrained-generic-truncates.md).
 The same class-method call, `let`-bound inside the constrained generic,
-truncates `-4.25` to `-4` with no second generic involved. It is open. The
-generator never writes a `let` inside a generic's body, so this is a
-section-3.1-style shape gap, and closing it is the natural F1 follow-up.
+truncates `-4.25` to `-4` with no second generic involved. The generator
+never wrote a `let` inside a generic's body, so this was a section-3.1-style
+shape gap.
+
+*Follow-up, same day:* fixed at elaboration. The call is typed with its
+receiver's `A`, not the representative instance's `int`. Fixing it exposed
+a generic-*function* twin, `(let [y (gid x)] y)` returning `9` for `9.75`
+with no typeclass at all. That one is open, as
+[let-bound-generic-call-result-in-generic-truncates](../reported/let-bound-generic-call-result-in-generic-truncates.md).
+The generator gained both shapes: `class_let` in the default pool, and
+`gid_let` behind `--emit-known` while its report is open.
 
 ### The known-bug table had outlived two of its reports
 
