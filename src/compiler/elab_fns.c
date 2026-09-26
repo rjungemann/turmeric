@@ -8400,9 +8400,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * this pins is the SIGNATURE, the one place a caller has to agree.
      *
      * Placed before the widen below on purpose, so the body is boxed by the
-     * existing return-position coercion rather than a second one written here. */
+     * existing return-position coercion rather than a second one written here.
+     *
+     * A DIVERGING body (`(defn fail [n] (panic "boom"))`, type `!`) gets the
+     * same `any` signature.  It used to keep the inferred `!`, which emits as
+     * `void` -- while every caller had already been elaborated against the
+     * `any` default, so a caller returning the call's value (`(fn [] : any
+     * (fail 5))`) was `return fail(...)` of a void: a cc error, found beside
+     * saffron-catch-unwind-around-dyn-call-fn-crashes.  The body needs no box
+     * (the widen below skips `!`); only the signature has to agree. */
     if (return_kind == TY_NIL && !return_annotated && body &&
-        body->type.kind != TY_NEVER && lang_span_is_dynamic(call->span)) {
+        lang_span_is_dynamic(call->span)) {
         /* saffron-lang-plan open question 3: `main` is the ONE unannotated
          * Saffron function that does not default to `any`.
          *
