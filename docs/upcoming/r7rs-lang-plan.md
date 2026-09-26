@@ -1044,7 +1044,8 @@ referential-transparency gap (D5).
 >   `...` at any depth with nested ellipses, an element after an ellipsis
 >   (`(_ a ... b)`), improper tails (`(_ a . rest)`), vector patterns, datum
 >   literals, a custom ellipsis (`(syntax-rules dots (lits) ...)` -- a symbol;
->   `:::` reads as a keyword under this reader) and the `(... ...)` escape.
+>   `:::` read as a keyword under this reader until 2026-09-26,
+>   docs/archive/r7rs-leading-colon-identifiers.md) and the `(... ...)` escape.
 >   Templates substitute, iterate `x ...` and flatten `x ... ...`, splice a
 >   substituted list into a dotted tail, build vectors, and `syntax-error`
 >   reports at the use site. `define-syntax` at top level or body start (a

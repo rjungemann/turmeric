@@ -350,6 +350,14 @@ Turmeric through the `(turmeric ...)` head:
 (display (vec-len v))                        ; 1
 ```
 
+A Turmeric keyword is spelled as a symbol from Scheme. `:k` in Turmeric and
+`'k` in Scheme are the same value, so a map keyed by keywords is read with
+`(map-get m 'k)`. In a Scheme file `:k` is an ordinary identifier, as R7RS
+says, so `':k` is the symbol `:k` and `:::` can be a macro's ellipsis.
+
+**Visible change:** before 2026-09-26, `:k` in a Scheme file was the Turmeric
+keyword (and `':k` the symbol `k`).
+
 Each argument crossing into a typed Turmeric function is checked against its
 signature. A string crosses into a Turmeric `cstr` as a fresh UTF-8 copy.
 Turmeric's strings stay immutable, so mutating the Scheme string afterwards
@@ -431,6 +439,14 @@ What it does not cover:
   re-entering a continuation from a later form finishes the form that
   captured it and then carries on after the form that invoked it. Inside a
   procedure, re-entry is what R7RS describes. See Control above.
+- **Some Turmeric syntax and names are visible in a Scheme file, and are
+  being removed.** `[...]`, `#map{...}` and the other Turmeric `#` literals,
+  inline C, `^tailcall`, `@`, the words `true`/`false`/`nil`, Turmeric forms
+  such as `defn`, and the auto-loaded Turmeric stdlib (`println`, `vec-new`,
+  ...) all work today without an import. Do not rely on them. Reach Turmeric
+  through `(import (turmeric <module>))`, which is the part that stays.
+  [docs/reported/r7rs-turmeric-syntax-leaks.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/r7rs-turmeric-syntax-leaks.md)
+  tracks each one.
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.

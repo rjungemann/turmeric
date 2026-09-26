@@ -47,7 +47,11 @@
   ;; A float with a fractional part, so a numeric-tower surprise would show.
   (let [x 7.1] (println x))
   ;; Everything Turmeric that Scheme does not contradict still reads:
-  ;; binding vectors, keywords, `#map{...}`, curly-infix.
-  (let [m #map{:k 42}] (println (map-get m :k)))
+  ;; binding vectors, `#map{...}` (whose keys are Turmeric keywords),
+  ;; curly-infix.  A bare `:k` is not a keyword here: it is an R7RS
+  ;; identifier (docs/archive/r7rs-leading-colon-identifiers.md), so the
+  ;; lookup uses the symbol `'k`, the keyword's runtime value.  What of this
+  ;; is kept is under review: docs/reported/r7rs-turmeric-syntax-leaks.md.
+  (let [m #map{:k 42}] (println (map-get m 'k)))
   (println {2.0 * 3.25})
   0)

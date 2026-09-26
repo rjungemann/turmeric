@@ -107,7 +107,10 @@ Probed on both back ends, all correct:
   generators are all named `:list`, `:range` and so on, and the `:::`
   ellipsis. A colon *inside* an identifier is fine, so SRFI 14's
   `char-set:letter` is not affected.
-  [docs/reported/r7rs-leading-colon-identifiers.md](../reported/r7rs-leading-colon-identifiers.md)
+  [docs/archive/r7rs-leading-colon-identifiers.md](../archive/r7rs-leading-colon-identifiers.md)
+  (resolved: fixture `r7rs-colon-identifiers`; the wider question it raised,
+  Turmeric surface in Scheme source, is
+  [docs/reported/r7rs-turmeric-syntax-leaks.md](../reported/r7rs-turmeric-syntax-leaks.md))
 - **A `define-library` cannot export a `syntax-rules` macro.** The export check
   in src/compiler/elab_module.c refuses it: "exported symbol 'my-rec' is not
   defined in this module". That rules out the obvious design of SRFI
@@ -376,7 +379,7 @@ Legend:
 | 39 | Parameter objects | re-export | built in | S1 | converter semantics probed equal (2.2) |
 | 40 | A Library of Streams | library | not planned | -- | deprecated by its author in favour of 41; the error says `(import (srfi 41))` |
 | 41 | Streams | library | library | S7 | reference implementation over records and `delay-force` |
-| 42 | Eager Comprehensions | library | library | S7 | blocked on leading-colon identifiers (2.3); a stress test for the expander |
+| 42 | Eager Comprehensions | library | library | S7 | needed leading-colon identifiers (2.3, since resolved); a stress test for the expander |
 | 43 | Vector Library | library | library | S8 | index-first `vector-map` conflicts with base (D5); SRFI 133 is its R7RS-compatible successor (Section 5) |
 | 45 | Primitives for Expressing Iterative Lazy Algorithms | library | alias | S1 | `lazy` is `delay-force`, `eager` is `make-promise` |
 | 48 | Intermediate Format Strings | library | library | S6 | superset of 28 |
@@ -400,7 +403,7 @@ Legend:
 | 105 | Curly-infix-expressions | no module | built in, no library | -- | `{a + b}` reads in every dialect, `#lang r7rs` included |
 
 (46, custom ellipsis, is R7RS 4.3.2 and has no row in either list; it is built
-in once the colon report closes, for `:::`.)
+in, `:::` included since the colon report was resolved.)
 
 The guide's version gets a short preamble:
 
@@ -550,8 +553,8 @@ fixture itself runs on both back ends.
   from `current-jiffy`.
 - 35: condition types as records.
 - 41: the reference implementation.
-- 42: after the colon report closes; a large `syntax-rules` workout, and any
-  expander limit it hits is a conformance finding.
+- 42: the colon report that blocked it is resolved; a large `syntax-rules`
+  workout, and any expander limit it hits is a conformance finding.
 - 60: fixnums via Turmeric bit ops, bignums arithmetically.
 - 4 and 66: bytevector aliases and the typed vectors.
 - 78's `check-ec`.

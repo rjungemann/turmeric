@@ -1,5 +1,42 @@
 # `#lang r7rs`: an identifier that starts with `:` does not read as a symbol in source
 
+**RESOLVED 2026-09-26.** In a user Scheme source, a token that starts with `:`
+now reads as an identifier (`scheme_colon_is_identifier`, src/compiler/reader.c).
+So `':x` is the symbol `:x`, `:::` works as a custom ellipsis, and `:x` can be
+bound, defined, or named as a macro (SRFI 42's `:range`). The source reader
+and `read` agree. Fixtures: `r7rs-colon-identifiers` (both back ends) and
+`errors/r7rs-colon-is-not-a-keyword`.
+
+**Correction to the filing below:** this was not an accident. r7rs-lang-plan
+R1 kept Turmeric keywords readable in `#lang r7rs` on purpose, and its R4 note
+says "`:::` reads as a keyword under this reader". Scheme code used them as
+map keys through the seam (`(map-get m :k)`). The resolution follows the
+project owner's rule that Turmeric features should not leak into R7RS: it
+does NOT fall back to the keyword for an unbound `:k`. Instead:
+
+- A keyword and the symbol of the same name are one runtime value
+  (`(eq? :k 'k)` was `#t`), so seam code writes `'k`, and nothing is lost.
+  The fixtures that used `:k` (`r7rs-gc-seam`, `r7rs-stdlib-seam`,
+  `r7rs-keyword-seed`, `r7rs-reader-lexemes`) now do. An unbound `:k` in a
+  Scheme file is "unbound symbol ':k'" with a help line naming `'k`
+  (src/compiler/elab_toplevel.c).
+- Turmeric's `:` survives in two places:
+  - the Turmeric-shaped Scheme sources (the prelude, `stdlib/r7rs/`, and the
+    REPL's pinned preload), by the same test as scheme_lower.c's
+    `prelude_span`;
+  - the inside of a `#map{...}` / `#set{...}` literal, whose keys are
+    keywords by the literal's own grammar.
+
+  A `:` or `::` standing alone still reads as Turmeric's annotation and
+  ascription. Those, `#map{}` itself, and the rest of the Turmeric surface
+  still visible in Scheme source are tracked in
+  docs/reported/r7rs-turmeric-syntax-leaks.md.
+
+The r7rs fixtures pass on both harnesses. The r7rs import tests and chibi's
+conformance suite were run on the change; their results are recorded in the
+commit that landed it.
+
+
 **Severity:** medium. R7RS 7.1.1 makes `:` an ordinary `<initial>`, so `:x`,
 `:::` and `:list` are identifiers. In a `#lang r7rs` source file they are not:
 a quoted `:x` is the symbol `x`, and `:::` or a parameter named `:x` is an

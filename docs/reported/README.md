@@ -2223,12 +2223,15 @@ section 5b (`docs/archive/type-confusion-detection-plan.md`).
 
 ## Found planning SRFI support for `#lang r7rs` (filed 2026-09-26)
 
-All three came from the probes behind `docs/upcoming/r7rs-srfi-plan.md`
-(its Section 2.3). chibi's R7RS suite reaches none of them.
+The first three came from the probes behind `docs/upcoming/r7rs-srfi-plan.md`
+(its Section 2.3); chibi's R7RS suite reaches none of them. The fourth came
+out of resolving the first: R7RS imports Turmeric libraries, but Turmeric's
+own surface should not leak into Scheme source.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [r7rs-leading-colon-identifiers](r7rs-leading-colon-identifiers.md) | medium | In a `#lang r7rs` source file, `':x` reads as the symbol `x`, and `':::` or a parameter named `:x` is an error. The runtime `read` gets all three right. Blocks SRFI 42 (`:list`, `:range`, ...) and the `:::` custom ellipsis; a colon inside an identifier (`char-set:letter`) is fine |
+| ~~[r7rs-leading-colon-identifiers](../archive/r7rs-leading-colon-identifiers.md)~~ | medium | **RESOLVED 2026-09-26** (archived): a leading `:` is an identifier in user Scheme source (`scheme_colon_is_identifier`, src/compiler/reader.c); seam code writes the symbol `'k`, the keyword's runtime value, and a stray `:k` gets a help line saying so. Fixtures `r7rs-colon-identifiers`, `errors/r7rs-colon-is-not-a-keyword`. Original: in a `#lang r7rs` source file, `':x` reads as the symbol `x`, and `':::` or a parameter named `:x` is an error. The runtime `read` gets all three right. Blocks SRFI 42 (`:list`, `:range`, ...) and the `:::` custom ellipsis; a colon inside an identifier (`char-set:letter`) is fine |
+| [r7rs-turmeric-syntax-leaks](r7rs-turmeric-syntax-leaks.md) | medium | Turmeric's surface is live in user `#lang r7rs` source: `[...]` as a vector, `#map{}`/`#set{}`/`#rat{}`/`#cx{}`/`#?()`, inline C, `^tailcall`, `@`, `true`/`false`/`nil` as literals, `defn`/`fn`/`match`/`->`, and every auto-loaded stdlib name (`println`, `vec-new`, `box`, ...) with no import; `--interpret` also runtime-dispatches a name the compiled back end refuses. Ten measured items, the fixtures that depend on them, and fix directions (namespace first) |
 | [r7rs-define-library-cannot-export-syntax](r7rs-define-library-cannot-export-syntax.md) | medium | Exporting a `define-syntax` name from a `define-library` is "exported symbol ... is not defined in this module" (src/compiler/elab_module.c:1580): the macro is consumed by the Scheme expander and never reaches the module interface. The same macro in a `load`ed file works |
 | ~~[r7rs-cond-expand-ratios-feature-drift](../archive/r7rs-cond-expand-ratios-feature-drift.md)~~ | low | **RESOLVED 2026-09-26** (archived): `feature_holds` reads one array, `R7RS_FEATURES`, and fixture `r7rs-features-agree` asks `cond-expand` (through `eval`) about every identifier `(features)` returns. Original: `(features)` lists `ratios` (stdlib/r7rs/prelude.tur:2424), but `cond-expand` does not hold it (`feature_holds`, src/compiler/scheme_lower.c:3970): two hand-kept copies of one list. r7rs-srfi-plan S1 generates both from one table |
 

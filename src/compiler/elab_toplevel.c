@@ -532,6 +532,22 @@ Expr *elab_form(Elab *e, Form *f) {
             Binding *b = elab_lookup_sym(e, f->as.sym, f->span, &sym_qual_err);
             if (!b) {
                 if (sym_qual_err) return NULL; /* error already emitted */
+                /* r7rs-leading-colon-identifiers: in a Scheme file `:k` is an
+                 * R7RS identifier, not Turmeric's keyword.  Code written
+                 * against the keyword (a map key passed through the seam)
+                 * lands here; name the spelling that means what it meant. */
+                if (f->as.sym->name[0] == ':' && f->as.sym->len > 1 && f->as.sym->name[1] != ':' &&
+                    lang_span_is_scheme(f->span)) {
+                    char msg[256], sug_text[256];
+                    snprintf(msg, sizeof(msg), "unbound symbol '%s'", f->as.sym->name);
+                    snprintf(sug_text, sizeof(sug_text),
+                             "in #lang r7rs '%s' is an identifier, not a Turmeric keyword; "
+                             "for the keyword's value (a map key, say) write the symbol '%s",
+                             f->as.sym->name, f->as.sym->name + 1);
+                    DiagSuggestion sug = { sug_text, NULL, "https://turmeric-lang.dev/docs/errors/TUR-E0003" };
+                    diag_emit_with_suggestion(DIAG_ERROR, f->span, msg, &sug);
+                    return NULL;
+                }
                 /* Phase 8: Enhanced unbound symbol diagnostic with suggestions */
                 const Symbol *best_match = NULL;
                 int best_distance = 3;
