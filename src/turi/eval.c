@@ -12288,6 +12288,27 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (!turi_is_error(dres) && tc && slot < tc->n_methods &&
             tc->methods[slot].return_type.kind == TY_BOOL && dres.tag == TURI_INT)
             dres = turi_bool(dres.as_int != 0);
+        /* saffron-applied-class-var-result-takes-one-instances-type: when the
+         * node is `any` -- a per-instance witness result on the compiled side,
+         * which boxes under the instance's own type -- a collection result
+         * needs the same named box a widen gives it
+         * (interp-collection-handles-report-as-int).  Otherwise `Twice
+         * [float]`'s `(Vec float)` came back as the bare handle and `type-of`
+         * read "int" where the compiled side reads "Vec".  Named from the
+         * IMPL's declared result, which is per instance. */
+        if (!turi_is_error(dres) && e->type.kind == TY_ANY && dres.tag != TURI_STRUCT &&
+            impl->binding && impl->binding->type.kind == TY_FN &&
+            impl->binding->type.as.fn.result_full_type) {
+            const char *bn = turi_any_boxable_name(*impl->binding->type.as.fn.result_full_type);
+            if (bn) {
+                TuriValue bf[1] = { dres };
+                TuriValue bx = make_struct_val(env, bn, 1, bf);
+                if (bx.tag == TURI_STRUCT && bx.as_struct) {
+                    bx.as_struct->is_any_box = true;
+                    dres = bx;
+                }
+            }
+        }
         return dres;
     }
 

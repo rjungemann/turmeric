@@ -1,0 +1,24 @@
+#lang saffron
+; A Saffron data literal builds the instantiation an enclosing expectation
+; pins -- a declared return or an ascription -- the way a generic constructor
+; CALL already did.  It used to widen its elements to `any` regardless, so
+; `(defn fv [x : float] : (Vec float) [x x])` built a `(Vec any)` that the
+; expectation still typed `(Vec float)`: the caller read the boxes' words as
+; doubles and printed 4.6e-310, compiled, even under `(:: [..] (Vec float))`.
+; Found through saffron-applied-class-var-result-takes-one-instances-type,
+; where an instance body's `[x x]` met the substituted `(Vec a)` result.
+; A literal with no expectation (`dyn`) is still the dialect's `(Vec any)`.
+; 7.1: a float read through the wrong representation would print wrong.
+(defn fv [x : float] : (Vec float) [x {x * 2.0}])
+(defn fa [x : float] : (Vec float) (:: [x x] (Vec float)))
+(defn fs [x : int] : (Set int) #set{x 2 3})
+(defn fm [x : float] : (Map cstr float) #map{"a" x "b" 2.5})
+(defn dyn [] [1 "two" 7.25])
+(defn main []
+  (println (vec-get (fv 7.1) 1))                ; 14.2
+  (println (vec-get (fa 7.1) 0))                ; 7.1
+  (println (set-count (fs 1)))                  ; 3
+  (println (map-get (fm 7.1) "a"))              ; 7.1
+  (println (vec-len (dyn)))                     ; 3
+  (println (vec-get (cast (dyn) (Vec any)) 1))  ; two
+  0)

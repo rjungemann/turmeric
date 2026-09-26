@@ -1,0 +1,15 @@
+;; saffron-applied-class-var-result-takes-one-instances-type: `Wrap [Pt]`'s
+;; result is `(Option Pt)` now that definstance substitutes the class variable
+;; through the application.  A body that builds a different instantiation is a
+;; type error at the body -- it reached cc before ("incompatible types when
+;; returning"), since `(Option int)` and `(Option Pt)` are both just an
+;; application to the kind-only return check.
+(defdata Pt (Pt [px : int py : int]))
+(defclass Wrap [a] (wrap-self [x : a] : (Option a)))
+(definstance Wrap [Pt]
+  (wrap-self [x]
+    (let [o (some 3)]
+      o)))
+(defn main [] : int
+  (println (.px (unwrap (.wrap-self (Pt 1 2)))))
+  0)

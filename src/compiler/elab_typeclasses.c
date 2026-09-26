@@ -4095,6 +4095,41 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                 }
             }
         }
+        /* saffron-applied-class-var-result-takes-one-instances-type: a
+         * kind-* class's result that mentions the class variable INSIDE an
+         * application -- `(wrap-self [x : a] : (Option a))` -- matched neither
+         * branch above (not a bare tyvar, and its head `Option` is no class
+         * parameter), so `Wrap [Pt]`'s impl kept returning `(Option a)`: an
+         * open type the emitter lowers to the carrier, whose box every
+         * dynamic dispatch then tagged with one unresolved `(Option a)` id,
+         * whichever instance ran.  Substitute the class variables through the
+         * application, so the impl returns `(Option Pt)`.  Three guards:
+         *   - a class whose every parameter is kind-*: an HKT class's
+         *     parameter is a constructor, handled by the head rewrite above;
+         *   - a RECEIVER-dispatched method: a return-directed one (`(dec
+         *     [seed : int] : (Result a cstr))`) is selected by its expected
+         *     result and rides the uniform carrier every such dispatch reads;
+         *   - GROUND instance types (a primitive or a non-parametric ADT): a
+         *     parametric head (`Dec [Option] [(Dec A)]`) would substitute the
+         *     bare constructor, `(Result Option cstr)`. */
+        else if (return_type.kind == TY_APP &&
+                 !method_is_return_dispatch(tc, &tc->methods[i])) {
+            bool subst_ok = n_type_args > 0;
+            if (tc->type_param_kinds)
+                for (uint8_t ki = 0; ki < tc->n_type_params; ki++)
+                    if (tc->type_param_kinds[ki] != KIND_STAR) { subst_ok = false; break; }
+            for (uint8_t ti = 0; subst_ok && ti < n_type_args; ti++) {
+                const Type *ta = &type_args[ti];
+                if (ta->kind == TY_APP || ta->kind == TY_TYVAR || ta->kind == TY_UNKNOWN ||
+                    (ta->kind == TY_ADT && ta->as.adt_.def &&
+                     ta->as.adt_.def->n_type_params > 0))
+                    subst_ok = false;
+            }
+            if (subst_ok)
+                return_type = elab_subst_class_tyvars(e->arena, return_type,
+                                                      tc->type_params, tc->n_type_params,
+                                                      type_args, n_type_args);
+        }
         /* Arrow head: a method whose declared return is the class variable
          * (e.g. `comp : a` under `Arrow [(->)]`) returns a callable closure.
          * The arrow marker carries no arity yet, so flag it as a boxed TY_FN
@@ -5006,23 +5041,50 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
          * The handler is expected to be provided at the call site. */
         e->fn_body_depth++;
 
+        /* saffron-applied-class-var-result-takes-one-instances-type: push a
+         * GROUND applied result (`(Option Pt)`, after the class-variable
+         * substitution in pass 1) onto the expected-type channel, as elab_defn
+         * does for its declared return.  In a dynamic file a generic
+         * constructor call defers to that expectation instead of widening its
+         * argument to `any`: `(some x)` builds the declared `(Option Pt)`, not
+         * an `(Option any)` the impl's signature cannot return.  Kind-* classes
+         * only, and only a result with no free type variable left -- an HKT
+         * method's `(Option b)` keeps its element open on purpose. */
+        Type *saved_body_expected = e->expected_type;
+        {
+            bool all_star = true;
+            if (tc->type_param_kinds)
+                for (uint8_t ki = 0; ki < tc->n_type_params; ki++)
+                    if (tc->type_param_kinds[ki] != KIND_STAR) { all_star = false; break; }
+            if (all_star && mp->ret_full.kind == TY_APP &&
+                !m7_type_has_free_tyvar(mp->ret_full)) {
+                Type *be = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *be = mp->ret_full;
+                e->expected_type = be;
+            }
+        }
+
         Expr *method_body = e_nil(e, impl_form->span);
         uint32_t n_body = impl_form->as.list.len - impl_body_start;
+        Type *body_expected = e->expected_type;
         if (n_body > 0) {
             if (n_body == 1) {
                 method_body = elab_form(e, impl_form->as.list.items[impl_body_start]);
-                if (!method_body) { e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
+                if (!method_body) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
             } else {
                 Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
                 for (uint32_t k = 0; k < n_body; k++) {
+                    /* Only the tail form produces the result. */
+                    e->expected_type = (k + 1 == n_body) ? body_expected : saved_body_expected;
                     items[k] = elab_form(e, impl_form->as.list.items[impl_body_start + k]);
-                    if (!items[k]) { e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
+                    if (!items[k]) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
                 }
                 method_body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, impl_form->span);
                 method_body->as.do_.items = items;
                 method_body->as.do_.n = n_body;
             }
         }
+        e->expected_type = saved_body_expected;
 
         e->fn_body_depth--;
 
@@ -5087,6 +5149,36 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
             method_body->type.kind != TY_NEVER) {
             Expr *widened = elab_coerce_to_any_return(e, method_body);
             if (widened) method_body = widened;
+        }
+
+        /* saffron-applied-class-var-result-takes-one-instances-type: with the
+         * class variable substituted through an applied result, a body that
+         * builds a DIFFERENT instantiation -- `(some 3)` under `Wrap [Pt]`'s
+         * `(Option Pt)` -- is a type error the kind-only return check below
+         * cannot see (both are TY_APP).  Unchecked, it reached cc as
+         * "incompatible types when returning".  Both sides must be ground: an
+         * open element is the carrier's business, not a mismatch. */
+        if (method_body && method_body->kind != EX_INLINE_C &&
+            mp->ret_full.kind == TY_APP && method_body->type.kind == TY_APP &&
+            !m7_type_has_free_tyvar(mp->ret_full) &&
+            !m7_type_has_free_tyvar(method_body->type) &&
+            !type_eq(mp->ret_full, method_body->type)) {
+            bool all_star = true;
+            if (tc->type_param_kinds)
+                for (uint8_t ki = 0; ki < tc->n_type_params; ki++)
+                    if (tc->type_param_kinds[ki] != KIND_STAR) { all_star = false; break; }
+            if (all_star) {
+                Buf wb; buf_init(&wb); type_print(&wb, mp->ret_full); buf_putc(&wb, '\0');
+                Buf gb; buf_init(&gb); type_print(&gb, method_body->type); buf_putc(&gb, '\0');
+                const char *meth = tc->methods[i].name ? tc->methods[i].name->name : "?";
+                diag_emit_with_code(DIAG_ERROR, method_body->span, TUR_E0001_TYPE_MISMATCH,
+                    "instance method '%s' declares return type %s but its body "
+                    "returns %s", meth, wb.data, gb.data);
+                buf_free(&wb); buf_free(&gb);
+                e->scope = method_scope.parent;
+                scope_free(&method_scope);
+                return NULL;
+            }
         }
 
         /* Pop method scope */
@@ -8157,7 +8249,44 @@ found_method:;
                 bool star_witness = false;
                 if (!tc_is_hkt && slot < tc->n_methods) {
                     const TypeClassMethod *cm = &tc->methods[slot];
-                    star_witness = cm->n_params > 1 || cm->return_type.kind == TY_TYVAR;
+                    /* saffron-applied-class-var-result-takes-one-instances-type:
+                     * a result that MENTIONS the class variable -- bare
+                     * (`clone : a`) or applied (`wrap-self : (Option a)`) -- is
+                     * a different type per instance, so no one slot signature
+                     * carries it; each instance's witness returns `any` and
+                     * tags its own instantiation.  Keyed on a bare tyvar alone,
+                     * an applied one took the direct shim and the node took
+                     * one instance's type for every instance. */
+                    star_witness = cm->n_params > 1 ||
+                                   saffron_type_mentions_tyvar(&cm->return_type);
+                    /* ...but a RETURN-directed method (`(wrap-self [x] :
+                     * (Option a))` -- `a` in the result and in no parameter,
+                     * the unannotated `x` being `int`) is not selected by its
+                     * receiver at all, and its instances' impls take that `int`:
+                     * a witness keyed on the receiver's type cannot call them
+                     * (cc: "incompatible type for argument 1"), and the direct
+                     * shim it replaced mis-tagged every result.  Typed code
+                     * refuses the static form of this call too, so say so
+                     * here.  A bare `: a` result keeps its M9 path. */
+                    if (cm->return_type.kind != TY_TYVAR &&
+                        saffron_type_mentions_tyvar(&cm->return_type) &&
+                        method_is_return_dispatch(tc, cm)) {
+                        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0020_AMBIGUOUS_DISPATCH,
+                            "cannot dispatch '.%.*s' on an 'any' receiver: '%s' "
+                            "names its class variable only in the result, so the "
+                            "instance is chosen by the expected result type, not "
+                            "by the receiver",
+                            (int)method_name_len, method_name, tc->name->name);
+                        diag_emit(DIAG_HELP, call->span,
+                            "to dispatch on the receiver, spell it in the class: "
+                            "`(%.*s [%s : %s] ...)`",
+                            (int)method_name_len, method_name,
+                            (cm->n_params > 0 && cm->param_names && cm->param_names[0])
+                                ? cm->param_names[0]->name : "x",
+                            tc->type_params[0] ? tc->type_params[0]->name : "a");
+                        return NULL;
+                    }
                 }
                 /* S9 (D8 Q1): a kind-* class's PARAMETRIC head (`Eq [Vec]`,
                  * `Show [Vec]`).  Its registry row is keyed on the all-`any`
@@ -8257,11 +8386,9 @@ found_method:;
                  * result is CONCRETE read it from the class -- not from the
                  * instance the static resolver happened to pick, which
                  * answered for every instance only because the instances
-                 * agreed.  A result that mentions the class variable APPLIED
-                 * (`: (Option a)`) differs per instance and no one signature
-                 * carries it; it still takes the picked instance's, which is
-                 * right for one instance and mis-tags the others'
-                 * (saffron-applied-class-var-result-takes-one-instances-type). */
+                 * agreed.  One that mentions the class variable at all is a
+                 * star witness above, so the instance fallback below is for a
+                 * declaration that elaborated to nothing usable. */
                 Type result_type = TYPE_INT;
                 if (tc_is_hkt || star_witness) result_type = type_from_kind(TY_ANY);
                 bool class_result = false;

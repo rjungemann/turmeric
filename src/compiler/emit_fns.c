@@ -3,6 +3,19 @@
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn CPS lowering */
 #include "globals.h"   /* g_cps_path, g_panic_trace */
 
+/* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...md, as ONE
+ * answer: does this non-spec instance-method impl return the int64 carrier
+ * because its declared result rides the carrier ABI?  The impl signature
+ * decides it here, and the dict slot / by-value wrapper in emit_stmt.c must
+ * spell the same type -- saffron-applied-class-var-result-takes-one-instances-
+ * type made a ground `(Vec float)` result reach them, and they had re-derived
+ * the question as type_c_name, which said `tur_adt_Vec__float *`. */
+bool emit_inst_result_rides_carrier(EmitCtx *ctx, const FnDef *fd, const Type *rft) {
+    return rft && fd && fd->binding && fd->binding->name && fd->binding->name->name &&
+           strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+           type_uses_carrier_abi(emit_resolve_type(ctx, *rft));
+}
+
 /* Append a pass-by-ptr binding to ctx->pbp_param_ptrs, growing the
  * (realloc-backed) array on demand -- no fixed arity ceiling.  Not only
  * params any more: a match binder that BORROWS a boxed recursive field
@@ -5434,11 +5447,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             } else {
                 buf_puts(file, emit_type_c_name(ctx, rt));
             }
-        } else if (!is_main && e->type.as.fn.result_full_type &&
-                   fd->binding && fd->binding->name && fd->binding->name->name &&
-                   strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
-                   type_uses_carrier_abi(emit_resolve_type(ctx,
-                       *e->type.as.fn.result_full_type))) {
+        } else if (!is_main &&
+                   emit_inst_result_rides_carrier(ctx, fd, e->type.as.fn.result_full_type)) {
             /* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...md:
              * non-spec instance method whose declared return is a carrier-ABI
              * parameterized struct (e.g. (Result T E)).  The dispatch dict's
