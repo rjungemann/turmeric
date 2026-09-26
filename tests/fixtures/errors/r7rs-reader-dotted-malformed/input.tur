@@ -3,6 +3,5 @@
 ;; exactly one datum may follow the `.` -- rather than reading the `.` as an
 ;; ordinary symbol and leaving elaboration to notice.  The other two shapes
 ;; (`(. b)`, `(a .)`) get their own messages; this pins the common typo.
-(defn main [] : int
-  (println (quote (a . b c)))
-  0)
+(import (scheme base) (scheme write))
+(write (quote (a . b c)))

@@ -50,7 +50,8 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
   `define-library` instead of a program.
 - **The REPL**: `tur repl --lang r7rs`, or type `#lang r7rs` at any prompt.
   Results echo in Scheme's own spelling (`=> (a "b" #\c)`), and nothing is
-  echoed for the unspecified value.
+  echoed for the unspecified value. The prompt takes Scheme only; type
+  `#lang turmeric` to switch to Turmeric (the session resets).
 - **Formatting**: `tur fmt` re-indents a Scheme file and never rewrites a
   token. Each line's leading whitespace is recomputed; `#t`, `#\x`,
   `|two words|` and `#e1.5` stay exactly as written.
@@ -446,10 +447,17 @@ What it does not cover:
   re-entering a continuation from a later form finishes the form that
   captured it and then carries on after the form that invoked it. Inside a
   procedure, re-entry is what R7RS describes. See Control above.
-- **Some Turmeric syntax and names are visible in a Scheme file, and are
-  being removed.** `[...]`, `#map{...}` and the other Turmeric `#` literals,
-  inline C, `^tailcall`, `@`, the words `true`/`false`/`nil`, Turmeric forms
-  such as `defn`, and the auto-loaded Turmeric stdlib (`println`, `vec-new`,
+- **Brackets are parentheses.** `(let ([x 1]) x)` reads as it does in
+  Racket and Chez. R7RS reserves `[` and `]`; this is the common reading.
+- **Turmeric syntax is not Scheme.** A Turmeric form such as `defn`, `fn`,
+  `match`, `::` or `->` in a Scheme file is an error that says where Turmeric code
+  goes: a Turmeric module, imported with `(import (turmeric <module>))`. At
+  the REPL, switch the prompt with `#lang turmeric` (which resets the
+  session). A program may still define a procedure of that name for itself.
+- **Some Turmeric syntax and names are still visible in a Scheme file, and
+  are being removed.** `#map{...}` and the other Turmeric `#` literals,
+  inline C, `^tailcall`, `@`, the words `true`/`false`/`nil`, and the
+  auto-loaded Turmeric stdlib (`println`, `vec-new`,
   ...) all work today without an import. Do not rely on them. Reach Turmeric
   through `(import (turmeric <module>))`, which is the part that stays.
   [docs/reported/r7rs-turmeric-syntax-leaks.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/r7rs-turmeric-syntax-leaks.md)

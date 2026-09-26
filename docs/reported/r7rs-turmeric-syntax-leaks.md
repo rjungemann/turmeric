@@ -39,6 +39,29 @@ prompt. This report reverses R1's choice for *user* Scheme source.
   A map key passed through the seam is written as the symbol `'k`, which is
   the runtime value of the keyword `:k`. `#map{...}` keys still read as
   keywords, because they are inside a Turmeric literal (item 2 below).
+- **Item 1, brackets**, resolved 2026-09-26 by the owner's decision: in user
+  Scheme source `[...]` reads as parentheses, as Racket, Chez and Guile read
+  it (`scheme_user_source`, src/compiler/reader.c; the same test as the
+  keyword item). So `(let ([x 1]) x)` runs. Inside a `#map{...}` literal and
+  in the Turmeric-shaped sources, `[...]` is still Turmeric's vector.
+  Fixture: `r7rs-brackets-are-parens`.
+- **Items 7 and 10, Turmeric forms**, resolved 2026-09-26 by the owner's
+  decision to require switching languages. In user Scheme source, a Turmeric
+  special form's name (`defn`, `fn`, `match`, `::`, `->`, ...) that the program does
+  not bind heads a refused form. In a file, the error is "'defn' is Turmeric
+  syntax, not Scheme; write Turmeric code in a Turmeric module and import it
+  with (turmeric <module>)". At an r7rs REPL prompt, it is "... to write
+  Turmeric at this prompt, switch it with #lang turmeric", which the REPL
+  supports and which resets the session. A program's own definition or local
+  binding of such a name (`(define (match x) ...)`) is an ordinary Scheme
+  binding and is not refused. This lives in src/compiler/scheme_lower.c, at
+  the call fallthrough of `lower`. Fixture: `errors/r7rs-turmeric-form-refused`.
+
+  Two fixtures moved with these items. `r7rs-reader-lexemes` is plain Scheme
+  now, and prints Scheme's spellings (`#t`, `10.0`). `r7rs-elaborates-as-saffron`
+  now pins the other side of R1's thesis: the Saffron program still runs,
+  and the same text under `#lang r7rs` is refused at its first `defn`, on both
+  back ends. `errors/r7rs-reader-dotted-malformed`'s body is Scheme too.
 
 ## Repro
 
@@ -60,7 +83,7 @@ build. Each probe is one program after `#lang r7rs` and
 | 6 | `@` deref | `(define b (box 1)) (write @b)` | `#<ptr>` | `@` cannot start an identifier; `box` is unbound |
 | 7 | Turmeric special forms | `(defn f [x : int] : int (* x 2)) (write (f 21))` | `42` | unbound `defn` |
 | 7 | | `(write ((fn [x] (* x 2)) 21))`, `(write (match 3 3 'three _ 'other))`, `(write (:: 5 int))` | `42`, `three`, `5` | unbound |
-| 7 | Turmeric macros | `(write (-> 5 (+ 1)))` | a Turmeric macro's diagnostic ("-> expected symbol or list") | unbound `->` |
+| 7 | Turmeric `->` (a special form, not a macro) | `(write (-> 5 (+ 1)))` | a Turmeric diagnostic ("-> expected symbol or list") | unbound `->` |
 | 8 | Auto-loaded stdlib names, no import | `(println "hi")`, `(write (vec-len (vec-new)))`, `(write (unwrap-or (some 5) 0))` | `hi`, `0`, `5` | unbound: a program sees only what it imports or defines (5.1, 5.2) |
 | 9 | Back ends disagree on an unknown name | `(write (str-concat "a" "b"))` (not auto-loaded) | compiled: error, unknown function; `--interpret`: warning TUR-W0040 "will runtime-dispatch", then `"ab"` | an error on both |
 | 10 | Turmeric forms at the REPL | a Turmeric form typed at a `tur repl --lang r7rs` prompt is evaluated as Turmeric (R9, deliberate) | works | -- |
@@ -96,16 +119,12 @@ flag on the Turmeric one.
 Found by grep over every `#lang r7rs` / `.scm` fixture; each needs a look
 when its item is fixed:
 
-- `r7rs-reader-lexemes`: pins R1's list, and is written as a Turmeric
-  `(defn main [] : int ...)` using `println`, `[...]` and `#map{}`.
-- `r7rs-elaborates-as-saffron`: R1's exit criterion, "a `#lang r7rs` file
-  elaborates as the equivalent `#lang saffron` file does". Its program is
-  Turmeric-shaped by construction, so item 7 retires it or rewrites it as a
-  Scheme program with a Saffron twin.
-- `r7rs-reader-forms` (a parse-check pair of Scheme against Turmeric
-  spelling).
-- `errors/lang-r7rs-no-reader-axis`, `errors/r7rs-reader-dotted-malformed`:
-  their bodies are `(defn main [] : int ...)`.
+- ~~`r7rs-reader-lexemes`, `r7rs-elaborates-as-saffron`,
+  `errors/r7rs-reader-dotted-malformed`~~: moved with items 1 and 7 (above).
+  `r7rs-reader-forms` (a parse-check pair of Scheme against Turmeric
+  spelling) needed no change. `errors/lang-r7rs-no-reader-axis` still has a
+  `(defn main ...)` body, but its `#lang r7rs/sweet` line is refused first, so
+  the body is never read.
 - `r7rs-gc-seam`, `r7rs-keyword-seed`: `#map{...}`. The keyword-seed
   fixture's point is a keyword record and the symbol seeder in one unit, so it
   needs its keyword from an imported Turmeric module instead.
@@ -142,18 +161,8 @@ In rough order of value and independence:
 4. **Items 4, 5**: `^x`, `true`, `false` and `nil` become ordinary identifiers
    in user source. The R10 `PROV_SCHEME_WORD` stamp already knows which words
    the Scheme reader made.
-5. **Item 7**: in user Scheme source, a Turmeric special-form name is an
-   ordinary identifier (unbound unless the program defines it). The
-   `turmeric_form` pass-through stays for Turmeric-shaped sources only.
-6. **Item 1 needs a decision**: refuse `[...]` ("R7RS reserves `[` `]`"), or
-   read it as parentheses as Racket, Chez and Guile do. Reading it as
-   parentheses matches the Racket-flavoured tutorials a newcomer will paste,
-   and takes nothing from Turmeric, so that is the recommendation. Either
-   way, not as a Turmeric vector.
-7. **Item 10 needs a decision**: keep Turmeric forms at an r7rs REPL prompt as
-   a convenience, or require switching with `#lang turmeric` at the prompt
-   (which the REPL already supports for `#lang r7rs`). The rule above points
-   to the switch.
+5. ~~**Item 7**~~, ~~**item 1**~~ (parentheses) and ~~**item 10**~~
+   (switch with `#lang turmeric`): done, see *Already resolved*.
 
 Each step changes what a Scheme program means, as r7rs-lang-plan's Section 9
 tasks did, and should land the same way: fixtures on both back ends, and the
@@ -161,8 +170,8 @@ chibi conformance count must not drop.
 
 ## Guide upkeep
 
-docs/guides/r7rs-guide.md does not list any of this under "Where it differs
-from R7RS", because it treats the leaks as extensions. Until each item is
-fixed, add a bullet there: "Turmeric syntax and stdlib names are visible in a
-Scheme file; do not rely on them, they are being removed." Link it here, and
-trim the bullet as items close.
+docs/guides/r7rs-guide.md carries a bullet under "Where it differs from
+R7RS" that begins "**Some Turmeric syntax and names are visible in a Scheme
+file, and are being removed.**" and links here. Trim each item out of it as
+it closes (items 1, 7 and 10 are out already), and delete the bullet when the
+last one does.

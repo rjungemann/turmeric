@@ -3186,6 +3186,27 @@ static Form *lower(SL *sl, Form *f) {
             if (!cond_expand_clause(sl, f, &n, &items)) return Nil(sl, f->span);
             return lower_seq(sl, items, n, f->span);
         }
+        /* r7rs-turmeric-syntax-leaks item 7: a Turmeric special form (`defn`,
+         * `fn`, `match`, `::`, ...) is not Scheme.  In a user Scheme source
+         * its name is an ordinary identifier; one the program never binds
+         * (a binder of that name is in the clash table, so rn moves it) heads
+         * a form written as Turmeric.  Refuse it and say where Turmeric code
+         * goes: a Turmeric module imported with (turmeric ...), or, at the
+         * REPL, the prompt switched with `#lang turmeric`.  The
+         * Turmeric-shaped sources (the prelude, stdlib/r7rs/) are exempt. */
+        if (!prelude_span(f->span) && rn(sl, h) == h && !global_alias_orig(sl, head->as.sym) &&
+            tur_name_is_reserved_special_form(h->name) && !is_scheme_syntax_name(h->name)) {
+            const SourceFile *sf = diag_source_file(f->span.file_id);
+            if (sf && sf->path && sf->path[0] == '<')
+                err(head, "'%s' is Turmeric syntax, not Scheme; to write Turmeric at this prompt, "
+                          "switch it with #lang turmeric", h->name);
+            else
+                err(head, "'%s' is Turmeric syntax, not Scheme; write Turmeric code in a Turmeric "
+                          "module and import it with (turmeric <module>)", h->name);
+            /* An `any`, so a refused form in call-head position does not
+             * cascade into "nil is not callable". */
+            return Ln(sl, f->span, 3, Sym(sl, f->span, I(sl, "::")), Nil(sl, f->span), Sym(sl, f->span, sl->t_any));
+        }
     }
     return lower_children(sl, f);
 }

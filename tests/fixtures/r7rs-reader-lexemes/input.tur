@@ -1,57 +1,53 @@
 #lang r7rs
 ;; r7rs-lang-plan R1: the Scheme reader (READER_R7RS), exercised through the
-;; lexemes that survive to runtime as ordinary Turmeric values.  No Scheme
-;; SEMANTICS are asserted here -- `#t` is a bool, `#\a` an int code point,
-;; `#(...)` a Vec -- which is exactly R1's contract: a `#lang r7rs` file reads,
-;; then elaborates as the same forms would under `#lang saffron`.  The forms
-;; that do not survive to runtime yet (dotted pairs, `,`/`,@`, `|sym|`,
-;; `#u8(...)`, `#!fold-case`) are pinned by r7rs-reader-forms via parse-check.
+;; lexemes that survive to runtime.  The forms that do not survive to runtime
+;; on their own (dotted pairs, `,`/`,@`, `|sym|`, `#u8(...)`, `#!fold-case`)
+;; are pinned by r7rs-reader-forms via parse-check.
+;;
+;; This was a Turmeric `(defn main [] : int (println ...))` until the
+;; Turmeric forms and brackets stopped reading in a Scheme source
+;; (docs/reported/r7rs-turmeric-syntax-leaks.md, items 1 and 7); it is plain
+;; Scheme now, so the values print in Scheme's spelling (`#t`, `10.0`).
 ;;
 ;; The directive is the enable (D11), so this file prints TUR-W0060 to stderr;
 ;; the harness compares stdout only.
-(defn main [] : int
-  ;; R7RS 6.3 booleans, both spellings.
-  (println #t)
-  (println #f)
-  (println #true)
-  (println #false)
-  ;; R7RS 6.6 characters: a plain one, an R7RS-only name, the `#\x<hex>`
-  ;; scalar-value form, a multi-byte UTF-8 character, and the shared names.
-  ;; Since R3 a character is its own type (R7rsChar), so the code is read
-  ;; back through `char->integer`.
-  (println (char->integer #\a))
-  (println (char->integer #\alarm))
-  (println (char->integer #\x3bb))
-  (println (char->integer #\space))
-  ;; R7RS 7.1.1 radix and exactness prefixes, alone and stacked.
-  (println #x1F)
-  (println #b101)
-  (println #o17)
-  (println #d10)
-  (println #x-1F)
-  (println #e10)
-  (println #i10)
-  (println #e#x10)
-  (println #e1e3)
-  ;; Explicit `+` sign and a bare fraction, both Scheme-only spellings.
-  (println +5)
-  (println .5)
-  (println -.5)
-  ;; R7RS 6.7 string escapes: `\x<hex>;`, `\t`, and the line continuation.
-  (println "a\x41;b")
-  (println "tab\there")
-  (println "one \
-            two")
-  ;; `#(...)` is the same F_VEC `[...]` reads as.
-  (println (vec-len #(1 2 3)))
-  ;; A float with a fractional part, so a numeric-tower surprise would show.
-  (let [x 7.1] (println x))
-  ;; Everything Turmeric that Scheme does not contradict still reads:
-  ;; binding vectors, `#map{...}` (whose keys are Turmeric keywords),
-  ;; curly-infix.  A bare `:k` is not a keyword here: it is an R7RS
-  ;; identifier (docs/archive/r7rs-leading-colon-identifiers.md), so the
-  ;; lookup uses the symbol `'k`, the keyword's runtime value.  What of this
-  ;; is kept is under review: docs/reported/r7rs-turmeric-syntax-leaks.md.
-  (let [m #map{:k 42}] (println (map-get m 'k)))
-  (println {2.0 * 3.25})
-  0)
+(import (scheme base) (scheme write) (scheme char))
+(define (show x) (display x) (newline))
+;; R7RS 6.3 booleans, both spellings.
+(show #t)
+(show #f)
+(show #true)
+(show #false)
+;; R7RS 6.6 characters: a plain one, an R7RS-only name, the `#\x<hex>`
+;; scalar-value form, a multi-byte UTF-8 character, and the shared names.
+(show (char->integer #\a))
+(show (char->integer #\alarm))
+(show (char->integer #\x3bb))
+(show (char->integer #\space))
+;; R7RS 7.1.1 radix and exactness prefixes, alone and stacked.
+(show #x1F)
+(show #b101)
+(show #o17)
+(show #d10)
+(show #x-1F)
+(show #e10)
+(show #i10)
+(show #e#x10)
+(show #e1e3)
+;; Explicit `+` sign and a bare fraction, both Scheme-only spellings.
+(show +5)
+(show .5)
+(show -.5)
+;; R7RS 6.7 string escapes: `\x<hex>;`, `\t`, and the line continuation.
+(show "a\x41;b")
+(show "tab\there")
+(show "one \
+       two")
+;; `#(...)` is a vector.
+(show (vector-length #(1 2 3)))
+;; A float with a fractional part, so a numeric-tower surprise would show.
+(let ((x 7.1)) (show x))
+;; Brackets are parentheses (as in Racket and Chez), and curly-infix is
+;; SRFI 105.
+(let ([k 42]) (show k))
+(show {2.0 * 3.25})
