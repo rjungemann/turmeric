@@ -6,11 +6,11 @@ every `tur jit` program on Windows whose C (emitted or inline) mixes a signed
 Windows JIT's whole-preamble fallback
 ([jit-windows-support-spike](../archive/jit-windows-support-spike.md)).
 
-**Status: open.** The fix is written and tested locally, but it lives in the
-MIR fork (`rjungemann/mir`), and pushing a branch and opening a PR there was
-not permitted from the session that found it. The full patch is below. One
-in-tree user of the pattern (the r7rs bignum subtraction) was rewritten so it
-no longer depends on the conversion.
+**Status: open, fix in review** as
+[rjungemann/mir#4](https://github.com/rjungemann/mir/pull/4) (branch
+`fix/llp64-uint-llong-conversion`). Turmeric still pins the unfixed MIR until
+that merges and the pin moves. One in-tree user of the pattern, the r7rs
+bignum subtraction, was rewritten so it no longer depends on the conversion.
 
 ## Repro
 
@@ -65,7 +65,7 @@ The other `int64_t ... R7BN_BASE` sites in that file are all-`int64_t`, or
 reach a `(uint32_t)` cast whose low 32 bits are the same either way. Nothing
 else in the tree was audited for the pattern.
 
-## Fix (ready, not pushed)
+## Fix ([rjungemann/mir#4](https://github.com/rjungemann/mir/pull/4))
 
 Branch `fix/llp64-uint-llong-conversion` off the fork's master (`b7e72a95`, the
 current pin), one commit. It follows C11 6.3.1.8 directly:
@@ -86,8 +86,8 @@ Verified on Windows 11 / MSYS2 UCRT64 with the patched c2mir in
 
 To land it:
 
-1. Apply the patch below to a checkout of `rjungemann/mir` at `b7e72a95`
-   (`git am`), push it, and merge it.
+1. Merge [rjungemann/mir#4](https://github.com/rjungemann/mir/pull/4). The
+   patch is reproduced below for reading without leaving this repo.
 2. Bump `TUR_MIR_GIT_TAG` in `cmake/mir.cmake` to the merge commit, and add a
    line to the pin notes above it.
 3. Re-run `TUR_TEST_FILTER='^r7rs' bash tests/run-jit.sh` on Windows.
