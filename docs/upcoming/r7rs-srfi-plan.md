@@ -1,9 +1,12 @@
 # SRFI libraries for `#lang r7rs`, after Racket's
 
-Status: **S1 landed 2026-09-26** (see its "What shipped" note); S0 and S2-S8
-to come. `(import (srfi N))` resolves for every SRFI in the table: the ten
-built-in rows and the two alias rows import, and the rest are refused with
-their reason. Every "today" claim in Sections 1-2 was measured on
+Status: **S1 and S0 landed 2026-09-26** (see their "What shipped" and "What
+S0 found" notes); S2-S8 to come. `(import (srfi N))` resolves for every SRFI
+in the table: the ten built-in rows and the two alias rows import, and the
+rest are refused with their reason. S0's inventory is
+[Appendix C](#appendix-c----s0-inventory); its measurement says a big SRFI
+needs its unreferenced definitions dropped before emission, which S3 builds
+first. Every "today" claim in Sections 1-2 was measured on
 2026-09-26 against `./build/tur` at fdd51fc9 (Debug build), on both back ends
 (`tur run` and `tur --interpret`), before S1. The transcript is in
 [Appendix A](#appendix-a----probe-transcript). Every claim about Racket was
@@ -328,7 +331,8 @@ decides.
   under `tests/r7rs/srfi/<N>/` and runs through the conformance runner
   (`tests/r7rs/run-conformance.py`, which already speaks chibi's test
   vocabulary). It reports a count per SRFI with a floor, as
-  `tur_r7rs_conformance` does. S0 inventories which suites exist.
+  `tur_r7rs_conformance` does. S0 found which suites exist
+  ([Appendix C](#appendix-c----s0-inventory)).
 - Negative fixtures under `tests/fixtures/errors/` for each refusal message
   and each conflict.
 
@@ -466,6 +470,101 @@ one file and one fixture on the machinery S1 builds, taken when asked for:
   them) or split the big SRFIs into several files.
 - Decide the S1 questions in Section 7.
 
+> **What S0 found (2026-09-26).**
+>
+> **The inventory** is [Appendix C](#appendix-c----s0-inventory), one row per
+> SRFI. It is not in `SRFI_LIBS[]`'s source comments as this stage first
+> said, because 51 rows of provenance would drown the table. The table's
+> comment points at the appendix instead. Three things in it change later
+> stages:
+>
+> - **S3 ports chibi's SRFI 1, not the reference.** chibi's is an R7RS
+>   library (BSD-3, the licence already vendored as
+>   `tests/r7rs/CHIBI-COPYING`), 492 lines in ten files, with 156
+>   `test` forms in its `test.sld`. Its `(else ...)` branch, the one for a
+>   Scheme that is not chibi, was spliced unmodified into a program with
+>   `include`. It gave the SRFI's answers for a 20-call sample on both back
+>   ends (fold, iota, delete-duplicates, lset-union, partition and span
+>   through `call-with-values`, unfold, alist-delete, ...). The reference
+>   (Shivers) is 1,596 lines and leans on `:optional`, `let-optionals` and
+>   `check-arg`.
+> - **SRFI 13 and 14's reference implementations carry the old MIT Scheme
+>   licence.** Its clause 2 asks users to "make their best efforts" to return
+>   improvements to MIT, and clause 3 asks for acknowledgement. That is
+>   permissive but unusual. D6 already writes 13 ourselves over code-point
+>   vectors. For 14, port chibi's (BSD, with a `test.sld`); the reference
+>   repository's `srfi-14-tests.scm` is still usable as a test suite.
+> - **Test suites exist for 1, 2, 14, 26, 27, 35, 41 and 69 in chibi, and
+>   for 4, 14, 19, 25, 26, 27, 41, 48, 64 and 67 in the SRFI repositories.**
+>   chibi also has suites for 16 and 38, which are built in here, so they are
+>   a free check of S1's claim.
+>
+> **The measurement.** A Debug (ASan) `tur`, a 4-core container with nothing
+> else running, three runs each; the medians. `cc` is the C compile inside
+> `tur build`, timed through a `CC` wrapper:
+>
+> | Program | `tur emit-c` | `cc` | `tur build` | C lines | C functions |
+> |---|---|---|---|---|---|
+> | `p0`: `(write 1)` | 0.91 s | 2.5 s | 3.46 s | 28,824 | 2,883 |
+> | `p1`: `p0` with chibi's SRFI 1 body spliced in, none of it called | 1.33 s | 3.8 s | 5.03 s | 34,185 | 3,342 |
+> | `p2`: `p1` calling `fold` | 1.37 s | -- | 5.06 s | 34,188 | 3,340 |
+> | `p3`: `p0` with its own 1-line `fold` | -- | 2.7 s | 3.66 s | -- | -- |
+>
+> Splicing SRFI 1 costs every importing program about 1.6 s (+45%), whether
+> it calls one procedure or none. `tur --interpret` does not notice
+> (0.42 s -> 0.45 s). That is material.
+>
+> **The emitter does not prune, and neither can gcc.** Every spliced
+> definition reaches the C, used or not (`lset-xor` is emitted in `p1`). gcc
+> already discards the prelude's unused functions before optimizing (see
+> [docs/reported/r7rs-programs-compile-slowly.md](../reported/r7rs-programs-compile-slowly.md)),
+> but a spliced Scheme library defeats it. `__tur_fatbox_init` runs at
+> startup and fills a static closure for every procedure the program uses
+> as a value *anywhere*, including in dead code: `every` calls
+> `(apply any ...)`, so `any` has a fatbox. Every variable define
+> (`(define reverse! reverse)`) is initialized at startup too. Both hold
+> function pointers, so gcc keeps those functions and everything they call.
+> Rewriting the body's 19 one-line aliases (`(define reverse! reverse)`,
+> `(define first car)`, ...) as procedures still left 190 of its 318 new
+> functions alive (`-fdump-ipa-cgraph`), nearly all of them lifted lambdas.
+>
+> **Decision: prune, in a whole-program pass before emission; do not
+> split.** Drop every definition from a `stdlib/srfi/` file that nothing
+> outside the SRFI files reaches, transitively through the SRFI's own
+> definitions. The whole program has to be visible for this, so it cannot
+> happen in a lowering pass: an SRFI is spliced once per compile, in the
+> first pass that imports it, and a library lowered later may use a
+> procedure the program does not (S1's `srfi-in-library-only`). It can
+> happen after elaboration, where every module is loaded and the program is
+> one translation unit. `p3` is the estimate of what it wins: a program
+> using `fold` should build within about 0.2 s of `p0`. Splitting loses:
+> a plain `(import (srfi 1))` keeps every export, so splitting helps only an
+> `only` import; and SRFI 1's parts call each other (the `lset-*` procedures
+> call `filter` and `remove`; `delete` calls `remove`), so even that would
+> pull in most files. The pass lands with S3, ahead of the SRFI 1 file, and
+> S3 re-measures on the real file.
+>
+> **A defect the measurement tripped over, fixed.** The spliced body defines
+> `any`, and the compiled program then failed inside the prelude: the
+> stdlib's `: any` annotations read the program's procedure. The same held
+> for every Turmeric type name (`int`, `ptr`, ...), for stdlib names
+> (`None`, `Vec`; interpreted as well), and, differently, for a program's
+> own `square` or `list` ("'r7rs-square' is already defined"). A program's
+> definition is now its own, whatever the name: a type name is spelled
+> `<name>--user` wherever user code names it, a stdlib name is respelled,
+> and a standard name is shadowed for the program, as chibi allows. At the
+> REPL, the respelling carries across turns. Pinned by
+> `tests/fixtures/r7rs-program-shadows-names`,
+> `r7rs-repl-shadowed-name-persists` and `run-r7rs-import.sh`'s
+> `type-named-exports`. The library half, a `define-library` that defines
+> `square` or `None`, is
+> [docs/reported/r7rs-library-defines-standard-or-stdlib-name.md](../reported/r7rs-library-defines-standard-or-stdlib-name.md).
+> An SRFI file is untouched by it, since its names are spelled
+> `srfi<N>--<name>` (D3).
+>
+> **Section 7's S1 questions** (1-3) are decided; 4 and 5 stay with S7 and
+> S4, where they belong.
+
 ### S1 -- the mechanism, the built-ins, the table (medium)
 
 - Integer library-name parts (D1); `SRFI_LIBS[]` (D4); inline-mode
@@ -554,8 +653,7 @@ fixture itself runs on both back ends.
 >   stdlib/srfi/45.scm says so.
 >
 > S0's inventory and build-time measurement did not come first, because S1
-> needed neither. Both are still owed before S3 (SRFI 1), where the
-> build-time question is real.
+> needed neither. Both landed after it, the same day (S0's "What S0 found").
 
 ### S2 -- the small syntax SRFIs (small)
 
@@ -569,13 +667,22 @@ fixture itself runs on both back ends.
 
 ### S3 -- SRFI 1 (medium)
 
-- The reference implementation, ported under D3's spellings, with the
-  base-compatible names bound to the prelude's procedures (D5). Confirm each
-  one's edge cases match SRFI 1: `map` over unequal lengths, `member`/`assoc`
-  with `=`, `list-copy` of an improper list.
+- First, the pruning pass S0 decided on: after elaboration and before
+  emission, drop every `stdlib/srfi/` definition that nothing outside the
+  SRFI files reaches, transitively. Its fixture compares `tur emit-c` for an
+  SRFI 1 import that calls `fold` against one that calls nothing, and against
+  a program that defines `fold` itself: the first two differ by `fold`'s
+  definitions only.
+- chibi's implementation (S0: an R7RS library, BSD-3, 492 lines, which ran
+  unmodified), ported under D3's spellings, with the base-compatible names
+  bound to the prelude's procedures (D5). Confirm each one's edge cases match
+  SRFI 1: `map` over unequal lengths, `member`/`assoc` with `=`, `list-copy`
+  of an improper list.
 - `length+` and the circular-list procedures against the prelude's `list?`
   cycle check.
-- The build-time delta from S0, re-measured on the real file.
+- chibi's `lib/srfi/1/test.sld` (156 tests) under `tests/r7rs/srfi/1/` (D7).
+- The build-time delta from S0 (+1.6 s unpruned), re-measured on the real
+  file with the pass on.
 
 ### S4 -- SRFI 69 hash tables (medium)
 
@@ -640,16 +747,19 @@ row in the table.
 
 ## 7. Open questions
 
-1. **SRFI 62: an error (Racket) or a no-op?** This plan says an error, per the
-   ask's "if Racket does same". The message makes it harmless. It is one
-   table cell either way.
+1. **SRFI 62: an error (Racket) or a no-op?** **Decided 2026-09-26: an
+   error**, as in Racket, per the ask's "if Racket does same"; the message
+   says `#;` needs no import. Shipped in S1
+   (`tests/fixtures/errors/r7rs-srfi-62-no-library`).
 2. **`(srfi :1)` and `(srfi 1 lists)`.** SRFI 97's R6RS-era spellings, which
-   some portable code uses. Racket's R7RS rejects them; so does this plan
-   until someone needs them.
+   some portable code uses. **Decided 2026-09-26: not accepted**, as in
+   Racket's R7RS. Both are refused on both back ends with "an SRFI is named
+   by its number, e.g. (srfi 1)", which is the fix. Revisit when a port
+   needs them.
 3. **Turmeric importing an SRFI.** `(import srfi/1 ...)` from a `.tur` file
-   would need the SRFI libraries as modules, which D3 avoids. Out of scope. A
-   Turmeric program has the typed stdlib, and a Scheme library can wrap an
-   SRFI for it.
+   would need the SRFI libraries as modules, which D3 avoids. **Decided
+   2026-09-26: out of scope.** A Turmeric program has the typed stdlib, and a
+   Scheme library can wrap an SRFI for it.
 4. **SRFI 35 and R7RS error objects.** Should `(condition-has-type? e &error)`
    hold for an `error` object, and `error-object?` for an SRFI 35 `&error`
    condition? Chibi and Gauche differ. Decide in S7.
@@ -661,8 +771,10 @@ row in the table.
 
 ## 8. Risks
 
-- **Build time.** Covered in S0. It is the one risk that could change D3's
-  shape (per-feature files, or pruning).
+- **Build time.** Measured in S0: an unpruned SRFI 1 splice costs every
+  importer about 1.6 s on a 3.5 s build. D3's shape stays; the pruning pass S3
+  builds first is the mitigation. A big SRFI landing before that pass does is
+  the risk.
 - **Macros across lowering passes.** D3 registers a spliced SRFI's macros in
   every pass that imports it. If that fails, a user library that uses
   `receive` breaks while the program does not. S1's two-pass fixture pins it
@@ -825,6 +937,74 @@ Read 2026-09-26 from `raw.githubusercontent.com`:
 - `lexi-lambda/racket-r7rs`, `r7rs-lib/private/import.rkt`: a
   `library-name-element` is an `id` or an `integer`, and a non-`scheme`
   library name becomes the module path of its elements joined with `/`.
+
+---
+
+## Appendix C -- S0 inventory
+
+Gathered 2026-09-26 from each SRFI's repository (`github.com/scheme-requests-for-implementation/srfi-<N>`)
+and from chibi-scheme's `lib/srfi/` (BSD-3, the licence already vendored as
+`tests/r7rs/CHIBI-COPYING`). Every SRFI document carries the MIT licence,
+whose text names "this software and associated documentation files", except
+SRFI 5, which carries the pre-2019 SRFI notice (copying and "derivative works
+that ... assist in its implementation" are allowed without restriction). So a
+reference file with no header of its own is covered by its document's MIT
+notice. "Document" below means the implementation is in the SRFI's HTML.
+chibi's test counts are the `(test ...)` forms in its `test.sld`.
+
+Rows that need no implementation: 0, 62 and 105 (no library); 6, 9, 11, 16,
+23, 30, 34, 39, 87 and 98 (built in); 38 and 45 (alias). chibi has test suites
+for 16 (a `test.sld`) and 38, so S1's "built in" can be checked against them.
+40 is not planned.
+
+| SRFI | Stage | Start from | Licence | Test suite |
+|---|---|---|---|---|
+| 1 | S3 | chibi `1.sld` + `1/*.scm` (R7RS, 492 lines; ran unmodified in S0). Reference: `srfi-1-reference.scm` (Shivers, 1,596 lines; `:optional`, `let-optionals`, `check-arg`) | chibi BSD-3; reference: "do as you please ... do not remove this copyright notice", SPDX MIT | chibi (156) |
+| 2 | S2 | document; chibi `2.sld` | MIT; chibi BSD-3 | chibi (31) |
+| 4 | S7 | repo `contrib/cowan/` (R6RS and R7RS libraries over bytevectors) | no header: document MIT | repo `contrib/cowan/all-tests`, `r6rs/shared-tests.scm` |
+| 5 | S8 | document | pre-2019 SRFI notice (see above) | none |
+| 7 | S8 | document | MIT | none |
+| 8 | S2 | document; chibi `8.sld` | MIT; chibi BSD-3 | none |
+| 13 | S5 | write our own (D6). Reference: `srfi-13.scm` (Shivers; MIT Scheme and scsh code) | reference: MIT Scheme licence (clause 2 asks users to return improvements to MIT, clause 3 asks for acknowledgement) plus scsh's BSD | none |
+| 14 | S5 | chibi `14.sld` | chibi BSD-3; reference `srfi-14.scm`: MIT Scheme licence, as 13 | chibi (6); repo `srfi-14-tests.scm` |
+| 17 | S2 | document (the repo's `srfi-17-twobit.scm` is Larceny-specific) | MIT | none |
+| 19 | S8 | `srfi-19.scm` (I/NET; a Gauche variant alongside) | MIT | repo `srfi-19-test-suite.scm` |
+| 25 | S8 | `array.scm` with the `op-*`/`ix-*` files (Piitulainen) | no header: document MIT | repo `test.scm` |
+| 26 | S2 | `cut.scm` (Egner); chibi `26.sld` | public domain; chibi BSD-3 | repo `check.scm`; chibi (2) |
+| 27 | S7 | `srfi-27-reference/mrg32k3a.scm` + `mrg32k3a-a.scm` (Egner; all Scheme). chibi's is C (`rand.c`) | no header: document MIT | repo `conftest.scm`; chibi (2) |
+| 28 | S6 | `srfi/28.sld` (Miller; already an R7RS library) | SPDX MIT | none |
+| 29 | S8 | document | MIT | none |
+| 31 | S2 | document (a `syntax-rules` definition) | MIT | none |
+| 35 | S7 | document; chibi `35.sld` | MIT; chibi BSD-3 | chibi (38) |
+| 41 | S7 | `streams.ss` + `primitive.ss` + `derived.ss` (Bewig; R6RS libraries) | MIT | repo `r5rs-test.ss`, `r6rs-test.ss`; chibi (111) |
+| 42 | S7 | `ec.scm` (Egner) | no header: document MIT | repo `examples.scm` (171 self-checking `my-check` forms) |
+| 43 | S8 | `vector-lib.scm` (Campbell) | public domain | none |
+| 48 | S6 | document | MIT | repo `test/` (Guile and Racket variants) |
+| 54 | S8 | document | MIT | none |
+| 57 | S8 | document | MIT | none |
+| 59 | S8 | document | MIT | none |
+| 60 | S7 | document | MIT | none |
+| 61 | S2 | document | MIT | none |
+| 63 | S8 | document | MIT | none |
+| 64 | S6 | repo `contrib/taylan.kammer/` (R7RS); chibi `64.sld` | MIT; chibi BSD-3 | repo `srfi-64-test.scm` |
+| 66 | S7 | document | MIT | none |
+| 67 | S8 | `implementation/compare.scm` (Egner, Sogaard) | MIT | repo `implementation/examples.scm` |
+| 69 | S4 | write our own (D6, S4). Document has one; chibi's is C (`hash.c`) | MIT; chibi BSD-3 | chibi (34) |
+| 71 | S8 | `letvalues.scm` (Egner) | no header: document MIT | none |
+| 74 | S8 | `blob.scm` (Sperber) | MIT | none |
+| 78 | S6 | `check.scm` (Egner; the SRFI is itself a test library) | no header: document MIT | repo `examples.scm` |
+| 86 | S8 | document | MIT | none |
+
+Two notes for the stages:
+
+- A port keeps its copyright header and gets a line in `stdlib/srfi/COPYING`
+  (D6). A chibi port's line points at `tests/r7rs/CHIBI-COPYING`.
+- A chibi `test.sld` is a `(srfi N test)` library whose `run-tests` holds
+  the tests, written against `(chibi test)`. The conformance runner already
+  defines a `(chibi test)`-compatible `test` family, but it takes a flat file
+  of top-level forms (`tests/r7rs/chibi-r7rs-tests.scm`). So porting a suite
+  means lifting `run-tests`' body out into such a file under
+  `tests/r7rs/srfi/<N>/`, with no change to the tests themselves.
 
 ---
 

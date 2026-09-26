@@ -394,7 +394,10 @@ static const char *const ONDEMAND[][3] = {
  *   NOTPLANNED refused, with `why`.
  *   NOTYET     refused until the plan stage in `why` lands.
  *
- * An importable row's `file` is its define-library, stdlib/srfi/<N>.scm. */
+ * An importable row's `file` is its define-library, stdlib/srfi/<N>.scm.
+ * Where each NOTYET row's implementation will come from, under what
+ * licence, and which test suite exists for it: r7rs-srfi-plan Appendix C
+ * (the S0 inventory). */
 enum { SRFI_BUILTIN, SRFI_ALIAS, SRFI_LIBRARY, SRFI_NOLIB, SRFI_NOTPLANNED, SRFI_NOTYET };
 typedef struct { int num; int kind; const char *title; const char *file; const char *why; } SrfiRow;
 static const SrfiRow SRFI_LIBS[] = {
