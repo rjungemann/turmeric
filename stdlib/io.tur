@@ -308,22 +308,24 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
   DIR* d = opendir(path);
   if (!d) return 0;
 
-  /* Count entries first */
-  struct dirent* entry;
-  int count = 0;
-  while ((entry = readdir(d))) {
-      if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
-      count++;
-  }
-  rewinddir(d);
-
-  /* Allocate array of pointers */
-  char** entries = (char**)malloc((count + 1) * sizeof(char*));
+  /* One pass into a growable array.  This used to count the entries, rewind,
+   * and fill an array sized by that count -- with no bound on the fill, so an
+   * entry created between the two passes wrote past the allocation.  Listing
+   * a busy directory (the fixture suite churning /tmp) aborted with
+   * "corrupted size vs. prev_size". */
+  size_t cap = 16, i = 0;
+  char** entries = (char**)malloc(cap * sizeof(char*));
   if (!entries) { closedir(d); return 0; }
 
-  int i = 0;
+  struct dirent* entry;
   while ((entry = readdir(d))) {
       if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+      if (i + 1 >= cap) {  /* keep a slot for the NULL terminator */
+          char** grown = (char**)realloc(entries, cap * 2 * sizeof(char*));
+          if (!grown) break;
+          entries = grown;
+          cap *= 2;
+      }
       entries[i++] = strdup(entry->d_name);
   }
   entries[i] = NULL;
