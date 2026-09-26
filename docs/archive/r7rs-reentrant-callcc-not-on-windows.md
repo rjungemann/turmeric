@@ -27,7 +27,7 @@
 > reaches that today: a Scheme program never engages the S2 split
 > ([r7rs-programs-compile-slowly](../reported/r7rs-programs-compile-slowly.md)),
 > and the whole-preamble JIT path falls back to `cc` on Windows (`__va_start`,
-> [jit-windows-support-spike](../reported/jit-windows-support-spike.md)) -- so
+> [jit-windows-support-spike](jit-windows-support-spike.md)) -- so
 > `tur jit` on Windows runs a Scheme program through the fixed `cc` path. A
 > `tur_sjlj_set`/`_jump` arm (the symbols the split's DK trampoline uses) was
 > written and then taken out rather than shipped unrun.

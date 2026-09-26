@@ -9,7 +9,7 @@
 
 > **RESOLVED 2026-09-26 (archived).** Section 3, the last open item, is
 > fixed; sections 1 and 2 had been done for a while, and section 4 lives in
-> [jit-windows-support-spike](../reported/jit-windows-support-spike.md). The
+> [jit-windows-support-spike](jit-windows-support-spike.md). The
 > report's own lists had fallen behind the source, so each is re-checked here:
 >
 > - **Section 1 is done.** The three sites "What is still POSIX-only" names

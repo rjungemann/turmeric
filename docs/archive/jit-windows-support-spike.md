@@ -1,5 +1,14 @@
 # Research spike: does the MIR JIT work on Windows?
 
+> **RESOLVED and archived 2026-09-26.** Every question the spike asked is
+> answered, and the last defect it tracked, the whole-preamble fallback
+> (section 3 of "Remaining Windows JIT work"), is fixed. See "Resolution: the
+> whole-preamble fallback" at the end. It was not one defect but four, and one
+> of them also hit variadic definitions on the default split path. The one
+> item left, section 4 (the Windows JIT corpus is not in CI), is a
+> runner-time decision rather than a defect. It is tracked on its own as
+> [windows-jit-corpus-not-in-ci](../reported/windows-jit-corpus-not-in-ci.md).
+>
 > **SPIKE RUN 2026-08-05.** Verdict: **a Windows JIT is real but the road is
 > not the one this report assumed.** Building everything was nearly trivial;
 > the wall is c2mir versus the MinGW system headers, and the recommended route
@@ -118,7 +127,7 @@ platform where it has never been run.
   ([cmake/mir.cmake:77](../../cmake/mir.cmake)). Opt-in at build time with
   `-DTUR_JIT=ON`, gated at run time behind the `jit` experiment.
 - **Validated platforms:** "J0 COMPLETE (x86-64 Linux + arm64 macOS)"
-  ([docs/upcoming/jit-engine-plan.md:3](../upcoming/jit-engine-plan.md)). MIR's
+  ([docs/upcoming/jit-engine-plan.md:3](jit-engine-plan.md)). MIR's
   own claim is "x86-64 + AArch64" (plan, section 2 table) -- note that names
   *architectures*, not OSes, and the Windows x64 ABI is not the SysV one.
 - **The Windows build has never enabled it.** `build-win/CMakeCache.txt` carries
@@ -140,7 +149,7 @@ Ordered so that a "no" high in the list makes the rest moot.
    and say so, loudly, because that is a different order of work.
 2. **Can c2mir parse the UCRT / MinGW headers?** There is direct precedent for
    this failing: Apple's SDK headers forced a `cc` fallback on macOS
-   ([docs/archive/history/jit-macos-apple-sdk-headers-force-cc-fallback.md](../archive/history/jit-macos-apple-sdk-headers-force-cc-fallback.md)),
+   ([docs/archive/history/jit-macos-apple-sdk-headers-force-cc-fallback.md](history/jit-macos-apple-sdk-headers-force-cc-fallback.md)),
    and three of the four c2mir gaps found so far were *silent* wrong answers
    rather than refusals ([jit-guide.md:125](../guides/jit-guide.md)). One of
    those, `#pragma pack`, was fixed in our fork precisely because "the Apple and
@@ -182,7 +191,7 @@ Ordered so that a "no" high in the list makes the rest moot.
   reported a false all-clear on exactly this question
   ([jit-guide.md](../guides/jit-guide.md), findings 21.2/21.3).
 - Record in a findings doc under `docs/upcoming/`, in the style of
-  [jit-engine-j0-findings.md](../upcoming/jit-engine-j0-findings.md).
+  [jit-engine-j0-findings.md](jit-engine-j0-findings.md).
 
 ## Exit criteria
 
@@ -193,7 +202,7 @@ Working code is explicitly not required.
 
 ## Related
 
-- [jit-godot-embedding-spike.md](jit-godot-embedding-spike.md) -- the companion
+- [jit-godot-embedding-spike.md](../reported/jit-godot-embedding-spike.md) -- the companion
   spike; the two intersect at "a shipped Godot game on Windows."
 - [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md)
 - [docs/guides/jit-guide.md](../guides/jit-guide.md)
@@ -626,3 +635,132 @@ c2mir learns `__builtin_setjmp`.
 > the corpus there is now a question of runner time, not of a red baseline;
 > the `windows-split` job's sharding is the model if it is too slow for one
 > runner.
+
+---
+
+## Resolution: the whole-preamble fallback (2026-09-26)
+
+Measured on real Windows (Windows 11, MSYS2/UCRT64, gcc 16.1, Debug `-DTUR_JIT=ON`),
+not under Wine.
+
+Section 3 said the fallback "dies on `__va_start`". That was the first thing
+visible, and it was never the whole story. With S2 forced off
+(`TUR_JIT_NO_SPLIT=1`), `hello.tur` got through c2mir with five implicit
+declarations and then died at `MIR_link`:
+
+```
+<tur-jit>:460:5: warning -- __va_start implicitly declared as a function returning int
+<tur-jit>:1472:9: warning -- _setjmp implicitly declared as a function returning int
+<tur-jit>:2215:5: warning -- pthread_exit implicitly declared as a function returning int
+<tur-jit>:3291:9: warning -- pthread_cond_timedwait implicitly declared as a function returning int
+<tur-jit>:7744:3: warning -- sprintf implicitly declared as a function returning int
+tur: jit: import of undefined item pthread_cond_timedwait
+tur: warning: TUR-W0070: jit engine could not link this program ...; falling back to the cc path
+```
+
+Four independent defects sat behind those lines.
+
+### 1. `va_start` was the MSVC intrinsic, and then a segfault
+
+c2mir's builtin `<stdarg.h>` (`c2mir/x86_64/mirc_x86_64_stdarg.h`) spells
+`va_start(ap, param)` as `__va_start (ap, param)` on `__WIN32`. That is the
+MSVC intrinsic, and c2mir does not implement it: `__va_start` appears nowhere in
+`c2mir.c`. Every variadic *definition* therefore compiled to an implicit call
+that could never link.
+
+Pointing it at `__builtin_va_start (ap)`, the lowering c2mir does have, turned
+the link failure into a **segfault**. MIR's win64 back end models `va_list` as
+a plain `char *`, and both builtins store through their operand. c2mir passes
+the operand's address only when the `va_list` lives in memory, and a local
+`char *` whose address is never taken lives in a register. So `MIR_VA_START`
+was handed the uninitialised *value* of `ap` and stored through it. On SysV
+`va_list` is an array, so the operand always decays to an address and the
+problem never arises.
+
+`JIT_PRELUDE_WIN` now spells both macros with `&(ap)`. That passes the address
+and also pins `ap` in memory. A `va_list` handed on to `vfprintf` is still the
+`char *` the UCRT expects.
+
+**This was not fallback-only.** A variadic function *defined* in a program's
+own inline C hits the same `<stdarg.h>` on the default split path, so it fell
+back to cc there too. `tests/fixtures/inline-c-variadic-definition` pins it,
+and the `windows-jit` CI job runs that fixture through the engine on both paths
+and fails on a fallback.
+
+### 2. `TUR_SETJMP` took MinGW's SEH `setjmp`
+
+The non-split emission chose `__builtin_setjmp` under `#if defined(_WIN32) &&
+defined(__GNUC__)` and plain `setjmp` otherwise. c2mir does not define
+`__GNUC__`, so under the JIT it took plain `setjmp`, which MinGW's
+`<setjmp.h>` expands to `_setjmp(buf, NULL)`. That is the SEH-unwinding
+longjmp that cannot cross MIR frames (no `.pdata`), the defect "Resolution:
+the JIT longjmp" fixed for the split. The non-split block now has a middle arm,
+`#elif defined(_WIN32)`, that uses the split's `tur_sjlj_set`/`tur_sjlj_jump`
+pair, resolved through `JIT_SHIMS`. cc on Windows is always GCC or clang, so it
+still takes the first arm. The 155 `expected.c` snapshots gain those six lines
+and nothing else.
+
+### 3. winpthreads, `clock_gettime`, `nanosleep` and `sprintf` are not exported
+
+`tur.exe` links winpthreads **statically**, and ld's `--export-all-symbols`
+leaves those objects out, the same way it leaves out the MinGW runtime objects
+that define `printf`. None of `pthread_*` (`pthread_mutex_lock`,
+`pthread_cond_timedwait`, ...), `clock_gettime`, `nanosleep` or `sprintf`
+appears in the export table, so the `RTLD_DEFAULT` walk cannot find them. The
+split never noticed, because its program half calls none of them and the host
+half does. The whole-preamble TU compiles the runtime too: 26 `pthread_mutex_lock`
+calls in `hello.tur` alone. They are now `JIT_SHIMS` entries under `_WIN32`,
+the treatment `printf` already had.
+
+### 4. Missing prelude declarations
+
+`pthread_exit`, `pthread_cond_timedwait` and `sprintf` are now declared in
+`JIT_PRELUDE_WIN`. `pthread_cond_timedwait` is declared on one line, after
+`struct timespec`, so `jit_prelude_win_shadowed`'s single-line scan still
+covers it. All three were already in `libc_names`, and
+`check-libc-collision-list.sh` passes (111 prelude declarations, up from 108).
+
+### Verified
+
+| check | before | after |
+| --- | --- | --- |
+| `TUR_JIT_NO_SPLIT=1 tur jit hello.tur`, interp / eager / lazy | cc fallback (link fails) | all three run in MIR, 0 implicit declarations |
+| variadic inline-C definition, split and no-split, eager and lazy | cc fallback | `7815066` in MIR on all four |
+| `fiber-basic` under `TUR_JIT_NO_SPLIT=1` | (fallback) | 42; it segfaulted until the `&(ap)` change, because `tur_win_makecontext` is variadic |
+| `run-jit.sh`, `TUR_JIT_NO_SPLIT=1`, effect/cps/fiber/spawn/chan/panic subset | -- | 288 passed, 0 failed, 5 skipped |
+| S2 engage probe | engaged | still engaged (`probe == committed`) |
+
+### What making the fallback link exposed
+
+A Scheme program never engages the S2 split
+([r7rs-programs-compile-slowly](../reported/r7rs-programs-compile-slowly.md)),
+so on Windows every `#lang r7rs` program used to reach the whole-preamble path,
+fail to link, and quietly run through cc. Once that path linked, they ran in
+MIR, and `run-jit.sh` turned up seven wrong answers that the fallback had been
+hiding:
+
+- **`call/cc` was escape-only under c2mir** (`r7rs-continuations`,
+  `r7rs-continuation-after-return`, `r7rs-toplevel-reentry`, `r7rs-gc-basic`,
+  `region-escape-via-callcc`, `docs-r7rs-guide-examples`). The re-entrant
+  implementation needs the thread's stack base, which the GCC arm reads from
+  the TEB with inline asm that c2mir cannot compile. It also needs a jump that
+  does not unwind. The prelude's c2mir-on-Windows arm now takes the base from a
+  host function, `tur_win_stack_base` (`src/runtime/tur_tls.c`, auto-exported),
+  and jumps with `tur_sjlj_set`/`tur_sjlj_jump`, the split's no-unwind pair.
+  The previous commit had left that arm alone "rather than given a mechanism
+  nothing can run"; now something runs it.
+- **`r7rs-bignums` got a remainder wrong.** That was a c2mir codegen bug, not a
+  Scheme one: on LLP64, `long long OP unsigned int` is computed in `unsigned
+  int`. It is filed as
+  [c2mir-llp64-long-long-vs-unsigned-int](../reported/c2mir-llp64-long-long-vs-unsigned-int.md),
+  with a fork patch ready. In the meantime `r7bn_sub_mag` casts both limbs, so
+  the fixture passes on the pinned MIR.
+
+All seven match under `tur jit` on Windows now, with no fallback.
+
+The corpus run also showed the fallback ratchet failing on 47 Windows-only cc
+fallbacks (c2mir cannot parse the MinGW `<sys/types.h>` family). They predate
+this work and were never visible, because nothing had run `run-jit.sh` on
+Windows since the ratchet landed (2026-09-09, after the last Windows corpus
+run of 2026-09-05). They are tracked with section 4 in
+[windows-jit-corpus-not-in-ci](../reported/windows-jit-corpus-not-in-ci.md).

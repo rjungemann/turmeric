@@ -1809,16 +1809,23 @@
   // makes the same choice (emit_tur_jmp_buf_prelude).  __builtin_longjmp may
   // not share a function with its __builtin_setjmp, which is why r7k_run_form
   // jumps through r7k_longjmp.  c2mir (`tur jit`) has neither __GNUC__ nor
-  // the builtin, so a Windows JIT compile keeps plain setjmp and finds no
-  // stack base below: call/cc stays the escape there.  No program reaches
-  // that today -- a Scheme program never engages the S2 split
-  // (r7rs-programs-compile-slowly), and the whole-preamble JIT path falls back
-  // to cc on Windows -- so it is left alone rather than given a mechanism
-  // nothing can run.
+  // the builtin, and every Scheme program reaches it on the Windows JIT: a
+  // Scheme program never engages the S2 split (r7rs-programs-compile-slowly),
+  // and the whole-preamble path it takes instead has linked there since
+  // 2026-09-26.  So the middle arm uses the host's no-unwind pair
+  // (src/async/tur_sjlj_x64_win.S, resolved through jit_engine.c's
+  // JIT_SHIMS), the same answer the S2 split gives TUR_SETJMP.
   #if defined(_WIN32) && (defined(__GNUC__) || defined(__clang__))
   typedef void *r7k_jmp_buf[5];
   #define R7K_SETJMP(b)  __builtin_setjmp(b)
   #define R7K_LONGJMP(b) __builtin_longjmp((b), 1)
+  #elif defined(_WIN32)
+  typedef void *r7k_jmp_buf[30];
+  extern int  tur_sjlj_set(void *);
+  extern void tur_sjlj_jump(void *);
+  extern void *tur_win_stack_base(void);
+  #define R7K_SETJMP(b)  tur_sjlj_set(b)
+  #define R7K_LONGJMP(b) tur_sjlj_jump(b)
   #else
   typedef jmp_buf r7k_jmp_buf;
   #define R7K_SETJMP(b)  setjmp(b)
@@ -1884,6 +1891,10 @@
       unsigned char *b;
       __asm__ ("movq %%gs:0x08, %0" : "=r"(b));
       r7k_base_tls = b;
+  #elif defined(_WIN32) && !(defined(__GNUC__) || defined(__clang__))
+      // c2mir has no inline asm; the host reads the same TEB field
+      // (src/runtime/tur_tls.c).
+      r7k_base_tls = (unsigned char *)tur_win_stack_base();
   #endif
       return r7k_base_tls;
   }

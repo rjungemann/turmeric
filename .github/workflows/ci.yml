@@ -1054,8 +1054,11 @@ jobs:
     # fixture -- no longer holds: that was the win64 SEH unwind through JIT
     # frames, fixed by tur_sjlj_x64_win.S, and the corpus is now 2702 passed /
     # 0 failed / 70 skipped on Windows
-    # (docs/reported/jit-windows-support-spike.md).  What keeps it off is
-    # runner time; if it is added, shard it like `windows-split` below.
+    # (docs/archive/jit-windows-support-spike.md).  Two things keep it off:
+    # runner time (shard it like `windows-split` below -- a third of the corpus
+    # takes ~5.5 min on a 12-core box), and the fallback ratchet, whose
+    # baseline is Linux-generated and would fail on the ~47 fixtures that fall
+    # back to cc only on Windows.  See docs/reported/windows-jit-corpus-not-in-ci.md.
     #
     # Separate job so it runs in parallel with `windows:` rather than adding its
     # MIR fetch and build onto that job's ~30 minutes.
@@ -1137,6 +1140,42 @@ jobs:
             echo "::error::TUR_JIT_GEN=$mode failed (rc=$rc)"
             echo "$out"
             fail=1
+          done
+          exit $fail
+
+      # The step above cannot see a cc fallback: `tur jit` falls back silently
+      # (TUR-W0070 on stderr) and the fallback prints "jit hello" too.  This one
+      # fails on the warning, over the two shapes that fell back on Windows
+      # until 2026-09-26:
+      #   - the whole-preamble path (TUR_JIT_NO_SPLIT=1), what the JIT runs when
+      #     S2 disengages.  It could not link at all here: c2mir's win64
+      #     va_start was the MSVC intrinsic, and winpthreads / clock_gettime /
+      #     nanosleep / sprintf are not in tur.exe's export table;
+      #   - a variadic C DEFINITION on the default split path, which fell back
+      #     for the same va_start reason.
+      # See docs/archive/jit-windows-support-spike.md, "Resolution: the
+      # whole-preamble fallback".
+      - name: Smoke-test the whole-preamble fallback and a variadic definition
+        run: |
+          fail=0
+          for mode in interp eager lazy; do
+            out=$(TUR_JIT_NO_SPLIT=1 TUR_JIT_GEN=$mode timeout 120 ./build-win-jit/tur.exe jit jit-smoke.tur 2>&1)
+            rc=$?
+            case "$out" in
+              *TUR-W0070*) echo "::error::no-split $mode fell back to cc"; echo "$out"; fail=1 ;;
+              *"jit hello"*) [ "$rc" -eq 0 ] && echo "no-split $mode: ok" || { echo "::error::no-split $mode rc=$rc"; fail=1; } ;;
+              *) echo "::error::no-split $mode failed (rc=$rc)"; echo "$out"; fail=1 ;;
+            esac
+          done
+          for split in 0 1; do
+            out=$(TUR_JIT_NO_SPLIT=$split timeout 120 ./build-win-jit/tur.exe jit tests/fixtures/inline-c-variadic-definition/input.tur 2>&1)
+            rc=$?
+            want=$(cat tests/fixtures/inline-c-variadic-definition/expected.stdout)
+            case "$out" in
+              *TUR-W0070*) echo "::error::variadic (no-split=$split) fell back to cc"; echo "$out"; fail=1 ;;
+              *"$want"*) [ "$rc" -eq 0 ] && echo "variadic (no-split=$split): ok" || { echo "::error::variadic rc=$rc"; fail=1; } ;;
+              *) echo "::error::variadic (no-split=$split) wrong output (rc=$rc)"; echo "$out"; fail=1 ;;
+            esac
           done
           exit $fail
 

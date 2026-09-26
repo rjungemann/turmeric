@@ -193,6 +193,12 @@ static int tur_win_swapcontext(ucontext_t *from, ucontext_t *to) {
 typedef void *tur_jmp_buf[5];
 #define TUR_SETJMP(b)  __builtin_setjmp(b)
 #define TUR_LONGJMP(b) __builtin_longjmp((b), 1)
+#elif defined(_WIN32)
+typedef void *tur_jmp_buf[30];
+extern int  tur_sjlj_set(void *);
+extern void tur_sjlj_jump(void *);
+#define TUR_SETJMP(b)  tur_sjlj_set(b)
+#define TUR_LONGJMP(b) tur_sjlj_jump(b)
 #else
 typedef jmp_buf tur_jmp_buf;
 #define TUR_SETJMP(b)  setjmp(b)

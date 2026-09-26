@@ -245,7 +245,7 @@ the AOT path there depends on the most fragile platform code in the shim
 all of which the JIT path would delete rather than fix.
 
 But it compounds risk rather than avoiding it: it needs a Windows JIT to exist
-at all. Sequence [jit-windows-support-spike.md](jit-windows-support-spike.md)
+at all. Sequence [jit-windows-support-spike.md](../archive/jit-windows-support-spike.md)
 first, or at minimum read its question 1 before planning anything Windows-shaped
 here. That spike's questions 3 and 4 (emitted `__asm__`, executable memory) hit
 this path unchanged.
@@ -268,7 +268,7 @@ or instead of the AOT path. Plus a measured script compile time, since question
 
 ## Related
 
-- [jit-windows-support-spike.md](jit-windows-support-spike.md) -- sequence that
+- [jit-windows-support-spike.md](../archive/jit-windows-support-spike.md) -- sequence that
   one first for anything Windows-shaped.
 - [docs/guides/jit-guide.md](../guides/jit-guide.md) -- "Embedding" section.
 - [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md) -- WIN2.

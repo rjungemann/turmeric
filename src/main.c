@@ -4180,7 +4180,7 @@ static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
      * Quoted includes only: `<...>` system headers are the decls region's
      * business, and on Windows re-emitting them is actively harmful (the JIT
      * cannot digest the MinGW SDK headers -- see
-     * docs/reported/jit-windows-support-spike.md). */
+     * docs/archive/jit-windows-support-spike.md). */
     for (const char *p = ps; p < pe; ) {
         const char *eol = (const char *)memchr(p, '\n', (size_t)(pe - p));
         size_t len = eol ? (size_t)(eol - p + 1) : (size_t)(pe - p);

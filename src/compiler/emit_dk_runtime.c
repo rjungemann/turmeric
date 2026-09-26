@@ -397,7 +397,7 @@ void emit_tur_jmp_buf_prelude(Buf *out) {
      * something both a real toolchain and c2mir can emit -- so the "must not be a
      * preprocessor test the halves answer differently" rule above is satisfied
      * without deciding anything at emission time.  See
-     * docs/reported/jit-windows-support-spike.md, "Resolution: the JIT longjmp",
+     * docs/archive/jit-windows-support-spike.md, "Resolution: the JIT longjmp",
      * and docs/archive/windows-longjmp-across-fiber-stack-kills-effects.md for the
      * cc path's separate (fiber-stack) defect. */
     if (rt_split_canonical_emission()) {
@@ -430,11 +430,23 @@ void emit_tur_jmp_buf_prelude(Buf *out) {
 "#define TUR_LONGJMP(b) longjmp((b), 1)\n"
 "#endif\n");
     } else {
+        /* One TU and one compiler here, so the halves always agree -- but the
+         * JIT's whole-preamble fallback compiles this TU with c2mir, which has
+         * no __GNUC__ and would otherwise take plain setjmp: on Windows that
+         * is MinGW's SEH longjmp, which cannot unwind MIR's frames (no
+         * .pdata).  The middle arm is that case, and uses the split's
+         * no-unwind pair, resolved through jit_engine.c's JIT_SHIMS. */
         buf_puts(out,
 "#if defined(_WIN32) && defined(__GNUC__)\n"
 "typedef void *tur_jmp_buf[5];\n"
 "#define TUR_SETJMP(b)  __builtin_setjmp(b)\n"
 "#define TUR_LONGJMP(b) __builtin_longjmp((b), 1)\n"
+"#elif defined(_WIN32)\n"
+"typedef void *tur_jmp_buf[30];\n"
+"extern int  tur_sjlj_set(void *);\n"
+"extern void tur_sjlj_jump(void *);\n"
+"#define TUR_SETJMP(b)  tur_sjlj_set(b)\n"
+"#define TUR_LONGJMP(b) tur_sjlj_jump(b)\n"
 "#else\n"
 "typedef jmp_buf tur_jmp_buf;\n"
 "#define TUR_SETJMP(b)  setjmp(b)\n"

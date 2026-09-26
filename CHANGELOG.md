@@ -115,6 +115,15 @@ All notable changes to Turmeric are documented here.
   happened 25 to 40 requests in, and on CI as early as the fifth. The cache
   is now cleared around every compilation.
 
+- **The JIT's whole-preamble path works on Windows.** When `tur jit` cannot use
+  its split runtime, it compiles the whole preamble instead. On Windows that
+  path could not link, so every such program, including every `#lang r7rs`
+  program, silently fell back to `cc`. It now runs in the engine. Variadic
+  functions defined in a program's own inline C also run in the engine there;
+  they used to fall back too. Scheme programs that now run in the engine keep
+  what `cc` gave them: re-entrant `call/cc` works there, and bignum arithmetic
+  gives the same answers.
+
 - **An over-capacity async `httpd` server sends its 503 intact on Windows.**
   `httpd-new-async-with-limit` answered a connection past its cap with a 503
   and closed the socket without reading the request. Closing over unread data
