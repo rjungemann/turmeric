@@ -1,6 +1,6 @@
 # Saffron -- a dynamically typed `#lang` over the Turmeric runtime
 
-Status: **shipped; S9's dispatch residue is the only open work.**
+Status: **shipped; S9's dispatch residue is down to two stated limits.**
 `#lang saffron` GRADUATED at 0.46.0 (2026-09-10) and is an ordinary base
 dialect on the same footing as `#lang turmeric`: there is no `EXPERIMENTS[]`
 row, no enable and no lifecycle warning (the graduation note in
@@ -16,9 +16,11 @@ left -- see [S9's remaining limits](#s9----what-is-still-open). Once those
 land or move to reports of their own, archive the plan. (S9's last design
 item, the constrained instance at `A = any` -- D8 Q1 -- turned out to be a
 silent wrong answer rather than a limit, and was built 2026-09-26. The same
-day, binary-fn methods and the class-declared result type landed too; what
-is left of the latter is filed as
-[saffron-applied-class-var-result-takes-one-instances-type](../reported/saffron-applied-class-var-result-takes-one-instances-type.md).)
+day, binary-fn methods and the class-declared result type landed too,
+including a result that mentions the class variable applied --
+[saffron-applied-class-var-result-takes-one-instances-type](../archive/saffron-applied-class-var-result-takes-one-instances-type.md).
+What is left are two stated limits on UNANNOTATED class parameters, both
+clean panics or diagnostics; see the list.)
 
 Open reports a Saffron program reaches (none is a stage blocker):
 
@@ -29,7 +31,6 @@ Open reports a Saffron program reaches (none is a stage blocker):
 - [list-length-on-cons-any-segfaults](../reported/list-length-on-cons-any-segfaults.md) (low-medium)
 - [untyped-forward-callee-result-retagged-as-pointer](../reported/untyped-forward-callee-result-retagged-as-pointer.md) (low-medium)
 - [byvalue-recursive-adt-boxes-are-never-freed](../reported/byvalue-recursive-adt-boxes-are-never-freed.md) (low-medium, plain Turmeric too)
-- [saffron-applied-class-var-result-takes-one-instances-type](../reported/saffron-applied-class-var-result-takes-one-instances-type.md) (medium, S9's last residue)
 - [cps-capturing-closure-env-leaks-through-dyn-call](../reported/cps-capturing-closure-env-leaks-through-dyn-call.md) (low)
 - [jit-x86-64-struct-valued-statement-expression-miscompiles](../reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md) (medium, JIT engine on x86-64 only)
 
@@ -2064,8 +2065,10 @@ variable is still open -- see below.)
 
 #### S9 -- what is still open
 
-Measured 2026-09-26, after Q1 landed. Each is a clean panic or a stated
-limit, not a silent wrong answer, except the one filed as a report:
+Measured 2026-09-26, after Q1 landed; updated the same day as items closed.
+What remains is two stated limits on UNANNOTATED class parameters -- the
+fn-arity default (unary) below and the parametric-head extra last in the
+list -- each a clean panic at a checked cast, never a silent wrong answer:
 
 - ~~**Binary-fn methods (Foldable's).**~~ **Fixed 2026-09-26.** The impl
   never records a function argument's arity, but the class does when it
@@ -2086,12 +2089,26 @@ limit, not a silent wrong answer, except the one filed as a report:
   `: any` result, so `(size [x] 3)` under `(size [x : a] : any)` returned a
   raw word from a `tur_tagged_t` function (cc error), now widened as a
   defn's is (`typeclass-any-result-instance-widens`,
-  `saffron-dyn-any-result-method`). **Still open:** a result that mentions
+  `saffron-dyn-any-result-method`). ~~**Still open:** a result that mentions
   the class variable APPLIED (`: (Option a)`) takes the picked instance's
-  type, which mis-tags every other instance's result compiled -- filed as
-  [saffron-applied-class-var-result-takes-one-instances-type](../reported/saffron-applied-class-var-result-takes-one-instances-type.md).
-  The interpreter's dynamic arm reads the class declaration for one thing --
-  turning an inline-C `bool` result that came back as an int into a bool.
+  type.~~ **Fixed 2026-09-26**
+  ([saffron-applied-class-var-result-takes-one-instances-type](../archive/saffron-applied-class-var-result-takes-one-instances-type.md)):
+  pass 1 of `definstance` now substitutes the class variable through the
+  application (`Wrap [Pt]` returns `(Option Pt)`, not an open `(Option a)`
+  that lowered to the carrier), the body sees that result as its expected
+  type, and the dispatch goes through a per-instance `any` witness. On the
+  way: a Saffron `[..]` / `#set{..}` / `#map{..}` literal now builds the
+  instantiation a declared return or ascription pins, instead of a `(Vec
+  any)` the expectation typed `(Vec float)` (a silent wrong answer in a plain
+  defn). The class must spell the receiver -- `(wrap-self [x : a] : (Option
+  a))`. With `[x]` unannotated the method is return-directed by the typed
+  rule and `x` stays `int`, so dispatching it on an `any` is now TUR-E0020
+  with that hint (it silently mis-tagged before; typed code refuses the
+  static form too). A body building the wrong instantiation is a type error
+  at the body. The interpreter's dynamic arm reads the class
+  declaration for one thing -- turning an inline-C `bool` result that came
+  back as an int into a bool -- and boxes a collection result under the
+  impl's declared type when the node is `any`.
 - ~~**An empty literal is not `(Vec any)`.**~~ **Fixed 2026-09-26.** `[]`
   expands to a `(vec-new)` carrying the stdlib's span, so the open-result rule
   (which gated on the call's span) left it an open `(Vec A)` whose box matched

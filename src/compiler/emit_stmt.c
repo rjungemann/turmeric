@@ -299,6 +299,26 @@ static bool dict_slot_param_is_carrier(EmitCtx *ctx, const FnDef *mi,
     return emit_type_is_byvalue_adt(ctx, pt);
 }
 
+/* saffron-applied-class-var-result-takes-one-instances-type: the C return type
+ * of an instance-method impl, spelled the way emit_fns.c spells its signature.
+ * A declared result that rides the carrier ABI returns `int64_t` there (the
+ * dict's uniform slot shape, "Direction (1)"), so the dict slot and the
+ * by-value wrapper must say `int64_t` too.  They used type_c_name, which agreed
+ * only while such a result was OPEN -- `(Vec a)` -- and so lowered to the
+ * carrier anyway; with the class variable substituted, `Twice [float]`'s
+ * `(Vec float)` slot read `tur_adt_Vec__float *` against an `int64_t` impl
+ * (-Wincompatible-pointer-types, -Wint-conversion). */
+static const char *dict_slot_ret_c_name(EmitCtx *ctx, const FnDef *mi, Type ret) {
+    if (mi && mi->binding && mi->binding->name && mi->binding->name->name &&
+        strncmp(mi->binding->name->name, "__inst_", 7) == 0 &&
+        mi->binding->type.kind == TY_FN &&
+        mi->binding->type.as.fn.result_full_type &&
+        type_uses_carrier_abi(emit_resolve_type(ctx,
+            *mi->binding->type.as.fn.result_full_type)))
+        return "int64_t";
+    return type_c_name(ret);
+}
+
 /* saffron-lang-plan S9 (D8 piece 4): the per-instance DYNAMIC dispatch table.
  *
  * Why not just point the registry row at the dict singleton?  Because the dict's
@@ -988,7 +1008,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 } else {
                     ret_type = method_impl->body->type;
                 }
-                const char *ret_c_name = type_c_name(ret_type);
+                const char *ret_c_name = dict_slot_ret_c_name(ctx, method_impl, ret_type);
                 /* instance-method-closure-return: a method whose declared
                  * return is a concrete function value carries it as a thin
                  * fn-ptr typedef (non-capturing body) or the int64_t closure
@@ -1078,7 +1098,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                     wret = mi->body->type;
                 }
                 buf_printf(ctx->file, "static %s __dictwrap_%s_%s%s(",
-                           type_c_name(wret), tc->name->name,
+                           dict_slot_ret_c_name(ctx, mi, wret), tc->name->name,
                            sanitized_method_name, type_suffix);
                 for (uint32_t j = 0; j < mi->n_params; j++) {
                     if (j) buf_puts(ctx->file, ", ");
