@@ -866,8 +866,8 @@ The first stdlib adoption, unreleased at the time of writing.
   [a `bool` closure read through the int64 carrier](../archive/narrow-closure-result-read-through-int64-carrier.md)
   could print true for false on the compiled path, through `Result`'s `fmap`
   already and now through its `ap`; and
-  [a user constructor holding a capturing closure](../reported/defdata-ctor-fn-field-passes-pointer-as-int.md)
-  emits a C warning. Separately, `Kleisli`'s missing `Arrow` instance is by
+  [a user constructor holding a capturing closure](../archive/defdata-ctor-fn-field-passes-pointer-as-int.md)
+  emitted a C warning. Separately, `Kleisli`'s missing `Arrow` instance is by
   design, which moved `ArrowZero`'s planned superclass from `Arrow` to
   `Category`.
 - **A diagnostic nit for whoever next touches TUR-E0393:** the message
@@ -933,9 +933,11 @@ Where it departs from the plan above:
   - [hkt-dict-generic-byvalue-result-to-typed-param](../archive/hkt-dict-generic-byvalue-result-to-typed-param.md)
     (medium) -- a user by-value type from a generic at a typed parameter.
     **Fixed** in the follow-up bug-fix PR.
-  - [generic-category-base-passes-carrier-to-arrow-instance](../reported/generic-category-base-passes-carrier-to-arrow-instance.md)
+  - [generic-category-base-passes-carrier-to-arrow-instance](../archive/generic-category-base-passes-carrier-to-arrow-instance.md)
     (low) -- a C warning in a generic's base clone at the function arrow,
-    which is why step 4 has no positive generic fixture.
+    which is why step 4 had no positive generic fixture. **Fixed** in the
+    follow-up bug-fix PR; `stdlib-arrow-generic-entails-category` now covers
+    it.
   - Also pre-existing and not filed: `Ord [cstr]` is inline C with no
     interpreter twin, so `stdlib-ord-entails-eq` leaves out `cstr`.
 - **Full suites at the end of step 5:** 3192 compiled and 2276 interpreted

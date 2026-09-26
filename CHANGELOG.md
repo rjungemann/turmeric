@@ -142,6 +142,15 @@ All notable changes to Turmeric are documented here.
   `Result`. The emitted C for a `bool` closure changes shape, and 155
   snapshots were regenerated for the stdlib comparator every program carries.
 
+- **Two pointer-to-integer mismatches in emitted C are gone.** A capturing
+  closure stored in a user `defdata` whose field is a type variable
+  (`(Right (fn ...))` in an `(Either (fn [int] int) int)`) was handed to the
+  constructor's 64-bit slot uncast, and a generic over `Category` passed its
+  64-bit argument to the function arrow's instance, which takes closure
+  handles. Both programs ran correctly, but the C carried a
+  `-Wint-conversion` warning, which GCC 14 and macOS clang treat as an error.
+  A `[^Arrow A]` generic calling `comp` is now covered by a test.
+
 - **A dictionary-passing generic's result reaches a typed parameter of a
   user type.** `(show-t (or-default (Tally 7 2) 5))` with
   `show-t [t : (Tally int)]` was a C type error, because the conversion back

@@ -1,5 +1,8 @@
 # A user `defdata` constructor is passed a closure pointer where it takes `int64_t`
 
+> **RESOLVED 2026-09-26.** See [Resolution](#resolution) at the end. The
+> analysis below is the original filing.
+
 **Severity:** low -- the program runs correctly, but the emitted C carries a
 `-Wint-conversion` warning, and `tests/run.sh`'s representation check fails any
 fixture whose C has one. Found 2026-09-25 while writing
@@ -40,3 +43,19 @@ field slot is the `int64_t` carrier (`(int64_t)(intptr_t)`), or declare a
 function-typed field's constructor parameter as `void *` the way the generic
 `ok` spec does. Once fixed, `hkt-ap-partial-head` can take its capturing-closure
 case back.
+
+## Resolution
+
+The constructor argument path already bridges a pointer argument into an
+`int64_t` slot (the straddle check against the constructor's recorded
+parameter C types in `src/compiler/emit_expr.c`), but it recognised a
+pointer argument only from a few spellings and from spec parameters. A
+capturing closure's value is a `void *` temp. The check now also reads a
+closure or boxed-function argument as `void *`, and falls back to a temp's
+recorded C type, so the handle is cast `(int64_t)(intptr_t)` into a
+type-variable field that the monomorph lays out as the carrier.
+
+`tests/fixtures/hkt-ap-partial-head` takes its capturing-closure case back
+(`ap` on a user `Either` holding a capturing closure, directly and through
+the Applicative dictionary). It fails the suite's representation check on
+the previous compiler and passes under both harnesses.

@@ -1,5 +1,8 @@
 # A generic over `Category` emits a pointer/integer warning at the function arrow
 
+> **RESOLVED 2026-09-26.** See [Resolution](#resolution) at the end. The
+> analysis below is the original filing.
+
 **Severity:** low -- the program prints the right answer, but the emitted C
 carries `-Wint-conversion`, which `tests/run.sh`'s representation check
 rejects, so a fixture exercising generic arrow code cannot pass. Found
@@ -41,3 +44,19 @@ emitting a base clone that no call site reaches. Once fixed, a generic
 cover the arrow superclasses' entailment, which today is covered only by the
 obligation (`errors/stdlib-arrowchoice-requires-arrow`) and the general
 `class-superclass-*` fixtures.
+
+## Resolution
+
+The forward straddle bridge at an ordinary call -- an argument that emits as
+the int64 carrier passed to a parameter recorded as a concrete pointer --
+skipped `void *` parameters. The function arrow's `Category` instance takes
+`void *` fat-closure handles, and a generic's unspecialized base holds
+`f : A` as the carrier, so its `comp` call passed an integer to a pointer.
+A `void *` parameter is now bridged too, limited to a variable argument that
+emits as the carrier (a literal 0 is a null pointer constant).
+
+Pinned by `tests/fixtures/stdlib-arrow-generic-entails-category`: a
+`[^Arrow A]` generic calls `comp` (Arrow entails Category), and a
+`[^Category A]` one nests it, with a plain and a capturing function. It fails
+the suite's representation check on the previous compiler. It loads
+`stdlib/arrow.tur`, whose inline C keeps it out of `run-turi.sh`.

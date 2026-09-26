@@ -10365,6 +10365,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             if (emit_var_spec_arg_type(ctx, arg, &sp))
                                 arg_cty = emit_type_c_name(ctx, sp);
                         }
+                        /* defdata-ctor-fn-field-passes-pointer-as-int: a
+                         * capturing closure (or a boxed fn value) lowers to a
+                         * `void *` temp, whatever its type says, so a monomorph
+                         * ctor whose field -- a type variable instantiated to a
+                         * fn type -- is the int64 carrier got the handle
+                         * uncast.  Read the argument's spelling off its
+                         * expression, or off the temp's recorded C type. */
+                        if (!arg_cty && arg) {
+                            const Expr *ac = arg;
+                            while (ac && ac->kind == EX_ASCRIBE)
+                                ac = ac->as.ascribe_.inner;
+                            if (ac && (ac->kind == EX_CLOSURE ||
+                                       ac->kind == EX_FN_TO_FAT))
+                                arg_cty = "void *";
+                            else if (emit_str_is_bare_ident(av))
+                                arg_cty = emit_localvar_lookup_ctype(av);
+                        }
                         if (arg_cty) {
                             size_t sl = strlen(slot_cty);
                             bool slot_is_ptr = sl && slot_cty[sl - 1] == '*';
@@ -12435,9 +12452,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bool arg_slot_is_carrier =
                             emit_arg->kind == EX_VAR && emit_arg->as.var.binding &&
                             emit_arg->as.var.binding->emit_carrier_holds_ptr;
-                        if (rec_is_conc_ptr &&
-                            ((acty && strcmp(acty, "int64_t") == 0) ||
-                             arg_slot_is_carrier)) {
+                        /* generic-category-base-passes-carrier-to-arrow-
+                         * instance: a `void *` formal is the same straddle.  A
+                         * generic's unspecialized base holds `f : A` as the
+                         * int64 carrier and dispatches `comp` to the function
+                         * arrow's instance, whose parameters are `void *`
+                         * fat-closure handles.  Limited to a variable that
+                         * emits as the carrier: a literal 0 is a null pointer
+                         * constant and needs nothing. */
+                        bool rec_is_voidp = strcmp(rec_c, "void *") == 0;
+                        bool voidp_straddle = rec_is_voidp &&
+                            emit_arg->kind == EX_VAR &&
+                            acty && strcmp(acty, "int64_t") == 0 &&
+                            strncmp(raw, "(void *)", 8) != 0;
+                        if ((rec_is_conc_ptr &&
+                             ((acty && strcmp(acty, "int64_t") == 0) ||
+                              arg_slot_is_carrier)) ||
+                            voidp_straddle) {
                             Buf _fb; buf_init(&_fb);
                             buf_printf(&_fb, "(%s)(intptr_t)(%s)", rec_c, raw);
                             buf_putc(&_fb, '\0');

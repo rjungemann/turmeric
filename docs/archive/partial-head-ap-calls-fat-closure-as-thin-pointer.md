@@ -169,5 +169,5 @@ Two pre-existing defects found on the way are filed separately:
 (a `bool` closure called through the erased carrier can read as true -- it
 already affected `Result`'s `fmap`, and `ap` on a mixed-type `Result` inherits
 it) and
-[defdata-ctor-fn-field-passes-pointer-as-int](../reported/defdata-ctor-fn-field-passes-pointer-as-int.md)
+[defdata-ctor-fn-field-passes-pointer-as-int](defdata-ctor-fn-field-passes-pointer-as-int.md)
 (a C warning at a user constructor holding a capturing closure).
