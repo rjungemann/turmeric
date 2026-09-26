@@ -190,6 +190,94 @@ static const char *stdlib_load_hint_file(const Symbol *name) {
     return tur_stdlib_load_hint(name->name);
 }
 
+/* list-length-on-cons-any-segfaults: the carrier-level list helpers in
+ * stdlib/list.tur walk a cons chain as `struct { int64_t head; int64_t tail;
+ * }`.  A `(Cons A)` coerces to their `:int` parameter in argument position,
+ * and for most A that is sound -- a scalar or pointer head is one word, so the
+ * tail sits at offset 8.  Two element kinds widen the head and push the tail
+ * past offset 8, and the walk then reads the tail out of the middle of the
+ * head:
+ *
+ *   - `any` / a union: the head is a two-word tur_tagged_t.  This is every
+ *     list in a Saffron program -- `(list 1 2 3)`, a `& xs : any` rest list
+ *     -- so `(length xs)` segfaulted and `(list-head xs)` answered the tag.
+ *   - a by-value aggregate laid out inline (`(Cons (Option int))`).
+ *
+ * For those, a call to one of the helpers below is elaborated as a call to
+ * its element-aware twin instead, which reads `.head` / `.tail` at the
+ * monomorph's own layout.  The twins take the same list and answer the same
+ * question, typed: `thead` returns the element (an `any`, a `(Option int)`)
+ * rather than its first word.  Every other element keeps the carrier call
+ * and its emitted C byte-for-byte. */
+static const char *carrier_list_typed_twin(const char *name) {
+    static const struct { const char *carrier; const char *typed; } table[] = {
+        { "list-length", "tlength" }, { "length", "tlength" },
+        { "list-head",   "thead"   }, { "car",    "thead"   },
+        { "list-tail",   "ttail"   }, { "cdr",    "ttail"   },
+    };
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
+        if (strcmp(name, table[i].carrier) == 0) return table[i].typed;
+    }
+    return NULL;
+}
+
+/* Is `t` a stdlib `(Cons A)` whose head is wider than the carrier word? */
+static bool cons_head_shifts_carrier_tail(const Type *t) {
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(t, &def, args, &n_args) || !def || n_args != 1 ||
+            !def->name || strcmp(def->name, "Cons") != 0 || !def->is_heap)
+        return false;
+    const Type *elem = &args[0];
+    if (elem->kind == TY_CONTRACT && elem->as.contract_.base_type)
+        elem = elem->as.contract_.base_type;
+    if (elem->kind == TY_ANY || elem->kind == TY_UNION) return true;
+    return repr_of(elem, REPR_POS_STRUCT_FIELD) == REPR_BYVAL_AGG;
+}
+
+/* Called with the elaborated carrier call; returns the twin call, or NULL to
+ * keep `call_expr`.  The argument is found under the implicit coercions the
+ * call wrapped it in, but NOT under an ascription the source wrote: an
+ * explicit `(:: xs :int)` is the documented escape hatch that discards the
+ * element type, and stays exactly as unsafe as it says it is. */
+static Expr *typed_list_twin_redirect(Elab *e, const Form *call,
+                                      const Binding *fn_binding,
+                                      const Expr *call_expr) {
+    if (!call_expr || call_expr->kind != EX_CALL || call->as.list.len != 2)
+        return NULL;
+    if (!fn_binding || !fn_binding->is_global || !fn_binding->name ||
+            !fn_binding->name->name)
+        return NULL;
+    if (!fn_binding->is_from_stdlib &&
+            !elab_file_is_stdlib(fn_binding->span.file_id))
+        return NULL;
+    const char *twin = carrier_list_typed_twin(fn_binding->name->name);
+    if (!twin || call_expr->as.call_.n_args != 1) return NULL;
+    const Expr *arg = call_expr->as.call_.args[0];
+    while (arg && !cons_head_shifts_carrier_tail(&arg->type)) {
+        if (arg->kind == EX_ASCRIBE && !arg->as.ascribe_.type_form)
+            arg = arg->as.ascribe_.inner;
+        else if (arg->kind == EX_CAST)
+            arg = arg->as.cast_.expr;
+        else if (arg->kind == EX_REINTERPRET)
+            arg = arg->as.reinterpret_.expr;
+        else
+            return NULL;
+    }
+    if (!arg) return NULL;
+    const Symbol *twin_sym = intern_cstr(e->st, twin);
+    bool qual_err = false;
+    Binding *twin_b = elab_lookup_sym(e, twin_sym, call->span, &qual_err);
+    if (!twin_b || !twin_b->is_global || twin_b->type.kind != TY_FN) return NULL;
+    /* The argument form elaborates a second time here.  Only the wide-head
+     * case pays that, and it is the case that used to crash. */
+    Form **items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    items[0] = form_sym(e->arena, call->as.list.items[0]->span, twin_sym);
+    items[1] = call->as.list.items[1];
+    return elab_call(e, form_list(e->arena, call->span, items, 2));
+}
+
 /* docs/archive/history/defn-shadows-return-special-form.md: head-position dispatch in
  * elab_call (below) matches special forms by symbol identity *before* any
  * binding, macro, or typeclass-method lookup.  A user `(defn return ...)` is
@@ -4707,6 +4795,10 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                        (fn_binding->type.kind == TY_PTR_VOID && fn_binding->closure_fn_binding) ||
                        fn_binding->closure_fn_binding)) {
         Expr *call_expr = elab_call_fn(e, call, fn_binding);
+        {
+            Expr *twin = typed_list_twin_redirect(e, call, fn_binding, call_expr);
+            if (twin) return twin;
+        }
         /* LT4: patch struct return type with full type containing StructDef pointer,
          * mirroring the G3 patch for TY_ADT above. Without this, the call expression
          * gets TY_STRUCT with def=NULL from type_from_kind(TY_STRUCT).

@@ -1229,8 +1229,8 @@ correct only for escapes is a trap.
 > - **Still capped:** a dynamic call with more than four arguments
 >   (`emit_dyn_call`, so `apply` too); the `TUR_APPLYn_T` table stops at 4.
 > - **Not this stage's:** `list-length` on a `(Cons any)` chain
->   (docs/reported/list-length-on-cons-any-segfaults.md, which is what the
->   archived report's section 3 really was).
+>   (docs/archive/list-length-on-cons-any-segfaults.md, which is what the
+>   archived report's section 3 really was; since resolved).
 
 ### R7 -- `(scheme base)` and the other eleven libraries (large; parallelizable)
 
