@@ -1006,8 +1006,9 @@ and getting the right answer.
 >   faces (a static error reported inside stdlib/map.tur, and a compiled
 >   panic where `--interpret` answers correctly when the map comes back
 >   through an unannotated function):
->   `docs/reported/saffron-open-generic-result-not-grounded.md` has the
->   repros and the one-site fix direction; `apply` takes at most four
+>   `docs/archive/saffron-open-generic-result-not-grounded.md` has the
+>   repros (**resolved 2026-09-26**; the fixture now builds its map with
+>   `(map-new)`); `apply` takes at most four
 >   arguments (the compiled dynamic-call helpers' limit); `string-copy`
 >   returns its argument (strings are immutable, so a copy is the value);
 >   `vector-map`/`vector-for-each`/`string-map` and the char-class
@@ -1250,10 +1251,13 @@ A prerequisite the R3 seam found: a Turmeric generic constructor called with
 nothing to bind its type parameters (`(map-new)`, and any adaptor that
 forwards to one) hands Scheme an OPEN type that nothing grounds to `any`, so
 the first insert is a static error or a compiled-only panic
-(`docs/reported/saffron-open-generic-result-not-grounded.md`). Every
+(`docs/archive/saffron-open-generic-result-not-grounded.md`). Every
 adaptor here that forwards to such a constructor either ascribes the result
 itself (`(:: (map-new) (Map any any))`) or waits on that report; the D9
 snippet as written (`(hamt-set (hamt-new) "k" 42)`) is the second face of it.
+(**Resolved 2026-09-26.** `(map-new)` from Scheme is `(Map any any)` and a
+concrete key crosses the key check; the ascriptions are now redundant but
+harmless.)
 
 > **What shipped (2026-09-24).** Every R7RS-small procedure that is not a
 > port, on both back ends, with the libraries split by cost:
@@ -1767,6 +1771,20 @@ expectation from a demo.
 6. **Which R7RS?** R7RS-small is the target. R7RS-large is a moving set of
    dockets and is explicitly out of scope; if it is ever wanted it is a sibling
    base token (D1), not a flag.
+7. **Several libraries in one file, and a library name that is not its
+   path.** D9 maps a `define-library` onto one `defmodule`, and a module's
+   path is its name, so a file holds one library and `(two a)` lives in
+   `two/a.tur`. Lifting either restriction needs a choice first: several
+   `defmodule`s per file in Turmeric itself (a language change), or a
+   lowering that splits each library into its own generated module and
+   registers where to find it (self-contained, but the emitted files stop
+   being one-to-one with the sources).
+   **Decided 2026-09-26: one library per file, named after the file, for
+   now.** Neither option is taken; `define-library` stays as D9 has it. The
+   restriction is stated where it bites -- the "module not found" error for a
+   Scheme import says the library's name is its path -- and in the guide's
+   "Where it differs". Revisit when a port needs a multi-library file badly
+   enough to pay for one of the two.
 
 ---
 
@@ -1984,7 +2002,9 @@ do first).** *Landed 2026-09-24; see "What shipped" at the end of the task.*
 >     bignum.
 >   - Turmeric's and Saffron's int-overflow fixtures are unchanged, and
 >     `run.sh` and `run-turi.sh` are green.
-> - **Found on the way:** `docs/reported/untyped-forward-callee-result-retagged-as-pointer.md`.
+> - **Found on the way:** `docs/archive/untyped-forward-callee-result-retagged-as-pointer.md`
+>   (resolved 2026-09-26: the module path's forward declarations give an
+>   unannotated dynamic-file return `any`).
 >   - An untyped prelude defn called before its definition had its `any`
 >     result re-tagged as a pointer, but only when a Turmeric module was the
 >     entry. That broke `tests/run-r7rs-import.sh`'s compiled
@@ -2682,6 +2702,8 @@ task.*
 >   - A CPS loop is still only as deep as gcc's sibling calls make it: it
 >     overflows at `-O1`
 >     ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md)).
+>     *2026-09-26: a self-recursive CPS loop is a backedge now and holds at
+>     `-O0`; mutual recursion between two CPS procedures is what remains.*
 >   - A million-element `append`, `map` (one to four lists), `string-map`,
 >     `vector-map`, `list-copy`, `string->list`, `vector->list`, `equal?`,
 >     `read-line`, `read` and `write` now pass compiled at `-O2` and
@@ -2797,16 +2819,23 @@ differences, as reports"):
   is the shim arity, eight, on both back ends
   ([archived](../archive/r7rs-map-for-each-at-most-four-sequences.md)); past
   eight is the `apply` bullet's limit.
-- **`define-record-type` is not an internal definition** -- top level or a
-  library body only
-  ([r7rs-define-record-type-not-an-internal-definition](../reported/r7rs-define-record-type-not-an-internal-definition.md)).
-- **One library per file, named after the file, and no `(export (rename ...))`**
-  ([r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md)).
-- **A loop whose non-tail call goes through a procedure variable** is CPS, and
-  its constant stack is the C compiler's sibling call -- the default `-O2` has
-  it, `-O0` does not
+- ~~**`define-record-type` is not an internal definition** -- top level or a
+  library body only~~ -- resolved 2026-09-26: one among a body's leading
+  definitions is lifted to the top level under fresh names the body's scope
+  maps its names to
+  ([archived](../archive/r7rs-define-record-type-not-an-internal-definition.md)).
+- **One library per file, named after the file** -- kept by decision
+  2026-09-26 (Section 8, question 7)
+  ([r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md));
+  ~~no `(export (rename ...))`~~ -- resolved 2026-09-26: the definition is
+  spelled with the public name, or aliased when it is imported or exported
+  twice.
+- **Mutual recursion whose non-tail calls go through a procedure variable** is
+  CPS, and the tail call between the two procedures is the C compiler's
+  sibling call -- the default `-O2` has it, `-O0` does not
   ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md);
-  every dialect with effectful functions).
+  every dialect with effectful functions). A self-recursive loop of that
+  shape -- `for-each`, `map`, `member` -- is a backedge since 2026-09-26.
 - ~~**Re-entrant `call/cc` is Linux and macOS only**~~ -- resolved 2026-09-26:
   the stack base comes from the TEB and the jump unwinds nothing
   ([archived](../archive/r7rs-reentrant-callcc-not-on-windows.md)).

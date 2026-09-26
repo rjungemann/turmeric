@@ -1104,6 +1104,12 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
              * borrow so a call can bind K from a `(& K)` argument. */
             t->as.ref_borrow.target_tyvar =
                 (target->kind == TY_TYVAR) ? target->as.tyvar_.name : NULL;
+            /* borrowed-aggregate-key-skips-the-key-check: a `(& Pt)` /
+             * `(& (Vec A))` parameter keeps the target its kind cannot name,
+             * so a call compares a borrowed argument against it (and binds
+             * the tyvars inside it). */
+            if (borrow_target_needs_full(target->kind))
+                t->as.ref_borrow.target_full = target;
 
             /* LS3: well-formedness of a nested borrow &'a &'b T.  The outer
              * reference (lifetime 'a) points at the inner reference (lifetime

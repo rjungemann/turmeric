@@ -412,15 +412,9 @@ What it does not cover:
 
 - **String literals are immutable.** R7RS allows this. See Lists,
   vectors, strings above.
-- **`define-record-type` is a top-level or library-body form.** R7RS counts it
-  a definition, so it may open any body; here one inside a `lambda` or `let`
-  body is an error naming the restriction. Define the type at the top level
-  and its constructor, predicate and accessors are in scope everywhere.
 - **A file holds one library, named after the file.** `(define-library (two
   a) ...)` lives in `two/a.tur`, the way a Turmeric module's path is its name,
-  and a second `define-library` in the same file is an error. `(export (rename
-  internal exported))` is refused too: export the name and rename it at the
-  import.
+  and a second `define-library` in the same file is an error.
 - **`(except ...)` over a user library or a Turmeric module hides nothing.**
   Turmeric's import has no "all but", so the module is imported whole; over
   a `(scheme ...)` library an excluded name is the program's own to define.
@@ -440,15 +434,16 @@ What it does not cover:
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.
-- **A loop through a procedure variable needs the C compiler's tail call.** A
-  procedure that calls another through a *variable* rather than by name, in a
-  non-tail position -- which is what `for-each`, `map`, `member` and a
-  `delay-force` stream do with the procedure you hand them -- compiles to a
-  continuation-passing shape whose own recursion is a C tail call. It runs in
-  constant stack when the C compiler makes that a sibling call, which the
-  default `-O2` does; a `-O0` build overflows on a million elements, and an
-  `-O1` build depends on the C compiler. Tail calls themselves -- self, mutual
-  and through a variable -- are constant stack at every level.
+- **Mutual recursion through a procedure variable needs the C compiler's tail
+  call.** A procedure that calls another through a *variable* rather than by
+  name, in a non-tail position, compiles to a continuation-passing shape.
+  When it loops by calling ITSELF -- which is what `for-each`, `map`, `member`
+  and a `delay-force` stream do with the procedure you hand them -- the loop
+  is a jump at every optimization level. When two such procedures tail-call
+  EACH OTHER, the call between them is a C tail call, constant stack when the
+  C compiler makes it a sibling call: the default `-O2` does, a `-O0` build
+  overflows on a million iterations. Tail calls themselves -- self, mutual and
+  through a variable -- are constant stack at every level.
 
 ## Conformance
 

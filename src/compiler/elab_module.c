@@ -2,6 +2,7 @@
 #include "scheme_lower.h"
 #include "runtime/globals.h"     /* g_lang_prelude */   /* r7rs-lang-plan R2: Scheme core forms in an imported module */
 #include "elab_internal.h"
+#include "lang_dialects.h"      /* lang_span_is_dynamic: the H6 forward-decl rule */
 
 /* ---- file-local helper forward declarations ---- */
 static bool module_name_valid(const char *name, uint32_t len);
@@ -148,6 +149,31 @@ static void elab_forward_declare_defns(Elab *e, Form *const *items,
         uint32_t param_arity = (params_idx < (uint32_t)f->as.list.len)
             ? fwd_decl_scan_params(e->arena, f->as.list.items[params_idx], &arg_kinds)
             : 0;
+        /* saffron-dynamic-surface-pass H6, the module half: an UNANNOTATED
+         * return in a dynamic file is `any`, and this forward decl is what a
+         * caller elaborated before the callee sees.  elaborate_program's
+         * pre-pass (elab_toplevel.c) has the rule; this one did not, so the
+         * R7RS prelude compiled when a Scheme program was the entry and not
+         * when a Turmeric module imported a Scheme library -- `r7rs-exint-of__`
+         * calls `r7rs-exact`, defined further down, and the call was typed by
+         * the TY_INT placeholder and re-tagged as a pointer at the `any`
+         * widen (untyped-forward-callee-result-retagged-as-pointer).
+         * Annotation is decided structurally, as there: a `: T` or a keyword
+         * followed by a body; a bare symbol or list here is the body. */
+        {
+            bool ret_annotated = false;
+            if (ret_idx < (uint32_t)f->as.list.len) {
+                const Form *rf = f->as.list.items[ret_idx];
+                ret_annotated = rf->tag == F_TYPE_ANN ||
+                    (rf->tag == F_KEYWORD && (uint32_t)f->as.list.len > ret_idx + 1);
+            }
+            if (!ret_annotated && lang_span_is_dynamic(f->span) &&
+                !(fn_name_f->as.sym->len == 4 && memcmp(fn_name_f->as.sym->name, "main", 4) == 0 &&
+                  param_arity == 0)) {
+                fwd_result_kind = TY_ANY;
+                fwd_result_full = NULL;
+            }
+        }
         /* r7rs-lang-plan R3: a compound parameter type in a dynamic file
          * rides the forward decl in full -- see elab_fwd_param_full_types.
          * This pre-pass is the one an imported `#lang r7rs` prelude goes
@@ -449,9 +475,35 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
                            "        try `tur check -I src <file>` from the spice root,\n"
                            "        or build the whole spice with `tur build src/`";
                 }
+                /* r7rs-library-file-shape-and-export-rename: a Scheme
+                 * `(import (two a))` reaches here as the module `two/a`, and
+                 * nothing above says the library's NAME is where it is looked
+                 * for -- a `(define-library (two a) ...)` in `lib.tur` is
+                 * never found.  Say so, in the library's own spelling. */
+                char r7note[512] = "";
+                const SourceFile *isf = diag_source_file(import_span.file_id);
+                if (isf && isf->lang == LANG_R7RS && isf->src &&
+                    import_span.off_end > import_span.off_start && import_span.off_end <= isf->len) {
+                    size_t sl = import_span.off_end - import_span.off_start;
+                    const char *st = isf->src + import_span.off_start;
+                    bool turmeric_ns = false;
+                    for (size_t k = 0; k + 10 <= sl && !turmeric_ns; k++)
+                        turmeric_ns = memcmp(st + k, "(turmeric ", 10) == 0;
+                    if (!turmeric_ns) {
+                        char lib[256]; size_t at = 0;
+                        for (const char *p = name->name; *p && at + 2 < sizeof lib; p++)
+                            lib[at++] = *p == '/' ? ' ' : *p;
+                        lib[at] = '\0';
+                        snprintf(r7note, sizeof r7note,
+                                 "\n  note: a library is found by its name: (%s) must be the file %s.tur "
+                                 "(or %s.scm) on the paths above, holding that one define-library "
+                                 "-- a file holds one library, named after the file",
+                                 lib, name->name, name->name);
+                    }
+                }
                 diag_emit(DIAG_ERROR, import_span,
-                          "module '%s' not found\n  searched:\n%s%s",
-                          name->name, attempted, hint);
+                          "module '%s' not found\n  searched:\n%s%s%s",
+                          name->name, attempted, hint, r7note);
                 slot->is_loading = false;
                 return NULL;
             }

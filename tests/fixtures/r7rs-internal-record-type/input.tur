@@ -1,0 +1,46 @@
+#lang r7rs
+;; r7rs-define-record-type-not-an-internal-definition: R7RS 5.5 makes
+;; define-record-type a definition, so it may stand among a body's leading
+;; definitions.  The lowering lifts the struct and procedures to the top
+;; level under fresh names; the body's scope maps the names it wrote to them.
+(import (scheme base) (scheme write))
+
+;; Two procedures each with their own <box>: different types, different fields.
+(define (f n)
+  (define-record-type <box> (mk v) box? (v box-v set-box-v!))
+  (let ((b (mk n)))
+    (set-box-v! b (* 10 (box-v b)))
+    (list (box? b) (box? n) (box-v b))))
+
+;; letrec*: a define before the record type calls its constructor, and an
+;; accessor is passed as a procedure value.
+(define (g)
+  (define (make-two) (list (mk2 1 2) (mk2 3 4)))
+  (define-record-type <box> (mk2 a b) box2? (a box-a) (b box-b))
+  (define total 0)
+  (for-each (lambda (bx) (set! total (+ total (box-a bx) (box-b bx)))) (make-two))
+  (list total (map box-a (make-two))))
+
+;; A let body, a nested body, and a field named like an enclosing variable.
+(define (h v)
+  (let ((w (+ v 1)))
+    (define-record-type pt (make-pt x y) pt? (x pt-x) (y pt-y))
+    (let ((p (make-pt v w)))
+      (let ()
+        (define-record-type <cell> (cell v) cell? (v cell-v))
+        (list (pt-x p) (pt-y p) (cell-v (cell (pt? p))))))))
+
+;; A record type a macro's expansion defines in a body.
+(define-syntax with-pair
+  (syntax-rules ()
+    ((_ a b body)
+     (let ()
+       (define-record-type <pair2> (kons x y) pair2? (x kar) (y kdr))
+       (let ((p (kons a b))) (body (kar p) (kdr p)))))))
+
+(write (f 3)) (newline)
+(write (f 4)) (newline)
+(write (g)) (newline)
+(write (h 5)) (newline)
+(write (with-pair 1 2 +)) (newline)
+(write (with-pair 'a 'b list)) (newline)

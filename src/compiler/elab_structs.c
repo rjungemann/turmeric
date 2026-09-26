@@ -5544,8 +5544,16 @@ Expr *elab_borrow_immut(Elab *e, const Form *call) {
         borrow_type = type_ref_immut(inner->type.as.ref.inner);
     } else if (inner->type.kind == TY_REF_IMMUT || inner->type.kind == TY_REF_MUT) {
         borrow_type = type_ref_immut(inner->type.as.ref_borrow.target);
+        borrow_type.as.ref_borrow.target_full = inner->type.as.ref_borrow.target_full;
     } else {
         borrow_type = type_ref_immut(inner->type.kind);
+        /* borrowed-aggregate-key-skips-the-key-check: keep an aggregate
+         * target's full type, which its kind does not name. */
+        if (borrow_target_needs_full(inner->type.kind)) {
+            Type *tf = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *tf = inner->type;
+            borrow_type.as.ref_borrow.target_full = tf;
+        }
     }
     
     /* Create the borrow expression */
@@ -5615,8 +5623,15 @@ Expr *elab_borrow_mut(Elab *e, const Form *call) {
         return NULL;
     } else if (inner->type.kind == TY_REF_MUT) {
         borrow_type = type_ref_mut(inner->type.as.ref_borrow.target);
+        borrow_type.as.ref_borrow.target_full = inner->type.as.ref_borrow.target_full;
     } else {
         borrow_type = type_ref_mut(inner->type.kind);
+        /* borrowed-aggregate-key-skips-the-key-check: as `&` does. */
+        if (borrow_target_needs_full(inner->type.kind)) {
+            Type *tf = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *tf = inner->type;
+            borrow_type.as.ref_borrow.target_full = tf;
+        }
     }
     
     /* Create the borrow expression */

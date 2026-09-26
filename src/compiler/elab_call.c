@@ -1028,8 +1028,10 @@ static bool call_type_has_named_tyvar(const Type *t) {
         case TY_TYVAR:
             return t->as.tyvar_.name != NULL;
         case TY_REF_IMMUT: case TY_REF_MUT:
-            /* H9: `(& K)` names K through the borrow. */
-            return t->as.ref_borrow.target_tyvar != NULL;
+            /* H9: `(& K)` names K through the borrow; a `(& (Vec A))` names A
+             * through its recorded full target. */
+            return t->as.ref_borrow.target_tyvar != NULL ||
+                   call_type_has_named_tyvar(t->as.ref_borrow.target_full);
         case TY_APP:
             return call_type_has_named_tyvar(t->as.app.fn) ||
                    call_type_has_named_tyvar(t->as.app.arg);
@@ -1284,22 +1286,32 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
              * contribute K, and an any-held map seamed on argument 0 was
              * grounded to `(Map any any)`. */
             const char *tv = expected->as.ref_borrow.target_tyvar;
-            if (!tv) return true;
+            const Type *ef = expected->as.ref_borrow.target_full;
+            if (!tv && !ef) return true;
             Type target;
             if (actual.kind == TY_REF_IMMUT || actual.kind == TY_REF_MUT) {
-                /* A borrow's target is a bare KIND, which fully names only a
-                 * scalar.  A struct / String / applied key (`&<adt>`) must
-                 * not bind K from its kind -- it would clash with the K the
-                 * map argument already bound with its full type -- so those
-                 * stay unbound here exactly as before this arm existed. */
+                /* A borrow's target KIND fully names only a scalar.  An
+                 * aggregate (`&Pt`, `&String`, `&(Vec int)`) is named by the
+                 * full type the borrow recorded, and is bound / compared
+                 * through it -- borrowed-aggregate-key-skips-the-key-check:
+                 * this arm used to return true for every aggregate, so
+                 * nothing checked a borrowed String against the `int` a
+                 * `(Map int int)` had bound K to.  An aggregate borrow with
+                 * no recorded target (an imported signature, an owning-ref
+                 * reborrow) is still accepted unbound, as before. */
                 TypeKind tk = actual.as.ref_borrow.target;
-                if (!(typekind_is_numeric(tk) || tk == TY_BOOL || tk == TY_CSTR ||
-                      tk == TY_NIL || tk == TY_SYM || tk == TY_PTR_VOID))
+                if (actual.as.ref_borrow.target_full) {
+                    target = *actual.as.ref_borrow.target_full;
+                } else if (typekind_is_numeric(tk) || tk == TY_BOOL || tk == TY_CSTR ||
+                           tk == TY_NIL || tk == TY_SYM || tk == TY_PTR_VOID) {
+                    target = type_from_kind(tk);
+                } else {
                     return true;
-                target = type_from_kind(tk);
+                }
             } else {
                 target = actual;
             }
+            if (!tv) return call_collect_type_bindings(ef, target, bindings, n_bindings);
             Type tvt; memset(&tvt, 0, sizeof tvt);
             tvt.kind = TY_TYVAR; tvt.as.tyvar_.name = tv;
             return call_collect_type_bindings(&tvt, target, bindings, n_bindings);
@@ -7098,6 +7110,16 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                         arg_ok = true;
                     }
                 }
+            } else if (arg_ok &&
+                       (expected_arg_kind == TY_REF_IMMUT || expected_arg_kind == TY_REF_MUT) &&
+                       expected_full && expected_full->kind == expected_arg_kind &&
+                       expected_full->as.ref_borrow.target_full) {
+                /* borrowed-aggregate-key-skips-the-key-check: a concrete
+                 * `(& Pt)` parameter matched any borrow of an ADT by kind, so
+                 * `(& q)` for a Qt -- or a String -- was accepted.  type_eq
+                 * compares the recorded targets (and falls back to the kind
+                 * when the argument has none). */
+                arg_ok = type_eq(args[i]->type, *expected_full);
             }
         }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_FN) {
@@ -7524,6 +7546,18 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                         }
                     }
                     if (!args[j] || args[j]->type.kind == TY_ANY) continue;
+                    /* saffron-open-generic-result-not-grounded: only a
+                     * CONTAINER sibling pins the instantiation (a typed map
+                     * passed beside this one).  A key or element does not:
+                     * every container a dynamic file builds is the all-`any`
+                     * instantiation, so binding K := Sym from `(map-get m :a)`
+                     * checked a `(Map any any)` box against `(Map Sym any)`
+                     * and panicked -- the same shape as `(vec-push! v "x")`
+                     * on an `any`-held vector.  Left open, K grounds to `any`
+                     * below, and the scalar sibling is widened to meet it
+                     * (by value by the widen seam, through a borrow by the
+                     * borrow seam). */
+                    if (args[j]->type.kind != TY_APP) continue;
                     uint32_t fj = fn_binding->closure_fn_binding ? j + 1 : j;
                     Type *ej = (fj < fn_type.as.fn.arity)
                         ? fn_type.as.fn.arg_full_types[fj] : NULL;
@@ -7672,6 +7706,48 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 }
             }
         }
+        /* saffron-open-generic-result-not-grounded: the BORROW twin of the
+         * widen seam above.  `map-assoc` / `map-get` check the key against the
+         * map through `(tur-map-kcheck m (& k))`, whose `(& K)` binds K from the
+         * map -- `any` for every map a dynamic file builds -- and then met the
+         * key's own `&cstr`: `function 'tur-map-kcheck' arg 2: expected &?, got
+         * &cstr`, reported inside stdlib/map.tur for `(map-assoc (map-new) "k"
+         * 42)`.  By value the widen seam boxes such a key; a borrow cannot be
+         * widened in place, so borrow a widened copy instead -- `(& (:: k
+         * any))`, the address of a fresh box.  Only an immutable borrow (a
+         * callee cannot write through it), only when what K is bound to is
+         * exactly `any`, and only in a dynamic file: a typed `(Map Sym int)`
+         * keeps rejecting a string key (errors/saffron-typed-map-rejects-
+         * wrong-key). */
+        if (!arg_ok && args[i] && args[i]->kind == EX_BORROW_IMMUT &&
+            args[i]->type.kind == TY_REF_IMMUT &&
+            args[i]->type.as.ref_borrow.target != TY_ANY &&
+            args[i]->as.borrow_immut_.expr &&
+            fn_binding && fn_type.kind == TY_FN &&
+            (lang_span_is_dynamic(args[i]->span) ||
+             lang_span_is_dynamic(call->span) || e->toplevel_dynamic)) {
+            uint32_t fb = fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *pb = (fn_type.as.fn.arg_full_types && fb < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[fb] : NULL;
+            if (!pb && fn_binding->source_fn_def && fn_binding->source_fn_def->params &&
+                fb < fn_binding->source_fn_def->n_params &&
+                fn_binding->source_fn_def->params[fb])
+                pb = &fn_binding->source_fn_def->params[fb]->type;
+            uint8_t bix = 0;
+            if (pb && pb->kind == TY_REF_IMMUT && pb->as.ref_borrow.target_tyvar &&
+                call_find_type_binding(type_bindings, n_type_bindings,
+                                       pb->as.ref_borrow.target_tyvar, &bix) &&
+                type_bindings[bix].type.kind == TY_ANY) {
+                Expr *boxed = elab_coerce_to_any(e, args[i]->as.borrow_immut_.expr);
+                if (boxed) {
+                    Expr *nb = expr_new(e->arena, EX_BORROW_IMMUT,
+                                        type_ref_immut(TY_ANY), args[i]->span);
+                    nb->as.borrow_immut_.expr = boxed;
+                    args[i] = nb;
+                    arg_ok = true;
+                }
+            }
+        }
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
             /* IT1: Use union-specific error code when union type is involved */
@@ -7685,6 +7761,38 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * their full type in arg_full_types, look it up there so the name
              * includes member/row types. */
             Type expected_ty = type_from_kind(expected_arg_kind);
+            /* saffron-open-generic-result-not-grounded (its second defect): a
+             * borrowed generic parameter `(& K)` printed as `&?` -- the kind
+             * alone has no target -- so `tur-map-kcheck`'s refusal of a string
+             * key into a Sym-keyed map read "expected &?, got &cstr".  Print
+             * what K is bound to at this call. */
+            if ((expected_arg_kind == TY_REF_IMMUT || expected_arg_kind == TY_REF_MUT) &&
+                fn_binding && fn_type.kind == TY_FN) {
+                uint32_t fr = fn_binding->closure_fn_binding ? i + 1 : i;
+                const Type *pr = (fn_type.as.fn.arg_full_types && fr < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fr] : NULL;
+                if (!pr && fn_binding->source_fn_def && fn_binding->source_fn_def->params &&
+                    fr < fn_binding->source_fn_def->n_params &&
+                    fn_binding->source_fn_def->params[fr])
+                    pr = &fn_binding->source_fn_def->params[fr]->type;
+                uint8_t rix = 0;
+                if (pr && (pr->kind == TY_REF_IMMUT || pr->kind == TY_REF_MUT) &&
+                    pr->as.ref_borrow.target_tyvar &&
+                    call_find_type_binding(type_bindings, n_type_bindings,
+                                           pr->as.ref_borrow.target_tyvar, &rix) &&
+                    type_bindings[rix].type.kind != TY_TYVAR &&
+                    type_bindings[rix].type.kind != TY_UNKNOWN)
+                {
+                    expected_ty = pr->kind == TY_REF_MUT
+                        ? type_ref_mut(type_bindings[rix].type.kind)
+                        : type_ref_immut(type_bindings[rix].type.kind);
+                    if (borrow_target_needs_full(type_bindings[rix].type.kind)) {
+                        Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *bt = type_bindings[rix].type;
+                        expected_ty.as.ref_borrow.target_full = bt;
+                    }
+                }
+            }
             if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION ||
                  expected_arg_kind == TY_APP || expected_arg_kind == TY_HANDLER ||
                  expected_arg_kind == TY_STRUCT || expected_arg_kind == TY_ADT ||
@@ -7711,6 +7819,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 Type *ct = (fn_arg_idx5 < fn_type.as.fn.arity)
                     ? fn_type.as.fn.arg_full_types[fn_arg_idx5] : NULL;
                 if (ct && (ct->kind == TY_APP || ct->kind == TY_ADT))
+                    expected_ty = *ct;
+                /* borrowed-aggregate-key-skips-the-key-check: a concrete
+                 * `(& Pt)` prints its target, not `&adt`. */
+                if (ct && ct->kind == expected_arg_kind &&
+                    (ct->kind == TY_REF_IMMUT || ct->kind == TY_REF_MUT) &&
+                    ct->as.ref_borrow.target_full && !ct->as.ref_borrow.target_tyvar &&
+                    !call_type_has_named_tyvar(ct))
                     expected_ty = *ct;
             }
             /* PH2.1: Build the type names into owned local buffers via
@@ -8748,8 +8863,14 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      *
      * Deferred to an enclosing ascription like the other two: `(:: (none)
      * (Option float))` pins the instantiation on purpose. */
+    /* saffron-open-generic-result-not-grounded: the TOP-LEVEL form's dialect
+     * counts too, as it does for the seams (M10).  `[]` lowers through the
+     * `vec-of` macro to a `(vec-new)` carrying stdlib/vec.tur's span, so
+     * gating on the call's own span left the empty literal an open `(Vec A)`
+     * -- the one Saffron vector that was not `(Vec any)`, whose box then
+     * matched no registry row (`(.kind-of x)` on it panicked compiled). */
     if (fn_type.kind == TY_FN && fn_type.as.fn.result_full_type &&
-        lang_span_is_dynamic(call->span) &&
+        (lang_span_is_dynamic(call->span) || e->toplevel_dynamic) &&
         call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
         !(saved_expected_return && saved_expected_return->kind == TY_APP)) {
         const char *open_names[16];

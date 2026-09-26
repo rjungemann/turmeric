@@ -1,11 +1,14 @@
 # Catching scalar representation confusion: ratchet first, fuzz second
 
-> **Status:** proposed (2026-09-11). **Track:** post-v1, but the F0 half is
-> cheap enough to land any time.
+> **Status:** **complete** -- F0, F1 and F2 landed 2026-09-11 (section 5a); F3
+> deliberately not done (its condition was never met). Archived 2026-09-26
+> with a post-landing audit (section 5b): the nightly search worked and found
+> a real defect four times, and its reporting step filed none of them until
+> the `fuzz` label bug was fixed. **Track:** post-v1.
 > **Type:** test infrastructure -- one warning ratchet extension, three gaps
 > closed in an existing fuzzer, and a seed-rotation story.
-> **Sequencing:** before [lattice-vocabulary-plan.md](lattice-vocabulary-plan.md)
-> and [crdt-spice-plan.md](crdt-spice-plan.md). Both of those are blocked on
+> **Sequencing:** before [lattice-vocabulary-plan.md](../upcoming/lattice-vocabulary-plan.md)
+> and [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md). Both of those are blocked on
 > defects of exactly the class this plan detects, and neither should land
 > vocabulary on top of a detector that cannot see its failure mode.
 
@@ -17,8 +20,8 @@ an integer. Recent instances, all within two releases -- the `any` -> scalar
 cast miscompiling in the JIT engine, the `Sym` ctor emitted taking `int64_t`
 while its caller passed `const struct __tur_sym *`, eight Saffron `any`-seam
 fixes, and the two defects filed while probing the lattice vocabulary
-([nested-class-method-call-picks-the-first-instance](../archive/nested-class-method-call-picks-the-first-instance.md),
-[nullary-class-method-unresolvable-over-newtype-tyvar](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md)).
+([nested-class-method-call-picks-the-first-instance](nested-class-method-call-picks-the-first-instance.md),
+[nullary-class-method-unresolvable-over-newtype-tyvar](nullary-class-method-unresolvable-over-newtype-tyvar.md)).
 
 The answer to "can this be fuzzed" is yes -- and the more useful answer is
 that **it already is, by four fuzzers, and the cheapest missing detector is
@@ -139,7 +142,7 @@ leg.defs.append("(definstance %s [%s] (%s [self : %s] : %s self))"
 ```
 
 Three properties follow, and each one independently makes
-[defect 1](../archive/nested-class-method-call-picks-the-first-instance.md)
+[defect 1](nested-class-method-call-picks-the-first-instance.md)
 unreachable:
 
 1. **One instance per class.** The class name is freshly generated per
@@ -158,7 +161,7 @@ Defect 1 requires all three of: a constrained generic body, a nested
 same-class call, and a non-first instance. The generator supplies none of
 them.
 
-[Defect 2](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md)
+[Defect 2](nullary-class-method-unresolvable-over-newtype-tyvar.md)
 is missed for a fourth reason: no generated method is **nullary**. Every method
 takes `self`, so a method whose class variable appears only in the return type
 is outside the space entirely.
@@ -296,7 +299,7 @@ The precedent report's entire lesson is that "a grep that silently matches
 nothing looks exactly like a clean corpus," and that two earlier sweeps
 reported false zeros. So the zero above is only meaningful alongside a positive
 control. Building
-[defect 1](../archive/nested-class-method-call-picks-the-first-instance.md)'s
+[defect 1](nested-class-method-call-picks-the-first-instance.md)'s
 repro through `tur build` with **the same `TUR_CC_FLAGS`** the sweep used:
 
 ```
@@ -366,8 +369,10 @@ zero tracked files, left by `8039ae53a`).
 - `x_class_nullary_newtype` closes gap 4: a **nullary** method over a
   `defopaque` newtype, on bare `int` legs.
 
-Both are open reports, so both are excluded by default via `known_bug_slug`
-and pinned in `KNOWN_PROBES`, per the harness's existing discipline.
+Both were open reports when this landed, so both were excluded by default
+via `known_bug_slug` and pinned in `KNOWN_PROBES`, per the harness's existing
+discipline. (Both were resolved and archived the same day; both shapes are back
+in the default pool, and their probes stay as FIXED regression rows.)
 
 **`known_probes()` needed a fix to make that pinning honest.** It decided
 "fires" from `out.kind in (crash, invalid_c, link, reject, other)` -- which
@@ -418,6 +423,102 @@ generator already knows the expected value, which is strictly stronger"). F1
 reaches both defects and produces a wrong-answer verdict on the first, so the
 condition is not met. Left in section 4 as the escape hatch it was written as.
 
+## 5b. After landing -- audit, 2026-09-26
+
+Thirteen nightly runs later, the question was whether F2 does what it says.
+The search did. The reporting step did not.
+
+### The search found one real defect, four times
+
+`.github/workflows/fuzz.yml` ran every night from 2026-09-13 to 2026-09-25.
+Nine runs were clean. Four (seeds `20260913`, `20260917`, `20260918`,
+`20260925`) each found one `BUG_wrong_output` in the type harness, all the
+same shape: a `class_nested` leg on a `float` scalar, plus a `gid` or
+`class_thru` hop. The saffron, refine and regions harnesses found nothing
+across all thirteen runs.
+
+It was one defect, and exactly the class this plan targets:
+[constrained-generic-float-result-into-generic-value-converts](constrained-generic-float-result-into-generic-value-converts.md).
+A constrained generic whose tail is a class-method call, called at `float`
+with its result passed into another generic, returned through the int64
+carrier with a value conversion. `-4.25` printed `-nan`. Now fixed and
+archived. F1's `class_nested` shape found it, but not because of nesting: it
+is the only generator shape that declares a decoy instance before the leg's
+own type, and that is the condition that matters.
+
+### The reporting step filed none of them
+
+Every one of those four runs went red on its final step:
+
+```
+could not add label: 'fuzz' not found
+##[error]Process completed with exit code 1.
+```
+
+The workflow opened its issue with `--label fuzz`, and that label never
+existed. So no issue was filed, no seed reached `tests/fuzz-seed-corpus.txt`,
+and the corpus stayed "empty until the nightly runs" for two weeks of
+nightlies. The only signal was a red X on a scheduled workflow. F2 said in so
+many words that this is "a signal people stop reading", and chose an issue
+over it for that reason.
+
+The step never ran once before the first real finding: `workflow_dispatch`
+only exercises it when a harness fails. Fixed: the step now runs
+`gh label create fuzz --force` first, and falls back to an unlabelled issue if
+labelling still fails.
+
+### Replay could not reach most findings
+
+The nightly runs `--n 400`; `replay-fuzz-seeds.sh` replays at smoke size
+(`--n 40` for the type harness). A case's program depends only on
+`(seed, index)`, so a finding at index 98 is simply never generated by the
+replay. Two of the four findings (indices 98 and 101) were in that position.
+Corpus rows now take an optional third column, the `--n` the seed needs;
+replay never runs fewer than smoke N. The two smoke-reachable seeds
+(`20260913` case 8, `20260918` case 7) are recorded.
+
+### A sibling the fuzzer cannot reach
+
+Reducing the finding turned up a worse sibling:
+[let-bound-class-method-result-in-constrained-generic-truncates](let-bound-class-method-result-in-constrained-generic-truncates.md).
+The same class-method call, `let`-bound inside the constrained generic,
+truncates `-4.25` to `-4` with no second generic involved. The generator
+never wrote a `let` inside a generic's body, so this was a section-3.1-style
+shape gap.
+
+*Follow-up, same day:* fixed at elaboration. The call is typed with its
+receiver's `A`, not the representative instance's `int`. Fixing it exposed
+a generic-*function* twin, `(let [y (gid x)] y)` returning `9` for `9.75`
+with no typeclass at all:
+[let-bound-generic-call-result-in-generic-truncates](let-bound-generic-call-result-in-generic-truncates.md).
+It is fixed too, and it reached stdlib: `vec-get` and `unwrap-or`, let-bound
+inside a generic, returned the carrier word or a truncated float. The
+generator gained both shapes, `class_let` and `gid_let`, and both are in the
+default pool.
+
+### The known-bug table had outlived two of its reports
+
+Each nightly also counted about 19 type-harness cases as
+`KNOWN(session-payloads-are-int64-only)` or
+`KNOWN(router-payloads-are-int64-only)`. Both reports were resolved and
+archived on 2026-09-16. What those rows were still catching was every
+by-value struct (`payload_box`) session or router leg, which the fix now
+rejects **by design** with `TUR-E0212`. That is exactly what the harness's
+report-only `SEAM_REJECT` class exists for. `--known-probes` had printed
+FIXED for both rows since then. The rows are retired and the probes stay as
+FIXED regression rows. That is the harness's own rule ("when a report is fixed
+and archived, delete its row"), applied ten nights late. A downgrade that
+outlives its report hides whatever else starts matching it.
+
+### Section 6's Linux/GCC item
+
+Section 6 asked for the ratchet to be re-checked on the GCC leg. That landed
+separately in `tests/run.sh`. GCC's `-Wfloat-conversion` also covers
+`double -> float`, which clang files under a different flag, so the ratchet
+skips warnings whose destination is a float type. The defect above
+reproduces identically under GCC 13.3, and GCC's `-Wfloat-conversion` flags
+its bad `return` line. The ratchet could see it; no fixture exercised it.
+
 ## 6. Risks and open questions
 
 - **The sweep may not be zero.** If fixtures already trip
@@ -448,10 +549,10 @@ condition is not met. Left in section 4 as the escape hatch it was written as.
   (the sweep-then-ratchet procedure this plan copies), and
   `docs/archive/emitter-thunk-type-return-mismatch.md` (the function-pointer
   ratchet beside it).
-- Blocked-on consumers: [lattice-vocabulary-plan.md](lattice-vocabulary-plan.md),
-  [crdt-spice-plan.md](crdt-spice-plan.md).
+- Blocked-on consumers: [lattice-vocabulary-plan.md](../upcoming/lattice-vocabulary-plan.md),
+  [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md).
 - Defects this plan would have caught:
-  [nested-class-method-call-picks-the-first-instance](../archive/nested-class-method-call-picks-the-first-instance.md),
-  [nullary-class-method-unresolvable-over-newtype-tyvar](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md).
+  [nested-class-method-call-picks-the-first-instance](nested-class-method-call-picks-the-first-instance.md),
+  [nullary-class-method-unresolvable-over-newtype-tyvar](nullary-class-method-unresolvable-over-newtype-tyvar.md).
 - In-tree: `docs/guides/value-representations-guide.md` (the representation and
   boundary inventory the type fuzzer walks).

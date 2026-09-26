@@ -3,9 +3,12 @@
 #
 # Reads tests/fuzz-seed-corpus.txt and re-runs every seed recorded for the
 # named harness at smoke size.  See that file's header for why, and
-# docs/upcoming/type-confusion-detection-plan.md section F2.
+# docs/archive/type-confusion-detection-plan.md section F2.
 #
 # Usage: replay-fuzz-seeds.sh <harness> <driver.py> <tur> <n>
+#
+# <n> is the smoke case count.  A corpus row may raise it for its own seed
+# with a third column (see the corpus header).
 #
 # Exits non-zero if any replayed seed fails.  An empty corpus exits 0 after
 # saying so -- silence would be indistinguishable from "the file went
@@ -23,16 +26,27 @@ fi
 
 rc=0
 found=0
-while read -r h seed _rest; do
+while read -r h seed cases _rest; do
   case "$h" in ''|'#'*) continue ;; esac
   [ "$h" = "$HARNESS" ] || continue
   case "$seed" in ''|*[!0-9]*)
     echo "  replay-fuzz-seeds: $HARNESS: ignoring non-numeric seed '$seed'" >&2
     continue ;;
   esac
+  # Optional third column: how many cases the seed needs.  A case's program
+  # depends only on (seed, case index), so a finding at index k replays with
+  # --n k+1 -- but not at the smoke N when k >= N, which is where most of a
+  # --n 400 nightly's findings land.  Never replay FEWER than smoke N.
+  n="$N"
+  case "$cases" in
+    ''|'#'*) ;;
+    *[!0-9]*)
+      echo "  replay-fuzz-seeds: $HARNESS seed $seed: ignoring non-numeric case count '$cases'" >&2 ;;
+    *) [ "$cases" -gt "$N" ] && n="$cases" ;;
+  esac
   found=$((found + 1))
-  echo "  replaying $HARNESS seed $seed"
-  python3 "$DRIVER" --tur "$TUR" --n "$N" --seed "$seed" || rc=1
+  echo "  replaying $HARNESS seed $seed (n $n)"
+  python3 "$DRIVER" --tur "$TUR" --n "$n" --seed "$seed" || rc=1
 done < "$CORPUS"
 
 if [ "$found" -eq 0 ]; then

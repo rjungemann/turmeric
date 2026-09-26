@@ -1,7 +1,40 @@
 # Saffron -- a dynamically typed `#lang` over the Turmeric runtime
 
-Status: **plan only for Saffron itself** -- there is no `EXPERIMENTS[]` row, no
-`#lang` base, no dialect fixture.
+Status: **shipped; S9's dispatch residue is down to two stated limits.**
+`#lang saffron` GRADUATED at 0.46.0 (2026-09-10) and is an ordinary base
+dialect on the same footing as `#lang turmeric`: there is no `EXPERIMENTS[]`
+row, no enable and no lifecycle warning (the graduation note in
+`src/runtime/experiments.c` records why `g_opt_dynamic_any` outlived the row).
+Every stage, S0 through S9, has landed. About eighty fixtures with `saffron`
+in the name pin the dialect on both back ends, plus ten under `errors/`.
+[saffron-guide.md](../guides/saffron-guide.md) and
+[introducing-saffron.md](../guides/introducing-saffron.md) are the
+user-facing halves.
+
+What keeps this file in `docs/upcoming/` is the dynamic-dispatch residue S9
+left -- see [S9's remaining limits](#s9----what-is-still-open). Once those
+land or move to reports of their own, archive the plan. (S9's last design
+item, the constrained instance at `A = any` -- D8 Q1 -- turned out to be a
+silent wrong answer rather than a limit, and was built 2026-09-26. The same
+day, binary-fn methods and the class-declared result type landed too,
+including a result that mentions the class variable applied --
+[saffron-applied-class-var-result-takes-one-instances-type](../archive/saffron-applied-class-var-result-takes-one-instances-type.md).
+What is left are two stated limits on UNANNOTATED class parameters, both
+clean panics or diagnostics; see the list.)
+
+Open reports a Saffron program reaches (none is a stage blocker):
+
+- [saffron-catch-unwind-around-dyn-call-fn-crashes](../reported/saffron-catch-unwind-around-dyn-call-fn-crashes.md) (high)
+- [any-widen-stored-in-an-adt-field-has-no-owner](../reported/any-widen-stored-in-an-adt-field-has-no-owner.md) (medium)
+- [compiled-closure-copies-a-captured-mut](../reported/compiled-closure-copies-a-captured-mut.md) (medium, every dialect)
+- [dynamic-returned-closure-env-is-never-freed](../reported/dynamic-returned-closure-env-is-never-freed.md) (low-medium)
+- [list-length-on-cons-any-segfaults](../reported/list-length-on-cons-any-segfaults.md) (low-medium)
+- [byvalue-recursive-adt-boxes-are-never-freed](../reported/byvalue-recursive-adt-boxes-are-never-freed.md) (low-medium, plain Turmeric too)
+- [cps-capturing-closure-env-leaks-through-dyn-call](../reported/cps-capturing-closure-env-leaks-through-dyn-call.md) (low)
+- [jit-x86-64-struct-valued-statement-expression-miscompiles](../reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md) (medium, JIT engine on x86-64 only)
+
+The rest of this header is the running log of the build-out. It is kept as
+written, with dated corrections where a claim has since changed.
 
 **S0 is complete as of 2026-09-07** -- all twelve prerequisites are fixed and
 archived: **P1** (cross-TU `any` ids), **P2** (by-value rank-2 receiver,
@@ -21,8 +54,9 @@ across both back ends for structs, ADTs, applied constructors, collections,
 opaques, unions, and every function shape -- which is the substrate S2-S4 stand
 on, so this is more than S0 asked for.
 
-Three residuals remain open, none of them S0 blockers:
-[a shim-box leak when a fn is widened through a local binding](../reported/any-fn-widen-through-local-binding-leaks.md)
+Three residuals were left open, none of them S0 blockers (all three are fixed
+and archived since):
+[a shim-box leak when a fn is widened through a local binding](../archive/any-fn-widen-through-local-binding-leaks.md)
 (low-medium), [a segfault in the interpreter's `any` reflection for an
 inline-C-produced opaque](../archive/interp-inline-c-opaque-segv-in-any-reflection.md)
 (high, but inside the existing TI7 inline-C carve-out -- worth closing before
@@ -57,6 +91,10 @@ to. Filed as
 [any-widen-stored-in-an-adt-field-has-no-owner](../reported/any-widen-stored-in-an-adt-field-has-no-owner.md),
 and it is a **prerequisite for S6**: a container of `any` is exactly what that
 stage is about, so the element box needs an owner before it lands.
+(**Corrected 2026-09-26:** it did not block S6, which landed 2026-09-08
+around it. The report is still open, narrowed to one shape -- a recursive
+function handing a match binder to an opaque call -- and
+`saffron-higher-order` measures 680 bytes in 17 allocations, down from 21.)
 
 The sibling finding that measurement separated out --
 [a self-recursive by-value ADT mallocs one box per link](../reported/byvalue-recursive-adt-boxes-are-never-freed.md),
@@ -64,7 +102,9 @@ which reproduces in plain Turmeric with no `any` anywhere -- is now partially
 fixed: a non-escaping local's spine is freed at scope exit. Its two residues (a
 local handed to a callee, and `:copy` types, where `with-region` already
 reclaims the spine) are recorded there.
-**S6, containers and the Saffron prelude, is DONE (2026-09-08). S7, the boundary, is next.**
+**S6, containers and the Saffron prelude, is DONE (2026-09-08).** S7 (the
+boundary) and S8 (tooling) followed on 2026-09-09, S9 (runtime typeclass
+dispatch) was built the same day, and the dialect graduated 2026-09-10.
 
 Worth stating plainly, because it changes how the rest of this plan should be
 read: **six of those eight reports had a diagnosis that was wrong on
@@ -211,32 +251,37 @@ fixtures that prove it.
 ## 3. What does not ship (measured)
 
 Every row below was reproduced against `v0.44.2`. Transcript in the appendix.
+**Every row is closed** (2026-09-26 re-check): the table is kept as the
+starting position the stages were measured against.
 
 | # | Saffron needs | Today | Diagnostic |
 |---|---|---|---|
-| G1 | unannotated param is dynamic | defaults to `int`; `(twice 7.1)` on `(defn twice [x] (* x 2))` is rejected | TUR-E0001 `expected int, got float` |
+| ~~G1~~ | unannotated param is dynamic | **FIXED by S2 (2026-09-07)** -- was: defaults to `int`; `(twice 7.1)` on `(defn twice [x] (* x 2))` is rejected | -- |
 | ~~G2~~ | unannotated return is dynamic | **FIXED 2026-09-07** -- was inconsistent (`int`/`cstr` bodies OK, `7.1` a hard error claiming the fn "declares return type 'nil'"). Now inferred for every body type. Still `int`-shaped rather than dynamic, which is S2's job, but no longer wrong | -- |
-| G3 | `(+ x 1)` where `x : any` | rejected | TUR-E0006 `operator lookup failed for '+', first arg type any` |
-| G4 | `(println x)` where `x : any` | rejected -- the union guide's own headline example does not compile | TUR-E0006 |
-| G5 | `(f x)` where `f : any` | rejected | `'f' is not a function or continuation` |
-| G6 | `(match x)` where `x : any` | rejected at elaboration, though `emit_expr.c:14356` already has a `TY_ANY` scrutinee arm | `match: scrutinee must be an ADT type, got any` |
-| G7 | heterogeneous containers | element type unifies; `(vec-of 1 "two")` is rejected | TUR-E0001 |
+| ~~G3~~ | `(+ x 1)` where `x : any` | **FIXED by S3/S5 (2026-09-07)** -- was: rejected, TUR-E0006 `operator lookup failed for '+', first arg type any` | -- |
+| ~~G4~~ | `(println x)` where `x : any` | **FIXED by S3/S5 (2026-09-07)** -- was: rejected; the union guide's own headline example did not compile | -- |
+| ~~G5~~ | `(f x)` where `f : any` | **FIXED by S4/S5 (2026-09-07)** -- was: rejected, `'f' is not a function or continuation` | -- |
+| ~~G6~~ | `(match x)` where `x : any` | **FIXED by S4/S5 (2026-09-07)** -- a checked narrow to the ADT the arms name. Was: rejected at elaboration, `match: scrutinee must be an ADT type, got any` | -- |
+| ~~G7~~ | heterogeneous containers | **FIXED by S6 (2026-09-08)** -- `[...]`, `#map{}`, `#set{}` and `(list ...)` widen each element to `any`. Was: `(vec-of 1 "two")` rejected with TUR-E0001 | -- |
 | ~~G8~~ | `type-of` on a boxed closure | **FIXED 2026-09-07** -- both back ends answer `"fn"`. But the tag is the bare `TY_FN` kind, so it identifies functions as a CLASS and not by signature; see P9 | -- |
-| G9 | `=`/`<`/`>` on `any` | rejected | TUR-E0006 |
-| G10 | `any` truthiness in `if` | untested; `if` wants `bool` | -- |
-| G11 | field access on `any` | no dynamic path | -- |
+| ~~G9~~ | `=`/`<`/`>` on `any` | **FIXED by S3/S5 (2026-09-07)** -- was: rejected, TUR-E0006 | -- |
+| ~~G10~~ | `any` truthiness in `if` | **FIXED by S3/S5 (2026-09-07)** -- D4's rule: `false` and `nil` are falsy, everything else truthy | -- |
+| ~~G11~~ | field access on `any` | **FIXED by S4/S5 (2026-09-07)** -- was: no dynamic path | -- |
 
-G3, G4, G5, G6, G9 are one problem wearing five hats: **the builtin operator
-table is keyed on concrete argument kinds and has no `any` row.** That is the
-core engineering work of this plan, and it is the same work on both back ends
--- except that on the interpreter the *implementation* already exists
-(Section 2.3) and only the elaborator needs to stop rejecting the call.
+G3, G4, G5, G6, G9 were one problem wearing five hats: **the builtin operator
+table was keyed on concrete argument kinds and had no `any` row.** That was the
+core engineering work of this plan, and it was the same work on both back ends
+-- except that on the interpreter the *implementation* already existed
+(Section 2.3) and only the elaborator needed to stop rejecting the call. S3-S5
+did it: the elaborator routes such a call to the `EX_DYN_*` nodes D4 lists.
 
 G2 and G8 are defects independent of Saffron and were filed separately. **G2 is
 fixed** ([inferred-return-defaults-inconsistently](../archive/inferred-return-defaults-inconsistently.md)
 -- an ordering bug, not the missing inference the report guessed); G8 is
-`docs/reported/type-of-on-boxed-closure-diverges.md`, and G4's documentation
-half is `docs/reported/any-type-guide-examples-do-not-compile.md`.
+[type-of-on-boxed-closure-diverges](../archive/type-of-on-boxed-closure-diverges.md),
+and G4's documentation half is
+[any-type-guide-examples-do-not-compile](../archive/any-type-guide-examples-do-not-compile.md),
+both fixed and archived.
 
 Two further defects were found by the follow-up research into S0 and D8, and
 both are prerequisites rather than side notes -- `any-type-ids-are-per-tu.md`
@@ -279,7 +324,11 @@ its signature and discards the new out-param, exactly as it already discards
 the layer set -- so no existing caller changes.
 
 Layers stay orthogonal to both axes: `#lang saffron/sweet stringed` is legal
-and means what it reads as.
+and means what it reads as. (**Superseded:** the layer axis was later
+decommissioned. `#lang` now takes exactly one base dialect -- `saffron`,
+`saffron/sweet`, and so on -- and a trailing token is TUR-E0330; per-file
+syntax goes in a `#use-reader-macros` file and per-file gates in an
+`EXPERIMENTS[]` row. The dialect table is `lang_dialects.c`.)
 
 Extensions follow later, not first: `.saf` and `.saf.sweet` in
 `reader_type_from_extension`'s sibling, once the semantics are real. Stage 1
@@ -511,6 +560,12 @@ method call. Runtime instance dispatch stays unscheduled -- but it is a
 smaller, better-founded piece of work than the first draft of this plan
 assumed, and the shape below is what it would be.**
 
+(**Superseded 2026-09-09:** runtime instance dispatch was scheduled as S9 and
+built. A method call on an un-narrowed `any` in a Saffron file dispatches on
+the box tag; typed Turmeric keeps the diagnostic. See [S9](#s9----runtime-typeclass-dispatch-d8----built-2026-09-09)
+for what shipped and what is still open. The measurements below are what it
+was built on.)
+
 The first draft asserted this was tractable "because `emit_any_type_id`'s name
 table is already a runtime type registry". That was a guess. It was then
 measured, and the picture is more favourable in one direction and more
@@ -579,7 +634,7 @@ error: incompatible type for argument 1 of
 That is a defect in its own right -- `forall-dict-pass` guards its other
 unsupported shape with TUR-E0311, and this one has no guard -- and it is filed
 as
-[forall-dict-byvalue-receiver-emits-uncompilable-c](../reported/forall-dict-byvalue-receiver-emits-uncompilable-c.md).
+[forall-dict-byvalue-receiver-emits-uncompilable-c](../archive/forall-dict-byvalue-receiver-emits-uncompilable-c.md).
 For D8 it is the load-bearing constraint: dictionary slots must hold
 **per-instance carrier wrappers**, not raw instance functions:
 
@@ -707,13 +762,13 @@ A second, independent gap sits next to it: a *generic defn* called in an
 `: any` return position is never monomorphised, so
 `(defn f [] : any (some 7.1))` emits a call to an undeclared `some` and fails
 at `cc` (writing `(Some 7.1)` directly works). Filed as
-[generic-fn-in-any-return-position-emits-uncompilable-c](../reported/generic-fn-in-any-return-position-emits-uncompilable-c.md).
+[generic-fn-in-any-return-position-emits-uncompilable-c](../archive/generic-fn-in-any-return-position-emits-uncompilable-c.md).
 
 `@TypeName` (`elab_typeclasses.c:5563`) is the dedicated syntax for exactly
 this situation -- and it is what the compiler's own ambiguity diagnostic
 recommends -- but it pins the instance without unboxing the receiver, so
 following the hint produces a `cc` error. Filed as
-[typeclass-dispatch-on-any-receiver-emits-uncompilable-c](../reported/typeclass-dispatch-on-any-receiver-emits-uncompilable-c.md).
+[typeclass-dispatch-on-any-receiver-emits-uncompilable-c](../archive/typeclass-dispatch-on-any-receiver-emits-uncompilable-c.md).
 **Fixing it is the cheapest large improvement to D8's ergonomics available**:
 the witness already names the target instance, which is precisely what `cast`
 needs, so it can lower to dispatch-plus-checked-unbox and become a one-token
@@ -983,6 +1038,14 @@ already resolved into per-instance slots -- but that is reasoning, not
 measurement, and superclass chains genuinely need a decision.
 
 ### D9 -- the gate
+
+(**Done and retired.** The row below shipped at 0.45.0 and Saffron GRADUATED
+at 0.46.0 on 2026-09-10, so the row is gone: `#lang saffron` needs no enable,
+prints no lifecycle warning, and a manifest's `:experiments` cannot turn it
+off. `g_opt_saffron` survives as `g_opt_dynamic_any`, a "this build has a
+dynamic TU" fact the emitter reads, not a gate -- see the graduation note in
+`src/runtime/experiments.c`. `lang_layers.c`, cited below, is now
+`lang_dialects.c`. The section is kept as the record of how it was gated.)
 
 Per CLAUDE.md's Experimental Compiler Features rule, Saffron is exactly the
 shape that must ship behind `--enable=`:
@@ -1525,6 +1588,11 @@ Still to do, and the ORDER is now measured rather than assumed:
    because the earlier text explained why the widen would break it.
    - `#map{...}` takes the same widen as `[...]`, on the VALUES only. The KEYS
      are already normalized to one key type by the lowering above the widen.
+     (**Changed 2026-09-26: the keys widen too**, raw, so a Saffron map literal
+     is `(Map any any)` like `(map-new)`. A `(Map Sym any)` literal behind an
+     `any` could satisfy no seam, which can only ground an open key to `any`
+     -- see
+     [saffron-open-generic-result-not-grounded](../archive/saffron-open-generic-result-not-grounded.md).)
      `tests/fixtures/saffron-map-literal`. (A heterogeneous key needs
      `Hash[any]`/`MapKey[any]`, which now exist -- see the set row -- but the
      key normalization still runs first.  Keying a map by `any` works since
@@ -1791,7 +1859,7 @@ fail on the second when reintroduced.
 
 **S8 is complete.** The next stage is S9.
 
-### S9 -- runtime typeclass dispatch (D8) -- BUILT 2026-09-09; design questions open
+### S9 -- runtime typeclass dispatch (D8) -- BUILT 2026-09-09
 
 D8's prerequisites are all met (see its verdict above): P1 built the runtime
 type registry instance lookup keys off, P2 guarded the by-value receiver, and
@@ -1841,6 +1909,16 @@ variable (`clone : a -> a`); an instance for a type CONSTRUCTOR
 (`Functor Option`), since a widened value's tag is minted from `(Option float)`;
 and a type-variable receiver (`Clone T`), which has no ground tag.
 
+(**Status 2026-09-26.** The first two are lifted: saffron-dynamic-surface-pass
+M9 gave extra-argument and class-variable-result methods a witness on a
+primitive or non-parametric receiver, and 2026-09-26 extended it to a
+parametric head at its all-`any` instantiation (`.eq?` on an `any` holding a
+Vec -- see Q1). The type-constructor case is Q3, built. The type-variable
+receiver was never a limit in practice: the tag axis only registers instances
+whose tag was widened somewhere, so it is simply never registered. The
+"clean panic rather than a wrong answer" claim was NOT true of the constrained
+instance, which answered wrongly -- see Q1.)
+
 #### The four design questions -- answered 2026-09-09
 
 Each was measured against a real program, and three of the four turned out
@@ -1858,6 +1936,55 @@ is the genuinely open design item, and it sits behind Q3. The ground case
 (`.show` on an `any` holding a float) dispatches correctly today; its
 `println` panic was Saffron's dynamic print not knowing `String`, not the
 dispatch.
+
+**Q1 BUILT 2026-09-26 -- and it was a wrong answer, not a limit.** Measured
+before building anything, with a user `Kind [Vec] [(Kind A)]` that answers
+with its first element's kind and the stdlib's own `Eq [Vec]`:
+
+| route | compiled | interpreted |
+|---|---|---|
+| dynamic -- `(.kind-of x)`, `x` an `any` holding `[7.25 1]` | `int` (the representative) | `int` (the whole vector sent to `Kind [int]`) |
+| dynamic -- `.eq?` on two such vectors | panic: no dynamic slot | `false` for two equal vectors |
+| static -- `(kind-of v)` / `(.eq? a b)`, `v : (Vec any)` | TUR-E0020 "matches 21 instances ... receiver type is erased" | same |
+
+Four defects, fixed in turn:
+
+- **The `C [any]` dictionary is minted.** When a constrained instance meets
+  `A = any` in a dynamic file -- at the static constraint check, or at a
+  dynamic dispatch site for its class -- the elaborator synthesises
+  `(definstance C [any] (m [__x ...] (.m __x ...)) ...)` in that span
+  (`saffron_mint_dyn_any_instance`). It is stamped `dyn_any_minted`, so an
+  `any` receiver never resolves to it statically (its own body would call
+  itself); the body's `.m` is an `EX_DYN_METHOD`. A method with extras casts
+  the witness's `any` back to the class's declared result. Kind-* classes
+  only, and never when a hand-written `C [any]` exists (`Hash`, `MapKey`).
+  An `[any]` head also stopped matching every non-primitive receiver as a
+  wildcard, so a `(Vec any)` reaches `C [Vec]` rather than the newest
+  `[any]` instance.
+- **The compiled row calls the `(Vec any)` spec, not the carrier base.** A
+  direct shim called the base impl, whose element call is the elaborator's
+  representative. A constrained instance on a parametric head now gets a
+  witness at `(Head any..)` -- returning the declared result for a
+  one-parameter method, so the slot keeps the direct shims' signature -- and
+  the element call in that spec re-resolves to `C [any]`. The argument bridge
+  reads the element box through its carrier word (`__tur_any_of_carrier`)
+  only when the argument's emitted spelling IS a word: a `(Result any any)`
+  match binder and a `vec-get` temp have the same static type and different
+  C types. The M9 witness now also covers a parametric head, casting a
+  class-variable extra to `(Head any..)` as a typed call would.
+- **The interpreter named a collection box by its handle.**
+  `turi_any_display_type` unwrapped every box and answered `int` for a Vec
+  (H5 had special-cased only Sym). The box's name is the answer for every box.
+- **The interpreter's dynamic entry bound no dictionaries.** A constrained
+  instance entered through `EX_DYN_METHOD` now gets a parent frame pinning
+  each constraint variable to `any`, which binds the minted dictionary, and
+  boxed extras are unwrapped as the receiver already was.
+
+Pinned by `saffron-dyn-constrained-instance` and `saffron-eq-vec-any` on both
+back ends. A typed file mints nothing -- it has no registry to dispatch
+through -- and its `(Vec any)` case now says what is wrong: TUR-E0015, "no
+instance of typeclass 'Kind' applies to type", instead of the ambiguity
+(`errors/typeclass-constraint-unsatisfied-vec-any`).
 
 **Q2 -- default methods: WORK, 2026-09-09.** They could not be measured at
 first because default bodies did not work under STATIC dispatch either (the
@@ -1898,12 +2025,15 @@ The design held, with one correction and two additions found by building it:
   arity, so the witness casts an erased-fn extra to `(fn [any] any)` -- what a
   Saffron lambda is -- and a closure of another arity panics at the checked
   cast rather than being called wrongly. Binary-fn methods (Foldable's) are
-  out until the class records arity.
+  out until the class records arity. (**Corrected 2026-09-26:** the class
+  DOES record it when it spells the parameter -- Foldable's `fn : (fn [b a]
+  b)` -- and the witness now casts to that arity. Only an unannotated class
+  parameter is still taken as unary. See S9's open list below.)
 - **Exposed on the way:** the witness's first draft passed its `any` parameter
   straight into `fmap`, and the rank-2 path wrapped that LOCAL in a file-scope
   thunk that calls it by name (`'f' undeclared`). Plain Turmeric, no Saffron;
   filed as
-  [local-fn-value-into-rank2-slot-gets-a-by-name-wrapper](../reported/local-fn-value-into-rank2-slot-gets-a-by-name-wrapper.md).
+  [local-fn-value-into-rank2-slot-gets-a-by-name-wrapper](../archive/local-fn-value-into-rank2-slot-gets-a-by-name-wrapper.md).
   The cast form sidesteps it.
 
 The poly-fn `any`-parameter blocker named in the previous version of this
@@ -1920,12 +2050,81 @@ file's own stated intent that user instances shadow stdlib ones. Filed as
 the decision (replace or error) is a language one and S9 inherits it. **The
 warning landed 2026-09-09** -- a user-file definstance the guard drops is now
 told so -- which removes the silence without pre-empting that decision.
+(**Decided 2026-09-11: reject.** An exact duplicate from a non-stdlib file is
+TUR-E0025, the conventional overlapping-instance rule, so there is still only
+ever one instance to find.)
 
 One robustness note from Q1: `EX_DYN_METHOD` takes its result type from the
 instance the static resolver happened to select rather than from the class
 declaration (`TypeClassMethod.return_type`). It was correct in every measured
 case -- for `Show` the instance's `void *` IS `String` -- but the class is the
 right source, since it is what makes one slot callable through one signature.
+(**Done 2026-09-26** for a concrete declared result; an applied class
+variable is still open -- see below.)
+
+#### S9 -- what is still open
+
+Measured 2026-09-26, after Q1 landed; updated the same day as items closed.
+What remains is two stated limits on UNANNOTATED class parameters -- the
+fn-arity default (unary) below and the parametric-head extra last in the
+list -- each a clean panic at a checked cast, never a silent wrong answer:
+
+- ~~**Binary-fn methods (Foldable's).**~~ **Fixed 2026-09-26.** The impl
+  never records a function argument's arity, but the class does when it
+  spells the parameter (Foldable's `fn : (fn [b a] b)`), so
+  `saffron_mint_dyn_witness` casts the erased-fn extra to `(fn [any any]
+  any)` from the declaration. An unannotated class parameter (`[container
+  g]`) is still taken as unary. Two compiled defects sat behind the cast: the
+  witness's spec at `b := any` re-widened `init` -- already the box -- as the
+  payload of another box (a widen of an operand that resolves to `any` is now
+  the identity, `EX_UNION_INJECT`), and loading `stdlib/rc.tur` minted a
+  `Hash [any]` whose dynamic row cast the receiver word to `tur_tagged_t` (a
+  box is never tagged `any`, so `emit_instance_dispatch_recv_type` declines
+  it). Pinned by `saffron-dyn-binary-fn-method`, a user `Foldable [Two]`.
+- **The result type's source.** ~~The robustness note above still holds.~~
+  **Done 2026-09-26 for a concrete declared result**: `EX_DYN_METHOD` reads
+  it from the class (a class method must declare one). Building that exposed
+  a plain-Turmeric defect: an instance body was never widened to a declared
+  `: any` result, so `(size [x] 3)` under `(size [x : a] : any)` returned a
+  raw word from a `tur_tagged_t` function (cc error), now widened as a
+  defn's is (`typeclass-any-result-instance-widens`,
+  `saffron-dyn-any-result-method`). ~~**Still open:** a result that mentions
+  the class variable APPLIED (`: (Option a)`) takes the picked instance's
+  type.~~ **Fixed 2026-09-26**
+  ([saffron-applied-class-var-result-takes-one-instances-type](../archive/saffron-applied-class-var-result-takes-one-instances-type.md)):
+  pass 1 of `definstance` now substitutes the class variable through the
+  application (`Wrap [Pt]` returns `(Option Pt)`, not an open `(Option a)`
+  that lowered to the carrier), the body sees that result as its expected
+  type, and the dispatch goes through a per-instance `any` witness. On the
+  way: a Saffron `[..]` / `#set{..}` / `#map{..}` literal now builds the
+  instantiation a declared return or ascription pins, instead of a `(Vec
+  any)` the expectation typed `(Vec float)` (a silent wrong answer in a plain
+  defn). The class must spell the receiver -- `(wrap-self [x : a] : (Option
+  a))`. With `[x]` unannotated the method is return-directed by the typed
+  rule and `x` stays `int`, so dispatching it on an `any` is now TUR-E0020
+  with that hint (it silently mis-tagged before; typed code refuses the
+  static form too). A body building the wrong instantiation is a type error
+  at the body. The interpreter's dynamic arm reads the class
+  declaration for one thing -- turning an inline-C `bool` result that came
+  back as an int into a bool -- and boxes a collection result under the
+  impl's declared type when the node is `any`.
+- ~~**An empty literal is not `(Vec any)`.**~~ **Fixed 2026-09-26.** `[]`
+  expands to a `(vec-new)` carrying the stdlib's span, so the open-result rule
+  (which gated on the call's span) left it an open `(Vec A)` whose box matched
+  no registry row. The rule now also consults the top-level form's dialect.
+  Fixed with
+  [saffron-open-generic-result-not-grounded](../archive/saffron-open-generic-result-not-grounded.md),
+  whose other three defects were in the same family.
+- **An unannotated extra on a parametric head is read as the class
+  variable.** `Eq`'s `(eq? [x y])` records `int` in both the class and the
+  impl, which is what a typed `(.eq? v w)` hands a `(Vec any)` to; so the
+  parametric witness casts such an extra to `(Head any..)`. A genuinely
+  int-typed extra on a parametric head is indistinguishable and panics at
+  that cast.
+
+Not S9's, but met on the way: interpreted `Eq [cstr]` is inline C, which the
+interpreter does not run (TI7), so `(eq? "x" "y")` interprets to `1` in any
+dialect.
 
 ---
 
@@ -1953,7 +2152,7 @@ fixtures for the guard against this being re-decided from the old prose.
 | Explicit borrows, lifetimes | **kept** -- the aliasing conflict fires identically | a scope walk over uses; `any` never enters it |
 | `with-region` / regions | rejected, TUR-E0312 | its proof reads the bracket body's INFERRED RESULT TYPE -- the one thing Saffron makes `any` (D7) |
 | Monomorphization, by-value HKT | off; everything boxes | requires ground types at each site |
-| Typeclass dispatch on `any` | rejected, for now (D8) | separate epic |
+| Typeclass dispatch on `any` | **dispatches on the box tag** since S9 (2026-09-09); a few shapes still panic cleanly, see [S9](#s9----what-is-still-open) | typed Turmeric keeps the diagnostic by design |
 | `extern-c`, inline-C | requires annotations (D2) | C needs concrete types |
 | Effect rows, `--strict-effects` | inferred as today | effect rows are not value types; expected to work unchanged |
 
@@ -1995,7 +2194,7 @@ beyond "the typed one needs annotations".
    The ids diverge per translation unit and four behaviours are wrong on
    `tur build --shared` today. Moved from an assumption to a hard S0
    prerequisite (P1); see
-   [any-type-ids-are-per-tu](../reported/any-type-ids-are-per-tu.md). Kept
+   [any-type-ids-are-per-tu](../archive/any-type-ids-are-per-tu.md). Kept
    here rather than deleted because the first draft's probe said "correct" and
    the reason it did -- `tur build <dir>` is single-TU -- is the kind of thing
    that would otherwise get re-derived from scratch.
@@ -2016,12 +2215,16 @@ beyond "the typed one needs annotations".
    annotation anywhere.
 4. **REPL default dialect.** `tur repl` is the surface where a dynamic dialect
    is most valuable and where changing the default is most disruptive. Propose
-   `--lang saffron` opt-in at S8; revisit after there is usage.
-5. **Should the interpreter ever be Saffron-only?** If the compiled path (S5)
+   `--lang saffron` opt-in at S8; revisit after there is usage. (**The opt-in
+   landed at S8** -- `tur repl --lang saffron`, and `#lang saffron` typed at
+   the prompt. The default is still Turmeric; the "revisit after usage" half
+   is what remains open.)
+5. ~~**Should the interpreter ever be Saffron-only?**~~ **MOOT.** If the compiled path (S5)
    proves disproportionately expensive, an honest fallback is "Saffron runs on
    the interpreter and the JIT, not on `cc`". That is a real product, given the
    REPL and DAP already exist. Recorded so the option is on the table rather
-   than discovered under pressure.
+   than discovered under pressure. (S5 landed 2026-09-07 and every Saffron
+   fixture is asserted on both back ends, so the fallback was never needed.)
 
 ---
 
@@ -2155,7 +2358,7 @@ inputs -- one `.c` (7445 lines, both modules inside), one consistent table.
 splits the same way.
 
 Full write-up:
-[any-type-ids-are-per-tu](../reported/any-type-ids-are-per-tu.md).
+[any-type-ids-are-per-tu](../archive/any-type-ids-are-per-tu.md).
 
 ### A.5 -- runtime typeclass dictionaries (D8)
 
@@ -2193,7 +2396,7 @@ tur: cc invocation failed (status 256)
 ```
 
 Filed as
-[forall-dict-byvalue-receiver-emits-uncompilable-c](../reported/forall-dict-byvalue-receiver-emits-uncompilable-c.md).
+[forall-dict-byvalue-receiver-emits-uncompilable-c](../archive/forall-dict-byvalue-receiver-emits-uncompilable-c.md).
 
 ### A.4 -- `#lang` today
 

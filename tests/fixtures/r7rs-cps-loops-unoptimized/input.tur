@@ -1,0 +1,36 @@
+#lang r7rs
+;; cps-self-tail-call-relies-on-sibling-call: a loop whose step calls a Scheme
+;; procedure through a VARIABLE is CPS-compiled, and its self tail call was
+;; `return f__cps(args, __kont)` -- a C call the optimizer made into a jump at
+;; -O2 but not at -O1 or -O0, so the stack grew one chain of frames per step.
+;; It is a backedge now (parameters rebound, goto the top of the body).  Built
+;; at -O0 by hook.sh (`--debug` is -Og, where gcc still makes the sibling
+;; call).  requires.compiled: the interpreter has always looped here, and a
+;; 1e6-step run is a memory multiplier under it (CLAUDE.md, "Memory, not CPU,
+;; inside a single turi run").
+;;
+;; Sizes: without the backedge each loop below overflows an 8 MiB stack at
+;; -O0 on its own -- the list walkers from about 25,000 elements, so 50,000
+;; is twice that.  The lists stay that small because tests/run-r7rs-gc.sh
+;; runs every #lang r7rs fixture with a collection every 31 allocations, and
+;; the collector's work there grows with the live list: a million-element
+;; list timed out (>300s) where 50,000 takes seconds.  The loop through a
+;; variable builds no list, so it keeps a million steps.
+(import (scheme base) (scheme write))
+
+;; for-each: the prelude's one-list walker.
+(let ((n 0))
+  (for-each (lambda (x) (set! n (+ n 1))) (make-list 50000 1))
+  (write n)
+  (newline))
+
+;; A user loop whose non-tail call goes through a parameter.
+(define (run f i acc) (if (= i 0) acc (run f (- i 1) (+ acc (f 1)))))
+(write (run (lambda (x) x) 1000000 0))
+(newline)
+
+;; map, and member with a user comparison.
+(write (length (map (lambda (x) (+ x 1)) (make-list 50000 1))))
+(newline)
+(write (member 7 (make-list 50000 1) (lambda (a b) (= a b))))
+(newline)

@@ -5863,6 +5863,13 @@ typedef struct {
      * elsewhere. */
     bool        tb_bouncer;
     const Buf  *tb_out;
+    /* cps-self-tail-call-relies-on-sibling-call: the function whose MAIN body
+     * `self_out` is, when a self tail call there may be a backedge (NULL when
+     * it may not -- a closure, a monomorph, a param held in a cell), and the
+     * flag that asks for the label at the top of that body. */
+    const FnDef *self_fd;
+    const Buf   *self_out;
+    bool        *self_backedge;
 } CE;
 
 static void ce_line(CE *ce, const char *fmt, ...) {
@@ -6193,12 +6200,17 @@ static const char *cps_call_param_ctype(CE *ce, const Binding *fn, uint32_t i) {
  * whose C type is the int64 carrier or a pointer (`... *`); an aggregate/poly-fn
  * param is left to the plain-atom emission (never intptr_t-cast).  Falls back to
  * the plain atom for a param we cannot type. */
-static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
-                                  const Binding *fn,
-                                  const EmitAbiSpecialization *spec) {
+/* `offs`, when non-NULL, receives each argument's start offset in the
+ * returned string (n entries; ", " separates them), so a caller can take the
+ * arguments one at a time -- the self tail call's backedge does. */
+static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
+                                       const Binding *fn,
+                                       const EmitAbiSpecialization *spec,
+                                       size_t *offs) {
     Buf b; buf_init(&b);
     for (uint32_t i = 0; i < n; i++) {
         if (i) buf_puts(&b, ", ");
+        if (offs) offs[i] = b.len;
         char *a = atom_str(ce, &args[i]);
         const char *pty = cps_call_param_ctype(ce, fn, i);
         /* When the callee resolved to a monomorph/spec clone, cps_call_param_ctype
@@ -6316,9 +6328,15 @@ static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
     buf_free(&b);
     return s;
 }
+static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
+                                  const Binding *fn,
+                                  const EmitAbiSpecialization *spec) {
+    return atoms_csv_call_typed_offs(ce, args, n, fn, spec, NULL);
+}
 
 static void emit_term(CE *ce, const CTerm *t);
 static void emit_binder_decls(CE *ce, const CTerm *t);
+static const char *emit_param_ctype(EmitCtx *ctx, const FnDef *fd, uint32_t i);
 static void emit_reset(CE *ce, const CTerm *t);
 static void emit_shift(CE *ce, const CTerm *t);
 static void emit_cloneable(CE *ce, const CTerm *t);
@@ -6893,9 +6911,52 @@ static void emit_term(CE *ce, const CTerm *t) {
                 /* Cast each arg to the callee's DECLARED param C type (int64, a
                  * void pointer, or a concrete pointer) -- gcc14-int-conversion,
                  * carrier-to-typed-param. */
-                char *argv_t = atoms_csv_call_typed(ce, t->as.tailcall.args,
-                                                    t->as.tailcall.n, t->as.tailcall.fn,
-                                                    find_spec_by_clone_name(ce->ctx, fn));
+                size_t *arg_offs = (size_t *)malloc((t->as.tailcall.n ? t->as.tailcall.n : 1) * sizeof(size_t));
+                char *argv_t = atoms_csv_call_typed_offs(ce, t->as.tailcall.args,
+                                                         t->as.tailcall.n, t->as.tailcall.fn,
+                                                         find_spec_by_clone_name(ce->ctx, fn),
+                                                         arg_offs);
+                /* cps-self-tail-call-relies-on-sibling-call: a self tail call
+                 * that hands on the function's own continuation, in its main
+                 * body, is a loop.  `return f__cps(args, __kont)` left it to the
+                 * C compiler's sibling-call optimization -- gcc makes it at -O2,
+                 * not at -O1 (every ASan build), and a million-element Scheme
+                 * `for-each` overflowed there.  Rebind the parameters (all
+                 * arguments are evaluated first: they may read the old ones)
+                 * and jump to the top of the body, the backedge the direct
+                 * emitter's self-TCO already gives a non-CPS function.
+                 * `__kont` is unchanged across it, so it needs no rebinding. */
+                const FnDef *sfd = ce->self_fd;
+                bool self_loop = sfd && ce->out == ce->self_out && !rr && !clone &&
+                    t->as.tailcall.fn == sfd->binding && t->as.tailcall.kont.kind == KK_RET &&
+                    !ce->shift_mode && !ce->ret_mode && !ce->handler_case_mode &&
+                    t->as.tailcall.n == sfd->n_params &&
+                    !cps_deferred_any_atom(t->as.tailcall.args, t->as.tailcall.n);
+                if (self_loop) {
+                    /* The temps are block-scoped, so their names need not be
+                     * unique in the function (and take no emitter counter). */
+                    ce_line(ce, "{   /* cps->cps self tail call: a backedge */");
+                    for (uint32_t i = 0; i < t->as.tailcall.n; i++) {
+                        size_t from = arg_offs[i];
+                        size_t to = (i + 1 < t->as.tailcall.n) ? arg_offs[i + 1] - 2 : strlen(argv_t);
+                        ce_line(ce, "    %s __tb%u = %.*s;", emit_param_ctype(ce->ctx, sfd, i),
+                                i, (int)(to - from), argv_t + from);
+                    }
+                    for (uint32_t i = 0; i < t->as.tailcall.n; i++) {
+                        char *pn = name_for_binding(ce->ctx, sfd->params[i]);
+                        ce_line(ce, "    %s = __tb%u;", pn, i);
+                        free(pn);
+                    }
+                    ce_line(ce, "    goto __tur_cps_self;");
+                    ce_line(ce, "}");
+                    *ce->self_backedge = true;
+                    free(argv_t);
+                    free(arg_offs);
+                    free(fn);
+                    free(argv);
+                    break;
+                }
+                free(arg_offs);
                 /* cps-edge-walk-misses-nodes-and-colored-frames-leak, the tail
                  * arm: a fresh box handed to this callee (a deferred drop keyed
                  * on one of the arg atoms) has nothing after `return f__cps(...)`
@@ -9985,8 +10046,36 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * under `catch-unwind`. */
     const char *saved_cps_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = "int64_t";
+    /* cps-self-tail-call-relies-on-sibling-call: a self tail call in this
+     * body may jump back to here.  Not for a closure (its env is param 0), a
+     * monomorph (the call names the generic), the program entry, or a param
+     * the body keeps in a cell or as a loop-carried variable -- rebinding
+     * the bare name would not reach those. */
+    bool self_backedge = false;
+    size_t body_start = body_buf.len;
+    {
+        bool ok = !mono_emit && !fd->closure && !fn_is_d2b_main(fd) && !fn_is_main(fd);
+        for (uint32_t i = 0; ok && i < fd->n_params; i++)
+            ok = fd->params[i] && !fd->params[i]->is_poly_fn &&
+                 !is_byref_mut(fd->params[i]) && !is_loop_carried(fd->params[i]);
+        ce.self_fd = ok ? fd : NULL;
+        ce.self_out = &body_buf;
+        ce.self_backedge = &self_backedge;
+    }
     emit_term(&ce, se->term);
     ctx->current_fn_ret_ctype = saved_cps_ret_ctype;
+    if (self_backedge) {
+        /* The label goes after the binder declarations, ahead of the first
+         * statement of the body; the empty statement keeps it legal where a
+         * declaration follows (C before C23). */
+        static const char lbl[] = "__tur_cps_self:;\n";
+        Buf withl; buf_init(&withl);
+        buf_write(&withl, body_buf.data, body_start);
+        buf_puts(&withl, lbl);
+        buf_write(&withl, body_buf.data + body_start, body_buf.len - body_start);
+        buf_free(&body_buf);
+        body_buf = withl;
+    }
     if (cps_env_var) {
         ctx->closure = saved_cps_closure;
         ctx->env_var_name = saved_cps_env_var;

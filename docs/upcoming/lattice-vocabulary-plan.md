@@ -3,7 +3,7 @@
 > **Status:** proposed (2026-09-11). **Track:** post-v1.
 > **Type:** stdlib typeclasses, plus **two compiler defects that block it**.
 > **Sequencing:** second of three.
-> [type-confusion-detection-plan.md](type-confusion-detection-plan.md) ->
+> [type-confusion-detection-plan.md](../archive/type-confusion-detection-plan.md) ->
 > this -> [crdt-spice-plan.md](crdt-spice-plan.md). The detection plan comes
 > first because it ratchets the emitted-C check that catches defect 1's failure
 > mode; this plan supplies the vocabulary the CRDT spice consumes.
@@ -239,7 +239,7 @@ a method -- defaulted or not -- is one more thing every instance must satisfy.
 
 **How it was caught matters.** The truncation was found by the
 `-Wfloat-conversion` ratchet from
-[type-confusion-detection-plan.md](type-confusion-detection-plan.md) F0, not by
+[type-confusion-detection-plan.md](../archive/type-confusion-detection-plan.md) F0, not by
 the fixture's stdout diff: the concrete `(max 2.5 7.1)` was correct and only
 the call through a generic was wrong, so the obvious assertion passed. That
 ratchet was built two steps earlier in this same chain.
@@ -363,7 +363,7 @@ stdlib module (not a spice) needs them without an import.
   The static half of this -- ratcheting
   `-Wfloat-conversion` on emitted C, which flags defect 1's line with zero
   noise -- is **F0 of
-  [type-confusion-detection-plan.md](type-confusion-detection-plan.md)** and is
+  [type-confusion-detection-plan.md](../archive/type-confusion-detection-plan.md)** and is
   measured there (corpus sweeps clean at 0 across 2250 cc-invoking fixtures);
   do not duplicate it here. **Nothing below is worth starting first.**
 - **L1 -- DONE 2026-09-11.** `max`/`min` are constrained generics over `Ord`

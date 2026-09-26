@@ -1,0 +1,22 @@
+;; A constrained instance whose constraint fails for the receiver's element
+;; type, with other instances of the class in scope.
+;;
+;; `Kind [Vec]` requires `(Kind A)`, and a typed file has no `Kind [any]` (only
+;; a dynamic file mints one -- saffron-lang-plan S9, D8 Q1).  The search drops
+;; the Vec instance, and with the scalar instances left over this used to be
+;; reported as TUR-E0020, "ambiguous method dispatch ... receiver type is erased
+;; (int64_t)", about a receiver that is a perfectly concrete `(Vec any)`.  It is
+;; an unsatisfied constraint, and says so.
+(defclass Kind [a] (kind-of [x] : cstr))
+(definstance Kind [int] (kind-of [x] "int"))
+(definstance Kind [float] (kind-of [x] "float"))
+(definstance Kind [Vec] [(Kind A)]
+  (kind-of [x]
+    (let [v (:: x (Vec A))]
+      (if (>= (vec-len v) 1) (kind-of (:: (vec-get v 0) A)) "empty"))))
+
+(defn main [] : int
+  (let [w (:: (vec-new) (Vec any))]
+    (vec-push! w (:: 7.25 any))
+    (println (kind-of w)))
+  0)

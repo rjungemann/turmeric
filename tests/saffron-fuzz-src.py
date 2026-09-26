@@ -341,8 +341,10 @@ class Gen:
                    lambda e: "(map-get #map{:k %s :other 1} :k)" % e,
                    v.tname, lambda e: e))
         if self.allow("wrap_map_outer"):
+            # A Saffron `#map{...}` is `(Map any any)`, keys widened like every
+            # other literal's elements (saffron-open-generic-result-not-grounded).
             ws.append(("wrap_map_outer", lambda e: "#map{:k %s}" % e,
-                       "(Map Sym any)", lambda e: "(map-get %s :k)" % e))
+                       "(Map any any)", lambda e: "(map-get %s :k)" % e))
         if self.allow("wrap_cons"):
             ws.append(("wrap_cons", lambda e: "(list %s 1)" % e, "(Cons any)",
                        lambda e: "(.head %s)" % e))

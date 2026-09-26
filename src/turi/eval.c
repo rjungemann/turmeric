@@ -1395,8 +1395,15 @@ static const char *turi_any_named_type(TuriValue v) {
 static const char *turi_any_display_type(TuriValue v) {
     if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
         v.as_struct->n_fields == 1 && v.as_struct->fields) {
-        /* H5: the Sym box's payload is an int; the box name is the answer. */
-        if (v.as_struct->name && strcmp(v.as_struct->name, "Sym") == 0) return "Sym";
+        /* The box's name IS the answer, for every box: turi_any_box_widen
+         * only wraps a payload that cannot name itself -- a Sym, a Vec, a
+         * Map, a cons cell, an opaque, all a bare TURI_INT here -- and names
+         * the wrapper from the static type, exactly as `is?` and `cast`
+         * compare it.  H5 learned this for Sym alone; every other box then
+         * unwrapped to its handle and answered "int", so S9's dispatch sent
+         * `.kind-of` on an `any` holding a Vec to the INT instance (a silent
+         * wrong answer) and a failed cast said "any holds int, not int". */
+        if (v.as_struct->name) return v.as_struct->name;
         v = v.as_struct->fields[0];
     }
     const char *named = turi_any_named_type(v);
@@ -12178,6 +12185,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             ov.as_struct->n_fields == 1 && ov.as_struct->fields)
             ov = ov.as_struct->fields[0];
         FnDef *impl = NULL;
+        TypeClassInstance *impl_inst = NULL;
         if (tc) {
             TypeClassEnv *tce = (TypeClassEnv *)env->last_tc_env;
             for (TypeClassInstance *inst = tce ? tce->instances : NULL;
@@ -12200,6 +12208,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 const char *want = type_name(wt);
                 if (!have || !want || strcmp(have, want) != 0) continue;
                 if (slot < inst->n_method_impls) impl = inst->method_impls[slot];
+                impl_inst = inst;
                 break;
             }
         }
@@ -12221,12 +12230,86 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++) {
             argv[1 + i] = eval_expr(env, frame, e->as.dyn_method_.args[i]);
             if (turi_is_error(argv[1 + i]) || env_signaled(env)) return argv[1 + i];
+            /* An extra crosses the dispatch as a box (the elaborator widens
+             * it), and the impl takes the payload unless it declares `any` --
+             * the same unwrap the receiver got above.  Without it a
+             * collection extra arrived as its wrapper struct, and `Eq [Vec]`
+             * measured the wrapper: `(.eq? a b)` on two equal vectors was
+             * false through an `any` and true statically. */
+            if (!(impl->param_types && 1 + i < impl->n_params &&
+                  impl->param_types[1 + i].kind == TY_ANY))
+                argv[1 + i] = turi_any_identity_payload(argv[1 + i]);
         }
         TuriClosure *cl = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
         memset(cl, 0, sizeof(*cl));
         cl->fn = impl;
         cl->captured = NULL;
-        return eval_apply(env, cl, argv, n);
+        /* saffron-lang-plan S9 (D8 Q1): a CONSTRAINED instance -- `Eq [Vec]`
+         * -- dispatches its element calls through the frame dictionary its
+         * constraints bind, and a static call binds them from the call's
+         * tyvar pins.  A dynamic dispatch has no call site to pin from, so the
+         * body fell back to the elaborator's baked representative (`Eq [int]`
+         * on every element: two equal vectors of floats compared unequal).
+         * What arrived is a box, and every container a dynamic dialect builds
+         * is the all-`any` instantiation, so pin each constraint variable to
+         * `any` -- which binds the `C [any]` dictionary the elaborator minted --
+         * on a parent frame the callee chains to. */
+        if (impl_inst && impl_inst->type_param_constraints &&
+            impl_inst->n_type_param_constraints > 0) {
+            EvalFrame *pf = eval_frame_new(env, NULL);
+            Type any_t;
+            memset(&any_t, 0, sizeof(any_t));
+            any_t.kind = TY_ANY;
+            any_t.copy_kind = CK_COPY;
+            for (uint8_t ci = 0; ci < impl_inst->n_type_param_constraints; ci++) {
+                const TypeConstraint *c = &impl_inst->type_param_constraints[ci];
+                const char *tv = NULL;
+                if (c->tyvar && c->tyvar->name) tv = c->tyvar->name;
+                else if (c->type_arg.kind == TY_TYVAR && c->type_arg.as.tyvar_.name)
+                    tv = c->type_arg.as.tyvar_.name;
+                if (!tv) continue;
+                TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+                tb->name = tv;
+                tb->type = any_t;
+                tb->next = pf->tyvars;
+                pf->tyvars = tb;
+            }
+            frame_bind_constraint_dicts(env, pf, impl_inst->type_param_constraints,
+                                        impl_inst->n_type_param_constraints);
+            cl->captured = pf;
+        }
+        TuriValue dres = eval_apply(env, cl, argv, n);
+        /* An inline-C instance body declared `: bool` (`Eq [cstr]`'s strcmp)
+         * hands its C result back as an int.  A static call is typed, so its
+         * consumer never notices; this result is about to be re-boxed and
+         * checked -- the minted `Eq [any]` casts it to the class's `bool` --
+         * so give it the kind the CLASS declares (the instance FnDef's own
+         * return_type is not populated for a method). */
+        if (!turi_is_error(dres) && tc && slot < tc->n_methods &&
+            tc->methods[slot].return_type.kind == TY_BOOL && dres.tag == TURI_INT)
+            dres = turi_bool(dres.as_int != 0);
+        /* saffron-applied-class-var-result-takes-one-instances-type: when the
+         * node is `any` -- a per-instance witness result on the compiled side,
+         * which boxes under the instance's own type -- a collection result
+         * needs the same named box a widen gives it
+         * (interp-collection-handles-report-as-int).  Otherwise `Twice
+         * [float]`'s `(Vec float)` came back as the bare handle and `type-of`
+         * read "int" where the compiled side reads "Vec".  Named from the
+         * IMPL's declared result, which is per instance. */
+        if (!turi_is_error(dres) && e->type.kind == TY_ANY && dres.tag != TURI_STRUCT &&
+            impl->binding && impl->binding->type.kind == TY_FN &&
+            impl->binding->type.as.fn.result_full_type) {
+            const char *bn = turi_any_boxable_name(*impl->binding->type.as.fn.result_full_type);
+            if (bn) {
+                TuriValue bf[1] = { dres };
+                TuriValue bx = make_struct_val(env, bn, 1, bf);
+                if (bx.tag == TURI_STRUCT && bx.as_struct) {
+                    bx.as_struct->is_any_box = true;
+                    dres = bx;
+                }
+            }
+        }
+        return dres;
     }
 
     /* --- saffron-lang-plan S4/D4 (G11): a dynamic field read -------------- */

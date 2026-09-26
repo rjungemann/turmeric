@@ -1,5 +1,21 @@
 # `#lang r7rs`: `define-record-type` is refused inside a body
 
+**RESOLVED 2026-09-26.** A `define-record-type` among a body's leading
+definitions is lifted: `lower_body_inner` (src/compiler/scheme_lower.c) hands
+it to `lower_record_type` in its local mode, which emits the `defstruct` and
+the procedures into the top-level stream the enclosing form is going to
+(`sl->lift_out` -- the program's, or a library body's) under fresh names --
+`R7rsRec_<name>__N` for the struct, `<proc>__vN` for each procedure -- and
+binds the body's own names to them in the body's scope. So a second body's
+record type of the same name is a different type, a define before the record
+type may call its constructor (letrec*), and a record type a macro expands
+into a body works. One after the body's first expression is still an error,
+now naming R7RS 5.3.2 like `define`'s. Pinned by
+`tests/fixtures/r7rs-internal-record-type` (both back ends),
+`tests/fixtures/errors/r7rs-record-type-after-expression`, and
+`run-r7rs-import.sh`'s `library-internal-record-type`. The guide's bullet is
+deleted. Original report follows.
+
 **Severity:** low-medium. R7RS 5.5 makes `define-record-type` a definition, so
 it may appear wherever internal definitions may -- at the start of a `lambda`,
 `let`, `letrec` or `when` body. Here it is accepted only at the top level or

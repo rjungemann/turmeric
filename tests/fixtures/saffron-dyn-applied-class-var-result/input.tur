@@ -1,0 +1,45 @@
+#lang saffron
+; saffron-applied-class-var-result-takes-one-instances-type: a method whose
+; result is the class variable APPLIED -- `: (Option a)`, `: (Vec a)` --
+; dispatched on an `any` receiver, with more than one instance.
+;
+; Compiled, every result used to come back tagged with ONE unresolved
+; `(Option a)` id, whichever instance ran: `(is? (w 4) (Option int))` was
+; false, and a cast of the Pt instance's result panicked ("any holds a
+; different instantiation of Option").  The interpreter was right.  Now:
+;   - pass 1 of definstance substitutes the class variable through the
+;     application, so `Wrap [Pt]`'s impl returns `(Option Pt)`;
+;   - the body sees that as its expected type, so `(some x)` and `[x x]`
+;     build it rather than the dialect's `(Option any)` / `(Vec any)`;
+;   - the dispatch goes through a per-instance witness that returns `any`,
+;     so each result is boxed under its own instantiation.
+; `Solo` has one instance, the case that used to be right by luck.
+; 7.1 in `Twice [float]`: a float element read back as an int would show.
+(defdata Pt (Pt [px : int py : int]))
+
+(defclass Wrap [a] (wrap-self [x : a] : (Option a)))
+(definstance Wrap [int] (wrap-self [x] (some x)))
+(definstance Wrap [Pt] (wrap-self [x] (some x)))
+
+(defclass Twice [a] (twice [x : a] : (Vec a)))
+(definstance Twice [float] (twice [x] [x x]))
+(definstance Twice [Pt] (twice [x] [(Pt (.py x) (.px x)) x]))
+
+(defclass Solo [a] (solo [x : a] : (Option a)))
+(definstance Solo [Pt] (solo [x] (some x)))
+
+(defn w [v] (.wrap-self v))
+(defn tw [v] (.twice v))
+(defn so [v] (.solo v))
+
+(defn main []
+  (println (type-of (w 4)))                                          ; Option
+  (println (is? (w 4) (Option int)))                                 ; true
+  (println (is? (w (Pt 1 2)) (Option Pt)))                           ; true
+  (println (unwrap (cast (w 41) (Option int))))                      ; 41
+  (println (.px (unwrap (cast (w (Pt 5 2)) (Option Pt)))))           ; 5
+  (println (vec-get (cast (tw 7.1) (Vec float)) 1))                  ; 7.1
+  (println (.px (vec-get (cast (tw (Pt 3 9)) (Vec Pt)) 0)))          ; 9
+  (println (type-of (tw 7.1)))                                       ; Vec
+  (println (.py (unwrap (cast (so (Pt 4 6)) (Option Pt)))))          ; 6
+  0)

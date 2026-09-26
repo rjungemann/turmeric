@@ -63,6 +63,26 @@ the image and the pinned driver temporaries for the life of the process
 (120 KB a call in the table above). The fix directions below are the
 interpreter's now.
 
+## Two directions ruled out (2026-09-26)
+
+- **Taking the image lazily cannot be done in the capture native as it is.**
+  `r7rs-cont-capture__` returns before the receiver runs (the prelude's
+  `r7rs-call/cc` calls `f` afterwards), so the frame its `setjmp` saved is
+  dead by the time anyone could know whether a copy is needed -- even an
+  in-extent `(k 1)` must restore the image. Running the receiver INSIDE the
+  native (capture, call `f`, copy only if `f` returns normally, pin only
+  then) would fix that, but it puts one nested C drive under every
+  `call/cc`: R7RS 3.5 requires `call/cc` to call its receiver in tail
+  position, and `(define (loop i) (call/cc (lambda (k) (loop (+ i 1)))))`
+  runs in constant stack today and would overflow.
+- **Lowering an escape-only receiver to `r7rs-call/ec__`** (no copy, no pin)
+  is sound when the continuation parameter appears only in operator position
+  and never inside a closure-making form (`lambda`, named `let`, `do`,
+  `guard`, `delay`, a macro use). But the common escape idiom calls it from
+  a `for-each` lambda -- `(call/cc (lambda (return) (for-each (lambda (x)
+  (if (p x) (return x))) l) #f))` -- which that test has to refuse, so it
+  would fire mostly on the synthetic repro above.
+
 ## Fix directions
 
 - **Cheap: don't copy for an escape.** Take the image lazily, or keep the

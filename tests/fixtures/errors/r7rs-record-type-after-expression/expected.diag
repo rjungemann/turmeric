@@ -1,0 +1,1 @@
+define-record-type is only allowed at the top level or at the beginning of a body (R7RS 5.3.2)

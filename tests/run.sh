@@ -217,7 +217,7 @@ fi
 # cleaned first.  Deliberately NOT -Wimplicit-int-float-conversion: clang-only,
 # so it would split the Linux and macOS legs.
 # Corpus swept clean at 0 hits across 2250 cc-invoking fixtures before this
-# landed -- see docs/upcoming/type-confusion-detection-plan.md section 5.
+# landed -- see docs/archive/type-confusion-detection-plan.md section 5.
 _tur_build_dir=$(dirname "$TUR")
 export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -Wfloat-conversion -Werror=implicit-function-declaration -fno-strict-aliasing -L${_tur_build_dir}/src}"
 

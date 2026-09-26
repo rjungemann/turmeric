@@ -1,7 +1,13 @@
 # tests/fuzz-seed-corpus.txt -- seeds that once found a real defect.
 #
-# Format: <harness> <seed> [# note]
+# Format: <harness> <seed> [<cases>] [# note]
 #   harness is one of: type saffron refine regions
+#   cases   is optional: the --n the seed needs.  A case's program depends only
+#           on (seed, case index), so a finding at index k needs k+1.  Omit it
+#           when k is below the harness's smoke N (40 for type); replay never
+#           runs fewer than smoke N.  A nightly runs --n 400, so most findings
+#           need it -- and each one costs that many cases on every smoke run,
+#           so prefer a smoke-reachable seed when several find the same shape.
 #   blank lines and lines starting with # are ignored
 #
 # Why this file exists
@@ -17,15 +23,35 @@
 # subsequent run of that harness then replays it at smoke size, which is what
 # keeps a fixed bug fixed WITHOUT pinning the search itself to seed 1.
 #
-# See docs/upcoming/type-confusion-detection-plan.md section F2.
+# See docs/archive/type-confusion-detection-plan.md section F2.
 #
 # Appending a row
 # ---------------
 #   type 20260912   # nested class dispatch, wrong instance on a float leg
+#   type 20260917 99   # same, but found at case index 98
 #
 # Remove a row only when its harness or driver no longer accepts the seed
 # (a generator change can make an old seed generate different programs --
 # that is expected and is not a reason to keep a stale row).
 #
-# Currently empty: the nightly workflow has not run yet.  An empty corpus is
-# a no-op, not a skip -- the replay step still runs and reports zero seeds.
+# An empty corpus is a no-op, not a skip -- the replay step still runs and
+# reports zero seeds.
+#
+# Recorded seeds
+# --------------
+# constrained-generic-float-result-into-generic-value-converts (2026-09-26).
+# The nightly found it four times (seeds 20260913, 20260917, 20260918,
+# 20260925) and filed it zero times: the workflow's `fuzz` label did not exist,
+# so every `gh issue create` failed.  20260917 (case 98) and 20260925 (case 101)
+# hit the same shape past smoke size and are deliberately not recorded; the
+# fixture tests/fixtures/constrained-generic-float-result-into-generic pins it.
+#
+# The generator has since gained the class_let and gid_let crossings (the two
+# let-bound reports, both fixed), which remaps what a seed generates.  Under
+# the generator as of that change, the two rows below replay all three fixed
+# shapes on float legs at smoke size:
+#   20260913 case 8   class_let + gid_let + gid
+#   20260918 case 7   class_let + class_thru;  case 20  gid_let;
+#            case 34  class_nested + class_thru
+type 20260913   # found constrained-generic-float-result-into-generic (case 8)
+type 20260918   # found constrained-generic-float-result-into-generic (case 7)

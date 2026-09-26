@@ -8095,6 +8095,13 @@ bool emit_instance_dispatch_recv_type(EmitCtx *ctx, TypeClassInstance *inst,
      * mis-tagged box. */
     while (recv.kind == TY_APP && recv.as.app.fn) recv = *recv.as.app.fn;
     if (recv.kind == TY_TYVAR || recv.kind == TY_UNKNOWN) return false;
+    /* saffron-lang-plan S9 (D8 Q1): the minted `C [any]` instance is the
+     * dispatcher, not a row.  A box's tag names the type INSIDE it and is
+     * never `any`, so a row keyed on `any` could only be reached by mistake --
+     * and its direct shim casts the receiver word to `tur_tagged_t`, which
+     * does not compile.  It appeared once a program both dispatched `.hash`
+     * dynamically and widened something already `any`. */
+    if (recv.kind == TY_ANY) return false;
     /* A hole-headed partial application (`Functor [(Result _ B)]`) has no
      * single all-`any` instantiation to key on, and a TY_FORALL / anything
      * else that is neither a primitive nor a named ADT would fall through

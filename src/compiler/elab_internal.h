@@ -560,6 +560,12 @@ typedef struct Elab {
      * instance's constraint list, not by any enclosing defn's.  The
      * unconstrained-call check skips while this is non-zero. */
     uint32_t definstance_depth;
+    /* saffron-lang-plan S9 (D8 Q1): set while saffron_mint_dyn_any_instance
+     * elaborates a synthesised `C [any]` definstance, so the registration
+     * stamps `dyn_any_minted` and the orphan check stands aside (the class is
+     * usually the stdlib's and `any` is nobody's, yet the instance belongs to
+     * the program that needs it). */
+    bool minting_dyn_any;
     /* van-laarhoven-lens-composition: while elaborating the body of a constrained
      * rank-2 (higher-kinded) fn -- `(defn f [^g] [^Functor g ...] ...)` -- these
      * hold that fn's single HKT constraint's class and the abstract type-variable

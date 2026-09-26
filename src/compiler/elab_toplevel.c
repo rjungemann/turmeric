@@ -314,10 +314,29 @@ static Form *dl_saffron_widen_elem(Elab *e, Form *elem) {
     return dl_build_call(e, elem->span, "::", items, 2);
 }
 
+/* saffron-applied-class-var-result-takes-one-instances-type (found on the
+ * way): does the enclosing expectation PIN the literal's instantiation -- an
+ * application with an argument other than `any`, as a declared `: (Vec float)`
+ * return or a `(:: [..] (Vec float))` ascription gives?  Then the literal
+ * builds that instantiation, exactly as a generic constructor CALL defers to
+ * the same expectation (saffron_expected_app_pins, elab_call.c).  Widening
+ * anyway built a `(Vec any)` while the expectation still typed the result
+ * `(Vec float)`, so `(defn f [x : float] : (Vec float) [x x])` handed its
+ * caller the boxes' words as doubles -- `(vec-get (f 7.1) 1)` printed
+ * 4.6e-310, compiled, even under an explicit ascription. */
+static bool dl_saffron_expected_pins(const Elab *e) {
+    const Type *t = e->expected_type;
+    if (!t || t->kind != TY_APP) return false;
+    for (const Type *cur = t; cur && cur->kind == TY_APP; cur = cur->as.app.fn)
+        if (!cur->as.app.arg || cur->as.app.arg->kind != TY_ANY) return true;
+    return false;
+}
+
 /* Widen every element of a data literal, or return `items` unchanged when the
- * literal is not in a Saffron file. */
+ * literal is not in a Saffron file, or when an enclosing expectation pins its
+ * instantiation (dl_saffron_expected_pins). */
 static Form **dl_saffron_widen_elems(Elab *e, Span sp, Form **items, uint32_t n) {
-    if (n == 0 || !lang_span_is_dynamic(sp)) return items;
+    if (n == 0 || !lang_span_is_dynamic(sp) || dl_saffron_expected_pins(e)) return items;
     Form **out = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
     for (uint32_t i = 0; i < n; i++) out[i] = dl_saffron_widen_elem(e, items[i]);
     return out;
@@ -642,21 +661,31 @@ Expr *elab_form(Elab *e, Form *f) {
             for (uint32_t i = 0; i + 1 < n; i += 2) {
                 if (f->as.list.items[i]->tag != F_STR) { all_str_keys = false; break; }
             }
-            bool saffron = lang_span_is_dynamic(f->span);
+            bool saffron = lang_span_is_dynamic(f->span) && !dl_saffron_expected_pins(e);
             Form **kvs = (n == 0) ? NULL
                 : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
             for (uint32_t i = 0; i + 1 < n; i += 2) {
                 /* String keys stay raw (content-keyed by map-assoc); other key
-                 * literals (keywords) are hash-normalized to their int key. */
-                kvs[i]     = all_str_keys ? f->as.list.items[i]
+                 * literals (keywords) are hash-normalized to their int key.
+                 *
+                 * saffron-open-generic-result-not-grounded: in a dynamic file
+                 * the KEYS widen too, raw, so every Saffron map is the one
+                 * instantiation the dialect builds everywhere else --
+                 * `(Map any any)`, which is also what `(map-new)` gives.  With
+                 * the keys left typed, `#map{"a" 1}` was a `(Map cstr any)`,
+                 * and the seam at every map accessor behind an `any` -- which
+                 * can only ground the open key to `any` -- checked it against
+                 * `(Map any any)` and panicked: `(map-count (mk))` for a
+                 * `(defn mk [] #map{"a" 1})`.  Raw rather than normalized: a
+                 * mixed literal `#map{"a" 1 :b 2}` keeps its string key a
+                 * string (Hash[any] / MapKey[any] key each by its payload), so
+                 * `(map-get m "a")` finds it. */
+                kvs[i]     = saffron ? dl_saffron_widen_elem(e, f->as.list.items[i])
+                           : all_str_keys ? f->as.list.items[i]
                                           : dl_normalize_map_key(e, f->as.list.items[i]);
                 /* saffron-lang-plan S6 (G7): in a Saffron file a map's VALUES
-                 * are `any`, so `#map{:a 1 :b "two"}` is a `(Map Sym any)`
-                 * rather than a `tur-map-homog__` error on the value side.  The
-                 * KEYS are left alone: they are already normalized to one key
-                 * type above (a `#map{...}` is a `(Map Sym any)`).  A key
-                 * arriving as an `any` at a map accessor is served by
-                 * `Hash[any]` / `MapKey[any]`, which key by the payload. */
+                 * are `any`, so `#map{:a 1 :b "two"}` is not a
+                 * `tur-map-homog__` error on the value side. */
                 kvs[i + 1] = saffron
                     ? dl_saffron_widen_elem(e, f->as.list.items[i + 1])
                     : f->as.list.items[i + 1];

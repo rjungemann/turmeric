@@ -1,0 +1,17 @@
+#lang saffron
+;; saffron-applied-class-var-result-takes-one-instances-type: the class leaves
+;; `wrap-self`'s parameter unannotated, so `a` appears only in the result and
+;; the method is RETURN-directed -- its instance is chosen by the expected
+;; result type, and `x` is `int` in every instance.  Dispatching it on an `any`
+;; receiver used to take one instance's result type for every instance (a
+;; silent mis-tag, compiled); the per-instance witness cannot call these impls
+;; with the receiver either.  Typed code refuses the static form of this call,
+;; so this is an error that says how to spell the receiver.
+(defdata Pt (Pt [px : int py : int]))
+(defclass Wrap [a] (wrap-self [x] : (Option a)))
+(definstance Wrap [int] (wrap-self [x] (some x)))
+(definstance Wrap [Pt] (wrap-self [x] (some x)))
+(defn w [v] (.wrap-self v))
+(defn main []
+  (println (type-of (w (Pt 1 2))))
+  0)

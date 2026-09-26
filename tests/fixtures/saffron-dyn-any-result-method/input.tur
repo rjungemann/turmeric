@@ -1,0 +1,25 @@
+#lang saffron
+; saffron-lang-plan S9: a class whose method DECLARES `: any`, with instances
+; whose bodies return an int and a float, dispatched on an `any` receiver.
+;
+; Two halves of "the result type comes from the class":
+;   - the instance bodies were never widened to the declared `: any`, so each
+;     returned a raw word from a function typed `tur_tagged_t` -- cc refused
+;     it ("incompatible types when returning"), while the interpreter, which
+;     has no such seam, answered correctly;
+;   - the dispatch node took its result type from whichever instance the
+;     static resolver picked; it now reads the class.
+; 7.25, not 7.0: a float read back through the int arm would print wrong.
+(defdata Pt (Pt [px : int py : int]))
+
+(defclass Size [a] (size [x] : any))
+(definstance Size [cstr] (size [x] 3))
+(definstance Size [Pt] (size [x] 7.25))
+
+(defn sz [v] (.size v))
+
+(defn main []
+  (println (sz "abc"))
+  (println (sz (Pt 1 2)))
+  (println (type-of (sz (Pt 1 2))))
+  0)

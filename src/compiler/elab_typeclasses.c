@@ -3862,6 +3862,10 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
     inst->decl_form = call;
     /* M7: record the partial-app wildcard hole slot (0xFF when absent). */
     inst->partial_hole_pos = hkt_hole_pos;
+    /* S9 (D8 Q1): stamped BEFORE the method loop, because the minted methods'
+     * bodies are `.m` calls on an `any` receiver and must already see this
+     * instance as the dynamic stand-in it is (see dyn_any_minted). */
+    inst->dyn_any_minted = e->minting_dyn_any;
 
     /* assoc-types-plan: resolve and store associated-type bindings.  Every
      * member the class declares must be bound exactly once; an unknown member
@@ -4090,6 +4094,41 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                     break;
                 }
             }
+        }
+        /* saffron-applied-class-var-result-takes-one-instances-type: a
+         * kind-* class's result that mentions the class variable INSIDE an
+         * application -- `(wrap-self [x : a] : (Option a))` -- matched neither
+         * branch above (not a bare tyvar, and its head `Option` is no class
+         * parameter), so `Wrap [Pt]`'s impl kept returning `(Option a)`: an
+         * open type the emitter lowers to the carrier, whose box every
+         * dynamic dispatch then tagged with one unresolved `(Option a)` id,
+         * whichever instance ran.  Substitute the class variables through the
+         * application, so the impl returns `(Option Pt)`.  Three guards:
+         *   - a class whose every parameter is kind-*: an HKT class's
+         *     parameter is a constructor, handled by the head rewrite above;
+         *   - a RECEIVER-dispatched method: a return-directed one (`(dec
+         *     [seed : int] : (Result a cstr))`) is selected by its expected
+         *     result and rides the uniform carrier every such dispatch reads;
+         *   - GROUND instance types (a primitive or a non-parametric ADT): a
+         *     parametric head (`Dec [Option] [(Dec A)]`) would substitute the
+         *     bare constructor, `(Result Option cstr)`. */
+        else if (return_type.kind == TY_APP &&
+                 !method_is_return_dispatch(tc, &tc->methods[i])) {
+            bool subst_ok = n_type_args > 0;
+            if (tc->type_param_kinds)
+                for (uint8_t ki = 0; ki < tc->n_type_params; ki++)
+                    if (tc->type_param_kinds[ki] != KIND_STAR) { subst_ok = false; break; }
+            for (uint8_t ti = 0; subst_ok && ti < n_type_args; ti++) {
+                const Type *ta = &type_args[ti];
+                if (ta->kind == TY_APP || ta->kind == TY_TYVAR || ta->kind == TY_UNKNOWN ||
+                    (ta->kind == TY_ADT && ta->as.adt_.def &&
+                     ta->as.adt_.def->n_type_params > 0))
+                    subst_ok = false;
+            }
+            if (subst_ok)
+                return_type = elab_subst_class_tyvars(e->arena, return_type,
+                                                      tc->type_params, tc->n_type_params,
+                                                      type_args, n_type_args);
         }
         /* Arrow head: a method whose declared return is the class variable
          * (e.g. `comp : a` under `Arrow [(->)]`) returns a callable closure.
@@ -5002,23 +5041,50 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
          * The handler is expected to be provided at the call site. */
         e->fn_body_depth++;
 
+        /* saffron-applied-class-var-result-takes-one-instances-type: push a
+         * GROUND applied result (`(Option Pt)`, after the class-variable
+         * substitution in pass 1) onto the expected-type channel, as elab_defn
+         * does for its declared return.  In a dynamic file a generic
+         * constructor call defers to that expectation instead of widening its
+         * argument to `any`: `(some x)` builds the declared `(Option Pt)`, not
+         * an `(Option any)` the impl's signature cannot return.  Kind-* classes
+         * only, and only a result with no free type variable left -- an HKT
+         * method's `(Option b)` keeps its element open on purpose. */
+        Type *saved_body_expected = e->expected_type;
+        {
+            bool all_star = true;
+            if (tc->type_param_kinds)
+                for (uint8_t ki = 0; ki < tc->n_type_params; ki++)
+                    if (tc->type_param_kinds[ki] != KIND_STAR) { all_star = false; break; }
+            if (all_star && mp->ret_full.kind == TY_APP &&
+                !m7_type_has_free_tyvar(mp->ret_full)) {
+                Type *be = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *be = mp->ret_full;
+                e->expected_type = be;
+            }
+        }
+
         Expr *method_body = e_nil(e, impl_form->span);
         uint32_t n_body = impl_form->as.list.len - impl_body_start;
+        Type *body_expected = e->expected_type;
         if (n_body > 0) {
             if (n_body == 1) {
                 method_body = elab_form(e, impl_form->as.list.items[impl_body_start]);
-                if (!method_body) { e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
+                if (!method_body) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
             } else {
                 Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
                 for (uint32_t k = 0; k < n_body; k++) {
+                    /* Only the tail form produces the result. */
+                    e->expected_type = (k + 1 == n_body) ? body_expected : saved_body_expected;
                     items[k] = elab_form(e, impl_form->as.list.items[impl_body_start + k]);
-                    if (!items[k]) { e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
+                    if (!items[k]) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
                 }
                 method_body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, impl_form->span);
                 method_body->as.do_.items = items;
                 method_body->as.do_.n = n_body;
             }
         }
+        e->expected_type = saved_body_expected;
 
         e->fn_body_depth--;
 
@@ -5068,6 +5134,50 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                         e, method_body, m_check_fn, rb->refine_class_ret_pred,
                         rb->refine_class_ret_var,
                         "Class result contract violated", impl_form->span);
+            }
+        }
+
+        /* S9: the class DECLARES the result, and `: any` is a widening target
+         * for the body exactly as it is for a defn's (P6).  Nothing applied it
+         * here, so `(size [x] 3)` under `(size [x : a] : any)` returned a raw
+         * int64 from a function the class -- and every dispatch site -- types
+         * as `tur_tagged_t` (cc: incompatible types when returning), in
+         * plain Turmeric as much as in Saffron.  Widen while the method scope
+         * is live, so a hoisted control temp binds inside it. */
+        if (method_body && method_body->kind != EX_INLINE_C &&
+            mp->ret_kind == TY_ANY && method_body->type.kind != TY_ANY &&
+            method_body->type.kind != TY_NEVER) {
+            Expr *widened = elab_coerce_to_any_return(e, method_body);
+            if (widened) method_body = widened;
+        }
+
+        /* saffron-applied-class-var-result-takes-one-instances-type: with the
+         * class variable substituted through an applied result, a body that
+         * builds a DIFFERENT instantiation -- `(some 3)` under `Wrap [Pt]`'s
+         * `(Option Pt)` -- is a type error the kind-only return check below
+         * cannot see (both are TY_APP).  Unchecked, it reached cc as
+         * "incompatible types when returning".  Both sides must be ground: an
+         * open element is the carrier's business, not a mismatch. */
+        if (method_body && method_body->kind != EX_INLINE_C &&
+            mp->ret_full.kind == TY_APP && method_body->type.kind == TY_APP &&
+            !m7_type_has_free_tyvar(mp->ret_full) &&
+            !m7_type_has_free_tyvar(method_body->type) &&
+            !type_eq(mp->ret_full, method_body->type)) {
+            bool all_star = true;
+            if (tc->type_param_kinds)
+                for (uint8_t ki = 0; ki < tc->n_type_params; ki++)
+                    if (tc->type_param_kinds[ki] != KIND_STAR) { all_star = false; break; }
+            if (all_star) {
+                Buf wb; buf_init(&wb); type_print(&wb, mp->ret_full); buf_putc(&wb, '\0');
+                Buf gb; buf_init(&gb); type_print(&gb, method_body->type); buf_putc(&gb, '\0');
+                const char *meth = tc->methods[i].name ? tc->methods[i].name->name : "?";
+                diag_emit_with_code(DIAG_ERROR, method_body->span, TUR_E0001_TYPE_MISMATCH,
+                    "instance method '%s' declares return type %s but its body "
+                    "returns %s", meth, wb.data, gb.data);
+                buf_free(&wb); buf_free(&gb);
+                e->scope = method_scope.parent;
+                scope_free(&method_scope);
+                return NULL;
             }
         }
 
@@ -5267,7 +5377,8 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
      * In Rust terms: you may only define Foo<Bar> if you own Foo or Bar.
      *
      * Now a hard DIAG_ERROR since the module system (P19-6) has landed. */
-    if (tc->origin_file_id != 0 && tc->origin_file_id != call->span.file_id) {
+    if (tc->origin_file_id != 0 && tc->origin_file_id != call->span.file_id &&
+        !e->minting_dyn_any) {
         /* The typeclass is from a different file.
          * Check if any struct type-arg was defined here. */
         bool owns_a_type_arg = false;
@@ -6106,6 +6217,44 @@ static bool typeclass_same_class(const TypeClass *a, const TypeClass *b) {
            memcmp(a->name->name, b->name->name, a->name->len) == 0;
 }
 
+/* S9: does a class method's declared type mention a type variable anywhere --
+ * the class variable itself, or one applied (`(Option a)`)?  Such a result is
+ * a different type per instance, so no one signature can carry it. */
+static bool saffron_type_mentions_tyvar(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR: return true;
+        case TY_APP:
+            return saffron_type_mentions_tyvar(t->as.app.fn) ||
+                   saffron_type_mentions_tyvar(t->as.app.arg);
+        case TY_FN:
+            if (saffron_type_mentions_tyvar(t->as.fn.result_full_type)) return true;
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    if (saffron_type_mentions_tyvar(t->as.fn.arg_full_types[i])) return true;
+            return false;
+        default: return false;
+    }
+}
+
+/* S9 (D8 Q1): is extra parameter `j` of a kind-* instance on the parametric
+ * head `def` the class variable -- i.e. another value of the receiver's own
+ * type?  Three spellings mean yes: a bare type variable, the head itself
+ * (`y : (MutableMap K V)`), and the erased `int` an UNANNOTATED parameter
+ * records in both the class and the impl (`Eq`'s `(eq? [x y])`). */
+static bool saffron_extra_is_class_var(const TypeClass *tc, uint8_t slot,
+                                       const FnDef *impl, uint32_t j,
+                                       const AdtDef *def) {
+    const Type *pt = &impl->param_types[j];
+    if (pt->kind == TY_TYVAR) return true;
+    const Type *h = pt;
+    while (h && h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+    if (h && h->kind == TY_ADT && h->as.adt_.def == def) return true;
+    return pt->kind == TY_INT && tc->methods[slot].param_types &&
+           j < tc->methods[slot].n_params &&
+           tc->methods[slot].param_types[j].kind == TY_INT;
+}
+
 /* saffron-lang-plan S9 (D8 Q3) / saffron-dynamic-surface-pass M9: mint the
  * dynamic-dispatch WITNESS for (instance `wi`, method `slot`) -- an ordinary
  * defn, elaborated at global scope in the Saffron span:
@@ -6125,7 +6274,7 @@ static void saffron_mint_dyn_witness(Elab *e, TypeClass *tc, uint8_t slot,
                                      TypeClassInstance *wi, AdtDef *def,
                                      Form *recv_ty, const char *recv_name,
                                      const char *method_name, size_t method_name_len,
-                                     Span sp) {
+                                     Span sp, Form *ret_ty) {
     if (!wi->dyn_witness) {
         wi->dyn_witness = (FnDef **)arena_alloc(
             e->arena, tc->n_methods * sizeof(FnDef *));
@@ -6183,12 +6332,18 @@ static void saffron_mint_dyn_witness(Elab *e, TypeClass *tc, uint8_t slot,
          * file scope.  A Saffron lambda IS a `(fn [any] any)`,
          * so the checked cast admits exactly the closures the
          * spec can apply, and a closure of another arity panics
-         * at the cast instead of being called wrongly.  Neither
-         * the class nor the impl records the fn's arity (the
-         * method is declared `[container g]`, unannotated), so
-         * unary is the assumption and it is a stated v0 limit
-         * for binary-fn methods such as Foldable's. */
+         * at the cast instead of being called wrongly.  The
+         * impl never records the fn's arity, but the CLASS does
+         * when it spells the parameter -- Foldable's `fn : (fn
+         * [b a] b)` is binary -- so the cast takes that arity,
+         * `(fn [any any] any)`.  Only an unannotated class
+         * parameter (`[container g]`) leaves it unknown, and
+         * that one is taken as unary. */
         FnDef *wimpl = wi->method_impls[slot];
+        bool tc_hkt = false;
+        if (tc->type_param_kinds)
+            for (uint8_t ki = 0; ki < tc->n_type_params; ki++)
+                if (tc->type_param_kinds[ki] != KIND_STAR) { tc_hkt = true; break; }
         const Symbol *casts = symtab_intern(e->st, strslice("cast", 4));
         const Symbol *fns   = symtab_intern(e->st, strslice("fn", 2));
         for (uint32_t k = 0; k < n_wextra; k++) {
@@ -6256,13 +6411,38 @@ static void saffron_mint_dyn_witness(Elab *e, TypeClass *tc, uint8_t slot,
                                  form_list(e->arena, sp, cst2, 3) };
                 cargs[2 + k] = form_list(e->arena, sp, lam, 4);
             } else if (erased_fn) {
-                Form *pany[1] = { form_sym(e->arena, sp, anys) };
+                uint32_t fn_arity = 1;
+                if (slot < tc->n_methods && tc->methods[slot].param_types &&
+                    (k + 1) < tc->methods[slot].n_params) {
+                    const Type *mp = &tc->methods[slot].param_types[k + 1];
+                    if (mp->kind == TY_FN && mp->as.fn.arity > 0)
+                        fn_arity = mp->as.fn.arity;
+                }
+                Form **pany = (Form **)arena_alloc(e->arena, fn_arity * sizeof(Form *));
+                for (uint32_t pa = 0; pa < fn_arity; pa++)
+                    pany[pa] = form_sym(e->arena, sp, anys);
                 Form *fnt[3] = { form_sym(e->arena, sp, fns),
-                                 form_vec(e->arena, sp, pany, 1),
+                                 form_vec(e->arena, sp, pany, fn_arity),
                                  form_sym(e->arena, sp, anys) };
                 Form *cst[3] = { form_sym(e->arena, sp, casts),
                                  form_sym(e->arena, sp, as),
                                  form_list(e->arena, sp, fnt, 3) };
+                cargs[2 + k] = form_list(e->arena, sp, cst, 3);
+            } else if (def && !tc_hkt && slot < tc->n_methods && wimpl &&
+                       wimpl->param_types && (k + 1) < wimpl->n_params &&
+                       saffron_extra_is_class_var(tc, slot, wimpl, k + 1, def)) {
+                /* S9 (D8 Q1) -- M9 for a PARAMETRIC head (`Eq [Vec]`'s
+                 * `(eq? [x y])`).  The class variable is `(Vec A)` here, and
+                 * an unannotated parameter records as the erased `int` in both
+                 * the class and the impl -- which is exactly the slot a typed
+                 * `(.eq? v w)` hands a `(Vec any)` value to.  So cast the box
+                 * to the all-`any` instantiation, as that typed call would
+                 * spell it.  A genuinely int-typed extra on such a head is
+                 * indistinguishable here; it panics at the cast rather than
+                 * being misread. */
+                SAFFRON_ALL_ANY_APP(cast_ty)
+                Form *cst[3] = { form_sym(e->arena, sp, casts),
+                                 form_sym(e->arena, sp, as), cast_ty };
                 cargs[2 + k] = form_list(e->arena, sp, cst, 3);
             } else if (!def && slot < tc->n_methods && tc->methods[slot].param_types) {
                 /* M9 (kind-* witness): the static `.m __r __a1` inside the
@@ -6317,9 +6497,14 @@ static void saffron_mint_dyn_witness(Elab *e, TypeClass *tc, uint8_t slot,
         }
         Form *params = form_vec(e->arena, sp, pv, 2 + n_wextra);
         Form *body   = form_list(e->arena, sp, cargs, 2 + n_wextra);
+        /* The witness returns `any` -- or, for a one-parameter method with a
+         * concrete declared result (S9's constrained parametric head), that
+         * result, so its slot keeps the signature every other instance's
+         * direct shim has. */
         Form *di[5] = { form_sym(e->arena, sp, defns), form_sym(e->arena, sp, wsym),
                         params,
-                        form_type_ann(e->arena, sp, form_sym(e->arena, sp, anys)),
+                        form_type_ann(e->arena, sp,
+                                      ret_ty ? ret_ty : form_sym(e->arena, sp, anys)),
                         body };
         Form *dform = form_list(e->arena, sp, di, 5);
         Scope *saved = e->scope;
@@ -6331,6 +6516,137 @@ static void saffron_mint_dyn_witness(Elab *e, TypeClass *tc, uint8_t slot,
             wi->dyn_witness[slot] = wdef->as.fn_def_.fn;
         }
     #undef SAFFRON_ALL_ANY_APP
+}
+
+/* saffron-lang-plan S9 (D8 Q1): the dynamic dictionary for `A = any`.
+ *
+ * A constrained instance -- `(definstance Eq [Vec] [(Eq A)] ...)` -- discharges
+ * its constraint at the element type, and the element type of every container
+ * a dynamic dialect builds is `any` (S6).  With no `Eq [any]` instance that
+ * discharge failed, and it failed three different ways depending on route:
+ *
+ *   - statically, the constrained instance was silently skipped as unsatisfied
+ *     and the scalar leftovers were reported as an AMBIGUOUS dispatch
+ *     (TUR-E0020, "receiver type is erased") on a receiver that is a perfectly
+ *     concrete `(Vec any)`;
+ *   - dynamically, compiled: the instance's spec at `A = any` re-resolved the
+ *     element call to nothing and kept the elaborator's carrier representative
+ *     -- `Kind [int]` -- so every element answered as an int.  A silent wrong
+ *     answer;
+ *   - dynamically, interpreted: no pin for `A`, so the same representative.
+ *
+ * All three want the same object, and it is the one the plan named: a
+ * synthesised `C [any]` whose every method dispatches on the receiver box's
+ * tag.  So mint it, as an ordinary definstance elaborated in the dynamic span
+ * that needed it:
+ *
+ *   (definstance C [any]
+ *     (m1 [__x __a1 ...] (.m1 __x __a1 ...))
+ *     ...)
+ *
+ * Unannotated, so the dialect default makes every parameter `any` and
+ * definstance takes the class's declared result (class variable := any).  The
+ * body's `.m1` on an `any` receiver becomes EX_DYN_METHOD because the instance
+ * is stamped `dyn_any_minted`, which the any-receiver arm treats as absent --
+ * otherwise the body would resolve statically to itself.  Every consumer then
+ * finds a real instance where it looks for one: the static constraint check,
+ * emit_reresolve_method_call at the `A = any` spec, and the interpreter's
+ * frame dictionaries.
+ *
+ * Kind-* single-parameter classes only: `any` is not a type constructor, so an
+ * HKT class has no `[any]` head to mint.  A class that already has an `any`
+ * instance (Hash, MapKey -- hand-written, and authoritative) is left alone. */
+static void saffron_mint_dyn_any_instance(Elab *e, TypeClass *tc, Span sp) {
+    if (!tc || !tc->name || tc->n_methods == 0 || tc->n_type_params != 1) return;
+    if (tc->type_param_kinds && tc->type_param_kinds[0] != KIND_STAR) return;
+    for (TypeClassInstance *i = e->typeclass_env.instances; i; i = i->next)
+        if (typeclass_same_class(i->typeclass, tc) && i->n_type_args > 0 &&
+            i->type_args[0].kind == TY_ANY)
+            return;
+    const Symbol *xs = symtab_intern(e->st, strslice("__x", 3));
+    Form **items = (Form **)arena_alloc(e->arena,
+                                        (3 + tc->n_methods) * sizeof(Form *));
+    items[0] = form_sym(e->arena, sp,
+                        symtab_intern(e->st, strslice("definstance", 11)));
+    items[1] = form_sym(e->arena, sp, tc->name);
+    Form *anyf = form_sym(e->arena, sp, symtab_intern(e->st, strslice("any", 3)));
+    items[2] = form_vec(e->arena, sp, &anyf, 1);
+    for (uint8_t mi = 0; mi < tc->n_methods; mi++) {
+        const TypeClassMethod *m = &tc->methods[mi];
+        uint32_t np = m->n_params > 0 ? m->n_params : 1;
+        Form **pv = (Form **)arena_alloc(e->arena, np * sizeof(Form *));
+        Form **cv = (Form **)arena_alloc(e->arena, (1 + np) * sizeof(Form *));
+        char dm[160];
+        snprintf(dm, sizeof dm, ".%s", m->name->name);
+        cv[0] = form_sym(e->arena, sp,
+                         symtab_intern(e->st, strslice(dm, (uint32_t)strlen(dm))));
+        pv[0] = form_sym(e->arena, sp, xs);
+        cv[1] = form_sym(e->arena, sp, xs);
+        for (uint32_t k = 1; k < np; k++) {
+            char an[24];
+            snprintf(an, sizeof an, "__a%u", k);
+            const Symbol *as = symtab_intern(e->st,
+                                             strslice(an, (uint32_t)strlen(an)));
+            pv[k] = form_sym(e->arena, sp, as);
+            cv[1 + k] = form_sym(e->arena, sp, as);
+        }
+        Form *mbody = form_list(e->arena, sp, cv, 1 + np);
+        /* A method with extras dispatches through a witness, which answers
+         * `any`; narrow it back to the class's declared concrete result
+         * (`eq?`'s bool) with the checked cast, since that is the signature
+         * every caller of this instance was typed against. */
+        if (np > 1 && m->return_type.kind != TY_TYVAR &&
+            m->return_type.kind != TY_ANY && m->return_type.kind != TY_UNKNOWN &&
+            m->return_type.kind != TY_NIL) {
+            Form *rf = NULL;
+            switch (m->return_type.kind) {
+                case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_CSTR: case TY_SYM: {
+                    const char *pn = type_name(m->return_type);
+                    rf = form_sym(e->arena, sp,
+                                  symtab_intern(e->st, strslice(pn, (uint32_t)strlen(pn))));
+                    break;
+                }
+                default:
+                    rf = type_to_form(e, &m->return_type, sp);
+                    break;
+            }
+            if (rf) {
+                Form *cst[3] = { form_sym(e->arena, sp,
+                                          symtab_intern(e->st, strslice("cast", 4))),
+                                 mbody, rf };
+                mbody = form_list(e->arena, sp, cst, 3);
+            }
+        }
+        Form *mf[3] = { form_sym(e->arena, sp, m->name),
+                        form_vec(e->arena, sp, pv, np),
+                        mbody };
+        items[3 + mi] = form_list(e->arena, sp, mf, 3);
+    }
+    Form *di = form_list(e->arena, sp, items, 3 + tc->n_methods);
+    /* Nesting is expected and terminates: a minted body's `.m` reaches the
+     * dispatch site below, which may mint ANOTHER class's dictionary, and the
+     * instance is registered before its methods elaborate, so the existence
+     * check above stops a class from being minted twice. */
+    Scope *saved_scope = e->scope;
+    Type *saved_expected = e->expected_type;
+    bool saved_minting = e->minting_dyn_any;
+    e->scope = &e->global;
+    e->expected_type = NULL;
+    e->minting_dyn_any = true;
+    (void)elab_definstance(e, di);
+    e->minting_dyn_any = saved_minting;
+    e->scope = saved_scope;
+    e->expected_type = saved_expected;
+}
+
+/* S9 (D8 Q1): mint the `[any]` dictionary for every class a constrained
+ * instance of `tc` discharges -- the dictionaries its body will ask for when
+ * it runs at the all-`any` instantiation. */
+static void saffron_mint_constraint_any_instances(Elab *e, const TypeClassInstance *inst,
+                                                  Span sp) {
+    if (!inst || !inst->type_param_constraints) return;
+    for (uint8_t ci = 0; ci < inst->n_type_param_constraints; ci++)
+        saffron_mint_dyn_any_instance(e, inst->type_param_constraints[ci].typeclass, sp);
 }
 
 Expr *elab_method_call(Elab *e, const Form *call) {
@@ -7038,6 +7354,12 @@ Expr *elab_method_call(Elab *e, const Form *call) {
      * instead of silently keeping whichever registered last. */
     TypeClassInstance *ambig_inst = NULL;
     int user_fallback_count = 0;
+    /* A head-matching instance the search dropped because its own constraint
+     * does not hold for the receiver's element type -- `Kind [Vec]` requiring
+     * `(Kind A)` against a `(Vec any)`.  When only scalar instances are left
+     * over, the ambiguity diagnostic below would otherwise blame an "erased"
+     * receiver that is in fact concrete; this names the real cause. */
+    TypeClassInstance *unsat_inst = NULL;
 
     /* GHE (constrained-generic-instance-dispatch): when the receiver is a bare
      * type variable `K` (a constrained generic type parameter, e.g. the `x : K`
@@ -7370,6 +7692,15 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                             oh && oh->kind == TY_ADT && oh->as.adt_.def;
                         if (recv_concrete_nominal) type_ok = false;
                     }
+                    /* An `any` head (`Hash [any]`, S9's minted `C [any]`) is
+                     * the instance FOR an `any` receiver, not a wildcard over
+                     * every non-primitive one: a concrete `(Vec any)` must
+                     * reach `C [Vec]`, whose constraint the `[any]` instance
+                     * then discharges.  Left as a match, the newest `[any]`
+                     * instance shadowed every struct/ADT instance of the class
+                     * (instances are prepended). */
+                    if (type_ok && itk == TY_ANY && obj->type.kind != TY_ANY)
+                        type_ok = false;
                     /* Arrow head (itk == TY_FN): an `Arrow [(->)]` instance
                      * matches only a function receiver, never a struct/vec.
                      * Conversely, a function receiver must not bind a non-arrow
@@ -7521,9 +7852,24 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                     n_elem = n_raw;
                     if (n_elem > 0) elem_types = elem_buf;
                 }
-                if (!typeclass_instance_constraints_satisfied(inst, &obj_type, 1,
-                                                              elem_types, n_elem,
-                                                              &e->typeclass_env)) {
+                bool cons_ok = typeclass_instance_constraints_satisfied(
+                    inst, &obj_type, 1, elem_types, n_elem, &e->typeclass_env);
+                /* D8 Q1: in a dynamic file an `any` element discharges the
+                 * constraint through the minted `C [any]` dictionary; the
+                 * first such call mints it.  A typed file keeps the refusal --
+                 * it has no registry to dispatch through. */
+                if (!cons_ok && lang_span_is_dynamic(call->span)) {
+                    bool any_elem = false;
+                    for (uint8_t ei = 0; ei < n_elem && !any_elem; ei++)
+                        any_elem = elem_types[ei].kind == TY_ANY;
+                    if (any_elem) {
+                        saffron_mint_constraint_any_instances(e, inst, call->span);
+                        cons_ok = typeclass_instance_constraints_satisfied(
+                            inst, &obj_type, 1, elem_types, n_elem, &e->typeclass_env);
+                    }
+                }
+                if (!cons_ok) {
+                    if (!unsat_inst) unsat_inst = inst;
                     continue;
                 }
             }
@@ -7755,8 +8101,9 @@ found_method:;
      * still resolves, which is the one case where an `any` receiver is exactly
      * what the instance asked for. */
     if (obj && obj->type.kind == TY_ANY && best_inst &&
-        !(best_inst->n_type_args > 0 &&
-          best_inst->type_args[0].kind == TY_ANY)) {
+        (best_inst->dyn_any_minted ||
+         !(best_inst->n_type_args > 0 &&
+           best_inst->type_args[0].kind == TY_ANY))) {
         /* saffron-lang-plan S9 (D8 piece 4): in Saffron this is not the end of
          * the road -- it is the whole point.  The class and the method SLOT are
          * static (the name resolved), so only the instance is undecidable here,
@@ -7779,6 +8126,13 @@ found_method:;
                 }
             }
             if (found_slot) {
+                /* D8 Q1: the registry row this site dispatches through may be a
+                 * CONSTRAINED instance -- `Eq [Vec]` -- whose spec runs at the
+                 * all-`any` instantiation and discharges `(Eq A)` at `any`.
+                 * Mint those dictionaries now, while the class is in hand. */
+                for (TypeClassInstance *ci = e->typeclass_env.instances; ci; ci = ci->next)
+                    if (typeclass_same_class(ci->typeclass, tc))
+                        saffron_mint_constraint_any_instances(e, ci, call->span);
                 uint32_t n_extra = call->as.list.len - 2;
                 Expr **extra = n_extra
                     ? (Expr **)arena_alloc(e->arena, n_extra * sizeof(Expr *))
@@ -7874,7 +8228,7 @@ found_method:;
                         for (uint32_t k = 0; k < ntp; k++) ti[1 + k] = form_sym(e->arena, sp, anys);
                         Form *recv_ty = form_list(e->arena, sp, ti, 1 + ntp);
                         saffron_mint_dyn_witness(e, tc, slot, wi, def, recv_ty, def->name,
-                                                 method_name, method_name_len, sp);
+                                                 method_name, method_name_len, sp, NULL);
                     }
                 }
                 /* saffron-dynamic-surface-pass M9: a kind-* method that takes
@@ -7895,7 +8249,104 @@ found_method:;
                 bool star_witness = false;
                 if (!tc_is_hkt && slot < tc->n_methods) {
                     const TypeClassMethod *cm = &tc->methods[slot];
-                    star_witness = cm->n_params > 1 || cm->return_type.kind == TY_TYVAR;
+                    /* saffron-applied-class-var-result-takes-one-instances-type:
+                     * a result that MENTIONS the class variable -- bare
+                     * (`clone : a`) or applied (`wrap-self : (Option a)`) -- is
+                     * a different type per instance, so no one slot signature
+                     * carries it; each instance's witness returns `any` and
+                     * tags its own instantiation.  Keyed on a bare tyvar alone,
+                     * an applied one took the direct shim and the node took
+                     * one instance's type for every instance. */
+                    star_witness = cm->n_params > 1 ||
+                                   saffron_type_mentions_tyvar(&cm->return_type);
+                    /* ...but a RETURN-directed method (`(wrap-self [x] :
+                     * (Option a))` -- `a` in the result and in no parameter,
+                     * the unannotated `x` being `int`) is not selected by its
+                     * receiver at all, and its instances' impls take that `int`:
+                     * a witness keyed on the receiver's type cannot call them
+                     * (cc: "incompatible type for argument 1"), and the direct
+                     * shim it replaced mis-tagged every result.  Typed code
+                     * refuses the static form of this call too, so say so
+                     * here.  A bare `: a` result keeps its M9 path. */
+                    if (cm->return_type.kind != TY_TYVAR &&
+                        saffron_type_mentions_tyvar(&cm->return_type) &&
+                        method_is_return_dispatch(tc, cm)) {
+                        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0020_AMBIGUOUS_DISPATCH,
+                            "cannot dispatch '.%.*s' on an 'any' receiver: '%s' "
+                            "names its class variable only in the result, so the "
+                            "instance is chosen by the expected result type, not "
+                            "by the receiver",
+                            (int)method_name_len, method_name, tc->name->name);
+                        diag_emit(DIAG_HELP, call->span,
+                            "to dispatch on the receiver, spell it in the class: "
+                            "`(%.*s [%s : %s] ...)`",
+                            (int)method_name_len, method_name,
+                            (cm->n_params > 0 && cm->param_names && cm->param_names[0])
+                                ? cm->param_names[0]->name : "x",
+                            tc->type_params[0] ? tc->type_params[0]->name : "a");
+                        return NULL;
+                    }
+                }
+                /* S9 (D8 Q1): a kind-* class's PARAMETRIC head (`Eq [Vec]`,
+                 * `Show [Vec]`).  Its registry row is keyed on the all-`any`
+                 * instantiation, `(Vec any)`, but a direct shim calls the
+                 * CARRIER base impl, where a constrained body's element call is
+                 * the elaborator's representative -- `Kind [int]` for every
+                 * element, a silent wrong answer.  A witness at `(Vec any)` is
+                 * a static call on that instantiation, so the ABI scan mints
+                 * the by-value spec and the element call re-resolves to the
+                 * `C [any]` dictionary.  With extras or a class-variable result
+                 * it is the ordinary `any`-returning witness; for a one-
+                 * parameter concrete-result method it returns the declared
+                 * result, so the slot keeps every other instance's signature.
+                 * An unconstrained parametric instance keeps its direct shim:
+                 * its base impl never dispatches on the element. */
+                if (!tc_is_hkt && slot < tc->n_methods) {
+                    for (TypeClassInstance *wi = e->typeclass_env.instances; wi; wi = wi->next) {
+                        if (wi->typeclass != tc || wi->n_type_args == 0) continue;
+                        Type ht = wi->type_args[0];
+                        if (ht.kind != TY_ADT || !ht.as.adt_.def ||
+                            ht.as.adt_.def->n_type_params == 0)
+                            continue;
+                        Form *ret_form = NULL;
+                        if (!star_witness) {
+                            if (!wi->type_param_constraints ||
+                                wi->n_type_param_constraints == 0)
+                                continue;
+                            const Type *crt = &tc->methods[slot].return_type;
+                            FnDef *wimpl = (slot < wi->n_method_impls)
+                                               ? wi->method_impls[slot] : NULL;
+                            if (wimpl && wimpl->binding &&
+                                wimpl->binding->type.kind == TY_FN &&
+                                wimpl->binding->type.as.fn.result_full_type)
+                                crt = wimpl->binding->type.as.fn.result_full_type;
+                            const char *pn = NULL;
+                            switch (crt->kind) {
+                                case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_CSTR:
+                                case TY_SYM:
+                                    pn = type_name(*crt); break;
+                                default: break;
+                            }
+                            if (pn)
+                                ret_form = form_sym(e->arena, call->span,
+                                    symtab_intern(e->st, strslice(pn, (uint32_t)strlen(pn))));
+                            else
+                                ret_form = type_to_form(e, crt, call->span);
+                            if (!ret_form) continue;
+                        }
+                        AdtDef *pdef = ht.as.adt_.def;
+                        Span sp = call->span;
+                        const Symbol *anys = symtab_intern(e->st, strslice("any", 3));
+                        uint32_t ntp = pdef->n_type_params;
+                        Form **ti = (Form **)arena_alloc(e->arena, (1 + ntp) * sizeof(Form *));
+                        ti[0] = form_sym(e->arena, sp, symtab_intern(e->st,
+                            strslice(pdef->name, (uint32_t)strlen(pdef->name))));
+                        for (uint32_t k = 0; k < ntp; k++) ti[1 + k] = form_sym(e->arena, sp, anys);
+                        Form *recv_ty = form_list(e->arena, sp, ti, 1 + ntp);
+                        saffron_mint_dyn_witness(e, tc, slot, wi, pdef, recv_ty, pdef->name,
+                                                 method_name, method_name_len, sp, ret_form);
+                    }
                 }
                 if (star_witness) {
                     for (TypeClassInstance *wi = e->typeclass_env.instances; wi; wi = wi->next) {
@@ -7921,7 +8372,7 @@ found_method:;
                         Form *recv_ty = form_sym(e->arena, sp,
                             symtab_intern(e->st, strslice(rn, (uint32_t)strlen(rn))));
                         saffron_mint_dyn_witness(e, tc, slot, wi, NULL, recv_ty, rn,
-                                                 method_name, method_name_len, sp);
+                                                 method_name, method_name_len, sp, NULL);
                     }
                 }
                 /* The result type comes from the METHOD's declaration, which is
@@ -7929,11 +8380,27 @@ found_method:;
                  * callable through one signature.  For an HKT class -- and for
                  * a kind-* method served by a witness (M9) -- the witness
                  * returns `any`, so the node is `any` regardless of the
-                 * declaration (whose result mentions the class variable). */
+                 * declaration (whose result mentions the class variable).
+                 *
+                 * S9: a class method must declare its result, so when that
+                 * result is CONCRETE read it from the class -- not from the
+                 * instance the static resolver happened to pick, which
+                 * answered for every instance only because the instances
+                 * agreed.  One that mentions the class variable at all is a
+                 * star witness above, so the instance fallback below is for a
+                 * declaration that elaborated to nothing usable. */
                 Type result_type = TYPE_INT;
                 if (tc_is_hkt || star_witness) result_type = type_from_kind(TY_ANY);
-                if (!tc_is_hkt && !star_witness && best_method && best_method->binding &&
-                    best_method->binding->type.kind == TY_FN) {
+                bool class_result = false;
+                if (!tc_is_hkt && !star_witness && slot < tc->n_methods) {
+                    Type crt = tc->methods[slot].return_type;
+                    if (crt.kind != TY_UNKNOWN && !saffron_type_mentions_tyvar(&crt)) {
+                        result_type = crt;
+                        class_result = true;
+                    }
+                }
+                if (!tc_is_hkt && !star_witness && !class_result && best_method &&
+                    best_method->binding && best_method->binding->type.kind == TY_FN) {
                     Type rt = best_method->binding->type.as.fn.result_full_type
                                   ? *best_method->binding->type.as.fn.result_full_type
                                   : type_from_kind(
@@ -8005,6 +8472,18 @@ found_method:;
                 Expr *rt = elab_try_return_dispatch(e, call, m_sym, &rt_handled);
                 if (rt) return rt;
             }
+        }
+        if (unsat_inst && obj && obj->type.kind == TY_APP) {
+            const char *cls = unsat_inst->typeclass && unsat_inst->typeclass->name
+                                  ? unsat_inst->typeclass->name->name : "?";
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
+                "no instance of typeclass '%s' applies to type '%s' "
+                "(method '.%.*s'). An instance is in scope but does not "
+                "match -- a parametric instance's own constraints must "
+                "also hold for the element type.",
+                cls, type_name(obj->type), (int)method_name_len, method_name);
+            return NULL;
         }
         /* Build a comma-separated list of matching instance names for the message,
          * and capture the typeclass name for the concrete-receiver diagnosis. */
@@ -8357,7 +8836,41 @@ resolved_user_fallback:;
         type_is_transparent_int_newtype(best_method->body->type)) {
         result_type = best_method->body->type;
     }
-    
+
+    /* let-bound-class-method-result-in-constrained-generic-truncates: on an
+     * abstract type-variable receiver (`x : A` inside `[^N A]`), best_method is
+     * the carrier REPRESENTATIVE, not the instance that will run, so its result
+     * type (`int` for `N [int]`) is not the call's.  When the CLASS declares
+     * both the receiver and the result as its own variable -- every
+     * `a -> ... -> a` method -- the call's type is the receiver's `A`, exactly
+     * as the return-directed path keeps the abstract tyvar (see
+     * return-dispatch-tyvar above).  Without this a `let` binding took the
+     * representative's `int`: `(let [y (n x x)] y)` stored the float instance's
+     * double into an int64_t, and `(n y x)` then dispatched on a concrete int.
+     * The base clone is unchanged -- `A` lowers to the same int64 carrier. */
+    if (obj->type.kind == TY_TYVAR && e->definstance_depth == 0 &&
+        best_inst && best_inst->typeclass &&
+        best_inst->typeclass->n_type_params >= 1 &&
+        best_inst->typeclass->type_params[0]) {
+        const TypeClass *rtc = best_inst->typeclass;
+        const char *cv = rtc->type_params[0]->name;
+        for (uint8_t rmi = 0; rmi < rtc->n_methods; rmi++) {
+            const TypeClassMethod *cm = &rtc->methods[rmi];
+            if (!cm->name || strlen(cm->name->name) != method_name_len ||
+                strncmp(cm->name->name, method_name, method_name_len) != 0)
+                continue;
+            bool recv_is_cv = cm->n_params >= 1 && cm->param_types &&
+                cm->param_types[0].kind == TY_TYVAR &&
+                cm->param_types[0].as.tyvar_.name &&
+                strcmp(cm->param_types[0].as.tyvar_.name, cv) == 0;
+            bool res_is_cv = cm->return_type.kind == TY_TYVAR &&
+                cm->return_type.as.tyvar_.name &&
+                strcmp(cm->return_type.as.tyvar_.name, cv) == 0;
+            if (recv_is_cv && res_is_cv) result_type = obj->type;
+            break;
+        }
+    }
+
     /* Phase H §1 (dict load): Build an EX_DICT node that carries both the
      * singleton identity AND the method field name.  When fn_expr is this
      * node, emit.c dispatches through the dictionary struct at the call site:

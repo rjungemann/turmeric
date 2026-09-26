@@ -348,7 +348,8 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * `experiment_enable` used to be what flipped it -- so the emission
      * decision is identical either side of this change.  Do NOT re-add a row
      * for it; the bit is a "this build contains a Saffron TU" fact, not a gate.
-     * See docs/upcoming/saffron-lang-plan.md (still live for D4/G3-G9). */
+     * See docs/upcoming/saffron-lang-plan.md (still live only for S9's
+     * remaining dynamic-dispatch limits; D4/G3-G11 all landed). */
     /* class-superclasses GRADUATED 2026-09-25 (SC7 of
      * docs/upcoming/typeclass-superclasses-plan.md) -- the `defclass`
      * constraint preamble `(defclass Monoid [a] [(Semigroup a)] ...)`, the

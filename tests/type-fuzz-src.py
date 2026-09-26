@@ -176,7 +176,8 @@ BYVALUE_WRAPPERS = {"box", "adt", "opt", "res", "opt_box", "res_box"}
 
 CROSSING_TAGS = {"through", "deep", "let", "ascribe", "gid", "fat_hof",
                  "thin_hof", "class_thru", "tyvar_run",
-                 "class_nested", "class_nullary_newtype"}
+                 "class_nested", "class_nullary_newtype",
+                 "gid_let", "class_let"}
 
 
 def known_bug_slug(tags):
@@ -230,6 +231,15 @@ def known_bug_slug(tags):
     # carrier-compatible opaque newtype, gated on the class tyvar reaching a
     # parameter -- and archived.  Shape back in the DEFAULT pool; probe below
     # kept as a FIXED regression row.)
+    # (let-bound-class-method-result-in-constrained-generic-truncates:
+    # RESOLVED 2026-09-26 -- a class-method call on an abstract-tyvar receiver
+    # is typed with that receiver's `A` -- and archived.  Its shape,
+    # class_let, is in the DEFAULT pool; probe below kept as a FIXED row.)
+    # (let-bound-generic-call-result-in-generic-truncates: RESOLVED
+    # 2026-09-26 -- a let binding over a generic call instantiated to the
+    # enclosing signature's own tyvar is typed with that tyvar, through a
+    # reinterpret emit lowers per clone -- and archived.  gid_let is in the
+    # DEFAULT pool; probe below kept as a FIXED row.)
     #
     # ---- runtime seams (seam axis, added 2026-09-16) ------------------------
     #
@@ -246,17 +256,14 @@ def known_bug_slug(tags):
     # seconds and keeps each one continuously measured: when a row starts
     # passing it stops matching here, and --known-probes reports it FIXED.
     #
-    # Per-(seam, payload) verdicts measured against v0.48.0 -- the matrix is in
-    # docs/reported/runtime-seams-carry-payloads-as-int64.md.  Bare `int` is the
-    # only payload every broken seam gets right, which is why every fixture and
-    # every guide example for these features sends an int.
-    if "seam_session" in tags or "seam_router" in tags:
-        # float truncates (7.25 -> 7); cstr and by-value struct are cc errors.
-        # int and bool round-trip.
-        if ("payload_box" in tags or "scalar_float" in tags
-                or "scalar_cstr" in tags):
-            return ("session-payloads-are-int64-only" if "seam_session" in tags
-                    else "router-payloads-are-int64-only")
+    # (session-payloads-are-int64-only, router-payloads-are-int64-only:
+    # RESOLVED 2026-09-16 and archived -- float is bit-reinterpreted, cstr
+    # cast through intptr_t, and a by-value struct payload is REJECTED by
+    # design with TUR-E0212.  Rows retired 2026-09-26.  They had outlived
+    # their reports by ten nights: every `payload_box` session/router leg --
+    # a designed rejection, which is what SEAM_REJECT is for -- was being
+    # counted as KNOWN against a closed report.  Both probes below stay as
+    # FIXED regression rows.)
     # The generator and await seams were the worst of the family until
     # 2026-09-17 -- the slot's type reached the SIGNATURE (gen-unwrap / await
     # declared :int), so bool printed 1 and cstr a raw pointer.  Both read
@@ -355,6 +362,33 @@ KNOWN_PROBES = [
      "(definstance MoP [SumP] (mzerop [] (:: 0 SumP)))\n"
      "(defn fq [^SgP A ^MoP A] [x : A] : A (combp x (mzerop)))\n"
      "(defn main [] : int (println (:: (fq (:: 3 SumP)) int)) 0)\n"),
+    # RESOLVED 2026-09-26.  Found by the nightly as class_nested + gid on a
+    # float leg (seeds 20260913/17/18/25), filed by none of them -- see
+    # tests/fuzz-seed-corpus.txt.  A FIXED regression probe: the flat tail is
+    # the minimal shape, and -4.25 printed -nan while it was open.
+    ("constrained-generic-float-result-into-generic-value-converts",
+     "(defclass NvP [a] (nvp [x : a y : a] : a))\n"
+     "(definstance NvP [int]   (nvp [x y] x))\n"
+     "(definstance NvP [float] (nvp [x y] x))\n"
+     "(defn fr [^NvP A] [x : A] : A (nvp x x))\n"
+     "(defn gr [A] [x : A] : A x)\n"
+     "(defn main [] : int (println (gr (fr -4.25))) 0)\n",
+     "-4.25\n"),
+    # RESOLVED 2026-09-26.  FIXED regression row: -4.25 printed -4.
+    ("let-bound-class-method-result-in-constrained-generic-truncates",
+     "(defclass LbP [a] (lbp [x : a y : a] : a))\n"
+     "(definstance LbP [int]   (lbp [x y] x))\n"
+     "(definstance LbP [float] (lbp [x y] x))\n"
+     "(defn fl [^LbP A] [x : A] : A (let [y (lbp x x)] (lbp y x)))\n"
+     "(defn main [] : int (println (fl -4.25)) 0)\n",
+     "-4.25\n"),
+    # RESOLVED 2026-09-26.  FIXED regression row: 9.75 printed 9.  No
+    # typeclass involved.
+    ("let-bound-generic-call-result-in-generic-truncates",
+     "(defn gl [A] [x : A] : A x)\n"
+     "(defn wl [A] [x : A] : A (let [y (gl x)] y))\n"
+     "(defn main [] : int (println (wl 9.75)) 0)\n",
+     "9.75\n"),
     # ---- runtime seams ------------------------------------------------------
     #
     # All four are wrong-ANSWER defects, so all four MUST carry the expected
@@ -685,6 +719,23 @@ class Gen:
             e = "(%s %s)" % (f, e)
         return e, "gid"
 
+    def x_gid_let(self, leg, tn, e):
+        """A generic whose body LET-BINDS another generic's result.
+
+        Every other crossing hands a call's result straight to the next call,
+        and emit re-targets a call it can see.  A `let` binding instead takes
+        the call's ELABORATED type -- which for an instantiation to the
+        caller's own `A` was `int`, so a float leg truncated (9.75 -> 9) and a
+        by-value aggregate leg did not compile.  Both halves are fixed and in
+        the default pool: this one
+        (docs/archive/let-bound-generic-call-result-in-generic-truncates.md)
+        and the class-method one, class_let.
+        """
+        f, g = self.name("g"), self.name("g")
+        leg.defs.append("(defn %s [A] [x : A] : A x)" % f)
+        leg.defs.append("(defn %s [A] [x : A] : A (let [y (%s x)] y))" % (g, f))
+        return "(%s %s)" % (g, e), "gid_let"
+
     def x_fat_hof(self, leg, tn, e):
         f = self.name("h")
         leg.defs.append("(defn %s [^fat f : (fn [] %s)] : %s (f))" % (f, tn, tn))
@@ -724,7 +775,7 @@ class Gen:
         diverge; the method is BINARY over its own class type so one call can
         feed another; and the generic body NESTS the two calls.  All three are
         required by
-        docs/reported/nested-class-method-call-picks-the-first-instance.md.
+        docs/archive/nested-class-method-call-picks-the-first-instance.md.
 
         The method projects its first argument, so nesting is an identity and
         the leg's expected value is unchanged -- resolving to the wrong
@@ -744,9 +795,33 @@ class Gen:
                         % (gen, cls, meth, meth))
         return "(%s %s)" % (gen, e), "class_nested"
 
+    def x_class_let(self, leg, tn, e):
+        """class_nested's shape with the inner result LET-BOUND.
+
+        The decoy instance is declared first, as in class_nested, because the
+        call on an A-typed receiver is elaborated against that carrier
+        representative.  Bound by a `let`, the representative's result type
+        used to become the binding's type: the float instance's double was
+        stored into an int64 and the outer call dispatched on `int`.
+        docs/archive/let-bound-class-method-result-in-constrained-generic-
+        truncates.md.  The method projects its first argument, so the
+        crossing is an identity and a wrong instance is a wrong ANSWER.
+        """
+        n = self.n_names
+        self.n_names += 1
+        cls, meth = "FzL%d%d" % (self.i, n), "fzl%d%d" % (self.i, n)
+        gen = "fzlg%d%d" % (self.i, n)
+        decoy = "float" if tn == "int" else "int"
+        leg.defs.append("(defclass %s [a] (%s [x : a y : a] : a))" % (cls, meth))
+        leg.defs.append("(definstance %s [%s] (%s [x y] x))" % (cls, decoy, meth))
+        leg.defs.append("(definstance %s [%s] (%s [x y] x))" % (cls, tn, meth))
+        leg.defs.append("(defn %s [^%s A] [x : A] : A (let [y (%s x x)] (%s y x)))"
+                        % (gen, cls, meth, meth))
+        return "(%s %s)" % (gen, e), "class_let"
+
     def x_class_nullary_newtype(self, leg, tn, e):
         """A NULLARY class method whose instances are over a `defopaque`
-        newtype -- docs/reported/nullary-class-method-unresolvable-over-newtype-tyvar.md.
+        newtype -- docs/archive/nullary-class-method-unresolvable-over-newtype-tyvar.md.
 
         Both halves are required: every other generated method takes `self`,
         and every other instance head is a plain struct/scalar name.  Applied
@@ -779,17 +854,20 @@ class Gen:
             return [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
                     self.x_fat_hof, self.x_thin_hof]
         xs = [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
-              self.x_fat_hof, self.x_thin_hof]
+              self.x_fat_hof, self.x_thin_hof, self.x_gid_let]
         # Thin HOF over every wrapper: scalars ride the poly carrier;
         # concrete by-value/heap signatures are fat-normalized as of
         # fn-value-fat-normalization stage 1 (2026-07-30).
         # Instance heads: plain type names only.
         if not tn.startswith("("):
             xs.append(self.x_class_thru)
-            # class_nested is in the default pool since its report was resolved
-            # (2026-09-11).  class_nullary_newtype is still an open report, so
-            # it stays avoided until --emit-known turns it back on.
+            # Both F1 shapes are in the default pool: their reports were
+            # resolved and archived (2026-09-11).  class_nested is also the
+            # only shape that gives a class a SECOND instance declared before
+            # the leg's own, which is what found
+            # constrained-generic-float-result-into-generic-value-converts.
             xs.append(self.x_class_nested)
+            xs.append(self.x_class_let)
             if tn == "int":
                 xs.append(self.x_class_nullary_newtype)
         if self.emit_known:
