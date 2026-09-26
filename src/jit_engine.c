@@ -311,6 +311,9 @@ static uint64_t jit_osswap64 (uint64_t x) {
          | jit_osswap32 ((uint32_t) (x >> 32));
 }
 
+static int jit_pthread_create (pthread_t *tid, const pthread_attr_t *attr,
+                               void *(*fn) (void *), void *arg);
+
 static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"__builtin_pow", (void *) jit_builtin_pow},
   {"__builtin_sqrt", (void *) jit_builtin_sqrt},
@@ -337,6 +340,7 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"__builtin_nan", (void *) jit_builtin_nan},
   {"__builtin_inf", (void *) jit_builtin_inf},
   {"atexit", (void *) jit_atexit},
+  {"pthread_create", (void *) jit_pthread_create},
   {"_OSSwapInt16", (void *) jit_osswap16},
   {"_OSSwapInt32", (void *) jit_osswap32},
   {"_OSSwapInt64", (void *) jit_osswap64},
@@ -452,6 +456,49 @@ static void jit_set_lazy_gen_interface (MIR_context_t ctx, MIR_item_t func_item)
 #endif
   addr = _MIR_get_wrapper (ctx, func_item, jit_lazy_gen_locked);
   _MIR_redirect_thunk (ctx, func_item->addr, addr);
+}
+
+/* Threads and lazy generation (docs/archive/jit-threaded-program-hangs-under-load.md).
+ * Generating a function ends in MIR redirecting its call thunk: 13 bytes
+ * rewritten in place with a plain memcpy (_MIR_redirect_thunk ->
+ * _MIR_change_code).  The lock above keeps two GENERATORS apart, but not a
+ * thread that is at that moment executing the thunk: it can run a jump whose
+ * displacement is half old, half new, and land anywhere -- a SIGSEGV, or a
+ * spin in unrelated code.  Under CPU load, with more preemption inside those
+ * instructions, `r7rs-threads-pause` hung in 6 of 150 runs lazy (and
+ * segfaulted in 2 of another 150) and 0 of 150 eager.
+ *
+ * So a program that starts a thread stops being lazy at that moment: the
+ * first pthread_create generates every function not yet generated, while the
+ * program is still single-threaded, and after it no thunk is ever rewritten
+ * again.  A program that never starts a thread keeps the whole lazy saving.
+ * (The engine's own entry thread is started by the host, not through here,
+ * and runs the program alone.) */
+static MIR_context_t g_jit_lazy_ctx;   /* the context still generating lazily */
+
+static void jit_generate_rest (MIR_context_t ctx) {
+  pthread_mutex_lock (&g_gen_lock);
+  for (MIR_module_t m = DLIST_HEAD (MIR_module_t, *MIR_get_module_list (ctx)); m != NULL;
+       m = DLIST_NEXT (MIR_module_t, m))
+    for (MIR_item_t it = DLIST_HEAD (MIR_item_t, m->items); it != NULL;
+         it = DLIST_NEXT (MIR_item_t, it))
+      if (it->item_type == MIR_func_item && it->u.func->machine_code == NULL)
+        MIR_gen (ctx, it);
+  pthread_mutex_unlock (&g_gen_lock);
+}
+
+/* A context being torn down stops being the one a thread start finishes. */
+static void jit_forget_lazy_ctx (MIR_context_t ctx) {
+  MIR_context_t expected = ctx;
+  __atomic_compare_exchange_n (&g_jit_lazy_ctx, &expected, NULL, 0,
+                               __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+
+static int jit_pthread_create (pthread_t *tid, const pthread_attr_t *attr,
+                               void *(*fn) (void *), void *arg) {
+  MIR_context_t ctx = __atomic_exchange_n (&g_jit_lazy_ctx, NULL, __ATOMIC_SEQ_CST);
+  if (ctx != NULL) jit_generate_rest (ctx);
+  return pthread_create (tid, attr, fn, arg);
 }
 
 /* MIR's default error handler prints and EXITS the process -- from inside
@@ -902,6 +949,8 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   jit_timing_mark ("load");
   MIR_link (ctx, gen_iface, jit_import_resolver);
   jit_timing_mark ("link");
+  if (gen_iface == jit_set_lazy_gen_interface)
+    __atomic_store_n (&g_jit_lazy_ctx, ctx, __ATOMIC_SEQ_CST);
   jit_sync_config_globals (ctx);
   g_jit_err_active = 0;   /* past the last MIR call that can raise */
 
@@ -952,6 +1001,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
 
   MIR_item_t main_item = jit_find_func (ctx, "main");
   if (main_item == NULL) {
+    jit_forget_lazy_ctx (ctx);
     if (g_jit_gen_inited) MIR_gen_finish (ctx);
     c2mir_finish (ctx);
     MIR_finish (ctx);
@@ -971,6 +1021,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   pthread_attr_setstacksize (&attr, stack_mb * 1024 * 1024);
   if (pthread_create (&entry_thread, &attr, jit_run_entry, &box) != 0) {
     pthread_attr_destroy (&attr);
+    jit_forget_lazy_ctx (ctx);
     if (g_jit_gen_inited) MIR_gen_finish (ctx);
     c2mir_finish (ctx);
     MIR_finish (ctx);
@@ -984,6 +1035,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   jit_timing_mark ("run");
   jit_timing_rss ();
 
+  jit_forget_lazy_ctx (ctx);
   if (g_jit_gen_inited) MIR_gen_finish (ctx);
   c2mir_finish (ctx);
   MIR_finish (ctx);
@@ -1025,6 +1077,7 @@ int tur_jit_compile_image (const char *csrc, size_t csrc_len,
 
   TurJitImage *img = (TurJitImage *) malloc (sizeof *img);
   if (!img) {
+    jit_forget_lazy_ctx (ctx);
     if (g_jit_gen_inited) MIR_gen_finish (ctx);
     c2mir_finish (ctx);
     MIR_finish (ctx);
@@ -1047,6 +1100,7 @@ void tur_jit_image_free (TurJitImage *img) {
    * generated code is still mapped; the callers' contract is that no
    * image function pointer is used after this call. */
   jit_atexit_drain ();
+  jit_forget_lazy_ctx (img->ctx);
   MIR_gen_finish (img->ctx);
   c2mir_finish (img->ctx);
   MIR_finish (img->ctx);
