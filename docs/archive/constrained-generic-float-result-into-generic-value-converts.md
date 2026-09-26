@@ -133,4 +133,7 @@ in `tests/fuzz-seed-corpus.txt`, both reachable at smoke size.
 **Not fixed here, filed separately:** a class-method result `let`-bound
 inside the same kind of constrained generic truncates even without the second
 generic --
-[let-bound-class-method-result-in-constrained-generic-truncates](../reported/let-bound-class-method-result-in-constrained-generic-truncates.md).
+[let-bound-class-method-result-in-constrained-generic-truncates](let-bound-class-method-result-in-constrained-generic-truncates.md)
+(since resolved at elaboration). Its generic-FUNCTION twin, a let-bound
+`(gid x)` result with no typeclass involved, is still open:
+[let-bound-generic-call-result-in-generic-truncates](../reported/let-bound-generic-call-result-in-generic-truncates.md).

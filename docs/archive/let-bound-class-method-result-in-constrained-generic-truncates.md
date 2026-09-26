@@ -4,8 +4,13 @@
 `-4`. No diagnostic; GCC's `-Wfloat-conversion` flags the emitted line, but
 no fixture reaches it, so the ratchet never sees it.
 
-**Status:** open. Found 2026-09-26 while reducing
-[constrained-generic-float-result-into-generic-value-converts](../archive/constrained-generic-float-result-into-generic-value-converts.md),
+**RESOLVED 2026-09-26** -- see Execution at the end. Fixing it turned up a
+second path to the same symptom that needs no typeclass at all. That one is
+filed separately as
+[let-bound-generic-call-result-in-generic-truncates](../reported/let-bound-generic-call-result-in-generic-truncates.md).
+
+**Status when filed:** open. Found 2026-09-26 while reducing
+[constrained-generic-float-result-into-generic-value-converts](constrained-generic-float-result-into-generic-value-converts.md),
 which is fixed. Reproduced on `build/tur` at the commit that fixed that report
 (Debug, Linux x86-64, GCC 13.3). The result is the same with and without that
 fix.
@@ -58,7 +63,7 @@ call's receiver is then a concrete-`int` variable, so
 `__inst_N0_n0_int`.
 
 This is the let-bound case of
-[nested-class-method-call-picks-the-first-instance](../archive/nested-class-method-call-picks-the-first-instance.md).
+[nested-class-method-call-picks-the-first-instance](nested-class-method-call-picks-the-first-instance.md).
 That fix recovers the dispatch type when the receiver **is** a re-resolved
 class-method call. Here the receiver is a variable **bound to** one.
 
@@ -84,3 +89,66 @@ discipline.
    Every other reader of `y` would still see `int`, so expect more shapes.
 3. **Pin it:** a compiled fixture asserting `-4.25` for both `one` and `two`,
    with `int` declared before `float`, plus the fuzzer shape above.
+
+
+## Execution -- RESOLVED 2026-09-26
+
+Fix direction 1: at elaboration.
+
+`elab_method_call` (`src/compiler/elab_typeclasses.c`) binds a call on an
+abstract-tyvar receiver to a carrier **representative** instance (`N [int]`),
+tags it with a dictionary, and leaves the real instance to emit-side
+re-resolution. The call's *type* was still read from the representative's
+binding, so it was `int`. Now, when the class declares both the receiver and
+the result as its own variable (every `a -> ... -> a` method), the call is
+typed with the receiver's `A`. The return-directed path already did this
+("`out->type` stays the tyvar `bound`"); the receiver-directed path never
+had. Gated on a `TY_TYVAR` receiver and `definstance_depth == 0`, so a
+concrete receiver and an instance body are untouched.
+
+The base clone is unchanged, because `A` lowers to the same int64 carrier the
+`int` did. Each spec now resolves the binding's `A` to its own type, so `y` is
+a `double` in the float spec. The next dispatch on it re-resolves like any
+other `A`-typed receiver:
+
+```c
+static double two__spec__double_double(double x) {
+        {
+            double __ps_181 = (__inst_N_n_float(x, x));
+            if (tur_panicking) return ((double)0);
+            double y_1618 = __ps_181;
+            (void)y_1618;
+            return __inst_N_n_float(y_1618, x);
+        }
+}
+```
+
+### One behaviour change
+
+`(println (n x x))` inside a `[^N A]` generic used to compile, and at `0.5`
+printed `0`. It is now the same compile error `(println x)` on an `A` value
+has always been (TUR-E0006, no `println` for a type variable). A wrong answer
+became a diagnostic. No fixture in the full suite (3191 passed, 0 failed)
+relied on the old behaviour.
+
+### The second path -- split out, not fixed here
+
+`(let [y (one x)] (n y x))`, with `one` a generic *function*, still truncated
+after the fix. Reduced, it needs no typeclass:
+`(defn wrap [A] [x : A] : A (let [y (gid x)] y))` returns `9` for `9.75`.
+`elab_call.c` types a generic call instantiated to the caller's own `A` as
+`int` too, by a separate path. The obvious fix, keeping the tyvar there, was
+tried and failed 16 fixtures. The gate cannot tell a caller's tyvar from an
+unbound one, and several emitter paths depend on that `int`. It is filed with
+the full record as
+[let-bound-generic-call-result-in-generic-truncates](../reported/let-bound-generic-call-result-in-generic-truncates.md).
+
+### Pinned
+
+- `tests/fixtures/let-bound-class-method-result-keeps-its-tyvar`: `let`,
+  `let` chain, `if`, dot syntax, a second class dispatched on the let-bound
+  value, the result into another generic, float32, plus int/cstr controls.
+  Without the fix it fails on the F0 `-Wfloat-conversion` ratchet.
+- `tests/type-fuzz-src.py`: a new `class_let` crossing in the default pool,
+  and a FIXED row in `KNOWN_PROBES`. The generic-function half has a
+  `gid_let` crossing, `--emit-known` only while its report is open.

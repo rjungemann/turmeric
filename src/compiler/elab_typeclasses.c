@@ -8263,7 +8263,41 @@ resolved_user_fallback:;
         type_is_transparent_int_newtype(best_method->body->type)) {
         result_type = best_method->body->type;
     }
-    
+
+    /* let-bound-class-method-result-in-constrained-generic-truncates: on an
+     * abstract type-variable receiver (`x : A` inside `[^N A]`), best_method is
+     * the carrier REPRESENTATIVE, not the instance that will run, so its result
+     * type (`int` for `N [int]`) is not the call's.  When the CLASS declares
+     * both the receiver and the result as its own variable -- every
+     * `a -> ... -> a` method -- the call's type is the receiver's `A`, exactly
+     * as the return-directed path keeps the abstract tyvar (see
+     * return-dispatch-tyvar above).  Without this a `let` binding took the
+     * representative's `int`: `(let [y (n x x)] y)` stored the float instance's
+     * double into an int64_t, and `(n y x)` then dispatched on a concrete int.
+     * The base clone is unchanged -- `A` lowers to the same int64 carrier. */
+    if (obj->type.kind == TY_TYVAR && e->definstance_depth == 0 &&
+        best_inst && best_inst->typeclass &&
+        best_inst->typeclass->n_type_params >= 1 &&
+        best_inst->typeclass->type_params[0]) {
+        const TypeClass *rtc = best_inst->typeclass;
+        const char *cv = rtc->type_params[0]->name;
+        for (uint8_t rmi = 0; rmi < rtc->n_methods; rmi++) {
+            const TypeClassMethod *cm = &rtc->methods[rmi];
+            if (!cm->name || strlen(cm->name->name) != method_name_len ||
+                strncmp(cm->name->name, method_name, method_name_len) != 0)
+                continue;
+            bool recv_is_cv = cm->n_params >= 1 && cm->param_types &&
+                cm->param_types[0].kind == TY_TYVAR &&
+                cm->param_types[0].as.tyvar_.name &&
+                strcmp(cm->param_types[0].as.tyvar_.name, cv) == 0;
+            bool res_is_cv = cm->return_type.kind == TY_TYVAR &&
+                cm->return_type.as.tyvar_.name &&
+                strcmp(cm->return_type.as.tyvar_.name, cv) == 0;
+            if (recv_is_cv && res_is_cv) result_type = obj->type;
+            break;
+        }
+    }
+
     /* Phase H §1 (dict load): Build an EX_DICT node that carries both the
      * singleton identity AND the method field name.  When fn_expr is this
      * node, emit.c dispatches through the dictionary struct at the call site:
