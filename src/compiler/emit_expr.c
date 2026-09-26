@@ -2846,10 +2846,18 @@ bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
         emit_resolve_type(ctx, init->as.union_inject_.value->type).kind == TY_UNION)
         return false;
     /* Owned-here shapes only.  A frame-boxed widen is a STACK address -- freeing
-     * it would be far worse than the leak this closes. */
+     * it would be far worse than the leak this closes.
+     *
+     * any-scope-drop-frees-an-aliased-call-result: a CALL is owned here only
+     * when the callee mints the box (returns_fresh_any) or forwards one the
+     * caller owned -- the same any_expr_is_owned_temp the move-to-use rule
+     * (elab_forms.c) and the argument drop (elab_call.c) ask.  "Any call" was
+     * a use-after-free: `(let [a (vec-get xs 0)] ...)` over a `(Vec any)`, or
+     * a call returning a global, dropped a box its other holder still reads,
+     * and the next read printed garbage and exited 0. */
     bool owned_here =
         (init->kind == EX_UNION_INJECT && !init->as.union_inject_.frame_box)
-        || (init->kind == EX_CALL);
+        || (init->kind == EX_CALL && any_expr_is_owned_temp(init, 8));
     if (!owned_here) return false;
     if (any_box_binding_escapes(e->as.let_.body, b) &&
         !catch_box_binding_reader_confined(e->as.let_.body, b, e->type.kind))
