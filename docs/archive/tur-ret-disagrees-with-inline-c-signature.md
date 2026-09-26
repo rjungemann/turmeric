@@ -1,5 +1,14 @@
 # `__TUR_RET__` names a type the inline-C function does not return
 
+**Resolved** (2026-09-25). When the signature emitter writes the carrier
+`int64_t` for an inline-C body, it now sets the function's return C type to
+match (src/compiler/emit_fns.c), and `__TUR_RET__` reads that. It is not
+specific to maps: a non-generic `(Vec int)` result drew the same warning.
+Fixture: `tests/fixtures/inline-c-tur-ret-heap-result`, which covers both;
+without the fix it draws two -Wint-conversion warnings. The
+r7rs-threads-lifecycle fixture uses `(__TUR_RET__)` again. What follows is
+the report as filed.
+
 **Severity:** low. The documented cast `return (__TUR_RET__)(intptr_t)v;`
 draws a `-Wint-conversion` warning in one shape. `tests/run.sh` fails a
 fixture on that warning, and `-Werror` would make it a hard error. Found

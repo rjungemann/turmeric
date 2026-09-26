@@ -1,5 +1,13 @@
 # A child forked from a multithreaded `tur jit` program can hang
 
+**Resolved** (2026-09-25). The hung child was waiting on `g_gen_lock` in
+`jit_lazy_gen_locked` (src/jit_engine.c): the JIT's lazy-generation lock,
+held by the burner thread at the moment of the fork. `pthread_atfork`
+handlers now take the lock before a fork and release it on both sides, so
+generation is never mid-way when the address space is copied. The fork
+check in `tests/fixtures/r7rs-threads-lifecycle` runs under the JIT again.
+What follows is the report as filed.
+
 **Severity:** low. Found while writing the r7rs-gc stage C fixtures.
 `fork` from a threaded program run under `tur jit` is rare, and the
 compiled build is unaffected.

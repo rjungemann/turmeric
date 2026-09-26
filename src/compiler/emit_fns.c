@@ -5487,6 +5487,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 buf_puts(file, emit_type_c_name(ctx, typed_byval_adt ? rft_r : rft));
             } else {
                 buf_puts(file, "int64_t");
+                /* The body is C text, and its `__TUR_RET__` must name the type
+                 * this signature returns: the carrier, not the typed pointer
+                 * the return-type computation above chose for a `:heap` result
+                 * (a non-generic `(Map int any)` inline-C function used to
+                 * return `(tur_adt_Map__int__any *)` from an int64_t function). */
+                if (body_is_inline_c) ctx->current_fn_ret_ctype = "int64_t";
             }
         } else {
             /* SF-application carrier bridge (struct/app closure return):
