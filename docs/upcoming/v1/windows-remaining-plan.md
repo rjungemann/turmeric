@@ -59,9 +59,11 @@ has no libdl) reached main in three new `jit-ffi` fixtures and the job stayed
 green through it, because that failure is a LINK error when building a FIXTURE,
 not when building `tur.exe`.
 
-Still missing: `release.yml` ships no Windows artifact, and
-`src/CMakeLists.txt:45-49` disables `-Werror` on Windows pending a warning-clean
-port, so the job runs with warnings unpromoted.
+Still missing: `src/CMakeLists.txt` disables `-Werror` on Windows pending a
+warning-clean port, so the job runs with warnings unpromoted (as of 2026-09-26
+a Debug build still warns, e.g. `signal_shim` defined but unused in
+`src/async/reactor.c`). `release.yml` now has a Windows job; the earlier "ships
+no Windows artifact" is no longer true.
 
 This plan tracks what is left.
 
@@ -214,12 +216,14 @@ Options, in rough order of effort:
 
 Recommendation: option 1 unless a use case forces option 2.
 
-### Concurrency stdout mismatches (2 fixtures)
+### Concurrency stdout mismatches (2 fixtures) -- no longer reproduce
 
-`fiber-effect` and `p19-8-fiber-effect-chain` build and run but produce
-diverging output -- scheduler/timing under the select backend, not yet
-diagnosed. Worth a focused diagnosis pass; start by comparing fiber/worker
-scheduling order against Linux.
+`fiber-effect` and `p19-8-fiber-effect-chain` used to build and run but produce
+diverging output. **Both pass on Windows as of 2026-09-26** (Windows 11,
+MSYS2/UCRT64, gcc 16.1, Debug; `run.sh` in three shards, 3208 passed). They were
+never diagnosed separately. The likeliest fix is the `__builtin_setjmp` fiber
+work ([windows-longjmp-across-fiber-stack-kills-effects](../../archive/windows-longjmp-across-fiber-stack-kills-effects.md)),
+since both run an effect on a fiber.
 
 (An earlier revision named `httpd-h4-keepalive`, `httpd-h6-routing` and
 `taskgroup-async` here. All three now pass -- the first two were collateral of

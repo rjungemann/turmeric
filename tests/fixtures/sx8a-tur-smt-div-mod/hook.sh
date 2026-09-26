@@ -111,6 +111,10 @@ EOF
 "$TUR" check --dump-refine=json "$TMP/rt.tur" > "$TMP/rt.json" 2>/dev/null
 python3 - "$TMP/rt.json" "$TMP" <<'PY'
 import json, sys
+# Windows: a native Python writes "\r\n" for every "\n" on a text-mode stdout,
+# which diffs against the LF expected.stdout; same fix as the two sibling
+# hooks (sx8a-refine-json-dump, refine-json-probe-caps-attributed).
+sys.stdout.reconfigure(newline="\n")
 recs = json.load(open(sys.argv[1]))
 recs = recs.get("obligations", recs) if isinstance(recs, dict) else recs
 n = 0
