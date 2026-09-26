@@ -2978,6 +2978,9 @@ saffron/sweet          saffron   sweet        stable
 
 ## See also
 
+- [r7rs-srfi-plan.md](r7rs-srfi-plan.md) -- `(import (srfi N))`, after
+  Racket's SRFI support: the built-in SRFIs as no-op imports, the rest as
+  libraries, and the guide's support table
 - [proper-tail-calls-plan.md](proper-tail-calls-plan.md) -- D6's prerequisite,
   with the full tail-call measurement matrix
 - [saffron-lang-plan.md](saffron-lang-plan.md) -- the dynamic substrate this

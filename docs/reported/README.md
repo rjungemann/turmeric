@@ -2221,6 +2221,17 @@ section 5b (`docs/archive/type-confusion-detection-plan.md`).
 | ~~[let-bound-class-method-result-in-constrained-generic-truncates](../archive/let-bound-class-method-result-in-constrained-generic-truncates.md)~~ | high | **RESOLVED 2026-09-26** (archived): a class-method call on an abstract-tyvar receiver is typed with the receiver's `A` when the class declares receiver and result as its variable, not with the representative instance's `int` (src/compiler/elab_typeclasses.c). Fixture `let-bound-class-method-result-keeps-its-tyvar`. Original: `(let [y (n x x)] y)` in a constrained generic returned `-4` for `-4.25` |
 | ~~[let-bound-generic-call-result-in-generic-truncates](../archive/let-bound-generic-call-result-in-generic-truncates.md)~~ | high | **RESOLVED 2026-09-26** (archived): a `let` binding over a generic call instantiated to the enclosing signature's own type variable is typed with that variable, through a reinterpret the emitter lowers per clone. It bridges from the carrier only when the hoist temp is recorded as one (src/compiler/elab_forms.c, src/compiler/emit_expr.c). Fixture `let-bound-generic-call-result-keeps-its-tyvar`. Original: `(let [y (gid x)] y)` in a generic returned `9` for `9.75`, stdlib `vec-get`/`unwrap-or` were hit the same way, and a by-value aggregate did not compile |
 
+## Found planning SRFI support for `#lang r7rs` (filed 2026-09-26)
+
+All three came from the probes behind `docs/upcoming/r7rs-srfi-plan.md`
+(its Section 2.3). chibi's R7RS suite reaches none of them.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [r7rs-leading-colon-identifiers](r7rs-leading-colon-identifiers.md) | medium | In a `#lang r7rs` source file, `':x` reads as the symbol `x`, and `':::` or a parameter named `:x` is an error. The runtime `read` gets all three right. Blocks SRFI 42 (`:list`, `:range`, ...) and the `:::` custom ellipsis; a colon inside an identifier (`char-set:letter`) is fine |
+| [r7rs-define-library-cannot-export-syntax](r7rs-define-library-cannot-export-syntax.md) | medium | Exporting a `define-syntax` name from a `define-library` is "exported symbol ... is not defined in this module" (src/compiler/elab_module.c:1580): the macro is consumed by the Scheme expander and never reaches the module interface. The same macro in a `load`ed file works |
+| [r7rs-cond-expand-ratios-feature-drift](r7rs-cond-expand-ratios-feature-drift.md) | low | `(features)` lists `ratios` (stdlib/r7rs/prelude.tur:2424), but `cond-expand` does not hold it (`feature_holds`, src/compiler/scheme_lower.c:3970): two hand-kept copies of one list. r7rs-srfi-plan S1 generates both from one table |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
