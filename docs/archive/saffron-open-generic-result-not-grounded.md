@@ -14,6 +14,9 @@ different defects stood behind the two symptoms, and each needed its own fix:
    variable is bound to exactly `any` borrows a widened copy, `(& (:: k any))`
    (elab_call.c, just before the argument-mismatch diagnostic).  A typed map
    keeps refusing a wrong key -- `errors/saffron-typed-map-rejects-wrong-key`.
+   Scalar keys only: a borrowed aggregate key never reaches the seam, and
+   is not checked against K at all -- filed as
+   [borrowed-aggregate-key-skips-the-key-check](../reported/borrowed-aggregate-key-skips-the-key-check.md).
 2. **Behind an `any`, the seam took the instantiation from a SCALAR sibling.**
    H9 (saffron-dynamic-surface-pass) pre-bound the container's type variables
    from the call's other arguments, so `(map-assoc (mk) "k" 42)` checked the

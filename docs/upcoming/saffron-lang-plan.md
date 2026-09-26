@@ -27,6 +27,7 @@ Open reports a Saffron program reaches (none is a stage blocker):
 - [list-length-on-cons-any-segfaults](../reported/list-length-on-cons-any-segfaults.md) (low-medium)
 - [untyped-forward-callee-result-retagged-as-pointer](../reported/untyped-forward-callee-result-retagged-as-pointer.md) (low-medium)
 - [byvalue-recursive-adt-boxes-are-never-freed](../reported/byvalue-recursive-adt-boxes-are-never-freed.md) (low-medium, plain Turmeric too)
+- [borrowed-aggregate-key-skips-the-key-check](../reported/borrowed-aggregate-key-skips-the-key-check.md) (medium, plain Turmeric too)
 - [cps-capturing-closure-env-leaks-through-dyn-call](../reported/cps-capturing-closure-env-leaks-through-dyn-call.md) (low)
 - [jit-x86-64-struct-valued-statement-expression-miscompiles](../reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md) (medium, JIT engine on x86-64 only)
 
