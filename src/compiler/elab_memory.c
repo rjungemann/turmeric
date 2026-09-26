@@ -101,8 +101,21 @@ Expr *elab_deref(Elab *e, const Form *call) {
         else
             result_type = type_from_kind(inner->type.as.rc.inner);
     } else if (inner->type.kind == TY_REF_IMMUT || inner->type.kind == TY_REF_MUT) {
-        /* Phase 12: &T and &mut T dereference to T */
-        result_type = type_from_kind(inner->type.as.ref_borrow.target);
+        /* Phase 12: &T and &mut T dereference to T.
+         * borrowed-aggregate-key-skips-the-key-check: T is the borrow's full
+         * target when it recorded one (`&Pt` derefs to Pt, not a bare ADT
+         * kind), and a `(& K)` derefs to the NAMED tyvar K, so a spec at
+         * K = any resolves the read to the tagged box. */
+        if (inner->type.as.ref_borrow.target_full) {
+            result_type = *inner->type.as.ref_borrow.target_full;
+        } else if (inner->type.as.ref_borrow.target == TY_TYVAR &&
+                   inner->type.as.ref_borrow.target_tyvar) {
+            memset(&result_type, 0, sizeof result_type);
+            result_type.kind = TY_TYVAR;
+            result_type.as.tyvar_.name = inner->type.as.ref_borrow.target_tyvar;
+        } else {
+            result_type = type_from_kind(inner->type.as.ref_borrow.target);
+        }
     } else {
         /* ptr<void> derefs to void* for now - could be more precise */
         result_type = TYPE_PTR_VOID;

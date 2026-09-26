@@ -308,7 +308,15 @@ int type_eq(Type a, Type b) {
     }
     /* Phase 12: Borrow types */
     if (a.kind == TY_REF_IMMUT || a.kind == TY_REF_MUT) {
-        return a.as.ref_borrow.target == b.as.ref_borrow.target;
+        if (a.as.ref_borrow.target != b.as.ref_borrow.target) return 0;
+        /* borrowed-aggregate-key-skips-the-key-check: two borrows of the same
+         * aggregate KIND are the same type only when their targets are --
+         * `&Pt` is not `&String`.  A side that never recorded its target
+         * (an imported signature, an owning-ref reborrow) compares by kind,
+         * as every borrow did before target_full existed. */
+        if (a.as.ref_borrow.target_full && b.as.ref_borrow.target_full)
+            return type_eq(*a.as.ref_borrow.target_full, *b.as.ref_borrow.target_full);
+        return 1;
     }
     /* Phase 15: Typeclass types */
     if (a.kind == TY_TYPECLASS) {
@@ -2851,7 +2859,9 @@ const char *type_name(Type t) {
             Buf tmp;
             buf_init(&tmp);
             buf_puts(&tmp, "&");
-            buf_puts(&tmp, type_name(type_from_kind(t.as.ref_borrow.target)));
+            buf_puts(&tmp, type_name(t.as.ref_borrow.target_full
+                                         ? *t.as.ref_borrow.target_full
+                                         : type_from_kind(t.as.ref_borrow.target)));
             buf_putc(&tmp, '\0');
             const char *r = intern_type_name(tmp.data);
             buf_free(&tmp);
@@ -2862,7 +2872,9 @@ const char *type_name(Type t) {
             Buf tmp;
             buf_init(&tmp);
             buf_puts(&tmp, "&mut ");
-            buf_puts(&tmp, type_name(type_from_kind(t.as.ref_borrow.target)));
+            buf_puts(&tmp, type_name(t.as.ref_borrow.target_full
+                                         ? *t.as.ref_borrow.target_full
+                                         : type_from_kind(t.as.ref_borrow.target)));
             buf_putc(&tmp, '\0');
             const char *r = intern_type_name(tmp.data);
             buf_free(&tmp);
@@ -3353,7 +3365,9 @@ static void type_name_buf(Buf *b, Type t) {
         /* Phase 12: Borrow types */
         case TY_REF_IMMUT: {
             buf_puts(b, "&");
-            type_name_buf(b, type_from_kind(t.as.ref_borrow.target));
+            type_name_buf(b, t.as.ref_borrow.target_full
+                                 ? *t.as.ref_borrow.target_full
+                                 : type_from_kind(t.as.ref_borrow.target));
             /* Phase 13: Add lifetime annotation if present */
             if (t.n_lifetimes > 0) {
                 buf_putc(b, ' ');
@@ -3363,7 +3377,9 @@ static void type_name_buf(Buf *b, Type t) {
         }
         case TY_REF_MUT: {
             buf_puts(b, "&mut ");
-            type_name_buf(b, type_from_kind(t.as.ref_borrow.target));
+            type_name_buf(b, t.as.ref_borrow.target_full
+                                 ? *t.as.ref_borrow.target_full
+                                 : type_from_kind(t.as.ref_borrow.target));
             /* Phase 13: Add lifetime annotation if present */
             if (t.n_lifetimes > 0) {
                 buf_putc(b, ' ');

@@ -5075,6 +5075,20 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
             }
         }
 
+        /* S9: the class DECLARES the result, and `: any` is a widening target
+         * for the body exactly as it is for a defn's (P6).  Nothing applied it
+         * here, so `(size [x] 3)` under `(size [x : a] : any)` returned a raw
+         * int64 from a function the class -- and every dispatch site -- types
+         * as `tur_tagged_t` (cc: incompatible types when returning), in
+         * plain Turmeric as much as in Saffron.  Widen while the method scope
+         * is live, so a hoisted control temp binds inside it. */
+        if (method_body && method_body->kind != EX_INLINE_C &&
+            mp->ret_kind == TY_ANY && method_body->type.kind != TY_ANY &&
+            method_body->type.kind != TY_NEVER) {
+            Expr *widened = elab_coerce_to_any_return(e, method_body);
+            if (widened) method_body = widened;
+        }
+
         /* Pop method scope */
         e->scope = method_scope.parent;
         scope_free(&method_scope);
@@ -6111,6 +6125,26 @@ static bool typeclass_same_class(const TypeClass *a, const TypeClass *b) {
            memcmp(a->name->name, b->name->name, a->name->len) == 0;
 }
 
+/* S9: does a class method's declared type mention a type variable anywhere --
+ * the class variable itself, or one applied (`(Option a)`)?  Such a result is
+ * a different type per instance, so no one signature can carry it. */
+static bool saffron_type_mentions_tyvar(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR: return true;
+        case TY_APP:
+            return saffron_type_mentions_tyvar(t->as.app.fn) ||
+                   saffron_type_mentions_tyvar(t->as.app.arg);
+        case TY_FN:
+            if (saffron_type_mentions_tyvar(t->as.fn.result_full_type)) return true;
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    if (saffron_type_mentions_tyvar(t->as.fn.arg_full_types[i])) return true;
+            return false;
+        default: return false;
+    }
+}
+
 /* S9 (D8 Q1): is extra parameter `j` of a kind-* instance on the parametric
  * head `def` the class variable -- i.e. another value of the receiver's own
  * type?  Three spellings mean yes: a bare type variable, the head itself
@@ -6206,11 +6240,13 @@ static void saffron_mint_dyn_witness(Elab *e, TypeClass *tc, uint8_t slot,
          * file scope.  A Saffron lambda IS a `(fn [any] any)`,
          * so the checked cast admits exactly the closures the
          * spec can apply, and a closure of another arity panics
-         * at the cast instead of being called wrongly.  Neither
-         * the class nor the impl records the fn's arity (the
-         * method is declared `[container g]`, unannotated), so
-         * unary is the assumption and it is a stated v0 limit
-         * for binary-fn methods such as Foldable's. */
+         * at the cast instead of being called wrongly.  The
+         * impl never records the fn's arity, but the CLASS does
+         * when it spells the parameter -- Foldable's `fn : (fn
+         * [b a] b)` is binary -- so the cast takes that arity,
+         * `(fn [any any] any)`.  Only an unannotated class
+         * parameter (`[container g]`) leaves it unknown, and
+         * that one is taken as unary. */
         FnDef *wimpl = wi->method_impls[slot];
         bool tc_hkt = false;
         if (tc->type_param_kinds)
@@ -6283,9 +6319,18 @@ static void saffron_mint_dyn_witness(Elab *e, TypeClass *tc, uint8_t slot,
                                  form_list(e->arena, sp, cst2, 3) };
                 cargs[2 + k] = form_list(e->arena, sp, lam, 4);
             } else if (erased_fn) {
-                Form *pany[1] = { form_sym(e->arena, sp, anys) };
+                uint32_t fn_arity = 1;
+                if (slot < tc->n_methods && tc->methods[slot].param_types &&
+                    (k + 1) < tc->methods[slot].n_params) {
+                    const Type *mp = &tc->methods[slot].param_types[k + 1];
+                    if (mp->kind == TY_FN && mp->as.fn.arity > 0)
+                        fn_arity = mp->as.fn.arity;
+                }
+                Form **pany = (Form **)arena_alloc(e->arena, fn_arity * sizeof(Form *));
+                for (uint32_t pa = 0; pa < fn_arity; pa++)
+                    pany[pa] = form_sym(e->arena, sp, anys);
                 Form *fnt[3] = { form_sym(e->arena, sp, fns),
-                                 form_vec(e->arena, sp, pany, 1),
+                                 form_vec(e->arena, sp, pany, fn_arity),
                                  form_sym(e->arena, sp, anys) };
                 Form *cst[3] = { form_sym(e->arena, sp, casts),
                                  form_sym(e->arena, sp, as),
@@ -8206,11 +8251,29 @@ found_method:;
                  * callable through one signature.  For an HKT class -- and for
                  * a kind-* method served by a witness (M9) -- the witness
                  * returns `any`, so the node is `any` regardless of the
-                 * declaration (whose result mentions the class variable). */
+                 * declaration (whose result mentions the class variable).
+                 *
+                 * S9: a class method must declare its result, so when that
+                 * result is CONCRETE read it from the class -- not from the
+                 * instance the static resolver happened to pick, which
+                 * answered for every instance only because the instances
+                 * agreed.  A result that mentions the class variable APPLIED
+                 * (`: (Option a)`) differs per instance and no one signature
+                 * carries it; it still takes the picked instance's, which is
+                 * right for one instance and mis-tags the others'
+                 * (saffron-applied-class-var-result-takes-one-instances-type). */
                 Type result_type = TYPE_INT;
                 if (tc_is_hkt || star_witness) result_type = type_from_kind(TY_ANY);
-                if (!tc_is_hkt && !star_witness && best_method && best_method->binding &&
-                    best_method->binding->type.kind == TY_FN) {
+                bool class_result = false;
+                if (!tc_is_hkt && !star_witness && slot < tc->n_methods) {
+                    Type crt = tc->methods[slot].return_type;
+                    if (crt.kind != TY_UNKNOWN && !saffron_type_mentions_tyvar(&crt)) {
+                        result_type = crt;
+                        class_result = true;
+                    }
+                }
+                if (!tc_is_hkt && !star_witness && !class_result && best_method &&
+                    best_method->binding && best_method->binding->type.kind == TY_FN) {
                     Type rt = best_method->binding->type.as.fn.result_full_type
                                   ? *best_method->binding->type.as.fn.result_full_type
                                   : type_from_kind(

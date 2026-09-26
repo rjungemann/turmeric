@@ -7275,6 +7275,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             return result;
         }
         case EX_REINTERPRET: {
+            /* let-bound-generic-call-result-in-generic-truncates: a reinterpret
+             * whose target is the enclosing generic's own type variable `A`
+             * (elab_forms.c, let_bridge_sig_tyvar_result).  Its value must be
+             * resolve(A) in every clone: the int64 carrier in the base, the
+             * concrete type in a spec.  The inner call is one or the other --
+             * a spec that already returns the concrete type, or a
+             * carrier-returning base / inline-C accessor -- and the hoist temp's
+             * recorded C type says which, so bridge only a recorded carrier
+             * word.  Keyed the same way emit_carrier_bridge_escaping keys its
+             * normalize step, so a value that already IS concrete is never
+             * double-bridged. */
+            if (e->as.reinterpret_.target_kind == TY_TYVAR) {
+                char *inner = emit_value(ctx, body, e->as.reinterpret_.expr);
+                Type rt = emit_resolve_type(ctx, e->type);
+                if (rt.kind == TY_TYVAR || rt.kind == TY_UNKNOWN) return inner;
+                const char *want = emit_type_c_name(ctx, rt);
+                if (!want || strcmp(want, "int64_t") == 0) return inner;
+                if (emit_str_is_bare_ident(inner)) {
+                    const char *have = emit_localvar_lookup_ctype(inner);
+                    if (have && strcmp(have, "int64_t") == 0)
+                        return emit_carrier_bridge(ctx, body, inner,
+                                                   CK_CARRIER, CK_CONCRETE, rt);
+                }
+                return inner;
+            }
             if (e->as.reinterpret_.expr && e->as.reinterpret_.expr->kind == EX_CALL) {
                 const Expr *inner_call = e->as.reinterpret_.expr;
                 for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
@@ -7450,6 +7475,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the final branch: `(pick 7.1)` stored 7.  Keying on the payload
              * type is exactly equivalent for `any` and correct for a union. */
             Type inj_pt = emit_resolve_type(ctx, e->as.union_inject_.value->type);
+            /* S9 (binary-fn witness): a widen of a TYPE-VARIABLE operand is a
+             * no-op in a spec that binds the variable to `any` -- the value is
+             * already the box.  A Saffron instance body calling its fn
+             * parameter (`(f init (.l t))`) widens `init : b` to `any`; at
+             * the witness's `b := any` spec that re-tagged a tur_tagged_t as
+             * the int64 payload of another box ("aggregate value used where
+             * an integer was expected"). */
+            if (e->type.kind == TY_ANY && inj_pt.kind == TY_ANY) {
+                buf_free(&out);
+                return inner;
+            }
             if (inj_pt.kind == TY_FLOAT) {
                 /* TY2.2: a double does not survive an integer cast -- store its
                  * IEEE-754 bit pattern in the payload via a union reinterpret. */
@@ -12841,8 +12877,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 return tmp;
             } else if (e->as.deref_.expr->type.kind == TY_REF_IMMUT
                        || e->as.deref_.expr->type.kind == TY_REF_MUT) {
-                /* Phase 12: &T / &mut T dereference: *((T *)ptr) */
-                const char *inner_type_c = type_c_name(e->type);
+                /* Phase 12: &T / &mut T dereference: *((T *)ptr)
+                 * borrowed-aggregate-key-skips-the-key-check: resolve T
+                 * through the current spec, so `(deref k)` of a `(& K)` read
+                 * at K = any loads the tagged box the caller lent (its whole
+                 * `tur_tagged_t`), not one int64_t word of it. */
+                const char *inner_type_c = type_c_name(emit_resolve_type(ctx, e->type));
                 char *tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s %s = *((%s *)%s);\n",

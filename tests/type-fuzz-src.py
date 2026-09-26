@@ -235,10 +235,11 @@ def known_bug_slug(tags):
     # RESOLVED 2026-09-26 -- a class-method call on an abstract-tyvar receiver
     # is typed with that receiver's `A` -- and archived.  Its shape,
     # class_let, is in the DEFAULT pool; probe below kept as a FIXED row.)
-    # let-bound-generic-call-result-in-generic-truncates: OPEN.  The
-    # generic-FUNCTION half of the same symptom; gid_let is --emit-known only.
-    if "gid_let" in tags:
-        return "let-bound-generic-call-result-in-generic-truncates"
+    # (let-bound-generic-call-result-in-generic-truncates: RESOLVED
+    # 2026-09-26 -- a let binding over a generic call instantiated to the
+    # enclosing signature's own tyvar is typed with that tyvar, through a
+    # reinterpret emit lowers per clone -- and archived.  gid_let is in the
+    # DEFAULT pool; probe below kept as a FIXED row.)
     #
     # ---- runtime seams (seam axis, added 2026-09-16) ------------------------
     #
@@ -381,7 +382,8 @@ KNOWN_PROBES = [
      "(defn fl [^LbP A] [x : A] : A (let [y (lbp x x)] (lbp y x)))\n"
      "(defn main [] : int (println (fl -4.25)) 0)\n",
      "-4.25\n"),
-    # OPEN.  9.75 prints 9.  No typeclass involved.
+    # RESOLVED 2026-09-26.  FIXED regression row: 9.75 printed 9.  No
+    # typeclass involved.
     ("let-bound-generic-call-result-in-generic-truncates",
      "(defn gl [A] [x : A] : A x)\n"
      "(defn wl [A] [x : A] : A (let [y (gl x)] y))\n"
@@ -723,14 +725,11 @@ class Gen:
         Every other crossing hands a call's result straight to the next call,
         and emit re-targets a call it can see.  A `let` binding instead takes
         the call's ELABORATED type -- which for an instantiation to the
-        caller's own `A` is `int`, so a float leg truncates (9.75 -> 9).  No
-        generated shape could reach it before this one.
-
-        The class-method half of the symptom is fixed
-        (docs/archive/let-bound-class-method-result-in-constrained-generic-
-        truncates.md; class_let, default pool).  THIS half is open --
-        docs/reported/let-bound-generic-call-result-in-generic-truncates.md --
-        so the shape is --emit-known only, per this harness's discipline.
+        caller's own `A` was `int`, so a float leg truncated (9.75 -> 9) and a
+        by-value aggregate leg did not compile.  Both halves are fixed and in
+        the default pool: this one
+        (docs/archive/let-bound-generic-call-result-in-generic-truncates.md)
+        and the class-method one, class_let.
         """
         f, g = self.name("g"), self.name("g")
         leg.defs.append("(defn %s [A] [x : A] : A x)" % f)
@@ -855,7 +854,7 @@ class Gen:
             return [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
                     self.x_fat_hof, self.x_thin_hof]
         xs = [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
-              self.x_fat_hof, self.x_thin_hof]
+              self.x_fat_hof, self.x_thin_hof, self.x_gid_let]
         # Thin HOF over every wrapper: scalars ride the poly carrier;
         # concrete by-value/heap signatures are fat-normalized as of
         # fn-value-fat-normalization stage 1 (2026-07-30).
@@ -873,8 +872,6 @@ class Gen:
                 xs.append(self.x_class_nullary_newtype)
         if self.emit_known:
             xs.append(self.x_tyvar_run)
-            # KNOWN: let-bound-generic-call-result-in-generic-truncates.
-            xs.append(self.x_gid_let)
         return xs
 
     # -- int mutation steps (bare int legs get arithmetic through defns) -------

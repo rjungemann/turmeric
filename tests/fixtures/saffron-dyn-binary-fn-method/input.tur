@@ -1,0 +1,37 @@
+#lang saffron
+; saffron-lang-plan S9: a method whose function argument takes TWO arguments,
+; dispatched on an `any` receiver -- Foldable's shape, on a user instance.
+;
+; The witness casts an erased-fn extra to a Saffron lambda's type.  It used to
+; spell that `(fn [any] any)` whatever the method, because the impl never
+; records the fn's arity -- so the two-argument closure here panicked at the
+; cast.  The CLASS does record it (`fn : (fn [b a] b)`), and the cast now
+; takes it.  Two more things this path needed, compiled:
+;   - the witness's spec at `b := any` re-widened `init` -- already the box
+;     -- as the int64 payload of another box (cc: "aggregate value used where
+;     an integer was expected"); a widen of an any-resolved operand is now the
+;     identity;
+;   - loading the class minted a `Hash [any]` whose dynamic row cast the
+;     receiver word to `tur_tagged_t` (cc: "conversion to non-scalar type");
+;     a box is never tagged `any`, so that instance has no row.
+;
+; 7.25 / 3.5 / 0.5: foldr must hand the fn (x, acc) in that order, and a
+; float that crossed a box as an int would print wrong.
+(load "stdlib/rc.tur")
+
+(defdata Two [a] (Two [l : a r : a]))
+
+(definstance Foldable [Two]
+  (foldl [t init f] (f (f init (.l t)) (.r t)))
+  (foldr [t init f] (f (.l t) (f (.r t) init))))
+
+(defn total [t]
+  (.foldl t 10 (fn [acc x] (+ acc x))))
+
+(defn sub-right [t]
+  (.foldr t 0.5 (fn [x acc] (- x acc))))
+
+(defn main []
+  (println (total (Two 1 2)))          ; 10 + 1 + 2
+  (println (sub-right (Two 7.25 3.5))) ; 7.25 - (3.5 - 0.5)
+  0)

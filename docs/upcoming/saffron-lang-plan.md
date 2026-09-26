@@ -12,11 +12,13 @@ in the name pin the dialect on both back ends, plus ten under `errors/`.
 user-facing halves.
 
 What keeps this file in `docs/upcoming/` is the dynamic-dispatch residue S9
-left, each a clean panic rather than a wrong answer -- see
-[S9's remaining limits](#s9----what-is-still-open). Once those land or move
-to reports of their own, archive the plan. (S9's last design item, the
-constrained instance at `A = any` -- D8 Q1 -- turned out to be a silent wrong
-answer rather than a limit, and was built 2026-09-26.)
+left -- see [S9's remaining limits](#s9----what-is-still-open). Once those
+land or move to reports of their own, archive the plan. (S9's last design
+item, the constrained instance at `A = any` -- D8 Q1 -- turned out to be a
+silent wrong answer rather than a limit, and was built 2026-09-26. The same
+day, binary-fn methods and the class-declared result type landed too; what
+is left of the latter is filed as
+[saffron-applied-class-var-result-takes-one-instances-type](../reported/saffron-applied-class-var-result-takes-one-instances-type.md).)
 
 Open reports a Saffron program reaches (none is a stage blocker):
 
@@ -26,7 +28,7 @@ Open reports a Saffron program reaches (none is a stage blocker):
 - [dynamic-returned-closure-env-is-never-freed](../reported/dynamic-returned-closure-env-is-never-freed.md) (low-medium)
 - [list-length-on-cons-any-segfaults](../reported/list-length-on-cons-any-segfaults.md) (low-medium)
 - [byvalue-recursive-adt-boxes-are-never-freed](../reported/byvalue-recursive-adt-boxes-are-never-freed.md) (low-medium, plain Turmeric too)
-- [borrowed-aggregate-key-skips-the-key-check](../reported/borrowed-aggregate-key-skips-the-key-check.md) (medium, plain Turmeric too)
+- [saffron-applied-class-var-result-takes-one-instances-type](../reported/saffron-applied-class-var-result-takes-one-instances-type.md) (medium, S9's last residue)
 - [cps-capturing-closure-env-leaks-through-dyn-call](../reported/cps-capturing-closure-env-leaks-through-dyn-call.md) (low)
 - [jit-x86-64-struct-valued-statement-expression-miscompiles](../reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md) (medium, JIT engine on x86-64 only)
 
@@ -2022,7 +2024,10 @@ The design held, with one correction and two additions found by building it:
   arity, so the witness casts an erased-fn extra to `(fn [any] any)` -- what a
   Saffron lambda is -- and a closure of another arity panics at the checked
   cast rather than being called wrongly. Binary-fn methods (Foldable's) are
-  out until the class records arity.
+  out until the class records arity. (**Corrected 2026-09-26:** the class
+  DOES record it when it spells the parameter -- Foldable's `fn : (fn [b a]
+  b)` -- and the witness now casts to that arity. Only an unannotated class
+  parameter is still taken as unary. See S9's open list below.)
 - **Exposed on the way:** the witness's first draft passed its `any` parameter
   straight into `fmap`, and the rank-2 path wrapped that LOCAL in a file-scope
   thunk that calls it by name (`'f' undeclared`). Plain Turmeric, no Saffron;
@@ -2053,22 +2058,39 @@ instance the static resolver happened to select rather than from the class
 declaration (`TypeClassMethod.return_type`). It was correct in every measured
 case -- for `Show` the instance's `void *` IS `String` -- but the class is the
 right source, since it is what makes one slot callable through one signature.
+(**Done 2026-09-26** for a concrete declared result; an applied class
+variable is still open -- see below.)
 
 #### S9 -- what is still open
 
 Measured 2026-09-26, after Q1 landed. Each is a clean panic or a stated
-limit, not a silent wrong answer:
+limit, not a silent wrong answer, except the one filed as a report:
 
-- **Binary-fn methods (Foldable's).** Neither the class nor the impl records
-  a function argument's arity, so the witness casts an erased-fn extra to
-  `(fn [any] any)`; a two-argument closure panics at that cast
-  (`saffron_mint_dyn_witness`). Needs the class to record arity. No stdlib
-  Foldable instance is dispatchable today (only `Foldable [rc]`), so this is
-  reached only through a user instance.
-- **The result type's source.** The robustness note above still holds for
-  the emitter (`elab_method_call`, where the `EX_DYN_METHOD` node is built).
-  The interpreter's dynamic arm now reads the class declaration for one thing
-  -- turning an inline-C `bool` result that came back as an int into a bool.
+- ~~**Binary-fn methods (Foldable's).**~~ **Fixed 2026-09-26.** The impl
+  never records a function argument's arity, but the class does when it
+  spells the parameter (Foldable's `fn : (fn [b a] b)`), so
+  `saffron_mint_dyn_witness` casts the erased-fn extra to `(fn [any any]
+  any)` from the declaration. An unannotated class parameter (`[container
+  g]`) is still taken as unary. Two compiled defects sat behind the cast: the
+  witness's spec at `b := any` re-widened `init` -- already the box -- as the
+  payload of another box (a widen of an operand that resolves to `any` is now
+  the identity, `EX_UNION_INJECT`), and loading `stdlib/rc.tur` minted a
+  `Hash [any]` whose dynamic row cast the receiver word to `tur_tagged_t` (a
+  box is never tagged `any`, so `emit_instance_dispatch_recv_type` declines
+  it). Pinned by `saffron-dyn-binary-fn-method`, a user `Foldable [Two]`.
+- **The result type's source.** ~~The robustness note above still holds.~~
+  **Done 2026-09-26 for a concrete declared result**: `EX_DYN_METHOD` reads
+  it from the class (a class method must declare one). Building that exposed
+  a plain-Turmeric defect: an instance body was never widened to a declared
+  `: any` result, so `(size [x] 3)` under `(size [x : a] : any)` returned a
+  raw word from a `tur_tagged_t` function (cc error), now widened as a
+  defn's is (`typeclass-any-result-instance-widens`,
+  `saffron-dyn-any-result-method`). **Still open:** a result that mentions
+  the class variable APPLIED (`: (Option a)`) takes the picked instance's
+  type, which mis-tags every other instance's result compiled -- filed as
+  [saffron-applied-class-var-result-takes-one-instances-type](../reported/saffron-applied-class-var-result-takes-one-instances-type.md).
+  The interpreter's dynamic arm reads the class declaration for one thing --
+  turning an inline-C `bool` result that came back as an int into a bool.
 - ~~**An empty literal is not `(Vec any)`.**~~ **Fixed 2026-09-26.** `[]`
   expands to a `(vec-new)` carrying the stdlib's span, so the open-result rule
   (which gated on the call's span) left it an open `(Vec A)` whose box matched
