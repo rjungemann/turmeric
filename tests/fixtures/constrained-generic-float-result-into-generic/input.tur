@@ -1,0 +1,56 @@
+;; constrained-generic-float-result-into-generic-value-converts -- RESOLVED.
+;;
+;; A CONSTRAINED generic whose body tail is a class-method call, called at
+;; float, with its result passed straight into ANOTHER generic.  The call site
+;; wants the int64 carrier, so the spec is minted with a carrier return:
+;;
+;;   static int64_t flat__spec__int64_t_double(double x) {
+;;       double __ps0 = (__inst_N_n_float(x, x));   ;; re-targeted: right
+;;       return __ps0;                              ;; VALUE conversion: wrong
+;;   }
+;;
+;; and the caller reads the carrier's BITS back as a double, so -4.25 printed
+;; -nan (the bit pattern of int64 -4).  The tail elaborated against the class's
+;; first-declared instance (`int`), so the return ladder saw an int tail and
+;; never bit-cast.  Found four times by the nightly type fuzzer
+;; (seeds 20260913, 20260917, 20260918, 20260925).
+;;
+;; Required: a class with an instance declared BEFORE float (a single-instance
+;; class elaborates the tail as float and was always right), and the result
+;; landing in a generic -- `let`-binding it first, or printing it directly,
+;; takes the concrete-return spec and was always right.
+;;
+;; Every float literal has a non-zero fractional part: an integer-valued float
+;; survives a value conversion unchanged and could not show the bug.
+(defclass N [a] (n [x : a y : a] : a))
+
+;; int FIRST: the instance the tail elaborates against.
+(definstance N [int]     (n [x y] x))
+(definstance N [float]   (n [x y] x))
+(definstance N [float32] (n [x y] x))
+(definstance N [cstr]    (n [x y] x))
+
+(defclass M [a] (m [x : a y : a] : a))
+(definstance M [int]   (m [x y] y))
+(definstance M [float] (m [x y] y))
+
+(defn flat [^N A] [x : A] : A (n x x))
+(defn nest [^N A] [x : A] : A (n (n x x) x))
+(defn pick [^N A] [x : A b : bool] : A (if b (n x x) x))
+(defn other [^M A] [x : A] : A (m (m x x) x))
+
+(defn gid [A] [x : A] : A x)
+(defn cid [^N A] [x : A] : A x)
+
+(defn main [] : int
+  (println (gid (flat -4.25)))                 ;; flat tail
+  (println (gid (nest 7.1)))                   ;; nested tail
+  (println (gid (pick 3.25 true)))             ;; tail inside an `if` arm
+  (println (cid (flat 2.5)))                   ;; into a constrained generic
+  (println (other (nest 1.75)))                ;; generic into generic
+  (println (gid (gid (flat 0.125))))           ;; two hops
+  (println (gid (flat (:: 7.1 float32))))      ;; float32 carrier
+  ;; controls: non-float instances were always right
+  (println (gid (flat 7)))
+  (println (gid (nest "brave")))
+  0)

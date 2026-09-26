@@ -13,7 +13,7 @@ name: Fuzz
 # red suite never blocks landing.  When a run finds something, record its seed
 # in tests/fuzz-seed-corpus.txt so every subsequent smoke run replays it.
 #
-# See docs/upcoming/type-confusion-detection-plan.md section F2.
+# See docs/archive/type-confusion-detection-plan.md section F2.
 
 on:
   schedule:
@@ -123,11 +123,18 @@ jobs:
           SEED: ${{ steps.seed.outputs.seed }}
           FAILED: ${{ steps.run.outputs.failed }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # The `fuzz` label is created here rather than assumed.  It never
+        # existed, so from the first run (2026-09-13) until this was fixed every
+        # `gh issue create --label fuzz` died with "could not add label: 'fuzz'
+        # not found": four nights of findings reached no issue, the seed corpus
+        # stayed empty, and the only trace was a red X on a scheduled workflow
+        # -- the signal this step exists to avoid.  `--force` makes the create
+        # idempotent.  If labelling still fails, file the issue without it: a
+        # finding with no label beats no finding.
         run: |
-          gh issue create \
-            --title "Fuzz: findings at seed $SEED ($FAILED)" \
-            --label fuzz \
-            --body "$(cat <<EOF
+          gh label create fuzz --force --color D93F0B \
+            --description "Nightly fuzz search finding" || true
+          BODY="$(cat <<EOF
           The nightly fuzz search found something.
 
           - **Seed:** \`$SEED\`
@@ -156,3 +163,6 @@ jobs:
           reported for exactly this triage.
           EOF
           )"
+          TITLE="Fuzz: findings at seed $SEED ($FAILED)"
+          gh issue create --title "$TITLE" --label fuzz --body "$BODY" ||
+            gh issue create --title "$TITLE" --body "$BODY"

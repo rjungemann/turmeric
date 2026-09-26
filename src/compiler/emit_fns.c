@@ -3997,6 +3997,31 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
 
 /* ------------ Phase 2: function emission ------------ */
 
+/* The float kind a tail value actually has in the emitted C, or TY_UNKNOWN when
+ * it is not a float.  Usually that is its elaborated type.  The exception is a
+ * dictionary-dispatched class-method call inside a spec: elaboration typed it
+ * against the class's representative (first-declared) instance, and the
+ * emitter re-targets it to the instance this spec selects -- so `(n0 x x)`
+ * elaborated `: int` is emitted as `__inst_N0_n0_float(x, x)` into a `double`
+ * temp.  That re-resolved instance's DECLARED result is then the answer, read
+ * the same way emit_reresolved_returns_byvalue_aggregate reads it.
+ * (constrained-generic-float-result-into-generic-value-converts) */
+static TypeKind emit_tail_float_kind(EmitCtx *ctx, const Expr *tail_e) {
+    TypeKind k = emit_resolve_type(ctx, tail_e->type).kind;
+    if (k == TY_FLOAT || k == TY_FLOAT32 || k == TY_FLOAT64) return k;
+    /* No call_dispatch_is_static gate: the call emitter does not apply one
+     * either (emit_reresolve_method_call gates itself), and a NESTED receiver
+     * -- `(n0 (n0 x x) x)` -- elaborates to a concrete `int`, so the outer
+     * call reads as static while the emitter still re-targets it. */
+    if (tail_e->kind != EX_CALL || !tail_e->as.call_.dict_arg)
+        return TY_UNKNOWN;
+    FnDef *rfd = emit_reresolve_method_fndef(ctx, tail_e);
+    if (!rfd || !rfd->binding || rfd->binding->type.kind != TY_FN)
+        return TY_UNKNOWN;
+    k = rfd->binding->type.as.fn.result_kind;
+    return (k == TY_FLOAT || k == TY_FLOAT32 || k == TY_FLOAT64) ? k : TY_UNKNOWN;
+}
+
 /* proper-tail-calls / emit-tail-return-path-lacks-carrier-bridges: the ONE
  * decision for "how does a body's value reach the `return`".
  *
@@ -4427,10 +4452,10 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
     } else if (ret_is_int64_carrier && tail_e &&
                tail_e->type.kind != TY_NEVER &&
                fn_e->type.kind == TY_FN &&
-               fn_e->type.as.fn.result_kind == TY_TYVAR &&
-               (emit_resolve_type(ctx, tail_e->type).kind == TY_FLOAT ||
-                emit_resolve_type(ctx, tail_e->type).kind == TY_FLOAT32 ||
-                emit_resolve_type(ctx, tail_e->type).kind == TY_FLOAT64)) {
+               (fn_e->type.as.fn.result_kind == TY_TYVAR ||
+                (fn_e->type.as.fn.result_full_type &&
+                 fn_e->type.as.fn.result_full_type->kind == TY_TYVAR)) &&
+               emit_tail_float_kind(ctx, tail_e) != TY_UNKNOWN) {
         /* nested-construct-byvalue (Gap #4, float element): a generic
          * accessor (`ok-val`) whose DECLARED result is a bare tyvar (`: A`)
          * collapses to the int64 carrier return, but inside a `(Result float
@@ -4442,8 +4467,18 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
          * preserving through the implicit pointer->int64 return cast).  Gated
          * on a TYVAR-declared result so a genuine `: float` function carried
          * through the int64 poly-fn slot (poly-to-fat-float-*) -- which uses a
-         * NUMERIC convention -- is untouched. */
-        Type body_rt = emit_resolve_type(ctx, tail_e->type);
+         * NUMERIC convention -- is untouched.
+         *
+         * constrained-generic-float-result-into-generic-value-converts: the
+         * tail may also be a class-method call that elaborated against the
+         * class's representative (first-declared, e.g. `int`) instance and
+         * that this spec re-targets to its float instance.  Its hoist temp is
+         * then a `double`, so the bridge source is the float kind
+         * emit_tail_float_kind recovered, not the elaborated int.  Such a
+         * CONSTRAINED generic's `result_kind` is already lowered to the int
+         * carrier, so the tyvar-declared test also reads `result_full_type`,
+         * which still spells the `A`. */
+        Type body_rt = emit_type_from_kind(emit_tail_float_kind(ctx, tail_e));
         char *bridged = emit_carrier_bridge(ctx, out, strdup(ret_val),
                                             CK_CONCRETE, CK_CARRIER, body_rt);
         indent_buf(out, ctx->indent);
