@@ -1515,6 +1515,15 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
 char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
                                   Type *param_types, uint8_t n_params,
                                   bool erased_result);
+/* narrow-closure-result-read-through-int64-carrier: the C spelling of a fat
+ * closure's slot-0 RESULT (a narrow integer is widened to int64_t), and the
+ * widening wrapper a capturing closure's slot 0 holds for such a result.  See
+ * emit_module.c. */
+const char *thunk_result_slot_c_name(Type t);
+const char *thunk_result_slot_c_spelling(const char *rc);
+char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
+                                 Type result_type, Type *param_types,
+                                 uint8_t n_params);
 char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
                                       Type *param_types, uint8_t n_params);
 /* erased-float-carrier: shims that carry a float-class param/result of a poly

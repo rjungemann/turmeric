@@ -165,7 +165,7 @@ green (3184 compiled, 2269 interpreted); the 155 regenerated snapshots differ
 only in generated identifier numbers.
 
 Two pre-existing defects found on the way are filed separately:
-[narrow-closure-result-read-through-int64-carrier](../reported/narrow-closure-result-read-through-int64-carrier.md)
+[narrow-closure-result-read-through-int64-carrier](narrow-closure-result-read-through-int64-carrier.md)
 (a `bool` closure called through the erased carrier can read as true -- it
 already affected `Result`'s `fmap`, and `ap` on a mixed-type `Result` inherits
 it) and

@@ -861,9 +861,10 @@ The first stdlib adoption, unreleased at the time of writing.
   all three are fixed in `src/compiler/elab_typeclasses.c`, and
   `Applicative [(Result _ B)]` ships in `stdlib/result.tur`
   ([resolved report](../archive/partial-head-ap-calls-fat-closure-as-thin-pointer.md)).
-  Two older defects surfaced on the way and are filed, not fixed:
-  [a `bool` closure read through the int64 carrier](../reported/narrow-closure-result-read-through-int64-carrier.md)
-  can print true for false on the compiled path, through `Result`'s `fmap`
+  Two older defects surfaced on the way and were filed, then fixed in the
+  follow-up bug-fix PR:
+  [a `bool` closure read through the int64 carrier](../archive/narrow-closure-result-read-through-int64-carrier.md)
+  could print true for false on the compiled path, through `Result`'s `fmap`
   already and now through its `ap`; and
   [a user constructor holding a capturing closure](../reported/defdata-ctor-fn-field-passes-pointer-as-int.md)
   emits a C warning. Separately, `Kleisli`'s missing `Arrow` instance is by

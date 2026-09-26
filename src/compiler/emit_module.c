@@ -529,11 +529,32 @@ static const char *thunk_param_slot_c_name(Type t) {
     return type_c_name(t);
 }
 
+static bool narrow_int_carrier(const char *cn);
+
+/* narrow-closure-result-read-through-int64-carrier: the C spelling of the
+ * RESULT of a fat closure's slot 0.  A narrow integer (`bool`, int8..int32,
+ * the unsigned widths) comes back widened to `int64_t`: an erased caller
+ * reads the whole return register, and a `bool` return defines only its low
+ * byte.  Every slot-0 entry point (the typed fatshim, the typed poly-to-fat
+ * shim, the capturing-closure widening wrapper) returns this spelling, and
+ * the typed-thunk typedef every typed caller casts slot 0 to uses it too, so
+ * both kinds of caller agree with the callee.  Any other type is unchanged. */
+const char *thunk_result_slot_c_name(Type t) {
+    const char *c = type_c_name(t);
+    return narrow_int_carrier(c) ? "int64_t" : c;
+}
+
+/* The same rule keyed on an already-spelled result C type, for the typed
+ * callers that build their slot-0 cast by hand. */
+const char *thunk_result_slot_c_spelling(const char *rc) {
+    return narrow_int_carrier(rc) ? "int64_t" : rc;
+}
+
 static char *typed_thunk_typedef_name(Type result_type, Type *param_types, uint8_t n_params) {
     Buf name;
     buf_init(&name);
     buf_puts(&name, "tur_thunk_");
-    append_sanitized_c_token(&name, type_c_name(result_type));
+    append_sanitized_c_token(&name, thunk_result_slot_c_name(result_type));
     for (uint32_t i = 0; i < n_params; i++) {
         buf_putc(&name, '_');
         append_sanitized_c_token(&name, thunk_param_slot_c_name(param_types[i]));
@@ -571,7 +592,7 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
     }
 
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : out;
-    buf_printf(target, "typedef %s (*%s)(void *", type_c_name(result_type), name);
+    buf_printf(target, "typedef %s (*%s)(void *", thunk_result_slot_c_name(result_type), name);
     for (uint32_t i = 0; i < n_params; i++) {
         buf_printf(target, ", %s", thunk_param_slot_c_name(param_types[i]));
     }
@@ -1408,13 +1429,16 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
      * boxes but never reaches. */
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
-    buf_printf(target, "static %s %s(void *__e", type_c_name(result_type), name);
+    /* narrow-closure-result-read-through-int64-carrier: a narrow result
+     * leaves slot 0 widened (thunk_result_slot_c_name). */
+    bool widen = has_ret && narrow_int_carrier(type_c_name(result_type));
+    buf_printf(target, "static %s %s(void *__e", thunk_result_slot_c_name(result_type), name);
     for (uint32_t i = 0; i < n_params; i++) {
         buf_printf(target, ", %s a%u", thunk_param_slot_c_name(param_types[i]),
                    (unsigned)i);
     }
     buf_puts(target, ") {\n    ");
-    if (has_ret) buf_puts(target, "return ");
+    if (has_ret) buf_puts(target, widen ? "return (int64_t)(" : "return ");
     buf_printf(target, "((%s (*)(", type_c_name(result_type));
     if (n_params == 0) {
         buf_puts(target, "void");
@@ -1455,7 +1479,55 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
         else
             buf_printf(target, "a%u", (unsigned)i);
     }
-    buf_puts(target, ");\n}\n");
+    buf_puts(target, widen ? "));\n}\n" : ");\n}\n");
+    return name;
+}
+
+/* narrow-closure-result-read-through-int64-carrier: the capturing-closure
+ * entry for slot 0.  A lifted closure thunk (`static bool __fn_N(void *env,
+ * int64_t x)`) is stored into its env's `__fn` field and called through slot
+ * 0 by typed and erased callers alike.  Its own signature is spelled in
+ * several places that must agree (definition, forward and spec declarations,
+ * the CPS entry), so rather than widen it, slot 0 holds this wrapper: it
+ * calls the thunk through the same typed pointer the typed callers used to,
+ * and returns the result widened.  Emitted into `out`, which must be at file
+ * scope after the forward declarations (pending_handler_fns), because the
+ * wrapper names the thunk.  Returns the wrapper's name, or NULL when the
+ * result is not narrow. */
+char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
+                                 Type result_type, Type *param_types,
+                                 uint8_t n_params) {
+    if (!ctx || !out || !thunk_sym) return NULL;
+    const char *rc = type_c_name(result_type);
+    if (!narrow_int_carrier(rc)) return NULL;
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_widen_");
+    append_sanitized_c_token(&nb, thunk_sym);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    buf_printf(out, "static int64_t %s(void *__e", name);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(out, ", %s a%u", thunk_param_slot_c_name(param_types[i]),
+                   (unsigned)i);
+    buf_printf(out, ") {\n    return (int64_t)((%s (*)(void *", rc);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(out, ", %s", thunk_param_slot_c_name(param_types[i]));
+    buf_printf(out, "))(intptr_t)%s)(__e", thunk_sym);
+    for (uint8_t i = 0; i < n_params; i++) buf_printf(out, ", a%u", (unsigned)i);
+    buf_puts(out, ");\n}\n");
     return name;
 }
 
@@ -2188,7 +2260,7 @@ char *ensure_fat_float_carrier_shim(EmitCtx *ctx, Type result_type,
      * uncast fat-closure emit reads); cast it to its real signature inside the
      * call expression so the bridged call is a single statement. */
     Buf callee; buf_init(&callee);
-    buf_printf(&callee, "((%s (*)(void *", rc);
+    buf_printf(&callee, "((%s (*)(void *", thunk_result_slot_c_name(result_type));
     for (uint8_t i = 0; i < n_params; i++)
         buf_printf(&callee, ", %s", type_c_name(param_types[i]));
     buf_puts(&callee, "))(intptr_t)((int64_t *)__e)[0])");
@@ -2437,19 +2509,22 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     const char *rc = type_c_name(result_type);
     bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
-    buf_printf(target, "static %s %s(void *__e", rc, name);
+    /* narrow-closure-result-read-through-int64-carrier: slot 0 returns a
+     * narrow result widened (thunk_result_slot_c_name). */
+    bool widen = has_ret && narrow_int_carrier(rc);
+    buf_printf(target, "static %s %s(void *__e", thunk_result_slot_c_name(result_type), name);
     for (uint32_t i = 0; i < n_args; i++) {
         buf_printf(target, ", %s a%u", thunk_param_slot_c_name(arg_types[i]),
                    (unsigned)i);
     }
     buf_puts(target, ") {\n    int64_t *__b = (int64_t *)__e;\n    ");
-    if (has_ret) buf_puts(target, "return ");
+    if (has_ret) buf_puts(target, widen ? "return (int64_t)(" : "return ");
     buf_printf(target, "((%s (*)(void *", rc);
     for (uint32_t i = 0; i < n_args; i++)
         buf_printf(target, ", %s", thunk_param_slot_c_name(arg_types[i]));
     buf_puts(target, "))(intptr_t)__b[1])((void *)(intptr_t)__b[2]");
     for (uint32_t i = 0; i < n_args; i++) buf_printf(target, ", a%u", (unsigned)i);
-    buf_puts(target, ");\n}\n");
+    buf_puts(target, widen ? "));\n}\n" : ");\n}\n");
     return name;
 }
 

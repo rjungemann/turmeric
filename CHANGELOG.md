@@ -131,6 +131,17 @@ All notable changes to Turmeric are documented here.
   an argument, a `let`, an `if` arm, the caller's own result and direct
   recursion.
 
+- **A `bool` closure called through a generic instance no longer reads as
+  true for false.** `(fmap (:: (ok 3) (Result int cstr)) (fn [x : int] :
+  bool (> x 10)))` answered `ok true` compiled. The instance calls the
+  function through the 64-bit carrier and read the whole return register, of
+  which a `bool` defines one byte. Every closure entry point such a caller can
+  reach now returns a narrow integer result (`bool`, `int8` to `int32` and
+  the unsigned widths) widened to 64 bits: in `fmap` and `ap`, for a lambda,
+  a capturing closure, a top-level function or a function stored in a
+  `Result`. The emitted C for a `bool` closure changes shape, and 155
+  snapshots were regenerated for the stdlib comparator every program carries.
+
 - **A dictionary-passing generic's result reaches a typed parameter of a
   user type.** `(show-t (or-default (Tally 7 2) 5))` with
   `show-t [t : (Tally int)]` was a C type error, because the conversion back

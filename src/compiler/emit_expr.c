@@ -8325,8 +8325,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (!emit_c_type_is_scalar(arg_ct[i])) any_aggregate = true;
                     }
                     Buf out; buf_init(&out);
+                    /* narrow-closure-result-read-through-int64-carrier: slot
+                     * 0 returns a narrow result widened; call it as such and
+                     * convert back to the declared type. */
+                    const char *slot_rc = thunk_result_slot_c_spelling(ret_c);
+                    bool narrow_back = slot_rc && ret_c && strcmp(slot_rc, ret_c) != 0;
+                    if (narrow_back) buf_printf(&out, "((%s)", ret_c);
                     if (!any_aggregate) {
-                        buf_printf(&out, "TUR_APPLY%u_T(%s", n, ret_c);
+                        buf_printf(&out, "TUR_APPLY%u_T(%s", n, slot_rc);
                         for (uint32_t i = 0; i < n; i++)
                             buf_printf(&out, ", %s", arg_ct[i]);
                         buf_printf(&out, ", %s", fn_ptr_val);
@@ -8359,7 +8365,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * This is the macro's own expansion with that one
                          * change; keep the two in sync (emit_module.c, search
                          * TUR_APPLY0_T). */
-                        buf_printf(&out, "(((%s (*)(void *", ret_c);
+                        buf_printf(&out, "(((%s (*)(void *", slot_rc);
                         for (uint32_t i = 0; i < n; i++)
                             buf_printf(&out, ", %s", arg_ct[i]);
                         buf_printf(&out,
@@ -8380,6 +8386,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                         buf_puts(&out, "))");
                     }
+                    if (narrow_back) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
@@ -9157,12 +9164,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
                         _disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
                     Buf out; buf_init(&out);
+                    /* narrow-closure-result-read-through-int64-carrier: slot 0
+                     * (and the typed-thunk typedef) return a narrow result
+                     * widened; convert back to the declared type. */
+                    const char *slot_rc = thunk_result_slot_c_spelling(ret_c);
+                    bool narrow_back = slot_rc && ret_c && strcmp(slot_rc, ret_c) != 0;
+                    if (narrow_back) buf_printf(&out, "((%s)", ret_c);
                     if (thunk_typedef) {
                         /* TS1: typed fat-closure layout stores __fn as a typed function pointer. */
                         buf_printf(&out, "(*( %s *)(%s))(%s", thunk_typedef, fn_ptr, fn_ptr);
                     } else {
                         /* Legacy fallback: polymorphic fat closures still store __fn as int64_t. */
-                        buf_printf(&out, "((%s (*)(void*", ret_c);
+                        buf_printf(&out, "((%s (*)(void*", slot_rc);
                         for (uint32_t i = 0; i < n; i++) {
                             /* SR-fat-abi: same slot convention as the typed
                              * typedef -- a wide by-value aggregate crosses as
@@ -9196,6 +9209,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                     buf_puts(&out, ")");
+                    if (narrow_back) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
@@ -9341,11 +9355,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
                         disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
                     Buf out; buf_init(&out);
+                    /* narrow-closure-result-read-through-int64-carrier: slot 0
+                     * (and the typed-thunk typedef) return a narrow result
+                     * widened; convert back to the declared type. */
+                    const char *slot_rc = thunk_result_slot_c_spelling(ret_c);
+                    bool narrow_back = slot_rc && ret_c && strcmp(slot_rc, ret_c) != 0;
+                    if (narrow_back) buf_printf(&out, "((%s)", ret_c);
                     if (thunk_typedef) {
                         /* TS1: typed fat-closure layout -- slot 0 is a typed thunk ptr. */
                         buf_printf(&out, "(*( %s *)(%s))(%s", thunk_typedef, fn_ptr, fn_ptr);
                     } else {
-                        buf_printf(&out, "((%s (*)(void*", ret_c);
+                        buf_printf(&out, "((%s (*)(void*", slot_rc);
                         for (uint32_t i = 0; i < n; i++) {
                             /* SR-fat-abi: see the CY2 twin above. */
                             buf_printf(&out, ", %s",
@@ -9400,6 +9420,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                     buf_puts(&out, ")");
+                    if (narrow_back) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
@@ -12870,12 +12891,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * typedef there stores a function pointer through an `int64_t`
              * field. */
             {
+                /* narrow-closure-result-read-through-int64-carrier: a narrow
+                 * result leaves slot 0 widened, through a wrapper that names
+                 * the thunk -- so it needs the file-scope buffer that lands
+                 * after the forward declarations.  Without one, the thunk is
+                 * stored as before. */
+                char *slot0_widen = ctx->pending_handler_fns
+                    ? ensure_closure_slot0_widen(ctx, ctx->pending_handler_fns,
+                                                 thunk_sym, thunk_result,
+                                                 thunk_params, (uint8_t)thunk_arity)
+                    : NULL;
+                const char *slot0 = slot0_widen ? slot0_widen : thunk_sym;
                 const char *decl_typedef = emit_env_struct_fn_typedef(ctx, env_name);
                 if (decl_typedef) {
-                    buf_printf(body, "%s->__fn = (%s)%s;\n", fat_tmp, decl_typedef, thunk_sym);
+                    buf_printf(body, "%s->__fn = (%s)%s;\n", fat_tmp, decl_typedef, slot0);
                 } else {
-                    buf_printf(body, "%s->__fn = (int64_t)(intptr_t)%s;\n", fat_tmp, thunk_sym);
+                    buf_printf(body, "%s->__fn = (int64_t)(intptr_t)%s;\n", fat_tmp, slot0);
                 }
+                free(slot0_widen);
             }
             for (uint8_t i = 0; i < closure->n_captures; i++) {
                 Binding *captured = closure->captures[i];
@@ -13425,8 +13458,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(pbuf, "static int64_t %s(void *);\n", wname);
                     buf_printf(pbuf, "static int64_t %s(void *__env) {\n", wname);
                     if (fn_expr->type.as.fn.boxed) {
-                        buf_printf(pbuf, "    %s (*__f)(void *) = *(%s (**)(void *))__env;\n", pc, pc);
-                        buf_printf(pbuf, "    %s __v = __f(__env);\n", pc);
+                        /* narrow-closure-result-read-through-int64-carrier:
+                         * slot 0 returns a narrow result widened. */
+                        const char *spc = thunk_result_slot_c_spelling(pc);
+                        buf_printf(pbuf, "    %s (*__f)(void *) = *(%s (**)(void *))__env;\n", spc, spc);
+                        buf_printf(pbuf, "    %s __v = (%s)__f(__env);\n", pc, pc);
                     } else {
                         buf_printf(pbuf, "    %s (*__f)(void) = (%s (*)(void))(intptr_t)__env;\n", pc, pc);
                         buf_printf(pbuf, "    %s __v = __f();\n", pc);
