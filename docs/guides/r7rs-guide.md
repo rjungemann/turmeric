@@ -225,6 +225,13 @@ where the macro was defined, however the use site binds that name.
 A local variable shadows a keyword or a macro of the same name, as R7RS says:
 `(let ((if even?)) (if 7))` calls `even?`.
 
+A `define-library` can export its macros like any other name, and an
+importer can take them under `only`, `prefix` and `rename`. A macro's template
+keeps its meaning in the importer, even when it calls a procedure the library
+does not export, and even when the importer defines the same name itself.
+A macro is Scheme syntax, so a Turmeric module that imports the library gets
+its procedures but not its macros.
+
 ## Control
 
 ```scheme

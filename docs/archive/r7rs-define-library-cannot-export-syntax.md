@@ -1,5 +1,55 @@
 # `#lang r7rs`: a `define-library` cannot export a `syntax-rules` macro
 
+**RESOLVED 2026-09-26.** A `define-library` exports its `syntax-rules`
+macros, on both back ends (src/compiler/scheme_lower.c, the `lib_*` block
+after `library_defined_names`). The work followed the first fix direction
+below: carry the macro's source. It is not in the module interface, because a
+macro is expanded by the Scheme lowering before any module is loaded. Instead,
+both sides read the library's source through one scan (`lib_scan`), so they
+agree on every name:
+
+- **The library** leaves an exported macro out of its module's exports. It
+  also exports each of its own definitions that a macro form names (a helper
+  the template calls) under a hidden spelling, `<lib>--syntax--<name>`, via
+  the export-rename lowering (`lib_rewrite_exports`).
+- **An importer** reads the library's file through the module loader's own
+  search (`elab_scheme_library_path`, now a parameter of
+  `scheme_lower_program`). It renames every macro and every helper its
+  templates name to the hidden spellings, registers the macros, and binds each
+  exported one under the name the import set gives it: bare, `only`, `prefix`
+  or `rename`. It also imports the hidden helpers by name
+  (`lib_syntax_of`, `lib_syntax_import`).
+
+So a template's free identifiers keep their library meaning in the importer
+(R7RS 4.3.2). A helper the library does not export stays out of the
+importer's namespace under its own name, and an importer's own definition of
+that name does not capture it. Quoted data in a template is left alone.
+
+Pinned by `tests/run-r7rs-import.sh`, on both back ends:
+
+- `library-exports-macros`: a private macro, an unexported helper, a quoted
+  helper name, an importer defining the same helper, and a `.scm` library
+  using the first library's macro and exporting a macro under
+  `(export (rename ...))`;
+- `library-macros-under-import-sets`: `only`, `prefix` and `rename`;
+- `turmeric-imports-macro-library`: a Turmeric importer still gets the
+  procedures.
+
+**What it does not do:**
+
+- A Turmeric module that imports the library gets its procedures, not its
+  macros; there is no `syntax-rules` in Turmeric.
+- A template that names something the library *imports* from a third library
+  (rather than defines) is not renamed. It resolves in the importer today,
+  because a loaded module's names are visible to the compile unit, but
+  without the hidden-spelling guarantee: an importer defining that same name
+  would capture it. Carrying those names too means knowing the third
+  library's exports at this point; take that up if a real library needs it.
+- An importer reads each Scheme library it imports one extra time, once per
+  lowering pass, to look for macros. That is small next to a Scheme
+  program's build.
+
+
 **Severity:** medium. R7RS 5.6.1 lets a library export any identifier it
 defines, keywords included. In practice exporting a macro is how most
 libraries ship their syntax. Here, exporting a `define-syntax` name is a

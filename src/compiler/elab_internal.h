@@ -1476,6 +1476,10 @@ bool elab_macro_env_import(Elab *e, const Symbol *module_name,
  * side effects.  Returns false when no candidate exists.  elab_module.c. */
 bool elab_module_resolve_path(Elab *e, const Symbol *name,
                               char *out, size_t cap);
+/* r7rs-define-library-cannot-export-syntax: elab_module_resolve_path in the
+ * shape scheme_lower_program takes (`ud` is the Elab), so an importer's
+ * Scheme lowering can read a library's macros from its source. */
+bool elab_scheme_library_path(void *ud, const char *module, char *out, size_t cap);
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);

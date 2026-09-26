@@ -2219,7 +2219,8 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * through by pointer and the stdlib prefix keeps its index. */
     if (scheme_lower_needed(forms, nforms)) {
         uint32_t lowered_n = 0;
-        forms  = (Form *const *)scheme_lower_program(arena, st, forms, nforms, &lowered_n);
+        forms  = (Form *const *)scheme_lower_program(arena, st, forms, nforms, &lowered_n,
+                                                     elab_scheme_library_path, &e);
         nforms = lowered_n;
     }
 

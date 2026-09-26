@@ -500,6 +500,13 @@ typedef struct SL {
      * prelude helper a call folds onto, and the variadic prelude procedure a
      * bare operator in value position names. */
     const Symbol   *ops[9], *ops_bin[9], *ops_val[9];
+    /* r7rs-define-library-cannot-export-syntax: where an imported library's
+     * source is (the module loader's search), and what was read from each
+     * library this pass imported. */
+    SchemeLibResolveFn   lib_resolve;
+    void                *lib_resolve_ud;
+    struct LibSyntax   **libsyn;
+    uint32_t             n_libsyn, cap_libsyn;
 } SL;
 
 static const Symbol *I(SL *sl, const char *s) {
@@ -1776,6 +1783,18 @@ static void lower_record_type(SL *sl, Form *f, FB *out, bool local);
 static bool is_export_rename(SL *sl, const Form *nm);
 static void user_define_names(SL *sl, const Form *f, FB *out);
 static void library_defined_names(SL *sl, Form *f, FB *out);
+/* r7rs-define-library-cannot-export-syntax: a library's macros, as the
+ * library itself and every importer see them. */
+typedef struct LibScan {
+    FB syntax;     /* every define-syntax form of the library body, in order */
+    FB exp_pub;    /* an exported macro's public name ... */
+    FB exp_in;     /* ... and its name in the library */
+    FB helpers;    /* the library's own definitions its macro forms name */
+} LibScan;
+static void lib_scan(SL *sl, Form *deflib, LibScan *out);
+static void lib_scan_free(LibScan *ls);
+static const Symbol *lib_hidden(SL *sl, const Symbol *mod, const Symbol *name);
+static Form *lib_rewrite_exports(SL *sl, Form *deflib, const Symbol *mod, const LibScan *ls);
 static void set_clash(SL *sl, const Symbol *from, const Symbol *to);
 static const Symbol *clash_spelling(const SL *sl, const Symbol *s);
 static Form *rebind_rest(SL *sl, Span sp, const Symbol *rest, Form *body);
@@ -3501,6 +3520,17 @@ static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
         if (!name) { err(f->as.list.items[1], "a (scheme ...) or auto-loaded stdlib name cannot be defined here"); return; }
         sl->has_library = true;
         sl->lib_name = name;
+        /* r7rs-define-library-cannot-export-syntax: an exported macro is not a
+         * module export -- the module has no definition of it; an importer
+         * reads it from this file's source (lib_syntax_of).  What the macros'
+         * forms name of the library's own definitions is exported under a
+         * hidden spelling, so an importer's expansion can reach it. */
+        {
+            LibScan ls = {0};
+            lib_scan(sl, f, &ls);
+            if (ls.exp_pub.n) f = lib_rewrite_exports(sl, f, name, &ls);
+            lib_scan_free(&ls);
+        }
         bool lib_fold = false;
         /* R7RS 5.6.1 `(export (rename internal public))`: importers see the
          * definition as `public`.  A module's `:exports` are bare names, so
@@ -3864,10 +3894,18 @@ static bool spec_excludes(const SchemeImportSpec *spec, const Symbol *s) {
     for (uint32_t i = 0; i < spec->except.n; i++) if (spec->except.items[i]->as.sym == s) return true;
     return false;
 }
+typedef struct LibSyntax LibSyntax;
+static LibSyntax *lib_syntax_of(SL *sl, const Form *libname, const Symbol *mod);
+static bool lib_syntax_exports(const LibSyntax *lx, const Symbol *pub);
+static void lib_syntax_import(SL *sl, LibSyntax *lx, const SchemeImportSpec *spec, Span sp);
 static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
     bool ok;
     const Symbol *mod = library_module(sl, spec->lib, &ok);
     if (!ok) return;
+    /* r7rs-define-library-cannot-export-syntax: a Scheme library's exported
+     * macros -- registered here, and kept out of the module's `:refer`. */
+    LibSyntax *lx = lib_syntax_of(sl, spec->lib, mod);
+    if (lx) lib_syntax_import(sl, lx, spec, sp);
     /* An excluded name is no longer the library's: it resolves as the
      * program's own (rn_global skips the standard map for it). */
     for (uint32_t i = 0; i < spec->except.n; i++) {
@@ -3879,6 +3917,7 @@ static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
     FB refer = {0};
     for (uint32_t i = 0; i + 1 < spec->renames.n; i += 2) {
         const Symbol *orig = spec->renames.items[i + 1]->as.sym;
+        if (lx && lib_syntax_exports(lx, orig)) continue;   /* a macro: registered above */
         const Symbol *to = rn(sl, orig);
         if (sl->n_renames < 64) {
             sl->renames[sl->n_renames].from = spec->renames.items[i]->as.sym;
@@ -3890,6 +3929,7 @@ static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
     if (spec->has_only)
         for (uint32_t i = 0; i < spec->only.n; i++) {
             const Symbol *o = spec->only.items[i]->as.sym;
+            if (lx && lib_syntax_exports(lx, o)) continue;   /* a macro: registered above */
             if (!spec_excludes(spec, o)) fb_push(&refer, Sym(sl, spec->only.items[i]->span, rn(sl, o)));
         }
     if (spec->prefix) {
@@ -3957,6 +3997,8 @@ static void lower_import_set(SL *sl, Form *set) {
     if (!ok || !mod) return;
     fb_push(&sl->imports, Ln(sl, sp, 2, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod)));
     sl->needs_module = true;
+    LibSyntax *lx = lib_syntax_of(sl, set, mod);
+    if (lx) lib_syntax_import(sl, lx, NULL, sp);
 }
 
 /* R7: the feature identifiers cond-expand holds -- the same list
@@ -4517,6 +4559,337 @@ static void library_defined_names(SL *sl, Form *f, FB *out) {
         }
     }
 }
+/* ---------------------------------------------------------------------------
+ * r7rs-define-library-cannot-export-syntax: a library's `syntax-rules` macros,
+ * exported to its importers.
+ *
+ * A macro is expanded by this lowering, before any module is loaded, so it
+ * cannot travel in the module's interface the way a procedure does.  Both
+ * sides read it from the library's source instead, through one scan
+ * (lib_scan) so they agree on every name:
+ *
+ *   - the library leaves an exported macro out of its module's exports (the
+ *     module has no definition of it), and exports each of its own
+ *     definitions a macro form names -- a helper the template calls -- under
+ *     a hidden spelling, `<lib>--syntax--<name>` (lib_rewrite_exports);
+ *   - an importer reads the library's file, renames every macro's name and
+ *     every helper it names to those hidden spellings, registers the macros,
+ *     then binds each exported one under the name the import set gives it,
+ *     and imports the hidden helpers by name (lib_syntax_of,
+ *     lib_syntax_import).
+ *
+ * So a template's free identifiers mean what they mean in the library,
+ * whatever the importer defines (R7RS 4.3.2), and a helper the library does
+ * not export stays out of the importer's namespace under its own name.
+ * ------------------------------------------------------------------------- */
+static void lib_syntax_forms(SL *sl, const Form *body, FB *out) {
+    for (uint32_t i = 1; i < body->as.list.len; i++) {
+        Form *d = body->as.list.items[i];
+        if (head_is(d, sl->s_define_syntax)) fb_push(out, d);
+        else if (head_is(d, sl->s_begin)) lib_syntax_forms(sl, d, out);
+    }
+}
+static bool fb_has_sym(const FB *b, const Symbol *s) {
+    for (uint32_t i = 0; i < b->n; i++) if (b->items[i]->tag == F_SYM && b->items[i]->as.sym == s) return true;
+    return false;
+}
+static bool lib_is_macro(const LibScan *ls, const Symbol *s) {
+    for (uint32_t i = 0; i < ls->syntax.n; i++) {
+        const Form *d = ls->syntax.items[i];
+        if (d->as.list.len >= 2 && d->as.list.items[1]->tag == F_SYM && d->as.list.items[1]->as.sym == s) return true;
+    }
+    return false;
+}
+/* Does `f` name `s` as code -- outside quote, and outside quasiquote except
+ * under its unquotes? */
+static bool form_names(const Form *f, const Symbol *s, int qq) {
+    if (!f) return false;
+    switch (f->tag) {
+        case F_SYM: return qq == 0 && f->as.sym == s;
+        case F_QUOTE: return false;
+        case F_QUASIQUOTE: return form_names(f->as.list.items[0], s, qq + 1);
+        case F_UNQUOTE: case F_UNQUOTE_SPLICING: return form_names(f->as.list.items[0], s, qq > 0 ? qq - 1 : 0);
+        case F_LIST: case F_VEC:
+            for (uint32_t i = 0; i < f->as.list.len; i++) if (form_names(f->as.list.items[i], s, qq)) return true;
+            return false;
+        default: return false;
+    }
+}
+static void lib_scan(SL *sl, Form *deflib, LibScan *out) {
+    for (uint32_t i = 2; i < deflib->as.list.len; i++) {
+        Form *d = deflib->as.list.items[i];
+        if (head_is(d, sl->s_begin)) lib_syntax_forms(sl, d, &out->syntax);
+        else if (head_is(d, sl->s_cond_expand)) {
+            /* A malformed clause is the library lowering's to report, once. */
+            bool wf = true;
+            for (uint32_t c = 1; c < d->as.list.len && wf; c++)
+                wf = d->as.list.items[c]->tag == F_LIST && d->as.list.items[c]->as.list.len > 0;
+            uint32_t n; Form **items;
+            if (wf && cond_expand_clause(sl, d, &n, &items))
+                for (uint32_t k = 0; k < n; k++)
+                    if (head_is(items[k], sl->s_begin)) lib_syntax_forms(sl, items[k], &out->syntax);
+        }
+    }
+    if (!out->syntax.n) return;
+    for (uint32_t i = 2; i < deflib->as.list.len; i++) {
+        Form *d = deflib->as.list.items[i];
+        if (!head_is(d, sl->s_export)) continue;
+        for (uint32_t j = 1; j < d->as.list.len; j++) {
+            Form *nm = d->as.list.items[j];
+            if (nm->tag == F_SYM && lib_is_macro(out, nm->as.sym)) {
+                fb_push(&out->exp_pub, nm);
+                fb_push(&out->exp_in, nm);
+            } else if (is_export_rename(sl, nm) && nm->as.list.items[1]->tag == F_SYM &&
+                       nm->as.list.items[2]->tag == F_SYM && lib_is_macro(out, nm->as.list.items[1]->as.sym)) {
+                fb_push(&out->exp_pub, nm->as.list.items[2]);
+                fb_push(&out->exp_in, nm->as.list.items[1]);
+            }
+        }
+    }
+    if (!out->exp_pub.n) return;
+    FB defined = {0};
+    library_defined_names(sl, deflib, &defined);
+    for (uint32_t d = 0; d < defined.n; d++) {
+        const Symbol *s = defined.items[d]->as.sym;
+        if (fb_has_sym(&out->helpers, s) || lib_is_macro(out, s)) continue;
+        for (uint32_t k = 0; k < out->syntax.n; k++)
+            if (form_names(out->syntax.items[k], s, 0)) { fb_push(&out->helpers, defined.items[d]); break; }
+    }
+    free(defined.items);
+}
+static void lib_scan_free(LibScan *ls) {
+    free(ls->syntax.items); free(ls->exp_pub.items); free(ls->exp_in.items); free(ls->helpers.items);
+    memset(ls, 0, sizeof *ls);
+}
+static const Symbol *lib_hidden(SL *sl, const Symbol *mod, const Symbol *name) {
+    char buf[512]; size_t at = 0;
+    for (const char *p = mod->name; *p && at + 1 < sizeof buf; p++) buf[at++] = *p == '/' ? '-' : *p;
+    buf[at] = '\0';
+    snprintf(buf + at, sizeof buf - at, "--syntax--%s", name->name);
+    return I(sl, buf);
+}
+/* The library's side: drop its exported macros from `(export ...)`, and
+ * export each helper under its hidden spelling -- `(export (rename h
+ * <lib>--syntax--h))`, which the export-rename lowering turns into the
+ * definition's own spelling or a forwarding alias. */
+static Form *lib_rewrite_exports(SL *sl, Form *deflib, const Symbol *mod, const LibScan *ls) {
+    FB decls = {0};
+    fb_push(&decls, deflib->as.list.items[0]);
+    fb_push(&decls, deflib->as.list.items[1]);
+    for (uint32_t i = 2; i < deflib->as.list.len; i++) {
+        Form *d = deflib->as.list.items[i];
+        if (!head_is(d, sl->s_export)) { fb_push(&decls, d); continue; }
+        FB e = {0};
+        fb_push(&e, d->as.list.items[0]);
+        for (uint32_t j = 1; j < d->as.list.len; j++) {
+            Form *nm = d->as.list.items[j];
+            if (nm->tag == F_SYM && lib_is_macro(ls, nm->as.sym)) continue;
+            if (is_export_rename(sl, nm) && nm->as.list.items[1]->tag == F_SYM &&
+                lib_is_macro(ls, nm->as.list.items[1]->as.sym)) continue;
+            fb_push(&e, nm);
+        }
+        fb_push(&decls, fb_list(sl, &e, d->span));
+    }
+    if (ls->helpers.n) {
+        Span sp = deflib->span;
+        FB e = {0};
+        fb_push(&e, Sym(sl, sp, sl->s_export));
+        for (uint32_t k = 0; k < ls->helpers.n; k++) {
+            const Symbol *h = ls->helpers.items[k]->as.sym;
+            fb_push(&e, Ln(sl, sp, 3, Sym(sl, sp, I(sl, "rename")), Sym(sl, sp, h),
+                           Sym(sl, sp, lib_hidden(sl, mod, h))));
+        }
+        fb_push(&decls, fb_list(sl, &e, sp));
+    }
+    return fb_list(sl, &decls, deflib->span);
+}
+
+/* The importer's side. */
+struct LibSyntax {
+    const Symbol *mod;
+    FB   defs;              /* the macros, renamed: (define-syntax <hidden> <spec>) */
+    FB   exp_pub, exp_in;   /* exported macros: public name, name in the library */
+    FB   helpers;           /* hidden helper spellings, imported by name */
+    bool registered, helpers_imported;
+};
+static bool lib_syntax_exports(const LibSyntax *lx, const Symbol *pub) {
+    return fb_has_sym(&lx->exp_pub, pub);
+}
+/* Rename `f`'s symbols through from[i] -> to[i], as code: quoted data and a
+ * quasiquote's template are left alone, its unquotes are not. */
+static Form *lib_rename(SL *sl, Form *f, const FB *from, const FB *to, int qq) {
+    if (!f) return f;
+    switch (f->tag) {
+        case F_SYM:
+            if (qq == 0)
+                for (uint32_t i = 0; i < from->n; i++)
+                    if (from->items[i]->as.sym == f->as.sym) return Sym(sl, f->span, to->items[i]->as.sym);
+            return f;
+        case F_QUOTE: return f;
+        case F_QUASIQUOTE: case F_UNQUOTE: case F_UNQUOTE_SPLICING: case F_LIST: case F_VEC: {
+            int sub = f->tag == F_QUASIQUOTE ? qq + 1
+                    : (f->tag == F_UNQUOTE || f->tag == F_UNQUOTE_SPLICING) ? (qq > 0 ? qq - 1 : 0) : qq;
+            Form *c = (Form *)arena_alloc(sl->a, sizeof(Form));
+            *c = *f;
+            c->as.list.items = (Form **)arena_alloc(sl->a, (f->as.list.len ? f->as.list.len : 1) * sizeof(Form *));
+            for (uint32_t i = 0; i < f->as.list.len; i++) c->as.list.items[i] = lib_rename(sl, f->as.list.items[i], from, to, sub);
+            return c;
+        }
+        default: return f;
+    }
+}
+/* Read a Scheme library's source for its macros; NULL when `path` is not
+ * Scheme or does not read. */
+static Form **lib_read_source(SL *sl, const char *path, uint32_t *nf) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return NULL;
+    size_t cap = 4096, len = 0, got;
+    char *raw = (char *)malloc(cap);
+    if (!raw) { fclose(fp); fprintf(stderr, "tur: oom\n"); abort(); }
+    while ((got = fread(raw + len, 1, cap - len - 1, fp)) > 0) {
+        len += got;
+        if (cap - len < 2) {
+            cap *= 2;
+            raw = (char *)realloc(raw, cap);
+            if (!raw) { fclose(fp); fprintf(stderr, "tur: oom\n"); abort(); }
+        }
+    }
+    fclose(fp);
+    raw[len] = '\0';
+    const char *body = raw; size_t blen = len;
+    const char *bad = NULL; size_t bad_len = 0;
+    LangDialect dialect = LANG_TURMERIC;
+    ReaderType rt = detect_lang_dialect(raw, len, &body, &blen, &bad, &bad_len, &dialect);
+    size_t pl = strlen(path);
+    bool scm = pl > 4 && strcmp(path + pl - 4, ".scm") == 0;
+    if (bad || (rt != READER_R7RS && !scm)) { free(raw); return NULL; }
+    char *src = (char *)arena_alloc(sl->a, blen + 1);
+    memcpy(src, body, blen);
+    src[blen] = '\0';
+    free(raw);
+    char *path_copy = (char *)arena_alloc(sl->a, pl + 1);
+    memcpy(path_copy, path, pl + 1);
+    SourceFile *sf = (SourceFile *)arena_alloc(sl->a, sizeof(SourceFile));
+    *sf = (SourceFile){0};
+    sf->path        = path_copy;
+    sf->src         = src;
+    sf->len         = blen;
+    sf->file_id     = diag_alloc_file_id();
+    sf->reader_type = READER_R7RS;
+    sf->lang        = LANG_R7RS;
+    diag_register_file(sf);
+    return read_all_with_registry(sl->a, sl->st, sf, NULL, nf);
+}
+static LibSyntax *lib_syntax_of(SL *sl, const Form *libname, const Symbol *mod) {
+    if (!mod || !libname || libname->tag != F_LIST || libname->as.list.len == 0 ||
+        libname->as.list.items[0]->tag != F_SYM)
+        return NULL;
+    const char *head = libname->as.list.items[0]->as.sym->name;
+    if (strcmp(head, "scheme") == 0 || strcmp(head, "turmeric") == 0) return NULL;
+    for (uint32_t i = 0; i < sl->n_libsyn; i++)
+        if (sl->libsyn[i]->mod == mod) return sl->libsyn[i]->exp_pub.n ? sl->libsyn[i] : NULL;
+    LibSyntax *lx = (LibSyntax *)arena_alloc(sl->a, sizeof(LibSyntax));
+    memset(lx, 0, sizeof *lx);
+    lx->mod = mod;
+    if (sl->n_libsyn == sl->cap_libsyn) {
+        sl->cap_libsyn = sl->cap_libsyn ? sl->cap_libsyn * 2 : 4;
+        sl->libsyn = (LibSyntax **)realloc(sl->libsyn, sl->cap_libsyn * sizeof(LibSyntax *));
+        if (!sl->libsyn) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    sl->libsyn[sl->n_libsyn++] = lx;
+    char path[4096];
+    if (!sl->lib_resolve || !sl->lib_resolve(sl->lib_resolve_ud, mod->name, path, sizeof path)) return NULL;
+    uint32_t nf = 0;
+    Form **fs = lib_read_source(sl, path, &nf);
+    Form *deflib = NULL;
+    for (uint32_t i = 0; fs && i < nf && !deflib; i++)
+        if (head_is(fs[i], sl->s_define_library)) deflib = fs[i];
+    if (!deflib) return NULL;
+    deflib = expand_library_includes(sl, deflib);
+    LibScan ls = {0};
+    lib_scan(sl, deflib, &ls);
+    if (!ls.exp_pub.n) { lib_scan_free(&ls); return NULL; }
+    /* from -> to: every macro and every helper to its hidden spelling. */
+    FB from = {0}, to = {0};
+    for (uint32_t k = 0; k < ls.syntax.n; k++) {
+        Form *nm = ls.syntax.items[k]->as.list.items[1];
+        fb_push(&from, nm);
+        fb_push(&to, Sym(sl, nm->span, lib_hidden(sl, mod, nm->as.sym)));
+    }
+    for (uint32_t k = 0; k < ls.helpers.n; k++) {
+        Form *h = ls.helpers.items[k];
+        fb_push(&from, h);
+        fb_push(&to, Sym(sl, h->span, lib_hidden(sl, mod, h->as.sym)));
+        fb_push(&lx->helpers, to.items[to.n - 1]);
+    }
+    for (uint32_t k = 0; k < ls.syntax.n; k++) {
+        Form *d = ls.syntax.items[k];
+        if (d->as.list.len != 3 || d->as.list.items[1]->tag != F_SYM) continue;
+        Form *spec = d->as.list.items[2];
+        if (!head_is(spec, sl->s_syntax_rules)) continue;   /* the library's own pass says why */
+        /* (syntax-rules [<ellipsis>] (<literal> ...) <rule> ...): the
+         * literals and the ellipsis match by name at the use site, so they
+         * keep theirs; the rules are renamed. */
+        uint32_t first_rule = 1;
+        if (first_rule < spec->as.list.len && spec->as.list.items[first_rule]->tag == F_SYM) first_rule++;
+        first_rule++;
+        FB ns = {0};
+        for (uint32_t i = 0; i < spec->as.list.len; i++)
+            fb_push(&ns, i < first_rule ? spec->as.list.items[i] : lib_rename(sl, spec->as.list.items[i], &from, &to, 0));
+        Form *nspec = fb_list(sl, &ns, spec->span);
+        fb_push(&lx->defs, Ln(sl, d->span, 3, d->as.list.items[0],
+                              Sym(sl, d->as.list.items[1]->span, lib_hidden(sl, mod, d->as.list.items[1]->as.sym)),
+                              nspec));
+    }
+    for (uint32_t k = 0; k < ls.exp_pub.n; k++) {
+        fb_push(&lx->exp_pub, ls.exp_pub.items[k]);
+        fb_push(&lx->exp_in, ls.exp_in.items[k]);
+    }
+    free(from.items); free(to.items);
+    lib_scan_free(&ls);
+    return lx;
+}
+static void lib_syntax_import(SL *sl, LibSyntax *lx, const SchemeImportSpec *spec, Span sp) {
+    if (!lx->registered) {
+        for (uint32_t k = 0; k < lx->defs.n; k++) sr_define(sl, lx->defs.items[k]);
+        lx->registered = true;
+    }
+    for (uint32_t k = 0; k < lx->exp_pub.n; k++) {
+        const Symbol *pub = lx->exp_pub.items[k]->as.sym;
+        const Symbol *vis = pub;
+        if (spec) {
+            if (spec->has_only) {
+                bool kept = false;
+                for (uint32_t i = 0; i < spec->only.n && !kept; i++) kept = spec->only.items[i]->as.sym == pub;
+                if (!kept) continue;
+            }
+            if (spec_excludes(spec, pub)) continue;
+            bool renamed = false;
+            for (uint32_t i = 0; i + 1 < spec->renames.n; i += 2)
+                if (spec->renames.items[i + 1]->as.sym == pub) { vis = spec->renames.items[i]->as.sym; renamed = true; }
+            if (!renamed && spec->prefix) {
+                char buf[512];
+                snprintf(buf, sizeof buf, "%s%s", spec->prefix->name, pub->name);
+                vis = I(sl, buf);
+            }
+        }
+        SMacro *m = sr_lookup(sl, lib_hidden(sl, lx->mod, lx->exp_in.items[k]->as.sym));
+        if (!m) continue;
+        SMacro *c = (SMacro *)arena_alloc(sl->a, sizeof(SMacro));
+        *c = *m;
+        c->name = vis;
+        sr_push(sl, c);
+    }
+    if (lx->helpers.n && !lx->helpers_imported) {
+        FB refer = {0};
+        for (uint32_t k = 0; k < lx->helpers.n; k++) fb_push(&refer, lx->helpers.items[k]);
+        fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, lx->mod),
+                                 Kw(sl, sp, sl->t_refer), fb_vec(sl, &refer, sp)));
+        sl->needs_module = true;
+        lx->helpers_imported = true;
+    }
+}
+
 /* Point a global's spelling at `to`, replacing a clash rename it already had. */
 static void set_clash(SL *sl, const Symbol *from, const Symbol *to) {
     for (uint32_t i = 0; i < sl->n_clash; i++)
@@ -4594,9 +4967,12 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
 }
 
 Form **scheme_lower_program(Arena *a, SymbolTable *st,
-                            Form *const *forms, uint32_t n, uint32_t *out_n) {
+                            Form *const *forms, uint32_t n, uint32_t *out_n,
+                            SchemeLibResolveFn resolve, void *resolve_ud) {
     SL sl;
     sl_init(&sl, a, st);
+    sl.lib_resolve = resolve;
+    sl.lib_resolve_ud = resolve_ud;
     FB included = {0};
     expand_includes(&sl, forms, n, &included);
     forms = included.items;
@@ -4719,6 +5095,11 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     free((void *)sl.clash_to);
     free((void *)sl.setters);
     free(sl.macros);
+    for (uint32_t i = 0; i < sl.n_libsyn; i++) {
+        LibSyntax *lx = sl.libsyn[i];
+        free(lx->defs.items); free(lx->exp_pub.items); free(lx->exp_in.items); free(lx->helpers.items);
+    }
+    free(sl.libsyn);
     return res;
 }
 

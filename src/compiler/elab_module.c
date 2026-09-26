@@ -630,7 +630,8 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
          * after its loads are spliced, before anything is elaborated. */
         if (scheme_lower_needed(forms, nforms)) {
             uint32_t lowered_n = 0;
-            forms  = scheme_lower_program(e->arena, e->st, forms, nforms, &lowered_n);
+            forms  = scheme_lower_program(e->arena, e->st, forms, nforms, &lowered_n,
+                                          elab_scheme_library_path, e);
             nforms = lowered_n;
             /* R3 / D9, the reverse direction: a Turmeric program importing a
              * Scheme library.  The R7RS prelude is autoloaded only when the
@@ -1033,6 +1034,12 @@ bool elab_module_resolve_path(Elab *e, const Symbol *name,
         if (module_path_exists_named(e->module_include_dirs[ii], name->name, out, cap)) return true;
     }
     return false;
+}
+
+bool elab_scheme_library_path(void *ud, const char *module, char *out, size_t cap) {
+    Elab *e = (Elab *)ud;
+    const Symbol *name = symtab_intern(e->st, strslice(module, (uint32_t)strlen(module)));
+    return elab_module_resolve_path(e, name, out, cap);
 }
 
 Expr *elab_defmodule(Elab *e, const Form *call) {

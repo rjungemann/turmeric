@@ -51,6 +51,7 @@
  * for any file. */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "forms.h"
@@ -63,8 +64,16 @@
  * grow (a top-level `begin` or `define-values` splices) and never shrinks.
  * Diagnostics are emitted for malformed Scheme forms; the offending form is
  * dropped and elaboration continues so that diag_had_error() reports it. */
+/* r7rs-define-library-cannot-export-syntax: the module path of a Scheme
+ * library (`my/utils`) -> its source file, by the module loader's own search
+ * (elab_scheme_library_path).  An importer reads the library's `syntax-rules`
+ * macros from it, since they are expanded here, before the module is loaded.
+ * `resolve` may be NULL: a library's macros are then not importable. */
+typedef bool (*SchemeLibResolveFn)(void *ud, const char *module, char *path, size_t cap);
+
 Form **scheme_lower_program(Arena *a, SymbolTable *st,
-                            Form *const *forms, uint32_t n, uint32_t *out_n);
+                            Form *const *forms, uint32_t n, uint32_t *out_n,
+                            SchemeLibResolveFn resolve, void *resolve_ud);
 
 /* True when any form in `forms` belongs to a LANG_R7RS file -- a cheap test a
  * caller can make before paying for the pass. */

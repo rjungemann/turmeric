@@ -112,10 +112,11 @@ Probed on both back ends, all correct:
   Turmeric surface in Scheme source, is
   [docs/reported/r7rs-turmeric-syntax-leaks.md](../reported/r7rs-turmeric-syntax-leaks.md))
 - **A `define-library` cannot export a `syntax-rules` macro.** The export check
-  in src/compiler/elab_module.c refuses it: "exported symbol 'my-rec' is not
-  defined in this module". That rules out the obvious design of SRFI
-  libraries as ordinary library modules (D3).
-  [docs/reported/r7rs-define-library-cannot-export-syntax.md](../reported/r7rs-define-library-cannot-export-syntax.md)
+  in src/compiler/elab_module.c refused it: "exported symbol 'my-rec' is not
+  defined in this module". That ruled out the obvious design of SRFI
+  libraries as ordinary library modules (D3). Resolved since: a library
+  exports its macros, and an importer reads them from the library's source.
+  [docs/archive/r7rs-define-library-cannot-export-syntax.md](../archive/r7rs-define-library-cannot-export-syntax.md)
 - **`(features)` lists `ratios`, but `cond-expand` says it is absent.** They
   are two hand-kept copies of one list. S1 adds a `srfi-N` identifier per SRFI,
   so it generates both from one table (D4).
@@ -165,9 +166,9 @@ Probed on both back ends, all correct:
 `(srfi N)` is resolved like `(scheme base)`, by a table in the lowering
 (`SRFI_LIBS[]`, beside `SCHEME_LIBS[]`), not by the module loader. The module
 route (`srfi/1` as a Turmeric module) would inherit every restriction of a
-user library: no exported syntax (2.3), `except` that hides nothing (guide,
-"Where it differs"), exports typed `any` on the Turmeric side, and a separate
-compile per library. The table route inherits the `(scheme ...)` libraries'
+user library: `except` that hides nothing (guide, "Where it differs"),
+exports typed `any` on the Turmeric side, and a separate compile per library.
+(No exported syntax was on this list too, until that gap closed, 2.3.) The table route inherits the `(scheme ...)` libraries'
 behaviour, which is already right.
 
 The accepted spelling is exactly `(srfi N)`, with `N` an exact non-negative
@@ -235,9 +236,12 @@ takes the `define-library` in **inline mode**:
   `(srfi 13)` pulls in `(srfi 14)`, and `(srfi 98)` pulls in
   `(scheme process-context)`.
 
-This sidesteps the macro-export gap (2.3) rather than waiting for it, and it
-lets SRFI reference implementations port with small edits, checkable against
-chibi or Racket. Fixing the gap for user libraries stays its own report.
+This lets SRFI reference implementations port with small edits, checkable
+against chibi or Racket. It was first chosen to sidestep the macro-export gap
+(2.3). That gap is now closed for user libraries, and the closing reused the
+same idea: an importer reads the library's source for its macros. Inline mode
+still wins for SRFIs on D1's other grounds, and because a spliced library's
+macros and procedures are one lowering pass with its importer.
 
 **Extensions of a core form are lowering arms, not macros.** SRFI 61 (a
 `cond` clause), 17 (`set!` on a call), 5 and 71 (`let`) change what an
