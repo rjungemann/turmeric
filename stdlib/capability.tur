@@ -20,7 +20,6 @@
 ;; other body then named a fresh, incomplete type, and no conforming C compiler
 ;; accepts `sizeof` or `->` on one. They live here, at file scope, where every
 ;; body below (and every implementation module that fills them) can see them.
-
 (load "stdlib/time.tur")
 
 ```c
@@ -223,8 +222,7 @@ typedef struct __tur_cap_time {
 ;;;
 ;;; Since: Phase 16
 
-(defn make-Time [now_fn : (c-fn [] i32)
-                 sleep_fn : (c-fn [i32] nil)] : Time
+(defn make-Time [now_fn : (c-fn [] i32) sleep_fn : (c-fn [i32] nil)] : Time
   ```c
   __tur_cap_time* time = (__tur_cap_time*)malloc(sizeof(__tur_cap_time));
   time->now = (int (*)(void))now_fn;
@@ -262,8 +260,7 @@ typedef struct __tur_cap_time {
 ;;; Since: Phase 16
 
 
-(defmacro with-capability [bindings & body]
-  `(let ~bindings (do ~@body)))
+(defmacro with-capability [bindings & body] `(let ~bindings (do ~@body)))
 ;; default-capability: returns the default implementation for a capability type
 ;; For now, this just returns NULL - users should provide their own defaults
 ;;; default-capability -- return the default implementation for a capability type (currently always nil).
@@ -356,7 +353,10 @@ typedef struct __tur_cap_time {
 ;;;
 ;;; Since: Phase 16
 
-(defn fs-list [fs : FileSystem path : cstr entries : ptr<void> max_entries : int] : int
+(defn fs-list [fs : FileSystem
+               path : cstr
+               entries : ptr<void>
+               max_entries : int] : int
   ```c
   __tur_cap_fs* f = (__tur_cap_fs*)fs;
   int out_count;
