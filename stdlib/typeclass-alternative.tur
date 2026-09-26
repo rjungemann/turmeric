@@ -9,6 +9,9 @@
 ;; Alternative -- container with an empty value and a choice combinator.
 ;;   empty  :: f a                 (a is a type witness for dispatch)
 ;;   alt-or :: f a -> f a -> f a   (first-match choice)
+;; Superclass: Applicative, as in Haskell.  stdlib/typeclass.tur re-declares
+;; this class and must carry the same preamble (a redeclaration compares it).
 (defclass Alternative [^f]
+  [(Applicative f)]
   (empty [a] : (f a))
   (alt-or [x : (f a) y : (f a)] : (f a)))

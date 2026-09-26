@@ -57,11 +57,13 @@
 ;;;
 ;;; Since: lattice-vocabulary-plan L2
 ;;
-;; Flat, not a subclass of Semigroup.  defclass does take a superclass
-;; preamble, but adding one to a class that already has instances obliges every
-;; one of them -- here and downstream -- to carry the superclass instance, so a
-;; function needing both lists both constraints (`[^Semigroup A ^Monoid A]`).
-(defclass Monoid [a] (mempty [] : a))
+;; A subclass of Semigroup.  A `[^Monoid A]` constraint entails `^Semigroup A`,
+;; so a function that needs both `mempty` and `combine` writes one constraint,
+;; not two.  The price is the instance obligation: every `Monoid` instance, here
+;; and downstream, must sit beside a `Semigroup` instance for the same type
+;; (TUR-E0393 otherwise) -- a Monoid IS a Semigroup with an identity, so any
+;; instance that lacked one was not a lawful Monoid to begin with.
+(defclass Monoid [a] [(Semigroup a)] (mempty [] : a))
 
 ;; -- selection newtypes -------------------------------------------------------
 ;;
@@ -192,7 +194,7 @@
 ;; variable -- but then only one side of the law could be written.  The let's
 ;; declared type supplies what first position lacks, and states the law more
 ;; plainly besides.
-(defn law-identity? [^Semigroup A ^Monoid A ^Eq A] [x : A] : bool
+(defn law-identity? [^Monoid A ^Eq A] [x : A] : bool
   (let [unit     : A
         (mempty)]
     (and (eq? (combine unit x) x) (eq? (combine x unit) x))))
@@ -211,10 +213,7 @@
 ;;;   acc combined with v[i..n).
 ;;;
 ;;; Since: lattice-vocabulary-plan L4
-(defn mconcat-from [^Semigroup A ^Monoid A] [v : (Vec A)
-                                             i : int
-                                             n : int
-                                             acc : A] : A
+(defn mconcat-from [^Monoid A] [v : (Vec A) i : int n : int acc : A] : A
   (if (>= i n) acc (mconcat-from v (+ i 1) n (combine acc (vec-get v i)))))
 
 ;;; mconcat -- combine every element of a Vec, left to right, from mempty.
@@ -242,7 +241,7 @@
 ;; tests/fixtures/errors/typeclass-nullary-return-only-newtype).  An empty Vec
 ;; still answers `mempty` correctly here precisely BECAUSE the Vec parameter
 ;; carries the type -- which is the whole reason an identity earns its keep.
-(defn mconcat [^Semigroup A ^Monoid A] [v : (Vec A)] : A
+(defn mconcat [^Monoid A] [v : (Vec A)] : A
   (let [unit     : A
         (mempty)]
     (mconcat-from v 0 (vec-len v) unit)))
@@ -257,11 +256,18 @@
 ;; not an afterthought.  Without them a JoinSemilattice is a Semigroup with a
 ;; longer name.
 ;;
-;; No superclass relates them -- these two are flat like the rest of the
-;; stdlib's classes -- so `join`'s associativity law is restated here rather
-;; than borrowed from `law-associative?`.  That duplication is the honest cost;
-;; a constraint-alias feature would remove it, and is worth considering only if
-;; it is felt again.
+;; No superclass relates them, on purpose.  `(defclass JoinSemilattice [a]
+;; [(Semigroup a)] ...)` would parse, but it would let a `[^JoinSemilattice A]`
+;; body call `combine` -- the wrong name for a join -- and would oblige every
+;; lattice to pick a Semigroup instance, which for `MaxI` is fine but for a CRDT
+;; state type is a second, redundant spelling of the same operation.  So
+;; `join`'s associativity law is restated here rather than borrowed from
+;; `law-associative?`.  That duplication is the honest cost.
+;;
+;; The BOUNDED classes are different: `bottom` is meaningless without the
+;; `join` it is an identity for, so `BoundedJoin` is declared over
+;; `JoinSemilattice` (and `BoundedMeet` over `MeetSemilattice`), the same way
+;; `Monoid` is declared over `Semigroup` above.
 
 ;;; JoinSemilattice -- associative, commutative, IDEMPOTENT combine (least upper bound).
 ;;;
@@ -302,7 +308,7 @@
 ;;;   (let [z : MaxI (bottom)] (join z (:: 3 MaxI)))   ; => MaxI 3
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
-(defclass BoundedJoin [a] (bottom [] : a))
+(defclass BoundedJoin [a] [(JoinSemilattice a)] (bottom [] : a))
 
 ;;; BoundedMeet -- a MeetSemilattice with a greatest element.
 ;;;
@@ -313,7 +319,7 @@
 ;;;   (let [t : MinI (top)] (meet t (:: 3 MinI)))   ; => MinI 3
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
-(defclass BoundedMeet [a] (top [] : a))
+(defclass BoundedMeet [a] [(MeetSemilattice a)] (top [] : a))
 
 ;; -- instances ----------------------------------------------------------------
 ;;
@@ -417,7 +423,7 @@
 ;;;   (law-bottom-identity? (:: 3 MaxI))   ; => true
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
-(defn law-bottom-identity? [^JoinSemilattice A ^BoundedJoin A ^Eq A] [x : A] : bool
+(defn law-bottom-identity? [^BoundedJoin A ^Eq A] [x : A] : bool
   (let [z        : A
         (bottom)]
     (eq? (join z x) x)))
@@ -469,7 +475,7 @@
 ;;;   (law-top-identity? (:: 3 MinI))   ; => true
 ;;;
 ;;; Since: lattice-vocabulary-plan L3
-(defn law-top-identity? [^MeetSemilattice A ^BoundedMeet A ^Eq A] [x : A] : bool
+(defn law-top-identity? [^BoundedMeet A ^Eq A] [x : A] : bool
   (let [t     : A
         (top)]
     (eq? (meet t x) x)))

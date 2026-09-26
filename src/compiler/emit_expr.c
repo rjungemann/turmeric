@@ -11871,10 +11871,36 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     fn_binding->type.kind == TY_FN &&
                     i < fn_binding->type.as.fn.arity &&
                     fn_binding->type.as.fn.arg_kinds[i] == TY_INT) {
-                    raw = emit_carrier_bridge(ctx, body, raw,
-                                             CK_CONCRETE, CK_CARRIER,
-                                             call_arg_spill_type(ctx, emit_arg,
-                                                 e->as.call_.args[i]->type));
+                    /* dict-clone-receiver-spill-escapes: a method dispatched
+                     * through a RUNTIME dict (a dict clone's body, or a
+                     * continuation that captured the dict) hands back the
+                     * carrier, and the clone returns that word unconverted.  A
+                     * method may return its argument -- `myalt` keeping `x`,
+                     * `bind` passing `none` through -- so a stack spill here
+                     * leaves the clone returning the address of its own dead
+                     * frame.  It read back correctly on x86-64 by luck and
+                     * printed garbage under the arm64 JIT.  Heap-promote it
+                     * instead; a statically resolved call reads its result
+                     * back inside this frame and keeps the stack spill. */
+                    Type spill_ty = call_arg_spill_type(ctx, emit_arg,
+                                                        e->as.call_.args[i]->type);
+                    if (emit_call_is_dict_param_dispatch(ctx, e)) {
+                        raw = emit_carrier_bridge_escaping(ctx, body, raw,
+                                                           CK_CONCRETE, CK_CARRIER,
+                                                           spill_ty);
+                        /* The box outlives any region bracket, and no store
+                         * hook sees it: note its words here. */
+                        const char *scn = emit_type_c_name(ctx, spill_ty);
+                        if (raw && scn && strstr(raw, "(int64_t)(intptr_t)(") == raw) {
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body,
+                                "TUR_REGION_NOTE_WORDS((void *)(intptr_t)%s, sizeof(%s));\n",
+                                raw, scn);
+                        }
+                    } else
+                        raw = emit_carrier_bridge(ctx, body, raw,
+                                                  CK_CONCRETE, CK_CARRIER,
+                                                  spill_ty);
                 }
                 /* option-consumers-typed-as-int-carrier: the same
                  * concrete->carrier bridge, but for an ordinary *direct* call

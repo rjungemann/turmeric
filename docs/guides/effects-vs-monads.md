@@ -372,12 +372,17 @@ Reach for a monad value when the computation must be reified:
 
 `Functor`, `Applicative`, `Monad`, `Alternative`, `MonadError`, `Bifunctor`,
 `Foldable`, and `Traversable` are higher-kinded typeclasses (`defclass Monad
-[^m]`). The `^m` marks a parameter of kind `* -> *`. Instances ship for:
+[^m]`). The `^m` marks a parameter of kind `* -> *`. They form Haskell's
+hierarchy: `Monad` is declared over `Applicative`, which is over `Functor`;
+`Alternative` over `Applicative`; `MonadError` over `Monad`; `Traversable` over
+`Functor` and `Foldable`. So a function constrained by `^Monad M` may also call
+`pure` and `fmap` (see
+[Superclasses](typeclass-guide.md#superclasses)). Instances ship for:
 
 | Type | Instances |
 |---|---|
 | `Option` | `Functor`, `Applicative`, `Monad`, `Alternative` |
-| `(Result _ B)` | `Functor`, `Monad`, `MonadError`, `Bifunctor` |
+| `(Result _ B)` | `Functor`, `Applicative`, `Monad`, `MonadError`, `Bifunctor` |
 | `Parser` | `Functor`, `Applicative`, `Monad`, `Alternative` |
 | `Backtrack` | `Functor`, `Applicative`, `Monad` |
 | `Goal` | `Functor`, `Applicative`, `Monad` |

@@ -174,6 +174,79 @@ bool typeclass_entails(const TypeClassEnv *env, TypeClass *sub, const TypeClass 
     return false;
 }
 
+/* class-superclasses: a declared constraint also declares its superclasses.
+ *
+ * Entailment used to be decided only at the dispatch site (typeclass_entails),
+ * which is enough when the call resolves statically.  It is not enough for a
+ * generic that is compiled by DICTIONARY PASSING or interpreted with frame
+ * dictionaries: a `[^Alternative F]` body calling `pure` needs an Applicative
+ * dictionary, and the generic received only the Alternative one -- the
+ * compiled body called `pure` through the Alternative dict's slot (a C type
+ * error at best, a wrong method at worst), and turi, which binds dictionaries
+ * from this list, had none to find.  Found retrofitting the stdlib's
+ * Alternative and Monad (typeclass-superclasses-plan SC8b).
+ *
+ * So the constraint list itself carries the closure: for each single-parameter
+ * constraint `(C W)`, every superclass reachable through single-argument
+ * elements over that parameter is appended as `(S W)`, unless the list already
+ * has it.  Implied entries go AFTER the declared ones, so code that reads "the
+ * first constraint" sees what the author wrote.  The instance obligation
+ * (Half B) guarantees every appended dictionary exists at a concrete call
+ * site.  Multi-parameter shapes are left to the dispatch-site walk. */
+static bool tc_constraint_present(const TypeConstraint *list, uint8_t n,
+                                  const TypeConstraint *extra, uint32_t n_extra,
+                                  const TypeClass *tc, const Symbol *tyvar) {
+    for (uint8_t i = 0; i < n; i++)
+        if (tc_same_name(list[i].typeclass, tc) && list[i].tyvar == tyvar)
+            return true;
+    for (uint32_t i = 0; i < n_extra; i++)
+        if (tc_same_name(extra[i].typeclass, tc) && extra[i].tyvar == tyvar)
+            return true;
+    return false;
+}
+
+TypeConstraint *typeclass_constraints_with_supers(const TypeClassEnv *env,
+                                                  TypeConstraint *list,
+                                                  uint8_t n, uint8_t *out_n) {
+    *out_n = n;
+    if (!env || !list || n == 0) return list;
+    TypeConstraint extra[TC_WALK_MAX];
+    uint32_t n_extra = 0;
+    for (uint8_t i = 0; i < n; i++) {
+        const TypeConstraint *c = &list[i];
+        if (!c->typeclass || c->typeclass->n_type_params != 1 || !c->tyvar)
+            continue;
+        TypeClass *stack[TC_WALK_MAX];
+        uint32_t n_stack = 0;
+        stack[n_stack++] = c->typeclass;
+        while (n_stack > 0) {
+            TypeClass *cur = stack[--n_stack];
+            for (uint8_t si = 0; si < cur->n_supers; si++) {
+                if (cur->super_n_args && cur->super_n_args[si] != 1) continue;
+                TypeClass *s = tc_super_at(env, cur, si);
+                if (!s || s->n_type_params != 1) continue;
+                if (tc_constraint_present(list, n, extra, n_extra, s, c->tyvar))
+                    continue;
+                if (n + n_extra >= 255 || n_extra >= TC_WALK_MAX ||
+                    n_stack >= TC_WALK_MAX)
+                    break;
+                extra[n_extra] = *c;          /* same tyvar, param, reach */
+                extra[n_extra].typeclass = s;
+                n_extra++;
+                stack[n_stack++] = s;
+            }
+        }
+    }
+    if (n_extra == 0) return list;
+    TypeConstraint *out = (TypeConstraint *)arena_alloc(
+        env->arena, ((size_t)n + n_extra) * sizeof(TypeConstraint));
+    if (!out) return list;
+    memcpy(out, list, n * sizeof(TypeConstraint));
+    memcpy(out + n, extra, n_extra * sizeof(TypeConstraint));
+    *out_n = (uint8_t)(n + n_extra);
+    return out;
+}
+
 /* Recursive colouring: 0 = unvisited, 1 = on the current path, 2 = done. */
 static uint8_t tc_cycle_walk(TypeClass *tc, TypeClass **path, uint8_t depth,
                              uint8_t cap, TypeClass **out, uint8_t *out_n) {

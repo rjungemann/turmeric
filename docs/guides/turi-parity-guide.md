@@ -50,7 +50,7 @@ concurrency).
 | Feature group | tur | turi | Notes |
 | --- | --- | --- | --- |
 | Pattern matching | OK | OK | `match`, guards, nested/ADT patterns, `is?` narrowing |
-| Typeclasses + instances | OK | OK | dispatch, default methods, associated types; inline-C instance bodies use native overrides |
+| Typeclasses + instances | OK | OK | dispatch, default methods, associated types, superclasses (entailment and the instance obligation; turi binds each superclass dictionary alongside the subclass's); inline-C instance bodies use native overrides |
 | Modules / imports | OK | OK | `import`/`export`, `defmodule`, per-file boundaries, `(load ...)` |
 | Macros | OK | OK | shared macro expander runs before either back end |
 | Currying / partial application | OK | OK | under-saturated `defn`/`fn` produce closures on both paths |

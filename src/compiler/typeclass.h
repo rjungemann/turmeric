@@ -234,6 +234,12 @@ TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol 
  * (a superclass declared BELOW its subclass resolves once it is registered);
  * a cyclic graph is walked with a visited set and reported elsewhere. */
 bool typeclass_entails(const TypeClassEnv *env, TypeClass *sub, const TypeClass *sup);
+/* class-superclasses: `list` with each single-parameter constraint's
+ * superclass closure appended (same tyvar), skipping any already present.
+ * Returns `list` itself when nothing is added. */
+TypeConstraint *typeclass_constraints_with_supers(const TypeClassEnv *env,
+                                                  TypeConstraint *list,
+                                                  uint8_t n, uint8_t *out_n);
 
 /* class-superclasses SC2: resolve `tc->super_forms` to `tc->supers` by name.
  * Returns false (leaving the unresolved slot NULL) when a name is unknown;

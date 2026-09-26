@@ -16,6 +16,8 @@
 (defn mk-box [A] [x : A] : (Box A) ```c return (int64_t)x; ```)
 (defn un-box [A] [b : (Box A)] : A ```c return (int64_t)b; ```)
 (definstance Monad [Box] (bind [ma k] (k (un-box ma))))
+;; Functor instance: Applicative is declared over Functor (typeclass-superclasses-plan SC8b step 3).
+(definstance Functor [Box] (fmap [c g] (mk-box (g (un-box c)))))
 (definstance Applicative [Box] (pure [x] (mk-box x)) (ap [ff fa] fa))
 
 ;; 1. pure alone, single constraint

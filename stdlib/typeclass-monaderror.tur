@@ -11,6 +11,8 @@
 ;;   throw-error :: e -> m a               (construct a failed computation)
 ;;   catch-error :: m a -> (e -> m a) -> m a (recover from a failure)
 ;; handler is declared :fn so capturing closures can be passed.
+;; Superclass: Monad, so a `[^MonadError M]` body may also `bind`.
 (defclass MonadError [^m]
+  [(Monad m)]
   (throw-error [err] : int)
   (catch-error [ma [handler :fn]] : int))

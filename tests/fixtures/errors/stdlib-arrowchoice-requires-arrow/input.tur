@@ -1,0 +1,13 @@
+;; typeclass-superclasses-plan SC8b step 4: ArrowChoice is declared over
+;; Arrow, so an ArrowChoice instance with no Arrow instance for the same type
+;; is refused (TUR-E0393).
+(load "stdlib/arrow.tur")
+
+(defopaque Gate :int)
+(definstance ArrowChoice [Gate]
+  (left [f] f)
+  (right [f] f)
+  (+++ [f g] f)
+  (||| [f g] f))
+
+(defn main [] : int 0)

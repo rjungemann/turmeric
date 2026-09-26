@@ -1,0 +1,11 @@
+;; typeclass-superclasses-plan SC8b step 1: the auto-loaded Ord is declared
+;; over Eq, so an Ord instance with no Eq instance for the same type is
+;; refused (TUR-E0393).
+(defopaque Rank :int)
+(definstance Ord [Rank]
+  (lt? [x y] (< (:: x int) (:: y int)))
+  (lte? [x y] (<= (:: x int) (:: y int)))
+  (gt? [x y] (> (:: x int) (:: y int)))
+  (gte? [x y] (>= (:: x int) (:: y int))))
+
+(defn main [] : int 0)

@@ -4,7 +4,79 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The lattice classes declare their superclasses.** In
+  `stdlib/typeclass-lattice.tur`, `Monoid` is now declared over `Semigroup`,
+  `BoundedJoin` over `JoinSemilattice`, and `BoundedMeet` over
+  `MeetSemilattice`. A `[^Monoid A]` function may call `combine` without also
+  writing `^Semigroup A`, and `mconcat`, `mconcat-from`, `law-identity?`,
+  `law-bottom-identity?` and `law-top-identity?` now carry the single
+  constraint. **Breaking for downstream instances:** a `Monoid`,
+  `BoundedJoin` or `BoundedMeet` instance now needs the superclass instance
+  for the same type somewhere in the program, or the build stops with
+  TUR-E0393. Every instance the stdlib ships already has one. Existing
+  two-constraint signatures such as `[^Semigroup A ^Monoid A]` still compile.
+  `JoinSemilattice` is deliberately not declared over `Semigroup`: the two
+  share a shape but not a meaning, and a join is not spelled `combine`. The
+  auto-loaded classes (`Eq`, `Ord`, `Functor`, `Monad` and the rest) stay
+  flat for now. SC8a of typeclass-superclasses-plan.
+
+- **`Ord` is declared over `Eq`.** The auto-loaded `Ord` carries the
+  preamble `[(Eq a)]`, so a `[^Ord A]` function may call `eq?` without also
+  writing `^Eq A`. **Breaking for downstream instances:** an `Ord` instance now
+  needs an `Eq` instance for the same type somewhere in the program, or the
+  build stops with TUR-E0393. Every stdlib `Ord` instance already has one, and
+  no spice declares an `Ord` instance. A program that re-declares `Ord` itself
+  must now spell the same preamble, or it is "typeclass 'Ord' is already
+  defined". SC8b step 1 of typeclass-superclasses-plan.
+
+- **`Alternative`, `MonadError` and `Traversable` declare their
+  superclasses.** The auto-loaded `Alternative` is declared over
+  `Applicative` and `MonadError` over `Monad`; `Traversable` in
+  `stdlib/typeclass.tur` over `Functor` and `Foldable`. So
+  `[^Alternative F]` licenses `pure`, `[^MonadError M]` licenses `bind`, and
+  `[^Traversable T]` licenses `fmap` and `foldl`. The same instance obligation
+  applies (TUR-E0393); every stdlib instance already satisfies it and no spice
+  declares an instance of these classes. SC8b step 2 of
+  typeclass-superclasses-plan.
+
+- **`Applicative` is declared over `Functor`.** An `[^Applicative F]` function
+  may call `fmap`. **Breaking for downstream instances:** an `Applicative`
+  instance now needs a `Functor` instance for the same type (TUR-E0393).
+  Every stdlib instance has one and no spice declares an `Applicative`
+  instance; six test fixtures that declared `Applicative` for a toy type
+  gained a one-line `Functor`. A constrained rank-2 `forall` implies its
+  constraints' superclasses the same way a `defn` does, so a function passed
+  to it still lines up dictionary for dictionary. SC8b step 3 of
+  typeclass-superclasses-plan.
+
+- **The arrow classes declare their superclasses.** In `stdlib/arrow.tur`,
+  `Arrow` is declared over `Category`; `ArrowChoice`, `ArrowLoop` and
+  `ArrowApply` over `Arrow`; `ArrowZero` over `Category`; and `ArrowPlus` over
+  `ArrowZero`. `ArrowZero` departs from Haskell's `Arrow` superclass because
+  `Kleisli` is a `Category` with an honest zero arrow and no `Arrow` instance.
+  Every stdlib instance satisfies the new obligations. SC8b step 4 of
+  typeclass-superclasses-plan.
+
+- **`Monad` is declared over `Applicative`.** With `Applicative` over
+  `Functor`, a `[^Monad M]` function may call `pure` and `fmap` -- the
+  Haskell `Applicative m => Monad m` shape, and what makes a `do-m` block
+  ending in `pure` generic over any monad. **Breaking for downstream
+  instances:** a `Monad` instance now needs `Applicative` (and so `Functor`)
+  instances for the same type (TUR-E0393). Every stdlib `Monad` has them, now
+  that `Result` is an `Applicative`; no spice declares a `Monad` instance; one
+  test fixture's toy monad gained both. SC8b step 5, the last step of
+  typeclass-superclasses-plan's stdlib adoption.
+
 ### Added
+
+- **`Result` is an `Applicative`.** `stdlib/result.tur` ships
+  `Applicative [(Result _ B)]`: `pure` is `ok`, and `ap` applies an `ok`
+  function to an `ok` argument and returns the first `err` it meets, the
+  function's before the argument's. `(ap ff fa)` on a
+  `(Result (fn [int] int) int)` has the type `(Result int int)`, so its result
+  can go straight to a typed parameter.
 
 - **`#lang r7rs`: threads run under the collector, in parallel** (stages A
   and B of docs/archive/r7rs-gc-threads-plan.md). A compiled Scheme
@@ -26,6 +98,34 @@ All notable changes to Turmeric are documented here.
   `tests/fixtures/r7rs-threads-*`.
 
 ### Fixed
+
+- **A dictionary-passing generic no longer returns a dangling stack
+  address.** A by-value argument to a method dispatched through a runtime
+  dictionary was spilled to the generic's stack, and a method that returns its
+  argument (an `Alternative`-style `myalt` keeping `x`, a `bind` passing
+  `none` through) handed that address back out of the generic. It happened to
+  read correctly on x86-64 and printed garbage under the arm64 JIT. The
+  argument is now heap-allocated.
+
+- **A subclass constraint now carries its superclasses' dictionaries.** A
+  higher-kinded generic constrained only by a subclass could not call a
+  return-directed superclass method such as `pure` under `[^Alternative F]`.
+  Compiled, the generic received only the subclass's dictionary and called
+  the method through the wrong one (a C type error, or with matching slot
+  types a wrong method); the interpreter found no dictionary at all. A
+  declared constraint now implies its superclass closure, as if written out.
+
+- **Compiled `ap` over a partially applied instance head no longer
+  segfaults.** An instance over a head such as `(Result _ B)` or a user
+  `(Either _ E)` typed its own body with the arms swapped, so in `ap` the
+  function was typed as the fixed arm. The natural body did not type-check
+  ("'f' is not a function"), and the ascription that worked around it called
+  a fat closure as a plain C function pointer, crashing the compiled program
+  while `--interpret` printed the right answer. The instance body now puts the
+  applied type in the hole slot, and the call site grounds `ap`'s result from
+  the function inside the receiver. A related binding that ran inside
+  constrained generics, and paired a partial head's fixed variable with the
+  function, is now limited to statically resolved calls.
 
 - **`tur jit`: threaded programs no longer hang or crash under load.**
   Generating a function lazily ends in MIR rewriting its call thunk in place,
