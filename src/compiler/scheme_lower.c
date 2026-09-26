@@ -461,6 +461,10 @@ typedef struct SL {
     const Symbol *lib_name;
     FB            lib_exports;
     FB            lib_body;
+    /* The top-level stream the form being lowered goes to (the program's,
+     * or a library body): where a body's `define-record-type` lifts its
+     * declarations (r7rs-define-record-type-not-an-internal-definition). */
+    FB           *lift_out;
     bool          user_main;
     /* Rename table, interned. */
     const Symbol *rn_from[N_RENAMES];
@@ -1768,7 +1772,7 @@ static bool include_files(SL *sl, Form *f, bool fold, FB *out);
 static void lower_import_set(SL *sl, Form *set);
 static const Symbol *library_module(SL *sl, Form *set, bool *ok);
 static Form *cond_expand_clause(SL *sl, Form *f, uint32_t *out_n, Form ***out_items);
-static void lower_record_type(SL *sl, Form *f, FB *out);
+static void lower_record_type(SL *sl, Form *f, FB *out, bool local);
 static Form *rebind_rest(SL *sl, Span sp, const Symbol *rest, Form *body);
 
 /* Is `name` (already renamed) the target of a `set!` anywhere in `f`?
@@ -2693,6 +2697,26 @@ static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp) {
     }
     free(pre.items);
     items = seq.items; n = seq.n;
+    /* R7RS 5.5: `define-record-type` is a definition, so a body's leading
+     * definitions may include one.  Its struct and procedures are top-level
+     * declarations, which a body has nowhere to put: they are lifted to the
+     * top level under fresh names, and this body's scope maps the names it
+     * wrote to them.  Nothing outside the body can reach the type, so one
+     * lifted type per source occurrence serves every call of the enclosing
+     * procedure (r7rs-define-record-type-not-an-internal-definition). */
+    {
+        uint32_t w = 0, i = 0;
+        for (; i < n; i++) {
+            if (head_is(items[i], sl->s_define_record_type)) {
+                lower_record_type(sl, items[i], sl->lift_out, true);
+                continue;
+            }
+            if (!head_is(items[i], sl->s_define)) break;
+            items[w++] = items[i];
+        }
+        for (; i < n; i++) items[w++] = items[i];
+        n = w;
+    }
     if (n == 0) { free(seq.items); return Nil(sl, sp); }
 
     uint32_t ndef = 0;
@@ -3130,7 +3154,7 @@ static Form *lower(SL *sl, Form *f) {
             return Nil(sl, f->span);
         }
         if (h == sl->s_define_record_type) {
-            err(f, "define-record-type is only allowed at the top level or in a library body");
+            err(f, "define-record-type is only allowed at the top level or at the beginning of a body (R7RS 5.3.2)");
             return Nil(sl, f->span);
         }
         if (h == sl->s_cond_expand) {
@@ -3281,7 +3305,14 @@ static Form *lower_toplevel_stmt(SL *sl, Form *f) {
     return lower(sl, Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-toplevel__")), thunk));
 }
 
+static void lower_toplevel_1(SL *sl, Form *f, FB *out);
 static void lower_toplevel(SL *sl, Form *f, FB *out) {
+    FB *saved = sl->lift_out;
+    sl->lift_out = out;
+    lower_toplevel_1(sl, f, out);
+    sl->lift_out = saved;
+}
+static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
     Span sp = f->span;
     {
         bool fold;
@@ -3513,7 +3544,7 @@ static void lower_toplevel(SL *sl, Form *f, FB *out) {
         return;
     }
     if (head_is(f, sl->s_define_record_type)) {
-        lower_record_type(sl, f, out);
+        lower_record_type(sl, f, out, false);
         return;
     }
     if (head_is(f, sl->s_define) && f->as.list.len >= 2 && f->as.list.items[1]->tag == F_LIST &&
@@ -3861,35 +3892,68 @@ static Form *cond_expand_clause(SL *sl, Form *f, uint32_t *out_n, Form ***out_it
 
 /* (define-record-type <name> (ctor f...) pred (f accessor [modifier])...)
  * -> a heap defstruct of `any` fields plus the procedures (D3: a record is
- * an ordinary Turmeric type, its predicate an `is?`). */
-static void lower_record_type(SL *sl, Form *f, FB *out) {
+ * an ordinary Turmeric type, its predicate an `is?`).
+ *
+ * `local`: the form is one of a body's definitions.  The declarations still
+ * go to `out` (the top level), but the struct gets a fresh name, and so does
+ * each procedure -- bound in the body's scope, so the body's `(mk 7)` reads
+ * the lifted `mk__vN` and a second body's record type of the same name is a
+ * different type (r7rs-define-record-type-not-an-internal-definition). */
+static void lower_record_type(SL *sl, Form *f, FB *out, bool local) {
     Span sp = f->span;
     if (f->as.list.len < 4 || f->as.list.items[1]->tag != F_SYM || f->as.list.items[2]->tag != F_LIST ||
         f->as.list.items[3]->tag != F_SYM) {
         err(f, "define-record-type expects (define-record-type <name> (ctor field...) pred (field accessor [modifier])...)");
         return;
     }
+    Form *ctor = f->as.list.items[2];
+    if (ctor->as.list.len < 1 || ctor->as.list.items[0]->tag != F_SYM) { err(ctor, "record constructor spec expects (name field...)"); return; }
+    for (uint32_t i = 1; i < ctor->as.list.len; i++)
+        if (ctor->as.list.items[i]->tag != F_SYM) { err(ctor->as.list.items[i], "constructor field must be an identifier"); return; }
+    uint32_t nf = f->as.list.len - 4;
+    for (uint32_t i = 0; i < nf; i++) {
+        Form *spec = f->as.list.items[4 + i];
+        if (spec->tag != F_LIST || spec->as.list.len < 2 || spec->as.list.len > 3 || spec->as.list.items[0]->tag != F_SYM) {
+            err(spec, "record field spec expects (field accessor [modifier])"); return;
+        }
+        if (spec->as.list.items[1]->tag != F_SYM) { err(spec, "accessor must be an identifier"); return; }
+        if (spec->as.list.len == 3 && spec->as.list.items[2]->tag != F_SYM) { err(spec, "modifier must be an identifier"); return; }
+    }
     /* Struct name: the record name with `<`/`>` dropped and a prefix, so it
      * can never collide with a stdlib type. */
     char sbuf[128]; size_t at = 0;
     const char *rn_name = f->as.list.items[1]->as.sym->name;
     at += (size_t)snprintf(sbuf, sizeof sbuf, "R7rsRec_");
-    for (const char *p = rn_name; *p && at + 1 < sizeof sbuf; p++) {
+    for (const char *p = rn_name; *p && at + 3 < sizeof sbuf; p++) {
         char c = *p;
         if (c == '<' || c == '>') continue;
         sbuf[at++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) ? c : '_';
     }
     sbuf[at] = '\0';
-    const Symbol *sname = I(sl, sbuf);
+    if (local) { sbuf[at++] = '_'; sbuf[at++] = '_'; sbuf[at] = '\0'; }
+    const Symbol *sname = local ? fresh(sl, sbuf) : I(sl, sbuf);
+    /* The procedures' names: a local record binds each one in the body's
+     * scope first, then the rest is generated as top-level code, outside
+     * every enclosing scope (a constructor parameter is not the enclosing
+     * procedure's variable of the same name). */
+    #define REC_NAME(s) (local ? bind_name(sl, (s), sp) : rn(sl, (s)))
+    const Symbol *ctor_name = REC_NAME(ctor->as.list.items[0]->as.sym);
+    const Symbol *pred_name = REC_NAME(f->as.list.items[3]->as.sym);
+    const Symbol **acc_names = (const Symbol **)arena_alloc(sl->a, (nf + 1) * sizeof(*acc_names));
+    const Symbol **mod_names = (const Symbol **)arena_alloc(sl->a, (nf + 1) * sizeof(*mod_names));
+    for (uint32_t i = 0; i < nf; i++) {
+        Form *spec = f->as.list.items[4 + i];
+        acc_names[i] = REC_NAME(spec->as.list.items[1]->as.sym);
+        mod_names[i] = spec->as.list.len == 3 ? REC_NAME(spec->as.list.items[2]->as.sym) : NULL;
+    }
+    #undef REC_NAME
+    LFrame *saved_scope = sl->scope;
+    if (local) sl->scope = NULL;
     /* Fields, in declaration order. */
-    uint32_t nf = f->as.list.len - 4;
     const Symbol **fields = (const Symbol **)arena_alloc(sl->a, (nf + 1) * sizeof(*fields));
     FB fvec = {0};
     for (uint32_t i = 0; i < nf; i++) {
         Form *spec = f->as.list.items[4 + i];
-        if (spec->tag != F_LIST || spec->as.list.len < 2 || spec->as.list.len > 3 || spec->as.list.items[0]->tag != F_SYM) {
-            err(spec, "record field spec expects (field accessor [modifier])"); free(fvec.items); return;
-        }
         fields[i] = spec->as.list.items[0]->as.sym;
         fb_push(&fvec, Sym(sl, spec->span, fields[i]));
         fb_push(&fvec, AnyAnn(sl, spec->span));
@@ -3898,12 +3962,9 @@ static void lower_record_type(SL *sl, Form *f, FB *out) {
                     fb_vec(sl, &fvec, sp)));
     /* Constructor: its parameters name a subset of the fields, in any order;
      * an unmentioned field starts as nil. */
-    Form *ctor = f->as.list.items[2];
-    if (ctor->as.list.len < 1 || ctor->as.list.items[0]->tag != F_SYM) { err(ctor, "record constructor spec expects (name field...)"); return; }
     FB params = {0}, args = {0};
     for (uint32_t i = 1; i < ctor->as.list.len; i++) {
         Form *p = ctor->as.list.items[i];
-        if (p->tag != F_SYM) { err(p, "constructor field must be an identifier"); free(params.items); free(args.items); return; }
         fb_push(&params, Sym(sl, p->span, rn(sl, p->as.sym)));
     }
     fb_push(&args, Sym(sl, sp, sname));
@@ -3913,36 +3974,34 @@ static void lower_record_type(SL *sl, Form *f, FB *out) {
             if (ctor->as.list.items[j]->as.sym == fields[i]) { named = true; break; }
         fb_push(&args, named ? Sym(sl, sp, rn(sl, fields[i])) : Nil(sl, sp));
     }
-    fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, ctor->as.list.items[0]->as.sym)),
+    fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, ctor_name),
                     fb_vec(sl, &params, sp), fb_list(sl, &args, sp)));
     /* Predicate. */
     {
         const Symbol *x = I(sl, "x");
         Form *pv[1] = { Sym(sl, sp, x) };
-        fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, f->as.list.items[3]->as.sym)),
+        fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_defn), Sym(sl, sp, pred_name),
                         Vec(sl, sp, pv, 1), form_type_ann(sl->a, sp, Sym(sl, sp, sl->t_bool)),
                         Ln(sl, sp, 3, Sym(sl, sp, sl->t_is), Sym(sl, sp, x), Sym(sl, sp, sname))));
     }
     /* Accessors and modifiers. */
     for (uint32_t i = 0; i < nf; i++) {
-        Form *spec = f->as.list.items[4 + i];
         const Symbol *r = I(sl, "r");
         char fld[128]; snprintf(fld, sizeof fld, ".%s", fields[i]->name);
         Form *sann = form_type_ann(sl->a, sp, Sym(sl, sp, sname));
         Form *acc_params[2] = { Sym(sl, sp, r), sann };
         Form *read = Ln(sl, sp, 2, Sym(sl, sp, I(sl, fld)), Sym(sl, sp, r));
-        if (spec->as.list.items[1]->tag != F_SYM) { err(spec, "accessor must be an identifier"); return; }
-        fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, spec->as.list.items[1]->as.sym)),
+        fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_defn), Sym(sl, sp, acc_names[i]),
                         Vec(sl, sp, acc_params, 2), AnyAnn(sl, sp), read));
-        if (spec->as.list.len == 3) {
-            if (spec->as.list.items[2]->tag != F_SYM) { err(spec, "modifier must be an identifier"); return; }
+        if (mod_names[i]) {
             const Symbol *v = I(sl, "v");
             Form *mod_params[3] = { Sym(sl, sp, r), form_type_ann(sl->a, sp, Sym(sl, sp, sname)), Sym(sl, sp, v) };
             Form *store = Ln(sl, sp, 3, Sym(sl, sp, sl->t_set), read, Sym(sl, sp, v));
-            fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, rn(sl, spec->as.list.items[2]->as.sym)),
+            fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, mod_names[i]),
                             Vec(sl, sp, mod_params, 3), store));
         }
     }
+    sl->scope = saved_scope;
 }
 
 bool scheme_lower_needed(Form *const *forms, uint32_t n) {

@@ -415,10 +415,6 @@ What it does not cover:
 
 - **String literals are immutable.** R7RS allows this. See Lists,
   vectors, strings above.
-- **`define-record-type` is a top-level or library-body form.** R7RS counts it
-  a definition, so it may open any body; here one inside a `lambda` or `let`
-  body is an error naming the restriction. Define the type at the top level
-  and its constructor, predicate and accessors are in scope everywhere.
 - **A file holds one library, named after the file.** `(define-library (two
   a) ...)` lives in `two/a.tur`, the way a Turmeric module's path is its name,
   and a second `define-library` in the same file is an error. `(export (rename

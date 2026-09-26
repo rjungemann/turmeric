@@ -1,0 +1,9 @@
+#lang r7rs
+;; r7rs-define-record-type-not-an-internal-definition: define-record-type is
+;; a definition (R7RS 5.5), so it may start a body -- but not follow the
+;; body's first expression, like any other definition (R7RS 5.3.2).
+(define (f)
+  (display "x")
+  (define-record-type <box> (mk v) box? (v box-v))
+  (box-v (mk 7)))
+(display (f))

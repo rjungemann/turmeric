@@ -2801,9 +2801,11 @@ differences, as reports"):
   is the shim arity, eight, on both back ends
   ([archived](../archive/r7rs-map-for-each-at-most-four-sequences.md)); past
   eight is the `apply` bullet's limit.
-- **`define-record-type` is not an internal definition** -- top level or a
-  library body only
-  ([r7rs-define-record-type-not-an-internal-definition](../reported/r7rs-define-record-type-not-an-internal-definition.md)).
+- ~~**`define-record-type` is not an internal definition** -- top level or a
+  library body only~~ -- resolved 2026-09-26: one among a body's leading
+  definitions is lifted to the top level under fresh names the body's scope
+  maps its names to
+  ([archived](../archive/r7rs-define-record-type-not-an-internal-definition.md)).
 - **One library per file, named after the file, and no `(export (rename ...))`**
   ([r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md)).
 - **A loop whose non-tail call goes through a procedure variable** is CPS, and

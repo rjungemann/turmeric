@@ -199,6 +199,29 @@ EOF
 
 run_case "scm-extension" prog6.scm "(15 truthy (a . b))"
 
+# ---- A library procedure's internal define-record-type. -------------------
+# r7rs-define-record-type-not-an-internal-definition: the record's struct and
+# procedures are lifted into the library's module (not exported), under fresh
+# names the procedure body's scope maps its own names to.
+cat > "$TMP/reclib.tur" <<'EOF'
+#lang r7rs
+(define-library (reclib)
+  (export boxed-sum)
+  (import (scheme base))
+  (begin
+    (define (boxed-sum a b)
+      (define-record-type <box> (mk v) box? (v box-v))
+      (+ (box-v (mk a)) (box-v (mk b))))))
+EOF
+
+cat > "$TMP/prog7.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (reclib))
+(write (boxed-sum 3 4)) (newline)
+EOF
+
+run_case "library-internal-record-type" prog7.tur "7"
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1
