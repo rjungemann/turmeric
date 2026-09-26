@@ -1,0 +1,54 @@
+#lang saffron
+; saffron-lang-plan S9 (D8 Q1): a CONSTRAINED instance, dispatched on an `any`.
+;
+; `(definstance Kind [Vec] [(Kind A)] ...)` answers by dispatching `kind-of` on
+; its first element, so at the only instantiation a Saffron file builds --
+; `(Vec any)` -- it discharges `(Kind A)` at `A = any`.  There was no `Kind
+; [any]` instance, and the three routes failed three ways:
+;
+;   - dynamically, compiled: the element call kept the elaborator's carrier
+;     REPRESENTATIVE, so every vector answered "int" -- a silent wrong answer;
+;   - dynamically, interpreted: the box of a Vec was named "int" (its handle),
+;     so the whole vector went to `Kind [int]` -- the same wrong answer;
+;   - statically, both: the constrained instance was dropped as unsatisfied
+;     and the scalar leftovers were reported as an AMBIGUOUS dispatch
+;     (TUR-E0020, "receiver type is erased") on a concrete `(Vec any)`.
+;
+; The elaborator now mints a `Kind [any]` whose method dispatches on the box's
+; tag, and every route finds it.  `Shape` is the unconstrained control: its
+; Vec instance never looks at an element, and the interpreter used to send it
+; to `Shape [int]` too.
+;
+; 7.25 keeps a fraction so a float read as an int would show.
+
+(defclass Kind [a] (kind-of [x] : cstr))
+(definstance Kind [int] (kind-of [x] "int"))
+(definstance Kind [float] (kind-of [x] "float"))
+(definstance Kind [cstr] (kind-of [x] "cstr"))
+(definstance Kind [Vec] [(Kind A)]
+  (kind-of [x]
+    (let [v (:: x (Vec A))]
+      (if (>= (vec-len v) 1) (kind-of (:: (vec-get v 0) A)) "empty"))))
+
+(defclass Shape [a] (shape-of [x] : cstr))
+(definstance Shape [int] (shape-of [x] "scalar"))
+(definstance Shape [Vec] (shape-of [x] "vector"))
+
+(defn describe [x] (.kind-of x))
+(defn shape [x] (.shape-of x))
+
+(defn main []
+  ; dynamic dispatch, on the box's tag
+  (println (describe 7))
+  (println (describe 7.25))
+  (println (describe [7.25 1]))
+  (println (describe ["a" 1]))
+  (println (describe [1 "a"]))
+  (println (shape 7))
+  (println (shape [7.25]))
+  ; static dispatch, on a concrete (Vec any)
+  (let [v [7.25]
+        w (:: ["a"] (Vec any))]
+    (println (kind-of v))
+    (println (kind-of w)))
+  0)

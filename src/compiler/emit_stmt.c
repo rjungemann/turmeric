@@ -342,8 +342,18 @@ void emit_instance_dyn_table(EmitCtx *ctx, TypeClassInstance *inst,
         Type rr = emit_resolve_type(ctx, wrecv);
         const char *rcn = emit_type_c_name(ctx, rr);
         uint32_t nx = w->n_params > 0 ? w->n_params - 1 : 0;
-        buf_printf(ctx->file, "static tur_tagged_t __dynshim_%s_%s%s(int64_t __r",
-                   tc->name->name, sanitized, type_suffix);
+        /* Almost every witness returns `any`; S9's witness for a one-parameter
+         * concrete-result method on a constrained parametric head returns the
+         * declared result, so its slot matches the direct shims beside it. */
+        const char *wret = "tur_tagged_t";
+        if (w->binding->type.kind == TY_FN) {
+            const Type *wrt = w->binding->type.as.fn.result_full_type;
+            Type wr = wrt ? *wrt : emit_type_from_kind(w->binding->type.as.fn.result_kind);
+            if (wr.kind != TY_ANY && wr.kind != TY_UNKNOWN && wr.kind != TY_TYVAR)
+                wret = type_c_name(wr);
+        }
+        buf_printf(ctx->file, "static %s __dynshim_%s_%s%s(int64_t __r",
+                   wret, tc->name->name, sanitized, type_suffix);
         for (uint32_t k = 0; k < nx; k++) buf_printf(ctx->file, ", tur_tagged_t __a%u", k + 1);
         buf_puts(ctx->file, ") {\n    return ");
         buf_printf(ctx->file, "%s(", wc);

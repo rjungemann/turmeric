@@ -1,0 +1,30 @@
+#lang saffron
+; saffron-lang-plan S9 (D8 Q1): the stdlib's constrained `Eq` instances at the
+; all-`any` instantiation.
+;
+; `(.eq? [7.25 1] [7.25 1])` was TUR-E0020, "matches 21 instances ... receiver
+; type is erased": `Eq [Vec]` requires `(Eq A)` and there was no `Eq [any]`, so
+; it was dropped and every scalar instance was left over.  Through an `any`
+; (`same`) it panicked compiled -- the M9 witness served only non-parametric
+; receivers, so a method taking a second vector had no slot -- and answered
+; false interpreted, comparing each element with the baked `Eq [int]`.
+;
+; Now the elaborator mints `Eq [any]` (dispatching `eq?` on each element's
+; tag), the M9 witness covers a parametric head at `(Vec any)`, and both back
+; ends agree.  7.25 against 7.5 differs only in the fraction.
+
+(defn same [a b] (.eq? a b))
+
+(defn main []
+  (let [a [7.25 1]
+        b [7.25 1]
+        c [7.5 1]]
+    (println (.eq? a b))
+    (println (.eq? a c))
+    (println (same a b))
+    (println (same a c))
+    (println (same [1 2.5] [1 2.5]))
+    (println (same [1 2.5] [1 2.75]))
+    (println (eq? (some 7.25) (some 7.25)))
+    (println (eq? (some 7.25) (some 7.5))))
+  0)

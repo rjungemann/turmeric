@@ -65,6 +65,34 @@ The interpreter's cast does not distinguish instantiations, so it proceeds
 and happens to be right. A Scheme `(define (mk) (map-new))` is this shape
 verbatim (interpreted 42, compiled panic).
 
+## 3. An empty container literal (found 2026-09-26, saffron-lang-plan S9)
+
+The same open result, reached with no generic call in sight: `[]` lowers to
+`(vec-of)` with no element to widen, so it is an OPEN `(Vec A)` rather than the
+`(Vec any)` every non-empty literal is (S6).  An `any` holding it carries the
+open instantiation's tag, which has no registry row, so a typeclass method
+dispatched on it has nothing to find:
+
+```turmeric
+#lang saffron
+(defclass Kind [a] (kind-of [x] : cstr))
+(definstance Kind [int] (kind-of [x] "int"))
+(definstance Kind [Vec] [(Kind A)]
+  (kind-of [x] (if (>= (vec-len (:: x (Vec A))) 1) "vec" "empty")))
+(defn describe [x] (.kind-of x))
+(defn main [] (println (describe [])) 0)
+```
+
+```
+$ tur --interpret e.tur
+empty
+$ tur run e.tur
+panic at e_tur.c:...: no instance of Kind for Vec (dispatching .kind-of on an any)
+```
+
+The fix direction below covers it: grounding `vec-of`'s unbound result to
+`any` makes `[]` a `(Vec any)` like its non-empty siblings.
+
 ## Workaround
 
 Ascribe the constructor's result: `(:: (map-new) (Map cstr any))` /
