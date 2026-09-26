@@ -17,6 +17,36 @@ static void note_call_ret(EmitCtx *ctx, const char *ct) {
     snprintf(ctx->call_ret_note, sizeof ctx->call_ret_note, "%s", ct);
 }
 
+/* saffron-lang-plan S9 (D8 Q1): is this argument, about to be handed to a
+ * `tur_tagged_t` parameter of a re-resolved `C [any]` method, the CARRIER word
+ * of a boxed `any` element (so it must be read through), rather than a box the
+ * spec already spells as one?  The emitted spelling decides, not the static
+ * type: a `(Result any any)` match binder and a `vec-get` temp are both typed
+ * as the element tyvar (or its `int` carrier), yet one is declared
+ * `tur_tagged_t` and the other `int64_t`.  The same two-step question the
+ * `any` temp reader asks (emit_join_coerce's temp_is_tagged arm): the local's
+ * recorded spelling, else the value's own representation. */
+static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
+                                            const Expr *init);
+static bool emit_arg_is_any_carrier_word(EmitCtx *ctx, const char *raw,
+                                         const Expr *arg) {
+    if (!raw || !arg) return false;
+    /* A read the spec already spelled as the box -- a `(Tuple2 any any)`
+     * field -- whose STATIC type is still the `int` carrier, so the
+     * representation query below would call it a word.  The field-read
+     * emitter leaves the exact text of such a read in any_field_read_note. */
+    if (ctx->any_field_read_note[0] &&
+        strcmp(raw, ctx->any_field_read_note) == 0)
+        return false;
+    if (strncmp(raw, "(tur_tagged_t)", 14) == 0) return false;
+    const Expr *tp = arg;
+    while (tp && tp->kind == EX_ASCRIBE) tp = tp->as.ascribe_.inner;
+    const char *ct = NULL;
+    if (emit_str_is_bare_ident(raw)) ct = emit_localvar_lookup_ctype(raw);
+    if (!ct && tp) ct = emit_binding_repr_c_name(ctx, tp->type, tp);
+    return ct && strcmp(ct, "int64_t") == 0;
+}
+
 static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
@@ -11450,7 +11480,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(body, "%s %s = %s;\n", cn, spill, raw);
                         Buf vb; buf_init(&vb);
                         buf_printf(&vb, "(int64_t)(intptr_t)tur_hamt_box_key("
-                                        "(const void*)&%s, sizeof(%s))", spill, cn);
+                                        "(void *)&%s, sizeof(%s))", spill, cn);
                         buf_putc(&vb, '\0');
                         free(raw);
                         raw = strdup(vb.data);
@@ -12279,6 +12309,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (_pc && strchr(_pc, '*') != NULL && _arg_is_word) {
                         Buf _cb; buf_init(&_cb);
                         buf_printf(&_cb, "(%s)(intptr_t)(%s)", _pc, raw);
+                        buf_putc(&_cb, '\0');
+                        free(raw);
+                        raw = strdup(_cb.data);
+                        buf_free(&_cb);
+                    } else if (_pc && strcmp(_pc, "tur_tagged_t") == 0 &&
+                               emit_arg_is_any_carrier_word(ctx, raw, e->as.call_.args[i])) {
+                        /* saffron-lang-plan S9 (D8 Q1): the `any` twin.  A
+                         * constrained instance's spec at the all-`any`
+                         * instantiation re-resolves its element call to the
+                         * `C [any]` dictionary, whose method takes the BOX --
+                         * but the element read in the generic body is still
+                         * the carrier slot word, and an `any` element is
+                         * stored boxed (repr_of's REPR_BOXED_AGG at a
+                         * container element), so the word is the box's
+                         * address.  Read the box through it; the same helper
+                         * the carrier->any reader uses, 0 answering nil.
+                         *
+                         * Only for an argument that really IS a word -- see
+                         * emit_arg_is_any_carrier_word: the static type cannot
+                         * say, since a `(Result any any)` match binder and a
+                         * `vec-get` temp are both tyvar/int-typed while one is
+                         * declared `tur_tagged_t` and the other `int64_t`. */
+                        ensure_any_carrier_bridge(ctx);
+                        Buf _cb; buf_init(&_cb);
+                        buf_printf(&_cb, "__tur_any_of_carrier((int64_t)(intptr_t)(%s))", raw);
                         buf_putc(&_cb, '\0');
                         free(raw);
                         raw = strdup(_cb.data);
@@ -14693,6 +14748,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                    eff_fld_rcty, sv, acc, mp);
                     } else if (inline_byval || rec_aggregate) {
                         buf_printf(&hb, "(%s)%s%s", sv, acc, mp);
+                    } else if (eff_fld_rcty && strcmp(eff_fld_rcty, "tur_tagged_t") == 0) {
+                        /* An `any` field is read at the slot's own type,
+                         * `tur_tagged_t`, so the rvalue cast below would be a
+                         * cast to a non-scalar type: gcc/clang accept it as a
+                         * same-type extension, ISO C and the JIT engine's
+                         * c2mir refuse it ("conversion to non-scalar type
+                         * requested") and the program fell back to cc.  The
+                         * `Eq [Cons]` / `[Tuple2]` / `[Pair]` specs at the
+                         * all-`any` instantiation read their elements this way
+                         * (saffron-lang-plan S9, D8 Q1). */
+                        buf_printf(&hb, "(%s)%s%s", sv, acc, mp);
+                        if (hb.len < sizeof ctx->any_field_read_note)
+                            snprintf(ctx->any_field_read_note,
+                                     sizeof ctx->any_field_read_note, "%.*s",
+                                     (int)hb.len, hb.data);
                     } else if (eff_fld_rcty) {
                         buf_printf(&hb, "(%s)(%s)%s%s", eff_fld_rcty, sv, acc, mp);
                     } else if (use_arrow) {
@@ -14722,10 +14792,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         (fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&
                          cty && strcmp(cty, "int64_t") == 0)
                             ? fld_rcty : cty;
-                    if (fld_aggregate)
+                    /* An `any` field is the 16-byte `tur_tagged_t` -- an
+                     * aggregate too, so it takes the no-cast read for the
+                     * same reason; gcc/clang had accepted the cast as a
+                     * same-type extension, c2mir did not (S9 D8 Q1, the
+                     * `Eq [Cons]` spec at `(Cons any)`).  The read is noted
+                     * for the `C [any]` argument bridge. */
+                    bool fld_tagged = heap_fld_cast &&
+                                      strcmp(heap_fld_cast, "tur_tagged_t") == 0;
+                    if (fld_aggregate || fld_tagged) {
                         buf_printf(&hb, "((%s)(intptr_t)(%s))->%s",
                                    heap_recv_cn, sv, mp);
-                    else
+                        if (fld_tagged && hb.len < sizeof ctx->any_field_read_note)
+                            snprintf(ctx->any_field_read_note,
+                                     sizeof ctx->any_field_read_note, "%.*s",
+                                     (int)hb.len, hb.data);
+                    } else
                         buf_printf(&hb, "(%s)((%s)(intptr_t)(%s))->%s",
                                    heap_fld_cast, heap_recv_cn, sv, mp);
                 } else if (field_byval_unbox) {
@@ -17222,6 +17304,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 }
                             }
                             char *bname = name_for_binding(ctx, fb);
+                            /* S9 (D8 Q1): an `any` binder is declared as the box; record it so
+                             * the re-resolved `C [any]` call does not read it as a carrier. */
+                            if (ctype && strcmp(ctype, "tur_tagged_t") == 0)
+                                emit_localvar_record_ctype(bname, ctype);
                             /* CONV-S1 seam 4: flat named record binds `.field`; a
                              * tagged/positional ADT binds `.as.<Ctor>._N`. */
                             char *mp = adt_field_member_path(pat->ctor->adt, pat->ctor, bi);
@@ -17578,6 +17664,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                  * the union read directly and skip the shared
                                  * cast branches below. */
                                 char *bname = name_for_binding(ctx, fb);
+                                /* S9 (D8 Q1): an `any` binder is declared as the box; record it so
+                                 * the re-resolved `C [any]` call does not read it as a carrier. */
+                                if (ctype && strcmp(ctype, "tur_tagged_t") == 0)
+                                    emit_localvar_record_ctype(bname, ctype);
                                 char *mp = adt_field_member_path(pat->ctor->adt, pat->ctor, bi);
                                 indent_buf(body, ctx->indent);
                                 buf_printf(body,
@@ -17643,6 +17733,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                             emit_type_is_byvalue_adt(ctx, fb->type) &&
                                             !emit_type_is_wide_byval_adt(ctx, fb->type)) {
                                             char *bname = name_for_binding(ctx, fb);
+                                            /* S9 (D8 Q1): an `any` binder is declared as the box; record it so
+                                             * the re-resolved `C [any]` call does not read it as a carrier. */
+                                            if (ctype && strcmp(ctype, "tur_tagged_t") == 0)
+                                                emit_localvar_record_ctype(bname, ctype);
                                             char *mp = adt_field_member_path(
                                                 pat->ctor->adt, pat->ctor, bi);
                                             indent_buf(body, ctx->indent);
@@ -17660,6 +17754,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             }
                             /* Use name_for_binding to get the canonical C name */
                             char *bname = name_for_binding(ctx, fb);
+                            /* S9 (D8 Q1): an `any` binder is declared as the box; record it so
+                             * the re-resolved `C [any]` call does not read it as a carrier. */
+                            if (ctype && strcmp(ctype, "tur_tagged_t") == 0)
+                                emit_localvar_record_ctype(bname, ctype);
                             char *mp = adt_field_member_path(pat->ctor->adt, pat->ctor, bi);
                             indent_buf(body, ctx->indent);
                             /* SR1: a by-value SUM inlines its by-value aggregate

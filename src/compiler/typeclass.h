@@ -192,6 +192,17 @@ struct TypeClassInstance {
      * concrete receiver while the hole slot is grounded by the mapped element.
      * 0xFF means "no wildcard head" (a bare ctor or a fully-fixed app). */
     uint8_t partial_hole_pos;
+    /* saffron-lang-plan S9 (D8 Q1): true for a `C [any]` instance the
+     * elaborator MINTED for a dynamic program, whose every method body
+     * dispatches on the receiver box's tag.  It exists so a constrained
+     * instance -- `(definstance Show [Vec] [(Show A)] ...)` -- has a
+     * dictionary to discharge `(Show A)` with when `A = any`, which is the
+     * only instantiation a dynamic dialect builds.  An `any` receiver never
+     * resolves to it STATICALLY (that would be its own body calling itself);
+     * the any-receiver arm of elab_method_call treats it as absent and
+     * dispatches on the tag instead.  A hand-written `C [any]` (Hash, MapKey)
+     * is a real instance and leaves this false. */
+    bool dyn_any_minted;
     /* For linking */
     TypeClassInstance *next;      /* Next instance in global registry */
 };

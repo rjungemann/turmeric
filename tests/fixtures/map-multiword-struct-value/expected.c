@@ -10535,7 +10535,7 @@ int main(int argc, char **argv) {
                     /* panic-return-signal: ret ctype unknown; no propagation here */
                     int64_t __ps_255 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_2077));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    tur_adt_Map__int__Point * __ps_256 = (map_assoc_eq_o__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___int64_t_int64_t_int64_t_int64_t_int64_t(__ps_250, __ps_251, __ps_252, (int64_t)(intptr_t)tur_hamt_box_key((const void*)&__t253, sizeof(tur_adt_Point)), __ps_254, (__ps_255) + (((INT64_C(2)) * (_un_untur_unmw_un_un_2079)) + ((INT64_C(4)) * (_un_untur_unmr_un_un_2080)))));
+                    tur_adt_Map__int__Point * __ps_256 = (map_assoc_eq_o__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___int64_t_int64_t_int64_t_int64_t_int64_t(__ps_250, __ps_251, __ps_252, (int64_t)(intptr_t)tur_hamt_box_key((void *)&__t253, sizeof(tur_adt_Point)), __ps_254, (__ps_255) + (((INT64_C(2)) * (_un_untur_unmw_un_un_2079)) + ((INT64_C(4)) * (_un_untur_unmr_un_un_2080)))));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
                     __t245 = __ps_256;
                 }
@@ -10550,7 +10550,7 @@ int main(int argc, char **argv) {
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 int64_t __ps_262 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_2073));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                tur_adt_Map__int__Point * __ps_263 = (map_assoc_eq_o__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___int64_t_int64_t_int64_t_int64_t_int64_t(__ps_257, __ps_258, __ps_259, (int64_t)(intptr_t)tur_hamt_box_key((const void*)&__t260, sizeof(tur_adt_Point)), __ps_261, (__ps_262) + (((INT64_C(2)) * (_un_untur_unmw_un_un_2075)) + ((INT64_C(4)) * (_un_untur_unmr_un_un_2076)))));
+                tur_adt_Map__int__Point * __ps_263 = (map_assoc_eq_o__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___int64_t_int64_t_int64_t_int64_t_int64_t(__ps_257, __ps_258, __ps_259, (int64_t)(intptr_t)tur_hamt_box_key((void *)&__t260, sizeof(tur_adt_Point)), __ps_261, (__ps_262) + (((INT64_C(2)) * (_un_untur_unmw_un_un_2075)) + ((INT64_C(4)) * (_un_untur_unmr_un_un_2076)))));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 __t241 = __ps_263;
             }

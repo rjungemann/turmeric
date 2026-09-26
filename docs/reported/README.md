@@ -1852,7 +1852,7 @@ concrete argument kinds and has no `TY_ANY` row, so `+`, `-`, `=`, `<` and
 `println` all reject an `any` argument with TUR-E0006. That is not filed as a
 defect -- `any` is documented as a storage and reflection type -- but it is the
 single largest gap between what ships and what a dynamic dialect needs, and it
-is scoped as D4/G3-G9 in the Saffron plan.
+is scoped as D4/G3-G9 in the Saffron plan. (All landed: S3-S6, 2026-09-07/08.)
 
 ## Found writing the Saffron tour (filed 2026-09-14)
 
@@ -2185,7 +2185,8 @@ live elsewhere in this index: compiled top-level order was
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [saffron-open-generic-result-not-grounded](saffron-open-generic-result-not-grounded.md) | medium | Pre-existing on `main`. A generic constructor called with nothing to bind its type parameters -- `(map-new)` -- hands a Saffron (or `#lang r7rs`) program an OPEN `(Map K V)` that nothing ever grounds to `any`: `(map-assoc m "k" 42)` on it is a static `TUR-E0001` reported inside stdlib/map.tur (`expected &?, got &cstr`), and the same map returned through an unannotated function is a compiled `cast: any holds a different instantiation of Map` where `--interpret` prints the right answer. The seam grounds open type arguments on the target side only; the value side (the let/def binding, the return widen) keeps the open type. Workaround is an ascription the dynamic-language user has no reason to know about; the R3 seam fixture builds its map from a `#map{}` literal for this reason |
+| ~~[saffron-open-generic-result-not-grounded](../archive/saffron-open-generic-result-not-grounded.md)~~ | -- | **RESOLVED 2026-09-26** (archived), and not by the fix the title names: `(map-new)` was already `(Map any any)`. Four defects: the `(& K)` key check had no borrow seam (repro 1); the any-arg seam bound a container's type variables from a scalar sibling (repro 2, and the same panic for `vec-push!` / `unwrap-or` on an `any`); `#map{}` literals kept typed keys, so a literal behind an `any` failed every seam; and `[]` stayed an open `(Vec A)` because its `(vec-new)` carries the stdlib's span. Every Saffron map is now `(Map any any)`, keys included -- an annotated `(Map Sym any)` parameter no longer takes a literal, as `(Vec int)` never took `[1 2 3]`. Pinned by `saffron-open-generic-grounded` and `errors/saffron-typed-map-rejects-wrong-key`. |
+| [borrowed-aggregate-key-skips-the-key-check](borrowed-aggregate-key-skips-the-key-check.md) | medium | Filed 2026-09-26, pre-existing, plain Turmeric. A borrow type carries only its target KIND, and the `(& K)` binding arm (elab_call.c:1252, H9) skips non-scalar targets without checking them, so `(map-assoc m k 20)` with `m : (Map int int)` and `k : String` type-checks and inserts a String key (count 2, both back ends) while a `cstr` key is refused. In a Saffron file a struct key into a `(Map any any)` is accepted by this path before the key seam, so the callee's `&any` gets the raw struct's address -- latent, since `tur-map-kcheck` never reads its key. |
 
 ## Found landing the r7rs-gc threads plan (filed 2026-09-25)
 

@@ -259,6 +259,14 @@ typedef struct EmitCtx {
      * (whose hoist is skipped) can never leak onto a later call.  Empty
      * string == no note. */
     char  call_ret_note[256];
+    /* saffron-lang-plan S9 (D8 Q1): the exact text of the most recent field
+     * read the EX_GET_FIELD emitter spelled at the slot's own `tur_tagged_t`
+     * type -- an `any` field of an all-`any` monomorph.  Such a read is
+     * already the box, but its STATIC type is the element tyvar / its `int`
+     * carrier, so the `C [any]` argument bridge (emit_arg_is_any_carrier_word)
+     * would otherwise read it as a carrier word and dereference it.  Ground
+     * truth from the emitter, compared by exact text; empty == none. */
+    char  any_field_read_note[256];
     /* consolidation increment 2 (bind cell): set while emitting an
      * EX_POLY_WRAP argument of a call whose resolved callee is the CARRIER
      * base instance entry (an __inst_* binding with no matched by-value

@@ -70,6 +70,7 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
     inst->n_assoc_types = 0;
     inst->origin_file_id = 0;
     inst->partial_hole_pos = 0xFF;
+    inst->dyn_any_minted = false;
     inst->next = env->instances;
     env->instances = inst;
     

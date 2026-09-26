@@ -143,10 +143,13 @@ stdlib operations work on them unannotated:
 ```
 
 `#map{...}` and `#set{...}` widen the same way -- a `#map{...}` is a
-`(Map Sym any)`, a `#set{...}` a `(Set any)`. An `any` **key** works too:
-`Hash[any]` and `MapKey[any]` hash and compare by the payload, so a keyword
-held in an `any` finds the entry a bare keyword put there, and a key whose
-payload is not the map's key type is a miss. A miss on a map whose values are
+`(Map any any)`, keys included, and so is `(map-new)`; a `#set{...}` is a
+`(Set any)`. Keys of different types can share one map (`#map{"a" 1 :b 2}`),
+because `Hash[any]` and `MapKey[any]` hash and compare by the payload: a
+keyword held in an `any` finds the entry a bare keyword put there, and a key
+whose payload matches no entry is a miss. Like `[1 2 3]` against a `(Vec int)`
+parameter, a literal does not satisfy a parameter annotated with a narrower
+map type; build a typed map by ascription, `(:: (map-new) (Map Sym int))`. A miss on a map whose values are
 `any` is `nil`, which under the truthiness rule below makes
 `(if (map-get m k) ...)` a presence test.
 

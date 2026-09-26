@@ -1,5 +1,53 @@
 # Saffron: a generic constructor's OPEN result is never grounded to `any`
 
+**RESOLVED 2026-09-26 -- and the title's diagnosis was not the cause.** By the
+time this was worked, `(map-new)` in a Saffron file already WAS `(Map any any)`:
+the D8 Q3 rule (saffron-lang-plan S9) binds a still-open result variable to
+`any` before the result is instantiated.  Measured on both repros, four
+different defects stood behind the two symptoms, and each needed its own fix:
+
+1. **The key check could not take a widened key.** `map-assoc` / `map-get`
+   expand to `(tur-map-kcheck m (& k))`.  K was `any` from the map, the key's
+   borrow was `&cstr`, and a borrow cannot be widened in place -- repro 1's
+   static error.  By value (`k : K`) the widen seam already boxed such a key;
+   there was no borrow twin.  Now an immutable borrow whose parameter's type
+   variable is bound to exactly `any` borrows a widened copy, `(& (:: k any))`
+   (elab_call.c, just before the argument-mismatch diagnostic).  A typed map
+   keeps refusing a wrong key -- `errors/saffron-typed-map-rejects-wrong-key`.
+   Scalar keys only: a borrowed aggregate key never reaches the seam, and
+   is not checked against K at all -- filed as
+   [borrowed-aggregate-key-skips-the-key-check](../reported/borrowed-aggregate-key-skips-the-key-check.md).
+2. **Behind an `any`, the seam took the instantiation from a SCALAR sibling.**
+   H9 (saffron-dynamic-surface-pass) pre-bound the container's type variables
+   from the call's other arguments, so `(map-assoc (mk) "k" 42)` checked the
+   `(Map any any)` box against `(Map cstr any)` -- repro 2's compiled-only
+   panic.  The same rule broke `(defn push1 [v] (vec-push! v "x") v)` and
+   `(unwrap-or o 0)` on an `any`, which this report never mentioned.  Only a
+   CONTAINER sibling pins the instantiation now; a key or element is widened
+   to meet the grounded `any`.
+3. **`#map{...}` literals widened their values but not their keys**, so a
+   literal was `(Map cstr any)` / `(Map Sym any)` while `(map-new)` was
+   `(Map any any)` -- and a literal behind an `any` could not satisfy any
+   seam: `(map-count (mk))` for `(defn mk [] #map{"a" 1})` panicked compiled.
+   Keys widen too, raw (a mixed `#map{"a" 1 :b 2}` keeps each key's own type),
+   so every Saffron map is `(Map any any)`, as every Saffron vector, set and
+   option already was.  **User-visible:** a Saffron parameter annotated
+   `(Map Sym any)` no longer accepts a literal -- exactly as `(Vec int)` never
+   accepted `[1 2 3]`; build a typed map with `(:: (map-new) (Map Sym any))`.
+4. **`[]` was the one open literal** (section 3 below): `vec-of` expands it to
+   a `(vec-new)` carrying stdlib/vec.tur's span, and the open-result rule gated
+   on the call's span alone.  It now also consults the top-level form's
+   dialect (`e->toplevel_dynamic`), as the seams already did (M10).
+
+The diagnostic half of the fix directions is done as far as it applies: the
+borrowed parameter now prints what its variable is bound to (`expected &:Sym,
+got &cstr`, not `expected &?`), and the macro-expansion note already points at
+the user's call.  `tests/fixtures/r7rs-stdlib-seam` builds its map with
+`(map-new)`, as the fix directions asked.  Pinned by
+`tests/fixtures/saffron-open-generic-grounded` on both back ends.
+
+The original report follows.
+
 **Severity: medium.** A Saffron (or `#lang r7rs`) program that builds a
 persistent map with `(map-new)` and then inserts into it fails in one of two
 ways depending on whether the constructor is called directly or through an
@@ -64,6 +112,34 @@ checks the box against that id, which the open instantiation's id is not.
 The interpreter's cast does not distinguish instantiations, so it proceeds
 and happens to be right. A Scheme `(define (mk) (map-new))` is this shape
 verbatim (interpreted 42, compiled panic).
+
+## 3. An empty container literal (found 2026-09-26, saffron-lang-plan S9)
+
+The same open result, reached with no generic call in sight: `[]` lowers to
+`(vec-of)` with no element to widen, so it is an OPEN `(Vec A)` rather than the
+`(Vec any)` every non-empty literal is (S6).  An `any` holding it carries the
+open instantiation's tag, which has no registry row, so a typeclass method
+dispatched on it has nothing to find:
+
+```turmeric
+#lang saffron
+(defclass Kind [a] (kind-of [x] : cstr))
+(definstance Kind [int] (kind-of [x] "int"))
+(definstance Kind [Vec] [(Kind A)]
+  (kind-of [x] (if (>= (vec-len (:: x (Vec A))) 1) "vec" "empty")))
+(defn describe [x] (.kind-of x))
+(defn main [] (println (describe [])) 0)
+```
+
+```
+$ tur --interpret e.tur
+empty
+$ tur run e.tur
+panic at e_tur.c:...: no instance of Kind for Vec (dispatching .kind-of on an any)
+```
+
+The fix direction below covers it: grounding `vec-of`'s unbound result to
+`any` makes `[]` a `(Vec any)` like its non-empty siblings.
 
 ## Workaround
 

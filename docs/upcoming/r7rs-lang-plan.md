@@ -1006,8 +1006,9 @@ and getting the right answer.
 >   faces (a static error reported inside stdlib/map.tur, and a compiled
 >   panic where `--interpret` answers correctly when the map comes back
 >   through an unannotated function):
->   `docs/reported/saffron-open-generic-result-not-grounded.md` has the
->   repros and the one-site fix direction; `apply` takes at most four
+>   `docs/archive/saffron-open-generic-result-not-grounded.md` has the
+>   repros (**resolved 2026-09-26**; the fixture now builds its map with
+>   `(map-new)`); `apply` takes at most four
 >   arguments (the compiled dynamic-call helpers' limit); `string-copy`
 >   returns its argument (strings are immutable, so a copy is the value);
 >   `vector-map`/`vector-for-each`/`string-map` and the char-class
@@ -1250,10 +1251,13 @@ A prerequisite the R3 seam found: a Turmeric generic constructor called with
 nothing to bind its type parameters (`(map-new)`, and any adaptor that
 forwards to one) hands Scheme an OPEN type that nothing grounds to `any`, so
 the first insert is a static error or a compiled-only panic
-(`docs/reported/saffron-open-generic-result-not-grounded.md`). Every
+(`docs/archive/saffron-open-generic-result-not-grounded.md`). Every
 adaptor here that forwards to such a constructor either ascribes the result
 itself (`(:: (map-new) (Map any any))`) or waits on that report; the D9
 snippet as written (`(hamt-set (hamt-new) "k" 42)`) is the second face of it.
+(**Resolved 2026-09-26.** `(map-new)` from Scheme is `(Map any any)` and a
+concrete key crosses the key check; the ascriptions are now redundant but
+harmless.)
 
 > **What shipped (2026-09-24).** Every R7RS-small procedure that is not a
 > port, on both back ends, with the libraries split by cost:
