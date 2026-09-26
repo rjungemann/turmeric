@@ -109,6 +109,19 @@ misbehave yet: the dynamic method call (`__tur_dm`), the union widen
 answering differently in the engine on Linux only, this is the first thing to
 suspect -- as shape 4 above did.
 
+**Re-checked 2026-09-26 on x86-64 Linux** with a `-DTUR_JIT=ON` build:
+`tests/run-jit.sh` passed 3142 fixtures in the engine, including the ones that
+reach these sites -- `union-to-any-widen-aliases-box` and
+`docs-any-guide-examples` (`__tur_ua`), `forall-dict-byvalue-receiver` and
+`hkt-constrained-byvalue-carrier` (`__tur_pbox`), and the `saffron-dyn-*`
+family (`__tur_dm`). The one shape the report's trigger names most directly --
+several `__tur_dm` results in ONE call's argument list, with float payloads so
+a swapped argument shows -- is now pinned by
+`tests/fixtures/saffron-dyn-method-in-argument-position`, identical in the
+engine, compiled and interpreted (run-turi.sh PASS-skips it only because the
+`stdlib/rc.tur` it loads for `Foldable` carries inline C). So there is still no Turmeric-side repro;
+what keeps this open is the engine defect itself (fix direction 1).
+
 ## Fix directions
 
 1. Upstream: reduce shape 3 to plain C (a 16-byte struct returned from a

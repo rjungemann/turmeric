@@ -1,0 +1,27 @@
+#lang saffron
+;; jit-x86-64-struct-valued-statement-expression-miscompiles: the dynamic
+;; method call (`__tur_dm`) is one of the emitter's remaining struct-valued
+;; `({ ... })` sites -- a 16-byte `tur_tagged_t` local plus a call taking
+;; `tur_tagged_t` arguments, the shape c2mir/MIR-gen miscompiled on x86-64
+;; elsewhere (a sibling argument replaced by the next one).  Here two and three
+;; of them sit in ONE call's argument list, with float payloads so a swapped
+;; or clobbered argument prints a different number.  run-jit.sh runs this in
+;; the engine; it must answer exactly as `tur run` and `--interpret` do.
+(load "stdlib/rc.tur")
+(defdata Two [a] (Two [l : a r : a]))
+(definstance Foldable [Two]
+  (foldl [t init f] (f (f init (.l t)) (.r t)))
+  (foldr [t init f] (f (.l t) (f (.r t) init))))
+(defn diff2 [p q] (- p q))
+(defn tri [p q r] (+ p (* q r)))
+(defn sum-of [t] (.foldl t 0.0 (fn [acc x] (+ acc x))))
+(defn main []
+  (let [t (Two 1.5 2.25)
+        u (Two 7.25 3.5)]
+    (println (diff2 (.foldl t 0.0 (fn [acc x] (+ acc x)))
+                   (.foldl u 0.0 (fn [acc x] (+ acc x)))))
+    (println (tri (.foldr t 0.5 (fn [x acc] (- x acc)))
+                  (.foldl u 1.0 (fn [acc x] (* acc x)))
+                  (sum-of t)))
+    (println (diff2 (sum-of u) (sum-of t))))
+  0)
