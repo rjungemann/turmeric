@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.54.0` -- `defclass` superclass preambles are unconditional: `(defclass Monoid [a] [(Semigroup a)] ...)` no longer needs `--enable=class-superclasses`, and the instance obligation that keeps the entailment sound is always checked.
+**Latest release:** `v0.55.0` -- the stdlib typeclass hierarchy declares its superclasses (`Ord` over `Eq`, `Monad` over `Applicative` over `Functor`), so one constraint licenses the whole chain; and `#lang r7rs` threads run in parallel under the collected heap.
 
 ## What
 

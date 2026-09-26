@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.55.0] -- 2026-09-25
 
 ### Changed
 
@@ -69,6 +69,21 @@ All notable changes to Turmeric are documented here.
   test fixture's toy monad gained both. SC8b step 5, the last step of
   typeclass-superclasses-plan's stdlib adoption.
 
+- **Saffron: every container grounds to all-`any`.** A `#map{}` literal
+  widens its keys as well as its values, and `[]` consults the top-level
+  form's dialect, so every map a Saffron file builds is `(Map any any)`, as
+  vectors and sets already were. An immutable borrow whose parameter's type
+  variable is bound to exactly `any` borrows a widened copy, so `map-assoc`
+  and `map-get` pass their `(& K)` key check; and only a container sibling
+  pins a seam's instantiation, so `(map-assoc (mk) "k" 42)`,
+  `(vec-push! v "x")` and `(unwrap-or o 0)` on an `any` no longer panic
+  compiled. **Behavior change:** an annotated `(Map Sym any)` parameter no
+  longer accepts a `#map{}` literal, the same way `(Vec int)` never accepted
+  `[1 2 3]` -- build one with `(:: (map-new) (Map Sym any))`. A borrowed
+  generic parameter's mismatch now prints what its variable is bound to
+  (`expected &:Sym, got &cstr`, not `&?`). Resolves
+  saffron-open-generic-result-not-grounded; M10 of saffron-lang-plan.
+
 ### Added
 
 - **`Result` is an `Applicative`.** `stdlib/result.tur` ships
@@ -96,6 +111,22 @@ All notable changes to Turmeric are documented here.
   signal caused. Gate: `tests/run-r7rs-gc.sh` section 3
   (threads-run/share/roots/tls/parallel/pause/syscall/lint) and
   `tests/fixtures/r7rs-threads-*`.
+
+- **Saffron: a constrained typeclass instance dispatches at `any`** (S9 of
+  saffron-lang-plan). `(definstance Eq [Vec] [(Eq A)] ...)` discharges its
+  constraint at the element type, and every container a Saffron file builds
+  holds `any`, so there was nothing to discharge it with -- and each route
+  failed differently: compiled, the registry shim called the carrier base
+  impl, so every vector answered as the elaborator's `int` representative (a
+  silent wrong answer); interpreted, a boxed collection was named by its int
+  handle and a dynamically entered constrained instance bound no
+  dictionaries; statically, the instance was dropped as unsatisfied and
+  `(.eq? [7.25 1] [7.25 1])` reported TUR-E0020 "receiver type is erased"
+  over 21 candidates. A dynamic file now mints an `[any]` instance whose
+  methods dispatch on the box tag, a constrained parametric head gets a
+  witness at `(Head any..)`, and a carrier-word element bridges to the
+  minted method's box parameter. Fixtures `saffron-eq-vec-any`,
+  `saffron-dyn-constrained-instance`.
 
 ### Fixed
 
@@ -236,6 +267,62 @@ All notable changes to Turmeric are documented here.
 - **`tur jit`: a child forked while another thread generates code no longer
   hangs.** The engine's lazy-generation lock is now taken around `fork`
   (src/jit_engine.c).
+
+- **A class-method call on an `A` receiver is typed as `A`, not the
+  representative instance's `int`.** Inside a constrained generic such a call
+  binds to a carrier representative (the first `int` instance) and is
+  re-targeted per spec at emit, but the call's *type* was still read from the
+  representative, so a `let` took the `int`:
+  `(defn two [^N A] [x : A] : A (let [y (n x x)] (n y x)))` printed `-4` for
+  `(two -4.25)`, the double having been stored into an `int64_t`. When the
+  class declares both the receiver and the result as its own variable, the
+  call is now typed with the receiver's `A`, as the return-directed path
+  already did. **Behavior change:** `(println (n x x))` in such a generic
+  used to compile and print `0` for `0.5`; it is now the TUR-E0006 that
+  `(println x)` on an `A` value has always been. The generic-*function* twin
+  is split out, not fixed, as
+  let-bound-generic-call-result-in-generic-truncates.
+
+- **A constrained generic's float result no longer reads as `-nan` through
+  another generic.** A generic whose tail is a class-method call, called at
+  float, with its result passed by value into another generic: the spec's
+  tail elaborated against the class's first-declared (`int`) instance, and
+  the emitter re-targets the call but the return ladder read the elaborated
+  `int`, so `-4.25` printed `-nan`. The return spelling now reads the
+  re-resolved instance's declared result. Found by the nightly
+  type-confusion fuzzer at four seeds -- which had filed nothing, because
+  its reporting step requested a `fuzz` label that never existed and all
+  four findings died with "could not add label"; the step now creates the
+  label and falls back to an unlabelled issue.
+
+- **`list-dir` no longer overflows its array when a directory grows
+  mid-listing.** `stdlib/io`'s `list-dir` counted a directory's entries,
+  rewound, and filled an array sized by that count with no bound on the
+  fill, so an entry created between the two passes wrote past the allocation
+  -- which the fixture suite hit intermittently as "corrupted size vs.
+  prev_size", parallel fixtures churning `/tmp` while `io-stdlib-roundtrip`
+  listed it. It reads the directory once into a growable array now: under
+  ASan, 3000 listings of a directory another process fills and empties
+  report a heap-buffer-overflow WRITE with the old code and nothing with the
+  new.
+
+- **The boxing shim's local no longer collides with MinGW's `__in`.**
+  `__tur_fatshim_boxres_fat_*` named a local `void *__in`, and MinGW's
+  headers define `__in` as an empty SAL annotation, so the line preprocessed
+  to `void * = ...` and `hkt-generic-calls-generic` and
+  `hkt-generic-forwarded-continuation` failed to compile in the Windows
+  suite and the split-runtime jobs. Renamed to `__tur_inner`.
+
+- **`tur jit`: an `any` field is read without a cast to its own struct
+  type.** The `Eq [Cons]` / `[Tuple2]` / `[Pair]` specs at the all-`any`
+  instantiation read their `any` elements as `(tur_tagged_t)(x).e1`, and a
+  cast to the slot's own struct type is a gcc/clang extension ISO C forbids,
+  so c2mir rejected the emitted C ("conversion to non-scalar type
+  requested") and `saffron-eq-vec-any` passed only via the `cc` fallback.
+  Two field-read spellings drop the no-op cast for a `tur_tagged_t` slot,
+  and the C `[any]` argument bridge consults a note of the exact text so it
+  still recognizes an already-boxed read rather than dereferencing it as a
+  carrier word.
 
 ## [0.54.0] -- 2026-09-25
 
