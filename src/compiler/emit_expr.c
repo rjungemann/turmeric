@@ -7275,6 +7275,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             return result;
         }
         case EX_REINTERPRET: {
+            /* let-bound-generic-call-result-in-generic-truncates: a reinterpret
+             * whose target is the enclosing generic's own type variable `A`
+             * (elab_forms.c, let_bridge_sig_tyvar_result).  Its value must be
+             * resolve(A) in every clone: the int64 carrier in the base, the
+             * concrete type in a spec.  The inner call is one or the other --
+             * a spec that already returns the concrete type, or a
+             * carrier-returning base / inline-C accessor -- and the hoist temp's
+             * recorded C type says which, so bridge only a recorded carrier
+             * word.  Keyed the same way emit_carrier_bridge_escaping keys its
+             * normalize step, so a value that already IS concrete is never
+             * double-bridged. */
+            if (e->as.reinterpret_.target_kind == TY_TYVAR) {
+                char *inner = emit_value(ctx, body, e->as.reinterpret_.expr);
+                Type rt = emit_resolve_type(ctx, e->type);
+                if (rt.kind == TY_TYVAR || rt.kind == TY_UNKNOWN) return inner;
+                const char *want = emit_type_c_name(ctx, rt);
+                if (!want || strcmp(want, "int64_t") == 0) return inner;
+                if (emit_str_is_bare_ident(inner)) {
+                    const char *have = emit_localvar_lookup_ctype(inner);
+                    if (have && strcmp(have, "int64_t") == 0)
+                        return emit_carrier_bridge(ctx, body, inner,
+                                                   CK_CARRIER, CK_CONCRETE, rt);
+                }
+                return inner;
+            }
             if (e->as.reinterpret_.expr && e->as.reinterpret_.expr->kind == EX_CALL) {
                 const Expr *inner_call = e->as.reinterpret_.expr;
                 for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {

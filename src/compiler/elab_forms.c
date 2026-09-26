@@ -489,6 +489,53 @@ static const Expr *any_find_sole_drop_use(const Expr *e, const Binding *b) {
     }
 }
 
+/* let-bound-generic-call-result-in-generic-truncates: inside a generic body, a
+ * call to a generic whose declared result is a bare type variable, instantiated
+ * to one of the ENCLOSING signature's own type variables -- `(gid x)` with
+ * `x : A` inside `(defn wrap [A] ...)` -- is typed as the int64 carrier by
+ * elab_call.c (it collapses a bare-tyvar result to `int` plus a reinterpret
+ * back, and a reinterpret cannot size a tyvar, so none is added).  Passed
+ * straight to another call that is harmless: emit re-targets what it can see.
+ * Bound by a `let`, the binding took the `int`, so in a float spec the double
+ * the spec returned was VALUE-converted into an int64_t (9.75 -> 9), and at a
+ * by-value aggregate the C did not compile.
+ *
+ * Give the binding the tyvar instead, through an explicit reinterpret typed
+ * `A` that emit lowers per clone (emit_expr.c, the EX_REINTERPRET tyvar arm).
+ * The binding then behaves exactly like an `A`-typed parameter, a path every
+ * consumer already handles.  Only the binding changes: typing the CALL itself
+ * `A` was tried and broke emitter paths that rely on the carrier `int` for a
+ * call in argument position (the report records which).
+ *
+ * The tyvar must be one the enclosing signature quantifies (`sig_tyvars`):
+ * outside a generic, `(unwrap-or (none) 42)` also binds its result to a type
+ * variable -- the unbound one `(none)` minted -- and that must stay `int`. */
+static Expr *let_bridge_sig_tyvar_result(Elab *e, Expr *init) {
+    if (!init || init->kind != EX_CALL || init->type.kind != TY_INT)
+        return init;
+    const Binding *fb = init->as.call_.fn_binding;
+    if (!fb || fb->type.kind != TY_FN) return init;
+    const Type *rft = fb->type.as.fn.result_full_type;
+    if (!rft || rft->kind != TY_TYVAR || !rft->as.tyvar_.name) return init;
+    for (uint32_t k = 0; k < init->as.call_.n_abi_bindings; k++) {
+        const AbiTypeBinding *ab = &init->as.call_.abi_bindings[k];
+        if (!ab->name || strcmp(ab->name, rft->as.tyvar_.name) != 0) continue;
+        if (ab->type.kind != TY_TYVAR || !ab->type.as.tyvar_.name) return init;
+        bool in_sig = false;
+        for (uint8_t si = 0; si < e->n_sig_tyvars && !in_sig; si++)
+            in_sig = e->sig_tyvars[si] &&
+                     strcmp(e->sig_tyvars[si], ab->type.as.tyvar_.name) == 0;
+        if (!in_sig) return init;
+        Expr *r = expr_new(e->arena, EX_REINTERPRET, ab->type, init->span);
+        r->as.reinterpret_.expr = init;
+        r->as.reinterpret_.source_kind = TY_INT;
+        r->as.reinterpret_.target_kind = TY_TYVAR;
+        r->as.reinterpret_.retain = false;
+        return r;
+    }
+    return init;
+}
+
 Expr *elab_let(Elab *e, const Form *call) {
     /* (let [b1 i1 b2 i2 ...] body...)
      * Named-let: (let name [p1 v1 ...] body...) -- desugar to letrec */
@@ -1062,6 +1109,11 @@ Expr *elab_let(Elab *e, const Form *call) {
                 if (fat != init) init = fat;
             }
         }
+
+        /* let-bound-generic-call-result-in-generic-truncates: see
+         * let_bridge_sig_tyvar_result.  After every init rewrite above, so an
+         * annotation-driven widen or fn shim is never second-guessed. */
+        init = let_bridge_sig_tyvar_result(e, init);
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
         /* perform-does-not-typecheck-its-arguments: an UNANNOTATED `let` bound
@@ -3879,6 +3931,12 @@ Expr *elab_set(Elab *e, const Form *call) {
     }
     Expr *value = elab_form(e, value_form);
     if (!value) return NULL;
+    /* let-bound-generic-call-result-in-generic-truncates: a `^mut` cell whose
+     * init the `let` retyped to the enclosing signature's own `A` takes a later
+     * generic-call value through the same bridge, or `(set! y (gid x))` would
+     * compare the call's carrier `int` against the cell's `A` and refuse it. */
+    if (b->type.kind == TY_TYVAR)
+        value = let_bridge_sig_tyvar_result(e, value);
     if (!type_eq(value->type, b->type)) {
         diag_emit(DIAG_ERROR, value->span,
                   "set!: value type %s does not match binding type %s",

@@ -42,9 +42,16 @@
 # constrained-generic-float-result-into-generic-value-converts (2026-09-26).
 # The nightly found it four times (seeds 20260913, 20260917, 20260918,
 # 20260925) and filed it zero times: the workflow's `fuzz` label did not exist,
-# so every `gh issue create` failed.  Case indices below are under the
-# generator as of 2026-09-26.  20260917 (case 98) and 20260925 (case 101) hit
-# the same shape past smoke size and are deliberately not recorded; the
+# so every `gh issue create` failed.  20260917 (case 98) and 20260925 (case 101)
+# hit the same shape past smoke size and are deliberately not recorded; the
 # fixture tests/fixtures/constrained-generic-float-result-into-generic pins it.
-type 20260913   # case 8: class_nested + class_thru + gid, float leg -> -nan
-type 20260918   # case 7: class_nested + class_thru, float leg -> -nan
+#
+# The generator has since gained the class_let and gid_let crossings (the two
+# let-bound reports, both fixed), which remaps what a seed generates.  Under
+# the generator as of that change, the two rows below replay all three fixed
+# shapes on float legs at smoke size:
+#   20260913 case 8   class_let + gid_let + gid
+#   20260918 case 7   class_let + class_thru;  case 20  gid_let;
+#            case 34  class_nested + class_thru
+type 20260913   # found constrained-generic-float-result-into-generic (case 8)
+type 20260918   # found constrained-generic-float-result-into-generic (case 7)

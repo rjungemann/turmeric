@@ -1,0 +1,62 @@
+;; let-bound-generic-call-result-in-generic-truncates -- RESOLVED.
+;;
+;; Inside a generic body, a call to a generic whose declared result is a bare
+;; type variable, instantiated to the ENCLOSING generic's own `A`, is typed as
+;; the int64 carrier.  Bound by a `let`, the binding took that type, so in a
+;; float spec the emitted C read
+;;
+;;   double  __ps0 = (gid__spec__double_double(x));   ;; right
+;;   int64_t y     = __ps0;                           ;; VALUE conversion
+;;
+;; and 9.75 came back 9.  At a by-value aggregate the same line did not
+;; compile, and a carrier-returning accessor (`vec-get`) handed back the raw
+;; bits read as an integer -- 1.5 printed 4.60943e+18.  No typeclass is
+;; involved.  The binding is now typed `A`, through a reinterpret the emitter
+;; lowers per clone: pass-through when the call already returns the concrete
+;; type, a carrier bridge when it returns the carrier word.
+;;
+;; Unbound, the same calls were right, which is why only `let` shapes failed.
+;; `tur --interpret` was right throughout.  Every float literal has a non-zero
+;; fractional part: an integer-valued float survives a value conversion.
+(defclass N [a] (n [x : a y : a] : a))
+(definstance N [int]   (n [x y] x))
+(definstance N [float] (n [x y] x))
+
+(defstruct P [a : int b : float])
+
+(defn gid [A] [x : A] : A x)
+(defn one [^N A] [x : A] : A (n x x))
+
+;; a user generic's result, let-bound
+(defn wrap  [A] [x : A] : A (let [y (gid x)] y))
+;; a let chain, and a binding used after another call
+(defn chain [A] [x : A] : A (let [y (gid x) z (gid y)] (gid z)))
+;; a constrained generic's result, then dispatched on
+(defn wrapc [^N A] [x : A] : A (let [y (one x)] (n y x)))
+;; stdlib accessors: a carrier-returning inline-C read, and an Option read
+(defn first-of [A] [v : (Vec A)] : A (let [y (vec-get v 0)] y))
+(defn from-opt [A] [o : (Option A) d : A] : A (let [y (unwrap-or o d)] y))
+;; a ^mut cell, reset with set! to another generic call's result (the set!
+;; value takes the same bridge), and a cell typed A by a parameter
+(defn reset-cell [A] [x : A] : A (let [^mut y (gid x)] (set! y (gid x)) y))
+(defn store [A] [x : A d : A] : A (let [^mut y d] (set! y (gid x)) y))
+
+(defn main [] : int
+  (println (wrap 9.75))
+  (println (chain -4.25))
+  (println (wrapc 7.1))
+  (println (first-of (vec-of 1.5 2.5)))
+  (println (from-opt (some 3.25) 0.5))
+  (println (.b (wrap (P 1 2.5))))                 ;; by-value struct
+  (println (unwrap-or (wrap (some 6.75)) 0.5))    ;; Option
+  (println (wrap (:: 7.1 float32)))               ;; float32
+  (println (reset-cell 3.25))
+  (println (store 6.5 0.25))
+  (println (let* [p (wrap (P 2 8.5))] (.b p)))    ;; let* at the call site
+  ;; controls: these instantiations were always right
+  (println (wrap 7))
+  (println (chain "abc"))
+  (println (wrap true))
+  ;; outside a generic the carrier typing stays: (none)'s tyvar is not `A`
+  (let [z (unwrap-or (none) 42)] (println z))
+  0)
