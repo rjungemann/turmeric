@@ -7,8 +7,41 @@ the importing file's own directory or the stdlib cannot be interpreted at all.
 That silently excludes every spice, every workspace, and every test that lives
 in a `tests/` sibling of `src/` -- which is to say all of them.
 
-**Status:** open. Found 2026-09-17 archiving
-[signal-compose-hand-rolled-vec-readers](../archive/signal-compose-hand-rolled-vec-readers.md),
+**RESOLVED 2026-09-26** -- all three fix directions.
+
+- **`-I` on the interpreter arms.** `tur interpret` / `tur --interpret` and
+  `tur debug` collect the `-I dir` / `-Idir` flags that come BEFORE the file
+  (`interp_leading_include_flags`, `src/main.c`); everything after the file
+  is still the program's `*args*`, a `-I` there included. A bare trailing
+  `-I` is a clear error instead of a file named `-I`. `tur eval --file`
+  takes `-I` anywhere, as its other flags do.
+- **A channel to the elaborator.** `TuriEnv` carries borrowed
+  `include_dirs` / `n_include_dirs` (`src/turi/env.h`), and both
+  `elaborate_program_session` calls in `src/turi/eval.c` pass them instead
+  of `NULL, 0`.
+- **Spice walk-up.** `cmd_eval_h` appends `auto_append_spice_includes` for
+  the script -- the enclosing spice's `src/` and its `:spices` deps -- after
+  the caller's `-I` dirs, honouring `--no-auto-spice`, and drops a dir that
+  is already on the list.
+- **The stale comment.** `run_delegate_engine`'s `interp` branch now threads
+  `user_inc` through and its comment says what happens.
+
+Two leaks the new fixture's leak-checked `tur` runs exposed are fixed with
+it: the interpreter's `*args*` cons cells were never freed, and
+`tur run --engine=interp <file>` dropped its auto-spice include list.
+
+Pinned by `tests/fixtures/interpret-spice-imports` (a `hook.sh` fixture: a
+`src/` + `tests/` spice built in a scratch dir), which runs the repro from
+the spice root with no flags, with `-I src`, with `-Isrc` plus program
+args, through `tur run --engine=interp` (with and without `-I`), through
+`tur eval --file -I`, and from outside the spice with `-I`; plus the two
+negative rows (`--no-auto-spice` with no `-I`, and outside the spice with
+no `-I`) that still report `module 'demo/core' not found`.
+`docs/guides/developing-spices-guide.md` lists the interpreter entry points
+alongside the other per-file commands.
+
+**Status at filing:** open. Found 2026-09-17 archiving
+[signal-compose-hand-rolled-vec-readers](signal-compose-hand-rolled-vec-readers.md),
 whose whole stated payoff was interpreter coverage for the `signal/compose`
 fixtures. That report's fix landed and is correct; the coverage it was buying
 turns out to be blocked one layer up, here.
