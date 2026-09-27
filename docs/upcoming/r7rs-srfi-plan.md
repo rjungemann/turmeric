@@ -1,13 +1,15 @@
 # SRFI libraries for `#lang r7rs`, after Racket's
 
-Status: **S1 and S0 landed 2026-09-26; S2 landed 2026-09-27 except SRFI 17**
-(see their "What shipped" and "What S0 found" notes). SRFI 17 waits on
-docs/reported/r7rs-prelude-procedures-lose-identity.md. S3-S8 to come. `(import (srfi N))` resolves for every SRFI
-in the table: the ten built-in rows and the two alias rows import, and the
-rest are refused with their reason. S0's inventory is
-[Appendix C](#appendix-c----s0-inventory); its measurement says a big SRFI
-needs its unreferenced definitions dropped before emission, which S3 builds
-first. Every "today" claim in Sections 1-2 was measured on
+Status: **S1 and S0 landed 2026-09-26; S2 landed 2026-09-27 except SRFI 17;
+S3 (the pruning pass and SRFI 1) landed 2026-09-27** (see their "What
+shipped" and "What S0 found" notes). SRFI 17 waits on
+docs/reported/r7rs-prelude-procedures-lose-identity.md. S4-S8 to come.
+`(import (srfi N))` resolves for every SRFI in the table: the ten built-in
+rows and the two alias rows import, and the rest are refused with their
+reason. S0's inventory is [Appendix C](#appendix-c----s0-inventory). Its
+measurement said a big SRFI needs its unreferenced definitions dropped
+before emission. S3 built that first, and an unused `(import (srfi 1))` now
+costs nothing. Every "today" claim in Sections 1-2 was measured on
 2026-09-26 against `./build/tur` at fdd51fc9 (Debug build), on both back ends
 (`tur run` and `tur --interpret`), before S1. The transcript is in
 [Appendix A](#appendix-a----probe-transcript). Every claim about Racket was
@@ -735,6 +737,103 @@ fixture itself runs on both back ends.
 - chibi's `lib/srfi/1/test.sld` (156 tests) under `tests/r7rs/srfi/1/` (D7).
 - The build-time delta from S0 (+1.6 s unpruned), re-measured on the real
   file with the pass on.
+
+> **What shipped (2026-09-27).** Everything above, and two defects the work
+> tripped over.
+>
+> - **The pruning pass** is `src/passes/srfi_prune.c`. `compile_to_c` runs
+>   it on the final program, after the transform passes and just before
+>   `emit_program`, so every path that emits a single translation unit
+>   (`emit-c`, `build`, `run`, the JIT) is covered. Separate compilation and
+>   the interpreter are left alone, and a REPL session keeps every
+>   definition for later turns.
+>   - **Candidates** are the top-level `defn`s and `def`s whose span is in a
+>     `stdlib/srfi/` file, with the lambdas lifted out of them. A `def` is a
+>     candidate only when its initializer has no effect (a literal, a
+>     reference, a lambda, or a wrapper around one). Nothing with C linkage
+>     is a candidate, and neither is anything exported while an exports
+>     manifest is being written.
+>   - **Roots** are every other item. The walk follows every `Binding` a
+>     node names, plus the links the emitter may spell in a binding's place
+>     (`closure_fn_binding`, `source_fn_def`, `widen_fn_alias`,
+>     `deferred_init`, ...). Instance method bodies are walked too.
+>   - **It lists every expression kind**, with no `default`, so `-Wswitch`
+>     names a kind added later. A kind the walk does not recognize at run
+>     time makes it give up and prune nothing.
+>   - The removed items take their C functions, forward declarations, fat
+>     boxes and startup initializers with them, because the emitter makes all
+>     of those from the items it is given.
+>   - `TUR_NO_SRFI_PRUNE=1` turns it off, and `TUR_SRFI_PRUNE_DEBUG=1` says
+>     what it kept and what reached each one.
+>   - `tests/check-r7rs-srfi-prune.sh` (ctest `tur_r7rs_srfi_prune`) is the
+>     fixture this stage asked for. `run-r7rs-import.sh` adds a library that
+>     uses SRFI 1 beside a program that uses other parts of it, procedures
+>     passed as values, and a library-only import.
+> - **The pass first kept 191 of SRFI 1's definitions alive** in a program
+>   that called none of them. The Scheme lowering defers a `define`'s
+>   initializer that comes after the program's first top-level expression,
+>   turning it into a `set!` in `main` (R7RS 5.1's order). It applied that
+>   to the SRFI's own defines too, since they are lowered in place beside the
+>   program. So `(define first car)` became a `set!` in `main`, which named
+>   `first`, and everything its initializer named. Only the program's own
+>   defines are deferred now. A library's are initialized in the library's
+>   order, before the program runs, as a `define-library`'s always were.
+> - **The measurement**, repeated as S0 did it (Debug `tur`, 4 cores, idle,
+>   median of three; `cc` timed through a `CC` wrapper):
+>
+>   | Program | `tur build` | `cc` | C lines | C functions |
+>   |---|---|---|---|---|
+>   | `p0`: `(write 1)` | 3.42 s | 2.53 s | 28,855 | 1,625 |
+>   | `p1`: `p0` importing `(srfi 1)`, none of it called | 3.50 s | 2.59 s | 28,855 | 1,625 |
+>   | `p1` with the pass off | 4.91 s | -- | 33,929 | 1,862 |
+>   | `p2`: `p1` calling `fold` | 4.21 s | 3.16 s | 29,400 | 1,651 |
+>   | `p2` with the pass off | 5.01 s | -- | -- | -- |
+>   | `p4`: `p0` defining chibi's `fold`, `any`, `every`, `map-onto` itself | 4.06 s | 3.02 s | 29,400 | 1,651 |
+>
+>   An unused import now costs nothing: `p1`'s C is `p0`'s, up to the
+>   numbering of lifted lambdas. `p2` is +0.8 s over `p0`, not the +0.2 s S0
+>   estimated from a one-line `fold` (`p3`). That is chibi's `fold`, not the
+>   splice. The n-ary branch calls `every`, `map`, `apply` and `map-onto`,
+>   and `p4`, the same code written in the program, emits the same 29,400
+>   lines and builds in the same time.
+> - **SRFI 1 is chibi's** `(else ...)` branch and its nine included files,
+>   as written, in `stdlib/srfi/1.scm`. The names it shares with
+>   `(scheme base)` and `(scheme cxr)` are re-exported (D5). R7RS's `append`
+>   was two-argument, so it became variadic, as R7RS 6.4 says, since chibi's
+>   code calls it with one argument and with three.
+> - **chibi's suite** is `tests/r7rs/srfi/1/tests.scm`: 157 of the 161 tests
+>   the runner counts pass on both back ends. The floor is 157. The four
+>   failures:
+>   - `(car '())`, `(cdr '())` and `(every odd? '(1 3 . x))` under
+>     `test-error` are the uncatchable panics of
+>     docs/reported/r7rs-type-errors-are-uncatchable-panics.md;
+>   - `(set-car! (g) 3)` on a quoted constant is not an error here. R7RS
+>     says mutating a literal "is an error", but it does not require the
+>     implementation to signal one; chibi's literals are immutable.
+>
+>   The runner now finds a form that fails the C build by bisection, fails
+>   that form alone, and carries on. It also no longer counts a test that
+>   is commented out inside a form.
+> - **A capture bug the suite found**, in plain Turmeric as well: a lambda
+>   that calls a let-bound lambda did not capture it. `(let [g (fn [] 1)]
+>   ((fn [] (g))))` named an undeclared `g` in the C. That was so as far
+>   back as v0.41.0. A lambda that captures nothing is held in a local as a
+>   C function pointer. `collect_free_vars` counted a call through a local
+>   as a capture only for a few kinds of binding (a parameter, a closure, a
+>   letrec member, ...), and a plain let-bound one was not among them. It
+>   is now any function-typed binding that is not global. The env fill then
+>   stores the pointer through `intptr_t` into the carrier field; a plain
+>   assignment was a `-Wint-conversion`, an error under clang. Pinned by
+>   `tests/fixtures/closure-calls-let-bound-lambda` and
+>   `r7rs-guard-calls-local-lambda`.
+> - **Fixtures:** `r7rs-srfi-1` pins the edge cases above on both back
+>   ends. `errors/r7rs-srfi-not-yet` and `r7rs-srfi-cond-expand` move their
+>   "not yet" pin from SRFI 1 to SRFI 69.
+> - **Reported, not fixed:**
+>   docs/reported/r7rs-raise-musttail-fails-under-clang-x86-64.md. Under
+>   clang on x86-64, any program that raises fails to build, the SRFI
+>   suites included. CI compiles with gcc on Linux and with clang on arm64,
+>   so it does not see it.
 
 ### S4 -- SRFI 69 hash tables (medium)
 

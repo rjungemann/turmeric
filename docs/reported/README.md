@@ -2248,14 +2248,16 @@ The first two came from SRFI 2's `and-let*`, whose whole point is guarding
 a call that would fail. Neither blocks S2: chibi's SRFI 2 suite passes in
 full, because its guarded calls are to `+`, which takes `any`. The third
 blocks SRFI 17. The fourth is from S2's pull request's macOS CI, in a
-collector test the stage did not touch.
+collector test the stage did not touch. The fifth turned up in S3, while
+checking that pull request's fix under clang.
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [r7rs-dead-mistyped-call-refused-at-compile-time](r7rs-dead-mistyped-call-refused-at-compile-time.md) | medium | `(let ((x #f)) (if x (car x) 0))` and a never-called `(define (g) (car 5))` are TUR-E0001 "expected R7rsPair, got bool/int" on both back ends: the typed prelude's argument check refuses a concrete mismatch that R7RS makes an error only when it runs. Fix: in a dynamic file, widen and let the checked cast fail at run time |
 | [r7rs-type-errors-are-uncatchable-panics](r7rs-type-errors-are-uncatchable-panics.md) | medium | `(car 5)` through a variable panics ("cast: any holds int, not R7rsPair") on both back ends; `guard` cannot catch it, where chibi and Racket raise an error object. Fix: in `#lang r7rs`, a failed boundary cast raises an error object |
 | [r7rs-prelude-procedures-lose-identity](r7rs-prelude-procedures-lose-identity.md) | medium | `(eqv? car car)` is `#f` on both back ends: boxing a typed prelude procedure as `any` wraps it in a fresh adaptor at every reference (`saffron_dyn_fn_adaptor`, elab_call.c:825), so each reference is a new procedure. The program's own procedures keep their identity. Blocks SRFI 17, whose `setter` table is keyed on `car`, `vector-ref`, ... Fix: one adaptor per function, made once per compile |
-| [r7rs-gc-threads-lifecycle-macos-timeout](r7rs-gc-threads-lifecycle-macos-timeout.md) | low-medium | `threads-lifecycle` timed out (>300 s) under `TUR_GC_TORTURE=31` on macOS CI (PR #948), on a runtime with the Linux world-lock fix. It normally takes about 89 s there (13 s on Linux), so this is either a macOS-only stall or a slow tail. `run-r7rs-gc.sh` now prints every thread's stack at the deadline, so the next sighting tells which |
+| ~~[r7rs-gc-threads-lifecycle-macos-timeout](../archive/r7rs-gc-threads-lifecycle-macos-timeout.md)~~ | low-medium | **RESOLVED 2026-09-27** (archived): a deadlock. The harness's new stack dump caught it on PR #949. macOS's `pthread_create` holds libpthread's thread-list lock, and the collector's `pthread_kill` takes it. A thread stopped mid-create held the lock the collector then waited on. `tur_gc_pthread_create` and `tur_gc_pthread_detach` now park around the libc call. Original row: `threads-lifecycle` timed out (>300 s) under `TUR_GC_TORTURE=31` on macOS CI (PR #948) |
+| [r7rs-raise-musttail-fails-under-clang-x86-64](r7rs-raise-musttail-fails-under-clang-x86-64.md) | medium | Found landing S3: every `#lang r7rs` program that reaches `raise` fails to build with clang on x86-64 ("failed to perform tail call elimination on a call site marked musttail" in `r7rs_hyraise`). Only with the call/cc runtime `tur build` pastes, and only at `-O1` and above: most likely a `__builtin_setjmp` wrapper inlined into the `musttail` caller. CI misses it (gcc on Linux, arm64 on macOS) |
 
 ## Found fixing the captured-`^mut` copy (filed 2026-09-26)
 

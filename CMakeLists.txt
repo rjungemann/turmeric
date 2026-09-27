@@ -1170,6 +1170,15 @@ add_test(
   COMMAND bash tests/check-r7rs-srfi-sync.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# r7rs-srfi-plan S3: src/passes/srfi_prune.c drops the SRFI definitions a
+# program never reaches -- an unused (import (srfi 1)) emits the same C as no
+# import, and one that calls `fold` emits `fold` and what it calls.
+add_test(
+  NAME tur_r7rs_srfi_prune
+  COMMAND bash tests/check-r7rs-srfi-prune.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_srfi_prune PROPERTIES TIMEOUT 720)
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
 # LOADED in a real Vim and queried for highlight groups -- which is what caught
 # the fused-vs-spaced annotation bug.  The vscode half is structure and pattern

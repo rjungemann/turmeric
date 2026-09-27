@@ -39,6 +39,9 @@ source.tur
  Borrow check    (src/passes/borrow_check.c)
     |
     v
+ SRFI prune      (src/passes/srfi_prune.c)
+    |  single-TU emission only: unreached stdlib/srfi/ definitions dropped
+    v
  Emitter         (src/compiler/emit_*.c)
     |  C99 source
     v
@@ -346,6 +349,17 @@ Ownership, move, and borrow analysis (Phase 14). Validates that:
 
 Lifetime annotation parsing and automatic lifetime elision (similar to Rust's
 rules). These are utilities used by the borrow checker.
+
+### srfi_prune.c / srfi_prune.h
+
+Drops each top-level definition from a `stdlib/srfi/` file that nothing
+outside those files reaches, transitively, so an `#lang r7rs` program pays only
+for the SRFI procedures it uses (r7rs-srfi-plan S3). `compile_to_c` calls it
+on the final program just before `emit_program`; it is not in the
+`run_core_passes` list, because separate compilation and REPL sessions must keep
+every definition. The walk lists every expression kind and gives up (pruning
+nothing) on one it does not recognize, so a new `ExprKind` needs an arm there
+-- `-Wswitch` points at it.
 
 ### rc_elision.c / rc_elision.h
 

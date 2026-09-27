@@ -1,0 +1,14 @@
+#lang r7rs
+;; A `guard` body (and any lambda) calling a local lambda: the shape that hid
+;; the capture bug tests/fixtures/closure-calls-let-bound-lambda pins, as
+;; SRFI 1's suite wrote it.
+(import (scheme base) (scheme write))
+(let ((g (lambda () (list 'x))))
+  (write (guard (e (#t 'caught)) (g)))
+  (write ((lambda () (g))))
+  (write (call-with-current-continuation (lambda (k) (g))))
+  (write (dynamic-wind (lambda () #f) (lambda () (g)) (lambda () #f))))
+(newline)
+(define (mk) (let ((g (lambda () 7))) (lambda () (g))))
+(write ((mk)))
+(newline)

@@ -396,7 +396,9 @@ kind each one is:
   import is accepted and costs nothing; the program compiles to exactly the
   same code without it. Importing it next to `(scheme base)` is fine.
 - **alias**: a few new names for R7RS procedures.
-- **library**: an implementation, loaded when imported.
+- **library**: an implementation, loaded when imported. Only the procedures
+  the program (or a library it imports) reaches are compiled, so an import
+  whose procedures go unused costs nothing.
 - **no library**: the syntax is always on, so there is nothing to import.
   The import is an error that says so, as in Racket.
 - **not planned**: refused, with the reason.
@@ -423,7 +425,7 @@ R7RS's own forms already are the SRFI's.
 | SRFI | Title | Here | Racket | Notes |
 |---|---|---|---|---|
 | 0 | Feature-based conditional expansion construct | no library | no module | `cond-expand` is R7RS syntax; `srfi-N` identifiers answer for each SRFI here |
-| 1 | List Library | not yet (S3) | library |  |
+| 1 | List Library | library | library | chibi's implementation. The names it shares with `(scheme base)` and `(scheme cxr)` (`map`, `member`, `assoc`, `list-copy`, ...) are R7RS's own procedures, which have SRFI 1's extensions; the linear-update `!` procedures are the pure ones |
 | 2 | AND-LET* | library | library | `and-let*`; a bare clause may be any expression, as in chibi |
 | 4 | Homogeneous numeric vector datatypes | not yet (S7) | library, no reader syntax | `u8vector` will be the bytevector type |
 | 5 | A compatible let form with signatures and rest arguments | not yet (S8) | library |  |

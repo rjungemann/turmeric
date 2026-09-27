@@ -51,7 +51,11 @@
  * its start routine until nothing of the thread is left: a joinable thread's
  * until the join, a detached one's until its key destructors have run (the
  * collector's own key, re-armed to run last).  A fork takes every collector
- * lock first, so the child never inherits one another thread held.
+ * lock first, so the child never inherits one another thread held.  A thread
+ * must never be stopped holding a lock the collector's own stop takes: on
+ * macOS pthread_kill takes libpthread's thread-list lock, so the calls that
+ * hold it (pthread_create, pthread_detach, pthread_join) are release points
+ * too.
  *
  * The runtime archive (libturt_runtime.a: the HAMT, rc<T>, strings, symbols)
  * allocates through the hook in src/runtime/rt_alloc.h, which the
@@ -1165,7 +1169,16 @@ static int tur_gc_pthread_create(pthread_t *tp, const pthread_attr_t *a,
     t->next = G->threads; G->threads = t;
     pthread_mutex_unlock(&G->world);
     pthread_t tid;
+    /* Parked across the create: macOS's pthread_create holds libpthread's
+     * global thread-list lock while it links the new thread in, and
+     * pthread_kill takes the same lock to find its target.  Stopped there by
+     * the signal, this thread would hold the lock the collector's next
+     * pthread_kill waits on -- a deadlock (docs/archive/
+     * r7rs-gc-threads-lifecycle-macos-timeout.md).  Parked, it is never
+     * signalled, and pthread_create touches nothing the collector scans. */
+    tur_gc_park();
     int rc = pthread_create(&tid, a, tur_gc_thread_main, t);
+    tur_gc_unpark();
     pthread_mutex_lock(&G->world);
     if (rc != 0) tur_gc_retire(t);
     else if (t->gen == gen) { t->tid = tid; t->has_tid = true; }
@@ -1216,7 +1229,12 @@ static int tur_gc_pthread_detach(pthread_t tid) {
             }
         pthread_mutex_unlock(&G->world);
     }
-    return pthread_detach(tid);
+    /* Parked for the reason tur_gc_pthread_create is: macOS's pthread_detach
+     * takes the thread-list lock too. */
+    tur_gc_park();
+    int rc = pthread_detach(tid);
+    tur_gc_unpark();
+    return rc;
 }
 
 /* pthread_setspecific, keeping the value as a root of the calling thread:

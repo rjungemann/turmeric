@@ -190,17 +190,26 @@
 ;;; r7rs-list-ref -- the k-th element, zero-based.
 (defn r7rs-list-ref [p k : int] : any (r7rs-car (r7rs-list-tail p k)))
 
-;;; r7rs-append -- two lists, the first copied.
+;;; r7rs-append2__ -- two lists, the first copied (quasiquote's splice).
 (defn r7rs-append-go__ [p b last] : any
   (if (r7rs-null? p)
     (do (r7rs-set-cdr! last b) last)
     (r7rs-append-go__ (r7rs-cdr p) b (r7rs-snoc__ last (r7rs-car p)))))
-(defn r7rs-append [a b] : any
+(defn r7rs-append2__ [a b] : any
   (if (r7rs-null? a)
     b
     (let [h (R7rsPair (r7rs-car a) b)]
       (r7rs-append-go__ (r7rs-cdr a) b h)
       h)))
+;;; r7rs-append -- the lists joined, each but the last copied (R7RS 6.4):
+;;; `(append)` is (), `(append x)` is x, and the last may be any object.
+(defn r7rs-append-all__ [c : (Cons any)] : any
+  (if (tnil? c)
+    r7rs-null-value__
+    (if (tnil? (.tail c))
+      (.head c)
+      (r7rs-append2__ (.head c) (r7rs-append-all__ (.tail c))))))
+(defn r7rs-append [& ls : any] : any (r7rs-append-all__ (:: ls (Cons any))))
 ;;; r7rs-reverse -- a reversed copy.
 (defn r7rs-reverse-go__ [p acc] : any
   (if (r7rs-null? p) acc (r7rs-reverse-go__ (r7rs-cdr p) (R7rsPair (r7rs-car p) acc))))
@@ -2427,8 +2436,8 @@
 (defn r7rs-features [] : any
   (r7rs-list (:: (str->sym "r7rs") any) (:: (str->sym "exact-closed") any)
              (:: (str->sym "ratios") any) (:: (str->sym "turmeric") any)
-             (:: (str->sym "srfi-0") any) (:: (str->sym "srfi-2") any) (:: (str->sym "srfi-6") any)
-             (:: (str->sym "srfi-8") any) (:: (str->sym "srfi-9") any)
+             (:: (str->sym "srfi-0") any) (:: (str->sym "srfi-1") any) (:: (str->sym "srfi-2") any)
+             (:: (str->sym "srfi-6") any) (:: (str->sym "srfi-8") any) (:: (str->sym "srfi-9") any)
              (:: (str->sym "srfi-11") any) (:: (str->sym "srfi-16") any)
              (:: (str->sym "srfi-23") any) (:: (str->sym "srfi-26") any)
              (:: (str->sym "srfi-30") any) (:: (str->sym "srfi-31") any)

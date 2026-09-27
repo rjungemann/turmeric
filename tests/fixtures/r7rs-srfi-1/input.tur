@@ -1,0 +1,47 @@
+#lang r7rs
+;; r7rs-srfi-plan S3: SRFI 1 on both back ends.  chibi's suite
+;; (tests/r7rs/srfi/1/) is the thorough check; this pins the edge cases the
+;; plan asked to confirm against the SRFI, and the base-compatible names
+;; being R7RS's own procedures (D5).
+(import (scheme base) (scheme write) (srfi 1))
+(define (show x) (write x) (newline))
+
+;; The names SRFI 1 shares with (scheme base) carry its extensions: `map` and
+;; `for-each` stop at the shortest list, `member` and `assoc` take a
+;; comparison, and `list-copy` copies the spine of an improper list.
+(show (map + '(1 2 3) '(10 20)))
+(show (let ((acc '())) (for-each (lambda (a b) (set! acc (cons (* a b) acc))) '(1 2 3) '(4 5)) acc))
+(show (member 2.0 '(1 2 3) =))
+(show (assoc 2.0 '((1 . a) (2 . b)) =))
+(show (let* ((l (cons 1 (cons 2 3))) (c (list-copy l))) (list c (eq? l c))))
+
+;; length+ and the circular-list procedures agree with (scheme base)'s list?.
+(define c (circular-list 1 2 3))
+(show (list (length+ c) (length+ '(1 2 3)) (circular-list? c) (list? c)
+            (proper-list? '(1 2)) (dotted-list? '(1 . 2)) (take c 5)))
+
+;; Constructors, selectors and the folds.
+(show (list (xcons 1 2) (cons* 1 2 '(3 4)) (list-tabulate 4 (lambda (i) (* i i)))
+            (iota 5) (iota 5 0 -1) (first '(a b c)) (third '(a b c)) (last '(a b c))))
+(show (list (fold cons* '() '(a b c) '(1 2 3)) (fold-right cons '() '(1 2 3))
+            (reduce + 0 '(1 2 3 4)) (reduce max 'none '())
+            (unfold (lambda (x) (> x 5)) (lambda (x) (* x x)) (lambda (x) (+ x 1)) 1)))
+(show (list (take '(a b c d) 2) (drop '(a b c d) 2) (take-right '(a b c d) 1)
+            (drop-right '(a b c d) 1) (append-reverse '(3 2 1) '(4 5))))
+
+;; Filtering, searching and deletion; partition answers with two values.
+(show (call-with-values (lambda () (partition even? '(1 2 3 4 5 6))) list))
+(show (call-with-values (lambda () (span even? '(2 4 5 6))) list))
+(show (list (filter odd? '(1 2 3 4 5)) (remove odd? '(1 2 3 4 5)) (find even? '(1 3 4 5))
+            (find-tail even? '(1 3 4 5)) (any even? '(1 3 5)) (every odd? '(1 3 5))
+            (list-index even? '(1 3 4)) (count even? '(1 2 4)) (filter-map (lambda (x) (and (even? x) (* x x))) '(1 2 3 4))))
+(show (list (delete 3 '(1 3 2 3)) (delete-duplicates '(a b a c b)) (append-map list '(1 2) '(a b))))
+
+;; Association lists and lists as sets.
+(show (list (alist-cons 'k 1 '((j . 2))) (alist-delete 'a '((a . 1) (b . 2) (a . 3)))))
+(show (list (lset-union eq? '(a b) '(b c)) (lset-intersection eq? '(a b c) '(b c d))
+            (lset-difference eqv? '(1 2 3) '(2)) (lset-adjoin eq? '(a b) 'c 'a)
+            (lset= eq? '(a b) '(b a)) (lset<= eq? '(a) '(a b))))
+
+;; The linear-update procedures are the pure ones, which the SRFI allows.
+(show (let* ((l (list 1 2 3)) (r (reverse! l))) (list r l)))

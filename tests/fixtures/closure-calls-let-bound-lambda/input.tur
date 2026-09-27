@@ -1,0 +1,23 @@
+;; A lambda that calls a let-bound lambda must capture it.  A lambda that
+;; captures nothing is held in a local as a plain function pointer, and a call
+;; through one from an inner lambda was not counted as a use of the local:
+;; the inner lambda was lifted without it, and its C named an undeclared `g`.
+;; Found by SRFI 1's suite (r7rs-srfi-plan S3), where `(g)` sat in a `guard`
+;; body; any inner lambda showed it.
+(defn run [f : (fn [] int)] : int (f))
+
+(defn main [] : int
+  (let [g (fn [] : int 1)
+        h (fn [] : int (g))]
+    (println (h)))
+  (let [x 5
+        g (fn [] : int 1)
+        h (fn [] : int (+ x (g)))]
+    (println (h)))
+  (let [g (fn [y : int] : int (* y 2))]
+    (println (run (fn [] : int (g 21))))
+    (println ((fn [] : int (let [k (fn [] : int (g 4))] (k))))))
+  (let [x 3
+        g (fn [y : int] : int (* y x))]
+    (println ((fn [] : int (g 4)))))
+  0)
