@@ -11,9 +11,12 @@ top-level forms, and the program is rebuilt around the failures:
      below).  A test that RAISES is caught by the harness's `guard` and fails
      on its own.
   2. A form the front end rejects before anything runs is named by the
-     diagnostic's line number, dropped, and the program rerun.  A failure no
-     diagnostic pins on a form (a C compiler error in the emitted code, a
-     compiler crash) ends the back end's pass: what has not run counts failed.
+     diagnostic's line number, dropped, and the program rerun.  A build
+     failure no diagnostic pins on a form (a C compiler error in the emitted
+     code, a compiler crash) is bisected on the compiled back end to the one
+     form that reproduces it, which is dropped the same way; one no single
+     form reproduces ends the back end's pass: what has not run counts
+     failed.
   3. A form that stops the program once it is running -- the interpreter
      elaborates top-level forms one at a time, so an unknown name surfaces
      here too, as does a panic `guard` cannot catch, a signal or a timeout --
@@ -250,7 +253,10 @@ def static_test_count(src):
     if head in DEF_HEADS:
         return 0
     total = 0
-    for m in re.finditer(r"\((test[-a-z]*)[\s)]", src):
+    # A test commented out inside a form (`;;(test ...)`) is not one.
+    code = re.sub(r'"(?:[^"\\]|\\.)*"|;[^\n]*',
+                  lambda m: m.group(0) if m.group(0)[0] == '"' else "", src)
+    for m in re.finditer(r"\((test[-a-z]*)[\s)]", code):
         total += TEST_HEADS.get(m.group(1), 0)
     return total
 
@@ -327,6 +333,60 @@ def run_program(tur, backend, text, timeout):
     return out, err, timed_out
 
 
+def build_fails(tur, forms, idxs, timeout):
+    """(True, first error line) when the program of these forms does not build
+    and no diagnostic names one of them -- the C compiler rejected emitted
+    code, or the compiler crashed; (False, None) otherwise."""
+    text, owner = build_program(forms, sorted(idxs))
+    with tempfile.NamedTemporaryFile("w", suffix=".tur", prefix="conformance-bisect-",
+                                     delete=False, encoding="utf-8") as f:
+        f.write(text)
+        path = f.name
+    out_bin = path[:-4] + ".bin"
+    env = dict(os.environ)
+    env.setdefault("ASAN_OPTIONS", "detect_leaks=0")
+    cmd = [tur] + ["--enable=" + e for e in ENABLES] + ["build", path, "-o", out_bin]
+    try:
+        p = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env, cwd=ROOT)
+        err = p.stderr.decode("utf-8", "replace")
+        failed = p.returncode != 0
+    except subprocess.TimeoutExpired:
+        err, failed = "", False
+    finally:
+        os.unlink(path)
+        if os.path.exists(out_bin):
+            os.unlink(out_bin)
+    if not failed or any(int(m.group(1)) in owner for m in DIAG_RE.finditer(err)):
+        return False, None
+    lines = [l for l in err.strip().splitlines() if "error" in l] or err.strip().splitlines() or ["?"]
+    return True, lines[0][:120]
+
+
+def bisect_build_failure(tur, forms, pending, timeout, verbose, backend):
+    """One form that alone, beside the suite's definitions, makes the build
+    fail with no diagnostic naming it, or None.  A C compiler error has no
+    suite line, so the round cannot drop the form it came from the way it drops
+    a rejected one; halving the test-bearing forms finds it in a handful of
+    builds (r7rs-srfi-plan S3: one miscompiled form in SRFI 1's suite kept
+    the whole compiled pass from running)."""
+    fixed = [i for i in pending if static_test_count(forms[i][2]) == 0]
+    cands = [i for i in pending if static_test_count(forms[i][2]) > 0]
+    if not cands or build_fails(tur, forms, fixed, timeout)[0]:
+        return None, None
+    while len(cands) > 1:
+        half = cands[:len(cands) // 2]
+        if build_fails(tur, forms, fixed + half, timeout)[0]:
+            cands = half
+        else:
+            cands = cands[len(cands) // 2:]
+    bad, why = build_fails(tur, forms, fixed + cands, timeout)
+    if not bad:
+        return None, None
+    if verbose:
+        print("  [%s] bisected a build failure to suite line %d" % (backend, forms[cands[0]][0]))
+    return cands[0], why
+
+
 def run_backend(tur, backend, forms, verbose, timeout, keep=None, rejected=None,
                 checks=None):
     """{form index: (passes, fails, note)} for every form with tests.  The
@@ -347,11 +407,20 @@ def run_backend(tur, backend, forms, verbose, timeout, keep=None, rejected=None,
             # Rejected before running: drop every form an error points at.
             bad = sorted({owner[int(m.group(1))] for m in DIAG_RE.finditer(err)
                           if int(m.group(1)) in owner})
+            if not bad and not timed_out and backend == "compiled":
+                # Nothing names a form, but the build failed: find the form
+                # by bisection, count it failed, and go on without it.
+                culprit, why = bisect_build_failure(tur, forms, pending, timeout, verbose, backend)
+                if culprit is not None:
+                    results[culprit] = (0, None, "build failed: " + why)
+                    pending = [i for i in pending if i != culprit]
+                    continue
             if not bad:
-                # Nothing names a form: a C compiler error in emitted code, a
-                # compiler crash, a timeout before the first form.  There is no
-                # form to drop, so stop and say so -- every form still pending
-                # counts failed, and the reason is the tail of the output.
+                # Nothing names a form: a C compiler error in emitted code no
+                # single form reproduces, a compiler crash, a timeout before
+                # the first form.  There is no form to drop, so stop and say
+                # so -- every form still pending counts failed, and the reason
+                # is the tail of the output.
                 why = "timeout" if timed_out else "build failed: " + (
                     ([l for l in err.strip().splitlines() if "error" in l] or
                      err.strip().splitlines() or ["?"])[0][:120])

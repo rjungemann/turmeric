@@ -791,6 +791,8 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                       cur->as.call_.fn_binding->is_match_binding) ||
                      (cur->as.call_.fn_binding->type.kind == TY_FN &&
                       cur->as.call_.fn_binding->is_letrec_binding) ||
+                     (cur->as.call_.fn_binding->type.kind == TY_FN &&
+                      !cur->as.call_.fn_binding->is_global) ||
                      cur->as.call_.fn_binding->is_fat ||
                      cur->as.call_.is_poly_call)) {
                     /* TY_FN local value: a function-typed binding invoked as the
@@ -821,10 +823,19 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                      * (is_poly_call -- the dispatch path emits `f.fn(f.env,...)`,
                      * so the carrier value must be reached through the env).
                      * All are callable values that the inner closure must
-                     * capture by env, not bare function references.  A let-bound
-                     * non-capturing fn is lifted as a global and is excluded by
-                     * the is_global check below (which also avoids regressing
-                     * letrec/named-let self-recursion). */
+                     * capture by env, not bare function references.
+                     *
+                     * So is any other function-typed LOCAL.  A let-bound lambda
+                     * that captures nothing has no closure_fn_binding: its
+                     * lifted body is a global, but the binding itself is a
+                     * local holding the C function pointer
+                     * (`int64_t (*g)() = __fn_N`), and `(fn [] (g))` must carry
+                     * that pointer in its env or name an undeclared `g`
+                     * (r7rs-srfi-plan S3; tests/fixtures/closure-calls-let-
+                     * bound-lambda).  A binding that really is global -- a
+                     * defn, or a captureless letrec member lifted as one -- is
+                     * excluded by the is_global check below, which also keeps
+                     * letrec/named-let self-recursion out. */
                     Binding *fb = cur->as.call_.fn_binding;
                     bool fb_is_param = false;
                     for (uint32_t i = 0; i < n_params; i++) {

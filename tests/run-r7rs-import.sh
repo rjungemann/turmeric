@@ -453,6 +453,41 @@ EOF
 
 run_case "srfi-in-library-only" prog13.tur "(30 4)"
 
+# r7rs-srfi-plan S3: SRFI 1's definitions are pruned to what the whole
+# program reaches, after every module is elaborated.  A library that uses
+# `fold` and `delete` and a program that uses `filter` and `first` as values
+# (fat boxes) and `lset-union` through apply must each keep their own; the
+# library's `unused-here` is never called.
+cat > "$TMP/listlib.scm" <<'EOF'
+(define-library (listlib)
+  (export total without unused-here)
+  (import (scheme base) (srfi 1))
+  (begin
+    (define (total xs) (fold + 0 xs))
+    (define (without x xs) (delete x xs))
+    (define (unused-here xs) (lset-xor eq? xs xs))))
+EOF
+
+cat > "$TMP/prog14.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (srfi 1) (listlib))
+(define pick first)
+(write (list (total (iota 5)) (without 2 '(1 2 3 2)) (map pick '((a b) (c d)))
+             ((lambda (f) (f odd? '(1 2 3))) filter) (apply lset-union eq? '((a b) (b c)))))
+(newline)
+EOF
+
+run_case "srfi-1-program-and-library" prog14.tur "(10 (1 3) (a c) (1 3) (c a b))"
+
+cat > "$TMP/prog15.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (listlib))
+(write (list (total '(1 2 3)) (without 'a '(a b a))))
+(newline)
+EOF
+
+run_case "srfi-1-in-library-only" prog15.tur "(6 (b))"
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1

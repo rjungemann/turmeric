@@ -13245,6 +13245,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             "TUR_REGION_NOTE_WORDS(__tur_cbox, sizeof *__tur_cbox); "
                             "%s->%s = (int64_t)(intptr_t)__tur_cbox; }\n",
                             val_cty, val_cty, val_cty, cn, fat_tmp, field);
+                    } else if (captured->type.kind == TY_FN && !captured->is_poly_fn &&
+                               !captured_is_pbp) {
+                        /* A function value's field is the int64_t carrier (see
+                         * the env struct), but a lambda that captures nothing is
+                         * held in its local as a bare C function pointer --
+                         * `int64_t (*g)() = __fn_N` -- and assigning that to the
+                         * field is a -Wint-conversion (an error under clang).
+                         * Bridge it through intptr_t, which is a no-op for a
+                         * value already held as the carrier. */
+                        buf_printf(body, "%s->%s = (int64_t)(intptr_t)(%s);\n",
+                                   fat_tmp, field, cn);
                     } else {
                         buf_printf(body, "%s->%s = %s%s;\n",
                                    fat_tmp, field, captured_is_pbp ? "*" : "", cn);

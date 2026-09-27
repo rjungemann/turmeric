@@ -8,6 +8,8 @@ elsewhere keeps its copyright notice there and its licence here
 
 File       From                                      Licence
 ---------  ----------------------------------------  -----------------------
+1.scm      chibi-scheme lib/srfi/1.sld and the       BSD-3 (chibi, below)
+           nine lib/srfi/1/*.scm files it includes
 2.scm      chibi-scheme lib/srfi/2.sld               BSD-3 (chibi, below)
 8.scm      SRFI 8's reference implementation         MIT (SRFI, below)
            Copyright (C) John David Stone (1999)

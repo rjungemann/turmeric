@@ -230,6 +230,7 @@ set(TUR_CORE_SOURCES
     passes/lifetime_elision.c
     passes/lifetimes.c
     passes/rc_elision.c
+    passes/srfi_prune.c
     # runtime/ -- memory, data structures, execution
     runtime/arc.c
     runtime/arena.c

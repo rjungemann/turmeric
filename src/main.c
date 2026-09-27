@@ -59,6 +59,7 @@
 #include "buf.h"
 #include "borrow_check.h"  /* Phase 14 */
 #include "cps.h"          /* Phase 18: CPS transformation */
+#include "srfi_prune.h"   /* r7rs-srfi-plan S3: unreached SRFI definitions */
 #include "cps_ir.h"       /* CPS2: ANF/CPS IR (--dump-cps) */
 #include "diag.h"
 #include "effect_check.h" /* Phase P19-2: effect-row inference */
@@ -1095,6 +1096,11 @@ static int compile_to_c(const char *path, Buf *out_c,
             /* DEDUP-4b: decide before emitting -- the preamble's text depends
              * on whether the archive will supply the rc<T>/GC runtime. */
             resolve_rcgc_from_archive();
+            /* r7rs-srfi-plan S3: the whole program is here now, so an SRFI
+             * definition nothing reaches can go before it costs a C function
+             * (and a startup fat box).  Exports stay when a manifest of them
+             * is being written. */
+            srfi_prune_program(ctx.arena, ctx.prog, g_manifest_sink != NULL);
             if (emit_program(out_c, ctx.prog) != 0) rc = 1;
             /* J2: the REPL's in-process spice build wants the exports
              * manifest from this same single-TU compile (the sink is set

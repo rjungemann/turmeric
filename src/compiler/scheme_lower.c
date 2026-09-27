@@ -403,7 +403,7 @@ typedef struct { int num; int kind; const char *title; const char *file; const c
 static const SrfiRow SRFI_LIBS[] = {
     {   0, SRFI_NOLIB,      "Feature-based conditional expansion construct", NULL,
         "cond-expand is R7RS syntax, available without an import" },
-    {   1, SRFI_NOTYET,     "List Library", NULL, "S3" },
+    {   1, SRFI_LIBRARY,    "List Library", "stdlib/srfi/1.scm", NULL },
     {   2, SRFI_LIBRARY,    "AND-LET*", "stdlib/srfi/2.scm", NULL },
     {   4, SRFI_NOTYET,     "Homogeneous numeric vector datatypes", NULL, "S7" },
     {   5, SRFI_NOTYET,     "A compatible let form with signatures and rest arguments", NULL, "S8" },
@@ -701,7 +701,7 @@ static void sl_init(SL *sl, Arena *a, SymbolTable *st) {
     sl->p_chain_to_list = I(sl, "r7rs-chain->list__");
     sl->p_values_ref = I(sl, "r7rs-values-ref");
     sl->p_values_rest = I(sl, "r7rs-values-rest");
-    sl->p_cons = I(sl, "r7rs-cons");         sl->p_append = I(sl, "r7rs-append");
+    sl->p_cons = I(sl, "r7rs-cons");         sl->p_append = I(sl, "r7rs-append2__");
     sl->p_vector = I(sl, "r7rs-vector");     sl->p_list_to_vector = I(sl, "r7rs-list->vector");
     sl->p_char = I(sl, "r7rs-char__");
     sl->p_big = I(sl, "r7rs-big__");
@@ -3230,7 +3230,7 @@ static Form *lower_datum(SL *sl, Form *d) {
 }
 
 /* Quasiquote: the datum walker with holes.  At depth 1 an `unquote` is an
- * expression and an `unquote-splicing` element splices via `r7rs-append`;
+ * expression and an `unquote-splicing` element splices via `r7rs-append2__`;
  * a nested quasiquote raises the depth and its unquotes lower it, staying
  * data (R7RS 4.2.8). */
 static Form *lower_qq(SL *sl, Form *f, int depth);
@@ -3771,7 +3771,12 @@ static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
          * deferred: `(define x y)` after a deferred `y` must read it after
          * its assignment. */
         bool defer_init = false;
-        if (sl->toplevel_expr_seen && out != &sl->lib_body) {
+        /* Only the program's own defines: an SRFI's (or the prelude's),
+         * lowered in place beside it, are a library's, initialized in the
+         * library's order before the program runs -- and a deferred one is a
+         * `set!` in the program's main, which keeps it and all it names alive
+         * past r7rs-srfi-plan S3's pruning. */
+        if (sl->toplevel_expr_seen && sl->in_user && out != &sl->lib_body) {
             const Form *raw = f->as.list.items[2];
             if (raw->tag == F_SYM) defer_init = true;
             else if (raw->tag == F_LIST && raw->as.list.len > 0) {
@@ -4017,7 +4022,7 @@ static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
         sl->user_main = true;
     /* A top-level expression of the program (not of a library body): every
      * define after it runs its initializer in order -- see the define arm. */
-    if (out != &sl->lib_body) sl->toplevel_expr_seen = true;
+    if (out != &sl->lib_body && sl->in_user) sl->toplevel_expr_seen = true;
     /* R9 / r7rs-repl-toplevel-expression-value-not-widened: at the REPL
      * prompt (a synthetic `<eval>` source, the user's lines after the pinned
      * preload) a top-level expression's value is what the prompt echoes, and
