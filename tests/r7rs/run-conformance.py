@@ -65,6 +65,7 @@ SUITE = os.path.join(HERE, "chibi-r7rs-tests.scm")
 # r7rs-srfi-plan D7: the same runner counts an SRFI's own suite
 # (tests/r7rs/srfi/<N>/tests.scm), with its import added to the header.
 EXTRA_IMPORTS = []
+BASE_EXCEPT = []
 
 # plan T7: tests that fail on a difference kept on purpose.  Keyed by the
 # form's text; each entry is the input string and the spelling
@@ -83,8 +84,8 @@ TEST_HEADS = {
     "test": 1, "test-assert": 1, "test-error": 1, "test-values": 1,
     "test-numeric-syntax": 2, "test-write-syntax": 1, "test-precision": 1,
     "test-read-error": 1, "test-not": 1, "test-equal": 1,
-    # SRFI 69's suite defines these two over test-equal.
-    "test-lset-eq?": 1, "test-lset-equal?": 1,
+    # SRFI 69's suite defines these two over test-equal, SRFI 14's test-cs.
+    "test-lset-eq?": 1, "test-lset-equal?": 1, "test-cs": 1,
 }
 DEF_HEADS = {"define", "define-syntax", "define-record-type", "define-values"}
 
@@ -283,6 +284,10 @@ DIAG_RE = re.compile(r"conformance[^:]*\.tur:(\d+):\d+: error")
 def build_program(forms, keep):
     """Program text, and a map from its line numbers to form indices."""
     header = HEADER
+    if BASE_EXCEPT:
+        # An SRFI whose names conflict with (scheme base)'s (D5: SRFI 13's
+        # string-map and string-for-each) leaves R7RS's out.
+        header = header.replace("(scheme base)", "(except (scheme base) %s)" % " ".join(BASE_EXCEPT), 1)
     if EXTRA_IMPORTS:
         # r7rs-srfi-plan D7: an SRFI's own suite imports the SRFI too.
         header = header.rstrip()[:-1] + "\n        " + " ".join(EXTRA_IMPORTS) + ")\n"
@@ -548,12 +553,15 @@ def main():
     ap.add_argument("--suite", default=SUITE, help="the file of tests (default: chibi's R7RS suite)")
     ap.add_argument("--import", dest="imports", action="append", default=[],
                     help="an import set added to the header, e.g. '(srfi 2)' (repeatable)")
+    ap.add_argument("--base-except", dest="base_except", action="append", default=[],
+                    help="a name to leave out of the header's (scheme base) (repeatable)")
     ap.add_argument("--label", default="r7rs-conformance", help="the name the summary lines carry")
     ap.add_argument("--enable", action="append", default=[],
                     help="an experiment to turn on for every run (repeatable)")
     args = ap.parse_args()
     ENABLES.extend(args.enable)
     EXTRA_IMPORTS.extend(args.imports)
+    BASE_EXCEPT.extend(args.base_except)
 
     with open(args.suite, encoding="utf-8") as f:
         text = f.read()

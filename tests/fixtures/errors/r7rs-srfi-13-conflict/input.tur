@@ -1,0 +1,8 @@
+#lang r7rs
+;; r7rs-srfi-plan D5 / R7RS 5.2: SRFI 13's string-map and string-for-each
+;; take one string and a range, R7RS's several strings -- two meanings for
+;; one name.  Importing both is refused, naming both libraries and the fix,
+;; for each name; the fix (except (scheme base) ...) is what
+;; r7rs-srfi-13 imports.
+(import (scheme base) (srfi 13))
+(string-index "abc" #\b)

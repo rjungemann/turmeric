@@ -2438,7 +2438,8 @@
              (:: (str->sym "ratios") any) (:: (str->sym "turmeric") any)
              (:: (str->sym "srfi-0") any) (:: (str->sym "srfi-1") any) (:: (str->sym "srfi-2") any)
              (:: (str->sym "srfi-6") any) (:: (str->sym "srfi-8") any) (:: (str->sym "srfi-9") any)
-             (:: (str->sym "srfi-11") any) (:: (str->sym "srfi-16") any)
+             (:: (str->sym "srfi-11") any) (:: (str->sym "srfi-13") any)
+             (:: (str->sym "srfi-14") any) (:: (str->sym "srfi-16") any)
              (:: (str->sym "srfi-23") any) (:: (str->sym "srfi-26") any)
              (:: (str->sym "srfi-30") any) (:: (str->sym "srfi-31") any)
              (:: (str->sym "srfi-34") any) (:: (str->sym "srfi-38") any)
@@ -2505,8 +2506,21 @@
 (defn r7rs-char-ci>? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci>2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-char-ci<=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci<=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-char-ci>=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci>=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
-(defn r7rs-string-upcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 0))
-(defn r7rs-string-downcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 1))
+;;; string-upcase and string-downcase take SRFI 13's optional [start, end)
+;;; too, and then map just those characters: a compatible extension, so
+;;; (srfi 13) re-exports these rather than giving the names a second meaning
+;;; next to (scheme char) (r7rs-srfi-plan D5).
+(defn r7rs-case-map__ [who : cstr s r : (Cons any) op : int] : cstr
+  (if (tnil? r)
+    (r7rs-uc-string__ (r7rs-str__ s) op)
+    (let [v (r7rs-cps__ s)
+          rl (r7rs-chain->list__ r)
+          a (r7rs-range-start__ rl)
+          b (r7rs-range-end__ rl (vec-len v))]
+      (r7rs-range-check__ who a b (vec-len v))
+      (r7rs-uc-string__ (r7rs-cps->cstr__ v a b) op))))
+(defn r7rs-string-upcase [s & r : any] : cstr (r7rs-case-map__ "string-upcase" s (:: r (Cons any)) 0))
+(defn r7rs-string-downcase [s & r : any] : cstr (r7rs-case-map__ "string-downcase" s (:: r (Cons any)) 1))
 (defn r7rs-string-foldcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 2))
 (defn r7rs-string-ci=2__ [a b] : bool (r7rs-string=2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
 (defn r7rs-string-ci<2__ [a b] : bool (r7rs-string<2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))

@@ -407,10 +407,17 @@ kind each one is:
 
 `only`, `except`, `prefix` and `rename` work on an SRFI as on any library,
 and their names are checked against its export list. One imported name has
-one binding (R7RS 5.2). Renaming an SRFI's procedure onto a name R7RS already
-has, next to `(scheme base)`, is an error that names both, and so is defining
-a name an SRFI import binds. `(except (srfi N) name)` keeps the name for the
-program.
+one binding (R7RS 5.2). Where an SRFI's procedure extends R7RS's compatibly
+(SRFI 1's `map`, SRFI 13's `string-copy`), the SRFI's name is R7RS's own
+procedure, so importing both is no conflict. Where it does not (SRFI 13's
+`string-map` and `string-for-each`), or where a rename puts an SRFI's
+procedure onto a name R7RS already has, importing it next to `(scheme base)`
+is an error that names both libraries. Leave R7RS's out, move it or respell
+it -- `(except (scheme base) string-map string-for-each)`, `(rename ...)`,
+`(prefix (scheme base) b:)` -- or prefix the SRFI's. Defining a name an SRFI
+import binds is an error too; `(except (srfi N) name)` keeps the name for the
+program. Two SRFIs that give one name different meanings (SRFI 13's and
+SRFI 69's `string-hash`) conflict the same way.
 
 `cond-expand` knows the table too. `srfi-N` holds for every SRFI marked built
 in, alias, library or no library, and `(library (srfi N))` holds for the ones
@@ -434,8 +441,8 @@ R7RS's own forms already are the SRFI's.
 | 8 | RECEIVE: Binding to multiple values | library | library | `receive`, the SRFI's own definition |
 | 9 | Defining Record Types | built in | library | R7RS `define-record-type` is SRFI 9's |
 | 11 | Syntax for receiving multiple values | built in | library | R7RS `let-values` takes dotted rest formals |
-| 13 | String Libraries | not yet (S5) | library |  |
-| 14 | Character-set Library | not yet (S5) | library |  |
+| 13 | String Libraries | library | library | Written for Turmeric: each procedure reads its string once, as a vector of characters, and returns fresh mutable strings. `string-map` and `string-for-each` are SRFI 13's (one string and a range), so they conflict with R7RS's: import `(except (scheme base) string-map string-for-each)`. The other names it shares with `(scheme base)` and `(scheme char)` are R7RS's procedures; `string-upcase` and `string-downcase` take SRFI 13's range and keep R7RS's full case mapping (`"stra\xDF;e"` upcases to `"STRASSE"`), while the `!` forms map one character to one. `string-filter` and `string-delete` take the criterion first, as the SRFI says, or the string first, as its drafts did. Imports SRFI 14 for its char sets |
+| 14 | Character-set Library | library | library | Written for Turmeric: a set is an inversion list, so the algebra is one merge and membership a binary search. The standard sets cover all of Unicode, as SRFI 14's 2019 CharsetDefs note defines them (`char-set:letter` is the Alphabetic property, `char-set:punctuation` the P* categories, ...), and each is built the first time a program uses it. `char-set:full` is every Unicode scalar value. The linear-update `!` procedures are the pure ones |
 | 16 | Syntax for procedures of variable arity | built in | re-export | `(scheme case-lambda)` |
 | 17 | Generalized set! | not yet (S2) | library | waits on standard procedures keeping their identity (`(eqv? car car)` is `#f` today), which `setter` is keyed on |
 | 19 | Time Data Types and Procedures | not yet (S8) | library |  |

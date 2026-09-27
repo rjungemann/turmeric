@@ -412,8 +412,8 @@ static const SrfiRow SRFI_LIBS[] = {
     {   8, SRFI_LIBRARY,    "RECEIVE: Binding to multiple values", "stdlib/srfi/8.scm", NULL },
     {   9, SRFI_BUILTIN,    "Defining Record Types", "stdlib/srfi/9.scm", NULL },
     {  11, SRFI_BUILTIN,    "Syntax for receiving multiple values", "stdlib/srfi/11.scm", NULL },
-    {  13, SRFI_NOTYET,     "String Libraries", NULL, "S5" },
-    {  14, SRFI_NOTYET,     "Character-set Library", NULL, "S5" },
+    {  13, SRFI_LIBRARY,    "String Libraries", "stdlib/srfi/13.scm", NULL },
+    {  14, SRFI_LIBRARY,    "Character-set Library", "stdlib/srfi/14.scm", NULL },
     {  16, SRFI_BUILTIN,    "Syntax for procedures of variable arity", "stdlib/srfi/16.scm", NULL },
     {  17, SRFI_NOTYET,     "Generalized set!", NULL, "S2" },
     {  19, SRFI_NOTYET,     "Time Data Types and Procedures", NULL, "S8" },
@@ -620,14 +620,14 @@ typedef struct SL {
     /* r7rs-srfi-plan S1: what each `(import (srfi N))` bound -- the visible
      * name, what it means, and the SRFI it came from (for D5's messages) --
      * the SRFI files read this pass, and the two facts about the unit D5's
-     * checks need: whether it imports (scheme base), and its own top-level
+     * checks need: its import sets of (scheme base), and its own top-level
      * definitions. */
     const Symbol       **srfi_from, **srfi_to;
     int64_t             *srfi_by;
     uint32_t             n_srfi, cap_srfi;
     struct SrfiLib     **srfilib;
     uint32_t             n_srfilib, cap_srfilib;
-    bool                 imports_base;
+    FB                   base_sets;
     FB                   user_globals;
 } SL;
 
@@ -1075,6 +1075,7 @@ static const Symbol *type_named_global(SL *sl, const Symbol *s) {
     return I(sl, buf);
 }
 
+static const Symbol *rn_std(SL *sl, const Symbol *s);
 static const Symbol *rn_global(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_renames; i++)
         if (sl->renames[i].from == s) return sl->renames[i].to;
@@ -1103,8 +1104,13 @@ static const Symbol *rn_global(SL *sl, const Symbol *s) {
             if (!sl->prefixes[i].alias) {
                 /* Alias-less (a global library): the prefix comes off, and the
                  * bare name resolves as written -- through a rename inside
-                 * the prefix, `(prefix (rename (scheme base) (car kar)) p:)`. */
-                return rn_global(sl, I(sl, s->name + sl->prefixes[i].plen));
+                 * the prefix, `(prefix (rename (scheme base) (car kar)) p:)`,
+                 * else as the library's own name, whatever an SRFI's import
+                 * or an `except` made the bare name mean (D5). */
+                const Symbol *bare = I(sl, s->name + sl->prefixes[i].plen);
+                for (uint32_t r = 0; r < sl->n_renames; r++)
+                    if (sl->renames[r].from == bare) return sl->renames[r].to;
+                return rn_std(sl, bare);
             }
             /* The rest is the module's spelling: a form-named export was
              * renamed in the library (`gen` -> `gen--user`), so it is here. */
@@ -1129,6 +1135,17 @@ static const Symbol *rn_global(SL *sl, const Symbol *s) {
         if (sl->od_from[i] == s && sl->od_lib[i] >= 0 && sl->lib_imported[sl->od_lib[i]])
             return sl->od_to[i];
     return s;
+}
+
+/* What a (scheme ...) library's own name means: its procedure, whatever the
+ * unit's `except`s did to the bare name. */
+static const Symbol *rn_std(SL *sl, const Symbol *s) {
+    for (size_t i = 0; i < N_RENAMES; i++)
+        if (sl->rn_from[i] == s) return sl->rn_to[i];
+    for (size_t i = 0; i < N_ONDEMAND; i++)
+        if (sl->od_from[i] == s && sl->od_lib[i] >= 0 && sl->lib_imported[sl->od_lib[i]])
+            return sl->od_to[i];
+    return rn(sl, s);
 }
 
 static bool is_char_form(SL *sl, const Form *f);
@@ -4250,12 +4267,14 @@ static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
         if (sl->n_excluded < 64) sl->excluded[sl->n_excluded++] = x;
         else { err(spec->except.items[i], "too many (except ...) names"); return; }
     }
-    /* Renames: the new name means the library's (rn'd) name. */
+    /* Renames: the new name means the library's (rn'd) name -- for a
+     * (scheme ...) library, its standard meaning, whatever an `except` of the
+     * same name in another import set made the bare name mean. */
     FB refer = {0};
     for (uint32_t i = 0; i + 1 < spec->renames.n; i += 2) {
         const Symbol *orig = spec->renames.items[i + 1]->as.sym;
         if (lx && lib_syntax_exports(lx, orig)) continue;   /* a macro: registered above */
-        const Symbol *to = rn(sl, orig);
+        const Symbol *to = mod ? rn(sl, orig) : rn_std(sl, orig);
         if (sl->n_renames < 64) {
             sl->renames[sl->n_renames].from = spec->renames.items[i]->as.sym;
             sl->renames[sl->n_renames].to   = to;
@@ -5281,9 +5300,10 @@ static void lib_syntax_import(SL *sl, LibSyntax *lx, const SchemeImportSpec *spe
  *     at all when the name is unchanged, so a built-in SRFI's import emits
  *     nothing.
  *
- * An SRFI file imports (scheme ...) libraries only, for now; an on-demand
- * one's names are spelled onto their procedures in the SRFI's own forms, so
- * the SRFI's import does not make them visible to the program.
+ * An SRFI file imports (scheme ...) libraries and other SRFIs: an on-demand
+ * library's names, and another SRFI's exports, are spelled onto their
+ * targets in the SRFI's own forms, so the SRFI's import does not make them
+ * visible to the program.
  * ------------------------------------------------------------------------- */
 static bool srfi_span(Span sp) {
     const SourceFile *f = diag_source_file(sp.file_id);
@@ -5297,6 +5317,7 @@ static const Symbol *srfi_spelling(SL *sl, int64_t num, const Symbol *name) {
 typedef struct SrfiLib {
     int64_t num;
     bool    registered;
+    bool    spliced;           /* its body's forms went into this pass's stream */
     FB      exp_pub, exp_in;   /* exports: the public name, the name in the library */
     FB      macros;            /* its define-syntax names */
     FB      defined;           /* the names its body defines */
@@ -5304,17 +5325,34 @@ typedef struct SrfiLib {
     FB      from, to;          /* its own names -> their spellings (definitions,
                                 * macros, and its on-demand imports' names) */
 } SrfiLib;
-/* The (scheme ...) imports of an SRFI's define-library: an on-demand
- * library's names map onto its procedures.  Anything else is refused. */
+static SrfiLib *srfi_lib_of(SL *sl, int64_t num);
+static void srfi_lib_register(SL *sl, SrfiLib *lib);
+/* The imports of an SRFI's define-library: an on-demand (scheme ...)
+ * library's names map onto its procedures, and another SRFI's exports onto
+ * their spellings (S5: SRFI 13 imports SRFI 14), its macros registered.  An
+ * SRFI is imported whole, by a bare `(srfi N)`.  Anything else is refused. */
 static void srfi_scan_imports(SL *sl, Form *deflib, FB *from, FB *to) {
     for (uint32_t i = 2; i < deflib->as.list.len; i++) {
         Form *d = deflib->as.list.items[i];
         if (!head_is(d, sl->s_import)) continue;
         for (uint32_t j = 1; j < d->as.list.len; j++) {
             Form *set = d->as.list.items[j];
+            int64_t dep_num = srfi_libname_num(set);
+            if (dep_num >= 0 && srfi_importable(srfi_row(dep_num))) {
+                SrfiLib *dep = srfi_lib_of(sl, dep_num);
+                if (!dep) { err(set, "(srfi %lld): its library file was not found", (long long)dep_num); continue; }
+                srfi_lib_register(sl, dep);
+                for (uint32_t k = 0; k < dep->exp_pub.n; k++) {
+                    const Symbol *in = dep->exp_in.items[k]->as.sym;
+                    bool own = fb_has_sym(&dep->defined, in) || fb_has_sym(&dep->macros, in);
+                    fb_push(from, Sym(sl, set->span, dep->exp_pub.items[k]->as.sym));
+                    fb_push(to, Sym(sl, set->span, own ? srfi_spelling(sl, dep_num, in) : in));
+                }
+                continue;
+            }
             int li = scheme_lib_index(set);
             if (li < 0) {
-                err(set, "an SRFI's library file may import (scheme ...) libraries only, for now");
+                err(set, "an SRFI's library file may import (scheme ...) libraries and other SRFIs only");
                 continue;
             }
             if (SCHEME_LIBS[li].kind != LIB_ONDEMAND) continue;
@@ -5442,8 +5480,12 @@ static void srfi_source_forms(SL *sl, Form *deflib, FB *out) {
         err(deflib, "a file under stdlib/srfi/ holds one (define-library (srfi N) ...) of an importable SRFI");
         return;
     }
-    if (srfi_lib_find(sl, num)) return;   /* spliced twice into one pass: once is enough */
-    SrfiLib *lib = srfi_lib_build(sl, num, deflib);
+    /* Spliced twice into one pass: once is enough.  A library already read
+     * from its file (another SRFI imports it) is not spliced yet. */
+    SrfiLib *lib = srfi_lib_find(sl, num);
+    if (lib && lib->spliced) return;
+    if (!lib) lib = srfi_lib_build(sl, num, deflib);
+    lib->spliced = true;
     srfi_lib_register(sl, lib);
     FB body = {0};
     srfi_body_forms(sl, deflib, &body);
@@ -5463,6 +5505,42 @@ static const Symbol *std_meaning(SL *sl, const Symbol *s) {
 static bool is_std_name(SL *sl, const Symbol *s) {
     return std_meaning(sl, s) != s || is_scheme_syntax_name(s->name);
 }
+/* Whether an import set makes `s`, spelled as it is, mean its library's `s`:
+ * no `only` leaves it out, no `except` drops it, no `rename` moves it (or
+ * puts another name in its place), and no `prefix` respells it. */
+static bool set_keeps_bare(const Form *set, const Symbol *s) {
+    while (set && set->tag == F_LIST && set->as.list.len >= 2 && set->as.list.items[0]->tag == F_SYM) {
+        const char *h = set->as.list.items[0]->as.sym->name;
+        if (!strcmp(h, "only") || !strcmp(h, "except")) {
+            bool listed = false;
+            for (uint32_t i = 2; i < set->as.list.len; i++)
+                if (set->as.list.items[i]->tag == F_SYM && set->as.list.items[i]->as.sym == s) listed = true;
+            if (listed != (h[0] == 'o')) return false;
+        } else if (!strcmp(h, "rename")) {
+            for (uint32_t i = 2; i < set->as.list.len; i++) {
+                const Form *pr = set->as.list.items[i];
+                if (pr->tag != F_LIST) continue;
+                for (uint32_t k = 0; k < pr->as.list.len; k++)
+                    if (pr->as.list.items[k]->tag == F_SYM && pr->as.list.items[k]->as.sym == s) return false;
+            }
+        } else if (!strcmp(h, "prefix")) {
+            return false;
+        } else {
+            return true;
+        }
+        set = set->as.list.items[1];
+    }
+    return true;
+}
+/* Whether the unit imports R7RS's own `s` under that name.  The (scheme
+ * base) import sets stand for every standard library here -- the lowering
+ * keeps no per-library name lists -- which is exact for the names an SRFI
+ * so far conflicts on (SRFI 13's string-map and string-for-each). */
+static bool std_imported(SL *sl, const Symbol *s) {
+    for (uint32_t i = 0; i < sl->base_sets.n; i++)
+        if (set_keeps_bare(sl->base_sets.items[i], s)) return true;
+    return false;
+}
 /* D5: bind `vis` to `target` for an import of (srfi N) -- unless that gives
  * one imported name two meanings (R7RS 5.2), or the program defines it. */
 static bool srfi_bind(SL *sl, const Symbol *vis, const Symbol *target, int64_t num, const Form *at) {
@@ -5474,7 +5552,7 @@ static bool srfi_bind(SL *sl, const Symbol *vis, const Symbol *target, int64_t n
             vis->name, (long long)sl->srfi_by[i], (long long)num);
         return false;
     }
-    if (sl->imports_base && is_std_name(sl, vis) && std_meaning(sl, vis) != target) {
+    if (std_imported(sl, vis) && is_std_name(sl, vis) && std_meaning(sl, vis) != target) {
         err(at, "'%s' would name both R7RS's own '%s' and (srfi %lld)'s; R7RS 5.2 allows one binding per "
                 "imported name -- rename or prefix the SRFI's, or leave R7RS's out with (except (scheme base) %s)",
             vis->name, vis->name, (long long)num, vis->name);
@@ -5742,7 +5820,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
                     !strcmp(set->as.list.items[0]->as.sym->name, "prefix") || !strcmp(set->as.list.items[0]->as.sym->name, "rename")))
                 set = set->as.list.items[1];
             int li = scheme_lib_index(set);
-            if (li >= 0 && strcmp(SCHEME_LIBS[li].name, "base") == 0) sl.imports_base = true;
+            if (li >= 0 && strcmp(SCHEME_LIBS[li].name, "base") == 0) fb_push(&sl.base_sets, sets.items[j]);
         }
         free(sets.items);
     }
@@ -5879,6 +5957,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     free(sl.srfilib);
     free((void *)sl.srfi_from); free((void *)sl.srfi_to); free(sl.srfi_by);
     free(sl.user_globals.items);
+    free(sl.base_sets.items);
     free(srfi_expanded.items);
     for (uint32_t i = 0; i < sl.n_libsyn; i++) {
         LibSyntax *lx = sl.libsyn[i];

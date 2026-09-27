@@ -1,9 +1,10 @@
 # SRFI libraries for `#lang r7rs`, after Racket's
 
 Status: **S1 and S0 landed 2026-09-26; S2 landed 2026-09-27 except SRFI 17;
-S3 (the pruning pass and SRFI 1) and S4 (SRFI 69) landed 2026-09-27** (see
-their "What shipped" and "What S0 found" notes). SRFI 17 waits on
-docs/reported/r7rs-prelude-procedures-lose-identity.md. S5-S8 to come.
+S3 (the pruning pass and SRFI 1), S4 (SRFI 69) and S5 (SRFIs 14 and 13)
+landed 2026-09-27** (see their "What shipped" and "What S0 found" notes).
+SRFI 17 waits on docs/reported/r7rs-prelude-procedures-lose-identity.md.
+S6-S8 to come.
 `(import (srfi N))` resolves for every SRFI in the table: the ten built-in
 rows and the two alias rows import, and the rest are refused with their
 reason. S0's inventory is [Appendix C](#appendix-c----s0-inventory). Its
@@ -627,7 +628,8 @@ fixture itself runs on both back ends.
 >   name (`(rename (srfi 87) (case kase))`) becomes a forwarding macro.
 > - **An SRFI file imports `(scheme ...)` libraries only, for now.** SRFI 13
 >   importing SRFI 14 (S5) needs the pre-pass to spell another SRFI's names
->   into the body too. It refuses anything else until then.
+>   into the body too. It refuses anything else until then. (S5 did that:
+>   see its note.)
 > - **`(features)` is written out, not generated.** The prelude is
 >   Turmeric-shaped and is loaded unlowered when a Turmeric program imports a
 >   Scheme library, so a placeholder the lowering fills in broke every
@@ -923,6 +925,81 @@ fixture itself runs on both back ends.
   repeated `string-ref` (2.5); results are fresh mutable strings. Default
   arguments that are char sets use 14. `string-map` and `string-for-each`
   conflict with base (D5).
+
+> **What shipped (2026-09-27).** Everything above, both SRFIs written for
+> Turmeric (D6).
+>
+> - **The Unicode data.** `tools/gen-r7rs-unicode.py` gains the General
+>   Category sets from the UnicodeData.txt it already read, so
+>   `tools/fetch-ucd.sh` fetches nothing new: title-case (Lt), punctuation
+>   (P\*), symbol (S\*), graphic (L\* N\* M\* S\* P\*) and blank (Zs and
+>   U+0009). They are SRFI 14's 2019 CharsetDefs note's definitions, which
+>   bring its Java-1.0-era tables to current Unicode. One accessor,
+>   `r7rs-uc-run__`, hands Scheme the strided runs of any standard set; it
+>   has an interpreter twin, and tests/check-r7rs-unicode-sync.sh covers the
+>   new C as it does the old. The generator also gains the titlecase
+>   exceptions (op 3 of `r7rs-uc-map__`), which `string-titlecase` needs:
+>   U+01C6 titlecases to U+01C5 but uppercases to U+01C4, and Georgian
+>   Mkhedruli titlecases to itself.
+> - **SRFI 14** (`stdlib/srfi/14.scm`) is a record around an inversion list,
+>   a vector of code points. Membership is a binary search, and union,
+>   intersection, difference and xor are one merge. A set never changes once
+>   made, so the linear-update `!` procedures are the pure ones. Each
+>   standard set is built from the tables the first time a program uses it.
+>   `char-set:full` is every Unicode scalar value, the surrogates left out.
+>   - chibi's suite (Shivers' regression tests) is
+>     `tests/r7rs/srfi/14/tests.scm`: 72 of 72 on both back ends.
+> - **SRFI 13** (`stdlib/srfi/13.scm`) reads each string argument once, as
+>   a vector of characters, and returns fresh mutable strings.
+>   - `string-map` and `string-for-each` are its own, and conflict with
+>     `(scheme base)`, as D5 said.
+>   - The other shared names are R7RS's procedures. `string-upcase` and
+>     `string-downcase` became compatible extensions: the prelude's take
+>     SRFI 13's optional range. They keep R7RS's full case mapping, where
+>     SRFI 13 asks for the one-to-one mapping; the in-place `!` forms use
+>     the one-to-one mapping.
+>   - `string-filter` and `string-delete` accept the criterion first (the
+>     SRFI) or the string first (its drafts, which Guile and Gauche kept).
+>   - `string-concatenate` does not use `apply`, which stops at eight
+>     arguments here.
+>   - SRFI 13 has no suite of its own and chibi has no SRFI 13. The suite is
+>     Gauche's (BSD-3), as Larceny carries it, `tests/r7rs/srfi/13/tests.scm`:
+>     163 of 163 on both back ends. Larceny's file also holds Guile's suite,
+>     which is GPL and is not taken.
+> - **An SRFI file may import another SRFI.** `(import (srfi 14))` in 13's
+>   define-library spells 14's exports onto their `srfi14--` names and
+>   registers its macros. The load expander already spliced the file, so
+>   importing (srfi 13) alone brings 14 along.
+> - **D5's check was fixed.** It had fired whenever the unit imported
+>   `(scheme base)` at all, so its own suggested fix,
+>   `(except (scheme base) string-map)`, did not clear it. It now asks
+>   whether a `(scheme base)` import set makes R7RS's name visible under its
+>   own spelling; `except`, `rename`, `prefix` and an `only` that leaves the
+>   name out all clear it. Two resolution bugs on the same paths were fixed
+>   with it: a `rename` of a standard name that another import set
+>   `except`s, and a `prefix`ed standard name that an SRFI also binds, both
+>   resolved to the wrong procedure. The `(scheme base)` import sets stand
+>   for every standard library, since the lowering keeps no per-library
+>   name lists. That is exact for 13's two names.
+> - **The suite runner** gains `--base-except`, and a suite directory a
+>   `base-except` file, for 13's suite. `test-cs` counts as a test.
+> - **Cost.** An unused `(import (srfi 13))` or `(import (srfi 14))` adds
+>   143 emitted lines, the standard sets' records; the pruning pass drops the
+>   rest. A program that tests `char-set:letter` adds about 890 lines, and
+>   one that uses `string-index`, `string-trim` and `string-join` about
+>   2,200.
+> - **Fixtures:**
+>   - `r7rs-srfi-14`: the standard sets on ASCII and beyond, their sizes
+>     against the UCD, the surrogate hole, and cursors;
+>   - `r7rs-srfi-13`: fresh results, ranges, the hashes, both
+>     `string-filter` orders, titlecase of the digraphs and Georgian, and
+>     the low-level and KMP procedures;
+>   - `errors/r7rs-srfi-13-conflict` pins D5's error for the first
+>     incompatible row, and `r7rs-srfi-conflict-fixes` every fix it names;
+>   - the three that run a program pass under `TUR_GC_TORTURE` in
+>     run-r7rs-gc.sh and under the sanitizers;
+>   - `errors/r7rs-srfi-not-yet` and `r7rs-srfi-cond-expand` move their
+>     "not yet" pin to SRFI 19, an S8 row.
 
 ### S6 -- formatting and testing (medium)
 

@@ -3325,7 +3325,7 @@ static TuriValue native_r7rs_big_int(TuriEnv *env, TuriValue *a, uint32_t n, voi
 }
 /* R10: (scheme char)'s Unicode tables -- the SAME generated C the prelude's
  * stdlib/r7rs/unicode.tur compiles in (tools/gen-r7rs-unicode.py writes
- * both), registered below over its three inline-C wrappers. */
+ * both), registered below over its four inline-C wrappers. */
 #include "r7rs_unicode.inc"
 static TuriValue native_r7rs_uc_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -3340,6 +3340,11 @@ static TuriValue native_r7rs_uc_string(TuriEnv *env, TuriValue *a, uint32_t n, v
     /* The buffer is the value's, as native_r7rs_bar_symbol's is (process-
      * lifetime, the interpreter's allocation model). */
     return turi_cstr(r7rs_uc_string(r7rs_arg_cstr(a, n, 0), r7rs_arg_int(a, n, 1)));
+}
+/* r7rs-srfi-plan S5: the runs of SRFI 14's standard sets. */
+static TuriValue native_r7rs_uc_run(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(r7rs_uc_run(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1), r7rs_arg_int(a, n, 2)));
 }
 /* R3: the R7RS prelude's string and character primitives. */
 static void r7rs_put_utf8(char *out, int *n, uint32_t cp) {
@@ -4217,6 +4222,7 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-uc-map__",            native_r7rs_uc_map,             NULL);
     turi_env_register_native(env, "r7rs-uc-prop__",           native_r7rs_uc_prop,            NULL);
     turi_env_register_native(env, "r7rs-uc-string__",         native_r7rs_uc_string,          NULL);
+    turi_env_register_native(env, "r7rs-uc-run__",            native_r7rs_uc_run,             NULL);
     turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
     turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);

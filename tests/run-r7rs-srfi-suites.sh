@@ -9,6 +9,10 @@
 #   tests/r7rs/srfi/<N>/imports     optional: more import sets the suite
 #                                   needs, one per line (SRFI 69's uses
 #                                   SRFI 1's lset=)
+#   tests/r7rs/srfi/<N>/base-except optional: names to leave out of the
+#                                   suite's (scheme base), space-separated
+#                                   (SRFI 13's string-map and
+#                                   string-for-each conflict with R7RS's, D5)
 #
 # Like tur_r7rs_conformance, this fails only on a REGRESSION: fewer passes
 # than a suite's floor.  Raise the floor when the count goes up.  Where a suite
@@ -54,6 +58,11 @@ for n in $NUMS; do
         while IFS= read -r set; do
             [ -n "$set" ] && extra+=(--import "$set")
         done < "$dir/imports"
+    fi
+    if [ -f "$dir/base-except" ]; then
+        for name in $(cat "$dir/base-except"); do
+            extra+=(--base-except "$name")
+        done
     fi
     python3 tests/r7rs/run-conformance.py --tur "$TUR" --backend "$BACKEND" \
         --suite "$dir/tests.scm" --import "(srfi $n)" ${extra[@]+"${extra[@]}"} --label "r7rs-srfi-$n" \
