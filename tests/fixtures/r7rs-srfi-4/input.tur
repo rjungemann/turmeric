@@ -1,0 +1,42 @@
+#lang r7rs
+;; r7rs-srfi-plan S7: SRFI 4 on both back ends.  The suite
+;; (tests/r7rs/srfi/4/, cowan's shared tests) is the thorough check; this pins
+;; the representation: the u8vector is the bytevector (SRFI 66's procedures,
+;; so importing both SRFIs is not a conflict), the other nine types are
+;; disjoint records, and every element is range-checked on the way in.
+(import (scheme base) (scheme write) (srfi 4) (srfi 66))
+(define (show x) (write x) (newline))
+(define (try thunk)
+  (guard (e ((error-object? e)
+             (list (error-object-message e) (error-object-irritants e))))
+    (thunk)))
+
+;; The extremes of each integer type round-trip.
+(show (s8vector->list (s8vector -128 0 127)))
+(show (u16vector->list (u16vector 0 65535)))
+(show (s32vector->list (s32vector -2147483648 2147483647)))
+(show (u64vector->list (u64vector 0 18446744073709551615)))
+(show (s64vector->list (s64vector -9223372036854775808 9223372036854775807)))
+
+;; Floats are stored inexact.
+(show (f64vector->list (f64vector 1 2.5 -7.25)))
+(show (f32vector->list (make-f32vector 2 3)))
+
+;; The accessors.
+(define v (make-s16vector 3 0))
+(s16vector-set! v 1 -300)
+(show (list (s16vector-length v) (s16vector-ref v 1) (s16vector->list v)))
+(show (u32vector->list (list->u32vector '(1 2 3))))
+
+;; Out of range, or the wrong type, raises.
+(show (try (lambda () (s8vector 128))))
+(show (try (lambda () (u16vector-set! (u16vector 1) 0 -1))))
+(show (try (lambda () (u64vector 18446744073709551616))))
+(show (try (lambda () (s16vector-ref (u16vector 1) 0))))
+(show (try (lambda () (u8vector 256))))
+
+;; u8vector is bytevector; the others are disjoint from it and each other.
+(show (list (u8vector? (bytevector 1 2)) (bytevector? (u8vector 1 2))
+            (equal? (u8vector 1 2) (bytevector 1 2))))
+(show (map (lambda (x) (list (s8vector? x) (u8vector? x) (f32vector? x) (vector? x)))
+           (list (s8vector 1) (u8vector 1) (f32vector 1) (vector 1))))

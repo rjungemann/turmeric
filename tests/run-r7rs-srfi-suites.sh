@@ -23,6 +23,8 @@
 # came from and under what licence is in its header.
 #
 #   R7RS_SRFI_SUITES          the SRFI numbers to run (default: every suite)
+#   R7RS_SRFI_SHARD           i/n: of those, in numeric order, only the i-th,
+#                             (i+n)-th, ... (1-based); ctest runs two shards
 #   R7RS_CONFORMANCE_BACKEND  both (default) | interp | compiled
 #
 # Skips cleanly (exit 0) without python3 or the built binary.
@@ -46,6 +48,22 @@ if [ -n "${R7RS_SRFI_SUITES:-}" ]; then
     NUMS="$R7RS_SRFI_SUITES"
 else
     NUMS=$(ls tests/r7rs/srfi | sort -n)
+fi
+
+SHARD="${R7RS_SRFI_SHARD:-}"
+if [ -n "$SHARD" ]; then
+    case "$SHARD" in
+        */*) shard_i="${SHARD%/*}"; shard_n="${SHARD#*/}" ;;
+        *) echo "FAIL run-r7rs-srfi-suites: R7RS_SRFI_SHARD='$SHARD' is not i/n"; exit 1 ;;
+    esac
+    k=0
+    picked=""
+    for n in $NUMS; do
+        if [ $((k % shard_n + 1)) -eq "$shard_i" ]; then picked="$picked $n"; fi
+        k=$((k + 1))
+    done
+    NUMS="$picked"
+    echo "run-r7rs-srfi-suites: shard $SHARD:$NUMS"
 fi
 
 status=0

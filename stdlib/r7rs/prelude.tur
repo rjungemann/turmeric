@@ -1349,10 +1349,15 @@
 (defn r7rs-range-start__ [r] : int (if (r7rs-null? r) 0 (r7rs-int-of__ (r7rs-car r) "range start must be an exact integer")))
 (defn r7rs-range-end__ [r len : int] : int
   (if (r7rs-null? r) len (if (r7rs-null? (r7rs-cdr r)) len (r7rs-int-of__ (r7rs-car (r7rs-cdr r)) "range end must be an exact integer"))))
+;;; A range out of bounds raises an error object a program can `guard`, the
+;;; start and end its irritants (r7rs-srfi-plan S7; it was a panic,
+;;; docs/reported/r7rs-type-errors-are-uncatchable-panics.md).
 (defn r7rs-range-check__ [who : cstr start : int end : int len : int] : nil
   (if (if (>= start 0) (if (<= start end) (<= end len) false) false)
     nil
-    (panic "sequence range out of bounds (start must be <= end <= length)")))
+    (do (r7rs-raise (R7rsError (r7rs-string-append2__ who ": range out of bounds (start must be <= end <= length)")
+                               (r7rs-list (:: start any) (:: end any)) 0))
+        nil)))
 
 ;;; ---- strings (T3): characters, and mutable ones ---------------------------
 ;;;
@@ -1559,12 +1564,20 @@
     (r7rs-range-check__ "vector-fill!" a b (vec-len v))
     (r7rs-vector-fill-go__ v x a b)))
 
+;;; A byte outside 0..255, or not an exact integer, raises an error object a
+;;; program can `guard`, as an index out of range does (r7rs-srfi-plan S7:
+;;; SRFI 4 and 66 range-check their octets through these).
+(defn r7rs-byte?__ [x] : bool
+  (if (is? x int) (if (>= x 0) (<= x 255) false) false))
+(defn r7rs-byte-error__ [who : cstr x] : any
+  (r7rs-raise (R7rsError (r7rs-string-append2__ who ": byte out of range 0..255")
+                         (r7rs-list x) 0)))
 (defn r7rs-bytes-from-chain__ [c : (Cons any) v : (Vec int)] : (Vec int)
   (if (tnil? c)
     v
-    (let [b (cast (.head c) int)]
-      (if (if (>= b 0) (<= b 255) false) nil (panic "bytevector: byte out of range 0..255"))
-      (vec-push! v b)
+    (let [x (.head c)]
+      (if (r7rs-byte?__ x) nil (do (r7rs-byte-error__ "bytevector" x) nil))
+      (vec-push! v (cast x int))
       (r7rs-bytes-from-chain__ (.tail c) v))))
 (defn r7rs-bytevector [& xs : any] : any
   (R7rsBytevector (r7rs-bytes-from-chain__ (:: xs (Cons any)) (:: (vec-new) (Vec int)))))
@@ -1572,11 +1585,22 @@
   (if (<= n 0) v (do (vec-push! v fill) (r7rs-make-bytevector-go__ (- n 1) fill v))))
 (defn r7rs-make-bytevector [n : int & fill : any] : any
   (let [fl (r7rs-chain->list__ (:: fill (Cons any)))]
+    (if (r7rs-null? fl)
+      nil
+      (if (r7rs-byte?__ (r7rs-car fl)) nil (do (r7rs-byte-error__ "make-bytevector" (r7rs-car fl)) nil)))
     (R7rsBytevector (r7rs-make-bytevector-go__ n (if (r7rs-null? fl) 0 (cast (r7rs-car fl) int))
                                                (:: (vec-new) (Vec int))))))
 (defn r7rs-bytevector-bytes__ [b : R7rsBytevector] : (Vec int) (.bytes b))
-(defn r7rs-bytevector-u8-ref [b : R7rsBytevector i : int] : int (vec-get (.bytes b) i))
-(defn r7rs-bytevector-u8-set! [b : R7rsBytevector i : int x : int] : nil (vec-set! (.bytes b) i x))
+(defn r7rs-bytevector-u8-ref [b : R7rsBytevector i : int] : int
+  (if (if (>= i 0) (< i (vec-len (.bytes b))) false)
+    (vec-get (.bytes b) i)
+    (do (r7rs-index-error__ "bytevector-u8-ref" (:: b any) i) 0)))
+(defn r7rs-bytevector-u8-set! [b : R7rsBytevector i : int x] : nil
+  (if (if (>= i 0) (< i (vec-len (.bytes b))) false)
+    (if (r7rs-byte?__ x)
+      (vec-set! (.bytes b) i (cast x int))
+      (do (r7rs-byte-error__ "bytevector-u8-set!" x) nil))
+    (do (r7rs-index-error__ "bytevector-u8-set!" (:: b any) i) nil)))
 (defn r7rs-bytevector-length [b : R7rsBytevector] : int (vec-len (.bytes b)))
 
 ;;; ---- multiple values (plan Section 8, Q1: a carrier over a list) --------
@@ -2448,21 +2472,24 @@
 (defn r7rs-features [] : any
   (r7rs-list (:: (str->sym "r7rs") any) (:: (str->sym "exact-closed") any)
              (:: (str->sym "ratios") any) (:: (str->sym "turmeric") any)
-             (:: (str->sym "srfi-0") any) (:: (str->sym "srfi-1") any) (:: (str->sym "srfi-2") any)
-             (:: (str->sym "srfi-6") any) (:: (str->sym "srfi-8") any) (:: (str->sym "srfi-9") any)
-             (:: (str->sym "srfi-11") any) (:: (str->sym "srfi-13") any)
-             (:: (str->sym "srfi-14") any) (:: (str->sym "srfi-16") any)
-             (:: (str->sym "srfi-23") any) (:: (str->sym "srfi-26") any)
-             (:: (str->sym "srfi-28") any)
-             (:: (str->sym "srfi-30") any) (:: (str->sym "srfi-31") any)
-             (:: (str->sym "srfi-34") any) (:: (str->sym "srfi-38") any)
-             (:: (str->sym "srfi-39") any) (:: (str->sym "srfi-45") any)
-             (:: (str->sym "srfi-48") any)
+             (:: (str->sym "srfi-0") any) (:: (str->sym "srfi-1") any)
+             (:: (str->sym "srfi-2") any) (:: (str->sym "srfi-4") any)
+             (:: (str->sym "srfi-6") any) (:: (str->sym "srfi-8") any)
+             (:: (str->sym "srfi-9") any) (:: (str->sym "srfi-11") any)
+             (:: (str->sym "srfi-13") any) (:: (str->sym "srfi-14") any)
+             (:: (str->sym "srfi-16") any) (:: (str->sym "srfi-23") any)
+             (:: (str->sym "srfi-26") any) (:: (str->sym "srfi-27") any)
+             (:: (str->sym "srfi-28") any) (:: (str->sym "srfi-30") any)
+             (:: (str->sym "srfi-31") any) (:: (str->sym "srfi-34") any)
+             (:: (str->sym "srfi-35") any) (:: (str->sym "srfi-38") any)
+             (:: (str->sym "srfi-39") any) (:: (str->sym "srfi-41") any)
+             (:: (str->sym "srfi-42") any) (:: (str->sym "srfi-45") any)
+             (:: (str->sym "srfi-48") any) (:: (str->sym "srfi-60") any)
              (:: (str->sym "srfi-61") any) (:: (str->sym "srfi-62") any)
-             (:: (str->sym "srfi-64") any)
+             (:: (str->sym "srfi-64") any) (:: (str->sym "srfi-66") any)
              (:: (str->sym "srfi-69") any) (:: (str->sym "srfi-78") any)
-             (:: (str->sym "srfi-87") any)
-             (:: (str->sym "srfi-98") any) (:: (str->sym "srfi-105") any)))
+             (:: (str->sym "srfi-87") any) (:: (str->sym "srfi-98") any)
+             (:: (str->sym "srfi-105") any)))
 
 ;;; r7rs-rationalize -- the simplest rational within y of x (R7RS 6.2.6), by
 ;;; the continued-fraction walk.  T2: the walk is written over the generic

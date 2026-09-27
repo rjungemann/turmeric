@@ -16,12 +16,29 @@ File       From                                      Licence
 26.scm     SRFI 26's reference implementation,       public domain
            cut.scm (Al Petrofsky, adapted by
            Sebastian Egner)
+27.scm     SRFI 27's reference implementation        MIT (SRFI, below)
+           (srfi-27-reference/: mrg32k3a-a.scm,
+           mrg32k3a.scm, the record type from
+           srfi-27-a.scm): Copyright (C)
+           Sebastian Egner (2002)
 31.scm     SRFI 31's implementation                  MIT (SRFI, below)
            Copyright (C) Dr. Mirko Luedde (2002)
+35.scm     SRFI 35's reference implementation        MIT (SRFI, below)
+           Copyright (C) Richard Kelsey, Michael
+           Sperber (2002)
+41.scm     chibi-scheme lib/srfi/41.scm, its         BSD-3 (chibi, below);
+           adaptation of SRFI 41's reference         the reference, MIT
+           (Copyright (C) 2007 Philip L. Bewig)      (SRFI, below)
+42.scm     SRFI 42's reference implementation,       MIT (SRFI, below)
+           ec.scm: Copyright (C) Sebastian Egner
+           (2003)
 48.scm     SRFI 48's reference implementation, as    MIT (SRFI, below)
            the SRFI's repository carries it
            (test/srfi-48.scm): Copyright 2003
            Kenneth A Dickey, 2017 Hamayama
+60.scm     SRFI 60's implementation as its document  MIT (SRFI, below)
+           carries it (SLIB's logical.scm):
+           Copyright (C) Aubrey Jaffer (2004, 2005)
 64.scm     SRFI 64's R7RS implementation, from the   MIT (SRFI, below)
            SRFI's repository (contrib/taylan.kammer):
            Copyright (c) 2015 Taylan Kammer
@@ -29,9 +46,9 @@ File       From                                      Licence
            check.scm: Copyright (c) 2005-2006
            Sebastian Egner
 
-The files not listed (6, 9, 11, 13, 14, 16, 23, 28, 30, 34, 38, 39, 45, 61,
-69, 87, 98) are export lists, adaptors and implementations written for
-Turmeric.
+The files not listed (4, 6, 9, 11, 13, 14, 16, 23, 28, 30, 34, 38, 39, 45,
+61, 66, 69, 87, 98) are export lists, adaptors and implementations written
+for Turmeric.
 
 
 The SRFI licence (MIT)

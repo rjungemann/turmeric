@@ -13,7 +13,17 @@ index and raise an error object ("vector-ref: index out of range", the vector
 and index as irritants), so `guard` and SRFI 64's `test-error` catch
 `(vector-ref v 99)` -- the example SRFI 64's own meta-suite tests.  A wrong
 TYPE (`(car 5)`, `(vector-ref 'x 0)`) still panics, as do the other index
-checks (`string-ref`, `list-ref`, `substring`'s range).
+checks (`string-ref`, `list-ref`, `substring`'s range -- since raised, below).
+
+**Narrowed again 2026-09-27 (S7).** `bytevector-u8-ref` and
+`bytevector-u8-set!` check their index the same way, and `bytevector`,
+`make-bytevector` and `bytevector-u8-set!` raise "byte out of range 0..255"
+for a byte that is not an exact integer in 0..255 (`bytevector-u8-set!` used
+to store it silently).  And the start/end range check every sequence
+procedure shares (`substring`, `vector->list`, `bytevector-copy!`,
+`string-copy!`, ...) raises "<who>: range out of bounds" with the start and
+end as irritants, where it panicked.  SRFI 4 and 66 check their elements
+through the same path (`tests/fixtures/r7rs-bytevector-range-errors`).
 
 ## Repro
 

@@ -434,7 +434,7 @@ R7RS's own forms already are the SRFI's.
 | 0 | Feature-based conditional expansion construct | no library | no module | `cond-expand` is R7RS syntax; `srfi-N` identifiers answer for each SRFI here |
 | 1 | List Library | library | library | chibi's implementation. The names it shares with `(scheme base)` and `(scheme cxr)` (`map`, `member`, `assoc`, `list-copy`, ...) are R7RS's own procedures, which have SRFI 1's extensions; the linear-update `!` procedures are the pure ones |
 | 2 | AND-LET* | library | library | `and-let*`; a bare clause may be any expression, as in chibi |
-| 4 | Homogeneous numeric vector datatypes | not yet (S7) | library, no reader syntax | `u8vector` will be the bytevector type |
+| 4 | Homogeneous numeric vector datatypes | library | library | Written for Turmeric. A `u8vector` is a bytevector: its procedures are SRFI 66's, so importing both is not a conflict. The other nine types are disjoint records holding their elements, each checked on the way in, so an element outside the type's range raises an error object; `f32` and `f64` elements are any real, stored inexact, and an `f32` keeps a double's precision. As in Racket, there is no reader syntax: `#s16(1 2)` does not read (`#u8(...)` is R7RS's own), and `equal?` compares two non-u8 vectors by identity |
 | 5 | A compatible let form with signatures and rest arguments | not yet (S8) | library |  |
 | 6 | Basic String Ports | built in | re-export | `(scheme base)`'s own |
 | 7 | Feature-based program configuration language | not yet (S8) | library |  |
@@ -449,35 +449,35 @@ R7RS's own forms already are the SRFI's.
 | 23 | Error reporting mechanism | built in | re-export | R7RS `error` is SRFI 23's |
 | 25 | Multi-dimensional Array Primitives | not yet (S8) | library |  |
 | 26 | Notation for Specializing Parameters without Currying | library | library | `cut` and `cute`, the SRFI's reference implementation |
-| 27 | Sources of Random Bits | not yet (S7) | library |  |
+| 27 | Sources of Random Bits | library | library | The reference implementation: Pierre L'Ecuyer's MRG32k3a generator over exact integers, so a range above 2^32 and a unit finer than 2^-32 use bignums. A state from `random-source-state-ref` is a list that `random-source-state-set!` restores. `random-source-randomize!` seeds from `current-jiffy`; `default-random-source` starts from the same state in every run |
 | 28 | Basic Format Strings | library | re-export (Racket's `format`) | SRFI 48's `format`, re-exported: one engine, so importing both SRFIs binds `format` once. SRFI 48's directives work here too |
 | 29 | Localization | not yet (S8) | library |  |
 | 30 | Nested Multi-line Comments | built in | empty module | `#\| \|#` nests; the library is empty, as Racket's is |
 | 31 | A special form rec for recursive evaluation | library | library | `rec`, the SRFI's own definition |
 | 34 | Exception Handling for Programs | built in | library | R7RS `guard`, `raise` and `with-exception-handler` are SRFI 34's |
-| 35 | Conditions | not yet (S7) | library |  |
+| 35 | Conditions | library | library | The reference implementation, over records. An R7RS error object is a condition of types `&error` and `&message`, its message `error-object-message`'s, so `(error? e)` holds for what `error` raises; the reverse does not hold, and `error-object?` is false for an SRFI 35 condition. SRFI 64's `test-error` takes a condition type |
 | 38 | External Representation for Data With Shared Structure | alias | library | `write-with-shared-structure` is `write-shared`; `read-with-shared-structure` is `read` |
 | 39 | Parameter objects | built in | re-export | the converter runs on the initial value and on each `parameterize` |
 | 40 | A Library of Streams | not planned | library | deprecated by its author in favour of SRFI 41 |
-| 41 | Streams | not yet (S7) | library |  |
-| 42 | Eager Comprehensions | not yet (S7) | library |  |
+| 41 | Streams | library | library | chibi's implementation of the reference, over records and R7RS's `delay-force`, so an iterative stream runs in constant space |
+| 42 | Eager Comprehensions | library | library | The reference implementation. The generic generator `:` is a lone colon, which reads as a symbol in `#lang r7rs`. A qualifier the program writes is expanded in the program's scope, so the program imports `(srfi 42)` for what it uses, SRFI 78's `check-ec` included |
 | 43 | Vector Library | not yet (S8) | library | its index-first `vector-map` differs from R7RS's |
 | 45 | Primitives for Expressing Iterative Lazy Algorithms | alias | library | `lazy` is `delay-force`, `eager` is `make-promise` |
 | 48 | Intermediate Format Strings | library | library | The reference implementation. `~Y` pretty-prints with `write`, as the SRFI permits. Where `~w,dF` switches to exponent notation follows `number->string`: `3.2e11` prints in full here, as `320000000000.0` |
 | 54 | Formatting | not yet (S8) | library |  |
 | 57 | Records | not yet (S8) | library |  |
 | 59 | Vicinity | not yet (S8) | library |  |
-| 60 | Integers as Bits | not yet (S7) | library |  |
+| 60 | Integers as Bits | library | library | The document's implementation. Integers are two's complement of any width; two fixnums take Turmeric's bit operations, and a bignum is taken 30 bits at a time. An argument that is not an exact integer raises an error object |
 | 61 | A more general cond clause | library | library | `(generator guard => receiver)` clauses in `cond`, on in a file that imports it; the export is R7RS's own `cond`, so it sits beside `(scheme base)` |
 | 62 | S-expression comments | no library | no module | `#;` is always on; the import is an error that says so, as in Racket |
 | 63 | Homogeneous and Heterogeneous Arrays | not yet (S8) | library |  |
-| 64 | A Scheme API for test suites | library | library | Taylan Kammer's R7RS implementation. The default runner prints to the current output port (no log file), and after a failure or an unexpected pass its outermost `test-end` exits with status 1, so `tur test` fails the file; `tur init --r7rs` scaffolds a test in it. `test-error` takes `#t` or a predicate (condition types wait for SRFI 35). `test-read-eval-string` is syntax, so only a program that uses it needs `(scheme eval)`. Failures print the form, with no file or line |
-| 66 | Octet Vectors | not yet (S7) | library |  |
+| 64 | A Scheme API for test suites | library | library | Taylan Kammer's R7RS implementation. The default runner prints to the current output port (no log file), and after a failure or an unexpected pass its outermost `test-end` exits with status 1, so `tur test` fails the file; `tur init --r7rs` scaffolds a test in it. `test-error` takes `#t`, a predicate or an SRFI 35 condition type (importing SRFI 64 imports SRFI 35 too, for this). `test-read-eval-string` is syntax, so only a program that uses it needs `(scheme eval)`. Failures print the form, with no file or line |
+| 66 | Octet Vectors | alias | library | An octet vector is a bytevector, and SRFI 66's names are R7RS's procedures, checked: an element that is not an octet or an argument that is not a bytevector raises an error object naming the SRFI 66 procedure. `u8vector-copy!` takes R6RS's argument order (`source source-start target target-start n`), not `bytevector-copy!`'s |
 | 67 | Compare Procedures | not yet (S8) | library |  |
 | 69 | Basic hash tables | library | library | Written for Turmeric. `hash` agrees with `equal?` and `hash-by-identity` with `eq?`/`eqv?`. A table made without a hash function works for all five standard equivalences (`eq?`, `eqv?`, `equal?`, `string=?`, `string-ci=?`); for any other equivalence, pass the hash function that agrees with it |
 | 71 | Extended LET-syntax for multiple values | not yet (S8) | library |  |
 | 74 | Octet-Addressed Binary Blocks | not yet (S8) | library |  |
-| 78 | Lightweight testing | library | library | The reference implementation, less `check-ec`, which needs SRFI 42 (S7). Nothing ends the program: to fail `tur test`, end with an `exit` on `check-passed?` |
+| 78 | Lightweight testing | library | library | The reference implementation. `check-ec` takes SRFI 42's qualifiers, so a program that uses it imports `(srfi 42)` as well. Nothing ends the program: to fail `tur test`, end with an `exit` on `check-passed?` |
 | 86 | MU and NU simulating VALUES and CALL-WITH-VALUES | not yet (S8) | library |  |
 | 87 | => in case clauses | built in | library | R7RS `case` takes `=>` |
 | 98 | An interface to access environment variables | built in | library | re-exports `(scheme process-context)`'s two procedures |

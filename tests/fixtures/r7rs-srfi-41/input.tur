@@ -52,8 +52,11 @@
   (lambda (evens odds) (show (list (stream->list evens) (stream->list odds)))))
 
 ;; A long walk: delay-force keeps an iterative stream bounded.  (Not
-;; (stream-drop 200000 nats): the 200000th car of the self-referential nats
-;; is 200000 nested stream-map cars when nothing forced the earlier ones --
-;; deep in any Scheme.  The filter below forces them in order.)
-(show (stream-ref (stream-filter (lambda (n) (= 0 (modulo n 1000))) nats) 100))
-(show (stream-car (stream-drop 200000 (stream-from 0))))
+;; (stream-drop 20000 nats): the 20000th car of the self-referential nats
+;; is 20000 nested stream-map cars when nothing forced the earlier ones --
+;; deep in any Scheme.  The filter below forces them in order.)  The walks
+;; are short enough for tests/run-r7rs-gc.sh, which collects every 31
+;; allocations: the global nats keeps every cell it has forced live, so a
+;; collection costs more with each one.
+(show (stream-ref (stream-filter (lambda (n) (= 0 (modulo n 100))) nats) 100))
+(show (stream-car (stream-drop 20000 (stream-from 0))))

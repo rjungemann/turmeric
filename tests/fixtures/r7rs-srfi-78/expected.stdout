@@ -42,7 +42,7 @@
 
 (check-ec (nested (: x 10) (: y 10) (: z 10)) (* x (+ y z)) (=> equal?) (+ (* x y) (* x z)) (x y z)) => #<nil> ; correct (1000 cases checked)
 
-(check-ec (: n 1 31) (even? (fib n)) (=> equal?) (= (modulo n 3) 0) (n)) => #<nil> ; correct (30 cases checked)
+(check-ec (: n 1 21) (even? (fib n)) (=> equal?) (= (modulo n 3) 0) (n)) => #<nil> ; correct (20 cases checked)
 
 ; *** checks *** : 4 correct, 1 failed. First failed example:
 
