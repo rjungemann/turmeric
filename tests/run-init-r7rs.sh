@@ -47,7 +47,7 @@ fi
 out="$("$TUR" build . 2>&1)"
 if [ ! -x build/bin/demo ]; then
     echo "FAIL --r7rs --bin: build produced no binary"
-    sed 's/^/       /' <<<"$out" | grep -v W0060 | head -6
+    sed 's/^/       /' <<<"$out" | grep -vE 'W006[01]' | head -6
     fails=$((fails + 1))
 elif ! grep -q 'Hello from demo!' < <(./build/bin/demo 2>/dev/null); then
     echo "FAIL --r7rs --bin: the built binary did not greet"
@@ -60,7 +60,7 @@ if grep -q '1 passed, 0 failed' <<<"$out"; then
     echo "ok   --r7rs --bin: tur test passes"
 else
     echo "FAIL --r7rs --bin: tur test"
-    sed 's/^/       /' <<<"$out" | grep -v W0060 | tail -6
+    sed 's/^/       /' <<<"$out" | grep -vE 'W006[01]' | tail -6
     fails=$((fails + 1))
 fi
 # r7rs-srfi-plan S6: the test is an SRFI 64 suite, and a failing one fails
@@ -71,7 +71,7 @@ if grep -q '0 passed, 1 failed' <<<"$out"; then
     echo "ok   --r7rs --bin: a failing SRFI 64 test fails tur test"
 else
     echo "FAIL --r7rs --bin: a failing SRFI 64 test did not fail tur test"
-    sed 's/^/       /' <<<"$out" | grep -v W0060 | tail -6
+    sed 's/^/       /' <<<"$out" | grep -vE 'W006[01]' | tail -6
     fails=$((fails + 1))
 fi
 mv tests/demo_test.tur.bak tests/demo_test.tur
@@ -93,7 +93,7 @@ fi
 out="$("$TUR" build . 2>&1)"
 if grep -qE 'error' <<<"$out"; then
     echo "FAIL --r7rs --lib: build reported an error"
-    sed 's/^/       /' <<<"$out" | grep -v W0060 | head -6
+    sed 's/^/       /' <<<"$out" | grep -vE 'W006[01]' | head -6
     fails=$((fails + 1))
 else
     echo "ok   --r7rs --lib: builds"
@@ -103,7 +103,7 @@ if grep -q '1 passed, 0 failed' <<<"$out"; then
     echo "ok   --r7rs --lib: tur test imports the library and passes"
 else
     echo "FAIL --r7rs --lib: tur test"
-    sed 's/^/       /' <<<"$out" | grep -v W0060 | tail -6
+    sed 's/^/       /' <<<"$out" | grep -vE 'W006[01]' | tail -6
     fails=$((fails + 1))
 fi
 if "$TUR" fmt --check src tests >/dev/null 2>&1; then

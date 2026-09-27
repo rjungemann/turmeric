@@ -676,13 +676,13 @@ layer, dynamic calls and dynamic field access. Annotations stay legal, and a
 Saffron module links against a Turmeric one in the same program. See
 [the Saffron guide](saffron-guide.md).
 
-**R7RS** is R7RS-small Scheme, being built as Saffron's dynamic substrate
-under a Scheme reader
+**R7RS** is R7RS-small Scheme, over Saffron's dynamic substrate under a
+Scheme reader
 ([r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-lang-plan.md)).
-It is **experiment-gated** (`tur dialects` shows it as `experimental (r7rs)`
-and `tur experiments` lists the row), but the `#lang r7rs` line is itself the
-enable: no `--enable=r7rs` is needed, and the file prints the TUR-W0060
-lifecycle warning once per compile. Today it has the reader (R1), the core
+It is **experiment-gated, in beta** (`tur dialects` shows it as
+`experimental (r7rs)` and `tur experiments` lists the row), but the
+`#lang r7rs` line is itself the enable: no `--enable=r7rs` is needed, and the
+file prints the TUR-W0061 lifecycle warning once per compile. Today it has the reader (R1), the core
 forms (R2): `define`, `lambda`, the `let` family, `do`, `cond`/`case`,
 `and`/`or`, `set!`, `case-lambda`, multiple values and the core list, equality
 and output procedures, with Scheme truthiness (only `#f` is false); and the
@@ -740,9 +740,11 @@ written in it pass, on both back ends, and the rest are the named carve-outs
 (bignums, exact rationals, complex numbers, mutable strings, `eval`,
 re-entrant `call/cc`); Section 9's tasks have since closed all of them, for
 1223 passing invocations and none failing (two tests of chibi's own float
-spelling, `e+308`, are counted as settled: R7RS allows both). A Scheme
-program's data is never freed -- there is no collector yet -- and every
-Scheme fixture runs under ASan and UBSan in `tur_r7rs_sanitize` (T8). `(scheme char)` maps and
+spelling, `e+308`, are counted as settled: R7RS allows both). A compiled
+single-unit Scheme program allocates through the conservative collector on
+Linux and macOS (`TUR_R7RS_GC=0` or `--no-r7rs-gc` opts out, which a program
+that starts threads must do), and every Scheme fixture runs under ASan and
+UBSan in `tur_r7rs_sanitize` (T8). `(scheme char)` maps and
 classifies all of Unicode, from tables generated out of the Unicode
 database. The full
 reference is [r7rs-guide.md](r7rs-guide.md).
