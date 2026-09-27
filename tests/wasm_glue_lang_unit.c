@@ -171,9 +171,13 @@ int main(void) {
     CHECK(turi_wasm_set_lang("r7rs") == 0, "set_lang accepts the r7rs base");
     CHECK(strcmp(turi_wasm_get_lang(), "r7rs") == 0,
           "get_lang reports the r7rs base");
-    CHECK(eval_contains("(defn add [a b] (+ a b))", "add") &&
+    /* Written as Scheme: a Turmeric `defn` in Scheme source is refused
+     * (r7rs-turmeric-syntax-leaks item 7), at the prompt as in a file. */
+    CHECK(!eval_contains("(define (add a b) (+ a b))", "#<error") &&
           eval_contains("(add 7.1 0.5)", "7.6"),
           "an unannotated r7rs parameter takes a float (the dynamic trait)");
+    CHECK(eval_contains("(defn add2 [a b] (+ a b))", "#<error"),
+          "a Turmeric defn at the r7rs prompt is refused, not run");
     CHECK(eval_contains("#t", "true") && !eval_contains("#t", "#<error"),
           "#t reads under the Scheme reader");
     CHECK(eval_contains("#x1F", "31"),
