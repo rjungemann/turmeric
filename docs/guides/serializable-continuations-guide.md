@@ -306,7 +306,7 @@ network.
 
 If you try to capture an unserializable value, the elaborator produces an error:
 
-```text
+```ascii
 error: binding `handle : file-handle` captured inside `serial-reset`
        but `file-handle` does not implement `Serializable`
   --> src/main.tur:42:5

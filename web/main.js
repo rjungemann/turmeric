@@ -5518,14 +5518,19 @@ function docsSiteUrl(ref) {
  * turmeric/sweet-exp toggles, and a "load into editor" affordance on every
  * runnable code block.
  *
- * The first two come from window.turmericGuide, which /docs-pack/guide.js
- * defines -- the same code the site's guide pages run, so highlighting and
- * toggles behave identically in both places.
+ * The first three come from window.turmericGuide, which /docs-pack/guide.js
+ * defines -- the same code the site's guide pages run, so highlighting,
+ * toggles and diagrams behave identically in both places.
  */
 function decorateDocsArticle(article) {
     if (window.turmericGuide) {
         window.turmericGuide.highlightGuideCode(article);
         window.turmericGuide.initSyntaxToggles(article);
+        // Diagrams are lazy and network-backed; with the pane offline they
+        // stay as their own source text, which renderMermaid handles itself.
+        if (window.turmericGuide.renderMermaid) {
+            window.turmericGuide.renderMermaid(article);
+        }
     }
     article.querySelectorAll('pre').forEach(pre => {
         const code = pre.querySelector('code.language-turmeric, code.language-sweet-exp');

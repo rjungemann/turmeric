@@ -531,25 +531,17 @@ predicate can be discharged -- and leaves them alone where it cannot.
 The shipped features are not independent additions. They form a dependency
 graph:
 
-```
-Algebraic effects
-  +-- Effect Types / Row Polymorphism
-        +-- Linear Continuations, Multi-Shot Continuations
-
-Linear Types
-  +-- Substructural Types
-  |     +-- Uniqueness Types
-  +-- Session Types
-
-GADTs
-  +-- Sized Types (via GADT infrastructure)
-
-Union/Intersection Types
-
-Contract Types
-
-HKT -- forall, Rank-2
-  +-- Existential Types -- exists, pack/open
+```mermaid
+flowchart LR
+  AE["Algebraic effects"] --> ET["Effect types /<br/>row polymorphism"]
+  ET --> LC["Linear continuations,<br/>multi-shot continuations"]
+  LT["Linear types"] --> ST["Substructural types"]
+  ST --> UT["Uniqueness types"]
+  LT --> SST["Session types"]
+  G["GADTs"] --> SZ["Sized types<br/>(via GADT infrastructure)"]
+  HKT["HKT -- forall, Rank-2"] --> EX["Existential types -- exists, pack/open"]
+  UI["Union / intersection types"]
+  CT["Contract types"]
 ```
 
 Each feature in the graph uses the one above it. Dependent types would not slot

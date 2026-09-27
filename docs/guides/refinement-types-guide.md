@@ -364,7 +364,7 @@ refinements were inferred and how many probes it took.
 The supported fragment is quantifier-free linear integer/real arithmetic with
 equality and uninterpreted functions.
 
-```
+```ascii
 pred ::= (= e e) | (not= e e) | (< e e) | (<= e e) | (> e e) | (>= e e)
        | (and pred ...) | (or pred ...) | (not pred) | (=> pred pred)
        | (measure e ...)          ; a bool-returning measure IS a proposition

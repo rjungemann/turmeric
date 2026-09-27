@@ -1771,7 +1771,7 @@ defn main []
 
 ## Final Project Structure
 
-```
+```ascii
 turmeric/
 |-- CMakeLists.txt
 |-- cmake/

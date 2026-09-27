@@ -387,7 +387,7 @@ project export the same name.
 The compiled library and its symbol manifest live under
 `.tur-repl-cache/` next to your `build.tur`:
 
-```
+```ascii
 my-spice/
 |-- build.tur
 |-- src/

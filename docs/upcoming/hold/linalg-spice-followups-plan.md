@@ -364,27 +364,35 @@ equivalent to within floating-point rounding.
 
 ## Dependency graph
 
-```
-linalg-v0.1.0  (LA0--LA8, shipped)
-  |
-  +-- linalg-v0.2.0  (LB0--LB6)
-  |     |
-  |     +-- linalg-blas-v0.1.0  (LX0--LX4)  [optional build flag]
-  |     |
-  |     +-- stats-multivariate-v0.1.0  (SM0--SM7)
-  |           SM0 (scaffold) unblocked after linalg-v0.1.0
-  |           SM1 (PCA) blocked on LB0 + LB2
-  |           SM2 (factor analysis) blocked on LB0
-  |           SM5 (MANOVA / Hotelling) blocked on SM0 + SM3
-  |           SM6 (LDA) blocked on SM1
-  |
-  +-- linalg-sparse-v0.1.0  (LS0--LS5)
-        |
-        +-- (uses linalg/iter from v0.2 for sparse-cg / sparse-bicgstab)
+```mermaid
+flowchart LR
+  LA["linalg v0.1.0<br/>LA0-LA8 (shipped)"]
+  LB["linalg v0.2.0<br/>LB0-LB6"]
+  LX["linalg-blas v0.1.0<br/>LX0-LX4 (optional build flag)"]
+  LS["linalg-sparse v0.1.0<br/>LS0-LS5"]
+  subgraph SM ["stats-multivariate v0.1.0 -- SM0-SM7"]
+    SM0["SM0 scaffold"]
+    SM1["SM1 PCA"]
+    SM2["SM2 factor analysis"]
+    SM3["SM3"]
+    SM5["SM5 MANOVA / Hotelling"]
+    SM6["SM6 LDA"]
+  end
+
+  LA --> LB
+  LA --> LS
+  LA --> SM0
+  LB --> LX
+  LB -->|"LB0 + LB2"| SM1
+  LB -->|"LB0"| SM2
+  LB -. "LB4 -- linalg/iter, for<br/>sparse-cg and sparse-bicgstab" .-> LS
+  SM0 --> SM5
+  SM3 --> SM5
+  SM1 --> SM6
 ```
 
-`tur-linalg-sparse` LS3 is blocked on `tur-linalg` LB4 (iterative solvers).
-All other sparse phases (LS0--LS2, LS4) can proceed in parallel with LB0--LB3.
+Sparse phases LS0--LS2 and LS4 carry no such edge -- they can proceed in
+parallel with LB0--LB3.
 
 ---
 

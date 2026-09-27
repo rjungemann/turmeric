@@ -14,38 +14,34 @@ the type system, or understand how source text becomes a native binary.
 
 ## High-level picture
 
-```
-source.tur
-    |
-    v
- Reader          (src/compiler/reader.c)
-    |  Form[]
-    v
- Elaborator      (src/compiler/elab_*.c)
-    |  Expr (typed IR)
-    v
- Kind check      (src/passes/kind_check.c)
-    |
-    v
- Effect lower    (src/passes/effect_lower.c)
-    |  perform/handle -> shift/reset
-    v
- Effect row infer (src/passes/effect_check.c)
-    |
-    v
- CPS transform   (src/passes/cps.c)
-    |  shift/reset -> trampolined IR
-    v
- Borrow check    (src/passes/borrow_check.c)
-    |
-    v
- SRFI prune      (src/passes/srfi_prune.c)
-    |  single-TU emission only: unreached stdlib/srfi/ definitions dropped
-    v
- Emitter         (src/compiler/emit_*.c)
-    |  C99 source
-    v
- C compiler (cc) -> native binary
+```mermaid
+flowchart TD
+  SRC["source.tur"]
+  STD["stdlib forms prepended<br/>src/main.c"]
+  RD["Reader<br/>src/compiler/reader.c"]
+  EL["Elaborator<br/>src/compiler/elab_*.c"]
+  KC["Kind check<br/>src/passes/kind_check.c"]
+  EFL["Effect lower<br/>src/passes/effect_lower.c"]
+  EFC["Effect row infer<br/>src/passes/effect_check.c"]
+  CPS["CPS transform<br/>src/passes/cps.c"]
+  BC["Borrow check<br/>src/passes/borrow_check.c"]
+  SP["SRFI prune<br/>src/passes/srfi_prune.c"]
+  EM["Emitter<br/>src/compiler/emit_*.c"]
+  CC["C compiler (cc)"]
+  BIN["native binary"]
+
+  SRC --> RD
+  RD -->|"Form[]"| EL
+  STD -->|"Form[]"| EL
+  EL -->|"Expr* -- typed IR"| KC
+  KC -->|"validates HKT kinds"| EFL
+  EFL -->|"perform/handle -> shift/reset"| EFC
+  EFC -->|"infer effect rows"| CPS
+  CPS -->|"shift/reset -> trampolined IR"| BC
+  BC -->|"ownership validation"| SP
+  SP -->|"single-TU emission only: unreached<br/>stdlib/srfi/ definitions dropped"| EM
+  EM -->|"Buf -- C99 source text"| CC
+  CC --> BIN
 ```
 
 All passes share a single `PassContext` (defined in `src/runtime/pass.h`) that
@@ -57,7 +53,7 @@ static array in `src/main.c` and executed by `run_core_passes()`.
 
 ## src/ directory layout
 
-```
+```ascii
 src/
 +-- main.c              compiler driver (CLI, pass scheduling, cc invocation)
 +-- compiler/           frontend: reader, elaborator, emitter, formatter
@@ -544,28 +540,11 @@ name.
 
 ## Data flow summary
 
-```
-Text
-  +- reader.c -----------------------------> Form[]
-                                               |
-  +- (stdlib forms prepended in main.c)        |
-                                               v
-                              elab_*.c ------> Expr* (typed IR)
-                                               |
-                              kind_check ----- | (validates HKT kinds)
-                                               |
-                              effect_lower --> | (perform/handle -> shift/reset)
-                                               |
-                              effect_check --- | (infer effect rows)
-                                               |
-                              cps.c --------> | (shift/reset -> trampolines)
-                                               |
-                              borrow_check --- | (ownership validation)
-                                               |
-                              emit_*.c ------> Buf (C99 source text)
-                                               |
-                              cc -----------> native binary
-```
+The pass chain and the value each stage hands the next are drawn once, in
+[High-level picture](#high-level-picture). This section used to redraw them,
+and the two copies drifted -- the duplicate had never picked up the SRFI prune
+pass, and the original had never picked up the stdlib-prepend edge. One diagram
+now carries both.
 
 All allocations within a compilation unit live in a single `Arena` that is
 freed as one block at the end of `compile_to_c()`. The symbol table owns

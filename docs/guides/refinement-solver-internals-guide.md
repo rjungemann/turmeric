@@ -57,22 +57,20 @@ The elaborator wires it in from `elab_fns.c`, `elab_call.c`,
 
 ## The pipeline
 
-```
-  source #refine{...}
-        |
-   RT1  |  refine_collect.c   -- find crossing points, build hypothesis env
-        v
-   [ RefineObligation ]       -- predicate + subject + env + location
-        |
-   RT2  |  refine_vc_build     -- Form -> normalized RefineVC (sorts, hash-cons)
-        v
-   [ RefineVC ]               -- vars, ufuncs, hyps[], goal
-        |
-   RT3  |  refine_discharge_one -> S0 -> S1 -> S2 -> S3 -> UNKNOWN
-        v
-   verdict: VALID  -> elide the runtime check
-            INVALID-> TUR-E0371 with a counterexample
-            UNKNOWN -> TUR-W0372, keep the runtime check
+```mermaid
+flowchart TD
+  SRC["source #refine{...}"]
+  OB[["RefineObligation<br/>predicate + subject + env + location"]]
+  VC[["RefineVC<br/>vars, ufuncs, hyps[], goal"]]
+  V{"verdict"}
+  E["elide the runtime check"]
+
+  SRC -->|"RT1 -- refine_collect.c<br/>find crossing points, build hypothesis env"| OB
+  OB -->|"RT2 -- refine_vc_build<br/>Form -> normalized RefineVC (sorts, hash-cons)"| VC
+  VC -->|"RT3 -- refine_discharge_one<br/>S0 -> S1 -> S2 -> S3 -> UNKNOWN"| V
+  V -->|"VALID"| E
+  V -->|"INVALID"| X["TUR-E0371<br/>with a counterexample"]
+  V -->|"UNKNOWN"| W["TUR-W0372<br/>keep the runtime check"]
 ```
 
 ### RT1: where obligations come from

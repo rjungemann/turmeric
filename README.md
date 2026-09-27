@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.55.1` -- thirty-two SRFIs ship as importable libraries under `#lang r7rs`, with a pruning pass so a program pays only for the definitions it reaches; plus a run of Windows, region and generic-typing fixes.
+**Latest release:** `v0.56.0` -- `#lang r7rs` moves from prototype to beta: the plan is complete, chibi's R7RS suite reports 1223 passing invocations on both back ends and none failing, and the surface is frozen for its soak.
 
 ## What
 
