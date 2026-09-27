@@ -17,7 +17,7 @@ File       From                                      Licence
 31.scm     SRFI 31's implementation                  MIT (SRFI, below)
            Copyright (C) Dr. Mirko Luedde (2002)
 
-The files not listed (6, 9, 11, 16, 23, 30, 34, 38, 39, 45, 87, 98) are
+The files not listed (6, 9, 11, 16, 23, 30, 34, 38, 39, 45, 61, 87, 98) are
 export lists and adaptors written for Turmeric.
 
 

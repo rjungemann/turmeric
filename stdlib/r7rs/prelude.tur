@@ -2434,8 +2434,9 @@
              (:: (str->sym "srfi-30") any) (:: (str->sym "srfi-31") any)
              (:: (str->sym "srfi-34") any) (:: (str->sym "srfi-38") any)
              (:: (str->sym "srfi-39") any) (:: (str->sym "srfi-45") any)
-             (:: (str->sym "srfi-62") any) (:: (str->sym "srfi-87") any)
-             (:: (str->sym "srfi-98") any) (:: (str->sym "srfi-105") any)))
+             (:: (str->sym "srfi-61") any) (:: (str->sym "srfi-62") any)
+             (:: (str->sym "srfi-87") any) (:: (str->sym "srfi-98") any)
+             (:: (str->sym "srfi-105") any)))
 
 ;;; r7rs-rationalize -- the simplest rational within y of x (R7RS 6.2.6), by
 ;;; the continued-fraction walk.  T2: the walk is written over the generic

@@ -435,7 +435,7 @@ R7RS's own forms already are the SRFI's.
 | 13 | String Libraries | not yet (S5) | library |  |
 | 14 | Character-set Library | not yet (S5) | library |  |
 | 16 | Syntax for procedures of variable arity | built in | re-export | `(scheme case-lambda)` |
-| 17 | Generalized set! | not yet (S2) | library |  |
+| 17 | Generalized set! | not yet (S2) | library | waits on standard procedures keeping their identity (`(eqv? car car)` is `#f` today), which `setter` is keyed on |
 | 19 | Time Data Types and Procedures | not yet (S8) | library |  |
 | 23 | Error reporting mechanism | built in | re-export | R7RS `error` is SRFI 23's |
 | 25 | Multi-dimensional Array Primitives | not yet (S8) | library |  |
@@ -459,7 +459,7 @@ R7RS's own forms already are the SRFI's.
 | 57 | Records | not yet (S8) | library |  |
 | 59 | Vicinity | not yet (S8) | library |  |
 | 60 | Integers as Bits | not yet (S7) | library |  |
-| 61 | A more general cond clause | not yet (S2) | library |  |
+| 61 | A more general cond clause | library | library | `(generator guard => receiver)` clauses in `cond`, on in a file that imports it; the export is R7RS's own `cond`, so it sits beside `(scheme base)` |
 | 62 | S-expression comments | no library | no module | `#;` is always on; the import is an error that says so, as in Racket |
 | 63 | Homogeneous and Heterogeneous Arrays | not yet (S8) | library |  |
 | 64 | A Scheme API for test suites | not yet (S6) | library |  |

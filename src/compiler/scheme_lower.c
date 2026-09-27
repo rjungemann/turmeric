@@ -440,7 +440,7 @@ static const SrfiRow SRFI_LIBS[] = {
     {  57, SRFI_NOTYET,     "Records", NULL, "S8" },
     {  59, SRFI_NOTYET,     "Vicinity", NULL, "S8" },
     {  60, SRFI_NOTYET,     "Integers as Bits", NULL, "S7" },
-    {  61, SRFI_NOTYET,     "A more general cond clause", NULL, "S2" },
+    {  61, SRFI_LIBRARY,    "A more general cond clause", "stdlib/srfi/61.scm", NULL },
     {  62, SRFI_NOLIB,      "S-expression comments", NULL,
         "its `#;` datum comments are part of the reader and always on, as in Racket, which has no library for it either; this import can be deleted" },
     {  63, SRFI_NOTYET,     "Homogeneous and Heterogeneous Arrays", NULL, "S8" },
@@ -551,6 +551,9 @@ typedef struct SL {
     const Symbol **clash_from, **clash_to;
     uint32_t n_clash, cap_clash;
     bool in_user;   /* lowering the user's forms, not the prelude's */
+    /* r7rs-srfi-plan S2: SRFI 61's `(generator guard => receiver)` cond
+     * clause, on in a unit that imports (srfi 61)'s `cond`. */
+    bool srfi61_cond;
     /* R10 (hygiene): the innermost lexical scope, and the identifiers a
      * template inserted that must mean their GLOBAL (or keyword) binding
      * although the use site binds the same name locally: alias -> name. */
@@ -2483,6 +2486,49 @@ static bool looks_like_scheme_cond(const Form *f) {
     return true;
 }
 
+/* A template-style alias of a global or keyword (hyg_resolve_free's kind):
+ * whatever the use site binds the name to, the alias means the global. */
+static const Symbol *global_alias_of(SL *sl, const char *name) {
+    const Symbol *x = I(sl, name);
+    char pre[160];
+    snprintf(pre, sizeof pre, "%s__g", name);
+    const Symbol *a = fresh(sl, pre);
+    sym_pair_push(sl, &sl->ga_from, &sl->ga_to, &sl->n_ga, &sl->cap_ga, a, x);
+    return a;
+}
+/* SRFI 61: `(generator guard => receiver)` -- the generator's values go to
+ * guard, and when it answers true, to receiver, whose values are the cond's;
+ * otherwise the next clause.  As the SRFI's reference implementation:
+ *   (call-with-values (lambda () generator)
+ *     (lambda vals (if (apply guard vals) (apply receiver vals) <rest>)))
+ * built from global aliases, so a local `apply` or `lambda` at the use site
+ * does not capture it, and `vals` fresh, so it captures nothing of the
+ * user's. */
+static Form *srfi61_clause(SL *sl, Form *cl, Form **rest, uint32_t nrest, Span sp) {
+    Span s = cl->span;
+    Form **it = cl->as.list.items;
+    const Symbol *cwv = global_alias_of(sl, "call-with-values");
+    const Symbol *lam = global_alias_of(sl, "lambda");
+    const Symbol *iff = global_alias_of(sl, "if");
+    const Symbol *app = global_alias_of(sl, "apply");
+    const Symbol *vals = fresh(sl, "srfi61_vals__");
+    Form *after;
+    if (nrest > 0) {
+        FB c = {0};
+        fb_push(&c, Sym(sl, sp, global_alias_of(sl, "cond")));
+        for (uint32_t i = 0; i < nrest; i++) fb_push(&c, rest[i]);
+        after = fb_list(sl, &c, sp);
+    } else {
+        after = Ln(sl, s, 3, Sym(sl, s, iff), Bool(sl, s, false), Bool(sl, s, false));   /* unspecified */
+    }
+    Form *test = Ln(sl, s, 3, Sym(sl, s, app), it[1], Sym(sl, s, vals));
+    Form *recv = Ln(sl, s, 3, Sym(sl, s, app), it[3], Sym(sl, s, vals));
+    Form *body = Ln(sl, s, 4, Sym(sl, s, iff), test, recv, after);
+    Form *consumer = Ln(sl, s, 3, Sym(sl, s, lam), Sym(sl, s, vals), body);
+    Form *producer = Ln(sl, s, 3, Sym(sl, s, lam), Ln(sl, s, 0), it[0]);
+    return lower(sl, Ln(sl, s, 3, Sym(sl, s, cwv), producer, consumer));
+}
+
 static Form *cond_chain(SL *sl, Form **clauses, uint32_t n, Span sp) {
     if (n == 0) return Nil(sl, sp);
     Form *cl = clauses[0];
@@ -2499,6 +2545,11 @@ static Form *cond_chain(SL *sl, Form **clauses, uint32_t n, Span sp) {
                         Sym(sl, cl->span, t), Sym(sl, cl->span, t), rest);
         Form *bv[2] = { Sym(sl, cl->span, t), test };
         return Ln(sl, cl->span, 3, Sym(sl, cl->span, sl->t_let), Vec(sl, cl->span, bv, 2), body);
+    }
+    if (len == 4 && kw_is(sl, it[2], sl->s_arrow)) {
+        if (sl->srfi61_cond) return srfi61_clause(sl, cl, clauses + 1, n - 1, sp);
+        err(cl, "a (generator guard => receiver) cond clause is SRFI 61's; import (srfi 61) to use it");
+        return Nil(sl, sp);
     }
     if (kw_is(sl, it[1], sl->s_arrow)) {
         if (len != 3) { err(cl, "cond clause with => expects (test => receiver)"); return Nil(sl, sp); }
@@ -5520,7 +5571,10 @@ static void srfi_import(SL *sl, Form *libname, const SchemeImportSpec *spec, Spa
             srfi_bind(sl, vis, srfi_spelling(sl, num, in), num, libname);
         } else if (is_scheme_syntax_name(in->name)) {
             /* A re-export of R7RS syntax.  Under its own name it IS the
-             * syntax; under another, a macro forwards to it. */
+             * syntax; under another, a macro forwards to it.  SRFI 61's
+             * `cond` is R7RS's with one more clause shape: importing it, by
+             * any name, turns that shape on in this unit (cond_chain). */
+            if (num == 61 && in == sl->s_cond) sl->srfi61_cond = true;
             if (vis == in) continue;
             if (!srfi_bind(sl, vis, in, num, libname)) continue;
             Span s = libname->span;

@@ -2244,14 +2244,16 @@ which the stdlib's type annotations read. The program half of that is fixed
 
 ## Found landing r7rs-srfi-plan S2 (filed 2026-09-27)
 
-Both came from SRFI 2's `and-let*`, whose whole point is guarding a call
-that would fail. Neither blocks S2: chibi's SRFI 2 suite passes in full,
-because its guarded calls are to `+`, which takes `any`.
+The first two came from SRFI 2's `and-let*`, whose whole point is guarding
+a call that would fail. Neither blocks S2: chibi's SRFI 2 suite passes in
+full, because its guarded calls are to `+`, which takes `any`. The third
+blocks SRFI 17.
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [r7rs-dead-mistyped-call-refused-at-compile-time](r7rs-dead-mistyped-call-refused-at-compile-time.md) | medium | `(let ((x #f)) (if x (car x) 0))` and a never-called `(define (g) (car 5))` are TUR-E0001 "expected R7rsPair, got bool/int" on both back ends: the typed prelude's argument check refuses a concrete mismatch that R7RS makes an error only when it runs. Fix: in a dynamic file, widen and let the checked cast fail at run time |
 | [r7rs-type-errors-are-uncatchable-panics](r7rs-type-errors-are-uncatchable-panics.md) | medium | `(car 5)` through a variable panics ("cast: any holds int, not R7rsPair") on both back ends; `guard` cannot catch it, where chibi and Racket raise an error object. Fix: in `#lang r7rs`, a failed boundary cast raises an error object |
+| [r7rs-prelude-procedures-lose-identity](r7rs-prelude-procedures-lose-identity.md) | medium | `(eqv? car car)` is `#f` on both back ends: boxing a typed prelude procedure as `any` wraps it in a fresh adaptor at every reference (`saffron_dyn_fn_adaptor`, elab_call.c:825), so each reference is a new procedure. The program's own procedures keep their identity. Blocks SRFI 17, whose `setter` table is keyed on `car`, `vector-ref`, ... Fix: one adaptor per function, made once per compile |
 
 ## Found fixing the captured-`^mut` copy (filed 2026-09-26)
 

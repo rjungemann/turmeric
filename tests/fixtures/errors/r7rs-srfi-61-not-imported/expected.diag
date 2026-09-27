@@ -1,0 +1,1 @@
+a (generator guard => receiver) cond clause is SRFI 61's; import (srfi 61) to use it
