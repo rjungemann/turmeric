@@ -33,9 +33,10 @@
  * read as something else.
  *
  * No <math.h>: the compiled copy shares a translation unit with
- * stdlib/math.tur, whose `fabs`/`sqrt`/`floor` are static functions of
+ * stdlib/math.tur, whose `fabs`/`sqrt`/`floor` were static functions of
  * those names, and MinGW's <math.h> DEFINES fabs inline -- a redefinition
- * error there.  The builtins below need no header. */
+ * error there.  (They are `tur_u_fabs` and friends now, since the <math.h>
+ * names joined mangle.c's denylist.)  The builtins below need no header. */
 
 /* m = m * radix + v, and whether that left 64 bits (m wraps; the caller
  * then reads the digit text instead).  Spelled out rather than with

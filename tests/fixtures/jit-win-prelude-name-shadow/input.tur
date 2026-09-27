@@ -9,10 +9,11 @@
 ;; goes in xmm0 per the `double` signature while the callee reads rcx, so the
 ;; program runs to completion and prints a pointer-shaped garbage value.
 ;;
-;; These names are NOT in mangle.c's libc denylist, correctly -- the emitted TU
-;; never includes math.h, so the cc path only ever sees them as gcc builtins,
-;; which a local definition may shadow.  jit_prelude_win_shadowed drops a
-;; prelude declaration the program defines, so the JIT path agrees with cc.
+;; jit_prelude_win_shadowed drops a prelude declaration the program defines,
+;; so the JIT path agrees with cc.  Since stdlib-math-wrappers-call-themselves
+;; these names are also in mangle.c's denylist (as <math.h> names), so the
+;; defns below are emitted as `tur_u_log2` and friends and no longer shadow
+;; the prelude at all; the fixture now pins that renaming on every path.
 ;;
 ;; One argument each: the miscompile is an integer-vs-float register class
 ;; mismatch, so a value that survives the round trip is the whole assertion.

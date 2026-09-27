@@ -5844,25 +5844,25 @@ static int64_t with_hyuntrailed(int64_t);
 static void trail_hyreset_ex();
 static int64_t trail_slautolink_hyhint();
 static int64_t with_hyregion(int64_t);
-static double sqrt(double);
-static double fabs(double);
-static double floor(double);
-static double ceil(double);
-static double pow(double, double);
-static double exp(double);
-static double log(double);
-static double sin(double);
-static double cos(double);
-static double atan2(double, double);
+static double tur_u_sqrt(double);
+static double tur_u_fabs(double);
+static double tur_u_floor(double);
+static double tur_u_ceil(double);
+static double tur_u_pow(double, double);
+static double tur_u_exp(double);
+static double tur_u_log(double);
+static double tur_u_sin(double);
+static double tur_u_cos(double);
+static double tur_u_atan2(double, double);
 static double int_hy_gtfloat(int64_t);
 static int64_t float_hy_gtint(double);
 static void printf_hyfloat6(double);
-static double tan(double);
-static double asin(double);
-static double acos(double);
-static double atan(double);
-static double trunc(double);
-static double rint(double);
+static double tur_u_tan(double);
+static double tur_u_asin(double);
+static double tur_u_acos(double);
+static double tur_u_atan(double);
+static double tur_u_trunc(double);
+static double tur_u_rint(double);
 static int64_t unwrap_hyor_hydefault(tur_adt_Option__int, int64_t);
 static double unwrap_hyor_hydefault_hyf(tur_adt_Option__float, double);
 static bool pos_hyi_qu(int64_t);
@@ -9435,52 +9435,52 @@ static int64_t with_hyregion(int64_t body) {
         return __ps_172;
 }
 
-static double sqrt(double x) {
+static double tur_u_sqrt(double x) {
         return __builtin_sqrt(x);
   
 }
 
-static double fabs(double x) {
+static double tur_u_fabs(double x) {
         return __builtin_fabs(x);
   
 }
 
-static double floor(double x) {
+static double tur_u_floor(double x) {
         return __builtin_floor(x);
   
 }
 
-static double ceil(double x) {
+static double tur_u_ceil(double x) {
         return __builtin_ceil(x);
   
 }
 
-static double pow(double x, double y) {
+static double tur_u_pow(double x, double y) {
         return __builtin_pow(x, y);
   
 }
 
-static double exp(double x) {
+static double tur_u_exp(double x) {
         return __builtin_exp(x);
   
 }
 
-static double log(double x) {
+static double tur_u_log(double x) {
         return __builtin_log(x);
   
 }
 
-static double sin(double x) {
+static double tur_u_sin(double x) {
         return __builtin_sin(x);
   
 }
 
-static double cos(double x) {
+static double tur_u_cos(double x) {
         return __builtin_cos(x);
   
 }
 
-static double atan2(double y, double x) {
+static double tur_u_atan2(double y, double x) {
         return __builtin_atan2(y, x);
   
 }
@@ -9501,32 +9501,32 @@ static void printf_hyfloat6(double x) {
 }
 
 static double PI_1661;
-static double tan(double x) {
+static double tur_u_tan(double x) {
         return __builtin_tan(x);
   
 }
 
-static double asin(double x) {
+static double tur_u_asin(double x) {
         return __builtin_asin(x);
   
 }
 
-static double acos(double x) {
+static double tur_u_acos(double x) {
         return __builtin_acos(x);
   
 }
 
-static double atan(double x) {
+static double tur_u_atan(double x) {
         return __builtin_atan(x);
   
 }
 
-static double trunc(double x) {
+static double tur_u_trunc(double x) {
         return __builtin_trunc(x);
   
 }
 
-static double rint(double x) {
+static double tur_u_rint(double x) {
         return __builtin_rint(x);
   
 }

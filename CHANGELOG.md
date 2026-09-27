@@ -6,6 +6,13 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`sqrt`, `pow`, `log` and the other `stdlib/math.tur` functions no longer
+  call themselves.** Each wrapper was a C function named after the libm
+  function it wraps. Where the compiler turns the math builtin into a libm
+  call (to set `errno`), that call reached the wrapper again. It overflowed
+  the stack at `-O0`. Under clang on Linux it returned garbage (`(sqrt 2.25)`
+  was 0.0) or hung. The wrappers now get their own C names.
+
 - **A Scheme program that raises builds with clang on x86-64.** Every `#lang
   r7rs` program that reached `raise` (so `error`, `guard`, every SRFI test
   suite) failed with "failed to perform tail call elimination on a call site

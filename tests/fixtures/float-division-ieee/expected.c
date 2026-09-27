@@ -5759,7 +5759,7 @@ static int64_t with_hyuntrailed(int64_t);
 static void trail_hyreset_ex();
 static int64_t trail_slautolink_hyhint();
 static int64_t with_hyregion(int64_t);
-static double fdiv(double, double);
+static double tur_u_fdiv(double, double);
 static float f32div(float, float);
 static double fconst(double);
 static bool nan_qu(double);
@@ -9293,7 +9293,7 @@ static int64_t with_hyregion(int64_t body) {
         return __ps_171;
 }
 
-static double fdiv(double a, double b) {
+static double tur_u_fdiv(double a, double b) {
         return (a) / (b);
 }
 
@@ -9325,28 +9325,28 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        double __ps_172 = (fdiv(7.1, 0.0));
+        double __ps_172 = (tur_u_fdiv(7.1, 0.0));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%g\n", (double)(__ps_172));
-        double __ps_173 = (fdiv(-7.1, 0.0));
+        double __ps_173 = (tur_u_fdiv(-7.1, 0.0));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%g\n", (double)(__ps_173));
-        double __ps_174 = (fdiv(0.0, 0.0));
+        double __ps_174 = (tur_u_fdiv(0.0, 0.0));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         bool __ps_175 = (nan_qu(__ps_174));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         puts((__ps_175) ? "true" : "false");
-        double __ps_176 = (fdiv(7.1, 2.5));
+        double __ps_176 = (tur_u_fdiv(7.1, 2.5));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         bool __ps_177 = (nan_qu(__ps_176));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         puts((__ps_177) ? "true" : "false");
-        double __ps_178 = (fdiv(7.1, 0.0));
+        double __ps_178 = (tur_u_fdiv(7.1, 0.0));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         bool __ps_179 = (nan_qu(__ps_178));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         puts((__ps_179) ? "true" : "false");
-        double __ps_180 = (fdiv(7.1, 2.5));
+        double __ps_180 = (tur_u_fdiv(7.1, 2.5));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%g\n", (double)(__ps_180));
         double __ps_181 = (fconst(16.5));
@@ -9355,9 +9355,9 @@ int main(int argc, char **argv) {
         float __ps_182 = (f32div(((float)7.5), ((float)2.5)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%.7g\n", (double)(__ps_182));
-        double __ps_183 = (fdiv(1.0, 0.0));
+        double __ps_183 = (tur_u_fdiv(1.0, 0.0));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        double __ps_184 = (fdiv(1.0, __ps_183));
+        double __ps_184 = (tur_u_fdiv(1.0, __ps_183));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%g\n", (double)(__ps_184));
         int64_t __t185;

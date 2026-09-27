@@ -478,9 +478,79 @@ int tur_name_collides_libc(const char *name, size_t len) {
         "vsprintf", "vsscanf", "wait", "waitpid", "wcstombs", "wctomb",
         "write",
     };
+    /* The <math.h> functions, which the TU does NOT include -- and that is
+     * exactly why they collide.  stdlib/math.tur defines `sqrt` as a static C
+     * function named `sqrt` whose body is `__builtin_sqrt(x)`.  A math builtin
+     * is not always an instruction: where it must set errno (a negative
+     * argument; everywhere at -O0; always under clang on Linux, which keeps
+     * -fmath-errno) the compiler emits a CALL to the libm symbol of the same
+     * name -- and in this TU that symbol is the wrapper itself.  So `sqrt`
+     * called itself until the stack ran out (gcc and clang at -O0), or
+     * clang -O2 deleted the recursion as UB and returned garbage (`(sqrt
+     * 2.25)` was 0.0 under #lang r7rs).  Named `tur_u_sqrt`, the wrapper's
+     * builtin reaches libm's (-lm is on every link line).  Every lowercase
+     * function <math.h> declares, derived with the recipe above over
+     * `#include <math.h>`, minus the TS 18661-3 _FloatN spellings (`sqrtf64`,
+     * `f32addf64`, ...) no program names. */
+    static const char *const libm_names[] = {
+        "acos", "acosf", "acosh", "acoshf", "acoshl", "acosl", "asin",
+        "asinf", "asinh", "asinhf", "asinhl", "asinl", "atan", "atan2",
+        "atan2f", "atan2l", "atanf", "atanh", "atanhf", "atanhl", "atanl",
+        "canonicalize", "canonicalizef", "canonicalizel", "cbrt", "cbrtf",
+        "cbrtl", "ceil", "ceilf", "ceill", "copysign", "copysignf",
+        "copysignl", "cos", "cosf", "cosh", "coshf", "coshl", "cosl",
+        "daddl", "ddivl", "dfmal", "dmull", "drem", "dremf", "dreml",
+        "dsqrtl", "dsubl", "erf", "erfc", "erfcf", "erfcl", "erff", "erfl",
+        "exp", "exp10", "exp10f", "exp10l", "exp2", "exp2f", "exp2l", "expf",
+        "expl", "expm1", "expm1f", "expm1l", "fabs", "fabsf", "fabsl",
+        "fadd", "faddl", "fdim", "fdimf", "fdiml", "fdiv", "fdivl", "ffma",
+        "ffmal", "finite", "finitef", "finitel", "floor", "floorf", "floorl",
+        "fma", "fmaf", "fmal", "fmax", "fmaxf", "fmaximum", "fmaximum_mag",
+        "fmaximum_mag_num", "fmaximum_mag_numf", "fmaximum_mag_numl",
+        "fmaximum_magf", "fmaximum_magl", "fmaximum_num", "fmaximum_numf",
+        "fmaximum_numl", "fmaximumf", "fmaximuml", "fmaxl", "fmaxmag",
+        "fmaxmagf", "fmaxmagl", "fmin", "fminf", "fminimum", "fminimum_mag",
+        "fminimum_mag_num", "fminimum_mag_numf", "fminimum_mag_numl",
+        "fminimum_magf", "fminimum_magl", "fminimum_num", "fminimum_numf",
+        "fminimum_numl", "fminimumf", "fminimuml", "fminl", "fminmag",
+        "fminmagf", "fminmagl", "fmod", "fmodf", "fmodl", "fmul", "fmull",
+        "frexp", "frexpf", "frexpl", "fromfp", "fromfpf", "fromfpl",
+        "fromfpx", "fromfpxf", "fromfpxl", "fsqrt", "fsqrtl", "fsub",
+        "fsubl", "gamma", "gammaf", "gammal", "getpayload", "getpayloadf",
+        "getpayloadl", "hypot", "hypotf", "hypotl", "ilogb", "ilogbf",
+        "ilogbl", "isinf", "isinff", "isinfl", "isnan", "isnanf", "isnanl",
+        "j0", "j0f", "j0l", "j1", "j1f", "j1l", "jn", "jnf", "jnl", "ldexp",
+        "ldexpf", "ldexpl", "lgamma", "lgamma_r", "lgammaf", "lgammaf_r",
+        "lgammal", "lgammal_r", "llogb", "llogbf", "llogbl", "llrint",
+        "llrintf", "llrintl", "llround", "llroundf", "llroundl", "log",
+        "log10", "log10f", "log10l", "log1p", "log1pf", "log1pl", "log2",
+        "log2f", "log2l", "logb", "logbf", "logbl", "logf", "logl", "lrint",
+        "lrintf", "lrintl", "lround", "lroundf", "lroundl", "modf", "modff",
+        "modfl", "nan", "nanf", "nanl", "nearbyint", "nearbyintf",
+        "nearbyintl", "nextafter", "nextafterf", "nextafterl", "nextdown",
+        "nextdownf", "nextdownl", "nexttoward", "nexttowardf", "nexttowardl",
+        "nextup", "nextupf", "nextupl", "pow", "powf", "powl", "remainder",
+        "remainderf", "remainderl", "remquo", "remquof", "remquol", "rint",
+        "rintf", "rintl", "round", "roundeven", "roundevenf", "roundevenl",
+        "roundf", "roundl", "scalb", "scalbf", "scalbl", "scalbln",
+        "scalblnf", "scalblnl", "scalbn", "scalbnf", "scalbnl", "setpayload",
+        "setpayloadf", "setpayloadl", "setpayloadsig", "setpayloadsigf",
+        "setpayloadsigl", "significand", "significandf", "significandl",
+        "sin", "sincos", "sincosf", "sincosl", "sinf", "sinh", "sinhf",
+        "sinhl", "sinl", "sqrt", "sqrtf", "sqrtl", "tan", "tanf", "tanh",
+        "tanhf", "tanhl", "tanl", "tgamma", "tgammaf", "tgammal",
+        "totalorder", "totalorderf", "totalorderl", "totalordermag",
+        "totalordermagf", "totalordermagl", "trunc", "truncf", "truncl",
+        "ufromfp", "ufromfpf", "ufromfpl", "ufromfpx", "ufromfpxf",
+        "ufromfpxl", "y0", "y0f", "y0l", "y1", "y1f", "y1l", "yn", "ynf",
+        "ynl",
+    };
     return bsearch(name, libc_names,
                    sizeof(libc_names) / sizeof(libc_names[0]),
-                   sizeof(libc_names[0]), sorted_strcmp) != NULL;
+                   sizeof(libc_names[0]), sorted_strcmp) != NULL ||
+           bsearch(name, libm_names,
+                   sizeof(libm_names) / sizeof(libm_names[0]),
+                   sizeof(libm_names[0]), sorted_strcmp) != NULL;
 }
 
 int tur_name_is_c_keyword(const char *name, size_t len) {
