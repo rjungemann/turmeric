@@ -1,0 +1,14 @@
+;; seedmap -- the Turmeric side of r7rs-keyword-seed: a map whose keys are
+;; Turmeric keywords, `:seed` among them, so the unit carries the interned
+;; keyword record `__tur_sym_seed` next to the Scheme program's symbol-table
+;; seeder.  A Scheme program cannot write the `#map{...}` literal itself
+;; (r7rs-turmeric-syntax-leaks), so it imports this.
+(defmodule seedmap
+  (export seeded)
+  ;; A `(Map any any)`, the kind a Scheme program's map-get reads; the
+  ;; keyword `:seed` is widened to `any` as a Scheme symbol is.
+  (defn seeded [] : any
+    (let [m0 (:: (map-new) (Map any any))
+          m1 (map-assoc m0 (:: :seed any) (:: 1 any))
+          m2 (map-assoc m1 (:: :other any) (:: 2 any))]
+      (:: m2 any))))

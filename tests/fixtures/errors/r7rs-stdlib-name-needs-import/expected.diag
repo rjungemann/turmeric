@@ -1,0 +1,3 @@
+'vec-len' is not bound: it is Turmeric's (stdlib/vec.tur), which a Scheme program reaches only through an import -- add (import (turmeric stdlib/vec))
+'println' is not bound: it is a Turmeric built-in, which Scheme cannot name
+unbound symbol 'true'

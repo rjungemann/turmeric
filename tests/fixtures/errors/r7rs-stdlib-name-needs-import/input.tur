@@ -1,0 +1,11 @@
+#lang r7rs
+;; r7rs-turmeric-syntax-leaks items 5, 8 and 9: a Scheme program sees only the
+;; names it imports or defines.  An auto-loaded Turmeric stdlib name is
+;; reached through `(import (turmeric stdlib/<file>))`, a Turmeric built-in
+;; not at all, and `true` is an ordinary (here unbound) identifier.  Both back
+;; ends refuse all three, where the interpreter used to run them (TUR-W0040's
+;; runtime dispatch for a name the compiled back end already refused).
+(import (scheme base) (scheme write))
+(write (vec-len (vec-new)))
+(println "hi")
+(write true)

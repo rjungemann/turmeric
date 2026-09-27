@@ -82,11 +82,18 @@ typedef bool (*SchemeLibResolveFn)(void *ud, const char *module, char *path, siz
  * May be NULL (a library's module: its names are not respelled). */
 typedef enum { SCHEME_GLOBAL_NONE, SCHEME_GLOBAL_STDLIB, SCHEME_GLOBAL_EARLIER_TURN } SchemeGlobalKind;
 typedef SchemeGlobalKind (*SchemeGlobalFn)(void *ud, const char *name);
+/* r7rs-turmeric-syntax-leaks item 8: the auto-loaded stdlib file (its
+ * basename without `.tur`, e.g. "vec") that defines the global `name`, for a
+ * name the stream's own forms do not show -- an interpreter or REPL session
+ * elaborated its stdlib earlier, and a library module's stream holds only the
+ * library (elab_scheme_stdlib_file).  False when `name` is no such global.
+ * May be NULL. */
+typedef bool (*SchemeStdlibFileFn)(void *ud, const char *name, char *out, size_t cap);
 
 Form **scheme_lower_program(Arena *a, SymbolTable *st,
                             Form *const *forms, uint32_t n, uint32_t *out_n,
                             SchemeLibResolveFn resolve, SchemeGlobalFn global_kind,
-                            void *resolve_ud);
+                            SchemeStdlibFileFn stdlib_file, void *resolve_ud);
 
 /* True when any form in `forms` belongs to a LANG_R7RS file -- a cheap test a
  * caller can make before paying for the pass. */

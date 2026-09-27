@@ -1,5 +1,5 @@
 #lang r7rs
-;; docs/reported/r7rs-turmeric-syntax-leaks.md item 7: a Turmeric special form
+;; docs/archive/r7rs-turmeric-syntax-leaks.md item 7: a Turmeric special form
 ;; is not Scheme.  In a Scheme source its name is an ordinary identifier, and
 ;; one the program does not bind heads a form written as Turmeric: refused,
 ;; with where Turmeric code goes.  (At the REPL the message says to switch the

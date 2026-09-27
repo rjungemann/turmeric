@@ -618,11 +618,26 @@ Expr *elab_form(Elab *e, Form *f) {
                     return NULL;
                 }
                 /* Phase 8: Enhanced unbound symbol diagnostic with suggestions */
+                /* r7rs-turmeric-syntax-leaks: in user Scheme source, name the
+                 * identifier as the program wrote it (the lowering respells
+                 * some -- `nil` is `nil--user`), and suggest only what the
+                 * program could name: not the stdlib's globals, nor the
+                 * prelude's internal `r7rs-` spellings. */
+                bool scheme_user = scheme_span_is_user_source(f->span);
+                char shown_buf[256];
+                const char *shown = scheme_user
+                    ? scheme_source_name(f->as.sym->name, shown_buf, sizeof shown_buf)
+                    : f->as.sym->name;
                 const Symbol *best_match = NULL;
                 int best_distance = 3;
                 for (Scope *cur = e->scope; cur; cur = cur->parent) {
                     for (uint32_t i = 0; i < cur->n; i++) {
                         Binding *candidate = cur->bindings[i];
+                        if (scheme_user && (candidate->is_from_stdlib ||
+                                            elab_file_is_stdlib(candidate->span.file_id) ||
+                                            strncmp(candidate->name->name, "r7rs-", 5) == 0 ||
+                                            strncmp(candidate->name->name, "__", 2) == 0))
+                            continue;
                         int dist = sym_levenshtein_distance(f->as.sym, candidate->name);
                         if (dist > 0 && dist < best_distance) {
                             best_distance = dist;
@@ -632,7 +647,7 @@ Expr *elab_form(Elab *e, Form *f) {
                 }
                 if (best_match) {
                     char msg[256];
-                    snprintf(msg, sizeof(msg), "unbound symbol '%s'", f->as.sym->name);
+                    snprintf(msg, sizeof(msg), "unbound symbol '%s'", shown);
                     char sug_text[128];
                     snprintf(sug_text, sizeof(sug_text), "Did you mean '%s'?", best_match->name);
                     DiagSuggestion sug = {
@@ -643,7 +658,7 @@ Expr *elab_form(Elab *e, Form *f) {
                     diag_emit_with_suggestion(DIAG_ERROR, f->span, msg, &sug);
                 } else {
                     diag_emit_with_code(DIAG_ERROR, f->span, TUR_E0003_UNBOUND_SYMBOL,
-                                        "unbound symbol '%s'", f->as.sym->name);
+                                        "unbound symbol '%s'", shown);
                 }
                 return NULL;
             }
@@ -2296,7 +2311,8 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         uint32_t lowered_n = 0;
         forms  = (Form *const *)scheme_lower_program(arena, st, forms, nforms, &lowered_n,
                                                      elab_scheme_library_path,
-                                                     elab_scheme_global_kind, &e);
+                                                     elab_scheme_global_kind,
+                                                     elab_scheme_stdlib_file, &e);
         nforms = lowered_n;
     }
 

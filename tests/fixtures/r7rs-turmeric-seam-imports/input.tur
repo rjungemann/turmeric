@@ -1,0 +1,29 @@
+#lang r7rs
+;; r7rs-turmeric-syntax-leaks: Turmeric reaches a Scheme program through one
+;; door, `(import (turmeric <module>))`.  An auto-loaded stdlib file's names
+;; are visible only through such an import, under any import set -- `only`,
+;; `prefix`, `rename`, `except` -- on both back ends.  And the words Turmeric
+;; reads as literals or annotations (`true`, `false`, `nil`, `^tailcall`) are
+;; ordinary Scheme identifiers here.
+(import (scheme base) (scheme write)
+        (only (turmeric stdlib/vec) vec-new vec-push!)
+        (prefix (turmeric stdlib/vec) v:)
+        (rename (turmeric stdlib/option) (unwrap-or or-else))
+        (except (turmeric stdlib/map) map-count))
+
+(define v (vec-new))
+(vec-push! v 7)
+(vec-push! v 8)
+(write (list (v:vec-len v) (v:vec-get v 1)))
+(newline)
+(write (or-else (some 5) 0))
+(newline)
+(write (map-get (map-assoc (map-new) 'k "value") 'k))
+(newline)
+
+;; Identifiers, not literals.
+(define true 'yes)
+(define (nil x) (list 'nil-called x))
+(define ^tailcall 3)
+(write (list true (nil 1) ^tailcall 'false '(nil true false)))
+(newline)

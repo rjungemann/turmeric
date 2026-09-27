@@ -4,6 +4,19 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **A Scheme file sees only Scheme and what it imports.** Under `#lang
+  r7rs`, Turmeric's stdlib (`vec-new`, `map-assoc`, `some`, ...) is visible
+  only through `(import (turmeric stdlib/<file>))`, with `only`, `prefix`,
+  `rename` and `except` working as for any library. A Turmeric built-in such
+  as `println` is not visible at all. Turmeric's `#map{...}`-family literals,
+  inline C and `@` are read errors that name the Scheme spelling or the
+  import to use. `true`, `false`, `nil` and `^tailcall` are ordinary
+  identifiers. A name nothing binds is an error under `--interpret` too,
+  where the interpreter used to run a native of that name. All of these used
+  to work with no import.
+
 ### Fixed
 
 - **A standard procedure is `eqv?` to itself.** Under `#lang r7rs`, `(eqv? car

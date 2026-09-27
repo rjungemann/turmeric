@@ -314,8 +314,8 @@
                                  ": ")))
         (print runner "[~a] ~a~%" result-kind-name label)
         (when (memq result-kind '(fail xpass))
-          ;; Turmeric: `nil` is not a name a #lang r7rs program may bind
-          ;; (docs/reported/r7rs-turmeric-syntax-leaks.md), so `missing`.
+          ;; Turmeric: `nil` could not be bound in a #lang r7rs program
+          ;; (docs/archive/r7rs-turmeric-syntax-leaks.md; it can now), so `missing`.
           (let ((missing (cons #f #f)))
             (define (found? value)
               (not (eq? missing value)))

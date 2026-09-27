@@ -13,6 +13,7 @@
 #include "reader.h"            /* include / include-ci: read a file as Scheme */
 #include "expr.h"              /* R10: tur_name_is_reserved_special_form */
 #include "stdlib_autoload.h"   /* R3: which `(turmeric stdlib/x)` imports are no-ops */
+#include "builtins.h"          /* r7rs-turmeric-syntax-leaks item 8: builtin_first_with_name */
 
 /* elab_core.c: the builtin type a name spells, or TY_UNKNOWN (elab_internal.h). */
 TypeKind typekind_from_symbol(const char *name);
@@ -319,20 +320,27 @@ const char *scheme_public_name(const char *prelude_name) {
     return NULL;
 }
 
+/* r7rs-turmeric-syntax-leaks item 4: see caret_spelling. */
+#define SCHEME_CARET_PREFIX "__scheme_caret_"
 const char *scheme_source_name(const char *name, char *buf, size_t cap) {
     if (!name || !buf || cap == 0) return name;
     const char *pub = scheme_public_name(name);
     if (pub) return pub;
     size_t n = strlen(name);
+    /* A `^` identifier (bind_name, caret_spelling). */
+    bool caret = strncmp(name, SCHEME_CARET_PREFIX, sizeof SCHEME_CARET_PREFIX - 1) == 0;
+    if (caret) { name += sizeof SCHEME_CARET_PREFIX - 1; n -= sizeof SCHEME_CARET_PREFIX - 1; }
     /* A local binder renamed apart (bind_name): `<name>__v<digits>`. */
     size_t d = n;
     while (d > 0 && name[d - 1] >= '0' && name[d - 1] <= '9') d--;
     if (d < n && d >= 3 && memcmp(name + d - 3, "__v", 3) == 0) n = d - 3;
     /* A global respelled apart from a stdlib or Turmeric-form name. */
     else if (n > 6 && memcmp(name + n - 6, "--user", 6) == 0) n -= 6;
-    if (n == 0 || n >= cap) return name;
-    memcpy(buf, name, n);
-    buf[n] = '\0';
+    if (n == 0 || n + (caret ? 1 : 0) >= cap) return name;
+    size_t at = 0;
+    if (caret) buf[at++] = '^';
+    memcpy(buf + at, name, n);
+    buf[at + n] = '\0';
     return buf;
 }
 
@@ -653,10 +661,82 @@ typedef struct SL {
     uint32_t             n_srfilib, cap_srfilib;
     FB                   base_sets;
     FB                   user_globals;
+    /* r7rs-turmeric-syntax-leaks item 8: a user Scheme source sees the
+     * auto-loaded stdlib only through `(turmeric stdlib/<file>)`.  The
+     * stdlib's globals and the file each is from (from the stream's own
+     * stdlib forms, else stdlib_file), and what this unit's imports made
+     * visible: names one by one (`only`), or whole files less the names an
+     * `except` or `rename` took away. */
+    SchemeStdlibFileFn   stdlib_file;
+    const Symbol       **std_keys;
+    const Symbol       **std_files;
+    uint32_t             std_cap, std_n;
+    const Symbol       **granted;
+    uint32_t             n_granted, cap_granted;
+    const Symbol        *granted_files[32];
+    uint32_t             n_granted_files;
+    const Symbol       **denied;
+    uint32_t             n_denied, cap_denied;
 } SL;
 
 static const Symbol *I(SL *sl, const char *s) {
     return symtab_intern(sl->st, strslice(s, (uint32_t)strlen(s)));
+}
+
+/* r7rs-turmeric-syntax-leaks item 8: the stdlib-name table (open addressing
+ * on the interned Symbol's address) and the grant lists. */
+static uint32_t std_slot(const SL *sl, const Symbol *s) {
+    uintptr_t h = (uintptr_t)s;
+    h ^= h >> 17; h *= (uintptr_t)0x9E3779B97F4A7C15ULL; h ^= h >> 29;
+    return (uint32_t)h & (sl->std_cap - 1);
+}
+static void std_put(SL *sl, const Symbol *s, const Symbol *file) {
+    if (sl->std_n * 2 >= sl->std_cap) {
+        uint32_t oc = sl->std_cap;
+        const Symbol **ok = sl->std_keys, **of = sl->std_files;
+        sl->std_cap = oc ? oc * 2 : 1024;
+        sl->std_keys = (const Symbol **)calloc(sl->std_cap, sizeof(Symbol *));
+        sl->std_files = (const Symbol **)calloc(sl->std_cap, sizeof(Symbol *));
+        if (!sl->std_keys || !sl->std_files) { fprintf(stderr, "tur: oom\n"); abort(); }
+        sl->std_n = 0;
+        for (uint32_t i = 0; i < oc; i++) if (ok[i]) std_put(sl, ok[i], of[i]);
+        free((void *)ok); free((void *)of);
+    }
+    uint32_t i = std_slot(sl, s);
+    while (sl->std_keys[i] && sl->std_keys[i] != s) i = (i + 1) & (sl->std_cap - 1);
+    if (!sl->std_keys[i]) sl->std_n++;
+    sl->std_keys[i] = s;
+    sl->std_files[i] = file;
+}
+static bool stdlib_autoloaded(const char *name);
+/* The auto-loaded stdlib file `s` is a global of, or NULL. */
+static const Symbol *std_file_of(SL *sl, const Symbol *s) {
+    if (sl->std_cap) {
+        uint32_t i = std_slot(sl, s);
+        while (sl->std_keys[i]) {
+            if (sl->std_keys[i] == s) return sl->std_files[i];
+            i = (i + 1) & (sl->std_cap - 1);
+        }
+    }
+    if (sl->stdlib_file) {
+        char buf[128];
+        if (sl->stdlib_file(sl->lib_resolve_ud, s->name, buf, sizeof buf) && stdlib_autoloaded(buf))
+            return I(sl, buf);
+    }
+    return NULL;
+}
+static void sym_list_push(const Symbol ***items, uint32_t *n, uint32_t *cap, const Symbol *s) {
+    for (uint32_t i = 0; i < *n; i++) if ((*items)[i] == s) return;
+    if (*n == *cap) {
+        *cap = *cap ? *cap * 2 : 16;
+        *items = (const Symbol **)realloc((void *)*items, *cap * sizeof(Symbol *));
+        if (!*items) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    (*items)[(*n)++] = s;
+}
+static bool sym_list_has(const Symbol *const *items, uint32_t n, const Symbol *s) {
+    for (uint32_t i = 0; i < n; i++) if (items[i] == s) return true;
+    return false;
 }
 
 static void sl_init(SL *sl, Arena *a, SymbolTable *st) {
@@ -1064,10 +1144,22 @@ static void sym_pair_push(SL *sl, const Symbol ***from, const Symbol ***to, uint
 static bool prelude_span(Span sp);
 /* Declare a local binder in the innermost scope: its unique name.  The
  * prelude is written against its own names and is never renamed. */
+/* r7rs-turmeric-syntax-leaks item 4: `^` is an R7RS <initial>, but a
+ * Turmeric name starting with it is an annotation (`^mut`), so a Scheme
+ * identifier `^x` is spelled `__scheme_caret_x` wherever it is bound or used
+ * (quoted, it is still the symbol `^x`). */
+static const Symbol *caret_spelling(SL *sl, const Symbol *s) {
+    char buf[256];
+    snprintf(buf, sizeof buf, SCHEME_CARET_PREFIX "%s", s->name + 1);
+    return I(sl, buf);
+}
 static const Symbol *bind_name(SL *sl, const Symbol *s, Span sp) {
     if (!sl->scope || prelude_span(sp)) return s;
     char pre[160];
-    snprintf(pre, sizeof pre, "%s__v", s->name);
+    if (s->name[0] == '^')
+        snprintf(pre, sizeof pre, SCHEME_CARET_PREFIX "%s__v", s->name + 1);
+    else
+        snprintf(pre, sizeof pre, "%s__v", s->name);
     const Symbol *u = fresh(sl, pre);
     sym_pair_push(sl, &sl->scope->src, &sl->scope->uq, &sl->scope->n, &sl->scope->cap, s, u);
     return u;
@@ -1111,9 +1203,12 @@ static const Symbol *type_named_global(SL *sl, const Symbol *s) {
 }
 
 static const Symbol *rn_std(SL *sl, const Symbol *s);
+static const Symbol *caret_spelling(SL *sl, const Symbol *s);
 static const Symbol *rn_global(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_renames; i++)
         if (sl->renames[i].from == s) return sl->renames[i].to;
+    /* r7rs-turmeric-syntax-leaks item 4: a `^` identifier, bound or not. */
+    if (sl->in_user && s->name[0] == '^' && s->len > 1) return caret_spelling(sl, s);
     /* r7rs-srfi-plan S1: a name an `(import (srfi N))` bound, in user code
      * only -- an SRFI's own body is spelled onto its targets already. */
     if (sl->in_user)
@@ -3251,6 +3346,15 @@ static Form *lower_datum(SL *sl, Form *d) {
     Span sp = d->span;
     switch (d->tag) {
         case F_SYM:
+            /* r7rs-turmeric-syntax-leaks item 5: in user source `nil`,
+             * `true` and `false` are identifiers, so quoted they are symbols
+             * -- built by name, since `(quote nil)` would elaborate as
+             * Turmeric's nil (the prelude's `'nil` is still the empty list). */
+            if (!prelude_span(sp) &&
+                (d->as.sym == sl->t_nil_sym || !strcmp(d->as.sym->name, "true") ||
+                 !strcmp(d->as.sym->name, "false")))
+                return Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-string->symbol")),
+                          form_str(sl->a, sp, d->as.sym->name, d->as.sym->len));
             if (d->as.sym == sl->t_nil_sym) return Ln(sl, sp, 1, Sym(sl, sp, sl->p_list));
             /* A template's alias quoted (hyg_pending): the symbol as written. */
             if (global_alias_orig(sl, d->as.sym)) return form_quote(sl->a, sp, Sym(sl, sp, ident_orig(sl, d->as.sym)));
@@ -3386,6 +3490,33 @@ static Form *lower_children(SL *sl, Form *f) {
     return g;
 }
 
+static bool scheme_std_visible(SL *sl, const Symbol *s);
+/* Does an import at `sp` grant the unit stdlib names?  The user's own. */
+static bool import_grants(const SL *sl, Span sp) {
+    (void)sp;
+    return sl->in_user;
+}
+/* A REPL session lowers each prompt turn on its own, so what an earlier
+ * turn's `(import (turmeric stdlib/...))` granted is kept here, for the
+ * process, and every later turn of a synthetic (`<eval>`) source starts from
+ * it.  Kept as names, re-interned into each turn's table. */
+typedef struct { char **items; uint32_t n, cap; } NameList;
+static struct { NameList granted, denied, files; } g_repl_grants;
+static void names_add(NameList *l, const char *s) {
+    for (uint32_t i = 0; i < l->n; i++) if (strcmp(l->items[i], s) == 0) return;
+    if (l->n == l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 16;
+        l->items = (char **)realloc(l->items, l->cap * sizeof(char *));
+        if (!l->items) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    l->items[l->n] = strdup(s);
+    if (!l->items[l->n]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    l->n++;
+}
+static bool span_is_synthetic(Span sp) {
+    const SourceFile *f = diag_source_file(sp.file_id);
+    return f && f->path && f->path[0] == '<';
+}
 static Form *lower(SL *sl, Form *f) {
     if (!f) return f;
     switch (f->tag) {
@@ -3413,6 +3544,24 @@ static Form *lower(SL *sl, Form *f) {
                 return Ln(sl, f->span, 3, Sym(sl, f->span, I(sl, "::")),
                           Sym(sl, f->span, sl->ops_val[op]), Sym(sl, f->span, sl->t_any));
             const Symbol *r = rn(sl, f->as.sym);
+            /* r7rs-turmeric-syntax-leaks item 8: a Turmeric stdlib name the
+             * unit did not import is not bound in Scheme. */
+            if (r == f->as.sym && sl->in_user && !scheme_std_visible(sl, r)) {
+                const Symbol *file = std_file_of(sl, r);
+                if (file && sym_list_has(sl->granted_files, sl->n_granted_files, file))
+                    err(f, "'%s' is not bound: this unit's import of (turmeric stdlib/%s) leaves it out "
+                           "(an `except`, or a `rename` gave it another name)", r->name, file->name);
+                else if (file)
+                    err(f, "'%s' is not bound: it is Turmeric's (stdlib/%s.tur), which a Scheme program "
+                           "reaches only through an import -- add (import (turmeric stdlib/%s))",
+                        r->name, file->name, file->name);
+                else
+                    err(f, "'%s' is not bound: it is a Turmeric built-in, which Scheme cannot name; "
+                           "use the Scheme procedure (display, write, ...), or call it from a Turmeric "
+                           "module imported with (turmeric <module>)", r->name);
+                return Ln(sl, f->span, 3, Sym(sl, f->span, I(sl, "::")), Nil(sl, f->span),
+                          Sym(sl, f->span, sl->t_any));
+            }
             return (r == f->as.sym) ? f : Sym(sl, f->span, r);
         }
         case F_QUOTE:      return lower_datum(sl, f->as.list.items[0]);
@@ -4312,8 +4461,79 @@ typedef struct LibSyntax LibSyntax;
 static LibSyntax *lib_syntax_of(SL *sl, const Form *libname, const Symbol *mod);
 static bool lib_syntax_exports(const LibSyntax *lx, const Symbol *pub);
 static void lib_syntax_import(SL *sl, LibSyntax *lx, const SchemeImportSpec *spec, Span sp);
+/* r7rs-turmeric-syntax-leaks item 8: the auto-loaded stdlib file a
+ * `(turmeric stdlib/<file>)` (or `(turmeric <file>)`) library name denotes,
+ * or NULL for any other library. */
+static const Symbol *turmeric_stdlib_file(SL *sl, const Form *lib) {
+    if (!lib || lib->tag != F_LIST || lib->as.list.len != 2 ||
+        lib->as.list.items[0]->tag != F_SYM || lib->as.list.items[1]->tag != F_SYM ||
+        strcmp(lib->as.list.items[0]->as.sym->name, "turmeric") != 0)
+        return NULL;
+    const char *m = lib->as.list.items[1]->as.sym->name;
+    if (strncmp(m, "stdlib/", 7) == 0) m += 7;
+    return stdlib_autoloaded(m) ? I(sl, m) : NULL;
+}
+static bool spec_excludes(const SchemeImportSpec *spec, const Symbol *s);
+/* What such an import makes visible: an `only` list name by name, anything
+ * else the whole file less what an `except` or a `rename` took away.  A
+ * `prefix` keeps the bare names hidden -- `v:vec-new` reaches its name
+ * through the prefix rule. */
+static void grant_stdlib_import(SL *sl, const SchemeImportSpec *spec, const Symbol *file) {
+    if (spec->has_only) {
+        for (uint32_t i = 0; i < spec->only.n; i++) {
+            const Symbol *o = spec->only.items[i]->as.sym;
+            bool renamed = false;
+            for (uint32_t r = 0; r + 1 < spec->renames.n && !renamed; r += 2)
+                renamed = spec->renames.items[r + 1]->as.sym == o;
+            if (!spec_excludes(spec, o) && !renamed && !spec->prefix)
+                sym_list_push(&sl->granted, &sl->n_granted, &sl->cap_granted, o);
+        }
+        return;
+    }
+    if (spec->prefix) return;
+    if (!sym_list_has(sl->granted_files, sl->n_granted_files, file) && sl->n_granted_files < 32)
+        sl->granted_files[sl->n_granted_files++] = file;
+    for (uint32_t i = 0; i < spec->except.n; i++)
+        sym_list_push(&sl->denied, &sl->n_denied, &sl->cap_denied, spec->except.items[i]->as.sym);
+    for (uint32_t r = 0; r + 1 < spec->renames.n; r += 2)
+        sym_list_push(&sl->denied, &sl->n_denied, &sl->cap_denied, spec->renames.items[r + 1]->as.sym);
+}
+/* Keep a REPL turn's grants for the turns after it. */
+static void repl_grants_save(const SL *sl) {
+    for (uint32_t i = 0; i < sl->n_granted; i++) names_add(&g_repl_grants.granted, sl->granted[i]->name);
+    for (uint32_t i = 0; i < sl->n_denied; i++) names_add(&g_repl_grants.denied, sl->denied[i]->name);
+    for (uint32_t i = 0; i < sl->n_granted_files; i++) names_add(&g_repl_grants.files, sl->granted_files[i]->name);
+}
+static void repl_grants_load(SL *sl) {
+    for (uint32_t i = 0; i < g_repl_grants.granted.n; i++)
+        sym_list_push(&sl->granted, &sl->n_granted, &sl->cap_granted, I(sl, g_repl_grants.granted.items[i]));
+    for (uint32_t i = 0; i < g_repl_grants.denied.n; i++)
+        sym_list_push(&sl->denied, &sl->n_denied, &sl->cap_denied, I(sl, g_repl_grants.denied.items[i]));
+    for (uint32_t i = 0; i < g_repl_grants.files.n && sl->n_granted_files < 32; i++) {
+        const Symbol *f = I(sl, g_repl_grants.files.items[i]);
+        if (!sym_list_has(sl->granted_files, sl->n_granted_files, f)) sl->granted_files[sl->n_granted_files++] = f;
+    }
+}
+/* May user Scheme source name `s`, which resolved to itself?  Anything that
+ * is not an auto-loaded stdlib global may (the elaborator reports what is
+ * unbound); a stdlib global only through an import. */
+static bool scheme_std_visible(SL *sl, const Symbol *s) {
+    if (sym_list_has(sl->granted, sl->n_granted, s)) return true;
+    const Symbol *file = std_file_of(sl, s);
+    /* A built-in (`println`, `str`, `mod`) is no file's, so nothing grants
+     * it; a Scheme spelling of one was renamed onto the prelude before
+     * this is asked. */
+    if (!file) return builtin_first_with_name(s) == NULL;
+    return sym_list_has(sl->granted_files, sl->n_granted_files, file) &&
+           !sym_list_has(sl->denied, sl->n_denied, s);
+}
+
 static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
     bool ok;
+    {
+        const Symbol *tfile = import_grants(sl, sp) ? turmeric_stdlib_file(sl, spec->lib) : NULL;
+        if (tfile) grant_stdlib_import(sl, spec, tfile);
+    }
     const Symbol *mod = library_module(sl, spec->lib, &ok);
     if (!ok) return;
     /* r7rs-define-library-cannot-export-syntax: a Scheme library's exported
@@ -4412,6 +4632,15 @@ static void lower_import_set(SL *sl, Form *set) {
         return;
     }
     if (is_srfi_libname(set)) { srfi_import(sl, set, NULL, sp); return; }
+    if (import_grants(sl, sp)) {
+        /* r7rs-turmeric-syntax-leaks item 8: the whole file becomes visible. */
+        const Symbol *tfile = turmeric_stdlib_file(sl, set);
+        if (tfile) {
+            SchemeImportSpec whole = {0};
+            whole.lib = set;
+            grant_stdlib_import(sl, &whole, tfile);
+        }
+    }
     const Symbol *mod = library_module(sl, set, &ok);
     if (!ok || !mod) return;
     fb_push(&sl->imports, Ln(sl, sp, 2, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod)));
@@ -5791,6 +6020,7 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
     /* A library's names live in its module and are exported by name. */
     for (uint32_t u = 0; u < user.n; u++) {
         const Symbol *s = user.items[u]->as.sym;
+        if (s->name[0] == '^' && s->len > 1) { set_clash(sl, s, caret_spelling(sl, s)); continue; }
         if (library) continue;
         /* A standard name the program defines for itself -- SICP's
          * `(define (square x) ...)` -- is the program's own from then on:
@@ -5837,16 +6067,41 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
 Form **scheme_lower_program(Arena *a, SymbolTable *st,
                             Form *const *forms, uint32_t n, uint32_t *out_n,
                             SchemeLibResolveFn resolve, SchemeGlobalFn global_kind,
-                            void *resolve_ud) {
+                            SchemeStdlibFileFn stdlib_file, void *resolve_ud) {
     SL sl;
     sl_init(&sl, a, st);
     sl.lib_resolve = resolve;
     sl.lib_resolve_ud = resolve_ud;
     sl.global_kind = global_kind;
+    sl.stdlib_file = stdlib_file;
     FB included = {0};
     expand_includes(&sl, forms, n, &included);
     forms = included.items;
     n = included.n;
+    /* r7rs-turmeric-syntax-leaks item 8: the auto-loaded stdlib's globals,
+     * each with its file, off the stdlib forms ahead of the program. */
+    for (uint32_t i = 0; i < n; i++) {
+        if (is_scheme_file(forms[i])) continue;
+        const SourceFile *sf = diag_source_file(forms[i]->span.file_id);
+        if (!sf || !sf->path) continue;
+        const char *b = sf->path;
+        for (const char *p = sf->path; *p; p++) if (*p == '/' || *p == '\\') b = p + 1;
+        size_t bl = strlen(b);
+        char base[128];
+        if (bl < 5 || bl - 4 >= sizeof base || strcmp(b + bl - 4, ".tur") != 0) continue;
+        memcpy(base, b, bl - 4);
+        base[bl - 4] = '\0';
+        if (!stdlib_autoloaded(base)) continue;
+        FB names = {0};
+        stdlib_names_of(&sl, forms[i], &names, 0);
+        const Symbol *file = I(&sl, base);
+        for (uint32_t k = 0; k < names.n; k++) std_put(&sl, names.items[k]->as.sym, file);
+        free(names.items);
+    }
+    bool repl_turn = false;
+    for (uint32_t i = 0; i < n && !repl_turn; i++)
+        repl_turn = is_scheme_file(forms[i]) && span_is_synthetic(forms[i]->span);
+    if (repl_turn) repl_grants_load(&sl);
     /* r7rs-srfi-plan S1: a spliced SRFI file's define-library -> its
      * definitions, spelled onto their targets, before any scan reads the
      * program (the `set!` targets see the spelled names). */
@@ -6026,6 +6281,11 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     free((void *)sl.srfi_from); free((void *)sl.srfi_to); free(sl.srfi_by);
     free(sl.user_globals.items);
     free(sl.base_sets.items);
+    if (repl_turn) repl_grants_save(&sl);
+    free((void *)sl.std_keys);
+    free((void *)sl.std_files);
+    free((void *)sl.granted);
+    free((void *)sl.denied);
     free(srfi_expanded.items);
     for (uint32_t i = 0; i < sl.n_libsyn; i++) {
         LibSyntax *lx = sl.libsyn[i];

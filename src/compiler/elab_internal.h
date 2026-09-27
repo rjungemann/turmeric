@@ -1482,6 +1482,7 @@ bool elab_module_resolve_path(Elab *e, const Symbol *name,
  * Scheme lowering can read a library's macros from its source. */
 bool elab_scheme_library_path(void *ud, const char *module, char *out, size_t cap);
 SchemeGlobalKind elab_scheme_global_kind(void *ud, const char *name);
+bool elab_scheme_stdlib_file(void *ud, const char *name, char *out, size_t cap);
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);

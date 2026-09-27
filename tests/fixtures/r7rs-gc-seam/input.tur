@@ -22,9 +22,10 @@
       (begin (list i i i i) (churn (- i 1)))))
 
 ;; A list, a string and a vector that live only in the map.  A key is a
-;; Scheme symbol (`'k`), the same runtime value as the Turmeric keyword `:k`
-;; the `#map{...}` literal's own keys are.
-(define m (map-assoc #map{:a 1} 'k (list 1 2 3 "four" (vector 5 6))))
+;; Scheme symbol (`'k`), the same runtime value as the Turmeric keyword `:k`.
+;; (Turmeric's `#map{...}` literal is not Scheme syntax: the map is built with
+;; map-assoc, r7rs-turmeric-syntax-leaks.)
+(define m (map-assoc (map-assoc (map-new) 'a 1) 'k (list 1 2 3 "four" (vector 5 6))))
 (churn 200000)
 (show (map-get m 'k))
 (define m2 (map-assoc m 's (string-append "hello" " world")))
@@ -45,6 +46,6 @@
 (show (vec-get v 1))
 
 ;; The map itself, reachable only through a Scheme pair, survives too.
-(define holder (cons (map-assoc #map{:y 0} 'z (list 'deep)) '()))
+(define holder (cons (map-assoc (map-assoc (map-new) 'y 0) 'z (list 'deep)) '()))
 (churn 200000)
 (show (map-get (car holder) 'z))

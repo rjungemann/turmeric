@@ -5021,7 +5021,12 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                               ov->name, ov->min_arity, ov->max_arity, arg_name, res_name);
                 }
             }
-        } else if (e->separate_compilation || !g_interpret_mode) {
+        } else if (e->separate_compilation || !g_interpret_mode ||
+                   /* r7rs-turmeric-syntax-leaks item 9: a Scheme program
+                    * names only what it defines or imports, so an unknown
+                    * name is an error on both back ends -- never the
+                    * interpreter's runtime dispatch to a native. */
+                   scheme_span_is_user_source(head->span)) {
             /* UCH1 (diagnose-unbound-call-heads-plan): in any compiled path an
              * unknown call head is a genuine unbound reference (a typo, or a
              * missing import / extern-c).  Report it here instead of silently

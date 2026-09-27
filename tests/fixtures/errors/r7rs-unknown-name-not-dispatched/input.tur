@@ -1,0 +1,7 @@
+#lang r7rs
+;; r7rs-turmeric-syntax-leaks item 9: a name nothing in the program binds is
+;; an error on both back ends.  The interpreter used to warn (TUR-W0040,
+;; "will runtime-dispatch") and then run its native `str-concat`, where the
+;; compiled back end refused the same program.
+(import (scheme base) (scheme write))
+(write (str-concat "a" "b"))

@@ -122,7 +122,7 @@ Probed on both back ends, all correct:
   [docs/archive/r7rs-leading-colon-identifiers.md](../archive/r7rs-leading-colon-identifiers.md)
   (resolved: fixture `r7rs-colon-identifiers`; the wider question it raised,
   Turmeric surface in Scheme source, is
-  [docs/reported/r7rs-turmeric-syntax-leaks.md](../reported/r7rs-turmeric-syntax-leaks.md))
+  [docs/archive/r7rs-turmeric-syntax-leaks.md](../archive/r7rs-turmeric-syntax-leaks.md))
 - **A `define-library` cannot export a `syntax-rules` macro.** The export check
   in src/compiler/elab_module.c refused it: "exported symbol 'my-rec' is not
   defined in this module". That ruled out the obvious design of SRFI

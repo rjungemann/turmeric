@@ -631,7 +631,8 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
         if (scheme_lower_needed(forms, nforms)) {
             uint32_t lowered_n = 0;
             forms  = scheme_lower_program(e->arena, e->st, forms, nforms, &lowered_n,
-                                          elab_scheme_library_path, NULL, e);
+                                          elab_scheme_library_path, NULL,
+                                          elab_scheme_stdlib_file, e);
             nforms = lowered_n;
             /* R3 / D9, the reverse direction: a Turmeric program importing a
              * Scheme library.  The R7RS prelude is autoloaded only when the
@@ -1052,6 +1053,27 @@ SchemeGlobalKind elab_scheme_global_kind(void *ud, const char *name) {
     if (!b) return SCHEME_GLOBAL_NONE;
     if (b->is_from_stdlib || elab_file_is_stdlib(b->span.file_id)) return SCHEME_GLOBAL_STDLIB;
     return elab_prior_turn_global(e, b) ? SCHEME_GLOBAL_EARLIER_TURN : SCHEME_GLOBAL_NONE;
+}
+
+/* scheme_lower.h SchemeStdlibFileFn: the auto-loaded stdlib file whose
+ * global `name` is -- its basename without `.tur` -- when the session has
+ * elaborated the stdlib already (an interpreter or REPL session, a library
+ * module imported by a program). */
+bool elab_scheme_stdlib_file(void *ud, const char *name, char *out, size_t cap) {
+    Elab *e = (Elab *)ud;
+    StrSlice nm = strslice(name, (uint32_t)strlen(name));
+    if (!symtab_contains(e->st, nm)) return false;
+    Binding *b = scope_lookup(&e->global, symtab_intern(e->st, nm));
+    if (!b || !(b->is_from_stdlib || elab_file_is_stdlib(b->span.file_id))) return false;
+    const SourceFile *sf = diag_source_file(b->span.file_id);
+    if (!sf || !sf->path) return false;
+    const char *base = sf->path;
+    for (const char *p = sf->path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
+    size_t bl = strlen(base);
+    if (bl < 5 || strcmp(base + bl - 4, ".tur") != 0 || bl - 4 >= cap) return false;
+    memcpy(out, base, bl - 4);
+    out[bl - 4] = '\0';
+    return true;
 }
 
 Expr *elab_defmodule(Elab *e, const Form *call) {
