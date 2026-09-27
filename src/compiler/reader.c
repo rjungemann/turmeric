@@ -4217,6 +4217,17 @@ static Form *read_form(Reader *r) {
          * identifiers in a Scheme source.  A `:` or `::` standing alone
          * reads as before (Turmeric's annotation / ascription). */
         int c2 = peek2(r);
+        /* A lone `:` is an identifier too (R7RS 7.1.1: `:` is an <initial>),
+         * not Turmeric's annotation marker: SRFI 42 names its dispatching
+         * generator `:`, as in `(list-ec (: i 3) i)` (r7rs-srfi-plan S7). */
+        if (scheme_user_source(r) && (c2 == ' ' || c2 == '\t' || c2 == '\n' || c2 == '\r' ||
+                                      c2 == '(' || c2 == ')' || c2 == '[' || c2 == ']' || c2 == -1)) {
+            uint32_t start_line = r->line, start_col = r->col;
+            size_t start_off = r->pos;
+            advance(r);
+            Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+            return form_sym(r->arena, span, symtab_intern(r->st, strslice(":", 1)));
+        }
         if (scheme_user_source(r) && c2 != ' ' && c2 != '\t' && c2 != '\n' &&
             c2 != '\r' && c2 != '(' && c2 != '[' && c2 != ')' && c2 != ']' && c2 != -1 &&
             !(c2 == ':' && !is_sym_cont(peek3(r)) && peek3(r) != ':'))

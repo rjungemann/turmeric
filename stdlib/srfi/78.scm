@@ -1,8 +1,8 @@
 ;;; srfi/78 -- SRFI 78, Lightweight testing.
 ;;;
 ;;; Sebastian Egner's reference implementation (check.scm), under its MIT
-;;; licence (stdlib/srfi/COPYING), less check-ec, which is written over SRFI
-;;; 42's comprehensions and comes with SRFI 42 (r7rs-srfi-plan S7).  One
+;;; licence (stdlib/srfi/COPYING).  check-ec is written over SRFI 42's
+;;; comprehensions, which this library imports (r7rs-srfi-plan S7).  One
 ;;; change for Turmeric, marked: the mode and counters start initialized
 ;;; rather than being set by calls at load time.  `check` reports to the
 ;;; current output port; check-report prints the summary.  Unlike SRFI 64's
@@ -31,8 +31,8 @@
 ;;; OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 ;;; WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 (define-library (srfi 78)
-  (export check check-report check-set-mode! check-reset! check-passed?)
-  (import (scheme base) (scheme write))
+  (export check check-ec check-report check-set-mode! check-reset! check-passed?)
+  (import (scheme base) (scheme write) (srfi 42))
   (begin
 
     ; -- utilities --
@@ -170,4 +170,84 @@
          (check expr (=> equal?) expected))
         ((check expr (=> equal) expected)
          (if (>= check:mode 1)
-             (check:proc 'expr (lambda () expr) equal expected)))))))
+             (check:proc 'expr (lambda () expr) equal expected)))))
+
+    ; -- parametric checks --
+
+    (define (check:proc-ec w)
+      (let ((correct? (car w))
+            (expression (cadr w))
+            (actual-result (caddr w))
+            (expected-result (cadddr w))
+            (cases (car (cddddr w))))
+        (if correct?
+            (begin (if (>= check:mode 100)
+                       (begin (check:report-expression expression)
+                              (check:report-actual-result actual-result)
+                              (check:report-correct cases)))
+                   (check:add-correct!))
+            (begin (if (>= check:mode 10)
+                       (begin (check:report-expression expression)
+                              (check:report-actual-result actual-result)
+                              (check:report-failed expected-result)))
+                   (check:add-failed! expression 
+                                      actual-result 
+                                      expected-result)))))
+
+    (define-syntax check-ec:make
+      (syntax-rules (=>)
+        ((check-ec:make qualifiers expr (=> equal) expected (arg ...))
+         (if (>= check:mode 1)
+             (check:proc-ec
+              (let ((cases 0))
+                (let ((w (first-ec 
+                          #f
+                          qualifiers
+                          (:let equal-pred equal)
+                          (:let expected-result expected)
+                          (:let actual-result
+                                (let ((arg arg) ...) ; (*)
+                                  expr))
+                          (begin (set! cases (+ cases 1)))
+                          (if (not (equal-pred actual-result expected-result)))
+                          (list (list 'let (list (list 'arg arg) ...) 'expr)
+                                actual-result
+                                expected-result
+                                cases))))
+                  (if w
+                      (cons #f w)
+                      (list #t 
+                            '(check-ec qualifiers 
+                                       expr (=> equal) 
+                                       expected (arg ...))
+                            (if #f #f)
+                            (if #f #f)
+                            cases)))))))))
+
+    ; (*) is a compile-time check that (arg ...) is a list
+    ; of pairwise disjoint bound variables at this point.
+
+    (define-syntax check-ec
+      (syntax-rules (nested =>)
+        ((check-ec expr => expected)
+         (check-ec:make (nested) expr (=> equal?) expected ()))
+        ((check-ec expr (=> equal) expected)
+         (check-ec:make (nested) expr (=> equal) expected ()))
+        ((check-ec expr => expected (arg ...))
+         (check-ec:make (nested) expr (=> equal?) expected (arg ...)))
+        ((check-ec expr (=> equal) expected (arg ...))
+         (check-ec:make (nested) expr (=> equal) expected (arg ...)))
+
+        ((check-ec qualifiers expr => expected)
+         (check-ec:make qualifiers expr (=> equal?) expected ()))
+        ((check-ec qualifiers expr (=> equal) expected)
+         (check-ec:make qualifiers expr (=> equal) expected ()))
+        ((check-ec qualifiers expr => expected (arg ...))
+         (check-ec:make qualifiers expr (=> equal?) expected (arg ...)))
+        ((check-ec qualifiers expr (=> equal) expected (arg ...))
+         (check-ec:make qualifiers expr (=> equal) expected (arg ...)))
+
+        ((check-ec (nested q1 ...) q etc ...)
+         (check-ec (nested q1 ... q) etc ...))
+        ((check-ec q1 q2             etc ...)
+         (check-ec (nested q1 q2)    etc ...))))))

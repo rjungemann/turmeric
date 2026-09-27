@@ -1,0 +1,13 @@
+#lang r7rs
+;; A record type may have no fields (SRFI 41's null-stream marker is one);
+;; each constructor call is a distinct object of the type.  It was a defdata
+;; error ("record-style variant field list cannot be empty"), at top level
+;; and in a body.
+(import (scheme base) (scheme write))
+(define-record-type <marker> (make-marker) marker?)
+(define (local-kind)
+  (define-record-type <local> (make-local) local?)
+  (list (local? (make-local)) (local? (make-marker))))
+(define a (make-marker))
+(write (list (marker? a) (marker? 'a) (eq? a a) (eq? a (make-marker)) (local-kind)))
+(newline)

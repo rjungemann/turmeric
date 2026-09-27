@@ -1,8 +1,8 @@
 #lang r7rs
 ;; r7rs-srfi-plan S6: SRFI 78 on both back ends -- the SRFI's own examples
-;; (examples.scm) less check-ec, which comes with SRFI 42 (S7), then the
-;; modes and the summary.
-(import (scheme base) (scheme write) (srfi 78))
+;; (examples.scm), the modes and the summary; check-ec came with SRFI 42 in
+;; S7, at the end.
+(import (scheme base) (scheme write) (srfi 42) (srfi 78))
 
 (check (+ 1 1) => 2)
 (check (+ 1 1) => 3) ; fails
@@ -36,3 +36,14 @@
 (check-report)
 (write (check-passed? 1))
 (newline)
+
+;; check-ec (with SRFI 42, S7): the SRFI's parametric examples.
+(check-reset!)
+(check-ec (+ 1 1) => 2)
+(check-ec (: x 10) (+ x 1) => (+ x 1) (x))
+(check-ec (: e 100) (:let x (expt 2.0 e)) (= (+ x 1) x) => #f (x)) ; fails
+(check-ec (: x 10) (: y 10) (: z 10)
+          (* x (+ y z)) => (+ (* x y) (* x z))
+          (x y z)) ; passes with 10^3 cases checked
+(check-ec (: n 1 31) (even? (fib n)) => (= (modulo n 3) 0) (n))
+(check-report)

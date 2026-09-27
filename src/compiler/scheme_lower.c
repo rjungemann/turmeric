@@ -431,8 +431,8 @@ static const SrfiRow SRFI_LIBS[] = {
     {  39, SRFI_BUILTIN,    "Parameter objects", "stdlib/srfi/39.scm", NULL },
     {  40, SRFI_NOTPLANNED, "A Library of Streams", NULL,
         "its author deprecated it in favour of SRFI 41 (Streams); import (srfi 41) instead" },
-    {  41, SRFI_NOTYET,     "Streams", NULL, "S7" },
-    {  42, SRFI_NOTYET,     "Eager Comprehensions", NULL, "S7" },
+    {  41, SRFI_LIBRARY,    "Streams", "stdlib/srfi/41.scm", NULL },
+    {  42, SRFI_LIBRARY,    "Eager Comprehensions", "stdlib/srfi/42.scm", NULL },
     {  43, SRFI_NOTYET,     "Vector Library", NULL, "S8" },
     {  45, SRFI_ALIAS,      "Primitives for Expressing Iterative Lazy Algorithms", "stdlib/srfi/45.scm", NULL },
     {  48, SRFI_LIBRARY,    "Intermediate Format Strings", "stdlib/srfi/48.scm", NULL },
@@ -972,13 +972,24 @@ static void forward_scan_form(SL *sl, const Form *f, Form *const *before, uint32
     if (init->tag == F_LIST && init->as.list.len >= 3 && is_sym(init->as.list.items[0], sl->s_lambda) &&
         !sr_lookup(sl, sl->s_lambda))
         return;
+    /* A case-lambda define is a defn too (the define arm). */
+    if (init->tag == F_LIST && init->as.list.len >= 1 && is_sym(init->as.list.items[0], sl->s_case_lambda) &&
+        !sr_lookup(sl, sl->s_case_lambda))
+        return;
     const Symbol *name = f->as.list.items[1]->as.sym;
     if (is_mut(sl, name)) return;
     for (uint32_t j = 0; j < n_before; j++)
         if (form_mentions_sym_unquoted(before[j], name)) { note_mut(sl, name); return; }
+    /* r7rs-toplevel-define-refers-to-itself: so does a define whose own
+     * initializer names it -- under a delay, a lambda or a stream-cons, as
+     * SRFI 41's `(define nats (stream-cons 0 (stream-map add1 nats)))` does.
+     * A plain def cannot see the global it defines ("unbound symbol"); the
+     * pre-declared `^mut` one can, and the reference runs after the store.
+     * A body's define does the same with a cell (lower_body_inner). */
+    if (form_mentions_sym_unquoted(init, name)) note_mut(sl, name);
 }
 static void note_forward_defs(SL *sl, Form *const *forms, uint32_t n) {
-    for (uint32_t i = 1; i < n; i++) forward_scan_form(sl, forms[i], forms, i);
+    for (uint32_t i = 0; i < n; i++) forward_scan_form(sl, forms[i], forms, i);
 }
 
 /* --- renaming -------------------------------------------------------------- */
@@ -4511,6 +4522,13 @@ static void lower_record_type(SL *sl, Form *f, FB *out, bool local) {
         fb_push(&fvec, Sym(sl, spec->span, fields[i]));
         fb_push(&fvec, AnyAnn(sl, spec->span));
     }
+    /* r7rs-record-type-without-fields: a record type may have no fields
+     * (SRFI 41's stream-null marker), and a struct may not; it gets one
+     * hidden field, always nil, that nothing reads. */
+    if (nf == 0) {
+        fb_push(&fvec, Sym(sl, sp, I(sl, "r7rs-no-fields__")));
+        fb_push(&fvec, AnyAnn(sl, sp));
+    }
     fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defstruct), Sym(sl, sp, sname), Kw(sl, sp, sl->t_heap),
                     fb_vec(sl, &fvec, sp)));
     /* Constructor: its parameters name a subset of the fields, in any order;
@@ -4527,6 +4545,7 @@ static void lower_record_type(SL *sl, Form *f, FB *out, bool local) {
             if (ctor->as.list.items[j]->as.sym == fields[i]) { named = true; break; }
         fb_push(&args, named ? Sym(sl, sp, rn(sl, fields[i])) : Nil(sl, sp));
     }
+    if (nf == 0) fb_push(&args, Nil(sl, sp));
     fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, ctor_name),
                     fb_vec(sl, &params, sp), fb_list(sl, &args, sp)));
     /* Predicate. */

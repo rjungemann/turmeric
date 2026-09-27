@@ -1,0 +1,20 @@
+#lang r7rs
+;; A top-level define whose initializer names the variable being defined --
+;; under a delay, a lambda or a data structure built lazily -- sees it: the
+;; reference runs after the store (R7RS 5.3.1 lets it, and SRFI 41's
+;; (define nats (stream-cons 0 (stream-map add1 nats))) is the shape).  It
+;; was "unbound symbol"; a body's define already worked.
+(import (scheme base) (scheme write) (scheme lazy))
+(define ones (cons 1 (delay ones)))
+(define (take-ones p n) (if (= n 0) '() (cons (car p) (take-ones (force (cdr p)) (- n 1)))))
+(write (take-ones ones 3))
+(newline)
+(define counter
+  (let ((n 0))
+    (lambda () (set! n (+ n 1)) (if (< n 3) (counter) n))))
+(write (counter))
+(newline)
+(define later (delay (+ 1 (force answer))))
+(define answer (delay 41))
+(write (force later))
+(newline)
