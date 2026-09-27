@@ -59,6 +59,9 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 SUITE = os.path.join(HERE, "chibi-r7rs-tests.scm")
+# r7rs-srfi-plan D7: the same runner counts an SRFI's own suite
+# (tests/r7rs/srfi/<N>/tests.scm), with its import added to the header.
+EXTRA_IMPORTS = []
 
 # plan T7: tests that fail on a difference kept on purpose.  Keyed by the
 # form's text; each entry is the input string and the spelling
@@ -261,8 +264,12 @@ DIAG_RE = re.compile(r"conformance[^:]*\.tur:(\d+):\d+: error")
 
 def build_program(forms, keep):
     """Program text, and a map from its line numbers to form indices."""
-    parts = [HEADER, HARNESS]
-    line = HEADER.count("\n") + HARNESS.count("\n") + 1
+    header = HEADER
+    if EXTRA_IMPORTS:
+        # r7rs-srfi-plan D7: an SRFI's own suite imports the SRFI too.
+        header = header.rstrip()[:-1] + "\n        " + " ".join(EXTRA_IMPORTS) + ")\n"
+    parts = [header, HARNESS]
+    line = header.count("\n") + HARNESS.count("\n") + 1
     owner = {}
     for idx in keep:
         start, end, src = forms[idx]
@@ -457,12 +464,17 @@ def main():
     ap.add_argument("--timeout", type=int, default=240, help="seconds per program run")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--list-failures", action="store_true")
+    ap.add_argument("--suite", default=SUITE, help="the file of tests (default: chibi's R7RS suite)")
+    ap.add_argument("--import", dest="imports", action="append", default=[],
+                    help="an import set added to the header, e.g. '(srfi 2)' (repeatable)")
+    ap.add_argument("--label", default="r7rs-conformance", help="the name the summary lines carry")
     ap.add_argument("--enable", action="append", default=[],
                     help="an experiment to turn on for every run (repeatable)")
     args = ap.parse_args()
     ENABLES.extend(args.enable)
+    EXTRA_IMPORTS.extend(args.imports)
 
-    with open(SUITE, encoding="utf-8") as f:
+    with open(args.suite, encoding="utf-8") as f:
         text = f.read()
     forms = [fm for fm in split_forms(text) if form_head(fm[2]) != "import"]
     total = sum(static_test_count(src) for _, _, src in forms)
@@ -482,19 +494,19 @@ def main():
                         for i, r in results.items() if r[1] is None}
             keep = [i for i in range(len(forms)) if i not in rejected]
         passed, settled, failed, failing, unsettled = summarize(forms, results, checks)
-        print("r7rs-conformance [%s]: %d passed, %d settled, %d failed (of %d written in the suite)"
-              % (be, passed, settled, failed, total))
+        print("%s [%s]: %d passed, %d settled, %d failed (of %d written in the suite)"
+              % (args.label, be, passed, settled, failed, total))
         if args.list_failures:
             for start, note, src in failing:
                 first = src.splitlines()[0][:90]
                 print("  line %4d  %-40s %s" % (start, (note or "")[:40], first))
         for start, note, src in unsettled:
-            print("r7rs-conformance [%s]: FAIL -- line %d: %s"
-                  % (be, start, note))
+            print("%s [%s]: FAIL -- line %d: %s"
+                  % (args.label, be, start, note))
             status = 1
         if passed < args.min_pass:
-            print("r7rs-conformance [%s]: FAIL -- %d passed is below the floor of %d"
-                  % (be, passed, args.min_pass))
+            print("%s [%s]: FAIL -- %d passed is below the floor of %d"
+                  % (args.label, be, passed, args.min_pass))
             status = 1
     sys.exit(status)
 

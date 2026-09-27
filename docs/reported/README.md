@@ -2242,6 +2242,21 @@ which the stdlib's type annotations read. The program half of that is fixed
 | [r7rs-repl-echoes-multiple-values-opaquely](r7rs-repl-echoes-multiple-values-opaquely.md) | low | `tur repl --lang r7rs` echoes `(values 1 2)`, `(values)` and `(exact-integer-sqrt 17)` as `#<R7rsValues>`: the echo writes the prelude's carrier struct. Fix in the echo branch of src/turi/repl.c: one `=> ` line per value, none for zero |
 | ~~[r7rs-cond-expand-ratios-feature-drift](../archive/r7rs-cond-expand-ratios-feature-drift.md)~~ | low | **RESOLVED 2026-09-26** (archived): `feature_holds` reads one array, `R7RS_FEATURES`, and fixture `r7rs-features-agree` asks `cond-expand` (through `eval`) about every identifier `(features)` returns. Original: `(features)` lists `ratios` (stdlib/r7rs/prelude.tur:2424), but `cond-expand` does not hold it (`feature_holds`, src/compiler/scheme_lower.c:3970): two hand-kept copies of one list. r7rs-srfi-plan S1 generates both from one table |
 
+## Found landing r7rs-srfi-plan S2 (filed 2026-09-27)
+
+The first two came from SRFI 2's `and-let*`, whose whole point is guarding
+a call that would fail. Neither blocks S2: chibi's SRFI 2 suite passes in
+full, because its guarded calls are to `+`, which takes `any`. The third
+blocks SRFI 17. The fourth is from S2's pull request's macOS CI, in a
+collector test the stage did not touch.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [r7rs-dead-mistyped-call-refused-at-compile-time](r7rs-dead-mistyped-call-refused-at-compile-time.md) | medium | `(let ((x #f)) (if x (car x) 0))` and a never-called `(define (g) (car 5))` are TUR-E0001 "expected R7rsPair, got bool/int" on both back ends: the typed prelude's argument check refuses a concrete mismatch that R7RS makes an error only when it runs. Fix: in a dynamic file, widen and let the checked cast fail at run time |
+| [r7rs-type-errors-are-uncatchable-panics](r7rs-type-errors-are-uncatchable-panics.md) | medium | `(car 5)` through a variable panics ("cast: any holds int, not R7rsPair") on both back ends; `guard` cannot catch it, where chibi and Racket raise an error object. Fix: in `#lang r7rs`, a failed boundary cast raises an error object |
+| [r7rs-prelude-procedures-lose-identity](r7rs-prelude-procedures-lose-identity.md) | medium | `(eqv? car car)` is `#f` on both back ends: boxing a typed prelude procedure as `any` wraps it in a fresh adaptor at every reference (`saffron_dyn_fn_adaptor`, elab_call.c:825), so each reference is a new procedure. The program's own procedures keep their identity. Blocks SRFI 17, whose `setter` table is keyed on `car`, `vector-ref`, ... Fix: one adaptor per function, made once per compile |
+| [r7rs-gc-threads-lifecycle-macos-timeout](r7rs-gc-threads-lifecycle-macos-timeout.md) | low-medium | `threads-lifecycle` timed out (>300 s) under `TUR_GC_TORTURE=31` on macOS CI (PR #948), on a runtime with the Linux world-lock fix. It normally takes about 89 s there (13 s on Linux), so this is either a macOS-only stall or a slow tail. `run-r7rs-gc.sh` now prints every thread's stack at the deadline, so the next sighting tells which |
+
 ## Found fixing the captured-`^mut` copy (filed 2026-09-26)
 
 | Report | Severity | One line |

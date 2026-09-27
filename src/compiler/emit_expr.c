@@ -9546,9 +9546,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     arg->type.kind == TY_PTR_VOID ||
                                     (arg->type.kind == TY_FN &&
                                      arg->type.as.fn.boxed));
+                        /* The same bridge for any other pointer-typed value in a
+                         * carrier slot: a variadic lambda's declared rest slot is
+                         * the int64_t carrier, while the rest list built at the
+                         * call (EX_CONS_LIST) is a `tur_adt_Cons__any *` --
+                         * `((cut list <...>))` in #lang r7rs, a -Wint-conversion
+                         * error under clang (r7rs-srfi-plan S2's SRFI 26 suite on
+                         * macOS). */
+                        const char *slot_cty = emit_type_c_name(ctx, arg_types[i]);
+                        const char *val_cty = arg ? emit_type_c_name(ctx, arg->type) : NULL;
+                        size_t val_len = val_cty ? strlen(val_cty) : 0;
+                        bool ptr_into_carrier = !slot_is_ptr && slot_cty &&
+                            strcmp(slot_cty, "int64_t") == 0 &&
+                            val_len > 0 && val_cty[val_len - 1] == '*';
                         if (slot_is_ptr && var_is_int64_carrier) {
                             buf_printf(&out, ", (%s)(intptr_t)(%s)", emit_type_c_name(ctx, arg_types[i]), arg_strs[i]);
-                        } else if (!slot_is_ptr && arg_is_fat_box) {
+                        } else if (!slot_is_ptr && (arg_is_fat_box || ptr_into_carrier)) {
                             buf_printf(&out, ", (int64_t)(intptr_t)(%s)", arg_strs[i]);
                         } else {
                             buf_printf(&out, ", %s", arg_strs[i]);
@@ -13245,6 +13258,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             "TUR_REGION_NOTE_WORDS(__tur_cbox, sizeof *__tur_cbox); "
                             "%s->%s = (int64_t)(intptr_t)__tur_cbox; }\n",
                             val_cty, val_cty, val_cty, cn, fat_tmp, field);
+                    } else if (captured->type.kind == TY_FN && !captured->is_poly_fn &&
+                               !captured_is_pbp) {
+                        /* A function value's field is the int64_t carrier (see
+                         * the env struct), but a lambda that captures nothing is
+                         * held in its local as a bare C function pointer --
+                         * `int64_t (*g)() = __fn_N` -- and assigning that to the
+                         * field is a -Wint-conversion (an error under clang).
+                         * Bridge it through intptr_t, which is a no-op for a
+                         * value already held as the carrier. */
+                        buf_printf(body, "%s->%s = (int64_t)(intptr_t)(%s);\n",
+                                   fat_tmp, field, cn);
                     } else {
                         buf_printf(body, "%s->%s = %s%s;\n",
                                    fat_tmp, field, captured_is_pbp ? "*" : "", cn);

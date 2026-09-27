@@ -1,7 +1,8 @@
 # SRFI libraries for `#lang r7rs`, after Racket's
 
-Status: **S1 and S0 landed 2026-09-26** (see their "What shipped" and "What
-S0 found" notes); S2-S8 to come. `(import (srfi N))` resolves for every SRFI
+Status: **S1 and S0 landed 2026-09-26; S2 landed 2026-09-27 except SRFI 17**
+(see their "What shipped" and "What S0 found" notes). SRFI 17 waits on
+docs/reported/r7rs-prelude-procedures-lose-identity.md. S3-S8 to come. `(import (srfi N))` resolves for every SRFI
 in the table: the ten built-in rows and the two alias rows import, and the
 rest are refused with their reason. S0's inventory is
 [Appendix C](#appendix-c----s0-inventory); its measurement says a big SRFI
@@ -377,7 +378,7 @@ Legend:
 | 13 | String Libraries | library | library | S5 | needs 14; works over code-point vectors (2.5); `string-map`/`string-for-each` conflict with base (D5) |
 | 14 | Character-set Library | library | library | S5 | inversion lists; standard sets from the Unicode 16 tables, with General Category data added for punctuation/symbol/title-case |
 | 16 | Syntax for procedures of variable arity | re-export | built in | S1 | `(scheme case-lambda)` |
-| 17 | Generalized `set!` | library | library | S2 | gated `set!` arm; setters for `car`, `cdr`, `vector-ref`, `string-ref`, `bytevector-u8-ref`, the `c[ad]r` family, later `hash-table-ref` |
+| 17 | Generalized `set!` | library | library | S2 | gated `set!` arm; setters for `car`, `cdr`, `vector-ref`, `string-ref`, `bytevector-u8-ref`, the `c[ad]r` family, later `hash-table-ref`. Blocked: `setter` is keyed on procedure identity, which the standard procedures lose (r7rs-prelude-procedures-lose-identity) |
 | 19 | Time Data Types and Procedures | library | library | S8 | large: dates, julian days, TAI/UTC with a leap-second table, `date->string`; the one C-heavy SRFI |
 | 23 | Error reporting mechanism | re-export | built in | S1 | R7RS `error` is SRFI 23's |
 | 25 | Multi-dimensional Array Primitives | library | library | S8 | reference implementation; names clash with 63 |
@@ -664,6 +665,57 @@ fixture itself runs on both back ends.
   of the guide notes. Turmeric's own `(set! (.field x) v)`, which the prelude
   uses, is untouched, because its head is a `.field`, not a Scheme identifier.
 - A fixture per SRFI, and the SRFI's own tests where S0 found them.
+
+> **What shipped (2026-09-27): 2, 8, 26, 31 and 61. 17 is held.**
+>
+> - **2, 8, 26, 31** are `syntax-rules` libraries:
+>   - 2 is chibi's `and-let*` (BSD-3);
+>   - 8's `receive` and 31's `rec` are the SRFI documents' own definitions
+>     (MIT);
+>   - 26 is the reference `cut.scm` (public domain).
+>
+>   `stdlib/srfi/COPYING` records each file's origin and carries the
+>   licences.
+> - **61** is an arm of the lowering's `cond` (`srfi61_clause`). It is on in
+>   a unit that imports the SRFI's `cond`, under any name. The clause lowers
+>   as the SRFI's reference implementation does: `call-with-values` into a
+>   consumer that applies guard, then receiver. The plumbing is built from
+>   global aliases, so a local `apply` or `lambda` at the use site does not
+>   capture it. The export is R7RS's own `cond`, so the import sits beside
+>   `(scheme base)` as one binding. Without the import, the clause shape is
+>   an error that names the import.
+> - **The SRFIs' own suites (D7).** `tests/r7rs/run-conformance.py` takes
+>   `--suite`, `--import` and `--label`. `tests/run-r7rs-srfi-suites.sh`
+>   (ctest `tur_r7rs_srfi_suites`) runs each `tests/r7rs/srfi/<N>/tests.scm`
+>   against the floor in `tests/r7rs/srfi/<N>/floor`:
+>   - SRFI 2 runs chibi's suite, 31/31 on both back ends;
+>   - SRFI 26 runs chibi's suite plus the reference `check.scm`, 26/26.
+> - **A hygiene fix SRFI 26 needed** (R7RS 4.3.2). The reference `cut`
+>   inserts `x` at each recursive step, and only the last step makes them
+>   lambda parameters. The expander renamed a template identifier only when
+>   the same step bound it, so every step's `x` was one name:
+>   `((cut list <> 'b <>) 'a 'c)` gave `(c b c)`. Now:
+>   - an identifier a template passes to another macro use gets a per-step
+>     alias (`hyg_pending`);
+>   - lookups try an alias locally first;
+>   - one step's aliases of one identifier are shared.
+>
+>   The old expander also let a helper macro's binder, passed on by a
+>   template, capture the user's variable of the same name; that is fixed
+>   too. `tests/fixtures/r7rs-hygiene-binder-made-later` pins it; it fails
+>   three ways on the old expander.
+> - **17 is held.** Its `setter` is a table keyed by procedure identity, and
+>   its standard entries are `car`, `cdr`, `vector-ref` and the like. Those
+>   lose their identity today: `(eqv? car car)` is `#f`, because boxing a
+>   typed prelude procedure makes a fresh adaptor at each reference. Shipping
+>   17 without `(setter car)` would ship its first example broken.
+>   docs/reported/r7rs-prelude-procedures-lose-identity.md has the fix
+>   directions. 17 lands after that.
+> - **Reported on the way** (docs/reported/):
+>   - `r7rs-dead-mistyped-call-refused-at-compile-time`: `(if x (car x) 0)`
+>     with `x` bound to `#f` does not compile;
+>   - `r7rs-type-errors-are-uncatchable-panics`: `(car 5)` at run time is a
+>     panic `guard` cannot catch.
 
 ### S3 -- SRFI 1 (medium)
 

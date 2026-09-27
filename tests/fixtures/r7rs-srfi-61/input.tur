@@ -1,0 +1,30 @@
+#lang r7rs
+;; r7rs-srfi-plan S2: SRFI 61's (generator guard => receiver) cond clause,
+;; on in a file that imports (srfi 61).  The export is R7RS's own `cond`, so
+;; it is imported beside (scheme base) with no conflict.
+(import (scheme base) (scheme write) (srfi 61))
+
+;; The SRFI's own example: read characters while they are characters.
+(define (port->char-list port)
+  (cond ((read-char port) char? => (lambda (c) (cons c (port->char-list port))))
+        (else '())))
+(write (port->char-list (open-input-string "abc")))
+(newline)
+
+(write
+ (list
+  ;; several values go to both guard and receiver
+  (cond ((values 1 2) (lambda (a b) (< a b)) => (lambda (a b) (list 'lt a b))) (else 'no))
+  ;; a guard that says no falls through
+  (cond ((values 3 2) (lambda (a b) (< a b)) => list) (else 'no))
+  ;; ... to the next clause, here R7RS's own (test => receiver)
+  (cond ((values 3 2) < => list) ((assv 2 '((2 . two))) => cdr))
+  ;; the clause's own plumbing is hygienic: a local `apply`, or a variable
+  ;; spelled like its temporaries, is not captured
+  (let ((apply (lambda args 'shadowed)) (vals 'user))
+    (cond (5 odd? => (lambda (x) (list x vals))) (else 'no)))
+  ;; no clause matches: unspecified, and nothing is called
+  (let ((n 0))
+    (cond ((values 1) even? => (lambda (x) (set! n 1))))
+    n)))
+(newline)

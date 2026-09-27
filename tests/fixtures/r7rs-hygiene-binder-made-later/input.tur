@@ -1,0 +1,48 @@
+#lang r7rs
+;; R7RS 4.3.2 hygiene: an identifier a template inserts is a new identifier
+;; at every expansion step, including one that becomes a binder only when a
+;; LATER step expands.  SRFI 26's reference `cut` inserts `x` once per
+;; recursive step and the last step makes them all lambda parameters; before
+;; the fix they were one name, so `((cut list <> 'b <>) 'a 'c)` gave (c b c).
+;; Pinned here without SRFI 26, with the cases the fix had to keep working.
+(import (scheme base) (scheme write))
+
+;; A recursive macro collecting one fresh binder per step (cut's shape).
+(define-syntax collect
+  (syntax-rules ()
+    ((_ (v ...) (arg ...)) (lambda (v ...) (list arg ...)))
+    ((_ (v ...) (arg ...) _ . rest) (collect (v ... x) (arg ... x) . rest))))
+(define-syntax slots (syntax-rules () ((_ . s) (collect () () . s))))
+(write ((slots _ _ _) 'a 'b 'c))
+(newline)
+
+;; The same, with the user's own variable spelled like the template's `x`
+;; and assigned after capture (cute's shape: a let of fresh names).
+(define-syntax freeze-all
+  (syntax-rules ()
+    ((_ binds (arg ...)) (let binds (lambda () (list arg ...))))
+    ((_ binds (arg ...) e . rest) (freeze-all ((x e) . binds) (arg ... x) . rest))))
+(let ((x 'orig))
+  (let ((f (freeze-all () () x 'second)))
+    (set! x 'wrong)
+    (write (f))))
+(newline)
+
+;; What the fix must not change: a template identifier that stays free means
+;; the global of that name, however the use site binds it; one that ends up
+;; quoted is the symbol as written; one that ends up matched against the
+;; next macro's literal matches it; the user's `x` beside the template's `x`
+;; is still the user's.
+(define-syntax show (syntax-rules () ((_ v) 'v)))
+(define-syntax quote-x (syntax-rules () ((_) (show x))))
+(define-syntax pick (syntax-rules (fst snd) ((_ fst a b) a) ((_ snd a b) b)))
+(define-syntax second-of (syntax-rules () ((_ a b) (pick snd a b))))
+(define helper 42)
+(define-syntax id (syntax-rules () ((_ e) e)))
+(define-syntax get-helper (syntax-rules () ((_) (id helper))))
+(define-syntax bind (syntax-rules () ((_ (n val) body) (let ((n val)) body))))
+(define-syntax with-x (syntax-rules () ((_ v body) (bind (x v) body))))
+(define x 'user-x)
+(write (list (quote-x) (second-of 1 2) (get-helper) (let ((helper 'local)) (get-helper))
+             (with-x 5 x)))
+(newline)

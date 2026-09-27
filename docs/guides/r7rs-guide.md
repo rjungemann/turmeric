@@ -424,27 +424,27 @@ R7RS's own forms already are the SRFI's.
 |---|---|---|---|---|
 | 0 | Feature-based conditional expansion construct | no library | no module | `cond-expand` is R7RS syntax; `srfi-N` identifiers answer for each SRFI here |
 | 1 | List Library | not yet (S3) | library |  |
-| 2 | AND-LET* | not yet (S2) | library |  |
+| 2 | AND-LET* | library | library | `and-let*`; a bare clause may be any expression, as in chibi |
 | 4 | Homogeneous numeric vector datatypes | not yet (S7) | library, no reader syntax | `u8vector` will be the bytevector type |
 | 5 | A compatible let form with signatures and rest arguments | not yet (S8) | library |  |
 | 6 | Basic String Ports | built in | re-export | `(scheme base)`'s own |
 | 7 | Feature-based program configuration language | not yet (S8) | library |  |
-| 8 | RECEIVE: Binding to multiple values | not yet (S2) | library |  |
+| 8 | RECEIVE: Binding to multiple values | library | library | `receive`, the SRFI's own definition |
 | 9 | Defining Record Types | built in | library | R7RS `define-record-type` is SRFI 9's |
 | 11 | Syntax for receiving multiple values | built in | library | R7RS `let-values` takes dotted rest formals |
 | 13 | String Libraries | not yet (S5) | library |  |
 | 14 | Character-set Library | not yet (S5) | library |  |
 | 16 | Syntax for procedures of variable arity | built in | re-export | `(scheme case-lambda)` |
-| 17 | Generalized set! | not yet (S2) | library |  |
+| 17 | Generalized set! | not yet (S2) | library | waits on standard procedures keeping their identity (`(eqv? car car)` is `#f` today), which `setter` is keyed on |
 | 19 | Time Data Types and Procedures | not yet (S8) | library |  |
 | 23 | Error reporting mechanism | built in | re-export | R7RS `error` is SRFI 23's |
 | 25 | Multi-dimensional Array Primitives | not yet (S8) | library |  |
-| 26 | Notation for Specializing Parameters without Currying | not yet (S2) | library |  |
+| 26 | Notation for Specializing Parameters without Currying | library | library | `cut` and `cute`, the SRFI's reference implementation |
 | 27 | Sources of Random Bits | not yet (S7) | library |  |
 | 28 | Basic Format Strings | not yet (S6) | re-export (Racket's `format`) | not in R7RS, so a library here |
 | 29 | Localization | not yet (S8) | library |  |
 | 30 | Nested Multi-line Comments | built in | empty module | `#\| \|#` nests; the library is empty, as Racket's is |
-| 31 | A special form rec for recursive evaluation | not yet (S2) | library |  |
+| 31 | A special form rec for recursive evaluation | library | library | `rec`, the SRFI's own definition |
 | 34 | Exception Handling for Programs | built in | library | R7RS `guard`, `raise` and `with-exception-handler` are SRFI 34's |
 | 35 | Conditions | not yet (S7) | library |  |
 | 38 | External Representation for Data With Shared Structure | alias | library | `write-with-shared-structure` is `write-shared`; `read-with-shared-structure` is `read` |
@@ -459,7 +459,7 @@ R7RS's own forms already are the SRFI's.
 | 57 | Records | not yet (S8) | library |  |
 | 59 | Vicinity | not yet (S8) | library |  |
 | 60 | Integers as Bits | not yet (S7) | library |  |
-| 61 | A more general cond clause | not yet (S2) | library |  |
+| 61 | A more general cond clause | library | library | `(generator guard => receiver)` clauses in `cond`, on in a file that imports it; the export is R7RS's own `cond`, so it sits beside `(scheme base)` |
 | 62 | S-expression comments | no library | no module | `#;` is always on; the import is an error that says so, as in Racket |
 | 63 | Homogeneous and Heterogeneous Arrays | not yet (S8) | library |  |
 | 64 | A Scheme API for test suites | not yet (S6) | library |  |
