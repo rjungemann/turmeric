@@ -1,5 +1,41 @@
 # `run-r7rs-gc.sh`: `threads-lifecycle` hung once under `TUR_GC_TORTURE=31`
 
+**RESOLVED 2026-09-27.** Root-caused on its second sighting (PR #947's
+macOS Auxiliary suites job) and fixed in src/runtime/r7gc.c. The rest of this
+file is the original report, kept as the record of what did not reproduce it.
+
+## Root cause
+
+A self-deadlock on the collector's `world` lock, in code the fixture itself
+runs. `life_extra_records` (tests/fixtures/r7rs-threads-lifecycle/life.tur)
+counts the registry under `pthread_mutex_lock(&tur_gc_G->world)`. After r7gc.c
+is pasted ahead of the unit, that spelling is the release-point wrapper
+`tur_gc_mutex_lock`. When the lock was contended (a detached thread retiring
+its own record in `tur_gc_thread_gone` held it at that instant), the wrapper
+parked, took `world`, then unparked -- and `tur_gc_unpark` takes `world` too.
+The thread waited on a lock it held, with every other thread gone. gdb on the
+hung process: the only thread left, in `tur_gc_unpark` ->
+`__lll_lock_wait`, called from the fixture's top-level form.
+
+It was not the branch's doing: a program built by `main`'s compiler hangs the
+same way. It is rare because the window is one retirement: about one run in
+600 under 12-way contention on 4 cores, none in 3000 runs of `main`'s build.
+Twenty rounds of the fixture's detach phase in one run hit it every time,
+with `main`'s runtime and this branch's alike.
+
+## Fix
+
+`tur_gc_mutex_lock` takes the collector's own locks (`world`, `heap`,
+`meta_lock`) directly, without the park: parking around `world` waited on
+itself, and parking around `heap` or `meta_lock` would take `world` under
+them, against the collector's lock order. Unparked, the wait is a stop point
+like the collector's other lock waits: a collection signals the thread and it
+answers.
+
+The fixture's detach phase now runs twenty rounds of forty threads (13 s
+under `TUR_GC_TORTURE=31`); it hangs on every run without the fix.
+
+
 **Severity:** low, unconfirmed. Seen once and not reproduced since. Recorded
 so a second sighting has somewhere to land, rather than being taken for a
 fresh problem.
