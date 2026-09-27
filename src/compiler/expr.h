@@ -331,6 +331,19 @@ struct Binding {
      * (pr-386); this one changes only where a box lives.  NULL for a `^mut`
      * binding (a `set!` could retarget it) and for anything but a global. */
     struct Binding *widen_fn_alias;
+    /* r7rs-prelude-procedures-lose-identity: the all-`any` adaptor
+     * (saffron_dyn_fn_adaptor) this typed function is boxed through, made the
+     * first time it is and reused at every later site, so every reference
+     * boxes the same lifted function -- one static fat box, one identity
+     * (`(eqv? car car)`), in every module of a one-TU build.
+     * `any_adaptor_module` is the module whose file defs hold it: under
+     * separate compilation another module (another TU) makes its own. */
+    struct Binding *any_adaptor;
+    const struct Symbol *any_adaptor_module;
+    /* ...and on the adaptor itself: it calls only a global function, so the
+     * interpreter need not re-home it onto the referencing frame (which
+     * would make each reference a new closure, and a new identity). */
+    bool          is_shared_any_adaptor;
     /* ER6: true if this binding was introduced by an (extern-c ...) declaration.
      * Used by effect_check to infer #{Unsafe} for calls to extern-c functions. */
     bool          is_extern_c;

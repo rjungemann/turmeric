@@ -823,11 +823,52 @@ static Expr *saffron_seam_fn_adaptor(Elab *e, const Form *arg_form,
     return out;
 }
 
+static Expr *saffron_dyn_fn_adaptor_make(Elab *e, Expr *value);
+/* r7rs-prelude-procedures-lose-identity: one adaptor per function, not per
+ * site.  The adaptor is a non-capturing lambda, which elab_fn lifts to a
+ * file-scope function and hands back as an EX_VAR of it; every later boxing of
+ * the same function refers to that one, so the emitter's static fat box for
+ * it is the procedure's single identity. */
 static Expr *saffron_dyn_fn_adaptor(Elab *e, Expr *value) {
     if (!value || value->kind != EX_VAR || !value->as.var.binding ||
         !value->as.var.binding->name || value->type.kind != TY_FN)
         return NULL;
     if (!(e->toplevel_dynamic || lang_span_is_dynamic(value->span))) return NULL;
+    Binding *fb = value->as.var.binding;
+    /* A local that is an immutable alias of a global function -- `(let ((g
+     * car)) ...)` -- is that function: box it through the global's adaptor. */
+    if (!fb->is_global && fb->widen_fn_alias && fb->widen_fn_alias->is_global &&
+        fb->widen_fn_alias->name && fb->widen_fn_alias->type.kind == TY_FN &&
+        type_eq(fb->widen_fn_alias->type, value->type)) {
+        Expr *gv = expr_new(e->arena, EX_VAR, value->type, value->span);
+        gv->as.var.binding = fb->widen_fn_alias;
+        value = gv;
+        fb = fb->widen_fn_alias;
+    }
+    /* One translation unit holds every module's file defs unless this is
+     * separate compilation, so a library and the program share the adaptor
+     * (SRFI 17's `setter` table is keyed on `car` in the library and asked
+     * with `car` from the program).  Under separate compilation the adaptor
+     * is a static function of the TU that made it; another module makes its
+     * own. */
+    if (fb->any_adaptor &&
+        (!e->separate_compilation || fb->any_adaptor_module == e->current_module_name)) {
+        Expr *v = expr_new(e->arena, EX_VAR, fb->any_adaptor->type, value->span);
+        v->as.var.binding = fb->any_adaptor;
+        return v;
+    }
+    Expr *ad = saffron_dyn_fn_adaptor_make(e, value);
+    /* Only a global function's adaptor is shared: a local's is a closure over
+     * that frame's variable (and may capture), so it is made per site. */
+    if (ad && ad->kind == EX_VAR && ad->as.var.binding && fb->is_global &&
+        ad->as.var.binding->is_global) {
+        fb->any_adaptor = ad->as.var.binding;
+        fb->any_adaptor_module = e->current_module_name;
+        ad->as.var.binding->is_shared_any_adaptor = true;
+    }
+    return ad;
+}
+static Expr *saffron_dyn_fn_adaptor_make(Elab *e, Expr *value) {
     const Type *ft = &value->type;
     if (ft->as.fn.cfnptr || ft->as.fn.arity > TUR_FAT_SHIM_MAX_ARITY) return NULL;
     /* r7rs-lang-plan R6/R7: a VARIADIC function.  Its rest slot is a chain

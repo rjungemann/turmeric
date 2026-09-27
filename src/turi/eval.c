@@ -10763,7 +10763,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             _v.as_closure->captured == NULL && !_v.as_closure->native &&
             _v.as_closure->fn && _v.as_closure->fn->binding &&
             _v.as_closure->fn->binding->is_lifted_lambda &&
-            e->as.var.binding->is_lifted_lambda) {
+            e->as.var.binding->is_lifted_lambda &&
+            !e->as.var.binding->is_shared_any_adaptor) {
             TuriClosure *copy = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
             *copy = *_v.as_closure;
             copy->captured = frame;

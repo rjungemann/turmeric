@@ -4,8 +4,9 @@ Status: **S1 and S0 landed 2026-09-26; S2 landed 2026-09-27 except SRFI 17;
 S3 (the pruning pass and SRFI 1), S4 (SRFI 69), S5 (SRFIs 14 and 13), S6
 (SRFIs 28, 48, 64 and 78) and S7 (SRFIs 4, 27, 35, 41, 42, 60 and 66, and
 78's `check-ec`) landed 2026-09-27** (see their "What shipped" and "What S0
-found" notes). SRFI 17 waits on
-docs/reported/r7rs-prelude-procedures-lose-identity.md. S8 is on demand.
+found" notes). SRFI 17 waited on
+docs/archive/r7rs-prelude-procedures-lose-identity.md, fixed 2026-09-27; it
+can land now. S8 is on demand.
 `(import (srfi N))` resolves for every SRFI in the table: the ten built-in
 rows, the three alias rows and the nineteen library rows import, and the
 rest are refused with their reason. S0's inventory is [Appendix C](#appendix-c----s0-inventory). Its
@@ -382,7 +383,7 @@ Legend:
 | 13 | String Libraries | library | library | S5 | needs 14; works over code-point vectors (2.5); `string-map`/`string-for-each` conflict with base (D5) |
 | 14 | Character-set Library | library | library | S5 | inversion lists; standard sets from the Unicode 16 tables, with General Category data added for punctuation/symbol/title-case |
 | 16 | Syntax for procedures of variable arity | re-export | built in | S1 | `(scheme case-lambda)` |
-| 17 | Generalized `set!` | library | library | S2 | gated `set!` arm; setters for `car`, `cdr`, `vector-ref`, `string-ref`, `bytevector-u8-ref`, the `c[ad]r` family, later `hash-table-ref`. Blocked: `setter` is keyed on procedure identity, which the standard procedures lose (r7rs-prelude-procedures-lose-identity) |
+| 17 | Generalized `set!` | library | library | S2 | gated `set!` arm; setters for `car`, `cdr`, `vector-ref`, `string-ref`, `bytevector-u8-ref`, the `c[ad]r` family, later `hash-table-ref`. Was blocked: `setter` is keyed on procedure identity, which the standard procedures lost until 2026-09-27 (docs/archive/r7rs-prelude-procedures-lose-identity.md) |
 | 19 | Time Data Types and Procedures | library | library | S8 | large: dates, julian days, TAI/UTC with a leap-second table, `date->string`; the one C-heavy SRFI |
 | 23 | Error reporting mechanism | re-export | built in | S1 | R7RS `error` is SRFI 23's |
 | 25 | Multi-dimensional Array Primitives | library | library | S8 | reference implementation; names clash with 63 |
@@ -716,7 +717,7 @@ fixture itself runs on both back ends.
 >   typed prelude procedure makes a fresh adaptor at each reference. Shipping
 >   17 without `(setter car)` would ship its first example broken.
 >   docs/reported/r7rs-prelude-procedures-lose-identity.md has the fix
->   directions. 17 lands after that.
+>   directions. 17 lands after that. (Fixed 2026-09-27, archived.)
 > - **Reported on the way** (docs/reported/):
 >   - `r7rs-dead-mistyped-call-refused-at-compile-time`: `(if x (car x) 0)`
 >     with `x` bound to `#f` does not compile;

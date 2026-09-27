@@ -1,0 +1,4 @@
+(#t #t #t)
+(car vref caddr f #f)
+(#t #t (#<procedure>))
+(#f #f)

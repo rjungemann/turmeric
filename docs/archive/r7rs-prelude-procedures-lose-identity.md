@@ -1,5 +1,40 @@
 # `#lang r7rs`: `(eqv? car car)` is `#f` -- a typed prelude procedure has a new identity at every reference
 
+**RESOLVED 2026-09-27**, by the first fix direction: one adaptor per
+function. `(eqv? car car)`, `(assv car table)` and the rest of the repro
+answer `(#t #t #t car vref caddr f #t)` on both back ends, and in a library
+and its importer alike. Pinned by `tests/fixtures/r7rs-procedure-identity`
+and `run-r7rs-import.sh`'s `library-shares-procedure-identity`. SRFI 17 is
+unblocked. The rest of this file is the original report.
+
+## Fix
+
+The hook the report looked for already existed: the adaptor is a
+non-capturing lambda, which `elab_fn` lifts to a file-scope function
+(`elab_register_file_def`) and returns as an `EX_VAR` of it. So
+`saffron_dyn_fn_adaptor` now caches that lifted binding on the wrapped
+function's `Binding` (`any_adaptor`) the first time it boxes the function.
+Every later boxing returns a fresh `EX_VAR` of the same binding, and the
+emitter's static fat box for a global function is then the procedure's one
+identity.
+
+- **Across modules.** The prelude's bindings are shared by every module of
+  a compile. Unless this is separate compilation, all modules' file defs land
+  in one translation unit, so a library and the program share the adaptor.
+  Under separate compilation each module makes its own, since the adaptor is
+  a `static` function of the TU that made it (`any_adaptor_module`).
+- **A local alias** of a global function (`(let ((g car)) ...)`,
+  `widen_fn_alias`) is boxed through the global's adaptor.
+- **The interpreter** re-homed every reference to a lifted lambda onto the
+  referencing frame, which made each one a new closure. A lambda that names
+  a frame-local function needs that. The shared adaptor calls only a global,
+  so it is marked `is_shared_any_adaptor` and not re-homed.
+
+SRFI 69 keeps its case-folding default hash: it is right for all five
+standard equivalences, so nothing there changes.
+
+---
+
 **Severity:** medium. R7RS 6.1 makes a procedure `eqv?` to itself. `(eqv? car
 car)` is `#t` in chibi and Racket. Here it is `#f` on both back ends, and so
 is every comparison of a standard procedure with itself: `(eq? vector-ref

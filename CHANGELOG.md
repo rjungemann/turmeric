@@ -6,6 +6,12 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A standard procedure is `eqv?` to itself.** Under `#lang r7rs`, `(eqv? car
+  car)` was `#f` on both back ends, so a table keyed by `car` never found
+  it. Each reference to a typed prelude procedure made a new adaptor. There
+  is now one per procedure, shared by a library and the program that imports
+  it.
+
 - **A Scheme procedure called with the wrong number of arguments raises.**
   Under `#lang r7rs`, `(f)` for `(define (f a . rest) a)` returned a
   procedure, because Turmeric curried the call, and the program went on with

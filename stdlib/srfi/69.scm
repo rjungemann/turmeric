@@ -15,9 +15,10 @@
 ;;; anything else with `hash`.  That is right for all five standard
 ;;; equivalences (eq?, eqv?, equal?, string=? and string-ci=?), where the
 ;;; reference picks one by comparing the equivalence with each of them by
-;;; eq?, which a standard procedure does not pass here
-;;; (docs/reported/r7rs-prelude-procedures-lose-identity.md).  For any other
-;;; equivalence, pass the hash function that agrees with it.
+;;; eq?, which a standard procedure did not pass here until 2026-09-27
+;;; (docs/archive/r7rs-prelude-procedures-lose-identity.md); the default
+;;; stays, being right for all five.  For any other equivalence, pass the
+;;; hash function that agrees with it.
 ;;; docs/upcoming/r7rs-srfi-plan.md, S4.
 (define-library (srfi 69)
   (export
