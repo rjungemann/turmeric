@@ -215,16 +215,56 @@ else
     echo "PASS threads-run (a thread starts, joins and prints under the collector, silently, as without it)"
 fi | tee -a "$WORK/results"
 
+# A hang in a threaded case is a deadlock or a cycle walk, and the two look
+# nothing alike on the stack (docs/archive/r7rs-gc-threads-lifecycle-rare-hang.md
+# "If it recurs").  On CI the process is gone by the time anyone looks, so a
+# case that outlives its deadline has every thread's stack printed first, with
+# whichever debugger the host has.
+dump_stacks() {
+    local pid="$1"
+    if command -v gdb > /dev/null 2>&1; then
+        gdb -p "$pid" -batch -ex "thread apply all bt" 2>&1 | grep -E '^(Thread|#)' | head -400
+    elif command -v lldb > /dev/null 2>&1; then
+        lldb -p "$pid" --batch -o "thread backtrace all" 2>&1 | head -400
+    elif [ "$HOST" = Darwin ] && command -v sample > /dev/null 2>&1; then
+        sample "$pid" 1 -mayDie 2>&1 | head -400
+    else
+        echo "(no gdb, lldb or sample here to print the stacks)"
+    fi
+}
+
+# run_deadline <secs> <out> <err> <cmd...>: timeout(1)'s exit codes (124 when
+# the deadline passed), but the stacks are dumped into <err> before the kill.
+run_deadline() {
+    local secs="$1" out="$2" err="$3" pid waited=0
+    shift 3
+    "$@" > "$out" 2> "$err" &
+    pid=$!
+    while kill -0 "$pid" 2> /dev/null; do
+        if [ "$waited" -ge "$secs" ]; then
+            { echo "--- stacks at the ${secs}s deadline ---"; dump_stacks "$pid"; } >> "$err" 2>&1
+            kill -9 "$pid" 2> /dev/null
+            wait "$pid" 2> /dev/null
+            return 124
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    wait "$pid"
+}
+
 fixture_case() {
     local tag="$1" dir="tests/fixtures/$2" torture="${4:-1}" want got rc
     if ! "$TUR" build "$dir/input.tur" -o "$WORK/$tag" > "$WORK/$tag.build" 2>&1; then
         echo "FAIL $tag -- build failed: $(grep -m1 -i error "$WORK/$tag.build" | cut -c1-160)"
         return
     fi
-    got="$(TUR_GC_TORTURE="$torture" timeout 300 "$WORK/$tag" 2> "$WORK/$tag.err")"; rc=$?
+    TUR_GC_TORTURE="$torture" run_deadline 300 "$WORK/$tag.out" "$WORK/$tag.err" "$WORK/$tag"; rc=$?
+    got="$(cat "$WORK/$tag.out")"
     want="$(cat "$dir/expected.stdout")"
     if [ "$rc" = 124 ]; then
         echo "FAIL $tag -- timed out (>300s) under TUR_GC_TORTURE=$torture (a missing root can read as a hang: a freed list walked in a cycle)"
+        sed -n '/^--- stacks at the/,$p' "$WORK/$tag.err"
     elif [ "$rc" != 0 ]; then
         echo "FAIL $tag -- exit $rc under TUR_GC_TORTURE=$torture: $(tail -1 "$WORK/$tag.err" | cut -c1-120)"
     elif [ "$got" != "$want" ]; then

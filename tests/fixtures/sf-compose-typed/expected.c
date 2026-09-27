@@ -9871,9 +9871,9 @@ static void * _gt_gt_gt(int64_t f, int64_t g) {
             *(void (**)(void *))__t224 = drop_glue___env_1667;
             struct __env_1667 *__t223 = (struct __env_1667 *)((char *)__t224 + sizeof(void *));
             __t223->__fn = (int64_t)(intptr_t)__fn_1665;
-            __t223->gv = gv;
+            __t223->gv = (int64_t)(intptr_t)(gv);
             TUR_REGION_NOTE_WORDS(&(__t223->gv), sizeof(__t223->gv));
-            __t223->fv = fv;
+            __t223->fv = (int64_t)(intptr_t)(fv);
             TUR_REGION_NOTE_WORDS(&(__t223->fv), sizeof(__t223->fv));
             void *__t225 = __t223;
             __t222 = __t225;
@@ -10494,9 +10494,9 @@ static void * _____spec__void___int64_t_int64_t(int64_t f, int64_t g) {
             *(void (**)(void *))__t289 = drop_glue___env_1667__spec__double;
             struct __env_1667__spec__double *__t288 = (struct __env_1667__spec__double *)((char *)__t289 + sizeof(void *));
             __t288->__fn = (tur_thunk_double_double_t)__fn_1665__spec__double_void___double;
-            __t288->gv = gv;
+            __t288->gv = (int64_t)(intptr_t)(gv);
             TUR_REGION_NOTE_WORDS(&(__t288->gv), sizeof(__t288->gv));
-            __t288->fv = fv;
+            __t288->fv = (int64_t)(intptr_t)(fv);
             TUR_REGION_NOTE_WORDS(&(__t288->fv), sizeof(__t288->fv));
             void *__t290 = __t288;
             __t287 = __t290;

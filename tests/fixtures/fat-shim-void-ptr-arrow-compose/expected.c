@@ -7293,7 +7293,7 @@ static void * __fn_1924(void * __env_p_1927, int64_t sig) {
         struct __env_1921 *__t113 = (struct __env_1921 *)((char *)__t114 + sizeof(void *));
         __t113->__fn = (tur_thunk_double_double_t)__fn_1919;
         __t113->k = __env___env_1926->k;
-        __t113->sig = sig;
+        __t113->sig = (int64_t)(intptr_t)(sig);
         TUR_REGION_NOTE_WORDS(&(__t113->sig), sizeof(__t113->sig));
         void *__t115 = __t113;
         return __t115;
@@ -9925,9 +9925,9 @@ static void * _gt_gt_gt(int64_t f, int64_t g) {
             *(void (**)(void *))__t228 = drop_glue___env_1666;
             struct __env_1666 *__t227 = (struct __env_1666 *)((char *)__t228 + sizeof(void *));
             __t227->__fn = (int64_t)(intptr_t)__fn_1664;
-            __t227->gv = gv;
+            __t227->gv = (int64_t)(intptr_t)(gv);
             TUR_REGION_NOTE_WORDS(&(__t227->gv), sizeof(__t227->gv));
-            __t227->fv = fv;
+            __t227->fv = (int64_t)(intptr_t)(fv);
             TUR_REGION_NOTE_WORDS(&(__t227->fv), sizeof(__t227->fv));
             void *__t229 = __t227;
             __t226 = __t229;

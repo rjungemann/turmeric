@@ -7006,7 +7006,7 @@ static int64_t line_hya_hyx_un_undict_un1707(int64_t __dict_1708, int64_t g, int
         __t81->__fn = (int64_t)(intptr_t)__fn_1674;
         __t81->__hkt_dict = __dict_1708;
         TUR_REGION_NOTE_WORDS(&(__t81->__hkt_dict), sizeof(__t81->__hkt_dict));
-        __t81->g = g;
+        __t81->g = (int64_t)(intptr_t)(g);
         TUR_REGION_NOTE_WORDS(&(__t81->g), sizeof(__t81->g));
         void *__t83 = __t81;
         int64_t __ps_84 = (line_hya_un_undict_un1679(__dict_1708, (int64_t)(intptr_t)(__t83), (int64_t)(intptr_t)(s)));
@@ -7025,7 +7025,7 @@ static int64_t line_hya_hyx_un_undict_un1721(int64_t __dict_1708, int64_t g, int
         __t85->__fn = (int64_t)(intptr_t)__fn_1674;
         __t85->__hkt_dict = __dict_1708;
         TUR_REGION_NOTE_WORDS(&(__t85->__hkt_dict), sizeof(__t85->__hkt_dict));
-        __t85->g = g;
+        __t85->g = (int64_t)(intptr_t)(g);
         TUR_REGION_NOTE_WORDS(&(__t85->g), sizeof(__t85->g));
         void *__t87 = __t85;
         int64_t __ps_88 = (line_hya_un_undict_un1679(__dict_1708, (int64_t)(intptr_t)(__t87), (int64_t)(intptr_t)(s)));
@@ -7048,7 +7048,7 @@ static int64_t line_hya_hyx_un_undict_un1737(int64_t __dict_1708, int64_t g, int
         __t89->__fn = (int64_t)(intptr_t)__fn_1674;
         __t89->__hkt_dict = __dict_1708;
         TUR_REGION_NOTE_WORDS(&(__t89->__hkt_dict), sizeof(__t89->__hkt_dict));
-        __t89->g = g;
+        __t89->g = (int64_t)(intptr_t)(g);
         TUR_REGION_NOTE_WORDS(&(__t89->g), sizeof(__t89->g));
         void *__t91 = __t89;
         int64_t __ps_92 = (line_hya_un_undict_un1679(__dict_1708, (int64_t)(intptr_t)(__t91), (int64_t)(intptr_t)(s)));
@@ -7067,7 +7067,7 @@ static int64_t line_hya_hyx_un_undict_un1749(int64_t __dict_1708, int64_t g, int
         __t93->__fn = (int64_t)(intptr_t)__fn_1674;
         __t93->__hkt_dict = __dict_1708;
         TUR_REGION_NOTE_WORDS(&(__t93->__hkt_dict), sizeof(__t93->__hkt_dict));
-        __t93->g = g;
+        __t93->g = (int64_t)(intptr_t)(g);
         TUR_REGION_NOTE_WORDS(&(__t93->g), sizeof(__t93->g));
         void *__t95 = __t93;
         int64_t __ps_96 = (line_hya_un_undict_un1679(__dict_1708, (int64_t)(intptr_t)(__t95), (int64_t)(intptr_t)(s)));
@@ -7086,7 +7086,7 @@ static int64_t line_hya_hyx_un_undict_un1762(int64_t __dict_1708, int64_t g, int
         __t97->__fn = (int64_t)(intptr_t)__fn_1674;
         __t97->__hkt_dict = __dict_1708;
         TUR_REGION_NOTE_WORDS(&(__t97->__hkt_dict), sizeof(__t97->__hkt_dict));
-        __t97->g = g;
+        __t97->g = (int64_t)(intptr_t)(g);
         TUR_REGION_NOTE_WORDS(&(__t97->g), sizeof(__t97->g));
         void *__t99 = __t97;
         int64_t __ps_100 = (line_hya_un_undict_un1679(__dict_1708, (int64_t)(intptr_t)(__t99), (int64_t)(intptr_t)(s)));
@@ -9733,7 +9733,7 @@ static int64_t over(tur_poly_fn_t l, int64_t h, int64_t s) {
         *(void (**)(void *))__t217 = drop_glue___env_1694;
         struct __env_1694 *__t216 = (struct __env_1694 *)((char *)__t217 + sizeof(void *));
         __t216->__fn = (int64_t)(intptr_t)__fn_1692;
-        __t216->h = h;
+        __t216->h = (int64_t)(intptr_t)(h);
         TUR_REGION_NOTE_WORDS(&(__t216->h), sizeof(__t216->h));
         void *__t218 = __t216;
         int64_t __ps_219 = (((int64_t(*)(void*, int64_t, int64_t, int64_t))l.fn)(l.env, (int64_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Functor_Identity_singleton))), (int64_t)((int64_t)(intptr_t)(__t218)), (int64_t)(s)));
@@ -9851,7 +9851,7 @@ static int64_t over__spec__int64_t_void___int64_t_int64_t(tur_poly_fn_t l, int64
         *(void (**)(void *))__t240 = drop_glue___env_1694__spec__tur_adt_Identity__int;
         struct __env_1694__spec__tur_adt_Identity__int *__t239 = (struct __env_1694__spec__tur_adt_Identity__int *)((char *)__t240 + sizeof(void *));
         __t239->__fn = (int64_t)(intptr_t)__fn_1692__spec__tur_adt_Identity__int_void___int64_t;
-        __t239->h = h;
+        __t239->h = (int64_t)(intptr_t)(h);
         TUR_REGION_NOTE_WORDS(&(__t239->h), sizeof(__t239->h));
         void *__t241 = __t239;
         tur_adt_Identity__Line __ps_242 = (line_a_x__mono_19a433877f08106f((int64_t)(intptr_t)(__t241), (int64_t)(intptr_t)(s)));
@@ -9976,7 +9976,7 @@ static tur_adt_Identity__Line line_a_x__mono_19a433877f08106f(int64_t g, int64_t
         __t268->__fn = (int64_t)(intptr_t)__fn_1674__byval;
         __t268->__hkt_dict = (int64_t)(intptr_t)(&dict_Functor_Identity_singleton);
         TUR_REGION_NOTE_WORDS(&(__t268->__hkt_dict), sizeof(__t268->__hkt_dict));
-        __t268->g = g;
+        __t268->g = (int64_t)(intptr_t)(g);
         TUR_REGION_NOTE_WORDS(&(__t268->g), sizeof(__t268->g));
         void *__t270 = __t268;
         tur_adt_Identity__Line __ps_271 = (line_a__mono_26f1991df1b6def6((int64_t)(intptr_t)(__t270), (int64_t)(intptr_t)(s)));
