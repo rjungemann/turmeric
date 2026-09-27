@@ -8744,6 +8744,36 @@ void ensure_musttail_macro(EmitCtx *ctx) {
         "#endif\n");
 }
 
+/* r7rs-type-errors-are-uncatchable-panics: the cast check a cast in Scheme
+ * source calls.  On a mismatch it hands the value to the prelude's
+ * `r7rs-type-error__`, which raises an R7RS error object ("car: not a pair",
+ * the value its irritant) that `guard` and `with-exception-handler` see.  The
+ * prelude installs the hook at startup (`r7rs-type-error-hook-install__`);
+ * raising never returns, so the ordinary check after it only fires when no
+ * hook is installed -- a panic, as before.  Written into the unit the first
+ * time a Scheme cast is emitted, after the `any` preamble it builds on, so a
+ * unit with no Scheme source is unchanged. */
+void ensure_r7rs_cast_helper(EmitCtx *ctx) {
+    if (!ctx || ctx->r7rs_cast_helper_emitted) return;
+    ctx->r7rs_cast_helper_emitted = true;
+    Buf *out = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    if (!out) return;
+    buf_puts(out,
+        "/* r7rs-type-errors-are-uncatchable-panics: a failed cast in Scheme\n"
+        " * source raises an R7RS error object through the prelude's hook. */\n"
+        "#define TUR_R7RS_TYPE_ERROR_HOOK 1\n"
+        "#ifndef TUR_R7RS_TYPE_ERROR_HOOK_DECL\n"
+        "#define TUR_R7RS_TYPE_ERROR_HOOK_DECL 1\n"
+        "static tur_tagged_t (*tur_r7rs_type_error_hook)(const char *, const char *, tur_tagged_t);\n"
+        "#endif\n"
+        "static void __tur_any_cast_check_r7(tur_tagged_t v, int64_t want,\n"
+        "                                    const char *who, const char *what) {\n"
+        "    if (TUR_GETTAG(v) != want && tur_r7rs_type_error_hook)\n"
+        "        (void)tur_r7rs_type_error_hook(who, what, v);\n"
+        "    __tur_any_cast_check(TUR_GETTAG(v), want);\n"
+        "}\n");
+}
+
 void emit_musttail_note_fn(EmitCtx *ctx, const char *cname) {
     if (!ctx || !cname) return;
     for (uint32_t i = ctx->n_mt_pins; i > 0; i--)
@@ -11481,6 +11511,22 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "             __tur_dyn_op_name(__op), __tur_dyn_argname(__t));\n"
         "    tur_panic(__m);\n"
         "}\n");
+    /* r7rs-type-errors-are-uncatchable-panics: an operand the dynamic operator
+     * has no row for.  In a Scheme program -- whose prelude installs the hook
+     * the raising cast check uses (ensure_r7rs_cast_helper) -- it is an R7RS
+     * error object `guard` can catch: the prelude's own numeric code reaches
+     * this with the program's values (`(negative? "four")`).  Everywhere else
+     * the hook is null and it is the panic above. */
+    buf_puts(out,
+        "#ifndef TUR_R7RS_TYPE_ERROR_HOOK_DECL\n"
+        "#define TUR_R7RS_TYPE_ERROR_HOOK_DECL 1\n"
+        "static tur_tagged_t (*tur_r7rs_type_error_hook)(const char *, const char *, tur_tagged_t);\n"
+        "#endif\n"
+        "static void __tur_dyn_bad_operand(int __op, tur_tagged_t __v) {\n"
+        "    if (tur_r7rs_type_error_hook)\n"
+        "        (void)tur_r7rs_type_error_hook(__tur_dyn_op_name(__op), \"a number\", __v);\n"
+        "    __tur_dyn_no_operator(__op, TUR_GETTAG(__v));\n"
+        "}\n");
     buf_puts(out,
         "static inline int __tur_dyn_is_num(int64_t __t) {\n"
         "    return __t == TUR_DYNTAG_INT || __t == TUR_DYNTAG_FLOAT;\n"
@@ -11504,16 +11550,16 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
     buf_puts(out,
         "static tur_tagged_t __tur_dyn_arith(int __op, tur_tagged_t __a, tur_tagged_t __b) {\n"
         "    int64_t __ta = TUR_GETTAG(__a), __tb = TUR_GETTAG(__b);\n"
-        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_no_operator(__op, __ta); }\n"
-        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_no_operator(__op, __tb); }\n"
+        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a); }\n"
+        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b); }\n"
         /* `mod` and the bit operators have int rows only in the builtin table,
          * so a float operand finds no overload in the interpreter either.  Same
          * answer here. */
         "    if (__op == TUR_DYNOP_MOD || __op == TUR_DYNOP_BAND ||\n"
         "        __op == TUR_DYNOP_BOR || __op == TUR_DYNOP_BXOR ||\n"
         "        __op == TUR_DYNOP_SHL || __op == TUR_DYNOP_SHR) {\n"
-        "        if (__ta != TUR_DYNTAG_INT) { __tur_dyn_no_operator(__op, __ta); }\n"
-        "        if (__tb != TUR_DYNTAG_INT) { __tur_dyn_no_operator(__op, __tb); }\n"
+        "        if (__ta != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __a); }\n"
+        "        if (__tb != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __b); }\n"
         "        {\n"
         "            int64_t __x = TUR_UNTAG(__a), __y = TUR_UNTAG(__b);\n"
         "            switch (__op) {\n"
@@ -11595,8 +11641,8 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "                 : ((__cx == NULL || __cy == NULL) ? 0 : (strcmp(__cx, __cy) == 0));\n"
         "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __ce : !__ce);\n"
         "    }\n"
-        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_no_operator(__op, __ta); }\n"
-        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_no_operator(__op, __tb); }\n"
+        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a); }\n"
+        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b); }\n"
         "    if (__ta == TUR_DYNTAG_FLOAT || __tb == TUR_DYNTAG_FLOAT) {\n"
         "        double __x = __tur_dyn_f(__a), __y = __tur_dyn_f(__b);\n"
         "        int __r;\n"

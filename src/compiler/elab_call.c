@@ -6408,6 +6408,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                     ? *fn_type.as.fn.arg_full_types[i]
                                     : type_from_kind(pk);
                     Expr *un = elab_any_unbox_to(e, call_args[i], want, call_args[i]->span);
+                    elab_any_cast_note_callee(e, un, fn_binding);
                     if (un) call_args[i] = un;
                 }
             }
@@ -7751,6 +7752,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                        : elab_any_unbox_to(e, args[i], want,
                                                            args[i]->span);
             if (unboxed) {
+                elab_any_cast_note_callee(e, unboxed, fn_binding);
                 args[i] = unboxed; arg_ok = true;
                 /* ...and the half that grounding ALONE does not buy.
                  *

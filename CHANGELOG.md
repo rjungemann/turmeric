@@ -6,6 +6,14 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A Scheme type error is an error object, not a panic.** Under `#lang
+  r7rs`, `(car 5)`, `(vector-ref '() 0)`, `(+ 'a 1)`, `(< 'a 1)`, `(negative?
+  "four")` and the prelude's other "it is an error" checks used to end the
+  program with a Turmeric panic that `guard` could not catch. Each now raises
+  an R7RS error object, such as "car: not a pair" with 5 as its irritant, on
+  both back ends. SRFI 64's `test-error` catches them. An unhandled one is
+  reported like any other error, with exit status 70.
+
 - **`sqrt`, `pow`, `log` and the other `stdlib/math.tur` functions no longer
   call themselves.** Each wrapper was a C function named after the libm
   function it wraps. Where the compiler turns the math builtin into a libm

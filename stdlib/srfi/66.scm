@@ -18,9 +18,9 @@
     u8vector=? u8vector-compare u8vector-copy! u8vector-copy)
   (import (scheme base))
   (begin
-    ;; A wrong type reaching a bytevector procedure would panic
-    ;; (docs/reported/r7rs-type-errors-are-uncatchable-panics.md), so each
-    ;; procedure checks its octet vectors first and raises.
+    ;; Each procedure checks its octet vectors first and raises, so the error
+    ;; names the octet vector and the SRFI 66 procedure; a wrong type used to
+    ;; panic below it (docs/archive/r7rs-type-errors-are-uncatchable-panics.md).
     (define (octets who u8vector)
       (if (bytevector? u8vector)
           u8vector

@@ -1892,6 +1892,16 @@ struct Expr {
         struct {
             struct Expr *value;
             TypeKind     target_kind;
+            /* r7rs-type-errors-are-uncatchable-panics: a cast in `#lang r7rs`
+             * source fails by RAISING an R7RS error object -- "<who>: not
+             * <want>", the value its irritant -- which `guard` can catch.
+             * `who` is the procedure the value was passed to (NULL when there
+             * is none, e.g. a cast the prelude writes), `want` the target in
+             * Scheme's words ("a pair").  Both back ends reach the prelude's
+             * `r7rs-type-error__`; a program without one still panics. */
+            bool         scheme_raise;
+            const char  *scheme_who;
+            const char  *scheme_want;
         } any_cast_;
         /* DV0: Dynamic var declaration */
         struct {

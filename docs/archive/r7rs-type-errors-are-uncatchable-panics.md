@@ -1,5 +1,60 @@
 # `#lang r7rs`: a primitive applied to the wrong type panics; `guard` cannot catch it
 
+**RESOLVED 2026-09-27.** A value of the wrong type reaching a standard
+procedure raises an R7RS error object on both back ends: `(car 5)` is
+"car: not a pair" with 5 as its irritant, and `guard`, `with-exception-handler`
+and SRFI 64's `test-error` catch it. Pinned by
+`tests/fixtures/r7rs-type-errors-raise`. The rest of this file is the
+original report.
+
+## Fix
+
+Three paths reached a panic, and each now reaches the prelude's
+`r7rs-type-error__`, which builds the error object and raises it:
+
+- **The seam's checked cast.** A cast the elaborator writes in Scheme source
+  (`elab_any_unbox_to`, any span `lang_span_is_scheme` accepts, the prelude
+  included) is marked `scheme_raise`, with the target in Scheme's words
+  ("a pair", "a vector", "an exact integer") and, at a call argument, the
+  procedure's Scheme name (`elab_any_cast_note_callee`, through the rename
+  table: `r7rs-car` is `car`). The emitter calls
+  `__tur_any_cast_check_r7(v, tag, who, what)` for it, written once per unit
+  (`ensure_r7rs_cast_helper`), which on a mismatch calls the hook
+  `tur_r7rs_type_error_hook`; the prelude points the hook at
+  `r7rs-type-error__` at startup (`r7rs-type-error-hook-install__`, run by a
+  `def`). The interpreter's `EX_ANY_CAST` calls the procedure by name. The
+  interpreter also used to pass a `(Vec any)` cast unchecked, so
+  `(vector-ref '() 0)` read a field of the empty list; a Scheme cast to a
+  type application now compares the box's name, as `is?` does.
+- **The dynamic operator.** The prelude's own numeric code runs Turmeric's
+  dynamic `+` and `<` on the program's values (`(negative? "four")`), and
+  those panicked "no operator for a cstr argument". The compiled
+  `__tur_dyn_bad_operand` and the interpreter's dyn-op arm call the same
+  hook, and still panic when there is none (a Saffron program).
+- **The prelude's "it is an error" helpers.** `r7rs-fail-any__` and its
+  twins, `string-set!`'s index, a mutated literal and `string-ref`'s index
+  (in inline C) raise with their message. So do `+`, `-`, `*` and the five
+  comparisons given a non-number: each checks its operands only after the
+  int64 fast path (`r7rs-intflos?__`).
+
+These raise through `r7rs-raise-type__`, an inline-C call into the same
+hook, rather than `raise`. A direct `raise` makes the procedure that reaches
+it effectful, and the effect analysis then compiles its callers to CPS. That
+is why these were panics (see the note on `r7rs-exint-of__`). A call into C
+is opaque to the analysis. Measured on a one-line program, the only function
+that became CPS is `r7rs-type-error__` itself. `r7rs-tail-calls` passes, and
+the chibi count holds at 1223 on both back ends.
+
+A bignum passed where a Turmeric `int` is wanted says so: "vec-get: not an
+exact integer in the int64 range" (`r7rs-bignum-int-seam`, which now raises
+where it panicked).
+
+The SRFI suites moved: SRFI 1 from 157 to 160, and SRFI 41 from 174 to 184
+(`(car '())`, `(every odd? '(1 3 . x))`, `(stream->list "four" s)`). Their
+floors are raised.
+
+---
+
 **Severity:** medium. `(car 5)` reached through a variable aborts the program
 with a Turmeric panic. It does not raise an R7RS error that `guard` or
 `with-exception-handler` can catch. chibi and Racket raise a catchable error

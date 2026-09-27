@@ -235,6 +235,39 @@ static Expr *r7rs_string_unbox(Elab *e, Expr *val, Span span) {
     return call;
 }
 
+/* r7rs-type-errors-are-uncatchable-panics: the target of a failed cast, in
+ * the words a Scheme error message uses ("car: not a pair").  NULL for a
+ * target that has no Scheme name; the message then names the Turmeric type. */
+static const char *scheme_type_desc(Type t) {
+    switch (t.kind) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return "an exact integer";
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64: return "an inexact real";
+        case TY_BOOL:  return "a boolean";
+        case TY_CSTR:  return "a string";
+        case TY_SYM:   return "a symbol";
+        case TY_FN:    return "a procedure";
+        default: break;
+    }
+    static const char *const names[][2] = {
+        { "R7rsPair", "a pair" },             { "R7rsNull", "the empty list" },
+        { "R7rsString", "a string" },         { "R7rsChar", "a character" },
+        { "R7rsBytevector", "a bytevector" }, { "R7rsError", "an error object" },
+        { "R7rsParam", "a parameter object" },{ "R7rsPromise", "a promise" },
+        { "R7rsPort", "a port" },             { "R7rsEof", "the eof object" },
+        { "R7rsRatio", "an exact rational" }, { "R7rsBig", "an exact integer" },
+        { "R7rsComplex", "a complex number" },{ "R7rsValues", "multiple values" },
+        { "R7rsEnvironment", "an environment" },
+    };
+    const char *n = type_name(t);
+    if (!n) return NULL;
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (strcmp(n, names[i][0]) == 0) return names[i][1];
+    if (strstr(n, "Vec") != NULL) return "a vector";
+    return NULL;
+}
+
 Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span) {
     if (target.kind == TY_CSTR) {
         Expr *conv = r7rs_string_unbox(e, val, span);
@@ -243,7 +276,42 @@ Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span) {
     Expr *out = expr_new(e->arena, EX_ANY_CAST, target, span);
     out->as.any_cast_.value = val;
     out->as.any_cast_.target_kind = any_box_tag_for_type(&target);
+    /* r7rs-type-errors-are-uncatchable-panics: in Scheme source a failed
+     * cast is an R7RS error, raised; elsewhere it stays the panic. */
+    if (lang_span_is_scheme(span) || lang_span_is_scheme(val->span)) {
+        out->as.any_cast_.scheme_raise = true;
+        out->as.any_cast_.scheme_want = scheme_type_desc(target);
+        if (!out->as.any_cast_.scheme_want) {
+            const char *n = type_name(target);
+            if (n) {
+                size_t len = strlen(n) + 4;
+                char *w = (char *)arena_alloc(e->arena, len);
+                snprintf(w, len, "a %s", n);
+                out->as.any_cast_.scheme_want = w;
+            }
+        }
+    }
     return out;
+}
+
+/* r7rs-type-errors-are-uncatchable-panics: name the procedure a raising cast
+ * guards, as Scheme spells it -- `r7rs-car` is `car`.  A prelude-internal
+ * callee (`r7rs-foo__`) names nothing; the message then says only what was
+ * expected. */
+void elab_any_cast_note_callee(Elab *e, Expr *cast, const Binding *callee) {
+    if (!cast || cast->kind != EX_ANY_CAST || !cast->as.any_cast_.scheme_raise ||
+        !callee || !callee->name)
+        return;
+    const char *n = callee->name->name;
+    size_t len = strlen(n);
+    if (len >= 2 && n[len - 2] == '_' && n[len - 1] == '_') return;
+    const char *pub = scheme_public_name(n);
+    if (!pub && strncmp(n, "r7rs-", 5) == 0) pub = n + 5;
+    if (!pub) pub = n;
+    size_t pl = strlen(pub) + 1;
+    char *w = (char *)arena_alloc(e->arena, pl);
+    memcpy(w, pub, pl);
+    cast->as.any_cast_.scheme_who = w;
 }
 
 /* TY3: (is? x T) — runtime type test on an `any`-typed value.  Returns bool:

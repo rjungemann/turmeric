@@ -2,7 +2,7 @@
 ;; A byte out of range, a bytevector index out of range, or a sequence range
 ;; out of bounds raises an error object `guard` catches, as vector-ref's
 ;; index does
-;; (docs/reported/r7rs-type-errors-are-uncatchable-panics.md).  The byte
+;; (docs/archive/r7rs-type-errors-are-uncatchable-panics.md).  The byte
 ;; checks used to be a panic (`bytevector`, `make-bytevector`) or nothing at
 ;; all (`bytevector-u8-set!` stored 256), and a bad range was a panic.
 ;; r7rs-srfi-plan S7: SRFI 4 and 66 check their octets through this path.

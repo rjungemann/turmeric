@@ -312,6 +312,13 @@ static const char *const RENAMES[][2] = {
 };
 #define N_RENAMES (sizeof(RENAMES) / sizeof(RENAMES[0]))
 
+const char *scheme_public_name(const char *prelude_name) {
+    if (!prelude_name) return NULL;
+    for (size_t i = 0; i < sizeof RENAMES / sizeof RENAMES[0]; i++)
+        if (strcmp(RENAMES[i][1], prelude_name) == 0) return RENAMES[i][0];
+    return NULL;
+}
+
 /* R7: the R7RS-small libraries.  A RESIDENT library's procedures live in the
  * prelude, so importing it is a scoping statement only.  An ON-DEMAND
  * library is its own file under stdlib/r7rs/, spliced in by the load

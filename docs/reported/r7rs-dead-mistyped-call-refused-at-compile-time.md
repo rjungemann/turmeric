@@ -49,6 +49,7 @@ failure.
 - Or have the Scheme lowering give every `let`-bound variable the static
   type `any`. That covers the `let` case but not a literal argument, and it
   gives up static types the rest of the file benefits from.
-- Whichever lands, the run-time failure it produces is the uncatchable
-  panic [r7rs-type-errors-are-uncatchable-panics](r7rs-type-errors-are-uncatchable-panics.md)
-  describes. Fixing that one first makes this fix's error an R7RS one.
+- Whichever lands, the run-time failure it produces is the cast that
+  [r7rs-type-errors-are-uncatchable-panics](../archive/r7rs-type-errors-are-uncatchable-panics.md)
+  made raise an R7RS error object (resolved 2026-09-27), so this fix's error
+  is already an R7RS one: letting the call through is all that is left.

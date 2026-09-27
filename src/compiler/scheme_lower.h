@@ -99,4 +99,10 @@ bool scheme_lower_needed(Form *const *forms, uint32_t n);
  * count written to `out` (interned string literals; do not free). */
 uint32_t scheme_import_library_files(const Form *f, const char **out, uint32_t cap);
 
+/* r7rs-type-errors-are-uncatchable-panics: the Scheme spelling of a prelude
+ * procedure (`r7rs-car` -> "car"), from the rename table; NULL when the
+ * prelude name is not one a Scheme program writes.  An error message names
+ * the procedure the way the program did. */
+const char *scheme_public_name(const char *prelude_name);
+
 #endif /* TUR_SCHEME_LOWER_H */

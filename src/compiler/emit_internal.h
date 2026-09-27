@@ -764,6 +764,9 @@ typedef struct EmitCtx {
      * a `TUR_MUSTTAIL` call, in emission order, for emit_musttail_pins. */
     char       **mt_pins;
     uint32_t     n_mt_pins, cap_mt_pins;
+    /* r7rs-type-errors-are-uncatchable-panics: __tur_any_cast_check_r7 and
+     * its hook are written (once per unit) the first time a Scheme cast is. */
+    bool         r7rs_cast_helper_emitted;
 } EmitCtx;
 
 enum {
@@ -882,6 +885,9 @@ void ensure_musttail_macro(EmitCtx *ctx);
  * recorded (see emit_musttail_pins). */
 void emit_musttail_note_fn(EmitCtx *ctx, const char *cname);
 void emit_musttail_pins(EmitCtx *ctx, Buf *out);
+/* r7rs-type-errors-are-uncatchable-panics: write the raising cast check a
+ * Scheme cast calls (once per unit). */
+void ensure_r7rs_cast_helper(EmitCtx *ctx);
 /* S1 (jit-engine-plan section 4): the same side table's return-type half.  A
  * call site consults it to name the type of a hoisted call temp outright,
  * instead of emitting GNU C's `__auto_type` -- which c2mir cannot parse at all

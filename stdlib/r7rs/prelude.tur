@@ -75,11 +75,16 @@
 ;;; error; `file-error?` and `read-error?` answer from it.
 (defn r7rs-error-kind__ [e : R7rsError] : int (.kind e))
 
-;;; r7rs-fail-any__ -- internal: panic, in a position that needs an `any`.
-;;; A bare `(panic ...)` in the value position of an `any`-returning function
-;;; is emitted as a void return by the compiled back end, so the branches
-;;; that cannot happen go through this instead.
+;;; r7rs-fail-any__ -- internal: an "it is an error" condition, in a position
+;;; that needs an `any`.  It raises an error object with this message, which
+;;; a program can `guard` (r7rs-type-errors-are-uncatchable-panics), through
+;;; r7rs-raise-type__ so that its callers stay out of CPS; the panic is only
+;;; reached with no hook installed.  (A bare `(panic ...)` in the value
+;;; position of an `any`-returning function is emitted as a void return by
+;;; the compiled back end, hence the helper.)  -bool, -int and -cstr are its
+;;; twins for other positions.
 (defn r7rs-fail-any__ [msg : cstr] : any
+  (r7rs-raise-type__ msg "" (:: 0 any))
   (panic msg)
   (:: 0 any))
 ;;; r7rs-signal__ -- internal: R10 -- an error a program can `guard`: raise
@@ -88,6 +93,7 @@
 (defn r7rs-signal__ [msg : cstr] : any
   (r7rs-raise (R7rsError msg (R7rsNull 0) 0)))
 (defn r7rs-fail-bool__ [msg : cstr] : bool
+  (r7rs-raise-type__ msg "" (:: 0 any))
   (panic msg)
   false)
 
@@ -702,20 +708,30 @@
 
 ;;; r7rs-add2__ ... -- the binary operators the lowering emits.  Two ints
 ;;; take the int64 path unless it overflows (T1: then the bignum core, where
-;;; D8 had a panic); a bignum operand goes to the core; anything else is the
-;;; dynamic operator, which promotes a mixed pair to inexact.
+;;; D8 had a panic); a bignum operand goes to the core; two ints or doubles
+;;; take the dynamic operator, which promotes a mixed pair to inexact; and
+;;; anything else is not a number, the raised error (`(+ 'a 1)`) where the
+;;; dynamic operator panicked.
+(defn r7rs-intflo?__ [x] : bool (if (is? x float) true (is? x int)))
+(defn r7rs-intflos?__ [a b] : bool (if (r7rs-intflo?__ a) (r7rs-intflo?__ b) false))
 (defn r7rs-add2__ [a b] : any
   (if (r7rs-both-int?__ a b)
     (if (r7rs-int-ovf?__ 0 a b) (r7rs-big2__ 0 a b) (+ a b))
-    (if (r7rs-any-exotic?__ a b) (r7rs-big-arith__ 0 a b) (+ a b))))
+    (if (r7rs-any-exotic?__ a b)
+      (r7rs-big-arith__ 0 a b)
+      (if (r7rs-intflos?__ a b) (+ a b) (r7rs-num-error__ "+" a b)))))
 (defn r7rs-sub2__ [a b] : any
   (if (r7rs-both-int?__ a b)
     (if (r7rs-int-ovf?__ 1 a b) (r7rs-big2__ 1 a b) (- a b))
-    (if (r7rs-any-exotic?__ a b) (r7rs-big-arith__ 1 a b) (- a b))))
+    (if (r7rs-any-exotic?__ a b)
+      (r7rs-big-arith__ 1 a b)
+      (if (r7rs-intflos?__ a b) (- a b) (r7rs-num-error__ "-" a b)))))
 (defn r7rs-mul2__ [a b] : any
   (if (r7rs-both-int?__ a b)
     (if (r7rs-int-ovf?__ 2 a b) (r7rs-big2__ 2 a b) (* a b))
-    (if (r7rs-any-exotic?__ a b) (r7rs-big-arith__ 2 a b) (* a b))))
+    (if (r7rs-any-exotic?__ a b)
+      (r7rs-big-arith__ 2 a b)
+      (if (r7rs-intflos?__ a b) (* a b) (r7rs-num-error__ "*" a b)))))
 ;;; r7rs-div2__ -- T2: exact on exact operands, a ratio when the quotient is
 ;;; not an integer (`(/ 7 2)` is 7/2, where it was 3.5), and division by
 ;;; exact zero is an error.  Two ints that divide stay on int64 (-1 aside:
@@ -791,13 +807,32 @@
     (r7rs-cmp-rat-any__ a b)
     (if (r7rs-any-big?__ a b) (r7rs-cmp-big__ a b) (r7rs-cmp-mixed__ a b))))
 (defn r7rs-slow?__ [a b] : bool (if (r7rs-mixed?__ a b) true (r7rs-any-exotic?__ a b)))
-(defn r7rs-numeq2__ [a b] : bool (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) 0) (= a b)))
-(defn r7rs-lt2__ [a b] : bool (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) -1) (< a b)))
-(defn r7rs-gt2__ [a b] : bool (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) 1) (> a b)))
+;;; The comparisons: two ints first, then the exact slow path, then two
+;;; doubles; anything else is not a number, raised (`(< 'a 1)`).
+(defn r7rs-cmp-error__ [who : cstr a b] : bool
+  (r7rs-raise-type__ who "a number" (if (r7rs-number? a) b a))
+  (panic (r7rs-string-append2__ who ": not a number"))
+  false)
+(defn r7rs-numeq2__ [a b] : bool
+  (if (r7rs-both-int?__ a b) (= a b)
+    (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) 0)
+      (if (r7rs-intflos?__ a b) (= a b) (r7rs-cmp-error__ "=" a b)))))
+(defn r7rs-lt2__ [a b] : bool
+  (if (r7rs-both-int?__ a b) (< a b)
+    (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) -1)
+      (if (r7rs-intflos?__ a b) (< a b) (r7rs-cmp-error__ "<" a b)))))
+(defn r7rs-gt2__ [a b] : bool
+  (if (r7rs-both-int?__ a b) (> a b)
+    (if (r7rs-slow?__ a b) (= (r7rs-cmp-slow__ a b) 1)
+      (if (r7rs-intflos?__ a b) (> a b) (r7rs-cmp-error__ ">" a b)))))
 (defn r7rs-le2__ [a b] : bool
-  (if (r7rs-slow?__ a b) (let [c (r7rs-cmp-slow__ a b)] (if (= c -1) true (= c 0))) (<= a b)))
+  (if (r7rs-both-int?__ a b) (<= a b)
+    (if (r7rs-slow?__ a b) (let [c (r7rs-cmp-slow__ a b)] (if (= c -1) true (= c 0)))
+      (if (r7rs-intflos?__ a b) (<= a b) (r7rs-cmp-error__ "<=" a b)))))
 (defn r7rs-ge2__ [a b] : bool
-  (if (r7rs-slow?__ a b) (let [c (r7rs-cmp-slow__ a b)] (if (= c 1) true (= c 0))) (>= a b)))
+  (if (r7rs-both-int?__ a b) (>= a b)
+    (if (r7rs-slow?__ a b) (let [c (r7rs-cmp-slow__ a b)] (if (= c 1) true (= c 0)))
+      (if (r7rs-intflos?__ a b) (>= a b) (r7rs-cmp-error__ ">=" a b)))))
 
 ;;; The variadic procedures a bare operator names in value position.
 (defn r7rs-fold-num__ [f l acc]
@@ -841,14 +876,15 @@
   (if (is? x int) x (if (is? x float) (if (r7rs-integer? x) (r7rs-float->int__ x) (r7rs-fail-int__ who)) (r7rs-fail-int__ who))))
 ;;; r7rs-exint-of__ -- an integer argument as an exact integer (an int or a
 ;;; bignum); an inexact integer converts exactly, anything else (a ratio, T2)
-;;; is the panic `who`.  Not a raised condition: this is reachable from `=`
-;;; (through the exact comparison of a ratio and a double), and a `raise`
-;;; there makes every procedure that compares numbers effectful, which
-;;; compiles it to CPS and costs the tail-call trampoline
+;;; is the error `who`.  Raised through r7rs-fail-any__, not `raise`: this is
+;;; reachable from `=` (through the exact comparison of a ratio and a
+;;; double), and a `raise` there makes every procedure that compares numbers
+;;; effectful, which compiles it to CPS and costs the tail-call trampoline
 ;;; (tests/fixtures/r7rs-tail-calls).
 (defn r7rs-exint-of__ [x who : cstr] : any
   (if (r7rs-exint? x) x (if (r7rs-integer? x) (r7rs-exact x) (r7rs-fail-any__ who))))
 (defn r7rs-fail-int__ [msg : cstr] : int
+  (r7rs-raise-type__ msg "" (:: 0 any))
   (panic msg)
   0)
 ;;; r7rs-even? -- an inexact integer is tested as a double, so a large one
@@ -1146,6 +1182,7 @@
     r))
 (defn r7rs-exact-unit?__ [x v : int] : bool (if (is? x int) (= x v) false))
 (defn r7rs-fail-cstr__ [msg : cstr] : cstr
+  (r7rs-raise-type__ msg "" (:: 0 any))
   (panic msg)
   "")
 ;;; r7rs-number-of__ -- internal: T0 -- s read as a number in radix, through
@@ -1271,12 +1308,20 @@
     for (int j = 0; j < w && *p; j++) p++;
     k++;
   }
+  #ifdef TUR_R7RS_TYPE_ERROR_HOOK
+  if (tur_r7rs_type_error_hook) tur_r7rs_type_error_hook("string-ref: index out of range", "", (tur_tagged_t){0});
+  #endif
   tur_panic("string-ref: index out of range");
   return 0;
   ```)
 (defn r7rs-string-ref-code__ [s : cstr i : int] : int
   ```c
-  if (i < 0 || (size_t)i >= strlen(s)) tur_panic("string-ref: index out of range");
+  if (i < 0 || (size_t)i >= strlen(s)) {
+  #ifdef TUR_R7RS_TYPE_ERROR_HOOK
+    if (tur_r7rs_type_error_hook) tur_r7rs_type_error_hook("string-ref: index out of range", "", (tur_tagged_t){0});
+  #endif
+    tur_panic("string-ref: index out of range");
+  }
   return (int64_t)(unsigned char)s[i];
   ```)
 ;;; r7rs-cstr-free__ -- T8: release a scratch string the caller made and no
@@ -1410,7 +1455,10 @@
   (r7rs-cps-range-go__ v a b (:: (vec-new) (Vec int))))
 ;;; r7rs-immutable__ -- the named error for mutating a cstr-backed string.
 (defn r7rs-immutable__ [who : cstr] : nil
-  (panic (r7rs-string-append2__ who ": this string is immutable -- a literal, or a string from symbol->string, number->string, read or Turmeric (R7RS 6.7: it is an error to mutate it); string-copy it first")))
+  (r7rs-fail-nil__ (r7rs-string-append2__ who ": this string is immutable -- a literal, or a string from symbol->string, number->string, read or Turmeric (R7RS 6.7: it is an error to mutate it); string-copy it first")))
+(defn r7rs-fail-nil__ [msg : cstr] : nil
+  (r7rs-raise-type__ msg "" (:: 0 any))
+  (panic msg))
 (defn r7rs-fail-char__ [msg : cstr] : R7rsChar (:: (r7rs-fail-int__ msg) R7rsChar))
 
 (defn r7rs-string-length [s] : int
@@ -1427,7 +1475,7 @@
     (let [v (r7rs-mstring-cps__ s)]
       (if (if (>= i 0) (< i (vec-len v)) false)
         (vec-set! v i (r7rs-char-code__ c))
-        (panic "string-set!: index out of range")))
+        (r7rs-fail-nil__ "string-set!: index out of range")))
     (r7rs-immutable__ "string-set!")))
 (defn r7rs-fill-go__ [v : (Vec int) i : int end : int c : int] : nil
   (if (>= i end) nil (do (vec-set! v i c) (r7rs-fill-go__ v (+ i 1) end c))))
@@ -2204,6 +2252,63 @@
 ;;; r7rs-error -- R7RS `error`: raise a fresh error object.
 (defn r7rs-error [msg & irritants : any] : any
   (r7rs-raise (R7rsError msg (r7rs-chain->list__ (:: irritants (Cons any))) 0)))
+
+;;; r7rs-type-error__ -- internal: a value of the wrong type reached a typed
+;;; prelude procedure -- `(car 5)`.  Raise an error object, "car: not a pair"
+;;; with the value as its irritant, where the checked cast at the seam used to
+;;; panic (docs/archive/r7rs-type-errors-are-uncatchable-panics.md).  `who`
+;;; is the procedure ("" when the cast has none to name), `what` the expected
+;;; type in Scheme's words ("" makes `who` the whole message, with no
+;;; irritant: the r7rs-fail-* helpers' shape).  The compiled back end
+;;; calls it through the hook below, from the raising cast check; the
+;;; interpreter calls it by name.  It never returns: the raise escapes to a
+;;; handler, and an unhandled one ends the program.
+(defn r7rs-type-error-message__ [who : cstr what : cstr] : cstr
+  (let [w (if (= (r7rs-utf8-count__ what) 0) "wrong type" (r7rs-string-append2__ "not " what))]
+    (if (= (r7rs-utf8-count__ who) 0) w (r7rs-string-append2__ (r7rs-string-append2__ who ": ") w))))
+(defn r7rs-type-error__ [who : cstr what : cstr x] : any
+  (if (= (r7rs-utf8-count__ what) 0)
+    (r7rs-raise (R7rsError who (R7rsNull 0) 0))
+    (r7rs-raise (R7rsError (if (if (is? x R7rsBig) (r7rs-string=2__ what "an exact integer") false)
+                             ;; A bignum is an exact integer; it just does
+                             ;; not fit the int64 the procedure takes.
+                             (r7rs-type-error-message__ who "an exact integer in the int64 range")
+                             (r7rs-type-error-message__ who what))
+                           (r7rs-cons x (R7rsNull 0)) 0))))
+;;; r7rs-type-error-hook-install__ -- internal: point the raising cast check
+;;; (__tur_any_cast_check_r7, which the emitter writes into any unit with a
+;;; Scheme cast) at r7rs-type-error__.  Run once, at startup, by the def
+;;; below.  The interpreter's twin does nothing: it finds the procedure by
+;;; name.
+(defn r7rs-type-error-hook-install__ [] : bool
+  ```c
+  #ifdef TUR_R7RS_TYPE_ERROR_HOOK
+  tur_r7rs_type_error_hook = r7rs_hytype_hyerror_un_un;
+  #endif
+  return true;
+  ```)
+(def r7rs-type-error-hook__ (r7rs-type-error-hook-install__))
+;;; r7rs-raise-type__ -- internal: r7rs-type-error__, called through the hook
+;;; from C.  For the "it is an error" checks on the hottest paths (arithmetic,
+;;; comparison, the r7rs-fail-* helpers): a direct `raise` there makes every
+;;; procedure that reaches it effectful, which compiles it to CPS and costs
+;;; the tail-call trampoline (tests/fixtures/r7rs-tail-calls), while a call
+;;; into C is opaque to that analysis.  An empty `what` makes `who` the whole
+;;; message, with no irritant.  Returns (false) only when no hook is
+;;; installed; the caller then panics as it did before.
+(defn r7rs-raise-type__ [who : cstr what : cstr x] : bool
+  ```c
+  #ifdef TUR_R7RS_TYPE_ERROR_HOOK
+  if (tur_r7rs_type_error_hook) (void)tur_r7rs_type_error_hook(who, what, x);
+  #endif
+  return false;
+  ```)
+;;; r7rs-num-error__ -- internal: an arithmetic operator given a non-number;
+;;; the irritant is the operand that is not one.
+(defn r7rs-num-error__ [who : cstr a b] : any
+  (r7rs-raise-type__ who "a number" (if (r7rs-number? a) b a))
+  (panic (r7rs-string-append2__ who ": not a number"))
+  (:: 0 any))
 
 ;;; R7rsParam -- a parameter object's cell: the current value and converter.
 (defstruct R7rsParam :heap [value : any converter : any])

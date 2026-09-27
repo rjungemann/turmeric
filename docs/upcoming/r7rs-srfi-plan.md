@@ -1084,6 +1084,7 @@ fixture itself runs on both back ends.
 >     instead of panicking. That is what `test-error` tests, in the
 >     meta-suite and in practice (`r7rs-vector-index-error`). The rest of
 >     docs/reported/r7rs-type-errors-are-uncatchable-panics.md stays open.
+>     (Resolved 2026-09-27: docs/archive/r7rs-type-errors-are-uncatchable-panics.md.)
 > - **Cost.** An unused import adds 14 emitted lines for (srfi 48), 4 for
 >   (srfi 78) and 320 for (srfi 64), whose `(scheme process-context)` is
 >   most of that. A one-test SRFI 64 file adds about 5,400 lines and 2 s of
