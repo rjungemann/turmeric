@@ -8735,12 +8735,53 @@ void ensure_musttail_macro(EmitCtx *ctx) {
         "     (defined(__x86_64__) || defined(__aarch64__))\n"
         "#    if __has_attribute(musttail)\n"
         "#      define TUR_MUSTTAIL __attribute__((musttail))\n"
+        "#      define TUR_MUSTTAIL_PINS 1\n"
         "#    endif\n"
         "#  endif\n"
         "#  ifndef TUR_MUSTTAIL\n"
         "#    define TUR_MUSTTAIL\n"
         "#  endif\n"
         "#endif\n");
+}
+
+void emit_musttail_note_fn(EmitCtx *ctx, const char *cname) {
+    if (!ctx || !cname) return;
+    for (uint32_t i = ctx->n_mt_pins; i > 0; i--)
+        if (strcmp(ctx->mt_pins[i - 1], cname) == 0) return;
+    if (ctx->n_mt_pins == ctx->cap_mt_pins) {
+        ctx->cap_mt_pins = ctx->cap_mt_pins ? ctx->cap_mt_pins * 2 : 16;
+        ctx->mt_pins = realloc(ctx->mt_pins, ctx->cap_mt_pins * sizeof(char *));
+    }
+    ctx->mt_pins[ctx->n_mt_pins++] = strdup(cname);
+}
+
+/* r7rs-raise-musttail-fails-under-clang-x86-64: take the address of every
+ * function that makes a `musttail` call, in a table the compiler must keep.
+ *
+ * A `static` function's signature is LLVM's to rewrite.  Dead argument
+ * elimination drops a return value no caller reads -- the payload half of a
+ * `tur_tagged_t` whose callers only test the tag -- and clang 18 does it to a
+ * function whose own `musttail` callee still returns both halves.  The call
+ * no longer returns what its caller does, and the backend aborts: "failed to
+ * perform tail call elimination on a call site marked musttail" (every
+ * `#lang r7rs` program reaching `raise`, `r7rs_hyraise`).  A function whose
+ * address is taken keeps its signature, so the pass leaves it alone, and its
+ * `musttail` callee's return value stays live through it.
+ *
+ * Only where TUR_MUSTTAIL is the real attribute: elsewhere the calls are plain
+ * `return f(args);` and nothing needs pinning, and a pin would keep an unused
+ * function alive for nothing. */
+void emit_musttail_pins(EmitCtx *ctx, Buf *out) {
+    if (!ctx || !out || ctx->n_mt_pins == 0) return;
+    buf_puts(out, "#ifdef TUR_MUSTTAIL_PINS\n"
+                  "static void (*const __tur_musttail_pins[])(void) __attribute__((used)) = {\n");
+    for (uint32_t i = 0; i < ctx->n_mt_pins; i++)
+        buf_printf(out, "    (void (*)(void))%s,\n", ctx->mt_pins[i]);
+    buf_puts(out, "};\n#endif\n");
+    for (uint32_t i = 0; i < ctx->n_mt_pins; i++) free(ctx->mt_pins[i]);
+    free(ctx->mt_pins);
+    ctx->mt_pins = NULL;
+    ctx->n_mt_pins = ctx->cap_mt_pins = 0;
 }
 
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx) {
@@ -18345,6 +18386,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     /* r7rs-gc: after every thread-local declaration in the unit. */
     if (r7rs_gc_active(false)) emit_r7rs_gc_tls_roots(out);
 
+    /* After every function definition: the table takes their addresses. */
+    emit_musttail_pins(&ctx, out);
+
     /* S1b: after every registered initializer's own definition (they are all
      * `static`), and after `main` -- the preamble carries the declaration. */
     static_init_emit(out);
@@ -19890,6 +19934,9 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
      * TU publishes only the rows for the types IT widens, and the dispatching
      * TU finds the rest through the merged list. */
     emit_instance_row_table(&ctx, out);
+
+    /* After every function definition: the table takes their addresses. */
+    emit_musttail_pins(&ctx, out);
 
     /* S1b: after every registered initializer's definition.  Emitted in
      * separate-compilation mode too -- there is no `main` in this TU to call

@@ -1,5 +1,60 @@
 # `#lang r7rs`: a program that raises does not build with clang on x86-64
 
+**RESOLVED 2026-09-27.** The report's suspect was wrong: it is not a
+`__builtin_setjmp` wrapper inlined into the caller (on Linux `TUR_SETJMP` is
+plain `setjmp`, and `-fno-inline` still fails). It is LLVM's dead argument
+elimination rewriting a `static` function's return type underneath its own
+`musttail` call. Fixed in src/compiler/emit_module.c
+(`emit_musttail_pins`); pinned by `tests/fixtures/r7rs-raise-under-musttail`
+(`requires.musttail`). The rest of this file is the original report.
+
+## Root cause (confirmed)
+
+`opt -O2 -verify-each` over the unoptimized IR of the repro stops right after
+`DeadArgumentEliminationPass`:
+
+```
+cannot guarantee tail call due to mismatched return types
+  %10 = musttail call { i64, i64 } @r7rs_hyuncaught_un_un(i64 ..., i64 ...)
+```
+
+`r7rs_hyraise` returns a `tur_tagged_t`, two words in two registers. Its
+callers only ever test the tag, so the pass narrows its return to the first
+word, `i64`. Its `musttail` callee, `r7rs_hyuncaught_un_un`, keeps both. A
+`musttail` call must return exactly what its caller does, so the backend
+aborts. The pass is meant to leave such a pair alone (clang 18.1.3 does not),
+and it can only touch a function whose every use is a direct call: a function
+whose address is taken keeps its signature.
+
+Why only with `tur build`'s pasted call/cc runtime: `tur emit-c` of the same
+program does not compile at all on its own (the pasted text defines
+`r7k_cont`), so the report's "emit-c compiles" was a different failure.
+Bisecting the 98 `TUR_MUSTTAIL` sites of the repro found the one site the
+report found.
+
+## Fix
+
+The emitter records every function that makes a `TUR_MUSTTAIL` call, and at
+the end of the unit writes one table of their addresses:
+
+```c
+#ifdef TUR_MUSTTAIL_PINS
+static void (*const __tur_musttail_pins[])(void) __attribute__((used)) = {
+    (void (*)(void))r7rs_hyraise,
+    ...
+};
+#endif
+```
+
+`TUR_MUSTTAIL_PINS` is defined next to `TUR_MUSTTAIL`, only where that
+expands to the attribute (clang on x86-64/aarch64), so gcc, c2mir and wasm
+see nothing and still drop an unused function. With its address taken, a
+pinned function keeps its signature, and its `musttail` callee's return value
+stays live through it. The 155 snapshots that carry `TUR_MUSTTAIL` gain the
+define and the table, nothing else.
+
+---
+
 **Severity:** medium. Every `#lang r7rs` program that reaches `raise` (so
 `error`, `guard`'s re-raise, every `test-error` in an SRFI suite) fails to
 build with clang on x86-64 Linux. clang's backend aborts:

@@ -760,6 +760,10 @@ typedef struct EmitCtx {
     const Buf   *mt_body_buf;
     size_t       mt_body_start;
     bool         musttail_macro_emitted;
+    /* r7rs-raise-musttail-fails-under-clang-x86-64: every function that made
+     * a `TUR_MUSTTAIL` call, in emission order, for emit_musttail_pins. */
+    char       **mt_pins;
+    uint32_t     n_mt_pins, cap_mt_pins;
 } EmitCtx;
 
 enum {
@@ -873,6 +877,11 @@ void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_par
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
 int emit_sig_lookup_n_params(const char *cname);
 void ensure_musttail_macro(EmitCtx *ctx);
+/* r7rs-raise-musttail-fails-under-clang-x86-64: record that `cname` makes a
+ * `TUR_MUSTTAIL` call, and, once every function is written, pin each one
+ * recorded (see emit_musttail_pins). */
+void emit_musttail_note_fn(EmitCtx *ctx, const char *cname);
+void emit_musttail_pins(EmitCtx *ctx, Buf *out);
 /* S1 (jit-engine-plan section 4): the same side table's return-type half.  A
  * call site consults it to name the type of a hoisted call temp outright,
  * instead of emitting GNU C's `__auto_type` -- which c2mir cannot parse at all

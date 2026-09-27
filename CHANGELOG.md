@@ -2,6 +2,17 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **A Scheme program that raises builds with clang on x86-64.** Every `#lang
+  r7rs` program that reached `raise` (so `error`, `guard`, every SRFI test
+  suite) failed with "failed to perform tail call elimination on a call site
+  marked musttail". LLVM rewrote the return type of a function under its own
+  guaranteed tail call. Functions that make one are now pinned so their
+  signature stays as written. Only clang builds change.
+
 ## [0.55.1] -- 2026-09-27
 
 ### Added

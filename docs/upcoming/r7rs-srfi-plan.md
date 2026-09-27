@@ -833,11 +833,11 @@ fixture itself runs on both back ends.
 > - **Fixtures:** `r7rs-srfi-1` pins the edge cases above on both back
 >   ends. `errors/r7rs-srfi-not-yet` and `r7rs-srfi-cond-expand` move their
 >   "not yet" pin from SRFI 1 to SRFI 69.
-> - **Reported, not fixed:**
->   docs/reported/r7rs-raise-musttail-fails-under-clang-x86-64.md. Under
->   clang on x86-64, any program that raises fails to build, the SRFI
+> - **Reported, not fixed (since fixed, 2026-09-27):**
+>   docs/archive/r7rs-raise-musttail-fails-under-clang-x86-64.md. Under
+>   clang on x86-64, any program that raises failed to build, the SRFI
 >   suites included. CI compiles with gcc on Linux and with clang on arm64,
->   so it does not see it.
+>   so it did not see it.
 
 ### S4 -- SRFI 69 hash tables (medium)
 

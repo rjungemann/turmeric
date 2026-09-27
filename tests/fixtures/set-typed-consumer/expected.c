@@ -5336,6 +5336,7 @@ static int64_t ctor_Option_Some__Zipper__struct(int64_t _0) {
      (defined(__x86_64__) || defined(__aarch64__))
 #    if __has_attribute(musttail)
 #      define TUR_MUSTTAIL __attribute__((musttail))
+#      define TUR_MUSTTAIL_PINS 1
 #    endif
 #  endif
 #  ifndef TUR_MUSTTAIL
@@ -9562,6 +9563,16 @@ static void __tur_fatbox_init(void) {
       __s[1] = (int64_t)(intptr_t)__fn_1437; }
 }
 
+#ifdef TUR_MUSTTAIL_PINS
+static void (*const __tur_musttail_pins[])(void) __attribute__((used)) = {
+    (void (*)(void))__fn_1010,
+    (void (*)(void))__fn_1437,
+    (void (*)(void))car,
+    (void (*)(void))cdr,
+    (void (*)(void))length,
+    (void (*)(void))__inst_Eq_eq_qu_Set__spec__bool_tur_adt_Set__int___tur_adt_Set__int__,
+};
+#endif
 /* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.
  * Called from main(); the constructor below covers the no-main cases
  * (separate compilation, --shared).  Whichever runs first wins. */
