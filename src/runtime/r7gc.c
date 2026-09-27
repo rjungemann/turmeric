@@ -1299,6 +1299,15 @@ static int tur_gc_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m, const st
 }
 static int tur_gc_mutex_lock(pthread_mutex_t *m) {
     if (pthread_mutex_trylock(m) == 0) return 0;
+    /* The collector's own locks are taken as the collector takes them, never
+     * parked around: unparking takes `world`, so a contended `world` taken
+     * through here waited on itself for good (a thread retiring its record
+     * held it at that instant -- r7rs-gc-threads-lifecycle-rare-hang), and
+     * `heap` or `meta_lock` would have `world` taken under them, against the
+     * collector's order.  Unparked, the wait is a stop point like any other
+     * lock of the collector's: a collection signals it and it answers. */
+    tur_gc_state *G = tur_gc_G;
+    if (G && (m == &G->world || m == &G->heap || m == &G->meta_lock)) return pthread_mutex_lock(m);
     tur_gc_park(); int r = pthread_mutex_lock(m); tur_gc_unpark(); return r;
 }
 static inline void tur_gc_intr_clear(void) { if (tur_gc_self) tur_gc_self->gc_intr = 0; }
