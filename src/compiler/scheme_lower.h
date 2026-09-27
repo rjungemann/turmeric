@@ -104,5 +104,16 @@ uint32_t scheme_import_library_files(const Form *f, const char **out, uint32_t c
  * prelude name is not one a Scheme program writes.  An error message names
  * the procedure the way the program did. */
 const char *scheme_public_name(const char *prelude_name);
+/* The name a Scheme program wrote for `name` after the lowering: the public
+ * name of a prelude procedure, a local binder without its `__v<N>` suffix, a
+ * global without its `--user` respelling.  Writes into `buf` when it has to
+ * trim; returns `name` itself when there is nothing to undo. */
+const char *scheme_source_name(const char *name, char *buf, size_t cap);
+
+/* r7rs-too-few-arguments-returns-a-procedure: true for a span in a Scheme
+ * program or library the user wrote -- `#lang r7rs` source outside the
+ * Turmeric-shaped prelude files (stdlib/r7rs/, the REPL's pinned preload),
+ * which use Turmeric's own semantics, partial application included. */
+bool scheme_span_is_user_source(Span sp);
 
 #endif /* TUR_SCHEME_LOWER_H */

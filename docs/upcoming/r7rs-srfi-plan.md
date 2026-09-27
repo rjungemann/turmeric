@@ -1132,7 +1132,8 @@ fixture itself runs on both back ends.
 >   failures are `test-error` cases: type errors that panic
 >   (docs/reported/r7rs-type-errors-are-uncatchable-panics.md) and calls with
 >   too few arguments, which return a procedure instead of raising
->   (docs/reported/r7rs-too-few-arguments-returns-a-procedure.md).
+>   (docs/reported/r7rs-too-few-arguments-returns-a-procedure.md). Both were
+>   fixed 2026-09-27 (docs/archive/), and the suite passes in full (187).
 > - **SRFI 35** decides section 7's question 4 (above). It carries local
 >   copies of the five SRFI 1 procedures it uses, so importing it (and SRFI
 >   64, which imports it for `test-error`'s condition types) does not splice

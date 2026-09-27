@@ -319,6 +319,23 @@ const char *scheme_public_name(const char *prelude_name) {
     return NULL;
 }
 
+const char *scheme_source_name(const char *name, char *buf, size_t cap) {
+    if (!name || !buf || cap == 0) return name;
+    const char *pub = scheme_public_name(name);
+    if (pub) return pub;
+    size_t n = strlen(name);
+    /* A local binder renamed apart (bind_name): `<name>__v<digits>`. */
+    size_t d = n;
+    while (d > 0 && name[d - 1] >= '0' && name[d - 1] <= '9') d--;
+    if (d < n && d >= 3 && memcmp(name + d - 3, "__v", 3) == 0) n = d - 3;
+    /* A global respelled apart from a stdlib or Turmeric-form name. */
+    else if (n > 6 && memcmp(name + n - 6, "--user", 6) == 0) n -= 6;
+    if (n == 0 || n >= cap) return name;
+    memcpy(buf, name, n);
+    buf[n] = '\0';
+    return buf;
+}
+
 /* R7: the R7RS-small libraries.  A RESIDENT library's procedures live in the
  * prelude, so importing it is a scoping statement only.  An ON-DEMAND
  * library is its own file under stdlib/r7rs/, spliced in by the load
@@ -2005,6 +2022,10 @@ static bool prelude_span(Span sp) {
     /* R7: the on-demand library files are written in the prelude's own
      * Turmeric shapes and against the typed stdlib's real names. */
     return strstr(f->path, "stdlib/r7rs/") != NULL;
+}
+
+bool scheme_span_is_user_source(Span sp) {
+    return lang_span_is_scheme(sp) && !prelude_span(sp);
 }
 static Form *lower_operator(SL *sl, Form *f, int op) {
     Span sp = f->span;

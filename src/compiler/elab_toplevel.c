@@ -305,9 +305,10 @@ void elab_any_cast_note_callee(Elab *e, Expr *cast, const Binding *callee) {
     const char *n = callee->name->name;
     size_t len = strlen(n);
     if (len >= 2 && n[len - 2] == '_' && n[len - 1] == '_') return;
+    char nbuf[256];
     const char *pub = scheme_public_name(n);
     if (!pub && strncmp(n, "r7rs-", 5) == 0) pub = n + 5;
-    if (!pub) pub = n;
+    if (!pub) pub = scheme_source_name(n, nbuf, sizeof nbuf);
     size_t pl = strlen(pub) + 1;
     char *w = (char *)arena_alloc(e->arena, pl);
     memcpy(w, pub, pl);

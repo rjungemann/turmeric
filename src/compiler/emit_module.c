@@ -11788,11 +11788,29 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "}\n"
         "/* -1: the ordinary call (the id matched); otherwise the fixed count of\n"
         " * a variadic callee this call must pack for.  Panics for anything else. */\n"
+        /* r7rs-too-few-arguments-returns-a-procedure: in a Scheme program
+         * (the hook is set) the refusal is an error object `guard` catches --
+         * "not a procedure", or "wrong number of arguments", the interpreter's
+         * words too.  The callee's own arity is not known here, so neither
+         * back end names it. */
+        "static void __tur_dyn_call_raise(tur_tagged_t __f, int __n) {\n"
+        "    if (strcmp(__tur_any_type_name(TUR_GETTAG(__f)), \"fn\") != 0) {\n"
+        "        (void)tur_r7rs_type_error_hook(\"\", \"a procedure\", __f);\n"
+        "        return;\n"
+        "    }\n"
+        "    {\n"
+        "        char *__m = (char *)malloc(96);   /* the error object keeps it */\n"
+        "        if (!__m) return;\n"
+        "        snprintf(__m, 96, \"wrong number of arguments (%d given)\", __n);\n"
+        "        (void)tur_r7rs_type_error_hook(__m, \"\", __f);\n"
+        "    }\n"
+        "}\n"
         "static __attribute__((unused)) int __tur_dyn_call_arity(tur_tagged_t __f, int64_t __want, int __n) {\n"
         "    int64_t __have = TUR_GETTAG(__f);\n"
         "    if (__have == __want) return -1;\n"
         "    int __fx = tur_dyn_var_n ? __tur_dyn_variadic_fixed(__have) : -1;\n"
         "    if (__fx >= 0 && __fx <= __n) return __fx;\n"
+        "    if (tur_r7rs_type_error_hook) __tur_dyn_call_raise(__f, __n);\n"
         "    __tur_dyn_call_check(__have, __want);\n"
         "    return -1;\n"
         "}\n"

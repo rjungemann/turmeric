@@ -1437,6 +1437,23 @@ static TuriValue turi_r7rs_type_error(TuriEnv *env, const char *who, const char 
     *raised = turi_is_error(r) || env_signaled(env);
     return r;
 }
+/* r7rs-too-few-arguments-returns-a-procedure: a procedure called with the
+ * wrong number of arguments.  In a Scheme program it is an error object,
+ * worded as the compiled back end's dynamic call words it (which cannot see
+ * the callee's own arity); elsewhere the caller's "arity mismatch" stands.
+ * True when *out holds the raise's value. */
+static bool turi_r7rs_arity_error(TuriEnv *env, uint32_t n, TuriValue *out) {
+    if (!turi_env_find_binding(env, "r7rs-type-error__")) return false;
+    char msg[96];
+    snprintf(msg, sizeof msg, "wrong number of arguments (%u given)", (unsigned)n);
+    size_t ml = strlen(msg) + 1;
+    char *m = (char *)malloc(ml);   /* the error object keeps it */
+    if (!m) return false;
+    memcpy(m, msg, ml);
+    bool raised;
+    *out = turi_r7rs_type_error(env, m, "", turi_nil(), &raised);
+    return raised;
+}
 
 /* interp-native-ctor-loses-adt-name: recover the CtorDef a constructor NAME
  * belongs to, so a value a native builds carries the same ctor->adt link a value
@@ -7994,9 +8011,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
             uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
             if (effective_params != n) {
-                cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
-                                  fn->binding ? fn->binding->name->name : "<fn>",
-                                  (unsigned)effective_params, (unsigned)n);
+                if (!turi_r7rs_arity_error(env, n, &cur))
+                    cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
+                                      fn->binding ? fn->binding->name->name : "<fn>",
+                                      (unsigned)effective_params, (unsigned)n);
                 TURI_DRIVE_FREE(acc); descending = false; continue;
             }
             if (env->step_fuel_limit > 0) {
@@ -9457,9 +9475,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     }
                 }
                 if (effective_params != n - arg_base) {
-                    cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
-                                      fn->binding ? fn->binding->name->name : "<fn>",
-                                      (unsigned)effective_params, (unsigned)(n - arg_base));
+                    if (!turi_r7rs_arity_error(env, n - arg_base, &cur))
+                        cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
+                                          fn->binding ? fn->binding->name->name : "<fn>",
+                                          (unsigned)effective_params, (unsigned)(n - arg_base));
                     TURI_DRIVE_FREE(acc); len--; break;
                 }
                 if (env->step_fuel_limit > 0) {  /* SB3: step-fuel, as the retired eval_apply_inner charged it */
@@ -9847,6 +9866,8 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
     uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
     uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
     if (effective_params != n_args) {
+        TuriValue r7;
+        if (turi_r7rs_arity_error(env, n_args, &r7)) return r7;
         return turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
                            fn->binding ? fn->binding->name->name : "<fn>",
                            (unsigned)effective_params, (unsigned)n_args);
@@ -12414,6 +12435,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                      "cannot call a %s value -- it is not a function",
                      turi_any_display_type(fnv) ? turi_any_display_type(fnv)
                                                 : "non-function");
+            bool raised;
+            TuriValue r7 = turi_r7rs_type_error(env, "", "a procedure", fnv, &raised);
+            if (raised) return r7;
             turi_runtime_panic(env, msg);
             return turi_nil();  /* unreachable */
         }

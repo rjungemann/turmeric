@@ -6,6 +6,13 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **A Scheme procedure called with the wrong number of arguments raises.**
+  Under `#lang r7rs`, `(f)` for `(define (f a . rest) a)` returned a
+  procedure, because Turmeric curried the call, and the program went on with
+  a wrong value. A call through a variable with the wrong count ended the
+  program. Both now raise an error object `guard` catches, as does calling a
+  value that is not a procedure. SRFI 41's test suite now passes in full.
+
 - **A Scheme type error is an error object, not a panic.** Under `#lang
   r7rs`, `(car 5)`, `(vector-ref '() 0)`, `(+ 'a 1)`, `(< 'a 1)`, `(negative?
   "four")` and the prelude's other "it is an error" checks used to end the

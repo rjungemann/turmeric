@@ -7,6 +7,7 @@
 #endif
 #include "elab_internal.h"
 #include "lang_dialects.h"   /* saffron-lang-plan S3: lang_span_is_dynamic */
+#include "scheme_lower.h"   /* r7rs: scheme_span_is_user_source, scheme_public_name */
 #include "cps.h"          /* cps_expr_uses_control -- the control-widen hoist */
 bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h */
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
@@ -6035,6 +6036,38 @@ static void mark_direct_apply_niche_word_params(Elab *e, Expr *head_expr,
     }
 }
 
+/* r7rs-too-few-arguments-returns-a-procedure: the error a Scheme call with
+ * too few arguments raises, as `(do arg... (r7rs-signal__ "msg"))` -- the
+ * arguments still run, in order, and the error object carries a message
+ * naming the procedure the way the program spelled it.  NULL outside user
+ * Scheme source, or when the prelude's raiser is not in scope; the caller
+ * then builds the partial application as before. */
+static Expr *scheme_arity_error(Elab *e, const Form *call, const Binding *fn_binding,
+                                uint32_t n_args, uint32_t n_required, bool variadic) {
+    if (!scheme_span_is_user_source(call->span) || !fn_binding || !fn_binding->name)
+        return NULL;
+    const Symbol *sig = symtab_intern(e->st, strslice("r7rs-signal__", 13));
+    bool qual_err = false;
+    Binding *sb = elab_lookup_sym(e, sig, call->span, &qual_err);
+    if (!sb || sb->type.kind != TY_FN) return NULL;
+    char nbuf[256];
+    const char *pub = scheme_source_name(fn_binding->name->name, nbuf, sizeof nbuf);
+    char msg[320];
+    snprintf(msg, sizeof msg, "%s: too few arguments (expects %s%u, got %u)", pub,
+             variadic ? "at least " : "", n_required, n_args);
+    size_t ml = strlen(msg);
+    char *mp = (char *)arena_alloc(e->arena, ml + 1);
+    memcpy(mp, msg, ml + 1);
+    Form **items = (Form **)arena_alloc(e->arena, (n_args + 2) * sizeof(Form *));
+    items[0] = form_sym(e->arena, call->span, symtab_intern(e->st, strslice("do", 2)));
+    for (uint32_t i = 0; i < n_args; i++) items[1 + i] = call->as.list.items[1 + i];
+    Form **sc = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    sc[0] = form_sym(e->arena, call->span, sig);
+    sc[1] = form_str(e->arena, call->span, mp, (uint32_t)ml);
+    items[1 + n_args] = form_list(e->arena, call->span, sc, 2);
+    return elab_form(e, form_list(e->arena, call->span, items, n_args + 2));
+}
+
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
@@ -6365,6 +6398,15 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                          : expected_arity;
 
     if (n_args < n_required && fn_type.kind == TY_FN) {
+        /* r7rs-too-few-arguments-returns-a-procedure: Scheme has no partial
+         * application.  In a Scheme program or library, a call with fewer
+         * arguments than the procedure requires is an error when it runs
+         * (R7RS 4.1.3): evaluate the arguments, as the call would have, then
+         * raise an error object a program can `guard`.  The Turmeric-shaped
+         * prelude keeps currying. */
+        Expr *arity_err = scheme_arity_error(e, call, fn_binding, n_args, n_required,
+                                             fn_is_variadic);
+        if (arity_err) return arity_err;
         /* CY1: Partial application */
         Expr **pap_elab_args = (n_args > 0)
             ? (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *))
