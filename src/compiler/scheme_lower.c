@@ -447,7 +447,7 @@ static const SrfiRow SRFI_LIBS[] = {
     {  64, SRFI_NOTYET,     "A Scheme API for test suites", NULL, "S6" },
     {  66, SRFI_NOTYET,     "Octet Vectors", NULL, "S7" },
     {  67, SRFI_NOTYET,     "Compare Procedures", NULL, "S8" },
-    {  69, SRFI_NOTYET,     "Basic hash tables", NULL, "S4" },
+    {  69, SRFI_LIBRARY,    "Basic hash tables", "stdlib/srfi/69.scm", NULL },
     {  71, SRFI_NOTYET,     "Extended LET-syntax for multiple values", NULL, "S8" },
     {  74, SRFI_NOTYET,     "Octet-Addressed Binary Blocks", NULL, "S8" },
     {  78, SRFI_NOTYET,     "Lightweight testing", NULL, "S6" },

@@ -1,6 +1,6 @@
 #lang r7rs
 ;; r7rs-srfi-plan S1: a planned SRFI whose stage has not landed is refused,
-;; naming it and the table that says which SRFIs are here.  SRFI 69 lands at
-;; S4; when it does, pick another not-yet row for this pin (SRFI 1 was the
-;; first, until S3).
-(import (scheme base) (srfi 69))
+;; naming it and the table that says which SRFIs are here.  SRFI 13 lands at
+;; S5; when it does, pick another not-yet row for this pin (SRFI 1 was the
+;; first, until S3, then SRFI 69, until S4).
+(import (scheme base) (srfi 13))

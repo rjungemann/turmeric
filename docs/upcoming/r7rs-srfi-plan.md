@@ -1,9 +1,9 @@
 # SRFI libraries for `#lang r7rs`, after Racket's
 
 Status: **S1 and S0 landed 2026-09-26; S2 landed 2026-09-27 except SRFI 17;
-S3 (the pruning pass and SRFI 1) landed 2026-09-27** (see their "What
-shipped" and "What S0 found" notes). SRFI 17 waits on
-docs/reported/r7rs-prelude-procedures-lose-identity.md. S4-S8 to come.
+S3 (the pruning pass and SRFI 1) and S4 (SRFI 69) landed 2026-09-27** (see
+their "What shipped" and "What S0 found" notes). SRFI 17 waits on
+docs/reported/r7rs-prelude-procedures-lose-identity.md. S5-S8 to come.
 `(import (srfi N))` resolves for every SRFI in the table: the ten built-in
 rows and the two alias rows import, and the rest are refused with their
 reason. S0's inventory is [Appendix C](#appendix-c----s0-inventory). Its
@@ -852,6 +852,66 @@ fixture itself runs on both back ends.
 - `hash-table-ref`'s failure thunk, `hash-table-update!/default`,
   `hash-table-walk`, `hash-table-fold` and the rest of the SRFI.
 
+> **What shipped (2026-09-27).** Everything above.
+>
+> - **The primitives** are in the prelude's new hashing section
+>   (stdlib/r7rs/prelude.tur), in Turmeric, so both back ends run the same
+>   code. Only two are C, each with an interpreter twin in
+>   src/turi/interpreter_natives.c:
+>   - `r7rs-identity-word__`: a value's carrier word, the payload
+>     `r7rs-same-ref__` already compares;
+>   - `r7rs-cstr-hash__`: FNV-1a over a string's UTF-8 bytes.
+>
+>   Every hash is a non-negative fixnum below 2^30.
+>   - `hash` (`r7rs-equal-hash__`) walks what `equal?` walks: pairs,
+>     vectors, bytevectors and strings. It reads at most 16 elements of a
+>     list or vector and 64 bytes of a bytevector, three levels down, so it
+>     is quick on a big key and terminates on a cycle, as `equal?` does.
+>   - `hash-by-identity` (`r7rs-eqv-hash__`) hashes by value what `eqv?`
+>     compares by value: numbers (a bignum by its digits, a ratio and a
+>     complex by their parts), string literals, symbols and characters.
+>     `'()` and the eof object are constants, and anything else is hashed
+>     by address, which is stable because the collector does not move.
+>     `eq?` is `eqv?` here, so one hash serves both.
+>   - An integral float hashes as the exact integer does, so a table keyed
+>     by `=` finds 2 from 2.0, and 0.0 and -0.0 land together, as `eqv?`
+>     has them.
+>   - `string-ci-hash` folds an ASCII string as it hashes, and folds any
+>     other with `string-foldcase` first.
+>   - No measurement was needed to choose Scheme over one C walk: a C walk
+>     would have needed a second copy for the interpreter's values.
+> - **The table** is `stdlib/srfi/69.scm`, written for Turmeric (D6). It is
+>   a record over a vector of association-list buckets, doubled past two
+>   entries a bucket. All 24 names are exported, with the hash functions'
+>   optional bound.
+> - **The default hash function.** The reference picks one by comparing the
+>   equivalence with `eq?`, `string=?` and the rest by `eq?`, which a
+>   standard procedure does not pass here
+>   (docs/reported/r7rs-prelude-procedures-lose-identity.md).
+>   `(make-hash-table string-ci=?)` would then have hashed case-sensitively.
+>   The default instead hashes a string key case-folded and anything else
+>   with `hash`. That is right for all five standard equivalences; case
+>   variants merely share a bucket.
+> - **chibi's suite** is `tests/r7rs/srfi/69/tests.scm`: 84 of 84 on both
+>   back ends, and the floor is 84.
+>   - It leaves out one chibi-only test (`make-exception`,
+>     `exception-kind`).
+>   - The runner gains `test-not` and chibi's `test-equal`.
+>   - A suite directory may name more imports in an `imports` file; 69's
+>     suite uses SRFI 1's `lset=`.
+> - **Cost.** An unused `(import (srfi 69))` adds the record's struct and
+>   constructor, 22 lines that nothing calls; the pruning pass drops the
+>   rest. A program using a table adds about 740 lines.
+> - **Fixtures:**
+>   - `r7rs-srfi-69` pins the default hash under each standard equivalence,
+>     `hash`/`equal?` agreement across representations, a circular key, a
+>     `=`-keyed table, and growth, deletion and the whole-table procedures
+>     on 500 entries;
+>   - it passes under `TUR_GC_TORTURE` in run-r7rs-gc.sh and under the
+>     sanitizers;
+>   - `errors/r7rs-srfi-not-yet` and `r7rs-srfi-cond-expand` move their
+>     "not yet" pin to SRFI 13.
+
 ### S5 -- SRFI 14, then 13 (large)
 
 - 14: char sets as sorted inversion lists over code points, and the standard
@@ -916,7 +976,11 @@ row in the table.
    condition? Chibi and Gauche differ. Decide in S7.
 5. **SRFI 69's `hash`.** The SRFI's `hash` takes an optional bound; R7RS-era
    code often expects SRFI 128's `default-hash`. Keep 69's names exact, and let
-   125/128 (Section 5) add theirs over the same primitives.
+   125/128 (Section 5) add theirs over the same primitives. **Decided
+   2026-09-27 (S4): as proposed.** 69 exports its own names only, and the
+   prelude's `r7rs-equal-hash__`, `r7rs-eqv-hash__`, `r7rs-string-hash__`
+   and `r7rs-string-ci-hash__` are what 125 and 128 will export under
+   theirs.
 
 ---
 

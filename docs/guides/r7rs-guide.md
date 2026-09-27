@@ -467,7 +467,7 @@ R7RS's own forms already are the SRFI's.
 | 64 | A Scheme API for test suites | not yet (S6) | library |  |
 | 66 | Octet Vectors | not yet (S7) | library |  |
 | 67 | Compare Procedures | not yet (S8) | library |  |
-| 69 | Basic hash tables | not yet (S4) | library |  |
+| 69 | Basic hash tables | library | library | Written for Turmeric. `hash` agrees with `equal?` and `hash-by-identity` with `eq?`/`eqv?`. A table made without a hash function works for all five standard equivalences (`eq?`, `eqv?`, `equal?`, `string=?`, `string-ci=?`); for any other equivalence, pass the hash function that agrees with it |
 | 71 | Extended LET-syntax for multiple values | not yet (S8) | library |  |
 | 74 | Octet-Addressed Binary Blocks | not yet (S8) | library |  |
 | 78 | Lightweight testing | not yet (S6) | library |  |

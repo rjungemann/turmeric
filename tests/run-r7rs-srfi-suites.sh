@@ -6,6 +6,9 @@
 #   tests/r7rs/srfi/<N>/tests.scm   the suite as top-level forms, written in
 #                                   (chibi test)'s vocabulary, (srfi N) imported
 #   tests/r7rs/srfi/<N>/floor       the pass count it must not fall below
+#   tests/r7rs/srfi/<N>/imports     optional: more import sets the suite
+#                                   needs, one per line (SRFI 69's uses
+#                                   SRFI 1's lset=)
 #
 # Like tur_r7rs_conformance, this fails only on a REGRESSION: fewer passes
 # than a suite's floor.  Raise the floor when the count goes up.  Where a suite
@@ -46,8 +49,14 @@ for n in $NUMS; do
         continue
     fi
     floor=$(tr -d '[:space:]' < "$dir/floor")
+    extra=()
+    if [ -f "$dir/imports" ]; then
+        while IFS= read -r set; do
+            [ -n "$set" ] && extra+=(--import "$set")
+        done < "$dir/imports"
+    fi
     python3 tests/r7rs/run-conformance.py --tur "$TUR" --backend "$BACKEND" \
-        --suite "$dir/tests.scm" --import "(srfi $n)" --label "r7rs-srfi-$n" \
+        --suite "$dir/tests.scm" --import "(srfi $n)" ${extra[@]+"${extra[@]}"} --label "r7rs-srfi-$n" \
         --min-pass "$floor" --list-failures || status=1
 done
 exit $status

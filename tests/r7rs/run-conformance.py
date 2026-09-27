@@ -82,7 +82,9 @@ SETTLED = {
 TEST_HEADS = {
     "test": 1, "test-assert": 1, "test-error": 1, "test-values": 1,
     "test-numeric-syntax": 2, "test-write-syntax": 1, "test-precision": 1,
-    "test-read-error": 1,
+    "test-read-error": 1, "test-not": 1, "test-equal": 1,
+    # SRFI 69's suite defines these two over test-equal.
+    "test-lset-eq?": 1, "test-lset-equal?": 1,
 }
 DEF_HEADS = {"define", "define-syntax", "define-record-type", "define-values"}
 
@@ -126,6 +128,16 @@ HARNESS = r"""
   (syntax-rules ()
     ((_ expr) (tur-conf-run #t (lambda () (if expr #t #f))))
     ((_ name expr) (tur-conf-run #t (lambda () (if expr #t #f))))))
+(define-syntax test-not
+  (syntax-rules ()
+    ((_ expr) (tur-conf-run #f (lambda () (if expr #t #f))))
+    ((_ name expr) (tur-conf-run #f (lambda () (if expr #t #f))))))
+;; (test-equal equal expected expr): chibi's form, with the comparison given.
+(define-syntax test-equal
+  (syntax-rules ()
+    ((_ equal expected expr)
+     (let ((got (guard (e (#t (tur-conf-error-value e))) expr)))
+       (tur-conf-report (equal expected got) expected got)))))
 (define-syntax test-values
   (syntax-rules ()
     ((_ expected expr)
@@ -256,7 +268,7 @@ def static_test_count(src):
     # A test commented out inside a form (`;;(test ...)`) is not one.
     code = re.sub(r'"(?:[^"\\]|\\.)*"|;[^\n]*',
                   lambda m: m.group(0) if m.group(0)[0] == '"' else "", src)
-    for m in re.finditer(r"\((test[-a-z]*)[\s)]", code):
+    for m in re.finditer(r"\((test[-a-z?]*)[\s)]", code):
         total += TEST_HEADS.get(m.group(1), 0)
     return total
 

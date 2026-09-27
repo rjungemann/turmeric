@@ -2,7 +2,8 @@ srfi-6
 srfi-62-supported
 no-library-for-62
 library-45
-srfi-69-not-yet
+srfi-13-not-yet
+library-69
 library-1
 srfi-40-not-planned
 no-such-srfi

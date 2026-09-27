@@ -11,6 +11,11 @@ This blocks SRFI 17 (r7rs-srfi-plan S2). Its `setter` is a table keyed by
 procedure identity, and its standard entries are exactly these procedures:
 `(setter car)` must be `set-car!`.
 
+SRFI 69 (S4) works around it. Its reference picks a table's default hash
+function by comparing the equivalence with `eq?`, `string=?`, `string-ci=?`
+and the rest by `eq?`. Here the default is one hash that is right for all of
+them, so `(make-hash-table string-ci=?)` works without the comparison.
+
 Filed 2026-09-27 while landing r7rs-srfi-plan S2.
 
 ## Repro

@@ -2444,8 +2444,8 @@
              (:: (str->sym "srfi-34") any) (:: (str->sym "srfi-38") any)
              (:: (str->sym "srfi-39") any) (:: (str->sym "srfi-45") any)
              (:: (str->sym "srfi-61") any) (:: (str->sym "srfi-62") any)
-             (:: (str->sym "srfi-87") any) (:: (str->sym "srfi-98") any)
-             (:: (str->sym "srfi-105") any)))
+             (:: (str->sym "srfi-69") any) (:: (str->sym "srfi-87") any)
+             (:: (str->sym "srfi-98") any) (:: (str->sym "srfi-105") any)))
 
 ;;; r7rs-rationalize -- the simplest rational within y of x (R7RS 6.2.6), by
 ;;; the continued-fraction walk.  T2: the walk is written over the generic
@@ -2877,6 +2877,115 @@
     (r7rs-idtab-free__ tab)
     (vec-free-o parent 0)
     r))
+
+;;; ---- hashing (r7rs-srfi-plan S4: SRFI 69) --------------------------------
+;;;
+;;; Each hash is a non-negative int below 2^30, so a table's arithmetic on it
+;;; stays in fixnums.  r7rs-eqv-hash__ agrees with eqv? (and so with eq?,
+;;; which is eqv? here): it hashes by value what eqv? compares by value, and
+;;; by address the rest.  r7rs-equal-hash__ agrees with equal?.  Only the two
+;;; primitives are C; the rest is this Turmeric, the same on both back ends.
+
+;;; r7rs-identity-word__ -- internal: a value's carrier word: a heap value's
+;;; address (stable, as the collector does not move), an int's value, a
+;;; float's bits.  Inline C on the compiled path, a native under the
+;;; interpreter (the payload word r7rs-same-ref__ compares).
+(defn r7rs-identity-word__ [x] : int
+  ```c
+  return (int64_t)TUR_UNTAG(x);
+  ```)
+;;; r7rs-cstr-hash__ -- internal: FNV-1a over a string's UTF-8 bytes, folded
+;;; to 30 bits.  With `ci`, an ASCII letter hashes as its lower case, and a
+;;; byte outside ASCII answers -1 (the caller folds that string itself).
+(defn r7rs-cstr-hash__ [s : cstr ci : bool] : int
+  ```c
+  uint64_t h = 1469598103934665603ULL;
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    unsigned char c = *p;
+    if (ci) {
+      if (c >= 0x80) return -1;
+      if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
+    }
+    h ^= c;
+    h *= 1099511628211ULL;
+  }
+  return (int64_t)((h ^ (h >> 30) ^ (h >> 60)) & 0x3FFFFFFFULL);
+  ```)
+;;; r7rs-hash-fold__ -- internal: a 64-bit word folded to 30 bits.
+(defn r7rs-hash-fold__ [w : int] : int
+  (bit-and (bit-xor w (bit-xor (bit-shr w 4) (bit-xor (bit-shr w 30) (bit-shr w 60)))) 1073741823))
+;;; r7rs-hash-mix__ -- internal: one more 30-bit hash folded into h.
+(defn r7rs-hash-mix__ [h : int x : int] : int (bit-and (+ (* h 31) x) 1073741823))
+
+;;; r7rs-string-hash__ -- SRFI 69's string-hash: agrees with string=?, over a
+;;; literal and a mutable string alike (the same characters, the same bytes).
+(defn r7rs-string-hash__ [s] : int (r7rs-cstr-hash__ (r7rs-str__ s) false))
+;;; r7rs-string-ci-hash__ -- SRFI 69's string-ci-hash: agrees with
+;;; string-ci=?.  An ASCII string is folded as it is hashed; any other is
+;;; folded first, which gives an ASCII one's bytes the same way.
+(defn r7rs-string-ci-hash__ [s] : int
+  (let [c (r7rs-str__ s)
+        h (r7rs-cstr-hash__ c true)]
+    (if (< h 0) (r7rs-cstr-hash__ (r7rs-string-foldcase c) false) h)))
+
+;;; r7rs-float-hash__ -- internal: an integral float hashes as the exact
+;;; integer would (so a table keyed by `=` finds 2 from 2.0), which also
+;;; puts 0.0 and -0.0 together, as eqv? has them; any other float by its bits.
+(defn r7rs-float-hash__ [x : float] : int
+  (if (r7rs-float-integral?__ x)
+    (if (if (< x 4503599627370496.0) (> x -4503599627370496.0) false)
+      (r7rs-hash-fold__ (float->int x))
+      (r7rs-hash-fold__ (r7rs-identity-word__ x)))
+    (r7rs-hash-fold__ (r7rs-identity-word__ x))))
+;;; r7rs-eqv-hash__ -- SRFI 69's hash-by-identity: agrees with eqv? and eq?.
+(defn r7rs-eqv-hash__ [x] : int
+  (if (is? x int) (r7rs-hash-fold__ x)
+    (if (is? x float) (r7rs-float-hash__ x)
+      (if (is? x cstr) (r7rs-cstr-hash__ x false)
+        (if (r7rs-symbol? x) (r7rs-cstr-hash__ (sym->str x) false)
+          (if (r7rs-char? x) (r7rs-char-code__ x)
+            (if (r7rs-big? x) (r7rs-cstr-hash__ (r7rs-big-digits__ x) false)
+              (if (r7rs-ratio? x)
+                (r7rs-hash-mix__ (r7rs-eqv-hash__ (r7rs-ratio-num__ x)) (r7rs-eqv-hash__ (r7rs-ratio-den__ x)))
+                (if (r7rs-cplx? x)
+                  (r7rs-hash-mix__ (r7rs-eqv-hash__ (r7rs-cplx-re__ x)) (r7rs-eqv-hash__ (r7rs-cplx-im__ x)))
+                  ;; '() and the eof object are values, not one heap object each.
+                  (if (r7rs-null? x) 1
+                    (if (r7rs-eof-object? x) 2
+                      (r7rs-hash-fold__ (r7rs-identity-word__ x)))))))))))))
+
+;;; r7rs-equal-hash__ -- SRFI 69's hash: agrees with equal?.  It reads at most
+;;; 16 elements of a list or vector (and 64 bytes of a bytevector), three
+;;; levels down, so it is quick on a big key and terminates on a cycle, as
+;;; equal? does.  Values equal? compares by eqv? hash as r7rs-eqv-hash__.
+(defn r7rs-equal-hash__ [x] : int (r7rs-equal-hash-go__ x 3))
+(defn r7rs-equal-hash-go__ [x depth : int] : int
+  (if (r7rs-pair? x)
+    (r7rs-equal-hash-list__ x depth 0 5)
+    (if (r7rs-vector? x)
+      (r7rs-equal-hash-vec__ x depth 0 (r7rs-hash-mix__ 7 (r7rs-vector-length x)))
+      (if (r7rs-bytevector? x)
+        (r7rs-equal-hash-bytes__ (r7rs-bytevector-bytes__ x) 0 11)
+        (if (r7rs-string? x)
+          (r7rs-string-hash__ x)
+          (r7rs-eqv-hash__ x))))))
+(defn r7rs-equal-hash-sub__ [x depth : int] : int
+  (if (<= depth 0) 3 (r7rs-equal-hash-go__ x (- depth 1))))
+(defn r7rs-equal-hash-list__ [x depth : int n : int h : int] : int
+  (if (r7rs-pair? x)
+    (if (>= n 16)
+      h
+      (r7rs-equal-hash-list__ (r7rs-cdr x) depth (+ n 1)
+                              (r7rs-hash-mix__ h (r7rs-equal-hash-sub__ (r7rs-car x) depth))))
+    (r7rs-hash-mix__ h (r7rs-equal-hash-sub__ x depth))))
+(defn r7rs-equal-hash-vec__ [v : (Vec any) depth : int i : int h : int] : int
+  (if (if (>= i (vec-len v)) true (>= i 16))
+    h
+    (r7rs-equal-hash-vec__ v depth (+ i 1) (r7rs-hash-mix__ h (r7rs-equal-hash-sub__ (vec-get v i) depth)))))
+(defn r7rs-equal-hash-bytes__ [b : (Vec int) i : int h : int] : int
+  (if (if (>= i (vec-len b)) true (>= i 64))
+    (r7rs-hash-mix__ h (vec-len b))
+    (r7rs-equal-hash-bytes__ b (+ i 1) (r7rs-hash-mix__ h (vec-get b i)))))
 
 
 ;;; R7rsPort -- kind 0 is a file, 1 a string, 2 a bytevector.  A port is an
