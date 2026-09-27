@@ -2,6 +2,76 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.55.1] -- 2026-09-27
+
+### Added
+
+- **`(import (srfi N))` under `#lang r7rs`.** Thirty-two SRFIs ship as
+  libraries a Scheme program can import -- 1 (lists), 2/8/26/31 (binding and
+  lambda shorthands), 4 and 66 (homogeneous and octet vectors), 13 and 14
+  (strings and char sets), 17 (generalized `set!`), 27 (random bits), 28 and
+  48 (format), 34 and 35 (conditions), 41 (streams), 42 (eager
+  comprehensions), 60 (integers as bits), 61 (`cond`'s receiver clause), 64
+  and 78 (test suites), and 69 (hash tables), among the rest. `(features)`
+  and `cond-expand` list the `srfi-N` identifiers. A pruning pass
+  (`src/passes/srfi_prune.c`) drops every SRFI definition a program never
+  reaches, so an unused `(import (srfi 1))` emits the same C as no import at
+  all (3.50 s to build against 4.91 s unpruned). r7rs-srfi-plan S1-S7.
+
+- **More of `define-library`.** `(export (rename internal public))`,
+  exported `syntax-rules` macros, and `define-record-type` as an internal
+  definition.
+
+- **The interpreter takes `-I` and finds its enclosing spice.** `tur
+  interpret` / `tur debug` collect `-I dir` before the file, `tur eval
+  --file` takes it anywhere, and the enclosing `build.tur`'s `src/` and
+  `:spices` deps are appended, so a multi-module program outside one
+  directory can be interpreted.
+
+### Changed
+
+- **Scheme source is Scheme.** Under `#lang r7rs`, brackets read as
+  parentheses, a leading `:` is an ordinary identifier rather than a keyword,
+  and Turmeric forms are refused. A program's own definition is its own,
+  whatever it shadows. R7RS's `append` is variadic, per R7RS 6.4.
+
+- **Diagnostics print parametric types in their source spelling** rather than
+  the elaborated carrier.
+
+### Fixed
+
+- **Windows.** The JIT's whole-preamble path links and runs (and `#lang r7rs`
+  with it), `tur repl --engine jit` loads in-process, `call/cc` is
+  re-entrant, an over-capacity async httpd server sends its 503 intact, and
+  two saffron fixture crashes are gone.
+
+- **`tur mcp` / `tur lsp` crashed after a few dozen analyses** on a stale CPS
+  cache.
+
+- **Types carried through generics and instances.** A `let` bound to a
+  generic call's `A` result is typed `A`, not the carrier int; a dispatched
+  method's applied class-variable result is typed per instance, and an
+  instance impl's carrier result is settled at one chokepoint; an imported
+  dynamic file's unannotated `defn` forward-declares as `any`; a float tyvar
+  reaching an `fn`-typed callback in a generic closure, and list helpers over
+  a `(Cons any)` head, both take the typed path.
+
+- **Ownership and effects.** A lambda-captured `^mut` is shared rather than
+  copied on the compiled path, a `let`-bound `any` from an aliasing call is
+  no longer dropped at scope end, a panic inside a CPS-lowered Saffron
+  function reaches `catch-unwind`, an async body driving a session endpoint
+  runs on its own thread, and a partial application checks a captured
+  session/role endpoint's protocol.
+
+- **Regions and the collector.** An erased node handed to an inline-C callee
+  is noted for regions, `extern-c` refuses a region node, and the r7rs
+  collector no longer parks around its own locks or deadlocks on macOS around
+  `pthread_create`.
+
+- **`stdlib/capability.tur` compiles again** -- file-scope vtables and typed
+  handles. A self tail call is lowered as a backedge rather than a C sibling
+  call, and a closure is inlined as a pap only when its body forwards exactly.
+
 ## [0.55.0] -- 2026-09-25
 
 ### Changed

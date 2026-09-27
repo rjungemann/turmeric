@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.55.0` -- the stdlib typeclass hierarchy declares its superclasses (`Ord` over `Eq`, `Monad` over `Applicative` over `Functor`), so one constraint licenses the whole chain; and `#lang r7rs` threads run in parallel under the collected heap.
+**Latest release:** `v0.55.1` -- thirty-two SRFIs ship as importable libraries under `#lang r7rs`, with a pruning pass so a program pays only for the definitions it reaches; plus a run of Windows, region and generic-typing fixes.
 
 ## What
 
