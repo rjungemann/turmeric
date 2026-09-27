@@ -1,0 +1,36 @@
+#lang r7rs
+;; docs/archive/r7rs-leading-colon-identifiers.md: R7RS 7.1.1 makes `:` an
+;; <initial>, so `:x`, `:::` and `::x` are identifiers.  The source reader
+;; used to hand a leading `:` to Turmeric's keyword syntax: `':x` was the
+;; symbol `x`, `:::` split into `::` and `:`, and `:x` could not be bound.
+;; The runtime `read` always had them right; the last line checks the two
+;; readers agree.
+(import (scheme base) (scheme write) (scheme read))
+
+(write (list ':x (symbol->string ':x) '::: (symbol->string ':::) '::x 'a:b
+             (eq? ':x (string->symbol ":x")) (eq? ':x 'x)))
+(newline)
+
+;; A parameter and a top-level variable.
+(define (f :x) (* :x 2))
+(write (f 21))
+(newline)
+(define :top 7)
+(write :top)
+(newline)
+
+;; `:::` as a custom ellipsis (R7RS 4.3.2).
+(define-syntax my-list (syntax-rules ::: () ((_ x :::) (list x :::))))
+(write (my-list 1 2 3))
+(newline)
+
+;; A macro named like an SRFI 42 generator.
+(define-syntax :range
+  (syntax-rules ()
+    ((_ a b) (let loop ((i a)) (if (< i b) (cons i (loop (+ i 1))) '())))))
+(write (:range 0 4))
+(newline)
+
+;; The source reader and `read` agree.
+(write (equal? (read (open-input-string "(:a ::: ::b c:d)")) '(:a ::: ::b c:d)))
+(newline)

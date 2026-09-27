@@ -9,8 +9,11 @@
 ;; `(map-new)` rather than a `#map{}` literal: its open `(Map K V)` result is
 ;; grounded to `(Map any any)`, and the key crosses `map-assoc`'s `(& K)` key
 ;; check as a borrowed box (saffron-open-generic-result-not-grounded).
-(define m (map-assoc (map-assoc (map-new) :a 1) :k 42))
-(display (map-get m :k)) (newline)
+;; The keys are Scheme symbols: `'k` is the runtime value a Turmeric
+;; keyword `:k` is, and a bare `:k` in Scheme is an R7RS identifier
+;; (docs/archive/r7rs-leading-colon-identifiers.md).
+(define m (map-assoc (map-assoc (map-new) 'a 1) 'k 42))
+(display (map-get m 'k)) (newline)
 (display (map-count m)) (newline)
 (define v (vec-new))
 (vec-push! v 7)

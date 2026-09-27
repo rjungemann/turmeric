@@ -1,0 +1,8 @@
+#lang r7rs
+;; docs/archive/r7rs-leading-colon-identifiers.md: a bare `:k` in a Scheme
+;; file is an R7RS identifier, not Turmeric's keyword.  Seam code written
+;; against the keyword -- a map key -- gets the spelling that means what it
+;; meant: the symbol `'k`, which is the keyword's runtime value.
+(import (scheme base) (scheme write) (turmeric stdlib/map))
+(define m (map-assoc (map-new) 'k 42))
+(write (map-get m :k))

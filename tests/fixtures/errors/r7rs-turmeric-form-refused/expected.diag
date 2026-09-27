@@ -1,0 +1,2 @@
+'defn' is Turmeric syntax, not Scheme
+write Turmeric code in a Turmeric module and import it with (turmeric <module>)

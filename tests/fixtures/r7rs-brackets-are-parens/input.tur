@@ -1,0 +1,15 @@
+#lang r7rs
+;; docs/reported/r7rs-turmeric-syntax-leaks.md item 1: in a Scheme source
+;; `[...]` reads as a list, as Racket, Chez and Guile read it (R7RS reserves
+;; the brackets), not as Turmeric's vector -- so the bracketed `let` of a
+;; Racket-flavoured tutorial runs as written.
+(import (scheme base) (scheme write))
+(define (show x) (write x) (newline))
+(show (let ([x 1] [y 2]) (+ x y)))
+(show (let loop ([i 0] [acc '()])
+        (if (< i 3) (loop (+ i 1) (cons i acc)) acc)))
+(show (cond [(= 1 2) 'no] [else 'yes]))
+(show (case 3 [(1 2) 'low] [(3 4) 'mid] [else 'high]))
+(show '[a b . c])
+(show (vector? '[1 2]))
+(show (list? [list 1 2]))

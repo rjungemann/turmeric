@@ -1,0 +1,2 @@
+'eager' is imported from (srfi 45) and also defined by this program
+(except (srfi 45) eager)

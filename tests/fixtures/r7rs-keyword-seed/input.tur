@@ -2,8 +2,12 @@
 ;; The keyword `:seed` is the interned record `__tur_sym_seed`; the symbol
 ;; table's seeder used to carry the same C name, so any unit with the runtime
 ;; registry (every #lang r7rs one) failed to compile
-;; (docs/archive/keyword-seed-collides-with-symbol-seeder.md).
+;; (docs/archive/keyword-seed-collides-with-symbol-seeder.md).  The keys
+;; inside `#map{...}` are still Turmeric keywords (the literal's own grammar);
+;; the lookup outside it uses the symbol `'seed`, the same runtime value, since
+;; a bare `:seed` in Scheme is an R7RS identifier
+;; (docs/archive/r7rs-leading-colon-identifiers.md).
 (import (scheme base) (scheme write) (turmeric stdlib/map))
 (define m #map{:seed 1 :other 2})
-(write (list (map-get m :seed) (map-count m) (eq? (string->symbol "seed") 'seed)))
+(write (list (map-get m 'seed) (map-count m) (eq? (string->symbol "seed") 'seed)))
 (newline)

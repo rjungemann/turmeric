@@ -1,0 +1,4 @@
+#lang r7rs
+;; r7rs-srfi-plan D2: SRFI 40 is deprecated by its author in favour of
+;; SRFI 41, so it is not planned; the message points at SRFI 41.
+(import (scheme base) (srfi 40))

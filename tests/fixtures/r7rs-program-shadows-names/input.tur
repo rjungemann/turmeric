@@ -1,0 +1,30 @@
+#lang r7rs
+;; r7rs-srfi-plan S0: a program's top-level definition is the program's own,
+;; whatever else the name means.
+;;
+;; - `square` is (scheme base)'s: the program's definition shadows it, and
+;;   every use -- one before the definition, one passed to `map` -- sees the
+;;   program's.  The prelude keeps its own (`exact-integer-sqrt` is fine).
+;; - `any`, `int`, `ptr` are Turmeric builtin type names, and `None`, `Vec`,
+;;   `list-length` are auto-loaded stdlib names: none of them is visible to
+;;   Scheme, so the program's definitions must not collide with them either
+;;   (chibi's SRFI 1 defines `any`).
+;; - a local of the same spelling is an ordinary local.
+(import (scheme base) (scheme write))
+
+(define (twice-square x) (* 2 (square x)))
+(define (square x) (* x x x))
+(define (any pred ls) (cond ((null? ls) #f) ((pred (car ls)) #t) (else (any pred (cdr ls)))))
+(define int 5)
+(define (ptr p) (car p))
+(define (None) 'none)
+(define Vec (vector 1 2))
+(define (list-length ls) (if (null? ls) 0 (+ 1 (list-length (cdr ls)))))
+(define (locals float bool) (let ((cstr (+ float bool))) cstr))
+
+(write (list (twice-square 2) (map square '(1 2 3))))
+(newline)
+(write (call-with-values (lambda () (exact-integer-sqrt 17)) list))
+(newline)
+(write (list (any odd? '(2 4 5)) int (ptr '(a b)) (None) Vec (list-length '(1 2 3)) (locals 1 2)))
+(newline)

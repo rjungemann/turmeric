@@ -532,6 +532,22 @@ Expr *elab_form(Elab *e, Form *f) {
             Binding *b = elab_lookup_sym(e, f->as.sym, f->span, &sym_qual_err);
             if (!b) {
                 if (sym_qual_err) return NULL; /* error already emitted */
+                /* r7rs-leading-colon-identifiers: in a Scheme file `:k` is an
+                 * R7RS identifier, not Turmeric's keyword.  Code written
+                 * against the keyword (a map key passed through the seam)
+                 * lands here; name the spelling that means what it meant. */
+                if (f->as.sym->name[0] == ':' && f->as.sym->len > 1 && f->as.sym->name[1] != ':' &&
+                    lang_span_is_scheme(f->span)) {
+                    char msg[256], sug_text[256];
+                    snprintf(msg, sizeof(msg), "unbound symbol '%s'", f->as.sym->name);
+                    snprintf(sug_text, sizeof(sug_text),
+                             "in #lang r7rs '%s' is an identifier, not a Turmeric keyword; "
+                             "for the keyword's value (a map key, say) write the symbol '%s",
+                             f->as.sym->name, f->as.sym->name + 1);
+                    DiagSuggestion sug = { sug_text, NULL, "https://turmeric-lang.dev/docs/errors/TUR-E0003" };
+                    diag_emit_with_suggestion(DIAG_ERROR, f->span, msg, &sug);
+                    return NULL;
+                }
                 /* Phase 8: Enhanced unbound symbol diagnostic with suggestions */
                 const Symbol *best_match = NULL;
                 int best_distance = 3;
@@ -1058,8 +1074,10 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
          * process-context / file) splices in that library's file first, as a
          * `(load ...)` would -- once per compile, through the visited set. */
         {
-            const char *libs[8];
-            uint32_t nl = scheme_import_library_files(f, libs, 8);
+            /* Room for every on-demand library and every SRFI in one import
+             * form (r7rs-srfi-plan S1: eight silently dropped the rest). */
+            const char *libs[128];
+            uint32_t nl = scheme_import_library_files(f, libs, 128);
             for (uint32_t li = 0; li < nl; li++) {
                 Form *ld_items[2];
                 ld_items[0] = form_sym(arena, f->span, e->sym_load);
@@ -2207,7 +2225,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * through by pointer and the stdlib prefix keeps its index. */
     if (scheme_lower_needed(forms, nforms)) {
         uint32_t lowered_n = 0;
-        forms  = (Form *const *)scheme_lower_program(arena, st, forms, nforms, &lowered_n);
+        forms  = (Form *const *)scheme_lower_program(arena, st, forms, nforms, &lowered_n,
+                                                     elab_scheme_library_path,
+                                                     elab_scheme_global_kind, &e);
         nforms = lowered_n;
     }
 

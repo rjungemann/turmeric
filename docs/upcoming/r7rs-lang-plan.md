@@ -796,6 +796,10 @@ No behavior change. This is the stage that makes every later one cheap.
 >   stays off; keywords, `[...]`, `#map{...}`, inline C and `^tailcall` all
 >   still read, and `true`/`false`/`nil` are still literals -- that last one
 >   is R2's call, when the truthiness predicate lands, not the reader's.
+>   (Reversed for user Scheme source, 2026-09-26, one item at a time:
+>   keywords and `[...]` are gone -- a leading `:` is an identifier and
+>   brackets are parentheses -- and the rest is tracked in
+>   docs/reported/r7rs-turmeric-syntax-leaks.md.)
 > - Fixtures: `r7rs-reader-lexemes` (runtime, both back ends),
 >   `r7rs-reader-forms` (a `tur parse-check` pair, Scheme spelling against
 >   Turmeric spelling, form for form), `r7rs-elaborates-as-saffron` (the
@@ -854,7 +858,9 @@ Exit criterion: a named-`let` loop summing a list runs under `--interpret`.
 >   `length`, and the `-values` family over a `Values` carrier. Internal
 >   defines follow R7RS 5.3.2: a run of lambdas becomes one `letrec`, a value
 >   a `let`, in letrec* order. Turmeric-shaped forms in a Scheme file pass
->   through with their subforms lowered, so the R1 fixtures still run. No
+>   through with their subforms lowered, so the R1 fixtures still run
+>   (until 2026-09-26: a Turmeric form in a user Scheme source is now
+>   refused, docs/reported/r7rs-turmeric-syntax-leaks.md item 7). No
 >   `defmacro` was needed, and no `if (lang == LANG_R7RS)` was added to the
 >   elaborator: the two per-file decisions it makes (truthiness and the
 >   static-condition rule below) read `LangTraits.scheme_truthiness`.
@@ -1044,7 +1050,8 @@ referential-transparency gap (D5).
 >   `...` at any depth with nested ellipses, an element after an ellipsis
 >   (`(_ a ... b)`), improper tails (`(_ a . rest)`), vector patterns, datum
 >   literals, a custom ellipsis (`(syntax-rules dots (lits) ...)` -- a symbol;
->   `:::` reads as a keyword under this reader) and the `(... ...)` escape.
+>   `:::` read as a keyword under this reader until 2026-09-26,
+>   docs/archive/r7rs-leading-colon-identifiers.md) and the `(... ...)` escape.
 >   Templates substitute, iterate `x ...` and flatten `x ... ...`, splice a
 >   substituted list into a dotted tail, build vectors, and `syntax-error`
 >   reports at the use site. `define-syntax` at top level or body start (a
@@ -2985,6 +2992,9 @@ saffron/sweet          saffron   sweet        stable
 
 ## See also
 
+- [r7rs-srfi-plan.md](r7rs-srfi-plan.md) -- `(import (srfi N))`, after
+  Racket's SRFI support: the built-in SRFIs as no-op imports, the rest as
+  libraries, and the guide's support table
 - [proper-tail-calls-plan.md](proper-tail-calls-plan.md) -- D6's prerequisite,
   with the full tail-call measurement matrix
 - [saffron-lang-plan.md](saffron-lang-plan.md) -- the dynamic substrate this

@@ -55,6 +55,16 @@ definitions would save the parse of the rest (about 0.15 s) and some of `tur
 emit-c`'s 1.0 s, not the `cc` time. The first direction below -- a prelude
 compiled once -- is the one that moves the number.
 
+**Measured 2026-09-26, r7rs-srfi-plan S0: that holds for the prelude, not
+for a spliced Scheme library.** chibi's SRFI 1 spliced into a one-line
+program adds about 1.6 s to its build (3.46 s -> 5.03 s), called or not, and
+gcc keeps 190 of the 318 functions it adds. `__tur_fatbox_init` fills a
+static closure at startup for every procedure the program uses as a value
+anywhere, dead code included. A variable define (`(define reverse! reverse)`)
+is also initialized at startup. Both reference functions gcc would otherwise
+drop. The plan's decision is a whole-program pass that drops unreferenced
+`stdlib/srfi/` definitions before emission (its S0 note and S3).
+
 ## Fix directions
 
 - Precompile the prelude once: build it as a library (`libr7rs.a`, or an

@@ -103,11 +103,14 @@ cat > "$WORK/seam.tur" <<'EOF'
 (define (churn i)
   (if (= i 0) 'done
       (begin (list i i i i) (churn (- i 1)))))
-(define m (map-assoc #map{:a 1} :k (list 1 2 3 "four" (vector 5 6))))
+;; Keys are Scheme symbols: `'k` is the runtime value of the keyword `:k`,
+;; and a bare `:k` in Scheme is an identifier
+;; (docs/archive/r7rs-leading-colon-identifiers.md).
+(define m (map-assoc #map{:a 1} 'k (list 1 2 3 "four" (vector 5 6))))
 (churn 20000)
-(define m2 (map-assoc m :s (string-append "hello" " world")))
+(define m2 (map-assoc m 's (string-append "hello" " world")))
 (churn 20000)
-(write (list (map-get m2 :k) (map-get m2 :s) (map-count m2)))
+(write (list (map-get m2 'k) (map-get m2 's) (map-count m2)))
 (newline)
 EOF
 seam_want='((1 2 3 "four" #(5 6)) "hello world" 3)'

@@ -1,0 +1,4 @@
+#lang r7rs
+;; r7rs-srfi-plan S1: an import set's names are checked against the SRFI's
+;; export list, stdlib/srfi/6.scm's here.
+(import (scheme base) (only (srfi 6) read-line))

@@ -32,11 +32,18 @@ typedef struct Reader {
      * for, so this costs nothing), dotted pairs, `|sym|`, the
      * `#x`/`#o`/`#b`/`#d`/`#e`/`#i` numeric prefixes, `+5`/`.5`/`+inf.0`,
      * and the Scheme string escapes.  Everything the Turmeric reader has
-     * that Scheme does not contradict stays available (keywords, `[...]`,
-     * `#map{...}`, inline C, `^tailcall`). */
+     * that Scheme does not contradict stays available (`#map{...}`, inline
+     * C, `^tailcall`) -- being removed from user Scheme source,
+     * docs/reported/r7rs-turmeric-syntax-leaks.md.  Keywords
+     * and brackets went first: a leading `:` is an identifier and `[...]` a
+     * list there (scheme_user_source). */
     bool              scheme_enabled;
     /* `#!fold-case` / `#!no-fold-case` (R7RS 2.1), Scheme only. */
     bool              fold_case;
+    /* > 0 while reading the inside of a Turmeric data literal (`#map{...}`,
+     * `#set{...}`), which keeps Turmeric's lexemes in a Scheme source too
+     * (its keys are keywords by its own grammar).  See scheme_user_source. */
+    uint32_t          turmeric_literal_depth;
     /* RM0/RM1: User-defined #-dispatch macros. May be NULL (no user macros). */
     const ReaderMacroRegistry *user_macros;
     /* proper-tail-calls T1: true while reading the FIRST element of a `(...)`
@@ -631,6 +638,37 @@ static Form *read_number(Reader *r, int sign) {
     }
     
     return atom;
+}
+
+/* A user Scheme source: read by the Scheme reader, and neither Turmeric-shaped
+ * nor inside a Turmeric data literal.  Where this holds, two Turmeric lexemes
+ * give way to Scheme's (docs/reported/r7rs-turmeric-syntax-leaks.md):
+ *
+ *   - a token that starts with `:` is an identifier (R7RS 7.1.1 makes `:` an
+ *     <initial>), as the runtime `read` has always read it -- so `':x` is the
+ *     symbol `:x`, `:::` can be a custom ellipsis, and SRFI 42's `:range` can
+ *     be defined (docs/archive/r7rs-leading-colon-identifiers.md).  A Scheme
+ *     program that passes a key to a Turmeric map writes the symbol `'k`,
+ *     which is the same runtime value the keyword `:k` is;
+ *   - `[...]` is a list, as Racket, Chez and Guile read it (R7RS reserves the
+ *     brackets), not Turmeric's vector.
+ *
+ * The Turmeric-shaped Scheme sources keep Turmeric's lexemes: the prelude and
+ * the on-demand library files under stdlib/r7rs/ (`(defstruct R7rsPair :heap
+ * [a : any d : any])`, `(:: c :int)`), and a synthetic `<eval>` source up to
+ * the REPL's pinned preload -- the same test as scheme_lower.c's
+ * prelude_span.  So does the inside of a Turmeric data literal (`#map{:k 1}`),
+ * whose keys are keywords by its own grammar. */
+static bool scheme_user_source(const Reader *r) {
+    if (!r->scheme_enabled || r->turmeric_literal_depth) return false;
+    const char *p = r->file ? r->file->path : NULL;
+    if (!p) return true;
+    if (p[0] == '<') return g_synthetic_user_from_line && r->line >= g_synthetic_user_from_line;
+    size_t n = strlen(p);
+    static const char SUFFIX[] = "r7rs/prelude.tur";
+    size_t m = sizeof SUFFIX - 1;
+    if (n >= m && memcmp(p + n - m, SUFFIX, m) == 0) return false;
+    return strstr(p, "stdlib/r7rs/") == NULL;
 }
 
 static Form *read_keyword(Reader *r) {
@@ -1383,8 +1421,10 @@ static Form *read_map_literal(Reader *r) {
     advance(r); /* consume 'a' */
     advance(r); /* consume 'p' */
     /* peek == '{' guaranteed by caller */
+    r->turmeric_literal_depth++;
     Form *lit = read_seq(r, '{', '}', F_MAP_LITERAL,
                          "unterminated map literal (missing '}') (TUR-E0281)");
+    r->turmeric_literal_depth--;
     if (!lit || r->error) return lit;
 
     uint32_t n = lit->as.list.len;
@@ -1428,8 +1468,11 @@ static Form *read_set_literal(Reader *r) {
     advance(r); /* consume 'e' */
     advance(r); /* consume 't' */
     /* peek == '{' guaranteed by caller */
-    return read_seq(r, '{', '}', F_SET_LITERAL,
-                    "unterminated set literal (missing '}') (TUR-E0281)");
+    r->turmeric_literal_depth++;
+    Form *lit = read_seq(r, '{', '}', F_SET_LITERAL,
+                         "unterminated set literal (missing '}') (TUR-E0281)");
+    r->turmeric_literal_depth--;
+    return lit;
 }
 
 /* Variadic HKT rows: read a #row{...} type-row literal -> F_ROW_LITERAL.
@@ -4151,6 +4194,10 @@ static Form *read_form(Reader *r) {
     
     if (c == '(') return read_seq(r, '(', ')', F_LIST, "unterminated list (missing ')')");
     if (c == '[') {
+        /* r7rs-turmeric-syntax-leaks item 1: brackets are parentheses in a
+         * user Scheme source. */
+        if (scheme_user_source(r))
+            return read_seq(r, '[', ']', F_LIST, "unterminated list (missing ']')");
         Form *v = read_seq(r, '[', ']', F_VEC, "unterminated vector (missing ']')");
         /* TCE: a fused `:T` element-type suffix (`[]:int`) pins the vec's
          * element type.  Binding vectors are unaffected because their ']' is
@@ -4165,7 +4212,17 @@ static Form *read_form(Reader *r) {
         return NULL;
     }
     if (c == '"') return read_string(r);
-    if (c == ':') return read_keyword(r);
+    if (c == ':') {
+        /* r7rs-leading-colon-identifiers: `:x`, `:::`, `::x` are R7RS
+         * identifiers in a Scheme source.  A `:` or `::` standing alone
+         * reads as before (Turmeric's annotation / ascription). */
+        int c2 = peek2(r);
+        if (scheme_user_source(r) && c2 != ' ' && c2 != '\t' && c2 != '\n' &&
+            c2 != '\r' && c2 != '(' && c2 != '[' && c2 != ')' && c2 != ']' && c2 != -1 &&
+            !(c2 == ':' && !is_sym_cont(peek3(r)) && peek3(r) != ':'))
+            return read_symbol_or_minus_at(r, head_pos);
+        return read_keyword(r);
+    }
     if (c == '`') {
         /* Phase 6: Check for triple backtick (C block) vs single backtick (quasiquote) */
         if (peek2(r) == '`' && peek3(r) == '`') {
@@ -5183,6 +5240,7 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
     r.neoteric_enabled = false;
     r.scheme_enabled = false;
     r.fold_case = false;
+    r.turmeric_literal_depth = 0;
     /* RM1: Reader-macro registry. If the caller supplied one, dispatch and
      * registration happen against it directly (REPL session semantics);
      * otherwise we keep a per-call local one (file semantics). */

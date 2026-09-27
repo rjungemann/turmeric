@@ -50,7 +50,8 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
   `define-library` instead of a program.
 - **The REPL**: `tur repl --lang r7rs`, or type `#lang r7rs` at any prompt.
   Results echo in Scheme's own spelling (`=> (a "b" #\c)`), and nothing is
-  echoed for the unspecified value.
+  echoed for the unspecified value. The prompt takes Scheme only; type
+  `#lang turmeric` to switch to Turmeric (the session resets).
 - **Formatting**: `tur fmt` re-indents a Scheme file and never rewrites a
   token. Each line's leading whitespace is recomputed; `#t`, `#\x`,
   `|two words|` and `#e1.5` stay exactly as written.
@@ -78,6 +79,10 @@ The core forms are all there: `define`, `lambda`, the `let` family and named
 `-values` forms, `define-record-type`, `define-library` and `import` with
 `only`/`except`/`prefix`/`rename` (nested freely), `cond-expand`, `syntax-rules`, `guard`,
 `parameterize`, `delay`, `delay-force`, quasiquote.
+
+SRFIs are imported as `(srfi N)`, the way Racket's R7RS imports them. The
+SRFIs that R7RS already includes import at no cost; see SRFIs below for the
+full table.
 
 ## Lists, vectors, strings
 
@@ -225,6 +230,13 @@ where the macro was defined, however the use site binds that name.
 A local variable shadows a keyword or a macro of the same name, as R7RS says:
 `(let ((if even?)) (if 7))` calls `even?`.
 
+A `define-library` can export its macros like any other name, and an
+importer can take them under `only`, `prefix` and `rename`. A macro's template
+keeps its meaning in the importer, even when it calls a procedure the library
+does not export, and even when the importer defines the same name itself.
+A macro is Scheme syntax, so a Turmeric module that imports the library gets
+its procedures but not its macros.
+
 ## Control
 
 ```scheme
@@ -350,12 +362,121 @@ Turmeric through the `(turmeric ...)` head:
 (display (vec-len v))                        ; 1
 ```
 
+A Turmeric keyword is spelled as a symbol from Scheme. `:k` in Turmeric and
+`'k` in Scheme are the same value, so a map keyed by keywords is read with
+`(map-get m 'k)`. In a Scheme file `:k` is an ordinary identifier, as R7RS
+says, so `':k` is the symbol `:k` and `:::` can be a macro's ellipsis.
+
+**Visible change:** before 2026-09-26, `:k` in a Scheme file was the Turmeric
+keyword (and `':k` the symbol `k`).
+
 Each argument crossing into a typed Turmeric function is checked against its
 signature. A string crosses into a Turmeric `cstr` as a fresh UTF-8 copy.
 Turmeric's strings stay immutable, so mutating the Scheme string afterwards
 changes nothing on the Turmeric side. A Turmeric module `cast`ing a Scheme
 library's string result to `cstr` gets the same copy.
 `tests/run-r7rs-import.sh` pins both directions on both back ends.
+
+## SRFIs
+
+An SRFI is imported by its number, `(import (srfi N))`, the way Racket's
+R7RS imports it:
+
+```scheme
+(import (scheme base) (scheme write) (srfi 45))
+(define (from n) (lazy (eager (cons n (from (+ n 1))))))
+(define (nth s n) (if (= n 0) (car (force s)) (nth (cdr (force s)) (- n 1))))
+(write (nth (from 0) 1000))                  ; 1000
+```
+
+What an import does depends on the SRFI, and the table below says which
+kind each one is:
+
+- **built in**: R7RS adopted the SRFI, so its names are R7RS's own. The
+  import is accepted and costs nothing; the program compiles to exactly the
+  same code without it. Importing it next to `(scheme base)` is fine.
+- **alias**: a few new names for R7RS procedures.
+- **library**: an implementation, loaded when imported.
+- **no library**: the syntax is always on, so there is nothing to import.
+  The import is an error that says so, as in Racket.
+- **not planned**: refused, with the reason.
+- **not yet**: planned, and refused until the stage in parentheses lands
+  ([docs/upcoming/r7rs-srfi-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-srfi-plan.md)).
+
+`only`, `except`, `prefix` and `rename` work on an SRFI as on any library,
+and their names are checked against its export list. One imported name has
+one binding (R7RS 5.2). Renaming an SRFI's procedure onto a name R7RS already
+has, next to `(scheme base)`, is an error that names both, and so is defining
+a name an SRFI import binds. `(except (srfi N) name)` keeps the name for the
+program.
+
+`cond-expand` knows the table too. `srfi-N` holds for every SRFI marked built
+in, alias, library or no library, and `(library (srfi N))` holds for the ones
+that can be imported. `(features)` lists the same `srfi-N` identifiers.
+
+The Racket column says what Racket's `srfi` collection has for each one.
+"re-export" means Racket's module only re-exports its core, and "library"
+means it has an implementation of its own. For SRFIs that R7RS adopted,
+Racket needs its own library where its core differs from the SRFI; here,
+R7RS's own forms already are the SRFI's.
+
+| SRFI | Title | Here | Racket | Notes |
+|---|---|---|---|---|
+| 0 | Feature-based conditional expansion construct | no library | no module | `cond-expand` is R7RS syntax; `srfi-N` identifiers answer for each SRFI here |
+| 1 | List Library | not yet (S3) | library |  |
+| 2 | AND-LET* | not yet (S2) | library |  |
+| 4 | Homogeneous numeric vector datatypes | not yet (S7) | library, no reader syntax | `u8vector` will be the bytevector type |
+| 5 | A compatible let form with signatures and rest arguments | not yet (S8) | library |  |
+| 6 | Basic String Ports | built in | re-export | `(scheme base)`'s own |
+| 7 | Feature-based program configuration language | not yet (S8) | library |  |
+| 8 | RECEIVE: Binding to multiple values | not yet (S2) | library |  |
+| 9 | Defining Record Types | built in | library | R7RS `define-record-type` is SRFI 9's |
+| 11 | Syntax for receiving multiple values | built in | library | R7RS `let-values` takes dotted rest formals |
+| 13 | String Libraries | not yet (S5) | library |  |
+| 14 | Character-set Library | not yet (S5) | library |  |
+| 16 | Syntax for procedures of variable arity | built in | re-export | `(scheme case-lambda)` |
+| 17 | Generalized set! | not yet (S2) | library |  |
+| 19 | Time Data Types and Procedures | not yet (S8) | library |  |
+| 23 | Error reporting mechanism | built in | re-export | R7RS `error` is SRFI 23's |
+| 25 | Multi-dimensional Array Primitives | not yet (S8) | library |  |
+| 26 | Notation for Specializing Parameters without Currying | not yet (S2) | library |  |
+| 27 | Sources of Random Bits | not yet (S7) | library |  |
+| 28 | Basic Format Strings | not yet (S6) | re-export (Racket's `format`) | not in R7RS, so a library here |
+| 29 | Localization | not yet (S8) | library |  |
+| 30 | Nested Multi-line Comments | built in | empty module | `#\| \|#` nests; the library is empty, as Racket's is |
+| 31 | A special form rec for recursive evaluation | not yet (S2) | library |  |
+| 34 | Exception Handling for Programs | built in | library | R7RS `guard`, `raise` and `with-exception-handler` are SRFI 34's |
+| 35 | Conditions | not yet (S7) | library |  |
+| 38 | External Representation for Data With Shared Structure | alias | library | `write-with-shared-structure` is `write-shared`; `read-with-shared-structure` is `read` |
+| 39 | Parameter objects | built in | re-export | the converter runs on the initial value and on each `parameterize` |
+| 40 | A Library of Streams | not planned | library | deprecated by its author in favour of SRFI 41 |
+| 41 | Streams | not yet (S7) | library |  |
+| 42 | Eager Comprehensions | not yet (S7) | library |  |
+| 43 | Vector Library | not yet (S8) | library | its index-first `vector-map` differs from R7RS's |
+| 45 | Primitives for Expressing Iterative Lazy Algorithms | alias | library | `lazy` is `delay-force`, `eager` is `make-promise` |
+| 48 | Intermediate Format Strings | not yet (S6) | library |  |
+| 54 | Formatting | not yet (S8) | library |  |
+| 57 | Records | not yet (S8) | library |  |
+| 59 | Vicinity | not yet (S8) | library |  |
+| 60 | Integers as Bits | not yet (S7) | library |  |
+| 61 | A more general cond clause | not yet (S2) | library |  |
+| 62 | S-expression comments | no library | no module | `#;` is always on; the import is an error that says so, as in Racket |
+| 63 | Homogeneous and Heterogeneous Arrays | not yet (S8) | library |  |
+| 64 | A Scheme API for test suites | not yet (S6) | library |  |
+| 66 | Octet Vectors | not yet (S7) | library |  |
+| 67 | Compare Procedures | not yet (S8) | library |  |
+| 69 | Basic hash tables | not yet (S4) | library |  |
+| 71 | Extended LET-syntax for multiple values | not yet (S8) | library |  |
+| 74 | Octet-Addressed Binary Blocks | not yet (S8) | library |  |
+| 78 | Lightweight testing | not yet (S6) | library |  |
+| 86 | MU and NU simulating VALUES and CALL-WITH-VALUES | not yet (S8) | library |  |
+| 87 | => in case clauses | built in | library | R7RS `case` takes `=>` |
+| 98 | An interface to access environment variables | built in | library | re-exports `(scheme process-context)`'s two procedures |
+| 105 | Curly-infix-expressions | no library | no module | `{a + b}` reads in every `#lang` |
+
+Each built-in or alias row is one file, `stdlib/srfi/<N>.scm`, holding a
+`(define-library (srfi N) ...)`. `tests/check-r7rs-srfi-sync.sh` checks this
+table, those files, and the compiler's own table against each other.
 
 ## Memory
 
@@ -418,6 +539,16 @@ What it does not cover:
 - **`(except ...)` over a user library or a Turmeric module hides nothing.**
   Turmeric's import has no "all but", so the module is imported whole; over
   a `(scheme ...)` library an excluded name is the program's own to define.
+- **A program may define a name it imports.** R7RS 5.2 calls
+  `(define (square x) ...)` after `(import (scheme base))` an error; here,
+  as in chibi, the program's definition shadows the standard one for the
+  whole program (earlier uses and `(map square ...)` included), and the
+  prelude and every SRFI keep their own. At the REPL it lasts across turns.
+  A name from an imported SRFI is the exception: redefining it is an error
+  whose message gives the `except` that frees the name. So far this holds
+  for programs only: a `define-library` that defines a standard name, or one
+  the Turmeric stdlib has, does not build yet
+  ([docs/reported/r7rs-library-defines-standard-or-stdlib-name.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/r7rs-library-defines-standard-or-stdlib-name.md)).
 - **`apply` takes at most eight arguments**, on both back ends, and so does a
   call through a variable on the compiled back end (`tur --interpret` has no
   such limit). A direct call to a named procedure has no limit. Past eight,
@@ -431,6 +562,21 @@ What it does not cover:
   re-entering a continuation from a later form finishes the form that
   captured it and then carries on after the form that invoked it. Inside a
   procedure, re-entry is what R7RS describes. See Control above.
+- **Brackets are parentheses.** `(let ([x 1]) x)` reads as it does in
+  Racket and Chez. R7RS reserves `[` and `]`; this is the common reading.
+- **Turmeric syntax is not Scheme.** A Turmeric form such as `defn`, `fn`,
+  `match`, `::` or `->` in a Scheme file is an error that says where Turmeric code
+  goes: a Turmeric module, imported with `(import (turmeric <module>))`. At
+  the REPL, switch the prompt with `#lang turmeric` (which resets the
+  session). A program may still define a procedure of that name for itself.
+- **Some Turmeric syntax and names are still visible in a Scheme file, and
+  are being removed.** `#map{...}` and the other Turmeric `#` literals,
+  inline C, `^tailcall`, `@`, the words `true`/`false`/`nil`, and the
+  auto-loaded Turmeric stdlib (`println`, `vec-new`,
+  ...) all work today without an import. Do not rely on them. Reach Turmeric
+  through `(import (turmeric <module>))`, which is the part that stays.
+  [docs/reported/r7rs-turmeric-syntax-leaks.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/r7rs-turmeric-syntax-leaks.md)
+  tracks each one.
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.

@@ -165,6 +165,28 @@ EOF
 
 run_case "form-named-exports" prog4.tur '(42 2)'
 
+# A library global named like a Turmeric builtin type (`any`, `int`) is
+# spelled `<name>--user` wherever user code names it -- in the library and in
+# every importer alike, whatever the import set -- so the stdlib's type
+# annotations never read it (r7rs-srfi-plan S0: chibi's SRFI 1 defines `any`).
+cat > "$TMP/tylib.tur" <<'EOF'
+#lang r7rs
+(define-library (tylib)
+  (export any int)
+  (import (scheme base))
+  (begin
+    (define (any pred ls) (cond ((null? ls) #f) ((pred (car ls)) #t) (else (any pred (cdr ls)))))
+    (define int 5)))
+EOF
+
+cat > "$TMP/prog4b.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (tylib) (prefix (tylib) t:) (rename (only (tylib) int) (int five)))
+(write (list (any odd? '(2 3)) int (t:any even? '(1)) t:int five)) (newline)
+EOF
+
+run_case "type-named-exports" prog4b.tur '(#t 5 #f 5 5)'
+
 # ---- Direction 4: nested import sets over a user library (R7RS 5.2). -------
 # `only`, `except`, `prefix` and `rename` compose in any order; the fold
 # unwinds each name to the library's spelling, and a prefixed user module is
@@ -318,6 +340,118 @@ cat > "$TMP/tmain3.tur" <<'EOF'
 EOF
 
 run_case "turmeric-imports-forward-callee" tmain3.tur "5"
+
+# ---- A library exporting syntax-rules macros. ------------------------------
+# r7rs-define-library-cannot-export-syntax.  The exports `my-rec`, `use-helper`
+# and `swap!` are macros; the export check used to refuse them ("exported
+# symbol 'my-rec' is not defined in this module").  `use-helper`'s template
+# calls a private macro and a helper the library does not export, and quotes
+# the helper's name.  The program defines its own `helper`, which must not
+# capture the template's (R7RS 4.3.2), and reaches the macros under `only`,
+# `prefix` and `rename`.  A second library, in a `.scm` file, uses the first
+# one's macro in its own body and exports a macro of its own under
+# `(export (rename ...))`.
+cat > "$TMP/maclib.tur" <<'EOF'
+#lang r7rs
+(define-library (maclib)
+  (export my-rec twice use-helper swap!)
+  (import (scheme base))
+  (begin
+    (define (twice x) (* 2 x))
+    (define (helper x) (* x 100))
+    (define-syntax my-rec
+      (syntax-rules ()
+        ((_ (name . args) body ...) (letrec ((name (lambda args body ...))) name))))
+    (define-syntax private-twice (syntax-rules () ((_ e) (twice e))))
+    (define-syntax use-helper
+      (syntax-rules () ((_ x) (list (helper x) (private-twice x) 'helper))))
+    (define-syntax swap!
+      (syntax-rules () ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))))
+EOF
+
+cat > "$TMP/macouter.scm" <<'EOF'
+(define-library (macouter)
+  (export fact5 (rename my-when when2))
+  (import (scheme base) (maclib))
+  (begin
+    (define (fact5) ((my-rec (f n) (if (= n 0) 1 (* n (f (- n 1))))) 5))
+    (define-syntax my-when (syntax-rules () ((_ c e ...) (if c (begin e ...) #f))))))
+EOF
+
+cat > "$TMP/prog10.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (maclib) (macouter))
+(define (helper x) 'captured)
+(write (list (twice 21)
+             ((my-rec (f n) (if (= n 0) 1 (* n (f (- n 1))))) 5)
+             (use-helper 7)
+             (let ((p 1) (q 2)) (swap! p q) (list p q))
+             (fact5)
+             (when2 #t 'yes)
+             (when2 #f 'yes)))
+(newline)
+EOF
+
+run_case "library-exports-macros" prog10.tur "(42 120 (700 14 helper) (2 1) 120 yes #f)"
+
+cat > "$TMP/prog11.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write)
+        (only (maclib) use-helper) (prefix (maclib) m:) (rename (maclib) (swap! exchange!)))
+(write (list (use-helper 1)
+             ((m:my-rec (g n) (if (= n 0) 0 (+ n (g (- n 1))))) 4)
+             (m:twice 5)
+             (let ((p 'a) (q 'b)) (exchange! p q) (list p q))))
+(newline)
+EOF
+
+run_case "library-macros-under-import-sets" prog11.tur "((100 2 helper) 10 10 (b a))"
+
+# A Turmeric module importing that library still gets its procedures; its
+# macros are Scheme syntax and are not in the module's exports.
+cat > "$TMP/tmain4.tur" <<'EOF'
+(defmodule tmain4
+  (import maclib :refer [twice])
+  (defn main [] : int
+    (println (cast (twice (:: 21 any)) int))
+    0))
+EOF
+
+run_case "turmeric-imports-macro-library" tmain4.tur "42"
+
+# ---- (srfi N) across modules. ----------------------------------------------
+# r7rs-srfi-plan S1 (D3).  An SRFI's definitions are spliced in once per
+# compile and emitted where every module sees them; its macros are
+# registered by every lowering pass that imports it.  So a user library and
+# the program can both import (srfi 45) and both use its `lazy` macro, and a
+# library can import an SRFI the program never names -- the splice then lands
+# in the library's pass, and the program still links.
+cat > "$TMP/lazylib.scm" <<'EOF'
+(define-library (lazylib)
+  (export later-sum ready)
+  (import (scheme base) (srfi 45) (srfi 38))
+  (begin
+    (define (later-sum a b) (lazy (eager (+ a b))))
+    (define (ready x) (eager x))))
+EOF
+
+cat > "$TMP/prog12.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (srfi 45) (lazylib))
+(write (list (force (later-sum 1 2)) (force (lazy (ready 5))) (force (lazy (eager 7)))))
+(newline)
+EOF
+
+run_case "srfi-in-program-and-library" prog12.tur "(3 5 7)"
+
+cat > "$TMP/prog13.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (lazylib))
+(write (list (force (later-sum 10 20)) (force (ready 4))))
+(newline)
+EOF
+
+run_case "srfi-in-library-only" prog13.tur "(30 4)"
 
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"

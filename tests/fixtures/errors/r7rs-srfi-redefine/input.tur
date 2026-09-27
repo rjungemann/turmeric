@@ -1,0 +1,5 @@
+#lang r7rs
+;; r7rs-srfi-plan D5 / R7RS 5.2: a program may not define a name it imports.
+;; The message says how to keep the name for itself: except.
+(import (scheme base) (srfi 45))
+(define (eager x) x)

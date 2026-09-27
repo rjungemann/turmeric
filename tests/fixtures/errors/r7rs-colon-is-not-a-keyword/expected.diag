@@ -1,0 +1,3 @@
+unbound symbol ':k'
+in #lang r7rs ':k' is an identifier, not a Turmeric keyword
+write the symbol 'k

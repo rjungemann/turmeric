@@ -1,13 +1,15 @@
 #lang saffron
-;; r7rs-lang-plan R1 exit criterion: a `#lang r7rs` file elaborates as the
-;; equivalent `#lang saffron` file does.  hook.sh runs this program twice --
-;; once as written and once with the directive swapped to `r7rs` -- and
-;; demands identical stdout on both back ends.  That is the thesis of the
-;; plan in one test: R7RS is Saffron's dynamic substrate under a Scheme
-;; reader.  (R1 also pinned byte-identical emitted C; since R2 the r7rs
-;; prelude differs from Saffron's by design, so the C differs by exactly
-;; those definitions and the pin is the output.)  Every form below is
-;; Turmeric-shaped, which the R2 lowering passes through untouched.
+;; r7rs-lang-plan R1's exit criterion was that this file, with its directive
+;; swapped to `#lang r7rs`, printed what it prints under Saffron: "R7RS is
+;; Saffron's dynamic substrate under a Scheme reader", shown by passing every
+;; Turmeric-shaped form below through the Scheme lowering untouched.  That
+;; pass-through is gone: Turmeric syntax does not leak into Scheme source
+;; (docs/reported/r7rs-turmeric-syntax-leaks.md, items 1 and 7), so hook.sh
+;; now pins the other side of the same line -- the program still runs under
+;; Saffron, and the same text under `#lang r7rs` is refused at its first
+;; Turmeric form, on both back ends, with the message that says where
+;; Turmeric code goes.  The substrate is still shared; it is just reached
+;; from Scheme through `(import (turmeric ...))` now.
 ;;
 ;; The body is saffron-default-any's: an unannotated parameter defaults to
 ;; `any` and is called at three unrelated types, plus one annotated (static)

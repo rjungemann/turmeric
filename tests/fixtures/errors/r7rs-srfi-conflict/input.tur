@@ -1,0 +1,5 @@
+#lang r7rs
+;; r7rs-srfi-plan D5 / R7RS 5.2: one imported name, one binding.  Renaming
+;; SRFI 45's eager to force, next to (scheme base), would give force two
+;; meanings; the message names both and the ways out.
+(import (scheme base) (rename (srfi 45) (eager force)))

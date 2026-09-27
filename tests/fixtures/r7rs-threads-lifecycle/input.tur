@@ -15,4 +15,11 @@
 (life-keeper-join keeper)
 (write (list 'kept (walk (kept)) (get!))) (newline)
 (write (list 'fork-failures (life-fork-run 60))) (newline)
-(write (list 'detached-records-left (life-detach-run 40))) (newline)
+;; Twenty rounds of forty: each round ends polling the registry while its
+;; threads retire their own records, the window where the poll's lock of the
+;; collector's `world` used to park, unpark into `world` again and wait on
+;; itself for good (r7rs-gc-threads-lifecycle-rare-hang).  One round hit it
+;; about once in 600 runs under load; twenty hang every run without the fix.
+(define (detach-rounds n left)
+  (if (= n 0) left (detach-rounds (- n 1) (+ left (life-detach-run 40)))))
+(write (list 'detached-records-left (detach-rounds 20 0))) (newline)

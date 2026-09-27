@@ -1,0 +1,4 @@
+#lang r7rs
+;; r7rs-srfi-plan D1: an SRFI the table does not know is refused, and the
+;; message says where the list of the ones #lang r7rs has is.
+(import (scheme base) (srfi 999))

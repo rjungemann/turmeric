@@ -1,0 +1,2 @@
+(srfi 40) (A Library of Streams) is not planned
+import (srfi 41) instead
