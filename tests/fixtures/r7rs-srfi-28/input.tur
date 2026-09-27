@@ -1,0 +1,11 @@
+#lang r7rs
+;; r7rs-srfi-plan S6: SRFI 28 is SRFI 48's format, re-exported (one engine),
+;; so importing both binds format once -- no R7RS 5.2 conflict.
+(import (scheme base) (scheme write) (srfi 28) (srfi 48))
+(define (show x) (write x) (newline))
+;; SRFI 28's examples.
+(show (format "Hello, ~a" "World!"))
+(show (format "Error, list is too short: ~s~%" '(one "two" 3)))
+;; Its four directives, and the error for a missing argument.
+(show (format "~a|~s|~%|~~" "x" "x"))
+(show (guard (e ((error-object? e) 'error)) (format "~a")))

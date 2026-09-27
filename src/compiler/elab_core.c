@@ -848,9 +848,17 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                      * any fn_binding that is in the active self-exclude group.
                      * A reference from a NESTED closure passes an empty group
                      * (cleared at elab_fn entry), so it is captured normally. */
+                    /* letrec-sibling-closure-not-captured: except a member
+                     * already elaborated to a CLOSURE (closure_fn_binding is
+                     * set once its init is done, so never on the init being
+                     * elaborated): the recursion machinery covers only the
+                     * init's own self-call and captureless (global) members,
+                     * so a call to an earlier sibling that captures -- `mp`
+                     * calling `fq` over `m` -- must carry it in the env, or the
+                     * lifted body names an undeclared local. */
                     bool fb_is_self_excluded = false;
                     for (uint32_t i = 0; i < n_self_exclude; i++) {
-                        if (self_exclude[i] == fb) { fb_is_self_excluded = true; break; }
+                        if (self_exclude[i] == fb && !fb->closure_fn_binding) { fb_is_self_excluded = true; break; }
                     }
                     if (!fb_is_param && !fb->is_global && !fb_is_self_excluded) {
                         bool fb_is_local = false;
@@ -912,7 +920,8 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                          * self-referential env is avoided). */
                         bool is_self_excluded = false;
                         for (uint32_t i = 0; i < n_self_exclude; i++) {
-                            if (self_exclude[i] == icap) { is_self_excluded = true; break; }
+                            /* An earlier sibling closure is forwarded, as above. */
+                            if (self_exclude[i] == icap && !icap->closure_fn_binding) { is_self_excluded = true; break; }
                         }
                         if (is_self_excluded) continue;
                         bool is_local = false;

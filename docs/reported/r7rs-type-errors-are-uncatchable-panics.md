@@ -8,6 +8,13 @@ among them) relies on it.
 
 Filed 2026-09-27 while landing r7rs-srfi-plan S2.
 
+**Narrowed 2026-09-27 (S6).** `vector-ref` and `vector-set!` check their
+index and raise an error object ("vector-ref: index out of range", the vector
+and index as irritants), so `guard` and SRFI 64's `test-error` catch
+`(vector-ref v 99)` -- the example SRFI 64's own meta-suite tests.  A wrong
+TYPE (`(car 5)`, `(vector-ref 'x 0)`) still panics, as do the other index
+checks (`string-ref`, `list-ref`, `substring`'s range).
+
 ## Repro
 
 ```scheme

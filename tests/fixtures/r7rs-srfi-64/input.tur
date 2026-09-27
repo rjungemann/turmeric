@@ -1,0 +1,49 @@
+#lang r7rs
+;; r7rs-srfi-plan S6: SRFI 64 on both back ends.  The SRFI's meta-suite
+;; (tests/r7rs/srfi/64/) is the thorough check; this pins the default
+;; runner's output and what the port changed.  A suite that passes returns
+;; from its outermost test-end, so the program goes on after it.
+(import (scheme base) (scheme write) (srfi 64))
+
+(test-begin "demo")
+(test-equal "arithmetic" 4 (+ 2 2))
+(test-eqv 'a (car '(a b)))
+(test-eq "same symbol" 'x 'x)
+(test-assert "string" (string? "s"))
+(test-approximate "pi" 3.14 (* 4 (atan 1)) 0.01)
+;; test-error: a raised object, an error with a predicate, and an index out
+;; of range, which the prelude raises (it panicked before S6).
+(test-error (raise 'boom))
+(test-error "predicate" error-object? (error "bad" 1))
+(test-error "out of range" #t (vector-ref (vector 1 2) 5))
+(test-group "grouped"
+  (test-equal 1 1)
+  (test-skip "skipped")
+  (test-assert "skipped" #f)
+  (test-expect-fail "known")
+  (test-assert "known" #f))
+(test-end "demo")
+
+;; A runner of the program's own, counting results quietly.
+(define (count-with thunk)
+  (let ((r (test-runner-null)))
+    (test-with-runner r (thunk))
+    (list (test-runner-pass-count r) (test-runner-fail-count r)
+          (test-runner-xfail-count r) (test-runner-skip-count r))))
+(write (count-with (lambda ()
+                     (test-begin "quiet")
+                     (test-equal 1 1)
+                     (test-equal 1 2)
+                     (test-end "quiet"))))
+(newline)
+;; test-apply runs just the named tests.
+(write (count-with (lambda ()
+                     (test-apply (test-match-name "b")
+                                 (lambda ()
+                                   (test-begin "apply")
+                                   (test-assert "a" #t)
+                                   (test-assert "b" #t)
+                                   (test-end "apply"))))))
+(newline)
+(display "after the suite")
+(newline)

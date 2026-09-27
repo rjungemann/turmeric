@@ -1,0 +1,28 @@
+;; letrec-sibling-closure-not-captured: a letrec member that calls an EARLIER
+;; sibling which is a closure (it captures `m`) must carry that sibling in its
+;; env.  The recursion machinery covers a member's own self-call and
+;; captureless members (lifted to globals); a capturing sibling called from a
+;; lambda was left out, and the lifted body named an undeclared local
+;; (cc: 'fq' undeclared).  Found by SRFI 64's simple runner, whose internal
+;; defines `found?` and `maybe-print` are exactly this shape.
+(defn f [r : int] : int
+  (let [m 5]
+    (letrec [fq (fn [v : int] : bool (= m v))
+             mp (fn [v : int] : int (if (fq v) r 0))]
+      (+ (mp 5) (mp 6)))))
+
+;; The sibling reached through a nested closure too: `mp` forwards `fq`.
+(defn g [r : int] : int
+  (let [m 5]
+    (letrec [fq (fn [v : int] : bool (= m v))
+             mp (fn [v : int] : int ((fn [] : int (if (fq v) (+ r m) 0))))]
+      (mp 5))))
+
+;; Mutual recursion between two capturing members (the earlier one calling
+;; the later) is still open: docs/reported/letrec-mutual-recursion-between-
+;; capturing-closures.md.
+
+(defn main [] : int
+  (println (f 7))
+  (println (g 7))
+  0)

@@ -1,0 +1,21 @@
+Test suite begin: demo
+[PASS] demo: arithmetic
+[PASS] demo: (car (quote (a b)))
+[PASS] demo: same symbol
+[PASS] demo: string
+[PASS] demo: pi
+[PASS] demo: (raise (quote boom))
+[PASS] demo: predicate
+[PASS] demo: out of range
+[PASS] demo: grouped: 1
+[SKIP] demo: grouped: skipped
+[XFAIL] demo: grouped: known
+Test suite end: demo
+Passes:            9
+Expected failures: 1
+Failures:          0
+Unexpected passes: 0
+Skipped tests:     1
+(1 1 0 0)
+(1 0 0 1)
+after the suite

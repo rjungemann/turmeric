@@ -18,9 +18,20 @@ File       From                                      Licence
            Sebastian Egner)
 31.scm     SRFI 31's implementation                  MIT (SRFI, below)
            Copyright (C) Dr. Mirko Luedde (2002)
+48.scm     SRFI 48's reference implementation, as    MIT (SRFI, below)
+           the SRFI's repository carries it
+           (test/srfi-48.scm): Copyright 2003
+           Kenneth A Dickey, 2017 Hamayama
+64.scm     SRFI 64's R7RS implementation, from the   MIT (SRFI, below)
+           SRFI's repository (contrib/taylan.kammer):
+           Copyright (c) 2015 Taylan Kammer
+78.scm     SRFI 78's reference implementation,       MIT (SRFI, below)
+           check.scm: Copyright (c) 2005-2006
+           Sebastian Egner
 
-The files not listed (6, 9, 11, 13, 14, 16, 23, 30, 34, 38, 39, 45, 61, 69,
-87, 98) are export lists, adaptors and implementations written for Turmeric.
+The files not listed (6, 9, 11, 13, 14, 16, 23, 28, 30, 34, 38, 39, 45, 61,
+69, 87, 98) are export lists, adaptors and implementations written for
+Turmeric.
 
 
 The SRFI licence (MIT)

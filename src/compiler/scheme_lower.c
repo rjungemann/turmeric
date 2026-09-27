@@ -421,7 +421,7 @@ static const SrfiRow SRFI_LIBS[] = {
     {  25, SRFI_NOTYET,     "Multi-dimensional Array Primitives", NULL, "S8" },
     {  26, SRFI_LIBRARY,    "Notation for Specializing Parameters without Currying", "stdlib/srfi/26.scm", NULL },
     {  27, SRFI_NOTYET,     "Sources of Random Bits", NULL, "S7" },
-    {  28, SRFI_NOTYET,     "Basic Format Strings", NULL, "S6" },
+    {  28, SRFI_LIBRARY,    "Basic Format Strings", "stdlib/srfi/28.scm", NULL },
     {  29, SRFI_NOTYET,     "Localization", NULL, "S8" },
     {  30, SRFI_BUILTIN,    "Nested Multi-line Comments", "stdlib/srfi/30.scm", NULL },
     {  31, SRFI_LIBRARY,    "A special form rec for recursive evaluation", "stdlib/srfi/31.scm", NULL },
@@ -435,7 +435,7 @@ static const SrfiRow SRFI_LIBS[] = {
     {  42, SRFI_NOTYET,     "Eager Comprehensions", NULL, "S7" },
     {  43, SRFI_NOTYET,     "Vector Library", NULL, "S8" },
     {  45, SRFI_ALIAS,      "Primitives for Expressing Iterative Lazy Algorithms", "stdlib/srfi/45.scm", NULL },
-    {  48, SRFI_NOTYET,     "Intermediate Format Strings", NULL, "S6" },
+    {  48, SRFI_LIBRARY,    "Intermediate Format Strings", "stdlib/srfi/48.scm", NULL },
     {  54, SRFI_NOTYET,     "Formatting", NULL, "S8" },
     {  57, SRFI_NOTYET,     "Records", NULL, "S8" },
     {  59, SRFI_NOTYET,     "Vicinity", NULL, "S8" },
@@ -444,13 +444,13 @@ static const SrfiRow SRFI_LIBS[] = {
     {  62, SRFI_NOLIB,      "S-expression comments", NULL,
         "its `#;` datum comments are part of the reader and always on, as in Racket, which has no library for it either; this import can be deleted" },
     {  63, SRFI_NOTYET,     "Homogeneous and Heterogeneous Arrays", NULL, "S8" },
-    {  64, SRFI_NOTYET,     "A Scheme API for test suites", NULL, "S6" },
+    {  64, SRFI_LIBRARY,    "A Scheme API for test suites", "stdlib/srfi/64.scm", NULL },
     {  66, SRFI_NOTYET,     "Octet Vectors", NULL, "S7" },
     {  67, SRFI_NOTYET,     "Compare Procedures", NULL, "S8" },
     {  69, SRFI_LIBRARY,    "Basic hash tables", "stdlib/srfi/69.scm", NULL },
     {  71, SRFI_NOTYET,     "Extended LET-syntax for multiple values", NULL, "S8" },
     {  74, SRFI_NOTYET,     "Octet-Addressed Binary Blocks", NULL, "S8" },
-    {  78, SRFI_NOTYET,     "Lightweight testing", NULL, "S6" },
+    {  78, SRFI_LIBRARY,    "Lightweight testing", "stdlib/srfi/78.scm", NULL },
     {  86, SRFI_NOTYET,     "MU and NU simulating VALUES and CALL-WITH-VALUES", NULL, "S8" },
     {  87, SRFI_BUILTIN,    "=> in case clauses", "stdlib/srfi/87.scm", NULL },
     {  98, SRFI_BUILTIN,    "An interface to access environment variables", "stdlib/srfi/98.scm", NULL },
@@ -3769,6 +3769,22 @@ static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
             for (uint32_t i = 2; i < lam->as.list.len; i++) fb_push(&db, lam->as.list.items[i]);
             lower_toplevel(sl, fb_list(sl, &db, sp), out);
             return;
+        }
+        /* r7rs-case-lambda-define-cannot-recur: `(define f (case-lambda ...))`
+         * of a name never `set!` is a defn of the dispatching fn, as the
+         * lambda case above is -- a def's initializer cannot see the global it
+         * defines, so a clause calling f (how a case-lambda defaults an
+         * argument: `((x) (f x 1))`) was "unknown function f". */
+        if (!is_mut(sl, name) && f->as.list.items[2]->tag == F_LIST &&
+            f->as.list.items[2]->as.list.len >= 1 &&
+            is_sym(f->as.list.items[2]->as.list.items[0], sl->s_case_lambda) &&
+            !sr_lookup(sl, sl->s_case_lambda)) {
+            Form *fnf = lower_case_lambda(sl, f->as.list.items[2]);
+            if (head_is(fnf, sl->t_fn) && fnf->as.list.len == 3) {
+                fb_push(out, Ln(sl, sp, 4, Sym(sl, sp, sl->t_defn), Sym(sl, sp, name),
+                                fnf->as.list.items[1], fnf->as.list.items[2]));
+                return;
+            }
         }
         Form *init = lower(sl, f->as.list.items[2]);
         /* R10: `(define first car)` -- a global that IS another procedure.

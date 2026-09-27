@@ -4514,29 +4514,32 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
 
         snprintf(path, sizeof(path), "%s/tests/%s_test.tur", dir, mod_name);
         if (opts->is_bin && opts->r7rs) {
+            /* r7rs-srfi-plan S6: an SRFI 64 suite.  Its default runner prints
+             * the summary and, after a failure, exits 1 from the outermost
+             * test-end -- which is what `tur test` counts. */
             snprintf(buf, sizeof(buf),
                 "#lang r7rs\n"
-                ";;; %s_test -- smoke test for %s.\n"
+                ";;; %s_test -- tests for %s, in SRFI 64.\n"
                 ";;\n"
-                "(import (scheme base) (scheme write))\n"
+                "(import (scheme base) (srfi 64))\n"
                 "\n"
-                "(display \"tests: ok\")\n"
-                "(newline)\n",
-                mod_name, name);
+                "(test-begin \"%s\")\n"
+                "(test-equal \"arithmetic\" 4 (+ 2 2))\n"
+                "(test-end \"%s\")\n",
+                mod_name, name, name, name);
         } else if (opts->r7rs) {
-            /* A Scheme program importing the library under test; `exit` is
-             * (scheme process-context)'s. */
+            /* A Scheme program importing the library under test, as an SRFI
+             * 64 suite (see the binary scaffold). */
             snprintf(buf, sizeof(buf),
                 "#lang r7rs\n"
-                ";;; %s_test -- unit tests for %s.\n"
+                ";;; %s_test -- unit tests for %s, in SRFI 64.\n"
                 ";;\n"
-                "(import (scheme base) (scheme write) (scheme process-context)\n"
-                "        (%s))\n"
+                "(import (scheme base) (srfi 64) (%s))\n"
                 "\n"
-                "(if (= (add 2 3) 5)\n"
-                "  (begin (display \"tests: ok\") (newline))\n"
-                "  (begin (display \"tests: FAIL\") (newline) (exit 1)))\n",
-                mod_name, name, mod_name);
+                "(test-begin \"%s\")\n"
+                "(test-equal \"add\" 5 (add 2 3))\n"
+                "(test-end \"%s\")\n",
+                mod_name, name, mod_name, name, name);
         } else if (opts->is_bin && opts->saffron) {
             snprintf(buf, sizeof(buf),
                 "#lang saffron\n"

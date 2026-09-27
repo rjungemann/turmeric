@@ -79,6 +79,22 @@ SETTLED = {
     '(test-precision "1.7976931348623157e+308" "+inf.0")':
         ("1.7976931348623157e+308", "1.7976931348623157e308"),
 }
+# r7rs-srfi-plan S6: SRFI 48's ~w,dF works from number->string's spelling,
+# and where that switches to exponent notation is the implementation's (the
+# SRFI says so for ~F; R7RS 6.2.7 leaves number->string's form open).  Its
+# suite assumes Gauche's, which writes 3.2e11 and -3e-4; here they are
+# 320000000000.0 and -0.0003 (exponents from 1e21 and below 1e-6 up).
+for _form, _inp, _ours in [
+        ('(test " 3.20e11" (format "~8,2F" 32e10))', "32e10", "320000000000.0"),
+        ('(test " 3.46e11" (format "~8,2F" 3.4567e11))', "3.4567e11", "345670000000.0"),
+        ('(test " 3.46e11"   (format "~8,2F" 3.4567e11))', "3.4567e11", "345670000000.0"),
+        ('(test "    -3.e-4" (format "~10,0F" -3e-4))', "-3e-4", "-0.0003"),
+        ('(test "   -3.0e-4" (format "~10,1F" -3e-4))', "-3e-4", "-0.0003"),
+        ('(test "  -3.00e-4" (format "~10,2F" -3e-4))', "-3e-4", "-0.0003"),
+        ('(test " -3.000e-4" (format "~10,3F" -3e-4))', "-3e-4", "-0.0003"),
+        ('(test "-3.0000e-4" (format "~10,4F" -3e-4))', "-3e-4", "-0.0003"),
+        ('(test "-3.00000e-4" (format "~10,5F" -3e-4))', "-3e-4", "-0.0003")]:
+    SETTLED[_form] = (_inp, _ours)
 
 TEST_HEADS = {
     "test": 1, "test-assert": 1, "test-error": 1, "test-values": 1,
@@ -350,6 +366,49 @@ def run_program(tur, backend, text, timeout):
     return out, err, timed_out
 
 
+SUMMARY_RE = {k: re.compile(r"^%s:\s+(\d+)$" % re.escape(k), re.M)
+              for k in ("Passes", "Expected failures", "Failures",
+                        "Unexpected passes", "Skipped tests")}
+
+
+def run_self_hosted(args):
+    """r7rs-srfi-plan S6: a suite written in SRFI 64 itself (its meta-suite)
+    cannot run under the (chibi test) harness -- the names clash -- so it runs
+    whole, with the header's imports, and its default runner's summary is the
+    count: passes and expected failures pass, failures and unexpected passes
+    fail.  A run that prints no summary (it crashed) counts as nothing passed."""
+    with open(args.suite, encoding="utf-8") as f:
+        suite = f.read()
+    header = "#lang r7rs\n(import (scheme base) (scheme write) (scheme char)\n        %s)\n" \
+             % " ".join(EXTRA_IMPORTS)
+    backends = ["interp", "compiled"] if args.backend == "both" else [args.backend]
+    status = 0
+    for be in backends:
+        out, err, timed_out = run_program(args.tur, be, header + suite, args.timeout)
+        got = {}
+        for k, rx in SUMMARY_RE.items():
+            m = rx.search(out)
+            got[k] = int(m.group(1)) if m else None
+        if got["Passes"] is None:
+            why = "timed out" if timed_out else "no summary: " + (err.strip().splitlines() or ["?"])[-1][:80]
+            print("%s [%s]: 0 passed, 0 settled, ? failed (%s)" % (args.label, be, why))
+            status = 1
+            continue
+        passed = got["Passes"] + (got["Expected failures"] or 0)
+        failed = (got["Failures"] or 0) + (got["Unexpected passes"] or 0)
+        print("%s [%s]: %d passed, 0 settled, %d failed (%d skipped; SRFI 64's own count)"
+              % (args.label, be, passed, failed, got["Skipped tests"] or 0))
+        if args.list_failures:
+            for line in out.splitlines():
+                if line.startswith("[FAIL]") or line.startswith("[XPASS]"):
+                    print("  " + line[:120])
+        if passed < args.min_pass:
+            print("%s [%s]: FAIL -- %d passed is below the floor of %d"
+                  % (args.label, be, passed, args.min_pass))
+            status = 1
+    return status
+
+
 def build_fails(tur, forms, idxs, timeout):
     """(True, first error line) when the program of these forms does not build
     and no diagnostic names one of them -- the C compiler rejected emitted
@@ -555,6 +614,9 @@ def main():
                     help="an import set added to the header, e.g. '(srfi 2)' (repeatable)")
     ap.add_argument("--base-except", dest="base_except", action="append", default=[],
                     help="a name to leave out of the header's (scheme base) (repeatable)")
+    ap.add_argument("--self-hosted", action="store_true",
+                    help="the suite is an SRFI 64 program: run it whole and "
+                         "read its own summary (SRFI 64's meta-suite)")
     ap.add_argument("--label", default="r7rs-conformance", help="the name the summary lines carry")
     ap.add_argument("--enable", action="append", default=[],
                     help="an experiment to turn on for every run (repeatable)")
@@ -562,6 +624,8 @@ def main():
     ENABLES.extend(args.enable)
     EXTRA_IMPORTS.extend(args.imports)
     BASE_EXCEPT.extend(args.base_except)
+    if args.self_hosted:
+        sys.exit(run_self_hosted(args))
 
     with open(args.suite, encoding="utf-8") as f:
         text = f.read()

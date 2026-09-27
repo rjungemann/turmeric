@@ -60,8 +60,12 @@ for num, (kind, title, file) in sorted(rows.items()):
         has_body = re.search(r"^\s*\(begin\b", text, re.M) is not None
         if kind == "BUILTIN" and has_body:
             bad.append("SRFI %d is built in, so %s must be an export list only (no begin)" % (num, want))
-        if kind in ("ALIAS", "LIBRARY") and not has_body:
-            bad.append("SRFI %d is %s, so %s needs a (begin ...) body" % (num, kind.lower(), want))
+        # A library may also be another SRFI's exports, re-exported with no
+        # body of its own (SRFI 28 is SRFI 48's format).
+        reexports = re.search(r"\(import\s+\(srfi\s+\d+\)\)", text) is not None
+        if kind in ("ALIAS", "LIBRARY") and not has_body and not (kind == "LIBRARY" and reexports):
+            bad.append("SRFI %d is %s, so %s needs a (begin ...) body, or to re-export "
+                       "an SRFI it imports" % (num, kind.lower(), want))
     elif file is not None:
         bad.append("SRFI %d is %s, so it names no file (it names %r)" % (num, kind, file))
 

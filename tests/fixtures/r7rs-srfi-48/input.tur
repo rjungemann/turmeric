@@ -1,0 +1,42 @@
+#lang r7rs
+;; r7rs-srfi-plan S6: SRFI 48 on both back ends.  The SRFI's own suite
+;; (tests/r7rs/srfi/48/) is the thorough check, ~F most of all; this pins
+;; the ports, the errors, and what the port of the reference changed.
+(import (scheme base) (scheme write) (srfi 48))
+(define (show x) (write x) (newline))
+
+;; No port, #f: a string.  #t: the current output port.  A port: that port.
+(show (format "~a+~s" "a" "b"))
+(show (format #f "~d ~x ~o ~b" 255 255 255 255))
+(format #t "to the current port: ~a~%" 'ok)
+(define p (open-output-string))
+(format p "~a and ~a" 1 2)
+(show (get-output-string p))
+
+;; A call past eight arguments: the reference applied format to them, and
+;; apply takes at most eight here.
+(show (format "~a~a~a~a~a~a~a~a~a~a~a~a" 1 2 3 4 5 6 7 8 9 10 11 12))
+(show (format #f "~a~a~a~a~a~a~a~a~a~a" 1 2 3 4 5 6 7 8 9 10))
+
+;; The directives, upper and lower case alike.
+(show (format "[~c~_~C]~t|" #\x #\y))
+(show (format "~A ~S ~W" "s" "s" (let ((l (list 1 2))) (set-cdr! (cdr l) l) l)))
+(show (format "~y" '(a (b c))))
+(show (format "x~&y~%~&z"))
+(show (format "~a ~? ~a" 'a "~s-~s" '(1 2) 'b))
+(show (format "~a ~k ~a" 'a "~a" '(k) 'b))
+(show (format "tilde ~~ and a trailing tilde ~"))
+(show (string? (format "~h")))
+
+;; ~F: width, digits, strings, exact and complex numbers.
+(show (list (format "~8,2F" 32) (format "~6,3F" 1/3) (format "~4F" 12)
+            (format "~8,3F" "foo") (format "~1,2F" 4321) (format "~8,3F" (sqrt -3.8))
+            (format "~F" -0.5) (format "~1,0F" 2.5) (format "~10,3F" 1.0025)))
+
+;; Errors are raised, so guard sees them.
+(define (err thunk) (guard (e ((error-object? e) (error-object-message e))) (thunk) 'no-error))
+(show (err (lambda () (format "~a ~a" 1))))
+(show (err (lambda () (format "~a" 1 2))))
+(show (err (lambda () (format "~q" 1))))
+(show (err (lambda () (format 'not-a-port "x"))))
+(show (err (lambda () (format "~,2F" 1))))

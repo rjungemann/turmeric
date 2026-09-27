@@ -1,0 +1,12 @@
+#lang r7rs
+;; r7rs-srfi-plan S6: test-read-eval-string is syntax here, spelling `eval`
+;; where it is used, so a program that calls it imports (scheme eval) --
+;; which links the interpreter -- and every other SRFI 64 program does not.
+(import (scheme base) (scheme write) (scheme eval) (srfi 64))
+(test-begin "read-eval")
+(test-equal 7 (test-read-eval-string "(+ 3 4)"))
+(test-error (test-read-eval-string "(+ 3"))
+(test-equal #\newline (test-read-eval-string "#\\newline"))
+(test-error (test-read-eval-string "(+ 3 4) extra"))
+(test-equal 12 (test-read-eval-string "(* 3 4)" (environment '(scheme base))))
+(test-end "read-eval")

@@ -3583,6 +3583,20 @@ Expr *elab_if(Elab *e, const Form *call) {
              * result with `^fat` (or `::`) to call it again.  Calling a raw
              * :ptr<void> directly stays an error (CRU B-4). */
             result_t = TYPE_PTR_VOID;
+        } else if (then_->type.kind == TY_FN && else_->type.kind == TY_FN &&
+                   then_->type.as.fn.boxed != else_->type.as.fn.boxed &&
+                   type_eq(then_->type, else_->type)) {
+            /* if-joins-closure-and-thin-fn: one arm a capturing closure (a fat
+             * `{ thunk, env }` box), the other a thin code pointer (a
+             * non-capturing lambda, a defn by name).  Same function type, two
+             * representations, and the join's C slot holds either -- so the
+             * thin one, called through the fat protocol, read its code as an
+             * env and crashed (`((if c (lambda () c) (lambda () 0)))` in
+             * `#lang r7rs`, SRFI 48's format with a port).  Box the thin arm
+             * (elab_fn_value_to_fat, a static box) and adopt the fat type. */
+            then_ = elab_fn_value_to_fat(e, then_);
+            else_ = elab_fn_value_to_fat(e, else_);
+            result_t = then_->type.as.fn.boxed ? then_->type : else_->type;
         } else if (!type_eq(then_->type, else_->type) &&
                    (lang_span_is_dynamic(call->span) || e->toplevel_dynamic) &&
                    !if_branches_unify_via_tyvar(then_->type, else_->type, &result_t)) {

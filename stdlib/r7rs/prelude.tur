@@ -1522,8 +1522,20 @@
 (defn r7rs-make-vector [n : int & fill : any] : (Vec any)
   (let [fl (r7rs-chain->list__ (:: fill (Cons any)))]
     (r7rs-make-vector-go__ n (if (r7rs-null? fl) (:: false any) (r7rs-car fl)) (:: (vec-new) (Vec any)))))
-(defn r7rs-vector-ref [v : (Vec any) i : int] : any (vec-get v i))
-(defn r7rs-vector-set! [v : (Vec any) i : int x] : nil (vec-set! v i x))
+;;; An index out of range raises an error object a program can `guard`
+;;; (SRFI 64's test-error tests exactly this), where vec-get's own check
+;;; panics (docs/reported/r7rs-type-errors-are-uncatchable-panics.md).
+(defn r7rs-index-error__ [who : cstr v i : int] : any
+  (r7rs-raise (R7rsError (r7rs-string-append2__ who ": index out of range")
+                         (r7rs-list v (:: i any)) 0)))
+(defn r7rs-vector-ref [v : (Vec any) i : int] : any
+  (if (if (>= i 0) (< i (vec-len v)) false)
+    (vec-get v i)
+    (r7rs-index-error__ "vector-ref" (:: v any) i)))
+(defn r7rs-vector-set! [v : (Vec any) i : int x] : nil
+  (if (if (>= i 0) (< i (vec-len v)) false)
+    (vec-set! v i x)
+    (do (r7rs-index-error__ "vector-set!" (:: v any) i) nil)))
 (defn r7rs-vector-length [v : (Vec any)] : int (vec-len v))
 (defn r7rs-vector->list-acc__ [v : (Vec any) i : int j : int acc] : any
   (if (< j i) acc (r7rs-vector->list-acc__ v i (- j 1) (R7rsPair (vec-get v j) acc))))
@@ -2441,11 +2453,15 @@
              (:: (str->sym "srfi-11") any) (:: (str->sym "srfi-13") any)
              (:: (str->sym "srfi-14") any) (:: (str->sym "srfi-16") any)
              (:: (str->sym "srfi-23") any) (:: (str->sym "srfi-26") any)
+             (:: (str->sym "srfi-28") any)
              (:: (str->sym "srfi-30") any) (:: (str->sym "srfi-31") any)
              (:: (str->sym "srfi-34") any) (:: (str->sym "srfi-38") any)
              (:: (str->sym "srfi-39") any) (:: (str->sym "srfi-45") any)
+             (:: (str->sym "srfi-48") any)
              (:: (str->sym "srfi-61") any) (:: (str->sym "srfi-62") any)
-             (:: (str->sym "srfi-69") any) (:: (str->sym "srfi-87") any)
+             (:: (str->sym "srfi-64") any)
+             (:: (str->sym "srfi-69") any) (:: (str->sym "srfi-78") any)
+             (:: (str->sym "srfi-87") any)
              (:: (str->sym "srfi-98") any) (:: (str->sym "srfi-105") any)))
 
 ;;; r7rs-rationalize -- the simplest rational within y of x (R7RS 6.2.6), by

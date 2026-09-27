@@ -1,0 +1,14 @@
+#lang r7rs
+;; r7rs-srfi-plan S6: after a failure the default runner's outermost test-end
+;; prints SRFI 64's summary and exits with status 1, so `tur test` and a
+;; shell see the failing suite (expected.exit).  An unexpected pass fails
+;; the same way.  Nothing after the test-end runs.
+(import (scheme base) (scheme write) (srfi 64))
+(test-begin "failing")
+(test-equal "wrong" 5 (+ 2 2))
+(test-expect-fail "surprise")
+(test-assert "surprise" #t)
+(test-assert "fine" #t)
+(test-end "failing")
+(display "not reached")
+(newline)

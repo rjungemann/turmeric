@@ -1,0 +1,16 @@
+Test suite begin: failing
+[FAIL] failing: wrong
+(+ 2 2)
+Expected value: 5
+Returned value: 4
+
+[XPASS] failing: surprise
+#t
+
+[PASS] failing: fine
+Test suite end: failing
+Passes:            1
+Expected failures: 0
+Failures:          1
+Unexpected passes: 1
+Skipped tests:     0

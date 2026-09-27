@@ -1,0 +1,17 @@
+#lang r7rs
+;; An index out of range in vector-ref or vector-set! raises an error object
+;; that guard catches (r7rs-srfi-plan S6: SRFI 64's test-error, and its
+;; meta-suite, test exactly this).  It used to be vec-get's panic.
+(import (scheme base) (scheme write))
+(define (catch thunk)
+  (guard (e ((error-object? e) (list (error-object-message e) (error-object-irritants e))))
+    (thunk)))
+(define v (vector 'a 'b))
+(write (catch (lambda () (vector-ref v 2))))
+(newline)
+(write (catch (lambda () (vector-ref v -1))))
+(newline)
+(write (catch (lambda () (vector-set! v 5 'c))))
+(newline)
+(write (list (vector-ref v 1) (begin (vector-set! v 0 'z) v)))
+(newline)

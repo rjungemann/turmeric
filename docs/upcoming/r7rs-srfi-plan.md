@@ -1,10 +1,10 @@
 # SRFI libraries for `#lang r7rs`, after Racket's
 
 Status: **S1 and S0 landed 2026-09-26; S2 landed 2026-09-27 except SRFI 17;
-S3 (the pruning pass and SRFI 1), S4 (SRFI 69) and S5 (SRFIs 14 and 13)
-landed 2026-09-27** (see their "What shipped" and "What S0 found" notes).
-SRFI 17 waits on docs/reported/r7rs-prelude-procedures-lose-identity.md.
-S6-S8 to come.
+S3 (the pruning pass and SRFI 1), S4 (SRFI 69), S5 (SRFIs 14 and 13) and S6
+(SRFIs 28, 48, 64 and 78) landed 2026-09-27** (see their "What shipped" and
+"What S0 found" notes). SRFI 17 waits on
+docs/reported/r7rs-prelude-procedures-lose-identity.md. S7-S8 to come.
 `(import (srfi N))` resolves for every SRFI in the table: the ten built-in
 rows and the two alias rows import, and the rest are refused with their
 reason. S0's inventory is [Appendix C](#appendix-c----s0-inventory). Its
@@ -1012,6 +1012,84 @@ fixture itself runs on both back ends.
   from a `display` to `(import (srfi 64))`, which gives newcomers a real test
   file on day one.
 - 78 `check`, `check-report` and friends. `check-ec` waits for 42.
+
+> **What shipped (2026-09-27).** Everything above. Three compiler bugs the
+> ports hit are fixed with them, and one gap on the uncatchable-panics report
+> is closed.
+>
+> - **SRFI 48** (`stdlib/srfi/48.scm`) is the reference implementation (D6:
+>   portable, MIT), as the SRFI's repository carries it with Hamayama's 2017
+>   `~F` fixes. The adaptations are marked in the file:
+>   - a call without a port no longer goes through `apply`, which stops at
+>     eight arguments here;
+>   - the format string is copied once, so `string-ref` on it is constant
+>     time (2.5);
+>   - R7RS's `inexact`/`exact` and `write-shared` stand in for their R5RS
+>     and SRFI 38 names.
+>
+>   The repository's test file is the suite, `tests/r7rs/srfi/48/tests.scm`:
+>   183 passed and 14 settled of 197 on both back ends. The 14 assume
+>   Gauche's `number->string`, which switches to exponent notation sooner
+>   (`3.2e11`, `-3e-4`); here those print in full. The SRFI leaves that point
+>   to the implementation. Each is a SETTLED entry in the runner, and the
+>   runner checks at run time that the spelling still holds.
+> - **SRFI 28** is SRFI 48's `format`, re-exported. Importing both binds it
+>   once. An SRFI library may now be only a re-export of an SRFI it imports,
+>   with no body; tests/check-r7rs-srfi-sync.sh accepts that.
+> - **SRFI 64** (`stdlib/srfi/64.scm`) is Taylan Kammer's R7RS
+>   implementation from the repository, its four libraries flattened into
+>   one. Changes, marked in the file:
+>   - `test-runner-factory` and `test-runner-current` are globals behind
+>     procedures; the original sets parameter objects by calling them;
+>   - the default runner writes no log file;
+>   - after the summary, the default runner's outermost `test-end` exits
+>     with status 1 when a test failed or passed unexpectedly. That is the
+>     `tur test` integration: a failing suite fails the file, and a clean one
+>     returns so the program goes on;
+>   - `test-error` takes `#t` or a predicate (SRFI 35's condition types come
+>     in S7);
+>   - `test-read-eval-string` is syntax. It spells `eval` and the reader
+>     where it is used, so only a program that calls it pays for
+>     `(scheme eval)` (the interpreter, +3 s and ~1.5 MB) or `(scheme read)`;
+>   - no source locations (no syntax-case), so a failure prints its form.
+>
+>   The SRFI's meta-suite is `tests/r7rs/srfi/64/tests.scm`, 53 of 53 on
+>   both back ends. It is itself an SRFI 64 program, so the runner gains
+>   `--self-hosted` (a `self-hosted` marker in the suite directory): it runs
+>   the file whole and reads the summary. `tur init --r7rs` scaffolds an SRFI
+>   64 test in both shapes, and run-init-r7rs.sh checks that a failing one
+>   fails `tur test`.
+> - **SRFI 78** (`stdlib/srfi/78.scm`) is the reference `check.scm`, less
+>   `check-ec`. Its mode and counters start initialized instead of being set
+>   by load-time calls.
+> - **Fixed on the way:**
+>   - *An `if` joining a capturing closure and a thin function*
+>     (`((if c (lambda () c) (lambda () 0)))`): the thin arm was stored raw
+>     where the join expects a fat box, and calling it read code as an env.
+>     The join now boxes the thin arm (src/compiler/elab_forms.c). SRFI 48's
+>     `format` with a port crashed on it. Pinned by
+>     `tests/fixtures/if-joins-closure-and-thin-fn`.
+>   - *A `letrec` member calling an earlier sibling that is a closure* was
+>     not captured, and cc rejected the lifted body. SRFI 64's simple runner
+>     has two internal defines of that shape. Now captured
+>     (src/compiler/elab_core.c; `letrec-sibling-closure-capture`). Two
+>     capturing members that call each other are still open:
+>     docs/reported/letrec-mutual-recursion-between-capturing-closures.md.
+>   - *A top-level `(define f (case-lambda ...))` whose clause calls `f`* was
+>     "unknown function f"; it is a defn now, as a lambda define is
+>     (`r7rs-case-lambda-define-recurs`).
+>   - *`vector-ref` and `vector-set!` out of range* raise an error object
+>     instead of panicking. That is what `test-error` tests, in the
+>     meta-suite and in practice (`r7rs-vector-index-error`). The rest of
+>     docs/reported/r7rs-type-errors-are-uncatchable-panics.md stays open.
+> - **Cost.** An unused import adds 14 emitted lines for (srfi 48), 4 for
+>   (srfi 78) and 320 for (srfi 64), whose `(scheme process-context)` is
+>   most of that. A one-test SRFI 64 file adds about 5,400 lines and 2 s of
+>   build over an empty program. One `format` call adds about 2,000 lines.
+> - **Fixtures:** `r7rs-srfi-28`, `r7rs-srfi-48`, `r7rs-srfi-64`,
+>   `r7rs-srfi-64-failing` (`expected.exit` 1), `r7rs-srfi-64-read-eval` and
+>   `r7rs-srfi-78`, plus the three bug fixtures above. All pass on both back
+>   ends, under `TUR_GC_TORTURE` and under the sanitizers.
 
 ### S7 -- data and control (medium each)
 

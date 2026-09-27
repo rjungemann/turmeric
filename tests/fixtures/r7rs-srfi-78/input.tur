@@ -1,0 +1,38 @@
+#lang r7rs
+;; r7rs-srfi-plan S6: SRFI 78 on both back ends -- the SRFI's own examples
+;; (examples.scm) less check-ec, which comes with SRFI 42 (S7), then the
+;; modes and the summary.
+(import (scheme base) (scheme write) (srfi 78))
+
+(check (+ 1 1) => 2)
+(check (+ 1 1) => 3) ; fails
+(check (vector 1) => (vector 1))
+(check (vector 1) (=> eq?) (vector 1)) ; fails
+
+(define (fib n)
+  (if (<= n 2) 1 (+ (fib (- n 1)) (fib (- n 2)))))
+(check (fib 1) => 1)
+(check (fib 2) => 1)
+(check-report)
+(write (check-passed? 4))
+(newline)
+
+;; report-failed prints only failures; summary nothing but the report; off
+;; skips the checks entirely.
+(check-reset!)
+(check-set-mode! 'report-failed)
+(check (* 2 3) => 6)
+(check (* 2 3) => 7)
+(check-set-mode! 'summary)
+(check (car '(a)) => 'a)
+(check-set-mode! 'off)
+(check (error "never evaluated") => 0)
+(check-set-mode! 'report)
+(check-report)
+(write (list (check-passed? 2) (check-passed? 3)))
+(newline)
+(check-reset!)
+(check (string-append "a" "b") => "ab")
+(check-report)
+(write (check-passed? 1))
+(newline)

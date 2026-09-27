@@ -1,0 +1,24 @@
+;; if-joins-closure-and-thin-fn: an `if` whose arms are the same function
+;; type in two representations -- a capturing closure (a fat box) and a thin
+;; code pointer (a non-capturing lambda, or a defn named as a value).  The
+;; join boxes the thin arm; calling it through the fat protocol unboxed read
+;; its code as an env and crashed.
+(defn five [] : int 5)
+
+(defn pick [c : bool n : int] : int
+  ((if c (fn [] : int n) (fn [] : int 0))))
+
+(defn pick-rev [c : bool n : int] : int
+  ((if c (fn [] : int 0) (fn [] : int n))))
+
+(defn pick-named [c : bool n : int] : int
+  ((if c (fn [] : int n) five)))
+
+(defn main [] : int
+  (println (pick true 7))
+  (println (pick false 7))
+  (println (pick-rev true 7))
+  (println (pick-rev false 7))
+  (println (pick-named true 7))
+  (println (pick-named false 7))
+  0)

@@ -450,7 +450,7 @@ R7RS's own forms already are the SRFI's.
 | 25 | Multi-dimensional Array Primitives | not yet (S8) | library |  |
 | 26 | Notation for Specializing Parameters without Currying | library | library | `cut` and `cute`, the SRFI's reference implementation |
 | 27 | Sources of Random Bits | not yet (S7) | library |  |
-| 28 | Basic Format Strings | not yet (S6) | re-export (Racket's `format`) | not in R7RS, so a library here |
+| 28 | Basic Format Strings | library | re-export (Racket's `format`) | SRFI 48's `format`, re-exported: one engine, so importing both SRFIs binds `format` once. SRFI 48's directives work here too |
 | 29 | Localization | not yet (S8) | library |  |
 | 30 | Nested Multi-line Comments | built in | empty module | `#\| \|#` nests; the library is empty, as Racket's is |
 | 31 | A special form rec for recursive evaluation | library | library | `rec`, the SRFI's own definition |
@@ -463,7 +463,7 @@ R7RS's own forms already are the SRFI's.
 | 42 | Eager Comprehensions | not yet (S7) | library |  |
 | 43 | Vector Library | not yet (S8) | library | its index-first `vector-map` differs from R7RS's |
 | 45 | Primitives for Expressing Iterative Lazy Algorithms | alias | library | `lazy` is `delay-force`, `eager` is `make-promise` |
-| 48 | Intermediate Format Strings | not yet (S6) | library |  |
+| 48 | Intermediate Format Strings | library | library | The reference implementation. `~Y` pretty-prints with `write`, as the SRFI permits. Where `~w,dF` switches to exponent notation follows `number->string`: `3.2e11` prints in full here, as `320000000000.0` |
 | 54 | Formatting | not yet (S8) | library |  |
 | 57 | Records | not yet (S8) | library |  |
 | 59 | Vicinity | not yet (S8) | library |  |
@@ -471,13 +471,13 @@ R7RS's own forms already are the SRFI's.
 | 61 | A more general cond clause | library | library | `(generator guard => receiver)` clauses in `cond`, on in a file that imports it; the export is R7RS's own `cond`, so it sits beside `(scheme base)` |
 | 62 | S-expression comments | no library | no module | `#;` is always on; the import is an error that says so, as in Racket |
 | 63 | Homogeneous and Heterogeneous Arrays | not yet (S8) | library |  |
-| 64 | A Scheme API for test suites | not yet (S6) | library |  |
+| 64 | A Scheme API for test suites | library | library | Taylan Kammer's R7RS implementation. The default runner prints to the current output port (no log file), and after a failure or an unexpected pass its outermost `test-end` exits with status 1, so `tur test` fails the file; `tur init --r7rs` scaffolds a test in it. `test-error` takes `#t` or a predicate (condition types wait for SRFI 35). `test-read-eval-string` is syntax, so only a program that uses it needs `(scheme eval)`. Failures print the form, with no file or line |
 | 66 | Octet Vectors | not yet (S7) | library |  |
 | 67 | Compare Procedures | not yet (S8) | library |  |
 | 69 | Basic hash tables | library | library | Written for Turmeric. `hash` agrees with `equal?` and `hash-by-identity` with `eq?`/`eqv?`. A table made without a hash function works for all five standard equivalences (`eq?`, `eqv?`, `equal?`, `string=?`, `string-ci=?`); for any other equivalence, pass the hash function that agrees with it |
 | 71 | Extended LET-syntax for multiple values | not yet (S8) | library |  |
 | 74 | Octet-Addressed Binary Blocks | not yet (S8) | library |  |
-| 78 | Lightweight testing | not yet (S6) | library |  |
+| 78 | Lightweight testing | library | library | The reference implementation, less `check-ec`, which needs SRFI 42 (S7). Nothing ends the program: to fail `tur test`, end with an `exit` on `check-passed?` |
 | 86 | MU and NU simulating VALUES and CALL-WITH-VALUES | not yet (S8) | library |  |
 | 87 | => in case clauses | built in | library | R7RS `case` takes `=>` |
 | 98 | An interface to access environment variables | built in | library | re-exports `(scheme process-context)`'s two procedures |

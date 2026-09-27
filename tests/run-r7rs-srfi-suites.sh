@@ -13,6 +13,10 @@
 #                                   suite's (scheme base), space-separated
 #                                   (SRFI 13's string-map and
 #                                   string-for-each conflict with R7RS's, D5)
+#   tests/r7rs/srfi/<N>/self-hosted optional marker: the suite is an SRFI
+#                                   64 program, run whole, and counted by its
+#                                   own summary (SRFI 64's meta-suite, whose
+#                                   names are the harness's)
 #
 # Like tur_r7rs_conformance, this fails only on a REGRESSION: fewer passes
 # than a suite's floor.  Raise the floor when the count goes up.  Where a suite
@@ -58,6 +62,9 @@ for n in $NUMS; do
         while IFS= read -r set; do
             [ -n "$set" ] && extra+=(--import "$set")
         done < "$dir/imports"
+    fi
+    if [ -f "$dir/self-hosted" ]; then
+        extra+=(--self-hosted)
     fi
     if [ -f "$dir/base-except" ]; then
         for name in $(cat "$dir/base-except"); do
