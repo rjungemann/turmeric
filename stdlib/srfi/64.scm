@@ -9,7 +9,9 @@
 ;;;   - the default runner writes no log file, and its outermost test-end
 ;;;     exits with status 1 after a failure or an unexpected pass
 ;;;     (r7rs-srfi-plan S6);
-;;;   - test-error takes #t or a predicate as the error type, until SRFI 35;
+;;;   - test-error takes #t, a predicate or an SRFI 35 condition type as
+;;;     the error type (an R7RS error object has the condition types &error
+;;;     and &message);
 ;;;   - test-read-eval-string is syntax, so that only a program using it
 ;;;     links (scheme eval);
 ;;;   - no source locations: this lowering has no syntax-case.
@@ -76,7 +78,7 @@
     test-on-bad-count-simple test-on-bad-end-name-simple
     )
   (import (scheme base) (scheme case-lambda) (scheme complex) (scheme write)
-          (scheme process-context) (srfi 48))
+          (scheme process-context) (srfi 35) (srfi 48))
   (begin
 
     ;;; ---- test-runner.body.scm ----
@@ -687,14 +689,16 @@
          (test-compare/source-info
           <source-info> (approx= <error-margin>) <name> <expected> <expr>))))
 
-    ;; Turmeric: an error type is #t or a predicate.  SRFI 35's condition
-    ;; types come with SRFI 35 (r7rs-srfi-plan S7).
+    ;; Turmeric: an error type is #t, a predicate or an SRFI 35 condition
+    ;; type (r7rs-srfi-plan S7).
     (define (error-matches? err type)
       (cond
        ((eq? type #t)
         #t)
        ((procedure? type)
         (type err))
+       ((condition-type? type)
+        (and (condition? err) (condition-has-type? err type)))
        (else
         (let ((runner (test-runner-get)))
           ((%test-runner-on-bad-error-type runner) runner type err))

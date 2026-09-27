@@ -1,0 +1,41 @@
+#lang r7rs
+;; r7rs-srfi-plan S7: SRFI 60 on both back ends.  The suite
+;; (tests/r7rs/srfi/60/) is the thorough check; this pins the document's
+;; examples, two's complement negatives, and both halves of the
+;; implementation: two fixnums go to the prelude's bit operations, a bignum
+;; is taken 30 bits at a time (bignums are base-1e9 limbs, not bits).
+(import (scheme base) (scheme write) (srfi 60))
+(define (show x) (write x) (newline))
+(show (number->string (logand #b1100 #b1010) 2))
+(show (number->string (logior #b1100 #b1010) 2))
+(show (number->string (logxor #b1100 #b1010) 2))
+(show (number->string (lognot #b10000000) 2))
+(show (list (logtest #b0100 #b1011) (logtest #b0100 #b0111)))
+(show (list (logcount #b10101010) (logcount 0) (logcount -2)))
+(show (list (integer-length #b10101010) (integer-length 0) (integer-length #b1111)))
+(show (map log2-binary-factors '(0 -1 -2 -3 -4 -16 16 12)))
+(show (map (lambda (i) (logbit? i #b1101)) '(0 1 2 3 4)))
+(show (list (number->string (copy-bit 0 0 #t) 2) (number->string (copy-bit 2 0 #t) 2) (number->string (copy-bit 2 #b1111 #f) 2)))
+(show (list (number->string (bit-field #b1101101010 0 4) 2) (number->string (bit-field #b1101101010 4 9) 2)))
+(show (list (number->string (copy-bit-field #b1101101010 0 0 4) 2) (number->string (copy-bit-field #b1101101010 -1 0 4) 2) (number->string (copy-bit-field #b110100100010000 -1 5 9) 2)))
+(show (list (number->string (ash #b1 3) 2) (number->string (ash #b1010 -1) 2)))
+(show (list (number->string (rotate-bit-field #b0100 3 0 4) 2) (number->string (rotate-bit-field #b0100 -1 0 4) 2) (number->string (rotate-bit-field #b110100100010000 -1 5 9) 2) (number->string (rotate-bit-field #b110100100010000 1 5 9) 2)))
+(show (number->string (reverse-bit-field #xa7 0 8) 16))
+(show (list (integer->list 6) (integer->list 6 5) (list->integer '(#t #f #t)) (booleans->integer #t #t)))
+;; Bignums, and fixnums shifted into and out of them.
+(show (logand (- (expt 2 100) 1) (expt 2 99)))
+(show (logior (expt 2 100) 1))
+(show (logxor (- (expt 2 70)) -1))
+(show (logand -1 (expt 2 80)))
+(show (logand (- (expt 2 80)) (- (expt 2 70))))
+(show (ash 1 100))
+(show (ash (expt 2 100) -98))
+(show (ash (- (expt 2 100)) -98))
+(show (ash -5 -1))
+(show (ash -5 -100))
+(show (integer-length (expt 2 100)))
+(show (logcount (- (expt 2 100) 1)))
+(show (bit-count -256))
+(show (logand))
+(show (logior 1 2 4 8))
+(show (guard (e ((error-object? e) (error-object-message e))) (logand 1.5 1)))

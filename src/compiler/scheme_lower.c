@@ -420,13 +420,13 @@ static const SrfiRow SRFI_LIBS[] = {
     {  23, SRFI_BUILTIN,    "Error reporting mechanism", "stdlib/srfi/23.scm", NULL },
     {  25, SRFI_NOTYET,     "Multi-dimensional Array Primitives", NULL, "S8" },
     {  26, SRFI_LIBRARY,    "Notation for Specializing Parameters without Currying", "stdlib/srfi/26.scm", NULL },
-    {  27, SRFI_NOTYET,     "Sources of Random Bits", NULL, "S7" },
+    {  27, SRFI_LIBRARY,    "Sources of Random Bits", "stdlib/srfi/27.scm", NULL },
     {  28, SRFI_LIBRARY,    "Basic Format Strings", "stdlib/srfi/28.scm", NULL },
     {  29, SRFI_NOTYET,     "Localization", NULL, "S8" },
     {  30, SRFI_BUILTIN,    "Nested Multi-line Comments", "stdlib/srfi/30.scm", NULL },
     {  31, SRFI_LIBRARY,    "A special form rec for recursive evaluation", "stdlib/srfi/31.scm", NULL },
     {  34, SRFI_BUILTIN,    "Exception Handling for Programs", "stdlib/srfi/34.scm", NULL },
-    {  35, SRFI_NOTYET,     "Conditions", NULL, "S7" },
+    {  35, SRFI_LIBRARY,    "Conditions", "stdlib/srfi/35.scm", NULL },
     {  38, SRFI_ALIAS,      "External Representation for Data With Shared Structure", "stdlib/srfi/38.scm", NULL },
     {  39, SRFI_BUILTIN,    "Parameter objects", "stdlib/srfi/39.scm", NULL },
     {  40, SRFI_NOTPLANNED, "A Library of Streams", NULL,
@@ -439,7 +439,7 @@ static const SrfiRow SRFI_LIBS[] = {
     {  54, SRFI_NOTYET,     "Formatting", NULL, "S8" },
     {  57, SRFI_NOTYET,     "Records", NULL, "S8" },
     {  59, SRFI_NOTYET,     "Vicinity", NULL, "S8" },
-    {  60, SRFI_NOTYET,     "Integers as Bits", NULL, "S7" },
+    {  60, SRFI_LIBRARY,    "Integers as Bits", "stdlib/srfi/60.scm", NULL },
     {  61, SRFI_LIBRARY,    "A more general cond clause", "stdlib/srfi/61.scm", NULL },
     {  62, SRFI_NOLIB,      "S-expression comments", NULL,
         "its `#;` datum comments are part of the reader and always on, as in Racket, which has no library for it either; this import can be deleted" },
@@ -2120,12 +2120,14 @@ static void push_param(SL *sl, FB *b, Span sp, const Symbol *name) {
 }
 
 /* (let [^mut p : any p] body) for every parameter in `params` that `body`
- * sets -- the mutable-local rebinding push_param promises. */
+ * sets -- the mutable-local rebinding push_param promises.  Not the rest
+ * parameter: rebind_rest has already bound it, mutable when it is set. */
 static Form *rebind_muts(SL *sl, Span sp, const Form *params, Form *body) {
     FB b = {0};
     for (uint32_t i = 0; i < params->as.list.len; i++) {
         const Form *p = params->as.list.items[i];
-        if (p->tag != F_SYM || p->as.sym == sl->t_amp) continue;
+        if (p->tag == F_SYM && p->as.sym == sl->t_amp) break;
+        if (p->tag != F_SYM) continue;
         if (form_sets(sl, p->as.sym, body))
             push_binding(sl, &b, sp, p->as.sym, Sym(sl, sp, p->as.sym), true);
     }
@@ -3732,6 +3734,9 @@ static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
             }
             Form *body = rebind_rest(sl, sp, rest,
                                      lower_body(sl, f->as.list.items + 2, f->as.list.len - 2, sp));
+            /* A parameter the body `set!`s is a mutable local, as in a
+             * lambda (r7rs-toplevel-define-sets-its-parameter). */
+            body = rebind_muts(sl, sp, params, body);
             scope_close(sl, saved);
             if (name == sl->s_main && params->as.list.len == 0) {
                 /* `(define (main) ...)` is the program's entry: Turmeric's main

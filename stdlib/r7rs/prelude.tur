@@ -2908,6 +2908,28 @@
     (vec-free-o parent 0)
     r))
 
+;;; ---- fixnum bits (r7rs-srfi-plan S7: SRFI 60) -----------------------------
+;;;
+;;; SRFI 60's fast path: two fixnums (Scheme's int-carried exact integers) in
+;;; two's complement, which is what the SRFI specifies for negatives too.
+;;; Bignums take the SRFI's arithmetic formulation in stdlib/srfi/60.scm, as
+;;; they are base-1e9 limbs, not bits.  Plain Turmeric, the same on both back
+;;; ends.
+
+;;; r7rs-fx-and__ -- internal: the bitwise AND of two fixnums.
+(defn r7rs-fx-and__ [a : int b : int] : int (bit-and a b))
+;;; r7rs-fx-ior__ -- internal: the bitwise inclusive OR of two fixnums.
+(defn r7rs-fx-ior__ [a : int b : int] : int (bit-or a b))
+;;; r7rs-fx-xor__ -- internal: the bitwise exclusive OR of two fixnums.
+(defn r7rs-fx-xor__ [a : int b : int] : int (bit-xor a b))
+;;; r7rs-fx-shr__ -- internal: fixnum a shifted right k places, 0 <= k < 64,
+;;; rounding toward negative infinity.  bit-shr is a logical shift, so a
+;;; negative a is shifted as its complement, which is non-negative.
+(defn r7rs-fx-shr__ [a : int k : int] : int
+  (if (< a 0)
+    (bit-xor (bit-shr (bit-xor a -1) k) -1)
+    (bit-shr a k)))
+
 ;;; ---- hashing (r7rs-srfi-plan S4: SRFI 69) --------------------------------
 ;;;
 ;;; Each hash is a non-negative int below 2^30, so a table's arithmetic on it
