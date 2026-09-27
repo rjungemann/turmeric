@@ -1,0 +1,39 @@
+#lang r7rs
+;; r7rs-srfi-plan S2: the four syntax-rules SRFIs, on both back ends.  Each
+;; SRFI's own suite (tests/r7rs/srfi/<N>/) is the thorough check; this pins
+;; one use of each shape.
+(import (scheme base) (scheme write) (srfi 2) (srfi 8) (srfi 26) (srfi 31))
+
+;; SRFI 8: receive over fixed, dotted and rest formals.
+(write (list (receive (q r) (floor/ 17 5) (list q r))
+             (receive (a . rest) (values 1 2 3) (list a rest))
+             (receive all (values 4 5) all)))
+(newline)
+
+;; SRFI 31: rec, in both forms, and the SRFI's own tail-recursive factorial.
+(write (list ((rec (fact n) (if (= n 0) 1 (* n (fact (- n 1))))) 10)
+             (let ((F (rec (F N) ((rec (G K L) (if (zero? K) L (G (- K 1) (* K L)))) N 1))))
+               (F 10))
+             ((rec loop (lambda (n acc) (if (= n 0) acc (loop (- n 1) (+ acc n))))) 100 0)))
+(newline)
+
+;; SRFI 2: a binding, a test, a guard that stops the chain, and the empty cases.
+(write (list (and-let* ((x 5) ((> x 3)) (y (* x 2))) (+ x y))
+             (and-let* ((x (assq 'z '((a . 1)))) (y (cdr x))) y)
+             (and-let* ((x (assq 'a '((a . 1)))) (y (cdr x))) y)
+             (and-let* () 'empty-body)
+             (and-let* ())))
+(newline)
+
+;; SRFI 26: slots, a rest slot, a slot in operator position, and cute
+;; evaluating its non-slot expressions once where cut evaluates them per call.
+(write (list ((cut cons 1 <>) 2)
+             ((cut list <> 'b <>) 'a 'c)
+             ((cut list 1 <...>) 2 3 4)
+             ((cut <> 1 2) +)
+             (map (cut * 2 <>) '(1 2 3))
+             (let ((n 0))
+               (let ((f (cute + (begin (set! n (+ n 1)) n) <>))) (f 10) (f 10) n))
+             (let ((n 0))
+               (let ((f (cut + (begin (set! n (+ n 1)) n) <>))) (f 10) (f 10) n))))
+(newline)

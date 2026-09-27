@@ -404,12 +404,12 @@ static const SrfiRow SRFI_LIBS[] = {
     {   0, SRFI_NOLIB,      "Feature-based conditional expansion construct", NULL,
         "cond-expand is R7RS syntax, available without an import" },
     {   1, SRFI_NOTYET,     "List Library", NULL, "S3" },
-    {   2, SRFI_NOTYET,     "AND-LET*", NULL, "S2" },
+    {   2, SRFI_LIBRARY,    "AND-LET*", "stdlib/srfi/2.scm", NULL },
     {   4, SRFI_NOTYET,     "Homogeneous numeric vector datatypes", NULL, "S7" },
     {   5, SRFI_NOTYET,     "A compatible let form with signatures and rest arguments", NULL, "S8" },
     {   6, SRFI_BUILTIN,    "Basic String Ports", "stdlib/srfi/6.scm", NULL },
     {   7, SRFI_NOTYET,     "Feature-based program configuration language", NULL, "S8" },
-    {   8, SRFI_NOTYET,     "RECEIVE: Binding to multiple values", NULL, "S2" },
+    {   8, SRFI_LIBRARY,    "RECEIVE: Binding to multiple values", "stdlib/srfi/8.scm", NULL },
     {   9, SRFI_BUILTIN,    "Defining Record Types", "stdlib/srfi/9.scm", NULL },
     {  11, SRFI_BUILTIN,    "Syntax for receiving multiple values", "stdlib/srfi/11.scm", NULL },
     {  13, SRFI_NOTYET,     "String Libraries", NULL, "S5" },
@@ -419,12 +419,12 @@ static const SrfiRow SRFI_LIBS[] = {
     {  19, SRFI_NOTYET,     "Time Data Types and Procedures", NULL, "S8" },
     {  23, SRFI_BUILTIN,    "Error reporting mechanism", "stdlib/srfi/23.scm", NULL },
     {  25, SRFI_NOTYET,     "Multi-dimensional Array Primitives", NULL, "S8" },
-    {  26, SRFI_NOTYET,     "Notation for Specializing Parameters without Currying", NULL, "S2" },
+    {  26, SRFI_LIBRARY,    "Notation for Specializing Parameters without Currying", "stdlib/srfi/26.scm", NULL },
     {  27, SRFI_NOTYET,     "Sources of Random Bits", NULL, "S7" },
     {  28, SRFI_NOTYET,     "Basic Format Strings", NULL, "S6" },
     {  29, SRFI_NOTYET,     "Localization", NULL, "S8" },
     {  30, SRFI_BUILTIN,    "Nested Multi-line Comments", "stdlib/srfi/30.scm", NULL },
-    {  31, SRFI_NOTYET,     "A special form rec for recursive evaluation", NULL, "S2" },
+    {  31, SRFI_LIBRARY,    "A special form rec for recursive evaluation", "stdlib/srfi/31.scm", NULL },
     {  34, SRFI_BUILTIN,    "Exception Handling for Programs", "stdlib/srfi/34.scm", NULL },
     {  35, SRFI_NOTYET,     "Conditions", NULL, "S7" },
     {  38, SRFI_ALIAS,      "External Representation for Data With Shared Structure", "stdlib/srfi/38.scm", NULL },
@@ -1006,6 +1006,12 @@ static const Symbol *lit_orig(const SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_lit; i++) if (sl->lit_from[i] == s) return sl->lit_to[i];
     return s;
 }
+/* The name an identifier was written as: a template's global alias is its
+ * original (quoted data, literal matching), anything else itself. */
+static const Symbol *ident_orig(const SL *sl, const Symbol *s) {
+    const Symbol *g = global_alias_orig(sl, s);
+    return g ? g : s;
+}
 static void sym_pair_push(SL *sl, const Symbol ***from, const Symbol ***to, uint32_t *n, uint32_t *cap,
                           const Symbol *a, const Symbol *b) {
     if (*n == *cap) {
@@ -1030,12 +1036,15 @@ static const Symbol *bind_name(SL *sl, const Symbol *s, Span sp) {
 }
 static const Symbol *rn_global(SL *sl, const Symbol *s);
 static const Symbol *rn(SL *sl, const Symbol *s) {
-    const Symbol *g = global_alias_orig(sl, s);
-    if (g) return rn_global(sl, g);
+    /* A local first.  A template's global alias is never a local -- except
+     * one a later expansion step bound (hyg_pending): then it is that
+     * binding, so looking the alias itself up first is right for both. */
     if (sl->scope) {
         const Symbol *u = scope_lookup(sl->scope, s);
         if (u) return u;
     }
+    const Symbol *g = global_alias_orig(sl, s);
+    if (g) return rn_global(sl, g);
     return rn_global(sl, s);
 }
 /* A keyword test that respects scope: `f` is the identifier `kw` and not a
@@ -1044,7 +1053,7 @@ static const Symbol *rn(SL *sl, const Symbol *s) {
 static bool kw_is(SL *sl, const Form *f, const Symbol *kw) {
     if (!f || f->tag != F_SYM) return false;
     const Symbol *g = global_alias_orig(sl, f->as.sym);
-    if (g) return g == kw;
+    if (g) return g == kw && !(sl->scope && scope_lookup(sl->scope, f->as.sym));
     return f->as.sym == kw && !(sl->scope && scope_lookup(sl->scope, kw));
 }
 
@@ -1324,7 +1333,7 @@ static bool sr_match(SL *sl, const SMacro *m, Form *pat, Form *form, MEnv *env) 
              * (free-identifier=?): a literal a template inserted was renamed
              * like a binder, and is compared by its original name. */
             if (sr_is_literal(m, pat->as.sym))
-                return form->tag == F_SYM && lit_orig(sl, form->as.sym) == lit_orig(sl, pat->as.sym);
+                return form->tag == F_SYM && lit_orig(sl, ident_orig(sl, form->as.sym)) == lit_orig(sl, pat->as.sym);
             if (pat->as.sym == sl->s_underscore) return true;
             if (sr_is_ellipsis(m, pat)) { err(pat, "misplaced ellipsis in pattern"); return false; }
             env_push(env, pat->as.sym, 0, form);
@@ -1667,7 +1676,12 @@ static bool sb_has(const SB *b, const Symbol *s) {
     for (uint32_t i = 0; i < b->n; i++) if (b->syms[i] == s) return true;
     return false;
 }
-static void hyg_resolve_free(SL *sl, const SMacro *m, Form *f, const FB *intro, const SB *made, bool quoted) {
+/* One alias per identifier per expansion: a template that writes `x` twice
+ * (cute's `((x nse) ...)` and `(position ... x)`) means one identifier, and
+ * a later step may bind it (hyg_pending), so both must share the alias. */
+typedef struct { const Symbol **from, **to; uint32_t n, cap; } HygAliases;
+static void hyg_resolve_free(SL *sl, const SMacro *m, Form *f, const FB *intro, const SB *made, bool quoted,
+                             HygAliases *ga) {
     if (!f) return;
     switch (f->tag) {
         case F_SYM: {
@@ -1679,26 +1693,87 @@ static void hyg_resolve_free(SL *sl, const SMacro *m, Form *f, const FB *intro, 
             const Symbol *d = scope_lookup(m->def_scope, x);
             if (d) { f->as.sym = d; return; }
             if (sl->scope && scope_lookup(sl->scope, x)) {
+                for (uint32_t i = 0; i < ga->n; i++)
+                    if (ga->from[i] == x) { f->as.sym = ga->to[i]; return; }
                 char pre[160];
                 snprintf(pre, sizeof pre, "%s__g", x->name);
                 const Symbol *a = fresh(sl, pre);
                 sym_pair_push(sl, &sl->ga_from, &sl->ga_to, &sl->n_ga, &sl->cap_ga, a, x);
+                sym_pair_push(sl, &ga->from, &ga->to, &ga->n, &ga->cap, x, a);
                 f->as.sym = a;
             }
             return;
         }
         case F_QUOTE: return;
-        case F_QUASIQUOTE: hyg_resolve_free(sl, m, f->as.list.items[0], intro, made, true); return;
+        case F_QUASIQUOTE: hyg_resolve_free(sl, m, f->as.list.items[0], intro, made, true, ga); return;
         case F_UNQUOTE: case F_UNQUOTE_SPLICING:
-            hyg_resolve_free(sl, m, f->as.list.items[0], intro, made, false);
+            hyg_resolve_free(sl, m, f->as.list.items[0], intro, made, false, ga);
             return;
         case F_LIST: case F_VEC:
             if (f->tag == F_LIST && f->as.list.len >= 1 && is_sym(f->as.list.items[0], sl->s_quote)) return;
             for (uint32_t i = 0; i < f->as.list.len; i++)
-                hyg_resolve_free(sl, m, f->as.list.items[i], intro, made, quoted);
+                hyg_resolve_free(sl, m, f->as.list.items[i], intro, made, quoted, ga);
             return;
         default: return;
     }
+}
+
+/* R7RS 4.3.2 (hygiene), the binder a later step makes: an identifier the
+ * template inserts as an ARGUMENT of another macro use may become a binder
+ * only once that macro expands -- SRFI 26's reference `cut` inserts `x` at
+ * each recursive step, and the last step makes them all lambda parameters.
+ * Each step's `x` is a different identifier, so here each gets its own
+ * alias, recorded as a global alias of the name: left free it still means
+ * what the name means, and bound by a later step it is that binding (rn
+ * looks an alias up locally first).  Only identifiers nothing else claims:
+ * not bound where the macro was defined or used (hyg_resolve_free's), not a
+ * keyword or macro, not one this expansion already renamed. */
+static bool is_scheme_syntax_name(const char *name);
+static bool hyg_pending_skip(SL *sl, const SMacro *m, const Symbol *x, const SB *made) {
+    if (sb_has(made, x) || global_alias_orig(sl, x)) return true;
+    if (x == m->ellipsis || x == sl->s_ellipsis || x == sl->s_underscore || x == sl->s_dot ||
+        x == sl->s_else || x == sl->s_arrow)
+        return true;
+    if (is_scheme_syntax_name(x->name) || sr_lookup(sl, x)) return true;
+    if (scope_lookup(m->def_scope, x) || (sl->scope && scope_lookup(sl->scope, x))) return true;
+    return false;
+}
+static void hyg_pending_args(SL *sl, const SMacro *m, Form *f, const FB *intro, const SB *made, SB *out) {
+    if (!f) return;
+    if (f->tag == F_SYM) {
+        if (hyg_introduced(intro, f) && !hyg_pending_skip(sl, m, f->as.sym, made) && !sb_has(out, f->as.sym))
+            sb_push(out, f->as.sym, 0);
+        return;
+    }
+    if (f->tag == F_QUOTE) return;
+    if (f->tag != F_LIST && f->tag != F_VEC) return;
+    if (f->tag == F_LIST && f->as.list.len >= 1 && is_sym(f->as.list.items[0], sl->s_quote)) return;
+    for (uint32_t i = 0; i < f->as.list.len; i++) hyg_pending_args(sl, m, f->as.list.items[i], intro, made, out);
+}
+static void hyg_pending(SL *sl, const SMacro *m, Form *f, const FB *intro, const SB *made, SB *out) {
+    if (!f || (f->tag != F_LIST && f->tag != F_VEC)) return;
+    if (f->tag == F_LIST && f->as.list.len >= 1 && is_sym(f->as.list.items[0], sl->s_quote)) return;
+    if (f->tag == F_LIST && f->as.list.len >= 1 && f->as.list.items[0]->tag == F_SYM) {
+        const Symbol *h = f->as.list.items[0]->as.sym;
+        if (h == sl->s_syntax_rules) return;   /* an inner transformer: hyg_inner_sr's */
+        if (sr_lookup(sl, ident_orig(sl, h)) && !(sl->scope && scope_lookup(sl->scope, h))) {
+            for (uint32_t i = 1; i < f->as.list.len; i++)
+                hyg_pending_args(sl, m, f->as.list.items[i], intro, made, out);
+            return;
+        }
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++) hyg_pending(sl, m, f->as.list.items[i], intro, made, out);
+}
+static void hyg_alias_rename(Form *f, const FB *intro, const SB *from, const Symbol **to) {
+    if (!f) return;
+    if (f->tag == F_SYM) {
+        if (!hyg_introduced(intro, f)) return;
+        for (uint32_t i = 0; i < from->n; i++) if (from->syms[i] == f->as.sym) { f->as.sym = to[i]; return; }
+        return;
+    }
+    if (f->tag == F_QUOTE) return;
+    if (f->tag != F_LIST && f->tag != F_VEC) return;
+    for (uint32_t i = 0; i < f->as.list.len; i++) hyg_alias_rename(f->as.list.items[i], intro, from, to);
 }
 
 /* One expansion of `use` by `m`, hygienically renamed; NULL after an error. */
@@ -1733,7 +1808,22 @@ static Form *sr_expand(SL *sl, SMacro *m, Form *use) {
             hyg_rename(sl, x, &intro, &binders, aliases, false);
         }
         sb_free(&binders);
-        hyg_resolve_free(sl, m, x, &intro, &made, false);
+        SB pend = {0};
+        hyg_pending(sl, m, x, &intro, &made, &pend);
+        if (pend.n > 0) {
+            const Symbol **to = (const Symbol **)arena_alloc(sl->a, pend.n * sizeof(const Symbol *));
+            for (uint32_t i = 0; i < pend.n; i++) {
+                char pre[160];
+                snprintf(pre, sizeof pre, "%s__t", pend.syms[i]->name);
+                to[i] = fresh(sl, pre);
+                sym_pair_push(sl, &sl->ga_from, &sl->ga_to, &sl->n_ga, &sl->cap_ga, to[i], pend.syms[i]);
+                sb_push(&made, to[i], 0);
+            }
+            hyg_alias_rename(x, &intro, &pend, to);
+        }
+        sb_free(&pend);
+        HygAliases ga = {0};
+        hyg_resolve_free(sl, m, x, &intro, &made, false, &ga);
         sb_free(&made);
         free(intro.items);
         return x;
@@ -1804,7 +1894,7 @@ static Form *sr_expand_head(SL *sl, Form *f) {
          * alias of the macro's name is the macro. */
         const Symbol *hs = f->as.list.items[0]->as.sym;
         const Symbol *g = global_alias_orig(sl, hs);
-        if (!g && sl->scope && scope_lookup(sl->scope, hs)) return f;
+        if (sl->scope && scope_lookup(sl->scope, hs)) return f;
         SMacro *m = sr_lookup(sl, g ? g : hs);
         if (!m) return f;
         if (++steps > SR_MAX_DEPTH) {
@@ -3053,6 +3143,8 @@ static Form *lower_datum(SL *sl, Form *d) {
     switch (d->tag) {
         case F_SYM:
             if (d->as.sym == sl->t_nil_sym) return Ln(sl, sp, 1, Sym(sl, sp, sl->p_list));
+            /* A template's alias quoted (hyg_pending): the symbol as written. */
+            if (global_alias_orig(sl, d->as.sym)) return form_quote(sl->a, sp, Sym(sl, sp, ident_orig(sl, d->as.sym)));
             return form_quote(sl->a, sp, d);
         case F_LIST:
             if (is_char_form(sl, d)) return d;
@@ -3247,7 +3339,7 @@ static Form *lower(SL *sl, Form *f) {
          * its name -- `(let ((if even?)) (if 7))` calls even?.  A template's
          * alias of a keyword or global is that keyword or global, however
          * the use site binds the name. */
-        if (!global_alias_orig(sl, head->as.sym) && sl->scope && scope_lookup(sl->scope, head->as.sym))
+        if (sl->scope && scope_lookup(sl->scope, head->as.sym))
             return lower_children(sl, f);
     }
     /* The name the head DISPATCHES on: an alias's original.  The form keeps
