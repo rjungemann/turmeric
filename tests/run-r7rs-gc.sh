@@ -105,8 +105,9 @@ cat > "$WORK/seam.tur" <<'EOF'
       (begin (list i i i i) (churn (- i 1)))))
 ;; Keys are Scheme symbols: `'k` is the runtime value of the keyword `:k`,
 ;; and a bare `:k` in Scheme is an identifier
-;; (docs/archive/r7rs-leading-colon-identifiers.md).
-(define m (map-assoc #map{:a 1} 'k (list 1 2 3 "four" (vector 5 6))))
+;; (docs/archive/r7rs-leading-colon-identifiers.md).  Turmeric's `#map{...}`
+;; is not Scheme syntax (docs/archive/r7rs-turmeric-syntax-leaks.md).
+(define m (map-assoc (map-assoc (map-new) 'a 1) 'k (list 1 2 3 "four" (vector 5 6))))
 (churn 20000)
 (define m2 (map-assoc m 's (string-append "hello" " world")))
 (churn 20000)
