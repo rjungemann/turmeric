@@ -1,0 +1,46 @@
+#lang r7rs
+;; A byte out of range, a bytevector index out of range, or a sequence range
+;; out of bounds raises an error object `guard` catches, as vector-ref's
+;; index does
+;; (docs/reported/r7rs-type-errors-are-uncatchable-panics.md).  The byte
+;; checks used to be a panic (`bytevector`, `make-bytevector`) or nothing at
+;; all (`bytevector-u8-set!` stored 256), and a bad range was a panic.
+;; r7rs-srfi-plan S7: SRFI 4 and 66 check their octets through this path.
+(import (scheme base) (scheme write))
+(define (show x) (write x) (newline))
+(define (try thunk)
+  (guard (e ((error-object? e)
+             (list (error-object-message e) (error-object-irritants e))))
+    (thunk)
+    'no-error))
+
+(define b (bytevector 1 2 3))
+(show (try (lambda () (bytevector-u8-set! b 0 256))))
+(show (try (lambda () (bytevector-u8-set! b 0 -1))))
+(show (try (lambda () (bytevector-u8-set! b 0 'x))))
+(show (try (lambda () (bytevector-u8-set! b 3 0))))
+(show (try (lambda () (bytevector-u8-ref b 3))))
+(show (try (lambda () (bytevector-u8-ref b -1))))
+(show (try (lambda () (bytevector 1 300))))
+(show (try (lambda () (bytevector 1 2.5))))
+(show (try (lambda () (make-bytevector 2 -1))))
+(show b)
+
+;; In range, all is as before.
+(bytevector-u8-set! b 0 255)
+(show (list b (bytevector-u8-ref b 0) (make-bytevector 2 7) (bytevector 0 255)))
+
+;; A range out of bounds raises too, through the check every sequence
+;; procedure with start/end arguments shares.
+(show (try (lambda () (bytevector-copy! (make-bytevector 2 0) 0 (bytevector 1 2) 1 3))))
+(show (try (lambda () (bytevector-copy (bytevector 1 2) 2 1))))
+(show (try (lambda () (vector->list (vector 1 2) 0 3))))
+(show (try (lambda () (substring "abc" 2 1))))
+
+;; bytevector-copy! handles overlap in both directions.
+(define c (bytevector 1 2 3 4 5 6))
+(bytevector-copy! c 2 c 0 4)
+(show c)
+(define d (bytevector 1 2 3 4 5 6))
+(bytevector-copy! d 0 d 2 6)
+(show d)

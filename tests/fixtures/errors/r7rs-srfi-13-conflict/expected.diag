@@ -1,0 +1,3 @@
+'string-map' would name both R7RS's own 'string-map' and (srfi 13)'s
+'string-for-each' would name both R7RS's own 'string-for-each' and (srfi 13)'s
+(except (scheme base) string-map)

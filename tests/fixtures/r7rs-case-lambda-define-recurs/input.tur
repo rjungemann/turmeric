@@ -1,0 +1,18 @@
+#lang r7rs
+;; A top-level (define f (case-lambda ...)) whose clause calls f -- the usual
+;; way a case-lambda defaults an argument -- is a defn now, as a lambda
+;; define is; a def's initializer could not see the global it defines
+;; ("unknown function f").  SRFI 64's test-begin and test-result-ref are
+;; written this way.
+(import (scheme base) (scheme write) (scheme case-lambda))
+(define greet
+  (case-lambda
+    ((name) (greet name "hello"))
+    ((name word) (string-append word ", " name))))
+(define (use-before-definition) (count-down 3))
+(define count-down
+  (case-lambda
+    ((n) (count-down n '()))
+    ((n acc) (if (= n 0) acc (count-down (- n 1) (cons n acc))))))
+(write (list (greet "you") (greet "you" "hi") (use-before-definition)))
+(newline)

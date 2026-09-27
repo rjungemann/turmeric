@@ -1,0 +1,50 @@
+
+(+ 1 1) => 2 ; correct
+
+(+ 1 1) => 2 ; *** failed ***
+ ; expected result: 3
+
+(vector 1) => #(1) ; correct
+
+(vector 1) => #(1) ; *** failed ***
+ ; expected result: #(1)
+
+(fib 1) => 1 ; correct
+
+(fib 2) => 1 ; correct
+
+; *** checks *** : 4 correct, 2 failed. First failed example:
+
+(+ 1 1) => 2 ; *** failed ***
+ ; expected result: 3
+#f
+
+(* 2 3) => 6 ; *** failed ***
+ ; expected result: 7
+
+; *** checks *** : 2 correct, 1 failed. First failed example:
+
+(* 2 3) => 6 ; *** failed ***
+ ; expected result: 7
+(#f #f)
+
+(string-append "a" "b") => "ab" ; correct
+
+; *** checks *** : 1 correct, 0 failed.
+#t
+
+(check-ec (nested) (+ 1 1) (=> equal?) 2 ()) => #<nil> ; correct
+
+(check-ec (: x 10) (+ x 1) (=> equal?) (+ x 1) (x)) => #<nil> ; correct (10 cases checked)
+
+(let ((x 9007199254740992.0)) (= (+ x 1) x)) => #t ; *** failed ***
+ ; expected result: #f
+
+(check-ec (nested (: x 10) (: y 10) (: z 10)) (* x (+ y z)) (=> equal?) (+ (* x y) (* x z)) (x y z)) => #<nil> ; correct (1000 cases checked)
+
+(check-ec (: n 1 21) (even? (fib n)) (=> equal?) (= (modulo n 3) 0) (n)) => #<nil> ; correct (20 cases checked)
+
+; *** checks *** : 4 correct, 1 failed. First failed example:
+
+(let ((x 9007199254740992.0)) (= (+ x 1) x)) => #t ; *** failed ***
+ ; expected result: #f

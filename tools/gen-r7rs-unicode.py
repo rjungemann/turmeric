@@ -20,8 +20,9 @@ when that tag does, then
   python3 tools/gen-r7rs-unicode.py --ucd build/ucd
 
 What is covered, and how it is derived:
-  - simple case mapping of a character (char-upcase / -downcase / -foldcase):
-    UnicodeData.txt fields 12-13 and CaseFolding.txt's C+S entries, so
+  - simple case mapping of a character (char-upcase / -downcase / -foldcase,
+    and the titlecase SRFI 13's string-titlecase uses):
+    UnicodeData.txt fields 12-14 and CaseFolding.txt's C+S entries, so
     `(char-upcase #\x1F80)` is #\x1F88 while `(char-upcase #\xDF)` stays
     #\xDF, as R7RS wants;
   - full case mapping of a string (string-upcase / -downcase / -foldcase):
@@ -34,7 +35,11 @@ What is covered, and how it is derived:
     char-upper-case? and char-lower-case? (the Uppercase / Lowercase
     properties), char-numeric? and digit-value (Nd), char-whitespace? (the
     White_Space property, whose list is fixed here since PropList.txt is
-    not among the files ICU ships).
+    not among the files ICU ships);
+  - the runs of SRFI 14's standard character sets (r7rs-srfi-plan S5), from
+    the properties above and UnicodeData.txt's General Category: title-case
+    (Lt), punctuation (P*), symbol (S*), graphic (L* N* M* S* P*) and blank
+    (Zs and U+0009), as SRFI 14's 2019 CharsetDefs note defines them.
 """
 import os
 import re
@@ -70,7 +75,12 @@ def strided(pred):
 
 def map_runs(single):
     """(lo, hi, stride, delta) runs of a codepoint -> codepoint map."""
-    m = [(c, single(c) - c) for c in range(N) if is_char(c) and single(c) != c]
+    return delta_runs([(c, single(c) - c) for c in range(N) if is_char(c) and single(c) != c])
+
+
+def delta_runs(m):
+    """(lo, hi, stride, delta) runs of sorted (codepoint, delta) pairs; a
+    delta of 0 is kept (an entry that maps a character to itself)."""
     out, i = [], 0
     while i < len(m):
         c, d = m[i]
@@ -123,6 +133,7 @@ class UCD:
         self.decimal = {}
         self.upper = {}
         self.lower = {}
+        self.title = {}
         first = None
         for line in open(os.path.join(d, "UnicodeData.txt"), encoding="ascii"):
             f = line.rstrip("\n").split(";")
@@ -144,6 +155,8 @@ class UCD:
                 self.upper[c] = int(f[12], 16)
             if f[13]:
                 self.lower[c] = int(f[13], 16)
+            if f[14]:
+                self.title[c] = int(f[14], 16)
         self.props = {}
         rx = re.compile(r"^([0-9A-F]+)(?:\.\.([0-9A-F]+))?\s*;\s*(\w+)")
         for line in open(os.path.join(d, "DerivedCoreProperties.txt"), encoding="utf-8"):
@@ -194,9 +207,21 @@ def c_block(u):
     cased = strided(has("Cased"))
     ci = strided(has("Case_Ignorable"))
     nd = [c for c in range(N) if is_char(c) and u.gc.get(c) == "Nd" and u.decimal.get(c) == 0]
+    def cat(*prefixes):
+        return lambda c: u.gc.get(c, "Cn").startswith(prefixes)
+    title = strided(lambda c: u.gc.get(c) == "Lt")
+    punct = strided(cat("P"))
+    symbol = strided(cat("S"))
+    graphic = strided(cat("L", "N", "M", "S", "P"))
+    blank = strided(lambda c: c == 0x09 or u.gc.get(c) == "Zs")
     to_upper = map_runs(lambda c: u.upper.get(c, c))
     to_lower = map_runs(lambda c: u.lower.get(c, c))
     to_fold = map_runs(lambda c: u.fold_simple.get(c, c))
+    # Titlecase is the uppercase mapping but for these: the digraphs (U+01C6
+    # titlecases to U+01C5, uppercases to U+01C4) and Georgian Mkhedruli,
+    # which uppercases to Mtavruli and titlecases to itself.
+    to_title = delta_runs(sorted((c, t - c) for c, t in u.title.items()
+                                 if is_char(c) and t != u.upper.get(c, c)))
     def full(table, simple):
         return sorted((c, out) for c, out in table.items()
                       if is_char(c) and out != [simple.get(c, c)])
@@ -217,8 +242,11 @@ typedef struct { uint32_t cp; uint32_t out[3]; } r7rs_uc_special;
               "static const uint32_t r7rs_uc_nd0[%d] = {%s};\n"
               % (len(nd), ",".join("0x%X" % c for c in nd)) +
               c_srange("r7rs_uc_space", [(lo, hi, 1) for lo, hi in WHITE_SPACE]) +
+              c_srange("r7rs_uc_title", title) + c_srange("r7rs_uc_punct", punct) +
+              c_srange("r7rs_uc_symbol", symbol) + c_srange("r7rs_uc_graphic", graphic) +
+              c_srange("r7rs_uc_blank", blank) +
               c_map("r7rs_uc_to_upper", to_upper) + c_map("r7rs_uc_to_lower", to_lower) +
-              c_map("r7rs_uc_to_fold", to_fold) +
+              c_map("r7rs_uc_to_fold", to_fold) + c_map("r7rs_uc_to_title", to_title) +
               c_special("r7rs_uc_sp_upper", sp_upper) + c_special("r7rs_uc_sp_lower", sp_lower) +
               c_special("r7rs_uc_sp_fold", sp_fold))
     code = r"""/* The last run whose lo <= cp, or -1. */
@@ -241,9 +269,18 @@ static uint32_t r7rs_uc_map1(const r7rs_uc_map *t, size_t n, uint32_t cp) {
         return (uint32_t)((int64_t)cp + t[k].delta);
     return cp;
 }
-/* op 0 upper, 1 lower, 2 fold: the simple (one-character) mapping. */
+/* op 0 upper, 1 lower, 2 fold, 3 title: the simple (one-character)
+ * mapping.  Titlecase is the uppercase mapping except where
+ * r7rs_uc_to_title says otherwise. */
 static int64_t r7rs_uc_mapc(int64_t cp, int64_t op) {
     if (cp < 0 || cp >= 0x110000) return cp;
+    if (op == 3) {
+        const r7rs_uc_map *t = r7rs_uc_to_title;
+        long k = r7rs_uc_find(t, sizeof r7rs_uc_to_title / sizeof *r7rs_uc_to_title, sizeof *t, (uint32_t)cp);
+        if (k >= 0 && (uint32_t)cp <= t[k].hi && ((uint32_t)cp - t[k].lo) % t[k].stride == 0)
+            return cp + t[k].delta;
+        op = 0;
+    }
     if (op == 0) return r7rs_uc_map1(r7rs_uc_to_upper, sizeof r7rs_uc_to_upper / sizeof *r7rs_uc_to_upper, (uint32_t)cp);
     if (op == 1) return r7rs_uc_map1(r7rs_uc_to_lower, sizeof r7rs_uc_to_lower / sizeof *r7rs_uc_to_lower, (uint32_t)cp);
     return r7rs_uc_map1(r7rs_uc_to_fold, sizeof r7rs_uc_to_fold / sizeof *r7rs_uc_to_fold, (uint32_t)cp);
@@ -263,6 +300,37 @@ static int64_t r7rs_uc_prop(int64_t cp, int64_t op) {
             return (k >= 0 && c - r7rs_uc_nd0[k] < 10) ? (int64_t)(c - r7rs_uc_nd0[k]) : -1;
         }
     }
+}
+/* SRFI 14's standard sets as the strided runs above, for stdlib/srfi/14.scm
+ * to build its inversion lists from: set 0 letter (Alphabetic), 1 upper-case
+ * (Uppercase), 2 lower-case (Lowercase), 3 whitespace (White_Space), 4 digit
+ * (Nd), 5 title-case (Lt), 6 punctuation (P*), 7 symbol (S*), 8 graphic
+ * (L* N* M* S* P*), 9 blank (Zs and U+0009) -- the definitions of SRFI 14's
+ * 2019 CharsetDefs note.  Field 0 is run i's first code point, 1 its last, 2
+ * its stride (1 or 2); -1 past the last run. */
+static int64_t r7rs_uc_run(int64_t set, int64_t i, int64_t field) {
+    const r7rs_uc_srange *t;
+    size_t n;
+    switch (set) {
+        case 0: t = r7rs_uc_alpha; n = sizeof r7rs_uc_alpha / sizeof *r7rs_uc_alpha; break;
+        case 1: t = r7rs_uc_upper; n = sizeof r7rs_uc_upper / sizeof *r7rs_uc_upper; break;
+        case 2: t = r7rs_uc_lower; n = sizeof r7rs_uc_lower / sizeof *r7rs_uc_lower; break;
+        case 3: t = r7rs_uc_space; n = sizeof r7rs_uc_space / sizeof *r7rs_uc_space; break;
+        case 4: {
+            /* Each Nd zero starts a run of ten digits. */
+            size_t nd = sizeof r7rs_uc_nd0 / sizeof *r7rs_uc_nd0;
+            if (i < 0 || (size_t)i >= nd) return -1;
+            return field == 0 ? (int64_t)r7rs_uc_nd0[i] : field == 1 ? (int64_t)r7rs_uc_nd0[i] + 9 : 1;
+        }
+        case 5: t = r7rs_uc_title; n = sizeof r7rs_uc_title / sizeof *r7rs_uc_title; break;
+        case 6: t = r7rs_uc_punct; n = sizeof r7rs_uc_punct / sizeof *r7rs_uc_punct; break;
+        case 7: t = r7rs_uc_symbol; n = sizeof r7rs_uc_symbol / sizeof *r7rs_uc_symbol; break;
+        case 8: t = r7rs_uc_graphic; n = sizeof r7rs_uc_graphic / sizeof *r7rs_uc_graphic; break;
+        case 9: t = r7rs_uc_blank; n = sizeof r7rs_uc_blank / sizeof *r7rs_uc_blank; break;
+        default: return -1;
+    }
+    if (i < 0 || (size_t)i >= n) return -1;
+    return field == 0 ? (int64_t)t[i].lo : field == 1 ? (int64_t)t[i].hi : (int64_t)t[i].stride;
 }
 static int r7rs_uc_put(char *o, uint32_t cp) {
     if (cp < 0x80) { o[0] = (char)cp; return 1; }
@@ -334,7 +402,7 @@ TUR_HEAD = """;;; r7rs/unicode -- the Unicode tables behind (scheme char) for `#
 ;;;
 ;;; GENERATED by tools/gen-r7rs-unicode.py -- do not edit; regenerate.  The C
 ;;; below is also src/turi/r7rs_unicode.inc, which the interpreter compiles in
-;;; and registers as natives over these three wrappers.
+;;; and registers as natives over these four wrappers.
 ;;;
 ;;; Since: r7rs-lang-plan R10
 ;; The prelude loads this file; nothing else should.
@@ -342,7 +410,7 @@ TUR_HEAD = """;;; r7rs/unicode -- the Unicode tables behind (scheme char) for `#
 
 TUR_TAIL = """
 ;;; r7rs-uc-map__ -- internal: simple case mapping of a codepoint (op 0
-;;; upper, 1 lower, 2 fold).
+;;; upper, 1 lower, 2 fold, 3 title).
 (defn r7rs-uc-map__ [cp : int op : int] : int
   ```c
   return r7rs_uc_mapc(cp, op);
@@ -358,6 +426,12 @@ TUR_TAIL = """
 (defn r7rs-uc-string__ [s : cstr op : int] : cstr
   ```c
   return r7rs_uc_string(s, op);
+  ```)
+;;; r7rs-uc-run__ -- internal: run i of SRFI 14 standard set `which` (field
+;;; 0 its first code point, 1 its last, 2 its stride; -1 past the end).
+(defn r7rs-uc-run__ [which : int i : int field : int] : int
+  ```c
+  return r7rs_uc_run(which, i, field);
   ```)
 """
 

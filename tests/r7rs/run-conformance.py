@@ -65,6 +65,7 @@ SUITE = os.path.join(HERE, "chibi-r7rs-tests.scm")
 # r7rs-srfi-plan D7: the same runner counts an SRFI's own suite
 # (tests/r7rs/srfi/<N>/tests.scm), with its import added to the header.
 EXTRA_IMPORTS = []
+BASE_EXCEPT = []
 
 # plan T7: tests that fail on a difference kept on purpose.  Keyed by the
 # form's text; each entry is the input string and the spelling
@@ -78,11 +79,29 @@ SETTLED = {
     '(test-precision "1.7976931348623157e+308" "+inf.0")':
         ("1.7976931348623157e+308", "1.7976931348623157e308"),
 }
+# r7rs-srfi-plan S6: SRFI 48's ~w,dF works from number->string's spelling,
+# and where that switches to exponent notation is the implementation's (the
+# SRFI says so for ~F; R7RS 6.2.7 leaves number->string's form open).  Its
+# suite assumes Gauche's, which writes 3.2e11 and -3e-4; here they are
+# 320000000000.0 and -0.0003 (exponents from 1e21 and below 1e-6 up).
+for _form, _inp, _ours in [
+        ('(test " 3.20e11" (format "~8,2F" 32e10))', "32e10", "320000000000.0"),
+        ('(test " 3.46e11" (format "~8,2F" 3.4567e11))', "3.4567e11", "345670000000.0"),
+        ('(test " 3.46e11"   (format "~8,2F" 3.4567e11))', "3.4567e11", "345670000000.0"),
+        ('(test "    -3.e-4" (format "~10,0F" -3e-4))', "-3e-4", "-0.0003"),
+        ('(test "   -3.0e-4" (format "~10,1F" -3e-4))', "-3e-4", "-0.0003"),
+        ('(test "  -3.00e-4" (format "~10,2F" -3e-4))', "-3e-4", "-0.0003"),
+        ('(test " -3.000e-4" (format "~10,3F" -3e-4))', "-3e-4", "-0.0003"),
+        ('(test "-3.0000e-4" (format "~10,4F" -3e-4))', "-3e-4", "-0.0003"),
+        ('(test "-3.00000e-4" (format "~10,5F" -3e-4))', "-3e-4", "-0.0003")]:
+    SETTLED[_form] = (_inp, _ours)
 
 TEST_HEADS = {
     "test": 1, "test-assert": 1, "test-error": 1, "test-values": 1,
     "test-numeric-syntax": 2, "test-write-syntax": 1, "test-precision": 1,
-    "test-read-error": 1,
+    "test-read-error": 1, "test-not": 1, "test-equal": 1,
+    # SRFI 69's suite defines these two over test-equal, SRFI 14's test-cs.
+    "test-lset-eq?": 1, "test-lset-equal?": 1, "test-cs": 1,
 }
 DEF_HEADS = {"define", "define-syntax", "define-record-type", "define-values"}
 
@@ -126,6 +145,16 @@ HARNESS = r"""
   (syntax-rules ()
     ((_ expr) (tur-conf-run #t (lambda () (if expr #t #f))))
     ((_ name expr) (tur-conf-run #t (lambda () (if expr #t #f))))))
+(define-syntax test-not
+  (syntax-rules ()
+    ((_ expr) (tur-conf-run #f (lambda () (if expr #t #f))))
+    ((_ name expr) (tur-conf-run #f (lambda () (if expr #t #f))))))
+;; (test-equal equal expected expr): chibi's form, with the comparison given.
+(define-syntax test-equal
+  (syntax-rules ()
+    ((_ equal expected expr)
+     (let ((got (guard (e (#t (tur-conf-error-value e))) expr)))
+       (tur-conf-report (equal expected got) expected got)))))
 (define-syntax test-values
   (syntax-rules ()
     ((_ expected expr)
@@ -256,7 +285,7 @@ def static_test_count(src):
     # A test commented out inside a form (`;;(test ...)`) is not one.
     code = re.sub(r'"(?:[^"\\]|\\.)*"|;[^\n]*',
                   lambda m: m.group(0) if m.group(0)[0] == '"' else "", src)
-    for m in re.finditer(r"\((test[-a-z]*)[\s)]", code):
+    for m in re.finditer(r"\((test[-a-z?]*)[\s)]", code):
         total += TEST_HEADS.get(m.group(1), 0)
     return total
 
@@ -271,6 +300,10 @@ DIAG_RE = re.compile(r"conformance[^:]*\.tur:(\d+):\d+: error")
 def build_program(forms, keep):
     """Program text, and a map from its line numbers to form indices."""
     header = HEADER
+    if BASE_EXCEPT:
+        # An SRFI whose names conflict with (scheme base)'s (D5: SRFI 13's
+        # string-map and string-for-each) leaves R7RS's out.
+        header = header.replace("(scheme base)", "(except (scheme base) %s)" % " ".join(BASE_EXCEPT), 1)
     if EXTRA_IMPORTS:
         # r7rs-srfi-plan D7: an SRFI's own suite imports the SRFI too.
         header = header.rstrip()[:-1] + "\n        " + " ".join(EXTRA_IMPORTS) + ")\n"
@@ -331,6 +364,49 @@ def run_program(tur, backend, text, timeout):
     finally:
         os.unlink(path)
     return out, err, timed_out
+
+
+SUMMARY_RE = {k: re.compile(r"^%s:\s+(\d+)$" % re.escape(k), re.M)
+              for k in ("Passes", "Expected failures", "Failures",
+                        "Unexpected passes", "Skipped tests")}
+
+
+def run_self_hosted(args):
+    """r7rs-srfi-plan S6: a suite written in SRFI 64 itself (its meta-suite)
+    cannot run under the (chibi test) harness -- the names clash -- so it runs
+    whole, with the header's imports, and its default runner's summary is the
+    count: passes and expected failures pass, failures and unexpected passes
+    fail.  A run that prints no summary (it crashed) counts as nothing passed."""
+    with open(args.suite, encoding="utf-8") as f:
+        suite = f.read()
+    header = "#lang r7rs\n(import (scheme base) (scheme write) (scheme char)\n        %s)\n" \
+             % " ".join(EXTRA_IMPORTS)
+    backends = ["interp", "compiled"] if args.backend == "both" else [args.backend]
+    status = 0
+    for be in backends:
+        out, err, timed_out = run_program(args.tur, be, header + suite, args.timeout)
+        got = {}
+        for k, rx in SUMMARY_RE.items():
+            m = rx.search(out)
+            got[k] = int(m.group(1)) if m else None
+        if got["Passes"] is None:
+            why = "timed out" if timed_out else "no summary: " + (err.strip().splitlines() or ["?"])[-1][:80]
+            print("%s [%s]: 0 passed, 0 settled, ? failed (%s)" % (args.label, be, why))
+            status = 1
+            continue
+        passed = got["Passes"] + (got["Expected failures"] or 0)
+        failed = (got["Failures"] or 0) + (got["Unexpected passes"] or 0)
+        print("%s [%s]: %d passed, 0 settled, %d failed (%d skipped; SRFI 64's own count)"
+              % (args.label, be, passed, failed, got["Skipped tests"] or 0))
+        if args.list_failures:
+            for line in out.splitlines():
+                if line.startswith("[FAIL]") or line.startswith("[XPASS]"):
+                    print("  " + line[:120])
+        if passed < args.min_pass:
+            print("%s [%s]: FAIL -- %d passed is below the floor of %d"
+                  % (args.label, be, passed, args.min_pass))
+            status = 1
+    return status
 
 
 def build_fails(tur, forms, idxs, timeout):
@@ -536,12 +612,20 @@ def main():
     ap.add_argument("--suite", default=SUITE, help="the file of tests (default: chibi's R7RS suite)")
     ap.add_argument("--import", dest="imports", action="append", default=[],
                     help="an import set added to the header, e.g. '(srfi 2)' (repeatable)")
+    ap.add_argument("--base-except", dest="base_except", action="append", default=[],
+                    help="a name to leave out of the header's (scheme base) (repeatable)")
+    ap.add_argument("--self-hosted", action="store_true",
+                    help="the suite is an SRFI 64 program: run it whole and "
+                         "read its own summary (SRFI 64's meta-suite)")
     ap.add_argument("--label", default="r7rs-conformance", help="the name the summary lines carry")
     ap.add_argument("--enable", action="append", default=[],
                     help="an experiment to turn on for every run (repeatable)")
     args = ap.parse_args()
     ENABLES.extend(args.enable)
     EXTRA_IMPORTS.extend(args.imports)
+    BASE_EXCEPT.extend(args.base_except)
+    if args.self_hosted:
+        sys.exit(run_self_hosted(args))
 
     with open(args.suite, encoding="utf-8") as f:
         text = f.read()

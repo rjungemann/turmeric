@@ -1,0 +1,45 @@
+#lang r7rs
+;; r7rs-srfi-plan S7: SRFI 35 conditions on both back ends.  chibi's suite
+;; (tests/r7rs/srfi/35/) is the thorough check; this pins the SRFI's own
+;; examples, the decision on section 7's question 4 (an R7RS error object is
+;; a condition of types &error and &message; an SRFI 35 condition is not an
+;; error object), and SRFI 64's test-error taking a condition type.
+(import (scheme base) (scheme write) (srfi 35) (srfi 64))
+(define (show x) (write x) (newline))
+
+;; The SRFI's examples: a hierarchy, a simple and a compound condition.
+(define-condition-type &c &condition c? (x c-x))
+(define-condition-type &c1 &c c1? (a c1-a))
+(define-condition-type &c2 &c c2? (b c2-b))
+(define v1 (make-condition &c1 'x "V1" 'a "a1"))
+(define v3 (condition (&c1 (x "V3/1") (a "a3"))
+                      (&c2 (b "b3"))))
+(show (list (c? v1) (c1? v1) (c2? v1) (c-x v1) (c1-a v1)))
+(show (list (c1? v3) (c2? v3) (c-x v3) (c2-b v3)))
+(show (c-x (make-compound-condition (condition (&c2 (x "V2") (b "b2"))) v3)))
+
+;; Raised and caught by type.
+(define (classify thunk)
+  (guard (e ((error? e) (list 'error (and (message-condition? e)
+                                          (condition-message e))))
+            ((serious-condition? e) 'serious)
+            ((condition? e) 'condition)
+            (else (list 'other e)))
+    (thunk)))
+(show (classify (lambda () (raise (condition (&error) (&message (message "bad")))))))
+(show (classify (lambda () (raise (make-condition &serious)))))
+(show (classify (lambda () (raise v1))))
+(show (classify (lambda () (raise 'boom))))
+
+;; Section 7, question 4: an R7RS error object answers as &error + &message.
+(show (classify (lambda () (error "went wrong" 1 2))))
+(show (classify (lambda () (vector-ref (vector 1 2) 5))))
+(show (error-object? (make-condition &error)))
+
+;; SRFI 64's test-error, given a condition type.
+(test-begin "conditions")
+(test-error "an &error" &error (raise (make-condition &error)))
+(test-error "an error object is an &error" &error (error "bad"))
+(test-error "a &message" &message (raise (condition (&message (message "m")))))
+(test-error "a user type" &c1 (raise v3))
+(test-end "conditions")

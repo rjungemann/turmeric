@@ -1,12 +1,14 @@
 # SRFI libraries for `#lang r7rs`, after Racket's
 
 Status: **S1 and S0 landed 2026-09-26; S2 landed 2026-09-27 except SRFI 17;
-S3 (the pruning pass and SRFI 1) landed 2026-09-27** (see their "What
-shipped" and "What S0 found" notes). SRFI 17 waits on
-docs/reported/r7rs-prelude-procedures-lose-identity.md. S4-S8 to come.
+S3 (the pruning pass and SRFI 1), S4 (SRFI 69), S5 (SRFIs 14 and 13), S6
+(SRFIs 28, 48, 64 and 78) and S7 (SRFIs 4, 27, 35, 41, 42, 60 and 66, and
+78's `check-ec`) landed 2026-09-27** (see their "What shipped" and "What S0
+found" notes). SRFI 17 waits on
+docs/reported/r7rs-prelude-procedures-lose-identity.md. S8 is on demand.
 `(import (srfi N))` resolves for every SRFI in the table: the ten built-in
-rows and the two alias rows import, and the rest are refused with their
-reason. S0's inventory is [Appendix C](#appendix-c----s0-inventory). Its
+rows, the three alias rows and the nineteen library rows import, and the
+rest are refused with their reason. S0's inventory is [Appendix C](#appendix-c----s0-inventory). Its
 measurement said a big SRFI needs its unreferenced definitions dropped
 before emission. S3 built that first, and an unused `(import (srfi 1))` now
 costs nothing. Every "today" claim in Sections 1-2 was measured on
@@ -627,7 +629,8 @@ fixture itself runs on both back ends.
 >   name (`(rename (srfi 87) (case kase))`) becomes a forwarding macro.
 > - **An SRFI file imports `(scheme ...)` libraries only, for now.** SRFI 13
 >   importing SRFI 14 (S5) needs the pre-pass to spell another SRFI's names
->   into the body too. It refuses anything else until then.
+>   into the body too. It refuses anything else until then. (S5 did that:
+>   see its note.)
 > - **`(features)` is written out, not generated.** The prelude is
 >   Turmeric-shaped and is loaded unlowered when a Turmeric program imports a
 >   Scheme library, so a placeholder the lowering fills in broke every
@@ -688,8 +691,9 @@ fixture itself runs on both back ends.
 >   an error that names the import.
 > - **The SRFIs' own suites (D7).** `tests/r7rs/run-conformance.py` takes
 >   `--suite`, `--import` and `--label`. `tests/run-r7rs-srfi-suites.sh`
->   (ctest `tur_r7rs_srfi_suites`) runs each `tests/r7rs/srfi/<N>/tests.scm`
->   against the floor in `tests/r7rs/srfi/<N>/floor`:
+>   (ctest `tur_r7rs_srfi_suites_1` and `_2`, a shard each since S7) runs
+>   each `tests/r7rs/srfi/<N>/tests.scm` against the floor in
+>   `tests/r7rs/srfi/<N>/floor`:
 >   - SRFI 2 runs chibi's suite, 31/31 on both back ends;
 >   - SRFI 26 runs chibi's suite plus the reference `check.scm`, 26/26.
 > - **A hygiene fix SRFI 26 needed** (R7RS 4.3.2). The reference `cut`
@@ -852,6 +856,66 @@ fixture itself runs on both back ends.
 - `hash-table-ref`'s failure thunk, `hash-table-update!/default`,
   `hash-table-walk`, `hash-table-fold` and the rest of the SRFI.
 
+> **What shipped (2026-09-27).** Everything above.
+>
+> - **The primitives** are in the prelude's new hashing section
+>   (stdlib/r7rs/prelude.tur), in Turmeric, so both back ends run the same
+>   code. Only two are C, each with an interpreter twin in
+>   src/turi/interpreter_natives.c:
+>   - `r7rs-identity-word__`: a value's carrier word, the payload
+>     `r7rs-same-ref__` already compares;
+>   - `r7rs-cstr-hash__`: FNV-1a over a string's UTF-8 bytes.
+>
+>   Every hash is a non-negative fixnum below 2^30.
+>   - `hash` (`r7rs-equal-hash__`) walks what `equal?` walks: pairs,
+>     vectors, bytevectors and strings. It reads at most 16 elements of a
+>     list or vector and 64 bytes of a bytevector, three levels down, so it
+>     is quick on a big key and terminates on a cycle, as `equal?` does.
+>   - `hash-by-identity` (`r7rs-eqv-hash__`) hashes by value what `eqv?`
+>     compares by value: numbers (a bignum by its digits, a ratio and a
+>     complex by their parts), string literals, symbols and characters.
+>     `'()` and the eof object are constants, and anything else is hashed
+>     by address, which is stable because the collector does not move.
+>     `eq?` is `eqv?` here, so one hash serves both.
+>   - An integral float hashes as the exact integer does, so a table keyed
+>     by `=` finds 2 from 2.0, and 0.0 and -0.0 land together, as `eqv?`
+>     has them.
+>   - `string-ci-hash` folds an ASCII string as it hashes, and folds any
+>     other with `string-foldcase` first.
+>   - No measurement was needed to choose Scheme over one C walk: a C walk
+>     would have needed a second copy for the interpreter's values.
+> - **The table** is `stdlib/srfi/69.scm`, written for Turmeric (D6). It is
+>   a record over a vector of association-list buckets, doubled past two
+>   entries a bucket. All 24 names are exported, with the hash functions'
+>   optional bound.
+> - **The default hash function.** The reference picks one by comparing the
+>   equivalence with `eq?`, `string=?` and the rest by `eq?`, which a
+>   standard procedure does not pass here
+>   (docs/reported/r7rs-prelude-procedures-lose-identity.md).
+>   `(make-hash-table string-ci=?)` would then have hashed case-sensitively.
+>   The default instead hashes a string key case-folded and anything else
+>   with `hash`. That is right for all five standard equivalences; case
+>   variants merely share a bucket.
+> - **chibi's suite** is `tests/r7rs/srfi/69/tests.scm`: 84 of 84 on both
+>   back ends, and the floor is 84.
+>   - It leaves out one chibi-only test (`make-exception`,
+>     `exception-kind`).
+>   - The runner gains `test-not` and chibi's `test-equal`.
+>   - A suite directory may name more imports in an `imports` file; 69's
+>     suite uses SRFI 1's `lset=`.
+> - **Cost.** An unused `(import (srfi 69))` adds the record's struct and
+>   constructor, 22 lines that nothing calls; the pruning pass drops the
+>   rest. A program using a table adds about 740 lines.
+> - **Fixtures:**
+>   - `r7rs-srfi-69` pins the default hash under each standard equivalence,
+>     `hash`/`equal?` agreement across representations, a circular key, a
+>     `=`-keyed table, and growth, deletion and the whole-table procedures
+>     on 500 entries;
+>   - it passes under `TUR_GC_TORTURE` in run-r7rs-gc.sh and under the
+>     sanitizers;
+>   - `errors/r7rs-srfi-not-yet` and `r7rs-srfi-cond-expand` move their
+>     "not yet" pin to SRFI 13.
+
 ### S5 -- SRFI 14, then 13 (large)
 
 - 14: char sets as sorted inversion lists over code points, and the standard
@@ -863,6 +927,81 @@ fixture itself runs on both back ends.
   repeated `string-ref` (2.5); results are fresh mutable strings. Default
   arguments that are char sets use 14. `string-map` and `string-for-each`
   conflict with base (D5).
+
+> **What shipped (2026-09-27).** Everything above, both SRFIs written for
+> Turmeric (D6).
+>
+> - **The Unicode data.** `tools/gen-r7rs-unicode.py` gains the General
+>   Category sets from the UnicodeData.txt it already read, so
+>   `tools/fetch-ucd.sh` fetches nothing new: title-case (Lt), punctuation
+>   (P\*), symbol (S\*), graphic (L\* N\* M\* S\* P\*) and blank (Zs and
+>   U+0009). They are SRFI 14's 2019 CharsetDefs note's definitions, which
+>   bring its Java-1.0-era tables to current Unicode. One accessor,
+>   `r7rs-uc-run__`, hands Scheme the strided runs of any standard set; it
+>   has an interpreter twin, and tests/check-r7rs-unicode-sync.sh covers the
+>   new C as it does the old. The generator also gains the titlecase
+>   exceptions (op 3 of `r7rs-uc-map__`), which `string-titlecase` needs:
+>   U+01C6 titlecases to U+01C5 but uppercases to U+01C4, and Georgian
+>   Mkhedruli titlecases to itself.
+> - **SRFI 14** (`stdlib/srfi/14.scm`) is a record around an inversion list,
+>   a vector of code points. Membership is a binary search, and union,
+>   intersection, difference and xor are one merge. A set never changes once
+>   made, so the linear-update `!` procedures are the pure ones. Each
+>   standard set is built from the tables the first time a program uses it.
+>   `char-set:full` is every Unicode scalar value, the surrogates left out.
+>   - chibi's suite (Shivers' regression tests) is
+>     `tests/r7rs/srfi/14/tests.scm`: 72 of 72 on both back ends.
+> - **SRFI 13** (`stdlib/srfi/13.scm`) reads each string argument once, as
+>   a vector of characters, and returns fresh mutable strings.
+>   - `string-map` and `string-for-each` are its own, and conflict with
+>     `(scheme base)`, as D5 said.
+>   - The other shared names are R7RS's procedures. `string-upcase` and
+>     `string-downcase` became compatible extensions: the prelude's take
+>     SRFI 13's optional range. They keep R7RS's full case mapping, where
+>     SRFI 13 asks for the one-to-one mapping; the in-place `!` forms use
+>     the one-to-one mapping.
+>   - `string-filter` and `string-delete` accept the criterion first (the
+>     SRFI) or the string first (its drafts, which Guile and Gauche kept).
+>   - `string-concatenate` does not use `apply`, which stops at eight
+>     arguments here.
+>   - SRFI 13 has no suite of its own and chibi has no SRFI 13. The suite is
+>     Gauche's (BSD-3), as Larceny carries it, `tests/r7rs/srfi/13/tests.scm`:
+>     163 of 163 on both back ends. Larceny's file also holds Guile's suite,
+>     which is GPL and is not taken.
+> - **An SRFI file may import another SRFI.** `(import (srfi 14))` in 13's
+>   define-library spells 14's exports onto their `srfi14--` names and
+>   registers its macros. The load expander already spliced the file, so
+>   importing (srfi 13) alone brings 14 along.
+> - **D5's check was fixed.** It had fired whenever the unit imported
+>   `(scheme base)` at all, so its own suggested fix,
+>   `(except (scheme base) string-map)`, did not clear it. It now asks
+>   whether a `(scheme base)` import set makes R7RS's name visible under its
+>   own spelling; `except`, `rename`, `prefix` and an `only` that leaves the
+>   name out all clear it. Two resolution bugs on the same paths were fixed
+>   with it: a `rename` of a standard name that another import set
+>   `except`s, and a `prefix`ed standard name that an SRFI also binds, both
+>   resolved to the wrong procedure. The `(scheme base)` import sets stand
+>   for every standard library, since the lowering keeps no per-library
+>   name lists. That is exact for 13's two names.
+> - **The suite runner** gains `--base-except`, and a suite directory a
+>   `base-except` file, for 13's suite. `test-cs` counts as a test.
+> - **Cost.** An unused `(import (srfi 13))` or `(import (srfi 14))` adds
+>   143 emitted lines, the standard sets' records; the pruning pass drops the
+>   rest. A program that tests `char-set:letter` adds about 890 lines, and
+>   one that uses `string-index`, `string-trim` and `string-join` about
+>   2,200.
+> - **Fixtures:**
+>   - `r7rs-srfi-14`: the standard sets on ASCII and beyond, their sizes
+>     against the UCD, the surrogate hole, and cursors;
+>   - `r7rs-srfi-13`: fresh results, ranges, the hashes, both
+>     `string-filter` orders, titlecase of the digraphs and Georgian, and
+>     the low-level and KMP procedures;
+>   - `errors/r7rs-srfi-13-conflict` pins D5's error for the first
+>     incompatible row, and `r7rs-srfi-conflict-fixes` every fix it names;
+>   - the three that run a program pass under `TUR_GC_TORTURE` in
+>     run-r7rs-gc.sh and under the sanitizers;
+>   - `errors/r7rs-srfi-not-yet` and `r7rs-srfi-cond-expand` move their
+>     "not yet" pin to SRFI 19, an S8 row.
 
 ### S6 -- formatting and testing (medium)
 
@@ -876,6 +1015,84 @@ fixture itself runs on both back ends.
   file on day one.
 - 78 `check`, `check-report` and friends. `check-ec` waits for 42.
 
+> **What shipped (2026-09-27).** Everything above. Three compiler bugs the
+> ports hit are fixed with them, and one gap on the uncatchable-panics report
+> is closed.
+>
+> - **SRFI 48** (`stdlib/srfi/48.scm`) is the reference implementation (D6:
+>   portable, MIT), as the SRFI's repository carries it with Hamayama's 2017
+>   `~F` fixes. The adaptations are marked in the file:
+>   - a call without a port no longer goes through `apply`, which stops at
+>     eight arguments here;
+>   - the format string is copied once, so `string-ref` on it is constant
+>     time (2.5);
+>   - R7RS's `inexact`/`exact` and `write-shared` stand in for their R5RS
+>     and SRFI 38 names.
+>
+>   The repository's test file is the suite, `tests/r7rs/srfi/48/tests.scm`:
+>   183 passed and 14 settled of 197 on both back ends. The 14 assume
+>   Gauche's `number->string`, which switches to exponent notation sooner
+>   (`3.2e11`, `-3e-4`); here those print in full. The SRFI leaves that point
+>   to the implementation. Each is a SETTLED entry in the runner, and the
+>   runner checks at run time that the spelling still holds.
+> - **SRFI 28** is SRFI 48's `format`, re-exported. Importing both binds it
+>   once. An SRFI library may now be only a re-export of an SRFI it imports,
+>   with no body; tests/check-r7rs-srfi-sync.sh accepts that.
+> - **SRFI 64** (`stdlib/srfi/64.scm`) is Taylan Kammer's R7RS
+>   implementation from the repository, its four libraries flattened into
+>   one. Changes, marked in the file:
+>   - `test-runner-factory` and `test-runner-current` are globals behind
+>     procedures; the original sets parameter objects by calling them;
+>   - the default runner writes no log file;
+>   - after the summary, the default runner's outermost `test-end` exits
+>     with status 1 when a test failed or passed unexpectedly. That is the
+>     `tur test` integration: a failing suite fails the file, and a clean one
+>     returns so the program goes on;
+>   - `test-error` takes `#t` or a predicate (SRFI 35's condition types come
+>     in S7);
+>   - `test-read-eval-string` is syntax. It spells `eval` and the reader
+>     where it is used, so only a program that calls it pays for
+>     `(scheme eval)` (the interpreter, +3 s and ~1.5 MB) or `(scheme read)`;
+>   - no source locations (no syntax-case), so a failure prints its form.
+>
+>   The SRFI's meta-suite is `tests/r7rs/srfi/64/tests.scm`, 53 of 53 on
+>   both back ends. It is itself an SRFI 64 program, so the runner gains
+>   `--self-hosted` (a `self-hosted` marker in the suite directory): it runs
+>   the file whole and reads the summary. `tur init --r7rs` scaffolds an SRFI
+>   64 test in both shapes, and run-init-r7rs.sh checks that a failing one
+>   fails `tur test`.
+> - **SRFI 78** (`stdlib/srfi/78.scm`) is the reference `check.scm`, less
+>   `check-ec`. Its mode and counters start initialized instead of being set
+>   by load-time calls.
+> - **Fixed on the way:**
+>   - *An `if` joining a capturing closure and a thin function*
+>     (`((if c (lambda () c) (lambda () 0)))`): the thin arm was stored raw
+>     where the join expects a fat box, and calling it read code as an env.
+>     The join now boxes the thin arm (src/compiler/elab_forms.c). SRFI 48's
+>     `format` with a port crashed on it. Pinned by
+>     `tests/fixtures/if-joins-closure-and-thin-fn`.
+>   - *A `letrec` member calling an earlier sibling that is a closure* was
+>     not captured, and cc rejected the lifted body. SRFI 64's simple runner
+>     has two internal defines of that shape. Now captured
+>     (src/compiler/elab_core.c; `letrec-sibling-closure-capture`). Two
+>     capturing members that call each other are still open:
+>     docs/reported/letrec-mutual-recursion-between-capturing-closures.md.
+>   - *A top-level `(define f (case-lambda ...))` whose clause calls `f`* was
+>     "unknown function f"; it is a defn now, as a lambda define is
+>     (`r7rs-case-lambda-define-recurs`).
+>   - *`vector-ref` and `vector-set!` out of range* raise an error object
+>     instead of panicking. That is what `test-error` tests, in the
+>     meta-suite and in practice (`r7rs-vector-index-error`). The rest of
+>     docs/reported/r7rs-type-errors-are-uncatchable-panics.md stays open.
+> - **Cost.** An unused import adds 14 emitted lines for (srfi 48), 4 for
+>   (srfi 78) and 320 for (srfi 64), whose `(scheme process-context)` is
+>   most of that. A one-test SRFI 64 file adds about 5,400 lines and 2 s of
+>   build over an empty program. One `format` call adds about 2,000 lines.
+> - **Fixtures:** `r7rs-srfi-28`, `r7rs-srfi-48`, `r7rs-srfi-64`,
+>   `r7rs-srfi-64-failing` (`expected.exit` 1), `r7rs-srfi-64-read-eval` and
+>   `r7rs-srfi-78`, plus the three bug fixtures above. All pass on both back
+>   ends, under `TUR_GC_TORTURE` and under the sanitizers.
+
 ### S7 -- data and control (medium each)
 
 - 27: the reference MRG32k3a generator; `random-source-randomize!` seeds
@@ -887,6 +1104,77 @@ fixture itself runs on both back ends.
 - 60: fixnums via Turmeric bit ops, bignums arithmetically.
 - 4 and 66: bytevector aliases and the typed vectors.
 - 78's `check-ec`.
+
+> **What shipped (2026-09-27).** Everything above: seven SRFIs and
+> `check-ec`, each with its suite on both back ends and a fixture. Suites
+> and floors (both back ends pass the same count):
+>
+> | SRFI | File | From | Suite | Passes |
+> |---|---|---|---|---|
+> | 4 | `4.scm` | written for Turmeric | cowan's `shared-tests.scm`, each type written out, plus range checks | 270/270 |
+> | 27 | `27.scm` | the reference MRG32k3a | the reference's `conftest.scm` and chibi's histograms | 36/36 |
+> | 35 | `35.scm` | the reference | chibi's, plus the error-object bridge | 69/69 |
+> | 41 | `41.scm` | chibi's adaptation of the reference | chibi's | 175 interp, 174 compiled, of 187 |
+> | 42 | `42.scm` | the reference `ec.scm`, unchanged | the reference's `examples.scm` | 163/163 |
+> | 60 | `60.scm` | the document's (SLIB `logical.scm`) | the document's examples, plus bignums and a fast-path cross-check | 94/94 |
+> | 66 | `66.scm` | written for Turmeric | the document, procedure by procedure | 40/40 |
+>
+> - **SRFI 42**: its `:` is a lone colon, which the reader now reads as a
+>   symbol in a Scheme source (src/compiler/reader.c); `(: i 3)` was a
+>   type-annotation error. No expander limit was hit. A qualifier the
+>   program writes (`(:list x xs)` in a `check-ec`) expands in the program's
+>   scope, so a program using `check-ec` imports `(srfi 42)` too.
+> - **SRFI 41**: two lowering gaps, fixed. A record type with no fields
+>   (the null stream's) gets a hidden field, and a top-level define whose
+>   init names itself (`(define nats (stream-cons 0 (stream-map add1
+>   nats)))`) is pre-declared like a forward reference. The 13 suite
+>   failures are `test-error` cases: type errors that panic
+>   (docs/reported/r7rs-type-errors-are-uncatchable-panics.md) and calls with
+>   too few arguments, which return a procedure instead of raising
+>   (docs/reported/r7rs-too-few-arguments-returns-a-procedure.md).
+> - **SRFI 35** decides section 7's question 4 (above). It carries local
+>   copies of the five SRFI 1 procedures it uses, so importing it (and SRFI
+>   64, which imports it for `test-error`'s condition types) does not splice
+>   SRFI 1: that saved 0.6 s of every SRFI 64 build.
+> - **SRFI 27**'s histograms draw 1,000 numbers each, not chibi's 10,000:
+>   the interpreter spends about 3 ms on a bignum draw, and the seed is
+>   fixed. The reference's last check (a sum over 10^7 reals) is left out
+>   for time; its `pseudo-randomize!` state check pins the same arithmetic.
+>   `randomize!` seeds from `current-jiffy`.
+> - **SRFI 60** is the plan's split: two fixnums go to four new prelude
+>   helpers over Turmeric's bit operations (`r7rs-fx-and__`, `-ior__`,
+>   `-xor__`, `-shr__`), plain Turmeric, so they need no interpreter twin; a
+>   bignum is taken 30 bits at a time by `floor-quotient` and `modulo`, where
+>   the reference went 4 bits at a time through two tables.
+> - **SRFI 4** is not Appendix C's cowan library, which sits on a 1,000-line
+>   R6RS bytevector layer. The nine non-u8 types are records over Scheme
+>   vectors with range checks, and `u8vector` is SRFI 66's, re-exported, so
+>   importing both SRFIs binds each name once. Cowan's shared tests are the
+>   suite.
+> - **Fixed on the way:**
+>   - *`set!` on a top-level procedure's parameter* was "'x' is immutable":
+>     the lambda path rebinds such a parameter as a mutable local, the
+>     `(define (f x) ...)` path did not. SRFI 60's `rotate-bit-field` found
+>     it. And a set rest parameter was rebound twice, whose second binding
+>     failed to build (`r7rs-toplevel-define-sets-its-parameter`).
+>   - *Bytevector bytes and indices, and every sequence range*, raise an
+>     error object: `bytevector-u8-set!` stored 256 silently, `(bytevector
+>     300)` and a bad `substring`/`vector->list`/`bytevector-copy!` range
+>     panicked (`r7rs-bytevector-range-errors`).
+> - **Order of evaluation.** The two back ends evaluate a call's arguments
+>   in different orders, which R7RS allows; `(list (rand) (rand))` differs
+>   between them. The fixtures sequence their draws.
+> - **Cost.** Emitted lines an unused import adds to a one-line program: 0
+>   for (srfi 66), 18 for (srfi 4), 74 for (srfi 41), 234 for (srfi 35), 652
+>   for (srfi 60), 2,076 for (srfi 27) and 5,500 for (srfi 42). The last two
+>   keep top-level state the pruner cannot drop: SRFI 27's
+>   `default-random-source` and SRFI 42's `:-dispatch` table, which names
+>   every generator. (srfi 64) grew from 320 to 554, by SRFI 35's types.
+> - **Fixtures:** `r7rs-srfi-4`, `-27`, `-35`, `-41`, `-42`, `-60`, `-66`,
+>   `r7rs-srfi-78` (now with `check-ec`), `r7rs-record-type-without-fields`,
+>   `r7rs-toplevel-define-refers-to-itself`,
+>   `r7rs-toplevel-define-sets-its-parameter` and
+>   `r7rs-bytevector-range-errors`.
 
 ### S8 -- the long tail (on demand)
 
@@ -913,10 +1201,23 @@ row in the table.
    Scheme library can wrap an SRFI for it.
 4. **SRFI 35 and R7RS error objects.** Should `(condition-has-type? e &error)`
    hold for an `error` object, and `error-object?` for an SRFI 35 `&error`
-   condition? Chibi and Gauche differ. Decide in S7.
+   condition? Chibi and Gauche differ. **Decided 2026-09-27 (S7): the first
+   yes, the second no.** An R7RS error object is a condition of types
+   `&error` and `&message`, its message `error-object-message`'s, so a
+   handler written against SRFI 35 (`(error? e)`, `(condition-message e)`)
+   works on what `error` and the primitives raise. The reverse would need
+   the prelude's `error-object?` to know SRFI 35's record type, and an SRFI
+   35 condition has no irritants to give `error-object-irritants`; code that
+   raises SRFI 35 conditions tests them with SRFI 35's predicates. The whole
+   bridge is in `stdlib/srfi/35.scm` (`condition?` and the type-field alist
+   accept an error object), and `tests/fixtures/r7rs-srfi-35` pins it.
 5. **SRFI 69's `hash`.** The SRFI's `hash` takes an optional bound; R7RS-era
    code often expects SRFI 128's `default-hash`. Keep 69's names exact, and let
-   125/128 (Section 5) add theirs over the same primitives.
+   125/128 (Section 5) add theirs over the same primitives. **Decided
+   2026-09-27 (S4): as proposed.** 69 exports its own names only, and the
+   prelude's `r7rs-equal-hash__`, `r7rs-eqv-hash__`, `r7rs-string-hash__`
+   and `r7rs-string-ci-hash__` are what 125 and 128 will export under
+   theirs.
 
 ---
 

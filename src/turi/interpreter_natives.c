@@ -3325,7 +3325,7 @@ static TuriValue native_r7rs_big_int(TuriEnv *env, TuriValue *a, uint32_t n, voi
 }
 /* R10: (scheme char)'s Unicode tables -- the SAME generated C the prelude's
  * stdlib/r7rs/unicode.tur compiles in (tools/gen-r7rs-unicode.py writes
- * both), registered below over its three inline-C wrappers. */
+ * both), registered below over its four inline-C wrappers. */
 #include "r7rs_unicode.inc"
 static TuriValue native_r7rs_uc_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -3341,6 +3341,11 @@ static TuriValue native_r7rs_uc_string(TuriEnv *env, TuriValue *a, uint32_t n, v
      * lifetime, the interpreter's allocation model). */
     return turi_cstr(r7rs_uc_string(r7rs_arg_cstr(a, n, 0), r7rs_arg_int(a, n, 1)));
 }
+/* r7rs-srfi-plan S5: the runs of SRFI 14's standard sets. */
+static TuriValue native_r7rs_uc_run(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(r7rs_uc_run(r7rs_arg_int(a, n, 0), r7rs_arg_int(a, n, 1), r7rs_arg_int(a, n, 2)));
+}
 /* R3: the R7RS prelude's string and character primitives. */
 static void r7rs_put_utf8(char *out, int *n, uint32_t cp) {
     if (cp < 0x80) out[(*n)++] = (char)cp;
@@ -3355,6 +3360,30 @@ static TuriValue native_r7rs_same_ref(TuriEnv *env, TuriValue *a, uint32_t n, vo
      * looked up through an `any` box (R8: a vector was never eq? to itself). */
     TuriValue x = turi_any_identity_payload(a[0]), y = turi_any_identity_payload(a[1]);
     return turi_bool(x.tag == y.tag && x.as_int == y.as_int);
+}
+/* r7rs-srfi-plan S4: the twins of the prelude's two hashing primitives.
+ * r7rs-identity-word__ answers the payload word r7rs-same-ref__ compares (a
+ * heap value's address, an int's value, a float's bits); r7rs-cstr-hash__ is
+ * the same FNV-1a, byte for byte, as its inline C. */
+static TuriValue native_r7rs_identity_word(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    return turi_int(turi_any_identity_payload(a[0]).as_int);
+}
+static TuriValue native_r7rs_cstr_hash(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    bool ci = n > 1 && (a[1].tag == TURI_BOOL ? a[1].as_bool : a[1].as_int != 0);
+    uint64_t h = 1469598103934665603ULL;
+    for (const unsigned char *p = (const unsigned char *)r7rs_arg_cstr(a, n, 0); *p; p++) {
+        unsigned char c = *p;
+        if (ci) {
+            if (c >= 0x80) return turi_int(-1);
+            if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
+        }
+        h ^= c;
+        h *= 1099511628211ULL;
+    }
+    return turi_int((int64_t)((h ^ (h >> 30) ^ (h >> 60)) & 0x3FFFFFFFULL));
 }
 static TuriValue native_r7rs_string_length(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -4154,6 +4183,8 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-eval-c-answer-unspecified__", native_r7rs_eval_c_answer_unspecified, NULL);
     turi_env_register_native(env, "r7rs-eval-c-answer-raise__",     native_r7rs_eval_c_answer_raise,     NULL);
     turi_env_register_native(env, "r7rs-same-ref__",       native_r7rs_same_ref,        NULL);
+    turi_env_register_native(env, "r7rs-identity-word__",  native_r7rs_identity_word,   NULL);
+    turi_env_register_native(env, "r7rs-cstr-hash__",      native_r7rs_cstr_hash,       NULL);
     turi_env_register_native(env, "r7rs-blen__",           native_r7rs_string_length,   NULL);
     turi_env_register_native(env, "r7rs-utf8-count__",     native_r7rs_utf8_count,      NULL);
     turi_env_register_native(env, "r7rs-utf8-ref__",       native_r7rs_utf8_ref,        NULL);
@@ -4191,6 +4222,7 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-uc-map__",            native_r7rs_uc_map,             NULL);
     turi_env_register_native(env, "r7rs-uc-prop__",           native_r7rs_uc_prop,            NULL);
     turi_env_register_native(env, "r7rs-uc-string__",         native_r7rs_uc_string,          NULL);
+    turi_env_register_native(env, "r7rs-uc-run__",            native_r7rs_uc_run,             NULL);
     turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
     turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);

@@ -1,0 +1,34 @@
+#lang r7rs
+;; r7rs-srfi-plan S7: SRFI 66 on both back ends.  An octet vector is a
+;; bytevector; the SRFI adds the list conversions, u8vector=?,
+;; u8vector-compare (a shorter vector is smaller, then lexicographic) and
+;; u8vector-copy!, whose arguments are R6RS's order, not bytevector-copy!'s.
+(import (scheme base) (scheme write) (srfi 66))
+(define (show x) (write x) (newline))
+
+(define v (u8vector 1 2 3 4 5))
+(show (list (u8vector? v) (u8vector-length v) (u8vector-ref v 4)))
+(show (list->u8vector '(10 20)))
+(show (u8vector->list (make-u8vector 3 9)))
+
+(show (list (u8vector=? (u8vector 1 2) (bytevector 1 2))
+            (u8vector=? (u8vector 1 2) (u8vector 1 2 3))))
+(show (map (lambda (p) (u8vector-compare (car p) (cdr p)))
+           (list (cons (u8vector 1 2) (u8vector 1 2))
+                 (cons (u8vector 1 2) (u8vector 1 3))
+                 (cons (u8vector 9 9) (u8vector 0 0 0))
+                 (cons (u8vector 2) (u8vector 1)))))
+
+;; (u8vector-copy! source source-start target target-start n), overlapping.
+(u8vector-copy! v 0 v 1 4)
+(show v)
+(define t (make-u8vector 4 0))
+(u8vector-copy! (u8vector 7 8 9) 1 t 2 2)
+(show t)
+
+(define c (u8vector-copy v))
+(u8vector-set! c 0 99)
+(show (list v c))
+
+(show (guard (e ((error-object? e) (error-object-message e)))
+        (u8vector-set! v 0 256)))

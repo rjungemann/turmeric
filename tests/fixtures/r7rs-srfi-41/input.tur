@@ -1,0 +1,62 @@
+#lang r7rs
+;; r7rs-srfi-plan S7: SRFI 41 on both back ends.  chibi's suite
+;; (tests/r7rs/srfi/41/) is the thorough check; this pins the SRFI's own
+;; examples that needed the lowering to grow: a top-level stream defined in
+;; terms of itself, a record type with no fields (the null stream's marker),
+;; and a long walk that delay-force keeps in constant space.
+(import (scheme base) (scheme write) (srfi 41))
+(define (show x) (write x) (newline))
+
+;; Self-referential streams: the define's own name, under stream-cons.
+(define nats (stream-cons 0 (stream-map (lambda (n) (+ n 1)) nats)))
+(define fibs (stream-cons 0 (stream-cons 1 (stream-map + fibs (stream-cdr fibs)))))
+(show (stream->list 10 nats))
+(show (stream->list 12 fibs))
+
+;; define-stream, stream-let, stream-of and stream-match.
+(define-stream (stream-evens s)
+  (stream-filter even? s))
+(show (stream->list 5 (stream-evens nats)))
+(show (stream->list (stream-of (* x x) (x in (stream-range 0 10)) (odd? x))))
+(show (stream-match (stream 1 2 3)
+        ((a b . rest) (list a b (stream->list rest)))))
+(show (stream-match (stream 1 2)
+        (() 'empty)
+        ((_ _ _) 'three)
+        ((a _) (list 'two-starting a))))
+(define (count-up-to k) (stream-let loop ((n 0)) (if (< n k) (stream-cons n (loop (+ n 1))) stream-null)))
+(show (stream->list (count-up-to 7)))
+
+;; The rest of the library, briefly.
+(show (list (stream-ref nats 100) (stream-length (stream-range 0 50 5))
+            (stream->list (stream-append (stream 1 2) (stream 3)))
+            (stream->list 4 (stream-constant 'a 'b))
+            (stream-fold + 0 (stream-range 1 11))
+            (stream->list (stream-scan + 0 (stream 1 2 3)))
+            (stream->list (stream-reverse (stream 1 2 3)))
+            (stream->list (stream-zip (stream 1 2) (stream 'a 'b)))
+            (stream->list (stream-take-while (lambda (n) (< n 3)) nats))
+            (stream->list 3 (stream-drop-while (lambda (n) (< n 5)) nats))
+            (stream->list 5 (stream-iterate (lambda (n) (* n 2)) 1))
+            (stream->list (stream-unfold (lambda (x) (* x x)) (lambda (x) (< x 5)) (lambda (x) (+ x 1)) 0))
+            (stream->list (port->stream (open-input-string "abc")))))
+(call-with-values
+  (lambda ()
+    (stream-unfolds
+      (lambda (s)
+        (if (stream-null? s)
+            (values s '() '())
+            (let ((a (stream-car s)) (d (stream-cdr s)))
+              (if (even? a) (values d (list a) #f) (values d #f (list a))))))
+      (stream-range 0 8)))
+  (lambda (evens odds) (show (list (stream->list evens) (stream->list odds)))))
+
+;; A long walk: delay-force keeps an iterative stream bounded.  (Not
+;; (stream-drop 20000 nats): the 20000th car of the self-referential nats
+;; is 20000 nested stream-map cars when nothing forced the earlier ones --
+;; deep in any Scheme.  The filter below forces them in order.)  The walks
+;; are short enough for tests/run-r7rs-gc.sh, which collects every 31
+;; allocations: the global nats keeps every cell it has forced live, so a
+;; collection costs more with each one.
+(show (stream-ref (stream-filter (lambda (n) (= 0 (modulo n 100))) nats) 100))
+(show (stream-car (stream-drop 20000 (stream-from 0))))

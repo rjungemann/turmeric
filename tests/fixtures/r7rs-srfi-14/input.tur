@@ -1,0 +1,82 @@
+#lang r7rs
+;; r7rs-srfi-plan S5: SRFI 14 on both back ends.  chibi's suite
+;; (tests/r7rs/srfi/14/) is the thorough check; this pins what the
+;; implementation had to get right beyond it: the standard sets over all of
+;; Unicode (SRFI 14's 2019 CharsetDefs note), sets as inversion lists, and
+;; the surrogates left out of every set.
+(import (scheme base) (scheme write) (scheme char) (srfi 14))
+(define (show x) (write x) (newline))
+(define (ascii cs) (char-set->string (char-set-intersection cs char-set:ascii)))
+
+;; The ASCII parts of the standard sets are SRFI 14's own table.
+(show (ascii char-set:punctuation))
+(show (ascii char-set:symbol))
+(show (ascii char-set:hex-digit))
+(show (map char->integer (char-set->list (char-set-intersection char-set:whitespace char-set:ascii))))
+(show (map char->integer (char-set->list (char-set-intersection char-set:blank char-set:ascii))))
+(show (list (char-set-size char-set:iso-control) (char-set-size char-set:ascii)
+            (char-set-size (char-set-intersection char-set:graphic char-set:ascii))
+            (char-set-size (char-set-intersection char-set:printing char-set:ascii))))
+
+;; Beyond ASCII: Greek letters have case, the Devanagari digits are digits,
+;; U+01C5 is the title-case one, U+2028 is whitespace but not blank, a CJK
+;; ideograph is a letter with no case, U+20AC is a symbol, U+00BF
+;; punctuation, and a combining mark (U+0301) is graphic but no letter.
+(define (in? cs n) (char-set-contains? cs (integer->char n)))
+(show (list (in? char-set:lower-case #x3B1) (in? char-set:upper-case #x391)
+            (in? char-set:upper-case #x3B1) (in? char-set:digit #x967)
+            (in? char-set:title-case #x1C5) (in? char-set:upper-case #x1C5)
+            (in? char-set:whitespace #x2028) (in? char-set:blank #x2028)
+            (in? char-set:letter #x4E2D) (in? char-set:lower-case #x4E2D)
+            (in? char-set:symbol #x20AC) (in? char-set:punctuation #xBF)
+            (in? char-set:graphic #x301) (in? char-set:letter #x301)))
+;; Every Nd digit is a digit: the set holds ten of each zero's run.
+(show (char-set-every (lambda (c) (digit-value c)) char-set:digit))
+(show (char-set-every char-alphabetic? (char-set-intersection char-set:letter (ucs-range->char-set 0 #x3000))))
+;; letter+digit and printing are the unions SRFI 14 says they are.
+(show (list (char-set= char-set:letter+digit (char-set-union char-set:letter char-set:digit))
+            (char-set= char-set:printing (char-set-union char-set:graphic char-set:whitespace))
+            (char-set<= char-set:title-case char-set:letter char-set:graphic char-set:printing char-set:full)))
+
+;; The full set is every Unicode scalar value, the surrogates left out, and
+;; a complement never reaches into them.
+(show (char-set-size char-set:full))
+(show (char-set-size (char-set-complement char-set:empty)))
+(show (char-set-size (ucs-range->char-set #xD700 #xE100)))
+(show (guard (e (#t 'error)) (ucs-range->char-set #xD700 #xE100 #t)))
+(show (char-set-size (ucs-range->char-set #x10FFF0 #x110010)))
+(show (char-set= (char-set-complement (char-set-complement char-set:letter)) char-set:letter))
+
+;; Inversion lists: ranges join where they meet, whatever order they came in,
+;; and cursors walk them in order.
+(define runs (list->char-set (string->list "zyxcba") (string->char-set "defw")))
+(show (char-set->string runs))
+(show (let loop ((cur (char-set-cursor runs)) (acc '()))
+        (if (end-of-char-set? cur)
+            (list->string (reverse acc))
+            (loop (char-set-cursor-next runs cur) (cons (char-set-ref runs cur) acc)))))
+(show (end-of-char-set? (char-set-cursor char-set:empty)))
+(show (char-set->string (char-set-xor (string->char-set "abcd") (string->char-set "cdef"))))
+(call-with-values
+  (lambda () (char-set-diff+intersection (string->char-set "abc123") char-set:letter char-set:digit))
+  (lambda (d i) (show (list (char-set->string d) (char-set->string i)))))
+(show (char-set->string (char-set-difference (string->char-set "a1b2c3") char-set:digit char-set:empty)))
+(show (char-set->string (char-set-map char-upcase (string->char-set "hello"))))
+(show (char-set->string (char-set-unfold null? car cdr (string->list "unfold") (char-set #\!))))
+(show (char-set->string (char-set-filter char-upper-case? (string->char-set "MiXeD cAsE"))))
+(show (list (char-set-count char-lower-case? (string->char-set "MiXeD cAsE"))
+            (char-set-any (lambda (c) (and (char-numeric? c) c)) (string->char-set "ab7c"))
+            (char-set-every char-lower-case? char-set:empty)))
+(show (char-set-fold cons '() (string->char-set "cab")))
+(show (list (char-set->string (->char-set "hello")) (char-set->string (->char-set #\q))
+            (char-set->string (->char-set (list #\b #\a)))))
+
+;; Sets that are char-set= hash equal, however they were made, and a hash
+;; respects its bound.
+(show (= (char-set-hash (string->char-set "hello")) (char-set-hash (char-set #\o #\l #\h #\e))))
+(show (let ((h (char-set-hash char-set:letter 17))) (and (>= h 0) (< h 17))))
+;; A linear-update procedure's result is what counts; its argument is left
+;; as it was.
+(define base (string->char-set "abc"))
+(show (list (char-set->string (char-set-adjoin! base #\d)) (char-set->string base)))
+(show (list (char-set? base) (char-set? "abc") (char-set? (char-set-copy base))))

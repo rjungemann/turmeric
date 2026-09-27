@@ -1,0 +1,20 @@
+#lang r7rs
+;; r7rs-srfi-plan D5: every fix the conflict error names works.  The check
+;; asks whether the unit's (scheme base) import makes R7RS's name visible
+;; under its own spelling: `except` leaves it out, `rename` moves it, `only`
+;; that does not list it and `prefix` respell it -- and then the SRFI's
+;; binding is the name's one meaning.  errors/r7rs-srfi-13-conflict is the
+;; import these repair.
+(import (except (scheme base) string-map string-for-each)
+        (rename (only (scheme base) string-for-each) (string-for-each r7:string-for-each))
+        (prefix (scheme base) b:)
+        (scheme write) (scheme char)
+        (srfi 13))
+(define (show x) (write x) (newline))
+;; SRFI 13's string-map: one string and a range.
+(show (string-map char-upcase "abcdef" 2 4))
+;; SRFI 13's string-for-each, and R7RS's under the name it was given.
+(show (let ((acc '())) (string-for-each (lambda (c) (set! acc (cons c acc))) "abc" 1) acc))
+(show (let ((acc '())) (r7:string-for-each (lambda (a b) (set! acc (cons (list a b) acc))) "ab" "xy") acc))
+;; R7RS's string-map, prefixed.
+(show (b:string-map (lambda (a b) (if (char<? a b) a b)) "adc" "bbb"))

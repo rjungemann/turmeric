@@ -1,0 +1,76 @@
+#lang r7rs
+;; r7rs-srfi-plan S4: SRFI 69 on both back ends.  chibi's suite
+;; (tests/r7rs/srfi/69/) is the thorough check; this pins what the
+;; implementation had to get right beyond it.  Nothing printed depends on the
+;; order a table walks its entries.
+(import (scheme base) (scheme write) (srfi 69))
+(define (show x) (write x) (newline))
+
+;; A table made without a hash function is right for every standard
+;; equivalence: the default cannot pick one by comparing the equivalence
+;; with eq?, which a standard procedure does not pass here.
+(define (probe equiv key lookup)
+  (let ((t (make-hash-table equiv)))
+    (hash-table-set! t key 'found)
+    (hash-table-ref/default t lookup 'missing)))
+(show (list (probe eq? 'sym 'sym)
+            (probe eqv? 12345678901234567890 12345678901234567890)
+            (probe equal? (list 1 "two" #(3)) (list 1 (string-copy "two") (vector 3)))
+            (probe string=? "abc" (string-copy "abc"))
+            (probe string-ci=? "Hello" "hELLO")
+            (probe string-ci=? "\x3A3;" "\x3C3;")))
+
+;; hash agrees with equal?, and hash-by-identity with eqv?: equal values hash
+;; equal, whatever their representation, and every hash respects a bound.
+(show (list (= (hash "abc") (hash (string-copy "abc")))
+            (= (hash (list 1/3 2.5 #\x)) (hash (list (/ 2 6) 2.5 #\x)))
+            (= (hash-by-identity 0.0) (hash-by-identity -0.0))
+            (= (hash-by-identity (expt 2 70)) (hash-by-identity (* (expt 2 35) (expt 2 35))))
+            (= (string-ci-hash "Stra\xDF;e") (string-ci-hash "STRA\xDF;E"))
+            (let ((b 7)) (and (< (hash '(a b c) b) b) (< (string-hash "xyz" b) b)
+                              (< (string-ci-hash "XYZ" b) b) (< (hash-by-identity 'q b) b)))))
+
+;; A key that is a circular list still hashes: hash reads a bounded prefix, so
+;; it terminates as equal? does.
+(define ring (list 1 2 3))
+(set-cdr! (cddr ring) ring)
+(define ht (make-hash-table eq?))
+(hash-table-set! ht ring 'ring)
+(show (hash-table-ref ht ring))
+
+;; A table keyed by = finds 2 from 2.0.
+(define nums (make-hash-table = hash))
+(hash-table-set! nums 2 'two)
+(show (hash-table-ref/default nums 2.0 'missing))
+
+;; ref's thunk and success procedure; errors a guard catches.
+(define t (make-hash-table))
+(hash-table-set! t 'a 1)
+(show (list (hash-table-ref t 'a (lambda () 'none) (lambda (v) (* v 10)))
+            (hash-table-ref t 'b (lambda () 'none))
+            (guard (e ((error-object? e) 'no-key)) (hash-table-ref t 'b))
+            (guard (e ((error-object? e) 'no-key)) (hash-table-update! t 'b (lambda (v) v)))))
+
+;; Growth, deletion, update and the whole-table procedures on 500 entries.
+(define big (make-hash-table))
+(do ((i 0 (+ i 1))) ((= i 500)) (hash-table-set! big i (* i i)))
+(do ((i 0 (+ i 2))) ((= i 500)) (hash-table-delete! big i))
+(hash-table-update!/default big 'count (lambda (n) (+ n 1)) 0)
+(hash-table-update! big 'count (lambda (n) (+ n 1)))
+(show (list (hash-table-size big) (hash-table-ref big 'count) (hash-table-exists? big 2)
+            (hash-table-ref big 499)
+            (hash-table-fold big (lambda (k v acc) (if (number? k) (+ acc k) acc)) 0)
+            (length (hash-table-keys big)) (length (hash-table->alist big))
+            (let ((n 0)) (hash-table-walk big (lambda (k v) (set! n (+ n 1)))) n)))
+
+;; copy is independent of its source; merge! adds the second into the first;
+;; alist->hash-table keeps a key's first association.
+(define c (hash-table-copy t))
+(hash-table-set! c 'a 99)
+(define m (alist->hash-table '((x . 1) (y . 2) (x . 3)) eq?))
+(hash-table-merge! m t)
+(show (list (hash-table-ref t 'a) (hash-table-ref c 'a)
+            (hash-table-ref m 'x) (hash-table-ref m 'a) (hash-table-size m)
+            (hash-table? m) (hash-table? '())
+            ((hash-table-equivalence-function m) 'p 'p)
+            (integer? ((hash-table-hash-function m) 'p))))

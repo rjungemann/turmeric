@@ -1,0 +1,38 @@
+#lang r7rs
+;; r7rs-srfi-plan S7: SRFI 42 on both back ends.  The suite
+;; (tests/r7rs/srfi/42/, the reference's examples.scm) is the thorough check;
+;; this pins the SRFI's own examples, including the generic generator `:`,
+;; whose lone-colon spelling the reader had to learn, and the nested and
+;; parallel qualifiers that work the syntax-rules expander hardest.
+(import (scheme base) (scheme write) (srfi 42))
+(define (show x) (write x) (newline))
+
+(show (list-ec (: i 5) (* i i)))
+(show (list-ec (: n 1 4) (: i n) (list n i)))
+(show (sum-ec (: i 1 11) i))
+(show (product-ec (: i 1 6) i))
+(show (string-ec (: c "abc") (char-upcase c)))
+(show (vector-ec (: i 3) (: j 2) (+ (* 10 i) j)))
+(show (append-ec (: x '((a b) (c) ())) x))
+(show (list-ec (: x '(1 2 3 4 5 6)) (if (even? x)) x))
+(show (list-ec (:parallel (: x '(a b c)) (: i 10)) (cons x i)))
+(show (list-ec (:let n 3) (: i n) i))
+(show (list-ec (:range i 10 0 -3) i))
+(show (list-ec (:char-range c #\a #\e) c))
+(show (list-ec (:while (: i 10) (< i 4)) i))
+(show (list-ec (:until (: i 10) (= i 4)) i))
+(show (list-ec (:do ((i 0)) (< i 3) ((+ i 1))) i))
+(show (first-ec 'none (: i 10) (if (> (* i i) 20)) i))
+(show (last-ec 'none (: i 10) i))
+(show (list (any?-ec (: i 10) (= i 7)) (every?-ec (: i 10) (< i 5))))
+(show (fold-ec 0 (: i 5) i +))
+(show (max-ec (: x '(3 1 4 1 5 9 2 6)) x))
+
+;; The primes below 50, the SRFI's own example.
+(define (primes n)
+  (let ((p? (make-vector (+ n 1) #t)))
+    (list-ec (: k 2 (+ n 1))
+             (if (vector-ref p? k))
+             (begin (do-ec (: m (* k k) (+ n 1) k) (vector-set! p? m #f))
+                    k))))
+(show (primes 50))

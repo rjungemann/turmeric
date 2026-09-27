@@ -1140,13 +1140,18 @@ add_test(
 )
 set_tests_properties(tur_r7rs_conformance PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
 # r7rs-srfi-plan D7: each SRFI's own test suite (tests/r7rs/srfi/<N>/), through
-# the same runner, with a floor per SRFI.
-add_test(
-  NAME tur_r7rs_srfi_suites
-  COMMAND bash tests/run-r7rs-srfi-suites.sh
-  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-)
-set_tests_properties(tur_r7rs_srfi_suites PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
+# the same runner, with a floor per SRFI.  Two shards (every other suite,
+# R7RS_SRFI_SHARD), since S7 the whole set is over seven minutes on a 4-core
+# box, too near the 720 s timeout for a slower runner.
+foreach(_srfi_shard 1 2)
+  add_test(
+    NAME tur_r7rs_srfi_suites_${_srfi_shard}
+    COMMAND bash tests/run-r7rs-srfi-suites.sh
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  set_tests_properties(tur_r7rs_srfi_suites_${_srfi_shard} PROPERTIES
+    TIMEOUT 720 RUN_SERIAL TRUE ENVIRONMENT "R7RS_SRFI_SHARD=${_srfi_shard}/2")
+endforeach()
 # R10: the Unicode tables behind (scheme char) are generated twice -- the
 # prelude's inline C and the interpreter's natives -- and must be identical.
 add_test(

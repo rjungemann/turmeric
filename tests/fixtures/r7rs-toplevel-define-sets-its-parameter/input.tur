@@ -1,0 +1,37 @@
+#lang r7rs
+;; A top-level `(define (f x) ...)` whose body `set!`s a parameter.  The
+;; lambda path rebinds such a parameter as a mutable local; the top-level
+;; procedure define did not, so every one of these was "set!: 'x' is
+;; immutable".  SRFI 60's rotate-bit-field (`(set! count (modulo count
+;; width))`) found it (r7rs-srfi-plan S7).
+(import (scheme base) (scheme write))
+(define (show x) (write x) (newline))
+
+(define (bump x) (set! x (+ x 1)) x)
+(show (bump 1))
+
+;; After an internal define, as SRFI 60 has it.
+(define (wrap n count)
+  (define width 4)
+  (set! count (modulo count width))
+  (list n count))
+(show (wrap 'n 7))
+(show (wrap 'n -1))
+
+;; A closure over the parameter shares the one cell.
+(define (counter n)
+  (lambda () (set! n (+ n 1)) n))
+(define c (counter 10))
+(c)
+(show (let* ((a (c)) (b (c))) (list a b)))
+
+;; A rest parameter, and a parameter set only in one branch.
+(define (drop-first . xs) (set! xs (cdr xs)) xs)
+(show (drop-first 1 2 3))
+(define (clamp x lo hi)
+  (if (< x lo) (set! x lo))
+  (if (> x hi) (set! x hi))
+  x)
+(show (map (lambda (x) (clamp x 0 10)) '(-5 5 15)))
+(define drop-second (lambda xs (set! xs (cons (car xs) (cddr xs))) xs))
+(show (drop-second 1 2 3))

@@ -1,0 +1,21 @@
+(#t #t #f "V1" "a1")
+(#t #t "V3/1" "b3")
+"V2"
+(error "bad")
+serious
+condition
+(other boom)
+(error "went wrong")
+(error "vector-ref: index out of range")
+#f
+Test suite begin: conditions
+[PASS] conditions: an &error
+[PASS] conditions: an error object is an &error
+[PASS] conditions: a &message
+[PASS] conditions: a user type
+Test suite end: conditions
+Passes:            4
+Expected failures: 0
+Failures:          0
+Unexpected passes: 0
+Skipped tests:     0

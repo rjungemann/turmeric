@@ -63,6 +63,18 @@ else
     sed 's/^/       /' <<<"$out" | grep -v W0060 | tail -6
     fails=$((fails + 1))
 fi
+# r7rs-srfi-plan S6: the test is an SRFI 64 suite, and a failing one fails
+# `tur test` (its outermost test-end exits 1).
+sed -i.bak 's/(test-equal "arithmetic" 4 (+ 2 2))/(test-equal "arithmetic" 5 (+ 2 2))/' tests/demo_test.tur
+out="$("$TUR" test tests 2>&1)"
+if grep -q '0 passed, 1 failed' <<<"$out"; then
+    echo "ok   --r7rs --bin: a failing SRFI 64 test fails tur test"
+else
+    echo "FAIL --r7rs --bin: a failing SRFI 64 test did not fail tur test"
+    sed 's/^/       /' <<<"$out" | grep -v W0060 | tail -6
+    fails=$((fails + 1))
+fi
+mv tests/demo_test.tur.bak tests/demo_test.tur
 if "$TUR" fmt --check src tests >/dev/null 2>&1; then
     echo "ok   --r7rs --bin: the scaffold is tur fmt-clean"
 else
@@ -87,7 +99,7 @@ else
     echo "ok   --r7rs --lib: builds"
 fi
 out="$("$TUR" test tests 2>&1)"
-if grep -q '1 passed, 0 failed' <<<"$out" && grep -q 'tests: ok' <<<"$out"; then
+if grep -q '1 passed, 0 failed' <<<"$out"; then
     echo "ok   --r7rs --lib: tur test imports the library and passes"
 else
     echo "FAIL --r7rs --lib: tur test"

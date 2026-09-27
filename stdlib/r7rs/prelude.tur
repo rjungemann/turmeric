@@ -1349,10 +1349,15 @@
 (defn r7rs-range-start__ [r] : int (if (r7rs-null? r) 0 (r7rs-int-of__ (r7rs-car r) "range start must be an exact integer")))
 (defn r7rs-range-end__ [r len : int] : int
   (if (r7rs-null? r) len (if (r7rs-null? (r7rs-cdr r)) len (r7rs-int-of__ (r7rs-car (r7rs-cdr r)) "range end must be an exact integer"))))
+;;; A range out of bounds raises an error object a program can `guard`, the
+;;; start and end its irritants (r7rs-srfi-plan S7; it was a panic,
+;;; docs/reported/r7rs-type-errors-are-uncatchable-panics.md).
 (defn r7rs-range-check__ [who : cstr start : int end : int len : int] : nil
   (if (if (>= start 0) (if (<= start end) (<= end len) false) false)
     nil
-    (panic "sequence range out of bounds (start must be <= end <= length)")))
+    (do (r7rs-raise (R7rsError (r7rs-string-append2__ who ": range out of bounds (start must be <= end <= length)")
+                               (r7rs-list (:: start any) (:: end any)) 0))
+        nil)))
 
 ;;; ---- strings (T3): characters, and mutable ones ---------------------------
 ;;;
@@ -1522,8 +1527,20 @@
 (defn r7rs-make-vector [n : int & fill : any] : (Vec any)
   (let [fl (r7rs-chain->list__ (:: fill (Cons any)))]
     (r7rs-make-vector-go__ n (if (r7rs-null? fl) (:: false any) (r7rs-car fl)) (:: (vec-new) (Vec any)))))
-(defn r7rs-vector-ref [v : (Vec any) i : int] : any (vec-get v i))
-(defn r7rs-vector-set! [v : (Vec any) i : int x] : nil (vec-set! v i x))
+;;; An index out of range raises an error object a program can `guard`
+;;; (SRFI 64's test-error tests exactly this), where vec-get's own check
+;;; panics (docs/reported/r7rs-type-errors-are-uncatchable-panics.md).
+(defn r7rs-index-error__ [who : cstr v i : int] : any
+  (r7rs-raise (R7rsError (r7rs-string-append2__ who ": index out of range")
+                         (r7rs-list v (:: i any)) 0)))
+(defn r7rs-vector-ref [v : (Vec any) i : int] : any
+  (if (if (>= i 0) (< i (vec-len v)) false)
+    (vec-get v i)
+    (r7rs-index-error__ "vector-ref" (:: v any) i)))
+(defn r7rs-vector-set! [v : (Vec any) i : int x] : nil
+  (if (if (>= i 0) (< i (vec-len v)) false)
+    (vec-set! v i x)
+    (do (r7rs-index-error__ "vector-set!" (:: v any) i) nil)))
 (defn r7rs-vector-length [v : (Vec any)] : int (vec-len v))
 (defn r7rs-vector->list-acc__ [v : (Vec any) i : int j : int acc] : any
   (if (< j i) acc (r7rs-vector->list-acc__ v i (- j 1) (R7rsPair (vec-get v j) acc))))
@@ -1547,12 +1564,20 @@
     (r7rs-range-check__ "vector-fill!" a b (vec-len v))
     (r7rs-vector-fill-go__ v x a b)))
 
+;;; A byte outside 0..255, or not an exact integer, raises an error object a
+;;; program can `guard`, as an index out of range does (r7rs-srfi-plan S7:
+;;; SRFI 4 and 66 range-check their octets through these).
+(defn r7rs-byte?__ [x] : bool
+  (if (is? x int) (if (>= x 0) (<= x 255) false) false))
+(defn r7rs-byte-error__ [who : cstr x] : any
+  (r7rs-raise (R7rsError (r7rs-string-append2__ who ": byte out of range 0..255")
+                         (r7rs-list x) 0)))
 (defn r7rs-bytes-from-chain__ [c : (Cons any) v : (Vec int)] : (Vec int)
   (if (tnil? c)
     v
-    (let [b (cast (.head c) int)]
-      (if (if (>= b 0) (<= b 255) false) nil (panic "bytevector: byte out of range 0..255"))
-      (vec-push! v b)
+    (let [x (.head c)]
+      (if (r7rs-byte?__ x) nil (do (r7rs-byte-error__ "bytevector" x) nil))
+      (vec-push! v (cast x int))
       (r7rs-bytes-from-chain__ (.tail c) v))))
 (defn r7rs-bytevector [& xs : any] : any
   (R7rsBytevector (r7rs-bytes-from-chain__ (:: xs (Cons any)) (:: (vec-new) (Vec int)))))
@@ -1560,11 +1585,22 @@
   (if (<= n 0) v (do (vec-push! v fill) (r7rs-make-bytevector-go__ (- n 1) fill v))))
 (defn r7rs-make-bytevector [n : int & fill : any] : any
   (let [fl (r7rs-chain->list__ (:: fill (Cons any)))]
+    (if (r7rs-null? fl)
+      nil
+      (if (r7rs-byte?__ (r7rs-car fl)) nil (do (r7rs-byte-error__ "make-bytevector" (r7rs-car fl)) nil)))
     (R7rsBytevector (r7rs-make-bytevector-go__ n (if (r7rs-null? fl) 0 (cast (r7rs-car fl) int))
                                                (:: (vec-new) (Vec int))))))
 (defn r7rs-bytevector-bytes__ [b : R7rsBytevector] : (Vec int) (.bytes b))
-(defn r7rs-bytevector-u8-ref [b : R7rsBytevector i : int] : int (vec-get (.bytes b) i))
-(defn r7rs-bytevector-u8-set! [b : R7rsBytevector i : int x : int] : nil (vec-set! (.bytes b) i x))
+(defn r7rs-bytevector-u8-ref [b : R7rsBytevector i : int] : int
+  (if (if (>= i 0) (< i (vec-len (.bytes b))) false)
+    (vec-get (.bytes b) i)
+    (do (r7rs-index-error__ "bytevector-u8-ref" (:: b any) i) 0)))
+(defn r7rs-bytevector-u8-set! [b : R7rsBytevector i : int x] : nil
+  (if (if (>= i 0) (< i (vec-len (.bytes b))) false)
+    (if (r7rs-byte?__ x)
+      (vec-set! (.bytes b) i (cast x int))
+      (do (r7rs-byte-error__ "bytevector-u8-set!" x) nil))
+    (do (r7rs-index-error__ "bytevector-u8-set!" (:: b any) i) nil)))
 (defn r7rs-bytevector-length [b : R7rsBytevector] : int (vec-len (.bytes b)))
 
 ;;; ---- multiple values (plan Section 8, Q1: a carrier over a list) --------
@@ -2436,14 +2472,22 @@
 (defn r7rs-features [] : any
   (r7rs-list (:: (str->sym "r7rs") any) (:: (str->sym "exact-closed") any)
              (:: (str->sym "ratios") any) (:: (str->sym "turmeric") any)
-             (:: (str->sym "srfi-0") any) (:: (str->sym "srfi-1") any) (:: (str->sym "srfi-2") any)
-             (:: (str->sym "srfi-6") any) (:: (str->sym "srfi-8") any) (:: (str->sym "srfi-9") any)
-             (:: (str->sym "srfi-11") any) (:: (str->sym "srfi-16") any)
-             (:: (str->sym "srfi-23") any) (:: (str->sym "srfi-26") any)
-             (:: (str->sym "srfi-30") any) (:: (str->sym "srfi-31") any)
-             (:: (str->sym "srfi-34") any) (:: (str->sym "srfi-38") any)
-             (:: (str->sym "srfi-39") any) (:: (str->sym "srfi-45") any)
+             (:: (str->sym "srfi-0") any) (:: (str->sym "srfi-1") any)
+             (:: (str->sym "srfi-2") any) (:: (str->sym "srfi-4") any)
+             (:: (str->sym "srfi-6") any) (:: (str->sym "srfi-8") any)
+             (:: (str->sym "srfi-9") any) (:: (str->sym "srfi-11") any)
+             (:: (str->sym "srfi-13") any) (:: (str->sym "srfi-14") any)
+             (:: (str->sym "srfi-16") any) (:: (str->sym "srfi-23") any)
+             (:: (str->sym "srfi-26") any) (:: (str->sym "srfi-27") any)
+             (:: (str->sym "srfi-28") any) (:: (str->sym "srfi-30") any)
+             (:: (str->sym "srfi-31") any) (:: (str->sym "srfi-34") any)
+             (:: (str->sym "srfi-35") any) (:: (str->sym "srfi-38") any)
+             (:: (str->sym "srfi-39") any) (:: (str->sym "srfi-41") any)
+             (:: (str->sym "srfi-42") any) (:: (str->sym "srfi-45") any)
+             (:: (str->sym "srfi-48") any) (:: (str->sym "srfi-60") any)
              (:: (str->sym "srfi-61") any) (:: (str->sym "srfi-62") any)
+             (:: (str->sym "srfi-64") any) (:: (str->sym "srfi-66") any)
+             (:: (str->sym "srfi-69") any) (:: (str->sym "srfi-78") any)
              (:: (str->sym "srfi-87") any) (:: (str->sym "srfi-98") any)
              (:: (str->sym "srfi-105") any)))
 
@@ -2505,8 +2549,21 @@
 (defn r7rs-char-ci>? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci>2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-char-ci<=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci<=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
 (defn r7rs-char-ci>=? [a b & xs : any] : bool (r7rs-chain-cmp__ r7rs-char-ci>=2__ a (R7rsPair b (r7rs-args__ (:: xs (Cons any))))))
-(defn r7rs-string-upcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 0))
-(defn r7rs-string-downcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 1))
+;;; string-upcase and string-downcase take SRFI 13's optional [start, end)
+;;; too, and then map just those characters: a compatible extension, so
+;;; (srfi 13) re-exports these rather than giving the names a second meaning
+;;; next to (scheme char) (r7rs-srfi-plan D5).
+(defn r7rs-case-map__ [who : cstr s r : (Cons any) op : int] : cstr
+  (if (tnil? r)
+    (r7rs-uc-string__ (r7rs-str__ s) op)
+    (let [v (r7rs-cps__ s)
+          rl (r7rs-chain->list__ r)
+          a (r7rs-range-start__ rl)
+          b (r7rs-range-end__ rl (vec-len v))]
+      (r7rs-range-check__ who a b (vec-len v))
+      (r7rs-uc-string__ (r7rs-cps->cstr__ v a b) op))))
+(defn r7rs-string-upcase [s & r : any] : cstr (r7rs-case-map__ "string-upcase" s (:: r (Cons any)) 0))
+(defn r7rs-string-downcase [s & r : any] : cstr (r7rs-case-map__ "string-downcase" s (:: r (Cons any)) 1))
 (defn r7rs-string-foldcase [s] : cstr (r7rs-uc-string__ (r7rs-str__ s) 2))
 (defn r7rs-string-ci=2__ [a b] : bool (r7rs-string=2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
 (defn r7rs-string-ci<2__ [a b] : bool (r7rs-string<2__ (r7rs-string-foldcase a) (r7rs-string-foldcase b)))
@@ -2877,6 +2934,137 @@
     (r7rs-idtab-free__ tab)
     (vec-free-o parent 0)
     r))
+
+;;; ---- fixnum bits (r7rs-srfi-plan S7: SRFI 60) -----------------------------
+;;;
+;;; SRFI 60's fast path: two fixnums (Scheme's int-carried exact integers) in
+;;; two's complement, which is what the SRFI specifies for negatives too.
+;;; Bignums take the SRFI's arithmetic formulation in stdlib/srfi/60.scm, as
+;;; they are base-1e9 limbs, not bits.  Plain Turmeric, the same on both back
+;;; ends.
+
+;;; r7rs-fx-and__ -- internal: the bitwise AND of two fixnums.
+(defn r7rs-fx-and__ [a : int b : int] : int (bit-and a b))
+;;; r7rs-fx-ior__ -- internal: the bitwise inclusive OR of two fixnums.
+(defn r7rs-fx-ior__ [a : int b : int] : int (bit-or a b))
+;;; r7rs-fx-xor__ -- internal: the bitwise exclusive OR of two fixnums.
+(defn r7rs-fx-xor__ [a : int b : int] : int (bit-xor a b))
+;;; r7rs-fx-shr__ -- internal: fixnum a shifted right k places, 0 <= k < 64,
+;;; rounding toward negative infinity.  bit-shr is a logical shift, so a
+;;; negative a is shifted as its complement, which is non-negative.
+(defn r7rs-fx-shr__ [a : int k : int] : int
+  (if (< a 0)
+    (bit-xor (bit-shr (bit-xor a -1) k) -1)
+    (bit-shr a k)))
+
+;;; ---- hashing (r7rs-srfi-plan S4: SRFI 69) --------------------------------
+;;;
+;;; Each hash is a non-negative int below 2^30, so a table's arithmetic on it
+;;; stays in fixnums.  r7rs-eqv-hash__ agrees with eqv? (and so with eq?,
+;;; which is eqv? here): it hashes by value what eqv? compares by value, and
+;;; by address the rest.  r7rs-equal-hash__ agrees with equal?.  Only the two
+;;; primitives are C; the rest is this Turmeric, the same on both back ends.
+
+;;; r7rs-identity-word__ -- internal: a value's carrier word: a heap value's
+;;; address (stable, as the collector does not move), an int's value, a
+;;; float's bits.  Inline C on the compiled path, a native under the
+;;; interpreter (the payload word r7rs-same-ref__ compares).
+(defn r7rs-identity-word__ [x] : int
+  ```c
+  return (int64_t)TUR_UNTAG(x);
+  ```)
+;;; r7rs-cstr-hash__ -- internal: FNV-1a over a string's UTF-8 bytes, folded
+;;; to 30 bits.  With `ci`, an ASCII letter hashes as its lower case, and a
+;;; byte outside ASCII answers -1 (the caller folds that string itself).
+(defn r7rs-cstr-hash__ [s : cstr ci : bool] : int
+  ```c
+  uint64_t h = 1469598103934665603ULL;
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    unsigned char c = *p;
+    if (ci) {
+      if (c >= 0x80) return -1;
+      if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
+    }
+    h ^= c;
+    h *= 1099511628211ULL;
+  }
+  return (int64_t)((h ^ (h >> 30) ^ (h >> 60)) & 0x3FFFFFFFULL);
+  ```)
+;;; r7rs-hash-fold__ -- internal: a 64-bit word folded to 30 bits.
+(defn r7rs-hash-fold__ [w : int] : int
+  (bit-and (bit-xor w (bit-xor (bit-shr w 4) (bit-xor (bit-shr w 30) (bit-shr w 60)))) 1073741823))
+;;; r7rs-hash-mix__ -- internal: one more 30-bit hash folded into h.
+(defn r7rs-hash-mix__ [h : int x : int] : int (bit-and (+ (* h 31) x) 1073741823))
+
+;;; r7rs-string-hash__ -- SRFI 69's string-hash: agrees with string=?, over a
+;;; literal and a mutable string alike (the same characters, the same bytes).
+(defn r7rs-string-hash__ [s] : int (r7rs-cstr-hash__ (r7rs-str__ s) false))
+;;; r7rs-string-ci-hash__ -- SRFI 69's string-ci-hash: agrees with
+;;; string-ci=?.  An ASCII string is folded as it is hashed; any other is
+;;; folded first, which gives an ASCII one's bytes the same way.
+(defn r7rs-string-ci-hash__ [s] : int
+  (let [c (r7rs-str__ s)
+        h (r7rs-cstr-hash__ c true)]
+    (if (< h 0) (r7rs-cstr-hash__ (r7rs-string-foldcase c) false) h)))
+
+;;; r7rs-float-hash__ -- internal: an integral float hashes as the exact
+;;; integer would (so a table keyed by `=` finds 2 from 2.0), which also
+;;; puts 0.0 and -0.0 together, as eqv? has them; any other float by its bits.
+(defn r7rs-float-hash__ [x : float] : int
+  (if (r7rs-float-integral?__ x)
+    (if (if (< x 4503599627370496.0) (> x -4503599627370496.0) false)
+      (r7rs-hash-fold__ (float->int x))
+      (r7rs-hash-fold__ (r7rs-identity-word__ x)))
+    (r7rs-hash-fold__ (r7rs-identity-word__ x))))
+;;; r7rs-eqv-hash__ -- SRFI 69's hash-by-identity: agrees with eqv? and eq?.
+(defn r7rs-eqv-hash__ [x] : int
+  (if (is? x int) (r7rs-hash-fold__ x)
+    (if (is? x float) (r7rs-float-hash__ x)
+      (if (is? x cstr) (r7rs-cstr-hash__ x false)
+        (if (r7rs-symbol? x) (r7rs-cstr-hash__ (sym->str x) false)
+          (if (r7rs-char? x) (r7rs-char-code__ x)
+            (if (r7rs-big? x) (r7rs-cstr-hash__ (r7rs-big-digits__ x) false)
+              (if (r7rs-ratio? x)
+                (r7rs-hash-mix__ (r7rs-eqv-hash__ (r7rs-ratio-num__ x)) (r7rs-eqv-hash__ (r7rs-ratio-den__ x)))
+                (if (r7rs-cplx? x)
+                  (r7rs-hash-mix__ (r7rs-eqv-hash__ (r7rs-cplx-re__ x)) (r7rs-eqv-hash__ (r7rs-cplx-im__ x)))
+                  ;; '() and the eof object are values, not one heap object each.
+                  (if (r7rs-null? x) 1
+                    (if (r7rs-eof-object? x) 2
+                      (r7rs-hash-fold__ (r7rs-identity-word__ x)))))))))))))
+
+;;; r7rs-equal-hash__ -- SRFI 69's hash: agrees with equal?.  It reads at most
+;;; 16 elements of a list or vector (and 64 bytes of a bytevector), three
+;;; levels down, so it is quick on a big key and terminates on a cycle, as
+;;; equal? does.  Values equal? compares by eqv? hash as r7rs-eqv-hash__.
+(defn r7rs-equal-hash__ [x] : int (r7rs-equal-hash-go__ x 3))
+(defn r7rs-equal-hash-go__ [x depth : int] : int
+  (if (r7rs-pair? x)
+    (r7rs-equal-hash-list__ x depth 0 5)
+    (if (r7rs-vector? x)
+      (r7rs-equal-hash-vec__ x depth 0 (r7rs-hash-mix__ 7 (r7rs-vector-length x)))
+      (if (r7rs-bytevector? x)
+        (r7rs-equal-hash-bytes__ (r7rs-bytevector-bytes__ x) 0 11)
+        (if (r7rs-string? x)
+          (r7rs-string-hash__ x)
+          (r7rs-eqv-hash__ x))))))
+(defn r7rs-equal-hash-sub__ [x depth : int] : int
+  (if (<= depth 0) 3 (r7rs-equal-hash-go__ x (- depth 1))))
+(defn r7rs-equal-hash-list__ [x depth : int n : int h : int] : int
+  (if (r7rs-pair? x)
+    (if (>= n 16)
+      h
+      (r7rs-equal-hash-list__ (r7rs-cdr x) depth (+ n 1)
+                              (r7rs-hash-mix__ h (r7rs-equal-hash-sub__ (r7rs-car x) depth))))
+    (r7rs-hash-mix__ h (r7rs-equal-hash-sub__ x depth))))
+(defn r7rs-equal-hash-vec__ [v : (Vec any) depth : int i : int h : int] : int
+  (if (if (>= i (vec-len v)) true (>= i 16))
+    h
+    (r7rs-equal-hash-vec__ v depth (+ i 1) (r7rs-hash-mix__ h (r7rs-equal-hash-sub__ (vec-get v i) depth)))))
+(defn r7rs-equal-hash-bytes__ [b : (Vec int) i : int h : int] : int
+  (if (if (>= i (vec-len b)) true (>= i 64))
+    (r7rs-hash-mix__ h (vec-len b))
+    (r7rs-equal-hash-bytes__ b (+ i 1) (r7rs-hash-mix__ h (vec-get b i)))))
 
 
 ;;; R7rsPort -- kind 0 is a file, 1 a string, 2 a bytevector.  A port is an

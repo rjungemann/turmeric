@@ -1,0 +1,32 @@
+"!\"#%&'()*,-./:;?@[\\]_{}"
+"$+<=>^`|~"
+"0123456789ABCDEFabcdef"
+(9 10 11 12 13 32)
+(9 32)
+(65 128 94 100)
+(#t #t #f #t #t #f #t #f #t #f #t #t #t #f)
+#t
+#t
+(#t #t #t)
+1112064
+1112064
+512
+error
+16
+#t
+"abcdefwxyz"
+"abcdefwxyz"
+#t
+"abef"
+("" "123abc")
+"abc"
+"EHLO"
+"!dflnou"
+"ADEMX"
+(4 #\7 #t)
+(#\c #\b #\a)
+("ehlo" "q" "ab")
+#t
+#t
+("abcd" "abc")
+(#t #f #t)

@@ -1,0 +1,55 @@
+#lang r7rs
+;; r7rs-srfi-plan S7: SRFI 27 on both back ends.  The suite
+;; (tests/r7rs/srfi/27/) is the thorough check; this pins the reference
+;; MRG32k3a generator's numbers: its initial state, the state
+;; pseudo-randomize! 1 2 reaches (conftest.scm's), draws below and above the
+;; modulus (the latter over bignums), reals, and saving and restoring a state.
+;; Every source here is seeded, so every line is deterministic.
+(import (scheme base) (scheme write) (srfi 27))
+(define (show x) (write x) (newline))
+
+(show (random-source-state-ref default-random-source))
+(define s (make-random-source))
+(random-source-pseudo-randomize! s 1 2)
+(show (random-source-state-ref s))
+
+;; Integers: small ranges, a range at the modulus, and bignum ranges.
+(define ints (random-source-make-integers s))
+(define (draws next . ranges)
+  ;; One at a time: the order a call's arguments are evaluated in is
+  ;; unspecified, and the two back ends differ.
+  (let loop ((rs ranges) (acc '()))
+    (if (null? rs)
+        (reverse acc)
+        (let ((x (next (car rs))))
+          (loop (cdr rs) (cons x acc))))))
+(show (draws ints 2 6 100 1000000))
+(show (ints 4294967087))
+(show (ints (expt 2 64)))
+(show (ints (expt 10 40)))
+
+;; Reals: the default unit, and a unit finer than 1/m1.
+(define reals (random-source-make-reals s))
+(show (let* ((a (reals)) (b (reals))) (list a b)))
+(define fine (random-source-make-reals s 1e-15))
+(show (fine))
+
+;; A saved state replays.
+(define saved (random-source-state-ref s))
+(define a (draws ints 1000 1000 1000))
+(random-source-state-set! s saved)
+(show (equal? a (draws ints 1000 1000 1000)))
+
+;; Two sources with the same seed agree; randomize! parts them.
+(define t (make-random-source))
+(random-source-pseudo-randomize! t 1 2)
+(random-source-state-set! s (random-source-state-ref t))
+(show (= ((random-source-make-integers t) 1000000) (ints 1000000)))
+(random-source-randomize! t)
+(show (random-source? t))
+
+;; The default source's procedures.
+(show (and (exact-integer? (random-integer 10)) (< -1 (random-integer 10) 10)))
+(show (let ((x (random-real))) (and (inexact? x) (< 0 x 1))))
+(show (guard (e ((error-object? e) (error-object-message e)))
+        (random-integer 0)))

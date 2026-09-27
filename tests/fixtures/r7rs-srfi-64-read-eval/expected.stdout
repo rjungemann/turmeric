@@ -1,0 +1,12 @@
+Test suite begin: read-eval
+[PASS] read-eval: (test-read-eval-string (+ 3 4))
+[PASS] read-eval: (test-read-eval-string (+ 3)
+[PASS] read-eval: (test-read-eval-string #\newline)
+[PASS] read-eval: (test-read-eval-string ... extra)
+[PASS] read-eval: (test-read-eval-string ...ase))))
+Test suite end: read-eval
+Passes:            5
+Expected failures: 0
+Failures:          0
+Unexpected passes: 0
+Skipped tests:     0

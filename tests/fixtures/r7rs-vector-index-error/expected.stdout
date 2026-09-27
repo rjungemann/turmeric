@@ -1,0 +1,4 @@
+("vector-ref: index out of range" (#(a b) 2))
+("vector-ref: index out of range" (#(a b) -1))
+("vector-set!: index out of range" (#(a b) 5))
+(b #(z b))

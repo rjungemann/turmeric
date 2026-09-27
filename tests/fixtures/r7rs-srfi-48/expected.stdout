@@ -1,0 +1,20 @@
+"a+\"b\""
+"255 ff 377 11111111"
+to the current port: ok
+"1 and 2"
+"123456789101112"
+"12345678910"
+"[x y]\t|"
+"s \"s\" #0=(1 2 . #0#)"
+"(a (b c))"
+"x\ny\nz"
+"a 1-2 b"
+"a k b"
+"tilde ~ and a trailing tilde ~"
+#t
+("   32.00" " 0.333" "  12" "     foo" "4321.00" "0.000+1.949i" "-0.5" "2." "     1.002")
+"FORMAT: too few arguments"
+"FORMAT: unused arguments (2)"
+"FORMAT: unknown tilde escape: #\\q"
+"FORMAT: bad output-port argument: not-a-port"
+"FORMAT: unknown tilde escape: #\\,"
