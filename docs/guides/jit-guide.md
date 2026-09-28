@@ -438,8 +438,13 @@ diagnostic, look for a struct-typed `Ai` before anything else.
 And one that compiles but answers wrong, on x86-64 only: a statement
 expression whose VALUE is a struct (`({ ...; TUR_TAG(...); })`, or one that
 yields a by-value ADT) placed in a call's argument list or as a local's
-initializer overwrites a sibling argument or parameter. The emitter builds
-those values with statements in the body instead -- see
+initializer overwrites a sibling argument or parameter. The cause is in
+c2mir's front end (the interpreter, `-ei`, answers wrong too): it reserves the
+statement expression's result slot in the frame while the body is still being
+checked, and only afterwards lays the stack variables out from offset 0 -- so
+the slot lands on the first of them, typically a by-value struct parameter.
+The emitter builds every such value with statements in the body instead --
+see
 [jit-x86-64-struct-valued-statement-expression-miscompiles](https://github.com/rjungemann/turmeric/blob/main/docs/reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md)
 for the shapes and the sites. A Linux-only `stdout mismatch` in the JIT
 suite on a program that passes under cc is the signature.

@@ -1246,26 +1246,39 @@ static char *emit_byval_recursive_carrier_reconstruct(EmitCtx *ctx, Type t,
  * copy on the way in, deref on the way out, mirroring the EX_ANY inject/cast
  * boxing above and the B4 wide-byval convention.  Both helpers return a freshly
  * malloc'd string the caller owns. */
-static char *emit_agg_box(EmitCtx *ctx, Type t, const char *val) {
+static char *emit_agg_box(EmitCtx *ctx, Buf *body, Type t, const char *val) {
     const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, t));
     /* repr-trace: aggregate heap-boxed into an int64 slot (field store /
      * poly-carrier crossing / wide-byval element). */
     if (g_emit_abi_trace)
         fprintf(stderr, "repr-trace bridge agg-box %s\n", cn);
-    Buf b; buf_init(&b);
     /* region-lock-hardening: the box is malloc'd and outlives the bracket its
      * element was built in (a Vec slot, a field store); its words are noted
      * so an erased node inside the aggregate cannot hide behind the box
      * pointer the store hook sees.  The macro is `((void)0)` under
-     * TUR_REGIONS=0. */
-    buf_printf(&b,
-        "({ %s *__tur_pbox = (%s *)malloc(sizeof(%s)); "
-        "*__tur_pbox = (%s); TUR_REGION_NOTE_WORDS(__tur_pbox, sizeof *__tur_pbox); "
-        "(int64_t)(intptr_t)__tur_pbox; })",
-        cn, cn, cn, val);
+     * TUR_REGIONS=0.
+     *
+     * jit-x86-64-struct-valued-statement-expression-miscompiles: built by
+     * STATEMENTS, leaving a plain expression.  This used to be a
+     * `({ T *__tur_pbox = ...; *__tur_pbox = (v); ...; (int64_t)__tur_pbox; })`
+     * in a call's argument list -- a statement expression holding a
+     * by-value aggregate, the shape c2mir/MIR-gen on x86-64 miscompiles by
+     * overwriting a sibling argument (shapes 1-5 of that report; shape 4
+     * showed a WORD-valued one misbehaves too when what it contains is an
+     * aggregate).  `val` is already a value, so hoisting its copy ahead of the
+     * call changes no evaluation order the emitter relied on. */
+    char *bx = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body,
+        "%s *%s = (%s *)malloc(sizeof(%s)); *%s = (%s); "
+        "TUR_REGION_NOTE_WORDS(%s, sizeof *%s);\n",
+        cn, bx, cn, cn, bx, val, bx, bx);
+    Buf b; buf_init(&b);
+    buf_printf(&b, "(int64_t)(intptr_t)%s", bx);
     buf_putc(&b, '\0');
     char *out = strdup(b.data);
     buf_free(&b);
+    free(bx);
     return out;
 }
 static char *emit_agg_unbox(EmitCtx *ctx, Type t, const char *val) {
@@ -7341,7 +7354,9 @@ static Type dyn_ground_tyvars_to_any(Arena *a, Type t) {
     return type_app(a, fn, arg, nosp);
 }
 
-static char *dyn_widen_to_any(EmitCtx *ctx, Type t, const char *val) {
+/* `stmts` receives any statements the widen needs, to be placed where `val`
+ * is valid to evaluate (the caller's tag-checked branch). */
+static char *dyn_widen_to_any(EmitCtx *ctx, Buf *stmts, Type t, const char *val) {
     Type r = emit_resolve_type(ctx, t);
     int64_t id = emit_any_type_id(ctx, t);
     Buf out; buf_init(&out);
@@ -7350,12 +7365,18 @@ static char *dyn_widen_to_any(EmitCtx *ctx, Type t, const char *val) {
                    "TUR_TAG(%lld, ((union { double d; int64_t i; }){.d = (%s)}).i)",
                    (long long)id, val);
     } else if (emit_type_is_byvalue_adt(ctx, t)) {
+        /* jit-x86-64-struct-valued-statement-expression-miscompiles: the box
+         * is built by statements, not a struct-valued `({ ... })` (the shape
+         * the engine miscompiles on x86-64), leaving a bare TUR_TAG. */
         const char *cn = emit_type_c_name(ctx, r);
-        buf_printf(&out,
-                   "({ %s *__tur_fb = (%s *)malloc(sizeof(%s)); *__tur_fb = (%s); "
-                   "TUR_REGION_NOTE_WORDS(__tur_fb, sizeof *__tur_fb); "
-                   "TUR_TAG(%lld, (int64_t)(intptr_t)__tur_fb); })",
-                   cn, cn, cn, val, (long long)id);
+        char *bx = fresh_tmp(ctx);
+        buf_printf(stmts,
+                   "%s *%s = (%s *)malloc(sizeof(%s)); *%s = (%s); "
+                   "TUR_REGION_NOTE_WORDS(%s, sizeof *%s); ",
+                   cn, bx, cn, cn, bx, val, bx, bx);
+        buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)%s)",
+                   (long long)id, bx);
+        free(bx);
     } else {
         buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
                    (long long)id, val);
@@ -7473,14 +7494,16 @@ static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* An already-`any` field needs no widen -- the read IS a
              * `tur_tagged_t`, and `dyn_widen_to_any` would cast that 16-byte
              * value through `(int64_t)`, which is a truncation, not a box. */
+            Buf wst; buf_init(&wst);
             char *w = (emit_resolve_type(ctx, ft).kind == TY_ANY)
                           ? strdup(read.data)
-                          : dyn_widen_to_any(ctx, ft, read.data);
+                          : dyn_widen_to_any(ctx, &wst, ft, read.data);
+            buf_putc(&wst, '\0');
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s (TUR_GETTAG(%s) == %lld) { %s = %s; }\n",
+            buf_printf(body, "%s (TUR_GETTAG(%s) == %lld) { %s%s = %s; }\n",
                        n_cands ? "else if" : "if", ov,
-                       (long long)emit_any_type_id(ctx, at), rv, w);
-            free(w); free(mp); buf_free(&read);
+                       (long long)emit_any_type_id(ctx, at), wst.data, rv, w);
+            free(w); free(mp); buf_free(&read); buf_free(&wst);
             n_cands++;
             break;
         }
@@ -7936,20 +7959,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * the member list must not silently become member 0 -- it becomes
                  * TY_UNKNOWN, which `type-of` reports as "unknown" and no `is?`
                  * target matches. */
+                /* jit-x86-64-struct-valued-statement-expression-miscompiles:
+                 * the re-box runs as STATEMENTS and leaves the bare result
+                 * temp, rather than a struct-valued `({ ... })` -- the shape
+                 * the engine miscompiles on x86-64 when it sits in a call's
+                 * argument list.  `inner` is already a value here, so binding
+                 * it first changes no evaluation order. */
                 const Type *ut = &inj_pt;
-                buf_printf(&out,
-                    "({ tur_tagged_t __tur_ui = (%s); "
-                    "tur_tagged_t __tur_ua = TUR_TAG(%d, TUR_UNTAG(__tur_ui)); "
-                    "switch (TUR_GETTAG(__tur_ui)) {",
-                    inner, (int)TY_UNKNOWN);
+                char *ui = fresh_tmp(ctx);
+                char *ua = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "tur_tagged_t %s = (%s); "
+                    "tur_tagged_t %s = TUR_TAG(%d, TUR_UNTAG(%s)); "
+                    "switch (TUR_GETTAG(%s)) {",
+                    ui, inner, ua, (int)TY_UNKNOWN, ui, ui);
                 for (uint8_t m = 0; m < ut->as.union_.n_members; m++) {
                     const Type *mem = ut->as.union_.members[m];
                     if (!mem) continue;
-                    buf_printf(&out,
-                        " case %u: __tur_ua = TUR_TAG(%lldLL, TUR_UNTAG(__tur_ui)); break;",
-                        (unsigned)m, (long long)emit_any_type_id(ctx, *mem));
+                    buf_printf(body,
+                        " case %u: %s = TUR_TAG(%lldLL, TUR_UNTAG(%s)); break;",
+                        (unsigned)m, ua, (long long)emit_any_type_id(ctx, *mem), ui);
                 }
-                buf_puts(&out, " default: break; } __tur_ua; })");
+                buf_puts(body, " default: break; }\n");
+                buf_puts(&out, ua);
+                free(ui);
+                free(ua);
             } else if (inj_pt.kind == TY_NIL) {
                 /* saffron-lang-plan S5: a NIL payload is the fourth thing that
                  * cannot ride the carrier as written.  `nil` emits as
@@ -9110,7 +9145,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             buf_free(&d);
                             free(raw);
                         }
-                        char *boxed = emit_agg_box(ctx, e->as.call_.args[i]->type, src);
+                        char *boxed = emit_agg_box(ctx, body, e->as.call_.args[i]->type, src);
                         free(src);
                         raw = boxed;
                     }
