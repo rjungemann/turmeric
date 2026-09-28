@@ -87,6 +87,37 @@ test.describe('Run runs this program', () => {
         await expect(consoleEl(page)).not.toContainText('error');
     });
 
+    // -----------------------------------------------------------------------
+    // Output that stops mid-line.
+    //
+    // stdout reaches the page through two line-buffering layers -- libc's FILE
+    // buffer and Emscripten's TTY device -- and both hold a last line with no
+    // newline behind it. Scheme's `display` writes no newline, so
+    // `(display "Hello, world!")` printed NOTHING at all, and then arrived
+    // glued to the front of the next run that happened to emit one. The C side
+    // flushes on the way out of every eval (wasm_flush_program_output) and the
+    // worker assembles the lines itself (eval-worker.js).
+    // -----------------------------------------------------------------------
+
+    test('a run whose output has no trailing newline still prints it', async ({ page }) => {
+        await gotoTry(page);
+
+        await run(page, '#lang r7rs\n\n(display "Hello, world!")');
+        await expect(consoleEl(page)).toContainText('Hello, world!');
+    });
+
+    test('a partial line belongs to its own run, not the next one', async ({ page }) => {
+        await gotoTry(page);
+
+        await run(page, '#lang r7rs\n\n(display "first")');
+        await expect(consoleEl(page)).toContainText('first');
+
+        await clearConsole(page);
+        await run(page, '#lang r7rs\n\n(display "second")\n(newline)');
+        await expect(consoleEl(page)).toContainText('second');
+        await expect(consoleEl(page)).not.toContainText('first');
+    });
+
     test("(doc 'name) at the prompt prints the docstring", async ({ page }) => {
         await gotoTry(page);
 

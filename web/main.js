@@ -1269,14 +1269,51 @@ function parseLangDirective(code) {
 // it cannot read.  A current build never uses this list.
 const LANG_REGISTRY_FALLBACK = {
     bases: [
-        { name: 'turmeric',             label: 'S-expression' },
-        { name: 'turmeric/curly-infix', label: 'Curly-infix' },
-        { name: 'turmeric/neoteric',    label: 'Neoteric' },
-        { name: 'turmeric/sweet',       label: 'Sweet-expression' },
+        { name: 'turmeric',             label: 'S-expression',     language: 'turmeric', reader: 's-expr' },
+        { name: 'turmeric/curly-infix', label: 'Curly-infix',      language: 'turmeric', reader: 'curly-infix' },
+        { name: 'turmeric/neoteric',    label: 'Neoteric',         language: 'turmeric', reader: 'neoteric' },
+        { name: 'turmeric/sweet',       label: 'Sweet-expression', language: 'turmeric', reader: 'sweet' },
     ],
 };
 
 const LANG_DEFAULT_BASE = 'turmeric';
+
+// The readers the picker offers.  Curly-infix and neoteric are deliberately
+// left out: `{a + b}` is enabled in EVERY dialect and neoteric `f(x)` is one of
+// sweet-exp's three tools, so a file almost never wants either as its whole
+// reader -- listing them made four Turmeric rows out of two real choices.  Both
+// remain spellable in a `#lang` line, and a buffer that names one still gets its
+// row (renderLangMenu's `keep`).
+const LANG_READERS_SHOWN = ['s-expr', 'sweet', 'scheme'];
+
+// Heading per language.  `r7rs` is the base token and the EXPERIMENTS[] name,
+// but "Scheme" is what the language is called.
+const LANG_GROUP_NAMES = {
+    turmeric: 'Turmeric',
+    saffron:  'Saffron',
+    r7rs:     'Scheme',
+};
+
+function langGroupName(lang) {
+    return LANG_GROUP_NAMES[lang] ||
+        `${lang.charAt(0).toUpperCase()}${lang.slice(1)}`;
+}
+
+// The reader half of a base.  Registry rows carry it; derive it from the base
+// token for an older cached WASM whose registry JSON predates the key.
+function baseReader(b) {
+    if (b.reader) return b.reader;
+    const slash = b.name.indexOf('/');
+    if (slash >= 0) return b.name.slice(slash + 1);
+    return b.name === 'r7rs' ? 'scheme' : 's-expr';
+}
+
+// The language half of a base token: `saffron/sweet` -> `saffron`, and a bare
+// base names its own language (`r7rs`).
+function baseLanguage(name) {
+    const slash = name.indexOf('/');
+    return slash >= 0 ? name.slice(0, slash) : name;
+}
 
 // Registry fetched from the WASM module (null until it arrives).
 let langRegistry = null;
@@ -1413,41 +1450,64 @@ function setLangDirective(model, { base }) {
  * control mirrors the form of the syntax: one mutually exclusive base, and
  * nothing else.
  */
-function renderLangMenu() {
+function renderLangMenu(rebuilt) {
     const basesEl = document.getElementById('lang-bases');
     if (!basesEl) return;
     const reg = langMenuRegistry();
 
-    // A base names a (language, reader) PAIR, and `label` is only the reader
-    // half -- so a bare label would print "S-expression" twice once a second
-    // language exists.  Non-default languages carry their name; the base token
-    // itself goes in the summary slot, and an experiment-gated language gets
-    // the same `experimental` chip a semantic layer gets.
-    basesEl.innerHTML = reg.bases.map(b => {
+    // A base names a (language, reader) PAIR, so the two axes become the two
+    // levels of the list: a heading per LANGUAGE, and one row per READER under
+    // it.  A flat list had to repeat the language in every row name
+    // ("Saffron -- Sweet-expression"), which read as eight unrelated dialects
+    // rather than two languages with the same choice of syntax.
+    //
+    // A row is labelled by the `#lang` line it writes, and nothing else.  The
+    // prose reader name ("Sweet-expression") was a second vocabulary for the
+    // token sitting right beside it, and the token is the thing the user ends
+    // up typing and reading at the top of the file.
+    //
+    // Only the readers people actually pick per file get a row -- see
+    // LANG_READERS_SHOWN.  The one exception is the base the buffer already
+    // names: hiding that would leave the picker silently unchecked and make a
+    // switch look like a no-op.
+    const keep = currentLangSelection().base;
+    const rows = reg.bases.filter(b =>
+        LANG_READERS_SHOWN.includes(baseReader(b)) || b.name === keep);
+    // The buffer can name a base this registry does not list at all: the
+    // fallback list is Turmeric-only, and it is what the picker renders from
+    // until the WASM registry arrives.  Synthesize the row rather than leave
+    // the picker contradicting line 1 of the file.
+    if (keep && !rows.some(b => b.name === keep)) {
+        rows.push({ name: keep, label: keep, language: baseLanguage(keep) });
+    }
+
+    // Group in registry order, which is the order `tur dialects` prints.
+    const groups = [];
+    rows.forEach(b => {
         const lang = b.language || 'turmeric';
-        // `r7rs` is an initialism, not a word, so it does not title-case.
-        const langName = lang === 'r7rs'
-            ? 'R7RS'
-            : `${lang.charAt(0).toUpperCase()}${lang.slice(1)}`;
-        const name = lang === 'turmeric'
-            ? b.label
-            : `${langName} -- ${b.label}`;
-        return `
-        <label class="lang-row" title="#lang ${escapeHtml(b.name)}">
-            <input type="radio" name="lang-base" value="${escapeHtml(b.name)}">
-            <span class="lang-row-name">${escapeHtml(name)}</span>${
-                b.experiment
-                    ? '<span class="lang-chip">experimental</span>'
-                    : ''
-            }
-            <span class="lang-row-summary">#lang ${escapeHtml(b.name)}</span>
-        </label>`;
-    }).join('');
+        let g = groups.find(x => x.lang === lang);
+        if (!g) groups.push(g = { lang, rows: [] });
+        g.rows.push(b);
+    });
+
+    basesEl.innerHTML = groups.map(g => `
+        <div class="lang-group" role="group" aria-label="${escapeHtml(langGroupName(g.lang))}">
+            <div class="lang-group-name">${escapeHtml(langGroupName(g.lang))}</div>
+            ${g.rows.map(b => `
+            <label class="lang-row" title="#lang ${escapeHtml(b.name)}">
+                <input type="radio" name="lang-base" value="${escapeHtml(b.name)}">
+                <span class="lang-row-name">#lang ${escapeHtml(b.name)}</span>${
+                    b.experiment
+                        ? '<span class="lang-chip">experimental</span>'
+                        : ''
+                }
+            </label>`).join('')}
+        </div>`).join('');
 
     basesEl.querySelectorAll('input[type=radio]').forEach(r =>
         r.addEventListener('change', onLangControlChange));
 
-    reconcileLangPicker();
+    reconcileLangPicker(!!rebuilt);
 }
 
 /** A picker control changed: write the new selection into the buffer. */
@@ -1465,13 +1525,25 @@ function onLangControlChange() {
  * content change (typing the header by hand and using the picker are the
  * same operation) and on tab switch (the picker follows the tab).
  */
-function reconcileLangPicker() {
+function reconcileLangPicker(rebuilt) {
     const sel = currentLangSelection();
     const btnLabel = document.getElementById('lang-btn-label');
     if (btnLabel) btnLabel.textContent = baseShortLabel(sel.base);
-    document.querySelectorAll('#lang-bases input[type=radio]').forEach(r => {
+    const radios = document.querySelectorAll('#lang-bases input[type=radio]');
+    let found = false;
+    radios.forEach(r => {
         r.checked = (r.value === sel.base);
+        if (r.checked) found = true;
     });
+    // The rendered rows stop matching the selection in two ways, and both are
+    // the hidden bases (curly-infix / neoteric): the buffer names one and it
+    // has no row yet, or it has moved off one whose row is still sitting there.
+    // renderLangMenu always produces a row for the current base and only for
+    // the current base, so this settles in one pass -- `rebuilt` is a stop, not
+    // a retry budget.
+    const stale = Array.from(radios).some(r =>
+        r.value !== sel.base && !LANG_READERS_SHOWN.includes(baseReader({ name: r.value })));
+    if ((!found || stale) && radios.length && !rebuilt) renderLangMenu(true);
 }
 
 /**

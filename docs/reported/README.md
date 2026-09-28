@@ -2195,6 +2195,12 @@ live elsewhere in this index: compiled top-level order was
 | --- | --- | --- |
 | ~~[cps-pap-inline-ignores-wrapper-arguments](../archive/cps-pap-inline-ignores-wrapper-arguments.md)~~ | high | **RESOLVED 2026-09-26** (archived), the day it was found: `pap_extract` now requires the wrapper body to pass exactly the captures, then the parameters. Pinned by `tests/fixtures/cps-pap-inline-ignores-wrapper-arguments` and `r7rs-closure-one-capture-call`. Original row: every dialect. Inside a CPS function a closure called in place or through a `let`, whose body is one saturated call, was taken for a partial application on arity alone and rewritten to `(TARGET captures... args...)`: `((fn [x] (sub x p)) 10)` ran as `(sub p 10)`, `((fn [] (neg (+ p 1))))` as `(neg p)`, silently; under `#lang r7rs` `((lambda () (list p)))` handed `list` a bare value for its rest chain and `cc` refused it |
 
+## Found in the Try Turmeric language picker (filed 2026-09-27)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [r7rs-sweet-base-dialect-missing](r7rs-sweet-base-dialect-missing.md) | low | Filed 2026-09-27. `#lang r7rs/sweet` is TUR-E0331: Scheme is the one language with no sweet-exp base, though SRFI-110 is a Scheme SRFI. Deliberate (r7rs-lang-plan Section 8 Q5; `LANG_R7RS`'s `reader_axis_free = false`, lang_dialects.c:55), filed so it can be picked up. The real work is pointing the sweet-exp pass at the Scheme reader rather than the Turmeric one; `LANG_BASES[]` and `reader_axis_free`'s two-valued answer are the easy half |
+
 ## Found landing r7rs-lang-plan R3 (filed 2026-09-23)
 
 | Report | Severity | One line |

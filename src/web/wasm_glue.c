@@ -127,6 +127,24 @@ static void wasm_preload_stdlib(TuriEnv *env) {
     turi_env_snapshot_prelude(env);
 }
 
+/* Push a program's partial last line out of libc's buffer.
+ *
+ * Emscripten's stdout is a character device, so libc line-buffers it: text
+ * with no trailing newline stays in the FILE buffer, never reaching the JS
+ * side at all.  Scheme's `display` writes no newline, so
+ * `(display "Hello, world!")` printed NOTHING in Try Turmeric -- and then
+ * surfaced glued to the front of the next run that happened to emit one.
+ *
+ * Every entry point that can run user code calls this on its way out.  The
+ * page's other half of the fix is in web/public/eval-worker.js, which takes
+ * the bytes per-byte (Module.stdout) instead of letting Emscripten's TTY layer
+ * hold back a line of its own.  Both are needed: this one gets the text out of
+ * libc, that one gets it onto the page. */
+static void wasm_flush_program_output(void) {
+    fflush(stdout);
+    fflush(stderr);
+}
+
 /* ---------------------------------------------------------------------------
  * Public API functions (exported to WASM)
  * ---------------------------------------------------------------------------
@@ -200,6 +218,7 @@ char *turi_wasm_eval(const char *input) {
 
     char type_tag[64] = {0};
     TuriValue result = turi_eval_typed(g_env, input, type_tag, sizeof(type_tag));
+    wasm_flush_program_output();
 
     /* SI4: four-tier display:
      *   1. turi_try_show        -- TURI_STRUCT with Show instance
@@ -258,6 +277,7 @@ int turi_wasm_eval_ex(const char *input, char **out_result, char **out_error) {
 
     char type_tag[64] = {0};
     TuriValue result = turi_eval_typed(g_env, input, type_tag, sizeof(type_tag));
+    wasm_flush_program_output();
 
     if (turi_is_error(result)) {
         char buf[2048];
@@ -332,6 +352,7 @@ int turi_wasm_eval_batch(const char **inputs, int count, char **outputs) {
         }
         
         TuriValue result = turi_eval(g_env, inputs[i]);
+        wasm_flush_program_output();
         char buf[2048];
         turi_value_repr(buf, sizeof(buf), result);
         outputs[i] = turi_wasm_strdup(buf);
@@ -541,7 +562,8 @@ static void wasm_json_escape(Buf *b, const char *s) {
 /* Return the `#lang` registry as JSON:
  *
  *   {"bases":[{"name":"turmeric","label":"S-expression",
- *              "language":"turmeric","experiment":null},...]}
+ *              "language":"turmeric","reader":"s-expr",
+ *              "experiment":null},...]}
  *
  * One axis, because `#lang` has one: bases are walked live from lang_base_at,
  * the same accessor that backs `tur dialects`, so the playground picker and
@@ -569,6 +591,12 @@ const char *turi_wasm_lang_registry(void) {
         wasm_json_escape(&b, wasm_reader_label(d.reader));
         buf_puts(&b, "\",\"language\":\"");
         wasm_json_escape(&b, d.language);
+        /* The READER half, unqualified (`s-expr`, `sweet`, `scheme`), the same
+         * token `tur dialects` prints.  The picker groups by language and shows
+         * one row per reader, so it needs the axis by name rather than having to
+         * re-derive it from the base token. */
+        buf_puts(&b, "\",\"reader\":\"");
+        wasm_json_escape(&b, d.reader);
         /* null for a stable base; the gating EXPERIMENTS[] name for a gated
          * one (`r7rs` since r7rs-lang-plan R1).  A base with an experiment is
          * BADGED, never hidden, because the `#lang` line is itself the enable
@@ -921,6 +949,7 @@ int turi_wasm_trace_run(const char *input, uint32_t max_steps, int has_main) {
      * every later eval at the prompt into a traced one. */
     turi_trace_stop(g_trace);
     turi_debug_disable(g_env);
+    wasm_flush_program_output();
 
     if (rc != 0) {
         wasm_trace_clear();
