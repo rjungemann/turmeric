@@ -1769,6 +1769,7 @@ deliberately held open rather than archived against a fix nobody had.
 | [godot-aot-staged-build-lacks-godot-natives](godot-aot-staged-build-lacks-godot-natives.md) | high (AOT) | The staged transient project has no `godot-*` natives, so the AOT path cannot compile a script that touches the engine. Interpreter path unaffected |
 | [godot-packed-array-push-is-a-no-op](godot-packed-array-push-is-a-no-op.md) | medium | All nine `godot-packed-*-push` natives in `turmeric-godot` `push_back` onto a COPY of the arena `Variant` and drop it, so every `Packed*Array` a script builds stays size 0 -- silently, with no diagnostic. `godot-array-push` / `godot-dict-set` are unaffected: Godot's `Array` and `Dictionary` are reference types, so mutating a copy mutates the shared body. Defeats the whole T3.D `Packed*Array` surface (vertex buffers, tilemap cells, byte blobs) |
 | [jit-godot-embedding-spike](jit-godot-embedding-spike.md) | research | Whether the JIT can replace the AOT stage-and-subprocess cache in the GDExtension |
+| [godot-shim-threading-under-workerthreadpool](godot-shim-threading-under-workerthreadpool.md) | medium (latent) | `cb_call` runs every interpreted method through `turi_call` on the script's single, unlocked `TuriEnv`, which is not thread-safe, so a node on a `WorkerThreadPool` sub-thread process group or the physics thread can corrupt it. The MIR half of J7 is already solved in-tree. Split out of the archived godot-binding-refresh plan's J7 |
 
 ## Platform-independent, found on a platform sweep
 

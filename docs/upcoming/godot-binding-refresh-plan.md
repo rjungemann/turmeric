@@ -1,11 +1,24 @@
 # Turmeric Godot Binding -- Status Refresh, JIT Concerns, and Un-stranding Plan
 
-> **Status:** Steps 0-4 DONE (2026-09-07). The branch is un-stranded: it merged
-> as [turmeric-godot#1](https://github.com/rjungemann/turmeric-godot/pull/1),
-> and that repo now has its **first passing CI run**, green on all four
-> platforms with downloadable artifacts. Steps 5-6 remain -- see
-> "What actually happened" below before starting them.
-> **Last Updated:** 2026-09-07
+> **Status:** **complete** -- Steps 0-4 landed 2026-09-07: the branch merged as
+> [turmeric-godot#1](https://github.com/rjungemann/turmeric-godot/pull/1), and
+> that repo got its **first passing CI run**, green on all four platforms.
+> Step 5 landed 2026-09-10, as neither (a) nor (b) -- per J1, declarations are
+> needed on every route: an exported C ABI (`native_abi.h`, 122 entry points)
+> plus a staged `tg-godot` declarations module, so engine-touching scripts
+> AOT-compile and run (turmeric-godot#2/#3, macOS; Windows via turmeric-godot#4
+> and this repo's `88197f74f`). Step 6 ran 2026-09-08 as a stand-in-plugin probe
+> on Windows, not the real shim in Godot: a JIT `libturi` links into a plugin,
+> MIR runs there, and JIT'd code calls the plugin's exports. The remainder is
+> tracked in open reports: five AOT gaps (variadic `godot-call`, unstaged
+> facade, `godot-connect-typed`, E0711 in a hand-written `defmodule`, compile
+> cost) in [godot-aot-staged-build-lacks-godot-natives](../reported/godot-aot-staged-build-lacks-godot-natives.md);
+> the real shim in Godot (SConstruct cannot link `libtur_mir.a`), macOS W^X and
+> fixture parity in [jit-godot-embedding-spike](../reported/jit-godot-embedding-spike.md).
+> J7's open, shim-side threading half is filed as
+> [godot-shim-threading-under-workerthreadpool](../reported/godot-shim-threading-under-workerthreadpool.md).
+> Archived 2026-09-28.
+> **Last Updated:** 2026-09-28
 > **Type:** Integration / Game Engine -- post-v1.
 > **Does not supersede** [godot-language-binding-plan.md](../archive/godot-language-binding-plan.md);
 > that plan's v1 scope really is complete and stays archived. This one covers
