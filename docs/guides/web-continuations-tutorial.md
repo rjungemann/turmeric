@@ -12,7 +12,7 @@ A **step-by-step guide** to building a multi-page web form application in Turmer
 
 > **Related guides**: [web-continuations-guide.md](web-continuations-guide.md) (the compact reference), [c-integration-guide.md](c-integration-guide.md), [checkpointing-guide.md](checkpointing-guide.md), [developing-spices-guide.md](developing-spices-guide.md) (`build.tur` and `:c-sources`)
 
-> **The code**: every snippet below is lifted from `examples/guestbook/`, which builds and is driven end to end by `tests/run-guestbook.sh`. Where the shape is dictated by the capture grammar of serializable continuations (one frame, one env value, an `int` hole, uncolored leaves), the tutorial says so rather than pretending otherwise.
+> **The code**: every snippet below is lifted from `examples/guestbook/`, which builds and is driven end to end by `tests/run-guestbook.sh`. Where the shape is dictated by the capture grammar of serializable continuations (one frame, one env value, an `int` hole, effect-free leaves), the tutorial says so rather than pretending otherwise.
 
 ---
 

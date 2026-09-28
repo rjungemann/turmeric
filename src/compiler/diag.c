@@ -2636,7 +2636,16 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: restructure the context into a supported shape -- e.g. pack loop\n"
       "state into a single Serializable struct passed as a tail call's argument\n"
       "  (do (init) (serial-shift k v) (run-loop state))\n"
-      "-- or move the non-capturable work outside the serial-reset boundary.\n",
+      "-- or move the non-capturable work outside the serial-reset boundary.\n"
+      "\n"
+      "The same code covers the RECEIVER (the function handed the continuation).\n"
+      "It runs once, when the continuation is captured, outside the handlers\n"
+      "that enclose the serial-reset, so it may not perform an effect it does not\n"
+      "handle itself:\n"
+      "  (defn recv [k : serial-cont] : int (k (perform (Ask))))  ; Ask escapes\n"
+      "Handle the effect inside the receiver (or a function it calls), or perform\n"
+      "it outside the serial-reset.  A receiver that merely CALLS code through a\n"
+      "fn value, or handles its own effects, is accepted.\n",
     },
     /* cloneable-shift-unsupported-context-miscompile (D6a) */
     { TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,

@@ -1,5 +1,59 @@
 # A serial-shift receiver that calls anything colored is rejected
 
+> **RESOLVED 2026-09-28** -- for every receiver and leaf that no effect
+> escapes, which is the shape the report was filed from (a guestbook receiver
+> calling a template through a `(fn [cstr] cstr)` parameter), and by a smaller
+> change than either fix direction below.
+>
+> The refusal was keyed on the COLORING bit. Coloring is conservative: a
+> fn-value call colors a function and every caller, effect or no effect. And a
+> colored function called through its direct-entry wrapper is not exotic --
+> it is how every effect-free colored function is called already (a `helper`
+> calling `apply1` through a fn value colors both, and the call stays direct).
+> The fresh DK root the wrapper starts only matters to a perform that
+> ESCAPES the callee, and whether one can is exactly what the declared and
+> inferred effect rows say. So `marshal_named_receiver` (both families) and
+> the three context-callee checks in `build_marshal_reset` now refuse a
+> colored target only when `fn_effect_may_escape` (`src/passes/cps_ir.c`):
+> a non-empty declared or inferred row, or no row at all. Colored-but-silent
+> receivers and leaves are admitted and called through the direct entry --
+> sound for the same reason as `apply1`.
+>
+> Two things fell out:
+>
+> - **A receiver typed `k : serial-cont`** lowers `k` to the int64 carrier,
+>   but the shift body passed the DK chain as `void *` whatever the receiver
+>   declared -- a `-Wint-conversion` (a hard error on GCC >= 14 and macOS
+>   clang) for a closure receiver, and a call through a mismatched
+>   function-pointer type for a named one. The admitted shapes made it
+>   reachable from more places; `serial_recv_kty` (`emit_cps_ir.c`) now reads
+>   the spelling off the receiver's declared parameter.
+> - **The remaining refusal says why.** A receiver an effect escapes is still
+>   `TUR-E0706`, but the message now names the receiver and the effect row
+>   instead of blaming the context shape (`emit_effects_serial_shift`), and
+>   `tur explain TUR-E0706` covers receivers.
+>
+> Pinned by `tests/fixtures/serial-shift-colored-receiver` (the repro; a named
+> colored receiver; a capturing closure typed `serial-cont`; a receiver
+> reaching a self-handled effect; a colored cloneable receiver; colored 1-arg,
+> 2-arg and do-tail leaves -- each serial capture marshalled to bytes and back
+> before it resumes) and `errors/serial-shift-receiver-effect-escapes`. The
+> guestbook harness (`tests/run-guestbook.sh`) is unchanged, 10/0. The guides'
+> "must be uncolored" rules now read "no effect may escape".
+>
+> **Not done, and filed separately:** a receiver or leaf whose effect DOES
+> escape, to be handled by a handler around the reset. The correction below
+> is right that it needs the `DKBody` contract widened (the body must be
+> handed the chain outside the prompt), but it is not sufficient: the serial
+> reset runs its chain standalone (`dk_run(chain, 0)` with the prompt's outer
+> continuation `dk_done()`), so `P->next` would have to be linked to the
+> enclosing function's `__kont` with the reset's rest lifted into a resume
+> frame, as `emit_reset` does for `reset`; and a function taking a
+> `serial-cont` parameter is not CPS-emittable at all today (`fn_sig_ok`
+> refuses the `cont` param), so the receiver's perform has no lowering
+> regardless. See
+> [serial-receiver-effect-cannot-reach-enclosing-handler](../reported/serial-receiver-effect-cannot-reach-enclosing-handler.md).
+
 **Severity: low** -- a surprising `TUR-E0706` with an easy workaround (keep
 the receiver's callees uncolored, or do the colored work elsewhere). Found
 2026-09-02 while rewriting the guestbook example; first filed as "a
