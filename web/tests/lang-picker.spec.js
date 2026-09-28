@@ -63,12 +63,76 @@ test.describe('language picker', () => {
     test('replacing the base preserves the rest of the file', async ({ page }) => {
         await page.goto('/try/');
         await waitForEditor(page);
-        await setCode(page, '#lang turmeric/sweet\n\nprintln "hi"\n');
+        // Both bases are in the registry fallback and both are rows the picker
+        // shows, so this holds with or without the WASM runtime.
+        await setCode(page, '#lang turmeric\n\n(println "hi")\n');
 
         await openLangMenu(page);
-        await page.check('#lang-bases input[value="turmeric/neoteric"]');
+        await page.check('#lang-bases input[value="turmeric/sweet"]');
 
-        expect(await editorValue(page)).toBe('#lang turmeric/neoteric\n\nprintln "hi"\n');
+        expect(await editorValue(page)).toBe('#lang turmeric/sweet\n\n(println "hi")\n');
+    });
+
+    // -----------------------------------------------------------------------
+    // Shape of the list: a heading per language, `#lang <base>` as the row.
+    // These need the registry export (the fallback is Turmeric-only), so they
+    // wait for the runtime the way the Run tests do.
+    // -----------------------------------------------------------------------
+
+    async function langRows(page) {
+        return page.evaluate(() =>
+            Array.from(document.querySelectorAll('#lang-bases .lang-group')).map(g => ({
+                name: g.querySelector('.lang-group-name').textContent,
+                rows: Array.from(g.querySelectorAll('.lang-row')).map(r => ({
+                    label: r.querySelector('.lang-row-name').textContent,
+                    value: r.querySelector('input').value,
+                    chip:  !!r.querySelector('.lang-chip'),
+                })),
+            })));
+    }
+
+    async function gotoWithRegistry(page) {
+        await page.goto('/try/');
+        await expect(page.locator('#wasm-status-text')).toHaveText('Ready', { timeout: 30_000 });
+        await waitForEditor(page);
+    }
+
+    test('the list is grouped by language and labelled by the #lang line', async ({ page }) => {
+        await gotoWithRegistry(page);
+        await setCode(page, '');
+        await openLangMenu(page);
+
+        expect(await langRows(page)).toEqual([
+            { name: 'Turmeric', rows: [
+                { label: '#lang turmeric',       value: 'turmeric',       chip: false },
+                { label: '#lang turmeric/sweet', value: 'turmeric/sweet', chip: false },
+            ] },
+            { name: 'Saffron', rows: [
+                { label: '#lang saffron',        value: 'saffron',        chip: false },
+                { label: '#lang saffron/sweet',  value: 'saffron/sweet',  chip: false },
+            ] },
+            // Scheme is gated, so its row -- and only its row -- is badged.
+            { name: 'Scheme', rows: [
+                { label: '#lang r7rs',           value: 'r7rs',           chip: true },
+            ] },
+        ]);
+    });
+
+    test('a buffer on a hidden base still gets its row, checked', async ({ page }) => {
+        await gotoWithRegistry(page);
+
+        // curly-infix and neoteric are spellable but not offered: `{a + b}` is
+        // on in every dialect and neoteric is one of sweet-exp's tools. A file
+        // that names one must still see itself in the picker.
+        await setCode(page, '#lang turmeric/neoteric\n\nprintln("hi")\n');
+        await openLangMenu(page);
+
+        await expect(page.locator('#lang-bases input[value="turmeric/neoteric"]')).toBeChecked();
+        await expect(page.locator('#lang-btn-label')).toHaveText('neoteric');
+
+        // ...and it goes away again once the buffer moves off it.
+        await page.check('#lang-bases input[value="turmeric/sweet"]');
+        await expect(page.locator('#lang-bases input[value="turmeric/neoteric"]')).toHaveCount(0);
     });
 
     test('typing a header by hand reconciles the picker', async ({ page }) => {

@@ -31,6 +31,49 @@ function postPrintErr(text) {
     if (!muted) self.postMessage({ type: 'printErr', text });
 }
 
+// ---------------------------------------------------------------------------
+// stdout/stderr: assemble the lines here, so a partial last line still shows
+// ---------------------------------------------------------------------------
+// Emscripten's default stdout is a TTY device that hands `print` one COMPLETE
+// line at a time -- a trailing partial line sits in its buffer until some
+// later write happens to emit a newline.  Scheme's `display` writes no
+// newline, so `(display "Hello, world!")` printed NOTHING at all, and then
+// surfaced glued to the front of the next Run that did print one.
+//
+// `Module.stdout`/`Module.stderr` are per-byte device callbacks (FS.init ->
+// FS.createDevice), so taking the bytes ourselves lets every request end with
+// an explicit flush of whatever has no newline behind it yet.
+const streamDecoder = new TextDecoder('utf-8');
+
+const stdoutStream = { bytes: [], post: postPrint };
+const stderrStream = { bytes: [], post: postPrintErr };
+
+// A line is complete: deliver it WITHOUT the newline, which is what `print`
+// used to hand the page (a bare `(newline)` is therefore an empty line, not a
+// dropped one).
+function emitStreamLine(s) {
+    const text = s.bytes.length
+        ? streamDecoder.decode(new Uint8Array(s.bytes))
+        : '';
+    s.bytes.length = 0;
+    s.post(text);
+}
+
+function streamByte(s, byte) {
+    if (byte === null) { flushStreams(); return; }   // device closed
+    if (byte === 0) return;                          // ignored, as the TTY does
+    if (byte === 10) { emitStreamLine(s); return; }
+    s.bytes.push(byte);
+}
+
+// Called at the end of every request that can print, so output that stops
+// mid-line reaches the page with the run that produced it rather than the
+// next one.  A no-op when both streams are empty.
+function flushStreams() {
+    if (stdoutStream.bytes.length) emitStreamLine(stdoutStream);
+    if (stderrStream.bytes.length) emitStreamLine(stderrStream);
+}
+
 // Queue messages that arrive before the module is ready.
 const queue = [];
 let ready = false;
@@ -52,12 +95,18 @@ function handleMessage(msg) {
             turiModule.stringToUTF8(msg.input, inputPtr, inputLen);
             const resultPtr = turiModule._turi_wasm_eval(inputPtr);
             turiModule._free(inputPtr);
+            // Before the result, so the transcript keeps program-output-then-
+            // value order.
+            flushStreams();
             const result = resultPtr ? turiModule.UTF8ToString(resultPtr) : '';
             if (resultPtr) turiModule._free(resultPtr);
             self.postMessage({ type: 'eval-result', id, result });
         } catch (err) {
             self.postMessage({ type: 'error', id, error: String(err) });
         } finally {
+            // Still inside the mute window: a quiet replay's leftovers are
+            // dropped here rather than surfacing on the next run.
+            flushStreams();
             muted = false;
         }
 
@@ -158,6 +207,7 @@ function handleMessage(msg) {
             turiModule.stringToUTF8(msg.input, inputPtr, inputLen);
             const steps = fn(inputPtr, msg.maxSteps >>> 0, msg.hasMain ? 1 : 0);
             turiModule._free(inputPtr);
+            flushStreams();
 
             let stats = null;
             if (steps >= 0) {
@@ -289,7 +339,15 @@ self.addEventListener('message', function (e) {
             return;
         }
 
-        factory({ print: postPrint, printErr: postPrintErr }).then(function (mod) {
+        // `print`/`printErr` still catch Emscripten's own `out()`/`err()`
+        // messages; `stdout`/`stderr` are the program's bytes, which we line
+        // up ourselves (see flushStreams above).
+        factory({
+            print:    postPrint,
+            printErr: postPrintErr,
+            stdout:   (byte) => streamByte(stdoutStream, byte),
+            stderr:   (byte) => streamByte(stderrStream, byte),
+        }).then(function (mod) {
             turiModule = mod;
             const initResult = turiModule._turi_wasm_init();
             if (initResult !== 0) {
