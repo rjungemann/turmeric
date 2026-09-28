@@ -310,8 +310,13 @@ covers `(+ a b)` and `(len v)` uniformly. Three sources of contradiction:
 2. two distinct literals in one class (`3` and `5` can never be equal);
 3. a positive atom and a negated atom that are congruent.
 
-Naive `O(n^2)` fixpoint; real obligations carry a handful of terms.
-`REFINE_MAX_EUF_TERMS` bounds the rest. Textbook treatment: Harrison; Bradley &
+Terms are interned through a hash index keyed on the hash-cons id, and the
+closure is a signature-table fixpoint: each round buckets every application by
+(operator, symbol, argument roots), so congruent terms meet in one bucket
+rather than being found by an all-pairs compare -- `O(n * arity)` per round.
+Literal conflicts are one pass over a root map. `REFINE_MAX_EUF_TERMS` bounds
+the rest. (Until 2026-09-28 all three were `O(n^2)` scans; see
+[solver-hot-structures-linear-scans](../archive/solver-hot-structures-linear-scans.md).) Textbook treatment: Harrison; Bradley &
 Manna (see References).
 
 **The state is incremental across cubes.** S1 and S3 hold ONE `EufState` and
@@ -633,9 +638,11 @@ than any number above.
 - **No DPLL(T).** Boolean structure is naive DNF: no clause learning, no theory
   propagation, no conflict-driven search. The cube caps exist because of this,
   not the other way round.
-- **The congruence fixpoint is a naive `O(n^2)` all-pairs sweep**, which is the
-  right tradeoff at the sizes measured (peak 25 terms of 512) and would not be
-  at a hundred times that.
+- **The congruence fixpoint re-hashes every term per round** rather than
+  keeping Nieuwenhuis-Oliveras use-lists, so a merge costs a full round rather
+  than touching only the affected parents. Each round is linear since
+  2026-09-28 (it was an all-pairs sweep), which is the right tradeoff at the
+  sizes measured (peak 25 terms of 512).
 
 **`path hyps` reads differently from the others.** Its peak *saturates*: the
 walk stops collecting once the array is full, so the peak reads 8 whatever the
