@@ -30,6 +30,7 @@ by default; no compiler flag is required.
   - [Multi-Party Session Types (SS5-SS8)](#multi-party-session-types-ss5-ss8)
     - [defprotocol](#defprotocol)
     - [make-protocol, send-to, recv-from, close](#make-protocol-send-to-recv-from-close)
+    - [Timed receives: timeout, recv-timeout-from](#timed-receives-timeout-recv-timeout-from)
     - [Three or more roles](#three-or-more-roles)
     - [Projection algorithm](#projection-algorithm)
   - [Checking a protocol under the interpreter](#checking-a-protocol-under-the-interpreter)
@@ -184,9 +185,9 @@ match recv-timeout(ch 500)  ; 500 ms deadline
     close(ch)
 ```
 
-`recv-timeout` is **binary-session only** -- multi-party role endpoints have no
-timed receive, so a role blocked in `recv-from` has no bounded wait. See
-[multi-party-sessions-have-no-timed-receive](https://github.com/rjungemann/turmeric/blob/main/docs/reported/multi-party-sessions-have-no-timed-receive.md).
+Multi-party role endpoints have the same bounded wait, `recv-timeout-from`,
+on a step the global protocol declares timed -- see
+[Timed receives](#timed-receives-timeout-recv-timeout-from) below.
 
 ### Payload types
 
@@ -437,6 +438,75 @@ defn main [] :int
 The runtime uses a shared router so all N role endpoints communicate through
 a single lock-based message router allocated on the heap.
 
+### Timed receives: timeout, recv-timeout-from
+
+A timeout is the only recovery a protocol has against a participant that
+stalls, and a multi-party protocol has more participants to stall. Declare
+the step that may time out with `timeout`, giving the message and what
+follows each outcome:
+
+```turmeric
+(defprotocol Relay [A B C]
+  (timeout (-> A B int)          ; B may stop waiting for A's value
+    [ok      (-> B C int)]       ; ... it arrived: forward it
+    [expired (-> B C int)]))     ; ... it did not: tell C anyway
+```
+
+```sweet-exp
+defprotocol Relay [A B C]
+  (timeout (-> A B int)          ; B may stop waiting for A's value
+    [ok      (-> B C int)]       ; ... it arrived: forward it
+    [expired (-> B C int)])      ; ... it did not: tell C anyway
+```
+
+The branches are named `ok` and `expired` (in either order); either may be
+empty, and any forms after the `timeout` follow both. The deadline is not
+part of the protocol -- the receiver supplies it, in milliseconds, at the op.
+`recv-timeout-from` is the multi-party `recv-timeout`: match `Left` for the
+value and the endpoint at `ok`, `Right` for the endpoint at `expired`:
+
+```turmeric
+(defn relay-b [^linear ch :(Role Relay B)] : nil
+  (match (recv-timeout-from ch A 500)
+    (Left pair)
+      (let [[v ch] pair]
+        (close (send-to ch C v)))
+    (Right ch)
+      (close (send-to ch C -1))))
+```
+
+```sweet-exp
+defn relay-b [^linear ch :(Role Relay B)] :nil
+  match recv-timeout-from(ch A 500)
+    (Left pair)
+    let [[v ch] pair]
+      close $ send-to ch C v
+    (Right ch)
+    close $ send-to ch C -1
+```
+
+The sender and every other role use their ordinary ops: A just `send-to`s B,
+and C just `recv-from`s B. That is sound because of one rule, checked when
+the protocol is declared:
+
+- **Only the receiver learns whether the deadline passed**, so every other
+  role -- the sender included -- must continue the same way in both branches.
+  A protocol that gives C a message only in `ok` is rejected with
+  `TUR-E0220`; the fix is what `Relay` does, a message from the receiver in
+  each branch. (The same rule makes the sender's projection
+  `Send int (Timeout P P)`, the binary dual of the receiver's
+  `Recv int (Timeout Q P)`, so a two-role timed protocol projects onto exactly
+  what `make-session` builds for a binary `recv-timeout`.)
+
+At run time, a sender whose receiver has already given up does not block:
+the router drops that one message. The late value is never delivered to the
+receiver's *next* receive from the same peer, so after `expired` the protocol
+resumes exactly where it says. `recv-from` is also accepted on a timed step,
+as a receive that never gives up (the `ok` branch).
+`tests/fixtures/session-mp-timeout` (and its `--interpret` twin
+`session-mp-timeout-turi`) runs both outcomes and the dropped-late-message
+case.
+
 ### Projection algorithm
 
 At compile time the elaborator _projects_ the global protocol onto each
@@ -449,9 +519,14 @@ the current role:
 - Choice branches that a role does not participate in must be _uniform_
   across branches (mergeability condition). If they are not, the compiler
   emits `TUR-E0220`.
+- A timed receive `(timeout (-> From To T) [ok ...] [expired ...])` projects
+  to `Recv T (Timeout ok expired)` for `To`. Every other role must project
+  the two branches identically (`TUR-E0220` otherwise); `From` gets
+  `Send T (Timeout P P)` and a bystander gets `P`.
 
-The projection check happens in `elab_global.c` when `(make-protocol P)` is
-elaborated.
+The projection check happens where a `(project G R)` type is written; a
+protocol containing a `timeout` is also projected onto every role when it is
+declared, since its role endpoints rely on the uniformity rule above.
 
 ---
 

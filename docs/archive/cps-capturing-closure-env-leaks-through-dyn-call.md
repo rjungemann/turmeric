@@ -1,5 +1,14 @@
 # A capturing closure passed to a dynamic call from a CPS-lowered function leaks its env
 
+> **RESOLVED 2026-09-28** by the collector a compiled single-unit `#lang
+> saffron` program now allocates from (see
+> [any-widen-stored-in-an-adt-field-has-no-owner](any-widen-stored-in-an-adt-field-has-no-owner.md)).
+> Measured with the repro in a loop -- 600,000 `vec-fold`s, 3,000,000 capturing
+> closures through `apply-to` -- it runs in a 1.4 MB heap (175 collections,
+> 201 MB freed) and fits a 256 MiB address-space limit it dies under without
+> the collector. The env still has no static owner on plain malloc; that
+> residue is [saffron-static-ownership-residue](../reported/saffron-static-ownership-residue.md).
+
 **Severity: low** (a leak, bounded by the number of such calls; no wrong answer).
 Found 2026-09-23 while landing proper-tail-calls T6; pre-existing on `main`
 (reproduced with the T6 changes stashed).

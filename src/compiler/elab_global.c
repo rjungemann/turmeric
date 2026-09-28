@@ -5,6 +5,7 @@
  *   elab_make_protocol -- creates role endpoints (compile-time type check only)
  *   elab_send_to       -- type-checks (send-to chan role val)
  *   elab_recv_from     -- type-checks (recv-from chan role)
+ *   elab_recv_timeout_from -- type-checks (recv-timeout-from chan role ms)
  *   elab_role_close    -- type-checks (close chan) for TY_ROLE endpoints
  *
  * Global protocols are compile-time only here in elab: the role endpoints
@@ -40,18 +41,64 @@ static const char *gi_intern(Elab *e, const char *s) {
  * protocols: if the current role is not involved in a message exchange it
  * simply advances past it.
  *
+ * A timed receive between two other roles is skipped the same way, into its
+ * `ok` continuation: defprotocol has already checked that both continuations
+ * project identically for every role but the receiver, so whichever branch
+ * the receiver takes at run time, this role's remaining steps are the same.
+ *
  * Returns the first step at which `role_name` is the sender or receiver, or
  * NULL/GI_END if the protocol is finished for this role. */
-static GlobalInteraction *skip_bystander_steps(GlobalInteraction *step,
-                                                const char *role_name) {
-    while (step && step->kind == GI_MSG) {
-        bool is_sender   = step->msg.from && strcmp(step->msg.from, role_name) == 0;
-        bool is_receiver = step->msg.to   && strcmp(step->msg.to,   role_name) == 0;
-        if (is_sender || is_receiver) break;
-        /* This role is a bystander -- advance past this step */
-        step = step->msg.rest;
+static bool role_named(const char *a, const char *b) {
+    return a && b && (a == b || strcmp(a, b) == 0);
+}
+
+GlobalInteraction *role_skip_bystander_steps(GlobalInteraction *step,
+                                             const char *role_name) {
+    while (step) {
+        if (step->kind == GI_MSG) {
+            if (role_named(step->msg.from, role_name) ||
+                role_named(step->msg.to, role_name)) break;
+            step = step->msg.rest;          /* bystander: advance past it */
+        } else if (step->kind == GI_TIMEOUT) {
+            if (role_named(step->timed.from, role_name) ||
+                role_named(step->timed.to, role_name)) break;
+            step = step->timed.ok;          /* uniform for bystanders */
+        } else {
+            break;
+        }
     }
     return step;
+}
+
+static GlobalInteraction *skip_bystander_steps(GlobalInteraction *step,
+                                                const char *role_name) {
+    return role_skip_bystander_steps(step, role_name);
+}
+
+/* A message step as the role ops see it: a plain (-> From To T), or the
+ * message of a timed receive.  `next` is where the cursor goes when the
+ * message is delivered -- the `ok` continuation for a timed step, which is
+ * also the (uniform) continuation of its sender. */
+typedef struct {
+    const char        *from, *to;
+    Type              *msg;
+    GlobalInteraction *next;
+    bool               timed;
+} RoleMsgStep;
+
+static bool role_msg_step(GlobalInteraction *step, RoleMsgStep *out) {
+    if (!step) return false;
+    if (step->kind == GI_MSG) {
+        *out = (RoleMsgStep){ step->msg.from, step->msg.to, step->msg.msg,
+                              step->msg.rest, false };
+        return true;
+    }
+    if (step->kind == GI_TIMEOUT) {
+        *out = (RoleMsgStep){ step->timed.from, step->timed.to, step->timed.msg,
+                              step->timed.ok, true };
+        return true;
+    }
+    return false;
 }
 
 /* ---- well-formedness checking ---- */
@@ -86,7 +133,7 @@ static GlobalInteraction *parse_one_interaction(Elab *e, Form *f,
     if (!f || f->tag != F_LIST || f->as.list.len < 1) {
         diag_emit_with_code(DIAG_ERROR, f ? f->span : (Span){0},
                             TUR_E0223_GLOBAL_NOT_WELLFORMED,
-                            "defprotocol '%s': expected an interaction form (-> ...) or (choice ...) or (loop ...) or (continue ...)",
+                            "defprotocol '%s': expected an interaction form (-> ...), (timeout ...), (choice ...), (loop ...) or (continue ...)",
                             proto_name);
         *ok = false;
         return NULL;
@@ -160,6 +207,103 @@ static GlobalInteraction *parse_one_interaction(Elab *e, Form *f,
         gi->msg.to     = to_role;
         gi->msg.msg    = msg_type;
         gi->msg.rest   = rest;
+        return gi;
+    }
+
+    /* (timeout (-> From To MsgType) [ok body...] [expired body...])
+     *
+     * A timed receive: To waits for From's message but may give up after a
+     * deadline supplied at the op, (recv-timeout-from ch From ms).  `ok` is
+     * the protocol when the message arrives, `expired` when it does not; the
+     * forms after the timeout follow both.  The branches are identified by
+     * label, not position, so either order reads the same. */
+    if (strcmp(head_name, "timeout") == 0) {
+        if (f->as.list.len != 4) {
+            diag_emit_with_code(DIAG_ERROR, f->span, TUR_E0223_GLOBAL_NOT_WELLFORMED,
+                                "defprotocol '%s': (timeout (-> From To MsgType) [ok ...] [expired ...]) "
+                                "requires a message and exactly two branches",
+                                proto_name);
+            *ok = false;
+            return NULL;
+        }
+        Form *msg_f = f->as.list.items[1];
+        if (msg_f->tag != F_LIST || msg_f->as.list.len != 4
+                || msg_f->as.list.items[0]->tag != F_SYM
+                || strcmp(msg_f->as.list.items[0]->as.sym->name, "->") != 0
+                || msg_f->as.list.items[1]->tag != F_SYM
+                || msg_f->as.list.items[2]->tag != F_SYM) {
+            diag_emit_with_code(DIAG_ERROR, msg_f->span, TUR_E0223_GLOBAL_NOT_WELLFORMED,
+                                "defprotocol '%s': the first argument of timeout must be a message (-> From To MsgType)",
+                                proto_name);
+            *ok = false;
+            return NULL;
+        }
+        const char *from_role = gi_intern(e, msg_f->as.list.items[1]->as.sym->name);
+        const char *to_role   = gi_intern(e, msg_f->as.list.items[2]->as.sym->name);
+        if (!check_role_declared(e, from_role, roles, n_roles, msg_f->span, proto_name) ||
+            !check_role_declared(e, to_role, roles, n_roles, msg_f->span, proto_name)) {
+            *ok = false; return NULL;
+        }
+        if (from_role == to_role || strcmp(from_role, to_role) == 0) {
+            diag_emit_with_code(DIAG_ERROR, msg_f->span, TUR_E0223_GLOBAL_NOT_WELLFORMED,
+                                "defprotocol '%s': role '%s' cannot send a message to itself",
+                                proto_name, from_role);
+            *ok = false;
+            return NULL;
+        }
+        Type *msg_type = type_expr_from_form(e, msg_f->as.list.items[3], NULL, NULL, NULL, 0);
+        if (!msg_type) { *ok = false; return NULL; }
+
+        /* Locate the two branches by label. */
+        Form *branch_ok = NULL, *branch_exp = NULL;
+        for (int bi = 0; bi < 2; bi++) {
+            Form *bf = f->as.list.items[2 + bi];
+            if ((bf->tag != F_VEC && bf->tag != F_LIST) || bf->as.list.len < 1
+                    || bf->as.list.items[0]->tag != F_SYM) {
+                diag_emit_with_code(DIAG_ERROR, bf->span, TUR_E0223_GLOBAL_NOT_WELLFORMED,
+                                    "defprotocol '%s': each timeout branch must be [ok body...] or [expired body...]",
+                                    proto_name);
+                *ok = false;
+                return NULL;
+            }
+            const char *label = bf->as.list.items[0]->as.sym->name;
+            Form **slot = strcmp(label, "ok") == 0      ? &branch_ok
+                        : strcmp(label, "expired") == 0 ? &branch_exp
+                        : NULL;
+            if (!slot || *slot) {
+                diag_emit_with_code(DIAG_ERROR, bf->span, TUR_E0223_GLOBAL_NOT_WELLFORMED,
+                                    slot ? "defprotocol '%s': timeout branch '%s' is given twice"
+                                         : "defprotocol '%s': timeout branch label '%s' must be ok or expired",
+                                    proto_name, label);
+                *ok = false;
+                return NULL;
+            }
+            *slot = bf;
+        }
+
+        /* Each continuation is its branch body followed by the rest, so a role
+         * cursor that enters a branch walks straight on into what follows. */
+        GlobalInteraction *conts[2];
+        Form *bfs[2] = { branch_ok, branch_exp };
+        for (int bi = 0; bi < 2; bi++) {
+            int n_body = (int)bfs[bi]->as.list.len - 1;
+            int n_all  = n_body + n_rest;
+            Form **all = (Form **)arena_alloc(e->arena,
+                                              (size_t)(n_all ? n_all : 1) * sizeof(Form *));
+            for (int k = 0; k < n_body; k++) all[k] = bfs[bi]->as.list.items[1 + k];
+            for (int k = 0; k < n_rest; k++) all[n_body + k] = rest_forms[k];
+            conts[bi] = parse_interactions(e, all, n_all, roles, n_roles, proto_name, ok);
+            if (!*ok) return NULL;
+        }
+
+        GlobalInteraction *gi = (GlobalInteraction *)arena_alloc(e->arena, sizeof(GlobalInteraction));
+        memset(gi, 0, sizeof(*gi));
+        gi->kind          = GI_TIMEOUT;
+        gi->timed.from    = from_role;
+        gi->timed.to      = to_role;
+        gi->timed.msg     = msg_type;
+        gi->timed.ok      = conts[0];
+        gi->timed.expired = conts[1];
         return gi;
     }
 
@@ -282,7 +426,8 @@ static GlobalInteraction *parse_one_interaction(Elab *e, Form *f,
             if (bf->tag == F_LIST && bf->as.list.len >= 1
                     && bf->as.list.items[0]->tag == F_SYM) {
                 const char *bn = bf->as.list.items[0]->as.sym->name;
-                if (strcmp(bn, "->") == 0 || strcmp(bn, "choice") == 0) {
+                if (strcmp(bn, "->") == 0 || strcmp(bn, "choice") == 0
+                        || strcmp(bn, "timeout") == 0) {
                     has_progress = true;
                     break;
                 }
@@ -290,7 +435,7 @@ static GlobalInteraction *parse_one_interaction(Elab *e, Form *f,
         }
         if (!has_progress) {
             diag_emit_with_code(DIAG_ERROR, f->span, TUR_E0223_GLOBAL_NOT_WELLFORMED,
-                                "defprotocol '%s': loop '%s' is not guarded -- the body must contain at least one (-> ...) or (choice ...) before any (continue %s)",
+                                "defprotocol '%s': loop '%s' is not guarded -- the body must contain at least one (-> ...), (timeout ...) or (choice ...) before any (continue %s)",
                                 proto_name, label, label);
             *ok = false;
             return NULL;
@@ -333,7 +478,7 @@ static GlobalInteraction *parse_one_interaction(Elab *e, Form *f,
     }
 
     diag_emit_with_code(DIAG_ERROR, f->span, TUR_E0223_GLOBAL_NOT_WELLFORMED,
-                        "defprotocol '%s': unknown interaction form '%s'; expected ->, choice, loop, or continue",
+                        "defprotocol '%s': unknown interaction form '%s'; expected ->, timeout, choice, loop, or continue",
                         proto_name, head_name);
     *ok = false;
     return NULL;
@@ -354,6 +499,27 @@ static GlobalInteraction *parse_interactions(Elab *e, Form **forms, int n_forms,
     /* Delegate to parse_one_interaction which recurses for the rest */
     return parse_one_interaction(e, forms[0], forms + 1, n_forms - 1,
                                  roles, n_roles, proto_name, ok);
+}
+
+/* True when the interaction tree contains a timed receive anywhere. */
+static bool gi_has_timeout(const GlobalInteraction *gi) {
+    while (gi) {
+        switch (gi->kind) {
+            case GI_TIMEOUT: return true;
+            case GI_MSG:     gi = gi->msg.rest; break;
+            case GI_CHOICE:
+                for (int i = 0; i < gi->choice.n_branches; i++)
+                    if (gi_has_timeout(gi->choice.branches[i].body)) return true;
+                gi = gi->choice.rest;
+                break;
+            case GI_LOOP:
+                if (gi_has_timeout(gi->loop.body)) return true;
+                gi = gi->loop.rest;
+                break;
+            default:         return false;
+        }
+    }
+    return false;
 }
 
 /* ---- elab_defprotocol ---- */
@@ -411,6 +577,19 @@ Expr *elab_defprotocol(Elab *e, const Form *call) {
     GlobalInteraction *body = parse_interactions(e, interaction_forms, n_interactions,
                                                  roles, n_roles, proto_name, &ok);
     if (!ok) return NULL;
+
+    /* A timed receive is only sound when every role except its receiver
+     * continues the same way whichever outcome the receiver saw -- none of
+     * them can observe it.  Project the protocol onto every role now, so a
+     * violation is TUR-E0220 at the declaration rather than a hang or a
+     * misdelivered message at run time.  Untimed protocols keep the lazy
+     * check they always had (projection runs where a (project G R) type is
+     * written). */
+    if (gi_has_timeout(body)) {
+        for (int i = 0; i < n_roles; i++) {
+            if (!session_project(e, body, roles[i], call->span)) return NULL;
+        }
+    }
 
     /* 4. Build TY_GLOBAL type node */
     Type *global_t = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -544,30 +723,35 @@ Expr *elab_send_to(Elab *e, const Form *call) {
     /* SS8: skip bystander steps (steps where this role is neither sender nor receiver) */
     GlobalInteraction *step = skip_bystander_steps(chan->type.as.role_.current_step, this_role);
 
-    /* Validate current step is GI_MSG with matching from/to */
-    if (!step || step->kind != GI_MSG) {
+    /* Validate current step is a message (plain or timed) with matching
+     * from/to.  A sender cannot observe whether a timed receive timed out, so
+     * sending into one is an ordinary send: defprotocol has checked that the
+     * sender's continuation is the same in both outcomes, and the runtime
+     * drops the message if the receiver has already given up on it. */
+    RoleMsgStep ms;
+    if (!role_msg_step(step, &ms)) {
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
                             "send-to: role '%s' cannot send at this point in the protocol "
                             "(current step is not a message send)",
                             this_role);
         return NULL;
     }
-    if (step->msg.from == NULL || strcmp(step->msg.from, this_role) != 0) {
+    if (ms.from == NULL || strcmp(ms.from, this_role) != 0) {
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
                             "send-to: role '%s' is not the sender at this protocol step "
                             "(expected sender is '%s')",
-                            this_role, step->msg.from ? step->msg.from : "?");
+                            this_role, ms.from ? ms.from : "?");
         return NULL;
     }
-    if (step->msg.to == NULL || strcmp(step->msg.to, dest_role) != 0) {
+    if (ms.to == NULL || strcmp(ms.to, dest_role) != 0) {
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
                             "send-to: role '%s' should send to '%s', not to '%s'",
-                            this_role, step->msg.to ? step->msg.to : "?", dest_role);
+                            this_role, ms.to ? ms.to : "?", dest_role);
         return NULL;
     }
 
     /* Type-check the value against the expected message type */
-    Type *expected_msg = step->msg.msg;
+    Type *expected_msg = ms.msg;
     if (expected_msg && expected_msg->kind != TY_UNKNOWN
             && val->type.kind != TY_UNKNOWN
             && val->type.kind != expected_msg->kind) {
@@ -586,7 +770,7 @@ Expr *elab_send_to(Elab *e, const Form *call) {
     /* Build the advanced TY_ROLE type (current_step = rest) */
     Type advanced_type = type_role(chan->type.as.role_.global_type,
                                    this_role,
-                                   step->msg.rest);
+                                   ms.next);
 
     /* SS7: Compute to_idx at elaboration time */
     Type *global_t = chan->type.as.role_.global_type;
@@ -682,25 +866,28 @@ Expr *elab_recv_from(Elab *e, const Form *call) {
     /* SS8: skip bystander steps (steps where this role is neither sender nor receiver) */
     GlobalInteraction *step = skip_bystander_steps(chan->type.as.role_.current_step, this_role);
 
-    /* Validate current step is GI_MSG with matching from/to */
-    if (!step || step->kind != GI_MSG) {
+    /* Validate current step is a message with matching from/to.  A timed
+     * step accepts a plain recv-from too: waiting without a deadline is the
+     * receiver declining to give up, which is the `ok` outcome. */
+    RoleMsgStep ms;
+    if (!role_msg_step(step, &ms)) {
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
                             "recv-from: role '%s' cannot receive at this point in the protocol "
                             "(current step is not a message send)",
                             this_role);
         return NULL;
     }
-    if (step->msg.to == NULL || strcmp(step->msg.to, this_role) != 0) {
+    if (ms.to == NULL || strcmp(ms.to, this_role) != 0) {
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
                             "recv-from: role '%s' is not the receiver at this protocol step "
                             "(expected receiver is '%s')",
-                            this_role, step->msg.to ? step->msg.to : "?");
+                            this_role, ms.to ? ms.to : "?");
         return NULL;
     }
-    if (step->msg.from == NULL || strcmp(step->msg.from, src_role) != 0) {
+    if (ms.from == NULL || strcmp(ms.from, src_role) != 0) {
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
                             "recv-from: expected message from '%s', not from '%s'",
-                            step->msg.from ? step->msg.from : "?", src_role);
+                            ms.from ? ms.from : "?", src_role);
         return NULL;
     }
 
@@ -710,7 +897,7 @@ Expr *elab_recv_from(Elab *e, const Form *call) {
     }
 
     /* Build [msg-type, advanced-Role] as a TY_SESSION_RECV_PAIR */
-    Type *msg_type = step->msg.msg;
+    Type *msg_type = ms.msg;
     if (!msg_type) {
         /* Fallback to NIL if no message type */
         msg_type = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -720,7 +907,7 @@ Expr *elab_recv_from(Elab *e, const Form *call) {
     Type *new_role = (Type *)arena_alloc(e->arena, sizeof(Type));
     *new_role = type_role(chan->type.as.role_.global_type,
                           this_role,
-                          step->msg.rest);
+                          ms.next);
 
     Type pair_type = type_session_recv_pair(msg_type, new_role);
 
@@ -763,6 +950,125 @@ Expr *elab_recv_from(Elab *e, const Form *call) {
     } else {
         ic->val_exprs[0] = chan;
     }
+    out->as.inline_c_.inline_c = ic;
+    return out;
+}
+
+/* ---- elab_recv_timeout_from ---- */
+
+/* (recv-timeout-from chan role-name duration-ms)
+ * The multi-party twin of recv-timeout.  Chan must be TY_ROLE whose current
+ * step is a timed receive (timeout (-> role-name this-role T) [ok ...]
+ * [expired ...]).  Returns a TY_SESSION_OFFER consumed by a match:
+ *   (Left pair)  -- pair : RecvPair[T, Role@ok], destructured as [v ch]
+ *   (Right ch)   -- ch   : Role@expired
+ * Emits tur_router_recv_timeout(chan, from_idx, ms), which returns the tag
+ * (0 = arrived, 1 = expired) and stashes an arrived value in tur__rtv_ exactly
+ * as the binary tur_session_recv_timeout does, so the Left arm's [v ch]
+ * destructuring is the binary one unchanged. */
+Expr *elab_recv_timeout_from(Elab *e, const Form *call) {
+    if (call->as.list.len != 4) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "recv-timeout-from requires 3 arguments: (recv-timeout-from chan role duration)");
+        return NULL;
+    }
+    Expr *chan = elab_form(e, call->as.list.items[1]);
+    if (!chan) return NULL;
+    Form *role_f = call->as.list.items[2];
+    if (role_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, role_f->span,
+                  "recv-timeout-from: role name must be a symbol");
+        return NULL;
+    }
+    Expr *dur = elab_form(e, call->as.list.items[3]);
+    if (!dur) return NULL;
+
+    if (chan->type.kind != TY_ROLE) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                            "recv-timeout-from requires a Role endpoint, got %s",
+                            typekind_to_string(chan->type.kind));
+        return NULL;
+    }
+
+    const char *this_role = chan->type.as.role_.role_name;
+    const char *src_role  = gi_intern(e, role_f->as.sym->name);
+    GlobalInteraction *step = skip_bystander_steps(chan->type.as.role_.current_step, this_role);
+
+    if (!step || step->kind != GI_TIMEOUT) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                            "recv-timeout-from: role '%s' has no timed receive at this point "
+                            "in the protocol -- declare the step as (timeout (-> From To T) "
+                            "[ok ...] [expired ...]), or use recv-from",
+                            this_role);
+        return NULL;
+    }
+    if (!role_named(step->timed.to, this_role)) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                            "recv-timeout-from: role '%s' is not the receiver at this protocol step "
+                            "(expected receiver is '%s')",
+                            this_role, step->timed.to ? step->timed.to : "?");
+        return NULL;
+    }
+    if (!role_named(step->timed.from, src_role)) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                            "recv-timeout-from: expected message from '%s', not from '%s'",
+                            step->timed.from ? step->timed.from : "?", src_role);
+        return NULL;
+    }
+
+    Type *global_t = chan->type.as.role_.global_type;
+    int from_idx = -1;
+    for (int i = 0; i < global_t->as.global_.n_roles; i++) {
+        if (role_named(global_t->as.global_.roles[i], src_role)) { from_idx = i; break; }
+    }
+    if (from_idx < 0) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                            "recv-timeout-from: role '%s' not found in protocol", src_role);
+        return NULL;
+    }
+
+    /* The payload travels as the router's int64 word; recv-from's checks. */
+    Type *msg_type = step->timed.msg;
+    if (!msg_type) {
+        msg_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *msg_type = TYPE_NIL;
+    }
+    if (!session_payload_supported(e, *msg_type, call->span, "recv-timeout-from"))
+        return NULL;
+
+    Binding *chan_binding = (chan->kind == EX_VAR) ? chan->as.var.binding : NULL;
+    if (chan_binding) binding_mark_moved(chan_binding, call->span);
+
+    Type *role_ok = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *role_ok = type_role(global_t, this_role, step->timed.ok);
+    Type *role_exp = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *role_exp = type_role(global_t, this_role, step->timed.expired);
+    Type *recv_pair = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *recv_pair = type_session_recv_pair(msg_type, role_ok);
+    Type offer_type = type_session_offer(recv_pair, role_exp);
+
+    char code[96];
+    snprintf(code, sizeof(code),
+             "tur_router_recv_timeout(__TUR_VAL_0__, %d, __TUR_VAL_1__)", from_idx);
+    size_t code_len = strlen(code);
+    char *code_str = (char *)arena_alloc(e->arena, code_len + 1);
+    memcpy(code_str, code, code_len + 1);
+
+    Expr *out = expr_new(e->arena, EX_INLINE_C, offer_type, call->span);
+    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
+    ic->code = strslice(code_str, (uint32_t)code_len);
+    ic->return_type = offer_type;
+    ic->val_exprs = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+    ic->n_val_exprs = 2;
+    if (chan_binding) {
+        Expr *cv = expr_new(e->arena, EX_VAR, chan_binding->type, call->span);
+        cv->as.var.binding = chan_binding;
+        ic->val_exprs[0] = cv;
+    } else {
+        ic->val_exprs[0] = chan;
+    }
+    ic->val_exprs[1] = dur;
     out->as.inline_c_.inline_c = ic;
     return out;
 }

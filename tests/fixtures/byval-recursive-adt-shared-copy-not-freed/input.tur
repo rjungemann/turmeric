@@ -1,0 +1,65 @@
+;; byvalue-recursive-adt-boxes-are-never-freed: a by-value COPY that shares
+;; its spine with an owner must not be freed as if it owned it.
+;;
+;; The move checker lets a by-value recursive ADT be copied out of a ^borrow
+;; parameter, a global and a container element, and each copy shares its
+;; boxes with the value it came from.  The scope-exit spine drop (2026-09-07)
+;; freed such a copy's spine when its local went out of scope -- under the
+;; owner, which then read freed memory.  Measured before the fix, each shape
+;; below: ASan heap-use-after-free.
+;;
+;;   id-b     -- a copy of a ^borrow, let-bound, dropped, then the owner read.
+;;   get-g    -- a copy of a global, twice.
+;;   vec-get  -- a copy of a container element, twice.
+;;   tail2    -- a consuming callee reached from a ^borrow: its parameter is
+;;               NOT owned (one caller passes a borrow), so it must not
+;;               discharge the spine it was handed.
+;;
+;; Both consumers now ask the ownership provenance in emit_core.c, which
+;; refuses all four.  The spines they decline to free leak instead
+;; (known-leak), which is the safe side; this fixture pins the absence of the
+;; use-after-free, which a known-leak run still fails on.
+;;
+;; Expected output:
+;;   2
+;;   2
+;;   2
+;;   2
+;;   2
+;;   2
+;;   1
+;;   2
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn llen [xs : Lst] : int
+  (match xs
+    (Cons h t) (+ 1 (llen t))
+    (Nil)      0))
+
+(defn id-b [^borrow x : Lst] : Lst x)
+
+(def g (Cons 1 (Cons 2 (Nil))))
+(defn get-g [] : Lst g)
+
+(defn tail2 [xs : Lst] : Lst
+  (match xs
+    (Cons h t) t
+    (Nil)      (Nil)))
+
+(defn via-borrow [^borrow xs : Lst] : int (llen (tail2 xs)))
+
+(defn main [] : int
+  (let [zs (Cons 7 (Cons 8 (Nil)))]
+    (let [w (id-b zs)]
+      (println (llen w)))
+    (println (llen zs)))
+  (let [w (get-g)] (println (llen w)))
+  (let [w2 (get-g)] (println (llen w2)))
+  (let [v (vec-of (Cons 1 (Cons 2 (Nil))))]
+    (let [w (vec-get v 0)] (println (llen w)))
+    (let [w2 (vec-get v 0)] (println (llen w2))))
+  (let [ys (Cons 5 (Cons 6 (Nil)))]
+    (println (via-borrow ys))
+    (println (llen ys)))
+  0)

@@ -1,0 +1,7 @@
+;; TUR-E0223: a timeout's two branches are named ok and expired.
+(defprotocol Bad [A B]
+  (timeout (-> A B int)
+    [ok]
+    [late]))
+
+(defn main [] : int 0)

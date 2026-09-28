@@ -1513,7 +1513,7 @@ were both caught), editor packs, `tools/gendocs.py`, and
 >   stale copies of both pointers made LeakSanitizer count them reachable. R6's
 >   dynamic-call change moved those words. The fixture now frees its vector,
 >   and the closure is the new report
->   [dynamic-returned-closure-env-is-never-freed](../reported/dynamic-returned-closure-env-is-never-freed.md)
+>   [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md)
 >   (a closure returned as `any` gets no scope-end drop; pre-existing at
 >   `main`), which the fixture's `known-leak` marker cites.
 
@@ -2642,7 +2642,7 @@ task.*
     - the embedded env's process-lifetime memory against what a program
       would expect to be freed.
   - **Closures and boxes in dynamic code:**
-    - [dynamic-returned-closure-env-is-never-freed](../reported/dynamic-returned-closure-env-is-never-freed.md);
+    - [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md);
     - the `R7rsBox` cells T5's assignment conversion now makes for every
       `set!` variable.
 - **How:**

@@ -91,17 +91,20 @@ the region around the shift so the "rest" is a named call: the image-dump
 combinator does exactly this (`(serial-shift handler 0)` followed by `(loop)`).
 Two further rules follow from how the frames are marshalled by name:
 
-- **The callee in the context must be uncolored** for the CPS backend: it
-  cannot contain a `serial-reset` of its own, perform an effect, use an
-  `unsafe` block, or call through a function value -- and neither can
-  anything it calls. A multi-page flow therefore does not nest resets: each
-  page's callee returns a code and the code that runs *outside* the reset
-  starts the next one (the guestbook example's `advance`).
-- **The handler, and everything it calls, must be uncolored too** -- whether
-  it is a named top-level function or a `(fn [k] ...)` literal (capturing or
-  not). It runs once at capture and is never marshalled, so this is a
-  limitation of how the emitter calls it, not of the bytes
-  (`docs/reported/serial-shift-colored-receiver-rejected.md`).
+- **No effect may escape the callee in the context.** A resumed frame calls
+  it as a plain function, outside any handler that enclosed the reset, so it
+  may not perform an effect it does not handle itself -- and neither may
+  anything it calls. Calling through a function value, or performing an
+  effect the callee (or something it calls) handles, is fine. It also cannot
+  contain a `serial-reset` of its own, so a multi-page flow does not nest
+  resets: each page's callee returns a code and the code that runs *outside*
+  the reset starts the next one (the guestbook example's `advance`).
+- **The same goes for the handler** (the receiver) -- whether it is a named
+  top-level function or a `(fn [k] ...)` literal (capturing or not). It runs
+  once at capture, outside the handlers enclosing the reset, so an effect
+  escaping it is `TUR-E0706` naming the receiver and the effect; one that
+  only calls through function values or handles its own effects is accepted
+  (`docs/archive/serial-shift-colored-receiver-rejected.md`).
 
 `TUR_TRACE_CORE=1` names the collector rule (`[CTX-REJECT] cps_ir.c:<line>`)
 that rejected a context, which is faster than guessing.

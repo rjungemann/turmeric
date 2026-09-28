@@ -1,0 +1,88 @@
+;; byvalue-recursive-adt-boxes-are-never-freed, the OWN half: a callee that
+;; CONSUMES its by-value recursive parameter and returns part of it.
+;;
+;; byval-recursive-adt-lent-to-callee pins the borrow half -- a callee proven
+;; not to retain its parameter is LENT the value, and the caller frees it.  A
+;; callee that returns part of the spine cannot be lent to (its result could
+;; carry a sub-spine out), so the caller MOVES the value in, and nothing freed
+;; what the callee did not pass on: `tail` below copied the second box's
+;; contents into its result and dropped the second box itself -- one leaked
+;; box per call.
+;;
+;; The callee now discharges an OWNED parameter (every caller passes a value
+;; it owns -- see the ownership provenance in emit_core.c) whose one use is a
+;; `match` evaluated once per call.  After each arm's value is computed:
+;;   - a recursive-field binder moved out exactly once (returned, or handed to
+;;     a constructor or a consuming callee) frees the box that held it;
+;;   - a binder unused, or only lent, frees its whole sub-spine.
+;;
+;; The shapes, each measured leaking before:
+;;   tail        -- returns `t`: its box is freed (the report's repro).
+;;   first-only  -- `t` unused: the whole tail is freed.
+;;   incr        -- `t` handed to a consuming call inside a constructor.
+;;   left        -- two recursive fields: `l` moved out, `r` freed deep.
+;;   chained     -- temporaries straight into consuming calls.
+;;
+;; requires.leak-check: the assertion is about allocation.
+;;
+;; Expected output:
+;;   1
+;;   1
+;;   9
+;;   1
+;;   1
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+(defdata Tree [] (Node [l : Tree v : int r : Tree]) (Leaf))
+
+(defn llen [xs : Lst] : int
+  (match xs
+    (Cons h t) (+ 1 (llen t))
+    (Nil)      0))
+
+(defn lsum [xs : Lst] : int
+  (match xs
+    (Cons h t) (+ h (lsum t))
+    (Nil)      0))
+
+(defn tsize [t : Tree] : int
+  (match t
+    (Node l v r) (+ 1 (+ (tsize l) (tsize r)))
+    (Leaf)       0))
+
+(defn tail [xs : Lst] : Lst
+  (match xs
+    (Cons h t) t
+    (Nil)      (Nil)))
+
+(defn first-only [xs : Lst] : Lst
+  (match xs
+    (Cons h t) (Cons h (Nil))
+    (Nil)      (Nil)))
+
+(defn incr [xs : Lst] : Lst
+  (match xs
+    (Cons h t) (Cons (+ h 1) (incr t))
+    (Nil)      (Nil)))
+
+(defn left [t : Tree] : Tree
+  (match t
+    (Node l v r) l
+    (Leaf)       (Leaf)))
+
+(defn main [] : int
+  (let [zs (Cons 7 (Cons 8 (Nil)))
+        ws (tail zs)]
+    (println (llen ws)))                                 ; 1
+  (let [a (Cons 1 (Cons 2 (Cons 3 (Nil))))
+        b (first-only a)]
+    (println (llen b)))                                  ; 1
+  (let [c (Cons 1 (Cons 2 (Cons 3 (Nil))))
+        d (incr c)]
+    (println (lsum d)))                                  ; 2 + 3 + 4 = 9
+  (let [tr (Node (Node (Leaf) 1 (Leaf)) 2 (Node (Leaf) 3 (Leaf)))
+        lt (left tr)]
+    (println (tsize lt)))                                ; 1
+  (let [e (tail (tail (Cons 1 (Cons 2 (Cons 3 (Nil))))))]
+    (println (llen e)))                                  ; 1
+  0)

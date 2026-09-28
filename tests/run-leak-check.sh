@@ -89,7 +89,17 @@ for marker in "${marked[@]}"; do
     fi
 
     exe="$WORK/$name"
-    if ! TUR_CC_FLAGS="$CC_FLAGS" CC="$BUILD_CC" \
+    # A `#lang saffron` program's allocator is the r7rs-gc collector by
+    # default (any-widen-stored-in-an-adt-field-has-no-owner, 2026-09-28).
+    # Its heap is invisible to LeakSanitizer -- reachable from the collector,
+    # so nothing ever reads as leaked -- and ASan does not poison what it
+    # frees, so a wrong static free would pass too.  This gate measures the
+    # ownership the COMPILER emits, so build those on plain malloc/free;
+    # tests/run-r7rs-gc.sh checks what the collector reclaims.
+    saffron_gc=1
+    IFS= read -r _first < "$input" || true
+    [[ "$_first" == "#lang saffron"* ]] && saffron_gc=0
+    if ! TUR_SAFFRON_GC="$saffron_gc" TUR_CC_FLAGS="$CC_FLAGS" CC="$BUILD_CC" \
          "$TUR" build "$input" -o "$exe" > "$WORK/$name.build" 2>&1; then
         fail "$name" "build failed: $(tail -3 "$WORK/$name.build" | tr '\n' ' ')"
         continue

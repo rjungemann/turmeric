@@ -14,8 +14,14 @@
  *   2. two DISTINCT literals in one class (`3` and `5` can never be equal);
  *   3. a positive atom and a negative atom that are congruent.
  *
- * The closure is a naive O(n^2) fixpoint.  Real obligations carry a handful of
- * terms, so this is the right tradeoff; REFINE_MAX_EUF_TERMS bounds the rest. */
+ * Terms are interned through a hash index keyed on the hash-cons id, and the
+ * closure is a signature-table fixpoint: each round hashes every application
+ * by (operator, symbol, argument ROOTS), so two congruent terms meet in one
+ * bucket instead of being found by an all-pairs compare.  A round is O(n *
+ * arity); it is still a fixpoint over rounds rather than Nieuwenhuis-Oliveras
+ * use-lists, which is the right tradeoff at REFINE_MAX_EUF_TERMS.
+ * (solver-hot-structures-linear-scans: all three hot scans -- the term index,
+ * the all-pairs closure, and the literal-conflict pair scan -- were O(n^2).) */
 
 #include "refine_solver.h"
 #include "trail_c.h"
@@ -29,9 +35,30 @@ struct EufState {
     VCTerm  **terms;   /* every subterm, deduplicated by pointer (hash-consed) */
     uint32_t *parent;  /* union-find over term indices */
     uint32_t *pstamp;  /* SX3: per-slot trail stamps, parallel to parent */
+    uint32_t *hslot;   /* per term: its slot in htab (parallel to terms) */
     uint32_t  n, cap;
     bool      unsat;
     TrailC    trail;   /* SX3: value trail over parent[]; see trail_c.h */
+
+    /* Term index: open addressing, linear probing, keyed on VCTerm.id.  A slot
+     * holds term index + 1 (0 = empty).  hcap is a power of two >= 2 * cap,
+     * so the load factor never passes 1/2.  Undo is exact without tombstones:
+     * terms are only ever appended and undo truncates them LIFO, and clearing
+     * the slot of the most recent insert under linear probing restores the
+     * table to precisely its state before that insert. */
+    uint32_t *htab;
+    uint32_t  hcap;
+
+    /* Scratch for euf_close's signature table (hcap slots) and
+     * literal_conflict's root map (cap slots); contents are per call. */
+    uint32_t *sigtab;
+    uint32_t *litroot;
+
+    /* The S3-shared terms (la_is_shared_term, non-Bool), as term indices in
+     * registration order -- maintained at registration so collect_shared
+     * does not rescan every term per cube.  Truncated by undo like terms. */
+    uint32_t *shared;
+    uint32_t  n_shared;
 };
 
 /* SX3: every parent[] write funnels through here so mark/undo see all of
@@ -52,6 +79,30 @@ static inline void euf_pset(EufState *st, uint32_t i, uint32_t v) {
 
 static uint32_t euf_index(EufState *st, VCTerm *t);
 
+static inline uint32_t euf_hash_id(uint32_t id) {
+    return id * 2654435761u;   /* Knuth multiplicative; ids are dense */
+}
+
+static void euf_hinsert(EufState *st, uint32_t idx) {
+    uint32_t mask = st->hcap - 1;
+    uint32_t s = euf_hash_id(st->terms[idx]->id) & mask;
+    while (st->htab[s]) s = (s + 1) & mask;
+    st->htab[s]  = idx + 1;
+    st->hslot[idx] = s;
+}
+
+/* Lookup only -- never registers.  The closure loop iterates over st->n, so a
+ * registering lookup there would mutate the array mid-iteration. */
+static uint32_t euf_lookup(const EufState *st, const VCTerm *t) {
+    if (!t || !st->hcap) return UINT32_MAX;
+    uint32_t mask = st->hcap - 1;
+    for (uint32_t s = euf_hash_id(t->id) & mask; st->htab[s]; s = (s + 1) & mask) {
+        uint32_t idx = st->htab[s] - 1;
+        if (st->terms[idx] == t) return idx;
+    }
+    return UINT32_MAX;
+}
+
 static void euf_add(EufState *st, VCTerm *t) {
     if (st->n >= REFINE_MAX_EUF_TERMS) {
         refine_caps()->euf_terms_hits++;
@@ -63,16 +114,31 @@ static void euf_add(EufState *st, VCTerm *t) {
         VCTerm **nt = (VCTerm **)arena_alloc(st->a, ncap * sizeof(VCTerm *));
         uint32_t *np = (uint32_t *)arena_alloc(st->a, ncap * sizeof(uint32_t));
         uint32_t *ns = (uint32_t *)arena_alloc(st->a, ncap * sizeof(uint32_t));
+        uint32_t *nh = (uint32_t *)arena_alloc(st->a, ncap * sizeof(uint32_t));
+        uint32_t *nl = (uint32_t *)arena_alloc(st->a, ncap * sizeof(uint32_t));
+        uint32_t *nsh = (uint32_t *)arena_alloc(st->a, ncap * sizeof(uint32_t));
         if (st->n) {
             memcpy(nt, st->terms, st->n * sizeof(VCTerm *));
             memcpy(np, st->parent, st->n * sizeof(uint32_t));
             memcpy(ns, st->pstamp, st->n * sizeof(uint32_t));
         }
+        if (st->n_shared) memcpy(nsh, st->shared, st->n_shared * sizeof(uint32_t));
         st->terms = nt; st->parent = np; st->pstamp = ns; st->cap = ncap;
+        st->hslot = nh; st->litroot = nl; st->shared = nsh;
+        /* Rehash into a table twice the new capacity.  Re-inserting the live
+         * terms in index order yields exactly the table incremental inserts
+         * in that order would have, so LIFO undo stays exact across a grow. */
+        st->hcap   = ncap * 2;
+        st->htab   = (uint32_t *)arena_alloc(st->a, st->hcap * sizeof(uint32_t));
+        st->sigtab = (uint32_t *)arena_alloc(st->a, st->hcap * sizeof(uint32_t));
+        memset(st->htab, 0, st->hcap * sizeof(uint32_t));
+        for (uint32_t i = 0; i < st->n; i++) euf_hinsert(st, i);
     }
     st->terms[st->n]  = t;
     st->parent[st->n] = st->n;
     st->pstamp[st->n] = 0;      /* SX3: never stamped at any live level */
+    euf_hinsert(st, st->n);
+    if (t->sort != VS_BOOL && la_is_shared_term(t)) st->shared[st->n_shared++] = st->n;
     st->n++;
     refine_cap_peak(&refine_caps()->euf_terms_peak, st->n);
 }
@@ -80,7 +146,8 @@ static void euf_add(EufState *st, VCTerm *t) {
 /* Register `t` and every subterm; returns t's index (UINT32_MAX if capped). */
 static uint32_t euf_index(EufState *st, VCTerm *t) {
     if (!t) return UINT32_MAX;
-    for (uint32_t i = 0; i < st->n; i++) if (st->terms[i] == t) return i;
+    uint32_t hit = euf_lookup(st, t);
+    if (hit != UINT32_MAX) return hit;
     for (uint32_t i = 0; i < t->n; i++) euf_index(st, t->kids[i]);
     if (st->n >= REFINE_MAX_EUF_TERMS) {
         refine_caps()->euf_terms_hits++;
@@ -113,13 +180,6 @@ static bool uf_union(EufState *st, uint32_t i, uint32_t j) {
 
 /* Two terms are congruent when they have the same operator/symbol/arity and
  * their arguments are pairwise equal in the current partition. */
-/* Lookup only -- never registers.  The closure loop iterates over st->n, so a
- * registering lookup there would mutate the array mid-iteration. */
-static uint32_t euf_lookup(const EufState *st, const VCTerm *t) {
-    for (uint32_t i = 0; i < st->n; i++) if (st->terms[i] == t) return i;
-    return UINT32_MAX;
-}
-
 static bool congruent(EufState *st, VCTerm *x, VCTerm *y) {
     if (x->op != y->op || x->n != y->n || x->n == 0) return false;
     if (x->op == VC_APP && x->as.idx != y->as.idx) return false;
@@ -132,33 +192,66 @@ static bool congruent(EufState *st, VCTerm *x, VCTerm *y) {
     return true;
 }
 
+/* Hash of a term's congruence signature -- (op, arity, symbol, argument
+ * roots) -- or false when it has none: a leaf, or an argument the capped
+ * registry never saw (congruent() treats both as matching nothing). */
+static bool euf_signature(EufState *st, VCTerm *x, uint32_t *out) {
+    if (x->n == 0) return false;
+    uint32_t h = (uint32_t)x->op * 0x9e3779b1u ^ x->n * 0x85ebca6bu;
+    if (x->op == VC_APP) h = (h ^ x->as.idx) * 0xc2b2ae35u;
+    for (uint32_t k = 0; k < x->n; k++) {
+        uint32_t a = euf_lookup(st, x->kids[k]);
+        if (a == UINT32_MAX) return false;
+        h = (h ^ uf_find(st, a)) * 0x27d4eb2fu;
+    }
+    *out = h;
+    return true;
+}
+
+/* Signature-table fixpoint.  Each round buckets every application by its
+ * signature under the current partition; a term whose bucket already holds a
+ * congruent term with a different root is merged into it.  A merge makes the
+ * signatures already hashed this round stale, so a round that merged anything
+ * is followed by another -- the fixpoint is reached when a round merges
+ * nothing, which is exactly the all-pairs loop's exit condition (every
+ * congruent pair shares a root), so the partition it produces is the same
+ * congruence closure. */
 static void euf_close(EufState *st) {
     bool changed = true;
     uint32_t rounds = 0;
+    uint32_t mask = st->hcap - 1;
     while (changed && rounds++ < 64) {
         changed = false;
+        if (!st->n) break;
+        memset(st->sigtab, 0, st->hcap * sizeof(uint32_t));
         for (uint32_t i = 0; i < st->n; i++) {
-            for (uint32_t j = i + 1; j < st->n; j++) {
-                if (uf_find(st, i) == uf_find(st, j)) continue;
-                if (congruent(st, st->terms[i], st->terms[j])) {
-                    uf_union(st, i, j);
-                    changed = true;
-                }
+            VCTerm *x = st->terms[i];
+            uint32_t h;
+            if (!euf_signature(st, x, &h)) continue;
+            uint32_t s = h & mask;
+            bool placed = false;
+            for (; st->sigtab[s]; s = (s + 1) & mask) {
+                uint32_t j = st->sigtab[s] - 1;
+                if (!congruent(st, st->terms[j], x)) continue;
+                if (uf_union(st, j, i)) changed = true;
+                placed = true;
+                break;
             }
+            if (!placed) st->sigtab[s] = i + 1;
         }
     }
 }
 
-/* Distinct numeric literals can never share a class. */
+/* Distinct numeric literals can never share a class.  One pass: remember the
+ * first literal seen in each class and conflict on a second. */
 static bool literal_conflict(EufState *st) {
+    for (uint32_t i = 0; i < st->n; i++) st->litroot[i] = UINT32_MAX;
     for (uint32_t i = 0; i < st->n; i++) {
         VCTerm *x = st->terms[i];
         if (x->op != VC_CONST_INT && x->op != VC_CONST_REAL) continue;
-        for (uint32_t j = i + 1; j < st->n; j++) {
-            VCTerm *y = st->terms[j];
-            if (y->op != VC_CONST_INT && y->op != VC_CONST_REAL) continue;
-            if (uf_find(st, i) == uf_find(st, j)) return true;  /* x != y by construction */
-        }
+        uint32_t r = uf_find(st, i);
+        if (st->litroot[r] != UINT32_MAX) return true;  /* x != y by construction */
+        st->litroot[r] = i;
     }
     return false;
 }
@@ -181,15 +274,19 @@ EufState *euf_new(RefineVC *vc, Arena *a) {
  * and trailc_undo_to skips entries for truncated slots. */
 EufMark euf_mark(EufState *st) {
     TrailCMark tm = trailc_mark(&st->trail);
-    EufMark m = { tm.len, tm.level, st->n, st->unsat };
+    EufMark m = { tm.len, tm.level, st->n, st->n_shared, st->unsat };
     return m;
 }
 
 void euf_undo_to(EufState *st, EufMark m) {
     TrailCMark tm = { m.trail_len, m.trail_level };
     trailc_undo_to(&st->trail, tm, st->parent, m.n);
-    st->n     = m.n;
-    st->unsat = m.unsat;
+    /* Unindex the truncated terms newest-first -- the LIFO order that makes
+     * a plain slot clear an exact undo under linear probing. */
+    for (uint32_t i = st->n; i > m.n; i--) st->htab[st->hslot[i - 1]] = 0;
+    st->n        = m.n;
+    st->n_shared = m.n_shared;
+    st->unsat    = m.unsat;
 }
 
 /* SX3 seam: TUR_REFINE_EUF=rebuild restores the per-cube euf_new path so the
@@ -222,6 +319,10 @@ bool euf_equal(EufState *st, VCTerm *x, VCTerm *y) {
 uint32_t euf_term_count(const EufState *st) { return st->n; }
 VCTerm  *euf_term_at(const EufState *st, uint32_t i) {
     return i < st->n ? st->terms[i] : NULL;
+}
+uint32_t euf_shared_count(const EufState *st) { return st->n_shared; }
+VCTerm  *euf_shared_at(const EufState *st, uint32_t i) {
+    return i < st->n_shared ? st->terms[st->shared[i]] : NULL;
 }
 
 bool euf_assert_cube(EufState *st, const VCCube *c) {

@@ -2,6 +2,88 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **SRFI 17, generalized `set!`, under `#lang r7rs`.** `(import (srfi 17))`
+  makes `(set! (f arg ...) v)` mean `((setter f) arg ... v)`. `car`, `cdr`,
+  the whole `c[ad]r` family, `vector-ref`, `string-ref` and
+  `bytevector-u8-ref` are settable out of the box; `getter-with-setter`
+  attaches a setter to a procedure of your own, and `(set! (setter f) s)`
+  adds one to any procedure. The target is an arm of the lowering's `set!`,
+  turned on by importing this SRFI's `set!` under any name, so the export is
+  R7RS's own and the import sits beside `(scheme base)` as one binding.
+  Without the import the shape is an error naming the SRFI, in place of
+  Turmeric's "set! target must be a symbol". The table is built on first use,
+  so an `(import (srfi 17))` a program does not use emits byte-identical C.
+  It was the last SRFI held by r7rs-srfi-plan S2: `setter` is keyed on
+  procedure identity, which standard procedures did not keep until
+  2026-09-27.
+
+## [0.56.2] -- 2026-09-28
+
+### Changed
+
+- **`call/cc` keeps far less memory.** Under `--interpret`, a capture now
+  stores only the words that differ from the latest whole image of the same
+  stack range, copies a drive's work stack at its length rather than its
+  capacity, and frees the work stacks a re-entry abandons: a 16,000-step
+  generator went from 1131 MB and 1.15 s to 284 MB and 0.68 s. An escape-only
+  `(call/cc (lambda (k) ...))` is lowered to the one-shot escape `guard` uses
+  and copies nothing. Compiled, a nested CPS entry forgets its registrations
+  on exit instead of leaving them for the outermost one to drain: 2,000,000
+  guards went from 285 MB and 2.8 s to 10 MB and 1.0 s. The drop is
+  single-threaded only -- the reap list is a process global, so a threaded
+  program keeps exactly the old behavior.
+
+- **The Try Turmeric language picker is grouped by language.** A `#lang` base
+  names a (language, reader) pair, so the list has a heading per language --
+  Turmeric, Saffron, Scheme -- with the readers under it, and each row is
+  labelled by the `#lang` line it writes. Curly-infix and neoteric are no
+  longer offered as separate rows: `{a + b}` is enabled in every dialect and
+  neoteric is one of sweet-exp's three tools. Both stay spellable, and a
+  buffer that names one still gets its row.
+
+### Fixed
+
+- **Output that stops mid-line reaches the Try Turmeric page.** `#lang r7rs`
+  plus `(display "Hello, world!")` printed nothing at all: a last line with no
+  newline behind it sat in libc's FILE buffer and Emscripten's TTY device
+  until some later run emitted a newline, and then arrived glued to the front
+  of that run's output. Every entry point that runs user code now flushes on
+  the way out, and the eval worker takes the bytes itself.
+
+- **A `define-library` may define a standard or stdlib name.** A library
+  defining `square` was refused as "already defined by an auto-loaded stdlib
+  module", and one defining `None` or `list-length` was unreachable from its
+  importers (or, interpreted, replaced the stdlib's `list-length` for
+  everyone). Such a definition is now respelled, and each importer binds its
+  names to it under any import set -- plain, `only`, `except`, `rename` or
+  `prefix`.
+
+- **A statically mistyped call raises at run time.** In a Scheme file a
+  mistyped argument is widened to `any` and takes the checked cast, so
+  `(let ((x #f)) (if x (car x) 0))` compiles and a call that runs raises
+  "car: not a pair". A variadic procedure's fixed parameters were not checked
+  at all (`(vector-fill! 5 0)` crashed) and take the same path; too many
+  arguments to a known procedure raises "f: too many arguments"; the
+  interpreter's cast to a symbol checks, so `(symbol->string "s")` raises
+  instead of crashing.
+
+- **The R7RS REPL keeps state across turns.** Each prompt/eval turn was
+  lowered alone, so an earlier turn's macros, imports and `set!`-ability were
+  gone in the next, and a turn importing a user library ran none of its
+  expressions. The prompt also echoes each of multiple values on its own line,
+  and nothing for `(values)` or a definition.
+
+- **A split `#lang r7rs` build prints the right symbols on Windows.** A quoted
+  symbol printed as other bytes (`|uired field|` for `caught`): MinGW-w64's
+  GNU ld resolves a reference at an offset into a weak DATA definition to the
+  wrong bytes. A split build now emits no weak records, and separately
+  compiled modules spell their records' linkage as `selectany` on Windows. The
+  split stays off on Windows until one Windows run confirms it.
+
 ## [0.56.1] -- 2026-09-27
 
 ### Changed

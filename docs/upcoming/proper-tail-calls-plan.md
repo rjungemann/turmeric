@@ -929,7 +929,7 @@ Two pre-existing defects surfaced and are filed rather than fixed here:
 [saffron-catch-unwind-around-dyn-call-fn-crashes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/saffron-catch-unwind-around-dyn-call-fn-crashes.md)
 (which is why no T6 fixture panics; since resolved -- compiled only, the
 CPS entry wrapper read a panicking body's NULL result box) and
-[cps-capturing-closure-env-leaks-through-dyn-call](https://github.com/rjungemann/turmeric/blob/main/docs/reported/cps-capturing-closure-env-leaks-through-dyn-call.md).
+[cps-capturing-closure-env-leaks-through-dyn-call](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cps-capturing-closure-env-leaks-through-dyn-call.md).
 `#lang r7rs` does not exist yet; when it does, its procedures ride the same
 fat-closure protocol, so it inherits this unchanged.
 

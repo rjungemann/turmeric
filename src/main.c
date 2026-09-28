@@ -9869,6 +9869,7 @@ static int usage(void) {
         "  --emit-abi-trace                 print the resolved ABI path per call site during emit-c (Phase I)\n"
         "  --no-abi-cache                   disable the persistent cross-module ABI cache (.tur-abi-cache/) (Phase J6)\n"
         "  --no-r7rs-gc                     build a #lang r7rs program without its collector (TUR_R7RS_GC=0; for a program that starts threads)\n"
+        "  --no-saffron-gc                  build a #lang saffron program without the collector (TUR_SAFFRON_GC=0)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
         "  --panic-trace                   print scope chain on panic (Phase R6)\n"
         "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
@@ -10659,6 +10660,22 @@ static bool parse_no_abi_cache(int argc, char **argv) {
  * a program that starts threads, which the collector refuses at the start
  * site (docs/archive/r7rs-gc-plan.md).  `TUR_R7RS_GC=1` is the default
  * spelled out (tests/run-r7rs-gc.sh's "with" arm). */
+/* any-widen-stored-in-an-adt-field-has-no-owner: the same collector is the
+ * allocator of every compiled single-unit `#lang saffron` program
+ * (g_opt_saffron_gc defaults true); `TUR_SAFFRON_GC=0` or `--no-saffron-gc`
+ * builds one on plain malloc/free, where its `any` boxes are owned only as far
+ * as the static drops reach. */
+static bool parse_no_saffron_gc(int argc, char **argv) {
+    bool off = false;
+    const char *env = getenv("TUR_SAFFRON_GC");
+    if (env && env[0] == '0') off = true;
+    else if (env && env[0] == '1') off = false;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--no-saffron-gc") == 0) off = true;
+    }
+    return off;
+}
+
 static bool parse_no_r7rs_gc(int argc, char **argv) {
     bool off = false;
     const char *env = getenv("TUR_R7RS_GC");
@@ -11460,6 +11477,7 @@ static int tur_main_inner(int argc, char **argv) {
     /* r7rs-gc: TUR_R7RS_GC=0 / --no-r7rs-gc builds a Scheme program without
      * the collector (a program that starts threads). */
     if (parse_no_r7rs_gc(argc, argv)) g_opt_r7rs_gc = false;
+    if (parse_no_saffron_gc(argc, argv)) g_opt_saffron_gc = false;
     /* tur-link-and-build-split-plan Phase 2/3c/6: TUR_RUNTIME overrides the
      * default runtime-linkage mode (auto).  A CLI --runtime= flag, parsed
      * later, still wins. */
@@ -11488,8 +11506,10 @@ static int tur_main_inner(int argc, char **argv) {
             }
             argc--;
             i--;
-        } else if (strcmp(argv[i], "--no-r7rs-gc") == 0) {
-            /* r7rs-gc: already parsed into g_opt_r7rs_gc; strip from argv. */
+        } else if (strcmp(argv[i], "--no-r7rs-gc") == 0 ||
+                   strcmp(argv[i], "--no-saffron-gc") == 0) {
+            /* r7rs-gc: already parsed into g_opt_r7rs_gc / g_opt_saffron_gc;
+             * strip from argv. */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -11907,6 +11927,7 @@ static int tur_main_inner(int argc, char **argv) {
                 if (i == od_idx) { i++; continue; }   /* skip --output-dir and its value */
                 if (strcmp(argv[i], "--no-abi-cache") == 0) continue; /* J6: global, skip */
                 if (strcmp(argv[i], "--no-r7rs-gc") == 0) continue;   /* r7rs-gc: global, skip */
+                if (strcmp(argv[i], "--no-saffron-gc") == 0) continue;
                 if (argv[i][0] == '-') { free(inputs); free(emit_inc); return usage_error(usage_build); }
                 inputs[n_inputs++] = argv[i];
             }
@@ -12277,8 +12298,10 @@ static int tur_main_inner(int argc, char **argv) {
                 }
             } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
                 /* J6: consumed globally by parse_no_abi_cache; no-op here. */
-            } else if (strcmp(argv[i], "--no-r7rs-gc") == 0) {
-                /* r7rs-gc: consumed globally by parse_no_r7rs_gc; no-op here. */
+            } else if (strcmp(argv[i], "--no-r7rs-gc") == 0 ||
+                       strcmp(argv[i], "--no-saffron-gc") == 0) {
+                /* r7rs-gc: consumed globally by parse_no_r7rs_gc /
+                 * parse_no_saffron_gc; no-op here. */
             } else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) {
                 manifest_out = argv[++i];
             } else if ((strcmp(argv[i], "--build-dir") == 0 ||
@@ -12431,7 +12454,8 @@ static int tur_main_inner(int argc, char **argv) {
                     free(comp_inc); return 1;
                 }
             } else if (strcmp(argv[i], "--no-abi-cache") == 0 ||
-                       strcmp(argv[i], "--no-r7rs-gc") == 0) {
+                       strcmp(argv[i], "--no-r7rs-gc") == 0 ||
+                       strcmp(argv[i], "--no-saffron-gc") == 0) {
                 /* global, consumed elsewhere */
             } else if (argv[i][0] != '-') {
                 if (input) { free(comp_inc); return usage_error(usage_build); }

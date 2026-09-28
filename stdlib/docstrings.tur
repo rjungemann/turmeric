@@ -1578,6 +1578,8 @@
     {"r7rs-cont-capture__", "---- T5: re-entrant continuations ----------------------------------------"},
     {"r7rs-cont-resumed?__", "r7rs-cont-resumed?__ -- internal: #t for the tagged handle a re-entry"},
     {"r7rs-cont-null?__", "r7rs-cont-null?__ -- internal: #t when no copy could be taken (no stack"},
+    {"r7rs-cont-here?__", "r7rs-cont-here?__ -- internal: #t when the calling thread is the one"},
+    {"r7rs-cont-check-here__", "r7rs-cont-check-here__ -- internal: raise an error object, one a program"},
     {"r7rs-cont-restore__", "r7rs-cont-restore__ -- internal: copy the captured stack back and jump in."},
     {"r7rs-run-toplevel-thunk", "r7rs-run-toplevel-thunk -- internal: call a top-level form's thunk.  Its"},
     {"r7rs-run-toplevel-thunk-ptr", "r7rs-run-toplevel-thunk-ptr -- internal: the trampoline r7k_run_form"},

@@ -118,7 +118,7 @@ interpreter's now.
 - **Reclaim images.** Free an image when its continuation procedure becomes
   unreachable. That needs the continuation to be a refcounted or traced
   object, which Scheme values are not today
-  ([dynamic-returned-closure-env-is-never-freed](dynamic-returned-closure-env-is-never-freed.md)
+  ([dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md)
   is the same gap for closures).
 
 ## 2026-09-28
@@ -212,7 +212,7 @@ a variable, a pair, a record, a vector's malloc'd buffer, another closure's
 environment. The interpreter has no collector and does not refcount closures,
 so there is no point at which it can know. That is still the "Reclaim
 images" direction, and it is the same gap as
-[dynamic-returned-closure-env-is-never-freed](dynamic-returned-closure-env-is-never-freed.md).
+[dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md).
 
 What the interpreter can do is keep less per image. Measured on a generator
 (`call/cc` re-entered twice a step, 16,000 steps, Release): 69 KB a step,

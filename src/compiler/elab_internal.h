@@ -73,6 +73,9 @@ typedef enum GlobalInteractionKind {
     GI_LOOP,     /* (loop label body...) -- recursive global protocol */
     GI_CONTINUE, /* (continue label) -- jump back to loop label */
     GI_END,      /* end of protocol */
+    GI_TIMEOUT,  /* (timeout (-> From To T) [ok ...] [expired ...]) -- a timed
+                  * receive: To may give up on From's message after a deadline
+                  * supplied at the op (recv-timeout-from) */
 } GlobalInteractionKind;
 
 typedef struct GlobalBranch {
@@ -103,6 +106,16 @@ typedef struct GlobalInteraction {
         struct {
             const char *label; /* loop label to continue to */
         } cont;
+        struct {
+            const char               *from;     /* interned role name (sender) */
+            const char               *to;       /* interned role name (timed receiver) */
+            struct Type              *msg;      /* message type */
+            /* Both continuations already carry the steps that follow the
+             * timeout form: the parser appends the rest to each branch body,
+             * so a role cursor never needs a continuation stack. */
+            struct GlobalInteraction *ok;       /* the message arrived in time */
+            struct GlobalInteraction *expired;  /* the receiver gave up */
+        } timed;
     };
 } GlobalInteraction;
 
@@ -904,6 +917,7 @@ typedef struct Elab {
     const Symbol    *sym_make_protocol; /* "make-protocol" */
     const Symbol    *sym_send_to;       /* "send-to" */
     const Symbol    *sym_recv_from;     /* "recv-from" */
+    const Symbol    *sym_recv_timeout_from; /* "recv-timeout-from" */
     /* SS5: Global protocol type symbols (appear in type annotations) */
     const Symbol    *sym_global_type;   /* "Global" -- type constructor */
     const Symbol    *sym_role_type;     /* "Role"   -- type constructor */
@@ -2020,6 +2034,13 @@ Expr *elab_defprotocol(Elab *e, const Form *call);
 Expr *elab_make_protocol(Elab *e, const Form *call);
 Expr *elab_send_to(Elab *e, const Form *call);
 Expr *elab_recv_from(Elab *e, const Form *call);
+Expr *elab_recv_timeout_from(Elab *e, const Form *call);
+/* Advance a role cursor past every step the role is not party to: a message
+ * between two other roles, and a timed receive between two other roles (whose
+ * two continuations project identically for this role -- defprotocol checks
+ * that -- so the cursor follows the `ok` one). */
+GlobalInteraction *role_skip_bystander_steps(GlobalInteraction *step,
+                                             const char *role_name);
 
 /* project.c -- SS6: projection algorithm */
 Type *session_project(Elab *e, GlobalInteraction *step, const char *role, Span span);

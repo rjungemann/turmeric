@@ -1075,8 +1075,8 @@ static const DiagExplanation diag_explanations_[] = {
       "TUR-W0043: Session op inside an async body may deadlock the compiled program\n"
       "\n"
       "An (async ...) body spells a session op (send, recv, offer, choose-left,\n"
-      "choose-right, recv-timeout, send-to, recv-from) on endpoints it makes\n"
-      "itself, e.g.\n"
+      "choose-right, recv-timeout, send-to, recv-from, recv-timeout-from) on\n"
+      "endpoints it makes itself, e.g.\n"
       "  (async (fn [] (let [[s r] (make-session (Send int Close))] ... (recv r))))\n"
       "\n"
       "An async body that CAPTURES an endpoint made outside it does not warn: it\n"
@@ -2188,7 +2188,18 @@ static const DiagExplanation diag_explanations_[] = {
       "is ambiguous from that role's perspective.\n"
       "\n"
       "This error is checked during SS6 (projection). In SS5, the global protocol\n"
-      "is only parsed and well-formedness is checked.\n",
+      "is only parsed and well-formedness is checked.\n"
+      "\n"
+      "A protocol with a timed receive is projected onto every role when it is\n"
+      "declared.  Only the receiver of a (timeout (-> From To T) [ok ...]\n"
+      "[expired ...]) learns whether the deadline passed, so every other role --\n"
+      "the sender included -- must continue the same way in both branches:\n"
+      "  (defprotocol Bad [A B C]\n"
+      "    (timeout (-> A B int)\n"
+      "      [ok      (-> B C int)]\n"
+      "      [expired]))          ; error: C cannot tell whether to receive\n"
+      "Fix: give the other roles the same steps in both branches, e.g. have the\n"
+      "receiver send C a message in each.\n",
     },
     { TUR_E0221_ROLE_NOT_DECLARED,
       "TUR-E0221: Role is not declared in global protocol\n"
@@ -2625,7 +2636,16 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: restructure the context into a supported shape -- e.g. pack loop\n"
       "state into a single Serializable struct passed as a tail call's argument\n"
       "  (do (init) (serial-shift k v) (run-loop state))\n"
-      "-- or move the non-capturable work outside the serial-reset boundary.\n",
+      "-- or move the non-capturable work outside the serial-reset boundary.\n"
+      "\n"
+      "The same code covers the RECEIVER (the function handed the continuation).\n"
+      "It runs once, when the continuation is captured, outside the handlers\n"
+      "that enclose the serial-reset, so it may not perform an effect it does not\n"
+      "handle itself:\n"
+      "  (defn recv [k : serial-cont] : int (k (perform (Ask))))  ; Ask escapes\n"
+      "Handle the effect inside the receiver (or a function it calls), or perform\n"
+      "it outside the serial-reset.  A receiver that merely CALLS code through a\n"
+      "fn value, or handles its own effects, is accepted.\n",
     },
     /* cloneable-shift-unsupported-context-miscompile (D6a) */
     { TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,

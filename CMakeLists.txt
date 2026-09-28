@@ -237,9 +237,10 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_sanitize PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
-# The r7rs-gc collector (docs/archive/r7rs-gc-plan.md): every Scheme fixture
-# built with the collector (the default) and run in torture mode (a collection every 31
-# allocations), and a churn loop that must fit a 256 MiB address space with
+# The r7rs-gc collector (docs/archive/r7rs-gc-plan.md): every Scheme and
+# compiled Saffron fixture built with the collector (the default for both
+# dialects) and run in torture mode (a collection every 31 allocations), and
+# churn loops (Scheme and Saffron) that must fit a 256 MiB address space with
 # the collector and not without it.
 add_test(
   NAME tur_r7rs_gc
