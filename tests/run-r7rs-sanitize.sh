@@ -26,9 +26,11 @@
 # under ASan and UBSan.
 #
 # Built at -O1 (ASan's stack traces keep their frames) plus
-# -foptimize-sibling-calls: a CPS prelude loop is constant-stack only when the
-# C compiler makes its self call a jump, which gcc does from -O2
-# (docs/reported/cps-self-tail-call-relies-on-sibling-call.md).
+# -foptimize-sibling-calls.  A CPS loop no longer needs it -- a self tail call
+# is a backedge and a mutual one a jump inside a fused group
+# (docs/archive/cps-self-tail-call-relies-on-sibling-call.md) -- but the flag
+# is kept so a remaining C tail call elsewhere does not turn a sanitizer run
+# into a stack-depth test.
 #
 # Linux only, like run-leak-check.sh.  Exit 0 when every fixture is clean.
 

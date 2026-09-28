@@ -18784,6 +18784,11 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     /* r7rs-gc: after every thread-local declaration in the unit. */
     if (r7rs_gc_active(false)) emit_r7rs_gc_tls_roots(out);
 
+    /* cps-self-tail-call-relies-on-sibling-call: a CPS mutual tail-call
+     * group whose last member was never rendered still needs its fused
+     * function; its rendered members' wrappers call it. */
+    emit_cps_ir_flush_groups(out);
+
     /* S1b: after every registered initializer's own definition (they are all
      * `static`), and after `main` -- the preamble carries the declaration. */
     static_init_emit(out);
@@ -20332,6 +20337,11 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
      * TU publishes only the rows for the types IT widens, and the dispatching
      * TU finds the rest through the merged list. */
     emit_instance_row_table(&ctx, out);
+
+    /* cps-self-tail-call-relies-on-sibling-call: a CPS mutual tail-call
+     * group whose last member was never rendered still needs its fused
+     * function; its rendered members' wrappers call it. */
+    emit_cps_ir_flush_groups(out);
 
     /* S1b: after every registered initializer's definition.  Emitted in
      * separate-compilation mode too -- there is no `main` in this TU to call

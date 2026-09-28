@@ -43,7 +43,9 @@ program unit:
 
 `-O1 -foptimize-sibling-calls` is the only middle setting worth having. It
 beats the others on both axes, and the explicit flag keeps the sibling calls
-that a CPS tail call needs (cps-self-tail-call-relies-on-sibling-call). It
+that a CPS tail call used to need (cps-self-tail-call-relies-on-sibling-call;
+since 2026-09-28 self and mutual CPS tail calls are jumps at any level, and
+only the closure and `guard` shapes that report lists still lean on it). It
 still costs about a tenth of the run time of prelude-heavy code, for the
 life of the program, to save about 4 s once per `tur` version, `cc` and
 flags. That trade is the maintainer's to make, so the default is unchanged.
@@ -69,8 +71,9 @@ defined-in-both check would need to run across the pieces too.
 - **Compile the library at a lower level.** The split already stops cc from
   inlining the prelude into the program, so the objection the original
   report raised against `-O1` for the prelude no longer applies. The
-  sibling-call problem still does: a CPS tail call needs `-O2`'s
-  sibling-call optimization
-  (docs/reported/cps-self-tail-call-relies-on-sibling-call.md).
+  sibling-call problem mostly does not either: a CPS self or mutual tail call
+  is a jump since 2026-09-28, and only a tail call through a closure or after
+  a `guard` still needs the sibling call
+  (docs/archive/cps-self-tail-call-relies-on-sibling-call.md).
   `-O2 -fno-inline-functions` or a similar narrower setting may be the
   middle ground. Measure it.

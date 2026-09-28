@@ -66,4 +66,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *fn_def_expr);
  * top-level emission. */
 void emit_cps_ir_forget(void);
 
+/* cps-self-tail-call-relies-on-sibling-call: write the fused function of any
+ * CPS mutual tail-call group not yet defined in this translation unit. */
+void emit_cps_ir_flush_groups(Buf *file);
+
 #endif
