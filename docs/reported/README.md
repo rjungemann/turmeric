@@ -2201,6 +2201,11 @@ live elsewhere in this index: compiled top-level order was
 | --- | --- | --- |
 | [r7rs-sweet-base-dialect-missing](r7rs-sweet-base-dialect-missing.md) | low | Filed 2026-09-27. `#lang r7rs/sweet` is TUR-E0331: Scheme is the one language with no sweet-exp base, though SRFI-110 is a Scheme SRFI. Deliberate (r7rs-lang-plan Section 8 Q5; `LANG_R7RS`'s `reader_axis_free = false`, lang_dialects.c:55), filed so it can be picked up. The real work is pointing the sweet-exp pass at the Scheme reader rather than the Turmeric one; `LANG_BASES[]` and `reader_axis_free`'s two-valued answer are the easy half |
 
+## CI instrumentation (filed 2026-09-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [macos-jit-hang-loses-both-diagnostics](macos-jit-hang-loses-both-diagnostics.md) | medium | Filed 2026-09-28 (rjungemann/turmeric#953). The `JIT engine (macos-latest)` 45-minute hang recurred, and the 2026-08-02 instrumentation built to diagnose it produced NOTHING: a `timeout-minutes` kill leaves the `if: always()` upload `pending` and the job's log blob 404s, so the artifact and the streamed console are both gone. The `coreutils`/`gtimeout` containment is still in place and is not the cause. Gaps that let a stall reach the job wall: `run-flags.sh` has no timeout wrapper at all, and none of the leg's three ctest targets carries a `TIMEOUT` property. Fix the instrumentation first (`perl -e 'alarm N'` around ctest, as ci.yml:413 already does) -- until then the next occurrence is blind too |
 ## Found landing r7rs-lang-plan R3 (filed 2026-09-23)
 
 | Report | Severity | One line |
