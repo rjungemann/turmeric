@@ -1885,6 +1885,43 @@
 ;;; what a Scheme continuation is.  Where the stack's base cannot be found the
 ;;; public call/cc is the escape above.
 
+;;; r7rs-cont-save-state -- internal: record the runtime's per-thread state
+;;; in a capture: the tail-call trampoline's root and armed callee, the CPS
+;;; driver's landing and entry depth, and the live escapes.
+;;;
+;;; (No `__` suffix: an inline-C __TUR_CNAME_ splice ends at the first `__`.)
+;;; This and r7rs-cont-load-state are their own functions, called from the
+;;; capture through volatile pointers so that no compiler inlines them back:
+;;; the function that calls setjmp must not touch a thread-local itself.
+;;; Apple's arm64 clang, after setjmp's second return (a re-entry), stored to
+;;; a thread-local through a stale address -- a write into the program's text
+;;; that ended the program -- once the CPS state joined the trampoline's among
+;;; the thread-locals (docs/archive/dk-reap-list-shared-across-threads.md).
+;;; Out here each access computes its address afresh.
+(defn r7rs-cont-save-state [p : ptr<void>] : nil
+  ```c
+  r7k_cont *c = (r7k_cont *)p;
+  c->tb_root = tur_tb_root;
+  c->tb_armed = tur_tb_armed_for;
+  c->dk_driver = (void *)g_dk_driver;
+  c->dk_depth = __dk_entry_depth;
+  c->esc_n = tur_escape_live_n;
+  if (c->esc_n > 0) {
+    c->esc = (void **)malloc((size_t)c->esc_n * sizeof(void *));
+    for (int i = 0; i < c->esc_n; i++) c->esc[i] = (void *)tur_escape_live[i];
+  }
+  ```)
+;;; r7rs-cont-load-state -- internal: put a capture's per-thread state back
+;;; on a re-entry (see r7rs-cont-save-state).
+(defn r7rs-cont-load-state [p : ptr<void>] : nil
+  ```c
+  r7k_cont *rc = (r7k_cont *)p;
+  tur_tb_root = rc->tb_root;
+  tur_tb_armed_for = rc->tb_armed;
+  g_dk_driver = (tur_jmp_buf *)rc->dk_driver;
+  __dk_entry_depth = rc->dk_depth;
+  for (int i = 0; i < rc->esc_n; i++) tur_escape_live_push((tur_escape_cont *)rc->esc[i]);
+  ```)
 ;;; r7rs-cont-capture__ -- internal: capture; returns the handle, and returns
 ;;; AGAIN, tagged (low bit set), each time the continuation is re-entered.
 (defn r7rs-cont-capture__ [] : ptr<void>
@@ -2076,26 +2113,17 @@
       }
       r7k_jump(c);
   } */
+  // No thread-local is touched in this function: see r7rs-cont-save-state.
+  void (*volatile save_state)(void *) = __TUR_CNAME_r7rs-cont-save-state__;
+  void (*volatile load_state)(void *) = __TUR_CNAME_r7rs-cont-load-state__;
   r7k_cont *volatile c = (r7k_cont *)calloc(1, sizeof(r7k_cont));
   tur_dk_pinned = 1;
   volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
   mark[0] = 0;
-  c->tb_root = tur_tb_root;
-  c->tb_armed = tur_tb_armed_for;
-  c->dk_driver = (void *)g_dk_driver;
-  c->dk_depth = __dk_entry_depth;
-  c->esc_n = tur_escape_live_n;
-  if (c->esc_n > 0) {
-    c->esc = (void **)malloc((size_t)c->esc_n * sizeof(void *));
-    for (int i = 0; i < c->esc_n; i++) c->esc[i] = (void *)tur_escape_live[i];
-  }
+  save_state((void *)c);
   if (R7K_SETJMP(c->jb) != 0) {
     r7k_cont *rc = c;
-    tur_tb_root = rc->tb_root;
-    tur_tb_armed_for = rc->tb_armed;
-    g_dk_driver = (tur_jmp_buf *)rc->dk_driver;
-    __dk_entry_depth = rc->dk_depth;
-    for (int i = 0; i < rc->esc_n; i++) tur_escape_live_push((tur_escape_cont *)rc->esc[i]);
+    load_state((void *)rc);
     return (void *)((uintptr_t)rc | 1);
   }
   if (!r7k_measure(c, (unsigned char *)mark)) return NULL;
