@@ -2299,11 +2299,54 @@ __attribute__((unused)) static __tur_cps_fn __tur_cps_lookup_checked(intptr_t di
  * so once the outermost dk_run has fully settled every registered chain is dead
  * and dk_free-able without aliasing another.  We register each at construction
  * and reap at the outermost direct->cps entry boundary.  The same registry
- * reclaims per-continuation env structs (plain malloc, freed one-by-one). */
-static void **__dk_reap_v = NULL;
-static unsigned char *__dk_reap_kind = NULL;  /* 1 = DK chain (dk_free), 0 = plain (free) */
-static size_t __dk_reap_n = 0, __dk_reap_cap = 0;
-static int __dk_entry_depth = 0;
+ * reclaims per-continuation env structs (plain malloc, freed one-by-one).
+ *
+ * dk-reap-list-shared-across-threads: the registry, the entry depth and the
+ * trampoline's state below are per-thread.  Shared, a CPS entry on one thread
+ * pushed onto the list another thread was reallocating, a worker's exit that
+ * took the depth to 0 freed every thread's live chains, and a worker's entry
+ * overwrote the landing another thread's tail-resume longjmps to.  A fiber
+ * carries its own registry and depth across its switches (FiberBlock,
+ * tur_fiber_block_resume), since it can resume on another thread. */
+#if defined(__GNUC__) || defined(__clang__)
+static TUR_THREAD_LOCAL void **__dk_reap_v;
+static TUR_THREAD_LOCAL unsigned char *__dk_reap_kind;  /* 1 = DK chain (dk_free), 0 = plain (free) */
+static TUR_THREAD_LOCAL size_t __dk_reap_n;
+static TUR_THREAD_LOCAL size_t __dk_reap_cap;
+static TUR_THREAD_LOCAL int __dk_entry_depth;
+/* The current entry-driver landing; NULL runs a tail resume inline. */
+static TUR_THREAD_LOCAL tur_jmp_buf *g_dk_driver;
+static TUR_THREAD_LOCAL DK *g_dk_resume_chain;
+static TUR_THREAD_LOCAL intptr_t g_dk_resume_val;
+static TUR_THREAD_LOCAL DK **g_dk_meta;
+static TUR_THREAD_LOCAL size_t g_dk_meta_n;
+static TUR_THREAD_LOCAL size_t g_dk_meta_cap;
+#else
+/* A front end without thread-locals (c2mir, `tur jit`): the host keeps a
+ * real per-thread slot each (src/runtime/tur_tls.c), as emit_rt_tls does. */
+extern void **tur_tls_dk_reap_v_ptr(void);
+extern void **tur_tls_dk_reap_kind_ptr(void);
+extern size_t *tur_tls_dk_reap_n_ptr(void);
+extern size_t *tur_tls_dk_reap_cap_ptr(void);
+extern int *tur_tls_dk_entry_depth_ptr(void);
+extern void **tur_tls_dk_driver_ptr(void);
+extern void **tur_tls_dk_resume_chain_ptr(void);
+extern intptr_t *tur_tls_dk_resume_val_ptr(void);
+extern void **tur_tls_dk_meta_ptr(void);
+extern size_t *tur_tls_dk_meta_n_ptr(void);
+extern size_t *tur_tls_dk_meta_cap_ptr(void);
+#define __dk_reap_v (*(void ***)tur_tls_dk_reap_v_ptr())
+#define __dk_reap_kind (*(unsigned char **)tur_tls_dk_reap_kind_ptr())
+#define __dk_reap_n (*tur_tls_dk_reap_n_ptr())
+#define __dk_reap_cap (*tur_tls_dk_reap_cap_ptr())
+#define __dk_entry_depth (*tur_tls_dk_entry_depth_ptr())
+#define g_dk_driver (*(tur_jmp_buf **)tur_tls_dk_driver_ptr())
+#define g_dk_resume_chain (*(DK **)tur_tls_dk_resume_chain_ptr())
+#define g_dk_resume_val (*tur_tls_dk_resume_val_ptr())
+#define g_dk_meta (*(DK ***)tur_tls_dk_meta_ptr())
+#define g_dk_meta_n (*tur_tls_dk_meta_n_ptr())
+#define g_dk_meta_cap (*tur_tls_dk_meta_cap_ptr())
+#endif
 static void __dk_reap_push(void *p, unsigned char kind) {
     if (__dk_reap_n == __dk_reap_cap) {
         __dk_reap_cap = __dk_reap_cap ? __dk_reap_cap * 2 : 16;
@@ -2329,7 +2372,6 @@ static void __dk_reap_run(void) {
 }
 __attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {
 #if defined(TUR_GC_ON) && TUR_GC_ON
-    if (TUR_GC_LOAD(&tur_gc_threaded)) return;
     /* A re-entered continuation can bring back an entry whose mark is past
      * the list's end: nothing of its is left to drop. */
     if (mark >= __dk_reap_n) return;
@@ -2371,10 +2413,9 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
 }
 static intptr_t dk_run(DK *k, intptr_t v)      { return dk_run_impl(k, v, false); }
 static intptr_t dk_run_root(DK *k, intptr_t v) { return dk_run_impl(k, v, true); }
-/* Forward decl of the entry driver (defined with the E7 runtime below): dk_invoke
- * consults it to know whether running the invoked chain might tail-resume out. */
-static tur_jmp_buf *g_dk_driver;
-static size_t   g_dk_meta_n;   /* tentative defn; the E7 block below defines it */
+/* Forward decl of the bounded driver (defined with the E7 runtime below):
+ * dk_invoke consults g_dk_driver (defined with the reap registry above) to
+ * know whether running the invoked chain might tail-resume out. */
 static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor);
 static intptr_t dk_invoke(DK *sub, intptr_t w) {
     DK *c = dk_copy_range(sub, NULL);
@@ -2411,12 +2452,9 @@ static intptr_t dk_invoke(DK *sub, intptr_t w) {
  * deliveries (what dk_run_impl(H->next,r) would run) ride a heap meta-stack in
  * nesting (LIFO) order; a delivery of only HANDLER/DONE nodes is a no-op and is
  * elided, so the meta-stack stays O(nesting), not O(N). Validated end-to-end at
- * N=1e6 by docs/artifacts/probes/e7-fidelity-probe.c. */
-static tur_jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */
-static DK      *g_dk_resume_chain = NULL;
-static intptr_t g_dk_resume_val = 0;
-static DK     **g_dk_meta = NULL;
-static size_t   g_dk_meta_cap = 0;
+ * N=1e6 by docs/artifacts/probes/e7-fidelity-probe.c.  The driver landing,
+ * the resume chain and value, and the meta-stack are per-thread, with the
+ * reap registry above. */
 static void __dk_meta_push(DK *d) {
     if (g_dk_meta_n == g_dk_meta_cap) {
         g_dk_meta_cap = g_dk_meta_cap ? g_dk_meta_cap * 2 : 16;
@@ -2592,6 +2630,9 @@ struct FiberBlock {
     bool cancelled; /* Set when parent TaskGroup is cancelled */
     tur_jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */
     bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */
+    void **dk_reap_v; unsigned char *dk_reap_kind;
+    size_t dk_reap_n, dk_reap_cap;
+    int dk_entry_depth;
 };
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -2776,9 +2817,17 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     tur_current_fiber = f;
     f->arg = arg;
     tur_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;
+    void **_dk_rv = __dk_reap_v; unsigned char *_dk_rk = __dk_reap_kind;
+    size_t _dk_rn = __dk_reap_n, _dk_rc = __dk_reap_cap; int _dk_rd = __dk_entry_depth;
+    __dk_reap_v = f->dk_reap_v; __dk_reap_kind = f->dk_reap_kind;
+    __dk_reap_n = f->dk_reap_n; __dk_reap_cap = f->dk_reap_cap; __dk_entry_depth = f->dk_entry_depth;
     TUR_GC_FIBER_ENTER((void *)&_dk_save);
     swapcontext(&f->caller_ctx, &f->ctx);
     TUR_GC_FIBER_LEAVE();
+    f->dk_reap_v = __dk_reap_v; f->dk_reap_kind = __dk_reap_kind;
+    f->dk_reap_n = __dk_reap_n; f->dk_reap_cap = __dk_reap_cap; f->dk_entry_depth = __dk_entry_depth;
+    __dk_reap_v = _dk_rv; __dk_reap_kind = _dk_rk;
+    __dk_reap_n = _dk_rn; __dk_reap_cap = _dk_rc; __dk_entry_depth = _dk_rd;
     g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;
     tur_current_fiber = _prev;
     return f->result;
