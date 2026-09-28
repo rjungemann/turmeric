@@ -1075,8 +1075,8 @@ static const DiagExplanation diag_explanations_[] = {
       "TUR-W0043: Session op inside an async body may deadlock the compiled program\n"
       "\n"
       "An (async ...) body spells a session op (send, recv, offer, choose-left,\n"
-      "choose-right, recv-timeout, send-to, recv-from) on endpoints it makes\n"
-      "itself, e.g.\n"
+      "choose-right, recv-timeout, send-to, recv-from, recv-timeout-from) on\n"
+      "endpoints it makes itself, e.g.\n"
       "  (async (fn [] (let [[s r] (make-session (Send int Close))] ... (recv r))))\n"
       "\n"
       "An async body that CAPTURES an endpoint made outside it does not warn: it\n"
@@ -2188,7 +2188,18 @@ static const DiagExplanation diag_explanations_[] = {
       "is ambiguous from that role's perspective.\n"
       "\n"
       "This error is checked during SS6 (projection). In SS5, the global protocol\n"
-      "is only parsed and well-formedness is checked.\n",
+      "is only parsed and well-formedness is checked.\n"
+      "\n"
+      "A protocol with a timed receive is projected onto every role when it is\n"
+      "declared.  Only the receiver of a (timeout (-> From To T) [ok ...]\n"
+      "[expired ...]) learns whether the deadline passed, so every other role --\n"
+      "the sender included -- must continue the same way in both branches:\n"
+      "  (defprotocol Bad [A B C]\n"
+      "    (timeout (-> A B int)\n"
+      "      [ok      (-> B C int)]\n"
+      "      [expired]))          ; error: C cannot tell whether to receive\n"
+      "Fix: give the other roles the same steps in both branches, e.g. have the\n"
+      "receiver send C a message in each.\n",
     },
     { TUR_E0221_ROLE_NOT_DECLARED,
       "TUR-E0221: Role is not declared in global protocol\n"

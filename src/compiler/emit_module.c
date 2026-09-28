@@ -16169,6 +16169,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    pthread_cond_t  cv;\n");
     buf_puts(out, "    int64_t val;\n");
     buf_puts(out, "    int state; /* 0=idle 1=data-ready 2=data-acked */\n");
+    buf_puts(out, "    int skip;  /* router: timed receives that gave up on this slot */\n");
     buf_puts(out, "} TurSyncCh;\n");
     buf_puts(out, "typedef struct {\n");
     buf_puts(out, "    TurSyncCh data;\n");
@@ -16324,11 +16325,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    role->role_idx = peer_idx;\n");
     buf_puts(out, "    return (void *)role;\n");
     buf_puts(out, "}\n");
+    /* multi-party-sessions-have-no-timed-receive: a receiver that timed out
+     * on this slot left a `skip`; the message it gave up on is the next one
+     * the sender sends here, and it is dropped rather than delivered to the
+     * receiver's NEXT receive on the slot.  Checked under the slot lock, and
+     * the receiver sets it under the same lock only when nothing had been
+     * deposited, so a message is either received or skipped, never both. */
     buf_puts(out, "static void tur_router_send(void *role_ptr, int to_idx, int64_t val) {\n");
     buf_puts(out, "    TurRole *role = (TurRole *)role_ptr;\n");
     buf_puts(out, "    TurSyncCh *ch = &role->router->slots[role->role_idx * role->router->n_roles + to_idx];\n");
     buf_puts(out, "    pthread_mutex_lock(&ch->mu);\n");
     buf_puts(out, "    while (ch->state != 0) pthread_cond_wait(&ch->cv, &ch->mu);\n");
+    buf_puts(out, "    if (ch->skip > 0) { ch->skip--; pthread_mutex_unlock(&ch->mu); return; }\n");
     buf_puts(out, "    ch->val = val; ch->state = 1;\n");
     buf_puts(out, "    pthread_cond_broadcast(&ch->cv);\n");
     buf_puts(out, "    while (ch->state != 2) pthread_cond_wait(&ch->cv, &ch->mu);\n");
@@ -16345,6 +16353,33 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    pthread_cond_broadcast(&ch->cv);\n");
     buf_puts(out, "    pthread_mutex_unlock(&ch->mu);\n");
     buf_puts(out, "    return v;\n");
+    buf_puts(out, "}\n");
+    /* recv-timeout-from: tur_session_recv_timeout on a router slot.  Returns
+     * 0 (arrived; value in tur__rtv_) or 1 (expired; the slot owes a skip). */
+    buf_puts(out, "static int64_t tur_router_recv_timeout(void *role_ptr, int from_idx, int64_t ms) {\n");
+    buf_puts(out, "    TurRole *role = (TurRole *)role_ptr;\n");
+    buf_puts(out, "    TurSyncCh *ch = &role->router->slots[from_idx * role->router->n_roles + role->role_idx];\n");
+    buf_puts(out, "    struct timespec ts;\n");
+    buf_puts(out, "    clock_gettime(CLOCK_REALTIME, &ts);\n");
+    buf_puts(out, "    if (ms < 0) ms = 0;\n");
+    buf_puts(out, "    ts.tv_sec  += (time_t)(ms / 1000);\n");
+    buf_puts(out, "    ts.tv_nsec += (long)((ms % 1000) * 1000000L);\n");
+    buf_puts(out, "    if (ts.tv_nsec >= 1000000000L) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000L; }\n");
+    buf_puts(out, "    pthread_mutex_lock(&ch->mu);\n");
+    buf_puts(out, "    int rc = 0;\n");
+    buf_puts(out, "    while (ch->state != 1 && rc == 0)\n");
+    buf_puts(out, "        rc = pthread_cond_timedwait(&ch->cv, &ch->mu, &ts);\n");
+    buf_puts(out, "    int64_t tag;\n");
+    buf_puts(out, "    if (ch->state == 1) {\n");
+    buf_puts(out, "        tur__rtv_ = ch->val; ch->state = 2;\n");
+    buf_puts(out, "        pthread_cond_broadcast(&ch->cv);\n");
+    buf_puts(out, "        tag = 0;\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        ch->skip++;\n");
+    buf_puts(out, "        tag = 1;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    pthread_mutex_unlock(&ch->mu);\n");
+    buf_puts(out, "    return tag;\n");
     buf_puts(out, "}\n");
     buf_puts(out, "static void tur_role_close(void *role_ptr) {\n");
     buf_puts(out, "    TurRole *role = (TurRole *)role_ptr;\n");

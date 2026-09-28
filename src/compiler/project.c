@@ -14,6 +14,14 @@
  *                                   project(rest, R) if R uninvolved
  *   GI_CONTINUE(label)          -> back-reference sentinel for label
  *   GI_END                      -> Close (or tail into end_cont)
+ *   GI_TIMEOUT(from, to=R, T)   -> Recv[T, Timeout[ok, expired]]
+ *   GI_TIMEOUT(from=R, to, T)   -> Send[T, Timeout[ok, expired]], ok == expired
+ *   GI_TIMEOUT(from, to, T)     -> ok, when ok == expired  (R uninvolved)
+ *     Only the receiver observes whether the deadline passed, so every other
+ *     role -- the sender included -- must continue the same way in both
+ *     outcomes (TUR-E0220 otherwise).  The sender keeps the Timeout wrapper
+ *     so that, for two roles, its projection is the binary dual of the
+ *     receiver's: dual(Recv[T, Timeout[Q, P]]) = Send[T, Timeout[dQ, dP]].
  */
 #include "elab_internal.h"
 #include <string.h>
@@ -51,6 +59,7 @@ static bool proto_equal(Type *a, Type *b) {
         case TY_RECV:
         case TY_CHOOSE:
         case TY_BRANCH:
+        case TY_TIMEOUT:
             return proto_equal(a->as.session_.fst, b->as.session_.fst)
                 && proto_equal(a->as.session_.snd, b->as.session_.snd);
         case TY_SESSION_REC:
@@ -210,6 +219,46 @@ static Type *project_inner(Elab *e, GlobalInteraction *step, const char *role,
 
         /* Build the Rec node wrapping the projected body */
         return arena_type(e, type_session_rec(label, body_proj));
+    }
+
+    /* ---- GI_TIMEOUT ---- */
+    case GI_TIMEOUT: {
+        /* Both continuations already end in whatever follows the timeout form
+         * (the parser appended it), so end_cont passes through unchanged. */
+        Type *b_ok = project_inner(e, step->timed.ok, role,
+                                   loops, n_loops, end_cont, span);
+        if (!b_ok) return NULL;
+        Type *b_exp = project_inner(e, step->timed.expired, role,
+                                    loops, n_loops, end_cont, span);
+        if (!b_exp) return NULL;
+        Type *msg = step->timed.msg;
+
+        if (role_eq(step->timed.to, role)) {
+            Type *tmo = arena_type(e, type_timeout(b_ok, b_exp));
+            return arena_type(e, type_recv(msg, tmo));
+        }
+        if (!proto_equal(b_ok, b_exp)) {
+            if (role_eq(step->timed.from, role)) {
+                diag_emit_with_code(DIAG_ERROR, span, TUR_E0220_GLOBAL_NOT_PROJECTABLE,
+                                    "project: role '%s' sends into a timed receive but cannot "
+                                    "observe whether '%s' timed out -- its protocol after the "
+                                    "message must be the same in the ok and expired branches",
+                                    role, step->timed.to);
+            } else {
+                diag_emit_with_code(DIAG_ERROR, span, TUR_E0220_GLOBAL_NOT_PROJECTABLE,
+                                    "project: role '%s' is not party to the timed receive "
+                                    "(-> %s %s ...) and cannot observe its outcome -- its protocol "
+                                    "must be the same in the ok and expired branches (have '%s' "
+                                    "tell it with a message in each branch instead)",
+                                    role, step->timed.from, step->timed.to, step->timed.to);
+            }
+            return NULL;
+        }
+        if (role_eq(step->timed.from, role)) {
+            Type *tmo = arena_type(e, type_timeout(b_ok, b_exp));
+            return arena_type(e, type_send(msg, tmo));
+        }
+        return b_ok;
     }
 
     /* ---- GI_CONTINUE ---- */

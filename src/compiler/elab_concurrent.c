@@ -61,7 +61,7 @@ static bool form_mentions_session_op(const Elab *e, const Form *f) {
                 if (h == e->sym_send || h == e->sym_recv || h == e->sym_offer
                         || h == e->sym_choose_left || h == e->sym_choose_right
                         || h == e->sym_recv_timeout || h == e->sym_send_to
-                        || h == e->sym_recv_from)
+                        || h == e->sym_recv_from || h == e->sym_recv_timeout_from)
                     return true;
             }
             for (uint32_t i = 0; i < f->as.list.len; i++)

@@ -4604,6 +4604,7 @@ typedef struct {
     pthread_cond_t  cv;
     int64_t val;
     int state; /* 0=idle 1=data-ready 2=data-acked */
+    int skip;  /* router: timed receives that gave up on this slot */
 } TurSyncCh;
 typedef struct {
     TurSyncCh data;
@@ -4767,6 +4768,7 @@ static void tur_router_send(void *role_ptr, int to_idx, int64_t val) {
     TurSyncCh *ch = &role->router->slots[role->role_idx * role->router->n_roles + to_idx];
     pthread_mutex_lock(&ch->mu);
     while (ch->state != 0) pthread_cond_wait(&ch->cv, &ch->mu);
+    if (ch->skip > 0) { ch->skip--; pthread_mutex_unlock(&ch->mu); return; }
     ch->val = val; ch->state = 1;
     pthread_cond_broadcast(&ch->cv);
     while (ch->state != 2) pthread_cond_wait(&ch->cv, &ch->mu);
@@ -4783,6 +4785,31 @@ static int64_t tur_router_recv(void *role_ptr, int from_idx) {
     pthread_cond_broadcast(&ch->cv);
     pthread_mutex_unlock(&ch->mu);
     return v;
+}
+static int64_t tur_router_recv_timeout(void *role_ptr, int from_idx, int64_t ms) {
+    TurRole *role = (TurRole *)role_ptr;
+    TurSyncCh *ch = &role->router->slots[from_idx * role->router->n_roles + role->role_idx];
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    if (ms < 0) ms = 0;
+    ts.tv_sec  += (time_t)(ms / 1000);
+    ts.tv_nsec += (long)((ms % 1000) * 1000000L);
+    if (ts.tv_nsec >= 1000000000L) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&ch->mu);
+    int rc = 0;
+    while (ch->state != 1 && rc == 0)
+        rc = pthread_cond_timedwait(&ch->cv, &ch->mu, &ts);
+    int64_t tag;
+    if (ch->state == 1) {
+        tur__rtv_ = ch->val; ch->state = 2;
+        pthread_cond_broadcast(&ch->cv);
+        tag = 0;
+    } else {
+        ch->skip++;
+        tag = 1;
+    }
+    pthread_mutex_unlock(&ch->mu);
+    return tag;
 }
 static void tur_role_close(void *role_ptr) {
     TurRole *role = (TurRole *)role_ptr;

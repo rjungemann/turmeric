@@ -465,13 +465,8 @@ Expr *elab_session_close(Elab *e, const Form *call) {
         /* The chan is already elaborated; inline the role-close logic here. */
         const char *role_name = chan->type.as.role_.role_name;
         /* SS8: skip bystander steps before checking for protocol end */
-        GlobalInteraction *step = chan->type.as.role_.current_step;
-        while (step && step->kind == GI_MSG) {
-            bool is_sender   = step->msg.from && strcmp(step->msg.from, role_name) == 0;
-            bool is_receiver = step->msg.to   && strcmp(step->msg.to,   role_name) == 0;
-            if (is_sender || is_receiver) break;
-            step = step->msg.rest;
-        }
+        GlobalInteraction *step =
+            role_skip_bystander_steps(chan->type.as.role_.current_step, role_name);
         if (!step || step->kind != GI_END) {
             const char *step_name = "unknown";
             if (step) {
@@ -479,6 +474,7 @@ Expr *elab_session_close(Elab *e, const Form *call) {
                 else if (step->kind == GI_CHOICE) step_name = "choice";
                 else if (step->kind == GI_LOOP)   step_name = "loop";
                 else if (step->kind == GI_CONTINUE) step_name = "continue";
+                else if (step->kind == GI_TIMEOUT)  step_name = "timeout";
             }
             diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
                                 "close: role '%s' cannot close the protocol here -- "

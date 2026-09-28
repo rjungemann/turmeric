@@ -1,0 +1,82 @@
+;;; session-mp-timeout-turi -- interpreter twin of session-mp-timeout.
+;;
+;; Same protocols and roles, under `tur --interpret`: session-spawn peers are
+;; scheduler fibers, the late sender blocks on a bare (sleep-async N), and
+;; recv-timeout-from runs the cooperative timed wait on the router cell (in a
+;; fiber it parks on the deposit AND a deadline timer, whichever fires first).
+;; The late sends must be dropped by the cell's skip exactly as the compiled
+;; router drops them, or Retry would print 1 and the relay would deadlock.
+;;
+;; Expected output:
+;;   -1
+;;   7
+;;   2
+(load "stdlib/session.tur")
+
+(defprotocol Relay [A B C]
+  (timeout (-> A B int)
+    [ok      (-> B C int)]
+    [expired (-> B C int)]))
+
+(defn relay-a [^linear ch :(Role Relay A) delay : int] : nil
+  (sleep-async delay)
+  (let [ch (send-to ch B 7)]
+    (close ch)))
+
+(defn relay-b [^linear ch :(Role Relay B) deadline : int] : nil
+  (match (recv-timeout-from ch A deadline)
+    (Left pair)
+      (let [[v ch] pair]
+        (let [ch (send-to ch C v)]
+          (close ch)))
+    (Right ch)
+      (let [ch (send-to ch C -1)]
+        (close ch))))
+
+(defn relay-c [^linear ch :(Role Relay C)] : nil
+  (let [[v ch] (recv-from ch B)]
+    (println v)
+    (close ch)))
+
+(defn run-relay [delay : int deadline : int] : nil
+  (let [[ra rb rc] (make-protocol Relay)]
+    (let [ta (session-spawn (fn [] (relay-a ra delay)))]
+      (let [tb (session-spawn (fn [] (relay-b rb deadline)))]
+        (relay-c rc)
+        (session-join tb)
+        (session-join ta)))))
+
+(defprotocol Retry [A B]
+  (timeout (-> A B int)
+    [ok]
+    [expired])
+  (-> A B int))
+
+(defn retry-a [^linear ch :(Role Retry A)] : nil
+  (sleep-async 400)
+  (let [ch (send-to ch B 1)]
+    (let [ch (send-to ch B 2)]
+      (close ch))))
+
+(defn retry-b [^linear ch :(Role Retry B)] : nil
+  (match (recv-timeout-from ch A 50)
+    (Left pair)
+      (let [[v ch] pair]
+        (let [[w ch] (recv-from ch A)]
+          (println w)
+          (close ch)))
+    (Right ch)
+      (let [[w ch] (recv-from ch A)]
+        (println w)
+        (close ch))))
+
+(defn main [] : int
+  ;; A 400 ms late against a 50 ms deadline; then on time against a generous
+  ;; one (the receive returns as soon as the value lands, so it costs nothing).
+  (run-relay 400 50)
+  (run-relay 0 5000)
+  (let [[ra rb] (make-protocol Retry)]
+    (let [ta (session-spawn (fn [] (retry-a ra)))]
+      (retry-b rb)
+      (session-join ta)))
+  0)

@@ -10070,6 +10070,7 @@ typedef struct TuriChan {
     TuriFiber *recv_waiter;                     /* parked receiver, or NULL */
     int        refcount;                        /* 2 at make-session */
     int        abandoned;                       /* a peer has closed */
+    int        skip;                            /* router cell: timed receives that gave up */
     const char *dbg_proto;                      /* TUR_DBGPROTO tag, or NULL (router cell) */
 } TuriChan;
 
@@ -10310,6 +10311,10 @@ static TuriValue router_send(TuriEnv *env, TuriRole *role, int to_idx, TuriValue
         role->role_idx >= r->n_roles)
         return turi_error("eval: session router send: role index out of range");
     TuriChan *ch = &r->slots[role->role_idx * r->n_roles + to_idx];
+    /* A receiver that timed out on this cell is owed this message: drop it
+     * rather than hand it to the receiver's NEXT receive here (the compiled
+     * tur_router_send does the same under its slot lock). */
+    if (ch->skip > 0) { ch->skip--; return turi_int((int64_t)(intptr_t)role); }
     (void)session_send_on(env, ch, val, &ch->data_state, &ch->data_val);
     return turi_int((int64_t)(intptr_t)role);
 }
@@ -10322,6 +10327,21 @@ static TuriValue router_recv(TuriEnv *env, TuriRole *role, int from_idx) {
         return turi_error("eval: session router recv: role index out of range");
     TuriChan *ch = &r->slots[from_idx * r->n_roles + role->role_idx];
     return session_recv_on(env, ch, &ch->data_state, &ch->data_val);
+}
+
+/* recv-timeout-from: the binary timed receive on cell (from_idx -> role_idx).
+ * Returns tag 0 (arrived; value in env->session_rtv) or 1 (expired), and an
+ * expiry leaves the cell a skip so the late message is dropped on arrival. */
+static TuriValue router_recv_timeout(TuriEnv *env, TuriRole *role, int from_idx,
+                                     int64_t dur_ms) {
+    TuriRouter *r = role->router;
+    if (from_idx < 0 || from_idx >= r->n_roles || role->role_idx < 0 ||
+        role->role_idx >= r->n_roles)
+        return turi_error("eval: session router recv: role index out of range");
+    TuriChan *ch = &r->slots[from_idx * r->n_roles + role->role_idx];
+    TuriValue tag = session_recv_timeout(env, ch, dur_ms);
+    if (tag.tag == TURI_INT && tag.as_int == 1) ch->skip++;
+    return tag;
 }
 
 /* role-close: drop the router refcount (pool-owned; never individually freed). */
@@ -10501,6 +10521,16 @@ static bool eval_session_intercept(TuriEnv *env, EvalFrame *frame,
         SESS_EVAL(rv, 0);
         int from_idx = session_int_after(p, n, "tur_router_recv(__TUR_VAL_0__, ");
         *out = router_recv(env, (TuriRole *)(intptr_t)rv.as_int, from_idx);
+        return true;
+    }
+    /* recv-timeout-from: tur_router_recv_timeout(__TUR_VAL_0__, FROM_IDX,
+     * __TUR_VAL_1__) -- the enclosing EX_MATCH selects Left (0) / Right (1). */
+    if (ic->n_val_exprs == 2 && SESS_PFX("tur_router_recv_timeout(__TUR_VAL_0__,")) {
+        SESS_EVAL(rv, 0);
+        SESS_EVAL(dv, 1);
+        int from_idx = session_int_after(p, n, "tur_router_recv_timeout(__TUR_VAL_0__, ");
+        int64_t dur = (dv.tag == TURI_INT) ? dv.as_int : 0;
+        *out = router_recv_timeout(env, (TuriRole *)(intptr_t)rv.as_int, from_idx, dur);
         return true;
     }
     /* role-close: tur_role_close((void *)__TUR_VAL_0__). */
