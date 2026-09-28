@@ -1,0 +1,19 @@
+#lang r7rs
+;; r7rs-gc threads (docs/archive/r7rs-gc-threads-plan.md 6, "fibers migrating
+;; between scheduler threads ... confirm with a fixture under torture"):
+;; nine fibers on a three-thread tur_scheduler_mt, each yielding 40 times.
+;; The scheduler's queue is shared, so a yielded fiber resumes on whichever
+;; worker is free -- over half the yields change threads.  Three parts, three
+;; fibers each:
+;;   roots       a list held only on the fiber's stack survives the moves
+;;               and the collections between them (3 x 20100);
+;;   escapes     a call/cc escape entered before a yield and taken after it,
+;;               on whatever thread the fiber is on by then (3 x 40).  The
+;;               live-escape set was the thread's, not the fiber's, so this
+;;               aborted with "continuation invoked after its call/cc prompt
+;;               returned" on every run;
+;;   tail-calls  a dynamic tail call whose callee yields (3 x 40).
+(import (scheme base) (scheme write) (migwork) (turmeric migcrew))
+(mig-run)
+(write (list 'roots (mig-result 0) 'escapes (mig-result 1) 'tail-calls (mig-result 2)))
+(newline)
