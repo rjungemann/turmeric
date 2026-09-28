@@ -87,7 +87,7 @@ report. See "Found on the way" below.
 One name moved from the draft and stuck: `Buf` / `send-buf` / `recv-buf`
 became `Payload` / `send-payload` / `recv-payload`, recorded under Resolved
 Decisions with the reason. A second moved and moved back -- `(Result nil int)`
-briefly became `(Result nil int)` around a compiler defect, and is `nil` again
+briefly became `(Result Ack int)` around a compiler defect, and is `nil` again
 now that the defect is fixed.
 
 ### Non-Goals (v0)

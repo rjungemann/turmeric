@@ -1,6 +1,6 @@
 # Trusted refinement claims -- making the promises the solver believes checkable
 
-> **Status:** Proposed 2026-08-17.  Drafted as the last step of the
+> **Status:** **complete** -- proposed 2026-08-17 as the last step of the
 > mutable-globals work, exactly where
 > [`mutable-globals-plan.md`](../archive/mutable-globals-plan.md) section 14 said it
 > should be: after G2 landed, from findings that came out of doing that work
@@ -8,8 +8,18 @@
 > refusal) LANDED 2026-08-17** behind `--enable=checked-reads` (see section
 > 4), and **R2 GRADUATED 2026-08-20 in 0.37.0** -- the refusal is
 > unconditional and the gate is retired (section 5).
-> **R3 LANDED 2026-08-18** (commit 9376c6c3; see its section).  R4 belongs
-> to the ECS/spice side and is still open.
+> **R3 LANDED 2026-08-18** (commit 9376c6c3; see its section).  **R4's
+> evidence and verification tiers LANDED 2026-08-19** (slices 1-3, shipped
+> in 0.37.0: omitted-parameter evidence, the `rf_resolve_read_frames`
+> footprint walk behind `--dump-read-frames`, call-shape EXCEEDED as
+> TUR-W0383), and the spice side converted the measure layer the same day
+> (turmeric-spices PRs #54-#56), so the shipping ECS aliveness chain
+> (`sized-gen-of` through `GameWorld-alive?`) is VERIFIED, not trusted.
+> Deliberately not done (R4's part-5 record): a behavioral consumer of
+> `reads_checked` -- CSE, safe parallelization, incremental recompute are
+> post-v1 optimizations that each want their own design, and nothing on the
+> v1 track blocks on them -- and local-alias tracking in the root chase,
+> which no real measure needs.  Archived 2026-09-28.
 > **Type:** Language / refinement checking
 > **Depends on:** nothing.  Section 14 of the mutable-globals plan is explicit
 > that the read side blocks nothing and must not become a precondition.

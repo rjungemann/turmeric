@@ -6,15 +6,25 @@ description: Where the refinement solver's limits actually are once the numeric 
 
 # Solver Integer Tail (S2c-lite)
 
-**Status:** Phase 1 **LANDED 2026-09-05** (this document was written with
-it).  Phase 3(b) and Phase 4 landed the same day; Phases 2 and 3(a) are
-parked on measured evidence, with their triggers instrumented (`eq no-unit
-split`, `LA int feasible`, and `benchmarks/run-unknown-oracle.py`, which
-found zero missed proofs in any swept population).  Nothing here is on the
-critical path to v1; every item is additive to a solver that already ships
-and is sound, and every step below is an equivalence over the integers, so
-the one-directional invariant (never `RT_VALID` unless entailed) is preserved
-by construction.
+**Status:** **complete** -- Phase 1 **LANDED 2026-09-05** (commit dee5563f,
+v0.44.0; this document was written with it).  Phase 3(b) (`tur smt`
+`div`/`mod` with their Euclidean meaning, both directions) and Phase 4 (both
+halves: the fuzzer's `shape_integer` population and the six `QF_LIA`
+div/mod corpus benchmarks) landed the same day and shipped in v0.44.2.
+Phases 2 (sigma-substitution) and 3(a) (dark shadow / branch-and-bound) are
+**parked by decision** on measured evidence -- the same disposition as SX4
+/ SX6 in [solver-extension-plan.md](../archive/solver-extension-plan.md) --
+with their triggers instrumented (`eq no-unit split` and `LA int feasible`
+under `TUR_REFINE_STATS=1`, carried as rows in
+`benchmarks/cap-sweep-results.md`, plus `benchmarks/run-unknown-oracle.py`,
+which found zero missed proofs in any swept population).  Neither has fired:
+the 2026-09-06 sweep's only Phase 2 hit is a `sat`-labelled corpus benchmark,
+and no solver-arithmetic change has landed since.  Re-open from those rows,
+not from this file.  Nothing here was on the critical path to v1; every item
+is additive to a solver that already ships and is sound, and every step below
+is an equivalence over the integers, so the one-directional invariant (never
+`RT_VALID` unless entailed) is preserved by construction.  Archived
+2026-09-28.
 
 Companion to [solver-extension-plan.md](../archive/solver-extension-plan.md) (SX), which
 this plan does not replace: SX is about *incrementality and boolean
