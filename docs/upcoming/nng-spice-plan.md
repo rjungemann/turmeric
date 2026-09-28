@@ -1,7 +1,12 @@
 # nng Spice Plan
 
-> **Status:** v0 shipped -- `turmeric-spices/spices/nng`
-> **Last Updated:** 2026-09-16
+> **Status:** **complete** -- NG0-NG4 landed as `tur-nng` 0.1.0
+> (`turmeric-spices/spices/nng`, turmeric-spices#75, 2026-09-17; nng pinned
+> v1.12.4). The two compiler defects it filed were fixed 2026-09-16 (#888) and
+> archived, and the spice's `Ack` stand-in is gone. NG5 is deliberately out of
+> v0: each follow-up graduates into its own plan if wanted, and none has been
+> opened. Archived 2026-09-28.
+> **Last Updated:** 2026-09-28
 > **Type:** Networking / spice (turmeric-spices)
 
 ---

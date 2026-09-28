@@ -1,7 +1,17 @@
 # `spices/secret`: linear key material + real crypto hygiene
 
-> **Status:** proposed (2026-08-17). **Track:** post-v1 -- nothing on the v1
-> line depends on this; it is written down so the design survives.
+> **Status:** **complete** -- S1, S2 and S3 landed 2026-08-18 as `tur-secret`
+> 0.1.0 (`turmeric-spices/spices/secret`: `secret/hygiene`, `secret/core`,
+> `secret/kdf`, `secret/hex`, with an `-O2` residue probe and `errors/run.sh`
+> asserting the three linear-`Secret` diagnostics), and the optional
+> `stdlib/random.tur` "not crypto-grade" note landed the same day. S4
+> (`secret-do`) deliberately not built -- optional here by design; the API
+> stands without it. Deviations: SHA-256/HMAC/HKDF are self-contained rather
+> than mbedTLS-backed (rationale in the spice's `docs/guides/secret-guide.md`),
+> the codecs are hex only (no b64), and the diagnostics are covered spice-side,
+> not by a compiler-repo `errors/` fixture. The four compiler defects the work
+> filed are fixed and archived. Archived 2026-09-28. **Track:** post-v1 --
+> nothing on the v1 line depends on this.
 > **Type:** spice (in `../turmeric-spices/`), plus one optional stdlib fix
 > (`random.tur`).
 
