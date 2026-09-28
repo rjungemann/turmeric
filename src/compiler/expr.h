@@ -98,6 +98,16 @@ struct Binding {
      * recursion machinery (it is excluded, never captured).  See
      * hkt-matcher-cata-fnarg-on-toplevel-defn-and-env-struct-collision (Edge 1). */
     bool          is_letrec_binding;
+    /* letrec-mutual-recursion-between-capturing-closures: set by elab_letrec's
+     * pre-scan on a group member whose `fn` init is predicted to capture (it
+     * names a local outside the group, or calls a member that does).  A call to
+     * such a member from a SIBLING's top-level body is a capture, not recursion
+     * -- even before the member's own init is elaborated -- and the emitter ties
+     * the knot by patching the sibling's env slot once the member is bound.
+     * `letrec_elaborating` marks the member whose init is being elaborated
+     * right now: its own self-call stays excluded (the S5 env-ptr self-call). */
+    bool          letrec_predicted_closure;
+    bool          letrec_elaborating;
     uint32_t      id;            /* unique within the program */
     Span          span;
     /* TY4: lexical scope depth at declaration (0 = outermost). Stamped by

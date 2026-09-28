@@ -3113,6 +3113,98 @@ bool emit_let_init_is_erased_word_to_ptr(EmitCtx *ctx, const Expr *init,
     return cn && strcmp(cn, "int64_t") == 0;
 }
 
+/* letrec-mutual-recursion-between-capturing-closures: the letrec closure knot.
+ *
+ *   (letrec [ev (fn [i] ... k ... (od ...))
+ *            od (fn [i] ... k ... (ev ...))] ...)
+ *
+ * Both members capture `k` and each other, so neither env can be filled first.
+ * The knot: `ev`'s env is built with its `od` slot 0, and once `od` is bound
+ * the slot is patched through `ev`'s binding.  Nothing between the two can
+ * call `ev` -- the members are bound in order and only a later member's init
+ * could, and `od`'s init is a closure construction, which calls nothing.
+ *
+ * The state is saved and restored around each letrec, so a nested letrec in
+ * a member's init keeps its own. */
+typedef LetrecKnot LetrecKnotSave;
+
+static void letrec_knot_begin(EmitCtx *ctx, const Expr *e, LetrecKnotSave *save) {
+    *save = ctx->letrec_knot;
+    memset(&ctx->letrec_knot, 0, sizeof ctx->letrec_knot);
+    if (e->as.let_.n < 2) return;
+    const Binding **pending = (const Binding **)malloc(e->as.let_.n * sizeof(Binding *));
+    if (!pending) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < e->as.let_.n; i++) pending[i] = e->as.let_.bindings[i].binding;
+    ctx->letrec_knot.active     = true;
+    ctx->letrec_knot.pending    = pending;
+    ctx->letrec_knot.n_pending  = e->as.let_.n;
+    ctx->letrec_knot.in_closure = ctx->closure;
+}
+
+/* About to emit member `i`'s init: it owns any deferred fill its closure makes. */
+static void letrec_knot_owner(EmitCtx *ctx, const Expr *e, uint32_t i) {
+    if (!ctx->letrec_knot.active) return;
+    const Expr *init = e->as.let_.bindings[i].init;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    ctx->letrec_knot.owner_init = init;
+    ctx->letrec_knot.owner      = e->as.let_.bindings[i].binding;
+}
+
+/* Member `b` is now bound: drop it from the pending set and emit every fill
+ * that was waiting on it. */
+static void letrec_knot_bound(EmitCtx *ctx, Buf *body, const Binding *b) {
+    if (!ctx->letrec_knot.active) return;
+    ctx->letrec_knot.owner_init = NULL;
+    ctx->letrec_knot.owner      = NULL;
+    for (uint32_t i = 0; i < ctx->letrec_knot.n_pending; i++) {
+        if (ctx->letrec_knot.pending[i] == b) {
+            ctx->letrec_knot.pending[i] = NULL;
+            break;
+        }
+    }
+    for (uint32_t i = 0; i < ctx->letrec_knot.n_patches; i++) {
+        if (ctx->letrec_knot.patch_target[i] != b) continue;
+        buf_puts(body, ctx->letrec_knot.patch_stmt[i]);
+        free(ctx->letrec_knot.patch_stmt[i]);
+        ctx->letrec_knot.patch_stmt[i]   = NULL;
+        ctx->letrec_knot.patch_target[i] = NULL;
+    }
+}
+
+static void letrec_knot_end(EmitCtx *ctx, const LetrecKnotSave *save) {
+    for (uint32_t i = 0; i < ctx->letrec_knot.n_patches; i++)
+        free(ctx->letrec_knot.patch_stmt[i]);
+    free(ctx->letrec_knot.patch_stmt);
+    free(ctx->letrec_knot.patch_target);
+    free(ctx->letrec_knot.pending);
+    ctx->letrec_knot = *save;
+}
+
+/* Should EX_CLOSURE `ce` defer its fill of `captured`?  Only the owner's own
+ * init, in the frame that opened the knot, capturing a member not bound yet. */
+static bool letrec_knot_defers(const EmitCtx *ctx, const Expr *ce, const Binding *captured) {
+    if (!ctx->letrec_knot.active || ce != ctx->letrec_knot.owner_init ||
+        !ctx->letrec_knot.owner || ctx->closure != ctx->letrec_knot.in_closure)
+        return false;
+    for (uint32_t i = 0; i < ctx->letrec_knot.n_pending; i++)
+        if (ctx->letrec_knot.pending[i] == captured) return true;
+    return false;
+}
+
+static void letrec_knot_add_patch(EmitCtx *ctx, const Binding *target, const char *stmt) {
+    uint32_t n = ctx->letrec_knot.n_patches;
+    ctx->letrec_knot.patch_target = (const Binding **)realloc(
+        ctx->letrec_knot.patch_target, (n + 1) * sizeof(Binding *));
+    ctx->letrec_knot.patch_stmt = (char **)realloc(
+        ctx->letrec_knot.patch_stmt, (n + 1) * sizeof(char *));
+    if (!ctx->letrec_knot.patch_target || !ctx->letrec_knot.patch_stmt) {
+        fprintf(stderr, "tur: oom\n"); abort();
+    }
+    ctx->letrec_knot.patch_target[n] = target;
+    ctx->letrec_knot.patch_stmt[n]   = strdup(stmt);
+    ctx->letrec_knot.n_patches       = n + 1;
+}
+
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
@@ -3255,9 +3347,13 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
     }
 
+    bool knot = e->kind == EX_LETREC;
+    LetrecKnotSave knot_save;
+    if (knot) letrec_knot_begin(ctx, e, &knot_save);
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         const Binding *b = e->as.let_.bindings[i].binding;
         char *bn = name_for_binding(ctx, b);
+        if (knot) letrec_knot_owner(ctx, e, i);
         char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
         indent_buf(body, ctx->indent);
         /* GF1: gen struct fields are already declared in the struct -- just assign */
@@ -3587,9 +3683,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* Suppress unused-variable warnings even if the body never refs it. */
         indent_buf(body, ctx->indent);
         buf_printf(body, "(void)%s;\n", bn);
+        if (knot) letrec_knot_bound(ctx, body, b);
         free(bn);
         free(iv);
     }
+    if (knot) letrec_knot_end(ctx, &knot_save);
 
     /* In scope for the body: an early exit inside it drops these first. */
     uint32_t any_scope_mark = ctx->n_any_scope_drops;
@@ -3775,6 +3873,8 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_puts(body, "{\n");
     ctx->indent += 4;
 
+    LetrecKnotSave knot_save;
+    letrec_knot_begin(ctx, e, &knot_save);
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         const Binding *b = e->as.let_.bindings[i].binding;
         if (b->is_global && b->c_export_name && b->type.kind == TY_FN) {
@@ -3785,10 +3885,12 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * with an uninitialized pointer and crash. */
             char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
             free(iv);
+            letrec_knot_bound(ctx, body, b);
             continue;
         }
         /* Normal binding -- mirror emit_let_value logic. */
         char *bn = name_for_binding(ctx, b);
+        letrec_knot_owner(ctx, e, i);
         char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
         indent_buf(body, ctx->indent);
         if (b->type.kind == TY_FN) {
@@ -3984,9 +4086,11 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         indent_buf(body, ctx->indent);
         buf_printf(body, "(void)%s;\n", bn);
+        letrec_knot_bound(ctx, body, b);
         free(bn);
         free(iv);
     }
+    letrec_knot_end(ctx, &knot_save);
 
     if (body_has_return_or_throw) {
         if (!nil_result && !expr_is_divergent(e->as.let_.body)) {
@@ -13227,8 +13331,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(field);
                     continue;
                 }
+                /* letrec-mutual-recursion-between-capturing-closures: a
+                 * sibling not bound yet (the letrec knot).  Zero its slot now
+                 * and render the real fill against the owner's binding, to be
+                 * emitted the moment the sibling is bound (letrec_knot_bound). */
+                Buf knot_patch;
+                Buf *out = body;
+                char *knot_lhs = NULL;
+                const char *lhs = fat_tmp;
+                if (letrec_knot_defers(ctx, e, captured)) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "memset(&%s->%s, 0, sizeof %s->%s);\n",
+                               fat_tmp, field, fat_tmp, field);
+                    char *on = name_for_binding(ctx, ctx->letrec_knot.owner);
+                    Buf lb; buf_init(&lb);
+                    buf_printf(&lb, "((struct %s *)(void *)(intptr_t)(%s))",
+                               env_name->name, on);
+                    buf_putc(&lb, '\0');
+                    knot_lhs = strdup(lb.data);
+                    buf_free(&lb);
+                    free(on);
+                    lhs = knot_lhs;
+                    buf_init(&knot_patch);
+                    out = &knot_patch;
+                }
                 char *cn = name_for_binding(ctx, captured);
-                indent_buf(body, ctx->indent);
+                indent_buf(out, ctx->indent);
                 /* B5: a captured struct/ADT that is a pass-by-pointer parameter
                  * of the *enclosing* function arrives as `const T *`, but the
                  * env field is declared by value (type_c_name => `T`).  Deref so
@@ -13250,8 +13378,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * non-carrier case, so this only bites carrier-held params). */
                 if (captured->emit_carrier_holds_ptr && !captured_is_pbp) {
                     const char *fcty = emit_type_c_name(ctx, captured->type);
-                    buf_printf(body, "%s->%s = (%s)(intptr_t)%s;\n",
-                               fat_tmp, field, fcty, cn);
+                    buf_printf(out, "%s->%s = (%s)(intptr_t)%s;\n",
+                               lhs, field, fcty, cn);
                 } else {
                     /* generic-closure-capture-of-float-truncates: a spec body
                      * filling the shared env a generic site declared.  A tyvar
@@ -13271,16 +13399,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         strcmp(val_cty, "int64_t") != 0;
                     size_t vl = val_cty ? strlen(val_cty) : 0;
                     if (into_carrier && vl && val_cty[vl - 1] == '*') {
-                        buf_printf(body, "%s->%s = (int64_t)(intptr_t)(%s);\n",
-                                   fat_tmp, field, cn);
+                        buf_printf(out, "%s->%s = (int64_t)(intptr_t)(%s);\n",
+                                   lhs, field, cn);
                     } else if (into_carrier && strcmp(val_cty, "double") == 0) {
-                        buf_printf(body,
+                        buf_printf(out,
                             "%s->%s = ((union { double f; int64_t u; }){ .f = (%s) }).u;\n",
-                            fat_tmp, field, cn);
+                            lhs, field, cn);
                     } else if (into_carrier && strcmp(val_cty, "float") == 0) {
-                        buf_printf(body,
+                        buf_printf(out,
                             "%s->%s = (int64_t)((union { float f; uint32_t u; }){ .f = (%s) }).u;\n",
-                            fat_tmp, field, cn);
+                            lhs, field, cn);
                     } else if (into_carrier &&
                                emit_type_is_byvalue_adt(ctx, captured->type)) {
                         /* hkt-generic-nested-bind-result-type: the same shared
@@ -13291,12 +13419,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * `bind`, which dereferences a box.  Heap-box it, as
                          * every aggregate entering a carrier slot is
                          * (emit_agg_box), and note the box's words. */
-                        buf_printf(body,
+                        buf_printf(out,
                             "{ %s *__tur_cbox = (%s *)malloc(sizeof(%s)); "
                             "*__tur_cbox = %s; "
                             "TUR_REGION_NOTE_WORDS(__tur_cbox, sizeof *__tur_cbox); "
                             "%s->%s = (int64_t)(intptr_t)__tur_cbox; }\n",
-                            val_cty, val_cty, val_cty, cn, fat_tmp, field);
+                            val_cty, val_cty, val_cty, cn, lhs, field);
                     } else if (captured->type.kind == TY_FN && !captured->is_poly_fn &&
                                !captured_is_pbp) {
                         /* A function value's field is the int64_t carrier (see
@@ -13306,11 +13434,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * field is a -Wint-conversion (an error under clang).
                          * Bridge it through intptr_t, which is a no-op for a
                          * value already held as the carrier. */
-                        buf_printf(body, "%s->%s = (int64_t)(intptr_t)(%s);\n",
-                                   fat_tmp, field, cn);
+                        buf_printf(out, "%s->%s = (int64_t)(intptr_t)(%s);\n",
+                                   lhs, field, cn);
                     } else {
-                        buf_printf(body, "%s->%s = %s%s;\n",
-                                   fat_tmp, field, captured_is_pbp ? "*" : "", cn);
+                        buf_printf(out, "%s->%s = %s%s;\n",
+                                   lhs, field, captured_is_pbp ? "*" : "", cn);
                     }
                     free(decl_cty);
                 }
@@ -13323,13 +13451,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * captured word at the fill, by the field's declared C type. */
                 if (regions_enabled()) {
                     Buf lv; buf_init(&lv);
-                    buf_printf(&lv, "%s->%s", fat_tmp, field);
+                    buf_printf(&lv, "%s->%s", lhs, field);
                     buf_putc(&lv, '\0');
                     const char *fcty_note = captured->type.kind == TY_FN
                         ? "int64_t"
                         : (captured->is_poly_fn ? "tur_poly_fn_t"
                                                 : emit_type_c_name(ctx, captured->type));
-                    emit_region_note_lvalue(body, ctx->indent, fcty_note, lv.data);
+                    emit_region_note_lvalue(out, ctx->indent, fcty_note, lv.data);
                     buf_free(&lv);
                 }
                 /* closure-drop-glue (Model R) walk slice: an rc-typed capture is a
@@ -13345,15 +13473,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * refcounted (a raw nested-closure handle, a ref) still need move
                  * analysis and are left to the next slice. */
                 if (captured->type.kind == TY_RC) {
-                    indent_buf(body, ctx->indent);
-                    buf_printf(body, "if (%s->%s) rc_strong_increment(%s->%s);\n",
-                               fat_tmp, field, fat_tmp, field);
+                    indent_buf(out, ctx->indent);
+                    buf_printf(out, "if (%s->%s) rc_strong_increment(%s->%s);\n",
+                               lhs, field, lhs, field);
                 }
                 /* A Drop-typeclass capture is MOVED into the env (no retain) -- the
                  * source is consumed at elab, so the stored handle is the sole owner
                  * and the drop-glue releases it once. */
                 free(field);
                 free(cn);
+                if (knot_lhs) {
+                    buf_putc(&knot_patch, '\0');
+                    letrec_knot_add_patch(ctx, captured, knot_patch.data);
+                    buf_free(&knot_patch);
+                    free(knot_lhs);
+                }
             }
             char *ptr_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);

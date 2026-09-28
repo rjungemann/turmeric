@@ -429,6 +429,19 @@ Binding *scope_lookup(Scope *s, const Symbol *name) {
     return NULL;
 }
 
+/* Edge 1 + letrec-sibling-closure-not-captured + letrec-mutual-recursion-
+ * between-capturing-closures: is a call from a letrec init's own top-level
+ * body to group member `b` recursion (left to the recursion machinery) rather
+ * than a capture?  Only for the member being elaborated itself (the S5 env-ptr
+ * self-call) or a member that will be captureless (lifted to a global).  A
+ * sibling already elaborated to a closure, or one the pre-scan predicts will
+ * be one, must be carried in the env. */
+static bool letrec_member_is_recursion(const Binding *b) {
+    if (b->closure_fn_binding) return false;
+    if (b->letrec_predicted_closure && !b->letrec_elaborating) return false;
+    return true;
+}
+
 /* Phase 3: Collect free variables in an expression that are not in the given
  * param bindings. Returns a malloc'd list of captured Binding pointers. */
 Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
@@ -858,7 +871,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                      * lifted body names an undeclared local. */
                     bool fb_is_self_excluded = false;
                     for (uint32_t i = 0; i < n_self_exclude; i++) {
-                        if (self_exclude[i] == fb && !fb->closure_fn_binding) { fb_is_self_excluded = true; break; }
+                        if (self_exclude[i] == fb && letrec_member_is_recursion(fb)) { fb_is_self_excluded = true; break; }
                     }
                     if (!fb_is_param && !fb->is_global && !fb_is_self_excluded) {
                         bool fb_is_local = false;
@@ -921,7 +934,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                         bool is_self_excluded = false;
                         for (uint32_t i = 0; i < n_self_exclude; i++) {
                             /* An earlier sibling closure is forwarded, as above. */
-                            if (self_exclude[i] == icap && !icap->closure_fn_binding) { is_self_excluded = true; break; }
+                            if (self_exclude[i] == icap && letrec_member_is_recursion(icap)) { is_self_excluded = true; break; }
                         }
                         if (is_self_excluded) continue;
                         bool is_local = false;

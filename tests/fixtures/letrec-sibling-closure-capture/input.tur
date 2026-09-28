@@ -19,8 +19,7 @@
       (mp 5))))
 
 ;; Mutual recursion between two capturing members (the earlier one calling
-;; the later) is still open: docs/reported/letrec-mutual-recursion-between-
-;; capturing-closures.md.
+;; the later) is tests/fixtures/letrec-mutual-capturing-closures.
 
 (defn main [] : int
   (println (f 7))

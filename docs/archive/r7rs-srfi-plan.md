@@ -10,12 +10,11 @@
 > unstarted work: its fourteen rows (5, 7, 19, 25, 29, 43, 54, 57, 59, 63,
 > 67, 71, 74, 86) stay "not yet (S8)" in `SRFI_LIBS[]` and the guide, and
 > each flips when someone asks; Section 5 is unscheduled likewise. All five
-> Section 7 questions are decided. The one report filed on the way that is
-> still open has its own note,
-> docs/reported/letrec-mutual-recursion-between-capturing-closures.md (S6);
-> the body's other docs/reported/ mentions (type-error panics, too-few
-> arguments, procedure identity) were fixed 2026-09-27 and are in
-> docs/archive/. Archived 2026-09-28.
+> Section 7 questions are decided. The one report filed on the way,
+> letrec-mutual-recursion-between-capturing-closures (S6), was resolved
+> 2026-09-28 and is in docs/archive/ too; the body's other docs/reported/
+> mentions (type-error panics, too-few arguments, procedure identity) were
+> fixed 2026-09-27 and are in docs/archive/. Archived 2026-09-28.
 
 `(import (srfi N))` resolves for every SRFI in the table: the ten built-in
 rows, the three alias rows and the twenty library rows import, and the
@@ -1112,8 +1111,8 @@ fixture itself runs on both back ends.
 >     not captured, and cc rejected the lifted body. SRFI 64's simple runner
 >     has two internal defines of that shape. Now captured
 >     (src/compiler/elab_core.c; `letrec-sibling-closure-capture`). Two
->     capturing members that call each other are still open:
->     docs/reported/letrec-mutual-recursion-between-capturing-closures.md.
+>     capturing members that call each other were resolved 2026-09-28:
+>     docs/archive/letrec-mutual-recursion-between-capturing-closures.md.
 >   - *A top-level `(define f (case-lambda ...))` whose clause calls `f`* was
 >     "unknown function f"; it is a defn now, as a lambda define is
 >     (`r7rs-case-lambda-define-recurs`).
