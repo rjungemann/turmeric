@@ -11,7 +11,7 @@
 ;;;     (r7rs-srfi-plan section 7, question 4);
 ;;;   - condition-subtype? and condition-type-field-supertype are exported
 ;;;     under neither name, as in the SRFI.
-;;; docs/upcoming/r7rs-srfi-plan.md, S7.
+;;; docs/archive/r7rs-srfi-plan.md, S7.
 (define-library (srfi 35)
   (export
     make-condition-type condition-type?

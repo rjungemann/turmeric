@@ -18,7 +18,7 @@
 ;;; A failing primitive (`(vector-ref v 99)`, `(car 5)`) raises an error
 ;;; object, which test-error catches
 ;;; (docs/archive/r7rs-type-errors-are-uncatchable-panics.md).
-;;; docs/upcoming/r7rs-srfi-plan.md, S6.
+;;; docs/archive/r7rs-srfi-plan.md, S6.
 ;;;
 ;;; SPDX-FileCopyrightText: 2015 Taylan Kammer <taylan.kammer@gmail.com>
 ;;; SPDX-License-Identifier: MIT

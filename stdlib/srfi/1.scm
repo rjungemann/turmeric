@@ -11,7 +11,7 @@
 ;;; `member` and `assoc` with a comparison), so importing (srfi 1) beside
 ;;; (scheme base) binds one procedure per name (r7rs-srfi-plan D5).  The
 ;;; linear-update `!` procedures are the pure ones, which the SRFI allows.
-;;; docs/upcoming/r7rs-srfi-plan.md, S3.
+;;; docs/archive/r7rs-srfi-plan.md, S3.
 (define-library (srfi 1)
   (export
     xcons cons* make-list list-tabulate list-copy circular-list iota

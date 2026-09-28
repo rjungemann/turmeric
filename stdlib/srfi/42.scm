@@ -4,7 +4,7 @@
 ;;; syntax-rules, unchanged: the file carries no licence header, and the
 ;;; SRFI's MIT licence covers it (stdlib/srfi/COPYING).  It imports (scheme
 ;;; read) because the :port generator reads with `read` by default.
-;;; docs/upcoming/r7rs-srfi-plan.md, S7.
+;;; docs/archive/r7rs-srfi-plan.md, S7.
 ;;;
 ;;; Copyright (C) Sebastian Egner (2003). All Rights Reserved.
 (define-library (srfi 42)

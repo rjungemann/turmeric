@@ -1,7 +1,25 @@
 # MessagePack Spice Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-09-13
+> **Status:** **complete** -- MPJ and MP0-MP5 landed together as `tur-msgpack`
+> 0.1.0 plus `tur-json` 0.3.0 -> 0.4.0 (`turmeric-spices/spices/msgpack`,
+> turmeric-spices#70, 2026-09-14; http/httpd moved in the same commit, and the
+> spice joined the root `:members`). MP0 declined mpack (no `CMakeLists.txt` at
+> any tag, header-config skew under bare `cc`) and hand-rolled the reader too --
+> the fallback the plan authorized -- so the spice has no native dependency. The
+> `DecodeErrors` question was settled at MPJ by renaming json's side as well
+> (`JsonDecodeErrors`, `encode-json-string`, `json-decode-error*`; msgpack ships
+> `MpDecodeErrors`). The MP5 guide section landed in turmeric 23e0d405e. The
+> four compiler defects the build turned up, and a fifth the sweep exposed, are
+> fixed and archived (e5a6c439c, #873, #874); turmeric-spices#71/#72
+> (2026-09-14/15) removed every workaround. Both reports cited below are
+> archived: same-method-name dispatch is now a TUR-E0020 error (2026-09-15), and
+> the wrapper leak was fixed (2026-09-19). Deliberately not done: the v0
+> non-goals, and shared stdlib serde classes (still gated on the typeclass
+> load-reentrancy bug). One loose end, unfiled: #71/#72 each saw
+> `tests/json-cross-check.tur` red locally (json's yyjson include dir not
+> picked up -- likely an unfetched sandbox, since the transitive `:cmake-deps`
+> walk does include `:optional` deps); not re-run here. Archived 2026-09-28.
+> **Last Updated:** 2026-09-28
 > **Type:** Serialization / spice (turmeric-spices)
 
 ---
@@ -262,7 +280,7 @@ json:42                # EncodeJson
 ```
 
 Filed as
-[same-method-name-in-two-classes-dispatches-by-declaration-order](../../reported/same-method-name-in-two-classes-dispatches-by-declaration-order.md).
+[same-method-name-in-two-classes-dispatches-by-declaration-order](same-method-name-in-two-classes-dispatches-by-declaration-order.md).
 Until that grows an ambiguity diagnostic, distinct method names are the
 only thing keeping the two spices apart, which is why the mapping renames
 methods as well as classes.
@@ -480,7 +498,7 @@ spice in the top-level `:members` list.
   keeps the two spices apart, and nothing in the compiler enforces that:
   two classes sharing a method name dispatch by declaration order with no
   diagnostic
-  ([report](../../reported/same-method-name-in-two-classes-dispatches-by-declaration-order.md)).
+  ([report](same-method-name-in-two-classes-dispatches-by-declaration-order.md)).
   The naming convention is the only guard. If a third serde spice ever
   lands, that report becomes load-bearing rather than informational.
 - **A generic wrapper over a return-dispatch method.** `encode-string` and
@@ -489,7 +507,7 @@ spice in the top-level `:members` list.
   return bridge in `emit_fns.c`). What remains is a 16-byte leak when the
   payload is a by-value struct, because the caller-side payload drop does
   not fire for this producer shape
-  ([report](../../reported/generic-wrapper-tail-forwarding-a-return-dispatch-method.md)).
+  ([report](generic-wrapper-tail-forwarding-a-return-dispatch-method.md)).
   Scalar and `cstr` payloads are clean. If a msgpack wrapper returns a
   struct payload, prefer the destructure-and-rebuild spelling until the
   ownership flag is connected.
@@ -502,5 +520,5 @@ spice in the top-level `:members` list.
   the three classes MPJ renames are at `:50`, `:373` and `:1037`
 - `stdlib/schema.tur` -- error-vocabulary source of truth
 - `stdlib/serial.tur` -- binary `Serializable` class; `Buf` layout peer
-- `docs/upcoming/nng-spice-plan.md` -- companion plan; msgpack-over-nng
+- `docs/archive/nng-spice-plan.md` -- companion plan; msgpack-over-nng
   typed messaging is the intended cross-spice showcase

@@ -64,7 +64,7 @@ directly) is not discoverable from the message.
 Found alongside
 [any-narrowing-broken-for-parametric-receivers](any-narrowing-broken-for-parametric-receivers.md)
 while probing how parametric values interact with `any` for
-[docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md).
+[docs/archive/saffron-lang-plan.md](saffron-lang-plan.md).
 Different root cause, so filed separately.
 
 ## Repro (v0.44.2, `2da89e84`)

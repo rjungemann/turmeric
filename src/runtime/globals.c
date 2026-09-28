@@ -281,7 +281,7 @@ bool g_dump_cps_mono = false;
 
 /* checked-reads GRADUATED 2026-08-20 -- the #reads congruence override is
  * refused on positive broken-promise evidence, unconditionally.  The enable bit
- * and its gates are gone.  See docs/upcoming/trusted-refinement-claims-plan.md
+ * and its gates are gone.  See docs/archive/trusted-refinement-claims-plan.md
  * (R2). */
 
 /* jit-ffi GRADUATED 2026-08-21 -- call-ptr / callback-ptr are ordinary

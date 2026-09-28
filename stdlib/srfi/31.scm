@@ -2,7 +2,7 @@
 ;;;
 ;;; The SRFI document's implementation, as written.  Copyright (C) Dr. Mirko
 ;;; Luedde (2002); MIT licence, see stdlib/srfi/COPYING.
-;;; docs/upcoming/r7rs-srfi-plan.md, S2.
+;;; docs/archive/r7rs-srfi-plan.md, S2.
 (define-library (srfi 31)
   (export rec)
   (import (scheme base))

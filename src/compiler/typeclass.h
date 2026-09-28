@@ -108,7 +108,7 @@ struct TypeClass {
     bool     has_fundep;
     uint16_t fundep_from_mask;
     uint16_t fundep_to_mask;
-    /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md, SC1;
+    /* class-superclasses (docs/archive/typeclass-superclasses-plan.md, SC1;
      * gated behind --enable=class-superclasses): the constraint preamble
      * written between the type-param vector and the fundep clause --
      * `(defclass Monoid [a] [(Semigroup a)] ...)`.  Each element is kept as

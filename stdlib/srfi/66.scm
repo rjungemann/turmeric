@@ -10,7 +10,7 @@
 ;;; u8vector-compare, and u8vector-copy!, whose arguments come in R6RS's
 ;;; order (source first, then a count), not bytevector-copy!'s.  SRFI 4
 ;;; re-exports these, so importing both binds one u8vector-ref.
-;;; docs/upcoming/r7rs-srfi-plan.md, S7.
+;;; docs/archive/r7rs-srfi-plan.md, S7.
 (define-library (srfi 66)
   (export
     u8vector? make-u8vector u8vector u8vector->list list->u8vector

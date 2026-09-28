@@ -54,7 +54,7 @@ Pinned by `tests/run-r7rs-import.sh`, on both back ends:
 defines, keywords included. In practice exporting a macro is how most
 libraries ship their syntax. Here, exporting a `define-syntax` name is a
 compile error, so a Scheme library cannot give its importers new syntax. Found
-while planning SRFI support (docs/upcoming/r7rs-srfi-plan.md). That plan works
+while planning SRFI support (docs/archive/r7rs-srfi-plan.md). That plan works
 around the gap by splicing SRFI libraries into the importer rather than
 compiling them as modules, so SRFI work does not wait on this fix, but user
 libraries still hit it.

@@ -1,8 +1,13 @@
 # FFI x spices: closing the gaps between the dynamic FFI and the package layer
 
-> **Status:** S1, S2, S4 implemented (2026-08-17); S3 is a cross-reference
-> (tracked in jit-ffi-c2mir-plan F4/F5); S5 blocked on JIT REPLs becoming
-> the default configuration.  Proposed 2026-08-17.
+> **Status:** S1, S2, S4 implemented (2026-08-17); S3 satisfied -- its
+> jit-ffi-c2mir-plan F4/F5 landed 2026-08-18 (follow-ons 2026-08-21, aarch64
+> HFA fixed 2026-08-26), and that plan graduated in 0.38.0 and is archived.
+> **Remaining: S5 only**, still blocked as of 2026-09-28 -- `TUR_JIT` is still
+> OFF by default (`CMakeLists.txt`) and `cc` is still the default REPL engine,
+> so the shape table (`src/runtime/ffi_dispatch_thunk.c`,
+> `tools/gen_ffi_dispatch.py`) is still the live non-JIT rung, and no plan
+> schedules the default flip.  Proposed 2026-08-17.
 > **Track:** post-v1, incremental -- each phase is independently landable.
 >
 > **Implementation notes:**
@@ -29,8 +34,8 @@
 > - S4: the constants convention is documented in
 >   developing-spices-guide.md ("Constants: #defines do not survive
 >   linking").
-> **Builds on:** [jit-ffi-c2mir-plan.md](../archive/jit-ffi-c2mir-plan.md) (F1-F3
-> implemented; F4/F5 trailing),
+> **Builds on:** [jit-ffi-c2mir-plan.md](../archive/jit-ffi-c2mir-plan.md) (F1-F5
+> implemented; graduated 2026-08-21),
 > [docs/guides/developing-spices-guide.md](../guides/developing-spices-guide.md),
 > [docs/guides/ffi-guide.md](../guides/ffi-guide.md).
 

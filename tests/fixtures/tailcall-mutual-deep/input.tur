@@ -1,4 +1,4 @@
-;; proper-tail-calls T5 (docs/upcoming/proper-tail-calls-plan.md, T-D5):
+;; proper-tail-calls T5 (docs/archive/proper-tail-calls-plan.md, T-D5):
 ;; mutual tail calls run in constant stack at -O0.
 ;;
 ;; The `flags` file builds this at -O0 (`--debug`).  Section 2.4 of the plan is

@@ -995,7 +995,7 @@ anyway.
   equation with no unit coefficient (`2x + 3y = 1`) is read as two
   inequalities, and a system that is only infeasible over the integers
   *without* any equation in it is not decided. Both fall to Unknown and keep
-  the runtime check; see `docs/upcoming/solver-integer-tail-plan.md`.
+  the runtime check; see `docs/archive/solver-integer-tail-plan.md`.
 - **[incomplete] A counterexample needs the search to fit its budget.** The
   bounded search that produces `TUR-E0371`'s witness enumerates at most
   131072 assignments over at most 8 integer variables; an obligation wider

@@ -1,11 +1,15 @@
 # Typeclass superclasses: `defclass` constraint preambles
 
-> **Status:** SC0-SC6 **landed 2026-09-16** behind the gate (see section 7);
-> **SC7 (graduation) landed 2026-09-25** (see section 8). **SC8a (the lattice
-> classes) and its SC9 docs landed 2026-09-25**, unreleased (see section 10).
-> **SC8b (the auto-loaded classes and the arrows) landed 2026-09-25**,
-> unreleased, as five commits (see section 11). Stdlib adoption is complete;
-> nothing in this plan remains open.
+> **Status:** **complete** -- SC0-SC6 landed 2026-09-16 behind the gate and
+> shipped in 0.49.0 (section 7); SC7 graduated the feature in 0.54.0 (section
+> 8); SC8a with its SC9 docs, and SC8b as five commits, landed 2026-09-25 and
+> shipped in 0.55.0 (sections 10 and 11). Every compiled-path gap section 11
+> filed is fixed and archived. Deliberately not done: `JoinSemilattice` and
+> `MeetSemilattice` stay flat (SC8a), and section 4.3 stays out of scope --
+> its Saffron dynamic-dispatch half is owned by saffron-lang-plan Q1. Two
+> cosmetic nits were left as they are: TUR-E0393's "requires a Applicative"
+> article (section 10) and `Ord [cstr]`'s missing interpreter twin (section
+> 11). Archived 2026-09-28.
 > **Type:** compiler feature (elaboration, plus superclass dictionaries for
 > dictionary-passing generics -- section 11), plus a
 > **documentation correction that is independently shippable and should land
@@ -246,7 +250,7 @@ populated `EXPERIMENTS[]` row in `src/runtime/experiments.c`:
 ```c
 { "class-superclasses",
   "defclass constraint preambles (superclass entailment)",
-  "docs/upcoming/typeclass-superclasses-plan.md",
+  "docs/archive/typeclass-superclasses-plan.md",
   "0.49.0",                  /* introduced */
   "0.55.0",                  /* expires_at -- advisory; never blocks a release */
   XF_LIFECYCLE_PROTOTYPE,
@@ -603,7 +607,7 @@ lists, which the fixtures route around and which are filed as reports.
 
 - [lattice-vocabulary-plan.md](lattice-vocabulary-plan.md) section 2.3 -- independent
   confirmation, and the verified two-constraint workaround.
-- [crdt-spice-plan.md](crdt-spice-plan.md):127, :586 -- the ergonomic cost in a
+- [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md):127, :586 -- the ergonomic cost in a
   real spice, and the "file it as a report" disposition.
 - [saffron-lang-plan.md](saffron-lang-plan.md):1849 -- Q1, the dynamic-dispatch
   half, deliberately out of scope here.

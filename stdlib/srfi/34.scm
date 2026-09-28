@@ -3,7 +3,7 @@
 ;;; Importing (srfi 34) costs nothing: R7RS adopted SRFI 34's
 ;;; with-exception-handler, guard and raise. The export list is what `(import
 ;;; (only (srfi 34) ...))`, `except`, `prefix` and `rename` check against.
-;;; docs/upcoming/r7rs-srfi-plan.md, D2.
+;;; docs/archive/r7rs-srfi-plan.md, D2.
 (define-library (srfi 34)
   (export with-exception-handler guard raise)
   (import (scheme base)))

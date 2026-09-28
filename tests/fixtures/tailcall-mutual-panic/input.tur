@@ -1,4 +1,4 @@
-;; proper-tail-calls T5 (docs/upcoming/proper-tail-calls-plan.md, T-D5): a
+;; proper-tail-calls T5 (docs/archive/proper-tail-calls-plan.md, T-D5): a
 ;; panic raised while a fused group is running still propagates, and the
 ;; owned locals of the member it leaves are still dropped.
 ;;

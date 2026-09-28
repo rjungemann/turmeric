@@ -5,7 +5,7 @@
 ;;; both procedures; importing (srfi 98) loads that library, as importing it
 ;;; directly would. The export list is what `(import (only (srfi 98) ...))`,
 ;;; `except`, `prefix` and `rename` check against.
-;;; docs/upcoming/r7rs-srfi-plan.md, D2.
+;;; docs/archive/r7rs-srfi-plan.md, D2.
 (define-library (srfi 98)
   (export get-environment-variable get-environment-variables)
   (import (scheme process-context)))

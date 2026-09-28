@@ -13,7 +13,7 @@ into) and `(features)` together, and the fixture covers them unchanged.
 **Severity:** low. R7RS 4.2.1 says `cond-expand` tests the feature
 identifiers that `(features)` returns. Here, the two lists have drifted apart:
 `ratios` is in `(features)` but a `cond-expand` clause on `ratios` does not
-hold. Found while planning SRFI support (docs/upcoming/r7rs-srfi-plan.md),
+hold. Found while planning SRFI support (docs/archive/r7rs-srfi-plan.md),
 which adds `srfi-N` feature identifiers and would widen the drift if nothing
 changed.
 

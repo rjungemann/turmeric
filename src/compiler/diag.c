@@ -1847,8 +1847,8 @@ static const DiagExplanation diag_explanations_[] = {
       "(an error under --strict-refine).  Only a demonstrable read does this:\n"
       "an inline-C body is unwalkable, yields no evidence, stays silent, and\n"
       "keeps the trusted grant.  See\n"
-      "docs/upcoming/trusted-refinement-claims-plan.md.\n" },
-    /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md) */
+      "docs/archive/trusted-refinement-claims-plan.md.\n" },
+    /* class-superclasses (docs/archive/typeclass-superclasses-plan.md) */
     { TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
       "TUR-E0390: Malformed `defclass` superclass preamble\n"
       "\n"

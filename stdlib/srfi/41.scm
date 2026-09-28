@@ -5,7 +5,7 @@
 ;;; (delay-force keeps an iterative stream in constant space).  Copyright
 ;;; (c) 2009-2021 Alex Shinn; BSD-3, see stdlib/srfi/COPYING.  It uses SRFI
 ;;; 1's any, every and iota.
-;;; docs/upcoming/r7rs-srfi-plan.md, S7.
+;;; docs/archive/r7rs-srfi-plan.md, S7.
 (define-library (srfi 41)
   (export
     stream-null stream-cons stream? stream-null? stream-pair?

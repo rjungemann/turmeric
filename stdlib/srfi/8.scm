@@ -2,7 +2,7 @@
 ;;;
 ;;; The SRFI document's reference implementation, as written.  Copyright (C)
 ;;; John David Stone (1999); MIT licence, see stdlib/srfi/COPYING.
-;;; docs/upcoming/r7rs-srfi-plan.md, S2.
+;;; docs/archive/r7rs-srfi-plan.md, S2.
 (define-library (srfi 8)
   (export receive)
   (import (scheme base))

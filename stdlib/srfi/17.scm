@@ -17,7 +17,7 @@
 ;;; `setter`, `set-setter!` and `getter-with-setter` are SRFI 17's reference
 ;;; implementation: Copyright (C) Per Bothner (2000); MIT licence, see
 ;;; stdlib/srfi/COPYING.  The standard entries are written for Turmeric.
-;;; docs/upcoming/r7rs-srfi-plan.md, S2.
+;;; docs/archive/r7rs-srfi-plan.md, S2.
 (define-library (srfi 17)
   (export set! setter getter-with-setter)
   (import (scheme base) (scheme cxr))

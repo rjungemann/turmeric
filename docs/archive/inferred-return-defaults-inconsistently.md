@@ -74,7 +74,7 @@ behaviours, and the failing one blames a declaration the programmer did not
 write. Filed rather than fixed because the fix is a return-inference decision
 (adopt the body's type, or require the annotation) that belongs with the
 `saffron` dialect work, which flips this exact default --
-[docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md) S2.
+[docs/archive/saffron-lang-plan.md](saffron-lang-plan.md) S2.
 
 ## Repro (v0.44.2, `2da89e84`)
 

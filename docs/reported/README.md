@@ -1770,6 +1770,7 @@ deliberately held open rather than archived against a fix nobody had.
 | [godot-aot-staged-build-lacks-godot-natives](godot-aot-staged-build-lacks-godot-natives.md) | high (AOT) | The staged transient project has no `godot-*` natives, so the AOT path cannot compile a script that touches the engine. Interpreter path unaffected |
 | [godot-packed-array-push-is-a-no-op](godot-packed-array-push-is-a-no-op.md) | medium | All nine `godot-packed-*-push` natives in `turmeric-godot` `push_back` onto a COPY of the arena `Variant` and drop it, so every `Packed*Array` a script builds stays size 0 -- silently, with no diagnostic. `godot-array-push` / `godot-dict-set` are unaffected: Godot's `Array` and `Dictionary` are reference types, so mutating a copy mutates the shared body. Defeats the whole T3.D `Packed*Array` surface (vertex buffers, tilemap cells, byte blobs) |
 | [jit-godot-embedding-spike](jit-godot-embedding-spike.md) | research | Whether the JIT can replace the AOT stage-and-subprocess cache in the GDExtension |
+| [godot-shim-threading-under-workerthreadpool](godot-shim-threading-under-workerthreadpool.md) | medium (latent) | `cb_call` runs every interpreted method through `turi_call` on the script's single, unlocked `TuriEnv`, which is not thread-safe, so a node on a `WorkerThreadPool` sub-thread process group or the physics thread can corrupt it. The MIR half of J7 is already solved in-tree. Split out of the archived godot-binding-refresh plan's J7 |
 
 ## Platform-independent, found on a platform sweep
 
@@ -1797,7 +1798,7 @@ and that one had been in the POSIX path from the start.
 ## The `any` surface (filed 2026-09-07)
 
 Three findings from surveying `any` while writing
-[docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md). None is
+[docs/archive/saffron-lang-plan.md](../archive/saffron-lang-plan.md). None is
 a miscompile; all three are in the same area -- what happens when a value's
 type is not statically pinned -- and all three would be prerequisites for any
 dynamic-dispatch layer over `any`. Each has a one-file repro against `v0.44.2`
@@ -1956,7 +1957,7 @@ defect count: most are genuine lengths, ports and indices.
 ## Found building the msgpack spice (filed 2026-09-14)
 
 Four defects found in one session implementing
-[msgpack-spice-plan](../upcoming/hold/msgpack-spice-plan.md) as
+[msgpack-spice-plan](../archive/msgpack-spice-plan.md) as
 `turmeric-spices/spices/msgpack`. Three are build breakers with a known
 workaround in that spice; the fourth is a silent wrong answer in the reader.
 
@@ -2252,7 +2253,7 @@ section 5b (`docs/archive/type-confusion-detection-plan.md`).
 
 ## Found planning SRFI support for `#lang r7rs` (filed 2026-09-26)
 
-The first three came from the probes behind `docs/upcoming/r7rs-srfi-plan.md`
+The first three came from the probes behind `docs/archive/r7rs-srfi-plan.md`
 (its Section 2.3); chibi's R7RS suite reaches none of them. The syntax-leaks
 report came out of resolving the first: R7RS imports Turmeric libraries, but
 Turmeric's own surface should not leak into Scheme source. The rare-hang note
@@ -2311,6 +2312,36 @@ ran the fixture that shows it.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [static-instance-spec-calls-any-lambda-as-concrete-result](static-instance-spec-calls-any-lambda-as-concrete-result.md) | high | A typeclass method call that resolves to a static instance specialization (`(.foldl t 0.0 f)` on a let-bound `(Two 1.5 2.25)`) calls the unannotated Saffron lambda -- whose result is `any`, a `tur_tagged_t` -- through a prototype that says it returns `double`. Linux reads `xmm0` (right by accident for `(+ acc x)`, garbage otherwise: `4.68416e-310` for `9.75`); Win64 returns the struct through a hidden pointer and crashes. Fix: unify the lambda result with the specialization's `b`, or pass an unboxing adaptor as the typed-fn seam does |
+
+## Found archiving proper-tail-calls-plan (filed 2026-09-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [tail-grammar-skips-and-or-and-carrier-lets](tail-grammar-skips-and-or-and-carrier-lets.md) | low-medium | What was left of the plan's T-D4 audit, which was never a stage. The last operand of `and`/`or` is not a tail position (`EX_BUILTIN` `BS_AND_SC`/`BS_OR_SC` has no `tco_mark` arm), and a `let` that binds a carrier-ABI value (`(vec-new)`, `(list ...)`) takes the whole `let` off the tail path (`tco_let_simple`). `^tailcall` refuses both with TUR-E0716; unannotated, both segfault at `-O0` and pass at `-O2` only because gcc makes the loop. `handle` arms are out of reach by design (CPS). Fix: a last-operand tail arm lowered like the equivalent `if`, and re-check the carrier bail now that `emit_tail` shares the let bridge |
+
+## Found archiving saffron-lang-plan (filed 2026-09-28)
+
+S9's two remaining dynamic-dispatch limits, split out so the plan could move to
+`docs/archive/saffron-lang-plan.md`. Both are compiled-only clean panics at the
+witness's checked cast; `--interpret` answers.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [saffron-dyn-witness-fn-arity-defaults-unary](saffron-dyn-witness-fn-arity-defaults-unary.md) | low | A class parameter spelled `g : fn` (no arity) is cast to `(fn [any] any)` by the dispatch witness (`elab_typeclasses.c:6414`), so `.comb` on an `any` with a two-argument lambda panics "cast: any holds a function this cast cannot accept" compiled; `--interpret` prints `3.75`. Spelling `g : (fn [a a] b)` works. Fix: take the arity from the impl's call sites, or reject a non-unary call of a `: fn` parameter at the instance body |
+| [saffron-dyn-parametric-extra-read-as-class-var](saffron-dyn-parametric-extra-read-as-class-var.md) | low-medium | On a parametric-head instance (`Nth [Vec]`) an `int` extra -- bare OR spelled `n : int` -- is taken for the class variable (`saffron_extra_is_class_var`, `elab_typeclasses.c:6253`) and cast to `(Vec any)`, so `(.nth-of x 2)` on an `any` panics "any holds int, not Vec" compiled; `--interpret` prints `hi`. Fix: gate the `int` arm on `param_explicit_type`, and stop guessing for a bare parameter |
+
+## Found reducing the Saffron `: any`-result panic (filed 2026-09-28)
+
+The "`: any` result" aside in saffron-dyn-witness-fn-arity-defaults-unary,
+reduced. It is not Saffron-specific and not about fn parameters, and reducing
+it turned up two neighbours. All three are compiled-only; `--interpret`
+answers.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [erased-instance-body-tags-a-type-variable-widened-to-any](erased-instance-body-tags-a-type-variable-widened-to-any.md) | medium-high | A constructor-class instance with a concrete `: any` result runs its ERASED body (no spec is minted -- `emit_abi_register_call` sees no ABI or dispatch change), where widening an element of type `a` to `any` tags it `TUR_TAG(36, ...)`, i.e. `TY_TYVAR`. `(unbox1 (One 1.5))` panics at the first operator, and before that `type-of` says `unknown` and `(is? x float)` is false -- a silent wrong branch. Saffron and typed alike. Fix: count a tyvar widen as `instance_changes`, and never emit a `TY_TYVAR` tag |
+| [fn-param-call-prototype-spelled-from-the-call-not-the-fn](fn-param-call-prototype-spelled-from-the-call-not-the-fn.md) | high | The Phase F call through a `fn` parameter in an instance body casts `g.fn` using the CALL's result type (`emit_expr.c:8922`) and the ARGUMENTS' types (`:8931`), not the fn's own signature. Result half: typed `(fn [float float] b)` with `: b` prints `4.61563e+18` for `3.75`, exit 0. Argument half: `(fn [any any] any)` gets raw doubles and panics. static-instance-spec-calls-any-lambda-as-concrete-result is a third symptom of `:8922` |
+| [concrete-result-fn-passed-where-an-any-result-fn-is-expected](concrete-result-fn-passed-where-an-any-result-fn-is-expected.md) | medium-high | A `(fn [float float] float)` passed for a `(fn [float float] any)` parameter is accepted with no adaptor, so the callee calls it through a `tur_tagged_t`-returning thunk (undefined behaviour; measured as `cast: any holds unknown`). The generic `(fn [float] B)` under a `: any` result reaches it too, because `B` is fixed to `any` at the definition. Fix: the mirror of `saffron_seam_fn_adaptor` at the argument seam |
 
 ## Filing conventions
 

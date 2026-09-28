@@ -1,28 +1,48 @@
 # Saffron -- a dynamically typed `#lang` over the Turmeric runtime
 
-Status: **shipped; S9's dispatch residue is down to two stated limits.**
-`#lang saffron` GRADUATED at 0.46.0 (2026-09-10) and is an ordinary base
-dialect on the same footing as `#lang turmeric`: there is no `EXPERIMENTS[]`
-row, no enable and no lifecycle warning (the graduation note in
-`src/runtime/experiments.c` records why `g_opt_dynamic_any` outlived the row).
-Every stage, S0 through S9, has landed. About eighty fixtures with `saffron`
-in the name pin the dialect on both back ends, plus ten under `errors/`.
+Status: **complete** -- every stage, S0 through S9, landed (S0-S5
+2026-09-07, S6 2026-09-08, S7-S9 2026-09-09), and `#lang saffron` GRADUATED
+at 0.46.0 (2026-09-10). It is an ordinary base dialect on the same footing as
+`#lang turmeric`: there is no `EXPERIMENTS[]` row, no enable and no lifecycle
+warning (the graduation note in `src/runtime/experiments.c` records why
+`g_opt_dynamic_any` outlived the row). About ninety fixtures with `saffron`
+in the name pin the dialect on both back ends, plus twelve under `errors/`.
 [saffron-guide.md](../guides/saffron-guide.md) and
 [introducing-saffron.md](../guides/introducing-saffron.md) are the
-user-facing halves.
+user-facing halves. Archived 2026-09-28.
 
-What keeps this file in `docs/upcoming/` is the dynamic-dispatch residue S9
-left -- see [S9's remaining limits](#s9----what-is-still-open). Once those
-land or move to reports of their own, archive the plan. (S9's last design
-item, the constrained instance at `A = any` -- D8 Q1 -- turned out to be a
-silent wrong answer rather than a limit, and was built 2026-09-26. The same
-day, binary-fn methods and the class-declared result type landed too,
-including a result that mentions the class variable applied --
-[saffron-applied-class-var-result-takes-one-instances-type](../archive/saffron-applied-class-var-result-takes-one-instances-type.md).
-What is left are two stated limits on UNANNOTATED class parameters, both
-clean panics or diagnostics; see the list.)
+What kept this file in `docs/upcoming/` until then was the dynamic-dispatch
+residue S9 left -- see [S9's remaining limits](#s9----what-is-still-open). The
+plan's own rule was to archive once those landed or moved to reports of their
+own; on 2026-09-28 they moved. (S9's last design item, the constrained
+instance at `A = any` -- D8 Q1 -- turned out to be a silent wrong answer
+rather than a limit, and was built 2026-09-26. The same day, binary-fn methods
+and the class-declared result type landed too, including a result that
+mentions the class variable applied --
+[saffron-applied-class-var-result-takes-one-instances-type](../archive/saffron-applied-class-var-result-takes-one-instances-type.md).)
+Re-measured 2026-09-28 against `./build/tur`, both remaining limits still
+stand -- compiled-only clean panics at the witness's checked cast, while
+`--interpret` answers -- and each is now a report:
 
-Open reports a Saffron program reaches (none is a stage blocker):
+- [saffron-dyn-witness-fn-arity-defaults-unary](../reported/saffron-dyn-witness-fn-arity-defaults-unary.md)
+  (low): the fn-arity default. A class parameter spelled `g : fn` (no arity)
+  is cast to `(fn [any] any)`, so a two-argument lambda panics. A FULLY
+  unannotated `g` never reaches the witness: a class method records it as
+  `int` in both dialects, and the instance body's `(g ..)` is already "'g' is
+  not a function or continuation".
+- [saffron-dyn-parametric-extra-read-as-class-var](../reported/saffron-dyn-parametric-extra-read-as-class-var.md)
+  (low-medium): an `int` extra on a parametric head is read as the class
+  variable and cast to `(Head any..)`. Not only an unannotated one, as S9's
+  list says -- a spelled `n : int` panics the same way.
+
+Deferred by decision, not residue: open questions 2 (a `.saf` extension) and
+4 (whether `tur repl` defaults to Saffron -- "revisit after usage") are
+product decisions. The interpreted `Eq [cstr]` noted under S9 (`(eq? "x"
+"y")` interprets to `1`, in any dialect) is the interpreter's TI7 inline-C
+carve-out ([turi-parity-post-v1-plan](../archive/turi-parity-post-v1-plan.md)),
+not Saffron's.
+
+Other open reports a Saffron program reaches (none was a stage blocker):
 
 - [saffron-static-ownership-residue](../reported/saffron-static-ownership-residue.md)
   (low, by design): what the static drops cannot own, which only a build with
@@ -36,6 +56,10 @@ Open reports a Saffron program reaches (none is a stage blocker):
   static drops that day, so a returned lambda a `let` owns and a lambda
   passed to a non-retaining parameter are freed with the collector off too.
 - [jit-x86-64-struct-valued-statement-expression-miscompiles](../reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md) (medium, JIT engine on x86-64 only)
+- [static-instance-spec-calls-any-lambda-as-concrete-result](../reported/static-instance-spec-calls-any-lambda-as-concrete-result.md)
+  (high): a `.foldl` that resolves STATICALLY on a Saffron value calls the
+  `any`-returning lambda as if it returned `double`. Still reproduces
+  2026-09-28 (compiled prints `2.25` / `4.6e-310` for `1.5` / `9.75`).
 
 The rest of this header is the running log of the build-out. It is kept as
 written, with dated corrections where a claim has since changed.
@@ -1061,7 +1085,7 @@ shape that must ship behind `--enable=`:
 /* src/runtime/experiments.c -- the first live row since option-niche. */
 { "saffron",
   "dynamically typed dialect (#lang saffron)",
-  "docs/upcoming/saffron-lang-plan.md",
+  "docs/archive/saffron-lang-plan.md",
   "0.45.0",                   /* introduced */
   "0.52.0",                   /* expires_at -- advisory, never blocks a cut */
   XF_LIFECYCLE_PROTOTYPE,

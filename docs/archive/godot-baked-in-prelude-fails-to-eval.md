@@ -16,7 +16,7 @@
 > [turmeric-godot#1](https://github.com/rjungemann/turmeric-godot/pull/1)
 > on 2026-09-07 -- which is also the first CI run that repo ever passed, on all
 > four platforms. See step 4 of
-> [godot-binding-refresh-plan.md](../upcoming/godot-binding-refresh-plan.md).
+> [godot-binding-refresh-plan.md](godot-binding-refresh-plan.md).
 >
 > Still open, and unaffected by this:
 > [godot-aot-staged-build-lacks-godot-natives](../reported/godot-aot-staged-build-lacks-godot-natives.md).

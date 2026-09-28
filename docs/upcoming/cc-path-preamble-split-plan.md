@@ -1,8 +1,18 @@
 # Compile the runtime preamble once on the cc path
 
-**Status: feasibility PROVEN end to end, not implemented.** A split program
-compiles, links against a prebuilt runtime object and produces the correct
-answer. What remains is build plumbing, not discovery.
+**Status: steps 1-4 LANDED 2026-09-06/07 (PR #838); step 5 half done -- the
+suite is green under the split, the default is NOT flipped** (re-verified
+2026-09-28). `tur build --runtime=split` / `TUR_RUNTIME=split` emits the decls
+region and links `libturt_preamble.a` (a3e63b9d7, 966f2157b). The 20 failures
+in "Where it actually got to" below were all fixed on 2026-09-07 -- 16 were
+duplicated thread-locals (c527e0494), plus the frame-helper inlining
+(1b8e71050) and the discarded project includes (9b72ae63e) -- and CI's `split`
+and `windows-split` jobs have asserted `0 failed` since (c1a04d0ec; paper trail
+in `docs/archive/cc-path-split-windows-and-hamt-findings.md`). **Remaining:**
+flip the default (not started, not declined), ideally after re-measuring the
+win on CI. The swap declines for `#lang r7rs` programs, which got their own
+prelude split on 2026-09-28. Step 1's `weak` fix was replaced by the
+`TUR_RT_SPLIT_HOSTED` guard (a weak definition broke the PE/COFF link).
 
 **Expected win: ~17% of suite wall-clock.** Measured, and materially smaller
 than the ~45% first estimated -- that figure was compile-*only* and taken while
