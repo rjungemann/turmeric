@@ -28,6 +28,28 @@ call", which no AST walk can settle:
    dynamic call** -- its env, one per call. See
    [cps-capturing-closure-env-leaks-through-dyn-call](../archive/cps-capturing-closure-env-leaks-through-dyn-call.md).
 
+## Re-examined 2026-09-28: the collector cannot cover `--shared`
+
+The one build that meets this residue without asking for it is `--shared`, so
+the natural question is whether the collector can go there too.  It cannot, and
+not for the reason `r7rs_gc_active` records ("each unit its own heap") -- that
+part is fixable by compiling `r7gc.c` once into the library.  The blocker is
+root discovery: the collector finds live objects by scanning the EXECUTABLE's
+data and bss (`__data_start` .. `_end`) and each registered thread's stack.  A
+shared library's own data segment is outside that range, and worse, the HOST
+that loads it keeps Turmeric values -- the handles an exported function returns
+-- in memory the collector never scans (the host's heap, a Python object, a
+Godot variant).  A conservative collector there frees objects the host still
+holds.  Making `--shared` collect would need an explicit root API
+(register/unregister a handle) at the FFI boundary, which is a different
+design, not a switch.
+
+The three shapes were also rechecked against this PR's ownership work
+(byvalue-recursive-shared-copies-leak): none is a by-value spine or an rc-field
+struct, so neither the result-alias walk nor the lent-temporary free reaches
+them.  All three are still a box whose every holder sits behind an opaque
+dynamic call.
+
 ## Why it stays open rather than being fixed
 
 The two static answers each report ended on -- a move discipline for `any`
