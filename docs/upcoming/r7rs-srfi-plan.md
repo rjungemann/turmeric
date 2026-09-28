@@ -564,7 +564,8 @@ one file and one fixture on the machinery S1 builds, taken when asked for:
 > `r7rs-repl-shadowed-name-persists` and `run-r7rs-import.sh`'s
 > `type-named-exports`. The library half, a `define-library` that defines
 > `square` or `None`, is
-> [docs/reported/r7rs-library-defines-standard-or-stdlib-name.md](../reported/r7rs-library-defines-standard-or-stdlib-name.md).
+> [docs/archive/r7rs-library-defines-standard-or-stdlib-name.md](../archive/r7rs-library-defines-standard-or-stdlib-name.md)
+> (fixed 2026-09-28).
 > An SRFI file is untouched by it, since its names are spelled
 > `srfi<N>--<name>` (D3).
 >
@@ -720,7 +721,7 @@ fixture itself runs on both back ends.
 >   directions. 17 lands after that. (Fixed 2026-09-27, archived.)
 > - **Reported on the way** (docs/reported/):
 >   - `r7rs-dead-mistyped-call-refused-at-compile-time`: `(if x (car x) 0)`
->     with `x` bound to `#f` does not compile;
+>     with `x` bound to `#f` does not compile (fixed 2026-09-28, archived);
 >   - `r7rs-type-errors-are-uncatchable-panics`: `(car 5)` at run time is a
 >     panic `guard` cannot catch.
 

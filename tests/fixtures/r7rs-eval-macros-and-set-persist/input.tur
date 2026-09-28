@@ -1,0 +1,23 @@
+#lang r7rs
+;; r7rs-repl-forgets-macros-and-set: `eval` in (interaction-environment) is
+;; one session, so what one `eval` defines stays for the next -- a macro
+;; included, which was "unknown function or operator 'sw'" -- and a later
+;; `eval` may `set!` a variable an earlier one defined, which was "'n' is
+;; immutable".  Both back ends run it through the same embedded session.
+(import (scheme base) (scheme write) (scheme eval) (scheme repl))
+
+(define env (interaction-environment))
+(define (show x) (write x) (newline))
+
+(eval '(define-syntax sw (syntax-rules () ((_ a b) (list b a)))) env)
+(show (eval '(sw 1 2) env))
+
+(eval '(define n 0) env)
+(eval '(set! n (+ n 1)) env)
+(show (eval 'n env))
+(eval '(define (bump!) (set! n (+ n 10)) n) env)
+(show (eval '(bump!) env))
+
+;; A later definition of the macro's name replaces the macro.
+(eval '(define (sw a b) (list 'proc a b)) env)
+(show (eval '(sw 1 2) env))

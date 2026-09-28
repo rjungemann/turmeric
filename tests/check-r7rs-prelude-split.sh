@@ -18,8 +18,11 @@
 #     cache is doing its job;
 #   - each program prints its fixture's expected output.
 #
-# Weak symbols (V/v) are the keyword records both units share by design
-# (SYM2); read-only data (R/r) may be duplicated freely.
+# Read-only data (R/r) may be duplicated freely.  The keyword records are
+# read-only too, but they must NOT be weak: PE/COFF has no weak data that
+# folds, so the library unit defines each record and the program unit
+# declares it (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md).
+# A weak `__tur_sym_` symbol (V/v) in either unit fails.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 TUR_REL="${TUR:-./build/tur}"
@@ -94,6 +97,11 @@ for f in $FIXTURES; do
     if ! "$CC_BIN" -O2 -std=c99 -w -fno-strict-aliasing -Isrc/runtime -c -o "$d/client.o" "$cli" \
             >"$d/cc.log" 2>&1; then
         fail "$f: the program unit does not compile on its own"; tail -5 "$d/cc.log"; continue
+    fi
+    weak=$(nm "$lib" "$d/client.o" 2>/dev/null | awk '$2 ~ /^[Vv]$/ && $3 ~ /__tur_sym_/ { print $3 }' | sort -u)
+    if [ -n "$weak" ]; then
+        fail "$f: weak keyword records (they do not fold on Windows):"
+        printf '%s\n' "$weak" | sed 's/^/    /' | head -5
     fi
     both=$(comm -12 <(defined_data "$lib") <(defined_data "$d/client.o") | grep -Ev "$ALLOW")
     if [ -n "$both" ]; then

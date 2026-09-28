@@ -1,0 +1,18 @@
+0
+#f
+not-a-number
+(caught "car: not a pair" (5))
+(caught "cdr: not a pair" (#f))
+(caught "vector-ref: not a vector" ((1 2)))
+(caught "not a string" (5))
+(caught "symbol->string: not a symbol" ("s"))
+(caught "char->integer: not a character" (5))
+(caught "list-tail: not an exact integer" (1.5))
+(caught "vector->list: not a vector" (a))
+(caught "vector-fill!: not a vector" (5))
+(caught "make-vector: not an exact integer" ("a"))
+(caught "make-vector: not an exact integer" (2.5))
+(caught "vector-copy: not a vector" ("s"))
+(caught "one: too many arguments (expects 1, got 2)" ())
+(caught "car: too many arguments (expects 1, got 2)" ())
+(1 #(z z) (2) 7)

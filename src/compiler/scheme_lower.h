@@ -95,6 +95,13 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
                             SchemeLibResolveFn resolve, SchemeGlobalFn global_kind,
                             SchemeStdlibFileFn stdlib_file, void *resolve_ud);
 
+/* r7rs-repl-forgets-macros-and-set: the raw (unlowered) forms of a REPL or
+ * `eval` session's earlier turns.  An incremental elaboration lowers only the
+ * new turn, so the interpreter names the turns before it here, around that
+ * call, and clears it (NULL) after.  A REPL turn's lowering re-registers the
+ * `define-syntax` macros they defined. */
+void scheme_lower_set_session_prior(Form *const *forms, uint32_t n);
+
 /* True when any form in `forms` belongs to a LANG_R7RS file -- a cheap test a
  * caller can make before paying for the pass. */
 bool scheme_lower_needed(Form *const *forms, uint32_t n);

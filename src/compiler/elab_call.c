@@ -6087,7 +6087,12 @@ static void mark_direct_apply_niche_word_params(Elab *e, Expr *head_expr,
  * arguments still run, in order, and the error object carries a message
  * naming the procedure the way the program spelled it.  NULL outside user
  * Scheme source, or when the prelude's raiser is not in scope; the caller
- * then builds the partial application as before. */
+ * then builds the partial application as before.
+ *
+ * r7rs-dead-mistyped-call-refused-at-compile-time: and a call with too MANY
+ * arguments to a fixed-arity procedure, which Turmeric reads as applying the
+ * result to the rest (and refuses when the result is not a function).  R7RS
+ * makes it an error only when it runs, so it raises the same way. */
 static Expr *scheme_arity_error(Elab *e, const Form *call, const Binding *fn_binding,
                                 uint32_t n_args, uint32_t n_required, bool variadic) {
     if (!scheme_span_is_user_source(call->span) || !fn_binding || !fn_binding->name)
@@ -6099,7 +6104,8 @@ static Expr *scheme_arity_error(Elab *e, const Form *call, const Binding *fn_bin
     char nbuf[256];
     const char *pub = scheme_source_name(fn_binding->name->name, nbuf, sizeof nbuf);
     char msg[320];
-    snprintf(msg, sizeof msg, "%s: too few arguments (expects %s%u, got %u)", pub,
+    snprintf(msg, sizeof msg, "%s: too %s arguments (expects %s%u, got %u)", pub,
+             n_args < n_required ? "few" : "many",
              variadic ? "at least " : "", n_required, n_args);
     size_t ml = strlen(msg);
     char *mp = (char *)arena_alloc(e->arena, ml + 1);
@@ -6500,6 +6506,41 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     if (un) call_args[i] = un;
                 }
             }
+            /* r7rs-dead-mistyped-call-refused-at-compile-time: a CONCRETE
+             * argument of the wrong type into a concrete fixed parameter.
+             * Nothing here checked it, so in Scheme `(vector-fill! 5 0)` or
+             * `(vector->list 'a)` compiled with a C pointer warning and then
+             * crashed or answered garbage.  In Scheme source, widen it and take
+             * the checked cast above, as the fixed-arity path now does, so the
+             * call raises when it runs.  An exact integer into a float
+             * parameter keeps the C conversion it always had; a float into an
+             * integer one does not (`(make-vector 2.5)` sized the vector from
+             * the float's bits under --interpret). */
+            else if (i < fn_type.as.fn.arity && fn_type.as.fn.arg_kinds &&
+                     lang_span_is_scheme(call->span)) {
+                TypeKind pk = (TypeKind)fn_type.as.fn.arg_kinds[i];
+                TypeKind ak = call_args[i]->type.kind;
+                const Type *pf = fn_type.as.fn.arg_full_types
+                                     ? fn_type.as.fn.arg_full_types[i] : NULL;
+                bool a_float = ak == TY_FLOAT || ak == TY_FLOAT32 || ak == TY_FLOAT64;
+                bool p_float = pk == TY_FLOAT || pk == TY_FLOAT32 || pk == TY_FLOAT64;
+                bool numeric_ok = typekind_is_numeric(ak) && typekind_is_numeric(pk) &&
+                                  (p_float || !a_float);
+                bool mismatch =
+                    (ak != pk && !numeric_ok) ||
+                    (ak == pk && pf &&
+                     (pf->kind == TY_STRUCT || pf->kind == TY_ADT || pf->kind == TY_APP) &&
+                     !type_eq(call_args[i]->type, *pf));
+                if (mismatch && pk != TY_ANY && pk != TY_UNKNOWN && pk != TY_TYVAR &&
+                    pk != TY_NIL && ak != TY_UNKNOWN && ak != TY_TYVAR) {
+                    Expr *w = elab_coerce_to_any(e, call_args[i]);
+                    Expr *un = w ? elab_any_unbox_to(e, w, pf ? *pf : type_from_kind(pk),
+                                                     call_args[i]->span)
+                                 : NULL;
+                    elab_any_cast_note_callee(e, un, fn_binding);
+                    if (un) call_args[i] = un;
+                }
+            }
         }
         /* Build cons-list expression for rest args */
         Expr *rest_expr = NULL;
@@ -6669,6 +6710,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         return out;
     }
     if (n_args > expected_arity && fn_type.kind == TY_FN) {
+        /* r7rs-dead-mistyped-call-refused-at-compile-time: Scheme has no
+         * over-application either -- `(f 1 2)` of a one-argument `f` is an
+         * error when it runs (R7RS 4.1.3), not a compile-time refusal. */
+        Expr *arity_err = scheme_arity_error(e, call, fn_binding, n_args,
+                                             expected_arity, false);
+        if (arity_err) return arity_err;
         /* CY2: Over-application */
         TypeKind result_kind = fn_type.as.fn.result_kind;
         if (result_kind != TY_PTR_VOID) {
@@ -7705,6 +7752,25 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * field).  ms_lenient was cleared at entry, so this only relaxes the
              * direct ctor args, never anything nested. */
             arg_ok = true;
+        }
+        /* r7rs-dead-mistyped-call-refused-at-compile-time: in a `#lang r7rs`
+         * file a statically mistyped argument is not a compile-time error.
+         * R7RS makes `(car 5)` an error only when it is EVALUATED (1.3.2), so
+         * `(let ((x #f)) (if x (car x) 0))` -- and SRFI 2's `(and-let* ((x #f)
+         * (y (car x))) y)` -- are valid programs that never run the call.
+         * Widen the argument to `any` and let the seam just below insert its
+         * checked unbox: a call that does run fails there, and that failure
+         * raises an R7RS error object (r7rs-type-errors-are-uncatchable-panics).
+         * Scheme files only: Saffron keeps its static refusal.  A borrow on
+         * either side is left to the borrow seam further down. */
+        if (!arg_ok && args[i] && args[i]->type.kind != TY_ANY &&
+            lang_span_is_scheme(call->span) &&
+            expected_arg_kind != TY_ANY && expected_arg_kind != TY_TYVAR &&
+            expected_arg_kind != TY_UNKNOWN &&
+            expected_arg_kind != TY_REF_IMMUT && expected_arg_kind != TY_REF_MUT &&
+            args[i]->type.kind != TY_REF_IMMUT && args[i]->type.kind != TY_REF_MUT) {
+            Expr *widened = elab_coerce_to_any(e, args[i]);
+            if (widened) args[i] = widened;
         }
         /* saffron-lang-plan D5/S4: the Saffron -> Turmeric seam.
          *
