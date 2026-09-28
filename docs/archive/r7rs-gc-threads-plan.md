@@ -606,6 +606,12 @@ One to two days, mostly review and the stress fixture.
   `swapcontext` into the fiber block, so a fiber parked on one thread and
   resumed on another has its roots reachable either way. Confirm with a
   fixture under torture rather than by argument.
+  *Done 2026-09-28:* `tests/fixtures/r7rs-threads-fiber-migration`. Nine
+  fibers run on three workers, and over half of their yields change
+  threads. The roots held up, under `run-r7rs-gc.sh`'s torture too. A
+  `call/cc` escape taken after a move did not, because the live-escape set
+  was the thread's rather than the fiber's. Each fiber now carries its own,
+  swapped in by `tur_fiber_block_resume` next to its DK state.
 - **Should stage A ship at all, or go straight to B?** Stage A is a day or
   two and gives every threaded stdlib library to Scheme programs with memory
   reclaimed; B is the better part of a week and its pause is the risky

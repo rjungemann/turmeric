@@ -13952,6 +13952,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    void **dk_reap_v; unsigned char *dk_reap_kind;\n");
     buf_puts(out, "    size_t dk_reap_n, dk_reap_cap;\n");
     buf_puts(out, "    int dk_entry_depth;\n");
+    /* r7rs-gc-fiber-migration: the fiber's own live-escape set (the call/cc
+     * prompts on ITS stack), swapped in by tur_fiber_block_resume when the
+     * program has the escape runtime. */
+    buf_puts(out, "    void *esc_live; int esc_live_n, esc_live_cap;\n");
     buf_puts(out, "};\n\n");
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber",
                 "tur_current_fiber", "void **", "tur_tls_current_fiber_ptr", "FiberBlock **");
@@ -14165,6 +14169,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    size_t _dk_rn = __dk_reap_n, _dk_rc = __dk_reap_cap; int _dk_rd = __dk_entry_depth;\n");
     buf_puts(out, "    __dk_reap_v = f->dk_reap_v; __dk_reap_kind = f->dk_reap_kind;\n");
     buf_puts(out, "    __dk_reap_n = f->dk_reap_n; __dk_reap_cap = f->dk_reap_cap; __dk_entry_depth = f->dk_entry_depth;\n");
+    /* r7rs-gc-fiber-migration: the live-escape set is the call/cc prompts on
+     * the CURRENT stack, so it is the fiber's, not the thread's.  Shared with
+     * the resumer, a fiber that yields inside a call/cc and resumes on
+     * another worker thread finds its prompt missing from that thread's set,
+     * and taking the escape aborted ("continuation invoked after its call/cc
+     * prompt returned").  Swapped like the reap registry. */
+    if (shared || cps_uses_callcc) {
+        buf_puts(out, "    tur_escape_cont **_esc_v = tur_escape_live; int _esc_n = tur_escape_live_n, _esc_c = tur_escape_live_cap;\n");
+        buf_puts(out, "    tur_escape_live = (tur_escape_cont **)f->esc_live; tur_escape_live_n = f->esc_live_n; tur_escape_live_cap = f->esc_live_cap;\n");
+    }
     /* r7rs-gc: the collector scans this thread's own stack from here while
      * the fiber runs on its (heap-allocated) stack. */
     buf_puts(out, "    TUR_GC_FIBER_ENTER((void *)&_dk_save);\n");
@@ -14174,6 +14188,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    f->dk_reap_n = __dk_reap_n; f->dk_reap_cap = __dk_reap_cap; f->dk_entry_depth = __dk_entry_depth;\n");
     buf_puts(out, "    __dk_reap_v = _dk_rv; __dk_reap_kind = _dk_rk;\n");
     buf_puts(out, "    __dk_reap_n = _dk_rn; __dk_reap_cap = _dk_rc; __dk_entry_depth = _dk_rd;\n");
+    if (shared || cps_uses_callcc) {
+        buf_puts(out, "    f->esc_live = (void *)tur_escape_live; f->esc_live_n = tur_escape_live_n; f->esc_live_cap = tur_escape_live_cap;\n");
+        buf_puts(out, "    tur_escape_live = _esc_v; tur_escape_live_n = _esc_n; tur_escape_live_cap = _esc_c;\n");
+    }
     buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
     buf_puts(out, "    tur_current_fiber = _prev;\n");
     buf_puts(out, "    return f->result;\n");
