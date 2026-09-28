@@ -6836,11 +6836,28 @@ TuriContState *turi_cont_state_capture(TuriEnv *env) {
             d->pst  = r->pst;
             d->len  = *r->plen;
             d->cap  = *r->pcap;
-            d->copy = (DriveCont *)malloc(d->cap * sizeof(DriveCont));
+            /* Only the used part: a restore allocates the capacity. */
+            d->copy = (DriveCont *)malloc((d->len ? d->len : 1) * sizeof(DriveCont));
             memcpy(d->copy, *r->pst, d->len * sizeof(DriveCont));
         }
     }
     return s;
+}
+
+/* r7rs-callcc-memory-never-freed: a re-entry abandons every drive of the
+ * current form whose frame lies below the image's top -- the jump copies the
+ * image over it, or leaves it dead below -- so its heap work stack is
+ * unreachable afterwards: a restored drive gets the snapshot's fresh copy, or
+ * the inline buffer its frame held at the capture.  Freed here, just before
+ * the jump, rather than kept for the life of the process (one fresh copy per
+ * drive per re-entry, the whole of a generator's steps).  A drive above
+ * `top` survives the jump and keeps its stack. */
+void turi_cont_release_drives(const void *top) {
+    for (DriveReg *r = g_drive_regs; r && r != g_drive_boundary; r = r->prev)
+        if ((uintptr_t)r < (uintptr_t)top && *r->pst != r->inl) {
+            free(*r->pst);
+            *r->pst = r->inl;
+        }
 }
 
 void turi_cont_state_restore(TuriEnv *env, const TuriContState *s) {

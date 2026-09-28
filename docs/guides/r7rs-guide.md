@@ -300,7 +300,10 @@ whose name only heads calls. That covers the usual early exit from a loop:
 
 Any other `call/cc` copies the stack between it and the program's start, so
 it costs time and memory in proportion to that depth. This includes one
-whose `k` is stored, returned, or passed to your own procedure. An uncaught
+whose `k` is stored, returned, or passed to your own procedure. Under `tur
+--interpret` the copy is never freed, but one close to an earlier copy of
+the same stack keeps only the words that changed, so a generator's steps
+stay small. An uncaught
 `raise` reports on the current error port and exits with status 70.
 
 A standard procedure given the wrong type, or any procedure given the wrong

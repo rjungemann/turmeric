@@ -10,6 +10,10 @@ handed to the program's own procedures. Everything else here is fixed; see
   repro, the `for-each` early exit and the named-`let` search.
 - The compiled back end no longer grows per call, for `call/cc` or for `guard`.
 - The interpreter's pin was measured, and costs nothing that shows.
+- The interpreter's images are still never freed, but a capture close to an
+  earlier one keeps only the words that differ: a generator step went from
+  69 KB to 16 KB, most of which is not the continuation. See *Interpreter
+  images kept small* below.
 
 The original title was "every `call/cc` keeps a copy of the stack forever".
 
@@ -197,9 +201,64 @@ pin keeps are small next to what the interpreter keeps anyway. So the
 "pin less" direction below, a per-frame capture epoch checked at some 40
 free sites, would buy nothing. It is not worth its risk.
 
+### Interpreter images kept small
+
+Freeing an interpreter image needs to know that its continuation procedure
+is dead. The procedure is an ordinary closure, and it can be stored anywhere:
+a variable, a pair, a record, a vector's malloc'd buffer, another closure's
+environment. The interpreter has no collector and does not refcount closures,
+so there is no point at which it can know. That is still the "Reclaim
+images" direction, and it is the same gap as
+[dynamic-returned-closure-env-is-never-freed](dynamic-returned-closure-env-is-never-freed.md).
+
+What the interpreter can do is keep less per image. Measured on a generator
+(`call/cc` re-entered twice a step, 16,000 steps, Release): 69 KB a step,
+of which 48 KB was stack images, 3.8 KB the snapshots of the driver's heap
+work stacks, and 3.8 KB the fresh copies of those a re-entry makes. Three
+changes:
+
+- **Delta images** (`r7k_snapshot`, src/turi/interpreter_natives.c).
+  Consecutive captures of one stack range are nearly the same: 98.8% of the
+  words equal the previous capture's word at the same address. So a capture
+  finds a KEYFRAME, the latest whole image of the same range (the same
+  bottom address and size, up to eight ranges per thread), and keeps only the
+  words that differ from it. A re-entry copies the keyframe back and patches
+  those words. A delta is always against a whole image, and keyframes, like
+  every image, are never freed, so a delta's key stays valid after the range
+  gets a newer keyframe. A capture that differs in more than an eighth of its
+  words, or that has no keyframe, is kept whole and becomes the range's
+  keyframe. The diff is one pass over the stack, like the copy it replaces.
+- **Snapshots of the used part.** `turi_cont_state_capture` copied each
+  drive's work stack at its capacity; it now copies its length. The restore
+  allocates the capacity, as before.
+- **Abandoned work stacks freed.** A re-entry abandons every drive of the
+  current form whose frame is below the image's top: the jump copies the
+  image over it or leaves it dead below. Each restored drive gets a fresh
+  copy of its snapshot, so the heap stacks the abandoned drives held were
+  unreachable, and kept. `turi_cont_release_drives` frees them just before
+  the jump.
+
+The same generator, peak RSS under `tur --interpret` (Release):
+
+| steps | before | after |
+| --- | --- | --- |
+| 16,000 | 1131 MB, 1.15 s | 284 MB, 0.68 s |
+
+That is 16 KB a step, from 69. About 13 KB of it is not the continuation's
+at all: it is the environments and closures each step makes, which the
+interpreter keeps for the life of the process whether or not the program
+calls `call/cc`. `tests/fixtures/r7rs-callcc-reentry-many` re-enters
+thousands of times, from ranges that alternate and vary in size, and
+re-enters an old continuation after hundreds of later captures. It gives the
+same answers on both back ends.
+
 ### What is left
 
 Only a continuation that may outlive its `call/cc` still has an image, and
-under the interpreter nothing frees that image. It needs the continuation to
-be a traced or refcounted object, which interpreter values are not, so the
-"Reclaim images" direction is the whole of what remains.
+under the interpreter nothing frees that image. It is now kept as a delta
+when it can be, so a loop of re-entries grows by the words each capture
+changed rather than by the stack's depth. A capture that differs a lot
+from every recent one, such as a deep walk whose captures are all at
+different depths, is still kept whole. Freeing any of it needs the
+continuation to be a traced or refcounted object, which interpreter values
+are not, so the "Reclaim images" direction is the whole of what remains.

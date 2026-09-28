@@ -2944,10 +2944,41 @@ static void r7k_longjmp(r7k_jmp_buf jb) {
 }
 typedef struct R7kCont {
     r7k_jmp_buf    jb;
-    unsigned char *lo, *img;
+    unsigned char *lo, *img;     /* img: the whole image, or NULL for a delta */
     size_t         n;
     TuriContState *state;
+    /* r7rs-callcc-memory-never-freed: a DELTA image -- the words at d_idx that
+     * differ from `key`'s whole image of the same stack range. */
+    struct R7kCont *key;
+    uint32_t       *d_idx;
+    uintptr_t      *d_val;
+    size_t          n_d;
 } R7kCont;
+/* r7rs-callcc-memory-never-freed: the interpreter cannot tell when a
+ * continuation is dead -- it has no collector, and a continuation procedure
+ * may be stored anywhere -- so a stack image lives as long as the process.
+ * What it CAN do is make each image small.  Consecutive captures of one
+ * stack range differ in about one word in eighty (a generator's two
+ * captures per step, measured: 98.8% of words equal to the previous capture
+ * at the same address), so an image is kept as the words that differ from a
+ * KEYFRAME -- the latest whole image of the same range -- and a restore
+ * copies the keyframe back and patches them.  A delta is always against a
+ * whole image, never another delta, and keyframes, like every image, are
+ * never freed, so a delta's key stays valid.  A capture that differs in more
+ * than an eighth of its words becomes the range's new keyframe. */
+#define R7K_KEYS 8
+static _Thread_local R7kCont *r7k_keys[R7K_KEYS];
+static _Thread_local unsigned r7k_keys_next;
+static R7kCont *r7k_key_find(const unsigned char *lo, size_t n) {
+    for (unsigned i = 0; i < R7K_KEYS; i++)
+        if (r7k_keys[i] && r7k_keys[i]->lo == lo && r7k_keys[i]->n == n) return r7k_keys[i];
+    return NULL;
+}
+static void r7k_key_put(R7kCont *c) {
+    for (unsigned i = 0; i < R7K_KEYS; i++)
+        if (r7k_keys[i] && r7k_keys[i]->lo == c->lo && r7k_keys[i]->n == c->n) { r7k_keys[i] = c; return; }
+    r7k_keys[r7k_keys_next++ % R7K_KEYS] = c;
+}
 static _Thread_local unsigned char *r7k_base_tls;
 /* r7rs-toplevel-reentry-reruns-forms: the top of the current top-level
  * form's frames (r7rs-toplevel__ below sets it), which bounds a capture in
@@ -2979,6 +3010,29 @@ static void r7k_copy(unsigned char *dst, const unsigned char *src, size_t n) {
     const volatile uintptr_t *s = (const volatile uintptr_t *)src;
     for (size_t i = 0; i < n / sizeof(uintptr_t); i++) d[i] = s[i];
 }
+/* The words of the live range [lo, lo + nw words) that differ from `key`,
+ * at most `cap` of them; returns how many, or cap + 1 if there are more.
+ * Reads the live stack, so no sanitizer and no inlining, as r7k_copy. */
+__attribute__((noinline)) R7K_NOASAN
+static size_t r7k_diff(const unsigned char *key, const unsigned char *lo, size_t nw,
+                       uint32_t *idx, uintptr_t *val, size_t cap) {
+    const volatile uintptr_t *k = (const volatile uintptr_t *)key;
+    const volatile uintptr_t *s = (const volatile uintptr_t *)lo;
+    size_t nd = 0;
+    for (size_t i = 0; i < nw; i++) {
+        uintptr_t w = s[i];
+        if (w == k[i]) continue;
+        if (nd == cap) return cap + 1;
+        idx[nd] = (uint32_t)i; val[nd] = w; nd++;
+    }
+    return nd;
+}
+/* Write a delta's words over the stack range a keyframe was just copied to. */
+__attribute__((noinline)) R7K_NOASAN
+static void r7k_patch(unsigned char *lo, const uint32_t *idx, const uintptr_t *val, size_t nd) {
+    volatile uintptr_t *d = (volatile uintptr_t *)lo;
+    for (size_t i = 0; i < nd; i++) d[idx[i]] = val[i];
+}
 static int r7k_snapshot(R7kCont *c, unsigned char *mark) {
     /* No image without a stack base, whatever the form base says -- call/cc
      * is the escape wherever r7k_stack_base finds none. */
@@ -2990,14 +3044,36 @@ static int r7k_snapshot(R7kCont *c, unsigned char *mark) {
     if (!base || base <= lo) return 0;
     c->lo  = lo;
     c->n   = (size_t)(base - lo) & ~(sizeof(uintptr_t) - 1);
+    R7kCont *key = r7k_key_find(lo, c->n);
+    if (key && c->n / sizeof(uintptr_t) <= UINT32_MAX) {
+        size_t nw = c->n / sizeof(uintptr_t), cap = nw / 8;
+        uint32_t  *idx = (uint32_t *)malloc((cap ? cap : 1) * sizeof(uint32_t));
+        uintptr_t *val = (uintptr_t *)malloc((cap ? cap : 1) * sizeof(uintptr_t));
+        size_t nd = (idx && val) ? r7k_diff(key->img, lo, nw, idx, val, cap) : cap + 1;
+        if (nd <= cap) {
+            c->key   = key;
+            c->n_d   = nd;
+            c->d_idx = nd ? (uint32_t *)realloc(idx, nd * sizeof(uint32_t)) : (free(idx), (uint32_t *)NULL);
+            c->d_val = nd ? (uintptr_t *)realloc(val, nd * sizeof(uintptr_t)) : (free(val), (uintptr_t *)NULL);
+            if (nd && (!c->d_idx || !c->d_val)) return 0;
+            return 1;
+        }
+        free(idx); free(val);
+    }
     c->img = (unsigned char *)malloc(c->n);
     if (!c->img) return 0;
     r7k_copy(c->img, lo, c->n);
+    r7k_key_put(c);
     return 1;
 }
 __attribute__((noinline, noreturn)) R7K_NOASAN
 static void r7k_jump(R7kCont *c) {
-    r7k_copy(c->lo, c->img, c->n);
+    if (c->img) {
+        r7k_copy(c->lo, c->img, c->n);
+    } else {
+        r7k_copy(c->lo, c->key->img, c->n);
+        r7k_patch(c->lo, c->d_idx, c->d_val, c->n_d);
+    }
 #ifdef R7K_ASAN
     __asan_unpoison_memory_region(c->lo, c->n);
 #endif
@@ -3084,6 +3160,7 @@ static TuriValue native_r7rs_toplevel(TuriEnv *env, TuriValue *a, uint32_t n, vo
 static TuriValue native_r7rs_cont_restore(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     R7kCont *c = (R7kCont *)(uintptr_t)(r7rs_arg_int(a, n, 0) & ~(int64_t)1);
+    turi_cont_release_drives(c->lo + c->n);
     r7k_restore(c);
 }
 
