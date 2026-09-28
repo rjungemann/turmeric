@@ -447,7 +447,7 @@ static const SrfiRow SRFI_LIBS[] = {
     {  13, SRFI_LIBRARY,    "String Libraries", "stdlib/srfi/13.scm", NULL },
     {  14, SRFI_LIBRARY,    "Character-set Library", "stdlib/srfi/14.scm", NULL },
     {  16, SRFI_BUILTIN,    "Syntax for procedures of variable arity", "stdlib/srfi/16.scm", NULL },
-    {  17, SRFI_NOTYET,     "Generalized set!", NULL, "S2" },
+    {  17, SRFI_LIBRARY,    "Generalized set!", "stdlib/srfi/17.scm", NULL },
     {  19, SRFI_NOTYET,     "Time Data Types and Procedures", NULL, "S8" },
     {  23, SRFI_BUILTIN,    "Error reporting mechanism", "stdlib/srfi/23.scm", NULL },
     {  25, SRFI_NOTYET,     "Multi-dimensional Array Primitives", NULL, "S8" },
@@ -590,8 +590,10 @@ typedef struct SL {
      * can see says so. */
     bool repl_turn;
     /* r7rs-srfi-plan S2: SRFI 61's `(generator guard => receiver)` cond
-     * clause, on in a unit that imports (srfi 61)'s `cond`. */
+     * clause, on in a unit that imports (srfi 61)'s `cond`; SRFI 17's
+     * `(set! (f arg ...) v)`, on in a unit that imports (srfi 17)'s `set!`. */
     bool srfi61_cond;
+    bool srfi17_set;
     /* R10 (hygiene): the innermost lexical scope, and the identifiers a
      * template inserted that must mean their GLOBAL (or keyword) binding
      * although the use site binds the same name locally: alias -> name. */
@@ -2696,6 +2698,35 @@ static Form *srfi61_clause(SL *sl, Form *cl, Form **rest, uint32_t nrest, Span s
     return lower(sl, Ln(sl, s, 3, Sym(sl, s, cwv), producer, consumer));
 }
 
+/* SRFI 17: a `set!` whose target is a call form -- `(set! (f arg ...) v)`.
+ * Turmeric's own targets are not this shape: `(.field x)` and `(@ p)` have
+ * heads that are not Scheme identifiers, and the prelude, which writes them,
+ * is excluded at the use site. */
+static bool is_srfi17_place(const Form *f) {
+    if (f->as.list.len != 3) return false;
+    const Form *p = f->as.list.items[1];
+    if (p->tag != F_LIST || p->as.list.len == 0) return false;
+    const Form *h = p->as.list.items[0];
+    if (h->tag == F_SYM && (h->as.sym->name[0] == '.' || h->as.sym->name[0] == '@')) return false;
+    return true;
+}
+/* `(set! (f arg ...) v)` is `((setter f) arg ... v)`, as SRFI 17 defines it:
+ * `f` and the arguments are ordinary expressions, evaluated once each.
+ * `setter` is the SRFI's own -- its spliced definition, reached through a
+ * global alias, so a local `setter` at the use site does not capture it and
+ * the program need not have imported the name at all. */
+static const Symbol *srfi_spelling(SL *sl, int64_t num, const Symbol *name);
+static Form *srfi17_place(SL *sl, Form *f) {
+    Span sp = f->span;
+    Form *place = f->as.list.items[1];
+    const Symbol *setter = global_alias_of(sl, srfi_spelling(sl, 17, I(sl, "setter"))->name);
+    FB call = {0};
+    fb_push(&call, Ln(sl, sp, 2, Sym(sl, sp, setter), place->as.list.items[0]));
+    for (uint32_t i = 1; i < place->as.list.len; i++) fb_push(&call, place->as.list.items[i]);
+    fb_push(&call, f->as.list.items[2]);
+    return lower(sl, fb_list(sl, &call, sp));
+}
+
 static Form *cond_chain(SL *sl, Form **clauses, uint32_t n, Span sp) {
     if (n == 0) return Nil(sl, sp);
     Form *cl = clauses[0];
@@ -3658,6 +3689,12 @@ static Form *lower(SL *sl, Form *f) {
         if (h == sl->s_if)          return lower_if(sl, f);
         if (h == sl->s_cond && looks_like_scheme_cond(f))
             return cond_chain(sl, f->as.list.items + 1, f->as.list.len - 1, f->span);
+        if (h == sl->s_set && !prelude_span(f->span) && is_srfi17_place(f)) {
+            if (sl->srfi17_set) return srfi17_place(sl, f);
+            err(f->as.list.items[1], "assigning to (procedure arg ...) is SRFI 17's generalized "
+                                     "set!; import (srfi 17) to use it");
+            return Nil(sl, f->span);
+        }
         if (h == sl->s_case && looks_like_scheme_case(sl, f)) return lower_case(sl, f);
         if (h == sl->s_and)         return and_chain(sl, f->as.list.items + 1, f->as.list.len - 1, f->span);
         if (h == sl->s_or)          return or_chain(sl, f->as.list.items + 1, f->as.list.len - 1, f->span);
@@ -6275,8 +6312,11 @@ static void srfi_import(SL *sl, Form *libname, const SchemeImportSpec *spec, Spa
             /* A re-export of R7RS syntax.  Under its own name it IS the
              * syntax; under another, a macro forwards to it.  SRFI 61's
              * `cond` is R7RS's with one more clause shape: importing it, by
-             * any name, turns that shape on in this unit (cond_chain). */
+             * any name, turns that shape on in this unit (cond_chain).  SRFI
+             * 17's `set!` is the same arrangement: importing it turns the
+             * `(set! (f arg ...) v)` target on (srfi17_place). */
             if (num == 61 && in == sl->s_cond) sl->srfi61_cond = true;
+            if (num == 17 && in == sl->s_set) sl->srfi17_set = true;
             if (vis == in) continue;
             if (!srfi_bind(sl, vis, in, num, libname)) continue;
             Span s = libname->span;
