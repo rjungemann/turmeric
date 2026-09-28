@@ -795,9 +795,14 @@ void emit_cps_runtime_prelude(Buf *out) {
  * whatever nothing else still reaches -- a stack image of a re-entrant
  * continuation included, which is scanned while it is live.  The slots are
  * cleared, since the list's array is itself scanned.  Without a collector
- * this does nothing, and the outermost exit frees everything, as before. */
+ * this does nothing, and the outermost exit frees everything, as before.
+ * Nor once the program has started a thread (tur_gc_threaded, r7gc.c): the
+ * list and the entry depth are process-global, so a mark taken on one thread
+ * says nothing about another's registrations, and a worker's exit would
+ * truncate the list under a push on the main thread. */
 "__attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {\n"
 "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+"    if (TUR_GC_LOAD(&tur_gc_threaded)) return;\n"
 "    /* A re-entered continuation can bring back an entry whose mark is past\n"
 "     * the list's end: nothing of its is left to drop. */\n"
 "    if (mark >= __dk_reap_n) return;\n"
