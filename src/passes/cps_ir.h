@@ -300,8 +300,16 @@ struct CTerm {
          * is called with (closure-env, cont) instead of a bare fn ptr.  Exactly
          * one of receiver / receiver_expr is set.  Currently a closure receiver is
          * admitted for Shape 1 (n_frames == 0) only; Shape 2 keeps delegating. */
+        /* recv_outward (serial-receiver-effect-cannot-reach-enclosing-handler):
+         * the named receiver is colored and an effect ESCAPES it, so it cannot
+         * run under the shift body's fresh root.  The reset is lowered as an
+         * ordinary colored call instead -- `x = receiver(frames)` with the rest
+         * lifted as its continuation -- so the effect walks out through the
+         * rest of the enclosing function into the handlers around the reset.
+         * The continuation handed over is the one the shift would capture: the
+         * context frames over a fresh prompt. */
         struct { CVar x; const Binding *receiver; const Expr *receiver_expr;
-                 bool serial;
+                 bool serial; bool recv_outward;
                  CloneLet *lets; uint32_t n_lets;
                  CloneFrame *frames; uint32_t n_frames;
                  /* Count of leading `frames` that sit OUTSIDE the `if` branch point

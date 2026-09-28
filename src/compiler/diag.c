@@ -2660,14 +2660,17 @@ static const DiagExplanation diag_explanations_[] = {
       "  (do (init) (serial-shift k v) (run-loop state))\n"
       "-- or move the non-capturable work outside the serial-reset boundary.\n"
       "\n"
-      "The same code covers the RECEIVER (the function handed the continuation).\n"
-      "It runs once, when the continuation is captured, outside the handlers\n"
-      "that enclose the serial-reset, so it may not perform an effect it does not\n"
-      "handle itself:\n"
-      "  (defn recv [k : serial-cont] : int (k (perform (Ask))))  ; Ask escapes\n"
-      "Handle the effect inside the receiver (or a function it calls), or perform\n"
-      "it outside the serial-reset.  A receiver that merely CALLS code through a\n"
-      "fn value, or handles its own effects, is accepted.\n",
+      "The same code covers the RECEIVER (the function handed the continuation)\n"
+      "in one remaining shape.  A named receiver may perform an effect it does not\n"
+      "handle itself -- the reset then calls it on its own continuation, so the\n"
+      "effect reaches the handlers around the serial-reset:\n"
+      "  (defn recv [k : serial-cont] : int (k (perform (Ask))))  ; accepted\n"
+      "but only when the context is a straight frame list.  Under an `if` branch\n"
+      "point the receiver still runs from the shift body, outside those handlers,\n"
+      "and an escaping effect has nowhere to go:\n"
+      "  (serial-reset (if c (page \"\" (serial-shift recv 0)) 5))  ; Ask escapes\n"
+      "Hoist the `if` out of the serial-reset, handle the effect inside the\n"
+      "receiver (or a function it calls), or perform it outside the reset.\n",
     },
     /* cloneable-shift-unsupported-context-miscompile (D6a) */
     { TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,

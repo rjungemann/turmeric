@@ -1,0 +1,61 @@
+;; serial-receiver-effect-cannot-reach-enclosing-handler: a serial-shift
+;; receiver whose effect escapes it reaches the handler around the reset.
+;;
+;; The receiver used to run from the shift body under a FRESH DK root -- the
+;; driver hands a shift body the captured sub-chain and nothing past the
+;; prompt -- so a `perform` it did not handle itself had nowhere to go and the
+;; program was refused (TUR-E0706).  Three things were in the way: the receiver
+;; could not be CPS-emitted at all (its `k : serial-cont` parameter, and the
+;; name `k` itself, kept it off the CPS path), the reset ran its chain
+;; standalone in the middle of the enclosing function, and the shift body is
+;; given no outward chain.
+;;
+;; A serial reset's context is a STATIC frame list, so the continuation the
+;; shift would capture -- those frames over a fresh prompt -- can be built
+;; directly.  When an effect escapes the receiver the reset is now lowered as
+;; an ordinary colored call, `x = receiver(frames)`, with the rest of the
+;; function lifted as the call's continuation: the receiver's effect walks out
+;; through that rest into the handlers enclosing the reset, exactly as a colored
+;; callee's does.  Every line matches `tur --interpret`.
+;;
+;;   run       -- receiver performs, then resumes k:       (41+1)+1   = 43
+;;   run-rest  -- context (+ n []), the reset's value is
+;;                used by the rest of the function:        (10+42)*2  = 104
+;;   run-skip  -- receiver never resumes k: its own value
+;;                is the reset's value:                    41+1       = 42
+;;   non-tail  -- the handler resumes and keeps working:   100+(1+1+1) = 103
+;;
+;; Expected output:
+;;   43
+;;   104
+;;   42
+;;   103
+
+(load "stdlib/serial.tur")
+
+(defeffect Ask [] :int)
+
+(defn page [env : cstr hole : int] : int (+ hole 1))
+
+(defn asks [] : int (+ (perform (Ask)) 1))
+
+(defn recv-e [k : serial-cont] : int (k (asks)))
+
+(defn recv-skip [k : serial-cont] : int (asks))
+
+(defn run [] : int
+  (serial-reset (page "" (serial-shift recv-e 0))))
+
+(defn run-rest [n : int] : int
+  (let [x (serial-reset (+ n (serial-shift recv-e 0)))]
+    (* x 2)))
+
+(defn run-skip [] : int
+  (serial-reset (page "" (serial-shift recv-skip 0))))
+
+(defn main [] : int
+  (println (handle (run) (Ask [] r) (resume r 41)))
+  (println (handle (run-rest 10) (Ask [] r) (resume r 41)))
+  (println (handle (run-skip) (Ask [] r) (resume r 41)))
+  (println (handle (run) (Ask [] r) (+ 100 (resume r 1))))
+  0)
