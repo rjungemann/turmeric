@@ -896,10 +896,18 @@ static Buf *g_split_lib_sink = NULL;
  * functions through the uncaught-error printer alone).  64-bit hosts only --
  * the library unit's fat boxes are pointer words (ensure_fatbox_keep).  Not
  * under --debug, whose `#line` spans would point into a unit that was
- * compiled for another program.  TUR_PRELUDE_SPLIT=0 turns it off. */
+ * compiled for another program.  TUR_PRELUDE_SPLIT=0 turns it off.
+ *
+ * Not on Windows unless TUR_PRELUDE_SPLIT=1: there the two units link, but
+ * the keyword records they share (SYM2, `__attribute__((weak)) const`) come
+ * out pointing at the wrong bytes and quoted symbols print as other strings
+ * (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md). */
 static bool prelude_split_applies(void) {
     const char *e = getenv("TUR_PRELUDE_SPLIT");
     if (e && strcmp(e, "0") == 0) return false;
+#ifdef _WIN32
+    if (!e || strcmp(e, "1") != 0) return false;
+#endif
     if (sizeof(void *) != 8 || g_emit_debug_lines || g_manifest_sink) return false;
     return g_lang_prelude && strcmp(g_lang_prelude, "r7rs/prelude.tur") == 0;
 }
