@@ -2693,6 +2693,117 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     return true;
 }
 
+/* mut-cell-is-never-freed: can the `TurMutCell` bound to `cell` still be
+ * reached once the let that binds it exits?  The pointer never appears in user
+ * code -- the `^mut` name is an alias whose reads and writes elaborate as
+ * `(.v cell)` field accesses -- so it leaves the let only inside the env of a
+ * closure that captures it.  It is therefore dead at scope exit when every such
+ * closure is: bound by a let whose env-free rule already proved it does not
+ * escape (a lambda handed to a non-retaining parameter is hoisted into exactly
+ * such a `__borrowc` let), with no closure in ITS body letting the cell out in
+ * turn.  Anything this walk does not recognize falls back to the ordinary
+ * escape walk, where any mention of the cell counts as an escape. */
+static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth);
+
+static bool mut_cell_closure_captures(const Expr *x, const Binding *cell) {
+    const struct Closure *c = x->as.closure_.closure;
+    if (!c) return true;
+    for (uint32_t i = 0; i < c->n_captures; i++)
+        if (c->captures[i] == cell) return true;
+    return false;
+}
+
+static bool mut_cell_is_receiver(const Expr *r, const Binding *cell) {
+    while (r && r->kind == EX_ASCRIBE) r = r->as.ascribe_.inner;
+    return r && r->kind == EX_VAR && r->as.var.binding == cell;
+}
+
+static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth) {
+    if (!x) return false;
+    if (depth > 256) return true;
+    switch (x->kind) {
+        case EX_VAR:
+            return x->as.var.binding == cell;
+        case EX_ASCRIBE:
+            return mut_cell_escapes(x->as.ascribe_.inner, cell, depth + 1);
+        case EX_GET_FIELD:
+            if (mut_cell_is_receiver(x->as.get_field_.struct_expr, cell)) return false;
+            return mut_cell_escapes(x->as.get_field_.struct_expr, cell, depth + 1);
+        case EX_SET_FIELD:
+            if (!mut_cell_is_receiver(x->as.set_field_.receiver, cell) &&
+                mut_cell_escapes(x->as.set_field_.receiver, cell, depth + 1))
+                return true;
+            return mut_cell_escapes(x->as.set_field_.value, cell, depth + 1);
+        case EX_DO:
+            for (uint32_t i = 0; i < x->as.do_.n; i++)
+                if (mut_cell_escapes(x->as.do_.items[i], cell, depth + 1)) return true;
+            return false;
+        case EX_IF:
+            return mut_cell_escapes(x->as.if_.cond, cell, depth + 1) ||
+                   mut_cell_escapes(x->as.if_.then_, cell, depth + 1) ||
+                   mut_cell_escapes(x->as.if_.else_or_null, cell, depth + 1);
+        case EX_WHILE:
+            return mut_cell_escapes(x->as.while_.cond, cell, depth + 1) ||
+                   mut_cell_escapes(x->as.while_.body, cell, depth + 1);
+        case EX_SET:
+            if (x->as.set_.target == cell) return true;
+            return mut_cell_escapes(x->as.set_.value, cell, depth + 1);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < x->as.builtin.n; i++)
+                if (mut_cell_escapes(x->as.builtin.args[i], cell, depth + 1)) return true;
+            return false;
+        case EX_CALL:
+            if (mut_cell_escapes(x->as.call_.fn_expr, cell, depth + 1)) return true;
+            for (uint32_t i = 0; i < x->as.call_.n_args; i++)
+                if (mut_cell_escapes(x->as.call_.args[i], cell, depth + 1)) return true;
+            return mut_cell_escapes(x->as.call_.dict_arg, cell, depth + 1);
+        case EX_CLOSURE:
+            /* Not in a let-init position the rule below can vouch for. */
+            return mut_cell_closure_captures(x, cell);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t j = 0; j < x->as.let_.n; j++) {
+                const Expr *init = x->as.let_.bindings[j].init;
+                while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+                if (init && init->kind == EX_CLOSURE &&
+                    mut_cell_closure_captures(init, cell)) {
+                    const struct Closure *c = init->as.closure_.closure;
+                    if (x->kind != EX_LET || !let_binding_env_freeable(x, j))
+                        return true;
+                    if (!c->fn || mut_cell_escapes(c->fn->body, cell, depth + 1))
+                        return true;
+                    continue;
+                }
+                if (mut_cell_escapes(x->as.let_.bindings[j].init, cell, depth + 1))
+                    return true;
+            }
+            return mut_cell_escapes(x->as.let_.body, cell, depth + 1);
+        default:
+            return closure_binding_escapes(x, cell);
+    }
+}
+
+/* mut-cell-is-never-freed: let-binding `idx` of `e` is a `^mut` cell that is
+ * dead at scope exit (see mut_cell_escapes). */
+static bool let_binding_mut_cell_freeable(const Expr *e, uint32_t idx) {
+    const Binding *b = e->as.let_.bindings[idx].binding;
+    if (!b || !b->is_mut_cell || e->kind != EX_LET) return false;
+    for (uint32_t j = idx + 1; j < e->as.let_.n; j++) {
+        const Expr *init = e->as.let_.bindings[j].init;
+        while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+        if (init && init->kind == EX_CLOSURE && mut_cell_closure_captures(init, b)) {
+            /* A sibling closure in this same let: freed by the same rule. */
+            if (!let_binding_env_freeable(e, j) ||
+                !init->as.closure_.closure->fn ||
+                mut_cell_escapes(init->as.closure_.closure->fn->body, b, 0))
+                return false;
+            continue;
+        }
+        if (mut_cell_escapes(e->as.let_.bindings[j].init, b, 0)) return false;
+    }
+    return !mut_cell_escapes(e->as.let_.body, b, 0);
+}
+
 /* catch-unwind-thunk-closure-leak (Part 2): decide whether let-binding `idx`
  * holds a caught Result box (`(catch-unwind ...)` / `(catch-panic-of ...)`)
  * whose box can be `tur_result_box_free`d when the let scope exits.  Sound iff:
@@ -3271,6 +3382,9 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     char **locown_names = NULL;
     char **locown_types = NULL;
     uint32_t n_locown = 0;
+    /* mut-cell-is-never-freed: C names of `^mut` cells dead at scope exit. */
+    char **cell_free_names = NULL;
+    uint32_t n_cell_free = 0;
     /* any-struct-box-leak-per-widen: collected UNGUARDED, unlike its neighbours.
      * They are trailing-only frees, so a body with an early exit gets none and
      * leaks -- the status quo this rule is closing.  An `any` drop is also
@@ -3314,6 +3428,13 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             locown_names[n_locown] = name_for_binding(ctx, rb);
             locown_types[n_locown] = rtn;
             n_locown++;
+        }
+        for (uint32_t i = 0; i < e->as.let_.n; i++) {
+            if (!let_binding_mut_cell_freeable(e, i)) continue;
+            cell_free_names = (char **)realloc(cell_free_names,
+                                               (n_cell_free + 1) * sizeof(char *));
+            cell_free_names[n_cell_free++] =
+                name_for_binding(ctx, e->as.let_.bindings[i].binding);
         }
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
             if (let_binding_env_freeable(e, i)) {
@@ -3758,6 +3879,20 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(env_free_names[i]);
     }
     free(env_free_names);
+
+    /* mut-cell-is-never-freed: release `^mut` cells whose capturing closures
+     * are all dead by now (the envs just dropped above never free a `:heap`
+     * capture, so this is the cell's only release).  The ctor allocates with
+     * tur_region_alloc_or_malloc, so the guarded free leaves region memory to
+     * its generation. */
+    for (uint32_t i = 0; i < n_cell_free; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s((void *)(intptr_t)(%s));\n",
+                   regions_enabled() ? "tur_region_free" : "free",
+                   cell_free_names[i]);
+        free(cell_free_names[i]);
+    }
+    free(cell_free_names);
 
     /* catch-unwind-thunk-closure-leak (Part 2): release non-escaping caught
      * Result boxes (and, for an err box, its panic payload) at scope exit -- the

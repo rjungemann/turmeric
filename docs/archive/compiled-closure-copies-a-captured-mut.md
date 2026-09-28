@@ -32,7 +32,8 @@ Scope, deliberately:
   seen. Over-approximating (a shadowing binding inside the lambda) only
   costs a cell.
 - **Memory:** a cell is never freed, like `R7rsBox`; filed as
-  [mut-cell-is-never-freed](../reported/mut-cell-is-never-freed.md).
+  [mut-cell-is-never-freed](mut-cell-is-never-freed.md) (resolved
+  2026-09-28: freed at scope exit when no capturing closure escapes).
 
 Found on the way, fixed in the same change: a Saffron lambda whose body is
 `nil` (or diverges) kept a `void` return, and the dynamic call site refuses

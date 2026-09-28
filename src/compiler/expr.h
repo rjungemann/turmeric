@@ -405,6 +405,12 @@ struct Binding {
      * copy of the value.  The binding itself is never emitted.  NULL for
      * every ordinary binding. */
     const Symbol *cell_hidden_sym;
+    /* mut-cell-is-never-freed: set on the HIDDEN binding that holds the
+     * `TurMutCell` itself.  Nothing but the alias's `(.v cell)` reads and
+     * writes and the capturing closures' envs ever sees the pointer, so the
+     * let that binds it may free it at scope exit once every capturing closure
+     * is provably dead by then (mut_cell_escapes, emit_expr.c). */
+    bool          is_mut_cell;
     /* r7rs-procedure-body-forward-reference: a `(def ^mut name : any init)`
      * the Pass-1 pre-pass declared ahead of the bodies, so a procedure
      * written above the def can name it; elab_def fills this binding in

@@ -654,6 +654,7 @@ static bool elab_let_mut_to_cell(Elab *e, Scope *inner, LetBinding **binds,
     if (!cell_init) { *ok = false; return false; }
     b->is_mut = false;
     Binding *cb = binding_new(e, hidden_sym, cell_init->type, false, false, name_span);
+    cb->is_mut_cell = true;
     scope_add(inner, cb);
     if (*n_binds == *cap) {
         *cap = *cap ? *cap * 2 : 4;
