@@ -834,6 +834,45 @@ static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
  * registers that env for a single-node free at the DK entry boundary, closing
  * the leak that made a general leaf-admitted closure unsound on the CPS path.
  * Everything else goes through cps_bind unchanged. */
+/* dynamic-returned-closure-env-is-never-freed: the `any` escape walks, defined
+ * emit-side (emit_core.c). */
+bool any_box_binding_escapes(const Expr *e, const Binding *b);
+bool any_box_binding_escapes_self_apply(const Expr *e, const Binding *b,
+                                        uint32_t self_mask);
+bool expr_is_fresh_any_closure(const Expr *x);
+
+/* dynamic-returned-closure-env-is-never-freed (the CPS path): is let-binding
+ * `idx` an `any` holding a fresh capturing closure (expr_is_fresh_any_closure:
+ * a widened lambda -- the __borrowc hoist of cps-capturing-closure-env-leaks-
+ * through-dyn-call -- or a call whose callee returns one), and does the name
+ * stay inside the let?  The direct emitter drops such a binding at the let's
+ * scope exit; a colored function's let is flattened into CPS binders and has
+ * no scope exit to put a drop at, so the env is reaped at the outermost DK
+ * entry boundary instead, exactly as reap_env does for a typed capturing
+ * closure.  Same escape facts as the direct path (let_binding_any_freeable),
+ * self application included.
+ *
+ * The one hazard the boundary adds is a proper-tail-calls T6 BOUNCE: a
+ * dynamic tail call made where `__kont` is the trampoline's root hands its
+ * callee back to the driver, which invokes it after the entry -- and its reap
+ * -- are over.  The emitter guards the registration on exactly that
+ * condition (emit_letraw, reap_any_env). */
+static bool cps_any_closure_env_freeable(const Expr *let, uint32_t idx) {
+    const Expr *init = ascribe_peel(let->as.let_.bindings[idx].init);
+    const Binding *b = let->as.let_.bindings[idx].binding;
+    if (!init || !b || b->type.kind != TY_ANY) return false;
+    if (!expr_is_fresh_any_closure(init)) return false;
+    uint32_t self_mask = init->kind == EX_CALL
+        ? init->as.call_.fn_binding->fresh_closure_self_apply_mask : 0;
+    if (any_box_binding_escapes_self_apply(let->as.let_.body, b, self_mask))
+        return false;
+    for (uint32_t j = 0; j < let->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (any_box_binding_escapes(let->as.let_.bindings[j].init, b)) return false;
+    }
+    return true;
+}
+
 static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx, CTerm *rest) {
     Expr *init = (Expr *)let->as.let_.bindings[idx].init;
     if (cps_closure_env_freeable(let, idx)) {
@@ -841,7 +880,13 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
         t->as.letraw.reap_env = true;
         return t;
     }
-    return cps_bind(b, init, bx, rest);
+    CTerm *t = cps_bind(b, init, bx, rest);
+    /* Only when the call was delegated as a raw let: that is the one lowering
+     * whose binder holds the `any` the call returned, in this function. */
+    if (t && t->kind == CT_LETRAW && t->as.letraw.e == init &&
+        t->as.letraw.x.id == bx.id && cps_any_closure_env_freeable(let, idx))
+        t->as.letraw.reap_any_env = true;
+    return t;
 }
 
 /* True if every argument of an EX_CALL is atomic (so the whole call can be

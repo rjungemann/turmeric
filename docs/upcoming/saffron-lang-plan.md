@@ -25,9 +25,7 @@ clean panics or diagnostics; see the list.)
 Open reports a Saffron program reaches (none is a stage blocker):
 
 - [any-widen-stored-in-an-adt-field-has-no-owner](../reported/any-widen-stored-in-an-adt-field-has-no-owner.md) (medium)
-- [dynamic-returned-closure-env-is-never-freed](../reported/dynamic-returned-closure-env-is-never-freed.md) (low-medium)
 - [byvalue-recursive-adt-boxes-are-never-freed](../reported/byvalue-recursive-adt-boxes-are-never-freed.md) (low-medium, plain Turmeric too)
-- [cps-capturing-closure-env-leaks-through-dyn-call](../reported/cps-capturing-closure-env-leaks-through-dyn-call.md) (low)
 - [jit-x86-64-struct-valued-statement-expression-miscompiles](../reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md) (medium, JIT engine on x86-64 only)
 
 The rest of this header is the running log of the build-out. It is kept as

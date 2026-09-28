@@ -10,6 +10,7 @@
 #include "scheme_lower.h"   /* r7rs: scheme_span_is_user_source, scheme_public_name */
 #include "cps.h"          /* cps_expr_uses_control -- the control-widen hoist */
 bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h */
+bool expr_is_fresh_any_closure(const Expr *x);  /* emit_core.c; see emit_internal.h */
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
 #include "mono_specs.h"   /* VBM1 (van-laarhoven-monomorphization): spec registry */
 
@@ -2077,6 +2078,12 @@ static bool arg_is_freeable_closure_source(const Binding *fb, uint32_t i,
         return true;
     if (a->kind == EX_CALL && a->as.call_.fn_binding
         && a->as.call_.fn_binding->returns_fresh_closure)
+        return true;
+    /* cps-capturing-closure-env-leaks-through-dyn-call: the dynamic twins --
+     * a capturing lambda widened to `any` for an `any` parameter, and a call
+     * to a function returning one.  Hoisted into a let, the `any` scope drop
+     * (direct) or the entry-boundary reap (CPS) releases the env. */
+    if (expr_is_fresh_any_closure(a))
         return true;
     return false;
 }

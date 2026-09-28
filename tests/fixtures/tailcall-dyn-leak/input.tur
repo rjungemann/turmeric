@@ -10,11 +10,12 @@
 ;; calling a Saffron callback whose tail is a dynamic call.  Strings ride the
 ;; loop as arguments, so a word read after its owner released it would show.
 ;;
-;; `step` hands `apply-to` a top-level function rather than a capturing lambda:
-;; a capturing closure passed to a dynamic call from a CPS-lowered function
-;; leaks its env, before T6 as after it
-;; (docs/reported/cps-capturing-closure-env-leaks-through-dyn-call.md), and
-;; that is not what this fixture is here to see.
+;; `step` hands `apply-to` a capturing lambda: the env is released at the DK
+;; entry boundary (docs/archive/cps-capturing-closure-env-leaks-through-dyn-call.md),
+;; and `make-counter`'s closure at its `let`'s scope exit
+;; (docs/archive/dynamic-returned-closure-env-is-never-freed.md).  Until those
+;; were fixed this fixture passed a top-level function instead and carried a
+;; `known-leak` marker for the counter.
 
 (defn run [f n acc]
   (if (= n 0) acc (f f (- n 1) (+ acc 1))))
@@ -30,9 +31,7 @@
 
 (defn apply-to [g x] (g x))
 
-(defn add-one [y] (+ y 1))
-
-(defn step [acc x] (apply-to add-one (+ acc x)))
+(defn step [acc x] (apply-to (fn [y] (+ y x 1)) acc))
 
 (defn main [] : int
   (println (run run 1000 0))

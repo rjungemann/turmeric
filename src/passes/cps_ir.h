@@ -273,7 +273,11 @@ struct CTerm {
          * set, emit_letraw registers the bound env pointer for a single-node free
          * at the outermost DK entry boundary (safe: the closure is dead after its
          * lifted body, and boundary reap never double-frees). */
-        struct { CVar x; const Expr *e; CTerm *body; bool reap_env; }      letraw;
+        /* reap_any_env: the same registration for an `any` binder that holds a
+         * fresh capturing closure (cps_any_closure_env_freeable): the env is
+         * the tagged value's payload, so it is untagged first. */
+        struct { CVar x; const Expr *e; CTerm *body; bool reap_env;
+                 bool reap_any_env; }                                      letraw;
         /* U3 cloneable (multi-shot).  `receiver` is a named, uncolored top-level
          * fn called with the fresh cloneable_cont handle; its result is the reset
          * value bound to x; then run body.

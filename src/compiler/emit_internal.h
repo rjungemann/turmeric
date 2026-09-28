@@ -1284,6 +1284,16 @@ bool any_box_binding_escapes(const Expr *e, const Binding *b);
 bool any_expr_is_owned_temp(const Expr *x, int depth);
 bool any_box_binding_escapes_except(const Expr *e, const Binding *b,
                                     const Expr *ignore);
+/* dynamic-returned-closure-env-is-never-freed: the `any` walk that also admits
+ * `b` handed back to itself in a masked slot of a dynamic call.  Defined in
+ * emit_core.c; see there for why the mask makes that sound. */
+bool any_box_binding_escapes_self_apply(const Expr *e, const Binding *b,
+                                        uint32_t self_mask);
+/* dynamic-returned-closure-env-is-never-freed: a closure whose env release is
+ * a bare free of the env block, and an expression that yields such a closure,
+ * freshly built, as an `any` (emit_core.c). */
+bool closure_env_drop_is_shallow(const struct Closure *c);
+bool expr_is_fresh_any_closure(const Expr *x);
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);
 /* catch-unwind-panic-payload-leaks (Leak 2): admit a deep box free when `b` is

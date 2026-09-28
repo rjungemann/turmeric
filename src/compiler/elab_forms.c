@@ -411,6 +411,7 @@ static const Type *let_use_site_app_type(Elab *e, const Form *f,
  * would free the box twice. */
 bool any_box_binding_escapes_except(const Expr *e, const Binding *b,
                                     const Expr *ignore);
+bool expr_is_fresh_any_closure(const Expr *x);
 
 static const Expr *any_find_sole_drop_use(const Expr *e, const Binding *b);
 
@@ -421,6 +422,12 @@ static void any_let_move_drop_to_use(Expr *let_e) {
         if (!lb->binding || !lb->init) continue;
         if (lb->binding->type.kind != TY_ANY) continue;
         if (!any_expr_is_owned_temp(lb->init, 8)) continue;
+        /* dynamic-returned-closure-env-is-never-freed: a fresh closure's drop
+         * releases its env through the header, which only the scope-exit
+         * channel spells (let_binding_widen_drop_stmt); the at-use drop is
+         * `__tur_any_drop`, which a "fn" payload passes through untouched.
+         * Leave it at scope exit, where early exits fire it too. */
+        if (expr_is_fresh_any_closure(lb->init)) continue;
         const Expr *use = any_find_sole_drop_use(let_e->as.let_.body, lb->binding);
         if (!use) continue;
         if (any_box_binding_escapes_except(let_e->as.let_.body, lb->binding, use))

@@ -1821,9 +1821,17 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
      * and carrier bridges emit_do_value gives a block's value on the ordinary
      * path, which is what that path handed the return ladder here before.  A
      * diverging tail (a `panic`) is left alone: it fires the chain itself. */
+    /* dynamic-returned-closure-env-is-never-freed: the same holds for the
+     * `any` locals of the enclosing tail-position lets (emit_tail's inline
+     * `let` arm pushes them and emits no trailing drop, leaving it to "the
+     * return").  A backedge and a void return fire them; this value return
+     * did not, so every `any` a tail `let` owned leaked on the way out.  The
+     * value goes into a temp first for the same reason as a frame's: `v` may
+     * read the local being dropped. */
+    bool any_drops_open = ctx->n_any_scope_drops > 0;
     Expr *one[1] = { (Expr *)e };
     Expr wrap = {0};
-    bool wrap_value = ctx->frame_var && e->type.kind != TY_NEVER;
+    bool wrap_value = (ctx->frame_var || any_drops_open) && e->type.kind != TY_NEVER;
     if (wrap_value) {
         wrap.kind = EX_DO;
         wrap.type = e->type;
@@ -1852,7 +1860,10 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
     char *v = emit_fat_return_value(ctx, body, fn_e, ve);
     ctx->dyn_tail_mode = DYN_TAIL_NONE;   /* never outlives the one call */
     ctx->dyn_tail_guard = NULL;
-    if (wrap_value) emit_tail_fire_frames(ctx, body);
+    if (wrap_value) {
+        emit_tail_fire_frames(ctx, body);
+        if (any_drops_open) emit_any_scope_drops(ctx, body);
+    }
     bool emitted_tail_call = want_tail_call && ctx->tail_call_no_hoist_taken;
     ctx->tail_call_no_hoist = nh_save;
     ctx->tail_call_no_hoist_taken = taken_save;

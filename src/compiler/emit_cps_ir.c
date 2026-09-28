@@ -7473,6 +7473,25 @@ static void emit_letraw(CE *ce, const CTerm *t) {
          * interior free. */
         ce_line(ce, "__dk_reap_closure((intptr_t)%s);", bn);
     }
+    /* dynamic-returned-closure-env-is-never-freed: an `any` binder holding a
+     * fresh capturing closure; its payload word is the headered env.
+     *
+     * Registered only when `__kont` is not the trampoline root.  A dynamic
+     * tail call bounces exactly when it is (the T6 check in emit_value's
+     * DYN_TAIL_CPS arm), and a bounce hands the callee -- possibly this
+     * closure, or a callee holding it -- to the driver, which runs it after
+     * this entry, and the reap at its exit, are done.  Every tail call from
+     * here threads `__kont` (or a prompt chain made inside this function), so
+     * when it is not the root nothing reached from here can bounce out, and
+     * the closure is dead by the time the entry returns.  Only the MAIN body
+     * has `__kont` as its own continuation parameter; a lifted helper leaves
+     * the env to leak, which is the status quo. */
+    if (t->as.letraw.reap_any_env && ce->out == ce->tb_out &&
+        !ce->shift_mode && !ce->ret_mode && !ce->handler_case_mode) {
+        ensure_saffron_dyn_runtime(ce->ctx);   /* declares tur_tb_root */
+        ce_line(ce, "if ((void *)__kont != tur_tb_root) "
+                    "__dk_reap_closure((intptr_t)TUR_UNTAG(%s));", bn);
+    }
     free(bn);
     free(rhs);
     emit_term(ce, t->as.letraw.body);

@@ -1,0 +1,50 @@
+#lang saffron
+;; cps-capturing-closure-env-leaks-through-dyn-call: a capturing lambda passed
+;; to a function that only invokes it is released by the caller.
+;; `requires.leak-check` builds this under AddressSanitizer with LeakSanitizer
+;; on (tests/run-leak-check.sh): an env nobody frees is a leak, and one freed
+;; while still in use is a use-after-free.
+;;
+;; `apply-to` only calls its `g`, so `g` is a non-retaining parameter, and the
+;; lambda at each call site is hoisted into a `let` and released:
+;;   - `step` and `twice` are emitted as CPS bodies (`step__cps`), whose let is
+;;     flattened into CPS binders; the env is registered for the DK entry
+;;     boundary reap, guarded so it is skipped when `__kont` is the trampoline
+;;     root (a dynamic tail call there bounces its callee to the driver, which
+;;     runs it after the entry has returned).  `step` is the report's repro.
+;;   - `main` is direct and drops at the `let`'s scope exit.
+;;   - `pick` and `pick-cps` are trampoline bouncers entered from the driver in
+;;     `drive`, and direct: the hoisted `let` is in TAIL position, so its drop
+;;     runs on emit_tail's value-return path, after `apply-to` returns.
+
+(defn apply-to [g x] (g x))
+
+;; The report's repro: one env per vec-fold element.
+(defn step [acc x] (apply-to (fn [y] (+ y x)) acc))
+
+;; Not a tail call: the lambda is consumed, then the sum is computed.
+(defn twice [x] (+ (apply-to (fn [y] (* y x)) 2) 1))
+
+(defn pick [n k]
+  (if (= n 0)
+    (apply-to (fn [y] (+ y n 100)) 5)
+    (k (- n 1) k)))
+
+(defn pick-cps [n k]
+  (if (= n 0)
+    (apply-to (fn [y] (+ y n 200)) 5)
+    (do (apply-to (fn [z] (+ z n)) 0)
+        (k (- n 1) k))))
+
+(defn drive [h] (h 3 h))
+
+(defn main [] : int
+  (let [v [1 2 3 4 5]]
+    (println (vec-fold v 100 step))
+    (vec-free v))
+  (println (twice 21))
+  (println (drive pick))
+  (println (drive pick-cps))
+  (let [k 7]
+    (println (apply-to (fn [y] (+ y k)) 1)))
+  0)
