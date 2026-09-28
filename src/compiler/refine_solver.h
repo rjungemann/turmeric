@@ -78,7 +78,7 @@
  * (3125 evaluations) is cheaper than a three-variable one over sixteen
  * (4096).  So the width cap is now only a backstop for the array sizes, and
  * the evaluation budget below decides.  See
- * docs/upcoming/solver-integer-tail-plan.md. */
+ * docs/archive/solver-integer-tail-plan.md. */
 #define MODEL_MAX_VARS          8
 /* Ceiling on `n_cand ** n_vars`, the number of full evaluations one search
  * may run.  131072 tiny evaluations is a few milliseconds; the old cap's

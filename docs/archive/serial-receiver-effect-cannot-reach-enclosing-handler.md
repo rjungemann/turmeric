@@ -29,12 +29,16 @@ parameter (an int64 carrier word passed by value -- admitted now, like a
 `^borrow` handle), and `param_name_clashes_cps` refused any parameter named
 `k`, a reservation left over from when the continuation parameter was spelled
 `DK *k` (it has been `__kont` since).  Every serial receiver the guides show is
-`(defn recv [k : serial-cont] ...)`.
+`(defn recv [k : serial-cont] ...)`, so the reservation is lifted for a
+`serial-cont` parameter.  Only for that one: lifting it outright moved every
+colored function with a `k` parameter onto the CPS path, and a Saffron
+self-applying function (`(k (- n 1) k)`) there leaked a lambda env the direct
+path frees (`saffron-lambda-arg-env-freed`, caught merging `main`).
 
-Admitting `k` exposed one miscompile the reservation had masked: a CAPTURING
-closure receiver an effect escapes compiled and aborted with "unhandled
-effect", because a closure receiver still runs from the shift body's fresh
-root.  It is refused at IR build now (TUR-E0706 from the fallback), as a named
+Admitting a `k : serial-cont` parameter exposed one miscompile the
+reservation had masked: a CAPTURING closure receiver an effect escapes
+compiled and aborted with "unhandled effect", because a closure receiver still
+runs from the shift body's fresh root.  It is refused at IR build now (TUR-E0706 from the fallback), as a named
 one used to be.
 
 Pinned by `tests/fixtures/serial-shift-receiver-effect-reaches-handler` (four

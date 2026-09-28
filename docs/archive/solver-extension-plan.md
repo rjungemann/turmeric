@@ -11,7 +11,7 @@ description: Extending the refinement solver into an incremental, backtracking d
 > SX5's remainder, SX6, SX6b -- is parked on evidence gates that have been
 > measured shut, with the re-measurement recipe recorded under each.  A later
 > integer-side slice of SX7 lives in
-> [../upcoming/solver-integer-tail-plan.md](../upcoming/solver-integer-tail-plan.md),
+> [solver-integer-tail-plan.md](solver-integer-tail-plan.md),
 > which is where the solver's open work is tracked now.
 
 **Status:** proposal. SX0 (both instruments), SX8a (the interrogation surface),
@@ -992,7 +992,7 @@ a nice-to-have; the asymmetry is the reason.
   (`enc_reads_args_frozen`) *can* hand congruence to an otherwise-impure
   measure when its named arguments are frozen at the site. That is a
   user-facing trusted claim and it is the general
-  [trusted-refinement-claims](../upcoming/trusted-refinement-claims-plan.md)
+  [trusted-refinement-claims](trusted-refinement-claims-plan.md)
   problem rather than a trail-specific one, but a trailed cell is exactly the
   kind of state where a wrong `#reads` frame would cost a check.
 - **The serialization refusal of 3.5.** Not added. Same reasoning: no serializable
@@ -1447,7 +1447,7 @@ obligations.
 
 > **First slice LANDED 2026-09-05, in C, not via the Turmeric prototype this
 > phase prescribes** -- see
-> [solver-integer-tail-plan.md](../upcoming/solver-integer-tail-plan.md). The Omega test's
+> [solver-integer-tail-plan.md](solver-integer-tail-plan.md). The Omega test's
 > two exact steps (gcd normalization of inequalities; the divisibility test
 > and unit-coefficient substitution on equations) went straight into
 > `refine_solver_arith.c` behind the unchanged `la_*` seam, because at ~150

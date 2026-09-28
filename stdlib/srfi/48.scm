@@ -7,12 +7,12 @@
 ;;;   - a call without a port does not go through apply, which takes at
 ;;;     most eight arguments here;
 ;;;   - the format string is copied once, so string-ref on it is constant
-;;;     time (docs/upcoming/r7rs-srfi-plan.md 2.5);
+;;;     time (docs/archive/r7rs-srfi-plan.md 2.5);
 ;;;   - R7RS's inexact/exact and write-shared stand for exact->inexact,
 ;;;     inexact->exact and SRFI 38's write-with-shared-structure.
 ;;; ~Y pretty-prints with write, as the reference permits.  (srfi 28)
 ;;; re-exports this format: SRFI 48 is a superset of SRFI 28.
-;;; docs/upcoming/r7rs-srfi-plan.md, S6.
+;;; docs/archive/r7rs-srfi-plan.md, S6.
 ;;;
 ;;; SPDX-FileCopyrightText: 2003 Kenneth A Dickey <ken.dickey@allvantage.com>
 ;;; SPDX-FileCopyrightText: 2017 Hamayama <hamay1010@gmail.com>

@@ -20,7 +20,7 @@
 ;;
 ;; VERIFIED is a stamped, dumpable fact (Binding.reads_checked); nothing
 ;; consumes it behaviorally yet -- that decision is recorded in
-;; docs/upcoming/trusted-refinement-claims-plan.md.
+;; docs/archive/trusted-refinement-claims-plan.md.
 (defstruct Wld [gens : ptr<void>])
 
 (defn wld-new [] : Wld

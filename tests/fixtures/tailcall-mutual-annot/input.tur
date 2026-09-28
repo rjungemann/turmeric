@@ -1,4 +1,4 @@
-;; proper-tail-calls T5 (docs/upcoming/proper-tail-calls-plan.md, T-D5): a
+;; proper-tail-calls T5 (docs/archive/proper-tail-calls-plan.md, T-D5): a
 ;; mutual pair of tail calls is fused into one C function with a dispatch
 ;; loop, so the pair runs in constant stack at any optimization level.
 ;;

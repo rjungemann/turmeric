@@ -44,7 +44,7 @@ not get freed, it stops being **allocated**. `get-x`'s two call sites now emit
 `TUR_TAG(id, &__t183)` -- a caller-frame copy, no `malloc` at all.
 
 Fix direction 3 (RC-managed `any` boxes), which
-`docs/upcoming/saffron-lang-plan.md` S5 proposed, was not needed and should not
+`docs/archive/saffron-lang-plan.md` S5 proposed, was not needed and should not
 be revived on this evidence.
 
 Verified: `tests/run-leak-check.sh` 87 passed / 0 failed, `run.sh` 2861 / 0,
@@ -148,7 +148,7 @@ Three, in increasing order of size:
    (`returns_fresh_any` / `returns_any_param_idx`).
 
 3. **RC-manage Saffron's `any` boxes**, which is what
-   `docs/upcoming/saffron-lang-plan.md` S5 proposed for exactly this reason
+   `docs/archive/saffron-lang-plan.md` S5 proposed for exactly this reason
    ("Ownership is the real risk here, not the dispatch"). It settles the whole
    family rather than one position, at the cost of a refcount on every widen.
    The plan should be the one to decide between (2) and (3); this report is the

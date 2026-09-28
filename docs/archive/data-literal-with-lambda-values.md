@@ -2,7 +2,7 @@
 
 **RESOLVED 2026-09-26, the day both were found** (probing closure ownership in
 Saffron for
-[dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md)).
+[dynamic-returned-closure-env-is-never-freed](dynamic-returned-closure-env-is-never-freed.md)).
 Filed here for the paper trail; neither had an open report.
 
 ## 1. `#map{"add" (fn [a b] (+ a b))}` -- both engines

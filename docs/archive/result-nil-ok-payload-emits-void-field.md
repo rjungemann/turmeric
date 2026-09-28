@@ -65,7 +65,7 @@ int)` and a "ok carries 0" convention -- exactly the `:int` stand-in that
 `CLAUDE.md` exists to prevent -- or invents a per-spice `Ack` opaque.
 
 **Status when filed: open.** Found writing the `nng` spice, whose plan
-(`docs/upcoming/nng-spice-plan.md`) specified `(Result nil int)` for `dial`,
+(`docs/archive/nng-spice-plan.md`) specified `(Result nil int)` for `dial`,
 `listen`, and the timeout setters. The spice ships a `(defopaque Ack :int)` as
 the stand-in, documented as such, and should switch to `nil` when this lands.
 

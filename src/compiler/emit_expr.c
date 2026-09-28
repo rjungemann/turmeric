@@ -2807,10 +2807,19 @@ static bool let_binding_union_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx
 char *let_binding_widen_drop_stmt(EmitCtx *ctx, const Expr *e, uint32_t idx) {
     const Binding *b = e->as.let_.bindings[idx].binding;
     char *nm = name_for_binding(ctx, b);
+    /* dynamic-returned-closure-env-is-never-freed: an `any` holding a fresh
+     * capturing closure -- widened here, or minted by a call whose callee
+     * widens one -- holds a headered heap env.  `__tur_any_drop` answers from
+     * the "fn" registry row, which says unboxed (a fn payload may be a static
+     * function), so it would free nothing; the initializer is what says this
+     * one is a heap env, and the drop goes through its header. */
+    bool fresh_closure = expr_is_fresh_any_closure(e->as.let_.bindings[idx].init);
     Buf s;
     buf_init(&s);
     if (emit_resolve_type(ctx, b->type).kind == TY_UNION)
         buf_printf(&s, "free((void *)(intptr_t)TUR_UNTAG(%s))", nm);
+    else if (fresh_closure)
+        buf_printf(&s, "__tur_any_closure_drop(%s)", nm);
     else
         buf_printf(&s, "__tur_any_drop(%s)", nm);
     buf_putc(&s, '\0');
@@ -2871,7 +2880,13 @@ bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
         (init->kind == EX_UNION_INJECT && !init->as.union_inject_.frame_box)
         || (init->kind == EX_CALL && any_expr_is_owned_temp(init, 8));
     if (!owned_here) return false;
-    if (any_box_binding_escapes(e->as.let_.body, b) &&
+    /* dynamic-returned-closure-env-is-never-freed: a fresh closure may be
+     * handed back to itself in the slots its own code only invokes. */
+    uint32_t self_mask =
+        (init->kind == EX_CALL && init->as.call_.fn_binding &&
+         init->as.call_.fn_binding->returns_fresh_any_closure)
+            ? init->as.call_.fn_binding->fresh_closure_self_apply_mask : 0;
+    if (any_box_binding_escapes_self_apply(e->as.let_.body, b, self_mask) &&
         !catch_box_binding_reader_confined(e->as.let_.body, b, e->type.kind))
         return false;
     for (uint32_t j = 0; j < e->as.let_.n; j++) {

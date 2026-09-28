@@ -23,6 +23,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
 
 /* B7 fwd decls (defined after the CE struct). */
 static bool is_byref_mut(const Binding *b);
+static void ctg_reset(void);   /* cps-self-tail-call-relies-on-sibling-call */
 static const struct Binding *byref_set_target(const Expr *e);
 static const struct Binding *set_mut_target(const Expr *e);
 static const char *byref_cell_ctype(EmitCtx *ctx, const Binding *b);
@@ -2979,12 +2980,20 @@ static bool handle_delim_ok(const CTerm *t) {
 
 /* A source parameter's raw C name (used unchanged now that fn_params is set
  * during CPS emission) must not collide with a name the CPS backend synthesizes:
- * any `__`-prefixed internal (`__kont`, `__root`, `__r`, `__cap`, `__h<N>`, and
- * the fresh result temporaries `__t<N>`).  A plain `k` used to be refused too,
- * when the continuation parameter was spelled `DK *k`; it has been `__kont`
- * since, and refusing `k` evicted every serial-shift receiver written the way
- * the guides write one, `(defn recv [k : serial-cont] ...)`
- * (serial-receiver-effect-cannot-reach-enclosing-handler).  A colliding param would
+ * the continuation `k`, or any `__`-prefixed internal (`__root`, `__r`, `__cap`,
+ * `__h<N>`, and the fresh result temporaries `__t<N>`).
+ *
+ * `k` itself no longer collides -- the continuation parameter has been
+ * `__kont` since this rule was written -- but the rule is load-bearing anyway:
+ * it keeps every colored function with a `k` parameter on the direct path, and
+ * lifting it moved Saffron self-applying functions (`(defn pick [n k] ...
+ * (k (- n 1) k))`) onto the CPS path, whose trampoline-root entry does not
+ * release a lambda env the direct path frees (saffron-lambda-arg-env-freed
+ * leaked).  So it is lifted only for a `serial-cont` parameter -- a
+ * serial-shift receiver written the way the guides write one, `(defn recv
+ * [k : serial-cont] ...)`, which must be CPS-emitted for its effects to reach
+ * the reset's handlers (serial-receiver-effect-cannot-reach-enclosing-handler).
+ * A colliding param would
  * shadow or be shadowed by a generated identifier; exclude such a function from
  * CPS candidacy so it falls back to the direct emitter (which owns its own
  * naming).  The `t<N>` branch below is retained defensively: temporaries are now
@@ -2993,6 +3002,8 @@ static bool handle_delim_ok(const CTerm *t) {
 static bool param_name_clashes_cps(const Binding *b) {
     if (!b || !b->name || !b->name->name) return false;
     const char *n = b->name->name;
+    if (strcmp(n, "k") == 0)
+        return !(b->type.kind == TY_CONT && b->type.as.cont.flavor == CONT_SERIAL);
     /* fn-value-fat-normalization (effect-row increment): a lifted capturing
      * lambda's env param is `__env_p_<id>` -- uniquely numbered, never a name
      * the CPS emitter mints itself.  Admitting it is what lets a capturing
@@ -4920,6 +4931,7 @@ static void ensure_S(const Expr *program) {
     fdc_prog = NULL;   /* a new classification: rebuild fd_for_binding's table */
     g_fwd_done = false;
     g_eff_n = 0;
+    ctg_reset();
     if (!program || program->kind != EX_PROGRAM) return;
 
     arena_init(&g_arena, 0);
@@ -5944,7 +5956,67 @@ typedef struct {
     const FnDef *self_fd;
     const Buf   *self_out;
     bool        *self_backedge;
+    /* cps-self-tail-call-relies-on-sibling-call (mutual recursion): the fused
+     * group this function's MAIN body is rendered into (tb_out is that body),
+     * its member index, and the prefix that keeps its join labels distinct
+     * from the other members' inside the one C function.  NULL / "" outside a
+     * group. */
+    const struct CpsTcg *tcg;
+    int          tcg_idx;
+    const char  *lbl_pfx;
 } CE;
+
+/* ============================================================================
+ * cps-self-tail-call-relies-on-sibling-call (mutual recursion): CPS mutual
+ * tail-call groups -- proper-tail-calls T5, for `__cps` bodies.
+ *
+ * A self tail call in a `__cps` main body is a backedge (`__tur_cps_self`).
+ * A tail call to ANOTHER CPS function was `return g__cps(args, __kont)`: a C
+ * call, constant-stack only when the C compiler makes it a sibling call (gcc
+ * at -O2, not -O1 or -O0).  Two procedures that call each other that way --
+ * each calling a procedure variable on the way, so each is CPS -- overflowed
+ * a million deep in every ASan build.
+ *
+ * A strongly-connected component of the cps->cps tail-call graph, two to
+ * CTG_MAXMEM members, is fused into one C function,
+ *   `static int64_t __cps_tcg_N(int __tcg_st, <every member's params>, DK *__kont)`,
+ * that dispatches on `__tcg_st` in a `switch` at the top of a loop.  Each
+ * member's rendered main body is one `case`, its parameters block locals read
+ * from its slots, its join labels prefixed so they cannot collide.  A tail
+ * call from a main body to any member -- itself included -- that hands on
+ * `__kont` evaluates its arguments, writes the target's slots, sets
+ * `__tcg_st` and jumps to the top.  `__kont` is one parameter shared by every
+ * member, and a tail call does not change it.  Each member keeps
+ * `<name>__cps` as a one-line wrapper into the fused function, for every call
+ * from outside the group, from its own lifted helpers, and from another
+ * member's non-tail position.
+ *
+ * The fused function is written once every member has been rendered (the
+ * last one to be emitted writes it), or at the end of the translation unit if
+ * one never is (emit_cps_ir_flush_groups); its members' helpers and wrappers
+ * are already in the file either way.  Members are the functions the
+ * self-backedge could already take -- no closure (env in param 0), no
+ * monomorph, not the entry, no parameter kept in a cell or carried by a
+ * loop -- and no split-library body, whose `__cps` has external linkage.
+ * ========================================================================== */
+#define CTG_MAXMEM   8
+#define CTG_MAXSLOTS 32
+typedef struct CpsTcg {
+    const FnDef *mem[CTG_MAXMEM];
+    int          n_mem;
+    uint32_t     slot_base[CTG_MAXMEM];
+    char        *slot_ctype[CTG_MAXSLOTS];
+    uint32_t     n_slots;
+    char        *body[CTG_MAXMEM];      /* the rendered case, NULL until rendered */
+    char         name[40];
+    bool         declared, defined;
+} CpsTcg;
+
+static int ctg_member_idx(const CpsTcg *g, const FnDef *fd) {
+    if (!g || !fd) return -1;
+    for (int i = 0; i < g->n_mem; i++) if (g->mem[i] == fd) return i;
+    return -1;
+}
 
 static void ce_line(CE *ce, const char *fmt, ...) {
     indent_buf(ce->out, ce->indent);
@@ -6519,7 +6591,7 @@ static void emit_deliver_ty(CE *ce, const CKont *kont, const char *v, const Type
         }
         /* KK_VAR: an inline join */
         ce_line(ce, "%s = %s;", join_param(ce, kont->id), v);
-        ce_line(ce, "goto L%u;", kont->id);
+        ce_line(ce, "goto %sL%u;", ce->lbl_pfx ? ce->lbl_pfx : "", kont->id);
     }
 }
 
@@ -7000,6 +7072,43 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * and jump to the top of the body, the backedge the direct
                  * emitter's self-TCO already gives a non-CPS function.
                  * `__kont` is unchanged across it, so it needs no rebinding. */
+                /* cps-self-tail-call-relies-on-sibling-call (mutual
+                 * recursion): a tail call from a fused group member's main
+                 * body to any member -- itself included -- that hands on
+                 * `__kont` is a jump inside the group's function.  Same order
+                 * as the backedge below: every argument into a temp first
+                 * (they may read this member's parameters), then the
+                 * target's slots, then the dispatch. */
+                if (ce->tcg && ce->out == ce->tb_out && !rr && !clone &&
+                    t->as.tailcall.kont.kind == KK_RET &&
+                    !ce->shift_mode && !ce->ret_mode && !ce->handler_case_mode &&
+                    !cps_deferred_any_atom(t->as.tailcall.args, t->as.tailcall.n)) {
+                    const FnDef *tfd = g_prog ? fd_for_binding(g_prog, t->as.tailcall.fn)
+                                              : NULL;
+                    int tj = ctg_member_idx(ce->tcg, tfd);
+                    if (tj >= 0 && t->as.tailcall.n == tfd->n_params) {
+                        uint32_t base = ce->tcg->slot_base[tj];
+                        ce_line(ce, "{   /* cps->cps group tail call: a jump */");
+                        for (uint32_t i = 0; i < t->as.tailcall.n; i++) {
+                            size_t from = arg_offs[i];
+                            size_t to = (i + 1 < t->as.tailcall.n) ? arg_offs[i + 1] - 2
+                                                                   : strlen(argv_t);
+                            ce_line(ce, "    %s __tb%u = %.*s;",
+                                    emit_param_ctype(ce->ctx, tfd, i), i,
+                                    (int)(to - from), argv_t + from);
+                        }
+                        for (uint32_t i = 0; i < t->as.tailcall.n; i++)
+                            ce_line(ce, "    __tcg_s%u = __tb%u;", (unsigned)(base + i), i);
+                        ce_line(ce, "    __tcg_st = %d;", tj);
+                        ce_line(ce, "    goto __tcg_top;");
+                        ce_line(ce, "}");
+                        free(argv_t);
+                        free(arg_offs);
+                        free(fn);
+                        free(argv);
+                        break;
+                    }
+                }
                 const FnDef *sfd = ce->self_fd;
                 bool self_loop = sfd && ce->out == ce->self_out && !rr && !clone &&
                     t->as.tailcall.fn == sfd->binding && t->as.tailcall.kont.kind == KK_RET &&
@@ -7217,7 +7326,8 @@ static void emit_term(CE *ce, const CTerm *t) {
             if (pushed && ce->n_joins > 0) ce->n_joins--;
             /* the join landing pad */
             indent_buf(ce->out, ce->indent);
-            buf_printf(ce->out, "L%u:;\n", t->as.letcont.j.id);
+            buf_printf(ce->out, "%sL%u:;\n", ce->lbl_pfx ? ce->lbl_pfx : "",
+                       t->as.letcont.j.id);
             emit_term(ce, t->as.letcont.jbody);
             free(pn);
             break;
@@ -7540,6 +7650,25 @@ static void emit_letraw(CE *ce, const CTerm *t) {
          * the header, walks owning captures, frees the base) rather than a bare
          * interior free. */
         ce_line(ce, "__dk_reap_closure((intptr_t)%s);", bn);
+    }
+    /* dynamic-returned-closure-env-is-never-freed: an `any` binder holding a
+     * fresh capturing closure; its payload word is the headered env.
+     *
+     * Registered only when `__kont` is not the trampoline root.  A dynamic
+     * tail call bounces exactly when it is (the T6 check in emit_value's
+     * DYN_TAIL_CPS arm), and a bounce hands the callee -- possibly this
+     * closure, or a callee holding it -- to the driver, which runs it after
+     * this entry, and the reap at its exit, are done.  Every tail call from
+     * here threads `__kont` (or a prompt chain made inside this function), so
+     * when it is not the root nothing reached from here can bounce out, and
+     * the closure is dead by the time the entry returns.  Only the MAIN body
+     * has `__kont` as its own continuation parameter; a lifted helper leaves
+     * the env to leak, which is the status quo. */
+    if (t->as.letraw.reap_any_env && ce->out == ce->tb_out &&
+        !ce->shift_mode && !ce->ret_mode && !ce->handler_case_mode) {
+        ensure_saffron_dyn_runtime(ce->ctx);   /* declares tur_tb_root */
+        ce_line(ce, "if ((void *)__kont != tur_tb_root) "
+                    "__dk_reap_closure((intptr_t)TUR_UNTAG(%s));", bn);
     }
     free(bn);
     free(rhs);
@@ -9859,6 +9988,7 @@ void emit_cps_ir_forget(void) {
     fdc_prog = NULL;
     g_fwd_done = false;
     g_eff_n = 0;
+    ctg_reset();
 }
 
 bool emit_cps_ir_program_has_emittable(const Expr *program) {
@@ -9977,6 +10107,204 @@ static void cps_dump_mono_admissible(EmitCtx *ctx, FnDef *fd) {
             nm, sig ? "ok" : "no", body ? "ok" : "no", island ? "yes" : "no",
             admissible ? (island ? "ISLAND-EMITTABLE" : "ADMISSIBLE(cross-fn)") : "fallback");
     arena_free(&tmp);
+}
+
+/* ---- cps-self-tail-call-relies-on-sibling-call: the group registry ---- */
+static CpsTcg g_ctg[32];
+static int    g_n_ctg;
+static bool   g_ctg_built;
+static int    g_ctg_ctr;
+
+static void ctg_reset(void) {
+    for (int i = 0; i < g_n_ctg; i++) {
+        for (uint32_t k = 0; k < g_ctg[i].n_slots; k++) free(g_ctg[i].slot_ctype[k]);
+        for (int m = 0; m < g_ctg[i].n_mem; m++) free(g_ctg[i].body[m]);
+    }
+    memset(g_ctg, 0, sizeof g_ctg);
+    g_n_ctg = 0;
+    g_ctg_built = false;
+}
+
+/* Every colored tail call's callee in `t`, lifted regions included -- an
+ * over-approximation of the edges, which only ever proposes a group; whether
+ * a given call becomes a jump is decided where it is rendered. */
+static void ctg_tail_targets(const CTerm *t, const FnDef **out, int *n, int cap) {
+    if (!t || *n >= cap) return;
+    switch (t->kind) {
+        case CT_TAILCALL:
+            if (t->as.tailcall.fn && !t->as.tailcall.via_registry &&
+                !t->as.tailcall.via_fncps && t->as.tailcall.kont.kind == KK_RET) {
+                const FnDef *g = fd_for_binding(g_prog, t->as.tailcall.fn);
+                if (!g) return;
+                for (int i = 0; i < *n; i++) if (out[i] == g) return;
+                out[(*n)++] = g;
+            }
+            return;
+        case CT_LETRAW:  ctg_tail_targets(t->as.letraw.body, out, n, cap); return;
+        case CT_LETVAL:  ctg_tail_targets(t->as.letval.body, out, n, cap); return;
+        case CT_LETPRIM: ctg_tail_targets(t->as.letprim.body, out, n, cap); return;
+        case CT_LETCALL: ctg_tail_targets(t->as.letcall.body, out, n, cap); return;
+        case CT_LETCONT:
+            ctg_tail_targets(t->as.letcont.jbody, out, n, cap);
+            ctg_tail_targets(t->as.letcont.body, out, n, cap);
+            return;
+        case CT_IF:
+            ctg_tail_targets(t->as.if_.then_, out, n, cap);
+            ctg_tail_targets(t->as.if_.else_, out, n, cap);
+            return;
+        case CT_MATCH:
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                ctg_tail_targets(t->as.match.arms[i].body, out, n, cap);
+            return;
+        case CT_PERFORM: ctg_tail_targets(t->as.perform.body, out, n, cap); return;
+        case CT_AWAIT:   ctg_tail_targets(t->as.await.body, out, n, cap); return;
+        case CT_RESUME:  ctg_tail_targets(t->as.resume.body, out, n, cap); return;
+        case CT_CALLCC:  ctg_tail_targets(t->as.callcc.body, out, n, cap); return;
+        default: return;
+    }
+}
+
+/* May `fd` be a group member?  The same bar the self backedge sets (see
+ * emit_cps_ir_try_fn), asked of the classification table before any member
+ * is rendered.  The cell / loop-carried scans are the ones the render runs;
+ * their tables are per-render globals, emptied again here. */
+static bool ctg_member_ok(const SEnt *se) {
+    if (!se || !se->in_s || se->mono_template || !se->term) return false;
+    const FnDef *fd = se->fd;
+    if (!fd || !fd->binding || fd->closure) return false;
+    if (fn_is_main(fd) || fn_is_d2b_main(fd)) return false;
+    if (emit_split_lib_owns(fd->binding)) return false;
+    g_byref_muts_n = 0;
+    g_loop_carried_n = 0;
+    loop_carried_scan(se->term);
+    byref_scan(se->term);
+    bool ok = true;
+    for (uint32_t i = 0; ok && i < fd->n_params; i++)
+        ok = fd->params[i] && !fd->params[i]->is_poly_fn &&
+             !is_byref_mut(fd->params[i]) && !is_loop_carried(fd->params[i]);
+    g_byref_muts_n = 0;
+    g_loop_carried_n = 0;
+    return ok;
+}
+
+#define CTG_EXPLORE 64
+static void ctg_build(EmitCtx *ctx) {
+    if (g_ctg_built) return;
+    g_ctg_built = true;
+    for (size_t r = 0; r < g_ents_n && g_n_ctg < 32; r++) {
+        const SEnt *root = &g_ents[r];
+        if (!ctg_member_ok(root)) continue;
+        bool grouped = false;
+        for (int gi = 0; gi < g_n_ctg && !grouped; gi++)
+            if (ctg_member_idx(&g_ctg[gi], root->fd) >= 0) grouped = true;
+        if (grouped) continue;
+        /* Forward reachability over eligible members from `root`. */
+        const SEnt *node[CTG_EXPLORE];
+        bool adj[CTG_EXPLORE][CTG_EXPLORE];
+        memset(adj, 0, sizeof adj);
+        int nn = 0;
+        node[nn++] = root;
+        for (int i = 0; i < nn; i++) {
+            const FnDef *cs[CTG_EXPLORE];
+            int nc = 0;
+            ctg_tail_targets(node[i]->term, cs, &nc, CTG_EXPLORE);
+            for (int c = 0; c < nc; c++) {
+                SEnt *ce_ = ent_of(cs[c]);
+                if (!ce_ || ce_ == node[i]) continue;
+                int j = -1;
+                for (int k = 0; k < nn; k++) if (node[k] == ce_) j = k;
+                if (j < 0) {
+                    bool in_other = false;
+                    for (int gi = 0; gi < g_n_ctg && !in_other; gi++)
+                        if (ctg_member_idx(&g_ctg[gi], ce_->fd) >= 0) in_other = true;
+                    if (in_other || !ctg_member_ok(ce_) || nn >= CTG_EXPLORE) continue;
+                    j = nn;
+                    node[nn++] = ce_;
+                }
+                adj[i][j] = true;
+            }
+        }
+        /* The component: the reached nodes that also reach back to `root`. */
+        bool back[CTG_EXPLORE] = { false };
+        back[0] = true;
+        for (bool changed = true; changed; ) {
+            changed = false;
+            for (int i = 0; i < nn; i++) {
+                if (back[i]) continue;
+                for (int j = 0; j < nn; j++)
+                    if (adj[i][j] && back[j]) { back[i] = true; changed = true; break; }
+            }
+        }
+        const SEnt *mem[CTG_EXPLORE];
+        int nm = 0;
+        for (int i = 0; i < nn; i++) if (back[i]) mem[nm++] = node[i];
+        if (nm < 2 || nm > CTG_MAXMEM) continue;
+        uint32_t n_slots = 0;
+        for (int i = 0; i < nm; i++) n_slots += mem[i]->fd->n_params;
+        if (n_slots > CTG_MAXSLOTS) continue;
+        CpsTcg *g = &g_ctg[g_n_ctg++];
+        memset(g, 0, sizeof *g);
+        snprintf(g->name, sizeof g->name, "__cps_tcg_%d", g_ctg_ctr++);
+        g->n_mem = nm;
+        for (int i = 0; i < nm; i++) {
+            g->mem[i] = mem[i]->fd;
+            g->slot_base[i] = g->n_slots;
+            for (uint32_t k = 0; k < mem[i]->fd->n_params; k++)
+                g->slot_ctype[g->n_slots++] = strdup(emit_param_ctype(ctx, mem[i]->fd, k));
+        }
+    }
+}
+
+static CpsTcg *ctg_of(const FnDef *fd, int *idx) {
+    for (int gi = 0; gi < g_n_ctg; gi++) {
+        int m = ctg_member_idx(&g_ctg[gi], fd);
+        if (m >= 0) { *idx = m; return &g_ctg[gi]; }
+    }
+    return NULL;
+}
+
+static void ctg_emit_signature(Buf *out, const CpsTcg *g, bool named) {
+    buf_printf(out, "static int64_t %s(int%s", g->name, named ? " __tcg_st" : "");
+    for (uint32_t k = 0; k < g->n_slots; k++) {
+        if (named) buf_printf(out, ", %s __tcg_s%u", g->slot_ctype[k], (unsigned)k);
+        else       buf_printf(out, ", %s", g->slot_ctype[k]);
+    }
+    buf_puts(out, named ? ", DK *__kont)" : ", DK *)");
+}
+
+/* The fused function.  A member whose body was never rendered here -- not
+ * expected, but not ruled out by anything this file controls -- keeps its
+ * case as a call to its own `__cps`, which is then its original definition
+ * rather than a wrapper, so the case can never call back into itself. */
+static void ctg_emit_def(Buf *file, CpsTcg *g) {
+    if (g->defined) return;
+    g->defined = true;
+    ctg_emit_signature(file, g, true);
+    buf_puts(file, " {\n");
+    buf_puts(file, "    __tcg_top:;\n");
+    buf_puts(file, "    switch (__tcg_st) {\n");
+    for (int m = 0; m < g->n_mem; m++) {
+        buf_printf(file, "    case %d: {\n", m);
+        if (g->body[m]) {
+            buf_puts(file, g->body[m]);
+        } else {
+            char *cn = raw_name_for_binding(g->mem[m]->binding);
+            buf_printf(file, "        return %s__cps(", cn);
+            for (uint32_t k = 0; k < g->mem[m]->n_params; k++)
+                buf_printf(file, "__tcg_s%u, ", (unsigned)(g->slot_base[m] + k));
+            buf_puts(file, "__kont);\n");
+            free(cn);
+        }
+        buf_puts(file, "    }\n");
+    }
+    buf_puts(file, "    default: break;\n    }\n    return 0;\n}\n");
+}
+
+/* End of a translation unit: define any group whose last member was never
+ * rendered (its rendered members' wrappers already call it). */
+void emit_cps_ir_flush_groups(Buf *file) {
+    for (int gi = 0; gi < g_n_ctg; gi++)
+        if (g_ctg[gi].declared && !g_ctg[gi].defined) ctg_emit_def(file, &g_ctg[gi]);
 }
 
 bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
@@ -10108,6 +10436,18 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     if (!g_fwd_done) { emit_forward_decls(ctx, file); g_fwd_done = true; }
 
+    /* cps-self-tail-call-relies-on-sibling-call: is this function a member of
+     * a mutual tail-call group?  Decided before the render, whose cell /
+     * loop-carried scans the group check borrows. */
+    int ctg_idx = -1;
+    CpsTcg *grp = NULL;
+    if (!mono_emit) {
+        ctg_build(ctx);
+        grp = ctg_of(fd, &ctg_idx);
+    }
+    char ctg_pfx[24];
+    snprintf(ctg_pfx, sizeof ctg_pfx, "__tcgm%d_", ctg_idx);
+
     /* An island monomorph is emitted under its concrete clone name; the type
      * spellings + slot tiers in the reused generic CTerm resolve through the
      * active spec (g_cps_mono_resolver, set around the emit below). */
@@ -10236,9 +10576,13 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         for (uint32_t i = 0; ok && i < fd->n_params; i++)
             ok = fd->params[i] && !fd->params[i]->is_poly_fn &&
                  !is_byref_mut(fd->params[i]) && !is_loop_carried(fd->params[i]);
-        ce.self_fd = ok ? fd : NULL;
+        /* A group member's self tail call is one of the group's jumps. */
+        ce.self_fd = (ok && !grp) ? fd : NULL;
         ce.self_out = &body_buf;
         ce.self_backedge = &self_backedge;
+        ce.tcg = grp;
+        ce.tcg_idx = ctg_idx;
+        ce.lbl_pfx = grp ? ctg_pfx : NULL;
     }
     emit_term(&ce, se->term);
     ctx->current_fn_ret_ctype = saved_cps_ret_ctype;
@@ -10276,6 +10620,48 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_init(ctx->pending_handler_fns);
     }
 
+    if (grp) {
+        /* cps-self-tail-call-relies-on-sibling-call: the body is this
+         * member's case of the group's fused function; `<name>__cps` is the
+         * way in. */
+        Buf cb; buf_init(&cb);
+        for (uint32_t k = 0; k < fd->n_params; k++) {
+            char *pn = name_for_binding(ctx, fd->params[k]);
+            buf_printf(&cb, "        %s %s = __tcg_s%u;\n        (void)%s;\n",
+                       grp->slot_ctype[grp->slot_base[ctg_idx] + k], pn,
+                       (unsigned)(grp->slot_base[ctg_idx] + k), pn);
+            free(pn);
+        }
+        buf_puts(&cb, body_buf.data);
+        buf_puts(&cb, "        return 0;\n");
+        buf_putc(&cb, '\0');
+        free(grp->body[ctg_idx]);
+        grp->body[ctg_idx] = strdup(cb.data);
+        buf_free(&cb);
+        if (!grp->declared) {
+            ctg_emit_signature(file, grp, false);
+            buf_puts(file, ";\n");
+            grp->declared = true;
+        }
+        buf_printf(file, "static int64_t %s__cps(", cn);
+        emit_params(ctx, file, fd);
+        if (fd->n_params) buf_puts(file, ", ");
+        buf_printf(file, "DK *__kont) {\n    return %s(%d", grp->name, ctg_idx);
+        for (int m = 0; m < grp->n_mem; m++)
+            for (uint32_t k = 0; k < grp->mem[m]->n_params; k++) {
+                if (m == ctg_idx) {
+                    char *pn = name_for_binding(ctx, fd->params[k]);
+                    buf_printf(file, ", %s", pn);
+                    free(pn);
+                } else {
+                    buf_printf(file, ", (%s){0}", grp->slot_ctype[grp->slot_base[m] + k]);
+                }
+            }
+        buf_puts(file, ", __kont);\n}\n");
+        bool all = true;
+        for (int m = 0; m < grp->n_mem; m++) if (!grp->body[m]) all = false;
+        if (all) ctg_emit_def(file, grp);
+    } else {
     /* ---- CPS body: int64_t <name>__cps(<params>, DK *__kont) ---- */
     buf_printf(file, "%sint64_t %s__cps(",
                (emit_split_lib_owns(fd->binding) && !mono_emit) ? "" : "static ", cn);
@@ -10284,6 +10670,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_puts(file, "DK *__kont) {\n");
     buf_puts(file, body_buf.data);
     buf_puts(file, "}\n");
+    }
     buf_free(&body_buf);
     buf_free(&helpers);
 

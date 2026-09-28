@@ -19,7 +19,7 @@
 ;;; (docs/archive/r7rs-prelude-procedures-lose-identity.md); the default
 ;;; stays, being right for all five.  For any other equivalence, pass the
 ;;; hash function that agrees with it.
-;;; docs/upcoming/r7rs-srfi-plan.md, S4.
+;;; docs/archive/r7rs-srfi-plan.md, S4.
 (define-library (srfi 69)
   (export
     make-hash-table hash-table? alist->hash-table

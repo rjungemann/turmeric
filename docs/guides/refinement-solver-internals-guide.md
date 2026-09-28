@@ -344,7 +344,7 @@ decides conjunctions of linear constraints outright.
 - **Integers:** rational unsatisfiability implies integer unsatisfiability, so
   every refutation is sound for `int`. On top of that, constraints whose
   variables are all int-sorted get the Omega test's two exact steps
-  (`docs/upcoming/solver-integer-tail-plan.md`, landed 2026-09-05):
+  (`docs/archive/solver-integer-tail-plan.md`, landed 2026-09-05):
   *normalization* -- clear denominators, divide by the gcd of the
   coefficients, round the bound to the integer hull (`e < 0` becomes
   `e <= -1`, which is what lets `x > 0 |= 2x > 0` go through, and
@@ -533,7 +533,7 @@ swept populations contained, which is why the sweep read clean. The cap that
 binds is now the evaluation budget, which is what the odometer actually pays:
 a five-variable VC over five candidates (3125 evaluations) is cheaper than a
 three-variable one over sixteen (4096). See
-`docs/upcoming/solver-integer-tail-plan.md`.
+`docs/archive/solver-integer-tail-plan.md`.
 
 Both are instrumented under `TUR_REFINE_STATS=1`:
 
@@ -631,7 +631,7 @@ than any number above.
   layer now closes the equation-side part of this (gcd test, unit-coefficient
   substitution -- see S2 above); what remains is the inequality-side hull
   (branch-and-bound / dark shadow) and equations with no unit coefficient.
-  See `docs/upcoming/solver-integer-tail-plan.md` for what is left and what
+  See `docs/archive/solver-integer-tail-plan.md` for what is left and what
   would trigger it; `TUR_REFINE_STATS=1` prints the two triggers (`eq no-unit
   split`, `LA int feasible`) as obligation counts, and as of 2026-09-05 no
   swept population has an unknown obligation Z3 can prove.

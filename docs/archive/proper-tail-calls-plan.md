@@ -1,8 +1,18 @@
 # Proper tail calls in Turmeric
 
-Status: **T1-T6 landed, and the optional T2b (`musttail`) with them. The plan
-is complete**; what remains open is named in Section 6's carve-outs, all by
-decision.
+Status: **complete** -- T1-T6 and the optional T2b (`musttail`) landed
+2026-09-21 to 2026-09-23 and shipped in 0.52.0; Section 6's carve-outs stay
+open by decision. One follow-on was never staged and was not done: T-D4's
+audit after `match` (`handle` arms, `and`/`or`, `tco_let_simple`'s
+carrier-ABI bail). It now lives in
+[tail-grammar-skips-and-or-and-carrier-lets](../reported/tail-grammar-skips-and-or-and-carrier-lets.md):
+`handle` bodies CPS-lower, so they are out of this emitter's reach by
+construction; the last operand of `and`/`or`, and a self tail call under a
+`let` that binds a carrier-ABI value, are still refused (probed 2026-09-28). The CPS
+backend's cross-function tail call is filed separately
+([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md),
+owned by r7rs-lang-plan), and `#lang r7rs`, which the text below says does
+not exist yet, has since landed on T6. Archived 2026-09-28.
 
 - **T1 -- `^tailcall` + TUR-E0716 + the `-O0` fixture harness: DONE.** The
   annotation is a checked assertion, not a hint: a call it cannot place in tail
@@ -50,7 +60,7 @@ decision.
   whose "What shipped" records how the trampoline had to reach the CPS
   backend, which the design text never mentioned.
 
-Prerequisite for [r7rs-lang-plan.md](r7rs-lang-plan.md), but not only for it:
+Prerequisite for [r7rs-lang-plan.md](../upcoming/r7rs-lang-plan.md), but not only for it:
 T1-T3 and T5 are Turmeric features that stand on their own, and T3 closes a
 silent hole in a shape people write every day.
 
@@ -929,7 +939,9 @@ Two pre-existing defects surfaced and are filed rather than fixed here:
 [saffron-catch-unwind-around-dyn-call-fn-crashes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/saffron-catch-unwind-around-dyn-call-fn-crashes.md)
 (which is why no T6 fixture panics; since resolved -- compiled only, the
 CPS entry wrapper read a panicking body's NULL result box) and
-[cps-capturing-closure-env-leaks-through-dyn-call](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cps-capturing-closure-env-leaks-through-dyn-call.md).
+[cps-capturing-closure-env-leaks-through-dyn-call](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cps-capturing-closure-env-leaks-through-dyn-call.md)
+(since resolved: the env is reaped at the DK entry boundary, unless `__kont`
+is the trampoline root, where a bounce would run the lambda after the reap).
 `#lang r7rs` does not exist yet; when it does, its procedures ride the same
 fat-closure protocol, so it inherits this unchanged.
 
@@ -1171,7 +1183,7 @@ __attribute__((unused)) static int64_t step_hya(int64_t n) {
 
 ## See also
 
-- [r7rs-lang-plan.md](r7rs-lang-plan.md) -- T6 is its prerequisite; D6 there
+- [r7rs-lang-plan.md](../upcoming/r7rs-lang-plan.md) -- T6 is its prerequisite; D6 there
   defers to this document
 - [docs/guides/performance-guide.md](../guides/performance-guide.md) -- the
   self-tail-call section, which A.2 confirms and which T5 would let us extend

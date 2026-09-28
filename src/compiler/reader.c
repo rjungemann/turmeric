@@ -1100,7 +1100,7 @@ static Form *read_symbol_or_minus_at(Reader *r, bool head_pos) {
         return NULL;
     }
 
-    /* proper-tail-calls T1 (docs/upcoming/proper-tail-calls-plan.md, T-D1):
+    /* proper-tail-calls T1 (docs/archive/proper-tail-calls-plan.md, T-D1):
      * `^tailcall` is a PREFIX annotation on the expression that follows it,
      * so `^tailcall (loop v)` reads as `(^tailcall (loop v))`.  It has to be
      * a prefix rather than an extra element because the shapes that most want

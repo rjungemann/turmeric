@@ -57,7 +57,7 @@ switch row.
 safe, and neither back end can *call* the boxed closure anyway. It matters
 because the `any` reflection surface is the intended foundation for dynamic
 dispatch (see
-[docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md) D4/S4),
+[docs/archive/saffron-lang-plan.md](saffron-lang-plan.md) D4/S4),
 and a function value that does not report as a function is the first thing that
 layer trips over.
 

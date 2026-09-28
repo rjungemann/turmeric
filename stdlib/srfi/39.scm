@@ -4,7 +4,7 @@
 ;;; the converter applied to the initial value and to each parameterize, as
 ;;; Racket's srfi/39 re-exports its core's. The export list is what `(import
 ;;; (only (srfi 39) ...))`, `except`, `prefix` and `rename` check against.
-;;; docs/upcoming/r7rs-srfi-plan.md, D2.
+;;; docs/archive/r7rs-srfi-plan.md, D2.
 (define-library (srfi 39)
   (export make-parameter parameterize)
   (import (scheme base)))

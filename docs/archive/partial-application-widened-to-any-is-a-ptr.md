@@ -152,7 +152,7 @@ recommends `(def read-csv-fast (read-csv default-csv-opts))` as *the* way to
 bake in defaults. A value produced that way can be stored in an `any` and can
 never be narrowed back to something callable, and the type name a program would
 branch on is "ptr". For the dynamic layer in
-[saffron-lang-plan](../upcoming/saffron-lang-plan.md) -- where `any` is the
+[saffron-lang-plan](saffron-lang-plan.md) -- where `any` is the
 default type and partial application is ordinary -- that is a load-bearing hole,
 not a curiosity.
 

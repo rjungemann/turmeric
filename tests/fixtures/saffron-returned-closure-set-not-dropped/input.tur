@@ -1,0 +1,20 @@
+#lang saffron
+;; dynamic-returned-closure-env-is-never-freed: the drop a `let` makes of a
+;; fresh closure it bound must NOT fire when the body reassigns the name.  The
+;; drop would release whatever the name holds last -- here `gadd`, a closure
+;; the global still owns -- so the call through `gadd` after the `let` would
+;; read a freed env (its code slot is the first word a free overwrites).
+;; saffron-returned-closure-env-freed covers the shapes that do drop.
+
+(defn make-adder [k] (fn [x] (+ x k)))
+
+(def gadd (make-adder 2))
+
+(defn main [] : int
+  (let [^mut a (make-adder 1)]
+    (println (a 10))
+    (set! a gadd)
+    (println (a 10)))
+  (println (gadd 20))
+  (println (gadd 30))
+  0)

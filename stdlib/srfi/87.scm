@@ -2,7 +2,7 @@
 ;;;
 ;;; Importing (srfi 87) costs nothing: R7RS's case takes => clauses. The
 ;;; export list is what `(import (only (srfi 87) ...))`, `except`, `prefix`
-;;; and `rename` check against.  docs/upcoming/r7rs-srfi-plan.md, D2.
+;;; and `rename` check against.  docs/archive/r7rs-srfi-plan.md, D2.
 (define-library (srfi 87)
   (export case)
   (import (scheme base)))

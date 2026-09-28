@@ -704,6 +704,9 @@ void emit_cps_runtime_prelude(Buf *out) {
  * interpreter's process-lifetime policy.  Nothing else sets the flag, so every
  * other program frees exactly as before. */
 "static int tur_dk_pinned = 0;\n"
+/* dynamic-returned-closure-env-is-never-freed: tells code emitted later in the
+ * TU (__tur_any_closure_drop) that the flag above is in scope. */
+"#define TUR_DK_PIN 1\n"
 "static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }\n");
     buf_puts(out,
 "/* Free a single spliced node without following ->next -- used to reclaim the\n"

@@ -7,6 +7,14 @@
 > `tur demangle` (section 5.1) is built and tested -- `perf` and Instruments
 > read cleanly against a Turmeric binary today. Open questions 2 and 3 were
 > answered by the author on 2026-08-25 and are folded into sections 2 and 4.3.
+> **Re-verified 2026-09-28: nothing past P0 has landed** (P0 is a9f714914).
+> No `--profile`, `--timings`, `tur profile`, `prof*.c`, `.tur-symbols`
+> side-table or `tur-profile/1` output exists in `src/`;
+> `tur jit --timing-json` is unchanged and unabsorbed; `performance-guide.md`
+> has no Profiling section. Remaining, none started or declined: P0a, P1a, C0+C1, P1,
+> P2, P3, C2/P4, P5, P6, and the section 6 guide. Open questions 1, 4, 5 stand.
+> The `src/` file:line anchors below have drifted (e.g. `--timing-json` is now
+> `src/main.c:4634`) -- locate by symbol, not line.
 > **Type:** Tooling / runtime / compiler driver
 > **Depends on:** `tur_demangle` (`src/compiler/mangle.c:172`), the `#line`
 > emission behind `--debug` (`src/compiler/emit_core.c:461`), and the

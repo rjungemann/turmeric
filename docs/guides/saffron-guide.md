@@ -34,7 +34,7 @@ dynamic substrate -- see
 
 The dialect is young, though, and parts of the dynamic surface are still being
 built out -- design notes, remaining stages and known gaps live in
-[docs/upcoming/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/saffron-lang-plan.md).
+[docs/archive/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/saffron-lang-plan.md).
 
 ## What actually changes
 
@@ -368,7 +368,7 @@ tur run hello.tur
 - [introducing-saffron.md](introducing-saffron.md) -- the tour this guide is the
   reference for: Try Turmeric, printing, flow control, functions, ADTs,
   typeclasses and effects, every example in both syntaxes
-- [docs/upcoming/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/saffron-lang-plan.md) --
+- [docs/archive/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/saffron-lang-plan.md) --
   the design decisions and their measurements
 - [union-intersection-types-guide.md](union-intersection-types-guide.md) --
   `any`, unions, and gradual typing in typed Turmeric

@@ -448,7 +448,7 @@ kind each one is:
   The import is an error that says so, as in Racket.
 - **not planned**: refused, with the reason.
 - **not yet**: planned, and refused until the stage in parentheses lands
-  ([docs/upcoming/r7rs-srfi-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-srfi-plan.md)).
+  ([docs/archive/r7rs-srfi-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-srfi-plan.md)).
 
 `only`, `except`, `prefix` and `rename` work on an SRFI as on any library,
 and their names are checked against its export list. One imported name has
@@ -638,16 +638,13 @@ What it does not cover:
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.
-- **Mutual recursion through a procedure variable needs the C compiler's tail
-  call.** A procedure that calls another through a *variable* rather than by
-  name, in a non-tail position, compiles to a continuation-passing shape.
-  When it loops by calling ITSELF -- which is what `for-each`, `map`, `member`
-  and a `delay-force` stream do with the procedure you hand them -- the loop
-  is a jump at every optimization level. When two such procedures tail-call
-  EACH OTHER, the call between them is a C tail call, constant stack when the
-  C compiler makes it a sibling call: the default `-O2` does, a `-O0` build
-  overflows on a million iterations. Tail calls themselves -- self, mutual and
-  through a variable -- are constant stack at every level.
+- **A tail call made after a `guard`, into ANOTHER procedure, is not constant
+  stack.** `(define (g2 f n) (guard (e (#t 'caught)) (f n)) (g1 f (- n 1)))`,
+  with `g1` calling back into `g2`, overflows an 8 MiB stack at tens of
+  thousands of iterations: a count of 30,000 crashes at `-O0` and 70,000 at
+  `-O2` (the default). The same loop through ONE procedure is constant stack,
+  and so is every other tail call -- self, mutual, and through a variable
+  ([mutual-tail-call-through-guard-grows-the-stack](https://github.com/rjungemann/turmeric/blob/main/docs/reported/mutual-tail-call-through-guard-grows-the-stack.md)).
 
 ## Conformance
 

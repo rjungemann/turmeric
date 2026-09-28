@@ -253,7 +253,7 @@ question is answered.~~
 
 > **Trigger note 2026-08-17 -- the `#reads` trust tier now has its own plan,
 > and ONE ECS DECISION IS ITS TRIGGER.**
-> [`trusted-refinement-claims-plan.md`](../trusted-refinement-claims-plan.md)
+> [`trusted-refinement-claims-plan.md`](../../archive/trusted-refinement-claims-plan.md)
 > covers the promise C2's answer rests on. Two pieces are already live and
 > cost the ECS nothing today: `TUR-W0383` warns when a `#reads` measure's
 > body *demonstrably* reads a mutable global, and the same evidence refuses
@@ -588,7 +588,7 @@ it becomes an ordinary path-splitting obligation.
 > bounds elimination to RESIZABLE storage, where `(in-bounds? buf i)` reads
 > mutable capacity (see stateful-refinements-guide.md "Where this
 > generalizes"). The trajectory's trusted-tier half now has its own plan --
-> [`trusted-refinement-claims-plan.md`](../trusted-refinement-claims-plan.md);
+> [`trusted-refinement-claims-plan.md`](../../archive/trusted-refinement-claims-plan.md);
 > see the trigger note under C2 above before touching how measures hold
 > state.
 

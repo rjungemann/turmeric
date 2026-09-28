@@ -66,7 +66,7 @@ memory-management one, all on a shipping build mode (`tur build --shared`). The
 reach is small only because `any` across a module boundary is rare in typed
 Turmeric. It stops being rare the moment anything makes `any` common -- which
 is exactly what `#lang saffron` would do, so this is filed as a prerequisite
-for [docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md) S0
+for [docs/archive/saffron-lang-plan.md](saffron-lang-plan.md) S0
 rather than as a curiosity.
 
 ## Root cause

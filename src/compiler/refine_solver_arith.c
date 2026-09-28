@@ -16,7 +16,7 @@
  * Integers: rational unsatisfiability implies integer unsatisfiability, so
  * every refutation found here is sound for `int` too.  On top of that the
  * integer-sorted constraints get the Omega test's two cheap exact steps
- * (docs/upcoming/solver-integer-tail-plan.md):
+ * (docs/archive/solver-integer-tail-plan.md):
  *   - NORMALIZATION (`int_normalize`): clear denominators, divide by the gcd
  *     of the coefficients, round the bound to the integer hull.  Subsumes the
  *     strict tightening (`e < 0` -> `e <= -1`) that lets
@@ -484,7 +484,7 @@ bool la_assert_cube(LaState *st, const VCCube *c) {
  *     already run at push time; the equality is now read as the two
  *     inequalities it always was, which is sound and exactly as complete as
  *     before this phase existed.  Pugh's sigma-substitution would finish the
- *     job; see docs/upcoming/solver-integer-tail-plan.md.
+ *     job; see docs/archive/solver-integer-tail-plan.md.
  * Returns false when a contradiction surfaces (the set is unsat). */
 static bool eq_eliminate(LaState *st, LinC *cur, uint32_t *n_io) {
     uint32_t n_vars = st->n_vars, n = *n_io;

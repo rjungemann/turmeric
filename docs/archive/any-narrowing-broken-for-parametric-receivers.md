@@ -61,7 +61,7 @@ exotic.
 
 Found while checking whether the `is?`-narrowing escape hatch -- which works
 for monomorphic receivers -- extends to higher-kinded ones, for
-[docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md) D8. It
+[docs/archive/saffron-lang-plan.md](saffron-lang-plan.md) D8. It
 does not, and the failure is worse than the limitation it was being tested
 against.
 

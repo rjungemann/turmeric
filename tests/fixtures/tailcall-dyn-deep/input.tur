@@ -1,5 +1,5 @@
 #lang saffron
-;; proper-tail-calls T6 (docs/upcoming/proper-tail-calls-plan.md, T-D6): a
+;; proper-tail-calls T6 (docs/archive/proper-tail-calls-plan.md, T-D6): a
 ;; dynamic call in tail position -- a call through a function VALUE, where no
 ;; callee is known at compile time -- runs in constant stack.
 ;;

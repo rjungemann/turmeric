@@ -1,15 +1,25 @@
 # `spices/crdt`: conflict-free replicated data types
 
-> **Status:** proposed (2026-09-11). **Track:** post-v1 -- nothing on the v1
+> **Status:** C1-C3 **landed** 2026-09-11/12 as `spices/crdt` 0.1.0
+> (turmeric-spices #67, #68): counters, causal core, `GSet` / `TwoPSet` /
+> `ORSet`, HLC, both registers and the constrained `ORMap`, with eight test
+> suites including the 400-seed convergence fuzzer. The two typeclass defects
+> below, and every defect the C1-C3 build filed, are fixed and archived.
+> **Open:** C4 (delta-state `DeltaCRDT`), C5 (sequences) and C6 (the separate
+> `crdt-sync` spice) -- none started. Spice follow-ups also open: `ReplicaId`
+> is still a `defalias` for `Sym` although the `defopaque`-over-`Sym` defect
+> was fixed 2026-09-16 (C1); `crdt/set` still uses the explicit-hash macros
+> although the typed adder was fixed 2026-09-16 (C2); no HAMT-join benchmark
+> yet (section 7). **Track:** post-v1 -- nothing on the v1
 > line depends on this; it is written down so the design survives.
 > **Type:** spice (in `../turmeric-spices/`), plus one candidate stdlib
 > addition (`map-merge-with`) that the plan deliberately declines to make.
 > **Sequencing:** last of three.
 > [type-confusion-detection-plan.md](../archive/type-confusion-detection-plan.md) ->
-> [lattice-vocabulary-plan.md](lattice-vocabulary-plan.md) -> this. C1's
+> [../archive/lattice-vocabulary-plan.md](../archive/lattice-vocabulary-plan.md) -> this. C1's
 > `JoinSemilattice` comes from the lattice plan rather than being redeclared
-> here, and both are gated on two open typeclass defects filed from this plan's
-> own probes.
+> here. Both were gated on two typeclass defects filed from this plan's own
+> probes; both are fixed.
 
 ## 0. Summary
 
@@ -100,7 +110,7 @@ tests can drive them from `Mock-Time` deterministically.
 
 `stdlib/random.tur` is libc `rand()` seeded with `time(NULL)` (this is
 already documented as the motivating defect in
-[secret-spice-plan.md](secret-spice-plan.md) section 2.3). Two replicas
+[../archive/secret-spice-plan.md](../archive/secret-spice-plan.md) section 2.3). Two replicas
 started in the same second can draw the same ID, and a duplicated replica
 ID breaks a G-Counter's *arithmetic*, not just its tidiness -- two replicas
 sharing a slot overwrite each other's counts under a pointwise `max`.
@@ -282,7 +292,7 @@ dep is `:optional true` in the manifest, matching how `spices/json` itself
 depends on `spices/test` -- the core must build without a transport.
 
 Binary framing belongs to
-[hold/msgpack-spice-plan.md](hold/msgpack-spice-plan.md) when that lands;
+[../archive/msgpack-spice-plan.md](../archive/msgpack-spice-plan.md) when that lands;
 CRDT deltas are a good forcing case for it and a bad reason to block on it.
 
 ## 3. Law checking -- the part that is not a port
@@ -619,7 +629,7 @@ follow-on, C6 is plumbing.
   the delta formulation in section 2.4.
 - Kulkarni et al., *Logical Physical Clocks* (2014) -- the HLC in 2.2.
 - Weiss, Urso, Molli, *Logoot*; Roh et al., *RGA* -- candidates for C5.
-- In-tree: [secret-spice-plan.md](secret-spice-plan.md) (CSPRNG, and the
+- In-tree: [../archive/secret-spice-plan.md](../archive/secret-spice-plan.md) (CSPRNG, and the
   template this plan follows), `docs/guides/typeclass-guide.md`
   (associated types, constrained instances),
   `docs/guides/contract-types-guide.md` (`#refine{...}`).

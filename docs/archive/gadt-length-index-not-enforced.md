@@ -1,5 +1,9 @@
 # GADT type indices over constructor applications are phantom -- no compile-time length proofs
 
+**RESOLVED 2026-09-28** -- see [Resolution](#resolution-2026-09-28).  Pinned
+by `tests/fixtures/gadt-ctor-index-inferred` and
+`tests/fixtures/errors/gadt-ctor-index-rejects-{empty-head,false-claim,shared-var}`.
+
 **Severity: low** (expressiveness; documented aspiration) -- "length-indexed
 vector" recipes cannot deliver their headline guarantees. Found in the
 2026-08-20 docs audit.
@@ -84,3 +88,48 @@ Updated 2026-09-19 to describe the current state:
   recipe above, and the remaining caveat
 - docs/guides/gadts-guide.md ("Current Limitations")
 - stdlib/gadt-vec.tur module docstring
+
+## Resolution (2026-09-28)
+
+Neither of the two routes above, for the reason the report gives against
+them.  A permissive bare-vs-indexed unification rule was one; migrating every
+annotation was the other.  A constructor application still has the bare type.
+Its index rides beside the type, as a Form, on the channel the sized-GADT (SZ8)
+indices already used, and it is checked where a claim is made.  Nothing about
+how types unify changed, so every bare-annotated function, `stdlib/gadt-vec.tur`
+included, takes exactly what it took before.
+
+- **Inference** (`gadt_infer_ctor_form`, elab_call.c).  A GADT constructor
+  call gets `call_.gadt_form`: the constructor's declared result, with its
+  variables instantiated by matching each field's declared form against the
+  argument's own form.  `(LNil)` is `(LVec Zero)`, `(LCons 7 (LNil))` is
+  `(LVec (Succ Zero))`, and an argument whose index is unknown leaves a `?`.
+  Two fields that share a variable and get different indices are a
+  `TUR-E0001` at the constructor.
+- **Propagation.** `sz_recover_type_form` returns `gadt_form` for such a call.
+  So a `let` bound to one carries it through `decl_type_form`, as it already
+  did for a declared return and an ascription.
+- **Checks** (`gadt_index_check_call`, `gadt_claim_disagrees`).  A call
+  argument, an ascription, an annotated `let`, and a declared return against
+  the body's tail.  A call uses one substitution for all its parameters, so
+  `[a : (LVec n) b : (LVec n)]` rejects two lengths.
+- **Refinement at an indexed parameter** (`gadt_refine_to_index`).  A bare
+  argument whose index is known all the way down, meeting a parameter
+  declared at an application of the same GADT, is given that type through the
+  ascription `(:: arg (LVec (Succ Zero)))` would build.  The parameter's
+  variables then bind from it: `(lhead (ltail v))` type-checks with `v`
+  unannotated, where before `ltail`'s result was an open `(LVec n)`.
+
+The matcher only rejects what is provably wrong.  A symbol that names a type
+in scope (`Zero`, `Succ`, a primitive) is a constant.  Any other symbol, a type
+variable or `?`, matches anything.  Two constants disagree only when they
+resolve to different types, and a size term (`Static`/`Add`/`Mul`) is left to
+SZ8.  So an index the checker cannot know is not checked, rather than
+rejected: a vector returned by a bare-typed function, or a recursion it cannot
+count.
+
+Not in scope, and unchanged: a bare-typed value still flows into an indexed
+parameter unchecked when nothing knows its index; and a fresh constructor value
+bound by `let` is inferred unique (`TUR-E0201` on a second use) unless
+ascribed, which is why the cookbook example still ascribes a value it uses
+three times.

@@ -1068,6 +1068,26 @@ void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
     buf_puts(out, "}\n");
     buf_puts(out, "static void (*__tur_any_drop_keep)(tur_tagged_t) "
                   "__attribute__((unused)) = __tur_any_drop;\n");
+    /* dynamic-returned-closure-env-is-never-freed: the scope drop of an `any`
+     * the compiler PROVED holds a fresh capturing closure (its producer's
+     * returns_fresh_any_closure) -- release the env through its drop-glue
+     * header.  Not a case of `__tur_any_drop`: the "fn" row cannot say boxed,
+     * since a fn payload may be a static function with no header at all.
+     *
+     * Skipped once a re-entrant continuation exists (`tur_dk_pinned`, set by
+     * the R7RS prelude's r7rs-cont-capture__): a copy of the C stack may
+     * re-enter the scope after this drop ran, and the env must still be there
+     * -- the same process-lifetime policy DK memory takes from that point.
+     * TUR_DK_PIN says this TU can see the flag; a TU without the DK runtime
+     * cannot have made such a capture. */
+    buf_puts(out, "static void __tur_any_closure_drop(tur_tagged_t __v) "
+                  "__attribute__((unused));\n");
+    buf_puts(out, "static void __tur_any_closure_drop(tur_tagged_t __v) {\n");
+    buf_puts(out, "#ifdef TUR_DK_PIN\n");
+    buf_puts(out, "    if (tur_dk_pinned) return;\n");
+    buf_puts(out, "#endif\n");
+    buf_puts(out, "    TUR_CLOSURE_DROP(TUR_UNTAG(__v));\n");
+    buf_puts(out, "}\n");
     if (!ctx || ctx->n_any_type_names == 0) return;   /* nothing to publish */
 
     /* This TU's rows.  `id` is the hash, so the same type carries the same id
@@ -8914,7 +8934,7 @@ int emit_sig_lookup_n_params(const char *cname) {
     return -1;
 }
 
-/* proper-tail-calls T2b (docs/upcoming/proper-tail-calls-plan.md, T-D2):
+/* proper-tail-calls T2b (docs/archive/proper-tail-calls-plan.md, T-D2):
  * `TUR_MUSTTAIL`, written once per program, the first time a tail call is
  * spelled with it.  It expands to `__attribute__((musttail))` only where that
  * is known to hold -- clang on x86-64 / aarch64 -- and to nothing everywhere
@@ -12076,7 +12096,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "             __tur_any_type_name(__tag));\n"
         "    tur_panic(__m);\n"
         "}\n");
-    /* proper-tail-calls T6 (docs/upcoming/proper-tail-calls-plan.md, T-D6):
+    /* proper-tail-calls T6 (docs/archive/proper-tail-calls-plan.md, T-D6):
      * the bounce trampoline for a dynamic call in tail position.
      *
      * A dynamic call is a call through a fat `any`, so no callee is known at
@@ -18814,6 +18834,11 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     /* r7rs-gc: after every thread-local declaration in the unit. */
     if (r7rs_gc_active(false)) emit_r7rs_gc_tls_roots(out);
 
+    /* cps-self-tail-call-relies-on-sibling-call: a CPS mutual tail-call
+     * group whose last member was never rendered still needs its fused
+     * function; its rendered members' wrappers call it. */
+    emit_cps_ir_flush_groups(out);
+
     /* S1b: after every registered initializer's own definition (they are all
      * `static`), and after `main` -- the preamble carries the declaration. */
     static_init_emit(out);
@@ -20362,6 +20387,11 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
      * TU publishes only the rows for the types IT widens, and the dispatching
      * TU finds the rest through the merged list. */
     emit_instance_row_table(&ctx, out);
+
+    /* cps-self-tail-call-relies-on-sibling-call: a CPS mutual tail-call
+     * group whose last member was never rendered still needs its fused
+     * function; its rendered members' wrappers call it. */
+    emit_cps_ir_flush_groups(out);
 
     /* S1b: after every registered initializer's definition.  Emitted in
      * separate-compilation mode too -- there is no `main` in this TU to call

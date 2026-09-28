@@ -380,7 +380,7 @@ typedef enum DiagCode {
      * because it reports a live trust-boundary fact and changes no behavior;
      * escalating warn -> refuse-the-override is a later, gated step. */
     TUR_W0383_READS_FRAME_OMITS_MUTABLE,
-    /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md), the
+    /* class-superclasses (docs/archive/typeclass-superclasses-plan.md), the
      * `defclass` constraint preamble `[(Super var)...]`:
      * E0390 -- the preamble itself: empty, malformed (an element that is not
      *          `(Class var...)`), naming a variable that is not one of the
@@ -434,7 +434,7 @@ typedef enum DiagCode {
      * shape with no error.  A bare `$` in a sweet-exp file can only have
      * arrived that way, so the reader rejects it. */
     TUR_E0332_SWEET_DOLLAR_IN_BRACKETS,
-    /* proper-tail-calls T1 (docs/upcoming/proper-tail-calls-plan.md, T-D1):
+    /* proper-tail-calls T1 (docs/archive/proper-tail-calls-plan.md, T-D1):
      * a call annotated `^tailcall` that the emitter did NOT place in tail
      * position.  The annotation exists so that "is this actually a tail
      * call?" -- today answerable only by reading the emitted C, and

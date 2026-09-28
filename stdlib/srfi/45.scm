@@ -6,7 +6,7 @@
 ;;; same.  One difference comes with the adoption: `eager` of a value that
 ;;; is already a promise returns that promise, as R7RS `make-promise` does,
 ;;; where SRFI 45's reference implementation wraps it -- so `(force (eager
-;;; (delay 7)))` is 7 here.  docs/upcoming/r7rs-srfi-plan.md, D2.
+;;; (delay 7)))` is 7 here.  docs/archive/r7rs-srfi-plan.md, D2.
 (define-library (srfi 45)
   (export delay lazy force eager promise?)
   (import (scheme base) (scheme lazy))

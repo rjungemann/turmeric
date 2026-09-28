@@ -20,7 +20,7 @@
 ;;; (tools/gen-r7rs-unicode.py) the first time a program uses each set, so an
 ;;; import costs nothing at startup.  char-set:full is every character: every
 ;;; Unicode scalar value, the surrogates U+D800-U+DFFF left out.
-;;; docs/upcoming/r7rs-srfi-plan.md, S5.
+;;; docs/archive/r7rs-srfi-plan.md, S5.
 (define-library (srfi 14)
   (export
     char-set? char-set= char-set<= char-set-hash

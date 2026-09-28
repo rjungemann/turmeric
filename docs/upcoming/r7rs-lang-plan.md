@@ -1,6 +1,9 @@
 # R7RS-small as a `#lang` over the Turmeric runtime
 
-Status: **R0 through R10 landed 2026-09-23/24; Section 9's T0-T8 since -- the plan is complete.** `#lang r7rs` is a base
+Status: **every stage has landed -- R0 through R10 2026-09-23/24, Section 9's
+T0-T7 2026-09-24 and T8 2026-09-25 -- and the one step left is graduating the
+`r7rs` row, which has been beta since 2026-09-27 (0.56.0, `expires_at`
+0.57.0); see "Where it stands" at the end of this block.** `#lang r7rs` is a base
 (`LANG_R7RS` + `READER_R7RS`, ninth row of `LANG_BASES[]`), the `r7rs`
 `EXPERIMENTS[]` row gates it with the directive as its own enable, the Scheme
 reader variant reads every lexeme R1 lists, and R2's core forms -- `define`,
@@ -60,6 +63,33 @@ Turmeric's and Saffron's semantics as they are, are all landed; T8's audit
 closed them with a sanitizer gate (`tur_r7rs_sanitize`) and the reports it
 filed.
 
+**Where it stands (2026-09-28).** The `r7rs` `EXPERIMENTS[]` row moved from
+prototype to beta on 2026-09-27 (`b0f9b05ef`). The four reports its comment
+named as the graduation checklist --
+`r7rs-raise-musttail-fails-under-clang-x86-64`,
+`r7rs-too-few-arguments-returns-a-procedure`,
+`r7rs-type-errors-are-uncatchable-panics` and `r7rs-turmeric-syntax-leaks`
+-- all closed 2026-09-27 and are in docs/archive/, as are
+`r7rs-programs-compile-slowly` (the prelude split, 2026-09-28) and T8's
+memory reports. **What keeps this file in docs/upcoming/** is graduation
+itself, after the one-release soak: move `r7rs` to `GRADUATED[]`, drop the
+row, and archive this plan in the same change, as r7rs-gc's plan was
+(`00b09ad40`); until then the row's `plan_path` points here. Decided rather
+than open: one library per file, named after the file (Section 8, Q7, held
+in docs/reported/r7rs-library-file-shape-and-export-rename.md); no
+`r7rs/sweet` base (Q5, a deferral, now filed as
+docs/reported/r7rs-sweet-base-dialect-missing.md); Q2 is moot, since `quote`
+builds at run time (R3's deviation from D4). Open reports that bear on the
+dialect, none of them a stage of this plan: `r7rs-reentrant-callcc-wrong-with-eval`
+(a compiled wrong answer, seen on one macOS host and not in CI -- the one
+open report of the kind the checklist was made of),
+`r7rs-callcc-memory-never-freed` (the interpreter's re-entrant images only),
+`r7rs-prelude-library-cold-compile` (the first build, 8.5 s),
+`r7rs-prelude-split-gc-seam-on-macos` and
+`r7rs-prelude-split-wrong-symbols-on-windows` (the split stays Linux-only
+until each closes), and `cps-self-tail-call-relies-on-sibling-call` (every
+dialect). SRFI work continues in [../archive/r7rs-srfi-plan.md](../archive/r7rs-srfi-plan.md).
+
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
 [Appendix A](#appendix-a----probe-transcript). That is deliberate: the Saffron
@@ -88,7 +118,7 @@ Four items in Section 3 are hard requirements of R7RS that Turmeric does not
 meet today, and the first of them -- proper tail calls on the compiled path --
 turned out on measurement to be *not met at all* for the shape Scheme is made
 of. It is large enough to have its own document
-([proper-tail-calls-plan.md](proper-tail-calls-plan.md)) and is a prerequisite
+([../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md)) and is a prerequisite
 rather than a stage.
 
 **"Support Turmeric libraries" is the whole point**, and it is also the thing
@@ -261,7 +291,7 @@ justify each site -- rather than waiting to be surprised.
 ### 3.1 The compiled path does not have proper tail calls
 
 **This is the largest gap, and it is worse than the documentation suggests.**
-It now has its own plan: [proper-tail-calls-plan.md](proper-tail-calls-plan.md),
+It now has its own plan: [../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md),
 which carries the full measurement matrix and the design. The summary:
 
 | Shape | `-O0` | `-O2` | `--interpret` |
@@ -555,7 +585,7 @@ hand-written names, which is normally the first thing to break.
 ### D6 -- proper tail calls are a Turmeric prerequisite, not R7RS work
 
 **Verdict: this is spun out into
-[proper-tail-calls-plan.md](proper-tail-calls-plan.md). R7RS depends on its T6;
+[../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md). R7RS depends on its T6;
 T1-T3 there are worth landing regardless.**
 
 Investigating 3.1 changed the shape of this decision twice, so the conclusions
@@ -1159,7 +1189,7 @@ is about exact/inexact divergence.
 ### R6 -- control (large; contains the hardest item)
 
 Proper tail calls on the compiled path -- **T6 of
-[proper-tail-calls-plan.md](proper-tail-calls-plan.md)**, which is a
+[../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md)**, which is a
 prerequisite landing on its own schedule, not work done here (D6). `dynamic-wind`. `values` and
 `call-with-values`. `guard`/`raise`/`raise-continuable`/`with-exception-handler`
 over effects (D10). `parameterize` over `dynvar` (D10). `delay`/`force`
@@ -1515,7 +1545,8 @@ were both caught), editor packs, `tools/gendocs.py`, and
 >   and the closure is the new report
 >   [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md)
 >   (a closure returned as `any` gets no scope-end drop; pre-existing at
->   `main`), which the fixture's `known-leak` marker cites.
+>   `main`), which the fixture's `known-leak` marker cites.  (Resolved
+>   2026-09-28; the marker is gone.)
 
 ### R10 -- conformance (medium, continuous)
 
@@ -2642,7 +2673,8 @@ task.*
     - the embedded env's process-lifetime memory against what a program
       would expect to be freed.
   - **Closures and boxes in dynamic code:**
-    - [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md);
+    - [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md)
+      (resolved 2026-09-28 for a closure a `let` minted);
     - the `R7rsBox` cells T5's assignment conversion now makes for every
       `set!` variable.
 - **How:**
@@ -2708,9 +2740,12 @@ task.*
 >     [r7rs-prelude-value-returning-loop-workaround](../archive/r7rs-prelude-value-returning-loop-workaround.md)).
 >   - A CPS loop is still only as deep as gcc's sibling calls make it: it
 >     overflows at `-O1`
->     ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md)).
+>     ([cps-self-tail-call-relies-on-sibling-call](../archive/cps-self-tail-call-relies-on-sibling-call.md)).
 >     *2026-09-26: a self-recursive CPS loop is a backedge now and holds at
->     `-O0`; mutual recursion between two CPS procedures is what remains.*
+>     `-O0`. 2026-09-28: mutual recursion is too (fused CPS groups; T5 takes
+>     colored functions); resolved and archived. The tail call after a
+>     `guard` is still open:
+>     [mutual-tail-call-through-guard-grows-the-stack](../reported/mutual-tail-call-through-guard-grows-the-stack.md).*
 >   - A million-element `append`, `map` (one to four lists), `string-map`,
 >     `vector-map`, `list-copy`, `string->list`, `vector->list`, `equal?`,
 >     `read-line`, `read` and `write` now pass compiled at `-O2` and
@@ -2837,12 +2872,15 @@ differences, as reports"):
   ~~no `(export (rename ...))`~~ -- resolved 2026-09-26: the definition is
   spelled with the public name, or aliased when it is imported or exported
   twice.
-- **Mutual recursion whose non-tail calls go through a procedure variable** is
-  CPS, and the tail call between the two procedures is the C compiler's
-  sibling call -- the default `-O2` has it, `-O0` does not
-  ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md);
-  every dialect with effectful functions). A self-recursive loop of that
-  shape -- `for-each`, `map`, `member` -- is a backedge since 2026-09-26.
+- ~~**Mutual recursion whose non-tail calls go through a procedure variable**~~
+  -- resolved 2026-09-28: a cycle of CPS procedures is fused into one C
+  function whose cross calls are jumps, and T5's direct groups take a colored
+  procedure the CPS backend declines, so the pair is constant stack at `-O0`
+  ([cps-self-tail-call-relies-on-sibling-call](../archive/cps-self-tail-call-relies-on-sibling-call.md)).
+  A self-recursive loop of that shape -- `for-each`, `map`, `member` -- has
+  been a backedge since 2026-09-26. What remains is a tail call made after a
+  `guard`, into another procedure
+  ([mutual-tail-call-through-guard-grows-the-stack](../reported/mutual-tail-call-through-guard-grows-the-stack.md)).
 - ~~**Re-entrant `call/cc` is Linux and macOS only**~~ -- resolved 2026-09-26:
   the stack base comes from the TEB and the jump unwinds nothing
   ([archived](../archive/r7rs-reentrant-callcc-not-on-windows.md)).
@@ -2895,7 +2933,7 @@ arm64). These are the measurements Sections 2 and 3 cite.
 ### A.1 -- the tail-call matrix (3.1)
 
 Full transcript, including the two wrong turns this probe took first, is in
-[proper-tail-calls-plan.md](proper-tail-calls-plan.md) Appendix A. Depth is read
+[../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md) Appendix A. Depth is read
 from the environment in every probe; an earlier version passed it as a literal
 and measured only clang's constant folding.
 
@@ -2992,12 +3030,12 @@ saffron/sweet          saffron   sweet        stable
 
 ## See also
 
-- [r7rs-srfi-plan.md](r7rs-srfi-plan.md) -- `(import (srfi N))`, after
+- [../archive/r7rs-srfi-plan.md](../archive/r7rs-srfi-plan.md) -- `(import (srfi N))`, after
   Racket's SRFI support: the built-in SRFIs as no-op imports, the rest as
   libraries, and the guide's support table
-- [proper-tail-calls-plan.md](proper-tail-calls-plan.md) -- D6's prerequisite,
+- [../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md) -- D6's prerequisite,
   with the full tail-call measurement matrix
-- [saffron-lang-plan.md](saffron-lang-plan.md) -- the dynamic substrate this
+- [../archive/saffron-lang-plan.md](../archive/saffron-lang-plan.md) -- the dynamic substrate this
   plan inherits, and the staging discipline it copies
 - [docs/guides/saffron-guide.md](../guides/saffron-guide.md)
 - [docs/guides/delimited-control-operators-guide.md](../guides/delimited-control-operators-guide.md) -- `call/cc`, `call/cc*`, `shift`/`reset`

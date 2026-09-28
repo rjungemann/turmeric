@@ -1,0 +1,47 @@
+#lang saffron
+;; dynamic-returned-closure-env-is-never-freed: a capturing lambda a function
+;; returns arrives as an `any`, and the scope that bound it releases its env.
+;; `requires.leak-check` builds this under AddressSanitizer with LeakSanitizer
+;; on (tests/run-leak-check.sh).  The loop makes one env per iteration, so an
+;; env nobody frees shows as a leak rather than hiding behind a stale copy of
+;; the last pointer; an env freed while still reachable shows as a
+;; use-after-free.
+;;
+;; `sum-adders` makes a dynamic call, so it is CPS-lowered: its `let` is
+;; flattened into CPS binders and the env is reaped at the DK entry boundary.
+;; `main` is direct, and drops at the `let`'s scope exit.  The closure stored
+;; into `keep` escapes and must survive its `let`; it stays reachable from the
+;; global, so it is not a leak.  (The `set!` refusal is its own fixture,
+;; saffron-returned-closure-set-not-dropped: reassigning the binding orphans
+;; the first closure, which a leak check would report.)
+
+(def keep [0])
+
+(defn make-adder [k] (fn [x] (+ x k)))
+
+(defn make-counter [step]
+  (fn [self n acc] (if (= n 0) acc (self self (- n 1) (+ acc step)))))
+
+(defn apply-to [g x] (g x))
+
+(defn sum-adders [i n acc]
+  (if (= i n)
+    acc
+    (let [add (make-adder i)]
+      (sum-adders (+ i 1) n (+ acc (add 1))))))
+
+(defn main [] : int
+  ;; One env per iteration.
+  (println (sum-adders 0 100 0))
+  ;; Invoked directly, and with its result widened for println.
+  (let [add3 (make-adder 3)]
+    (println (add3 4))
+    (println (+ (add3 1) (add3 2))))
+  ;; Handed back to itself in the slot its own code only invokes.
+  (let [counter (make-counter 3)]
+    (println (counter counter 10 0)))
+  ;; Escapes into a global vector: not dropped.
+  (let [add5 (make-adder 5)]
+    (vec-set! keep 0 add5))
+  (println (apply-to (vec-get keep 0) 1))
+  0)

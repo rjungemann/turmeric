@@ -610,6 +610,7 @@ static const Type *let_use_site_app_type(Elab *e, const Form *f,
  * would free the box twice. */
 bool any_box_binding_escapes_except(const Expr *e, const Binding *b,
                                     const Expr *ignore);
+bool expr_is_fresh_any_closure(const Expr *x);
 
 static const Expr *any_find_sole_drop_use(const Expr *e, const Binding *b);
 
@@ -620,6 +621,12 @@ static void any_let_move_drop_to_use(Expr *let_e) {
         if (!lb->binding || !lb->init) continue;
         if (lb->binding->type.kind != TY_ANY) continue;
         if (!any_expr_is_owned_temp(lb->init, 8)) continue;
+        /* dynamic-returned-closure-env-is-never-freed: a fresh closure's drop
+         * releases its env through the header, which only the scope-exit
+         * channel spells (let_binding_widen_drop_stmt); the at-use drop is
+         * `__tur_any_drop`, which a "fn" payload passes through untouched.
+         * Leave it at scope exit, where early exits fire it too. */
+        if (expr_is_fresh_any_closure(lb->init)) continue;
         const Expr *use = any_find_sole_drop_use(let_e->as.let_.body, lb->binding);
         if (!use) continue;
         if (any_box_binding_escapes_except(let_e->as.let_.body, lb->binding, use))
@@ -1366,6 +1373,23 @@ Expr *elab_let(Elab *e, const Form *call) {
                         typekind_to_string(ak), typekind_to_string(ik));
                     rc = -1; break;
                 }
+            }
+            /* gadt-length-index-not-enforced: an annotated GADT index is a
+             * claim about the initializer -- `[v : (Vec (Succ Zero)) (VNil)]`
+             * is false. */
+            const Form *got = NULL;
+            if (gadt_claim_disagrees(e, type_ann_form, init, &got)) {
+                const Form *ann = type_ann_form;
+                while (ann && ann->tag == F_TYPE_ANN && ann->as.list.len == 1)
+                    ann = ann->as.list.items[0];
+                Buf cb; buf_init(&cb); form_print(&cb, ann); buf_putc(&cb, '\0');
+                Buf gb; buf_init(&gb); form_print(&gb, got); buf_putc(&gb, '\0');
+                diag_emit_with_code(DIAG_ERROR, type_ann_form->span,
+                    TUR_E0001_TYPE_MISMATCH,
+                    "let binding '%s': annotated %s, but the initializer has type %s",
+                    name->name, cb.data, gb.data);
+                buf_free(&cb); buf_free(&gb);
+                rc = -1; break;
             }
         }
 
@@ -4574,7 +4598,7 @@ Expr *elab_defer(Elab *e, const Form *call) {
  * per frame, then function-exit." The codegen emits tur_frame_fire_chain to 
  * walk the parent chain and fire all defers before returning.
  */
-/* proper-tail-calls T1 (docs/upcoming/proper-tail-calls-plan.md, T-D1):
+/* proper-tail-calls T1 (docs/archive/proper-tail-calls-plan.md, T-D1):
  * `(^tailcall <call>)`, or its prefix spelling `^tailcall <call>`.
  *
  * The annotation carries no semantics -- it elaborates to the call itself,

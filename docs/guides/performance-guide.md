@@ -256,7 +256,7 @@ each later stage is verified by a fixture that annotates a call and asserts the
 annotation holds at `-O0`.  A tail-call fixture built at `-O2` asserts nothing
 -- clang will inline a small recursive cycle into a loop and the fixture then
 measures the C compiler.  See
-[proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md).
+[proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/proper-tail-calls-plan.md).
 
 **Dynamic tail calls in Saffron.** A call through an `any` in tail position --
 `(f f (- n 1))` where `f` is a function value -- runs in constant stack too.
@@ -276,7 +276,7 @@ existing CPS backend is not a way out either: that backend emits a tail call
 as an ordinary call, a panic check, and a continuation invocation, which was
 measured rather than assumed.
 See
-[proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/proper-tail-calls-plan.md)
+[proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/proper-tail-calls-plan.md)
 for the measurements and the staging, and
 [control-flow-completeness-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md)
 (Phase CF1) for the self-tail-call work that shipped.
