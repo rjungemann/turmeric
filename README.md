@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.56.1` -- `#lang r7rs` builds in about a second on Linux, a Scheme file sees only Scheme and what it imports, and type errors, arity errors and `eqv?` on a standard procedure now follow the report.
+**Latest release:** `v0.56.2` -- `call/cc` keeps far less memory on both back ends, output that stops mid-line reaches the Try Turmeric page, and a `define-library` may define a standard or stdlib name.
 
 ## What
 
