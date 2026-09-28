@@ -1160,6 +1160,7 @@ void emit_split_set_mode(int mode) {
         split_tab_clear(&g_split_boxes);
         split_tab_clear(&g_split_sigs);
         emit_split_exports_clear();
+        sym_codegen_split_clear();
         g_split_refusal = NULL;
     }
 }
@@ -1174,6 +1175,7 @@ void emit_split_reset(void) {
     split_tab_clear(&g_split_boxes);
     split_tab_clear(&g_split_sigs);
     emit_split_exports_clear();
+    sym_codegen_split_clear();
     g_emit_split = EMIT_SPLIT_NONE;
     g_split_refusal = NULL;
 }
