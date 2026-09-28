@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.56.1] -- 2026-09-27
 
 ### Changed
 
@@ -15,6 +15,13 @@ All notable changes to Turmeric are documented here.
   as before. A program the compiler cannot
   split this way builds as one unit, as before. `TUR_PRELUDE_SPLIT=0` forces
   a one-unit build (docs/archive/r7rs-programs-compile-slowly.md).
+
+- **Unreachable code is dropped from the emitted C.** A procedure used as a
+  value gets its fat box as a static initializer instead of a startup store,
+  and a function making a `musttail` call takes its own address ahead of the
+  call instead of appearing in one program-wide `used` table. Both roots used
+  to keep every function they named alive, so `cc -O2` compiled prelude
+  functions nothing could reach. Codegen snapshots moved with it.
 
 - **A Scheme file sees only Scheme and what it imports.** Under `#lang
   r7rs`, Turmeric's stdlib (`vec-new`, `map-assoc`, `some`, ...) is visible
