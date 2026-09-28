@@ -24,10 +24,15 @@ clean panics or diagnostics; see the list.)
 
 Open reports a Saffron program reaches (none is a stage blocker):
 
-- [any-widen-stored-in-an-adt-field-has-no-owner](../reported/any-widen-stored-in-an-adt-field-has-no-owner.md) (medium)
-- [dynamic-returned-closure-env-is-never-freed](../reported/dynamic-returned-closure-env-is-never-freed.md) (low-medium)
-- [byvalue-recursive-adt-boxes-are-never-freed](../archive/byvalue-recursive-adt-boxes-are-never-freed.md) (low-medium, plain Turmeric too)
-- [cps-capturing-closure-env-leaks-through-dyn-call](../reported/cps-capturing-closure-env-leaks-through-dyn-call.md) (low)
+- [saffron-static-ownership-residue](../reported/saffron-static-ownership-residue.md)
+  (low, by design): what the static drops cannot own, which only a build with
+  the collector OFF leaks.  **2026-09-28:** a compiled single-unit Saffron
+  program allocates from the r7rs-gc collector, which closed
+  [any-widen-stored-in-an-adt-field-has-no-owner](../archive/any-widen-stored-in-an-adt-field-has-no-owner.md),
+  [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md) and
+  [cps-capturing-closure-env-leaks-through-dyn-call](../archive/cps-capturing-closure-env-leaks-through-dyn-call.md);
+  [byvalue-recursive-adt-boxes-are-never-freed](../archive/byvalue-recursive-adt-boxes-are-never-freed.md)
+  closed the same day on its own.
 - [jit-x86-64-struct-valued-statement-expression-miscompiles](../reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md) (medium, JIT engine on x86-64 only)
 
 The rest of this header is the running log of the build-out. It is kept as
@@ -85,13 +90,16 @@ emitted C rather than reading the source: `saffron-higher-order`'s container is
 `(Cons [hd : any tl : any])`, so its 21 allocations are all the **`any` widen
 into a field** and none of them the recursive-carrier box it was first attributed
 to. Filed as
-[any-widen-stored-in-an-adt-field-has-no-owner](../reported/any-widen-stored-in-an-adt-field-has-no-owner.md),
+[any-widen-stored-in-an-adt-field-has-no-owner](../archive/any-widen-stored-in-an-adt-field-has-no-owner.md),
 and it is a **prerequisite for S6**: a container of `any` is exactly what that
 stage is about, so the element box needs an owner before it lands.
 (**Corrected 2026-09-26:** it did not block S6, which landed 2026-09-08
 around it. The report is still open, narrowed to one shape -- a recursive
 function handing a match binder to an opaque call -- and
 `saffron-higher-order` measures 680 bytes in 17 allocations, down from 21.)
+(**Closed 2026-09-28** by the collector: a compiled Saffron program allocates
+from the r7rs-gc heap, so the boxes no static owner reaches are reclaimed;
+the no-collector residue is `saffron-static-ownership-residue`.)
 
 The sibling finding that measurement separated out --
 [a self-recursive by-value ADT mallocs one box per link](../archive/byvalue-recursive-adt-boxes-are-never-freed.md),

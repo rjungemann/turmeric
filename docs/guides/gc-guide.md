@@ -585,6 +585,33 @@ dlopen: librc2.so: undefined symbol: gc_possible_root
 Behaviourally the two are identical; only the symbol is missing. Verified above:
 the symbol is present in `libturt_runtime.a` and absent from the `.so`.
 
+## The dialect collector (`#lang r7rs`, `#lang saffron`)
+
+Everything above is the Turmeric memory model: ownership, `rc<T>` counts and
+the opt-in cycle collector. The two dynamic dialects do not fit it -- Scheme
+data is shared, mutable and cyclic, and a Saffron `any` value is copied into
+arguments, fields and results and handed to dynamic calls whose bodies no
+analysis can see -- so a compiled single-unit program in either dialect swaps
+its whole allocator for a conservative mark-sweep collector
+(`src/runtime/r7gc.c`): every `malloc`/`free` in the unit, the region
+fallbacks, and the runtime archive's allocation hook. It scans the stacks,
+registers, thread-local state and data segment of every thread, and runs
+threads in parallel. Details and limits: `docs/archive/r7rs-gc-plan.md` and
+`docs/archive/r7rs-gc-threads-plan.md`.
+
+| dialect | on since | opt out |
+|---|---|---|
+| `#lang r7rs` | 2026-09-25 | `TUR_R7RS_GC=0` / `--no-r7rs-gc` |
+| `#lang saffron` | 2026-09-28 | `TUR_SAFFRON_GC=0` / `--no-saffron-gc` |
+
+The static drops the compiler emits still run in a collected program; the
+collector reclaims what they cannot prove. Because the collector's heap is
+invisible to LeakSanitizer, `tests/run-leak-check.sh` builds a Saffron
+fixture with the collector OFF -- it measures the ownership the compiler
+emits -- and `tests/run-r7rs-gc.sh` checks what the collector reclaims (every
+dialect fixture under frequent collections, plus bounded-memory loops).
+`TUR_GC_STATS=1` prints what the collector did.
+
 ## Known gaps
 
 - Cycle collection is off by default. When enabled it reclaims live strong

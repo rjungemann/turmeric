@@ -1,5 +1,39 @@
 # An `any` widen has no owner -- the roots are argument and return position, not the ADT field
 
+> **RESOLVED 2026-09-28 -- by a collector, not by a static owner.** Both
+> static directions below were measured against the remaining shape and
+> neither can close it: the boxes that leak are held through opaque dynamic
+> calls (`(f h)` in `lmap`, `(p h)` in `lfilter`), so a move discipline cannot
+> decide who owns them, and a refcount on every widen and every copy of an
+> `any` word is the full RC discipline the dialect never had. What does close
+> it is the collector that already runs every compiled `#lang r7rs` program
+> (`src/runtime/r7gc.c`, graduated 2026-09-25, threads included): a compiled
+> single-unit `#lang saffron` program now allocates from it too
+> (`r7rs_gc_active`, emit_module.c; `TUR_SAFFRON_GC=0` / `--no-saffron-gc`
+> opt out). The static drops still run; the collector reclaims what they
+> cannot prove.
+>
+> Measured, not assumed -- LeakSanitizer cannot see the collector's heap, so a
+> clean leak-check would prove nothing:
+>
+> - A 100-cell `any` list rebuilt, mapped through a dynamic call and folded
+>   20,000 times: 6 MB peak RSS with the collector (23 collections, 96 MB
+>   freed), 84 MB and growing without; 285 vs 315 ms.
+> - `tests/run-r7rs-gc.sh` now tortures every compiled Saffron fixture (95)
+>   with a collection every 31st allocation (208/0 overall), and all 95 pass
+>   with a collection on EVERY allocation; its new `reclaim-saffron` case runs
+>   100,000 iterations of that loop inside a 256 MiB address-space limit,
+>   which fits with the collector and dies without it.
+> - `tests/run-leak-check.sh` builds Saffron fixtures with the collector OFF,
+>   so the gate still measures the ownership the compiler emits (a double free
+>   in a static drop still fails it); `saffron-higher-order` stays `known-leak`
+>   there at 880 bytes / 22 allocations, now against
+>   [saffron-static-ownership-residue](../reported/saffron-static-ownership-residue.md),
+>   the no-collector residue this report and its two siblings leave.
+>
+> Full suite unchanged (3331/0; no Saffron fixture carries a codegen
+> snapshot).
+
 > **Filename note.** The slug stays
 > `any-widen-stored-in-an-adt-field-has-no-owner` because it is cited as a tag
 > in five compiler source comments and two fixtures. The heading is the accurate

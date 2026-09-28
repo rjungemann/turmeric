@@ -1,5 +1,16 @@
 # A capturing closure returned as `any` is never freed
 
+> **RESOLVED 2026-09-28** for both dialects it names: a compiled `#lang
+> r7rs` program has allocated from the r7rs-gc collector since 2026-09-25, and
+> a compiled single-unit `#lang saffron` program does too since this date
+> (see [any-widen-stored-in-an-adt-field-has-no-owner](any-widen-stored-in-an-adt-field-has-no-owner.md)).
+> Measured with the repro in a loop -- 3,000,000 `(make-adder i)` closures --
+> the collector ran 11 collections and freed 92 MB with an 8 MB heap. The
+> env still has no STATIC owner, which is what the leak gate measures (it
+> builds Saffron without the collector); `tests/fixtures/tailcall-dyn-leak`
+> keeps its `known-leak` marker, now against
+> [saffron-static-ownership-residue](../reported/saffron-static-ownership-residue.md).
+
 **Severity: low-medium.** One closure env per call that returns a capturing
 lambda, in any dynamic file (`#lang saffron`, `#lang r7rs`). No wrong answer,
 but a Scheme program is made of exactly this shape -- every `lambda` a

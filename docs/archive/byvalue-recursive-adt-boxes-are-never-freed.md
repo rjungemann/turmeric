@@ -210,7 +210,7 @@ That was wrong, and measuring the emitted C is what showed it: its `Lst` is
 `elab_coerce_to_any`'s by-value widen, not the recursive-carrier box at all --
 11 widen sites, ZERO recursive-carrier sites. Same family (a box inside a
 structure with no owner), different producer, different fix. Filed separately as
-[any-widen-stored-in-an-adt-field-has-no-owner](../reported/any-widen-stored-in-an-adt-field-has-no-owner.md).
+[any-widen-stored-in-an-adt-field-has-no-owner](../archive/any-widen-stored-in-an-adt-field-has-no-owner.md).
 
 ## Fix directions for the residue
 

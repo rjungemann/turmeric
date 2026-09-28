@@ -12,9 +12,10 @@
 ;;
 ;; `step` hands `apply-to` a top-level function rather than a capturing lambda:
 ;; a capturing closure passed to a dynamic call from a CPS-lowered function
-;; leaks its env, before T6 as after it
-;; (docs/reported/cps-capturing-closure-env-leaks-through-dyn-call.md), and
-;; that is not what this fixture is here to see.
+;; leaks its env on plain malloc, before T6 as after it -- the collector
+;; reclaims it in a default build, and the leak gate builds Saffron without the
+;; collector (docs/archive/cps-capturing-closure-env-leaks-through-dyn-call.md)
+;; -- and that is not what this fixture is here to see.
 
 (defn run [f n acc]
   (if (= n 0) acc (f f (- n 1) (+ acc 1))))

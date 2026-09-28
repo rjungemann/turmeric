@@ -1,5 +1,7 @@
-docs/reported/dynamic-returned-closure-env-is-never-freed.md
+docs/reported/saffron-static-ownership-residue.md
 
-The `make-counter` closure env (32 bytes) is never freed: a capturing
-closure returned as `any` has no owner in a dynamic file.  The fixture passed
-on stale-pointer luck until r7rs-lang-plan R6 moved the words that masked it.
+The `make-counter` closure env (32 bytes) has no static owner: a capturing
+closure returned as `any` in a dynamic file.  A default build reclaims it --
+the collector is a compiled Saffron program's allocator -- but this gate builds
+Saffron with the collector off (TUR_SAFFRON_GC=0) to measure the static drops,
+where it leaks by design.

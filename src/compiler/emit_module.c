@@ -10829,9 +10829,20 @@ static void emit_rcgc_global(Buf *out, bool shared,
  * is single-threaded.
  *
  * Only for a single-unit build: a --shared build would give each unit its own
- * heap, and one unit's free() of another's object would reach libc. */
+ * heap, and one unit's free() of another's object would reach libc.
+ *
+ * any-widen-stored-in-an-adt-field-has-no-owner (2026-09-28): a `#lang
+ * saffron` program too (g_opt_dynamic_any; TUR_SAFFRON_GC=0 or
+ * --no-saffron-gc opts out).  Its `any` values alias freely -- a widen boxes
+ * a by-value payload, the box is copied into arguments, fields and results,
+ * and an opaque dynamic call `(f h)` may keep any of them -- so no static
+ * owner exists for most of those boxes, and a loop that rebuilt a structure
+ * leaked linearly.  The static drops still run (they are still correct); the
+ * collector reclaims what they cannot prove. */
 static bool r7rs_gc_active(bool shared) {
-    return g_opt_r7rs_gc && g_opt_r7rs && !shared;
+    if (shared) return false;
+    if (g_opt_r7rs) return g_opt_r7rs_gc;
+    return g_opt_dynamic_any && g_opt_saffron_gc;
 }
 
 /* The redirecting macros, defined (on) or withdrawn (off) -- withdrawn around
