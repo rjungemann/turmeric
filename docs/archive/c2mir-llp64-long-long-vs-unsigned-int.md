@@ -6,11 +6,13 @@ every `tur jit` program on Windows whose C (emitted or inline) mixes a signed
 Windows JIT's whole-preamble fallback
 ([jit-windows-support-spike](../archive/jit-windows-support-spike.md)).
 
-**Status: open, fix in review** as
-[rjungemann/mir#4](https://github.com/rjungemann/mir/pull/4) (branch
-`fix/llp64-uint-llong-conversion`). Turmeric still pins the unfixed MIR until
-that merges and the pin moves. One in-tree user of the pattern, the r7rs
-bignum subtraction, was rewritten so it no longer depends on the conversion.
+**Status: RESOLVED 2026-09-28.**
+[rjungemann/mir#4](https://github.com/rjungemann/mir/pull/4) merged into the
+fork's master as `79cb2905`, and `TUR_MIR_GIT_TAG` in `cmake/mir.cmake` now
+pins that commit (with a line in the pin notes above it). One in-tree user of
+the pattern, the r7rs bignum subtraction, had already been rewritten so it no
+longer depends on the conversion; that cast stays, since it is correct C
+either way.
 
 ## Repro
 
@@ -162,3 +164,23 @@ index 07fb461a..e5f0fcba 100644
    }
    return res;
 ```
+
+## Resolution (2026-09-28)
+
+Landed exactly as the three steps above say:
+
+1. [rjungemann/mir#4](https://github.com/rjungemann/mir/pull/4) merged with a
+   merge commit, `79cb29058e8c`, on the fork's master. Its own CI (the
+   ubuntu, macOS and Windows `test` jobs) was green. The gcc-farm and qemu
+   jobs were cancelled because the fork has no self-hosted runners for them,
+   which is also true of the earlier PRs.
+2. `TUR_MIR_GIT_TAG` moved from `b7e72a95` to `79cb2905`, with a pin-note entry.
+3. Re-verified on **Linux** (x86-64, gcc 13) only. There was no Windows box
+   for this pass. A fresh `-DTUR_JIT=ON` build fetched `79cb2905`
+   (`git -C build-jit/_deps/mir-src log` confirms it), and
+   `TUR_TEST_FILTER='^r7rs' bash tests/run-jit.sh` gives 97 passed, 0 failed,
+   1 skipped. With the patched MIR, `c2m` runs the new
+   `c-tests/new/llp64-uint-llong-conv.c` cleanly (exit 0) under both `-eg`
+   and `-ei`. The Windows result is the one recorded above against the same
+   patch, applied in `build-win/_deps/mir-src` before it merged. The first
+   Windows `run-jit.sh` on the new pin will confirm it end to end.

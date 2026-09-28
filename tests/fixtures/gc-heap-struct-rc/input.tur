@@ -82,10 +82,18 @@
   ;; (Under a sanitized `tur`, CI's JIT leg, mallinfo2 cannot see the ASan
   ;; allocator at all and reads 0 either way; the compiled leg is the real
   ;; check there.)  docs/archive/jit-cc-fallback-reentry-inherits-monomorph-state.md
+  ;; TWO throwaway windows: by 2026-09-28 one was no longer enough -- an
+  ;; unsanitized `tur jit` read a constant 736 bytes in the first real window
+  ;; (736 at 500 and 5000 iterations, 688 at 50000: the engine's one-off
+  ;; allocations, not a leak).  With a second window it reads 0 there.
   (let [w0 (heap-bytes)]
     (run-acyclic 10)
     (run-ring 10)
     (- (heap-bytes) w0))
+  (let [w1 (heap-bytes)]
+    (run-acyclic 10)
+    (run-ring 10)
+    (- (heap-bytes) w1))
   (let [a0 (heap-bytes)]
     (run-acyclic 5000)
     (println (- (heap-bytes) a0)))          ; 0 -- acyclic :heap rc leaks nothing

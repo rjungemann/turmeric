@@ -2,7 +2,7 @@
 
 **RESOLVED 2026-09-26, the day it was found** (while reading
 `let_binding_any_freeable` for
-[dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md)).
+[dynamic-returned-closure-env-is-never-freed](dynamic-returned-closure-env-is-never-freed.md)).
 Filed here for the paper trail; it never had an open report.
 
 **Severity at discovery: high** -- a use-after-free with a silent wrong answer

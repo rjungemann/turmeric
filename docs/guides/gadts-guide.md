@@ -624,10 +624,13 @@ arm falls through to the next arm of the same group when it fails.
   (phantom-parameter opaques: `(defopaque Zero :int)`, `(defopaque Succ [n]
   :int)`). A `match` on a scrutinee annotated `(Vec (Succ n))` then omits the
   `VNil` arm -- the exhaustiveness check drops a constructor whose declared
-  index provably differs from the scrutinee's -- and a value ascribed
-  `(Vec Zero)` is rejected at such a call. A constructor application itself
-  is still typed as the bare `Vec`, so the proof needs the values annotated;
-  see the cookbook's "Length-Indexed Vectors".
+  index provably differs from the scrutinee's -- and `(vec-head (VNil))` is
+  rejected at the call: a constructor application knows its index
+  (`(VNil)` is `(Vec Zero)`), and so do a `let` bound to one, an ascription
+  and a declared return. The value's type stays the bare `Vec`, so a
+  bare-annotated function takes every vector, and an index the checker
+  cannot know is not checked rather than rejected. See the cookbook's
+  "Length-Indexed Vectors".
 
 - **No mutual recursion across files.** Mutually recursive GADTs must be
   defined in the same file.

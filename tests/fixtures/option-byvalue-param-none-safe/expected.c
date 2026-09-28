@@ -2257,6 +2257,7 @@ static DK *dk_append(DK *a, DK *b) {
     return a;
 }
 static int tur_dk_pinned = 0;
+#define TUR_DK_PIN 1
 static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
 /* Free a single spliced node without following ->next -- used to reclaim the
  * one-off shift/perform node whose ->next points into an enclosing continuation
@@ -5486,6 +5487,13 @@ static void TUR_ANY_DROP_ATTR __tur_any_drop(tur_tagged_t __v) {
     free(__p);
 }
 static void (*__tur_any_drop_keep)(tur_tagged_t) __attribute__((unused)) = __tur_any_drop;
+static void __tur_any_closure_drop(tur_tagged_t __v) __attribute__((unused));
+static void __tur_any_closure_drop(tur_tagged_t __v) {
+#ifdef TUR_DK_PIN
+    if (tur_dk_pinned) return;
+#endif
+    TUR_CLOSURE_DROP(TUR_UNTAG(__v));
+}
 
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);

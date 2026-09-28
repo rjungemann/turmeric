@@ -1515,7 +1515,8 @@ were both caught), editor packs, `tools/gendocs.py`, and
 >   and the closure is the new report
 >   [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md)
 >   (a closure returned as `any` gets no scope-end drop; pre-existing at
->   `main`), which the fixture's `known-leak` marker cites.
+>   `main`), which the fixture's `known-leak` marker cites.  (Resolved
+>   2026-09-28; the marker is gone.)
 
 ### R10 -- conformance (medium, continuous)
 
@@ -2642,7 +2643,8 @@ task.*
     - the embedded env's process-lifetime memory against what a program
       would expect to be freed.
   - **Closures and boxes in dynamic code:**
-    - [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md);
+    - [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md)
+      (resolved 2026-09-28 for a closure a `let` minted);
     - the `R7rsBox` cells T5's assignment conversion now makes for every
       `set!` variable.
 - **How:**
@@ -2708,9 +2710,12 @@ task.*
 >     [r7rs-prelude-value-returning-loop-workaround](../archive/r7rs-prelude-value-returning-loop-workaround.md)).
 >   - A CPS loop is still only as deep as gcc's sibling calls make it: it
 >     overflows at `-O1`
->     ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md)).
+>     ([cps-self-tail-call-relies-on-sibling-call](../archive/cps-self-tail-call-relies-on-sibling-call.md)).
 >     *2026-09-26: a self-recursive CPS loop is a backedge now and holds at
->     `-O0`; mutual recursion between two CPS procedures is what remains.*
+>     `-O0`. 2026-09-28: mutual recursion is too (fused CPS groups; T5 takes
+>     colored functions); resolved and archived. The tail call after a
+>     `guard` is still open:
+>     [mutual-tail-call-through-guard-grows-the-stack](../reported/mutual-tail-call-through-guard-grows-the-stack.md).*
 >   - A million-element `append`, `map` (one to four lists), `string-map`,
 >     `vector-map`, `list-copy`, `string->list`, `vector->list`, `equal?`,
 >     `read-line`, `read` and `write` now pass compiled at `-O2` and
@@ -2837,12 +2842,15 @@ differences, as reports"):
   ~~no `(export (rename ...))`~~ -- resolved 2026-09-26: the definition is
   spelled with the public name, or aliased when it is imported or exported
   twice.
-- **Mutual recursion whose non-tail calls go through a procedure variable** is
-  CPS, and the tail call between the two procedures is the C compiler's
-  sibling call -- the default `-O2` has it, `-O0` does not
-  ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md);
-  every dialect with effectful functions). A self-recursive loop of that
-  shape -- `for-each`, `map`, `member` -- is a backedge since 2026-09-26.
+- ~~**Mutual recursion whose non-tail calls go through a procedure variable**~~
+  -- resolved 2026-09-28: a cycle of CPS procedures is fused into one C
+  function whose cross calls are jumps, and T5's direct groups take a colored
+  procedure the CPS backend declines, so the pair is constant stack at `-O0`
+  ([cps-self-tail-call-relies-on-sibling-call](../archive/cps-self-tail-call-relies-on-sibling-call.md)).
+  A self-recursive loop of that shape -- `for-each`, `map`, `member` -- has
+  been a backedge since 2026-09-26. What remains is a tail call made after a
+  `guard`, into another procedure
+  ([mutual-tail-call-through-guard-grows-the-stack](../reported/mutual-tail-call-through-guard-grows-the-stack.md)).
 - ~~**Re-entrant `call/cc` is Linux and macOS only**~~ -- resolved 2026-09-26:
   the stack base comes from the TEB and the jump unwinds nothing
   ([archived](../archive/r7rs-reentrant-callcc-not-on-windows.md)).

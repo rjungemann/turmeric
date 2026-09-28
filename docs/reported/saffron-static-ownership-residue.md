@@ -21,12 +21,22 @@ call", which no AST walk can settle:
    carries values `(f h)` produced. Attribution and the static fixes that
    landed first are in
    [any-widen-stored-in-an-adt-field-has-no-owner](../archive/any-widen-stored-in-an-adt-field-has-no-owner.md).
-2. **A capturing closure returned as `any`** -- its env
-   (`tests/fixtures/tailcall-dyn-leak`, `known-leak`: 32 bytes). See
+2. **A capturing closure returned as `any`** -- its env. See
    [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md).
+   **Narrowed 2026-09-28:** a `let` that holds the fresh closure now drops
+   it statically (at scope exit, or at the DK entry boundary in a CPS body),
+   self-application included, so `tests/fixtures/tailcall-dyn-leak` runs
+   clean with the collector off and lost its `known-leak` marker. What stays
+   here is a closure whose single owner the compiler cannot prove: stored,
+   returned onward, or handed to a callee that may keep it.
 3. **A capturing closure built in a CPS-lowered function and passed to a
    dynamic call** -- its env, one per call. See
    [cps-capturing-closure-env-leaks-through-dyn-call](../archive/cps-capturing-closure-env-leaks-through-dyn-call.md).
+   **Narrowed 2026-09-28:** when the callee's `any` parameter is inferred
+   non-retaining (it only invokes the value), the lambda is hoisted into a
+   `let` and released the same way
+   (`tests/fixtures/saffron-lambda-arg-env-freed`, leak-checked). A callee
+   that may keep it still leaves the env here.
 
 ## Why it stays open rather than being fixed
 

@@ -1,0 +1,52 @@
+#lang r7rs
+;; cps-self-tail-call-relies-on-sibling-call, the mutual-recursion half:
+;; procedures that tail-call EACH OTHER, each calling a procedure variable on
+;; the way, a million deep -- built at -O0 by hook.sh, where no C compiler
+;; turns a call into a jump on its own.  Every one of these overflowed below
+;; -O2 before the fix.
+;;
+;; Two lowerings are covered, because which one a procedure gets depends on
+;; its body:
+;;   - `ping` / `pong` return a symbol, a widen the CPS backend does not lower,
+;;     so they fall back to direct C.  They are CPS-colored all the same, and
+;;     proper-tail-calls T5's group fusion used to refuse a colored function;
+;;     it no longer does (emit_fns.c, tcg_member_ok).
+;;   - `even-steps` / `odd-steps` and the three-way `step-a` / `step-b` /
+;;     `step-c` are lowered by the CPS backend.  Their `__cps` bodies are fused
+;;     into one function with the cross calls as jumps (emit_cps_ir.c, CPS
+;;     mutual tail-call groups).
+;; `count-even` makes NON-tail calls into a group (the wrapper path), and
+;; `hop` / `skip` put a call/cc escape in one member's body.
+(import (scheme base) (scheme write))
+
+(define (ping f n) (if (= n 0) 'done (begin (f n) (pong f (- n 1)))))
+(define (pong f n) (if (= n 0) 'done (begin (f n) (ping f (- n 1)))))
+
+(define (even-steps f n) (if (= n 0) n (begin (f n) (odd-steps f (- n 1)))))
+(define (odd-steps f n) (if (= n 0) n (begin (f n) (even-steps f (- n 1)))))
+
+(define (step-a f n acc) (if (= n 0) acc (step-b f (- n 1) (+ acc (f 1)))))
+(define (step-b f n acc) (if (= n 0) acc (step-c f (- n 1) (+ acc (f 2)))))
+(define (step-c f n acc) (if (= n 0) acc (step-a f (- n 1) (+ acc (f 3)))))
+
+(define (ev? f n) (if (= n 0) #t (begin (f n) (od? f (- n 1)))))
+(define (od? f n) (if (= n 0) #f (begin (f n) (ev? f (- n 1)))))
+(define (count-even f n)
+  (if (= n 0)
+      0
+      (+ (if (ev? f (modulo n 7)) 1 0) (count-even f (- n 1)))))
+
+(define (hop f n)
+  (if (= n 0)
+      'hopped
+      (begin (call/cc (lambda (k) (f n) (k 1))) (skip f (- n 1)))))
+(define (skip f n) (if (= n 0) 'skipped (begin (f n) (hop f (- n 1)))))
+
+(define id (lambda (x) x))
+
+(write (ping id 1000000)) (newline)
+(write (even-steps id 1000000)) (newline)
+(write (step-a id 1000000 0)) (newline)
+(write (ev? id 1000001)) (newline)
+(write (count-even id 1000)) (newline)
+(write (hop id 1000000)) (newline)

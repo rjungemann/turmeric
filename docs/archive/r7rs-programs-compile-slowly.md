@@ -228,9 +228,11 @@ The rest is `cc` over 29,400 lines. On the same C:
   will not fix this.
 - **`-O1` is not an option.** It saves 40%, but a CPS function's tail call to
   another is a plain C tail call that needs `-O2`'s sibling-call optimization
-  (docs/reported/cps-self-tail-call-relies-on-sibling-call.md). Compiling
-  only the prelude at a lower level would stop gcc inlining `car`/`cdr` into
-  the program across the attribute mismatch.
+  (docs/archive/cps-self-tail-call-relies-on-sibling-call.md -- no longer
+  true since 2026-09-28, when self and mutual CPS tail calls became jumps;
+  a tail call through a closure or after a `guard` still is). Compiling only
+  the prelude at a lower level would stop gcc inlining `car`/`cdr` into the
+  program across the attribute mismatch.
 - **Parallel LTO helps wall time only.** `cc -O2 -flto=4
   -flto-partition=balanced` takes 2.3 s wall where one process takes 3.6 s,
   on four idle cores. It spends more CPU in total, so it does nothing for the

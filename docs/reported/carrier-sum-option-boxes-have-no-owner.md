@@ -180,3 +180,83 @@ joins the "consumer outside the audited set" residue this report already
 owns. `tests/fixtures/colored-generic-erased-carrier-param` carries
 `requires.leak-check` plus a `known-leak` marker naming this report, so the
 gate turns red the day the box is freed and the marker must go.
+
+## Re-measured 2026-09-28, attributed row by row, and two directions tried
+
+**Still open.** Executed as a report on 2026-09-28. Nothing here could be
+closed soundly short of the monomorphization this report has always pointed
+to. What follows is the measurement, where each byte comes from, and why the
+two cheap-looking fixes are not taken.
+
+The sweep over `docs/artifacts/rm1-erased-base-callers.txt` reads
+**1766 B**. Each fixture was built with `-fsanitize=address` and run with
+`detect_leaks=1`, with each leak attributed by its first non-allocator frame.
+The total is byte-identical on the pre-session compiler (`bf31e725`,
+v0.56.2) and after that day's changes, so none of them moved a row. It is
+higher than 2026-09-19's 1630 mostly because two rows live under
+subdirectories and were read as absent or zero there:
+`typed/zipper-basic` (64 B) and `typed-slots/coerce-carrier-to-struct`
+(32 B). The rest is small drift in the `hkt-*` rows before 2026-09-28.
+
+| Category | Rows | Bytes |
+|---|---|---:|
+| **This report: a fixture's own `:int` inline-C reader or producer** | `hkt-stdlib-result-ok-biased` 64, `conv-defstruct-option-hkt-instance-bodies` 40, `hkt-stdlib-option-result-instances` 40, `typed-slots/coerce-carrier-to-struct` 32 | 176 |
+| **This report: dictionary dispatch inside a constrained generic** | `hkt-constrained-byvalue-bind-pure` 72, `hkt-constrained-hole-headed-instance-head` 48, `hkt-constrained-spec-reresolves-instance` 48, `hkt-constrained-byvalue-carrier` 32 | 200 |
+| **This report: payload type erased through a `ptr<void>` closure** | `option-map-capturing-closure` | 16 |
+| Recursive spine (RM2) | `re-string` 516, `constrained-defn-cons-return-monomorphize` 432, `refined-nonempty` 80 | 1028 |
+| `tur_string_from_bytes` payloads | `option-niche-crossings` 151, `httpd-req-string-opt` 109, `option-niche-string` 22 | 282 |
+| Test rig | `typed/zipper-basic` (the twin of the `zipper-basic` rig leak fixed 2026-09-05) | 64 |
+
+So this report's residue is **392 B**, plus the deliberate 16 B of
+`colored-generic-erased-carrier-param` (outside the sweep, `known-leak`
+marked). Each category is a consumer the compiler cannot see through:
+
+- **`:int` readers.** `(defn res-ok [r : int] : int ```c ... ```)` takes the
+  box as a machine word, and inline-C bodies are never inferred
+  non-retaining (`elab_infer_nonretain_masks`). The
+  `conv-defstruct`/`hkt-stdlib-option` rows also leak the 24 B env of a
+  capturing lambda stored in `(some ...)`, which nothing drops.
+- **Dictionary dispatch.** A monomorph that knows its instance still
+  dispatches through the dictionary pointer.
+  `bind_then_pure__dict_19__spec_..._tur_adt_Option__int` spills its by-value
+  `x` into a malloc'd carrier (16 B) and builds the lambda's env (24 B). It
+  then calls `bind` as `((void **)__dict_20)[0](...)`, and the result box
+  that `pure` mints (16 B) is read back by value at the caller. None of the
+  three can be freed without knowing which instance ran, and a user instance
+  may retain. Devirtualizing the call per monomorph is the fix, and it is
+  the monomorphization this report names.
+- **`option-map-capturing-closure`.**
+  `(unwrap-or-carrier (option-map (some 5) scale4) 0)` with
+  `scale4 : ptr<void>` leaves option-map's `B` unresolved, so the call's type
+  is `(Option ?)`.
+
+**Tried, not taken: 1. reap a fresh box handed to a colored callee at the DK
+entry boundary.** This would close `colored-generic-erased-carrier-param`.
+The boundary itself is sound: the runtime already frees the continuation
+frames that hold the box there (`__pfe0` in `peek__..._cps`), and a
+continuation is dead once the outermost entry settles (the B7 stored-chain
+comment in `emit_cps_ir.c`). The blocker is upstream of it. The callee's
+`(perform (Tick))` is an escape to `binding_escapes_impl_x`, so
+`box_uses_confined` never sets `peek`'s `nonretain_sum_param_mask` bit, and
+the stamp has nothing to key on. Setting that bit would not stay local: the
+same mask admits scope-exit frees in every caller that hands `peek` a
+let-bound box. A multi-shot handler that re-enters the callee's
+continuation would run such a caller's trailing free twice. Doing this
+safely needs a second mask meaning "non-retaining except through a
+continuation", read only by a boundary-reap stamp. That is a lot of new
+machinery for 16 bytes, and a double free is the failure mode.
+
+**Tried, not taken: 2. admit `unwrap-or-carrier` as an audited reader.** It
+reads arg 0 and returns the payload word or its default, never the box. But
+for a boxed value-struct payload, that word points into the arm box that the
+deep drain (`emit_carrier_sum_free`) frees, and inside a generic body the
+drain resolves a type variable to such a payload. So it is sound only over a
+statically word-scalar payload. The one row it could reach has an unresolved
+payload type (above), so the guarded rule measured zero, and it was
+reverted.
+
+Also found while re-measuring, and filed separately: rewriting
+`hkt-stdlib-result-ok-biased` with typed readers segfaults on an ascribed
+`catch-error`
+([catch-error-ascribed-result-types-handler-by-value](catch-error-ascribed-result-types-handler-by-value.md)).
+That bug predates this work.
