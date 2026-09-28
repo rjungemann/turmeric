@@ -737,6 +737,11 @@ typedef struct EmitCtx {
      * NULL off the tail path, and compared by NODE identity, so a `match` nested
      * inside a tail `match`'s arm is emitted ordinarily. */
     const struct MatchTailCtx *match_tail;
+    /* byvalue-recursive-adt-boxes-are-never-freed (own half): the function
+     * whose body the DIRECT emitter is emitting, NULL elsewhere (a CPS body,
+     * a fused tail-call group, a handler thunk).  The consuming-callee
+     * discharge fires only where it is set. */
+    const struct FnDef *own_cur_fn;
     /* proper-tail-calls T5 (T-D5): the top-level function definitions a
      * mutual-tail-call group may draw its members from -- the module's
      * EX_FN_DEF items minus the generic templates emit_abi_fn_skip_generic
@@ -800,6 +805,18 @@ typedef struct MatchTailCtx {
 static inline bool emit_match_in_tail(const EmitCtx *ctx, const Expr *e) {
     return ctx->match_tail && ctx->match_tail->node == e;
 }
+
+/* byvalue-recursive-adt-boxes-are-never-freed: ownership provenance and the
+ * consuming-callee discharge (emit_core.c). */
+enum { EMIT_OWN_NONE = 0, EMIT_OWN_SHALLOW, EMIT_OWN_DEEP };
+const struct AdtDef *emit_own_adt_of(Type t);
+bool emit_own_binding_owned(EmitCtx *ctx, const Binding *b);
+bool emit_own_param_owned(EmitCtx *ctx, const struct FnDef *fd, uint32_t i);
+bool emit_own_match_discharges(EmitCtx *ctx, const Expr *m);
+int  emit_own_arm_field_discharge(EmitCtx *ctx, const Expr *m,
+                                  const struct MatchArm *arm, uint32_t fi);
+void emit_own_arm_discharges(EmitCtx *ctx, Buf *body, const Expr *m,
+                             const struct MatchArm *arm, const char *acc);
 
 /* Phase 4 v1: Defer thunk tracking */
 typedef struct DeferThunk {

@@ -610,13 +610,19 @@ the symbol is present in `libturt_runtime.a` and absent from the `.so`.
   or lent to a callee the compiler can prove does not retain it (a
   non-pointer-scalar result, every match binder and field read of the
   parameter confined; `tests/fixtures/byval-recursive-adt-lent-to-callee`).
-  Two shapes still leak, by design rather than by accident:
-  - A callee that **consumes** the value and returns part of it (`(defn
-    tail [xs : Lst] : Lst (match xs (Cons h t) t ...))`) takes ownership of
-    the whole spine and hands back only a sub-spine; the boxes above it have
-    no owner. Discharging that at the callee needs an owned/borrowed
-    distinction on the parameter itself, which the move tracking does not
-    carry.
+  A callee that **consumes** the value -- `(defn tail [xs : Lst] : Lst
+  (match xs (Cons h t) t ...))` -- frees what it does not pass on: when its
+  one use of the parameter is a `match` run once per call, each arm frees the
+  box a returned or handed-on binder was copied out of, and the whole
+  sub-spine of a binder it never used (`tests/fixtures/byval-recursive-adt-consumed-by-callee`).
+  Both frees need the value to OWN its spine, which a whole-program
+  provenance check establishes (`emit_core.c`): constructed, or moved from
+  something that was. A copy out of a `^borrow` parameter, a global or a
+  container element shares its boxes with its source and is never freed as
+  if it owned them -- until 2026-09-28 the scope-exit drop did exactly that,
+  a use-after-free. Such copies leak instead; see
+  `docs/reported/byvalue-recursive-shared-copies-leak.md`.
+  One shape still leaks by design rather than by accident:
   - A **`:copy` recursive ADT** -- `Term`, `Subst`, `Stream` in
     `stdlib/logic.tur`, the `Regex` family -- is never freed per value. This
     is a contract, not a gap: drop glue makes a type move-only, and that move

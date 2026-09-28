@@ -1,5 +1,55 @@
 # A by-value recursive ADT leaks one box per link
 
+> **RESOLVED 2026-09-28.** The last open shape -- a callee that CONSUMES the
+> value and returns part of it -- is discharged at the callee, and closing it
+> exposed a use-after-free in the 2026-09-07 scope-exit drop, fixed here too.
+>
+> **The own half** (direction 1's other half, `emit_core.c` +
+> both ADT match paths in `emit_expr.c`). The report's worry was right: one
+> body compiled once cannot know per call site whether its parameter is owned.
+> It does not have to -- ownership is made a per-callee fact: a parameter is
+> OWNED when every static call site passes a value it owns, the function's
+> address is never taken, it is not exported (under separate compilation),
+> not an instance method, not a C export, and not proven non-retaining (those
+> are lent). When such a parameter's only use is a `match` on the body's spine
+> (evaluated once per call), each arm, after its value is computed, frees the
+> spine boxes it did not pass on: a recursive-field binder moved out exactly
+> once (returned, or handed to a constructor or a consuming callee) frees the
+> box its contents were copied from (SHALLOW, `tur_region_free`); a binder
+> unused, or only lent (the strict alias walk), frees its whole sub-spine
+> (DEEP, `drop_glue_<T>`). The parameter's own storage is the caller's and is
+> never touched. Declined, as a leak: an arm emitted on the tail path (it
+> returns / jumps first), a move INTO a tail call (a free after it would cost
+> the C compiler the jump a recursive walker relies on), guarded arms, and any
+> binder use the walk cannot place. `TUR_NO_OWN_DISCHARGE=1` turns it off for
+> A/B. The report's repro -- `(let [zs (Cons 7 (Cons 8 (Nil))) ws (tail zs)]
+> (llen ws))` -- is leak-clean; `byval-recursive-adt-consumed-by-callee` pins
+> it with `first-only` (DEEP), `incr` (a consuming call inside a
+> constructor), a two-field tree (`left`: SHALLOW + DEEP) and chained
+> temporaries: 344 bytes / 13 allocations -> clean.
+>
+> **The use-after-free it exposed.** "Owned" needs a real answer, and the move
+> checker does not give one: a by-value recursive value can be COPIED out of
+> a `^borrow` parameter (`(defn id-b [^borrow x : Lst] : Lst x)`), a global,
+> or a container element (`vec-get`), and the copy shares its boxes with its
+> source. The scope-exit drop freed such a copy's spine under its owner --
+> ASan heap-use-after-free for all three, on `main` before this change. So both
+> consumers now ask a whole-program ownership PROVENANCE analysis: a value is
+> owned when it is a constructor (recursive-type args owned), a moved owned
+> local / binder / parameter, or the result of a user function whose every
+> return value is owned (greatest fixed point with the parameter facts; the
+> walk enumerates operands through the shared `cps_visit_children`). Those
+> copies are refused and leak instead -- pinned by
+> `byval-recursive-adt-shared-copy-not-freed` (`known-leak`, which still fails
+> on a use-after-free) and filed as
+> [byvalue-recursive-shared-copies-leak](../reported/byvalue-recursive-shared-copies-leak.md),
+> along with the same hole for an rc-field struct copied out of a `^borrow`,
+> which this analysis does not cover.
+>
+> Suite 3331/0, no snapshot moved; leak-check 108/0 with the new fixture the
+> only new known-open row. `:copy` recursive ADTs stay the documented regions
+> contract (Residue 2 below); gc-guide "Known gaps" is updated.
+
 **Severity: low-medium.** One `malloc` per link of a self-recursive by-value
 `defdata`, never freed.
 
@@ -11,7 +61,7 @@ the value and returns part of it. `:copy` recursive ADTs are now a documented
 contract (regions), not a gap. Details under "Residue 1" and "Residue 2".
 
 Split out of
-[saffron-any-return-defeats-the-frame-box-rule](../archive/saffron-any-return-defeats-the-frame-box-rule.md).
+[saffron-any-return-defeats-the-frame-box-rule](saffron-any-return-defeats-the-frame-box-rule.md).
 
 ## Repro -- no `any` anywhere, plain Turmeric
 
@@ -160,7 +210,7 @@ That was wrong, and measuring the emitted C is what showed it: its `Lst` is
 `elab_coerce_to_any`'s by-value widen, not the recursive-carrier box at all --
 11 widen sites, ZERO recursive-carrier sites. Same family (a box inside a
 structure with no owner), different producer, different fix. Filed separately as
-[any-widen-stored-in-an-adt-field-has-no-owner](any-widen-stored-in-an-adt-field-has-no-owner.md).
+[any-widen-stored-in-an-adt-field-has-no-owner](../reported/any-widen-stored-in-an-adt-field-has-no-owner.md).
 
 ## Fix directions for the residue
 

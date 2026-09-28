@@ -133,7 +133,7 @@ the information it has: a pointer derived from the parameter flows into another
 call whose result is built into the value returned. A caller-side free would be
 a use-after-free if the callee kept it, and a callee-side free double-frees
 because the binder aliases the parent. See
-[byvalue-recursive-adt-boxes-are-never-freed](byvalue-recursive-adt-boxes-are-never-freed.md)
+[byvalue-recursive-adt-boxes-are-never-freed](../archive/byvalue-recursive-adt-boxes-are-never-freed.md)
 "Residue 1".
 
 This is the only thing standing between this fixture and zero.

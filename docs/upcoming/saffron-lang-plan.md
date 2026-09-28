@@ -26,7 +26,7 @@ Open reports a Saffron program reaches (none is a stage blocker):
 
 - [any-widen-stored-in-an-adt-field-has-no-owner](../reported/any-widen-stored-in-an-adt-field-has-no-owner.md) (medium)
 - [dynamic-returned-closure-env-is-never-freed](../reported/dynamic-returned-closure-env-is-never-freed.md) (low-medium)
-- [byvalue-recursive-adt-boxes-are-never-freed](../reported/byvalue-recursive-adt-boxes-are-never-freed.md) (low-medium, plain Turmeric too)
+- [byvalue-recursive-adt-boxes-are-never-freed](../archive/byvalue-recursive-adt-boxes-are-never-freed.md) (low-medium, plain Turmeric too)
 - [cps-capturing-closure-env-leaks-through-dyn-call](../reported/cps-capturing-closure-env-leaks-through-dyn-call.md) (low)
 - [jit-x86-64-struct-valued-statement-expression-miscompiles](../reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md) (medium, JIT engine on x86-64 only)
 
@@ -94,7 +94,7 @@ function handing a match binder to an opaque call -- and
 `saffron-higher-order` measures 680 bytes in 17 allocations, down from 21.)
 
 The sibling finding that measurement separated out --
-[a self-recursive by-value ADT mallocs one box per link](../reported/byvalue-recursive-adt-boxes-are-never-freed.md),
+[a self-recursive by-value ADT mallocs one box per link](../archive/byvalue-recursive-adt-boxes-are-never-freed.md),
 which reproduces in plain Turmeric with no `any` anywhere -- is now partially
 fixed: a non-escaping local's spine is freed at scope exit. Its two residues (a
 local handed to a callee, and `:copy` types, where `with-region` already
@@ -1412,7 +1412,7 @@ copy. **RC-managed `any` boxes were not needed**, and nothing measured here
 argues for them.
 
 The sibling `saffron-higher-order` leak was a different thing and remains open
-as [byvalue-recursive-adt-boxes-are-never-freed](../reported/byvalue-recursive-adt-boxes-are-never-freed.md):
+as [byvalue-recursive-adt-boxes-are-never-freed](../archive/byvalue-recursive-adt-boxes-are-never-freed.md):
 a plain Turmeric recursive ADT leaks one box per cons cell too, with no `any`
 anywhere (3 cells / 3 allocations, 5 / 5). Saffron makes that shape easy to
 reach; it does not create it.

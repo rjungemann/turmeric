@@ -3,6 +3,7 @@
 #include "mangle.h"
 #include "platform_fs.h"  /* strndup() on Windows */
 #include "globals.h"      /* compiler config globals */
+#include "cps.h"          /* cps_visit_children (ownership provenance walk) */
 
 /* ------------ helpers ------------ */
 
@@ -6499,4 +6500,577 @@ void static_init_emit(Buf *out) {
             "__attribute__((constructor))\n"
             "static void __tur_static_init_ctor(void) { __tur_static_init(); }\n");
     buf_putc(out, '\n');
+}
+
+
+/* ========================================================================= *
+ * byvalue-recursive-adt-boxes-are-never-freed: ownership PROVENANCE.
+ *
+ * A by-value recursive ADT (`(defdata Lst [] (Cons [hd : int tl : Lst])
+ * (Nil))`, or one with an `any` field) owns a spine of heap boxes, and two
+ * things free that spine: a let-local's scope-exit drop (`drop_localowned_<T>`,
+ * since 2026-09-07) and a consuming callee's discharge of its parameter (the
+ * "own half", below).  Both are sound only for a value that really OWNS its
+ * spine, and the move checker does not guarantee that a by-value copy does:
+ *
+ *   (defn id-b [^borrow x : Lst] : Lst x)       ; a copy of a borrow
+ *   (defn get-g [] : Lst g)                     ; a copy of a global
+ *   (vec-get v 0)                               ; a copy of an element
+ *
+ * each hands back a value that SHARES its boxes with an owner that will free
+ * them, and `(let [w (id-b zs)] (llen w))` freed zs's spine under zs
+ * (measured: heap-use-after-free, for all three).
+ *
+ * So both consumers now ask this analysis first.  A value is OWNED when it is
+ *   - a constructor call whose recursive-type arguments are owned;
+ *   - a let-local or match binder proven owned here (binders inherit from an
+ *     owned scrutinee); or a parameter whose every caller passes an owned
+ *     value (OwnedParam, below);
+ *   - the result of a call to a user function whose result is FRESH -- every
+ *     value it can return is owned;
+ *   - an if / match / do / let whose value positions are all owned.
+ * Anything else -- a ^borrow parameter, a global, a field read, an indirect
+ * call, a call into inline C or a stdlib accessor -- is not.
+ *
+ * OwnedParam and Fresh are a greatest fixed point over the whole program:
+ * everything starts assumed, and a call site passing an unowned argument, a
+ * function whose address is taken (its callers are unknown), an export, or an
+ * unowned return value knocks a fact out until nothing changes.  The walk
+ * enumerates operands through cps_visit_children, so no expression kind is
+ * silently skipped, and descends into closure bodies itself.
+ *
+ * Refusing costs a leak; a wrong "owned" costs a use-after-free. */
+
+typedef struct {
+    const FnDef *fd;
+    uint32_t     owned;        /* params (bit i) every caller passes owned */
+    bool         fresh;        /* every returned value is owned */
+    bool         addr_taken;   /* referenced as a value: callers unknown */
+} OwnFn;
+
+typedef struct {
+    const void **keys;
+    uint32_t    *vals;
+    uint32_t     cap, n;
+} OwnMap;
+
+static uint32_t own_ptr_hash(const void *p) {
+    uint64_t x = (uint64_t)(uintptr_t)p;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (uint32_t)x;
+}
+
+static void own_map_free(OwnMap *m) {
+    free(m->keys); free(m->vals);
+    memset(m, 0, sizeof(*m));
+}
+
+static void own_map_clear(OwnMap *m) {
+    if (m->keys) memset(m->keys, 0, m->cap * sizeof(*m->keys));
+    m->n = 0;
+}
+
+static void own_map_put(OwnMap *m, const void *k, uint32_t v);
+static void own_map_grow(OwnMap *m) {
+    OwnMap old = *m;
+    m->cap = old.cap ? old.cap * 2 : 256;
+    m->keys = (const void **)calloc(m->cap, sizeof(*m->keys));
+    m->vals = (uint32_t *)calloc(m->cap, sizeof(*m->vals));
+    if (!m->keys || !m->vals) { fprintf(stderr, "tur: oom\n"); abort(); }
+    m->n = 0;
+    for (uint32_t i = 0; i < old.cap; i++)
+        if (old.keys[i]) own_map_put(m, old.keys[i], old.vals[i]);
+    free(old.keys); free(old.vals);
+}
+
+static void own_map_put(OwnMap *m, const void *k, uint32_t v) {
+    if (!k) return;
+    if ((m->n + 1) * 2 > m->cap) own_map_grow(m);
+    uint32_t mask = m->cap - 1;
+    for (uint32_t s = own_ptr_hash(k) & mask;; s = (s + 1) & mask) {
+        if (!m->keys[s]) { m->keys[s] = k; m->vals[s] = v; m->n++; return; }
+        if (m->keys[s] == k) { m->vals[s] = v; return; }
+    }
+}
+
+static bool own_map_get(const OwnMap *m, const void *k, uint32_t *v) {
+    if (!k || !m->cap) return false;
+    uint32_t mask = m->cap - 1;
+    for (uint32_t s = own_ptr_hash(k) & mask; m->keys[s]; s = (s + 1) & mask)
+        if (m->keys[s] == k) { if (v) *v = m->vals[s]; return true; }
+    return false;
+}
+
+static const Expr *g_own_prog;
+static OwnFn      *g_own_fns;
+static uint32_t    g_own_n;
+static OwnMap      g_own_fn_ix;     /* fn Binding -> index into g_own_fns */
+static OwnMap      g_own_set;       /* let-locals / binders proven owned */
+static OwnFn      *g_own_cur;       /* function whose body is being walked */
+static bool        g_own_changed;
+
+/* The ADTs whose spines these consumers free: by-value, non-generic, with a
+ * direct self-recursive box or an `any` field.  Mirrors the elaborator's
+ * elab_byval_localowned_adt, which is what sets drops_local_owned. */
+const AdtDef *emit_own_adt_of(Type t) {
+    const AdtDef *def = NULL;
+    if (t.kind == TY_ADT)      def = t.as.adt_.def;
+    else if (t.kind == TY_APP) def = type_adt_app_def(&t);
+    else                       return NULL;
+    if (!def || def->is_heap || !def->needs_drop_glue) return NULL;
+    if (def->n_type_params != 0) return NULL;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++)
+        for (uint32_t fi = 0; fi < def->ctors[ci]->n_fields; fi++)
+            if (def->ctors[ci]->fields[fi].drop_inner_def == def ||
+                def->ctors[ci]->fields[fi].kind == TY_ANY)
+                return def;
+    return NULL;
+}
+
+static OwnFn *own_fn_for(const Binding *b) {
+    uint32_t ix;
+    if (b && own_map_get(&g_own_fn_ix, b, &ix)) return &g_own_fns[ix];
+    return NULL;
+}
+
+static int own_param_index(const FnDef *fd, const Binding *b) {
+    if (!fd || !b) return -1;
+    for (uint32_t i = 0; i < fd->n_params; i++)
+        if (fd->params[i] == b) return (int)i;
+    return -1;
+}
+
+static const Expr *own_peel(const Expr *e) {
+    while (e && (e->kind == EX_ASCRIBE || e->kind == EX_CAST))
+        e = e->kind == EX_ASCRIBE ? e->as.ascribe_.inner : e->as.cast_.expr;
+    return e;
+}
+
+static bool own_expr(const Expr *e) {
+    e = own_peel(e);
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_VAR: {
+            const Binding *b = e->as.var.binding;
+            if (!b || b->is_global || b->is_borrow) return false;
+            if (own_map_get(&g_own_set, b, NULL)) return true;
+            if (g_own_cur) {
+                int i = own_param_index(g_own_cur->fd, b);
+                if (i >= 0 && i < 32) return (g_own_cur->owned >> i) & 1u;
+            }
+            return false;
+        }
+        case EX_CALL: {
+            if (e->as.call_.ctor) {
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    const Expr *a = e->as.call_.args[i];
+                    if (a && emit_own_adt_of(a->type) && !own_expr(a)) return false;
+                }
+                return true;
+            }
+            if (e->as.call_.fn_expr || !e->as.call_.fn_binding) return false;
+            const OwnFn *f = own_fn_for(e->as.call_.fn_binding);
+            return f && f->fresh;
+        }
+        case EX_IF:
+            return e->as.if_.else_or_null &&
+                   own_expr(e->as.if_.then_) && own_expr(e->as.if_.else_or_null);
+        case EX_MATCH:
+            if (e->as.match_.n_arms == 0) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                const Expr *ab = e->as.match_.arms[i].body;
+                if (ab && ab->type.kind == TY_NEVER) continue;
+                if (!own_expr(ab)) return false;
+            }
+            return true;
+        case EX_DO:
+            return e->as.do_.n > 0 && own_expr(e->as.do_.items[e->as.do_.n - 1]);
+        case EX_LET:
+        case EX_LETREC:
+            return own_expr(e->as.let_.body);
+        default:
+            return false;
+    }
+}
+
+static void own_walk(const Expr *e);
+static bool own_walk_cb(const Expr *c, void *ud) { (void)ud; own_walk(c); return false; }
+
+static void own_walk_nested_fn(const FnDef *fd) {
+    if (!fd || !fd->body) return;
+    OwnFn *saved = g_own_cur;
+    /* A nested fn's own params are called through a value: never owned. */
+    g_own_cur = fd->binding ? own_fn_for(fd->binding) : NULL;
+    if (g_own_cur && g_own_cur->fd != fd) g_own_cur = NULL;
+    own_walk(fd->body);
+    g_own_cur = saved;
+}
+
+static void own_walk(const Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_VAR: {
+            OwnFn *f = own_fn_for(e->as.var.binding);
+            if (f && !f->addr_taken) { f->addr_taken = true; g_own_changed = true; }
+            return;
+        }
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                const Expr *init = e->as.let_.bindings[i].init;
+                own_walk(init);
+                const Binding *lb = e->as.let_.bindings[i].binding;
+                if (lb && emit_own_adt_of(lb->type) && own_expr(init))
+                    own_map_put(&g_own_set, lb, 1);
+            }
+            own_walk(e->as.let_.body);
+            return;
+        case EX_MATCH: {
+            const Expr *sc = e->as.match_.scrutinee;
+            own_walk(sc);
+            bool os = sc && emit_own_adt_of(sc->type) && own_expr(sc);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                const MatchArm *arm = &e->as.match_.arms[i];
+                if (os) {
+                    const MatchPattern *pt = &arm->pattern;
+                    for (uint32_t j = 0; j < pt->n_bindings; j++)
+                        if (pt->bindings[j] && emit_own_adt_of(pt->bindings[j]->type))
+                            own_map_put(&g_own_set, pt->bindings[j], 1);
+                    if (pt->is_var && pt->var_binding)
+                        own_map_put(&g_own_set, pt->var_binding, 1);
+                }
+                own_walk(arm->guard);
+                own_walk(arm->body);
+            }
+            return;
+        }
+        case EX_CALL: {
+            own_walk(e->as.call_.fn_expr);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                own_walk(e->as.call_.args[i]);
+            own_walk(e->as.call_.dict_arg);
+            if (!e->as.call_.fn_expr && e->as.call_.fn_binding) {
+                OwnFn *f = own_fn_for(e->as.call_.fn_binding);
+                if (f && f->owned) {
+                    for (uint32_t i = 0; i < e->as.call_.n_args && i < 32; i++) {
+                        if (!((f->owned >> i) & 1u)) continue;
+                        if (!own_expr(e->as.call_.args[i])) {
+                            f->owned &= ~(1u << i);
+                            g_own_changed = true;
+                        }
+                    }
+                    /* Fewer args than params (a partial application or a
+                     * variadic tail): the rest arrive from an unknown place. */
+                    if (e->as.call_.n_args < f->fd->n_params) {
+                        uint32_t keep = e->as.call_.n_args >= 32
+                            ? 0xffffffffu : ((1u << e->as.call_.n_args) - 1u);
+                        if (f->owned & ~keep) { f->owned &= keep; g_own_changed = true; }
+                    }
+                }
+            }
+            return;
+        }
+        case EX_RETURN:
+            own_walk(e->as.return_.value);
+            if (g_own_cur && g_own_cur->fresh && !own_expr(e->as.return_.value)) {
+                g_own_cur->fresh = false;
+                g_own_changed = true;
+            }
+            return;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure) own_walk_nested_fn(e->as.closure_.closure->fn);
+            return;
+        case EX_FN:
+            own_walk_nested_fn(e->as.fn_.fn);
+            return;
+        case EX_FN_DEF:
+            own_walk_nested_fn(e->as.fn_def_.fn);
+            return;
+        default:
+            cps_visit_children(e, own_walk_cb, NULL);
+            return;
+    }
+}
+
+static void own_compute(EmitCtx *ctx, const Expr *prog) {
+    if (g_own_prog == prog && g_own_fns) return;
+    free(g_own_fns); g_own_fns = NULL; g_own_n = 0;
+    own_map_free(&g_own_fn_ix);
+    own_map_free(&g_own_set);
+    g_own_prog = prog;
+    if (!prog || prog->kind != EX_PROGRAM) return;
+
+    uint32_t np = 0;
+    const Expr **items = flatten_program_items(prog, &np);
+    g_own_fns = (OwnFn *)calloc(np ? np : 1, sizeof(OwnFn));
+    for (uint32_t i = 0; i < np; i++) {
+        const Expr *it = items[i];
+        if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+        const FnDef *fd = it->as.fn_def_.fn;
+        if (!fd->binding || own_fn_for(fd->binding)) continue;
+        OwnFn *f = &g_own_fns[g_own_n];
+        f->fd = fd;
+        const Binding *fb = fd->binding;
+        bool external = fb->is_instance_method || fb->c_export_name ||
+                        fb->retain_c_linkage || fb->is_lifted_lambda ||
+                        (ctx && ctx->separate_compilation && fb->is_exported) ||
+                        (fb->name && strcmp(fb->name->name, "main") == 0);
+        for (uint32_t pi = 0; pi < fd->n_params && pi < 32; pi++) {
+            const Binding *p = fd->params[pi];
+            if (external || !p || p->is_borrow || !emit_own_adt_of(p->type)) continue;
+            if (fb->nonretain_ptr_param_mask & (1u << pi)) continue;   /* lent */
+            f->owned |= (1u << pi);
+        }
+        f->fresh = fd->body && emit_own_adt_of(fd->body->type);
+        own_map_put(&g_own_fn_ix, fb, g_own_n);
+        g_own_n++;
+    }
+
+    /* Greatest fixed point: every fact only ever turns off. */
+    for (int iter = 0; iter < 64; iter++) {
+        g_own_changed = false;
+        own_map_clear(&g_own_set);
+        for (uint32_t i = 0; i < np; i++) {
+            const Expr *it = items[i];
+            if (!it) continue;
+            if (it->kind == EX_FN_DEF && it->as.fn_def_.fn) {
+                const FnDef *fd = it->as.fn_def_.fn;
+                g_own_cur = fd->binding ? own_fn_for(fd->binding) : NULL;
+                if (g_own_cur && g_own_cur->fd != fd) g_own_cur = NULL;
+                own_walk(fd->body);
+                if (g_own_cur && g_own_cur->fresh && !own_expr(fd->body)) {
+                    g_own_cur->fresh = false;
+                    g_own_changed = true;
+                }
+            } else {
+                g_own_cur = NULL;
+                own_walk(it);
+            }
+        }
+        g_own_cur = NULL;
+        for (uint32_t k = 0; k < g_own_n; k++) {
+            if (g_own_fns[k].addr_taken && g_own_fns[k].owned) {
+                g_own_fns[k].owned = 0;
+                g_own_changed = true;
+            }
+        }
+        if (!g_own_changed) { free(items); return; }
+    }
+    /* No fixed point inside the budget: claim nothing. */
+    for (uint32_t k = 0; k < g_own_n; k++) { g_own_fns[k].owned = 0; g_own_fns[k].fresh = false; }
+    own_map_clear(&g_own_set);
+    free(items);
+}
+
+bool emit_own_binding_owned(EmitCtx *ctx, const Binding *b) {
+    if (!ctx || !b) return false;
+    own_compute(ctx, ctx->program_root);
+    return own_map_get(&g_own_set, b, NULL);
+}
+
+bool emit_own_param_owned(EmitCtx *ctx, const FnDef *fd, uint32_t i) {
+    if (!ctx || !fd || !fd->binding || i >= 32) return false;
+    own_compute(ctx, ctx->program_root);
+    const OwnFn *f = own_fn_for(fd->binding);
+    return f && f->fd == fd && ((f->owned >> i) & 1u);
+}
+
+/* ---- the own half: a consuming callee discharges its parameter ---------- *
+ *
+ * A caller hands a by-value recursive ADT to a callee it cannot prove
+ * non-retaining by MOVING it (Residue 1 lends only to proven non-retaining
+ * callees), and nothing discharged it there: `(defn tail [xs : Lst] : Lst
+ * (match xs (Cons h t) t (Nil) (Nil)))` returned the copy of the second box's
+ * contents and dropped the second box itself -- one leaked box per call.
+ *
+ * When a parameter is OWNED (every caller passes an owned value, above) and
+ * the body's one use of it is a `match` that runs once per call, each arm
+ * frees, after its value is computed, the boxes of the parameter's spine it
+ * did not pass on:
+ *   SHALLOW -- a recursive-field binder MOVED out exactly once (returned, or
+ *              handed to a constructor or a consuming callee): its contents
+ *              were copied on, so the box that held them is garbage;
+ *   DEEP    -- a binder unused, or used only in ways the strict alias walk
+ *              proves confined: the whole sub-spine is garbage.
+ * Anything else discharges nothing for that field (a leak, as before).  The
+ * parameter's own storage is the caller's and is never touched. */
+
+static uint32_t g_own_count_n;
+static const Binding *g_own_count_b;
+static bool own_count_cb(const Expr *c, void *ud);
+static void own_count(const Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_VAR:
+            if (e->as.var.binding == g_own_count_b) g_own_count_n++;
+            return;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure) {
+                const struct Closure *cl = e->as.closure_.closure;
+                for (uint8_t i = 0; i < cl->n_captures; i++)
+                    if (cl->captures[i] == g_own_count_b) g_own_count_n++;
+                if (cl->fn) own_count(cl->fn->body);
+            }
+            return;
+        case EX_FN:
+            if (e->as.fn_.fn) own_count(e->as.fn_.fn->body);
+            return;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn) own_count(e->as.fn_def_.fn->body);
+            return;
+        case EX_CALL:
+            own_count(e->as.call_.fn_expr);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                own_count(e->as.call_.args[i]);
+            own_count(e->as.call_.dict_arg);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                own_count(e->as.let_.bindings[i].init);
+            own_count(e->as.let_.body);
+            return;
+        case EX_MATCH:
+            own_count(e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                own_count(e->as.match_.arms[i].guard);
+                own_count(e->as.match_.arms[i].body);
+            }
+            return;
+        default:
+            cps_visit_children(e, own_count_cb, NULL);
+            return;
+    }
+}
+static bool own_count_cb(const Expr *c, void *ud) { (void)ud; own_count(c); return false; }
+
+static uint32_t own_uses(const Expr *e, const Binding *b) {
+    g_own_count_b = b;
+    g_own_count_n = 0;
+    own_count(e);
+    return g_own_count_n;
+}
+
+/* Is `m` on the body's straight-line spine -- evaluated exactly once per
+ * call, as the value of the body? */
+static bool own_on_spine(const Expr *body, const Expr *m) {
+    const Expr *cur = own_peel(body);
+    while (cur) {
+        if (cur == m) return true;
+        if (cur->kind == EX_DO && cur->as.do_.n > 0)
+            cur = own_peel(cur->as.do_.items[cur->as.do_.n - 1]);
+        else if (cur->kind == EX_LET || cur->kind == EX_LETREC)
+            cur = own_peel(cur->as.let_.body);
+        else
+            return false;
+    }
+    return false;
+}
+
+/* The one occurrence of `b` is a MOVE into a fresh copy, on the arm's
+ * unconditional spine: a constructor argument, or an argument of a direct
+ * call to a callee whose parameter consumes (not ^borrow, not proven
+ * non-retaining).  `top` is the arm body itself: a call there is a tail call,
+ * and freeing after it would cost the C compiler the jump a recursive walker
+ * relies on, so it is declined (a leak, as before). */
+static bool own_moved_once(const Expr *e, const Binding *b, bool top) {
+    e = own_peel(e);
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_CALL: {
+            const Binding *fb = e->as.call_.fn_binding;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *a = own_peel(e->as.call_.args[i]);
+                if (a && a->kind == EX_VAR && a->as.var.binding == b) {
+                    if (e->as.call_.ctor) return true;
+                    if (top || e->as.call_.fn_expr || !fb) return false;
+                    const OwnFn *f = own_fn_for(fb);
+                    if (!f || i >= f->fd->n_params || i >= 32) return false;
+                    if (f->fd->params[i]->is_borrow) return false;
+                    if (fb->nonretain_ptr_param_mask & (1u << i)) return false;
+                    return true;
+                }
+                if (own_moved_once(a, b, false)) return true;
+            }
+            return false;
+        }
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (own_moved_once(e->as.builtin.args[i], b, false)) return true;
+            return false;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (own_moved_once(e->as.do_.items[i], b, top && i + 1 == e->as.do_.n))
+                    return true;
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (own_moved_once(e->as.let_.bindings[i].init, b, false)) return true;
+            return own_moved_once(e->as.let_.body, b, top);
+        default:
+            return false;
+    }
+}
+
+bool emit_own_match_discharges(EmitCtx *ctx, const Expr *m) {
+    if (!ctx || !m || m->kind != EX_MATCH || !ctx->own_cur_fn) return false;
+    if (getenv("TUR_NO_OWN_DISCHARGE")) return false;
+    const FnDef *fd = ctx->own_cur_fn;
+    const Expr *sc = own_peel(m->as.match_.scrutinee);
+    if (!sc || sc->kind != EX_VAR) return false;
+    const Binding *p = sc->as.var.binding;
+    if (!emit_own_adt_of(p->type)) return false;
+    int pi = own_param_index(fd, p);
+    if (pi < 0 || !emit_own_param_owned(ctx, fd, (uint32_t)pi)) return false;
+    if (!own_on_spine(fd->body, m)) return false;
+    return own_uses(fd->body, p) == 1;
+}
+
+int emit_own_arm_field_discharge(EmitCtx *ctx, const Expr *m, const MatchArm *arm,
+                                 uint32_t fi) {
+    (void)m;
+    const MatchPattern *pt = &arm->pattern;
+    if (arm->guard || pt->is_wildcard || pt->is_var || pt->is_literal || !pt->ctor)
+        return EMIT_OWN_NONE;
+    const CtorDef *ctor = pt->ctor;
+    if (fi >= ctor->n_fields || ctor->fields[fi].drop_inner_def != ctor->adt)
+        return EMIT_OWN_NONE;
+    const Binding *b = fi < pt->n_bindings ? pt->bindings[fi] : NULL;
+    uint32_t n = b ? own_uses(arm->body, b) : 0;
+    if (n == 0) return EMIT_OWN_DEEP;
+    const Expr *body = own_peel(arm->body);
+    if (body && body->kind == EX_VAR && body->as.var.binding == b)
+        return EMIT_OWN_SHALLOW;
+    own_compute(ctx, ctx->program_root);
+    if (n == 1 && own_moved_once(arm->body, b, true)) return EMIT_OWN_SHALLOW;
+    bool scalar = arm->body && !bc_kind_can_alias(arm->body->type.kind);
+    if (localowned_binding_is_confined(arm->body, b, scalar)) return EMIT_OWN_DEEP;
+    return EMIT_OWN_NONE;
+}
+
+void emit_own_arm_discharges(EmitCtx *ctx, Buf *body, const Expr *m,
+                             const MatchArm *arm, const char *acc) {
+    const MatchPattern *pt = &arm->pattern;
+    if (!pt->ctor) return;
+    const CtorDef *ctor = pt->ctor;
+    const AdtDef *def = ctor->adt;
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        if (ctor->fields[fi].drop_inner_def != def) continue;
+        int mode = emit_own_arm_field_discharge(ctx, m, arm, fi);
+        if (mode == EMIT_OWN_NONE) continue;
+        char *mp = adt_field_member_path(def, ctor, fi);
+        indent_buf(body, ctx->indent);
+        if (mode == EMIT_OWN_SHALLOW) {
+            buf_printf(body,
+                "tur_region_free((void *)(intptr_t)__scrut%s%s);  /* moved out: free its box */\n",
+                acc, mp);
+        } else {
+            char *mn = mangle_adt_name(def->name);
+            buf_printf(body,
+                "if (__scrut%s%s) drop_glue_tur_adt_%s((void *)(intptr_t)__scrut%s%s);  /* unused: free the sub-spine */\n",
+                acc, mp, mn, acc, mp);
+            free(mn);
+        }
+        free(mp);
+    }
 }
