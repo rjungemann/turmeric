@@ -12089,18 +12089,33 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * words for no longer than an ordinary call's argument registers do.
      * TUR_TB_BOUNCE is negative: interned ids live in [2^62, 2^63) and
      * primitive tags are TypeKind values, so no `any` carries it. */
+    /* dk-reap-list-shared-across-threads: without thread-locals (c2mir,
+     * `tur jit`) the four were plain globals, so every thread's dynamic tail
+     * calls bounced through ONE descriptor -- a Scheme program's worker threads
+     * called each other's functions.  They are host slots there now
+     * (src/runtime/tur_tls.c), in the same #if/#else shape as the other
+     * thread-locals, which is also what the split generator routes. */
     buf_puts(out,
         "#define TUR_TB_BOUNCE ((int64_t)-7)\n"
-        "#if defined(__GNUC__) || defined(__clang__)\n"
-        "#define TUR_TB_TLS TUR_THREAD_LOCAL\n"
-        "#else\n"
-        "#define TUR_TB_TLS\n"
-        "#endif\n"
         "typedef struct { tur_tagged_t fn; int n; tur_tagged_t a[8]; } tur_tb_desc_t;\n"
-        "static TUR_TB_TLS tur_tb_desc_t tur_tb_desc;\n"
-        "static TUR_TB_TLS void *tur_tb_armed_for;\n"
-        "static TUR_TB_TLS void *tur_tb_root;\n"
-        "static TUR_TB_TLS tur_tagged_t tur_tb_sentinel_box;\n");
+        "#if defined(__GNUC__) || defined(__clang__)\n"
+        "static TUR_THREAD_LOCAL tur_tb_desc_t tur_tb_desc;\n"
+        "static TUR_THREAD_LOCAL void *tur_tb_armed_for;\n"
+        "static TUR_THREAD_LOCAL void *tur_tb_root;\n"
+        "static TUR_THREAD_LOCAL tur_tagged_t tur_tb_sentinel_box;\n"
+        "#else\n"
+        "extern void **tur_tls_tb_desc_ptr(void);\n"
+        "extern void **tur_tls_tb_armed_for_ptr(void);\n"
+        "extern void **tur_tls_tb_root_ptr(void);\n"
+        "extern void **tur_tls_tb_sentinel_box_ptr(void);\n"
+        "/* The host's slots are raw bytes: 256 for the descriptor, 16 for the box. */\n"
+        "typedef char tur_tb_desc_fits_host_slot[sizeof(tur_tb_desc_t) <= 256 ? 1 : -1];\n"
+        "typedef char tur_tb_box_fits_host_slot[sizeof(tur_tagged_t) <= 16 ? 1 : -1];\n"
+        "#define tur_tb_desc (*(tur_tb_desc_t *)tur_tls_tb_desc_ptr())\n"
+        "#define tur_tb_armed_for (*(void **)tur_tls_tb_armed_for_ptr())\n"
+        "#define tur_tb_root (*(void **)tur_tls_tb_root_ptr())\n"
+        "#define tur_tb_sentinel_box (*(tur_tagged_t *)tur_tls_tb_sentinel_box_ptr())\n"
+        "#endif\n");
     r7gc_note_tls_root("tur_tb_desc");
     r7gc_note_tls_root("tur_tb_armed_for");
     r7gc_note_tls_root("tur_tb_root");
@@ -13783,6 +13798,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (shared || cps_uses_delimited || cps_uses_cloneable_dk ||
         cps_uses_serial || cps_ir_emittable) {
         emit_cps_runtime_prelude(out);
+        /* The DK runtime's per-thread state (dk-reap-list-shared-across-
+         * threads): realloc'd (collected) arrays and a chain in flight. */
+        r7gc_note_tls_root("__dk_reap_v");
+        r7gc_note_tls_root("__dk_reap_kind");
+        r7gc_note_tls_root("g_dk_meta");
+        r7gc_note_tls_root("g_dk_resume_chain");
     }
     /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
      * direct emitter lowers a base (reset ...) whose body reaches a shift through
@@ -13865,6 +13886,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase TG-004-1 PR: Per-fiber panic handling for auto-cancel propagation */
     buf_puts(out, "    tur_jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */\n");
     buf_puts(out, "    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */\n");
+    /* dk-reap-list-shared-across-threads: the fiber's own CPS entry depth and
+     * reap registry, swapped in by tur_fiber_block_resume.  The DK runtime's
+     * are per-thread, and a fiber that yields inside a CPS entry can finish
+     * it on another thread. */
+    buf_puts(out, "    void **dk_reap_v; unsigned char *dk_reap_kind;\n");
+    buf_puts(out, "    size_t dk_reap_n, dk_reap_cap;\n");
+    buf_puts(out, "    int dk_entry_depth;\n");
     buf_puts(out, "};\n\n");
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber",
                 "tur_current_fiber", "void **", "tur_tls_current_fiber_ptr", "FiberBlock **");
@@ -14065,11 +14093,28 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * out.  The trampoline path declares g_dk_driver / g_dk_meta_n and is the
      * only path since cps-tramp-resume graduated (2026-07-19). */
     buf_puts(out, "    tur_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+    /* dk-reap-list-shared-across-threads: the CPS entry depth and the reap
+     * registry follow the stack too, but a fiber's outlive a yield -- it can
+     * yield inside a CPS entry and finish that entry later, on whichever
+     * thread resumes it.  So the fiber keeps its own in its block, swapped in
+     * here and back out when control returns.  Sharing the resumer's instead
+     * would leave that thread's depth off by one forever (no reap), and on the
+     * thread that finishes the entry take the depth to 0 early (a reap of
+     * chains the resumer still runs).  The resumer's saved registry is a local
+     * of this frame, which the collector scans while the fiber runs. */
+    buf_puts(out, "    void **_dk_rv = __dk_reap_v; unsigned char *_dk_rk = __dk_reap_kind;\n");
+    buf_puts(out, "    size_t _dk_rn = __dk_reap_n, _dk_rc = __dk_reap_cap; int _dk_rd = __dk_entry_depth;\n");
+    buf_puts(out, "    __dk_reap_v = f->dk_reap_v; __dk_reap_kind = f->dk_reap_kind;\n");
+    buf_puts(out, "    __dk_reap_n = f->dk_reap_n; __dk_reap_cap = f->dk_reap_cap; __dk_entry_depth = f->dk_entry_depth;\n");
     /* r7rs-gc: the collector scans this thread's own stack from here while
      * the fiber runs on its (heap-allocated) stack. */
     buf_puts(out, "    TUR_GC_FIBER_ENTER((void *)&_dk_save);\n");
     buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
     buf_puts(out, "    TUR_GC_FIBER_LEAVE();\n");
+    buf_puts(out, "    f->dk_reap_v = __dk_reap_v; f->dk_reap_kind = __dk_reap_kind;\n");
+    buf_puts(out, "    f->dk_reap_n = __dk_reap_n; f->dk_reap_cap = __dk_reap_cap; f->dk_entry_depth = __dk_entry_depth;\n");
+    buf_puts(out, "    __dk_reap_v = _dk_rv; __dk_reap_kind = _dk_rk;\n");
+    buf_puts(out, "    __dk_reap_n = _dk_rn; __dk_reap_cap = _dk_rc; __dk_entry_depth = _dk_rd;\n");
     buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
     buf_puts(out, "    tur_current_fiber = _prev;\n");
     buf_puts(out, "    return f->result;\n");

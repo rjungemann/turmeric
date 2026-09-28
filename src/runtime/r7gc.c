@@ -258,11 +258,6 @@ static tur_gc_state *tur_gc_G;          /* points into mmap'd metadata */
 /* The calling thread's record.  A real thread-local: it holds no heap
  * pointer and is read on every allocation. */
 static __thread tur_gc_thread *tur_gc_self;
-/* Set, for good, when the program first starts a thread (before the thread
- * exists, so any code that thread runs sees it).  The DK runtime's reap list
- * is process-global, so its nested-entry drop (__dk_reap_drop_to) only runs
- * while one thread has ever run the program. */
-static int tur_gc_threaded;
 
 /* The thread-local roots of the emitted runtime: defined after the preamble
  * (emit_module.c, emit_r7rs_gc_tls_roots), it calls `add` once per
@@ -1173,7 +1168,6 @@ static int tur_gc_pthread_create(pthread_t *tp, const pthread_attr_t *a,
     unsigned long gen = t->gen;
     t->next = G->threads; G->threads = t;
     pthread_mutex_unlock(&G->world);
-    TUR_GC_STORE(&tur_gc_threaded, 1);
     pthread_t tid;
     /* Parked across the create: macOS's pthread_create holds libpthread's
      * global thread-list lock while it links the new thread in, and

@@ -1,0 +1,61 @@
+;; threads-effects-tail-resume -- docs/archive/dk-reap-list-shared-across-
+;; threads.md.  Four threads and main each run a `handle` whose clause resumes
+;; in tail position 200,000 times.  A tail resume yields to the CPS entry's
+;; trampoline, which longjmps to the landing in g_dk_driver; that landing,
+;; the resume chain and the reap registry were process globals, so a worker's
+;; entry replaced the landing another thread was about to jump to ("longjmp
+;; causes uninitialized stack frame", every run).  They are per-thread now.
+(defeffect Tick [i : int] : int)
+
+(defn count-up [n : int] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i n)
+      (set! acc (+ acc (perform (Tick i))))
+      (set! i (+ i 1)))
+    acc))
+
+;; Each Tick resumes with 1, so a run of n steps sums to n.
+(defn run-one [n : int] : int
+  (handle (count-up n)
+    (Tick [i] k) (resume k (+ 1 (- i i)))))
+
+```c
+#define FX_WORKERS 4
+static pthread_t fx_tids[FX_WORKERS];
+/* One slot per worker, named by its pthread argument: no atomics, which
+ * c2mir (`tur jit`) does not have. */
+static int64_t   fx_sums[FX_WORKERS];
+```
+
+;; Records a worker's sum in the slot its pthread argument names.
+(defn fx-store [slot : ptr<void> v : int] : nil
+  ```c
+  fx_sums[(intptr_t)slot] = v;
+  ```)
+
+(defn worker [arg : ptr<void>] : ptr<void>
+  (fx-store arg (run-one 200000))
+  arg)
+
+(defn fx-start [w : ptr<void>] : nil
+  ```c
+  for (int i = 0; i < FX_WORKERS; i++)
+      if (pthread_create(&fx_tids[i], NULL, (void *(*)(void *))w, (void *)(intptr_t)i) != 0) abort();
+  ```)
+
+;; Joins the workers and returns the sum of their four runs.
+(defn fx-join [] : int
+  ```c
+  int64_t s = 0;
+  for (int i = 0; i < FX_WORKERS; i++) pthread_join(fx_tids[i], NULL);
+  for (int i = 0; i < FX_WORKERS; i++) s += fx_sums[i];
+  return s;
+  ```)
+
+(defn main [] : int
+  (fx-start worker)
+  (let [mine (run-one 200000)]
+    (println mine)
+    (println (fx-join)))
+  0)

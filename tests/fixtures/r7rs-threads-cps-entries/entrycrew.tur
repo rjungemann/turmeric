@@ -1,0 +1,37 @@
+;; entrycrew -- four raw pthreads, each running the Scheme loop while the
+;; main thread runs it too.
+(defmodule entrycrew
+  (import entries :refer [spin])
+  (export crew-start crew-join crew-total)
+  ```c
+  #define CREW_WORKERS 4
+  static pthread_t crew_tids[CREW_WORKERS];
+  static int64_t   crew_sums[CREW_WORKERS];
+  ```
+  ;; Records a worker's sum in the slot its pthread argument names (no
+  ;; atomics: c2mir, `tur jit`, has none).
+  (defn crew-store [slot : ptr<void> v : int] : nil
+    ```c
+    crew_sums[(intptr_t)slot] = v;
+    ```)
+  (defn crew-worker [arg : ptr<void>] : ptr<void>
+    (crew-store arg (spin 20000))
+    arg)
+  (defn crew-spawn [w : ptr<void>] : nil
+    ```c
+    for (int i = 0; i < CREW_WORKERS; i++)
+        if (pthread_create(&crew_tids[i], NULL, (void *(*)(void *))w, (void *)(intptr_t)i) != 0) abort();
+    ```)
+  (defn crew-start [] : nil
+    (crew-spawn crew-worker))
+  (defn crew-join [] : nil
+    ```c
+    for (int i = 0; i < CREW_WORKERS; i++) pthread_join(crew_tids[i], NULL);
+    ```)
+  ;; The sum of the four workers' loops.
+  (defn crew-total [] : int
+    ```c
+    int64_t s = 0;
+    for (int i = 0; i < CREW_WORKERS; i++) s += crew_sums[i];
+    return s;
+    ```))

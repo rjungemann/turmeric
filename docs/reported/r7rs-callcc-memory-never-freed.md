@@ -178,11 +178,10 @@ Now each CPS entry records where its registrations start
 (`__dk_reap_mark`, emit_cps_ir.c). Under the collector (`TUR_GC_ON`) a
 nested exit forgets them (`__dk_reap_drop_to`), and the collector reclaims
 whatever nothing else reaches. The outermost exit still frees by hand, as
-before, and without the collector the drop does nothing. Nor does it once
-the program has started a thread: the list and the entry depth are
-process-global, so a mark taken on one thread says nothing about another's
-registrations, and a threaded program keeps the old behavior
-([dk-reap-list-shared-across-threads](dk-reap-list-shared-across-threads.md)). Compiled, 2,000,000
+before, and without the collector the drop does nothing. The list and the
+entry depth are per-thread (and per-fiber), so the drop holds with any
+number of threads
+([dk-reap-list-shared-across-threads](../archive/dk-reap-list-shared-across-threads.md)). Compiled, 2,000,000
 iterations:
 
 | per iteration | before | after |

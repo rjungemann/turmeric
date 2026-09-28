@@ -1,0 +1,12 @@
+#lang r7rs
+;; docs/archive/dk-reap-list-shared-across-threads.md: CPS entries on five
+;; threads at once.  The DK runtime's reap registry, entry depth and
+;; trampoline state were process globals, so the threads' entries pushed onto
+;; one array while another thread reallocated it (a segfault in
+;; __dk_reap_push, every run), and a worker's exit could free chains another
+;; thread was running.  They are per-thread now.  Each step is worth 3.
+(import (scheme base) (scheme write) (entries) (turmeric entrycrew))
+(crew-start)
+(define mine (spin 20000))
+(crew-join)
+(write (list mine (crew-total))) (newline)
