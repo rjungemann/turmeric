@@ -12732,7 +12732,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                          e->as.dyn_op_.op ? e->as.dyn_op_.op->name : "operator",
                          (k0 != TY_UNKNOWN) ? type_name(type_simple(k0, CK_COPY))
                                             : "value of that type");
-                TuriValue bad = vals[0];
+                /* `n` is never 0: the two sites that build an EX_DYN_OP set
+                 * n_args to 1 (elab_forms.c) or gate on an `any` operand,
+                 * which takes at least one (elab_call.c).  Neither invariant
+                 * is visible in this translation unit, so GCC reads this as a
+                 * possibly uninitialized `stackv[0]` -- and only on aarch64,
+                 * where inlining exposes the path to the warning pass, so the
+                 * release's linux-aarch64 leg failed on
+                 * -Werror=maybe-uninitialized while x86-64 built clean on the
+                 * same GCC.  Spell the invariant locally rather than leave one
+                 * leg of the release matrix unbuildable. */
+                TuriValue bad = (n > 0) ? vals[0] : turi_nil();
                 for (uint32_t i = 0; i < n; i++)
                     if (vals[i].tag != TURI_INT && vals[i].tag != TURI_FLOAT) { bad = vals[i]; break; }
                 if (vals != stackv) free(vals);
