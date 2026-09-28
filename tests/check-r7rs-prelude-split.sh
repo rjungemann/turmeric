@@ -38,11 +38,18 @@ trap 'rm -rf "$TMP"' EXIT
 FAILED=0
 fail() { echo "FAIL check-r7rs-prelude-split: $*"; FAILED=1; }
 
-# Per-unit by design: each unit registers its own rows of `any` type names.
-ALLOW='^(__tur_any_chunk|__tur_any_rows)$'
+# Per-unit by design: each unit registers its own rows of `any` type names
+# (Mach-O spells a C name with a leading `_`).
+ALLOW='^_?(__tur_any_chunk|__tur_any_rows)$'
 
+# Mach-O objects list assembler-local labels (`ltmp1`, `l_.str`) among their
+# data symbols, in every object alike; a C name there always starts with `_`.
+C_NAME='.'
+[ "$(uname -s)" = Darwin ] && C_NAME='^_'
 defined_data() {
-    nm "$1" 2>/dev/null | awk '$2 ~ /^[BbDdGgSs]$/ { n = $3; sub(/\.[0-9]+$/, "", n); print n }' | sort -u
+    nm "$1" 2>/dev/null |
+        awk -v c="$C_NAME" '$2 ~ /^[BbDdGgSs]$/ && $3 ~ c { n = $3; sub(/\.[0-9]+$/, "", n); print n }' |
+        sort -u
 }
 
 FIXTURES="r7rs-named-let-sum r7rs-strings r7rs-ports r7rs-procedure-identity r7rs-colon-identifiers r7rs-gc-seam r7rs-type-errors-raise"
