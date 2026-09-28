@@ -43,7 +43,8 @@
  * parked in a blocking call (tur_gc_park, the release points at the end of
  * this file) has already spilled its registers and stack pointer and is left
  * where it is; any other thread is sent a signal whose handler spills the
- * same and waits, on its own stack, for the resume signal.  This is the
+ * same and waits, on its own stack, for the resume signal (on macOS, for
+ * the collector to clear its flag: tur_gc_stop_handler says why).  This is the
  * Boehm collector's design: a thread can be stopped anywhere, so no safe
  * points are compiled in.  The stop signal restarts the interrupted system
  * call (SA_RESTART); the few that do not restart are the wrapped ones, whose
@@ -894,7 +895,20 @@ TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_mark_roots(void) {
  * handler's mask), so sigsuspend cannot miss it: sent before, it is pending
  * and delivered the moment sigsuspend unblocks it.  The collector clears
  * `stopped` before it sends the resume, so a thread that has not yet reached
- * the loop skips it.  Only async-signal-safe calls, and errno kept. */
+ * the loop skips it.  Only async-signal-safe calls, and errno kept.
+ *
+ * macOS waits differently (docs/archive/r7rs-gc-darwin-stop-handler-reentered.md).
+ * There the stop signal can arrive while the handler is still running --
+ * the next collection's, landing before the thread has left this one's --
+ * although the handler's mask blocks it: in the fixture that found this, a
+ * quarter to two thirds of the handler's entries were nested ones, on
+ * threads stopped while waiting on the heap mutex.  Nested
+ * sigsuspends then swallowed each other's resume signals, and the threads
+ * hung, or nested until the kernel had no stack left to deliver a signal on
+ * (SIGILL).  Nesting itself is harmless -- the inner entry is the next
+ * collection stopping the same thread, spilling from a deeper frame -- so on
+ * macOS the handler polls `stopped` and yields instead, and no resume signal
+ * is sent. */
 static void tur_gc_stop_handler(int sig) {
     (void)sig;
     int e = errno;
@@ -906,10 +920,14 @@ static void tur_gc_stop_handler(int sig) {
         t->gc_intr = 1;
         TUR_GC_STORE(&t->stopped, 1);
         __atomic_fetch_add(&tur_gc_G->acks, 1, __ATOMIC_SEQ_CST);
+#if defined(__APPLE__)
+        while (TUR_GC_LOAD(&t->stopped)) sched_yield();
+#else
         sigset_t m;
         sigfillset(&m);
         sigdelset(&m, TUR_GC_SIG_RESUME);
         while (TUR_GC_LOAD(&t->stopped)) sigsuspend(&m);
+#endif
     }
     errno = e;
 }
@@ -937,7 +955,9 @@ static void tur_gc_start_world(void) {
     for (tur_gc_thread *t = G->threads; t; t = t->next) {
         if (t->stop_state != 1) continue;
         TUR_GC_STORE(&t->stopped, 0);
-        pthread_kill(t->tid, TUR_GC_SIG_RESUME);
+#if !defined(__APPLE__)
+        pthread_kill(t->tid, TUR_GC_SIG_RESUME);   /* macOS polls instead */
+#endif
         t->stop_state = 0;
     }
 }
