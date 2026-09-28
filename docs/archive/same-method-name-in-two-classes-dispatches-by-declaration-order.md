@@ -41,7 +41,7 @@ just calls the other class's instance. Reordering two unrelated `definstance`
 forms changes the answer.
 
 **Status:** open. Found 2026-09-13 while validating the
-[msgpack spice plan](../upcoming/hold/msgpack-spice-plan.md)'s class-naming
+[msgpack spice plan](msgpack-spice-plan.md)'s class-naming
 decision (does json's `Encode` really have to be renamed, or could msgpack
 declare a method of the same name?). It has to be renamed -- this is why.
 
@@ -147,4 +147,4 @@ close the silent-wrong-answer hole.
 
 Give each class's methods a distinct name. This is what the msgpack plan now
 does: `encode-json` / `encode-mp`, never a shared `encode`. See
-[msgpack-spice-plan.md](../upcoming/hold/msgpack-spice-plan.md).
+[msgpack-spice-plan.md](msgpack-spice-plan.md).

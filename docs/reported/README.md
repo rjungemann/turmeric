@@ -1956,7 +1956,7 @@ defect count: most are genuine lengths, ports and indices.
 ## Found building the msgpack spice (filed 2026-09-14)
 
 Four defects found in one session implementing
-[msgpack-spice-plan](../upcoming/hold/msgpack-spice-plan.md) as
+[msgpack-spice-plan](../archive/msgpack-spice-plan.md) as
 `turmeric-spices/spices/msgpack`. Three are build breakers with a known
 workaround in that spice; the fourth is a silent wrong answer in the reader.
 

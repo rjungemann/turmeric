@@ -292,7 +292,7 @@ dep is `:optional true` in the manifest, matching how `spices/json` itself
 depends on `spices/test` -- the core must build without a transport.
 
 Binary framing belongs to
-[hold/msgpack-spice-plan.md](hold/msgpack-spice-plan.md) when that lands;
+[../archive/msgpack-spice-plan.md](../archive/msgpack-spice-plan.md) when that lands;
 CRDT deltas are a good forcing case for it and a bad reason to block on it.
 
 ## 3. Law checking -- the part that is not a port

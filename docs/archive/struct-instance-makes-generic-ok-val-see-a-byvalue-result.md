@@ -51,7 +51,7 @@ but the trigger is nonlocal and counterintuitive: adding an instance for one
 type breaks a generic that never mentions that type.
 
 **Status:** open. Found 2026-09-14 building `spices/msgpack` (the MessagePack
-spice from [msgpack-spice-plan](../upcoming/hold/msgpack-spice-plan.md)), whose
+spice from [msgpack-spice-plan](msgpack-spice-plan.md)), whose
 `DecodeMp` class and `decode-mp-list` mirror the json spice's `DecodeJson` /
 `decode-json-list` one for one.
 
