@@ -1,0 +1,73 @@
+;; byvalue-recursive-shared-copies-leak: a by-value struct with an `rc` field,
+;; copied out of something that keeps owning it, takes its own count.
+;;
+;; A let-local of such a struct releases each rc field at scope exit, so it
+;; must hold its own +1.  A copy of a value someone else owns holds none, and
+;; before this fix every shape below decremented a count it never took --
+;; ASan heap-use-after-free in rc_strong_decrement:
+;;
+;;   id-b    -- a copy of a ^borrow, returned;
+;;   get-g   -- a copy of a global, returned (twice);
+;;   pick    -- a ^borrow in ONE branch of the result (the other is fresh, and
+;;              must not be counted twice);
+;;   first-n -- a match binder of a ^borrow, let-bound.
+;;
+;; Each shared view is now cloned where it becomes an owner (a let-local, a
+;; function result): the clone takes +1 per rc field, the local's scope-exit
+;; drop gives it back.  The strong-count lines show the balance -- one owner
+;; left, the original.  copy-b is the spelling TUR-E0108 names for a struct
+;; whose owning field is a `ref`, which has no count to take.
+;;
+;; Expected output:
+;;   1
+;;   1
+;;   1
+;;   1
+;;   1
+;;   1
+;;   2
+;;   1
+;;   1
+;;   1
+;;   1
+;;   9
+;;   1
+
+(defstruct S [r : rc<int> n : int])
+(defstruct R [p : ref<int> n : int])
+(defdata L [] (C [s : S tl : L]) (E))
+
+(defn id-b [^borrow x : S] : S x)
+
+(def g (S (rc/of 5) 1))
+(defn get-g [] : S g)
+
+(defn pick [c : bool ^borrow x : S] : S
+  (if c x (S (rc/of 7) 2)))
+
+(defn first-n [^borrow l : L] : int
+  (match l
+    (C s tl) (let [t s] (.n t))
+    (E)      0))
+
+(defn copy-b [^borrow x : R] : R (R (ref (deref (.p x))) (.n x)))
+
+(defn main [] : int
+  (let [s (S (rc/of 5) 1)]
+    (let [w (id-b s)] (println (.n w)))
+    (println (.n s))
+    (println (rc/strong-count (.r s))))
+  (let [w (get-g)] (println (.n w)))
+  (let [w2 (get-g)] (println (.n w2)))
+  (println (rc/strong-count (.r g)))
+  (let [s (S (rc/of 6) 1)]
+    (let [a (pick false s)] (println (.n a)))
+    (let [b (pick true s)] (println (.n b)))
+    (println (rc/strong-count (.r s))))
+  (let [l (C (S (rc/of 8) 1) (E))]
+    (println (first-n l))
+    (println (first-n l)))
+  (let [r (R (ref 9) 1)]
+    (let [c (copy-b r)] (println (deref (.p c))))
+    (println (.n r)))
+  0)

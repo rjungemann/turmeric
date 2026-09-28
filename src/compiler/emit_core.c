@@ -968,6 +968,15 @@ bool expr_subtree_has_inline_c(const Expr *e) {
          * so this node has now been the missing arm in three walks. */
         case EX_UNION_INJECT:
             return expr_subtree_has_inline_c(e->as.union_inject_.value);
+        /* byvalue-recursive-shared-copies-leak: an rc count operation and a
+         * scope-exit `defer` are emitter code around their operand.  The rc
+         * field auto-drop IS an injected defer, and the clone of a shared view
+         * an rc clone, so leaving these to `default` switched the inference off
+         * for every body holding an rc-field struct local -- the same missing
+         * arm this function has grown three times before. */
+        case EX_RC_CLONE: return expr_subtree_has_inline_c(e->as.rc_clone_.expr);
+        case EX_RC_DROP:  return expr_subtree_has_inline_c(e->as.rc_drop_.expr);
+        case EX_DEFER:    return expr_subtree_has_inline_c(e->as.defer_.body);
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
             return true;
@@ -1631,6 +1640,12 @@ static bool box_reader_result_void_sink(const char *name) {
  * The alias set is a file-scope stack, like the sum flag: the walk is not
  * reentrant.  Bounded; overflow refuses (conservative). */
 static bool g_bc_strict_handoff = false;
+/* byvalue-recursive-shared-copies-leak: the walk's root is a ^borrow
+ * parameter.  Nothing derived from a borrow is ever an OWNER (ownership
+ * provenance refuses it), so a local bound to any value that may point into
+ * the root's spine is only an alias to track -- where for an owned root a
+ * bare rebinding is a move, and its local becomes the spine's owner. */
+static bool g_bc_root_unowned = false;
 #define BC_MAX_ALIAS 64
 static const Binding *g_bc_alias[BC_MAX_ALIAS];
 static uint32_t g_bc_n_alias = 0;
@@ -1678,6 +1693,23 @@ static bool bc_expr_roots_at_b(const Expr *x, const Binding *b) {
     return false;
 }
 
+/* byvalue-recursive-shared-copies-leak: is `x` a static call handing `b` (or
+ * an alias of it) to a parameter the callee keeps only in its result? */
+static bool bc_call_result_aliases_b(const Expr *x, const Binding *b) {
+    while (x && (x->kind == EX_ASCRIBE || x->kind == EX_CAST))
+        x = x->kind == EX_ASCRIBE ? x->as.ascribe_.inner : x->as.cast_.expr;
+    if (!x || x->kind != EX_CALL || x->as.call_.fn_expr) return false;
+    const Binding *fb = x->as.call_.fn_binding;
+    if (!fb || !fb->resalias_param_mask || !call_dispatch_is_static(x)) return false;
+    for (uint32_t i = 0; i < x->as.call_.n_args && i < 32; i++) {
+        const Expr *a = x->as.call_.args[i];
+        if (a && a->kind == EX_VAR && bc_is_b(a->as.var.binding, b) &&
+            (fb->resalias_param_mask & (1u << i)))
+            return true;
+    }
+    return false;
+}
+
 /* The unmodelled-form answer: defer to the strict escape walk for `b`, and in
  * strict mode for every tracked alias too. */
 static bool bc_unmodelled(const Expr *e, const Binding *b) {
@@ -1710,6 +1742,15 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             return box_uses_confined(e->as.get_field_.struct_expr, b, true);
         case EX_ASCRIBE: return box_uses_confined(e->as.ascribe_.inner, b, confined);
         case EX_CAST:    return box_uses_confined(e->as.cast_.expr, b, confined);
+        /* byvalue-recursive-shared-copies-leak: an rc clone takes a count on
+         * its operand and hands the same control block back -- transparent,
+         * like a widen, in the position it occupies. */
+        case EX_RC_CLONE: return box_uses_confined(e->as.rc_clone_.expr, b, confined);
+        /* ... and a count DROP, or the scope-exit defer the rc field auto-drop
+         * wraps it in, keeps nothing: its operand is read and released, its
+         * value discarded. */
+        case EX_RC_DROP:  return box_uses_confined(e->as.rc_drop_.expr, b, /*confined=*/true);
+        case EX_DEFER:    return box_uses_confined(e->as.defer_.body, b, /*confined=*/true);
         /* any-struct-box-leak-per-widen: the three `any` readers.  Each consumes
          * the tagged value and yields something that cannot alias the payload
          * box, so `b` appearing directly underneath one is a READ, not
@@ -1807,14 +1848,38 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             }
             return true;
         case EX_LET:
-        case EX_LETREC:
-            for (uint32_t i = 0; i < e->as.let_.n; i++)
+        case EX_LETREC: {
+            /* byvalue-recursive-shared-copies-leak (strict mode): a local bound
+             * to a call whose result may alias `b` -- `(let [w (id-b zs)] ...)`
+             * through a result-alias ^borrow parameter -- is tracked as an
+             * alias for the rest of the let instead of refusing the free.  A
+             * bare `b` init is NOT: that is a move, and its local becomes the
+             * spine's owner. */
+            uint32_t saved_n = g_bc_n_alias;
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                const Expr *init = e->as.let_.bindings[i].init;
+                const Binding *lb = e->as.let_.bindings[i].binding;
+                if (g_bc_strict_handoff && lb && bc_kind_can_alias(lb->type.kind) &&
+                    (g_bc_root_unowned || bc_call_result_aliases_b(init, b))) {
+                    if (!box_uses_confined(init, b, /*confined=*/true)) {
+                        g_bc_n_alias = saved_n;
+                        return false;
+                    }
+                    bc_push_alias(lb);
+                    continue;
+                }
                 /* A binding init's value is retained in the bound local, so a
                  * box-owned pointer flowing there could outlive the box: NOT
                  * confined. */
-                if (!box_uses_confined(e->as.let_.bindings[i].init, b, false))
+                if (!box_uses_confined(init, b, false)) {
+                    g_bc_n_alias = saved_n;
                     return false;
-            return box_uses_confined(e->as.let_.body, b, confined);
+                }
+            }
+            bool ok = box_uses_confined(e->as.let_.body, b, confined);
+            g_bc_n_alias = saved_n;
+            return ok;
+        }
         case EX_BUILTIN: {
             /* A print-family builtin (e.g. `println`) consumes -- prints -- its
              * argument and never retains a pointer into it, so it confines its
@@ -1860,6 +1925,15 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
                 if (a && a->kind == EX_VAR && bc_is_b(a->as.var.binding, b)) {
                     if (acc) continue;             /* scalar result cannot alias */
                     if (arg_sink) continue;        /* printed, not retained */
+                    /* byvalue-recursive-shared-copies-leak: a ^borrow callee
+                     * that keeps the spine nowhere but its result -- the
+                     * result is an alias, so it is safe exactly when THIS
+                     * call's result is confined (or, at a let, tracked). */
+                    if (g_bc_strict_handoff && fb_static && i < 32 &&
+                        (fb->resalias_param_mask & (1u << i))) {
+                        if (!confined) return false;
+                        continue;
+                    }
                     /* Residue 1 (strict mode): a hand-off to a callee not
                      * proven non-retaining is an escape -- it may store the
                      * value, and the spine the caller frees would then be
@@ -1904,11 +1978,13 @@ bool localowned_binding_is_confined(const Expr *body, const Binding *b,
                                     bool result_cannot_carry) {
     if (!body || !b) return false;
     g_bc_strict_handoff = true;
+    g_bc_root_unowned = b->is_borrow;
     g_bc_n_alias = 0;
     g_bc_alias_overflow = false;
     bool r = box_uses_confined(body, b, /*confined=*/result_cannot_carry);
     if (g_bc_alias_overflow) r = false;
     g_bc_strict_handoff = false;
+    g_bc_root_unowned = false;
     g_bc_n_alias = 0;
     g_bc_alias_overflow = false;
     return r;
@@ -6866,6 +6942,59 @@ bool emit_own_binding_owned(EmitCtx *ctx, const Binding *b) {
     if (!ctx || !b) return false;
     own_compute(ctx, ctx->program_root);
     return own_map_get(&g_own_set, b, NULL);
+}
+
+/* byvalue-recursive-shared-copies-leak: is `e` a value that owns its spine --
+ * a construction, a fresh call, an owned local -- by the analysis above?  The
+ * question a caller asks before freeing a TEMPORARY it lent to a callee. */
+bool emit_own_expr_owned(EmitCtx *ctx, const Expr *e) {
+    if (!ctx || !e) return false;
+    own_compute(ctx, ctx->program_root);
+    OwnFn *saved = g_own_cur;
+    g_own_cur = NULL;
+    if (ctx->own_cur_fn && ctx->own_cur_fn->binding) {
+        g_own_cur = own_fn_for(ctx->own_cur_fn->binding);
+        if (g_own_cur && g_own_cur->fd != ctx->own_cur_fn) g_own_cur = NULL;
+    }
+    bool r = own_expr(e);
+    g_own_cur = saved;
+    return r;
+}
+
+/* byvalue-recursive-shared-copies-leak: may the caller free argument `i` of
+ * `call` -- spilled to a temporary for a `const T *` formal -- right after the
+ * call returns?  A fresh by-value recursive value (a construction, a fresh
+ * call) handed straight to a parameter the callee neither keeps nor frees
+ * (nonretaining, or a ^borrow kept only in a result that here is a scalar) had
+ * no owner at all: `(llen (build 3))` leaked the whole spine on every call.
+ * The result must be a non-pointer scalar, so nothing the call returns can
+ * point into what is freed; a tail call keeps its jump and leaks as before. */
+bool emit_call_arg_temp_is_lent_fresh_spine(EmitCtx *ctx, const Expr *call,
+                                            uint32_t i) {
+    if (!ctx || !call || call->kind != EX_CALL) return false;
+    if (i >= call->as.call_.n_args || i >= 32) return false;
+    if (call->as.call_.fn_expr || call->as.call_.wants_tailcall) return false;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb || !call_dispatch_is_static(call)) return false;
+    if (bc_kind_can_alias(call->type.kind)) return false;
+    const Expr *a = own_peel(call->as.call_.args[i]);
+    if (!a || a->kind == EX_VAR) return false;       /* a local owns it */
+    Type at = call->as.call_.args[i]->type;
+    if (at.kind != TY_ADT || !emit_own_adt_of(at)) return false;
+    if (!(((fb->nonretain_ptr_param_mask | fb->resalias_param_mask) >> i) & 1u))
+        return false;
+    return emit_own_expr_owned(ctx, call->as.call_.args[i]);
+}
+
+/* `drop_localowned_tur_adt_<T>((void *)&lv);` for a by-value recursive `t`. */
+char *emit_localowned_drop_call(Type t, const char *lv) {
+    char *mn = mangle_adt_name(t.as.adt_.def->name);
+    size_t n = strlen(mn) + strlen(lv) + 64;
+    char *s = (char *)malloc(n);
+    if (!s) { fprintf(stderr, "tur: oom\n"); abort(); }
+    snprintf(s, n, "drop_localowned_tur_adt_%s((void *)&%s);", mn, lv);
+    free(mn);
+    return s;
 }
 
 bool emit_own_param_owned(EmitCtx *ctx, const FnDef *fd, uint32_t i) {

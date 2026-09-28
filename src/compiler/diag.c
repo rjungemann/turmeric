@@ -291,6 +291,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0105_BORROW_ESCAPES_SCOPE:       return "TUR-E0105";
         case TUR_E0106_CYCLIC_LIFETIME:            return "TUR-E0106";
         case TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER: return "TUR-E0107";
+        case TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW: return "TUR-E0108";
         /* ST0: Substructural type errors */
         case TUR_E0150_AFFINE_USED_TWICE:          return "TUR-E0150";
         case TUR_E0151_RELEVANT_DROPPED:           return "TUR-E0151";
@@ -469,6 +470,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0105") == 0) return TUR_E0105_BORROW_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0106") == 0) return TUR_E0106_CYCLIC_LIFETIME;
     if (strcmp(s, "TUR-E0107") == 0) return TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER;
+    if (strcmp(s, "TUR-E0108") == 0) return TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW;
     /* ST0: Substructural type errors */
     if (strcmp(s, "TUR-E0150") == 0) return TUR_E0150_AFFINE_USED_TWICE;
     if (strcmp(s, "TUR-E0151") == 0) return TUR_E0151_RELEVANT_DROPPED;
@@ -1344,6 +1346,26 @@ static const DiagExplanation diag_explanations_[] = {
       "Read it (borrow) instead -- (.tag o), (rc/strong-count (.r o)) -- and let o's\n"
       "scope-exit auto-drop release the field once; or move ownership out of the\n"
       "aggregate before the handle so the enclosing scope no longer owns it.\n",
+    },
+    /* byvalue-recursive-shared-copies-leak: an owning ref field moved out of a borrow */
+    { TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW,
+      "TUR-E0108: A struct with an owning ref field is returned out of a borrow\n"
+      "\n"
+      "A function returned, by value, a struct that owns a `ref` field -- but the\n"
+      "value was a copy of one it does not own: a ^borrow parameter, a global, a\n"
+      "container element, or a match binder of one of those.  The caller owns a\n"
+      "function's result and frees its `ref` field when it is done, while the\n"
+      "value's real owner frees the same box: a double free.  An `rc` field is\n"
+      "cloned at this point (the result takes its own count), but a `ref` is a\n"
+      "unique owner and has no count to take.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defstruct R [p : ref<int> n : int])\n"
+      "  (defn id-b [^borrow x : R] : R x)     ; ERROR: returns x's ref field\n"
+      "\n"
+      "Fix: return a new value -- (R (ref (deref (.p x))) (.n x)) copies the box --\n"
+      "or take the parameter by value (without ^borrow) so the function owns what\n"
+      "it returns, or return only the fields the caller needs.\n",
     },
     /* ST1: Substructural type explanations */
     { TUR_E0150_AFFINE_USED_TWICE,

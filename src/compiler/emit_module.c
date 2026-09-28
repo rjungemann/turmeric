@@ -9565,6 +9565,58 @@ static bool adt_glue_is_tagged(const AdtDef *def) {
     return def->n_ctors > 1;
 }
 
+/* The owning-field releases of one variant, in REVERSE field order (matching
+ * struct drop-glue) -- shared by drop_glue_<T>, which then frees the node, and
+ * drop_localowned_<T>, whose node is a stack-resident local and is not freed. */
+static void emit_adt_glue_field_drops(Buf *out, const AdtDef *def,
+                                      const CtorDef *ctor) {
+    /* Drop fields in REVERSE order, matching struct drop-glue. */
+    for (int32_t fi = (int32_t)ctor->n_fields - 1; fi >= 0; fi--) {
+        TypeKind k = ctor->fields[fi].kind;
+        char *mp = adt_field_member_path(def, ctor, (uint32_t)fi);
+        if (k == TY_RC) {
+            buf_printf(out, "    if (s->%s) { rc_strong_decrement(s->%s); rc_free_queue_drain(); }\n",
+                       mp, mp);
+        } else if (k == TY_WEAK) {
+            buf_printf(out, "    if (s->%s) rc_weak_decrement(s->%s);\n", mp, mp);
+        } else if (k == TY_REF || k == TY_LREF) {
+            buf_printf(out, "    if (s->%s) free(s->%s);\n", mp, mp);
+        } else if (ctor->fields[fi].drop_inner_def) {
+            /* drop-glue-shallow-nested-owning-aggregate: the field is an int64
+             * carrier holding a malloc'd box of a nested owning by-value
+             * aggregate.  Its own drop glue releases the box's owners and frees
+             * the box (it is a plain heap allocation, uniquely owned by this
+             * value under the same move discipline a direct rc field relies on). */
+            char *imn = mangle_adt_name(ctor->fields[fi].drop_inner_def->name);
+            buf_printf(out,
+                       "    if (s->%s) drop_glue_tur_adt_%s((void *)(intptr_t)s->%s);\n",
+                       mp, imn, mp);
+            free(imn);
+        } else if (k == TY_ANY) {
+            /* any-widen-stored-in-an-adt-field-has-no-owner: the field holds a
+             * two-word box whose payload may or may not be heap-allocated --
+             * only the runtime registry row for its tag knows, and
+             * __tur_any_drop is the reader of that row.  So the drop is one
+             * call and needs no type knowledge here, which is exactly why an
+             * `any` field could not reuse the statically-named glue the
+             * recursive/nested-aggregate arms above call. */
+            buf_printf(out, "    __tur_any_drop(s->%s);\n", mp);
+        } else if (k == TY_FN && ctor->fields[fi].full_type &&
+                   ctor->fields[fi].full_type->kind == TY_FN &&
+                   ctor->fields[fi].full_type->as.fn.boxed) {
+            /* closure-drop-glue S2 (Model U): a boxed fn-field owns a heap fat
+             * handle (a `{shim, fn}` box for a bare fn, or a capturing closure
+             * env).  The struct is move-only (needs_drop_glue), so the handle has
+             * a single owner -- free it.  (A capturing env with OWNING captures
+             * leaks those captures for now; a scalar-capture env and a bare-fn
+             * shim box are freed whole.  An UNboxed nullary/>4-arg fn field is a
+             * plain fn pointer -- not heap -- and is NOT matched here.) */
+            buf_printf(out, "    if (s->%s) free((void *)(intptr_t)s->%s);\n", mp, mp);
+        }
+        free(mp);
+    }
+}
+
 static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
                                      const char *adt_c_name) {
     if (!def->needs_drop_glue || def->n_ctors == 0) return;
@@ -9614,51 +9666,7 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
     ctor = def->ctors[ci];
     if (tagged) buf_printf(out, "    case %u:\n", ci);
-    /* Drop fields in REVERSE order, matching struct drop-glue. */
-    for (int32_t fi = (int32_t)ctor->n_fields - 1; fi >= 0; fi--) {
-        TypeKind k = ctor->fields[fi].kind;
-        char *mp = adt_field_member_path(def, ctor, (uint32_t)fi);
-        if (k == TY_RC) {
-            buf_printf(out, "    if (s->%s) { rc_strong_decrement(s->%s); rc_free_queue_drain(); }\n",
-                       mp, mp);
-        } else if (k == TY_WEAK) {
-            buf_printf(out, "    if (s->%s) rc_weak_decrement(s->%s);\n", mp, mp);
-        } else if (k == TY_REF || k == TY_LREF) {
-            buf_printf(out, "    if (s->%s) free(s->%s);\n", mp, mp);
-        } else if (ctor->fields[fi].drop_inner_def) {
-            /* drop-glue-shallow-nested-owning-aggregate: the field is an int64
-             * carrier holding a malloc'd box of a nested owning by-value
-             * aggregate.  Its own drop glue releases the box's owners and frees
-             * the box (it is a plain heap allocation, uniquely owned by this
-             * value under the same move discipline a direct rc field relies on). */
-            char *imn = mangle_adt_name(ctor->fields[fi].drop_inner_def->name);
-            buf_printf(out,
-                       "    if (s->%s) drop_glue_tur_adt_%s((void *)(intptr_t)s->%s);\n",
-                       mp, imn, mp);
-            free(imn);
-        } else if (k == TY_ANY) {
-            /* any-widen-stored-in-an-adt-field-has-no-owner: the field holds a
-             * two-word box whose payload may or may not be heap-allocated --
-             * only the runtime registry row for its tag knows, and
-             * __tur_any_drop is the reader of that row.  So the drop is one
-             * call and needs no type knowledge here, which is exactly why an
-             * `any` field could not reuse the statically-named glue the
-             * recursive/nested-aggregate arms above call. */
-            buf_printf(out, "    __tur_any_drop(s->%s);\n", mp);
-        } else if (k == TY_FN && ctor->fields[fi].full_type &&
-                   ctor->fields[fi].full_type->kind == TY_FN &&
-                   ctor->fields[fi].full_type->as.fn.boxed) {
-            /* closure-drop-glue S2 (Model U): a boxed fn-field owns a heap fat
-             * handle (a `{shim, fn}` box for a bare fn, or a capturing closure
-             * env).  The struct is move-only (needs_drop_glue), so the handle has
-             * a single owner -- free it.  (A capturing env with OWNING captures
-             * leaks those captures for now; a scalar-capture env and a bare-fn
-             * shim box are freed whole.  An UNboxed nullary/>4-arg fn field is a
-             * plain fn pointer -- not heap -- and is NOT matched here.) */
-            buf_printf(out, "    if (s->%s) free((void *)(intptr_t)s->%s);\n", mp, mp);
-        }
-        free(mp);
-    }
+    emit_adt_glue_field_drops(out, def, ctor);
     if (tagged) buf_printf(out, "        break;\n");
     }
     if (tagged) buf_printf(out, "    }\n");
@@ -9739,19 +9747,15 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
             for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
                 const CtorDef *rc_ctor = def->ctors[ci];
                 if (rs_tagged) buf_printf(out, "    case %u:\n", ci);
-                for (int32_t fi = (int32_t)rc_ctor->n_fields - 1; fi >= 0; fi--) {
-                    bool rec = rc_ctor->fields[fi].drop_inner_def == def;
-                    bool anyf = rc_ctor->fields[fi].kind == TY_ANY;
-                    if (!rec && !anyf) continue;
-                    char *mp = adt_field_member_path(def, rc_ctor, (uint32_t)fi);
-                    if (rec)
-                        buf_printf(out,
-                                   "    if (s->%s) drop_glue_%s((void *)(intptr_t)s->%s);\n",
-                                   mp, adt_c_name, mp);
-                    else
-                        buf_printf(out, "    __tur_any_drop(s->%s);\n", mp);
-                    free(mp);
-                }
+                /* byvalue-recursive-shared-copies-leak: EVERY owning field
+                 * of the live variant, not only the recursive and `any`
+                 * ones.  A recursive type is a sum, so the elaborator's
+                 * per-field auto-drop (single-constructor products only)
+                 * never covers it, and this is the one release its top cell
+                 * gets: `(C (S (rc/of 8) 1) (E))` freed its tail and leaked
+                 * the boxed `S` -- box and count -- in the cell itself, which
+                 * drop_glue releases for every OTHER cell of the spine. */
+                emit_adt_glue_field_drops(out, def, rc_ctor);
                 if (rs_tagged) buf_printf(out, "        break;\n");
                 if (!rs_tagged) break;
             }

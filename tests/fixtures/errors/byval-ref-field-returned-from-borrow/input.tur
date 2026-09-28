@@ -1,0 +1,20 @@
+;; byvalue-recursive-shared-copies-leak: TUR-E0108.
+;;
+;; A by-value struct that owns a `ref` field, returned out of a ^borrow.  The
+;; caller owns a function's result and frees its ref box at scope exit, and so
+;; does the value's real owner: a double free (ASan-confirmed before this was
+;; an error).  An `rc` field is cloned at this point instead, but a `ref` is a
+;; unique owner with no count to take -- Rust's "cannot move out of a borrow".
+;;
+;; The fix the message names, `(R (ref (deref (.p x))) (.n x))`, builds a new
+;; value with its own box; byval-rc-struct-shared-copy runs it.
+
+(defstruct R [p : ref<int> n : int])
+
+(defn id-b [^borrow x : R] : R x)
+
+(defn main [] : int
+  (let [s (R (ref 9) 1)]
+    (let [w (id-b s)] (println (.n w)))
+    (println (.n s)))
+  0)

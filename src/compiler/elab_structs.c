@@ -4640,6 +4640,10 @@ Expr *elab_match(Elab *e, const Form *call) {
                 Binding *fb = binding_new(e, var_form->as.sym, ftype, false, false,
                                           var_form->span);
                 fb->is_match_binding = true;
+                /* byvalue-recursive-shared-copies-leak: a binder of a shared
+                 * view (a ^borrow, a global, an element) shares its owning
+                 * fields with the scrutinee's owner. */
+                fb->shared_view = elab_expr_is_shared_view(scrutinee);
                 /* hkt-cata-function-carrier: a TY_FN value stored in a
                  * PARAMETRIC ADT field (one declared as a bare type variable,
                  * e.g. `a` in `(defdata ExprF [a] (AddF a a))`) is uniformly a
