@@ -4,20 +4,31 @@
 once and linked. `tur build` writes a `#lang r7rs` program as two C units, a
 library unit (the runtime preamble and the auto-loaded stdlib) whose object
 is cached, and the program's own unit, which declares what it uses from the
-library. With the library cached:
+library. Measured 2026-09-28 on a 4-core container, gcc 13:
 
 | `tur build`, end to end | one unit | split, library cached |
 |---|---|---|
-| a one-line program, Release `tur` | 3.25 s | 1.08 s |
-| `r7rs-strings`, Release `tur` | 4.8 s | 1.65 s |
-| a one-line program, Debug (ASan) `tur` | 4.1 s | 2.3 s |
+| `r7rs-named-let-sum`, Release `tur` | 3.0 s | 0.95 s |
+| `r7rs-strings`, Release `tur` | 4.65 s | 1.55 s |
+| `(display 1)`, Release `tur` | 2.4 s | 0.87 s |
+| `r7rs-named-let-sum`, Debug (ASan) `tur` | 4.0 s | 2.35 s |
 
-The first build with a given library pays for compiling it once (it is the
-old cost, plus the small program unit). Of the 95 `#lang r7rs` fixtures, all
-95 build split; 79 link the same library object and the rest
-use 6 variants, so the cache is warm after the first few builds.
-Pinned by `tests/check-r7rs-prelude-split.sh` (ctest
-`tur_r7rs_prelude_split`). The rest of this file is the original report.
+**The first build costs more than it used to: 8.5 s** for
+`r7rs-named-let-sum` on an empty cache, where one unit took 3.0 s. The
+library unit exports every stdlib definition, so cc cannot drop the ~1,100
+functions a given program never reaches, as it does in one unit. It pays
+that once per library, per `tur` version, `cc` and flags; every later
+build is the cached column. Builds that start together on a cold cache
+(the fixture suite, `make -j`) wait on a lock for the first one's object
+rather than each compiling their own. Four concurrent cold builds did one
+library compile and finished in 9.4-10 s. Making that first compile cheaper
+is filed as docs/reported/r7rs-prelude-library-cold-compile.md.
+
+Of the 95 `#lang r7rs` fixtures, all 95 build split. 79 link the same
+library object and the other 16 use 6 variants (see below), so the cache is
+warm after the first few builds. Pinned by
+`tests/check-r7rs-prelude-split.sh` (ctest `tur_r7rs_prelude_split`). The
+rest of this file is the original report.
 
 ## Fix
 
@@ -116,10 +127,10 @@ make it stable:
   compiled with `-fsanitize=address,undefined` too. Otherwise the default
   options are lost, and a GC-torture `eval` corrupts its heap.
 
-**Not changed:** the r7rs fixtures keep `expected.timeout` 60. Under the
-suite's parallelism, many fixtures start at once on a cold cache, and each
-compiles its own copy of the library (the cache writes by atomic rename, so
-the racers agree). That first wave costs what it always did.
+**Not changed:** the r7rs fixtures keep `expected.timeout` 60, for the
+cold-cache first wave of a suite run.
+
+## Original report
 
 **Severity:** low-medium. A one-line Scheme program takes as long to build as
 the whole prelude: 6.4 s for `r7rs-named-let-sum`, 7.6 s for `r7rs-strings`,

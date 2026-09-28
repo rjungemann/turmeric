@@ -9,8 +9,9 @@ All notable changes to Turmeric are documented here.
 - **A `#lang r7rs` program builds in about a second.** `tur build` and `tur
   run` compile the runtime and the R7RS prelude once, cache the object under
   `<tmpdir>/tur-build/prelude/`, and link it, so later builds compile only
-  the program's own C. A one-line program took 3.25 s to build and now
-  takes 1.08 s with a Release `tur`. A program the compiler cannot
+  the program's own C. A one-line program took 3.0 s to build and now
+  takes 0.95 s with a Release `tur`; the first build, which compiles the
+  library, takes about 8.5 s. A program the compiler cannot
   split this way builds as one unit, as before. `TUR_PRELUDE_SPLIT=0` forces
   a one-unit build (docs/archive/r7rs-programs-compile-slowly.md).
 
