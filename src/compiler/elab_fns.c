@@ -10722,7 +10722,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* For anonymous fn, we lift it to a static function with a generated name.
      * We use the arena to allocate a unique name. */
     char fn_name_buf[32];
-    snprintf(fn_name_buf, sizeof(fn_name_buf), "__fn_%u", e->next_id++);
+    snprintf(fn_name_buf, sizeof(fn_name_buf), "__fn_%u", elab_fresh_id(e));
     const Symbol *fn_name_sym = symtab_intern(e->st, 
         strslice(fn_name_buf, (uint32_t)strlen(fn_name_buf)));
     
@@ -10847,7 +10847,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         /* Phase 3: Closure with captures */
         /* Generate env struct name */
         char env_name_buf[32];
-        snprintf(env_name_buf, sizeof(env_name_buf), "__env_%u", e->next_id++);
+        snprintf(env_name_buf, sizeof(env_name_buf), "__env_%u", elab_fresh_id(e));
         const Symbol *env_name_sym = symtab_intern(e->st,
             strslice(env_name_buf, (uint32_t)strlen(env_name_buf)));
         
@@ -10862,7 +10862,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         
         /* First param is env (void*) */
         char env_param_name[32];
-        snprintf(env_param_name, sizeof(env_param_name), "__env_p_%u", e->next_id++);
+        snprintf(env_param_name, sizeof(env_param_name), "__env_p_%u", elab_fresh_id(e));
         const Symbol *env_param_sym = symtab_intern(e->st,
             strslice(env_param_name, (uint32_t)strlen(env_param_name)));
         Binding *env_param_binding = binding_new(e, env_param_sym, TYPE_PTR_VOID, false, false, call->span);

@@ -292,16 +292,27 @@ static CTerm *unsupported_form(CpsB *b, const Expr *e) {
     return t;
 }
 
+/* A fresh binder's id is drawn from its own range, above every Binding id: the
+ * two meet in the capture analysis's bound sets (emit_cps_ir.c keys both on
+ * `id`), and a source binder whose id happened to equal a fresh one's was
+ * taken as bound where it was free -- a handler's `k_7` missing from the env
+ * of a reopen frame whose slot was `__t7`.  That only stayed hidden while a
+ * program's binding ids all sat above the stdlib's thousands, which
+ * r7rs-programs-compile-slowly's separate stdlib id range undid.  The name
+ * keeps the small per-function number. */
+#define CPS_FRESH_ID_BASE 0x80000000u
+
 static CVar fresh_cvar(CpsB *b, const Type *ty) {
     CVar v;
-    v.id = b->counter++;
+    uint32_t n = b->counter++;
+    v.id = CPS_FRESH_ID_BASE + n;
     char buf[24];
     /* `__`-reserved so a synthesized result temporary can never collide with a
      * user identifier (globals are not name-guarded like params are -- a `t<N>`
      * form shadowed a user fn/global `t0` referenced from a colored context and
      * segfaulted).  The reader/param guard treat `__`-prefixed names as
      * off-limits for user code. */
-    snprintf(buf, sizeof(buf), "__t%u", v.id);
+    snprintf(buf, sizeof(buf), "__t%u", n);
     v.name = arena_strdup(b->a, buf, strlen(buf));
     v.ty = ty ? ty->kind : TY_UNKNOWN;
     v.type = ty;

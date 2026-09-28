@@ -817,6 +817,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                     bool is_role_pair = (fst && fst->kind == TY_ROLE);
                     Expr *ic_expr = expr_new(e->arena, EX_INLINE_C, elem_type, vec_span);
                     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+                    memset(ic, 0, sizeof(InlineC));
                     ic->return_type = elem_type;
                     ic->val_exprs = NULL; ic->n_val_exprs = 0;
                     ic->captures = NULL; ic->n_captures = 0;
@@ -915,6 +916,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                     bool is_recv_timeout = is_recv_timeout_var || is_recv_timeout_ic;
                     Expr *ic_expr = expr_new(e->arena, EX_INLINE_C, elem_type, vec_span);
                     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+                    memset(ic, 0, sizeof(InlineC));
                     ic->return_type = elem_type;
                     ic->captures = NULL; ic->n_captures = 0;
                     if (is_role_recv) {

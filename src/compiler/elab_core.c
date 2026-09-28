@@ -2019,6 +2019,8 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     scope_init(&e->global, NULL);
     e->scope = &e->global;
     e->next_id = 0;
+    e->next_stdlib_id = ELAB_STDLIB_ID_BASE;
+    e->ids_stdlib = false;
     e->next_gensym_id = 0;  /* Phase 6 */
     /* RT1: refinement obligation vector (empty unless `refined` is on). */
     refine_obligations_init(&e->refine_obs, arena);
@@ -2593,7 +2595,7 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->type = type;
     b->is_mut = is_mut;
     b->is_global = is_global;
-    b->id = e->next_id++;
+    b->id = elab_fresh_id(e);
     b->span = span;
     /* TY4: stamp the lexical scope depth at which this binding is introduced,
      * walked from the live scope chain.  The borrow-escape check compares a

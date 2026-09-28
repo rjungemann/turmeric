@@ -9650,8 +9650,25 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
     for (size_t i = 0; i < g_ents_n; i++) {
         if (!g_ents[i].in_s) continue;
         const FnDef *fd = g_ents[i].fd;
+        /* r7rs-programs-compile-slowly: the library unit of a split build
+         * declares only what it defines -- the stdlib's. */
+        if (g_emit_split == EMIT_SPLIT_LIB && !emit_split_lib_owns(fd->binding)) continue;
         char *cn = raw_name_for_binding(fd->binding);
-        buf_printf(file, "static int64_t %s__cps(", cn);
+        if (g_emit_split == EMIT_SPLIT_LIB) {
+            size_t cl = strlen(cn);
+            char *xn = (char *)malloc(cl + 6);
+            if (xn) {
+                memcpy(xn, cn, cl);
+                memcpy(xn + cl, "__cps", 6);
+                emit_split_note_export(xn);
+                free(xn);
+            }
+        }
+        /* r7rs-programs-compile-slowly: a split build's library unit defines
+         * a stdlib defn's CPS body with external linkage, for a colored
+         * caller in the client unit. */
+        buf_printf(file, "%sint64_t %s__cps(",
+                   emit_split_lib_owns(fd->binding) ? "" : "static ", cn);
         emit_params(ctx, file, fd);
         if (fd->n_params) buf_puts(file, ", ");
         buf_puts(file, "DK *__kont);\n");
@@ -9664,6 +9681,7 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
     for (size_t i = 0; i < g_ents_n; i++) {
         if (!g_ents[i].mono_template) continue;
         FnDef *fd = (FnDef *)g_ents[i].fd;
+        if (g_emit_split == EMIT_SPLIT_LIB && !emit_split_lib_owns(fd->binding)) continue;
         for (uint32_t s = 0; s < ctx->n_abi_specializations; s++) {
             EmitAbiSpecialization *spec = &ctx->abi_specializations[s];
             if (spec->fn != fd || !spec->clone_name) continue;
@@ -10099,7 +10117,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     /* ---- CPS body: int64_t <name>__cps(<params>, DK *k) ---- */
-    buf_printf(file, "static int64_t %s__cps(", cn);
+    buf_printf(file, "%sint64_t %s__cps(",
+               (emit_split_lib_owns(fd->binding) && !mono_emit) ? "" : "static ", cn);
     emit_params(ctx, file, fd);
     if (fd->n_params) buf_puts(file, ", ");
     buf_puts(file, "DK *__kont) {\n");
@@ -10206,7 +10225,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         && fd->binding
         && (fd->binding->is_exported || fd->binding->retain_c_linkage
             || emit_inst_method_wants_external(fd))
-        && !fd->binding->is_from_stdlib);
+        && !fd->binding->is_from_stdlib)
+        && !(emit_split_lib_owns(fd->binding) && !mono_emit);   /* r7rs-programs-compile-slowly */
     buf_printf(file, "__attribute__((unused)) %s%s %s(",
                entry_static ? "static " : "", rety, cn);
     /* Params: the __cps ABI spelling (emit_params) EXCEPT a pass-by-ptr

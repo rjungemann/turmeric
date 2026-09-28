@@ -187,6 +187,7 @@ set(TUR_CORE_SOURCES
     compiler/emit_stmt.c
     compiler/emit_fns.c
     compiler/emit_module.c
+    compiler/emit_split.c
     compiler/expr.c
     compiler/fmt.c
     compiler/mangle.c

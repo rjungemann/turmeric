@@ -624,6 +624,7 @@ Expr *elab_send_to(Elab *e, const Form *call) {
 
     Expr *out = expr_new(e->arena, EX_INLINE_C, advanced_type, call->span);
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
     ic->code = strslice(code_str, (uint32_t)send_code_len);
     ic->return_type = advanced_type;
     ic->captures = NULL; ic->n_captures = 0;
@@ -747,6 +748,7 @@ Expr *elab_recv_from(Elab *e, const Form *call) {
 
     Expr *out = expr_new(e->arena, EX_INLINE_C, pair_type, call->span);
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
     ic->code = strslice(code_str, (uint32_t)recv_code_len);
     ic->return_type = pair_type;
     ic->captures = NULL; ic->n_captures = 0;

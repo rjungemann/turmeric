@@ -1106,6 +1106,167 @@ void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
     static_init_register("__tur_any_names_init", STATIC_INIT_KEYS);
 }
 
+/* ---------------------------------------------------------------------------
+ * r7rs-programs-compile-slowly: the split build (emit_split.h).
+ *
+ * The library unit is emitted first, from the auto-loaded stdlib's items
+ * only; the client unit is emitted second, from every item, declaring what
+ * the library unit defines.  Two things cross from the first emission to the
+ * second, recorded here:
+ *
+ *   boxes       the fat boxes the library unit defines, by their dedup key
+ *               ("<shim>|<orig>").  A box is a procedure's identity -- `(eqv?
+ *               car car)` -- so the client unit must name the library's box,
+ *               not make its own, whenever the library made one.
+ *   signatures  each library function's emitted C signature.  The client
+ *               declares the function from its own view of the program; if
+ *               the two ever disagree the split is refused rather than
+ *               linking a call against a different ABI.
+ * ------------------------------------------------------------------------- */
+EmitSplitMode g_emit_split = EMIT_SPLIT_NONE;
+static const char *g_split_refusal = NULL;
+
+typedef struct { char *key; char *val; } SplitCarry;
+typedef struct { SplitCarry *v; uint32_t n, cap; } SplitCarryTab;
+static SplitCarryTab g_split_boxes, g_split_sigs;
+
+static void split_tab_clear(SplitCarryTab *t) {
+    for (uint32_t i = 0; i < t->n; i++) { free(t->v[i].key); free(t->v[i].val); }
+    free(t->v);
+    t->v = NULL;
+    t->n = t->cap = 0;
+}
+
+static void split_tab_put(SplitCarryTab *t, const char *key, const char *val) {
+    if (t->n == t->cap) {
+        t->cap = t->cap ? t->cap * 2 : 64;
+        t->v = (SplitCarry *)realloc(t->v, t->cap * sizeof(SplitCarry));
+        if (!t->v) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    t->v[t->n].key = strdup(key);
+    t->v[t->n].val = strdup(val);
+    t->n++;
+}
+
+static const char *split_tab_get(const SplitCarryTab *t, const char *key) {
+    for (uint32_t i = 0; i < t->n; i++)
+        if (strcmp(t->v[i].key, key) == 0) return t->v[i].val;
+    return NULL;
+}
+
+void emit_split_set_mode(int mode) {
+    g_emit_split = (EmitSplitMode)mode;
+    if (mode == EMIT_SPLIT_LIB) {
+        split_tab_clear(&g_split_boxes);
+        split_tab_clear(&g_split_sigs);
+        emit_split_exports_clear();
+        g_split_refusal = NULL;
+    }
+}
+
+const char *emit_split_refusal(void) { return g_split_refusal; }
+
+void emit_split_refuse(const char *why) {
+    if (!g_split_refusal) g_split_refusal = why ? why : "refused";
+}
+
+void emit_split_reset(void) {
+    split_tab_clear(&g_split_boxes);
+    split_tab_clear(&g_split_sigs);
+    emit_split_exports_clear();
+    g_emit_split = EMIT_SPLIT_NONE;
+    g_split_refusal = NULL;
+}
+
+/* The library unit owns every stdlib definition it writes.  The client unit
+ * declares those, and writes -- as its own, file-local -- any stdlib function
+ * the library unit did not: a generic defn the stdlib alone never needs in
+ * its unspecialized form (emit_abi_fn_skip_generic) but the program does. */
+bool emit_split_lib_owns(const Binding *b) {
+    if (g_emit_split == EMIT_SPLIT_NONE || !b || !b->is_from_stdlib) return false;
+    return g_emit_split == EMIT_SPLIT_LIB || b->split_lib_defined;
+}
+
+/* Who writes a top-level item: the library unit, the client unit, or both
+ * (types and declarations, which each unit needs and which carry no state). */
+typedef enum { SPLIT_OWN_BOTH, SPLIT_OWN_LIB, SPLIT_OWN_USER } SplitOwner;
+
+static SplitOwner split_item_owner(const Expr *e) {
+    switch (e->kind) {
+    case EX_FN_DEF:
+        return (e->as.fn_def_.fn && emit_split_lib_owns(e->as.fn_def_.fn->binding))
+               ? SPLIT_OWN_LIB : SPLIT_OWN_USER;
+    case EX_DEF:
+        return (e->as.def_.binding && e->as.def_.binding->is_from_stdlib)
+               ? SPLIT_OWN_LIB : SPLIT_OWN_USER;
+    case EX_DEFDATA:
+    case EX_DEFGADT: {
+        /* A stdlib type is both units'; a type of the program's is its own. */
+        const AdtDef *d = e->kind == EX_DEFGADT ? e->as.defgadt_.def : e->as.defdata_.def;
+        return (d && d->from_stdlib) ? SPLIT_OWN_BOTH : SPLIT_OWN_USER;
+    }
+    case EX_EXTERN_C:
+        return SPLIT_OWN_BOTH;
+    case EX_INLINE_C:
+        return (e->as.inline_c_.inline_c && e->as.inline_c_.inline_c->from_stdlib)
+               ? SPLIT_OWN_LIB : SPLIT_OWN_USER;
+    default:
+        return (e->span.file_id >= 1 && e->span.file_id < diag_autoload_file_ids_end())
+               ? SPLIT_OWN_LIB : SPLIT_OWN_USER;
+    }
+}
+
+/* The signature the emitter recorded for `cname` in this unit, as one string
+ * ("<ret>(<p0>,<p1>,...)"); NULL when nothing was recorded. */
+static char *split_sig_of(const char *cname) {
+    int n = emit_sig_lookup_n_params(cname);
+    const char *rt = emit_sig_lookup_ret_ctype(cname);
+    if (n < 0 && !rt) return NULL;
+    Buf b; buf_init(&b);
+    buf_printf(&b, "%s(", rt ? rt : "?");
+    for (int i = 0; i < n; i++) {
+        const char *p = emit_sig_lookup_param_ctype(cname, (uint32_t)i);
+        buf_printf(&b, "%s%s", i ? "," : "", p ? p : "?");
+    }
+    buf_puts(&b, ")");
+    buf_putc(&b, '\0');
+    char *r = strdup(b.data);
+    buf_free(&b);
+    return r;
+}
+
+/* After the forward declarations: the library unit records each of its
+ * functions' signatures; the client unit refuses the split if its own
+ * declaration of any of them says something else. */
+static void split_check_sigs(const Expr **items, uint32_t n_items) {
+    if (g_emit_split == EMIT_SPLIT_NONE) return;
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind != EX_FN_DEF || split_item_owner(e) != SPLIT_OWN_LIB) continue;
+        const FnDef *fd = e->as.fn_def_.fn;
+        if (fd->skip_emission) continue;
+        const char *cn = raw_name_for_binding(fd->binding);
+        char *sig = split_sig_of(cn);
+        if (sig) {
+            if (g_emit_split == EMIT_SPLIT_LIB) {
+                split_tab_put(&g_split_sigs, cn, sig);
+                fd->binding->split_lib_defined = true;
+                emit_split_note_export(cn);
+            } else {
+                const char *lib = split_tab_get(&g_split_sigs, cn);
+                if (!lib || strcmp(lib, sig) != 0) {
+                    if (getenv("TUR_SHOW_CC"))
+                        fprintf(stderr, "tur: split: %s is %s in the library unit, %s here\n",
+                                cn, lib ? lib : "(undeclared)", sig);
+                    emit_split_refuse("a stdlib function's signature differs between the units");
+                }
+            }
+        }
+        free(sig);
+        free((void *)cn);
+    }
+}
+
 static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_params) {
     Buf name;
     buf_init(&name);
@@ -1200,6 +1361,96 @@ bool ensure_fatbox_keep(EmitCtx *ctx) {
     return true;
 }
 
+/* Intern the box for `key`, writing its declaration, definition and fill the
+ * first time.  `win_shim` is NULL for the single-shim form; otherwise the
+ * dual-slot-0 form, where the preprocessor picks slot 0 (`win_shim` under
+ * _WIN32, `shim` elsewhere).
+ *
+ * r7rs-programs-compile-slowly: in the library unit of a split build a box has
+ * external linkage and is recorded by its key; in the client unit a key the
+ * library recorded names the library's box (declared `extern`), so a
+ * procedure keeps one identity across the two units, and a box only the
+ * program asks for is the client's own (`__tur_ufatbox_<i>`, distinct from
+ * every library name). */
+static const char *fatbox_intern(EmitCtx *ctx, const char *key, const char *win_shim,
+                                 const char *shim, const char *fnptr) {
+    for (uint32_t i = 0; i < ctx->n_fatbox_keys; i++)
+        if (strcmp(ctx->fatbox_keys[i], key) == 0) return ctx->fatbox_names[i];
+    if (ctx->n_fatbox_keys >= ctx->cap_fatbox_keys) {
+        uint32_t nc = ctx->cap_fatbox_keys ? ctx->cap_fatbox_keys * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatbox_keys, nc * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatbox_keys = nn;
+        char **nm = (char **)realloc(ctx->fatbox_names, nc * sizeof(char *));
+        if (!nm) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatbox_names = nm;
+        ctx->cap_fatbox_keys = nc;
+    }
+    uint32_t idx = ctx->n_fatbox_keys++;
+    ctx->fatbox_keys[idx] = strdup(key);
+    if (!ctx->fatbox_keys[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    /* One OWNED name per box, freed with the keys.  Not a function-scoped
+     * `static char[96]`: the caller that holds two of these -- or stashes one
+     * and emits later -- would then get the same spelling twice, with no crash
+     * and no diagnostic, just wrong C.  See
+     * docs/archive/c-name-accessors-share-static-buffers.md. */
+    const char *lib = (g_emit_split == EMIT_SPLIT_CLIENT)
+        ? split_tab_get(&g_split_boxes, key) : NULL;
+    char nb[96];
+    if (lib) snprintf(nb, sizeof nb, "%s", lib);
+    else snprintf(nb, sizeof nb, g_emit_split == EMIT_SPLIT_CLIENT ? "__tur_ufatbox_%u"
+                                                                 : "__tur_fatbox_%u",
+                  (unsigned)idx);
+    ctx->fatbox_names[idx] = strdup(nb);
+    if (!ctx->fatbox_names[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    const char *b = ctx->fatbox_names[idx];
+
+    ensure_fatbox_keep(ctx);
+    if (lib) {
+        buf_printf(ctx->thunk_typedefs, "extern void *%s[3];\n", b);
+        return b;
+    }
+    if (g_emit_split == EMIT_SPLIT_LIB) {
+        /* A split build is 64-bit only, so the box is always pointer words. */
+        split_tab_put(&g_split_boxes, key, b);
+        emit_split_note_export(b);
+        buf_printf(ctx->thunk_typedefs, "extern void *%s[3];\n", b);
+        if (win_shim)
+            buf_printf(ctx->fatbox_defs,
+                "#ifdef _WIN32\n"
+                "void *%s[3] = { (void *)__tur_fatbox_keep, (void *)%s, (void *)%s };\n"
+                "#else\n"
+                "void *%s[3] = { (void *)__tur_fatbox_keep, (void *)%s, (void *)%s };\n"
+                "#endif\n", b, win_shim, fnptr, b, shim, fnptr);
+        else
+            buf_printf(ctx->fatbox_defs,
+                "void *%s[3] = { (void *)__tur_fatbox_keep, (void *)%s, (void *)%s };\n",
+                b, shim, fnptr);
+        return b;
+    }
+    buf_printf(ctx->thunk_typedefs, "TUR_FATBOX_DECL(%s);\n", b);
+    /* Directives must start a line; the fill is inside a function. */
+    if (win_shim) {
+        buf_printf(ctx->fatbox_defs,
+            "#ifdef _WIN32\n"
+            "TUR_FATBOX_DEF(%s, %s, %s)\n"
+            "#else\n"
+            "TUR_FATBOX_DEF(%s, %s, %s)\n"
+            "#endif\n", b, win_shim, fnptr, b, shim, fnptr);
+        buf_printf(ctx->fatbox_init,
+            "#ifdef _WIN32\n"
+            "    TUR_FATBOX_FILL(%s, %s, %s);\n"
+            "#else\n"
+            "    TUR_FATBOX_FILL(%s, %s, %s);\n"
+            "#endif\n", b, win_shim, fnptr, b, shim, fnptr);
+    } else {
+        buf_printf(ctx->fatbox_defs, "TUR_FATBOX_DEF(%s, %s, %s)\n", b, shim, fnptr);
+        buf_printf(ctx->fatbox_init, "    TUR_FATBOX_FILL(%s, %s, %s);\n", b, shim, fnptr);
+    }
+    return b;
+}
+
 /* Dual-slot-0 form: the preprocessor picks the shim.  `win_shim` is the typed
  * shim the Win64 sret-only window needs; `sysv_shim` is whatever the SysV
  * decision produced (the generic __tur_fatshim<arity>).  Same static box,
@@ -1211,120 +1462,36 @@ const char *ensure_static_fatbox_dual(EmitCtx *ctx, const char *win_shim,
         return NULL;
     if (!win_shim || !*win_shim || !sysv_shim || !*sysv_shim || !fnptr || !*fnptr)
         return NULL;
-
     Buf key; buf_init(&key);
     buf_puts(&key, win_shim); buf_putc(&key, '|');
     buf_puts(&key, sysv_shim); buf_putc(&key, '|'); buf_puts(&key, fnptr);
     buf_putc(&key, '\0');
-    for (uint32_t i = 0; i < ctx->n_fatbox_keys; i++) {
-        if (strcmp(ctx->fatbox_keys[i], key.data) == 0) {
-            buf_free(&key);
-            return ctx->fatbox_names[i];
-        }
-    }
-    if (ctx->n_fatbox_keys >= ctx->cap_fatbox_keys) {
-        uint32_t nc = ctx->cap_fatbox_keys ? ctx->cap_fatbox_keys * 2 : 8;
-        char **nn = (char **)realloc(ctx->fatbox_keys, nc * sizeof(char *));
-        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
-        ctx->fatbox_keys = nn;
-        char **nm = (char **)realloc(ctx->fatbox_names, nc * sizeof(char *));
-        if (!nm) { fprintf(stderr, "tur: oom\n"); abort(); }
-        ctx->fatbox_names = nm;
-        ctx->cap_fatbox_keys = nc;
-    }
-    uint32_t idx = ctx->n_fatbox_keys++;
-    ctx->fatbox_keys[idx] = strdup(key.data);
-    if (!ctx->fatbox_keys[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    const char *r = fatbox_intern(ctx, key.data, win_shim, sysv_shim, fnptr);
     buf_free(&key);
-    {
-        char nb[96];
-        snprintf(nb, sizeof nb, "__tur_fatbox_%u", (unsigned)idx);
-        ctx->fatbox_names[idx] = strdup(nb);
-        if (!ctx->fatbox_names[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
-    }
-    ensure_fatbox_keep(ctx);
-    buf_printf(ctx->thunk_typedefs, "TUR_FATBOX_DECL(__tur_fatbox_%u);\n",
-               (unsigned)idx);
-    /* Directives must start a line; the fill is inside a function. */
-    buf_printf(ctx->fatbox_defs,
-        "#ifdef _WIN32\n"
-        "TUR_FATBOX_DEF(__tur_fatbox_%u, %s, %s)\n"
-        "#else\n"
-        "TUR_FATBOX_DEF(__tur_fatbox_%u, %s, %s)\n"
-        "#endif\n",
-        (unsigned)idx, win_shim, fnptr, (unsigned)idx, sysv_shim, fnptr);
-    buf_printf(ctx->fatbox_init,
-        "#ifdef _WIN32\n"
-        "    TUR_FATBOX_FILL(__tur_fatbox_%u, %s, %s);\n"
-        "#else\n"
-        "    TUR_FATBOX_FILL(__tur_fatbox_%u, %s, %s);\n"
-        "#endif\n",
-        (unsigned)idx, win_shim, fnptr, (unsigned)idx, sysv_shim, fnptr);
-
-    return ctx->fatbox_names[idx];
+    return r;
 }
 
+/* The drop-glue header is a STATIC initializer on every target, never a fill:
+ * a function-pointer-to-void* conversion is an address constant (the
+ * preamble's __tur_fatshim_keep[] table already relies on that).  It has to
+ * be initialized at load time rather than from __tur_fatbox_init, because
+ * tur_closure_drop's else-branch is `free(header_address)` -- with a
+ * zero-initialized header GCC cannot prove that branch dead and warns `'free'
+ * called on unallocated object` at every drop site that inlines it
+ * (-Wfree-nonheap-object).  Non-NULL from load time folds the branch away.
+ * The two slots are address constants too where they are pointer words; see
+ * ensure_fatbox_keep for the wasm32 fill. */
 const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
                                         const char *fnptr) {
     if (!ctx || !ctx->fatbox_init || !ctx->fatbox_defs || !ctx->thunk_typedefs)
         return NULL;
     if (!shim || !*shim || !fnptr || !*fnptr) return NULL;
-
     Buf key; buf_init(&key);
     buf_puts(&key, shim); buf_putc(&key, '|'); buf_puts(&key, fnptr);
     buf_putc(&key, '\0');
-    for (uint32_t i = 0; i < ctx->n_fatbox_keys; i++) {
-        if (strcmp(ctx->fatbox_keys[i], key.data) == 0) {
-            buf_free(&key);
-            return ctx->fatbox_names[i];
-        }
-    }
-    if (ctx->n_fatbox_keys >= ctx->cap_fatbox_keys) {
-        uint32_t nc = ctx->cap_fatbox_keys ? ctx->cap_fatbox_keys * 2 : 8;
-        char **nn = (char **)realloc(ctx->fatbox_keys, nc * sizeof(char *));
-        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
-        ctx->fatbox_keys = nn;
-        char **nm = (char **)realloc(ctx->fatbox_names, nc * sizeof(char *));
-        if (!nm) { fprintf(stderr, "tur: oom\n"); abort(); }
-        ctx->fatbox_names = nm;
-        ctx->cap_fatbox_keys = nc;
-    }
-    uint32_t idx = ctx->n_fatbox_keys++;
-    ctx->fatbox_keys[idx] = strdup(key.data);
-    if (!ctx->fatbox_keys[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    const char *r = fatbox_intern(ctx, key.data, NULL, shim, fnptr);
     buf_free(&key);
-
-    /* One OWNED name per box, freed with the keys.  Not a function-scoped
-     * `static char[96]`: the caller that holds two of these -- or stashes one
-     * and emits later -- would then get the same spelling twice, with no crash
-     * and no diagnostic, just wrong C.  See
-     * docs/archive/c-name-accessors-share-static-buffers.md. */
-    {
-        char nb[96];
-        snprintf(nb, sizeof nb, "__tur_fatbox_%u", (unsigned)idx);
-        ctx->fatbox_names[idx] = strdup(nb);
-        if (!ctx->fatbox_names[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
-    }
-
-    ensure_fatbox_keep(ctx);
-    /* The drop-glue header is a STATIC initializer on every target, never a
-     * fill: a function-pointer-to-void* conversion is an address constant (the
-     * preamble's __tur_fatshim_keep[] table already relies on that).  It has
-     * to be initialized at load time rather than from __tur_fatbox_init,
-     * because tur_closure_drop's else-branch is `free(header_address)` -- with
-     * a zero-initialized header GCC cannot prove that branch dead and warns
-     * `'free' called on unallocated object` at every drop site that inlines it
-     * (-Wfree-nonheap-object).  Non-NULL from load time folds the branch away.
-     * The two slots are address constants too where they are pointer words;
-     * see ensure_fatbox_keep for the wasm32 fill. */
-    buf_printf(ctx->thunk_typedefs, "TUR_FATBOX_DECL(__tur_fatbox_%u);\n",
-               (unsigned)idx);
-    buf_printf(ctx->fatbox_defs, "TUR_FATBOX_DEF(__tur_fatbox_%u, %s, %s)\n",
-               (unsigned)idx, shim, fnptr);
-    buf_printf(ctx->fatbox_init, "    TUR_FATBOX_FILL(__tur_fatbox_%u, %s, %s);\n",
-               (unsigned)idx, shim, fnptr);
-
-    return ctx->fatbox_names[idx];
+    return r;
 }
 
 /* catch-unwind-aggregate-return-miscompiled: the per-type boxing trampoline a
@@ -9098,10 +9265,13 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         /* definstance-not-dispatchable-across-modules: mirror the definition's
          * linkage in emit_fns.c -- a user module's instance method keeps
          * external linkage so an importing TU can call it. */
-        if (!ctx->separate_compilation ||
-            !(fd->binding->is_exported || fd->binding->retain_c_linkage ||
-              emit_inst_method_wants_external(fd)) ||
-            fd->binding->is_from_stdlib) {
+        /* r7rs-programs-compile-slowly: in a split build the library unit
+         * owns every stdlib defn and the client unit declares it. */
+        if ((!ctx->separate_compilation ||
+             !(fd->binding->is_exported || fd->binding->retain_c_linkage ||
+               emit_inst_method_wants_external(fd)) ||
+             fd->binding->is_from_stdlib) &&
+            !emit_split_lib_owns(fd->binding)) {
             buf_puts(out, "static ");
         }
         /* S1: the return type is written by the branches below; capture the
@@ -16679,6 +16849,15 @@ static void gdef_collect_refs(const Expr *e, const Binding ***a, uint32_t *n, ui
 
 /* Emit `static <T> <name>;` into `out` for every top-level `def` some earlier
  * item reads.  Mirrors emit_fn_forward_decls, one band later in the file. */
+/* r7rs-programs-compile-slowly: the storage class a top-level `def`'s C
+ * variable is written with -- file-local normally; defined with external
+ * linkage in the library unit of a split build and declared `extern` in the
+ * client unit when the stdlib owns it. */
+static const char *split_def_storage(const Binding *b) {
+    if (!emit_split_lib_owns(b)) return "static ";
+    return g_emit_split == EMIT_SPLIT_LIB ? "" : "extern ";
+}
+
 static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
                                           const Expr **items, uint32_t n_items) {
     const Binding **need = NULL; uint32_t n_need = 0, cap_need = 0;
@@ -16729,7 +16908,7 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
         char *bn = name_for_binding(ctx, (Binding *)need[i]);
         const char *fr = NULL; char *fa = NULL;
         if (emit_global_def_thin_fnptr(need[i], &fr, &fa)) {
-            buf_printf(out, "static %s (*%s)(%s);\n", fr, bn, fa);
+            buf_printf(out, "%s%s (*%s)(%s);\n", split_def_storage(need[i]), fr, bn, fa);
             /* jit-fallback (global-fn-value-def): a call through this pointer
              * hoists into a temp whose C type the hoist looks up BY CALLEE
              * NAME in the signature table; a global has no forward-declared
@@ -16739,7 +16918,8 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
             emit_sig_record_ret_ctype(bn, need[i]->type.as.fn.arity, fr);
             free(fa);
         } else {
-            buf_printf(out, "static %s %s;\n", type_c_name(need[i]->type), bn);
+            buf_printf(out, "%s%s %s;\n", split_def_storage(need[i]),
+                       type_c_name(need[i]->type), bn);
         }
         free(bn);
     }
@@ -16814,6 +16994,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * they can define file-scope helper functions/structs that Turmeric defns
      * reference -- e.g. the capability vtables in stdlib/io.tur and log.tur. */
     Buf cprelude; buf_init(&cprelude);
+    Buf cprelude_user; buf_init(&cprelude_user);   /* split client: the program's own */
     InlineCDedup cprelude_dedup = {0};  /* file-scope-inline-c-dedup */
 
     EmitCtx ctx;
@@ -16913,9 +17094,34 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     type_codegen_reset_fn_ptr_typedefs();
     sym_codegen_reset();   /* SYM1: clear interned-symbol records for this TU */
 
+    /* r7rs-programs-compile-slowly: the runtime helpers that carry state are
+     * written up front -- before any scan can ask for one -- in a split build, into their own buffer, so both units
+     * write the same set of them and the state transform can find them. */
+    Buf rt_lazy; buf_init(&rt_lazy);
+    if (g_emit_split != EMIT_SPLIT_NONE) {
+        Buf *saved_tt = ctx.thunk_typedefs;
+        ctx.thunk_typedefs = &rt_lazy;
+        ensure_saffron_dyn_runtime(&ctx);
+        ensure_r7rs_cast_helper(&ctx);
+        ctx.thunk_typedefs = saved_tt;
+    }
+
     /* Phase M0: Flatten program items, expanding EX_DEFMODULE body. */
     uint32_t n_items;
     const Expr **items = flatten_program_items(program, &n_items);
+
+    /* r7rs-programs-compile-slowly (emit_split.h): the library unit of a split
+     * build is written from the auto-loaded stdlib's items alone -- and from
+     * the types and declarations both units need -- so nothing of the
+     * program reaches it and its text is the same for every program. */
+    const bool split_lib = (g_emit_split == EMIT_SPLIT_LIB);
+    const bool split_client = (g_emit_split == EMIT_SPLIT_CLIENT);
+    if (split_lib && items) {
+        uint32_t k = 0;
+        for (uint32_t i = 0; i < n_items; i++)
+            if (split_item_owner(items[i]) != SPLIT_OWN_USER) items[k++] = items[i];
+        n_items = k;
+    }
 
     /* J1: ABI specialization scan (extracted into emit_abi_scan_program). */
     emit_abi_scan_program(&ctx, items, n_items);
@@ -16958,6 +17164,10 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 near_miss_main = fd;
         }
     }
+
+    /* The library unit of a split build has no `main`: its def initializers
+     * run from __tur_module_def_init, as a user-main program's do. */
+    const bool defs_to_init_fn = user_has_main || split_lib;
 
     /* Phase 2: Two-pass emission for mutual recursion support.
      * Pass 0: Emit struct typedefs + drop glue (must precede function forward decls). */
@@ -17421,6 +17631,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * Written to fwd_decls buffer (emitted before pending_handler_fns in final
      * assembly) so that effect handler functions can call user-defined functions. */
     emit_fn_forward_decls(&ctx, &fwd_decls, items, n_items);
+    split_check_sigs(items, n_items);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
         emit_abi_forward_decl(&fwd_decls, &ctx.abi_specializations[i]);
     }
@@ -17510,6 +17721,17 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             /* slice 5: an opaque type declaration has no runtime storage. */
             if (def_is_opaque_type_decl(e)) continue;
             char *bn = name_for_binding(&ctx, e->as.def_.binding);
+            /* r7rs-programs-compile-slowly: the client unit of a split build
+             * declares a stdlib global and leaves its initializer to the
+             * library unit, which runs it from __tur_split_lib_init. */
+            const bool def_lib_owned = emit_split_lib_owns(e->as.def_.binding);
+            const bool def_declare_only = split_client && def_lib_owned;
+            if (split_lib && def_lib_owned) {
+                e->as.def_.binding->split_lib_defined = true;
+                emit_split_note_export(bn);
+            }
+            if (def_lib_owned && e->as.def_.binding->is_thread_local)
+                emit_split_refuse("a stdlib ^thread-local global");
             /* G4b: a `^thread-local` has no process-wide storage and no entry
              * in __tur_module_def_init.  Its initializer becomes a function so
              * it can be run once per thread, on that thread -- which is the
@@ -17552,14 +17774,15 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             {
                 const char *fp_ret = NULL; char *fp_args = NULL;
                 if (emit_global_def_thin_fnptr(e->as.def_.binding, &fp_ret, &fp_args)) {
-                    buf_printf(&file, "static %s (*%s)(%s);\n", fp_ret, bn, fp_args);
+                    buf_printf(&file, "%s%s (*%s)(%s);\n",
+                               split_def_storage(e->as.def_.binding), fp_ret, bn, fp_args);
                     /* jit-fallback: see the forward-declaration pass above --
                      * the hoist temp of a call through this pointer needs the
                      * result type on record under the global's name. */
                     emit_sig_record_ret_ctype(bn, e->as.def_.binding->type.as.fn.arity,
                                               fp_ret);
-                    if (e->as.def_.init) {
-                        Buf *init_sink = user_has_main ? &def_init_body : &body;
+                    if (e->as.def_.init && !def_declare_only) {
+                        Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
                         char *iv = emit_value(&ctx, init_sink, e->as.def_.init);
                         indent_buf(init_sink, ctx.indent);
                         buf_printf(init_sink, "%s = (%s (*)(%s))(intptr_t)(%s);\n",
@@ -17571,9 +17794,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                     continue;
                 }
             }
-            buf_printf(&file, "static %s %s;\n",
+            buf_printf(&file, "%s%s %s;\n", split_def_storage(e->as.def_.binding),
                        type_c_name(e->as.def_.binding->type), bn);
-            if (e->as.def_.init) {
+            if (e->as.def_.init && !def_declare_only) {
                 /* Gap F: route to def_init_body so user-has-main programs
                  * still execute the initializer via __constructor__.
                  *
@@ -17583,7 +17806,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                  * the top-level expressions in `body`, so a program's forms
                  * run in the order they are written -- what the interpreter
                  * does, and what R7RS 5.1 requires of a Scheme program. */
-                Buf *init_sink = user_has_main ? &def_init_body : &body;
+                Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
                 char *iv = emit_value(&ctx, init_sink, e->as.def_.init);
                 /* global-def-store-misses-int-ptr-bridge: same bridge the
                  * `let` binder applies -- the def's declared carrier and the
@@ -17601,6 +17824,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             if (emit_abi_fn_skip_generic(&ctx, e)) {
                 continue;
             }
+            /* r7rs-programs-compile-slowly: the library unit defines it. */
+            if (split_client && split_item_owner(e) == SPLIT_OWN_LIB) continue;
             emit_fn_def(&ctx, &file, e);
         } else if (e->kind == EX_EXTERN_C) {
             /* Emit extern-c declaration early (before handler functions) */
@@ -17675,9 +17900,11 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             /* DV2: initialize the root value in main() body.
              * Gap F: route to def_init_body so user-has-main programs
              * still execute the initializer via __constructor__. */
+            if (g_emit_split != EMIT_SPLIT_NONE && split_item_owner(e) == SPLIT_OWN_LIB)
+                emit_split_refuse("a stdlib dynamic variable");
             DynVarEntry *entry = e->as.defdynamic_.entry;
             char *mname = mangle_dynvar_name(entry->name->name);
-            Buf *init_sink = user_has_main ? &def_init_body : &body;
+            Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
             char *rv = emit_value(&ctx, init_sink, e->as.defdynamic_.root_expr);
             indent_buf(init_sink, ctx.indent);
             buf_printf(init_sink, "_dynvar_root_%s = %s;\n", mname, rv);
@@ -17689,10 +17916,23 @@ static int emit_program_inner(Buf *out, const Expr *program) {
              * captures/val-exprs, so emit its text directly. */
             InlineC *ic = e->as.inline_c_.inline_c;
             if (ic && ic->code.p && ic->code.len > 0) {
-                inline_c_emit_block_deduped(&cprelude, &cprelude_dedup,
-                                             ic->code.p, ic->code.len);
+                /* r7rs-programs-compile-slowly: a stdlib block's file-scope
+                 * state is the library unit's (emit_split_state at assembly);
+                 * a program's own block is the client's alone. */
+                bool user_block = split_client && split_item_owner(e) == SPLIT_OWN_USER;
+                inline_c_emit_block_deduped(user_block ? &cprelude_user : &cprelude,
+                                             &cprelude_dedup, ic->code.p, ic->code.len);
             }
         } else {
+            /* r7rs-programs-compile-slowly: a stdlib statement would run in
+             * only one unit's `main`, which the library unit has none of. */
+            if (g_emit_split != EMIT_SPLIT_NONE && split_item_owner(e) == SPLIT_OWN_LIB) {
+                size_t before = body.len;
+                if (split_client) continue;
+                emit_stmt(&ctx, &body, e);
+                if (body.len != before) emit_split_refuse("a stdlib top-level statement");
+                continue;
+            }
             emit_stmt(&ctx, &body, e);
         }
     }
@@ -18291,6 +18531,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     }
 
     /* Phase M5: emit module-level defer thunks + atexit constructor. */
+    if (n_prog_defers > 0 && g_emit_split != EMIT_SPLIT_NONE)
+        emit_split_refuse("a module-level defer");
     if (n_prog_defers > 0) {
         buf_puts(&file, "\n/* Phase M5: module-level defers */\n");
         for (uint32_t i = 0; i < n_prog_defers; i++) {
@@ -18315,8 +18557,18 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     }
 
     /* Final assembly. */
-    emit_runtime_preamble(out, program, false);
-    emit_hoisted_includes(out);
+    if (g_emit_split != EMIT_SPLIT_NONE) {
+        /* r7rs-programs-compile-slowly: one instance of the runtime's state,
+         * in the library unit (emit_split_state). */
+        Buf pre; buf_init(&pre);
+        emit_runtime_preamble(&pre, program, false);
+        emit_hoisted_includes(&pre);
+        emit_split_state(pre.data, pre.len, g_emit_split, out);
+        buf_free(&pre);
+    } else {
+        emit_runtime_preamble(out, program, false);
+        emit_hoisted_includes(out);
+    }
 
     /* Phase 4 v1: Collect all defer thunks into a buffer so they can be
      * emitted after extern_decls and fwd_decls (defer bodies may call
@@ -18327,7 +18579,10 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     /* SYM1: interned runtime symbol records (struct __tur_sym + one per keyword).
      * Body emission above populated the registry via sym_codegen_register(). */
     Buf sym_records; buf_init(&sym_records);
-    sym_codegen_emit(&sym_records, false);  /* single-file: static records */
+    /* single-file: static records.  r7rs-programs-compile-slowly: a split
+     * build's two units share each keyword's record the way separately
+     * compiled modules do (SYM2), so `:x` is one pointer program-wide. */
+    sym_codegen_emit(&sym_records, g_emit_split != EMIT_SPLIT_NONE);
     /* Phase E: fn-ptr typedefs for concrete fn fields in parametric structs */
     Buf concrete_fn_ptr_typedefs; buf_init(&concrete_fn_ptr_typedefs);
     type_codegen_emit_fn_ptr_typedefs(&concrete_fn_ptr_typedefs);
@@ -18365,6 +18620,11 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
     if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
+    if (rt_lazy.len) {
+        emit_split_state(rt_lazy.data, rt_lazy.len, g_emit_split, out);
+        buf_putc(out, '\n');
+    }
+    buf_free(&rt_lazy);
     emit_any_type_name_table(&ctx, &thunk_typedefs);
     if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
@@ -18372,8 +18632,14 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     if (defer_thunks.len){ buf_write(out, defer_thunks.data, defer_thunks.len); buf_putc(out, '\n'); }
     /* file-scope-c-block: top-level raw-C prelude -- after fwd_decls (so it may
      * call Turmeric functions) and before handler fns / file (so function defs
-     * may reference the file-scope helpers it declares). */
-    if (cprelude.len)    { buf_write(out, cprelude.data, cprelude.len); buf_putc(out, '\n'); }
+     * may reference the file-scope helpers it declares).  In a split build the
+     * stdlib's blocks share their state the way the runtime preamble does. */
+    if (cprelude.len)    {
+        emit_split_state(cprelude.data, cprelude.len, g_emit_split, out);
+        buf_putc(out, '\n');
+    }
+    if (cprelude_user.len) { buf_write(out, cprelude_user.data, cprelude_user.len); buf_putc(out, '\n'); }
+    buf_free(&cprelude_user);
     buf_free(&early_file);
     buf_free(&thunk_typedefs);
     /* NOTE: fatbox_init is NOT freed here -- it is read further down, where the
@@ -18398,7 +18664,16 @@ static int emit_program_inner(Buf *out, const Expr *program) {
 
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
 
-    if (!user_has_main) {
+    if (split_lib) {
+        /* r7rs-programs-compile-slowly: the library unit has no entry point;
+         * its initializers run from __tur_split_lib_init (static_init_emit). */
+        if (def_init_body.len) {
+            buf_puts(out, "static void __tur_module_def_init(void) {\n");
+            buf_write(out, def_init_body.data, def_init_body.len);
+            buf_puts(out, "}\n\n");
+            static_init_register("__tur_module_def_init", STATIC_INIT_DEFS);
+        }
+    } else if (!user_has_main) {
         /* Only generate main() if user didn't define one */
         /* examples-have-no-suite-coverage (section 2): the synthesized main
          * runs static init and returns 0.  With NO top-level statements to

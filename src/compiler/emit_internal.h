@@ -32,9 +32,19 @@
 #include "rc.h"
 #include "rc_elision.h"
 #include "types.h"
+#include "emit_split.h"
 
 /* Phase R5: Global panic strategy flag (set by main.c --panic-abort) */
 extern bool g_panic_abort;
+/* r7rs-programs-compile-slowly: which unit of a split build this emission
+ * writes (emit_split.h); EMIT_SPLIT_NONE for every ordinary emission. */
+extern EmitSplitMode g_emit_split;
+/* Is this binding a definition the library unit of a split build owns --
+ * one of the auto-loaded stdlib files'?  False outside a split. */
+bool emit_split_lib_owns(const Binding *b);
+/* Decline the split for this program: the build falls back to one unit.
+ * `why` is a string literal, kept for TUR_SHOW_CC-style diagnostics. */
+void emit_split_refuse(const char *why);
 
 /* Phase R6: Result/panic linting flags (set by main.c) */
 extern bool g_warn_unused_result;
