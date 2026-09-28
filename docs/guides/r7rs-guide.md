@@ -644,7 +644,7 @@ What it does not cover:
   thousands of iterations: a count of 30,000 crashes at `-O0` and 70,000 at
   `-O2` (the default). The same loop through ONE procedure is constant stack,
   and so is every other tail call -- self, mutual, and through a variable
-  ([mutual-tail-call-through-guard-grows-the-stack](../reported/mutual-tail-call-through-guard-grows-the-stack.md)).
+  ([mutual-tail-call-through-guard-grows-the-stack](https://github.com/rjungemann/turmeric/blob/main/docs/reported/mutual-tail-call-through-guard-grows-the-stack.md)).
 
 ## Conformance
 

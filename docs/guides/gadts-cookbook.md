@@ -107,7 +107,7 @@ namespace, where a type annotation cannot see them.)
 > function annotated with the bare name, still takes every vector. An index
 > that is not known -- a vector a bare-typed function returns, a recursion
 > the checker cannot count -- is not an error: it is simply not checked
-> ([gadt-length-index-not-enforced](../archive/gadt-length-index-not-enforced.md)).
+> ([gadt-length-index-not-enforced](https://github.com/rjungemann/turmeric/blob/main/docs/archive/gadt-length-index-not-enforced.md)).
 
 ```turmeric
 ; Type-level naturals: phantom-parameter opaques, so (Succ n) is a type.
