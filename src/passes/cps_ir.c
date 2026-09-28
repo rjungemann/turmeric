@@ -302,6 +302,10 @@ static CTerm *unsupported_form(CpsB *b, const Expr *e) {
  * keeps the small per-function number. */
 #define CPS_FRESH_ID_BASE 0x80000000u
 
+/* How many fresh binders the last cps_ir_translate_fn minted (see
+ * cps_ir_last_fresh_count). */
+static uint32_t g_cps_last_fresh;
+
 static CVar fresh_cvar(CpsB *b, const Type *ty) {
     CVar v;
     uint32_t n = b->counter++;
@@ -4349,16 +4353,25 @@ CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
      * emitter lowers the closure with its scoped-env free instead of the CPS path
      * leaf-admitting (and leaking) the closure.  The general per-node path handles
      * every function with a real control op / colored call. */
+    CTerm *t;
     if (whole_body_delegatable(&b, fd->body)) {
         Expr *body = (Expr *)ascribe_peel(fd->body);
-        if (is_atomic(body)) return cps_tail(&b, body, b.retk);
-        CVar x = fresh_cvar(&b, &body->type);
-        CTerm *ac = new_term(&b, CT_APPCONT);
-        ac->as.appcont.kont = b.retk; ac->as.appcont.v = atom_cvar(x);
-        return build_letraw(&b, body, x, ac);
+        if (is_atomic(body)) {
+            t = cps_tail(&b, body, b.retk);
+        } else {
+            CVar x = fresh_cvar(&b, &body->type);
+            CTerm *ac = new_term(&b, CT_APPCONT);
+            ac->as.appcont.kont = b.retk; ac->as.appcont.v = atom_cvar(x);
+            t = build_letraw(&b, body, x, ac);
+        }
+    } else {
+        t = cps_tail(&b, fd->body, b.retk);
     }
-    return cps_tail(&b, fd->body, b.retk);
+    g_cps_last_fresh = b.counter;
+    return t;
 }
+
+uint32_t cps_ir_last_fresh_count(void) { return g_cps_last_fresh; }
 
 /* ---- printing --------------------------------------------------------- */
 

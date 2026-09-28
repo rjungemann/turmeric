@@ -336,6 +336,12 @@ struct CTerm {
  * body. The result is a CTerm delivering the body's value to KK_RET. */
 CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd);
 
+/* How many fresh binders the last cps_ir_translate_fn call minted: they are
+ * named `__t0` .. `__t<count-1>`, which are also the direct emitter's
+ * fresh_tmp names, so an emitter rendering that term must mint its own
+ * temporaries from `count` up. */
+uint32_t cps_ir_last_fresh_count(void);
+
 /* Pretty-print a CPS term. */
 void cps_ir_print(const CTerm *t, FILE *out, int indent);
 

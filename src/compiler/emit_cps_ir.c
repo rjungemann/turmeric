@@ -3207,6 +3207,10 @@ typedef struct {
      * PERMANENTLY tainted, so a fn evicted only because it shares such an effect
      * is itself permanent routing (no BODY-* fix exists), not a fixable BODY root. */
     bool sig_perm;
+    /* The CPS IR's fresh binders in `term` are `__t0` .. `__t<fresh_n-1>`, the
+     * same spelling as the direct emitter's fresh_tmp; rendering the term
+     * raises ctx->tmp_n to at least this first. */
+    uint32_t fresh_n;
 } SEnt;
 
 /* The program entry point `main` (never module-prefixed). */
@@ -5025,6 +5029,7 @@ static void ensure_S(const Expr *program) {
                     if (lo || hi) { candidate = false; sig_perm = true; }
                 }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
+                uint32_t fresh_n = cps_ir_last_fresh_count();
                 if (candidate && !term_core_ok(t)) {
                     candidate = false;
                     /* An un-lowerable inline-C form in a colored body is a
@@ -5061,6 +5066,7 @@ static void ensure_S(const Expr *program) {
                 g_ents[g_ents_n].fd = fd;
                 g_ents[g_ents_n].bind = fd->binding;
                 g_ents[g_ents_n].term = t;
+                g_ents[g_ents_n].fresh_n = fresh_n;
                 g_ents[g_ents_n].in_s = candidate;
                 g_ents[g_ents_n].mono_template = mono_tmpl;
                 g_ents[g_ents_n].sig_perm = sig_perm;
@@ -10052,6 +10058,14 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * decides, since a loop can enclose the handle whose clause reads one. */
     loop_carried_scan(se->term);
     byref_scan(se->term);
+    /* The term's own binders are `__t0` .. `__t<fresh_n-1>`, and the direct
+     * emitter names its temporaries `__t<tmp_n>` from one program-wide
+     * counter.  A monolithic build had emitted the stdlib before any user
+     * function, so tmp_n was in the hundreds here; the prelude split's
+     * program unit emits no stdlib, tmp_n starts at 0, and a delegated
+     * node's `__t0` redeclared the term's. */
+    if (ctx->tmp_n >= 0 && (uint32_t)ctx->tmp_n < se->fresh_n)
+        ctx->tmp_n = (int)se->fresh_n;
     emit_binder_decls(&ce, se->term);
     /* cps-body-panic-not-propagated: every function this render produces -- the
      * `<fn>__cps` body, its join/frame/loop helpers -- returns the int64/intptr
