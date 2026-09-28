@@ -38,6 +38,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <dirent.h>
 #include "platform_proc.h"
 #include "platform_fs.h"  /* realpath/mkdir/setenv/mkstemps/... on Windows */
@@ -2917,6 +2918,26 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     struct stat st;
     if (stat(obj, &st) == 0 && st.st_size > 0) { buf_free(&flags); return 0; }
 
+    /* One compile per library.  The unit exports every stdlib definition, so
+     * cc cannot drop the ones no program reaches, and the compile costs more
+     * than a whole one-unit build did: builds that start together on a cold
+     * cache (the fixture suite, `make -j`) wait for the first one's object
+     * instead of each compiling their own.  A lock older than the wait (its
+     * holder killed) is ignored, and a waiter that gives up compiles its own
+     * copy -- the rename below makes racing writers agree. */
+    char lock[1100];
+    snprintf(lock, sizeof lock, "%s/%016llx.lock", dir, (unsigned long long)h);
+    int lock_fd = open(lock, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    if (lock_fd < 0 && errno == EEXIST) {
+        for (int tick = 0; tick < 1200; tick++) {   /* 100 ms ticks, 120 s */
+            if (stat(obj, &st) == 0 && st.st_size > 0) { buf_free(&flags); return 0; }
+            if (stat(lock, &st) != 0) break;
+            if (difftime(time(NULL), st.st_mtime) > 120) break;
+            usleep(100000);
+        }
+        if (stat(obj, &st) == 0 && st.st_size > 0) { buf_free(&flags); return 0; }
+    }
+
     char src[1100], tmp_obj[1100];
     snprintf(src, sizeof src, "%s/%016llx.%ld.c", dir, (unsigned long long)h, (long)getpid());
     snprintf(tmp_obj, sizeof tmp_obj, "%s/%016llx.%ld.o", dir, (unsigned long long)h, (long)getpid());
@@ -2924,6 +2945,7 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     if (!f || fwrite(lib_c->data, 1, lib_c->len, f) != lib_c->len) {
         if (f) fclose(f);
         buf_free(&flags);
+        if (lock_fd >= 0) { close(lock_fd); unlink(lock); }
         return 2;
     }
     fclose(f);
@@ -2943,9 +2965,10 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     } else {
         unlink(src);
     }
-    if (rc != 0) { unlink(tmp_obj); return 2; }
-    if (rename(tmp_obj, obj) != 0) { unlink(tmp_obj); return 2; }
-    return 0;
+    int ret = 0;
+    if (rc != 0 || rename(tmp_obj, obj) != 0) { unlink(tmp_obj); ret = 2; }
+    if (lock_fd >= 0) { close(lock_fd); unlink(lock); }
+    return ret;
 }
 
 static int cmd_build_once(const char *input, const char *out_path,
