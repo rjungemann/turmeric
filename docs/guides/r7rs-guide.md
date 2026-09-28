@@ -281,10 +281,22 @@ so a continuation captured in one is the rest of that form: re-entering it
 from a later form finishes the earlier form and then continues after the
 form that invoked it, as chibi and Racket do.
 
-`guard` and `raise` escape without copying anything. `call/cc` copies the
-stack between it and the program's start, so it costs time and memory in
-proportion to that depth. An uncaught `raise` reports on the current error
-port and exits with status 70.
+`guard` and `raise` escape without copying anything. So does a `call/cc`
+whose continuation can only be called while the `call/cc` is running: every
+use of `k` heads a call, whether directly, inside a lambda handed to
+`for-each`, `map` or their vector and string twins, or inside a named `let`
+whose name only heads calls. That covers the usual early exit from a loop:
+
+```scheme
+(call/cc (lambda (return)
+  (for-each (lambda (x) (if (p x) (return x))) l)
+  #f))
+```
+
+Any other `call/cc` copies the stack between it and the program's start, so
+it costs time and memory in proportion to that depth. This includes one
+whose `k` is stored, returned, or passed to your own procedure. An uncaught
+`raise` reports on the current error port and exits with status 70.
 
 ## Eval
 
@@ -506,8 +518,8 @@ A compiled program's allocator is a conservative mark-sweep collector
 (docs/archive/r7rs-gc-plan.md): every pair, vector, string, record,
 procedure, `call/cc` image and runtime record the program makes is reclaimed
 once nothing reaches it. A loop that builds a dead four-element list a
-million times peaks at 10 MB; a hundred thousand escaping `call/cc`s, the
-same. Values you keep in Turmeric maps or `rc<T>` cells through the
+million times peaks at 10 MB, and so does a loop that runs a `guard`, an
+escaping `call/cc` and a re-entrant one a million times each. Values you keep in Turmeric maps or `rc<T>` cells through the
 `(turmeric ...)` seam are seen through the node that holds them. A
 collection runs when 8 MiB, or twice the live size, has been allocated since
 the last one; `TUR_GC_TORTURE=N` collects every N allocations, for shaking

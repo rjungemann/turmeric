@@ -1,0 +1,81 @@
+#lang r7rs
+;; r7rs-callcc-memory-never-freed: a call/cc whose continuation never outlives
+;; it -- every use of `k` heads a call, in the body, in a lambda handed to
+;; for-each / map / call/cc, or in a named let whose name only heads calls --
+;; is lowered to the one-shot escape (callcc_escape_only), which copies no
+;; stack.  These are the idioms, and the cases that must NOT be converted:
+;; each answer is what the copying call/cc gives (checked against a copy of
+;; this program in which every k is also stored, so none is converted).  Case
+;; 6 is the one that makes the conversion safe or not: the escape invoked
+;; after an inner, re-entrant continuation brought its frame back.
+(import (scheme base) (scheme write))
+(define (show x) (write x) (newline))
+;; 1. for-each escape
+(define (find-first p l) (call/cc (lambda (return) (for-each (lambda (x) (if (p x) (return x))) l) #f)))
+(show (list (find-first odd? '(2 4 5 6)) (find-first odd? '(2 4))))
+;; 2. named let escape, and do
+(define (index-of x l)
+  (call/cc (lambda (return)
+    (let scan ((l l) (i 0)) (cond ((null? l) (return -1)) ((eqv? (car l) x) (return i)) (else (scan (cdr l) (+ i 1))))))))
+(define (first-neg v)
+  (call/cc (lambda (k) (do ((i 0 (+ i 1))) ((= i (vector-length v)) 'none) (if (negative? (vector-ref v i)) (k i))))))
+(show (list (index-of 'c '(a b c)) (index-of 'z '(a)) (first-neg #(1 2 -3)) (first-neg #(1))))
+;; 3. multiple and zero values through the escape
+(show (call-with-values (lambda () (call/cc (lambda (k) (k 1 2 3)))) list))
+(show (call-with-values (lambda () (call/cc (lambda (k) (map (lambda (x) (if (= x 2) (k 'two 'found) x)) '(1 2 3))))) list))
+;; 4. dynamic-wind: the after thunk runs on the escape
+(define trail '())
+(show (list (call/cc (lambda (k) (dynamic-wind (lambda () (set! trail (cons 'in trail)))
+                                              (lambda () (k 'out))
+                                              (lambda () (set! trail (cons 'after trail))))))
+            (reverse trail)))
+;; 5. guard inside, and an escape out of a guard handler
+(show (call/cc (lambda (k) (guard (e (#t (k (list 'handled e)))) (raise 'boom)))))
+;; 6. the escape invoked after an inner re-entrant continuation brought its frame back
+(define saved #f)
+(define mode 'first)
+(define (f)
+  (call/cc (lambda (return)
+    (for-each (lambda (x)
+                (call/cc (lambda (k2) (if (eq? x 'b) (set! saved k2))))
+                (if (and (eq? mode 'second) (eq? x 'c)) (return 'escaped-after-reentry)))
+              '(a b c d))
+    'done)))
+(define results '())
+(define (run) (let ((r (f))) (set! results (cons r results)) (if (eq? mode 'first) (begin (set! mode 'second) (saved #f)))))
+(run)
+(show (reverse results))
+;; 7. a stored continuation is still re-entrant (not converted)
+(define n 0)
+(define (count-to limit)
+  (let ((k #f))
+    (call/cc (lambda (c) (set! k c)))
+    (set! n (+ n 1))
+    (if (< n limit) (k #f) n)))
+(show (count-to 4))
+;; 8. a generator through two stored continuations
+(define (make-gen lst)
+  (define return #f)
+  (define resume #f)
+  (lambda ()
+    (call/cc (lambda (r)
+      (set! return r)
+      (if resume
+          (resume #f)
+          (begin
+            (for-each (lambda (x) (call/cc (lambda (next) (set! resume next) (return x)))) lst)
+            (return 'done)))))))
+(define g (make-gen '(1 2 3)))
+(define g1 (g))
+(define g2 (g))
+(define g3 (g))
+(define g4 (g))
+(show (list g1 g2 g3 g4))
+;; 9. a user for-each that keeps its procedure: the call/cc is not converted
+(define kept #f)
+(define (my-each f l) (set! kept f) (if (pair? l) (begin (f (car l)) (my-each f (cdr l)))))
+(define (probe) (call/cc (lambda (k) (my-each (lambda (x) (if (eq? x 'stop) (k 'stopped))) '(a stop)) 'ran)))
+(show (probe))
+;; 10. call/cc as an argument, k returned as a value (not converted)
+(define k3 (call/cc (lambda (k) k)))
+(show (procedure? k3))

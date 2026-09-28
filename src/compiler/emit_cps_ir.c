@@ -10167,6 +10167,9 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
         buf_puts(file, "    }\n");
         buf_puts(file, "    __dk_entry_depth++;\n");
+    /* r7rs-callcc-memory-never-freed: where this entry's registrations
+     * start, so a nested exit can drop them (__dk_reap_drop_to). */
+    buf_puts(file, "    size_t __dk_reap_mark = __dk_reap_n;\n");
         buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
         /* E7: install the trampoline driver.  A tail-resume longjmps here; the
          * else-branch runs the meta-stack trampoline to completion. */
@@ -10193,7 +10196,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
          * struct / box, so reaping only runs once the body has actually settled
          * (docs/archive/cps-delimited-dk-node-leak.md). */
         buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
-        buf_puts(file, "    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();\n");
+        buf_puts(file, "    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }\n");
         if (mvoid) {
             buf_puts(file, "    return 0;\n}\n");
         } else {
@@ -10259,6 +10262,9 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     buf_puts(file, ") {\n");
     buf_puts(file, "    __dk_entry_depth++;\n");
+    /* r7rs-callcc-memory-never-freed: where this entry's registrations
+     * start, so a nested exit can drop them (__dk_reap_drop_to). */
+    buf_puts(file, "    size_t __dk_reap_mark = __dk_reap_n;\n");
     buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
     /* proper-tail-calls T6 (T-D6): a bouncer's direct entry is where the
      * trampoline's arming lands -- the driver arms exactly this function, and
@@ -10330,7 +10336,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * struct / box, so reaping only runs once the body has actually settled
      * (docs/archive/cps-delimited-dk-node-leak.md). */
     buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
-    buf_puts(file, "    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();\n");
+    buf_puts(file, "    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }\n");
     if (void_ret) {
         buf_puts(file, "    return;\n}\n");
     } else {

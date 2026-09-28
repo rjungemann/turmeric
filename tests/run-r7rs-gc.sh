@@ -24,7 +24,9 @@
 #      and drops a million small lists runs under a 256 MiB address-space
 #      limit.  With the collector it fits; the same program without it
 #      (429 MB peak, docs/reported/r7rs-heap-data-never-reclaimed.md) must
-#      NOT fit, or the check proves nothing and fails.
+#      NOT fit, or the check proves nothing and fails.  A million guards and
+#      call/cc escapes must fit too (reclaim-escapes; 397 MB before nested
+#      CPS entries dropped their reap registrations).
 #
 # Linux/glibc and macOS (the collector is; elsewhere it is plain malloc).
 #   R7RS_GC_TORTURE=N   the torture interval (default 31, about two minutes on
@@ -331,6 +333,31 @@ elif [ "$without" = "done" ]; then
     echo "FAIL reclaim -- the churn fits in 256 MiB WITHOUT the collector, so this check bites on nothing"
 else
     echo "PASS reclaim (256 MiB: fits with the collector, not without)"
+fi | tee -a "$WORK/results"
+# r7rs-callcc-memory-never-freed: escapes.  A `guard`, a call/cc used as an
+# escape and a re-entrant call/cc each enter CPS code, and a nested CPS
+# entry's registrations stayed on the reap list until the program ended: this
+# loop peaked at 397 MB before `__dk_reap_drop_to`, and runs in 10 MB with it.
+cat > "$WORK/escapes.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write))
+(define keep #f)
+(define (step i)
+  (+ (guard (e (#t 0)) (if (= i -1) (raise 'never) 1))
+     (call/cc (lambda (k) (k 1)))
+     (call/cc (lambda (k) (set! keep k) 1))))
+(define (spin i acc) (if (= i 0) acc (spin (- i 1) (+ acc (step i)))))
+(write (spin 1000000 0))
+(newline)
+EOF
+esc="build-failed"
+if "$TUR" build "$WORK/escapes.tur" -o "$WORK/escapes" > "$WORK/escapes.build" 2>&1; then
+    esc="$( (ulimit -v 262144; "$WORK/escapes" 2>/dev/null) 2>/dev/null || true)"
+fi
+if [ "$esc" = "3000000" ]; then
+    echo "PASS reclaim-escapes (a million guards and call/cc escapes fit in 256 MiB)"
+else
+    echo "FAIL reclaim-escapes -- a million guards and call/cc escapes did not fit in 256 MiB (got '$esc')"
 fi | tee -a "$WORK/results"
 else
     echo "PASS reclaim (skipped on $HOST: no address-space limit to test under)" | tee -a "$WORK/results"
