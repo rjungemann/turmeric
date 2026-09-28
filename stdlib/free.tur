@@ -55,8 +55,9 @@
 ;;;
 ;;; Parameters:
 ;;;   ma -- a Free value
-;;;   kont -- a continuation from a to (Free f b); carried as an :int fat-closure
-;;;           handle via the ^fat marker (a bare non-capturing fn is auto-shimmed)
+;;;   kont -- a continuation from a to (Free f b), typed `(fn [int] int)` over
+;;;           the erased Free carrier; a fat closure via the ^fat marker (a bare
+;;;           non-capturing fn is auto-shimmed)
 ;;;
 ;;; Returns:
 ;;;   A new Free value representing the sequenced computation.
@@ -67,7 +68,7 @@
 ;;; Since: Phase RF3
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
 
-(defn free-bind [ma : int ^fat kont : int]
+(defn free-bind [ma : int ^fat kont : (fn [int] int)]
   #fx{Unsafe}
   : int
   ```c
@@ -84,8 +85,9 @@
 ;;;
 ;;; Parameters:
 ;;;   free -- a Free value
-;;;   f    -- a function from a to b; carried as an :int fat-closure handle via
-;;;           the ^fat marker (a bare non-capturing fn is auto-shimmed)
+;;;   f    -- a function from a to b, typed `(fn [int] int)` over the erased
+;;;           carrier; a fat closure via the ^fat marker (a bare non-capturing
+;;;           fn is auto-shimmed)
 ;;;
 ;;; Returns:
 ;;;   A new Free value with f applied to all pure leaves.
@@ -93,7 +95,7 @@
 ;;; Since: Phase RF3
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
 
-(defn free-fmap [free : int ^fat f : int]
+(defn free-fmap [free : int ^fat f : (fn [int] int)]
   #fx{Unsafe}
   : int
   ```c
@@ -110,8 +112,9 @@
 ;;; free-run -- interpret a Free computation with a natural transformation.
 ;;;
 ;;; Parameters:
-;;;   interp -- a natural transformation from (f a) to a; carried as an :int
-;;;             fat-closure handle via the ^fat marker (bare fns auto-shimmed)
+;;;   interp -- a natural transformation from (f a) to a, typed
+;;;             `(fn [int] int)` over the erased carrier; a fat closure via the
+;;;             ^fat marker (bare fns auto-shimmed)
 ;;;   free   -- a Free computation to run
 ;;;
 ;;; Returns:
@@ -123,7 +126,7 @@
 ;;; Since: Phase RF3
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
 
-(defn free-run [^borrow ^fat interp : int free : int]
+(defn free-run [^borrow ^fat interp : (fn [int] int) free : int]
   #fx{Unsafe}
   : int
   ```c

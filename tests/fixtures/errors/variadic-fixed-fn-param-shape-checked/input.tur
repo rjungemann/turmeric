@@ -1,0 +1,10 @@
+;; stdlib-int-stand-in-audit (S1): a VARIADIC callee's fixed function-typed
+;; parameter got none of the fixed-arity path's shape check, so a lambda of
+;; the wrong arity reached it with `tur check` exit 0 -- which made typing
+;; `compose-middleware-of`'s `^fat base` as `(fn [ptr<void>] nil)` decorative.
+;; The fixed parameters of a variadic call now take the same structural test.
+(defn run-all [^fat f : (fn [int] int) & xs : int] : int (f 1))
+
+(defn main [] : int
+  (println (run-all (fn [a : int b : int] : int a) 5 6))
+  0)

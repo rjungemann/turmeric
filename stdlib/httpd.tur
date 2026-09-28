@@ -3696,7 +3696,7 @@
 ;;; non-callable mistakes at elaboration.
 ;;;
 ;;; Parameters:
-;;;   base -- base handler closure (:int)
+;;;   base -- base handler, a `(fn [ptr<void>] nil)` closure
 ;;;   mws  -- variadic fat-closure middlewares; type variable A unifies
 ;;;           to whatever closure type the call site uses.
 ;;;
@@ -3710,7 +3710,7 @@
 ;;;        docs/archive/history/variadic-rest-closure-cast-plan.md.
 ;;;        Returns `Handler` since automatic R3a (closure-drop-glue).
 
-(defn compose-middleware-of [A] [^fat base :int ^borrow & mws :A] :Handler
+(defn compose-middleware-of [A] [^fat base : (fn [ptr<void>] nil) ^borrow & mws :A] :Handler
   (let [composed (httpd-mw-fold base mws)]
     (httpd-mw-free-spine mws)
     (:: composed :Handler)))

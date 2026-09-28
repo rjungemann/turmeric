@@ -92,7 +92,7 @@
 ;;;
 ;;; Parameters:
 ;;;   ma -- a Cell list of values to thread through fn.
-;;;   fn -- a fat closure of type int64_t -> Cell list.
+;;;   fn -- a fat closure `(fn [int] int)`: a value to a Cell list.
 ;;;
 ;;; Returns:
 ;;;   The concatenated results of applying fn to every value in ma,
@@ -101,7 +101,7 @@
 ;;; Example:
 ;;;   (mbind (mreturn 1) (fn [x] (mreturn (* x 2))))  ; => Cell{2}
 
-(defn mbind [ma : int ^borrow ^fat fn : int] : int
+(defn mbind [ma : int ^borrow ^fat fn : (fn [int] int)] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
