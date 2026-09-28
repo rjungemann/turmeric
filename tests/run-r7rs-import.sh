@@ -512,6 +512,49 @@ EOF
 
 run_case "library-shares-procedure-identity" prog16.tur "(#t set-car! set-cdr! #f)"
 
+# r7rs-library-defines-standard-or-stdlib-name: a library may define a
+# standard name (`square`, `abs`) or an auto-loaded stdlib one (`None`,
+# `list-length`) and export it, plainly or as a rename's public name.  It
+# used to be "'r7rs-square' is already defined by an auto-loaded stdlib
+# module" compiled, and unreachable -- or the stdlib's `list-length` replaced
+# for everyone -- interpreted.  The module spells each `<name>--user`, and an
+# importer learns that from the library's source, under any import set.  The
+# library's own uses mean its definition; the program's other uses of a
+# standard name it did not import from the library still mean R7RS's.
+cat > "$TMP/stdnlib.tur" <<'EOF'
+#lang r7rs
+(define-library (stdnlib)
+  (export square None list-length (rename my-cube cube) (rename my-abs abs) square-of-three)
+  (import (scheme base))
+  (begin
+    (define (square x) (list 'mine x))
+    (define (None) 'none)
+    (define (list-length l) 77)
+    (define (my-cube x) (* x x x))
+    (define (my-abs x) (list 'abs x))
+    (define (square-of-three) (square 3))))
+EOF
+
+cat > "$TMP/prog17.tur" <<'EOF'
+#lang r7rs
+(import (except (scheme base) square abs) (scheme write) (stdnlib))
+(write (list (square 1) (None) (list-length '(1 2)) (cube 2) (abs -1) (square-of-three) (length '(1 2))))
+(newline)
+EOF
+
+run_case "library-defines-standard-and-stdlib-names" prog17.tur "((mine 1) none 77 8 (abs -1) (mine 3) 2)"
+
+cat > "$TMP/prog18.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write)
+        (prefix (stdnlib) s:)
+        (rename (only (stdnlib) None list-length) (None nothing)))
+(write (list (s:square 2) (s:None) (nothing) (list-length '()) (square 3) (s:abs 5) (abs -5)))
+(newline)
+EOF
+
+run_case "library-standard-names-under-import-sets" prog18.tur "((mine 2) none none 77 9 (abs 5) 5)"
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1

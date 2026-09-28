@@ -450,6 +450,11 @@ typedef struct TuriEnv {
      * free of the compiler type headers; cast to `const Type *` in eval.c.
      * See docs/archive/map-show-keyword-key-raw-int.md (root cause B). */
     void        *last_result_type;
+    /* r7rs-repl-echoes-multiple-values-opaquely: the last new top-level item
+     * of the turn was a definition (a `def`/`defn`).  A Scheme `define`
+     * returns the value it bound, but its value is unspecified in R7RS, so
+     * the R7RS prompt echoes nothing for it, as chibi and Racket do. */
+    bool         last_result_is_def;
     /* RM Q#5: session-scoped reader-macro registry. Persists across REPL
      * turns so `(reader-macros/define ...)` on one line is visible to the
      * reader on the next. Allocated from sym_arena; entries' templates

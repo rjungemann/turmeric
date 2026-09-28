@@ -131,10 +131,30 @@ int main(void) {
          * EXPERIMENTS[] row. */
         CHECK(strstr(reg, "\"name\":\"r7rs\"") != NULL,
               "the r7rs base is offered (badged, not hidden)");
-        CHECK(strstr(reg, "\"language\":\"r7rs\",\"experiment\":\"r7rs\"") != NULL,
+        CHECK(strstr(reg, "\"language\":\"r7rs\",\"reader\":\"scheme\","
+                          "\"experiment\":\"r7rs\"") != NULL,
               "the r7rs base is badged with the r7rs experiment");
         CHECK(strstr(reg, "\"label\":\"Scheme\"") != NULL,
               "the r7rs base carries a label for its own reader");
+
+        /* The READER axis by name, which the picker groups and filters on: it
+         * shows one row per language per reader and leaves curly-infix and
+         * neoteric out, so it needs the axis stated rather than re-derived
+         * from the base token.  Every row carries it. */
+        size_t n_readers = 0;
+        for (const char *q = reg; (q = strstr(q, "\"reader\":\"")) != NULL; q++) {
+            n_readers++;
+        }
+        CHECK(n_readers == lang_bases_count(),
+              "every base states its reader");
+        for (size_t i = 0; i < lang_bases_count(); i++) {
+            LangBaseDescriptor d;
+            if (!lang_base_at(i, &d)) continue;
+            char needle[96];
+            snprintf(needle, sizeof needle, "\"reader\":\"%s\"", d.reader);
+            CHECK(strstr(reg, needle) != NULL,
+                  "the registry's reader is lang_base_at's reader");
+        }
         size_t n_badged = 0;
         for (size_t i = 0; i < lang_bases_count(); i++) {
             LangBaseDescriptor d;

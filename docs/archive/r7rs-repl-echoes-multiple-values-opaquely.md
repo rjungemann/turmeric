@@ -1,5 +1,20 @@
 # `tur repl --lang r7rs` echoes multiple values as `#<R7rsValues>`
 
+**RESOLVED 2026-09-28.** The R7RS prompt echoes each value on its own `=>`
+line and nothing for `(values)` (src/turi/repl.c, the `LANG_R7RS` echo). It
+tests the result with the prelude's `r7rs-values?__` and walks
+`r7rs-values-items__`. `_` is the first value, though Scheme source cannot
+name `_` at the prompt. A definition now echoes nothing either:
+`(define x 3)` printed `=> 3`, and `(define (g) ...)` or a
+`define-record-type` printed `=> #<procedure>`. The evaluator records whether
+a turn's last item was a `def`/`defn` (`last_result_is_def`, src/turi/env.h),
+and the echo skips it. Pinned by the hook fixture
+`tests/fixtures/r7rs-repl-echoes-multiple-values`;
+`r7rs-repl-echo-widened` and `r7rs-repl-shadowed-name-persists` lost their
+definition echoes. The rest of this file is the original report.
+
+---
+
 **Severity:** low. Display only; the values are right.
 
 Filed 2026-09-26 while writing `tests/fixtures/r7rs-repl-shadowed-name-persists`

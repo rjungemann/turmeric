@@ -1893,6 +1893,18 @@ body.split-dragging * {
     overflow: visible;
 }
 .lang-menu { min-width: 260px; max-width: 380px; }
+/* One heading per language, with its readers indented under it. Styled like
+   .more-label (the popover's own section heading) so the two read as the same
+   kind of thing. */
+.lang-group + .lang-group { margin-top: 6px; }
+.lang-group-name {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-dim);
+    padding: 4px 12px 2px;
+}
+.lang-group .lang-row { padding-left: 22px; }
 .lang-row {
     display: flex;
     align-items: baseline;
@@ -1905,14 +1917,11 @@ body.split-dragging * {
 }
 .lang-row:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.06)); }
 .lang-row input { flex: 0 0 auto; margin: 0; align-self: center; accent-color: var(--gold); }
-.lang-row-name { white-space: nowrap; }
-.lang-row-summary {
-    font-size: 11px;
-    color: var(--text-dim);
-    overflow: hidden;
-    text-overflow: ellipsis;
+/* The row IS the `#lang` line it writes, so it is set as code. */
+.lang-row-name {
     white-space: nowrap;
-    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
 }
 .lang-chip {
     font-size: 9px;

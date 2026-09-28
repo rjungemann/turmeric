@@ -1,5 +1,44 @@
 # `#lang r7rs`: a mistyped primitive call is refused at compile time, even where it never runs
 
+**RESOLVED 2026-09-28.** A statically mistyped call in `#lang r7rs` compiles,
+and raises an error object if it runs, on both back ends. So does a call
+with too many arguments to a known procedure. Pinned by
+`tests/fixtures/r7rs-dead-mistyped-call`. The rest of this file is the
+original report.
+
+## Fix
+
+- **A fixed-arity procedure** (`elab_call_fn_inner`, src/compiler/elab_call.c,
+  just before the Saffron seam). In a Scheme file (`lang_span_is_scheme`), an
+  argument whose concrete type the ordinary check refuses is widened to `any`
+  (`elab_coerce_to_any`). The seam below then inserts its checked unbox, which
+  in Scheme source raises "car: not a pair" with the value as the irritant
+  ([r7rs-type-errors-are-uncatchable-panics](r7rs-type-errors-are-uncatchable-panics.md)).
+  Saffron keeps its static refusal.
+- **A variadic procedure's fixed parameters** were not checked at all, so
+  `(vector-fill! 5 0)`, `(vector->list 'a)`, `(vector-copy "s")` compiled
+  with a C pointer warning and crashed or answered garbage, and
+  `(make-vector 2.5)` sized the vector from the float's bits (killed for
+  memory under `--interpret`). In Scheme source a mismatched argument takes
+  the same widen and checked cast. An exact integer into a `float` parameter
+  keeps its C conversion.
+- **Too many arguments to a known procedure** was Turmeric's
+  over-application, "function 'f' returns any, which is not callable". In
+  user Scheme source it now raises "f: too many arguments (expects 1, got 2)"
+  after running the arguments, through the helper the too-few case uses
+  (`scheme_arity_error`).
+- **The interpreter's checked cast to `Sym`** checked nothing (the
+  `default` arm of `EX_ANY_CAST` in src/turi/eval.c), so `(symbol->string
+  "s")` read a string as a symbol record and crashed printing it. It now
+  compares the box's name, as `is? Sym` does. Found while testing the fix;
+  a value whose type is only known at run time hit it too.
+
+What this does not change: `(string-length 7.1)` says "not a string" without
+naming the procedure, because a string parameter takes its own unbox
+(`r7rs_string_unbox`); that predates this fix.
+
+---
+
 **Severity:** medium. An R7RS program that is valid, because the mistyped call
 is never executed, does not build. R7RS makes `(car 5)` an error only when it
 is evaluated (R7RS 1.3.2: "it is an error" describes a situation at run time).

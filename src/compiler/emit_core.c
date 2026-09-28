@@ -6256,6 +6256,37 @@ const char *sym_codegen_register(const Symbol *sym) {
  * duplicates to a single object, so `:foo` is one pointer across the whole
  * program.  In single-file / emit-c mode (`external_weak` false) the records
  * stay `static`, keeping the output self-contained. */
+/* r7rs-prelude-split-wrong-symbols-on-windows: the records the LIBRARY unit
+ * of a split build defined, by C name.  The client unit, emitted next in the
+ * same process, declares these `extern` and defines only the rest. */
+static char   **g_split_lib_syms;
+static uint32_t g_n_split_lib_syms, g_cap_split_lib_syms;
+
+void sym_codegen_split_clear(void) {
+    for (uint32_t i = 0; i < g_n_split_lib_syms; i++) free(g_split_lib_syms[i]);
+    free(g_split_lib_syms);
+    g_split_lib_syms = NULL;
+    g_n_split_lib_syms = g_cap_split_lib_syms = 0;
+}
+
+static bool split_lib_defines_sym(const char *cid) {
+    for (uint32_t i = 0; i < g_n_split_lib_syms; i++)
+        if (strcmp(g_split_lib_syms[i], cid) == 0) return true;
+    return false;
+}
+
+static void split_lib_note_sym(const char *cid) {
+    if (split_lib_defines_sym(cid)) return;
+    if (g_n_split_lib_syms == g_cap_split_lib_syms) {
+        uint32_t nc = g_cap_split_lib_syms ? g_cap_split_lib_syms * 2 : 64;
+        char **nv = (char **)realloc(g_split_lib_syms, nc * sizeof(char *));
+        if (!nv) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_split_lib_syms = nv;
+        g_cap_split_lib_syms = nc;
+    }
+    g_split_lib_syms[g_n_split_lib_syms++] = strdup(cid);
+}
+
 void sym_codegen_emit(Buf *out, bool external_weak) {
     buf_puts(out,
         "/* SYM1 (runtime-symbols-plan): interned runtime symbol records. */\n"
@@ -6268,16 +6299,49 @@ void sym_codegen_emit(Buf *out, bool external_weak) {
         "    char     name[]; /* NUL-terminated UTF-8 */\n"
         "};\n"
         "#endif\n");
+    /* SYM2 on PE/COFF (r7rs-prelude-split-wrong-symbols-on-windows): GNU ld
+     * implements a weak DATA definition as a weak external plus a per-object
+     * default, and a reference at an offset into it (`.name`) resolves to the
+     * wrong bytes.  `selectany` is PE's own folding -- one COMDAT copy, every
+     * reference correct -- so separately compiled modules use it there. */
+    if (external_weak && g_emit_split == EMIT_SPLIT_NONE)
+        buf_puts(out,
+            "#ifndef TUR_SYM_LINKAGE\n"
+            "#if defined(_WIN32) || defined(__CYGWIN__)\n"
+            "#define TUR_SYM_LINKAGE __attribute__((selectany))\n"
+            "#else\n"
+            "#define TUR_SYM_LINKAGE __attribute__((weak))\n"
+            "#endif\n"
+            "#endif\n");
     const char *storage = external_weak
-        ? "__attribute__((weak)) const"   /* SYM2: linker folds same-named dups */
+        ? "TUR_SYM_LINKAGE const"   /* SYM2: linker folds same-named dups */
         : "static const";
+    /* r7rs-prelude-split-wrong-symbols-on-windows: a split build does not
+     * lean on weak data.  PE/COFF has none that folds -- GNU ld gives each
+     * object a weak external with its own default, so on Windows the two
+     * units' `:caught` were two records, and a reference could land in
+     * another object's string literals.  The library unit DEFINES each record
+     * it uses (strong, external); the client unit declares those `extern` and
+     * keeps a file-local record for a keyword only it quotes.  The SYM5 seed
+     * still registers both units' records, first registration winning. */
+    if (g_emit_split == EMIT_SPLIT_LIB) storage = "const";
     for (uint32_t i = 0; i < g_n_sym_records; i++) {
         SymRecord *r = &g_sym_records[i];
+        if (g_emit_split == EMIT_SPLIT_LIB) {
+            split_lib_note_sym(r->cid);
+            emit_split_note_export(r->cid);
+        } else if (g_emit_split == EMIT_SPLIT_CLIENT && split_lib_defines_sym(r->cid)) {
+            buf_printf(out,
+                "extern const struct { uint64_t hash; uint32_t len; uint32_t _pad; char name[%u]; } %s;\n",
+                r->len + 1, r->cid);
+            continue;
+        }
+        const char *st = (g_emit_split == EMIT_SPLIT_CLIENT) ? "static const" : storage;
         /* The record has a flexible array member, so use a sized anonymous
          * struct for the definition and cast to const struct __tur_sym * at use. */
         buf_printf(out,
             "%s struct { uint64_t hash; uint32_t len; uint32_t _pad; char name[%u]; } %s = { ",
-            storage, r->len + 1, r->cid);
+            st, r->len + 1, r->cid);
         buf_printf(out, "%lluULL, %uu, 0u, ",
                    (unsigned long long)r->hash, r->len);
         /* Emit the name as a C string literal (escape conservatively). */
