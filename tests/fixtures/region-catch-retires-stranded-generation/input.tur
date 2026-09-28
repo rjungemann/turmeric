@@ -1,0 +1,50 @@
+;; region-escape-through-unhooked-stores item 3, the top-level panic jam: a
+;; panic caught after unwinding through a bracket whose pop never ran left that
+;; generation open, with nothing left to pop it -- every later allocation
+;; landed in it.  Every catch boundary now records the generation depth on
+;; entry and, on its panic arm, RETIRES (never rewinds) whatever is left open
+;; above it.
+;;
+;; Reachable, it turned out, from an ordinary `with-region`: on BOTH backends
+;; a region scope's call checked `tur_panicking` and returned before its pop,
+;; so a panic out of the bracket stranded the generation.  The bracket now
+;; retires its own generation on the panic arm too; the hand-made case below (a
+;; push with no pop, then a panic) is what only the catch boundary can close.
+;; On the regions-off arm (tests/run-regions-seam.sh) there is no generation
+;; to strand and the depth is 0 throughout -- the same answer.
+
+(defn strand! [] : nil
+  ```c
+  #ifdef TUR_REGION_H
+  (void)tur_region_push();
+  #endif
+  ```)
+
+(defn depth [] : int
+  ```c
+  return (int64_t)TUR_REGION_DEPTH();
+  ```)
+
+(defn bracket-then-panic [n : int] : int
+  (with-region (fn [] : int (if (> n 0) (do (panic "direct") n) n))))
+
+(defn main [] : int
+  ;; catch-unwind: the stranded generation is retired by the catch.
+  (let [r (catch-unwind (fn [] : int (do (strand!) (panic "jam") 1)))]
+    (println (err? r)))
+  (println (depth))                              ; 0
+  ;; A panic through a real bracket, inside the catch thunk (the CPS arm).
+  (let [r (catch-unwind (fn [] : int
+                          (with-region (fn [] : int (do (panic "in") 2)))))]
+    (println (err? r)))
+  (println (depth))                              ; 0
+  ;; ... and through a bracket in a plain defn (the direct arm).
+  (let [r (catch-unwind (fn [] : int (bracket-then-panic 3)))]
+    (println (err? r)))
+  (println (depth))                              ; 0
+  ;; A normal return is untouched: a bracket inside the catch still rewinds
+  ;; and hands its value back.
+  (let [r (catch-unwind (fn [] : int (with-region (fn [] : int 7))))]
+    (println (ok-val r)))
+  (println (depth))                              ; 0
+  0)

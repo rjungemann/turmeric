@@ -6338,6 +6338,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * is recorded with its ACTUAL pointer representation. */
     bool v_is_ctor = strncmp(v, "ctor_", 5) == 0 || strncmp(v, "(ctor_", 6) == 0;
     free(v);
+    /* region-escape-through-unhooked-stores item 3: a panic propagating out
+     * of a region scope returns HERE, before the pop below -- which left the
+     * generation open, and every later allocation landed in it.  Close it on
+     * the panic arm first: RETIRE, never rewind (the payload may point in) --
+     * down to the depth below this bracket, which is also what keeps it out
+     * of the region-scope-* hooks' `tur_region_pop(` count: that ratchet
+     * measures the static retire/rewind verdict, and this arm is uniform. */
+    if (rgn_id >= 0) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (tur_panicking) TUR_REGION_RETIRE_TO(__tur_rgn_%d - 1);\n", rgn_id);
+    }
     emit_panic_signal_return(ctx, body);
     /* gcc14-int-conversion (carrier-representation-tracking): record this call
      * temp's representation C type when it is a concrete pointer, so a later

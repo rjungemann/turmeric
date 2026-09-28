@@ -573,6 +573,8 @@ TUR_RT_API void tur_region_each_used_all(void (*cb)(const void *p, size_t n, voi
 /* ---- end src/runtime/region.h ---- */
 #define TUR_REGION_NOTE(w) tur_region_note_escape((const void *)(intptr_t)(w))
 #define TUR_REGION_NOTE_WORDS(p, n) tur_region_note_escape_words((const void *)(p), (size_t)(n))
+#define TUR_REGION_DEPTH() tur_region_depth()
+#define TUR_REGION_RETIRE_TO(d) do { if (tur_region_depth() > (d)) tur_region_pop((d) + 1); } while (0)
 static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));
 static int64_t tur_opt_value_checked(int64_t __o) {
     tur_option_t *__p = (tur_option_t *)(intptr_t)__o;
@@ -1935,6 +1937,7 @@ typedef void (*tur_thunk_fn)(void *env, tur_result *out);
 static void rc_free_queue_reset_drain_state(void);  /* Forward decl */
 static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
     tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;
+    volatile int __tur_rd = TUR_REGION_DEPTH();
     if (TUR_SETJMP(__node.buf) == 0) {
         thunk(env, out);
         tur_handler_chain = __node.parent;
@@ -1945,6 +1948,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         tur_handler_chain = __node.parent;
+        TUR_REGION_RETIRE_TO(__tur_rd);
         tur_panic_in_progress = 0;
         rc_free_queue_reset_drain_state();
         out->tag = TUR_RESULT_ERR;
@@ -1956,6 +1960,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
 
 static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env, tur_result *out) {
     tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;
+    volatile int __tur_rd = TUR_REGION_DEPTH();
     if (TUR_SETJMP(__node.buf) == 0) {
         thunk(env, out);
         tur_handler_chain = __node.parent;
@@ -1966,6 +1971,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         tur_handler_chain = __node.parent;
+        TUR_REGION_RETIRE_TO(__tur_rd);
         tur_panic_in_progress = 0;
         rc_free_queue_reset_drain_state();
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
@@ -1988,9 +1994,11 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
 static int64_t tur_catch_unwind_box(int64_t thunk) {
     tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));
     __node->parent = tur_handler_chain; tur_handler_chain = __node;
+    int __tur_rd = TUR_REGION_DEPTH();
     int64_t __v = TUR_APPLY0(thunk);
     tur_handler_chain = __node->parent; free(__node);
     if (tur_panicking) {
+        TUR_REGION_RETIRE_TO(__tur_rd);
         tur_panicking = 0; tur_panic_in_progress = 0;
         tur_panic_payload *__p = global_panic_payload;
         global_panic_payload = NULL;
@@ -2002,9 +2010,11 @@ static int64_t tur_catch_unwind_box(int64_t thunk) {
 static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
     tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));
     __node->parent = tur_handler_chain; tur_handler_chain = __node;
+    int __tur_rd = TUR_REGION_DEPTH();
     int64_t __v = TUR_APPLY0(thunk);
     tur_handler_chain = __node->parent; free(__node);
     if (tur_panicking) {
+        TUR_REGION_RETIRE_TO(__tur_rd);
         tur_panic_payload *__p = global_panic_payload;
         if (__p && __p->type_tag == expected_type) {
             tur_panicking = 0; tur_panic_in_progress = 0;
@@ -2027,9 +2037,11 @@ static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
 static int64_t tur_catch_unwind_box_via(int64_t (*__call)(void *), int64_t thunk, int __owns) {
     tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));
     __node->parent = tur_handler_chain; tur_handler_chain = __node;
+    int __tur_rd = TUR_REGION_DEPTH();
     int64_t __v = __call((void *)(intptr_t)thunk);
     tur_handler_chain = __node->parent; free(__node);
     if (tur_panicking) {
+        TUR_REGION_RETIRE_TO(__tur_rd);
         if (__owns) free((void *)(intptr_t)__v);
         tur_panicking = 0; tur_panic_in_progress = 0;
         tur_panic_payload *__p = global_panic_payload;
@@ -2042,9 +2054,11 @@ static int64_t tur_catch_unwind_box_via(int64_t (*__call)(void *), int64_t thunk
 static int64_t tur_catch_panic_of_box_via(int expected_type, int64_t (*__call)(void *), int64_t thunk, int __owns) {
     tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));
     __node->parent = tur_handler_chain; tur_handler_chain = __node;
+    int __tur_rd = TUR_REGION_DEPTH();
     int64_t __v = __call((void *)(intptr_t)thunk);
     tur_handler_chain = __node->parent; free(__node);
     if (tur_panicking) {
+        TUR_REGION_RETIRE_TO(__tur_rd);
         if (__owns) free((void *)(intptr_t)__v);
         tur_panic_payload *__p = global_panic_payload;
         if (__p && __p->type_tag == expected_type) {
@@ -9401,7 +9415,12 @@ static void * fiber_hynew(void * fn, int64_t stack_size) {
 }
 
 static int64_t fiber_hyresume(void * f, int64_t arg) {
-        return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
+        /* region-lock-hardening: the resume argument is handed across to the
+     fiber's own stack, which outlives a bracket this resume runs inside (the
+     fiber keeps what its yield returned).  Erased (`:int`), so noted here --
+     the mirror of fiber-yield's note below. */
+  TUR_REGION_NOTE(arg);
+  return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   
 }
 

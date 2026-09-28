@@ -7154,6 +7154,12 @@ static void emit_term(CE *ce, const CTerm *t) {
                         ce_line(ce, "%s %s = %s(%s); /* cps->direct */", drt, tmp, fn, argv_t);
                     else
                         ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
+                    /* region-escape-through-unhooked-stores item 3: the panic
+                     * check returns before the pop below, stranding the
+                     * generation; retire it on the panic arm first (as the
+                     * direct path does). */
+                    if (rgn_id >= 0)
+                        ce_line(ce, "if (tur_panicking) TUR_REGION_RETIRE_TO(__tur_rgn_%d - 1);", rgn_id);
                     cps_panic_check(ce);   /* cps-body-panic-not-propagated */
                     cps_deferred_consume_atoms(ce, t->as.tailcall.args, t->as.tailcall.n);
                     /* RM3 R4: close the generation before the value is delivered

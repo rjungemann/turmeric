@@ -577,7 +577,7 @@ compiler can *prove* nothing outside it points in, and that proof is a static
 walk over the bracket's result type (see the Region Store Hooks rule in
 CLAUDE.md). Over `any`, the result type says nothing. A region bracket in a
 Saffron file would be a use-after-rewind waiting to happen, which is precisely
-the failure mode `docs/reported/region-escape-through-unhooked-stores.md`
+the failure mode `docs/archive/region-escape-through-unhooked-stores.md`
 documents. **Saffron runs on the GC/RC arm; regions are off, not degraded.**
 
 Note this is a *file*-level restriction, not a program-level one. A Turmeric

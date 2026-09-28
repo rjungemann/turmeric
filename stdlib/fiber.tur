@@ -57,6 +57,11 @@
 
 (defn fiber-resume [f : FiberHandle arg : int] : int
   ```c
+  /* region-lock-hardening: the resume argument is handed across to the
+     fiber's own stack, which outlives a bracket this resume runs inside (the
+     fiber keeps what its yield returned).  Erased (`:int`), so noted here --
+     the mirror of fiber-yield's note below. */
+  TUR_REGION_NOTE(arg);
   return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   ```)
 ;;; fiber-yield -- suspend the current fiber and return a value to its caller.
