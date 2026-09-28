@@ -1,5 +1,15 @@
 # macOS JIT CI leg intermittently hangs to its 45-minute timeout
 
+> **The symptom recurred on 2026-09-28** (rjungemann/turmeric#953, run
+> 36385448273) -- with a DIFFERENT cause, so this report stays archived. The
+> `coreutils`/`gtimeout` containment and the `httpd-async-limit` fix below are
+> both still in the tree and are not implicated. What failed was the
+> instrumentation this report added: a `timeout-minutes` kill leaves the
+> `if: always()` upload step `pending` and the job's log blob 404s, so the
+> occurrence produced no diagnostic at all -- the "Confirmed working" run cited
+> below had SUCCEEDED, so that claim was never exercised under a kill. See
+> docs/reported/macos-jit-hang-loses-both-diagnostics.md.
+
 **Severity: medium.** Intermittent, not reproduced locally, and it gates: the
 `JIT engine (macos-latest)` leg is the one JIT job that is not
 `continue-on-error`, so a hang fails the run. Two occurrences within 40 minutes

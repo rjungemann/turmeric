@@ -2195,6 +2195,12 @@ live elsewhere in this index: compiled top-level order was
 | --- | --- | --- |
 | ~~[cps-pap-inline-ignores-wrapper-arguments](../archive/cps-pap-inline-ignores-wrapper-arguments.md)~~ | high | **RESOLVED 2026-09-26** (archived), the day it was found: `pap_extract` now requires the wrapper body to pass exactly the captures, then the parameters. Pinned by `tests/fixtures/cps-pap-inline-ignores-wrapper-arguments` and `r7rs-closure-one-capture-call`. Original row: every dialect. Inside a CPS function a closure called in place or through a `let`, whose body is one saturated call, was taken for a partial application on arity alone and rewritten to `(TARGET captures... args...)`: `((fn [x] (sub x p)) 10)` ran as `(sub p 10)`, `((fn [] (neg (+ p 1))))` as `(neg p)`, silently; under `#lang r7rs` `((lambda () (list p)))` handed `list` a bare value for its rest chain and `cc` refused it |
 
+## CI instrumentation (filed 2026-09-28)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [macos-jit-hang-loses-both-diagnostics](macos-jit-hang-loses-both-diagnostics.md) | medium | Filed 2026-09-28 (rjungemann/turmeric#953). The `JIT engine (macos-latest)` 45-minute hang recurred, and the 2026-08-02 instrumentation built to diagnose it produced NOTHING: a `timeout-minutes` kill leaves the `if: always()` upload `pending` and the job's log blob 404s, so the artifact and the streamed console are both gone. The `coreutils`/`gtimeout` containment is still in place and is not the cause. Gaps that let a stall reach the job wall: `run-flags.sh` has no timeout wrapper at all, and none of the leg's three ctest targets carries a `TIMEOUT` property. Fix the instrumentation first (`perl -e 'alarm N'` around ctest, as ci.yml:413 already does) -- until then the next occurrence is blind too |
+
 ## Found landing r7rs-lang-plan R3 (filed 2026-09-23)
 
 | Report | Severity | One line |
