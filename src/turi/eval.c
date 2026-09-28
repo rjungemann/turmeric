@@ -86,6 +86,7 @@
 #include "forms.h"
 #include "mangle.h"
 #include "reader.h"
+#include "scheme_lower.h"   /* r7rs-repl-forgets-macros-and-set: session prior */
 #include "symbols.h"
 #include "types.h"
 #include "../passes/effect_check.h"
@@ -12183,6 +12184,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 ok = (have && want && strcmp(have, want) == 0);
             }
             break;
+        /* A Sym target checked nothing either (the `default` below), so
+         * `(symbol->string "s")` in `#lang r7rs` read the string as a symbol
+         * record and crashed printing it.  A widened Sym is boxed under its
+         * name (turi_any_boxable_name), which is what `is? Sym` compares, so
+         * compare that.  A bare int is ambiguous outside Scheme -- a Sym some
+         * native handed back unboxed -- and passes there as before; in Scheme
+         * it is a fixnum, and `symbol?` of it is false. */
+        case TY_SYM: {
+            const char *have = turi_any_named_type(v);
+            if (have)
+                ok = (strcmp(have, "Sym") == 0);
+            else
+                ok = (v.tag == TURI_INT && !e->as.any_cast_.scheme_raise);
+            break;
+        }
         default: ok = true; break;
         }
         if (!ok && e->as.any_cast_.scheme_raise) {
@@ -13941,6 +13957,7 @@ static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
          * replay that fails leaves this turn's error state untouched; the sink
          * above mutes the warnings a capture frame lets through. */
         diag_push_capture();
+        scheme_lower_set_session_prior(forms, from);   /* the turns before it */
         Expr *p = elaborate_program_session(arena, &env->st, forms + from,
                                             to - from, /*stdlib_prefix=*/0,
                                             mbase,
@@ -13950,6 +13967,7 @@ static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
                                             env->include_dirs,
                                             env->n_include_dirs,
                                             &n_fsd, env->reader_macros, sess);
+        scheme_lower_set_session_prior(NULL, 0);
         if (!p || diag_had_error()) ok = false;
         if (diag_pop_capture() > 0) ok = false;
         from = to;
@@ -14275,6 +14293,11 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * that cannot help.  Genuine stdlib exports keep the stamp through the
      * `tur/`-module promotion at the prefix boundary.  Zero on the
      * incremental path, where the prefix is empty anyway. */
+    /* r7rs-repl-forgets-macros-and-set: the incremental path lowers only
+     * this turn's forms; name the earlier turns so a Scheme turn still sees
+     * the macros they defined.  (The whole-program path has them in the
+     * stream already.) */
+    scheme_lower_set_session_prior(forms, elab_from);
     Expr *prog = elaborate_program_session(eval_arena, &env->st,
                                    forms + elab_from, nforms - elab_from,
                                    /*stdlib_prefix=*/prior - elab_from,
@@ -14290,6 +14313,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                     * see the same macros the entry did. */
                                    env->reader_macros,
                                    env->elab_session);
+    scheme_lower_set_session_prior(NULL, 0);
     if (!prog || diag_had_error()) {
         env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
         /* A failed program may have left partial definitions in the session;
@@ -14451,9 +14475,12 @@ eval_done:;
         env->last_tc_env = tc_env_slot;
         /* SI4: extract type tag from the last new top-level expression. */
         env->last_result_type = NULL;
+        env->last_result_is_def = false;
         if (total > n_fsd + prior_prog) {
             Expr *last_expr = prog->as.program.items[total - 1];
             if (last_expr) {
+                env->last_result_is_def = last_expr->kind == EX_DEF ||
+                                          last_expr->kind == EX_FN_DEF;
                 if (out_type_tag && tag_cap > 0)
                     extract_type_tag(last_expr->type, out_type_tag, tag_cap);
                 /* Retain the FULL type alongside the head-only tag.  Lives in

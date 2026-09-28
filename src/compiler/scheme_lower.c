@@ -583,6 +583,11 @@ typedef struct SL {
     const Symbol **clash_from, **clash_to;
     uint32_t n_clash, cap_clash;
     bool in_user;   /* lowering the user's forms, not the prelude's */
+    /* r7rs-repl-forgets-macros-and-set: a REPL or `eval` turn -- a Scheme
+     * form read from a synthetic `<...>` source.  Its top-level variables
+     * are all mutable: a LATER turn may `set!` one, and nothing this turn
+     * can see says so. */
+    bool repl_turn;
     /* r7rs-srfi-plan S2: SRFI 61's `(generator guard => receiver)` cond
      * clause, on in a unit that imports (srfi 61)'s `cond`. */
     bool srfi61_cond;
@@ -4032,7 +4037,7 @@ static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
             fb_push(&d, Sym(sl, sp, sl->t_mut));
             fb_push(&d, Sym(sl, sp, I(sl, "^deferred-init")));
             fb_push(&d, Sym(sl, sp, name));
-            if (is_mut(sl, name)) fb_push(&d, AnyAnn(sl, sp));
+            if (is_mut(sl, name) || (sl->repl_turn && sl->in_user)) fb_push(&d, AnyAnn(sl, sp));
             fb_push(&d, init);
             fb_push(out, fb_list(sl, &d, sp));
             fb_push(out, lower_toplevel_stmt(sl,
@@ -4040,7 +4045,12 @@ static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
                    Ln(sl, sp, 2, Sym(sl, sp, I(sl, "__tur-deferred-init__")), Sym(sl, sp, name)))));
             return;
         }
-        if (is_mut(sl, name)) {
+        /* r7rs-repl-forgets-macros-and-set: at the REPL (and in `eval`) a
+         * later turn may `set!` any variable -- `(define n 0)`, then `(set! n
+         * (+ n 1))` -- so a REPL turn's top-level variable is always the
+         * mutable `any` cell a `set!` target is.  A procedure definition
+         * stays a defn: a later turn redefines it with `define`. */
+        if (is_mut(sl, name) || (sl->repl_turn && sl->in_user)) {
             fb_push(out, Ln(sl, sp, 5, Sym(sl, sp, sl->t_def), Sym(sl, sp, sl->t_mut),
                             Sym(sl, sp, name), AnyAnn(sl, sp), init));
         } else {
@@ -6064,6 +6074,82 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
     free(user.items);
 }
 
+/* r7rs-repl-forgets-macros-and-set: the raw forms of a REPL or `eval`
+ * session's earlier turns, which an incremental elaboration does not hand the
+ * lowering (scheme_lower_set_session_prior). */
+static Form *const *g_session_prior;
+static uint32_t     g_n_session_prior;
+void scheme_lower_set_session_prior(Form *const *forms, uint32_t n) {
+    g_session_prior = forms;
+    g_n_session_prior = forms ? n : 0;
+}
+/* A top-level `define-syntax` of an earlier turn, unless a later top-level
+ * definition of the same name replaced it.  `keep` holds the surviving
+ * define-syntax forms, in order. */
+static void session_macro_drop(FB *keep, const Symbol *name) {
+    for (uint32_t k = 0; k < keep->n; k++) {
+        if (keep->items[k]->as.list.items[1]->as.sym != name) continue;
+        for (uint32_t j = k + 1; j < keep->n; j++) keep->items[j - 1] = keep->items[j];
+        keep->n--;
+        return;
+    }
+}
+static void session_macro_scan(SL *sl, Form *f, FB *keep, bool take_syntax) {
+    if (!f || !is_scheme_file(f) || !span_is_synthetic(f->span) || prelude_span(f->span)) return;
+    if (head_is(f, sl->s_begin)) {
+        for (uint32_t i = 1; i < f->as.list.len; i++)
+            session_macro_scan(sl, f->as.list.items[i], keep, take_syntax);
+        return;
+    }
+    if (head_is(f, sl->s_define_syntax)) {
+        if (f->as.list.len != 3 || f->as.list.items[1]->tag != F_SYM) return;
+        session_macro_drop(keep, f->as.list.items[1]->as.sym);
+        if (take_syntax) fb_push(keep, f);
+        return;
+    }
+    FB names = {0};
+    user_define_names(sl, f, &names);
+    for (uint32_t i = 0; i < names.n; i++) session_macro_drop(keep, names.items[i]->as.sym);
+    free(names.items);
+}
+/* Register the macros the session's earlier turns defined, so a macro one
+ * turn defines expands in the next.  Each turn is lowered on its own, so its
+ * macro table started empty: `(define-syntax sw ...)` then `(sw 1 2)` was
+ * "unknown function or operator 'sw'", at the prompt and through `eval`.
+ *
+ * The same holds for what an earlier turn's `import` set up in the lowering:
+ * an SRFI's names (`(import (srfi 1))`, then `(fold + 0 l)` was unknown),
+ * its macros (`cut`, `and-let*`), a (scheme ...) library's `except` and
+ * `rename`, and a library's exported macros.  Replay those import sets for
+ * that state.  What they emit -- a library's Turmeric `import`, which wraps
+ * the turn in a module -- the earlier turn already did, so it is dropped. */
+static void session_imports_load(SL *sl) {
+    for (uint32_t i = 0; i < g_n_session_prior; i++) {
+        Form *f = g_session_prior[i];
+        if (!f || !is_scheme_file(f) || !span_is_synthetic(f->span) || prelude_span(f->span)) continue;
+        if (!head_is(f, sl->s_import)) continue;
+        uint32_t n_imports = sl->imports.n;
+        bool needs_module = sl->needs_module;
+        for (uint32_t j = 1; j < f->as.list.len; j++)
+            if (f->as.list.items[j]->tag == F_LIST) lower_import_set(sl, f->as.list.items[j]);
+        sl->imports.n = n_imports;
+        sl->needs_module = needs_module;
+    }
+}
+static void session_macros_load(SL *sl, Form *const *forms, uint32_t n) {
+    session_imports_load(sl);
+    FB keep = {0};
+    for (uint32_t i = 0; i < g_n_session_prior; i++)
+        session_macro_scan(sl, g_session_prior[i], &keep, true);
+    /* This turn's own definitions replace an earlier macro of that name; its
+     * own define-syntax forms register themselves as it is lowered. */
+    for (uint32_t i = 0; i < n; i++) session_macro_scan(sl, forms[i], &keep, false);
+    sl->in_user = true;
+    for (uint32_t k = 0; k < keep.n; k++) sr_define(sl, keep.items[k]);
+    sl->in_user = false;
+    free(keep.items);
+}
+
 Form **scheme_lower_program(Arena *a, SymbolTable *st,
                             Form *const *forms, uint32_t n, uint32_t *out_n,
                             SchemeLibResolveFn resolve, SchemeGlobalFn global_kind,
@@ -6102,6 +6188,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     for (uint32_t i = 0; i < n && !repl_turn; i++)
         repl_turn = is_scheme_file(forms[i]) && span_is_synthetic(forms[i]->span);
     if (repl_turn) repl_grants_load(&sl);
+    sl.repl_turn = repl_turn;
     /* r7rs-srfi-plan S1: a spliced SRFI file's define-library -> its
      * definitions, spelled onto their targets, before any scan reads the
      * program (the `set!` targets see the spelled names). */
@@ -6166,6 +6253,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
         note_forward_defs(&sl, srfi.items, srfi.n);
         free(user.items); free(srfi.items);
     }
+    if (repl_turn && g_n_session_prior > 0) session_macros_load(&sl, forms, n);
     Span first_sp = SPAN_UNKNOWN;
     bool have_first = false;
     for (uint32_t i = 0; i < n; i++) {
@@ -6212,6 +6300,20 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
         for (uint32_t i = 0; i < sl.lib_body.n; i++) fb_push(&m, sl.lib_body.items[i]);
         fb_push(&out, fb_list(&sl, &m, first_sp));
         free(sl.lib_exports.items); free(sl.lib_body.items); free(sl.imports.items);
+    } else if (sl.needs_module && have_first && repl_turn) {
+        /* r7rs-repl-forgets-macros-and-set: a REPL or `eval` turn that
+         * imports a library.  Wrapped like a program, its expressions became a
+         * `main` nothing calls (`(import (lb m)) (display "x")` printed
+         * nothing) and its definitions were private to the wrapper module.
+         * The module carries only the imports; the turn's own forms stay at
+         * the session's top level, where the imported names are visible. */
+        FB m = {0};
+        fb_push(&m, Sym(&sl, first_sp, sl.t_defmodule));
+        fb_push(&m, Sym(&sl, first_sp, I(&sl, "r7rs-repl-imports")));
+        for (uint32_t i = 0; i < sl.imports.n; i++) fb_push(&m, sl.imports.items[i]);
+        fb_push(&out, fb_list(&sl, &m, first_sp));
+        for (uint32_t i = 0; i < sforms.n; i++) fb_push(&out, sforms.items[i]);
+        free(sl.imports.items);
     } else if (sl.needs_module && have_first) {
         /* A program with imports: wrap it in a defmodule named after its file,
          * imports first, definitions next, and the top-level expressions as

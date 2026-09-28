@@ -58,8 +58,13 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
   `tur build .` and tests with `tur test tests`. Add `--lib` for a
   `define-library` instead of a program.
 - **The REPL**: `tur repl --lang r7rs`, or type `#lang r7rs` at any prompt.
-  Results echo in Scheme's own spelling (`=> (a "b" #\c)`), and nothing is
-  echoed for the unspecified value. The prompt takes Scheme only; type
+  Results echo in Scheme's own spelling (`=> (a "b" #\c)`). Several values
+  echo one per line (`(values 1 2)` is `=> 1` then `=> 2`), and nothing is
+  echoed for `(values)`, a definition or the unspecified value. Definitions,
+  macros and imports last for the session, and a later turn may `set!` any
+  variable an earlier one defined. `(import (prefix (mylib) m:))` of your
+  own library does not work at the prompt; import it plainly, or with
+  `only` or `rename`. The prompt takes Scheme only; type
   `#lang turmeric` to switch to Turmeric (the session resets).
 - **Formatting**: `tur fmt` re-indents a Scheme file and never rewrites a
   token. Each line's leading whitespace is recomputed; `#t`, `#\x`,
@@ -286,6 +291,14 @@ stack between it and the program's start, so it costs time and memory in
 proportion to that depth. An uncaught `raise` reports on the current error
 port and exits with status 70.
 
+A standard procedure given the wrong type, or any procedure given the wrong
+number of arguments, raises an error object when the call runs: `(car 5)`
+raises "car: not a pair" with `5` as the irritant, and `(f 1 2)` of a
+one-argument `f` raises "f: too many arguments (expects 1, got 2)". It is
+never a compile-time error, even when the argument is a literal, so a call
+that a test keeps from running, such as `(if (pair? x) (car x) 0)` with `x`
+bound to `#f`, compiles and never raises.
+
 ## Eval
 
 `eval` runs a datum as code, in an environment that names the libraries it
@@ -304,7 +317,8 @@ Importing `(scheme eval)`, `(scheme repl)`, `(scheme load)` or `(scheme
 r5rs)` links the interpreter into a compiled program. A program that imports
 none of them links nothing extra. The evaluator is one embedded R7RS session
 per run, so a definition evaluated in `(interaction-environment)` stays for
-later `eval`s, and `load` evaluates a file's forms the same way.
+later `eval`s, a `define-syntax` included, and a later `eval` may `set!` a
+variable an earlier one defined. `load` evaluates a file's forms the same way.
 
 Values cross between the program and the evaluator:
 

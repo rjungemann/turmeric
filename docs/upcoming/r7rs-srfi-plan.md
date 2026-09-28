@@ -720,7 +720,7 @@ fixture itself runs on both back ends.
 >   directions. 17 lands after that. (Fixed 2026-09-27, archived.)
 > - **Reported on the way** (docs/reported/):
 >   - `r7rs-dead-mistyped-call-refused-at-compile-time`: `(if x (car x) 0)`
->     with `x` bound to `#f` does not compile;
+>     with `x` bound to `#f` does not compile (fixed 2026-09-28, archived);
 >   - `r7rs-type-errors-are-uncatchable-panics`: `(car 5)` at run time is a
 >     panic `guard` cannot catch.
 

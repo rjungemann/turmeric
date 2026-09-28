@@ -26,8 +26,10 @@ report.
   callee's own arity, so neither back end names it. Calling a value that is
   not a procedure raises "not a procedure" with the value as its irritant.
 
-Too many arguments to a KNOWN procedure is still a compile-time refusal:
-[r7rs-dead-mistyped-call-refused-at-compile-time](../reported/r7rs-dead-mistyped-call-refused-at-compile-time.md).
+Too many arguments to a KNOWN procedure was still a compile-time refusal
+here; it raises too since
+[r7rs-dead-mistyped-call-refused-at-compile-time](r7rs-dead-mistyped-call-refused-at-compile-time.md)
+(resolved 2026-09-28).
 
 ---
 
@@ -46,7 +48,7 @@ Filed 2026-09-27 while landing r7rs-srfi-plan S7: SRFI 41's suite tests
 `(test-error (stream-zip))` and `(stream-for-each proc)` with no stream, and
 both "pass" through without an error on both back ends. A call to a known
 procedure with too many or wrong-typed arguments is refused at compile time
-instead ([r7rs-dead-mistyped-call-refused-at-compile-time](../reported/r7rs-dead-mistyped-call-refused-at-compile-time.md)),
+instead ([r7rs-dead-mistyped-call-refused-at-compile-time](r7rs-dead-mistyped-call-refused-at-compile-time.md)),
 which is how `(test-error (stream-map odd?))` fails to build compiled.
 
 ## Root cause

@@ -13,8 +13,8 @@
     (thunk)))
 
 ;; Through variables, so each call is well typed at compile time and only
-;; wrong when it runs (a literal mismatch is a compile-time refusal, which is
-;; r7rs-dead-mistyped-call-refused-at-compile-time).
+;; wrong when it runs.  A literal mismatch raises the same way now
+;; (r7rs-dead-mistyped-call, from r7rs-dead-mistyped-call-refused-at-compile-time).
 (define (h x) (car x))
 (define (vr v k) (vector-ref v k))
 (define (sr s k) (string-ref s k))

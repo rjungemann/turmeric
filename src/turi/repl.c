@@ -1789,19 +1789,53 @@ int turi_repl_run(bool watch_mode) {
                 if (env->lang == LANG_R7RS) {
                     TuriValue wr = turi_env_get(env, "r7rs-write");
                     if (wr.tag == TURI_CLOSURE) {
-                        if (result.tag != TURI_NIL) {
+                        /* r7rs-repl-echoes-multiple-values-opaquely: a turn
+                         * that returns any count of values but one returns the
+                         * prelude's `R7rsValues` carrier, which `write` has no
+                         * case for.  Echo each value on its own `=>` line, as
+                         * chibi and Racket do, and nothing for `(values)`.
+                         * Nor for a definition, whose value is unspecified.
+                         * `_` is the first value. */
+                        TuriValue items[64];
+                        uint32_t n_items = 0;
+                        bool multi = false;
+                        TuriValue isv = turi_env_get(env, "r7rs-values?__");
+                        TuriValue its = turi_env_get(env, "r7rs-values-items__");
+                        TuriValue nul = turi_env_get(env, "r7rs-null?");
+                        TuriValue car = turi_env_get(env, "r7rs-car");
+                        TuriValue cdr = turi_env_get(env, "r7rs-cdr");
+                        if (result.tag != TURI_NIL && !env->last_result_is_def &&
+                            isv.tag == TURI_CLOSURE &&
+                            its.tag == TURI_CLOSURE && nul.tag == TURI_CLOSURE &&
+                            car.tag == TURI_CLOSURE && cdr.tag == TURI_CLOSURE) {
+                            TuriValue q = turi_call(env, isv, &result, 1);
+                            if (q.tag == TURI_BOOL && q.as_bool) {
+                                multi = true;
+                                TuriValue l = turi_call(env, its, &result, 1);
+                                while (n_items < sizeof items / sizeof items[0] &&
+                                       !turi_is_error(l)) {
+                                    TuriValue end = turi_call(env, nul, &l, 1);
+                                    if (end.tag != TURI_BOOL || end.as_bool) break;
+                                    items[n_items++] = turi_call(env, car, &l, 1);
+                                    l = turi_call(env, cdr, &l, 1);
+                                }
+                            }
+                        }
+                        if (!multi && result.tag != TURI_NIL && !env->last_result_is_def)
+                            items[n_items++] = result;
+                        for (uint32_t k = 0; k < n_items; k++) {
                             printf("=> ");
                             fflush(stdout);
                             /* `write` is variadic (`[x & port]`), and
                              * turi_call does not pack a rest list: pass the
                              * empty one, so the current output port is used. */
-                            TuriValue arg[2] = { result, turi_int(0) };   /* nil rest = 0 */
+                            TuriValue arg[2] = { items[k], turi_int(0) };   /* nil rest = 0 */
                             TuriValue wres = turi_call(env, wr, arg, 2);
                             if (turi_is_error(wres) && turi_error_message(wres))
                                 fprintf(stderr, "write: %s\n", turi_error_message(wres));
                             printf("\n");
-                            turi_env_set(env, "_", result);
                         }
+                        if (n_items > 0) turi_env_set(env, "_", items[0]);
                         scheme_echoed = true;
                     }
                 }
