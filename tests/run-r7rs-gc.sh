@@ -60,6 +60,47 @@ for d in tests/fixtures/*/; do
     esac
 done
 
+# A hang in a threaded case is a deadlock or a cycle walk, and the two look
+# nothing alike on the stack (docs/archive/r7rs-gc-threads-lifecycle-rare-hang.md
+# "If it recurs").  On CI the process is gone by the time anyone looks, so a
+# case that outlives its deadline has every thread's stack printed first, with
+# whichever debugger the host has.
+dump_stacks() {
+    local pid="$1"
+    if command -v gdb > /dev/null 2>&1; then
+        gdb -p "$pid" -batch -ex "thread apply all bt" 2>&1 | grep -E '^(Thread|#)' | head -400
+    elif command -v lldb > /dev/null 2>&1; then
+        lldb -p "$pid" --batch -o "thread backtrace all" 2>&1 | head -400
+    elif [ "$HOST" = Darwin ] && command -v sample > /dev/null 2>&1; then
+        sample "$pid" 1 -mayDie 2>&1 | head -400
+    else
+        echo "(no gdb, lldb or sample here to print the stacks)"
+    fi
+}
+
+# run_deadline <secs> <out> <err> <cmd...>: timeout(1)'s exit codes (124 when
+# the deadline passed), but the stacks are dumped into <err> before the kill.
+# Standard input is $RD_STDIN (default /dev/null).  It polls every tenth of a
+# second, so a case that finishes at once is not held for a whole second:
+# every fixture in section 1 goes through here.
+run_deadline() {
+    local secs="$1" out="$2" err="$3" pid ticks=0
+    shift 3
+    "$@" < "${RD_STDIN:-/dev/null}" > "$out" 2> "$err" &
+    pid=$!
+    while kill -0 "$pid" 2> /dev/null; do
+        if [ "$ticks" -ge $((secs * 10)) ]; then
+            { echo "--- stacks at the ${secs}s deadline ---"; dump_stacks "$pid"; } >> "$err" 2>&1
+            kill -9 "$pid" 2> /dev/null
+            wait "$pid" 2> /dev/null
+            return 124
+        fi
+        sleep 0.1
+        ticks=$((ticks + 1))
+    done
+    wait "$pid"
+}
+
 one() {
     local name; name="$(basename "$1")"
     one_case "$1" > "$WORK/$name.result" 2>&1
@@ -76,13 +117,17 @@ one_case() {
         echo "FAIL $name -- build failed: $(grep -m1 -i error "$WORK/$name.build" | cut -c1-160)"
         return
     fi
-    (cd "$dir" && ASAN_OPTIONS=detect_leaks=0 TUR_GC_TORTURE="$TORTURE" \
-        timeout 300 "$WORK/$name" "${args[@]}" < "$stdin" \
-        > "$WORK/$name.out" 2> "$WORK/$name.err") 2> /dev/null
+    # Through run_deadline, so a fixture that hangs has every thread's stack
+    # in the log: on CI the process is gone by the time anyone looks, and a
+    # bare "timed out" cannot tell a deadlock from a cycle walk (the macOS
+    # r7rs-threads-lifecycle timeout on #956 left nothing else to go on).
+    (cd "$dir" && ASAN_OPTIONS=detect_leaks=0 TUR_GC_TORTURE="$TORTURE" RD_STDIN="$stdin" \
+        run_deadline 300 "$WORK/$name.out" "$WORK/$name.err" "$WORK/$name" "${args[@]}") 2> /dev/null
     rc=$?
     want=0; [ -f "$dir/expected.exit" ] && want="$(tr -d '[:space:]' < "$dir/expected.exit")"
     if [ "$rc" = 124 ]; then
         echo "FAIL $name -- timed out (>300s) under TUR_GC_TORTURE=$TORTURE"
+        sed -n '/^--- stacks at the/,$p' "$WORK/$name.err"
     elif { [ "$want" = nonzero ] && [ "$rc" = 0 ]; } || { [ "$want" != nonzero ] && [ "$rc" != "$want" ]; }; then
         echo "FAIL $name -- exit $rc, expected $want: $(tail -1 "$WORK/$name.err" | cut -c1-120)"
     elif ! diff -q "$WORK/$name.out" "$dir/expected.stdout" > /dev/null; then
@@ -92,8 +137,8 @@ one_case() {
         echo "PASS $name"
     fi
 }
-export -f one one_case
-export TUR WORK TORTURE
+export -f one one_case run_deadline dump_stacks
+export TUR WORK TORTURE HOST
 
 printf '%s\n' "${fixtures[@]}" | xargs -P "$(nproc)" -I{} bash -c 'one "$@"' _ {}
 for d in "${fixtures[@]}"; do cat "$WORK/$(basename "$d").result"; done | tee "$WORK/results"
@@ -217,44 +262,6 @@ elif grep -q "r7rs-gc" "$WORK/threaded-gc.err"; then
 else
     echo "PASS threads-run (a thread starts, joins and prints under the collector, silently, as without it)"
 fi | tee -a "$WORK/results"
-
-# A hang in a threaded case is a deadlock or a cycle walk, and the two look
-# nothing alike on the stack (docs/archive/r7rs-gc-threads-lifecycle-rare-hang.md
-# "If it recurs").  On CI the process is gone by the time anyone looks, so a
-# case that outlives its deadline has every thread's stack printed first, with
-# whichever debugger the host has.
-dump_stacks() {
-    local pid="$1"
-    if command -v gdb > /dev/null 2>&1; then
-        gdb -p "$pid" -batch -ex "thread apply all bt" 2>&1 | grep -E '^(Thread|#)' | head -400
-    elif command -v lldb > /dev/null 2>&1; then
-        lldb -p "$pid" --batch -o "thread backtrace all" 2>&1 | head -400
-    elif [ "$HOST" = Darwin ] && command -v sample > /dev/null 2>&1; then
-        sample "$pid" 1 -mayDie 2>&1 | head -400
-    else
-        echo "(no gdb, lldb or sample here to print the stacks)"
-    fi
-}
-
-# run_deadline <secs> <out> <err> <cmd...>: timeout(1)'s exit codes (124 when
-# the deadline passed), but the stacks are dumped into <err> before the kill.
-run_deadline() {
-    local secs="$1" out="$2" err="$3" pid waited=0
-    shift 3
-    "$@" > "$out" 2> "$err" &
-    pid=$!
-    while kill -0 "$pid" 2> /dev/null; do
-        if [ "$waited" -ge "$secs" ]; then
-            { echo "--- stacks at the ${secs}s deadline ---"; dump_stacks "$pid"; } >> "$err" 2>&1
-            kill -9 "$pid" 2> /dev/null
-            wait "$pid" 2> /dev/null
-            return 124
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-    wait "$pid"
-}
 
 fixture_case() {
     local tag="$1" dir="tests/fixtures/$2" torture="${4:-1}" want got rc
