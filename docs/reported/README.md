@@ -2283,6 +2283,16 @@ checking that pull request's fix under clang.
 | ~~[r7rs-too-few-arguments-returns-a-procedure](../archive/r7rs-too-few-arguments-returns-a-procedure.md)~~ | medium | **RESOLVED 2026-09-27** (archived): in user Scheme source an under-saturated call to a known procedure runs its arguments and raises "f: too few arguments (expects at least 1, got 0)"; a dynamic call with the wrong count raises "wrong number of arguments (N given)" (compiled `__tur_dyn_call_arity`, interpreted arity checks), and calling a non-procedure raises "not a procedure". SRFI 41 passes in full (floor 187). Fixture `r7rs-too-few-arguments`. Original row: Found landing S7: `(f)` of `(define (f a . rest) a)` returns a procedure (Turmeric's partial application) instead of raising, so `guard` sees nothing; SRFI 41's `(test-error (stream-zip))` passes through. Fix: under-saturated calls in `#lang r7rs` raise |
 | [letrec-mutual-recursion-between-capturing-closures](letrec-mutual-recursion-between-capturing-closures.md) | medium | Found landing S6: two `letrec` members (or `#lang r7rs` internal defines) that capture a local and call each other fail in cc ("'od' undeclared"). S6 made a call to an EARLIER capturing sibling capture it; a LATER one has no init yet to say it captures. Fix: allocate the group's envs, then fill them |
 
+## Found landing r7rs-srfi-plan S2's SRFI 17 (filed 2026-09-28)
+
+Not caused by that change -- it reproduces with its compiler diff reverted,
+and CI is green at the same commit. It is here because SRFI 17's work is what
+ran the fixture that shows it.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [r7rs-reentrant-callcc-wrong-with-eval](r7rs-reentrant-callcc-wrong-with-eval.md) | medium | Compiled only: a `call/cc` whose continuation is stored and re-entered reads back a non-number for a variable `set!` between capture and re-entry (`error: +: not a number`) when the same unit also CALLS `eval` -- the import alone is fine, and `--interpret` is right. A later form changing an earlier result makes it a compile-time difference. `docs-r7rs-guide-examples` carries it locally (macOS 27 / Apple clang 21 / arm64, Debug) while `Test (macos-latest)` is green at bf31e725c, which wants reconciling first |
+
 ## Found fixing the captured-`^mut` copy (filed 2026-09-26)
 
 | Report | Severity | One line |

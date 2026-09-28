@@ -2,6 +2,25 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **SRFI 17, generalized `set!`, under `#lang r7rs`.** `(import (srfi 17))`
+  makes `(set! (f arg ...) v)` mean `((setter f) arg ... v)`. `car`, `cdr`,
+  the whole `c[ad]r` family, `vector-ref`, `string-ref` and
+  `bytevector-u8-ref` are settable out of the box; `getter-with-setter`
+  attaches a setter to a procedure of your own, and `(set! (setter f) s)`
+  adds one to any procedure. The target is an arm of the lowering's `set!`,
+  turned on by importing this SRFI's `set!` under any name, so the export is
+  R7RS's own and the import sits beside `(scheme base)` as one binding.
+  Without the import the shape is an error naming the SRFI, in place of
+  Turmeric's "set! target must be a symbol". The table is built on first use,
+  so an `(import (srfi 17))` a program does not use emits byte-identical C.
+  It was the last SRFI held by r7rs-srfi-plan S2: `setter` is keyed on
+  procedure identity, which standard procedures did not keep until
+  2026-09-27.
+
 ## [0.56.2] -- 2026-09-28
 
 ### Changed

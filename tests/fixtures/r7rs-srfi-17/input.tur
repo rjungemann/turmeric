@@ -1,0 +1,65 @@
+#lang r7rs
+;; r7rs-srfi-plan S2: SRFI 17's generalized `set!`.  `(set! (f arg ...) v)`
+;; is `((setter f) arg ... v)`, on in a file that imports (srfi 17)'s `set!`.
+;; The export is R7RS's own `set!`, so it is imported beside (scheme base)
+;; with no conflict.
+(import (scheme base) (scheme write) (scheme cxr) (srfi 17))
+
+;; The standard settable procedures.
+(define p (list 1 2 3))
+(set! (car p) 'a)
+(set! (cadr p) 'b)
+(set! (cddr p) '(c))
+(define v (vector 1 2 3))
+(set! (vector-ref v 1) 'x)
+(define s (string-copy "abc"))
+(set! (string-ref s 0) #\Z)
+(define bv (bytevector 1 2 3))
+(set! (bytevector-u8-ref bv 2) 9)
+(write (list p v s bv))
+(newline)
+
+;; `setter` is keyed on procedure identity, and the standard entries are the
+;; procedures themselves (docs/archive/r7rs-prelude-procedures-lose-identity.md).
+(write (list (eqv? (setter car) set-car!)
+             (eqv? (setter vector-ref) vector-set!)
+             (eqv? (setter bytevector-u8-ref) bytevector-u8-set!)))
+(newline)
+
+;; Four levels of the c[ad]r family, and a head that is an expression: it is
+;; evaluated once, like any argument.
+(define deep (list (list (list (list 1 2) 3) 4) 5))
+(set! (cadar (car deep)) 'd)
+(set! (cddddr (list 1 2 3 4 5)) '())
+(write deep)
+(newline)
+
+;; `setter` is settable itself: (set! (setter f) s) is ((setter setter) f s).
+(define (kar q) (car q))
+(set! (setter kar) set-car!)
+(define q (list 1 2))
+(set! (kar q) 'k)
+(write q)
+(newline)
+
+;; getter-with-setter carries its own setter.
+(define box-value (getter-with-setter (lambda (b) (cadr b))
+                                      (lambda (b val) (set-car! (cdr b) val))))
+(define b (list 'box 1))
+(set! (box-value b) 42)
+(write (list (box-value b) b))
+(newline)
+
+;; The plumbing is the SRFI's own `setter`, not whatever the use site binds
+;; that name to, and it does not need the name imported at all.
+(write (let ((setter (lambda (x) 'shadowed))
+             (r (list 1 2)))
+         (set! (car r) 'h)
+         (list r (setter 'anything))))
+(newline)
+
+;; A procedure with no setter raises an R7RS error object, catchable.
+(define (plain x) x)
+(write (guard (e (#t (list 'caught (error-object? e) (error-object-message e))))
+         (setter plain)))
+(newline)
