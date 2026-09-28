@@ -567,7 +567,8 @@ typedef struct SL {
     bool          needs_module;
     /* R3: `(prefix <set> p)` -- a symbol spelled `p<rest>` reads as
      * `<alias>/<rest>`; `(rename <set> (a b))` -- `b` reads as `a`. */
-    struct { const char *prefix; size_t plen; const Symbol *alias; } prefixes[16];
+    struct { const char *prefix; size_t plen; const Symbol *alias;
+             const struct LibSyntax *lx; /* the library's respelled exports, or NULL */ } prefixes[16];
     uint32_t n_prefixes;
     struct { const Symbol *from, *to; } renames[64];
     uint32_t n_renames;
@@ -1209,6 +1210,8 @@ static const Symbol *type_named_global(SL *sl, const Symbol *s) {
 
 static const Symbol *rn_std(SL *sl, const Symbol *s);
 static const Symbol *caret_spelling(SL *sl, const Symbol *s);
+struct LibSyntax;
+static const Symbol *lib_respelling(SL *sl, const struct LibSyntax *lx, const Symbol *pub);
 static const Symbol *rn_global(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_renames; i++)
         if (sl->renames[i].from == s) return sl->renames[i].to;
@@ -1250,7 +1253,11 @@ static const Symbol *rn_global(SL *sl, const Symbol *s) {
             /* The rest is the module's spelling: a form-named export was
              * renamed in the library (`gen` -> `gen--user`), so it is here. */
             const Symbol *rest = I(sl, s->name + sl->prefixes[i].plen);
-            if (sl->in_user)
+            /* r7rs-library-defines-standard-or-stdlib-name: the library
+             * spelled a standard or stdlib name it defines `<name>--user`. */
+            const Symbol *lib_sp = lib_respelling(sl, sl->prefixes[i].lx, rest);
+            if (lib_sp) rest = lib_sp;
+            else if (sl->in_user)
                 for (uint32_t c = 0; c < sl->n_clash; c++)
                     if (sl->clash_from[c] == rest) { rest = sl->clash_to[c]; break; }
             if (sl->in_user && type_named_global(sl, rest)) rest = type_named_global(sl, rest);
@@ -2183,6 +2190,8 @@ static void lower_record_type(SL *sl, Form *f, FB *out, bool local);
 static bool is_export_rename(SL *sl, const Form *nm);
 static void user_define_names(SL *sl, const Form *f, FB *out);
 static void library_defined_names(SL *sl, Form *f, FB *out);
+static bool lib_needs_respelling(SL *sl, const Symbol *s);
+static const Symbol *lib_user_spelling(SL *sl, const Symbol *s);
 /* r7rs-define-library-cannot-export-syntax: a library's macros, as the
  * library itself and every importer see them. */
 typedef struct LibScan {
@@ -4125,6 +4134,11 @@ static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
                         ren[n_ren].in = nm->as.list.items[1]->as.sym;
                         ren[n_ren].pub = pub;
                         ren[n_ren].out = clash_spelling(sl, pub);
+                        /* r7rs-library-defines-standard-or-stdlib-name: a
+                         * public name that is a standard or stdlib one is
+                         * `<name>--user` in the module, as importers expect. */
+                        if (ren[n_ren].out == pub && lib_needs_respelling(sl, pub))
+                            ren[n_ren].out = lib_user_spelling(sl, pub);
                         ren[n_ren].alias = true;
                         n_ren++;
                     } else if (nm->tag == F_SYM) {
@@ -4471,6 +4485,7 @@ typedef struct LibSyntax LibSyntax;
 static LibSyntax *lib_syntax_of(SL *sl, const Form *libname, const Symbol *mod);
 static bool lib_syntax_exports(const LibSyntax *lx, const Symbol *pub);
 static void lib_syntax_import(SL *sl, LibSyntax *lx, const SchemeImportSpec *spec, Span sp);
+static void lib_bind_respelled(SL *sl, const LibSyntax *lx, const SchemeImportSpec *spec);
 /* r7rs-turmeric-syntax-leaks item 8: the auto-loaded stdlib file a
  * `(turmeric stdlib/<file>)` (or `(turmeric <file>)`) library name denotes,
  * or NULL for any other library. */
@@ -4550,6 +4565,7 @@ static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
      * macros -- registered here, and kept out of the module's `:refer`. */
     LibSyntax *lx = lib_syntax_of(sl, spec->lib, mod);
     if (lx) lib_syntax_import(sl, lx, spec, sp);
+    lib_bind_respelled(sl, lx, spec);
     /* An excluded name is no longer the library's: it resolves as the
      * program's own (rn_global skips the standard map for it). */
     for (uint32_t i = 0; i < spec->except.n; i++) {
@@ -4564,7 +4580,8 @@ static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
     for (uint32_t i = 0; i + 1 < spec->renames.n; i += 2) {
         const Symbol *orig = spec->renames.items[i + 1]->as.sym;
         if (lx && lib_syntax_exports(lx, orig)) continue;   /* a macro: registered above */
-        const Symbol *to = mod ? rn(sl, orig) : rn_std(sl, orig);
+        const Symbol *to = mod ? lib_respelling(sl, lx, orig) : NULL;
+        if (!to) to = mod ? rn(sl, orig) : rn_std(sl, orig);
         if (sl->n_renames < 64) {
             sl->renames[sl->n_renames].from = spec->renames.items[i]->as.sym;
             sl->renames[sl->n_renames].to   = to;
@@ -4576,7 +4593,8 @@ static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
         for (uint32_t i = 0; i < spec->only.n; i++) {
             const Symbol *o = spec->only.items[i]->as.sym;
             if (lx && lib_syntax_exports(lx, o)) continue;   /* a macro: registered above */
-            if (!spec_excludes(spec, o)) fb_push(&refer, Sym(sl, spec->only.items[i]->span, rn(sl, o)));
+            const Symbol *osp = lib_respelling(sl, lx, o);
+            if (!spec_excludes(spec, o)) fb_push(&refer, Sym(sl, spec->only.items[i]->span, osp ? osp : rn(sl, o)));
         }
     if (spec->prefix) {
         const Symbol *pfx = spec->prefix;
@@ -4587,6 +4605,7 @@ static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
             sl->prefixes[sl->n_prefixes].prefix = pfx->name;
             sl->prefixes[sl->n_prefixes].plen   = pfx->len;
             sl->prefixes[sl->n_prefixes].alias  = NULL;
+            sl->prefixes[sl->n_prefixes].lx     = NULL;
             sl->n_prefixes++;
             free(refer.items);
             return;
@@ -4601,6 +4620,7 @@ static void emit_import_spec(SL *sl, Span sp, SchemeImportSpec *spec) {
         sl->prefixes[sl->n_prefixes].prefix = pfx->name;
         sl->prefixes[sl->n_prefixes].plen   = pfx->len;
         sl->prefixes[sl->n_prefixes].alias  = I(sl, alias);
+        sl->prefixes[sl->n_prefixes].lx     = lx;
         sl->n_prefixes++;
         fb_push(&sl->imports, Ln(sl, sp, 4, Sym(sl, sp, sl->t_import), Sym(sl, sp, mod),
                                  Kw(sl, sp, sl->t_as), Sym(sl, sp, I(sl, alias))));
@@ -4657,6 +4677,7 @@ static void lower_import_set(SL *sl, Form *set) {
     sl->needs_module = true;
     LibSyntax *lx = lib_syntax_of(sl, set, mod);
     if (lx) lib_syntax_import(sl, lx, NULL, sp);
+    lib_bind_respelled(sl, lx, NULL);
 }
 
 /* R7: the feature identifiers cond-expand holds -- with `srfi-N` for every
@@ -5405,10 +5426,80 @@ struct LibSyntax {
     FB   defs;              /* the macros, renamed: (define-syntax <hidden> <spec>) */
     FB   exp_pub, exp_in;   /* exported macros: public name, name in the library */
     FB   helpers;           /* hidden helper spellings, imported by name */
+    /* r7rs-library-defines-standard-or-stdlib-name: public exports the
+     * library spells `<name>--user` in its module (lib_needs_respelling). */
+    FB   respelled;
     bool registered, helpers_imported;
 };
 static bool lib_syntax_exports(const LibSyntax *lx, const Symbol *pub) {
     return fb_has_sym(&lx->exp_pub, pub);
+}
+/* r7rs-library-defines-standard-or-stdlib-name: would a library's own
+ * definition named `s` collide?  A standard procedure's name is spelled onto
+ * the prelude (`square` -> `r7rs-square`, an auto-loaded global), and an
+ * auto-loaded stdlib global (`None`, `list-length`) is one already.  The test
+ * is context-free -- it ignores what the library imports or excludes -- so
+ * the library, spelling its definition, and every importer, reading its
+ * source, agree on the spelling without seeing each other's imports. */
+static bool lib_needs_respelling(SL *sl, const Symbol *s) {
+    for (size_t i = 0; i < N_RENAMES; i++) if (sl->rn_from[i] == s) return true;
+    for (size_t i = 0; i < N_ONDEMAND; i++) if (sl->od_from[i] == s) return true;
+    return std_file_of(sl, s) != NULL;
+}
+static const Symbol *lib_user_spelling(SL *sl, const Symbol *s) {
+    char buf[256];
+    snprintf(buf, sizeof buf, "%s--user", s->name);
+    return I(sl, buf);
+}
+/* The module's spelling of the library export `pub`, when the library
+ * respelled it; NULL otherwise. */
+static const Symbol *lib_respelling(SL *sl, const struct LibSyntax *lx, const Symbol *pub) {
+    if (!lx || !fb_has_sym(&lx->respelled, pub)) return NULL;
+    return lib_user_spelling(sl, pub);
+}
+/* Which of a library's exports it respells: a plain export of a name it
+ * defines, or the public name of an `(export (rename in pub))`, that
+ * lib_needs_respelling holds for.  The library's own pass spells them so
+ * (note_stdlib_clashes, and the export-rename arm of define-library). */
+static void lib_respelled_exports(SL *sl, Form *deflib, FB *out) {
+    FB defined = {0};
+    library_defined_names(sl, deflib, &defined);
+    for (uint32_t i = 2; i < deflib->as.list.len; i++) {
+        Form *decl = deflib->as.list.items[i];
+        if (!head_is(decl, sl->s_export)) continue;
+        for (uint32_t j = 1; j < decl->as.list.len; j++) {
+            Form *nm = decl->as.list.items[j];
+            if (is_export_rename(sl, nm)) {
+                Form *pub = nm->as.list.items[2];
+                if (pub->tag == F_SYM && lib_needs_respelling(sl, pub->as.sym)) fb_push(out, pub);
+            } else if (nm->tag == F_SYM && fb_has_sym(&defined, nm->as.sym) &&
+                       lib_needs_respelling(sl, nm->as.sym)) {
+                fb_push(out, nm);
+            }
+        }
+    }
+    free(defined.items);
+}
+/* Bind an importer's bare names to a library's respelled exports: what the
+ * import set keeps of them under their own names (not excluded, not renamed
+ * away, in an `only` list when there is one; a prefix has its own rule). */
+static void lib_bind_respelled(SL *sl, const LibSyntax *lx, const SchemeImportSpec *spec) {
+    if (!lx || !lx->respelled.n || (spec && spec->prefix)) return;
+    for (uint32_t k = 0; k < lx->respelled.n; k++) {
+        const Symbol *pub = lx->respelled.items[k]->as.sym;
+        if (spec) {
+            if (spec_excludes(spec, pub)) continue;
+            bool renamed = false, kept = !spec->has_only;
+            for (uint32_t i = 0; i + 1 < spec->renames.n && !renamed; i += 2)
+                renamed = spec->renames.items[i + 1]->as.sym == pub;
+            for (uint32_t i = 0; i < spec->only.n && !kept; i++) kept = spec->only.items[i]->as.sym == pub;
+            if (renamed || !kept) continue;
+        }
+        if (sl->n_renames >= 64) { err(lx->respelled.items[k], "too many (rename ...) names"); return; }
+        sl->renames[sl->n_renames].from = pub;
+        sl->renames[sl->n_renames].to   = lib_user_spelling(sl, pub);
+        sl->n_renames++;
+    }
 }
 /* Rename `f`'s symbols through from[i] -> to[i], as code: quoted data and a
  * quasiquote's template are left alone, its unquotes are not. */
@@ -5482,7 +5573,8 @@ static LibSyntax *lib_syntax_of(SL *sl, const Form *libname, const Symbol *mod) 
     const char *head = libname->as.list.items[0]->as.sym->name;
     if (strcmp(head, "scheme") == 0 || strcmp(head, "turmeric") == 0) return NULL;
     for (uint32_t i = 0; i < sl->n_libsyn; i++)
-        if (sl->libsyn[i]->mod == mod) return sl->libsyn[i]->exp_pub.n ? sl->libsyn[i] : NULL;
+        if (sl->libsyn[i]->mod == mod)
+            return (sl->libsyn[i]->exp_pub.n || sl->libsyn[i]->respelled.n) ? sl->libsyn[i] : NULL;
     LibSyntax *lx = (LibSyntax *)arena_alloc(sl->a, sizeof(LibSyntax));
     memset(lx, 0, sizeof *lx);
     lx->mod = mod;
@@ -5501,9 +5593,10 @@ static LibSyntax *lib_syntax_of(SL *sl, const Form *libname, const Symbol *mod) 
         if (head_is(fs[i], sl->s_define_library)) deflib = fs[i];
     if (!deflib) return NULL;
     deflib = expand_library_includes(sl, deflib);
+    lib_respelled_exports(sl, deflib, &lx->respelled);
     LibScan ls = {0};
     lib_scan(sl, deflib, &ls);
-    if (!ls.exp_pub.n) { lib_scan_free(&ls); return NULL; }
+    if (!ls.exp_pub.n) { lib_scan_free(&ls); return lx->respelled.n ? lx : NULL; }
     /* from -> to: every macro and every helper to its hidden spelling. */
     FB from = {0}, to = {0};
     for (uint32_t k = 0; k < ls.syntax.n; k++) {
@@ -6046,6 +6139,23 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
         if (!clash && sl->global_kind) clash = sl->global_kind(sl->lib_resolve_ud, s->name) == SCHEME_GLOBAL_STDLIB;
         if (clash) add_clash(sl, s);
     }
+    /* r7rs-library-defines-standard-or-stdlib-name: ... except a name the
+     * library defines that would collide in its module -- a standard one,
+     * which would be spelled onto the prelude's `r7rs-square`, or an
+     * auto-loaded stdlib global.  It is `<name>--user` there, and in every
+     * importer (lib_respelled_exports), by one context-free rule. */
+    if (library) {
+        FB defined = {0};
+        for (uint32_t i = 0; i < n; i++)
+            if (is_scheme_file(forms[i]) && !prelude_span(forms[i]->span) && !srfi_span(forms[i]->span) &&
+                head_is(forms[i], sl->s_define_library))
+                library_defined_names(sl, forms[i], &defined);
+        for (uint32_t d = 0; d < defined.n; d++) {
+            const Symbol *s = defined.items[d]->as.sym;
+            if (lib_needs_respelling(sl, s)) add_clash(sl, s);
+        }
+        free(defined.items);
+    }
     FB binders = {0};
     for (uint32_t i = 0; i < n; i++)
         if (is_scheme_file(forms[i]) && !prelude_span(forms[i]->span) && !srfi_span(forms[i]->span))
@@ -6392,6 +6502,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     for (uint32_t i = 0; i < sl.n_libsyn; i++) {
         LibSyntax *lx = sl.libsyn[i];
         free(lx->defs.items); free(lx->exp_pub.items); free(lx->exp_in.items); free(lx->helpers.items);
+        free(lx->respelled.items);
     }
     free(sl.libsyn);
     return res;

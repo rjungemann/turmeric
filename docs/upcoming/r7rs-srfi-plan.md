@@ -564,7 +564,8 @@ one file and one fixture on the machinery S1 builds, taken when asked for:
 > `r7rs-repl-shadowed-name-persists` and `run-r7rs-import.sh`'s
 > `type-named-exports`. The library half, a `define-library` that defines
 > `square` or `None`, is
-> [docs/reported/r7rs-library-defines-standard-or-stdlib-name.md](../reported/r7rs-library-defines-standard-or-stdlib-name.md).
+> [docs/archive/r7rs-library-defines-standard-or-stdlib-name.md](../archive/r7rs-library-defines-standard-or-stdlib-name.md)
+> (fixed 2026-09-28).
 > An SRFI file is untouched by it, since its names are spelled
 > `srfi<N>--<name>` (D3).
 >

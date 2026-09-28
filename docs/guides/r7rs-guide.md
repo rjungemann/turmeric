@@ -581,10 +581,12 @@ What it does not cover:
   whole program (earlier uses and `(map square ...)` included), and the
   prelude and every SRFI keep their own. At the REPL it lasts across turns.
   A name from an imported SRFI is the exception: redefining it is an error
-  whose message gives the `except` that frees the name. So far this holds
-  for programs only: a `define-library` that defines a standard name, or one
-  the Turmeric stdlib has, does not build yet
-  ([docs/reported/r7rs-library-defines-standard-or-stdlib-name.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/r7rs-library-defines-standard-or-stdlib-name.md)).
+  whose message gives the `except` that frees the name. A `define-library`
+  may define and export a standard name too, or one the Turmeric stdlib has
+  (`None`, `list-length`). An importer that takes the name from the library
+  gets the library's, even beside `(scheme base)`. A Turmeric module that
+  imports the library sees such an export as `<name>--user`
+  (`mylib/square--user`), since the bare name would collide.
 - **`apply` takes at most eight arguments**, on both back ends, and so does a
   call through a variable on the compiled back end (`tur --interpret` has no
   such limit). A direct call to a named procedure has no limit. Past eight,

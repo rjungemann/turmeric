@@ -1,5 +1,43 @@
 # `#lang r7rs`: a `define-library` cannot define a standard or stdlib name
 
+**RESOLVED 2026-09-28.** A `define-library` may define and export a standard
+name (`square`, `abs`) or an auto-loaded stdlib one (`None`, `list-length`),
+plainly or as an `(export (rename in pub))` public name. It works on both back
+ends, under every import set. Pinned by `tests/run-r7rs-import.sh`'s
+`library-defines-standard-and-stdlib-names` and
+`library-standard-names-under-import-sets`. The rest of this file is the
+original report.
+
+## Fix
+
+One context-free rule, so the library and each importer agree without seeing
+each other's imports: `lib_needs_respelling` (src/compiler/scheme_lower.c)
+holds for a standard procedure's name (the rename and on-demand tables) and
+for an auto-loaded stdlib global (`std_file_of`, which the module pass has
+through `elab_scheme_stdlib_file`). It ignores what the library itself
+imports or excludes.
+
+- **Library side.** `note_stdlib_clashes` respells every name the library
+  defines that the rule holds for to `<name>--user` (`add_clash`), so the
+  definition, every use in the library and the plain export follow. An
+  export rename whose public name the rule holds for is spelled
+  `<pub>--user` too.
+- **Importer side.** `lib_syntax_of`, which already reads the library's
+  source for its macros, records which exports the library respells
+  (`lib_respelled_exports`). A plain import, and an `only`, `except` or
+  `rename` set, binds each kept name to that spelling (`lib_bind_respelled`,
+  and the `rename`/`only` arms of `emit_import_spec`). A `prefix` rule
+  applies it after taking the prefix off.
+
+A name the program takes from the library means the library's definition,
+even when `(scheme base)` is imported beside it without an `except`: the
+importer's rename wins. R7RS 5.2 calls two bindings of one name an error,
+and the report proposed refusing it. This follows the guide's existing
+policy instead, where a program may shadow a standard name as chibi allows.
+A Turmeric module importing the library sees `square--user`.
+
+---
+
 **Severity:** medium. A library whose body defines a name that `(scheme base)`
 or the auto-loaded Turmeric stdlib also has -- SRFI 1's `list-copy`-style
 extensions, a portable library's own `square`, anything called `None` or
