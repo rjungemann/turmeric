@@ -446,9 +446,9 @@ bool cps_fn_needs_cloneable_transform(const FnDef *fd) {
  * extern-c / inline-c) likewise have no evaluated operand in the enclosing
  * body.
  * ------------------------------------------------------------------------- */
-static bool cps_visit_children(const Expr *e,
-                               bool (*visit)(const Expr *, void *),
-                               void *ud) {
+bool cps_visit_children(const Expr *e,
+                        bool (*visit)(const Expr *, void *),
+                        void *ud) {
     if (!e) return false;
 
 #define V(x)  do { const Expr *c_ = (x); if (c_ && visit(c_, ud)) return true; } while (0)

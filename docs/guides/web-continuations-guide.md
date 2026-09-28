@@ -67,11 +67,14 @@ Three rules of the capture grammar shape this:
 - **The hole is an `int`.** The POST body travels as its address
   (`cstr-as-int` / `int-as-cstr`); both ends are the same process, and the
   bytes on disk hold the frame, not the body.
-- **The leaf and the receiver must be uncolored**: no `serial-reset` of their
-  own, no effects, no `unsafe` block, no call through a function value --
-  transitively. So a leaf does not start the next page; it returns a **step
-  code**, and `advance`, called by the router outside every reset, starts the
-  next page's reset (or renders a terminal page):
+- **No effect may escape the leaf or the receiver**, and neither may start a
+  `serial-reset` of its own. They run outside the handlers around the reset
+  (the receiver at capture, the leaf on resume), so an effect they do not
+  handle themselves has nowhere to go; calling through a function value -- a
+  template passed as `(fn [cstr] cstr)` -- is fine. So a leaf does not start
+  the next page; it returns a **step code**, and `advance`, called by the
+  router outside every reset, starts the next page's reset (or renders a
+  terminal page):
 
 ```turmeric
 (defn advance [step : int] : int
@@ -236,7 +239,7 @@ every name against the running program's registry.
 
 **One frame, one env, one int hole.** The capture grammar is a single-scalar-hole chain; a page's state is one `cstr` (or `Serializable` value) and the resume value is an `int`. Pack state, and pass bulky data by reference (an id into the store), not by value.
 
-**Uncolored leaves and receivers.** Anything the reset context calls must stay out of the CPS backend's colored set; the page-transition work that needs colored code (templates that concatenate through `str+`, effects) happens in `advance`.
+**Effects stay out of leaves and receivers.** Anything the reset context calls, and the receiver, must not let an effect escape it (TUR-E0706 names the receiver and the effect); the page-transition work that needs effects happens in `advance`. Calling through a function value is fine -- until 2026-09-28 it was not, which is why the guestbook's receivers call the templates and the store directly.
 
 **Token size.** A guestbook continuation is one frame: a few hundred bytes. Monitor `data/conts/` if a flow captures larger values.
 

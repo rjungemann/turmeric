@@ -339,6 +339,7 @@ typedef struct {
     uint32_t trail_len;    /* TrailCMark, flattened to keep trail_c.h private */
     uint32_t trail_level;
     uint32_t n;
+    uint32_t n_shared;
     bool     unsat;
 } EufMark;
 EufMark  euf_mark(EufState *st);
@@ -352,6 +353,10 @@ bool      euf_equal(EufState *st, VCTerm *a, VCTerm *b);
 /* Terms EUF knows about, for the S3 equality exchange. */
 uint32_t  euf_term_count(const EufState *st);
 VCTerm   *euf_term_at(const EufState *st, uint32_t i);
+/* The subset of those terms both theories see (la_is_shared_term, non-Bool),
+ * in registration order; maintained at registration, truncated by undo. */
+uint32_t  euf_shared_count(const EufState *st);
+VCTerm   *euf_shared_at(const EufState *st, uint32_t i);
 
 /* ------------------------------------------------------------------------- *
  * S2: linear arithmetic (Fourier-Motzkin over the rationals)

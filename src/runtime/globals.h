@@ -374,6 +374,7 @@ extern bool g_opt_regions;
  * because the fact it records is "the `any` machinery is needed", which is a
  * trait shared by every dynamic language, not Saffron's identity. */
 extern bool g_opt_dynamic_any;
+extern bool g_opt_saffron_gc;
 /* r7rs (docs/upcoming/r7rs-lang-plan.md): the `#lang r7rs` dialect's enable
  * bit.  Never set by a flag a user has to write -- lang_dialect_apply sets it
  * (through experiment_enable) the moment a `#lang r7rs` file is read, because

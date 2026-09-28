@@ -227,6 +227,30 @@ panics `Contract violated`. What does *not* happen is the predicate being
 accepted and ignored, which would leave the file looking like it carries a
 guarantee it does not.
 
+## Memory: a compiled Saffron program is collected
+
+An `any` value can alias freely: widening a by-value payload boxes it, the box
+is copied into arguments, fields and results, and a dynamic call `(f h)` may
+keep any of them -- there is no body to look at. So no static owner exists for
+most of those boxes. A compiled single-unit `#lang saffron` program therefore
+allocates from the same conservative mark-sweep collector a `#lang r7rs`
+program does (`src/runtime/r7gc.c`; `docs/guides/r7rs-guide.md` describes it),
+on Linux and macOS:
+
+- A loop that rebuilds a structure runs in bounded memory. Measured: a
+  100-cell `any` list rebuilt, mapped through a dynamic call and folded 20,000
+  times peaks at 6 MB, against 84 MB (and growing) without the collector,
+  and runs no slower.
+- The compiler's static drops still run where it can prove an owner; the
+  collector reclaims what it cannot.
+- `TUR_SAFFRON_GC=0 tur build prog.tur`, or `tur --no-saffron-gc build ...`,
+  builds on plain `malloc`/`free` instead, where those boxes are simply never
+  freed (`docs/reported/saffron-static-ownership-residue.md` lists the
+  shapes). `TUR_GC_STATS=1` on a collected program prints what the collector
+  did.
+- A `--shared` build (several translation units) keeps plain `malloc`: each
+  unit would otherwise get its own heap.
+
 ## What Saffron gives up
 
 **One feature: `with-region`.**

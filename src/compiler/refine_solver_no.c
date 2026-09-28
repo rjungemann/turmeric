@@ -23,19 +23,15 @@
 
 /* Collect the terms both theories can see: the opaque terms LA purified out
  * (variables and uninterpreted applications), which EUF also has as nodes. */
+/* EUF keeps that set as it registers terms (euf_shared_at), so this reads
+ * only the eligible terms rather than filtering every term per cube. */
 static uint32_t collect_shared(EufState *euf, VCTerm **out, uint32_t cap) {
-    uint32_t n = 0, eligible = 0;
-    uint32_t total = euf_term_count(euf);
-    /* Scan every term even after the array is full: the count we discard is
-     * the telemetry -- it is the difference between "8 shared terms, exactly
-     * at the cap" and "40 shared terms, 32 of them dropped". */
-    for (uint32_t i = 0; i < total; i++) {
-        VCTerm *t = euf_term_at(euf, i);
-        if (!t || t->sort == VS_BOOL) continue;
-        if (!la_is_shared_term(t)) continue;
-        eligible++;
-        if (n < cap) out[n++] = t;
-    }
+    uint32_t n = 0;
+    /* The full eligible count, even past the cap: the count we discard is the
+     * telemetry -- it is the difference between "8 shared terms, exactly at
+     * the cap" and "40 shared terms, 32 of them dropped". */
+    uint32_t eligible = euf_shared_count(euf);
+    for (uint32_t i = 0; i < eligible && n < cap; i++) out[n++] = euf_shared_at(euf, i);
     refine_cap_peak(&refine_caps()->no_shared_peak, eligible);
     if (eligible > cap) refine_caps()->no_shared_hits++;
     return n;

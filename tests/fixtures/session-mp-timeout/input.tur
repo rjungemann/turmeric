@@ -1,0 +1,101 @@
+;;; session-mp-timeout -- a multi-party timed receive (recv-timeout-from).
+;;
+;; multi-party-sessions-have-no-timed-receive: binary sessions had
+;; recv-timeout; a Role endpoint had no bounded wait at all, so a compiled
+;; multi-party program with a stalled peer hung until killed.
+;;
+;; Relay: B waits for A's value with a deadline and forwards it to C, or
+;; forwards -1 when A is late.  C is not party to the timed receive, so the
+;; protocol gives it the same step in both branches (a value from B) -- the
+;; projection rule defprotocol enforces.  Run twice: A late (expired), then A
+;; on time (ok).
+;;
+;; Late: B takes the expired branch, sends -1, and closes.  A's late send is
+;; then dropped by the router (B left a skip on the A->B slot) instead of
+;; blocking A forever -- so the program terminates.
+;;
+;; Retry: after timing out on A's FIRST value, B receives again from A with no
+;; deadline.  It must get A's SECOND value (2): the first one, sent after B gave
+;; up on it, is dropped rather than delivered to the next receive.
+;;
+;; Expected output:
+;;   -1
+;;   7
+;;   2
+(load "stdlib/session.tur")
+
+(defn sleep-ms [ms : int] : int
+  ```c
+  struct timespec req = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000L };
+  struct timespec rem;
+  while (nanosleep(&req, &rem) == -1) req = rem;
+  return 0;
+  ```)
+
+(defprotocol Relay [A B C]
+  (timeout (-> A B int)
+    [ok      (-> B C int)]
+    [expired (-> B C int)]))
+
+(defn relay-a [^linear ch :(Role Relay A) delay : int] : nil
+  (sleep-ms delay)
+  (let [ch (send-to ch B 7)]
+    (close ch)))
+
+(defn relay-b [^linear ch :(Role Relay B) deadline : int] : nil
+  (match (recv-timeout-from ch A deadline)
+    (Left pair)
+      (let [[v ch] pair]
+        (let [ch (send-to ch C v)]
+          (close ch)))
+    (Right ch)
+      (let [ch (send-to ch C -1)]
+        (close ch))))
+
+(defn relay-c [^linear ch :(Role Relay C)] : nil
+  (let [[v ch] (recv-from ch B)]
+    (println v)
+    (close ch)))
+
+(defn run-relay [delay : int deadline : int] : nil
+  (let [[ra rb rc] (make-protocol Relay)]
+    (let [ta (session-spawn (fn [] (relay-a ra delay)))]
+      (let [tb (session-spawn (fn [] (relay-b rb deadline)))]
+        (relay-c rc)
+        (session-join tb)
+        (session-join ta)))))
+
+(defprotocol Retry [A B]
+  (timeout (-> A B int)
+    [ok]
+    [expired])
+  (-> A B int))
+
+(defn retry-a [^linear ch :(Role Retry A)] : nil
+  (sleep-ms 400)
+  (let [ch (send-to ch B 1)]
+    (let [ch (send-to ch B 2)]
+      (close ch))))
+
+(defn retry-b [^linear ch :(Role Retry B)] : nil
+  (match (recv-timeout-from ch A 50)
+    (Left pair)
+      (let [[v ch] pair]
+        (let [[w ch] (recv-from ch A)]
+          (println w)
+          (close ch)))
+    (Right ch)
+      (let [[w ch] (recv-from ch A)]
+        (println w)
+        (close ch))))
+
+(defn main [] : int
+  ;; A 400 ms late against a 50 ms deadline; then on time against a generous
+  ;; one (the receive returns as soon as the value lands, so it costs nothing).
+  (run-relay 400 50)
+  (run-relay 0 5000)
+  (let [[ra rb] (make-protocol Retry)]
+    (let [ta (session-spawn (fn [] (retry-a ra)))]
+      (retry-b rb)
+      (session-join ta)))
+  0)

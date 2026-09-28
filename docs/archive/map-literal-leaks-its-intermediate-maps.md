@@ -40,7 +40,7 @@ one; the other N-1, and the trie generations they retain, have no owner.
 
 This is the container analogue of the ownership shape
 `docs/archive/any-struct-box-leak-per-widen.md` and
-`docs/reported/byvalue-recursive-adt-boxes-are-never-freed.md` describe: a value
+`docs/archive/byvalue-recursive-adt-boxes-are-never-freed.md` describe: a value
 whose lifetime is an EXPRESSION's, with no scope to attach a drop to. Here the
 intermediate is a whole map, and the expression that produced it is a macro
 expansion the author never wrote.

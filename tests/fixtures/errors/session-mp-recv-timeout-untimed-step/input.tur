@@ -1,0 +1,12 @@
+;; TUR-E0212: recv-timeout-from needs a step the protocol declares timed --
+;; (timeout (-> A B T) [ok ...] [expired ...]).  A plain (-> A B int) says B
+;; waits for the value, and has no expired branch to continue in.
+(defprotocol Ping [A B]
+  (-> A B int))
+
+(defn role-b [^linear ch :(Role Ping B)] : nil
+  (match (recv-timeout-from ch A 50)
+    (Left pair) (let [[v ch] pair] (close ch))
+    (Right ch)  (close ch)))
+
+(defn main [] : int 0)

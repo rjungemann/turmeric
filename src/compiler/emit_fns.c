@@ -5176,6 +5176,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     const char *saved_current_fn_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = current_fn_ret_ctype_eff;
+    const struct FnDef *saved_own_cur_fn = ctx->own_cur_fn;
+    ctx->own_cur_fn = fd;
 
     /* Use raw name (without ID suffix) for function name */
     const char *fn_name = ctx->fn_name_override
@@ -6390,6 +6392,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     free((void*)ctx->env_var_name);
     ctx->env_var_name = saved_env_var_name;
     ctx->current_fn_ret_ctype = saved_current_fn_ret_ctype;
+    ctx->own_cur_fn = saved_own_cur_fn;
     ctx->tail_void = saved_tail_void;
 
     ctx->indent -= 4;

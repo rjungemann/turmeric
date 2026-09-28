@@ -1,0 +1,9 @@
+;; TUR-E0220: C is not party to the timed receive (-> A B int), so it cannot
+;; tell which branch B took -- yet the protocol has C receive in one branch
+;; and not the other.  Rejected at the declaration.
+(defprotocol Bad [A B C]
+  (timeout (-> A B int)
+    [ok      (-> B C int)]
+    [expired]))
+
+(defn main [] : int 0)

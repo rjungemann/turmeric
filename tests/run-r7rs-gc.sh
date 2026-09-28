@@ -20,6 +20,10 @@
 #      them the r7rs-threads-* fixtures under frequent collections (every
 #      allocation, or every 31st for the two long ones), plus a lint over
 #      the release points.
+#   1b. Every compiled `#lang saffron` fixture the same way: since
+#      2026-09-28 the collector is a Saffron program's allocator too
+#      (any-widen-stored-in-an-adt-field-has-no-owner; TUR_SAFFRON_GC=0 opts
+#      out), so the same missing-root hazard applies to its `any` boxes.
 #   4. Reclamation (Linux only, where `ulimit -v` binds): a loop that builds
 #      and drops a million small lists runs under a 256 MiB address-space
 #      limit.  With the collector it fits; the same program without it
@@ -56,7 +60,10 @@ for d in tests/fixtures/*/; do
     case "$(basename "$d")" in
         r7rs-*) fixtures+=("$d") ;;
         *) IFS= read -r first < "$d/input.tur"
-           [[ "$first" == "#lang r7rs"* ]] && fixtures+=("$d") ;;
+           [[ "$first" == "#lang r7rs"* ]] && fixtures+=("$d")
+           # 1b: compiled Saffron fixtures (an interp-only one is not built).
+           [[ "$first" == "#lang saffron"* ]] && [ ! -f "$d/requires.interp-only" ] \
+               && fixtures+=("$d") ;;
     esac
 done
 
@@ -365,6 +372,39 @@ if [ "$esc" = "3000000" ]; then
     echo "PASS reclaim-escapes (a million guards and call/cc escapes fit in 256 MiB)"
 else
     echo "FAIL reclaim-escapes -- a million guards and call/cc escapes did not fit in 256 MiB (got '$esc')"
+fi | tee -a "$WORK/results"
+# Saffron (any-widen-stored-in-an-adt-field-has-no-owner): the same loop in
+# the dynamic dialect -- rebuild a 100-cell list of `any`, map it through a
+# dynamic call and fold it, 100000 times.  Measured at 20000 iterations: 84 MB
+# peak without the collector, growing linearly; 6 MB with it.
+cat > "$WORK/saffron-churn.tur" <<'EOF'
+#lang saffron
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+(defn build [n acc] (if (= n 0) acc (build (- n 1) (Cons n acc))))
+(defn lmap [f xs] (match xs (Cons h t) (Cons (f h) (lmap f t)) (Nil) (Nil)))
+(defn lsum [xs acc] (match xs (Cons h t) (lsum t (+ acc h)) (Nil) acc))
+(defn add-one [x] (+ x 1))
+(defn spin [i total]
+  (if (= i 0)
+    total
+    (spin (- i 1) (+ total (lsum (lmap add-one (build 100 (Nil))) 0)))))
+(defn main [] : int (println (spin 100000 0)) 0)
+EOF
+sreclaim() {
+    local tag="$1"; shift
+    if ! env "$@" "$TUR" build "$WORK/saffron-churn.tur" -o "$WORK/schurn-$tag" > "$WORK/schurn-$tag.build" 2>&1; then
+        echo "build-failed"; return
+    fi
+    (ulimit -v 262144; "$WORK/schurn-$tag" 2>/dev/null) 2>/dev/null || true
+}
+swith="$(sreclaim gc TUR_SAFFRON_GC=1)"
+swithout="$(sreclaim plain TUR_SAFFRON_GC=0)"
+if [ "$swith" != "515000000" ]; then
+    echo "FAIL reclaim-saffron -- with the collector the churn did not fit in 256 MiB (got '$swith')"
+elif [ "$swithout" = "515000000" ]; then
+    echo "FAIL reclaim-saffron -- the churn fits in 256 MiB WITHOUT the collector, so this check bites on nothing"
+else
+    echo "PASS reclaim-saffron (256 MiB: fits with the collector, not without)"
 fi | tee -a "$WORK/results"
 else
     echo "PASS reclaim (skipped on $HOST: no address-space limit to test under)" | tee -a "$WORK/results"
