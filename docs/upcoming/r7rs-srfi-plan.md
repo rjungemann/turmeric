@@ -467,7 +467,7 @@ one file and one fixture on the machinery S1 builds, taken when asked for:
   the reference implementation's licence? Record both in the table's source
   comments.
 - Measure what splicing costs. `#lang r7rs` programs already build slowly
-  ([docs/reported/r7rs-programs-compile-slowly.md](../reported/r7rs-programs-compile-slowly.md)),
+  ([docs/archive/r7rs-programs-compile-slowly.md](../archive/r7rs-programs-compile-slowly.md)),
   and every procedure a library splices in is emitted and C-compiled into the
   importing program. Take SRFI 1's reference implementation (about 150
   procedures), splice it into a one-line program, and time `tur build` with and
@@ -523,7 +523,7 @@ one file and one fixture on the machinery S1 builds, taken when asked for:
 > **The emitter does not prune, and neither can gcc.** Every spliced
 > definition reaches the C, used or not (`lset-xor` is emitted in `p1`). gcc
 > already discards the prelude's unused functions before optimizing (see
-> [docs/reported/r7rs-programs-compile-slowly.md](../reported/r7rs-programs-compile-slowly.md)),
+> [docs/archive/r7rs-programs-compile-slowly.md](../archive/r7rs-programs-compile-slowly.md)),
 > but a spliced Scheme library defeats it. `__tur_fatbox_init` runs at
 > startup and fills a static closure for every procedure the program uses
 > as a value *anywhere*, including in dead code: `every` calls

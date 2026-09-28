@@ -733,7 +733,7 @@ covers it. All three were already in `libc_names`, and
 ### What making the fallback link exposed
 
 A Scheme program never engages the S2 split
-([r7rs-programs-compile-slowly](../reported/r7rs-programs-compile-slowly.md)),
+([r7rs-programs-compile-slowly](r7rs-programs-compile-slowly.md)),
 so on Windows every `#lang r7rs` program used to reach the whole-preamble path,
 fail to link, and quietly run through cc. Once that path linked, they ran in
 MIR, and `run-jit.sh` turned up seven wrong answers that the fallback had been

@@ -175,7 +175,7 @@ static size_t source_stem_len(const char *name, size_t len) {
  * GCC's -Wmisleading-indentation (in -Wall) is quadratic on the long
  * brace-less `if` chains a Scheme program's prelude lowers to: with it, the
  * parse of a one-line `#lang r7rs` program took 2.9 s of a 6.4 s build; without
- * it, 0.1 s (docs/reported/r7rs-programs-compile-slowly.md).  Nobody reads the
+ * it, 0.1 s (docs/archive/r7rs-programs-compile-slowly.md).  Nobody reads the
  * indentation of generated C, and a harness's own TUR_CC_FLAGS still carry
  * -Wall, so the driver adds the opt-out itself rather than to each default. */
 #define TUR_EMITTED_C_CC_FLAGS " -Wno-misleading-indentation"
