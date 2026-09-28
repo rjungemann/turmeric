@@ -1,0 +1,18 @@
+;; contcrew -- one raw pthread that runs the Scheme worker body, started and
+;; joined while the main thread waits.
+(defmodule contcrew
+  (import contwork :refer [worker-body!])
+  (export run-worker)
+  ```c
+  static pthread_t cont_tid;
+  ```
+  (defn cont-worker [arg : ptr<void>] : ptr<void>
+    (worker-body!)
+    arg)
+  (defn cont-spawn-join [w : ptr<void>] : nil
+    ```c
+    if (pthread_create(&cont_tid, NULL, (void *(*)(void *))w, NULL) != 0) abort();
+    pthread_join(cont_tid, NULL);
+    ```)
+  (defn run-worker [] : nil
+    (cont-spawn-join cont-worker)))
