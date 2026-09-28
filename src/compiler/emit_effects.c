@@ -13,6 +13,7 @@
  */
 #include "emit_internal.h"
 #include "globals.h"
+#include "effect.h"   /* serial receiver escaping-effect note */
 
 /* =========================================================================
  * Region C -- algebraic effects
@@ -1455,7 +1456,62 @@ char *emit_effects_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     return emit_value(ctx, body, e->as.serial_reset_.body);
 }
 
+/* serial-shift-colored-receiver-rejected: the one receiver the native backend
+ * still refuses is a function an effect ESCAPES -- a non-empty declared or
+ * inferred row.  It is called from the shift body through its direct entry,
+ * whose fresh DK root cannot see the handler enclosing the reset.  Returns
+ * that function's FnDef so the diagnostic can say so instead of blaming the
+ * context shape; NULL for any other rejection. */
+static const FnDef *serial_receiver_with_escaping_effect(EmitCtx *ctx, const Expr *e) {
+    const Expr *kf = e->as.serial_shift_.k_fn;
+    while (kf && kf->kind == EX_ASCRIBE) kf = kf->as.ascribe_.inner;
+    const Binding *rb = NULL;
+    if (kf && kf->kind == EX_VAR) rb = kf->as.var.binding;
+    else if (kf && kf->kind == EX_CLOSURE && kf->as.closure_.closure
+             && kf->as.closure_.closure->fn)
+        rb = kf->as.closure_.closure->fn->binding;
+    const Expr *prog = ctx->program_root;
+    if (!rb || !prog || prog->kind != EX_PROGRAM) return NULL;
+    for (uint32_t i = 0; i < prog->as.program.n; i++) {
+        const Expr *it = prog->as.program.items[i];
+        if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+        const FnDef *fd = it->as.fn_def_.fn;
+        if (fd->binding != rb) continue;
+        bool declared = fd->binding->type.kind == TY_FN
+            && !effect_row_is_empty(fd->binding->type.as.fn.effect_row);
+        bool inferred = fd->inferred_effect_row
+            && !effect_row_is_empty(fd->inferred_effect_row);
+        return (declared || inferred) ? fd : NULL;
+    }
+    return NULL;
+}
+
 char *emit_effects_serial_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
+    const FnDef *eff_recv = serial_receiver_with_escaping_effect(ctx, e);
+    if (eff_recv) {
+        Buf row; buf_init(&row);
+        effect_row_print(&row, eff_recv->inferred_effect_row
+                                   && !effect_row_is_empty(eff_recv->inferred_effect_row)
+                               ? eff_recv->inferred_effect_row
+                               : eff_recv->binding->type.as.fn.effect_row);
+        buf_putc(&row, '\0');
+        const char *nm = eff_recv->binding->name ? eff_recv->binding->name->name : "<lambda>";
+        diag_emit_with_code(DIAG_ERROR, e->span,
+                            TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE,
+                            "serial-shift receiver '%s' performs an effect that escapes it (%s)\n"
+                            "  = note: the receiver runs once, when the continuation is captured, "
+                            "outside the handlers that enclose the serial-reset -- an effect it "
+                            "does not handle itself has nowhere to go\n"
+                            "  = help: handle the effect inside the receiver (or in a function it "
+                            "calls), or perform it outside the serial-reset; run `tur explain "
+                            "TUR-E0706` for details",
+                            nm, row.data ? row.data : "?");
+        buf_free(&row);
+        char *tmp = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "int64_t %s = 0; /* serial-shift: rejected (TUR-E0706) */\n", tmp);
+        return tmp;
+    }
     /* serial-shift-unsupported-context-miscompile: reaching this fallback means
      * the enclosing serial-reset could not lower its delimited context onto the
      * DK machine (sk_can_lower / collect_ctx rejected the shape), so the shift

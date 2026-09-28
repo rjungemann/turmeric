@@ -1,9 +1,22 @@
 # A capturing closure returned as `any` is never freed
 
-**RESOLVED 2026-09-28** -- see [Resolution](#resolution-2026-09-28).  Pinned
-by `tests/fixtures/saffron-returned-closure-env-freed` (leak-checked) and
-`tests/fixtures/saffron-returned-closure-set-not-dropped`;
-`tests/fixtures/tailcall-dyn-leak` lost its `known-leak` marker.
+**RESOLVED 2026-09-28**, by two changes that landed the same day:
+
+- **Statically** -- see [Resolution](#resolution-2026-09-28).  A returned
+  capturing lambda that a `let` owns is freed at scope exit (or at the DK
+  entry boundary in a CPS-lowered caller), with or without a collector.
+  Pinned by `tests/fixtures/saffron-returned-closure-env-freed`
+  (leak-checked) and `tests/fixtures/saffron-returned-closure-set-not-dropped`;
+  `tests/fixtures/tailcall-dyn-leak` lost its `known-leak` marker.
+- **By the collector**, for both dialects it names: a compiled `#lang r7rs`
+  program has allocated from the r7rs-gc collector since 2026-09-25, and a
+  compiled single-unit `#lang saffron` program does too since this date (see
+  [any-widen-stored-in-an-adt-field-has-no-owner](any-widen-stored-in-an-adt-field-has-no-owner.md)).
+  Measured with the repro in a loop -- 3,000,000 `(make-adder i)` closures --
+  the collector ran 11 collections and freed 92 MB with an 8 MB heap.  A
+  closure whose owner the compiler cannot prove (stored, returned onward,
+  handed to a retaining callee) still has no STATIC owner; that residue is
+  [saffron-static-ownership-residue](../reported/saffron-static-ownership-residue.md).
 
 **Severity: low-medium.** One closure env per call that returns a capturing
 lambda, in any dynamic file (`#lang saffron`, `#lang r7rs`). No wrong answer,

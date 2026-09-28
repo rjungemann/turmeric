@@ -54,7 +54,7 @@ outside Saffron.
 
 The `saffron-higher-order` leak this report separated out in "What is NOT this
 bug" is still open and now has its own report:
-[byvalue-recursive-adt-boxes-are-never-freed](../reported/byvalue-recursive-adt-boxes-are-never-freed.md).
+[byvalue-recursive-adt-boxes-are-never-freed](../archive/byvalue-recursive-adt-boxes-are-never-freed.md).
 
 ## Repro
 

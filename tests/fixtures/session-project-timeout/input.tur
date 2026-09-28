@@ -1,0 +1,35 @@
+;;; session-project-timeout -- projecting a timed receive onto binary roles.
+;;
+;; project(Timed, B) = Session[Recv int (Timeout Close Close)]
+;; project(Timed, A) = Session[Send int (Timeout Close Close)]
+;; -- the binary recv-timeout protocol and its dual, so a two-role timed
+;; protocol projects onto exactly what make-session builds for it.
+;;
+;; Expected output:
+;;   5
+(load "stdlib/session.tur")
+
+(defprotocol Timed [A B]
+  (timeout (-> A B int)
+    [ok]
+    [expired]))
+
+(defn role-a [^linear ch :(project Timed A)] : nil
+  (let [ch (send ch 5)]
+    (close ch)))
+
+(defn role-b [^linear ch :(project Timed B)] : nil
+  (match (recv-timeout ch 5000)
+    (Left pair)
+      (let [[v ch] pair]
+        (println v)
+        (close ch))
+    (Right ch)
+      (do (println "timeout") (close ch))))
+
+(defn main [] : int
+  (let [[cb ca] (make-session (Recv int (Timeout Close Close)))]
+    (let [t (session-spawn (fn [] (role-a ca)))]
+      (role-b cb)
+      (session-join t)))
+  0)

@@ -1,0 +1,7 @@
+#lang r7rs
+;; r7rs-srfi-plan S2: assigning to a call form is SRFI 17's generalized
+;; `set!`.  Without the import the shape is an error that says which import
+;; turns it on -- not Turmeric's own "set! target must be a symbol".
+(import (scheme base))
+(define p (list 1 2))
+(set! (car p) 9)

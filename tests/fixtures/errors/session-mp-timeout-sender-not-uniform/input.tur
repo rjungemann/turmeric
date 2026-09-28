@@ -1,0 +1,9 @@
+;; TUR-E0220: A sends into B's timed receive but never learns whether B timed
+;; out, so A's protocol after the message must be the same in both branches.
+;; Here A would have to receive B's reply only when B got the value.
+(defprotocol Bad [A B]
+  (timeout (-> A B int)
+    [ok      (-> B A int)]
+    [expired]))
+
+(defn main [] : int 0)

@@ -3204,6 +3204,12 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (!rb || !rb->drops_local_owned || rb->type.kind != TY_ADT ||
                 !rb->type.as.adt_.def)
                 continue;
+            /* The spine is this local's to free only if the value OWNS it: a
+             * copy of a ^borrow, a global or a container element shares its
+             * boxes with an owner that frees them too (emit_core.c, ownership
+             * provenance). */
+            if (!emit_own_binding_owned(ctx, rb))
+                continue;
             char *rmn = mangle_adt_name(rb->type.as.adt_.def->name);
             size_t rtl = strlen(rmn) + 16;
             char *rtn = (char *)malloc(rtl);
@@ -17668,6 +17674,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else {
                         emit_stmt(ctx, body, arm->body);
                     }
+                    /* byvalue-recursive-adt-boxes-are-never-freed (own half): free
+                     * the spine boxes of an owned, consumed parameter this arm did
+                     * not pass on -- after its value is computed, and never on the
+                     * tail path (its arms end in a return / backedge of their own). */
+                    if (!emit_match_in_tail(ctx, e) && emit_own_match_discharges(ctx, e))
+                        emit_own_arm_discharges(ctx, body, e, arm, (adt_byval && !adt_byval_pbp) ? "." : "->");
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "goto __%s;\n", end_label);
 
@@ -18083,6 +18095,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else {
                         emit_stmt(ctx, body, arm->body);
                     }
+                    /* byvalue-recursive-adt-boxes-are-never-freed (own half): free
+                     * the spine boxes of an owned, consumed parameter this arm did
+                     * not pass on -- after its value is computed, and never on the
+                     * tail path (its arms end in a return / backedge of their own). */
+                    if (!emit_match_in_tail(ctx, e) && emit_own_match_discharges(ctx, e))
+                        emit_own_arm_discharges(ctx, body, e, arm, "->");
 
                     indent_buf(body, ctx->indent);
                     buf_puts(body, "break;\n");

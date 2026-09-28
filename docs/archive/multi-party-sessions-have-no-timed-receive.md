@@ -1,5 +1,49 @@
 # Multi-party sessions have no timed receive
 
+> **RESOLVED 2026-09-28.** All four steps of the fix direction landed:
+>
+> 1. **Syntax.** `(timeout (-> From To T) [ok ...] [expired ...])` in a
+>    `defprotocol`. The deadline stays at the op, as in the binary
+>    `recv-timeout`; the branches are labelled (either order, either may be
+>    empty) and the forms after the `timeout` follow both. The parser appends
+>    that rest to each branch body, so a role cursor walks into a branch and
+>    straight on with no continuation stack (`GI_TIMEOUT`,
+>    `src/compiler/elab_internal.h`).
+> 2. **Projection** (`src/compiler/project.c`) -- the design risk, settled as
+>    the report predicted: only the receiver observes the outcome, so every
+>    OTHER role, the sender included, must project the two branches
+>    identically, else `TUR-E0220`. The receiver gets `Recv T (Timeout ok
+>    expired)`; the sender `Send T (Timeout P P)` -- kept wrapped so two-role
+>    projections are the binary duals `make-session` builds (pinned by
+>    `session-project-timeout`, and swapping the roles is a `TUR-E0001`); a
+>    bystander gets `P`. `proto_equal` had no `TY_TIMEOUT` arm and called any
+>    two Timeouts equal; it recurses now. A protocol containing a `timeout` is
+>    projected onto every role at `defprotocol`, since the role endpoints --
+>    which walk the global tree rather than a projection -- lean on the rule:
+>    a bystander or the sender steps into `ok` knowing `expired` is the same.
+> 3. **`recv-timeout-from`** (`elab_global.c`) returns the same
+>    `TY_SESSION_OFFER` shape as `recv-timeout` and stashes the value in
+>    `tur__rtv_`, so the `Left` arm's `[v ch]` destructuring and the offer
+>    match are the binary code unchanged. `send-to` into, and a plain
+>    `recv-from` at, a timed step are accepted (the latter is the `ok`
+>    outcome). `close`'s bystander skip now shares the ops' helper.
+> 4. **Runtime.** `tur_router_recv_timeout` is the binary timed wait on a
+>    router slot. The part the report did not anticipate is the SENDER: once
+>    the receiver has given up, the message it gave up on must neither block
+>    the sender forever (the router has no `abandoned` flag) nor be delivered
+>    to the receiver's NEXT receive from that peer -- which is what a
+>    non-trivial `expired` branch would otherwise get. An expiry leaves the
+>    slot a `skip`, taken under the slot lock, and the next send on the slot
+>    consumes it and returns. The interpreter's router cell does the same,
+>    over the already-fixed fiber-aware `session_recv_timeout`.
+>
+> Pinned by `tests/fixtures/session-mp-timeout` (relay expired and ok, and a
+> retry that must print the SECOND value) and its `--interpret` twin
+> `session-mp-timeout-turi`, plus four negative fixtures (bystander and
+> sender non-uniform `TUR-E0220`, `recv-timeout-from` on an untimed step
+> `TUR-E0212`, a bad branch label `TUR-E0223`). The guide's Timeouts section
+> points at the new "Timed receives" section instead of saying binary-only.
+
 **Severity: low-medium.** Feature asymmetry, not a defect -- nothing gives a
 wrong answer. Binary sessions have `recv-timeout`; multi-party role endpoints
 have no equivalent, so a role blocked in `recv-from` has no bounded-wait option
@@ -44,7 +88,7 @@ assumes it carries over.
 
 The interpreter dimension is worth stating too. Under `--interpret` a stalled
 role is *detected* (`eval: session recv deadlocked`, exit 1) rather than hanging
--- see [turi-session-expansion-plan.md](../upcoming/turi-session-expansion-plan.md)
+-- see [turi-session-expansion-plan.md](turi-session-expansion-plan.md)
 phase S6 -- so the missing timeout hurts most exactly where it cannot be worked
 around: a compiled multi-party program, which hangs until killed.
 
@@ -65,7 +109,7 @@ Not a small change, and worth scoping before starting:
    `tur_session_recv_timeout` already has; the interpreter's `router_recv` needs
    the timer work described in
    [turi-fiber-recv-timeout-ignores-its-deadline](turi-fiber-recv-timeout-ignores-its-deadline.md)
-   (fix that one first -- a fiber-context timed receive is broken for binary
+   (fixed and archived; fix that one first -- a fiber-context timed receive is broken for binary
    sessions today, and multi-party would inherit the same hole).
 
 Step 2 is where the design risk is; 1, 3 and 4 are mechanical once it is settled.

@@ -13,6 +13,11 @@ File       From                                      Licence
 2.scm      chibi-scheme lib/srfi/2.sld               BSD-3 (chibi, below)
 8.scm      SRFI 8's reference implementation         MIT (SRFI, below)
            Copyright (C) John David Stone (1999)
+17.scm     SRFI 17's reference implementation        MIT (SRFI, below)
+           (setter, set-setter!,
+           getter-with-setter): Copyright (C) Per
+           Bothner (2000).  Its table of standard
+           setters is written for Turmeric
 26.scm     SRFI 26's reference implementation,       public domain
            cut.scm (Al Petrofsky, adapted by
            Sebastian Egner)

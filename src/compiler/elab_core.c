@@ -2447,6 +2447,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_make_protocol = intern_cstr(st, "make-protocol");
     e->sym_send_to       = intern_cstr(st, "send-to");
     e->sym_recv_from     = intern_cstr(st, "recv-from");
+    e->sym_recv_timeout_from = intern_cstr(st, "recv-timeout-from");
     e->sym_global_type   = intern_cstr(st, "Global");
     e->sym_role_type     = intern_cstr(st, "Role");
     e->sym_project_type  = intern_cstr(st, "project");

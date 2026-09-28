@@ -585,6 +585,33 @@ dlopen: librc2.so: undefined symbol: gc_possible_root
 Behaviourally the two are identical; only the symbol is missing. Verified above:
 the symbol is present in `libturt_runtime.a` and absent from the `.so`.
 
+## The dialect collector (`#lang r7rs`, `#lang saffron`)
+
+Everything above is the Turmeric memory model: ownership, `rc<T>` counts and
+the opt-in cycle collector. The two dynamic dialects do not fit it -- Scheme
+data is shared, mutable and cyclic, and a Saffron `any` value is copied into
+arguments, fields and results and handed to dynamic calls whose bodies no
+analysis can see -- so a compiled single-unit program in either dialect swaps
+its whole allocator for a conservative mark-sweep collector
+(`src/runtime/r7gc.c`): every `malloc`/`free` in the unit, the region
+fallbacks, and the runtime archive's allocation hook. It scans the stacks,
+registers, thread-local state and data segment of every thread, and runs
+threads in parallel. Details and limits: `docs/archive/r7rs-gc-plan.md` and
+`docs/archive/r7rs-gc-threads-plan.md`.
+
+| dialect | on since | opt out |
+|---|---|---|
+| `#lang r7rs` | 2026-09-25 | `TUR_R7RS_GC=0` / `--no-r7rs-gc` |
+| `#lang saffron` | 2026-09-28 | `TUR_SAFFRON_GC=0` / `--no-saffron-gc` |
+
+The static drops the compiler emits still run in a collected program; the
+collector reclaims what they cannot prove. Because the collector's heap is
+invisible to LeakSanitizer, `tests/run-leak-check.sh` builds a Saffron
+fixture with the collector OFF -- it measures the ownership the compiler
+emits -- and `tests/run-r7rs-gc.sh` checks what the collector reclaims (every
+dialect fixture under frequent collections, plus bounded-memory loops).
+`TUR_GC_STATS=1` prints what the collector did.
+
 ## Known gaps
 
 - Cycle collection is off by default. When enabled it reclaims live strong
@@ -610,13 +637,19 @@ the symbol is present in `libturt_runtime.a` and absent from the `.so`.
   or lent to a callee the compiler can prove does not retain it (a
   non-pointer-scalar result, every match binder and field read of the
   parameter confined; `tests/fixtures/byval-recursive-adt-lent-to-callee`).
-  Two shapes still leak, by design rather than by accident:
-  - A callee that **consumes** the value and returns part of it (`(defn
-    tail [xs : Lst] : Lst (match xs (Cons h t) t ...))`) takes ownership of
-    the whole spine and hands back only a sub-spine; the boxes above it have
-    no owner. Discharging that at the callee needs an owned/borrowed
-    distinction on the parameter itself, which the move tracking does not
-    carry.
+  A callee that **consumes** the value -- `(defn tail [xs : Lst] : Lst
+  (match xs (Cons h t) t ...))` -- frees what it does not pass on: when its
+  one use of the parameter is a `match` run once per call, each arm frees the
+  box a returned or handed-on binder was copied out of, and the whole
+  sub-spine of a binder it never used (`tests/fixtures/byval-recursive-adt-consumed-by-callee`).
+  Both frees need the value to OWN its spine, which a whole-program
+  provenance check establishes (`emit_core.c`): constructed, or moved from
+  something that was. A copy out of a `^borrow` parameter, a global or a
+  container element shares its boxes with its source and is never freed as
+  if it owned them -- until 2026-09-28 the scope-exit drop did exactly that,
+  a use-after-free. Such copies leak instead; see
+  `docs/reported/byvalue-recursive-shared-copies-leak.md`.
+  One shape still leaks by design rather than by accident:
   - A **`:copy` recursive ADT** -- `Term`, `Subst`, `Stream` in
     `stdlib/logic.tur`, the `Regex` family -- is never freed per value. This
     is a contract, not a gap: drop glue makes a type move-only, and that move

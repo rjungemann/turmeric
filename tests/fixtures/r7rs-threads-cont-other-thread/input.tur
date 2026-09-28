@@ -1,0 +1,15 @@
+#lang r7rs
+;; A re-entrant continuation is a copy of the capturing thread's stack, at
+;; that thread's addresses.  Invoked on another thread it used to copy the
+;; main thread's frames over the worker's and jump into them.  Now the
+;; invocation raises an error object the worker can `guard`, before any wind
+;; thunk runs; the main thread can still re-enter it.
+(import (scheme base) (scheme write) (contwork) (turmeric contcrew))
+(define result
+  (let ((v (capture!)))
+    (if (= v 1)
+        (begin (run-worker)           ; the worker's (saved 99) is refused
+               ((saved-cont) 2))      ; re-entry on the capturing thread
+        v)))
+(write result) (newline)
+(write (worker-answer)) (newline)

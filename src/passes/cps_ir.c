@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "cps.h"
+#include "effect.h"   /* effect_row_is_empty */
 #include "builtins.h"
 #include "globals.h"
 
@@ -437,25 +438,53 @@ static CAtom atom_cvar(CVar v) {
  * a colored module member reads as uncolored, so a caller in the same module
  * emits a DIRECT (unthreaded) call instead of the DK-threaded `__cps` call, and
  * an effect performed in the callee escapes the caller's handler. */
-static bool callee_colored(CpsB *b, const Binding *fn) {
-    if (!fn || !b->program || b->program->kind != EX_PROGRAM) return false;
+static const FnDef *callee_fndef(CpsB *b, const Binding *fn) {
+    if (!fn || !b->program || b->program->kind != EX_PROGRAM) return NULL;
     for (uint32_t i = 0; i < b->program->as.program.n; i++) {
         Expr *it = b->program->as.program.items[i];
         if (!it) continue;
         if (it->kind == EX_FN_DEF && it->as.fn_def_.fn &&
             it->as.fn_def_.fn->binding == fn)
-            return it->as.fn_def_.fn->cps_colored;
+            return it->as.fn_def_.fn;
         if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) {
             DefModule *m = it->as.defmodule_.mod;
             for (uint32_t j = 0; j < m->n_body; j++) {
                 Expr *mb = m->body[j];
                 if (mb && mb->kind == EX_FN_DEF && mb->as.fn_def_.fn &&
                     mb->as.fn_def_.fn->binding == fn)
-                    return mb->as.fn_def_.fn->cps_colored;
+                    return mb->as.fn_def_.fn;
             }
         }
     }
-    return false;
+    return NULL;
+}
+
+static bool callee_colored(CpsB *b, const Binding *fn) {
+    const FnDef *fd = callee_fndef(b, fn);
+    return fd && fd->cps_colored;
+}
+
+/* serial-shift-colored-receiver-rejected: may a perform inside this function
+ * reach a handler OUTSIDE it?  True when its declared or inferred effect row is
+ * non-empty (or unknown -- no FnDef, or a row effect_check never inferred).
+ *
+ * A marshal-reset receiver is called from the per-site shift-body helper as a
+ * plain C function, i.e. through a colored function's DIRECT-ENTRY wrapper,
+ * which runs its __cps body under a fresh DK root.  That is exactly how every
+ * other effect-free colored function is called (a `helper` calling `apply1`
+ * through a fn value colors both, and the call is still direct), and it is
+ * sound for the same reason: a function with an empty row performs nothing
+ * that escapes it, so the fresh root is never asked to handle anything.  Only
+ * an effect that ESCAPES the receiver would need the handler enclosing the
+ * reset -- that is the case the restriction exists for, and it stays refused. */
+static bool fn_effect_may_escape(CpsB *b, const Binding *fn) {
+    const FnDef *fd = callee_fndef(b, fn);
+    if (!fd) return true;
+    if (fd->binding && fd->binding->type.kind == TY_FN
+        && !effect_row_is_empty(fd->binding->type.as.fn.effect_row))
+        return true;
+    if (!fd->inferred_effect_row) return true;   /* never inferred: be safe */
+    return !effect_row_is_empty(fd->inferred_effect_row);
 }
 
 /* ---- pending bindings (drives atomization order) ---------------------- */
@@ -938,11 +967,14 @@ static CTerm *build_callcc(CpsB *b, Expr *e, CVar x, CTerm *body) {
     return t;
 }
 
-/* A named, uncolored top-level fn receiver of a cloneable/serial-shift; NULL
- * otherwise.  The two families gate the receiver slightly differently:
- *   - cloneable: a top-level (is_global) uncolored fn.
+/* A named top-level fn receiver of a cloneable/serial-shift; NULL otherwise.
+ * The two families gate the receiver slightly differently:
+ *   - cloneable: a top-level (is_global) fn.
  *   - serial: any TY_FN value that is not a fat closure; the colored cut only
  *     applies to a global receiver (a local fn value is admitted).
+ * Either way a COLORED receiver is admitted only when no effect can escape it
+ * (fn_effect_may_escape): it is called through its direct-entry wrapper, whose
+ * fresh DK root cannot see the handler enclosing the reset.
  * A capturing-closure receiver returns NULL here; the caller then picks it up
  * via the shift's EX_CLOSURE k_fn (receiver_expr path). */
 static const Binding *marshal_named_receiver(CpsB *b, const Expr *shift,
@@ -954,10 +986,12 @@ static const Binding *marshal_named_receiver(CpsB *b, const Expr *shift,
     if (serial) {
         if (recv->type.kind != TY_FN) return NULL;   /* a function value */
         if (recv->closure_fn_binding || recv->hoist_closure_fn_binding) return NULL;   /* not a fat closure */
-        if (recv->is_global && callee_colored(b, recv)) return NULL;
+        if (recv->is_global && callee_colored(b, recv)
+            && fn_effect_may_escape(b, recv)) return NULL;
     } else {
         if (!recv->is_global) return NULL;           /* a top-level fn */
-        if (callee_colored(b, recv)) return NULL;    /* uncolored receiver only */
+        if (callee_colored(b, recv)
+            && fn_effect_may_escape(b, recv)) return NULL;
     }
     return recv;
 }
@@ -1238,15 +1272,18 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
             continue;
         }
 
-        /* Call frame (1-arg): a call `(f [])` to a top-level uncolored
-         * scalar->scalar fn; the hole is the sole argument, so there is no
-         * captured env. */
+        /* Call frame (1-arg): a call `(f [])` to a top-level scalar->scalar fn
+         * that no effect escapes (uncolored, or colored with an empty row --
+         * the frame wrapper calls it through its direct entry, exactly as the
+         * receiver is called; see fn_effect_may_escape); the hole is the sole
+         * argument, so there is no captured env. */
         if (cur->kind == EX_CALL && cur->as.call_.n_args == 1
             && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
             const Binding *fb = cur->as.call_.fn_binding;
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) SK_REJECT();
             if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) SK_REJECT();         /* not a fat closure */
-            if (callee_colored(b, fb)) SK_REJECT();          /* uncolored target */
+            if (callee_colored(b, fb) && fn_effect_may_escape(b, fb))
+                SK_REJECT();                                 /* nothing escapes it */
             if (!cps_scalar_kind_ok(cur->type.kind)) SK_REJECT();         /* result */
             if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0])) SK_REJECT();  /* arg */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
@@ -1274,7 +1311,8 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
             const Binding *fb = cur->as.call_.fn_binding;
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) SK_REJECT();
             if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) SK_REJECT();         /* not a fat closure */
-            if (callee_colored(b, fb)) SK_REJECT();          /* uncolored target */
+            if (callee_colored(b, fb) && fn_effect_may_escape(b, fb))
+                SK_REJECT();                                 /* nothing escapes it */
             if (!cps_scalar_kind_ok(cur->type.kind)) SK_REJECT();   /* result: scalar */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
             const Expr *a1 = ascribe_peel(cur->as.call_.args[1]);
@@ -1397,7 +1435,8 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                 const Binding *fb = tail->as.call_.fn_binding;
                 if (fb->type.kind != TY_FN) SK_REJECT();
                 if (fb->closure_fn_binding || fb->hoist_closure_fn_binding) SK_REJECT();    /* not a fat closure */
-                if (callee_colored(b, fb)) SK_REJECT();     /* uncolored target */
+                if (callee_colored(b, fb) && fn_effect_may_escape(b, fb))
+                    SK_REJECT();                            /* nothing escapes it */
                 if (tail->type.kind != TY_INT) SK_REJECT(); /* result: int */
                 if (nf >= CL_IR_MAX_FRAMES) SK_REJECT();
                 if (fb->type.as.fn.arity == 0 && tail->as.call_.n_args == 0) {

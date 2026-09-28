@@ -1,14 +1,15 @@
 # SRFI libraries for `#lang r7rs`, after Racket's
 
-Status: **S1 and S0 landed 2026-09-26; S2 landed 2026-09-27 except SRFI 17;
-S3 (the pruning pass and SRFI 1), S4 (SRFI 69), S5 (SRFIs 14 and 13), S6
-(SRFIs 28, 48, 64 and 78) and S7 (SRFIs 4, 27, 35, 41, 42, 60 and 66, and
-78's `check-ec`) landed 2026-09-27** (see their "What shipped" and "What S0
-found" notes). SRFI 17 waited on
-docs/archive/r7rs-prelude-procedures-lose-identity.md, fixed 2026-09-27; it
-can land now. S8 is on demand.
+Status: **S1 and S0 landed 2026-09-26; S2, S3 (the pruning pass and SRFI 1),
+S4 (SRFI 69), S5 (SRFIs 14 and 13), S6 (SRFIs 28, 48, 64 and 78) and S7
+(SRFIs 4, 27, 35, 41, 42, 60 and 66, and 78's `check-ec`) landed
+2026-09-27** (see their "What shipped" and "What S0 found" notes). S2's last
+SRFI, 17, was held by
+docs/archive/r7rs-prelude-procedures-lose-identity.md; that was fixed
+2026-09-27 and **SRFI 17 landed 2026-09-28**, so every stage but S8 is
+complete. S8 is on demand.
 `(import (srfi N))` resolves for every SRFI in the table: the ten built-in
-rows, the three alias rows and the nineteen library rows import, and the
+rows, the three alias rows and the twenty library rows import, and the
 rest are refused with their reason. S0's inventory is [Appendix C](#appendix-c----s0-inventory). Its
 measurement said a big SRFI needs its unreferenced definitions dropped
 before emission. S3 built that first, and an unused `(import (srfi 1))` now
@@ -383,7 +384,7 @@ Legend:
 | 13 | String Libraries | library | library | S5 | needs 14; works over code-point vectors (2.5); `string-map`/`string-for-each` conflict with base (D5) |
 | 14 | Character-set Library | library | library | S5 | inversion lists; standard sets from the Unicode 16 tables, with General Category data added for punctuation/symbol/title-case |
 | 16 | Syntax for procedures of variable arity | re-export | built in | S1 | `(scheme case-lambda)` |
-| 17 | Generalized `set!` | library | library | S2 | gated `set!` arm; setters for `car`, `cdr`, `vector-ref`, `string-ref`, `bytevector-u8-ref`, the `c[ad]r` family, later `hash-table-ref`. Was blocked: `setter` is keyed on procedure identity, which the standard procedures lost until 2026-09-27 (docs/archive/r7rs-prelude-procedures-lose-identity.md) |
+| 17 | Generalized `set!` | library | library | S2 | gated `set!` arm; setters for `car`, `cdr`, `vector-ref`, `string-ref`, `bytevector-u8-ref` and the `c[ad]r` family, plus `getter-with-setter` and `(set! (setter f) s)`. Landed 2026-09-28. Was blocked: `setter` is keyed on procedure identity, which the standard procedures lost until 2026-09-27 (docs/archive/r7rs-prelude-procedures-lose-identity.md). `hash-table-ref` has no setter: SRFI 69 does not ask for one, and an entry for it would make every `(srfi 17)` import carry SRFI 69 |
 | 19 | Time Data Types and Procedures | library | library | S8 | large: dates, julian days, TAI/UTC with a leap-second table, `date->string`; the one C-heavy SRFI |
 | 23 | Error reporting mechanism | re-export | built in | S1 | R7RS `error` is SRFI 23's |
 | 25 | Multi-dimensional Array Primitives | library | library | S8 | reference implementation; names clash with 63 |
@@ -673,7 +674,8 @@ fixture itself runs on both back ends.
   uses, is untouched, because its head is a `.field`, not a Scheme identifier.
 - A fixture per SRFI, and the SRFI's own tests where S0 found them.
 
-> **What shipped (2026-09-27): 2, 8, 26, 31 and 61. 17 is held.**
+> **What shipped (2026-09-27): 2, 8, 26, 31 and 61. 17 followed on
+> 2026-09-28.**
 >
 > - **2, 8, 26, 31** are `syntax-rules` libraries:
 >   - 2 is chibi's `and-let*` (BSD-3);
@@ -712,13 +714,37 @@ fixture itself runs on both back ends.
 >   template, capture the user's variable of the same name; that is fixed
 >   too. `tests/fixtures/r7rs-hygiene-binder-made-later` pins it; it fails
 >   three ways on the old expander.
-> - **17 is held.** Its `setter` is a table keyed by procedure identity, and
->   its standard entries are `car`, `cdr`, `vector-ref` and the like. Those
->   lose their identity today: `(eqv? car car)` is `#f`, because boxing a
->   typed prelude procedure makes a fresh adaptor at each reference. Shipping
->   17 without `(setter car)` would ship its first example broken.
->   docs/reported/r7rs-prelude-procedures-lose-identity.md has the fix
->   directions. 17 lands after that. (Fixed 2026-09-27, archived.)
+> - **17 landed 2026-09-28**, once the identity fix it waited on was in
+>   (docs/archive/r7rs-prelude-procedures-lose-identity.md): its `setter` is
+>   an association list keyed by procedure identity, so `(setter car)` is
+>   `set-car!` only because `(eqv? car car)` is `#t`.
+>   - **The target is an arm of the lowering's `set!`** (`srfi17_place`), on
+>     in a unit that imports this SRFI's `set!`, under any name -- the same
+>     arrangement as 61's `cond`, so the export is R7RS's own `set!` and the
+>     import sits beside `(scheme base)` as one binding. `(set! (f arg ...)
+>     v)` becomes `((setter f) arg ... v)`, with `setter` reached through a
+>     global alias of the SRFI's own definition, so a local `setter` at the
+>     use site does not capture it and the program need not have imported
+>     that name at all.
+>   - **Without the import the shape is an error naming the SRFI**
+>     (`errors/r7rs-srfi-17-not-imported`), where it used to reach Turmeric's
+>     own "set! target must be a symbol, (@ borrow), or (.field struct)" --
+>     one more r7rs-turmeric-syntax-leaks shape, closed in passing.
+>     `(set! (.field x) v)` still means Turmeric's, since its head is not a
+>     Scheme identifier.
+>   - **Settable out of the box**: `car`, `cdr`, the 28 members of the
+>     `c[ad]r` family, `vector-ref`, `string-ref`, `bytevector-u8-ref`, and
+>     `setter` itself, which is what makes `(set! (setter f) s)` work.
+>     `getter-with-setter` is the SRFI's.
+>   - **An unused import costs nothing.** The table is built on first use, as
+>     SRFI 14's char sets are: an initializer that allocates is not a
+>     candidate for S3's pruning pass, so a table written as one `define`
+>     would have pinned the whole `c[ad]r` family. Measured: `(import (srfi
+>     17))` added to a `(write 1)` program emits byte-identical C.
+>   - `tests/fixtures/r7rs-srfi-17` covers the standard setters, four levels
+>     of `c[ad]r`, `getter-with-setter`, `(set! (setter f) s)`, the hygiene of
+>     the plumbing and the `guard`-able error for a procedure with no setter,
+>     on both back ends. SRFI 17 has no suite of its own (Appendix C).
 > - **Reported on the way** (docs/reported/):
 >   - `r7rs-dead-mistyped-call-refused-at-compile-time`: `(if x (car x) 0)`
 >     with `x` bound to `#f` does not compile (fixed 2026-09-28, archived);

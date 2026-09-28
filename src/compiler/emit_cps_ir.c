@@ -8618,6 +8618,40 @@ static char *emit_cloneable_pure_arm(CE *ce, const CTerm *t) {
  * dk_shift env carries the fn ptr and the body calls it as one; for a CLOSURE
  * receiver (receiver_expr) the closure's thunk is baked in here and the dk_shift
  * env carries the closure env instead (see emit_cl_shift_env). */
+/* The C spelling of a SERIAL receiver's continuation parameter.  Both
+ * spellings the language offers for it reach here: `k : ptr<void>` (the
+ * workflow.tur convention) lowers to `void *`, while the typed
+ * `k : serial-cont` -- `cont<int>`, what stdlib/serial.tur and the guides use
+ * -- lowers to the int64 carrier.  The DK chain is handed over in whichever
+ * the receiver declares; keying on the family alone passed a pointer to an
+ * int64_t param (-Wint-conversion, a hard error on GCC >= 14 and macOS clang)
+ * for a closure receiver, and called a named one through a mismatched
+ * function-pointer type.  Found while admitting colored receivers
+ * (serial-shift-colored-receiver-rejected), which made the typed spelling
+ * reachable from more shapes. */
+static const char *serial_recv_kty(CE *ce, const CTerm *t) {
+    TypeKind pk = TY_PTR_VOID;
+    const Type *pt = NULL;
+    if (t->as.cloneable.receiver_expr) {
+        /* The receiver's one parameter is its LAST: a capturing closure's
+         * FnDef has the synthesized `__env_p_<id>` env param prepended. */
+        const struct Closure *cl = t->as.cloneable.receiver_expr->as.closure_.closure;
+        if (cl && cl->fn && cl->fn->n_params > 0 && cl->fn->params[cl->fn->n_params - 1]) {
+            pt = &cl->fn->params[cl->fn->n_params - 1]->type;
+            pk = pt->kind;
+        }
+    } else if (t->as.cloneable.receiver
+               && t->as.cloneable.receiver->type.kind == TY_FN
+               && t->as.cloneable.receiver->type.as.fn.arity >= 1) {
+        const Type *ft = &t->as.cloneable.receiver->type;
+        pk = ft->as.fn.arg_kinds[0];
+        pt = ft->as.fn.arg_full_types ? ft->as.fn.arg_full_types[0] : NULL;
+    }
+    const char *ct = binder_ctype_full(ce->ctx, pk, pt);
+    size_t L = ct ? strlen(ct) : 0;
+    return (L && ct[L - 1] == '*') ? "void *" : "int64_t";
+}
+
 static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
                                  const char *cont_setup, const char *cont_arg) {
     if (t->as.cloneable.receiver_expr) {
@@ -8641,8 +8675,9 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
          * serial receiver is handed a raw DK chain typed `ptr<void>`, so its thunk
          * param is void*.  A blanket int64_t cast makes a pointer from an integer
          * for the serial void* k; a blanket void* cast makes an integer from a
-         * pointer for the cloneable int64_t k. */
-        const char *kty = t->as.cloneable.serial ? "void *" : "int64_t";
+         * pointer for the cloneable int64_t k.  A serial k is itself either
+         * spelling (serial_recv_kty). */
+        const char *kty = t->as.cloneable.serial ? serial_recv_kty(ce, t) : "int64_t";
         buf_printf(ce->helpers,
             "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
             "    return (intptr_t)%s((void *)env, (%s)(intptr_t)%s);\n}\n",
@@ -8659,8 +8694,9 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
          * integer register).  Key the callee pointer type AND its argument cast on
          * the same `serial` bit the closure branch uses two cases up for the
          * continuation-arg cast; the non-serial (cloneable) case keeps int64_t, so
-         * its emitted C is byte-identical to before. */
-        const char *kty = t->as.cloneable.serial ? "void *" : "int64_t";
+         * its emitted C is byte-identical to before.  (A serial k's own
+         * spelling is read off the receiver's declared parameter.) */
+        const char *kty = t->as.cloneable.serial ? serial_recv_kty(ce, t) : "int64_t";
         buf_printf(ce->helpers,
             "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
             "    return (intptr_t)((int64_t (*)(%s))(intptr_t)env)((%s)(intptr_t)%s);\n}\n",

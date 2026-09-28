@@ -20,6 +20,10 @@
 #      them the r7rs-threads-* fixtures under frequent collections (every
 #      allocation, or every 31st for the two long ones), plus a lint over
 #      the release points.
+#   1b. Every compiled `#lang saffron` fixture the same way: since
+#      2026-09-28 the collector is a Saffron program's allocator too
+#      (any-widen-stored-in-an-adt-field-has-no-owner; TUR_SAFFRON_GC=0 opts
+#      out), so the same missing-root hazard applies to its `any` boxes.
 #   4. Reclamation (Linux only, where `ulimit -v` binds): a loop that builds
 #      and drops a million small lists runs under a 256 MiB address-space
 #      limit.  With the collector it fits; the same program without it
@@ -56,9 +60,53 @@ for d in tests/fixtures/*/; do
     case "$(basename "$d")" in
         r7rs-*) fixtures+=("$d") ;;
         *) IFS= read -r first < "$d/input.tur"
-           [[ "$first" == "#lang r7rs"* ]] && fixtures+=("$d") ;;
+           [[ "$first" == "#lang r7rs"* ]] && fixtures+=("$d")
+           # 1b: compiled Saffron fixtures (an interp-only one is not built).
+           [[ "$first" == "#lang saffron"* ]] && [ ! -f "$d/requires.interp-only" ] \
+               && fixtures+=("$d") ;;
     esac
 done
+
+# A hang in a threaded case is a deadlock or a cycle walk, and the two look
+# nothing alike on the stack (docs/archive/r7rs-gc-threads-lifecycle-rare-hang.md
+# "If it recurs").  On CI the process is gone by the time anyone looks, so a
+# case that outlives its deadline has every thread's stack printed first, with
+# whichever debugger the host has.
+dump_stacks() {
+    local pid="$1"
+    if command -v gdb > /dev/null 2>&1; then
+        gdb -p "$pid" -batch -ex "thread apply all bt" 2>&1 | grep -E '^(Thread|#)' | head -400
+    elif command -v lldb > /dev/null 2>&1; then
+        lldb -p "$pid" --batch -o "thread backtrace all" 2>&1 | head -400
+    elif [ "$HOST" = Darwin ] && command -v sample > /dev/null 2>&1; then
+        sample "$pid" 1 -mayDie 2>&1 | head -400
+    else
+        echo "(no gdb, lldb or sample here to print the stacks)"
+    fi
+}
+
+# run_deadline <secs> <out> <err> <cmd...>: timeout(1)'s exit codes (124 when
+# the deadline passed), but the stacks are dumped into <err> before the kill.
+# Standard input is $RD_STDIN (default /dev/null).  It polls every tenth of a
+# second, so a case that finishes at once is not held for a whole second:
+# every fixture in section 1 goes through here.
+run_deadline() {
+    local secs="$1" out="$2" err="$3" pid ticks=0
+    shift 3
+    "$@" < "${RD_STDIN:-/dev/null}" > "$out" 2> "$err" &
+    pid=$!
+    while kill -0 "$pid" 2> /dev/null; do
+        if [ "$ticks" -ge $((secs * 10)) ]; then
+            { echo "--- stacks at the ${secs}s deadline ---"; dump_stacks "$pid"; } >> "$err" 2>&1
+            kill -9 "$pid" 2> /dev/null
+            wait "$pid" 2> /dev/null
+            return 124
+        fi
+        sleep 0.1
+        ticks=$((ticks + 1))
+    done
+    wait "$pid"
+}
 
 one() {
     local name; name="$(basename "$1")"
@@ -76,13 +124,17 @@ one_case() {
         echo "FAIL $name -- build failed: $(grep -m1 -i error "$WORK/$name.build" | cut -c1-160)"
         return
     fi
-    (cd "$dir" && ASAN_OPTIONS=detect_leaks=0 TUR_GC_TORTURE="$TORTURE" \
-        timeout 300 "$WORK/$name" "${args[@]}" < "$stdin" \
-        > "$WORK/$name.out" 2> "$WORK/$name.err") 2> /dev/null
+    # Through run_deadline, so a fixture that hangs has every thread's stack
+    # in the log: on CI the process is gone by the time anyone looks, and a
+    # bare "timed out" cannot tell a deadlock from a cycle walk (the macOS
+    # r7rs-threads-lifecycle timeout on #956 left nothing else to go on).
+    (cd "$dir" && ASAN_OPTIONS=detect_leaks=0 TUR_GC_TORTURE="$TORTURE" RD_STDIN="$stdin" \
+        run_deadline 300 "$WORK/$name.out" "$WORK/$name.err" "$WORK/$name" "${args[@]}") 2> /dev/null
     rc=$?
     want=0; [ -f "$dir/expected.exit" ] && want="$(tr -d '[:space:]' < "$dir/expected.exit")"
     if [ "$rc" = 124 ]; then
         echo "FAIL $name -- timed out (>300s) under TUR_GC_TORTURE=$TORTURE"
+        sed -n '/^--- stacks at the/,$p' "$WORK/$name.err"
     elif { [ "$want" = nonzero ] && [ "$rc" = 0 ]; } || { [ "$want" != nonzero ] && [ "$rc" != "$want" ]; }; then
         echo "FAIL $name -- exit $rc, expected $want: $(tail -1 "$WORK/$name.err" | cut -c1-120)"
     elif ! diff -q "$WORK/$name.out" "$dir/expected.stdout" > /dev/null; then
@@ -92,8 +144,8 @@ one_case() {
         echo "PASS $name"
     fi
 }
-export -f one one_case
-export TUR WORK TORTURE
+export -f one one_case run_deadline dump_stacks
+export TUR WORK TORTURE HOST
 
 printf '%s\n' "${fixtures[@]}" | xargs -P "$(nproc)" -I{} bash -c 'one "$@"' _ {}
 for d in "${fixtures[@]}"; do cat "$WORK/$(basename "$d").result"; done | tee "$WORK/results"
@@ -218,44 +270,6 @@ else
     echo "PASS threads-run (a thread starts, joins and prints under the collector, silently, as without it)"
 fi | tee -a "$WORK/results"
 
-# A hang in a threaded case is a deadlock or a cycle walk, and the two look
-# nothing alike on the stack (docs/archive/r7rs-gc-threads-lifecycle-rare-hang.md
-# "If it recurs").  On CI the process is gone by the time anyone looks, so a
-# case that outlives its deadline has every thread's stack printed first, with
-# whichever debugger the host has.
-dump_stacks() {
-    local pid="$1"
-    if command -v gdb > /dev/null 2>&1; then
-        gdb -p "$pid" -batch -ex "thread apply all bt" 2>&1 | grep -E '^(Thread|#)' | head -400
-    elif command -v lldb > /dev/null 2>&1; then
-        lldb -p "$pid" --batch -o "thread backtrace all" 2>&1 | head -400
-    elif [ "$HOST" = Darwin ] && command -v sample > /dev/null 2>&1; then
-        sample "$pid" 1 -mayDie 2>&1 | head -400
-    else
-        echo "(no gdb, lldb or sample here to print the stacks)"
-    fi
-}
-
-# run_deadline <secs> <out> <err> <cmd...>: timeout(1)'s exit codes (124 when
-# the deadline passed), but the stacks are dumped into <err> before the kill.
-run_deadline() {
-    local secs="$1" out="$2" err="$3" pid waited=0
-    shift 3
-    "$@" > "$out" 2> "$err" &
-    pid=$!
-    while kill -0 "$pid" 2> /dev/null; do
-        if [ "$waited" -ge "$secs" ]; then
-            { echo "--- stacks at the ${secs}s deadline ---"; dump_stacks "$pid"; } >> "$err" 2>&1
-            kill -9 "$pid" 2> /dev/null
-            wait "$pid" 2> /dev/null
-            return 124
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-    wait "$pid"
-}
-
 fixture_case() {
     local tag="$1" dir="tests/fixtures/$2" torture="${4:-1}" want got rc
     if ! "$TUR" build "$dir/input.tur" -o "$WORK/$tag" > "$WORK/$tag.build" 2>&1; then
@@ -358,6 +372,39 @@ if [ "$esc" = "3000000" ]; then
     echo "PASS reclaim-escapes (a million guards and call/cc escapes fit in 256 MiB)"
 else
     echo "FAIL reclaim-escapes -- a million guards and call/cc escapes did not fit in 256 MiB (got '$esc')"
+fi | tee -a "$WORK/results"
+# Saffron (any-widen-stored-in-an-adt-field-has-no-owner): the same loop in
+# the dynamic dialect -- rebuild a 100-cell list of `any`, map it through a
+# dynamic call and fold it, 100000 times.  Measured at 20000 iterations: 84 MB
+# peak without the collector, growing linearly; 6 MB with it.
+cat > "$WORK/saffron-churn.tur" <<'EOF'
+#lang saffron
+(defdata Lst [] (Cons [hd : any tl : any]) (Nil))
+(defn build [n acc] (if (= n 0) acc (build (- n 1) (Cons n acc))))
+(defn lmap [f xs] (match xs (Cons h t) (Cons (f h) (lmap f t)) (Nil) (Nil)))
+(defn lsum [xs acc] (match xs (Cons h t) (lsum t (+ acc h)) (Nil) acc))
+(defn add-one [x] (+ x 1))
+(defn spin [i total]
+  (if (= i 0)
+    total
+    (spin (- i 1) (+ total (lsum (lmap add-one (build 100 (Nil))) 0)))))
+(defn main [] : int (println (spin 100000 0)) 0)
+EOF
+sreclaim() {
+    local tag="$1"; shift
+    if ! env "$@" "$TUR" build "$WORK/saffron-churn.tur" -o "$WORK/schurn-$tag" > "$WORK/schurn-$tag.build" 2>&1; then
+        echo "build-failed"; return
+    fi
+    (ulimit -v 262144; "$WORK/schurn-$tag" 2>/dev/null) 2>/dev/null || true
+}
+swith="$(sreclaim gc TUR_SAFFRON_GC=1)"
+swithout="$(sreclaim plain TUR_SAFFRON_GC=0)"
+if [ "$swith" != "515000000" ]; then
+    echo "FAIL reclaim-saffron -- with the collector the churn did not fit in 256 MiB (got '$swith')"
+elif [ "$swithout" = "515000000" ]; then
+    echo "FAIL reclaim-saffron -- the churn fits in 256 MiB WITHOUT the collector, so this check bites on nothing"
+else
+    echo "PASS reclaim-saffron (256 MiB: fits with the collector, not without)"
 fi | tee -a "$WORK/results"
 else
     echo "PASS reclaim (skipped on $HOST: no address-space limit to test under)" | tee -a "$WORK/results"

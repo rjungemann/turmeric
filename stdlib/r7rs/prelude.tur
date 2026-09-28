@@ -1930,6 +1930,9 @@
       size_t n;
       void *tb_root, *tb_armed, *dk_driver, **esc;
       int dk_depth, esc_n;
+      // The thread that captured it: the image is a copy of THAT thread's
+      // stack, so no other thread may jump into it (r7rs-cont-here?__).
+      pthread_t owner;
   } r7k_cont;
   #if defined(__SANITIZE_ADDRESS__)
   #define R7K_ASAN 1
@@ -2077,6 +2080,7 @@
       r7k_jump(c);
   } */
   r7k_cont *volatile c = (r7k_cont *)calloc(1, sizeof(r7k_cont));
+  c->owner = pthread_self();
   tur_dk_pinned = 1;
   volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
   mark[0] = 0;
@@ -2122,6 +2126,24 @@
   ```c
   return c == NULL;
   ```)
+;;; r7rs-cont-here?__ -- internal: #t when the calling thread is the one
+;;; that captured the continuation.  Its image is a copy of that thread's
+;;; stack at that thread's addresses, so a jump into it from any other thread
+;;; would copy one thread's frames over another's.
+(defn r7rs-cont-here?__ [c : ptr<void>] : bool
+  ```c
+  r7k_cont *k = (r7k_cont *)((uintptr_t)c & ~(uintptr_t)1);
+  return pthread_equal(k->owner, pthread_self()) != 0;
+  ```)
+;;; r7rs-cont-check-here__ -- internal: raise an error object, one a program
+;;; can `guard`, when a continuation is invoked on a thread other than the
+;;; one that captured it.  Checked before the wind travel, so no `before` or
+;;; `after` thunk runs for a jump that is refused.
+(defn r7rs-cont-check-here__ [c : ptr<void>] : nil
+  (if (r7rs-cont-here?__ c)
+    nil
+    (do (r7rs-signal__ "call/cc: continuation invoked on a thread other than the one that captured it")
+        nil)))
 ;;; r7rs-cont-restore__ -- internal: copy the captured stack back and jump in.
 (defn r7rs-cont-restore__ [c : ptr<void>] : nil
   ```c
@@ -2203,6 +2225,7 @@
       (if (r7rs-cont-resumed?__ c)
         r7rs-cont-delivered__
         (f (fn [& vs : any] : any
+             (r7rs-cont-check-here__ c)
              (r7rs-travel-to__ saved)
              (set! r7rs-cont-delivered__ (r7rs-values-of-list__ (r7rs-chain->list__ (:: vs (Cons any)))))
              (r7rs-cont-restore__ c)))))))
@@ -2582,7 +2605,8 @@
              (:: (str->sym "srfi-6") any) (:: (str->sym "srfi-8") any)
              (:: (str->sym "srfi-9") any) (:: (str->sym "srfi-11") any)
              (:: (str->sym "srfi-13") any) (:: (str->sym "srfi-14") any)
-             (:: (str->sym "srfi-16") any) (:: (str->sym "srfi-23") any)
+             (:: (str->sym "srfi-16") any) (:: (str->sym "srfi-17") any)
+             (:: (str->sym "srfi-23") any)
              (:: (str->sym "srfi-26") any) (:: (str->sym "srfi-27") any)
              (:: (str->sym "srfi-28") any) (:: (str->sym "srfi-30") any)
              (:: (str->sym "srfi-31") any) (:: (str->sym "srfi-34") any)

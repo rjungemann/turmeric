@@ -1089,7 +1089,7 @@ linear scan. That constant is the thing worth attacking in the persistent path,
 and it is not diagnosed here: a microbenchmark that tried to isolate it was
 optimized away entirely -- the same trap as SX0(a)'s closure baseline -- and a
 number from a folded loop is worse than no number. Filed under
-[../reported/solver-hot-structures-linear-scans.md](../reported/solver-hot-structures-linear-scans.md).
+[solver-hot-structures-linear-scans.md](solver-hot-structures-linear-scans.md) (resolved 2026-09-28).
 
 **The two benchmarks this phase names do not measure what it needs.** Both
 `bench-logic-query.tur` and `bench-backtrack-n-queens.tur` are self-contained

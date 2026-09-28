@@ -319,10 +319,21 @@ jobs:
     needs: [build, build-windows, docs]
     # startsWith(...refs/tags/) is what makes workflow_dispatch safe: a manual
     # run produces artifacts to inspect and never creates a release.
+    #
+    # Every leg must SUCCEED, not merely avoid cancellation.  Checking only for
+    # 'cancelled' let a FAILED leg through, and `files: artifacts/*` then
+    # published whatever had managed to upload: v0.56.1 and v0.56.2 both went
+    # out with no turmeric-<tag>-linux-aarch64.tar.gz, with nothing on the
+    # release page or in the run's conclusion-at-a-glance saying a platform was
+    # missing.  One compile error became two silently incomplete releases.
+    # A broken leg must strand the tag instead -- that is recoverable, by
+    # re-running this workflow once the build is fixed, and a partial release
+    # is not.
     if: >-
       always() && startsWith(github.ref, 'refs/tags/')
-      && needs.build.result != 'cancelled'
-      && needs.build-windows.result != 'cancelled'
+      && needs.build.result == 'success'
+      && needs.build-windows.result == 'success'
+      && needs.docs.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write

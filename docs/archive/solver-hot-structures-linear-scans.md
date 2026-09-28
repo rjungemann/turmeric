@@ -1,5 +1,34 @@
 # The refinement solver's hot structures are linear scans
 
+> **RESOLVED 2026-09-28.** All three scans are gone, with no verdict change:
+>
+> - **#1** `euf_index` / `euf_lookup` intern through an open-addressed index
+>   keyed on the hash-cons id (`VCTerm.id`), load factor <= 1/2. It is
+>   trail-aware without tombstones: terms are only appended and `euf_undo_to`
+>   truncates them LIFO, and clearing the slot of the most recent insert under
+>   linear probing restores the table exactly. A grow rehashes the live terms
+>   in index order, which is the table incremental inserts would have built,
+>   so LIFO undo stays exact across it.
+> - **#2** `euf_close` is a signature-table fixpoint: each round buckets every
+>   application by (op, arity, symbol, argument roots) and merges on a bucket
+>   hit, `O(n * arity)` per round instead of all pairs. Its exit condition (a
+>   round that merges nothing) is the all-pairs loop's (no congruent pair has
+>   two roots), so it computes the same closure. `literal_conflict`'s pair scan
+>   became one pass over a root map too.
+> - **#3** the S3-shared terms are recorded at registration (`euf_shared_at`)
+>   and truncated by undo, so `collect_shared` reads only the eligible terms;
+>   its telemetry count is unchanged by construction.
+>
+> Measured: `tur_refine_corpus` over `tests/corpus/smtlib` is **byte-identical**
+> before and after, verdicts and per-benchmark cap telemetry alike, and the
+> 512-term stress unit (`qf_lra_deep_arith_chain_sat.smt2`) drops from ~510 ms
+> to ~70 ms (Debug + ASan, 3 runs each). `tur_refine_solver` (both
+> `TUR_REFINE_EUF` modes), the refine/gadt fixtures (165/0) and the
+> `refine-fuzz-src` smoke (same 2 report-only suspicious as the baseline)
+> pass. The `logic.tur` `Subst` scan and section 4 below were never this
+> report's to close -- they belong to SX2 and to the archived
+> sr4-byvalue-recursive-sum-walk-copies-per-link respectively.
+
 **Severity:** low today, structural. Every one of these is inside a cap, so none
 of them can hang a compile -- they make the caps bite sooner than they need to,
 which costs completeness rather than time. Worth fixing when the surrounding

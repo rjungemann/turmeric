@@ -1,0 +1,97 @@
+;;; serial-shift-colored-receiver -- a COLORED marshal-reset receiver.
+;;
+;; serial-shift-colored-receiver-rejected: a receiver that called anything
+;; colored -- here, anything that calls through a fn value -- was TUR-E0706,
+;; although it runs once, at capture, and is never marshalled.  The shift body
+;; calls the receiver as a plain C function, i.e. through a colored function's
+;; direct-entry wrapper, whose fresh DK root cannot see a handler enclosing the
+;; reset.  That only matters for an effect that ESCAPES the receiver, and it
+;; is how every other effect-free colored function is already called (apply1
+;; below colors every caller, and they all call it directly).  So a colored
+;; receiver with an empty effect row is admitted; one an effect escapes is
+;; still refused (errors/serial-shift-receiver-effect-escapes).
+;;
+;; The shapes:
+;;   1. the report's repro -- a lambda receiver calling a colored helper.
+;;   2. a NAMED colored receiver that marshals the continuation to bytes and
+;;      back before resuming it (the path the receiver exists for).
+;;   3. a CAPTURING closure receiver typed `k : serial-cont`, calling a colored
+;;      helper.  `serial-cont` lowers to the int64 carrier, and the shift body
+;;      used to pass the DK chain as `void *` regardless -- a -Wint-conversion,
+;;      a hard error on GCC >= 14 and macOS clang.
+;;   4. a receiver whose callee performs an effect AND handles it: colored,
+;;      empty row, admitted.
+;;   5. the cloneable family, same rule: a colored receiver resuming twice.
+;;   6. colored LEAVES -- the context callees (1-arg, 2-arg with a cstr env,
+;;      and a do-tail), which the resumed frames call the same direct way.
+;;      Each capture is marshalled to bytes and back before it is resumed.
+;;
+;; Expected output:
+;;   4
+;;   11
+;;   125
+;;   43
+;;   23
+;;   21
+;;   40
+;;   7
+(load "stdlib/serial.tur")
+
+(defeffect Ask [] :int)
+
+(defn page [env : cstr hole : int] : int (+ hole 1))
+(defn apply1 [^fat f : (fn [int] int) v : int] : int (f v))
+
+;; 1. The repro: `helper` is colored because it calls through a fn value.
+(defn helper [k : serial-cont] : int (apply1 (fn [x : int] : int (k x)) 3))
+(defn run-repro [] : int
+  (serial-reset (page "" (serial-shift (fn [k : serial-cont] : int (helper k)) 0))))
+
+;; 2. Named colored receiver, resuming a marshalled round trip of k.
+(defn roundtrip [k : serial-cont x : int] : int
+  (match (bytes->serial-cont (serial-cont->bytes k))
+    (Ok k2)  (k2 x)
+    (Err m)  (do (println m) -1)))
+(defn recv-named [k : serial-cont] : int
+  (apply1 (fn [x : int] : int (roundtrip k x)) 10))
+(defn run-named [] : int
+  (serial-reset (page "" (serial-shift recv-named 0))))
+
+;; 3. Capturing closure receiver typed serial-cont.
+(defn helper2 [k : serial-cont base : int] : int
+  (apply1 (fn [x : int] : int (+ base (roundtrip k x))) 20))
+(defn run-closure [base : int] : int
+  (serial-reset (+ 100 (serial-shift (fn [k : serial-cont] : int (helper2 k base)) 0))))
+
+;; 4. The receiver's callee performs Ask and handles it itself.
+(defn asks [] : int (+ (perform (Ask)) 1))
+(defn ask41 [] : int
+  (handle (asks)
+    (Ask [] r) (resume r 41)))
+(defn recv-handled [k : serial-cont] : int (k (ask41)))
+(defn run-handled [] : int
+  (serial-reset (page "" (serial-shift recv-handled 0))))
+
+;; 5. Cloneable: a colored receiver resuming the clone twice.
+(defn sum-two-via [k] : int
+  (apply1 (fn [x : int] : int
+            (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) x)
+               (tur_cloneable_cont_resume k (+ x 1))))
+          1))
+
+;; 6. Colored leaves.
+(defn inc-via  [x : int] : int (apply1 (fn [y : int] : int (+ y 1)) x))
+(defn page-via [env : cstr hole : int] : int (apply1 (fn [y : int] : int (* y 2)) hole))
+(defn done-via [] : int (apply1 (fn [y : int] : int y) 7))
+(defn recv20   [k : serial-cont] : int (roundtrip k 20))
+
+(defn main [] : int
+  (println (run-repro))       ; page(3)            = 4
+  (println (run-named))       ; page(10)           = 11
+  (println (run-closure 5))   ; 5 + (100 + 20)     = 125
+  (println (run-handled))     ; page(41 + 1)       = 43
+  (println (cloneable-reset (+ 10 (cloneable-shift sum-two-via 0))))  ; 11 + 12 = 23
+  (println (serial-reset (inc-via (serial-shift recv20 0))))          ; 20 + 1 = 21
+  (println (serial-reset (page-via "p" (serial-shift recv20 0))))     ; 20 * 2 = 40
+  (println (serial-reset (do (serial-shift recv20 0) (done-via))))    ; 7
+  0)

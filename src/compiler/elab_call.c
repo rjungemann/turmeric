@@ -4176,6 +4176,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
     if (!scope_lookup(e->scope, name)) {
         if (name == e->sym_send_to)       return elab_send_to(e, call);
         if (name == e->sym_recv_from)     return elab_recv_from(e, call);
+        if (name == e->sym_recv_timeout_from) return elab_recv_timeout_from(e, call);
         if (name == e->sym_send)          return elab_session_send(e, call);
         if (name == e->sym_recv)          return elab_session_recv(e, call);
         /* SS5: close handles both TY_SESSION (binary) and TY_ROLE (multi-party) */
