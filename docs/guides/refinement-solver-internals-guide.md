@@ -316,7 +316,7 @@ closure is a signature-table fixpoint: each round buckets every application by
 rather than being found by an all-pairs compare -- `O(n * arity)` per round.
 Literal conflicts are one pass over a root map. `REFINE_MAX_EUF_TERMS` bounds
 the rest. (Until 2026-09-28 all three were `O(n^2)` scans; see
-[solver-hot-structures-linear-scans](../archive/solver-hot-structures-linear-scans.md).) Textbook treatment: Harrison; Bradley &
+[solver-hot-structures-linear-scans](https://github.com/rjungemann/turmeric/blob/main/docs/archive/solver-hot-structures-linear-scans.md).) Textbook treatment: Harrison; Bradley &
 Manna (see References).
 
 **The state is incremental across cubes.** S1 and S3 hold ONE `EufState` and
