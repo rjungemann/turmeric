@@ -1,0 +1,20 @@
+#lang r7rs
+;; The Scheme half: a continuation captured on the main thread, and a worker
+;; body that tries to invoke it inside a `guard` and keeps what it caught.
+(define-library (contwork)
+  (export capture! worker-body! worker-answer saved-cont)
+  (import (scheme base))
+  (begin
+    (define saved #f)
+    (define (saved-cont) saved)
+    ;; Returns 1, and again whatever a later invocation of `saved` passes.
+    (define (capture!)
+      (call/cc (lambda (c) (set! saved c) 1)))
+    (define answer 'not-run)
+    (define (worker-body!)
+      (set! answer
+            (guard (e ((error-object? e) (error-object-message e)))
+              (saved 99)
+              'jumped))
+      #t)
+    (define (worker-answer) answer)))

@@ -2953,6 +2953,10 @@ typedef struct R7kCont {
     uint32_t       *d_idx;
     uintptr_t      *d_val;
     size_t          n_d;
+    /* The thread that captured it (r7rs-cont-here?__): the image is a copy of
+     * that thread's stack.  turi starts no threads of its own today; this
+     * keeps the interpreter's answer the compiled prelude's. */
+    pthread_t       owner;
 } R7kCont;
 /* r7rs-callcc-memory-never-freed: the interpreter cannot tell when a
  * continuation is dead -- it has no collector, and a continuation procedure
@@ -3093,6 +3097,7 @@ static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n
     (void)a; (void)n; (void)ud;
     R7kCont *volatile c = (R7kCont *)calloc(1, sizeof(R7kCont));
     TuriEnv *volatile venv = env;
+    c->owner = pthread_self();
     turi_cont_pin();
     c->state = turi_cont_state_capture(env);
     volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
@@ -3108,6 +3113,11 @@ static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n
 static TuriValue native_r7rs_cont_resumed(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     return turi_bool((r7rs_arg_int(a, n, 0) & 1) != 0);
+}
+static TuriValue native_r7rs_cont_here(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    R7kCont *c = (R7kCont *)(uintptr_t)(r7rs_arg_int(a, n, 0) & ~(int64_t)1);
+    return turi_bool(pthread_equal(c->owner, pthread_self()) != 0);
 }
 static TuriValue native_r7rs_cont_null(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -4277,6 +4287,7 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-cont-capture__",  native_r7rs_cont_capture,  NULL);
     turi_env_register_native(env, "r7rs-cont-resumed?__", native_r7rs_cont_resumed,  NULL);
     turi_env_register_native(env, "r7rs-cont-null?__",    native_r7rs_cont_null,     NULL);
+    turi_env_register_native(env, "r7rs-cont-here?__",    native_r7rs_cont_here,     NULL);
     turi_env_register_native(env, "r7rs-cont-restore__",  native_r7rs_cont_restore,  NULL);
     turi_env_register_native(env, "r7rs-toplevel__",       native_r7rs_toplevel,      NULL);
     /* r7rs-lang-plan T4: stdlib/r7rs/eval.tur. */
