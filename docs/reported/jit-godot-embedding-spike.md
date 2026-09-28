@@ -52,7 +52,7 @@
 > - Not the real shim -- a stand-in plugin with one exported function.
 > - Windows only, Release libturi only. The macOS `MAP_JIT` / hardened-runtime
 >   question (spike question 2) is untouched, and J5 in
->   [godot-binding-refresh-plan.md](../upcoming/godot-binding-refresh-plan.md)
+>   [godot-binding-refresh-plan.md](../archive/godot-binding-refresh-plan.md)
 >   records that MIR's interpreter tier is *not* an escape hatch there.
 > ### Question 4 answered too: the cache is not needed on this route
 >

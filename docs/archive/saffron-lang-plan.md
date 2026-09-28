@@ -1083,7 +1083,7 @@ shape that must ship behind `--enable=`:
 /* src/runtime/experiments.c -- the first live row since option-niche. */
 { "saffron",
   "dynamically typed dialect (#lang saffron)",
-  "docs/upcoming/saffron-lang-plan.md",
+  "docs/archive/saffron-lang-plan.md",
   "0.45.0",                   /* introduced */
   "0.52.0",                   /* expires_at -- advisory, never blocks a cut */
   XF_LIFECYCLE_PROTOTYPE,

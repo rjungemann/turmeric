@@ -250,7 +250,7 @@ populated `EXPERIMENTS[]` row in `src/runtime/experiments.c`:
 ```c
 { "class-superclasses",
   "defclass constraint preambles (superclass entailment)",
-  "docs/upcoming/typeclass-superclasses-plan.md",
+  "docs/archive/typeclass-superclasses-plan.md",
   "0.49.0",                  /* introduced */
   "0.55.0",                  /* expires_at -- advisory; never blocks a release */
   XF_LIFECYCLE_PROTOTYPE,
@@ -607,7 +607,7 @@ lists, which the fixtures route around and which are filed as reports.
 
 - [lattice-vocabulary-plan.md](lattice-vocabulary-plan.md) section 2.3 -- independent
   confirmation, and the verified two-constraint workaround.
-- [crdt-spice-plan.md](crdt-spice-plan.md):127, :586 -- the ergonomic cost in a
+- [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md):127, :586 -- the ergonomic cost in a
   real spice, and the "file it as a report" disposition.
 - [saffron-lang-plan.md](saffron-lang-plan.md):1849 -- Q1, the dynamic-dispatch
   half, deliberately out of scope here.

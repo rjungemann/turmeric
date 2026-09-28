@@ -60,7 +60,7 @@ not exist yet, has since landed on T6. Archived 2026-09-28.
   whose "What shipped" records how the trampoline had to reach the CPS
   backend, which the design text never mentioned.
 
-Prerequisite for [r7rs-lang-plan.md](r7rs-lang-plan.md), but not only for it:
+Prerequisite for [r7rs-lang-plan.md](../upcoming/r7rs-lang-plan.md), but not only for it:
 T1-T3 and T5 are Turmeric features that stand on their own, and T3 closes a
 silent hole in a shape people write every day.
 
@@ -1181,7 +1181,7 @@ __attribute__((unused)) static int64_t step_hya(int64_t n) {
 
 ## See also
 
-- [r7rs-lang-plan.md](r7rs-lang-plan.md) -- T6 is its prerequisite; D6 there
+- [r7rs-lang-plan.md](../upcoming/r7rs-lang-plan.md) -- T6 is its prerequisite; D6 there
   defers to this document
 - [docs/guides/performance-guide.md](../guides/performance-guide.md) -- the
   self-tail-call section, which A.2 confirms and which T5 would let us extend

@@ -102,7 +102,7 @@ TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol 
     return NULL;
 }
 
-/* ---- class-superclasses (docs/upcoming/typeclass-superclasses-plan.md) ---- */
+/* ---- class-superclasses (docs/archive/typeclass-superclasses-plan.md) ---- */
 
 /* Same class by name: a class re-registered through two import paths is two
  * TypeClass records with one interned Symbol, and the dispatch path has always

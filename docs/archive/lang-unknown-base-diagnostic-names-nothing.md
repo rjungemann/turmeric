@@ -35,7 +35,7 @@ reader meets when they mistype the very first line of a file, and it tells them
 nothing they did not already know.
 
 Found while wiring the language axis
-([saffron-lang-plan](../upcoming/saffron-lang-plan.md) S1), which adds four new
+([saffron-lang-plan](saffron-lang-plan.md) S1), which adds four new
 base spellings and so makes a near-miss more likely -- but the defect is
 pre-existing and applies equally to `#lang foo`.
 

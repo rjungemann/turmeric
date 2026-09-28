@@ -1,4 +1,4 @@
-;; proper-tail-calls T2b (docs/upcoming/proper-tail-calls-plan.md, T-D2): the
+;; proper-tail-calls T2b (docs/archive/proper-tail-calls-plan.md, T-D2): the
 ;; codegen snapshot for `TUR_MUSTTAIL`.  It pins where the attribute goes and,
 ;; just as much, where it must NOT go -- musttail is a hard contract, so every
 ;; condition is checked against text and records rather than inferred.

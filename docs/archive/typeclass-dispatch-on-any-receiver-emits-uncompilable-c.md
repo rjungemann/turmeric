@@ -65,7 +65,7 @@ to do.
 
 Found while scoping how far the "typeclass methods need a static receiver"
 limitation actually reaches for
-[docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md) (D8).
+[docs/archive/saffron-lang-plan.md](saffron-lang-plan.md) (D8).
 It matters beyond Saffron: `any` is a shipping type, and dispatching a method
 on one is a reasonable thing to try.
 

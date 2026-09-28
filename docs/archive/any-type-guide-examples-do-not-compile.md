@@ -113,7 +113,7 @@ compile.
 - **Wider:** if `any` grows a dynamic operator layer, these examples become
   correct as originally written and the sentence comes back out. That work is
   scoped in
-  [docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md) (D4,
+  [docs/archive/saffron-lang-plan.md](saffron-lang-plan.md) (D4,
   gaps G3/G4/G9) -- so fix the docs now rather than waiting on it.
 
 Worth a doc fixture either way: these examples went stale because nothing

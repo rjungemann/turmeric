@@ -4365,7 +4365,7 @@ Expr *elab_defer(Elab *e, const Form *call) {
  * per frame, then function-exit." The codegen emits tur_frame_fire_chain to 
  * walk the parent chain and fire all defers before returning.
  */
-/* proper-tail-calls T1 (docs/upcoming/proper-tail-calls-plan.md, T-D1):
+/* proper-tail-calls T1 (docs/archive/proper-tail-calls-plan.md, T-D1):
  * `(^tailcall <call>)`, or its prefix spelling `^tailcall <call>`.
  *
  * The annotation carries no semantics -- it elaborates to the call itself,

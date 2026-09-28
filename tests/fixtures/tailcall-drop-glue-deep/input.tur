@@ -1,4 +1,4 @@
-;; proper-tail-calls T4 (docs/upcoming/proper-tail-calls-plan.md, T-D3): a
+;; proper-tail-calls T4 (docs/archive/proper-tail-calls-plan.md, T-D3): a
 ;; self tail call under an owned local's drop glue becomes a backedge.
 ;;
 ;; A `let` that owns a `ref<T>`, an `rc<T>`, or a by-value ADT with an owning

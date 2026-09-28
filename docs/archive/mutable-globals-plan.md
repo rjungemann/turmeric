@@ -4,7 +4,7 @@
 > it introduced graduated -- `global-state` in 0.35.0, `write-frames` in
 > 0.37.0 -- so the header's own "a record rather than open work" is the
 > disposition. The read-side follow-up it drafted,
-> [trusted-refinement-claims-plan.md](../upcoming/trusted-refinement-claims-plan.md),
+> [trusted-refinement-claims-plan.md](trusted-refinement-claims-plan.md),
 > is the one thread still open (R4), and it lives in `docs/upcoming/`.
 
 > **Status: COMPLETE.** **G1, G2, G3, G4a (`^atomic`) LANDED 2026-08-05** (see
@@ -12,7 +12,7 @@
 > adjacent small items closed 2026-08-17** (see §20): §12.3's classifier
 > shipped as the §13.1 warning (`TUR-W0383`), §13.3's unchecked dynvar
 > `pthread_key_create` fixed, and §14's read-side plan drafted
-> ([`trusted-refinement-claims-plan.md`](../upcoming/trusted-refinement-claims-plan.md)).
+> ([`trusted-refinement-claims-plan.md`](trusted-refinement-claims-plan.md)).
 > **G5b closed 2026-08-18: `global-state` GRADUATED in 0.35.0** (§21) -- every
 > feature is unconditional and the row is retired. Every phase is done; this
 > plan is a record rather than open work.
@@ -1689,7 +1689,7 @@ thread-local emitter was corrected in the same change.
 
 ### 20.3 §14's read-side plan: drafted
 
-[`trusted-refinement-claims-plan.md`](../upcoming/trusted-refinement-claims-plan.md),
+[`trusted-refinement-claims-plan.md`](trusted-refinement-claims-plan.md),
 named for the tier rather than the annotation, seeded from §§12.1-12.3 and
 §13.5 as §14 specified.  Its phases: R1 the warning (landed, above), R2 the
 gated refusal (which `refine-reads-frame-omits-global` is now written to

@@ -214,7 +214,7 @@ guide lists as blocked on checking become reachable.  Until then this phase
 is a pointer, not work.
 
 The pointer is bidirectional:
-[`ecs-refinement-typed-apis-plan.md`](v1/ecs-refinement-typed-apis-plan.md)
+[`ecs-refinement-typed-apis-plan.md`](../upcoming/v1/ecs-refinement-typed-apis-plan.md)
 carries a trigger note under its C2 prerequisite naming the exact decision
 that fires this phase -- its C1 purity caveat's option "(b) making the RE0
 unwrappers pure primitives" is the same rewrite viewed from the other side,

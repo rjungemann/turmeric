@@ -7,7 +7,7 @@
 ;;; in a unit that imports this library's `cond` -- by any name -- so the
 ;;; export is R7RS's own `cond`, and importing it beside (scheme base) is one
 ;;; binding, not two.  The body is empty: nothing is spliced.
-;;; docs/upcoming/r7rs-srfi-plan.md, S2.
+;;; docs/archive/r7rs-srfi-plan.md, S2.
 (define-library (srfi 61)
   (export cond)
   (import (scheme base))

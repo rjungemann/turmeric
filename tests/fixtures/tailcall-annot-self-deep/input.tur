@@ -1,4 +1,4 @@
-;; proper-tail-calls T1 (docs/upcoming/proper-tail-calls-plan.md, T-D1):
+;; proper-tail-calls T1 (docs/archive/proper-tail-calls-plan.md, T-D1):
 ;; `^tailcall` is a CHECKED annotation -- the compiler either places the call
 ;; in tail position or rejects it with TUR-E0716.  This fixture is the positive
 ;; half: the annotation is accepted, and the guarantee it asserts actually

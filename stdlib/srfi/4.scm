@@ -11,7 +11,7 @@
 ;;; out of range raises an error object.  As in Racket, there is no reader
 ;;; syntax: `#s16(1 2)` does not read, and `#u8(1 2)` is R7RS's own.  Written
 ;;; for Turmeric from the SRFI's document (MIT, see stdlib/srfi/COPYING).
-;;; docs/upcoming/r7rs-srfi-plan.md, S7.
+;;; docs/archive/r7rs-srfi-plan.md, S7.
 (define-library (srfi 4)
   (export
     make-u8vector make-s8vector make-u16vector make-s16vector make-u32vector

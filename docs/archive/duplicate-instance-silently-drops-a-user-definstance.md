@@ -47,7 +47,7 @@ This matters more for some classes than others. `Eq [int]` has one right
 answer, so first-wins is harmless. `Semigroup [int]` has four (sum, product,
 min, max), so whichever the library ships is both arbitrary and
 order-dependent. It is a live design constraint on
-[lattice-vocabulary-plan.md](../upcoming/lattice-vocabulary-plan.md) section
+[lattice-vocabulary-plan.md](lattice-vocabulary-plan.md) section
 3.5, which is why that plan now defers shipping bare-primitive instances until
 this decision lands.
 
@@ -172,7 +172,7 @@ three grounds, the first decisive:
    `12`, and the warning blamed whichever lost -- including stdlib itself. A
    hard error cannot be order-dependent. This is what made the decision urgent
    rather than theoretical: it blocks
-   [lattice-vocabulary-plan.md](../upcoming/lattice-vocabulary-plan.md) 3.5,
+   [lattice-vocabulary-plan.md](lattice-vocabulary-plan.md) 3.5,
    where `int` genuinely has four monoids and no canonical one.
 
 ### What did NOT change

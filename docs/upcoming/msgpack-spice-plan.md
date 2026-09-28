@@ -320,5 +320,5 @@ spice in the top-level `:members` list.
 - `spices/json/src/json/encode.tur` -- the architecture this mirrors
 - `stdlib/schema.tur` -- error-vocabulary source of truth
 - `stdlib/serial.tur` -- binary `Serializable` class; `Buf` layout peer
-- `docs/upcoming/nng-spice-plan.md` -- companion plan; msgpack-over-nng
+- `docs/archive/nng-spice-plan.md` -- companion plan; msgpack-over-nng
   typed messaging is the intended cross-spice showcase

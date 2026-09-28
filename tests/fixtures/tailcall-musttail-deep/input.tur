@@ -1,4 +1,4 @@
-;; proper-tail-calls T2b (docs/upcoming/proper-tail-calls-plan.md, T-D2): a
+;; proper-tail-calls T2b (docs/archive/proper-tail-calls-plan.md, T-D2): a
 ;; mutual tail-call cycle that T5 does NOT fuse still runs in constant stack at
 ;; -O0 -- where the C compiler can promise it.
 ;;

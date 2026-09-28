@@ -1501,7 +1501,7 @@ Two notes for the stages:
 
 ## See also
 
-- [r7rs-lang-plan.md](r7rs-lang-plan.md) -- the dialect this extends; D9 (the
+- [r7rs-lang-plan.md](../upcoming/r7rs-lang-plan.md) -- the dialect this extends; D9 (the
   library system) and R7 (the on-demand library mechanism S1 reuses).
 - [docs/guides/r7rs-guide.md](../guides/r7rs-guide.md) -- where the support
   table goes.

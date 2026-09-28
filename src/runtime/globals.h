@@ -454,7 +454,7 @@ extern bool g_sr2_app_sum_byvalue;
  * warning; the g_opt_checked_reads enable bit and its gates are gone.  Refusal
  * still keys on "saw a read", never on "could not see" -- an inline-C body
  * yields no evidence and keeps the trusted grant.  See
- * docs/upcoming/trusted-refinement-claims-plan.md (R2). */
+ * docs/archive/trusted-refinement-claims-plan.md (R2). */
 
 /* jit-ffi GRADUATED 2026-08-21 -- `(unsafe (call-ptr p [T1 T2 -> R] args...))`
  * (F3) and `(unsafe (callback-ptr f [sig]))` (F5) are ordinary `unsafe` forms;

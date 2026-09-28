@@ -8914,7 +8914,7 @@ int emit_sig_lookup_n_params(const char *cname) {
     return -1;
 }
 
-/* proper-tail-calls T2b (docs/upcoming/proper-tail-calls-plan.md, T-D2):
+/* proper-tail-calls T2b (docs/archive/proper-tail-calls-plan.md, T-D2):
  * `TUR_MUSTTAIL`, written once per program, the first time a tail call is
  * spelled with it.  It expands to `__attribute__((musttail))` only where that
  * is known to hold -- clang on x86-64 / aarch64 -- and to nothing everywhere
@@ -12072,7 +12072,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "             __tur_any_type_name(__tag));\n"
         "    tur_panic(__m);\n"
         "}\n");
-    /* proper-tail-calls T6 (docs/upcoming/proper-tail-calls-plan.md, T-D6):
+    /* proper-tail-calls T6 (docs/archive/proper-tail-calls-plan.md, T-D6):
      * the bounce trampoline for a dynamic call in tail position.
      *
      * A dynamic call is a call through a fat `any`, so no callee is known at

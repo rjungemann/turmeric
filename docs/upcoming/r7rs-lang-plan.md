@@ -88,7 +88,7 @@ open report of the kind the checklist was made of),
 `r7rs-prelude-split-gc-seam-on-macos` and
 `r7rs-prelude-split-wrong-symbols-on-windows` (the split stays Linux-only
 until each closes), and `cps-self-tail-call-relies-on-sibling-call` (every
-dialect). SRFI work continues in [r7rs-srfi-plan.md](r7rs-srfi-plan.md).
+dialect). SRFI work continues in [../archive/r7rs-srfi-plan.md](../archive/r7rs-srfi-plan.md).
 
 Every "today" claim in Sections 2 and 3 was **measured on 2026-09-21** against
 `./build/tur` at v0.50.0, Debug build, and the transcript is in
@@ -118,7 +118,7 @@ Four items in Section 3 are hard requirements of R7RS that Turmeric does not
 meet today, and the first of them -- proper tail calls on the compiled path --
 turned out on measurement to be *not met at all* for the shape Scheme is made
 of. It is large enough to have its own document
-([proper-tail-calls-plan.md](proper-tail-calls-plan.md)) and is a prerequisite
+([../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md)) and is a prerequisite
 rather than a stage.
 
 **"Support Turmeric libraries" is the whole point**, and it is also the thing
@@ -291,7 +291,7 @@ justify each site -- rather than waiting to be surprised.
 ### 3.1 The compiled path does not have proper tail calls
 
 **This is the largest gap, and it is worse than the documentation suggests.**
-It now has its own plan: [proper-tail-calls-plan.md](proper-tail-calls-plan.md),
+It now has its own plan: [../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md),
 which carries the full measurement matrix and the design. The summary:
 
 | Shape | `-O0` | `-O2` | `--interpret` |
@@ -585,7 +585,7 @@ hand-written names, which is normally the first thing to break.
 ### D6 -- proper tail calls are a Turmeric prerequisite, not R7RS work
 
 **Verdict: this is spun out into
-[proper-tail-calls-plan.md](proper-tail-calls-plan.md). R7RS depends on its T6;
+[../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md). R7RS depends on its T6;
 T1-T3 there are worth landing regardless.**
 
 Investigating 3.1 changed the shape of this decision twice, so the conclusions
@@ -1189,7 +1189,7 @@ is about exact/inexact divergence.
 ### R6 -- control (large; contains the hardest item)
 
 Proper tail calls on the compiled path -- **T6 of
-[proper-tail-calls-plan.md](proper-tail-calls-plan.md)**, which is a
+[../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md)**, which is a
 prerequisite landing on its own schedule, not work done here (D6). `dynamic-wind`. `values` and
 `call-with-values`. `guard`/`raise`/`raise-continuable`/`with-exception-handler`
 over effects (D10). `parameterize` over `dynvar` (D10). `delay`/`force`
@@ -2925,7 +2925,7 @@ arm64). These are the measurements Sections 2 and 3 cite.
 ### A.1 -- the tail-call matrix (3.1)
 
 Full transcript, including the two wrong turns this probe took first, is in
-[proper-tail-calls-plan.md](proper-tail-calls-plan.md) Appendix A. Depth is read
+[../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md) Appendix A. Depth is read
 from the environment in every probe; an earlier version passed it as a literal
 and measured only clang's constant folding.
 
@@ -3022,12 +3022,12 @@ saffron/sweet          saffron   sweet        stable
 
 ## See also
 
-- [r7rs-srfi-plan.md](r7rs-srfi-plan.md) -- `(import (srfi N))`, after
+- [../archive/r7rs-srfi-plan.md](../archive/r7rs-srfi-plan.md) -- `(import (srfi N))`, after
   Racket's SRFI support: the built-in SRFIs as no-op imports, the rest as
   libraries, and the guide's support table
-- [proper-tail-calls-plan.md](proper-tail-calls-plan.md) -- D6's prerequisite,
+- [../archive/proper-tail-calls-plan.md](../archive/proper-tail-calls-plan.md) -- D6's prerequisite,
   with the full tail-call measurement matrix
-- [saffron-lang-plan.md](saffron-lang-plan.md) -- the dynamic substrate this
+- [../archive/saffron-lang-plan.md](../archive/saffron-lang-plan.md) -- the dynamic substrate this
   plan inherits, and the staging discipline it copies
 - [docs/guides/saffron-guide.md](../guides/saffron-guide.md)
 - [docs/guides/delimited-control-operators-guide.md](../guides/delimited-control-operators-guide.md) -- `call/cc`, `call/cc*`, `shift`/`reset`

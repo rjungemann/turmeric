@@ -4,7 +4,7 @@
 ;;; SRFI 11's, dotted rest formals included (Racket's core lacks those, so its
 ;;; srfi/11 is its own). The export list is what `(import (only (srfi 11)
 ;;; ...))`, `except`, `prefix` and `rename` check against.
-;;; docs/upcoming/r7rs-srfi-plan.md, D2.
+;;; docs/archive/r7rs-srfi-plan.md, D2.
 (define-library (srfi 11)
   (export let-values let*-values)
   (import (scheme base)))

@@ -16,7 +16,7 @@
 > addition (`map-merge-with`) that the plan deliberately declines to make.
 > **Sequencing:** last of three.
 > [type-confusion-detection-plan.md](../archive/type-confusion-detection-plan.md) ->
-> [lattice-vocabulary-plan.md](lattice-vocabulary-plan.md) -> this. C1's
+> [../archive/lattice-vocabulary-plan.md](../archive/lattice-vocabulary-plan.md) -> this. C1's
 > `JoinSemilattice` comes from the lattice plan rather than being redeclared
 > here. Both were gated on two typeclass defects filed from this plan's own
 > probes; both are fixed.
@@ -110,7 +110,7 @@ tests can drive them from `Mock-Time` deterministically.
 
 `stdlib/random.tur` is libc `rand()` seeded with `time(NULL)` (this is
 already documented as the motivating defect in
-[secret-spice-plan.md](secret-spice-plan.md) section 2.3). Two replicas
+[../archive/secret-spice-plan.md](../archive/secret-spice-plan.md) section 2.3). Two replicas
 started in the same second can draw the same ID, and a duplicated replica
 ID breaks a G-Counter's *arithmetic*, not just its tidiness -- two replicas
 sharing a slot overwrite each other's counts under a pointwise `max`.
@@ -629,7 +629,7 @@ follow-on, C6 is plumbing.
   the delta formulation in section 2.4.
 - Kulkarni et al., *Logical Physical Clocks* (2014) -- the HLC in 2.2.
 - Weiss, Urso, Molli, *Logoot*; Roh et al., *RGA* -- candidates for C5.
-- In-tree: [secret-spice-plan.md](secret-spice-plan.md) (CSPRNG, and the
+- In-tree: [../archive/secret-spice-plan.md](../archive/secret-spice-plan.md) (CSPRNG, and the
   template this plan follows), `docs/guides/typeclass-guide.md`
   (associated types, constrained instances),
   `docs/guides/contract-types-guide.md` (`#refine{...}`).

@@ -162,7 +162,7 @@ at all.
 
 ## Blocks
 
-[lattice-vocabulary-plan.md](../upcoming/lattice-vocabulary-plan.md) L2/L3's
+[lattice-vocabulary-plan.md](lattice-vocabulary-plan.md) L2/L3's
 selection newtypes (`Sum` / `Product` / `MinI` / `MaxI` / `Any` / `All`). Their
 `Semigroup` half works today; the `Monoid` half is exactly this defect, and
 `mempty` is what `mconcat`-over-empty needs.

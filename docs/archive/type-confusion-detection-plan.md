@@ -7,7 +7,7 @@
 > the `fuzz` label bug was fixed. **Track:** post-v1.
 > **Type:** test infrastructure -- one warning ratchet extension, three gaps
 > closed in an existing fuzzer, and a seed-rotation story.
-> **Sequencing:** before [lattice-vocabulary-plan.md](../upcoming/lattice-vocabulary-plan.md)
+> **Sequencing:** before [lattice-vocabulary-plan.md](lattice-vocabulary-plan.md)
 > and [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md). Both of those are blocked on
 > defects of exactly the class this plan detects, and neither should land
 > vocabulary on top of a detector that cannot see its failure mode.
@@ -549,7 +549,7 @@ its bad `return` line. The ratchet could see it; no fixture exercised it.
   (the sweep-then-ratchet procedure this plan copies), and
   `docs/archive/emitter-thunk-type-return-mismatch.md` (the function-pointer
   ratchet beside it).
-- Blocked-on consumers: [lattice-vocabulary-plan.md](../upcoming/lattice-vocabulary-plan.md),
+- Blocked-on consumers: [lattice-vocabulary-plan.md](lattice-vocabulary-plan.md),
   [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md).
 - Defects this plan would have caught:
   [nested-class-method-call-picks-the-first-instance](nested-class-method-call-picks-the-first-instance.md),

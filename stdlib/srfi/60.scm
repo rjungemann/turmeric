@@ -12,7 +12,7 @@
 ;;;   - arithmetic-shift shifts a fixnum right with the prelude's
 ;;;     r7rs-fx-shr__;
 ;;;   - an argument that is not an exact integer is an error, raised.
-;;; docs/upcoming/r7rs-srfi-plan.md, S7.
+;;; docs/archive/r7rs-srfi-plan.md, S7.
 (define-library (srfi 60)
   (export
     logand bitwise-and logior bitwise-ior logxor bitwise-xor

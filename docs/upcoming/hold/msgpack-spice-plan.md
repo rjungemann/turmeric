@@ -502,5 +502,5 @@ spice in the top-level `:members` list.
   the three classes MPJ renames are at `:50`, `:373` and `:1037`
 - `stdlib/schema.tur` -- error-vocabulary source of truth
 - `stdlib/serial.tur` -- binary `Serializable` class; `Buf` layout peer
-- `docs/upcoming/nng-spice-plan.md` -- companion plan; msgpack-over-nng
+- `docs/archive/nng-spice-plan.md` -- companion plan; msgpack-over-nng
   typed messaging is the intended cross-spice showcase

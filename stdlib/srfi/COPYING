@@ -4,7 +4,7 @@ Licences of the SRFI implementations under stdlib/srfi/
 Each stdlib/srfi/<N>.scm names where its code came from in its header. Code
 written for Turmeric is under Turmeric's own licence. Code taken from
 elsewhere keeps its copyright notice there and its licence here
-(docs/upcoming/r7rs-srfi-plan.md, D6).
+(docs/archive/r7rs-srfi-plan.md, D6).
 
 File       From                                      Licence
 ---------  ----------------------------------------  -----------------------

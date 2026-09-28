@@ -1797,7 +1797,7 @@ and that one had been in the POSIX path from the start.
 ## The `any` surface (filed 2026-09-07)
 
 Three findings from surveying `any` while writing
-[docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md). None is
+[docs/archive/saffron-lang-plan.md](../archive/saffron-lang-plan.md). None is
 a miscompile; all three are in the same area -- what happens when a value's
 type is not statically pinned -- and all three would be prerequisites for any
 dynamic-dispatch layer over `any`. Each has a one-file repro against `v0.44.2`
@@ -2249,7 +2249,7 @@ section 5b (`docs/archive/type-confusion-detection-plan.md`).
 
 ## Found planning SRFI support for `#lang r7rs` (filed 2026-09-26)
 
-The first three came from the probes behind `docs/upcoming/r7rs-srfi-plan.md`
+The first three came from the probes behind `docs/archive/r7rs-srfi-plan.md`
 (its Section 2.3); chibi's R7RS suite reaches none of them. The syntax-leaks
 report came out of resolving the first: R7RS imports Turmeric libraries, but
 Turmeric's own surface should not leak into Scheme source. The rare-hang note

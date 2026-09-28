@@ -3,7 +3,7 @@
 ;;;
 ;;; The SRFI's reference implementation (cut.scm), as written: by Al
 ;;; Petrofsky, adapted by Sebastian Egner, placed in the public domain.  See
-;;; stdlib/srfi/COPYING.  docs/upcoming/r7rs-srfi-plan.md, S2.
+;;; stdlib/srfi/COPYING.  docs/archive/r7rs-srfi-plan.md, S2.
 (define-library (srfi 26)
   (export cut cute)
   (import (scheme base))

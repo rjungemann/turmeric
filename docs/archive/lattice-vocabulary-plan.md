@@ -410,7 +410,7 @@ stdlib module (not a spice) needs them without an import.
   deliberately given no `meet`. Pinned by
   `tests/fixtures/typeclass-lattice-join-meet`, whose `BadJoin` is associative
   and commutative but NOT idempotent and must fail exactly one law. This is
-  what [crdt-spice-plan.md](crdt-spice-plan.md) C1 consumes.
+  what [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md) C1 consumes.
 
   **Interpreter caveat -- closed 2026-09-16.** Both L2/L3 fixtures carried
   `requires.compiled`: the law functions nest a class-method call inside a
@@ -495,6 +495,6 @@ stdlib module (not a spice) needs them without an import.
   [nullary-class-method-unresolvable-over-newtype-tyvar](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md),
   and the sibling
   [typeclass-method-resolution-ignores-the-class](../archive/typeclass-method-resolution-ignores-the-class.md).
-- Consumer: [crdt-spice-plan.md](crdt-spice-plan.md).
+- Consumer: [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md).
 - In-tree: `docs/guides/typeclass-guide.md` (default methods, associated types,
   constrained instances), `src/compiler/stdlib_autoload.c` (the autoload list).
