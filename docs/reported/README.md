@@ -2326,6 +2326,19 @@ witness's checked cast; `--interpret` answers.
 | [saffron-dyn-witness-fn-arity-defaults-unary](saffron-dyn-witness-fn-arity-defaults-unary.md) | low | A class parameter spelled `g : fn` (no arity) is cast to `(fn [any] any)` by the dispatch witness (`elab_typeclasses.c:6414`), so `.comb` on an `any` with a two-argument lambda panics "cast: any holds a function this cast cannot accept" compiled; `--interpret` prints `3.75`. Spelling `g : (fn [a a] b)` works. Fix: take the arity from the impl's call sites, or reject a non-unary call of a `: fn` parameter at the instance body |
 | [saffron-dyn-parametric-extra-read-as-class-var](saffron-dyn-parametric-extra-read-as-class-var.md) | low-medium | On a parametric-head instance (`Nth [Vec]`) an `int` extra -- bare OR spelled `n : int` -- is taken for the class variable (`saffron_extra_is_class_var`, `elab_typeclasses.c:6253`) and cast to `(Vec any)`, so `(.nth-of x 2)` on an `any` panics "any holds int, not Vec" compiled; `--interpret` prints `hi`. Fix: gate the `int` arm on `param_explicit_type`, and stop guessing for a bare parameter |
 
+## Found reducing the Saffron `: any`-result panic (filed 2026-09-28)
+
+The "`: any` result" aside in saffron-dyn-witness-fn-arity-defaults-unary,
+reduced. It is not Saffron-specific and not about fn parameters, and reducing
+it turned up two neighbours. All three are compiled-only; `--interpret`
+answers.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [erased-instance-body-tags-a-type-variable-widened-to-any](erased-instance-body-tags-a-type-variable-widened-to-any.md) | medium-high | A constructor-class instance with a concrete `: any` result runs its ERASED body (no spec is minted -- `emit_abi_register_call` sees no ABI or dispatch change), where widening an element of type `a` to `any` tags it `TUR_TAG(36, ...)`, i.e. `TY_TYVAR`. `(unbox1 (One 1.5))` panics at the first operator, and before that `type-of` says `unknown` and `(is? x float)` is false -- a silent wrong branch. Saffron and typed alike. Fix: count a tyvar widen as `instance_changes`, and never emit a `TY_TYVAR` tag |
+| [fn-param-call-prototype-spelled-from-the-call-not-the-fn](fn-param-call-prototype-spelled-from-the-call-not-the-fn.md) | high | The Phase F call through a `fn` parameter in an instance body casts `g.fn` using the CALL's result type (`emit_expr.c:8922`) and the ARGUMENTS' types (`:8931`), not the fn's own signature. Result half: typed `(fn [float float] b)` with `: b` prints `4.61563e+18` for `3.75`, exit 0. Argument half: `(fn [any any] any)` gets raw doubles and panics. static-instance-spec-calls-any-lambda-as-concrete-result is a third symptom of `:8922` |
+| [concrete-result-fn-passed-where-an-any-result-fn-is-expected](concrete-result-fn-passed-where-an-any-result-fn-is-expected.md) | medium-high | A `(fn [float float] float)` passed for a `(fn [float float] any)` parameter is accepted with no adaptor, so the callee calls it through a `tur_tagged_t`-returning thunk (undefined behaviour; measured as `cast: any holds unknown`). The generic `(fn [float] B)` under a `: any` result reaches it too, because `B` is fixed to `any` at the definition. Fix: the mirror of `saffron_seam_fn_adaptor` at the argument seam |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

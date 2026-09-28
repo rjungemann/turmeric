@@ -73,5 +73,7 @@ With the arity spelled but the method's result declared `: any` -- `(comb [ta
 : (t a) g : (fn [a a] b)] : any)` -- the compiled program panics `+: no
 operator for a value of that type argument` while `--interpret` prints
 `3.75`; declaring the result `: b` (or `: a` with `(fn [a a] a)`) works. Not
-investigated; it looks like the elements reach the lambda un-boxed when the
-class result is `any` rather than a class variable.
+investigated here. Reduced 2026-09-28, it is not about fn parameters at all:
+[erased-instance-body-tags-a-type-variable-widened-to-any](erased-instance-body-tags-a-type-variable-widened-to-any.md)
+(the elements reach the lambda boxed, but tagged `TY_TYVAR`, because an
+`: any` result mints no spec).
