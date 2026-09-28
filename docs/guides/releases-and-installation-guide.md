@@ -176,7 +176,7 @@ Linux dev environment.
 
 After extracting, the tarball lays out like:
 
-```
+```ascii
 .
 |-- bin/tur                   # the CLI
 |-- lib/libturt_runtime.a     # runtime archive `tur build` links against

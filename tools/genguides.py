@@ -374,12 +374,12 @@ SIDEBAR_TOGGLE_JS = SIDEBAR_DRAWER_JS
 # ---------------------------------------------------------------------------
 # Guide runtime -- one source, three consumers
 #
-# A rendered guide body needs two behaviours to look right: Turmeric syntax
-# highlighting on its code blocks, and the turmeric/sweet-exp segmented toggle
-# on paired blocks. Those behaviours are needed by the site pages under
-# docs/html/guides/, by the spice pages genspices.py renders, and by Try
-# Turmeric's in-app docs pane, which renders the very same bodies out of the
-# docs pack.
+# A rendered guide body needs three behaviours to look right: Turmeric syntax
+# highlighting on its code blocks, the turmeric/sweet-exp segmented toggle on
+# paired blocks, and mermaid rendering on its diagram blocks. Those behaviours
+# are needed by the site pages under docs/html/guides/, by the spice pages
+# genspices.py renders, and by Try Turmeric's in-app docs pane, which renders
+# the very same bodies out of the docs pack.
 #
 # So GUIDE_JS_CORE below is the only copy. The site pages inline it and call
 # into it immediately (GUIDE_RUNTIME_JS); the docs pack ships it as guide.js
@@ -820,7 +820,103 @@ GUIDE_JS_CORE = '''\
     });
   }
 
-  var api = { highlightGuideCode: highlightGuideCode, initSyntaxToggles: initSyntaxToggles };
+  // ---- Mermaid diagrams ---------------------------------------------------
+  //
+  // `build_guide_body` has already turned every ```mermaid fence into a
+  // `<pre class="mermaid">`. Mermaid itself is NOT bundled: it is ~3 MB, and
+  // the docs pack is precached wholesale by Try Turmeric's service worker, so
+  // vendoring it would grow every offline install by half again for a feature
+  // a minority of pages use. It is imported on demand instead -- the first
+  // page that actually contains a diagram pays for it, and nothing else does.
+  //
+  // The consequence is deliberate and is the reason the escaped source is left
+  // in the <pre>: with no network (the offline docs pane, a docs tarball read
+  // from disk) the import fails and the diagram degrades to its own source
+  // text, which is readable. It does not degrade to an empty box.
+  var MERMAID_SRC = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  var mermaidPromise = null;
+
+  // Mermaid gets the guide palette by hand: it cannot read our CSS custom
+  // properties, and its stock dark theme is a blue that clashes with the gold.
+  function mermaidConfig(){
+    return {
+      startOnLoad: false,
+      securityLevel: 'strict',
+      // A diagram that fails to parse keeps its own source text, the same way an
+      // unreachable CDN leaves it. Mermaid's default is to swap in a 'Syntax
+      // error' bomb graphic, which destroys the content it failed to render.
+      suppressErrorRendering: true,
+      theme: 'base',
+      fontFamily: '"DM Sans", system-ui, sans-serif',
+      themeVariables: {
+        darkMode: true,
+        background: '#161411',
+        primaryColor: '#161411',
+        primaryTextColor: '#EAE0D2',
+        primaryBorderColor: '#EFA030',
+        secondaryColor: '#1C1A15',
+        tertiaryColor: '#12100D',
+        lineColor: '#8A7D6E',
+        textColor: '#EAE0D2',
+        mainBkg: '#161411',
+        nodeBorder: '#EFA030',
+        clusterBkg: '#12100D',
+        clusterBorder: '#222018',
+        titleColor: '#EFA030',
+        edgeLabelBackground: '#161411',
+        fontSize: '14px'
+      }
+    };
+  }
+
+  function loadMermaid(){
+    if (mermaidPromise) return mermaidPromise;
+    mermaidPromise = import(MERMAID_SRC).then(function(mod){
+      var m = mod.default || mod;
+      m.initialize(mermaidConfig());
+      return m;
+    });
+    return mermaidPromise;
+  }
+
+  // Idempotent the same way highlightGuideCode is: the stamp goes on BEFORE
+  // the async render, so a second pass over a subtree whose first render is
+  // still in flight cannot queue the same node twice.
+  function renderMermaid(root){
+    var scope = root || document;
+    var nodes = [];
+    scope.querySelectorAll('pre.mermaid').forEach(function(el){
+      if (el.dataset.mermaidDone) return;
+      el.dataset.mermaidDone = '1';
+      nodes.push(el);
+    });
+    if (!nodes.length) return Promise.resolve();
+
+    // Leave the source visible and say why, rather than failing silently.
+    function unrendered(els, err){
+      els.forEach(function(el){ el.classList.add('mermaid-unrendered'); });
+      if (typeof console !== 'undefined' && console.warn) {
+        console.warn('mermaid: diagram left as source text', err);
+      }
+    }
+
+    return loadMermaid().then(function(m){
+      // One node at a time. `mermaid.run()` rejects on the FIRST diagram that
+      // fails to parse and abandons the rest of the batch, so a single typo in
+      // one block would otherwise mark every other diagram on the page as
+      // unrendered -- including the ones that drew correctly.
+      return nodes.reduce(function(chain, el){
+        return chain.then(function(){
+          return m.run({ nodes: [el] }).catch(function(err){ unrendered([el], err); });
+        });
+      }, Promise.resolve());
+    }).catch(function(err){
+      unrendered(nodes, err);   // mermaid itself never loaded
+    });
+  }
+
+  var api = { highlightGuideCode: highlightGuideCode, initSyntaxToggles: initSyntaxToggles,
+              renderMermaid: renderMermaid };
   if (typeof window !== 'undefined') window.turmericGuide = api;
 })();'''
 
@@ -831,6 +927,7 @@ GUIDE_RUNTIME_JS = '''\
 ''' + GUIDE_JS_CORE + '''
   window.turmericGuide.highlightGuideCode(document);
   window.turmericGuide.initSyntaxToggles(document);
+  window.turmericGuide.renderMermaid(document);
   </script>'''
 
 # Kept under their historical names so genspices.py (and any other caller)
@@ -865,6 +962,21 @@ GUIDE_CSS = '''\
     .guide-content li.task-item input[type="checkbox"]:checked::after { content:""; position:absolute; left:0.3em; top:0.06em; width:0.2em; height:0.48em; border:solid var(--green); border-width:0 2px 2px 0; transform:rotate(43deg); }
     .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
     .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    /* ```ascii -- preformatted text whose VERTICAL alignment carries meaning: a
+       directory tree's `|` gutter, a diagnostic's caret column, a grammar's
+       aligned alternatives. Those glyphs have to touch across lines to read as
+       a continuous stroke, and the body's inherited line-height:1.6 -- which is
+       right for reading code, and stays -- opens a gap that breaks them into a
+       dotted stutter. Only this fence tightens; every other block keeps 1.6.
+       Anything that is a GRAPH should be a ```mermaid block instead. */
+    .guide-content pre code.language-ascii { line-height:1.15; }
+    /* A mermaid block before (or instead of) its render: still a code block, so
+       an un-rendered diagram reads as its own source rather than as a blank. */
+    .guide-content pre.mermaid { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; line-height:1.5; color:var(--text-sec); }
+    /* Post-render mermaid injects an <svg>; drop the code-block chrome then. */
+    .guide-content pre.mermaid[data-processed] { background:none; border:none; padding:0.5rem 0; text-align:center; line-height:normal; }
+    .guide-content pre.mermaid[data-processed] svg { max-width:100%; height:auto; }
+    .guide-content pre.mermaid.mermaid-unrendered { border-style:dashed; }
     .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
     .guide-content blockquote { border-left:3px solid var(--green); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
     /* A `---` separator. The page reset zeroes hr's UA margins and leaves its
@@ -922,6 +1034,27 @@ def render_task_lists(body_html: str) -> str:
         return f'<li class="task-item"><input type="checkbox" disabled{checked}> '
 
     return _TASK_ITEM_RE.sub(sub, body_html)
+
+
+# A ```mermaid fence, as python-markdown's fenced_code leaves it. Mermaid
+# renders from `<pre class="mermaid">`, not from the `<pre><code>` pair every
+# other fence becomes, so the block is unwrapped here rather than in the
+# browser -- one rewrite at build time instead of a DOM fixup on every page.
+#
+# The escaping stays: mermaid reads `textContent`, which the browser has
+# already decoded, so `A --&gt; B` arrives at the parser as `A --> B`. Leaving
+# the entities in place is what keeps the block valid HTML in the meantime --
+# and what makes the un-rendered fallback (no JS, no network, the offline docs
+# pane) show the diagram source as ordinary preformatted text instead of
+# swallowing everything after the first `<`.
+_MERMAID_BLOCK_RE = re.compile(
+    r'<pre><code class="language-mermaid">(.*?)</code></pre>', re.DOTALL)
+
+
+def render_mermaid_blocks(body_html: str) -> str:
+    """Unwrap ```mermaid fences into the `<pre class="mermaid">` mermaid wants."""
+    return _MERMAID_BLOCK_RE.sub(
+        lambda m: f'<pre class="mermaid">{m.group(1)}</pre>', body_html)
 
 
 def inject_syntax_toggles(body_html: str) -> str:
@@ -1149,6 +1282,7 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
     body_html = conv.convert(text)
     body_html = inject_syntax_toggles(body_html)
     body_html = render_task_lists(body_html)
+    body_html = render_mermaid_blocks(body_html)
     toc_tokens = getattr(conv, 'toc_tokens', [])
 
     # In-body "Contents" box, inserted right after the page title (first <h1>),

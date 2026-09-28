@@ -27,9 +27,12 @@ tur run fact.tur          # compile and run
 tur --interpret fact.tur  # the tree-walking interpreter
 ```
 
-The dialect is a **prototype**. The `#lang r7rs` line is its own enable, so no
-`--enable=` flag is needed, but every compile prints the lifecycle warning
-TUR-W0060. The stages, design decisions and known gaps live in
+The dialect is in **beta**: the plan is complete and the surface is frozen,
+and what remains before it graduates is the soak (the four reports that
+gated it closed on 2026-09-27). The
+`#lang r7rs` line is its own enable, so no `--enable=` flag is needed, but
+every compile prints the lifecycle warning TUR-W0061. The stages, design
+decisions and known gaps live in
 [docs/upcoming/r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-lang-plan.md).
 
 The single-file examples in this guide are compiled and run, on both back

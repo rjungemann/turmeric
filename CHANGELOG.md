@@ -54,6 +54,45 @@ All notable changes to Turmeric are documented here.
   guaranteed tail call. Functions that make one are now pinned so their
   signature stays as written. Only clang builds change.
 
+## [0.56.0] -- 2026-09-27
+
+### Changed
+
+- **`#lang r7rs` moves from prototype to beta.** The dialect's plan is
+  complete -- r7rs-lang-plan's R0-R10 and Section 9's T0-T8, and
+  r7rs-srfi-plan's S0-S7 -- and R10's exit criterion is met:
+  `tur_r7rs_conformance` runs chibi-scheme's R7RS suite and reports 1223
+  passing test invocations on both back ends, 2 settled as differences kept
+  on purpose and none failing, of the 1216 tests the suite writes. The
+  surface is frozen; beta is the soak, not more design. Every `#lang r7rs`
+  compile now prints **TUR-W0061** ("graduates in 0.57.0") in place of
+  TUR-W0060 ("breaking changes likely"), and `expires_at` comes in from
+  0.70.0 to 0.57.0 so the date reads as the one-cycle soak the lifecycle
+  describes rather than fourteen minor lines out. It stays advisory and
+  still never blocks a release cut.
+
+  Four open reports are the graduation checklist, and the registry row names
+  them: every program that reaches `raise` fails to build under clang on
+  x86-64, an under-saturated call returns a partial application instead of
+  erroring, type errors are uncatchable panics, and Turmeric's syntax and
+  auto-loaded names leak into Scheme source.
+
+### Fixed
+
+- **Two r7rs harnesses filtered the lifecycle warning by its code.**
+  `tests/run-init-r7rs.sh` and `tests/check-r7rs-srfi-prune.sh` dropped it
+  with `grep -v W0060`, which a beta row's TUR-W0061 slips past; both now
+  match `W006[01]`.
+
+### Docs
+
+- **`syntax-guide.md` still said a Scheme program's data is never freed.**
+  `r7rs-gc` graduated on 2026-09-25, so a compiled single-unit `#lang r7rs`
+  program allocates through the conservative collector on Linux and macOS
+  (`TUR_R7RS_GC=0` / `--no-r7rs-gc` opts out, which a program that starts
+  threads must do). The r7rs and syntax guides also carried the prototype
+  framing and TUR-W0060.
+
 ## [0.55.1] -- 2026-09-27
 
 ### Added

@@ -9,7 +9,7 @@
 ;; (docs/archive/r7rs-turmeric-syntax-leaks.md, items 1 and 7); it is plain
 ;; Scheme now, so the values print in Scheme's spelling (`#t`, `10.0`).
 ;;
-;; The directive is the enable (D11), so this file prints TUR-W0060 to stderr;
+;; The directive is the enable (D11), so this file prints TUR-W0061 to stderr;
 ;; the harness compares stdout only.
 (import (scheme base) (scheme write) (scheme char))
 (define (show x) (display x) (newline))

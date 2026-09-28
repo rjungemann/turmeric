@@ -45,7 +45,7 @@ printf '#lang r7rs\n(import (scheme base) (scheme write) (srfi 1))\n(write (fold
 
 for p in p0 p1 p2; do
     if ! (cd "$TMP/$p" && "$TUR" emit-c prog.scm > prog.c 2> emit.err); then
-        fail "$p: tur emit-c failed: $(grep -v W0060 "$TMP/$p/emit.err" | head -3)"
+        fail "$p: tur emit-c failed: $(grep -vE 'W006[01]' "$TMP/$p/emit.err" | head -3)"
     fi
 done
 (cd "$TMP/p1" && TUR_NO_SRFI_PRUNE=1 "$TUR" emit-c prog.scm > unpruned.c 2>/dev/null)

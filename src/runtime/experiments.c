@@ -373,11 +373,35 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * graduation deferred it, it did not remove it.  The name moves to
      * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op). */
     /* r7rs -- R7RS-small Scheme as a `#lang` base over the Turmeric runtime
-     * (Saffron's dynamic substrate under a Scheme reader).  Gated because the
-     * plan is staged R0-R10 and everything past R1 -- Scheme core forms, a
-     * real datum, `syntax-rules`, the numeric tower, control -- is still to
-     * land; until the conformance suite (R10) reports a number the dialect is
-     * a documented deviation from the standard and must say so.
+     * (Saffron's dynamic substrate under a Scheme reader).
+     *
+     * BETA since 2026-09-27 (0.56.0).  It was prototype while the plan was
+     * staged and unfinished; that condition is gone.  r7rs-lang-plan's R0-R10
+     * and its Section 9 T0-T8 have all landed, r7rs-srfi-plan's S0-S7 with
+     * them, and R10's exit criterion -- the conformance suite reports a
+     * number -- is met: `tur_r7rs_conformance` runs chibi-scheme's R7RS suite
+     * and 1223 test invocations pass on BOTH back ends, 2 are settled as
+     * differences kept on purpose (T7) and none fail, of the 1216 tests the
+     * suite writes.  The surface is frozen; beta is the soak, not more design.
+     *
+     * What beta does NOT claim, and why this is not GRADUATED[] yet: four open
+     * reports in docs/reported/ still describe a conforming program getting a
+     * wrong answer or failing to build --
+     *   - r7rs-raise-musttail-fails-under-clang-x86-64 (every program that
+     *     reaches `raise` fails to build under clang on x86-64 Linux; CI does
+     *     not see it, because Linux CI is gcc and macOS CI is arm64),
+     *   - r7rs-too-few-arguments-returns-a-procedure (an under-saturated call
+     *     is a Turmeric partial application, not R7RS's error),
+     *   - r7rs-type-errors-are-uncatchable-panics (`(car 5)` aborts instead of
+     *     being `guard`-able; narrowed by S6, not closed),
+     *   - r7rs-turmeric-syntax-leaks (Turmeric's forms, reader extensions and
+     *     auto-loaded stdlib names are live in Scheme source, taking lexical
+     *     space R7RS gives the program).
+     * Those are the graduation checklist.  All four closed on 2026-09-27 and
+     * are archived under docs/archive/ (r7rs-programs-compile-slowly, still
+     * open, is a build-time cost, not a wrong answer).  What remains is the
+     * beta soak: at graduation, move the name to GRADUATED[] below and drop
+     * the row.
      *
      * The `#lang r7rs` line is itself the enable (D11): lang_dialect_apply
      * enables this row at CLI precedence when it reads the directive, so no
@@ -390,8 +414,8 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "R7RS-small Scheme as a `#lang` base (Saffron's dynamic substrate under a Scheme reader)",
       "docs/upcoming/r7rs-lang-plan.md",
       "0.52.0",                  /* introduced */
-      "0.70.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
+      "0.57.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_BETA,
       &g_opt_r7rs },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */

@@ -19,17 +19,13 @@ interpreter deliberately does not free, and where the seams are.
 
 ## The layers, at a glance
 
-```
-┌──────────────────────────────────────────────────────┐
-│  Bacon-Rajan cycle collector    src/runtime/gc.c     │  opt-in, off by default
-├──────────────────────────────────────────────────────┤
-│  Reference counting (rc<T> / weak<T>)                │  always on for rc<T>
-│                                 src/runtime/rc.c     │
-├──────────────────────────────────────────────────────┤
-│  Arenas (bump allocators)       src/runtime/arena.c  │  bulk-freed
-├──────────────────────────────────────────────────────┤
-│  Stack + plain malloc / free                         │  everything else
-└──────────────────────────────────────────────────────┘
+```mermaid
+block-beta
+  columns 2
+  a["Bacon-Rajan cycle collector -- src/runtime/gc.c"] a2["opt-in, off by default"]
+  b["Reference counting (rc&lt;T&gt; / weak&lt;T&gt;) -- src/runtime/rc.c"] b2["always on for rc&lt;T&gt;"]
+  c["Arenas (bump allocators) -- src/runtime/arena.c"] c2["bulk-freed"]
+  d["Stack + plain malloc / free"] d2["everything else"]
 ```
 
 Only values whose type is `rc<T>` participate in RC or GC. Everything else

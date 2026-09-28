@@ -76,23 +76,16 @@ The formula `y ~ x1 * x2 + I(x3^2)` expands to response `y` with predictors:
 
 ## Architecture
 
-```
-caller (tur-stats functions)
-  |
-  v
-formula/parser  -- lexer + Pratt parser -> AST
-  |
-  v
-formula/expand -- term expansion (* / ^ -> + interactions)
-  |
-  v
-formula/factors -- categorical detection + dummy coding
-  |
-  v
-formula/terms  -- final column list extraction
-  |
-  v
-tur-stats functions (ols-frame, etc.) -- unchanged
+```mermaid
+flowchart TD
+  A["caller<br/>tur-stats functions"]
+  B["formula/parser<br/>lexer + Pratt parser -> AST"]
+  C["formula/expand<br/>term expansion (* / ^ -> + interactions)"]
+  D["formula/factors<br/>categorical detection + dummy coding"]
+  E["formula/terms<br/>final column list extraction"]
+  F["tur-stats functions (ols-frame, etc.)<br/>-- unchanged"]
+
+  A --> B --> C --> D --> E --> F
 ```
 
 All formula processing is **pure Turmeric** with inline-C only for performance

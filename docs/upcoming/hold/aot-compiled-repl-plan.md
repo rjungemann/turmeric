@@ -16,23 +16,19 @@ Today's `tur repl` is powered by the tree-walking interpreter (`turi`), evaluati
 
 The **AOT-compiled REPL** bridges this gap by compiling user input on the fly. Each expression or definition entered by the user is transpiled to C, built as a position-independent shared library (`.so` / `.dylib`) via a background C compiler subprocess (`clang` or `gcc`), dynamically loaded into the REPL process via `dlopen`, resolved via `dlsym`, and executed directly as native machine code.
 
-```
-       User Form (e.g. (+ x 42))
-                   |
-                   v
-    [ AST Form parsed in REPL Loop ]
-                   |
-                   v
- [ Append to Session Source / Wrap Stub ]
-                   |
-                   v  (tur build --shared)
-    [ Transient C File & libeval-gen.so ]
-                   |
-                   v  (dlopen + dlsym)
-    [ Invoke compiled __tur_repl_eval ]
-                   |
-                   v
-         Native Output / Result
+```mermaid
+flowchart TD
+  U["User form -- (+ x 42)"]
+  P["AST form parsed in REPL loop"]
+  S["Append to session source / wrap stub"]
+  C["Transient .c file + libeval-gen.so"]
+  I["Invoke compiled __tur_repl_eval"]
+  O["Native output / result"]
+
+  U --> P --> S
+  S -->|"tur build --shared"| C
+  C -->|"dlopen + dlsym"| I
+  I --> O
 ```
 
 ---

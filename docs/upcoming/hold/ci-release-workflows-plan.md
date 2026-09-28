@@ -23,26 +23,29 @@ Every ordering invariant the skill enforced is preserved:
 
 ## Flow
 
-```
-[ Actions tab ] --workflow_dispatch(bump: patch|minor|major)-->
-  release-prepare.yml
-    - compute NEW from VERSION per bump level
-    - bump VERSION + src/web/wasm_glue.h (TURMERIC_VERSION)
-    - auto-draft CHANGELOG.md entry from git log (rough)
-    - insert README "Latest release" placeholder line
-    - open PR "chore: release vX.Y.Z" (label: release)
-  --> human reviews/edits CHANGELOG + README in the PR (ci.yml gates it)
-  --> merge to main  (VERSION file changes)
-  release-deploy.yml  (on: push, paths: [VERSION])
-    job deploy-web:
-      - build native tur, generate docs, build WASM, build web bundle
-      - Playwright deploy-gate smoke test (must pass before deploy)
-      - wrangler deploy --> Cloudflare
-    job tag (needs: deploy-web):
-      - create + push tag vX.Y.Z (via RELEASE_PAT)
-  --> tag push triggers release.yml (unchanged)
-  release.yml
-    - build 3 platform binaries + create GitHub Release
+```mermaid
+sequenceDiagram
+  actor Dev as Maintainer
+  participant A as Actions tab
+  participant P as release-prepare.yml
+  participant M as main
+  participant D as release-deploy.yml
+  participant R as release.yml
+
+  Dev->>A: workflow_dispatch(bump: patch|minor|major)
+  A->>P: run
+  P->>P: compute NEW from VERSION per bump level
+  P->>P: bump VERSION + src/web/wasm_glue.h (TURMERIC_VERSION)
+  P->>P: auto-draft CHANGELOG.md from git log (rough)
+  P->>P: insert README "Latest release" placeholder
+  P-->>Dev: PR "chore: release vX.Y.Z" (label: release)
+  Dev->>M: edit CHANGELOG + README, merge (ci.yml gates it)
+  M->>D: push, paths: [VERSION]
+  D->>D: deploy-web -- build tur, docs, WASM, web bundle
+  D->>D: Playwright deploy-gate smoke test (must pass)
+  D->>D: wrangler deploy -> Cloudflare
+  D->>R: tag job (needs: deploy-web) pushes vX.Y.Z via RELEASE_PAT
+  R->>R: build 3 platform binaries + create GitHub Release
 ```
 
 ## Decisions (settled)
