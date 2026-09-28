@@ -394,6 +394,9 @@ TuriValue turi_any_identity_payload(TuriValue v);
  * (after the stack image is restored). */
 typedef struct TuriContState TuriContState;
 void           turi_cont_pin(void);
+/* Free the heap work stacks of the drives a re-entry is about to abandon:
+ * those registered below `top`, the top of the image being restored. */
+void           turi_cont_release_drives(const void *top);
 TuriContState *turi_cont_state_capture(TuriEnv *env);
 void           turi_cont_state_restore(TuriEnv *env, const TuriContState *s);
 /* The per-form prompt (r7rs-toplevel-reentry-reruns-forms): the drive the

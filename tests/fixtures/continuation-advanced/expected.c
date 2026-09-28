@@ -2327,6 +2327,18 @@ static void __dk_reap_run(void) {
     free(__dk_reap_v); free(__dk_reap_kind);
     __dk_reap_v = NULL; __dk_reap_kind = NULL; __dk_reap_n = __dk_reap_cap = 0;
 }
+__attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {
+#if defined(TUR_GC_ON) && TUR_GC_ON
+    if (TUR_GC_LOAD(&tur_gc_threaded)) return;
+    /* A re-entered continuation can bring back an entry whose mark is past
+     * the list's end: nothing of its is left to drop. */
+    if (mark >= __dk_reap_n) return;
+    for (size_t i = mark; i < __dk_reap_n; i++) __dk_reap_v[i] = NULL;
+    __dk_reap_n = mark;
+#else
+    (void)mark;
+#endif
+}
 static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
     while (k) {
         switch (k->kind) {
@@ -7227,6 +7239,7 @@ __tur_cps_self:;
 }
 __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp) {
     __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
@@ -7235,7 +7248,7 @@ __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt,
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
     return __ret;
 }
 static bool map_hyeq_hydriver(int64_t m1, int64_t m2, int64_t val_cmp) {
@@ -7579,6 +7592,7 @@ __tur_cps_self:;
 }
 __attribute__((unused)) static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t cmp_fn) {
     __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
@@ -7587,7 +7601,7 @@ __attribute__((unused)) static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
     return __ret;
 }
 static bool cons_hyeq_hygo(int64_t c1, int64_t c2) {
@@ -7666,6 +7680,7 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
 }
 __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f) {
     __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
@@ -7674,7 +7689,7 @@ __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f)
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
     return __ret;
 }
 static void tur_hylist_hyhomog_un_un(int64_t a, int64_t b) {
@@ -9415,6 +9430,7 @@ static int64_t test_hynested_hyreset__cps(DK *__kont) {
 }
 __attribute__((unused)) static int64_t test_hynested_hyreset() {
     __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
@@ -9423,7 +9439,7 @@ __attribute__((unused)) static int64_t test_hynested_hyreset() {
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
     return __ret;
 }
 static intptr_t test_hyshift_hyreturn_hydifferent_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
@@ -9448,6 +9464,7 @@ static int64_t test_hyshift_hyreturn_hydifferent__cps(DK *__kont) {
 }
 __attribute__((unused)) static int64_t test_hyshift_hyreturn_hydifferent() {
     __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
@@ -9456,7 +9473,7 @@ __attribute__((unused)) static int64_t test_hyshift_hyreturn_hydifferent() {
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
     return __ret;
 }
 static intptr_t test_hymultiple_hyshifts_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
@@ -9481,6 +9498,7 @@ static int64_t test_hymultiple_hyshifts__cps(DK *__kont) {
 }
 __attribute__((unused)) static int64_t test_hymultiple_hyshifts() {
     __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
@@ -9489,7 +9507,7 @@ __attribute__((unused)) static int64_t test_hymultiple_hyshifts() {
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
     return __ret;
 }
 static intptr_t test_hyshift_hyignores_hyk_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
@@ -9514,6 +9532,7 @@ static int64_t test_hyshift_hyignores_hyk__cps(DK *__kont) {
 }
 __attribute__((unused)) static int64_t test_hyshift_hyignores_hyk() {
     __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
@@ -9522,7 +9541,7 @@ __attribute__((unused)) static int64_t test_hyshift_hyignores_hyk() {
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
     return __ret;
 }
 static intptr_t test_hyreset_hyno_hyshift_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
@@ -9536,6 +9555,7 @@ static int64_t test_hyreset_hyno_hyshift__cps(DK *__kont) {
 }
 __attribute__((unused)) static int64_t test_hyreset_hyno_hyshift() {
     __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
@@ -9544,7 +9564,7 @@ __attribute__((unused)) static int64_t test_hyreset_hyno_hyshift() {
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
     return __ret;
 }
 static intptr_t test_hydeeply_hynested_hyshift_k0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
@@ -9589,6 +9609,7 @@ static int64_t test_hydeeply_hynested_hyshift__cps(DK *__kont) {
 }
 __attribute__((unused)) static int64_t test_hydeeply_hynested_hyshift() {
     __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
@@ -9597,7 +9618,7 @@ __attribute__((unused)) static int64_t test_hydeeply_hynested_hyshift() {
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
     return __ret;
 }
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {

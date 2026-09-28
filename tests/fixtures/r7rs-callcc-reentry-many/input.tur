@@ -1,0 +1,79 @@
+#lang r7rs
+;; r7rs-callcc-memory-never-freed: many re-entries of re-entrant continuations.
+;; Under --interpret a capture is kept as the stack words that differ from a
+;; KEYFRAME (the latest whole image of the same stack range), and a re-entry
+;; copies the keyframe back and patches them.  These programs re-enter
+;; thousands of times, from ranges that alternate and vary in size, and
+;; re-enter an old continuation after hundreds of later captures -- every
+;; answer depends on the restored stack being exactly the captured one.
+(import (scheme base) (scheme write))
+
+(define (show x) (write x) (newline))
+
+(define (iota-list n)
+  (let loop ((i n) (acc '()))
+    (if (= i 0) acc (loop (- i 1) (cons i acc)))))
+
+;; A generator over whatever `walk` yields: each step re-enters the walk.
+(define (make-gen walk)
+  (define return #f)
+  (define resume #f)
+  (lambda ()
+    (call/cc (lambda (r)
+      (set! return r)
+      (if resume
+          (resume #f)
+          (begin
+            (walk (lambda (x) (call/cc (lambda (next) (set! resume next) (return x)))))
+            (return 'done)))))))
+
+(define (drain g acc)
+  (let ((v (g)))
+    (if (eq? v 'done) acc (drain g (+ acc v)))))
+
+;; 1. one generator, three thousand steps.
+(show (drain (make-gen (lambda (yield) (for-each yield (iota-list 3000)))) 0))
+
+;; 2. two generators stepped in lockstep: consecutive captures alternate
+;;    between the two walks.
+(define ga (make-gen (lambda (yield) (for-each yield (iota-list 500)))))
+(define gb (make-gen (lambda (yield) (for-each (lambda (x) (yield (* x x))) (iota-list 500)))))
+(define (lockstep n acc)
+  (if (= n 0) acc (lockstep (- n 1) (+ acc (* (ga) (gb))))))
+(show (lockstep 500 0))
+
+;; 3. a recursive tree walk: the captures are taken at varying depths, so
+;;    the images vary in size and the keyframes move.
+(define (build lo hi)
+  (if (= lo hi)
+      lo
+      (let ((mid (quotient (+ lo hi) 2)))
+        (cons (build lo mid) (build (+ mid 1) hi)))))
+(define (tree-walk t yield)
+  (if (pair? t)
+      (begin (tree-walk (car t) yield) (tree-walk (cdr t) yield))
+      (yield t)))
+(define gt (make-gen (lambda (yield) (tree-walk (build 1 300) yield))))
+(define (take g n)
+  (if (= n 0) '() (let ((v (g))) (cons v (take g (- n 1))))))
+(show (take gt 12))
+(show (drain gt 0))
+
+;; 4. an old continuation, re-entered after hundreds of later captures.
+(define (replay)
+  (let ((old #f) (n 0) (out '()))
+    (let ((x (call/cc (lambda (k) (set! old k) 0))))
+      (set! out (cons x out))
+      (drain (make-gen (lambda (yield) (for-each yield (iota-list 200)))) 0)
+      (set! n (+ n 1))
+      (if (< n 5) (old (* n 10)) (reverse out)))))
+(show (replay))
+
+;; 5. one continuation re-entered two thousand times.
+(define (reenter-many)
+  (let ((k #f) (count 0) (total 0))
+    (let ((v (+ 100 (call/cc (lambda (c) (set! k c) 0)))))
+      (set! total (+ total v))
+      (set! count (+ count 1))
+      (if (< count 2000) (k count) (list count total)))))
+(show (reenter-many))

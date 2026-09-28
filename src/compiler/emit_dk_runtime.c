@@ -782,6 +782,35 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    }\n"
 "    free(__dk_reap_v); free(__dk_reap_kind);\n"
 "    __dk_reap_v = NULL; __dk_reap_kind = NULL; __dk_reap_n = __dk_reap_cap = 0;\n"
+"}\n"
+/* r7rs-callcc-memory-never-freed: a NESTED entry's exit.  Only the outermost
+ * exit may free what the list holds -- a registered chain can still be in use
+ * until the outermost dk_run settles -- so a program whose loop runs inside
+ * one CPS entry (a `guard`, a call/cc escape, anything that reaches Turmeric's
+ * call/cc) kept every inner entry's registrations until the program ended:
+ * 2,000,000 entries for a `guard` in a loop run 1,000,000 times, and every
+ * box and chain they name live with them.  Under the collector (`TUR_GC_ON`,
+ * a compiled `#lang r7rs` program) nothing needs freeing by hand: forgetting
+ * the entry's own registrations is enough, and the collector reclaims
+ * whatever nothing else still reaches -- a stack image of a re-entrant
+ * continuation included, which is scanned while it is live.  The slots are
+ * cleared, since the list's array is itself scanned.  Without a collector
+ * this does nothing, and the outermost exit frees everything, as before.
+ * Nor once the program has started a thread (tur_gc_threaded, r7gc.c): the
+ * list and the entry depth are process-global, so a mark taken on one thread
+ * says nothing about another's registrations, and a worker's exit would
+ * truncate the list under a push on the main thread. */
+"__attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {\n"
+"#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+"    if (TUR_GC_LOAD(&tur_gc_threaded)) return;\n"
+"    /* A re-entered continuation can bring back an entry whose mark is past\n"
+"     * the list's end: nothing of its is left to drop. */\n"
+"    if (mark >= __dk_reap_n) return;\n"
+"    for (size_t i = mark; i < __dk_reap_n; i++) __dk_reap_v[i] = NULL;\n"
+"    __dk_reap_n = mark;\n"
+"#else\n"
+"    (void)mark;\n"
+"#endif\n"
 "}\n");
     buf_puts(out,
 "static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {\n"

@@ -3531,6 +3531,7 @@ static bool span_is_synthetic(Span sp) {
     const SourceFile *f = diag_source_file(sp.file_id);
     return f && f->path && f->path[0] == '<';
 }
+static bool callcc_escape_only(SL *sl, const Form *call);
 static Form *lower(SL *sl, Form *f) {
     if (!f) return f;
     switch (f->tag) {
@@ -3722,6 +3723,12 @@ static Form *lower(SL *sl, Form *f) {
              * cascade into "nil is not callable". */
             return Ln(sl, f->span, 3, Sym(sl, f->span, I(sl, "::")), Nil(sl, f->span), Sym(sl, f->span, sl->t_any));
         }
+        /* r7rs-callcc-memory-never-freed: a `call/cc` whose continuation
+         * provably never outlives the call is the one-shot escape, which
+         * copies no stack and pins nothing (callcc_escape_only says when). */
+        if (!prelude_span(f->span) && callcc_escape_only(sl, f))
+            return Ln(sl, f->span, 2, Sym(sl, f->span, I(sl, "r7rs-call/ec-proc__")),
+                      lower(sl, f->as.list.items[1]));
     }
     return lower_children(sl, f);
 }
@@ -5139,6 +5146,218 @@ static void user_binders(SL *sl, const Form *f, FB *out) {
     }
     for (uint32_t i = 0; i < len; i++) user_binders(sl, f->as.list.items[i], out);
 }
+/* ---------------------------------------------------------------------------
+ * r7rs-callcc-memory-never-freed: escape-only `call/cc`.
+ *
+ * `(call/cc (lambda (k) body...))` copies the stack so that `k` can be
+ * invoked after the call/cc has returned.  When the body cannot let `k` out,
+ * every invocation of `k` happens while the call/cc is still running -- an
+ * escape -- and `r7rs-call/ec__`, the one-shot escape `guard` uses, gives the
+ * same answers with no stack copy and, under the interpreter, no pin.
+ *
+ * `k` cannot get out when every occurrence of it is the operator of a call,
+ * and every closure it occurs in cannot get out either.  A closure is let
+ * through in two places only:
+ *   - a `lambda` written as an argument of a standard procedure that calls
+ *     its procedure arguments and keeps none of them (`for-each`, `map`,
+ *     their vector and string twins, and `call/cc` itself), which is the
+ *     `(for-each (lambda (x) (if (p x) (return x))) l)` idiom;
+ *   - a named `let` whose name, too, only ever heads a call, which is the
+ *     `(let scan ((l l)) ... (return x) ... (scan (cdr l)))` idiom.
+ * Anything else that makes a closure over `k` -- a lambda stored, returned or
+ * passed elsewhere, `delay`, `case-lambda`, an internal `define`, a macro use
+ * or quasiquote mentioning it -- keeps the copying call/cc.  So does any
+ * rebinding of `k`, or of one of those procedure names, inside the body.
+ *
+ * A continuation captured INSIDE the body and re-entered later restores the
+ * escape as live along with the frames it copies (the capture's saved state
+ * includes the live escapes, on both back ends), so `k` still works there.
+ * `dynamic-wind` is deliberately not in the list: its `before` thunk runs
+ * again on a re-entry BEFORE the stack is restored, where the escape is not
+ * live yet.
+ * ------------------------------------------------------------------------- */
+static bool fb_has_sym(const FB *b, const Symbol *s);
+static bool cc_mentions(const Form *f, const Symbol *k) {
+    if (!f) return false;
+    if (f->tag == F_SYM) return f->as.sym == k;
+    if (f->tag == F_QUOTE) return false;
+    switch (f->tag) {
+        case F_LIST: case F_VEC: case F_QUASIQUOTE: case F_UNQUOTE: case F_UNQUOTE_SPLICING:
+        case F_MAP: case F_SET: case F_MAP_LITERAL: case F_SET_LITERAL: case F_TYPE_ANN:
+            for (uint32_t i = 0; i < f->as.list.len; i++)
+                if (cc_mentions(f->as.list.items[i], k)) return true;
+            return false;
+        default: return false;
+    }
+}
+typedef struct { SL *sl; const Symbol *k; FB binders; } CcScan;
+static bool cc_bound_inside(const CcScan *c, const Symbol *s) { return fb_has_sym(&c->binders, s); }
+/* A head that names one of the non-retaining standard procedures. */
+static bool cc_nonretaining_head(const CcScan *c, const Form *h) {
+    if (!h || h->tag != F_SYM || cc_bound_inside(c, h->as.sym)) return false;
+    static const char *const names[] = {
+        "r7rs-for-each", "r7rs-map", "r7rs-vector-for-each", "r7rs-vector-map",
+        "r7rs-string-for-each", "r7rs-string-map", "r7rs-call/cc",
+    };
+    const Symbol *t = rn(c->sl, h->as.sym);
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (strcmp(t->name, names[i]) == 0) return true;
+    return false;
+}
+static bool cc_ok(CcScan *c, const Form *f);
+static bool cc_ok_from(CcScan *c, const Form *f, uint32_t from) {
+    for (uint32_t i = from; i < f->as.list.len; i++)
+        if (!cc_ok(c, f->as.list.items[i])) return false;
+    return true;
+}
+/* A `lambda` in a position that does not let it out: its body is checked as
+ * if written in place. */
+static bool cc_ok_lambda_body(CcScan *c, const Form *lam) {
+    if (lam->as.list.len < 3) return false;
+    return cc_ok_from(c, lam, 2);
+}
+static bool cc_is_lambda(const CcScan *c, const Form *f) {
+    return f && f->tag == F_LIST && f->as.list.len >= 3 && f->as.list.items[0]->tag == F_SYM &&
+           f->as.list.items[0]->as.sym == c->sl->s_lambda && !sr_lookup(c->sl, c->sl->s_lambda);
+}
+static bool cc_ok(CcScan *c, const Form *f) {
+    SL *sl = c->sl;
+    const Symbol *k = c->k;
+    if (!f) return true;
+    if (f->tag == F_SYM) return f->as.sym != k;          /* k as a value: it can get out */
+    if (f->tag == F_QUOTE) return true;
+    if (f->tag != F_LIST) return !cc_mentions(f, k);
+    if (f->as.list.len == 0) return true;
+    if (!cc_mentions(f, k)) return true;                  /* nothing here can reach k */
+    const Form *h = f->as.list.items[0];
+    if (h->tag == F_SYM && h->as.sym == k) return cc_ok_from(c, f, 1);   /* (k args...) */
+    if (h->tag == F_SYM && !cc_bound_inside(c, h->as.sym)) {
+        const Symbol *s = h->as.sym;
+        if (sr_lookup(sl, s)) return false;               /* a macro use: opaque */
+        if (s == sl->s_quote) return true;
+        if (s == sl->s_if || s == sl->s_begin || s == sl->s_when || s == sl->s_unless ||
+            s == sl->s_and || s == sl->s_or)
+            return cc_ok_from(c, f, 1);
+        if (s == sl->s_set)
+            return f->as.list.len == 3 && f->as.list.items[1]->tag == F_SYM &&
+                   f->as.list.items[1]->as.sym != k && cc_ok(c, f->as.list.items[2]);
+        if (s == sl->s_cond || s == sl->s_guard || s == sl->s_case) {
+            /* cond clauses; a guard's (var clause...) and body; a case's key
+             * and clauses, whose data lists are data. */
+            uint32_t i = 1;
+            if (s == sl->s_case) { if (f->as.list.len < 2 || !cc_ok(c, f->as.list.items[1])) return false; i = 2; }
+            if (s == sl->s_guard) {
+                const Form *spec = f->as.list.len >= 2 ? f->as.list.items[1] : NULL;
+                if (!spec || spec->tag != F_LIST || spec->as.list.len < 1) return false;
+                for (uint32_t j = 1; j < spec->as.list.len; j++) {
+                    const Form *cl = spec->as.list.items[j];
+                    if (cl->tag != F_LIST || !cc_ok_from(c, cl, 0)) return false;
+                }
+                return cc_ok_from(c, f, 2);
+            }
+            for (; i < f->as.list.len; i++) {
+                const Form *cl = f->as.list.items[i];
+                if (cl->tag != F_LIST) return false;
+                if (!cc_ok_from(c, cl, s == sl->s_case ? 1 : 0)) return false;
+            }
+            return true;
+        }
+        if (s == sl->s_let || s == sl->s_letstar || s == sl->s_letrec || s == sl->s_letrecstar ||
+            s == sl->s_let_values || s == sl->s_letstar_values || s == sl->s_parameterize) {
+            if (f->as.list.len < 3) return false;
+            uint32_t bi = 1;
+            const Form *name = NULL;
+            if (s == sl->s_let && f->as.list.items[1]->tag == F_SYM) { name = f->as.list.items[1]; bi = 2; }
+            const Form *b = f->as.list.items[bi];
+            if (b->tag != F_LIST && b->tag != F_NIL) return false;
+            for (uint32_t j = 0; b->tag == F_LIST && j < b->as.list.len; j++) {
+                const Form *pair = b->as.list.items[j];
+                if (pair->tag != F_LIST || pair->as.list.len < 1) return false;
+                /* (v init), ((formals) init), (param value) */
+                if (s == sl->s_parameterize ? !cc_ok(c, pair->as.list.items[0])
+                                            : cc_mentions(pair->as.list.items[0], k))
+                    return false;
+                if (!cc_ok_from(c, pair, 1)) return false;
+            }
+            if (name) {
+                /* The loop procedure closes over the body: it must not get
+                 * out either, so its name may only head calls. */
+                if (name->as.sym == k) return false;
+                CcScan inner = { sl, name->as.sym, c->binders };
+                if (!cc_ok_from(&inner, f, bi + 1)) return false;
+            }
+            return cc_ok_from(c, f, bi + 1);
+        }
+        if (s == sl->s_do) {
+            /* (do ((var init step)...) (test expr...) command...) */
+            if (f->as.list.len < 3) return false;
+            const Form *b = f->as.list.items[1], *t = f->as.list.items[2];
+            if ((b->tag != F_LIST && b->tag != F_NIL) || (t->tag != F_LIST && t->tag != F_NIL)) return false;
+            for (uint32_t j = 0; b->tag == F_LIST && j < b->as.list.len; j++) {
+                const Form *v = b->as.list.items[j];
+                if (v->tag != F_LIST || v->as.list.len < 2 || cc_mentions(v->as.list.items[0], k)) return false;
+                if (!cc_ok_from(c, v, 1)) return false;
+            }
+            if (t->tag == F_LIST && !cc_ok_from(c, t, 0)) return false;
+            return cc_ok_from(c, f, 3);
+        }
+        if (is_scheme_syntax_name(s->name)) return false;  /* lambda, delay, define, ... */
+    }
+    /* An application.  The operator is an expression like any other; a
+     * lambda argument is let through only for a non-retaining callee. */
+    if (!cc_ok(c, h)) return false;
+    bool keeps_none = cc_nonretaining_head(c, h);
+    for (uint32_t i = 1; i < f->as.list.len; i++) {
+        const Form *a = f->as.list.items[i];
+        if (keeps_none && cc_is_lambda(c, a)) {
+            if (cc_mentions(a->as.list.items[1], k)) return false;   /* rebinds k */
+            if (!cc_ok_lambda_body(c, a)) return false;
+        } else if (!cc_ok(c, a)) {
+            return false;
+        }
+    }
+    return true;
+}
+/* Every name the body binds, variable defines included. */
+static void cc_binders(SL *sl, const Form *f, FB *out) {
+    user_binders(sl, f, out);
+    if (!f || f->tag != F_LIST) return;
+    for (uint32_t i = 0; i < f->as.list.len; i++) {
+        const Form *x = f->as.list.items[i];
+        if (x && x->tag == F_LIST && x->as.list.len >= 2 && is_sym(x->as.list.items[0], sl->s_define) &&
+            x->as.list.items[1]->tag == F_SYM)
+            fb_push(out, x->as.list.items[1]);
+        if (x && x->tag == F_LIST) cc_binders(sl, x, out);
+    }
+}
+/* Is `call` -- already known to be a list with a symbol head -- a
+ * `(call/cc (lambda (k) body...))` whose `k` never outlives it? */
+static bool callcc_escape_only(SL *sl, const Form *call) {
+    if (call->as.list.len != 2) return false;
+    const Form *h = call->as.list.items[0];
+    if (h->tag != F_SYM || strcmp(rn(sl, h->as.sym)->name, "r7rs-call/cc") != 0) return false;
+    const Form *lam = call->as.list.items[1];
+    CcScan c = { sl, NULL, {0} };
+    if (!cc_is_lambda(&c, lam)) return false;
+    const Form *formals = lam->as.list.items[1];
+    if (formals->tag != F_LIST || formals->as.list.len != 1 || formals->as.list.items[0]->tag != F_SYM)
+        return false;
+    c.k = formals->as.list.items[0]->as.sym;
+    for (uint32_t i = 2; i < lam->as.list.len; i++) cc_binders(sl, lam->as.list.items[i], &c.binders);
+    bool ok = !cc_bound_inside(&c, c.k);
+    for (uint32_t i = 2; ok && i < lam->as.list.len; i++) {
+        const Form *x = lam->as.list.items[i];
+        /* An internal definition closes over k: keep the copying call/cc. */
+        if (x->tag == F_LIST && x->as.list.len >= 1 && x->as.list.items[0]->tag == F_SYM &&
+            is_scheme_syntax_name(x->as.list.items[0]->as.sym->name) &&
+            strncmp(x->as.list.items[0]->as.sym->name, "define", 6) == 0 && cc_mentions(x, c.k))
+            ok = false;
+        else ok = cc_ok(&c, x);
+    }
+    free(c.binders.items);
+    return ok;
+}
+
 /* The names an `(import ...)` binds by spelling them: an `(only ...)` list
  * and the new names of a `(rename ...)`.  A global spelled like a Turmeric
  * special form (`gen`, `handle`, `return`, ...) that the user defines or
