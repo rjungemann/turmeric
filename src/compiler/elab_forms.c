@@ -1175,6 +1175,23 @@ Expr *elab_let(Elab *e, const Form *call) {
                     rc = -1; break;
                 }
             }
+            /* gadt-length-index-not-enforced: an annotated GADT index is a
+             * claim about the initializer -- `[v : (Vec (Succ Zero)) (VNil)]`
+             * is false. */
+            const Form *got = NULL;
+            if (gadt_claim_disagrees(e, type_ann_form, init, &got)) {
+                const Form *ann = type_ann_form;
+                while (ann && ann->tag == F_TYPE_ANN && ann->as.list.len == 1)
+                    ann = ann->as.list.items[0];
+                Buf cb; buf_init(&cb); form_print(&cb, ann); buf_putc(&cb, '\0');
+                Buf gb; buf_init(&gb); form_print(&gb, got); buf_putc(&gb, '\0');
+                diag_emit_with_code(DIAG_ERROR, type_ann_form->span,
+                    TUR_E0001_TYPE_MISMATCH,
+                    "let binding '%s': annotated %s, but the initializer has type %s",
+                    name->name, cb.data, gb.data);
+                buf_free(&cb); buf_free(&gb);
+                rc = -1; break;
+            }
         }
 
         /* Phase 11: Move tracking - if init is a CK_MOVE binding reference, poison it */

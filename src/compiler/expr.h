@@ -1547,6 +1547,15 @@ struct Expr {
                   * are elaboration-only; size indices are erased in codegen. */
                  struct CtorDef *ctor;
                  struct SizeTerm *size_index;
+                 /* gadt-length-index-not-enforced: for a GADT constructor
+                  * application, the constructed value's type with its
+                  * phantom index instantiated from the arguments --
+                  * `(Vec (Succ Zero))` for `(VCons 7 (VNil))`, `?` where an
+                  * index is unknown.  The value's TYPE stays the bare ADT;
+                  * this is what sz_recover_type_form hands a claim check
+                  * (gadt_index_check_call / gadt_claim_disagrees).
+                  * Elaboration-only; NULL for everything else. */
+                 const struct Form *gadt_form;
                  /* jit-ffi-c2mir-plan F3: non-NULL marks this call as
                   * `(call-ptr ...)` -- an indirect call through a raw
                   * address with the explicit C signature here.  fn_expr

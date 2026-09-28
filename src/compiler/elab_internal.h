@@ -1826,6 +1826,14 @@ const Form *sz_recover_type_form(Elab *e, const Expr *x);
  * describes disagree at a position where both are statically known. */
 bool sz_claim_disagrees(Elab *e, const Form *claim, const Expr *x,
                         int64_t *claimed, int64_t *actual);
+/* gadt-length-index-not-enforced: is the claim that a GADT value has index
+ * `claim` (an ascription, a declared return, an annotated let) provably false
+ * of `x`?  `*got` is what x's index is known to be.  elab_call.c. */
+bool gadt_claim_disagrees(Elab *e, const Form *claim, const Expr *x,
+                          const struct Form **got);
+/* gadt-length-index-not-enforced: `x` wrapped in an ascription to its known
+ * GADT index, or `x` unchanged.  elab_call.c. */
+Expr *gadt_refine_to_index(Elab *e, Expr *x);
 Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span, bool typed_concrete);
 /* MB1 (constrained-hkt-forall-mode-b): variant with `n_lead_ignore` leading
  * dict-carrier params the wrapper accepts but does not forward to the inner. */

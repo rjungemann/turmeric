@@ -1,0 +1,20 @@
+;; gadt-length-index-not-enforced: `(LNil)` is `(LVec Zero)`, so handing it
+;; to a parameter declared `(LVec (Succ n))` is a type error -- before, the
+;; application was the bare `LVec`, was accepted, and fell off the arm-less
+;; match at runtime.  The let-bound spelling is rejected the same way.
+
+(defopaque Zero :int)
+(defopaque Succ [n] :int)
+
+(defgadt LVec [n]
+  (LNil : (LVec Zero))
+  (LCons int (LVec n) : (LVec (Succ n))))
+
+(defn lhead [n] [v : (LVec (Succ n))] : int
+  (match v
+    (LCons x _) x))
+
+(defn main [] : int
+  (let [v (LNil)]
+    (println (lhead v)))
+  0)

@@ -1,0 +1,55 @@
+;; gadt-length-index-not-enforced -- a GADT constructor application carries
+;; the index its constructor declares, instantiated from its arguments:
+;; `(LNil)` is `(LVec Zero)`, `(LCons 7 (LNil))` is `(LVec (Succ Zero))`.
+;;
+;; The value's TYPE stays the bare `LVec` (so a bare-annotated function such as
+;; `blen` still takes it); the index rides beside it, the way a sized GADT's
+;; size index does, and is checked where a claim is made about it -- an
+;; argument, an ascription, an annotated let, a declared return.  A parameter
+;; declared at an application of the GADT gets the argument at its known
+;; index, so `ltail`'s `n` binds from the argument and `(lhead (ltail v))`
+;; type-checks without an ascription anywhere.
+;;
+;; errors/gadt-ctor-index-rejects-* are the same program with a false claim.
+
+(defopaque Zero :int)
+(defopaque Succ [n] :int)
+
+(defgadt LVec [n]
+  (LNil : (LVec Zero))
+  (LCons int (LVec n) : (LVec (Succ n))))
+
+;; No LNil arm: the index says the vector is non-empty.
+(defn lhead [n] [v : (LVec (Succ n))] : int
+  (match v
+    (LCons x _) x))
+
+(defn ltail [n] [v : (LVec (Succ n))] : (LVec n)
+  (match v
+    (LCons _ t) t))
+
+;; A bare parameter keeps taking every vector.
+(defn blen [v : LVec] : int
+  (match v
+    (LNil)         0
+    (LCons _ rest) (+ 1 (blen rest))))
+
+;; Two parameters sharing `n`: the arguments must have equal lengths.
+(defn heads2 [n] [a : (LVec (Succ n)) b : (LVec (Succ n))] : int
+  (+ (lhead a) (lhead b)))
+
+;; A declared index the body agrees with.
+(defn one [] : (LVec (Succ Zero)) (LCons 1 (LNil)))
+
+(defn main [] : int
+  (println (lhead (LCons 7 (LNil))))
+  (let [v (LCons 8 (LCons 9 (LNil)))]
+    (println (lhead (ltail v))))
+  (println (blen (LCons 7 (LCons 8 (LNil)))))
+  (println (heads2 (LCons 1 (LNil)) (LCons 2 (LNil))))
+  (println (lhead (one)))
+  (let [w : (LVec (Succ (Succ Zero))) (LCons 3 (LCons 4 (LNil)))]
+    (println (lhead w)))
+  ;; An index built through a function result.
+  (println (lhead (LCons 5 (ltail (LCons 6 (LNil))))))
+  0)

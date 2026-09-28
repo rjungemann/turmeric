@@ -8564,6 +8564,20 @@ Expr *elab_defn(Elab *e, const Form *call) {
             scope_free(&inner);
             return NULL;
         }
+        /* gadt-length-index-not-enforced: a declared GADT index against the
+         * tail's -- `(defn nil1 [] : (Vec (Succ Zero)) (VNil))` is false. */
+        const Form *got = NULL;
+        if (gadt_claim_disagrees(e, return_type_form_kept, tail, &got)) {
+            Buf cb; buf_init(&cb); form_print(&cb, return_type_form_kept); buf_putc(&cb, '\0');
+            Buf gb; buf_init(&gb); form_print(&gb, got); buf_putc(&gb, '\0');
+            diag_emit_with_code(DIAG_ERROR, tail->span, TUR_E0001_TYPE_MISMATCH,
+                "'%s' declares return type %s but its body has type %s",
+                name_f->as.sym->name, cb.data, gb.data);
+            buf_free(&cb); buf_free(&gb);
+            e->scope = inner.parent;
+            scope_free(&inner);
+            return NULL;
+        }
     }
 
     /* carrier-aware-return-unification Phase 1: reject a genuine return-position

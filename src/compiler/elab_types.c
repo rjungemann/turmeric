@@ -3451,6 +3451,18 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
                 (long long)claimed, (long long)actual);
             return NULL;
         }
+        /* gadt-length-index-not-enforced: the same claim about a GADT's
+         * phantom index -- `(:: (VNil) (Vec (Succ Zero)))` is false. */
+        const Form *got = NULL;
+        if (gadt_claim_disagrees(e, type_form, inner, &got)) {
+            Buf cb; buf_init(&cb); form_print(&cb, type_form); buf_putc(&cb, '\0');
+            Buf gb; buf_init(&gb); form_print(&gb, got); buf_putc(&gb, '\0');
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0001_TYPE_MISMATCH,
+                "ascription declares %s but the expression has type %s",
+                cb.data, gb.data);
+            buf_free(&cb); buf_free(&gb);
+            return NULL;
+        }
     }
 
     /* Fat-handle ascription: reinterpreting a one-word carrier (:int or

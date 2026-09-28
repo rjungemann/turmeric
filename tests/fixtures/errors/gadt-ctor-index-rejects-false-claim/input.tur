@@ -1,0 +1,20 @@
+;; gadt-length-index-not-enforced: a declared GADT index is a claim about
+;; the value, checked against the index the value is known to have.  A return
+;; type saying `(LVec (Succ Zero))` over a body that builds `(LNil)` is false.
+
+(defopaque Zero :int)
+(defopaque Succ [n] :int)
+
+(defgadt LVec [n]
+  (LNil : (LVec Zero))
+  (LCons int (LVec n) : (LVec (Succ n))))
+
+(defn lhead [n] [v : (LVec (Succ n))] : int
+  (match v
+    (LCons x _) x))
+
+(defn one [] : (LVec (Succ Zero)) (LNil))
+
+(defn main [] : int
+  (println (lhead (one)))
+  0)
