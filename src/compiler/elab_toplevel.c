@@ -235,6 +235,39 @@ static Expr *r7rs_string_unbox(Elab *e, Expr *val, Span span) {
     return call;
 }
 
+/* r7rs-type-errors-are-uncatchable-panics: the target of a failed cast, in
+ * the words a Scheme error message uses ("car: not a pair").  NULL for a
+ * target that has no Scheme name; the message then names the Turmeric type. */
+static const char *scheme_type_desc(Type t) {
+    switch (t.kind) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return "an exact integer";
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64: return "an inexact real";
+        case TY_BOOL:  return "a boolean";
+        case TY_CSTR:  return "a string";
+        case TY_SYM:   return "a symbol";
+        case TY_FN:    return "a procedure";
+        default: break;
+    }
+    static const char *const names[][2] = {
+        { "R7rsPair", "a pair" },             { "R7rsNull", "the empty list" },
+        { "R7rsString", "a string" },         { "R7rsChar", "a character" },
+        { "R7rsBytevector", "a bytevector" }, { "R7rsError", "an error object" },
+        { "R7rsParam", "a parameter object" },{ "R7rsPromise", "a promise" },
+        { "R7rsPort", "a port" },             { "R7rsEof", "the eof object" },
+        { "R7rsRatio", "an exact rational" }, { "R7rsBig", "an exact integer" },
+        { "R7rsComplex", "a complex number" },{ "R7rsValues", "multiple values" },
+        { "R7rsEnvironment", "an environment" },
+    };
+    const char *n = type_name(t);
+    if (!n) return NULL;
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (strcmp(n, names[i][0]) == 0) return names[i][1];
+    if (strstr(n, "Vec") != NULL) return "a vector";
+    return NULL;
+}
+
 Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span) {
     if (target.kind == TY_CSTR) {
         Expr *conv = r7rs_string_unbox(e, val, span);
@@ -243,7 +276,43 @@ Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span) {
     Expr *out = expr_new(e->arena, EX_ANY_CAST, target, span);
     out->as.any_cast_.value = val;
     out->as.any_cast_.target_kind = any_box_tag_for_type(&target);
+    /* r7rs-type-errors-are-uncatchable-panics: in Scheme source a failed
+     * cast is an R7RS error, raised; elsewhere it stays the panic. */
+    if (lang_span_is_scheme(span) || lang_span_is_scheme(val->span)) {
+        out->as.any_cast_.scheme_raise = true;
+        out->as.any_cast_.scheme_want = scheme_type_desc(target);
+        if (!out->as.any_cast_.scheme_want) {
+            const char *n = type_name(target);
+            if (n) {
+                size_t len = strlen(n) + 4;
+                char *w = (char *)arena_alloc(e->arena, len);
+                snprintf(w, len, "a %s", n);
+                out->as.any_cast_.scheme_want = w;
+            }
+        }
+    }
     return out;
+}
+
+/* r7rs-type-errors-are-uncatchable-panics: name the procedure a raising cast
+ * guards, as Scheme spells it -- `r7rs-car` is `car`.  A prelude-internal
+ * callee (`r7rs-foo__`) names nothing; the message then says only what was
+ * expected. */
+void elab_any_cast_note_callee(Elab *e, Expr *cast, const Binding *callee) {
+    if (!cast || cast->kind != EX_ANY_CAST || !cast->as.any_cast_.scheme_raise ||
+        !callee || !callee->name)
+        return;
+    const char *n = callee->name->name;
+    size_t len = strlen(n);
+    if (len >= 2 && n[len - 2] == '_' && n[len - 1] == '_') return;
+    char nbuf[256];
+    const char *pub = scheme_public_name(n);
+    if (!pub && strncmp(n, "r7rs-", 5) == 0) pub = n + 5;
+    if (!pub) pub = scheme_source_name(n, nbuf, sizeof nbuf);
+    size_t pl = strlen(pub) + 1;
+    char *w = (char *)arena_alloc(e->arena, pl);
+    memcpy(w, pub, pl);
+    cast->as.any_cast_.scheme_who = w;
 }
 
 /* TY3: (is? x T) — runtime type test on an `any`-typed value.  Returns bool:
@@ -549,11 +618,26 @@ Expr *elab_form(Elab *e, Form *f) {
                     return NULL;
                 }
                 /* Phase 8: Enhanced unbound symbol diagnostic with suggestions */
+                /* r7rs-turmeric-syntax-leaks: in user Scheme source, name the
+                 * identifier as the program wrote it (the lowering respells
+                 * some -- `nil` is `nil--user`), and suggest only what the
+                 * program could name: not the stdlib's globals, nor the
+                 * prelude's internal `r7rs-` spellings. */
+                bool scheme_user = scheme_span_is_user_source(f->span);
+                char shown_buf[256];
+                const char *shown = scheme_user
+                    ? scheme_source_name(f->as.sym->name, shown_buf, sizeof shown_buf)
+                    : f->as.sym->name;
                 const Symbol *best_match = NULL;
                 int best_distance = 3;
                 for (Scope *cur = e->scope; cur; cur = cur->parent) {
                     for (uint32_t i = 0; i < cur->n; i++) {
                         Binding *candidate = cur->bindings[i];
+                        if (scheme_user && (candidate->is_from_stdlib ||
+                                            elab_file_is_stdlib(candidate->span.file_id) ||
+                                            strncmp(candidate->name->name, "r7rs-", 5) == 0 ||
+                                            strncmp(candidate->name->name, "__", 2) == 0))
+                            continue;
                         int dist = sym_levenshtein_distance(f->as.sym, candidate->name);
                         if (dist > 0 && dist < best_distance) {
                             best_distance = dist;
@@ -563,7 +647,7 @@ Expr *elab_form(Elab *e, Form *f) {
                 }
                 if (best_match) {
                     char msg[256];
-                    snprintf(msg, sizeof(msg), "unbound symbol '%s'", f->as.sym->name);
+                    snprintf(msg, sizeof(msg), "unbound symbol '%s'", shown);
                     char sug_text[128];
                     snprintf(sug_text, sizeof(sug_text), "Did you mean '%s'?", best_match->name);
                     DiagSuggestion sug = {
@@ -574,7 +658,7 @@ Expr *elab_form(Elab *e, Form *f) {
                     diag_emit_with_suggestion(DIAG_ERROR, f->span, msg, &sug);
                 } else {
                     diag_emit_with_code(DIAG_ERROR, f->span, TUR_E0003_UNBOUND_SYMBOL,
-                                        "unbound symbol '%s'", f->as.sym->name);
+                                        "unbound symbol '%s'", shown);
                 }
                 return NULL;
             }
@@ -2227,7 +2311,8 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         uint32_t lowered_n = 0;
         forms  = (Form *const *)scheme_lower_program(arena, st, forms, nforms, &lowered_n,
                                                      elab_scheme_library_path,
-                                                     elab_scheme_global_kind, &e);
+                                                     elab_scheme_global_kind,
+                                                     elab_scheme_stdlib_file, &e);
         nforms = lowered_n;
     }
 

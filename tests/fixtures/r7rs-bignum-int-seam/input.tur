@@ -3,8 +3,9 @@
 ;; Turmeric `int` parameter -- here stdlib/vec's index, through the
 ;; `(turmeric ...)` import -- is the seam's checked cast, which refuses an
 ;; R7rsBig by name on both back ends.  It is never truncated to an int64, and
-;; a value that fits int64 is an int, so it always crosses.  The exit is
-;; nonzero and the lines before it print.
+;; a value that fits int64 is an int, so it always crosses.  The refusal is a
+;; raised error object (r7rs-type-errors-are-uncatchable-panics), unhandled
+;; here: the exit is nonzero and the lines before it print.
 (import (scheme base) (scheme write)
         (only (turmeric stdlib/vec) vec-new vec-push! vec-get))
 (define v (vec-new))

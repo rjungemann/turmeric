@@ -1,0 +1,37 @@
+#lang r7rs
+;; r7rs-too-few-arguments-returns-a-procedure: Scheme has no partial
+;; application.  A call with too few arguments raises an error object `guard`
+;; catches, on both back ends; it used to return a procedure (Turmeric's
+;; currying), so the program went on with a wrong value.  A procedure reached
+;; through a variable, called with the wrong count either way, raises too, as
+;; does calling a value that is not a procedure.
+(import (scheme base) (scheme write))
+
+(define (try thunk)
+  (guard (e ((error-object? e)
+             (list 'caught (error-object-message e) (error-object-irritants e)))
+            (#t (list 'raised-other e)))
+    (thunk)))
+
+(define (f a . rest) a)
+(define (g a b) (+ a b))
+
+;; Known procedures: the program's own, a standard one, a local one.  The
+;; arguments that were supplied are still evaluated, in order.
+(write (try (lambda () (f)))) (newline)
+(write (try (lambda () (g (begin (display "[arg] ") 1))))) (newline)
+(write (try (lambda () (cons 1)))) (newline)
+(write (let ((k (lambda (a b) a))) (try (lambda () (k 1))))) (newline)
+
+;; Through a variable: the count is checked when the call runs.
+(define (call1 p) (p 1))
+(define (call3 p) (p 1 2 3))
+(write (try (lambda () (call1 g)))) (newline)
+(write (try (lambda () (call3 g)))) (newline)
+(write (try (lambda () (apply g '(1))))) (newline)
+(write (try (lambda () (call1 cons)))) (newline)
+(write (try (lambda () (call1 5)))) (newline)
+
+;; The right count still works, and a variadic procedure takes any surplus.
+(write (list (g 1 2) (call1 (lambda (x) (* x 10))) (f 1 2 3) (apply g '(3 4))))
+(newline)

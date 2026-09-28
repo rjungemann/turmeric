@@ -28,7 +28,8 @@ tur --interpret fact.tur  # the tree-walking interpreter
 ```
 
 The dialect is in **beta**: the plan is complete and the surface is frozen,
-and what remains before it graduates is the soak and four open reports. The
+and what remains before it graduates is the soak (the four reports that
+gated it closed on 2026-09-27). The
 `#lang r7rs` line is its own enable, so no `--enable=` flag is needed, but
 every compile prints the lifecycle warning TUR-W0061. The stages, design
 decisions and known gaps live in
@@ -364,6 +365,10 @@ Turmeric through the `(turmeric ...)` head:
 (display (vec-len v))                        ; 1
 ```
 
+The import is required: without it `vec-new` is not bound, and the error
+names the import to add. `only`, `prefix`, `rename` and `except` work on a
+Turmeric module as on any library.
+
 A Turmeric keyword is spelled as a symbol from Scheme. `:k` in Turmeric and
 `'k` in Scheme are the same value, so a map keyed by keywords is read with
 `(map-get m 'k)`. In a Scheme file `:k` is an ordinary identifier, as R7RS
@@ -580,14 +585,16 @@ What it does not cover:
   goes: a Turmeric module, imported with `(import (turmeric <module>))`. At
   the REPL, switch the prompt with `#lang turmeric` (which resets the
   session). A program may still define a procedure of that name for itself.
-- **Some Turmeric syntax and names are still visible in a Scheme file, and
-  are being removed.** `#map{...}` and the other Turmeric `#` literals,
-  inline C, `^tailcall`, `@`, the words `true`/`false`/`nil`, and the
-  auto-loaded Turmeric stdlib (`println`, `vec-new`,
-  ...) all work today without an import. Do not rely on them. Reach Turmeric
-  through `(import (turmeric <module>))`, which is the part that stays.
-  [docs/reported/r7rs-turmeric-syntax-leaks.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/r7rs-turmeric-syntax-leaks.md)
-  tracks each one.
+- **A Scheme file sees only Scheme, and what it imports.** Turmeric's `#`
+  literals (`#map{...}`, `#set{...}`, `#rat{...}`, `#cx{...}`, `#?(...)`),
+  inline C and `@` are read errors that name the Scheme spelling or the
+  import. `true`, `false`, `nil` and `^tailcall` are ordinary identifiers.
+  Turmeric's stdlib (`vec-new`, `map-assoc`, `some`, ...) is visible only
+  through `(import (turmeric stdlib/<file>))`, under any import set. A
+  Turmeric built-in (`println`, `str`, `mod`) is not visible at all: use the
+  Scheme procedure, or call it from a Turmeric module. A name nothing binds is
+  an error on both back ends. **Visible change (2026-09-27):** all of these
+  used to work in a Scheme file with no import.
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.

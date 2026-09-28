@@ -1,0 +1,1 @@
+`#map{...}` is Turmeric syntax, not Scheme; build the map with map-assoc on (map-new), from (turmeric stdlib/map)

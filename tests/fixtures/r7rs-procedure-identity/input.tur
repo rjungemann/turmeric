@@ -1,0 +1,24 @@
+#lang r7rs
+;; r7rs-prelude-procedures-lose-identity: a standard procedure is `eqv?` to
+;; itself (R7RS 6.1), however many times the program names it.  Boxing a
+;; typed prelude procedure as a Scheme value used to wrap it in a fresh
+;; adaptor at every reference, so `(eqv? car car)` was #f and a table keyed by
+;; `car` (SRFI 17's `setter`) never found it.  The program's own procedures
+;; and the all-`any` library ones (`caddr`) always kept theirs.
+(import (scheme base) (scheme write) (scheme cxr))
+
+(define (f x) x)
+(define tbl (list (cons car 'car) (cons vector-ref 'vref) (cons caddr 'caddr) (cons f 'f)))
+(define (lookup p) (let ((e (assv p tbl))) (and e (cdr e))))
+
+(write (list (eqv? car car) (eq? vector-ref vector-ref) (eqv? f f)))
+(newline)
+(write (list (lookup car) (lookup vector-ref) (lookup caddr) (lookup f) (lookup cdr)))
+(newline)
+;; Through a local, through a procedure's result, and in a list.
+(define (pick) car)
+(write (list (let ((g car)) (eqv? g car)) (eqv? (pick) car) (memv car (list cdr car))))
+(newline)
+;; Distinct procedures stay distinct.
+(write (list (eqv? car cdr) (eqv? car f)))
+(newline)

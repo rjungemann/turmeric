@@ -174,6 +174,9 @@ int main(void) {
         "getchar", "gets", "chown", "execl", "drand48", "erand48",
         /* already covered before, kept so a regeneration cannot drop them */
         "read", "write", "time", "free", "malloc", "printf", "strlen",
+        /* <math.h>: stdlib/math.tur's wrappers, which called themselves
+         * through their own builtins until renamed */
+        "sqrt", "floor", "pow", "fabs", "atan2",
     };
     for (size_t i = 0; i < sizeof libc_hits / sizeof libc_hits[0]; i++)
         CHECK(tur_name_collides_libc(libc_hits[i], strlen(libc_hits[i])),

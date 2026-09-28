@@ -2,6 +2,58 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **A Scheme file sees only Scheme and what it imports.** Under `#lang
+  r7rs`, Turmeric's stdlib (`vec-new`, `map-assoc`, `some`, ...) is visible
+  only through `(import (turmeric stdlib/<file>))`, with `only`, `prefix`,
+  `rename` and `except` working as for any library. A Turmeric built-in such
+  as `println` is not visible at all. Turmeric's `#map{...}`-family literals,
+  inline C and `@` are read errors that name the Scheme spelling or the
+  import to use. `true`, `false`, `nil` and `^tailcall` are ordinary
+  identifiers. A name nothing binds is an error under `--interpret` too,
+  where the interpreter used to run a native of that name. All of these used
+  to work with no import.
+
+### Fixed
+
+- **A standard procedure is `eqv?` to itself.** Under `#lang r7rs`, `(eqv? car
+  car)` was `#f` on both back ends, so a table keyed by `car` never found
+  it. Each reference to a typed prelude procedure made a new adaptor. There
+  is now one per procedure, shared by a library and the program that imports
+  it.
+
+- **A Scheme procedure called with the wrong number of arguments raises.**
+  Under `#lang r7rs`, `(f)` for `(define (f a . rest) a)` returned a
+  procedure, because Turmeric curried the call, and the program went on with
+  a wrong value. A call through a variable with the wrong count ended the
+  program. Both now raise an error object `guard` catches, as does calling a
+  value that is not a procedure. SRFI 41's test suite now passes in full.
+
+- **A Scheme type error is an error object, not a panic.** Under `#lang
+  r7rs`, `(car 5)`, `(vector-ref '() 0)`, `(+ 'a 1)`, `(< 'a 1)`, `(negative?
+  "four")` and the prelude's other "it is an error" checks used to end the
+  program with a Turmeric panic that `guard` could not catch. Each now raises
+  an R7RS error object, such as "car: not a pair" with 5 as its irritant, on
+  both back ends. SRFI 64's `test-error` catches them. An unhandled one is
+  reported like any other error, with exit status 70.
+
+- **`sqrt`, `pow`, `log` and the other `stdlib/math.tur` functions no longer
+  call themselves.** Each wrapper was a C function named after the libm
+  function it wraps. Where the compiler turns the math builtin into a libm
+  call (to set `errno`), that call reached the wrapper again. It overflowed
+  the stack at `-O0`. Under clang on Linux it returned garbage (`(sqrt 2.25)`
+  was 0.0) or hung. The wrappers now get their own C names.
+
+- **A Scheme program that raises builds with clang on x86-64.** Every `#lang
+  r7rs` program that reached `raise` (so `error`, `guard`, every SRFI test
+  suite) failed with "failed to perform tail call elimination on a call site
+  marked musttail". LLVM rewrote the return type of a function under its own
+  guaranteed tail call. Functions that make one are now pinned so their
+  signature stays as written. Only clang builds change.
+
 ## [0.56.0] -- 2026-09-27
 
 ### Changed

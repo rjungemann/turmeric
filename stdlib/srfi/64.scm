@@ -15,9 +15,9 @@
 ;;;   - test-read-eval-string is syntax, so that only a program using it
 ;;;     links (scheme eval);
 ;;;   - no source locations: this lowering has no syntax-case.
-;;; A failing primitive (`(vector-ref v 99)`) panics rather than raising, so
-;;; test-error cannot catch it yet
-;;; (docs/reported/r7rs-type-errors-are-uncatchable-panics.md).
+;;; A failing primitive (`(vector-ref v 99)`, `(car 5)`) raises an error
+;;; object, which test-error catches
+;;; (docs/archive/r7rs-type-errors-are-uncatchable-panics.md).
 ;;; docs/upcoming/r7rs-srfi-plan.md, S6.
 ;;;
 ;;; SPDX-FileCopyrightText: 2015 Taylan Kammer <taylan.kammer@gmail.com>
@@ -314,8 +314,8 @@
                                  ": ")))
         (print runner "[~a] ~a~%" result-kind-name label)
         (when (memq result-kind '(fail xpass))
-          ;; Turmeric: `nil` is not a name a #lang r7rs program may bind
-          ;; (docs/reported/r7rs-turmeric-syntax-leaks.md), so `missing`.
+          ;; Turmeric: `nil` could not be bound in a #lang r7rs program
+          ;; (docs/archive/r7rs-turmeric-syntax-leaks.md; it can now), so `missing`.
           (let ((missing (cons #f #f)))
             (define (found? value)
               (not (eq? missing value)))

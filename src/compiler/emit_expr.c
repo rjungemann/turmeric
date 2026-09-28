@@ -5657,6 +5657,33 @@ static bool region_ascription_erases_node(EmitCtx *ctx, Type from, Type to) {
            region_type_reaches_node(ctx, from, seen_a, &na, 24);
 }
 
+
+/* Bind a cast's operand to `cb` and check its tag against `tag`.  A cast in
+ * Scheme source (r7rs-type-errors-are-uncatchable-panics) calls the raising
+ * check, which names the procedure and the expected type; every other cast
+ * keeps the panicking one. */
+static void emit_any_cast_bind_check(EmitCtx *ctx, Buf *body, const Expr *e,
+                                     const char *cb, const char *inner, int64_t tag) {
+    if (!e->as.any_cast_.scheme_raise) {
+        buf_printf(body,
+            "tur_tagged_t %s = (%s); "
+            "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
+            cb, inner, cb, (long long)tag);
+        return;
+    }
+    ensure_r7rs_cast_helper(ctx);
+    const char *who  = e->as.any_cast_.scheme_who;
+    const char *want = e->as.any_cast_.scheme_want;
+    buf_printf(body, "tur_tagged_t %s = (%s); __tur_any_cast_check_r7(%s, %lld, ",
+               cb, inner, cb, (long long)tag);
+    if (who) emit_c_string(body, strslice(who, (uint32_t)strlen(who)));
+    else     buf_puts(body, "\"\"");
+    buf_puts(body, ", ");
+    if (want) emit_c_string(body, strslice(want, (uint32_t)strlen(want)));
+    else      buf_puts(body, "\"\"");
+    buf_puts(body, ");\n");
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* G3 general catch-unwind splitter: a registered hole emits its C temp name
      * verbatim (the suspended sub-expression's already-delivered value). */
@@ -7747,10 +7774,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * shape.  `inner` already emits its own statements into `body`,
                  * so binding it here changes no evaluation order. */
                 char *cb = fresh_tmp(ctx);
-                buf_printf(body,
-                    "tur_tagged_t %s = (%s); "
-                    "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
-                    cb, inner, cb, (long long)target_tag);
+                emit_any_cast_bind_check(ctx, body, e, cb, inner, target_tag);
                 buf_printf(&out,
                     "((union { int64_t i; double d; }){.i = TUR_UNTAG(%s)}).d", cb);
                 free(cb);
@@ -7770,10 +7794,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * (saffron-higher-order, engine only, arm64 clean).  The
                  * scalar arms beside this one yield a word and are fine. */
                 char *cb = fresh_tmp(ctx);
-                buf_printf(body,
-                    "tur_tagged_t %s = (%s); "
-                    "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
-                    cb, inner, cb, (long long)target_tag);
+                emit_any_cast_bind_check(ctx, body, e, cb, inner, target_tag);
                 buf_printf(&out, "(*(%s *)(intptr_t)TUR_UNTAG(%s))", cn, cb);
                 free(cb);
             } else {
@@ -7809,10 +7830,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * 16-byte `tur_tagged_t` from a call that can take struct
                  * arguments, which is the shape the engine miscompiles. */
                 char *cb = fresh_tmp(ctx);
-                buf_printf(body,
-                    "tur_tagged_t %s = (%s); "
-                    "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
-                    cb, inner, cb, (long long)target_tag);
+                emit_any_cast_bind_check(ctx, body, e, cb, inner, target_tag);
                 buf_printf(&out, "(%s)(intptr_t)TUR_UNTAG(%s)", cast_ct, cb);
                 free(cb);
             }

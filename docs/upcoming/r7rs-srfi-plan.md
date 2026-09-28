@@ -4,8 +4,9 @@ Status: **S1 and S0 landed 2026-09-26; S2 landed 2026-09-27 except SRFI 17;
 S3 (the pruning pass and SRFI 1), S4 (SRFI 69), S5 (SRFIs 14 and 13), S6
 (SRFIs 28, 48, 64 and 78) and S7 (SRFIs 4, 27, 35, 41, 42, 60 and 66, and
 78's `check-ec`) landed 2026-09-27** (see their "What shipped" and "What S0
-found" notes). SRFI 17 waits on
-docs/reported/r7rs-prelude-procedures-lose-identity.md. S8 is on demand.
+found" notes). SRFI 17 waited on
+docs/archive/r7rs-prelude-procedures-lose-identity.md, fixed 2026-09-27; it
+can land now. S8 is on demand.
 `(import (srfi N))` resolves for every SRFI in the table: the ten built-in
 rows, the three alias rows and the nineteen library rows import, and the
 rest are refused with their reason. S0's inventory is [Appendix C](#appendix-c----s0-inventory). Its
@@ -121,7 +122,7 @@ Probed on both back ends, all correct:
   [docs/archive/r7rs-leading-colon-identifiers.md](../archive/r7rs-leading-colon-identifiers.md)
   (resolved: fixture `r7rs-colon-identifiers`; the wider question it raised,
   Turmeric surface in Scheme source, is
-  [docs/reported/r7rs-turmeric-syntax-leaks.md](../reported/r7rs-turmeric-syntax-leaks.md))
+  [docs/archive/r7rs-turmeric-syntax-leaks.md](../archive/r7rs-turmeric-syntax-leaks.md))
 - **A `define-library` cannot export a `syntax-rules` macro.** The export check
   in src/compiler/elab_module.c refused it: "exported symbol 'my-rec' is not
   defined in this module". That ruled out the obvious design of SRFI
@@ -382,7 +383,7 @@ Legend:
 | 13 | String Libraries | library | library | S5 | needs 14; works over code-point vectors (2.5); `string-map`/`string-for-each` conflict with base (D5) |
 | 14 | Character-set Library | library | library | S5 | inversion lists; standard sets from the Unicode 16 tables, with General Category data added for punctuation/symbol/title-case |
 | 16 | Syntax for procedures of variable arity | re-export | built in | S1 | `(scheme case-lambda)` |
-| 17 | Generalized `set!` | library | library | S2 | gated `set!` arm; setters for `car`, `cdr`, `vector-ref`, `string-ref`, `bytevector-u8-ref`, the `c[ad]r` family, later `hash-table-ref`. Blocked: `setter` is keyed on procedure identity, which the standard procedures lose (r7rs-prelude-procedures-lose-identity) |
+| 17 | Generalized `set!` | library | library | S2 | gated `set!` arm; setters for `car`, `cdr`, `vector-ref`, `string-ref`, `bytevector-u8-ref`, the `c[ad]r` family, later `hash-table-ref`. Was blocked: `setter` is keyed on procedure identity, which the standard procedures lost until 2026-09-27 (docs/archive/r7rs-prelude-procedures-lose-identity.md) |
 | 19 | Time Data Types and Procedures | library | library | S8 | large: dates, julian days, TAI/UTC with a leap-second table, `date->string`; the one C-heavy SRFI |
 | 23 | Error reporting mechanism | re-export | built in | S1 | R7RS `error` is SRFI 23's |
 | 25 | Multi-dimensional Array Primitives | library | library | S8 | reference implementation; names clash with 63 |
@@ -716,7 +717,7 @@ fixture itself runs on both back ends.
 >   typed prelude procedure makes a fresh adaptor at each reference. Shipping
 >   17 without `(setter car)` would ship its first example broken.
 >   docs/reported/r7rs-prelude-procedures-lose-identity.md has the fix
->   directions. 17 lands after that.
+>   directions. 17 lands after that. (Fixed 2026-09-27, archived.)
 > - **Reported on the way** (docs/reported/):
 >   - `r7rs-dead-mistyped-call-refused-at-compile-time`: `(if x (car x) 0)`
 >     with `x` bound to `#f` does not compile;
@@ -833,11 +834,11 @@ fixture itself runs on both back ends.
 > - **Fixtures:** `r7rs-srfi-1` pins the edge cases above on both back
 >   ends. `errors/r7rs-srfi-not-yet` and `r7rs-srfi-cond-expand` move their
 >   "not yet" pin from SRFI 1 to SRFI 69.
-> - **Reported, not fixed:**
->   docs/reported/r7rs-raise-musttail-fails-under-clang-x86-64.md. Under
->   clang on x86-64, any program that raises fails to build, the SRFI
+> - **Reported, not fixed (since fixed, 2026-09-27):**
+>   docs/archive/r7rs-raise-musttail-fails-under-clang-x86-64.md. Under
+>   clang on x86-64, any program that raises failed to build, the SRFI
 >   suites included. CI compiles with gcc on Linux and with clang on arm64,
->   so it does not see it.
+>   so it did not see it.
 
 ### S4 -- SRFI 69 hash tables (medium)
 
@@ -1084,6 +1085,7 @@ fixture itself runs on both back ends.
 >     instead of panicking. That is what `test-error` tests, in the
 >     meta-suite and in practice (`r7rs-vector-index-error`). The rest of
 >     docs/reported/r7rs-type-errors-are-uncatchable-panics.md stays open.
+>     (Resolved 2026-09-27: docs/archive/r7rs-type-errors-are-uncatchable-panics.md.)
 > - **Cost.** An unused import adds 14 emitted lines for (srfi 48), 4 for
 >   (srfi 78) and 320 for (srfi 64), whose `(scheme process-context)` is
 >   most of that. A one-test SRFI 64 file adds about 5,400 lines and 2 s of
@@ -1131,7 +1133,8 @@ fixture itself runs on both back ends.
 >   failures are `test-error` cases: type errors that panic
 >   (docs/reported/r7rs-type-errors-are-uncatchable-panics.md) and calls with
 >   too few arguments, which return a procedure instead of raising
->   (docs/reported/r7rs-too-few-arguments-returns-a-procedure.md).
+>   (docs/reported/r7rs-too-few-arguments-returns-a-procedure.md). Both were
+>   fixed 2026-09-27 (docs/archive/), and the suite passes in full (187).
 > - **SRFI 35** decides section 7's question 4 (above). It carries local
 >   copies of the five SRFI 1 procedures it uses, so importing it (and SRFI
 >   64, which imports it for `test-error`'s condition types) does not splice

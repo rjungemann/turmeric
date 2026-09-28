@@ -1482,6 +1482,7 @@ bool elab_module_resolve_path(Elab *e, const Symbol *name,
  * Scheme lowering can read a library's macros from its source. */
 bool elab_scheme_library_path(void *ud, const char *module, char *out, size_t cap);
 SchemeGlobalKind elab_scheme_global_kind(void *ud, const char *name);
+bool elab_scheme_stdlib_file(void *ud, const char *name, char *out, size_t cap);
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);
@@ -1867,6 +1868,10 @@ Expr *elab_borrow_immut(Elab *e, const Form *call);
  * target Type.  Used by the `@TypeName` witness path, which pins an instance
  * and therefore already knows the type the receiver must be unboxed to. */
 Expr *elab_any_unbox_to(Elab *e, Expr *val, Type target, Span span);
+/* r7rs-type-errors-are-uncatchable-panics: record on a raising Scheme cast
+ * (elab_any_unbox_to's result) the procedure its value is passed to, so the
+ * error names it ("car: not a pair").  A no-op for any other node. */
+void elab_any_cast_note_callee(Elab *e, Expr *cast, const Binding *callee);
 /* saffron-lang-plan S2/D3: the declared TypeKind of an UNANNOTATED positional
  * parameter -- `any` in a Saffron file, `int` in a Turmeric one.  Defined in
  * elab_fns.c, where the full reasoning and the two deliberate exclusions

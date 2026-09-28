@@ -1861,7 +1861,10 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
          * return, which is the whole point.  T2b: where the C compiler can
          * guarantee the tail call, ask it to (`TUR_MUSTTAIL`). */
         bool mt = tail_call_musttail_ok(ctx, body, v);
-        if (mt) ensure_musttail_macro(ctx);
+        if (mt) {
+            ensure_musttail_macro(ctx);
+            emit_musttail_note_fn(ctx, ctx->mt_fn_cname);
+        }
         indent_buf(body, ctx->indent);
         buf_printf(body, "%sreturn %s;\n", mt ? "TUR_MUSTTAIL " : "", v);
         free(v);

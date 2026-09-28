@@ -3408,6 +3408,21 @@ static TuriValue native_r7rs_utf8_at(TuriEnv *env, TuriValue *a, uint32_t n, voi
     for (; k < w && p[k]; k++) cp = (cp << 6) | (p[k] & 0x3Fu);
     return turi_int((int64_t)cp * 8 + k);
 }
+/* r7rs-type-errors-are-uncatchable-panics: an "it is an error" condition a
+ * native detects is raised as an R7RS error object with `msg`, through the
+ * prelude's `r7rs-type-error__` (an empty `what`: `msg` is the whole
+ * message), as the compiled inline C does through its hook.  Returns only
+ * when there is no such procedure, or its raise came back as an error value
+ * the caller hands on; the caller then panics as before. */
+static bool r7rs_interp_escaping(const TuriEnv *env, TuriValue r) {
+    return turi_is_error(r) || env->returning || env->throwing || env->aborting || env->panicking;
+}
+static TuriValue r7rs_interp_raise(TuriEnv *env, const char *msg) {
+    TuriValue fn = turi_env_get(env, "r7rs-type-error__");
+    if (fn.tag != TURI_CLOSURE) return turi_nil();
+    TuriValue args[3] = { turi_cstr(msg), turi_cstr(""), turi_nil() };
+    return turi_call(env, fn, args, 3);
+}
 static TuriValue native_r7rs_utf8_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     const unsigned char *p = (const unsigned char *)r7rs_arg_cstr(a, n, 0);
@@ -3422,6 +3437,8 @@ static TuriValue native_r7rs_utf8_ref(TuriEnv *env, TuriValue *a, uint32_t n, vo
         for (int j = 0; j < w && *p; j++) p++;
         k++;
     }
+    TuriValue r = r7rs_interp_raise(env, "string-ref: index out of range");
+    if (r7rs_interp_escaping(env, r)) return r;
     turi_runtime_panic(env, "string-ref: index out of range");
     return turi_int(0);
 }
@@ -3429,8 +3446,29 @@ static TuriValue native_r7rs_string_ref_code(TuriEnv *env, TuriValue *a, uint32_
     (void)ud;
     const char *s = r7rs_arg_cstr(a, n, 0);
     int64_t i = r7rs_arg_int(a, n, 1);
-    if (i < 0 || (size_t)i >= strlen(s)) turi_runtime_panic(env, "string-ref: index out of range");
+    if (i < 0 || (size_t)i >= strlen(s)) {
+        TuriValue r = r7rs_interp_raise(env, "string-ref: index out of range");
+        if (r7rs_interp_escaping(env, r)) return r;
+        turi_runtime_panic(env, "string-ref: index out of range");
+        return turi_int(0);
+    }
     return turi_int((int64_t)(unsigned char)s[i]);
+}
+/* r7rs-type-errors-are-uncatchable-panics: the compiled prelude installs a C
+ * hook the raising cast check calls; the interpreter's EX_ANY_CAST finds
+ * `r7rs-type-error__` by name instead, so there is nothing to install. */
+/* r7rs-raise-type__'s twin: the compiled body calls the hook; this calls
+ * the procedure the hook points at. */
+static TuriValue native_r7rs_raise_type(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    TuriValue fn = turi_env_get(env, "r7rs-type-error__");
+    if (fn.tag != TURI_CLOSURE || n < 3) return turi_bool(false);
+    TuriValue r = turi_call(env, fn, a, 3);
+    return r7rs_interp_escaping(env, r) ? r : turi_bool(false);
+}
+static TuriValue native_r7rs_type_error_hook_install(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_bool(true);
 }
 static TuriValue native_r7rs_string_append2(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -4191,6 +4229,8 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-utf8-at__",        native_r7rs_utf8_at,         NULL);
     turi_env_register_native(env, "r7rs-string-ref-code__", native_r7rs_string_ref_code, NULL);
     turi_env_register_native(env, "r7rs-string-append2__", native_r7rs_string_append2,  NULL);
+    turi_env_register_native(env, "r7rs-type-error-hook-install__", native_r7rs_type_error_hook_install, NULL);
+    turi_env_register_native(env, "r7rs-raise-type__", native_r7rs_raise_type, NULL);
     turi_env_register_native(env, "r7rs-bsubstring__",     native_r7rs_substring,       NULL);
     turi_env_register_native(env, "r7rs-cstr<__",          native_r7rs_string_lt,       NULL);
     turi_env_register_native(env, "r7rs-string-of-code__", native_r7rs_string_of_code,  NULL);

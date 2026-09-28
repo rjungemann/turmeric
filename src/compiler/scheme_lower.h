@@ -82,11 +82,18 @@ typedef bool (*SchemeLibResolveFn)(void *ud, const char *module, char *path, siz
  * May be NULL (a library's module: its names are not respelled). */
 typedef enum { SCHEME_GLOBAL_NONE, SCHEME_GLOBAL_STDLIB, SCHEME_GLOBAL_EARLIER_TURN } SchemeGlobalKind;
 typedef SchemeGlobalKind (*SchemeGlobalFn)(void *ud, const char *name);
+/* r7rs-turmeric-syntax-leaks item 8: the auto-loaded stdlib file (its
+ * basename without `.tur`, e.g. "vec") that defines the global `name`, for a
+ * name the stream's own forms do not show -- an interpreter or REPL session
+ * elaborated its stdlib earlier, and a library module's stream holds only the
+ * library (elab_scheme_stdlib_file).  False when `name` is no such global.
+ * May be NULL. */
+typedef bool (*SchemeStdlibFileFn)(void *ud, const char *name, char *out, size_t cap);
 
 Form **scheme_lower_program(Arena *a, SymbolTable *st,
                             Form *const *forms, uint32_t n, uint32_t *out_n,
                             SchemeLibResolveFn resolve, SchemeGlobalFn global_kind,
-                            void *resolve_ud);
+                            SchemeStdlibFileFn stdlib_file, void *resolve_ud);
 
 /* True when any form in `forms` belongs to a LANG_R7RS file -- a cheap test a
  * caller can make before paying for the pass. */
@@ -98,5 +105,22 @@ bool scheme_lower_needed(Form *const *forms, uint32_t n);
  * each file in as though the program had `(load ...)`ed it.  Returns the
  * count written to `out` (interned string literals; do not free). */
 uint32_t scheme_import_library_files(const Form *f, const char **out, uint32_t cap);
+
+/* r7rs-type-errors-are-uncatchable-panics: the Scheme spelling of a prelude
+ * procedure (`r7rs-car` -> "car"), from the rename table; NULL when the
+ * prelude name is not one a Scheme program writes.  An error message names
+ * the procedure the way the program did. */
+const char *scheme_public_name(const char *prelude_name);
+/* The name a Scheme program wrote for `name` after the lowering: the public
+ * name of a prelude procedure, a local binder without its `__v<N>` suffix, a
+ * global without its `--user` respelling.  Writes into `buf` when it has to
+ * trim; returns `name` itself when there is nothing to undo. */
+const char *scheme_source_name(const char *name, char *buf, size_t cap);
+
+/* r7rs-too-few-arguments-returns-a-procedure: true for a span in a Scheme
+ * program or library the user wrote -- `#lang r7rs` source outside the
+ * Turmeric-shaped prelude files (stdlib/r7rs/, the REPL's pinned preload),
+ * which use Turmeric's own semantics, partial application included. */
+bool scheme_span_is_user_source(Span sp);
 
 #endif /* TUR_SCHEME_LOWER_H */

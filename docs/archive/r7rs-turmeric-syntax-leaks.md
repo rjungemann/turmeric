@@ -1,5 +1,48 @@
 # `#lang r7rs`: Turmeric syntax and names leak into Scheme source
 
+**RESOLVED 2026-09-27.** Every item is closed. Items 1 and 7 (brackets,
+Turmeric forms), item 10 (the REPL) and the keyword item closed on
+2026-09-26 (see *Already resolved* below). The rest closed together:
+
+- **Items 2, 3 and 6: `#` literals, inline C, `@`.** In user Scheme source
+  (`scheme_user_source`), any `#` form the Scheme reader does not own is
+  refused (`scheme_refuse_hash`, src/compiler/reader.c). The message names the
+  Scheme spelling or the seam: "`#map{...}` is Turmeric syntax, not Scheme;
+  build the map with map-assoc on (map-new), from (turmeric stdlib/map)",
+  "R7RS writes an exact ratio as n/d", "use cond-expand". An inline C fence
+  and `@` are refused the same way. A user reader macro still gets the `#`
+  first.
+- **Items 4 and 5: `^tailcall`, `true`, `false`, `nil`.** These are
+  identifiers in user source. Quoted, they are the symbols (built by name,
+  since `(quote nil)` would elaborate as Turmeric's nil). A binding or
+  reference of an identifier starting with `^` is spelled
+  `__scheme_caret_<rest>`, since a Turmeric name starting with `^` is an
+  annotation. Messages undo the respelling (`scheme_source_name`).
+- **Item 8: the namespace.** The lowering builds a table of the auto-loaded
+  stdlib's globals and the file each comes from. It uses the stdlib forms
+  ahead of the program, or asks the elaborator (`elab_scheme_stdlib_file`)
+  for an interpreter session or a library module. Each `(turmeric
+  stdlib/<file>)` import set records what it makes visible: `only` names one
+  by one; otherwise the whole file, less what `except` or `rename` took
+  away; with `prefix`, only the prefixed names. A REPL session keeps its
+  grants across prompt turns. A free identifier in user source that resolves
+  to an ungranted stdlib global is refused, with the import to add. A
+  Turmeric built-in (`println`, `str`, `mod`), which no file defines and no
+  import grants, is refused outright.
+- **Item 9.** An unknown call head in user Scheme source is an error on the
+  interpreter too (`elab_call.c`), never TUR-W0040's runtime dispatch.
+
+Fixtures: `r7rs-turmeric-seam-imports` (every import-set shape, and the
+freed identifiers, both back ends), `errors/r7rs-turmeric-literal-refused`,
+`errors/r7rs-inline-c-refused`, `errors/r7rs-stdlib-name-needs-import`,
+`errors/r7rs-unknown-name-not-dispatched`. `r7rs-gc-seam` builds its maps with
+`map-assoc`. `r7rs-keyword-seed` takes its keyword from a Turmeric module next
+to it (`seedmap.tur`), as the report suggested. `r7rs-conformance-fixes`
+still reads `'(nil true false)` as symbols. The chibi count holds at 1223,
+and the import, formatter, editor-syntax and LSP harnesses pass unchanged.
+
+---
+
 **Severity:** medium. A `#lang r7rs` program is supposed to reach Turmeric
 through one door, `(import (turmeric <module>))`. In practice, much of
 Turmeric's own surface is also live in Scheme source:

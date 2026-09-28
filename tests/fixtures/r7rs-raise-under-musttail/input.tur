@@ -1,0 +1,15 @@
+#lang r7rs
+;; r7rs-raise-musttail-fails-under-clang-x86-64: every program that reaches
+;; `raise` failed to build with clang on x86-64 -- LLVM's dead argument
+;; elimination narrowed `raise`'s return type under its own musttail call to
+;; the uncaught-error reporter.  `requires.musttail` keeps this fixture to the
+;; compilers where TUR_MUSTTAIL is the real attribute.
+(import (scheme base) (scheme write))
+(write (guard (e (#t (list 'caught e))) (raise 'x)))
+(newline)
+(write (guard (e ((error-object? e) (error-object-message e))) (error "boom" 1 2)))
+(newline)
+(write (with-exception-handler
+        (lambda (e) 10)
+        (lambda () (+ 1 (raise-continuable 'c)))))
+(newline)

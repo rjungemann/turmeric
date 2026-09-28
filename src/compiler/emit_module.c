@@ -8735,12 +8735,83 @@ void ensure_musttail_macro(EmitCtx *ctx) {
         "     (defined(__x86_64__) || defined(__aarch64__))\n"
         "#    if __has_attribute(musttail)\n"
         "#      define TUR_MUSTTAIL __attribute__((musttail))\n"
+        "#      define TUR_MUSTTAIL_PINS 1\n"
         "#    endif\n"
         "#  endif\n"
         "#  ifndef TUR_MUSTTAIL\n"
         "#    define TUR_MUSTTAIL\n"
         "#  endif\n"
         "#endif\n");
+}
+
+/* r7rs-type-errors-are-uncatchable-panics: the cast check a cast in Scheme
+ * source calls.  On a mismatch it hands the value to the prelude's
+ * `r7rs-type-error__`, which raises an R7RS error object ("car: not a pair",
+ * the value its irritant) that `guard` and `with-exception-handler` see.  The
+ * prelude installs the hook at startup (`r7rs-type-error-hook-install__`);
+ * raising never returns, so the ordinary check after it only fires when no
+ * hook is installed -- a panic, as before.  Written into the unit the first
+ * time a Scheme cast is emitted, after the `any` preamble it builds on, so a
+ * unit with no Scheme source is unchanged. */
+void ensure_r7rs_cast_helper(EmitCtx *ctx) {
+    if (!ctx || ctx->r7rs_cast_helper_emitted) return;
+    ctx->r7rs_cast_helper_emitted = true;
+    Buf *out = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    if (!out) return;
+    buf_puts(out,
+        "/* r7rs-type-errors-are-uncatchable-panics: a failed cast in Scheme\n"
+        " * source raises an R7RS error object through the prelude's hook. */\n"
+        "#define TUR_R7RS_TYPE_ERROR_HOOK 1\n"
+        "#ifndef TUR_R7RS_TYPE_ERROR_HOOK_DECL\n"
+        "#define TUR_R7RS_TYPE_ERROR_HOOK_DECL 1\n"
+        "static tur_tagged_t (*tur_r7rs_type_error_hook)(const char *, const char *, tur_tagged_t);\n"
+        "#endif\n"
+        "static void __tur_any_cast_check_r7(tur_tagged_t v, int64_t want,\n"
+        "                                    const char *who, const char *what) {\n"
+        "    if (TUR_GETTAG(v) != want && tur_r7rs_type_error_hook)\n"
+        "        (void)tur_r7rs_type_error_hook(who, what, v);\n"
+        "    __tur_any_cast_check(TUR_GETTAG(v), want);\n"
+        "}\n");
+}
+
+void emit_musttail_note_fn(EmitCtx *ctx, const char *cname) {
+    if (!ctx || !cname) return;
+    for (uint32_t i = ctx->n_mt_pins; i > 0; i--)
+        if (strcmp(ctx->mt_pins[i - 1], cname) == 0) return;
+    if (ctx->n_mt_pins == ctx->cap_mt_pins) {
+        ctx->cap_mt_pins = ctx->cap_mt_pins ? ctx->cap_mt_pins * 2 : 16;
+        ctx->mt_pins = realloc(ctx->mt_pins, ctx->cap_mt_pins * sizeof(char *));
+    }
+    ctx->mt_pins[ctx->n_mt_pins++] = strdup(cname);
+}
+
+/* r7rs-raise-musttail-fails-under-clang-x86-64: take the address of every
+ * function that makes a `musttail` call, in a table the compiler must keep.
+ *
+ * A `static` function's signature is LLVM's to rewrite.  Dead argument
+ * elimination drops a return value no caller reads -- the payload half of a
+ * `tur_tagged_t` whose callers only test the tag -- and clang 18 does it to a
+ * function whose own `musttail` callee still returns both halves.  The call
+ * no longer returns what its caller does, and the backend aborts: "failed to
+ * perform tail call elimination on a call site marked musttail" (every
+ * `#lang r7rs` program reaching `raise`, `r7rs_hyraise`).  A function whose
+ * address is taken keeps its signature, so the pass leaves it alone, and its
+ * `musttail` callee's return value stays live through it.
+ *
+ * Only where TUR_MUSTTAIL is the real attribute: elsewhere the calls are plain
+ * `return f(args);` and nothing needs pinning, and a pin would keep an unused
+ * function alive for nothing. */
+void emit_musttail_pins(EmitCtx *ctx, Buf *out) {
+    if (!ctx || !out || ctx->n_mt_pins == 0) return;
+    buf_puts(out, "#ifdef TUR_MUSTTAIL_PINS\n"
+                  "static void (*const __tur_musttail_pins[])(void) __attribute__((used)) = {\n");
+    for (uint32_t i = 0; i < ctx->n_mt_pins; i++)
+        buf_printf(out, "    (void (*)(void))%s,\n", ctx->mt_pins[i]);
+    buf_puts(out, "};\n#endif\n");
+    for (uint32_t i = 0; i < ctx->n_mt_pins; i++) free(ctx->mt_pins[i]);
+    free(ctx->mt_pins);
+    ctx->mt_pins = NULL;
+    ctx->n_mt_pins = ctx->cap_mt_pins = 0;
 }
 
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx) {
@@ -11440,6 +11511,22 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "             __tur_dyn_op_name(__op), __tur_dyn_argname(__t));\n"
         "    tur_panic(__m);\n"
         "}\n");
+    /* r7rs-type-errors-are-uncatchable-panics: an operand the dynamic operator
+     * has no row for.  In a Scheme program -- whose prelude installs the hook
+     * the raising cast check uses (ensure_r7rs_cast_helper) -- it is an R7RS
+     * error object `guard` can catch: the prelude's own numeric code reaches
+     * this with the program's values (`(negative? "four")`).  Everywhere else
+     * the hook is null and it is the panic above. */
+    buf_puts(out,
+        "#ifndef TUR_R7RS_TYPE_ERROR_HOOK_DECL\n"
+        "#define TUR_R7RS_TYPE_ERROR_HOOK_DECL 1\n"
+        "static tur_tagged_t (*tur_r7rs_type_error_hook)(const char *, const char *, tur_tagged_t);\n"
+        "#endif\n"
+        "static void __tur_dyn_bad_operand(int __op, tur_tagged_t __v) {\n"
+        "    if (tur_r7rs_type_error_hook)\n"
+        "        (void)tur_r7rs_type_error_hook(__tur_dyn_op_name(__op), \"a number\", __v);\n"
+        "    __tur_dyn_no_operator(__op, TUR_GETTAG(__v));\n"
+        "}\n");
     buf_puts(out,
         "static inline int __tur_dyn_is_num(int64_t __t) {\n"
         "    return __t == TUR_DYNTAG_INT || __t == TUR_DYNTAG_FLOAT;\n"
@@ -11463,16 +11550,16 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
     buf_puts(out,
         "static tur_tagged_t __tur_dyn_arith(int __op, tur_tagged_t __a, tur_tagged_t __b) {\n"
         "    int64_t __ta = TUR_GETTAG(__a), __tb = TUR_GETTAG(__b);\n"
-        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_no_operator(__op, __ta); }\n"
-        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_no_operator(__op, __tb); }\n"
+        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a); }\n"
+        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b); }\n"
         /* `mod` and the bit operators have int rows only in the builtin table,
          * so a float operand finds no overload in the interpreter either.  Same
          * answer here. */
         "    if (__op == TUR_DYNOP_MOD || __op == TUR_DYNOP_BAND ||\n"
         "        __op == TUR_DYNOP_BOR || __op == TUR_DYNOP_BXOR ||\n"
         "        __op == TUR_DYNOP_SHL || __op == TUR_DYNOP_SHR) {\n"
-        "        if (__ta != TUR_DYNTAG_INT) { __tur_dyn_no_operator(__op, __ta); }\n"
-        "        if (__tb != TUR_DYNTAG_INT) { __tur_dyn_no_operator(__op, __tb); }\n"
+        "        if (__ta != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __a); }\n"
+        "        if (__tb != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __b); }\n"
         "        {\n"
         "            int64_t __x = TUR_UNTAG(__a), __y = TUR_UNTAG(__b);\n"
         "            switch (__op) {\n"
@@ -11554,8 +11641,8 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "                 : ((__cx == NULL || __cy == NULL) ? 0 : (strcmp(__cx, __cy) == 0));\n"
         "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __ce : !__ce);\n"
         "    }\n"
-        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_no_operator(__op, __ta); }\n"
-        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_no_operator(__op, __tb); }\n"
+        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a); }\n"
+        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b); }\n"
         "    if (__ta == TUR_DYNTAG_FLOAT || __tb == TUR_DYNTAG_FLOAT) {\n"
         "        double __x = __tur_dyn_f(__a), __y = __tur_dyn_f(__b);\n"
         "        int __r;\n"
@@ -11701,11 +11788,29 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "}\n"
         "/* -1: the ordinary call (the id matched); otherwise the fixed count of\n"
         " * a variadic callee this call must pack for.  Panics for anything else. */\n"
+        /* r7rs-too-few-arguments-returns-a-procedure: in a Scheme program
+         * (the hook is set) the refusal is an error object `guard` catches --
+         * "not a procedure", or "wrong number of arguments", the interpreter's
+         * words too.  The callee's own arity is not known here, so neither
+         * back end names it. */
+        "static void __tur_dyn_call_raise(tur_tagged_t __f, int __n) {\n"
+        "    if (strcmp(__tur_any_type_name(TUR_GETTAG(__f)), \"fn\") != 0) {\n"
+        "        (void)tur_r7rs_type_error_hook(\"\", \"a procedure\", __f);\n"
+        "        return;\n"
+        "    }\n"
+        "    {\n"
+        "        char *__m = (char *)malloc(96);   /* the error object keeps it */\n"
+        "        if (!__m) return;\n"
+        "        snprintf(__m, 96, \"wrong number of arguments (%d given)\", __n);\n"
+        "        (void)tur_r7rs_type_error_hook(__m, \"\", __f);\n"
+        "    }\n"
+        "}\n"
         "static __attribute__((unused)) int __tur_dyn_call_arity(tur_tagged_t __f, int64_t __want, int __n) {\n"
         "    int64_t __have = TUR_GETTAG(__f);\n"
         "    if (__have == __want) return -1;\n"
         "    int __fx = tur_dyn_var_n ? __tur_dyn_variadic_fixed(__have) : -1;\n"
         "    if (__fx >= 0 && __fx <= __n) return __fx;\n"
+        "    if (tur_r7rs_type_error_hook) __tur_dyn_call_raise(__f, __n);\n"
         "    __tur_dyn_call_check(__have, __want);\n"
         "    return -1;\n"
         "}\n"
@@ -18345,6 +18450,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     /* r7rs-gc: after every thread-local declaration in the unit. */
     if (r7rs_gc_active(false)) emit_r7rs_gc_tls_roots(out);
 
+    /* After every function definition: the table takes their addresses. */
+    emit_musttail_pins(&ctx, out);
+
     /* S1b: after every registered initializer's own definition (they are all
      * `static`), and after `main` -- the preamble carries the declaration. */
     static_init_emit(out);
@@ -19890,6 +19998,9 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
      * TU publishes only the rows for the types IT widens, and the dispatching
      * TU finds the rest through the merged list. */
     emit_instance_row_table(&ctx, out);
+
+    /* After every function definition: the table takes their addresses. */
+    emit_musttail_pins(&ctx, out);
 
     /* S1b: after every registered initializer's definition.  Emitted in
      * separate-compilation mode too -- there is no `main` in this TU to call

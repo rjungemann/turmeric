@@ -4,7 +4,7 @@
 ;; Saffron's dynamic substrate under a Scheme reader", shown by passing every
 ;; Turmeric-shaped form below through the Scheme lowering untouched.  That
 ;; pass-through is gone: Turmeric syntax does not leak into Scheme source
-;; (docs/reported/r7rs-turmeric-syntax-leaks.md, items 1 and 7), so hook.sh
+;; (docs/archive/r7rs-turmeric-syntax-leaks.md, items 1 and 7), so hook.sh
 ;; now pins the other side of the same line -- the program still runs under
 ;; Saffron, and the same text under `#lang r7rs` is refused at its first
 ;; Turmeric form, on both back ends, with the message that says where

@@ -31,12 +31,12 @@ typedef struct Reader {
      * is whitespace in every Turmeric reader -- the byte was never spoken
      * for, so this costs nothing), dotted pairs, `|sym|`, the
      * `#x`/`#o`/`#b`/`#d`/`#e`/`#i` numeric prefixes, `+5`/`.5`/`+inf.0`,
-     * and the Scheme string escapes.  Everything the Turmeric reader has
-     * that Scheme does not contradict stays available (`#map{...}`, inline
-     * C, `^tailcall`) -- being removed from user Scheme source,
-     * docs/reported/r7rs-turmeric-syntax-leaks.md.  Keywords
-     * and brackets went first: a leading `:` is an identifier and `[...]` a
-     * list there (scheme_user_source). */
+     * and the Scheme string escapes.  The Turmeric lexemes stay for the
+     * Turmeric-shaped Scheme sources (the prelude, stdlib/r7rs/); in user
+     * Scheme source (scheme_user_source) a leading `:` is an identifier,
+     * `[...]` a list, `true`/`false`/`nil` and `^tailcall` identifiers, and
+     * the `#` literals, inline C and `@` are refused
+     * (docs/archive/r7rs-turmeric-syntax-leaks.md). */
     bool              scheme_enabled;
     /* `#!fold-case` / `#!no-fold-case` (R7RS 2.1), Scheme only. */
     bool              fold_case;
@@ -671,6 +671,49 @@ static bool scheme_user_source(const Reader *r) {
     return strstr(p, "stdlib/r7rs/") == NULL;
 }
 
+#define SCHEME_SEAM_HELP \
+    "write Turmeric code in a Turmeric module and import it with (turmeric <module>)"
+/* r7rs-turmeric-syntax-leaks items 2, 3 and 6: a Turmeric lexeme in user
+ * Scheme source -- a `#map{...}`-family literal, `#?(...)`, inline C, `@` --
+ * is refused, naming the Scheme spelling or the seam: Turmeric code belongs in
+ * a Turmeric module the program imports with `(turmeric <module>)`.  Reports
+ * at the lexeme's start and stops the read, as any reader error does. */
+static Form *scheme_refuse_lexeme(Reader *r, const char *what, const char *instead) {
+    diag_emit(DIAG_ERROR, span_point(r), "%s is Turmeric syntax, not Scheme; %s", what, instead);
+    r->error = true;
+    return NULL;
+}
+static bool scheme_is_delim(int c);
+static Form *scheme_refuse_hash(Reader *r) {
+    /* peek(r) == '#', and no Scheme `#` form (`#t`, `#(`, `#u8(`, `#x`...,
+     * `#\`, `#;`) claimed it. */
+    static const char SEAM[] = SCHEME_SEAM_HELP;
+    if (peek2(r) == 'm' && peek3(r) == 'a' && peek_at(r, 3) == 'p' && peek_at(r, 4) == '{')
+        return scheme_refuse_lexeme(r, "`#map{...}`",
+            "build the map with map-assoc on (map-new), from (turmeric stdlib/map)");
+    if (peek2(r) == 's' && peek3(r) == 'e' && peek_at(r, 3) == 't' && peek_at(r, 4) == '{')
+        return scheme_refuse_lexeme(r, "`#set{...}`",
+            "build the set with set-add on (set-new), from (turmeric stdlib/set)");
+    if (peek2(r) == 'r' && peek3(r) == 'a' && peek_at(r, 3) == 't' && peek_at(r, 4) == '{')
+        return scheme_refuse_lexeme(r, "`#rat{...}`",
+            "R7RS writes an exact ratio as n/d, e.g. 3/4");
+    if (peek2(r) == 'c' && peek3(r) == 'x' && peek_at(r, 3) == '{')
+        return scheme_refuse_lexeme(r, "`#cx{...}`",
+            "R7RS writes a complex number as a+bi, e.g. 1+2i, or (make-rectangular a b)");
+    if (peek2(r) == '?')
+        return scheme_refuse_lexeme(r, "the reader conditional `#?(...)`",
+            "use cond-expand (R7RS 4.2.1)");
+    char tag[24];
+    size_t k = 1, t = 0;
+    while (t + 1 < sizeof tag && peek_at(r, k) != -1 && !scheme_is_delim(peek_at(r, k)) &&
+           peek_at(r, k) != '{' && peek_at(r, k) != '[')
+        tag[t++] = (char)peek_at(r, k++);
+    tag[t] = '\0';
+    char what[48];
+    snprintf(what, sizeof what, "`#%s`", tag);
+    return scheme_refuse_lexeme(r, what, SEAM);
+}
+
 static Form *read_keyword(Reader *r) {
     uint32_t start_line = r->line;
     uint32_t start_col = r->col;
@@ -1021,9 +1064,13 @@ static Form *read_symbol_or_minus_at(Reader *r, bool head_pos) {
         }
     }
 
-    /* Recognize literal keywords. */
+    /* Recognize literal keywords -- except in user Scheme source, where
+     * `true`, `false` and `nil` are ordinary identifiers (R7RS spells the
+     * booleans `#t`/`#f` and has no nil; r7rs-turmeric-syntax-leaks item 5). */
     Form *word = NULL;
-    if (name.len == 3 && memcmp(name.p, "nil", 3) == 0)
+    if (scheme_user_source(r))
+        ;
+    else if (name.len == 3 && memcmp(name.p, "nil", 3) == 0)
         word = form_nil(r->arena, span);
     else if (name.len == 4 && memcmp(name.p, "true", 4) == 0)
         word = form_bool(r->arena, span, true);
@@ -1063,7 +1110,11 @@ static Form *read_symbol_or_minus_at(Reader *r, bool head_pos) {
      * Suppressed in list-head position (`head_pos`), which is what lets the
      * explicit `(^tailcall (loop v))` spelling read as itself; the sweet-exp
      * indentation layer produces that spelling from a `^tailcall`-led line. */
-    if (!head_pos && name.len == 9 && memcmp(name.p, "^tailcall", 9) == 0) {
+    /* In user Scheme source `^tailcall` is an identifier (`^` is an R7RS
+     * <initial>), and every call in tail position is a proper tail call
+     * already (r7rs-turmeric-syntax-leaks item 4). */
+    if (!head_pos && name.len == 9 && memcmp(name.p, "^tailcall", 9) == 0 &&
+        !scheme_user_source(r)) {
         Span op_span = span;
         skip_ws_and_comments(r);
         if (peek(r) == -1 || peek(r) == ')' || peek(r) == ']' || peek(r) == '}') {
@@ -4113,6 +4164,10 @@ static Form *read_form(Reader *r) {
     if (c == '#' && peek2(r) == '\\') {
         return read_char_literal(r);
     }
+    /* r7rs-turmeric-syntax-leaks items 2 and 6: every `#` form left is
+     * Turmeric's (`#map{`, `#set{`, `#rat{`, `#cx{`, `#?(`, `#fx{`, `#json`,
+     * `#[`...).  A user reader macro was offered the `#` first, above. */
+    if (c == '#' && scheme_user_source(r)) return scheme_refuse_hash(r);
     /* fx-row-syntax-rename-plan Phase 1: `#fx{...}` -- explicit effect row.
      * Must be checked BEFORE the generic `#` + `{` map dispatch, otherwise
      * the bare-map branch would never see `f` after `#`.  None of the
@@ -4235,6 +4290,13 @@ static Form *read_form(Reader *r) {
         return read_keyword(r);
     }
     if (c == '`') {
+        /* r7rs-turmeric-syntax-leaks item 3: an inline C fence in user Scheme
+         * source.  (Three quasiquotes before a `c` would be legal R7RS; no
+         * program writes them, and the fence is what this is.) */
+        if (peek2(r) == '`' && peek3(r) == '`' && peek_at(r, 3) == 'c' &&
+            (peek_at(r, 4) == '\n' || peek_at(r, 4) == '\r' || peek_at(r, 4) == ' ' ||
+             peek_at(r, 4) == '\t') && scheme_user_source(r))
+            return scheme_refuse_lexeme(r, "inline C", SCHEME_SEAM_HELP);
         /* Phase 6: Check for triple backtick (C block) vs single backtick (quasiquote) */
         if (peek2(r) == '`' && peek3(r) == '`') {
             return read_cblock(r); /* C code block ``` */
@@ -4262,6 +4324,11 @@ static Form *read_form(Reader *r) {
         if (c == '|') return read_piped_symbol(r);
     }
     /* '@' as deref/effect-row prefix */
+    /* r7rs-turmeric-syntax-leaks item 6: `@` cannot start an R7RS
+     * identifier, and Turmeric's deref is not Scheme (`,@` is read above). */
+    if (c == '@' && scheme_user_source(r))
+        return scheme_refuse_lexeme(r, "`@` (Turmeric's deref)",
+                                    "a Scheme program has no boxes of its own; " SCHEME_SEAM_HELP);
     if (c == '@') return read_at(r);
     /* Phase 6: ' as quote operator */
     if (c == '\'') return read_quote(r);

@@ -65,6 +65,71 @@ is also initialized at startup. Both reference functions gcc would otherwise
 drop. The plan's decision is a whole-program pass that drops unreferenced
 `stdlib/srfi/` definitions before emission (its S0 note and S3).
 
+**Measured 2026-09-27, fourth look (a 4-core container, gcc 13).** The
+numbers are larger than the 2026-09-25 box's, and the split is the same.
+
+| `r7rs-named-let-sum` | Debug (ASan) `tur` | Release `tur` |
+|---|---|---|
+| `tur build`, end to end | 4.4 s | 3.55 s |
+| `tur emit-c` | 1.36 s | 0.29 s |
+
+The rest is `cc` over 29,400 lines. On the same C:
+
+| `cc` on the emitted C | time |
+|---|---|
+| `-O2 -Wall` (what `tur build` runs) | 3.3 s |
+| `-O2` | 3.2 s |
+| `-O1` | 1.95 s |
+| `-O0` | 1.76 s |
+| `-fsyntax-only -Wall` | 0.18 s |
+| link | 0.04 s |
+
+- **No pass dominates.** `-ftime-report` at `-O2` puts 2.84 s of the 3.38 s
+  "opt and generate" phase in "callgraph functions expansion", spread over the
+  ~680 functions the program reaches, with no single pass over 0.2 s. A flag
+  will not fix this.
+- **`-O1` is not an option.** It saves 40%, but a CPS function's tail call to
+  another is a plain C tail call that needs `-O2`'s sibling-call optimization
+  (docs/reported/cps-self-tail-call-relies-on-sibling-call.md). Compiling
+  only the prelude at a lower level would stop gcc inlining `car`/`cdr` into
+  the program across the attribute mismatch.
+- **Parallel LTO helps wall time only.** `cc -O2 -flto=4
+  -flto-partition=balanced` takes 2.3 s wall where one process takes 3.6 s,
+  on four idle cores. It spends more CPU in total, so it does nothing for the
+  suite, which already fills every core. It is also spelled differently on
+  clang and needs the linker plugin. Not taken.
+- **A content-hash object cache of "the prelude part" would miss.** Emitting
+  two fixtures (`r7rs-named-let-sum`, `r7rs-strings`) gives C that differs in
+  16,740 lines. An on-demand library (`stdlib/r7rs/read.tur`) splices in more
+  types and functions, and binding-id suffixes on globals
+  (`r7rs_hyhandlers_un_un_3428`) shift with what was loaded first. The
+  prelude's C is not a fixed text today, so caching it by hash of each
+  program's emission would rarely hit.
+- **This session's changes did not move it.** The one-line program's C is
+  348 lines longer after r7rs-type-errors-are-uncatchable-panics and the
+  identity fix. Its `-O2` compile time is the same within noise (3.0-3.2 s
+  both).
+
+So the first direction below is the one that moves the number, and it has
+to compile the prelude independently of the program:
+
+1. Make the prelude, and each on-demand library, a separately compiled unit
+   with a header. It needs a stable C interface: exported function names with
+   no binding-id suffix, and its globals and runtime state extern rather than
+   `static`. The machinery exists for modules: `emit_implementation` and
+   `emit_header`, the per-TU `any` registries that merge at startup
+   (any-type-ids-are-per-tu), and the ABI cache.
+2. Build it once per `tur` install (or per stdlib content hash, in the build
+   dir's cache) and link it. The program's TU then carries declarations
+   plus the program.
+3. The interpreter keeps loading the prelude source. The change is on the
+   compiled back end only.
+
+The costly parts are the two dynamic pieces a Scheme program's C carries per
+unit: the fat-box and static-init registrations, and the pasted call/cc and
+collector runtime. Both need the extern/registry treatment the `any` tables
+already have.
+
 ## Fix directions
 
 - Precompile the prelude once: build it as a library (`libr7rs.a`, or an

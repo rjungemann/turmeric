@@ -1,0 +1,10 @@
+#lang r7rs
+;; r7rs-turmeric-syntax-leaks item 2: Turmeric's `#` literals (`#map{...}`,
+;; `#set{...}`, `#rat{...}`, `#cx{...}`, `#?(...)`) are not Scheme syntax.
+;; The reader refuses them in a Scheme source and names the Scheme spelling
+;; or the import that builds the value.  (Inside a Turmeric module, imported
+;; with `(turmeric <module>)`, they read as ever.)
+(import (scheme base) (scheme write) (turmeric stdlib/map))
+(define m (map-assoc (map-new) 'a 1))
+(write (map-get m 'a))
+(write #map{:a 1})

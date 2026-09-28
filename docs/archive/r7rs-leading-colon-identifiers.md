@@ -31,7 +31,7 @@ does NOT fall back to the keyword for an unbound `:k`. Instead:
   A `:` or `::` standing alone still reads as Turmeric's annotation and
   ascription. Those, `#map{}` itself, and the rest of the Turmeric surface
   still visible in Scheme source are tracked in
-  docs/reported/r7rs-turmeric-syntax-leaks.md.
+  docs/archive/r7rs-turmeric-syntax-leaks.md.
 
 The r7rs fixtures pass on both harnesses. The r7rs import tests and chibi's
 conformance suite were run on the change; their results are recorded in the

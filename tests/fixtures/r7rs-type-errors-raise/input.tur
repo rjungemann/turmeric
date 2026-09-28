@@ -1,0 +1,54 @@
+#lang r7rs
+;; r7rs-type-errors-are-uncatchable-panics: a standard procedure given a value
+;; of the wrong type raises an error object that `guard` and
+;; `with-exception-handler` catch, on both back ends.  It used to end the
+;; program with "panic: cast: any holds int, not R7rsPair".  The message names
+;; the procedure and the type it wanted; the irritant is the value.
+(import (scheme base) (scheme write) (scheme cxr))
+
+(define (try thunk)
+  (guard (e ((error-object? e)
+             (list 'caught (error-object-message e) (error-object-irritants e)))
+            (#t (list 'raised-other e)))
+    (thunk)))
+
+;; Through variables, so each call is well typed at compile time and only
+;; wrong when it runs (a literal mismatch is a compile-time refusal, which is
+;; r7rs-dead-mistyped-call-refused-at-compile-time).
+(define (h x) (car x))
+(define (vr v k) (vector-ref v k))
+(define (sr s k) (string-ref s k))
+(define (add a b) (+ a b))
+(define (lt a b) (< a b))
+
+(write (try (lambda () (h 5)))) (newline)
+(write (try (lambda () (vr '() 0)))) (newline)
+(write (try (lambda () (vr (vector 1 2) 'x)))) (newline)
+(write (try (lambda () (add 'a 1)))) (newline)
+(write (try (lambda () (add 2.5 "x")))) (newline)
+(write (try (lambda () (lt 'a 1)))) (newline)
+(write (try (lambda () (cadr 5)))) (newline)
+(write (try (lambda () (exact? 'x)))) (newline)
+(write (try (lambda () (sr "abc" 7)))) (newline)
+(write (try (lambda () (sr (string-copy "abc") 7)))) (newline)
+;; The prelude's own numeric code on a program's value: the dynamic operator
+;; underneath refuses it, and that refusal raises too.
+(define (neg x) (negative? x))
+(write (try (lambda () (neg "four")))) (newline)
+
+;; A handler that escapes through a continuation sees the same object.
+(write (call-with-current-continuation
+         (lambda (k)
+           (with-exception-handler
+             (lambda (e) (k (list 'handled (error-object-message e))))
+             (lambda () (h 5))))))
+(newline)
+
+;; The checks are off the fast paths: numbers still add and compare.
+(write (list (add 1 2) (add 1 2.5) (lt 1 2.5) (lt 3 2)))
+(newline)
+
+;; Unhandled, it is reported the way any error object is, and the program
+;; ends with status 70.
+(h 7)
+(display "not reached")

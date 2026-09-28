@@ -5396,6 +5396,7 @@ struct tur_adt_Const__int__cstr {
      (defined(__x86_64__) || defined(__aarch64__))
 #    if __has_attribute(musttail)
 #      define TUR_MUSTTAIL __attribute__((musttail))
+#      define TUR_MUSTTAIL_PINS 1
 #    endif
 #  endif
 #  ifndef TUR_MUSTTAIL
@@ -9672,6 +9673,17 @@ static void __tur_fatbox_init(void) {
       __s[1] = (int64_t)(intptr_t)__fn_1446; }
 }
 
+#ifdef TUR_MUSTTAIL_PINS
+static void (*const __tur_musttail_pins[])(void) __attribute__((used)) = {
+    (void (*)(void))__fn_1019,
+    (void (*)(void))__fn_1446,
+    (void (*)(void))__fn_1659,
+    (void (*)(void))__fn_1669,
+    (void (*)(void))car,
+    (void (*)(void))cdr,
+    (void (*)(void))length,
+};
+#endif
 /* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.
  * Called from main(); the constructor below covers the no-main cases
  * (separate compilation, --shared).  Whichever runs first wins. */

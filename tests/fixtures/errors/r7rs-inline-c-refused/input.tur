@@ -1,0 +1,10 @@
+#lang r7rs
+;; r7rs-turmeric-syntax-leaks item 3: an inline C block is Turmeric's.  In a
+;; Scheme source it is refused, pointing at the seam: C belongs in a Turmeric
+;; module, which the program imports with `(turmeric <module>)`.
+(import (scheme base) (scheme write))
+(define (g)
+  ```c
+  return 42;
+  ```)
+(write (g))

@@ -1419,6 +1419,42 @@ static const char *turi_any_display_type(TuriValue v) {
     }
 }
 
+/* r7rs-type-errors-are-uncatchable-panics: in a Scheme program (one whose
+ * prelude defines `r7rs-type-error__`) a value of the wrong type is an R7RS
+ * error object, raised through that procedure -- the one the compiled back
+ * end's raising checks reach through their hook.  `*raised` says the call is
+ * unwinding (an escape to a handler, or the error it came back as); the
+ * caller returns its value.  With no such procedure, nothing happens and the
+ * caller panics as before. */
+static bool env_signaled(const TuriEnv *env);
+static TuriValue turi_r7rs_type_error(TuriEnv *env, const char *who, const char *what,
+                                      TuriValue x, bool *raised) {
+    *raised = false;
+    EnvBinding *b = turi_env_find_binding(env, "r7rs-type-error__");
+    if (!b || b->value.tag != TURI_CLOSURE) return turi_nil();
+    TuriValue args[3] = { turi_cstr(who ? who : ""), turi_cstr(what ? what : ""), x };
+    TuriValue r = turi_call(env, b->value, args, 3);
+    *raised = turi_is_error(r) || env_signaled(env);
+    return r;
+}
+/* r7rs-too-few-arguments-returns-a-procedure: a procedure called with the
+ * wrong number of arguments.  In a Scheme program it is an error object,
+ * worded as the compiled back end's dynamic call words it (which cannot see
+ * the callee's own arity); elsewhere the caller's "arity mismatch" stands.
+ * True when *out holds the raise's value. */
+static bool turi_r7rs_arity_error(TuriEnv *env, uint32_t n, TuriValue *out) {
+    if (!turi_env_find_binding(env, "r7rs-type-error__")) return false;
+    char msg[96];
+    snprintf(msg, sizeof msg, "wrong number of arguments (%u given)", (unsigned)n);
+    size_t ml = strlen(msg) + 1;
+    char *m = (char *)malloc(ml);   /* the error object keeps it */
+    if (!m) return false;
+    memcpy(m, msg, ml);
+    bool raised;
+    *out = turi_r7rs_type_error(env, m, "", turi_nil(), &raised);
+    return raised;
+}
+
 /* interp-native-ctor-loses-adt-name: recover the CtorDef a constructor NAME
  * belongs to, so a value a native builds carries the same ctor->adt link a value
  * built by evaluating `(Some x)` does.
@@ -7975,9 +8011,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
             uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
             if (effective_params != n) {
-                cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
-                                  fn->binding ? fn->binding->name->name : "<fn>",
-                                  (unsigned)effective_params, (unsigned)n);
+                if (!turi_r7rs_arity_error(env, n, &cur))
+                    cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
+                                      fn->binding ? fn->binding->name->name : "<fn>",
+                                      (unsigned)effective_params, (unsigned)n);
                 TURI_DRIVE_FREE(acc); descending = false; continue;
             }
             if (env->step_fuel_limit > 0) {
@@ -9438,9 +9475,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     }
                 }
                 if (effective_params != n - arg_base) {
-                    cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
-                                      fn->binding ? fn->binding->name->name : "<fn>",
-                                      (unsigned)effective_params, (unsigned)(n - arg_base));
+                    if (!turi_r7rs_arity_error(env, n - arg_base, &cur))
+                        cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
+                                          fn->binding ? fn->binding->name->name : "<fn>",
+                                          (unsigned)effective_params, (unsigned)(n - arg_base));
                     TURI_DRIVE_FREE(acc); len--; break;
                 }
                 if (env->step_fuel_limit > 0) {  /* SB3: step-fuel, as the retired eval_apply_inner charged it */
@@ -9828,6 +9866,8 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
     uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
     uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
     if (effective_params != n_args) {
+        TuriValue r7;
+        if (turi_r7rs_arity_error(env, n_args, &r7)) return r7;
         return turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
                            fn->binding ? fn->binding->name->name : "<fn>",
                            (unsigned)effective_params, (unsigned)n_args);
@@ -10723,7 +10763,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             _v.as_closure->captured == NULL && !_v.as_closure->native &&
             _v.as_closure->fn && _v.as_closure->fn->binding &&
             _v.as_closure->fn->binding->is_lifted_lambda &&
-            e->as.var.binding->is_lifted_lambda) {
+            e->as.var.binding->is_lifted_lambda &&
+            !e->as.var.binding->is_shared_any_adaptor) {
             TuriClosure *copy = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
             *copy = *_v.as_closure;
             copy->captured = frame;
@@ -12130,7 +12171,30 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                   (!have || !want || strcmp(have, want) == 0));
             break;
         }
+        /* r7rs-type-errors-are-uncatchable-panics: a type application --
+         * Scheme's vector, `(Vec any)` -- passed unchecked, so
+         * `(vector-ref '() 0)` read a field of the empty list as a vector.
+         * A Scheme cast compares the name the box was widened under, as
+         * `is?` does, and raises on a mismatch; other casts keep passing. */
+        case TY_APP:
+            if (e->as.any_cast_.scheme_raise) {
+                const char *have = turi_any_named_type(v);
+                const char *want = turi_any_target_name(e->type);
+                ok = (have && want && strcmp(have, want) == 0);
+            }
+            break;
         default: ok = true; break;
+        }
+        if (!ok && e->as.any_cast_.scheme_raise) {
+            /* r7rs-type-errors-are-uncatchable-panics: in Scheme source the
+             * failure is an R7RS error object, raised through the prelude's
+             * `r7rs-type-error__` -- the procedure the compiled back end's
+             * raising cast check reaches through its hook.  Without the
+             * prelude (no such binding) it is the panic below. */
+            bool raised;
+            TuriValue r = turi_r7rs_type_error(env, e->as.any_cast_.scheme_who,
+                                               e->as.any_cast_.scheme_want, v, &raised);
+            if (raised) return r;
         }
         if (!ok) {
             {
@@ -12372,6 +12436,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                      "cannot call a %s value -- it is not a function",
                      turi_any_display_type(fnv) ? turi_any_display_type(fnv)
                                                 : "non-function");
+            bool raised;
+            TuriValue r7 = turi_r7rs_type_error(env, "", "a procedure", fnv, &raised);
+            if (raised) return r7;
             turi_runtime_panic(env, msg);
             return turi_nil();  /* unreachable */
         }
@@ -12486,11 +12553,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * same sentence; the Sym `=`/`not=` case stays the one exception. */
         uint32_t n_sym = 0;
         const char *boxed_name = NULL;
+        TuriValue boxed_first = turi_nil();   /* the refused operand, as it arrived */
         for (uint32_t i = 0; i < n; i++) {
             TuriValue v = eval_expr(env, frame, e->as.dyn_op_.args[i]);
             if (turi_is_error(v) || env_signaled(env)) { result = v; failed = true; break; }
             if (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->is_any_box &&
                 v.as_struct->n_fields == 1 && v.as_struct->fields) {
+                if (n_sym == 0 && !boxed_name) boxed_first = v;
                 if (v.as_struct->name && strcmp(v.as_struct->name, "Sym") == 0) n_sym++;
                 else if (v.as_struct->name && !boxed_name) boxed_name = v.as_struct->name;
                 v = v.as_struct->fields[0];
@@ -12513,6 +12582,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             snprintf(msg, sizeof(msg), "%s: no operator for a %s argument", opn,
                      n_sym > 0 ? "Sym" : boxed_name);
             if (vals != stackv) free(vals);
+            bool raised;
+            TuriValue r = turi_r7rs_type_error(env, opn, "a number", boxed_first, &raised);
+            if (raised) return r;
             turi_runtime_panic(env, msg);
             return turi_nil();  /* unreachable */
         }
@@ -12627,7 +12699,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                          e->as.dyn_op_.op ? e->as.dyn_op_.op->name : "operator",
                          (k0 != TY_UNKNOWN) ? type_name(type_simple(k0, CK_COPY))
                                             : "value of that type");
+                TuriValue bad = vals[0];
+                for (uint32_t i = 0; i < n; i++)
+                    if (vals[i].tag != TURI_INT && vals[i].tag != TURI_FLOAT) { bad = vals[i]; break; }
                 if (vals != stackv) free(vals);
+                bool raised;
+                TuriValue r = turi_r7rs_type_error(env,
+                    e->as.dyn_op_.op ? e->as.dyn_op_.op->name : "operator", "a number", bad, &raised);
+                if (raised) return r;
                 turi_runtime_panic(env, msg);
                 return turi_nil();  /* unreachable */
             }

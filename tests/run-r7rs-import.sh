@@ -488,6 +488,30 @@ EOF
 
 run_case "srfi-1-in-library-only" prog15.tur "(6 (b))"
 
+# r7rs-prelude-procedures-lose-identity: a standard procedure a library names
+# is the one the program names -- one adaptor per compile, not per module --
+# so a table the library keys on `car` answers the program's `car` (SRFI 17's
+# `setter` is exactly this).
+cat > "$TMP/idlib.tur" <<'EOF'
+#lang r7rs
+(define-library (idlib)
+  (export get-car lookup)
+  (import (scheme base))
+  (begin
+    (define (get-car) car)
+    (define table (list (cons car 'set-car!) (cons cdr 'set-cdr!)))
+    (define (lookup p) (let ((e (assv p table))) (and e (cdr e))))))
+EOF
+
+cat > "$TMP/prog16.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (idlib))
+(write (list (eqv? car (get-car)) (lookup car) (lookup cdr) (lookup vector-ref)))
+(newline)
+EOF
+
+run_case "library-shares-procedure-identity" prog16.tur "(#t set-car! set-cdr! #f)"
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1

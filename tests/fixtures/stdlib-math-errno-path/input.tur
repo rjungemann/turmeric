@@ -1,0 +1,26 @@
+;; stdlib/math.tur's wrappers used to be C functions named after libm
+;; (`static double sqrt(double x) { return __builtin_sqrt(x); }`).  Where a
+;; math builtin has to set errno -- a domain error, or everywhere at -O0, or
+;; always under clang on Linux -- the compiler calls the libm symbol of the
+;; same name, which in this unit was the wrapper itself: a stack overflow, or
+;; under clang -O2 garbage.  The <math.h> names are in mangle.c's denylist
+;; now, so the wrappers are `tur_u_sqrt` and friends and the call reaches libm.
+;; Each probe below takes the errno path; a NaN is reported as `nan` so the
+;; output does not depend on how the C library spells its sign.  `k` is 1.0
+;; at run time but not at compile time, so no argument is constant-folded.
+(load "stdlib/math.tur")
+
+(defn show [x : float] : nil
+  (if (= x x)
+    (println x)
+    (println "nan")))
+
+(defn main [] : int
+  (let [k (if (= (list-length *args*) 0) 1.0 2.0)]
+    (show (sqrt (* k 2.25)))
+    (show (sqrt (* k -4.0)))
+    (show (log (* k -1.5)))
+    (show (pow (* k -8.5) 0.5))
+    (show (acos (* k 2.5)))
+    (show (exp (* k 1.5))))
+  0)

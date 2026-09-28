@@ -397,8 +397,11 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      *   - r7rs-turmeric-syntax-leaks (Turmeric's forms, reader extensions and
      *     auto-loaded stdlib names are live in Scheme source, taking lexical
      *     space R7RS gives the program).
-     * Those are the graduation checklist.  They are being worked; when they
-     * close, move the name to GRADUATED[] below and drop the row.
+     * Those are the graduation checklist.  All four closed on 2026-09-27 and
+     * are archived under docs/archive/ (r7rs-programs-compile-slowly, still
+     * open, is a build-time cost, not a wrong answer).  What remains is the
+     * beta soak: at graduation, move the name to GRADUATED[] below and drop
+     * the row.
      *
      * The `#lang r7rs` line is itself the enable (D11): lang_dialect_apply
      * enables this row at CLI precedence when it reads the directive, so no
