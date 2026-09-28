@@ -2662,6 +2662,7 @@ struct FiberBlock {
     void **dk_reap_v; unsigned char *dk_reap_kind;
     size_t dk_reap_n, dk_reap_cap;
     int dk_entry_depth;
+    void *esc_live; int esc_live_n, esc_live_cap;
 };
 
 #if defined(__GNUC__) || defined(__clang__)
