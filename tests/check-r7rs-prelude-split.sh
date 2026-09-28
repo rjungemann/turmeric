@@ -33,6 +33,13 @@ case "$(uname -m)" in
     x86_64|amd64|aarch64|arm64) ;;
     *) echo "SKIP check-r7rs-prelude-split: 64-bit targets only"; exit 0 ;;
 esac
+# The split is on by default on Linux only (prelude_split_applies, src/main.c);
+# macOS and Windows keep one unit until their reports close
+# (docs/reported/r7rs-prelude-split-*).  The Mach-O handling below is for then.
+case "$(uname -s)" in
+    Linux) ;;
+    *) echo "SKIP check-r7rs-prelude-split: the split is off by default on $(uname -s)"; exit 0 ;;
+esac
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 FAILED=0

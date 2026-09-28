@@ -87,9 +87,12 @@ If either `cc` or the link fails, the driver also builds one unit
 (`cmd_build` retries). `TUR_PRELUDE_SPLIT=0` forces one unit.
 `TUR_SHOW_CC=1` prints why a split was declined and keeps the library's `.c`
 beside its object. The split covers `tur build` and `tur run` of a
-`#lang r7rs` program on 64-bit hosts other than Windows, where the shared
-keyword records resolve wrongly and the split is off unless
-`TUR_PRELUDE_SPLIT=1` (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md).
+`#lang r7rs` program on 64-bit Linux. Elsewhere it is off unless
+`TUR_PRELUDE_SPLIT=1`. On Windows the shared keyword records resolve
+wrongly (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md). On
+macOS a value kept only in a Turmeric map is collected
+(docs/reported/r7rs-prelude-split-gc-seam-on-macos.md). Both showed up in
+the first CI run.
 It does not cover `--debug` (line
 directives), project builds, or Turmeric programs. `tur emit-c` still writes
 one unit, so no `expected.c` snapshot changed shape.

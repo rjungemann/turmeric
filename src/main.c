@@ -898,14 +898,17 @@ static Buf *g_split_lib_sink = NULL;
  * under --debug, whose `#line` spans would point into a unit that was
  * compiled for another program.  TUR_PRELUDE_SPLIT=0 turns it off.
  *
- * Not on Windows unless TUR_PRELUDE_SPLIT=1: there the two units link, but
- * the keyword records they share (SYM2, `__attribute__((weak)) const`) come
- * out pointing at the wrong bytes and quoted symbols print as other strings
- * (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md). */
+ * On by default on Linux only; elsewhere TUR_PRELUDE_SPLIT=1 opts in.  On
+ * Windows the two units link, but the keyword records they share (SYM2,
+ * `__attribute__((weak)) const`) come out pointing at the wrong bytes and
+ * quoted symbols print as other strings
+ * (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md).  On macOS
+ * a Scheme value kept only in a Turmeric map is collected under it
+ * (r7rs-gc-seam; docs/reported/r7rs-prelude-split-gc-seam-on-macos.md). */
 static bool prelude_split_applies(void) {
     const char *e = getenv("TUR_PRELUDE_SPLIT");
     if (e && strcmp(e, "0") == 0) return false;
-#ifdef _WIN32
+#if !defined(__linux__)
     if (!e || strcmp(e, "1") != 0) return false;
 #endif
     if (sizeof(void *) != 8 || g_emit_debug_lines || g_manifest_sink) return false;

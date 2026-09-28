@@ -11,7 +11,8 @@ All notable changes to Turmeric are documented here.
   `<tmpdir>/tur-build/prelude/`, and link it, so later builds compile only
   the program's own C. A one-line program took 3.0 s to build and now
   takes 0.95 s with a Release `tur`; the first build, which compiles the
-  library, takes about 8.5 s. Not yet on Windows. A program the compiler cannot
+  library, takes about 8.5 s. Linux only for now; macOS and Windows build
+  as before. A program the compiler cannot
   split this way builds as one unit, as before. `TUR_PRELUDE_SPLIT=0` forces
   a one-unit build (docs/archive/r7rs-programs-compile-slowly.md).
 
