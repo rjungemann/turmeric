@@ -2329,6 +2329,7 @@ static void __dk_reap_run(void) {
 }
 __attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {
 #if defined(TUR_GC_ON) && TUR_GC_ON
+    if (TUR_GC_LOAD(&tur_gc_threaded)) return;
     /* A re-entered continuation can bring back an entry whose mark is past
      * the list's end: nothing of its is left to drop. */
     if (mark >= __dk_reap_n) return;
