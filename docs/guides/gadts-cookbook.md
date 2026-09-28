@@ -186,6 +186,7 @@ defn nvec-tail [n] [v : (NVec (Succ n))] : (NVec n)
 
 defn main [] :int
   println(nvec-head((NCons 7 (NNil))))
+  println(nvec-head(nvec-tail((NCons 1 (NCons 2 (NNil))))))
   ; Ascribed because the value is used three times (a fresh constructor value
   ; bound by `let` is unique); the index would be known without it.
   let [v (:: (NCons 1 (NCons 2 (NCons 3 (NNil))))
