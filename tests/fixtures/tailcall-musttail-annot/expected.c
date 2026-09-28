@@ -5347,6 +5347,14 @@ static int64_t ctor_Option_Some__Zipper__struct(int64_t _0) {
 #    define TUR_MUSTTAIL
 #  endif
 #endif
+/* A function making a `musttail` call takes its own address, so clang's
+ * dead argument elimination leaves its signature alone (see
+ * emit_musttail_self_pin). */
+#ifdef TUR_MUSTTAIL_PINS
+#  define TUR_MUSTTAIL_SELF(f) __asm__ volatile("" :: "r"((void (*)(void))(f)))
+#else
+#  define TUR_MUSTTAIL_SELF(f) ((void)0)
+#endif
 static int64_t __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return (int64_t)(((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1));
 }
@@ -5356,12 +5364,27 @@ static int64_t __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t
  * which would free() a non-heap address; this makes every drop of such
  * a box a no-op. */
 static void __tur_fatbox_keep(void *__e) { (void)__e; }
-static union { void *__a; int64_t __b;
-               char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }
-    __tur_fatbox_0 = { .__a = (void *)__tur_fatbox_keep };
-static union { void *__a; int64_t __b;
-               char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }
-    __tur_fatbox_1 = { .__a = (void *)__tur_fatbox_keep };
+/* A static { keep, shim, orig } box: address constants where every slot
+ * is a pointer word, so an unreferenced box (and the function only it
+ * names) can be dropped; filled at startup where a slot is wider. */
+#if UINTPTR_MAX == UINT64_MAX
+#  define TUR_FATBOX_DECL(b) static void *b[3]
+#  define TUR_FATBOX_DEF(b, s, f) \
+     static void *b[3] = { (void *)__tur_fatbox_keep, (void *)(s), (void *)(f) };
+#  define TUR_FATBOX_FILL(b, s, f) ((void)0)
+#else
+#  define TUR_FATBOX_DECL(b) \
+     static union { void *__a; int64_t __b; \
+                    char __c[sizeof(void *) + 2 * sizeof(int64_t)]; } \
+         b = { .__a = (void *)__tur_fatbox_keep }
+#  define TUR_FATBOX_DEF(b, s, f)
+#  define TUR_FATBOX_FILL(b, s, f) do { \
+     int64_t *__s = (int64_t *)((char *)&(b) + sizeof(void *)); \
+     __s[0] = (int64_t)(intptr_t)(s); __s[1] = (int64_t)(intptr_t)(f); \
+   } while (0)
+#endif
+TUR_FATBOX_DECL(__tur_fatbox_0);
+TUR_FATBOX_DECL(__tur_fatbox_1);
 typedef int64_t (*tur_thunk_int64_t_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
 #if defined(__GNUC__) && !defined(__clang__)
@@ -6501,6 +6524,7 @@ tur_tagged_t __t25 = (x); __tur_any_cast_check(TUR_GETTAG(__t25), 58);
 }
 
 static bool __fn_1026(int64_t a, int64_t b) {
+        TUR_MUSTTAIL_SELF(__fn_1026);
         TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
 }
 
@@ -6704,6 +6728,7 @@ static bool __inst_Eq_eq_qu_Set(int64_t x, int64_t y) {
 }
 
 static bool __fn_1453(int64_t a, int64_t b) {
+        TUR_MUSTTAIL_SELF(__fn_1453);
         TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
 }
 
@@ -7668,10 +7693,12 @@ static int64_t list_hyconcat(int64_t l1, int64_t l2) {
 }
 
 static int64_t car(int64_t l) {
+        TUR_MUSTTAIL_SELF(car);
         TUR_MUSTTAIL return list_hyhead(l);
 }
 
 static int64_t cdr(int64_t l) {
+        TUR_MUSTTAIL_SELF(cdr);
         TUR_MUSTTAIL return list_hytail(l);
 }
 
@@ -7680,6 +7707,7 @@ static bool null_qu(int64_t l) {
 }
 
 static int64_t length(int64_t l) {
+        TUR_MUSTTAIL_SELF(length);
         TUR_MUSTTAIL return list_hylength(l);
 }
 
@@ -9333,6 +9361,7 @@ static int64_t c0(int64_t n) {
         if ((n) == (INT64_C(0))) {
             return INT64_C(0);
         } else {
+            TUR_MUSTTAIL_SELF(c0);
             TUR_MUSTTAIL return c1((n) - (INT64_C(1)));
         }
 }
@@ -9341,6 +9370,7 @@ static int64_t c1(int64_t n) {
         if ((n) == (INT64_C(0))) {
             return INT64_C(1);
         } else {
+            TUR_MUSTTAIL_SELF(c1);
             TUR_MUSTTAIL return c2((n) - (INT64_C(1)));
         }
 }
@@ -9349,6 +9379,7 @@ static int64_t c2(int64_t n) {
         if ((n) == (INT64_C(0))) {
             return INT64_C(2);
         } else {
+            TUR_MUSTTAIL_SELF(c2);
             TUR_MUSTTAIL return c3((n) - (INT64_C(1)));
         }
 }
@@ -9357,6 +9388,7 @@ static int64_t c3(int64_t n) {
         if ((n) == (INT64_C(0))) {
             return INT64_C(3);
         } else {
+            TUR_MUSTTAIL_SELF(c3);
             TUR_MUSTTAIL return c4((n) - (INT64_C(1)));
         }
 }
@@ -9365,6 +9397,7 @@ static int64_t c4(int64_t n) {
         if ((n) == (INT64_C(0))) {
             return INT64_C(4);
         } else {
+            TUR_MUSTTAIL_SELF(c4);
             TUR_MUSTTAIL return c5((n) - (INT64_C(1)));
         }
 }
@@ -9373,6 +9406,7 @@ static int64_t c5(int64_t n) {
         if ((n) == (INT64_C(0))) {
             return INT64_C(5);
         } else {
+            TUR_MUSTTAIL_SELF(c5);
             TUR_MUSTTAIL return c6((n) - (INT64_C(1)));
         }
 }
@@ -9381,6 +9415,7 @@ static int64_t c6(int64_t n) {
         if ((n) == (INT64_C(0))) {
             return INT64_C(6);
         } else {
+            TUR_MUSTTAIL_SELF(c6);
             TUR_MUSTTAIL return c7((n) - (INT64_C(1)));
         }
 }
@@ -9389,6 +9424,7 @@ static int64_t c7(int64_t n) {
         if ((n) == (INT64_C(0))) {
             return INT64_C(7);
         } else {
+            TUR_MUSTTAIL_SELF(c7);
             TUR_MUSTTAIL return c8((n) - (INT64_C(1)));
         }
 }
@@ -9397,6 +9433,7 @@ static int64_t c8(int64_t n) {
         if ((n) == (INT64_C(0))) {
             return INT64_C(8);
         } else {
+            TUR_MUSTTAIL_SELF(c8);
             TUR_MUSTTAIL return c0((n) - (INT64_C(1)));
         }
 }
@@ -9512,35 +9549,14 @@ static void __tur_module_def_init(void) {
     SCHEMA_unAP_unFAT_1510 = INT64_C(16);
 }
 
+TUR_FATBOX_DEF(__tur_fatbox_0, __tur_fatshim_bool_int64_t_int64_t, __fn_1026)
+TUR_FATBOX_DEF(__tur_fatbox_1, __tur_fatshim_bool_int64_t_int64_t, __fn_1453)
+
 static void __tur_fatbox_init(void) {
-    { char *__b = (char *)&__tur_fatbox_0;
-      int64_t *__s = (int64_t *)(__b + sizeof(void *));
-      __s[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-      __s[1] = (int64_t)(intptr_t)__fn_1026; }
-    { char *__b = (char *)&__tur_fatbox_1;
-      int64_t *__s = (int64_t *)(__b + sizeof(void *));
-      __s[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-      __s[1] = (int64_t)(intptr_t)__fn_1453; }
+    TUR_FATBOX_FILL(__tur_fatbox_0, __tur_fatshim_bool_int64_t_int64_t, __fn_1026);
+    TUR_FATBOX_FILL(__tur_fatbox_1, __tur_fatshim_bool_int64_t_int64_t, __fn_1453);
 }
 
-#ifdef TUR_MUSTTAIL_PINS
-static void (*const __tur_musttail_pins[])(void) __attribute__((used)) = {
-    (void (*)(void))__fn_1026,
-    (void (*)(void))__fn_1453,
-    (void (*)(void))car,
-    (void (*)(void))cdr,
-    (void (*)(void))length,
-    (void (*)(void))c0,
-    (void (*)(void))c1,
-    (void (*)(void))c2,
-    (void (*)(void))c3,
-    (void (*)(void))c4,
-    (void (*)(void))c5,
-    (void (*)(void))c6,
-    (void (*)(void))c7,
-    (void (*)(void))c8,
-};
-#endif
 /* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.
  * Called from main(); the constructor below covers the no-main cases
  * (separate compilation, --shared).  Whichever runs first wins. */

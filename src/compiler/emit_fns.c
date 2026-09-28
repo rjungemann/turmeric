@@ -1863,7 +1863,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         bool mt = tail_call_musttail_ok(ctx, body, v);
         if (mt) {
             ensure_musttail_macro(ctx);
-            emit_musttail_note_fn(ctx, ctx->mt_fn_cname);
+            emit_musttail_self_pin(body, ctx->indent, ctx->mt_fn_cname);
         }
         indent_buf(body, ctx->indent);
         buf_printf(body, "%sreturn %s;\n", mt ? "TUR_MUSTTAIL " : "", v);

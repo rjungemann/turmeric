@@ -439,8 +439,10 @@ typedef struct EmitCtx {
      * per-execution malloc EX_FN_TO_FAT would otherwise emit -- which is not
      * merely slow but an unbounded leak, since nothing drops a box handed to a
      * normalized param (a 5e6-iteration `(apply1 add3 acc)` loop leaked
-     * 122 MiB).  `fatbox_keys` dedups on "<shim>|<orig>"; the definitions land
-     * in `thunk_typedefs` and the fill statements in `fatbox_init`, emitted as
+     * 122 MiB).  `fatbox_keys` dedups on "<shim>|<orig>"; the declarations land
+     * in `thunk_typedefs`, the address-constant definitions in `fatbox_defs`
+     * (after every function is declared), and the fill statements -- used only
+     * where a box cannot be a static initializer -- in `fatbox_init`, emitted as
      * one `__tur_fatbox_init` registered in the earliest static-init band.
      *
      * `fatbox_names` holds the `__tur_fatbox_<i>` spelling ensure_static_fatbox
@@ -455,6 +457,7 @@ typedef struct EmitCtx {
     uint32_t  n_fatbox_keys;
     uint32_t  cap_fatbox_keys;
     Buf      *fatbox_init;
+    Buf      *fatbox_defs;
     /* constrained-byval dispatch: per-(class,struct-instance) carrier-adapter
      * witness-dict tracking.  A constrained existential over a by-value struct
      * payload points its witness at one of these `dict_<Class>_<T>__exbox`
@@ -760,10 +763,6 @@ typedef struct EmitCtx {
     const Buf   *mt_body_buf;
     size_t       mt_body_start;
     bool         musttail_macro_emitted;
-    /* r7rs-raise-musttail-fails-under-clang-x86-64: every function that made
-     * a `TUR_MUSTTAIL` call, in emission order, for emit_musttail_pins. */
-    char       **mt_pins;
-    uint32_t     n_mt_pins, cap_mt_pins;
     /* r7rs-type-errors-are-uncatchable-panics: __tur_any_cast_check_r7 and
      * its hook are written (once per unit) the first time a Scheme cast is. */
     bool         r7rs_cast_helper_emitted;
@@ -880,11 +879,10 @@ void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_par
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
 int emit_sig_lookup_n_params(const char *cname);
 void ensure_musttail_macro(EmitCtx *ctx);
-/* r7rs-raise-musttail-fails-under-clang-x86-64: record that `cname` makes a
- * `TUR_MUSTTAIL` call, and, once every function is written, pin each one
- * recorded (see emit_musttail_pins). */
-void emit_musttail_note_fn(EmitCtx *ctx, const char *cname);
-void emit_musttail_pins(EmitCtx *ctx, Buf *out);
+/* r7rs-raise-musttail-fails-under-clang-x86-64: write the self-reference a
+ * function making a `TUR_MUSTTAIL` call needs ahead of that call (see the
+ * definition). */
+void emit_musttail_self_pin(Buf *body, int indent, const char *cname);
 /* r7rs-type-errors-are-uncatchable-panics: write the raising cast check a
  * Scheme cast calls (once per unit). */
 void ensure_r7rs_cast_helper(EmitCtx *ctx);

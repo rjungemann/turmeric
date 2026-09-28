@@ -5357,6 +5357,14 @@ static int64_t ctor_Option_Some__Zipper__struct(int64_t _0) {
 #    define TUR_MUSTTAIL
 #  endif
 #endif
+/* A function making a `musttail` call takes its own address, so clang's
+ * dead argument elimination leaves its signature alone (see
+ * emit_musttail_self_pin). */
+#ifdef TUR_MUSTTAIL_PINS
+#  define TUR_MUSTTAIL_SELF(f) __asm__ volatile("" :: "r"((void (*)(void))(f)))
+#else
+#  define TUR_MUSTTAIL_SELF(f) ((void)0)
+#endif
 static int64_t __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return (int64_t)(((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1));
 }
@@ -5366,12 +5374,27 @@ static int64_t __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t
  * which would free() a non-heap address; this makes every drop of such
  * a box a no-op. */
 static void __tur_fatbox_keep(void *__e) { (void)__e; }
-static union { void *__a; int64_t __b;
-               char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }
-    __tur_fatbox_0 = { .__a = (void *)__tur_fatbox_keep };
-static union { void *__a; int64_t __b;
-               char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }
-    __tur_fatbox_1 = { .__a = (void *)__tur_fatbox_keep };
+/* A static { keep, shim, orig } box: address constants where every slot
+ * is a pointer word, so an unreferenced box (and the function only it
+ * names) can be dropped; filled at startup where a slot is wider. */
+#if UINTPTR_MAX == UINT64_MAX
+#  define TUR_FATBOX_DECL(b) static void *b[3]
+#  define TUR_FATBOX_DEF(b, s, f) \
+     static void *b[3] = { (void *)__tur_fatbox_keep, (void *)(s), (void *)(f) };
+#  define TUR_FATBOX_FILL(b, s, f) ((void)0)
+#else
+#  define TUR_FATBOX_DECL(b) \
+     static union { void *__a; int64_t __b; \
+                    char __c[sizeof(void *) + 2 * sizeof(int64_t)]; } \
+         b = { .__a = (void *)__tur_fatbox_keep }
+#  define TUR_FATBOX_DEF(b, s, f)
+#  define TUR_FATBOX_FILL(b, s, f) do { \
+     int64_t *__s = (int64_t *)((char *)&(b) + sizeof(void *)); \
+     __s[0] = (int64_t)(intptr_t)(s); __s[1] = (int64_t)(intptr_t)(f); \
+   } while (0)
+#endif
+TUR_FATBOX_DECL(__tur_fatbox_0);
+TUR_FATBOX_DECL(__tur_fatbox_1);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef double (*tur_thunk_double_double_t)(void *, double);
@@ -6572,6 +6595,7 @@ tur_tagged_t __t25 = (x); __tur_any_cast_check(TUR_GETTAG(__t25), 58);
 }
 
 static bool __fn_1048(int64_t a, int64_t b) {
+        TUR_MUSTTAIL_SELF(__fn_1048);
         TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
 }
 
@@ -6775,6 +6799,7 @@ static bool __inst_Eq_eq_qu_Set(int64_t x, int64_t y) {
 }
 
 static bool __fn_1475(int64_t a, int64_t b) {
+        TUR_MUSTTAIL_SELF(__fn_1475);
         TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
 }
 
@@ -7214,6 +7239,7 @@ static int64_t __fn_1896(void * __env_p_1899, int64_t b) {
 }
 
 static int64_t __fn_1903(int64_t p) {
+        TUR_MUSTTAIL_SELF(__fn_1903);
         TUR_MUSTTAIL return __ac_app(p);
 }
 
@@ -8197,10 +8223,12 @@ static int64_t list_hyconcat(int64_t l1, int64_t l2) {
 }
 
 static int64_t car(int64_t l) {
+        TUR_MUSTTAIL_SELF(car);
         TUR_MUSTTAIL return list_hyhead(l);
 }
 
 static int64_t cdr(int64_t l) {
+        TUR_MUSTTAIL_SELF(cdr);
         TUR_MUSTTAIL return list_hytail(l);
 }
 
@@ -8209,6 +8237,7 @@ static bool null_qu(int64_t l) {
 }
 
 static int64_t length(int64_t l) {
+        TUR_MUSTTAIL_SELF(length);
         TUR_MUSTTAIL return list_hylength(l);
 }
 
@@ -10025,6 +10054,7 @@ static void * arrow_hyconst(int64_t v) {
 }
 
 static int64_t arrow_hydup(int64_t x) {
+        TUR_MUSTTAIL_SELF(arrow_hydup);
         TUR_MUSTTAIL return __arrow_pair_dup(x);
 }
 
@@ -10550,28 +10580,14 @@ static void __tur_module_def_init(void) {
     SCHEMA_unAP_unFAT_1532 = INT64_C(16);
 }
 
+TUR_FATBOX_DEF(__tur_fatbox_0, __tur_fatshim_bool_int64_t_int64_t, __fn_1048)
+TUR_FATBOX_DEF(__tur_fatbox_1, __tur_fatshim_bool_int64_t_int64_t, __fn_1475)
+
 static void __tur_fatbox_init(void) {
-    { char *__b = (char *)&__tur_fatbox_0;
-      int64_t *__s = (int64_t *)(__b + sizeof(void *));
-      __s[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-      __s[1] = (int64_t)(intptr_t)__fn_1048; }
-    { char *__b = (char *)&__tur_fatbox_1;
-      int64_t *__s = (int64_t *)(__b + sizeof(void *));
-      __s[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-      __s[1] = (int64_t)(intptr_t)__fn_1475; }
+    TUR_FATBOX_FILL(__tur_fatbox_0, __tur_fatshim_bool_int64_t_int64_t, __fn_1048);
+    TUR_FATBOX_FILL(__tur_fatbox_1, __tur_fatshim_bool_int64_t_int64_t, __fn_1475);
 }
 
-#ifdef TUR_MUSTTAIL_PINS
-static void (*const __tur_musttail_pins[])(void) __attribute__((used)) = {
-    (void (*)(void))__fn_1048,
-    (void (*)(void))__fn_1475,
-    (void (*)(void))__fn_1903,
-    (void (*)(void))car,
-    (void (*)(void))cdr,
-    (void (*)(void))length,
-    (void (*)(void))arrow_hydup,
-};
-#endif
 /* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.
  * Called from main(); the constructor below covers the no-main cases
  * (separate compilation, --shared).  Whichever runs first wins. */
