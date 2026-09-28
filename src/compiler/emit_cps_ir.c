@@ -3207,6 +3207,10 @@ typedef struct {
      * PERMANENTLY tainted, so a fn evicted only because it shares such an effect
      * is itself permanent routing (no BODY-* fix exists), not a fixable BODY root. */
     bool sig_perm;
+    /* The CPS IR's fresh binders in `term` are `__t0` .. `__t<fresh_n-1>`, the
+     * same spelling as the direct emitter's fresh_tmp; rendering the term
+     * raises ctx->tmp_n to at least this first. */
+    uint32_t fresh_n;
 } SEnt;
 
 /* The program entry point `main` (never module-prefixed). */
@@ -5025,6 +5029,7 @@ static void ensure_S(const Expr *program) {
                     if (lo || hi) { candidate = false; sig_perm = true; }
                 }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
+                uint32_t fresh_n = cps_ir_last_fresh_count();
                 if (candidate && !term_core_ok(t)) {
                     candidate = false;
                     /* An un-lowerable inline-C form in a colored body is a
@@ -5061,6 +5066,7 @@ static void ensure_S(const Expr *program) {
                 g_ents[g_ents_n].fd = fd;
                 g_ents[g_ents_n].bind = fd->binding;
                 g_ents[g_ents_n].term = t;
+                g_ents[g_ents_n].fresh_n = fresh_n;
                 g_ents[g_ents_n].in_s = candidate;
                 g_ents[g_ents_n].mono_template = mono_tmpl;
                 g_ents[g_ents_n].sig_perm = sig_perm;
@@ -9650,8 +9656,25 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
     for (size_t i = 0; i < g_ents_n; i++) {
         if (!g_ents[i].in_s) continue;
         const FnDef *fd = g_ents[i].fd;
+        /* r7rs-programs-compile-slowly: the library unit of a split build
+         * declares only what it defines -- the stdlib's. */
+        if (g_emit_split == EMIT_SPLIT_LIB && !emit_split_lib_owns(fd->binding)) continue;
         char *cn = raw_name_for_binding(fd->binding);
-        buf_printf(file, "static int64_t %s__cps(", cn);
+        if (g_emit_split == EMIT_SPLIT_LIB) {
+            size_t cl = strlen(cn);
+            char *xn = (char *)malloc(cl + 6);
+            if (xn) {
+                memcpy(xn, cn, cl);
+                memcpy(xn + cl, "__cps", 6);
+                emit_split_note_export(xn);
+                free(xn);
+            }
+        }
+        /* r7rs-programs-compile-slowly: a split build's library unit defines
+         * a stdlib defn's CPS body with external linkage, for a colored
+         * caller in the client unit. */
+        buf_printf(file, "%sint64_t %s__cps(",
+                   emit_split_lib_owns(fd->binding) ? "" : "static ", cn);
         emit_params(ctx, file, fd);
         if (fd->n_params) buf_puts(file, ", ");
         buf_puts(file, "DK *__kont);\n");
@@ -9664,6 +9687,7 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
     for (size_t i = 0; i < g_ents_n; i++) {
         if (!g_ents[i].mono_template) continue;
         FnDef *fd = (FnDef *)g_ents[i].fd;
+        if (g_emit_split == EMIT_SPLIT_LIB && !emit_split_lib_owns(fd->binding)) continue;
         for (uint32_t s = 0; s < ctx->n_abi_specializations; s++) {
             EmitAbiSpecialization *spec = &ctx->abi_specializations[s];
             if (spec->fn != fd || !spec->clone_name) continue;
@@ -10034,6 +10058,14 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * decides, since a loop can enclose the handle whose clause reads one. */
     loop_carried_scan(se->term);
     byref_scan(se->term);
+    /* The term's own binders are `__t0` .. `__t<fresh_n-1>`, and the direct
+     * emitter names its temporaries `__t<tmp_n>` from one program-wide
+     * counter.  A monolithic build had emitted the stdlib before any user
+     * function, so tmp_n was in the hundreds here; the prelude split's
+     * program unit emits no stdlib, tmp_n starts at 0, and a delegated
+     * node's `__t0` redeclared the term's. */
+    if (ctx->tmp_n >= 0 && (uint32_t)ctx->tmp_n < se->fresh_n)
+        ctx->tmp_n = (int)se->fresh_n;
     emit_binder_decls(&ce, se->term);
     /* cps-body-panic-not-propagated: every function this render produces -- the
      * `<fn>__cps` body, its join/frame/loop helpers -- returns the int64/intptr
@@ -10099,7 +10131,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     /* ---- CPS body: int64_t <name>__cps(<params>, DK *k) ---- */
-    buf_printf(file, "static int64_t %s__cps(", cn);
+    buf_printf(file, "%sint64_t %s__cps(",
+               (emit_split_lib_owns(fd->binding) && !mono_emit) ? "" : "static ", cn);
     emit_params(ctx, file, fd);
     if (fd->n_params) buf_puts(file, ", ");
     buf_puts(file, "DK *__kont) {\n");
@@ -10206,7 +10239,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         && fd->binding
         && (fd->binding->is_exported || fd->binding->retain_c_linkage
             || emit_inst_method_wants_external(fd))
-        && !fd->binding->is_from_stdlib);
+        && !fd->binding->is_from_stdlib)
+        && !(emit_split_lib_owns(fd->binding) && !mono_emit);   /* r7rs-programs-compile-slowly */
     buf_printf(file, "__attribute__((unused)) %s%s %s(",
                entry_static ? "static " : "", rety, cn);
     /* Params: the __cps ABI spelling (emit_params) EXCEPT a pass-by-ptr

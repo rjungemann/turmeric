@@ -1863,7 +1863,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         bool mt = tail_call_musttail_ok(ctx, body, v);
         if (mt) {
             ensure_musttail_macro(ctx);
-            emit_musttail_note_fn(ctx, ctx->mt_fn_cname);
+            emit_musttail_self_pin(body, ctx->indent, ctx->mt_fn_cname);
         }
         indent_buf(body, ctx->indent);
         buf_printf(body, "%sreturn %s;\n", mt ? "TUR_MUSTTAIL " : "", v);
@@ -5381,12 +5381,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * the `is_from_stdlib` test that already guards this branch: those ARE
      * preloaded into every project-mode TU and must stay static. */
     bool user_inst_method = emit_inst_method_wants_external(fd);
+    /* r7rs-programs-compile-slowly: the library unit of a split build gives
+     * every stdlib defn external linkage for the client unit to call (its ABI
+     * clones, under fn_name_override, stay file-local like any other). */
     bool needs_static = !is_main &&
         !ctx->fn_name_override_external &&
         !(ctx->separate_compilation
           && (fd->binding->is_exported || fd->binding->retain_c_linkage
               || user_inst_method)
-          && !fd->binding->is_from_stdlib);
+          && !fd->binding->is_from_stdlib) &&
+        !(emit_split_lib_owns(fd->binding) && !ctx->fn_name_override);
     if (needs_static) {
         buf_printf(file, "static ");
     }

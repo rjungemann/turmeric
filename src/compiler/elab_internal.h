@@ -180,6 +180,18 @@ typedef struct Elab {
      * resolved and must not be walked again -- see refine_resolve_call_sites. */
     uint32_t  turn_start_n_refine_call_sites;
     uint32_t     next_id;
+    /* r7rs-programs-compile-slowly: ids drawn inside the auto-loaded stdlib's
+     * window (`in_stdlib_load`, or `ids_stdlib` for a pass that walks the
+     * stdlib forms outside that bracket) come from their own counter,
+     * starting at ELAB_STDLIB_ID_BASE.  The two passes over the forms each
+     * visit the stdlib first and the program second, so from one counter the
+     * program's own top-level names were numbered BETWEEN the stdlib's two
+     * passes -- and every stdlib name after them (`r7rs_hyhandlers_un_un_3442`,
+     * `__fn_1755`) moved with the size of the program.  A split build caches
+     * the stdlib's C by a hash of its text, so it has to be the same text for
+     * every program.  Draw an id through elab_fresh_id, never `next_id++`. */
+    uint32_t     next_stdlib_id;
+    bool         ids_stdlib;
     uint32_t     next_gensym_id;  /* Phase 6: for generating unique symbol names */
     /* Transitive-RM: shared reader-macro registry, set by the driver
      * before elaborate_program runs. Module loaders (elab_module.c,
@@ -2070,5 +2082,15 @@ void elab_stamp_sum_freshness(Binding *b, Binding **params, uint32_t n_params,
  * elaborated body.  Shared by defn and instance-method elaboration. */
 void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                                 Expr *body);
+
+
+/* r7rs-programs-compile-slowly: the first id of the stdlib's own counter --
+ * far past anything a program draws, so the two ranges never meet. */
+#define ELAB_STDLIB_ID_BASE 1000000u
+
+/* A fresh binding / gensym id (see `next_stdlib_id`). */
+static inline uint32_t elab_fresh_id(Elab *e) {
+    return (e->in_stdlib_load || e->ids_stdlib) ? e->next_stdlib_id++ : e->next_id++;
+}
 
 #endif

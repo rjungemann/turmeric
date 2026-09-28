@@ -38,6 +38,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <dirent.h>
 #include "platform_proc.h"
 #include "platform_fs.h"  /* realpath/mkdir/setenv/mkstemps/... on Windows */
@@ -69,6 +70,7 @@
 #include "compiler/refine_solver.h" /* SX8a: the S0..S3 chain `tur smt` runs */
 #include "elab.h"
 #include "emit.h"
+#include "compiler/emit_split.h" /* r7rs-programs-compile-slowly */
 #include "compiler/stack_guard.h" /* tur_run_on_big_stack -- see the note at EOF */
 #include "runtime/hamt.h" /* S2: tur_hamt_hash_xxh64 for the split-artifact hash */
 #include "runtime/rt_split_embed.h" /* S2: committed decls region + hash (TUR_JIT) */
@@ -174,7 +176,7 @@ static size_t source_stem_len(const char *name, size_t len) {
  * GCC's -Wmisleading-indentation (in -Wall) is quadratic on the long
  * brace-less `if` chains a Scheme program's prelude lowers to: with it, the
  * parse of a one-line `#lang r7rs` program took 2.9 s of a 6.4 s build; without
- * it, 0.1 s (docs/reported/r7rs-programs-compile-slowly.md).  Nobody reads the
+ * it, 0.1 s (docs/archive/r7rs-programs-compile-slowly.md).  Nobody reads the
  * indentation of generated C, and a harness's own TUR_CC_FLAGS still carry
  * -Wall, so the driver adds the opt-out itself rather than to each default. */
 #define TUR_EMITTED_C_CC_FLAGS " -Wno-misleading-indentation"
@@ -881,6 +883,38 @@ static bool g_emit_for_link = false;
  * compiled program here (set only by the REPL's in-process spice build). */
 static Buf *g_manifest_sink = NULL;
 
+/* r7rs-programs-compile-slowly (src/compiler/emit_split.h): when non-NULL and
+ * the program is a `#lang r7rs` one, compile_to_c writes it as TWO units --
+ * the library unit (the runtime preamble and the auto-loaded stdlib, the
+ * prelude among them) here, and the program unit into its usual output.  Left
+ * empty when the split declines; the output is then one unit as always.  Set
+ * only by cmd_build, which compiles the library unit once and caches it. */
+static Buf *g_split_lib_sink = NULL;
+
+/* Does this compile get a split build?  `#lang r7rs` only: that is where the
+ * prelude dominates the build (a one-line program reaches ~160 of its
+ * functions through the uncaught-error printer alone).  64-bit hosts only --
+ * the library unit's fat boxes are pointer words (ensure_fatbox_keep).  Not
+ * under --debug, whose `#line` spans would point into a unit that was
+ * compiled for another program.  TUR_PRELUDE_SPLIT=0 turns it off.
+ *
+ * On by default on Linux only; elsewhere TUR_PRELUDE_SPLIT=1 opts in.  On
+ * Windows the two units link, but the keyword records they share (SYM2,
+ * `__attribute__((weak)) const`) come out pointing at the wrong bytes and
+ * quoted symbols print as other strings
+ * (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md).  On macOS
+ * a Scheme value kept only in a Turmeric map is collected under it
+ * (r7rs-gc-seam; docs/reported/r7rs-prelude-split-gc-seam-on-macos.md). */
+static bool prelude_split_applies(void) {
+    const char *e = getenv("TUR_PRELUDE_SPLIT");
+    if (e && strcmp(e, "0") == 0) return false;
+#if !defined(__linux__)
+    if (!e || strcmp(e, "1") != 0) return false;
+#endif
+    if (sizeof(void *) != 8 || g_emit_debug_lines || g_manifest_sink) return false;
+    return g_lang_prelude && strcmp(g_lang_prelude, "r7rs/prelude.tur") == 0;
+}
+
 static void resolve_rcgc_from_archive(void) {
     const char *opt = getenv("TUR_RCGC_FROM_ARCHIVE");
     bool forced_on = opt && strcmp(opt, "1") == 0;
@@ -1101,7 +1135,35 @@ static int compile_to_c(const char *path, Buf *out_c,
              * (and a startup fat box).  Exports stay when a manifest of them
              * is being written. */
             srfi_prune_program(ctx.arena, ctx.prog, g_manifest_sink != NULL);
-            if (emit_program(out_c, ctx.prog) != 0) rc = 1;
+            bool split_done = false;
+            if (g_split_lib_sink && prelude_split_applies()) {
+                /* The library unit first: it records what the program unit
+                 * declares instead of defining. */
+                Buf lib; buf_init(&lib);
+                Buf cli; buf_init(&cli);
+                emit_split_set_mode(EMIT_SPLIT_LIB);
+                bool ok = emit_program(&lib, ctx.prog) == 0 && !emit_split_refusal();
+                if (ok) {
+                    emit_split_set_mode(EMIT_SPLIT_CLIENT);
+                    ok = emit_program(&cli, ctx.prog) == 0 && !emit_split_refusal();
+                }
+                const char *why = emit_split_refusal();
+                if (!ok && getenv("TUR_SHOW_CC"))
+                    fprintf(stderr, "tur: prelude split declined: %s\n",
+                            why ? why : "emission failed");
+                if (ok) {
+                    /* Every name the library unit exports moves to a private
+                     * prefix, in both units (EMIT_SPLIT_PREFIX). */
+                    emit_split_rename(lib.data, lib.len, g_split_lib_sink);
+                    emit_split_rename(cli.data, cli.len, out_c);
+                    split_done = true;
+                }
+                emit_split_reset();
+                buf_free(&lib);
+                buf_free(&cli);
+                if (diag_had_error()) rc = 1;
+            }
+            if (rc == 0 && !split_done && emit_program(out_c, ctx.prog) != 0) rc = 1;
             /* J2: the REPL's in-process spice build wants the exports
              * manifest from this same single-TU compile (the sink is set
              * only around that call; every other caller leaves it NULL). */
@@ -2813,11 +2875,145 @@ static int link_command_run(const char *cc, const char *cc_flags,
     return 0;
 }
 
+/* r7rs-programs-compile-slowly: the object of a split build's library unit
+ * (emit_split.h), compiled once and cached by a hash of everything that goes
+ * into it -- its text, the compiler and every flag -- under
+ * <tur-build>/prelude/<hash>.o.  A cached object is reused as is; a missing
+ * one is compiled to a private name and renamed into place, so parallel
+ * builds (the fixture suite) never read a half-written object.  Returns 0
+ * with `obj` filled, nonzero if the unit would not compile. */
+static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc_flags,
+                                const Buf *aux_includes, const Buf *autolink,
+                                bool needs_asan, const Buf *cmake_flags,
+                                const char **include_dirs, int n_include_dirs,
+                                char *obj, size_t obj_cap) {
+    /* The flags that reach a compile: the build's own, plus every -I/-D the
+     * link line would pass; nothing it links.  And the link's sanitizers: a
+     * program that links the ASan libturi (`eval`) is compiled with ASan, and
+     * the library unit must be too -- it is where the prelude's
+     * `__asan_default_options` lives, which turns off the use-after-return
+     * fake stack a conservative collector cannot scan. */
+    Buf flags; buf_init(&flags);
+    buf_printf(&flags, "%s" TUR_EMITTED_C_CC_FLAGS, cc_flags);
+    if (needs_asan) buf_puts(&flags, " -fsanitize=address,undefined");
+    const Buf *srcs[3] = { aux_includes, autolink, cmake_flags };
+    for (int k = 0; k < 3; k++) {
+        const Buf *b = srcs[k];
+        if (!b || b->len == 0 || !b->data) continue;
+        const char *q = b->data, *lim = b->data + b->len;
+        while (q < lim && *q) {
+            while (q < lim && *q == ' ') q++;
+            const char *tok = q;
+            while (q < lim && *q && *q != ' ') q++;
+            size_t tl = (size_t)(q - tok);
+            if (tl > 2 && tok[0] == '-' && (tok[1] == 'I' || tok[1] == 'D')) {
+                buf_putc(&flags, ' ');
+                buf_write(&flags, tok, tl);
+            }
+        }
+    }
+    for (int i = 0; i < n_include_dirs; i++)
+        if (include_dirs[i] && include_dirs[i][0]) buf_printf(&flags, " -I%s", include_dirs[i]);
+    buf_putc(&flags, '\0');
+
+    Buf key; buf_init(&key);
+    buf_printf(&key, "%s\n%s\n%s\n", TUR_VERSION, cc, flags.data);
+    buf_write(&key, lib_c->data, lib_c->len);
+    uint64_t h = tur_hamt_hash_xxh64(key.data, key.len);
+    buf_free(&key);
+
+    char dir[1024];
+    snprintf(dir, sizeof dir, "%sprelude", stable_c_prefix());
+    mkdir(dir, 0700);
+    snprintf(obj, obj_cap, "%s/%016llx.o", dir, (unsigned long long)h);
+    struct stat st;
+    if (stat(obj, &st) == 0 && st.st_size > 0) { buf_free(&flags); return 0; }
+
+    /* One compile per library.  The unit exports every stdlib definition, so
+     * cc cannot drop the ones no program reaches, and the compile costs more
+     * than a whole one-unit build did: builds that start together on a cold
+     * cache (the fixture suite, `make -j`) wait for the first one's object
+     * instead of each compiling their own.  A lock older than the wait (its
+     * holder killed) is ignored, and a waiter that gives up compiles its own
+     * copy -- the rename below makes racing writers agree. */
+    char lock[1100];
+    snprintf(lock, sizeof lock, "%s/%016llx.lock", dir, (unsigned long long)h);
+    int lock_fd = open(lock, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    if (lock_fd < 0 && errno == EEXIST) {
+        for (int tick = 0; tick < 1200; tick++) {   /* 100 ms ticks, 120 s */
+            if (stat(obj, &st) == 0 && st.st_size > 0) { buf_free(&flags); return 0; }
+            if (stat(lock, &st) != 0) break;
+            if (difftime(time(NULL), st.st_mtime) > 120) break;
+            usleep(100000);
+        }
+        if (stat(obj, &st) == 0 && st.st_size > 0) { buf_free(&flags); return 0; }
+    }
+
+    char src[1100], tmp_obj[1100];
+    snprintf(src, sizeof src, "%s/%016llx.%ld.c", dir, (unsigned long long)h, (long)getpid());
+    snprintf(tmp_obj, sizeof tmp_obj, "%s/%016llx.%ld.o", dir, (unsigned long long)h, (long)getpid());
+    FILE *f = fopen(src, "wb");
+    if (!f || fwrite(lib_c->data, 1, lib_c->len, f) != lib_c->len) {
+        if (f) fclose(f);
+        buf_free(&flags);
+        if (lock_fd >= 0) { close(lock_fd); unlink(lock); }
+        return 2;
+    }
+    fclose(f);
+    Buf cmd; buf_init(&cmd);
+    buf_printf(&cmd, "%s %s -c -o %s %s", cc, flags.data, tmp_obj, src);
+    buf_putc(&cmd, '\0');
+    if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
+    int rc = system(cmd.data);
+    buf_free(&cmd);
+    buf_free(&flags);
+    /* TUR_SHOW_CC keeps the unit's text beside its object, for a look at
+     * what the cache key covered. */
+    if (getenv("TUR_SHOW_CC")) {
+        char keep[1100];
+        snprintf(keep, sizeof keep, "%s/%016llx.c", dir, (unsigned long long)h);
+        rename(src, keep);
+    } else {
+        unlink(src);
+    }
+    int ret = 0;
+    if (rc != 0 || rename(tmp_obj, obj) != 0) { unlink(tmp_obj); ret = 2; }
+    if (lock_fd >= 0) { close(lock_fd); unlink(lock); }
+    return ret;
+}
+
+static int cmd_build_once(const char *input, const char *out_path,
+                          const char **include_dirs, int n_include_dirs,
+                          const char *target,
+                          const char **reader_macro_paths,
+                          int n_reader_macro_paths,
+                          bool allow_split, bool *retry_whole);
+
 static int cmd_build(const char *input, const char *out_path,
                      const char **include_dirs, int n_include_dirs,
                      const char *target,
                      const char **reader_macro_paths,
                      int n_reader_macro_paths) {
+    /* r7rs-programs-compile-slowly: try the split build; if either unit fails
+     * to compile or the two fail to link, build the program as one unit --
+     * slower, never wrong. */
+    bool retry = false;
+    int rc = cmd_build_once(input, out_path, include_dirs, n_include_dirs, target,
+                            reader_macro_paths, n_reader_macro_paths, true, &retry);
+    if (!retry) return rc;
+    if (getenv("TUR_SHOW_CC"))
+        fprintf(stderr, "tur: prelude split build failed; building as one unit\n");
+    return cmd_build_once(input, out_path, include_dirs, n_include_dirs, target,
+                          reader_macro_paths, n_reader_macro_paths, false, &retry);
+}
+
+static int cmd_build_once(const char *input, const char *out_path,
+                          const char **include_dirs, int n_include_dirs,
+                          const char *target,
+                          const char **reader_macro_paths,
+                          int n_reader_macro_paths,
+                          bool allow_split, bool *retry_whole) {
+    *retry_whole = false;
     /* RT3: reset per-compile refinement state, like the check/run/emit-c entry
      * points. The memo caches VC pointers into the per-compile arena; a process
      * that builds >1 file (`tur test`, LSP) otherwise keeps stale pointers and
@@ -2842,11 +3038,22 @@ static int cmd_build(const char *input, const char *out_path,
                                                  n_include_dirs, &n_used_mods);
     UsedModulesCtx used_ctx = { (const char **)used_mods, n_used_mods };
     if (n_used_mods > 0) used_modules_ctx_set(&used_ctx);
+    /* r7rs-programs-compile-slowly: a native, whole-preamble build of a
+     * `#lang r7rs` program may come back as two units (prelude_split_applies
+     * decides; compile_to_c leaves `split_lib` empty when it declines). */
+    Buf split_lib;
+    buf_init(&split_lib);
+    bool try_split = allow_split && !(target && strcmp(target, "wasm") == 0) &&
+                     g_runtime_mode != TUR_RT_SPLIT;
+    if (try_split) g_split_lib_sink = &split_lib;
     int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs,
                           reader_macro_paths, n_reader_macro_paths);
+    g_split_lib_sink = NULL;
     if (n_used_mods > 0) used_modules_ctx_set(NULL);
     free_tur_files(used_mods, n_used_mods);
-    if (rc != 0) { buf_free(&csrc); return rc; }
+    if (rc != 0) { buf_free(&csrc); buf_free(&split_lib); return rc; }
+    const bool prelude_split = split_lib.len > 0;
+    if (prelude_split) hoist_tur_include_directives(&split_lib);
 
     /* Write generated C to a deterministic path so ccache can cache the result
      * across repeated builds of the same .tur file.  Fall back to a random
@@ -2862,6 +3069,7 @@ static int cmd_build(const char *input, const char *out_path,
         if (fd < 0) {
             fprintf(stderr, "tur: cannot create temp file\n");
             buf_free(&csrc);
+            buf_free(&split_lib);
             return 2;
         }
         tf = fdopen(fd, "wb");
@@ -2907,6 +3115,7 @@ static int cmd_build(const char *input, const char *out_path,
         if (tf) fclose(tf);
         buf_free(&split_c);
         buf_free(&csrc);
+        buf_free(&split_lib);
         return 2;
     }
     fclose(tf);
@@ -2916,7 +3125,18 @@ static int cmd_build(const char *input, const char *out_path,
      * for __tur_autolink__ comments (shared helper). */
     Buf autolink;
     buf_init(&autolink);
-    scan_autolink_markers(&csrc, &autolink);
+    if (prelude_split) {
+        /* The library unit's markers count too: a runtime source or library
+         * its stdlib code needs is needed by the linked program. */
+        Buf both; buf_init(&both);
+        buf_write(&both, csrc.data, csrc.len);
+        buf_putc(&both, '\n');
+        buf_write(&both, split_lib.data, split_lib.len);
+        scan_autolink_markers(&both, &autolink);
+        buf_free(&both);
+    } else {
+        scan_autolink_markers(&csrc, &autolink);
+    }
     buf_free(&csrc);
 
     bool wasm_target = target && strcmp(target, "wasm") == 0;
@@ -3026,10 +3246,34 @@ static int cmd_build(const char *input, const char *out_path,
      * command via the shared helper.  Inputs is the single generated `.c`, so
      * this is the byte-identical monolithic compile+link -- the same helper
      * `tur link` calls with `.o` inputs. */
-    int link_rc = link_command_run(cc, cc_flags, tmpl, &aux_includes,
+    /* r7rs-programs-compile-slowly: the program unit links the library
+     * unit's cached object; a failure at either step sends cmd_build back to
+     * a one-unit build. */
+    char inputs[2200];
+    snprintf(inputs, sizeof inputs, "%s", tmpl);
+    if (prelude_split) {
+        char obj[1024];
+        if (prelude_split_object(&split_lib, cc, cc_flags, &aux_includes, &autolink,
+                                 autolink_needs_asan, &cmake_flags,
+                                 include_dirs, n_include_dirs,
+                                 obj, sizeof obj) != 0) {
+            *retry_whole = true;
+            buf_free(&split_lib);
+            buf_free(&aux_includes);
+            buf_free(&aux_sources);
+            buf_free(&autolink);
+            buf_free(&cmake_flags);
+            buf_free(&split_flags);
+            return 2;
+        }
+        snprintf(inputs, sizeof inputs, "%s %s", tmpl, obj);
+    }
+    buf_free(&split_lib);
+    int link_rc = link_command_run(cc, cc_flags, inputs, &aux_includes,
                                    &aux_sources, &autolink, autolink_needs_asan,
                                    &cmake_flags, include_dirs, n_include_dirs,
                                    out_path);
+    if (link_rc != 0 && prelude_split) *retry_whole = true;
     buf_free(&aux_includes);
     buf_free(&aux_sources);
     buf_free(&autolink);

@@ -25,7 +25,7 @@
 > `__GNUC__` nor the builtin, so a Windows JIT compile keeps plain `setjmp`
 > and finds no stack base, and `call/cc` stays the escape there. No program
 > reaches that today: a Scheme program never engages the S2 split
-> ([r7rs-programs-compile-slowly](../reported/r7rs-programs-compile-slowly.md)),
+> ([r7rs-programs-compile-slowly](r7rs-programs-compile-slowly.md)),
 > and the whole-preamble JIT path falls back to `cc` on Windows (`__va_start`,
 > [jit-windows-support-spike](jit-windows-support-spike.md)) -- so
 > `tur jit` on Windows runs a Scheme program through the fixed `cc` path. A

@@ -384,6 +384,9 @@ struct Binding {
      * shadows a stdlib name (which would otherwise produce conflicting
      * static functions of the same C name and break the C compile). */
     bool          is_from_stdlib;
+    /* r7rs-programs-compile-slowly: the library unit of this program's split
+     * build defined this stdlib function (emit_split_lib_owns). */
+    bool          split_lib_defined;
     /* compiled-closure-copies-a-captured-mut: set on the NAME binding of a
      * `^mut` local that a lambda captures (elab_let_mut_to_cell).  The value
      * lives in a shared heap cell bound under this hidden symbol; every read
@@ -1165,6 +1168,9 @@ struct InlineC {
     uint8_t        n_captures;
     struct Expr  **val_exprs;    /* SS2: sub-expressions; __TUR_VAL_N__ evaluates val_exprs[N] */
     uint8_t        n_val_exprs;
+    /* r7rs-programs-compile-slowly: a file-scope block elaborated in the
+     * auto-loaded stdlib's window -- the library unit's in a split build. */
+    bool           from_stdlib;
 };
 
 /* Phase 3: Closure represents a fn with captured environment. */

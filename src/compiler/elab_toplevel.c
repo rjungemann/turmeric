@@ -937,6 +937,9 @@ Expr *elab_form(Elab *e, Form *f) {
             ic->n_captures = cname_n_caps;
             ic->val_exprs = NULL;
             ic->n_val_exprs = 0;
+            /* r7rs-programs-compile-slowly: a block the auto-loaded stdlib
+             * owns, including one a stdlib file `(load ...)`s. */
+            ic->from_stdlib = e->in_stdlib_load;
             
             Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, f->span);
             out->as.inline_c_.inline_c = ic;
@@ -2324,6 +2327,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * definitions can reference each other regardless of declaration order. */
     for (uint32_t i = 0; i < nforms; i++) {
         Form *f = forms[i];
+        /* r7rs-programs-compile-slowly: a stdlib type's stub id comes from the
+         * stdlib's counter, like everything else of the stdlib's. */
+        e.ids_stdlib = (i < stdlib_prefix);
         if (f->tag != F_LIST || f->as.list.len < 2) continue;
         Form *head = f->as.list.items[0];
         if (!head || head->tag != F_SYM) continue;
@@ -2405,6 +2411,8 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
             scope_add(&e.global, b);
         }
     }
+
+    e.ids_stdlib = false;
 
     /* v2 sole-effect-lowering (top-level-handle taint root): fold trailing
      * top-level STATEMENT forms into a synthesized `(defn main [] : int

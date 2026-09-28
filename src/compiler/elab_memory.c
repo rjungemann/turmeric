@@ -555,6 +555,7 @@ Expr *elab_gc_force(Elab *e, const Form *call) {
     }
     /* For Phase 10 v1: emit as inline-C with gc_force() call */
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
     ic->code = strslice("gc_force();", 11);
     ic->return_type = TYPE_NIL;
     ic->captures = NULL;
@@ -574,6 +575,7 @@ Expr *elab_gc_enable(Elab *e, const Form *call) {
         return NULL;
     }
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
     ic->code = strslice("gc_enable();", 12);
     ic->return_type = TYPE_NIL;
     ic->captures = NULL;
@@ -593,6 +595,7 @@ Expr *elab_gc_disable(Elab *e, const Form *call) {
         return NULL;
     }
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
     ic->code = strslice("gc_disable();", 13);
     ic->return_type = TYPE_NIL;
     ic->captures = NULL;
@@ -623,6 +626,7 @@ Expr *elab_gc_auto(Elab *e, const Form *call) {
     }
 
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
     ic->code = strslice("gc_auto();", 10);
     ic->return_type = TYPE_NIL;
     ic->captures = NULL;
@@ -657,6 +661,7 @@ static Expr *elab_gc_stat_reader(Elab *e, const Form *call,
      * bare expression.  Writing `return ...;` here produced
      * `printf("%lld", (long long)(return ...;))`. */
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
     ic->code = strslice(c_call, (uint32_t)strlen(c_call));
     ic->return_type = TYPE_INT;
     ic->captures = NULL;

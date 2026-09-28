@@ -1184,6 +1184,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_srfi_prune PROPERTIES TIMEOUT 720)
+# r7rs-programs-compile-slowly: a `#lang r7rs` program builds as two units,
+# the prelude compiled once and cached.  No piece of state may be defined in
+# both, and two programs must link the same cached library object.
+add_test(
+  NAME tur_r7rs_prelude_split
+  COMMAND bash tests/check-r7rs-prelude-split.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_prelude_split PROPERTIES TIMEOUT 720)
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
 # LOADED in a real Vim and queried for highlight groups -- which is what caught
 # the fused-vs-spaced annotation bug.  The vscode half is structure and pattern

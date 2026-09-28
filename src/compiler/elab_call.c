@@ -464,7 +464,7 @@ static bool struct_accessor_hint(Elab *e, const char *name,
  * the temp is an ordinary binding and no such bridge is needed. */
 Expr *elab_bind_control_temp(Elab *e, Expr *value, LetBinding *lb) {
     char nm[48];
-    snprintf(nm, sizeof nm, "__ctlhoist_%u", e->next_id++);
+    snprintf(nm, sizeof nm, "__ctlhoist_%u", elab_fresh_id(e));
     const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
     Binding *tb = binding_new(e, sym, value->type, false, false, value->span);
     memset(lb, 0, sizeof(*lb));
@@ -2120,7 +2120,7 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
         if (!arg_is_freeable_closure_source(fb, i, a))
             continue;
         char nm[48];
-        snprintf(nm, sizeof nm, "__borrowc_%u", e->next_id++);
+        snprintf(nm, sizeof nm, "__borrowc_%u", elab_fresh_id(e));
         const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
         Binding *cb = binding_new(e, sym, a->type, false, false, span);
         /* fn-value-fat-normalization (effect-row increment): record the lifted
@@ -2450,7 +2450,7 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     }
 
     char tmp_name[32];
-    snprintf(tmp_name, sizeof(tmp_name), "__call_head_%u", e->next_id++);
+    snprintf(tmp_name, sizeof(tmp_name), "__call_head_%u", elab_fresh_id(e));
     const Symbol *tmp_sym = symtab_intern(e->st, strslice(tmp_name, (uint32_t)strlen(tmp_name)));
     Binding *tmp_b = binding_new(e, tmp_sym, head_expr->type, false, false, call->as.list.items[0]->span);
 
@@ -5226,7 +5226,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     Binding **cap_bindings = (Binding **)arena_alloc(e->arena, n_provided * sizeof(Binding *));
     for (uint32_t i = 0; i < n_provided; i++) {
         char cap_name[32];
-        snprintf(cap_name, sizeof(cap_name), "__papc%u", e->next_id++);
+        snprintf(cap_name, sizeof(cap_name), "__papc%u", elab_fresh_id(e));
         const Symbol *cap_sym = symtab_intern(e->st, strslice(cap_name, (uint32_t)strlen(cap_name)));
         /* arg type from fn_type: skip index 0 if closure (env), so index = i+1 if closure, else i */
         TypeKind cap_kind = fn_type.as.fn.arg_kinds[fn_is_closure ? (i + 1) : i];
@@ -5316,7 +5316,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     TypeKind rem_kinds[MAX_FN_ARITY];
     for (uint32_t i = 0; i < n_remaining; i++) {
         char rem_name[32];
-        snprintf(rem_name, sizeof(rem_name), "__papr%u", e->next_id++);
+        snprintf(rem_name, sizeof(rem_name), "__papr%u", elab_fresh_id(e));
         const Symbol *rem_sym = symtab_intern(e->st, strslice(rem_name, (uint32_t)strlen(rem_name)));
         TypeKind rem_kind = fn_type.as.fn.arg_kinds[fn_is_closure ? (n_provided + 1 + i) : (n_provided + i)];
         Type rem_type = type_from_kind(rem_kind);
@@ -5414,7 +5414,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
 
     /* env param */
     char env_param_name[32];
-    snprintf(env_param_name, sizeof(env_param_name), "__pap_env_%u", e->next_id++);
+    snprintf(env_param_name, sizeof(env_param_name), "__pap_env_%u", elab_fresh_id(e));
     const Symbol *env_param_sym = symtab_intern(e->st, strslice(env_param_name, (uint32_t)strlen(env_param_name)));
     Binding *env_param_b = binding_new(e, env_param_sym, TYPE_PTR_VOID, false, false, call->span);
     thunk_params[0] = env_param_b;
@@ -5462,7 +5462,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
 
     /* Thunk binding (global) */
     char pap_name[32];
-    snprintf(pap_name, sizeof(pap_name), "__pap%u", e->next_id++);
+    snprintf(pap_name, sizeof(pap_name), "__pap%u", elab_fresh_id(e));
     const Symbol *pap_sym = symtab_intern(e->st, strslice(pap_name, (uint32_t)strlen(pap_name)));
     Binding *thunk_binding = binding_new(e, pap_sym, thunk_type, false, true, call->span);
     scope_add(&e->global, thunk_binding);
@@ -5481,7 +5481,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
 
     /* Build the env struct name */
     char pap_env_name[32];
-    snprintf(pap_env_name, sizeof(pap_env_name), "__pap_env_s_%u", e->next_id++);
+    snprintf(pap_env_name, sizeof(pap_env_name), "__pap_env_s_%u", elab_fresh_id(e));
     const Symbol *pap_env_sym = symtab_intern(e->st, strslice(pap_env_name, (uint32_t)strlen(pap_env_name)));
 
     /* Build captures list: [cap_binding[0], ..., cap_binding[n_provided-1]] + fn_binding if closure */
@@ -6698,7 +6698,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         inner_call->as.call_.poly_arg_mask = 0;
         /* Create a let-binding for the intermediate closure result */
         char oar_name[32];
-        snprintf(oar_name, sizeof(oar_name), "__oar%u", e->next_id++);
+        snprintf(oar_name, sizeof(oar_name), "__oar%u", elab_fresh_id(e));
         const Symbol *oar_sym = symtab_intern(e->st, strslice(oar_name, (uint32_t)strlen(oar_name)));
         Binding *oar_binding = binding_new(e, oar_sym, inner_result_type, false, false, call->span);
         /* Set closure_fn_binding if the inner result is a closure */
@@ -9869,7 +9869,7 @@ static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
     Binding **np = (Binding **)arena_alloc(e->arena, new_np * sizeof(Binding *));
     Type *npt = (Type *)arena_alloc(e->arena, new_np * sizeof(Type));
     char epn[40];
-    snprintf(epn, sizeof(epn), "__env_p_%u", e->next_id++);
+    snprintf(epn, sizeof(epn), "__env_p_%u", elab_fresh_id(e));
     Binding *envp = binding_new(e, symtab_intern(e->st, strslice(epn, (uint32_t)strlen(epn))),
                                 TYPE_PTR_VOID, false, false, span);
     np[0] = envp; npt[0] = TYPE_PTR_VOID;
@@ -9935,7 +9935,7 @@ static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
     clo->captures = caps;
     clo->n_captures = n_cap;
     char en[32];
-    snprintf(en, sizeof(en), "__env_%u", e->next_id++);
+    snprintf(en, sizeof(en), "__env_%u", elab_fresh_id(e));
     clo->env_name = symtab_intern(e->st, strslice(en, (uint32_t)strlen(en)));
     clo->is_shift_receiver = false;   /* arena mem is not zeroed */
     clo->is_effect_payload = false;
@@ -10472,7 +10472,7 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
     char cn[64];
     snprintf(cn, sizeof(cn), "%s__dict_%u",
              (inner_b->name && inner_b->name->name) ? inner_b->name->name : "fn",
-             e->next_id++);
+             elab_fresh_id(e));
     const Symbol *csym = symtab_intern(e->st, strslice(cn, (uint32_t)strlen(cn)));
 
     uint8_t np = on + nc;
@@ -10492,7 +10492,7 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
             dparam = orig->memo_dict_params[c];
         } else {
             char dn[48];
-            snprintf(dn, sizeof(dn), "__dict_%u", e->next_id++);
+            snprintf(dn, sizeof(dn), "__dict_%u", elab_fresh_id(e));
             const Symbol *dsym = symtab_intern(e->st, strslice(dn, (uint32_t)strlen(dn)));
             dparam = binding_new(e, dsym, type_from_kind(TY_INT), false, false, span);
         }
@@ -10634,7 +10634,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
                               bool typed_concrete) {
     /* Wrapper name */
     char wname[32];
-    snprintf(wname, sizeof(wname), "__poly_%u", e->next_id++);
+    snprintf(wname, sizeof(wname), "__poly_%u", elab_fresh_id(e));
     const Symbol *wsym = symtab_intern(e->st, strslice(wname, (uint32_t)strlen(wname)));
 
     /* Wrapper params: env (ptr<void>) + n_lead_ignore dict slots + inner_arity args */
@@ -10648,7 +10648,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
 
     /* env param */
     char env_pname[40];
-    snprintf(env_pname, sizeof(env_pname), "__poly_env_%u", e->next_id++);
+    snprintf(env_pname, sizeof(env_pname), "__poly_env_%u", elab_fresh_id(e));
     const Symbol *env_psym = symtab_intern(e->st, strslice(env_pname, (uint32_t)strlen(env_pname)));
     Binding *env_pb = binding_new(e, env_psym, TYPE_PTR_VOID, false, false, span);
     wparams[0] = env_pb;
@@ -10657,7 +10657,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
     /* MB1: ignored leading dict slots (int64 carriers), never forwarded. */
     for (uint8_t j = 0; j < n_lead_ignore; j++) {
         char dpn[44];
-        snprintf(dpn, sizeof(dpn), "__poly_dictskip%u_%u", j, e->next_id++);
+        snprintf(dpn, sizeof(dpn), "__poly_dictskip%u_%u", j, elab_fresh_id(e));
         const Symbol *ds = symtab_intern(e->st, strslice(dpn, (uint32_t)strlen(dpn)));
         Binding *dpb = binding_new(e, ds, type_from_kind(TY_INT), false, false, span);
         wparams[1 + j] = dpb;
@@ -10713,7 +10713,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
     Binding *arg_bs[MAX_FN_ARITY];
     for (uint32_t i = 0; i < inner_arity; i++) {
         char apname[40];
-        snprintf(apname, sizeof(apname), "__poly_x%u_%u", i, e->next_id++);
+        snprintf(apname, sizeof(apname), "__poly_x%u_%u", i, elab_fresh_id(e));
         const Symbol *apsym = symtab_intern(e->st, strslice(apname, (uint32_t)strlen(apname)));
         Type apt = type_from_kind(real_arg_kinds[i]);
         Binding *apb = binding_new(e, apsym, apt, false, false, span);

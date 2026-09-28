@@ -6302,7 +6302,10 @@ void sym_codegen_emit(Buf *out, bool external_weak) {
      * query the table -- so a literal-only program emits no constructor.
      * Named outside the records' `__tur_sym_` prefix: a keyword `:seed` is
      * the record `__tur_sym_seed`. */
-    if (g_n_sym_records > 0 && g_sym_intern_used) {
+    /* r7rs-programs-compile-slowly: the program unit of a split build seeds
+     * its records too -- str->sym lives in the library unit, and a symbol
+     * only the program quotes must still be the one `string->symbol` finds. */
+    if (g_n_sym_records > 0 && (g_sym_intern_used || g_emit_split == EMIT_SPLIT_CLIENT)) {
         buf_puts(out, "extern void tur_sym_register(const struct __tur_sym *);\n");
         buf_puts(out, "static void __tur_symtab_seed(void) {\n");
         for (uint32_t i = 0; i < g_n_sym_records; i++) {
@@ -6383,12 +6386,36 @@ uint32_t static_init_count(void) { return g_n_static_inits; }
  * implicit declaration.  The declaration `main` calls is emitted in the
  * runtime preamble instead. */
 void static_init_emit(Buf *out) {
+    /* r7rs-programs-compile-slowly: the library unit of a split build has no
+     * `main` and no constructor.  Its initializers -- its fat boxes' fills,
+     * its `any` rows, its stdlib globals -- run from __tur_split_lib_init,
+     * which the client unit's __tur_static_init calls first, so the prelude
+     * is initialized before the program's own code runs, as in one unit.
+     * The region-pool shutdown stays with the client: it is registered once
+     * per program. */
+    if (g_emit_split == EMIT_SPLIT_LIB) {
+        buf_puts(out,
+            "/* r7rs-programs-compile-slowly: this unit's initializers, run by the\n"
+            " * program unit's __tur_static_init before its own. */\n"
+            "void __tur_split_lib_init(void) {\n"
+            "    static int __tur_split_lib_init_done = 0;\n"
+            "    if (__tur_split_lib_init_done) return;\n"
+            "    __tur_split_lib_init_done = 1;\n");
+        for (int band = STATIC_INIT_KEYS; band <= STATIC_INIT_DEFS; band++)
+            for (uint32_t i = 0; i < g_n_static_inits; i++)
+                if (g_static_inits[i].band == (StaticInitBand)band)
+                    buf_printf(out, "    %s();\n", g_static_inits[i].fn);
+        buf_puts(out, "}\n\n");
+        return;
+    }
+    const bool split_client = (g_emit_split == EMIT_SPLIT_CLIENT);
+    if (split_client) buf_puts(out, "extern void __tur_split_lib_init(void);\n");
     buf_puts(out,
         "/* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.\n"
         " * Called from main(); the constructor below covers the no-main cases\n"
         " * (separate compilation, --shared).  Whichever runs first wins. */\n"
         "static void __tur_static_init(void) {\n");
-    if (g_n_static_inits > 0) {
+    if (g_n_static_inits > 0 || split_client) {
         buf_puts(out, "    static int __tur_static_init_done = 0;\n"
                       "    if (__tur_static_init_done) return;\n"
                       "    __tur_static_init_done = 1;\n");
@@ -6396,13 +6423,14 @@ void static_init_emit(Buf *out) {
          * else -- see emit_region_shutdown_atexit for why this is the only
          * place the atexit ordering actually holds. */
         emit_region_shutdown_atexit(out, 4);
+        if (split_client) buf_puts(out, "    __tur_split_lib_init();\n");
         for (int band = STATIC_INIT_KEYS; band <= STATIC_INIT_DEFS; band++)
             for (uint32_t i = 0; i < g_n_static_inits; i++)
                 if (g_static_inits[i].band == (StaticInitBand)band)
                     buf_printf(out, "    %s();\n", g_static_inits[i].fn);
     }
     buf_puts(out, "}\n");
-    if (g_n_static_inits > 0)
+    if (g_n_static_inits > 0 || split_client)
         buf_puts(out,
             "__attribute__((constructor))\n"
             "static void __tur_static_init_ctor(void) { __tur_static_init(); }\n");

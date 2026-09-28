@@ -2001,6 +2001,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_DEFDATA, TYPE_NIL, call->span);
     out->as.defdata_.def = def;
     out->as.defdata_.binding = adt_binding;
+    def->from_stdlib = e->in_stdlib_load;   /* r7rs-programs-compile-slowly */
     return out;
 
 data_ctor_parse_error:
@@ -2883,6 +2884,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_DEFGADT, TYPE_NIL, call->span);
     out->as.defgadt_.def = def;
     out->as.defgadt_.binding = adt_binding;
+    def->from_stdlib = e->in_stdlib_load;   /* r7rs-programs-compile-slowly */
     return out;
 
 ctor_parse_error:
@@ -5331,7 +5333,7 @@ static Expr *elab_with_record_adt(Elab *e, const Form *call,
 
     /* Build (let [G src] (Ctor <f0> ...)). */
     char g_name[32];
-    snprintf(g_name, sizeof(g_name), "__with_%u", e->next_id++);
+    snprintf(g_name, sizeof(g_name), "__with_%u", elab_fresh_id(e));
     const Symbol *g_sym = symtab_intern(e->st, strslice(g_name, (uint32_t)strlen(g_name)));
     Form *g_form = form_sym(e->arena, sp, g_sym);
 

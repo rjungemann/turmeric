@@ -405,6 +405,9 @@ typedef struct AdtDef {
      * FILE-granular identity the orphan-instance check uses, which is a
      * different question (a module can span files). */
     const Symbol    *sealed_module;
+    /* r7rs-programs-compile-slowly: defined inside the auto-loaded stdlib's
+     * window -- a type the library unit of a split build writes too. */
+    bool from_stdlib;
 } AdtDef;
 
 /* CONV-S2 (struct/ADT convergence): a single-variant, non-GADT ADT is

@@ -6,6 +6,16 @@ All notable changes to Turmeric are documented here.
 
 ### Changed
 
+- **A `#lang r7rs` program builds in about a second.** `tur build` and `tur
+  run` compile the runtime and the R7RS prelude once, cache the object under
+  `<tmpdir>/tur-build/prelude/`, and link it, so later builds compile only
+  the program's own C. A one-line program took 3.0 s to build and now
+  takes 0.95 s with a Release `tur`; the first build, which compiles the
+  library, takes about 8.5 s. Linux only for now; macOS and Windows build
+  as before. A program the compiler cannot
+  split this way builds as one unit, as before. `TUR_PRELUDE_SPLIT=0` forces
+  a one-unit build (docs/archive/r7rs-programs-compile-slowly.md).
+
 - **A Scheme file sees only Scheme and what it imports.** Under `#lang
   r7rs`, Turmeric's stdlib (`vec-new`, `map-assoc`, `some`, ...) is visible
   only through `(import (turmeric stdlib/<file>))`, with `only`, `prefix`,
@@ -615,7 +625,7 @@ All notable changes to Turmeric are documented here.
   one-line Scheme program built in 6.4 s and builds in 3.1 s. The driver
   appends the flag after the user's `TUR_CC_FLAGS` (`TUR_EMITTED_C_CC_FLAGS`,
   src/main.c), so a harness's own `-Wall` still gets it
-  (docs/reported/r7rs-programs-compile-slowly.md).
+  (docs/archive/r7rs-programs-compile-slowly.md).
 - **The R7RS prelude's `-lp__` loops are folded back** into their `: nil`
   originals (28 in stdlib/r7rs/prelude.tur and read.tur), now that a `: nil`
   self tail call lowers to a loop; the wrappers are gone and no caller

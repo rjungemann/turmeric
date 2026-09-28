@@ -27,6 +27,18 @@ void emit_shared_runtime_header(Buf *out);
  * flags): knob drift must change the text and fail the hash compare. */
 void emit_rt_split_source(Buf *out);
 
+/* r7rs-programs-compile-slowly (emit_split.h): write the library unit
+ * (EMIT_SPLIT_LIB) or the client unit (EMIT_SPLIT_CLIENT) of a split build
+ * with the next emit_program, or an ordinary single unit (EMIT_SPLIT_NONE).
+ * Emit the library unit first: it records what the client unit declares
+ * instead of defining (the fat boxes it owns and its functions' signatures).
+ * emit_split_refusal is NULL while both units can be built, else why not --
+ * the caller then emits the program as one unit.  emit_split_reset clears
+ * the mode and what the library unit recorded. */
+void emit_split_set_mode(int mode);
+const char *emit_split_refusal(void);
+void emit_split_reset(void);
+
 /* J2: when true, emit_program appends the per-export `<mangled>__ffi` shims
  * (the --shared path's interpreter-arbitrary-arity-ffi emission) to the
  * single-file TU.  Set only by the REPL's in-process spice build; leave

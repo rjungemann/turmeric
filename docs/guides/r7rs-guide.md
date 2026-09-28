@@ -43,6 +43,12 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
 
 - **A program** is a file of top-level forms. `tur run prog.tur` builds and
   runs it; there is no `main` to write.
+- **Build time**: the runtime and the prelude are compiled once and cached
+  under `<tmpdir>/tur-build/prelude/`, so the first build after installing
+  `tur` takes about 8 s and later ones about 1 s (on Linux; macOS and Windows
+  still build each program as one unit). `TUR_PRELUDE_SPLIT=0` builds the
+  program as a single C unit instead; `TUR_SHOW_CC=1` shows the two
+  compiles, or why a program was built as one unit.
 - **`.scm` files** are Scheme without the `#lang r7rs` line: `tur run
   prog.scm`, `tur build prog.scm` (the binary is `prog`), `tur check` and
   `tur --interpret` all take one, a `(load "util.scm")` reads one, and
