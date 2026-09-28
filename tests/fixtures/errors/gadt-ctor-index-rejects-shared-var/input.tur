@@ -1,0 +1,21 @@
+;; gadt-length-index-not-enforced: two parameters naming the same index
+;; variable take arguments of the same index -- one substitution per call.
+;; Lengths 2 and 1 disagree on `n`.
+
+(defopaque Zero :int)
+(defopaque Succ [n] :int)
+
+(defgadt LVec [n]
+  (LNil : (LVec Zero))
+  (LCons int (LVec n) : (LVec (Succ n))))
+
+(defn lhead [n] [v : (LVec (Succ n))] : int
+  (match v
+    (LCons x _) x))
+
+(defn heads2 [n] [a : (LVec (Succ n)) b : (LVec (Succ n))] : int
+  (+ (lhead a) (lhead b)))
+
+(defn main [] : int
+  (println (heads2 (LCons 1 (LCons 3 (LNil))) (LCons 2 (LNil))))
+  0)

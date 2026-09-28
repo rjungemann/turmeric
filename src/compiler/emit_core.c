@@ -1072,6 +1072,11 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
  * its narrower set: its free is DEEP (tur_result_box_free walks the payload),
  * which is why err-val is scalar-restricted there and unrestricted here. */
 static bool g_esc_allow_sum_accessors = false;
+/* dynamic-returned-closure-env-is-never-freed (self application): bit i set
+ * admits `b` as argument i of a dynamic call whose CALLEE is `b` itself.  See
+ * any_box_binding_escapes_self_apply.  File-scope for the same reason as the
+ * flag above: one caller sets it, and the walk is not reentrant. */
+static uint32_t g_esc_self_apply_mask = 0;
 bool sum_box_reader_name(const char *nm) {
     /* Concrete stdlib defns only, each body audited for "reads, never
      * retains": the accessors copy a payload word or return a bool; the two
@@ -1369,7 +1374,52 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 ESC_PUSH(cur->as.while_.body);
                 break;
             case EX_SET:
+                /* Reassigning `b` itself: the scope-exit drop would then release
+                 * whatever `b` holds LAST -- possibly a value some other holder
+                 * owns -- and never the one this scope minted.  Decline. */
+                if (cur->as.set_.target == b) { escapes = true; goto esc_done; }
                 ESC_PUSH(cur->as.set_.value);
+                break;
+            /* dynamic-returned-closure-env-is-never-freed: a dynamic call
+             * `(b x)` whose CALLEE is the bare value `b` invokes it, exactly as
+             * an EX_CALL whose fn_expr is `b` does -- invocation is not
+             * retention.  The arguments are walked as they are for EX_CALL,
+             * and with less to go on: the callee is unknown, so `b` passed as
+             * an argument is an escape.  Before this, any dynamic call anywhere
+             * in a scope made every binding in it escape, which is why no scope
+             * drop ever fired in a dynamic file whose body called a value. */
+            case EX_DYN_CALL: {
+                const Expr *fe = cur->as.dyn_call_.fn;
+                const Expr *pfe = fe;
+                while (pfe && pfe->kind == EX_ASCRIBE) pfe = pfe->as.ascribe_.inner;
+                bool callee_is_b = pfe && pfe->kind == EX_VAR && pfe->as.var.binding == b;
+                if (!callee_is_b)
+                    ESC_PUSH(fe);
+                for (uint32_t i = 0; i < cur->as.dyn_call_.n_args; i++) {
+                    if (callee_is_b && i < 32 && (g_esc_self_apply_mask & (1u << i))) {
+                        const Expr *pa = cur->as.dyn_call_.args[i];
+                        while (pa && pa->kind == EX_ASCRIBE) pa = pa->as.ascribe_.inner;
+                        if (pa && pa->kind == EX_VAR && pa->as.var.binding == b)
+                            continue;   /* handed back to its own code: see the mask */
+                    }
+                    ESC_PUSH(cur->as.dyn_call_.args[i]);
+                }
+                break;
+            }
+            /* A widen re-tags its operand's value, so `b` escapes through it
+             * exactly when it escapes through the operand: `(:: b any)` reaches
+             * EX_VAR and is an escape; `(:: (b 4) any)` is an invocation.  It
+             * used to fall to `default`, which is how a dynamic file's
+             * `(println (add3 4))` -- the call result widened for println --
+             * read as an escape of add3. */
+            case EX_UNION_INJECT:
+                ESC_PUSH(cur->as.union_inject_.value);
+                break;
+            /* A runtime-dispatched operator: its operands are walked, so a bare
+             * `b` operand is an escape (an operator such as `cons` stores it). */
+            case EX_DYN_OP:
+                for (uint32_t i = 0; i < cur->as.dyn_op_.n_args; i++)
+                    ESC_PUSH(cur->as.dyn_op_.args[i]);
                 break;
             case EX_BUILTIN:
                 for (uint32_t i = 0; i < cur->as.builtin.n; i++)
@@ -1570,6 +1620,102 @@ bool any_box_binding_escapes_except(const Expr *e, const Binding *b,
                                     const Expr *ignore) {
     return binding_escapes_impl_x(e, b, /*allow_box_accessors=*/true, ignore,
                                   /*allow_any_cast=*/true);
+}
+
+/* dynamic-returned-closure-env-is-never-freed (self application): the `any`
+ * walk, but a dynamic call `(b ... b ...)` whose callee is `b` may also take
+ * `b` as argument i when bit i of `self_mask` is set.
+ *
+ * That is only sound when the code `b` runs does not keep what arrives in
+ * slot i -- which is what the mask says.  It has two users that together make
+ * the argument:
+ *
+ *   - elab_fns asks it of a fresh closure's OWN body, one parameter at a time
+ *     with just that parameter's bit, and sets the bit in the producer's
+ *     fresh_closure_self_apply_mask when the parameter does not escape.  The
+ *     parameter may then be invoked, and handed back to itself in the same
+ *     slot, and nothing else: no store, no return, no capture, no other slot.
+ *   - the scope drop asks it of the let body with that mask.
+ *
+ * `(counter counter 1000 0)` then puts the closure C in slot 0 of C.  Inside,
+ * the only handle C has on itself is that parameter, and it can do nothing with
+ * it but call C again with C in slot 0 -- the same situation, one level down.
+ * So no activation reached from the call can store or return C, and the scope
+ * that minted C is its only owner when the call returns.  An activation that
+ * calls its parameter with something ELSE in slot 0 runs C with no handle on C
+ * at all, which is safer still.  Everything else about the walk is unchanged. */
+bool any_box_binding_escapes_self_apply(const Expr *e, const Binding *b,
+                                        uint32_t self_mask) {
+    g_esc_self_apply_mask = self_mask;
+    bool r = binding_escapes_impl_x(e, b, /*allow_box_accessors=*/true, NULL,
+                                    /*allow_any_cast=*/true);
+    g_esc_self_apply_mask = 0;
+    return r;
+}
+
+/* dynamic-returned-closure-env-is-never-freed: is releasing this closure's env
+ * through its drop-glue header a free of the env block and nothing else?
+ * drop_glue_<env> also releases an rc capture, an owned `^fat` capture and a
+ * capture with a Drop instance; each of those could be a value a call of the
+ * closure handed back, so a closure that has one is not admitted.  An `any`
+ * capture is copied into the env word for word and its glue leaves it alone;
+ * a scalar has nothing to release.  A body with inline C is refused too: it is
+ * the only way a closure's code can reach its own env and hand it out. */
+static bool fresh_closure_capture_kind_ok(TypeKind k) {
+    switch (k) {
+        case TY_ANY:
+        case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_CSTR: case TY_NIL:
+        case TY_PTR_VOID:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool closure_env_drop_is_shallow(const struct Closure *c) {
+    if (!c || !c->fn || c->n_captures == 0) return false;
+    if (c->is_shift_receiver || c->is_effect_payload) return false;
+    if (expr_subtree_has_inline_c(c->fn->body)) return false;
+    uint32_t heap_caps = 0;
+    for (uint32_t i = 0; i < c->n_captures; i++) {
+        const Binding *cap = c->captures[i];
+        if (!cap) return false;
+        if (cap->is_global) continue;          /* no env field */
+        heap_caps++;
+        if (cap->is_fat) return false;
+        if (c->capture_drop_insts && c->capture_drop_insts[i]) return false;
+        if (!fresh_closure_capture_kind_ok(cap->type.kind)) return false;
+    }
+    return heap_caps > 0;                      /* an env block exists */
+}
+
+/* dynamic-returned-closure-env-is-never-freed: does `x` evaluate to an `any`
+ * holding a capturing closure's env that nothing but this value owns?  Two
+ * shapes: a widen of a capturing lambda written right here, and a call to a
+ * function whose tail is one (returns_fresh_any_closure).  Either way the env
+ * was malloc'd behind a drop-glue header for this value alone, so whoever
+ * owns the value may release it with TUR_CLOSURE_DROP. */
+bool expr_is_fresh_any_closure(const Expr *x) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    if (!x) return false;
+    if (x->kind == EX_CALL)
+        return x->as.call_.fn_binding &&
+               x->as.call_.fn_binding->returns_fresh_any_closure;
+    if (x->kind != EX_UNION_INJECT || x->type.kind != TY_ANY ||
+        x->as.union_inject_.frame_box)
+        return false;
+    const Expr *v = x->as.union_inject_.value;
+    while (v && (v->kind == EX_ASCRIBE || v->kind == EX_FN_TO_FAT ||
+                 v->kind == EX_POLY_TO_FAT || v->kind == EX_POLY_WRAP))
+        v = v->kind == EX_ASCRIBE     ? v->as.ascribe_.inner
+          : v->kind == EX_FN_TO_FAT   ? v->as.fn_to_fat_.inner
+          : v->kind == EX_POLY_TO_FAT ? v->as.poly_to_fat_.inner
+                                      : v->as.poly_wrap_.inner;
+    return v && v->kind == EX_CLOSURE &&
+           closure_env_drop_is_shallow(v->as.closure_.closure);
 }
 
 /* catch-unwind-panic-payload-leaks (Leak 2): runtime sinks that CONSUME their

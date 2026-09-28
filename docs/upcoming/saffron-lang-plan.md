@@ -32,7 +32,9 @@ Open reports a Saffron program reaches (none is a stage blocker):
   [dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md) and
   [cps-capturing-closure-env-leaks-through-dyn-call](../archive/cps-capturing-closure-env-leaks-through-dyn-call.md);
   [byvalue-recursive-adt-boxes-are-never-freed](../archive/byvalue-recursive-adt-boxes-are-never-freed.md)
-  closed the same day on its own.
+  closed the same day on its own.  The two closure-env reports also gained
+  static drops that day, so a returned lambda a `let` owns and a lambda
+  passed to a non-retaining parameter are freed with the collector off too.
 - [jit-x86-64-struct-valued-statement-expression-miscompiles](../reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md) (medium, JIT engine on x86-64 only)
 
 The rest of this header is the running log of the build-out. It is kept as

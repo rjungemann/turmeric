@@ -12,6 +12,11 @@
  * pulling the whole emit-internal surface into the elaborator. */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
 bool expr_subtree_has_inline_c(const Expr *e);
+/* dynamic-returned-closure-env-is-never-freed: the `any` walk with the
+ * self-application slots admitted, defined emit-side. */
+bool any_box_binding_escapes_self_apply(const Expr *e, const Binding *b,
+                                        uint32_t self_mask);
+bool expr_is_fresh_any_closure(const Expr *x);
 /* catch-box-reader-confinement-whitelist: the box-confinement walk, likewise
  * defined emit-side, reused here to infer per-param non-retention for
  * pointer-carrying scalars when a defn is elaborated. */
@@ -5412,9 +5417,19 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
        * until nothing changes: bits only ever clear, so this terminates, and
        * a bit that survives is one no use of the param can contradict --
        * including a pass-through into a slot that also survived. */
+      /* cps-capturing-closure-env-leaks-through-dyn-call: an `any` parameter
+       * joins the fn-param inference.  In a dynamic file a procedure argument
+       * IS an `any`, and the body calls it through a dynamic call -- which the
+       * walk now reads as an invocation, not an escape -- so `(defn apply-to
+       * [g x] (g x))` does not retain `g`, and a capturing lambda handed to it
+       * can be released by the caller the way a typed one handed to a
+       * `(fn ...)`-typed parameter is.  The bit means the same thing for any
+       * payload: the body does nothing with the value but invoke it, read its
+       * tag, or pass it on to a slot that does the same. */
       for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
           Binding *_pb = params[_pi];
-          if (_pb && (_pb->is_fat || _pb->is_poly_fn || _pb->type.kind == TY_FN))
+          if (_pb && (_pb->is_fat || _pb->is_poly_fn || _pb->type.kind == TY_FN ||
+                      _pb->type.kind == TY_ANY))
               b->nonretain_param_mask |= (1u << _pi);
       }
       /* byvalue-recursive-adt-boxes-are-never-freed (Residue 1): a by-value
@@ -5540,7 +5555,7 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                 }
             }
             bool _is_fnparam = _pb->is_fat || _pb->is_poly_fn ||
-                               _pb->type.kind == TY_FN;
+                               _pb->type.kind == TY_FN || _pb->type.kind == TY_ANY;
             if (_is_fnparam && closure_binding_escapes(body, _pb))
                 b->nonretain_param_mask &= ~(1u << _pi);
             /* any-struct-box-leak-per-widen: an `any` parameter joins the same
@@ -8549,6 +8564,20 @@ Expr *elab_defn(Elab *e, const Form *call) {
             scope_free(&inner);
             return NULL;
         }
+        /* gadt-length-index-not-enforced: a declared GADT index against the
+         * tail's -- `(defn nil1 [] : (Vec (Succ Zero)) (VNil))` is false. */
+        const Form *got = NULL;
+        if (gadt_claim_disagrees(e, return_type_form_kept, tail, &got)) {
+            Buf cb; buf_init(&cb); form_print(&cb, return_type_form_kept); buf_putc(&cb, '\0');
+            Buf gb; buf_init(&gb); form_print(&gb, got); buf_putc(&gb, '\0');
+            diag_emit_with_code(DIAG_ERROR, tail->span, TUR_E0001_TYPE_MISMATCH,
+                "'%s' declares return type %s but its body has type %s",
+                name_f->as.sym->name, cb.data, gb.data);
+            buf_free(&cb); buf_free(&gb);
+            e->scope = inner.parent;
+            scope_free(&inner);
+            return NULL;
+        }
     }
 
     /* carrier-aware-return-unification Phase 1: reject a genuine return-position
@@ -9446,6 +9475,42 @@ Expr *elab_defn(Elab *e, const Form *call) {
                                             : _fa->as.let_.body;
         if (_fa && _fa->kind == EX_UNION_INJECT && _fa->type.kind == TY_ANY)
             b->returns_fresh_any = true;
+        /* dynamic-returned-closure-env-is-never-freed: which of those widen a
+         * capturing closure built right here (expr_is_fresh_any_closure, which
+         * also requires an env whose release frees nothing a call of the
+         * closure could have handed back).  The env is then a fresh heap
+         * allocation behind a drop-glue header, owned by nobody but the value
+         * this function returns. */
+        b->returns_fresh_any_closure = false;
+        b->fresh_closure_self_apply_mask = 0;
+        if (b->returns_fresh_any && expr_is_fresh_any_closure(_fa)) {
+            b->returns_fresh_any_closure = true;
+            const Expr *_cv = _fa->as.union_inject_.value;
+            while (_cv && (_cv->kind == EX_ASCRIBE || _cv->kind == EX_FN_TO_FAT ||
+                           _cv->kind == EX_POLY_TO_FAT || _cv->kind == EX_POLY_WRAP))
+                _cv = _cv->kind == EX_ASCRIBE      ? _cv->as.ascribe_.inner
+                    : _cv->kind == EX_FN_TO_FAT    ? _cv->as.fn_to_fat_.inner
+                    : _cv->kind == EX_POLY_TO_FAT  ? _cv->as.poly_to_fat_.inner
+                                                   : _cv->as.poly_wrap_.inner;
+            const FnDef *_cfn = _cv->as.closure_.closure->fn;
+            /* The self-application mask: which of the closure's own parameters
+             * it only invokes, or hands back to itself in the same slot
+             * (any_box_binding_escapes_self_apply).  params[0] is the env
+             * parameter closure conversion prepends. */
+            if (_cfn->params) {
+                uint32_t _off = 0;
+                const Binding *_p0 = _cfn->n_params ? _cfn->params[0] : NULL;
+                if (_p0 && _p0->name && _p0->name->name &&
+                    strncmp(_p0->name->name, "__env_p_", 8) == 0)
+                    _off = 1;
+                for (uint32_t _pj = 0; _pj + _off < _cfn->n_params && _pj < 32; _pj++) {
+                    const Binding *_pp = _cfn->params[_pj + _off];
+                    if (!_pp || _pp->type.kind != TY_ANY) continue;
+                    if (!any_box_binding_escapes_self_apply(_cfn->body, _pp, 1u << _pj))
+                        b->fresh_closure_self_apply_mask |= 1u << _pj;
+                }
+            }
+        }
     }
     /* any-struct-box-leak-per-widen: the passthrough twin.  A body whose tail is
      * a bare parameter forwards that argument, so the caller's ownership of the

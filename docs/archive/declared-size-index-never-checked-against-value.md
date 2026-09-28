@@ -205,7 +205,7 @@ runtime predicates is by design, per the guide.
 
 ## Related
 
-- [gadt-length-index-not-enforced](../reported/gadt-length-index-not-enforced.md) -- the
+- [gadt-length-index-not-enforced](gadt-length-index-not-enforced.md) -- the
   separate, already-open dependent-types gap. That report is about indices that
   are phantom *by design pending a future phase*; this one is about indices
   that are load-bearing today and simply unvalidated.

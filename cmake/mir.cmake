@@ -101,6 +101,16 @@ include_guard(GLOBAL)
 #     refusals that used to catch this shape (they were deleted with the fix, in
 #     jit_ffi_hook.c and elab_fns.c), so an older MIR silently reinstates the
 #     miscall rather than diagnosing it.
+#
+#   b7991fcc (merged as 79cb2905, rjungemann/mir#4) -- arithmetic_conversion
+#     asked MIR_LONG_MAX about every signed type of rank long or above when the
+#     other operand was unsigned int, so on LLP64 (win64: 32-bit long)
+#     `long long OP unsigned int` was typed, and computed, as unsigned int:
+#     `(int64_t)5u - 7u` came out 4294967294.  Now follows C11 6.3.1.8 rank by
+#     rank; every LP64 result keeps its width.  Silent wrong answers on the
+#     Windows JIT only (a base-1e9 bignum borrow); covered by
+#     c-tests/new/llp64-uint-llong-conv.c
+#     (docs/archive/c2mir-llp64-long-long-vs-unsigned-int.md).
 # Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands
 # equivalents.
 # CACHE-VARIABLE TRAP: `set(... CACHE ...)` does NOT update an entry that is
@@ -114,8 +124,8 @@ include_guard(GLOBAL)
 # the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
     CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
-set(TUR_MIR_GIT_TAG "b7e72a958c0b8dfb04d0732516a09c989fd5acad"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes + aarch64 AAPCS64 HFA passing (both, merged) + win64 lazy-generation wrapper ABI + wasm32/Emscripten target -- now on the fork's master, not a feature branch")
+set(TUR_MIR_GIT_TAG "79cb29058e8c8128dc5e0dce58c1e12382c1fb82"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes + aarch64 AAPCS64 HFA passing (both, merged) + win64 lazy-generation wrapper ABI + wasm32/Emscripten target + LLP64 long long vs unsigned int conversion -- now on the fork's master, not a feature branch")
 
 include(FetchContent)
 

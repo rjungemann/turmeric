@@ -1821,9 +1821,17 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
      * and carrier bridges emit_do_value gives a block's value on the ordinary
      * path, which is what that path handed the return ladder here before.  A
      * diverging tail (a `panic`) is left alone: it fires the chain itself. */
+    /* dynamic-returned-closure-env-is-never-freed: the same holds for the
+     * `any` locals of the enclosing tail-position lets (emit_tail's inline
+     * `let` arm pushes them and emits no trailing drop, leaving it to "the
+     * return").  A backedge and a void return fire them; this value return
+     * did not, so every `any` a tail `let` owned leaked on the way out.  The
+     * value goes into a temp first for the same reason as a frame's: `v` may
+     * read the local being dropped. */
+    bool any_drops_open = ctx->n_any_scope_drops > 0;
     Expr *one[1] = { (Expr *)e };
     Expr wrap = {0};
-    bool wrap_value = ctx->frame_var && e->type.kind != TY_NEVER;
+    bool wrap_value = (ctx->frame_var || any_drops_open) && e->type.kind != TY_NEVER;
     if (wrap_value) {
         wrap.kind = EX_DO;
         wrap.type = e->type;
@@ -1852,7 +1860,10 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
     char *v = emit_fat_return_value(ctx, body, fn_e, ve);
     ctx->dyn_tail_mode = DYN_TAIL_NONE;   /* never outlives the one call */
     ctx->dyn_tail_guard = NULL;
-    if (wrap_value) emit_tail_fire_frames(ctx, body);
+    if (wrap_value) {
+        emit_tail_fire_frames(ctx, body);
+        if (any_drops_open) emit_any_scope_drops(ctx, body);
+    }
     bool emitted_tail_call = want_tail_call && ctx->tail_call_no_hoist_taken;
     ctx->tail_call_no_hoist = nh_save;
     ctx->tail_call_no_hoist_taken = taken_save;
@@ -4717,13 +4728,21 @@ static char *tcg_member_ok(EmitCtx *ctx, const Expr *e) {
     if (expr_tail_diverges(fd->body)) return NULL;
     /* G3/G4's flat-stack catch-unwind lowerings claim these bodies. */
     if (gs_has_catch(fd->body, fd)) return NULL;
-    /* An effect-colored body is CPS-lowered (plan 2.5), or at least runs on the
-     * delimited-control path; neither is a C tail position. */
-    if (fd->cps_colored) return NULL;
+    /* A body the CPS backend emits is not a C tail position; its mutual tail
+     * calls are fused there instead (emit_cps_ir.c, CPS mutual tail-call
+     * groups).
+     *
+     * cps-self-tail-call-relies-on-sibling-call: a COLORED function the CPS
+     * backend declined is emitted right here, as ordinary direct C -- the
+     * fiber path a colored body used to run on is gone -- so its tail calls
+     * are C tail positions exactly like an uncolored function's, and the self
+     * backedge (tco_mark) already takes them.  Refusing it here left a
+     * colored pair such as r7rs's `(define (ping f n) (if (= n 0) 'done
+     * (begin (f n) (pong f (- n 1)))))` making a C call per step, which
+     * overflowed below -O2. */
     if (ctx->program_root &&
         emit_cps_ir_emits_binding(ctx->program_root, fd->binding))
         return NULL;
-    if (fd->cps_colored) return NULL;   /* colored by the call above */
     if (!tco_params_simple(ctx, e, fd)) return NULL;
     for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *pb = fd->params[i];

@@ -707,6 +707,23 @@ struct Binding {
      * exactly like returns_fresh_closure, and for the same reason: ownership of
      * a returned value cannot be read off the call site alone. */
     bool                returns_fresh_any;
+    /* dynamic-returned-closure-env-is-never-freed: returns_fresh_any where the
+     * widened value is a freshly built CAPTURING closure -- `(defn make-adder
+     * [k] (fn [x] (+ x k)))` in a dynamic file.  The `any` then carries a heap
+     * env with an env[-1] drop-glue header, which `__tur_any_drop` cannot free
+     * (the registry row for "fn" says unboxed: a fn payload may equally be a
+     * static function), so the caller's scope drop releases it through the
+     * header instead.  Set only when every capture is one the drop glue leaves
+     * alone (`any` or a scalar) and the closure body has no inline C, so the
+     * env holds nothing a returned value could alias. */
+    bool                returns_fresh_any_closure;
+    /* dynamic-returned-closure-env-is-never-freed (self application): with
+     * returns_fresh_any_closure, bit i set when the returned closure's
+     * parameter i is only ever invoked, or handed back to itself as argument
+     * i -- `(fn [self n] (self self (- n 1)))`.  A caller may then pass the
+     * closure to itself in slot i without that counting as an escape
+     * (any_box_binding_escapes_self_apply). */
+    uint32_t            fresh_closure_self_apply_mask;
     /* any-struct-box-leak-per-widen (the passthrough case): this function's
      * body is exactly `param[returns_any_param_idx]` -- it hands its argument
      * straight back, and does not otherwise retain it.  So the OWNERSHIP of the
@@ -1530,6 +1547,15 @@ struct Expr {
                   * are elaboration-only; size indices are erased in codegen. */
                  struct CtorDef *ctor;
                  struct SizeTerm *size_index;
+                 /* gadt-length-index-not-enforced: for a GADT constructor
+                  * application, the constructed value's type with its
+                  * phantom index instantiated from the arguments --
+                  * `(Vec (Succ Zero))` for `(VCons 7 (VNil))`, `?` where an
+                  * index is unknown.  The value's TYPE stays the bare ADT;
+                  * this is what sz_recover_type_form hands a claim check
+                  * (gadt_index_check_call / gadt_claim_disagrees).
+                  * Elaboration-only; NULL for everything else. */
+                 const struct Form *gadt_form;
                  /* jit-ffi-c2mir-plan F3: non-NULL marks this call as
                   * `(call-ptr ...)` -- an indirect call through a raw
                   * address with the explicit C signature here.  fn_expr

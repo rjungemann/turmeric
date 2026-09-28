@@ -117,9 +117,11 @@ interpreter's now.
   image can reach, instead of everything after the first capture.
 - **Reclaim images.** Free an image when its continuation procedure becomes
   unreachable. That needs the continuation to be a refcounted or traced
-  object, which Scheme values are not today
+  object, which Scheme values are not today.
   ([dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md)
-  is the same gap for closures).
+  was the same gap for closures.  It was closed on 2026-09-28 only for a
+  closure whose single owner the compiler can prove, a `let` that minted it.
+  A continuation procedure stored anywhere is still not that.)
 
 ## 2026-09-28
 
@@ -211,8 +213,9 @@ is dead. The procedure is an ordinary closure, and it can be stored anywhere:
 a variable, a pair, a record, a vector's malloc'd buffer, another closure's
 environment. The interpreter has no collector and does not refcount closures,
 so there is no point at which it can know. That is still the "Reclaim
-images" direction, and it is the same gap as
-[dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md).
+images" direction.  It is the general case of
+[dynamic-returned-closure-env-is-never-freed](../archive/dynamic-returned-closure-env-is-never-freed.md),
+which was closed on 2026-09-28 only where the compiler can prove the owner.
 
 What the interpreter can do is keep less per image. Measured on a generator
 (`call/cc` re-entered twice a step, 16,000 steps, Release): 69 KB a step,

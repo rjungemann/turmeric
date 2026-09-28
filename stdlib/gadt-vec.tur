@@ -5,8 +5,8 @@
 ;;; and gvec-head-or takes an explicit default.  A genuinely length-indexed
 ;;; vector -- VNil : (Vec Zero), VCons : (Vec (Succ n)) over phantom-parameter
 ;;; opaques -- gets an arm-less head on a scrutinee annotated (Vec (Succ n)),
-;;; and a rejected call on a value ascribed (Vec Zero); the recipe is the
-;;; "Length-Indexed Vectors" section of docs/guides/gadts-cookbook.md.
+;;; and a rejected call on (VNil) itself, whose index is known; the recipe is
+;;; the "Length-Indexed Vectors" section of docs/guides/gadts-cookbook.md.
 ;;;
 ;;; Since: Phase G4
 ;; Phase G4: GVec GADT (simplified int elements)

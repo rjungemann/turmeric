@@ -10,6 +10,7 @@
 #include "scheme_lower.h"   /* r7rs: scheme_span_is_user_source, scheme_public_name */
 #include "cps.h"          /* cps_expr_uses_control -- the control-widen hoist */
 bool sum_box_reader_name(const char *nm);  /* emit_core.c; see emit_internal.h */
+bool expr_is_fresh_any_closure(const Expr *x);  /* emit_core.c; see emit_internal.h */
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
 #include "mono_specs.h"   /* VBM1 (van-laarhoven-monomorphization): spec registry */
 
@@ -2078,6 +2079,12 @@ static bool arg_is_freeable_closure_source(const Binding *fb, uint32_t i,
     if (a->kind == EX_CALL && a->as.call_.fn_binding
         && a->as.call_.fn_binding->returns_fresh_closure)
         return true;
+    /* cps-capturing-closure-env-leaks-through-dyn-call: the dynamic twins --
+     * a capturing lambda widened to `any` for an `any` parameter, and a call
+     * to a function returning one.  Hoisted into a let, the `any` scope drop
+     * (direct) or the entry-boundary reap (CPS) releases the env. */
+    if (expr_is_fresh_any_closure(a))
+        return true;
     return false;
 }
 
@@ -2721,6 +2728,10 @@ const Form *sz_recover_type_form(Elab *e, const Expr *x) {
             return sz_recover_type_form(e, x->as.ascribe_.inner);
         }
         case EX_CALL: {
+            /* gadt-length-index-not-enforced: a GADT constructor application
+             * knows its own index, which the constructor's declared result
+             * (the open template below) does not. */
+            if (x->as.call_.gadt_form) return x->as.call_.gadt_form;
             const Binding *callee = x->as.call_.fn_binding;
             if (!callee) return NULL;
             const Type *cft = &callee->type;
@@ -2814,6 +2825,338 @@ bool sz_claim_disagrees(Elab *e, const Form *claim, const Expr *x,
         }
     }
     return false;
+}
+
+/* ============================================================================
+ * gadt-length-index-not-enforced: the phantom INDEX of a GADT value, carried
+ * as a type Form beside the value's (bare) type.
+ *
+ * A GADT constructor application is typed as the bare ADT -- `(VNil)` and
+ * `(VCons 7 (VNil))` are both `Vec` -- because the checker treats a bare `Vec`
+ * and an application `(Vec Zero)` as different types, and every bare-annotated
+ * GADT function (stdlib/gadt-vec.tur included) would otherwise stop accepting
+ * the values its own constructors build.  So the index is not put in the TYPE.
+ * It rides the same channel the sized-GADT (SZ8) indices already do: a Form,
+ * recovered from an expression by sz_recover_type_form -- a constructor
+ * application's inferred index (call_.gadt_form, below), a let binding's
+ * decl_type_form, an ascription, a callee's declared result -- and checked
+ * against a declared template where a claim is made: a call argument, an
+ * ascription, a function's declared return.
+ *
+ * The matcher only ever REJECTS what is provably wrong.  Index symbols that
+ * name a type in scope (`Zero`, `Succ`, `int`) are constants; any other symbol
+ * -- a type variable, or `?`, how an index the constructor could not infer is
+ * written -- matches anything.  Two constants disagree only when they resolve
+ * to different types, so `(Vec (Succ n))` against `(Vec Zero)` is a mismatch
+ * and `(Vec (Succ n))` against `(Vec m)` is not.  A size term (Static / Add /
+ * Mul) is SZ8's business and is never judged here.
+ * ========================================================================== */
+
+typedef struct { const char *name; const Form *val; } GxSub;
+#define GX_MAX_SUB 16
+
+/* A spaced let annotation `[v : (Vec Zero) ...]` reaches us wrapped in the
+ * reader's one-item F_TYPE_ANN (and so does the binding's decl_type_form). */
+static const Form *gx_peel(const Form *f) {
+    while (f && f->tag == F_TYPE_ANN && f->as.list.len == 1)
+        f = f->as.list.items[0];
+    return f;
+}
+
+/* 0 = not a constant (a variable / `?` / something unclassified), 1 = a
+ * primitive type keyword (`*prim` set), 2 = a named ADT/opaque (`*def` set). */
+static int gx_const(Elab *e, const Form *f, TypeKind *prim, const AdtDef **def) {
+    if (!f || f->tag != F_SYM || !f->as.sym) return 0;
+    const char *n = f->as.sym->name;
+    static const struct { const char *name; TypeKind kind; } prims[] = {
+        { "int", TY_INT }, { "bool", TY_BOOL }, { "float", TY_FLOAT },
+        { "cstr", TY_CSTR }, { "int8", TY_INT8 }, { "int16", TY_INT16 },
+        { "int32", TY_INT32 }, { "int64", TY_INT64 }, { "uint8", TY_UINT8 },
+        { "uint16", TY_UINT16 }, { "uint32", TY_UINT32 },
+        { "uint64", TY_UINT64 }, { "float32", TY_FLOAT32 },
+        { "float64", TY_FLOAT64 },
+    };
+    for (size_t i = 0; i < sizeof prims / sizeof prims[0]; i++)
+        if (strcmp(prims[i].name, n) == 0) { *prim = prims[i].kind; return 1; }
+    Binding *tb = scope_lookup(e->scope, f->as.sym);
+    if (!tb) tb = scope_lookup(&e->global, f->as.sym);
+    /* Only a binding whose type IS the named ADT counts; an alias to an
+     * application, a value, anything else is left unclassified. */
+    if (tb && tb->type.kind == TY_ADT && tb->type.as.adt_.def) {
+        *def = tb->type.as.adt_.def;
+        return 2;
+    }
+    return 0;
+}
+
+static bool gx_is_size_head(const Form *hd) {
+    if (!hd || hd->tag != F_SYM) return false;
+    const char *op = hd->as.sym->name;
+    return strcmp(op, "Static") == 0 || strcmp(op, "Add") == 0 ||
+           strcmp(op, "Mul") == 0;
+}
+
+/* Could `a` and `b` be the same index?  False only when provably not. */
+static bool gx_compatible(Elab *e, const Form *a, const Form *b) {
+    a = gx_peel(a); b = gx_peel(b);
+    if (!a || !b) return true;
+    TypeKind pa = TY_UNKNOWN, pb = TY_UNKNOWN;
+    const AdtDef *da = NULL, *db = NULL;
+    if (a->tag == F_SYM && b->tag == F_SYM) {
+        int ka = gx_const(e, a, &pa, &da), kb = gx_const(e, b, &pb, &db);
+        if (!ka || !kb) return true;
+        if (ka != kb) return false;
+        return ka == 1 ? pa == pb : da == db;
+    }
+    if (a->tag == F_SYM || b->tag == F_SYM) {
+        const Form *sym = a->tag == F_SYM ? a : b;
+        const Form *lst = a->tag == F_SYM ? b : a;
+        if (lst->tag != F_LIST || lst->as.list.len < 1) return true;
+        int ks = gx_const(e, sym, &pa, &da);
+        if (!ks) return true;
+        const Form *hd = lst->as.list.items[0];
+        if (gx_is_size_head(hd)) return true;
+        int kh = gx_const(e, hd, &pb, &db);
+        if (kh != 2) return true;
+        return ks == 2 && da == db;          /* nullary name vs an application */
+    }
+    if (a->tag != F_LIST || b->tag != F_LIST) return true;
+    if (a->as.list.len < 1 || b->as.list.len < 1) return true;
+    const Form *ha = a->as.list.items[0], *hb = b->as.list.items[0];
+    if (gx_is_size_head(ha) || gx_is_size_head(hb)) return true;
+    int ka = gx_const(e, ha, &pa, &da), kb = gx_const(e, hb, &pb, &db);
+    if (ka != 2 || kb != 2) return true;
+    if (da != db) return false;
+    if (a->as.list.len != b->as.list.len) return true;
+    for (uint32_t i = 1; i < a->as.list.len; i++)
+        if (!gx_compatible(e, a->as.list.items[i], b->as.list.items[i]))
+            return false;
+    return true;
+}
+
+/* Match the template `pat` against the value index `val`, binding `pat`'s
+ * variables in `subs` (shared across one call's parameters, so a variable
+ * two parameters name must agree).  False only on a provable mismatch. */
+static bool gx_unify(Elab *e, const Form *pat, const Form *val,
+                     GxSub *subs, int *n_subs) {
+    pat = gx_peel(pat); val = gx_peel(val);
+    if (!pat || !val) return true;
+    TypeKind pp = TY_UNKNOWN;
+    const AdtDef *pd = NULL;
+    if (pat->tag == F_SYM) {
+        if (gx_const(e, pat, &pp, &pd)) return gx_compatible(e, pat, val);
+        const char *vn = pat->as.sym->name;
+        TypeKind vp = TY_UNKNOWN;
+        const AdtDef *vd = NULL;
+        /* A value side that says nothing binds nothing. */
+        if (val->tag == F_SYM && !gx_const(e, val, &vp, &vd)) return true;
+        for (int i = 0; i < *n_subs; i++)
+            if (strcmp(subs[i].name, vn) == 0)
+                return gx_compatible(e, subs[i].val, val);
+        if (*n_subs < GX_MAX_SUB) {
+            subs[*n_subs].name = vn;
+            subs[*n_subs].val = val;
+            (*n_subs)++;
+        }
+        return true;
+    }
+    if (pat->tag != F_LIST || pat->as.list.len < 1) return true;
+    if (gx_is_size_head(pat->as.list.items[0])) return true;
+    if (val->tag == F_SYM) return gx_compatible(e, pat, val);
+    if (val->tag != F_LIST || val->as.list.len < 1) return true;
+    const Form *hp = pat->as.list.items[0], *hv = val->as.list.items[0];
+    if (gx_is_size_head(hv)) return true;
+    TypeKind vp = TY_UNKNOWN;
+    const AdtDef *vd = NULL;
+    int kp = gx_const(e, hp, &pp, &pd), kv = gx_const(e, hv, &vp, &vd);
+    if (kp == 2 && kv == 2 && pd != vd) return false;
+    if (kp != 2 || kv != 2) return true;
+    if (pat->as.list.len != val->as.list.len) return true;
+    for (uint32_t i = 1; i < pat->as.list.len; i++)
+        if (!gx_unify(e, pat->as.list.items[i], val->as.list.items[i], subs, n_subs))
+            return false;
+    return true;
+}
+
+/* `f` with its variables replaced from `subs`; an unbound variable becomes
+ * `?`, so a partly inferred index still says what it knows. */
+static const Form *gx_subst(Elab *e, const Form *f, const GxSub *subs, int n_subs,
+                            const Form *qmark) {
+    if (!f) return NULL;
+    if (f->tag == F_SYM) {
+        TypeKind p = TY_UNKNOWN;
+        const AdtDef *d = NULL;
+        if (gx_const(e, f, &p, &d)) return f;
+        for (int i = 0; i < n_subs; i++)
+            if (strcmp(subs[i].name, f->as.sym->name) == 0) return subs[i].val;
+        return qmark;
+    }
+    if (f->tag != F_LIST || f->as.list.len < 1) return f;
+    if (gx_is_size_head(f->as.list.items[0])) return f;
+    Form **items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
+    items[0] = f->as.list.items[0];
+    for (uint32_t i = 1; i < f->as.list.len; i++)
+        items[i] = (Form *)gx_subst(e, f->as.list.items[i], subs, n_subs, qmark);
+    return form_list(e->arena, f->span, items, f->as.list.len);
+}
+
+static const AdtDef *gx_gadt_head(Elab *e, const Form *f) {
+    f = gx_peel(f);
+    if (!f || f->tag != F_LIST || f->as.list.len < 2) return NULL;
+    TypeKind p = TY_UNKNOWN;
+    const AdtDef *d = NULL;
+    if (gx_const(e, f->as.list.items[0], &p, &d) != 2 || !d || !d->is_gadt)
+        return NULL;
+    return d;
+}
+
+static char *gx_form_str(const Form *f) {
+    Buf b; buf_init(&b);
+    form_print(&b, f);
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data ? b.data : "?");
+    buf_free(&b);
+    return s;
+}
+
+/* The index of a GADT constructor application: the constructor's declared
+ * result with its variables instantiated from the fields' arguments.
+ * `(VCons 7 (VNil))` is `(Vec (Succ Zero))`; with an argument whose index is
+ * unknown it is `(Vec (Succ ?))`.  A field whose argument's index contradicts
+ * another field sharing its variable is a type error, reported here.
+ * NULL for a non-GADT. */
+static const Form *gadt_infer_ctor_form(Elab *e, const CtorDef *ctor,
+                                        const Expr *call_expr, const Form *call,
+                                        bool *mismatch) {
+    if (mismatch) *mismatch = false;
+    if (!ctor || !ctor->adt || !ctor->adt->is_gadt) return NULL;
+    /* A size term (SZ8's `(Static 0)`, `(Add (Static 1) n)`) is left exactly
+     * as declared by gx_subst and matches anything in gx_unify, so a sized
+     * GADT's form carries the same size template it always did. */
+    const Form *rt = ctor->result_type_form;
+    if (!rt || rt->tag != F_LIST || rt->as.list.len < 2) return NULL;
+    GxSub subs[GX_MAX_SUB];
+    int n_subs = 0;
+    uint32_t n_args = call_expr ? call_expr->as.call_.n_args : 0;
+    for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_args; fi++) {
+        const Form *ff = ctor->field_forms ? ctor->field_forms[fi] : NULL;
+        if (!ff || ff->tag != F_LIST) continue;
+        const Form *af = gx_peel(sz_recover_type_form(e, call_expr->as.call_.args[fi]));
+        if (!af || af->tag != F_LIST) continue;
+        if (!gx_unify(e, ff, af, subs, &n_subs)) {
+            char *fs = gx_form_str(gx_subst(e, ff, subs, n_subs,
+                                            form_sym(e->arena, ff->span,
+                                                     symtab_intern(e->st, strslice("?", 1)))));
+            char *as = gx_form_str(af);
+            Span sp = (call && call->tag == F_LIST && fi + 1 < call->as.list.len)
+                      ? call->as.list.items[fi + 1]->span : call_expr->span;
+            diag_emit_with_code(DIAG_ERROR, sp, TUR_E0001_TYPE_MISMATCH,
+                                "constructor '%s' arg %u: expected %s, got %s",
+                                ctor->name, fi + 1, fs, as);
+            free(fs); free(as);
+            if (mismatch) *mismatch = true;
+            return NULL;
+        }
+    }
+    const Form *qmark = form_sym(e->arena, rt->span,
+                                 symtab_intern(e->st, strslice("?", 1)));
+    return gx_subst(e, rt, subs, n_subs, qmark);
+}
+
+/* Does `f` name only constants -- an index known all the way down? */
+static bool gx_closed(Elab *e, const Form *f) {
+    f = gx_peel(f);
+    if (!f) return false;
+    if (f->tag == F_SYM) {
+        TypeKind p = TY_UNKNOWN;
+        const AdtDef *d = NULL;
+        return gx_const(e, f, &p, &d) != 0;
+    }
+    if (f->tag != F_LIST || f->as.list.len < 1) return false;
+    if (gx_is_size_head(f->as.list.items[0])) return false;
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!gx_closed(e, f->as.list.items[i])) return false;
+    return true;
+}
+
+/* A bare GADT value `x` whose index is known all the way down, retyped at
+ * that index through an ascription -- the node `(:: x (Vec (Succ Zero)))`
+ * elaborates to.  `x` itself when the index is not known. */
+Expr *gadt_refine_to_index(Elab *e, Expr *x) {
+    if (!x || x->type.kind != TY_ADT || !x->type.as.adt_.def ||
+        !x->type.as.adt_.def->is_gadt)
+        return x;
+    const Form *xf = gx_peel(sz_recover_type_form(e, x));
+    if (gx_gadt_head(e, xf) != x->type.as.adt_.def || !gx_closed(e, xf))
+        return x;
+    Type *t = fn_type_from_form(e, xf, NULL, NULL, 0);
+    if (!t || t->kind != TY_APP || type_adt_app_def(t) != x->type.as.adt_.def)
+        return x;
+    Expr *asc = expr_new(e->arena, EX_ASCRIBE, *t, x->span);
+    asc->as.ascribe_.inner = x;
+    asc->as.ascribe_.type_form = xf;
+    return asc;
+}
+
+/* A call's GADT-indexed parameters against what each argument's index is
+ * known to be.  One substitution for the whole call, so `(zip-with [n] [a :
+ * (Vec n) b : (Vec n)])` rejects two different lengths.  Returns true when it
+ * reported a mismatch. */
+static bool gadt_index_check_call(Elab *e, const Form *call, const Type *fn_type,
+                                  Binding *fn_binding, Expr **args,
+                                  uint32_t n_args) {
+    if (!fn_type || fn_type->kind != TY_FN || !fn_type->as.fn.param_type_forms)
+        return false;
+    if (fn_binding && fn_binding->closure_fn_binding) return false;
+    GxSub subs[GX_MAX_SUB];
+    int n_subs = 0;
+    uint32_t arity = fn_type->as.fn.arity;
+    for (uint32_t i = 0; i < n_args && i < arity; i++) {
+        const Form *pf = gx_peel(fn_type->as.fn.param_type_forms[i]);
+        const AdtDef *pd = gx_gadt_head(e, pf);
+        if (!pd) continue;
+        const Form *af = gx_peel(sz_recover_type_form(e, args[i]));
+        if (gx_gadt_head(e, af) != pd) continue;
+        if (!gx_unify(e, pf, af, subs, &n_subs)) {
+            char *ps = gx_form_str(pf);
+            char *as = gx_form_str(af);
+            Span sp = (call && call->tag == F_LIST && i + 1 < call->as.list.len)
+                      ? call->as.list.items[i + 1]->span : args[i]->span;
+            diag_emit_with_code(DIAG_ERROR, sp, TUR_E0001_TYPE_MISMATCH,
+                                "function '%s' arg %u: expected %s, got %s",
+                                (fn_binding && fn_binding->name)
+                                    ? fn_binding->name->name : "?",
+                                i + 1, ps, as);
+            free(ps); free(as);
+            return true;
+        }
+    }
+    return false;
+}
+
+/* A CLAIM -- an ascription, a declared return, an annotated let -- that a
+ * GADT value has index `claim`, against what `x`'s index is known to be.
+ * True (and `*got` set, arena-owned) when the claim is provably false. */
+bool gadt_claim_disagrees(Elab *e, const Form *claim, const Expr *x,
+                          const Form **got) {
+    claim = gx_peel(claim);
+    const AdtDef *cd = gx_gadt_head(e, claim);
+    if (!cd || !x) return false;
+    /* An annotated let (and a return the elaborator pinned to its declared
+     * type) wraps the value in an ascription carrying the very claim being
+     * checked; what it claims ABOUT is underneath. */
+    while (x && x->kind == EX_ASCRIBE &&
+           (gx_peel(x->as.ascribe_.type_form) == claim ||
+            x->as.ascribe_.type_form == NULL))
+        x = x->as.ascribe_.inner;
+    const Form *xf = gx_peel(sz_recover_type_form(e, x));
+    if (gx_gadt_head(e, xf) != cd) return false;
+    if (xf == claim) return false;
+    GxSub subs[GX_MAX_SUB];
+    int n_subs = 0;
+    if (gx_unify(e, claim, xf, subs, &n_subs)) return false;
+    if (got) *got = xf;
+    return true;
 }
 
 /* (sz_first_size_term was retired by sized-types-cross-param-multi-index:
@@ -4527,6 +4870,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
             SizeTerm *inferred = sz8_infer_ctor_size_index(e, ctor, out);
             out->as.call_.size_index = inferred;
             sz8_dump_ctor_size(e, ctor, inferred);
+            out->as.call_.gadt_form = gadt_infer_ctor_form(e, ctor, out, call, NULL);
             return out;
         }
     }
@@ -4562,6 +4906,13 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                 SizeTerm *inferred = sz8_infer_ctor_size_index(e, ctor, call_expr);
                 call_expr->as.call_.size_index = inferred;
                 sz8_dump_ctor_size(e, ctor, inferred);
+                /* gadt-length-index-not-enforced: the value's phantom index. */
+                if (ctor->adt->is_gadt && call_expr->kind == EX_CALL) {
+                    bool gmis = false;
+                    call_expr->as.call_.gadt_form =
+                        gadt_infer_ctor_form(e, ctor, call_expr, call, &gmis);
+                    if (gmis) return NULL;
+                }
 
                 /* TP5: intra-constructor type-arg consistency check.
                  * For each field whose full_type is a named TY_TYVAR, record
@@ -6965,6 +7316,24 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             }
         }
 
+        /* gadt-length-index-not-enforced: a bare GADT argument whose index is
+         * fully known (gadt_form / an annotated binding's form) meets a
+         * parameter declared at an application of the same GADT.  Give the
+         * argument that type, as the ascription `(:: arg (Vec (Succ Zero)))`
+         * would, so the parameter's index variables bind from it and a
+         * mismatch is the ordinary type error: `(lhead (ltail v))` binds
+         * `ltail`'s `n` from `v`'s index instead of leaving `(Vec n)` open.
+         * Only there -- a bare parameter keeps the bare argument. */
+        if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+            args[i]->type.kind == TY_ADT && args[i]->type.as.adt_.def &&
+            args[i]->type.as.adt_.def->is_gadt) {
+            uint32_t gfi = fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *gft = (gfi < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[gfi] : NULL;
+            if (gft && gft->kind == TY_APP &&
+                type_adt_app_def(gft) == args[i]->type.as.adt_.def)
+                args[i] = gadt_refine_to_index(e, args[i]);
+        }
         bool arg_ok = (args[i]->type.kind == expected_arg_kind);
         /* typed-c-abi-function-pointers: a `(c-fn [A...] R)` parameter is a
          * bare C function pointer.  The same-kind match above would admit ANY
@@ -9381,6 +9750,10 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * Runs after arg elaboration so each arg carries its inferred SZ8 size
      * index.  No effect on calls to non-sized signatures. */
     if (sz_cross_param_unify(e, call, &fn_type, fn_binding, args, n_args))
+        return NULL;
+    /* gadt-length-index-not-enforced: the same, for the phantom index of a
+     * GADT argument -- `(vec-head (VNil))` against `[v : (Vec (Succ n))]`. */
+    if (gadt_index_check_call(e, call, &fn_type, fn_binding, args, n_args))
         return NULL;
 
     /* class-defn-constraint-not-discharged-at-call-site: a defn carrying a

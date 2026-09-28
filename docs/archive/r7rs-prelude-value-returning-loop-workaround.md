@@ -9,9 +9,10 @@
 > `vector-fill!`, `write` of a list, `read` of it back, `read-line` and
 > `read-string` pass built at `-O1` (the build that used to overflow) and at
 > `-O2`. `r7rs-for-eachn-go__` stays `: bool`: it is CPS and waits on
-> [cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md),
+> [cps-self-tail-call-relies-on-sibling-call](cps-self-tail-call-relies-on-sibling-call.md),
 > which also still overflows a 100,000-element `map` with a lambda at `-O1`
-> (pre-existing; measured the same before and after this fold).
+> (pre-existing; measured the same before and after this fold). *That report
+> is resolved too (self tail calls 2026-09-26, mutual 2026-09-28).*
 
 **Severity:** low (cleanup; no wrong answer). **Unblocked 2026-09-25:**
 [void-self-tail-call-not-lowered](../archive/void-self-tail-call-not-lowered.md)

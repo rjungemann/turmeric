@@ -93,17 +93,21 @@ and `defopaque` with a type-parameter vector is exactly that. (A `defgadt
 Nat` with `Zero` / `Succ` constructors puts those names in the VALUE
 namespace, where a type annotation cannot see them.)
 
-> **What is proven, and what is not.** A `match` on a scrutinee typed
-> `(NVec (Succ n))` reads the index: `NNil : (NVec Zero)` provably cannot be
-> the value, so it needs no arm. And a value that CARRIES an index is checked
-> at the call: `(nvec-head (:: (NNil) (NVec Zero)))` is a `TUR-E0001`. What is
-> still phantom is the constructor application itself -- `(NNil)` and
-> `(NCons 7 (NNil))` are typed as the bare `NVec`, which unifies with every
-> instantiation, so an UNANNOTATED empty vector reaches `nvec-head` and falls
-> off the match at runtime. Annotate the values you build (an ascription, or
-> a function whose declared return names the index), and the proof holds.
-> The open half is filed as
-> `docs/reported/gadt-length-index-not-enforced.md`.
+> **What is proven.** A `match` on a scrutinee typed `(NVec (Succ n))` reads
+> the index: `NNil : (NVec Zero)` provably cannot be the value, so it needs no
+> arm. A constructor application knows its own index -- `(NNil)` is
+> `(NVec Zero)`, `(NCons 7 (NNil))` is `(NVec (Succ Zero))` -- and so does a
+> `let` bound to one, an ascription, and a call whose declared return names
+> one. That index is checked wherever a claim is made about it: `(nvec-head
+> (NNil))` is a `TUR-E0001`, and so is a declared return, an ascription or an
+> annotated `let` that disagrees with the value. Two parameters naming the
+> same variable must get arguments of the same index.
+>
+> The value's TYPE stays the bare `NVec`, so `nvec-len` below, and any
+> function annotated with the bare name, still takes every vector. An index
+> that is not known -- a vector a bare-typed function returns, a recursion
+> the checker cannot count -- is not an error: it is simply not checked
+> ([gadt-length-index-not-enforced](https://github.com/rjungemann/turmeric/blob/main/docs/archive/gadt-length-index-not-enforced.md)).
 
 ```turmeric
 ; Type-level naturals: phantom-parameter opaques, so (Succ n) is a type.
@@ -134,13 +138,16 @@ namespace, where a type annotation cannot see them.)
     (NCons _ tl) tl))
 
 (defn main [] : int
-  ; Ascribe the value you build; the index is what makes the calls checkable.
+  (println (nvec-head (NCons 7 (NNil))))            ; 7
+  (println (nvec-head (nvec-tail (NCons 1 (NCons 2 (NNil))))))  ; 2
+  ; A fresh constructor value bound by `let` is unique (used once) unless
+  ; ascribed, so a value used three times is ascribed here.
   (let [v (:: (NCons 1 (NCons 2 (NCons 3 (NNil))))
               (NVec (Succ (Succ (Succ Zero)))))]
     (println (nvec-len v))              ; 3
     (println (nvec-head v))             ; 1
     (println (nvec-head (nvec-tail v)))  ; 2
-    ; (nvec-head (:: (NNil) (NVec Zero)))  ; TUR-E0001: expected (NVec (Succ n))
+    ; (nvec-head (NNil))  ; TUR-E0001: expected (NVec (Succ n)), got (NVec Zero)
     )
   0)
 ```
@@ -178,7 +185,10 @@ defn nvec-tail [n] [v : (NVec (Succ n))] : (NVec n)
     tl
 
 defn main [] :int
-  ; Ascribe the value you build; the index is what makes the calls checkable.
+  println(nvec-head((NCons 7 (NNil))))
+  println(nvec-head(nvec-tail((NCons 1 (NCons 2 (NNil))))))
+  ; Ascribed because the value is used three times (a fresh constructor value
+  ; bound by `let` is unique); the index would be known without it.
   let [v (:: (NCons 1 (NCons 2 (NCons 3 (NNil))))
              (NVec (Succ (Succ (Succ Zero)))))]
     println(nvec-len(v))
