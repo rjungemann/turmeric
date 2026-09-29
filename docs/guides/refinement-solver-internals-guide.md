@@ -173,7 +173,7 @@ check). Until 2026-09-29 it fell through to
 the measure encoder, which declared `as` as an abstract measure at the
 position-default sort -- Int -- and the type name as a variable; `(as float
 v)` over a float was then integer-tightened (`t <= 2.75` to `t <= 2`) and a
-satisfiable cube was refuted (fixture `refine-cast-in-predicate`).
+satisfiable cube was refuted (fixtures `errors/refine-cast-in-predicate-refuted`, now refuted at compile time with a witness, and `refine-cast-in-predicate` for the opaque truncation).
 
 Treating two occurrences of a call as *the same value* is only valid when the
 callee is **pure**, and purity is **earned, not declared**

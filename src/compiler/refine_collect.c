@@ -624,7 +624,8 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
  * first argument -- the type NAME -- as a variable.  `(as float x)` over a
  * float `x` then became an Int-sorted opaque term, and S2's integer hull
  * tightened `t <= 2.75` to `t <= 2` and `2.25 <= t` to `3 <= t`, refuting a
- * cube that `x = 2.5` satisfies (fixture refine-cast-in-predicate).
+ * cube that `x = 2.5` satisfies (fixtures errors/refine-cast-in-predicate-refuted
+ * and refine-cast-in-predicate).
  *
  *   (as float e), e int   -> e itself.  The VC's reals are exact, and an
  *                            int converted to float denotes the same number

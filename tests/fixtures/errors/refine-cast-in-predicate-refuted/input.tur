@@ -1,0 +1,21 @@
+;; RT2: `(as T e)` inside a predicate is a builtin conversion, not a measure.
+;;
+;; It used to fall through to the measure encoder, which declared `as` as an
+;; abstract measure at the position-default sort (Int) and the type name as a
+;; variable.  `(as float v)` over a float was then an Int-sorted opaque term,
+;; and S2's integer hull tightened `t <= 2.75` to `t <= 2` and `2.25 <= t` to
+;; `3 <= t` -- a contradiction for a set that `x = 2.5` satisfies.  The
+;; return check on `k` was elided and `(k 2.5)` printed 2.5.
+;;
+;; Now `(as float e)` is e itself, the obligation is `x <= 2.75 |- x < 2.25`,
+;; and the counterexample search (which covers reals) refutes it outright:
+;; the wrong refinement is a compile-time TUR-E0371 with a witness, which is
+;; the strongest form of "the check is not elided".  The sibling
+;; `refine-cast-in-predicate` pins the opaque `(as int e)` case, where the
+;; obligation stays unknown and the runtime check has to fire.
+(defn k [x : #refine{ v : float | (<= (as float v) 2.75) }] : #refine{ r : float | (< r 2.25) }
+  (as float x))
+
+(defn main [] : int
+  (println (k 2.5))
+  0)
