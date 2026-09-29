@@ -5136,9 +5136,15 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                      * classic Functor / cata paths where fmap's arms build
                      * bare-ADT results uniformly and no outer expected type
                      * is present. */
+                    /* An expected type that is itself OPEN -- a sibling match
+                     * arm's `(Either int R)` -- pins nothing: it is another
+                     * constructor's partial answer, not an annotation.  Filling
+                     * `(Right d)` out from it made `(Either int int)`, a by-value
+                     * monomorph, beside a sibling that is still the carrier. */
                     if (!all_bound && e->expected_type &&
                         e->expected_type->kind == TY_APP &&
-                        type_adt_app_def(e->expected_type) == ctor->adt) {
+                        type_adt_app_def(e->expected_type) == ctor->adt &&
+                        !type_has_open_slot(e->expected_type)) {
                         Type ex_args[8];
                         AdtDef *ex_def = NULL;
                         uint8_t ex_n = 0;
@@ -5159,6 +5165,40 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                             }
                             if (recovered) all_bound = true;
                         }
+                    }
+                    /* fmap-over-underdetermined-constructor-is-a-defless-shell:
+                     * a constructor that fixes SOME parameters but not all --
+                     * `(Ok 7.1)` fixes A, and nothing names B -- used to fall
+                     * back to the bare ADT, which says nothing about A.  A
+                     * generic consumer then bound nothing from it:
+                     * `(ok-val (Ok 7.1))` returned the float's bits as an int,
+                     * and `fmap` had no application chain to ground its result
+                     * against.  Type it the way the generic `ok` constructor
+                     * function already is: the application, with each open
+                     * parameter left as the ADT's own type variable --
+                     * `(Result float B)`, the same type `(ok 7.1)` has.  A
+                     * Saffron file's undetermined argument is `any`, as its
+                     * nullary constructors already are.  Only when a field
+                     * fixed a parameter to a concrete type: with nothing
+                     * concrete there is nothing to say, and the bare ADT stays. */
+                    bool any_concrete = false;
+                    for (uint8_t pi = 0; pi < ntp; pi++)
+                        if (have[pi] && targs[pi].kind != TY_TYVAR &&
+                            targs[pi].kind != TY_UNKNOWN)
+                            any_concrete = true;
+                    if (!all_bound && any_concrete) {
+                        bool dyn = lang_span_is_dynamic(call->span);
+                        for (uint8_t pi = 0; pi < ntp; pi++) {
+                            if (have[pi] && targs[pi].kind != TY_UNKNOWN) continue;
+                            if (dyn) {
+                                targs[pi] = type_from_kind(TY_ANY);
+                            } else {
+                                targs[pi] = type_tyvar_named(ctor->adt->type_params[pi]);
+                                targs[pi].as.tyvar_.open_slot = true;
+                            }
+                            have[pi] = true;
+                        }
+                        all_bound = true;
                     }
                     if (all_bound) {
                         Type adt_base = type_adt(ctor->adt);

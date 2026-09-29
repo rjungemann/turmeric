@@ -1,0 +1,33 @@
+;; fmap-over-underdetermined-constructor-is-a-defless-shell: a constructor that
+;; fixes SOME of its ADT's parameters -- `(Ok 7.1)` fixes A, and nothing names
+;; B -- is typed `(Result float B)`, the type the generic `ok` already gave
+;; `(ok 7.1)`.  It used to be the bare ADT, which says nothing about A.
+
+(defn inc [x : int] : int (+ x 1))
+(defn half [x : int] : float (/ (as float x) 2.0))
+
+;; A user ADT with a phantom parameter: no constructor ever fixes B.
+(defdata Tagged [A B] (Tag A))
+(defn untag [A B] [t : (Tagged A B)] : A (match t (Tag a) a))
+
+(defn main [] : int
+  ;; A generic accessor binds A from the constructor.  Both printed the
+  ;; float's BITS as an int before (4619679907765970534).
+  (println (ok-val (Ok 7.1)))
+  (println (err-val (Err 3.25)))
+  (println (untag (Tag 2.75)))
+  ;; A match reads the payload back as a float, on the erased layout too
+  ;; (the open B keeps the scrutinee off the monomorph).  The arm binding the
+  ;; open parameter is the carrier word, as it was for the bare ADT.
+  (let [r (Ok 7.1)]
+    (match r (Ok v) (println v) (Err e) (println e)))
+  (let [r (ok 7.25)]
+    (match r (Ok v) (println v) (Err _) (println "unreachable")))
+  ;; fmap over an open receiver grounds its result, `(Result int B)`, where it
+  ;; was the def-less `(? ?)` no `(Result A B)` parameter accepts.
+  (println (ok-val (fmap (Ok 41) inc)))
+  (println (ok-val (fmap (ok 41) inc)))
+  (println (ok-val (fmap (Ok 41) half)))
+  ;; A pinned receiver is unchanged.
+  (println (err-val (fmap (:: (Err 9) (Result int int)) inc)))
+  0)

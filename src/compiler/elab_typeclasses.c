@@ -9380,6 +9380,25 @@ resolved_user_fallback:;
                 if (!m7_app_to_ptr_family(hr, &pf_dummy) &&
                     (hr_heap || hr_byval || m7_result_is_int_carrier(hr)))
                     result_type = hr;
+            } else if (m7_have_hole_result && !m7_byvalue_grounded &&
+                       result_type.kind == TY_APP &&
+                       m7_type_has_free_tyvar(obj_orig_type)) {
+                /* fmap-over-underdetermined-constructor-is-a-defless-shell: a
+                 * receiver with an OPEN fixed slot -- `(Result int B)`, which is
+                 * what `(ok 41)` and `(Ok 41)` are -- leaves the same open slot
+                 * in `(f b)`, and `b` itself is ground (m7_have_hole_result is
+                 * set only then), so every variable left in the result came
+                 * from the receiver.  An application with a variable argument
+                 * is the carrier, as the receiver was and as the method
+                 * returns, so there is nothing to bridge: commit it, and a
+                 * generic consumer (`ok-val [A B] [r : (Result A B)]`) unifies
+                 * with it instead of meeting the def-less shell. */
+                Type hr = m7_hole_result;
+                Type pf_dummy;
+                if (hr.kind == TY_APP && type_adt_app_def(&hr) &&
+                    !type_is_heap_adt(hr) && !type_is_heap_struct(hr) &&
+                    !m7_app_to_ptr_family(hr, &pf_dummy))
+                    result_type = hr;
             }
         }
     }

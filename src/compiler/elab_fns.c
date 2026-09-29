@@ -4633,7 +4633,10 @@ static bool fn_type_has_named_tyvar(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
         case TY_TYVAR:
-            return t->as.tyvar_.name != NULL;
+            /* An OPEN slot (fmap-over-underdetermined-constructor-is-a-
+             * defless-shell) is no parameter to specialize over: a value of
+             * `(Result float B)` is the carrier whatever B is. */
+            return t->as.tyvar_.name != NULL && !t->as.tyvar_.open_slot;
         case TY_APP:
             return fn_type_has_named_tyvar(t->as.app.fn) ||
                    fn_type_has_named_tyvar(t->as.app.arg);
@@ -8979,6 +8982,23 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if ((return_kind == TY_NIL || return_kind == TY_TYVAR) && body->type.kind != TY_NIL
             && body->type.kind != TY_TYVAR) {
         return_kind = body->type.kind;
+        /* fmap-over-underdetermined-constructor-is-a-defless-shell: an
+         * unannotated defn whose body is an application -- `(Ok 1.5) :
+         * (Result float B)`, or a concrete `(Result float int)` -- returns that
+         * application.  Recording only the kind left callers the def-less
+         * `(? ?)`, which no `(Result A B)` parameter accepts, and spelled the
+         * C return as the carrier while a concrete body returned the by-value
+         * aggregate (match-join-of-ctor-arm-and-byvalue-arm-reaches-cc).  The
+         * lambda twin below has recorded a ground body this way since
+         * closure-result-monomorphization.  Not when a signature tyvar is in
+         * it: that is the generic case, which keeps its existing path.  An
+         * open slot is not one (fn_type_has_named_tyvar). */
+        if (body->type.kind == TY_APP && !return_app_type &&
+            !fn_type_has_named_tyvar(&body->type)) {
+            Type *rat = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rat = body->type;
+            return_app_type = rat;
+        }
         /* SS7: propagate full TY_ROLE type from body so callers see the correct
          * current_step (the step after the body's last session operation). */
         if (body->type.kind == TY_ROLE && !return_session_type) {

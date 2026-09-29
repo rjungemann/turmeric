@@ -1,0 +1,39 @@
+;; A branch built by a constructor that leaves a parameter open -- `(Ok 1.25)`
+;; is `(Result float B)`, the carrier -- beside a by-value `(Result float int)`
+;; branch.  Each shape below reached cc before (an `invalid initializer`, or a
+;; by-value value returned through a carrier return type), or was refused
+;; with `got (? ?)` / `got <adt>` at its first typed use.
+
+;; A literal-pattern match with an annotated aggregate result: its temporary
+;; was initialized with a scalar `0`.
+(defn pick-annotated [c : bool r : (Result float int)] : (Result float int)
+  (match c true (Ok 1.25) false r))
+
+;; ... unannotated: the result was the first arm's type, the carrier.
+(defn pick-literal [c : bool r : (Result float int)]
+  (match c true (Ok 1.25) false r))
+
+;; An ADT-pattern match, unannotated.
+(defn pick-adt [o : (Option int) r : (Result float int)]
+  (match o (Some _) (Ok 1.25) (None) r))
+
+;; Both arms by value, literal patterns.
+(defn pick-both [c : int r : (Result float int) q : (Result float int)]
+  (match c 1 q _ r))
+
+;; An unannotated defn whose body is a concrete application: its callers saw
+;; `(? ?)`.
+(defn mk [x : float]
+  (:: (Ok x) (Result float int)))
+
+(defn main [] : int
+  (println (ok-val (pick-annotated true (Err 2))))
+  (println (err-val (pick-annotated false (Err 4))))
+  (println (ok-val (pick-literal true (Err 2))))
+  (println (err-val (pick-literal false (Err 5))))
+  (println (ok-val (pick-adt (Some 1) (Err 2))))
+  (println (err-val (pick-adt (None) (Err 6))))
+  (println (ok-val (pick-both 1 (Err 2) (Ok 3.5))))
+  (println (err-val (pick-both 0 (Err 7) (Ok 3.5))))
+  (println (ok-val (mk 2.25)))
+  0)

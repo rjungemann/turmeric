@@ -3065,6 +3065,21 @@ static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
             *out = (a.kind == TY_APP) ? a : b;
             return true;
         }
+        if (a.kind == TY_APP && b.kind == TY_APP &&
+            (type_has_open_slot(&a) || type_has_open_slot(&b))) {
+            /* fmap-over-underdetermined-constructor-is-a-defless-shell: an
+             * arm whose constructor left a parameter OPEN is the carrier.
+             * Grounding each side's open slot against the other -- `(Left l)`
+             * is `(Either int R)`, `(Right (f r))` is `(Either L int)` -- made
+             * `(Either int int)`, a by-value monomorph that neither arm's
+             * carrier value is.  A concrete peer still wins, as it did over
+             * the bare ADT these arms used to be; two open arms join to that
+             * bare ADT, the carrier they both are. */
+            if (!type_has_open_slot(&a) && type_app_is_concrete_adt(&a)) { *out = a; return true; }
+            if (!type_has_open_slot(&b) && type_app_is_concrete_adt(&b)) { *out = b; return true; }
+            *out = type_adt(ad);
+            return true;
+        }
         if (a.kind == TY_APP && b.kind == TY_APP) {
             /* Both applied over the same head: structurally join the argument
              * spines, grounding any method-level tyvar against its concrete
@@ -4165,6 +4180,18 @@ Expr *elab_match(Elab *e, const Form *call) {
                 lit_arms[ai].guard = guard;
                 lit_arms[ai].body = body;
                 if (lit_result.kind == TY_UNKNOWN) lit_result = body->type;
+                /* match-join-of-ctor-arm-and-byvalue-arm-reaches-cc: the
+                 * result is the first arm's type, so `(match c true (Ok 1.25)
+                 * false r)` was the carrier `(Result float B)` over a by-value
+                 * `r`.  A later arm that is the concrete application of the
+                 * same ADT wins, as it does in the ADT path's join
+                 * (match_arm_type_compatible). */
+                else if (type_has_open_slot(&lit_result) &&
+                         body->type.kind == TY_APP &&
+                         !type_has_open_slot(&body->type) &&
+                         type_app_is_concrete_adt(&body->type) &&
+                         type_adt_app_def(&body->type) == type_adt_app_def(&lit_result))
+                    lit_result = body->type;
             }
             if (lit_result.kind == TY_UNKNOWN) lit_result = TYPE_NIL;
             Expr *out = expr_new(e->arena, EX_MATCH, lit_result, call->span);
@@ -4592,6 +4619,18 @@ Expr *elab_match(Elab *e, const Form *call) {
                     if (elab_adt_type_extract_args(&scrutinee->type, adt, type_args)) {
                         ftype = adt_field_instantiate_type(e, adt,
                                     ctor->fields[bi].full_type, type_args);
+                        /* fmap-over-underdetermined-constructor-is-a-defless-shell:
+                         * a scrutinee with an OPEN parameter -- `(Result float
+                         * B)`, what `(Ok 7.1)` and `(ok 7.1)` are -- leaves the
+                         * field that parameter types as a variable nothing in
+                         * this function quantifies, and `(println e)` in the
+                         * `(Err e)` arm then had no overload.  Such a binder is
+                         * the carrier word, as the whole field was when the
+                         * scrutinee was the bare ADT.  Only a slot a constructor
+                         * left open: a variable a signature or an instance head
+                         * quantifies stays abstract. */
+                        if (ftype.kind == TY_TYVAR && ftype.as.tyvar_.open_slot)
+                            ftype = type_from_kind(ctor->fields[bi].kind);
                     } else {
                         ftype = type_from_kind(ctor->fields[bi].kind);
                     }
