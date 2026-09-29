@@ -896,7 +896,7 @@ anyway.
   witness it reports is one the program would reject; it is the proving side
   that is optimistic. Fix directions, and the one consistent with the
   soundness invariant, are in
-  [`docs/reported/float-proofs-assume-exact-reals.md`](../reported/float-proofs-assume-exact-reals.md).
+  [`docs/reported/float-proofs-assume-exact-reals.md`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/float-proofs-assume-exact-reals.md).
   Until it is resolved, read a proved float refinement as a claim over reals.
 - **[by design] A callee's entry check is never elided.** See above -- the call-site layer
   reports, it does not remove the callee's guard. Whole-program elision is a
