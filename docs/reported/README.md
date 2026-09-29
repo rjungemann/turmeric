@@ -2352,6 +2352,17 @@ answers.
 | ~~[fn-param-call-prototype-spelled-from-the-call-not-the-fn](../archive/fn-param-call-prototype-spelled-from-the-call-not-the-fn.md)~~ | high | **RESOLVED 2026-09-29** (archived): both halves were elaboration, not the emitter. Result half: the non-HKT dispatch now binds the METHOD's own tyvars (`b := float`) so the instance spec resolves them; argument half: `elab_poly_call` widens a concrete argument where a typed carrier's parameter is `any`. `instance-fn-param-call-result-tyvar`, `instance-fn-param-call-any-args` |
 | ~~[concrete-result-fn-passed-where-an-any-result-fn-is-expected](../archive/concrete-result-fn-passed-where-an-any-result-fn-is-expected.md)~~ | medium-high | **RESOLVED 2026-09-29** (archived): the `any` bridge marshals a function whose signature differs from a ground parameter only in `any` slots; for the generic spelling, a call through a LOCAL fn value no longer binds the enclosing definition's rigid tyvar from the expected return, and the `any`-widen spec trigger now covers plain generics (`B := int` changes no ABI). `fn-arg-any-result-bridge` |
 
+## Found investigating the AOT-compiled REPL plan (filed 2026-09-29)
+
+Found while checking the 2026-06-28 draft of
+[aot-compiled-repl-plan](../upcoming/hold/aot-compiled-repl-plan.md) against
+`main`. The first report blocks that plan's phase C0.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [repl-continuation-counter-misreads-reader-syntax](repl-continuation-counter-misreads-reader-syntax.md) | medium | `paren_balance` (`src/turi/repl.c:208`) counts brackets inside a ```` ```c ```` fence, a string spanning lines, a `#\| \|#` comment, or a `#\(` char literal. A C `for (...;...;...)` then keeps the `..` prompt open forever (piped input: everything after it is silently swallowed, exit 0), and a `')'` char literal evaluates the form halfway through the fence. All of these are valid in a file. Fix: ask the reader whether the buffer is incomplete instead of approximating it |
+| [duplicate-defn-in-one-file-reaches-the-c-compiler](duplicate-defn-in-one-file-reaches-the-c-compiler.md) | low | Two same-name `defn`s in one file pass `tur check`. `--interpret` silently runs the later one, and `build`/`jit` fail with `redefinition of 'f'` / c2mir `Repeated item declaration`. `elab_defn` (`src/compiler/elab_fns.c:5829`) treats any global fn binding as a pass-1 forward declaration. Fix: mirror `def`'s `is_forward_def` + `elab_prior_turn_global` check, keeping cross-turn REPL redefinition working |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
