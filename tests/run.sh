@@ -1220,6 +1220,31 @@ for d in "${FIXTURE_DIRS[@]}"; do
     fixture_ordinal=$((fixture_ordinal + 1))
 done
 
+# r7rs-prelude-library-cold-compile: the first `#lang r7rs` build on an empty
+# cache compiles the whole stdlib library unit (8-15 s), and the builds that
+# start alongside it wait on its lock with their own timers running.  On a
+# fresh CI runner that is every run, so whichever r7rs fixture a shard reached
+# first failed `tur build timed out (>10s)` -- a different one whenever adding
+# fixtures reshuffled shard membership (r7rs-keyword-seed on Windows 2/3).
+# Pay it once here, untimed, with the compiler and environment the fixtures
+# build with; the library unit is program-independent, so every r7rs fixture
+# then hits the cache.
+_r7rs_warm=0
+for d in "${HAPPY_DIRS[@]}"; do
+    _in="$d/input.tur"
+    [ -f "$_in" ] || _in="$d/$(basename "$d").tur"
+    [ -f "$_in" ] || continue
+    _first=""
+    IFS= read -r _first < "$_in" || true
+    case "$_first" in "#lang r7rs"*) _r7rs_warm=1; break ;; esac
+done
+if [ "$_r7rs_warm" = 1 ]; then
+    printf '#lang r7rs\n(display 1)\n' > "$RESULTS_DIR/r7rs-warm.tur"
+    CC="$BUILD_CC" "$TUR" build "$RESULTS_DIR/r7rs-warm.tur" \
+        -o "$RESULTS_DIR/r7rs-warm.exe" > /dev/null 2>&1 || true
+    rm -f "$RESULTS_DIR/r7rs-warm.exe" "$RESULTS_DIR/r7rs-warm.tur"
+fi
+
 HAPPY_XARGS_RC=0
 if [ ${#HAPPY_DIRS[@]} -gt 0 ]; then
     HAPPY_LIST_FILE="$RESULTS_DIR/happy_dirs.list"
