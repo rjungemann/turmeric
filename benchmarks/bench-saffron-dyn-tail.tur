@@ -1,7 +1,7 @@
 #lang saffron
 ;;; bench-saffron-dyn-tail -- the cost of a dynamic call in tail position.
 ;;
-;; proper-tail-calls T6 (docs/upcoming/proper-tail-calls-plan.md, T-D6) turns a
+;; proper-tail-calls T6 (docs/archive/proper-tail-calls-plan.md, T-D6) turns a
 ;; dynamic tail call into a bounce to a trampoline driver instead of a nested C
 ;; call.  This measures what that costs per call, on a shape both compilers can
 ;; run: 2,000 rounds of a 5,000-deep loop through a function VALUE -- shallow

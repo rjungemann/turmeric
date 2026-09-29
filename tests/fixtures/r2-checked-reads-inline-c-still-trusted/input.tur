@@ -1,4 +1,4 @@
-;; R2 (docs/upcoming/trusted-refinement-claims-plan.md): the refusal keys on
+;; R2 (docs/archive/trusted-refinement-claims-plan.md): the refusal keys on
 ;; "saw a read", never "could not see".  This is the
 ;; refine-stateful-guard-discharges program -- an inline-C `#reads` measure
 ;; whose crossing discharges from the guard inside a frozen region, under

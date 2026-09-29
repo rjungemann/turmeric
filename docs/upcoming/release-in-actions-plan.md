@@ -1,10 +1,15 @@
 # Release in Actions -- one-shot patch/minor/major cuts, with LM-drafted notes
 
-> **Status: PROPOSED 2026-09-27.** Written in response to "come up with a plan
-> for manual GH Actions release tasks (patch, minor, major)", the open question
-> of which LM writes the release notes (Cloudflare Workers AI vs. a Mistral API
-> key), and the requirement that docstrings be regenerated as part of the
-> release.
+> **Status: PROPOSED 2026-09-27; nothing landed as of 2026-09-28.** R1-R5 are
+> all open: no `release-cut.yml`, `release-build.yml` or `tools/release/`; the
+> `Justfile` `bump-*` recipes and the `cut-*-release` skills are unchanged, and
+> v0.56.1/v0.56.2 were cut by the local flow. One change since writing:
+> `7698fff03` (2026-09-28) gated `release.yml`'s publish job on every build leg
+> succeeding -- R3's extraction must keep that gate. Written in response to
+> "come up with a plan for manual GH Actions release tasks (patch, minor,
+> major)", the open question of which LM writes the release notes (Cloudflare
+> Workers AI vs. a Mistral API key), and the requirement that docstrings be
+> regenerated as part of the release.
 > **Type:** Release engineering / CI
 > **Touches:** `.github/workflows/release.yml`, new `release-cut.yml` and
 > `release-build.yml`, new `tools/release/`, the `Justfile` `bump-*` recipes,

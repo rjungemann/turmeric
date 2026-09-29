@@ -10,7 +10,7 @@
 ;;;   - random-source-randomize! seeds from current-jiffy, not the time in
 ;;;     seconds, so two randomizations in one second differ;
 ;;;   - exact->inexact is spelled inexact, the (scheme base) name.
-;;; docs/upcoming/r7rs-srfi-plan.md, S7.
+;;; docs/archive/r7rs-srfi-plan.md, S7.
 (define-library (srfi 27)
   (export
     random-integer random-real default-random-source

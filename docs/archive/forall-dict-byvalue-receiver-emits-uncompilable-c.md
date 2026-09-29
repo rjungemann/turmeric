@@ -85,7 +85,7 @@ and a negative fixture, and its archive note records the intent as
 This shape has no such guard.
 
 Filed while scoping runtime typeclass dispatch for
-[docs/upcoming/saffron-lang-plan.md](../upcoming/saffron-lang-plan.md) (D8),
+[docs/archive/saffron-lang-plan.md](saffron-lang-plan.md) (D8),
 where it is the load-bearing limit on the existing machinery -- see
 "Why this matters beyond the diagnostic" below.
 

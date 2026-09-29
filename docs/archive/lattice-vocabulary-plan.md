@@ -1,10 +1,23 @@
 # Lattice vocabulary: `Semigroup`, `Monoid`, and the join/meet family
 
-> **Status:** proposed (2026-09-11). **Track:** post-v1.
-> **Type:** stdlib typeclasses, plus **two compiler defects that block it**.
+> **Status:** **complete** -- L0-L3 landed 2026-09-11 and shipped in v0.47.0
+> (2026-09-12); L4 was investigated the same day (expressible: `mconcat` /
+> `mconcat-from` added; `effects-chain` deliberately not rewritten, and the
+> stale Vec readers it exposed were removed in turmeric-spices #74,
+> 2026-09-16). Both blocking defects are fixed and archived (section 4).
+> Superseded since: `max`/`min` moved to the auto-loaded
+> `stdlib/typeclass-ord.tur` on 2026-09-12, so 3.2's "require `(load
+> "stdlib/typeclass.tur")`" no longer holds; and 2.3's "no superclasses" is
+> gone -- `Monoid` / `BoundedJoin` / `BoundedMeet` declare theirs as of v0.55.0
+> (typeclass-superclasses-plan SC8a, 2026-09-25). Declined by decision:
+> `Group`, a combined `Lattice`, `fold-map`, autoloading (3.1, 3.5, 5). User
+> docs: [lattice-guide.md](../guides/lattice-guide.md). Archived 2026-09-28.
+> **Track:** post-v1.
+> **Type:** stdlib typeclasses, plus **two compiler defects that blocked it**
+> (both fixed).
 > **Sequencing:** second of three.
 > [type-confusion-detection-plan.md](../archive/type-confusion-detection-plan.md) ->
-> this -> [crdt-spice-plan.md](crdt-spice-plan.md). The detection plan comes
+> this -> [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md). The detection plan comes
 > first because it ratchets the emitted-C check that catches defect 1's failure
 > mode; this plan supplies the vocabulary the CRDT spice consumes.
 
@@ -397,7 +410,7 @@ stdlib module (not a spice) needs them without an import.
   deliberately given no `meet`. Pinned by
   `tests/fixtures/typeclass-lattice-join-meet`, whose `BadJoin` is associative
   and commutative but NOT idempotent and must fail exactly one law. This is
-  what [crdt-spice-plan.md](crdt-spice-plan.md) C1 consumes.
+  what [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md) C1 consumes.
 
   **Interpreter caveat -- closed 2026-09-16.** Both L2/L3 fixtures carried
   `requires.compiled`: the law functions nest a class-method call inside a
@@ -482,6 +495,6 @@ stdlib module (not a spice) needs them without an import.
   [nullary-class-method-unresolvable-over-newtype-tyvar](../archive/nullary-class-method-unresolvable-over-newtype-tyvar.md),
   and the sibling
   [typeclass-method-resolution-ignores-the-class](../archive/typeclass-method-resolution-ignores-the-class.md).
-- Consumer: [crdt-spice-plan.md](crdt-spice-plan.md).
+- Consumer: [crdt-spice-plan.md](../upcoming/crdt-spice-plan.md).
 - In-tree: `docs/guides/typeclass-guide.md` (default methods, associated types,
   constrained instances), `src/compiler/stdlib_autoload.c` (the autoload list).

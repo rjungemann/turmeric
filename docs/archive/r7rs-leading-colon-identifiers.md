@@ -43,7 +43,7 @@ commit that landed it.
 a quoted `:x` is the symbol `x`, and `:::` or a parameter named `:x` is an
 error. The runtime `read` gets all of them right, so the source reader and
 `read` disagree about the same text. Found while planning SRFI support
-(docs/upcoming/r7rs-srfi-plan.md). It blocks SRFI 42 outright, since every
+(docs/archive/r7rs-srfi-plan.md). It blocks SRFI 42 outright, since every
 generator is named `:list`, `:range`, `:vector`, `:parallel` and so on. It also
 blocks the `:::` custom ellipsis that R7RS 4.3.2 (from SRFI 46) allows.
 chibi's R7RS suite never spells such an identifier, which is why the

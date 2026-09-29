@@ -483,7 +483,7 @@
 ;;;
 ;;; Parameters:
 ;;;   f  -- source Future pointer
-;;;   fn -- function pointer (int64_t -> int64_t) applied to the fulfilled value
+;;;   fn -- a `(fn [int] int)` closure applied to the fulfilled value
 ;;;
 ;;; Returns:
 ;;;   A new pre-settled Future with fn(value) on success, or the original error on failure.
@@ -491,7 +491,7 @@
 ;;; Since: Phase T20-C
 
 
-(defn future-map [^borrow f : Future ^fat fn : ptr<void>] : Future
+(defn future-map [^borrow f : Future ^fat fn : (fn [int] int)] : Future
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)f;
@@ -526,14 +526,14 @@
 ;;;
 ;;; Parameters:
 ;;;   f  -- source Future pointer
-;;;   fn -- function pointer (int64_t -> ptr<void>) producing the next Future
+;;;   fn -- a `(fn [int] Future)` closure producing the next Future
 ;;;
 ;;; Returns:
 ;;;   The Future returned by fn, or a pre-rejected Future if f was rejected.
 ;;;
 ;;; Since: Phase T20-C
 
-(defn future-then [^borrow f : Future ^fat fn : ptr<void>] : Future
+(defn future-then [^borrow f : Future ^fat fn : (fn [int] Future)] : Future
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   FutureCell *fc = (FutureCell *)f;

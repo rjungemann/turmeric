@@ -337,7 +337,7 @@ stack image (`TUR_REGION_NOTE_WORDS` over the copy; `region-escape-via-callcc`).
 primitive, a new boxing site, or a new cell type joins the list in the same
 change, and `tests/fixtures/region-escape-via-store` gets the case. A missed
 hook is a silent use-after-rewind on the default build -- exactly what
-`docs/reported/region-escape-through-unhooked-stores.md` documents -- not a
+`docs/archive/region-escape-through-unhooked-stores.md` documents -- not a
 lost saving. See `docs/guides/gc-guide.md` (regions) for the reasoning.
 
 **A TYPED node parameter of an inline-C body needs no hand-written note**: the

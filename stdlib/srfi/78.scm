@@ -8,7 +8,7 @@
 ;;; current output port; check-report prints the summary.  Unlike SRFI 64's
 ;;; runner nothing here ends the program: a test file that should fail `tur
 ;;; test` ends with (exit (check-passed? n)) or the like.
-;;; docs/upcoming/r7rs-srfi-plan.md, S6.
+;;; docs/archive/r7rs-srfi-plan.md, S6.
 ;;;
 ;;; Copyright (c) 2005-2006 Sebastian Egner.
 ;;;

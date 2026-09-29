@@ -12,7 +12,7 @@ diagnostic a user can act on. The program is also not obviously wrong: putting
 dynamic values in a vector is an ordinary thing to want.
 
 Found while landing
-[saffron-lang-plan](../upcoming/saffron-lang-plan.md) S2, whose whole change is
+[saffron-lang-plan](saffron-lang-plan.md) S2, whose whole change is
 to default an unannotated parameter to `any`. **It is not caused by S2** -- the
 same program written in plain Turmeric with explicit annotations ICEs
 identically -- but S2 makes the shape trivially reachable, since in a Saffron

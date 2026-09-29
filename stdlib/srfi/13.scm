@@ -25,7 +25,7 @@
 ;;; drafts (which Guile and Gauche kept) is accepted too, since a criterion
 ;;; is never a string.  Case-insensitive comparison folds a character with
 ;;; (char-downcase (char-upcase c)), as SRFI 13 specifies.
-;;; docs/upcoming/r7rs-srfi-plan.md, S5.
+;;; docs/archive/r7rs-srfi-plan.md, S5.
 (define-library (srfi 13)
   (export
     string? string-null? string-every string-any

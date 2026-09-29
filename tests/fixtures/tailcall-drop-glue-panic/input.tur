@@ -1,4 +1,4 @@
-;; proper-tail-calls T4 (docs/upcoming/proper-tail-calls-plan.md, T-D3): the
+;; proper-tail-calls T4 (docs/archive/proper-tail-calls-plan.md, T-D3): the
 ;; drop glue an owned local carries still runs when a panic leaves the loop
 ;; from INSIDE a backedge's argument.
 ;;

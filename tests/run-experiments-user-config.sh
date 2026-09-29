@@ -9,7 +9,7 @@
 # the probe this test used to key on, graduated) to 2026-09-16, when
 # `class-superclasses` registered, and again from 2026-09-25, when
 # `class-superclasses` graduated in turn (SC7 of
-# docs/upcoming/typeclass-superclasses-plan.md).  The registry-INDEPENDENT
+# docs/archive/typeclass-superclasses-plan.md).  The registry-INDEPENDENT
 # paths -- the parts of the mechanism that must hold regardless of what is
 # registered -- are covered first:
 #

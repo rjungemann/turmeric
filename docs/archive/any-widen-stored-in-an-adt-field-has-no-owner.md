@@ -211,7 +211,7 @@ Remaining directions:
    arguments, so the callee's frame owns what it was given. Large, and the
    thing the sibling report's "Residue 1" is about.
 2. **Refcount the `any` box.** Settles it wherever the box ends up, at the cost
-   of a count on every widen. `docs/upcoming/saffron-lang-plan.md` S5 proposed
+   of a count on every widen. `docs/archive/saffron-lang-plan.md` S5 proposed
    this for a different leak and it was not needed there; this is the position
    where it would be load-bearing, and with direction 1's cost it is now the
    more plausible of the two.

@@ -1,7 +1,12 @@
 # nng Spice Plan
 
-> **Status:** v0 shipped -- `turmeric-spices/spices/nng`
-> **Last Updated:** 2026-09-16
+> **Status:** **complete** -- NG0-NG4 landed as `tur-nng` 0.1.0
+> (`turmeric-spices/spices/nng`, turmeric-spices#75, 2026-09-17; nng pinned
+> v1.12.4). The two compiler defects it filed were fixed 2026-09-16 (#888) and
+> archived, and the spice's `Ack` stand-in is gone. NG5 is deliberately out of
+> v0: each follow-up graduates into its own plan if wanted, and none has been
+> opened. Archived 2026-09-28.
+> **Last Updated:** 2026-09-28
 > **Type:** Networking / spice (turmeric-spices)
 
 ---
@@ -27,7 +32,7 @@ calling thread, they do not block nng's internals), with socket-level
 send/recv timeouts so nothing can hang a test. The `inproc://` transport
 makes the whole test suite network-free and CI-safe.
 
-The companion `docs/upcoming/msgpack-spice-plan.md` was deliberately
+The companion `docs/archive/msgpack-spice-plan.md` was deliberately
 paired with this one: msgpack-encoded payloads over nng sockets is the
 typed-messaging showcase. Both have landed, and the showcase is real --
 `spices/nng/tests/nng/msgpack_test.tur` derives a codec for a `Job`
@@ -82,7 +87,7 @@ report. See "Found on the way" below.
 One name moved from the draft and stuck: `Buf` / `send-buf` / `recv-buf`
 became `Payload` / `send-payload` / `recv-payload`, recorded under Resolved
 Decisions with the reason. A second moved and moved back -- `(Result nil int)`
-briefly became `(Result nil int)` around a compiler defect, and is `nil` again
+briefly became `(Result Ack int)` around a compiler defect, and is `nil` again
 now that the defect is fixed.
 
 ### Non-Goals (v0)
@@ -367,5 +372,5 @@ Each graduates into its own plan if wanted:
   error fixtures)
 - `stdlib/thread.tur`, `stdlib/chan.tur` -- v0 concurrency companions
 - `stdlib/reactor.tur` -- the NG5 async integration seam
-- `docs/upcoming/msgpack-spice-plan.md` -- companion codec plan; the
+- `docs/archive/msgpack-spice-plan.md` -- companion codec plan; the
   cross-spice typed-messaging showcase, now real

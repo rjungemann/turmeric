@@ -1,4 +1,4 @@
-;; proper-tail-calls T3 (docs/upcoming/proper-tail-calls-plan.md, T-D4): a self
+;; proper-tail-calls T3 (docs/archive/proper-tail-calls-plan.md, T-D4): a self
 ;; tail call in a `match` ARM becomes a backedge.
 ;;
 ;; Section 2.3 measured this as the plan's cheapest high-value fix, and the

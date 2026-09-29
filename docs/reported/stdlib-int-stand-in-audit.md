@@ -396,6 +396,83 @@ malloc'd cell (`promise-fulfill`, `promise-fail`, `future-of`,
 `future-error-of`). Both are independent of the typing work and are cheap to
 fix on their own.
 
+## Done 2026-09-28 -- S1's `^fat : int` class is gone, and one checker hole found on the way
+
+**S1, `^fat <name> : int` -- zero left in `stdlib/`** (was 24; httpd's 17
+and the `reactor` / `httpd-compress` sites had already moved to their real
+handler types).  The last six now spell their shape:
+
+| Site | Now |
+| --- | --- |
+| `free-bind` `kont`, `free-fmap` `f`, `free-run` `interp` | `(fn [int] int)` -- over the erased `Free` carrier, the honest shape of what the inline-C body calls |
+| `parsec.tur` `mbind` `fn` | `(fn [int] int)` -- the signature `backtrack.tur`'s `mbind` already had |
+| `compose-middleware-of` `base` | `(fn [ptr<void>] nil)` -- the handler type `httpd-new` / `router-add` take |
+
+and two of the `ptr<void>` callbacks, both fat closures under the hood:
+`future-map`'s `fn` is `(fn [int] int)`, `future-then`'s is
+`(fn [int] Future)`.  Each inline-C body is unchanged -- a fn-typed `^fat`
+parameter is the same `int64_t` fat handle in C -- so this is purely what the
+checker sees: `(future-map fut (fn [] : float 7.25))` and a three-`cstr`
+lambda into `free-bind` are now `TUR-E0001` ("expected a function of type
+(fn [int] : int) ... arity, argument types and result type must match").
+Callers in the tree needed no change.
+
+**A hole this exposed: a VARIADIC callee's fixed fn-typed parameter was never
+shape-checked.**  Typing `compose-middleware-of`'s `base` changed nothing at
+first -- a two-argument lambda still passed `tur check` with exit 0 -- because
+the variadic call path (elab_call.c, AR8) elaborates the fixed arguments with
+none of the fixed-arity path's checks.  It now runs the same structural test
+(`fn_type_structurally_compatible`, the plain-fn-typed-params-are-kind-matched
+rule) on each fixed fn-typed parameter.  Pinned by
+`tests/fixtures/errors/variadic-fixed-fn-param-shape-checked`.  Note the
+test is structural, as it is on the fixed-arity path: arity and register
+class are enforced, but `cstr` and `int` are both one word, so a
+`(fn [cstr] cstr)` still passes where `(fn [int] int)` is declared -- on
+either path.  That is the existing rule, not something this change weakened.
+
+**The remaining `ptr<void>` "callbacks" are mostly not closures at all.**
+`timer-set`, `scheduler-timeout`, `once-call` (`pthread_once`),
+`hamt/map` / `hamt/filter` (C predicates taking `ctx`), `fiber-new`,
+`register-test`: each hands a raw C code pointer to a C API with a fixed C
+signature.  A Turmeric `(fn ...)` type describes a Turmeric-ABI function
+value (thin or fat), not a C function pointer, so retyping these as `:fn`
+would promise something the body does not deliver.  They want a C
+function-pointer type (or an adapter that owns the fat-to-C trampoline), which
+is a design item, not a signature pass.  `with-cancel-guard` DOES take fat
+closures (it reads slot 0 as the thunk) and is the one left that could be
+typed directly; its calling convention (`thunk(closure, 0)`) wants reading
+before choosing the signature.
+
+**S3, `either.tur` -- attempted, NOT landed, and why.**  Making the module
+generic in the `option.tur` / `result.tur` idiom (`left? [L R] [e : (Either
+L R)]`, `from-right [L R] [dflt : R e : (Either L R)] : R`, `either [L R C]`,
+`either-map [L A B] ... : (Either L B)`) type-checks every caller in the tree
+but one -- and that one is a real compiler gap the `:int` erasure has been
+hiding:
+
+```turmeric
+(load "stdlib/either.tur")
+(defn inc [x : int] : int (+ x 1))
+(defn main [] : int (println (from-right -1 (fmap (Right 41) inc))) 0)
+```
+
+`(Right 41)` alone leaves `L` open, and a constructor application of a
+parametric sum with an undetermined parameter is typed as the BARE ADT
+(`Either`, no applied arguments -- a `let` annotation mismatch reports it as
+"got adt").  The dispatch's result grounding (hkt-carrier-result-loses-
+payload-types, elab_typeclasses.c) works on the receiver's TY_APP chain, so
+with no chain it has nothing to ground and `fmap` falls back to the def-less
+`(type-app ? ?)` shell -- which no generic `(Either L R)` parameter unifies
+with.  `Result` already shows it today: `(ok-val (fmap (Ok 41) inc))` is
+`TUR-E0001 ... expected (Result A B), got (? ?)`.  With the receiver typed
+(`(let [e : (Either int int) (Right 41)] ...)`) both work.  So the generic
+`either.tur` is ready and waits on the constructor typing (an application
+with its open parameters as fresh variables, not a bare ADT), and
+`sum-either-functor-instance` is the regression it would otherwise cause.
+That is a type-system change with a wide blast radius, not a stdlib pass.  `str->int-checked`'s `: int` return (str.tur) belongs to the
+same change: it builds an `Either` in inline C and should declare
+`(Either int int)`.
+
 ## See also
 
 - [docs/archive/spices-int-stand-in-audit-2026-06-14.md](../archive/spices-int-stand-in-audit-2026-06-14.md)

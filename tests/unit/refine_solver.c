@@ -145,7 +145,7 @@ static void test_s2_linear(Arena *a) {
     ok(decide(vc, a) != RT_VALID, "S2 soundness: unconstrained z is not positive");
 }
 
-/* S2c-lite (docs/upcoming/solver-integer-tail-plan.md): the integer phase of
+/* S2c-lite (docs/archive/solver-integer-tail-plan.md): the integer phase of
  * la_unsat -- gcd normalization of inequalities, the divisibility test on
  * equalities, and substitution through a unit coefficient.  Every "proves"
  * case here was RT_UNKNOWN on the pure rational relaxation. */

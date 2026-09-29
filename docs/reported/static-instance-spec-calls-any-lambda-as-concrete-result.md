@@ -80,3 +80,12 @@ cloned instance body -- the "Phase F" arm under `phase_f_concrete` in
    (`saffron-seam-into-typed-fn-param`).
 3. Either way, add a fixture: the repro above, plus the Windows runner will
    crash on it until fixed, so it pins both ABIs.
+
+## Related
+
+- [fn-param-call-prototype-spelled-from-the-call-not-the-fn](fn-param-call-prototype-spelled-from-the-call-not-the-fn.md)
+  (filed 2026-09-28): the same Phase F line spells the prototype from the
+  call's view in two more ways -- the erased result in a spec (a silent wrong
+  answer in typed Turmeric, no `any` involved) and the arguments' types where
+  the fn takes `any`. One fix, spelling the prototype from the fn value's own
+  type, should cover all three.

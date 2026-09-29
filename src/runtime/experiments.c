@@ -251,7 +251,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * are ordinary global annotations.  All unconditional; the name moves to
      * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op). */
     /* checked-reads GRADUATED 2026-08-20 (R2 of
-     * docs/upcoming/trusted-refinement-claims-plan.md) -- positive evidence
+     * docs/archive/trusted-refinement-claims-plan.md) -- positive evidence
      * that a `#reads` measure's body reads mutable state the frame omits now
      * REFUSES the congruence override unconditionally, instead of merely
      * warning.  The crossing it used to decide becomes the ordinary TUR-W0372
@@ -348,10 +348,10 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * `experiment_enable` used to be what flipped it -- so the emission
      * decision is identical either side of this change.  Do NOT re-add a row
      * for it; the bit is a "this build contains a Saffron TU" fact, not a gate.
-     * See docs/upcoming/saffron-lang-plan.md (still live only for S9's
-     * remaining dynamic-dispatch limits; D4/G3-G11 all landed). */
+     * See docs/archive/saffron-lang-plan.md (complete; S9's two remaining
+     * dynamic-dispatch limits are docs/reported/saffron-dyn-*.md). */
     /* class-superclasses GRADUATED 2026-09-25 (SC7 of
-     * docs/upcoming/typeclass-superclasses-plan.md) -- the `defclass`
+     * docs/archive/typeclass-superclasses-plan.md) -- the `defclass`
      * constraint preamble `(defclass Monoid [a] [(Semigroup a)] ...)`, the
      * entailment it licenses (a `[^Monoid A]` body may call `combine`) and the
      * instance obligation that makes the entailment sound (`Monoid [int]`

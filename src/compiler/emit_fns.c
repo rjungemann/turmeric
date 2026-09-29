@@ -244,7 +244,7 @@ static bool tco_match_tail_ok(const Expr *e) {
 }
 
 /* ============================================================================
- * proper-tail-calls T5 (docs/upcoming/proper-tail-calls-plan.md, T-D5):
+ * proper-tail-calls T5 (docs/archive/proper-tail-calls-plan.md, T-D5):
  * mutual tail-call groups -- the registry tco_mark consults.
  *
  * A strongly-connected component of the TAIL-call graph (edges: a direct call
@@ -317,7 +317,7 @@ static int tcg_call_target(const EmitCtx *ctx, const Expr *call) {
 }
 
 /* ============================================================================
- * proper-tail-calls T4 (docs/upcoming/proper-tail-calls-plan.md, T-D3):
+ * proper-tail-calls T4 (docs/archive/proper-tail-calls-plan.md, T-D3):
  * hoisting an owned local's drop glue ahead of a tail call.
  *
  * A `let` binding an owned value -- a `ref<T>`, an `rc<T>`, a move-only Drop
@@ -624,7 +624,7 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
 
 
 /* ============================================================================
- * proper-tail-calls T1 (docs/upcoming/proper-tail-calls-plan.md, T-D1):
+ * proper-tail-calls T1 (docs/archive/proper-tail-calls-plan.md, T-D1):
  * verifying the `^tailcall` annotation.
  *
  * `^tailcall` is a request to be TOLD, not a request to be optimized: the
@@ -686,7 +686,7 @@ static const char *tc_call_shape_reason(FnDef *fd, const char *fn_cname,
                "through a function value (a `fn`-typed parameter, a struct "
                "field, or a rank-2 polymorphic parameter), and typed Turmeric "
                "does not trampoline those (T-D6 of "
-               "docs/upcoming/proper-tail-calls-plan.md)";
+               "docs/archive/proper-tail-calls-plan.md)";
     if (!call->as.call_.fn_binding)
         return "this is not a direct call to a named function";
     if (!tco_is_self_call(fd, fn_cname, call)) {
@@ -708,7 +708,7 @@ static const char *tc_call_shape_reason(FnDef *fd, const char *fn_cname,
                "inline-C, effectful or `catch-unwind` body, no variadic or "
                "`fn`-typed parameter -- with the same C return type, at most "
                "8 members and 16 parameters in all (T5 of "
-               "docs/upcoming/proper-tail-calls-plan.md)";
+               "docs/archive/proper-tail-calls-plan.md)";
     }
     return NULL;
 }
@@ -6321,7 +6321,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * passed to a hand-written `cell-set!`, read back after the pop --
          * the bracket rewound and the reader printed garbage, where
          * TUR_REGIONS=0 printed the value
-         * (docs/reported/region-escape-through-unhooked-stores.md).
+         * (docs/archive/region-escape-through-unhooked-stores.md).
          *
          * The callee is the one place each parameter is a plain C identifier,
          * so the note goes here rather than at every call site: one site per

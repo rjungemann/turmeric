@@ -1,4 +1,4 @@
-;; proper-tail-calls T4 (docs/upcoming/proper-tail-calls-plan.md, T-D3): the
+;; proper-tail-calls T4 (docs/archive/proper-tail-calls-plan.md, T-D3): the
 ;; codegen snapshot for a backedge taken through an owned local's drop glue.
 ;;
 ;; This program was `errors/tailcall-owned-local-live` until T4 -- a negative

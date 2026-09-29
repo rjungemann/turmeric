@@ -566,7 +566,7 @@ Each declares every phase closed, so it is a record rather than open work.
 Where a plan leaves a named thread, the banner at its top says where that
 thread now lives.
 
-- **[mutable-globals-plan.md](mutable-globals-plan.md)** -- `^mut` global state made visible to write frames, effect rows and module boundaries; G1-G5b landed, `global-state` graduated in 0.35.0 and `write-frames` in 0.37.0. The read-side follow-up is [../upcoming/trusted-refinement-claims-plan.md](../upcoming/trusted-refinement-claims-plan.md) (R4 open)
+- **[mutable-globals-plan.md](mutable-globals-plan.md)** -- `^mut` global state made visible to write frames, effect rows and module boundaries; G1-G5b landed, `global-state` graduated in 0.35.0 and `write-frames` in 0.37.0. The read-side follow-up is [trusted-refinement-claims-plan.md](trusted-refinement-claims-plan.md) (R1-R4 landed; archived 2026-09-28)
 - **[offline-docs-plan.md](offline-docs-plan.md)** -- one docs pack serving the site, the in-app Try Turmeric viewer and offline mode; OD1-OD5 landed 2026-08-26. See [offline-docs-guide.md](../guides/offline-docs-guide.md)
 - **[tur-run-feature-audit-plan.md](tur-run-feature-audit-plan.md)** -- `tur run` parity with just 1.54.0 (attributes, `--set`, groups, platform attributes, modules, backticks); phases 0-3 executed 2026-08-30. The Windows shebang path stays with the Windows port
 - **[sum-representation-plan.md](sum-representation-plan.md)** -- multi-variant ADTs by value, Option/Result as real sums, the Option niche; SR0-SR4 all closed (SR2c graduated 2026-08-27, the niche 2026-09-03, SR4 flipped 2026-09-02). Gate records: [sr1-gate-results.md](sr1-gate-results.md), [sr2-gate-results.md](sr2-gate-results.md)
@@ -581,7 +581,7 @@ thread now lives.
 ### Archived 2026-09-05
 
 - **[regions-plan.md](regions-plan.md)** -- RM3 declared regions over the arena; R1-R5 landed, `with-region` added, GRADUATED on by default 2026-09-05 (`TUR_REGIONS=0` is the hatch). The static escape walk's admitted result shapes are recorded under graduation item 2; the spine residue stays with [reclamation-plan.md](reclamation-plan.md)
-- **[solver-extension-plan.md](solver-extension-plan.md)** -- the refinement solver as an incremental, backtracking decision procedure; SX0/SX1/SX2/SX3/SX8/SX9 landed (trail, DFS driver, incremental EUF, `tur smt`, `--dump-refine=json` at schema 1), SX4/SX6 parked on measured-shut gates. Open solver work continues in [../upcoming/solver-integer-tail-plan.md](../upcoming/solver-integer-tail-plan.md)
+- **[solver-extension-plan.md](solver-extension-plan.md)** -- the refinement solver as an incremental, backtracking decision procedure; SX0/SX1/SX2/SX3/SX8/SX9 landed (trail, DFS driver, incremental EUF, `tur smt`, `--dump-refine=json` at schema 1), SX4/SX6 parked on measured-shut gates. Its integer-tail follow-up is [solver-integer-tail-plan.md](solver-integer-tail-plan.md) (Phases 1, 3(b), 4 landed; 2 and 3(a) parked; archived 2026-09-28)
 
 ### Completed plans swept out of `docs/upcoming/` (2026-08-15)
 

@@ -223,10 +223,12 @@ with a hand-written body retires the generation, while the far more common
 scalar-parameter body notes nothing and keeps every rewind. No fixture in the
 tree changed when this landed.
 
-Two things remain outside the note, both in
-`docs/reported/region-escape-through-unhooked-stores.md`: an `extern-c`
-function, which has no emitted body to put the note in, and a stdlib primitive
-that stores a word arriving as an *erased* `:int` rather than a typed node.
+Two things sat outside the note, both closed and recorded in
+`docs/archive/region-escape-through-unhooked-stores.md`: an `extern-c`
+function, which has no emitted body to put the note in (unreachable -- the
+extern-c boundary refuses a `:heap` node and any record holding one), and a
+stdlib primitive that stores a word arriving as an *erased* `:int` rather than
+a typed node (noted at the erasure, and by hand in each such primitive).
 Prefer the typed style (`nxt : Link`, `(Vec Link)`, a `:copy` sum) over
 erasing to `:int`: a typed value is refused by the result walk where it must
 be, keeps its rewinds where it can, and never takes the erasure note.
@@ -235,7 +237,12 @@ The generation stack is **per-thread** (like the trail and the panic state);
 ownership -- what `tur_region_free` refuses to `free()` -- is process-wide
 through a registry, so a node that crosses threads is still safe to drop
 anywhere. A pop whose inner brackets were skipped by a panic retires the
-abandoned generations rather than jamming the stack.
+abandoned generations rather than jamming the stack. A panic out of a bracket
+retires the bracket's own generation on the way out (never rewinds it: the
+payload may point in), and every catch boundary (`catch-unwind`,
+`catch-panic-of`) retires whatever a panic left open above the depth it was
+entered at -- so even the outermost catch leaves the stack where it found it
+(`region-catch-retires-stranded-generation`).
 
 **Fuzzed, both ways.** `tests/regions-fuzz-src.py` generates programs that
 let nodes out of a bracket through every route above (or not at all), reads

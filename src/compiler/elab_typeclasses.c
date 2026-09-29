@@ -1420,7 +1420,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
         }
     }
 
-    /* class-superclasses (docs/upcoming/typeclass-superclasses-plan.md, SC1):
+    /* class-superclasses (docs/archive/typeclass-superclasses-plan.md, SC1):
      * optional constraint preamble `[(Super var...) ...]` right after the
      * type-param vector -- the same bracketed `(Class var)` vector `definstance`
      * and `defn` already spell constraints with, and in the same position
@@ -9607,7 +9607,7 @@ resolved_user_fallback:;
 }
 
 /* ======================================================================== *
- * class-superclasses (docs/upcoming/typeclass-superclasses-plan.md): the
+ * class-superclasses (docs/archive/typeclass-superclasses-plan.md): the
  * post-unit pass -- SC2 (resolve + validate the superclass graph) and SC4
  * (the instance obligation, plan Half B).
  *

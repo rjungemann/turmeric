@@ -449,7 +449,7 @@ design -- there is no runtime fallback to fall back to -- so refusing buys a
 diagnostic, not a check. Outside `--strict-refine` the program still compiles
 and still runs the unearned crossing; what changed is that the compiler now
 says so rather than staying silent. Fix the frame. See
-[`trusted-refinement-claims-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/trusted-refinement-claims-plan.md)
+[`trusted-refinement-claims-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/trusted-refinement-claims-plan.md)
 (R2 for the mutable-global evidence, R4 slice 1 for the omitted-parameter
 evidence -- `errors/r4-checked-reads-refuses-param-read` pins the refusal and
 `refine-reads-multi-param-visible-quiet` the fixed frame, while

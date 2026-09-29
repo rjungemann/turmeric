@@ -448,7 +448,7 @@ kind each one is:
   The import is an error that says so, as in Racket.
 - **not planned**: refused, with the reason.
 - **not yet**: planned, and refused until the stage in parentheses lands
-  ([docs/upcoming/r7rs-srfi-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/r7rs-srfi-plan.md)).
+  ([docs/archive/r7rs-srfi-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-srfi-plan.md)).
 
 `only`, `except`, `prefix` and `rename` work on an SRFI as on any library,
 and their names are checked against its export list. One imported name has

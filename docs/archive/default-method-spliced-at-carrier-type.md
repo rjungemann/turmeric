@@ -8,7 +8,7 @@ are converted on the way in. `tur check` is clean, cc is happy (the conversion
 is legal C), and only a non-`int` instance is affected.
 
 **Status:** open. Found 2026-09-11 executing
-[lattice-vocabulary-plan.md](../upcoming/lattice-vocabulary-plan.md) L1, whose
+[lattice-vocabulary-plan.md](lattice-vocabulary-plan.md) L1, whose
 design (`max`/`min` as defaulted `Ord` methods) it blocks outright.
 
 Caught by the `-Wfloat-conversion` ratchet

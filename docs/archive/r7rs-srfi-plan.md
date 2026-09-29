@@ -1,13 +1,21 @@
 # SRFI libraries for `#lang r7rs`, after Racket's
 
-Status: **S1 and S0 landed 2026-09-26; S2, S3 (the pruning pass and SRFI 1),
-S4 (SRFI 69), S5 (SRFIs 14 and 13), S6 (SRFIs 28, 48, 64 and 78) and S7
-(SRFIs 4, 27, 35, 41, 42, 60 and 66, and 78's `check-ec`) landed
-2026-09-27** (see their "What shipped" and "What S0 found" notes). S2's last
-SRFI, 17, was held by
-docs/archive/r7rs-prelude-procedures-lose-identity.md; that was fixed
-2026-09-27 and **SRFI 17 landed 2026-09-28**, so every stage but S8 is
-complete. S8 is on demand.
+> **Status:** **complete** -- S1 and S0 landed 2026-09-26; S2 (SRFIs 2, 8,
+> 26, 31 and 61), S3 (the pruning pass and SRFI 1), S4 (SRFI 69), S5 (SRFIs
+> 14 and 13), S6 (SRFIs 28, 48, 64 and 78) and S7 (SRFIs 4, 27, 35, 41, 42,
+> 60 and 66, and 78's `check-ec`) landed 2026-09-27 (see their "What
+> shipped" and "What S0 found" notes). S2's last SRFI, 17, waited on
+> docs/archive/r7rs-prelude-procedures-lose-identity.md (fixed 2026-09-27)
+> and landed 2026-09-28 (3ed9f9b65). S8 is on demand by decision, not
+> unstarted work: its fourteen rows (5, 7, 19, 25, 29, 43, 54, 57, 59, 63,
+> 67, 71, 74, 86) stay "not yet (S8)" in `SRFI_LIBS[]` and the guide, and
+> each flips when someone asks; Section 5 is unscheduled likewise. All five
+> Section 7 questions are decided. The one report filed on the way,
+> letrec-mutual-recursion-between-capturing-closures (S6), was resolved
+> 2026-09-28 and is in docs/archive/ too; the body's other docs/reported/
+> mentions (type-error panics, too-few arguments, procedure identity) were
+> fixed 2026-09-27 and are in docs/archive/. Archived 2026-09-28.
+
 `(import (srfi N))` resolves for every SRFI in the table: the ten built-in
 rows, the three alias rows and the twenty library rows import, and the
 rest are refused with their reason. S0's inventory is [Appendix C](#appendix-c----s0-inventory). Its
@@ -1103,8 +1111,8 @@ fixture itself runs on both back ends.
 >     not captured, and cc rejected the lifted body. SRFI 64's simple runner
 >     has two internal defines of that shape. Now captured
 >     (src/compiler/elab_core.c; `letrec-sibling-closure-capture`). Two
->     capturing members that call each other are still open:
->     docs/reported/letrec-mutual-recursion-between-capturing-closures.md.
+>     capturing members that call each other were resolved 2026-09-28:
+>     docs/archive/letrec-mutual-recursion-between-capturing-closures.md.
 >   - *A top-level `(define f (case-lambda ...))` whose clause calls `f`* was
 >     "unknown function f"; it is a defn now, as a lambda define is
 >     (`r7rs-case-lambda-define-recurs`).
@@ -1492,7 +1500,7 @@ Two notes for the stages:
 
 ## See also
 
-- [r7rs-lang-plan.md](r7rs-lang-plan.md) -- the dialect this extends; D9 (the
+- [r7rs-lang-plan.md](../upcoming/r7rs-lang-plan.md) -- the dialect this extends; D9 (the
   library system) and R7 (the on-demand library mechanism S1 reuses).
 - [docs/guides/r7rs-guide.md](../guides/r7rs-guide.md) -- where the support
   table goes.

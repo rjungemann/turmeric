@@ -1,0 +1,58 @@
+;; letrec-mutual-recursion-between-capturing-closures: two letrec members that
+;; capture a local AND call each other.  When the earlier member was
+;; elaborated the later one had no init yet, so nothing said it would capture;
+;; the call to it was left to the recursion machinery and the lifted body named
+;; an undeclared local (cc: 'od_N' undeclared).  elab_letrec now predicts which
+;; members capture before elaborating any, and the emitter ties the knot: the
+;; earlier env's slot is zeroed, then patched once the later member is bound.
+
+;; The report's repro.
+(defn parity [k : int n : int] : int
+  (letrec [ev (fn [i : int] : int (if (= i 0) k (od (- i 1))))
+           od (fn [i : int] : int (if (= i 0) (- 0 k) (ev (- i 1))))]
+    (ev n)))
+
+;; A three-member cycle.
+(defn tri [k : int n : int] : int
+  (letrec [a (fn [i : int] : int (if (= i 0) k (b (- i 1))))
+           b (fn [i : int] : int (if (= i 0) (* 10 k) (c (- i 1))))
+           c (fn [i : int] : int (if (= i 0) (* 100 k) (a (- i 1))))]
+    (+ (a n) (b n))))
+
+;; The later member reached from a closure NESTED in the earlier one.
+(defn nest [k : int n : int] : int
+  (letrec [ev (fn [i : int] : int (if (= i 0) k ((fn [] : int (od (- i 1))))))
+           od (fn [i : int] : int (if (= i 0) (- 0 k) (ev (- i 1))))]
+    (ev n)))
+
+;; Only the later member names the local; the earlier one captures it
+;; transitively, by calling a closure.
+(defn trans [k : int n : int] : int
+  (letrec [ev (fn [i : int] : int (if (= i 0) 1 (od (- i 1))))
+           od (fn [i : int] : int (if (= i 0) k (ev (- i 1))))]
+    (ev n)))
+
+;; Over-prediction: `k` is shadowed inside `od`, which captures nothing and is
+;; lifted to a global; `ev`'s predicted capture of it is skipped.
+(defn shadow [k : int n : int] : int
+  (letrec [ev (fn [i : int] : int (if (= i 0) k (od (- i 1))))
+           od (fn [i : int] : int (let [k 5] (if (= i 0) k (ev (- i 1)))))]
+    (ev n)))
+
+;; A float capture, and a value member that calls the knot after it is tied.
+(defn fl [k : float n : int] : float
+  (letrec [ev (fn [i : int] : float (if (= i 0) k (od (- i 1))))
+           od (fn [i : int] : float (if (= i 0) (* 2.5 k) (ev (- i 1))))
+           r  (ev n)]
+    r))
+
+(defn main [] : int
+  (println (parity 1 10))   ; 1
+  (println (parity 1 7))    ; -1
+  (println (tri 1 4))       ; 10 + 100
+  (println (nest 3 5))      ; -3
+  (println (trans 7 3))     ; 7
+  (println (shadow 2 3))    ; 5
+  (println (shadow 2 4))    ; 2
+  (println (fl 1.25 3))     ; 3.125
+  0)
