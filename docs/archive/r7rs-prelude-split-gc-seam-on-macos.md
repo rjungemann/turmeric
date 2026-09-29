@@ -118,7 +118,9 @@ constructor and also called where nothing can precede it.
 - `src/runtime/r7gc.c` -- `tur_gc_install_rt_allocator()`, idempotent, called
   by `tur_gc_ctor` as before. Safe before `tur_gc_init`, because
   `tur_gc_malloc` initializes the collector on its first call. A no-op stub in
-  the `!TUR_GC_ON` arm, where the entry points already *are* libc.
+  the `!TUR_GC_ON` arm, where the entry points already *are* libc. Its
+  allocator table is filled field by field into a plain local, not built as a
+  `static const` -- see "the trap that cost a CI round" below.
 - `src/compiler/emit_core.c` (`static_init_emit`) -- emits that call as the
   first statement of `__tur_static_init`, behind its idempotent guard and ahead
   of the atexit band and `__tur_split_lib_init`. Gated on a new
@@ -139,11 +141,36 @@ Its duplicate-state check had a Mach-O branch written in advance and never
 executed. It fails on Darwin as written, with nothing wrong: `nm`'s one-letter
 class separates writable data from read-only on ELF (`R`/`r` being rodata) but
 **not** on Mach-O, where every non-text local is `s` whatever section it is in.
-The collector pasted into both units has two read-only statics
-(`tur_gc_class_size`, and now `tur_gc_install_rt_allocator.ours`), and both were
-reported as forked state. `defined_data` now asks `nm -m` for the section
-instead and takes only the writable ones -- `__DATA,__data`, `__bss`,
-`__common`, plus `__thread_vars` / `__thread_bss`.
+The collector pasted into both units has a read-only static
+(`tur_gc_class_size`), and it was reported as forked state. `defined_data` now
+asks `nm -m` for the section instead and takes only the writable ones --
+`__DATA,__data`, `__bss`, `__common`, plus `__thread_vars` / `__thread_bss`.
+
+## The trap that cost a CI round, one section over
+
+The first version of the fix wrote the allocator table the way `tur_gc_ctor`
+already did, as a function-scope `static const tur_gc_rt_allocator ours`. That
+passed everything locally and **failed `tur_r7rs_prelude_split` on
+ubuntu-latest**, reporting `ours` as state defined in both units.
+
+It is the same blind spot as above, on the other platform. A const table of
+function POINTERS needs relocating, so ELF places it in `.data.rel.ro` --
+read-only after load, but `nm` classes it `d`, exactly like `.data`. It had
+never shown up before because in the client unit `tur_gc_ctor` is renamed
+`unused` and never called, so the compiler dropped the function and its static
+with it; `tur_gc_install_rt_allocator` is called in both units, so the table
+existed in both.
+
+The table is now filled field by field into a plain local. `tur_rt_set_allocator`
+copies it, so it never needed to outlive the call, and four stores to stack
+slots leave no data object to misclassify -- on either platform. Verified: no
+`ours` symbol of any kind in either unit.
+
+An aggregate initializer was not enough on its own. Written as
+`const tur_gc_rt_allocator ours = { ... }`, clang still emitted a read-only
+template (`l___const.tur_gc_install_rt_allocator.ours` in `__DATA,__const`);
+that particular spelling is assembler-local and would have passed both arms,
+but it is the compiler's choice, not something to depend on.
 
 ## Verified
 
@@ -158,3 +185,6 @@ On macOS 27.0 / Apple clang 21 (arm64), Debug `tur`, `-DTUR_JIT=ON`:
   pastes the collector, so the new line moves none of them).
 - `bash tests/run-fmt.sh` -> 34 passed, `bash tests/check-reported-index.sh`
   -> PASS.
+- `bash tests/run-jit.sh` -> 3235 passed, 0 failed, 55 skipped. (Under
+  `tur jit` the new call is the no-op stub; the run is a regression check on
+  the emitter change, not on the collector.)

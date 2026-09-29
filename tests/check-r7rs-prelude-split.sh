@@ -59,15 +59,21 @@ ALLOW='^_?(__tur_any_chunk|__tur_any_rows)$'
 #
 # Mach-O: it does NOT.  Plain `nm` spells every non-text local `s` and every
 # non-text external `S`, whatever section it sits in, so a `static const` table
-# is indistinguishable from mutable state -- and the collector pasted into both
-# units has two of them (`tur_gc_class_size`, `tur_gc_install_rt_allocator.ours`),
-# which made this check fail on Darwin the first time it ran there with nothing
-# actually wrong.  `nm -m` names the section instead, so ask for the writable
-# ones by name: __data / __bss / __common, plus the two a `__thread` variable
-# produces (__thread_vars holds its descriptor, __thread_bss its initial
-# image).  __TEXT,__const, __TEXT,__cstring and __DATA,__const are not state:
-# the last one sits outside __TEXT only because it needs relocating on load,
-# and is read-only thereafter.
+# is indistinguishable from mutable state.  The collector pasted into both units
+# has one (`tur_gc_class_size`), which made this check fail on Darwin the first
+# time it ran there with nothing actually wrong.  `nm -m` names the section
+# instead, so ask for the writable ones by name: __data / __bss / __common, plus
+# the two a `__thread` variable produces (__thread_vars holds its descriptor,
+# __thread_bss its initial image).  __TEXT,__const, __TEXT,__cstring and
+# __DATA,__const are not state: the last one sits outside __TEXT only because it
+# needs relocating on load, and is read-only thereafter.
+#
+# The ELF arm has the same blind spot one section over: `.data.rel.ro` is
+# read-only after load but `nm` classes it `d`, so a `static const` table of
+# function pointers reads as writable state there.  Nothing in the collector has
+# one today -- r7gc.c's allocator table is a local for exactly this reason --
+# and if that changes, this arm needs `nm --format=sysv` and a section filter
+# too, not another name on ALLOW.
 defined_data() {
     if [ "$(uname -s)" = Darwin ]; then
         # The `^_` keeps assembler-local labels (`ltmp1`, `l_.str`) out: a C
@@ -78,7 +84,7 @@ defined_data() {
             sort -u
     else
         nm "$1" 2>/dev/null |
-            awk '$2 ~ /^[BbDdGgSs]$/ { n = $3; sub(/\.[0-9]+$/, "", n); print n }' |
+            awk '$2 ~ /^[BbDdGgSs]$/ && $3 ~ /./ { n = $3; sub(/\.[0-9]+$/, "", n); print n }' |
             sort -u
     fi
 }

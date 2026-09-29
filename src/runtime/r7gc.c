@@ -1069,9 +1069,21 @@ extern void tur_rt_set_allocator(const tur_gc_rt_allocator *a) __attribute__((we
  * is 0 the stub at the bottom of this file answers that call instead. */
 static __attribute__((unused)) void tur_gc_install_rt_allocator(void) {
     if (!tur_rt_set_allocator) return;
-    static const tur_gc_rt_allocator ours = {
-        tur_gc_malloc, tur_gc_calloc, tur_gc_realloc, tur_gc_free
-    };
+    /* Filled field by field into a LOCAL, deliberately not built as a `static
+     * const` and not even as an aggregate initializer.  tur_rt_set_allocator
+     * COPIES the table, so it need not outlive this call -- and any data object
+     * holding these four function pointers needs relocating, so ELF puts it in
+     * `.data.rel.ro`, which `nm` classes `d`, indistinguishable from writable
+     * data.  Both units of a split build call this, so such an object would be
+     * defined in both and tests/check-r7rs-prelude-split.sh would read it as
+     * the collector's state having forked.  That would be wrong -- it is
+     * read-only after load -- but the check cannot see the difference, and four
+     * stores to stack slots cost nothing to get right. */
+    tur_gc_rt_allocator ours;
+    ours.malloc  = tur_gc_malloc;
+    ours.calloc  = tur_gc_calloc;
+    ours.realloc = tur_gc_realloc;
+    ours.free    = tur_gc_free;
     tur_rt_set_allocator(&ours);
 }
 
