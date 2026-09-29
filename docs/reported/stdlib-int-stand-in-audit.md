@@ -473,6 +473,19 @@ That is a type-system change with a wide blast radius, not a stdlib pass.  `str-
 same change: it builds an `Either` in inline C and should declare
 `(Either int int)`.
 
+> **2026-09-29: the constructor typing landed; `either.tur` meets a second
+> gap.** `(Right 41)` is `(Either L int)` now, with `L` an open slot, and
+> `fmap` over it grounds
+> ([fmap-over-underdetermined-constructor-is-a-defless-shell](../archive/fmap-over-underdetermined-constructor-is-a-defless-shell.md),
+> archived). The generic `either.tur` was rewritten again against it. Every
+> caller in the tree passed, `sum-either-functor-instance` included, once
+> `str->int-checked` declared `(Either int int)`. It still did not land: a
+> generic map's by-value monomorph refuses its own arms in C. `(either-map inc
+> (Left 9))` reached cc, where the `int`-typed version runs it. The cause, and
+> `result-map`'s identical failure on `main` for a type-changing function, is
+> [generic-call-result-leaks-callee-tyvar-names](generic-call-result-leaks-callee-tyvar-names.md).
+> That is the blocker now.
+
 ## See also
 
 - [docs/archive/spices-int-stand-in-audit-2026-06-14.md](../archive/spices-int-stand-in-audit-2026-06-14.md)

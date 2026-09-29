@@ -3529,6 +3529,26 @@ static bool type_eq_tyvar_tolerant(Type a, Type b, Type *out_concrete) {
 
 static bool if_branches_unify_via_tyvar(Type then_ty, Type else_ty, Type *out) {
     Type result = then_ty;
+    /* fmap-over-underdetermined-constructor-is-a-defless-shell: a branch
+     * whose constructor left a parameter OPEN is the carrier, as the bare ADT
+     * it used to be typed as was.  Two such branches over one ADT --
+     * `(if c (Ok 1.5) (Err 3))` -- join to that bare ADT, as they did.  An
+     * open branch beside a concrete one was a mismatch against the bare ADT
+     * and stays one: the tolerant walk below would read the open slot as a
+     * wildcard and keep the carrier shape over a by-value peer. */
+    if (type_has_open_slot(&then_ty) || type_has_open_slot(&else_ty)) {
+        AdtDef *td = (then_ty.kind == TY_APP) ? type_adt_app_def(&then_ty)
+                   : (then_ty.kind == TY_ADT) ? then_ty.as.adt_.def : NULL;
+        AdtDef *ed = (else_ty.kind == TY_APP) ? type_adt_app_def(&else_ty)
+                   : (else_ty.kind == TY_ADT) ? else_ty.as.adt_.def : NULL;
+        bool then_open = then_ty.kind == TY_ADT || type_has_open_slot(&then_ty);
+        bool else_open = else_ty.kind == TY_ADT || type_has_open_slot(&else_ty);
+        if (td && td == ed && then_open && else_open) {
+            if (out) *out = type_adt(td);
+            return true;
+        }
+        return false;
+    }
     if (!type_eq_tyvar_tolerant(then_ty, else_ty, &result)) return false;
     /* Prefer the side with no bare tyvars at the outermost position. */
     if (then_ty.kind == TY_TYVAR && else_ty.kind != TY_TYVAR) result = else_ty;

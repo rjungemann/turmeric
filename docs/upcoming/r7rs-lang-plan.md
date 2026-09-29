@@ -2752,9 +2752,10 @@ task.*
 >     ([cps-self-tail-call-relies-on-sibling-call](../archive/cps-self-tail-call-relies-on-sibling-call.md)).
 >     *2026-09-26: a self-recursive CPS loop is a backedge now and holds at
 >     `-O0`. 2026-09-28: mutual recursion is too (fused CPS groups; T5 takes
->     colored functions); resolved and archived. The tail call after a
->     `guard` is still open:
->     [mutual-tail-call-through-guard-grows-the-stack](../reported/mutual-tail-call-through-guard-grows-the-stack.md).*
+>     colored functions); resolved and archived. 2026-09-29: the tail call
+>     after a `guard` is too -- its partner was evicted from CPS by a quoted
+>     symbol in its base case
+>     ([mutual-tail-call-through-guard-grows-the-stack](../archive/mutual-tail-call-through-guard-grows-the-stack.md)).*
 >   - A million-element `append`, `map` (one to four lists), `string-map`,
 >     `vector-map`, `list-copy`, `string->list`, `vector->list`, `equal?`,
 >     `read-line`, `read` and `write` now pass compiled at `-O2` and
@@ -2887,9 +2888,9 @@ differences, as reports"):
   procedure the CPS backend declines, so the pair is constant stack at `-O0`
   ([cps-self-tail-call-relies-on-sibling-call](../archive/cps-self-tail-call-relies-on-sibling-call.md)).
   A self-recursive loop of that shape -- `for-each`, `map`, `member` -- has
-  been a backedge since 2026-09-26. What remains is a tail call made after a
-  `guard`, into another procedure
-  ([mutual-tail-call-through-guard-grows-the-stack](../reported/mutual-tail-call-through-guard-grows-the-stack.md)).
+  been a backedge since 2026-09-26. A tail call made after a `guard`, into
+  another procedure, followed 2026-09-29
+  ([mutual-tail-call-through-guard-grows-the-stack](../archive/mutual-tail-call-through-guard-grows-the-stack.md)).
 - ~~**Re-entrant `call/cc` is Linux and macOS only**~~ -- resolved 2026-09-26:
   the stack base comes from the TEB and the jump unwinds nothing
   ([archived](../archive/r7rs-reentrant-callcc-not-on-windows.md)).

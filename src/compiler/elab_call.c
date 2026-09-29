@@ -1468,6 +1468,14 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                     actual.kind != TY_TYVAR) {
                     return true;
                 }
+                /* fmap-over-underdetermined-constructor-is-a-defless-shell: an
+                 * OPEN slot of the argument -- the `A` of `(Err 3) : (Result A
+                 * int)` -- was fixed by nothing, so it agrees with whatever
+                 * another argument bound the variable to: `(pick-ok 0.5 (Err
+                 * 3))` binds A to float from `d`.  The bare ADT this value used
+                 * to be was accepted for any application (KB-022 below). */
+                if (actual.kind == TY_TYVAR && actual.as.tyvar_.open_slot)
+                    return true;
                 return type_eq(bindings[idx].type, actual);
             }
             if (*n_bindings >= 16) return false;
@@ -5136,9 +5144,15 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                      * classic Functor / cata paths where fmap's arms build
                      * bare-ADT results uniformly and no outer expected type
                      * is present. */
+                    /* An expected type that is itself OPEN -- a sibling match
+                     * arm's `(Either int R)` -- pins nothing: it is another
+                     * constructor's partial answer, not an annotation.  Filling
+                     * `(Right d)` out from it made `(Either int int)`, a by-value
+                     * monomorph, beside a sibling that is still the carrier. */
                     if (!all_bound && e->expected_type &&
                         e->expected_type->kind == TY_APP &&
-                        type_adt_app_def(e->expected_type) == ctor->adt) {
+                        type_adt_app_def(e->expected_type) == ctor->adt &&
+                        !type_has_open_slot(e->expected_type)) {
                         Type ex_args[8];
                         AdtDef *ex_def = NULL;
                         uint8_t ex_n = 0;
@@ -5146,6 +5160,16 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                                                  ex_args, &ex_n) &&
                             ex_def == ctor->adt && ex_n == ntp) {
                             bool recovered = true;
+                            /* A failed rescue leaves the arguments as the
+                             * fields gave them: the open-parameter typing
+                             * below reads them, and a variable adopted from
+                             * a CALLEE's parameter type -- `(Err 3)` passed
+                             * to `pick-ok [A B]` meets `(Result A B)` --
+                             * would leak that callee's `A` into the value. */
+                            Type saved_targs[8];
+                            bool saved_have[8];
+                            memcpy(saved_targs, targs, sizeof(saved_targs));
+                            memcpy(saved_have, have, sizeof(saved_have));
                             for (uint8_t pi = 0; pi < ntp; pi++) {
                                 if (!have[pi]) {
                                     targs[pi] = ex_args[pi];
@@ -5157,8 +5181,47 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                                     recovered = false;
                                 }
                             }
-                            if (recovered) all_bound = true;
+                            if (recovered) {
+                                all_bound = true;
+                            } else {
+                                memcpy(targs, saved_targs, sizeof(saved_targs));
+                                memcpy(have, saved_have, sizeof(saved_have));
+                            }
                         }
+                    }
+                    /* fmap-over-underdetermined-constructor-is-a-defless-shell:
+                     * a constructor that fixes SOME parameters but not all --
+                     * `(Ok 7.1)` fixes A, and nothing names B -- used to fall
+                     * back to the bare ADT, which says nothing about A.  A
+                     * generic consumer then bound nothing from it:
+                     * `(ok-val (Ok 7.1))` returned the float's bits as an int,
+                     * and `fmap` had no application chain to ground its result
+                     * against.  Type it the way the generic `ok` constructor
+                     * function already is: the application, with each open
+                     * parameter left as the ADT's own type variable --
+                     * `(Result float B)`, the same type `(ok 7.1)` has.  A
+                     * Saffron file's undetermined argument is `any`, as its
+                     * nullary constructors already are.  Only when a field
+                     * fixed a parameter to a concrete type: with nothing
+                     * concrete there is nothing to say, and the bare ADT stays. */
+                    bool any_concrete = false;
+                    for (uint8_t pi = 0; pi < ntp; pi++)
+                        if (have[pi] && targs[pi].kind != TY_TYVAR &&
+                            targs[pi].kind != TY_UNKNOWN)
+                            any_concrete = true;
+                    if (!all_bound && any_concrete) {
+                        bool dyn = lang_span_is_dynamic(call->span);
+                        for (uint8_t pi = 0; pi < ntp; pi++) {
+                            if (have[pi] && targs[pi].kind != TY_UNKNOWN) continue;
+                            if (dyn) {
+                                targs[pi] = type_from_kind(TY_ANY);
+                            } else {
+                                targs[pi] = type_tyvar_named(ctor->adt->type_params[pi]);
+                                targs[pi].as.tyvar_.open_slot = true;
+                            }
+                            have[pi] = true;
+                        }
+                        all_bound = true;
                     }
                     if (all_bound) {
                         Type adt_base = type_adt(ctor->adt);

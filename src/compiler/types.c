@@ -992,6 +992,19 @@ AdtDef *type_adt_app_def(const Type *t) {
     return def;
 }
 
+/* fmap-over-underdetermined-constructor-is-a-defless-shell: does `t` mention a
+ * parameter a constructor application left open (tyvar_.open_slot)? */
+bool type_has_open_slot(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR: return t->as.tyvar_.open_slot;
+        case TY_APP:
+            return type_has_open_slot(t->as.app.fn) ||
+                   type_has_open_slot(t->as.app.arg);
+        default: return false;
+    }
+}
+
 /* SC7 (carrier-duality): a "transparent int newtype" is a parametric struct
  * with a single field declared as a plain int64-width scalar (`:int`) -- e.g.
  * `(defstruct Schema [A] (raw :int))`.  Because the lone field is a concrete

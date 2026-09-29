@@ -1,5 +1,10 @@
 # A mutual tail call through a `guard` procedure grows the C stack
 
+**RESOLVED 2026-09-29** -- see [Resolution](#resolution-2026-09-29). The
+repro runs a million deep at `-O0`, and so does the same pair with a
+`(list ...)` base case. Pinned by `tests/fixtures/r7rs-cps-mutual-tail-unoptimized`,
+built at `-O0` by its `hook.sh`.
+
 **Severity:** low-medium. `#lang r7rs` (any dialect whose `guard`-like catch
 makes a function CPS while its partner stays direct). The C stack grows by
 three frames on every round trip at every optimization level, so a
@@ -71,3 +76,44 @@ In the emitted C of the repro: `g1` ends `return g2(f__v0, __ps_...)`, and
   `tests/fixtures/r7rs-cps-mutual-tail-unoptimized` (built at `-O0`), and
   delete the "tail call made after a `guard`" bullet from
   `docs/guides/r7rs-guide.md` ("Where it differs from R7RS").
+
+## Resolution (2026-09-29)
+
+The diagnosis above was right about the shape -- one CPS partner, one direct
+one, so neither kind of group takes the pair -- but not about why `g1` was
+direct. `g1` is CPS-colored: the coloring pass propagates backward from a
+colored callee, and `g2` is one. It was **evicted** at emit time. Its CPS
+translation had an unsupported node, and an evicted function falls back to the
+direct emitter whole (`TUR_TRACE_EVICT=1` prints
+`BODY-UNSUPPORTED g1 unsupported form: EX_#100`).
+
+Node 100 is `EX_UNION_INJECT`, the `any` widen around `'g-done`. The widen was
+already a delegated value op (`is_delegatable_struct`), but only over an
+operand `operand_uses_control` can clear, and that scan did not know
+`EX_SYM_LIT`, so its conservative default said "may hide a control op". So
+the base case, not the tail call, kept `g1` out of CPS.
+
+`src/passes/cps_ir.c`:
+
+- `EX_SYM_LIT` is control-free in `operand_uses_control` and a delegated
+  value in `is_delegatable_value`. A quoted symbol is the address of a static
+  record.
+- An indirect call's arguments may be widened literals, not only atoms
+  (`call_args_literal`: an atom, a quoted symbol, either one widened to `any`,
+  or a constructor over those). `#lang r7rs`'s `(list 1 2)` is an indirect
+  call to a variadic procedure whose rest list is a `Cons` chain of widened
+  literals, and the "indirect call (non-atomic args)" refusal evicted a base
+  case written that way. The test is deliberately not "control-free": a call
+  to a colored function passes that scan and must not be delegated.
+
+With `g1` in the CPS set, the pair is a cps->cps tail cycle and the existing
+group fusion (`emit_cps_ir.c`, "CPS mutual tail-call groups") fuses it into one
+`__cps_tcg_N`. Nothing about `guard` itself changed.
+
+The fixture's `ping` / `pong` (which return `'done`) moved from T5's direct
+groups to the CPS path by the same change. Its comment says so.
+
+**Still a C call**, as for any mutual tail call: a partner the CPS backend
+evicts for some other unsupported form, a member reached through a closure or
+an internal `define`, and groups over 8 members or 32 slots
+(cps-self-tail-call-relies-on-sibling-call).

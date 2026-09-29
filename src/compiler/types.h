@@ -937,6 +937,12 @@ typedef struct Type {
         /* Phase HRT/G2: Named type variable -- parameter typed with a GADT type var */
         struct {
             const char *name;  /* interned type var name (e.g. "a"), or NULL for anonymous escaped skolem */
+            /* fmap-over-underdetermined-constructor-is-a-defless-shell: this
+             * variable is a parameter a constructor application left OPEN --
+             * the `B` of `(Ok 7.1) : (Result float B)` -- rather than one a
+             * signature quantifies.  Nothing binds it; it only says "not fixed
+             * here".  Copied with the Type, so it survives instantiation. */
+            bool open_slot;
         } tyvar_;
         /* ET3/FH4.1: Handler type — handler<EffectRow, ValueType, ResultType> */
         struct {
@@ -2009,6 +2015,7 @@ bool         type_has_concrete_codegen_layout(const Type *t);
 bool         type_app_is_concrete_adt(const Type *t);
 /* The AdtDef at the head of an ADT application, or NULL if not an ADT app. */
 AdtDef      *type_adt_app_def(const Type *t);
+bool         type_has_open_slot(const Type *t);
 /* Resolve an ADT ctor field's type against a concrete ADT-app receiver type. */
 Type         adt_field_type_for_app(const Type *recv, const CtorField *field);
 /* end-to-end-monomorphization: the by-value struct C name (`Vec__int`) for a

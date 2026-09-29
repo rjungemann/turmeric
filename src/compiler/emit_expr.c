@@ -17274,7 +17274,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (!nil_result) {
                         tmp = fresh_tmp(ctx);
                         indent_buf(body, ctx->indent);
-                        buf_printf(body, "%s %s = 0;\n", type_c_name(e->type), tmp);
+                        /* match-join-of-ctor-arm-and-byvalue-arm-reaches-cc: an
+                         * aggregate result cannot take a scalar `0` ("invalid
+                         * initializer") -- the ADT path below already says so;
+                         * a literal-pattern match on a bool or an int returning
+                         * a by-value `(Result float int)` hit it here. */
+                        Type _lrt = e->type;
+                        if (type_is_byvalue_adt_product(_lrt) ||
+                            adt_app_is_byvalue_product(_lrt) ||
+                            _lrt.kind == TY_ANY || _lrt.kind == TY_UNION)
+                            buf_printf(body, "%s %s = {0};\n", type_c_name(_lrt), tmp);
+                        else
+                            buf_printf(body, "%s %s = 0;\n", type_c_name(_lrt), tmp);
                     }
                     char *scrut_val = emit_value(ctx, body, e->as.match_.scrutinee);
                     TypeKind _sk = e->as.match_.scrutinee->type.kind;
@@ -17861,6 +17872,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                  * `_sub_ctype` is the equivalent correction. */
                                 buf_printf(body, "%s %s = __scrut;\n",
                                            adt_c_name, bname);
+                            } else if (!scrut_is_app_monomorph && !adt_byval &&
+                                       bi < pat->ctor->n_fields &&
+                                       pat->ctor->fields[bi].full_type &&
+                                       pat->ctor->fields[bi].full_type->kind == TY_TYVAR &&
+                                       (emit_resolve_type(ctx, fb_eff).kind == TY_FLOAT ||
+                                        emit_resolve_type(ctx, fb_eff).kind == TY_FLOAT64)) {
+                                /* The switch path's SR2b FLOAT leg, which this
+                                 * path (a single-constructor ADT) lacked: a
+                                 * type-variable field of the erased base layout
+                                 * holds the double's BITS, so a float binder
+                                 * bit-reinterprets it.  The default arm's
+                                 * `(int64_t)` read, assigned on to a float,
+                                 * converted the bits instead: `(untag (Tag
+                                 * 2.75))` printed 4.61337e+18
+                                 * (fmap-over-underdetermined-constructor-is-a-
+                                 * defless-shell). */
+                                buf_printf(body,
+                                    "double %s = ((union { double d; int64_t i; })"
+                                    "{ .i = (int64_t)__scrut%s%s }).d;\n",
+                                    bname, acc, mp);
                             } else if (adt_byval &&
                                 match_field_is_ros_pointer_box(ctx, pat->ctor, fb)) {
                                 /* Pointer-box payload slot -- deref, never bind
@@ -18187,12 +18218,28 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     }
                                     free_struct_app_type(_sf);
                                 }
-                            } else if (!scrut_is_app_monomorph &&
-                                       strcmp(ctype, "int64_t") == 0 &&
-                                       (fb->type.kind == TY_TYVAR ||
-                                        fb->type.kind == TY_FORALL) &&
-                                       (emit_resolve_type(ctx, fb->type).kind == TY_FLOAT ||
-                                        emit_resolve_type(ctx, fb->type).kind == TY_FLOAT64)) {
+                            } else if ((!scrut_is_app_monomorph &&
+                                        strcmp(ctype, "int64_t") == 0 &&
+                                        (fb->type.kind == TY_TYVAR ||
+                                         fb->type.kind == TY_FORALL) &&
+                                        (emit_resolve_type(ctx, fb->type).kind == TY_FLOAT ||
+                                         emit_resolve_type(ctx, fb->type).kind == TY_FLOAT64)) ||
+                                       /* fmap-over-underdetermined-constructor-
+                                        * is-a-defless-shell: the same slot read
+                                        * when the binder is ALREADY float --
+                                        * `(match (ok 7.1) (Ok v) ...)`, whose
+                                        * scrutinee `(Result float B)` has an
+                                        * open parameter, so it is the erased
+                                        * base layout rather than a monomorph,
+                                        * while elaboration read `v : float` off
+                                        * the application.  The plain cast below
+                                        * printed 4.61968e+18. */
+                                       (!scrut_is_app_monomorph && !adt_byval &&
+                                        (fb->type.kind == TY_FLOAT ||
+                                         fb->type.kind == TY_FLOAT64) &&
+                                        bi < pat->ctor->n_fields &&
+                                        pat->ctor->fields[bi].full_type &&
+                                        pat->ctor->fields[bi].full_type->kind == TY_TYVAR)) {
                                 /* SR2b, the FLOAT leg: the base union slot holds
                                  * the double's BITS (the monomorph ctor stored a
                                  * real double at the same offset), so the binder
