@@ -274,7 +274,8 @@ static __thread tur_gc_thread *tur_gc_self;
  * its stack scanned from a point it had long left), and the thread and key
  * wrappers.  The stop handler, the collector's own frames and a thread's
  * start and end run on the thread they read, never inlined into a fiber's
- * code, and keep the plain read. */
+ * code, and keep the plain read; so do the EINTR helpers, which run while
+ * the thread is parked (tur_gc_park says why no call may run then). */
 #if defined(TUR_TLS_FRESH)
 TUR_TLS_FRESH(tur_gc_thread *, tur_gc_self, tur_gc_self__at);
 #define TUR_GC_SELF_FRESH() (*tur_gc_self__at())
@@ -1114,34 +1115,31 @@ extern void tur_rt_set_allocator(const tur_gc_rt_allocator *a) __attribute__((we
  * G->world for an instant, so it cannot happen in the middle of a
  * collection.  A thread the collector does not know parks nothing.
  *
- * The registers are the caller's, taken by a setjmp in the caller's own
- * frame -- tur_gc_park is a macro -- and only the stack pointer comes from a
- * function of its own, tur_gc_park_at, whose frame lies below everything the
- * caller keeps.  The setjmp used to be made inside that function, and then
- * it took that function's registers: whichever callee-saved register its
- * prologue had taken over held its own value, and the caller's was saved in
- * its frame, which the blocking call reused once it returned.  Whether a
- * parked thread's pointer survived depended on its callers' register
- * allocation, and a change to code nearby lost one (r7rs-threads-roots on
- * macOS, fiber-tls-address-reuse). */
-TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_park_at(tur_gc_thread *t) {
+ * On a fiber the record is read afresh (TUR_GC_SELF_FRESH), since the fiber
+ * may have moved to another thread since the last read.  In park that read
+ * comes before the thread is marked parked, while a collection would still
+ * stop it by signal.  In unpark it comes after G->world is taken, so no
+ * collection is scanning the thread while the read's call runs: the thread
+ * is still marked parked when the blocking call returns, and until it takes
+ * G->world a collector scans its stack from the parked snapshot -- stack the
+ * thread is by then writing its next frames over.  A call made in that
+ * window (the accessor read first, as a first version did, or unpark itself
+ * made noinline) overwrote a pointer the parked thread held
+ * (r7rs-threads-roots on macOS, fiber-tls-address-reuse). */
+TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_park(void) {
+    tur_gc_thread *t = TUR_GC_SELF_FRESH();
+    if (!t) return;
+    if (t->park_depth++ > 0) return;
+    setjmp(t->regs);                    /* callee-saved registers */
     volatile unsigned char here = 0;
     t->stack_sp = (unsigned char *)&here;
     TUR_GC_STORE(&t->parked, 1);
 }
-#define tur_gc_park() do {                                             \
-        tur_gc_thread *tur_gc_park_t_ = TUR_GC_SELF_FRESH();            \
-        if (tur_gc_park_t_ && tur_gc_park_t_->park_depth++ == 0) {      \
-            setjmp(tur_gc_park_t_->regs);   /* callee-saved registers */ \
-            tur_gc_park_at(tur_gc_park_t_);                              \
-        }                                                                \
-    } while (0)
 static void tur_gc_unpark(void) {
-    tur_gc_thread *t = TUR_GC_SELF_FRESH();
-    if (!t) return;
-    if (--t->park_depth > 0) return;
+    if (!tur_gc_G) return;
     pthread_mutex_lock(&tur_gc_G->world);
-    TUR_GC_STORE(&t->parked, 0);
+    tur_gc_thread *t = TUR_GC_SELF_FRESH();
+    if (t && --t->park_depth == 0) TUR_GC_STORE(&t->parked, 0);
     pthread_mutex_unlock(&tur_gc_G->world);
 }
 
@@ -1403,8 +1401,8 @@ static int tur_gc_mutex_lock(pthread_mutex_t *m) {
     if (G && (m == &G->world || m == &G->heap || m == &G->meta_lock)) return pthread_mutex_lock(m);
     tur_gc_park(); int r = pthread_mutex_lock(m); tur_gc_unpark(); return r;
 }
-static inline void tur_gc_intr_clear(void) { tur_gc_thread *t = TUR_GC_SELF_FRESH(); if (t) t->gc_intr = 0; }
-static inline bool tur_gc_intr_ours(void) { tur_gc_thread *t = TUR_GC_SELF_FRESH(); return t && t->gc_intr; }
+static inline void tur_gc_intr_clear(void) { if (tur_gc_self) tur_gc_self->gc_intr = 0; }
+static inline bool tur_gc_intr_ours(void) { return tur_gc_self && tur_gc_self->gc_intr; }
 /* The other blocking calls are wrapped at the call site, as a statement
  * expression around the call as written, whatever its signature.  The
  * macros are function-like, so a struct member of the same name is left
