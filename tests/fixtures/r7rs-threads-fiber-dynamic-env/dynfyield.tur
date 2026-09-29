@@ -1,0 +1,9 @@
+;; dynfyield -- the scheduler's cooperative yield, for Scheme code running in
+;; a fiber: the fiber goes back on the shared queue, and whichever worker
+;; thread is free next resumes it.
+(defmodule dynfyield
+  (export yield!)
+  (defn yield! [] : nil
+    ```c
+    tur_scheduler_mt_yield();
+    ```))

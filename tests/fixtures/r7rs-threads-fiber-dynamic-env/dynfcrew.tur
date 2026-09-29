@@ -1,0 +1,43 @@
+;; dynfcrew -- six fibers on a three-thread scheduler (the shared-queue
+;; tur_scheduler_mt), fiber n running (dyn-part n); the main thread waits for
+;; the queue to drain.
+(defmodule dynfcrew
+  (import dynfwork :refer [dyn-part])
+  (export dynf-run dynf-total)
+  ```c
+  #define DYNF_FIBERS 6
+  static pthread_mutex_t dynf_mu = PTHREAD_MUTEX_INITIALIZER;
+  static int64_t dynf_next;
+  static int64_t dynf_out[DYNF_FIBERS];
+  ```
+  ;; The calling fiber's number, 1..6, handed out in the order they start.
+  (defn dynf-id [] : int
+    ```c
+    pthread_mutex_lock(&dynf_mu);
+    int64_t id = ++dynf_next;
+    pthread_mutex_unlock(&dynf_mu);
+    return id;
+    ```)
+  (defn dynf-store [id : int v : int] : nil
+    ```c
+    dynf_out[id - 1] = v;
+    ```)
+  (defn dynf-body [] : nil
+    (let [id (dynf-id)]
+      (dynf-store id (dyn-part id))))
+  (defn dynf-spawn-all [body : ptr<void>] : nil
+    ```c
+    TurSchedulerMT *s = tur_scheduler_mt_new(3);
+    for (int i = 0; i < DYNF_FIBERS; i++)
+        tur_scheduler_mt_spawn(s, tur_fiber_block_new((void (*)(void))body, 256 * 1024));
+    tur_scheduler_mt_free(s);
+    ```)
+  (defn dynf-run [] : nil
+    (dynf-spawn-all dynf-body))
+  ;; The sum of the six fibers' results.
+  (defn dynf-total [] : int
+    ```c
+    int64_t s = 0;
+    for (int i = 0; i < DYNF_FIBERS; i++) s += dynf_out[i];
+    return s;
+    ```))

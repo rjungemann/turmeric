@@ -79,6 +79,13 @@ int *tur_tls_escape_live_n_ptr (void) { return &tur_tls_escape_live_n; }
 static __thread int tur_tls_escape_live_cap = 0;
 int *tur_tls_escape_live_cap_ptr (void) { return &tur_tls_escape_live_cap; }
 
+/* The r7rs prelude's dynamic environment (emit_dk_runtime.c, tur_r7rs_dyn):
+ * the wind, handler and parameter stacks and a re-entry's delivered value,
+ * four 16-byte tagged words.  Shared, one thread's raise ran another thread's
+ * handler (docs/archive/r7rs-dynamic-environment-shared-across-threads.md). */
+static __thread _Alignas(16) unsigned char tur_tls_r7rs_dyn[64];
+void **tur_tls_r7rs_dyn_ptr (void) { return (void **) tur_tls_r7rs_dyn; }
+
 /* The r7rs prelude's stack bases for a call/cc image (stdlib/r7rs/prelude.tur):
  * the calling thread's own stack top, and the current top-level form's frame.
  * Shared, a worker's capture measured its image against another thread's

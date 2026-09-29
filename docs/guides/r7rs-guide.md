@@ -557,6 +557,16 @@ threads on one heap, eight of them taking turns on a shared persistent map
 and one churning garbage, is a gate case
 (`tests/fixtures/r7rs-threads-stress`).
 
+Each thread has its own dynamic environment: the handlers `guard` and
+`with-exception-handler` install, the `dynamic-wind` frames, and the values
+`parameterize` binds. A `raise` on one thread never reaches a handler
+another thread installed, and a `parameterize` on one thread changes nothing
+another thread reads. A new thread starts with no handlers, no wind frames
+and each parameter at the value `make-parameter` gave it. A fiber has its
+own too, and carries it with it when it resumes on another thread
+(`tests/fixtures/r7rs-threads-dynamic-env`,
+`tests/fixtures/r7rs-threads-fiber-dynamic-env`).
+
 - The stop signal restarts the system call it interrupts. The runtime knows
   these blocking calls: the joins, the condition waits, `nanosleep`,
   `poll`, `select`, `accept`, `connect`, `recv`, `read`, `waitpid`,

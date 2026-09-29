@@ -1,0 +1,12 @@
+#lang r7rs
+;; docs/archive/r7rs-dynamic-environment-shared-across-threads.md, for
+;; fibers: the dynamic environment belongs to the code that is running, so a
+;; fiber carries its own from yield to yield and from thread to thread
+;; (tur_fiber_block_resume swaps it with the escapes).  Six fibers on a
+;; three-thread scheduler, each inside its own parameterize, yield inside a
+;; guard, a handler and the parameterize itself; 120 a fiber when each sees
+;; only its own.  Afterwards the parameter reads its global value again.
+(import (scheme base) (scheme write) (dynfwork) (turmeric dynfcrew))
+(dynf-run)
+(write (list 'fibers (dynf-total) 'outside (param-outside)))
+(newline)

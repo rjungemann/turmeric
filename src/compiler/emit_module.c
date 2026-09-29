@@ -13945,6 +13945,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (shared || cps_uses_callcc) {
         emit_cps_callcc_prelude(out);
         r7gc_note_tls_root("tur_escape_live");   /* a realloc'd (collected) array */
+        r7gc_note_tls_root("tur_r7rs_dyn");      /* Scheme lists and procedures */
     }
 
     /* Phase 19 fiber effect runtime (TurContK / TurEffectCaptureCtx /
@@ -13992,6 +13993,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * prompts on ITS stack), swapped in by tur_fiber_block_resume when the
      * program has the escape runtime. */
     buf_puts(out, "    void *esc_live; int esc_live_n, esc_live_cap;\n");
+    /* r7rs-dynamic-environment-shared-across-threads: the fiber's own Scheme
+     * dynamic environment (tur_r7rs_dyn, emit_dk_runtime.c), swapped in with
+     * the escapes.  calloc's zero is the empty one.  Raw words: the type
+     * is declared only in a unit with the escape runtime. */
+    buf_puts(out, "    int64_t r7dyn[8];\n");
     buf_puts(out, "};\n\n");
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber",
                 "tur_current_fiber", "void **", "tur_tls_current_fiber_ptr", "FiberBlock **");
@@ -14230,6 +14236,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (shared || cps_uses_callcc) {
         buf_puts(out, "    tur_escape_cont **_esc_v = tur_escape_live; int _esc_n = tur_escape_live_n, _esc_c = tur_escape_live_cap;\n");
         buf_puts(out, "    tur_escape_live = (tur_escape_cont **)f->esc_live; tur_escape_live_n = f->esc_live_n; tur_escape_live_cap = f->esc_live_cap;\n");
+        /* The Scheme dynamic environment is the fiber's too: a `guard` or
+         * `parameterize` a fiber is inside when it yields must not be seen by
+         * whatever the thread runs next, and must still be there when the
+         * fiber resumes, on any thread. */
+        buf_puts(out, "    tur_r7rs_dynenv _r7dyn = tur_r7rs_dyn;\n");
+        buf_puts(out, "    memcpy(&tur_r7rs_dyn, f->r7dyn, sizeof tur_r7rs_dyn);\n");
     }
     /* r7rs-gc: the collector scans this thread's own stack from here while
      * the fiber runs on its (heap-allocated) stack. */
@@ -14243,6 +14255,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (shared || cps_uses_callcc) {
         buf_puts(out, "    f->esc_live = (void *)tur_escape_live; f->esc_live_n = tur_escape_live_n; f->esc_live_cap = tur_escape_live_cap;\n");
         buf_puts(out, "    tur_escape_live = _esc_v; tur_escape_live_n = _esc_n; tur_escape_live_cap = _esc_c;\n");
+        buf_puts(out, "    memcpy(f->r7dyn, &tur_r7rs_dyn, sizeof f->r7dyn);\n");
+        buf_puts(out, "    tur_r7rs_dyn = _r7dyn;\n");
     }
     buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
     buf_puts(out, "    tur_current_fiber = _prev;\n");
