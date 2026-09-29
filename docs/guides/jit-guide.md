@@ -435,19 +435,22 @@ by-value struct argument (the Saffron dynamic call, whose arguments are all
 spells the prototype cast out and passes the boxes uncast. Under this
 diagnostic, look for a struct-typed `Ai` before anything else.
 
-And one that compiles but answers wrong, on x86-64 only: a statement
-expression whose VALUE is a struct (`({ ...; TUR_TAG(...); })`, or one that
-yields a by-value ADT) placed in a call's argument list or as a local's
-initializer overwrites a sibling argument or parameter. The cause is in
-c2mir's front end (the interpreter, `-ei`, answers wrong too): it reserves the
-statement expression's result slot in the frame while the body is still being
-checked, and only afterwards lays the stack variables out from offset 0 -- so
-the slot lands on the first of them, typically a by-value struct parameter.
-The emitter builds every such value with statements in the body instead --
-see
-[jit-x86-64-struct-valued-statement-expression-miscompiles](https://github.com/rjungemann/turmeric/blob/main/docs/reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md)
-for the shapes and the sites. A Linux-only `stdout mismatch` in the JIT
-suite on a program that passes under cc is the signature.
+A bug that used to compile but answer wrong, fixed in the fork since
+`96c34860`: on x86-64, a statement expression whose VALUE is a struct
+(`({ ...; TUR_TAG(...); })`, or one that yields a by-value ADT) placed in a
+call's argument list or as a local's initializer overwrote a sibling argument
+or parameter. The cause was in c2mir's front end (the interpreter, `-ei`,
+answered wrong too): it reserved the statement expression's result slot in the
+frame while the body was still being checked, and only afterwards laid the
+stack variables out from offset 0 -- so the slot landed on the first of them,
+typically a by-value struct parameter. The emitter had already stopped
+producing the shape (it builds every such value with statements in the body),
+so today only user inline C could reach it, and
+`tests/fixtures/jit-inline-c-struct-stmtexpr-slot` fails if the MIR pin ever
+drops below the fix. See
+[jit-x86-64-struct-valued-statement-expression-miscompiles](https://github.com/rjungemann/turmeric/blob/main/docs/archive/jit-x86-64-struct-valued-statement-expression-miscompiles.md)
+for the shapes and the sites. On an older pin, a Linux-only `stdout mismatch`
+in the JIT suite on a program that passes under cc is the signature.
 
 ### `__attribute__((packed))` is silently ignored
 

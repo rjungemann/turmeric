@@ -1,0 +1,44 @@
+;; jit-x86-64-struct-valued-statement-expression-miscompiles: a statement
+;; expression whose VALUE is a struct must not overwrite the function's first
+;; struct local under the JIT.
+;;
+;; c2mir copies a struct-valued `({ ... })` out into a frame slot.  Before
+;; rjungemann/mir#5 it reserved that slot while the body was still being
+;; checked, at the frame size so far -- but the stack variables are laid out
+;; only afterwards, from offset 0, so the slot was the frame's first bytes and
+;; the copy-out landed on the first struct there.  On x86-64 `tur jit` printed
+;; 708 (f clobbered with {7, 8}) where cc prints 304.
+;;
+;; The emitter stopped producing the shape before the engine was fixed, so
+;; generated code no longer reaches it; user inline C still can, and this is
+;; what fails if cmake/mir.cmake's pin is ever moved back below 96c34860.
+;;
+;; stmtexpr-siblings also checks what the slot exists for: two struct
+;; statement expressions in one expression get independent storage.
+(defn stmtexpr-init [] : int
+  ```c
+  typedef struct { int64_t a, b; } T;
+  typedef struct { int64_t x, y, z; } S;
+  T f = {3, 4};
+  S v = {7, 8, 9};
+  S *p = &v;
+  S s = ({ *p; });
+  return f.a * 100 + f.b + s.x * 0;
+  ```)
+
+(defn stmtexpr-siblings [n : int] : int
+  ```c
+  typedef struct { int64_t x, y, z; } S;
+  int64_t acc = 0;
+  for (int64_t i = 0; i < n; i++) {
+    S outer = {i, i + 1, i + 2};
+    S inner = {100, 200, 300};
+    acc += ({ S u = outer; u; }).x - ({ S w = inner; w; }).x + inner.z - outer.z;
+  }
+  return acc;
+  ```)
+
+(defn main [] : int
+  (println (stmtexpr-init))
+  (println (stmtexpr-siblings 10))
+  0)
