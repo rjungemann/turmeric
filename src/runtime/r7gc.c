@@ -198,6 +198,7 @@ typedef struct tur_gc_thread {
     volatile int   parked;       /* in a blocking call: regs and stack_sp are current */
     volatile int   stopped;      /* in the stop handler, waiting for the resume signal */
     volatile int   gc_intr;      /* the stop signal landed since the wrapper last cleared it */
+    volatile int   in_stop;      /* macOS: inside the stop handler's wait (tur_gc_stop_handler) */
     int            stop_state;   /* this collection: 0 untouched, 1 signaled, 2 parked */
     jmp_buf        regs;         /* its callee-saved registers, spilled at the park */
     jmp_buf        sig_regs;     /* the same, spilled by the stop handler */
@@ -902,18 +903,32 @@ TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_mark_roots(void) {
  * the next collection's, landing before the thread has left this one's --
  * although the handler's mask blocks it: in the fixture that found this, a
  * quarter to two thirds of the handler's entries were nested ones, on
- * threads stopped while waiting on the heap mutex.  Nested
- * sigsuspends then swallowed each other's resume signals, and the threads
- * hung, or nested until the kernel had no stack left to deliver a signal on
- * (SIGILL).  Nesting itself is harmless -- the inner entry is the next
- * collection stopping the same thread, spilling from a deeper frame -- so on
- * macOS the handler polls `stopped` and yields instead, and no resume signal
- * is sent. */
+ * threads stopped while waiting on the heap mutex.  Nested sigsuspends
+ * swallowed each other's resume signals, and the threads hung, or nested
+ * until the kernel had no stack left to deliver a signal on (SIGILL).  So on
+ * macOS no resume signal is sent: the handler polls `stopped`, and a nested
+ * entry does not wait at all.  Since the outer entry spilled, the thread has
+ * run nothing but this handler, so that spill is still the thread's state; a
+ * nested entry marks it stopped for its own collection, acknowledges, and
+ * returns to the outer entry's loop, which waits for that collection too.
+ * The loop re-checks `stopped` after it leaves, since an entry landing
+ * between the check and `in_stop` going to 0 is an outer one again, with a
+ * wait of its own.  The depth stays at two or three frames. */
 static void tur_gc_stop_handler(int sig) {
     (void)sig;
     int e = errno;
     tur_gc_thread *t = tur_gc_self;
     if (t) {
+#if defined(__APPLE__)
+        if (TUR_GC_LOAD(&t->in_stop)) {
+            t->gc_intr = 1;
+            TUR_GC_STORE(&t->stopped, 1);
+            __atomic_fetch_add(&tur_gc_G->acks, 1, __ATOMIC_SEQ_CST);
+            errno = e;
+            return;
+        }
+        TUR_GC_STORE(&t->in_stop, 1);
+#endif
         setjmp(t->sig_regs);
         volatile unsigned char here = 0;
         t->sig_sp = (unsigned char *)&here;
@@ -921,7 +936,12 @@ static void tur_gc_stop_handler(int sig) {
         TUR_GC_STORE(&t->stopped, 1);
         __atomic_fetch_add(&tur_gc_G->acks, 1, __ATOMIC_SEQ_CST);
 #if defined(__APPLE__)
-        while (TUR_GC_LOAD(&t->stopped)) sched_yield();
+        for (;;) {
+            while (TUR_GC_LOAD(&t->stopped)) sched_yield();
+            TUR_GC_STORE(&t->in_stop, 0);
+            if (!TUR_GC_LOAD(&t->stopped)) break;
+            TUR_GC_STORE(&t->in_stop, 1);
+        }
 #else
         sigset_t m;
         sigfillset(&m);

@@ -3,8 +3,10 @@
 **RESOLVED 2026-09-28**, in the PR that made the DK runtime's state
 per-thread (its new fixture `r7rs-threads-cps-entries` is what exposed this).
 On macOS the r7rs-gc stop handler no longer waits in `sigsuspend` for a
-resume signal. It polls its `stopped` flag and yields, and the collector
-sends no resume signal there. Linux is unchanged.
+resume signal. It polls its `stopped` flag and yields, the collector sends
+no resume signal there, and a nested entry of the handler acknowledges and
+returns to the entry it interrupted, so nesting never goes deeper than a
+frame or two. Linux is unchanged.
 
 ## Symptom
 
@@ -58,12 +60,26 @@ It spills from a deeper frame, which the scan covers, and acknowledges for
 its own collection. Returning from it without acknowledging loses that
 collection's acknowledgement, which is why the third row hangs.
 
-What breaks is the resume signal. Each nested level waits in its own
-`sigsuspend` for a resume signal. The levels consumed one another's resume
-signals, so threads hung, or nested deeper with every collection until the
-kernel ran out of stack to push a frame on. With polling, the innermost
-level leaves as soon as its collection clears the flag, and every level
-under it finds the flag clear too.
+What breaks is waiting at every level. With `sigsuspend`, each nested
+level waits for a resume signal of its own, the levels consumed one
+another's resume signals, and threads hung. Polling fixed that (the second
+row), but on its own it still let the nesting grow: under torture the next
+collection's stop signal keeps landing on a thread just as it is about to
+leave, and each landing is another frame. The first push polled only, and
+CI's Debug build still died with SIGILL, the kernel out of stack for a
+signal frame. A second diagnostic measured the depth (8 runs per cell, both
+builds):
+
+| nested entry | Debug | Release |
+| --- | --- | --- |
+| waits in its own loop (polling alone) | 1 SIGILL in 16; depth up to 554 | 3 SIGILL in 16; depth up to 334 |
+| acknowledges and returns to the outer loop | **16 right**; depth 2-3 | **16 right**; depth 2-3 |
+
+A nested entry does not need to wait. Since the outer entry spilled, the
+thread has run nothing but the handler, so the outer spill is still its
+state; the nested entry marks the thread stopped for its own collection,
+acknowledges, and returns to the outer entry's loop, which waits for that
+collection too.
 
 ## Fix
 
@@ -72,7 +88,16 @@ under it finds the flag clear too.
 - `tur_gc_stop_handler` waits with `while (stopped) sched_yield();` in place
   of the `sigsuspend` loop. `sched_yield` is a Mach trap (`swtch_pri`), safe
   in a handler.
+- A thread record carries `in_stop`. An entry that finds it set is nested:
+  it sets `stopped`, acknowledges, and returns without spilling or waiting.
+  The outer entry clears `in_stop` when its wait ends and checks `stopped`
+  once more, since a stop signal landing between the two is an outer entry
+  of its own.
 - `tur_gc_start_world` clears `stopped` and sends no resume signal.
+
+Tested on Linux as well, with the handler installed with an empty mask and
+`SA_NODEFER` so that it nests there too (about 20,000 nested entries a run):
+the fixture 10 of 10 and `tests/run-r7rs-gc.sh` 215 of 215.
 
 The handlers for both signals are still installed, so nothing else changes.
 
@@ -81,7 +106,7 @@ The handlers for both signals are still installed, so nothing else changes.
 Why a handler with a full `sa_mask` sees its own signal again on macOS is
 not established. It happened only to threads that had been stopped while
 blocked in libpthread's mutex wait (`__psynch_mutexwait`), as far as the
-crash reports show. The stress fixture never nested. Boehm GC does not use signals on Darwin
-at all: it stops threads with Mach `thread_suspend` and reads their
-registers with `thread_get_state`. That is the fallback if the polling
-handler ever proves insufficient.
+crash reports show. The stress fixture never nested. Boehm GC does not use
+signals on Darwin at all: it stops threads with Mach `thread_suspend` and reads their
+registers with `thread_get_state`. That is the fallback if this handler
+ever proves insufficient.
