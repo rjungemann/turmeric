@@ -1468,6 +1468,14 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                     actual.kind != TY_TYVAR) {
                     return true;
                 }
+                /* fmap-over-underdetermined-constructor-is-a-defless-shell: an
+                 * OPEN slot of the argument -- the `A` of `(Err 3) : (Result A
+                 * int)` -- was fixed by nothing, so it agrees with whatever
+                 * another argument bound the variable to: `(pick-ok 0.5 (Err
+                 * 3))` binds A to float from `d`.  The bare ADT this value used
+                 * to be was accepted for any application (KB-022 below). */
+                if (actual.kind == TY_TYVAR && actual.as.tyvar_.open_slot)
+                    return true;
                 return type_eq(bindings[idx].type, actual);
             }
             if (*n_bindings >= 16) return false;
@@ -5152,6 +5160,16 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                                                  ex_args, &ex_n) &&
                             ex_def == ctor->adt && ex_n == ntp) {
                             bool recovered = true;
+                            /* A failed rescue leaves the arguments as the
+                             * fields gave them: the open-parameter typing
+                             * below reads them, and a variable adopted from
+                             * a CALLEE's parameter type -- `(Err 3)` passed
+                             * to `pick-ok [A B]` meets `(Result A B)` --
+                             * would leak that callee's `A` into the value. */
+                            Type saved_targs[8];
+                            bool saved_have[8];
+                            memcpy(saved_targs, targs, sizeof(saved_targs));
+                            memcpy(saved_have, have, sizeof(saved_have));
                             for (uint8_t pi = 0; pi < ntp; pi++) {
                                 if (!have[pi]) {
                                     targs[pi] = ex_args[pi];
@@ -5163,7 +5181,12 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                                     recovered = false;
                                 }
                             }
-                            if (recovered) all_bound = true;
+                            if (recovered) {
+                                all_bound = true;
+                            } else {
+                                memcpy(targs, saved_targs, sizeof(saved_targs));
+                                memcpy(have, saved_have, sizeof(saved_have));
+                            }
                         }
                     }
                     /* fmap-over-underdetermined-constructor-is-a-defless-shell:

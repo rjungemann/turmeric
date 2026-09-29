@@ -93,6 +93,15 @@ variable can tell:
 - An unannotated `defn` whose body is an open application records it as its
   return type (`elab_fns.c`). `fn_type_has_named_tyvar` does not count an
   open slot, which is always the carrier.
+- A generic parameter whose variable another argument already bound accepts
+  an open slot in that position (`call_collect_type_bindings`). `(pick-ok 0.5
+  (Err 3))`, where `d : A` fixes `A` and `(Err 3)` is `(Result A int)`, was
+  accepted when the constructor was the bare ADT (KB-022), and would have been
+  a mismatch without this.
+- A constructor's failed expected-type rescue restores the arguments its fields
+  gave. The open typing reads them afterwards, and `(Err 3)` elaborated against
+  `pick-ok`'s `(Result A B)` otherwise kept `pick-ok`'s own `A` as its first
+  argument.
 
 **The dispatch.** `src/compiler/elab_typeclasses.c`: a receiver with an open
 fixed slot grounds `(f b)` to itself with the hole replaced. `(fmap (Ok 41)

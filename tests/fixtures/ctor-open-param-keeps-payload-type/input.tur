@@ -10,6 +10,14 @@
 (defdata Tagged [A B] (Tag A))
 (defn untag [A B] [t : (Tagged A B)] : A (match t (Tag a) a))
 
+;; A generic consumer whose OTHER argument fixes the parameter the constructor
+;; left open: `(Err 3)` is `(Result A int)`, and `d` binds A.  The bare ADT was
+;; accepted for any application, so an open slot has to be too -- and the
+;; constructor, elaborated against this parameter's `(Result A B)`, must not
+;; take `pick-ok`'s own `A` as its own.
+(defn pick-ok [A B] [d : A r : (Result A B)] : A
+  (match r (Ok v) v (Err _) d))
+
 (defn main [] : int
   ;; A generic accessor binds A from the constructor.  Both printed the
   ;; float's BITS as an int before (4619679907765970534).
@@ -30,4 +38,6 @@
   (println (ok-val (fmap (Ok 41) half)))
   ;; A pinned receiver is unchanged.
   (println (err-val (fmap (:: (Err 9) (Result int int)) inc)))
+  (println (pick-ok 0.5 (Err 3)))
+  (println (pick-ok 0.5 (Ok 7.25)))
   0)
