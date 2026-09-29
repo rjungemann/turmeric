@@ -468,6 +468,7 @@ static void mark_ident(const char *id, size_t len, void *ud) {
 typedef struct HeavyInclude {
     const char *line;
     const char *const *markers;
+    const char *stand_in;   /* written in its place when dropped, or NULL */
 } HeavyInclude;
 
 static const char *const k_regex[] = {
@@ -491,13 +492,24 @@ static const char *const k_select[] = {
 static const char *const k_hamt[] = {
     "tur_hamt_*", "Hamt*", "HAMT_*", "TUR_HAMT_H", NULL };
 
+/* hamt.h is the decls region's FIRST include, so its own system includes are
+ * where the TU's first system header comes from -- and some libcs fix their
+ * feature level once, on that first inclusion.  Dropped outright, the first
+ * system header became <ucontext.h> under the region's `#define
+ * _XOPEN_SOURCE 700`; glibc shrugs (the region defines _DEFAULT_SOURCE), but
+ * macOS's <sys/cdefs.h> then settles on the POSIX level and hides every
+ * Darwin extension from the rest of the TU, and most programs failed to
+ * compile there (TUR-W0071) while Linux passed.  Leaving hamt.h's three
+ * includes behind keeps the header order ahead of that block exactly as it
+ * was.  The other entries sit after it, so they carry no such role. */
 static const HeavyInclude k_heavy[] = {
-    { "#include <regex.h>",      k_regex  },
-    { "#include <arpa/inet.h>",  k_inet   },
-    { "#include <netinet/in.h>", k_netin  },
-    { "#include <sys/socket.h>", k_socket },
-    { "#include <sys/select.h>", k_select },
-    { "#include \"hamt.h\"",     k_hamt   },
+    { "#include <regex.h>",      k_regex,  NULL },
+    { "#include <arpa/inet.h>",  k_inet,   NULL },
+    { "#include <netinet/in.h>", k_netin,  NULL },
+    { "#include <sys/socket.h>", k_socket, NULL },
+    { "#include <sys/select.h>", k_select, NULL },
+    { "#include \"hamt.h\"",     k_hamt,
+      "#include <stdint.h>\n#include <stdbool.h>\n#include <stdio.h>\n" },
 };
 #define N_HEAVY (sizeof k_heavy / sizeof k_heavy[0])
 
@@ -535,14 +547,18 @@ static unsigned copy_without_includes(Buf *out, const char *s, size_t a, size_t 
     while (i < b) {
         size_t e = i;
         while (e < b && s[e] != '\n') e++;
-        int drop = 0;
+        const HeavyInclude *drop = NULL;
         if (s[i] == '#') {
             for (size_t h = 0; h < N_HEAVY && !drop; h++)
-                if (!u->used[h] && line_is(s, i, e, k_heavy[h].line)) drop = 1;
+                if (!u->used[h] && line_is(s, i, e, k_heavy[h].line)) drop = &k_heavy[h];
         }
         size_t next = e < b ? e + 1 : e;
-        if (drop) dropped++;
-        else buf_write(out, s + i, next - i);
+        if (drop) {
+            dropped++;
+            if (drop->stand_in) buf_puts(out, drop->stand_in);
+        } else {
+            buf_write(out, s + i, next - i);
+        }
         i = next;
     }
     return dropped;

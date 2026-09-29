@@ -189,17 +189,32 @@ trap 'rm -rf "$RESULTS_DIR"' EXIT
 # (1) Smoke: ONE trivial program must go through the engine natively.  Costs
 #     a second, needs no list, and catches the tree-wide case before 2700
 #     fixtures spend ten minutes falling back.
+# The first engine diagnostic in a stderr file, for a FAIL line.  CI filters
+# this harness's console down to its FAIL lines, so a reason printed on a line
+# of its own is lost there (it survives only in the uploaded ctest log).
+_first_jit_error() {
+    local _e
+    _e="$(grep -E '^<tur-jit>:[0-9]+:[0-9]+: ' "$1" 2>/dev/null | grep -v -- ' warning --' | head -1)"
+    [ -n "$_e" ] || _e="$(grep -m1 -E '^tur: jit: ' "$1" 2>/dev/null)"
+    printf '%s' "$_e"
+}
+
 if [ "$LIST_ONLY" != "1" ]; then
 _smoke_dir="$(mktemp -d -t tur-jit-smoke.XXXXXX)"
 printf '(defn main [] : int (println 42) 0)\n' > "$_smoke_dir/smoke.tur"
 _smoke_err="$_smoke_dir/smoke.stderr"
 _smoke_out="$("$TUR" jit "$_smoke_dir/smoke.tur" 2> "$_smoke_err")"; _smoke_rc=$?
+# TUR-W0071 counts too: a trivial program that needs the full-TU retry means
+# the split or the pruner (src/compiler/jit_prune.h) is broken for EVERY
+# program on this host -- name it once here rather than in 2700 FAIL lines.
 if [ "$_smoke_rc" -ne 0 ] || [ "$_smoke_out" != "42" ] \
-   || grep -q 'TUR-W0070' "$_smoke_err" 2>/dev/null; then
-    echo "FAIL run-jit -- the engine did not natively run a trivial program"
+   || grep -qE 'TUR-W007[01]' "$_smoke_err" 2>/dev/null; then
+    echo "FAIL run-jit -- the engine did not natively run a trivial program: $(_first_jit_error "$_smoke_err")"
     echo "     (rc=$_smoke_rc, stdout='$_smoke_out').  If stderr below carries TUR-W0070,"
     echo "     the engine is falling back TREE-WIDE (an emitter construct c2mir cannot"
     echo "     parse?) and every fixture 'pass' below would be the cc path, not the JIT."
+    echo "     TUR-W0071: the reduced TU (split runtime / pruned program) is broken on"
+    echo "     this host and every program is paying a second, full compile."
     sed 's/^/     stderr: /' "$_smoke_err" | head -12
     rm -rf "$_smoke_dir"
     exit 1
@@ -361,7 +376,7 @@ run_jit_fixture() {
     # one way a reference the pruner missed would otherwise pass silently
     # -- and pay two c2mir compiles.
     if [ -z "$fell_back" ] && grep -q 'TUR-W0071' "$actual_stderr" 2>/dev/null; then
-        echo "FAIL $name -- passed only on the full-TU retry (TUR-W0071)"
+        echo "FAIL $name -- passed only on the full-TU retry (TUR-W0071): $(_first_jit_error "$actual_stderr")"
         grep 'TUR-W0071' "$actual_stderr" | head -1 | sed 's/^/    stderr: /'
         echo "FAIL" > "$RESULTS_DIR/$rkey.result"
         return

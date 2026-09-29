@@ -62,7 +62,9 @@ at link time:
    `<netinet/in.h>`, `<sys/socket.h>`, `<sys/select.h>` and `"hamt.h"` in the
    decls region are dropped when no identifier they declare survives in the
    program's own text. A full preamble keeps every include -- its own runtime
-   uses them.
+   uses them. A dropped `"hamt.h"` leaves its own `<stdint.h>`, `<stdbool.h>`
+   and `<stdio.h>` behind, so the TU's first system header is unchanged (see
+   the macOS note under Results).
 
 `TUR_JIT_NO_PRUNE=1` turns it off. Pruning the decls region's ~500 prototypes
 as well was measured (4 ms of c2mir's 67, unsanitized) and not done.
@@ -104,6 +106,22 @@ an inline-C block pasted with its indentation puts a second `static`
 definition on an indented line, which the chunker leaves in the chunk above,
 and that chunk was named for its first definition only. Such a chunk is now a
 root. All three had passed silently before the W0071 check existed.
+
+**The first CI run then failed most of the macOS JIT corpus with W0071 while
+Linux passed.** Dropping `"hamt.h"` -- the decls region's first include --
+made `<ucontext.h>` the TU's first system header, and the region includes it
+under `#define _XOPEN_SOURCE 700`. glibc fixes its feature level with
+`_DEFAULT_SOURCE` (defined at the top of the region), so it did not notice.
+macOS's `<sys/cdefs.h>` settles `__DARWIN_C_LEVEL` once, on its first
+inclusion: under `_XOPEN_SOURCE` without `_DARWIN_C_SOURCE` that is the POSIX
+level, which hides the Darwin extensions from the rest of the TU. A program
+that still uses a map keeps `hamt.h` first and should have been unaffected.
+The dropped `hamt.h` now leaves its three system includes in
+its place, so the header order ahead of that block is what it was. The
+mechanism is inferred from the header order and the macOS headers' documented
+behaviour; the console never showed the c2mir diagnostic. `run-jit.sh` now
+prints the first engine error on each W0071 FAIL line and fails its one-program
+smoke test on W0071, so a host-wide break is named once, with its reason.
 
 ## What is left
 
