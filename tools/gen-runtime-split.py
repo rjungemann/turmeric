@@ -6,7 +6,7 @@ Consumes the feature-complete single-file runtime preamble from
 
   src/runtime/generated/tur_rt_split.c        -- the runtime TU: every
       file-scope static externalized (so the program half can bind it),
-      the 11 thread-locals routed through the host tur_tls accessors
+      the runtime thread-locals (the TLS table below) routed through the host tur_tls accessors
       (one storage), compiled by a real cc into the host.
   src/runtime/generated/tur_rt_split_decls.h  -- the declarations region:
       same preamble with function bodies dropped and statics turned into
@@ -54,6 +54,26 @@ TLS = {
     'tur_cancel_jmpbuf_valid': ('int *', 'tur_tls_cancel_jmpbuf_valid_ptr'),
     'tur_current_scheduler_mt': ('void **', 'tur_tls_current_scheduler_mt_ptr'),
     'tur__rtv_': ('int64_t *', 'tur_tls_rtv_ptr'),
+    # The DK runtime's per-thread state (dk-reap-list-shared-across-threads).
+    # The program half's CPS entry wrappers read and write these directly,
+    # and the runtime half's dk_perform / trampoline reads them, so both
+    # halves must see one slot per thread.
+    '__dk_reap_v': ('void **', 'tur_tls_dk_reap_v_ptr'),
+    '__dk_reap_kind': ('void **', 'tur_tls_dk_reap_kind_ptr'),
+    '__dk_reap_n': ('size_t *', 'tur_tls_dk_reap_n_ptr'),
+    '__dk_reap_cap': ('size_t *', 'tur_tls_dk_reap_cap_ptr'),
+    '__dk_entry_depth': ('int *', 'tur_tls_dk_entry_depth_ptr'),
+    'g_dk_driver': ('void **', 'tur_tls_dk_driver_ptr'),
+    'g_dk_resume_chain': ('void **', 'tur_tls_dk_resume_chain_ptr'),
+    'g_dk_resume_val': ('intptr_t *', 'tur_tls_dk_resume_val_ptr'),
+    'g_dk_meta': ('void **', 'tur_tls_dk_meta_ptr'),
+    'g_dk_meta_n': ('size_t *', 'tur_tls_dk_meta_n_ptr'),
+    'g_dk_meta_cap': ('size_t *', 'tur_tls_dk_meta_cap_ptr'),
+    # The dynamic tail-call trampoline's state (emit_module.c).
+    'tur_tb_desc': ('void **', 'tur_tls_tb_desc_ptr'),
+    'tur_tb_armed_for': ('void **', 'tur_tls_tb_armed_for_ptr'),
+    'tur_tb_root': ('void **', 'tur_tls_tb_root_ptr'),
+    'tur_tb_sentinel_box': ('void **', 'tur_tls_tb_sentinel_box_ptr'),
 }
 
 # Functions whose BODY belongs in the decls half, emitted `static inline`, and
@@ -366,7 +386,7 @@ def split(src):
             decls.append('#endif')
             i += 1
             continue
-        # The THREAD-LOCAL selector.  Each of the 11 thread-locals is emitted as
+        # The THREAD-LOCAL selector.  Each thread-local in the TLS table is emitted as
         #
         #     #if defined(__GNUC__) || defined(__clang__)
         #     static TUR_THREAD_LOCAL T x = ...;      <- native TLS, private

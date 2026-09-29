@@ -8,7 +8,7 @@
  * workers ended up sharing one transaction descriptor and losing updates
  * (stm-stress), and why gc-registry-growth SIGSEGVed.
  *
- * The emitted preamble declares 11 thread-local variables.  Under a
+ * The emitted preamble declares a set of thread-local variables.  Under a
  * GNU-family compiler they stay exactly what they were -- plain
  * `TUR_THREAD_LOCAL` file-scope variables, zero indirection.  Under any other
  * front end the emitter #defines each NAME to a deref of one of these
@@ -30,6 +30,7 @@
  * across the boundary is well-defined.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <setjmp.h>
@@ -86,6 +87,49 @@ static __thread void *tur_tls_r7k_base = 0;
 void **tur_tls_r7k_base_ptr (void) { return &tur_tls_r7k_base; }
 static __thread void *tur_tls_r7k_form_base = 0;
 void **tur_tls_r7k_form_base_ptr (void) { return &tur_tls_r7k_form_base; }
+
+/* The DK runtime's per-thread state (emit_dk_runtime.c): the reap registry,
+ * the CPS entry depth, and the trampoline's landing, resume chain and value
+ * and meta-stack.  Shared, CPS entries on two threads reallocated one
+ * registry between them, a worker's exit freed the other threads' live
+ * chains, and a worker's entry replaced the landing another thread's
+ * tail-resume jumped to (docs/archive/dk-reap-list-shared-across-threads.md). */
+static __thread void *tur_tls_dk_reap_v = 0;
+void **tur_tls_dk_reap_v_ptr (void) { return &tur_tls_dk_reap_v; }
+static __thread void *tur_tls_dk_reap_kind = 0;
+void **tur_tls_dk_reap_kind_ptr (void) { return &tur_tls_dk_reap_kind; }
+static __thread size_t tur_tls_dk_reap_n = 0;
+size_t *tur_tls_dk_reap_n_ptr (void) { return &tur_tls_dk_reap_n; }
+static __thread size_t tur_tls_dk_reap_cap = 0;
+size_t *tur_tls_dk_reap_cap_ptr (void) { return &tur_tls_dk_reap_cap; }
+static __thread int tur_tls_dk_entry_depth = 0;
+int *tur_tls_dk_entry_depth_ptr (void) { return &tur_tls_dk_entry_depth; }
+static __thread void *tur_tls_dk_driver = 0;
+void **tur_tls_dk_driver_ptr (void) { return &tur_tls_dk_driver; }
+static __thread void *tur_tls_dk_resume_chain = 0;
+void **tur_tls_dk_resume_chain_ptr (void) { return &tur_tls_dk_resume_chain; }
+static __thread intptr_t tur_tls_dk_resume_val = 0;
+intptr_t *tur_tls_dk_resume_val_ptr (void) { return &tur_tls_dk_resume_val; }
+static __thread void *tur_tls_dk_meta = 0;
+void **tur_tls_dk_meta_ptr (void) { return &tur_tls_dk_meta; }
+static __thread size_t tur_tls_dk_meta_n = 0;
+size_t *tur_tls_dk_meta_n_ptr (void) { return &tur_tls_dk_meta_n; }
+static __thread size_t tur_tls_dk_meta_cap = 0;
+size_t *tur_tls_dk_meta_cap_ptr (void) { return &tur_tls_dk_meta_cap; }
+
+/* The dynamic tail-call trampoline (emit_module.c, proper-tail-calls T6): its
+ * descriptor, the function it has armed, the driver's root and the sentinel
+ * box.  Shared, every thread's tail calls bounced through one descriptor.
+ * The descriptor and the box are preamble-private types, so they are raw,
+ * aligned bytes here; the emitted side checks that its types fit. */
+static __thread _Alignas(16) unsigned char tur_tls_tb_desc[256];
+void **tur_tls_tb_desc_ptr (void) { return (void **) tur_tls_tb_desc; }
+static __thread void *tur_tls_tb_armed_for = 0;
+void **tur_tls_tb_armed_for_ptr (void) { return &tur_tls_tb_armed_for; }
+static __thread void *tur_tls_tb_root = 0;
+void **tur_tls_tb_root_ptr (void) { return &tur_tls_tb_root; }
+static __thread _Alignas(16) unsigned char tur_tls_tb_sentinel_box[16];
+void **tur_tls_tb_sentinel_box_ptr (void) { return (void **) tur_tls_tb_sentinel_box; }
 
 #ifdef _WIN32
 #include <windows.h>

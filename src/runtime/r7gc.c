@@ -43,7 +43,8 @@
  * parked in a blocking call (tur_gc_park, the release points at the end of
  * this file) has already spilled its registers and stack pointer and is left
  * where it is; any other thread is sent a signal whose handler spills the
- * same and waits, on its own stack, for the resume signal.  This is the
+ * same and waits, on its own stack, for the resume signal (on macOS, for
+ * the collector to clear its flag: tur_gc_stop_handler says why).  This is the
  * Boehm collector's design: a thread can be stopped anywhere, so no safe
  * points are compiled in.  The stop signal restarts the interrupted system
  * call (SA_RESTART); the few that do not restart are the wrapped ones, whose
@@ -197,6 +198,7 @@ typedef struct tur_gc_thread {
     volatile int   parked;       /* in a blocking call: regs and stack_sp are current */
     volatile int   stopped;      /* in the stop handler, waiting for the resume signal */
     volatile int   gc_intr;      /* the stop signal landed since the wrapper last cleared it */
+    volatile int   in_stop;      /* macOS: inside the stop handler's wait (tur_gc_stop_handler) */
     int            stop_state;   /* this collection: 0 untouched, 1 signaled, 2 parked */
     jmp_buf        regs;         /* its callee-saved registers, spilled at the park */
     jmp_buf        sig_regs;     /* the same, spilled by the stop handler */
@@ -258,11 +260,6 @@ static tur_gc_state *tur_gc_G;          /* points into mmap'd metadata */
 /* The calling thread's record.  A real thread-local: it holds no heap
  * pointer and is read on every allocation. */
 static __thread tur_gc_thread *tur_gc_self;
-/* Set, for good, when the program first starts a thread (before the thread
- * exists, so any code that thread runs sees it).  The DK runtime's reap list
- * is process-global, so its nested-entry drop (__dk_reap_drop_to) only runs
- * while one thread has ever run the program. */
-static int tur_gc_threaded;
 
 /* The thread-local roots of the emitted runtime: defined after the preamble
  * (emit_module.c, emit_r7rs_gc_tls_roots), it calls `add` once per
@@ -899,22 +896,58 @@ TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_mark_roots(void) {
  * handler's mask), so sigsuspend cannot miss it: sent before, it is pending
  * and delivered the moment sigsuspend unblocks it.  The collector clears
  * `stopped` before it sends the resume, so a thread that has not yet reached
- * the loop skips it.  Only async-signal-safe calls, and errno kept. */
+ * the loop skips it.  Only async-signal-safe calls, and errno kept.
+ *
+ * macOS waits differently (docs/archive/r7rs-gc-darwin-stop-handler-reentered.md).
+ * There the stop signal can arrive while the handler is still running --
+ * the next collection's, landing before the thread has left this one's --
+ * although the handler's mask blocks it: in the fixture that found this, a
+ * quarter to two thirds of the handler's entries were nested ones, on
+ * threads stopped while waiting on the heap mutex.  Nested sigsuspends
+ * swallowed each other's resume signals, and the threads hung, or nested
+ * until the kernel had no stack left to deliver a signal on (SIGILL).  So on
+ * macOS no resume signal is sent: the handler polls `stopped`, and a nested
+ * entry does not wait at all.  Since the outer entry spilled, the thread has
+ * run nothing but this handler, so that spill is still the thread's state; a
+ * nested entry marks it stopped for its own collection, acknowledges, and
+ * returns to the outer entry's loop, which waits for that collection too.
+ * The loop re-checks `stopped` after it leaves, since an entry landing
+ * between the check and `in_stop` going to 0 is an outer one again, with a
+ * wait of its own.  The depth stays at two or three frames. */
 static void tur_gc_stop_handler(int sig) {
     (void)sig;
     int e = errno;
     tur_gc_thread *t = tur_gc_self;
     if (t) {
+#if defined(__APPLE__)
+        if (TUR_GC_LOAD(&t->in_stop)) {
+            t->gc_intr = 1;
+            TUR_GC_STORE(&t->stopped, 1);
+            __atomic_fetch_add(&tur_gc_G->acks, 1, __ATOMIC_SEQ_CST);
+            errno = e;
+            return;
+        }
+        TUR_GC_STORE(&t->in_stop, 1);
+#endif
         setjmp(t->sig_regs);
         volatile unsigned char here = 0;
         t->sig_sp = (unsigned char *)&here;
         t->gc_intr = 1;
         TUR_GC_STORE(&t->stopped, 1);
         __atomic_fetch_add(&tur_gc_G->acks, 1, __ATOMIC_SEQ_CST);
+#if defined(__APPLE__)
+        for (;;) {
+            while (TUR_GC_LOAD(&t->stopped)) sched_yield();
+            TUR_GC_STORE(&t->in_stop, 0);
+            if (!TUR_GC_LOAD(&t->stopped)) break;
+            TUR_GC_STORE(&t->in_stop, 1);
+        }
+#else
         sigset_t m;
         sigfillset(&m);
         sigdelset(&m, TUR_GC_SIG_RESUME);
         while (TUR_GC_LOAD(&t->stopped)) sigsuspend(&m);
+#endif
     }
     errno = e;
 }
@@ -942,7 +975,9 @@ static void tur_gc_start_world(void) {
     for (tur_gc_thread *t = G->threads; t; t = t->next) {
         if (t->stop_state != 1) continue;
         TUR_GC_STORE(&t->stopped, 0);
-        pthread_kill(t->tid, TUR_GC_SIG_RESUME);
+#if !defined(__APPLE__)
+        pthread_kill(t->tid, TUR_GC_SIG_RESUME);   /* macOS polls instead */
+#endif
         t->stop_state = 0;
     }
 }
@@ -1173,7 +1208,6 @@ static int tur_gc_pthread_create(pthread_t *tp, const pthread_attr_t *a,
     unsigned long gen = t->gen;
     t->next = G->threads; G->threads = t;
     pthread_mutex_unlock(&G->world);
-    TUR_GC_STORE(&tur_gc_threaded, 1);
     pthread_t tid;
     /* Parked across the create: macOS's pthread_create holds libpthread's
      * global thread-list lock while it links the new thread in, and

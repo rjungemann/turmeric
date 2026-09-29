@@ -1,0 +1,14 @@
+#lang r7rs
+;; The Scheme half: a loop whose every step enters CPS code three times, each
+;; a call/cc used as an escape (the one-shot escape, a CPS entry of its own).
+(define-library (entries)
+  (export spin)
+  (import (scheme base))
+  (begin
+    (define (step i)
+      (+ (call/cc (lambda (k) (k 1)))
+         (call/cc (lambda (k) (+ 1 (k 1))))
+         (call/cc (lambda (k) 1))))
+    (define (spin n)
+      (let lp ((i n) (acc 0))
+        (if (= i 0) acc (lp (- i 1) (+ acc (step i))))))))
