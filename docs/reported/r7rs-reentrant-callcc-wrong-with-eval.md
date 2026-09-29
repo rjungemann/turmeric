@@ -69,13 +69,53 @@ stops after `[in]body[out]` and loses its last eight lines.
   **That is a lead, not a finding**: nothing here has been read out of the
   emitted C.
 
+## Narrowed on Linux (2026-09-29)
+
+Linux x86-64, a Debug `tur` at `72245ef5` (main) and at the branch that made
+the dynamic environment per thread:
+
+- **It does not reproduce.** The repro prints `3` and `42` built with gcc 13
+  (`-O2`, one unit and the prelude split alike), with clang 18 (through a
+  `-DTUR_DEBUG_SANITIZE=OFF` build, since this box has no clang ASan runtime
+  to link a sanitized `libturi.a` against), and under `tur jit`.
+  `tests/fixtures/docs-r7rs-guide-examples` passes.
+- **The emitted `count-to` is the same with and without the `eval`.**
+  `tur emit-c` of both variants, temporaries renumbered: `count_hyto__cps`
+  and its continuation `count_hyto_j0` are identical. What the `eval` adds
+  is two top-level forms, the program unit's own keyword records for the
+  quoted `*`, `scheme` and `base` with a `__tur_symtab_seed()` call in
+  startup, two fat boxes -- and, at link time, the embedded interpreter
+  (`libturi.a`, which a Debug `tur` builds with ASan, so the program then
+  carries the ASan runtime too). So step 2 below is done, and the
+  "compile-time difference" is not in `count-to`'s code: it is in the link
+  or in startup.
+- **Not the prelude split's macOS seam.** At `bf31e725c` macOS built one
+  unit (`prelude_split_applies` declined off Linux), so the constructor-order
+  bug fixed in `a73ab97c`
+  ([r7rs-prelude-split-gc-seam-on-macos](../archive/r7rs-prelude-split-gc-seam-on-macos.md))
+  cannot be it.
+- **ASan in the process is not enough on its own.** On Linux the gcc variant
+  runs with the ASan runtime loaded (LeakSanitizer reports the embedded
+  interpreter's 3-byte leak at exit) and is right.
+
+What is left points at the Mac's toolchain pairing: macOS 27 with Apple
+clang 21 is the OS-ahead-of-toolchain case
+[macos-asan-runtime-deadlocks-at-startup](macos-asan-runtime-deadlocks-at-startup.md)
+describes, and the one variant that fails is the one that loads that ASan
+runtime (through `libturi.a`) into a program that copies and restores its own
+stack. The cheapest next measurement is on that Mac: the repro with a Release
+`tur` (no sanitizer in `libturi.a`), or with a `-DTUR_DEBUG_SANITIZE=OFF`
+Debug one. Right there and wrong under a sanitized `libturi.a` would make
+this a toolchain report, not a codegen one.
+
 ## Fix directions
 
 1. Reconcile with CI first (above). A host- or toolchain-specific failure and
    a semantic one want different work.
-2. `tur emit-c` both variants -- with and without the `eval` call -- and diff
-   what happens to `count-to`. The difference is a compile-time one by
-   construction, so it is in that diff.
+2. ~~`tur emit-c` both variants -- with and without the `eval` call -- and diff
+   what happens to `count-to`.~~ Done 2026-09-29: identical (above). The
+   difference is in the link (the embedded interpreter and, from a Debug
+   `tur`, its ASan runtime) or in startup, not in `count-to`.
 3. v0.56.2 changed exactly this area (`bb27a64d3` escape-only `call/cc`
    copies nothing and nested CPS entries drop their reap list, `27fb767cf`
    interpreter images as deltas, `906a6a44d` the reap-list drop kept to

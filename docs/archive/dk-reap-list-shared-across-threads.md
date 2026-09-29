@@ -27,7 +27,8 @@ Built with the compiler before the fix, each program fails every run:
 
 The same loop with `guard` instead of `call/cc` still fails. That is a
 different bug, the Scheme prelude's own handler and wind stacks:
-[r7rs-dynamic-environment-shared-across-threads](../reported/r7rs-dynamic-environment-shared-across-threads.md).
+[r7rs-dynamic-environment-shared-across-threads](r7rs-dynamic-environment-shared-across-threads.md)
+(since resolved).
 
 ## Fix
 

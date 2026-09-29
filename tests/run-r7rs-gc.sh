@@ -218,6 +218,12 @@ fi | tee -a "$WORK/results"
 #                  a worker; a child forked while another thread allocates
 #                  flat out can allocate; detached threads leave nothing in
 #                  the registry.
+#   threads-dynenv, threads-fiber-dynenv: tests/fixtures/r7rs-threads-
+#                  dynamic-env and -fiber-dynamic-env: the Scheme dynamic
+#                  environment (handlers, wind frames, parameter bindings) is
+#                  per thread and per fiber, kept in a thread-local the
+#                  collector scans and a fiber's block (a collection every
+#                  31st allocation, as for stage C).
 #   threads-lint   every blocking libc call the stdlib and the emitter
 #                  spell is one the collector's release-point macros route
 #                  (src/runtime/r7gc.c); a new one that is not would be a
@@ -298,6 +304,8 @@ fixture_case threads-pause r7rs-threads-pause "a thread allocating in a tight lo
 fixture_case threads-syscall r7rs-threads-syscall "a thread blocked in an unwrapped read is stopped and resumed across hundreds of collections, and the read completes" | tee -a "$WORK/results"
 fixture_case threads-stress r7rs-threads-stress "nine threads on the heap at once -- eight on one shared persistent map, one churning -- and every value intact" 31 | tee -a "$WORK/results"
 fixture_case threads-lifecycle r7rs-threads-lifecycle "key values are roots, a fork mid-allocation is safe, detached threads leave the registry" 31 | tee -a "$WORK/results"
+fixture_case threads-dynenv r7rs-threads-dynamic-env "five threads each see only their own handlers, wind frames and parameter bindings, and the collector sees all of them" 31 | tee -a "$WORK/results"
+fixture_case threads-fiber-dynenv r7rs-threads-fiber-dynamic-env "a fiber's handlers and parameter bindings move with it from thread to thread" 31 | tee -a "$WORK/results"
 
 # threads-lint: the blocking calls (a broad list; the stdio reads are left
 # out on purpose -- a read from a FILE holds the world, docs/guides/r7rs-guide.md).

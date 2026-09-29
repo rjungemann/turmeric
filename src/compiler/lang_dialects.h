@@ -6,7 +6,7 @@
  * `#lang <base>[/<reader>]` selects one mutually-exclusive base dialect: a
  * LANGUAGE (`turmeric` | `saffron` | `r7rs`) and, for a language whose trait
  * row is `reader_axis_free`, an optional slash and a reader (`curly-infix`,
- * `neoteric`, `sweet`).  `r7rs` brings its own reader and takes no slash.
+ * `neoteric`, `sweet`).  `r7rs` brings its own readers: bare, and `r7rs/sweet`.
  * That is the whole grammar -- a trailing token after the base name is a
  * hard error (TUR-E0330), and an unknown base is TUR-E0331.
  *
@@ -41,7 +41,8 @@
 typedef struct LangTraits {
     const char *name;             /* "turmeric" | "saffron" | "r7rs" */
     ReaderType  default_reader;   /* what the bare base token selects */
-    bool        reader_axis_free; /* may be spelled over the four Turmeric readers */
+    bool        reader_axis_free; /* may be spelled over the four Turmeric readers;
+                                   * false: LANG_BASES[] lists the ones it has */
     bool        dynamic;          /* an unannotated param/return means `any` */
     /* r7rs-lang-plan R2: Scheme's truthiness -- ONLY `#f` is false; `0`,
      * `""`, `'()` and every other value are true (R7RS 6.3).  Saffron's D4

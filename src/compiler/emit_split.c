@@ -494,8 +494,11 @@ void emit_split_exports_clear(void) {
 
 /* The names the variable declaration s[a..b) declares: one per declarator,
  * `(*name)` for a function pointer, else its last identifier outside any
- * brackets and attribute groups, before the initializer. */
-static void note_declared_names(const char *s, size_t a, size_t b) {
+ * brackets and attribute groups, before the initializer.  Each goes to
+ * `add` (exp_add when it is NULL). */
+typedef void (*NameAddFn)(const char *p, size_t n, void *ud);
+static void note_declared_names_to(const char *s, size_t a, size_t b,
+                                   NameAddFn add, void *ud) {
     size_t i = a;
     while (i < b) {
         /* one declarator: up to a depth-0 `,` or `;`; its head ends at `=` */
@@ -565,10 +568,17 @@ static void note_declared_names(const char *s, size_t a, size_t b) {
                 k++;
             }
         }
-        if (name_e > name_s) exp_add(s + name_s, name_e - name_s);
+        if (name_e > name_s) {
+            if (add) add(s + name_s, name_e - name_s, ud);
+            else exp_add(s + name_s, name_e - name_s);
+        }
         if (seg_end >= b || s[seg_end] == ';') break;
         i = seg_end + 1;
     }
+}
+
+static void note_declared_names(const char *s, size_t a, size_t b) {
+    note_declared_names_to(s, a, b, NULL, NULL);
 }
 
 /* ---- the rename ----------------------------------------------------------- */
@@ -672,4 +682,397 @@ void emit_split_state(const char *s, size_t n, EmitSplitMode mode, Buf *out) {
         }
         i = e;
     }
+}
+
+/* ---- the library unit in pieces (r7rs-prelude-library-cold-compile) ---- */
+
+/* A string -> int map over owned copies, open addressing. */
+typedef struct { char **k; int *v; uint32_t cap, n; } NameMap;
+
+static int *namemap_find(const NameMap *m, const char *p, size_t n) {
+    if (!m->cap) return NULL;
+    for (uint32_t i = exp_hash(p, n) & (m->cap - 1);; i = (i + 1) & (m->cap - 1)) {
+        const char *e = m->k[i];
+        if (!e) return NULL;
+        if (strlen(e) == n && memcmp(e, p, n) == 0) return &m->v[i];
+    }
+}
+
+static void namemap_put(NameMap *m, const char *p, size_t n, int v) {
+    int *have = namemap_find(m, p, n);
+    if (have) { *have = v; return; }
+    if ((m->n + 1) * 2 > m->cap) {
+        NameMap g = { NULL, NULL, m->cap ? m->cap * 2 : 256, 0 };
+        g.k = (char **)calloc(g.cap, sizeof(char *));
+        g.v = (int *)calloc(g.cap, sizeof(int));
+        if (!g.k || !g.v) { fprintf(stderr, "tur: oom\n"); abort(); }
+        for (uint32_t i = 0; i < m->cap; i++)
+            if (m->k[i]) { namemap_put(&g, m->k[i], strlen(m->k[i]), m->v[i]); free(m->k[i]); }
+        free(m->k); free(m->v);
+        *m = g;
+    }
+    char *c = (char *)malloc(n + 1);
+    if (!c) { fprintf(stderr, "tur: oom\n"); abort(); }
+    memcpy(c, p, n);
+    c[n] = '\0';
+    uint32_t i = exp_hash(p, n) & (m->cap - 1);
+    while (m->k[i]) i = (i + 1) & (m->cap - 1);
+    m->k[i] = c;
+    m->v[i] = v;
+    m->n++;
+}
+
+static void namemap_free(NameMap *m) {
+    for (uint32_t i = 0; i < m->cap; i++) free(m->k[i]);
+    free(m->k); free(m->v);
+    m->k = NULL; m->v = NULL; m->cap = m->n = 0;
+}
+
+static void namemap_add_fn(const char *p, size_t n, void *ud) {
+    namemap_put((NameMap *)ud, p, n, 1);
+}
+
+/* The name a function definition's or prototype's declarator names -- the
+ * identifier just before its parameter list -- or false for anything more
+ * involved (`(*f(int))(void)`, a macro-made name). */
+static bool function_name(const char *s, size_t a, size_t b, size_t *ns, size_t *ne) {
+    size_t p = declarator_paren(s, a, b, false);
+    if (p == (size_t)-1) return false;
+    size_t m = p + 1;
+    while (m < b && isspace((unsigned char)s[m])) m++;
+    if (m < b && s[m] == '*') return false;
+    size_t k = p;
+    while (k > a && isspace((unsigned char)s[k - 1])) k--;
+    size_t e = k;
+    while (k > a && is_ident_char(s[k - 1])) k--;
+    if (e == k || isdigit((unsigned char)s[k])) return false;
+    *ns = k; *ne = e;
+    return true;
+}
+
+/* Does a function head carry an attribute a `static` twin cannot: one that
+ * is about the symbol (weak, alias, section, used, ...) rather than the code? */
+static bool head_symbol_attr(const char *s, size_t a, size_t b) {
+    static const char *const no[] = {
+        "weak", "__weak__", "alias", "__alias__", "ifunc", "section", "__section__",
+        "used", "__used__", "externally_visible", "visibility", "constructor",
+        "destructor", "__constructor__", "__destructor__", NULL
+    };
+    for (size_t i = a; i < b;) {
+        size_t j = skip_lexeme(s, b, i);
+        if (j != i) { i = j; continue; }
+        if (is_ident_char(s[i]) && (i == a || !is_ident_char(s[i - 1]))) {
+            size_t k = i;
+            while (k < b && is_ident_char(s[k])) k++;
+            for (int w = 0; no[w]; w++)
+                if (tok_is(s, i, k - i, no[w])) return true;
+            i = k;
+            continue;
+        }
+        i++;
+    }
+    return false;
+}
+
+/* May a function body be copied into another unit as a `static`?  Not when
+ * it keeps state (a local `static`), names itself (`__func__`), or depends on
+ * its own frame (setjmp/longjmp, alloca, inline asm): those stay one
+ * definition. */
+static bool body_copyable(const char *s, size_t a, size_t b) {
+    static const char *const no[] = {
+        "static", "__func__", "__FUNCTION__", "__PRETTY_FUNCTION__",
+        "setjmp", "longjmp", "_setjmp", "_longjmp", "sigsetjmp", "siglongjmp",
+        "alloca", "__builtin_alloca", "asm", "__asm__", "__asm",
+        "__builtin_frame_address", "__builtin_return_address", NULL
+    };
+    size_t i = a;
+    while (i < b) {
+        size_t j = skip_lexeme(s, b, i);
+        if (j != i) { i = j; continue; }
+        if (is_ident_char(s[i]) && (i == a || !is_ident_char(s[i - 1]))) {
+            size_t k = i;
+            while (k < b && is_ident_char(s[k])) k++;
+            for (int w = 0; no[w]; w++)
+                if (tok_is(s, i, k - i, no[w])) return false;
+            /* the preamble's jump macros (TUR_SETJMP, R7K_LONGJMP, ...) */
+            for (size_t q = i; q < k; q++)
+                if ((q + 6 <= k && memcmp(s + q, "SETJMP", 6) == 0) ||
+                    (q + 7 <= k && memcmp(s + q, "LONGJMP", 7) == 0))
+                    return false;
+            i = k;
+            continue;
+        }
+        i++;
+    }
+    return true;
+}
+
+enum { PI_TEXT, PI_PROTO, PI_FN_EXT, PI_FN_CTOR, PI_VAR_STATIC, PI_VAR_EXT };
+
+typedef struct {
+    size_t a, e, body;    /* the item; a function's opening brace */
+    unsigned char what;
+    bool extern_kw;       /* PI_PROTO: spelled `extern` */
+    int owner;            /* PI_FN_EXT: the piece that defines it */
+    int dup;              /* index of its name in the copy table, or -1 */
+} PieceItem;
+
+typedef struct {
+    const char *name; size_t len;
+    int owner;
+} PieceDup;
+
+/* Write s[a..b) -- a function's head -- as a declaration, with any
+ * constructor or destructor attribute demoted to `unused`. */
+static void put_head_as_proto(Buf *out, const char *s, size_t a, size_t body) {
+    size_t k = body;
+    while (k > a && isspace((unsigned char)s[k - 1])) k--;
+    if (head_has_ctor(s, a, k)) put_without_ctor(out, s, a, k, k);
+    else buf_write(out, s + a, k - a);
+    buf_puts(out, ";");
+}
+
+/* The `static` twin's declaration and the macro that sends direct calls to
+ * it, from a prototype or a definition head s[a..hend) naming it at
+ * s[ns..ne).  A declaration with no storage class after a `static` one keeps
+ * internal linkage (C11 6.2.2p5), so the definition below the macro, whose
+ * name the macro rewrites, becomes the twin's. */
+static void put_dup_decl(Buf *out, const char *s, size_t a, size_t hend,
+                         size_t ns, size_t ne) {
+    buf_puts(out, "\nstatic ");
+    size_t k = hend;
+    while (k > a && isspace((unsigned char)s[k - 1])) k--;
+    while (a < ns && isspace((unsigned char)s[a])) a++;
+    size_t len = ne - ns;
+    buf_write(out, s + a, ns - a);
+    buf_puts(out, "tur_sd_");
+    buf_write(out, s + ns, k - ns);
+    buf_puts(out, ";\n#define ");
+    buf_write(out, s + ns, len);
+    buf_puts(out, "(...) tur_sd_");
+    buf_write(out, s + ns, len);
+    buf_puts(out, "(__VA_ARGS__)\n");
+}
+
+/* Copy s[0..n) to out, giving every identifier in `set` the piece prefix. */
+static void piece_rename(const char *s, size_t n, const NameMap *set, Buf *out) {
+    size_t i = 0;
+    while (i < n) {
+        size_t j = skip_lexeme(s, n, i);
+        if (j != i) { buf_write(out, s + i, j - i); i = j; continue; }
+        if (is_ident_char(s[i]) && !isdigit((unsigned char)s[i]) &&
+            (i == 0 || !is_ident_char(s[i - 1]))) {
+            size_t k = i;
+            while (k < n && is_ident_char(s[k])) k++;
+            if (namemap_find(set, s + i, k - i)) buf_puts(out, EMIT_SPLIT_PIECE_PREFIX);
+            buf_write(out, s + i, k - i);
+            i = k;
+            continue;
+        }
+        if (isdigit((unsigned char)s[i])) {
+            size_t k = i;
+            while (k < n && (is_ident_char(s[k]) || s[k] == '.')) k++;
+            buf_write(out, s + i, k - i);
+            i = k;
+            continue;
+        }
+        buf_putc(out, s[i]);
+        i++;
+    }
+}
+
+int emit_split_pieces(const char *s, size_t n, int npieces, size_t dup_max, Buf *pieces) {
+    if (!s || n == 0 || npieces < 2) return 1;
+    PieceItem *items = NULL;
+    size_t nitems = 0, cap = 0;
+    NameMap statics = {0};    /* static variables, to rename */
+    NameMap dup_ix = {0};     /* copyable function name -> index in dups */
+    NameMap fn_seen = {0};    /* external function name -> times defined */
+    PieceDup *dups = NULL;
+    size_t ndups = 0, dcap = 0;
+
+#define PUSH_ITEM(A, E, B, W) do { \
+        if (nitems == cap) { \
+            cap = cap ? cap * 2 : 4096; \
+            PieceItem *g_ = (PieceItem *)realloc(items, cap * sizeof *items); \
+            if (!g_) { fprintf(stderr, "tur: oom\n"); abort(); } \
+            items = g_; \
+        } \
+        items[nitems] = (PieceItem){ (A), (E), (B), (unsigned char)(W), false, 0, -1 }; \
+        nitems++; \
+    } while (0)
+
+    /* Pass 1: cut and classify, as emit_split_state does. */
+    size_t i = 0;
+    while (i < n) {
+        size_t t0 = i;
+        for (;;) {   /* between items: blanks, comments, preprocessor lines */
+            if (i >= n) break;
+            if (isspace((unsigned char)s[i])) { i++; continue; }
+            size_t j = skip_lexeme(s, n, i);
+            if (j != i) { i = j; continue; }
+            if (s[i] == '#' && at_line_start(s, i)) { i = skip_pp_line(s, n, i); continue; }
+            if (s[i] == ';') { i++; continue; }
+            break;
+        }
+        if (i > t0) PUSH_ITEM(t0, i, 0, PI_TEXT);
+        if (i >= n) break;
+
+        ChunkKind kind;
+        size_t body = 0;
+        size_t e = chunk_end(s, n, i, &kind, &body);
+        HeadKw h = { .first = true };
+        each_head_token(s, i, kind == CHUNK_FUNC ? body : e, head_kw_tok, &h);
+
+        if (kind == CHUNK_FUNC) {
+            if (h.is_static || h.is_inline) {
+                PUSH_ITEM(i, e, body, head_has_ctor(s, i, body) ? PI_FN_CTOR : PI_TEXT);
+            } else {
+                PUSH_ITEM(i, e, body, PI_FN_EXT);
+                size_t ns, ne;
+                if (function_name(s, i, body, &ns, &ne)) {
+                    int *seen = namemap_find(&fn_seen, s + ns, ne - ns);
+                    if (seen) (*seen)++;
+                    else namemap_put(&fn_seen, s + ns, ne - ns, 1);
+                }
+            }
+        } else if (kind == CHUNK_OPEN) {
+            PUSH_ITEM(i, e, 0, PI_TEXT);
+        } else {
+            bool pass = h.is_typedef || h.is_extern || decl_is_function(s, i, e);
+            if (!pass && h.is_aggregate_kw && !h.is_static) {
+                size_t k = e - 1;
+                while (k > i && isspace((unsigned char)s[k - 1])) k--;
+                if (k > i && s[k - 1] == '}') pass = true;
+                size_t toks = 0;
+                for (size_t m = i; m < e; m++)
+                    if (is_ident_char(s[m]) && (m == i || !is_ident_char(s[m - 1]))) toks++;
+                if (toks <= 2) pass = true;
+            }
+            if (!pass && h.is_static && decl_is_readonly(s, i, e, &h)) pass = true;
+            if (pass) {
+                bool proto = !h.is_typedef && decl_is_function(s, i, e);
+                PUSH_ITEM(i, e, 0, proto ? PI_PROTO : PI_TEXT);
+                items[nitems - 1].extern_kw = h.is_extern;
+            } else if (h.is_static) {
+                note_declared_names_to(s, i, e, namemap_add_fn, &statics);
+                PUSH_ITEM(i, e, 0, PI_VAR_STATIC);
+            } else {
+                PUSH_ITEM(i, e, 0, PI_VAR_EXT);
+            }
+        }
+        i = e;
+    }
+#undef PUSH_ITEM
+
+    /* Pass 2: the external functions, in source order, cut into `npieces`
+     * contiguous runs of about equal size.  The emitter writes a stdlib file's
+     * definitions together, and they mostly call each other, so a run keeps
+     * a section's callers beside their callees and -O2 inlines across them as
+     * it did in one unit (scattered by size, the guard/parameterize path
+     * lost 5%).  The small functions defined once get a copy table entry,
+     * for the calls that still cross a cut. */
+    size_t total = 0;
+    for (size_t k = 0; k < nitems; k++)
+        if (items[k].what == PI_FN_EXT) total += items[k].e - items[k].a;
+    size_t done = 0;
+    for (size_t k = 0; k < nitems; k++) {
+        PieceItem *it = &items[k];
+        if (it->what != PI_FN_EXT) continue;
+        size_t mid = done + (it->e - it->a) / 2;
+        int p = total ? (int)((mid * (size_t)npieces) / total) : 0;
+        if (p >= npieces) p = npieces - 1;
+        it->owner = p;
+        done += it->e - it->a;
+        size_t ns, ne;
+        if (dup_max > 0 && it->e - it->body <= dup_max && !head_symbol_attr(s, it->a, it->body) &&
+            function_name(s, it->a, it->body, &ns, &ne)) {
+            int *seen = namemap_find(&fn_seen, s + ns, ne - ns);
+            if (seen && *seen == 1 && body_copyable(s, it->body, it->e)) {
+                if (ndups == dcap) {
+                    dcap = dcap ? dcap * 2 : 512;
+                    PieceDup *g = (PieceDup *)realloc(dups, dcap * sizeof *dups);
+                    if (!g) { fprintf(stderr, "tur: oom\n"); abort(); }
+                    dups = g;
+                }
+                dups[ndups] = (PieceDup){ s + ns, ne - ns, p };
+                namemap_put(&dup_ix, s + ns, ne - ns, (int)ndups);
+                it->dup = (int)ndups++;
+            }
+        }
+    }
+    /* A prototype of a copied function marks where its twin is declared. */
+    for (size_t k = 0; k < nitems; k++) {
+        if (items[k].what != PI_PROTO || items[k].extern_kw) continue;
+        size_t ns, ne;
+        if (!function_name(s, items[k].a, items[k].e, &ns, &ne)) continue;
+        int *d = namemap_find(&dup_ix, s + ns, ne - ns);
+        if (d) items[k].dup = *d;
+    }
+
+    /* Pass 3: one text per piece, then the static variables' rename. */
+    bool *declared = (bool *)malloc((ndups ? ndups : 1) * sizeof *declared);
+    if (!declared) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (int p = 0; p < npieces; p++) {
+        memset(declared, 0, (ndups ? ndups : 1) * sizeof *declared);
+        Buf t; buf_init(&t);
+        for (size_t k = 0; k < nitems; k++) {
+            const PieceItem *it = &items[k];
+            switch (it->what) {
+            case PI_TEXT:
+                buf_write(&t, s + it->a, it->e - it->a);
+                break;
+            case PI_PROTO:
+                buf_write(&t, s + it->a, it->e - it->a);
+                if (it->dup >= 0 && dups[it->dup].owner != p && !declared[it->dup]) {
+                    size_t ns, ne;
+                    size_t semi = it->e;
+                    while (semi > it->a && s[semi - 1] != ';') semi--;
+                    if (semi > it->a && function_name(s, it->a, semi - 1, &ns, &ne)) {
+                        put_dup_decl(&t, s, it->a, semi - 1, ns, ne);
+                        declared[it->dup] = true;
+                    }
+                }
+                break;
+            case PI_FN_EXT:
+                if (it->owner == p) {
+                    buf_write(&t, s + it->a, it->e - it->a);
+                } else if (it->dup >= 0) {
+                    if (!declared[it->dup]) {
+                        size_t ns, ne;
+                        if (function_name(s, it->a, it->body, &ns, &ne)) {
+                            put_dup_decl(&t, s, it->a, it->body, ns, ne);
+                            declared[it->dup] = true;
+                        }
+                    }
+                    if (declared[it->dup]) buf_write(&t, s + it->a, it->e - it->a);
+                    else put_head_as_proto(&t, s, it->a, it->body);
+                } else {
+                    put_head_as_proto(&t, s, it->a, it->body);
+                }
+                break;
+            case PI_FN_CTOR:
+                if (p == 0) buf_write(&t, s + it->a, it->e - it->a);
+                else put_without_ctor(&t, s, it->a, it->body, it->e);
+                break;
+            case PI_VAR_STATIC:
+                if (p == 0) put_without_static(&t, s, it->a, it->e);
+                else put_as_extern(&t, s, it->a, it->e);
+                break;
+            case PI_VAR_EXT:
+                if (p == 0) buf_write(&t, s + it->a, it->e - it->a);
+                else put_as_extern(&t, s, it->a, it->e);
+                break;
+            }
+        }
+        piece_rename(t.data ? t.data : "", t.len, &statics, &pieces[p]);
+        buf_free(&t);
+    }
+    free(declared);
+    free(dups);
+    free(items);
+    namemap_free(&statics);
+    namemap_free(&dup_ix);
+    namemap_free(&fn_seen);
+    return 0;
 }

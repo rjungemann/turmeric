@@ -8479,9 +8479,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* TY2.2: return-position widening to `any`.  A function declared `: any`
      * whose body yields a narrower type must box the result, otherwise the
      * raw value leaks into a tur_tagged_t slot and breaks C codegen.  Mirror
-     * the call-argument widening via the shared coercion helper. */
+     * the call-argument widening via the shared coercion helper.  Not an
+     * inline-C body: its value type is fiat TY_NIL, trusted to match the
+     * declared return (see the conflict check below), so an `: any` one
+     * returns a tur_tagged_t itself; boxed as nil, it was pasted into an
+     * expression and did not compile. */
     if (return_kind == TY_ANY && body && body->type.kind != TY_ANY &&
-        body->type.kind != TY_NEVER) {
+        body->type.kind != TY_NEVER && body->kind != EX_INLINE_C) {
         body = elab_coerce_to_any_return(e, body);
     }
 

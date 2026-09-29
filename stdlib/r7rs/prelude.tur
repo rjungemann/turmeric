@@ -1816,22 +1816,58 @@
 ;;; wind stack that an escape unwinds; exceptions are a handler stack over
 ;;; the same escapes (D10 named effects, but a `handle` around a dynamic
 ;;; thunk is not lowered by the compiled back end, and the escape encoding
-;;; is exactly what R7RS 6.11 describes); `parameterize` is a struct cell
-;;; swapped under `dynamic-wind`; a promise is a shared box.
+;;; is exactly what R7RS 6.11 describes); `parameterize` binds a parameter's
+;;; cell under `dynamic-wind`; a promise is a shared box.
+
+;;; ---- the dynamic environment ----------------------------------------------
+;;;
+;;; The wind stack, the handler stack, parameterize's bindings and the value a
+;;; re-entered continuation delivers belong to the code that is running, not to
+;;; the program: they live in tur_r7rs_dyn (emit_dk_runtime.c), one per thread
+;;; and one per fiber (tur_fiber_block_resume swaps it).  As process globals,
+;;; a `raise` on one thread called a handler another thread had installed, and
+;;; a pop on one removed another's
+;;; (docs/archive/r7rs-dynamic-environment-shared-across-threads.md).  A slot
+;;; that was never written is all zero, which reads as the empty list.
+
+;;; r7rs-dyn-ref__ -- internal: slot `i` of the running code's dynamic
+;;; environment -- 0 the wind stack, 1 the handler stack, 2 the parameter
+;;; bindings, 3 a re-entry's delivered value.
+(defn r7rs-dyn-ref__ [i : int] : any
+  ```c
+  return tur_r7rs_dyn.w[i];
+  ```)
+;;; r7rs-dyn-set__ -- internal: set slot `i`.  The slot outlives any region
+;;; bracket, so the word is noted (the region store-hook rule).
+(defn r7rs-dyn-set__ [i : int v] : nil
+  ```c
+  TUR_REGION_NOTE_WORDS(&v, sizeof v);
+  tur_r7rs_dyn.w[i] = v;
+  ```)
+;;; r7rs-dyn-unset?__ -- internal: #t for a slot never written (all zero).
+(defn r7rs-dyn-unset?__ [v] : bool
+  ```c
+  return v.tag == 0 && v.val == 0;
+  ```)
+;;; r7rs-dyn-list__ -- internal: slot `i` as a Scheme list.
+(defn r7rs-dyn-list__ [i : int] : any
+  (let [v (r7rs-dyn-ref__ i)]
+    (if (r7rs-dyn-unset?__ v) r7rs-null-value__ v)))
 
 ;;; R7rsWind -- one `dynamic-wind` frame: its before and after thunks.
 (defstruct R7rsWind :heap [before : any after : any])
 ;;; r7rs-winders__ -- the wind stack, innermost first, as a Scheme list.
-(def ^mut r7rs-winders__ : any (R7rsNull 0))
+(defn r7rs-winders__ [] : any (r7rs-dyn-list__ 0))
+(defn r7rs-winders-set!__ [v] : nil (r7rs-dyn-set__ 0 v))
 (defn r7rs-wind-after__ [w : R7rsWind] : any (.after w))
 
 ;;; r7rs-dynamic-wind -- run before, thunk, after; the frame is on the wind
 ;;; stack while thunk runs, so an escape out of thunk runs `after`.
 (defn r7rs-dynamic-wind [before thunk after] : any
   (before)
-  (set! r7rs-winders__ (r7rs-cons (R7rsWind before after) r7rs-winders__))
+  (r7rs-winders-set!__ (r7rs-cons (R7rsWind before after) (r7rs-winders__)))
   (let [r (thunk)]
-    (set! r7rs-winders__ (r7rs-cdr r7rs-winders__))
+    (r7rs-winders-set!__ (r7rs-cdr (r7rs-winders__)))
     (after)
     r))
 
@@ -1841,14 +1877,15 @@
 ;;; reached the continuation is being re-entered, which the underlying
 ;;; escape reports itself.
 (defn r7rs-rewind-to__ [saved] : nil
-  (if (r7rs-same-ref__ r7rs-winders__ saved)
-    nil
-    (if (r7rs-null? r7rs-winders__)
+  (let [ws (r7rs-winders__)]
+    (if (r7rs-same-ref__ ws saved)
       nil
-      (let [w (r7rs-car r7rs-winders__)]
-        (set! r7rs-winders__ (r7rs-cdr r7rs-winders__))
-        ((r7rs-wind-after__ w))
-        (r7rs-rewind-to__ saved)))))
+      (if (r7rs-null? ws)
+        nil
+        (let [w (r7rs-car ws)]
+          (r7rs-winders-set!__ (r7rs-cdr ws))
+          ((r7rs-wind-after__ w))
+          (r7rs-rewind-to__ saved))))))
 
 ;;; r7rs-values-of-list__ -- internal: the value a `(values ...)` denotes:
 ;;; one value is itself, any other count is the R7rsValues carrier.
@@ -1865,7 +1902,7 @@
 ;;; eval bridge escape through this, which costs nothing per call; the
 ;;; public `call/cc` below is re-entrant and copies the stack.
 (defn r7rs-call/ec__ [f] : any
-  (let [saved r7rs-winders__]
+  (let [saved (r7rs-winders__)]
     (call/cc (fn [k]
                (f (fn [& vs : any] : any
                     (r7rs-rewind-to__ saved)
@@ -2181,8 +2218,9 @@
   ```)
 
 ;;; r7rs-cont-delivered__ -- the value an invoked continuation hands its
-;;; call/cc; set just before the jump, read just after it.
-(def ^mut r7rs-cont-delivered__ : any (R7rsNull 0))
+;;; call/cc; set just before the jump, read just after it, on one thread.
+(defn r7rs-cont-delivered__ [] : any (r7rs-dyn-ref__ 3))
+(defn r7rs-cont-deliver!__ [v] : nil (r7rs-dyn-set__ 3 v))
 
 ;;; r7rs-run-toplevel-thunk -- internal: call a top-level form's thunk.  Its
 ;;; own function so the runner below can call it by C name from inline C.
@@ -2223,15 +2261,16 @@
     nil
     (do (r7rs-rewind-into__ (r7rs-cdr target) common)
         ((r7rs-wind-before__ (r7rs-car target)))
-        (set! r7rs-winders__ target)
+        (r7rs-winders-set!__ target)
         nil)))
 ;;; r7rs-travel-to__ -- internal: R7RS 6.10 -- leave the current extent to
 ;;; the common ancestor (each `after`, innermost first), then enter the
 ;;; target's (each `before`, outermost first).
 (defn r7rs-travel-to__ [target] : nil
-  (let [la     (r7rs-wind-depth__ r7rs-winders__)
+  (let [ws     (r7rs-winders__)
+        la     (r7rs-wind-depth__ ws)
         lb     (r7rs-wind-depth__ target)
-        common (r7rs-wind-common__ (r7rs-wind-drop__ r7rs-winders__ (- la lb))
+        common (r7rs-wind-common__ (r7rs-wind-drop__ ws (- la lb))
                                    (r7rs-wind-drop__ target (- lb la)))]
     (r7rs-rewind-to__ common)
     (r7rs-rewind-into__ target common)))
@@ -2246,16 +2285,16 @@
 ;;; must not find.
 (def r7rs-call/ec-proc__ : any r7rs-call/ec__)
 (defn r7rs-call/cc [f] : any
-  (let [saved r7rs-winders__
+  (let [saved (r7rs-winders__)
         c     (r7rs-cont-capture__)]
     (if (r7rs-cont-null?__ c)
       (r7rs-call/ec-proc__ f)
       (if (r7rs-cont-resumed?__ c)
-        r7rs-cont-delivered__
+        (r7rs-cont-delivered__)
         (f (fn [& vs : any] : any
              (r7rs-cont-check-here__ c)
              (r7rs-travel-to__ saved)
-             (set! r7rs-cont-delivered__ (r7rs-values-of-list__ (r7rs-chain->list__ (:: vs (Cons any)))))
+             (r7rs-cont-deliver!__ (r7rs-values-of-list__ (r7rs-chain->list__ (:: vs (Cons any)))))
              (r7rs-cont-restore__ c)))))))
 
 ;;; read-error? / file-error? -- R7: an error object of that kind; (scheme
@@ -2264,41 +2303,42 @@
 (defn r7rs-file-error? [x] : bool (if (r7rs-error-object? x) (= (r7rs-error-kind__ x) 1) false))
 
 ;;; r7rs-handlers__ -- the exception handler stack, innermost first.
-(def ^mut r7rs-handlers__ : any (R7rsNull 0))
+(defn r7rs-handlers__ [] : any (r7rs-dyn-list__ 1))
+(defn r7rs-handlers-set!__ [v] : nil (r7rs-dyn-set__ 1 v))
 
 ;;; r7rs-with-exception-handler -- install handler for the extent of thunk.
 ;;; The install and the uninstall are wind frames, so an escape out of thunk
 ;;; leaves the stack as it found it.
 (defn r7rs-with-exception-handler [handler thunk] : any
-  (let [saved r7rs-handlers__]
+  (let [saved (r7rs-handlers__)]
     (r7rs-dynamic-wind
-     (fn [] : any (set! r7rs-handlers__ (r7rs-cons handler saved)))
+     (fn [] : any (r7rs-handlers-set!__ (r7rs-cons handler saved)))
      thunk
-     (fn [] : any (set! r7rs-handlers__ saved)))))
+     (fn [] : any (r7rs-handlers-set!__ saved)))))
 
 ;;; r7rs-raise-continuable -- call the innermost handler with obj, with the
 ;;; outer handlers installed while it runs (R7RS 6.11); its value is the
 ;;; value of the raise.
 (defn r7rs-raise-continuable [obj] : any
-  (if (r7rs-null? r7rs-handlers__)
-    (r7rs-uncaught__ obj)
-    (let [saved r7rs-handlers__
-          h (r7rs-car saved)]
-      (r7rs-dynamic-wind
-       (fn [] : any (set! r7rs-handlers__ (r7rs-cdr saved)))
-       (fn [] : any (h obj))
-       (fn [] : any (set! r7rs-handlers__ saved))))))
+  (let [saved (r7rs-handlers__)]
+    (if (r7rs-null? saved)
+      (r7rs-uncaught__ obj)
+      (let [h (r7rs-car saved)]
+        (r7rs-dynamic-wind
+         (fn [] : any (r7rs-handlers-set!__ (r7rs-cdr saved)))
+         (fn [] : any (h obj))
+         (fn [] : any (r7rs-handlers-set!__ saved)))))))
 
 ;;; r7rs-raise -- like raise-continuable, but a handler that returns is an
 ;;; error: a secondary exception is raised to the outer handlers.
 (defn r7rs-raise [obj] : any
-  (if (r7rs-null? r7rs-handlers__)
-    (r7rs-uncaught__ obj)
-    (let [saved r7rs-handlers__]
-      (r7rs-raise-continuable obj)
-      (set! r7rs-handlers__ (r7rs-cdr saved))
-      (r7rs-raise (R7rsError "exception handler returned from a non-continuable raise"
-                             (r7rs-cons obj (R7rsNull 0)) 0)))))
+  (let [saved (r7rs-handlers__)]
+    (if (r7rs-null? saved)
+      (r7rs-uncaught__ obj)
+      (do (r7rs-raise-continuable obj)
+          (r7rs-handlers-set!__ (r7rs-cdr saved))
+          (r7rs-raise (R7rsError "exception handler returned from a non-continuable raise"
+                                 (r7rs-cons obj (R7rsNull 0)) 0))))))
 
 ;;; r7rs-error -- R7RS `error`: raise a fresh error object.
 (defn r7rs-error [msg & irritants : any] : any
@@ -2361,14 +2401,40 @@
   (panic (r7rs-string-append2__ who ": not a number"))
   (:: 0 any))
 
-;;; R7rsParam -- a parameter object's cell: the current value and converter.
+;;; R7rsParam -- a parameter object's cell: its global value and converter.
+;;; `parameterize` does not write the cell: it binds it in the running code's
+;;; dynamic environment (slot 2), so no other thread or fiber sees the value.
 (defstruct R7rsParam :heap [value : any converter : any])
+;;; R7rsPBind -- one `parameterize` binding of a cell, in slot 2's list.
+(defstruct R7rsPBind :heap [cell : any value : any])
 ;;; R7rsParamMarker -- the private argument that asks a parameter for its cell.
 (defstruct R7rsParamMarker [tag : int])
 (def r7rs-param-marker__ (R7rsParamMarker 0))
 (defn r7rs-param-get__ [c : R7rsParam] : any (.value c))
 (defn r7rs-param-conv__ [c : R7rsParam] : any (.converter c))
 (defn r7rs-param-set__ [c : R7rsParam v] : nil (set! (.value c) v))
+(defn r7rs-pbind-cell__ [b : R7rsPBind] : any (.cell b))
+(defn r7rs-pbind-value__ [b : R7rsPBind] : any (.value b))
+(defn r7rs-pbind-set__ [b : R7rsPBind v] : nil (set! (.value b) v))
+;;; r7rs-param-binding__ -- internal: the innermost binding of `cell` in the
+;;; binding list `l`, or the empty list when the cell is not bound there.
+(defn r7rs-param-binding__ [cell l] : any
+  (if (r7rs-null? l)
+    l
+    (let [b (r7rs-car l)]
+      (if (r7rs-same-ref__ (r7rs-pbind-cell__ b) cell)
+        b
+        (r7rs-param-binding__ cell (r7rs-cdr l))))))
+;;; r7rs-param-value__ -- internal: a parameter's value for the running code:
+;;; its innermost binding, else the cell's global value.
+(defn r7rs-param-value__ [cell] : any
+  (let [b (r7rs-param-binding__ cell (r7rs-dyn-list__ 2))]
+    (if (r7rs-null? b) (r7rs-param-get__ cell) (r7rs-pbind-value__ b))))
+;;; r7rs-param-assign__ -- internal: `(p v)`: the innermost binding when
+;;; there is one, else the global value.
+(defn r7rs-param-assign__ [cell v] : nil
+  (let [b (r7rs-param-binding__ cell (r7rs-dyn-list__ 2))]
+    (if (r7rs-null? b) (r7rs-param-set__ cell v) (r7rs-pbind-set__ b v))))
 (defn r7rs-identity__ [x] : any x)
 
 ;;; r7rs-make-parameter -- a parameter is a procedure: `(p)` reads it, and
@@ -2381,31 +2447,35 @@
     (fn [& args : any] : any
       (let [a (r7rs-chain->list__ (:: args (Cons any)))]
         (if (r7rs-null? a)
-          (r7rs-param-get__ cell)
+          (r7rs-param-value__ cell)
           (if (is? (r7rs-car a) R7rsParamMarker)
             cell
-            (r7rs-param-set__ cell (r7rs-car a))))))))
+            (r7rs-param-assign__ cell (r7rs-car a))))))))
 
 (defn r7rs-param-cell__ [p] : any (p r7rs-param-marker__))
-(defn r7rs-params-set-all__ [cells vals] : nil
+;;; r7rs-params-bind__ -- internal: `l` with a binding of each cell to its
+;;; value in front, the first pair innermost.
+(defn r7rs-params-bind__ [cells vals l] : any
   (if (r7rs-null? cells)
-    nil
-    (do (r7rs-param-set__ (r7rs-car cells) (r7rs-car vals))
-        (r7rs-params-set-all__ (r7rs-cdr cells) (r7rs-cdr vals)))))
+    l
+    (r7rs-cons (R7rsPBind (r7rs-car cells) (r7rs-car vals))
+               (r7rs-params-bind__ (r7rs-cdr cells) (r7rs-cdr vals) l))))
 ;;; r7rs-parameterize__ -- `(parameterize ((p v) ...) body...)`: bindings is
 ;;; the list of `(p . v)`; each new value goes through the parameter's
-;;; converter, the swap in and the swap back are wind frames.
+;;; converter.  The new bindings go in front of the running code's own, and
+;;; entering and leaving are wind frames.
 (defn r7rs-parameterize__ [bindings thunk] : any
   (let [cells (r7rs-map (fn [b] : any (r7rs-param-cell__ (r7rs-car b))) bindings)
-        news (r7rs-map (fn [b] : any
-                         (let [c (r7rs-param-cell__ (r7rs-car b))]
-                           ((r7rs-param-conv__ c) (r7rs-cdr b))))
-                       bindings)
-        olds (r7rs-map (fn [c] : any (r7rs-param-get__ c)) cells)]
+        news  (r7rs-map (fn [b] : any
+                          (let [c (r7rs-param-cell__ (r7rs-car b))]
+                            ((r7rs-param-conv__ c) (r7rs-cdr b))))
+                        bindings)
+        saved (r7rs-dyn-list__ 2)
+        inner (r7rs-params-bind__ cells news saved)]
     (r7rs-dynamic-wind
-     (fn [] : any (r7rs-params-set-all__ cells news))
+     (fn [] : any (r7rs-dyn-set__ 2 inner))
      thunk
-     (fn [] : any (r7rs-params-set-all__ cells olds)))))
+     (fn [] : any (r7rs-dyn-set__ 2 saved)))))
 
 ;;; R7rsPBox / R7rsPromise -- a promise shares its box with the promise a
 ;;; `delay-force` chain yields, the R7RS 7.3 reference shape.

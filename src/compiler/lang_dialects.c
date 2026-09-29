@@ -13,10 +13,11 @@
  * It used to be rendered as the cross-product of {language} x {reader}, on
  * the argument that "the legal bases are exactly their cross-product, and a
  * table would have to be kept in step with both".  That stopped being true
- * the moment a language arrived with its own reader: `r7rs/sweet` is not a
- * thing, and `turmeric/r7rs` is not a thing either.  The table has one row
- * per legal pair, and a language's LangTraits row says whether it spans the
- * four Turmeric readers (`reader_axis_free`) or brings exactly one. */
+ * the moment a language arrived with its own readers: `r7rs/neoteric` is not
+ * a thing, and `turmeric/r7rs` is not a thing either.  The table has one row
+ * per legal pair.  A language's LangTraits row says whether it spans the four
+ * Turmeric readers (`reader_axis_free`); a language that brings its own lists
+ * them here -- Scheme has two, its s-expression reader and `r7rs/sweet`. */
 #include "lang_dialects.h"
 
 #include <stdio.h>
@@ -44,10 +45,11 @@ static const LangTraits LANG_TRAITS[] = {
     /* LANG_R7RS: Saffron's substrate under a Scheme reader (r7rs-lang-plan
      * thesis, Section 1).  `dynamic` is the whole inheritance: unannotated
      * means `any`, the dynamic operator/call/field/match surface and the
-     * `any` type-id machinery all come from that one bit.  The reader is its
-     * own and there is no reader axis (D1; `r7rs/sweet` is a deliberate
-     * deferral, Section 8 Q5).  Truthiness is Scheme's (R2): only `#f` is
-     * false.  The prelude is `stdlib/r7rs/prelude.tur` -- R2's core
+     * `any` type-id machinery all come from that one bit.  The readers are
+     * its own (D1): the Scheme reader, and `r7rs/sweet` (Section 8 Q5,
+     * r7rs-sweet-base-dialect-missing), SRFI-110 over Scheme's lexemes --
+     * sweet-expressions are a Scheme SRFI.  Truthiness is Scheme's (R2):
+     * only `#f` is false.  The prelude is `stdlib/r7rs/prelude.tur` -- R2's core
      * procedures, spelled `r7rs-<name>` and reached through
      * scheme_lower.c's rename table; R7 grows it into `(scheme base)` and
      * its siblings.  `experiment` is the EXPERIMENTS[] row that gates the
@@ -65,7 +67,7 @@ const LangTraits *lang_traits(LangDialect d) {
 
 /* The base set: one row per legal (language, reader) pair, in the order
  * `tur dialects` prints them.  A `reader_axis_free` language contributes one
- * row per Turmeric reader; a language with its own reader contributes one.
+ * row per Turmeric reader; a language with its own readers, one per reader.
  * `sweet-exp` is omitted on purpose -- it is a legacy alias accepted on input
  * and never generated (reader_type_name), so listing it would advertise a
  * spelling new code should not use. */
@@ -84,6 +86,7 @@ static const LangBase LANG_BASES[] = {
     { LANG_SAFFRON,  READER_NEOTERIC    },
     { LANG_SAFFRON,  READER_SWEET       },
     { LANG_R7RS,     READER_R7RS        },
+    { LANG_R7RS,     READER_R7RS_SWEET  },
 };
 
 #define N_LANG_BASES (sizeof(LANG_BASES) / sizeof(LANG_BASES[0]))
@@ -92,9 +95,11 @@ static const LangBase LANG_BASES[] = {
  * "turmeric/<suffix>" for the Turmeric readers, which reads as a
  * contradiction in a Saffron row; the language already has its own column.
  * A language-owned reader (READER_R7RS) has no slash and no Turmeric
- * spelling, so it gets a descriptive word instead. */
+ * spelling, so it gets a descriptive word instead; Scheme's sweet reader is
+ * `sweet`, as its base token spells it (and as the picker groups it). */
 static const char *lang_reader_suffix(ReaderType r) {
     if (r == READER_R7RS) return "scheme";
+    if (r == READER_R7RS_SWEET) return "sweet";
     const char *full = reader_type_name(r);
     const char *slash = strchr(full, '/');
     return slash ? slash + 1 : "s-expr";

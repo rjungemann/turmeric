@@ -2134,6 +2134,25 @@ int fmt_format_buffer(const char *path_label, const char *src, size_t len,
     int rc = 0;
     if (!forms || diag_had_error()) {
         rc = -1;
+    } else if (rtype == READER_R7RS_SWEET) {
+        /* r7rs-sweet-base-dialect-missing: the parse above is the syntax
+         * check, and the layout IS the syntax, so the text is kept as
+         * written -- re-indenting it as Scheme would change its meaning.
+         * Only the ends are normalized, as fmt_scheme_reindent does: no
+         * leading blank lines (the body starts with the newline that ended
+         * the `#lang` line, which the caller re-emits) and exactly one
+         * trailing newline, so the pass is idempotent. */
+        size_t a = 0, z = len;
+        for (size_t k = 0; k < len; k++) {
+            if (src[k] == '\n') a = k + 1;
+            else if (src[k] != ' ' && src[k] != '\t' && src[k] != '\r') break;
+        }
+        while (z > a && (src[z - 1] == '\n' || src[z - 1] == ' ' ||
+                         src[z - 1] == '\t' || src[z - 1] == '\r'))
+            z--;
+        buf_init(out);
+        buf_write(out, src + a, z - a);
+        buf_putc(out, '\n');
     } else if (rtype == READER_R7RS) {
         /* r7rs-lang-plan R9: the parse above is the syntax check; the
          * output is the ORIGINAL text re-indented (fmt_scheme_reindent). */
