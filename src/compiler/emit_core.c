@@ -6672,7 +6672,7 @@ uint32_t static_init_count(void) { return g_n_static_inits; }
  * definition: they are all `static`, so a forward reference would be an
  * implicit declaration.  The declaration `main` calls is emitted in the
  * runtime preamble instead. */
-void static_init_emit(Buf *out) {
+void static_init_emit(Buf *out, bool gc_collector_pasted) {
     /* r7rs-programs-compile-slowly: the library unit of a split build has no
      * `main` and no constructor.  Its initializers -- its fat boxes' fills,
      * its `any` rows, its stdlib globals -- run from __tur_split_lib_init,
@@ -6706,6 +6706,26 @@ void static_init_emit(Buf *out) {
         buf_puts(out, "    static int __tur_static_init_done = 0;\n"
                       "    if (__tur_static_init_done) return;\n"
                       "    __tur_static_init_done = 1;\n");
+        /* r7rs-prelude-split-gc-seam-on-macos: the runtime archive's allocator
+         * hook, installed here as well as from the collector's own
+         * `constructor(101)`.  That priority orders initializers only WITHIN
+         * one object file on Mach-O -- across object files ld64 runs them in
+         * link order -- and under the prelude split the collector's ARMED copy
+         * is in the library unit, which links after the program unit.  So this
+         * function ran first and its bands allocated archive memory with libc:
+         * __tur_symtab_seed grew the symbol table, __tur_module_def_init built
+         * a HAMT, and the collector could trace through neither block, so a
+         * Scheme value kept only in a Turmeric map was freed under it.
+         *
+         * This is the earliest point that is always ahead of the unit's own
+         * allocations, on every platform and in whichever unit has it, so it
+         * goes before the atexit band as well as before the prelude's init.
+         * Idempotent, and safe before the collector is initialized (see
+         * tur_gc_install_rt_allocator).  A target where the collector compiles
+         * out -- Windows, or `tur jit`, where TUR_GC_ON is 0 because the
+         * engine's globals are not in the data segment the root scan walks --
+         * gets the no-op stub, so this line costs nothing there. */
+        if (gc_collector_pasted) buf_puts(out, "    tur_gc_install_rt_allocator();\n");
         /* RM3 R5 item 3: register the region-pool shutdown HERE and nowhere
          * else -- see emit_region_shutdown_atexit for why this is the only
          * place the atexit ordering actually holds. */

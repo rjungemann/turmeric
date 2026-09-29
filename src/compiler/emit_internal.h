@@ -148,7 +148,11 @@ typedef enum StaticInitBand {
 void     static_init_reset(void);
 void     static_init_register(const char *fn, StaticInitBand band);
 uint32_t static_init_count(void);
-void     static_init_emit(Buf *out);
+/* `gc_collector_pasted`: this unit has src/runtime/r7gc.c in it, so
+ * __tur_static_init opens by installing the archive's allocator hook --
+ * the collector's own constructor priority is not enough under the prelude
+ * split on Mach-O.  See the definition. */
+void     static_init_emit(Buf *out, bool gc_collector_pasted);
 
 /* Phase B5: backtrack depth cap (set by main.c --backtrack-depth N) */
 extern int64_t g_backtrack_depth;

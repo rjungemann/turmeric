@@ -1,5 +1,19 @@
 # The macOS JIT leg's 45-minute hang recurred, and both diagnostics were lost
 
+**RESOLVED 2026-09-28** -- the instrumentation defect, which is what this report
+was filed for. All three fix directions landed: the ctest invocation is bounded
+inside the job budget so a hang FAILS the step instead of getting the job
+killed (which is what skipped the `if: always()` upload), the leg's three ctest
+targets carry `TIMEOUT` properties so a per-test kill names the culprit, and
+`tests/run-flags.sh` has a per-invocation timeout for the first time. See "The
+fix" below.
+
+**The stall itself is still unexplained**, and cannot be investigated from this
+occurrence -- its evidence is gone, which was the report's whole point. It is
+tracked as its own open finding:
+[docs/reported/macos-jit-leg-stall-unexplained.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/macos-jit-leg-stall-unexplained.md).
+The next occurrence will produce a log.
+
 **Severity: medium.** The hang itself gates -- `JIT engine (macos-latest)` is
 the one JIT leg that is not `continue-on-error`, so it fails the run. What
 makes this worth its own report rather than a line on the archived one is the
@@ -88,25 +102,52 @@ Three structural gaps, all verified against the tree at `30ca2df47`:
    which is the archived report's own point 3 about where a 45-minute stall is
    likeliest to live.
 
-## Fix directions
+## The fix (landed 2026-09-28)
 
-The first one is the one that matters: without it the next occurrence tells us
-nothing again.
+Three bounds, outermost first. Each one alone would have salvaged this
+occurrence; together they narrow it from "the leg hung" to "this test hung, and
+here is its log".
 
-- **Bound ctest inside the job budget** so the step fails normally and the
-  `if: always()` uploads get to run. The repo already has the idiom for this --
-  `ci.yml:413` uses `perl -e 'alarm 30; exec @ARGV'` for the engine-present
-  probe, for exactly the reason that stock macOS has no `timeout(1)`. Wrapping
-  the ctest call in `perl -e 'alarm 2100; exec @ARGV'` leaves ~10 minutes of
-  the 45 for the artifact upload.
-- **Give the three targets explicit ctest `TIMEOUT` properties**, in the style
-  the rest of CMakeLists.txt already uses. A per-test kill also makes ctest
-  name the test that died, which is most of the diagnosis.
-- **Add the `_run_timed` probe to `tests/run-flags.sh`**, so its fixtures fail
-  at a per-case timeout like every other harness's.
-- Then, with a log in hand, find the actual stall. Until one of the above
-  lands, do not spend time guessing which of the three targets it was -- the
-  evidence for this occurrence no longer exists.
+- **`ci.yml`, `Run JIT suites`: `perl -e 'alarm 2100; exec @ARGV'` heads the
+  ctest pipeline.** 35 minutes against a 13-19 min baseline for the step, ~10
+  minutes inside the job's `timeout-minutes: 45`. `perl -e alarm` rather than
+  `timeout`, because stock macOS ships no coreutils `timeout` -- the same idiom
+  as the engine-present probe at the top of the job. It heads the pipeline so
+  `PIPESTATUS[0]` carries its 142 (128+SIGALRM) and the step FAILS; a failing
+  step runs the remaining `if: always()` steps, which is the property a
+  `timeout-minutes` kill does not have and the reason the artifact was lost.
+  The step also prints a `::error::` line saying what happened, so a reader of
+  the summary is not left inferring it from an exit code. The upload step's
+  comment no longer claims `always()` covers a timeout kill -- it does not, and
+  that wrong claim is what made the gap invisible for two months.
+- **`CMakeLists.txt`: `TIMEOUT` on all three targets.**
+  `tur_jit_fixture_tests` 1500 (~1.6x its ~940s p90 on the 3-core runner CI
+  draws ~97% of the time), `tur_repl_spice_jit` 600, `tur_flags_tests` 900.
+  These are hang bounds, not performance assertions; the values are documented
+  as such next to them. The per-test kill is what names the test, which is most
+  of the diagnosis. Their sum exceeds the 2100s alarm deliberately: the alarm is
+  the backstop for several targets running long at once, while these catch the
+  single hang -- which is what has actually happened, four times.
+- **`tests/run-flags.sh`: a per-invocation timeout, the harness's first.** Every
+  case invokes the compiler as `"$TUR" ...` and nothing else uses `$TUR`, so
+  `$TUR` becomes a generated wrapper that runs the real binary under
+  `timeout -k 5 ${TUR_CASE_TIMEOUT:-180}`. One indirection over ~100 call sites
+  -- and over the cases added later, which is exactly what a hand-edited call
+  site gets wrong. `-k` because `tur` spawns a C compiler and a SIGTERM to the
+  parent alone can leave that child running. The real binary stays argv[0]
+  (`resolve_stdlib_root`'s last-resort path hint), and with neither `timeout`
+  nor `gtimeout` present the wrapper is skipped -- the same tradeoff `run.sh`
+  makes. Its `trap ... EXIT` is now one trap for the whole file: the jit-ffi
+  block's own trap would have replaced it, bash keeping only the last.
+
+## What is NOT fixed
+
+The stall. This occurrence's evidence no longer exists, so there is nothing to
+diagnose from -- see
+[docs/reported/macos-jit-leg-stall-unexplained.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/macos-jit-leg-stall-unexplained.md).
+The three structural gaps above are now closed as *gaps*; whether one of them
+was also the *cause* (a `run-flags.sh` jit-ffi case deadlocking, say) is exactly
+what the next occurrence will say and this one cannot.
 
 ## Note on the archive
 

@@ -36,11 +36,11 @@ case "$(uname -m)" in
     x86_64|amd64|aarch64|arm64) ;;
     *) echo "SKIP check-r7rs-prelude-split: 64-bit targets only"; exit 0 ;;
 esac
-# The split is on by default on Linux only (prelude_split_applies, src/main.c);
-# macOS and Windows keep one unit until their reports close
-# (docs/reported/r7rs-prelude-split-*).  The Mach-O handling below is for then.
+# The split is on by default on Linux and Darwin (prelude_split_applies,
+# src/main.c); Windows keeps one unit until its report closes
+# (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md).
 case "$(uname -s)" in
-    Linux) ;;
+    Linux|Darwin) ;;
     *) echo "SKIP check-r7rs-prelude-split: the split is off by default on $(uname -s)"; exit 0 ;;
 esac
 TMP="$(mktemp -d)"
@@ -52,14 +52,41 @@ fail() { echo "FAIL check-r7rs-prelude-split: $*"; FAILED=1; }
 # (Mach-O spells a C name with a leading `_`).
 ALLOW='^_?(__tur_any_chunk|__tur_any_rows)$'
 
-# Mach-O objects list assembler-local labels (`ltmp1`, `l_.str`) among their
-# data symbols, in every object alike; a C name there always starts with `_`.
-C_NAME='.'
-[ "$(uname -s)" = Darwin ] && C_NAME='^_'
+# WRITABLE data only -- read-only data may be duplicated freely, and the two
+# platforms need different questions asked to tell the two apart.
+#
+# ELF: `nm`'s one-letter class already separates them, R/r being rodata.
+#
+# Mach-O: it does NOT.  Plain `nm` spells every non-text local `s` and every
+# non-text external `S`, whatever section it sits in, so a `static const` table
+# is indistinguishable from mutable state.  The collector pasted into both units
+# has one (`tur_gc_class_size`), which made this check fail on Darwin the first
+# time it ran there with nothing actually wrong.  `nm -m` names the section
+# instead, so ask for the writable ones by name: __data / __bss / __common, plus
+# the two a `__thread` variable produces (__thread_vars holds its descriptor,
+# __thread_bss its initial image).  __TEXT,__const, __TEXT,__cstring and
+# __DATA,__const are not state: the last one sits outside __TEXT only because it
+# needs relocating on load, and is read-only thereafter.
+#
+# The ELF arm has the same blind spot one section over: `.data.rel.ro` is
+# read-only after load but `nm` classes it `d`, so a `static const` table of
+# function pointers reads as writable state there.  Nothing in the collector has
+# one today -- r7gc.c's allocator table is a local for exactly this reason --
+# and if that changes, this arm needs `nm --format=sysv` and a section filter
+# too, not another name on ALLOW.
 defined_data() {
-    nm "$1" 2>/dev/null |
-        awk -v c="$C_NAME" '$2 ~ /^[BbDdGgSs]$/ && $3 ~ c { n = $3; sub(/\.[0-9]+$/, "", n); print n }' |
-        sort -u
+    if [ "$(uname -s)" = Darwin ]; then
+        # The `^_` keeps assembler-local labels (`ltmp1`, `l_.str`) out: a C
+        # name in a Mach-O object always carries the leading underscore.
+        nm -m "$1" 2>/dev/null |
+            awk '/\(__DATA,__(data|bss|common|thread_vars|thread_bss)\)/ {
+                     n = $NF; sub(/\.[0-9]+$/, "", n); if (n ~ /^_/) print n }' |
+            sort -u
+    else
+        nm "$1" 2>/dev/null |
+            awk '$2 ~ /^[BbDdGgSs]$/ && $3 ~ /./ { n = $3; sub(/\.[0-9]+$/, "", n); print n }' |
+            sort -u
+    fi
 }
 
 FIXTURES="r7rs-named-let-sum r7rs-strings r7rs-ports r7rs-procedure-identity r7rs-colon-identifiers r7rs-gc-seam r7rs-type-errors-raise"

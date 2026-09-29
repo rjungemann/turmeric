@@ -642,6 +642,36 @@ to 15-20 minutes, suspect CPU contention (overlapping suite runs), not a
 hang: per-fixture *run* timeouts already cap at 10s, so a genuine runtime
 loop surfaces as `FAIL`, not an indefinite stall.
 
+### Where the per-case bounds are, harness by harness
+
+`timeout` is preferred, `gtimeout` is the fallback, and with neither present
+every harness below runs untimed -- stock macOS ships neither name, so CI
+installs `coreutils`. Nothing here bounds an **untimed phase around** a
+fixture (harness setup, a compile or link the harness does not wrap); that is
+where a stall long enough to reach a CI job's wall clock is likeliest to
+live.
+
+| Harness | Per-case bound |
+| --- | --- |
+| `run.sh` | 10s per fixture *run*, `expected.timeout` overrides |
+| `run-turi.sh` | 15s per fixture, interpreted |
+| `run-jit.sh` | `_run_timed` around each `tur ... jit`, incl. the `errors/` pass |
+| `run-flags.sh` | `TUR_CASE_TIMEOUT` (180s) per `$TUR` invocation, via a generated wrapper |
+
+`run-flags.sh` is the odd one: its cases are inline shell, not fixture
+directories, so instead of a `_run_timed` at each of ~100 call sites it points
+`$TUR` at a small wrapper that runs the real binary under `timeout -k 5`. That
+bounds cases added later too. It had **no** bound at all until 2026-09-28,
+which is how a stall in its `jit-ffi-*` cases -- dynamic FFI, callbacks,
+threads -- could reach the CI job's `timeout-minutes`
+([docs/archive/macos-jit-hang-loses-both-diagnostics.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/macos-jit-hang-loses-both-diagnostics.md)).
+
+The CI legs add two outer bounds of their own, because a `timeout-minutes`
+kill **cancels the job** and leaves every remaining `if: always()` step
+`pending` -- so it destroys the log artifact it was supposed to preserve. The
+JIT leg alarms the whole `ctest` call at 2100s, and its three targets carry
+ctest `TIMEOUT` properties so a single hang is killed and *named* first.
+
 ---
 
 ## See also

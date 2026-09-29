@@ -564,18 +564,44 @@ jobs:
           # (docs/archive/suite-timing-trends-plan.md).  These rows carry
           # jit=true from the build cache, so they form their own series and
           # are never averaged against the `test` job's jit=false rows.
+          #
+          # macos-jit-hang-loses-both-diagnostics: BOUNDED INSIDE THE JOB
+          # BUDGET, which is the whole reason the instrumentation above finally
+          # produces something.  On 2026-09-28 this step hung and was killed by
+          # `timeout-minutes: 45` -- and a timeout-minutes kill does NOT run the
+          # job's remaining `if: always()` steps, so "Upload JIT ctest log"
+          # never ran, the runner took the log with it, and the occurrence was
+          # as blind as the ones the tee/grep were added for.  The `if:
+          # always()` claim had only ever been exercised on a run that
+          # SUCCEEDED.
+          #
+          # 35 minutes, against a 13-19 min baseline for this step on recent
+          # `main` runs: comfortably above any observed run, and ~10 minutes
+          # inside the 45 so the uploads below get to run on a step that FAILS
+          # rather than a job that is killed.  `perl -e alarm` rather than
+          # `timeout`, because stock macOS ships no coreutils `timeout` -- the
+          # same idiom as the engine-present probe above.  It heads the
+          # pipeline, so PIPESTATUS[0] carries its 142 (128+SIGALRM) and the
+          # step fails; `tee` has already written everything it got.
           set +e
-          ctest --test-dir build -V --no-tests=error --output-junit results-jit.xml \
+          perl -e 'alarm 2100; exec @ARGV' \
+            ctest --test-dir build -V --no-tests=error --output-junit results-jit.xml \
                 --test-output-size-passed 262144 --test-output-truncation head \
                 -R '^(tur_jit_fixture_tests|tur_repl_spice_jit|tur_flags_tests)$' 2>&1 \
             | tee jit-ctest.log \
             | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
           rc=${PIPESTATUS[0]}
+          if [ "$rc" -eq 142 ]; then
+            echo "::error::Run JIT suites exceeded its 35-minute budget and was killed. The partial ctest log is uploaded as an artifact by the next step; the per-test TIMEOUT properties in CMakeLists.txt should normally name the test first."
+          fi
           exit $rc
 
-      # `always()` covers the cancellation a `timeout-minutes` kill produces, so
-      # the partial log from a HANG is uploaded too -- which is the case the
-      # console filter cannot serve and the whole reason this exists.
+      # `always()` covers a FAILING step, which is what the alarm above turns a
+      # hang into.  It does NOT cover a `timeout-minutes` kill: that cancels the
+      # job and leaves every remaining step `pending`, which is exactly how the
+      # 2026-09-28 hang lost its log
+      # (docs/archive/macos-jit-hang-loses-both-diagnostics.md).  So this step
+      # depends on the step above bounding itself, not on `always()` alone.
       - name: Upload JIT ctest log
         if: always()
         uses: actions/upload-artifact@v4

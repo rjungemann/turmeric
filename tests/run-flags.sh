@@ -27,6 +27,51 @@ export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 # -DTUR_JIT=ON build (`TUR=./build-jit/tur bash tests/run-flags.sh`),
 # matching run-jit.sh's convention.  Default unchanged.
 TUR="${TUR:-./build/tur}"
+
+# macos-jit-hang-loses-both-diagnostics: a per-invocation timeout.
+#
+# This harness carried NONE, while run.sh and run-jit.sh both carry the probe
+# below -- and it is in CI's JIT leg precisely because it owns the `jit-ffi-*`
+# cases, which drive dynamic FFI, callbacks and threads: the shapes that hang.
+# So a hang here had nothing to stop it before the job's `timeout-minutes`
+# wall, and that kill skips the remaining steps, taking the ctest log artifact
+# with it -- the run is then as blind as if no instrumentation existed.
+#
+# Prefer timeout, fall back to gtimeout (stock macOS ships neither name by
+# default; CI installs coreutils), and run untimed if neither exists -- a hung
+# case then hangs the run, which is the pre-existing tradeoff run.sh makes.
+# -k adds a SIGKILL after the grace period, because `tur` spawns a C compiler
+# and a SIGTERM to the parent alone can leave that child running.
+_tur_timeout_bin=""
+if command -v timeout >/dev/null 2>&1; then _tur_timeout_bin="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then _tur_timeout_bin="gtimeout"; fi
+
+# Per-invocation budget.  Generous: the slowest case here compiles and links a
+# fixture, and this is a hang bound, not a performance assertion.
+TUR_CASE_TIMEOUT="${TUR_CASE_TIMEOUT:-180}"
+
+# Every case invokes the compiler as `"$TUR" ...`, so ONE indirection bounds
+# all ~100 of them -- and bounds the cases added later too, which is the part a
+# hand-edited call site is exactly what a new case forgets.  The wrapper runs
+# the real binary as argv[0] (resolve_stdlib_root's last-resort path hint), so
+# nothing downstream can tell the difference.
+_tur_wrap_dir=""
+if [ -n "$_tur_timeout_bin" ] && [ -x "$TUR" ]; then
+    TUR_REAL="$(cd "$(dirname "$TUR")" && pwd)/$(basename "$TUR")"
+    _tur_wrap_dir="$(mktemp -d -t tur-flags-wrap-XXXXXX)"
+    cat > "$_tur_wrap_dir/tur" <<WRAP
+#!/bin/sh
+exec $_tur_timeout_bin -k 5 $TUR_CASE_TIMEOUT "$TUR_REAL" "\$@"
+WRAP
+    chmod +x "$_tur_wrap_dir/tur"
+    TUR="$_tur_wrap_dir/tur"
+fi
+# One EXIT trap for the whole script: bash keeps only the LAST `trap ... EXIT`,
+# so the jit-ffi block below adds its directory to this list rather than
+# installing a second trap that would silently drop this one.
+TMP_FFI_DIR=""
+trap 'rm -rf "$_tur_wrap_dir" "$TMP_FFI_DIR"' EXIT
+
 PASS=0
 FAIL=0
 
@@ -1063,7 +1108,8 @@ fi
 # the path as given.
 TMP_FFI_DIR=$(mktemp -d -t tur-jit-ffi-XXXXXX)
 TMP_FFI="$TMP_FFI_DIR/case.tur"
-trap 'rm -rf "$TMP_FFI_DIR"' EXIT
+# Removed by the single EXIT trap at the top of this file -- a `trap ... EXIT`
+# here would replace that one and leak the $TUR timeout wrapper.
 # NOTE: captured via command substitution, not a pipeline -- this script
 # runs `set -o pipefail`, and `tur jit`'s non-zero exit (or the SIGPIPE from
 # grep -q's early close) would mask a successful match.
