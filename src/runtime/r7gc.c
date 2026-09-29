@@ -266,8 +266,10 @@ static __thread tur_gc_thread *tur_gc_self;
  * first worker's record and popped its cache while that worker popped it
  * too: one slot handed out twice (the migration fixture under torture, on
  * macOS).  So the allocator and free read the record through TUR_TLS_FRESH's
- * accessor, TUR_GC_SELF_FRESH().  Only those two: the park and unpark around
- * a blocking call, the stop handler and the collector keep the plain read.
+ * accessor, TUR_GC_SELF_FRESH(); so does tur_gc_stop_world, reached from an
+ * allocation, which with a stale record skipped the wrong thread and left
+ * the one it was on running through the collection.  The park and unpark
+ * around a blocking call and the stop handler keep the plain read.
  * Changing how those read it -- through the accessor, or with the collector's
  * entry points made noinline -- lost the roots of a parked thread on macOS
  * (r7rs-threads-roots), whose registers tur_gc_park takes from inside its own
@@ -976,7 +978,7 @@ static void tur_gc_resume_handler(int sig) { (void)sig; }
  * signaled and waited for. */
 static void tur_gc_stop_world(void) {
     tur_gc_state *G = tur_gc_G;
-    tur_gc_thread *self = tur_gc_self;
+    tur_gc_thread *self = TUR_GC_SELF_FRESH();
     long want = 0;
     TUR_GC_STORE(&G->acks, 0);
     for (tur_gc_thread *t = G->threads; t; t = t->next) {
