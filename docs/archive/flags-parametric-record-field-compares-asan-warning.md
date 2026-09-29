@@ -1,5 +1,11 @@
 # `jit-ffi-interp-parametric-record-field` fails on a correct answer: ASan's makecontext warning is in the compared text
 
+**RESOLVED 2026-09-29, the same day it was filed.** The check now captures
+stderr to its own file, compares stdout alone against `42\n1`, and looks for
+the refusal diagnostic on both streams; `bash tests/run-flags.sh` against a
+sanitized Debug JIT build reads `flags summary: 130 passed, 0 failed`. Kept
+as the paper trail for a red that sat on the ubuntu JIT leg unseen.
+
 **Severity: low (harness defect; no product impact).** The interpreter gives
 the right answer. The check in `tests/run-flags.sh` captures stdout and
 stderr together (`2>&1`) and compares the whole capture against `42\n1`, and
@@ -65,7 +71,7 @@ Two halves, only the first of which is a defect.
 
 Keep stderr in its own file: compare stdout alone against `42\n1`, and look
 for the refusal diagnostic on both streams so the "still refused" branch
-keeps its meaning. Landed with this report (see the archive header).
+keeps its meaning. Landed with this report.
 
 Two related things this does not change, kept for whoever next reads the
 leg's log: the ubuntu JIT leg's `continue-on-error` is a gating-policy choice

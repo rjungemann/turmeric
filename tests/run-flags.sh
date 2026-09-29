@@ -1200,15 +1200,24 @@ PROBEC
                          (make-struct FOuter (make-struct Box 1.5) (:: 7 :int32))))))
   0)
 TURFFI
-        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>&1)
+        # stdout and stderr are kept apart: the sanitized build prints ASan's
+        # makecontext/swapcontext warning on stderr for this program, and a
+        # `2>&1` capture folded it into the text compared against '42\n1', so
+        # the check failed on a correct answer (it did, on the ubuntu JIT
+        # leg, where continue-on-error hid it). The refusal diagnostic is
+        # still looked for on both streams; only stdout is compared.
+        _pf_err=$(mktemp)
+        out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" --interpret "$TMP_FFI" 2>"$_pf_err")
         want=$(printf '42\n1')
-        if grep -q "no by-value C member type\|parametric monomorph" <<< "$out"; then
-            fail "jit-ffi-interp-parametric-record-field" "still refused: $out"
+        if grep -q "no by-value C member type\|parametric monomorph" "$_pf_err" ||
+           grep -q "no by-value C member type\|parametric monomorph" <<< "$out"; then
+            fail "jit-ffi-interp-parametric-record-field" "still refused: $out $(cat "$_pf_err")"
         elif [ "$out" != "$want" ]; then
-            fail "jit-ffi-interp-parametric-record-field" "expected '42' then '1' (the compiled path's answer), got: $out"
+            fail "jit-ffi-interp-parametric-record-field" "expected '42' then '1' (the compiled path's answer), got: $out (stderr: $(cat "$_pf_err"))"
         else
             pass "jit-ffi-interp-parametric-record-field"
         fi
+        rm -f "$_pf_err"
     else
         echo "SKIP jit-ffi-interp-parametric-record-field (cc could not build the probe)"
     fi
