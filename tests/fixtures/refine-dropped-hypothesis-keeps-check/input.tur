@@ -1,0 +1,20 @@
+;; RT2/RT3: a hypothesis the encoder cannot express is DROPPED, and a dropped
+;; hypothesis must disable the counterexample search.
+;;
+;; The `:pre` here is written with a `let`, which is outside the predicate
+;; fragment, so the encoder leaves it out.  For a PROOF that is sound (fewer
+;; hypotheses only make the goal harder).  For a REFUTATION it is not: the
+;; search used to evaluate `hyps AND (not goal)` with the precondition gone,
+;; find x = -2, and report TUR-E0371 with that witness -- a hard error on a
+;; function that is correct for every input its precondition admits.
+;;
+;; Now the VC remembers the drop, the search declines, and the obligation
+;; falls back to the runtime check like any other unknown: this compiles
+;; (with the ordinary TUR-W0372) and prints 7.
+(defn f [x : int] : #refine{ r : int | (> r 0) }
+  :pre (let [y x] (> y 0))
+  x)
+
+(defn main [] : int
+  (println (f 7))
+  0)

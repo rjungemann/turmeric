@@ -640,7 +640,12 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
  *                            with no axioms -- opaque is sound.
  *   any other target      -> not encoded; the obligation keeps its runtime
  *                            check (narrowing conversions change values in
- *                            ways this fragment does not model). */
+ *                            ways this fragment does not model; see the table in the body). */
+static bool name_in(const char *n, const char *const *tbl, size_t k) {
+    for (size_t i = 0; i < k; i++) if (strcmp(n, tbl[i]) == 0) return true;
+    return false;
+}
+
 static VCTerm *enc_cast(Enc *E, const Form *f) {
     if (f->as.list.len != 3) { E->fail = "as takes a type and one operand"; return NULL; }
     const Form *ty = f->as.list.items[1];
@@ -648,14 +653,34 @@ static VCTerm *enc_cast(Enc *E, const Form *f) {
         E->fail = "cast target is not a type name"; return NULL;
     }
     const char *tn = ty->as.sym->name;
-    bool to_real = strcmp(tn, "float") == 0;
-    bool to_int  = strcmp(tn, "int") == 0;
-    if (!to_real && !to_int) { E->fail = "unsupported cast target in predicate"; return NULL; }
+    /* The numeric targets `as` accepts (elab_as_cast: typekind_is_numeric),
+     * by what the conversion does to the VALUE:
+     *   exact_real  -- `float` / `f64`: the operand's number, unchanged
+     *                  (the double rounding of a wide int is the same
+     *                  approximation every real-sorted fact here makes);
+     *   wide_int    -- `int` / `i64` / `isize`: identity on an int operand,
+     *                  C truncation on a real one;
+     *   anything else numeric -- `f32` (rounds), the narrower and unsigned
+     *                  ints (wrap): value-changing, kept OPAQUE at the
+     *                  target's sort, congruent across occurrences. */
+    static const char *const EXACT_REAL[] = { "float", "f64" };
+    static const char *const WIDE_INT[]   = { "int", "i64", "isize" };
+    static const char *const OPAQUE_REAL[] = { "f32" };
+    static const char *const OPAQUE_INT[]  = { "i8", "i16", "i32", "u8", "u16",
+                                               "u32", "u64", "usize" };
+    #define IN(tbl) name_in(tn, tbl, sizeof(tbl) / sizeof(tbl[0]))
+    bool exact_real  = IN(EXACT_REAL), wide_int = IN(WIDE_INT);
+    bool opaque_real = IN(OPAQUE_REAL), opaque_int = IN(OPAQUE_INT);
+    #undef IN
+    if (!exact_real && !wide_int && !opaque_real && !opaque_int) {
+        E->fail = "unsupported cast target in predicate"; return NULL;
+    }
     VCTerm *e = enc(E, f->as.list.items[2]);
     if (!enc_want_value(E, e)) return NULL;
-    if (to_real || e->sort == VS_INT) return e;
-    /* (as int e) with a real operand: C truncation, kept opaque. */
-    uint32_t fn = vc_declare_ufunc(E->vc, "as-int#trunc", 1, VS_INT, f, false);
+    if (exact_real || (wide_int && e->sort == VS_INT)) return e;
+    char nm[48];
+    snprintf(nm, sizeof(nm), "as-%s#conv", tn);
+    uint32_t fn = vc_declare_ufunc(E->vc, nm, 1, opaque_real ? VS_REAL : VS_INT, f, false);
     VCTerm *args[1] = { e };
     return vc_app(E->vc, fn, args, 1);
 }
@@ -882,8 +907,20 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
         VCTerm *t = enc(&E, h->pred);
         /* A hypothesis we cannot encode is simply dropped: fewer hypotheses
          * can only make the goal HARDER to prove, never easier, so this stays
-         * on the safe side of the soundness invariant. */
+         * on the safe side of the soundness invariant.  It is NOT safe for a
+         * refutation, so the VC remembers the drop and the model search
+         * declines it: until 2026-09-29 a `:pre` written with a `let` was
+         * dropped here and the search then refuted the goal without it --
+         * a TUR-E0371 hard error, with a witness, on a correct function
+         * (fixture refine-dropped-hypothesis-keeps-check). */
         if (t) vc_add_hyp(vc, t);
+        else {
+            vc->hyps_dropped = true;
+            if (getenv("TUR_REFINE_STATS"))
+                fprintf(stderr, "refine: hypothesis not encoded (%s): %s\n",
+                        E.fail ? E.fail : "outside the supported fragment",
+                        ob->what ? ob->what : "obligation");
+        }
     }
 
     /* --- goal ------------------------------------------------------------ */
@@ -904,7 +941,11 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
         Enc E2; memset(&E2, 0, sizeof(E2));
         E2.vc = vc; E2.env = ob->env; E2.sorts = &sorts;
         VCTerm *t = enc(&E2, ob->subst[i].form);
-        if (!t) continue;   /* un-encodable argument: leave the name free */
+        /* An un-encodable argument leaves the callee's parameter name FREE,
+         * which is weaker than the truth in the same way a dropped
+         * hypothesis is: a witness could bind it to a value the actual
+         * argument never takes. */
+        if (!t) { vc->hyps_dropped = true; continue; }
         E.subst[E.n_subst].name = ob->subst[i].name;
         E.subst[E.n_subst].term = t;
         E.n_subst++;

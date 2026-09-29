@@ -88,9 +88,11 @@ static void emit_model(Buf *out, const RefineModel *m) {
         buf_puts(out, "{");
         json_kv_str(out, "name", b->name);
         buf_puts(out, ", ");
-        if (b->is_real) buf_printf(out, "\"value\": %g, \"sort\": \"Real\"", b->rval);
-        else            buf_printf(out, "\"value\": %lld, \"sort\": \"Int\"",
-                                    (long long)b->ival);
+        if (b->is_real)      buf_printf(out, "\"value\": %g, \"sort\": \"Real\"", b->rval);
+        else if (b->is_bool) buf_printf(out, "\"value\": %s, \"sort\": \"Bool\"",
+                                        b->ival ? "true" : "false");
+        else                 buf_printf(out, "\"value\": %lld, \"sort\": \"Int\"",
+                                        (long long)b->ival);
         buf_puts(out, "}");
     }
     buf_puts(out, "]");

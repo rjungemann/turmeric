@@ -161,11 +161,15 @@ them to **uninterpreted function applications** (`VCUFunc`):
    `TUR-W0373` warning.
 
 `(as T e)` is a **builtin conversion, not a measure**, and the encoder
-handles it before the measure path: `(as float e)` is `e` itself (the VC's
-reals are exact, so an int converted to float denotes the same number, and
-keeping `e`'s Int sort lets S2 keep its integrality), `(as int e)` over a real
-is an opaque Int-sorted truncation term, and any other target is not encoded
-(the obligation keeps its runtime check). Until 2026-09-29 it fell through to
+handles it before the measure path, by what the conversion does to the value:
+`(as float e)` / `(as f64 e)` is `e` itself (the VC's reals are exact, so an
+int converted to float denotes the same number, and keeping `e`'s Int sort
+lets S2 keep its integrality); `(as int e)` / `i64` / `isize` is `e` on an int
+operand and an opaque Int-sorted truncation term on a real one; `f32` (rounds)
+and the narrower or unsigned ints (`i8`..`i32`, `u8`..`u64`, `usize`, which
+wrap) are opaque terms at the target's sort, congruent across occurrences; a
+target outside that set is not encoded (the obligation keeps its runtime
+check). Until 2026-09-29 it fell through to
 the measure encoder, which declared `as` as an abstract measure at the
 position-default sort -- Int -- and the type name as a variable; `(as float
 v)` over a float was then integer-tightened (`t <= 2.75` to `t <= 2`) and a
@@ -412,13 +416,33 @@ assignments over an odometer, and **evaluates `hyps AND (not goal)` exactly**. A
 satisfying assignment is a genuine counterexample, which is the only thing in
 the whole solver allowed to answer `RT_INVALID`, and it does so *with a model*.
 
-Scope is deliberately tiny: integer variables only, at most `MODEL_MAX_VARS = 8`
-of them and -- the cap that actually binds -- at most `MODEL_MAX_EVALS = 131072`
-full evaluations (`n_cand ** n_vars`), and it **declines any VC carrying
-uninterpreted symbols** -- a measure has no fixed interpretation to evaluate, so
-guessing one would be dishonest. The important zero-variable case is a call
-site with literal arguments (`(safe-div 10 0)`): the goal is closed, one
-evaluation decides it.
+Scope is deliberately tiny: at most `MODEL_MAX_VARS = 8` variables and -- the
+cap that actually binds -- at most `MODEL_MAX_EVALS = 131072` full evaluations
+(the product of the per-variable candidate counts), and it **declines any VC
+carrying uninterpreted symbols** -- a measure has no fixed interpretation to
+evaluate, so guessing one would be dishonest. The important zero-variable case
+is a call site with literal arguments (`(safe-div 10 0)`): the goal is closed,
+one evaluation decides it.
+
+Every sort has a candidate set (since 2026-09-29; before that only Int
+variables were searched, so a plainly false float refinement, or one with a
+bool parameter in its predicate, never got a witness). Ints take the literals
+in the VC, their neighbours and a few small values; bools take `false` and
+`true`; reals take the numeric literals with a half-unit either side and a few
+small values, and are **evaluated in `double`** -- which is not an
+approximation of the runtime check but exactly it, so a real witness is a
+value the program would reject (fixture
+`errors/refine-real-and-bool-counterexample`). An assignment that cannot be
+evaluated (overflow, a zero divisor) is skipped rather than ending the search.
+
+The search also **declines a VC whose encoder dropped a hypothesis**
+(`RefineVC.hyps_dropped`: a `:pre` outside the predicate fragment, or a
+call-site argument it could not encode). Dropping is sound for a proof and
+unsound for a refutation -- the dropped fact may exclude the witness -- and a
+`:pre` written with a `let` used to produce a `TUR-E0371` hard error, with a
+witness, on a correct function (fixture
+`refine-dropped-hypothesis-keeps-check`). `TUR_REFINE_STATS=1` prints
+`refine: hypothesis not encoded (<reason>)` for each drop.
 
 ---
 
@@ -566,10 +590,9 @@ refine:   model vars run  1 (of 1 over the cap)
 refine:   model evals out 1 (budget 131072 evaluations)
 ```
 
-`model vars` counts every decline at the width cap. **`model vars run` counts
-the subset a higher cap would actually help** -- a VC over the cap may also
-carry a non-int variable, and the sort gate sits *after* the count gate, so
-raising the limit buys those nothing. `model evals out` counts declines on the
+`model vars` counts every decline at the width cap. `model vars run` counts
+the subset a higher cap would actually help; since every sort has a candidate
+set (2026-09-29) that is every decline, and the two rows read the same. `model evals out` counts declines on the
 budget; every one of those would run at a bigger budget, so it needs no
 `would run` twin. The cost is exponential either way (`n_cand ** n_vars`, and
 `n_cand` is up to 16), which is why the distinction matters rather than being
