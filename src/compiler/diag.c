@@ -291,6 +291,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0105_BORROW_ESCAPES_SCOPE:       return "TUR-E0105";
         case TUR_E0106_CYCLIC_LIFETIME:            return "TUR-E0106";
         case TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER: return "TUR-E0107";
+        case TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW: return "TUR-E0108";
         /* ST0: Substructural type errors */
         case TUR_E0150_AFFINE_USED_TWICE:          return "TUR-E0150";
         case TUR_E0151_RELEVANT_DROPPED:           return "TUR-E0151";
@@ -469,6 +470,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0105") == 0) return TUR_E0105_BORROW_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0106") == 0) return TUR_E0106_CYCLIC_LIFETIME;
     if (strcmp(s, "TUR-E0107") == 0) return TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER;
+    if (strcmp(s, "TUR-E0108") == 0) return TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW;
     /* ST0: Substructural type errors */
     if (strcmp(s, "TUR-E0150") == 0) return TUR_E0150_AFFINE_USED_TWICE;
     if (strcmp(s, "TUR-E0151") == 0) return TUR_E0151_RELEVANT_DROPPED;
@@ -1344,6 +1346,26 @@ static const DiagExplanation diag_explanations_[] = {
       "Read it (borrow) instead -- (.tag o), (rc/strong-count (.r o)) -- and let o's\n"
       "scope-exit auto-drop release the field once; or move ownership out of the\n"
       "aggregate before the handle so the enclosing scope no longer owns it.\n",
+    },
+    /* byvalue-recursive-shared-copies-leak: an owning ref field moved out of a borrow */
+    { TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW,
+      "TUR-E0108: A struct with an owning ref field is returned out of a borrow\n"
+      "\n"
+      "A function returned, by value, a struct that owns a `ref` field -- but the\n"
+      "value was a copy of one it does not own: a ^borrow parameter, a global, a\n"
+      "container element, or a match binder of one of those.  The caller owns a\n"
+      "function's result and frees its `ref` field when it is done, while the\n"
+      "value's real owner frees the same box: a double free.  An `rc` field is\n"
+      "cloned at this point (the result takes its own count), but a `ref` is a\n"
+      "unique owner and has no count to take.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defstruct R [p : ref<int> n : int])\n"
+      "  (defn id-b [^borrow x : R] : R x)     ; ERROR: returns x's ref field\n"
+      "\n"
+      "Fix: return a new value -- (R (ref (deref (.p x))) (.n x)) copies the box --\n"
+      "or take the parameter by value (without ^borrow) so the function owns what\n"
+      "it returns, or return only the fields the caller needs.\n",
     },
     /* ST1: Substructural type explanations */
     { TUR_E0150_AFFINE_USED_TWICE,
@@ -2638,14 +2660,17 @@ static const DiagExplanation diag_explanations_[] = {
       "  (do (init) (serial-shift k v) (run-loop state))\n"
       "-- or move the non-capturable work outside the serial-reset boundary.\n"
       "\n"
-      "The same code covers the RECEIVER (the function handed the continuation).\n"
-      "It runs once, when the continuation is captured, outside the handlers\n"
-      "that enclose the serial-reset, so it may not perform an effect it does not\n"
-      "handle itself:\n"
-      "  (defn recv [k : serial-cont] : int (k (perform (Ask))))  ; Ask escapes\n"
-      "Handle the effect inside the receiver (or a function it calls), or perform\n"
-      "it outside the serial-reset.  A receiver that merely CALLS code through a\n"
-      "fn value, or handles its own effects, is accepted.\n",
+      "The same code covers the RECEIVER (the function handed the continuation)\n"
+      "in one remaining shape.  A named receiver may perform an effect it does not\n"
+      "handle itself -- the reset then calls it on its own continuation, so the\n"
+      "effect reaches the handlers around the serial-reset:\n"
+      "  (defn recv [k : serial-cont] : int (k (perform (Ask))))  ; accepted\n"
+      "but only when the context is a straight frame list.  Under an `if` branch\n"
+      "point the receiver still runs from the shift body, outside those handlers,\n"
+      "and an escaping effect has nowhere to go:\n"
+      "  (serial-reset (if c (page \"\" (serial-shift recv 0)) 5))  ; Ask escapes\n"
+      "Hoist the `if` out of the serial-reset, handle the effect inside the\n"
+      "receiver (or a function it calls), or perform it outside the reset.\n",
     },
     /* cloneable-shift-unsupported-context-miscompile (D6a) */
     { TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,

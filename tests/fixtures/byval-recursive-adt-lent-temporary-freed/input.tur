@@ -1,0 +1,52 @@
+;; byvalue-recursive-shared-copies-leak: two spines that had no owner.
+;;
+;;   (llen (build 3))
+;;     A FRESH spine handed straight to a parameter the callee neither keeps
+;;     nor frees (llen is inferred non-retaining, so it LENDS).  Nothing owned
+;;     the temporary: every call leaked the whole spine -- 300 boxes for the
+;;     loop below.  The caller now frees it right after the call returns,
+;;     through the same pending-drop queue that frees a lent Option box.
+;;
+;;   (let [w (id-b zs)] (llen w))
+;;     A ^borrow parameter kept nowhere but the result.  The alias walk read
+;;     the call as a hand-off, so zs -- which still owns its spine -- was not
+;;     freed at scope exit either.  id-b now carries a result-alias bit, the
+;;     walk tracks w as an alias of zs, and zs is freed once w is dead.  The
+;;     same holds for a borrowed binder rebound inside the callee (second).
+;;
+;; Expected output:
+;;   0
+;;   2
+;;   1
+;;   2
+;;   3
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn llen [xs : Lst] : int
+  (match xs
+    (Cons h t) (+ 1 (llen t))
+    (Nil)      0))
+
+(defn build [n : int] : Lst
+  (if (= n 0) (Nil) (Cons n (build (- n 1)))))
+
+(defn go [i : int] : int
+  (if (= i 0) 0 (do (llen (build 3)) (go (- i 1)))))
+
+(defn id-b [^borrow x : Lst] : Lst x)
+
+(defn second [^borrow xs : Lst] : int
+  (match xs
+    (Cons h t) (let [u t] (llen u))
+    (Nil)      0))
+
+(defn main [] : int
+  (println (go 100))
+  (let [zs (Cons 7 (Cons 8 (Nil)))]
+    (let [w (id-b zs)]
+      (println (llen w)))
+    (println (second zs))
+    (println (llen zs)))
+  (println (llen (build 3)))
+  0)

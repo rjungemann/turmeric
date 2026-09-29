@@ -978,7 +978,8 @@ static CTerm *build_callcc(CpsB *b, Expr *e, CVar x, CTerm *body) {
  * A capturing-closure receiver returns NULL here; the caller then picks it up
  * via the shift's EX_CLOSURE k_fn (receiver_expr path). */
 static const Binding *marshal_named_receiver(CpsB *b, const Expr *shift,
-                                             bool serial) {
+                                             bool serial, bool *outward) {
+    if (outward) *outward = false;
     const Expr *kf = ascribe_peel(serial ? shift->as.serial_shift_.k_fn
                                          : shift->as.cloneable_shift_.k_fn);
     if (!kf || kf->kind != EX_VAR || !kf->as.var.binding) return NULL;
@@ -986,8 +987,15 @@ static const Binding *marshal_named_receiver(CpsB *b, const Expr *shift,
     if (serial) {
         if (recv->type.kind != TY_FN) return NULL;   /* a function value */
         if (recv->closure_fn_binding || recv->hoist_closure_fn_binding) return NULL;   /* not a fat closure */
+        /* serial-receiver-effect-cannot-reach-enclosing-handler: an effect that
+         * escapes a named global receiver is reachable from the reset's own
+         * continuation when the receiver is CALLED from it as a colored callee
+         * (recv_outward) rather than from the shift body's fresh root. */
         if (recv->is_global && callee_colored(b, recv)
-            && fn_effect_may_escape(b, recv)) return NULL;
+            && fn_effect_may_escape(b, recv)) {
+            if (!outward) return NULL;
+            *outward = true;
+        }
     } else {
         if (!recv->is_global) return NULL;           /* a top-level fn */
         if (callee_colored(b, recv)
@@ -1551,7 +1559,13 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
      * receiver runs once) or bound after the reset (dead at the shift).  The
      * frame validation is what is trusted instead, unconditionally since
      * owning-cloneable-capture graduated (2026-07-20). */
-    const Binding *recv = marshal_named_receiver(b, cur, serial);    const Expr *recv_expr = NULL;
+    bool recv_outward = false;
+    const Binding *recv = marshal_named_receiver(b, cur, serial, &recv_outward);
+    const Expr *recv_expr = NULL;
+    /* The outward lowering runs the receiver on the reset's own continuation,
+     * so the context must be a straight frame list: an `if` branch point would
+     * need that continuation on both arms. */
+    if (recv_outward && saw_if) SK_REJECT();
     if (!recv) {
         /* U7: a CLOSURE receiver (capturing or not).  Shape 1 calls it directly at
          * the reset site; Shape 2 threads it through the dk_shift body env -- the
@@ -1561,10 +1575,23 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                                              : cur->as.cloneable_shift_.k_fn);
         if (kf && kf->kind == EX_CLOSURE) recv_expr = kf;
         else SK_REJECT();
+        /* serial-receiver-effect-cannot-reach-enclosing-handler: a closure
+         * receiver is called from the shift body's fresh root, so one an effect
+         * escapes is refused here as a named one used to be -- the fallback's
+         * TUR-E0706 names it.  (It was masked while a `k` parameter kept the
+         * lambda off the CPS path; admitting `k` made it compile and abort with
+         * "unhandled effect" at run time.)  The outward lowering calls a NAMED
+         * receiver's `__cps` twin; a capturing lambda's env-taking twin is not
+         * threaded through here. */
+        const struct Closure *rcl = kf->as.closure_.closure;
+        const Binding *rfb = (rcl && rcl->fn) ? rcl->fn->binding : NULL;
+        if (!rfb || (callee_colored(b, rfb) && fn_effect_may_escape(b, rfb)))
+            SK_REJECT();
     }
 
     CTerm *t = new_term(b, CT_CLONEABLE);
     t->as.cloneable.serial = serial;
+    t->as.cloneable.recv_outward = recv_outward;
     t->as.cloneable.x = x;
     t->as.cloneable.receiver = recv;
     t->as.cloneable.receiver_expr = recv_expr;

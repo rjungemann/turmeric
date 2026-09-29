@@ -1,5 +1,53 @@
 # A serial-shift receiver's effect cannot reach a handler around the reset
 
+**RESOLVED 2026-09-28** for a named receiver (or a non-capturing `fn`
+literal, which is lifted to one) under a straight-frame context -- the
+report's repro and every receiver the guides write.  The shapes still refused
+moved to
+[serial-receiver-effect-under-if-closure-or-leaf](../reported/serial-receiver-effect-under-if-closure-or-leaf.md).
+
+## Resolution
+
+Gap 1 did not need closing.  A serial reset's context is a STATIC frame list
+(that is what makes it marshalable), so the continuation a shift would capture
+-- those frames over a fresh prompt, exactly the chain the reset already built
+before pushing the shift -- can be built directly, without the driver.  When an
+effect escapes a named receiver, the reset is lowered as an ordinary colored
+call instead of a shift (`recv_outward` on the CT_CLONEABLE node, cps_ir.c;
+`emit_serial_outward_call`, emit_cps_ir.c):
+
+    return recv__cps((int64_t)(intptr_t)frames, __dk_reap_node(dk_frame_resume(rest, env, __kont)));
+
+The rest of the enclosing function is lifted as the call's continuation,
+exactly as a heap join is, so gap 2 closes by construction: the receiver's
+chain runs out through that rest into every handler above the reset.  The
+receiver owns the frames chain, as it owned the shift body's copy.  No DK
+runtime change, so no snapshot moved.
+
+Gap 3 was two refusals, not one: `fn_sig_ok` refused the `serial-cont`
+parameter (an int64 carrier word passed by value -- admitted now, like a
+`^borrow` handle), and `param_name_clashes_cps` refused any parameter named
+`k`, a reservation left over from when the continuation parameter was spelled
+`DK *k` (it has been `__kont` since).  Every serial receiver the guides show is
+`(defn recv [k : serial-cont] ...)`, so the reservation is lifted for a
+`serial-cont` parameter.  Only for that one: lifting it outright moved every
+colored function with a `k` parameter onto the CPS path, and a Saffron
+self-applying function (`(k (- n 1) k)`) there leaked a lambda env the direct
+path frees (`saffron-lambda-arg-env-freed`, caught merging `main`).
+
+Admitting a `k : serial-cont` parameter exposed one miscompile the
+reservation had masked: a CAPTURING closure receiver an effect escapes
+compiled and aborted with "unhandled effect", because a closure receiver still
+runs from the shift body's fresh root.  It is refused at IR build now (TUR-E0706 from the fallback), as a named
+one used to be.
+
+Pinned by `tests/fixtures/serial-shift-receiver-effect-reaches-handler` (four
+shapes, every line equal to `tur --interpret`, including a handler that keeps
+working after `resume`); `errors/serial-shift-receiver-effect-escapes` now
+pins the `if` shape that is still refused.
+
+## Original report
+
 **Severity: low.** A compile-time refusal (`TUR-E0706`, naming the receiver
 and the effect), not a wrong answer; `tur --interpret` runs the same program.
 The residue of

@@ -86,6 +86,205 @@ static Expr *elab_rc_field_read_init(Expr *init) {
     return NULL;
 }
 
+/* byvalue-recursive-shared-copies-leak: the struct-sized twin of the rule
+ * above.  A by-value product with an `rc` field -- `(defstruct S [r : rc<int>
+ * n : int])` -- is released field by field when a let-local of it leaves scope
+ * (the auto-drop in elab_let), so every such local must hold its own +1 on each
+ * rc field.  A copy of a value someone else owns holds none, and the move
+ * checker lets one be taken from three places that keep owning it:
+ *
+ *   (defn id-b [^borrow x : S] : S x)           ; out of a ^borrow
+ *   (defn get-g [] : S g)                       ; out of a global
+ *   (vec-get v 0)                               ; out of a container
+ *
+ * plus a match binder of any of those.  Each local initialised from one (or
+ * from a call returning one) decremented a count it never took: ASan
+ * heap-use-after-free in rc_strong_decrement, all four shapes.
+ *
+ * The fix is at the copy: where a SHARED VIEW flows into a position that owns
+ * -- a let-local, a function's result, a `return` -- it is cloned, taking a +1
+ * on each rc field, so the owner it becomes is a real one.  A function's result
+ * is therefore always owned, which is the convention every caller already
+ * assumes.  Only non-generic products: a monomorph's field layout is named per
+ * instantiation, and nothing here has needed one yet. */
+static const AdtDef *elab_byval_product_with(Type t, TypeKind k) {
+    const AdtDef *ad = elab_byval_drop_adt(t);
+    if (!ad || t.kind != TY_ADT || ad->n_type_params != 0) return NULL;
+    const CtorDef *ctor = ad->ctors[0];
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++)
+        if (ctor->fields[fi].kind == k) return ad;
+    return NULL;
+}
+
+const AdtDef *elab_rc_product_adt(Type t) {
+    return elab_byval_product_with(t, TY_RC);
+}
+
+/* A container read hands back a copy of an element the container still
+ * holds -- the same list own_carry_for_result retains an `rc` result for. */
+static bool elab_call_reads_container_element(const Expr *x) {
+    const Binding *fb = x->as.call_.fn_binding;
+    if (x->as.call_.fn_expr || !fb || !fb->name) return false;
+    const char *nm = fb->name->name;
+    return strcmp(nm, "vec-get") == 0 || strcmp(nm, "vec-get-byval") == 0 ||
+           strcmp(nm, "vec-get-checked") == 0 || strcmp(nm, "map-get-eq-o") == 0;
+}
+
+bool elab_expr_is_shared_view(const Expr *x) {
+    while (x) {
+        switch (x->kind) {
+            case EX_ASCRIBE:   x = x->as.ascribe_.inner; continue;
+            /* A field of a shared view is shared.  A field of an OWNED value is
+             * not claimed either way: the parent's drop releases only its own
+             * direct rc/ref fields, so a nested product's are not doubled. */
+            case EX_GET_FIELD: x = x->as.get_field_.struct_expr; continue;
+            case EX_VAR: {
+                const Binding *b = x->as.var.binding;
+                return b && (b->is_borrow || b->is_global || b->shared_view);
+            }
+            case EX_CALL:
+                return elab_call_reads_container_element(x);
+            default:
+                return false;
+        }
+    }
+    return false;
+}
+
+/* (let [__shv v] (do (rc/clone (.r1 __shv)) ... __shv)) */
+static Expr *elab_clone_rc_fields(Elab *e, Expr *v, const AdtDef *ad) {
+    LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+    char nm[48];
+    snprintf(nm, sizeof nm, "__shv_%u", elab_fresh_id(e));
+    const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+    Binding *tb = binding_new(e, sym, v->type, false, false, v->span);
+    memset(lb, 0, sizeof(*lb));
+    lb->binding = tb;
+    lb->init = v;
+
+    const CtorDef *ctor = ad->ctors[0];
+    uint32_t n_rc = 0;
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++)
+        if (ctor->fields[fi].kind == TY_RC) n_rc++;
+    Expr **items = (Expr **)arena_alloc(e->arena, (n_rc + 1) * sizeof(Expr *));
+    uint32_t j = 0;
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        if (ctor->fields[fi].kind != TY_RC) continue;
+        Type fld_ty = ctor->fields[fi].full_type ? *ctor->fields[fi].full_type
+                                                 : type_from_kind(TY_RC);
+        Expr *tv = expr_new(e->arena, EX_VAR, v->type, v->span);
+        tv->as.var.binding = tb;
+        Expr *gf = expr_new(e->arena, EX_GET_FIELD, fld_ty, v->span);
+        gf->as.get_field_.struct_expr = tv;
+        gf->as.get_field_.field_idx = fi;
+        gf->as.get_field_.adt_def = ad;
+        gf->as.get_field_.adt_ctor = ctor;
+        Expr *cl = expr_new(e->arena, EX_RC_CLONE, fld_ty, v->span);
+        cl->as.rc_clone_.expr = gf;
+        cl->as.rc_clone_.elide = false;
+        items[j++] = cl;
+    }
+    Expr *res = expr_new(e->arena, EX_VAR, v->type, v->span);
+    res->as.var.binding = tb;
+    items[j++] = res;
+    Expr *d = expr_new(e->arena, EX_DO, v->type, v->span);
+    d->as.do_.items = items;
+    d->as.do_.n = j;
+    Expr *let = expr_new(e->arena, EX_LET, v->type, v->span);
+    let->as.let_.bindings = lb;
+    let->as.let_.n = 1;
+    let->as.let_.body = d;
+    return let;
+}
+
+/* Clone every shared-view LEAF of `v` -- the value positions of an if / match /
+ * do / let are followed, so `(if c x (S ...))` clones only the `x` branch and a
+ * fresh value is never counted twice.  Sets *had_shared when anything was. */
+Expr *elab_clone_shared_rc_product(Elab *e, Expr *v, bool *had_shared) {
+    if (!v) return v;
+    const AdtDef *ad = elab_rc_product_adt(v->type);
+    if (!ad) return v;
+    switch (v->kind) {
+        case EX_IF:
+            v->as.if_.then_ = elab_clone_shared_rc_product(e, v->as.if_.then_, had_shared);
+            if (v->as.if_.else_or_null)
+                v->as.if_.else_or_null =
+                    elab_clone_shared_rc_product(e, v->as.if_.else_or_null, had_shared);
+            return v;
+        case EX_MATCH:
+            for (uint32_t i = 0; i < v->as.match_.n_arms; i++)
+                v->as.match_.arms[i].body =
+                    elab_clone_shared_rc_product(e, v->as.match_.arms[i].body, had_shared);
+            return v;
+        case EX_DO:
+            if (v->as.do_.n > 0)
+                v->as.do_.items[v->as.do_.n - 1] = elab_clone_shared_rc_product(
+                    e, v->as.do_.items[v->as.do_.n - 1], had_shared);
+            return v;
+        case EX_LET:
+        case EX_LETREC:
+            v->as.let_.body = elab_clone_shared_rc_product(e, v->as.let_.body, had_shared);
+            return v;
+        default:
+            if (!elab_expr_is_shared_view(v)) return v;
+            if (had_shared) *had_shared = true;
+            return elab_clone_rc_fields(e, v, ad);
+    }
+}
+
+/* The first value position of `v` that produces a shared view, or NULL.  (The
+ * ref-field question: a `ref` cannot be cloned, so a value that may hold one
+ * it does not own must leave that field to its owner.) */
+static const Expr *elab_shared_view_leaf(const Expr *v) {
+    if (!v) return NULL;
+    const Expr *r = NULL;
+    switch (v->kind) {
+        case EX_IF:
+            r = elab_shared_view_leaf(v->as.if_.then_);
+            return r ? r : elab_shared_view_leaf(v->as.if_.else_or_null);
+        case EX_MATCH:
+            for (uint32_t i = 0; i < v->as.match_.n_arms && !r; i++)
+                r = elab_shared_view_leaf(v->as.match_.arms[i].body);
+            return r;
+        case EX_DO:
+            return v->as.do_.n > 0
+                ? elab_shared_view_leaf(v->as.do_.items[v->as.do_.n - 1]) : NULL;
+        case EX_LET:
+        case EX_LETREC:
+            return elab_shared_view_leaf(v->as.let_.body);
+        default:
+            return elab_expr_is_shared_view(v) ? v : NULL;
+    }
+}
+
+/* The let-init / result hook: clone the rc fields of a shared view where it
+ * becomes an owner.  A `ref` field has no count to take, so a let-local that
+ * may hold a borrowed one is marked shared_view (its auto-drop leaves the
+ * field to the real owner), and a RESULT that may hold one -- the caller would
+ * free it, and so would the owner -- is TUR-E0108, Rust's "cannot move out of
+ * a borrow". */
+Expr *elab_own_byval_copy(Elab *e, Expr *v, Binding *local) {
+    if (!v) return v;
+    if (elab_byval_product_with(v->type, TY_REF) ||
+        elab_byval_product_with(v->type, TY_LREF)) {
+        const Expr *leaf = elab_shared_view_leaf(v);
+        if (leaf && local) {
+            local->shared_view = true;
+        } else if (leaf) {
+            const AdtDef *ad = elab_byval_drop_adt(v->type);
+            diag_emit_with_code(
+                DIAG_ERROR, leaf->span, TUR_E0108_REF_FIELD_MOVED_OUT_OF_BORROW,
+                "returns a copy of a '%s' it does not own (a ^borrow, a global, "
+                "a container element, or a binder of one): the caller would free "
+                "its owning `ref` field, and so would the value's real owner. "
+                "Return a new value (copy the box with `(ref (deref ...))`), or take "
+                "the parameter by value",
+                ad && ad->name ? ad->name : "struct");
+        }
+    }
+    return elab_clone_shared_rc_product(e, v, NULL);
+}
+
 /* local-struct-drop: does field `fi` own a BOXED fn-field?  Such a field holds a
  * heap fat-closure handle (`{shim, fn}` box, or a capturing env) that the struct
  * drop glue frees via `free((void *)f)`.  A by-value local carrying one is freed
@@ -1635,6 +1834,9 @@ Expr *elab_let(Elab *e, const Form *call) {
                 b->gen_elem_set  = true;
             }
         }
+        /* byvalue-recursive-shared-copies-leak: a local is an owner, so a
+         * shared view it is initialised from gets its own counts. */
+        init = elab_own_byval_copy(e, init, b);
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
         binding_moved_during_init[n_binds] = false; /* new binding, not yet moved during init */
@@ -2272,6 +2474,11 @@ Expr *elab_let(Elab *e, const Form *call) {
                 TypeKind fk = ctor->fields[fi].kind;
                 if (fk != TY_RC && fk != TY_REF && fk != TY_LREF)
                     continue;
+                /* byvalue-recursive-shared-copies-leak: a `ref` field of a
+                 * shared view belongs to its real owner (it cannot be cloned
+                 * the way an rc field is). */
+                if (fk != TY_RC && binds[k].binding->shared_view)
+                    continue;
                 /* Skip a field the body already drops explicitly -- the
                  * scope-exit auto-drop would double-free it. */
                 if (is_field_consumed(body, binds[k].binding, fi))
@@ -2299,6 +2506,8 @@ Expr *elab_let(Elab *e, const Form *call) {
                     TypeKind fk = ctor->fields[fi].kind;
                     if (fk != TY_RC && fk != TY_REF && fk != TY_LREF)
                         continue;
+                    if (fk != TY_RC && binds[k].binding->shared_view)
+                        continue;   /* must match the counting loop above */
                     /* Skip a field the body already drops explicitly (must match
                      * the counting loop above, or new_items over/underflows). */
                     if (is_field_consumed(body, binds[k].binding, fi))
@@ -4569,6 +4778,9 @@ Expr *elab_return(Elab *e, const Form *call) {
         if (value->kind == EX_VAR && type_is_move(value->as.var.binding->type)) {
             binding_mark_moved(value->as.var.binding, value->span);
         }
+        /* byvalue-recursive-shared-copies-leak: a result is owned by the
+         * caller, so a shared view returned here is cloned. */
+        value = elab_own_byval_copy(e, value, NULL);
     }
     
     /* Create EX_RETURN expression */

@@ -194,6 +194,14 @@ struct Binding {
      * and, unlike the rc/ref auto-drop beside it, there is no surface form that
      * frees a recursive box chain to inject. */
     bool          drops_local_owned;
+    /* byvalue-recursive-shared-copies-leak: this binding is a SHARED VIEW -- a
+     * by-value copy whose owning fields still belong to someone else.  Set on a
+     * match binder whose scrutinee is one (a ^borrow, a global, a container
+     * element, or a binder of one), and on a let-local of a product with an
+     * owning `ref` field initialised from one, which cannot be cloned.  Read
+     * by elab_expr_is_shared_view and by the let field auto-drop, which
+     * leaves such a local's ref fields to their real owner. */
+    bool          shared_view;
     /* Phase 11: span of first move for note chaining diagnostics */
     Span          moved_at;
     /* Phase R5: #[no-unwind] attribute on defn */
@@ -708,6 +716,15 @@ struct Binding {
      * the function's own result is a non-pointer scalar, so it cannot carry
      * the param or its arm back out. */
     uint32_t            nonretain_sum_param_mask;
+    /* byvalue-recursive-shared-copies-leak: bit i set when parameter i is a
+     * `^borrow` by-value RECURSIVE ADT that the body keeps nowhere but its
+     * RESULT -- every use is confined except that the value it returns may
+     * alias the argument's spine (`(defn id-b [^borrow x : Lst] : Lst x)`).  A
+     * caller's alias walk then treats the call's result as an alias of the
+     * argument instead of a hand-off, so the argument's owner can still free
+     * it at scope exit.  ^borrow only: such a callee frees none of what it is
+     * handed, where a consuming one may discharge part of it. */
+    uint32_t            resalias_param_mask;
     /* closure-drop-glue S1c (fresh-closure-returning fn): true when this function
      * binding's body is a bare capturing EX_CLOSURE with only scalar (Copy)
      * captures and a scalar result -- so every call mallocs a FRESH, uniquely

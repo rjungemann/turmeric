@@ -64,6 +64,15 @@ fi
 _build_dir="$(dirname "$TUR")"
 CC_FLAGS="-O1 -g -std=c99 -Wall -fno-strict-aliasing -fsanitize=address -L${_build_dir}/src"
 
+# Compile the runtime into each program rather than linking the prebuilt
+# archive.  The archive is built WITHOUT ASan, so a use-after-free inside a
+# runtime function -- rc_strong_decrement reading a control block the compiler
+# already released -- ran uninstrumented and passed this gate
+# (byvalue-recursive-shared-copies-leak: an rc-field struct copied out of a
+# ^borrow double-decremented, and only `TUR_RUNTIME=source` showed it).  Set
+# TUR_RUNTIME to override.
+export TUR_RUNTIME="${TUR_RUNTIME:-source}"
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 

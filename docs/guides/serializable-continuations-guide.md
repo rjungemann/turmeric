@@ -99,12 +99,18 @@ Two further rules follow from how the frames are marshalled by name:
   contain a `serial-reset` of its own, so a multi-page flow does not nest
   resets: each page's callee returns a code and the code that runs *outside*
   the reset starts the next one (the guestbook example's `advance`).
-- **The same goes for the handler** (the receiver) -- whether it is a named
-  top-level function or a `(fn [k] ...)` literal (capturing or not). It runs
-  once at capture, outside the handlers enclosing the reset, so an effect
-  escaping it is `TUR-E0706` naming the receiver and the effect; one that
-  only calls through function values or handles its own effects is accepted
-  (`docs/archive/serial-shift-colored-receiver-rejected.md`).
+- **The handler** (the receiver) is different: it runs once, at capture, and
+  it MAY perform an effect it does not handle itself. The reset then calls it
+  as an ordinary function on its own continuation, so the effect reaches the
+  handlers around the `serial-reset` -- `(defn recv [k : serial-cont] : int
+  (k (perform (Ask))))` under `(handle (run) (Ask [] r) (resume r 41))` works
+  compiled as it does interpreted
+  (`docs/archive/serial-receiver-effect-cannot-reach-enclosing-handler.md`).
+  Three shapes are still `TUR-E0706`, naming the receiver and the effect: a
+  context with an `if` branch point, a CAPTURING `(fn [k] ...)` receiver (a
+  non-capturing one, or a named function, is fine), and an effect escaping a
+  context callee as above. Hoist the `if` out of the reset, name the
+  receiver, or handle the effect inside it.
 
 `TUR_TRACE_CORE=1` names the collector rule (`[CTX-REJECT] cps_ir.c:<line>`)
 that rejected a context, which is faster than guessing.

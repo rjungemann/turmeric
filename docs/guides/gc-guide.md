@@ -654,8 +654,14 @@ dialect fixture under frequent collections, plus bounded-memory loops).
   something that was. A copy out of a `^borrow` parameter, a global or a
   container element shares its boxes with its source and is never freed as
   if it owned them -- until 2026-09-28 the scope-exit drop did exactly that,
-  a use-after-free. Such copies leak instead; see
-  `docs/reported/byvalue-recursive-shared-copies-leak.md`.
+  a use-after-free. Its SOURCE is still freed: a `^borrow` callee that keeps
+  its argument nowhere but its result (`(defn id-b [^borrow x : Lst] : Lst
+  x)`) makes the result an alias the caller tracks, so `(let [w (id-b zs)]
+  ...)` frees `zs` once `w` is dead. A FRESH spine handed straight to a
+  non-retaining callee -- `(llen (build 3))` -- is freed right after the call
+  (`tests/fixtures/byval-recursive-adt-lent-temporary-freed`). What still
+  leaks is a consuming callee reached from a borrow and a container's
+  elements; see `docs/reported/byvalue-recursive-shared-copies-leak.md`.
   One shape still leaks by design rather than by accident:
   - A **`:copy` recursive ADT** -- `Term`, `Subst`, `Stream` in
     `stdlib/logic.tur`, the `Regex` family -- is never freed per value. This
@@ -669,6 +675,15 @@ dialect fixture under frequent collections, plus bounded-memory loops).
     wrapped in `(with-region (fn [] : int ...))` reports zero leaks). Build
     `:copy` recursive structures inside a region, or accept process-lifetime
     retention.
+- A **by-value struct with an `rc` field** (`(defstruct S [r : rc<int> n :
+  int])`) releases each rc field when a local of it leaves scope, so a copy
+  that becomes an owner -- a let-local, a function's result -- takes its own
+  count when it comes from a SHARED VIEW: a `^borrow`, a global, a container
+  element, or a match binder of one. The clone is one `rc_strong_increment`
+  per field (`tests/fixtures/byval-rc-struct-shared-copy`). An owning `ref`
+  field has no count to take, so returning a struct that holds a borrowed
+  one is `TUR-E0108`; build a new value instead,
+  `(R (ref (deref (.p x))) (.n x))`.
 - Interpreter memory is reclaimed at env teardown; a long-lived env is
   bounded incrementally only via incremental elaboration and scratch
   promotion (on for the REPL -- see "The interpreter is different" above).

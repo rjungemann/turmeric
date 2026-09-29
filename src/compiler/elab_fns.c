@@ -265,6 +265,8 @@ bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
 bool sum_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry);
 bool localowned_param_is_nonretaining(const Expr *body, const Binding *p);
+bool localowned_binding_is_confined(const Expr *body, const Binding *b,
+                                    bool result_cannot_carry);
 
 /* closure-capture-escapes-linearity: one enclosing linear/unique binding's
  * substructural state, recorded before a lambda body is elaborated so the body's
@@ -5407,6 +5409,7 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
      * it back out. */
     b->nonretain_ptr_param_mask = 0;
     b->nonretain_sum_param_mask = 0;
+    b->resalias_param_mask = 0;
     if (body && !expr_subtree_has_inline_c(body)) {
       /* residual-leaks (2026-09-02): a GREATEST fixed point for the fn-param
        * mask.  `list-eq?` hands `cmp-fn` to its own recursive call; with the
@@ -5473,12 +5476,26 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                       _adt_bits |= (1u << _pi);
               }
       }
-      uint32_t _prev_fn_mask, _prev_adt_bits;
+      /* byvalue-recursive-shared-copies-leak: a `^borrow` recursive-ADT
+       * parameter kept nowhere but the result (resalias_param_mask).  The same
+       * strict walk with the result position CONFINED -- a bare `x` there is
+       * the alias the caller will track -- and the same greatest fixed point,
+       * so a walker handing its borrow to its own recursive call keeps the
+       * bit. */
+      uint32_t _ra_bits = 0;
+      for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
+          Binding *_pb = params[_pi];
+          if (_pb && _pb->is_borrow && elab_byval_localowned_adt(_pb->type))
+              _ra_bits |= (1u << _pi);
+      }
+      uint32_t _prev_fn_mask, _prev_adt_bits, _prev_ra_bits;
       do {
         _prev_fn_mask = b->nonretain_param_mask;
         _prev_adt_bits = _adt_bits;
+        _prev_ra_bits = _ra_bits;
         b->nonretain_ptr_param_mask = _adt_bits;
         b->nonretain_sum_param_mask = 0;
+        b->resalias_param_mask = _ra_bits;
         for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
             Binding *_pb = params[_pi];
             if (!_pb) continue;
@@ -5486,6 +5503,11 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
                 !localowned_param_is_nonretaining(body, _pb)) {
                 _adt_bits &= ~(1u << _pi);
                 b->nonretain_ptr_param_mask &= ~(1u << _pi);
+            }
+            if ((_ra_bits & (1u << _pi)) &&
+                !localowned_binding_is_confined(body, _pb, /*result_cannot_carry=*/true)) {
+                _ra_bits &= ~(1u << _pi);
+                b->resalias_param_mask &= ~(1u << _pi);
             }
             /* value-struct-payload-sum-monomorph-box-has-no-owner: a stdlib
              * Option/Result-typed parameter joins the inference.  Same result
@@ -5624,7 +5646,7 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
             }
         }
       } while (b->nonretain_param_mask != _prev_fn_mask ||
-               _adt_bits != _prev_adt_bits);
+               _adt_bits != _prev_adt_bits || _ra_bits != _prev_ra_bits);
     }
 }
 
@@ -8530,6 +8552,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
         body = elab_coerce_to_union(e, body, return_union_type);
     }
 
+    /* byvalue-recursive-shared-copies-leak: the caller owns the result, so a
+     * shared view in result position (a ^borrow, a global, a container
+     * element) is cloned rather than handed out as a second owner. */
+    body = elab_own_byval_copy(e, body, NULL);
+
     /* bare-fat-param-non-int-result: a bare `^fat g` call in result position
      * has no recorded result type (typed int64).  When the function declares a
      * non-int register-class return, infer the closure's result type from the
@@ -10625,6 +10652,9 @@ Expr *elab_fn(Elab *e, const Form *call) {
         body->type.kind != TY_NEVER) {
         body = elab_coerce_to_any_return(e, body);
     }
+    /* byvalue-recursive-shared-copies-leak: as elab_defn -- the result is
+     * owned, so a shared view there is cloned. */
+    body = elab_own_byval_copy(e, body, NULL);
 
     /* Infer return type from body if not specified.
      *

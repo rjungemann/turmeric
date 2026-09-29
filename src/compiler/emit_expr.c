@@ -5483,8 +5483,18 @@ static void vsp_pending_push(EmitCtx *ctx, const char *name, Type t) {
 static void vsp_pending_drain(EmitCtx *ctx, Buf *body, uint32_t mark) {
     while (ctx->n_vsp_pending > mark) {
         uint32_t k = --ctx->n_vsp_pending;
-        emit_boxed_struct_payload_free(ctx, body, ctx->vsp_pending[k],
-                                       ctx->vsp_pending_types[k]);
+        Type t = ctx->vsp_pending_types[k];
+        /* byvalue-recursive-shared-copies-leak: the same queue carries a lent
+         * fresh SPINE temp (a non-generic by-value recursive ADT -- never an
+         * Option/Result monomorph, which is what the rest of it holds). */
+        if (t.kind == TY_ADT && emit_own_adt_of(t)) {
+            char *d = emit_localowned_drop_call(t, ctx->vsp_pending[k]);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s  /* lent temporary: nothing else owns it */\n", d);
+            free(d);
+        } else {
+            emit_boxed_struct_payload_free(ctx, body, ctx->vsp_pending[k], t);
+        }
         free(ctx->vsp_pending[k]);
     }
 }
@@ -12737,6 +12747,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_putc(&_ab, '\0');
                     raw = strdup(_ab.data);
                     buf_free(&_ab);
+                    /* byvalue-recursive-shared-copies-leak: a FRESH spine lent
+                     * to a callee that neither keeps nor frees it has no owner
+                     * -- `(llen (build 3))` leaked every box.  Queue the spill
+                     * for the drain that follows this call's materialization. */
+                    if (emit_call_arg_temp_is_lent_fresh_spine(ctx, e, i))
+                        vsp_pending_push(ctx, _tmp, e->as.call_.args[i]->type);
                     free(_tmp);
                     }
                 }

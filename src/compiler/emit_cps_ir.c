@@ -618,6 +618,53 @@ static const CTerm *first_unsupported(const CTerm *t) {
     }
 }
 
+/* serial-receiver-effect-cannot-reach-enclosing-handler: every outward serial
+ * receiver in `t` is CPS-emitted (the reset calls its `__cps` twin).  Read by
+ * the classification fixpoint, once every entry exists: a function whose
+ * outward receiver is not in S is evicted with it, so it falls back to the
+ * direct emitter's TUR-E0706 rather than calling a twin that was never
+ * emitted.  Same traversal as first_unsupported. */
+static bool binding_cps_reachable(const Binding *b);
+static bool outward_receivers_in_s(const CTerm *t) {
+    if (!t) return true;
+    switch (t->kind) {
+        case CT_LETVAL:   return outward_receivers_in_s(t->as.letval.body);
+        case CT_LETPRIM:  return outward_receivers_in_s(t->as.letprim.body);
+        case CT_LETCALL:  return outward_receivers_in_s(t->as.letcall.body);
+        case CT_LETRAW:   return outward_receivers_in_s(t->as.letraw.body);
+        case CT_LETCONT:
+            return outward_receivers_in_s(t->as.letcont.jbody) &&
+                   outward_receivers_in_s(t->as.letcont.body);
+        case CT_IF:
+            return outward_receivers_in_s(t->as.if_.then_) &&
+                   outward_receivers_in_s(t->as.if_.else_);
+        case CT_MATCH:
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!outward_receivers_in_s(t->as.match.arms[i].body)) return false;
+            return true;
+        case CT_RESET:
+            return outward_receivers_in_s(t->as.reset.delim) &&
+                   outward_receivers_in_s(t->as.reset.body);
+        case CT_SHIFT:    return outward_receivers_in_s(t->as.shift.body);
+        case CT_HANDLE:
+            if (!outward_receivers_in_s(t->as.handle.delim)) return false;
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++)
+                if (!outward_receivers_in_s(t->as.handle.cases[i].case_body)) return false;
+            return outward_receivers_in_s(t->as.handle.body);
+        case CT_PERFORM:  return outward_receivers_in_s(t->as.perform.body);
+        case CT_RESUME:   return outward_receivers_in_s(t->as.resume.body);
+        case CT_CLONEABLE:
+            if (t->as.cloneable.recv_outward &&
+                !(t->as.cloneable.receiver &&
+                  binding_cps_reachable(t->as.cloneable.receiver)))
+                return false;
+            return outward_receivers_in_s(t->as.cloneable.body);
+        case CT_CALLCC:   return outward_receivers_in_s(t->as.callcc.body);
+        case CT_LOOP:     return outward_receivers_in_s(t->as.loop.body);
+        default: return true;
+    }
+}
+
 static bool term_core_ok(const CTerm *t);
 static bool delim_ok(const CTerm *t);   /* reset-delim admission (permits KK_PROMPT delivery) */
 static bool handle_delim_ok(const CTerm *t);  /* top-level handle-body admission (join-to-prompt, no interior control op) */
@@ -2654,6 +2701,10 @@ static bool term_core_ok_impl(const CTerm *t) {
                  * go through the operand-slot check. */
                 if (!fr->call_fn && !fr->env_expr && !atom_ok(&fr->operand)) return false;
             }
+            /* An outward receiver must itself be CPS-emitted -- checked in the
+             * classification fixpoint (outward_receivers_in_s), not here: this
+             * runs as each entry is built, before a receiver defined later in
+             * the file has an entry to ask. */
             return term_core_ok(t->as.cloneable.body);
         case CT_CALLCC:
             /* U7: a local setjmp escape landing (emit_callcc).  The receiver is
@@ -2930,7 +2981,19 @@ static bool handle_delim_ok(const CTerm *t) {
 /* A source parameter's raw C name (used unchanged now that fn_params is set
  * during CPS emission) must not collide with a name the CPS backend synthesizes:
  * the continuation `k`, or any `__`-prefixed internal (`__root`, `__r`, `__cap`,
- * `__h<N>`, and the fresh result temporaries `__t<N>`).  A colliding param would
+ * `__h<N>`, and the fresh result temporaries `__t<N>`).
+ *
+ * `k` itself no longer collides -- the continuation parameter has been
+ * `__kont` since this rule was written -- but the rule is load-bearing anyway:
+ * it keeps every colored function with a `k` parameter on the direct path, and
+ * lifting it moved Saffron self-applying functions (`(defn pick [n k] ...
+ * (k (- n 1) k))`) onto the CPS path, whose trampoline-root entry does not
+ * release a lambda env the direct path frees (saffron-lambda-arg-env-freed
+ * leaked).  So it is lifted only for a `serial-cont` parameter -- a
+ * serial-shift receiver written the way the guides write one, `(defn recv
+ * [k : serial-cont] ...)`, which must be CPS-emitted for its effects to reach
+ * the reset's handlers (serial-receiver-effect-cannot-reach-enclosing-handler).
+ * A colliding param would
  * shadow or be shadowed by a generated identifier; exclude such a function from
  * CPS candidacy so it falls back to the direct emitter (which owns its own
  * naming).  The `t<N>` branch below is retained defensively: temporaries are now
@@ -2939,7 +3002,8 @@ static bool handle_delim_ok(const CTerm *t) {
 static bool param_name_clashes_cps(const Binding *b) {
     if (!b || !b->name || !b->name->name) return false;
     const char *n = b->name->name;
-    if (strcmp(n, "k") == 0) return true;
+    if (strcmp(n, "k") == 0)
+        return !(b->type.kind == TY_CONT && b->type.as.cont.flavor == CONT_SERIAL);
     /* fn-value-fat-normalization (effect-row increment): a lifted capturing
      * lambda's env param is `__env_p_<id>` -- uniquely numbered, never a name
      * the CPS emitter mints itself.  Admitting it is what lets a capturing
@@ -3142,7 +3206,15 @@ static bool fn_sig_ok(const FnDef *fd) {
             && !(fn_single_concrete_sig(fd)
                  && fatparam_only_called(fd, p))) return false;
         bool fn_param_ok = p->type.kind == TY_FN || p->is_poly_fn;
-        if (!p->is_borrow && !fn_param_ok
+        /* serial-receiver-effect-cannot-reach-enclosing-handler: a `k :
+         * serial-cont` parameter is the opaque DK chain a serial-shift
+         * receiver is handed, spelled as the int64 carrier.  It is passed by
+         * value and only ever resumed or marshalled through a plain runtime
+         * call, never threaded through a slot -- so, like a ^borrow handle,
+         * it keeps an effectful receiver CPS-emittable. */
+        bool serial_k_ok = p->type.kind == TY_CONT &&
+                           p->type.as.cont.flavor == CONT_SERIAL;
+        if (!p->is_borrow && !fn_param_ok && !serial_k_ok
             && !sig_slot_ok(&p->type, p->type.kind)
             && !fn_byval_agg_param_ok(fd, p)
             && !fn_carrier_param_ok(fd, p)) return false;
@@ -5176,6 +5248,12 @@ static void ensure_S(const Expr *program) {
         changed = false;
         for (size_t i = 0; i < g_ents_n; i++) {
             if (g_ents[i].in_s && needs_heap_join(g_ents[i].term)) {
+                g_ents[i].in_s = false;
+                changed = true;
+            }
+            /* Rule D: an outward serial receiver must be in S itself (the
+             * reset calls its `__cps` twin). */
+            if (g_ents[i].in_s && !outward_receivers_in_s(g_ents[i].term)) {
                 g_ents[i].in_s = false;
                 changed = true;
             }
@@ -8724,6 +8802,32 @@ static char *emit_cl_shift_env(CE *ce, const CTerm *t, const char *rfn) {
     return strdup(rfn);
 }
 
+/* serial-receiver-effect-cannot-reach-enclosing-handler: the tail of an
+ * outward serial reset -- `return <receiver>__cps(<k>, <rest frame>)`.  The
+ * rest (the cloneable node's body, binding x) is lifted as a resume-frame over
+ * `cur_k` exactly as emit_heap_join lifts a join, so the receiver's result
+ * binds x and the enclosing continuation -- with every handler installed above
+ * this function -- stays reachable from the receiver's own chain. */
+static void emit_serial_outward_call(CE *ce, const CTerm *t, int id, const char *kchain) {
+    char jname[256];
+    snprintf(jname, sizeof(jname), "%s_skj%d", ce->fn_cn, id);
+    char *xn = cvar_cname(ce, t->as.cloneable.x);
+    CapSet cs;
+    bool caps_ok = collect_caps(t->as.cloneable.body, t->as.cloneable.x.id, &cs);
+    const CapSet *caps = (caps_ok && cs.n > 0) ? &cs : NULL;
+    emit_lifted(ce, jname, LH_RESUME_CONT, xn, t->as.cloneable.x.ty,
+                t->as.cloneable.x.type, t->as.cloneable.body, NULL, caps);
+    free(xn);
+    char *envexpr = emit_cont_env(ce, jname, caps);
+    char *fn = callee_name(t->as.cloneable.receiver);
+    const char *kty = serial_recv_kty(ce, t);
+    ce_line(ce, "return %s__cps((%s)(intptr_t)%s, __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
+                " /* serial reset: outward receiver */",
+            fn, kty, kchain, jname, envexpr, ce->cur_k);
+    free(envexpr);
+    free(fn);
+}
+
 static void emit_cloneable(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char *xn  = cvar_cname(ce, t->as.cloneable.x);
@@ -8807,10 +8911,12 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
          * receiver the copied DK chain directly so the captured continuation
          * round-trips through save-cont!/resume-cont!.  No per-site frame fns. */
         uint32_t nf = t->as.cloneable.n_frames;
+        bool outward = t->as.cloneable.recv_outward;
         char bodyfn[256];
         snprintf(bodyfn, sizeof(bodyfn), "%s_skbody%d", ce->fn_cn, id);
-        emit_cl_shift_bodyfn(ce, bodyfn, t,
-            "    DK *__cap = dk_copy_range(subk, NULL);\n", "__cap");
+        if (!outward)
+            emit_cl_shift_bodyfn(ce, bodyfn, t,
+                "    DK *__cap = dk_copy_range(subk, NULL);\n", "__cap");
         /* A 1-arg call frame gets a per-site wrapper fn plus a SkReg entry that
          * self-registers (constructor) so the marshaler maps the frame <-> a stable
          * name ("<fn>$L") for save/restore.  Arithmetic frames need no per-site
@@ -8940,6 +9046,20 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                         dv, sk_tag_for_frame(fr), opv, dv);
                 free(opv);
             }
+        }
+        if (outward) {
+            /* serial-receiver-effect-cannot-reach-enclosing-handler: `dv` is
+             * now exactly what the shift would have captured -- the context
+             * frames over a fresh prompt -- so hand it to the receiver
+             * directly, as an ordinary colored call whose continuation is the
+             * rest of this function (lifted, like a heap join).  An effect the
+             * receiver performs walks that continuation out into the handlers
+             * enclosing the reset.  The receiver owns `dv`, as it owned the
+             * shift body's copy. */
+            emit_serial_outward_call(ce, t, id, dv);
+            free(xn);
+            free(rfn);
+            return;
         }
         char *senv = emit_cl_shift_env(ce, t, rfn);
         ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
@@ -10548,7 +10668,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         for (int m = 0; m < grp->n_mem; m++) if (!grp->body[m]) all = false;
         if (all) ctg_emit_def(file, grp);
     } else {
-    /* ---- CPS body: int64_t <name>__cps(<params>, DK *k) ---- */
+    /* ---- CPS body: int64_t <name>__cps(<params>, DK *__kont) ---- */
     buf_printf(file, "%sint64_t %s__cps(",
                (emit_split_lib_owns(fd->binding) && !mono_emit) ? "" : "static ", cn);
     emit_params(ctx, file, fd);

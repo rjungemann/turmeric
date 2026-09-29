@@ -835,6 +835,10 @@ enum { EMIT_OWN_NONE = 0, EMIT_OWN_SHALLOW, EMIT_OWN_DEEP };
 const struct AdtDef *emit_own_adt_of(Type t);
 bool emit_own_binding_owned(EmitCtx *ctx, const Binding *b);
 bool emit_own_param_owned(EmitCtx *ctx, const struct FnDef *fd, uint32_t i);
+bool emit_own_expr_owned(EmitCtx *ctx, const Expr *e);
+bool emit_call_arg_temp_is_lent_fresh_spine(EmitCtx *ctx, const Expr *call,
+                                            uint32_t i);
+char *emit_localowned_drop_call(Type t, const char *lv);
 bool emit_own_match_discharges(EmitCtx *ctx, const Expr *m);
 int  emit_own_arm_field_discharge(EmitCtx *ctx, const Expr *m,
                                   const struct MatchArm *arm, uint32_t fi);
