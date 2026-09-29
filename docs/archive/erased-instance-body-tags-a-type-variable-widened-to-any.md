@@ -24,8 +24,12 @@ causes, one per class kind:
   class over a parametric head, `Get [(One A)]` -- spells the same C as the
   erased body, so `abi_changes` stays false.  `body_has_dispatch_on_app_tyvar`
   (`emit_module.c`) gains a third trigger: an `EX_UNION_INJECT` whose payload
-  type is a type variable the call binds.  Scoped to instance-method bodies
-  (`g_bhd_detect_tyvar_widen`); a plain generic is monomorphized anyway.
+  type is a type variable the call binds.  First scoped to instance-method
+  bodies on the belief that a plain generic is always monomorphized; that was
+  false (`(defn ap1 [B] [g : (fn [float] B)] : any (g 1.5))` at `B := int`
+  changes no ABI either), so the same day it was widened to every callee --
+  see
+  [concrete-result-fn-passed-where-an-any-result-fn-is-expected](concrete-result-fn-passed-where-an-any-result-fn-is-expected.md).
 
 In the spec the payload type is concrete, so the widen tags it (`float` is 4)
 as a monomorphized `defn` does.

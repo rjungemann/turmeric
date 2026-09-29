@@ -34,7 +34,7 @@ For the repro, Foldable's `(fn [b a] b)` at `b := float` becomes the target
 `(fn [any any] float)`: the lambda's `any` result is cast to `float`.
 
 The same bridge closed half of
-[concrete-result-fn-passed-where-an-any-result-fn-is-expected](../reported/concrete-result-fn-passed-where-an-any-result-fn-is-expected.md)
+[concrete-result-fn-passed-where-an-any-result-fn-is-expected](concrete-result-fn-passed-where-an-any-result-fn-is-expected.md)
 (the plain-call direction).
 
 

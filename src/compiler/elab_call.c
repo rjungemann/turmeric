@@ -9690,7 +9690,16 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * carrier emission that other carrier callers still need.  A ground
      * expected return (`Pos`, `int`, `(Map cstr int)`) is the only safe
      * case to bind from. */
+    /* concrete-result-fn-passed-where-an-any-result-fn-is-expected (the
+     * generic spelling): not for a call through a LOCAL function value.  Its
+     * type variables are the ENCLOSING definition's own -- `g : (fn [float]
+     * B)` in `(defn ap1 [B] [g ...] : any (g 1.5))` -- which are rigid there,
+     * and binding `B := any` from the `: any` return typed the call `any`
+     * while the function the caller passed returns its own `B` (a double):
+     * the result was read as a tagged word.  Left open, the call is typed
+     * `B`, the return widens it, and the spec's binding tags it. */
     if (saved_expected_return && fn_type.kind == TY_FN &&
+        fn_binding && fn_binding->is_global &&
         fn_type.as.fn.result_full_type &&
         call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
         !call_type_has_named_tyvar(saved_expected_return)) {

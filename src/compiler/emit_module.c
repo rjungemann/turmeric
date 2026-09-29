@@ -4161,9 +4161,13 @@ static bool type_mentions_bound_tyvar(const Type *t,
  * compile thread, so a file-scope toggle is safe. */
 static bool g_bhd_detect_return_dispatch = false;
 
-/* Set while probing an INSTANCE method's body: the `any`-widen trigger below
- * (erased-instance-body-tags-a-type-variable-widened-to-any) is a reason to
- * mint an instance spec only.  A plain generic defn is monomorphized anyway. */
+/* Set while probing a callee's body for instance_changes: the `any`-widen
+ * trigger below (erased-instance-body-tags-a-type-variable-widened-to-any).
+ * Not only for instance methods: a plain generic whose binding leaves its C
+ * signature unchanged -- `(defn ap1 [B] [g : (fn [float] B)] : any (g 1.5))`
+ * at `B := int` -- is NOT monomorphized either, and its erased body tagged
+ * the widened `B` with TY_TYVAR (concrete-result-fn-passed-where-an-any-
+ * result-fn-is-expected, the generic spelling). */
 static bool g_bhd_detect_tyvar_widen = false;
 
 /* Depth guard for the transitive probe below: a constrained generic may call
@@ -4565,8 +4569,7 @@ static bool body_has_dispatch_on_app_tyvar(
              * tags the value with the TypeKind TY_TYVAR itself, which no
              * consumer understands (`type-of` says "unknown", `is?` answers
              * false).  The C spelling is the same for every binding, so no
-             * ABI change asks for the spec; this does.  Instance bodies only
-             * (a plain generic is always monomorphized). */
+             * ABI change asks for the spec; this does. */
             const Expr *v = e->as.union_inject_.value;
             if (g_bhd_detect_tyvar_widen && v &&
                 v->type.kind == TY_TYVAR && v->type.as.tyvar_.name) {
@@ -6243,7 +6246,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
          * what an argument's must be matched against. */
         g_bhd_caller_cs = (fd && fd->binding) ? fd->binding->fn_constraints : NULL;
         bool saved_widen = g_bhd_detect_tyvar_widen;
-        g_bhd_detect_tyvar_widen = fd->owner_instance != NULL;
+        g_bhd_detect_tyvar_widen = true;
         instance_changes = body_has_dispatch_on_app_tyvar(fd->body, bindings, n_bindings);
         g_bhd_detect_tyvar_widen = saved_widen;
         g_bhd_caller_cs = saved_cs;

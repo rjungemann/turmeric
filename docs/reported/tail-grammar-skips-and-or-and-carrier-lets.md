@@ -33,8 +33,16 @@ part of `emit_let_value`'s per-binding init ladder (the by-value carrier
 bridge, the recorded-pointer cast and the erased-word cast; not the rest).  So
 the bail is load-bearing, and it was restored.
 
-The fix is structural: give `emit_let_value` and the inline arm ONE
-per-binding init emission, then drop the bail.  The 21 fixtures
+The fix is structural, and a shared init is only half of it.
+`emit_let_value` also collects SCOPE-EXIT frees per binding -- non-escaping
+fat-closure envs, caught Result boxes, RM1's freshness-flagged erased sum
+boxes, value-struct payload monomorphs, fn-field drops, by-value recursive
+spines -- and frees them after the body.  The inline arm has only the `any`
+drop channel (`any_scope_drops_push`, which the backedge and every `return`
+fire).  A carrier binding moved onto the tail path without those would trade
+the stack overflow for a leak per iteration.  So: give `emit_let_value` and
+the inline arm ONE per-binding init emission, route the scope-exit frees
+through the channel the backedge fires, then drop the bail.  The 21 fixtures
 (`borrow-param-unique-mut-allowed`, `show-collections*`,
 `vec-multiword-struct-*`, `schan-worker-pool`, ...) are the test set for it.
 Found on the way: a carrier-ABI PARAMETER (a `(Tree float)`) is refused
