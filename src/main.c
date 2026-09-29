@@ -61,6 +61,7 @@
 #include "borrow_check.h"  /* Phase 14 */
 #include "cps.h"          /* Phase 18: CPS transformation */
 #include "srfi_prune.h"   /* r7rs-srfi-plan S3: unreached SRFI definitions */
+#include "jit_prune.h"    /* JIT: drop the prelude a program never reaches */
 #include "cps_ir.h"       /* CPS2: ANF/CPS IR (--dump-cps) */
 #include "diag.h"
 #include "effect_check.h" /* Phase P19-2: effect-row inference */
@@ -4739,6 +4740,40 @@ static int cmd_jit(int argc, char **argv) {
     Buf split_src;
     buf_init(&split_src);
     bool split_used = jit_try_split_preamble(&csrc, &split_src);
+    /* jit-suite-pays-for-the-whole-prelude: c2mir compiles every definition
+     * it is handed, and every program carries the whole auto-loaded prelude
+     * (and, split, the prelude's heavy system headers).  Drop what the
+     * program never reaches (src/compiler/jit_prune.h).  A TU the split
+     * declined is pruned as a COPY, so the full TU stays for the W0071 retry
+     * below exactly as a split one does.  Not for the REPL image: it must
+     * keep every exported function for later calls. */
+    bool reduced_used = split_used;
+    {
+        JitPruneStats ps;
+        memset(&ps, 0, sizeof ps);
+        bool pruned;
+        if (split_used) {
+            pruned = jit_prune_split_source(&split_src, &ps);
+        } else {
+            buf_write(&split_src, csrc.data, csrc.len);
+            pruned = jit_prune_full_source(&split_src, &ps);
+            if (pruned) reduced_used = true;
+            else { buf_free(&split_src); buf_init(&split_src); }
+        }
+        if (pruned) {
+            const char *tv = getenv("TUR_JIT_TIMING");
+            if (tv && *tv && strcmp(tv, "0") != 0)
+                fprintf(stderr,
+                        "TUR_JIT_TIMING\tprune\tbytes\t%zu -> %zu (%u of %u "
+                        "definitions, %u includes dropped)\n",
+                        ps.bytes_before, ps.bytes_after, ps.nodes_dropped,
+                        ps.nodes, ps.includes_dropped);
+        }
+        /* TUR_JIT_DUMP_C: the text c2mir is handed first, so a <tur-jit>:LINE
+         * diagnostic reads against it (the no-reduction path dumps below). */
+        const char *dump = getenv("TUR_JIT_DUMP_C");
+        if (reduced_used && dump && *dump) buf_to_path(&split_src, dump);
+    }
 
     /* Program argv: argv[0] = the source path (matches what a compiled binary
      * would see as its own name closely enough for *args*), then everything
@@ -4788,22 +4823,25 @@ static int cmd_jit(int argc, char **argv) {
     const char *force_fb = getenv("TUR_JIT_FORCE_FALLBACK");
     if (force_fb && *force_fb && strcmp(force_fb, "0") != 0) {
         jrc = TUR_JIT_ERR_COMPILE;
-    } else if (split_used) {
-        /* Split first; if the split half fails to COMPILE or LINK, retry the
-         * full TU in the engine before conceding to cc -- the hash guard
-         * covers emitter drift but not, e.g., an export the host build
-         * dropped, and the full TU is self-contained against that.  A RUN
-         * failure is the program's own (a panic aborts identically either
-         * way), so it is not retried. */
+    } else if (reduced_used) {
+        /* Reduced TU (split and/or pruned) first; if it fails to COMPILE or
+         * LINK, retry the full TU in the engine before conceding to cc -- the
+         * hash guard covers emitter drift but not, e.g., an export the host
+         * build dropped, nor a reference the pruner missed, and the full TU is
+         * self-contained against both.  tests/run-jit.sh fails a fixture that
+         * passes only on this retry.  A RUN failure is the program's own (a
+         * panic aborts identically either way), so it is not retried. */
         jrc = tur_jit_execute(split_src.data, split_src.len,
                               autolink.len ? autolink.data : NULL,
                               jit_incs, n_jit_incs,
                               prog_argc, prog_argv, &prog_rc);
         if (jrc == TUR_JIT_ERR_COMPILE || jrc == TUR_JIT_ERR_LINK) {
             fprintf(stderr,
-                    "tur: warning: TUR-W0071: split-runtime path failed to "
-                    "%s; retrying with the full preamble\n",
-                    jrc == TUR_JIT_ERR_COMPILE ? "compile" : "link");
+                    "tur: warning: TUR-W0071: %s failed to %s; retrying "
+                    "with the full %s\n",
+                    split_used ? "split-runtime path" : "pruned program",
+                    jrc == TUR_JIT_ERR_COMPILE ? "compile" : "link",
+                    split_used ? "preamble" : "program");
             jrc = tur_jit_execute(csrc.data, csrc.len,
                                   autolink.len ? autolink.data : NULL,
                                   jit_incs, n_jit_incs,

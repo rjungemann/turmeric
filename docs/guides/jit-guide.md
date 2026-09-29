@@ -202,10 +202,19 @@ requirements, so it must be set on the consumer too) and **PUBLIC** on
    preamble text for a declarations-only region, because that runtime is
    already resident in the host via `tur_rt_split.c`. `TUR_JIT_NO_SPLIT=1`
    opts out.
-4. **Include dirs.** `jit_sdk_include_dirs` produces `<root>/src` and
+4. **Prune.** c2mir compiles every definition it is handed, where cc drops an
+   unreferenced `static` function, so without this every program would compile
+   the whole auto-loaded prelude. `jit_prune_split_source` (split TU) or
+   `jit_prune_full_source` (a TU the split declined -- every `#lang r7rs` and
+   `#lang saffron` program) drops the program half's `static` functions,
+   objects, fat boxes and `extern` declarations that nothing live names, and on
+   a split TU the heavy system includes nothing uses
+   (`src/compiler/jit_prune.h`). The unpruned TU is kept for the W0071 retry.
+   `TUR_JIT_NO_PRUNE=1` opts out.
+5. **Include dirs.** `jit_sdk_include_dirs` produces `<root>/src` and
    `<root>/src/runtime` from `$TUR_SDK_ROOT`, or by walking up from the
    executable probing for `src/runtime/hamt.h`.
-5. **Into the engine.** `tur_jit_execute` -> `jit_compile_and_link`:
+6. **Into the engine.** `tur_jit_execute` -> `jit_compile_and_link`:
    - `jit_load_autolink` -- each `-l<name>` marker becomes
      `dlopen("lib<name>.so", RTLD_NOW|RTLD_GLOBAL)`.
    - `JIT_PRELUDE` is concatenated ahead of the emitted TU.
@@ -217,13 +226,13 @@ requirements, so it must be set on the consumer too) and **PUBLIC** on
    - `MIR_load_module` over every module `MIR_get_module_list` reports.
    - `MIR_link(ctx, gen_iface, jit_import_resolver)`.
    - `jit_sync_config_globals`.
-6. **Find and run `main`.** `jit_find_func` walks the module and item lists
+7. **Find and run `main`.** `jit_find_func` walks the module and item lists
    rather than calling `dlsym` -- which is what lets it see **static**
    functions, and is why single-TU spice emission keeps its `static` linkage
    unchanged. The function pointer is then called on a fresh pthread with a
    `TUR_JIT_STACK_MB` stack (default 64 MB), followed by `jit_atexit_drain`
    and `fflush(stdout)` **on that same thread**.
-7. **Teardown**, strictly in this order: `MIR_gen_finish`, `c2mir_finish`,
+8. **Teardown**, strictly in this order: `MIR_gen_finish`, `c2mir_finish`,
    `MIR_finish`.
 
 Anything that goes wrong returns `TUR_JIT_ERR_COMPILE`, `TUR_JIT_ERR_LINK`, or
@@ -232,7 +241,7 @@ Anything that goes wrong returns `TUR_JIT_ERR_COMPILE`, `TUR_JIT_ERR_LINK`, or
 ### The C the JIT sees is not `tur emit-c` output
 
 Worth internalizing before you debug a JIT-only failure by eyeballing
-`tur emit-c`. Relative to `tur emit-c`, the JIT's input differs in four ways:
+`tur emit-c`. Relative to `tur emit-c`, the JIT's input differs in five ways:
 
 1. `g_emit_for_link = true`, so the `rc<T>`/GC runtime comes from the archive
    instead of being replicated into the preamble.
@@ -240,10 +249,14 @@ Worth internalizing before you debug a JIT-only failure by eyeballing
    the top of the TU.
 3. The engine has prepended `JIT_PRELUDE`.
 4. The S2 splice has replaced most of the fixed preamble.
+5. The pruner has dropped every prelude function the program never reaches.
+   `TUR_JIT_DUMP_C` writes the text c2mir actually got, so its line numbers
+   match a `<tur-jit>:LINE` diagnostic.
 
 (`tur emit-c` also passes manifest reader macros, which `cmd_jit` does not.)
 The right comparison is `tur build`, whose front half `cmd_jit` copies exactly;
-`TUR_JIT_NO_SPLIT=1` removes the largest remaining difference.
+`TUR_JIT_NO_SPLIT=1 TUR_JIT_NO_PRUNE=1` removes the largest remaining
+differences.
 
 ### The pieces that exist only because of the JIT
 
@@ -353,9 +366,12 @@ A few families always take the fallback, deliberately:
 
 There are two, and they are distinct:
 
-- **Split preamble to full preamble (TUR-W0071).** Only when the S2 splice was
-  used and the result was `TUR_JIT_ERR_COMPILE` or `TUR_JIT_ERR_LINK`: retry
-  the unsplit TU in the engine. `TUR_JIT_ERR_RUN` is deliberately *not*
+- **Reduced TU to full TU (TUR-W0071).** Only when the engine was handed a
+  split and/or pruned TU and the result was `TUR_JIT_ERR_COMPILE` or
+  `TUR_JIT_ERR_LINK`: retry the full, unpruned TU in the engine.
+  `tests/run-jit.sh` fails a fixture that passes only on this retry (unless it
+  then fell back to cc anyway), since that is how a reference the pruner missed
+  would show up. `TUR_JIT_ERR_RUN` is deliberately *not*
   retried -- a run failure is the program's own, and a panic aborts identically
   either way.
 - **Engine to `cc` (TUR-W0070).** On **any** non-OK result, warn and call
@@ -588,6 +604,7 @@ they are diagnostics rather than semantics.
 | `TUR_JIT_GEN` | lazy | `eager` restores whole-program generation (slower start, but generation failures surface while the fallback is still reachable); `interp` is spike instrumentation only |
 | `TUR_JIT_STACK_MB` | 64 | entry stack size; MIR does not do gcc's sibling-call optimization, so a deep recursion the `cc` path survives can overflow here |
 | `TUR_JIT_NO_SPLIT` | unset | skip the S2 preamble splice and compile the full runtime preamble |
+| `TUR_JIT_NO_PRUNE` | unset | hand c2mir every definition the emitter wrote, including the prelude the program never reaches |
 | `TUR_JIT_TIMING` | unset | `1` prints per-phase timings and RSS to **stderr**, so fixture stdout stays byte-comparable |
 | `TUR_SDK_ROOT` | discovered | root for the runtime headers c2mir needs |
 

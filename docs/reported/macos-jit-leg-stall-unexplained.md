@@ -60,6 +60,32 @@ Ranked by what the fixes above cannot bound:
    sets the per-test `TIMEOUT` values, and those may need revisiting if a
    legitimate run ever trips one.
 
+## 2026-09-29: the first instrumented occurrence was slowness, not a stall
+
+[Run 36608484061](https://github.com/rjungemann/turmeric/actions/runs/36608484061)
+(rjungemann/turmeric#970) failed the leg with the instrumentation working as
+designed: `tur_jit_fixture_tests ***Timeout 1500.55 sec`, the step failing
+rather than the job being killed. The console lines the step's filter lets
+through (FAILs and fallback PASSes) arrived at a steady ~1.9 fixtures/s the
+whole way. Every gap between them scales with the number of fixtures it covers.
+The last one, 1408 s in, was `workstealing-steal`, #2660 of 2663 top-level
+fixtures. What was cut off was the tail of the positive pass, the nested
+fixture dirs and the whole `errors/` pass (~650 dirs) -- work, not a hang.
+`main`'s run of the same hour passed the leg, in 27 minutes for the whole
+job.
+
+The cause of *that* was a fixed per-program cost: c2mir compiled the whole
+auto-loaded prelude and its system headers for every program. It is fixed in
+[jit-suite-pays-for-the-whole-prelude](../archive/jit-suite-pays-for-the-whole-prelude.md)
+(sum of per-fixture time 1843 s -> 1355 s locally, median 508 -> 350 ms). The
+ctest `TIMEOUT` was deliberately left at 1500.
+
+This does not explain the earlier 45-48 minute occurrences, which had no
+per-test timeout and left no evidence, so the report stays open on its own
+closure condition below. It does mean a `***Timeout` on this test is first a
+question about throughput: check the fixture rate in the console before
+looking for a stuck fixture.
+
 ## What would close this
 
 A named stall with a cause, or a long enough quiet period on a leg that now

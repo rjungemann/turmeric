@@ -355,6 +355,18 @@ run_jit_fixture() {
         fi
     fi
 
+    # TUR-W0071 without W0070: the reduced TU (split runtime and/or the
+    # pruned program, src/compiler/jit_prune.h) failed and only the full-TU
+    # retry got the engine through.  The output is right, but that is the
+    # one way a reference the pruner missed would otherwise pass silently
+    # -- and pay two c2mir compiles.
+    if [ -z "$fell_back" ] && grep -q 'TUR-W0071' "$actual_stderr" 2>/dev/null; then
+        echo "FAIL $name -- passed only on the full-TU retry (TUR-W0071)"
+        grep 'TUR-W0071' "$actual_stderr" | head -1 | sed 's/^/    stderr: /'
+        echo "FAIL" > "$RESULTS_DIR/$rkey.result"
+        return
+    fi
+
     if [ -n "$fell_back" ]; then
         # Correct output through the cc fallback: a pass, tallied separately
         # so the jit-native count stays an honest signal.  Not stamped -- a
