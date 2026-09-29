@@ -1,0 +1,11 @@
+#lang r7rs
+;; A continuation captured on a worker thread and re-entered there, three
+;; times (jit-r7rs-callcc-reads-unknown-tag-after-per-thread-dynenv).  On
+;; glibc a thread's TCB and static TLS sit at the top of its stack mapping,
+;; so an image measured to that top rewound the thread's thread-locals on
+;; every re-entry -- among them the value the re-entry delivers, which lives
+;; in tur_r7rs_dyn: `<: not a number #<unknown>`.  Under `tur jit` the whole
+;; program runs on such a thread.
+(import (scheme base) (scheme write) (reentrywork) (turmeric reentrycrew))
+(run-worker)
+(write (worker-answer)) (newline)

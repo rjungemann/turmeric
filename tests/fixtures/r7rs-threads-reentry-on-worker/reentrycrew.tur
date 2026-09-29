@@ -1,0 +1,18 @@
+;; reentrycrew -- one raw pthread that runs the Scheme worker body, started
+;; and joined while the main thread waits.
+(defmodule reentrycrew
+  (import reentrywork :refer [worker-body!])
+  (export run-worker)
+  ```c
+  static pthread_t reentry_tid;
+  ```
+  (defn reentry-worker [arg : ptr<void>] : ptr<void>
+    (worker-body!)
+    arg)
+  (defn reentry-spawn-join [w : ptr<void>] : nil
+    ```c
+    if (pthread_create(&reentry_tid, NULL, (void *(*)(void *))w, NULL) != 0) abort();
+    pthread_join(reentry_tid, NULL);
+    ```)
+  (defn run-worker [] : nil
+    (reentry-spawn-join reentry-worker)))

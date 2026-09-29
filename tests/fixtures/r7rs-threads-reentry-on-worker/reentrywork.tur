@@ -1,0 +1,18 @@
+#lang r7rs
+;; The Scheme half: a counter that climbs by re-entering its own
+;; continuation until it reaches 3.  `n` counts the returns from call/cc,
+;; so the answer is (3 4): the value delivered last, and four arrivals.
+(define-library (reentrywork)
+  (export worker-body! worker-answer)
+  (import (scheme base))
+  (begin
+    (define answer 'not-run)
+    (define (worker-body!)
+      (let ((k #f) (n 0))
+        (let ((v (call/cc (lambda (c) (set! k c) 0))))
+          (set! n (+ n 1))
+          (if (< v 3)
+              (k (+ v 1))
+              (set! answer (list v n)))))
+      #t)
+    (define (worker-answer) answer)))
