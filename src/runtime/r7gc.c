@@ -260,6 +260,15 @@ static tur_gc_state *tur_gc_G;          /* points into mmap'd metadata */
 /* The calling thread's record.  A real thread-local: it holds no heap
  * pointer and is read on every allocation. */
 static __thread tur_gc_thread *tur_gc_self;
+/* A fiber can yield on one worker and resume on another, and clang keeps a
+ * thread-local's address in a register for the rest of a function call
+ * (TUR_TLS_FRESH, emit_module.c): a caller that allocated before the yield
+ * and allocates after it would take the first worker's record and cache.  So
+ * every function the program calls that reads tur_gc_self is TUR_GC_ENTRY --
+ * never inlined, it reads the address on its own entry, on the thread it is
+ * running on.  Cheaper than the accessor call per read that TUR_TLS_FRESH
+ * gives the fiber's own state, since nothing in here yields. */
+#define TUR_GC_ENTRY __attribute__((noinline))
 
 /* The thread-local roots of the emitted runtime: defined after the preamble
  * (emit_module.c, emit_r7rs_gc_tls_roots), it calls `add` once per
@@ -629,7 +638,7 @@ static void *tur_gc_alloc_large(size_t n) {
     return (void *)base;   /* fresh mmap memory is already zero */
 }
 
-static void *tur_gc_malloc(size_t n) {
+TUR_GC_ENTRY static void *tur_gc_malloc(size_t n) {
     if (!tur_gc_G) tur_gc_init();
     tur_gc_thread *t = tur_gc_check_thread("an allocation");
     tur_gc_maybe_collect();
@@ -661,7 +670,7 @@ static void tur_gc_release_large(tur_gc_page *pg) {
     pg->dead = true;
 }
 
-static void tur_gc_free(void *p) {
+TUR_GC_ENTRY static void tur_gc_free(void *p) {
     if (!p) return;
     tur_gc_state *G = tur_gc_G;
     if (!G) { free(p); return; }
@@ -1101,7 +1110,7 @@ TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_park(void) {
     t->stack_sp = (unsigned char *)&here;
     TUR_GC_STORE(&t->parked, 1);
 }
-static void tur_gc_unpark(void) {
+TUR_GC_ENTRY static void tur_gc_unpark(void) {
     tur_gc_thread *t = tur_gc_self;
     if (!t) return;
     if (--t->park_depth > 0) return;
@@ -1194,7 +1203,7 @@ static void tur_gc_thread_gone(void *raw) {
  * from the start.  After pthread_create the creator touches the record only
  * if it is still the same incarnation: a detached thread can finish and be
  * retired, and its record reused, before pthread_create returns. */
-static int tur_gc_pthread_create(pthread_t *tp, const pthread_attr_t *a,
+TUR_GC_ENTRY static int tur_gc_pthread_create(pthread_t *tp, const pthread_attr_t *a,
                                  void *(*fn)(void *), void *arg) {
     if (!tur_gc_G) tur_gc_init();
     tur_gc_state *G = tur_gc_G;
@@ -1231,7 +1240,7 @@ static int tur_gc_pthread_create(pthread_t *tp, const pthread_attr_t *a,
  * the start routine's end is recorded here (the emitted tur_thread_do_cancel
  * exits a cancelled thread this way). */
 static void tur_gc_pthread_exit(void *r) __attribute__((noreturn));
-static void tur_gc_pthread_exit(void *r) {
+TUR_GC_ENTRY static void tur_gc_pthread_exit(void *r) {
     tur_gc_thread *t = tur_gc_self;
     if (t) tur_gc_thread_end(t, r);
     pthread_exit(r);
@@ -1284,7 +1293,7 @@ static int tur_gc_pthread_detach(pthread_t tid) {
  * caller's registers until it is recorded.  The stores are ordered for a
  * stop at any instruction: a grown array is filled before it is published,
  * and an entry is written before the count that covers it. */
-static int tur_gc_setspecific(pthread_key_t k, const void *v) {
+TUR_GC_ENTRY static int tur_gc_setspecific(pthread_key_t k, const void *v) {
     int r = pthread_setspecific(k, v);
     tur_gc_thread *t = tur_gc_self;
     if (r != 0 || !t) return r;
@@ -1368,8 +1377,8 @@ static int tur_gc_mutex_lock(pthread_mutex_t *m) {
     if (G && (m == &G->world || m == &G->heap || m == &G->meta_lock)) return pthread_mutex_lock(m);
     tur_gc_park(); int r = pthread_mutex_lock(m); tur_gc_unpark(); return r;
 }
-static inline void tur_gc_intr_clear(void) { if (tur_gc_self) tur_gc_self->gc_intr = 0; }
-static inline bool tur_gc_intr_ours(void) { return tur_gc_self && tur_gc_self->gc_intr; }
+TUR_GC_ENTRY static void tur_gc_intr_clear(void) { if (tur_gc_self) tur_gc_self->gc_intr = 0; }
+TUR_GC_ENTRY static bool tur_gc_intr_ours(void) { return tur_gc_self && tur_gc_self->gc_intr; }
 /* The other blocking calls are wrapped at the call site, as a statement
  * expression around the call as written, whatever its signature.  The
  * macros are function-like, so a struct member of the same name is left

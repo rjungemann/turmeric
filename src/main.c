@@ -2094,6 +2094,32 @@ static void hoist_tur_include_directives(Buf *csrc) {
          * later strcmp/free).  Emitting the macro here guarantees it is seen
          * before any hoisted include. */
         buf_puts(&new_csrc, "#define _DEFAULT_SOURCE 1\n");
+        /* The same reason, one header later: on macOS the layout of
+         * ucontext_t is fixed by whichever header defines it first.  Defined
+         * under _XOPEN_SOURCE it embeds the machine context (880 bytes on
+         * arm64); defined by anything else -- <stdlib.h> reaches it through
+         * <sys/wait.h> and <sys/signal.h> -- it is the 56-byte head alone.
+         * libc's getcontext writes the machine context at its _XOPEN_SOURCE
+         * offset either way, so a FiberBlock laid out with the short type had
+         * every context switch write 816 bytes over the fields after its
+         * contexts and into the next heap object (a fixture that hoists
+         * <stdlib.h> -- every #lang r7rs program -- resumed fibers whose
+         * saved pc was zero).  The preamble includes <ucontext.h> first for
+         * this reason (emit_module.c, Phase T21), but a hoisted include lands
+         * above the preamble, so the prefix repeats that step here, in the
+         * preamble's order: the BSD networking headers first, while the full
+         * Darwin feature set is still the default, then <ucontext.h> under
+         * _XOPEN_SOURCE.  Include guards make the preamble's copy a no-op. */
+        buf_puts(&new_csrc,
+                 "#if defined(__APPLE__)\n"
+                 "#include <sys/select.h>\n"
+                 "#include <sys/socket.h>\n"
+                 "#include <netinet/in.h>\n"
+                 "#include <arpa/inet.h>\n"
+                 "#define _XOPEN_SOURCE 700\n"
+                 "#include <ucontext.h>\n"
+                 "#undef _XOPEN_SOURCE\n"
+                 "#endif\n");
         buf_write(&new_csrc, hdr.data, hdr.len);
         buf_write(&new_csrc, csrc->data, csrc->len);
         buf_free(csrc);
