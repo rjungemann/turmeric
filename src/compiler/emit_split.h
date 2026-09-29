@@ -74,4 +74,29 @@ void emit_split_exports_clear(void);
  * String and character literals and comments are left as written. */
 void emit_split_rename(const char *src, size_t len, Buf *out);
 
+/* r7rs-prelude-library-cold-compile: the library unit as `n` pieces that
+ * compile concurrently and link as one object.  Almost all of the unit's
+ * compile is optimizing its ~1,200 external functions, so each piece keeps
+ * the whole unit's declarations and static helpers and defines only its share
+ * of those, balanced by size:
+ *
+ *   - an external function is defined in one piece and prototyped in the
+ *     others;
+ *   - a file-scope variable is defined in piece 0 and declared `extern` in
+ *     the others -- a `static` one loses `static` and moves to the private
+ *     prefix EMIT_SPLIT_PIECE_PREFIX, so nothing the runtime archives define
+ *     can capture it; read-only data is copied freely;
+ *   - a constructor or destructor runs from one piece (piece 0 for a static
+ *     one), demoted to an ordinary function elsewhere;
+ *   - a SMALL external function (body at most `dup_max` bytes, no local
+ *     `static`, no `__func__`) is also a `static` copy in every other piece,
+ *     reached by a function-like macro so that only direct calls use it:
+ *     `-O2` inlines it there as it did in one unit, and taking its address
+ *     still names the one external definition.
+ *
+ * Writes pieces[0..n) (each buf_init'd by the caller) and returns 0, or
+ * nonzero when the text does not split (then compile it whole). */
+#define EMIT_SPLIT_PIECE_PREFIX "tur_sp_"
+int emit_split_pieces(const char *src, size_t len, int n, size_t dup_max, Buf *pieces);
+
 #endif /* TUR_EMIT_SPLIT_H */

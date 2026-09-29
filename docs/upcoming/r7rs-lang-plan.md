@@ -84,7 +84,6 @@ dialect, none of them a stage of this plan: `r7rs-reentrant-callcc-wrong-with-ev
 (a compiled wrong answer, seen on one macOS host and not in CI -- the one
 open report of the kind the checklist was made of),
 `r7rs-callcc-memory-never-freed` (the interpreter's re-entrant images only),
-`r7rs-prelude-library-cold-compile` (the first build, 8.5 s),
 `r7rs-prelude-split-gc-seam-on-macos` and
 `r7rs-prelude-split-wrong-symbols-on-windows` (the split stays Linux-only
 until each closes), and `cps-self-tail-call-relies-on-sibling-call` (every

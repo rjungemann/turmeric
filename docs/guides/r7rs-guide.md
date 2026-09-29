@@ -45,8 +45,10 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
   runs it; there is no `main` to write.
 - **Build time**: the runtime and the prelude are compiled once and cached
   under `<tmpdir>/tur-build/prelude/`, so the first build after installing
-  `tur` takes about 8 s and later ones about 1 s (on Linux and macOS; Windows
-  still builds each program as one unit). `TUR_PRELUDE_SPLIT=0` builds the
+  `tur` takes about 9 s on one core, about 4.5 s on four (it compiles in one
+  piece per CPU, up to eight; `TUR_PRELUDE_JOBS=<n>` sets the number), and
+  later ones about 1 s (on Linux and macOS; Windows still builds each
+  program as one unit). `TUR_PRELUDE_SPLIT=0` builds the
   program as a single C unit instead; `TUR_SHOW_CC=1` shows the two
   compiles, or why a program was built as one unit.
 - **`.scm` files** are Scheme without the `#lang r7rs` line: `tur run
