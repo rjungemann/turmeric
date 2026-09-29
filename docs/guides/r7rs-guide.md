@@ -45,8 +45,10 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
   runs it; there is no `main` to write.
 - **Build time**: the runtime and the prelude are compiled once and cached
   under `<tmpdir>/tur-build/prelude/`, so the first build after installing
-  `tur` takes about 8 s and later ones about 1 s (on Linux and macOS; Windows
-  still builds each program as one unit). `TUR_PRELUDE_SPLIT=0` builds the
+  `tur` takes about 9 s on one core, about 4.5 s on four (it compiles in one
+  piece per CPU, up to eight; `TUR_PRELUDE_JOBS=<n>` sets the number), and
+  later ones about 1 s (on Linux and macOS; Windows still builds each
+  program as one unit). `TUR_PRELUDE_SPLIT=0` builds the
   program as a single C unit instead; `TUR_SHOW_CC=1` shows the two
   compiles, or why a program was built as one unit.
 - **`.scm` files** are Scheme without the `#lang r7rs` line: `tur run
@@ -66,6 +68,29 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
   own library does not work at the prompt; import it plainly, or with
   `only` or `rename`. The prompt takes Scheme only; type
   `#lang turmeric` to switch to Turmeric (the session resets).
+- **Sweet-expressions**: `#lang r7rs/sweet` is the same language written
+  with SRFI-110's indentation, neoteric calls and `$`, over Scheme's own
+  lexemes (`#t`, `#\(`, `|two words|`, `#;` and `#|...|#` all read as they
+  do in `#lang r7rs`). `f{n - 1}` is SRFI-105's `(f (- n 1))`, and `f[x]` is
+  `f(x)`, since Scheme's brackets are parens. A library may be written this
+  way and imported by a plain `#lang r7rs` program, or the other way round
+  (`tests/fixtures/r7rs-sweet`):
+
+  ```scheme
+  #lang r7rs/sweet
+  import (scheme base) (scheme write)
+
+  define (fact n)
+    if {n <= 1}
+      1
+      {n * fact{n - 1}}
+
+  display $ fact 20
+  newline()
+  ```
+
+  `tur fmt` checks a sweet file and leaves its layout alone, which is its
+  syntax.
 - **Formatting**: `tur fmt` re-indents a Scheme file and never rewrites a
   token. Each line's leading whitespace is recomputed; `#t`, `#\x`,
   `|two words|` and `#e1.5` stay exactly as written.
@@ -556,6 +581,16 @@ Boehm collector does, so nothing is compiled into the program's loops. Nine
 threads on one heap, eight of them taking turns on a shared persistent map
 and one churning garbage, is a gate case
 (`tests/fixtures/r7rs-threads-stress`).
+
+Each thread has its own dynamic environment: the handlers `guard` and
+`with-exception-handler` install, the `dynamic-wind` frames, and the values
+`parameterize` binds. A `raise` on one thread never reaches a handler
+another thread installed, and a `parameterize` on one thread changes nothing
+another thread reads. A new thread starts with no handlers, no wind frames
+and each parameter at the value `make-parameter` gave it. A fiber has its
+own too, and carries it with it when it resumes on another thread
+(`tests/fixtures/r7rs-threads-dynamic-env`,
+`tests/fixtures/r7rs-threads-fiber-dynamic-env`).
 
 - The stop signal restarts the system call it interrupts. The runtime knows
   these blocking calls: the joins, the condition waits, `nanosleep`,

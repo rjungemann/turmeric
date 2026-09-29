@@ -14262,6 +14262,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
         /* sweet-exp rewrites the whole buffer, so an offset in original
          * coordinates is meaningless after transformation */
         env->reader_type != READER_SWEET &&
+        env->reader_type != READER_R7RS_SWEET &&
         prefix_len > 0 &&                       /* nothing accumulated yet */
         prefix_len <= src_len &&
         env->n_acc_forms == env->prior_toplevel; /* vector in sync with session */

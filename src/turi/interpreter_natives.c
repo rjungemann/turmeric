@@ -3440,6 +3440,29 @@ static void r7rs_put_utf8(char *out, int *n, uint32_t cp) {
     else if (cp < 0x10000) { out[(*n)++] = (char)(0xE0 | (cp >> 12)); out[(*n)++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[(*n)++] = (char)(0x80 | (cp & 0x3F)); }
     else { out[(*n)++] = (char)(0xF0 | (cp >> 18)); out[(*n)++] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[(*n)++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[(*n)++] = (char)(0x80 | (cp & 0x3F)); }
 }
+/* The twins of the prelude's dynamic-environment slots (r7rs-dyn-ref__,
+ * tur_r7rs_dyn in the compiled runtime): the wind, handler and parameter
+ * stacks and a re-entry's delivered value.  One set: turi has no
+ * user-reachable thread spawn, as with a ^thread-local global here.  A slot
+ * never written reads as nil, which r7rs-dyn-unset?__ answers #t for. */
+static TuriValue r7rs_dyn_slots[4];
+static bool      r7rs_dyn_written[4];
+static TuriValue native_r7rs_dyn_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t i = r7rs_arg_int(a, n, 0);
+    if (i < 0 || i >= 4 || !r7rs_dyn_written[i]) return turi_nil();
+    return r7rs_dyn_slots[i];
+}
+static TuriValue native_r7rs_dyn_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t i = r7rs_arg_int(a, n, 0);
+    if (i >= 0 && i < 4 && n >= 2) { r7rs_dyn_slots[i] = a[1]; r7rs_dyn_written[i] = true; }
+    return turi_nil();
+}
+static TuriValue native_r7rs_dyn_unset(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_bool(n < 1 || turi_any_identity_payload(a[0]).tag == TURI_NIL);
+}
 static TuriValue native_r7rs_same_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_bool(false);
@@ -4309,6 +4332,9 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-eval-c-answer-unspecified__", native_r7rs_eval_c_answer_unspecified, NULL);
     turi_env_register_native(env, "r7rs-eval-c-answer-raise__",     native_r7rs_eval_c_answer_raise,     NULL);
     turi_env_register_native(env, "r7rs-same-ref__",       native_r7rs_same_ref,        NULL);
+    turi_env_register_native(env, "r7rs-dyn-ref__",        native_r7rs_dyn_ref,         NULL);
+    turi_env_register_native(env, "r7rs-dyn-set__",        native_r7rs_dyn_set,         NULL);
+    turi_env_register_native(env, "r7rs-dyn-unset?__",     native_r7rs_dyn_unset,       NULL);
     turi_env_register_native(env, "r7rs-identity-word__",  native_r7rs_identity_word,   NULL);
     turi_env_register_native(env, "r7rs-cstr-hash__",      native_r7rs_cstr_hash,       NULL);
     turi_env_register_native(env, "r7rs-blen__",           native_r7rs_string_length,   NULL);

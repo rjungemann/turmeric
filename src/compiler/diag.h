@@ -466,8 +466,14 @@ typedef enum ReaderType {
      * `#u8(...)`, `,`/`,@` as unquote (comma is whitespace in every Turmeric
      * reader), dotted pairs, `|sym|`, the `#x`/`#o`/`#b`/`#d`/`#e`/`#i`
      * numeric prefixes and the Scheme string escapes.  Only `#lang r7rs`
-     * selects it; the language has no reader axis (D1). */
+     * selects it (D1). */
     READER_R7RS,
+    /* r7rs-sweet-base-dialect-missing: `#lang r7rs/sweet`, SRFI-110 over
+     * Scheme's lexical syntax -- the sweet-exp preprocessor (indentation, `$`)
+     * with its Scheme lexemes, then the Scheme reader with neoteric `f(x)` on.
+     * Scheme's second reader, and its last: `r7rs/neoteric` and
+     * `r7rs/curly-infix` are not bases (curly-infix is on under both). */
+    READER_R7RS_SWEET,
 } ReaderType;
 
 /* saffron-lang-plan D1: the LANGUAGE axis of a `#lang` line, orthogonal to the

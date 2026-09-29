@@ -2907,6 +2907,83 @@ static int link_command_run(const char *cc, const char *cc_flags,
     return 0;
 }
 
+/* r7rs-prelude-library-cold-compile: how many pieces the library unit is
+ * compiled in (emit_split_pieces), at once.  The unit is ~1,200 functions at
+ * -O2 and its parse is a small part of the compile, so the wall time falls
+ * with the pieces: a cold build took 9.1 s whole and takes 4.6 s in four on
+ * a 4-core box (docs/archive/r7rs-prelude-library-cold-compile.md).  One per
+ * online CPU up to eight; TUR_PRELUDE_JOBS=<n> overrides, and 1 compiles the
+ * unit whole.  Whole on Windows, where cmd.exe has no `&`/`wait`. */
+#define PRELUDE_PIECE_DUP_MAX 1200   /* bytes of body: a copy per piece, for inlining */
+static int prelude_pieces(void) {
+#ifdef _WIN32
+    return 1;
+#else
+    const char *e = getenv("TUR_PRELUDE_JOBS");
+    long n = (e && *e) ? strtol(e, NULL, 10) : sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1) n = 1;
+    if (n > 8) n = 8;
+    return (int)n;
+#endif
+}
+
+/* Compile the library unit `lib_c` as `np` pieces at once and link them into
+ * the one relocatable object `out_obj`.  Nonzero when anything fails -- the
+ * caller then compiles the unit whole, so a piece that does not compile costs
+ * time, never a build.  `stem` names the temporaries. */
+static int prelude_compile_pieces(const Buf *lib_c, const char *cc, const char *flags,
+                                  const char *stem, int np, const char *out_obj) {
+    Buf pieces[8];
+    for (int k = 0; k < np; k++) buf_init(&pieces[k]);
+    int rc = emit_split_pieces(lib_c->data, lib_c->len, np, PRELUDE_PIECE_DUP_MAX, pieces);
+    char src[8][1100], obj[8][1100];
+    int written = 0;
+    for (int k = 0; rc == 0 && k < np; k++) {
+        snprintf(src[k], sizeof src[k], "%s.p%d.c", stem, k);
+        snprintf(obj[k], sizeof obj[k], "%s.p%d.o", stem, k);
+        FILE *f = fopen(src[k], "wb");
+        if (!f || fwrite(pieces[k].data, 1, pieces[k].len, f) != pieces[k].len) rc = 2;
+        if (f) fclose(f);
+        written = k + 1;
+    }
+    for (int k = 0; k < np; k++) buf_free(&pieces[k]);
+    bool show = getenv("TUR_SHOW_CC") != NULL;
+    if (rc == 0) {
+        /* One shell: every compile in the background, then each one's
+         * status by its pid, so a failure in any of them is seen. */
+        /* Each piece carries every static helper and read-only table of
+         * the unit and uses a share of them: the rest are unused, which is
+         * no news. */
+        Buf cmd; buf_init(&cmd);
+        for (int k = 0; k < np; k++)
+            buf_printf(&cmd, "%s %s -Wno-unused-function -Wno-unused-variable "
+                             "-Wno-unused-const-variable -c -o %s %s & p%d=$!; ",
+                       cc, flags, obj[k], src[k], k);
+        buf_puts(&cmd, "ok=0;");
+        for (int k = 0; k < np; k++) buf_printf(&cmd, " wait $p%d || ok=1;", k);
+        buf_puts(&cmd, " exit $ok");
+        buf_putc(&cmd, '\0');
+        if (show) fprintf(stderr, "CC: %s\n", cmd.data);
+        rc = system(cmd.data) != 0;
+        buf_free(&cmd);
+    }
+    if (rc == 0) {
+        Buf cmd; buf_init(&cmd);
+        buf_printf(&cmd, "%s -r -nostdlib -o %s", cc, out_obj);
+        for (int k = 0; k < np; k++) buf_printf(&cmd, " %s", obj[k]);
+        buf_putc(&cmd, '\0');
+        if (show) fprintf(stderr, "CC: %s\n", cmd.data);
+        rc = system(cmd.data) != 0;
+        buf_free(&cmd);
+    }
+    for (int k = 0; k < written; k++) {
+        if (!show) unlink(src[k]);
+        unlink(obj[k]);
+    }
+    if (rc != 0) unlink(out_obj);
+    return rc;
+}
+
 /* r7rs-programs-compile-slowly: the object of a split build's library unit
  * (emit_split.h), compiled once and cached by a hash of everything that goes
  * into it -- its text, the compiler and every flag -- under
@@ -2992,12 +3069,23 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
         return 2;
     }
     fclose(f);
-    Buf cmd; buf_init(&cmd);
-    buf_printf(&cmd, "%s %s -c -o %s %s", cc, flags.data, tmp_obj, src);
-    buf_putc(&cmd, '\0');
-    if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
-    int rc = system(cmd.data);
-    buf_free(&cmd);
+    int rc = 1;
+    int np = prelude_pieces();
+    if (np > 1) {
+        char stem[1100];
+        snprintf(stem, sizeof stem, "%s/%016llx.%ld", dir, (unsigned long long)h, (long)getpid());
+        rc = prelude_compile_pieces(lib_c, cc, flags.data, stem, np, tmp_obj);
+        if (rc != 0 && getenv("TUR_SHOW_CC"))
+            fprintf(stderr, "tur: the library unit did not compile in %d pieces; compiling it whole\n", np);
+    }
+    if (rc != 0) {
+        Buf cmd; buf_init(&cmd);
+        buf_printf(&cmd, "%s %s -c -o %s %s", cc, flags.data, tmp_obj, src);
+        buf_putc(&cmd, '\0');
+        if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
+        rc = system(cmd.data);
+        buf_free(&cmd);
+    }
     buf_free(&flags);
     /* TUR_SHOW_CC keeps the unit's text beside its object, for a look at
      * what the cache key covered. */
@@ -8157,6 +8245,9 @@ static int cmd_fmt(int argc, char **argv) {
                 /* r7rs-lang-plan R9: a Scheme buffer with no `#lang` line
                  * (an editor selection) -- re-indented, never reprinted. */
                 force_lang = READER_R7RS;
+            } else if (strcmp(lang, "r7rs/sweet") == 0) {
+                /* Checked, and kept as written (fmt_format_buffer). */
+                force_lang = READER_R7RS_SWEET;
             } else {
                 fprintf(stderr, "tur fmt: unknown dialect '%s'\n", lang);
                 return 2;

@@ -1,0 +1,10 @@
+#lang r7rs
+;; R7RS 2.2: `#;<datum>` is intertoken space, so it may come last in a list,
+;; or last in the file.  The reader used to take it as the prefix of the next
+;; form, so `(list 1 #;2)` was "unexpected ')'" -- in every dialect.
+(import (scheme base) (scheme write))
+(write (list 1 #;2)) (newline)
+(write (list #;0 1 #;(2 3) 4 #; 5)) (newline)
+(write '(a #;b . #;c d)) (newline)
+(write (vector 1 #;#(2) 3)) (newline)
+#;(write 'never)

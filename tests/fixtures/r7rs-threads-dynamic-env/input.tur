@@ -1,0 +1,14 @@
+#lang r7rs
+;; docs/archive/r7rs-dynamic-environment-shared-across-threads.md: the R7RS
+;; dynamic environment on five threads at once.  The handler stack, the wind
+;; stack and the parameter cells were process globals, so a raise on one
+;; thread called a handler another thread had installed ("continuation
+;; invoked after its call/cc prompt returned"), a pop on one removed
+;; another's ("uncaught exception: boom"), an escape ran another thread's
+;; dynamic-wind `after`, and a parameterize on one thread changed the value
+;; every other thread read.  Every run failed.  They are per thread now.
+(import (scheme base) (scheme write) (dynsteps) (turmeric dyncrew))
+(crew-start)
+(define mine (spin 20000))
+(crew-join)
+(write (list mine (crew-total))) (newline)

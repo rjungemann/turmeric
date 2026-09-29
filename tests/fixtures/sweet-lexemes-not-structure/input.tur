@@ -1,0 +1,17 @@
+#lang turmeric/sweet
+;; The sweet-exp preprocessor counts brackets and ends a `$` rest at `;`, so a
+;; character literal holding one (`#\(`) opened a group that never closed, and
+;; a `;` inside a string after `$` cut the rest off mid-string.  Both read now
+;; (r7rs-sweet-base-dialect-missing, which made the preprocessor skip lexemes).
+
+defn pick [a : cstr b : cstr] : cstr
+  a
+
+defn main [] : int
+  println #\(
+  println #\;
+  println "a;b"
+  println $ pick "x;" "y"
+  println (pick "p" ; a comment inside the group (with a paren
+                "q")
+  0

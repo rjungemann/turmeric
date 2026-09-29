@@ -149,6 +149,66 @@ if [ -n "$LIB_A" ] && [ -n "$LIB_B" ] && [ "$LIB_A" != "$LIB_B" ]; then
          "(${LIB_A##*/} vs ${LIB_B##*/}): the cache never hits"
 fi
 
+# r7rs-prelude-library-cold-compile: a cold cache compiles the library unit
+# in pieces (emit_split_pieces), one per CPU, and links them into the one
+# object.  Every piece has the unit's declarations and static helpers, so
+# state could fork there too: a static variable left static in two pieces, or
+# a function-local `static` in a helper two pieces compile.  Build the
+# library from a cold cache whole (TUR_PRELUDE_JOBS=1) and in four pieces:
+# no writable data name may be defined twice in the pieces' object and more
+# times than in the whole one, and the program must print its expected
+# output.  (Once where the whole unit has none is not a fork: exported from
+# piece 0, a static the whole unit's optimizer dropped stays.)
+counted_data() {   # defined_data, one line per definition, piece prefix off
+    if [ "$(uname -s)" = Darwin ]; then
+        nm -m "$1" 2>/dev/null |
+            awk '/\(__DATA,__(data|bss|common|thread_vars|thread_bss)\)/ {
+                     n = $NF; sub(/\.[0-9]+$/, "", n); sub(/^_tur_sp_/, "_", n)
+                     if (n ~ /^_/) print n }' | sort
+    else
+        nm "$1" 2>/dev/null |
+            awk '$2 ~ /^[BbDdGgSs]$/ && $3 ~ /./ {
+                     n = $3; sub(/\.[0-9]+$/, "", n); sub(/^tur_sp_/, "", n); print n }' | sort
+    fi
+}
+PF=r7rs-type-errors-raise
+PLIB_1=""; PLIB_4=""
+for jobs in 1 4; do
+    d="$TMP/pieces-$jobs"
+    mkdir -p "$d/tmp"
+    cp -r "tests/fixtures/$PF/." "$d/"
+    if ! (cd "$d" && TMPDIR="$d/tmp" TUR_PRELUDE_SPLIT=1 TUR_PRELUDE_JOBS=$jobs TUR_SHOW_CC=1 \
+            "$TUR" build input.tur -o "$d/prog") >"$d/build.log" 2>&1; then
+        fail "pieces: the build with TUR_PRELUDE_JOBS=$jobs failed"; tail -20 "$d/build.log" | sed 's/^/    /'
+        continue
+    fi
+    lib=$(ls "$d"/tmp/tur-build/prelude/*.o 2>/dev/null | head -1)
+    [ -n "$lib" ] || { fail "pieces: no library object with TUR_PRELUDE_JOBS=$jobs"; continue; }
+    if [ "$jobs" = 4 ]; then
+        PLIB_4="$lib"
+        grep -q -- ' -r -nostdlib ' "$d/build.log" ||
+            fail "pieces: TUR_PRELUDE_JOBS=4 compiled the library whole (see TUR_SHOW_CC)"
+        grep -q "did not compile in" "$d/build.log" &&
+            fail "pieces: the pieces did not compile: $(grep -m1 'did not compile in' "$d/build.log")"
+    else
+        PLIB_1="$lib"
+    fi
+    if ! (cd "$d" && "$d/prog" >"$d/out" 2>/dev/null; true) ||
+       ! diff -q "$d/out" "tests/fixtures/$PF/expected.stdout" >/dev/null; then
+        fail "pieces: with TUR_PRELUDE_JOBS=$jobs the output differs"
+        diff "$d/out" "tests/fixtures/$PF/expected.stdout" | head -10 | sed 's/^/    /'
+    fi
+done
+if [ -n "$PLIB_1" ] && [ -n "$PLIB_4" ]; then
+    forked=$(awk 'NR == FNR { w[$0]++; next } { p[$0]++ }
+                  END { for (n in p) if (p[n] > 1 && p[n] > w[n]) print n " (" p[n] " vs " w[n] + 0 ")" }' \
+                 <(counted_data "$PLIB_1") <(counted_data "$PLIB_4"))
+    if [ -n "$forked" ]; then
+        fail "pieces: state defined in more than one piece (pieces vs whole):"
+        printf '%s\n' "$forked" | sed 's/^/    /' | head -20
+    fi
+fi
+
 if [ "$FAILED" -eq 0 ]; then
     echo "PASS check-r7rs-prelude-split"
 fi

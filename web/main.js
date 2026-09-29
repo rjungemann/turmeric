@@ -1342,8 +1342,9 @@ function baseShortLabel(base) {
         case 'saffron/curly-infix':  return 'saffron curly';
         case 'saffron/neoteric':     return 'saffron neoteric';
         case 'saffron/sweet':        return 'saffron sweet';
-        // r7rs brings its own reader, so the base token says it all.
+        // r7rs brings its own readers, so the base token says it all.
         case 'r7rs':                 return 'r7rs';
+        case 'r7rs/sweet':           return 'r7rs sweet';
         default:                     return base || 's-expr';
     }
 }

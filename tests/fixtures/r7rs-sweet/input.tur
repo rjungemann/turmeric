@@ -1,0 +1,45 @@
+#lang r7rs/sweet
+;; docs/archive/r7rs-sweet-base-dialect-missing.md: `#lang r7rs/sweet` is
+;; SRFI-110 over Scheme's lexical syntax -- indentation, neoteric `f(x)` and
+;; rest-of-line `$`, with curly-infix -- read by the Scheme reader.  The
+;; preprocessor takes no Scheme lexeme for structure: `#\(`, `#\;`, `#\"`,
+;; a `|delimited symbol|`, `#;` and `#|...|#` below each hold a byte it
+;; would otherwise count.  `f{n - 1}` is SRFI-105's `(f (- n 1))`.
+import (scheme base) (scheme write) (sweetshapes)
+
+define (fact n)
+  if {n <= 1}
+    1
+    {n * fact{n - 1}}
+
+define (greet name)
+  string-append "hello; " name
+
+display $ greet "world"
+newline()
+write fact(10)
+newline()
+;; The guide's example (docs/guides/r7rs-guide.md, Sweet-expressions).
+display $ fact 20
+newline()
+write $ list #t #f #\( #\; #\" '|a b;c| #(1 2 3) #u8(4 5) 'sym
+newline()
+let loop ((i 0) (acc '()))  ; a comment with a ( paren
+  if {i < 3}
+    loop {i + 1} (cons i acc)
+    begin
+      write acc
+      newline()
+write
+  guard (e ((symbol? e) (list 'caught e)))
+    raise 'boom
+newline()
+write $ describe $ make-rect 3 4  #;(ignored)
+newline()
+write (list 1 #;2 3)
+newline()
+write $ map (lambda (x) {x * x}) '(1 2 3)
+newline()
+define v (vector 10 20 30)
+write vector-ref[v 1]
+newline()

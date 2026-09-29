@@ -1,0 +1,24 @@
+#lang r7rs
+;; The Scheme half: a loop whose every step uses the whole dynamic
+;; environment -- two guards (one that raises), a parameterize, a read of the
+;; parameter outside it, and a dynamic-wind left by an escape.  Each step is
+;; worth 6 when this thread sees only its own handlers, wind frames and
+;; parameter bindings.
+(define-library (dynsteps)
+  (export spin)
+  (import (scheme base))
+  (begin
+    (define p (make-parameter 0))
+    (define (step i)
+      (+ (guard (e (#t 0)) (if (= i -1) (raise 'never) 1))
+         (guard (e ((symbol? e) 1)) (raise 'boom))
+         (parameterize ((p i)) (if (= (p) i) 1 0))
+         (if (= (p) 0) 1 0)
+         (let ((n 0))
+           (dynamic-wind (lambda () (set! n (+ n 1)))
+                         (lambda () (call/cc (lambda (k) (k 0))))
+                         (lambda () (set! n (+ n 1))))
+           n)))
+    (define (spin n)
+      (let lp ((i n) (acc 0))
+        (if (= i 0) acc (lp (- i 1) (+ acc (step i))))))))

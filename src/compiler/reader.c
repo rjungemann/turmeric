@@ -169,6 +169,43 @@ static bool skip_block_comment(Reader *r) {
     return false;
 }
 
+static Form *read_form(Reader *r);
+static void skip_ws_and_comments(Reader *r);
+
+/* DC1/DC2: a datum comment `#;<datum>` at r->pos -- read and discard one
+ * form.  False, with r->error set, when no form follows. */
+static bool skip_datum_comment(Reader *r) {
+    Span s = span_point(r);
+    advance(r); advance(r);  /* consume '#' and ';' */
+    skip_ws_and_comments(r);
+    if (r->error) return false;
+    int next = peek(r);
+    if (next == -1) {
+        diag_emit(DIAG_ERROR, s,
+                  "datum comment #; requires a following form, "
+                  "got end of input");
+        r->error = true;
+        return false;
+    }
+    if (next == ')' || next == ']' || next == '}') {
+        diag_emit(DIAG_ERROR, s,
+                  "datum comment #; requires a following form, got '%c'",
+                  (char)next);
+        r->error = true;
+        return false;
+    }
+    Form *discarded = read_form(r);
+    if (r->error) return false;
+    if (!discarded) {
+        diag_emit(DIAG_ERROR, s,
+                  "datum comment #; requires a following form, "
+                  "got end of input");
+        r->error = true;
+        return false;
+    }
+    return true;
+}
+
 static void skip_ws_and_comments(Reader *r) {
     for (;;) {
         if (r->error) return;
@@ -197,6 +234,11 @@ static void skip_ws_and_comments(Reader *r) {
             while ((c = peek(r)) != -1 && c != '\n') advance(r);
         } else if (c == '#' && peek2(r) == '|') {
             if (!skip_block_comment(r)) return;
+        } else if (c == '#' && peek2(r) == ';') {
+            /* R7RS 2.2: a datum comment is intertoken space, so it may be
+             * the last thing in a list -- `(list 1 #;2)`.  Read as the
+             * prefix of the next form instead, that was "unexpected ')'". */
+            if (!skip_datum_comment(r)) return;
         } else {
             return;
         }
@@ -1089,7 +1131,8 @@ static Form *read_symbol_or_minus_at(Reader *r, bool head_pos) {
      * Every other decline path rewrites to something (`$` at EOL or before a
      * comment wraps an empty rest, `$x` is the symbol `$x`), so a BARE `$`
      * reaching the reader from a sweet file means exactly one thing. */
-    if (r->file != NULL && r->file->reader_type == READER_SWEET &&
+    if (r->file != NULL && (r->file->reader_type == READER_SWEET ||
+                            r->file->reader_type == READER_R7RS_SWEET) &&
         name.len == 1 && name.p[0] == '$') {
         diag_emit_with_code(DIAG_ERROR, span, TUR_E0332_SWEET_DOLLAR_IN_BRACKETS,
                             "`$` has no meaning inside brackets -- the "
@@ -2848,12 +2891,33 @@ static int peek_neoteric_bracket(const Reader *r) {
     return -1;
 }
 
+static Form *read_curly_infix(Reader *r);
+
 /* Phase S2: Read neoteric bracketed expression after an atom */
 /* f(expr) -> (f expr), f{expr} -> (f expr), f[expr] -> (bracketapply f expr) */
 static Form *read_neoteric_bracket(Reader *r, Form *atom, int bracket) {
     uint32_t start_line = r->line;
     uint32_t start_col = r->col;
     size_t start_off = r->pos;
+
+    /* `#lang r7rs/sweet` (r7rs-sweet-base-dialect-missing) reads neoteric
+     * as SRFI-105 specifies it for Scheme: `f{n - 1}` is `(f {n - 1})`, one
+     * argument -- `(fact (- n 1))`, the SRFI's own example -- and `f{}` is
+     * `(f)`.  `f[x]` is `f(x)`: Scheme's `[...]` are parens.  The Turmeric
+     * readers keep their own reading of both, below. */
+    if (r->scheme_enabled && bracket == '{') {
+        Form *arg = read_curly_infix(r);
+        if (!arg) return NULL;
+        bool empty = arg->tag == F_LIST && arg->as.list.len == 0;
+        Form **call_items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+        call_items[0] = atom;
+        call_items[1] = arg;
+        Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+        Form *result = form_list(r->arena, span, call_items, empty ? 1 : 2);
+        int next = peek_neoteric_bracket(r);
+        if (next != -1) return read_neoteric_bracket(r, result, next);
+        return result;
+    }
     
     /* Consume the opening bracket */
     advance(r);
@@ -2914,7 +2978,7 @@ static Form *read_neoteric_bracket(Reader *r, Form *atom, int bracket) {
     free(items);
     
     Form *result;
-    if (bracket == '[' && n == 1) {
+    if (bracket == '[' && n == 1 && !r->scheme_enabled) {
         /* Special case: f[x] -> (bracketapply f x) */
         const Symbol *bracketapply_sym = symtab_intern(r->st, strslice("bracketapply", 12));
         Form **ba_items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
@@ -4116,38 +4180,8 @@ static Form *read_form(Reader *r) {
         if (m || r->error) return m;
     }
 
-    /* DC1/DC2: Datum comment #;datum -- read and discard one form */
-    if (c == '#' && peek2(r) == ';') {
-        Span s = span_point(r);
-        advance(r); advance(r);  /* consume '#' and ';' */
-        skip_ws_and_comments(r);
-        int next = peek(r);
-        if (next == -1) {
-            diag_emit(DIAG_ERROR, s,
-                      "datum comment #; requires a following form, "
-                      "got end of input");
-            r->error = true;
-            return NULL;
-        }
-        if (next == ')' || next == ']' || next == '}') {
-            diag_emit(DIAG_ERROR, s,
-                      "datum comment #; requires a following form, got '%c'",
-                      (char)next);
-            r->error = true;
-            return NULL;
-        }
-        Form *discarded = read_form(r);
-        if (r->error) return NULL;
-        if (!discarded) {
-            diag_emit(DIAG_ERROR, s,
-                      "datum comment #; requires a following form, "
-                      "got end of input");
-            r->error = true;
-            return NULL;
-        }
-        (void)discarded;
-        return read_form(r);
-    }
+    /* DC1/DC2: a datum comment `#;datum` is whitespace, and
+     * skip_ws_and_comments above has already discarded it. */
     /* r7rs-lang-plan R1: the Scheme-only `#` dispatches -- `#t`/`#f`,
      * `#(...)`, `#u8(...)`, the numeric prefixes.  Before every Turmeric
      * `#` literal so that, e.g., `#f` is a boolean and not the start of
@@ -4609,6 +4643,7 @@ typedef struct SweetEmit {
     Buf      *out;
     SweetMap *map;
     Arena    *arena;
+    bool      scheme;   /* r7rs/sweet: Scheme's lexemes (sweet_lexeme_end) */
 } SweetEmit;
 
 static void emit_copy_(SweetEmit *e, const char *src, size_t orig_off, size_t n) {
@@ -4695,6 +4730,52 @@ static size_t sweet_skip_group_marker(const char *s, size_t i, size_t end) {
     return i;
 }
 
+/* Past a lexeme at s[i] that holds a byte the scanners below would take for
+ * structure, or i itself when none starts there.  Called only outside
+ * strings and comments.
+ *
+ * A character literal -- `#\(`, `#\;`, `#\"` -- in every dialect, since the
+ * Turmeric reader reads `#\c` too.  Under `#lang r7rs/sweet`
+ * (r7rs-sweet-base-dialect-missing) also Scheme's own: a `|delimited
+ * symbol|`, which may hold spaces, brackets and semicolons, and the `#;`
+ * datum-comment prefix, whose `;` does not start a line comment. */
+static size_t sweet_lexeme_end(const char *s, size_t i, size_t end, bool scheme) {
+    if (s[i] == '#' && i + 2 < end && s[i + 1] == '\\' && s[i + 2] != '\n')
+        return i + 3;
+    if (!scheme) return i;
+    if (s[i] == '#' && i + 1 < end && s[i + 1] == ';') return i + 2;
+    if (s[i] == '|') {
+        size_t k = i + 1;
+        while (k < end && s[k] != '|' && s[k] != '\n') {
+            if (s[k] == '\\' && k + 1 < end) k++;
+            k++;
+        }
+        return (k < end && s[k] == '|') ? k + 1 : i;
+    }
+    return i;
+}
+
+/* One step of a `$` rest-of-line scan, which stops at a `;` or a newline:
+ * past a string (whose `;` is text), a lexeme (sweet_lexeme_end) or a `\`
+ * line continuation, else one byte. */
+static size_t sweet_rest_step(const char *s, size_t i, size_t end, bool scheme) {
+    if (s[i] == '"') {
+        i++;
+        while (i < end && s[i] != '"') {
+            if (s[i] == '\\' && i + 1 < end) i++;
+            i++;
+        }
+        return i < end ? i + 1 : end;
+    }
+    size_t k = sweet_lexeme_end(s, i, end, scheme);
+    if (k != i) return k;
+    if (s[i] == '\\') {
+        k = sweet_skip_line_cont(s, i, end);
+        if (k != i) return k;
+    }
+    return i + 1;
+}
+
 static bool sweet_line_is_blank(const char *s, size_t i, size_t end) {
     size_t orig = i;
     while (i < end && (s[i] == ' ' || s[i] == '\t')) i++;
@@ -4717,7 +4798,8 @@ static inline bool sweet_at_fence(const char *src, size_t i, size_t end) {
     return i + 2 < end && src[i] == '`' && src[i + 1] == '`' && src[i + 2] == '`';
 }
 
-static int sweet_count_elements(const char *src, size_t start, size_t end) {
+static int sweet_count_elements(const char *src, size_t start, size_t end,
+                                bool scheme) {
     int count = 0;
     bool in_tok = false;   /* mid-token at bd == 0 */
     int  bd = 0;
@@ -4758,6 +4840,16 @@ static int sweet_count_elements(const char *src, size_t start, size_t end) {
             if (c == '#' && i + 1 < end && src[i + 1] == '|') {
                 in_bc = true; i += 2; continue;
             }
+            {
+                size_t k = sweet_lexeme_end(src, i, end, scheme);
+                if (k != i) { i = k; continue; }
+            }
+            /* A line comment inside the group: its brackets are not
+             * structure (the logical line runs on past it). */
+            if (c == ';') {
+                while (i < end && src[i] != '\n') i++;
+                continue;
+            }
             if (c == '(' || c == '[' || c == '{') { bd++; i++; continue; }
             if (c == ')' || c == ']' || c == '}') {
                 bd--; i++;
@@ -4773,6 +4865,13 @@ static int sweet_count_elements(const char *src, size_t start, size_t end) {
             i++; continue;
         }
         /* bd == 0 */
+        {
+            size_t k = sweet_lexeme_end(src, i, end, scheme);
+            if (k != i) {
+                if (!in_tok) { count++; in_tok = true; }
+                i = k; continue;
+            }
+        }
         if (c == ';') break;
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
             in_tok = false; i++; continue;
@@ -4802,11 +4901,7 @@ static int sweet_count_elements(const char *src, size_t start, size_t end) {
             count++;
             i++;
             while (i < end && src[i] != ';' && src[i] != '\n') {
-                if (src[i] == '\\') {
-                    size_t k = sweet_skip_line_cont(src, i, end);
-                    if (k != i) { i = k; continue; }
-                }
-                i++;
+                i = sweet_rest_step(src, i, end, scheme);
             }
             in_tok = false;
             continue;
@@ -4818,7 +4913,7 @@ static int sweet_count_elements(const char *src, size_t start, size_t end) {
 }
 
 static SweetLine *sweet_collect_lines(const char *src, size_t len,
-                                       size_t *out_n) {
+                                       size_t *out_n, bool scheme) {
     SweetLine *lines = NULL;
     size_t cap = 0, n = 0;
 
@@ -4864,6 +4959,10 @@ static SweetLine *sweet_collect_lines(const char *src, size_t len,
             if (c == '"') { in_str = true; j++; continue; }
             if (c == '#' && j + 1 < len && src[j + 1] == '|') {
                 in_bc = true; j += 2; continue;
+            }
+            {
+                size_t k = sweet_lexeme_end(src, j, len, scheme);
+                if (k != j) { j = k; continue; }
             }
             if (c == ';') {
                 while (j < len && src[j] != '\n') j++;
@@ -4919,13 +5018,13 @@ static SweetLine *sweet_collect_lines(const char *src, size_t len,
  * contribute their post-`\\` head tokens plus the sum of their
  * children's contributions, flattening into the parent. */
 static size_t sweet_analyze_node(SweetLine *lines, size_t n_lines,
-                                  const char *src, size_t idx) {
+                                  const char *src, size_t idx, bool scheme) {
     SweetLine *H = &lines[idx];
     int my_indent = H->indent;
     size_t head_start = H->content_start;
     if (H->is_group)
         head_start = sweet_skip_group_marker(src, head_start, H->content_end);
-    int head_elems = sweet_count_elements(src, head_start, H->content_end);
+    int head_elems = sweet_count_elements(src, head_start, H->content_end, scheme);
 
     size_t last = idx;
     int child_contrib = 0;
@@ -4934,7 +5033,7 @@ static size_t sweet_analyze_node(SweetLine *lines, size_t n_lines,
         if (lines[j].blank) { j++; continue; }
         if (lines[j].indent <= my_indent) break;
         size_t child_first = j;
-        last = sweet_analyze_node(lines, n_lines, src, j);
+        last = sweet_analyze_node(lines, n_lines, src, j, scheme);
         child_contrib += lines[child_first].contributes_elems;
         j = last + 1;
     }
@@ -4954,11 +5053,11 @@ static size_t sweet_analyze_node(SweetLine *lines, size_t n_lines,
 }
 
 static void sweet_analyze_top(SweetLine *lines, size_t n_lines,
-                               const char *src) {
+                               const char *src, bool scheme) {
     size_t i = 0;
     while (i < n_lines) {
         if (lines[i].blank) { i++; continue; }
-        size_t last = sweet_analyze_node(lines, n_lines, src, i);
+        size_t last = sweet_analyze_node(lines, n_lines, src, i, scheme);
         i = last + 1;
     }
 }
@@ -4976,7 +5075,8 @@ static void sweet_analyze_top(SweetLine *lines, size_t n_lines,
  * covered: SRFI-110 specifies `(f (g))` there, and that is a call, not a
  * double application. */
 static bool sweet_dollar_rest_is_delimited(const char *src,
-                                            size_t start, size_t end) {
+                                            size_t start, size_t end,
+                                            bool scheme) {
     while (start < end && (src[start] == ' ' || src[start] == '\t')) start++;
     while (end > start && (src[end - 1] == ' ' || src[end - 1] == '\t' ||
                            src[end - 1] == '\r' || src[end - 1] == '\n'))
@@ -5009,6 +5109,10 @@ static bool sweet_dollar_rest_is_delimited(const char *src,
             q++; continue;
         }
         if (c == '"') { in_str = true; q++; continue; }
+        {
+            size_t k = sweet_lexeme_end(src, q, end, scheme);
+            if (k != q) { q = k; continue; }
+        }
         if (c == '(' || c == '[' || c == '{') { bd++; q++; continue; }
         if (c == ')' || c == ']' || c == '}') {
             bd--; q++;
@@ -5063,8 +5167,13 @@ static void sweet_emit_content(SweetEmit *e, const char *src,
             }
             i++; continue;
         }
-        if (bd == 0 && c == ';') {
-            /* copy the comment through to EOL */
+        {
+            size_t k = sweet_lexeme_end(src, i, end, e->scheme);
+            if (k != i) { emit_copy_(e, src, i, k - i); i = k; continue; }
+        }
+        if (c == ';') {
+            /* copy the comment through to EOL (inside a bracket group too:
+             * its brackets are not structure) */
             size_t j = i;
             while (j < end && src[j] != '\n') j++;
             emit_copy_(e, src, i, j - i);
@@ -5114,19 +5223,14 @@ static void sweet_emit_content(SweetEmit *e, const char *src,
             while (rest_end < end && src[rest_end] != '\n' && src[rest_end] != ';')
                 rest_end++;
             size_t rs = i;
-            while (rs < end && src[rs] != '\n' && src[rs] != ';') {
-                if (src[rs] == '\\') {
-                    size_t k = sweet_skip_line_cont(src, rs, end);
-                    if (k != rs) { rs = k; continue; }
-                }
-                rs++;
-            }
+            while (rs < end && src[rs] != '\n' && src[rs] != ';')
+                rs = sweet_rest_step(src, rs, end, e->scheme);
             rest_end = rs;
             /* ... but when the rest is already one complete expression --
              * a neoteric call `g(7)`, a parenthesised form `(g 7)`, a
              * curly-infix group, a data literal -- wrapping it again would
              * apply the result as a function.  Emit it as-is. */
-            bool wrap = !sweet_dollar_rest_is_delimited(src, i, rest_end);
+            bool wrap = !sweet_dollar_rest_is_delimited(src, i, rest_end, e->scheme);
             if (wrap) emit_insert_char_(e, '(');
             sweet_emit_content(e, src, i, rest_end);
             if (wrap) emit_insert_char_(e, ')');
@@ -5145,7 +5249,8 @@ static void sweet_emit_content(SweetEmit *e, const char *src,
  * (producing a spurious "unterminated list"). Block comments and string
  * contents count as code (they self-terminate), so only `;` line comments
  * are trimmed. */
-static size_t sweet_code_end(const char *src, size_t start, size_t end) {
+static size_t sweet_code_end(const char *src, size_t start, size_t end,
+                             bool scheme) {
     size_t code_end = start;
     bool in_str = false, in_bc = false, in_cb = false;
     size_t i = start;
@@ -5174,6 +5279,10 @@ static size_t sweet_code_end(const char *src, size_t start, size_t end) {
         if (c == '#' && i + 1 < end && src[i + 1] == '|') {
             in_bc = true; code_end = i + 2; i += 2; continue;
         }
+        {
+            size_t k = sweet_lexeme_end(src, i, end, scheme);
+            if (k != i) { code_end = k; i = k; continue; }
+        }
         if (c == ';') {
             /* Line comment -- skip to EOL without advancing code_end. */
             while (i < end && src[i] != '\n') i++;
@@ -5186,19 +5295,20 @@ static size_t sweet_code_end(const char *src, size_t start, size_t end) {
 }
 
 static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
-                               size_t *out_len, SweetMap *out_map) {
+                               size_t *out_len, SweetMap *out_map,
+                               bool scheme) {
     size_t n_lines = 0;
-    SweetLine *lines = sweet_collect_lines(src, len, &n_lines);
+    SweetLine *lines = sweet_collect_lines(src, len, &n_lines, scheme);
     if (!lines && n_lines == 0) {
         char *empty = (char *)arena_alloc(arena, 1);
         empty[0] = 0;
         *out_len = 0;
         return empty;
     }
-    sweet_analyze_top(lines, n_lines, src);
+    sweet_analyze_top(lines, n_lines, src, scheme);
 
     Buf b; buf_init(&b);
-    SweetEmit emit = { .out = &b, .map = out_map, .arena = arena };
+    SweetEmit emit = { .out = &b, .map = out_map, .arena = arena, .scheme = scheme };
     size_t cur = 0;
     for (size_t i = 0; i < n_lines; i++) {
         SweetLine *L = &lines[i];
@@ -5224,7 +5334,7 @@ static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
 
         /* Split off any trailing line comment so the implicit closes land
          * before it (a `)` after a `; comment` would be commented out). */
-        size_t code_end = sweet_code_end(src, cstart, L->content_end);
+        size_t code_end = sweet_code_end(src, cstart, L->content_end, scheme);
         sweet_emit_content(&emit, src, cstart, code_end);
 
         /* Implicit closes (inserted). */
@@ -5275,13 +5385,14 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
      * that span offsets recorded in Forms (which index into r.src) match
      * what diagnostics print as the file's contents. */
     const SourceFile *eff_file = file;
-    if (file->reader_type == READER_SWEET) {
+    if (file->reader_type == READER_SWEET || file->reader_type == READER_R7RS_SWEET) {
         size_t xlen = 0;
         SweetMap *xmap = (SweetMap *)arena_alloc(arena, sizeof *xmap);
         xmap->runs = NULL;
         xmap->n_runs = 0;
         xmap->cap_runs = 0;
-        char  *xsrc = sweet_preprocess(arena, file->src, file->len, &xlen, xmap);
+        char  *xsrc = sweet_preprocess(arena, file->src, file->len, &xlen, xmap,
+                                       file->reader_type == READER_R7RS_SWEET);
         /* TUR_SWEET_DUMP=1 prints the preprocessed source for debugging. */
         if (getenv("TUR_SWEET_DUMP")) {
             fprintf(stderr, "==== sweet-exp preprocessed (%s) ====\n%.*s====\n",
@@ -5370,6 +5481,14 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
              * Scheme SRFI, and `{` is reserved in R7RS rather than spoken
              * for -- and neoteric stays off, since `f(x)` is not Scheme. */
             r.scheme_enabled = true;
+            break;
+        case READER_R7RS_SWEET:
+            /* r7rs-sweet-base-dialect-missing: the Scheme lexemes over the
+             * text the preprocessor above made, with SRFI-105's neoteric
+             * `f(x)` -- which only ever follows a symbol, so `#(1 2)`,
+             * `#u8(1)`, `'(a b)` and a number keep their Scheme reading. */
+            r.scheme_enabled = true;
+            r.neoteric_enabled = true;
             break;
         case READER_UNKNOWN:
             break;
@@ -5703,6 +5822,7 @@ const char *reader_type_name(ReaderType type) {
         /* r7rs-lang-plan R1: the Scheme reader is owned by one language and
          * has no `turmeric/` spelling; the base token IS the name. */
         case READER_R7RS: return "r7rs";
+        case READER_R7RS_SWEET: return "r7rs/sweet";
         default: return "<invalid>";
     }
 }
@@ -5732,6 +5852,8 @@ bool reader_type_is_implemented(ReaderType type) {
             return true; /* indent-sensitive t-expressions + curly-infix + neoteric */
         case READER_R7RS:
             return true; /* r7rs-lang-plan R1: the Scheme reader variant */
+        case READER_R7RS_SWEET:
+            return true; /* the sweet-exp preprocessor over Scheme's lexemes */
         default:
             return false;
     }

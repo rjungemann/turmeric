@@ -82,11 +82,12 @@
 ;;; r7rs-unwind-all__ -- run every outstanding dynamic-wind `after`,
 ;;; innermost first.
 (defn r7rs-unwind-all__ [] : nil
-  (if (r7rs-null? r7rs-winders__) nil
-    (let [w (r7rs-car r7rs-winders__)]
-      (set! r7rs-winders__ (r7rs-cdr r7rs-winders__))
-      ((r7rs-wind-after__ w))
-      (r7rs-unwind-all__))))
+  (let [ws (r7rs-winders__)]
+    (if (r7rs-null? ws) nil
+      (let [w (r7rs-car ws)]
+        (r7rs-winders-set!__ (r7rs-cdr ws))
+        ((r7rs-wind-after__ w))
+        (r7rs-unwind-all__)))))
 ;;; r7rs-exit -- run the outstanding dynamic-wind afters, then leave.
 (defn r7rs-exit [& obj : any] : nil
   (r7rs-unwind-all__)

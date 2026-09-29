@@ -1,0 +1,31 @@
+#lang r7rs
+;; The Scheme half: each fiber runs inside its own parameterize and yields
+;; 40 times in each of three ways.  Every (yield!) can resume the fiber on
+;; another worker thread, and between yields the other fibers run their own
+;; parameterize, guard and handler on whichever thread they are on.  A step
+;; is worth 3 when the fiber sees only its own dynamic environment, whatever
+;; ran in between and wherever it resumed.
+(define-library (dynfwork)
+  (export dyn-part param-outside)
+  (import (scheme base) (turmeric dynfyield))
+  (begin
+    (define p (make-parameter 0))
+    (define (dyn-part id)
+      (parameterize ((p id))
+        (let lp ((r 0) (acc 0))
+          (if (= r 40)
+              acc
+              (lp (+ r 1)
+                  (+ acc
+                     ;; its own parameter binding, after a yield
+                     (begin (yield!) (if (= (p) id) 1 0))
+                     ;; its own guard, installed before a yield, catching a
+                     ;; raise after it
+                     (guard (e ((eqv? e id) 1) (#t 0)) (yield!) (raise id))
+                     ;; its own handler, the same way, for raise-continuable
+                     (with-exception-handler
+                      (lambda (e) (if (eqv? e id) 1 0))
+                      (lambda () (yield!) (raise-continuable id)))))))))
+    ;; The parameter's value outside every parameterize: 0 unless a fiber's
+    ;; binding leaked out to the thread.
+    (define (param-outside) (p))))

@@ -2693,6 +2693,7 @@ struct FiberBlock {
     size_t dk_reap_n, dk_reap_cap;
     int dk_entry_depth;
     void *esc_live; int esc_live_n, esc_live_cap;
+    int64_t r7dyn[8];
 };
 
 #if defined(__GNUC__) || defined(__clang__)
