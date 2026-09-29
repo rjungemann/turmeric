@@ -612,6 +612,9 @@ static bool operand_uses_control(const Expr *e) {
         case EX_ANY_TYPE_OF:  return operand_uses_control(e->as.any_type_of_.value);
         case EX_ANY_IS:       return operand_uses_control(e->as.any_is_.value);
         case EX_ANY_CAST:     return operand_uses_control(e->as.any_cast_.value);
+        /* mutual-tail-call-through-guard-grows-the-stack: a quoted symbol is the
+         * address of a static record -- a literal, with nothing under it. */
+        case EX_SYM_LIT:      return false;
         /* Nested fn boundaries: a control op inside is emitted elsewhere. */
         case EX_FN_DEF:
         case EX_FN:
@@ -775,6 +778,14 @@ static bool is_delegatable_value(const Expr *e) {
         case EX_POLY_WRAP:
         case EX_FN:
             return true;
+        /* mutual-tail-call-through-guard-grows-the-stack: a quoted symbol --
+         * `'done`, a `#lang r7rs` base case -- is a literal the direct emitter
+         * spells as its record's address.  Unlisted, it translated to
+         * CT_UNSUPPORTED and evicted the whole function: `(define (g1 f n) (if
+         * (= n 0) 'g-done (g2 f (- n 1))))` stayed direct, so its tail call into
+         * a CPS partner could never join a CPS tail-call group. */
+        case EX_SYM_LIT:
+            return true;
         case EX_CLOSURE:
             /* A capture-free closure is always delegatable.  A CAPTURING closure
              * is delegatable ONLY when it is a cross-function `shift` receiver
@@ -923,6 +934,36 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
 static bool call_args_atomic(const Expr *e) {
     for (uint32_t i = 0; i < e->as.call_.n_args; i++)
         if (!is_atomic(e->as.call_.args[i])) return false;
+    return true;
+}
+
+/* mutual-tail-call-through-guard-grows-the-stack: an argument the direct
+ * emitter spells with no call in it -- an atom, a quoted symbol, or either one
+ * widened to `any`.  `#lang r7rs`'s `(list 1 2)` is an indirect call whose
+ * arguments are `(:: 1 any)` and `(:: 2 any)`; refusing them as non-atomic
+ * evicted a base case like `(if (= n 0) (list 1 2) (g2 ...))` and with it the
+ * whole function, so its tail call into a CPS partner stayed a C call.  A
+ * CONSTRUCTOR over such arguments is one too -- a variadic callee's rest list
+ * is a `Cons` chain -- since a constructor stores its arguments and invokes
+ * nothing (the coloring pass reasons the same way, cps_collect_calls).
+ * Deliberately not "control-free": a call to a colored function is
+ * control-free to that scan and must not be delegated. */
+static bool is_widened_literal(const Expr *a) {
+    a = ascribe_peel(a);
+    while (a && a->kind == EX_UNION_INJECT) a = ascribe_peel(a->as.union_inject_.value);
+    if (!a) return false;
+    if (is_atomic(a) || a->kind == EX_SYM_LIT) return true;
+    if (a->kind == EX_CALL && a->as.call_.ctor && !a->as.call_.fn_expr) {
+        for (uint32_t i = 0; i < a->as.call_.n_args; i++)
+            if (!is_widened_literal(a->as.call_.args[i])) return false;
+        return true;
+    }
+    return false;
+}
+
+static bool call_args_literal(const Expr *e) {
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+        if (!is_widened_literal(e->as.call_.args[i])) return false;
     return true;
 }
 
@@ -3628,7 +3669,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                     t->as.unsupported.why = "indirect call through capturing closure";
                     return t;
                 }
-                if (!call_args_atomic(e)) {
+                if (!call_args_literal(e)) {
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
@@ -3676,7 +3717,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * cc error.  Route it exactly like the binding-less indirect call
              * above: delegate with atomic args, otherwise evict. */
             if (!fn->source_fn_def && !callee_colored(b, fn)) {
-                if (!call_args_atomic(e)) {
+                if (!call_args_literal(e)) {
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
@@ -4140,7 +4181,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     t->as.unsupported.why = "indirect call through capturing closure";
                     return t;
                 }
-                if (!call_args_atomic(e)) {
+                if (!call_args_literal(e)) {
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
@@ -4176,7 +4217,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             /* all-any-fn-param-is-unusable: see the tail-position twin -- a fn
              * VALUE callee never takes the named CT_LETCALL arm. */
             if (!fn->source_fn_def && !callee_colored(b, fn)) {
-                if (!call_args_atomic(e)) {
+                if (!call_args_literal(e)) {
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;

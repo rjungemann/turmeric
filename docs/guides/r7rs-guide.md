@@ -673,13 +673,6 @@ What it does not cover:
 - **`eval` copies data.** A datum crosses into and out of `eval` as text, so
   evaluated code never shares a pair, vector or string with the program. A
   datum that holds a procedure or a record cannot cross. See Eval above.
-- **A tail call made after a `guard`, into ANOTHER procedure, is not constant
-  stack.** `(define (g2 f n) (guard (e (#t 'caught)) (f n)) (g1 f (- n 1)))`,
-  with `g1` calling back into `g2`, overflows an 8 MiB stack at tens of
-  thousands of iterations: a count of 30,000 crashes at `-O0` and 70,000 at
-  `-O2` (the default). The same loop through ONE procedure is constant stack,
-  and so is every other tail call -- self, mutual, and through a variable
-  ([mutual-tail-call-through-guard-grows-the-stack](https://github.com/rjungemann/turmeric/blob/main/docs/reported/mutual-tail-call-through-guard-grows-the-stack.md)).
 
 ## Conformance
 

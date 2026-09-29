@@ -4,8 +4,9 @@
 tail calls were fixed 2026-09-26, and mutual recursion is fixed as of
 2026-09-28. Pinned by `tests/fixtures/r7rs-cps-loops-unoptimized` (self) and
 `tests/fixtures/r7rs-cps-mutual-tail-unoptimized` (mutual). Both are built at
-`-O0` by their `hook.sh`. One shape is still open, filed on its own as
-[mutual-tail-call-through-guard-grows-the-stack](../reported/mutual-tail-call-through-guard-grows-the-stack.md).
+`-O0` by their `hook.sh`. One shape was left open, filed on its own as
+[mutual-tail-call-through-guard-grows-the-stack](mutual-tail-call-through-guard-grows-the-stack.md)
+and resolved 2026-09-29.
 
 **Self tail calls, 2026-09-26.** A CPS function's self tail call in its own
 body that hands on its own `__kont` is now a backedge. The parameters are
@@ -207,14 +208,16 @@ depends on it now.
 - **A component larger than eight members or thirty-two parameter slots**
   (`CTG_MAXMEM`, `CTG_MAXSLOTS`) is not fused. Raise the caps if a real
   program hits them.
-- **A tail call after a `guard`, into another procedure.** `guard` makes
+- ~~**A tail call after a `guard`, into another procedure.**~~ Resolved
+  2026-09-29: the partner was evicted from CPS by its base case, not by the
+  tail call. `guard` makes
   its procedure CPS. Its partner, which only tail-calls it, is direct, so the
   cycle alternates between the two lowerings. The CPS side calls the direct
   side as `cps->direct` and hands the result to `dk_run`, and the direct side
   enters the CPS one through its prompt-and-setjmp wrapper, so neither call
   is a tail call at any `-O`. Filed as
-  [mutual-tail-call-through-guard-grows-the-stack](../reported/mutual-tail-call-through-guard-grows-the-stack.md);
-  the guide's "Where it differs" carries it.
+  [mutual-tail-call-through-guard-grows-the-stack](mutual-tail-call-through-guard-grows-the-stack.md);
+  the guide's "Where it differs" bullet is gone.
 
 ### Guide upkeep, done
 
