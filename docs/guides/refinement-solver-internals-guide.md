@@ -160,6 +160,17 @@ them to **uninterpreted function applications** (`VCUFunc`):
    cannot see inside. Abstracting it sets `has_nonlinear` and drives the
    `TUR-W0373` warning.
 
+`(as T e)` is a **builtin conversion, not a measure**, and the encoder
+handles it before the measure path: `(as float e)` is `e` itself (the VC's
+reals are exact, so an int converted to float denotes the same number, and
+keeping `e`'s Int sort lets S2 keep its integrality), `(as int e)` over a real
+is an opaque Int-sorted truncation term, and any other target is not encoded
+(the obligation keeps its runtime check). Until 2026-09-29 it fell through to
+the measure encoder, which declared `as` as an abstract measure at the
+position-default sort -- Int -- and the type name as a variable; `(as float
+v)` over a float was then integer-tightened (`t <= 2.75` to `t <= 2`) and a
+satisfiable cube was refuted (fixture `refine-cast-in-predicate`).
+
 Treating two occurrences of a call as *the same value* is only valid when the
 callee is **pure**, and purity is **earned, not declared**
 (`refine_collect.h:53`, fixture `refine-measure-euf`): the compiler walks the
@@ -309,6 +320,18 @@ covers `(+ a b)` and `(len v)` uniformly. Three sources of contradiction:
 1. a disequality `a != b` whose sides became congruent;
 2. two distinct literals in one class (`3` and `5` can never be equal);
 3. a positive atom and a negated atom that are congruent.
+
+The second source compares literals by **value**, not by term identity: an
+Int literal and a Real literal for one number (`3` and `3.0`) are two
+hash-consed terms, and until 2026-09-29 a class holding both was called a
+conflict. That refuted a satisfiable cube and proved whatever goal sat under
+it -- reachable from source wherever a real-sorted term is equated with an
+int-sorted one (`(= x (to-f n))` with `x = 3.0`, `n = 3`, `to-f` a
+float-returning measure: S3's exchange merges the two classes). The mixed
+compare is conservative, `(double)i == r` reads as "same value", so a rounding
+coincidence past 2^53 costs a proof, never a wrong one (fixture
+`refine-int-real-literal-not-contradictory`, corpus
+`qf_uflira_int_real_literal_{sat,unsat}`).
 
 Terms are interned through a hash index keyed on the hash-cons id, and the
 closure is a signature-table fixpoint: each round buckets every application by
@@ -858,7 +881,10 @@ in both directions: an external harness can differentially test any solver
 against `tur` without `tur` ever linking one.
 
 The dumped VC is legal SMT-LIB 2.6 for an external solver, not only for
-`tur smt`'s reader: a name that is not a simple symbol is quoted (`|tickm#0|`),
+`tur smt`'s reader: an integral Real literal is written `3.0`, never `3`
+(`%.17g` alone drops the point, and in a mixed `QF_UFLIRA` VC the replay then
+read an Int numeral -- a different literal from the one the encoder built), a
+name that is not a simple symbol is quoted (`|tickm#0|`),
 a reserved or builtin name is renamed (`|match~rw|` -- SMT-LIB makes `|match|`
 the same symbol as `match`, so quoting alone is refused), an uninterpreted
 function's parameter sorts are read off a real application (an abstracted

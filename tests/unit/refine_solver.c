@@ -301,6 +301,37 @@ static void test_s1_euf(Arena *a) {
     vc_add_hyp(vc, eq(vc, vc_app(vc, f, g1, 1), vc_app(vc, f, g2, 1)));
     vc_set_goal(vc, eq(vc, aa, bb));
     ok(decide(vc, a) != RT_VALID, "S1 soundness: uninterpreted functions are not injective");
+
+    /* SOUNDNESS: an Int literal and a Real literal for ONE value are two
+     * hash-consed terms.  `x = 3.0, x = 3` is satisfiable, and so is the
+     * S3-reached shape `x = to-f(n), n = 3, x = 3.0` where the arithmetic
+     * exchange merges the two classes.  Both answered unsat until
+     * 2026-09-29, proving `x < 1.5` under them. */
+    vc = vc_new(a);
+    VCTerm *xr = R(vc, "x");
+    vc_add_hyp(vc, eq(vc, xr, vc_real(vc, 3.0)));
+    vc_add_hyp(vc, eq(vc, xr, vc_int(vc, 3)));
+    vc_set_goal(vc, lt(vc, xr, vc_real(vc, 1.5)));
+    ok(decide(vc, a) != RT_VALID, "S1 soundness: 3 and 3.0 in one class is not a conflict");
+
+    vc = vc_new(a);
+    uint32_t tof = vc_declare_ufunc(vc, "to-f", 1, VS_REAL, NULL, false);
+    xr = R(vc, "x");
+    VCTerm *ni = V(vc, "n");
+    VCTerm *tof_args[1] = { ni };
+    vc_add_hyp(vc, eq(vc, xr, vc_app(vc, tof, tof_args, 1)));
+    vc_add_hyp(vc, eq(vc, ni, vc_int(vc, 3)));
+    vc_add_hyp(vc, eq(vc, xr, vc_real(vc, 3.0)));
+    vc_set_goal(vc, lt(vc, xr, vc_real(vc, 1.5)));
+    ok(decide(vc, a) != RT_VALID, "S3 soundness: x = to-f(n), n = 3, x = 3.0 does not prove x < 1.5");
+
+    /* ... and differing values across the kinds still conflict. */
+    vc = vc_new(a);
+    xr = R(vc, "x");
+    vc_add_hyp(vc, eq(vc, xr, vc_real(vc, 3.0)));
+    vc_add_hyp(vc, eq(vc, xr, vc_int(vc, 4)));
+    vc_set_goal(vc, lt(vc, xr, vc_real(vc, 1.5)));
+    ok(decide(vc, a) == RT_VALID, "S1: 4 and 3.0 in one class is a conflict (ex falso)");
 }
 
 static void test_nonlinear_is_unknown(Arena *a) {
@@ -464,6 +495,10 @@ static void test_smtlib(Arena *a) {
     buf_putc(&b, '\0');
     ok(b.data && strstr(b.data, "QF_UFLRA") != NULL,
        "smtlib: a real-sorted VC selects QF_UFLRA");
+    /* An integral Real literal keeps its decimal point: `0` would be an Int
+     * numeral, and a mixed-logic replay would read a different literal. */
+    ok(b.data && strstr(b.data, "(<= 0.0 r)") != NULL,
+       "smtlib: an integral real literal is written with a decimal point");
     buf_free(&b);
 }
 

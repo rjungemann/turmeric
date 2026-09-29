@@ -242,15 +242,40 @@ static void euf_close(EufState *st) {
     }
 }
 
-/* Distinct numeric literals can never share a class.  One pass: remember the
- * first literal seen in each class and conflict on a second. */
+/* Two numeric literals in one class conflict when their VALUES differ.  Two
+ * distinct terms of the SAME kind always do -- hash-consing interns one term
+ * per value -- but an int literal and a real literal are two terms for one
+ * value: `3` and `3.0`.  Until 2026-09-29 that pair was called a conflict,
+ * which refuted a satisfiable cube and proved whatever goal sat under it.
+ * It is reachable from source wherever a real-sorted term is equated with an
+ * int-sorted one -- `(= x (to-f n))` with `x = 3.0` and `n = 3`, `to-f` a
+ * float-returning measure -- because S3's exchange then merges the two
+ * classes (fixture refine-int-real-literal-not-contradictory).
+ *
+ * The mixed compare is deliberately CONSERVATIVE: `(double)i == r` whenever
+ * the exact values could be equal (a real literal IS a double, so an exactly
+ * equal int converts to exactly it), so only a definite inequality conflicts
+ * and a rounding coincidence at 2^53 and beyond costs a proof, never a wrong
+ * one. */
+static bool lit_values_differ(const VCTerm *x, const VCTerm *y) {
+    if (x->op == y->op) return true;                 /* distinct terms, one kind */
+    const VCTerm *iv = x->op == VC_CONST_INT ? x : y;
+    const VCTerm *rv = x->op == VC_CONST_INT ? y : x;
+    return (double)iv->as.i != rv->as.r;
+}
+
+/* One pass: remember the first literal seen in each class and conflict on a
+ * second whose value differs. */
 static bool literal_conflict(EufState *st) {
     for (uint32_t i = 0; i < st->n; i++) st->litroot[i] = UINT32_MAX;
     for (uint32_t i = 0; i < st->n; i++) {
         VCTerm *x = st->terms[i];
         if (x->op != VC_CONST_INT && x->op != VC_CONST_REAL) continue;
         uint32_t r = uf_find(st, i);
-        if (st->litroot[r] != UINT32_MAX) return true;  /* x != y by construction */
+        if (st->litroot[r] != UINT32_MAX) {
+            if (lit_values_differ(st->terms[st->litroot[r]], x)) return true;
+            continue;   /* `3` and `3.0`: one value, no conflict */
+        }
         st->litroot[r] = i;
     }
     return false;

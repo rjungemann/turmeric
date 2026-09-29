@@ -280,6 +280,7 @@ static bool sym_is(const Form *f, const char *s) {
  * positions are propositions. */
 typedef enum EncHead {
     EH_MEASURE = 0,  /* unrecognised head: a named measure          */
+    EH_CAST,         /* (as T e)          -- a type name, then a value */
     EH_ARITH,        /* + - * / mod       -- value operands         */
     EH_ORD,          /* < <= > >=         -- value operands         */
     EH_EQ,           /* = == not= != <>   -- sort-polymorphic       */
@@ -306,6 +307,7 @@ static EncHead enc_head_kind(const Form *h) {
         sym_is(h, "!=") || sym_is(h, "<>")) return EH_EQ;
     if (sym_is(h, "and") || sym_is(h, "or") || sym_is(h, "not") ||
         sym_is(h, "=>")  || sym_is(h, "implies")) return EH_LOGIC;
+    if (sym_is(h, "as")) return EH_CAST;
     return EH_MEASURE;
 }
 
@@ -616,6 +618,48 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
     return app;
 }
 
+/* `(as T e)` -- the language's numeric conversion.  It is a builtin, not a
+ * function, so it must not fall through to enc_measure: that path declared
+ * `as` as an ABSTRACT measure at the position-default sort (Int), and its
+ * first argument -- the type NAME -- as a variable.  `(as float x)` over a
+ * float `x` then became an Int-sorted opaque term, and S2's integer hull
+ * tightened `t <= 2.75` to `t <= 2` and `2.25 <= t` to `3 <= t`, refuting a
+ * cube that `x = 2.5` satisfies (fixture refine-cast-in-predicate).
+ *
+ *   (as float e), e int   -> e itself.  The VC's reals are exact, and an
+ *                            int converted to float denotes the same number
+ *                            (the double rounding past 2^53 is the same
+ *                            approximation every real-sorted fact here makes).
+ *                            Keeping e's Int sort is what lets S2 keep using
+ *                            its integrality -- `(as float n) <= 2.75` IS
+ *                            `n <= 2`.
+ *   (as float e), e real  -> e (identity).
+ *   (as int e),   e int   -> e (identity).
+ *   (as int e),   e real  -> truncation: an opaque INT-sorted term, congruent
+ *                            across occurrences (the conversion is pure),
+ *                            with no axioms -- opaque is sound.
+ *   any other target      -> not encoded; the obligation keeps its runtime
+ *                            check (narrowing conversions change values in
+ *                            ways this fragment does not model). */
+static VCTerm *enc_cast(Enc *E, const Form *f) {
+    if (f->as.list.len != 3) { E->fail = "as takes a type and one operand"; return NULL; }
+    const Form *ty = f->as.list.items[1];
+    if ((ty->tag != F_SYM && ty->tag != F_KEYWORD) || !ty->as.sym) {
+        E->fail = "cast target is not a type name"; return NULL;
+    }
+    const char *tn = ty->as.sym->name;
+    bool to_real = strcmp(tn, "float") == 0;
+    bool to_int  = strcmp(tn, "int") == 0;
+    if (!to_real && !to_int) { E->fail = "unsupported cast target in predicate"; return NULL; }
+    VCTerm *e = enc(E, f->as.list.items[2]);
+    if (!enc_want_value(E, e)) return NULL;
+    if (to_real || e->sort == VS_INT) return e;
+    /* (as int e) with a real operand: C truncation, kept opaque. */
+    uint32_t fn = vc_declare_ufunc(E->vc, "as-int#trunc", 1, VS_INT, f, false);
+    VCTerm *args[1] = { e };
+    return vc_app(E->vc, fn, args, 1);
+}
+
 static VCTerm *enc(Enc *E, const Form *f) {
     if (!f) { E->fail = "empty predicate"; return NULL; }
     if (E->fail) return NULL;
@@ -672,6 +716,7 @@ static VCTerm *enc(Enc *E, const Form *f) {
                 if (!enc_want_prop(E, b)) break;
                 r = vc_mk2(E->vc, VC_IMPLIES, a, b);
             }
+            else if (sym_is(h, "as")) r = enc_cast(E, f);
             else r = enc_measure(E, f);
             break;
         }
@@ -740,6 +785,13 @@ static void presort_walk(EncSorts *S, const RefineEnv *env, const Form *f,
          * abstract measure has none), so its ARGUMENTS demand nothing. */
         for (uint32_t i = 1; i < f->as.list.len; i++)
             presort_walk(S, env, f->as.list.items[i], POS_NEUTRAL, depth + 1);
+        return;
+    }
+    if (k == EH_CAST) {
+        /* `as` is a builtin, not a measure, and its first operand is a type
+         * name, not a term: only the value operand is walked. */
+        if (f->as.list.len == 3)
+            presort_walk(S, env, f->as.list.items[2], POS_VALUE, depth + 1);
         return;
     }
     EncPos kid = (k == EH_LOGIC) ? POS_PROP

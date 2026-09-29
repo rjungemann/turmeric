@@ -142,9 +142,18 @@ static void emit_term(const RefineVC *vc, const VCTerm *t, Buf *out) {
             else             buf_printf(out, "%lld", (long long)t->as.i);
             return;
         case VC_CONST_REAL: {
+            /* A Real literal must carry a decimal point: `%.17g` prints 3.0
+             * as `3`, which is an Int numeral in SMT-LIB, so a replay of a
+             * mixed Int/Real VC (QF_UFLIRA) read `(= x 3)` with a DIFFERENT
+             * literal from the one the encoder built -- exactly the int/real
+             * pair S1's literal check once mis-handled.  `%.17g` round-trips
+             * the double; the suffix only restores the sort. */
             double v = t->as.r;
-            if (v < 0) buf_printf(out, "(- %.17g)", -v);
-            else       buf_printf(out, "%.17g", v);
+            char num[40];
+            snprintf(num, sizeof(num), "%.17g", v < 0 ? -v : v);
+            if (!strpbrk(num, ".eEn")) strncat(num, ".0", sizeof(num) - strlen(num) - 1);
+            if (v < 0) buf_printf(out, "(- %s)", num);
+            else       buf_puts(out, num);
             return;
         }
         case VC_VAR:
