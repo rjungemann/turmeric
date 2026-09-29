@@ -1,0 +1,58 @@
+;; fiber-scheduler-mt-migration -- nine fibers on a three-thread
+;; tur_scheduler_mt, each counting to 40 with a yield before every step.  The
+;; queue is shared, so a yielded fiber resumes on whichever worker is free:
+;; most steps change threads.  Each fiber stores its count; the sum is 360.
+;;
+;; Under clang, and gcc on Windows, the counting loop, with
+;; tur_scheduler_mt_yield inlined into it, kept tur_current_fiber's address
+;; in a register across the yield and read the first worker's slot after a
+;; move: "fiber-yield: not in fiber"
+;; (docs/archive/fiber-tls-address-reuse.md).  No Scheme and no collector.
+(defmodule fibmig
+  ```c
+  #define MIG_FIBERS 9
+  static pthread_mutex_t mig_mu = PTHREAD_MUTEX_INITIALIZER;
+  static int64_t mig_next;
+  static int64_t mig_out[MIG_FIBERS];
+  ```
+  (defn yield! [] : nil
+    ```c
+    tur_scheduler_mt_yield();
+    ```)
+  ;; The calling fiber's number, 0..8, in the order they start.
+  (defn mig-id [] : int
+    ```c
+    pthread_mutex_lock(&mig_mu);
+    int64_t id = mig_next++;
+    pthread_mutex_unlock(&mig_mu);
+    return id;
+    ```)
+  (defn mig-store [id : int v : int] : nil
+    ```c
+    mig_out[id] = v;
+    ```)
+  (defn spin [n : int acc : int] : int
+    (if (= n 0)
+      acc
+      (do (yield!)
+          (spin (- n 1) (+ acc 1)))))
+  (defn mig-body [] : nil
+    (let [id (mig-id)]
+      (mig-store id (spin 40 0))))
+  (defn mig-spawn-all [body : ptr<void>] : nil
+    ```c
+    TurSchedulerMT *s = tur_scheduler_mt_new(3);
+    for (int i = 0; i < MIG_FIBERS; i++)
+        tur_scheduler_mt_spawn(s, tur_fiber_block_new((void (*)(void))body, 256 * 1024));
+    tur_scheduler_mt_free(s);
+    ```)
+  (defn mig-result [] : int
+    ```c
+    int64_t s = 0;
+    for (int i = 0; i < MIG_FIBERS; i++) s += mig_out[i];
+    return s;
+    ```)
+  (defn main [] : int
+    (do (mig-spawn-all mig-body)
+        (println (mig-result))
+        0)))

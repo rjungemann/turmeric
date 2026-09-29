@@ -611,7 +611,14 @@ One to two days, mostly review and the stress fixture.
   threads. The roots held up, under `run-r7rs-gc.sh`'s torture too. A
   `call/cc` escape taken after a move did not, because the live-escape set
   was the thread's rather than the fiber's. Each fiber now carries its own,
-  swapped in by `tur_fiber_block_resume` next to its DK state.
+  swapped in by `tur_fiber_block_resume` next to its DK state. macOS found
+  two more. clang kept a thread-local's address in a register across a
+  yield, so a fiber that moved went on using the old thread's state
+  (`fiber-tls-address-reuse`). And a hoisted include gave `FiberBlock` a
+  `ucontext_t` too small for the context libc writes into it
+  (`hoisted-include-shrinks-ucontext-on-macos`). The work
+  also showed that a parked thread's registers had never been scanned on
+  macOS (`parked-snapshot-unaligned`).
 - **Should stage A ship at all, or go straight to B?** Stage A is a day or
   two and gives every threaded stdlib library to Scheme programs with memory
   reclaimed; B is the better part of a week and its pause is the risky

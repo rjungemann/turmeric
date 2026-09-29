@@ -12369,6 +12369,42 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#else\n");
     buf_puts(out, "#  define TUR_THREAD_LOCAL __thread\n");
     buf_puts(out, "#endif\n");
+    /* fiber-tls-address-reuse: a thread-local that code on a fiber reads on
+     * both sides of a switch.  clang takes a thread-local's address to be
+     * fixed for the whole of a function call (llvm.threadlocal.address is
+     * readnone), so it computes it once and keeps it in a register across
+     * calls.  A fiber on tur_scheduler_mt can yield on one worker and resume
+     * on another, and then that function goes on reading and writing the
+     * FIRST worker's slot: tur_fiber_block_yield inlined into a loop found no
+     * current fiber ("fiber-yield: not in fiber"), and a CPS entry's exit
+     * restored its depth and driver into another thread's state.  gcc on
+     * ELF addresses each access through %fs afresh and never showed it;
+     * clang did on Linux as on macOS.  So does gcc on Windows, whose
+     * thread-locals are emulated: __emutls_get_address is a const builtin,
+     * so gcc hoists the call out of a loop around a switch just the same.
+     *
+     * TUR_TLS_FRESH(T, x, x__at) defines x__at(), which returns x's address
+     * and cannot be merged with another call to itself: not inlined, and the
+     * empty asm with a memory clobber keeps clang from deducing that it
+     * reads no memory.  The accessor's name is spelled out rather than
+     * pasted from x, so that the r7rs prelude split's renaming
+     * (emit_split_rename), which sees tokens, not expansions, renames the
+     * definition and its uses alike.  For the same reader each use ends in
+     * `;`, taken up by the extern declaration the expansion ends with: an
+     * unterminated use ran on, in that transform's eyes, into the next
+     * function, whose body the program unit then dropped
+     * (emit_split_state).  A thread-local that moves with a fiber is then
+     * #defined to (*x__at()) -- the state tur_fiber_block_resume swaps: the
+     * current fiber, the DK registry and driver, the live-escape set.  (The
+     * collector's per-thread record goes through it wherever a fiber's code
+     * reads it: TUR_GC_SELF_FRESH, r7gc.c.)  Each block is guarded by
+     * !defined(x): a front end or split half that already reaches x through
+     * a host accessor (tur_tls.c) has x as a macro and keeps it.  Not
+     * applied to thread-locals that belong to the thread rather than the
+     * fiber, tur_panicking above all, which every CPS call site reads. */
+    buf_puts(out, "#if defined(__clang__) || (defined(_WIN32) && defined(__GNUC__))\n");
+    buf_puts(out, "#  define TUR_TLS_FRESH(T, x, at) __attribute__((noinline, unused)) static T *at(void) { __asm__ volatile (\"\" ::: \"memory\"); return &x; } extern int tur_tls_fresh_end\n");
+    buf_puts(out, "#endif\n");
     if (!r7rs_gc_active(shared)) {
         /* r7rs-gc's fiber hooks (tur_fiber_block_resume); the collector's
          * prologue, pasted after the system includes below, defines the real
@@ -13959,6 +13995,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "};\n\n");
     emit_rt_tls(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber",
                 "tur_current_fiber", "void **", "tur_tls_current_fiber_ptr", "FiberBlock **");
+    /* Read on the fiber's side of every yield (TUR_TLS_FRESH says why). */
+    buf_puts(out, "#if defined(TUR_TLS_FRESH) && !defined(tur_current_fiber)\n"
+                  "TUR_TLS_FRESH(FiberBlock *, tur_current_fiber, tur_current_fiber__at);\n"
+                  "#define tur_current_fiber (*tur_current_fiber__at())\n"
+                  "#endif\n");
     /* Phase R2: tur_panic_with body — placed here so FiberBlock and
      * tur_current_fiber are in scope for the per-fiber panic check. */
     buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
@@ -14108,6 +14149,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     buf_puts(out, "static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {\n");
     buf_puts(out, "    if (!stack_size) stack_size = 1024 * 1024;\n");
+    /* macOS: libc's getcontext writes the machine context just past the head
+     * of a ucontext_t, whatever this unit's ucontext_t says.  Declared without
+     * _XOPEN_SOURCE the type has no room for it, and every switch would write
+     * over the rest of the FiberBlock and the object after it; say so instead
+     * (the include order that prevents it: hoist_tur_include_directives). */
+    buf_puts(out, "#if defined(__APPLE__)\n");
+    buf_puts(out, "    if (sizeof(ucontext_t) <= sizeof(*((ucontext_t *)0)->uc_mcontext)) {\n");
+    buf_puts(out, "        fprintf(stderr, \"fiber: ucontext_t has no room for its machine context (a header defined it before <ucontext.h> under _XOPEN_SOURCE)\\n\");\n");
+    buf_puts(out, "        abort();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "#endif\n");
     buf_puts(out, "    FiberBlock *f = (FiberBlock *)calloc(1, sizeof(FiberBlock));\n");
     buf_puts(out, "    if (!f) { fprintf(stderr, \"fiber: oom\\n\"); abort(); }\n");
     buf_puts(out, "    f->stack = (char *)malloc(stack_size);\n");
