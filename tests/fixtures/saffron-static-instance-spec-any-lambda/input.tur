@@ -1,0 +1,19 @@
+#lang saffron
+;; static-instance-spec-calls-any-lambda-as-concrete-result: a statically
+;; resolved `.foldl` mints the instance spec at the concrete accumulator type
+;; (`b := float`, from `init`), and the spec calls `f` as returning a double.
+;; An unannotated Saffron lambda returns `any`, so it must be marshalled at the
+;; dispatch -- otherwise the double is read from a register the lambda never
+;; wrote (Linux printed 2.25 and 4.68e-310; Windows crashed).
+(load "stdlib/rc.tur")
+(defdata Two [a] (Two [l : a r : a]))
+(definstance Foldable [Two]
+  (foldl [t init f] (f (f init (.l t)) (.r t)))
+  (foldr [t init f] (f (.l t) (f (.r t) init))))
+(defn main []
+  (let [t (Two 1.5 2.25)]
+    (println (.foldl t 0.0 (fn [acc x] (if (> x 2.0) acc x))))
+    (println (.foldl t 0.0 (fn [acc x] 9.75)))
+    (println (.foldl t 0.5 (fn [acc x] (+ acc x))))
+    (println (.foldr t 0.5 (fn [x acc] (+ acc x)))))
+  0)

@@ -1,0 +1,44 @@
+;; concrete-result-fn-passed-where-an-any-result-fn-is-expected: a function
+;; whose signature differs from the parameter's only in where `any` appears is
+;; a different calling convention (`any` is a 16-byte tagged word), not a
+;; subtype.  The argument is marshalled to the parameter's convention: its
+;; concrete result is widened, and an `any` parameter is cast down to what the
+;; function takes.  Before, the callee read a `tur_tagged_t` out of `rax:rdx`
+;; where the function left a double in `xmm0` (`cast: any holds unknown`).
+(defstruct Pt [x : float y : float])
+
+(defn ap2 [p : Pt g : (fn [float float] any)] : any
+  (g (.x p) (.y p)))
+
+(defn ap-any [g : (fn [any] any)] : any
+  (g (:: 7.1 any)))
+
+(defn add [a : float b : float] : float (+ a b))
+
+;; The generic spelling: `B` is this definition's own (rigid) variable, so the
+;; call through `g` is typed `B` and the `: any` return widens it -- the spec
+;; for `B := float` then tags a float.  It used to bind `B := any` from the
+;; return expectation, and read the lambda's double as a tagged word.
+(defn ap1 [B] [g : (fn [float] B)] : any
+  (g 1.5))
+
+(defn ap1-let [B] [g : (fn [float] B)] : any
+  (let [r (g 7.1)] r))
+
+(defn main [] : int
+  ;; a lambda literal
+  (println (cast (ap2 (Pt 1.5 2.25) (fn [a : float b : float] : float (+ a b))) float))
+  ;; a named function
+  (println (cast (ap2 (Pt 7.1 3.25) add) float))
+  ;; a capturing closure
+  (let [k 10.5]
+    (println (cast (ap2 (Pt 1.5 2.25) (fn [a : float b : float] : float (+ k a))) float)))
+  ;; the parameter side: an `any` parameter, a float-taking function
+  (println (cast (ap-any (fn [x : float] : float (* x 2.0))) float))
+  ;; the generic spelling, at three instantiations
+  (println (cast (ap1 (fn [a : float] : float (+ a 2.25))) float))
+  (println (cast (ap1 (fn [a : float] : int (if (> a 1.0) 7 8))) int))
+  (println (cast (ap1-let (fn [a : float] : cstr (if (> a 7.0) "big" "small"))) cstr))
+  ;; a cstr result widens with its own tag
+  (println (type-of (ap2 (Pt 1.5 2.25) (fn [a : float b : float] : cstr "s"))))
+  0)

@@ -1,5 +1,25 @@
 # An `int` extra on a parametric-head instance is cast as the receiver type
 
+**Narrowed 2026-09-29: a SPELLED `n : int` is fixed; a bare `n` remains.**
+Fix direction 1: `saffron_extra_is_class_var` returns false for a parameter
+the class annotated (`param_explicit_type`), and the witness's concrete-type
+cast arm -- which only ran for a kind-* head -- now also runs for a
+parametric head's extra that is not the class variable, so the `any` extra is
+cast to `int` rather than passed through (without the second half the spelled
+case became a cc error, `incompatible type for argument 2`).  Pinned by
+`tests/fixtures/saffron-dyn-spelled-int-extra` (both spellings from the
+report).
+
+**What remains: the bare `(nth-of [x n] : any)`.**  Re-checked 2026-09-29, it
+is more than a guess in the witness: the instance side's Prereq-4 rewrite
+(`elab_definstance`, "untyped params default to TY_INT") retypes a bare `int`
+class parameter to the instance head, so the `Nth [Vec]` impl itself declares
+`n : (Vec ...)` -- exactly as `Eq [Vec]`'s `y`.  A body-scan that tells the
+two apart (`Eq`'s body ascribes `y` to `(Vec A)`; `Nth`'s never touches `n`
+that way) was tried and reverted: it cannot help while the impl's own
+signature says `Vec`.  The fix has to start at that rewrite (fix direction 2).
+
+
 **Severity: low-medium.** Compiled only, and a clean panic at a checked cast,
 never a wrong answer; `--interpret` answers. It is not limited to
 unannotated parameters: an explicitly spelled `n : int` panics the same way.

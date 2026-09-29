@@ -1,5 +1,40 @@
 # Calling a `fn` parameter in an instance body spells the prototype from the call, not from the fn
 
+**RESOLVED 2026-09-29**, both halves.  Pinned by
+`tests/fixtures/instance-fn-param-call-result-tyvar` and
+`tests/fixtures/instance-fn-param-call-any-args`.
+
+## Resolution
+
+Neither half was really the emitter spelling the prototype from the wrong
+place: in both, the ELABORATED call disagreed with the function value, and the
+emitter faithfully spelled what it was given.  So both fixes are in
+elaboration, and the emitter's Phase F arm is unchanged.
+
+- **Result half.**  The spec a `: b` result mints was bound to the class
+  variable only (`a := Pt`), so inside it `b` stayed a free type variable and
+  every `b` the body held -- the call through `g` and its temp included --
+  was spelled as the int64 carrier.  The non-HKT dispatch
+  (`elab_typeclasses.c`, "M4c Path A step 1") now also records the METHOD's
+  own type variables, solved from the arguments exactly as the M7 path solves
+  an HKT method's (receiver first, then the arguments in order, first binding
+  wins).  Only a ground solution is recorded; a name the class variable or
+  the instance head already binds keeps that binding.  With `b := float` in
+  the spec, the body's call is `double (*)(void*, double, double)`.
+- **Argument half.**  `elab_poly_call` (the call through a `tur_poly_fn_t`
+  carrier) never widened an argument: a typed carrier whose parameter is
+  `any` -- an instance method's unannotated `g`, typed from its class --
+  received the raw double.  It now widens a concrete argument to `any` where
+  the carrier's parameter is `any`, the same `elab_coerce_to_any` the
+  direct-call path's IT4 widen uses.
+
+The third symptom named here,
+[static-instance-spec-calls-any-lambda-as-concrete-result](static-instance-spec-calls-any-lambda-as-concrete-result.md),
+was NOT covered by either fix -- there the function value itself returns
+`any` where the spec expects `double`, which needs a marshalling adaptor at
+the dispatch.  It was resolved the same day with the `any` bridge; see there.
+
+
 **Severity: high.** A silent wrong answer in typed Turmeric with no `any` in
 sight (the result half, below), and a panic from the same line when the fn's
 parameters are `any` (the argument half). Compiled only; `--interpret`

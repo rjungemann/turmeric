@@ -164,7 +164,16 @@ static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) 
 /* A let/letrec is tail-transparent for TCO only if every binding is a plain
  * scalar we can declare with `T name = init;`.  fn-typed (incl. letrec global
  * fns), poly-fn, and carrier-ABI bindings force the whole let onto the default
- * (emit_value + return) path. */
+ * (emit_value + return) path.
+ *
+ * tail-grammar-skips-and-or-and-carrier-lets: the carrier-ABI arm was audited
+ * 2026-09-29 and is still load-bearing.  emit_tail's inline `let` arm repeats
+ * only part of emit_let_value's init ladder (the by-value carrier bridge, the
+ * recorded-pointer and erased-word casts); dropping the arm sent 21 fixtures'
+ * pointer-represented carrier bindings (`tur_adt_Vec__int *` from an int64
+ * producer, among others) through the inline arm unbridged -- -Wint-conversion
+ * in the emitted C.  Relaxing it wants the two sites to share one per-binding
+ * init emission first. */
 static bool tco_let_simple(EmitCtx *ctx, const Expr *e) {
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         const Binding *b = e->as.let_.bindings[i].binding;
@@ -524,6 +533,18 @@ static const char *tco_drop_glue_refusal(const Expr *e, const Expr *let_e) {
 static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                     int *n_ok);
 
+/* tail-grammar-skips-and-or-and-carrier-lets: `(and a ... z)` / `(or a ...
+ * z)`.  Every operand but the last is a test (a false / true one answers the
+ * whole form without evaluating the rest), and the LAST is the form's value,
+ * so it is in the enclosing tail position.  tco_mark, the `^tailcall`
+ * verifier and emit_tail all ask this one question (plan risk TR1). */
+static bool tco_builtin_short_circuit(const Expr *e) {
+    return e && e->kind == EX_BUILTIN && e->as.builtin.spec &&
+           (e->as.builtin.spec->shape == BS_AND_SC ||
+            e->as.builtin.spec->shape == BS_OR_SC) &&
+           e->as.builtin.n >= 2;
+}
+
 /* The `do` arm of tco_mark, split out because a block of trailing drop glue
  * needs to see the `let` it is the body of (`let_e`, NULL otherwise) -- the
  * initializers are where the dropped local may have been aliased. */
@@ -615,6 +636,11 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
              * which emit_tail must see to spell. */
             ctx->tail_dyn_seen = true;
             return 0;
+        case EX_BUILTIN:
+            if (tco_builtin_short_circuit(e))
+                return tco_mark(ctx, fd, fn_cname,
+                                e->as.builtin.args[e->as.builtin.n - 1], n_ok);
+            return 0;
         default:
             /* Not a call at all: a literal, a variable.  Neither served nor
              * refused -- it is simply not a tail CALL. */
@@ -656,6 +682,8 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                       "or carrier-ABI, which takes the whole `let` off the tail " \
                       "path"
 #define TC_MATCH_SCR  "the scrutinee of a `match` is evaluated before any arm"
+#define TC_SC_TEST    "only the LAST operand of `and` / `or` is in tail position; " \
+                      "the others are tests evaluated before it"
 /* T3 landed, so a `match` ARM is in the tail grammar.  What is left to refuse
  * is the match whose SHAPE emit_tail cannot serve -- see tco_match_tail_ok. */
 #define TC_MATCH_ARM  "the enclosing `match` is not one the tail path can " \
@@ -834,13 +862,20 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
             tc_check(ctx, fd, fn_cname, e->as.while_.cond, TC_WHILE, fn_block);
             tc_check(ctx, fd, fn_cname, e->as.while_.body, TC_WHILE, fn_block);
             return;
-        case EX_BUILTIN:
+        case EX_BUILTIN: {
             /* Every arithmetic and comparison operator is a builtin, so this is
              * the node a call-used-as-a-value most often sits under:
-             * `(+ 1 (f x))` is the canonical "not a tail call". */
-            for (uint32_t i = 0; i < e->as.builtin.n; i++)
-                tc_check(ctx, fd, fn_cname, e->as.builtin.args[i], TC_ARG, fn_block);
+             * `(+ 1 (f x))` is the canonical "not a tail call".  The LAST
+             * operand of `and` / `or` is the exception: it is the form's
+             * value (tco_builtin_short_circuit). */
+            bool sc = tco_builtin_short_circuit(e);
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) {
+                bool last = sc && i + 1 == e->as.builtin.n;
+                tc_check(ctx, fd, fn_cname, e->as.builtin.args[i],
+                         last ? why : (sc ? TC_SC_TEST : TC_ARG), fn_block);
+            }
             return;
+        }
         case EX_DYN_OP:
             for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
                 tc_check(ctx, fd, fn_cname, e->as.dyn_op_.args[i], TC_ARG, fn_block);
@@ -1555,6 +1590,40 @@ static bool tail_call_musttail_ok(EmitCtx *ctx, const Buf *body, const char *v) 
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                       const Expr *e, TypeKind result_kind, bool is_main) {
     switch (e->kind) {
+        case EX_BUILTIN:
+            /* tail-grammar-skips-and-or-and-carrier-lets: `(and a ... z)` is
+             * `if (!a) return false; ... <tail z>`, and `(or a ... z)` is
+             * `if (a) return true; ... <tail z>` -- the lowering the
+             * equivalent `if` already gets.  The early answer goes back
+             * through this same function as a literal, so it takes the
+             * ordinary return path (frames, drops, the return spelling). */
+            if (tco_builtin_short_circuit(e)) {
+                bool is_or = e->as.builtin.spec->shape == BS_OR_SC;
+                uint32_t n = e->as.builtin.n;
+                /* Read only for the duration of the emit_tail calls below. */
+                Expr lit_e;
+                memset(&lit_e, 0, sizeof(lit_e));
+                lit_e.kind = EX_BOOL_LIT;
+                lit_e.type = TYPE_BOOL;
+                lit_e.span = e->span;
+                lit_e.as.b = is_or;
+                const Expr *lit = &lit_e;
+                for (uint32_t i = 0; i + 1 < n; i++) {
+                    char *cond = emit_value(ctx, body, e->as.builtin.args[i]);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "if (%s(%s)) {\n", is_or ? "" : "!", cond);
+                    free(cond);
+                    ctx->indent += 4;
+                    emit_tail(ctx, body, fn_e, fd, lit, result_kind, is_main);
+                    ctx->indent -= 4;
+                    indent_buf(body, ctx->indent);
+                    buf_puts(body, "}\n");
+                }
+                emit_tail(ctx, body, fn_e, fd, e->as.builtin.args[n - 1],
+                          result_kind, is_main);
+                return;
+            }
+            break;
         case EX_CALL:
             /* T5: inside a fused group every backedge -- to itself or to a
              * sibling -- is a jump through the group's dispatch, since each

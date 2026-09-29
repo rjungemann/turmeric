@@ -1965,6 +1965,7 @@
   ```c
   /* __tur_include__: #include <setjmp.h> */
   /* __tur_include__: #include <pthread.h> */
+  /* __tur_include__: #include <stddef.h> */
   /* __tur_include__: #include <stdint.h> */
   /* __tur_include__: #include <stdlib.h> */
   /* __tur_include__: // r7rs-reentrant-callcc-not-on-windows: the jump into a
@@ -2027,6 +2028,28 @@
   #endif
   #if defined(__GLIBC__)
   extern int pthread_getattr_np(pthread_t, pthread_attr_t *);
+  // glibc's own prototype, against an incomplete struct: <link.h> itself is
+  // beyond c2mir (bits/link.h), and this spelling stays compatible with a TU
+  // that includes it anyway.  r7k_phdr mirrors the documented head of
+  // struct dl_phdr_info up to dlpi_tls_data; the callback's `size` says
+  // whether this glibc passes that far.
+  struct dl_phdr_info;
+  extern int dl_iterate_phdr(int (*)(struct dl_phdr_info *, size_t, void *), void *);
+  typedef struct {
+      uintptr_t addr; const char *name; const void *phdr; uint16_t phnum;
+      unsigned long long adds, subs;
+      size_t tls_modid; void *tls_data;
+  } r7k_phdr;
+  typedef struct { unsigned char *lo, *floor; } r7k_tls_span;
+  // Lower `floor` to this module's TLS block for the calling thread when that
+  // block lies on the thread's stack mapping, between `lo` and `floor`.
+  static int r7k_tls_floor_cb(struct dl_phdr_info *info, size_t size, void *data) {
+      r7k_tls_span *sp = (r7k_tls_span *)data;
+      if (size < offsetof(r7k_phdr, tls_data) + sizeof(void *)) return 0;
+      unsigned char *t = (unsigned char *)((r7k_phdr *)(void *)info)->tls_data;
+      if (t && t >= sp->lo && t < sp->floor) sp->floor = t;
+      return 0;
+  }
   #endif
   // r7k_base_tls: this thread's stack top.  r7k_form_base
   // (r7rs-toplevel-reentry-reruns-forms): the top of the current top-level
@@ -2051,6 +2074,24 @@
           if (pthread_attr_getstack(&a, &addr, &sz) == 0 && addr)
               r7k_base_tls = (unsigned char *)addr + sz;
           pthread_attr_destroy(&a);
+      }
+      // jit-r7rs-callcc-reads-unknown-tag-after-per-thread-dynenv: that top is
+      // the top of the MAPPING, and glibc keeps a thread's TCB (the struct
+      // pthread) and every module's static TLS block there, above the first
+      // frame -- for every thread but the main one, whose TLS the loader
+      // allocates elsewhere.  An image measured to it took this thread's
+      // thread-locals with it and a re-entry wrote them all back as they were
+      // at the capture: the program's and the runtime's (the value a
+      // re-entered continuation delivers, since it moved into tur_r7rs_dyn),
+      // tur's own under `tur jit` (the program runs on the engine's thread),
+      // and libc's.  Stop below the lowest of them.  Nothing of a frame lies
+      // up there, so the image still holds every frame of the thread.
+      if (r7k_base_tls) {
+          r7k_tls_span sp = { (unsigned char *)addr, r7k_base_tls };
+          unsigned char *self = (unsigned char *)pthread_self();
+          if (self >= sp.lo && self < sp.floor) sp.floor = self;
+          dl_iterate_phdr(r7k_tls_floor_cb, &sp);
+          r7k_base_tls = (unsigned char *)((uintptr_t)sp.floor & ~(uintptr_t)15);
       }
   #elif defined(__APPLE__)
       r7k_base_tls = (unsigned char *)pthread_get_stackaddr_np(pthread_self());

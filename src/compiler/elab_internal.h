@@ -1512,6 +1512,13 @@ bool elab_scheme_stdlib_file(void *ud, const char *name, char *out, size_t cap);
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);
+/* The `any`-bridge adaptor for a function value whose signature differs from
+ * the slot's only in where `any` appears (elab_call.c); NULL leaves it alone. */
+Expr *elab_fn_any_bridge(Elab *e, Expr *arg, const Type *want_decl,
+                         const AbiTypeBinding *binds, uint8_t n_binds);
+bool elab_type_is_ground(const Type *t);
+bool saffron_bare_tyvar_param_widens(const Type *fnt, uint32_t i);
+Type elab_saffron_call_view(Elab *e, const Type *fnt);
 /* saffron-effect-row-lost-through-unannotated-call: the RETURN-position widen.
  * Hoists an effectful call out of the widened body first; see its comment in
  * elab_call.c for why this is separate from elab_coerce_to_any (the argument

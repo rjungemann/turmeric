@@ -188,6 +188,7 @@ set(TUR_CORE_SOURCES
     compiler/emit_fns.c
     compiler/emit_module.c
     compiler/emit_split.c
+    compiler/jit_prune.c
     compiler/expr.c
     compiler/fmt.c
     compiler/mangle.c

@@ -1,0 +1,18 @@
+;; tail-grammar-skips-and-or-and-carrier-lets (the `and`/`or` half): the
+;; codegen of a self tail call in the last operand of `and` / `or`.  The
+;; `expected.c` snapshot pins the lowering the equivalent `if` gets:
+;; `(and a z)` is `if (!(a)) return false; <tail z>` and `(or a z)` is
+;; `if (a) return true; <tail z>`, with `z`'s self call a jump to
+;; `__tur_tailcall:` rather than a call.  The deep companion
+;; (`tailcall-and-or-deep`) asserts it at 10,000,000 frames at -O0.
+
+(defn all-ok? [n : int] : bool
+  (and (>= n 0) ^tailcall (all-ok? (- n 1))))
+
+(defn any-hit? [n : int] : bool
+  (or (= n 0) ^tailcall (any-hit? (- n 1))))
+
+(defn main [] : int
+  (println (all-ok? 3))
+  (println (any-hit? 3))
+  0)

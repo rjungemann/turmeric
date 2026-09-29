@@ -1,0 +1,11 @@
+;; tail-grammar-skips-and-or-and-carrier-lets: only the LAST operand of `and`
+;; / `or` is in tail position (tailcall-and-or-annot).  An earlier operand is a
+;; TEST whose answer the form still has to inspect, so a call there keeps its
+;; frame -- and the refusal names that, not "an argument position".
+
+(defn early [n : int] : bool
+  (or ^tailcall (early (- n 1)) (= n 0)))
+
+(defn main [] : int
+  (println (early 3))
+  0)

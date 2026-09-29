@@ -1,5 +1,40 @@
 # A concrete-result function passed where an `any`-result function is expected gets no adaptor
 
+**RESOLVED 2026-09-29**, both spellings.  Pinned by
+`tests/fixtures/fn-arg-any-result-bridge` (a lambda, a named function, a
+capturing closure, an `any` parameter over a float-taking function, a `cstr`
+result, and the generic `ap1 [B]` at `float`, `int` and -- let-bound --
+`cstr`).
+
+## Resolution
+
+- **Typed parameter** (fix direction 1).  A function argument whose signature
+  differs from a GROUND parameter type only in where `any` appears is
+  marshalled by the `any` bridge (`elab_fn_any_bridge`, `elab_call.c`), in
+  both directions and in parameter and result slots, at the typed-call
+  argument check just before LT2's signature check.  The same bridge resolved
+  [static-instance-spec-calls-any-lambda-as-concrete-result](static-instance-spec-calls-any-lambda-as-concrete-result.md)
+  at the method-dispatch seam.
+- **Generic spelling** (fix direction 2, "keep a rigid type variable
+  rigid").  Two causes, found with gdb rather than guessed:
+  1. `elab_call_fn_inner` bound the callee's result type variables from a
+     ground expected return type -- for the call through `g`, that bound the
+     ENCLOSING definition's own `B := any` from the `: any` return, so the
+     call was typed `any` and never widened.  That binding now applies only to
+     a GLOBAL callee: a local function value's type variables are the
+     enclosing definition's, rigid there.  The call is typed `B`, the return
+     widens it, and the spec (which the gdb run showed was already minted with
+     `B := float`) tags it.
+  2. At `B := int` no spec is minted -- the C signature does not change -- so
+     the erased body tagged the widened `B` with `TY_TYVAR`, exactly the
+     defect
+     [erased-instance-body-tags-a-type-variable-widened-to-any](erased-instance-body-tags-a-type-variable-widened-to-any.md)
+     fixed for instance bodies.  That report's `instance_changes` trigger (an
+     `any` widen of a bound type variable) now applies to every callee, not
+     only instance methods: "a plain generic is always monomorphized" was not
+     true.
+
+
 **Severity: medium-high.** It is undefined behaviour reached with no
 diagnostic: a mismatched function-pointer call. It is measured as a panic on
 x86-64 Linux, and it is not guaranteed to be one. Typed Turmeric, no

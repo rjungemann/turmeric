@@ -6000,9 +6000,9 @@ static void __defer_168(void *__env) {
 
 static void __defer_163(void *__env) {
     struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
-    bool __ps_237 = (bt_hyundo_hyto_ex(__e->m));
+    bool __ps_235 = (bt_hyundo_hyto_ex(__e->m));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_237);
+    (void)(__ps_235);
 }
 
 
@@ -9823,47 +9823,44 @@ static tur_adt_Map__int__float * map_new__spec__tur_adt_Map__int__float__() {
 }
 
 static bool __inst_Eq_eq_qu_Map__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int__(tur_adt_Map__int__int * x, tur_adt_Map__int__int * y) {
-        int64_t __ps_225 = (map_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(x))));
+        int64_t __ps_224 = (map_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(x))));
         if (tur_panicking) return ((bool)0);
-        int64_t __ps_226 = (map_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(y))));
+        int64_t __ps_225 = (map_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(y))));
         if (tur_panicking) return ((bool)0);
-        bool __t224 = (__ps_225) == (__ps_226);
-        if (__t224) {
-            void *__t227 = (void *)((char *)&__tur_fatbox_0 + sizeof(void *));
-            bool __ps_228 = (map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___int64_t((tur_adt_Map__int__int *)(intptr_t)(x), (tur_adt_Map__int__int *)(intptr_t)(y), (int64_t)(intptr_t)(__t227)));
-            if (tur_panicking) return ((bool)0);
-            __t224 = __ps_228;
+        if (!((__ps_224) == (__ps_225))) {
+            return false;
         }
-        return __t224;
+        void *__t226 = (void *)((char *)&__tur_fatbox_0 + sizeof(void *));
+        return map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___int64_t((tur_adt_Map__int__int *)(intptr_t)(x), (tur_adt_Map__int__int *)(intptr_t)(y), (int64_t)(intptr_t)(__t226));
 }
 
 static bool map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___int64_t(tur_adt_Map__int__int * m1, tur_adt_Map__int__int * m2, int64_t val_cmp) {
-        bool __t229;
+        bool __t227;
         {
+            void * __ps_228 = (map_hyhamt((int64_t)(intptr_t)((int64_t)(intptr_t)(m1))));
+            if (tur_panicking) return ((bool)0);
+            void * __ps_229 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_228)));
+            if (tur_panicking) return ((bool)0);
+            void * iter_1000998 = __ps_229;
+            (void)iter_1000998;
             void * __ps_230 = (map_hyhamt((int64_t)(intptr_t)((int64_t)(intptr_t)(m1))));
             if (tur_panicking) return ((bool)0);
-            void * __ps_231 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_230)));
+            void * __ps_231 = (hamt_slkeyeq((void *)(intptr_t)(__ps_230)));
             if (tur_panicking) return ((bool)0);
-            void * iter_1000998 = __ps_231;
-            (void)iter_1000998;
-            void * __ps_232 = (map_hyhamt((int64_t)(intptr_t)((int64_t)(intptr_t)(m1))));
-            if (tur_panicking) return ((bool)0);
-            void * __ps_233 = (hamt_slkeyeq((void *)(intptr_t)(__ps_232)));
-            if (tur_panicking) return ((bool)0);
-            void * keyeq_1000999 = __ps_233;
+            void * keyeq_1000999 = __ps_231;
             (void)keyeq_1000999;
-            void * __ps_234 = (map_hyhamt((int64_t)(intptr_t)((int64_t)(intptr_t)(m2))));
+            void * __ps_232 = (map_hyhamt((int64_t)(intptr_t)((int64_t)(intptr_t)(m2))));
             if (tur_panicking) return ((bool)0);
-            bool __ps_235 = (map_hyeq_hyloop((void *)(intptr_t)(iter_1000998), (void *)(intptr_t)(__ps_234), (void *)(intptr_t)(keyeq_1000999), (int64_t)(intptr_t)(val_cmp)));
+            bool __ps_233 = (map_hyeq_hyloop((void *)(intptr_t)(iter_1000998), (void *)(intptr_t)(__ps_232), (void *)(intptr_t)(keyeq_1000999), (int64_t)(intptr_t)(val_cmp)));
             if (tur_panicking) return ((bool)0);
-            bool result_1001000 = __ps_235;
+            bool result_1001000 = __ps_233;
             (void)result_1001000;
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1000998));
-            bool __t236;
-            __t236 = result_1001000;
-            __t229 = __t236;
+            bool __t234;
+            __t234 = result_1001000;
+            __t227 = __t234;
         }
-        return __t229;
+        return __t227;
 }
 
 

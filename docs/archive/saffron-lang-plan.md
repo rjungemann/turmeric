@@ -58,7 +58,7 @@ Other open reports a Saffron program reaches (none was a stage blocker):
 - [jit-x86-64-struct-valued-statement-expression-miscompiles](jit-x86-64-struct-valued-statement-expression-miscompiles.md)
   (medium, JIT engine on x86-64 only): resolved 2026-09-29 -- the c2mir
   fix merged as rjungemann/mir#5 and the MIR pin moved to it.
-- [static-instance-spec-calls-any-lambda-as-concrete-result](../reported/static-instance-spec-calls-any-lambda-as-concrete-result.md)
+- [static-instance-spec-calls-any-lambda-as-concrete-result](static-instance-spec-calls-any-lambda-as-concrete-result.md)
   (high): a `.foldl` that resolves STATICALLY on a Saffron value calls the
   `any`-returning lambda as if it returned `double`. Still reproduces
   2026-09-28 (compiled prints `2.25` / `4.6e-310` for `1.5` / `9.75`).

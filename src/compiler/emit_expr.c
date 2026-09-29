@@ -3189,6 +3189,20 @@ const char *match_binder_c_type(const Type *t) {
  *   - fn_body_tail_emits_byvalue_carrier_abi excludes a producer that already
  *     hands back the aggregate.
  */
+/* catch-error-ascribed-result-types-handler-by-value (let half): is the
+ * emitted text `v` already a dereference INTO `ctype` -- `(*(T *)...)`?  An
+ * ascription over a carrier producer bridges on its own, so the value in hand
+ * has the aggregate's type and a second bridge would dereference the struct
+ * (`aggregate value used where an integer was expected`).  The text is the
+ * one the bridge itself writes (emit_carrier_bridge), so this recognises
+ * exactly the shape that was already bridged. */
+static bool emit_value_is_deref_into(const char *v, const char *ctype) {
+    if (!v || !ctype) return false;
+    size_t n = strlen(ctype);
+    return strncmp(v, "(*(", 3) == 0 && strncmp(v + 3, ctype, n) == 0 &&
+           strncmp(v + 3 + n, " *)", 3) == 0;
+}
+
 Type emit_let_init_carrier_bridge_type(EmitCtx *ctx, const Expr *init,
                                        const char *bind_c, const char *iv) {
     Type none = type_simple(TY_UNKNOWN, CK_COPY);
@@ -3198,6 +3212,7 @@ Type emit_let_init_carrier_bridge_type(EmitCtx *ctx, const Expr *init,
     Type init_bv = fn_body_tail_byvalue_carrier_type(ctx, init);
     if (init_bv.kind == TY_UNKNOWN) return none;
     if (emit_value_is_recorded_as(iv, bind_c)) return none;
+    if (emit_value_is_deref_into(iv, bind_c)) return none;
     if (fn_body_tail_emits_byvalue_carrier_abi(ctx, init)) return none;
     return init_bv;
 }

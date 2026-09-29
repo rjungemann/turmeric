@@ -5973,9 +5973,9 @@ static void __defer_168(void *__env) {
 
 static void __defer_163(void *__env) {
     struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
-    bool __ps_217 = (bt_hyundo_hyto_ex(__e->m));
+    bool __ps_215 = (bt_hyundo_hyto_ex(__e->m));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_217);
+    (void)(__ps_215);
 }
 
 
@@ -9669,46 +9669,44 @@ static bool __inst_Eq_eq_qu_Set__spec__bool_tur_adt_Set__int___tur_adt_Set__int_
 }
 
 static bool set_eq_full__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_adt_Set__int * s1, tur_adt_Set__int * s2) {
-        int64_t __ps_206 = (set_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(s1))));
+        int64_t __ps_205 = (set_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(s1))));
         if (tur_panicking) return ((bool)0);
-        int64_t __ps_207 = (set_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(s2))));
+        int64_t __ps_206 = (set_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(s2))));
         if (tur_panicking) return ((bool)0);
-        bool __t205 = (__ps_206) == (__ps_207);
-        if (__t205) {
-            bool __ps_208 = (set_eq_driver__spec__bool_tur_adt_Set__int___tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(s1), (tur_adt_Set__int *)(intptr_t)(s2)));
-            if (tur_panicking) return ((bool)0);
-            __t205 = __ps_208;
+        if (!((__ps_205) == (__ps_206))) {
+            return false;
         }
-        return __t205;
+        TUR_MUSTTAIL_SELF(set_eq_full__spec__bool_tur_adt_Set__int___tur_adt_Set__int__);
+        TUR_MUSTTAIL return set_eq_driver__spec__bool_tur_adt_Set__int___tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(s1), (tur_adt_Set__int *)(intptr_t)(s2));
 }
 
 static bool set_eq_driver__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_adt_Set__int * s1, tur_adt_Set__int * s2) {
-        bool __t209;
+        bool __t207;
         {
+            int64_t __ps_208 = (set_hamt__spec__int64_t_tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(s1)));
+            if (tur_panicking) return ((bool)0);
+            void * __ps_209 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_208)));
+            if (tur_panicking) return ((bool)0);
+            void * iter_1001381 = __ps_209;
+            (void)iter_1001381;
             int64_t __ps_210 = (set_hamt__spec__int64_t_tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(s1)));
             if (tur_panicking) return ((bool)0);
-            void * __ps_211 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_210)));
+            void * __ps_211 = (hamt_slkeyeq((void *)(intptr_t)(__ps_210)));
             if (tur_panicking) return ((bool)0);
-            void * iter_1001381 = __ps_211;
-            (void)iter_1001381;
-            int64_t __ps_212 = (set_hamt__spec__int64_t_tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(s1)));
-            if (tur_panicking) return ((bool)0);
-            void * __ps_213 = (hamt_slkeyeq((void *)(intptr_t)(__ps_212)));
-            if (tur_panicking) return ((bool)0);
-            void * keyeq_1001382 = __ps_213;
+            void * keyeq_1001382 = __ps_211;
             (void)keyeq_1001382;
-            int64_t __ps_214 = (set_hamt__spec__int64_t_tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(s2)));
+            int64_t __ps_212 = (set_hamt__spec__int64_t_tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(s2)));
             if (tur_panicking) return ((bool)0);
-            bool __ps_215 = (set_hyeq_hyloop((void *)(intptr_t)(iter_1001381), (void *)(intptr_t)(__ps_214), (void *)(intptr_t)(keyeq_1001382)));
+            bool __ps_213 = (set_hyeq_hyloop((void *)(intptr_t)(iter_1001381), (void *)(intptr_t)(__ps_212), (void *)(intptr_t)(keyeq_1001382)));
             if (tur_panicking) return ((bool)0);
-            bool result_1001383 = __ps_215;
+            bool result_1001383 = __ps_213;
             (void)result_1001383;
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1001381));
-            bool __t216;
-            __t216 = result_1001383;
-            __t209 = __t216;
+            bool __t214;
+            __t214 = result_1001383;
+            __t207 = __t214;
         }
-        return __t209;
+        return __t207;
 }
 
 static int64_t set_hamt__spec__int64_t_tur_adt_Set__int__(tur_adt_Set__int * s) {
