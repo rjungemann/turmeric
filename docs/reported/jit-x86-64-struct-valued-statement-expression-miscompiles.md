@@ -3,6 +3,134 @@
 **Severity: medium (JIT engine, x86-64 only).** Filed 2026-09-10 while
 driving the Saffron dynamic-surface PR to green.
 
+**Status 2026-09-28: Turmeric side DONE, root cause FOUND, engine fix
+written and verified -- open only until it lands on the MIR fork.**
+
+- **Fix direction 2 is complete.** The last three sites that still emitted a
+  struct-holding `({ ... })` -- the union widen (`__tur_ua`),
+  `dyn_widen_to_any`'s by-value box (`__tur_fb`), and `emit_agg_box`'s
+  `__tur_pbox` -- now build their value with statements and leave a plain
+  expression, like every site before them (emit_expr.c).  `__tur_fb` is built
+  inside the dynamic field read's tag-checked branch, since the read it boxes
+  is only valid once the tag matches.  The emitter no longer produces the
+  shape anywhere; the fixtures that reach the three sites pass under cc and
+  in the engine.
+- **Fix direction 1: reduced to plain C, and the defect is c2mir's front end,
+  not MIR-gen.** Built against the pinned fork (79cb2905) on x86-64 Linux,
+  `c2m -eg` AND the interpreter `c2m -ei` both answer wrong; gcc is right:
+
+  ```c
+  #include <stdio.h>
+  #include <stdint.h>
+  typedef struct { int64_t a, b; } T;          /* 16 bytes */
+  typedef struct { int64_t x, y, z; } S;       /* 24 bytes */
+  int64_t use(T f) { return f.a * 100 + f.b; }
+  int64_t k(T f, int64_t p) {
+    S s = ({ *(S *)(intptr_t)p; });            /* shape 3 */
+    return use(f) + s.x * 0;
+  }
+  int main(void) {
+    S v = {7, 8, 9}; T f = {3, 4};
+    printf("%lld\n", (long long)k(f, (int64_t)(intptr_t)&v));  /* gcc 304, c2m 708 */
+    return 0;
+  }
+  ```
+
+  Shape 1 reduces the same way: `g(acc, ({ int64_t q = p; q ? *(T *)q : NIL; }))`
+  with two `{tag, double}` boxes gives 4.5 for 3.75, the report's exact
+  symptom.
+
+  **Root cause** (c2mir/c2mir.c).  The N_STMTEXPR check reserves the
+  struct/union result slot at `func_block_scope->size` *while the function
+  body is still being checked* -- but a function's stack variables are laid
+  out only after the whole body is checked, by
+  `process_func_decls_for_allocation`, which places the top scope's
+  variables from offset 0 and then overwrites that scope's `size`.  So the
+  reserved slot is the frame's first bytes, and it coincides with the first
+  non-scalar stack variable -- a by-value struct parameter (`f` above, and
+  shape 3's `f`), which the statement expression's copy-out then
+  overwrites.  The layout code is target-independent, so why arm64 never
+  showed it is not established here -- most likely the aarch64 ABI code does
+  not materialize the aggregate parameter as a frame variable at offset 0 --
+  and the fix does not depend on the answer.
+
+  **The fix** records each struct/union statement expression during the
+  check and assigns its slot in a new `process_func_stmtexprs_for_allocation`,
+  called right after `process_func_decls_for_allocation`, at the end of the
+  frame that pass computed (which already covers every nested scope) and
+  before the call-arg area is added.  Every slot is still a fixed frame slot,
+  so the "no dynamic ALLOCA in a loop" property the original code was after
+  is kept.  Verified: all four reductions answer as gcc does under `-eg` and
+  `-ei`, and MIR's own c2mir suites (`c-tests/runtests.sh` with
+  `use-c2m-interp` and `use-c2m-gen`, 1087 tests each) give identical
+  results before and after -- the same two pre-existing failures either way.
+
+  **To finish:** land the patch below on rjungemann/mir, bump
+  `TUR_MIR_GIT_TAG` in cmake/mir.cmake (with a line in the pin comment's
+  fix list, like every fork fix before it), and archive this report.  The
+  patch is against 79cb2905:
+
+  ```diff
+  --- a/c2mir/c2mir.c
+  +++ b/c2mir/c2mir.c
+  @@ struct check_ctx {
+     VARR (decl_t) * func_decls_for_allocation;
+  +  VARR (node_t) * func_stmtexprs_for_allocation;
+     VARR (node_t) * possible_incomplete_decls;
+  @@
+   #define func_decls_for_allocation check_ctx->func_decls_for_allocation
+  +#define func_stmtexprs_for_allocation check_ctx->func_stmtexprs_for_allocation
+  @@ after process_func_decls_for_allocation
+  +/* Place the struct/union result slot of every statement expression in the function after all
+  +   of its stack variables, i.e. after the frame size process_func_decls_for_allocation computed
+  +   (which already covers every nested scope): */
+  +static void process_func_stmtexprs_for_allocation (c2m_ctx_t c2m_ctx, node_t block) {
+  +  check_ctx_t check_ctx = c2m_ctx->check_ctx;
+  +  struct node_scope *ns = block->attr;
+  +
+  +  for (size_t i = 0; i < VARR_LENGTH (node_t, func_stmtexprs_for_allocation); i++) {
+  +    node_t r = VARR_GET (node_t, func_stmtexprs_for_allocation, i);
+  +    struct expr *e = r->attr;
+  +    mir_size_t size = type_size (c2m_ctx, e->type);
+  +    mir_size_t align = var_align (c2m_ctx, e->type);
+  +
+  +    ns->size = round_size (ns->size, align);
+  +    e->c.u_val = ns->size;
+  +    ns->size += size;
+  +    ns->stack_var_p = TRUE;
+  +  }
+  +}
+  @@ case N_FUNC_DEF (check):
+       VARR_TRUNC (decl_t, func_decls_for_allocation, 0);
+  +    VARR_TRUNC (node_t, func_stmtexprs_for_allocation, 0);
+  @@
+       process_func_decls_for_allocation (c2m_ctx);
+  +    process_func_stmtexprs_for_allocation (c2m_ctx, block);
+       /* Add call arg area */
+  @@ case N_STMTEXPR (check):
+  -    if (func_block_scope != NULL && (t1->mode == TM_STRUCT || t1->mode == TM_UNION)) {
+  -      struct node_scope *fns = func_block_scope->attr;
+  -      mir_size_t size = type_size (c2m_ctx, t1);
+  -      mir_size_t align = var_align (c2m_ctx, t1);
+  -
+  -      fns->size = round_size (fns->size, align);
+  -      e->c.u_val = fns->size;
+  -      fns->size += size;
+  -      fns->stack_var_p = TRUE;
+  -    }
+  +    if (func_block_scope != NULL && (t1->mode == TM_STRUCT || t1->mode == TM_UNION))
+  +      VARR_PUSH (node_t, func_stmtexprs_for_allocation, r);
+  @@ context_init:
+       VARR_CREATE (decl_t, func_decls_for_allocation, alloc, 1024);
+  +  VARR_CREATE (node_t, func_stmtexprs_for_allocation, alloc, 64);
+  @@ context_finish:
+     if (func_decls_for_allocation != NULL) VARR_DESTROY (decl_t, func_decls_for_allocation);
+  +  if (func_stmtexprs_for_allocation != NULL)
+  +    VARR_DESTROY (node_t, func_stmtexprs_for_allocation);
+  ```
+
+The body below is the report as it stood before this update.
+
 ## Summary
 
 Under the MIR engine (`tur jit`, `tests/run-jit.sh`) on x86-64 Linux, a GNU
@@ -136,8 +264,9 @@ as STATEMENTS and leaves a bare prototype-cast call, as `emit_dyn_call`
 already did for its callee box.
 
 Still emitted as struct-valued statement expressions, none observed to
-misbehave yet: the union widen (`__tur_ua`), `dyn_widen_to_any`'s by-value
-box (`__tur_fb`), and `emit_core.c`'s `__tur_pbox`. `tests/run-jit.sh` passes
+misbehave yet (all three hoisted 2026-09-28, see the status at the top): the
+union widen (`__tur_ua`), `dyn_widen_to_any`'s by-value box (`__tur_fb`),
+and `emit_agg_box`'s `__tur_pbox` (emit_expr.c, not emit_core.c). `tests/run-jit.sh` passes
 the fixtures that reach them (`union-to-any-widen-aliases-box` and
 `docs-any-guide-examples` for `__tur_ua`, `forall-dict-byvalue-receiver` and
 `hkt-constrained-byvalue-carrier` for `__tur_pbox`) -- but, as shape 5 shows,

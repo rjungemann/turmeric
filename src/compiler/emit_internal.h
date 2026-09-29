@@ -253,6 +253,20 @@ typedef struct EmitAbiSpecialization {
     unsigned long long consumer_lens_hash;
 } EmitAbiSpecialization;
 
+/* letrec-mutual-recursion-between-capturing-closures: the letrec closure
+ * knot (EmitCtx.letrec_knot; see letrec_knot_begin in emit_expr.c). */
+typedef struct LetrecKnot {
+    bool                   active;
+    const struct Binding **pending;       /* group members not yet bound */
+    uint32_t               n_pending;
+    const struct Expr     *owner_init;    /* the member init being emitted */
+    const struct Binding  *owner;
+    struct Closure        *in_closure;    /* ctx->closure when the knot opened */
+    const struct Binding **patch_target;  /* deferred fills, by target member */
+    char                 **patch_stmt;
+    uint32_t               n_patches;
+} LetrecKnot;
+
 typedef struct EmitCtx {
     Buf  *file;     /* file-scope decls (statics, includes) */
     Buf  *main_;    /* main() body */
@@ -479,6 +493,15 @@ typedef struct EmitCtx {
     char    **exbox_dict_names;
     uint32_t  n_exbox_dict_names;
     uint32_t  cap_exbox_dict_names;
+    /* letrec-mutual-recursion-between-capturing-closures: the letrec closure
+     * knot.  While a letrec's bindings are emitted, `pending` holds the group
+     * members not yet bound.  A member's own EX_CLOSURE init (`owner_init`)
+     * that captures a pending member fills that slot with 0 and records the
+     * real fill in `patches`, rendered against the owner's binding; it is
+     * emitted the moment the target is bound.  `in_closure` pins the knot to
+     * the frame that set it up -- a thunk body emitted meanwhile reads its
+     * captures through its own env and must not see it. */
+    LetrecKnot letrec_knot;
     /* Phase 3: For closure thunk emission, track the current closure */
     struct Closure *closure;
     const char *env_var_name;  /* Name of the casted env variable (e.g., "__env_4") */

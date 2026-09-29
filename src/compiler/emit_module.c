@@ -10511,14 +10511,26 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * by-value aggregate (every aligned word is a possible erased pointer).
      * The macro names are upper-case on purpose: the canary matches
      * `tur_region_` and must keep matching the off arm as clean. */
+    /* region-escape-through-unhooked-stores item 3 (the top-level panic jam):
+     * every catch boundary records the generation depth on entry and, on its
+     * panic arm, RETIRES whatever the panic left open above it -- a bracket
+     * whose pop the unwind skipped.  Without it the outermost catch left that
+     * generation live with nothing to pop it, and every later allocation
+     * landed in it.  Retire, never rewind: what the stranded generation holds
+     * may still be reachable (the payload, a stored node).  Same two-arm
+     * spelling as the notes, so the off arm names no region symbol. */
     if (regions_enabled()) {
         buf_puts(out,
             "#define TUR_REGION_NOTE(w) tur_region_note_escape((const void *)(intptr_t)(w))\n"
-            "#define TUR_REGION_NOTE_WORDS(p, n) tur_region_note_escape_words((const void *)(p), (size_t)(n))\n");
+            "#define TUR_REGION_NOTE_WORDS(p, n) tur_region_note_escape_words((const void *)(p), (size_t)(n))\n"
+            "#define TUR_REGION_DEPTH() tur_region_depth()\n"
+            "#define TUR_REGION_RETIRE_TO(d) do { if (tur_region_depth() > (d)) tur_region_pop((d) + 1); } while (0)\n");
     } else {
         buf_puts(out,
             "#define TUR_REGION_NOTE(w) ((void)0)\n"
-            "#define TUR_REGION_NOTE_WORDS(p, n) ((void)0)\n");
+            "#define TUR_REGION_NOTE_WORDS(p, n) ((void)0)\n"
+            "#define TUR_REGION_DEPTH() 0\n"
+            "#define TUR_REGION_RETIRE_TO(d) ((void)(d))\n");
     }
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_opt_value_checked(int64_t __o) {\n");
@@ -13518,6 +13530,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "%svoid rc_free_queue_reset_drain_state(void);  /* Forward decl */\n", rcgc_helper);
     buf_puts(out, "static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;\n");
+    buf_puts(out, "    volatile int __tur_rd = TUR_REGION_DEPTH();\n");
     buf_puts(out, "    if (TUR_SETJMP(__node.buf) == 0) {\n");
     buf_puts(out, "        thunk(env, out);\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
@@ -13528,6 +13541,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        return false;\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "        TUR_REGION_RETIRE_TO(__tur_rd);\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
     /* rc-free-queue-drain-quadratic: the longjmp may have unwound out of the
      * middle of rc_free_queue_drain, skipping the assignment that clears the
@@ -13547,6 +13561,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     buf_puts(out, "static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env, tur_result *out) {\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;\n");
+    buf_puts(out, "    volatile int __tur_rd = TUR_REGION_DEPTH();\n");
     buf_puts(out, "    if (TUR_SETJMP(__node.buf) == 0) {\n");
     buf_puts(out, "        thunk(env, out);\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
@@ -13557,6 +13572,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        return false;\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "        TUR_REGION_RETIRE_TO(__tur_rd);\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
     /* rc-free-queue-drain-quadratic: the longjmp may have unwound out of the
      * middle of rc_free_queue_drain, skipping the assignment that clears the
@@ -13601,9 +13617,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "static int64_t tur_catch_unwind_box(int64_t thunk) {\n");
         buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
         buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+        buf_puts(out, "    int __tur_rd = TUR_REGION_DEPTH();\n");
         buf_puts(out, "    int64_t __v = TUR_APPLY0(thunk);\n");
         buf_puts(out, "    tur_handler_chain = __node->parent; free(__node);\n");
         buf_puts(out, "    if (tur_panicking) {\n");
+        buf_puts(out, "        TUR_REGION_RETIRE_TO(__tur_rd);\n");
         buf_puts(out, "        tur_panicking = 0; tur_panic_in_progress = 0;\n");
         buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
         buf_puts(out, "        global_panic_payload = NULL;\n");
@@ -13614,9 +13632,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {\n");
         buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
         buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+        buf_puts(out, "    int __tur_rd = TUR_REGION_DEPTH();\n");
         buf_puts(out, "    int64_t __v = TUR_APPLY0(thunk);\n");
         buf_puts(out, "    tur_handler_chain = __node->parent; free(__node);\n");
         buf_puts(out, "    if (tur_panicking) {\n");
+        buf_puts(out, "        TUR_REGION_RETIRE_TO(__tur_rd);\n");
         buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
         buf_puts(out, "        if (__p && __p->type_tag == expected_type) {\n");
         buf_puts(out, "            tur_panicking = 0; tur_panic_in_progress = 0;\n");
@@ -13654,9 +13674,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "static int64_t tur_catch_unwind_box_via(int64_t (*__call)(void *), int64_t thunk, int __owns) {\n");
         buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
         buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+        buf_puts(out, "    int __tur_rd = TUR_REGION_DEPTH();\n");
         buf_puts(out, "    int64_t __v = __call((void *)(intptr_t)thunk);\n");
         buf_puts(out, "    tur_handler_chain = __node->parent; free(__node);\n");
         buf_puts(out, "    if (tur_panicking) {\n");
+        buf_puts(out, "        TUR_REGION_RETIRE_TO(__tur_rd);\n");
         buf_puts(out, "        if (__owns) free((void *)(intptr_t)__v);\n");
         buf_puts(out, "        tur_panicking = 0; tur_panic_in_progress = 0;\n");
         buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
@@ -13668,9 +13690,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "static int64_t tur_catch_panic_of_box_via(int expected_type, int64_t (*__call)(void *), int64_t thunk, int __owns) {\n");
         buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
         buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+        buf_puts(out, "    int __tur_rd = TUR_REGION_DEPTH();\n");
         buf_puts(out, "    int64_t __v = __call((void *)(intptr_t)thunk);\n");
         buf_puts(out, "    tur_handler_chain = __node->parent; free(__node);\n");
         buf_puts(out, "    if (tur_panicking) {\n");
+        buf_puts(out, "        TUR_REGION_RETIRE_TO(__tur_rd);\n");
         buf_puts(out, "        if (__owns) free((void *)(intptr_t)__v);\n");
         buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
         buf_puts(out, "        if (__p && __p->type_tag == expected_type) {\n");

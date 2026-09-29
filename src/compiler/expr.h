@@ -98,6 +98,16 @@ struct Binding {
      * recursion machinery (it is excluded, never captured).  See
      * hkt-matcher-cata-fnarg-on-toplevel-defn-and-env-struct-collision (Edge 1). */
     bool          is_letrec_binding;
+    /* letrec-mutual-recursion-between-capturing-closures: set by elab_letrec's
+     * pre-scan on a group member whose `fn` init is predicted to capture (it
+     * names a local outside the group, or calls a member that does).  A call to
+     * such a member from a SIBLING's top-level body is a capture, not recursion
+     * -- even before the member's own init is elaborated -- and the emitter ties
+     * the knot by patching the sibling's env slot once the member is bound.
+     * `letrec_elaborating` marks the member whose init is being elaborated
+     * right now: its own self-call stays excluded (the S5 env-ptr self-call). */
+    bool          letrec_predicted_closure;
+    bool          letrec_elaborating;
     uint32_t      id;            /* unique within the program */
     Span          span;
     /* TY4: lexical scope depth at declaration (0 = outermost). Stamped by
@@ -395,6 +405,12 @@ struct Binding {
      * copy of the value.  The binding itself is never emitted.  NULL for
      * every ordinary binding. */
     const Symbol *cell_hidden_sym;
+    /* mut-cell-is-never-freed: set on the HIDDEN binding that holds the
+     * `TurMutCell` itself.  Nothing but the alias's `(.v cell)` reads and
+     * writes and the capturing closures' envs ever sees the pointer, so the
+     * let that binds it may free it at scope exit once every capturing closure
+     * is provably dead by then (mut_cell_escapes, emit_expr.c). */
+    bool          is_mut_cell;
     /* r7rs-procedure-body-forward-reference: a `(def ^mut name : any init)`
      * the Pass-1 pre-pass declared ahead of the bodies, so a procedure
      * written above the def can name it; elab_def fills this binding in

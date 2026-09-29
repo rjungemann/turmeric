@@ -6321,7 +6321,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * passed to a hand-written `cell-set!`, read back after the pop --
          * the bracket rewound and the reader printed garbage, where
          * TUR_REGIONS=0 printed the value
-         * (docs/reported/region-escape-through-unhooked-stores.md).
+         * (docs/archive/region-escape-through-unhooked-stores.md).
          *
          * The callee is the one place each parameter is a plain C identifier,
          * so the note goes here rather than at every call site: one site per

@@ -1,0 +1,31 @@
+;; mut-cell-is-never-freed: a `^mut` a lambda captures lives in a shared heap
+;; cell (TurMutCell), and nothing owned it -- 8 bytes leaked per evaluation of
+;; the `let`, one per iteration in a loop.  The let now frees the cell at scope
+;; exit when every closure capturing it is provably dead by then: here each
+;; lambda is handed to a non-retaining parameter, so it is hoisted into a
+;; `__borrowc` let whose env is dropped after the call.  Run under
+;; tests/run-leak-check.sh (requires.leak-check): any leaked cell fails it.
+;; An ESCAPING closure keeps its cell (tests/fixtures/closure-captured-mut-shared
+;; has the escaping counters).
+
+(defn apply3 [f : (fn [int] nil)] : nil (f 1) (f 2) (f 3))
+
+(defn main [] : int
+  ;; The report's repro.
+  (let [^mut acc 0]
+    (apply3 (fn [x : int] : nil (set! acc (+ acc x))))
+    (println acc))
+  ;; A float cell, fresh each iteration: one cell per pass, each freed.
+  (let [^mut i 0]
+    (while (< i 5)
+      (let [^mut total 0.5]
+        (apply3 (fn [x : int] : nil (set! total (+ total 1.25))))
+        (when (= i 4) (println total)))
+      (set! i (+ i 1))))
+  ;; Two closures in one let, both let-bound and called in the body.
+  (let [^mut n 0]
+    (let [getn (fn [] : int n)
+          incn (fn [] : nil (set! n (+ n 1)))]
+      (incn) (incn) (incn)
+      (println (getn))))
+  0)

@@ -654,6 +654,7 @@ static bool elab_let_mut_to_cell(Elab *e, Scope *inner, LetBinding **binds,
     if (!cell_init) { *ok = false; return false; }
     b->is_mut = false;
     Binding *cb = binding_new(e, hidden_sym, cell_init->type, false, false, name_span);
+    cb->is_mut_cell = true;
     scope_add(inner, cb);
     if (*n_binds == *cap) {
         *cap = *cap ? *cap * 2 : 4;
@@ -2603,6 +2604,98 @@ Expr *elab_letstar(Elab *e, const Form *call) {
  *     rejected.  Substructural recursive locals can be top-level defns.
  *   - Vector destructuring is not supported.
  */
+/* Is `f` a `(fn [...] ...)` / `(lambda [...] ...)` literal? */
+static bool letrec_form_is_fn_literal(Elab *e, const Form *f) {
+    if (!f || f->tag != F_LIST || f->as.list.len < 3) return false;
+    const Form *h = f->as.list.items[0];
+    return h->tag == F_SYM && (h->as.sym == e->sym_fn || h->as.sym == e->sym_lambda) &&
+           f->as.list.items[1]->tag == F_VEC;
+}
+
+/* Walk a member's init form for symbol references.  Sets *refs_local when a
+ * symbol resolves to a local outside the group (a parameter or let binding of
+ * the enclosing function), and refs[j] when it names group member j.  Purely
+ * syntactic, so it over-approximates: a name an inner binder shadows still
+ * counts -- see letrec_predict_closures for why that is safe. */
+static void letrec_scan_refs(Elab *e, const Form *f, Binding **group, uint32_t n,
+                             const Symbol *const *own_params, uint32_t n_own,
+                             bool *refs_local, bool *refs) {
+    if (!f) return;
+    switch (f->tag) {
+        case F_SYM: {
+            for (uint32_t i = 0; i < n_own; i++)
+                if (own_params[i] == f->as.sym) return;
+            Binding *b = scope_lookup(e->scope, f->as.sym);
+            if (!b || b->is_global) return;
+            for (uint32_t j = 0; j < n; j++) {
+                if (group[j] == b) { refs[j] = true; return; }
+            }
+            *refs_local = true;
+            return;
+        }
+        case F_QUOTE: case F_TYPE_ANN: case F_KEYWORD: case F_CBLOCK:
+            return;
+        case F_LIST: case F_VEC: case F_MAP: case F_SET: case F_MAP_LITERAL:
+        case F_SET_LITERAL: case F_READER_COND: case F_RANGE_VAR:
+        case F_QUASIQUOTE: case F_UNQUOTE: case F_UNQUOTE_SPLICING:
+        case F_CONTRACT_TYPE:
+            for (uint32_t i = 0; i < f->as.list.len; i++)
+                letrec_scan_refs(e, f->as.list.items[i], group, n, own_params,
+                                 n_own, refs_local, refs);
+            return;
+        default:
+            return;
+    }
+}
+
+/* letrec-mutual-recursion-between-capturing-closures: mark each `fn` member
+ * predicted to capture (letrec_predicted_closure).  A member captures when its
+ * init names a local outside the group, names a NON-fn member (a value member
+ * is an ordinary local, always captured), or calls a member that captures --
+ * the last to a fixpoint, since capturing a closure makes the caller one.
+ *
+ * Over-approximation is the safe direction.  A member predicted to capture that
+ * ends up captureless is lifted to a global, and its sibling's capture of it is
+ * skipped at the env struct and at the fill (the Edge-1 is_global skip in
+ * EX_CLOSURE emission).  Under-approximation is the bug this fixes. */
+static void letrec_predict_closures(Elab *e, Binding **group, Form **inits, uint32_t n) {
+    bool *is_fn   = (bool *)calloc(n, sizeof(bool));
+    bool *local   = (bool *)calloc(n, sizeof(bool));
+    bool *refs    = (bool *)calloc((size_t)n * n, sizeof(bool));
+    if (!is_fn || !local || !refs) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t k = 0; k < n; k++) is_fn[k] = letrec_form_is_fn_literal(e, inits[k]);
+    for (uint32_t k = 0; k < n; k++) {
+        if (!is_fn[k]) continue;
+        /* The lambda's own parameter names are not references out of it. */
+        const Form *pv = inits[k]->as.list.items[1];
+        const Symbol **own = (const Symbol **)calloc(pv->as.list.len + 1, sizeof(Symbol *));
+        if (!own) { fprintf(stderr, "tur: oom\n"); abort(); }
+        uint32_t n_own = 0;
+        for (uint32_t i = 0; i < pv->as.list.len; i++)
+            if (pv->as.list.items[i]->tag == F_SYM) own[n_own++] = pv->as.list.items[i]->as.sym;
+        for (uint32_t i = 2; i < inits[k]->as.list.len; i++)
+            letrec_scan_refs(e, inits[k]->as.list.items[i], group, n, own, n_own,
+                             &local[k], &refs[(size_t)k * n]);
+        free(own);
+        for (uint32_t j = 0; j < n; j++)
+            if (j != k && refs[(size_t)k * n + j] && !is_fn[j]) local[k] = true;
+    }
+    for (bool changed = true; changed; ) {
+        changed = false;
+        for (uint32_t k = 0; k < n; k++) {
+            if (!is_fn[k] || local[k]) continue;
+            for (uint32_t j = 0; j < n; j++) {
+                if (j != k && refs[(size_t)k * n + j] && local[j]) {
+                    local[k] = true; changed = true; break;
+                }
+            }
+        }
+    }
+    for (uint32_t k = 0; k < n; k++)
+        if (is_fn[k] && local[k]) group[k]->letrec_predicted_closure = true;
+    free(is_fn); free(local); free(refs);
+}
+
 Expr *elab_letrec(Elab *e, const Form *call) {
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2804,6 +2897,25 @@ Expr *elab_letrec(Elab *e, const Form *call) {
         pre_b[k] = b;
     }
 
+    /* letrec-mutual-recursion-between-capturing-closures: predict, before any
+     * init is elaborated, which `fn` members will CAPTURE.  A call to a group
+     * member from a sibling's top-level body is left to the recursion
+     * machinery only while that member is not known to be a closure -- and a
+     * LATER member has no init yet when an earlier one is elaborated, so a call
+     * to it was never captured and the lifted body named an undeclared local.
+     * With the prediction, collect_free_vars captures it, and the emitter ties
+     * the knot (the earlier env's slot is patched once the later member is
+     * bound).  Over-predicting is harmless: a member that turns out captureless
+     * is lifted to a global, and a capture of a global member is skipped at
+     * both the env struct and its fill (Edge 1). */
+    if (rc == 0 && n_entries > 1) {
+        Form **inits = (Form **)malloc(n_entries * sizeof(Form *));
+        if (!inits) { fprintf(stderr, "tur: oom\n"); abort(); }
+        for (uint32_t k = 0; k < n_entries; k++) inits[k] = entries[k].init_form;
+        letrec_predict_closures(e, pre_b, inits, n_entries);
+        free(inits);
+    }
+
     /* Pass B -- elaborate each init inside the inner scope, then patch the
      * pre-registered binding's type with the actual elaborated type. */
     LetBinding *binds = NULL;
@@ -2848,7 +2960,9 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                 init_form = form_list(e->arena, init_form->span, items, len + 1);
             }
         }
+        pre_b[k]->letrec_elaborating = true;
         Expr *init = elab_form(e, init_form);
+        pre_b[k]->letrec_elaborating = false;
         e->letrec_self_group   = NULL;
         e->letrec_self_group_n = 0;
         if (!init) { rc = -1; break; }

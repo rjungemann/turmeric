@@ -327,7 +327,7 @@ which is the trail doing its job.
 
 What this did not close, at first, was a store the emitter never sees: a user
 inline-C body writing a node into its own `malloc`'d cell. That was filed as
-`docs/reported/region-escape-through-unhooked-stores.md` with a documented
+`docs/archive/region-escape-through-unhooked-stores.md` with a documented
 contract as the proposed fix -- and both halves of that were wrong.
 
 **The inline-C parameter note (2026-09-06, same day).** The report called the

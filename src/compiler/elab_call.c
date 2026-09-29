@@ -6831,6 +6831,31 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         for (uint32_t i = 0; i < n_required; i++) {
             call_args[i] = elab_form(e, call->as.list.items[1 + i]);
             if (!call_args[i]) return NULL;
+            /* stdlib-int-stand-in-audit: a variadic callee's fixed
+             * FUNCTION-typed parameter got none of the fixed-arity path's
+             * shape check (plain-fn-typed-params-are-kind-matched / LT2), so
+             * `compose-middleware-of`'s `^fat base : (fn [ptr<void>] nil)`
+             * took a two-argument lambda with exit 0.  Same structural test,
+             * same diagnostic. */
+            if (call_args[i]->type.kind == TY_FN && fn_type.kind == TY_FN &&
+                fn_type.as.fn.arg_full_types && i < fn_type.as.fn.arity) {
+                const Type *declared_fn = fn_type.as.fn.arg_full_types[i];
+                if (declared_fn && declared_fn->kind == TY_FN &&
+                    !fn_type_structurally_compatible(call_args[i]->type, *declared_fn)) {
+                    Buf sx; buf_init(&sx);
+                    type_print(&sx, *declared_fn); buf_putc(&sx, '\0');
+                    Buf sa; buf_init(&sa);
+                    type_print(&sa, call_args[i]->type); buf_putc(&sa, '\0');
+                    diag_emit_with_code(DIAG_ERROR, call_args[i]->span,
+                                        TUR_E0001_TYPE_MISMATCH,
+                                        "function '%s' arg %u: expected a function of type %s, "
+                                        "got %s -- arity, argument types and result type must match",
+                                        fn_binding && fn_binding->name ? fn_binding->name->name : "?",
+                                        i + 1, sx.data, sa.data);
+                    buf_free(&sx); buf_free(&sa);
+                    return NULL;
+                }
+            }
             /* saffron-dynamic-surface-pass (`& rest : any`): a variadic
              * callee's FIXED parameters get none of the fixed-arity path's
              * coercions, so an unannotated (`any`) parameter of a Saffron

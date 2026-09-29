@@ -1246,26 +1246,39 @@ static char *emit_byval_recursive_carrier_reconstruct(EmitCtx *ctx, Type t,
  * copy on the way in, deref on the way out, mirroring the EX_ANY inject/cast
  * boxing above and the B4 wide-byval convention.  Both helpers return a freshly
  * malloc'd string the caller owns. */
-static char *emit_agg_box(EmitCtx *ctx, Type t, const char *val) {
+static char *emit_agg_box(EmitCtx *ctx, Buf *body, Type t, const char *val) {
     const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, t));
     /* repr-trace: aggregate heap-boxed into an int64 slot (field store /
      * poly-carrier crossing / wide-byval element). */
     if (g_emit_abi_trace)
         fprintf(stderr, "repr-trace bridge agg-box %s\n", cn);
-    Buf b; buf_init(&b);
     /* region-lock-hardening: the box is malloc'd and outlives the bracket its
      * element was built in (a Vec slot, a field store); its words are noted
      * so an erased node inside the aggregate cannot hide behind the box
      * pointer the store hook sees.  The macro is `((void)0)` under
-     * TUR_REGIONS=0. */
-    buf_printf(&b,
-        "({ %s *__tur_pbox = (%s *)malloc(sizeof(%s)); "
-        "*__tur_pbox = (%s); TUR_REGION_NOTE_WORDS(__tur_pbox, sizeof *__tur_pbox); "
-        "(int64_t)(intptr_t)__tur_pbox; })",
-        cn, cn, cn, val);
+     * TUR_REGIONS=0.
+     *
+     * jit-x86-64-struct-valued-statement-expression-miscompiles: built by
+     * STATEMENTS, leaving a plain expression.  This used to be a
+     * `({ T *__tur_pbox = ...; *__tur_pbox = (v); ...; (int64_t)__tur_pbox; })`
+     * in a call's argument list -- a statement expression holding a
+     * by-value aggregate, the shape c2mir/MIR-gen on x86-64 miscompiles by
+     * overwriting a sibling argument (shapes 1-5 of that report; shape 4
+     * showed a WORD-valued one misbehaves too when what it contains is an
+     * aggregate).  `val` is already a value, so hoisting its copy ahead of the
+     * call changes no evaluation order the emitter relied on. */
+    char *bx = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body,
+        "%s *%s = (%s *)malloc(sizeof(%s)); *%s = (%s); "
+        "TUR_REGION_NOTE_WORDS(%s, sizeof *%s);\n",
+        cn, bx, cn, cn, bx, val, bx, bx);
+    Buf b; buf_init(&b);
+    buf_printf(&b, "(int64_t)(intptr_t)%s", bx);
     buf_putc(&b, '\0');
     char *out = strdup(b.data);
     buf_free(&b);
+    free(bx);
     return out;
 }
 static char *emit_agg_unbox(EmitCtx *ctx, Type t, const char *val) {
@@ -2693,6 +2706,117 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     return true;
 }
 
+/* mut-cell-is-never-freed: can the `TurMutCell` bound to `cell` still be
+ * reached once the let that binds it exits?  The pointer never appears in user
+ * code -- the `^mut` name is an alias whose reads and writes elaborate as
+ * `(.v cell)` field accesses -- so it leaves the let only inside the env of a
+ * closure that captures it.  It is therefore dead at scope exit when every such
+ * closure is: bound by a let whose env-free rule already proved it does not
+ * escape (a lambda handed to a non-retaining parameter is hoisted into exactly
+ * such a `__borrowc` let), with no closure in ITS body letting the cell out in
+ * turn.  Anything this walk does not recognize falls back to the ordinary
+ * escape walk, where any mention of the cell counts as an escape. */
+static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth);
+
+static bool mut_cell_closure_captures(const Expr *x, const Binding *cell) {
+    const struct Closure *c = x->as.closure_.closure;
+    if (!c) return true;
+    for (uint32_t i = 0; i < c->n_captures; i++)
+        if (c->captures[i] == cell) return true;
+    return false;
+}
+
+static bool mut_cell_is_receiver(const Expr *r, const Binding *cell) {
+    while (r && r->kind == EX_ASCRIBE) r = r->as.ascribe_.inner;
+    return r && r->kind == EX_VAR && r->as.var.binding == cell;
+}
+
+static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth) {
+    if (!x) return false;
+    if (depth > 256) return true;
+    switch (x->kind) {
+        case EX_VAR:
+            return x->as.var.binding == cell;
+        case EX_ASCRIBE:
+            return mut_cell_escapes(x->as.ascribe_.inner, cell, depth + 1);
+        case EX_GET_FIELD:
+            if (mut_cell_is_receiver(x->as.get_field_.struct_expr, cell)) return false;
+            return mut_cell_escapes(x->as.get_field_.struct_expr, cell, depth + 1);
+        case EX_SET_FIELD:
+            if (!mut_cell_is_receiver(x->as.set_field_.receiver, cell) &&
+                mut_cell_escapes(x->as.set_field_.receiver, cell, depth + 1))
+                return true;
+            return mut_cell_escapes(x->as.set_field_.value, cell, depth + 1);
+        case EX_DO:
+            for (uint32_t i = 0; i < x->as.do_.n; i++)
+                if (mut_cell_escapes(x->as.do_.items[i], cell, depth + 1)) return true;
+            return false;
+        case EX_IF:
+            return mut_cell_escapes(x->as.if_.cond, cell, depth + 1) ||
+                   mut_cell_escapes(x->as.if_.then_, cell, depth + 1) ||
+                   mut_cell_escapes(x->as.if_.else_or_null, cell, depth + 1);
+        case EX_WHILE:
+            return mut_cell_escapes(x->as.while_.cond, cell, depth + 1) ||
+                   mut_cell_escapes(x->as.while_.body, cell, depth + 1);
+        case EX_SET:
+            if (x->as.set_.target == cell) return true;
+            return mut_cell_escapes(x->as.set_.value, cell, depth + 1);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < x->as.builtin.n; i++)
+                if (mut_cell_escapes(x->as.builtin.args[i], cell, depth + 1)) return true;
+            return false;
+        case EX_CALL:
+            if (mut_cell_escapes(x->as.call_.fn_expr, cell, depth + 1)) return true;
+            for (uint32_t i = 0; i < x->as.call_.n_args; i++)
+                if (mut_cell_escapes(x->as.call_.args[i], cell, depth + 1)) return true;
+            return mut_cell_escapes(x->as.call_.dict_arg, cell, depth + 1);
+        case EX_CLOSURE:
+            /* Not in a let-init position the rule below can vouch for. */
+            return mut_cell_closure_captures(x, cell);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t j = 0; j < x->as.let_.n; j++) {
+                const Expr *init = x->as.let_.bindings[j].init;
+                while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+                if (init && init->kind == EX_CLOSURE &&
+                    mut_cell_closure_captures(init, cell)) {
+                    const struct Closure *c = init->as.closure_.closure;
+                    if (x->kind != EX_LET || !let_binding_env_freeable(x, j))
+                        return true;
+                    if (!c->fn || mut_cell_escapes(c->fn->body, cell, depth + 1))
+                        return true;
+                    continue;
+                }
+                if (mut_cell_escapes(x->as.let_.bindings[j].init, cell, depth + 1))
+                    return true;
+            }
+            return mut_cell_escapes(x->as.let_.body, cell, depth + 1);
+        default:
+            return closure_binding_escapes(x, cell);
+    }
+}
+
+/* mut-cell-is-never-freed: let-binding `idx` of `e` is a `^mut` cell that is
+ * dead at scope exit (see mut_cell_escapes). */
+static bool let_binding_mut_cell_freeable(const Expr *e, uint32_t idx) {
+    const Binding *b = e->as.let_.bindings[idx].binding;
+    if (!b || !b->is_mut_cell || e->kind != EX_LET) return false;
+    for (uint32_t j = idx + 1; j < e->as.let_.n; j++) {
+        const Expr *init = e->as.let_.bindings[j].init;
+        while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+        if (init && init->kind == EX_CLOSURE && mut_cell_closure_captures(init, b)) {
+            /* A sibling closure in this same let: freed by the same rule. */
+            if (!let_binding_env_freeable(e, j) ||
+                !init->as.closure_.closure->fn ||
+                mut_cell_escapes(init->as.closure_.closure->fn->body, b, 0))
+                return false;
+            continue;
+        }
+        if (mut_cell_escapes(e->as.let_.bindings[j].init, b, 0)) return false;
+    }
+    return !mut_cell_escapes(e->as.let_.body, b, 0);
+}
+
 /* catch-unwind-thunk-closure-leak (Part 2): decide whether let-binding `idx`
  * holds a caught Result box (`(catch-unwind ...)` / `(catch-panic-of ...)`)
  * whose box can be `tur_result_box_free`d when the let scope exits.  Sound iff:
@@ -3113,6 +3237,98 @@ bool emit_let_init_is_erased_word_to_ptr(EmitCtx *ctx, const Expr *init,
     return cn && strcmp(cn, "int64_t") == 0;
 }
 
+/* letrec-mutual-recursion-between-capturing-closures: the letrec closure knot.
+ *
+ *   (letrec [ev (fn [i] ... k ... (od ...))
+ *            od (fn [i] ... k ... (ev ...))] ...)
+ *
+ * Both members capture `k` and each other, so neither env can be filled first.
+ * The knot: `ev`'s env is built with its `od` slot 0, and once `od` is bound
+ * the slot is patched through `ev`'s binding.  Nothing between the two can
+ * call `ev` -- the members are bound in order and only a later member's init
+ * could, and `od`'s init is a closure construction, which calls nothing.
+ *
+ * The state is saved and restored around each letrec, so a nested letrec in
+ * a member's init keeps its own. */
+typedef LetrecKnot LetrecKnotSave;
+
+static void letrec_knot_begin(EmitCtx *ctx, const Expr *e, LetrecKnotSave *save) {
+    *save = ctx->letrec_knot;
+    memset(&ctx->letrec_knot, 0, sizeof ctx->letrec_knot);
+    if (e->as.let_.n < 2) return;
+    const Binding **pending = (const Binding **)malloc(e->as.let_.n * sizeof(Binding *));
+    if (!pending) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < e->as.let_.n; i++) pending[i] = e->as.let_.bindings[i].binding;
+    ctx->letrec_knot.active     = true;
+    ctx->letrec_knot.pending    = pending;
+    ctx->letrec_knot.n_pending  = e->as.let_.n;
+    ctx->letrec_knot.in_closure = ctx->closure;
+}
+
+/* About to emit member `i`'s init: it owns any deferred fill its closure makes. */
+static void letrec_knot_owner(EmitCtx *ctx, const Expr *e, uint32_t i) {
+    if (!ctx->letrec_knot.active) return;
+    const Expr *init = e->as.let_.bindings[i].init;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    ctx->letrec_knot.owner_init = init;
+    ctx->letrec_knot.owner      = e->as.let_.bindings[i].binding;
+}
+
+/* Member `b` is now bound: drop it from the pending set and emit every fill
+ * that was waiting on it. */
+static void letrec_knot_bound(EmitCtx *ctx, Buf *body, const Binding *b) {
+    if (!ctx->letrec_knot.active) return;
+    ctx->letrec_knot.owner_init = NULL;
+    ctx->letrec_knot.owner      = NULL;
+    for (uint32_t i = 0; i < ctx->letrec_knot.n_pending; i++) {
+        if (ctx->letrec_knot.pending[i] == b) {
+            ctx->letrec_knot.pending[i] = NULL;
+            break;
+        }
+    }
+    for (uint32_t i = 0; i < ctx->letrec_knot.n_patches; i++) {
+        if (ctx->letrec_knot.patch_target[i] != b) continue;
+        buf_puts(body, ctx->letrec_knot.patch_stmt[i]);
+        free(ctx->letrec_knot.patch_stmt[i]);
+        ctx->letrec_knot.patch_stmt[i]   = NULL;
+        ctx->letrec_knot.patch_target[i] = NULL;
+    }
+}
+
+static void letrec_knot_end(EmitCtx *ctx, const LetrecKnotSave *save) {
+    for (uint32_t i = 0; i < ctx->letrec_knot.n_patches; i++)
+        free(ctx->letrec_knot.patch_stmt[i]);
+    free(ctx->letrec_knot.patch_stmt);
+    free(ctx->letrec_knot.patch_target);
+    free(ctx->letrec_knot.pending);
+    ctx->letrec_knot = *save;
+}
+
+/* Should EX_CLOSURE `ce` defer its fill of `captured`?  Only the owner's own
+ * init, in the frame that opened the knot, capturing a member not bound yet. */
+static bool letrec_knot_defers(const EmitCtx *ctx, const Expr *ce, const Binding *captured) {
+    if (!ctx->letrec_knot.active || ce != ctx->letrec_knot.owner_init ||
+        !ctx->letrec_knot.owner || ctx->closure != ctx->letrec_knot.in_closure)
+        return false;
+    for (uint32_t i = 0; i < ctx->letrec_knot.n_pending; i++)
+        if (ctx->letrec_knot.pending[i] == captured) return true;
+    return false;
+}
+
+static void letrec_knot_add_patch(EmitCtx *ctx, const Binding *target, const char *stmt) {
+    uint32_t n = ctx->letrec_knot.n_patches;
+    ctx->letrec_knot.patch_target = (const Binding **)realloc(
+        ctx->letrec_knot.patch_target, (n + 1) * sizeof(Binding *));
+    ctx->letrec_knot.patch_stmt = (char **)realloc(
+        ctx->letrec_knot.patch_stmt, (n + 1) * sizeof(char *));
+    if (!ctx->letrec_knot.patch_target || !ctx->letrec_knot.patch_stmt) {
+        fprintf(stderr, "tur: oom\n"); abort();
+    }
+    ctx->letrec_knot.patch_target[n] = target;
+    ctx->letrec_knot.patch_stmt[n]   = strdup(stmt);
+    ctx->letrec_knot.n_patches       = n + 1;
+}
+
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
@@ -3179,6 +3395,9 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     char **locown_names = NULL;
     char **locown_types = NULL;
     uint32_t n_locown = 0;
+    /* mut-cell-is-never-freed: C names of `^mut` cells dead at scope exit. */
+    char **cell_free_names = NULL;
+    uint32_t n_cell_free = 0;
     /* any-struct-box-leak-per-widen: collected UNGUARDED, unlike its neighbours.
      * They are trailing-only frees, so a body with an early exit gets none and
      * leaks -- the status quo this rule is closing.  An `any` drop is also
@@ -3224,6 +3443,13 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             n_locown++;
         }
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
+            if (!let_binding_mut_cell_freeable(e, i)) continue;
+            cell_free_names = (char **)realloc(cell_free_names,
+                                               (n_cell_free + 1) * sizeof(char *));
+            cell_free_names[n_cell_free++] =
+                name_for_binding(ctx, e->as.let_.bindings[i].binding);
+        }
+        for (uint32_t i = 0; i < e->as.let_.n; i++) {
             if (let_binding_env_freeable(e, i)) {
                 env_free_names = (char **)realloc(env_free_names,
                                                   (n_env_free + 1) * sizeof(char *));
@@ -3255,9 +3481,13 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
     }
 
+    bool knot = e->kind == EX_LETREC;
+    LetrecKnotSave knot_save;
+    if (knot) letrec_knot_begin(ctx, e, &knot_save);
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         const Binding *b = e->as.let_.bindings[i].binding;
         char *bn = name_for_binding(ctx, b);
+        if (knot) letrec_knot_owner(ctx, e, i);
         char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
         indent_buf(body, ctx->indent);
         /* GF1: gen struct fields are already declared in the struct -- just assign */
@@ -3587,9 +3817,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* Suppress unused-variable warnings even if the body never refs it. */
         indent_buf(body, ctx->indent);
         buf_printf(body, "(void)%s;\n", bn);
+        if (knot) letrec_knot_bound(ctx, body, b);
         free(bn);
         free(iv);
     }
+    if (knot) letrec_knot_end(ctx, &knot_save);
 
     /* In scope for the body: an early exit inside it drops these first. */
     uint32_t any_scope_mark = ctx->n_any_scope_drops;
@@ -3660,6 +3892,20 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(env_free_names[i]);
     }
     free(env_free_names);
+
+    /* mut-cell-is-never-freed: release `^mut` cells whose capturing closures
+     * are all dead by now (the envs just dropped above never free a `:heap`
+     * capture, so this is the cell's only release).  The ctor allocates with
+     * tur_region_alloc_or_malloc, so the guarded free leaves region memory to
+     * its generation. */
+    for (uint32_t i = 0; i < n_cell_free; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s((void *)(intptr_t)(%s));\n",
+                   regions_enabled() ? "tur_region_free" : "free",
+                   cell_free_names[i]);
+        free(cell_free_names[i]);
+    }
+    free(cell_free_names);
 
     /* catch-unwind-thunk-closure-leak (Part 2): release non-escaping caught
      * Result boxes (and, for an err box, its panic payload) at scope exit -- the
@@ -3775,6 +4021,8 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_puts(body, "{\n");
     ctx->indent += 4;
 
+    LetrecKnotSave knot_save;
+    letrec_knot_begin(ctx, e, &knot_save);
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         const Binding *b = e->as.let_.bindings[i].binding;
         if (b->is_global && b->c_export_name && b->type.kind == TY_FN) {
@@ -3785,10 +4033,12 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * with an uninitialized pointer and crash. */
             char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
             free(iv);
+            letrec_knot_bound(ctx, body, b);
             continue;
         }
         /* Normal binding -- mirror emit_let_value logic. */
         char *bn = name_for_binding(ctx, b);
+        letrec_knot_owner(ctx, e, i);
         char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
         indent_buf(body, ctx->indent);
         if (b->type.kind == TY_FN) {
@@ -3984,9 +4234,11 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         indent_buf(body, ctx->indent);
         buf_printf(body, "(void)%s;\n", bn);
+        letrec_knot_bound(ctx, body, b);
         free(bn);
         free(iv);
     }
+    letrec_knot_end(ctx, &knot_save);
 
     if (body_has_return_or_throw) {
         if (!nil_result && !expr_is_divergent(e->as.let_.body)) {
@@ -6099,6 +6351,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * is recorded with its ACTUAL pointer representation. */
     bool v_is_ctor = strncmp(v, "ctor_", 5) == 0 || strncmp(v, "(ctor_", 6) == 0;
     free(v);
+    /* region-escape-through-unhooked-stores item 3: a panic propagating out
+     * of a region scope returns HERE, before the pop below -- which left the
+     * generation open, and every later allocation landed in it.  Close it on
+     * the panic arm first: RETIRE, never rewind (the payload may point in) --
+     * down to the depth below this bracket, which is also what keeps it out
+     * of the region-scope-* hooks' `tur_region_pop(` count: that ratchet
+     * measures the static retire/rewind verdict, and this arm is uniform. */
+    if (rgn_id >= 0) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (tur_panicking) TUR_REGION_RETIRE_TO(__tur_rgn_%d - 1);\n", rgn_id);
+    }
     emit_panic_signal_return(ctx, body);
     /* gcc14-int-conversion (carrier-representation-tracking): record this call
      * temp's representation C type when it is a concrete pointer, so a later
@@ -7091,7 +7354,9 @@ static Type dyn_ground_tyvars_to_any(Arena *a, Type t) {
     return type_app(a, fn, arg, nosp);
 }
 
-static char *dyn_widen_to_any(EmitCtx *ctx, Type t, const char *val) {
+/* `stmts` receives any statements the widen needs, to be placed where `val`
+ * is valid to evaluate (the caller's tag-checked branch). */
+static char *dyn_widen_to_any(EmitCtx *ctx, Buf *stmts, Type t, const char *val) {
     Type r = emit_resolve_type(ctx, t);
     int64_t id = emit_any_type_id(ctx, t);
     Buf out; buf_init(&out);
@@ -7100,12 +7365,18 @@ static char *dyn_widen_to_any(EmitCtx *ctx, Type t, const char *val) {
                    "TUR_TAG(%lld, ((union { double d; int64_t i; }){.d = (%s)}).i)",
                    (long long)id, val);
     } else if (emit_type_is_byvalue_adt(ctx, t)) {
+        /* jit-x86-64-struct-valued-statement-expression-miscompiles: the box
+         * is built by statements, not a struct-valued `({ ... })` (the shape
+         * the engine miscompiles on x86-64), leaving a bare TUR_TAG. */
         const char *cn = emit_type_c_name(ctx, r);
-        buf_printf(&out,
-                   "({ %s *__tur_fb = (%s *)malloc(sizeof(%s)); *__tur_fb = (%s); "
-                   "TUR_REGION_NOTE_WORDS(__tur_fb, sizeof *__tur_fb); "
-                   "TUR_TAG(%lld, (int64_t)(intptr_t)__tur_fb); })",
-                   cn, cn, cn, val, (long long)id);
+        char *bx = fresh_tmp(ctx);
+        buf_printf(stmts,
+                   "%s *%s = (%s *)malloc(sizeof(%s)); *%s = (%s); "
+                   "TUR_REGION_NOTE_WORDS(%s, sizeof *%s); ",
+                   cn, bx, cn, cn, bx, val, bx, bx);
+        buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)%s)",
+                   (long long)id, bx);
+        free(bx);
     } else {
         buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
                    (long long)id, val);
@@ -7223,14 +7494,16 @@ static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* An already-`any` field needs no widen -- the read IS a
              * `tur_tagged_t`, and `dyn_widen_to_any` would cast that 16-byte
              * value through `(int64_t)`, which is a truncation, not a box. */
+            Buf wst; buf_init(&wst);
             char *w = (emit_resolve_type(ctx, ft).kind == TY_ANY)
                           ? strdup(read.data)
-                          : dyn_widen_to_any(ctx, ft, read.data);
+                          : dyn_widen_to_any(ctx, &wst, ft, read.data);
+            buf_putc(&wst, '\0');
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s (TUR_GETTAG(%s) == %lld) { %s = %s; }\n",
+            buf_printf(body, "%s (TUR_GETTAG(%s) == %lld) { %s%s = %s; }\n",
                        n_cands ? "else if" : "if", ov,
-                       (long long)emit_any_type_id(ctx, at), rv, w);
-            free(w); free(mp); buf_free(&read);
+                       (long long)emit_any_type_id(ctx, at), wst.data, rv, w);
+            free(w); free(mp); buf_free(&read); buf_free(&wst);
             n_cands++;
             break;
         }
@@ -7686,20 +7959,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * the member list must not silently become member 0 -- it becomes
                  * TY_UNKNOWN, which `type-of` reports as "unknown" and no `is?`
                  * target matches. */
+                /* jit-x86-64-struct-valued-statement-expression-miscompiles:
+                 * the re-box runs as STATEMENTS and leaves the bare result
+                 * temp, rather than a struct-valued `({ ... })` -- the shape
+                 * the engine miscompiles on x86-64 when it sits in a call's
+                 * argument list.  `inner` is already a value here, so binding
+                 * it first changes no evaluation order. */
                 const Type *ut = &inj_pt;
-                buf_printf(&out,
-                    "({ tur_tagged_t __tur_ui = (%s); "
-                    "tur_tagged_t __tur_ua = TUR_TAG(%d, TUR_UNTAG(__tur_ui)); "
-                    "switch (TUR_GETTAG(__tur_ui)) {",
-                    inner, (int)TY_UNKNOWN);
+                char *ui = fresh_tmp(ctx);
+                char *ua = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "tur_tagged_t %s = (%s); "
+                    "tur_tagged_t %s = TUR_TAG(%d, TUR_UNTAG(%s)); "
+                    "switch (TUR_GETTAG(%s)) {",
+                    ui, inner, ua, (int)TY_UNKNOWN, ui, ui);
                 for (uint8_t m = 0; m < ut->as.union_.n_members; m++) {
                     const Type *mem = ut->as.union_.members[m];
                     if (!mem) continue;
-                    buf_printf(&out,
-                        " case %u: __tur_ua = TUR_TAG(%lldLL, TUR_UNTAG(__tur_ui)); break;",
-                        (unsigned)m, (long long)emit_any_type_id(ctx, *mem));
+                    buf_printf(body,
+                        " case %u: %s = TUR_TAG(%lldLL, TUR_UNTAG(%s)); break;",
+                        (unsigned)m, ua, (long long)emit_any_type_id(ctx, *mem), ui);
                 }
-                buf_puts(&out, " default: break; } __tur_ua; })");
+                buf_puts(body, " default: break; }\n");
+                buf_puts(&out, ua);
+                free(ui);
+                free(ua);
             } else if (inj_pt.kind == TY_NIL) {
                 /* saffron-lang-plan S5: a NIL payload is the fourth thing that
                  * cannot ride the carrier as written.  `nil` emits as
@@ -8860,7 +9145,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             buf_free(&d);
                             free(raw);
                         }
-                        char *boxed = emit_agg_box(ctx, e->as.call_.args[i]->type, src);
+                        char *boxed = emit_agg_box(ctx, body, e->as.call_.args[i]->type, src);
                         free(src);
                         raw = boxed;
                     }
@@ -13227,8 +13512,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(field);
                     continue;
                 }
+                /* letrec-mutual-recursion-between-capturing-closures: a
+                 * sibling not bound yet (the letrec knot).  Zero its slot now
+                 * and render the real fill against the owner's binding, to be
+                 * emitted the moment the sibling is bound (letrec_knot_bound). */
+                Buf knot_patch;
+                Buf *out = body;
+                char *knot_lhs = NULL;
+                const char *lhs = fat_tmp;
+                if (letrec_knot_defers(ctx, e, captured)) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "memset(&%s->%s, 0, sizeof %s->%s);\n",
+                               fat_tmp, field, fat_tmp, field);
+                    char *on = name_for_binding(ctx, ctx->letrec_knot.owner);
+                    Buf lb; buf_init(&lb);
+                    buf_printf(&lb, "((struct %s *)(void *)(intptr_t)(%s))",
+                               env_name->name, on);
+                    buf_putc(&lb, '\0');
+                    knot_lhs = strdup(lb.data);
+                    buf_free(&lb);
+                    free(on);
+                    lhs = knot_lhs;
+                    buf_init(&knot_patch);
+                    out = &knot_patch;
+                }
                 char *cn = name_for_binding(ctx, captured);
-                indent_buf(body, ctx->indent);
+                indent_buf(out, ctx->indent);
                 /* B5: a captured struct/ADT that is a pass-by-pointer parameter
                  * of the *enclosing* function arrives as `const T *`, but the
                  * env field is declared by value (type_c_name => `T`).  Deref so
@@ -13250,8 +13559,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * non-carrier case, so this only bites carrier-held params). */
                 if (captured->emit_carrier_holds_ptr && !captured_is_pbp) {
                     const char *fcty = emit_type_c_name(ctx, captured->type);
-                    buf_printf(body, "%s->%s = (%s)(intptr_t)%s;\n",
-                               fat_tmp, field, fcty, cn);
+                    buf_printf(out, "%s->%s = (%s)(intptr_t)%s;\n",
+                               lhs, field, fcty, cn);
                 } else {
                     /* generic-closure-capture-of-float-truncates: a spec body
                      * filling the shared env a generic site declared.  A tyvar
@@ -13271,16 +13580,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         strcmp(val_cty, "int64_t") != 0;
                     size_t vl = val_cty ? strlen(val_cty) : 0;
                     if (into_carrier && vl && val_cty[vl - 1] == '*') {
-                        buf_printf(body, "%s->%s = (int64_t)(intptr_t)(%s);\n",
-                                   fat_tmp, field, cn);
+                        buf_printf(out, "%s->%s = (int64_t)(intptr_t)(%s);\n",
+                                   lhs, field, cn);
                     } else if (into_carrier && strcmp(val_cty, "double") == 0) {
-                        buf_printf(body,
+                        buf_printf(out,
                             "%s->%s = ((union { double f; int64_t u; }){ .f = (%s) }).u;\n",
-                            fat_tmp, field, cn);
+                            lhs, field, cn);
                     } else if (into_carrier && strcmp(val_cty, "float") == 0) {
-                        buf_printf(body,
+                        buf_printf(out,
                             "%s->%s = (int64_t)((union { float f; uint32_t u; }){ .f = (%s) }).u;\n",
-                            fat_tmp, field, cn);
+                            lhs, field, cn);
                     } else if (into_carrier &&
                                emit_type_is_byvalue_adt(ctx, captured->type)) {
                         /* hkt-generic-nested-bind-result-type: the same shared
@@ -13291,12 +13600,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * `bind`, which dereferences a box.  Heap-box it, as
                          * every aggregate entering a carrier slot is
                          * (emit_agg_box), and note the box's words. */
-                        buf_printf(body,
+                        buf_printf(out,
                             "{ %s *__tur_cbox = (%s *)malloc(sizeof(%s)); "
                             "*__tur_cbox = %s; "
                             "TUR_REGION_NOTE_WORDS(__tur_cbox, sizeof *__tur_cbox); "
                             "%s->%s = (int64_t)(intptr_t)__tur_cbox; }\n",
-                            val_cty, val_cty, val_cty, cn, fat_tmp, field);
+                            val_cty, val_cty, val_cty, cn, lhs, field);
                     } else if (captured->type.kind == TY_FN && !captured->is_poly_fn &&
                                !captured_is_pbp) {
                         /* A function value's field is the int64_t carrier (see
@@ -13306,11 +13615,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * field is a -Wint-conversion (an error under clang).
                          * Bridge it through intptr_t, which is a no-op for a
                          * value already held as the carrier. */
-                        buf_printf(body, "%s->%s = (int64_t)(intptr_t)(%s);\n",
-                                   fat_tmp, field, cn);
+                        buf_printf(out, "%s->%s = (int64_t)(intptr_t)(%s);\n",
+                                   lhs, field, cn);
                     } else {
-                        buf_printf(body, "%s->%s = %s%s;\n",
-                                   fat_tmp, field, captured_is_pbp ? "*" : "", cn);
+                        buf_printf(out, "%s->%s = %s%s;\n",
+                                   lhs, field, captured_is_pbp ? "*" : "", cn);
                     }
                     free(decl_cty);
                 }
@@ -13323,13 +13632,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * captured word at the fill, by the field's declared C type. */
                 if (regions_enabled()) {
                     Buf lv; buf_init(&lv);
-                    buf_printf(&lv, "%s->%s", fat_tmp, field);
+                    buf_printf(&lv, "%s->%s", lhs, field);
                     buf_putc(&lv, '\0');
                     const char *fcty_note = captured->type.kind == TY_FN
                         ? "int64_t"
                         : (captured->is_poly_fn ? "tur_poly_fn_t"
                                                 : emit_type_c_name(ctx, captured->type));
-                    emit_region_note_lvalue(body, ctx->indent, fcty_note, lv.data);
+                    emit_region_note_lvalue(out, ctx->indent, fcty_note, lv.data);
                     buf_free(&lv);
                 }
                 /* closure-drop-glue (Model R) walk slice: an rc-typed capture is a
@@ -13345,15 +13654,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * refcounted (a raw nested-closure handle, a ref) still need move
                  * analysis and are left to the next slice. */
                 if (captured->type.kind == TY_RC) {
-                    indent_buf(body, ctx->indent);
-                    buf_printf(body, "if (%s->%s) rc_strong_increment(%s->%s);\n",
-                               fat_tmp, field, fat_tmp, field);
+                    indent_buf(out, ctx->indent);
+                    buf_printf(out, "if (%s->%s) rc_strong_increment(%s->%s);\n",
+                               lhs, field, lhs, field);
                 }
                 /* A Drop-typeclass capture is MOVED into the env (no retain) -- the
                  * source is consumed at elab, so the stored handle is the sole owner
                  * and the drop-glue releases it once. */
                 free(field);
                 free(cn);
+                if (knot_lhs) {
+                    buf_putc(&knot_patch, '\0');
+                    letrec_knot_add_patch(ctx, captured, knot_patch.data);
+                    buf_free(&knot_patch);
+                    free(knot_lhs);
+                }
             }
             char *ptr_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);

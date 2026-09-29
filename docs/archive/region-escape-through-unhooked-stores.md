@@ -1,5 +1,40 @@
 # A region node stored by an unhooked primitive still dangles after the rewind
 
+**RESOLVED 2026-09-28: every item closed; archived.**  Items 1 and 2 were
+closed 2026-09-26 (below).  Item 3, the "latent" top-level panic jam, turned
+out to be **reachable** from an ordinary `with-region` -- and is fixed twice
+over:
+
+- **The bracket closes itself on a panic.**  On both backends a region scope's
+  call ran the panic-propagation check -- `if (tur_panicking) return ...` --
+  *before* its pop (emit_expr.c's call hoist; emit_cps_ir.c's CPS tail-call
+  arm), so a panic out of `(with-region (fn [] (panic ...)))` left the
+  generation open.  The note below that said "both catch paths close the
+  bracket before the propagation check runs, verified by probe" was wrong:
+  a probe of the depth after the catch reads 1, not 0.  Both arms now emit
+  `if (tur_panicking) tur_region_pop(<depth>);` ahead of the check --
+  RETIRE, never rewind, since the panic payload may point into it.
+- **Every catch boundary retires what is left above it** -- the fix this
+  report named.  The six emitted catch helpers (`tur_catch_unwind`,
+  `tur_catch_panic_of`, and the four `_box` / `_box_via` variants) record
+  `TUR_REGION_DEPTH()` on entry and `TUR_REGION_RETIRE_TO(depth)` on the
+  panic arm (emit_module.c).  Both macros are defined on both arms (`0` /
+  `((void)0)` under `TUR_REGIONS=0`, so the off arm still names no region
+  symbol).  This covers a generation stranded by anything else -- inline C
+  that pushed and panicked, a future path that forgets the pop.
+
+Pinned by `tests/fixtures/region-catch-retires-stranded-generation` (a
+hand-stranded generation, a panic through a bracket on the CPS arm and on
+the direct arm, and a normal return), on the regions-off arm too
+(`tests/run-regions-seam.sh`).  Each layer was checked alone by stripping the
+other from the emitted C: without the bracket fix only the hand-stranded
+case leaves depth 1; without the catch retire it stays 1 after every case.
+
+The longer-term direction at the end (routing closure envs and element boxes
+into the generation) is unchanged and is explicitly not v1 work.
+
+The original report follows.
+
 **Severity: low (was medium).** Filed 2026-09-06 during region-lock-hardening.
 **Narrowed 2026-09-06**, same day: the class this was mostly about -- a node
 handed to a hand-written inline-C body -- is fixed, and it was a **silent wrong
