@@ -1,0 +1,18 @@
+;; erased-instance-body-tags-a-type-variable-widened-to-any (typed half): a
+;; constructor-class instance whose method returns `: any` widens its element
+;; `a` on the way out.  The erased body has no concrete type for `a` and tagged
+;; the value with TY_TYVAR itself -- `cast: any holds unknown`.  The call now
+;; mints the instance spec, where `a` is concrete and tags correctly.
+(defclass Box1 [^t]
+  (unbox1 [b : (t a)] : any))
+(defdata One [a] (One [v : a]))
+(definstance Box1 [One]
+  (unbox1 [o] (.v o)))
+
+(defn main [] : int
+  (println (cast (unbox1 (One 1.5)) float))
+  (println (type-of (unbox1 (One 7.1))))
+  (println (cast (unbox1 (One 42)) int))
+  (println (type-of (unbox1 (One 42))))
+  (println (cast (unbox1 (One "hi")) cstr))
+  0)

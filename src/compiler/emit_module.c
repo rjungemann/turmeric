@@ -4161,6 +4161,11 @@ static bool type_mentions_bound_tyvar(const Type *t,
  * compile thread, so a file-scope toggle is safe. */
 static bool g_bhd_detect_return_dispatch = false;
 
+/* Set while probing an INSTANCE method's body: the `any`-widen trigger below
+ * (erased-instance-body-tags-a-type-variable-widened-to-any) is a reason to
+ * mint an instance spec only.  A plain generic defn is monomorphized anyway. */
+static bool g_bhd_detect_tyvar_widen = false;
+
 /* Depth guard for the transitive probe below: a constrained generic may call
  * another, and mutual recursion would not terminate on its own. */
 static uint8_t g_bhd_relay_depth = 0;
@@ -4553,6 +4558,27 @@ static bool body_has_dispatch_on_app_tyvar(
             return body_has_dispatch_on_app_tyvar(e->as.cast_.expr, bindings, n_bindings);
         case EX_REINTERPRET:
             return body_has_dispatch_on_app_tyvar(e->as.reinterpret_.expr, bindings, n_bindings);
+        case EX_UNION_INJECT: {
+            /* erased-instance-body-tags-a-type-variable-widened-to-any: a
+             * widen to `any` of a value whose type is a BOUND type variable
+             * needs that binding for its tag -- the erased body has none and
+             * tags the value with the TypeKind TY_TYVAR itself, which no
+             * consumer understands (`type-of` says "unknown", `is?` answers
+             * false).  The C spelling is the same for every binding, so no
+             * ABI change asks for the spec; this does.  Instance bodies only
+             * (a plain generic is always monomorphized). */
+            const Expr *v = e->as.union_inject_.value;
+            if (g_bhd_detect_tyvar_widen && v &&
+                v->type.kind == TY_TYVAR && v->type.as.tyvar_.name) {
+                for (uint8_t i = 0; i < n_bindings; i++)
+                    if (bindings[i].name &&
+                        strcmp(bindings[i].name, v->type.as.tyvar_.name) == 0 &&
+                        bindings[i].type.kind != TY_TYVAR &&
+                        bindings[i].type.kind != TY_UNKNOWN)
+                        return true;
+            }
+            return body_has_dispatch_on_app_tyvar(v, bindings, n_bindings);
+        }
         default:
             break;
     }
@@ -6216,7 +6242,10 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         /* The body being probed is the CALLEE's, so its own constraints are
          * what an argument's must be matched against. */
         g_bhd_caller_cs = (fd && fd->binding) ? fd->binding->fn_constraints : NULL;
+        bool saved_widen = g_bhd_detect_tyvar_widen;
+        g_bhd_detect_tyvar_widen = fd->owner_instance != NULL;
         instance_changes = body_has_dispatch_on_app_tyvar(fd->body, bindings, n_bindings);
+        g_bhd_detect_tyvar_widen = saved_widen;
         g_bhd_caller_cs = saved_cs;
         g_bhd_detect_return_dispatch = saved_detect;
     }

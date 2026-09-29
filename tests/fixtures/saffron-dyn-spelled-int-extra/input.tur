@@ -1,0 +1,24 @@
+#lang saffron
+;; saffron-dyn-parametric-extra-read-as-class-var: dispatching on an `any`
+;; whose instance has a parametric head calls a witness that decides, per
+;; extra argument, whether it is "another value of the receiver's type".  An
+;; `int` on both sides was always guessed yes (that is how an unannotated
+;; `(eq? [x y])` records), so a SPELLED `n : int` index was cast to
+;; `(Vec any)` and panicked.
+(defclass Nth [a]
+  (nth-of [x n : int] : any))
+(definstance Nth [Vec]
+  (nth-of [v n] (vec-get v n)))
+(defn pick [x i] (.nth-of x i))
+
+(defclass Nth2 [a]
+  (nth2 [x : a n : int] : any))
+(definstance Nth2 [Vec]
+  (nth2 [v n] (vec-get v n)))
+(defn pick2 [x i] (.nth2 x i))
+
+(defn main []
+  (println (pick [7.25 1 "hi"] 2))
+  (println (pick [7.25 1 "hi"] 0))
+  (println (pick2 [7.25 1 "hi"] 1))
+  0)

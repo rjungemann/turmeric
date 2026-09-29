@@ -1,5 +1,43 @@
 # A static instance specialization calls an `any`-returning lambda as if it returned the concrete type
 
+**RESOLVED 2026-09-29.**  Pinned by
+`tests/fixtures/saffron-static-instance-spec-any-lambda` (the repro, plus a
+summing `.foldl` and a `.foldr`).
+
+## Resolution
+
+Fix direction 2, generalised.  A function value whose signature differs from
+the slot it fills only in WHERE `any` appears is a different calling
+convention (`any` is the 16-byte `tur_tagged_t`), not a subtype, so it is now
+marshalled with an adaptor -- the `any` bridge, `elab_fn_any_bridge`
+(`elab_call.c`):
+
+    (let [__sfnb_N <arg>]
+      (fn [__sa0 : W0 ...] : WR (cast? (__sfnb_N (cast? __sa0 H0) ...) WR)))
+
+A slot that is `any` in the target where the value's is concrete gets a
+checked `cast` down; a concrete target slot over an `any` one is widened by
+the ordinary call / `: any` return.  The already-elaborated argument is bound
+to the temp directly, so a lambda literal is not lifted twice.  It declines
+unless both signatures are ground, arities match, and every slot pair agrees
+except for `any`.
+
+At a method dispatch (`elab_method_call`) it runs before the poly-fn packing,
+with the method's type variables solved as the spec's bindings are, so the
+adaptor and the spec agree.  The target is the signature the INSTANCE BODY
+calls the parameter through: its binding's `poly_type`, not the class's -- and
+for a Saffron instance body, that signature with every bare, otherwise
+unpinned type-variable parameter read as `any`, because a Saffron body
+ascribes such an argument to `any` (D8 Q3; the decision is now one helper,
+`saffron_bare_tyvar_param_widens`, shared by that rewrite and the bridge).
+For the repro, Foldable's `(fn [b a] b)` at `b := float` becomes the target
+`(fn [any any] float)`: the lambda's `any` result is cast to `float`.
+
+The same bridge closed half of
+[concrete-result-fn-passed-where-an-any-result-fn-is-expected](../reported/concrete-result-fn-passed-where-an-any-result-fn-is-expected.md)
+(the plain-call direction).
+
+
 **Severity: high (silent wrong answer on Linux, crash on Windows).** Filed
 2026-09-26 while driving the open-reports PR's Windows suite to green.
 

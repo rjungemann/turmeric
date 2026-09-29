@@ -74,6 +74,16 @@ With the arity spelled but the method's result declared `: any` -- `(comb [ta
 operator for a value of that type argument` while `--interpret` prints
 `3.75`; declaring the result `: b` (or `: a` with `(fn [a a] a)`) works. Not
 investigated here. Reduced 2026-09-28, it is not about fn parameters at all:
-[erased-instance-body-tags-a-type-variable-widened-to-any](erased-instance-body-tags-a-type-variable-widened-to-any.md)
+[erased-instance-body-tags-a-type-variable-widened-to-any](../archive/erased-instance-body-tags-a-type-variable-widened-to-any.md)
 (the elements reach the lambda boxed, but tagged `TY_TYVAR`, because an
 `: any` result mints no spec).
+
+**Resolved 2026-09-29** (that report is archived): the `: any` shape with the
+arity spelled now prints `3.75` compiled, pinned by
+`tests/fixtures/saffron-instance-any-result-widens-element`.  THIS report's
+bare `g : fn` repro still panics at the witness's cast exactly as described
+above -- re-checked the same day.  The new `: any` spec deliberately stays off
+a body whose widened tail calls an untyped `: fn` carrier (minting it turned
+this panic into a cc error, `aggregate value used where an integer was
+expected`), so fixing the arity here will also want that guard revisited
+(`m7_body_returns_byvalue_element`, its `EX_UNION_INJECT` arm).

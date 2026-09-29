@@ -1,0 +1,30 @@
+#lang saffron
+;; erased-instance-body-tags-a-type-variable-widened-to-any (Saffron half):
+;; the `type-of` and `is?` lines were the SILENT wrong answers (`unknown`,
+;; `not a float`) before the `+` finally panicked.
+(defclass Box1 [^t]
+  (unbox1 [b : (t a)] : any))
+(defdata One [a] (One [v : a]))
+(definstance Box1 [One]
+  (unbox1 [o] (.v o)))
+
+(defclass Comb [^t]
+  (comb [ta : (t a) g : (fn [a a] b)] : any))
+(defdata Two [a] (Two [l : a r : a]))
+(definstance Comb [Two]
+  (comb [t g] (g (.l t) (.r t))))
+(defn go [x] (.comb x (fn [a b] (+ a b))))
+;; the same method on an `any` receiver goes through the dynamic witness
+(defn unbox-any [x] (.unbox1 x))
+
+(defn main []
+  (let [x (.unbox1 (One 1.5))]
+    (println (type-of x))
+    (println (if (is? x float) "float" "not a float"))
+    (println (+ x 2.25)))
+  (println (go (Two 1.5 2.25)))
+  (println (.comb (Two 7.1 3.25) (fn [a b] (* a b))))
+  (let [y (unbox-any (One 1.5))]
+    (println (type-of y))
+    (println (+ y 2.25)))
+  0)

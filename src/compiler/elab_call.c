@@ -702,6 +702,10 @@ Expr *elab_hoist_control_operands(Elab *e, Expr *node) {
  * bare symbol.  Normalise, and pass everything else (named ADTs, TY_APP
  * chains) through untouched. */
 static Form *saffron_seam_type_form(Elab *e, const Type *t, Span sp) {
+    /* `type_to_form` has no spelling for `any` (its other callers decline on
+     * it), and the `any`-bridge adaptor needs one for every `any` slot. */
+    if (t && t->kind == TY_ANY)
+        return form_sym(e->arena, sp, symtab_intern(e->st, strslice("any", 3)));
     Form *f = type_to_form(e, t, sp);
     if (f && f->tag == F_KEYWORD) return form_sym(e->arena, sp, f->as.sym);
     return f;
@@ -1806,6 +1810,213 @@ static Type call_instantiate_type(Elab *e, const Type *t,
         default:
             return *t;
     }
+}
+
+static bool type_mentions_tyvar_named(const Type *t, const char *name);
+
+/* D8 Q3: in a Saffron span, a call through a function of type `fnt`
+ * ascribes argument `i` to `any` when that parameter is a BARE type variable
+ * no compound parameter type mentions -- nothing else can pin it (the
+ * argument widen in elab_call_inner).  Shared with the `any` bridge, which
+ * must marshal to the convention such a call actually uses. */
+bool saffron_bare_tyvar_param_widens(const Type *fnt, uint32_t i) {
+    if (!fnt || fnt->kind != TY_FN || !fnt->as.fn.arg_full_types ||
+        i >= fnt->as.fn.arity)
+        return false;
+    const Type *ft = fnt->as.fn.arg_full_types[i];
+    if (!ft || ft->kind != TY_TYVAR || !ft->as.tyvar_.name) return false;
+    for (uint32_t j = 0; j < fnt->as.fn.arity; j++) {
+        const Type *ot = fnt->as.fn.arg_full_types[j];
+        if (!ot || j == i || ot->kind == TY_TYVAR) continue;
+        if (type_mentions_tyvar_named(ot, ft->as.tyvar_.name)) return false;
+    }
+    return true;
+}
+
+/* The signature a Saffron body calls a function of type `fnt` through: the
+ * parameters `saffron_bare_tyvar_param_widens` picks read as `any`, the rest
+ * (and the result) as declared. */
+Type elab_saffron_call_view(Elab *e, const Type *fnt) {
+    Type out = *fnt;
+    if (fnt->kind != TY_FN || !fnt->as.fn.arg_full_types || fnt->as.fn.arity == 0)
+        return out;
+    uint32_t ar = fnt->as.fn.arity;
+    Type **afts = (Type **)arena_alloc(e->arena, ar * sizeof(Type *));
+    uint8_t *kinds = tur_fn_args_alloc(ar), *flags = tur_fn_args_alloc(ar);
+    for (uint32_t k = 0; k < ar; k++) {
+        afts[k] = fnt->as.fn.arg_full_types[k];
+        kinds[k] = fnt->as.fn.arg_kinds[k];
+        flags[k] = fnt->as.fn.arg_flags ? fnt->as.fn.arg_flags[k] : 0;
+        if (saffron_bare_tyvar_param_widens(fnt, k)) {
+            afts[k] = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *afts[k] = type_from_kind(TY_ANY);
+            kinds[k] = TY_ANY;
+        }
+    }
+    out.as.fn.arg_full_types = afts;
+    out.as.fn.arg_kinds = kinds;
+    out.as.fn.arg_flags = flags;
+    return out;
+}
+
+/* True when `t` is known and names no type variable anywhere in its
+ * structure, a function signature's parameter and result slots included. */
+bool elab_type_is_ground(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_UNKNOWN:
+        case TY_TYVAR:
+        case TY_FORALL:
+        case TY_EXISTS:
+            return false;
+        case TY_APP:
+            return (!t->as.app.fn || elab_type_is_ground(t->as.app.fn)) &&
+                   (!t->as.app.arg || elab_type_is_ground(t->as.app.arg));
+        case TY_FN:
+            for (uint32_t i = 0; i < t->as.fn.arity; i++) {
+                if (t->as.fn.arg_full_types && t->as.fn.arg_full_types[i]) {
+                    if (!elab_type_is_ground(t->as.fn.arg_full_types[i]))
+                        return false;
+                } else if (t->as.fn.arg_kinds &&
+                           (t->as.fn.arg_kinds[i] == TY_TYVAR ||
+                            t->as.fn.arg_kinds[i] == TY_UNKNOWN)) {
+                    return false;
+                }
+            }
+            if (t->as.fn.result_full_type)
+                return elab_type_is_ground(t->as.fn.result_full_type);
+            return t->as.fn.result_kind != TY_TYVAR &&
+                   t->as.fn.result_kind != TY_UNKNOWN;
+        default:
+            return true;
+    }
+}
+
+static Type fn_slot_type(const Type *ft, uint32_t k) {
+    if (k == ft->as.fn.arity)
+        return ft->as.fn.result_full_type ? *ft->as.fn.result_full_type
+                                          : type_from_kind(ft->as.fn.result_kind);
+    return (ft->as.fn.arg_full_types && ft->as.fn.arg_full_types[k])
+               ? *ft->as.fn.arg_full_types[k]
+               : type_from_kind(ft->as.fn.arg_kinds[k]);
+}
+
+/* static-instance-spec-calls-any-lambda-as-concrete-result and
+ * concrete-result-fn-passed-where-an-any-result-fn-is-expected: a function
+ * VALUE crossing into a slot whose signature differs from its own only in
+ * where `any` appears.
+ *
+ * `any` is a 16-byte tagged word and every other type is its own register, so
+ * `(fn [float] any)` and `(fn [float] float)` are different calling
+ * conventions, not a subtype pair: the callee invokes the value through the
+ * SLOT's signature and reads the result from the wrong register.  The
+ * checker accepts the pair (any is the top type), so the value must be
+ * marshalled to the slot's convention instead:
+ *
+ *   (let [__sfn <arg>]
+ *     (fn [__sa0 : W0 ...] : WR (cast? (__sfn (cast? __sa0 H0) ...) WR)))
+ *
+ * A `W` slot that is `any` where the value's `H` is concrete gets a checked
+ * `cast` down to `H`; a concrete `W` where `H` is `any` is widened by the
+ * ordinary call.  The result is the same in the other direction: a concrete
+ * `WR` over an `any` result is a checked cast, and an `any` `WR` over a
+ * concrete one is widened by the `: any` return.
+ *
+ * `arg` is already elaborated, so it is bound to the temp directly rather
+ * than re-elaborated from its form (a lambda literal would otherwise be lifted
+ * twice).  Returns NULL -- leave the argument alone -- unless both signatures
+ * are ground, the arities match, every slot pair agrees except for `any`, and
+ * at least one slot actually differs.  `want` may mention the callee's type
+ * variables; `binds` instantiates it first. */
+Expr *elab_fn_any_bridge(Elab *e, Expr *arg, const Type *want_decl,
+                         const AbiTypeBinding *binds, uint8_t n_binds) {
+    if (!e || !arg || !want_decl) return NULL;
+    const Type *have = &arg->type;
+    if (have->kind != TY_FN || want_decl->kind != TY_FN) return NULL;
+    Type want = n_binds ? call_instantiate_type(e, want_decl,
+                                                (CallTypeBinding *)binds, n_binds)
+                        : *want_decl;
+    if (want.kind != TY_FN) return NULL;
+    if (have->as.fn.cfnptr || want.as.fn.cfnptr) return NULL;
+    if (have->as.fn.is_variadic || want.as.fn.is_variadic) return NULL;
+    uint32_t n = want.as.fn.arity;
+    if (n != have->as.fn.arity || n > 5) return NULL;
+    if (!elab_type_is_ground(&want) || !elab_type_is_ground(have)) return NULL;
+    bool differs = false;
+    for (uint32_t k = 0; k <= n; k++) {
+        Type hs = fn_slot_type(have, k), ws = fn_slot_type(&want, k);
+        bool ha = hs.kind == TY_ANY, wa = ws.kind == TY_ANY;
+        if (ha != wa) { differs = true; continue; }
+        if (!ha && !type_eq(hs, ws)) return NULL;
+    }
+    if (!differs) return NULL;
+
+    Span sp = arg->span;
+    const Symbol *fn_s   = symtab_intern(e->st, strslice("fn", 2));
+    const Symbol *cast_s = symtab_intern(e->st, strslice("cast", 4));
+    char sfn_nm[40];
+    snprintf(sfn_nm, sizeof sfn_nm, "__sfnb_%u", elab_fresh_id(e));
+    const Symbol *sfn_s = symtab_intern(e->st, strslice(sfn_nm, (uint32_t)strlen(sfn_nm)));
+
+    Form **pv = (Form **)arena_alloc(e->arena, (2 * (n ? n : 1)) * sizeof(Form *));
+    Form **cargs = (Form **)arena_alloc(e->arena, (n + 1) * sizeof(Form *));
+    cargs[0] = form_sym(e->arena, sp, sfn_s);
+    for (uint32_t k = 0; k < n; k++) {
+        Type hs = fn_slot_type(have, k), ws = fn_slot_type(&want, k);
+        Form *wtf = saffron_seam_type_form(e, &ws, sp);
+        if (!wtf) return NULL;
+        char nm[24];
+        snprintf(nm, sizeof nm, "__sa%u", k);
+        const Symbol *ps = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+        pv[2 * k]     = form_sym(e->arena, sp, ps);
+        pv[2 * k + 1] = form_type_ann(e->arena, sp, wtf);
+        if (ws.kind == TY_ANY && hs.kind != TY_ANY) {
+            Form *htf = saffron_seam_type_form(e, &hs, sp);
+            if (!htf) return NULL;
+            Form *ci[3] = { form_sym(e->arena, sp, cast_s), form_sym(e->arena, sp, ps), htf };
+            cargs[1 + k] = form_list(e->arena, sp, ci, 3);
+        } else {
+            cargs[1 + k] = form_sym(e->arena, sp, ps);
+        }
+    }
+    Type hr = fn_slot_type(have, n), wr = fn_slot_type(&want, n);
+    Form *rtf_ann = saffron_seam_type_form(e, &wr, sp);
+    if (!rtf_ann) return NULL;
+    Form *body = form_list(e->arena, sp, cargs, n + 1);
+    if (hr.kind == TY_ANY && wr.kind != TY_ANY) {
+        Form *rtf_cast = saffron_seam_type_form(e, &wr, sp);
+        if (!rtf_cast) return NULL;
+        Form *ci[3] = { form_sym(e->arena, sp, cast_s), body, rtf_cast };
+        body = form_list(e->arena, sp, ci, 3);
+    }
+    Form *lam_items[4] = { form_sym(e->arena, sp, fn_s),
+                           form_vec(e->arena, sp, pv, 2 * n),
+                           form_type_ann(e->arena, sp, rtf_ann),
+                           body };
+    Form *lam_form = form_list(e->arena, sp, lam_items, 4);
+
+    Scope inner;
+    scope_init(&inner, e->scope);
+    e->scope = &inner;
+    Binding *sb = binding_new(e, sfn_s, arg->type, false, false, sp);
+    scope_add(&inner, sb);
+    Type *saved_expected = e->expected_type;
+    e->expected_type = NULL;
+    Expr *lam = elab_form(e, lam_form);
+    e->expected_type = saved_expected;
+    e->scope = inner.parent;
+    scope_free(&inner);
+    if (!lam) return NULL;
+
+    LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+    memset(lb, 0, sizeof(*lb));
+    lb->binding = sb;
+    lb->init = arg;
+    Expr *out = expr_new(e->arena, EX_LET, lam->type, sp);
+    out->as.let_.bindings = lb;
+    out->as.let_.n = 1;
+    out->as.let_.body = lam;
+    return out;
 }
 
 static bool call_reinterpret_kind_is_integral(TypeKind k) {
@@ -3831,16 +4042,10 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
             bool widen_param[64] = {0};
             bool any_bare = false;
             for (uint32_t i = 0; i < n_look && i < 64; i++) {
-                const Type *ft = gb->type.as.fn.arg_full_types[i];
-                if (!ft || ft->kind != TY_TYVAR || !ft->as.tyvar_.name) continue;
-                bool pinned_elsewhere = false;
-                for (uint32_t j = 0; j < arity && !pinned_elsewhere; j++) {
-                    const Type *ot = gb->type.as.fn.arg_full_types[j];
-                    if (!ot || j == i || ot->kind == TY_TYVAR) continue;
-                    if (type_mentions_tyvar_named(ot, ft->as.tyvar_.name))
-                        pinned_elsewhere = true;
+                if (saffron_bare_tyvar_param_widens(&gb->type, i)) {
+                    widen_param[i] = true;
+                    any_bare = true;
                 }
-                if (!pinned_elsewhere) { widen_param[i] = true; any_bare = true; }
             }
             if (any_bare) {
                 const Symbol *any_sym = symtab_intern(e->st, strslice("any", 3));
@@ -8081,6 +8286,26 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * verify that their arg_linear flags match.  This catches attempts to
          * pass a (-> T R) function where (-> ^linear T R) is required (or vice
          * versa) in higher-order call positions. */
+        /* concrete-result-fn-passed-where-an-any-result-fn-is-expected: a
+         * function argument whose signature differs from the parameter's
+         * only in where `any` appears -- `(fn [float float] float)` for a
+         * `(fn [float float] any)` -- is a different calling convention, not
+         * a subtype.  The callee would call it through the parameter's
+         * signature and read a `tur_tagged_t` out of `rax:rdx` where the
+         * function left a double in `xmm0`.  Marshal it with the `any`
+         * bridge.  Only a ground parameter type is bridged (a generic one is
+         * instantiated from this very argument). */
+        if (arg_ok &&
+            expected_arg_kind == TY_FN && args[i]->type.kind == TY_FN &&
+            fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+            uint32_t bidx = fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *bexp = (bidx < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[bidx] : NULL;
+            if (bexp && bexp->kind == TY_FN) {
+                Expr *ad = elab_fn_any_bridge(e, args[i], bexp, NULL, 0);
+                if (ad) args[i] = ad;
+            }
+        }
         if (arg_ok &&
             expected_arg_kind == TY_FN && args[i]->type.kind == TY_FN) {
             uint32_t fn_arg_idx_lt2 = fn_binding->closure_fn_binding ? i + 1 : i;
@@ -11361,6 +11586,24 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
      * If body->arg_full_types[i] is TY_FORALL, wrap that arg with EX_POLY_WRAP
      * and mark it in poly_arg_mask so emit can pass it by pointer. */
     const Type *poly = fn_binding->poly_type;
+
+    /* fn-param-call-prototype-spelled-from-the-call-not-the-fn (argument
+     * half): an F5 typed carrier whose parameter is `any` -- `g : (fn [any
+     * any] any)`, an instance method's unannotated `g` typed from its class
+     * -- holds a thunk that takes `tur_tagged_t`, so a concrete argument
+     * must be widened exactly as the direct-call path widens one (IT4).
+     * Without it the emitter spelled the slot from the argument (`double`)
+     * and the callee read a raw double as a tagged word: `cast: any holds
+     * unknown`. */
+    if (poly && poly->kind == TY_FN) {
+        for (uint32_t i = 0; i < n_args && i < (uint32_t)poly->as.fn.arity; i++) {
+            TypeKind pk = (poly->as.fn.arg_full_types && poly->as.fn.arg_full_types[i])
+                              ? poly->as.fn.arg_full_types[i]->kind
+                              : (TypeKind)poly->as.fn.arg_kinds[i];
+            if (pk == TY_ANY && args[i] && args[i]->type.kind != TY_ANY)
+                args[i] = elab_coerce_to_any(e, args[i]);
+        }
+    }
 
     /* Slice 3 (constrained-hkt-forall): gate + validate a higher-kinded rank-2
      * invocation.  When the callee applies a poly fn whose forall quantifies an

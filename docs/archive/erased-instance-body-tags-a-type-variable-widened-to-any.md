@@ -1,14 +1,51 @@
 # An erased instance body widens a type-variable value to `any` with a meaningless tag
 
+**RESOLVED 2026-09-29** (fix direction 1; direction 2 not taken -- see
+below).  Pinned by `tests/fixtures/instance-any-result-widens-bound-tyvar`
+(typed; float, int and cstr elements) and
+`tests/fixtures/saffron-instance-any-result-widens-element` (the Saffron
+repro including its silent `type-of` / `is?` lines, and the `Comb` shape it
+was found in, static and dynamic receivers).
+
+## Resolution
+
+Two pieces, because the report's piece 2 ("nothing mints the spec") had two
+causes, one per class kind:
+
+- **An HKT class attached no bindings at all.**  The M7 dispatch
+  (`elab_typeclasses.c`) collects a constructor class's element bindings
+  (`t := One`, `a := float`) only for an applied `(f b)` or bare-element `b`
+  result.  A concrete `: any` result now counts as the bare-element shape:
+  the widen that ends such a body is what needs the element's type, and
+  `m7_body_returns_byvalue_element` reads through an `EX_UNION_INJECT` to the
+  element read under it.  With the bindings attached, `(One float)` is a
+  by-value receiver and the spec mints on the ABI change.
+- **An unchanged ABI still minted nothing.**  `(One int)` -- or a kind-*
+  class over a parametric head, `Get [(One A)]` -- spells the same C as the
+  erased body, so `abi_changes` stays false.  `body_has_dispatch_on_app_tyvar`
+  (`emit_module.c`) gains a third trigger: an `EX_UNION_INJECT` whose payload
+  type is a type variable the call binds.  Scoped to instance-method bodies
+  (`g_bhd_detect_tyvar_widen`); a plain generic is monomorphized anyway.
+
+In the spec the payload type is concrete, so the widen tags it (`float` is 4)
+as a monomorphized `defn` does.
+
+Fix direction 2 (make `TUR_TAG(TY_TYVAR, ...)` an internal error) was NOT
+taken: the erased base body is still emitted for every instance, called or
+not, so an emit-time error would fire on programs whose every call now goes
+to a spec.  The erased widen can still be reached by a dispatch that mints no
+spec; none is known after this change.
+
+
 **Severity: medium-high.** Compiled only; `--interpret` answers correctly. It
 usually ends in a clean panic, the first time a dynamic operator, `println` or
 `cast` reads the value. But `type-of` answers `unknown` and `(is? x float)`
 answers false, so a program that branches on the value's type silently takes
 the wrong branch. It reaches both Saffron and typed Turmeric. Filed 2026-09-28.
 It was found while splitting S9's residue out of
-[saffron-lang-plan](../archive/saffron-lang-plan.md), as the "`: any` result"
+[saffron-lang-plan](saffron-lang-plan.md), as the "`: any` result"
 aside in
-[saffron-dyn-witness-fn-arity-defaults-unary](saffron-dyn-witness-fn-arity-defaults-unary.md).
+[saffron-dyn-witness-fn-arity-defaults-unary](../reported/saffron-dyn-witness-fn-arity-defaults-unary.md).
 That note guessed "the elements reach the lambda un-boxed". They do not: they
 reach it boxed, but with a tag no consumer understands.
 
@@ -149,5 +186,5 @@ binding and answers correctly.
   [fn-param-call-prototype-spelled-from-the-call-not-the-fn](fn-param-call-prototype-spelled-from-the-call-not-the-fn.md):
   the same instance bodies, a different defect (the prototype of the call
   through the `fn` parameter).
-- [saffron-dyn-witness-fn-arity-defaults-unary](saffron-dyn-witness-fn-arity-defaults-unary.md):
+- [saffron-dyn-witness-fn-arity-defaults-unary](../reported/saffron-dyn-witness-fn-arity-defaults-unary.md):
   the note this was found beside.

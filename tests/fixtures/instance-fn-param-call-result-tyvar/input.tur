@@ -1,0 +1,20 @@
+;; fn-param-call-prototype-spelled-from-the-call-not-the-fn (result half):
+;; an instance body calls its `g : (fn [float float] b)` parameter.  The
+;; `: b` result mints a spec, and that spec must bind the METHOD's own `b`
+;; (here `float`, from the lambda) -- not only the class var -- or the call
+;; through `g` is spelled as returning the int64 carrier and a double result
+;; is read out of the wrong register (it printed 4.61563e+18).
+(defclass Ap2 [a]
+  (ap2 [x : a g : (fn [float float] b)] : b))
+(defstruct Pt [x : float y : float])
+(definstance Ap2 [Pt]
+  (ap2 [p g] (g (.x p) (.y p))))
+
+(defn main [] : int
+  ;; b := float
+  (println (ap2 (Pt 1.5 2.25) (fn [a : float b : float] : float (+ a b))))
+  ;; b := int, through the same instance
+  (println (ap2 (Pt 7.1 3.25) (fn [a : float b : float] : int (if (> a b) 1 2))))
+  ;; b := cstr
+  (println (ap2 (Pt 7.1 3.25) (fn [a : float b : float] : cstr (if (> a b) "gt" "le"))))
+  0)

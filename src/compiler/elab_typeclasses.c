@@ -2279,6 +2279,25 @@ static bool m7_body_returns_byvalue_element(const Expr *e) {
             return e->as.call_.fn_binding && !e->as.call_.fn_expr &&
                    !e->as.call_.fn_binding->is_global &&
                    e->type.kind != TY_APP;
+        case EX_UNION_INJECT: {
+            /* erased-instance-body-tags-a-type-variable-widened-to-any: an
+             * `: any` result is an element read WIDENED on the way out --
+             * `(.v o)` under `(unbox1 [o] ...)`.  The widen is what needs the
+             * element's concrete type (its tag), so the read under it decides.
+             *
+             * Except a call through an UNTYPED `g : fn` carrier: it takes and
+             * returns the int64 word whatever the elements are, so a spec
+             * whose elements are `any` or a double hands it a value it cannot
+             * take (a cc error, `aggregate value used where an integer was
+             * expected` -- the saffron-dyn-witness-fn-arity repro). */
+            const Expr *v = e->as.union_inject_.value;
+            if (v && v->kind == EX_CALL && v->as.call_.fn_binding &&
+                v->as.call_.fn_binding->is_poly_fn &&
+                !(v->as.call_.fn_binding->poly_type &&
+                  v->as.call_.fn_binding->poly_type->kind == TY_FN))
+                return false;
+            return m7_body_returns_byvalue_element(v);
+        }
         default:
             return false;
     }
@@ -6250,6 +6269,15 @@ static bool saffron_extra_is_class_var(const TypeClass *tc, uint8_t slot,
     const Type *h = pt;
     while (h && h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
     if (h && h->kind == TY_ADT && h->as.adt_.def == def) return true;
+    /* An `int` on both sides is how an unannotated parameter records (`Eq`'s
+     * `(eq? [x y])`), so it is guessed to be the class variable -- but only
+     * when the CLASS left it bare.  A spelled `n : int` is an int
+     * (saffron-dyn-parametric-extra-read-as-class-var: `(nth-of [x n : int])`
+     * cast its index to `(Vec any)` and panicked). */
+    if (tc->methods[slot].param_explicit_type &&
+        j < tc->methods[slot].n_params &&
+        tc->methods[slot].param_explicit_type[j])
+        return false;
     return pt->kind == TY_INT && tc->methods[slot].param_types &&
            j < tc->methods[slot].n_params &&
            tc->methods[slot].param_types[j].kind == TY_INT;
@@ -6444,7 +6472,12 @@ static void saffron_mint_dyn_witness(Elab *e, TypeClass *tc, uint8_t slot,
                 Form *cst[3] = { form_sym(e->arena, sp, casts),
                                  form_sym(e->arena, sp, as), cast_ty };
                 cargs[2 + k] = form_list(e->arena, sp, cst, 3);
-            } else if (!def && slot < tc->n_methods && tc->methods[slot].param_types) {
+            } else if (slot < tc->n_methods && tc->methods[slot].param_types) {
+                /* Also a PARAMETRIC head's extra that is not the class
+                 * variable (saffron-dyn-parametric-extra-read-as-class-var:
+                 * `Nth [Vec]`'s spelled `n : int`).  saffron_extra_is_class_var
+                 * has already claimed every tyvar-typed and head-typed impl
+                 * parameter, so only a concrete one reaches here. */
                 /* M9 (kind-* witness): the static `.m __r __a1` inside the
                  * witness resolves to ONE instance, whose impl declares the
                  * extra at a concrete type -- the class variable IS the
@@ -6469,7 +6502,11 @@ static void saffron_mint_dyn_witness(Elab *e, TypeClass *tc, uint8_t slot,
                 if (wimpl && wimpl->param_types && (k + 1) < wimpl->n_params)
                     mp = &wimpl->param_types[k + 1];
                 const char *cast_name = NULL;
-                if (mp->kind == TY_TYVAR) cast_name = recv_name;
+                /* A class-variable extra means the receiver type only for a
+                 * kind-* head; on a parametric head the receiver's name is a
+                 * constructor, not a type, and a tyvar extra there (Foldable's
+                 * `init : b`) stays bare. */
+                if (mp->kind == TY_TYVAR) cast_name = def ? NULL : recv_name;
                 else switch (mp->kind) {
                     case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_CSTR: case TY_SYM:
                     case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
@@ -8545,6 +8582,76 @@ resolved_user_fallback:;
         ? (Type *)arena_alloc(e->arena, n_args * sizeof(Type)) : NULL;
     for (uint32_t i = 0; i < n_args; i++) args_orig_types[i] = args[i]->type;
 
+    /* static-instance-spec-calls-any-lambda-as-concrete-result: a function
+     * argument whose `any` slots disagree with the method's parameter AT THIS
+     * CALL -- a Saffron `(fn [acc x] ...)`, all-`any`, handed to Foldable's
+     * `f : (fn [b a] b)` with `b := float` from `init` -- is called by the
+     * instance spec through the parameter's signature, so a `tur_tagged_t`
+     * result was read out of `xmm0`.  Marshal it with the `any` bridge before
+     * the poly-fn packing below sees it.  The tyvars are solved exactly as
+     * the spec's own bindings are (receiver first, then the arguments in
+     * order, first binding wins), so the adaptor and the spec agree. */
+    if (best_inst && best_inst->typeclass && n_args > 0) {
+        const TypeClassMethod *bcm = NULL;
+        TypeClass *btc = best_inst->typeclass;
+        for (uint8_t mi = 0; mi < btc->n_methods; mi++)
+            if (btc->methods[mi].name &&
+                strcmp(btc->methods[mi].name->name, method_name) == 0) {
+                bcm = &btc->methods[mi];
+                break;
+            }
+        bool any_fn_arg = false;
+        for (uint32_t i = 0; i < n_args && bcm; i++)
+            if (args[i]->type.kind == TY_FN && 1 + i < bcm->n_params &&
+                bcm->param_types[1 + i].kind == TY_FN)
+                any_fn_arg = true;
+        if (bcm && any_fn_arg && bcm->n_params >= 1) {
+            const Symbol *bn[16];
+            Type bt[16];
+            uint8_t nb = 0;
+            m7_collect_tyvar_bindings(e, bcm->param_types[0], obj->type,
+                                      bn, bt, &nb, 16);
+            for (uint32_t i = 0; i < n_args && 1 + i < bcm->n_params; i++)
+                m7_collect_tyvar_bindings(e, bcm->param_types[1 + i],
+                                          args_orig_types[i], bn, bt, &nb, 16);
+            AbiTypeBinding ab[16];
+            for (uint8_t k = 0; k < nb; k++) {
+                ab[k].name = bn[k]->name;
+                ab[k].type = bt[k];
+            }
+            for (uint32_t i = 0; i < n_args && 1 + i < bcm->n_params; i++) {
+                if (args[i]->type.kind != TY_FN ||
+                    bcm->param_types[1 + i].kind != TY_FN) continue;
+                /* The target is the signature the INSTANCE body calls the
+                 * parameter through -- its binding's poly_type -- not the
+                 * class's.  A Saffron instance body reads Foldable's `(fn [b
+                 * a] b)` as `(fn [any any] b)`, and the adaptor must take
+                 * what that body passes. */
+                const Type *target = &bcm->param_types[1 + i];
+                if (best_method && 1 + i < best_method->n_params &&
+                    best_method->params[1 + i] &&
+                    best_method->params[1 + i]->poly_type &&
+                    best_method->params[1 + i]->poly_type->kind == TY_FN)
+                    target = best_method->params[1 + i]->poly_type;
+                /* A Saffron instance body ascribes a bare-tyvar argument of
+                 * that call to `any` (D8 Q3), so read the target the same
+                 * way. */
+                Type saffron_view;
+                if (best_method && 1 + i < best_method->n_params &&
+                    best_method->params[1 + i] &&
+                    lang_span_is_dynamic(best_method->params[1 + i]->span)) {
+                    saffron_view = elab_saffron_call_view(e, target);
+                    target = &saffron_view;
+                }
+                Expr *ad = elab_fn_any_bridge(e, args[i], target, ab, nb);
+                if (ad) {
+                    args[i] = ad;
+                    args_orig_types[i] = ad->type;
+                }
+            }
+        }
+    }
+
     /* F3-5 (cross-plan-followups): per-call-site synthesis for the
      * recursive case of typed-collection `.eq?` dispatch.  When the
      * outer instance is a constrained typed-collection (e.g. Eq[Vec])
@@ -8939,15 +9046,21 @@ resolved_user_fallback:;
     }
     bool m7_result_is_applied   = m7_cm && m7_cm->return_type.kind == TY_APP;
     bool m7_result_is_bare_elem = m7_cm && m7_cm->return_type.kind == TY_TYVAR;
+    /* erased-instance-body-tags-a-type-variable-widened-to-any: a concrete
+     * `: any` result spells the same C for every element type, so nothing
+     * else asks for a spec -- and the erased body then widens its element
+     * with no type to tag it by.  Treat it as the bare-element shape: the
+     * element bindings are what the widen needs. */
+    bool m7_result_is_any = m7_cm && m7_cm->return_type.kind == TY_ANY;
     bool m7_body_byvalue_ok = best_method && best_method->body &&
         best_method->body->kind != EX_INLINE_C &&
         ((m7_result_is_applied &&
           m7_body_constructs_byvalue(best_method->body)) ||
-         (m7_result_is_bare_elem &&
+         ((m7_result_is_bare_elem || m7_result_is_any) &&
           m7_body_returns_byvalue_element(best_method->body)));
     if (best_inst && best_inst->typeclass &&
         best_method->binding->type.kind == TY_FN && m7_cm &&
-        (m7_result_is_applied || m7_result_is_bare_elem)) {
+        (m7_result_is_applied || m7_result_is_bare_elem || m7_result_is_any)) {
         const TypeClassMethod *cm = m7_cm;
         {
             /* The declared element tyvars `(g a)` / `(fn [a] b)` live on the
@@ -9531,7 +9644,46 @@ resolved_user_fallback:;
                 m7_collect_tyvar_bindings(e, best_inst->type_args[0],
                                           obj_orig_type, hb_names, hb_types,
                                           &hb_n, ABI_TYPE_BINDINGS_MAX - 1);
-            uint8_t total = (uint8_t)(1 + hb_n);
+            /* fn-param-call-prototype-spelled-from-the-call-not-the-fn: bind
+             * the METHOD's own type variables too -- `b` in
+             * `(ap2 [x : a g : (fn [float float] b)] : b)` -- from the
+             * arguments that fix them.  The spec a `: b` result mints knows
+             * only its signature (`double`); without `b` in its bindings the
+             * body kept spelling every `b` it held, the call through `g`
+             * included, as the int64 carrier, and read a double result out of
+             * `rax`.  Only a GROUND solution is recorded (a free tyvar actual
+             * is skipped by the collector, and an argument still mentioning
+             * one binds nothing), and a name the class var or the instance
+             * head already binds keeps that binding. */
+            const Symbol *mb_names[ABI_TYPE_BINDINGS_MAX];
+            Type mb_types[ABI_TYPE_BINDINGS_MAX];
+            uint8_t mb_n = 0;
+            if (m7_cm) {
+                const Symbol *raw_names[16];
+                Type raw_types[16];
+                uint8_t raw_n = 0;
+                for (uint32_t i = 0; i < n_args; i++) {
+                    uint8_t pidx = (uint8_t)(1 + i);
+                    if (pidx >= m7_cm->n_params) break;
+                    m7_collect_tyvar_bindings(e, m7_cm->param_types[pidx],
+                                              args_orig_types[i], raw_names,
+                                              raw_types, &raw_n, 16);
+                }
+                for (uint8_t k = 0; k < raw_n; k++) {
+                    const char *nm = raw_names[k] ? raw_names[k]->name : NULL;
+                    if (!nm || strcmp(nm, tc->type_params[0]->name) == 0) continue;
+                    if (!elab_type_is_ground(&raw_types[k])) continue;
+                    bool dup = false;
+                    for (uint8_t h = 0; h < hb_n && !dup; h++)
+                        if (strcmp(hb_names[h]->name, nm) == 0) dup = true;
+                    if (dup) continue;
+                    if ((uint8_t)(1 + hb_n + mb_n) >= ABI_TYPE_BINDINGS_MAX) break;
+                    mb_names[mb_n] = raw_names[k];
+                    mb_types[mb_n] = raw_types[k];
+                    mb_n++;
+                }
+            }
+            uint8_t total = (uint8_t)(1 + hb_n + mb_n);
             AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
                 e->arena, total * sizeof(AbiTypeBinding));
             bindings[0].name = tc->type_params[0]->name;
@@ -9539,6 +9691,10 @@ resolved_user_fallback:;
             for (uint8_t k = 0; k < hb_n; k++) {
                 bindings[1 + k].name = hb_names[k]->name;
                 bindings[1 + k].type = hb_types[k];
+            }
+            for (uint8_t k = 0; k < mb_n; k++) {
+                bindings[1 + hb_n + k].name = mb_names[k]->name;
+                bindings[1 + hb_n + k].type = mb_types[k];
             }
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = total;

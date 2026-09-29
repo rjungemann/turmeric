@@ -1,0 +1,21 @@
+;; fn-param-call-prototype-spelled-from-the-call-not-the-fn (argument half):
+;; an instance body calls a `g : (fn [any any] any)` parameter with float
+;; arguments.  Each argument must be widened to `any` exactly as the call
+;; through a plain `defn`'s fn parameter widens it -- passing the raw doubles
+;; left the lambda reading a double as a tagged word (`cast: any holds
+;; unknown`).
+(defclass Ap2 [a]
+  (ap2 [x : a g : (fn [any any] any)] : any))
+(defstruct Pt [x : float y : float])
+(definstance Ap2 [Pt]
+  (ap2 [p g] (g (.x p) (.y p))))
+
+(defn main [] : int
+  (let [r (ap2 (Pt 1.5 2.25)
+               (fn [a : any b : any] : any
+                 (do (println (cast a float))
+                     (println (cast b float))
+                     b)))]
+    (println (cast r float))
+    (println (type-of r)))
+  0)
