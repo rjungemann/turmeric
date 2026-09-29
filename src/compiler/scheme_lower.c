@@ -5804,7 +5804,7 @@ static Form **lib_read_source(SL *sl, const char *path, uint32_t *nf) {
     ReaderType rt = detect_lang_dialect(raw, len, &body, &blen, &bad, &bad_len, &dialect);
     size_t pl = strlen(path);
     bool scm = pl > 4 && strcmp(path + pl - 4, ".scm") == 0;
-    if (bad || (rt != READER_R7RS && !scm)) { free(raw); return NULL; }
+    if (bad || (rt != READER_R7RS && rt != READER_R7RS_SWEET && !scm)) { free(raw); return NULL; }
     char *src = (char *)arena_alloc(sl->a, blen + 1);
     memcpy(src, body, blen);
     src[blen] = '\0';
@@ -5817,7 +5817,9 @@ static Form **lib_read_source(SL *sl, const char *path, uint32_t *nf) {
     sf->src         = src;
     sf->len         = blen;
     sf->file_id     = diag_alloc_file_id();
-    sf->reader_type = READER_R7RS;
+    /* A library may be written in `#lang r7rs/sweet`; a `.scm` file with no
+     * line is the Scheme reader's. */
+    sf->reader_type = rt == READER_R7RS_SWEET ? READER_R7RS_SWEET : READER_R7RS;
     sf->lang        = LANG_R7RS;
     diag_register_file(sf);
     return read_all_with_registry(sl->a, sl->st, sf, NULL, nf);

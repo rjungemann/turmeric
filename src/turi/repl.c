@@ -1714,7 +1714,8 @@ int turi_repl_run(bool watch_mode) {
              * If in sweet mode and the first token doesn't start with '(',
              * we enter sweet continuation: indented lines continue the form,
              * and a blank line (handled above) terminates it. */
-            if (env->reader_type == READER_SWEET && multi.len == 0
+            if ((env->reader_type == READER_SWEET ||
+                 env->reader_type == READER_R7RS_SWEET) && multi.len == 0
                     && line[0] != '(' && line[0] != '\0') {
                 in_sweet_form = true;
             }

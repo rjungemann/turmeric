@@ -66,6 +66,29 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
   own library does not work at the prompt; import it plainly, or with
   `only` or `rename`. The prompt takes Scheme only; type
   `#lang turmeric` to switch to Turmeric (the session resets).
+- **Sweet-expressions**: `#lang r7rs/sweet` is the same language written
+  with SRFI-110's indentation, neoteric calls and `$`, over Scheme's own
+  lexemes (`#t`, `#\(`, `|two words|`, `#;` and `#|...|#` all read as they
+  do in `#lang r7rs`). `f{n - 1}` is SRFI-105's `(f (- n 1))`, and `f[x]` is
+  `f(x)`, since Scheme's brackets are parens. A library may be written this
+  way and imported by a plain `#lang r7rs` program, or the other way round
+  (`tests/fixtures/r7rs-sweet`):
+
+  ```scheme
+  #lang r7rs/sweet
+  import (scheme base) (scheme write)
+
+  define (fact n)
+    if {n <= 1}
+      1
+      {n * fact{n - 1}}
+
+  display $ fact 20
+  newline()
+  ```
+
+  `tur fmt` checks a sweet file and leaves its layout alone, which is its
+  syntax.
 - **Formatting**: `tur fmt` re-indents a Scheme file and never rewrites a
   token. Each line's leading whitespace is recomputed; `#t`, `#\x`,
   `|two words|` and `#e1.5` stay exactly as written.

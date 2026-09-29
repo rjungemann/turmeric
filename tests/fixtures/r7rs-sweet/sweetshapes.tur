@@ -1,0 +1,17 @@
+#lang r7rs/sweet
+;; A library written in sweet-expressions, imported by input.tur.
+define-library (sweetshapes)
+  export make-rect rect-area describe
+  import (scheme base)
+  begin
+    define-record-type rect
+      make-rect w h
+      rect?
+      w rect-w
+      h rect-h
+    define (rect-area r)
+      {rect-w(r) * rect-h(r)}
+    #| a block comment
+       with an (unbalanced paren |#
+    define (describe r)
+      `(rect ,(rect-w r) ,@(list (rect-h r)) area ,(rect-area r))

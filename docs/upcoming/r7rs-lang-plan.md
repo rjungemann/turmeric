@@ -76,9 +76,9 @@ itself, after the one-release soak: move `r7rs` to `GRADUATED[]`, drop the
 row, and archive this plan in the same change, as r7rs-gc's plan was
 (`00b09ad40`); until then the row's `plan_path` points here. Decided rather
 than open: one library per file, named after the file (Section 8, Q7, held
-in docs/reported/r7rs-library-file-shape-and-export-rename.md); no
-`r7rs/sweet` base (Q5, a deferral, now filed as
-docs/reported/r7rs-sweet-base-dialect-missing.md); Q2 is moot, since `quote`
+in docs/reported/r7rs-library-file-shape-and-export-rename.md); an
+`r7rs/sweet` base (Q5, landed 2026-09-29,
+docs/archive/r7rs-sweet-base-dialect-missing.md); Q2 is moot, since `quote`
 builds at run time (R3's deviation from D4). Open reports that bear on the
 dialect, none of them a stage of this plan: `r7rs-reentrant-callcc-wrong-with-eval`
 (a compiled wrong answer, seen on one macOS host and not in CI -- the one
@@ -401,7 +401,8 @@ The file argues for this explicitly -- "the legal bases are exactly their
 cross-product, and a table would have to be kept in step with both."
 
 That argument stops being true the moment a language arrives with its own
-reader. `r7rs/sweet` is not a thing, and `turmeric/r7rs` is not a thing either.
+reader. `r7rs/neoteric` is not a thing, and `turmeric/r7rs` is not a thing either.
+(`r7rs/sweet` became one on 2026-09-29, Q5 below: another row.)
 The cross-product must become a table again. This is a small change, but it
 must be made **deliberately**, because the current source will actively argue
 against it during review.
@@ -804,6 +805,8 @@ No behavior change. This is the stage that makes every later one cheap.
 >   `LangBaseDescriptor.experiment` has its first non-NULL value and the
 >   playground picker badges the row (`tests/wasm_glue_lang_unit.c`).
 >   `#lang r7rs/sweet` is TUR-E0331 (`errors/lang-r7rs-no-reader-axis`).
+>   *(Superseded 2026-09-29: `r7rs/sweet` is a base, Q5; the fixture now
+>   pins `r7rs/neoteric` as the unknown one.)*
 > - The `r7rs` `EXPERIMENTS[]` row (introduced 0.52.0, `expires_at` 0.70.0 --
 >   advisory, per Section 7 R4), `g_opt_r7rs`, and D11's gate:
 >   `lang_dialect_apply` calls `experiment_enable("r7rs", XF_SRC_CLI)` then
@@ -1806,6 +1809,13 @@ expectation from a demo.
    sweet-expressions were designed for Scheme, and SRFI-110 is a Scheme SRFI.
    Recorded as a deliberate deferral rather than an oversight; if it is ever
    wanted, the `LangTraits` table is the place it goes.
+   **Answered 2026-09-29: one reader more, not the axis.** `#lang r7rs/sweet`
+   is a second `LANG_BASES[]` row for Scheme, `READER_R7RS_SWEET`: the
+   sweet-exp preprocessor, taught Scheme's lexemes (`#\(`, `|sym|`, `#;`),
+   then the Scheme reader with neoteric on, which reads `f{n - 1}` as
+   SRFI-105 does (`(f (- n 1))`). `r7rs/neoteric` and `r7rs/curly-infix`
+   stay unknown bases: curly-infix is on under both, and neoteric is one of
+   sweet's tools. See docs/archive/r7rs-sweet-base-dialect-missing.md.
 6. **Which R7RS?** R7RS-small is the target. R7RS-large is a moving set of
    dockets and is explicitly out of scope; if it is ever wanted it is a sibling
    base token (D1), not a flag.

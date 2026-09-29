@@ -8157,6 +8157,9 @@ static int cmd_fmt(int argc, char **argv) {
                 /* r7rs-lang-plan R9: a Scheme buffer with no `#lang` line
                  * (an editor selection) -- re-indented, never reprinted. */
                 force_lang = READER_R7RS;
+            } else if (strcmp(lang, "r7rs/sweet") == 0) {
+                /* Checked, and kept as written (fmt_format_buffer). */
+                force_lang = READER_R7RS_SWEET;
             } else {
                 fprintf(stderr, "tur fmt: unknown dialect '%s'\n", lang);
                 return 2;

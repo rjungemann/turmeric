@@ -127,8 +127,8 @@ int main(void) {
         /* r7rs-lang-plan R1 / D11: `r7rs` is the first base to fill the
          * `experiment` slot, and it is BADGED rather than hidden -- the
          * `#lang` line is itself the enable, so the row stays selectable.
-         * Exactly that one row carries a badge, and it names its own
-         * EXPERIMENTS[] row. */
+         * Its rows (`r7rs`, `r7rs/sweet`) are the ones that carry a badge,
+         * and it names their own EXPERIMENTS[] row. */
         CHECK(strstr(reg, "\"name\":\"r7rs\"") != NULL,
               "the r7rs base is offered (badged, not hidden)");
         CHECK(strstr(reg, "\"language\":\"r7rs\",\"reader\":\"scheme\","
@@ -166,9 +166,9 @@ int main(void) {
                       "only the r7rs base is experiment-gated");
             }
         }
-        CHECK(n_badged == 1, "exactly one base is badged (r7rs)");
-        CHECK(lang_bases_count() == 9,
-              "nine bases: four turmeric, four saffron, one r7rs");
+        CHECK(n_badged == 2, "exactly two bases are badged (r7rs, r7rs/sweet)");
+        CHECK(lang_bases_count() == 10,
+              "ten bases: four turmeric, four saffron, two r7rs");
     }
 
     /* The LANGUAGE axis survives a set_lang.  `saffron` reads with the
@@ -208,10 +208,19 @@ int main(void) {
     CHECK(eval_contains("(null? (quote ()))", "true") &&
           !eval_contains("(null? (quote ()))", "unknown"),
           "set_lang r7rs brings the R7RS prelude: null? resolves through the rename");
-    CHECK(turi_wasm_set_lang("r7rs/sweet") == 1,
-          "r7rs has no reader axis: a slash spelling is rejected");
+    CHECK(turi_wasm_set_lang("r7rs/neoteric") == 1,
+          "r7rs spans only its own readers: another slash spelling is rejected");
     CHECK(strcmp(turi_wasm_get_lang(), "r7rs") == 0,
-          "a rejected r7rs/sweet leaves the session in r7rs");
+          "a rejected r7rs/neoteric leaves the session in r7rs");
+    /* r7rs-sweet-base-dialect-missing: Scheme's sweet reader, at the prompt:
+     * a neoteric call and curly-infix, and the Scheme lexemes still read. */
+    CHECK(turi_wasm_set_lang("r7rs/sweet") == 0, "set_lang accepts r7rs/sweet");
+    CHECK(strcmp(turi_wasm_get_lang(), "r7rs/sweet") == 0,
+          "get_lang reports the r7rs/sweet base");
+    CHECK(eval_contains("length('(1 2 3))", "3") &&
+          eval_contains("{7.1 + 0.5}", "7.6") &&
+          eval_contains("#t", "true"),
+          "r7rs/sweet reads neoteric, curly-infix and #t");
 
     turi_wasm_shutdown();
 
