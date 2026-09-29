@@ -1,0 +1,35 @@
+#lang r7rs
+;; The Scheme half: what each fiber runs, in three parts, each checked on
+;; its own.  Every (yield!) can resume the fiber on another worker thread.
+(define-library (migwork)
+  (export roots-part escape-part tail-part)
+  (import (scheme base) (turmeric migyield))
+  (begin
+    (define (build n)
+      (let lp ((i n) (acc '())) (if (= i 0) acc (lp (- i 1) (cons i acc)))))
+    (define (sum l)
+      (let lp ((l l) (a 0)) (if (null? l) a (lp (cdr l) (+ a (car l))))))
+    (define (churn k)
+      (let lp ((i k)) (if (= i 0) #t (begin (list i i i) (lp (- i 1))))))
+    ;; 1. A list held only on the fiber's stack across 40 yields, with
+    ;;    garbage made between them.  20100 when it survives whole.
+    (define (roots-part)
+      (let ((l (build 200)))
+        (let lp ((r 0))
+          (if (= r 40)
+              (sum l)
+              (begin (yield!) (churn 30) (lp (+ r 1)))))))
+    ;; 2. A call/cc escape entered on one thread and taken after a yield,
+    ;;    maybe on another.  40 when every escape lands.
+    (define (escape-part)
+      (let lp ((r 0) (acc 0))
+        (if (= r 40)
+            acc
+            (lp (+ r 1) (+ acc (call/cc (lambda (k) (yield!) (k 1) 0)))))))
+    ;; 3. A dynamic tail call (through a procedure argument) whose callee
+    ;;    yields.  40 when every call returns its value.
+    (define (bounce f x) (f x))
+    (define (step x) (yield!) (+ x 1))
+    (define (tail-part)
+      (let lp ((r 0) (acc 0))
+        (if (= r 40) acc (lp (+ r 1) (bounce step acc)))))))

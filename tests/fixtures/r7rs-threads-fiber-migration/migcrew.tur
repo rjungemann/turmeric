@@ -1,0 +1,45 @@
+;; migcrew -- nine fibers on a three-thread scheduler (the shared-queue
+;; tur_scheduler_mt), each running one part of migwork; the main thread waits
+;; for the queue to drain.
+(defmodule migcrew
+  (import migwork :refer [roots-part escape-part tail-part])
+  (export mig-run mig-result)
+  ```c
+  #define MIG_FIBERS 9
+  static pthread_mutex_t mig_mu = PTHREAD_MUTEX_INITIALIZER;
+  static int64_t mig_next;
+  static int64_t mig_out[MIG_FIBERS];
+  ```
+  ;; The calling fiber's number, 0..8, handed out in the order they start.
+  (defn mig-id [] : int
+    ```c
+    pthread_mutex_lock(&mig_mu);
+    int64_t id = mig_next++;
+    pthread_mutex_unlock(&mig_mu);
+    return id;
+    ```)
+  (defn mig-store [id : int v : int] : nil
+    ```c
+    mig_out[id] = v;
+    ```)
+  (defn mig-body [] : nil
+    (let [id (mig-id)
+          k  (mod id 3)]
+      (mig-store id (if (= k 0) (roots-part) (if (= k 1) (escape-part) (tail-part))))))
+  (defn mig-spawn-all [body : ptr<void>] : nil
+    ```c
+    TurSchedulerMT *s = tur_scheduler_mt_new(3);
+    for (int i = 0; i < MIG_FIBERS; i++)
+        tur_scheduler_mt_spawn(s, tur_fiber_block_new((void (*)(void))body, 256 * 1024));
+    tur_scheduler_mt_free(s);
+    ```)
+  (defn mig-run [] : nil
+    (mig-spawn-all mig-body))
+  ;; The sum of each part's results, one part per call: 0 roots, 1 escape,
+  ;; 2 tail calls.
+  (defn mig-result [part : int] : int
+    ```c
+    int64_t s = 0;
+    for (int i = 0; i < MIG_FIBERS; i++) if (i % 3 == part) s += mig_out[i];
+    return s;
+    ```))
