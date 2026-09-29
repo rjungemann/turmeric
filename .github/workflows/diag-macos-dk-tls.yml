@@ -1,0 +1,24 @@
+# TEMPORARY diagnostic for rjungemann/turmeric#966 (macOS r7rs-gc roots
+# failures after the fiber fixes).  Runs only on pushes to its own branch; never merged.
+name: diag-macos-dk-tls
+on:
+  push:
+    branches: ['claude/diag-macos-dk-tls']
+jobs:
+  probe:
+    name: probe (${{ matrix.build }})
+    runs-on: macos-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [Release, Debug]
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install libedit coreutils || true
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build -j
+      - name: Probe
+        run: PATH="/opt/homebrew/opt/coreutils/libexec/gnubin:$PATH" bash tools/diag/dk-tls-probe.sh
