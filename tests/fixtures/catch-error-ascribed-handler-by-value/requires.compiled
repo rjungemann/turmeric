@@ -1,0 +1,1 @@
+stdlib's MonadError [(Result _ B)] catch-error is an inline-C instance body; the interpreter has no native for it.

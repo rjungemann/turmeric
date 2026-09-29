@@ -1,9 +1,34 @@
 # An ascribed `catch-error` hands its handler a by-value shim through the carrier ABI
 
+**RESOLVED 2026-09-29**, both shapes.  Pinned by
+`tests/fixtures/catch-error-ascribed-handler-by-value` (ascribed at the call,
+let-bound with the ascription, an `ok` passing the handler by, and a
+`(Result float int)` payload of 7.1; `requires.compiled`, since the instance
+body is inline C).
+
+## Resolution
+
+Both fix directions, as filed:
+
+- **The shim boxes for the carrier.**  The method-call poly-fn packing
+  (`elab_typeclasses.c`, the arg loop under "Phase HRT3/HRT4") already asked
+  for the carrier-spill shim (`poly_wrap_.boxes_aggregate`) when the receiver
+  is an abstract constructor, whose dictionary dispatch reads the handler's
+  result as an int64 word.  An INLINE-C instance body is the same consumer
+  -- it cannot be re-specialised -- so it now asks too.  The handler's shim
+  heap-boxes the by-value `(Result int int)` and returns the pointer, which is
+  what the caller's carrier bridge dereferences.
+- **The let bridge does not deref twice.**  `emit_let_init_carrier_bridge_type`
+  (`emit_expr.c`) now also declines when the emitted init is already a
+  dereference into the binder's own type, `(*(T *)...)` -- the text the
+  ascription's own carrier bridge writes.  The side-table check beside it
+  could not see this: it answers only for a bare local.
+
+
 **Severity:** medium. A silent miscompile (a segfault at run time), or a `cc`
 error, for an ordinary typed use of the stdlib `MonadError [(Result _ B)]`
 instance. Filed 2026-09-28 while re-measuring
-[carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md).
+[carrier-sum-option-boxes-have-no-owner](../reported/carrier-sum-option-boxes-have-no-owner.md).
 It reproduces on `bf31e725` (v0.56.2) too, so it predates that work.
 
 ## Repro

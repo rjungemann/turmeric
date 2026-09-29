@@ -8781,7 +8781,17 @@ resolved_user_fallback:;
                     rcv.kind == TY_TYVAR && rcv.as.tyvar_.name &&
                     e->cur_hkt_constraint_tyvar &&
                     strcmp(rcv.as.tyvar_.name, e->cur_hkt_constraint_tyvar) == 0;
-                if (obj_is_abstract_tyvar || rcv_is_ambient_ctor)
+                /* catch-error-ascribed-result-types-handler-by-value: an
+                 * INLINE-C instance body is the same carrier consumer -- it
+                 * cannot be re-specialised, and `MonadError [(Result _ B)]`'s
+                 * `catch-error` returns `handler.fn(handler.env, ...)` as the
+                 * int64 word -- so a continuation whose result an enclosing
+                 * ascription grounded to a by-value aggregate must box it
+                 * too.  Without this, the handler's shim returned the struct
+                 * and the caller dereferenced its first word as a pointer. */
+                bool impl_is_inline_c = best_method && best_method->body &&
+                                        best_method->body->kind == EX_INLINE_C;
+                if (obj_is_abstract_tyvar || rcv_is_ambient_ctor || impl_is_inline_c)
                     wrap->as.poly_wrap_.boxes_aggregate = true;
             }
             if (inner_b->is_poly_fn) {

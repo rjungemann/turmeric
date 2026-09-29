@@ -258,5 +258,5 @@ reverted.
 Also found while re-measuring, and filed separately: rewriting
 `hkt-stdlib-result-ok-biased` with typed readers segfaults on an ascribed
 `catch-error`
-([catch-error-ascribed-result-types-handler-by-value](catch-error-ascribed-result-types-handler-by-value.md)).
+([catch-error-ascribed-result-types-handler-by-value](../archive/catch-error-ascribed-result-types-handler-by-value.md)).
 That bug predates this work.

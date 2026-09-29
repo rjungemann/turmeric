@@ -1,0 +1,26 @@
+;; catch-error-ascribed-result-types-handler-by-value: `catch-error` is an
+;; inline-C instance method that returns its handler's result as the int64
+;; carrier word.  When an ascription grounds that result to a by-value
+;; `(Result int int)`, the handler's shim must still box it for the carrier --
+;; it returned the struct, and the caller dereferenced its first word
+;; (segfault).  Bound by a `let` carrying the ascription, the value was also
+;; bridged twice (a cc error).
+(defn main [] : int
+  ;; ascribed at the call
+  (println (ok-val (:: (catch-error (:: (err 5) (Result int int))
+                                    (fn [e] (ok (* e -1))))
+                       (Result int int))))
+  ;; let-bound with the ascription
+  (let [r (:: (catch-error (:: (err 5) (Result int int)) (fn [e] (ok (* e -1))))
+              (Result int int))]
+    (println (ok? r))
+    (println (ok-val r)))
+  ;; an ok value passes the handler by
+  (let [r (:: (catch-error (:: (ok 7) (Result int int)) (fn [e] (ok 0)))
+              (Result int int))]
+    (println (ok-val r)))
+  ;; a float payload keeps its fraction through the carrier
+  (println (ok-val (:: (catch-error (:: (err 3) (Result float int))
+                                    (fn [e] (ok 7.1)))
+                       (Result float int))))
+  0)
