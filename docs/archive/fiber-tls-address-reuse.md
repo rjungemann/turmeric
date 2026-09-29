@@ -2,9 +2,9 @@
 
 **RESOLVED 2026-09-29**, in the PR that added
 `tests/fixtures/r7rs-threads-fiber-migration`. Under clang, the thread-locals
-a fiber carries from thread to thread are now read through an accessor that
-cannot be merged, and the collector's per-thread record is read only by
-functions that are never inlined. gcc builds are unchanged.
+a fiber carries from thread to thread, and the collector's per-thread record
+where the allocator reads it, are now read through an accessor that cannot
+be merged. gcc builds are unchanged.
 
 ## Symptom
 
@@ -66,11 +66,21 @@ thread pointer afresh at each access, and passed every run.
   is guarded by `!defined(x)`, so a front end or split half that already
   reaches `x` through a host accessor (`src/runtime/tur_tls.c`, c2mir and
   the split runtime) keeps that.
-- The collector's `tur_gc_self` is read by functions that yield nothing, so
-  they are `TUR_GC_ENTRY` (`noinline`) instead: `tur_gc_malloc`,
-  `tur_gc_free`, `tur_gc_unpark`, `tur_gc_pthread_create`,
-  `tur_gc_pthread_exit`, `tur_gc_setspecific` and the two `EINTR` helpers.
-  Each reads the address on its own entry, on the thread it is running on.
+- The collector's `tur_gc_self`, the calling thread's record, goes through
+  the accessor where the allocator and `free` read it
+  (`TUR_GC_SELF_FRESH()`, `src/runtime/r7gc.c`). Read stale, an allocation
+  after a move popped the first worker's cache while that worker popped it
+  too, and one slot went out twice. On macOS under `TUR_GC_TORTURE=31` the
+  fixture crashed in 3 of 4 runs without this and passed 4 of 4 with it; the
+  crash reports showed `tur_gc_mark_roots` faulting, and a fiber resumed from
+  a context main was still building.
+- Everywhere else in the collector the read is as it was. Two broader
+  versions each lost the roots of a parked thread on macOS
+  (`r7rs-threads-roots` under `TUR_GC_TORTURE=1`, 0 of 4, Release and Debug):
+  every read through the accessor, and the collector's entry points made
+  `noinline`. The second also broke `r7rs-threads-pause`. `tur_gc_park`
+  takes a parked thread's registers from inside its own frame, and it and
+  the blocking-call wrappers around it are left exactly as they were.
 
 Thread-locals that belong to the thread rather than the fiber are not
 changed. The trampoline's `tur_tb_*` and `tur_handler_chain` are not swapped
@@ -89,12 +99,13 @@ escapes, and 50 lists of 20,000 built and summed, compiled with clang 18
 
 | thread-locals | time |
 | --- | --- |
-| direct (before) | 158-171 ms |
-| this fix | 175-177 ms |
-| collector record through an accessor too | 184-191 ms |
+| direct (before) | 158-173 ms |
+| the fiber's own state through the accessor | 175-177 ms |
+| this fix: that, and the allocator's read of the collector's record | 182-186 ms |
 | every preamble thread-local through an accessor | 205-216 ms |
 
 ## Verified
 
 Linux, clang 18: the fixture 20 of 20, 10 of 10 under
-`TUR_GC_TORTURE=31`, and the plain version 20 of 20.
+`TUR_GC_TORTURE=31` with and without the prelude split, and the plain version
+20 of 20. macOS: see the PR.

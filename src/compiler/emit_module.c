@@ -12394,8 +12394,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * (emit_split_state).  A thread-local that moves with a fiber is then
      * #defined to (*x__at()) -- the state tur_fiber_block_resume swaps: the
      * current fiber, the DK registry and driver, the live-escape set.  (The
-     * collector's per-thread record takes the cheaper route of TUR_GC_ENTRY,
-     * r7gc.c.)  Each block is guarded by
+     * collector's per-thread record goes through it only where the allocator
+     * reads it: TUR_GC_SELF_FRESH, r7gc.c.)  Each block is guarded by
      * !defined(x): a front end or split half that already reaches x through
      * a host accessor (tur_tls.c) has x as a macro and keeps it.  Not
      * applied to thread-locals that belong to the thread rather than the
