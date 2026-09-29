@@ -14,7 +14,7 @@
 #  define TUR_THREAD_LOCAL __thread
 #endif
 #if defined(__clang__)
-#  define TUR_TLS_FRESH(T, x) __attribute__((noinline, unused)) static T *x##__at(void) { __asm__ volatile ("" ::: "memory"); return &x; }
+#  define TUR_TLS_FRESH(T, x, at) __attribute__((noinline, unused)) static T *at(void) { __asm__ volatile ("" ::: "memory"); return &x; } extern int tur_tls_fresh_end
 #endif
 #define TUR_GC_FIBER_ENTER(sp) ((void)0)
 #define TUR_GC_FIBER_LEAVE()   ((void)0)
@@ -2369,17 +2369,17 @@ extern size_t *tur_tls_dk_meta_cap_ptr(void);
  * fiber reads it afresh after the body, which may have yielded and resumed
  * elsewhere (TUR_TLS_FRESH). */
 #if defined(TUR_TLS_FRESH) && !defined(__dk_reap_v)
-TUR_TLS_FRESH(void **, __dk_reap_v)
-TUR_TLS_FRESH(unsigned char *, __dk_reap_kind)
-TUR_TLS_FRESH(size_t, __dk_reap_n)
-TUR_TLS_FRESH(size_t, __dk_reap_cap)
-TUR_TLS_FRESH(int, __dk_entry_depth)
-TUR_TLS_FRESH(tur_jmp_buf *, g_dk_driver)
-TUR_TLS_FRESH(DK *, g_dk_resume_chain)
-TUR_TLS_FRESH(intptr_t, g_dk_resume_val)
-TUR_TLS_FRESH(DK **, g_dk_meta)
-TUR_TLS_FRESH(size_t, g_dk_meta_n)
-TUR_TLS_FRESH(size_t, g_dk_meta_cap)
+TUR_TLS_FRESH(void **, __dk_reap_v, __dk_reap_v__at);
+TUR_TLS_FRESH(unsigned char *, __dk_reap_kind, __dk_reap_kind__at);
+TUR_TLS_FRESH(size_t, __dk_reap_n, __dk_reap_n__at);
+TUR_TLS_FRESH(size_t, __dk_reap_cap, __dk_reap_cap__at);
+TUR_TLS_FRESH(int, __dk_entry_depth, __dk_entry_depth__at);
+TUR_TLS_FRESH(tur_jmp_buf *, g_dk_driver, g_dk_driver__at);
+TUR_TLS_FRESH(DK *, g_dk_resume_chain, g_dk_resume_chain__at);
+TUR_TLS_FRESH(intptr_t, g_dk_resume_val, g_dk_resume_val__at);
+TUR_TLS_FRESH(DK **, g_dk_meta, g_dk_meta__at);
+TUR_TLS_FRESH(size_t, g_dk_meta_n, g_dk_meta_n__at);
+TUR_TLS_FRESH(size_t, g_dk_meta_cap, g_dk_meta_cap__at);
 #define __dk_reap_v (*__dk_reap_v__at())
 #define __dk_reap_kind (*__dk_reap_kind__at())
 #define __dk_reap_n (*__dk_reap_n__at())
@@ -2688,7 +2688,7 @@ extern void ** tur_tls_current_fiber_ptr(void);
 #define tur_current_fiber (*(FiberBlock **)tur_tls_current_fiber_ptr())
 #endif
 #if defined(TUR_TLS_FRESH) && !defined(tur_current_fiber)
-TUR_TLS_FRESH(FiberBlock *, tur_current_fiber)
+TUR_TLS_FRESH(FiberBlock *, tur_current_fiber, tur_current_fiber__at);
 #define tur_current_fiber (*tur_current_fiber__at())
 #endif
 static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {
