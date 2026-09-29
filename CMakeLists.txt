@@ -729,6 +729,12 @@ add_test(
   COMMAND bash tests/run-flags.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# macos-jit-hang-loses-both-diagnostics: a ctest-level bound, so a hang fails
+# this test by name instead of running until the CI job's wall clock.  This
+# target had none, and it is in the JIT leg of CI because it owns the
+# `jit-ffi-*` cases -- dynamic FFI, callbacks and threads.  Generous against a
+# ~1-2 min run: this bounds a hang, it does not assert performance.
+set_tests_properties(tur_flags_tests PROPERTIES TIMEOUT 900)
 # engine-selection-plan E1-E3: `tur run` engine resolution ladder
 # (--engine > TUR_ENGINE > build.tur :engine > cc), the unsatisfiable-engine
 # hard errors, and the P0 manifest-experiment gate.  Runs on every build --
@@ -1267,7 +1273,20 @@ if(TUR_JIT)
             bash tests/turi/repl-spice-jit.sh
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
-  set_tests_properties(tur_repl_spice_jit PROPERTIES RUN_SERIAL TRUE)
+  # macos-jit-hang-loses-both-diagnostics: RUN_SERIAL was the only property
+  # here, so a hang in either of these whole-corpus targets ran until the CI
+  # job's `timeout-minutes` killed the job -- which skips the remaining
+  # `if: always()` steps and destroys the log.  A ctest TIMEOUT fails the test
+  # instead, and names which one, which is most of the diagnosis.
+  #
+  # The numbers are hang bounds, not performance assertions.  Measured off the
+  # ci-metrics branch, tur_jit_fixture_tests runs ~440s median on Linux, ~348s
+  # on a 5-core mac and ~730s median / ~940s p90 on the 3-core mac CI draws
+  # ~97% of the time; 1500 is ~1.6x that p90.  repl-spice-jit is a short
+  # script.  The workflow also alarms the whole ctest invocation at 2100s, as a
+  # backstop for the case where more than one target runs long at once -- these
+  # per-test values are what catch the single hang, which is what has happened.
+  set_tests_properties(tur_repl_spice_jit PROPERTIES RUN_SERIAL TRUE TIMEOUT 600)
   # J3 (jit-engine-plan section 5): the full fixture corpus through
   # `tur jit`.  RUN_SERIAL like the other whole-corpus
   # harnesses -- it fans out across nproc internally.  TUR is pinned to
@@ -1280,7 +1299,7 @@ if(TUR_JIT)
             bash tests/run-jit.sh
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
-  set_tests_properties(tur_jit_fixture_tests PROPERTIES RUN_SERIAL TRUE)
+  set_tests_properties(tur_jit_fixture_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 1500)
 endif()
 # Type-checks a curated allowlist of non-auto-loaded stdlib files so
 # regressions in their loadability are caught even when no fixture

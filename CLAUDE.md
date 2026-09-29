@@ -201,23 +201,58 @@ default to `ASAN_OPTIONS=detect_leaks=0`. Override with
 
 #### macOS startup hang -- outdated ASan runtime
 
-On some newer macOS/dyld the clang ASan runtime can **deadlock at startup** --
-it spins forever in a spinlock inside `InitializeShadowMemory` while walking the
-dyld shared cache, *before* `main()` runs. The symptom is that **every** `tur`
-invocation hangs, including `tur --version`. This is a toolchain/OS runtime bug,
-not a bug in `tur`: the ASan runtime is baked into the binary by the compiler at
-link time, so an old clang links an old runtime that predates the current dyld
-layout. It reproduces with a bare `int main(){}` compiled `-fsanitize=address`,
-and it is triggered by *rebuilding* with the outdated toolchain -- not by any
-turmeric source change.
+On an OS-ahead-of-toolchain pairing the clang ASan runtime can **deadlock at
+startup** -- it spins forever in a spinlock inside `InitializeShadowMemory` while
+walking the dyld shared cache, *before* `main()` runs. The symptom is that
+**every** `tur` invocation hangs, including `tur --version`. This is a
+toolchain/OS runtime bug, not a bug in `tur`. See
+[docs/reported/macos-asan-runtime-deadlocks-at-startup.md](docs/reported/macos-asan-runtime-deadlocks-at-startup.md),
+which carries the measured mechanism and whether it is currently live.
+
+**Check that this is actually your problem before working around it.** It does
+not reproduce on a matched pairing, and it needs no `tur` at all to test:
+
+```sh
+printf 'int main(void){return 0;}\n' > bare.c
+cc -fsanitize=address -g -o bare-asan bare.c
+perl -e 'alarm 15; exec @ARGV' ./bare-asan     # hangs only when live
+```
+
+(`perl -e 'alarm N; exec @ARGV'` rather than `timeout N`: macOS ships no
+coreutils `timeout`, and this is the form CI uses.) A hang that survives that
+passing is something else -- do not reach for `-DTUR_DEBUG_SANITIZE=OFF`. The
+variable to compare is **the Command Line Tools version against the OS
+version**, not the Darwin version against a threshold.
+
+On macOS the runtime is **not** linked into the binary: an absolute,
+version-pinned rpath (`.../CommandLineTools/usr/lib/clang/<N>/lib/darwin`) makes
+it a dylib loaded at every startup, which is why remedy 1 below fixes binaries
+you already built. Runtimes are not interchangeable either -- the binary imports
+a guard symbol naming the compiler that built it, so forcing a foreign runtime
+under it is rejected, not silently used.
 
 `TUR_DEBUG_SANITIZE` defaults **ON on every platform** (macOS included) -- we do
 not auto-disable anywhere, because a silent, permanent loss of sanitizer
 coverage in CI is worse than a loud hang (the `tur --version` CI smoke check
-catches a real deadlock). Two ways to deal with it locally:
+catches a real deadlock). Three ways to deal with it locally, cheapest first:
 
-- **Real fix (keeps ASan/UBSan coverage):** build with a current LLVM whose ASan
-  runtime understands the new dyld cache -- e.g. Homebrew LLVM:
+- **Update the Command Line Tools.** The only remedy that needs no rebuild,
+  because the runtime is loaded from the toolchain rather than linked in:
+
+  ```sh
+  softwareupdate --list        # look for a Command Line Tools update
+  softwareupdate --install "Command Line Tools for Xcode-<version>"
+  ```
+
+  Verify with `DYLD_PRINT_LIBRARIES=1 ./build/tur --version` that the dylib now
+  loading is the new one.
+
+- **Keeps ASan/UBSan coverage, but read the next section first:** build with a
+  current LLVM whose ASan runtime understands the current dyld cache -- e.g.
+  Homebrew LLVM. This is the route that then makes **every** fixture fail on
+  `___asan_version_mismatch_check_v8` unless you pin the fixture compiler to the
+  same toolchain; that is the same guard symbol described above, and
+  "macOS: building fixtures against a sanitized `libturi.a`" below has the fix:
 
   ```sh
   brew install llvm
@@ -234,7 +269,8 @@ catches a real deadlock). Two ways to deal with it locally:
   ```
 
 The Release build never carries the sanitizers, so `tur --version` on a Release
-build always works regardless.
+build always works regardless -- the quickest way to tell this apart from a hang
+in `tur` itself.
 
 #### macOS: building fixtures against a sanitized `libturi.a`
 
@@ -242,9 +278,9 @@ A first fixture-suite run on macOS can produce dozens of failures that are a
 **toolchain mismatch, not a product regression**. Two traps, both of which the
 harness reports as `build failed`:
 
-- **Mixed toolchains.** If `tur` is built with Homebrew LLVM (the workaround
-  above) but fixtures link with Apple's system `cc`, every fixture that pulls in
-  the ASan-instrumented `libturi.a` fails to link with
+- **Mixed toolchains.** If `tur` is built with Homebrew LLVM (remedy 2 of the
+  section above) but fixtures link with Apple's system `cc`, every fixture that
+  pulls in the ASan-instrumented `libturi.a` fails to link with
   `Undefined symbols ... ___asan_version_mismatch_check_v8`. Either pin the
   fixture compiler to the same toolchain (`CC=/opt/homebrew/opt/llvm/bin/clang
   bash tests/run-jit.sh`) or -- better -- build unsanitized with Apple clang,

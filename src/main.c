@@ -898,17 +898,23 @@ static Buf *g_split_lib_sink = NULL;
  * under --debug, whose `#line` spans would point into a unit that was
  * compiled for another program.  TUR_PRELUDE_SPLIT=0 turns it off.
  *
- * On by default on Linux only; elsewhere TUR_PRELUDE_SPLIT=1 opts in.  On
+ * On by default on Linux and macOS; elsewhere TUR_PRELUDE_SPLIT=1 opts in.  On
  * Windows the two units link, but the keyword records they share (SYM2,
  * `__attribute__((weak)) const`) come out pointing at the wrong bytes and
  * quoted symbols print as other strings
- * (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md).  On macOS
- * a Scheme value kept only in a Turmeric map is collected under it
- * (r7rs-gc-seam; docs/reported/r7rs-prelude-split-gc-seam-on-macos.md). */
+ * (docs/reported/r7rs-prelude-split-wrong-symbols-on-windows.md).
+ *
+ * macOS was off for the same kind of reason until 2026-09-28: a Scheme value
+ * kept only in a Turmeric map was collected under it, because Mach-O runs
+ * initializers in link order and ignores the collector's `constructor(101)`
+ * across object files, so the program unit allocated archive memory before the
+ * library unit's copy installed the collector's allocator hook.  The hook is
+ * now installed from __tur_static_init as well, which is ahead of every band
+ * on every platform (docs/archive/r7rs-prelude-split-gc-seam-on-macos.md). */
 static bool prelude_split_applies(void) {
     const char *e = getenv("TUR_PRELUDE_SPLIT");
     if (e && strcmp(e, "0") == 0) return false;
-#if !defined(__linux__)
+#if !defined(__linux__) && !defined(__APPLE__)
     if (!e || strcmp(e, "1") != 0) return false;
 #endif
     if (sizeof(void *) != 8 || g_emit_debug_lines || g_manifest_sink) return false;

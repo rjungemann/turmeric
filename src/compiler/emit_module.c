@@ -18865,7 +18865,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
 
     /* S1b: after every registered initializer's own definition (they are all
      * `static`), and after `main` -- the preamble carries the declaration. */
-    static_init_emit(out);
+    static_init_emit(out, r7rs_gc_active(false));
 
     /* J2: the REPL's in-process spice build compiles the whole spice as ONE
      * single-file TU, and its high-arity exports need the same
@@ -20419,8 +20419,10 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
 
     /* S1b: after every registered initializer's definition.  Emitted in
      * separate-compilation mode too -- there is no `main` in this TU to call
-     * it, so the constructor wrapper is the whole mechanism there. */
-    static_init_emit(out);
+     * it, so the constructor wrapper is the whole mechanism there.  This path
+     * never pastes the collector (emit_r7rs_gc_prologue is the program
+     * emitter's), so there is no allocator hook for it to install. */
+    static_init_emit(out, false);
 
     buf_free(&file);
     buf_free(&body);

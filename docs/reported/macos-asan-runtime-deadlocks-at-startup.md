@@ -112,7 +112,15 @@ unsanitized with Apple clang, which sidesteps both.
 
 ## Does it reproduce today?
 
-**No, on the pairing this was checked against (2026-09-18):**
+**Re-checked 2026-09-28: still no**, on the same host and the same pairing
+(macOS 27.0, CLTools_Executables 27.0.0.0, Apple clang 21.0.0
+clang-2100.3.25.1, arm64). The bare repro below exits 0 inside its 15s alarm;
+`build/tur` links `@rpath/libclang_rt.asan_osx_dynamic.dylib` and runs
+`--version` immediately. The CI backstop has moved line but is intact --
+`perl -e 'alarm 10; exec @ARGV' ./build/tur --version` at
+`.github/workflows/ci.yml:167`.
+
+**No, on the pairing this was first checked against (2026-09-18):**
 
 | | |
 |---|---|
@@ -238,3 +246,17 @@ deletable in one piece, along with the `TUR_DEBUG_SANITIZE` rationale comment
 at `CMakeLists.txt:25-32`. Do not let the two drift: the workarounds above are
 duplicated from it deliberately, so a reader who lands on either one has the
 whole answer.
+
+**Synced 2026-09-28.** That section had drifted from this report's corrected
+mechanism, in three ways that each cost a reader something:
+
+- It still said the runtime is "baked into the binary by the compiler at link
+  time", and so listed no CLT update -- the one remedy that fixes binaries
+  already built. It now leads with it.
+- It gave no way to tell whether the hazard is live, so its first suggestion for
+  any macOS hang was a rebuild. It now leads with the bare `int main(void){}`
+  repro and says plainly that a hang surviving a passing repro is something
+  else.
+- Its Homebrew-LLVM remedy and the "building fixtures against a sanitized
+  `libturi.a`" section immediately below it are the same guard symbol seen from
+  two sides, and neither said so. They now cross-reference each other.

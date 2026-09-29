@@ -1049,6 +1049,32 @@ typedef struct tur_gc_rt_allocator {
 } tur_gc_rt_allocator;
 extern void tur_rt_set_allocator(const tur_gc_rt_allocator *a) __attribute__((weak));
 
+/* Installing it, separately from the constructor below, because a constructor
+ * is not always early enough.  The prelude split (src/compiler/emit_split.h)
+ * pastes this collector into BOTH units of a program and arms the constructor
+ * in only one of them -- and Mach-O ignores a constructor's priority ACROSS
+ * object files, running initializers in link order instead.  The program unit
+ * links first, so its __tur_static_init ran before the library unit's
+ * constructor got here, and the HAMT that `__tur_module_def_init` builds and
+ * the symbol table that `__tur_symtab_seed` grows were libc blocks the
+ * collector could not trace through: a value kept only in a Turmeric map was
+ * freed under it (docs/archive/r7rs-prelude-split-gc-seam-on-macos.md).
+ *
+ * So the emitter also calls this from the first statement of
+ * __tur_static_init, in whichever unit has it, before anything that unit does
+ * can allocate.  Calling it twice is a no-op: the table is the same one, and
+ * every copy of these functions works the same shared heap (tur_gc_G is one
+ * variable across the split).  It is safe before tur_gc_init too --
+ * tur_gc_malloc initializes the collector on its first call.  Where TUR_GC_ON
+ * is 0 the stub at the bottom of this file answers that call instead. */
+static __attribute__((unused)) void tur_gc_install_rt_allocator(void) {
+    if (!tur_rt_set_allocator) return;
+    static const tur_gc_rt_allocator ours = {
+        tur_gc_malloc, tur_gc_calloc, tur_gc_realloc, tur_gc_free
+    };
+    tur_rt_set_allocator(&ours);
+}
+
 /* ---- threads ------------------------------------------------------------ */
 
 /* Before blocking: spill the registers and the stack pointer into this
@@ -1372,15 +1398,13 @@ static inline bool tur_gc_intr_ours(void) { return tur_gc_self && tur_gc_self->g
 #define kevent(kq, c, nc, ev, nev, ts)  TUR_GC_BLOCKING(kevent((kq), (c), (nc), (ev), (nev), (ts)))
 
 /* Before every other constructor in the unit (101 is the first user
- * priority), so the archive's first allocation already goes through us. */
+ * priority), so the archive's first allocation already goes through us.  The
+ * priority holds only WITHIN an object file on Mach-O, which is why the
+ * install is also called explicitly from __tur_static_init -- see
+ * tur_gc_install_rt_allocator. */
 static __attribute__((constructor(101))) void tur_gc_ctor(void) {
     if (!tur_gc_G) tur_gc_init();
-    if (tur_rt_set_allocator) {
-        static const tur_gc_rt_allocator ours = {
-            tur_gc_malloc, tur_gc_calloc, tur_gc_realloc, tur_gc_free
-        };
-        tur_rt_set_allocator(&ours);
-    }
+    tur_gc_install_rt_allocator();
     pthread_mutex_lock(&tur_gc_G->world);
     tur_rt_tls_roots(tur_gc_add_tls_root);
     pthread_mutex_unlock(&tur_gc_G->world);
@@ -1411,5 +1435,7 @@ TUR_RT_API void tur_region_free(void *p);
 static void *tur_gc_region_alloc(size_t n) { return tur_region_alloc_or_malloc(n); }
 static void  tur_gc_region_free(void *p) { tur_region_free(p); }
 static __attribute__((unused)) void tur_gc_collect(void) { }
+/* Nothing to install: these entry points ARE libc. */
+static __attribute__((unused)) void tur_gc_install_rt_allocator(void) { }
 
 #endif
