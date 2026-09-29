@@ -48,10 +48,18 @@ thread pointer afresh at each access, and passed every run.
 
 ## Fix
 
-- `TUR_TLS_FRESH(T, x)` (preamble head, clang only) defines `x__at()`, which
-  returns `&x`. It is `noinline`, and an empty `asm volatile` with a memory
-  clobber keeps clang from deducing that it reads no memory and merging two
-  calls to it.
+- `TUR_TLS_FRESH(T, x, x__at)` (preamble head, clang only) defines
+  `x__at()`, which returns `&x`. It is `noinline`, and an empty
+  `asm volatile` with a memory clobber keeps clang from deducing that it
+  reads no memory and merging two calls to it. The r7rs prelude split
+  (on by default on Linux) reads the emitted text token by token, before
+  preprocessing, and shaped the macro twice. The accessor's name is an
+  argument rather than pasted from `x`, since the split's renaming did not
+  see a pasted name (the first version failed to build under clang there).
+  Each use ends in `;`, which the `extern` declaration the expansion ends
+  with takes up. An unterminated use ran on into the next function in the
+  split's eyes, the program unit lost that function's body, and every
+  split build fell back to one unit.
 - The state `tur_fiber_block_resume` swaps per fiber is `#define`d to
   `(*x__at())`: `tur_current_fiber`, the DK registry, entry depth, driver
   and resume state (`emit_dk_runtime.c`), and the live-escape set. Each block

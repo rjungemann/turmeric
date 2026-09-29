@@ -12381,10 +12381,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * addresses each access through %fs afresh and never showed it; clang
      * did on Linux as on macOS.
      *
-     * TUR_TLS_FRESH(T, x) defines x__at(), which returns x's address and
-     * cannot be merged with another call to itself: not inlined, and the
+     * TUR_TLS_FRESH(T, x, x__at) defines x__at(), which returns x's address
+     * and cannot be merged with another call to itself: not inlined, and the
      * empty asm with a memory clobber keeps clang from deducing that it
-     * reads no memory.  A thread-local that moves with a fiber is then
+     * reads no memory.  The accessor's name is spelled out rather than
+     * pasted from x, so that the r7rs prelude split's renaming
+     * (emit_split_rename), which sees tokens, not expansions, renames the
+     * definition and its uses alike.  For the same reader each use ends in
+     * `;`, taken up by the extern declaration the expansion ends with: an
+     * unterminated use ran on, in that transform's eyes, into the next
+     * function, whose body the program unit then dropped
+     * (emit_split_state).  A thread-local that moves with a fiber is then
      * #defined to (*x__at()) -- the state tur_fiber_block_resume swaps: the
      * current fiber, the DK registry and driver, the live-escape set.  (The
      * collector's per-thread record takes the cheaper route of TUR_GC_ENTRY,
@@ -12394,7 +12401,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * applied to thread-locals that belong to the thread rather than the
      * fiber, tur_panicking above all, which every CPS call site reads. */
     buf_puts(out, "#if defined(__clang__)\n");
-    buf_puts(out, "#  define TUR_TLS_FRESH(T, x) __attribute__((noinline, unused)) static T *x##__at(void) { __asm__ volatile (\"\" ::: \"memory\"); return &x; }\n");
+    buf_puts(out, "#  define TUR_TLS_FRESH(T, x, at) __attribute__((noinline, unused)) static T *at(void) { __asm__ volatile (\"\" ::: \"memory\"); return &x; } extern int tur_tls_fresh_end\n");
     buf_puts(out, "#endif\n");
     if (!r7rs_gc_active(shared)) {
         /* r7rs-gc's fiber hooks (tur_fiber_block_resume); the collector's
@@ -13988,7 +13995,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
                 "tur_current_fiber", "void **", "tur_tls_current_fiber_ptr", "FiberBlock **");
     /* Read on the fiber's side of every yield (TUR_TLS_FRESH says why). */
     buf_puts(out, "#if defined(TUR_TLS_FRESH) && !defined(tur_current_fiber)\n"
-                  "TUR_TLS_FRESH(FiberBlock *, tur_current_fiber)\n"
+                  "TUR_TLS_FRESH(FiberBlock *, tur_current_fiber, tur_current_fiber__at);\n"
                   "#define tur_current_fiber (*tur_current_fiber__at())\n"
                   "#endif\n");
     /* Phase R2: tur_panic_with body — placed here so FiberBlock and
