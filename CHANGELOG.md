@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.56.3] -- 2026-09-28
 
 ### Added
 
@@ -20,6 +20,123 @@ All notable changes to Turmeric are documented here.
   It was the last SRFI held by r7rs-srfi-plan S2: `setter` is keyed on
   procedure identity, which standard procedures did not keep until
   2026-09-27.
+
+- **Multi-party sessions take a timed receive.** A `defprotocol` step
+  `(timeout (-> A B T) [ok ...] [expired ...])` lets the receiving role give
+  up after a deadline supplied at the op, `(recv-timeout-from ch A ms)`,
+  matched like `recv-timeout`. Only the receiver observes the outcome, so
+  projection requires every other role -- the sender included -- to continue
+  the same way in both branches (TUR-E0220, checked at declaration for timed
+  protocols). At run time an expiry leaves the router slot a skip: the
+  message the receiver gave up on is dropped when it is sent, instead of
+  blocking the sender forever or arriving at the receiver's next receive.
+
+### Changed
+
+- **A compiled Saffron program allocates from the r7rs-gc collector.** A
+  Saffron `any` value aliases freely -- a widen boxes a by-value payload, the
+  box is copied into arguments, fields and results, and a dynamic call may
+  keep any of them -- so most of those boxes have no static owner and a
+  rebuild loop leaked linearly. The conservative collector every compiled
+  `#lang r7rs` program already runs now backs single-unit compiled
+  `#lang saffron` as well (`TUR_SAFFRON_GC=0` / `--no-saffron-gc` opts out);
+  the static drops still run. Measured: a rebuild-map-fold loop peaks at 6 MB
+  instead of 84 MB and growing, no slower.
+
+- **A GADT constructor application knows its index.** `(LNil)` is
+  `(LVec Zero)` and `(LCons 7 (LNil))` is `(LVec (Succ Zero))`: the index
+  rides beside the value's type, which stays the bare ADT, on the channel the
+  size indices already use -- so a `let`, an ascription and a declared return
+  carry it, and no unification rule changes. Call arguments, ascriptions,
+  annotated lets and a declared return against the body's tail are checked
+  against it, and only a provable clash of two type constants is rejected. A
+  bare argument whose index is fully known is refined to the parameter's
+  application, so `(lhead (ltail v))` now needs no annotation.
+
+- **CPS mutual tail calls are jumps.** A strongly-connected component of the
+  CPS tail-call graph (2..8 members, 32 parameter slots) is fused into one
+  dispatching function, so two procedures that tail-call each other no longer
+  overflow below `-O2`; each member keeps a one-line wrapper for outside,
+  helper and non-tail calls. T5's direct tail-call groups also stop refusing
+  a CPS-colored function the CPS backend declines -- it is emitted as plain
+  direct C, whose tail calls are C tail positions.
+
+- **stdlib spells its last `^fat` callback types.** `free-bind` / `free-fmap`
+  / `free-run`, parsec's `mbind`, `compose-middleware-of`'s base and
+  `future-map` / `future-then` take real function types in place of `:int`
+  and `ptr<void>`, so a wrong-arity or wrong-register-class lambda is a
+  TUR-E0001 instead of a silent miscall; the C bodies are unchanged. Typing
+  them exposed a checker hole, now closed: a variadic callee's fixed
+  `fn`-typed parameters were never shape-checked.
+
+- **The refine solver's EUF core is indexed.** Terms intern through an
+  open-addressed hash index, congruence closes by a per-round signature table
+  instead of comparing all pairs, and the shared set is recorded at
+  registration. Corpus output is byte-identical -- verdicts and cap telemetry
+  alike -- and the 512-term stress unit drops from ~510 ms to ~70 ms.
+
+### Fixed
+
+- **Four more classes of value are freed in emitted code.** A dynamic closure
+  env is released for returned lambdas and for lambdas passed to
+  non-retaining parameters; a by-value recursive ADT's spine is freed where a
+  consuming callee does not pass it on, and a fresh spine lent to a
+  non-retaining callee is freed after the call; a shared view is cloned where
+  it becomes an owner rather than double-released (four ASan
+  heap-use-after-frees, with the new TUR-E0108 for a `ref` field that would
+  escape as a result); and a lambda-captured `^mut` cell is freed at the
+  `let`'s scope end when every closure capturing it is provably dead.
+
+- **A panic no longer strands an open region generation.** On both back ends
+  a region scope's call ran the panic-propagation check before its pop, so a
+  panic out of a `with-region` left the generation open and every later
+  allocation landed in it. The bracket now retires its generation on the
+  panic arm, and every emitted catch boundary records the region depth on
+  entry and retires down to it, covering a generation stranded any other way.
+
+- **`letrec` members that capture and call each other compile.** Two
+  capturing members that call each other -- and so a `#lang r7rs` body's
+  internal defines of that shape -- failed in `cc` with `'od_N' undeclared`.
+  Elaboration now predicts which members capture before elaborating any init,
+  and emission zeroes a not-yet-bound slot and fills it the moment the target
+  is bound.
+
+- **A re-entrant continuation invoked on another thread is refused.** Its
+  image is a copy of the capturing thread's stack at that thread's addresses;
+  invoked elsewhere it copied the main thread's frames over the worker's, so
+  the worker ran the rest of the main program itself and exited the process
+  while the real main thread was still in `pthread_join`. Both back ends now
+  record the capturing thread and raise a guardable error, with no
+  `dynamic-wind` thunk run.
+
+- **A colored serial-shift receiver is admitted, and its effects reach the
+  enclosing handler.** The refusal keyed on coloring, which is conservative;
+  it now keys on whether an effect actually escapes. A receiver typed
+  `k : serial-cont` takes the DK chain as its declared spelling instead of
+  always `void *`, and when an effect does escape a named receiver the reset
+  is lowered as an ordinary colored call on its own continuation, so the
+  effect walks out to the handlers around it.
+
+- **The JIT emits no struct-valued statement expressions, and the c2mir bug
+  behind them is fixed upstream.** The union widen, `dyn_widen_to_any`'s
+  by-value box and `emit_agg_box`'s box now build their values with
+  statements and leave a plain expression. The defect itself -- c2mir
+  reserved a struct statement expression's result slot at the frame size so
+  far, while stack variables are laid out afterwards from offset 0, so the
+  slot overlapped the first of them and the `({ ... })` copy-out overwrote
+  it -- is root-caused and patched in the fork: the MIR pin moves to
+  96c34860, which assigns those slots after the stack layout, picking up
+  c2mir's C11 6.3.1.8 arithmetic conversion on the way (on win64
+  `long long OP unsigned int` is now `long long`). Generated code no longer
+  depends on either fix; user inline C still can, so
+  `jit-inline-c-struct-stmtexpr-slot` pins it.
+
+- **The `linux-aarch64` release binary ships again.** That leg had failed
+  since v0.56.1, so both v0.56.1 and v0.56.2 published without
+  `turmeric-<tag>-linux-aarch64.tar.gz`: a GCC `-Wmaybe-uninitialized` false
+  positive on `eval.c`'s `EX_DYN_OP` operand read was fatal under `-Werror`
+  on that backend alone. The `release` job's gate had also tolerated a failed
+  build leg, which is why it shipped twice unnoticed; it no longer does.
 
 ## [0.56.2] -- 2026-09-28
 

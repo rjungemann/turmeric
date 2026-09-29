@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.56.2` -- `call/cc` keeps far less memory on both back ends, output that stops mid-line reaches the Try Turmeric page, and a `define-library` may define a standard or stdlib name.
+**Latest release:** `v0.56.3` -- compiled Saffron allocates from the r7rs-gc collector, emitted code frees four more classes of value, CPS mutual tail calls are jumps, and the `linux-aarch64` release binary ships again.
 
 ## What
 
