@@ -102,8 +102,10 @@ The guarantee applies to:
 - the named-let / loop idiom `(let loop [...] ... (loop ...))`,
 
 with tail position computed through `if`, `match` arms (guarded ones included),
-`cond`/`when` (which macro-expand to `if`), `do`, and `let`/`letrec`.  For example, both of these are lowered to a
-loop:
+`cond`/`when` (which macro-expand to `if`), `do`, `let`/`letrec`, and the LAST
+operand of `and` / `or` -- `(and (>= n 0) (all-ok? (- n 1)))` is `if (!(n >=
+0)) return false;` and a backedge (`tests/fixtures/tailcall-and-or-deep`).  For
+example, both of these are lowered to a loop:
 
 ```turmeric no-check
 ; self-recursive defn -- tail call in the `if` else-branch
@@ -183,8 +185,12 @@ are left as ordinary recursive calls -- correct, but not stack-optimized:
   plain top-level function, a return type that differs, or more than 8 members
   / 16 parameters -- and **indirect** tail calls through a typed `fn` value
   (Saffron's dynamic calls through an `any` are handled; see below);
-- self-recursive functions with pass-by-pointer struct, function-typed, or
-  poly-fn parameters;
+- self-recursive functions with pass-by-pointer struct, function-typed,
+  poly-fn, or carrier-ABI (a by-value recursive ADT such as a `(Tree float)`)
+  parameters -- a backedge cannot reassign them;
+- a call under a `let` that binds a function value or a carrier-ABI value (a
+  `Vec`, a list, a `:heap` struct, a by-value recursive ADT) -- the whole `let`
+  is off the tail path, whether or not the binding is live at the call;
 - a self-recursive function with an explicit `defer` in the block around the
   call: a `defer` you wrote runs after the call, innermost first, and that
   order is observable, so it cannot move ahead of a backedge;

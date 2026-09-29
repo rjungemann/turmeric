@@ -1,0 +1,33 @@
+;; tail-grammar-skips-and-or-and-carrier-lets (the `and`/`or` half): the LAST
+;; operand of `and` / `or` is the form's value, so a self call there is in
+;; tail position.  `and`/`or` are builtins, and the tail grammar had no
+;; builtin arm -- `^tailcall` refused both with TUR-E0716 ("an argument
+;; position"), and without the annotation the call was an ordinary C frame.
+;;
+;; The `flags` file builds this at -O0 (`--debug`): with no inliner to borrow
+;; a pass from, either the emitter produced a `__tur_tailcall:` backedge or this
+;; overflows the C stack long before 10,000,000.
+;;
+;; Each form is exercised on both of its exits: the early answer (a test that
+;; decides the form) and the fall-through to the backedge.  The three-operand
+;; forms pin that only the LAST operand is the tail.
+
+(defn all-ok? [n : int] : bool
+  (and (>= n 0) ^tailcall (all-ok? (- n 1))))
+
+(defn any-hit? [n : int] : bool
+  (or (= n 0) ^tailcall (any-hit? (- n 1))))
+
+(defn all-even-steps? [n : int stop : int] : bool
+  (and (>= n stop) (= (mod n 1) 0) ^tailcall (all-even-steps? (- n 1) stop)))
+
+(defn find-mark? [n : int mark : int] : bool
+  (or (< n 0) (= n mark) ^tailcall (find-mark? (- n 1) mark)))
+
+(defn main [] : int
+  (println (all-ok? 10000000))              ; runs down to -1: false
+  (println (any-hit? 10000000))             ; hits 0: true
+  (println (all-even-steps? 10000000 5))    ; stops below 5: false
+  (println (find-mark? 10000000 3))         ; finds the mark: true
+  (println (find-mark? 10000000 -7))        ; runs off the end: true (n < 0)
+  0)

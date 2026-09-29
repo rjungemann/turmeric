@@ -1,5 +1,47 @@
 # The tail grammar skips `and`/`or` and a `let` that binds a carrier value
 
+**Narrowed 2026-09-29: the `and`/`or` half is fixed; the carrier-`let`
+half stays open, and the audit it asked for has a result.**
+
+## The `and`/`or` half -- fixed
+
+Fix direction 1.  One predicate, `tco_builtin_short_circuit`
+(`emit_fns.c`), is asked by all three parts of the tail grammar, so they
+cannot disagree (TR1): `tco_mark` recurses into the LAST operand; the
+`^tailcall` verifier passes the enclosing position to the last operand and
+refuses the others with the new TC_SC_TEST ("only the LAST operand of `and` /
+`or` is in tail position"); `emit_tail` lowers `(and a ... z)` to `if (!(a))
+return false; ... <tail z>` and `(or a ... z)` to `if (a) return true; ...
+<tail z>`, the early answer going back through `emit_tail` itself as a literal
+so it takes the ordinary return path.  Pinned by
+`tests/fixtures/tailcall-and-or-deep` (-O0, 10,000,000 steps, both exits of
+two- and three-operand forms), `tests/fixtures/tailcall-and-or-annot` (the
+`expected.c` of the lowering) and
+`tests/fixtures/errors/tailcall-and-or-test-operand`.  Two stdlib snapshots
+moved with it (`map-typed-consumer`, `set-typed-consumer`: an `and` in tail
+position now early-returns and makes a genuine tail call).
+
+## The carrier-`let` half -- audited, still open
+
+Removing `tco_let_simple`'s carrier-ABI arm outright was tried.  The report's
+own shapes then ran (a `Vec`, a `Cons` list, a by-value recursive ADT and a
+`:heap` struct bound in the `let`, 1,000,000 steps at -O0, peak RSS matching
+the old recursive path), but **21 fixtures** failed the emitted-C ratchet with
+`-Wint-conversion` -- `tur_adt_Vec__int *` initialised from an `int64_t`
+producer, and similar -- because `emit_tail`'s inline `let` arm repeats only
+part of `emit_let_value`'s per-binding init ladder (the by-value carrier
+bridge, the recorded-pointer cast and the erased-word cast; not the rest).  So
+the bail is load-bearing, and it was restored.
+
+The fix is structural: give `emit_let_value` and the inline arm ONE
+per-binding init emission, then drop the bail.  The 21 fixtures
+(`borrow-param-unique-mut-allowed`, `show-collections*`,
+`vec-multiword-struct-*`, `schan-worker-pool`, ...) are the test set for it.
+Found on the way: a carrier-ABI PARAMETER (a `(Tree float)`) is refused
+separately -- a backedge cannot reassign it -- which the performance guide's
+Boundary list did not name; it does now, beside the carrier `let`.
+
+
 **Severity: low-medium.** These are gaps in what can be written, not wrong
 answers. `^tailcall` refuses both shapes with TUR-E0716, so a loop that asks
 for the guarantee is told it does not have it. A loop that does not ask
@@ -22,7 +64,7 @@ where it lives now:
   is CPS-lowered, so `tco_mark`/`emit_tail` never see it (plan TR3). A CPS
   function's self tail call has been a backedge since 2026-09-26. Its
   cross-function tail call is
-  [cps-self-tail-call-relies-on-sibling-call](cps-self-tail-call-relies-on-sibling-call.md).
+  [cps-self-tail-call-relies-on-sibling-call](../archive/cps-self-tail-call-relies-on-sibling-call.md).
 
 ## Repro
 

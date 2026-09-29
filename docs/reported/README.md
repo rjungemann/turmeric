@@ -2321,7 +2321,7 @@ ran the fixture that shows it.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [tail-grammar-skips-and-or-and-carrier-lets](tail-grammar-skips-and-or-and-carrier-lets.md) | low-medium | What was left of the plan's T-D4 audit, which was never a stage. The last operand of `and`/`or` is not a tail position (`EX_BUILTIN` `BS_AND_SC`/`BS_OR_SC` has no `tco_mark` arm), and a `let` that binds a carrier-ABI value (`(vec-new)`, `(list ...)`) takes the whole `let` off the tail path (`tco_let_simple`). `^tailcall` refuses both with TUR-E0716; unannotated, both segfault at `-O0` and pass at `-O2` only because gcc makes the loop. `handle` arms are out of reach by design (CPS). Fix: a last-operand tail arm lowered like the equivalent `if`, and re-check the carrier bail now that `emit_tail` shares the let bridge |
+| [tail-grammar-skips-and-or-and-carrier-lets](tail-grammar-skips-and-or-and-carrier-lets.md) | low-medium | **Narrowed 2026-09-29**: the last operand of `and`/`or` is a tail position (`tailcall-and-or-deep`, `tailcall-and-or-annot`, `errors/tailcall-and-or-test-operand`). Open: `tco_let_simple`'s carrier-ABI bail -- audited, still load-bearing (dropping it sent 21 fixtures' pointer-represented carrier bindings through emit_tail's partial init ladder, -Wint-conversion); needs one shared per-binding init emission first |
 
 ## Found archiving saffron-lang-plan (filed 2026-09-28)
 
