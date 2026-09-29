@@ -63,8 +63,8 @@ at link time:
    decls region are dropped when no identifier they declare survives in the
    program's own text. A full preamble keeps every include -- its own runtime
    uses them. A dropped `"hamt.h"` leaves its own `<stdint.h>`, `<stdbool.h>`
-   and `<stdio.h>` behind, so the TU's first system header is unchanged (see
-   the macOS note under Results).
+   and `<stdio.h>` behind, so the TU's first system headers are unchanged (a
+   precaution; see the macOS note under Results).
 
 `TUR_JIT_NO_PRUNE=1` turns it off. Pruning the decls region's ~500 prototypes
 as well was measured (4 ms of c2mir's 67, unsanitized) and not done.
@@ -107,21 +107,36 @@ definition on an indented line, which the chunker leaves in the chunk above,
 and that chunk was named for its first definition only. Such a chunk is now a
 root. All three had passed silently before the W0071 check existed.
 
-**The first CI run then failed most of the macOS JIT corpus with W0071 while
-Linux passed.** Dropping `"hamt.h"` -- the decls region's first include --
-made `<ucontext.h>` the TU's first system header, and the region includes it
-under `#define _XOPEN_SOURCE 700`. glibc fixes its feature level with
-`_DEFAULT_SOURCE` (defined at the top of the region), so it did not notice.
-macOS's `<sys/cdefs.h>` settles `__DARWIN_C_LEVEL` once, on its first
-inclusion: under `_XOPEN_SOURCE` without `_DARWIN_C_SOURCE` that is the POSIX
-level, which hides the Darwin extensions from the rest of the TU. A program
-that still uses a map keeps `hamt.h` first and should have been unaffected.
-The dropped `hamt.h` now leaves its three system includes in
-its place, so the header order ahead of that block is what it was. The
-mechanism is inferred from the header order and the macOS headers' documented
-behaviour; the console never showed the c2mir diagnostic. `run-jit.sh` now
-prints the first engine error on each W0071 FAIL line and fails its one-program
-smoke test on W0071, so a host-wide break is named once, with its reason.
+**The first CI run then failed 1345 macOS fixtures with W0071 while Linux
+passed**, and the timeout came back with them, since each of those programs
+compiled twice. The console never showed why: CI filters `run-jit.sh` down to
+its FAIL lines, and the c2mir diagnostic was on a line of its own. So
+`run-jit.sh` now prints the first engine error on each W0071 FAIL line and
+fails its one-program smoke test on W0071. The next run stopped at the smoke
+test with the reason: `<tur-jit>:2573:29: syntax error on 317 (expected
+'<declarator>')`.
+
+That is one column past the pruned TU's last line, `__attribute__((constructor))`.
+The emitter writes that attribute on its own line above
+`static void __tur_static_init_ctor(void) {...}`. The chunker treated a line
+ending in `)` as a complete entity, so the attribute became a root chunk of its
+own and the definition an unreferenced static, and the TU ended in a dangling
+attribute. Linux's c2mir accepted it silently (the constructor was simply gone;
+`main` calls `__tur_static_init` itself, so nothing noticed). macOS's did not.
+The previous run had passed ~800 programs before failing everything after, so
+its rejection is not deterministic -- likely c2mir reading past the end of the
+input there; not investigated. A `)` that closes a top-level `__attribute__`
+group no longer completes a chunk.
+
+A check Linux's c2mir cannot give: every fixture's pruned TU run through
+`cc -fsyntax-only` reports no error beyond the full TU's own `tur_hamt_*`
+prototype conflicts, and the same check rejects the old dangling-attribute TU
+(`expected identifier or '(' at end of input`). A first theory -- that dropping
+`"hamt.h"` let `<ucontext.h>`'s `_XOPEN_SOURCE 700` fix macOS's feature level
+-- was wrong (that run had compiled ~800 programs with `hamt.h` dropped). The
+stand-in it produced stays as a precaution: a dropped `hamt.h` leaves its
+three system includes behind, so the pruned TU's first system headers are the
+unpruned ones.
 
 ## What is left
 

@@ -20,9 +20,9 @@
  *      Identifiers are read outside comments and literals.
  *   2. A handful of heavy system includes in the decls region is dropped when
  *      no identifier they declare survives in the program's own text.  A
- *      dropped "hamt.h" leaves its own system includes behind: it is the
- *      region's first include, and on macOS the first system header fixes the
- *      feature level for the whole TU (see k_heavy in jit_prune.c).
+ *      dropped "hamt.h" leaves its own system includes behind, so the TU's
+ *      first system headers are what they were unpruned (a precaution; see
+ *      k_heavy in jit_prune.c).
  *
  * A reference the scan misses cannot pass silently: c2mir rejects the pruned
  * program, cmd_jit retries the full TU (TUR-W0071), and tests/run-jit.sh fails

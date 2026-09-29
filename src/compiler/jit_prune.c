@@ -171,25 +171,37 @@ static void cv_push(ChunkVec *cv, size_t start, size_t end, int is_pp) {
  * begins in column 0 with brace and paren depth 0, provided the previous one
  * is complete (its last code character was `;`, `}` or `)`, or it was a
  * preprocessor line that did not continue).  So `static void\nfoo(void) {`
- * and a `{` on its own line stay with the header above them. */
+ * and a `{` on its own line stay with the header above them.
+ *
+ * A `)` that closes a top-level `__attribute__((...))` does NOT complete one:
+ * the emitter writes `__attribute__((constructor))` on its own line above the
+ * definition it decorates.  Split there, the attribute was a root and the
+ * definition an unreferenced static, so the pruned TU ended in a dangling
+ * attribute.  Linux's c2mir let it through (and the constructor was silently
+ * gone); macOS's rejected it -- "syntax error on 317 (expected
+ * '<declarator>')" -- and every program paid the full-TU retry. */
 static void split_chunks(const char *s, size_t n, size_t base, ChunkVec *cv) {
     size_t i = 0, cur = 0;
     int depth = 0, paren = 0;
     char last = 0;          /* last code character of the current chunk */
     int cur_pp = 0, pp_continues = 0, have_code = 0;
     int at_line_start = 1;
+    int in_attr = 0;        /* inside a top-level __attribute__((...)) */
+    int last_attr = 0;      /* ...and `last` is the `)` that closed it */
     while (i < n) {
         if (at_line_start) {
             at_line_start = 0;
             char c = s[i];
             int complete = !have_code ||
                            (cur_pp ? !pp_continues
-                                   : (last == ';' || last == '}' || last == ')'));
+                                   : (last == ';' || last == '}' ||
+                                      (last == ')' && !last_attr)));
             if (depth == 0 && paren == 0 && complete && i > cur &&
                 c != ' ' && c != '\t' && c != '\n' && c != '\r' &&
                 c != '{' && c != '}') {
                 cv_push(cv, base + cur, base + i, cur_pp);
                 cur = i; have_code = 0; cur_pp = 0; last = 0;
+                in_attr = 0; last_attr = 0;
             }
             if (depth == 0 && c == '#' && !cur_pp) {
                 if (have_code && i > cur) {
@@ -224,11 +236,27 @@ static void split_chunks(const char *s, size_t n, size_t base, ChunkVec *cv) {
             continue;
         }
         if (c == ' ' || c == '\t' || c == '\r') { i++; continue; }
+        if (!cur_pp && is_id_start((unsigned char)c)) {
+            size_t e = i;
+            while (e < n && is_id_char((unsigned char)s[e])) e++;
+            if (depth == 0 && paren == 0) {
+                in_attr = (e - i == 13 && memcmp(s + i, "__attribute__", 13) == 0);
+                last_attr = 0;
+            }
+            last = s[e - 1];
+            have_code = 1;
+            i = e;
+            continue;
+        }
         if (!cur_pp) {
             if (c == '{') depth++;
             else if (c == '}') { if (depth > 0) depth--; }
             else if (c == '(') paren++;
             else if (c == ')') { if (paren > 0) paren--; }
+            if (depth == 0 && paren == 0) {
+                last_attr = (c == ')' && in_attr);
+                if (c != '(') in_attr = 0;
+            }
         }
         last = c;
         have_code = 1;
@@ -493,15 +521,14 @@ static const char *const k_hamt[] = {
     "tur_hamt_*", "Hamt*", "HAMT_*", "TUR_HAMT_H", NULL };
 
 /* hamt.h is the decls region's FIRST include, so its own system includes are
- * where the TU's first system header comes from -- and some libcs fix their
- * feature level once, on that first inclusion.  Dropped outright, the first
- * system header became <ucontext.h> under the region's `#define
- * _XOPEN_SOURCE 700`; glibc shrugs (the region defines _DEFAULT_SOURCE), but
- * macOS's <sys/cdefs.h> then settles on the POSIX level and hides every
- * Darwin extension from the rest of the TU, and most programs failed to
- * compile there (TUR-W0071) while Linux passed.  Leaving hamt.h's three
- * includes behind keeps the header order ahead of that block exactly as it
- * was.  The other entries sit after it, so they carry no such role. */
+ * where the TU's first system header comes from.  Dropped outright, the first
+ * system header would be <ucontext.h>, under the region's `#define
+ * _XOPEN_SOURCE 700`, and some libcs fix their feature level once, on that
+ * first inclusion (macOS's <sys/cdefs.h> would settle on the POSIX level).  No
+ * failure has been traced to that -- a CI run compiled ~800 programs on macOS
+ * with hamt.h dropped -- so this is a precaution: leaving hamt.h's three
+ * includes behind keeps the header order ahead of that block what it was
+ * unpruned.  The other entries sit after it and carry no such role. */
 static const HeavyInclude k_heavy[] = {
     { "#include <regex.h>",      k_regex,  NULL },
     { "#include <arpa/inet.h>",  k_inet,   NULL },
