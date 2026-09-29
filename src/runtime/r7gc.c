@@ -200,8 +200,12 @@ typedef struct tur_gc_thread {
     volatile int   gc_intr;      /* the stop signal landed since the wrapper last cleared it */
     volatile int   in_stop;      /* macOS: inside the stop handler's wait (tur_gc_stop_handler) */
     int            stop_state;   /* this collection: 0 untouched, 1 signaled, 2 parked */
-    jmp_buf        regs;         /* its callee-saved registers, spilled at the park */
-    jmp_buf        sig_regs;     /* the same, spilled by the stop handler */
+    /* Aligned, since the scan reads aligned words.  macOS's jmp_buf is an
+     * int array: left to its own alignment, `regs` sat at 4 mod 8, every
+     * register saved in it straddled two of the words the scan read, and a
+     * parked thread's registers were never seen (parked-snapshot-unaligned). */
+    jmp_buf        regs __attribute__((aligned(16)));      /* its callee-saved registers, spilled at the park */
+    jmp_buf        sig_regs __attribute__((aligned(16)));  /* the same, spilled by the stop handler */
     void         **tls_roots;    /* addresses of its TUR_THREAD_LOCAL variables */
     size_t        *tls_sizes;
     size_t         n_tls, cap_tls;
@@ -851,7 +855,7 @@ TUR_GC_NOASAN static void tur_gc_mark_specific(tur_gc_thread *t) {
 
 TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_mark_roots(void) {
     tur_gc_state *G = tur_gc_G;
-    jmp_buf regs;
+    jmp_buf regs __attribute__((aligned(16)));   /* aligned for the scan, as in the record */
     setjmp(regs);                       /* callee-saved registers, onto this frame */
     volatile unsigned char here = 0;
     tur_gc_scan((const void *)&regs, sizeof regs);
@@ -1129,16 +1133,30 @@ static __attribute__((unused)) void tur_gc_install_rt_allocator(void) {
  * collector leaves a parked thread alone.  A park inside a park (a wrapped
  * call reached from a wrapped call) changes nothing.  Unparking takes
  * G->world for an instant, so it cannot happen in the middle of a
- * collection.  A thread the collector does not know parks nothing. */
-TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_park(void) {
-    tur_gc_thread *t = tur_gc_self;
-    if (!t) return;
-    if (t->park_depth++ > 0) return;
-    setjmp(t->regs);                    /* callee-saved registers */
+ * collection.  A thread the collector does not know parks nothing.
+ *
+ * The registers are spilled in the frame that makes the blocking call, so
+ * tur_gc_park is a macro.  That frame is live until the unpark, and each
+ * callee-saved register holds, at the setjmp, either the value its callers
+ * left in it or a value of this frame's own, with the caller's saved in
+ * this frame: the spill and the stack from below this frame have them all.
+ * The stack pointer is taken in a call below the frame (tur_gc_park_at).
+ * tur_gc_park used to be a function of its own, spilling its own
+ * registers.  Those of its callers that it had saved to use the registers
+ * itself were in its frame, which the blocking call's frames then wrote
+ * over: a parked thread's root in such a register could be lost. */
+TUR_GC_NOASAN __attribute__((noinline)) static void tur_gc_park_at(tur_gc_thread *t) {
     volatile unsigned char here = 0;
     t->stack_sp = (unsigned char *)&here;
     TUR_GC_STORE(&t->parked, 1);
 }
+#define tur_gc_park() do {                                                  \
+        tur_gc_thread *tpk_ = tur_gc_self;                                  \
+        if (tpk_ && tpk_->park_depth++ == 0) {                              \
+            setjmp(tpk_->regs);         /* callee-saved registers */        \
+            tur_gc_park_at(tpk_);                                           \
+        }                                                                   \
+    } while (0)
 static void tur_gc_unpark(void) {
     tur_gc_thread *t = tur_gc_self;
     if (!t) return;
