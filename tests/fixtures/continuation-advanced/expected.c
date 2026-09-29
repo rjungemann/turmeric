@@ -13,6 +13,9 @@
 #else
 #  define TUR_THREAD_LOCAL __thread
 #endif
+#if defined(__clang__)
+#  define TUR_TLS_FRESH(T, x) __attribute__((noinline, unused)) static T *x##__at(void) { __asm__ volatile ("" ::: "memory"); return &x; }
+#endif
 #define TUR_GC_FIBER_ENTER(sp) ((void)0)
 #define TUR_GC_FIBER_LEAVE()   ((void)0)
 #if defined(__GNUC__) || defined(__clang__)
@@ -2362,6 +2365,33 @@ extern size_t *tur_tls_dk_meta_cap_ptr(void);
 #define g_dk_meta_n (*tur_tls_dk_meta_n_ptr())
 #define g_dk_meta_cap (*tur_tls_dk_meta_cap_ptr())
 #endif
+/* The fiber's DK state follows it from thread to thread, so a CPS entry on a
+ * fiber reads it afresh after the body, which may have yielded and resumed
+ * elsewhere (TUR_TLS_FRESH). */
+#if defined(TUR_TLS_FRESH) && !defined(__dk_reap_v)
+TUR_TLS_FRESH(void **, __dk_reap_v)
+TUR_TLS_FRESH(unsigned char *, __dk_reap_kind)
+TUR_TLS_FRESH(size_t, __dk_reap_n)
+TUR_TLS_FRESH(size_t, __dk_reap_cap)
+TUR_TLS_FRESH(int, __dk_entry_depth)
+TUR_TLS_FRESH(tur_jmp_buf *, g_dk_driver)
+TUR_TLS_FRESH(DK *, g_dk_resume_chain)
+TUR_TLS_FRESH(intptr_t, g_dk_resume_val)
+TUR_TLS_FRESH(DK **, g_dk_meta)
+TUR_TLS_FRESH(size_t, g_dk_meta_n)
+TUR_TLS_FRESH(size_t, g_dk_meta_cap)
+#define __dk_reap_v (*__dk_reap_v__at())
+#define __dk_reap_kind (*__dk_reap_kind__at())
+#define __dk_reap_n (*__dk_reap_n__at())
+#define __dk_reap_cap (*__dk_reap_cap__at())
+#define __dk_entry_depth (*__dk_entry_depth__at())
+#define g_dk_driver (*g_dk_driver__at())
+#define g_dk_resume_chain (*g_dk_resume_chain__at())
+#define g_dk_resume_val (*g_dk_resume_val__at())
+#define g_dk_meta (*g_dk_meta__at())
+#define g_dk_meta_n (*g_dk_meta_n__at())
+#define g_dk_meta_cap (*g_dk_meta_cap__at())
+#endif
 static void __dk_reap_push(void *p, unsigned char kind) {
     if (__dk_reap_n == __dk_reap_cap) {
         __dk_reap_cap = __dk_reap_cap ? __dk_reap_cap * 2 : 16;
@@ -2671,6 +2701,10 @@ static TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;
 extern void ** tur_tls_current_fiber_ptr(void);
 #define tur_current_fiber (*(FiberBlock **)tur_tls_current_fiber_ptr())
 #endif
+#if defined(TUR_TLS_FRESH) && !defined(tur_current_fiber)
+TUR_TLS_FRESH(FiberBlock *, tur_current_fiber)
+#define tur_current_fiber (*tur_current_fiber__at())
+#endif
 static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {
     if (tur_panic_in_progress) {
         fprintf(stderr, "double panic: aborting\n");
@@ -2819,6 +2853,12 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
 
 static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {
     if (!stack_size) stack_size = 1024 * 1024;
+#if defined(__APPLE__)
+    if (sizeof(ucontext_t) <= sizeof(*((ucontext_t *)0)->uc_mcontext)) {
+        fprintf(stderr, "fiber: ucontext_t has no room for its machine context (a header defined it before <ucontext.h> under _XOPEN_SOURCE)\n");
+        abort();
+    }
+#endif
     FiberBlock *f = (FiberBlock *)calloc(1, sizeof(FiberBlock));
     if (!f) { fprintf(stderr, "fiber: oom\n"); abort(); }
     f->stack = (char *)malloc(stack_size);
