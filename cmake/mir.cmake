@@ -111,6 +111,19 @@ include_guard(GLOBAL)
 #     Windows JIT only (a base-1e9 bignum borrow); covered by
 #     c-tests/new/llp64-uint-llong-conv.c
 #     (docs/archive/c2mir-llp64-long-long-vs-unsigned-int.md).
+#
+#   5f20fb89 (merged as 96c34860, rjungemann/mir#5) -- c2mir reserved a
+#     struct/union statement expression's result slot at the frame size so
+#     far, while the function body was still being checked; the stack
+#     variables are laid out only afterwards, from offset 0, so the slot
+#     overlapped the first of them -- in practice a by-value struct
+#     parameter, which the `({ ... })` copy-out then overwrote.  The slots
+#     are now assigned after the stack layout.  Silent wrong answers on
+#     x86-64 (a sibling argument or parameter replaced; `-ei` too, so the
+#     front end, not MIR-gen); covered by c-tests/new/stmtexpr-struct-slot-overlap.c
+#     (docs/archive/jit-x86-64-struct-valued-statement-expression-miscompiles.md).
+#     The emitter already stopped producing the shape, so nothing in the
+#     generated C depends on this; user inline C still can.
 # Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands
 # equivalents.
 # CACHE-VARIABLE TRAP: `set(... CACHE ...)` does NOT update an entry that is
@@ -124,8 +137,8 @@ include_guard(GLOBAL)
 # the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
     CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
-set(TUR_MIR_GIT_TAG "79cb29058e8c8128dc5e0dce58c1e12382c1fb82"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes + aarch64 AAPCS64 HFA passing (both, merged) + win64 lazy-generation wrapper ABI + wasm32/Emscripten target + LLP64 long long vs unsigned int conversion -- now on the fork's master, not a feature branch")
+set(TUR_MIR_GIT_TAG "96c34860a1fe0dfa4a8b95c92763e6001d0b104e"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes + aarch64 AAPCS64 HFA passing (both, merged) + win64 lazy-generation wrapper ABI + wasm32/Emscripten target + LLP64 long long vs unsigned int conversion + struct statement-expression slots after the stack layout -- now on the fork's master, not a feature branch")
 
 include(FetchContent)
 

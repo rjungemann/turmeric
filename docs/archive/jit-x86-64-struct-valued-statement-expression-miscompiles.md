@@ -3,8 +3,20 @@
 **Severity: medium (JIT engine, x86-64 only).** Filed 2026-09-10 while
 driving the Saffron dynamic-surface PR to green.
 
-**Status 2026-09-28: Turmeric side DONE, root cause FOUND, engine fix
-written and verified -- open only until it lands on the MIR fork.**
+**Status: RESOLVED 2026-09-29.** The engine fix below landed as
+[rjungemann/mir#5](https://github.com/rjungemann/mir/pull/5), merged into the
+fork's master as `96c34860`, and `TUR_MIR_GIT_TAG` in `cmake/mir.cmake` now
+pins that commit (with a line in the pin notes above it). MIR carries the
+regression test (`c-tests/new/stmtexpr-struct-slot-overlap.c`: both reported
+shapes plus sibling independence, under `-eg` and `-ei`).
+`tests/fixtures/jit-inline-c-struct-stmtexpr-slot` pins it on this side: the
+emitter no longer produces the shape, but user inline C can, and the
+fixture's inline-C bodies (extracted from the `TUR_JIT_DUMP_C` output) print
+708 on the old pin and 304 on the new one, as gcc does. Checked on Linux: a
+fresh `-DTUR_JIT=ON` build fetches `96c34860`, and `tests/run-jit.sh` passes
+on it.
+
+The status note from 2026-09-28, before the fork merge:
 
 - **Fix direction 2 is complete.** The last three sites that still emitted a
   struct-holding `({ ... })` -- the union widen (`__tur_ua`),
@@ -65,10 +77,10 @@ written and verified -- open only until it lands on the MIR fork.**
   `use-c2m-interp` and `use-c2m-gen`, 1087 tests each) give identical
   results before and after -- the same two pre-existing failures either way.
 
-  **To finish:** land the patch below on rjungemann/mir, bump
-  `TUR_MIR_GIT_TAG` in cmake/mir.cmake (with a line in the pin comment's
-  fix list, like every fork fix before it), and archive this report.  The
-  patch is against 79cb2905:
+  **To finish (done 2026-09-29, see the status above):** land the patch
+  below on rjungemann/mir, bump `TUR_MIR_GIT_TAG` in cmake/mir.cmake (with a
+  line in the pin comment's fix list, like every fork fix before it), and
+  archive this report.  The patch is against 79cb2905:
 
   ```diff
   --- a/c2mir/c2mir.c

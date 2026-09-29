@@ -55,7 +55,9 @@ Other open reports a Saffron program reaches (none was a stage blocker):
   closed the same day on its own.  The two closure-env reports also gained
   static drops that day, so a returned lambda a `let` owns and a lambda
   passed to a non-retaining parameter are freed with the collector off too.
-- [jit-x86-64-struct-valued-statement-expression-miscompiles](../reported/jit-x86-64-struct-valued-statement-expression-miscompiles.md) (medium, JIT engine on x86-64 only)
+- [jit-x86-64-struct-valued-statement-expression-miscompiles](jit-x86-64-struct-valued-statement-expression-miscompiles.md)
+  (medium, JIT engine on x86-64 only): resolved 2026-09-29 -- the c2mir
+  fix merged as rjungemann/mir#5 and the MIR pin moved to it.
 - [static-instance-spec-calls-any-lambda-as-concrete-result](../reported/static-instance-spec-calls-any-lambda-as-concrete-result.md)
   (high): a `.foldl` that resolves STATICALLY on a Saffron value calls the
   `any`-returning lambda as if it returned `double`. Still reproduces
