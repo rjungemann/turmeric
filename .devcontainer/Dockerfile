@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/devcontainers/cpp:1-ubuntu-22.04
+FROM mcr.microsoft.com/devcontainers/cpp:2-ubuntu-24.04
 
 # libedit: REPL line editing (matches CI: apt-get install libedit-dev)
 # python3: doc generation (gendocs.py, genguides.py, doctest.py, ...)
