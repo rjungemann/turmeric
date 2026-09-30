@@ -75,6 +75,15 @@
   } ChanBlock;
   ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
   if (!ch) { fprintf(stderr, "chan-new: out of memory\n"); abort(); }
+  /* cap sizes the ring: 0 divided by zero at the first `% cap`, and a
+     negative or huge one wrapped `8 * cap` to a tiny block the sends then
+     overran (security audit WP5, M-5).  A cap under 1 is 1, as the
+     interpreter's twin has always read it. */
+  if (cap < 1) cap = 1;
+  if ((uint64_t)cap > SIZE_MAX / sizeof(int64_t)) {
+    fprintf(stderr, "chan-new: capacity %lld out of range\n", (long long)cap);
+    abort();
+  }
   ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
   if (!ch->buf) { free(ch); fprintf(stderr, "chan-new: buf oom\n"); abort(); }
   pthread_mutex_init(&ch->lock, NULL);
@@ -224,6 +233,15 @@
   } ChanBlock;
   ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
   if (!ch) { fprintf(stderr, "async-chan-new: out of memory\n"); abort(); }
+  /* cap sizes the ring: 0 divided by zero at the first `% cap`, and a
+     negative or huge one wrapped `8 * cap` to a tiny block the sends then
+     overran (security audit WP5, M-5).  A cap under 1 is 1, as the
+     interpreter's twin has always read it. */
+  if (cap < 1) cap = 1;
+  if ((uint64_t)cap > SIZE_MAX / sizeof(int64_t)) {
+    fprintf(stderr, "async-chan-new: capacity %lld out of range\n", (long long)cap);
+    abort();
+  }
   ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
   if (!ch->buf) { free(ch); fprintf(stderr, "async-chan-new: buf oom\n"); abort(); }
   pthread_mutex_init(&ch->lock, NULL);

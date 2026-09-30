@@ -1,0 +1,53 @@
+;; security-audit-plan WP5 (M-5): caller-supplied sizes that reached an
+;; allocation or an index with no range check.  Each case used to be a wild
+;; read or write -- a length that wrapped to a tiny block under a huge
+;; recorded size, a negative count cast to SIZE_MAX, an alloca sized by the
+;; caller, an unchecked (x, y) -- and now either answers correctly (the
+;; clamps, the heap fallback) or stops with a diagnostic naming the call.
+;; hook.sh runs one case per process and prints each exit status beside the
+;; first line of stderr, since most of these end the program on purpose.
+
+(load "stdlib/sized.tur")
+(load "stdlib/sized-buf.tur")
+(load "stdlib/sized-matrix.tur")
+(load "stdlib/sized-bits.tur")
+(load "stdlib/grid.tur")
+(load "stdlib/serial.tur")
+(load "stdlib/string.tur")
+(load "stdlib/fs.tur")
+(load "stdlib/str.tur")
+
+(defn huge [] : int
+  ```c return (int64_t)1 << 61; ```)
+
+(defn fill-and-sum [b] : int
+  (sized-buf-set! (:: b :SizedBuf) 0 10)
+  (sized-buf-set! (:: b :SizedBuf) 999 32)
+  (sized-buf-sum (:: b :SizedBuf)))
+
+(defn run-case [c : int] : int
+  (cond
+    ;; the window clamp: start + len overflowed int64 and skipped the clamp
+    (= c 0) (let [s (string/substring (string/from-cstr "hello") 2 9223372036854775807)]
+              (println (string/to-cstr s))
+              (println (string/len s))
+              0)
+    (= c 1) (do (bytes-alloc -1) 0)
+    (= c 2) (do (sized-buf-new-zeroed (huge)) 0)
+    ;; past the stack bound the scoped buffer is heap-allocated, same answer
+    (= c 3) (do (println (unsafe (sized-buf-with-stack 1000 fill-and-sum))) 0)
+    (= c 4) (do (unsafe (sized-buf-with-stack -1 fill-and-sum)) 0)
+    (= c 5) (do (unsafe (sized-buf-compute -1)) 0)
+    (= c 6) (do (unsafe (sized-matrix-new (+ (huge) 1) 8)) 0)
+    (= c 7) (do (unsafe (sized-bitvec-new 9223372036854775807)) 0)
+    (= c 8) (let [g (grid-new 2 2)]
+              (grid-set! g 1 1 7)
+              (println (grid-get g 1 1))
+              (grid-set! g 2 0 9)
+              0)
+    ;; ftell is -1 on a pipe: the slurp must fail, not overrun a 0-byte buffer
+    (= c 9) (do (println (= (:: (fs/read-text "/dev/stdin") :int) 0)) 0)
+    :else (do (println "no such case") 2)))
+
+(defn main [] : int
+  (run-case (cstr->parse-int (list-head *args*))))

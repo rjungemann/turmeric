@@ -30,16 +30,27 @@
 ;;;
 ;;; Since: Phase TC2
 
+;; The header stores int dimensions, so they must fit one; width * height was
+;; unchecked, and a failed calloc left NULL data behind a live handle
+;; (security audit WP5, M-5).
 (defn grid-new [width : int height : int]
   #fx{}
   : int
   ```c
+  if (width < 0 || height < 0 || width > INT32_MAX || height > INT32_MAX ||
+      (height > 0 && (uint64_t)width > (SIZE_MAX / sizeof(int64_t)) / (uint64_t)height)) {
+    fprintf(stderr, "grid-new: dimensions %lldx%lld out of range\n",
+            (long long)width, (long long)height);
+    exit(1);
+  }
   struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
+  if (!g) { fprintf(stderr, "grid-new: out of memory\n"); exit(1); }
   g->width  = (int)width;
   g->height = (int)height;
   g->cx = 0;
   g->cy = 0;
-  g->data = calloc((size_t)(width * height), sizeof(int64_t));
+  g->data = calloc((size_t)width * (size_t)height, sizeof(int64_t));
+  if (!g->data && width > 0 && height > 0) { fprintf(stderr, "grid-new: out of memory\n"); exit(1); }
   return (int64_t)(intptr_t)g;
   ```)
 ;;; grid-get -- return the element at (x, y).
@@ -57,11 +68,18 @@
 ;;;
 ;;; Since: Phase TC2
 
+;; No bounds check used to stand here: any (x, y) was a wild read from a
+;; `#fx{}` function (security audit WP5).
 (defn grid-get [g : int x : int y : int]
   #fx{}
   : int
   ```c
   struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
+    fprintf(stderr, "grid-get: (%lld, %lld) out of bounds in %dx%d\n",
+            (long long)x, (long long)y, grid->width, grid->height);
+    exit(1);
+  }
   return (int64_t)grid->data[(size_t)(y * grid->width + x)];
   ```)
 ;;; grid-set! -- set the element at (x, y).
@@ -77,11 +95,17 @@
 ;;;
 ;;; Since: Phase TC2
 
+;; As grid-get: an unchecked (x, y) was a wild write.
 (defn grid-set! [g : int x : int y : int v : int]
   #fx{}
   : void
   ```c
   struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
+    fprintf(stderr, "grid-set!: (%lld, %lld) out of bounds in %dx%d\n",
+            (long long)x, (long long)y, grid->width, grid->height);
+    exit(1);
+  }
   TUR_REGION_NOTE(v);   /* region-lock-hardening: see vec-push! */
   grid->data[(size_t)(y * grid->width + x)] = v;
   ```)

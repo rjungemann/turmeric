@@ -6,8 +6,13 @@
 ;;
 ;; Consumer A accumulates values from ch-a.
 ;; Consumer B accumulates values from ch-b.
-;; Each consumer receives exactly 3 values (staggered via cap=1 channels so that
-;; the select must block when both are full).
+;; Each consumer drains its channel until it reads the 0 sentinel the main
+;; thread sends last.  The channels are cap=1, so the select must block when
+;; both are full.  (Each consumer used to stop after exactly 3 values -- but
+;; the select is free to route 4 values to one channel, the 4th sitting in its
+;; buffer after its consumer had stopped, and the other consumer then waited
+;; forever for a 3rd: about 1 run in 3 hung.  requires.tsan kept it out of
+;; every CI run until security-audit-plan WP5's TSan job.)
 ;;
 ;; The select sends values 1, 2, 3, 4, 5, 6 in sequence.
 ;; Because send-select is non-deterministic as to WHICH channel gets each value,
@@ -55,7 +60,7 @@
   free(c);
   ```)
 
-;; Consumer: receives n values from ch, returns their sum via a result channel.
+;; Consumer: receives values from ch until the 0 sentinel; records their sum.
 (defn consumer [arg : ptr<void>] : ptr<void>
   ```c
   typedef struct {
@@ -68,7 +73,8 @@
   void *ch = a->ch;
   int64_t sum = 0;
   int64_t i;
-  for (i = 0; i < a->n; i++) {
+  (void)i;
+  for (;;) {
       ChanBlock *c = (ChanBlock *)ch;
       pthread_mutex_lock(&c->lock);
       while (c->count == 0) pthread_cond_wait(&c->not_empty, &c->lock);
@@ -78,10 +84,30 @@
       pthread_cond_signal(&c->not_full);
       tur_waiter_signal_one(c->send_waiters);
       pthread_mutex_unlock(&c->lock);
+      if (v == 0) break;
       sum += v;
   }
   a->result = sum;
   return NULL;
+  ```)
+
+;; A plain blocking send, for the sentinel.
+(defn chan-send-blocking [ch : ptr<void> v : int] : nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  while (c->count == c->cap) pthread_cond_wait(&c->not_full, &c->lock);
+  c->buf[c->tail] = v;
+  c->tail = (c->tail + 1) % c->cap;
+  c->count++;
+  pthread_cond_signal(&c->not_empty);
+  tur_waiter_signal_one(c->recv_waiters);
+  pthread_mutex_unlock(&c->lock);
   ```)
 
 (defn carg-new [ch : ptr<void> n : int] : ptr<void>
@@ -119,7 +145,6 @@
   ```)
 
 ;; Send 6 values via select :send across two channels.
-;; Consumers each drain exactly 3 values.
 (defn send-loop [ch-a : ptr<void> ch-b : ptr<void> iter : int v : int] : int
   (if (= iter 0)
     0
@@ -136,6 +161,9 @@
             tp-b (thread-spawn-fn consumer arg-b)]
         ;; Send values 1..6 across both channels via select :send
         (send-loop ch-a ch-b 6 1)
+        ;; then stop both consumers
+        (chan-send-blocking ch-a 0)
+        (chan-send-blocking ch-b 0)
         (thread-join tp-a)
         (thread-join tp-b)
         (let [sum (+ (carg-result arg-a) (carg-result arg-b))]

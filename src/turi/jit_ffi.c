@@ -35,6 +35,7 @@
 #include <string.h>
 
 #include "jit_engine.h"
+#include "runtime/buf.h"   /* TUR_PRINTF_FMT */
 
 /* ------------------------------------------------------------------ */
 /* signature -> C source                                               */
@@ -111,6 +112,7 @@ static void sb_putn(SrcBuf *b, const char *s, size_t n) {
 
 static void sb_puts(SrcBuf *b, const char *s) { sb_putn(b, s, strlen(s)); }
 
+static void sb_printf(SrcBuf *b, const char *fmt, ...) TUR_PRINTF_FMT(2, 3);
 static void sb_printf(SrcBuf *b, const char *fmt, ...) {
     char tmp[256];
     va_list ap;

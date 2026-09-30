@@ -1,4 +1,5 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
+#include <stdarg.h>
 #include "elab_internal.h"
 #include "lang_dialects.h"   /* saffron-lang-plan S2: lang_span_is_dynamic */
 #include "cps.h"          /* cps_expr_uses_control -- the control-cast hoist */
@@ -4920,9 +4921,13 @@ typedef struct LiComp {
     char               whybuf[192];
 } LiComp;
 
-static const Form *li_decline(LiComp *C, const char *fmt, const char *arg) {
+static const Form *li_decline(LiComp *C, const char *fmt, ...) TUR_PRINTF_FMT(2, 3);
+static const Form *li_decline(LiComp *C, const char *fmt, ...) {
     if (!C->why) {
-        snprintf(C->whybuf, sizeof(C->whybuf), fmt, arg ? arg : "");
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(C->whybuf, sizeof(C->whybuf), fmt, ap);
+        va_end(ap);
         C->why = C->whybuf;
     }
     return NULL;
@@ -4951,7 +4956,7 @@ static const Form *li_image(const LiPath *P, const char *nm) {
 static const Form *li_subst(LiComp *C, const LiPath *P, const Form *f, uint32_t depth) {
     if (!f) return NULL;
     if (C->why) return NULL;
-    if (depth > 64) return li_decline(C, "an assigned expression is nested too deeply%s", NULL);
+    if (depth > 64) return li_decline(C, "an assigned expression is nested too deeply%s", "");
     if (f->tag == F_SYM && f->as.sym) {
         const Form *im = li_image(P, f->as.sym->name);
         return im ? im : f;
@@ -4969,10 +4974,10 @@ static const Form *li_subst(LiComp *C, const LiPath *P, const Form *f, uint32_t 
             uint32_t nb = 0;
             if (!li_parse_bvec(f->as.list.items[1], b, LI_MAX_BINDS, &nb))
                 return li_decline(C, "an assigned expression contains a `let` "
-                                     "this analysis cannot read%s", NULL);
+                                     "this analysis cannot read%s", "");
             for (uint32_t j = 0; j < nb; j++) {
                 if (b[j].name->tag != F_SYM)
-                    return li_decline(C, "an assigned expression destructures%s", NULL);
+                    return li_decline(C, "an assigned expression destructures%s", "");
                 const char *bn = b[j].name->as.sym->name;
                 bool clash = li_image(P, bn) != NULL;
                 for (uint32_t i = 0; i < P->n && !clash; i++)
@@ -5010,7 +5015,7 @@ static bool li_set_image(LiComp *C, LiPath *P, const char *nm, const Form *img) 
     for (uint32_t i = 0; i < P->n; i++)
         if (strcmp(P->name[i], nm) == 0) { P->img[i] = img; return true; }
     if (P->n >= LI_MAX_SUBST) {
-        li_decline(C, "the body assigns too many names%s", NULL);
+        li_decline(C, "the body assigns too many names%s", "");
         return false;
     }
     P->name[P->n] = nm;
@@ -5027,7 +5032,7 @@ static LiPath *li_path_clone(LiComp *C, const LiPath *P) {
 
 static bool li_path_assume(LiComp *C, LiPath *P, const Form *c) {
     if (P->ncond >= LI_MAX_PCOND) {
-        li_decline(C, "the loop body branches too deeply%s", NULL);
+        li_decline(C, "the loop body branches too deeply%s", "");
         return false;
     }
     P->cond[P->ncond++] = c;
@@ -5037,21 +5042,21 @@ static bool li_path_assume(LiComp *C, LiPath *P, const Form *c) {
 static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
     Elab *e = C->e;
     if (!st || C->why) return !C->why;
-    if (depth > 32) { li_decline(C, "the loop body is nested too deeply%s", NULL); return false; }
+    if (depth > 32) { li_decline(C, "the loop body is nested too deeply%s", ""); return false; }
     const Form *mx = rt_macro_expansion(e, st);
     if (mx) return li_compose(C, mx, ps, depth + 1);
     /* No assignment anywhere in it: whatever it does, it cannot rebind a
      * local (by-value; borrows and lambda cells are declined up front). */
     if (!rt_form_mentions_set(e, st, 0)) return true;
     if (st->tag != F_LIST || st->as.list.len == 0) {
-        li_decline(C, "an assignment operator is used as a value in the loop body%s", NULL);
+        li_decline(C, "an assignment operator is used as a value in the loop body%s", "");
         return false;
     }
     if (rt_head_is(st, "set!") && st->as.list.len == 3) {
         const Form *t   = st->as.list.items[1];
         const Form *rhs = st->as.list.items[2];
         if (!t || t->tag != F_SYM || !t->as.sym) {
-            li_decline(C, "the loop body assigns through a place expression%s", NULL);
+            li_decline(C, "the loop body assigns through a place expression%s", "");
             return false;
         }
         const char *tn = t->as.sym->name;
@@ -5070,7 +5075,7 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
         return true;
     }
     if (rt_head_is(st, "set!")) {
-        li_decline(C, "the loop body has a `set!` of an unexpected shape%s", NULL);
+        li_decline(C, "the loop body has a `set!` of an unexpected shape%s", "");
         return false;
     }
     if (rt_head_is(st, "swap!") || rt_head_is(st, "reset!")) {
@@ -5087,12 +5092,12 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
         LiBind b[LI_MAX_BINDS];
         uint32_t nb = 0;
         if (!li_parse_bvec(st->as.list.items[1], b, LI_MAX_BINDS, &nb)) {
-            li_decline(C, "the loop body has a `let` this analysis cannot read%s", NULL);
+            li_decline(C, "the loop body has a `let` this analysis cannot read%s", "");
             return false;
         }
         for (uint32_t j = 0; j < nb; j++) {
             if (b[j].name->tag != F_SYM) {
-                li_decline(C, "the loop body destructures in a `let`%s", NULL);
+                li_decline(C, "the loop body destructures in a `let`%s", "");
                 return false;
             }
             const char *bn = b[j].name->as.sym->name;
@@ -5105,7 +5110,7 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
                 return false;
             }
             if (C->n_inner >= LI_MAX_NAMES) {
-                li_decline(C, "the loop body binds too many names%s", NULL);
+                li_decline(C, "the loop body binds too many names%s", "");
                 return false;
             }
             C->inner[C->n_inner++] = bn;
@@ -5125,11 +5130,11 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
          * hypotheses live. */
         const Form *c2 = st->as.list.items[1];
         if (rt_form_mentions_set(e, c2, 0)) {
-            li_decline(C, "a branch condition in the loop body assigns%s", NULL);
+            li_decline(C, "a branch condition in the loop body assigns%s", "");
             return false;
         }
         if (ps->n * 2 > LI_MAX_PATHS) {
-            li_decline(C, "the loop body has too many paths to check%s", NULL);
+            li_decline(C, "the loop body has too many paths to check%s", "");
             return false;
         }
         LiPaths tp, ep;
@@ -5148,7 +5153,7 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
         if (st->as.list.len == 4 &&
             !li_compose(C, st->as.list.items[3], &ep, depth + 1)) return false;
         if (tp.n + ep.n > LI_MAX_PATHS) {
-            li_decline(C, "the loop body has too many paths to check%s", NULL);
+            li_decline(C, "the loop body has too many paths to check%s", "");
             return false;
         }
         ps->n = 0;
@@ -5157,7 +5162,7 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
         return true;
     }
     if (rt_head_is(st, "while")) {
-        li_decline(C, "the loop body contains a nested loop that assigns%s", NULL);
+        li_decline(C, "the loop body contains a nested loop that assigns%s", "");
         return false;
     }
     li_decline(C, "the loop body assigns in a position this analysis does not "

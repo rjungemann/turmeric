@@ -5,6 +5,19 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+/* printf-style format checking for the wrappers below: under -Wformat=2 the
+ * compiler checks every call's arguments against its format and refuses a
+ * non-literal one (security audit WP5).  Off on Windows, where MinGW's printf
+ * archetype disagrees with the C99 specifiers used here and -Werror is off. */
+#ifndef TUR_PRINTF_FMT
+#  if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+#    define TUR_PRINTF_FMT(fmt_idx, first_arg) \
+         __attribute__((format(printf, fmt_idx, first_arg)))
+#  else
+#    define TUR_PRINTF_FMT(fmt_idx, first_arg)
+#  endif
+#endif
+
 /* Forward declarations */
 typedef struct TuriClosure    TuriClosure;
 typedef struct TuriEffectCont TuriEffectCont;  /* defined in eval.c */
@@ -149,7 +162,7 @@ void  turi_val_global_pool_free(void);
 
 /* Create an error value (message is strdup'd) */
 TuriValue turi_error(const char *msg);
-TuriValue turi_errorf(const char *fmt, ...);
+TuriValue turi_errorf(const char *fmt, ...) TUR_PRINTF_FMT(1, 2);
 
 /* Create a rejection value (message is strdup'd).  Distinct from
  * turi_error so the interpreter does not short-circuit through it. */

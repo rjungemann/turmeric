@@ -283,6 +283,10 @@ typedef struct TurUf { int64_t n; TurBtCell cells[1]; } TurUf;
 
 void *tur_uf_new(int64_t n_vars) {
     if (n_vars <= 0) n_vars = 1;
+    /* `(n - 1) * sizeof(cell)` wrapped for a huge n and the init loop below
+     * overran the block (security audit WP5, M-5). */
+    if ((uint64_t)(n_vars - 1) > (SIZE_MAX - sizeof(TurUf)) / sizeof(TurBtCell))
+        return NULL;
     TurUf *u = (TurUf *)malloc(sizeof(TurUf) + (size_t)(n_vars - 1) * sizeof(TurBtCell));
     if (!u) return NULL;
     u->n = n_vars;

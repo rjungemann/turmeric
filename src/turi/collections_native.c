@@ -1412,9 +1412,14 @@ static TuriValue native_vec_new_filled(TuriEnv *env, TuriValue *a, uint32_t n, v
     int64_t sz  = (n > 0) ? a[0].as_int : 0;
     int64_t val = (n > 1) ? a[1].as_int : 0;
     if (sz < 0) sz = 0;
+    /* `sz * 8` wrapped for a huge sz and the fill loop overran the block
+     * (security audit WP5, M-5). */
+    if ((uint64_t)sz > SIZE_MAX / sizeof(int64_t))
+        return turi_errorf("vec-new-filled: size %lld out of range", (long long)sz);
     int64_t *v = (int64_t *)malloc(3 * sizeof(int64_t));
     if (!v) return turi_nil();
     int64_t *data = sz > 0 ? (int64_t *)malloc((size_t)sz * sizeof(int64_t)) : NULL;
+    if (sz > 0 && !data) { free(v); return turi_error("vec-new-filled: out of memory"); }
     for (int64_t i = 0; i < sz; i++) data[i] = val;
     v[0] = (int64_t)(intptr_t)data; v[1] = sz; v[2] = sz;
     TuriValue ret = {0}; ret.tag = TURI_INT; ret.as_int = (int64_t)(intptr_t)v;
