@@ -110,6 +110,31 @@ typedef struct RefineFnInfo {
     uint32_t     writes_param_mask;
     bool         writes_declared;
     bool         writes_checked;
+    /* reflected-measures (docs/upcoming/reflected-measures-plan.md):
+     * is_ctor -- the name is a DATA CONSTRUCTOR, which is what makes an
+     *   argument form "ground" for the unfolder: a `match` arm can be
+     *   selected syntactically against `(Cons 1 (Nil))` and against nothing
+     *   else.
+     * reflect_total -- the callee is `^reflect` AND passed the totality gate
+     *   (elab_reflect.c), so its defining equation may be admitted.  Never
+     *   set for a rejected or ungated function: the encoder unfolds on this
+     *   bit alone, and everything RF1/RF2 proves is what makes that sound.
+     * reflect_body / reflect_param_names / reflect_n_params -- the body as
+     *   ONE Form and the parameter names it is written in. */
+    bool         is_ctor;
+    /* RF4: the constructor's shape, so the unfolder can select a `match` arm
+     * from a TAG FACT (`(= (#dt/tag s) k)`, what a caller's own match arm
+     * knows) and bind the arm's variables to field SELECTORS (`(.tl s)`) when
+     * the scrutinee is not a constructor term.  Only a record constructor has
+     * named fields to select; a positional one binds nothing and declines. */
+    uint32_t     ctor_tag;
+    bool         ctor_is_record;
+    const char **ctor_field_names;
+    uint32_t     ctor_n_fields;
+    bool         reflect_total;
+    const Form  *reflect_body;
+    const char **reflect_param_names;
+    uint32_t     reflect_n_params;
 } RefineFnInfo;
 
 /* Resolve a called name.  Returns false when the name does not resolve to a

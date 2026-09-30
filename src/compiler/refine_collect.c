@@ -214,6 +214,17 @@ typedef struct Enc {
      * names are already the caller's. */
     const RefineSubst *ob_subst;
     uint32_t           n_ob_subst;
+    /* reflected-measures RF3: the per-obligation unfolding budget, shared by
+     * every Enc built for one VC (root encs and the nested ones the
+     * propagation and unfolding blocks create).  NULL disables unfolding. */
+    uint32_t          *rf_fuel;
+    /* reflected-measures RF3: the refinement's bound variable and the FORM it
+     * stands for at this obligation (the subject), so an argument written as
+     * the bound variable -- `(len v)` in a parameter predicate -- reduces at
+     * the subject form `(Cons 1 (Nil))` and not at the symbol `v`.  Goal enc
+     * only; NULL elsewhere. */
+    const char        *rf_subject_name;
+    const Form        *rf_subject_form;
 } Enc;
 
 /* C2 / #reads: is `name` frozen (borrowed) at this obligation's site? */
@@ -517,6 +528,487 @@ static const char *enc_fresh_name(Enc *E, const char *base) {
     return arena_strdup(E->vc->arena, buf, strlen(buf));
 }
 
+/* ------------------------------------------------------------------------- *
+ * reflected-measures RF3: bounded ground unfolding
+ * (docs/upcoming/reflected-measures-plan.md)
+ *
+ * A `^reflect` function that passed the totality gate (elab_reflect.c) has a
+ * defining equation the solver may use.  The supported fragment is
+ * quantifier-free, so the equation is never asserted as `forall x. f(x) = ...`
+ * -- that is the solver cliff the design stays on the cheap side of.  It is
+ * asserted one GROUND INSTANCE at a time, by syntactic reduction:
+ *
+ *   for an application f(t) in the VC, substitute the argument forms for the
+ *   parameters in the body, select `match` arms syntactically where the
+ *   scrutinee is constructor-headed or a literal, and assert
+ *   f(t) = <the surviving expression>.
+ *
+ * `if` and guarded arms have no term in the logic, so a body under one is
+ * asserted as a PROPOSITION rather than an equation:
+ *   def(f(t), (if c a b)) = (c => def(f(t), a)) and (not c => def(f(t), b)).
+ * The match itself is gone by the time anything is encoded -- no encoding of
+ * `match` exists here -- and a `match` whose scrutinee is NOT ground declines
+ * (RF4 territory).  New application terms the reduction introduces
+ * (`len(Nil)` inside `1 + len(Nil)`) are encoded through enc_measure again and
+ * unfold in turn, bounded by the obligation's fuel: running out costs
+ * completeness (the equation is simply not asserted; TUR-W0385 if the
+ * obligation then stays unknown), never soundness.
+ *
+ * Every equation is DEFINITIONAL -- true of the total function it came from
+ * -- so, like RT4's propagated refinements, it is sound wherever the
+ * application appears, including under a negation.  The whole soundness
+ * argument rests on the callee being total, which is why `reflect_total` is
+ * the only thing that turns this on and why RF1/RF2 are a hard gate.
+ * ------------------------------------------------------------------------- */
+
+#define RF_ENV_MAX   48
+#define RF_DEF_DEPTH 32
+
+/* The measure's local names, bound to forms in the CALLER's namespace (the
+ * argument forms of the application, and pattern/let variables bound to
+ * sub-forms of those).  Because every value is a caller-namespace form, the
+ * reduced expression never mentions a measure-local name and the caller's
+ * substitution applies to it unchanged. */
+typedef struct RfBind { const char *name; const Form *form; } RfBind;
+typedef struct RfEnv  { RfBind b[RF_ENV_MAX]; uint32_t n; } RfEnv;
+
+static uint32_t rf_fuel_default(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *s = getenv("TUR_REFLECT_FUEL");
+        long v = s ? strtol(s, NULL, 10) : 8;
+        if (v < 0) v = 0;
+        /* Each unfolding step is a C-stack frame (rf_unfold -> rf_def -> enc
+         * -> enc_measure -> rf_unfold), so the override is capped where the
+         * stack is still comfortably bounded. */
+        if (v > 256) v = 256;
+        cached = (int)v;
+    }
+    return (uint32_t)cached;
+}
+
+static const Form *rf_env_lookup(const RfEnv *env, const char *name) {
+    for (uint32_t i = env->n; i-- > 0; )
+        if (strcmp(env->b[i].name, name) == 0) return env->b[i].form;
+    return NULL;
+}
+
+static bool rf_env_bind(RfEnv *env, const char *name, const Form *form) {
+    if (!name || env->n >= RF_ENV_MAX) return false;
+    env->b[env->n].name = name; env->b[env->n].form = form; env->n++;
+    return true;
+}
+
+static bool rf_form_is_literal(const Form *f) {
+    return f && (f->tag == F_INT || f->tag == F_FLOAT || f->tag == F_BOOL ||
+                 f->tag == F_STR || f->tag == F_NIL);
+}
+
+/* A symbol form the encoder can mint without a symbol table.  Every consumer
+ * of a Form inside the encoder compares symbols by NAME (form_equal, sym_is,
+ * enc's `->name` reads), so an arena Symbol that is never interned is
+ * indistinguishable from an interned one here -- and these forms never leave
+ * the encoder (a ufunc `origin` is the one place they are stored, and it is
+ * read for its span alone). */
+static const Form *rf_sym_form(RefineVC *vc, const char *name) {
+    Symbol *s = (Symbol *)arena_alloc(vc->arena, sizeof(Symbol));
+    size_t n = strlen(name);
+    s->name = arena_strdup(vc->arena, name, n);
+    s->len  = (uint32_t)n;
+    s->hash = 0;
+    Span sp; memset(&sp, 0, sizeof(sp));
+    return form_sym(vc->arena, sp, s);
+}
+
+/* `(.field v)` -- the selector form the arm hypotheses are written with. */
+static const Form *rf_sel_form(RefineVC *vc, const char *field, const Form *v) {
+    char acc[128];
+    snprintf(acc, sizeof(acc), ".%s", field);
+    Form **k = (Form **)arena_alloc(vc->arena, 2 * sizeof(Form *));
+    k[0] = (Form *)rf_sym_form(vc, acc);
+    k[1] = (Form *)v;
+    return form_list(vc->arena, v->span, k, 2);
+}
+
+/* ---- RF4: what the hypotheses say about a NON-ground scrutinee ----------
+ *
+ * A caller's own `match` arm puts two kinds of fact in the environment
+ * (rt_prove_paths): the constructor's discriminant, `(= (#dt/tag s) k)`, and
+ * each binder's identity, `(= t (.tl s))`.  Neither is `s = (Cons h t)`, so
+ * the syntactic reduction of RF3 has no constructor term to select an arm
+ * against.  It does have enough: the TAG picks the arm, and the binders of
+ * that arm are the field SELECTORS applied to the scrutinee -- the very
+ * terms the arm hypotheses already equate the caller's binders to, so
+ * congruence closure connects them for free.
+ *
+ * Forms are compared modulo the hypotheses' variable equations: `t` and
+ * `(.tl xs)` are one thing when `(= t (.tl xs))` is in scope, so a tag fact
+ * about `t` answers for the reduced form `(.tl xs)` and vice versa.  That is
+ * a bounded syntactic canonicalisation, not congruence closure -- a
+ * completeness knob; every fact consulted is a hypothesis of this path, so
+ * an arm selected here is the arm that runs on it. */
+
+#define RF_CANON_DEPTH 6
+
+static bool rf_hyp_is_plain_eq(const RefineHyp *h, const Form **a, const Form **b) {
+    if (!h || h->bound_var || !h->pred || h->pred->tag != F_LIST ||
+        h->pred->as.list.len != 3) return false;
+    const Form *hd = h->pred->as.list.items[0];
+    if (!sym_is(hd, "=") && !sym_is(hd, "==")) return false;
+    *a = h->pred->as.list.items[1];
+    *b = h->pred->as.list.items[2];
+    return true;
+}
+
+/* Replace every symbol that some hypothesis equates to a non-symbol form by
+ * that form, recursively and boundedly, so two spellings of one value
+ * compare equal.  Returns `f` itself when nothing changes. */
+static const Form *rf_canon(const Enc *E, const Form *f, uint32_t depth) {
+    if (!f || depth > RF_CANON_DEPTH || !E->env) return f;
+    if (f->tag == F_SYM) {
+        for (const RefineHyp *h = E->env->head; h; h = h->next) {
+            const Form *a, *b;
+            if (!rf_hyp_is_plain_eq(h, &a, &b)) continue;
+            const Form *other = NULL;
+            if (form_equal(a, f) && b->tag != F_SYM) other = b;
+            else if (form_equal(b, f) && a->tag != F_SYM) other = a;
+            if (other && other->tag == F_LIST) return rf_canon(E, other, depth + 1);
+        }
+        return f;
+    }
+    if (f->tag != F_LIST || f->as.list.len == 0) return f;
+    Form **items = NULL;
+    for (uint32_t i = 0; i < f->as.list.len; i++) {
+        const Form *c = rf_canon(E, f->as.list.items[i], depth + 1);
+        if (c == f->as.list.items[i] && !items) continue;
+        if (!items) {
+            items = (Form **)arena_alloc(E->vc->arena, f->as.list.len * sizeof(Form *));
+            for (uint32_t j = 0; j < i; j++) items[j] = f->as.list.items[j];
+        }
+        items[i] = (Form *)c;
+    }
+    return items ? form_list(E->vc->arena, f->span, items, f->as.list.len) : f;
+}
+
+/* The constructor tag the hypotheses pin `scrut` to, if any. */
+static bool rf_hyp_tag_of(const Enc *E, const Form *scrut, int64_t *tag) {
+    if (!E->env) return false;
+    const Form *cs = rf_canon(E, scrut, 0);
+    for (const RefineHyp *h = E->env->head; h; h = h->next) {
+        const Form *a, *b;
+        if (!rf_hyp_is_plain_eq(h, &a, &b)) continue;
+        for (int side = 0; side < 2; side++) {
+            const Form *x = side ? b : a, *y = side ? a : b;
+            if (!x || x->tag != F_LIST || x->as.list.len != 2 ||
+                !sym_is(x->as.list.items[0], "#dt/tag") || !y || y->tag != F_INT)
+                continue;
+            if (form_equal(rf_canon(E, x->as.list.items[1], 0), cs)) { *tag = y->as.i; return true; }
+        }
+    }
+    return false;
+}
+
+/* The literal the hypotheses equate `scrut` to, if any (a literal-pattern
+ * arm's `(= s 0)`). */
+static const Form *rf_hyp_literal_of(const Enc *E, const Form *scrut) {
+    if (!E->env) return NULL;
+    const Form *cs = rf_canon(E, scrut, 0);
+    for (const RefineHyp *h = E->env->head; h; h = h->next) {
+        const Form *a, *b;
+        if (!rf_hyp_is_plain_eq(h, &a, &b)) continue;
+        if (rf_form_is_literal(b) && form_equal(rf_canon(E, a, 0), cs)) return b;
+        if (rf_form_is_literal(a) && form_equal(rf_canon(E, b, 0), cs)) return a;
+    }
+    return NULL;
+}
+
+/* Is this caller-namespace form headed by a data constructor? */
+static bool rf_form_is_ctor_app(const Enc *E, const Form *f) {
+    if (!f || f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *h = f->as.list.items[0];
+    if (h->tag != F_SYM || !h->as.sym) return false;
+    if (!E->env || !E->env->resolve_fn) return false;
+    RefineFnInfo ci; memset(&ci, 0, sizeof(ci));
+    return E->env->resolve_fn(E->env->resolve_ud, h->as.sym->name, &ci) && ci.is_ctor;
+}
+
+/* Reduce a body expression in VALUE position to a caller-namespace form.
+ * NULL declines: a name the environment does not bind (a global, which the
+ * first cut does not read), control flow in value position, or a shape the
+ * gate never admitted. */
+static const Form *rf_reduce(Enc *E, const Form *f, const RfEnv *env, uint32_t depth) {
+    if (!f || depth > RF_DEF_DEPTH) return NULL;
+    switch (f->tag) {
+    case F_INT: case F_FLOAT: case F_BOOL: case F_STR: case F_NIL:
+        return f;
+    case F_SYM: {
+        const char *nm = f->as.sym ? f->as.sym->name : NULL;
+        if (!nm) return NULL;
+        if (strcmp(nm, "true") == 0 || strcmp(nm, "false") == 0) return f;
+        return rf_env_lookup(env, nm);
+    }
+    case F_LIST: {
+        if (f->as.list.len == 0) return NULL;
+        const Form *h = f->as.list.items[0];
+        if (h->tag != F_SYM || !h->as.sym) return NULL;
+        if (sym_is(h, "if") || sym_is(h, "match") || sym_is(h, "let") || sym_is(h, "do"))
+            return NULL;   /* control flow in value position: not in the first cut */
+        uint32_t n = f->as.list.len;
+        Form **items = (Form **)arena_alloc(E->vc->arena, n * sizeof(Form *));
+        items[0] = (Form *)h;
+        for (uint32_t i = 1; i < n; i++) {
+            const Form *r = rf_reduce(E, f->as.list.items[i], env, depth + 1);
+            if (!r) return NULL;
+            items[i] = (Form *)r;
+        }
+        return form_list(E->vc->arena, f->span, items, n);
+    }
+    default:
+        return NULL;
+    }
+}
+
+/* Match one pattern against a caller-namespace form.  1 = matches (binding
+ * its variables into `env`), 0 = does not match, -1 = cannot tell (the form
+ * is not ground where the pattern needs it to be). */
+static int rf_match_pat(Enc *E, const Form *pat, const Form *v, RfEnv *env) {
+    if (!pat || !v) return -1;
+    if (pat->tag == F_SYM) {
+        if (sym_is(pat, "_")) return 1;
+        return rf_env_bind(env, pat->as.sym ? pat->as.sym->name : NULL, v) ? 1 : -1;
+    }
+    if (rf_form_is_literal(pat)) {
+        if (!rf_form_is_literal(v)) {
+            /* RF4: a literal-pattern arm's own `(= s <lit>)` fact. */
+            const Form *lit = rf_hyp_literal_of(E, v);
+            if (!lit) return -1;
+            E->vc->reflect_arms_by_hyp++;
+            v = lit;
+        }
+        if (pat->tag != v->tag) {
+            /* An int literal against a float literal (or any cross-tag pair)
+             * is a typing question the elaborator settled; decline. */
+            return -1;
+        }
+        switch (pat->tag) {
+        case F_INT:   return pat->as.i == v->as.i;
+        case F_BOOL:  return pat->as.b == v->as.b;
+        case F_FLOAT: return pat->as.f == v->as.f;
+        case F_STR:   return pat->as.s.len == v->as.s.len &&
+                             memcmp(pat->as.s.p, v->as.s.p, pat->as.s.len) == 0;
+        case F_NIL:   return 1;
+        default:      return -1;
+        }
+    }
+    if (pat->tag == F_LIST && pat->as.list.len > 0) {
+        const Form *ph = pat->as.list.items[0];
+        if (ph->tag != F_SYM || !ph->as.sym) return -1;
+        if (!rf_form_is_ctor_app(E, v)) {
+            /* RF4: not a constructor term -- ask the hypotheses for its tag,
+             * select by tag, and bind the arm's variables to the field
+             * selectors the caller's own arm hypotheses are written with. */
+            int64_t tag;
+            if (!rf_hyp_tag_of(E, v, &tag)) return -1;
+            if (!E->env || !E->env->resolve_fn) return -1;
+            RefineFnInfo ci; memset(&ci, 0, sizeof(ci));
+            if (!E->env->resolve_fn(E->env->resolve_ud, ph->as.sym->name, &ci) || !ci.is_ctor)
+                return -1;
+            if ((int64_t)ci.ctor_tag != tag) return 0;
+            if (pat->as.list.len - 1 != ci.ctor_n_fields) return -1;
+            E->vc->reflect_arms_by_hyp++;
+            for (uint32_t i = 1; i < pat->as.list.len; i++) {
+                const Form *sp = pat->as.list.items[i];
+                if (sp->tag == F_SYM && sym_is(sp, "_")) continue;
+                /* Only a record constructor has a selector to bind through. */
+                if (!ci.ctor_is_record || !ci.ctor_field_names || !ci.ctor_field_names[i - 1])
+                    return -1;
+                const Form *sel = rf_sel_form(E->vc, ci.ctor_field_names[i - 1], v);
+                int r = rf_match_pat(E, sp, sel, env);
+                if (r != 1) return r;
+            }
+            return 1;
+        }
+        const Form *vh = v->as.list.items[0];
+        if (strcmp(ph->as.sym->name, vh->as.sym->name) != 0) return 0;
+        if (pat->as.list.len != v->as.list.len) return -1;   /* arity: not ours to judge */
+        for (uint32_t i = 1; i < pat->as.list.len; i++) {
+            int r = rf_match_pat(E, pat->as.list.items[i], v->as.list.items[i], env);
+            if (r != 1) return r;
+        }
+        return 1;
+    }
+    return -1;
+}
+
+static VCTerm *rf_def(Enc *E, VCTerm *app, const Form *body, const RfEnv *env, uint32_t depth);
+
+/* The arms of a `match` from index `idx` on, against the reduced scrutinee
+ * `fs`.  Returns the proposition for the first matching arm (a guarded arm
+ * splits on its guard and falls through to the arms after it). */
+static VCTerm *rf_def_arms(Enc *E, VCTerm *app, const Form *m, uint32_t idx,
+                           const Form *fs, const RfEnv *env, uint32_t depth) {
+    while (idx < m->as.list.len) {
+        const Form *pat = m->as.list.items[idx++];
+        const Form *guard = NULL;
+        if (idx + 1 < m->as.list.len && sym_is(m->as.list.items[idx], "when")) {
+            guard = m->as.list.items[idx + 1];
+            idx += 2;
+        }
+        if (idx >= m->as.list.len) return NULL;
+        const Form *arm_body = m->as.list.items[idx++];
+        RfEnv env2 = *env;
+        int r = rf_match_pat(E, pat, fs, &env2);
+        if (r < 0) return NULL;
+        if (r == 0) continue;
+        if (!guard) return rf_def(E, app, arm_body, &env2, depth + 1);
+        const Form *fg = rf_reduce(E, guard, &env2, depth + 1);
+        if (!fg) return NULL;
+        VCTerm *tg = enc(E, fg);
+        if (!tg || tg->sort != VS_BOOL) return NULL;
+        VCTerm *yes = rf_def(E, app, arm_body, &env2, depth + 1);
+        if (!yes) return NULL;
+        VCTerm *no = rf_def_arms(E, app, m, idx, fs, env, depth + 1);
+        if (!no) return NULL;
+        return vc_mk2(E->vc, VC_AND,
+                      vc_mk2(E->vc, VC_IMPLIES, tg, yes),
+                      vc_mk2(E->vc, VC_IMPLIES, vc_not(E->vc, tg), no));
+    }
+    return NULL;   /* no arm matched -- cannot happen for a covered match */
+}
+
+/* The proposition "app is what `body` computes", in the environment. */
+static VCTerm *rf_def(Enc *E, VCTerm *app, const Form *body, const RfEnv *env, uint32_t depth) {
+    if (!body || depth > RF_DEF_DEPTH || E->fail) return NULL;
+    if (body->tag == F_LIST && body->as.list.len > 0) {
+        const Form *h = body->as.list.items[0];
+        if (sym_is(h, "if")) {
+            if (body->as.list.len != 4) return NULL;
+            const Form *fc = rf_reduce(E, body->as.list.items[1], env, depth + 1);
+            if (!fc) return NULL;
+            VCTerm *tc = enc(E, fc);
+            if (!tc || tc->sort != VS_BOOL) return NULL;
+            VCTerm *a = rf_def(E, app, body->as.list.items[2], env, depth + 1);
+            if (!a) return NULL;
+            VCTerm *b = rf_def(E, app, body->as.list.items[3], env, depth + 1);
+            if (!b) return NULL;
+            return vc_mk2(E->vc, VC_AND,
+                          vc_mk2(E->vc, VC_IMPLIES, tc, a),
+                          vc_mk2(E->vc, VC_IMPLIES, vc_not(E->vc, tc), b));
+        }
+        if (sym_is(h, "do")) {
+            if (body->as.list.len < 2) return NULL;
+            /* Pure body: only the last form's value matters. */
+            return rf_def(E, app, body->as.list.items[body->as.list.len - 1], env, depth + 1);
+        }
+        if (sym_is(h, "let")) {
+            if (body->as.list.len < 3 || body->as.list.items[1]->tag != F_VEC) return NULL;
+            const Form *bv = body->as.list.items[1];
+            RfEnv env2 = *env;
+            uint32_t i = 0;
+            while (i < bv->as.list.len) {
+                const Form *name = bv->as.list.items[i++];
+                if (name->tag != F_SYM || !name->as.sym) return NULL;
+                if (i + 1 < bv->as.list.len && sym_is(bv->as.list.items[i], ":")) i += 2;
+                if (i >= bv->as.list.len) return NULL;
+                const Form *init = rf_reduce(E, bv->as.list.items[i++], &env2, depth + 1);
+                if (!init) return NULL;
+                if (!rf_env_bind(&env2, name->as.sym->name, init)) return NULL;
+            }
+            return rf_def(E, app, body->as.list.items[body->as.list.len - 1], &env2, depth + 1);
+        }
+        if (sym_is(h, "match")) {
+            if (body->as.list.len < 4) return NULL;
+            const Form *fs = rf_reduce(E, body->as.list.items[1], env, depth + 1);
+            if (!fs) return NULL;
+            /* A constructor term or a literal selects its arm directly; any
+             * other scrutinee selects through the hypotheses (RF4,
+             * rf_match_pat) or declines with -1 and no equation. */
+            return rf_def_arms(E, app, body, 2, fs, env, depth + 1);
+        }
+    }
+    const Form *fr = rf_reduce(E, body, env, depth + 1);
+    if (!fr) return NULL;
+    VCTerm *t = enc(E, fr);
+    if (!t) return NULL;
+    /* The equation must be well-sorted: a Bool measure equals a proposition,
+     * an Int/Real one equals a value of the SAME sort (an Int measure over a
+     * Real body would be the RM-B0 missort in a new coat). */
+    if ((t->sort == VS_BOOL) != (app->sort == VS_BOOL)) return NULL;
+    if (t->sort != VS_BOOL && t->sort != app->sort) return NULL;
+    /* A Bool measure is a proposition, and its equation is an `iff`.  Spelled
+     * as two implications rather than `(= p q)`: the solver's cube expansion
+     * splits an implication natively, while an equality between propositions
+     * is an atom it cannot see inside (the `all-pos?` fixture stayed Unknown
+     * under `=` and proves under the pair). */
+    if (t->sort == VS_BOOL)
+        return vc_mk2(E->vc, VC_AND,
+                      vc_mk2(E->vc, VC_IMPLIES, app, t),
+                      vc_mk2(E->vc, VC_IMPLIES, t, app));
+    return vc_mk2(E->vc, VC_EQ, app, t);
+}
+
+/* An argument form as the CALLER wrote it.  A predicate's argument may be the
+ * refinement's bound variable or a callee parameter name; both stand for a
+ * caller form at this obligation (the subject, or a crossing's argument), and
+ * that form is what a `match` arm can be selected against.  The encoder's
+ * own substitution already maps these names to the same TERMS, so the
+ * reduced expression encodes to terms `app` was built from. */
+static const Form *rf_resolve_arg(const Enc *E, const Form *a) {
+    for (uint32_t hop = 0; hop < 4 && a && a->tag == F_SYM && a->as.sym; hop++) {
+        const char *nm = a->as.sym->name;
+        const Form *next = NULL;
+        if (E->rf_subject_name && E->rf_subject_form && strcmp(nm, E->rf_subject_name) == 0)
+            next = E->rf_subject_form;
+        for (uint32_t i = 0; !next && i < E->n_ob_subst; i++)
+            if (E->ob_subst[i].name && E->ob_subst[i].form &&
+                strcmp(E->ob_subst[i].name, nm) == 0)
+                next = E->ob_subst[i].form;
+        if (!next || next == a) break;
+        a = next;
+    }
+    return a;
+}
+
+/* Assert the defining equation of a TOTAL reflected callee at `app` (the
+ * application of `call`'s head to `call`'s arguments), within fuel. */
+static void rf_unfold(Enc *E, const RefineFnInfo *info, const Form *call, VCTerm *app) {
+    if (!E->rf_fuel || !info->reflect_body || !info->reflect_param_names) return;
+    RefineVC *vc = E->vc;
+    uint32_t argc = call->as.list.len - 1;
+    if (argc != info->reflect_n_params) return;
+    /* Once per distinct application term: a term reached again (the same
+     * VCTerm, by hash-consing) already carries its equation. */
+    for (uint32_t i = 0; i < vc->n_reflect_done; i++)
+        if (vc->reflect_done[i] == app->id) return;
+    if (*E->rf_fuel == 0) { vc->reflect_fuel_exhausted = true; return; }
+    (*E->rf_fuel)--;
+    if (vc->n_reflect_done == vc->cap_reflect_done) {
+        uint32_t ncap = vc->cap_reflect_done ? vc->cap_reflect_done * 2 : 16;
+        uint32_t *nb = (uint32_t *)arena_alloc(vc->arena, ncap * sizeof(uint32_t));
+        if (vc->reflect_done) memcpy(nb, vc->reflect_done, vc->n_reflect_done * sizeof(uint32_t));
+        vc->reflect_done = nb; vc->cap_reflect_done = ncap;
+    }
+    vc->reflect_done[vc->n_reflect_done++] = app->id;
+
+    RfEnv env; memset(&env, 0, sizeof(env));
+    for (uint32_t i = 0; i < argc; i++)
+        if (!rf_env_bind(&env, info->reflect_param_names[i],
+                         rf_resolve_arg(E, call->as.list.items[i + 1])))
+            return;
+    /* An isolated encoder: a reduction the fragment cannot encode drops just
+     * this equation (fewer hypotheses only make the goal harder), never the
+     * predicate that mentioned the call.  The substitution, frozen set and
+     * fuel are the caller's, so the argument forms encode to the very terms
+     * `app` was built from. */
+    Enc E2 = *E;
+    E2.fail = NULL; E2.depth = 0;
+    VCTerm *prop = rf_def(&E2, app, info->reflect_body, &env, 0);
+    if (prop && !E2.fail && prop->sort == VS_BOOL) {
+        vc_add_hyp(vc, prop);
+        vc->reflect_unfolds++;
+    }
+}
+
 static VCTerm *enc_measure(Enc *E, const Form *f) {
     const Form *head = f->as.list.items[0];
     if (head->tag != F_SYM && head->tag != F_KEYWORD) {
@@ -559,6 +1051,23 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
         const char *nm = pure ? head->as.sym->name
                               : enc_fresh_name(E, head->as.sym->name);
         uint32_t v = vc_declare_var(E->vc, nm, msort);
+        /* RF6: a nullary constructor is a free constant, not a value to
+         * enumerate; remember it so the model search treats it as one. */
+        if (info.is_ctor) {
+            RefineVC *vc = E->vc;
+            bool seen = false;
+            for (uint32_t i = 0; i < vc->n_ctor_consts; i++)
+                if (vc->ctor_consts[i] == v) { seen = true; break; }
+            if (!seen) {
+                if (vc->n_ctor_consts == vc->cap_ctor_consts) {
+                    uint32_t ncap = vc->cap_ctor_consts ? vc->cap_ctor_consts * 2 : 8;
+                    uint32_t *nb = (uint32_t *)arena_alloc(vc->arena, ncap * sizeof(uint32_t));
+                    if (vc->ctor_consts) memcpy(nb, vc->ctor_consts, vc->n_ctor_consts * sizeof(uint32_t));
+                    vc->ctor_consts = nb; vc->cap_ctor_consts = ncap;
+                }
+                vc->ctor_consts[vc->n_ctor_consts++] = v;
+            }
+        }
         return vc_var_ref(E->vc, v);
     }
     VCTerm **args = (VCTerm **)arena_alloc(E->vc->arena, argc * sizeof(VCTerm *));
@@ -570,13 +1079,31 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
                              : enc_fresh_name(E, head->as.sym->name);
     uint32_t fn = vc_declare_ufunc(E->vc, fname, argc, msort,
                                    f, /*nonlinear=*/false);
+    /* RF6: what this symbol denotes, for the model search's evaluability
+     * test.  Only a PURE (stable-named) symbol can be either. */
+    if (pure) {
+        if (info.is_ctor)       E->vc->ufuncs[fn].is_ctor   = true;
+        if (info.reflect_total) E->vc->ufuncs[fn].reflected = true;
+    }
     VCTerm *app = vc_app(E->vc, fn, args, argc);
+
+    /* reflected-measures RF3: a TOTAL `^reflect` callee has a defining
+     * equation the solver may use.  Assert it at this application, by
+     * reduction, within the obligation's fuel. */
+    if (pure && info.reflect_total) rf_unfold(E, &info, f, app);
 
     /* RT4: if the callee declares (or had inferred) a return refinement, that
      * predicate holds of the value this call produced -- either because it was
      * proved statically or because the runtime check would have panicked
      * otherwise.  Assert it, so the result of a refined function can satisfy
      * the next obligation instead of being an opaque term.
+     *
+     * That is a PARTIAL-correctness argument: for a call that never returns
+     * there is no produced value and the fact is vacuous, which is fine only
+     * because the obligation it feeds is about a program point after the
+     * call.  For a `^reflect` callee the totality gate (elab_reflect.c) makes
+     * the argument unconditional -- the call returns, so the fact is about a
+     * value that exists (reflected-measures-plan RF6.3).
      *
      * The hypothesis is about THIS application term, so it is sound wherever
      * the call appears in the formula -- including under a negation. */
@@ -593,6 +1120,7 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
             info.ret_pred && info.ret_var) {
             Enc E2; memset(&E2, 0, sizeof(E2));
             E2.vc = E->vc; E2.env = E->env; E2.sorts = E->sorts;
+            E2.rf_fuel = E->rf_fuel;
             for (uint32_t i = 0; i < E->n_propagating; i++)
                 E2.propagating[E2.n_propagating++] = E->propagating[i];
             E2.propagating[E2.n_propagating++] = nm;
@@ -858,6 +1386,10 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
     }
 
     RefineVC *vc = vc_new(a);
+    /* reflected-measures RF3: one unfolding budget per obligation, shared by
+     * every encoder below.  Deterministic reduction plus the RT7 memo make the
+     * default a completeness knob only; TUR_REFLECT_FUEL overrides it. */
+    uint32_t rf_fuel = rf_fuel_default();
 
     /* Declare every in-scope name with its sort up front so the encoder never
      * has to guess (an undeclared name still defaults to VS_INT). */
@@ -893,7 +1425,7 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
     /* --- hypotheses ------------------------------------------------------ */
     for (RefineHyp *h = ob->env ? ob->env->head : NULL; h; h = h->next) {
         Enc E; memset(&E, 0, sizeof(E));
-        E.vc = vc; E.env = ob->env; E.sorts = &sorts;
+        E.vc = vc; E.env = ob->env; E.sorts = &sorts; E.rf_fuel = &rf_fuel;
         /* C2 / #reads: a hypothesis (a recovered guard) is written in the
          * CALLER's names, so it needs the frozen set but NOT the callee-param
          * subst. */
@@ -904,6 +1436,11 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
             E.subst[E.n_subst].name = h->bound_var;
             E.subst[E.n_subst].term = vc_var_ref(vc, v);
             E.n_subst++;
+            /* RF4: the same binding as a FORM, so a reflected measure applied
+             * to the bound variable unfolds at the subject name -- where the
+             * caller's tag facts live. */
+            E.rf_subject_name = h->bound_var;
+            E.rf_subject_form = rf_sym_form(vc, h->subject_name);
         }
         VCTerm *t = enc(&E, h->pred);
         /* A hypothesis we cannot encode is simply dropped: fewer hypotheses
@@ -926,7 +1463,7 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
 
     /* --- goal ------------------------------------------------------------ */
     Enc E; memset(&E, 0, sizeof(E));
-    E.vc = vc; E.env = ob->env; E.sorts = &sorts;
+    E.vc = vc; E.env = ob->env; E.sorts = &sorts; E.rf_fuel = &rf_fuel;
     /* C2 / #reads: the goal predicate is written in the CALLEE's parameter
      * names, so it needs both the frozen set and the callee-param subst to
      * resolve a `#reads` world argument back to the caller expression. */
@@ -940,7 +1477,7 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
     for (uint32_t i = 0; i < ob->n_subst && E.n_subst < ENC_MAX_SUBST; i++) {
         if (!ob->subst[i].name || !ob->subst[i].form) continue;
         Enc E2; memset(&E2, 0, sizeof(E2));
-        E2.vc = vc; E2.env = ob->env; E2.sorts = &sorts;
+        E2.vc = vc; E2.env = ob->env; E2.sorts = &sorts; E2.rf_fuel = &rf_fuel;
         VCTerm *t = enc(&E2, ob->subst[i].form);
         /* An un-encodable argument leaves the callee's parameter name FREE,
          * which is weaker than the truth in the same way a dropped
@@ -953,7 +1490,7 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
     }
     if (ob->var_name && ob->subject) {
         Enc E2; memset(&E2, 0, sizeof(E2));
-        E2.vc = vc; E2.env = ob->env; E2.sorts = &sorts;
+        E2.vc = vc; E2.env = ob->env; E2.sorts = &sorts; E2.rf_fuel = &rf_fuel;
         VCTerm *subj = enc(&E2, ob->subject);
         if (!subj) {
             if (out_reason) *out_reason = E2.fail ? E2.fail : "subject expression is outside the supported fragment";
@@ -964,6 +1501,8 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
             E.subst[E.n_subst].term = subj;
             E.n_subst++;
         }
+        E.rf_subject_name = ob->var_name;
+        E.rf_subject_form = ob->subject;
     }
     VCTerm *goal = enc(&E, ob->predicate);
     if (!goal) {
@@ -975,5 +1514,17 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
         return NULL;
     }
     vc_set_goal(vc, goal);
+    /* RF6: may the bounded model search run on a VC that mentions
+     * uninterpreted functions?  Yes iff every one of them is a data
+     * constructor (a free value) or a reflected measure (defined by the
+     * equations asserted above), and no unfolding ran out of fuel -- an
+     * application left without its equation would be a free value the
+     * search could bend a spurious counterexample around. */
+    {
+        bool ok = !vc->reflect_fuel_exhausted;
+        for (uint32_t i = 0; ok && i < vc->n_ufuncs; i++)
+            ok = vc->ufuncs[i].is_ctor || vc->ufuncs[i].reflected;
+        vc->reflect_model_ok = ok;
+    }
     return vc;
 }

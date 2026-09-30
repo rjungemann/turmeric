@@ -9162,6 +9162,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--strict-refine")     == 0) g_strict_refine            = true;
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
         else if (strcmp(tok, "--dump-write-frames") == 0) g_dump_write_frames        = true;
+        else if (strcmp(tok, "--dump-reflect")      == 0) g_dump_reflect             = true;
         else if (strcmp(tok, "--dump-read-frames") == 0)  g_dump_read_frames         = true;
         else if (strcmp(tok, "--dump-cps-coloring") == 0) g_dump_cps_coloring        = true;
         else if (strcmp(tok, "--dump-cps")          == 0) g_dump_cps                 = true;
@@ -11822,6 +11823,15 @@ static int tur_main_inner(int argc, char **argv) {
         } else if (strcmp(argv[i], "--strict-effects") == 0) {
             /* ER1: enforce unannotated effectful functions as warnings */
             g_strict_effects = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--dump-reflect") == 0) {
+            /* reflected-measures RF5: print the totality verdict for each
+             * `^reflect` site */
+            g_dump_reflect = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

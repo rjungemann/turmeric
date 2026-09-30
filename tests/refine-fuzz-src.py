@@ -134,6 +134,10 @@ CMP_OPS = ["<", "<=", ">", ">=", "=", "not="]
 #   pure_rec        1      yes       recursive -- exercises the cycle rule
 #   impure_c        1      NO        declares #fx{} and counts up in inline C
 #   impure_c0       0      NO        nullary counter (the original repro shape)
+#   reflect_if      1      yes       `^reflect` with an if-body: its equation is
+#                                    ADMITTED by unfolding (reflected-measures)
+#   reflect_lie     1      yes       `^reflect` on a non-total body: must be a
+#                                    hard TUR-E0384, never an admitted equation
 #
 # RM-B: bool-returning helpers live in their own pool, because they are the
 # only ones that can appear as a predicate ATOM rather than inside an
@@ -177,7 +181,8 @@ class Gen:
     def gen_helpers(self, n):
         """Emit n helper defns.  Returns (source_lines, helper_specs)."""
         lines = []
-        kinds = ["pure_plain", "pure_fx", "pure_rec", "impure_c", "impure_c0"]
+        kinds = ["pure_plain", "pure_fx", "pure_rec", "impure_c", "impure_c0",
+                 "reflect_if", "reflect_lie"]
         for i in range(n):
             kind = self.rng.choice(kinds)
             name = "h%d" % i
@@ -202,6 +207,37 @@ class Gen:
                     lines.append(
                         "(defn %s [a : float] #fx{} : float\n"
                         "  (if (<= a 0.0) 0.0 (* a 0.5)))" % name)
+                self.helpers.append((name, kind, 1, True))
+            elif kind == "reflect_if":
+                # reflected-measures RF3: a `^reflect` measure whose defining
+                # equation the encoder ADMITS by unfolding.  Non-recursive with
+                # an `if`, so it unfolds at ANY argument (no arm to select) and
+                # exercises the proposition-shaped encoding
+                #   (c => f(t) = a) and (not c => f(t) = b).
+                # Both legs see the same flag; the reference leg suppresses
+                # discharge, so an unfolding that is WRONG (an equation that
+                # does not hold of the compiled body) shows up as a
+                # BUG_soundness exactly like a bad congruence grant would.
+                body_a = self.expr(1, ["a"], pure_only=True)
+                body_b = self.expr(1, ["a"], pure_only=True)
+                lines.append(
+                    "(defn ^reflect %s [a : %s] : %s\n"
+                    "  (if (%s a %s) %s %s))"
+                    % (name, self.ty, self.ty,
+                       self.rng.choice([">", "<=", "="]), self.lit(),
+                       body_a, body_b))
+                self.helpers.append((name, kind, 1, True))
+            elif kind == "reflect_lie":
+                # reflected-measures RF1: `^reflect` on a function that is NOT
+                # total must be a hard TUR-E0384 (the program does not compile
+                # on either leg -> skip_invalid), never an admitted equation.
+                # If the gate ever let this through, `f(a) = 1 + f(a)` would be
+                # an inconsistent hypothesis and every obligation in the
+                # program would "prove" -- the soundness check catches that.
+                lines.append(
+                    "(defn ^reflect %s [a : %s] : %s\n"
+                    "  (%s %s (%s a)))"
+                    % (name, self.ty, self.ty, "+", self.nonzero_lit(), name))
                 self.helpers.append((name, kind, 1, True))
             elif kind == "impure_c":
                 # Declares an EMPTY effect row and is not remotely pure.  This
@@ -1075,11 +1111,15 @@ def run_gate(tur, path, refined):
     emits checks MINUS the elided ones, and the elided set is exactly what the
     miscompile property below is about.
     """
+    # Both experiments are enabled on both legs.
+    # reflected-measures: the `^reflect` helper kinds need the gate on both
+    # legs (the reference leg still suppresses discharge, so the equations
+    # are asserted into VCs that then decide nothing).
     # loop-invariants-plan LI5: both legs enable the experiment, so a
     # generated `:invariant` is ACTED on -- runtime checks in the reference
     # leg, checks minus proofs in the discharge leg.  Harmless to the other
-    # shapes: the gate only acts where a loop carries an invariant.
-    cmd = [tur, "--enable=loop-invariants", "run", path]
+    # shapes: each gate only acts where the shape it names is generated.
+    cmd = [tur, "--enable=reflected-measures", "--enable=loop-invariants", "run", path]
     env = dict(os.environ)
     # See the note in tests/type-fuzz-src.py: a shimmed `python3` (mise, asdf)
     # can re-export another install's TUR_STDLIB_DIR inside this process, which

@@ -1,0 +1,10 @@
+;; reflected-measures RF2: a match over LITERALS has no coverage check in the
+;; elaborator (S4-lit path), so the reflection walk demands a trailing `_` or
+;; variable arm itself.  The sibling positive reflect-literal-default adds
+;; the `_` arm and passes.
+(defn ^reflect code [n : int] : int
+  (match n
+    1 10
+    2 20))
+
+(defn main [] : int (println (code 1)) 0)

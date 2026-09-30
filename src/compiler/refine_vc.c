@@ -82,6 +82,8 @@ uint32_t vc_declare_ufunc(RefineVC *vc, const char *name, uint32_t arity,
     u->sort      = sort;
     u->origin    = origin;
     u->nonlinear = nonlinear;
+    u->is_ctor   = false;   /* RF6: set by the encoder once it knows */
+    u->reflected = false;
     if (nonlinear) {
         vc->has_nonlinear = true;
         if (!vc->nonlinear_src) vc->nonlinear_src = origin;

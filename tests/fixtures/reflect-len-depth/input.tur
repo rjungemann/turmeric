@@ -1,0 +1,18 @@
+;; reflected-measures RF3: unfolding at DEPTH.  A three-cell literal against
+;; `(> (len v) 2)` needs four definitional equations (three Cons steps and the
+;; Nil base), well inside the default fuel of 8.  The sibling negative
+;; errors/reflect-len-depth-false asks the same literal for `(> (len v) 3)`,
+;; which is false, and must NOT prove.
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn at-least-3 [xs : #refine{ v : Lst | (> (len v) 2) }] : int 3)
+
+(defn main [] : int
+  (println (at-least-3 (Cons 1 (Cons 2 (Cons 3 (Nil))))))
+  (println "reflect-len-depth")
+  0)

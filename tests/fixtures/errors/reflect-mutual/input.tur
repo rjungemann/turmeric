@@ -1,0 +1,12 @@
+;; reflected-measures RF1: MUTUAL recursion rejects (settled question 3: the
+;; effect_check.c fixpoint is the template if demand appears; self-recursion
+;; only until then).  Both are declared `#fx{}` so the purity walk clears
+;; them and the rejection is the termination gate's, not purity's: the
+;; callee `mb` can reach `ma` again through its own body.
+(defn ^reflect ma [n : int] #fx{} : int
+  (if (= n 0) 0 (mb n)))
+
+(defn ^reflect mb [n : int] #fx{} : int
+  (+ 1 (ma n)))
+
+(defn main [] : int (println (ma 0)) 0)

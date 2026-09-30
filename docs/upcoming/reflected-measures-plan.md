@@ -1,14 +1,118 @@
 # Plan: Reflected Measures (`^reflect`)
 
-> **Status:** Elaborated 2026-08-17 -- phased and sized against the real
-> elaborator, still **on hold** pending the trigger below. Not started.
-> **Last Updated:** 2026-08-17
+> **Status:** **In progress** since 2026-09-29, behind
+> `--enable=reflected-measures` (`EXPERIMENTS[]` row, introduced 0.57.0,
+> `expires_at` 0.61.0, prototype). RF0, RF1, RF2, RF3 and RF5 landed in the
+> first cut (2026-09-29), RF4 and RF6.1 the next day; RF6.2 is deliberately
+> untouched (see "Landed" below). Nothing in the plan is outstanding. Taken off hold by
+> direct request ("execute the plan"), not by one of the triggers below.
+> **Last Updated:** 2026-09-29
+>
+> **RF0 decision (recorded 2026-09-29):** a `^reflect`ed function -- and only
+> such a function -- must be shown total (pure, structurally recursive in one
+> fixed argument position, exhaustively matching) before its defining
+> equation is admitted as an axiom. Program termination and total
+> correctness in general remain **out of scope, permanently**, exactly as
+> [refinement-types-plan.md](../archive/refinement-types-plan.md) and
+> [loop-invariants-plan.md](loop-invariants-plan.md) state; nothing here
+> makes an un-annotated non-terminating program fail to compile. The gate is
+> a hard error (`TUR-E0384`) on the definition, never a silent downgrade.
 > **Type:** Compiler / Refinement types
-> **Depends on:** [refinement-types-plan.md](../../archive/refinement-types-plan.md)
+> **Depends on:** [refinement-types-plan.md](../archive/refinement-types-plan.md)
 > (RT0--RT7 + S0--S4, all landed), the `refined` graduation (**happened
 > 2026-08-01**, shipped v0.33.0), and
-> [refine-predicate-measures-plan.md](../../archive/refine-predicate-measures-plan.md)
+> [refine-predicate-measures-plan.md](../archive/refine-predicate-measures-plan.md)
 > (RM-B, landed).
+
+## Landed (2026-09-29, first cut)
+
+| Phase | State | Where |
+|---|---|---|
+| RF0 gate, syntax, site table | landed | `src/runtime/experiments.c` (`reflected-measures`), `g_opt_reflected_measures`, `^reflect` in `elab_defn` (either order with `^deprecated`; pass-1 scan in `elab_toplevel.c` skips it), `ReflectSite` on `Elab`, `Binding::{is_reflected, reflect_total, reflect_body, reflect_param_names}` |
+| RF1 purity + termination | landed | `src/compiler/elab_reflect.c`: `rf_resolve_reflect_sites` (deferred, before crossings resolve) plus an eager TOTAL-only stamp at the end of `elab_defn` so in-place return obligations can unfold |
+| RF2 coverage | landed | same walk: `#{NonExhaustive}`, literal match without `_`/variable arm, and every unrecognised form reject |
+| RF3 bounded ground unfolding | landed | `refine_collect.c`: `rf_unfold` / `rf_def` / `rf_reduce`; fuel 8 per obligation, `TUR_REFLECT_FUEL` override; `RefineFnInfo::{is_ctor, reflect_*}`; `RefineVC::reflect_*`; `RefineStats::{reflect_unfolds, reflect_fuel_out}` |
+| RF4 non-ground unfolding | landed 2026-09-30 | `rf_match_pat` selects an arm from a tag fact `(= (#dt/tag s) k)` in the hypotheses and binds the arm's variables to `.field` selectors, comparing forms modulo the binder equations (`rf_canon`); a literal-pattern arm selects from `(= s <lit>)` the same way; `RefineFnInfo::ctor_*` carries the constructor shape; `RefineStats::reflect_arms_by_hyp` counts it |
+| RF5 diagnostics, strict, dump | landed | `TUR-E0384` / `TUR-W0385` (the plan's E0383/W0384 were taken by `#reads` by land time), `tur explain` entries, `--strict-refine` promotes W0385 at the W0372 site, `--dump-reflect` |
+| RF6.1 counterexamples with measures | landed 2026-09-30 | `refine_model_search` runs on a VC whose every ufunc is a constructor or a reflected measure and whose unfolding did not run out of fuel (`RefineVC::reflect_model_ok`, flags on `VCUFunc`); a measure application evaluates by reading its own definitional equation (`model_collect_defs` / `model_def_of`), a nullary constructor is a fixed free constant kept out of the printed model. `errors/reflect-len-depth-false` and `errors/reflect-bool-refuted` are now `TUR-E0371` "false for the value given here" |
+| RF6.2 `ENC_MAX_PROPAGATE` as a well-founded budget | not done, by design | the plan says touch it only if a real program hits the depth-4 cutoff; none has |
+| RF6.3 RT4 justification | landed | the return-refinement propagation comment in `enc_measure` now says which half of its partial-correctness argument a total callee makes unconditional |
+
+Three things the first cut settled that the phases below did not predict:
+
+- **`if` needs no term.** The logic has no if-then-else, so a body under an
+  `if` (or a guarded arm) is admitted as a *proposition*,
+  `(c => f(t) = a) and (not c => f(t) = b)`, not an equation. Same for
+  `let` (environment extension) and `do` (last form). A Bool measure's
+  equation is an `iff`, asserted as two implications: the cube expansion
+  splits an implication natively, while `(= p q)` over propositions is an
+  atom it cannot see inside (`reflect-bool-measure` stayed Unknown under
+  `=`).
+- **The argument must be resolved through the obligation's substitutions.**
+  In a parameter predicate the argument is the bound variable (`(len v)`);
+  the form to select an arm against is the *subject* `(Cons 1 (Nil))`, which
+  the goal encoder now carries beside its term (`Enc::rf_subject_form`).
+- **The purity memo needed one fix.** A caller walked before its callee's
+  body existed memoized UNKNOWN for good; with the eager stamp walking every
+  `^reflect` body at its own definition, that made any reflected function
+  calling a later-defined one permanently impure. The walk now keeps every
+  open frame provisional after a body-less callee (`RtPureCtx::leaned_missing`),
+  the way a recursion edge already did. `reflect-mutual` is the fixture that
+  found it (its pair was rejected at the purity gate instead of the
+  termination gate).
+
+RF4 (2026-09-30) is exactly the plan's reduction-through-hypotheses and no
+more: no guarded per-arm equations over tag/selector symbols are asserted,
+so a scrutinee nothing pins simply declines. Acceptance: `reflect-nonground-arm`
+(the match-guarded `sorted?` shape: the Cons/Cons arm of a return obligation
+proves from the precondition's unfolding plus `t = (.tl xs)`) proves, its
+sibling `errors/reflect-nonground-no-tag` stays unknown. The fixture
+returns a `bool` because two pre-existing bugs surfaced on the way: a
+refined **ADT** result type miscompiles outright
+(`docs/reported/refined-adt-return-type-miscompiles.md`, filed, unrelated
+to reflection), and a `match` arm's binders were declared at the result
+refinement's sort instead of their field's, which in a `bool`-returning
+body dropped every `(= t (.tl xs))` as a Bool/Int mismatch -- fixed in
+`rt_prove_paths` as part of this work, since RF4 has nothing to select
+through without those equations. (`(= r true)` as the predicate still
+does not prove where bare `r` does: an equality between two propositions is
+an atom the cube expansion cannot see inside -- the same limitation the
+Bool-measure `iff` encoding works around.) Cost: cube and
+EUF-term peaks over all 116 pre-existing `refine-*`/`reflect-*` fixtures
+(happy and `errors/`) are **identical before and after** on every fixture
+(max cubes 16, max EUF terms 50; sums 178 and 863; the two new RF4 fixtures
+add 16 cubes / 33 terms and 2 / 17) -- RF4 adds terms only to an obligation that
+mentions a reflected measure at a non-ground argument with a tag fact in
+scope. Budget going forward: the same two peaks must not grow on a fixture
+that writes no `^reflect`.
+
+One thing to know about crossings: `rt_collect_path_conds` deliberately
+omits an arm's tag and selector facts for a CALL-SITE crossing (a pattern
+binder that shadows an outer name would inherit its hypotheses in the flat
+namespace), so RF4 fires on return obligations and on crossings only where
+a tag fact reaches the environment some other way. Extending the collector
+with the same shadow veto `let` has is possible and was not done: every
+tag/selector fact is a ufunc, and `refine_model_search` declines any VC
+with one, so pushing them into crossing VCs would turn refuted crossings
+(TUR-E0371 with a model) into unknown ones -- the RF6 item first.
+
+RF6.1's soundness argument, since a spurious refutation would be a wrong
+compile error: the search constructs an interpretation, not a guess. Under
+the gate every ufunc is a constructor or a reflected measure; constructors
+are read as free term formers (distinct ground applications are distinct
+values, a nullary one a fixed constant), and every measure application is
+evaluated by its own definitional equation -- an application without one
+(anything the encoder did not unfold) fails the evaluation and the search
+declines. Two applications of one measure to the same term are one
+hash-consed `VCTerm`, so congruence needs no separate check. A model found
+this way satisfies every hypothesis and falsifies the goal under a genuine
+EUF+LIA interpretation, which is what `TUR-E0371` claims.
+
+Sabotage run (RF1/RF3 acceptance): with `rf_classify` stubbed to return
+TOTAL, `errors/reflect-nontotal-self` compiles under `--strict-refine` and
+reports its false crossing `(= (spin 3) 7)` as **1 proven** -- the
+inconsistent equation `spin(3) = 1 + spin(3)` discharges it. In the shipped
+build the same program is `TUR-E0384`. The stub was removed before commit.
 
 ## Goal
 
@@ -53,10 +157,10 @@ are the predicates users actually want to write.
 Two documents in this tree list termination checking as an explicit non-goal,
 and **this plan does not reopen either of them**:
 
-- [refinement-types-plan.md](../../archive/refinement-types-plan.md), under
+- [refinement-types-plan.md](../archive/refinement-types-plan.md), under
   "Non-goals for this prototype": *"Termination checking or total-correctness
   verification."*
-- [loop-invariants-plan.md](../loop-invariants-plan.md), "Explicitly not in
+- [loop-invariants-plan.md](loop-invariants-plan.md), "Explicitly not in
   scope": *"A refinement says nothing about whether the loop finishes... A
   non-terminating loop with a true invariant is perfectly well-typed. Ranking
   functions / decreasing measures. Same reason."*
@@ -210,7 +314,7 @@ unchanged.
 ### 5. Diagnostic codes: the ones this plan reserved are gone
 
 Write-frames took `TUR-E0381`/`TUR-E0382`. The sibling
-[loop-invariants-plan.md](../loop-invariants-plan.md) needs no codes (its
+[loop-invariants-plan.md](loop-invariants-plan.md) needs no codes (its
 obligations report through `TUR-E0371`/`TUR-W0372` like `:pre`/`:post` do),
 so this plan takes the next free slots: **`TUR-E0383`** (a `^reflect` whose
 function fails the totality gate -- purity, termination, or coverage; the
@@ -466,24 +570,24 @@ Until then this file is the record, and "no measured demand" is the answer.
 
 ## References
 
-- [refinement-types-plan.md](../../archive/refinement-types-plan.md) -- the
+- [refinement-types-plan.md](../archive/refinement-types-plan.md) -- the
   parent plan; "Why checking, not inference" is the constraint this one
   inherits, and its termination non-goal is what RF0 carves out from.
-- [refine-predicate-measures-plan.md](../../archive/refine-predicate-measures-plan.md)
+- [refine-predicate-measures-plan.md](../archive/refine-predicate-measures-plan.md)
   -- RM-B; bool-returning measures as predicate atoms (what makes reflecting
   them worth anything) and the `ret_sort` plumbing RF3 rides.
-- [refine-float-measure-missort.md](../../archive/history/refine-float-measure-missort.md)
+- [refine-float-measure-missort.md](../archive/history/refine-float-measure-missort.md)
   -- the soundness bug that mandates RF3's `3.25` fixture discipline.
-- [checked-write-frames-plan.md](../../archive/checked-write-frames-plan.md) -- WF2's
+- [checked-write-frames-plan.md](../archive/checked-write-frames-plan.md) -- WF2's
   `WriteFrameSite` + deferred resolver is the structural template for RF0/RF1,
   and its sabotage-run convention is the acceptance style RF1/RF3 adopt.
-- [loop-invariants-plan.md](../loop-invariants-plan.md) -- the sibling plan;
+- [loop-invariants-plan.md](loop-invariants-plan.md) -- the sibling plan;
   shares the termination non-goal and the structure-indexed-type trigger, and
   reuses `TUR-E0371`/`TUR-W0372` rather than claiming codes of its own.
-- [../../guides/refinement-types-guide.md](../../guides/refinement-types-guide.md)
+- [../../guides/refinement-types-guide.md](../guides/refinement-types-guide.md)
   -- the supported fragment, measure rules, and purity walk this plan works
   within.
-- [../../guides/refinement-solver-internals-guide.md](../../guides/refinement-solver-internals-guide.md)
+- [../../guides/refinement-solver-internals-guide.md](../guides/refinement-solver-internals-guide.md)
   -- the staged decision procedure and its caps (the RF4 cost model).
 - Liquid Haskell, `{-@ reflect @-}` -- direct prior art for opt-in reflection
   gated on totality. Dafny's `fuel` -- prior art for bounded unfolding as the

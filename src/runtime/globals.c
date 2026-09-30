@@ -123,6 +123,8 @@ uint32_t g_synthetic_user_from_line = 0; /* r7rs-lang-plan R9; see globals.h */
 const char *g_repl_start_lang = NULL; /* saffron-lang-plan S8 / r7rs R9: `tur repl --lang <base>`, validated by main.c */
 bool g_opt_option_niche = true;   /* graduated 2026-09-03; TUR_OPTION_NICHE=0 restores the tagged monomorph */
 bool g_opt_regions = true;       /* graduated 2026-09-05; TUR_REGIONS=0 restores malloc + unbracketed calls */
+bool g_opt_reflected_measures = false; /* reflected-measures RF0: --enable=reflected-measures */
+bool g_dump_reflect = false;           /* reflected-measures RF5: --dump-reflect */
 bool g_opt_r7rs = false;         /* r7rs-lang-plan D11: set by the `#lang r7rs` line, never by a flag */
 bool g_opt_loop_invariants = false; /* loop-invariants-plan: `--enable=loop-invariants` */
 bool g_opt_r7rs_gc = true;       /* r7rs-gc (graduated 2026-09-25): a compiled `#lang r7rs` program's allocator is the collector; TUR_R7RS_GC=0 or --no-r7rs-gc opts out (docs/archive/r7rs-gc-plan.md) */

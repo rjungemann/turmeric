@@ -181,6 +181,7 @@ set(TUR_CORE_SOURCES
     compiler/project.c
     compiler/elab_dynvars.c
     compiler/elab_toplevel.c
+    compiler/elab_reflect.c
     compiler/mono_specs.c
     compiler/emit_core.c
     compiler/emit_dk_runtime.c

@@ -38,6 +38,9 @@ typedef struct RefineStats {
     uint32_t memo_hits;         /* RT7 obligations answered from the memo */
     uint32_t path_probes;       /* RT4 per-path probes for branching bodies */
     uint32_t proven_by_path;    /* obligations discharged by path splitting */
+    uint32_t reflect_unfolds;   /* reflected-measures: definitional equations asserted */
+    uint32_t reflect_arms_by_hyp; /* RF4: match arms selected from a hypothesis, not a ground term */
+    uint32_t reflect_fuel_out;  /* reflected-measures: obligations that ran out of fuel */
     /* loop-invariants-plan: while-loop invariant obligations (initiation and
      * preservation, one per conjunct), and loops the analysis declined. */
     uint32_t inv_proven;
