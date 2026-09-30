@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.57.0] -- 2026-09-30
 
 ### Added
 
@@ -32,20 +32,189 @@ All notable changes to Turmeric are documented here.
   `docs/upcoming/reflected-measures-plan.md` and the refinement guide's
   "Reflected measures" section.
 
+- **Loop invariants, behind `--enable=loop-invariants`.** A `while` may carry a
+  user-written `:invariant p` directly after its condition. The annotation
+  always parses and is validated as a pure bool (`TUR-E0375`, where a stray
+  keyword used to be a silently ignored value statement); the gate withholds
+  the acting. Enabled, `p` is checked on entry and at the end of every
+  iteration in compiled and interpreted code, and per-conjunct initiation and
+  preservation obligations are discharged against the solver -- a proof elides
+  the check, a refutation is `TUR-E0371` naming the broken conjunct and path,
+  and undecided or declined is `TUR-W0372` (promoted by `--strict-refine`).
+  The post-loop fact `p AND (not c)` is then usable by return obligations and
+  by call-site crossings. Conservative declines keep both checks for place
+  writes, early exits, borrowed names, names assigned in lambdas or handler
+  clauses, field/deref/mutable-global reads in the invariant, and shadowing
+  body lets. See `docs/upcoming/loop-invariants-plan.md`.
+
+- **`#lang r7rs/sweet` -- sweet-expressions over Scheme's lexemes.** Scheme was
+  the one language with no sweet-exp base, though SRFI-110 is a Scheme SRFI.
+  The preprocessor's scanners now ask one helper which bytes are not structure
+  -- a character literal (`#\(`, `#\;`, `#\"`) in every dialect, and under
+  Scheme a `|delimited symbol|` and the `#;` prefix -- so a Scheme reader runs
+  under the sweet-exp layer with neoteric on, following SRFI-105: `f{n - 1}`
+  is `(f (- n 1))`, `f{}` is `(f)`, and `f[x]` is `f(x)`. A library found by
+  `import` may be written in it, `tur fmt` keeps its layout (idempotent, with
+  `--lang r7rs/sweet` for a bare buffer), and the playground picker lists it
+  under Scheme. `r7rs/neoteric` and `r7rs/curly-infix` stay unknown. Fixed on
+  the way: in `turmeric/sweet` a `#\(` opened a group that never closed and a
+  `;` inside a string after `$` cut the line short, and in every dialect a
+  datum comment last in a list was "unexpected `)`" -- `#;` is intertoken
+  space now, as R7RS 2.2 says.
+
+- **A security guide, `SECURITY.md`, and a private disclosure channel.**
+  `docs/guides/security-guide.md` states the five trust boundaries, each with
+  its promise and a "status today" block naming the open defect where the
+  promise is not kept. `SECURITY.md` carries the private advisory form, a
+  7-day acknowledgement / 14-day assessment, and an explicit scope and
+  non-scope; GitHub private vulnerability reporting is enabled on the repo.
+  `CODEOWNERS` is grouped by the boundary each path sits on rather than by
+  directory.
+
+- **Function values cross an instance body and a typed `fn` parameter.** Four
+  open reports, all about a function value losing its shape at a boundary.
+  Non-HKT method dispatch binds the method's own type variables from the
+  arguments, so an instance spec resolves them instead of spelling the call
+  through the int64 carrier. A new `any` bridge marshals a function whose
+  signature differs from the slot's only in where `any` appears -- at a method
+  dispatch, and at a typed call's ground `fn` parameter -- and an HKT `: any`
+  result attaches the M7 element bindings. An inline-C body may now declare
+  `: any`.
+
+### Changed
+
+- **The CPS/effects and `#lang r7rs` runtimes keep their state per thread and
+  per fiber.** Both kept all of their mutable state in process globals, so any
+  compiled program running CPS code or a Scheme `guard` on two threads at once
+  corrupted itself: a worker's entry replaced the landing another thread's tail
+  resume longjmps to (15 of 15 runs), five threads in `call/cc` escapes
+  segfaulted in `__dk_reap_push` (20 of 20), and a `guard` on one thread caught
+  or missed a `raise` on another (every run). The DK reap registry, entry
+  depth, trampoline landing, resume chain and meta-stack -- eleven variables --
+  and the r7rs handler stack, wind stack and re-entry value are thread-local
+  now, with host accessors for `tur jit` and as collector roots. A `FiberBlock`
+  carries its own copies, swapped by `tur_fiber_block_resume`, so a fiber that
+  yields inside a CPS entry, a `guard` or a `parameterize` finds them again on
+  whatever thread resumes it. `parameterize` puts `(cell . value)` bindings in
+  front of the running code's list for its extent instead of writing the shared
+  cell.
+
+- **A restricted interpreter env can no longer act on the host, or end it.**
+  A `turi_env_new_sandboxed()` env created and deleted files, forked, read the
+  environment, and ended or aborted the host process -- and from `tur check`,
+  with no embedder and no flags, a `defmacro*` body calling a native by its
+  bare name deleted a file and spawned a process at expansion time. Every
+  builtin native is classified (656 names, 63 not pure) and
+  `turi_env_register_native` stamps the row's `TURI_CAP_FS` / `TURI_CAP_PROC` /
+  `TURI_CAP_ENV` bits on the closure, which `eval_apply_driven` refuses before
+  the native runs. Separately, `turi_eval` and `turi_call` install a landing
+  pad on an env without `TURI_CAP_PROC`, so an uncaught panic, a typed panic, a
+  double panic or a native's own error exit returns `TURI_ERROR` instead of
+  ending the process. Unrestricted envs print and exit exactly as before.
+
+- **The `#lang r7rs` prelude compiles in parallel pieces on a cold cache.** The
+  first build compiled the whole ~1,200-function library unit at `-O2` in one
+  `cc` (9.1 s); it now compiles in one piece per CPU, up to eight
+  (`TUR_PRELUDE_JOBS` overrides, `1` is whole), and `cc -r` joins the pieces
+  into the object the cache already keeps: 4.6 s on four cores, 6.3 s on two.
+  Warm builds are unchanged. Each piece keeps every declaration, type and
+  static helper and gets a contiguous run of the external functions; a small
+  function also gets a static twin in every other piece so `-O2` inlines it as
+  before while its address still names the one definition. Any failure
+  compiles the unit whole.
+
+- **The JIT prunes the prelude a program never reaches before c2mir.** Every
+  program paid a fixed ~0.46 s and c2mir was 60% of it, compiling the whole
+  auto-loaded prelude -- ~377 static functions for `(println 42)` -- plus the
+  heavy system headers it needs, where `cc` drops an unreferenced static
+  function for free. The prune drops the static functions, objects, fat boxes
+  and extern declarations nothing live names, and the unused
+  regex/inet/socket/select/hamt includes. `TUR_JIT_NO_PRUNE=1` opts out, the
+  full-TU retry (`TUR-W0071`) covers a pruned TU, and `run-jit.sh` fails a
+  fixture that passes only on that retry. Measured over the corpus: per-fixture
+  sum 1843 s -> 1355 s, median 508 -> 350 ms.
+
+- **The last operand of `and`/`or` is a tail position.** One predicate now
+  answers `tco_mark`, the `^tailcall` verifier and `emit_tail`, so the three
+  agree: the last operand is in the enclosing tail position and the others are
+  tests (the verifier names that, `TC_SC_TEST`). `emit_tail` lowers
+  `(and a .. z)` to `if (!(a)) return false; .. <tail z>`, symmetrically for
+  `or`, so a self call there is a backedge at `-O0`.
+
+- **The REPL reads multi-line forms the way the reader does.** It decided a
+  form was complete with a per-line bracket count that knew only `"` strings
+  and `;` comments, so a ```` ```c ```` body's `for (...;...;...)` kept the
+  `..` prompt open forever (piped input swallowed, exit 0), a `')'` character
+  literal evaluated the form halfway through the fence, and multi-line
+  strings, `#| |#` comments and `#\(` literals broke the same way. A blank
+  line inside a string, fence or block comment is kept as content, and end of
+  input mid-form prints `(cancelled)`. A duplicate `defn` is rejected rather
+  than silently shadowed.
+
 ### Fixed
 
-- A `match` arm's binders were declared to the refinement solver at the sort
-  of the function's *result* refinement rather than of their own field, so in
-  a `: #refine{ r : bool | ... }` body every binder was a proposition and its
-  field equation (`(= t (.tl xs))`) was silently dropped as a sort mismatch.
+- **Two source-reachable refinement soundness holes around int/real
+  literals.** Both elided a return check on a program whose refinement is
+  false for the input given -- the reference build panics, the normal build
+  printed the value and exited 0. S1's literal-conflict check treated the Int
+  literal `3` and the Real literal `3.0` as a contradiction, so any cube
+  equating a real-sorted term with an int-sorted one was refuted and the goal
+  under it "proved"; literals now conflict only when their values differ. And
+  `(as T e)` is a cast, not a measure. Alongside: the bounded counterexample
+  search covers Real and Bool variables, so a plainly false float refinement
+  or one with a bool parameter gets `TUR-E0371` with a witness instead of the
+  vague `TUR-W0372`, and a hypothesis the encoder cannot express is a decline
+  rather than a dropped fact.
+
+- **A `match` arm's binders carry their own field's sort.** They were declared
+  to the refinement solver at the sort of the function's *result* refinement
+  rather than of their own field, so in a `: #refine{ r : bool | ... }` body
+  every binder was a proposition and its field equation (`(= t (.tl xs))`) was
+  silently dropped as a sort mismatch.
   Binders now carry their field's sort; a bool-returning `match` body knows
   what its arms destructure.
 
-- The refinement purity walk memoized a caller's UNKNOWN verdict when its
+- **The refinement purity walk no longer memoizes a verdict taken across a
+  forward reference.** It memoized a caller's UNKNOWN verdict when its
   callee had no body yet (a forward reference), so a function asked about
   early stayed non-congruent for the whole unit even once the callee was
   defined. Every frame open at such a miss is now provisional, as it already
   was across a recursion edge.
+
+- **A threaded `call/cc` capture no longer swallows the thread's own
+  thread-locals.** `r7k_stack_base` took the stack top from
+  `pthread_getattr_np`, which on glibc is the top of the mapping, and for
+  every thread but the main one glibc keeps the TCB and each module's static
+  TLS block up there. A capture that no top-level form bounds copied the
+  thread's thread-locals into the image, and every re-entry wrote them back as
+  they were at the capture -- including the value the re-entry delivers. The
+  image now stops below the TCB and static TLS. A parked thread's registers
+  are aligned and spilled in the caller's frame, the frame pointer is read
+  plainly at every spill, and a fiber that finishes on a different thread gets
+  fresh thread-locals and keeps its own live-escape set.
+
+- **macOS r7rs-gc: the stop handler polls instead of `sigsuspend`, and a
+  nested entry does not wait.** Also the prelude split's GC seam, and the
+  allocator table is built on the stack rather than as a `static const`.
+
+- **A constructor that leaves a type parameter open keeps the ones it fixes.**
+  `(Ok 7.1)` fixes `A` and nothing names `B`, and it was typed as the bare
+  `Result` -- which dropped `A` as well. Beyond the reported `fmap` refusal,
+  that was a silent wrong answer: `(ok-val (Ok 7.1))` and `(err-val (Err
+  3.25))` printed the float's bits. The constructor is typed as the
+  application now, each open parameter a type variable carrying an
+  `open_slot` bit, and an argument's open slot matches a variable another
+  argument already bound. Separately, an enclosing definition's type variable
+  stays rigid at a call through a local `fn` value, where the expected-return
+  binding used to bind it to the enclosing `: any` and never widen.
+
+- **`catch-error` boxes an ascription-grounded handler result, and a
+  quoted-symbol base case keeps its tail-call partner.** An inline-C instance
+  body reads its handler's result as the int64 carrier word, so method-call
+  poly-fn packing asks for the carrier-spill shim there too; and the let-init
+  carrier bridge no longer dereferences an init whose emitted text already is
+  one. In CPS, a quoted-symbol base case no longer evicts a guard's
+  tail-call partner.
 
 ## [0.56.3] -- 2026-09-28
 
