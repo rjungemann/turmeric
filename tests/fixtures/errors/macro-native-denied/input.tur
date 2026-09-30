@@ -1,0 +1,8 @@
+;; security-audit-plan WP3 (S-1): a defmacro* body reaching a native by its
+;; bare name is refused by the capability check, not merely the builtins.
+;; Before WP3 this spawned the process at `tur check` time.
+(defmodule prog
+  (defmacro* spawner []
+    (do (process/spawn "true" 0)
+        (int->syntax 1)))
+  (defn main [] : int (println (spawner)) 0))

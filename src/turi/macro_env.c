@@ -229,8 +229,11 @@ struct TuriEnv *elab_macro_env_get(ElabSession *session) {
         turi_env_deny(env, TURI_CAP_ALL);
         turi_env_set_fuel(env, TURI_DEFAULT_SANDBOX_FUEL);
         /* Stage 3: --macro-caps=io re-grants exactly I/O for the rare
-         * legitimately-effectful macro.  Nothing else is ever granted. */
-        if (g_macro_caps_io) turi_env_allow(env, TURI_CAP_IO);
+         * legitimately-effectful macro (an embed-file generator).  WP3 split
+         * path-based file access out of TURI_CAP_IO into TURI_CAP_FS, so the
+         * flag grants both to keep meaning what it documented.  Process,
+         * environment, FFI, inline-C, unsafe and async are never granted. */
+        if (g_macro_caps_io) turi_env_allow(env, TURI_CAP_IO | TURI_CAP_FS);
     }
 
     macro_env_bracket_exit(&br, e);
@@ -310,8 +313,19 @@ static Form *import_form(Elab *e, const Form *f, Span call_span) {
     return out;
 }
 
+/* security-audit-plan WP3: --no-proc-macros refuses each of the three ways
+ * into macro-time evaluation before the env is even created. */
+static bool proc_macros_refused(Span span, const char *what) {
+    if (!g_no_proc_macros) return false;
+    diag_emit(DIAG_ERROR, span,
+              "%s: procedural macros are disabled (--no-proc-macros); no "
+              "macro-time code was run", what);
+    return true;
+}
+
 bool elab_macro_env_define_proc(Elab *e, const char *fn_name,
                                 const Form *defn_form, Span err_span) {
+    if (proc_macros_refused(err_span, "defmacro*")) return false;
     TuriEnv *env = elab_macro_env_get((ElabSession *)e);
     if (!env) {
         diag_emit(DIAG_ERROR, err_span,
@@ -356,6 +370,7 @@ bool elab_macro_env_define_proc(Elab *e, const char *fn_name,
 
 Form *elab_macro_env_call_proc(Elab *e, MacroDef *macro,
                                Form **args, uint32_t n_args, Span call_span) {
+    if (proc_macros_refused(call_span, macro->name->name)) return NULL;
     TuriEnv *env = elab_macro_env_get((ElabSession *)e);
     if (!env) {
         diag_emit(DIAG_ERROR, call_span,
@@ -449,6 +464,7 @@ Form *elab_macro_env_call_proc(Elab *e, MacroDef *macro,
 
 bool elab_macro_env_import(Elab *e, const Symbol *module_name,
                            const char *path, Span span) {
+    if (proc_macros_refused(span, ":for-macros")) return false;
     TuriEnv *env = elab_macro_env_get((ElabSession *)e);
     if (!env) {
         diag_emit(DIAG_ERROR, span,

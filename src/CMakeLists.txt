@@ -52,11 +52,12 @@ endif()
 # Format-string policing (security-audit-plan WP5).  -Wformat=2 adds
 # -Wformat-nonliteral: a format that is not a string literal cannot be checked,
 # and one the PROGRAM supplies is how the interpreter's printf/snprintf
-# emulation (S-2, S-3) turns a `%s` into a dereference of an integer.  The
+# emulation (S-2, S-3) turned a `%s` into a dereference of an integer.  The
 # printf-style wrappers (buf_printf, diag_emit, turi_errorf, ...) carry
 # TUR_PRINTF_FMT, so every call's arguments are checked against its format too.
-# Under TUR_WERROR a new one fails the build; the two open S-2/S-3 sites in
-# turi/eval.c are silenced by name, with the finding named beside them.
+# Under TUR_WERROR a new one fails the build.  The interpreter's emulation
+# formats with a copy of the program's string that WP3's check rebuilt; it is
+# not a literal, so those sites in turi/eval.c are silenced by name.
 # ---------------------------------------------------------------------------
 set(TUR_FORMAT_WARNINGS -Wformat=2 -Wformat-security)
 
@@ -119,6 +120,9 @@ set(TURI_EVAL_SOURCES
     # block relocated from main.c so `tur repl` and the WASM REPL register the
     # same interpreter natives as --interpret (web-repl-repl-inline-c-native-gap).
     turi/interpreter_natives.c
+    # native_caps.c -- the capability each builtin native requires, checked at
+    # the one native dispatch in eval.c (security-audit-plan WP3, S-1).
+    turi/native_caps.c
     # macro_env.c -- the per-compile macro-time interpreter env
     # (macro-system-direction-plan Stage 1): elab_macro_env_get/_dispose,
     # declared in compiler/elab.h, implemented turi-side to keep the include

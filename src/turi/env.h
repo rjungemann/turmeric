@@ -150,12 +150,20 @@ typedef struct TuriCollBuf {
  * sandboxed environment.  TURI_CAP_ALL grants every capability (unrestricted).
  * TURI_CAP_NONE grants nothing (fully sandboxed). */
 typedef uint32_t TuriCaps;
-#define TURI_CAP_IO       (1u << 0)  /* println-*, file I/O builtins */
-#define TURI_CAP_FFI      (1u << 1)  /* dlopen/dlsym/dlclose */
+#define TURI_CAP_IO       (1u << 0)  /* stdout/stdin, raw-fd read/write, pipes */
+#define TURI_CAP_FFI      (1u << 1)  /* dlopen/dlsym/dlclose, extern-c */
 #define TURI_CAP_INLINE_C (1u << 2)  /* inline-C expressions */
-#define TURI_CAP_ASYNC    (1u << 3)  /* (async ...) forms */
+#define TURI_CAP_ASYNC    (1u << 3)  /* (async ...) forms and the scheduler natives */
 #define TURI_CAP_UNSAFE   (1u << 4)  /* raw-malloc, ptr-deref, unsafe-cast, ... */
 #define TURI_CAP_IMPORT   (1u << 5)  /* (import ...) module loading */
+/* security-audit-plan WP3: the classes the native classification table
+ * (native_caps.c) needed that the builtin set never did. */
+#define TURI_CAP_FS       (1u << 6)  /* open/create/remove/stat by path */
+#define TURI_CAP_PROC     (1u << 7)  /* spawn, wait, exit the host process */
+#define TURI_CAP_ENV      (1u << 8)  /* getenv / environ */
+/* Every bit defined above.  A native that hands its argument to an evaluator
+ * holding all capabilities (r7rs-eval-c-eval__) requires all of them. */
+#define TURI_CAP_EVERY    ((TuriCaps)((1u << 9) - 1u))
 #define TURI_CAP_ALL      (~(TuriCaps)0)
 #define TURI_CAP_NONE     ((TuriCaps)0)
 
@@ -419,6 +427,11 @@ typedef struct TuriEnv {
     int          n_include_dirs;
     /* Phase R2: catch-unwind support — setjmp boundary for interpreter panic handling */
     jmp_buf     *catch_jmp;           /* active catch-unwind jmp_buf, or NULL */
+    /* security-audit-plan S-5: while turi_eval runs a program in an env that
+     * may not end the host (no TURI_CAP_PROC), the landing pad every panic
+     * path jumps to instead of exit()/abort() -- including the uncatchable
+     * ones (no-unwind, double panic).  NULL otherwise. */
+    jmp_buf     *host_exit_jmp;
     char         catch_panic_msg[512]; /* copy of panic message when longjmp fires */
     /* Phase TI5: typed panic payload carried across the catch boundary so that
      * catch-panic-of can filter by type and the panic-payload-* accessors can

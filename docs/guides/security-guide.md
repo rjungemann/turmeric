@@ -28,7 +28,7 @@ keeps.
 | --- | --- | --- | --- |
 | T1 | Compiling a project | a `.tur` tree, its `build.tur`, its `spices/`, its Justfile | Split -- see below. `tur build` makes **no promise**. `tur check`, `tur run --list` and the language server promise not to execute repo-supplied code or shell unless you asked them to. |
 | T2 | A compiled program's own inputs | bytes handed to stdlib readers: `bytes->serial-cont`, image files, JSON, HTTP requests to `httpd`, `read-async` lengths | A malformed input is a `result` error or a panic -- never a wild read or write. |
-| T3 | The sandboxed interpreter | the program text evaluated inside `Env/new-sandboxed`, the macro environment, or the playground | A capability-denied environment does no I/O, no process, no FFI, no inline C, and terminates under fuel. |
+| T3 | The sandboxed interpreter | the program text evaluated inside `Env/new-sandboxed`, the macro environment, or the playground | A capability-denied environment does no I/O, no filesystem, no process, no environment, no FFI, no inline C; it cannot corrupt or end the host process; and it terminates under fuel. |
 | T4 | The supply chain | the installer, release assets, `tur fetch` of a `:url` spice, Actions inputs | Installing a release gets you the bytes CI built, verifiably. A spice pinned in `tur.lock` cannot change under a rebuild without a diagnostic. |
 | T5 | Editor protocols | LSP, DAP and MCP messages over stdio | The peer is your editor, so it is semi-trusted -- but framing must be robust. A bad `Content-Length` must not overflow. |
 
@@ -93,22 +93,28 @@ Until it lands: **`tur run --list` is not safe on a tree you do not trust.**
 #### `tur check` expands macros, and the macro environment is not yet a boundary (open, high)
 
 `tur check` expands compile-time macros, which is the same exposure Rust has
-with proc macros. The macro environment is *intended* to be capability-denied
--- it calls `turi_env_deny(env, TURI_CAP_ALL)` and bounds work with step fuel --
-but see T3: the native function table is registered into every environment and
-almost none of its entries consult the capability set, so the denial is not yet
-enforced at the point that matters.
+with proc macros. The macro environment is capability-denied, and that is now
+enforced for every native function as well as the builtins (T3): a
+`defmacro*` body that calls `process/spawn`, deletes a file or reads the
+environment gets a diagnostic, and nothing runs.
 
-When that is fixed (S-1, below), a genuinely capability-denied macro
-environment will be a *better* story than Rust's, and this guide will promise
-it. It does not promise it yet.
+It is still not a boundary against a hostile tree, for the reason T3 gives: a
+`defmacro*` body can forge a handle and read or write an arbitrary address in
+the compiler's process (S-5). When that is fixed, a genuinely
+capability-denied macro environment will be a *better* story than Rust's, and
+this guide will promise it.
 
-There is also no opt-out today. `--macro-caps=io` exists and grants *more*, not
-less; the `--no-macros` equivalent -- what rust-analyzer ships as
-`procMacro.enable` -- has not been built.
+Until then there is an opt-out. The global flag `--no-proc-macros` refuses
+every `defmacro*` with a diagnostic, so no macro-time code runs -- what
+rust-analyzer ships as `procMacro.enable = false`:
 
-Until then: **`tur check` on an untrusted tree is as exposed as `cargo check`
-on an untrusted crate.**
+```
+tur --no-proc-macros check src/
+```
+
+Template `defmacro` still expands, because substitution runs nothing. Without
+the flag, **`tur check` on an untrusted tree is as exposed as `cargo check` on
+an untrusted crate.**
 
 #### `tur repl` auto-discovery compiles and dlopens (open, medium)
 
@@ -178,40 +184,44 @@ reject a request carrying both `Content-Length` and `Transfer-Encoding` (M-4).
 ## T3 -- The sandboxed interpreter
 
 `turi_env_new_sandboxed()` and the compile-time macro environment both promise:
-no I/O, no process spawning, no FFI, no inline C, no unsafe memory, and
+no I/O, no filesystem, no process spawning, no environment variables, no FFI,
+no inline C, no unsafe memory, no way to corrupt or end the host process, and
 termination under a step-fuel bound. See the
 [Sandboxing Guide](sandboxing-guide.md) for the embedding API.
 
-**Status today: the capability check is bypassed for native functions (S-1,
-open, high).** A sandboxed environment is built by creating an ordinary
-environment -- which registers the full native table, including process
-spawning, file open and write, unlink, `getenv`, and raw-descriptor
-`read-async`/`write-async` -- and then clearing the capability set. But the
-natives do not consult that set. Exactly one of them does.
+**Capabilities are enforced.** Every native function the interpreter ships
+has a row in one classification table that names the capability it requires,
+and the single native dispatch refuses a call whose environment lacks it -- by
+name from Turmeric, via `turi_call` from C, and through a higher-order native
+alike. A new native without a row fails the sandbox test. The
+[Sandboxing Guide](sandboxing-guide.md#capability-classification) has the
+classes and the rows that are not pure. `load` and `import` are refused
+outright, and the `extern-c` overrides for `printf`, `getenv` and `exit` need
+FFI like every other `extern-c`.
 
-The capability checks that do exist cover the *builtin* dispatch (the
-`println-*` family, `dlopen`/`dlsym`/`dlclose`, and the raw-memory
-operations), the FFI thunk path, inline C, the `(async ...)` form, and
-`import`. A native reached by name is not checked.
+**Status today: memory safety is not kept (S-5, open, high).** Most natives
+take a collection, string or continuation handle as a bare integer and cast it
+to a pointer, and nothing checks that the integer came from the matching
+constructor. So sandboxed text can forge one:
 
-Two consequences worth stating plainly:
+```
+(vec-get 4096 0)   ; reads address 4096
+```
 
-- `read-async` performs its read eagerly, before any future machinery, so the
-  capability gate on the `(async ...)` *form* never intercedes.
-- The macro environment denies every capability and still has the same table
-  registered into it, which is why the T1 macro promise above is deferred.
+That is a wild read, and the setters make it a wild write, so an adversary
+who can guess an address has the host process. It needs no capability. It is a
+property of the interpreter's value model rather than of any one native.
 
-The fix is one choke point, not two hundred checks: every native declares a
-capability, and the native dispatch checks it. Until that lands, **do not treat
-`Env/new-sandboxed` as a boundary against hostile code.** It is a boundary
-against *accidents* -- a plug-in that calls `println` by mistake -- and it
-stops the builtins listed above.
+A panic, by contrast, no longer ends the host. In an environment without
+`TURI_CAP_PROC`, a panic that nothing catches, and the error exits of natives
+like an out-of-bounds `vec-get`, come back to the embedder as a `TURI_ERROR`
+reading `panic: <msg>`, and the environment stays usable. A panicking
+`defmacro*` is an ordinary expansion diagnostic.
 
-Two narrower gaps: `extern-c`'s known overrides for `printf` and `getenv` skip
-the FFI check the thunk path enforces, and the interpreted `printf` takes its
-format string from the program (S-2); the inline-C emulator's `snprintf` shim
-coerces every argument to `long long`, so a `%s` in the body dereferences an
-integer (S-3).
+Until S-5 is fixed, **do not treat `Env/new-sandboxed` as a boundary against
+hostile code.** It is now a sound boundary against *careless* code -- a plug-in
+cannot open a file, spawn a process, or read the environment, however it
+spells the call -- but not against code written to corrupt memory.
 
 ### Try Turmeric
 

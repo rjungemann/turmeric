@@ -765,8 +765,8 @@ static TuriValue native_read_async(TuriEnv *env, TuriValue *args, uint32_t n,
     /* Range-check the byte count BEFORE narrowing it to `int`: a negative
      * count made `(size_t)bytes + 1` wrap to a tiny malloc and the read below
      * run SIZE_MAX bytes into it, and 2^32-1 narrowed to -1 on the way
-     * (security audit WP5, M-5).  This native is also reachable from a
-     * capability-denied env (S-1), so the bound is not only hygiene. */
+     * (security audit WP5, M-5).  It needs TURI_CAP_IO since WP3, but an
+     * unsandboxed program's own count reaches it just the same. */
     if (args[1].as_int < 0 || args[1].as_int > INT_MAX - 1)
         return turi_errorf("read-async: byte count %lld out of range",
                            (long long)args[1].as_int);
