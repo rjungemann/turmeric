@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [0.57.0] -- 2026-09-30
+## [Unreleased]
 
 ### Security
 
@@ -39,6 +39,8 @@ All notable changes to Turmeric are documented here.
   every interface. A body shorter than its `Content-Length` now drops the
   connection instead of reaching the handler truncated. See the httpd guide's
   "Binding and request limits".
+
+## [0.57.0] -- 2026-09-30
 
 ### Added
 
