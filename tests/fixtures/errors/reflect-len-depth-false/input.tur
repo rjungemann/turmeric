@@ -1,10 +1,11 @@
-;; reflected-measures RF3 negative control: the same three-cell literal as
-;; reflect-len-depth against `(> (len v) 3)`, which is FALSE.  Unfolding
-;; establishes len(...) = 3 exactly, so this must not prove; it reports
-;; TUR-W0372 (Unknown, runtime check kept) rather than TUR-E0371, because the
-;; model search still declines any VC that mentions an uninterpreted function
-;; (refine_solver.c) -- lifting that for reflected measures is RF6, not done.
-;; Under --strict-refine the warning is an error, which is what pins it.
+;; reflected-measures RF3/RF6 negative control: the same three-cell literal
+;; as reflect-len-depth against `(> (len v) 3)`, which is FALSE.  Unfolding
+;; establishes len(...) = 3 exactly, so this must not prove -- and since RF6
+;; it is REFUTED, TUR-E0371 with "false for the value given here": the
+;; bounded model search, which declines any VC with an uninterpreted
+;; function, runs here because every symbol is a constructor or a reflected
+;; measure the encoder unfolded, and reads len(...) off its own equations.
+;; (Before RF6 this was TUR-W0372, unknown with the check kept.)
 (defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
 
 (defn ^reflect len [xs : Lst] : int

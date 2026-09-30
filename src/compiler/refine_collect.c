@@ -1049,6 +1049,23 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
         const char *nm = pure ? head->as.sym->name
                               : enc_fresh_name(E, head->as.sym->name);
         uint32_t v = vc_declare_var(E->vc, nm, msort);
+        /* RF6: a nullary constructor is a free constant, not a value to
+         * enumerate; remember it so the model search treats it as one. */
+        if (info.is_ctor) {
+            RefineVC *vc = E->vc;
+            bool seen = false;
+            for (uint32_t i = 0; i < vc->n_ctor_consts; i++)
+                if (vc->ctor_consts[i] == v) { seen = true; break; }
+            if (!seen) {
+                if (vc->n_ctor_consts == vc->cap_ctor_consts) {
+                    uint32_t ncap = vc->cap_ctor_consts ? vc->cap_ctor_consts * 2 : 8;
+                    uint32_t *nb = (uint32_t *)arena_alloc(vc->arena, ncap * sizeof(uint32_t));
+                    if (vc->ctor_consts) memcpy(nb, vc->ctor_consts, vc->n_ctor_consts * sizeof(uint32_t));
+                    vc->ctor_consts = nb; vc->cap_ctor_consts = ncap;
+                }
+                vc->ctor_consts[vc->n_ctor_consts++] = v;
+            }
+        }
         return vc_var_ref(E->vc, v);
     }
     VCTerm **args = (VCTerm **)arena_alloc(E->vc->arena, argc * sizeof(VCTerm *));
@@ -1060,6 +1077,12 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
                              : enc_fresh_name(E, head->as.sym->name);
     uint32_t fn = vc_declare_ufunc(E->vc, fname, argc, msort,
                                    f, /*nonlinear=*/false);
+    /* RF6: what this symbol denotes, for the model search's evaluability
+     * test.  Only a PURE (stable-named) symbol can be either. */
+    if (pure) {
+        if (info.is_ctor)       E->vc->ufuncs[fn].is_ctor   = true;
+        if (info.reflect_total) E->vc->ufuncs[fn].reflected = true;
+    }
     VCTerm *app = vc_app(E->vc, fn, args, argc);
 
     /* reflected-measures RF3: a TOTAL `^reflect` callee has a defining
@@ -1072,6 +1095,13 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
      * proved statically or because the runtime check would have panicked
      * otherwise.  Assert it, so the result of a refined function can satisfy
      * the next obligation instead of being an opaque term.
+     *
+     * That is a PARTIAL-correctness argument: for a call that never returns
+     * there is no produced value and the fact is vacuous, which is fine only
+     * because the obligation it feeds is about a program point after the
+     * call.  For a `^reflect` callee the totality gate (elab_reflect.c) makes
+     * the argument unconditional -- the call returns, so the fact is about a
+     * value that exists (reflected-measures-plan RF6.3).
      *
      * The hypothesis is about THIS application term, so it is sound wherever
      * the call appears in the formula -- including under a negation. */
@@ -1390,5 +1420,17 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
         return NULL;
     }
     vc_set_goal(vc, goal);
+    /* RF6: may the bounded model search run on a VC that mentions
+     * uninterpreted functions?  Yes iff every one of them is a data
+     * constructor (a free value) or a reflected measure (defined by the
+     * equations asserted above), and no unfolding ran out of fuel -- an
+     * application left without its equation would be a free value the
+     * search could bend a spurious counterexample around. */
+    {
+        bool ok = !vc->reflect_fuel_exhausted;
+        for (uint32_t i = 0; ok && i < vc->n_ufuncs; i++)
+            ok = vc->ufuncs[i].is_ctor || vc->ufuncs[i].reflected;
+        vc->reflect_model_ok = ok;
+    }
     return vc;
 }

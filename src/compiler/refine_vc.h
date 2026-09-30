@@ -85,6 +85,16 @@ typedef struct VCUFunc {
     VCSort      sort;      /* result sort */
     const Form *origin;    /* source term this symbol abstracts (TUR-W0373 / RT6) */
     bool        nonlinear; /* true when it abstracts a var*var / var/var term */
+    /* reflected-measures RF6: what the symbol stands for, so the bounded
+     * model search can decide whether a VC with uninterpreted functions is
+     * nonetheless EVALUABLE.  A data constructor is a free term former
+     * (distinct ground applications are distinct values); a reflected,
+     * total measure is defined at every application the encoder unfolded
+     * (its value is read off its own definitional equation).  Anything
+     * else -- an abstract measure, a selector, a fresh impure symbol --
+     * has no fixed meaning and keeps the search declined. */
+    bool        is_ctor;
+    bool        reflected;
 } VCUFunc;
 
 /* ------------------------------------------------------------------------- *
@@ -124,6 +134,16 @@ typedef struct RefineVC {
     uint32_t   reflect_arms_by_hyp;   /* RF4: arms selected from a tag/literal fact */
     bool       reflect_fuel_exhausted;
     uint32_t  *reflect_done; uint32_t n_reflect_done, cap_reflect_done;
+    /* RF6: variables that are NULLARY CONSTRUCTORS (`Nil`).  The model search
+     * gives each a fixed, distinct value instead of enumerating it, and
+     * leaves it out of the printed model -- "Nil = -2" is not a
+     * counterexample anyone can act on. */
+    uint32_t  *ctor_consts; uint32_t n_ctor_consts, cap_ctor_consts;
+    /* RF6: every ufunc in this VC is a constructor or a reflected measure
+     * and no unfolding ran out of fuel, so `refine_model_search` may run:
+     * each measure application it meets has a definitional equation to
+     * read its value from, and each constructor term is a free value. */
+    bool       reflect_model_ok;
 } RefineVC;
 
 RefineVC *vc_new(Arena *a);

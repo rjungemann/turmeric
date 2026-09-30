@@ -271,12 +271,95 @@ bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out) {
  * VALUE set rather than a structural quantity, and nothing has asked. */
 #define MODEL_MAX_CANDS 16
 
+/* reflected-measures RF6: an application's value is READ OFF ITS OWN
+ * DEFINITIONAL EQUATION.  The encoder asserts `f(t) = <body at t>` (or the
+ * iff pair for a Bool measure) for every reflected application it unfolded;
+ * the search collects those into a table and evaluates `f(t)` as the right
+ * hand side.  An application with no entry is a free value, and the search
+ * declines rather than guess -- that is what keeps a refutation genuine.
+ * Congruence needs no separate check under the VC's gate
+ * (RefineVC.reflect_model_ok): every other ufunc is a constructor, distinct
+ * ground constructor terms are distinct values, and two applications of one
+ * measure to the same term are one hash-consed VCTerm. */
+#define MODEL_MAX_DEFS  256
+#define MODEL_DEF_DEPTH 64
+
 typedef struct {
-    const int64_t *vals;   /* one per VC variable */
-    bool           fail;   /* evaluation hit overflow / an opaque term */
+    const VCTerm *app;   /* a VC_APP of a reflected measure */
+    const VCTerm *def;   /* what it equals (Int) / is equivalent to (Bool) */
+} ModelDef;
+
+typedef struct {
+    const int64_t  *vals;   /* one per VC variable */
+    bool            fail;   /* evaluation hit overflow / an opaque term */
+    const ModelDef *defs;
+    uint32_t        n_defs;
+    uint32_t        depth;  /* definitional recursion guard */
 } EvalCtx;
 
 static int64_t eval_arith(EvalCtx *E, const VCTerm *t);
+static bool    eval_bool(EvalCtx *E, const VCTerm *t);
+
+static const VCTerm *model_def_of(const EvalCtx *E, const VCTerm *app) {
+    for (uint32_t i = 0; i < E->n_defs; i++)
+        if (E->defs[i].app == app) return E->defs[i].def;
+    return NULL;
+}
+
+/* Collect the definitional equations from the hypotheses: `(= app rhs)` for
+ * an Int measure, `(and (=> app q) (=> q app))` for a Bool one -- exactly the
+ * shapes refine_collect.c's rf_def asserts.  Only a REFLECTED symbol's
+ * application is admitted as a definition; an equation that happens to
+ * mention a constructor application defines nothing. */
+static inline RefineVC *vc_mutable(const RefineVC *vc) { return (RefineVC *)vc; }
+
+/* An implication as the builder stores it: `(=> a b)` is normalized to
+ * `(or (not a) b)` at construction, so both spellings are read. */
+static bool model_impl_parts(const VCTerm *t, const VCTerm **a, const VCTerm **b) {
+    if (!t) return false;
+    if (t->op == VC_IMPLIES && t->n == 2) { *a = t->kids[0]; *b = t->kids[1]; return true; }
+    if (t->op == VC_OR && t->n == 2) {
+        if (t->kids[0]->op == VC_NOT) { *a = t->kids[0]->kids[0]; *b = t->kids[1]; return true; }
+        if (t->kids[1]->op == VC_NOT) { *a = t->kids[1]->kids[0]; *b = t->kids[0]; return true; }
+    }
+    return false;
+}
+
+static uint32_t model_collect_defs(const RefineVC *vc, ModelDef *out, uint32_t cap) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < vc->n_hyps && n < cap; i++) {
+        const VCTerm *h = vc->hyps[i];
+        const VCTerm *app = NULL, *def = NULL;
+        if (h->op == VC_EQ && h->n == 2) {
+            if (h->kids[0]->op == VC_APP)      { app = h->kids[0]; def = h->kids[1]; }
+            else if (h->kids[1]->op == VC_APP) { app = h->kids[1]; def = h->kids[0]; }
+        } else if (h->op == VC_APP && h->sort == VS_BOOL) {
+            /* `p <=> true` folds to the bare atom at construction. */
+            app = h; def = vc_bool(vc_mutable(vc), true);
+        } else if (h->op == VC_NOT && h->n == 1 && h->kids[0]->op == VC_APP &&
+                   h->kids[0]->sort == VS_BOOL) {
+            /* ... and `p <=> false` to its negation. */
+            app = h->kids[0]; def = vc_bool(vc_mutable(vc), false);
+        } else if (h->op == VC_AND && h->n == 2) {
+            /* The iff pair `(and (=> p q) (=> q p))`, in whichever order and
+             * spelling the builder left it. */
+            const VCTerm *a1, *b1, *a2, *b2;
+            if (model_impl_parts(h->kids[0], &a1, &b1) &&
+                model_impl_parts(h->kids[1], &a2, &b2) && a1 == b2 && b1 == a2) {
+                if (a1->op == VC_APP)      { app = a1; def = b1; }
+                else if (b1->op == VC_APP) { app = b1; def = a1; }
+            }
+        }
+        if (!app || !def) continue;
+        if (app->as.idx >= vc->n_ufuncs || !vc->ufuncs[app->as.idx].reflected) continue;
+        if (def == app) continue;
+        bool dup = false;
+        for (uint32_t j = 0; j < n; j++) if (out[j].app == app) { dup = true; break; }
+        if (dup) continue;
+        out[n].app = app; out[n].def = def; n++;
+    }
+    return n;
+}
 
 static bool eval_bool(EvalCtx *E, const VCTerm *t) {
     if (E->fail) return false;
@@ -291,10 +374,32 @@ static bool eval_bool(EvalCtx *E, const VCTerm *t) {
             for (uint32_t i = 0; i < t->n; i++) if (eval_bool(E, t->kids[i])) return true;
             return false;
         case VC_EQ: case VC_LT: case VC_LE: {
+            /* RF6: an equality between two PROPOSITIONS (a Bool measure's
+             * `(= p q)` spelling) evaluates as an iff. */
+            if (t->op == VC_EQ && t->kids[0]->sort == VS_BOOL && t->kids[1]->sort == VS_BOOL) {
+                bool a = eval_bool(E, t->kids[0]);
+                bool b = eval_bool(E, t->kids[1]);
+                return E->fail ? false : (a == b);
+            }
             int64_t a = eval_arith(E, t->kids[0]);
             int64_t b = eval_arith(E, t->kids[1]);
             if (E->fail) return false;
             return t->op == VC_EQ ? (a == b) : t->op == VC_LT ? (a < b) : (a <= b);
+        }
+        case VC_IMPLIES: {
+            bool a = eval_bool(E, t->kids[0]);
+            if (E->fail) return false;
+            if (!a) return true;
+            return eval_bool(E, t->kids[1]);
+        }
+        case VC_APP: {
+            /* RF6: a reflected Bool measure at an unfolded application. */
+            const VCTerm *d = t->sort == VS_BOOL ? model_def_of(E, t) : NULL;
+            if (!d || E->depth >= MODEL_DEF_DEPTH) { E->fail = true; return false; }
+            E->depth++;
+            bool r = eval_bool(E, d);
+            E->depth--;
+            return r;
         }
         default:
             E->fail = true;   /* an opaque proposition: cannot evaluate */
@@ -323,8 +428,17 @@ static int64_t eval_arith(EvalCtx *E, const VCTerm *t) {
                 case VC_DIV: if (b == 0) { E->fail = true; return 0; } return a / b;
                 default:     if (b == 0) { E->fail = true; return 0; } return a % b;
             }
+        case VC_APP: {
+            /* RF6: a reflected Int measure at an unfolded application. */
+            const VCTerm *d = t->sort == VS_INT ? model_def_of(E, t) : NULL;
+            if (!d || E->depth >= MODEL_DEF_DEPTH) { E->fail = true; return 0; }
+            E->depth++;
+            int64_t v = eval_arith(E, d);
+            E->depth--;
+            return v;
+        }
         default:
-            E->fail = true;   /* VC_APP, VC_CONST_REAL, ... */
+            E->fail = true;   /* VC_CONST_REAL, ... */
             return 0;
     }
 }
@@ -347,7 +461,26 @@ static void add_cand(int64_t *c, uint32_t *n, int64_t v) {
 
 RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
     if (!vc || !vc->goal) return NULL;
-    if (vc->n_ufuncs > 0) return NULL;              /* measures have no fixed meaning */
+    /* Measures have no fixed meaning -- unless every symbol here is a
+     * constructor or a reflected measure the encoder unfolded (RF6), in
+     * which case each application has a definitional equation to read. */
+    if (vc->n_ufuncs > 0 && !vc->reflect_model_ok) return NULL;
+    ModelDef defs[MODEL_MAX_DEFS];
+    uint32_t n_defs = vc->n_ufuncs > 0 ? model_collect_defs(vc, defs, MODEL_MAX_DEFS) : 0;
+    /* Which variables are ENUMERATED: every variable but a nullary
+     * constructor, which is a free constant and gets a fixed distinct value
+     * below (and stays out of the printed model). */
+    bool is_const[MODEL_MAX_VARS + 64];
+    memset(is_const, 0, sizeof(is_const));
+    uint32_t n_enum = 0;
+    for (uint32_t i = 0; i < vc->n_vars; i++) {
+        bool c = false;
+        for (uint32_t j = 0; j < vc->n_ctor_consts; j++)
+            if (vc->ctor_consts[j] == i) { c = true; break; }
+        if (i < sizeof(is_const) / sizeof(is_const[0])) is_const[i] = c;
+        if (!c) n_enum++;
+    }
+    if (vc->n_vars >= sizeof(is_const) / sizeof(is_const[0])) return NULL;
     /* n_vars == 0 is allowed and is the IMPORTANT case: a call site with
      * literal arguments (`(safe-div 10 0)`) has a closed goal, so one
      * evaluation decides it outright.  The odometer below runs exactly once and
@@ -356,8 +489,8 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
     /* Past the uninterpreted-symbol gate, so this VC could plausibly use the
      * search at SOME cap -- which is what makes its width worth recording.
      * The peak is real, not saturating: n_vars is known before the check. */
-    refine_cap_peak(&g_caps.model_vars_peak, vc->n_vars);
-    if (vc->n_vars > MODEL_MAX_VARS) {
+    refine_cap_peak(&g_caps.model_vars_peak, n_enum);
+    if (n_enum > MODEL_MAX_VARS) {
         g_caps.model_vars_hits++;
         /* Would a higher cap actually let this one search?  Only if every
          * variable is also an integer -- the sort gate below would otherwise
@@ -387,40 +520,50 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
         if (lits[i] < INT64_MAX) add_cand(cand, &n_cand, lits[i] + 1);
         if (lits[i] > INT64_MIN) add_cand(cand, &n_cand, lits[i] - 1);
     }
-    if (n_cand == 0 && vc->n_vars > 0) return NULL;
+    if (n_cand == 0 && n_enum > 0) return NULL;
 
-    /* The cap that binds: the odometer runs n_cand ** n_vars full
+    /* The cap that binds: the odometer runs n_cand ** n_enum full
      * evaluations.  Past the budget we decline rather than start something
      * that might not finish in compile-time noise; a decline here is one a
      * bigger budget WOULD have let run, which is what the counter says. */
     {
         uint64_t evals = 1;
-        for (uint32_t i = 0; i < vc->n_vars && evals <= MODEL_MAX_EVALS; i++)
+        for (uint32_t i = 0; i < n_enum && evals <= MODEL_MAX_EVALS; i++)
             evals *= n_cand;
         if (evals > MODEL_MAX_EVALS) { g_caps.model_evals_hits++; return NULL; }
     }
 
+    /* `vals` is indexed by VC variable; the odometer runs over the
+     * enumerated ones through `enum_of`.  A constructor constant takes a
+     * distinct value no candidate can collide with. */
     uint32_t nv = vc->n_vars;
-    int64_t vals[MODEL_MAX_VARS] = {0};
+    int64_t vals[MODEL_MAX_VARS + 64];
+    uint32_t enum_of[MODEL_MAX_VARS];
     uint32_t idx[MODEL_MAX_VARS] = {0};
-    for (uint32_t i = 0; i < nv; i++) idx[i] = 0;
+    {
+        uint32_t k = 0;
+        for (uint32_t i = 0; i < nv; i++) {
+            if (is_const[i]) vals[i] = INT64_MIN / 2 + (int64_t)i;
+            else { vals[i] = 0; enum_of[k++] = i; }
+        }
+    }
 
     for (;;) {
-        for (uint32_t i = 0; i < nv; i++) vals[i] = cand[idx[i]];
+        for (uint32_t i = 0; i < n_enum; i++) vals[enum_of[i]] = cand[idx[i]];
 
-        EvalCtx E = { vals, false };
+        EvalCtx E = { vals, false, defs, n_defs, 0 };
         bool sat = true;
         for (uint32_t i = 0; i < vc->n_hyps && sat; i++)
             if (!eval_bool(&E, vc->hyps[i])) sat = false;
         if (sat && !E.fail && !eval_bool(&E, vc->goal) && !E.fail) {
             RefineModel *m = (RefineModel *)arena_alloc(a, sizeof(RefineModel));
-            m->n = nv;
-            m->bindings = nv ? (RefineModelBinding *)arena_alloc(
-                                   a, nv * sizeof(RefineModelBinding)) : NULL;
-            for (uint32_t i = 0; i < nv; i++) {
-                m->bindings[i].name    = vc->vars[i].name;
+            m->n = n_enum;
+            m->bindings = n_enum ? (RefineModelBinding *)arena_alloc(
+                                       a, n_enum * sizeof(RefineModelBinding)) : NULL;
+            for (uint32_t i = 0; i < n_enum; i++) {
+                m->bindings[i].name    = vc->vars[enum_of[i]].name;
                 m->bindings[i].is_real = false;
-                m->bindings[i].ival    = vals[i];
+                m->bindings[i].ival    = vals[enum_of[i]];
                 m->bindings[i].rval    = 0.0;
             }
             return m;
@@ -429,8 +572,8 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
 
         /* odometer */
         uint32_t k = 0;
-        while (k < nv && ++idx[k] >= n_cand) { idx[k] = 0; k++; }
-        if (k == nv) break;
+        while (k < n_enum && ++idx[k] >= n_cand) { idx[k] = 0; k++; }
+        if (k == n_enum) break;
     }
     return NULL;
 }

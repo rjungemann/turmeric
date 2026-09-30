@@ -3,7 +3,8 @@
 > **Status:** **In progress** since 2026-09-29, behind
 > `--enable=reflected-measures` (`EXPERIMENTS[]` row, introduced 0.57.0,
 > `expires_at` 0.61.0, prototype). RF0, RF1, RF2, RF3 and RF5 landed in the
-> first cut (2026-09-29), RF4 the next day; RF6 is open (see "Landed" below). Taken off hold by
+> first cut (2026-09-29), RF4 and RF6.1 the next day; RF6.2 is deliberately
+> untouched (see "Landed" below). Nothing in the plan is outstanding. Taken off hold by
 > direct request ("execute the plan"), not by one of the triggers below.
 > **Last Updated:** 2026-09-29
 >
@@ -33,7 +34,9 @@
 | RF3 bounded ground unfolding | landed | `refine_collect.c`: `rf_unfold` / `rf_def` / `rf_reduce`; fuel 8 per obligation, `TUR_REFLECT_FUEL` override; `RefineFnInfo::{is_ctor, reflect_*}`; `RefineVC::reflect_*`; `RefineStats::{reflect_unfolds, reflect_fuel_out}` |
 | RF4 non-ground unfolding | landed 2026-09-30 | `rf_match_pat` selects an arm from a tag fact `(= (#dt/tag s) k)` in the hypotheses and binds the arm's variables to `.field` selectors, comparing forms modulo the binder equations (`rf_canon`); a literal-pattern arm selects from `(= s <lit>)` the same way; `RefineFnInfo::ctor_*` carries the constructor shape; `RefineStats::reflect_arms_by_hyp` counts it |
 | RF5 diagnostics, strict, dump | landed | `TUR-E0384` / `TUR-W0385` (the plan's E0383/W0384 were taken by `#reads` by land time), `tur explain` entries, `--strict-refine` promotes W0385 at the W0372 site, `--dump-reflect` |
-| RF6 follow-ons | **open** | counterexamples with measures (`refine_model_search` still declines any ufunc, so a false ground obligation reports `TUR-W0372`, not `TUR-E0371` -- pinned by `errors/reflect-len-depth-false`) |
+| RF6.1 counterexamples with measures | landed 2026-09-30 | `refine_model_search` runs on a VC whose every ufunc is a constructor or a reflected measure and whose unfolding did not run out of fuel (`RefineVC::reflect_model_ok`, flags on `VCUFunc`); a measure application evaluates by reading its own definitional equation (`model_collect_defs` / `model_def_of`), a nullary constructor is a fixed free constant kept out of the printed model. `errors/reflect-len-depth-false` and `errors/reflect-bool-refuted` are now `TUR-E0371` "false for the value given here" |
+| RF6.2 `ENC_MAX_PROPAGATE` as a well-founded budget | not done, by design | the plan says touch it only if a real program hits the depth-4 cutoff; none has |
+| RF6.3 RT4 justification | landed | the return-refinement propagation comment in `enc_measure` now says which half of its partial-correctness argument a total callee makes unconditional |
 
 Three things the first cut settled that the phases below did not predict:
 
@@ -92,6 +95,18 @@ with the same shadow veto `let` has is possible and was not done: every
 tag/selector fact is a ufunc, and `refine_model_search` declines any VC
 with one, so pushing them into crossing VCs would turn refuted crossings
 (TUR-E0371 with a model) into unknown ones -- the RF6 item first.
+
+RF6.1's soundness argument, since a spurious refutation would be a wrong
+compile error: the search constructs an interpretation, not a guess. Under
+the gate every ufunc is a constructor or a reflected measure; constructors
+are read as free term formers (distinct ground applications are distinct
+values, a nullary one a fixed constant), and every measure application is
+evaluated by its own definitional equation -- an application without one
+(anything the encoder did not unfold) fails the evaluation and the search
+declines. Two applications of one measure to the same term are one
+hash-consed `VCTerm`, so congruence needs no separate check. A model found
+this way satisfies every hypothesis and falsifies the goal under a genuine
+EUF+LIA interpretation, which is what `TUR-E0371` claims.
 
 Sabotage run (RF1/RF3 acceptance): with `rf_classify` stubbed to return
 TOTAL, `errors/reflect-nontotal-self` compiles under `--strict-refine` and

@@ -692,6 +692,13 @@ the gate, never a silent downgrade. This is *not* a termination checker for
 programs: a function that is never `^reflect`ed is untouched, and the
 language's non-goal on total correctness stands.
 
+A false obligation over reflected measures is **refuted**, not left unknown:
+the bounded model search, which otherwise declines any VC that mentions an
+uninterpreted function, runs when every such function is a constructor or a
+reflected measure the encoder unfolded, and evaluates each application by
+its own equation. `(> (len (Cons 1 (Cons 2 (Cons 3 (Nil))))) 3)` is
+`TUR-E0371` "false for the value given here".
+
 `--dump-reflect` prints one line per site (`reflect len: TOTAL dec=0`, or
 `REJECTED gate=... reason=...`). Without the flag, `^reflect` warns that it
 is ignored and the measure stays opaque. The plan, with what the first cut

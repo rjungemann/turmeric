@@ -22,7 +22,12 @@ All notable changes to Turmeric are documented here.
   prints each site's verdict. Inside a `match` arm of the function being
   proved, a reflected measure applied to the scrutinee unfolds through the
   arm's own tag fact, with the arm's binders standing for the field
-  selectors (plan RF4). Nothing changes for a program that does not
+  selectors (plan RF4). A false obligation over reflected measures at
+  ground arguments is refuted (`TUR-E0371`, "false for the value given
+  here") rather than left unknown: the bounded model search runs when every
+  uninterpreted symbol in the VC is a constructor or an unfolded reflected
+  measure, and evaluates each application by its own equation (plan RF6).
+  Nothing changes for a program that does not
   write `^reflect`; without the flag the attribute warns and is inert. See
   `docs/upcoming/reflected-measures-plan.md` and the refinement guide's
   "Reflected measures" section.
