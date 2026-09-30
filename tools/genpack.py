@@ -134,6 +134,10 @@ def build(pack_dir: Path, version: str, max_bytes: int,
     # --- 2. link rewriting, now that the whole pack is known -----------------
     guide_slugs = {e['slug'] for e in guides}
     api_slugs = {e['slug'] for e in api}
+    # Every spice's own front page, so a cross-spice `../<name>/README.md` link
+    # resolves into the pack. The module pages ('ansi/ansi-box') are in here too
+    # and simply never match a README's parent.
+    spice_slugs = {e['slug'] for e in spices}
     unresolved: dict[str, list[str]] = {}
     for entry in guides + api + spices:
         frag = pack_dir / entry['path']
@@ -142,7 +146,8 @@ def build(pack_dir: Path, version: str, max_bytes: int,
                   file=sys.stderr)
             return 1
         before = frag.read_text(encoding='utf-8')
-        after, missing = packlib.rewrite_pack_links(before, guide_slugs, api_slugs)
+        after, missing = packlib.rewrite_pack_links(before, guide_slugs, api_slugs,
+                                                   spice_slugs)
         if after != before:
             frag.write_text(after, encoding='utf-8')
             entry['bytes'] = len(after.encode('utf-8'))

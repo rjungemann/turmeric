@@ -205,23 +205,35 @@ _EXTERNAL_PREFIXES = ('http://', 'https://', 'mailto:', '#', '/')
 
 
 def rewrite_pack_links(body_html: str, guide_slugs: set[str],
-                       api_slugs: set[str]) -> tuple[str, list[str]]:
+                       api_slugs: set[str],
+                       spice_slugs: set[str] | None = None,
+                       ) -> tuple[str, list[str]]:
     """Point a fragment's cross-links at other pack pages.
 
-    In-pack targets become `#doc=guides/<slug>` / `#doc=api/<module>`, which the
-    Try docs pane intercepts and resolves without ever navigating away from the
-    REPL. A link whose target is not in the pack is left exactly as written --
-    it still resolves against the website for an online reader -- and is
-    returned in the second element so the emitter can report it instead of the
-    pane silently swallowing a dead click.
+    In-pack targets become `#doc=guides/<slug>` / `#doc=api/<module>` /
+    `#doc=spices/<name>`, which the Try docs pane intercepts and resolves
+    without ever navigating away from the REPL. A link whose target is not in
+    the pack is left exactly as written -- it still resolves against the
+    website for an online reader -- and is returned in the second element so
+    the emitter can report it instead of the pane silently swallowing a dead
+    click.
     """
     unresolved: list[str] = []
+    spice_slugs = spice_slugs or set()
 
     def rewrite_md(m: re.Match) -> str:
         href, frag = m.group(1), m.group(2) or ''
         if href.startswith(_EXTERNAL_PREFIXES):
             return m.group(0)
-        slug = href.rsplit('/', 1)[-1]
+        parts = href.split('/')
+        slug = parts[-1]
+        # A spice's front page IS its README, so one spice links to another as
+        # `../json/README.md`: the spice is named by the parent directory and
+        # the basename is the same for all of them. Match the parent before the
+        # basename-keyed guide lookup, which would otherwise ask after a guide
+        # called "README" and never find one.
+        if slug.lower() == 'readme' and len(parts) >= 2 and parts[-2] in spice_slugs:
+            return f'href="#doc=spices/{parts[-2]}{frag}"'
         if slug not in guide_slugs:
             unresolved.append(f'{href}.md')
             return m.group(0)
