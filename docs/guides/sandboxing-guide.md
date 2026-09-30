@@ -10,18 +10,26 @@ The libturi embedding API provides a sandboxed evaluation environment for
 Turmeric code -- REPL widgets, plug-in scripts, user-supplied formulas --
 inside a C host process with I/O, FFI, and unsafe memory operations denied.
 
-> **Do not rely on this as a boundary against hostile code yet.** Every
+> **Do not rely on this as a full boundary against hostile code yet.** Every
 > capability is enforced -- each native function has a row in one
 > [classification table](#capability-classification) and the native dispatch
 > refuses a call the environment has no capability for -- so a sandboxed
 > script cannot open a file, spawn a process, or read the environment, however
-> it spells the call. What is **not** kept is memory safety: most natives take
-> collection and string handles as bare integers, so a script can forge one and
-> read or write an arbitrary address. This is tracked as S-5 in the
+> it spells the call. Memory safety across the native surface is now enforced
+> too: a native takes a collection / string / iterator / continuation handle as
+> a bare integer, and in a restricted env a per-env handle-provenance registry
+> refuses any handle argument that was not minted by a constructor of the
+> matching kind -- so `(vec-get 4096 0)`, a kind-confused replay, and a
+> use-after-free are refused instead of reading or writing an arbitrary address,
+> while a genuinely built collection still round-trips. What is **not** yet kept
+> is the narrower value-model channel: an erasing ascription on a type variable
+> (and continuation resume) can still launder an integer into a pointer without
+> passing through the native dispatch. This is tracked as S-5 in the
 > [security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md);
 > the [Security Guide](security-guide.md#t3-the-sandboxed-interpreter) states
 > the promise and where it stands. Treat the sandbox as protection against
-> *careless* code, not against code written to corrupt memory.
+> *careless* code, and against the native handle-forgery channel, but not yet
+> against code written to launder an integer through an erasing ascription.
 
 See [eval-api.md](eval-api.md) for the full C embedding API reference.
 
@@ -401,8 +409,16 @@ need no open. About six hundred natives are pure; these are the rest:
 `unsafe` is given to the natives whose only purpose is to allocate, free or
 dereference a raw address with no typed wrapper. It is not given to the
 collection and string natives, although they take handles as bare integers
-too; a sandbox without vectors and maps would be useless, and closing that gap
-is S-5's job, not a capability's.
+too; a sandbox without vectors and maps would be useless. That gap is not a
+capability's to close -- it is closed for the native surface by the handle
+provenance registry (S-5, direction 1): in a restricted env each collection /
+string / iterator / continuation handle argument is checked against the set of
+handles a constructor of the matching kind actually minted, so a forged integer
+is refused while a real handle round-trips. The per-native handle-kind column
+lives beside this table in `src/turi/native_caps.c`
+(`k_handle_rows[]`); see the
+[S-5 report](../reported/turi-sandbox-handles-are-forgeable-integers.md) for the
+model and for the value-model channel that remains (direction 2).
 
 The operations that are not native functions are checked where they are
 evaluated: the `println` builtins and the raw-memory builtins in the builtin
