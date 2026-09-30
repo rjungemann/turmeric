@@ -1,0 +1,11 @@
+;; A bare `fn` field has no signature, so every call through it uses the int64
+;; register class: `(.app t 3.25)` of a doubling function printed the BITS of
+;; 6.5 (4619004367821864960), and an effectful one segfaulted.  Storing a
+;; float-signature function there is rejected, as the `:fn` parameter carrier
+;; already rejects it.
+(defstruct Box1 :copy [app : fn])
+(defn twice [v : float] : float (* v 2.0))
+(defn main [] : int
+  (let [t (make-struct Box1 twice)]
+    (println (.app t 3.25)))
+  0)

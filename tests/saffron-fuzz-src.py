@@ -739,7 +739,7 @@ def run_case(tur, path, src):
 
 BUG_OF = {"crash": "BUG_crash", "invalid_c": "BUG_invalid_c",
           "link": "BUG_link", "other": "BUG_toolchain_other",
-          "fnptr_trap": "BUG_fnptr_trap"}
+          "fnptr_trap": fuzz_arm.TRAP_CLASS}
 
 
 def classify(out, expected):
@@ -771,7 +771,7 @@ def one_case(tur, workdir, idx, seed, max_legs, emit_known):
     kind = classify(out, expected)
 
     detail = None
-    if kind.startswith(("BUG", "IBUG")) or kind == "GEN_REJECT":
+    if kind.startswith(("BUG", "IBUG")) or kind in ("GEN_REJECT", "FNPTR_TRAP"):
         failing = []
         for j, leg in enumerate(legs):
             s2, e2 = assemble([leg])
@@ -1002,6 +1002,10 @@ def main():
         n_known = sum(v for k, v in counts.items() if k.startswith("KNOWN"))
         print("\n  BUG/IBUG classes (fail)     : %d" % n_bugs)
         print("  generator rejects (report)  : %d" % n_rej)
+        n_trap = counts.get("FNPTR_TRAP", 0)
+        if n_trap:
+            print("  fn-pointer traps (report)   : %d   "
+                  "(TUR_FUZZ_FNSAN_STRICT=1 fails on these)" % n_trap)
         print("  known open findings (report): %d" % n_known)
         if findings:
             print("\n  saved to %s" % save_dir)

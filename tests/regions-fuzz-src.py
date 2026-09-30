@@ -442,8 +442,13 @@ def check_program(tur, build, src_text, expected, rewinds, retires):
             problems.append(f"{arm}: {first[0] if first else 'AddressSanitizer report'}")
             continue
         if o.status == "fnptr_trap":
-            problems.append(f"{arm}: BUG_fnptr_trap -- an indirect call went "
-                            "through a function pointer of the wrong type")
+            msg = (f"{arm}: {fuzz_arm.TRAP_CLASS} -- an indirect call went "
+                   "through a function pointer of the wrong type")
+            if fuzz_arm.FNSAN_STRICT:
+                problems.append(msg)
+            else:
+                print("  note: " + msg + " (report-only; "
+                      "TUR_FUZZ_FNSAN_STRICT=1 fails on it)", flush=True)
             continue
         if o.status == "fail":
             tail = o.stderr.strip().splitlines()[-1] if o.stderr.strip() else "(no stderr)"

@@ -45,6 +45,19 @@ in the same change.
 | --- | --- | --- |
 | [turi-sandbox-handles-are-forgeable-integers](turi-sandbox-handles-are-forgeable-integers.md) | high | S-5, filed by WP3, narrowed the same day: a sandboxed or macro-time `(vec-get 4096 0)` reads address 4096. Interpreter handles are bare integers that 204+ natives cast back unchecked. The host-exit half (`panic` and native error paths ending the host) is fixed. Direction: a per-native handle-kind column in `native_caps.c` plus a provenance set per restricted env |
 
+## P0 representation confusion (filed 2026-09-30)
+
+The recurring class -- a value crossing a seam in the emitted C at the wrong
+representation -- is now watched by a mechanism-level detector (clang
+`-fsanitize=function`, armed in all four source fuzzers by
+`tests/fuzz_arm.py`) instead of only by shape-enumerating generators.  This
+row tracks the corpus sweep to zero that has to land before the detector can
+gate.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [emitted-c-indirect-calls-are-not-type-exact](emitted-c-indirect-calls-are-not-type-exact.md) | high (WASM) / medium | 165 fixtures still make an indirect call through a function pointer of the wrong type (328 before `(void)` prototypes).  Mostly ABI-benign on SysV (`bool`/pointer vs `int64_t`), every one a `call_indirect` trap on WASM, and the same mechanism as the float/tagged silent wrong answers.  Clusters and fix order in the report |
+
 ## Representation gaps (filed 2026-09-09, extended 2026-09-10)
 
 A value whose representation does not fit the one the typed path already chose

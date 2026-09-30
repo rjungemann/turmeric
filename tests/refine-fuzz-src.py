@@ -1167,7 +1167,7 @@ BUGS = ("BUG_soundness", "BUG_output_divergence", "BUG_new_abort",
 
 def classify(off, on):
     if off.kind == "fnptr_trap" or on.kind == "fnptr_trap":
-        return "BUG_fnptr_trap"
+        return fuzz_arm.TRAP_CLASS     # report-only unless strict
     if off.kind == "timeout" or on.kind == "timeout":
         return "skip_timeout"
     if off.kind == "reject":

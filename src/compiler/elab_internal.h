@@ -1930,6 +1930,26 @@ Expr *elab_fn(Elab *e, const Form *call);
  * docs/archive/history/bare-fat-result-type-inference-plan.md. */
 bool kind_is_non_int_register_class(TypeKind k);
 
+/* The float register class, as the untyped-fn carrier rule spells it: a value
+ * of this kind lives in xmm, not a GP register, so it cannot cross a
+ * signature-less `fn` slot (a `:fn` parameter, or a struct field declared
+ * bare `fn`) whose calling convention is the int64 word. */
+static inline bool kind_is_float_class(TypeKind k) {
+    return kind_is_non_int_register_class(k) || k == TY_FLOAT32 || k == TY_FLOAT64;
+}
+
+/* True when a function value of type `ft` has a float-class argument or
+ * result, so it cannot be stored into -- or called through -- a
+ * signature-less `fn` slot without a register-class miscompile. */
+static inline bool fn_sig_has_float_class(const Type *ft) {
+    if (!ft || ft->kind != TY_FN) return false;
+    if (kind_is_float_class(ft->as.fn.result_kind)) return true;
+    for (uint32_t k = 0; k < ft->as.fn.arity; k++)
+        if (ft->as.fn.arg_kinds && kind_is_float_class(ft->as.fn.arg_kinds[k]))
+            return true;
+    return false;
+}
+
 /* bare-fat-result-monomorphization (Phase B); see
  * docs/archive/history/bare-fat-result-monomorphization-plan.md.
  *  - elab_specialize_bare_fat: re-elaborate `callee`'s retained body with its

@@ -751,6 +751,40 @@ class Gen:
         v = self.name("c")
         return "(let [%s %s] (%s (fn [] %s)))" % (v, e, f, v), "thin_hof"
 
+    def x_fn_field(self, leg, tn, e):
+        """The value passes through a function stored in a TYPED fn field.
+
+        No crossing had ever stored a function in a struct field.  That is
+        where a bare `fn` field returned a float's BITS
+        (4619004367821864960 for 6.5) and an effectful typed field aborted
+        -- both 2026-09-30.  Half the time the stored function is a
+        capturing lambda, which a typed field boxes fat.
+        """
+        st, f = self.name("FzFF"), self.name("ff")
+        leg.defs.append("(defstruct %s :copy [app : (fn [%s] %s)])" % (st, tn, tn))
+        if self.rng.random() < 0.5:
+            leg.defs.append("(defn %s [v : %s] : %s v)" % (f, tn, tn))
+            fnv = f
+        else:
+            k = self.name("fk")
+            leg.defs.append("(def %s 1)" % k)
+            fnv = "(fn [v : %s] : %s (if (= %s 1) v v))" % (tn, tn, k)
+        return "(.app (make-struct %s %s) %s)" % (st, fnv, e), "fn_field"
+
+    def x_fn_field_eff(self, leg, tn, e):
+        """The same through an EFFECTFUL typed fn field: the stored function
+        performs, and the handler resumes with the payload.  The E2a call
+        into it spelled every argument `int64_t` (a float became its
+        truncation in the wrong register) and looked the registry up by the
+        field's fat box."""
+        ef, st, f = self.name("FzEf"), self.name("FzFE"), self.name("fe")
+        leg.defs.append("(defeffect %s [x :%s] :%s)" % (ef, tn, tn))
+        leg.defs.append("(defstruct %s :copy [run : (fn [%s] %s) #fx{%s}])"
+                        % (st, tn, tn, ef))
+        leg.defs.append("(defn %s [v : %s] : %s (perform (%s v)))" % (f, tn, tn, ef))
+        return ("(handle (.run (make-struct %s %s) %s)\n    (%s [x] k) (resume k x))"
+                % (st, f, e, ef)), "fn_field_eff"
+
     def x_tyvar_run(self, leg, tn, e):
         # KNOWN shape (crashes with a capturing closure); --emit-known only.
         f = self.name("r")
@@ -856,7 +890,10 @@ class Gen:
             return [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
                     self.x_fat_hof, self.x_thin_hof]
         xs = [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
-              self.x_fat_hof, self.x_thin_hof, self.x_gid_let]
+              self.x_fat_hof, self.x_thin_hof, self.x_gid_let,
+              self.x_fn_field]
+        if tn in ("int", "float", "bool", "cstr"):
+            xs.append(self.x_fn_field_eff)
         # Thin HOF over every wrapper: scalars ride the poly carrier;
         # concrete by-value/heap signatures are fat-normalized as of
         # fn-value-fat-normalization stage 1 (2026-07-30).
@@ -1270,11 +1307,11 @@ def run_case(tur, path, src):
 
 BUG_OF = {"crash": "BUG_crash", "invalid_c": "BUG_invalid_c",
           "link": "BUG_link", "other": "BUG_toolchain_other",
-          "fnptr_trap": "BUG_fnptr_trap"}
+          "fnptr_trap": fuzz_arm.TRAP_CLASS}
 
 SEAM_BUG_OF = {"crash": "BUG_seam_crash", "invalid_c": "BUG_seam_invalid_c",
                "link": "BUG_seam_link", "other": "BUG_toolchain_other",
-               "fnptr_trap": "BUG_fnptr_trap"}
+               "fnptr_trap": fuzz_arm.TRAP_CLASS}
 
 
 def classify(out, expected, is_seam=False):
@@ -1316,7 +1353,8 @@ def one_case(tur, workdir, idx, seed, max_legs, emit_known,
     kind = classify(out, expected, is_seam)
 
     detail = None
-    if kind.startswith("BUG") or kind in ("GEN_REJECT", "SEAM_REJECT"):
+    if kind.startswith("BUG") or kind in ("GEN_REJECT", "SEAM_REJECT",
+                                          "FNPTR_TRAP"):
         # Bisect: which leg(s) fail alone?
         failing = []
         for j, leg in enumerate(legs):
@@ -1355,7 +1393,7 @@ def one_case(tur, workdir, idx, seed, max_legs, emit_known,
 
 # A program whose emitted C makes one indirect call through a function
 # pointer of the wrong type.  With fnsan armed it must classify as
-# BUG_fnptr_trap; unarmed, the self-test says it cannot check this arm rather
+# its trap class (FNPTR_TRAP, or BUG_fnptr_trap under strict); unarmed, the self-test says it cannot check this arm rather
 # than passing it.
 FNPTR_SELF_TEST = (
     "fn-pointer mismatch trapped",
@@ -1364,7 +1402,7 @@ FNPTR_SELF_TEST = (
     '  ```c\n  double (*d)(double) = (double (*)(double))(void *)twice;\n'
     '  return (int64_t)d(1.5);\n  ```)\n'
     '(defn main [] : int (println (twice 1)) (println (boom)) 0)\n',
-    "2\n3\n", "BUG_fnptr_trap")
+    "2\n3\n", fuzz_arm.TRAP_CLASS)
 
 SELF_TESTS = [
     ("clean pass",
@@ -1644,6 +1682,10 @@ def main():
         n_hang = counts.get("SEAM_HANG", 0)
         print("\n  BUG classes (fail)          : %d" % n_bugs)
         print("  generator rejects (report)  : %d" % n_rej)
+        n_trap = counts.get("FNPTR_TRAP", 0)
+        if n_trap:
+            print("  fn-pointer traps (report)   : %d   "
+                  "(TUR_FUZZ_FNSAN_STRICT=1 fails on these)" % n_trap)
         print("  known open reports (report) : %d" % n_known)
         # A seam reject is the elaborator refusing a payload it cannot carry --
         # the outcome the session report asks for -- so it is reported, not

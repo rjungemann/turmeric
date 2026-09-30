@@ -6189,6 +6189,55 @@ static bool e2a_callee_is_fat(const Binding *fn) {
            fn_param_type_is_fat_normalized(&fn->type);
 }
 
+/* The same question for either callee spelling.  An E2c struct-field LOAD
+ * (fn == NULL) is fat exactly when its field is a TYPED fn field: those store
+ * a fat box `{ fatshim, entry }` (the ctor's boxed-field path), and a lookup
+ * keyed on the box itself found nothing -- "no CPS entry registered for
+ * effectful fn-value" on every typed effectful field.  A bare `fn` field
+ * keeps the thin store and the raw atom key. */
+static bool e2a_call_is_fat(const Binding *fn, const CAtom *fn_atom) {
+    if (fn) return e2a_callee_is_fat(fn);
+    return fn_atom && fn_atom->type && fn_atom->type->kind == TY_FN &&
+           fn_atom->type->as.fn.boxed;
+}
+
+/* The C type an E2a call spells for parameter `i`.  The registered `__cps`
+ * twin keeps its REAL parameter types (`put__cps(double v, DK *k)`), so
+ * spelling every slot `int64_t` value-converted a float argument (2.5 -> 2)
+ * into the wrong register class, and the callee then read its continuation
+ * from the register holding the int -- a segfault, or with a pure callee a
+ * wrong answer.  When the callee has a signature, a float-class parameter
+ * takes its own spelling; the word-class kinds keep the int64 carrier the
+ * args are cast to (atoms_csv_call_cps), which shares their register class.
+ * A signature-less callee (bare `fn` field, bare `:fn` parameter) cannot
+ * carry a float at all: the elaborator rejects that at the store and the
+ * call. */
+static const Type *e2a_callee_sig(const Binding *fn, const CAtom *fn_atom,
+                                  uint32_t n) {
+    const Type *t = NULL;
+    if (fn && fn->type.kind == TY_FN) t = &fn->type;
+    else if (!fn && fn_atom && fn_atom->type && fn_atom->type->kind == TY_FN)
+        t = fn_atom->type;
+    if (!t || t->as.fn.arity != n || (n && !t->as.fn.arg_kinds)) return NULL;
+    return t;
+}
+static const char *e2a_param_ctype(const Type *sig, uint32_t i) {
+    if (!sig || i >= sig->as.fn.arity) return "int64_t";
+    switch ((TypeKind)sig->as.fn.arg_kinds[i]) {
+        case TY_FLOAT: case TY_FLOAT64: return "double";
+        case TY_FLOAT32:                return "float";
+        default:                        return "int64_t";
+    }
+}
+/* "int64_t (*)(<lead>T0, T1, ..., DK *)" into `out`. */
+static void e2a_cast(char *out, size_t cap, const char *lead, const Type *sig,
+                     uint32_t n) {
+    int off = snprintf(out, cap, "int64_t (*)(%s", lead);
+    for (uint32_t i = 0; i < n && off < (int)cap - 64; i++)
+        off += snprintf(out + off, cap - (size_t)off, "%s, ", e2a_param_ctype(sig, i));
+    snprintf(out + off, cap - (size_t)off, "DK *)");
+}
+
 /* Emit the via_registry dispatch for a FAT callee.  Two box species reach an
  * effectful fn slot, distinguishable by which slot the registry knows:
  *
@@ -6206,16 +6255,12 @@ static bool e2a_callee_is_fat(const Binding *fn) {
  * `thread` the continuation expression. */
 static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
                                   const char *argv, uint32_t n,
-                                  const char *thread, const char *tag) {
-    char env_cast[512]; int off = snprintf(env_cast, sizeof env_cast,
-                                           "int64_t (*)(void *, ");
-    for (uint32_t i = 0; i < n && off < 400; i++)
-        off += snprintf(env_cast + off, sizeof env_cast - (size_t)off, "int64_t, ");
-    snprintf(env_cast + off, sizeof env_cast - (size_t)off, "DK *)");
-    char thin_cast[512]; off = snprintf(thin_cast, sizeof thin_cast, "int64_t (*)(");
-    for (uint32_t i = 0; i < n && off < 400; i++)
-        off += snprintf(thin_cast + off, sizeof thin_cast - (size_t)off, "int64_t, ");
-    snprintf(thin_cast + off, sizeof thin_cast - (size_t)off, "DK *)");
+                                  const char *thread, const char *tag,
+                                  const Type *sig) {
+    char env_cast[512];
+    e2a_cast(env_cast, sizeof env_cast, "void *, ", sig, n);
+    char thin_cast[512];
+    e2a_cast(thin_cast, sizeof thin_cast, "", sig, n);
     ce_line(ce, "{ int64_t *__e2ab = (int64_t *)(intptr_t)(%s); /* %s (fat callee) */", callee, tag);
     ce_line(ce, "  __tur_cps_fn __e2af = __tur_cps_lookup(__e2ab[0]);");
     if (n) {
@@ -6279,8 +6324,9 @@ static char *atoms_csv_call(CE *ce, const CAtom *args, uint32_t n) {
  * natural C type to a real callee), here a pointer-like arg -- a cstr literal, a
  * `ptr<void>`, an rc/weak/ref handle, a fn value, a continuation -- must be cast
  * to `(int64_t)(intptr_t)`, else it "makes integer from pointer" at the call, a
- * hard error under GCC >= 14.  int/bool pass through as int64 already; float args
- * do not occur on this carrier path. */
+ * hard error under GCC >= 14.  int/bool pass through as int64 already.  A float
+ * arg passes bare, and the E2a cast spells its slot `double` (e2a_param_ctype);
+ * "float args do not occur on this carrier path" was never true. */
 static bool atom_ty_is_ptr_carrier(TypeKind k) {
     return k == TY_FN || k == TY_PTR_VOID || k == TY_CSTR || k == TY_RC ||
            k == TY_WEAK || k == TY_REF || k == TY_REF_IMMUT || k == TY_REF_MUT ||
@@ -6952,17 +6998,18 @@ static void emit_term(CE *ce, const CTerm *t) {
                 char *argv = atoms_csv_call_cps(ce, t->as.tailcall.args, t->as.tailcall.n);
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
-                if (e2a_callee_is_fat(t->as.tailcall.fn)) {
+                const Type *e2sig = e2a_callee_sig(t->as.tailcall.fn,
+                                                   &t->as.tailcall.fn_atom,
+                                                   t->as.tailcall.n);
+                if (e2a_call_is_fat(t->as.tailcall.fn, &t->as.tailcall.fn_atom)) {
                     emit_e2a_fat_dispatch(ce, pf, pf, argv, t->as.tailcall.n,
-                                          thread, "E2a threaded fn-value");
+                                          thread, "E2a threaded fn-value", e2sig);
                     free(pf); free(argv);
                     break;
                 }
-                /* cast to the __cps ABI: int64_t (*)(int64_t x n, DK *) */
-                char cast[512]; int off = snprintf(cast, sizeof cast, "int64_t (*)(");
-                for (uint32_t i = 0; i < t->as.tailcall.n && off < 400; i++)
-                    off += snprintf(cast + off, sizeof cast - (size_t)off, "int64_t, ");
-                snprintf(cast + off, sizeof cast - (size_t)off, "DK *)");
+                /* cast to the __cps ABI, float parameters at their own type */
+                char cast[512];
+                e2a_cast(cast, sizeof cast, "", e2sig, t->as.tailcall.n);
                 char key[640];
                 e2a_lookup_key(key, sizeof key, t->as.tailcall.fn, pf);
                 if (t->as.tailcall.n)
@@ -8182,15 +8229,16 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
          * join `frame` to its CPS entry recovered from the registry. */
         /* Carrier ABI: pointer-like args must be int64-cast (gcc14-int-conversion). */
         char *argv_cps = atoms_csv_call_cps(ce, call->as.tailcall.args, call->as.tailcall.n);
-        if (e2a_callee_is_fat(call->as.tailcall.fn)) {
+        const Type *e2sig = e2a_callee_sig(call->as.tailcall.fn,
+                                           &call->as.tailcall.fn_atom,
+                                           call->as.tailcall.n);
+        if (e2a_call_is_fat(call->as.tailcall.fn, &call->as.tailcall.fn_atom)) {
             emit_e2a_fat_dispatch(ce, fn, fn, argv_cps, call->as.tailcall.n,
-                                  frame, "E2a threaded fn-value heap join");
+                                  frame, "E2a threaded fn-value heap join", e2sig);
             free(argv_cps);
         } else {
-        char cast[512]; int coff = snprintf(cast, sizeof cast, "int64_t (*)(");
-        for (uint32_t i = 0; i < call->as.tailcall.n && coff < 400; i++)
-            coff += snprintf(cast + coff, sizeof cast - (size_t)coff, "int64_t, ");
-        snprintf(cast + coff, sizeof cast - (size_t)coff, "DK *)");
+        char cast[512];
+        e2a_cast(cast, sizeof cast, "", e2sig, call->as.tailcall.n);
         char key[640];
         e2a_lookup_key(key, sizeof key, call->as.tailcall.fn, fn);
         if (call->as.tailcall.n)

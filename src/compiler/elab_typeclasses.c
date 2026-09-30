@@ -7291,6 +7291,22 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                         for (uint32_t j = 0; j < n_args; j++) {
                             args[j] = elab_form(e, call->as.list.items[2 + j]);
                             if (!args[j]) return NULL;
+                            /* A bare `fn` field has no signature, so the call
+                             * uses the int64 register class; a float argument
+                             * would reach the callee in the wrong register.
+                             * Same rule as a `:fn` parameter's application. */
+                            if (!ctor->fields[i].full_type &&
+                                kind_is_float_class(args[j]->type.kind)) {
+                                diag_emit(DIAG_ERROR, args[j]->span,
+                                          "calling field '%s' with a floating-point "
+                                          "argument is not supported: it is declared "
+                                          "bare `fn` (no signature), and a call "
+                                          "through it uses the int64 register class\n"
+                                          "  = help: declare the field's function "
+                                          "type, e.g. (fn [float] float)",
+                                          method_name);
+                                return NULL;
+                            }
                         }
                         Type result_type = TYPE_INT;
                         if (field_type.kind == TY_FN) {

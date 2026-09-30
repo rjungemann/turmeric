@@ -5255,6 +5255,28 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                     if (!thin_fn_field) continue;
                     const Expr *fa = call_expr->as.call_.args[fi];
                     while (fa && fa->kind == EX_ASCRIBE) fa = fa->as.ascribe_.inner;
+                    /* The same field, the other way to miscompile it: a bare
+                     * `fn` field carries no signature, so every call through
+                     * it spells an int64 result -- a function with a float
+                     * argument or result stored here came back as its bits
+                     * (`(.app b 3.25)` of a doubling fn printed
+                     * 4619004367821864960).  The `:fn` parameter carrier has
+                     * rejected exactly this since Phase CCL; the field form of
+                     * the same erasure never did. */
+                    if (!ft && fa && fn_sig_has_float_class(&fa->type)) {
+                        diag_emit(DIAG_ERROR, fa->span,
+                                  "constructor '%s': a function with a "
+                                  "floating-point argument or result cannot be "
+                                  "stored in field %u, which is declared bare "
+                                  "`fn` (no signature)\n"
+                                  "  = note: every call through a signature-less "
+                                  "`fn` field uses the int64 register class, so "
+                                  "the float would be a silent miscompile\n"
+                                  "  = help: declare the field's function type, "
+                                  "e.g. (fn [float] float)",
+                                  ctor->name, fi);
+                        return NULL;
+                    }
                     if (fa && fa->kind == EX_CLOSURE && fa->as.closure_.closure &&
                         fa->as.closure_.closure->n_captures > 0) {
                         diag_emit(DIAG_ERROR, fa->span,
