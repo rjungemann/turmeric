@@ -495,13 +495,27 @@
 ;; inlined at each site (no nested helper function, which the compiled backend
 ;; rejects as an invalid storage class).
 ;; ---------------------------------------------------------------------------
+;;; image/crc32- -- chainable CRC-32 (zlib convention) over n bytes at p (internal).
+
+(defn image/crc32- [crc : int p : ptr<void> n : int] : int
+  ```c
+  const uint8_t *b = (const uint8_t *)p;
+  uint32_t c = ~(uint32_t)crc;
+  for (int64_t i = 0; i < n; i++) {
+    c ^= b[i];
+    for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(c & 1)));
+  }
+  return (int64_t)(uint32_t)~c;
+  ```)
 ;;; image/write-image-file! -- frame continuation k (+ globals) and write to path.
 ;;;
 ;;; The C half of image/save-cont-to-file!: marshals k via the Phase 21 serial
 ;;; codec, writes the 72-byte header carrying `stamp`, the continuation bytes,
 ;;; and -- when `globals` is non-NULL -- the AI3 globals section
 ;;; ([int64 len][bytes]) that the header's globals_offset (byte 56) locates.
-;;; payload_len covers both sections.
+;;; payload_len covers both sections.  The header's flags word
+;;; carries TUR_IMAGE_FLAG_PAYLOAD_CRC and a u32 CRC-32 of the payload trails
+;;; it (outside payload_len).
 ;;;
 ;;; Parameters:
 ;;;   path    -- destination path
@@ -536,6 +550,9 @@
   if (!f) { free(bb); return 0; }
   uint8_t hdr[72]; memset(hdr, 0, 72);
   uint32_t magic=0x54555249u, ver=1u;
+  /* flags bit 0 (TUR_IMAGE_FLAG_PAYLOAD_CRC): a u32 CRC-32 of the payload
+   * follows it, so a flipped byte in an env is caught, not resumed. */
+  uint32_t flags=1u;
   memcpy(hdr+0,&magic,4); memcpy(hdr+4,&ver,4);
   if (stamp) memcpy(hdr+8,(const void*)(intptr_t)stamp,32);
   memcpy(hdr+40,&total,8);
@@ -543,13 +560,18 @@
   if (clock_gettime(CLOCK_REALTIME,&ts)==0) cns=(uint64_t)ts.tv_sec*1000000000ull+(uint64_t)ts.tv_nsec;
   memcpy(hdr+48,&cns,8);
   memcpy(hdr+56,&goff,8);
+  memcpy(hdr+64,&flags,4);
   { uint32_t crc=0xFFFFFFFFu; for (int i=0;i<68;i++){ crc^=hdr[i]; for(int b=0;b<8;b++) crc=(crc>>1)^(0xEDB88320u&(uint32_t)(-(int32_t)(crc&1))); } crc=~crc; memcpy(hdr+68,&crc,4); }
   int ok = (fwrite(hdr,1,72,f)==72);
   if (ok && plen>0) ok = (fwrite(payload,1,(size_t)plen,f)==(size_t)plen);
+  int64_t pcrc = image_slcrc32_hy(0, (void *)payload, plen);
   if (ok && gsec) {
     ok = (fwrite(&glen,1,8,f)==8);
     if (ok && glen>0) ok = (fwrite(gsec+1,1,(size_t)glen,f)==(size_t)glen);
+    pcrc = image_slcrc32_hy(pcrc, (void *)&glen, 8);
+    pcrc = image_slcrc32_hy(pcrc, (void *)(gsec+1), glen);
   }
+  if (ok) { uint32_t pc = (uint32_t)pcrc; ok = (fwrite(&pc,1,4,f)==4); }
   fclose(f);
   free(bb);
   return ok ? 1 : 0;
@@ -574,39 +596,13 @@
   (let [g  (image/snapshot-globals)
         ok (image/write-image-file! path k stamp g)]
     (do (image/free-bytes g) ok)))
-;;; image/loadable? -- 1 if path is a structurally valid image for `stamp`.
-;;;
-;;; Validates magic + version + CRC and then requires the header build-stamp to
-;;; equal `stamp` (the running binary's stamp). A missing/corrupt/foreign image
-;;; returns 0. This is a *pre-check*: callers use it to decide whether to resume
-;;; an image, so that a resumed value of 0 is never confused with a load
-;;; failure. Returns 0 on any failure.
-;;;
-;;; Since: Phase AI
-
-(defn image/loadable? [path : cstr stamp : int] : int
-  ```c
-  #include <stdint.h>
-  if (!stamp) return 0;
-  FILE *f = fopen(path, "rb");
-  if (!f) return 0;
-  uint8_t hdr[72];
-  size_t g = fread(hdr,1,72,f);
-  fclose(f);
-  if (g != 72) return 0;
-  uint32_t magic; memcpy(&magic,hdr+0,4);
-  if (magic != 0x54555249u) return 0;
-  uint32_t ver; memcpy(&ver,hdr+4,4);
-  if (ver != 1u) return 0;
-  uint32_t stored_crc; memcpy(&stored_crc,hdr+68,4);
-  uint32_t crc=0xFFFFFFFFu; for (int i=0;i<68;i++){ crc^=hdr[i]; for(int b=0;b<8;b++) crc=(crc>>1)^(0xEDB88320u&(uint32_t)(-(int32_t)(crc&1))); } crc=~crc;
-  if (stored_crc != crc) return 0;
-  return memcmp(hdr+8, (const void*)(intptr_t)stamp, 32) == 0 ? 1 : 0;
-  ```)
 ;;; image/read-image-file -- read + validate an image into a blob (internal).
 ;;;
-;;; Validates magic / version / CRC and, when `stamp` is non-zero, the build
-;;; stamp.  Returns a malloc'd blob laid out as [int64 cont_len][cont bytes]
+;;; Validates magic / version / flags / header CRC and, when `stamp` is
+;;; non-zero, the build stamp; holds payload_len to the file's real size;
+;;; checks the payload CRC when the header says one follows; and checks the
+;;; continuation bytes against this program's frame registry.  Returns a
+;;; malloc'd blob laid out as [int64 cont_len][cont bytes]
 ;;; [int64 globals_len][globals bytes] (globals_len is 0 for an image with no
 ;;; globals section), or NULL on any validation / I-O failure.  The blob's head
 ;;; is exactly the buffer tur_serial_cont_deserialize consumes.
@@ -627,10 +623,23 @@
   if (stored_crc != crc) { fclose(f); return NULL; }
   uint32_t ver; memcpy(&ver,hdr+4,4);
   if (ver != 1u) { fclose(f); return NULL; }
+  uint32_t flags; memcpy(&flags,hdr+64,4);
+  if (flags & ~1u) { fclose(f); return NULL; }       /* unknown flag bits */
   if (stamp && memcmp(hdr+8,(const void*)(intptr_t)stamp,32)!=0) { fclose(f); return NULL; }
   int64_t plen; { uint64_t pl; memcpy(&pl,hdr+40,8); plen=(int64_t)pl; }
   int64_t goff; { uint64_t go; memcpy(&go,hdr+56,8); goff=(int64_t)go; }
-  if (plen < 0) { fclose(f); return NULL; }
+  /* security-audit-plan M-1: payload_len is the file's own word, and it sizes
+   * the malloc below.  Hold it to the bytes actually present, so a header
+   * that claims 2^62 bytes is a rejected image rather than a giant
+   * allocation. */
+  int64_t avail;
+  {
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long fend = ftell(f);
+    if (fend < 72 || fseek(f, 72, SEEK_SET) != 0) { fclose(f); return NULL; }
+    avail = (int64_t)fend - 72 - ((flags & 1u) ? 4 : 0);
+  }
+  if (plen < 0 || plen > avail) { fclose(f); return NULL; }
   /* The continuation section is everything before globals_offset (or the
    * whole payload when there is no globals section). */
   int64_t clen = plen;
@@ -650,9 +659,45 @@
   } else {
     int64_t zero = 0; memcpy(buf+8+clen, &zero, 8);
   }
+  if (flags & 1u) {
+    /* The payload sits contiguously at buf+8 (continuation, then the globals
+     * section when there is one), exactly as it did on disk. */
+    uint32_t want;
+    if (fread(&want,1,4,f) != 4 ||
+        (uint32_t)image_slcrc32_hy(0, (void *)(buf + 8), plen) != want) {
+      free(buf); fclose(f); return NULL;
+    }
+  }
   fclose(f);
+#ifdef SK_TAG_CALL
+  /* The continuation must also rebuild: checked here so that a damaged or
+   * foreign continuation is an image that does not load (a cold start), not a
+   * panic inside image/blob-resume!. */
+  if (tur_serial_cont_check((int64_t)(intptr_t)buf) != 0) { free(buf); return NULL; }
+#endif
   return (void *)buf;
   ```)
+;;; image/loadable? -- 1 if path is a valid image for `stamp`.
+;;;
+;;; Runs every check image/load-resume-file! runs -- magic, version, header
+;;; flags and CRC, the build stamp (which must equal `stamp`, the running
+;;; binary's), the payload's length against the file and its CRC, and the
+;;; continuation bytes against this program's frame registry -- so a 1 here
+;;; means the load will resume rather than fail.  A missing, corrupt, foreign
+;;; or truncated image returns 0.  Callers use it to decide whether to resume
+;;; an image, so that a resumed value of 0 is never confused with a load
+;;; failure.
+;;;
+;;; Since: Phase AI
+
+(defn image/loadable? [path : cstr stamp : int] : int
+  (if (= stamp 0)
+    0
+    (let [blob (image/read-image-file path stamp)]
+      (if (image/bytes-null? blob)
+        0
+        (do (image/free-bytes blob) 1)))))
+
 ;;; image/blob-globals -- the globals section inside a read blob (internal).
 ;;;
 ;;; Returns a bytes view ({len; data}) into the blob, or NULL when the image

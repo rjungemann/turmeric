@@ -41,7 +41,9 @@ static void lsp_io_binary(int fd) { (void)fd; }
 #endif
 
 /* Read until the 4-byte CRLF CRLF header terminator.
- * Returns heap-allocated header string (NUL-terminated), or NULL on EOF. */
+ * Returns heap-allocated header string (NUL-terminated), or NULL on EOF or
+ * once the block passes LSP_MAX_HEADER_BYTES -- a peer that never sends the
+ * terminator must not be able to grow this buffer without bound. */
 static char *read_headers(int fd) {
     size_t cap = 256, len = 0;
     char *buf = malloc(cap);
@@ -53,9 +55,11 @@ static char *read_headers(int fd) {
         if (n <= 0) { free(buf); return NULL; }
 
         if (len + 2 >= cap) {
+            if (cap >= LSP_MAX_HEADER_BYTES) { free(buf); return NULL; }
             cap *= 2;
-            buf = realloc(buf, cap);
-            if (!buf) return NULL;
+            char *nb = realloc(buf, cap);
+            if (!nb) { free(buf); return NULL; }
+            buf = nb;
         }
         buf[len++] = c;
         buf[len] = '\0';
@@ -68,20 +72,69 @@ static char *read_headers(int fd) {
     }
 }
 
+/* Case-insensitive compare of the first n bytes (header names are
+ * case-insensitive, as in HTTP). */
+static int ascii_ncaseeq(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
+        if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
+        if (x != y) return 0;
+    }
+    return 1;
+}
+
+bool lsp_parse_content_length(const char *headers, size_t *out_len) {
+    static const char name[] = "content-length:";
+    const size_t name_len = sizeof name - 1;
+    bool found = false;
+    size_t value = 0;
+
+    /* Walk the block line by line, matching the header name only at the start
+     * of a line -- a strstr over the whole block also matched the name inside
+     * another header's value. */
+    for (const char *line = headers; *line; ) {
+        const char *eol = strstr(line, "\r\n");
+        size_t line_len = eol ? (size_t)(eol - line) : strlen(line);
+        if (line_len >= name_len && ascii_ncaseeq(line, name, name_len)) {
+            const char *p = line + name_len, *end = line + line_len;
+            while (p < end && (*p == ' ' || *p == '\t')) p++;
+            if (p == end || *p < '0' || *p > '9') return false;
+            size_t v = 0;
+            for (; p < end && *p >= '0' && *p <= '9'; p++) {
+                /* Checked on every digit, so v is at most the cap going into
+                 * each multiply and no digit string can wrap it.  The "-1"
+                 * that used to wrap body_len + 1 to zero (malloc(0), then a
+                 * read of SIZE_MAX bytes into it) is rejected at the '-'. */
+                v = v * 10 + (size_t)(*p - '0');
+                if (v > LSP_MAX_BODY_BYTES) return false;
+            }
+            while (p < end && (*p == ' ' || *p == '\t')) p++;
+            if (p != end) return false;           /* trailing garbage */
+            if (found && v != value) return false; /* conflicting duplicates */
+            found = true;
+            value = v;
+        }
+        if (!eol) break;
+        line = eol + 2;
+    }
+    if (!found || value == 0) return false;
+    *out_len = value;
+    return true;
+}
+
 char *lsp_read_message(int fd_in) {
     lsp_io_binary(fd_in);
     char *headers = read_headers(fd_in);
     if (!headers) return NULL;
 
-    /* Parse Content-Length */
-    const char *cl = strstr(headers, "Content-Length:");
-    if (!cl) { free(headers); return NULL; }
-    cl += 15; /* skip "Content-Length:" */
-    while (*cl == ' ') cl++;
-    size_t body_len = (size_t)atol(cl);
+    /* A missing, malformed, zero or oversized Content-Length is a framing
+     * error.  Nothing after it can be re-synchronised, so it ends the session
+     * exactly as EOF does. */
+    size_t body_len = 0;
+    bool ok = lsp_parse_content_length(headers, &body_len);
     free(headers);
-
-    if (body_len == 0) return NULL;
+    if (!ok) return NULL;
 
     char *body = malloc(body_len + 1);
     if (!body) return NULL;

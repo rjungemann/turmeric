@@ -27,9 +27,17 @@
  *                          (stdlib/image.tur image/global-registry): [i64 n]
  *                          then per global [i64 name_len][name][i64 blen]
  *                          [Serializable bytes].
- *   [flags           u32]  reserved, must be 0
+ *   [flags           u32]  bit 0 = TUR_IMAGE_FLAG_PAYLOAD_CRC; every other
+ *                          bit must be 0 (an unknown bit is IMAGE_BAD_FLAGS)
  *   [header_crc32    u32]  CRC32 of header bytes [0, header_crc32) -- catches
  *                          truncation/corruption of the header itself
+ *
+ * When TUR_IMAGE_FLAG_PAYLOAD_CRC is set, a u32 CRC32 of the payload_len
+ * payload bytes follows the payload (outside payload_len), so corruption of
+ * the payload is caught as well as the header's (security-audit-plan M-1).
+ * stdlib/image.tur always sets it; an image with the bit clear predates it and
+ * loads without the payload check.  Neither CRC is authentication -- anyone
+ * who can write the file can recompute both.
  *
  * sizeof(TurImageHeader) == TUR_IMAGE_HEADER_SIZE == 72.
  */
@@ -44,6 +52,9 @@
 #define TUR_IMAGE_HEADER_SIZE 72u          /* fixed on-disk header size in bytes */
 #define TUR_IMAGE_STAMP_LEN   32u          /* SHA-256 digest length */
 
+#define TUR_IMAGE_FLAG_PAYLOAD_CRC 0x1u    /* a u32 payload CRC32 trails the payload */
+#define TUR_IMAGE_FLAGS_KNOWN      TUR_IMAGE_FLAG_PAYLOAD_CRC
+
 typedef struct TurImageHeader {
     uint32_t magic;                          /* TUR_IMAGE_MAGIC */
     uint32_t version;                        /* TUR_IMAGE_VERSION */
@@ -51,7 +62,7 @@ typedef struct TurImageHeader {
     uint64_t payload_len;                    /* bytes of TSER data after header */
     uint64_t created_unix_ns;                /* informational; not validated */
     uint64_t globals_offset;                 /* AI3 globals section offset; 0 == none */
-    uint32_t flags;                          /* reserved, must be 0 */
+    uint32_t flags;                          /* TUR_IMAGE_FLAG_* bits */
     uint32_t header_crc32;                   /* CRC32 of bytes [0, header_crc32) */
 } TurImageHeader;
 
@@ -66,6 +77,10 @@ typedef enum TurImageError {
     IMAGE_BAD_CRC         = -4,  /* header_crc32 mismatch */
     IMAGE_TRUNCATED       = -5,  /* short read: fewer than 72 header bytes */
     IMAGE_IO_ERROR        = -6,  /* underlying read/write failed */
+    IMAGE_BAD_FLAGS       = -7,  /* a flag bit this reader does not know */
+    IMAGE_BAD_PAYLOAD     = -8,  /* payload shorter than payload_len, a
+                                    globals_offset outside it, or a payload
+                                    CRC mismatch */
 } TurImageError;
 
 /* Human-readable name for an error code (static string, never NULL). */
@@ -88,6 +103,14 @@ TurImageError tur_image_write(FILE *f,
  * the first payload byte. Validates magic, version, and header CRC; does NOT
  * validate the build stamp (that is the caller's job, AI4). */
 TurImageError tur_image_read_header(FILE *f, TurImageHeader *out);
+
+/* Validate the payload that follows a header tur_image_read_header accepted,
+ * reading from the current file position: payload_len bytes must be present,
+ * and when TUR_IMAGE_FLAG_PAYLOAD_CRC is set the trailing CRC32 must match.
+ * Returns IMAGE_OK, IMAGE_BAD_PAYLOAD or IMAGE_IO_ERROR.  Streams the payload
+ * in fixed-size chunks, so a lying payload_len costs a read, not an
+ * allocation. */
+TurImageError tur_image_verify_payload(FILE *f, const TurImageHeader *h);
 
 /* Compute the SHA-256 of an entire file (used by `tur image-verify` to hash a
  * candidate loader binary and compare it against an image's build stamp).
