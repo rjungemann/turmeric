@@ -1,0 +1,20 @@
+;; reflected-measures RF3: a FLOAT-returning reflected measure is Real-sorted
+;; (RM-B1), and its equations are Real equations: fsum(FCons(1.5, FCons(1.25,
+;; FNil))) = 1.5 + fsum(...), down to 0.0, and 2.75 < 3.25 is linear real
+;; arithmetic.  Every literal carries a non-zero fractional part on purpose --
+;; the RM-B0 missort (an Int-declared measure integer-tightened against a Real
+;; bound) is invisible at 3.0/4.0 and the sibling negative
+;; errors/reflect-float-not-tightened pins the boundary case 1.5 + 1.75.
+(defdata FL [] (FCons [hd : float tl : FL]) (FNil))
+
+(defn ^reflect fsum [xs : FL] : float
+  (match xs
+    (FNil) 0.0
+    (FCons h t) (+ h (fsum t))))
+
+(defn bounded [xs : #refine{ v : FL | (< (fsum v) 3.25) }] : float 1.5)
+
+(defn main [] : int
+  (println (bounded (FCons 1.5 (FCons 1.25 (FNil)))))
+  (println "reflect-float-measure")
+  0)

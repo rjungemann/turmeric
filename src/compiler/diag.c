@@ -331,6 +331,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0381_WRITES_FRAME_INVALID:       return "TUR-E0381";
         case TUR_E0382_WRITES_FRAME_EXCEEDED:      return "TUR-E0382";
         case TUR_W0383_READS_FRAME_OMITS_MUTABLE:  return "TUR-W0383";
+        case TUR_E0384_REFLECT_NOT_TOTAL:          return "TUR-E0384";
+        case TUR_W0385_REFLECT_FUEL_EXHAUSTED:     return "TUR-W0385";
         case TUR_E0390_CLASS_SUPERCLASS_PREAMBLE:         return "TUR-E0390";
         case TUR_E0391_CLASS_SUPERCLASS_UNRESOLVED:       return "TUR-E0391";
         case TUR_E0392_CLASS_SUPERCLASS_CYCLE:            return "TUR-E0392";
@@ -510,6 +512,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0381") == 0) return TUR_E0381_WRITES_FRAME_INVALID;
     if (strcmp(s, "TUR-E0382") == 0) return TUR_E0382_WRITES_FRAME_EXCEEDED;
     if (strcmp(s, "TUR-W0383") == 0) return TUR_W0383_READS_FRAME_OMITS_MUTABLE;
+    if (strcmp(s, "TUR-E0384") == 0) return TUR_E0384_REFLECT_NOT_TOTAL;
+    if (strcmp(s, "TUR-W0385") == 0) return TUR_W0385_REFLECT_FUEL_EXHAUSTED;
     if (strcmp(s, "TUR-E0390") == 0) return TUR_E0390_CLASS_SUPERCLASS_PREAMBLE;
     if (strcmp(s, "TUR-E0391") == 0) return TUR_E0391_CLASS_SUPERCLASS_UNRESOLVED;
     if (strcmp(s, "TUR-E0392") == 0) return TUR_E0392_CLASS_SUPERCLASS_CYCLE;
@@ -1907,6 +1911,59 @@ static const DiagExplanation diag_explanations_[] = {
       "an inline-C body is unwalkable, yields no evidence, stays silent, and\n"
       "keeps the trusted grant.  See\n"
       "docs/archive/trusted-refinement-claims-plan.md.\n" },
+    { TUR_E0384_REFLECT_NOT_TOTAL,
+      "TUR-E0384: `^reflect` function is not proven total\n"
+      "\n"
+      "A `^reflect` defn asks the refinement solver to USE its definition: at a\n"
+      "call whose argument is a constructor term or a literal, the body is\n"
+      "unfolded and the equation `f(t) = <body at t>` is asserted.  Such an\n"
+      "equation is only a fact when `f` is TOTAL.  Unfolding `f(x) = 1 + f(x)`\n"
+      "asserts `0 = 1`, and an inconsistent hypothesis set discharges every\n"
+      "obligation in the unit -- silently, including the false ones.  So the\n"
+      "gate is a hard error on the definition, never a quiet downgrade.\n"
+      "\n"
+      "Three things are checked, and the message names which one failed:\n"
+      "\n"
+      "  purity      -- the body clears the same default-deny purity walk that\n"
+      "                 grants a measure congruence (literals, if/let/do/match,\n"
+      "                 arithmetic, calls to functions already known pure).\n"
+      "  termination -- every self-call passes, in some fixed position, a\n"
+      "                 STRICT STRUCTURAL SUBTERM of the corresponding\n"
+      "                 parameter: a variable bound by a constructor pattern in\n"
+      "                 a `match` on that parameter (the `t` in\n"
+      "                 `(Cons _ t) (+ 1 (len t))`), or a subterm of one.\n"
+      "                 Arithmetic on the argument (`(f (- n 1))`), calls\n"
+      "                 through variables, and mutual recursion all reject.\n"
+      "  coverage    -- every `match` is proven exhaustive: a `#{NonExhaustive}`\n"
+      "                 opt-out, or a literal-scrutinee match with no `_` /\n"
+      "                 variable arm, rejects.  So does any form the reflection\n"
+      "                 walk does not positively recognise (macros, lambdas,\n"
+      "                 `panic`, inline C, loops).\n"
+      "\n"
+      "    (defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))\n"
+      "    (defn ^reflect len [xs : Lst] : int          ;; passes\n"
+      "      (match xs (Nil) 0 (Cons _ t) (+ 1 (len t))))\n"
+      "    (defn ^reflect bad [n : int] : int           ;; TUR-E0384: termination\n"
+      "      (if (= n 0) 0 (+ 1 (bad (- n 1)))))\n"
+      "\n"
+      "This is NOT a termination checker for programs.  A function that is\n"
+      "never `^reflect`ed is untouched; only a function whose equation you\n"
+      "asked to admit into the logic must be shown total.  Behind\n"
+      "`--enable=reflected-measures`; see docs/upcoming/reflected-measures-plan.md.\n" },
+    { TUR_W0385_REFLECT_FUEL_EXHAUSTED,
+      "TUR-W0385: `^reflect` unfolding fuel exhausted; obligation left unknown\n"
+      "\n"
+      "The encoder unfolds a reflected measure at constructor-headed and\n"
+      "literal arguments, one definitional equation per step, up to a fixed\n"
+      "budget per obligation (default 8; `TUR_REFLECT_FUEL=<n>` overrides it\n"
+      "for experiments).  This obligation ran the budget out and was then not\n"
+      "decided, so the runtime check is kept -- the TUR-W0372 principle: running\n"
+      "out of budget costs completeness, never soundness.\n"
+      "\n"
+      "Typical cause: a literal deeper than the budget, e.g. a 10-element cons\n"
+      "literal against `(> (len v) 9)` with fuel 8.  Raise the fuel, or restate\n"
+      "the argument so fewer steps are needed.  Under --strict-refine this is an\n"
+      "error.  Behind `--enable=reflected-measures`.\n" },
     /* class-superclasses (docs/archive/typeclass-superclasses-plan.md) */
     { TUR_E0390_CLASS_SUPERCLASS_PREAMBLE,
       "TUR-E0390: Malformed `defclass` superclass preamble\n"

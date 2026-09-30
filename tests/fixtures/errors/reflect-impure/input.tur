@@ -1,0 +1,12 @@
+;; reflected-measures RF1 gate 1: an inline-C body is not proven pure (the
+;; congruence walk answers UNKNOWN, which reads as "no"), and reflecting an
+;; impure function is meaningless anyway -- its occurrences are fresh
+;; symbols.  Rejected outright, naming the gate.
+(defn ^reflect ticks [n : int] : int
+  ```c
+  static int64_t s = 0;
+  s += n;
+  return s;
+  ```)
+
+(defn main [] : int (println (ticks 1)) 0)

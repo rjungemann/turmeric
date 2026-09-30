@@ -383,6 +383,17 @@ extern bool g_opt_saffron_gc;
  * LangTraits.dynamic (g_opt_dynamic_any) and its reader rides
  * SourceFile.reader_type == READER_R7RS, both per-file. */
 extern bool g_opt_r7rs;
+/* reflected-measures (docs/upcoming/reflected-measures-plan.md, RF0): the
+ * `--enable=reflected-measures` bit.  When on, a `^reflect` defn is
+ * registered for the deferred totality pass (elab_reflect.c) and, once it
+ * passes, its defining equation is admitted to the refinement encoder by
+ * bounded ground unfolding (refine_collect.c).  Off, `^reflect` is inert
+ * (warned, never silently enforced). */
+extern bool g_opt_reflected_measures;
+/* RF5: --dump-reflect -- one line per `^reflect` site: verdict, decreasing
+ * argument position, rejection reason.  A diagnostic knob, not an
+ * experiment (same footing as --dump-write-frames). */
+extern bool g_dump_reflect;
 /* loop-invariants-plan LI0: `--enable=loop-invariants`.  A `while` with a
  * written `:invariant` always PARSES; this bit gates the acting -- runtime
  * checks, static discharge, and the post-loop fact. */

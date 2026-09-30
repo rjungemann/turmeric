@@ -2090,6 +2090,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_caret_capability = intern_cstr(st, "^capability");  /* stdlib-effect-rows */
     e->sym_caret_multishot        = intern_cstr(st, "^multishot");        /* MS1 */
     e->sym_caret_deprecated       = intern_cstr(st, "^deprecated");       /* F4 */
+    e->sym_caret_reflect          = intern_cstr(st, "^reflect");          /* reflected-measures RF0 */
     e->sym_map_new = intern_cstr(st, "map-new");
     e->sym_assoc = intern_cstr(st, "assoc");
     e->sym_dissoc = intern_cstr(st, "dissoc");

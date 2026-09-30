@@ -1,0 +1,21 @@
+;; reflected-measures RF4 negative control: the Cons arm returns `t` with
+;; NOTHING pinning `t`'s constructor (no inner match), so `sorted?(xs)`
+;; unfolds one level and stops at its inner match, and `sorted?(t)` has no
+;; arm to select.  Unknown -- TUR-W0372, an error under --strict-refine.  A
+;; wrong answer here (a proof) would mean an arm was selected without a tag
+;; fact for it.
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect sorted? [xs : Lst] : bool
+  (match xs
+    (Nil) true
+    (Cons h t) (match t
+                 (Nil) true
+                 (Cons h2 _) (and (<= h h2) (sorted? t)))))
+
+(defn tail-any? [xs : #refine{ v : Lst | (sorted? v) }] : #refine{ r : bool | r }
+  (match xs
+    (Nil) true
+    (Cons h t) (sorted? t)))
+
+(defn main [] : int 0)

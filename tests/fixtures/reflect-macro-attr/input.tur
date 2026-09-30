@@ -1,0 +1,19 @@
+;; reflected-measures RF0 acceptance: the attribute survives MACRO EXPANSION.
+;; `^reflect` is an ordinary symbol in the defn form (`^` is a symbol
+;; character; no reader work), so a macro that emits `(defn ^reflect ...)`
+;; produces a reflected measure like any hand-written one.  Under
+;; --strict-refine the crossing below proves only if `dbl` was reflected, so
+;; a dropped attribute is a build failure.  (Non-recursive on purpose: a
+;; macro-generated top-level defn is not pre-declared for its own self-call,
+;; a pre-existing limit unrelated to the attribute.)
+(defmacro def-double [name]
+  `(defn ^reflect ~name [n : int] : int (* 2 n)))
+
+(def-double dbl)
+
+(defn needs-six [x : #refine{ v : int | (= (dbl v) 6) }] : int 6)
+
+(defn main [] : int
+  (println (needs-six 3))
+  (println "reflect-macro-attr")
+  0)

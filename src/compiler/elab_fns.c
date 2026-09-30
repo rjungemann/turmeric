@@ -5,6 +5,7 @@
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
 #include "globals.h"            /* repr-trace: g_emit_abi_trace; G1: g_dump_write_frames */
+#include "runtime/experiments.h" /* reflected-measures RF0: experiment_warn_if_used */
 
 /* closure-drop-glue S1c: the closure-escape analysis (defined emit-side in
  * emit_core.c) is a pure walk of the shared Expr tree, reused here to infer
@@ -691,6 +692,12 @@ typedef struct RtPureCtx {
      * and must not be memoized -- that frame may still turn out impure. */
     uint32_t min_open;
     uint32_t budget;
+    /* Set once the walk hit a binding with no body yet (a forward reference).
+     * Every frame still open at that point depends on an answer that may
+     * change later in the unit, so none of them may memoize -- sticky for
+     * the rest of the walk (a frame opened afterwards loses a memo it could
+     * have kept; that is a cost, never a wrong verdict). */
+    bool     leaned_missing;
 } RtPureCtx;
 
 static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x);
@@ -753,7 +760,17 @@ static RtPurity rt_classify_binding(RtPureCtx *c, Binding *b) {
      * linked, or a forward reference not yet elaborated.  UNKNOWN -- not
      * congruent, and not diagnosable either -- and deliberately NOT memoized,
      * since the same name may be resolvable later in the unit. */
-    if (!fd || !fd->body) return RT_P_UNKNOWN;
+    if (!fd || !fd->body) {
+        /* ... and neither is any verdict that LEANED on this answer: a caller
+         * walked before its callee's body existed would otherwise memoize
+         * UNKNOWN and never be asked again, which made every `^reflect`
+         * function classified at its own definition (elab_reflect.c's eager
+         * stamp) permanently impure if it called anything defined later.
+         * The sticky flag keeps every open frame provisional, the way a
+         * recursion edge keeps the frames above it provisional. */
+        c->leaned_missing = true;
+        return RT_P_UNKNOWN;
+    }
     if (c->depth >= RT_PURE_MAX_DEPTH || c->budget == 0) return RT_P_UNKNOWN;
 
     uint32_t my_depth  = c->depth;
@@ -774,7 +791,7 @@ static RtPurity rt_classify_binding(RtPureCtx *c, Binding *b) {
 
     uint32_t used = c->min_open;
     c->depth--;
-    if (used >= my_depth) b->refine_purity = (uint8_t)(r + 1);
+    if (used >= my_depth && !c->leaned_missing) b->refine_purity = (uint8_t)(r + 1);
     c->min_open = (used < saved_min) ? used : saved_min;
     return r;
 }
@@ -920,13 +937,13 @@ static RtPurity rt_classify_binding_top(Binding *b) {
     if (b->refine_purity) return (RtPurity)(b->refine_purity - 1);
     /* The declared-row veto lives in rt_classify_binding itself, so it is
      * memoized and transitive; nothing to add at the top. */
-    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES };
+    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES, false };
     return rt_classify_binding(&c, b);
 }
 
 /* True when calling `b` twice with equal arguments is guaranteed to produce
  * equal results with no observable side effect.  UNKNOWN reads as "no". */
-static bool rt_binding_is_pure(Binding *b) {
+bool rt_binding_is_pure(Binding *b) {
     return rt_classify_binding_top(b) == RT_P_PURE;
 }
 
@@ -935,7 +952,7 @@ static bool rt_binding_is_pure(Binding *b) {
  * predicate the walk cannot model is never diagnosed and never blocks
  * elision on suspicion alone. */
 static bool rt_expr_definitely_impure(const Expr *x) {
-    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES };
+    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES, false };
     return rt_classify_expr(&c, x) == RT_P_IMPURE;
 }
 
@@ -1260,7 +1277,8 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * That gave every occurrence its own symbol and made the constructor
      * axioms below inert: the `Box(p,3)` in the axiom and the `Box(p,3)` in
      * the goal were different terms. */
-    if (elab_lookup_ctor(e, sym)) {
+    CtorDef *cdef = elab_lookup_ctor(e, sym);
+    if (cdef) {
         out->ret_pred    = NULL;
         out->ret_var     = NULL;
         out->param_names = NULL;
@@ -1269,6 +1287,20 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
         /* A constructor yields an aggregate handle -- an opaque Int term, the
          * only thing the predicate language can say about it. */
         out->ret_sort    = VS_INT;
+        out->is_ctor     = true;   /* reflected-measures: a ground argument head */
+        /* RF4: tag and field names, so a reflected body's `match` can be
+         * selected against a caller's tag fact and its binders tied to the
+         * same `.field` selectors the arm hypotheses use (rt_prove_paths). */
+        out->ctor_tag       = cdef->tag;
+        out->ctor_is_record = cdef->is_record;
+        out->ctor_n_fields  = cdef->n_fields;
+        if (cdef->n_fields) {
+            const char **fn = (const char **)arena_alloc(
+                e->arena, cdef->n_fields * sizeof(char *));
+            for (uint32_t i = 0; i < cdef->n_fields; i++)
+                fn[i] = cdef->fields[i].name;
+            out->ctor_field_names = fn;
+        }
         return true;
     }
 
@@ -1373,6 +1405,19 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * effect row is only a veto, the real evidence is a default-deny walk of
      * the callee's body. */
     out->pure = rt_binding_is_pure(b);
+
+    /* reflected-measures RF3: a `^reflect` callee that PASSED the totality
+     * gate (elab_reflect.c stamps 1; 2 is rejected, 0 not yet classified --
+     * which the encoder treats as "no", so a verdict that arrives late costs
+     * a missed unfolding, never a wrong one).  Re-tested against the gate so a
+     * stale stamp can never publish without the experiment. */
+    if (g_opt_reflected_measures && b->is_reflected && b->reflect_total == 1 &&
+        b->reflect_body) {
+        out->reflect_total       = true;
+        out->reflect_body        = b->reflect_body;
+        out->reflect_param_names = b->reflect_param_names;
+        out->reflect_n_params    = b->reflect_n_params;
+    }
     return true;
 }
 
@@ -3601,12 +3646,20 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
                             strcmp(env->names[j], b->as.sym->name) == 0)
                             { ok = false; break; }
                     if (!ok) break;
-                    refine_env_declare(env, b->as.sym->name,
-                                       rt_sort_of_kind(base_kind));
+                    /* A binder's sort is its FIELD's, not the refinement's base
+                     * type.  Declaring it at `base_kind` made every binder of
+                     * a `: #refine{ r : bool | ... }` function a proposition,
+                     * so its field equation `(= t (.tl xs))` was dropped as a
+                     * Bool/Int mismatch and the arm knew nothing about `t` --
+                     * which is what kept reflected-measures' non-ground
+                     * unfolding (RF4) from firing in a bool-returning body. */
+                    uint32_t fi = k - 1;
+                    VCSort bsort = rt_sort_of_kind(base_kind);
+                    if (cd && fi < cd->n_fields) bsort = rt_sort_of_kind(cd->fields[fi].kind);
+                    refine_env_declare(env, b->as.sym->name, bsort);
                     /* Only a record constructor has a field NAME to select
                      * with; a positional variant has no accessor to speak of,
                      * so its binder stays unconstrained as before. */
-                    uint32_t fi = k - 1;
                     if (cd && cd->is_record && fi < cd->n_fields &&
                         cd->fields[fi].name) {
                         char acc[128];
@@ -7381,6 +7434,25 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * the message (or a generic note if the message is omitted). */
     bool is_deprecated_attr = false;
     const char *deprecation_msg = NULL;
+    /* reflected-measures RF0: `^reflect` before the name, composing with
+     * `^deprecated` in either order.  Placement is on the defn, like
+     * `#reads`/`#writes`: the totality obligation hangs on the FUNCTION, which
+     * is where TUR-E0384 must land.  Without the gate the attribute is inert
+     * and says so -- an annotation that quietly does nothing is how a reader
+     * comes to believe a predicate is enforced when it is not. */
+    bool        is_reflect_attr = false;
+    const Form *reflect_annot   = NULL;
+    if (name_f->tag == F_SYM && name_f->as.sym == e->sym_caret_reflect) {
+        is_reflect_attr = true;
+        reflect_annot   = name_f;
+        name_idx++;
+        if (name_idx >= call->as.list.len) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "^reflect must be followed by the function name");
+            return NULL;
+        }
+        name_f = call->as.list.items[name_idx];
+    }
     if (name_f->tag == F_SYM && name_f->as.sym == e->sym_caret_deprecated) {
         is_deprecated_attr = true;
         name_idx++;
@@ -7404,6 +7476,24 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
         name_f = call->as.list.items[name_idx];
+    }
+    if (!is_reflect_attr && name_f->tag == F_SYM &&
+        name_f->as.sym == e->sym_caret_reflect) {
+        is_reflect_attr = true;
+        reflect_annot   = name_f;
+        name_idx++;
+        if (name_idx >= call->as.list.len) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "^reflect must be followed by the function name");
+            return NULL;
+        }
+        name_f = call->as.list.items[name_idx];
+    }
+    if (is_reflect_attr && !g_opt_reflected_measures) {
+        diag_emit(DIAG_WARNING, reflect_annot->span,
+                  "^reflect is ignored: the measure stays opaque to the "
+                  "refinement solver (enable with --enable=reflected-measures)");
+        is_reflect_attr = false;
     }
 
     /* Minimum: (defn name []) or (defn #[no-unwind] name []) */
@@ -11126,6 +11216,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * only reachable through this registry. */
     wf_note_frame_site(e, b, params, n_params, call, body_start,
                        writes_declared_defn ? writes_annot_defn : NULL);
+    /* reflected-measures RF0: a `^reflect` defn joins the deferred totality
+     * pass.  The verdict itself is stamped at the end of this function (the
+     * eager attempt, once source_fn_def exists) and by rf_resolve_reflect_sites
+     * after the unit. */
+    if (is_reflect_attr) {
+        experiment_warn_if_used("reflected-measures");
+        b->is_reflected = true;
+        rf_note_reflect_site(e, b, params, n_params, call, body_start, reflect_annot);
+    }
     /* A declared return refinement wins -- but only when something actually
      * enforces it (see rt_ret_guaranteed).  An INFERRED one is always safe to
      * publish: RT4 only records what a backend proved. */
@@ -11364,6 +11463,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
     fd->params = params;
     fd->n_params = n_params;
     fd->body = body;
+    /* reflected-measures RF0: the eager verdict, now that the purity walk can
+     * see this body.  Only a TOTAL verdict is stamped here; rejections wait
+     * for the deferred pass so they never depend on definition order. */
+    if (b && b->is_reflected) rf_stamp_reflect_site_eager(e, b);
     fd->is_variadic = is_variadic;  /* AR5: propagate variadic flag */
     if (is_variadic) {
         extern bool g_has_variadics;
