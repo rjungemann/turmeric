@@ -1441,6 +1441,13 @@ static int64_t json_dec_parse_value(tur_json_ctx *c) {
     c->err = 1;
     return 0;
 }
+int64_t turi_json_decode_cstr(const char *s) {
+    if (!s) return 0;
+    tur_json_ctx ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0; ctx.depth = 0;
+    int64_t result = json_dec_parse_value(&ctx);
+    return ctx.err ? 0 : result;
+}
+void turi_json_free_tree(int64_t node) { json_dec_free_node(node); }
 static TuriValue native_json_decode(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 1) return turi_int(0);

@@ -402,15 +402,33 @@ static bool cur_u64le(WireCursor *c, uint64_t *out) {
 }
 
 /* Read a length-prefixed string (allocates a NUL-terminated copy). */
+/* Bytes left to read.  Every length taken from the wire is checked against
+ * this BEFORE it sizes an allocation -- the reads were bounded, but a u32
+ * length used to reach malloc first, so four bytes could ask for 4 GiB
+ * (security-audit-plan WP4). */
+static size_t cur_left(const WireCursor *c) {
+    return c->len - c->pos;
+}
+
 static bool cur_lstr(WireCursor *c, char **out) {
     uint32_t slen;
     if (!cur_u32le(c, &slen)) return false;
-    char *s = (char *)malloc(slen + 1);
+    if ((size_t)slen > cur_left(c)) return false;
+    char *s = (char *)malloc((size_t)slen + 1);
     if (!s) return false;
     if (slen > 0 && !cur_read(c, s, slen)) { free(s); return false; }
     s[slen] = '\0';
     *out = s;
     return true;
+}
+
+/* A frame decoded off the wire owns its field names (malloc'd by cur_lstr),
+ * unlike a program-built frame whose names are read-only data -- so it is
+ * freed here rather than by serial_frame_free, which leaked them. */
+static void wire_frame_free(SerialFrame *wf) {
+    if (!wf) return;
+    for (size_t i = 0; i < wf->n_fields; i++) free((void *)wf->fields[i].name);
+    serial_frame_free(wf);
 }
 
 bool serial_cont_from_bytes(const uint8_t *data, size_t len,
@@ -510,6 +528,16 @@ bool serial_cont_from_bytes(const uint8_t *data, size_t len,
             return false;
         }
 
+        /* Every field is at least a 4-byte name length plus a 1-byte tag, so
+         * a count the remaining bytes cannot hold is short input, not a
+         * reason to calloc n_fields records. */
+        if ((size_t)n_fields > cur_left(&c) / 5) {
+            free(sym_key);
+            serial_frame_chain_free(chain_head);
+            if (out_err) *out_err = err_short;
+            return false;
+        }
+
         /* Allocate a temporary frame to hold decoded wire data. */
         SerialFrame *wf = serial_frame_alloc((size_t)n_fields);
         if (!wf) {
@@ -564,6 +592,7 @@ bool serial_cont_from_bytes(const uint8_t *data, size_t len,
                 if (!cur_u32le(&c, &dlen)) { field_ok = false; break; }
                 fld->value.bytes.len = dlen;
                 fld->value.bytes.data = NULL;
+                if ((size_t)dlen > cur_left(&c)) { field_ok = false; break; }
                 if (dlen > 0) {
                     fld->value.bytes.data = (uint8_t *)malloc(dlen);
                     if (!fld->value.bytes.data) { field_ok = false; break; }
@@ -593,7 +622,7 @@ bool serial_cont_from_bytes(const uint8_t *data, size_t len,
         }
 
         if (!field_ok) {
-            serial_frame_free(wf);
+            wire_frame_free(wf);
             free(sym_key);
             serial_frame_chain_free(chain_head);
             if (out_err && !*out_err) *out_err = err_short;
@@ -605,7 +634,7 @@ bool serial_cont_from_bytes(const uint8_t *data, size_t len,
          * path we check schema_ver after reconstructing so the registered
          * function has the compiled schema_ver available. */
         SerialFrame *live = reconstruct(wf);
-        serial_frame_free(wf);
+        wire_frame_free(wf);
         free(sym_key);
 
         if (!live) {

@@ -31,6 +31,14 @@ void turi_env_register_interpreter_natives(TuriEnv *env);
  * (wk_eval_fixture), which registers a narrower subset than the full sequence
  * above and threads its own preload. */
 void wk_register_stdlib_natives(TuriEnv *env);
+
+/* The json/decode native's parser, callable without an env: the decoded node
+ * tree (layout-exact with stdlib/json.tur's), or 0 on a parse error.
+ * turi_json_free_tree releases one -- the json/free native is a no-op under
+ * the interpreter's process-lifetime policy.  Exposed for tests/fuzz
+ * (security-audit-plan WP4). */
+int64_t turi_json_decode_cstr(const char *s);
+void    turi_json_free_tree(int64_t node);
 void wk_register_safe_natives(TuriEnv *env);
 void wk_register_typeclass_natives(TuriEnv *env);
 TuriValue native_contract_check(TuriEnv *env, TuriValue *args,

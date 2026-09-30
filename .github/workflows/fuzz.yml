@@ -14,6 +14,12 @@ name: Fuzz
 # in tests/fuzz-seed-corpus.txt so every subsequent smoke run replays it.
 #
 # See docs/archive/type-confusion-detection-plan.md section F2.
+#
+# The second job, fuzz-parsers, is the coverage-guided half: libFuzzer targets
+# (tests/fuzz) for the parsers that take untrusted bytes -- serialized
+# continuations and images, both JSON decoders, LSP framing, the httpd request
+# parser, the reader, the manifest reader and the Justfile parser.  See
+# docs/upcoming/security-audit-plan.md (WP4) and tests/fuzz/README.md.
 
 on:
   schedule:
@@ -30,6 +36,11 @@ on:
         description: "Cases per harness (default 400)"
         required: false
         default: "400"
+        type: string
+      parser_seconds:
+        description: "Seconds per libFuzzer parser target (default 600)"
+        required: false
+        default: "600"
         type: string
 
 # One fuzz run at a time: a second run adds nothing (it would search a
@@ -71,8 +82,14 @@ jobs:
 
       - name: Pick the seed
         id: seed
+        # Through env:, never interpolated into the script text: a dispatch
+        # input spliced into `run:` is shell injection (security-audit-plan
+        # C-6), and the digit check keeps it a seed.
+        env:
+          INPUT_SEED: ${{ inputs.seed }}
         run: |
-          SEED="${{ inputs.seed }}"
+          SEED="$INPUT_SEED"
+          case "$SEED" in *[!0-9]*) echo "seed must be digits: $SEED" >&2; exit 1 ;; esac
           [ -n "$SEED" ] || SEED="$(date -u +%Y%m%d)"
           echo "seed=$SEED" >> "$GITHUB_OUTPUT"
           echo "Fuzzing with seed $SEED"
@@ -166,3 +183,81 @@ jobs:
           TITLE="Fuzz: findings at seed $SEED ($FAILED)"
           gh issue create --title "$TITLE" --label fuzz --body "$BODY" ||
             gh issue create --title "$TITLE" --body "$BODY"
+
+  fuzz-parsers:
+    name: Fuzz parsers (libFuzzer)
+    runs-on: ubuntu-latest
+    # Ten targets at parser_seconds each (default 600), run nproc at a time,
+    # plus a clang build of tur_core with coverage instrumentation.
+    timeout-minutes: 120
+    # Least privilege: this job reads the tree and uploads an artifact; it
+    # files nothing (see the last step for why).
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          # libFuzzer ships in compiler-rt (libclang-rt-18-dev), not with clang.
+          sudo apt-get install -y libedit-dev ccache clang-18 libclang-rt-18-dev
+
+      - name: Configure (clang + libFuzzer + ASan/UBSan)
+        run: >
+          cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER=clang-18
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DTUR_FUZZ=ON
+
+      - name: Build the fuzz targets
+        run: cmake --build build-fuzz -j --target tur_fuzz_all
+
+      - name: Replay the seeds (every target, every seed, once)
+        run: ctest --test-dir build-fuzz -R '^fuzz_' --output-on-failure
+
+      - name: Run the parser fuzzers
+        id: run
+        env:
+          SECS: ${{ inputs.parser_seconds || '600' }}
+        run: |
+          case "$SECS" in ''|*[!0-9]*) echo "parser_seconds must be digits" >&2; exit 1 ;; esac
+          if bash tests/fuzz/run-fuzzers.sh build-fuzz "$SECS" fuzz-findings/parsers; then
+            echo "failed=" >> "$GITHUB_OUTPUT"
+          else
+            echo "failed=$(tr '\n' ' ' < fuzz-findings/parsers/FAILED | sed 's/ *$//')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload findings
+        if: steps.run.outputs.failed != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-parser-findings-${{ github.run_id }}
+          path: fuzz-findings/parsers/
+          if-no-files-found: warn
+          retention-days: 7
+
+      # Unlike the search job above, a finding here does NOT open an issue.
+      # These parsers take untrusted bytes, so a crash is a potential
+      # vulnerability, and an auto-filed public issue naming the parser and
+      # linking the reproducer would be public disclosure.  The job fails
+      # instead: GitHub notifies the maintainers of a failed scheduled run,
+      # who triage it privately (SECURITY.md) before anything is filed.
+      - name: Fail on findings
+        if: steps.run.outputs.failed != ''
+        env:
+          FAILED: ${{ steps.run.outputs.failed }}
+        run: |
+          {
+            echo "## Parser fuzzing found something"
+            echo
+            echo "Targets: \`$FAILED\`. The reproducers and logs are in this run's"
+            echo "\`fuzz-parser-findings\` artifact (kept 7 days)."
+            echo
+            echo "Triage privately first (SECURITY.md): these parsers take untrusted"
+            echo "input. Reproduce with \`build-fuzz/fuzz/<target> <reproducer>\`"
+            echo "(tests/fuzz/README.md); fix with the reproducer added to"
+            echo "\`tests/fuzz/seeds/<target>/\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::parser fuzzing found something in: $FAILED"
+          exit 1

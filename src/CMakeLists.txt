@@ -481,6 +481,11 @@ target_compile_options(tur_core PRIVATE
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
     $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
 )
+# security-audit-plan WP4: coverage instrumentation for the fuzz targets in
+# tests/fuzz, which link these objects.  (Only in a TUR_FUZZ build dir.)
+if(TUR_FUZZ)
+    target_compile_options(tur_core PRIVATE -fsanitize=fuzzer-no-link)
+endif()
 # Phase S3: ucontext_t is deprecated on macOS but still functional
 if(APPLE)
     target_compile_options(tur_core PRIVATE -Wno-deprecated-declarations)
@@ -1974,4 +1979,10 @@ if(TUR_WASM)
             COMMENT "Copying WASM module to web/public"
         )
     endif()
+endif()
+
+# security-audit-plan WP4: the libFuzzer targets.  Added from here, not the
+# top level, so TUR_INCLUDE_DIRS / TUR_CSTD and tur_core are in scope.
+if(TUR_FUZZ)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/tests/fuzz ${CMAKE_BINARY_DIR}/fuzz-targets)
 endif()

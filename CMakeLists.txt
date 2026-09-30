@@ -51,6 +51,18 @@ if(TUR_DEBUG_SANITIZE AND WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     "Build with the MSYS2 clang toolchain to get sanitizer coverage on Windows.")
 endif()
 
+# security-audit-plan WP4: libFuzzer targets for the parsers that take
+# untrusted bytes (tests/fuzz/README.md).  Clang only -- libFuzzer ships with
+# compiler-rt.  Use a build directory of its own; it instruments tur_core:
+#   cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=Debug \
+#         -DCMAKE_C_COMPILER=clang -DTUR_FUZZ=ON
+option(TUR_FUZZ "Build the libFuzzer parser targets in tests/fuzz (clang only)" OFF)
+if(TUR_FUZZ AND NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+  message(FATAL_ERROR
+    "TUR_FUZZ needs clang: libFuzzer ships with compiler-rt. "
+    "Configure with -DCMAKE_C_COMPILER=clang.")
+endif()
+
 if(TUR_DEBUG_SANITIZE)
   set(TUR_ASAN_FLAGS "-fsanitize=address,undefined")
 else()

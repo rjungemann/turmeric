@@ -1,0 +1,15 @@
+set shell := ["sh", "-c"]
+name := "world"
+ver := `echo 1`
+
+# greet someone
+greet who=name:
+    echo "hi {{who}} {{ver}}"
+
+[private]
+helper:
+    @true
+
+build: helper
+    #!/usr/bin/env sh
+    echo building

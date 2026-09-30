@@ -716,7 +716,17 @@ static int parse_recipe_header(const char *line, JRecipe *r) {
         while (*p == ' ' || *p == '\t') p++;
     }
 
-    if (*p != ':') { free(r->name); r->name = NULL; return 0; }
+    if (*p != ':') {
+        /* Not a recipe header after all: release the parameters parsed so
+         * far too, not just the name (found by tests/fuzz/fuzz_justfile). */
+        for (int i = 0; i < r->n_params; i++) {
+            free(r->params[i].name);
+            free(r->params[i].default_val);
+        }
+        r->n_params = 0;
+        free(r->name); r->name = NULL;
+        return 0;
+    }
     p++;
 
     /* Dependencies */
