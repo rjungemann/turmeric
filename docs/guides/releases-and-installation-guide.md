@@ -44,25 +44,27 @@ tvm run 0.17.0 --version # one-shot invoke without switching (great for bisects)
 ```
 
 `tvm install` consumes the same GitHub Release tarballs described in
-Option 2, checks them against the release's `sha256sums.txt` **when it can**,
-and extracts each version under `~/.tvm/versions/<v>/`.
+Option 2, checks them against the release's `sha256sums.txt`, and extracts each
+version under `~/.tvm/versions/<v>/`.
 
-> **The checksum check currently fails open.** Four conditions skip it, and
-> only one of them says so:
+> **The checksum check fails closed.** A missing, unreachable or empty
+> `sha256sums.txt`, an asset with no row in it, and a system with no `sha256`
+> tool are all refusals -- the download is deleted and the install stops.
+> `--insecure` is the single opt-out, and it does **not** apply to a checksum
+> *mismatch*: a check that ran and said no is not a check that could not run.
+> An explicit `--from` source skips the check, since you have named the
+> artifact yourself, and says so.
 >
-> | Condition | What happens |
-> | --- | --- |
-> | `sha256sums.txt` missing, unreachable or empty | skipped, **silently** |
-> | the asset has no row in that file | skipped, **silently** |
-> | no `sha256` tool on the system | skipped, with a log line |
-> | an explicit `--from` source | skipped |
+> The sums file is fetched from the same origin as the asset, so on its own it
+> establishes integrity, not authenticity. The stronger check is the release's
+> build provenance, which is signed through Sigstore and names the workflow run
+> that produced the bytes:
 >
-> It should refuse instead, and making it do so is tracked as C-2 in the
-> [security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md).
-> Note too that the sums file is fetched from the same origin as the asset, so
-> even when the check runs it establishes integrity, not authenticity --
-> release assets are not yet signed or attested. To verify by hand, use the
-> Option 2 steps below. When no prebuilt
+> ```sh
+> gh attestation verify turmeric-<tag>-<target>.tar.gz --repo rjungemann/turmeric
+> ```
+>
+> When no prebuilt
 asset exists for a tag (older than the prebuild matrix, or an
 unpublished platform), `tvm install --build <v>` falls back to a CMake
 source build. See [`tvm/README.md`](https://github.com/rjungemann/turmeric/blob/main/tvm/README.md) for the full
@@ -167,14 +169,14 @@ The formula builds from the latest commit on `main` (CMake source build,
 On Apple Silicon, `<prefix>` is `/opt/homebrew`; on Intel macOS and
 Linuxbrew it's `/usr/local` or `/home/linuxbrew/.linuxbrew`.
 
-There is currently no stable (versioned) Homebrew formula -- only
-`--HEAD`. A pinned `url`/`sha256` stanza will be added once a stable
-release line is established.
+There is no stable (versioned) Homebrew formula -- only `--HEAD`, which
+compiles whatever `main` is at that moment and verifies no checksum. That makes
+it a way to track development, not a way to install the compiler.
 
-**This is also what the advertised `curl … | sh` installer does**, so that
-path compiles whatever `main` is at that moment and verifies no checksum.
-For a verified install, use `tvm` (with the caveat above) or Option 2's
-manual download-and-check. Tracked as C-1; see the
+**The advertised `curl ... | sh` installer no longer uses it.** It installs
+`tvm` and then the latest release, checksum-verified as described above, and
+works on Linux as well as macOS. Use `brew install --HEAD` only when you
+specifically want to build `main`. See the
 [Security Guide](security-guide.md#t4-the-supply-chain).
 
 ### Option 4: Building from source
