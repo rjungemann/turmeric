@@ -290,6 +290,7 @@ Without it they stop with that instruction rather than half-generating.
 | `tools/genspices.py` | sibling spice checkout -> spice pages + pack fragments |
 | `tools/packlib.py` | fragment writing, search strings, pack link rewriting |
 | `tools/genpack.py` | merge, check, budget |
+| `tools/check-pack-spices.py` | refuse to deploy a pack with no spice pages |
 | `web/public/sw.js` | precache and serve the pack offline |
 | `web/main.js` | the docs pane (search `In-app docs browser`) |
 | `web/tests/docs-pane.spec.js` | pane behaviour |
@@ -303,6 +304,32 @@ Without it they stop with that instruction rather than half-generating.
 without `../turmeric-spices/` yields a pane with no spice nav rather than
 entries that 404 offline. "Installed means complete" stays true for whatever
 the pack claims to contain.
+
+**A deploy is the one place that leniency is wrong.** `genspices.py` reports a
+missing checkout as a warning and moves on, so `just docs` exits 0 having
+produced no spice pages -- and a deploy of that pack drops every spice from the
+site's spice pages, the offline pack and the search index without failing
+anything. `just deploy-web` therefore runs `tools/check-pack-spices.py` over the
+built pack and refuses to publish one with no spice pages. `docs` itself stays
+lenient, because CI has no sibling checkout and legitimately builds a
+spice-less pack.
+
+**Finding the sibling checkout from a worktree.** `genspices.py` resolves
+`../turmeric-spices` from the directory `just` runs in. In a plain clone that is
+the sibling of the checkout, which is what the path expects. A **worktree of a
+bare checkout sits one level further in** -- the worktrees are subdirectories of
+the bare repo -- so `../turmeric-spices` lands inside the bare repo rather than
+beside it, and needs a bridge symlink there pointing at the real checkout:
+
+```sh
+ln -sfn ../turmeric-spices <bare-repo>/turmeric-spices
+# verify, from inside a worktree:
+python3 -c "from pathlib import Path; print(Path('../turmeric-spices').resolve())"
+```
+
+A broken bridge is quiet: the warning names the symlink's *resolved* target, so
+it reads like a missing clone. `Generating docs for 0 spices` in the build log
+and `spices: 0` in `index.json` are the symptoms to grep for.
 
 **The offline spec runs against a production build on its own port.**
 Playwright's `context.setOffline()` and its request routing both intercept
