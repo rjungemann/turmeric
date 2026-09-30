@@ -319,13 +319,15 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
 /* Forward declaration (parse_str_vec is defined after parse_cmake_deps). */
 static bool parse_str_vec(const Form *f, char ***out, int *n_out);
 
-/* Parse a single cmake dep options map: #{:KEY "VAL" ...} */
-static bool parse_cmake_opts(const Form *map,
+/* Parse a single cmake dep options map: #{:KEY "VAL" ...}.  `label` names the
+ * key being parsed so a shape error points at `:options` or `:wasm-options`
+ * rather than always the former. */
+static bool parse_cmake_opts(const Form *map, const char *label,
                               PkgCmakeOpt **out_opts, int *out_n) {
     *out_opts = NULL;
     *out_n    = 0;
     if (!map) return true;
-    if (!expect_map(map, ":options")) return false;
+    if (!expect_map(map, label)) return false;
     const FormList *fl = &map->as.list;
     int cap = 4;
     *out_opts = (PkgCmakeOpt *)malloc(cap * sizeof(PkgCmakeOpt));
@@ -433,7 +435,9 @@ static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
         parse_str_vec(map_get_kw(val, "link-flags"),
                       &d->link_flags, &d->n_link_flags);
         const Form *opts_f = map_get_kw(val, "options");
-        parse_cmake_opts(opts_f, &d->opts, &d->n_opts);
+        parse_cmake_opts(opts_f, ":options", &d->opts, &d->n_opts);
+        parse_cmake_opts(map_get_kw(val, "wasm-options"), ":wasm-options",
+                         &d->wasm_opts, &d->n_wasm_opts);
 
         /* :prefer-system needs a :cmake-name to know what to find_package. */
         if (d->prefer_system && !d->cmake_name) {
@@ -837,6 +841,11 @@ static void cmake_deps_clear(PkgManifest *m) {
             free(m->cmake_deps[i].opts[j].val);
         }
         free(m->cmake_deps[i].opts);
+        for (int j = 0; j < m->cmake_deps[i].n_wasm_opts; j++) {
+            free(m->cmake_deps[i].wasm_opts[j].key);
+            free(m->cmake_deps[i].wasm_opts[j].val);
+        }
+        free(m->cmake_deps[i].wasm_opts);
     }
     free(m->cmake_deps);
     m->cmake_deps = NULL;
@@ -853,11 +862,16 @@ static void bins_clear(PkgManifest *m) {
     m->bin_names = NULL;
     m->bin_paths = NULL;
     m->n_bins = 0;
+    pkg_web_opts_free(&m->web);
 }
 
 bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                               PkgManifestStatus *status) {
     memset(out, 0, sizeof(*out));
+    /* `:web`'s defaults are not all zero (ES3, a 128 MB heap), so they have to
+     * be installed before the slot parser runs -- a manifest with no `:web`
+     * key still describes a buildable web target. */
+    pkg_web_opts_defaults(&out->web);
     if (status) *status = PKG_MANIFEST_ABSENT;
 
     /* Read the file into memory */
@@ -1138,6 +1152,49 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                 out->bin_paths[out->n_bins] = bpath;
                 out->n_bins++;
             }
+        } else if (strcmp(kw, "web") == 0) {
+            if (vf && expect_map(vf, ":web")) {
+                out->web.present = true;
+                const Form *gf = map_get_kw(vf, "gl");
+                if (gf && gf->tag == F_KEYWORD && gf->as.sym &&
+                    gf->as.sym->name) {
+                    const char *g = gf->as.sym->name;
+                    if (strcmp(g, "es2") == 0)      out->web.gl = PKG_WEB_GL_ES2;
+                    else if (strcmp(g, "es3") == 0) out->web.gl = PKG_WEB_GL_ES3;
+                    else
+                        diag_emit(DIAG_ERROR, gf->span,
+                                  "build.tur: :web :gl must be :es2 or :es3, "
+                                  "got :%s", g);
+                }
+                out->web.canvas  = form_bool_val(map_get_kw(vf, "canvas"));
+                out->web.audio   = form_bool_val(map_get_kw(vf, "audio"));
+                out->web.threads = form_bool_val(map_get_kw(vf, "threads"));
+                const Form *hf = map_get_kw(vf, "heap");
+                if (hf) {
+                    if (hf->tag == F_INT && hf->as.i >= 0)
+                        out->web.heap = (long)hf->as.i;
+                    else
+                        diag_emit(DIAG_ERROR, hf->span,
+                                  "build.tur: :web :heap must be a "
+                                  "non-negative byte count (0 selects "
+                                  "-sALLOW_MEMORY_GROWTH)");
+                }
+                const Form *mf = map_get_kw(vf, "main-loop");
+                if (mf && mf->tag == F_KEYWORD && mf->as.sym &&
+                    mf->as.sym->name) {
+                    const char *ml = mf->as.sym->name;
+                    if (strcmp(ml, "callback") == 0 ||
+                        strcmp(ml, "asyncify") == 0 ||
+                        strcmp(ml, "none") == 0) {
+                        free(out->web.main_loop);
+                        out->web.main_loop = tur_strdup(ml);
+                    } else {
+                        diag_emit(DIAG_ERROR, mf->span,
+                                  "build.tur: :web :main-loop must be "
+                                  ":callback, :asyncify or :none, got :%s", ml);
+                    }
+                }
+            }
         } else if (strcmp(kw, "build-opts") == 0) {
             if (vf && expect_map(vf, ":build-opts")) {
                 const Form *cf = map_get_kw(vf, "c-flags");
@@ -1406,8 +1463,33 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
                 }
                 fprintf(f, "}");
             }
+            if (d->n_wasm_opts > 0) {
+                fprintf(f, " :wasm-options #{");
+                for (int j = 0; j < d->n_wasm_opts; j++) {
+                    if (j) fprintf(f, " ");
+                    fprintf(f, ":%s \"%s\"",
+                            d->wasm_opts[j].key, d->wasm_opts[j].val);
+                }
+                fprintf(f, "}");
+            }
             fprintf(f, "}\n");
         }
+        fprintf(f, "  }\n");
+    }
+
+    /* `:web` round-trips only when the manifest actually carried it: the
+     * defaults are not all zero, so writing them unconditionally would put a
+     * `:web` block into every manifest `tur add` touches. */
+    if (m->web.present) {
+        fprintf(f, "\n  :web #{\n");
+        fprintf(f, "    :gl :%s\n",
+                m->web.gl == PKG_WEB_GL_ES2 ? "es2" : "es3");
+        if (m->web.canvas)  fprintf(f, "    :canvas true\n");
+        if (m->web.audio)   fprintf(f, "    :audio true\n");
+        if (m->web.threads) fprintf(f, "    :threads true\n");
+        fprintf(f, "    :heap %ld\n", m->web.heap);
+        if (m->web.main_loop)
+            fprintf(f, "    :main-loop :%s\n", m->web.main_loop);
         fprintf(f, "  }\n");
     }
 
@@ -3252,6 +3334,16 @@ static bool deep_copy_cmake_dep(PkgCmakeDep *dst, const PkgCmakeDep *src) {
         }
         dst->n_opts = src->n_opts;
     }
+    if (src->n_wasm_opts > 0) {
+        dst->wasm_opts = (PkgCmakeOpt *)calloc((size_t)src->n_wasm_opts,
+                                               sizeof(PkgCmakeOpt));
+        if (!dst->wasm_opts) return false;
+        for (int i = 0; i < src->n_wasm_opts; i++) {
+            dst->wasm_opts[i].key = dup_cstr_or_null(src->wasm_opts[i].key);
+            dst->wasm_opts[i].val = dup_cstr_or_null(src->wasm_opts[i].val);
+        }
+        dst->n_wasm_opts = src->n_wasm_opts;
+    }
     return true;
 }
 
@@ -3273,6 +3365,11 @@ static void free_one_cmake_dep(PkgCmakeDep *d) {
         free(d->opts[i].val);
     }
     free(d->opts);
+    for (int i = 0; i < d->n_wasm_opts; i++) {
+        free(d->wasm_opts[i].key);
+        free(d->wasm_opts[i].val);
+    }
+    free(d->wasm_opts);
     memset(d, 0, sizeof(*d));
 }
 
@@ -3447,11 +3544,170 @@ static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
  * array) and sets *out_n; returns NULL with *out_n = 0 when `project_dir` is
  * not part of any workspace. */
 /* WP2 (D-9): one `:options` pair on its way into a generated
- * `set(<key> "<val>" CACHE BOOL "" FORCE)` line.  The key is unquotable (it is
- * a cmake variable name) and the value is documented as a BOOL, so both are
+ * `set(<key> "<val>" CACHE <type> "" FORCE)` line.  The key is unquotable (it is
+ * a cmake variable name) and the value is a bare token, so both are
  * narrow; a pair that fails is skipped with a diagnostic rather than written,
  * because a cmake dep configured without one of its options fails visibly
  * while a `$\{...}` in a value does not. */
+void pkg_web_opts_defaults(PkgWebOpts *w) {
+    if (!w) return;
+    memset(w, 0, sizeof(*w));
+    /* ES3/WebGL2 is the floor.  ES2 gives a WebGL1 context, whose NPOT
+     * restriction ("no-mipmaps, no-repeat" on any texture not a power of two)
+     * is a real constraint on a real game; WebGL2 has been in every evergreen
+     * browser for years. `:gl :es2` remains available for old mobile. */
+    w->gl        = PKG_WEB_GL_ES3;
+    /* 128 MB, matching raylib's own BUILD_WEB_HEAP_SIZE default.  A fixed heap
+     * beats -sALLOW_MEMORY_GROWTH when the working set is known: growth
+     * invalidates cached heap views and copies at every grow, which is a
+     * frame-time spike exactly when a level loads.  `:heap 0` opts into
+     * growth for a program whose working set is not known at link time. */
+    w->heap      = 134217728L;
+    w->threads   = false;   /* -pthread needs COOP/COEP, which GitHub Pages
+                             * cannot serve, and a droppable static site is
+                             * the point of this target. */
+    w->main_loop = NULL;    /* NULL reads as "callback" */
+}
+
+void pkg_web_opts_free(PkgWebOpts *w) {
+    if (!w) return;
+    free(w->main_loop);
+    w->main_loop = NULL;
+}
+
+void pkg_web_compose_link_flags(const PkgWebOpts *w, Buf *out) {
+    if (!w || !out) return;
+
+    /* Kept alive across main() returning: in callback mode the frame callback
+     * fires after main has unwound, and with the default the runtime would
+     * tear down first and the callback fire into a dead module. */
+    buf_printf(out, " -sEXIT_RUNTIME=0 -sMODULARIZE=1 -sEXPORT_NAME=TurmericApp");
+
+    if (w->heap > 0)
+        buf_printf(out, " -sINITIAL_MEMORY=%ld", w->heap);
+    else
+        buf_printf(out, " -sALLOW_MEMORY_GROWTH=1");
+
+    if (w->canvas) {
+        /* raylib and the opengl spice both reach the canvas through the
+         * Emscripten GLFW port. GL_ENABLE_GET_PROC_ADDRESS is insurance: a
+         * minimal program runs without it, but a raylib build that resolves
+         * GL entry points through glGetProcAddress dies at InitWindow(). */
+        buf_printf(out, " -sUSE_GLFW=3 -sGL_ENABLE_GET_PROC_ADDRESS");
+        if (w->gl == PKG_WEB_GL_ES3)
+            buf_printf(out, " -sMAX_WEBGL_VERSION=2");
+    }
+
+    if (w->audio) {
+        /* ccall per upstream; HEAPF32 because miniaudio -- what raylib's
+         * raudio is built on -- reads the heap as `Module.HEAPF32.buffer`
+         * from inside its ScriptProcessorNode callback, and Emscripten no
+         * longer hangs heap views off Module by default.  Naming it is also
+         * what makes updateMemoryViews() re-publish the view after a heap
+         * grow, so it matters doubly under `:heap 0`.  Omitting it is a
+         * TypeError thrown out of the audio callback -- and only once the
+         * AudioContext is actually running, so it hides until someone
+         * gestures to unlock audio. */
+        buf_printf(out, " -sEXPORTED_RUNTIME_METHODS=ccall,HEAPF32");
+    }
+
+    if (w->threads)
+        buf_printf(out, " -pthread -sPTHREAD_POOL_SIZE_STRICT=0");
+
+    /* Asyncify lets an existing blocking `while (not (window-should-close))`
+     * loop yield to the browser with no source change.  The cost is a fixed
+     * ~16ms wait ADDED to frame time (measured: 59.5fps at ~0ms of frame work,
+     * 40.0fps at 8ms, against a flat 60.0 in callback mode), so it is a
+     * porting mode for a game with frame time to spare, not the default. */
+    if (w->main_loop && strcmp(w->main_loop, "asyncify") == 0)
+        buf_printf(out, " -sASYNCIFY");
+}
+
+bool pkg_web_check_gl_agreement(const PkgWebOpts *w,
+                                const PkgCmakeDep *deps, int n_deps) {
+    if (!w || !deps) return true;
+    for (int i = 0; i < n_deps; i++) {
+        const PkgCmakeDep *d = &deps[i];
+        for (int j = 0; j < d->n_wasm_opts; j++) {
+            const char *val = d->wasm_opts[j].val;
+            if (!val) continue;
+            /* Only the two spellings that actually pin a level are checked;
+             * anything else in :wasm-options is none of this function's
+             * business. */
+            bool dep_es3 = strstr(val, "OPENGL_ES3") != NULL;
+            bool dep_es2 = strstr(val, "OPENGL_ES2") != NULL;
+            if (!dep_es3 && !dep_es2) continue;
+            bool web_es3 = (w->gl == PKG_WEB_GL_ES3);
+            if (dep_es3 == web_es3) continue;
+            fprintf(stderr,
+                "build.tur: cmake-dep '%s' :wasm-options sets %s \"%s\", which "
+                "needs a WebGL%d context, but :web :gl is :%s (WebGL%d).\n"
+                "  These are set by different tools and neither checks the "
+                "other, so a mismatch links fine and then dies in the browser "
+                "on `attachShader ... parameter 2 is not of type "
+                "'WebGLShader'`.\n"
+                "  Set :web :gl to :%s, or change the dep's option.\n",
+                d->name, d->wasm_opts[j].key, val,
+                dep_es3 ? 2 : 1,
+                web_es3 ? "es3" : "es2", web_es3 ? 2 : 1,
+                dep_es3 ? "es3" : "es2");
+            return false;
+        }
+    }
+    return true;
+}
+
+/* The cache type to declare an option with.  Every `:options` value in the
+ * spice tree today is ON/OFF, which is why this was hardcoded `BOOL`; but a
+ * dep's web backend is typically selected by a STRING (raylib's
+ * `PLATFORM`/`GRAPHICS`), and declaring that BOOL both mistypes the cache
+ * entry and fights the dep's own `set(... CACHE STRING)`.  Booleans keep BOOL
+ * so nothing in the existing tree changes shape. */
+static const char *cmake_opt_cache_type(const char *val) {
+    if (!val) return "STRING";
+    static const char *bools[] = {
+        "ON", "OFF", "TRUE", "FALSE", "YES", "NO", "Y", "N", "1", "0"
+    };
+    for (size_t i = 0; i < sizeof(bools) / sizeof(bools[0]); i++) {
+        const char *b = bools[i];
+        size_t n = strlen(b);
+        if (strlen(val) != n) continue;
+        size_t k = 0;
+        for (; k < n; k++) {
+            char a = val[k], c = b[k];
+            if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+            if (a != c) break;
+        }
+        if (k == n) return "BOOL";
+    }
+    return "STRING";
+}
+
+static bool cmake_opt_ok(const PkgCmakeDep *d, const PkgCmakeOpt *o);
+
+/* Emit the `set(<K> "<V>" CACHE <T> "" FORCE)` lines for one option list.
+ * `indent` matches the surrounding block; `wasm_only` wraps the lines in
+ * `if(EMSCRIPTEN)` so the same generated CMakeLists serves both arms. */
+static void emit_cmake_opts(FILE *f, const PkgCmakeDep *d,
+                            const PkgCmakeOpt *opts, int n,
+                            const char *indent, bool wasm_only) {
+    if (n <= 0) return;
+    /* Count what will actually be written: an all-skipped list must not emit
+     * an empty `if(EMSCRIPTEN)/endif()` pair. */
+    int live = 0;
+    for (int j = 0; j < n; j++) if (cmake_opt_ok(d, &opts[j])) live++;
+    if (live == 0) return;
+    if (wasm_only) fprintf(f, "%sif (EMSCRIPTEN)\n", indent);
+    const char *in2 = wasm_only ? "    " : "";
+    for (int j = 0; j < n; j++) {
+        if (!cmake_opt_ok(d, &opts[j])) continue;
+        fprintf(f, "%s%sset(%s \"%s\" CACHE %s \"\" FORCE)\n",
+                indent, in2, opts[j].key, opts[j].val,
+                cmake_opt_cache_type(opts[j].val));
+    }
+    if (wasm_only) fprintf(f, "%sendif()\n", indent);
+}
+
 static bool cmake_opt_ok(const PkgCmakeDep *d, const PkgCmakeOpt *o) {
     if (!tur_cmake_ident_ok(o->key)) {
         fprintf(stderr, "spice: cmake-dep '%s': skipping :options key '%s' -- "
@@ -3779,6 +4035,14 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             char build_subdir[4096];
             snprintf(build_subdir, sizeof(build_subdir),
                      "${CMAKE_BINARY_DIR}/_local/%s-build", d->name);
+            /* Options have to be in the cache before the subdirectory is
+             * added, which is the only point at which the dep reads them.
+             * This branch used to emit none at all, so a `:path` dep silently
+             * ignored every option it declared -- including the
+             * `:wasm-options` a local raylib checkout needs to pick its web
+             * backend. */
+            emit_cmake_opts(f, d, d->opts, d->n_opts, "", false);
+            emit_cmake_opts(f, d, d->wasm_opts, d->n_wasm_opts, "", true);
             fprintf(f, "add_subdirectory(\"%s\" \"%s\")\n", abs_path,
                     build_subdir);
             fprintf(f, "set(_%s_resolved_via \"path\" CACHE INTERNAL \"\")\n\n",
@@ -3801,11 +4065,8 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             if (d->url) fprintf(f, "      GIT_REPOSITORY \"%s\"\n", d->url);
             if (d->ref) fprintf(f, "      GIT_TAG        \"%s\"\n", d->ref);
             fprintf(f, "    )\n");
-            for (int j = 0; j < d->n_opts; j++) {
-                if (!cmake_opt_ok(d, &d->opts[j])) continue;
-                fprintf(f, "    set(%s \"%s\" CACHE BOOL \"\" FORCE)\n",
-                        d->opts[j].key, d->opts[j].val);
-            }
+            emit_cmake_opts(f, d, d->opts, d->n_opts, "    ", false);
+            emit_cmake_opts(f, d, d->wasm_opts, d->n_wasm_opts, "    ", true);
             fprintf(f, "    FetchContent_MakeAvailable(%s)\n", d->name);
             fprintf(f, "    set(_%s_resolved_via \"fetch\" CACHE INTERNAL \"\")\n",
                     d->name);
@@ -3820,21 +4081,32 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             if (d->url) fprintf(f, "  GIT_REPOSITORY \"%s\"\n", d->url);
             if (d->ref) fprintf(f, "  GIT_TAG        \"%s\"\n", d->ref);
             fprintf(f, ")\n");
-            for (int j = 0; j < d->n_opts; j++) {
-                if (!cmake_opt_ok(d, &d->opts[j])) continue;
-                fprintf(f, "set(%s \"%s\" CACHE BOOL \"\" FORCE)\n",
-                        d->opts[j].key, d->opts[j].val);
-            }
+            emit_cmake_opts(f, d, d->opts, d->n_opts, "", false);
+            emit_cmake_opts(f, d, d->wasm_opts, d->n_wasm_opts, "", true);
             fprintf(f, "FetchContent_MakeAvailable(%s)\n", d->name);
             fprintf(f, "set(_%s_resolved_via \"fetch\" CACHE INTERNAL \"\")\n\n",
                     d->name);
         }
     }
 
-    /* Generate spice-deps-manifest.json at cmake configure time */
+    /* Generate spice-deps-manifest.json at cmake configure time.
+     *
+     * The filename is arm-dependent, and CMake picks it rather than tur: the
+     * generated CMakeLists is shared by both arms (see the `if(EMSCRIPTEN)`
+     * option blocks above), and the two arms resolve every dep to different
+     * -I/-L/-l paths.  With one shared filename a wasm configure silently
+     * overwrote the native manifest, so the next native link picked up wasm
+     * library paths. */
     fprintf(f, "# --- Generate spice-deps-manifest.json ---\n");
+    fprintf(f, "if (EMSCRIPTEN)\n");
+    fprintf(f, "    set(_spice_manifest_name \"%s\")\n",
+            PKG_CMAKE_MANIFEST_WASM);
+    fprintf(f, "else()\n");
+    fprintf(f, "    set(_spice_manifest_name \"%s\")\n",
+            PKG_CMAKE_MANIFEST_NATIVE);
+    fprintf(f, "endif()\n");
     fprintf(f, "set(_spice_manifest_path "
-               "\"${CMAKE_CURRENT_SOURCE_DIR}/spice-deps-manifest.json\")\n");
+               "\"${CMAKE_CURRENT_SOURCE_DIR}/${_spice_manifest_name}\")\n");
     fprintf(f, "set(_spice_manifest \"{\\n\")\n");
     fprintf(f, "set(_spice_first TRUE)\n\n");
 
@@ -3992,8 +4264,12 @@ bool pkg_cmake_build(const char *project_dir,
     char cmake_src[4096];
     snprintf(cmake_src, sizeof(cmake_src), "%s/cmake", project_dir);
 
+    /* Per-arm build dir.  A native and a wasm configure cannot share one:
+     * the toolchain file, compiler and every cached path differ, and CMake
+     * refuses (or worse, silently reuses) a tree configured for the other. */
     char cmake_bld[4096];
-    snprintf(cmake_bld, sizeof(cmake_bld), "%s/cmake/build", project_dir);
+    snprintf(cmake_bld, sizeof(cmake_bld), "%s/cmake/%s", project_dir,
+             wasm ? "build-wasm" : "build");
 
     if (!mkdirp(cmake_bld)) {
         fprintf(stderr, "spice: cannot create '%s'\n", cmake_bld);
@@ -4019,8 +4295,18 @@ bool pkg_cmake_build(const char *project_dir,
      * 3.x the variable goes unused and CMake reports it under
      * "Manually-specified variables were not used by the project", which is
      * noise on every single configure. TUR_CMAKE_NO_POLICY_MIN=1 opts out for
-     * a project that wants the strict floor enforced. */
-    if (!wasm && cmake_major_version() >= 4 && !getenv("TUR_CMAKE_NO_POLICY_MIN"))
+     * a project that wants the strict floor enforced.
+     *
+     * This used to carry a `!wasm` conjunct, which made the reasoning above
+     * apply to native builds only: the identical manifest configured natively
+     * and died under emcmake with "Compatibility with CMake < 3.5 has been
+     * removed from CMake."  Nothing about a low `cmake_minimum_required` floor
+     * is arm-specific, and the CMake 3.x noise the guard worried about is
+     * already handled by the arm-independent `cmake_major_version() >= 4`
+     * test.  raylib hid the bug -- its own floor is exactly 3.5, the lowest
+     * CMake 4 still accepts -- so it only showed up on the second cmake dep.
+     * docs/reported/wasm-arm-suppresses-cmake-policy-min.md. */
+    if (cmake_major_version() >= 4 && !getenv("TUR_CMAKE_NO_POLICY_MIN"))
         buf_printf(&cmd, " -DCMAKE_POLICY_VERSION_MINIMUM=3.5");
     /* SF3: honor `tur fetch --refetch` (sets TUR_FETCH_FORCE_FETCH) by
      * disabling the system find_package short-circuit. */
@@ -4053,8 +4339,8 @@ bool pkg_cmake_build(const char *project_dir,
     PkgCmakeManifest cmkman;
     memset(&cmkman, 0, sizeof(cmkman));
     char manifest_json[4096];
-    snprintf(manifest_json, sizeof(manifest_json),
-             "%s/spice-deps-manifest.json", cmake_src);
+    snprintf(manifest_json, sizeof(manifest_json), "%s/%s", cmake_src,
+             wasm ? PKG_CMAKE_MANIFEST_WASM : PKG_CMAKE_MANIFEST_NATIVE);
     pkg_cmake_manifest_read(manifest_json, &cmkman);
 
     /* Update tur.lock cmake-dep entries with resolved git SHAs */

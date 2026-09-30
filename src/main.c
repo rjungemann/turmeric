@@ -2526,8 +2526,53 @@ static void append_manifest_link_flags(const char *proj_root, Buf *cmake_flags) 
  * `:c-includes` (-I) and `:c-sources` (vendored .c) by walking up from the
  * input file to the project root.  No-op when the input is not inside a
  * manifested project.  Shared by cmd_build and cmd_compile. */
+/* Compose the `:web` emcc flags for a wasm link of `input` into `out`.
+ *
+ * Walks up from the input file the same way collect_build_aux does, so a
+ * single-file `tur build --target wasm game.tur` inside a project picks up
+ * that project's `:web` block.  Returns false when the manifest's `:web :gl`
+ * contradicts a cmake dep's `:wasm-options` -- caught here, before the link,
+ * because the browser's own report of that mismatch names neither. */
+static bool collect_web_link_flags(const char *input, Buf *out) {
+    char input_dir[4096];
+    strncpy(input_dir, input, sizeof(input_dir) - 1);
+    input_dir[sizeof(input_dir) - 1] = '\0';
+    char *slash = strrchr(input_dir, '/');
+    if (slash) *slash = '\0';
+    else strncpy(input_dir, ".", sizeof(input_dir));
+    char abs_dir[4096];
+    if (realpath(input_dir, abs_dir)) {
+        strncpy(input_dir, abs_dir, sizeof(input_dir) - 1);
+        input_dir[sizeof(input_dir) - 1] = '\0';
+    }
+    char *proj_root = find_project_root(input_dir);
+    PkgWebOpts web;
+    pkg_web_opts_defaults(&web);
+    bool ok = true;
+    if (proj_root) {
+        char mpath[4096];
+        snprintf(mpath, sizeof(mpath), "%s/build.tur", proj_root);
+        PkgManifest m;
+        if (pkg_manifest_read(mpath, &m)) {
+            ok = pkg_web_check_gl_agreement(&m.web, m.cmake_deps,
+                                            m.n_cmake_deps);
+            if (ok) pkg_web_compose_link_flags(&m.web, out);
+            pkg_manifest_free(&m);
+        } else {
+            pkg_web_compose_link_flags(&web, out);
+        }
+        free(proj_root);
+    } else {
+        /* No manifest: still a valid wasm link, just with the defaults. */
+        pkg_web_compose_link_flags(&web, out);
+    }
+    pkg_web_opts_free(&web);
+    return ok;
+}
+
 static void collect_build_aux(const char *input, Buf *cmake_flags,
-                              Buf *aux_includes, Buf *aux_sources) {
+                              Buf *aux_includes, Buf *aux_sources,
+                              const char *target) {
     /* Walk up from the input file's directory to find project root.  Resolve
      * to an absolute path first -- find_project_root walks via strrchr('/'),
      * so a bare "." or "foo.tur" would stop after one step. */
@@ -2545,8 +2590,8 @@ static void collect_build_aux(const char *input, Buf *cmake_flags,
     char *proj_root = find_project_root(input_dir);
     if (proj_root) {
         char manifest_path[4096];
-        snprintf(manifest_path, sizeof(manifest_path),
-                 "%s/cmake/spice-deps-manifest.json", proj_root);
+        snprintf(manifest_path, sizeof(manifest_path), "%s/cmake/%s",
+                 proj_root, pkg_cmake_manifest_name(target));
         PkgCmakeManifest cmake_manifest;
         if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
             pkg_cmake_manifest_append_cc_flags(&cmake_manifest, cmake_flags);
@@ -3541,7 +3586,15 @@ static int cmd_build_once(const char *input, const char *out_path,
      * manifest dir found by walking up from the input file. */
     Buf aux_includes; buf_init(&aux_includes);
     Buf aux_sources;  buf_init(&aux_sources);
-    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources);
+    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources,
+                      target);
+    /* `:web` -> emcc flags.  Appended to cmake_flags because that Buf is
+     * already spliced verbatim into the link command. */
+    if (wasm_target && !collect_web_link_flags(input, &cmake_flags)) {
+        buf_free(&cmake_flags); buf_free(&aux_includes); buf_free(&aux_sources);
+        buf_free(&autolink);
+        return 2;
+    }
 
     /* tur-link-and-build-split-plan Phase 2/3c: under --runtime=lib, swap bare
      * runtime .c autolink sources for a link against the prebuilt libturi.a
@@ -5525,7 +5578,7 @@ static int repl_jit_build(const char *build_dir, void **out_image,
         buf_init(&auxs);
         char probe[4400];
         snprintf(probe, sizeof(probe), "%s/build.tur", rootd);
-        collect_build_aux(probe, &cmk, &auxi, &auxs);
+        collect_build_aux(probe, &cmk, &auxi, &auxs, NULL);
         bool have_aux_sources = auxs.len > 0;
         if (cmk.len > 0) {
             if (autolink.len > 0) {
@@ -7097,7 +7150,8 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
         if (proj_root) {
             char manifest_path[4096];
             snprintf(manifest_path, sizeof(manifest_path),
-                     "%s/cmake/spice-deps-manifest.json", proj_root);
+                     "%s/cmake/%s", proj_root,
+                     pkg_cmake_manifest_name(NULL));
             PkgCmakeManifest cmake_manifest;
             if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
                 pkg_cmake_manifest_append_cc_flags(&cmake_manifest, &cmake_flags);
@@ -7353,7 +7407,8 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
 static int cmd_build_project(const char *root_in, const char *out_path,
                              bool shared, const char *manifest_path,
                              const char **user_inc, int n_user_inc,
-                             const char *cli_build_dir) {
+                             const char *cli_build_dir,
+                             const char *target) {
     /* Resolve `root_in` to an absolute path so transitive-dep walking can
      * climb out via `:path "../sibling"` references.  When `tur build .` is
      * run from a spice directory, `root_in` is "." and the dep-resolution
@@ -7418,11 +7473,19 @@ static int cmd_build_project(const char *root_in, const char *out_path,
                         /*include_workspace_siblings=*/false,
                         &closure, &n_closure)
                     && n_closure > 0) {
-                    char cmake_lists[4096];
-                    snprintf(cmake_lists, sizeof(cmake_lists),
-                             "%s/cmake/CMakeLists.txt", root);
+                    /* Keyed on the ARM's own dep manifest, not on
+                     * cmake/CMakeLists.txt.  The generated CMakeLists is
+                     * shared by both arms, so statting it reported "already
+                     * built" for a wasm build whose deps had only ever been
+                     * configured natively -- the dep build was skipped and the
+                     * link then failed on missing wasm libraries.  The
+                     * manifest is the artifact the link step actually
+                     * consumes, and there is one per arm. */
+                    char cmake_marker[4096];
+                    snprintf(cmake_marker, sizeof(cmake_marker), "%s/cmake/%s",
+                             root, pkg_cmake_manifest_name(target));
                     struct stat _cmst;
-                    bool already_built = (stat(cmake_lists, &_cmst) == 0);
+                    bool already_built = (stat(cmake_marker, &_cmst) == 0);
                     if (!already_built) {
                         char lock_path[4096];
                         snprintf(lock_path, sizeof(lock_path),
@@ -7435,7 +7498,7 @@ static int cmd_build_project(const char *root_in, const char *out_path,
                         mu.cmake_deps   = closure;
                         mu.n_cmake_deps = n_closure;
                         if (pkg_gen_cmake_deps(root, &mu)
-                            && pkg_cmake_build(root, &mu, &lock, NULL)) {
+                            && pkg_cmake_build(root, &mu, &lock, target)) {
                             pkg_lock_write(lock_path, &lock);
                         } else {
                             fprintf(stderr,
@@ -7866,7 +7929,8 @@ static int cmd_compile(const char *input, const char *out_obj,
     Buf cmake_flags;  buf_init(&cmake_flags);
     Buf aux_includes; buf_init(&aux_includes);
     Buf aux_sources;  buf_init(&aux_sources);
-    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources);
+    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources,
+                      NULL);
 
     bool needs_asan = false;
     resolve_autolink_flags(&autolink, cc_flags, &needs_asan);
@@ -12864,7 +12928,7 @@ static int tur_main_inner(int argc, char **argv) {
             if (stat(proj_manifest, &mst) == 0 && S_ISREG(mst.st_mode)) {
                 rc = cmd_build_project(input, out, shared, manifest_out,
                                        (const char **)build_inc, n_build_inc,
-                                       cli_build_dir);
+                                       cli_build_dir, build_target);
             } else {
                 rc = cmd_build_multi(input, out, shared, manifest_out,
                                      cli_build_dir);

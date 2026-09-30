@@ -1,0 +1,81 @@
+;; wasm-spices-plan W2: the native stand-in for `raylib/web`'s `run-main-loop`
+;; in turmeric-spices.  A browser frame callback is registered and then invoked
+;; after `main` has unwound, so the closure has to survive the scope that built
+;; it and be callable from plain C afterwards.  `frame-store` unpacks a closure
+;; exactly the way the spice does and keeps it in malloc'd memory, `churn`
+;; reuses whatever the bracket released, and `frame-call` invokes it after.
+;;
+;; WHAT THIS FIXTURE PINS: the closure ABI.  `TUR_CLOSURE_FN(f)` is slot 0 of
+;; the box and the box itself is the environment -- a zero-argument closure is
+;; called as `fn(box)`.  The spice's C shim depends on that split, and the
+;; c-integration guide is explicit that a spice-side copy of a calling
+;; convention is "a silent miscompile waiting for the convention to move, and
+;; it stays broken for as long as no fixture loads the module."  This is the
+;; fixture that loads it.
+;;
+;; WHAT IT DOES NOT PIN, measured rather than assumed: the
+;; `TUR_REGION_NOTE(frame)` below is NOT observably load-bearing here.  Deleting
+;; it leaves the output unchanged (both print 7), so on this path the closure
+;; survives the bracket without it -- plausibly because the closure-env fill is
+;; already a hooked store, or because the bracket's opaque `ptr<void>` result
+;; makes the static walk keep the generation.  The note is kept as cheap
+;; insurance (it is `((void)0)` under TUR_REGIONS=0), NOT on the strength of a
+;; demonstrated failure.  If you are here because you need a discriminating
+;; case for the frame-callback store, this fixture is not one yet.
+
+(defmodule main
+  (defdata Link :heap (Link [v : int nxt : int]))
+  (defdata TL :heap (TNil) (TCons :int :TL))
+
+  (defn tbuild [n : int acc : TL] : TL
+    (if (<= n 0) acc (tbuild (- n 1) (TCons 99 acc))))
+  (defn tsum [t : TL] : int
+    (match t
+      (TNil) 0
+      (TCons v r) (+ v (tsum r))))
+
+  ;; The two words of a closure, kept in memory the bracket does not own --
+  ;; the same shape as the C statics the browser reads after main unwinds.
+  (defn frame-store [frame : (fn [] unit)] : ptr<void>
+    ```c
+    #include <stdlib.h>
+    typedef struct { void *env; int64_t (*fn)(void *); } tur_test_frame_box;
+    tur_test_frame_box *b =
+        (tur_test_frame_box *)malloc(sizeof *b);
+    /* `frame` is a closure HANDLE (int64_t), so this is the scalar note, not
+       the by-value-aggregate form.  Defensive: see the header -- removing it
+       does not change this fixture's output. */
+    TUR_REGION_NOTE(frame);
+    /* TUR_CLOSURE_FN is slot 0 of the box, and the box itself is what gets
+       passed as the argument -- it is the environment.  Read here, where the
+       preamble is in scope, so the C shim never learns the layout. */
+    b->env = (void *)(intptr_t)frame;
+    b->fn  = (int64_t (*)(void *))(intptr_t)TUR_CLOSURE_FN(frame);
+    return (void *)b;
+    ```)
+
+  ;; env first, then the (zero) arguments -- the preamble's own convention.
+  (defn frame-call [b : ptr<void>] : void
+    ```c
+    typedef struct { void *env; int64_t (*fn)(void *); } tur_test_frame_box;
+    tur_test_frame_box *p = (tur_test_frame_box *)b;
+    (void)p->fn(p->env);
+    ```)
+
+  ;; Build the captured node inside a bracket and register a closure over it.
+  (defn arm [] : ptr<void>
+    (with-region
+      (fn []
+        (let [n (Link 7 0)]
+          (frame-store (fn [] : unit
+                         (println (match n (Link v x) v))))))))
+
+  ;; A second bracket that reuses whatever the first one rewound.
+  (defn churn [] : int
+    (with-region (fn [] (tsum (tbuild 50 (TNil))))))
+
+  (defn main [] : int
+    (let [f (arm)]
+      (println (churn))
+      (frame-call f))
+    0))
