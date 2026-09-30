@@ -497,6 +497,11 @@ target_compile_options(tur_core PRIVATE
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
     $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
 )
+# security-audit-plan WP4: coverage instrumentation for the fuzz targets in
+# tests/fuzz, which link these objects.  (Only in a TUR_FUZZ build dir.)
+if(TUR_FUZZ)
+    target_compile_options(tur_core PRIVATE -fsanitize=fuzzer-no-link)
+endif()
 # Phase S3: ucontext_t is deprecated on macOS but still functional
 if(APPLE)
     target_compile_options(tur_core PRIVATE -Wno-deprecated-declarations)
@@ -1156,6 +1161,31 @@ set_target_properties(tur_trail PROPERTIES
 # tests/check-ctest-registration.sh checks that every add_test here shows
 # up in `ctest -N`.
 add_test(NAME tur_trail COMMAND tur_trail)
+
+# ---------------------------------------------------------------------------
+# security-audit-plan M-3: LSP/DAP Content-Length framing.  Links lsp_io.c
+# alone -- the transport has no other dependency.  POSIX only: the read-loop
+# half drives the framing over pipe(2).
+# ---------------------------------------------------------------------------
+if(NOT WIN32)
+    add_executable(tur_lsp_io_unit
+        ${CMAKE_SOURCE_DIR}/tests/unit/lsp_io.c
+        lsp/lsp_io.c
+    )
+    target_include_directories(tur_lsp_io_unit PRIVATE ${TUR_INCLUDE_DIRS})
+    target_compile_options(tur_lsp_io_unit PRIVATE
+        -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+        $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+        $<$<CONFIG:Release>: -O2 -DNDEBUG>
+    )
+    target_link_options(tur_lsp_io_unit PRIVATE
+        $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+    )
+    set_target_properties(tur_lsp_io_unit PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME tur_lsp_io_unit COMMAND tur_lsp_io_unit)
+endif()
 
 # ---------------------------------------------------------------------------
 # RT2/S0--S3: refinement normalized-VC + decision-procedure unit test
@@ -1965,4 +1995,10 @@ if(TUR_WASM)
             COMMENT "Copying WASM module to web/public"
         )
     endif()
+endif()
+
+# security-audit-plan WP4: the libFuzzer targets.  Added from here, not the
+# top level, so TUR_INCLUDE_DIRS / TUR_CSTD and tur_core are in scope.
+if(TUR_FUZZ)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/tests/fuzz ${CMAKE_BINARY_DIR}/fuzz-targets)
 endif()

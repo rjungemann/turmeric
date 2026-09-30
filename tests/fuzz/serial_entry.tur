@@ -1,0 +1,23 @@
+;; tests/fuzz/serial_entry.tur -- the serial-continuation runtime as a fuzz
+;; target.  Capturing continuations through each frame shape registers them,
+;; so fuzz_serial_cont.c can hand tur_serial_cont_check /
+;; tur_serial_cont_deserialize buffers that name real frames: arithmetic
+;; (tags 1-6), a 1-arg call ($L), a 2-arg call with an int env ($2R) and one
+;; with a cstr env.
+(load "stdlib/serial.tur")
+
+(defn greet-len [s : cstr n : int] : int
+  ```c return (int64_t)strlen(s) + n; ```)
+
+(defn add [a : int b : int] : int (+ a b))
+
+(defn inc [x : int] : int (+ x 1))
+
+(defn keep [k : serial-cont] : int 0)
+
+(defn main [] : int
+  (do
+    (serial-reset (greet-len "hi" (serial-shift keep 0)))
+    (serial-reset (add 5 (serial-shift keep 0)))
+    (serial-reset (inc (- 9 (* 3 (/ 8 (serial-shift keep 1))))))
+    0))

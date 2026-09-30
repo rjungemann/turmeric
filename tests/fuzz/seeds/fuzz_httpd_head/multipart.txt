@@ -1,0 +1,10 @@
+POST /u HTTP/1.1
+Content-Type: multipart/form-data; boundary=XX
+Content-Length: 97
+
+--XX
+Content-Disposition: form-data; name="f"; filename="a.txt"
+Content-Type: text/plain
+
+hi
+--XX--

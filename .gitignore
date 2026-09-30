@@ -4,6 +4,7 @@ build/
 build2/
 build-asan/
 build-nosan/
+build-fuzz/
 build-debug/
 build-win-jit/
 build-win-lazy/

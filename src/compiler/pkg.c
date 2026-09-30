@@ -790,6 +790,71 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
     return pkg_manifest_read_status(path, out, NULL);
 }
 
+/* Release one manifest slot and reset it to empty.  pkg_manifest_free uses
+ * them, and so does the manifest reader when a key appears twice: the later
+ * value replaces the earlier one, as it always has, and the earlier one's
+ * allocations are released instead of leaked (found by
+ * tests/fuzz/fuzz_manifest, security-audit-plan WP4). */
+static void str_vec_clear(char ***v, int *n) {
+    for (int i = 0; i < *n; i++) free((*v)[i]);
+    free(*v);
+    *v = NULL;
+    *n = 0;
+}
+
+static void spices_clear(PkgManifest *m) {
+    for (int i = 0; i < m->n_spices; i++) {
+        free(m->spices[i].name);
+        free(m->spices[i].url);
+        free(m->spices[i].ref);
+        free(m->spices[i].path);
+        free(m->spices[i].subdir);
+    }
+    free(m->spices);
+    m->spices = NULL;
+    m->n_spices = 0;
+}
+
+static void cmake_deps_clear(PkgManifest *m) {
+    for (int i = 0; i < m->n_cmake_deps; i++) {
+        free(m->cmake_deps[i].name);
+        free(m->cmake_deps[i].url);
+        free(m->cmake_deps[i].ref);
+        free(m->cmake_deps[i].path);
+        free(m->cmake_deps[i].cmake_name);
+        free(m->cmake_deps[i].cmake_version);
+        for (int j = 0; j < m->cmake_deps[i].n_targets; j++)
+            free(m->cmake_deps[i].targets[j]);
+        free(m->cmake_deps[i].targets);
+        for (int j = 0; j < m->cmake_deps[i].n_link_libs; j++)
+            free(m->cmake_deps[i].link_libs[j]);
+        free(m->cmake_deps[i].link_libs);
+        for (int j = 0; j < m->cmake_deps[i].n_link_flags; j++)
+            free(m->cmake_deps[i].link_flags[j]);
+        free(m->cmake_deps[i].link_flags);
+        for (int j = 0; j < m->cmake_deps[i].n_opts; j++) {
+            free(m->cmake_deps[i].opts[j].key);
+            free(m->cmake_deps[i].opts[j].val);
+        }
+        free(m->cmake_deps[i].opts);
+    }
+    free(m->cmake_deps);
+    m->cmake_deps = NULL;
+    m->n_cmake_deps = 0;
+}
+
+static void bins_clear(PkgManifest *m) {
+    for (int i = 0; i < m->n_bins; i++) {
+        free(m->bin_names[i]);
+        free(m->bin_paths[i]);
+    }
+    free(m->bin_names);
+    free(m->bin_paths);
+    m->bin_names = NULL;
+    m->bin_paths = NULL;
+    m->n_bins = 0;
+}
+
 bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                               PkgManifestStatus *status) {
     memset(out, 0, sizeof(*out));
@@ -863,6 +928,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                     "spice: error [TUR-E0330]: `#lang` takes a single base "
                     "dialect; unexpected trailing token '%.*s' in %s\n",
                     (int)bad_len, bad, path);
+            symtab_free(&st);   /* its buckets are heap, not arena */
             arena_free(&arena);
             if (status) *status = PKG_MANIFEST_MALFORMED;
             pkg_manifest_mark_malformed(path);
@@ -928,21 +994,31 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
             free(out->name);
             out->name = form_str_dup(vf);
         } else if (strcmp(kw, "version") == 0) {
+            /* A key repeated in the manifest replaces the earlier value, so
+             * each scalar slot frees what it held -- only :name did, and the
+             * rest leaked (found by tests/fuzz/fuzz_manifest). */
+            free(out->version);
             out->version = form_str_dup(vf);
         } else if (strcmp(kw, "tur-version") == 0) {
+            free(out->tur_version);
             out->tur_version = form_str_dup(vf);
             /* Checked here rather than after the loop so the caret lands on the
              * range the user wrote. */
             pkg_check_tur_version_span(out->tur_version, vf->span);
         } else if (strcmp(kw, "description") == 0) {
+            free(out->description);
             out->description = form_str_dup(vf);
         } else if (strcmp(kw, "license") == 0) {
+            free(out->license);
             out->license = form_str_dup(vf);
         } else if (strcmp(kw, "repository") == 0) {
+            free(out->repository);
             out->repository = form_str_dup(vf);
         } else if (strcmp(kw, "homepage") == 0) {
+            free(out->homepage);
             out->homepage = form_str_dup(vf);
         } else if (strcmp(kw, "authors") == 0) {
+            str_vec_clear(&out->authors, &out->n_authors);
             if (!parse_str_vec(vf, &out->authors, &out->n_authors))
                 bad_slot = bad_slot ? bad_slot : ":authors";
         } else if (strcmp(kw, "spices") == 0) {
@@ -952,18 +1028,22 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
              * slot broke.  Keep the first failing slot name for the sticky
              * verdict; parsing still continues so the user sees every slot's
              * diagnostic in one pass rather than one per edit-compile cycle. */
+            spices_clear(out);
             if (!parse_spices(vf, out))
                 bad_slot = bad_slot ? bad_slot : ":spices";
         } else if (strcmp(kw, "cmake-deps") == 0) {
+            cmake_deps_clear(out);
             if (!parse_cmake_deps(vf, out))
                 bad_slot = bad_slot ? bad_slot : ":cmake-deps";
         } else if (strcmp(kw, "exports") == 0) {
+            str_vec_clear(&out->exports, &out->n_exports);
             if (!parse_exports(vf, &out->exports, &out->n_exports))
                 bad_slot = bad_slot ? bad_slot : ":exports";
         } else if (strcmp(kw, "members") == 0) {
             /* LS2: workspace member spice directories, relative to this
              * manifest. A non-empty list makes this manifest a workspace
              * root; the resolver auto-links sibling members. */
+            str_vec_clear(&out->members, &out->n_members);
             parse_str_vec(vf, &out->members, &out->n_members);
             /* WP2 (D-5): a member path is resolved against the workspace root
              * and then built, so it has to stay inside the workspace. */
@@ -976,6 +1056,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
             }
         } else if (strcmp(kw, "build-dir") == 0) {
             /* build-output-directory-plan: relative path for build artifacts. */
+            free(out->build_dir);
             out->build_dir = form_str_dup(vf);
             /* WP2 (D-5): "relative path" was a comment, not a rule -- an
              * absolute or climbing :build-dir chose where the build WROTE. */
@@ -991,6 +1072,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
             /* Entry-point module for project-mode `tur run`, relative to the
              * manifest dir. Existence is checked by the caller (main.c), which
              * is the only place that knows the resolved project root. */
+            free(out->entry);
             out->entry = form_str_dup(vf);
         } else if (strcmp(kw, "engine") == 0) {
             /* engine-selection-plan E1: default execution engine for
@@ -998,6 +1080,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
              * "jitt"` silently running under cc is exactly the failure mode
              * the plan exists to prevent (unknown KEYS stay silently
              * ignored, which is the documented compatibility story). */
+            free(out->engine);
             out->engine = form_str_dup(vf);
             if (out->engine && strcmp(out->engine, "cc") != 0 &&
                 strcmp(out->engine, "jit") != 0 &&
@@ -1011,6 +1094,7 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
             }
         } else if (strcmp(kw, "experiments") == 0) {
             /* XF1: opt-in experimental features for this spice. */
+            str_vec_clear(&out->experiments, &out->n_experiments);
             parse_experiments(vf, &out->experiments, &out->n_experiments);
             /* UC-3: record that the key was present even when the list is
              * empty -- an empty :experiments [] still suppresses the
@@ -1018,11 +1102,13 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
             out->has_experiments_key = true;
         } else if (strcmp(kw, "reader-macros") == 0) {
             /* RM4: vector of paths to reader-macro definition files. */
+            str_vec_clear(&out->reader_macros, &out->n_reader_macros);
             parse_str_vec(vf, &out->reader_macros, &out->n_reader_macros);
         } else if (strcmp(kw, "bin") == 0) {
             /* GS-M1: :bin #{ "tur-foo" "src/main.tur" ... } */
             if (!vf) continue;
             if (!expect_map(vf, ":bin")) continue;
+            bins_clear(out);
             const FormList *bfl = &vf->as.list;
             int cap = (int)(bfl->len / 2 + 1);
             out->bin_names = (char **)malloc(cap * sizeof(char *));
@@ -1059,6 +1145,11 @@ bool pkg_manifest_read_status(const char *path, PkgManifest *out,
                 const Form *nf = map_get_kw(vf, "no-stdlib");
                 const Form *sf = map_get_kw(vf, "c-sources");
                 const Form *if_ = map_get_kw(vf, "c-includes");
+                str_vec_clear(&out->c_flags, &out->n_c_flags);
+                str_vec_clear(&out->link_libs, &out->n_link_libs);
+                str_vec_clear(&out->link_flags, &out->n_link_flags);
+                str_vec_clear(&out->c_sources, &out->n_c_sources);
+                str_vec_clear(&out->c_includes, &out->n_c_includes);
                 parse_str_vec(cf, &out->c_flags,   &out->n_c_flags);
                 parse_str_vec(lf, &out->link_libs,  &out->n_link_libs);
                 parse_str_vec(map_get_kw(vf, "link-flags"),
@@ -1428,63 +1519,19 @@ void pkg_manifest_free(PkgManifest *m) {
     free(m->license);
     free(m->repository);
     free(m->homepage);
-    for (int i = 0; i < m->n_authors; i++) free(m->authors[i]);
-    free(m->authors);
-    for (int i = 0; i < m->n_spices; i++) {
-        free(m->spices[i].name);
-        free(m->spices[i].url);
-        free(m->spices[i].ref);
-        free(m->spices[i].path);
-        free(m->spices[i].subdir);
-    }
-    free(m->spices);
-    for (int i = 0; i < m->n_cmake_deps; i++) {
-        free(m->cmake_deps[i].name);
-        free(m->cmake_deps[i].url);
-        free(m->cmake_deps[i].ref);
-        free(m->cmake_deps[i].path);
-        free(m->cmake_deps[i].cmake_name);
-        free(m->cmake_deps[i].cmake_version);
-        for (int j = 0; j < m->cmake_deps[i].n_targets; j++)
-            free(m->cmake_deps[i].targets[j]);
-        free(m->cmake_deps[i].targets);
-        for (int j = 0; j < m->cmake_deps[i].n_link_libs; j++)
-            free(m->cmake_deps[i].link_libs[j]);
-        free(m->cmake_deps[i].link_libs);
-        for (int j = 0; j < m->cmake_deps[i].n_link_flags; j++)
-            free(m->cmake_deps[i].link_flags[j]);
-        free(m->cmake_deps[i].link_flags);
-        for (int j = 0; j < m->cmake_deps[i].n_opts; j++) {
-            free(m->cmake_deps[i].opts[j].key);
-            free(m->cmake_deps[i].opts[j].val);
-        }
-        free(m->cmake_deps[i].opts);
-    }
-    free(m->cmake_deps);
-    for (int i = 0; i < m->n_exports;   i++) free(m->exports[i]);
-    free(m->exports);
-    for (int i = 0; i < m->n_c_flags;   i++) free(m->c_flags[i]);
-    free(m->c_flags);
-    for (int i = 0; i < m->n_link_flags; i++) free(m->link_flags[i]);
-    free(m->link_flags);
-    for (int i = 0; i < m->n_link_libs; i++) free(m->link_libs[i]);
-    free(m->link_libs);
-    for (int i = 0; i < m->n_c_sources;  i++) free(m->c_sources[i]);
-    free(m->c_sources);
-    for (int i = 0; i < m->n_c_includes; i++) free(m->c_includes[i]);
-    free(m->c_includes);
-    for (int i = 0; i < m->n_reader_macros; i++) free(m->reader_macros[i]);
-    free(m->reader_macros);
-    for (int i = 0; i < m->n_bins; i++) {
-        free(m->bin_names[i]);
-        free(m->bin_paths[i]);
-    }
-    free(m->bin_names);
-    free(m->bin_paths);
-    for (int i = 0; i < m->n_members; i++) free(m->members[i]);
-    free(m->members);
-    for (int i = 0; i < m->n_experiments; i++) free(m->experiments[i]);
-    free(m->experiments);
+    str_vec_clear(&m->authors, &m->n_authors);
+    spices_clear(m);
+    cmake_deps_clear(m);
+    str_vec_clear(&m->exports, &m->n_exports);
+    str_vec_clear(&m->c_flags, &m->n_c_flags);
+    str_vec_clear(&m->link_flags, &m->n_link_flags);
+    str_vec_clear(&m->link_libs, &m->n_link_libs);
+    str_vec_clear(&m->c_sources, &m->n_c_sources);
+    str_vec_clear(&m->c_includes, &m->n_c_includes);
+    str_vec_clear(&m->reader_macros, &m->n_reader_macros);
+    bins_clear(m);
+    str_vec_clear(&m->members, &m->n_members);
+    str_vec_clear(&m->experiments, &m->n_experiments);
     free(m->build_dir);
     free(m->entry);
     free(m->engine);

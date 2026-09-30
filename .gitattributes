@@ -25,3 +25,7 @@
 *.dll  binary
 *.dylib binary
 *.exe  binary
+
+# Fuzz seeds are byte-exact inputs: the HTTP and LSP ones exist to carry
+# CRLF framing, which end-of-line normalization would destroy.
+tests/fuzz/seeds/** -text
