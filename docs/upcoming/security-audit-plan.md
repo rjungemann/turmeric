@@ -1605,8 +1605,11 @@ Linux and macOS), and the mermaid pin WP6 handed over in section 2f.
   installer verifies a checksum; the lock check has a fixture. **All four met**
   -- 56 of 56 pinned, `actions/attest-build-provenance` on every asset,
   `tvm/tests/install-script.sh` (11 assertions) driving the Worker's real
-  `/install` route, and `tests/run-lock-integrity.sh` (11 assertions, 6 of
-  which fail against the pre-fix binary).
+  `/install` route, and seven new cases in `tests/run-spice-fetch.sh` (17
+  total; 5 of the 7 fail against the pre-fix binary). The lock cases went into
+  that existing harness rather than a new one -- it is already wired into ctest
+  AND the Windows CI leg, which is where the package manager's coverage gap
+  was, so a parallel harness would have been the thinner half of the pair.
 
 ### WP8 -- Effects as a stated boundary (1 day, decision-heavy)
 

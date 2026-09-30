@@ -122,8 +122,12 @@ fi
 
 verdict() {
     out="$("$TUR_ABS" run 2>&1)"
-    if echo "$out" | grep -q "integrity check failed"; then echo tampered
-    elif echo "$out" | grep -q "^42";                 then echo ran
+    # Case-insensitive on purpose: this asks "was tampering reported", not
+    # "is the diagnostic spelled exactly this way". WP7's C-3 work rewrote the
+    # message to print both hashes and name `tur fetch --update`, and the
+    # capitalisation alone used to break this.
+    if echo "$out" | grep -qi "integrity check failed"; then echo tampered
+    elif echo "$out" | grep -q "^42";                    then echo ran
     else echo "other: $out"; fi
 }
 
@@ -205,6 +209,93 @@ fi
 #    wrong reason).
 "$TUR_ABS" fetch >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 0 ] && ok "a clean fetch exits 0" || bad "a clean fetch exits 0" "rc=$rc"
+
+# ------------------------------------------------------------------ #
+# C-3 (docs/upcoming/security-audit-plan.md): the lock VERIFIES, it does not
+# merely record.
+#
+# Everything above tests a dependency edited AFTER a fetch, which the old code
+# did catch. The three below are what it did not: a fetch that re-downloads at
+# all, a fetch that compares what came back against the pin, and the commands
+# other than `tur run` doing the same check.
+# ------------------------------------------------------------------ #
+
+cd "$WORK/app" || exit 1
+PINNED="$(grep -o ':sha256 "[^"]*"' tur.lock 2>/dev/null | head -n1)"
+
+# 10. the fresh-clone shape: tur.lock committed, spices/ gitignored and absent.
+#     The "already in the lock, skip it" test never checked whether the
+#     directory was THERE, so this printed "using cached 'demo'" and fetched
+#     nothing, leaving the build to fail later with "module not found".
+rm -rf spices
+out="$("$TUR_ABS" fetch 2>&1)"
+if [ -d spices/demo ]; then
+    ok "fetch re-downloads when spices/ is missing"
+else
+    bad "fetch re-downloads when spices/ is missing" "$out"
+fi
+
+# 11. upstream moves under a branch-shaped :ref. The fetched tree no longer
+#     matches the pin, so the fetch must FAIL -- and must not rewrite the row,
+#     because a rewritten hash makes the next command agree with the drift and
+#     the failure lasts exactly one run.
+cat >> "$WORK/demo/src/demo.tur" <<'EOF'
+
+(defmodule demo-extra
+  (export backdoor)
+  (defn backdoor [] : int 1337))
+EOF
+git -C "$WORK/demo" -c user.email=t@t -c user.name=t commit -qam upstream-moved
+rm -rf spices
+out="$("$TUR_ABS" fetch 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -qi "integrity check failed" <<< "$out"; then
+    ok "fetch refuses upstream content that differs from the pin"
+else
+    bad "fetch refuses upstream content that differs from the pin" "rc=$rc $out"
+fi
+if [ "$(grep -o ':sha256 "[^"]*"' tur.lock 2>/dev/null | head -n1)" = "$PINNED" ]; then
+    ok "a refused fetch does not rewrite the pin"
+else
+    bad "a refused fetch does not rewrite the pin" "$(cat tur.lock 2>&1)"
+fi
+
+# 12. --update is the deliberate escape hatch the diagnostic names.
+out="$("$TUR_ABS" fetch --update 2>&1)"; rc=$?
+NOW="$(grep -o ':sha256 "[^"]*"' tur.lock 2>/dev/null | head -n1)"
+if [ "$rc" -eq 0 ] && [ -n "$NOW" ] && [ "$NOW" != "$PINNED" ]; then
+    ok "tur fetch --update re-pins to the new content"
+else
+    bad "tur fetch --update re-pins to the new content" "rc=$rc $out"
+fi
+
+# 13. `tur build` verifies too. It never did -- the comparison was open-coded
+#     inside `tur run` and existed nowhere else, so the command that turns a
+#     dependency's source into a binary you keep was the one that did not look.
+echo ';; tampered again' >> spices/demo/src/demo.tur
+out="$("$TUR_ABS" build . 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -qi "integrity check failed" <<< "$out"; then
+    ok "tur build refuses a tampered dependency"
+else
+    bad "tur build refuses a tampered dependency" "rc=$rc $out"
+fi
+
+# 14. and `tur audit` reports rather than closing with "it verifies nothing".
+out="$("$TUR_ABS" audit 2>&1)"
+if grep -qi "integrity check failed" <<< "$out"; then
+    ok "tur audit reports a tampered dependency"
+else
+    bad "tur audit reports a tampered dependency" "$out"
+fi
+
+# 15. the pair: a clean tree makes audit say so, so 14 cannot pass by shouting
+#     at everything.
+git -C spices/demo checkout -- . 2>/dev/null
+out="$("$TUR_ABS" audit 2>&1)"
+if grep -q "matches tur.lock" <<< "$out"; then
+    ok "tur audit is quiet on a clean tree"
+else
+    bad "tur audit is quiet on a clean tree" "$out"
+fi
 
 echo
 echo "spice-fetch summary: $PASS passed, $FAIL failed"
