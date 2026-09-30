@@ -1453,6 +1453,46 @@ jobs:
       - name: Check fused annotations in stdlib/ and docs/guides/
         run: python3 tools/spaced-types-rewrite.py --check stdlib/ docs/guides/
 
+  # C-1: tvm is the advertised install path now -- turmeric-lang.com/install
+  # bootstraps it and installs a checksum-verified release through it. Its two
+  # suites ran NOWHERE automatic before that change: not in this file, not in
+  # ctest, not in the Justfile. A version manager nobody tests is a poor thing
+  # to make load-bearing, so they run here.
+  #
+  # Both are fully offline -- a fake release served over file:// URLs -- so
+  # this job is seconds, needs no compiler, and cannot flake on the network.
+  # It runs on both OSes because the install path is platform-shaped: shell rc
+  # detection, tar layouts, `sha256sum` vs `shasum`, and the target triple all
+  # differ, and macOS is where the advertised one-liner is most used.
+  tvm:
+    name: tvm (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The suite asserts `tvm current` is `none` before anything is
+      # installed, which a tur already on PATH would contradict. The runners
+      # have none; this guard says so out loud rather than leaving a future
+      # toolchain image to make it a mystery failure.
+      - name: Check no tur is already on PATH
+        run: |
+          if command -v tur >/dev/null 2>&1; then
+            echo "::error::a tur is already on PATH ($(command -v tur)); the tvm suite assumes none"
+            exit 1
+          fi
+
+      - name: tvm suite
+        run: sh tvm/tests/run.sh
+
+      # Drives web/worker.js's own /install route, so an edit that breaks the
+      # served installer fails here rather than on someone's laptop.
+      - name: Installer end-to-end (C-1)
+        run: sh tvm/tests/install-script.sh
+
   check-snapshots:
     name: Check codegen snapshots
     runs-on: ubuntu-latest
