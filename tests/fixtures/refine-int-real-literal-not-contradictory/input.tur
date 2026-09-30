@@ -1,0 +1,25 @@
+;; S1 soundness: an Int literal and a Real literal for ONE value.
+;;
+;; `to-f` is a pure float-returning measure, so `(= x (to-f n))` is a real
+;; term equated with an int one.  With `x = 3.0` and `n = 3` the hypotheses
+;; are consistent -- (to-f 3) IS 3.0 -- and the body returns x = 3.0, so the
+;; return refinement `r < 1.5` is false for the only legal input.  The
+;; return check must therefore stay and fire.
+;;
+;; It did not: S3's arithmetic exchange merged the classes {x, (to-f n), 3.0}
+;; and {n, 3}, and S1's literal check called `3` and `3.0` -- two hash-consed
+;; terms -- a contradiction, refuting a satisfiable cube.  The check was
+;; elided and this program printed 3 and exited 0.  (The same class conflict
+;; reaches S1 directly through `(as float n)`, which used to encode as an
+;; Int-sorted measure; see refine-cast-in-predicate.)
+(defn to-f [n : int] : float
+  (as float n))
+
+(defn m [x : #refine{ v : float | (= v 3.0) } n : #refine{ w : int | (= w 3) }] : #refine{ r : float | (< r 1.5) }
+  :pre (= x (to-f n))
+  x)
+
+(defn main [] : int
+  (println (m 3.0 3))
+  (println "unreachable")
+  0)

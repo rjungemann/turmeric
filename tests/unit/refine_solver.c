@@ -301,6 +301,37 @@ static void test_s1_euf(Arena *a) {
     vc_add_hyp(vc, eq(vc, vc_app(vc, f, g1, 1), vc_app(vc, f, g2, 1)));
     vc_set_goal(vc, eq(vc, aa, bb));
     ok(decide(vc, a) != RT_VALID, "S1 soundness: uninterpreted functions are not injective");
+
+    /* SOUNDNESS: an Int literal and a Real literal for ONE value are two
+     * hash-consed terms.  `x = 3.0, x = 3` is satisfiable, and so is the
+     * S3-reached shape `x = to-f(n), n = 3, x = 3.0` where the arithmetic
+     * exchange merges the two classes.  Both answered unsat until
+     * 2026-09-29, proving `x < 1.5` under them. */
+    vc = vc_new(a);
+    VCTerm *xr = R(vc, "x");
+    vc_add_hyp(vc, eq(vc, xr, vc_real(vc, 3.0)));
+    vc_add_hyp(vc, eq(vc, xr, vc_int(vc, 3)));
+    vc_set_goal(vc, lt(vc, xr, vc_real(vc, 1.5)));
+    ok(decide(vc, a) != RT_VALID, "S1 soundness: 3 and 3.0 in one class is not a conflict");
+
+    vc = vc_new(a);
+    uint32_t tof = vc_declare_ufunc(vc, "to-f", 1, VS_REAL, NULL, false);
+    xr = R(vc, "x");
+    VCTerm *ni = V(vc, "n");
+    VCTerm *tof_args[1] = { ni };
+    vc_add_hyp(vc, eq(vc, xr, vc_app(vc, tof, tof_args, 1)));
+    vc_add_hyp(vc, eq(vc, ni, vc_int(vc, 3)));
+    vc_add_hyp(vc, eq(vc, xr, vc_real(vc, 3.0)));
+    vc_set_goal(vc, lt(vc, xr, vc_real(vc, 1.5)));
+    ok(decide(vc, a) != RT_VALID, "S3 soundness: x = to-f(n), n = 3, x = 3.0 does not prove x < 1.5");
+
+    /* ... and differing values across the kinds still conflict. */
+    vc = vc_new(a);
+    xr = R(vc, "x");
+    vc_add_hyp(vc, eq(vc, xr, vc_real(vc, 3.0)));
+    vc_add_hyp(vc, eq(vc, xr, vc_int(vc, 4)));
+    vc_set_goal(vc, lt(vc, xr, vc_real(vc, 1.5)));
+    ok(decide(vc, a) == RT_VALID, "S1: 4 and 3.0 in one class is a conflict (ex falso)");
 }
 
 static void test_nonlinear_is_unknown(Arena *a) {
@@ -369,6 +400,57 @@ static void test_model_search(Arena *a) {
 
 /* The call-site shape: a closed goal (every term a literal) decides outright,
  * which is what makes `(safe-div 10 0)` a compile error rather than a shrug. */
+/* The search covers Real and Bool variables (evaluated in double / as
+ * false-true), and declines a VC whose encoder dropped a hypothesis. */
+static void test_model_search_sorts(Arena *a) {
+    /* x > 0.0 |- x > 1.5 : refuted, with a real witness. */
+    RefineVC *vc = vc_new(a);
+    VCTerm *x = R(vc, "x");
+    vc_add_hyp(vc, lt(vc, vc_real(vc, 0.0), x));
+    vc_set_goal(vc, lt(vc, vc_real(vc, 1.5), x));
+    RefineModel *m = refine_model_search(vc, a);
+    ok(m != NULL && m->n == 1 && m->bindings[0].is_real &&
+       m->bindings[0].rval > 0.0 && m->bindings[0].rval <= 1.5,
+       "model search: a real witness, evaluated in double");
+
+    /* (b or x > 0) |- x > 0 : refuted with b = true, x <= 0. */
+    vc = vc_new(a);
+    VCTerm *b  = vc_var_ref(vc, vc_declare_var(vc, "b", VS_BOOL));
+    VCTerm *xi = V(vc, "x");
+    VCTerm *disj[2] = { b, lt(vc, vc_int(vc, 0), xi) };
+    vc_add_hyp(vc, vc_mk(vc, VC_OR, disj, 2));
+    vc_set_goal(vc, lt(vc, vc_int(vc, 0), xi));
+    m = refine_model_search(vc, a);
+    ok(m != NULL && m->n == 2, "model search: a bool variable is enumerated");
+    if (m && m->n == 2) {
+        const RefineModelBinding *bb = m->bindings[0].is_bool ? &m->bindings[0] : &m->bindings[1];
+        const RefineModelBinding *bx = m->bindings[0].is_bool ? &m->bindings[1] : &m->bindings[0];
+        ok(bb->is_bool && bb->ival == 1 && !bx->is_bool && bx->ival <= 0,
+           "model search: the bool witness is b = true with x <= 0");
+    }
+
+    /* The same int VC with a dropped hypothesis is NOT refuted: the dropped
+     * fact may exclude every witness. */
+    vc = vc_new(a);
+    xi = V(vc, "x");
+    vc_set_goal(vc, lt(vc, vc_int(vc, 0), xi));
+    ok(refine_model_search(vc, a) != NULL, "model search: |- x > 0 has a witness");
+    vc->hyps_dropped = true;
+    ok(refine_model_search(vc, a) == NULL,
+       "model search: declines when the encoder dropped a hypothesis");
+
+    /* An assignment that overflows is skipped, not fatal: x > 0 with
+     * x * 9e18 mentioned still finds x = 1. */
+    vc = vc_new(a);
+    xi = V(vc, "x");
+    vc_add_hyp(vc, lt(vc, vc_int(vc, 0), xi));
+    vc_add_hyp(vc, le(vc, vc_int(vc, 0), mul(vc, xi, vc_int(vc, 9000000000000000000LL))));
+    vc_set_goal(vc, vc_bool(vc, false));
+    m = refine_model_search(vc, a);
+    ok(m != NULL && m->n == 1 && m->bindings[0].ival == 1,
+       "model search: an overflowing candidate is skipped, not fatal");
+}
+
 static void test_closed_goal(Arena *a) {
     RefineVC *vc = vc_new(a);
     /* (not= 0 0) -- the predicate of NonZero with the argument substituted in */
@@ -464,6 +546,10 @@ static void test_smtlib(Arena *a) {
     buf_putc(&b, '\0');
     ok(b.data && strstr(b.data, "QF_UFLRA") != NULL,
        "smtlib: a real-sorted VC selects QF_UFLRA");
+    /* An integral Real literal keeps its decimal point: `0` would be an Int
+     * numeral, and a mixed-logic replay would read a different literal. */
+    ok(b.data && strstr(b.data, "(<= 0.0 r)") != NULL,
+       "smtlib: an integral real literal is written with a decimal point");
     buf_free(&b);
 }
 
@@ -544,6 +630,7 @@ int main(void) {
     test_nonlinear_is_unknown(&a);
     test_disjunction(&a);
     test_model_search(&a);
+    test_model_search_sorts(&a);
     test_closed_goal(&a);
     test_hint_search(&a);
     test_smtlib(&a);

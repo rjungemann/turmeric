@@ -232,6 +232,21 @@ them to **uninterpreted function applications** (`VCUFunc`):
    cannot see inside. Abstracting it sets `has_nonlinear` and drives the
    `TUR-W0373` warning.
 
+`(as T e)` is a **builtin conversion, not a measure**, and the encoder
+handles it before the measure path, by what the conversion does to the value:
+`(as float e)` / `(as f64 e)` is `e` itself (the VC's reals are exact, so an
+int converted to float denotes the same number, and keeping `e`'s Int sort
+lets S2 keep its integrality); `(as int e)` / `i64` / `isize` is `e` on an int
+operand and an opaque Int-sorted truncation term on a real one; `f32` (rounds)
+and the narrower or unsigned ints (`i8`..`i32`, `u8`..`u64`, `usize`, which
+wrap) are opaque terms at the target's sort, congruent across occurrences; a
+target outside that set is not encoded (the obligation keeps its runtime
+check). Until 2026-09-29 it fell through to
+the measure encoder, which declared `as` as an abstract measure at the
+position-default sort -- Int -- and the type name as a variable; `(as float
+v)` over a float was then integer-tightened (`t <= 2.75` to `t <= 2`) and a
+satisfiable cube was refuted (fixtures `errors/refine-cast-in-predicate-refuted`, now refuted at compile time with a witness, and `refine-cast-in-predicate` for the opaque truncation).
+
 Treating two occurrences of a call as *the same value* is only valid when the
 callee is **pure**, and purity is **earned, not declared**
 (`refine_collect.h:53`, fixture `refine-measure-euf`): the compiler walks the
@@ -382,6 +397,18 @@ covers `(+ a b)` and `(len v)` uniformly. Three sources of contradiction:
 2. two distinct literals in one class (`3` and `5` can never be equal);
 3. a positive atom and a negated atom that are congruent.
 
+The second source compares literals by **value**, not by term identity: an
+Int literal and a Real literal for one number (`3` and `3.0`) are two
+hash-consed terms, and until 2026-09-29 a class holding both was called a
+conflict. That refuted a satisfiable cube and proved whatever goal sat under
+it -- reachable from source wherever a real-sorted term is equated with an
+int-sorted one (`(= x (to-f n))` with `x = 3.0`, `n = 3`, `to-f` a
+float-returning measure: S3's exchange merges the two classes). The mixed
+compare is conservative, `(double)i == r` reads as "same value", so a rounding
+coincidence past 2^53 costs a proof, never a wrong one (fixture
+`refine-int-real-literal-not-contradictory`, corpus
+`qf_uflira_int_real_literal_{sat,unsat}`).
+
 Terms are interned through a hash index keyed on the hash-cons id, and the
 closure is a signature-table fixpoint: each round buckets every application by
 (operator, symbol, argument roots), so congruent terms meet in one bucket
@@ -461,13 +488,33 @@ assignments over an odometer, and **evaluates `hyps AND (not goal)` exactly**. A
 satisfying assignment is a genuine counterexample, which is the only thing in
 the whole solver allowed to answer `RT_INVALID`, and it does so *with a model*.
 
-Scope is deliberately tiny: integer variables only, at most `MODEL_MAX_VARS = 8`
-of them and -- the cap that actually binds -- at most `MODEL_MAX_EVALS = 131072`
-full evaluations (`n_cand ** n_vars`), and it **declines any VC carrying
-uninterpreted symbols** -- a measure has no fixed interpretation to evaluate, so
-guessing one would be dishonest. The important zero-variable case is a call
-site with literal arguments (`(safe-div 10 0)`): the goal is closed, one
-evaluation decides it.
+Scope is deliberately tiny: at most `MODEL_MAX_VARS = 8` variables and -- the
+cap that actually binds -- at most `MODEL_MAX_EVALS = 131072` full evaluations
+(the product of the per-variable candidate counts), and it **declines any VC
+carrying uninterpreted symbols** -- a measure has no fixed interpretation to
+evaluate, so guessing one would be dishonest. The important zero-variable case
+is a call site with literal arguments (`(safe-div 10 0)`): the goal is closed,
+one evaluation decides it.
+
+Every sort has a candidate set (since 2026-09-29; before that only Int
+variables were searched, so a plainly false float refinement, or one with a
+bool parameter in its predicate, never got a witness). Ints take the literals
+in the VC, their neighbours and a few small values; bools take `false` and
+`true`; reals take the numeric literals with a half-unit either side and a few
+small values, and are **evaluated in `double`** -- which is not an
+approximation of the runtime check but exactly it, so a real witness is a
+value the program would reject (fixture
+`errors/refine-real-and-bool-counterexample`). An assignment that cannot be
+evaluated (overflow, a zero divisor) is skipped rather than ending the search.
+
+The search also **declines a VC whose encoder dropped a hypothesis**
+(`RefineVC.hyps_dropped`: a `:pre` outside the predicate fragment, or a
+call-site argument it could not encode). Dropping is sound for a proof and
+unsound for a refutation -- the dropped fact may exclude the witness -- and a
+`:pre` written with a `let` used to produce a `TUR-E0371` hard error, with a
+witness, on a correct function (fixture
+`refine-dropped-hypothesis-keeps-check`). `TUR_REFINE_STATS=1` prints
+`refine: hypothesis not encoded (<reason>)` for each drop.
 
 ---
 
@@ -616,10 +663,9 @@ refine:   model vars run  1 (of 1 over the cap)
 refine:   model evals out 1 (budget 131072 evaluations)
 ```
 
-`model vars` counts every decline at the width cap. **`model vars run` counts
-the subset a higher cap would actually help** -- a VC over the cap may also
-carry a non-int variable, and the sort gate sits *after* the count gate, so
-raising the limit buys those nothing. `model evals out` counts declines on the
+`model vars` counts every decline at the width cap. `model vars run` counts
+the subset a higher cap would actually help; since every sort has a candidate
+set (2026-09-29) that is every decline, and the two rows read the same. `model evals out` counts declines on the
 budget; every one of those would run at a bigger budget, so it needs no
 `would run` twin. The cost is exponential either way (`n_cand ** n_vars`, and
 `n_cand` is up to 16), which is why the distinction matters rather than being
@@ -931,7 +977,10 @@ in both directions: an external harness can differentially test any solver
 against `tur` without `tur` ever linking one.
 
 The dumped VC is legal SMT-LIB 2.6 for an external solver, not only for
-`tur smt`'s reader: a name that is not a simple symbol is quoted (`|tickm#0|`),
+`tur smt`'s reader: an integral Real literal is written `3.0`, never `3`
+(`%.17g` alone drops the point, and in a mixed `QF_UFLIRA` VC the replay then
+read an Int numeral -- a different literal from the one the encoder built), a
+name that is not a simple symbol is quoted (`|tickm#0|`),
 a reserved or builtin name is renamed (`|match~rw|` -- SMT-LIB makes `|match|`
 the same symbol as `match`, so quoting alone is refused), an uninterpreted
 function's parameter sorts are read off a real application (an abstracted

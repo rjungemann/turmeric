@@ -981,6 +981,18 @@ side of the one-directional invariant: the worst outcome is an obligation the
 solver declines to prove, which keeps the runtime check it would have had
 anyway.
 
+- **[deferred] A `float` refinement is proved over exact reals, checked in `double`.**
+  Where IEEE rounding breaks an identity the prover relies on, the proof is
+  about numbers the program never computes: `(- (+ x 0.1) 0.1)` is proved
+  equal to `x`, and is not, for `x = 0.3`. Monotone shapes (a bound scaled by
+  a positive literal, a sum of non-negatives) hold in both worlds; an
+  equality, a strict inequality at a boundary, or anything that can underflow
+  may not. The counterexample search evaluates reals in `double`, so a
+  witness it reports is one the program would reject; it is the proving side
+  that is optimistic. Fix directions, and the one consistent with the
+  soundness invariant, are in
+  [`docs/reported/float-proofs-assume-exact-reals.md`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/float-proofs-assume-exact-reals.md).
+  Until it is resolved, read a proved float refinement as a claim over reals.
 - **[by design] A callee's entry check is never elided.** See above -- the call-site layer
   reports, it does not remove the callee's guard. Whole-program elision is a
   separate piece of work with real soundness preconditions.

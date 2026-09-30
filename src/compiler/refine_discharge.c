@@ -107,6 +107,9 @@ static void emit_model_note(const RefineObligation *ob, bool closed) {
         int k = b->is_real
               ? snprintf(buf + off, sizeof(buf) - off, "%s%s = %g",
                          i ? ", " : "", b->name, b->rval)
+              : b->is_bool
+              ? snprintf(buf + off, sizeof(buf) - off, "%s%s = %s",
+                         i ? ", " : "", b->name, b->ival ? "true" : "false")
               : snprintf(buf + off, sizeof(buf) - off, "%s%s = %lld",
                          i ? ", " : "", b->name, (long long)b->ival);
         if (k < 0) break;
