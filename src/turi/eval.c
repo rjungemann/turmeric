@@ -366,7 +366,16 @@ static TuriValue native_extern_getenv(TuriEnv *env, TuriValue *args, uint32_t n,
     return turi_nil();
 }
 
-/* printf: supports one argument (%lld for int, %s for cstr, %f/%g for float). */
+/* printf: supports one argument (%lld for int, %s for cstr, %f/%g for float).
+ *
+ * The format is the PROGRAM's, so -Wformat-nonliteral is silenced for this one
+ * function rather than satisfied: that is security-audit-plan S-2, open and
+ * owned by WP3 (a %s against an int argument dereferences it).  Everywhere
+ * else the flag stays an error. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
 static TuriValue native_extern_printf(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1 || args[0].tag != TURI_CSTR || !args[0].as_cstr) return turi_int(0);
@@ -385,6 +394,9 @@ static TuriValue native_extern_printf(TuriEnv *env, TuriValue *args, uint32_t n,
     }
     return turi_int((int64_t)ret);
 }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 /* puts: write the cstr followed by a newline (libc semantics). */
 static TuriValue native_extern_puts(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
@@ -5525,8 +5537,14 @@ static TuriValue ic_format_snprintf_call(TuriEnv *env, const char *fp,
             sn_args[sn_argc++]=val;
         }
     }
-    /* format the result */
+    /* format the result.  The format is the PROGRAM's -- security-audit-plan
+     * S-3, open and owned by WP3 -- so -Wformat-nonliteral is silenced for
+     * this switch only. */
     char result_buf[1024]; int rlen=0;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
     switch(sn_argc){
         case 0: rlen=snprintf(result_buf,sizeof(result_buf),"%s",fmt_str); break;
         case 1: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0]); break;
@@ -5535,7 +5553,14 @@ static TuriValue ic_format_snprintf_call(TuriEnv *env, const char *fp,
         case 4: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2],(long long)sn_args[3]); break;
         default: return turi_nil();
     }
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     if(rlen<0) return turi_nil();
+    /* snprintf returns the length it WOULD have written: past the buffer,
+     * the copy below read beyond result_buf on the stack (security audit
+     * WP5, M-5).  Keep what was formatted, as the truncated C would. */
+    if((size_t)rlen>=sizeof(result_buf)) rlen=(int)sizeof(result_buf)-1;
     char *out=(char*)turi_val_alloc(env, (size_t)rlen+1);
     memcpy(out,result_buf,(size_t)rlen+1);
     TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=out; return rv;
@@ -5865,7 +5890,15 @@ static TuriValue ic_exec_linked_list_print(const char *body,
         while (cur && safety-->0) {
             int64_t pval=cur[pidx];
             char line[256];
+            /* The program's format: S-3, as ic_format_snprintf_call. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
             int llen=snprintf(line,sizeof(line),fmt_str,(long long)pval);
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
             if (llen>0) { fwrite(line,1,(size_t)llen,stdout); fflush(stdout); }
             cur=(int64_t*)(intptr_t)cur[nidx];
         }

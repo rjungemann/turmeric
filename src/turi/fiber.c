@@ -32,6 +32,7 @@
 #include "eval.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -220,8 +221,13 @@ void turi_io_read_async(TuriEnv *env, int fd, int n, TuriFuture *future,
     p->op         = TURI_IO_READ;
     p->future     = future;
     p->fiber      = fiber;
-    p->read_buf   = (char *)malloc((size_t)n + 1);
-    p->read_len   = n;
+    /* `n` was range-checked by native_read_async, the only caller. */
+    p->read_buf   = (char *)malloc((size_t)(n < 0 ? 0 : n) + 1);
+    if (!p->read_buf) {
+        fprintf(stderr, "tur: read-async: out of memory\n");
+        abort();
+    }
+    p->read_len   = n < 0 ? 0 : n;
     p->write_buf  = NULL;
     p->write_len  = 0;
     p->write_cap  = 0;
@@ -756,11 +762,20 @@ static TuriValue native_read_async(TuriEnv *env, TuriValue *args, uint32_t n,
     (void)ud;
     if (n != 2 || args[0].tag != TURI_INT || args[1].tag != TURI_INT)
         return turi_error("read-async: expected (fd :int, n :int)");
+    /* Range-check the byte count BEFORE narrowing it to `int`: a negative
+     * count made `(size_t)bytes + 1` wrap to a tiny malloc and the read below
+     * run SIZE_MAX bytes into it, and 2^32-1 narrowed to -1 on the way
+     * (security audit WP5, M-5).  This native is also reachable from a
+     * capability-denied env (S-1), so the bound is not only hygiene. */
+    if (args[1].as_int < 0 || args[1].as_int > INT_MAX - 1)
+        return turi_errorf("read-async: byte count %lld out of range",
+                           (long long)args[1].as_int);
     int fd    = (int)args[0].as_int;
     int bytes = (int)args[1].as_int;
 
     /* Try non-blocking read first. */
     char *buf = (char *)malloc((size_t)bytes + 1);
+    if (!buf) return turi_error("read-async: out of memory");
     ssize_t r = read(fd, buf, (size_t)bytes);
     if (r >= 0) {
         buf[r] = '\0';

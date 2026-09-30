@@ -597,8 +597,13 @@
   if (!f) return NULL;
   fseek(f, 0, SEEK_END);
   long size = ftell(f);
+  /* ftell answers -1 for a pipe, a FIFO or /dev/stdin: `(size_t)-1 + 1`
+     was a zero-byte malloc and fread then ran the stream into it
+     (security audit WP5, M-5). */
+  if (size < 0) { fclose(f); return NULL; }
   fseek(f, 0, SEEK_SET);
   char *buf = malloc((size_t)size + 1);
+  if (!buf) { fclose(f); return NULL; }
   size_t n = fread(buf, 1, (size_t)size, f);
   fclose(f);
   buf[n] = '\0';

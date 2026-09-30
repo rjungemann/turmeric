@@ -44,9 +44,18 @@
   #fx{Unsafe}
   : int
   ```c
+  /* n * 8 wrapped for a huge n: a tiny block under a huge recorded len, so
+     the `i < len` check in sized-buf-set! passed and wrote past it (security
+     audit WP5, M-5).  A failed allocation is fatal for the same reason. */
+  if (n < 0 || (uint64_t)n > SIZE_MAX / sizeof(int64_t)) {
+    fprintf(stderr, "sized-buf-new: length %lld out of range\n", (long long)n);
+    exit(1);
+  }
   struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
+  if (!b) { fprintf(stderr, "sized-buf-new: out of memory\n"); exit(1); }
   b->len  = n;
   b->data = n > 0 ? (int64_t *)malloc((size_t)n * sizeof(int64_t)) : NULL;
+  if (n > 0 && !b->data) { fprintf(stderr, "sized-buf-new: out of memory\n"); exit(1); }
   return (int64_t)(intptr_t)b;
   ```)
 
@@ -54,9 +63,17 @@
   #fx{Unsafe}
   : int
   ```c
+  /* See __sized-buf-new-raw: calloc refuses the overflow itself, but a NULL
+     data under a huge len was the same wild write. */
+  if (n < 0 || (uint64_t)n > SIZE_MAX / sizeof(int64_t)) {
+    fprintf(stderr, "sized-buf-new-zeroed: length %lld out of range\n", (long long)n);
+    exit(1);
+  }
   struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
+  if (!b) { fprintf(stderr, "sized-buf-new-zeroed: out of memory\n"); exit(1); }
   b->len  = n;
   b->data = n > 0 ? (int64_t *)calloc((size_t)n, sizeof(int64_t)) : NULL;
+  if (n > 0 && !b->data) { fprintf(stderr, "sized-buf-new-zeroed: out of memory\n"); exit(1); }
   return (int64_t)(intptr_t)b;
   ```)
 
@@ -441,12 +458,32 @@
   ```c
   /* alloca: data lives on THIS function's stack frame.
      The buffer is only valid while this function is executing.
-     f must not store the buffer pointer beyond its own return. */
-  int64_t *stack_data = alloca((size_t)n * sizeof(int64_t));
+     f must not store the buffer pointer beyond its own return.
+
+     n is the caller's: a negative one wrapped to a huge alloca, and a large
+     one moved the stack pointer past the guard page (stack clash) -- both a
+     wild stack write (security audit WP5, M-5).  So n is range-checked, and
+     past a small bound the buffer is heap-allocated instead and freed on
+     return, with the same scoped lifetime. */
+  if (n < 0 || (uint64_t)n > SIZE_MAX / sizeof(int64_t)) {
+    fprintf(stderr, "sized-buf-with-stack: length %lld out of range\n", (long long)n);
+    exit(1);
+  }
+  int64_t *heap_data = NULL;
+  int64_t *stack_data;
+  if (n <= 512) {
+    stack_data = alloca((size_t)(n > 0 ? n : 1) * sizeof(int64_t));
+  } else {
+    heap_data = (int64_t *)malloc((size_t)n * sizeof(int64_t));
+    if (!heap_data) { fprintf(stderr, "sized-buf-with-stack: out of memory\n"); exit(1); }
+    stack_data = heap_data;
+  }
   memset(stack_data, 0, (size_t)n * sizeof(int64_t));
   struct { int64_t len; int64_t *data; } stack_buf = { n, stack_data };
   int64_t buf_ptr = (int64_t)(intptr_t)&stack_buf;
-  return ((int64_t(*)(int64_t))(intptr_t)f)(buf_ptr);
+  int64_t result = ((int64_t(*)(int64_t))(intptr_t)f)(buf_ptr);
+  free(heap_data);
+  return result;
   ```)
 ;; ===== Allocation dispatch =====
 ;; Buffers with n <= SIZED_BUF_STACK_THRESHOLD elements use stack allocation
@@ -479,6 +516,12 @@
   ```c
   int64_t threshold = 64;
   int64_t result = 0;
+  /* A negative n took the alloca branch and wrapped to a huge frame; a huge
+     one wrapped the heap branch's n * 8 (security audit WP5, M-5). */
+  if (n < 0 || (uint64_t)n > SIZE_MAX / sizeof(int64_t)) {
+    fprintf(stderr, "sized-buf-compute: length %lld out of range\n", (long long)n);
+    exit(1);
+  }
   if (n <= threshold) {
     /* Stack allocation: no malloc/free overhead */
     int64_t *stack_data = alloca((size_t)n * sizeof(int64_t));
@@ -487,6 +530,7 @@
   } else {
     /* Heap allocation fallback for large n */
     int64_t *heap_data = (int64_t *)malloc((size_t)n * sizeof(int64_t));
+    if (!heap_data) { fprintf(stderr, "sized-buf-compute: out of memory\n"); exit(1); }
     for (int64_t i = 0; i < n; i++) heap_data[i] = i;
     for (int64_t i = 0; i < n; i++) result += heap_data[i];
     free(heap_data);

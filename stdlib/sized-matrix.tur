@@ -31,11 +31,22 @@
   #fx{Unsafe}
   : int
   ```c
+  /* rows * cols wrapped for large dimensions: a small block under huge
+     recorded dims, so sized-matrix-set!'s `r < rows && c < cols` check passed
+     and wrote past it (security audit WP5, M-5). */
+  if (rows < 0 || cols < 0 ||
+      (cols > 0 && (uint64_t)rows > (SIZE_MAX / sizeof(int64_t)) / (uint64_t)cols)) {
+    fprintf(stderr, "sized-matrix-new: dimensions %lldx%lld out of range\n",
+            (long long)rows, (long long)cols);
+    exit(1);
+  }
   struct { int64_t rows; int64_t cols; int64_t *data; } *m = malloc(sizeof(*m));
+  if (!m) { fprintf(stderr, "sized-matrix-new: out of memory\n"); exit(1); }
   m->rows = rows;
   m->cols = cols;
   int64_t n = rows * cols;
   m->data = n > 0 ? (int64_t *)malloc((size_t)n * sizeof(int64_t)) : NULL;
+  if (n > 0 && !m->data) { fprintf(stderr, "sized-matrix-new: out of memory\n"); exit(1); }
   return (int64_t)(intptr_t)m;
   ```)
 ;;; sized-matrix-new-zeroed -- allocate a rows x cols matrix, all zero.
@@ -56,11 +67,20 @@
   #fx{Unsafe}
   : int
   ```c
+  /* See sized-matrix-new. */
+  if (rows < 0 || cols < 0 ||
+      (cols > 0 && (uint64_t)rows > (SIZE_MAX / sizeof(int64_t)) / (uint64_t)cols)) {
+    fprintf(stderr, "sized-matrix-new-zeroed: dimensions %lldx%lld out of range\n",
+            (long long)rows, (long long)cols);
+    exit(1);
+  }
   struct { int64_t rows; int64_t cols; int64_t *data; } *m = malloc(sizeof(*m));
+  if (!m) { fprintf(stderr, "sized-matrix-new-zeroed: out of memory\n"); exit(1); }
   m->rows = rows;
   m->cols = cols;
   int64_t n = rows * cols;
   m->data = n > 0 ? (int64_t *)calloc((size_t)n, sizeof(int64_t)) : NULL;
+  if (n > 0 && !m->data) { fprintf(stderr, "sized-matrix-new-zeroed: out of memory\n"); exit(1); }
   return (int64_t)(intptr_t)m;
   ```)
 ;;; sized-matrix-free -- free a heap-allocated SizedMatrix and its data.

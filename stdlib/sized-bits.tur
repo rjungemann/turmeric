@@ -30,10 +30,19 @@
   #fx{Unsafe}
   : int
   ```c
+  /* n + 7 overflowed near INT64_MAX, and a calloc that failed left NULL
+     bits under a huge len -- sized-bitvec-set!'s `i < len` check then passed
+     and wrote at NULL + i/8 (security audit WP5, M-5). */
+  if (n < 0 || n > INT64_MAX - 7 || (uint64_t)((n + 7) / 8) > SIZE_MAX) {
+    fprintf(stderr, "sized-bitvec-new: length %lld out of range\n", (long long)n);
+    exit(1);
+  }
   struct { int64_t len; uint8_t *bits; } *bv = malloc(sizeof(*bv));
+  if (!bv) { fprintf(stderr, "sized-bitvec-new: out of memory\n"); exit(1); }
   bv->len  = n;
   int64_t nbytes = (n + 7) / 8;
   bv->bits = nbytes > 0 ? (uint8_t *)calloc((size_t)nbytes, 1) : NULL;
+  if (nbytes > 0 && !bv->bits) { fprintf(stderr, "sized-bitvec-new: out of memory\n"); exit(1); }
   return (int64_t)(intptr_t)bv;
   ```)
 ;;; sized-bitvec-free -- free a SizedBitVec and its backing storage.

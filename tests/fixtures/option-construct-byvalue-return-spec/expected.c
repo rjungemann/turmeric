@@ -7969,24 +7969,42 @@ static int64_t length(int64_t l) {
 }
 
 static int64_t grid_hynew(int64_t width, int64_t height) {
-        struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
+        if (width < 0 || height < 0 || width > INT32_MAX || height > INT32_MAX ||
+      (height > 0 && (uint64_t)width > (SIZE_MAX / sizeof(int64_t)) / (uint64_t)height)) {
+    fprintf(stderr, "grid-new: dimensions %lldx%lld out of range\n",
+            (long long)width, (long long)height);
+    exit(1);
+  }
+  struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
+  if (!g) { fprintf(stderr, "grid-new: out of memory\n"); exit(1); }
   g->width  = (int)width;
   g->height = (int)height;
   g->cx = 0;
   g->cy = 0;
-  g->data = calloc((size_t)(width * height), sizeof(int64_t));
+  g->data = calloc((size_t)width * (size_t)height, sizeof(int64_t));
+  if (!g->data && width > 0 && height > 0) { fprintf(stderr, "grid-new: out of memory\n"); exit(1); }
   return (int64_t)(intptr_t)g;
   
 }
 
 static int64_t grid_hyget(int64_t g, int64_t x, int64_t y) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
+    fprintf(stderr, "grid-get: (%lld, %lld) out of bounds in %dx%d\n",
+            (long long)x, (long long)y, grid->width, grid->height);
+    exit(1);
+  }
   return (int64_t)grid->data[(size_t)(y * grid->width + x)];
   
 }
 
 static void grid_hyset_ex(int64_t g, int64_t x, int64_t y, int64_t v) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
+    fprintf(stderr, "grid-set!: (%lld, %lld) out of bounds in %dx%d\n",
+            (long long)x, (long long)y, grid->width, grid->height);
+    exit(1);
+  }
   TUR_REGION_NOTE(v);   /* region-lock-hardening: see vec-push! */
   grid->data[(size_t)(y * grid->width + x)] = v;
   
@@ -8012,12 +8030,23 @@ static void grid_hyfree(int64_t g) {
 }
 
 static int64_t zipper_hynew_hyraw(void * left, int64_t left_len, int64_t focus, void * right, int64_t right_len) {
-        struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
+        if (left_len < 0 || right_len < 0 ||
+      (uint64_t)left_len > SIZE_MAX / sizeof(int64_t) - 1 ||
+      (uint64_t)right_len > SIZE_MAX / sizeof(int64_t) - 1) {
+    fprintf(stderr, "zipper-new: lengths %lld/%lld out of range\n",
+            (long long)left_len, (long long)right_len);
+    exit(1);
+  }
+  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
+  if (!z) { fprintf(stderr, "zipper-new: out of memory\n"); exit(1); }
   z->left_len  = (size_t)left_len;
   z->right_len = (size_t)right_len;
   z->focus     = focus;
   z->left  = z->left_len  > 0 ? malloc(sizeof(int64_t) * z->left_len)  : NULL;
   z->right = z->right_len > 0 ? malloc(sizeof(int64_t) * z->right_len) : NULL;
+  if ((z->left_len && !z->left) || (z->right_len && !z->right)) {
+    fprintf(stderr, "zipper-new: out of memory\n"); exit(1);
+  }
   if (z->left  && left)  memcpy(z->left,  (int64_t*)(intptr_t)left,  sizeof(int64_t) * z->left_len);
   if (z->right && right) memcpy(z->right, (int64_t*)(intptr_t)right, sizeof(int64_t) * z->right_len);
   return (int64_t)(intptr_t)z;

@@ -1747,12 +1747,17 @@ static void dump_node(HamtNode *n, FILE *out, int indent) {
 char *tur_hamt_show(Hamt *m) {
     if (!m || m->count == 0) {
         char *s = (char *)malloc(3);
+        if (!s) return NULL;
         s[0] = '{'; s[1] = '}'; s[2] = '\0';
         return s;
     }
-    /* Each entry: "0x%016llx->0x%016llx" = ~40 chars; plus ", " and {}. */
-    size_t cap = m->count * 48 + 4;
+    /* Each entry: "0x%016llx->0x%016llx" = ~40 chars; plus ", " and {}.
+     * Widen BEFORE multiplying: `count` is a uint32_t, and the 32-bit
+     * product wrapped above ~89M entries into a buffer the loop below then
+     * overran (security audit WP5, M-5). */
+    size_t cap = (size_t)m->count * 48 + 4;
     char *buf = (char *)malloc(cap);
+    if (!buf) return NULL;
     size_t pos = 0;
     buf[pos++] = '{';
     bool first = true;
