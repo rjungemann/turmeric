@@ -1,11 +1,54 @@
 # A second `defn` of the same name in one file passes the front end
 
+**RESOLVED 2026-09-30**, the day after it was filed. Pinned by
+`tests/fixtures/errors/defn-redefine-same-file` (same shape),
+`defn-redefine-same-file-result-type` and `defn-redefine-same-file-arity`
+(the misleading-`println` case). `tests/turi/repl-smoke.sh` also checks that
+redefinition on a later turn still works, and that two defns of one name in
+one turn do not.
+
+## Resolution
+
+The report's first direction: mirror `def`, keyed on the **form** that
+elaborated the binding.
+
+- `Binding` gains `defn_claim` (`src/compiler/expr.h`). It holds the span of
+  the `(defn ...)` form Pass 2 elaborated into a Pass-1 forward declaration.
+  Line 0 means unclaimed.
+- `elab_defn` (`src/compiler/elab_fns.c`, at the forward-declaration check)
+  claims the binding the first time. A later defn of the name from a
+  *different* form in the *same file* now gets
+  `defn: 'f' is already defined`, plus a note at the first definition. It
+  is not exempt as a prior REPL/playground turn (`elab_prior_turn_global`),
+  and not a stdlib load.
+
+Three choices in that rule, and why:
+
+- **Compared by span, not by `Form *`.** The same source form can be
+  elaborated twice: the speculative deferral in `elab_toplevel.c` (a defn
+  that fails is rolled back and re-elaborated after the other forms), or a
+  macro expansion that carries its call site's span. It must still be
+  recognised as itself.
+- **Same file only.** A binding that arrived from an import, an `extern-c`
+  or a native stub has no claim, and keeps exactly the old behaviour. Loading
+  one helper file twice also stays as it was (same offsets). The fix covers
+  what the report describes and nothing wider.
+- **User code only.** A stdlib load (`in_stdlib_load`) keeps its existing
+  rules (MF3). This change does not touch them.
+
+The pass-1 question the report raised (does it collapse the two forward
+declarations into one?) answered itself: it does. Pass 1 skips a name that is
+already in scope, so both defns land on one binding, and Pass 2 is the only
+place that can tell them apart.
+
+## The report as filed
+
 **Severity: low.** It is a user mistake, but no Turmeric diagnostic reports
 it. `tur check` exits 0, `--interpret` silently runs the later definition, and
 `tur build` / `tur jit` fail with raw C-compiler or c2mir errors. The
 same mistake with `def` gets a clean `def: 'x' is already defined`.
 
-**Status: open.** Filed 2026-09-29 while investigating
+Filed 2026-09-29 while investigating
 [aot-compiled-repl-plan](../upcoming/hold/aot-compiled-repl-plan.md). Measured
 on `main` at `c6ba4162`, Release `-DTUR_JIT=ON`.
 

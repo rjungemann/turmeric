@@ -1,0 +1,11 @@
+;; duplicate-defn-in-one-file-reaches-the-c-compiler: a second `defn` of one
+;; name in one file.  Pass 1 declares the name once, so the second form landed
+;; on the binding the first had filled and was taken for a forward
+;; declaration: `check` passed, --interpret ran the later body, and cc failed
+;; on two C functions named `f`.  Now rejected like a duplicate `def`.
+(defn f [] : int 1)
+(defn f [] : int 2)
+
+(defn main [] : int
+  (println (f))
+  0)

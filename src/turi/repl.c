@@ -200,29 +200,6 @@ static void repl_configure_env(TuriEnv *env) {
 }
 
 /* -------------------------------------------------------------------------
- * Paren-balance counter — drives multi-line continuation
- * ---------------------------------------------------------------------- */
-
-/* Count the paren imbalance in a string (positive = more open than close).
- * Ignores parens inside string literals and line comments. */
-static int paren_balance(const char *s) {
-    int depth = 0;
-    bool in_str = false;
-    for (; *s; s++) {
-        if (in_str) {
-            if (*s == '\\' && s[1]) { s++; continue; }
-            if (*s == '"') in_str = false;
-            continue;
-        }
-        if (*s == '"') { in_str = true; continue; }
-        if (*s == ';') break; /* line comment */
-        if (*s == '(' || *s == '[' || *s == '{') depth++;
-        if (*s == ')' || *s == ']' || *s == '}') depth--;
-    }
-    return depth;
-}
-
-/* -------------------------------------------------------------------------
  * E11: Tab-completion generator (editline only)
  * ---------------------------------------------------------------------- */
 
@@ -1393,7 +1370,13 @@ int turi_repl_run(bool watch_mode) {
 
     Buf multi;
     buf_init(&multi);
+    /* Multi-line continuation: brackets the accumulated input leaves open,
+     * and whether it ends inside a string / ```c fence / #| |# comment, both
+     * from reader_open_depth over the WHOLE buffer (see
+     * repl-continuation-counter-misreads-reader-syntax -- a per-line count
+     * read a C body's brackets and semicolons as Lisp). */
     int balance = 0;
+    bool in_lexeme = false;
     bool in_sweet_form = false; /* 2e: accumulating sweet-exp continuation */
 
     for (;;) {
@@ -1403,10 +1386,14 @@ int turi_repl_run(bool watch_mode) {
         if (!line) {
             /* EOF (Ctrl-D) */
             if (multi.len > 0) {
+                /* Say so: with piped input an unfinished form was dropped
+                 * without a word, the same silence the continuation bug
+                 * produced for finished ones. */
                 multi.len = 0;
                 balance = 0;
+                in_lexeme = false;
                 in_sweet_form = false;
-                printf("\n");
+                printf("\n(cancelled)\n");
                 continue;
             }
             printf("\n");
@@ -1415,8 +1402,15 @@ int turi_repl_run(bool watch_mode) {
 
         /* Empty line in multi-line mode:
          * sweet-exp → terminates the form and evaluates;
+         * inside a string / ```c fence / #| |# comment → it is content (a
+         *   blank line between C statements), so keep it;
          * s-expr    → cancels the incomplete expression. */
         if (line[0] == '\0' && multi.len > 0) {
+            if (in_lexeme) {
+                buf_putc(&multi, '\n');
+                free(line);
+                continue;
+            }
             if (in_sweet_form) {
                 /* Blank line terminates the sweet-exp form */
                 in_sweet_form = false;
@@ -1430,6 +1424,7 @@ int turi_repl_run(bool watch_mode) {
             printf("(cancelled)\n");
             multi.len = 0;
             balance = 0;
+            in_lexeme = false;
             free(line);
             continue;
         }
@@ -1726,13 +1721,18 @@ int turi_repl_run(bool watch_mode) {
                 if (multi.len > 0) buf_putc(&multi, '\n');
                 buf_puts(&multi, line);
                 free(line);
+                /* Only for the blank-line rule above: a blank line inside a
+                 * fence or string is content here too, not the terminator. */
+                (void)reader_open_depth(multi.data, multi.len,
+                                        env->reader_type, &in_lexeme);
                 continue; /* show '..' prompt again */
             }
 
-            balance += paren_balance(line);
             if (multi.len > 0) buf_putc(&multi, '\n');
             buf_puts(&multi, line);
             free(line);
+            balance = reader_open_depth(multi.data, multi.len,
+                                        env->reader_type, &in_lexeme);
         }
 
         /* If balanced (or over-closed), evaluate */

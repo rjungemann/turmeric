@@ -1,5 +1,51 @@
 # The REPL's multi-line counter misreads inline-C fences (and other reader syntax)
 
+**RESOLVED 2026-09-30**, the day after it was filed. Pinned by
+`tests/turi/repl-multiline-input.sh` (ctest `tur_repl_multiline_input`):
+24 checks, every repro below plus the blank-line and end-of-input cases.
+Against the pre-fix binary, 16 of the 24 fail.
+
+## Resolution
+
+The REPL no longer counts brackets line by line. After each line it calls
+`reader_open_depth` (`src/compiler/reader.c`, declared in `reader.h`) on the
+**whole** accumulated input. That function lexes the input the way the
+reader does:
+
+- strings across lines, with escapes;
+- ```` ```c ```` fences, opaque up to the next ```` ``` ````, as
+  `read_cblock` reads them;
+- nested `#| |#` comments;
+- `;` comments, and `#;` datum-comment prefixes in every dialect;
+- `#\c` literals, and Scheme `|symbols|`.
+
+The last two go through `sweet_lexeme_end`, the helper the sweet-exp
+preprocessor already uses for the same lexemes, so the two scanners share
+their rules rather than diverging again.
+
+Two behaviours came with it, both from the same investigation:
+
+- **A blank line inside a string, fence or block comment is content.** A
+  blank line between two C statements used to print `(cancelled)`, and the
+  rest of the body was then read as Lisp. `reader_open_depth` reports "input
+  ends inside a lexeme" separately (`*in_lexeme`). The REPL then keeps the
+  blank line, in s-expression and sweet-exp continuation alike. A blank line
+  with only brackets open still cancels, as before.
+- **End of input in the middle of a form prints `(cancelled)`.** With piped
+  input, an unfinished form used to vanish without a word.
+
+Why not the report's preferred direction, asking the reader itself: the
+reader has 38 separate end-of-input ("unterminated ...") error sites and no
+shared end-of-input signal. Classifying its failures as "incomplete" versus
+"malformed" would have been a second approximation of its own. The scanner
+lives beside the sweet preprocessor's and reuses its helpers, which was the
+point of that direction.
+
+Still not modelled: brackets inside a user reader macro
+(`#use-reader-macros`) count as brackets.
+
+## The report as filed
+
 **Severity: medium.** A valid multi-line form either never reaches the
 evaluator or is cut off partway through, depending on what its lines contain.
 With piped input nothing is reported and the process exits 0. Interactively
@@ -7,7 +53,7 @@ the `..` prompt keeps absorbing lines until a blank line prints `(cancelled)`,
 so a form containing, for example, a C `for` loop cannot be entered at the
 prompt at all. Every form below compiles and runs from a file.
 
-**Status: open.** Filed 2026-09-29 while investigating
+Filed 2026-09-29 while investigating
 [aot-compiled-repl-plan](../upcoming/hold/aot-compiled-repl-plan.md), whose
 headline feature (inline-C at the prompt) depends on this. Measured on `main`
 at `c6ba4162`, Release `-DTUR_JIT=ON`, `TUR_NO_AUTO_SPICE=1 tur repl`.

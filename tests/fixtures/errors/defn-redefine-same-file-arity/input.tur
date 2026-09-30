@@ -1,0 +1,10 @@
+;; duplicate-defn-in-one-file-reaches-the-c-compiler: the second definition
+;; changes the arity.  It silently replaced the first for every caller, so the
+;; zero-argument call below failed with an error blaming `println` ("got 1
+;; arg(s), first arg type (fn [int] : int)") instead of naming the duplicate.
+(defn f [] : int 1)
+(defn f [x : int] : int 2)
+
+(defn main [] : int
+  (println (f))
+  0)

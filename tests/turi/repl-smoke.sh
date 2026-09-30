@@ -199,6 +199,20 @@ LS_MONO_OUT="$(repl_out '(show :hello)' '#lang turmeric/neoteric' '(show :hello)
 check_last "monomorphic Show[Sym] survives a reader switch" \
            '=> ":hello"' "$LS_MONO_OUT"
 
+# --- Redefining a defn on a LATER turn replaces it (PS4) ---
+# duplicate-defn-in-one-file-reaches-the-c-compiler made a second defn of one
+# name in one file (or one turn) an error.  An earlier turn's defn is the
+# exception, exactly as for `def`: the prompt's redefine-and-retry workflow.
+REDEF_OUT="$(repl_out '(defn f [] : int 1)' '(f)' '(defn f [] : int 2)' '(f)')"
+check_last "defn redefined on a later turn" '=> 2' "$REDEF_OUT"
+REDEF_ARITY_OUT="$(repl_out '(defn f [] : int 1)' '(f)' '(defn f [x : int] : int x)' '(f 9)')"
+check_last "defn redefined with a new arity on a later turn" '=> 9' "$REDEF_ARITY_OUT"
+# ...but two defns of one name in ONE turn are a duplicate, like two defs.
+SAME_TURN_OUT="$(printf '%s\n' '(defn g [] : int 1) (defn g [] : int 2)' \
+                 | "$REPL" repl 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
+check "two defns of one name in one turn are rejected" \
+      "defn: 'g' is already defined" "$SAME_TURN_OUT"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -9,8 +9,8 @@
 > historical: nothing here is ahead-of-time compiled any more. Move the plan to
 > `docs/upcoming/` when work starts, and point the experiment rows'
 > `plan_path` at it there.
-> **Last Updated:** 2026-09-29
-> **Track:** post-v1, except C0, which is a bug fix that can land any time.
+> **Last Updated:** 2026-09-30
+> **Track:** post-v1. C0, a bug fix, landed 2026-09-30.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
 > **Requires:** `-DTUR_JIT=ON`. It is OFF by default and the release workflow
@@ -54,8 +54,9 @@ and refuses the rest. Piped into `tur repl` on `main` (`c6ba4162`):
 error: eval: inline-C not supported in interpreter mode (function uses a native C implementation; run it with `tur build`/`tur run` instead of `--interpret`)
 ```
 
-The same `c-mix` in a file prints `97` under `tur jit`. Adding a `for` loop to
-the body makes things worse: the REPL cannot even read the form (C0).
+The same `c-mix` in a file prints `97` under `tur jit`. Until C0 landed, adding
+a `for` loop to the body made things worse: the REPL could not even read the
+form.
 
 ## What already exists
 
@@ -84,10 +85,11 @@ the body makes things worse: the REPL cannot even read the form (C0).
 - **Every `.so` carried its own runtime state** (allocator, regions, interned
   symbols, thread-locals). A value made by one generation would be consumed
   by another generation's runtime.
-- **An append-only session cannot redefine.** A second `(def x ...)` in one
-  file is `def: 'x' is already defined`. A second `defn` gets past the front
-  end and fails in the C compiler
-  ([duplicate-defn-in-one-file-reaches-the-c-compiler](../../reported/duplicate-defn-in-one-file-reaches-the-c-compiler.md)).
+- **An append-only session cannot redefine.** A second `(def x ...)` or
+  `(defn f ...)` in one file is an "already defined" error. (Until
+  2026-09-30 the `defn` case got past the front end and failed in the C
+  compiler instead:
+  [duplicate-defn-in-one-file-reaches-the-c-compiler](../../archive/duplicate-defn-in-one-file-reaches-the-c-compiler.md).)
   The draft's registry also looked a `def` up *before* initializing it, so a
   re-`def` would have kept the stale value. The interpreter re-initializes.
 - **A `void *` registry** cannot hold floats or by-value aggregates. Storing
@@ -125,14 +127,15 @@ the ways to reduce it.
 
 ## Design
 
-### C0 -- the prompt must accept a multi-line inline-C form
+### C0 -- the prompt must accept a multi-line inline-C form (LANDED 2026-09-30)
 
-This is a bug fix:
-[repl-continuation-counter-misreads-reader-syntax](../../reported/repl-continuation-counter-misreads-reader-syntax.md).
-Today a `for (...;...;...)` inside a fence keeps the `..` prompt open forever,
-and a `')'` char literal makes the REPL evaluate the form halfway through the
-fence. No gate; land it any time. C1 and C2 cannot be tested at an interactive
-prompt without it.
+This was a bug fix:
+[repl-continuation-counter-misreads-reader-syntax](../../archive/repl-continuation-counter-misreads-reader-syntax.md).
+A `for (...;...;...)` inside a fence kept the `..` prompt open forever, and a
+`')'` char literal made the REPL evaluate the form halfway through the fence.
+The REPL now asks `reader_open_depth` (`src/compiler/reader.c`) whether the
+input is complete, and keeps a blank line typed inside a fence or string.
+C1 and C2 could not be tested at an interactive prompt without it.
 
 ### C1 -- JIT the inline-C `defn`s the interpreter cannot run
 
@@ -330,7 +333,7 @@ Only needed if C2 misses its latency budget. Candidates, safest first:
 
 | Phase | Gate | Lands | Tests |
 | --- | --- | --- | --- |
-| C0 | none (bug fix) | any time | `tests/turi/repl-multiline-input.sh`: every repro in the report, piped, asserting on the evaluated output (the failure exits 0) |
+| C0 | none (bug fix) | landed 2026-09-30 | `tests/turi/repl-multiline-input.sh`: every repro in the report, piped, asserting on the evaluated output (the failure exits 0) |
 | C1 | `repl-jit-inline-c` | post-v1 | `tests/turi/repl-jit-inline-c.sh`: loop and branch bodies, a hoisted `#include`, float/cstr/bool signatures, redefinition dropping the cache, refusal of a body that calls a Turmeric function. It probes the binary for the JIT and PASS-skips without it, like `tests/run-flags.sh`'s `jit-ffi-*` cases |
 | C2 | `compiled-repl` | post-v1 | Transcript diff: run each transcript in a corpus through the interpreted and the compiled REPL and fail on any difference, as the engine triangle does. See the corpus list below. Latency: a new `benchmarks/repl-turn/` |
 | C3, C4 | as C2 | after C2 | as needed |
@@ -348,8 +351,8 @@ The C2 transcript corpus covers:
 
 ## Success criteria
 
-- **C0:** every repro in the report evaluates correctly, both piped and
-  interactive.
+- **C0 (met 2026-09-30):** every repro in the report evaluates correctly,
+  piped and interactive.
 - **C1:** on a JIT build with the experiment on, the `c-mix` example above
   prints `97` at the prompt and under `--interpret`. Unsupported signatures
   still get a clean error.
