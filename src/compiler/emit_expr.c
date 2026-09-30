@@ -8075,6 +8075,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the target TypeKind; tur_panic on mismatch, otherwise unbox.
              * TY2.2: a struct target unboxes by dereferencing the heap pointer. */
             char *inner = emit_value(ctx, body, e->as.any_cast_.value);
+            /* A cast whose target RESOLVES to `any` -- a `(cast x a)` inside a
+             * spec that binds `a := any`, the Saffron witness's instantiation
+             * -- is the identity: the value already is the box, and unboxing
+             * it would hand a `tur_tagged_t` slot the payload word. */
+            if (emit_resolve_type(ctx, e->type).kind == TY_ANY)
+                return inner;
             /* type-of-cast-kind-granularity: `e->type` IS the named target
              * type, so the cast checks per-monomorph identity -- casting an
              * `any` holding a Point to OtherStruct now panics instead of

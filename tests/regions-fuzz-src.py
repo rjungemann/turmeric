@@ -92,6 +92,8 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fuzz_arm  # noqa: E402  (tests/fuzz_arm.py)
 TIMEOUT = 120
 STATS_RE = re.compile(r"region-stats: pushes=(\d+) rewinds=(\d+) retires=(\d+)")
 
@@ -396,6 +398,10 @@ def run_arm(tur, build, src, regions_on):
         env.pop("TUR_REGIONS", None)
     else:
         env["TUR_REGIONS"] = "0"
+        # Arm clang's function-pointer detector on the reference arm
+        # (tests/fuzz_arm.py).  The regions arm keeps its ASan flags: it links
+        # the gcc-built sanitized runtime, and fnsan is clang-only.
+        env, _ = fuzz_arm.armed_env(env)
     try:
         p = subprocess.run([tur, "run", src], capture_output=True, text=True,
                            timeout=TIMEOUT, cwd=REPO, env=env)
@@ -407,6 +413,8 @@ def run_arm(tur, build, src, regions_on):
         stats = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
     if "AddressSanitizer" in p.stderr:
         return Outcome("asan", p.stdout, p.stderr, stats)
+    if p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+        return Outcome("fnptr_trap", p.stdout, p.stderr, stats)
     if p.returncode != 0:
         return Outcome("fail", p.stdout, p.stderr, stats)
     return Outcome("clean", p.stdout, p.stderr, stats)
@@ -432,6 +440,10 @@ def check_program(tur, build, src_text, expected, rewinds, retires):
         if o.status == "asan":
             first = [l for l in o.stderr.splitlines() if "ERROR: AddressSanitizer" in l]
             problems.append(f"{arm}: {first[0] if first else 'AddressSanitizer report'}")
+            continue
+        if o.status == "fnptr_trap":
+            problems.append(f"{arm}: BUG_fnptr_trap -- an indirect call went "
+                            "through a function pointer of the wrong type")
             continue
         if o.status == "fail":
             tail = o.stderr.strip().splitlines()[-1] if o.stderr.strip() else "(no stderr)"
@@ -498,6 +510,8 @@ def main():
 
     if args.save_dir:
         os.makedirs(args.save_dir, exist_ok=True)
+    print("regions-fuzz-src: reference arm " +
+          fuzz_arm.armed_env(dict(os.environ))[1], flush=True)
 
     programs = [gen_program(args.seed, i, args.cases) for i in range(args.n)]
     kinds = {}

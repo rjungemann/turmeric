@@ -819,6 +819,11 @@ static int64_t tur_any_id_hash(const char *key) {
 
 int64_t emit_any_type_id(EmitCtx *ctx, Type t) {
     Type r = ctx ? emit_resolve_type(ctx, t) : t;
+    /* A still-unresolved type variable has no runtime identity.  Its bare
+     * TypeKind (TY_TYVAR) used to go out as the tag, which no consumer
+     * understands; the reserved tag makes TUR_TAG trap instead (see the
+     * TUR_ANY_UNRESOLVED_TAG note in emit_closure_fat_runtime). */
+    if (r.kind == TY_TYVAR) return -1;   /* TUR_ANY_UNRESOLVED_TAG */
     AdtDef *app_def = (r.kind == TY_APP) ? type_adt_app_def(&r) : NULL;
     bool named = (r.kind == TY_ADT && r.as.adt_.def) || app_def != NULL;
     /* any-fn-tag-does-not-discriminate-signatures: a FUNCTION type is interned
@@ -8819,6 +8824,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
          * items, so the forward-decl pass over `items` never records them. */
         emit_sig_record_param_ctype(spec->clone_name, i, spec->n_args, pc);
     }
+    if (spec->n_args == 0) buf_puts(out, "void");   /* prototyped, not `()` */
     buf_puts(out, ");\n");
     emit_sig_record_ret_ctype(spec->clone_name, spec->n_args, _spec_ret);
     free(_spec_ret);
@@ -9525,6 +9531,11 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                 }
             }
         }
+        /* A zero-parameter prototype is `(void)`: `f()` is an UNPROTOTYPED
+         * function type in C99, which clang's -fsanitize=function reports
+         * against every `(T (*)(void))` call of it -- noise that buried the
+         * real mismatched-call findings (tests/fuzz_arm.py). */
+        if (fd->n_params == 0) buf_puts(out, "void");
         buf_puts(out, ");\n");
         emit_sig_record_ret_ctype(fn_name, fd->n_params, _ret_ty);
         free(_ret_ty);
@@ -10150,6 +10161,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
             const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval || heap);
             buf_printf(out, "%s _%u", ctype, fi);
         }
+        if (ctor->n_fields == 0) buf_puts(out, "void");   /* prototyped, not `()` */
         buf_printf(out, ") {\n");
         if (heap) {
             /* malloc the by-value header, store fields inline, return the typed
@@ -10364,7 +10376,24 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     }
     buf_puts(out, "/* IT4: tagged union runtime representation */\n");
     buf_puts(out, "typedef struct { int64_t tag; int64_t val; } tur_tagged_t;\n");
-    buf_puts(out, "#define TUR_TAG(t, v)   ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})\n");
+    /* An `any` box whose tag names no concrete type -- the widen of a value
+     * whose type is still a type VARIABLE (erased-instance-body-tags-a-type-
+     * variable-widened-to-any: `TUR_TAG(36, ...)`, 36 being TY_TYVAR) -- is a
+     * box no consumer understands: `type-of` says "unknown", `is?` answers
+     * false and a program silently takes the wrong branch.  emit_any_type_id
+     * gives such a widen the reserved tag below, and TUR_TAG traps on it, so
+     * the failure is a loud internal error AT the widen instead of a wrong
+     * answer somewhere downstream.  Every other tag is a constant, so the
+     * test folds away (and C allows the call in the unevaluated arm of a
+     * constant initializer). */
+    buf_puts(out, "#define TUR_ANY_UNRESOLVED_TAG (-1)\n");
+    buf_puts(out, "static inline int64_t tur_any_unresolved_tag(void) {\n"
+                  "    fprintf(stderr, \"tur: internal error: a value was widened to `any` "
+                  "while its type was still an unresolved type variable -- the box would "
+                  "carry no usable type tag.  Please report this.\\n\");\n"
+                  "    abort();\n"
+                  "}\n");
+    buf_puts(out, "#define TUR_TAG(t, v)   ((tur_tagged_t){(int64_t)((t) == TUR_ANY_UNRESOLVED_TAG ? tur_any_unresolved_tag() : (t)), (int64_t)(v)})\n");
     buf_puts(out, "#define TUR_UNTAG(x)    ((x).val)\n");
     buf_puts(out, "#define TUR_GETTAG(x)   ((x).tag)\n");
     /* Pointer accessors for tur_tagged_t*.  Inline-C that allocates tagged
@@ -17605,6 +17634,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                     const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
                     buf_printf(&early_file, "%s _%u", ctype, fi);
                 }
+                if (ctor->n_fields == 0) buf_puts(&early_file, "void");
                 buf_printf(&early_file, ") {\n");
                 if (heap) {
                     /* RM3 R2/R4 (docs/archive/regions-plan.md): the THIRD
@@ -18151,6 +18181,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                 if (j > 0) buf_puts(&extern_decls, ", ");
                 buf_printf(&extern_decls, "%s", type_c_name(ec->param_types[j]));
             }
+            if (ec->n_params == 0) buf_puts(&extern_decls, "void");
             buf_puts(&extern_decls, ");\n");
             }
         } else if (e->kind == EX_DEFDYNAMIC) {
@@ -19947,6 +19978,7 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
                 if (j > 0) buf_puts(out, ", ");
                 buf_puts(out, type_c_name(ec->param_types[j]));
             }
+            if (ec->n_params == 0) buf_puts(out, "void");
             buf_puts(out, ");\n");
         } else if (e->kind == EX_DEF) {
             if (def_is_opaque_type_decl(e)) continue;   /* slice 5: type decl, no storage */
@@ -20411,6 +20443,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
                 if (j > 0) buf_puts(&file, ", ");
                 buf_puts(&file, type_c_name(ec->param_types[j]));
             }
+            if (ec->n_params == 0) buf_puts(&file, "void");
             buf_puts(&file, ");\n");
         } else if (e->kind == EX_INLINE_C) {
             /* Already emitted in Pass 1a above. */

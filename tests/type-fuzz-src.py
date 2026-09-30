@@ -159,6 +159,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fuzz_arm  # noqa: E402  (tests/fuzz_arm.py)
 
 TIMEOUT = 90
 
@@ -1236,6 +1238,10 @@ def run_case(tur, path, src):
     # docs/archive/type-fuzz-src-red-on-clang-21.md.
     env.pop("TUR_STDLIB_DIR", None)
     env["ASAN_OPTIONS"] = env.get("ASAN_OPTIONS", "") or "detect_leaks=0"
+    # Arm clang's function-pointer detector (tests/fuzz_arm.py): it sees a
+    # mismatched indirect call whatever shape produced it, which no shape
+    # list can promise.
+    env, _ = fuzz_arm.armed_env(env)
     try:
         chk = subprocess.run([tur, "check", path], capture_output=True,
                              text=True, timeout=TIMEOUT, cwd=REPO, env=env)
@@ -1250,6 +1256,8 @@ def run_case(tur, path, src):
         return Outcome("timeout")
     if p.returncode == 0:
         return Outcome("clean", p.stdout, p.stderr)
+    if p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+        return Outcome("fnptr_trap", p.stdout, p.stderr)
     if p.returncode in (134, 138, 139) or p.returncode < 0:
         return Outcome("crash", p.stdout, p.stderr)
     blob = p.stderr + p.stdout
@@ -1261,10 +1269,12 @@ def run_case(tur, path, src):
 
 
 BUG_OF = {"crash": "BUG_crash", "invalid_c": "BUG_invalid_c",
-          "link": "BUG_link", "other": "BUG_toolchain_other"}
+          "link": "BUG_link", "other": "BUG_toolchain_other",
+          "fnptr_trap": "BUG_fnptr_trap"}
 
 SEAM_BUG_OF = {"crash": "BUG_seam_crash", "invalid_c": "BUG_seam_invalid_c",
-               "link": "BUG_seam_link", "other": "BUG_toolchain_other"}
+               "link": "BUG_seam_link", "other": "BUG_toolchain_other",
+               "fnptr_trap": "BUG_fnptr_trap"}
 
 
 def classify(out, expected, is_seam=False):
@@ -1343,6 +1353,19 @@ def one_case(tur, workdir, idx, seed, max_legs, emit_known,
 # Self-test: prove the classifier sees each failure class.
 # ---------------------------------------------------------------------------
 
+# A program whose emitted C makes one indirect call through a function
+# pointer of the wrong type.  With fnsan armed it must classify as
+# BUG_fnptr_trap; unarmed, the self-test says it cannot check this arm rather
+# than passing it.
+FNPTR_SELF_TEST = (
+    "fn-pointer mismatch trapped",
+    '(defn twice [x : int] : int (* 2 x))\n'
+    '(defn boom [] : int\n'
+    '  ```c\n  double (*d)(double) = (double (*)(double))(void *)twice;\n'
+    '  return (int64_t)d(1.5);\n  ```)\n'
+    '(defn main [] : int (println (twice 1)) (println (boom)) 0)\n',
+    "2\n3\n", "BUG_fnptr_trap")
+
 SELF_TESTS = [
     ("clean pass",
      '(defn f [x : int] : int (+ x 1))\n(defn main [] : int (println (f 4)) 0)\n',
@@ -1397,7 +1420,13 @@ SELF_TESTS = [
 
 def self_test(tur, workdir):
     ok = True
-    for i, row in enumerate(SELF_TESTS):
+    status = fuzz_arm.armed_env(dict(os.environ))[1]
+    rows = list(SELF_TESTS)
+    if "ARMED" in status:
+        rows.append(FNPTR_SELF_TEST)
+    else:
+        print("  SKIP %-28s (%s)" % (FNPTR_SELF_TEST[0], status))
+    for i, row in enumerate(rows):
         label, src, expected, want = row[0], row[1], row[2], row[3]
         is_seam = row[4] if len(row) > 4 else False
         path = os.path.join(workdir, "selftest%d.tur" % i)
@@ -1466,7 +1495,8 @@ def known_probes(tur, workdir):
         expected = row[2] if len(row) > 2 else None
         path = os.path.join(workdir, "known%d.tur" % i)
         out = run_case(tur, path, src)
-        fired = out.kind in ("crash", "invalid_c", "link", "reject", "other")
+        fired = out.kind in ("crash", "invalid_c", "link", "reject", "other",
+                            "fnptr_trap")
         how = out.kind
         # A wrong-ANSWER defect builds and runs cleanly, so out.kind is
         # "clean" and the loop above would call it FIXED on a still-broken
@@ -1559,6 +1589,7 @@ def main():
                  (", seam=%s only" % args.seam) if args.seam
                  else (", seam-frac %.2f" % args.seam_frac
                        if args.seam_frac else ", seams off")))
+        print("type_fuzz_src: " + fuzz_arm.armed_env(dict(os.environ))[1])
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
             futs = {pool.submit(job, i): i for i in range(args.n)}
             done = 0

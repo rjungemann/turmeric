@@ -12359,6 +12359,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * (type vars, unknown) so a valid cast never spuriously panics. */
         TuriValue v = eval_expr(env, frame, e->as.any_cast_.value);
         if (turi_is_error(v) || env_signaled(env)) return v;
+        /* A TYPE-VARIABLE target -- the checked unbox a dynamic instance body
+         * takes under a `: a` result -- names no concrete type here: the
+         * interpreter runs one body for every element type.  Leave the value
+         * exactly as it arrived.  Unwrapping below would hand back a boxed
+         * Sym's bare int word, and `type-of` would then say `int` where the
+         * compiled spec (which resolves `a`) says `Sym`. */
+        if (e->as.any_cast_.target_kind == TY_TYVAR || e->type.kind == TY_TYVAR)
+            return v;
         bool ok = true;
         switch (e->as.any_cast_.target_kind) {
         case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:

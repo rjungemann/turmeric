@@ -5899,6 +5899,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         }
         free((void*)pn);
     }
+    /* `(void)`, not `()`: see the forward declaration in emit_module.c. */
+    if (fd->n_params == 0 && !emit_main_argv) buf_puts(file, "void");
     buf_puts(file, ") {\n");
 
     /* proper-tail-calls T6 (T-D6): a bouncer -- a function whose tail reaches a

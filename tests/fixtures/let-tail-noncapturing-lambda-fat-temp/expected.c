@@ -323,7 +323,12 @@ static void tur_handler_table_free(tur_handler_table_t *t) {
 #define TUR_CONTRACTS_ENABLED 1
 /* IT4: tagged union runtime representation */
 typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
-#define TUR_TAG(t, v)   ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})
+#define TUR_ANY_UNRESOLVED_TAG (-1)
+static inline int64_t tur_any_unresolved_tag(void) {
+    fprintf(stderr, "tur: internal error: a value was widened to `any` while its type was still an unresolved type variable -- the box would carry no usable type tag.  Please report this.\n");
+    abort();
+}
+#define TUR_TAG(t, v)   ((tur_tagged_t){(int64_t)((t) == TUR_ANY_UNRESOLVED_TAG ? tur_any_unresolved_tag() : (t)), (int64_t)(v)})
 #define TUR_UNTAG(x)    ((x).val)
 #define TUR_GETTAG(x)   ((x).tag)
 #define TUR_PTAG(p)     ((p)->tag)
@@ -4974,7 +4979,7 @@ typedef struct tur_adt_Option {
     } as;
 } tur_adt_Option;
 
-static int64_t ctor_Option_None() {
+static int64_t ctor_Option_None(void) {
     return 0;
 }
 
@@ -5385,7 +5390,7 @@ struct tur_adt_Option__fn1_int__int {
 
 #ifndef TUR_FN_tur_adt_Option__fn1_int__int
 #define TUR_FN_tur_adt_Option__fn1_int__int
-static tur_adt_Option__fn1_int__int ctor_Option_None__fn1_int__int() {
+static tur_adt_Option__fn1_int__int ctor_Option_None__fn1_int__int(void) {
     tur_adt_Option__fn1_int__int __r;
     __r.tag = 0;
     memset((char *)&__r + sizeof(__r.tag), 0, offsetof(tur_adt_Option__fn1_int__int, as) - sizeof(__r.tag));
@@ -5440,7 +5445,7 @@ struct tur_adt_Option__Zipper__struct {
 
 #ifndef TUR_FN_tur_adt_Option__Zipper__struct
 #define TUR_FN_tur_adt_Option__Zipper__struct
-static int64_t ctor_Option_None__Zipper__struct() {
+static int64_t ctor_Option_None__Zipper__struct(void) {
     return 0;
 }
 
@@ -5530,7 +5535,7 @@ static void __tur_any_closure_drop(tur_tagged_t __v) {
     TUR_CLOSURE_DROP(TUR_UNTAG(__v));
 }
 
-extern void * tur_hamt_new();
+extern void * tur_hamt_new(void);
 extern void tur_hamt_free(void *);
 extern void * tur_hamt_retain(void *);
 extern int64_t tur_hamt_count(void *);
@@ -5581,14 +5586,14 @@ extern void * tur_hamt_transient(void *);
 extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
-extern int64_t tur_trail_mark_packed();
+extern int64_t tur_trail_mark_packed(void);
 extern bool tur_trail_undo_to_packed(int64_t);
 extern bool tur_trail_commit_to_packed(int64_t);
-extern int64_t tur_trail_level_i64();
-extern int64_t tur_trail_depth_i64();
-extern void tur_trail_pause();
-extern void tur_trail_resume();
-extern void tur_trail_reset();
+extern int64_t tur_trail_level_i64(void);
+extern int64_t tur_trail_depth_i64(void);
+extern void tur_trail_pause(void);
+extern void tur_trail_resume(void);
+extern void tur_trail_reset(void);
 extern void * tur_bt_cell_new(int64_t);
 extern void * tur_bt_lvar_new(int64_t);
 extern void tur_bt_cell_free(void *);
@@ -5708,12 +5713,12 @@ static void * with_hyc_hystring(const char *, void *);
 static const char * from_hyc_hystring(const char *);
 static void * box(int64_t);
 static int64_t unbox(void *);
-static bool contract_hyenabled_qu();
+static bool contract_hyenabled_qu(void);
 static void tur_hycontract_hycheck(bool, const char *);
 static void tur_hycontract_hycheck_hyinv(int64_t, int64_t, const char *);
 static void set_hycontract_hyhandler_ex(int64_t);
 static int64_t with_hycontract_hyhandler(int64_t, int64_t);
-static void * hamt_slnew();
+static void * hamt_slnew(void);
 static void hamt_slfree(void *);
 static void * hamt_slretain(void *);
 static void * hamt_slset(void *, int64_t, void *, void *);
@@ -5750,11 +5755,11 @@ static void * hamt_sltransient(void *);
 static void hamt_sltransient_hyset_ex(void *, int64_t, void *, void *);
 static void hamt_sltransient_hydel_ex(void *, int64_t, void *);
 static void * hamt_slpersistent_ex(void *);
-static int64_t hamt_slautolink_hyhint();
+static int64_t hamt_slautolink_hyhint(void);
 static int64_t cstr_hycompare_un_un(const char *, const char *);
 static int64_t max(int64_t, int64_t);
 static int64_t min(int64_t, int64_t);
-static int64_t map_hynew();
+static int64_t map_hynew(void);
 static void * map_hyhamt(int64_t);
 static int64_t cstr_hyhash(const char *);
 static bool tur_hycstr_hykey_hyeq_qu(const char *, const char *);
@@ -5772,7 +5777,7 @@ static int64_t map_hyget_hydynamic_hyas(void *, int64_t, void *, void *);
 static bool map_hyeq_hyloop(void *, void *, void *, int64_t);
 static bool map_hyeq_hydriver(int64_t, int64_t, int64_t);
 static void tur_hymap_hyhomog_un_un(int64_t, int64_t);
-static int64_t vec_hynew();
+static int64_t vec_hynew(void);
 static int64_t vec_hylen(int64_t);
 static int64_t vec_hyget(int64_t, int64_t);
 static void vec_hypush_ex(int64_t, int64_t);
@@ -5786,7 +5791,7 @@ static int64_t slice_hylen(int64_t);
 static int64_t slice_hyget(int64_t, int64_t);
 static void slice_hyfree(int64_t);
 static bool slice_hyeq_qu(int64_t, int64_t, int64_t);
-static int64_t none();
+static int64_t none(void);
 static bool none_qu(int64_t);
 static int64_t unwrap_hyor_hycarrier(int64_t, int64_t);
 static void option_hyfree(int64_t);
@@ -5821,7 +5826,7 @@ static int64_t zipper_hyfocus_hyraw(int64_t);
 static int64_t zipper_hymove_hyleft_hyraw(int64_t);
 static int64_t zipper_hymove_hyright_hyraw(int64_t);
 static void zipper_hyfree_hyraw(int64_t);
-static int64_t set_hynew();
+static int64_t set_hynew(void);
 static int64_t set_hycount(int64_t);
 static bool set_hyeq_qu(int64_t, int64_t);
 static bool set_hyeq_hycmp_qu(int64_t, int64_t, int64_t);
@@ -5839,14 +5844,14 @@ static int64_t mutmap_hyslot_hykey(int64_t, int64_t);
 static int64_t mutmap_hyslot_hyvalue(int64_t, int64_t);
 static bool mutmap_hyeq_hystorage_qu(void *, void *, int64_t);
 static bool mutmap_hyeq_hyloop(int64_t, int64_t, int64_t, int64_t, int64_t);
-static int64_t json_slnull();
+static int64_t json_slnull(void);
 static int64_t json_slbool(bool);
 static int64_t json_slint(int64_t);
 static int64_t json_slfloat(double);
 static int64_t json_slstring(const char *);
-static int64_t json_slarray_hynew();
+static int64_t json_slarray_hynew(void);
 static int64_t json_slarray_hypush(int64_t, int64_t);
-static int64_t json_slobject_hynew();
+static int64_t json_slobject_hynew(void);
 static int64_t json_slobject_hyput(int64_t, const char *, int64_t);
 static int64_t json_sltype(int64_t);
 static bool json_slget_hybool(int64_t);
@@ -5870,14 +5875,14 @@ static int64_t json_sldecode(const char *);
 static int64_t json_sldecode_hyfile_ex(const char *);
 static void json_hyfree_hynode_hy(int64_t);
 static void json_slfree(int64_t);
-static int64_t schema_slstr();
-static int64_t schema_slint();
-static int64_t schema_slfloat();
-static int64_t schema_slbool();
-static int64_t schema_slnil();
+static int64_t schema_slstr(void);
+static int64_t schema_slint(void);
+static int64_t schema_slfloat(void);
+static int64_t schema_slbool(void);
+static int64_t schema_slnil(void);
 static int64_t schema_slliteral_hyint(int64_t);
 static int64_t schema_slliteral_hystr(const char *);
-static int64_t schema_slobject_hynew();
+static int64_t schema_slobject_hynew(void);
 static int64_t schema_slfield(int64_t, const char *, int64_t);
 static int64_t schema_slarray(int64_t);
 static int64_t schema_sloptional(int64_t);
@@ -5927,26 +5932,26 @@ static void * g_hycell_hynew(int64_t);
 static void g_hycell_hyfree(void *);
 static int64_t g_hyget(void *);
 static void g_hyset_ex(void *, int64_t);
-static int64_t bt_hymark();
+static int64_t bt_hymark(void);
 static bool bt_hyundo_hyto_ex(int64_t);
 static bool bt_hycommit_hyto_ex(int64_t);
-static int64_t bt_hylevel();
-static int64_t bt_hydepth();
-static void untrailed_hybegin();
-static void untrailed_hyend();
+static int64_t bt_hylevel(void);
+static int64_t bt_hydepth(void);
+static void untrailed_hybegin(void);
+static void untrailed_hyend(void);
 static int64_t bt_hyscope(int64_t);
 static int64_t with_hyuntrailed(int64_t);
-static void trail_hyreset_ex();
-static int64_t trail_slautolink_hyhint();
+static void trail_hyreset_ex(void);
+static int64_t trail_slautolink_hyhint(void);
 static int64_t with_hyregion(int64_t);
-static int64_t wrap();
-static void * wrap_hycallable();
-static void * capturing();
-static void * via_hydo();
-static void * direct();
+static int64_t wrap(void);
+static void * wrap_hycallable(void);
+static void * capturing(void);
+static void * via_hydo(void);
+static void * direct(void);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t);
-static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__();
+static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void);
 
 struct __defer_env_162 {int64_t m; };
 
@@ -6959,7 +6964,7 @@ static int64_t unbox(void * p) {
   
 }
 
-static bool contract_hyenabled_qu() {
+static bool contract_hyenabled_qu(void) {
         return true;
 }
 
@@ -6994,7 +6999,7 @@ static int64_t with_hycontract_hyhandler(int64_t h, int64_t body) {
   
 }
 
-static void * hamt_slnew() {
+static void * hamt_slnew(void) {
         return tur_hamt_new();
 }
 
@@ -7142,7 +7147,7 @@ static void * hamt_slpersistent_ex(void * t) {
         return tur_hamt_persistent((void *)(intptr_t)(t));
 }
 
-static int64_t hamt_slautolink_hyhint() {
+static int64_t hamt_slautolink_hyhint(void) {
         /* __tur_autolink__: src/runtime/hamt.c src/runtime/rt_alloc.c -Isrc/runtime */
   return 0;
   
@@ -7177,7 +7182,7 @@ static int64_t min(int64_t x, int64_t y) {
         return __t64;
 }
 
-static int64_t map_hynew() {
+static int64_t map_hynew(void) {
         struct { void *hamt; } *m = malloc(sizeof(*m));
   m->hamt = tur_hamt_new();
   return (int64_t)(intptr_t)m;
@@ -7392,7 +7397,7 @@ static void tur_hymap_hyhomog_un_un(int64_t a, int64_t b) {
         (void)a; (void)b; 
 }
 
-static int64_t vec_hynew() {
+static int64_t vec_hynew(void) {
         struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
   v->len = 0;
@@ -7530,7 +7535,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
   
 }
 
-static int64_t none() {
+static int64_t none(void) {
         return ctor_Option_None();
 }
 
@@ -7965,7 +7970,7 @@ static void zipper_hyfree_hyraw(int64_t z) {
   
 }
 
-static int64_t set_hynew() {
+static int64_t set_hynew(void) {
         struct { void *hamt; } *s = malloc(sizeof(*s));
   s->hamt = tur_hamt_new();
   return (int64_t)(intptr_t)s;
@@ -8292,7 +8297,7 @@ static bool mutmap_hyeq_hyloop(int64_t m1, int64_t m2, int64_t i, int64_t cap, i
         return __t135;
 }
 
-static int64_t json_slnull() {
+static int64_t json_slnull(void) {
         int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 0; n[1] = 0;
   return (int64_t)(intptr_t)n;
@@ -8328,7 +8333,7 @@ static int64_t json_slstring(const char * s) {
   
 }
 
-static int64_t json_slarray_hynew() {
+static int64_t json_slarray_hynew(void) {
         struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
   int64_t *n = malloc(2 * sizeof(int64_t));
@@ -8350,7 +8355,7 @@ static int64_t json_slarray_hypush(int64_t arr, int64_t elem) {
   
 }
 
-static int64_t json_slobject_hynew() {
+static int64_t json_slobject_hynew(void) {
         int64_t *n = malloc(2 * sizeof(int64_t));
   n[0] = 6; n[1] = 0;
   return (int64_t)(intptr_t)n;
@@ -8778,35 +8783,35 @@ static int64_t SCHEMA_unNEVER_1001487;
 static int64_t SCHEMA_unAP_1001488;
 static int64_t SCHEMA_unFIELD_1001489;
 static int64_t SCHEMA_unAP_unFAT_1001490;
-static int64_t schema_slstr() {
+static int64_t schema_slstr(void) {
         int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 0; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   
 }
 
-static int64_t schema_slint() {
+static int64_t schema_slint(void) {
         int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 1; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   
 }
 
-static int64_t schema_slfloat() {
+static int64_t schema_slfloat(void) {
         int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 2; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   
 }
 
-static int64_t schema_slbool() {
+static int64_t schema_slbool(void) {
         int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 3; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
   
 }
 
-static int64_t schema_slnil() {
+static int64_t schema_slnil(void) {
         int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 4; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
@@ -8829,7 +8834,7 @@ static int64_t schema_slliteral_hystr(const char * v) {
   
 }
 
-static int64_t schema_slobject_hynew() {
+static int64_t schema_slobject_hynew(void) {
         int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 6; s[1] = 0; s[2] = 0; s[3] = 0;
   return (int64_t)(intptr_t)s;
@@ -9422,7 +9427,7 @@ static void g_hyset_ex(void * g, int64_t v) {
   
 }
 
-static int64_t bt_hymark() {
+static int64_t bt_hymark(void) {
         return tur_trail_mark_packed();
   
 }
@@ -9437,22 +9442,22 @@ static bool bt_hycommit_hyto_ex(int64_t m) {
   
 }
 
-static int64_t bt_hylevel() {
+static int64_t bt_hylevel(void) {
         return tur_trail_level_i64();
   
 }
 
-static int64_t bt_hydepth() {
+static int64_t bt_hydepth(void) {
         return tur_trail_depth_i64();
   
 }
 
-static void untrailed_hybegin() {
+static void untrailed_hybegin(void) {
         tur_trail_pause();
   
 }
 
-static void untrailed_hyend() {
+static void untrailed_hyend(void) {
         tur_trail_resume();
   
 }
@@ -9491,12 +9496,12 @@ static int64_t with_hyuntrailed(int64_t body) {
         return __t169;
 }
 
-static void trail_hyreset_ex() {
+static void trail_hyreset_ex(void) {
         tur_trail_reset();
   
 }
 
-static int64_t trail_slautolink_hyhint() {
+static int64_t trail_slautolink_hyhint(void) {
         /* __tur_autolink__: src/runtime/trail.c -Isrc/runtime */
   return 0;
   
@@ -9508,7 +9513,7 @@ static int64_t with_hyregion(int64_t body) {
         return __ps_171;
 }
 
-static int64_t wrap() {
+static int64_t wrap(void) {
         void * __t172;
         {
             int64_t _unx_8 = INT64_C(1);
@@ -9518,7 +9523,7 @@ static int64_t wrap() {
         return (int64_t)(intptr_t)__t172;
 }
 
-static void * wrap_hycallable() {
+static void * wrap_hycallable(void) {
         void * __t173;
         {
             int64_t _unx_12 = INT64_C(1);
@@ -9534,7 +9539,7 @@ static void * wrap_hycallable() {
         return __t173;
 }
 
-static void * capturing() {
+static void * capturing(void) {
         void * __t177;
         {
             int64_t x_16 = INT64_C(5);
@@ -9551,7 +9556,7 @@ static void * capturing() {
         return __t177;
 }
 
-static void * via_hydo() {
+static void * via_hydo(void) {
         void * __t181;
         void *__t183 = malloc(sizeof(void *) + 2 * sizeof(int64_t));
         *(void (**)(void *))__t183 = 0;
@@ -9563,7 +9568,7 @@ static void * via_hydo() {
         return __t181;
 }
 
-static void * direct() {
+static void * direct(void) {
         void *__t186 = malloc(sizeof(void *) + 2 * sizeof(int64_t));
         *(void (**)(void *))__t186 = 0;
         int64_t *__t185 = (int64_t *)((char *)__t186 + sizeof(void *));
@@ -9649,7 +9654,7 @@ static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int
         return __ps_201;
 }
 
-static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
+static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
         struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
   v->len = 0;

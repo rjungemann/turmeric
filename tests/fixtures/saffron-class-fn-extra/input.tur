@@ -1,0 +1,35 @@
+#lang saffron
+;; saffron-dyn-witness-fn-arity-defaults-unary: a class method whose extra is
+;; spelled `g : fn` (no arity) and CALLED by the instance body.  In Saffron
+;; that parameter is a function value arriving as `any`, called dynamically.
+;; Compiled, it used to be the int64 poly-fn carrier: the unary case printed
+;; the element's TYPE TAG (4 for a float, 3 for an int), the binary case
+;; panicked at the witness's unary cast, and a lambda passed by direct
+;; dispatch did not compile.  Every line must match `--interpret`.
+(defclass Comb [^t]
+  (comb [ta : (t a) g : fn] : any))
+(defclass Pick [^t]
+  (pick [ta : (t a) g : fn] : a))
+(defdata Two [a] (Two [l : a r : a]))
+(definstance Comb [Two]
+  (comb [t g] (g (.l t) (.r t))))
+(definstance Pick [Two]
+  (pick [t g] (g (.l t))))
+
+;; dispatch on an `any` receiver -- through the dynamic witness
+(defn comb-dyn [x] (.comb x (fn [a b] (+ a b))))
+(defn pick-dyn [x] (.pick x (fn [a] a)))
+;; direct dispatch on a constructed receiver
+(defn comb-direct [x y] (.comb (Two x y) (fn [a b] (- a b))))
+(defn pick-direct [x] (.pick (Two x x) (fn [a] a)))
+
+(defn main []
+  (println (comb-dyn (Two 1.5 2.25)))       ; 3.75, was a panic
+  (println (comb-dyn (Two 10 20)))          ; 30
+  (println (pick-dyn (Two 2.5 0.5)))        ; 2.5, was 4 (the float tag)
+  (println (pick-dyn (Two "hi" "there")))   ; hi
+  (println (type-of (pick-dyn (Two 7 8))))  ; int
+  (println (comb-direct 2.5 1.0))           ; 1.5, did not compile
+  (println (pick-direct 4.25))              ; 4.25
+  (println (type-of (pick-direct "s")))     ; cstr
+  0)

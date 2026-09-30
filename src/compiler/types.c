@@ -2581,6 +2581,8 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             buf_printf(out, "static %s ctor_%s%s(", ctor_ret, csym, suffix.data);
             if (ctor->n_fields == 1)
                 buf_printf(out, "%s _0", niche_ctype);
+            else
+                buf_puts(out, "void");   /* prototyped, not `()` */
             buf_printf(out, ") {\n");
             if (ctor->n_fields == 1) {
                 /* option-niche: the eligibility claim ("this payload's valid
@@ -2610,6 +2612,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             if (fi > 0) buf_puts(out, ", ");
             buf_printf(out, "%s _%u", val_ctype[fi], fi);
         }
+        if (ctor->n_fields == 0) buf_puts(out, "void");   /* prototyped, not `()` */
         buf_printf(out, ") {\n");
         /* CONV-S1 seam 4 (keystone): route every field store through
          * adt_field_member_path so a named-layout monomorph writes `__r->len`
