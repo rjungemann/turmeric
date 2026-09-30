@@ -345,6 +345,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # C-4: build provenance. `id-token: write` mints the OIDC token that
+      # identifies this workflow run to Sigstore; `attestations: write` stores
+      # the signed statement against the repo. Both are scoped to this job --
+      # the build legs never hold either.
+      id-token: write
+      attestations: write
 
     steps:
       - name: Download all artifacts
@@ -358,6 +364,29 @@ jobs:
           cd artifacts
           sha256sum * > sha256sums.txt
           cat sha256sums.txt
+
+      # C-4 in docs/upcoming/security-audit-plan.md. Until now every release
+      # asset was unsigned: sha256sums.txt says the bytes did not change in
+      # transit, but it is served from the same origin as the assets, so it is
+      # integrity and never authenticity. Anyone who can write to the release
+      # page can rewrite both together.
+      #
+      # This binds each asset to the workflow, repository, commit and run that
+      # produced it, signed through Sigstore with a short-lived certificate
+      # minted from the job's OIDC token -- there is no long-lived key for
+      # anyone to lose. A consumer verifies with:
+      #
+      #   gh attestation verify turmeric-<tag>-<target>.tar.gz \
+      #     --repo rjungemann/turmeric
+      #
+      # Placed AFTER the checksums step so sha256sums.txt is attested too, and
+      # BEFORE the release is created so a failure here strands the tag rather
+      # than publishing unattested assets -- the same posture the `if:` above
+      # takes for a failed build leg.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'artifacts/*'
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
