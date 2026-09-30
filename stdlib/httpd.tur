@@ -4234,8 +4234,18 @@
   full[off] = '\0';
   /* Containment: the file, with every symlink resolved, must sit under the
    * root with every symlink resolved.  A symlink inside the root that points
-   * outside it used to be served, because stat and open both follow it. */
-  char rroot[PATH_MAX], rfull[PATH_MAX];
+   * outside it used to be served, because stat and open both follow it.
+   * The buffers are sized without trusting PATH_MAX to exist: `tur jit`'s C
+   * front end supplies its own <limits.h>, which has none, and a bare
+   * PATH_MAX sent every program reaching this function to the cc fallback.
+   * 4096 is at least PATH_MAX wherever the fallback applies (Linux 4096,
+   * macOS 1024). */
+  #ifdef PATH_MAX
+  #define HTTPD_REALPATH_BUF PATH_MAX
+  #else
+  #define HTTPD_REALPATH_BUF 4096
+  #endif
+  char rroot[HTTPD_REALPATH_BUF], rfull[HTTPD_REALPATH_BUF];
   #ifdef _WIN32
   if (!_fullpath(rroot, root, sizeof rroot) || !_fullpath(rfull, full, sizeof rfull)) return 0;
   #else
