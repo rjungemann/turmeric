@@ -11,6 +11,12 @@ on:
   # `release` job is gated on a tag ref, so a dispatch can never publish.
   workflow_dispatch:
 
+# C-5: read by default; the `release` job raises itself to `contents: write`
+# (and, for C-4, to the two scopes build provenance needs).  The build jobs
+# compile and upload artifacts and want nothing beyond read.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build (${{ matrix.target }})
@@ -30,7 +36,7 @@ jobs:
             cmake_extra: ""
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -112,7 +118,7 @@ jobs:
           esac
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: turmeric-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
@@ -134,9 +140,9 @@ jobs:
         shell: bash
         run: git config --global core.autocrlf input
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: UCRT64
           update: true
@@ -260,7 +266,7 @@ jobs:
           esac
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: turmeric-windows-x86_64
           path: ${{ env.ARCHIVE }}
@@ -277,13 +283,15 @@ jobs:
     name: Package docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # genguides.py dates each guide from the commit that added it.
           fetch-depth: 0
 
       - name: Install doc generator dependencies
-        run: python3 -m pip install -r tools/requirements.txt
+        # C-5: --require-hashes.  This job builds the turmeric-docs tarball the
+        # release publishes, so its Python inputs are release inputs.
+        run: python3 -m pip install --require-hashes -r tools/requirements.txt
 
       - name: Build the docs and the docs pack
         run: |
@@ -308,7 +316,7 @@ jobs:
           echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: turmeric-docs
           path: ${{ env.ARCHIVE }}
@@ -340,7 +348,7 @@ jobs:
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           path: artifacts
           merge-multiple: true
@@ -352,7 +360,7 @@ jobs:
           cat sha256sums.txt
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: artifacts/*
           generate_release_notes: true
