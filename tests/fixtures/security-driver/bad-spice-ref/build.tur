@@ -1,0 +1,9 @@
+;;; D-6: `git -C <dest> fetch --depth 1 origin <ref>` had no `--`, so a ref
+;;; beginning with `-` was an OPTION -- shell quoting never touched that.
+(defpackage sec-bad-spice-ref
+  :name "sec-bad-spice-ref"
+  :modules [main]
+  :spices #map{
+    "dep" #map{:url "https://example.invalid/x.git"
+               :ref "--upload-pack=touch PWNED"}
+  })
