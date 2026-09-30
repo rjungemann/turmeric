@@ -64,6 +64,7 @@
 
 #include "justrun.h"
 #include "platform_fs.h"
+#include "buf.h"   /* TUR_PRINTF_FMT */
 
 extern _Bool use_json_output;
 
@@ -399,6 +400,7 @@ static void load_dotenv(const char *dir) {
 /* ================================================================== */
 
 /* Format an unsupported-feature message into a fresh heap string. */
+static char *jr_issuef(const char *fmt, ...) TUR_PRINTF_FMT(1, 2);
 static char *jr_issuef(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -1170,12 +1172,11 @@ static int parse_justfile_in(const char *text, const char *path, JFile *jf,
  * NAME/Justfile, or NAME/.justfile -- just's search order.  Returns a fresh
  * path or NULL. */
 static char *resolve_module_file(const char *dir, const char *name) {
-    static const char *pats[] = { "%s/%s.just", "%s/%s/mod.just",
-                                  "%s/%s/justfile", "%s/%s/Justfile",
-                                  "%s/%s/.justfile" };
-    for (size_t i = 0; i < sizeof(pats) / sizeof(pats[0]); i++) {
+    static const char *sufs[] = { ".just", "/mod.just", "/justfile",
+                                  "/Justfile", "/.justfile" };
+    for (size_t i = 0; i < sizeof(sufs) / sizeof(sufs[0]); i++) {
         char buf[4096];
-        snprintf(buf, sizeof(buf), pats[i], dir, name);
+        snprintf(buf, sizeof(buf), "%s/%s%s", dir, name, sufs[i]);
         struct stat st;
         if (stat(buf, &st) == 0 && S_ISREG(st.st_mode)) return jr_strdup(buf);
     }

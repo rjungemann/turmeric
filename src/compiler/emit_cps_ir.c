@@ -6018,6 +6018,7 @@ static int ctg_member_idx(const CpsTcg *g, const FnDef *fd) {
     return -1;
 }
 
+static void ce_line(CE *ce, const char *fmt, ...) TUR_PRINTF_FMT(2, 3);
 static void ce_line(CE *ce, const char *fmt, ...) {
     indent_buf(ce->out, ce->indent);
     va_list ap; va_start(ap, fmt);
@@ -9105,13 +9106,15 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                         && owning_byvalue_aggregate(fr->operand.type)) {
                         const char *cn = emit_type_c_name(ce->ctx, *fr->operand.type);
                         bool pbp = type_struct_pass_by_ptr(*fr->operand.type);
-                        const char *ec = pbp ? "(const %s *)" : "*(%s *)";
-                        /* env arg is a0 when the hole is on the right, else a1. */
+                        /* env arg is a0 when the hole is on the right, else a1.
+                         * Both casts spelled as literals so -Wformat checks them. */
+                        char *envc = fr->hole_left ? c1 : c0;
+                        size_t envn = fr->hole_left ? sizeof c1 : sizeof c0;
+                        if (pbp) snprintf(envc, envn, "(const %s *)", cn);
+                        else     snprintf(envc, envn, "*(%s *)", cn);
                         if (fr->hole_left) {
                             cc_cast_for_param(ce, fr->call_fn, 0, c0, sizeof c0);
-                            snprintf(c1, sizeof c1, ec, cn);
                         } else {
-                            snprintf(c0, sizeof c0, ec, cn);
                             cc_cast_for_param(ce, fr->call_fn, 1, c1, sizeof c1);
                         }
                     } else {

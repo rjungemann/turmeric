@@ -49,6 +49,18 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# Format-string policing (security-audit-plan WP5).  -Wformat=2 adds
+# -Wformat-nonliteral: a format that is not a string literal cannot be checked,
+# and one the PROGRAM supplies is how the interpreter's printf/snprintf
+# emulation (S-2, S-3) turns a `%s` into a dereference of an integer.  The
+# printf-style wrappers (buf_printf, diag_emit, turi_errorf, ...) carry
+# TUR_PRINTF_FMT, so every call's arguments are checked against its format too.
+# Under TUR_WERROR a new one fails the build; the two open S-2/S-3 sites in
+# turi/eval.c are silenced by name, with the finding named beside them.
+# ---------------------------------------------------------------------------
+set(TUR_FORMAT_WARNINGS -Wformat=2 -Wformat-security)
+
+# ---------------------------------------------------------------------------
 # C standard: gnu11 on Windows, c11 everywhere else.
 #
 # -std=c11 defines __STRICT_ANSI__, and MinGW uses that to hide every
@@ -470,7 +482,7 @@ target_include_directories(tur_core PUBLIC ${TUR_INCLUDE_DIRS})
 
 # Common warning flags
 target_compile_options(tur_core PRIVATE
-    -Wall -Wextra ${TUR_WERROR} -Wno-unused-parameter ${TUR_CSTD} -pedantic -pthread
+    -Wall -Wextra ${TUR_WERROR} ${TUR_FORMAT_WARNINGS} -Wno-unused-parameter ${TUR_CSTD} -pedantic -pthread
     # GCC's -Wformat-truncation flags bounded, memory-safe snprintf path
     # building (pkg.c); clang has no such warning. Keep it non-fatal on GCC.
     $<$<C_COMPILER_ID:GNU>:-Wno-format-truncation>
@@ -526,7 +538,7 @@ if(TUR_JIT)
   target_link_libraries(tur_jit_obj PRIVATE tur_mir)
   target_compile_definitions(tur_jit_obj PRIVATE TUR_HAVE_JIT=1)
   target_compile_options(tur_jit_obj PRIVATE
-      -Wall -Wextra ${TUR_WERROR} -Wno-unused-parameter ${TUR_CSTD} -pthread
+      -Wall -Wextra ${TUR_WERROR} ${TUR_FORMAT_WARNINGS} -Wno-unused-parameter ${TUR_CSTD} -pthread
       $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
       $<$<CONFIG:Release>: -O2 -DNDEBUG>
       $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
@@ -564,7 +576,7 @@ target_include_directories(tur PRIVATE ${TUR_INCLUDE_DIRS})
 
 # Common warning flags
 target_compile_options(tur PRIVATE
-    -Wall -Wextra ${TUR_WERROR} -Wno-unused-parameter ${TUR_CSTD} -pedantic
+    -Wall -Wextra ${TUR_WERROR} ${TUR_FORMAT_WARNINGS} -Wno-unused-parameter ${TUR_CSTD} -pedantic
     $<$<C_COMPILER_ID:GNU>:-Wno-format-truncation>
 )
 
