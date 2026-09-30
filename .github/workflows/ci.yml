@@ -166,7 +166,7 @@ jobs:
       # looks for emcc, and the harness only needs it on PATH at test time.
       - name: Set up Emscripten (for tur_refine_wasm)
         if: matrix.part == 'aux'
-        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
         with:
           # C-5: an exact SDK version, not `latest`.  This is what `latest`
           # resolved to when the pin was taken, so behaviour is unchanged --
@@ -1589,7 +1589,7 @@ jobs:
         run: python3 -m pip install --require-hashes -r tools/requirements.txt
 
       - name: Set up Emscripten
-        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
         with:
           # Pinned to a modern release; bump alongside the wasm build if the
           # emcc surface changes (currently only the -sSTACK_SIZE / INITIAL_MEMORY
