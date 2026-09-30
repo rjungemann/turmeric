@@ -222,7 +222,7 @@ as a handle) and use-after-free are refused the same way, while a genuinely
 minted vector, map, HAMT or string still round-trips. The registry, the
 per-native handle-signature column it reads (`src/turi/native_caps.c`), and the
 one dispatch hook are described in
-[the S-5 report](../reported/turi-sandbox-handles-are-forgeable-integers.md).
+[the S-5 report](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-sandbox-handles-are-forgeable-integers.md).
 
 What is **not** yet closed is the narrower *value-model* channel: an erasing
 ascription on a type variable, and continuation resume, still launder a caller

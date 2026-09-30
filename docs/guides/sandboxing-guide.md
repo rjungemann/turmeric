@@ -417,7 +417,7 @@ handles a constructor of the matching kind actually minted, so a forged integer
 is refused while a real handle round-trips. The per-native handle-kind column
 lives beside this table in `src/turi/native_caps.c`
 (`k_handle_rows[]`); see the
-[S-5 report](../reported/turi-sandbox-handles-are-forgeable-integers.md) for the
+[S-5 report](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-sandbox-handles-are-forgeable-integers.md) for the
 model and for the value-model channel that remains (direction 2).
 
 The operations that are not native functions are checked where they are
