@@ -1,0 +1,23 @@
+;; loop-invariants-plan LI0: `:invariant` goes directly after the condition,
+;; at most once, and needs a predicate.  Anywhere else it would have been an
+;; ignored value statement -- and a misplaced invariant that silently checks
+;; nothing is worse than an error.
+(defn twice [] : int
+  (let [^mut i 0]
+    (while (< i 3) :invariant (>= i 0) :invariant (< i 9)
+      (set! i (+ i 1))))
+  0)
+
+(defn late [] : int
+  (let [^mut i 0]
+    (while (< i 3)
+      (set! i (+ i 1))
+      :invariant (>= i 0)))
+  0)
+
+(defn bare [] : int
+  (let [^mut i 0]
+    (while (< i 3) :invariant))
+  0)
+
+(defn main [] : int 0)

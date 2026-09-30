@@ -1,0 +1,42 @@
+;; loop-invariants-plan LI3, the RE2 shape (ecs-refinement-typed-apis-plan C3):
+;; a bounds-checked slot access inside a `while` over slot indices.  The upper
+;; bound is the loop condition, the lower bound is the written invariant; both
+;; reach the crossing, which --strict-refine requires to discharge.  The same
+;; walk also carries a proved loop's post-fact to a crossing AFTER it, and a
+;; macro that expands to an annotated `while` (the `for-each` lowering) gets
+;; all of it for free.
+(defn slot-get [n : int x : #refine{ j : int | (and (>= j 0) (< j n)) }] : int
+  (* x 10))
+
+(defn walk [n : int] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i n) :invariant (>= i 0)
+      (set! acc (+ acc (slot-get n i)))
+      (set! i (+ i 1)))
+    acc))
+
+;; After the loop: i <= n and not (i < n), so i = n -- a valid slot of n + 1.
+(defn after [n : #refine{ v : int | (> v 0) }] : int
+  (let [^mut i 0]
+    (while (< i n) :invariant (<= i n)
+      (set! i (+ i 1)))
+    (slot-get (+ n 1) i)))
+
+(defmacro for-slots [i n & body]
+  (let [^mut i 0]
+    (while (< i n) :invariant (>= i 0)
+      (do ~@body)
+      (set! i (+ i 1)))))
+
+(defn total [n : int] : int
+  (let [^mut acc 0]
+    (for-slots k n
+      (set! acc (+ acc (slot-get n k))))
+    acc))
+
+(defn main [] : int
+  (println (walk 4))
+  (println (after 3))
+  (println (total 4))
+  0)

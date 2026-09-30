@@ -747,6 +747,101 @@ A refinement alias takes no type parameters in this prototype.
 
 ---
 
+## Loop invariants: `(while c :invariant p ...)`
+
+> **Experimental** -- `--enable=loop-invariants` (TUR-W0060 names the plan).
+> Without the flag the annotation still parses and is validated, and nothing
+> acts on it.
+
+A value a `while` loop builds cannot satisfy a refinement on its own: the
+solver does not infer what a loop does, and never will (the same *checking,
+not inference* rule as everywhere else here). You can **write** what the loop
+maintains:
+
+```turmeric
+(defn count-up [n : int] : #refine{ r : int | (>= r 0) }
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i n) :invariant (and (>= acc 0) (>= i 0))
+      (set! acc (+ acc 1))
+      (set! i   (+ i 1)))
+    acc))
+```
+
+`:invariant` goes directly after the condition, at most once (combine
+predicates with `and`). It must be a pure `bool` -- the same purity gate as any
+contract predicate (`TUR-E0375`).
+
+**It is a contract first.** The invariant is checked on entry and again as the
+last statement of every iteration; a failure panics with
+`Loop invariant failed on entry to the while loop at file.tur:L:C` or
+`Loop invariant not re-established by the body of the while loop at ...`. That
+holds in compiled and interpreted code alike, whether or not anything is
+proved.
+
+**Then it is proved, which removes the checks.** The loop owes the two
+Floyd-Hoare obligations, and each one proved elides its own check:
+
+| obligation | hypotheses | goal |
+|---|---|---|
+| initiation | what reaches the loop: branch conditions, `let` bindings, parameter refinements and `:pre`, an earlier proved loop's post-fact | `p` |
+| preservation | `p`, `c`, and every entry fact about a name the loop never assigns | `p` after one pass of the body |
+
+**And once both are proved, code after the loop can use it**: `p AND (not c)`
+holds on exit, which is what lets `count-up`'s return refinement discharge --
+`acc >= 0` survives the loop. The same fact reaches a call after the loop, and
+inside the body a call sees `p` and `c` (minus whatever the statements before it
+assign), so a bounds-checked access in the body discharges both bounds:
+
+```turmeric
+(defn slot-get [n : int x : #refine{ j : int | (and (>= j 0) (< j n)) }] : int ...)
+
+(while (< i n) :invariant (>= i 0)       ; upper bound: c; lower bound: p
+  (set! acc (+ acc (slot-get n i)))
+  (set! i (+ i 1)))
+```
+
+A body that assigns under `if` / `when` is checked path by path. A macro that
+expands to an annotated `while` (a `for-each` lowering) gets all of this with
+no extra work.
+
+**What a failure tells you.** An invariant false on entry is `TUR-E0371`
+("does not hold on entry"). One the body can break is `TUR-E0371` naming the
+**conjunct** that broke, with the invariant as it reads after the body and,
+for a branching body, the path that breaks it:
+
+```text
+error [TUR-E0371]: the body of the while loop in 'shrink' does not preserve `(>= acc 0)`
+note: the predicate (>= (- acc 1) 0) does not hold for every input here
+note: counterexample: i = -2, acc = 0, n = 0
+note: checked assuming the invariant and the loop condition (< i n) hold at the top of the body
+```
+
+The usual fix is a *stronger* invariant -- the counterexample names the variable
+it says too little about. An obligation the solver cannot decide is
+`TUR-W0372` and keeps its check; `--strict-refine` makes that an error, and a
+loop with **no** `:invariant` generates no obligation at all, so it stays
+silent under strict mode. `TUR_REFINE_STATS=1` prints a line of its own:
+`refine: invariant: 4 proven, 0 unproven, 0 loop(s) declined`.
+
+**What is declined, not approximated.** A loop whose effect on its own
+variables the analysis cannot see is reported (`TUR-W0372`, `is not analysed statically: <reason>`) and keeps
+both checks:
+
+- an assignment through a place (`(set! (.f s) v)`) or to an atom;
+- an early exit (`return`, `?`, a captured continuation) -- `(not c)` would
+  not hold on that path;
+- a nested loop that assigns, or a body `let` that rebinds a name in scope;
+- a variable the loop depends on that is **borrowed** anywhere in the function
+  (`(& x)`, `&mut x` -- a callee can write through it), or **assigned inside a
+  lambda or an effect-handler clause** (a call can then change it with no
+  `set!` in the loop);
+- a field read, a deref, or a mutable global in the invariant or the condition.
+
+Termination is not part of any of this: a loop that never ends with a true
+invariant is perfectly well-typed. See
+[docs/upcoming/loop-invariants-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md).
+
 ## The solver
 
 There is **no heavyweight solver dependency**. The shipped compiler carries a
@@ -1046,6 +1141,9 @@ anyway.
   form, but only when the preceding statements contain no assignment -- an
   assignment can stale a hypothesis about a parameter, and carrying that
   hypothesis across it would prove a function that violates its own refinement.
+  The one exception is a `while` whose `:invariant` is proved (experimental,
+  above): it is stepped over by renaming every earlier fact about a name it
+  assigns to a fresh name, then assuming `p AND (not c)` of the current one.
 - **[incomplete] A call-site crossing sees path conditions from `if`, `let`, and `match`.**
   A crossing is resolved after the whole unit, which is what lets it see every
   callee's refinement; the branches that had to be taken to reach it are
@@ -1069,12 +1167,13 @@ anyway.
   under `x > 0` once "proved" `x != 0` of a value that is zero. Dropping the
   binding's equation is not enough, because the collision is in the name rather
   than the fact, so the whole crossing is skipped.
-- **[deferred] A `while` loop is not analysed.** An accumulator built by a loop is
-  Unknown regardless of what the loop does. There is no invariant *inference*
-  and none is planned -- inferring facts is the thing this design deliberately
-  does not do. A user-written `:invariant`, which would be checking rather than
-  inference, is a plausible future addition but is not in the prototype; see
-  [docs/upcoming/hold/loop-invariants-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/hold/loop-invariants-plan.md).
+- **[prototype] A `while` loop needs a written `:invariant`** -- behind
+  `--enable=loop-invariants`; see *Loop invariants* above.
+  An unannotated loop is still not analysed: an accumulator it builds is
+  Unknown, and there is no invariant *inference* -- inferring facts is the
+  thing this design deliberately does not do. An annotated loop whose body
+  the analysis cannot model is declined (both runtime checks kept), never
+  approximated.
 - **[prototype] No refinements on type parameters or higher-order predicates.** These are
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)

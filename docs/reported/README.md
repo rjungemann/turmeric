@@ -2358,10 +2358,12 @@ answers.
 
 Found while checking the 2026-06-28 draft of
 [aot-compiled-repl-plan](../upcoming/hold/aot-compiled-repl-plan.md) against
-`main`. Both were resolved the next day. The first was that plan's phase C0.
+`main`. The first two were resolved the next day; the first was that plan's
+phase C0. The third was filed 2026-09-30 and is open.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [turi-inline-c-bool-return-tagged-as-int](turi-inline-c-bool-return-tagged-as-int.md) | medium | (filed 2026-09-30, open) A user `defn` with an inline-C body declared `: bool` comes back from the interpreter's simple executor as a bare `TURI_INT`: `println` prints `1`/`0` where the compiled binary prints `true`/`false`, `type-of` via `any` says `int`, and a `match` on it ABORTS with "no arm matched" under `--interpret` and at the REPL. The consumer of `try_exec_simple_inline_c` re-tags ADT/struct results but has no `TY_BOOL` arm; the extern-c thunk and typeclass-dispatch paths already do the right re-tag. Stdlib predicates are shielded by their native overrides, so only user inline-C is affected |
 | ~~[repl-continuation-counter-misreads-reader-syntax](../archive/repl-continuation-counter-misreads-reader-syntax.md)~~ | medium | **RESOLVED 2026-09-30** (archived): the REPL decides whether a multi-line form is finished with `reader_open_depth` (`src/compiler/reader.c`). It lexes the whole accumulated input the way the reader does, so ```` ```c ```` bodies, strings across lines, nested `#\| \|#` comments and `#\(` literals no longer hang the `..` prompt or split a form. A blank line inside a string or fence is kept as content, and end of input mid-form prints `(cancelled)`. Pinned by `tests/turi/repl-multiline-input.sh`. Original row: `paren_balance` counted brackets inside all of those, so a C `for (...;...;...)` swallowed piped input with exit 0 |
 | ~~[duplicate-defn-in-one-file-reaches-the-c-compiler](../archive/duplicate-defn-in-one-file-reaches-the-c-compiler.md)~~ | low | **RESOLVED 2026-09-30** (archived): `elab_defn` records which form claimed a Pass-1 forward declaration (`Binding.defn_claim`). A second `defn` of the name from another form in the same file is now `defn: 'f' is already defined`, with a note at the first. Redefinition on a later REPL turn still works. Pinned by `tests/fixtures/errors/defn-redefine-same-file{,-result-type,-arity}`. Original row: `check` passed, `--interpret` ran the later body, and `build`/`jit` failed with `redefinition of 'f'` |
 ## Found landing reflected-measures-plan RF4 (filed 2026-09-30)

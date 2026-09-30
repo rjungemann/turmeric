@@ -458,6 +458,25 @@ static void emit_hint(const RefineObligation *ob, RefineVC *vc, Arena *a) {
  * Discharge
  * ------------------------------------------------------------------------- */
 
+void refine_note_invariant(bool proven) {
+    if (proven) g_stats.inv_proven++;
+    else        g_stats.inv_unproven++;
+}
+
+void refine_note_invariant_declined(void) { g_stats.inv_declined++; }
+
+void refine_emit_obligation_notes(const RefineObligation *ob, Arena *a,
+                                  bool refuted, bool closed) {
+    if (!ob) return;
+    if (refuted) {
+        emit_predicate_note(ob, closed);
+        emit_model_note(ob, closed);
+    } else {
+        emit_predicate_note(ob, false);
+    }
+    emit_hint(ob, ob->vc, a);
+}
+
 bool refine_discharge_one(RefineObligation *ob, Arena *a) {
     if (!ob) return false;
     if (ob->discharged) return ob->proven;
@@ -544,6 +563,13 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
 
     if (!vc) {
         g_stats.unknown++;
+        if (ob->quiet) {
+            ob->unknown_reason = reason ? reason : "outside the supported fragment";
+            if (stats_enabled())
+                fprintf(stderr, "refine: not encoded (%s): %s\n",
+                        ob->unknown_reason, what);
+            return false;
+        }
         /* RM-B3: an obligation that fails to ENCODE and one the solver could
          * not decide both report as `unknown`, and for a runtime-guarded
          * crossing neither reports at all -- so the reason, which is computed
@@ -693,6 +719,11 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
             }
             ob->counterex = d.model;
             g_stats.invalid++;
+            if (ob->quiet) {
+                ob->refuted        = true;
+                ob->refuted_closed = closed;
+                return false;
+            }
             diag_emit_with_code(DIAG_ERROR, ob->loc, TUR_E0371_REFINE_NOT_PROVED,
                                 "refinement on %s cannot be proved statically", what);
             emit_predicate_note(ob, closed);
@@ -703,6 +734,7 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
 
         default:
             g_stats.unknown++;
+            if (ob->quiet) return false;
             if (g_strict_refine || !ob->runtime_guarded) {
                 /* reflected-measures RF3/RF5: the budget is the likeliest
                  * reason a reflected obligation stays unknown, so say so
@@ -819,6 +851,12 @@ void refine_discharge_all(RefineObligationVec *v, Arena *a) {
             fprintf(stderr,
                     "refine: %u proved by path splitting (%u path probe(s))\n",
                     g_stats.proven_by_path, g_stats.path_probes);
+        if (g_stats.inv_proven || g_stats.inv_unproven || g_stats.inv_declined)
+            fprintf(stderr,
+                    "refine: invariant: %u proven, %u unproven, %u loop(s) "
+                    "declined\n",
+                    g_stats.inv_proven, g_stats.inv_unproven,
+                    g_stats.inv_declined);
         if (g_stats.templates_tried)
             fprintf(stderr,
                     "refine: %u result refinement(s) inferred from %u template "

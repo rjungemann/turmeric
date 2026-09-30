@@ -1531,7 +1531,12 @@ struct Expr {
          * them before each backedge / return instead of treating the whole
          * block as a non-tail position. */
         struct { Expr **items; uint32_t n; bool tail_drop_hoist; }        do_;
-        struct { Expr *cond; Expr *body; }                                 while_;
+        /* `invariant` (loop-invariants-plan LI0): the raw `:invariant <pred>`
+         * Form, kept as a Form exactly as TY_CONTRACT keeps its predicate;
+         * NULL when none was written.  No visitor reads it -- the runtime
+         * checks are injected as ordinary Exprs by elab_while, and the static
+         * discharge works on Forms (LoopInvSite, elab_internal.h). */
+        struct { Expr *cond; Expr *body; const Form *invariant; }          while_;
         /* set-bang-rc-release: `release_old` is stamped by elab_set_rc_release
          * when `target` is an rc-managed binding that owns a continuous +1 from
          * its init to its scope-exit auto-drop.  Overwriting such a binding must

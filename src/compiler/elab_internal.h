@@ -887,6 +887,7 @@ typedef struct Elab {
     /* CT0: Contract keyword symbols */
     const Symbol    *kw_pre;                /* :pre */
     const Symbol    *kw_post;               /* :post */
+    const Symbol    *kw_invariant;          /* :invariant (loop-invariants-plan LI0) */
     const Symbol    *sym_result;            /* "result" -- bound name in :post predicates */
     const Symbol    *sym_tur_contract_check; /* tur-contract-check */
     /* SS0b: Session type constructor symbols (used in type annotations) */
@@ -1059,7 +1060,70 @@ typedef struct Elab {
     const struct Form    **refine_mexp_bodies;
     uint32_t               n_refine_mexps;
     uint32_t               cap_refine_mexps;
+    /* loop-invariants-plan: every `while` that carried a written `:invariant`
+     * under the gate, recorded by elab_while and decided by the enclosing
+     * defn once its whole body is elaborated (li_analyze_loops, elab_fns.c) --
+     * the same deferral the return obligations use, for the same reason: the
+     * facts that reach the loop live in the defn's Form tree, not in the
+     * elaborator's scope at the moment the loop is built. */
+    struct LoopInvSite    *loop_inv_sites;
+    uint32_t               n_loop_inv_sites;
+    uint32_t               cap_loop_inv_sites;
 } Elab;
+
+/* loop-invariants-plan: one `(while c :invariant p body...)`.
+ *
+ * Everything the static side needs is Form-level (the refinement machinery
+ * encodes Forms), so the record keeps the source shape plus two things only
+ * elaboration can know: the SORT of every local in scope at the loop (a name
+ * the refinement env does not declare defaults to Int, which for a float local
+ * would let S2's integer tightening prove a falsehood), and the slots holding
+ * the two injected runtime checks, which a proof overwrites with nil. */
+typedef struct LoopInvSite {
+    const struct Form  *while_form;   /* the whole `(while ...)` call form */
+    const struct Form  *cond;         /* c */
+    const struct Form  *inv;          /* p */
+    uint32_t            body_start;   /* index of the first body form */
+    struct Expr       **entry_check;  /* slot of the entry check, or NULL */
+    struct Expr       **body_check;   /* slot of the re-establishment check, or NULL */
+    Span                span;
+    /* In-scope locals at the loop, innermost binding first, one per name. */
+    const char        **local_names;
+    VCSort             *local_sorts;
+    uint32_t            n_locals;
+    /* An elaboration-time decline (the invariant reads a mutable global...),
+     * or NULL.  Decided where the bindings are still resolvable. */
+    const char         *decline;
+    /* Filled by li_analyze_loops. */
+    bool                analyzed;
+    bool                entry_proven;
+    bool                pres_proven;
+    const char        **assigned;     /* names the loop assigns (valid when proven) */
+    uint32_t            n_assigned;
+} LoopInvSite;
+
+/* elab_while's two calls into the refinement side (elab_fns.c).
+ *
+ * elab_loop_invariant_pred elaborates `pred` in the current scope and checks it
+ * is a pure `bool`, returning NULL (diagnosed) when it is not.
+ * li_contract_check builds `(tur-contract-check pred msg)`, or NULL when the
+ * checker is not bound.  li_register_site records the loop for the defn-level
+ * pass and snapshots the in-scope local sorts. */
+struct Expr *elab_loop_invariant_pred(Elab *e, const struct Form *pred, Span span);
+struct Expr *li_contract_check(Elab *e, struct Expr *pred_e, const char *msg, Span span);
+LoopInvSite *li_register_site(Elab *e, const struct Form *call, const struct Form *cond,
+                              const struct Form *inv, uint32_t body_start, Span span);
+
+/* loop-invariants-plan LI2: decide every loop site recorded since `from`
+ * (initiation + preservation), eliding the runtime checks a proof covers.
+ * Called by elab_defn once its body is elaborated, with the same inputs as the
+ * return-obligation environment, BEFORE the return obligations -- a proved
+ * loop's post-fact is what lets them see past it (LI3). */
+void li_analyze_loops(Elab *e, uint32_t from, Binding **params, uint32_t n_params,
+                      const struct Form **ct_param_preds, const char **ct_param_varnames,
+                      const uint32_t *ct_param_param_idx, uint32_t n_ct_param_preds,
+                      const struct Form *ct_pre_form, const struct Form *body,
+                      const char *fn_name);
 
 /* CT0: a contract type in ANNOTATION position contributes its BASE type to the
  * signature; the predicate rides separately, as an entry check and (under

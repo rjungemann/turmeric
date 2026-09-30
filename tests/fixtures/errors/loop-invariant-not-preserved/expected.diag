@@ -1,0 +1,5 @@
+TUR-E0371
+the body of the while loop in 'shrink' does not preserve `(>= acc 0)`
+the predicate (>= (- acc 1) 0) does not hold for every input here
+the body of the while loop in 'overshoot' does not preserve `(<= x 10)`
+on the path where (not (> x 5))

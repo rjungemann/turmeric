@@ -1,0 +1,15 @@
+;; loop-invariants-plan LI1: an invariant false on entry panics before the
+;; first iteration.  `start` is opaque to the solver (a call it cannot see
+;; through), so the entry obligation is undecided rather than refuted and the
+;; program compiles; the runtime check is what catches it.
+(defn start [n : int] : int (if (> n 100) 0 (- 0 n)))
+
+(defn f [n : int] : int
+  (let [^mut i (start n)]
+    (while (< i n) :invariant (>= i 0)
+      (set! i (+ i 1)))
+    i))
+
+(defn main [] : int
+  (println (f 3))
+  0)

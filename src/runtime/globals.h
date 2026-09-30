@@ -394,6 +394,10 @@ extern bool g_opt_reflected_measures;
  * argument position, rejection reason.  A diagnostic knob, not an
  * experiment (same footing as --dump-write-frames). */
 extern bool g_dump_reflect;
+/* loop-invariants-plan LI0: `--enable=loop-invariants`.  A `while` with a
+ * written `:invariant` always PARSES; this bit gates the acting -- runtime
+ * checks, static discharge, and the post-loop fact. */
+extern bool g_opt_loop_invariants;
 extern bool g_opt_r7rs_gc;
 /* SR2a: a MULTI-VARIANT parametric sum monomorph -- `(Opt2 int)`, `(PRes
  * cstr)`, and above all `(Option int)` / `(Result int cstr)` -- flows by value

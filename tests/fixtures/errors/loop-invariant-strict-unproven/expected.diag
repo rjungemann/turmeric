@@ -1,0 +1,2 @@
+error [TUR-W0372]
+the invariant of the while loop in 'f' could not be proved to be preserved by the body

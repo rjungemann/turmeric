@@ -150,8 +150,9 @@ CMP_OPS = ["<", "<=", ">", ">=", "=", "not="]
 
 
 class Gen:
-    def __init__(self, rng, mode):
+    def __init__(self, rng, mode, only=None):
         self.rng = rng
+        self.only = only            # --only-shape: generate just this shape
         self.mode = mode            # "int" or "float"
         self.helpers = []           # list of (name, kind, arity)
         self.bool_helpers = []      # RM-B: bool-returning, usable as an atom
@@ -950,12 +951,103 @@ class Gen:
                               "(> r %s)" % terms[-1]])
         return params, self._target(params, rp, None, body)
 
+    def shape_loop(self):
+        """loop-invariants-plan LI5: a `while` carrying a written `:invariant`.
+
+        Every rung is built so the property has teeth in both directions:
+
+          * TRUE invariants the analysis should prove, so checks really are
+            elided -- initiation, preservation (straight-line and branching
+            bodies, a body `let`), and the post-loop fact the return
+            refinement then leans on;
+          * SABOTAGED invariants -- off by one, the wrong direction, a random
+            predicate -- which are false at runtime, so the reference leg
+            aborts and the discharge leg must NOT run clean;
+          * bodies the analysis must DECLINE (an early `return`, a `&mut`
+            borrow handed to a writing callee, a lambda cell) whose invariant
+            is false -- if a decline ever regressed into a proof, the elided
+            check is exactly what the soundness property catches.
+
+        The loop counter is always an int; the accumulator has the mode's
+        type, so float mode exercises the sort bookkeeping of the locals."""
+        z = self._zero()
+        T = self.ty
+        one = "1" if self.mode == "int" else "1.5"
+        if self.mode == "int":
+            bound = self.rng.choice(["p", "3", "5", "(+ p 2)"])
+            init = self.rng.choice([z, z, "p", self.lit()])
+            scope = ["acc", "i", "p"]
+        else:
+            bound = self.rng.choice(["3", "5"])
+            init = self.rng.choice([z, z, self.lit()])
+            scope = ["acc"]
+        pre_lines = []
+
+        def step():
+            if self.mode == "int":
+                return self.rng.choice([one, "i", self.lit(), "(* i 2)"])
+            return self.rng.choice([one, self.lit(), "(* %s 2.0)" % one])
+
+        kind = self.rng.choice(["plain", "plain", "when", "if", "let", "twice",
+                                "return", "mutborrow", "lambda"])
+        if kind == "plain":
+            body = "(set! acc (+ acc %s))" % step()
+        elif kind == "when":
+            body = "(when (> i 1) (set! acc (%s acc %s)))" % (
+                self.rng.choice(["+", "-"]), step())
+        elif kind == "if":
+            body = "(if (> acc %s) (set! acc (- acc %s)) (set! acc (+ acc %s)))" % (
+                self.lit(), step(), step())
+        elif kind == "let":
+            body = "(let [d %s] (set! acc (+ acc d)))" % step()
+        elif kind == "twice":
+            body = "(set! acc (+ acc %s))\n      (set! acc (- acc %s))" % (
+                step(), step())
+        elif kind == "return":
+            body = "(when (> i 100) (return acc))\n      (set! acc (- acc %s))" % one
+        elif kind == "mutborrow":
+            pre_lines.append("(defn zap [r : &mut %s] : int (set! @r (- %s %s)) 0)"
+                             % (T, z, one))
+            body = "(zap &mut acc)"
+        else:  # lambda
+            body = "(bump)"
+
+        invs = ["(>= acc %s)" % z,
+                "(and (>= acc %s) (>= i 0))" % z,
+                "(> acc %s)" % z,                 # off by one on entry
+                "(<= acc %s)" % z,                # the wrong direction
+                "(>= acc %s)" % init,
+                self.pred(1, scope)]              # anything goes
+        if self.mode == "int":
+            invs.append("(and (>= i 0) (<= i %s))" % bound)
+        inv = self.rng.choice(invs)
+        ret = self.rng.choice(["(>= r %s)" % z, "(> r %s)" % z, "(<= r %s)" % z]
+                              + (["(>= r p)"] if self.mode == "int" else []))
+        binds = "[^mut acc %s\n        ^mut i   0" % init
+        if kind == "lambda":
+            binds += "\n        bump (fn [] : int (set! acc (- acc %s)) 0)" % one
+        binds += "]"
+        tail = self.rng.choice(["acc", "acc", "(+ acc %s)" % z])
+        target = ("(defn target [p : %s] : #refine{ r : %s | %s }\n"
+                  "  (let %s\n"
+                  "    (while (< i %s) :invariant %s\n"
+                  "      %s\n"
+                  "      (set! i (+ i 1)))\n"
+                  "    %s))" % (T, T, ret, binds, bound, inv, body, tail))
+        return ["p"], "\n\n".join(pre_lines + [target])
+
     def program(self):
         lines = self.gen_helpers(self.rng.randint(1, 3))
         lines += self.gen_bool_helpers(self.rng.randint(1, 2))
         r = self.rng.random()
-        if r < 0.15:
+        if self.only:
+            params, target = getattr(self, "shape_" + self.only)()
+        elif r < 0.07:
             params, target = self.shape_random()
+        elif r < 0.15:
+            # loop-invariants-plan LI5: carved out of shape_random's slice, so
+            # every other shape keeps the population it had.
+            params, target = self.shape_loop()
         elif r < 0.33:
             params, target = self.shape_linear()
         elif r < 0.49:
@@ -1019,10 +1111,15 @@ def run_gate(tur, path, refined):
     emits checks MINUS the elided ones, and the elided set is exactly what the
     miscompile property below is about.
     """
+    # Both experiments are enabled on both legs.
     # reflected-measures: the `^reflect` helper kinds need the gate on both
     # legs (the reference leg still suppresses discharge, so the equations
     # are asserted into VCs that then decide nothing).
-    cmd = [tur, "--enable=reflected-measures", "run", path]
+    # loop-invariants-plan LI5: both legs enable the experiment, so a
+    # generated `:invariant` is ACTED on -- runtime checks in the reference
+    # leg, checks minus proofs in the discharge leg.  Harmless to the other
+    # shapes: each gate only acts where the shape it names is generated.
+    cmd = [tur, "--enable=reflected-measures", "--enable=loop-invariants", "run", path]
     env = dict(os.environ)
     # See the note in tests/type-fuzz-src.py: a shimmed `python3` (mise, asdf)
     # can re-export another install's TUR_STDLIB_DIR inside this process, which
@@ -1083,9 +1180,9 @@ def classify(off, on):
     return "agree_rejected_early"
 
 
-def one_case(tur, workdir, idx, seed, mode):
+def one_case(tur, workdir, idx, seed, mode, only=None):
     rng = random.Random(seed)
-    src = Gen(rng, mode).program()
+    src = Gen(rng, mode, only).program()
     # Gate-off and gate-on need DISTINCT paths: `tur run` derives its
     # intermediate .c name from the source path, so a shared name would let two
     # workers (or the two gates) collide in /tmp/tur-build.
@@ -1175,6 +1272,9 @@ def main():
     ap.add_argument("--save-dir", default=None,
                     help="where to write failing cases (default: a temp dir)")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--only-shape", default=None,
+                    help="generate only this shape (e.g. `loop` -- the "
+                         "loop-invariants-plan LI5 population)")
     args = ap.parse_args()
 
     tur = os.path.abspath(args.tur)
@@ -1200,7 +1300,8 @@ def main():
         mode = args.mode
         if mode == "both":
             mode = "int" if (i % 2 == 0) else "float"
-        return one_case(tur, workdir, i, args.seed * 1000003 + i, mode)
+        return one_case(tur, workdir, i, args.seed * 1000003 + i, mode,
+                        args.only_shape)
 
     print("refine_fuzz_src: %d cases, seed %d, mode %s, %d job(s)"
           % (args.n, args.seed, args.mode, args.jobs))

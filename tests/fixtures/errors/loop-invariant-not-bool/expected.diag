@@ -1,0 +1,1 @@
+while: `:invariant` must be a bool predicate, got int

@@ -1,0 +1,15 @@
+;; loop-invariants-plan LI5: the fuzz population's shape -- an int counter
+;; beside a float accumulator.  `acc = 0.0` refutes `(> acc 0.0)` on entry.
+;; This once "proved" instead: S3 exchanged `i = acc` (both 0) into EUF, which
+;; held the Int 0 and the Real 0.0 as distinct constants, and the manufactured
+;; conflict elided the entry check (fixed by S1 comparing int/real literals by
+;; value; see refine-int-real-literal-not-contradictory).
+(defn target [p : float] : float
+  (let [^mut acc 0.0
+        ^mut i   0]
+    (while (< i 3) :invariant (> acc 0.0)
+      (set! acc (+ acc 1.5))
+      (set! i (+ i 1)))
+    acc))
+
+(defn main [] : int 0)

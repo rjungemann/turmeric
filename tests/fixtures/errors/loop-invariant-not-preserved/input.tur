@@ -1,0 +1,21 @@
+;; loop-invariants-plan LI4: a failed preservation names the CONJUNCT that
+;; broke, at its own span, with what it reads after the body -- here the body
+;; can drive `acc` negative, while `(<= i n)` is preserved fine.  A branching
+;; body also names the path.
+(defn shrink [n : #refine{ v : int | (>= v 0) }] : int
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i n) :invariant (and (<= i n) (>= acc 0))
+      (set! acc (- acc 1))
+      (set! i (+ i 1)))
+    acc))
+
+(defn overshoot [n : int] : int
+  (let [^mut x 0
+        ^mut i 0]
+    (while (< i n) :invariant (and (>= x 0) (<= x 10))
+      (if (> x 5) (set! x (- x 1)) (set! x (+ x 6)))
+      (set! i (+ i 1)))
+    x))
+
+(defn main [] : int 0)
