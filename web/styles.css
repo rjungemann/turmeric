@@ -825,6 +825,13 @@ body.split-dragging * {
     border-left: 2px solid var(--border-str);
 }
 
+/* A :help / :doc / :explain block sits flush with the lines around it. A class
+   rather than an inline style, so the console's persisted transcript (which
+   keeps tags and classes, never attributes) restores it unchanged. */
+.console-output pre.console-flush {
+    margin: 0;
+}
+
 .console-line {
     display: flex;
     gap: var(--spacing-sm);

@@ -1,3 +1,6 @@
+# Content-Security-Policy is NOT written here: vite.config.js (stampCsp) inserts
+# it into the `/*` rule of the built dist/client/_headers from web/csp.js, the
+# one copy shared with the dev server and worker.js.
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp

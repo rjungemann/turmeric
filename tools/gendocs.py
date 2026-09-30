@@ -26,7 +26,8 @@ import packlib  # noqa: E402  (sibling module, path fixed up just above)
 # so guides, API docs and the spices site show the same links in the same order
 # and describe the same page the same way.
 from genguides import (build_page_header, build_sidebar,  # noqa: E402
-                       SIDEBAR_DRAWER_JS)
+                       SIDEBAR_DRAWER_JS_SRC, font_links, script_tag,
+                       sidebar_drawer, write_page_scripts)
 
 
 # ---------------------------------------------------------------------------
@@ -1312,9 +1313,9 @@ details.internal-section summary {
 
 # The drawer itself comes from genguides so the hamburger behaves identically
 # on an API page, a guide and a spice; only the search filter below is specific
-# to these pages.
-_SIDEBAR_TOGGLE_JS = SIDEBAR_DRAWER_JS + """
-<script>
+# to these pages. Both ship as files beside the pages (api-filter.js here), never
+# inline -- see genguides.write_page_scripts.
+_API_FILTER_JS_SRC = """\
   // Search filtering
   document.addEventListener('DOMContentLoaded', function(){
     var input = document.querySelector('.search-input');
@@ -1374,8 +1375,12 @@ _SIDEBAR_TOGGLE_JS = SIDEBAR_DRAWER_JS + """
         input.focus();
       }
     });
-  });
-</script>"""
+  });"""
+
+_API_PAGE_SCRIPTS = {
+    'site-drawer.js': SIDEBAR_DRAWER_JS_SRC,
+    'api-filter.js':  _API_FILTER_JS_SRC,
+}
 
 
 def _sidebar_tip(defn) -> str:
@@ -1404,23 +1409,14 @@ def _html_header(title, css_path='style.css'):
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{html_module.escape(title)}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="preconnect" href="https://cdn.jsdelivr.net">
-<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" onload="this.rel='stylesheet'">
-<link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" onload="this.rel='stylesheet'">
-<link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" onload="this.rel='stylesheet'">
-<noscript>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css">
-</noscript>
+{font_links(indent='')}
 <link rel="stylesheet" href="{css_path}">
 </head>
 <body>
 {build_page_header(active='API Docs', base=SITE_BASE, search='Filter definitions', indent='')}
 <p class="search-no-results">No matching definitions.</p>
-{_SIDEBAR_TOGGLE_JS}
+{sidebar_drawer()}
+{script_tag('api-filter.js', indent='')}
 """
 
 
@@ -2184,6 +2180,7 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
     css_path = out_dir / 'style.css'
     css_path.write_text(CSS, encoding='utf-8')
     print(f'  Wrote {css_path}')
+    write_page_scripts(out_dir, _API_PAGE_SCRIPTS)
 
     # Collect and parse files
     tur_files = collect_tur_files(source)

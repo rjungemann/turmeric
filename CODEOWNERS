@@ -35,8 +35,11 @@
 /src/lsp/                           @rjungemann
 /src/turi/dap.c                     @rjungemann
 
-# The installer the README advertises, and the playground's origin.
+# The installer the README advertises, and the playground's origin: the
+# Content-Security-Policy every page is served under, and where it is applied.
 /web/worker.js                      @rjungemann
+/web/csp.js                         @rjungemann
+/web/vite.config.js                 @rjungemann
 
 # CI holds the release tokens.
 /.github/workflows/                 @rjungemann
