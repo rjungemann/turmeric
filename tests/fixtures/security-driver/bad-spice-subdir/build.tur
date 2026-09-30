@@ -1,0 +1,9 @@
+;;; D-5: `:subdir` names a directory INSIDE the fetched repo, so it must be
+;;; contained.  (`:path` is the deliberate exception -- it points at siblings.)
+(defpackage sec-bad-spice-subdir
+  :name "sec-bad-spice-subdir"
+  :modules [main]
+  :spices #map{
+    "dep" #map{:url "https://example.invalid/x.git" :ref "v1"
+               :subdir "../../../etc"}
+  })

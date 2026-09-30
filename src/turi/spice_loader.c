@@ -110,7 +110,8 @@ const TurSpiceExport *tur_spice_image_find(const TurSpiceImage *img,
 }
 
 /* Forward decls: defined below alongside needs_rebuild. */
-static bool needs_rebuild(const char *root, const char *lib_path);
+static bool needs_rebuild(const char *root, const char *lib_path,
+                          const char *tur_bin);
 static int64_t newest_tur_mtime(const char *dir, int64_t acc);
 
 bool tur_spice_image_is_fresh(const TurSpiceImage *img) {
@@ -120,7 +121,7 @@ bool tur_spice_image_is_fresh(const TurSpiceImage *img) {
     if (img->jit_image) {
         return newest_tur_mtime(img->build_dir, 0) <= img->build_stamp_ns;
     }
-    return !needs_rebuild(img->build_dir, img->lib_path);
+    return !needs_rebuild(img->build_dir, img->lib_path, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -203,13 +204,76 @@ static int64_t newest_tur_mtime(const char *dir, int64_t acc) {
     return acc;
 }
 
-/* Returns true if `lib_path` is missing OR any .tur under `root` is
- * newer than the library. Conservative: treats unreadable libs and
- * stat() failures as "rebuild needed" so the next invocation tries
- * again rather than serving stale code. */
-static bool needs_rebuild(const char *root, const char *lib_path) {
+#ifndef TUR_VERSION
+#define TUR_VERSION "unknown"
+#endif
+
+/* WP2 (D-3): the provenance stamp written beside a cached `.so`.
+ *
+ * `tur repl` walks up from the cwd, AOT-builds the tree it finds and
+ * `dlopen`s the result.  Whether to rebuild was decided by ONE mtime
+ * comparison, so a `.tur-repl-cache/lib-N.so` COMMITTED to a repository with a
+ * timestamp newer than the sources was loaded into the process without a build
+ * -- opening a checkout and typing `tur repl` ran it.  The `.gitignore`
+ * handshake in ensure_cache_dir does nothing against a repo that commits the
+ * object deliberately.
+ *
+ * The fix is to require the library to be one THIS tur built: a sidecar
+ * recording the compiler's version, path, size and mtime.  An attacker can
+ * write the `.so`, and can write the stamp too -- but not one that matches the
+ * `tur` binary on the machine they are attacking, which they do not know.  The
+ * check is "did I build this", not "is this file trustworthy". */
+static void repl_cache_stamp_path(const char *lib_path, char *out, size_t cap) {
+    snprintf(out, cap, "%s.built-by", lib_path);
+}
+
+static void repl_cache_stamp_text(const char *tur_bin, char *out, size_t cap) {
+    struct stat es;
+    long long sz = 0, mt = 0;
+    if (tur_bin && stat(tur_bin, &es) == 0) {
+        sz = (long long)es.st_size;
+        mt = (long long)es.st_mtime;
+    }
+    snprintf(out, cap, "tur-repl-cache-v1\n%s\n%s\n%lld\n%lld\n",
+             TUR_VERSION, tur_bin ? tur_bin : "", sz, mt);
+}
+
+static bool repl_cache_stamp_matches(const char *lib_path, const char *tur_bin) {
+    char sp[4200];
+    repl_cache_stamp_path(lib_path, sp, sizeof(sp));
+    FILE *f = fopen(sp, "rb");
+    if (!f) return false;
+    char have[8192];
+    size_t n = fread(have, 1, sizeof(have) - 1, f);
+    fclose(f);
+    have[n] = '\0';
+    char want[8192];
+    repl_cache_stamp_text(tur_bin, want, sizeof(want));
+    return strcmp(have, want) == 0;
+}
+
+static void repl_cache_stamp_write(const char *lib_path, const char *tur_bin) {
+    char sp[4200];
+    repl_cache_stamp_path(lib_path, sp, sizeof(sp));
+    FILE *f = fopen(sp, "wb");
+    if (!f) return;
+    char txt[8192];
+    repl_cache_stamp_text(tur_bin, txt, sizeof(txt));
+    fputs(txt, f);
+    fclose(f);
+}
+
+/* Returns true if `lib_path` is missing, was not built by THIS tur (D-3), OR
+ * any .tur under `root` is newer than the library. Conservative: treats
+ * unreadable libs and stat() failures as "rebuild needed" so the next
+ * invocation tries again rather than serving stale code. */
+static bool needs_rebuild(const char *root, const char *lib_path,
+                          const char *tur_bin) {
     struct stat lib_st;
     if (stat(lib_path, &lib_st) != 0) return true;
+    /* `tur_bin` NULL means the caller is only asking about SOURCE freshness
+     * (tur_spice_image_is_fresh, for an image already loaded and vetted). */
+    if (tur_bin && !repl_cache_stamp_matches(lib_path, tur_bin)) return true;
     int64_t lib_mtime = stat_mtime_ns(&lib_st);
     int64_t newest = newest_tur_mtime(root, 0);
     return newest > lib_mtime;
@@ -713,11 +777,12 @@ int tur_spice_image_load(const char *start_dir, const char *tur_bin,
     }
 
 subprocess_path:
-    if (needs_rebuild(build_dir, lib_path)) {
+    if (needs_rebuild(build_dir, lib_path, tur_bin)) {
         if (run_build(tur_bin, build_dir, lib_path, manifest_path) != 0) {
             free(root);
             return -1;
         }
+        repl_cache_stamp_write(lib_path, tur_bin);
     }
 
     void *handle = dlopen(lib_path, RTLD_NOW | RTLD_LOCAL);

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.56.3` -- compiled Saffron allocates from the r7rs-gc collector, emitted code frees four more classes of value, CPS mutual tail calls are jumps, and the `linux-aarch64` release binary ships again.
+**Latest release:** `v0.57.0` -- the CPS/effects and `#lang r7rs` runtimes keep their state per thread and per fiber, `#lang r7rs/sweet` reads sweet-expressions over Scheme, loop invariants and reflected measures land behind `--enable=`, and a cold-cache r7rs build is twice as fast.
 
 ## What
 
