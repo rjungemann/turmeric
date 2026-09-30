@@ -34,6 +34,16 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Security audit (filed 2026-09-30)
+
+Findings from [security-audit-plan](../upcoming/security-audit-plan.md) that
+its work packages left open on purpose.  Exploitable findings go through the
+private channel in `SECURITY.md` first, and are only filed here once fixed.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [httpd-residual-request-hardening](httpd-residual-request-hardening.md) | low-medium | WP4's httpd read-through: quadratic header scan, async writes that park forever, no default in-flight cap, a rate limiter that fails open when full, silently-empty oversize request fields, and a Basic-auth doc example that leaks username validity. None is memory corruption; each needs a small fix or a default chosen |
+
 ## Representation gaps (filed 2026-09-09, extended 2026-09-10)
 
 A value whose representation does not fit the one the typed path already chose
