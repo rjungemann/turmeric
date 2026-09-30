@@ -24,9 +24,10 @@ JOBS=${4:-$(nproc 2>/dev/null || echo 2)}
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 BIN="$BUILD/fuzz"
 
-TARGETS="fuzz_lsp_frame fuzz_image_header fuzz_serial_wire fuzz_reader
+# TUR_FUZZ_TARGETS="fuzz_reader fuzz_manifest" narrows the run to those.
+TARGETS=${TUR_FUZZ_TARGETS:-"fuzz_lsp_frame fuzz_image_header fuzz_serial_wire fuzz_reader
 fuzz_manifest fuzz_json_interp fuzz_justfile fuzz_json_compiled
-fuzz_serial_cont fuzz_httpd_head"
+fuzz_serial_cont fuzz_httpd_head"}
 
 for t in $TARGETS; do
     [ -x "$BIN/$t" ] || { echo "run-fuzzers: $BIN/$t missing -- build the TUR_FUZZ tree first" >&2; exit 2; }
@@ -44,30 +45,37 @@ for t in $TARGETS; do
     mkdir -p "$WORK/$t"
     cp "$ROOT/tests/fuzz/seeds/$t/"* "$WORK/$t/" 2>/dev/null || true
 done
+# (Each block runs only when its target is in this run's TARGETS.)
+has() { [ -d "$WORK/$1" ]; }
 i=0
-for f in "$ROOT"/tests/fixtures/*/*.tur "$ROOT"/examples/*/src/*.tur "$ROOT"/stdlib/*.tur; do
-    [ -f "$f" ] || continue
-    i=$((i + 1))
-    { printf '0'; head -c 16384 "$f"; } > "$WORK/fuzz_reader/tree-$i.txt"
-done
-for f in "$ROOT"/tests/fixtures/*/*.tur.sweet "$ROOT"/tests/fixtures/*/*.sweet; do
-    [ -f "$f" ] || continue
-    i=$((i + 1))
-    { printf '3'; head -c 16384 "$f"; } > "$WORK/fuzz_reader/tree-$i.txt"
-done
-find "$ROOT/tests" "$ROOT/examples" -name build.tur -o -name build.tur.sweet 2>/dev/null |
-while read -r f; do
-    i=$((i + 1))
-    case "$f" in *.sweet) sel=s ;; *) sel=p ;; esac
-    { printf '%s' "$sel"; cat "$f"; } > "$WORK/fuzz_manifest/tree-$i.txt"
-done
+if has fuzz_reader; then
+    for f in "$ROOT"/tests/fixtures/*/*.tur "$ROOT"/examples/*/src/*.tur "$ROOT"/stdlib/*.tur; do
+        [ -f "$f" ] || continue
+        i=$((i + 1))
+        { printf '0'; head -c 16384 "$f"; } > "$WORK/fuzz_reader/tree-$i.txt"
+    done
+    for f in "$ROOT"/tests/fixtures/*/*.tur.sweet "$ROOT"/tests/fixtures/*/*.sweet; do
+        [ -f "$f" ] || continue
+        i=$((i + 1))
+        { printf '3'; head -c 16384 "$f"; } > "$WORK/fuzz_reader/tree-$i.txt"
+    done
+fi
+if has fuzz_manifest; then
+    find "$ROOT/tests" "$ROOT/examples" -name build.tur -o -name build.tur.sweet 2>/dev/null |
+    while read -r f; do
+        i=$((i + 1))
+        case "$f" in *.sweet) sel=s ;; *) sel=p ;; esac
+        { printf '%s' "$sel"; cat "$f"; } > "$WORK/fuzz_manifest/tree-$i.txt"
+    done
+fi
 find "$ROOT/tests" "$ROOT/examples" -name '*.json' -size -64k 2>/dev/null |
 while read -r f; do
     i=$((i + 1))
-    cp "$f" "$WORK/fuzz_json_interp/tree-$i.json"
-    cp "$f" "$WORK/fuzz_json_compiled/tree-$i.json"
+    for t in fuzz_json_interp fuzz_json_compiled; do
+        has $t && cp "$f" "$WORK/$t/tree-$i.json"
+    done
 done
-[ -f "$ROOT/Justfile" ] && cp "$ROOT/Justfile" "$WORK/fuzz_justfile/repo-Justfile"
+has fuzz_justfile && [ -f "$ROOT/Justfile" ] && cp "$ROOT/Justfile" "$WORK/fuzz_justfile/repo-Justfile"
 
 run_one() {
     t=$1

@@ -19,7 +19,7 @@
 > with fixtures.  Ten libFuzzer targets now live in `tests/fuzz` and run
 > nightly.  Their first pass found two defects, and both are fixed.  WP4's
 > research pass is recorded in section 2b: re-grades, the survey line numbers
-> that had moved, and eleven findings the survey did not have.
+> that had moved, and fifteen findings the survey did not have.
 > **Type:** Security / process / tooling
 > **Depends on:** nothing that is not already in the tree. The Debug build's
 > ASan+UBSan (`CMakeLists.txt:33`), the four differential fuzzers
@@ -372,8 +372,8 @@ httpd, from a full read of `stdlib/httpd.tur`:
 - **Basic auth.** A decoded NUL truncated the credentials the verifier saw.
 - **Multipart.** A repeated part header leaked the earlier value.
 
-The compiler's own front door, found by the new fuzz targets in their first
-60-second pass:
+The compiler's own front door, found by the new fuzz targets. The first two
+came from the 60-second pass and the rest from the 10-minute passes:
 
 - **The reader `free()`d arena memory.** `read_neoteric_bracket`
   (`src/compiler/reader.c:2988`) called `free(call_items)` on an
@@ -383,6 +383,28 @@ The compiler's own front door, found by the new fuzz targets in their first
   build. T1, high, now fixed. Fixture `errors/neoteric-bracket-call-reads`.
 - **A Justfile parser leak.** `parse_recipe_header` leaked the parameters it
   had parsed when the line turned out not to be a recipe header. Low; fixed.
+- **A Justfile parser hang.** In a dependency with arguments, `(a #` never
+  terminated: `parse_value` consumes nothing at a `#` or `\r`, and the argument
+  loop did not stop on either. The loop spun forever and allocated an empty
+  argument on every turn, so `tur run --list` on such a Justfile hung until it
+  ran out of memory. T1, medium (denial of service); fixed. Pinned by a case
+  in `tests/run-tur-run-attrs.sh`.
+- **Stack exhaustion in the Justfile evaluator.** Parentheses and call
+  arguments recurse through `re_expr`, so an assignment nested a few thousand
+  deep overflowed the C stack while the file was only being parsed, and
+  `tur run --list` crashed. T1, medium; fixed with a nesting cap of 256
+  ("expression nested too deeply"). Pinned in `tests/run-tur-run-attrs.sh`.
+- **Manifest reader leaks.** A repeated key leaked the earlier value, both for
+  scalar keys (`:version`, `:description`, `:build-dir`, `:engine`, ...) and
+  for vector keys (`:exports`, `:authors`, `:spices`, `:build-opts`, ...).
+  Only `:name` freed before overwriting. Each slot now releases its earlier
+  value through the helpers `pkg_manifest_free` also uses, so last-wins is
+  unchanged. Separately, the `#lang` trailing-token rejection (TUR-E0330)
+  returned without `symtab_free`. Low; fixed.
+- **Undefined behaviour on an empty sweet-exp file.** `sweet_preprocess`
+  called `memcpy(dst, NULL, 0)` when the preprocessed text was empty. It is
+  harmless in practice, but UBSan stops on it and a compiler may exploit it.
+  Fixed.
 
 ### Deliberately not done here
 
@@ -609,10 +631,35 @@ leaves behind run nightly under ASan and UBSan. Its research pass is section
   committed as a seed:
   - the reader's arena `free()` (T1, high; fixture
     `errors/neoteric-bracket-call-reads`)
+  - the Justfile `(dep #` hang (T1, medium; `tests/run-tur-run-attrs.sh`)
+  - Justfile expression stack exhaustion (T1, medium; same script)
   - the Justfile parameter leak
+  - the manifest repeated-key leaks, for scalar and vector keys, and the
+    `#lang` rejection's symbol-table leak
+  - the empty-sweet-exp `memcpy(NULL, 0)`
 - **Exit.**
-  - Every fixed bug has a fixture with the crashing input, or a unit test.
-  - Every target runs clean for 10 minutes under ASan and UBSan: EXIT_RESULTS.
+  - **Tests for the fixes.** Every fixed memory-safety bug and the hang have
+    a fixture, a unit test or a harness case that exercises the input. Three
+    of the lesser fixes are covered only by the fuzz seeds and the replay:
+    the two leaks and the TSER allocation caps. One has no dedicated test at
+    all: the Basic-auth NUL refusal, because `fuzz_httpd_head` does not
+    drive the verifier.
+  - **The 10-minute runs.** Each target ran for 600 s under ASan and UBSan
+    on a 4-core box, four at a time, and all ten finished clean.
+    - The first 10-minute pass stopped `fuzz_manifest` and `fuzz_justfile`
+      on findings, and the reruns found more. Each finding was fixed and the
+      target rerun, until both went the full 600 s clean.
+    - Executions in 600 s:
+      - `fuzz_serial_cont` 182M
+      - `fuzz_image_header` 39M
+      - `fuzz_serial_wire` 31M
+      - `fuzz_httpd_head` 18M
+      - `fuzz_json_compiled` 8.9M
+      - `fuzz_lsp_frame` 4.5M
+      - `fuzz_json_interp` 4.0M
+      - `fuzz_reader` 1.1M
+      - `fuzz_manifest` 1.8M, in its final clean run
+      - `fuzz_justfile` 1.0M, in its final clean run
 - **Decisions this package took, for the author to overrule:**
   - **The httpd bind default moved to loopback.** It is the one change a
     deployed server notices. The plan asked for it, the opt-in is one call,

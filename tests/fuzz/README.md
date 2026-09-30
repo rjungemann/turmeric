@@ -60,6 +60,9 @@ ctest --test-dir build-fuzz -R '^fuzz_'
 # every target, 60 s each, nproc at a time; findings under fuzz-findings/
 bash tests/fuzz/run-fuzzers.sh build-fuzz 60 fuzz-findings
 
+# only some targets
+TUR_FUZZ_TARGETS="fuzz_reader fuzz_manifest" bash tests/fuzz/run-fuzzers.sh build-fuzz 600
+
 # one target, by hand
 build-fuzz/fuzz/fuzz_reader tests/fuzz/seeds/fuzz_reader -max_total_time=300
 ```

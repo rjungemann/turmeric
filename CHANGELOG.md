@@ -25,6 +25,10 @@ All notable changes to Turmeric are documented here.
     - It fixes a stack overrun in `httpd-set-cookie!`.
   - The reader no longer `free()`s arena memory on `f[x]` in a neoteric or
     sweet-exp file. That was a crash in `tur check` and the language server.
+  - `tur run --list` no longer hangs, allocating without bound, on a Justfile
+    dependency argument list cut off by a comment (`(dep #`). It also no longer
+    overflows the stack on deeply nested parentheses: nesting past 256 is a
+    parse error.
   - The parsers now run nightly under libFuzzer (`tests/fuzz`,
     `-DTUR_FUZZ=ON`).
 

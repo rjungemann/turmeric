@@ -5357,7 +5357,9 @@ static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
     if (cur < len) emit_copy_(&emit, src, cur, len - cur);
 
     char *result = (char *)arena_alloc(arena, b.len + 1);
-    memcpy(result, b.data, b.len);
+    /* An empty result leaves b.data NULL, and memcpy's source must not be
+     * NULL even for zero bytes (UBSan, tests/fuzz/fuzz_manifest). */
+    if (b.len) memcpy(result, b.data, b.len);
     result[b.len] = 0;
     *out_len = b.len;
     buf_free(&b);

@@ -399,5 +399,52 @@ expect_output "--set VAR VALUE overrides" "hello" --set V hello show
 expect_output "--set VAR=VALUE overrides"  "world" --set V=world show
 expect_output "unset falls back to the file value" "default" show
 
+# ------------------------------------------------------------------
+# Parser robustness (security-audit-plan WP4, found by tests/fuzz)
+# ------------------------------------------------------------------
+
+# A dependency-with-arguments cut off by a comment: `(a #` used to spin the
+# argument loop forever, allocating as it went, so `tur run --list` on such a
+# Justfile never returned.  It must answer, and quickly.
+write_justfile <<'EOF'
+a:
+	@echo a
+b: (a #not an argument
+	@echo b
+EOF
+rc=0
+( cd "$WORK" && timeout 10 "$TUR_BIN" run --list >/dev/null 2>&1 </dev/null ) || rc=$?
+if [ "$rc" -eq 124 ]; then
+    echo "FAIL: --list on '(dep #' -- hung (killed after 10 s)"
+    FAIL=$((FAIL + 1))
+else
+    echo "PASS: --list on '(dep #' returns"
+    PASS=$((PASS + 1))
+fi
+
+# An assignment nested 5000 parentheses deep used to recurse the expression
+# evaluator off the C stack while the file was only being parsed.  It is now a
+# parse error ("nested too deeply") -- an ordinary exit, not a signal.
+{
+    printf 'x := '
+    printf '(%.0s' $(seq 5000)
+    printf '"a"'
+    printf ')%.0s' $(seq 5000)
+    printf '\nt:\n\t@echo t\n'
+} > "$WORK/Justfile"
+rc=0
+out=$( cd "$WORK" && timeout 10 "$TUR_BIN" run --list 2>&1 </dev/null ) || rc=$?
+if [ "$rc" -ge 124 ] || grep -q "AddressSanitizer" <<< "$out"; then
+    echo "FAIL: --list on 5000-deep parentheses -- exit $rc"
+    FAIL=$((FAIL + 1))
+elif ! grep -q "nested too deeply" <<< "$out"; then
+    echo "FAIL: --list on 5000-deep parentheses -- no 'nested too deeply' diagnostic"
+    echo "  output: $out"
+    FAIL=$((FAIL + 1))
+else
+    echo "PASS: --list on 5000-deep parentheses is a parse error"
+    PASS=$((PASS + 1))
+fi
+
 echo "run-tur-run-attrs: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

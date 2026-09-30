@@ -756,6 +756,12 @@ static int parse_recipe_header(const char *line, JRecipe *r) {
                 if (*p == ')' || !*p || *p == '\n') break;
                 const char *end;
                 char *arg = parse_value(p, &end);
+                /* parse_value consumes nothing at a '#' or '\r', which this
+                 * loop did not stop on: `(dep #` spun here forever, growing
+                 * args by one empty string per turn -- `tur run --list` on
+                 * such a Justfile hung until it ran out of memory (found by
+                 * tests/fuzz/fuzz_justfile). */
+                if (end == p) { free(arg); break; }
                 p = end;
                 if (n_args >= arg_cap) {
                     arg_cap *= 2;
@@ -861,7 +867,13 @@ typedef struct {
     int         lineno;
     JFile      *jf;
     int         error;
+    int         depth;   /* re_expr nesting, capped at JR_MAX_EXPR_DEPTH */
 } REval;
+
+/* Parentheses and call arguments recurse through re_expr, so a Justfile of a
+ * few thousand '(' overflowed the C stack while it was only being PARSED --
+ * `tur run --list` included (found by tests/fuzz/fuzz_justfile). */
+#define JR_MAX_EXPR_DEPTH 256
 
 static void re_skip_ws(REval *r) {
     while (*r->p == ' ' || *r->p == '\t' || *r->p == '\n' || *r->p == '\r')
@@ -1118,7 +1130,20 @@ static char *re_concat(char *a, char op, char *b) {
     return out;
 }
 
+static char *re_expr_inner(REval *r);
+
 static char *re_expr(REval *r) {
+    if (r->depth >= JR_MAX_EXPR_DEPTH) {
+        re_error(r, "expression nested too deeply");
+        return jr_strdup("");
+    }
+    r->depth++;
+    char *v = re_expr_inner(r);
+    r->depth--;
+    return v;
+}
+
+static char *re_expr_inner(REval *r) {
     char *left = re_primary(r);
     while (!r->error) {
         re_skip_ws(r);
@@ -1143,6 +1168,7 @@ static char *eval_rhs(const char *text, JFile *jf, const char *path,
     r.lineno = lineno;
     r.jf     = jf;
     r.error  = 0;
+    r.depth  = 0;
     char *v = re_expr(&r);
     re_skip_ws(&r);
     if (!r.error && *r.p) {
