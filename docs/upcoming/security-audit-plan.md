@@ -299,6 +299,13 @@ Two findings the survey did not have:
   tail is `t : int`: a list built with it inside a bracket now retires, where
   `tcons-of` (typed tail) keeps its rewind. The regions fuzz passes its
   rewind/retire model at seeds 1 and 7.
+- **The widening exposed a pre-existing CPS emitter gap.** The CPS lowering
+  types a call-argument binder from the argument but binds the value with its
+  ascriptions peeled, so an erasing `(:: node :int)` argument to a CPS callee
+  put a typed pointer into an `int64_t` uncast (-Wint-conversion). It was
+  already reachable with an explicit ascription; the implicit one made it
+  common (`list-eq?` over typed lists: four fixtures). The delegated-let
+  emission casts a pointer-typed value into an `int64_t` binder now.
 
 Pinned by `tests/fixtures/region-escape-via-wrapper`, a `hook.sh` fixture that
 asserts the stats line (`pushes=6 rewinds=2 retires=4`) and the
