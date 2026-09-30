@@ -53,6 +53,17 @@ execute arbitrary code through at least:
 - `:c-sources`, which names C files to compile into your binary;
 - `:cmake-deps`, which runs upstream CMake.
 
+What a manifest and an inline-C `__tur_autolink__` marker may contribute to
+that command line is now a fixed vocabulary -- `-l<name>`, `-L<dir>`,
+`-I<dir>`, `-D<key>[=<val>]`, `-framework <name>`, `-Wl,<...>`, a source or
+object path, or one of a short list of bare toolchain flags -- and anything
+else is a build error naming the token. That closes the *shell*: a manifest
+cannot smuggle `; touch x` into the command any more. It does not change the
+promise, because the vocabulary is itself enough to run code: `-l` names a
+library whose static initializers run, a `.c` path is compiled into your
+binary, and `-Wl,` speaks directly to the linker. It is a narrower channel,
+not a closed one, which is why `tur build` still promises nothing.
+
 This is not a defect list. It is the same position every compiler takes.
 `build.tur` is Turmeric's `.cargo/config.toml`: Cargo honours a repo's
 `rustflags` and `[target.*] runner` and documents that building a crate runs
@@ -69,26 +80,7 @@ These are different, because an editor runs them on a tree you have merely
 
 > **They do not execute repo-supplied code or shell unless you asked them to.**
 
-Three things stand between that promise and the implementation today.
-
-#### `tur run --list` evaluates Justfile backticks (open, high)
-
-A Justfile variable assignment may have a backtick command substitution:
-
-```
-commit := `git rev-parse HEAD`
-```
-
-`tur run` evaluates those while *parsing* the Justfile, and parsing happens
-before listing -- so `tur run --list`, which reads in every toolchain on earth
-as an inventory command, runs the shell. `--list` failing that surprise test is
-a defect regardless of what this guide promises.
-
-The fix is scoped: defer a backtick from parse time to the first recipe
-invocation that actually uses the variable. Tracked as D-2 in the
-[security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md).
-
-Until it lands: **`tur run --list` is not safe on a tree you do not trust.**
+Two things stand between that promise and the implementation today.
 
 #### `tur check` expands macros, and the macro environment is not yet a boundary (open, high)
 
@@ -116,15 +108,18 @@ on an untrusted crate.**
 tree into a shared library under `.tur-repl-cache/`, and `dlopen`s it. That is
 Gradle-tier behaviour and this guide makes **no promise** about it.
 
-Worse, whether to rebuild is decided by comparing mtimes, so a repository that
-*commits* a `.tur-repl-cache/lib-N.so` newer than its sources gets that object
-loaded with no build at all.
+What it does guarantee is that the object loaded is one *this* `tur` built: the
+cache carries a `.built-by` sidecar recording the compiler's version, path,
+size and mtime, and a mismatch forces a rebuild. So a repository that commits a
+`.tur-repl-cache/lib-N.so` does not get it loaded.
 
-The opt-out, `TUR_NO_AUTO_SPICE=1`, is default-allow, which points the wrong
-way: pnpm, Bun, Deno and Neovim have all moved to default-deny plus an
+The opt-out, `TUR_NO_AUTO_SPICE=1`, is still default-allow, which points the
+wrong way: pnpm, Bun, Deno and Neovim have all moved to default-deny plus an
 allowlist. The intended replacement is direnv's model -- hash the tree's
-`build.tur`, ask once, remember the answer -- which turns this from a defect
-into a documented design. Tracked as D-3.
+`build.tur`, ask once, remember the answer -- which would turn auto-discovery
+from something this guide declines to promise into a documented design.
+Tracked as D-3 in the
+[security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md).
 
 ### Editor trust support
 

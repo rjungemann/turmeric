@@ -1,0 +1,11 @@
+;;; The grammar must still ADMIT what the tree actually uses.  `:link-flags` is
+;;; documented (pkg.h) as the verbatim sibling of `:link-libs` because
+;;; `-framework Cocoa` is one entry and two arguments; a check that rejected it
+;;; would break every macOS spice.  This fixture is the one here that must BUILD.
+(defpackage sec-good-framework-flag
+  :name "sec-good-framework-flag"
+  :modules [main]
+  :build-opts #map{
+    :link-libs  ["m"]
+    :link-flags ["-L/tur-sec-marker" "-Wl,-dead_strip"]
+  })
