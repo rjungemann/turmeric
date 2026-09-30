@@ -1,0 +1,20 @@
+;; reflected-measures RF0/RF3: an obligation decided IN PLACE.  A return
+;; refinement is discharged while its own defn is elaborated -- before the
+;; deferred totality pass has run -- so `len`'s verdict has to exist already.
+;; It does: elab_defn stamps TOTAL eagerly at the end of the reflected defn
+;; (the deferred pass only ever adds rejections), and the return obligation
+;; unfolds `len` at the literal.
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn two [] : #refine{ r : int | (= r 2) }
+  (len (Cons 1 (Cons 2 (Nil)))))
+
+(defn main [] : int
+  (println (two))
+  (println "reflect-return-obligation")
+  0)

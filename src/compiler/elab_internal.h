@@ -278,6 +278,7 @@ typedef struct Elab {
     const Symbol *sym_caret_multishot;        /* ^multishot -- MS1: safe multi-shot via snapshot semantics */
     /* F4 (cross-plan-followups): ^deprecated definition annotation */
     const Symbol *sym_caret_deprecated;
+    const Symbol *sym_caret_reflect;   /* reflected-measures RF0: `^reflect` on a defn */
     const Symbol *sym_map_new;    /* map-new - create new map */
     const Symbol *sym_assoc;      /* assoc - insert/update key-value */
     const Symbol *sym_dissoc;     /* dissoc - delete key */
@@ -1033,6 +1034,14 @@ typedef struct Elab {
     struct RfReadsSite    *rf_reads_sites;
     uint32_t               n_rf_reads_sites;
     uint32_t               cap_rf_reads_sites;
+    /* reflected-measures RF0: every `^reflect` defn, recorded during
+     * elaboration (gate on) for the deferred totality pass
+     * (rf_resolve_reflect_sites, elab_reflect.c).  Same deferral rationale as
+     * WriteFrameSite: purity of a callee defined later in the unit is part of
+     * the verdict, and the verdict must not depend on definition order. */
+    struct ReflectSite    *reflect_sites;
+    uint32_t               n_reflect_sites;
+    uint32_t               cap_reflect_sites;
     /* Open-addressed (callee, call_form) -> index+1 set, so deduplicating a
      * re-elaborated call site stays O(1) instead of rescanning every crossing
      * recorded so far -- which would make an opted-in build quadratic in its
@@ -1273,6 +1282,35 @@ typedef struct RfReadsSite {
      * silent -- no dump line, no repeated warning. */
     bool      is_clone;
 } RfReadsSite;
+
+/* reflected-measures RF0/RF1/RF2 (docs/upcoming/reflected-measures-plan.md):
+ * one `^reflect`-annotated function.  The body is kept as FORMS (the
+ * refinement encoder consumes Forms, and Binding::defn_form is only retained
+ * on two unrelated paths), the same shape WriteFrameSite carries. */
+typedef struct ReflectSite {
+    Binding      *fn;          /* the annotated function; where the verdict lands */
+    Binding     **params;      /* its parameters, in declaration order */
+    uint32_t      n_params;
+    const Form   *defn_form;   /* the whole `(defn ...)`; the body is a suffix */
+    uint32_t      body_start;  /* index of the first body form within defn_form */
+    const Form   *annot;       /* the `^reflect` symbol, for the diagnostic span */
+} ReflectSite;
+
+/* Record a `^reflect` function for the deferred totality pass. */
+void rf_note_reflect_site(Elab *e, Binding *fn, Binding **params, uint32_t n_params,
+                          const Form *defn_form, uint32_t body_start,
+                          const Form *annot);
+/* Classify every recorded site (purity + structural termination + coverage),
+ * stamping Binding::reflect_total and emitting TUR-E0384 on the ones that
+ * fail.  Runs after elaboration, before crossings are resolved. */
+void rf_resolve_reflect_sites(Elab *e);
+/* Classify ONE site without diagnostics, stamping the verdict only when it is
+ * TOTAL.  Called at the end of elab_defn so an obligation discharged IN PLACE
+ * (a return refinement decided while its defn is elaborated) can already
+ * unfold the measure; the deferred pass is authoritative for rejections. */
+void rf_stamp_reflect_site_eager(Elab *e, Binding *fn);
+/* The purity walk's verdict, exported for the totality gate (elab_fns.c). */
+bool rt_binding_is_pure(Binding *b);
 
 /* Record a `#reads`-annotated function for the deferred verification pass. */
 void rf_note_reads_site(Elab *e, Binding *fn, Binding **params,

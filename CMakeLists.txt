@@ -1152,17 +1152,32 @@ set_tests_properties(tur_init_r7rs PROPERTIES TIMEOUT 600)
 # r7rs-lang-plan R10: chibi-scheme's R7RS test suite, as a pass COUNT with a
 # floor, so a regression fails and progress only needs the floor raised.  Both
 # back ends, about two minutes together.  Skips cleanly without python3.
-# RUN_SERIAL: the compiled pass is one large C build.
+#
+# NOT RUN_SERIAL.  It was, on the grounds that "the compiled pass is one large
+# C build" -- but one large single-threaded `cc` is the case RUN_SERIAL serves
+# worst: it idles every core but one for the whole run, and on ctest's
+# scheduler RUN_SERIAL is a full barrier, so the cost is paid twice (nothing
+# runs beside it, and nothing runs while the queue drains into it).  The
+# harness is concurrency-safe: tests/r7rs/run-conformance.py writes each
+# program to its own `tempfile.NamedTemporaryFile`, so two runs share no path.
 add_test(
   NAME tur_r7rs_conformance
   COMMAND bash tests/run-r7rs-conformance.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-set_tests_properties(tur_r7rs_conformance PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
+set_tests_properties(tur_r7rs_conformance PROPERTIES TIMEOUT 720)
 # r7rs-srfi-plan D7: each SRFI's own test suite (tests/r7rs/srfi/<N>/), through
 # the same runner, with a floor per SRFI.  Two shards (every other suite,
 # R7RS_SRFI_SHARD), since S7 the whole set is over seven minutes on a 4-core
 # box, too near the 720 s timeout for a slower runner.
+#
+# NOT RUN_SERIAL, and that is the point of sharding rather than a detail of it.
+# The split was made to stay under the per-test TIMEOUT, but while both shards
+# were RUN_SERIAL ctest ran them one after the other, so the pair cost the same
+# wall time as the unsharded suite it replaced -- the timeout was fixed and the
+# clock was not.  Neither shard fans out internally (no nproc, no background
+# jobs), so RUN_SERIAL left two of three cores idle for both of them; the
+# runner is concurrency-safe for the same reason as tur_r7rs_conformance above.
 foreach(_srfi_shard 1 2)
   add_test(
     NAME tur_r7rs_srfi_suites_${_srfi_shard}
@@ -1170,7 +1185,7 @@ foreach(_srfi_shard 1 2)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
   set_tests_properties(tur_r7rs_srfi_suites_${_srfi_shard} PROPERTIES
-    TIMEOUT 720 RUN_SERIAL TRUE ENVIRONMENT "R7RS_SRFI_SHARD=${_srfi_shard}/2")
+    TIMEOUT 720 ENVIRONMENT "R7RS_SRFI_SHARD=${_srfi_shard}/2")
 endforeach()
 # R10: the Unicode tables behind (scheme char) are generated twice -- the
 # prelude's inline C and the interpreter's natives -- and must be identical.

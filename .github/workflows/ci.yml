@@ -16,13 +16,32 @@ on:
 
 jobs:
   test:
-    # Two jobs per OS, split along the ctest boundary that already existed as
-    # two steps: `fixtures` runs the RUN_SERIAL tur_tests corpus, `aux` runs
-    # the other ~145 suites under -j.  They only share the build, which ccache
-    # reproduces in about a minute, and running them in parallel takes the
-    # macOS leg from ~23 min (8.5 fixture + 12 auxiliary, back to back) to the
-    # longer of the two.  The fixtures part keeps the "Test (<os>)" check name
-    # so required-status-check rules keep matching it.
+    # Three jobs per OS, split along ctest boundaries: `fixtures` runs the
+    # RUN_SERIAL tur_tests corpus, `r7rs` runs every suite whose name contains
+    # `r7rs`, and `aux` runs the ~155 that are left, both of the latter under
+    # -j.  They only share the build, which ccache reproduces in about a
+    # minute, and running them in parallel takes the macOS leg from ~23 min
+    # (8.5 fixture + 12 auxiliary, back to back) to the longer of the three.
+    # The fixtures part keeps the "Test (<os>)" check name so
+    # required-status-check rules keep matching it.
+    #
+    # `r7rs` became its own part because the dialect's suites are RUN_SERIAL
+    # where they fan out internally (tur_r7rs_gc, tur_r7rs_sanitize), and a
+    # RUN_SERIAL test is a barrier on ctest's scheduler: nothing runs beside
+    # it.  Between 09-19 and 09-29 the macOS aux job's serial chain went from
+    # 3.8 min to 18.3 min as those suites landed, and total wall time from
+    # ~22 min to ~36 min -- growth that lands entirely on the critical path
+    # and cannot be recovered by -j.  Measured from the ci-metrics trend
+    # (branch `ci-metrics`, suite-timings-2026.jsonl), medians 09-28..09-30:
+    # the split takes the macOS aux part to ~13 min and gives r7rs its own
+    # ~10 min, against the ~28 min they cost together.
+    #
+    # The two -R/-E patterns are exact complements -- `-R 'r7rs'` against
+    # `-E '^tur_tests$|r7rs'` -- so the three parts still run every registered
+    # test exactly once.  Verify after adding a suite: `ctest -N` totals must
+    # satisfy all == fixtures + r7rs + aux.  Both patterns carry
+    # `--no-tests=error`, so a drift that empties either one fails the job
+    # instead of passing it vacuously.
     name: ${{ matrix.job_name }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # tur-link-and-build-split-plan Phase 5: cache the compiler-build objects
@@ -43,12 +62,14 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        part: [fixtures, aux]
+        part: [fixtures, aux, r7rs]
         include:
           - part: fixtures
             job_name: Test
           - part: aux
             job_name: Auxiliary suites
+          - part: r7rs
+            job_name: R7RS suites
         # Sharding the fixture corpus itself is still off, but the blockers
         # that kept it off are not blockers any more.  run.sh has always
         # supported it (TUR_TEST_SHARD="i/N" partitions round-robin by fixture
@@ -237,7 +258,7 @@ jobs:
         # Everything except tur_tests, once per OS, in its own job so it
         # overlaps the fixture corpus instead of following it.
         #
-        # -j: this step runs ~105 targets, so without it wall time is their sum.
+        # -j: this step runs ~155 targets, so without it wall time is their sum.
         # The count must be explicit -- through CMake 3.28 a bare `-j` is
         # accepted silently and does nothing (see the Justfile `test` recipe).
         # getconf _NPROCESSORS_ONLN is portable across the Linux and macOS
@@ -253,8 +274,30 @@ jobs:
         # now carry. The step above is a single RUN_SERIAL target, so -j would
         # do nothing there.
         # --output-junit to a DISTINCT path from the step above -- see the note
-        # there. The two files are merged by the collect step.
-        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E '^tur_tests$' --output-junit results-aux.xml --test-output-size-passed 262144 --test-output-truncation head
+        # there. Each part writes exactly one of the three files; the collect
+        # step globs whichever one this part produced.
+        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E '^tur_tests$|r7rs' --no-tests=error --output-junit results-aux.xml --test-output-size-passed 262144 --test-output-truncation head
+
+      - name: Run r7rs suites
+        if: matrix.part == 'r7rs'
+        # The `#lang r7rs` dialect's own suites, in their own job for the
+        # reason in the job comment above: two of them (tur_r7rs_gc,
+        # tur_r7rs_sanitize) fan out across nproc internally and so must stay
+        # RUN_SERIAL, which on ctest's scheduler is a barrier for the whole
+        # invocation.  Keeping them here means they only serialize against
+        # each other and the ~155 suites in the `aux` part no longer wait
+        # behind them.
+        #
+        # `-R 'r7rs'` matches the substring, not a prefix, on purpose: it picks
+        # up lsp_r7rs_diagnostics and tur_init_r7rs alongside the tur_r7rs_*
+        # family, and a suite added later for this dialect lands in this job
+        # by its name alone.  That is also why the aux pattern excludes the
+        # same substring rather than listing names -- see the complement note
+        # in the job comment.
+        #
+        # No Emscripten step gates on this part: tur_refine_wasm is an `aux`
+        # suite, and emsdk setup costs about 100 s.
+        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -R 'r7rs' --no-tests=error --output-junit results-r7rs.xml --test-output-size-passed 262144 --test-output-truncation head
 
       # `always()`, NOT `continue-on-error` on the ctest steps: a suite that
       # regressed into a timeout is exactly the signal this exists to catch, so
@@ -269,8 +312,15 @@ jobs:
           # into build/. Reading them from the workspace root instead yields
           # zero rows and (because the script only warns) a silently empty
           # dashboard -- which is exactly how this would have shipped broken.
+          # A glob, not a list of names: each part runs exactly one of the
+          # ctest steps above and so writes exactly one of results-main.xml /
+          # results-aux.xml / results-r7rs.xml.  Naming all three would make
+          # the collector warn about the two this part never wrote, on every
+          # run of every part.  If the glob matches nothing -- a ctest step
+          # that died before writing -- the literal pattern is passed, the
+          # collector warns once, and the empty-file check below reports it.
           python3 tools/ci/collect-suite-timings.py --build-dir build \
-            build/results-main.xml build/results-aux.xml > timings.jsonl || true
+            build/results-*.xml > timings.jsonl || true
           if [ ! -s timings.jsonl ]; then
             echo "::warning::no suite timings collected -- check the ctest --output-junit paths above"
           else

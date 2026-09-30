@@ -1,0 +1,19 @@
+;; reflected-measures RF3/RF6 negative control for the Real sort: 1.5 + 1.75
+;; is exactly 3.25, so `(< (fsum v) 3.25)` is false at the boundary and must
+;; NOT prove.  An Int-sorted `fsum` (the RM-B0 missort) would have tightened
+;; the strict bound and "proved" it; the Real equations do not.  Since the
+;; model search learned Real evaluation (#972) and RF6 let it run through
+;; reflected measures, the case is REFUTED outright: TUR-E0371 "false for the
+;; value given here", read off fsum's own equations in double arithmetic.
+(defdata FL [] (FCons [hd : float tl : FL]) (FNil))
+
+(defn ^reflect fsum [xs : FL] : float
+  (match xs
+    (FNil) 0.0
+    (FCons h t) (+ h (fsum t))))
+
+(defn bounded [xs : #refine{ v : FL | (< (fsum v) 3.25) }] : float 1.5)
+
+(defn main [] : int
+  (println (bounded (FCons 1.5 (FCons 1.75 (FNil)))))
+  0)

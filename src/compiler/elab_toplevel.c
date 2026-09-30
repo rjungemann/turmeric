@@ -1831,6 +1831,13 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                             f->as.list.items[name_idx]->as.list.items[0]->as.sym == ep->sym_export_as_attr) {
                             name_idx += 1; /* skip (export-as "c_name") */
                         }
+                        /* reflected-measures RF0: skip `^reflect`, in either
+                         * order with ^deprecated (elab_defn accepts both). */
+                        if ((uint32_t)f->as.list.len > name_idx &&
+                            f->as.list.items[name_idx]->tag == F_SYM &&
+                            f->as.list.items[name_idx]->as.sym == ep->sym_caret_reflect) {
+                            name_idx += 1;
+                        }
                         /* F4: skip optional ^deprecated [message] attribute */
                         if ((uint32_t)f->as.list.len > name_idx &&
                             f->as.list.items[name_idx]->tag == F_SYM &&
@@ -1840,6 +1847,11 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                                 f->as.list.items[name_idx]->tag == F_STR) {
                                 name_idx += 1;
                             }
+                        }
+                        if ((uint32_t)f->as.list.len > name_idx &&
+                            f->as.list.items[name_idx]->tag == F_SYM &&
+                            f->as.list.items[name_idx]->as.sym == ep->sym_caret_reflect) {
+                            name_idx += 1;
                         }
                         if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
                         Form *name_f = f->as.list.items[name_idx];
@@ -3006,6 +3018,11 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * nothing but the optional --dump-read-frames dump plus slice 3's
      * EXCEEDED evidence (TUR-W0383). */
     rf_resolve_read_frames(&e);
+    /* reflected-measures RF1/RF2: classify every `^reflect` site (TUR-E0384
+     * on rejection) BEFORE the crossings below are resolved, because that is
+     * where the encoder consumes the verdict -- it unfolds only a TOTAL
+     * measure. */
+    rf_resolve_reflect_sites(&e);
     refine_resolve_call_sites(&e);
     refine_discharge_all(&e.refine_obs, arena);
     /* SX8a: the JSON obligation dump.  Emitted here rather than from the

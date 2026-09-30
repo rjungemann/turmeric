@@ -1,0 +1,17 @@
+;; reflected-measures RF3/RF5: a ten-cell literal needs eleven equations and
+;; the default fuel is 8, so the obligation runs out and stays Unknown.  That
+;; is TUR-W0385 beside the ordinary TUR-W0372 -- completeness lost, never
+;; soundness -- and --strict-refine promotes both to errors.
+;; TUR_REFLECT_FUEL=16 makes it prove (env only, for experiments).
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn ten-long [xs : #refine{ v : Lst | (> (len v) 9) }] : int 10)
+
+(defn main [] : int
+  (println (ten-long (Cons 1 (Cons 2 (Cons 3 (Cons 4 (Cons 5 (Cons 6 (Cons 7 (Cons 8 (Cons 9 (Cons 10 (Nil)))))))))))))
+  0)

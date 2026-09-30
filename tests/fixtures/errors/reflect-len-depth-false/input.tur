@@ -1,0 +1,20 @@
+;; reflected-measures RF3/RF6 negative control: the same three-cell literal
+;; as reflect-len-depth against `(> (len v) 3)`, which is FALSE.  Unfolding
+;; establishes len(...) = 3 exactly, so this must not prove -- and since RF6
+;; it is REFUTED, TUR-E0371 with "false for the value given here": the
+;; bounded model search, which declines any VC with an uninterpreted
+;; function, runs here because every symbol is a constructor or a reflected
+;; measure the encoder unfolded, and reads len(...) off its own equations.
+;; (Before RF6 this was TUR-W0372, unknown with the check kept.)
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect len [xs : Lst] : int
+  (match xs
+    (Nil) 0
+    (Cons _ t) (+ 1 (len t))))
+
+(defn at-least-4 [xs : #refine{ v : Lst | (> (len v) 3) }] : int 4)
+
+(defn main [] : int
+  (println (at-least-4 (Cons 1 (Cons 2 (Cons 3 (Nil))))))
+  0)

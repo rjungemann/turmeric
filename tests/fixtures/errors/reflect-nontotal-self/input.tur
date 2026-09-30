@@ -1,0 +1,17 @@
+;; reflected-measures RF1: the inconsistency case, and the fixture the SABOTAGE
+;; run arms.  `spin(x) = 1 + spin(x)` never returns; admitting its equation
+;; asserts `spin(3) = 1 + spin(3)`, which LIA reduces to `0 = 1`, and an
+;; inconsistent hypothesis set discharges EVERY obligation -- including the
+;; false `(= (spin 3) 7)` below.  The termination gate rejects the definition
+;; (no argument position is a strict subterm of its parameter at the self-
+;; call), so nothing is ever admitted.  With that gate stubbed to `true`, this
+;; program compiles under --strict-refine and reports the false crossing as
+;; proven: that is the check that the gate is load-bearing.
+(defn ^reflect spin [x : int] : int
+  (+ 1 (spin x)))
+
+(defn seven [x : #refine{ v : int | (= (spin v) 7) }] : int 7)
+
+(defn main [] : int
+  (println (seven 3))
+  0)
