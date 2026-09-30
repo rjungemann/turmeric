@@ -373,10 +373,23 @@ node -- which is exactly the case the rule says needs the manual macro. So:
   ```)
 ```
 
-A missed note here is a silent use-after-rewind on the default build -- the
-failure mode `docs/archive/region-escape-through-unhooked-stores.md` documents
--- and it would present as a game that renders one correct frame and then
-garbage, which is an expensive thing to debug from that symptom. Per the same
+**Corrected 2026-09-30, by trying to demonstrate it.** The paragraph above is
+the reasoning from the rules; it is not a measured failure, and the measurement
+does not back it. `tests/fixtures/region-escape-via-main-loop` stores a closure
+the same way and calls it back after the bracket exits: **deleting the note
+leaves the output unchanged.** So on this path the closure survives without it
+-- plausibly because the closure-env fill is already a hooked store, or because
+the bracket's opaque `ptr<void>` result makes the static walk keep the
+generation rather than rewinding it.
+
+Keep the note: it is one call, `((void)0)` under `TUR_REGIONS=0`, and the
+argument that an erased word stored past a bracket *ought* to be noted still
+holds. But write it as insurance and label it that way, do not claim it fixes a
+demonstrated rewind, and do not tell a reader the fixture pins it -- it pins the
+**closure ABI** (`TUR_CLOSURE_FN` is slot 0; the box is the environment; a
+zero-argument closure is called as `fn(box)`), which is what the
+c-integration guide warns will otherwise rot unnoticed. A discriminating case
+for the frame-callback store specifically is still missing. Per the same
 rule, this joins the hooked set **in the same change** as a fixture:
 `tests/fixtures/region-escape-via-main-loop`, modeled on the existing
 `region-escape-via-callcc` (the closest analogue: `call/cc`'s stack image is
@@ -818,8 +831,11 @@ breaks silently.
 - `tur-raylib` `:web` block per section 4.
 - `raylib/web` module: `run-main-loop` (6.2), the `:c-sources` trampoline
   shim, and `with-web-game-loop` (6.3).
-- **`tests/fixtures/region-escape-via-main-loop`**, and `raylib/web` joins the
-  hooked-store set in CLAUDE.md -- same change, per the strict rule.
+- **`tests/fixtures/region-escape-via-main-loop`** -- which pins the closure
+  ABI the C shim depends on. It does NOT yet discriminate on the region note
+  (6.2's correction): the note ships as labelled insurance, so `raylib/web`
+  joins CLAUDE.md's hooked-store list as a store that carries a note, not as
+  one with a demonstrated failure behind it.
 - `-sASYNCIFY` mode A behind `:main-loop :asyncify`, with its measured cost
   documented at the point of use: a fixed ~16 ms added to frame time, which is
   free at low frame work and ~40 fps by 8 ms of it (section 12, extra finding
@@ -1075,11 +1091,12 @@ A working C++ raylib web build on this machine states it directly:
 > **Anything left on main's stack would be dangling by the first frame.**
 > Static storage sidesteps that.
 
-That is [6.2](#62-the-callback-boundary-and-the-region-note-it-requires)'s
-requirement reached independently, in C++, for the same reason. It is the
-strongest available evidence that the `TUR_REGION_NOTE` on the frame closure
-is load-bearing and not defensive: a language with no regions at all still had
-to move that state to static storage to survive the first frame.
+That corroborates the **lifetime** problem 6.2 describes -- state in `main`'s
+frame is gone by frame one, in any language -- but note what it does not
+corroborate: that Turmeric's region allocator needs a hand-written note for it.
+An attempt to demonstrate that failed (see 6.2's correction), so the note ships
+as insurance rather than as a fix. The C++ evidence is about where state must
+live, not about the note.
 
 Use `emscripten_set_main_loop_arg` (not the plain form) and pass the `^fat`
 closure handle as the `void *arg`, which removes the file-scope static the
