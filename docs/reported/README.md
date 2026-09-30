@@ -2353,6 +2353,15 @@ answers.
 | ~~[fn-param-call-prototype-spelled-from-the-call-not-the-fn](../archive/fn-param-call-prototype-spelled-from-the-call-not-the-fn.md)~~ | high | **RESOLVED 2026-09-29** (archived): both halves were elaboration, not the emitter. Result half: the non-HKT dispatch now binds the METHOD's own tyvars (`b := float`) so the instance spec resolves them; argument half: `elab_poly_call` widens a concrete argument where a typed carrier's parameter is `any`. `instance-fn-param-call-result-tyvar`, `instance-fn-param-call-any-args` |
 | ~~[concrete-result-fn-passed-where-an-any-result-fn-is-expected](../archive/concrete-result-fn-passed-where-an-any-result-fn-is-expected.md)~~ | medium-high | **RESOLVED 2026-09-29** (archived): the `any` bridge marshals a function whose signature differs from a ground parameter only in `any` slots; for the generic spelling, a call through a LOCAL fn value no longer binds the enclosing definition's rigid tyvar from the expected return, and the `any`-widen spec trigger now covers plain generics (`B := int` changes no ABI). `fn-arg-any-result-bridge` |
 
+## Found landing reflected-measures-plan RF4 (filed 2026-09-30)
+
+Unrelated to `^reflect` (reproduces with no experiment on); found writing the
+RF4 fixture, whose measure originally returned a refined ADT.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [refined-adt-return-type-miscompiles](refined-adt-return-type-miscompiles.md) | medium | Any `defn` whose RESULT is `#refine{ r : <ADT> | ... }` fails to build: the emitted C signature returns the peeled type's carrier (`int64_t`) while the body returns the by-value aggregate (`tur_adt_Lst`), so `cc` rejects the return. Parameter refinements over an ADT are fine; a plain `: Lst` result builds and prints `7`. Fix: peel the refinement for representation where the plain result type is classified, so both spellings emit one signature; add `refine-adt-return` (+ `--no-contracts` variant) |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
