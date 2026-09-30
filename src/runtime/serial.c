@@ -424,6 +424,15 @@ static bool cur_lstr(WireCursor *c, char **out) {
     return true;
 }
 
+/* A frame decoded off the wire owns its field names (malloc'd by cur_lstr),
+ * unlike a program-built frame whose names are read-only data -- so it is
+ * freed here rather than by serial_frame_free, which leaked them. */
+static void wire_frame_free(SerialFrame *wf) {
+    if (!wf) return;
+    for (size_t i = 0; i < wf->n_fields; i++) free((void *)wf->fields[i].name);
+    serial_frame_free(wf);
+}
+
 bool serial_cont_from_bytes(const uint8_t *data, size_t len,
                              SerialFrame **out_head, const char **out_err) {
     static const char *err_short    = "wire: buffer too short";
@@ -521,6 +530,16 @@ bool serial_cont_from_bytes(const uint8_t *data, size_t len,
             return false;
         }
 
+        /* Every field is at least a 4-byte name length plus a 1-byte tag, so
+         * a count the remaining bytes cannot hold is short input, not a
+         * reason to calloc n_fields records. */
+        if ((size_t)n_fields > cur_left(&c) / 5) {
+            free(sym_key);
+            serial_frame_chain_free(chain_head);
+            if (out_err) *out_err = err_short;
+            return false;
+        }
+
         /* Allocate a temporary frame to hold decoded wire data. */
         SerialFrame *wf = serial_frame_alloc((size_t)n_fields);
         if (!wf) {
@@ -607,7 +626,7 @@ bool serial_cont_from_bytes(const uint8_t *data, size_t len,
         }
 
         if (!field_ok) {
-            serial_frame_free(wf);
+            wire_frame_free(wf);
             free(sym_key);
             serial_frame_chain_free(chain_head);
             if (out_err && !*out_err) *out_err = err_short;
@@ -619,7 +638,7 @@ bool serial_cont_from_bytes(const uint8_t *data, size_t len,
          * path we check schema_ver after reconstructing so the registered
          * function has the compiled schema_ver available. */
         SerialFrame *live = reconstruct(wf);
-        serial_frame_free(wf);
+        wire_frame_free(wf);
         free(sym_key);
 
         if (!live) {

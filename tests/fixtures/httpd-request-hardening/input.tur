@@ -1,0 +1,148 @@
+;; security-audit-plan M-4: the httpd request path, driven without a socket.
+;;
+;; httpd-parse-head is the one parser both server loops share (and the one
+;; tests/fuzz drives).  It used to read Content-Length with `(int)strtol`, so
+;; 4294967306 became 10, "10abc" became 10 and "-1" became 0; it ignored
+;; Transfer-Encoding, so a chunked body was read as the next request; and it
+;; sized the body malloc from the header with no cap.  Each refusal below is
+;; the status the server now answers with before reading any body.
+;;
+;; Also here: response headers that would split the response are dropped,
+;; the static handler keeps to its root (dotfiles, symlinks out, backslashes),
+;; and a long cookie no longer overruns a 2 KiB stack buffer.
+
+(load "stdlib/httpd.tur")
+
+(defn new-conn [] : ptr<void>
+  ```c return calloc(1, sizeof(HttpdConn)); ```)
+
+(defn free-conn [c : ptr<void>] : void
+  ```c httpd_hyconn_hyrelease(c); free(c); ```)
+
+(defn parse [label : cstr req : cstr] : void
+  ```c
+  HttpdConn *c = (HttpdConn *)calloc(1, sizeof(HttpdConn));
+  size_t n = strlen(req);
+  char *buf = (char *)malloc(n + 1);
+  memcpy(buf, req, n + 1);
+  int64_t clen = -1;
+  int64_t r = httpd_hyparse_hyhead((void *)c, (void *)buf, (int64_t)n, (void *)&clen);
+  if (r < 0) printf("%s: refused %lld\n", label, (long long)-r);
+  else printf("%s: %s %s clen=%lld\n", label, c->method, c->path, (long long)clen);
+  httpd_hyconn_hyrelease((void *)c);
+  free(buf);
+  free(c);
+  ```)
+
+;; Print the response head with CRLF shown as " | ".
+(defn show-resp-head [c : ptr<void>] : void
+  ```c
+  int64_t len = 0;
+  char *h = (char *)httpd_hyresp_hyhead(c, 1, (void *)&len);
+  for (int64_t i = 0; i < len; i++) {
+    if (h[i] == '\r') continue;
+    if (h[i] == '\n') fputs(" | ", stdout); else putchar(h[i]);
+  }
+  putchar('\n');
+  free(h);
+  ```)
+
+;; A scratch tree: root/ok.txt, root/.env, root/link -> ../secret.txt.
+(defn make-tree [] : cstr
+  ```c
+  #include <sys/stat.h>
+  static char root[700];
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  char base[512];
+  snprintf(base, sizeof base, "%s/tur-httpd-hardening-XXXXXX", d);
+  if (!mkdtemp(base)) return "";
+  snprintf(root, sizeof root, "%s/root", base);
+  mkdir(root, 0700);
+  char p[800];
+  FILE *f;
+  snprintf(p, sizeof p, "%s/ok.txt", root);     f = fopen(p, "w"); fputs("ok\n", f); fclose(f);
+  snprintf(p, sizeof p, "%s/.env", root);       f = fopen(p, "w"); fputs("SECRET=1\n", f); fclose(f);
+  snprintf(p, sizeof p, "%s/secret.txt", base); f = fopen(p, "w"); fputs("secret\n", f); fclose(f);
+  snprintf(p, sizeof p, "%s/link", root);
+  if (symlink("../secret.txt", p) != 0) return "";
+  return root;
+  ```)
+
+(defn set-path! [c : ptr<void> path : cstr] : void
+  ```c
+  HttpdConn *conn = (HttpdConn *)c;
+  snprintf(conn->path, sizeof conn->path, "%s", path);
+  ```)
+
+(defn serve [root : cstr path : cstr] : void
+  (let [c (new-conn)]
+    (do
+      (set-path! c path)
+      (println (if (= (httpd-mw-static-try c root) 1) "served" "refused"))
+      (free-conn c))))
+
+(defn long-value [n : int] : cstr
+  ```c
+  char *s = (char *)malloc((size_t)n + 1);
+  memset(s, 'v', (size_t)n);
+  s[n] = '\0';
+  return s;
+  ```)
+
+(defn free-cstr [s : cstr] : void
+  ```c free((void *)s); ```)
+
+(defn set-cookie-len [c : ptr<void>] : int
+  ```c
+  HttpdHeader *h = (HttpdHeader *)((HttpdConn *)c)->resp_headers;
+  return h && h->value ? (int64_t)strlen(h->value) : -1;
+  ```)
+
+(defn main [] : int
+  (do
+    (parse "get"            "GET /a?b=1 HTTP/1.1\r\nHost: x\r\n\r\n")
+    (parse "post"           "POST /f HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello")
+    (parse "negative"       "POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n")
+    (parse "trailing junk"  "POST / HTTP/1.1\r\nContent-Length: 10abc\r\n\r\n")
+    (parse "plus sign"      "POST / HTTP/1.1\r\nContent-Length: +5\r\n\r\n")
+    (parse "empty"          "POST / HTTP/1.1\r\nContent-Length: \r\n\r\n")
+    (parse "int wrap"       "POST / HTTP/1.1\r\nContent-Length: 4294967306\r\n\r\n")
+    (parse "huge"           "POST / HTTP/1.1\r\nContent-Length: 99999999999999999999999\r\n\r\n")
+    (parse "dup same"       "POST / HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 3\r\n\r\n")
+    (parse "dup differ"     "POST / HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 30\r\n\r\n")
+    (parse "chunked"        "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n")
+    (parse "cl and te"      "POST / HTTP/1.1\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n")
+    (parse "over default"   "POST / HTTP/1.1\r\nContent-Length: 8388609\r\n\r\n")
+    (parse "at default"     "POST / HTTP/1.1\r\nContent-Length: 8388608\r\n\r\n")
+    (httpd-set-max-body! 16)
+    (parse "over 16"        "POST / HTTP/1.1\r\nContent-Length: 17\r\n\r\n")
+    (parse "at 16"          "POST / HTTP/1.1\r\nContent-Length: 16\r\n\r\n")
+    ;; response splitting: only X-Ok survives
+    (let [c (new-conn)]
+      (do
+        (httpd-resp-header! c "X-Ok" "fine")
+        (httpd-resp-header! c "X-Evil" "a\r\nSet-Cookie: pwned=1")
+        (httpd-resp-header! c "Bad Name" "x")
+        (httpd-resp-header! c "X-Colon:" "x")
+        (show-resp-head c)
+        (free-conn c)))
+    ;; static files
+    (let [root (make-tree)]
+      (do
+        (serve root "/ok.txt")
+        (serve root "/ok.txt?v=2")
+        (serve root "/.env")
+        (serve root "/link")
+        (serve root "/../secret.txt")
+        (serve root "/a\\..\\ok.txt")
+        (serve root "/.well-known/none")))
+    ;; a cookie far longer than the old 2 KiB stack buffer
+    (let [c (new-conn)
+          v (long-value 5000)]
+      (do
+        (httpd-set-cookie! c (cookie "session" v))
+        (println (set-cookie-len c))
+        (free-cstr v)
+        (free-conn c)))
+    0))

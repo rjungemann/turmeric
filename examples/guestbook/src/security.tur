@@ -172,11 +172,24 @@
   (defn sign-token [token : cstr secret : cstr] : cstr
     (str+ token "." (hmac-sha256-hex secret token)))
 
+  ;;; hex-64? -- true when s is exactly 64 lowercase hex characters.
+  (defn hex-64? [s : cstr] : bool
+    ```c
+    size_t n = strlen(s);
+    if (n != 64) return false;
+    for (size_t i = 0; i < n; i++)
+      if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return false;
+    return true;
+    ```)
+
   ;;; verify-token -- (Some raw-token) when signed carries a valid signature.
   ;;;
   ;;; Returns (None) for a token with no signature, a malformed one, or one
   ;;; whose signature does not match the secret.  The comparison is
-  ;;; constant-time.
+  ;;; constant-time.  The raw token must also be the shape random-hex-64
+  ;;; issues: it becomes a file name under data/conts/, so a signature alone
+  ;;; is not enough -- with the dev default secret anyone can sign
+  ;;; "../../elsewhere", and the name would step out of that directory.
   ;;;
   ;;; Since: Guestbook example
   (defn verify-token [signed : cstr secret : cstr] : (Option cstr)
@@ -185,6 +198,6 @@
         (none)
         (let [token (cstr-slice signed 0 dot)
               sig   (cstr-slice signed (+ dot 1) (cstr-len signed))]
-          (if (cstr-eq-ct sig (hmac-sha256-hex secret token))
+          (if (and (hex-64? token) (cstr-eq-ct sig (hmac-sha256-hex secret token)))
             (some token)
             (none)))))))

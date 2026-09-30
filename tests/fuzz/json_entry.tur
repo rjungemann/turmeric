@@ -1,0 +1,21 @@
+;; tests/fuzz/json_entry.tur -- stdlib/json.tur's compiled decoder as a fuzz
+;; target.  tests/fuzz/CMakeLists.txt runs `tur emit-c` over this file and
+;; fuzz_json_compiled.c includes the result, so the harness drives the exact
+;; inline C a compiled program ships, not a copy of it.
+(load "stdlib/json.tur")
+
+(defn fuzz-free [s : cstr] : int
+  ```c free((void *)s); return 0; ```)
+
+;; Decode; re-encode what was accepted (the encoder walks the whole tree);
+;; free both.  1 when the input was valid JSON.
+(defn fuzz-json [s : cstr] : int
+  (let [n (json/decode s)]
+    (if (= n 0)
+      0
+      (do (fuzz-free (json/encode n))
+          (json/free n)
+          1))))
+
+(defn main [] : int
+  (fuzz-json "{\"k\": [1, 2.5, \"s\", true, null]}"))

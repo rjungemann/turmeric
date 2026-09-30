@@ -8612,6 +8612,14 @@ static void json_hyenc_hystr_hy(void * b, const char * s) {
     else if (*sp == '\n') { json_hyenc_hyappend_hys_hy(b, "\\n"); }
     else if (*sp == '\r') { json_hyenc_hyappend_hys_hy(b, "\\r"); }
     else if (*sp == '\t') { json_hyenc_hyappend_hys_hy(b, "\\t"); }
+    else if (*sp == '\b') { json_hyenc_hyappend_hys_hy(b, "\\b"); }
+    else if (*sp == '\f') { json_hyenc_hyappend_hys_hy(b, "\\f"); }
+    else if ((unsigned char)*sp < 0x20) {
+      /* Any other control character is not legal raw inside a JSON string. */
+      char esc[8];
+      snprintf(esc, sizeof esc, "\\u%04x", (unsigned)(unsigned char)*sp);
+      json_hyenc_hyappend_hys_hy(b, esc);
+    }
     else                  { json_hyenc_hyappend_hyc_hy(b, (int64_t)*sp); }
   }
   json_hyenc_hyappend_hyc_hy(b, (int64_t)'"');
@@ -8676,7 +8684,7 @@ static const char * json_slencode(int64_t node) {
 }
 
 static void json_hydec_hyskip_hyws_hy(void * c) {
-        struct tur_json_ctx { const char *s; size_t pos; int err; };
+        struct tur_json_ctx { const char *s; size_t pos; int err; int depth; };
   struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
   while (cp->s[cp->pos] == ' ' || cp->s[cp->pos] == '\n' ||
          cp->s[cp->pos] == '\r' || cp->s[cp->pos] == '\t') cp->pos++;
@@ -8684,16 +8692,26 @@ static void json_hydec_hyskip_hyws_hy(void * c) {
 }
 
 static void * json_hydec_hyparse_hystring_hy(void * c) {
-        struct tur_json_ctx { const char *s; size_t pos; int err; };
+        struct tur_json_ctx { const char *s; size_t pos; int err; int depth; };
   struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
   if (cp->s[cp->pos] != '"') { cp->err = 1; return NULL; }
   cp->pos++;
   size_t cap = 64, len = 0;
   char *buf = malloc(cap);
+  if (!buf) { cp->err = 1; return NULL; }
   while (cp->s[cp->pos] && cp->s[cp->pos] != '"') {
-    if (len + 4 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+    /* Room for the widest thing one step appends (a 4-byte UTF-8 sequence)
+     * plus the terminator. */
+    if (len + 4 >= cap) {
+      char *nb = realloc(buf, cap * 2);
+      if (!nb) { free(buf); cp->err = 1; return NULL; }
+      buf = nb; cap *= 2;
+    }
     if (cp->s[cp->pos] == '\\') {
       cp->pos++;
+      /* A backslash at the very end of the input: the old code copied the
+       * NUL, stepped past it and kept reading (security-audit-plan M-2). */
+      if (!cp->s[cp->pos]) break;
       switch (cp->s[cp->pos]) {
         case '"':  buf[len++] = '"';  break;
         case '\\': buf[len++] = '\\'; break;
@@ -8703,6 +8721,56 @@ static void * json_hydec_hyparse_hystring_hy(void * c) {
         case 't':  buf[len++] = '\t'; break;
         case 'b':  buf[len++] = '\b'; break;
         case 'f':  buf[len++] = '\f'; break;
+        case 'u': {
+          /* \uXXXX, with a surrogate pair for code points above U+FFFF,
+           * decoded to UTF-8.  A lone surrogate is an error, and so is
+           * \u0000: the value is a C string and cannot carry a NUL. */
+          uint32_t cpt = 0;
+          for (int k = 1; k <= 4; k++) {
+            char h = cp->s[cp->pos + k];
+            uint32_t d = (h >= '0' && h <= '9') ? (uint32_t)(h - '0')
+                       : (h >= 'a' && h <= 'f') ? (uint32_t)(h - 'a' + 10)
+                       : (h >= 'A' && h <= 'F') ? (uint32_t)(h - 'A' + 10) : 99u;
+            if (d == 99u) { free(buf); cp->err = 1; return NULL; }
+            cpt = cpt * 16 + d;
+          }
+          cp->pos += 4;
+          if (cpt >= 0xDC00 && cpt <= 0xDFFF) { free(buf); cp->err = 1; return NULL; }
+          if (cpt >= 0xD800 && cpt <= 0xDBFF) {
+            if (cp->s[cp->pos + 1] != '\\' || cp->s[cp->pos + 2] != 'u') {
+              free(buf); cp->err = 1; return NULL;
+            }
+            uint32_t lo = 0;
+            for (int k = 3; k <= 6; k++) {
+              char h = cp->s[cp->pos + k];
+              uint32_t d = (h >= '0' && h <= '9') ? (uint32_t)(h - '0')
+                         : (h >= 'a' && h <= 'f') ? (uint32_t)(h - 'a' + 10)
+                         : (h >= 'A' && h <= 'F') ? (uint32_t)(h - 'A' + 10) : 99u;
+              if (d == 99u) { free(buf); cp->err = 1; return NULL; }
+              lo = lo * 16 + d;
+            }
+            if (lo < 0xDC00 || lo > 0xDFFF) { free(buf); cp->err = 1; return NULL; }
+            cp->pos += 6;
+            cpt = 0x10000 + ((cpt - 0xD800) << 10) + (lo - 0xDC00);
+          }
+          if (cpt == 0) { free(buf); cp->err = 1; return NULL; }
+          if (cpt < 0x80) {
+            buf[len++] = (char)cpt;
+          } else if (cpt < 0x800) {
+            buf[len++] = (char)(0xC0 | (cpt >> 6));
+            buf[len++] = (char)(0x80 | (cpt & 0x3F));
+          } else if (cpt < 0x10000) {
+            buf[len++] = (char)(0xE0 | (cpt >> 12));
+            buf[len++] = (char)(0x80 | ((cpt >> 6) & 0x3F));
+            buf[len++] = (char)(0x80 | (cpt & 0x3F));
+          } else {
+            buf[len++] = (char)(0xF0 | (cpt >> 18));
+            buf[len++] = (char)(0x80 | ((cpt >> 12) & 0x3F));
+            buf[len++] = (char)(0x80 | ((cpt >> 6) & 0x3F));
+            buf[len++] = (char)(0x80 | (cpt & 0x3F));
+          }
+          break;
+        }
         default:   buf[len++] = cp->s[cp->pos]; break;
       }
     } else {
@@ -8718,7 +8786,7 @@ static void * json_hydec_hyparse_hystring_hy(void * c) {
 }
 
 static int64_t json_hydec_hyparse_hyvalue_hy(void * c) {
-        struct tur_json_ctx { const char *s; size_t pos; int err; };
+        struct tur_json_ctx { const char *s; size_t pos; int err; int depth; };
   struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
   json_hydec_hyskip_hyws_hy(c);
   char ch = cp->s[cp->pos];
@@ -8763,58 +8831,78 @@ static int64_t json_hydec_hyparse_hyvalue_hy(void * c) {
     int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 2; n[1] = ival;
     return (int64_t)(intptr_t)n;
   }
+  /* Nesting is capped so a hostile document cannot recurse this parser off
+   * the end of the C stack (security-audit-plan M-2). */
+  if ((ch == '[' || ch == '{') && ++cp->depth > 256) { cp->err = 1; return 0; }
   /* array */
   if (ch == '[') {
     cp->pos++;
+    int64_t *n = malloc(2 * sizeof(int64_t));
     struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+    if (!n || !v) { free(n); free(v); cp->err = 1; return 0; }
     v->data = NULL; v->len = 0; v->cap = 0;
+    /* Built as a node up front so an error part-way through frees the
+     * elements already parsed with json-free-node-, not just the vector. */
+    n[0] = 5; n[1] = (int64_t)(intptr_t)v;
     json_hydec_hyskip_hyws_hy(c);
     if (cp->s[cp->pos] != ']') {
       for (;;) {
         int64_t elem = json_hydec_hyparse_hyvalue_hy(c);
-        if (cp->err) { free(v->data); free(v); return 0; }
+        if (cp->err) { json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         if (v->len >= v->cap) {
-          v->cap = v->cap > 0 ? v->cap * 2 : 4;
-          v->data = realloc(v->data, v->cap * sizeof(int64_t));
+          size_t ncap = v->cap > 0 ? v->cap * 2 : 4;
+          int64_t *nd = realloc(v->data, ncap * sizeof(int64_t));
+          if (!nd) {
+            json_hyfree_hynode_hy(elem); json_hyfree_hynode_hy((int64_t)(intptr_t)n);
+            cp->err = 1; return 0;
+          }
+          v->data = nd; v->cap = ncap;
         }
         v->data[v->len++] = elem;
         json_hydec_hyskip_hyws_hy(c);
         if (cp->s[cp->pos] == ']') break;
-        if (cp->s[cp->pos] != ',') { cp->err = 1; free(v->data); free(v); return 0; }
+        if (cp->s[cp->pos] != ',') { cp->err = 1; json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         cp->pos++;
       }
     }
     cp->pos++;
-    int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 5; n[1] = (int64_t)(intptr_t)v;
+    cp->depth--;
     return (int64_t)(intptr_t)n;
   }
   /* object */
   if (ch == '{') {
     cp->pos++;
-    int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 6; n[1] = 0;
+    int64_t *n = malloc(2 * sizeof(int64_t));
+    if (!n) { cp->err = 1; return 0; }
+    n[0] = 6; n[1] = 0;
     json_hydec_hyskip_hyws_hy(c);
     if (cp->s[cp->pos] != '}') {
       for (;;) {
         json_hydec_hyskip_hyws_hy(c);
         char *key = (char *)json_hydec_hyparse_hystring_hy(c);
-        if (!key || cp->err) { free(n); return 0; }
+        if (!key || cp->err) { free(key); cp->err = 1; json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         json_hydec_hyskip_hyws_hy(c);
-        if (cp->s[cp->pos] != ':') { cp->err = 1; free(key); free(n); return 0; }
+        if (cp->s[cp->pos] != ':') { cp->err = 1; free(key); json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         cp->pos++;
         int64_t val = json_hydec_hyparse_hyvalue_hy(c);
-        if (cp->err) { free(key); free(n); return 0; }
+        if (cp->err) { free(key); json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         int64_t *entry = malloc(3 * sizeof(int64_t));
+        if (!entry) {
+          free(key); json_hyfree_hynode_hy(val); json_hyfree_hynode_hy((int64_t)(intptr_t)n);
+          cp->err = 1; return 0;
+        }
         entry[0] = (int64_t)(intptr_t)key;
         entry[1] = val;
         entry[2] = n[1];
         n[1] = (int64_t)(intptr_t)entry;
         json_hydec_hyskip_hyws_hy(c);
         if (cp->s[cp->pos] == '}') break;
-        if (cp->s[cp->pos] != ',') { cp->err = 1; free(n); return 0; }
+        if (cp->s[cp->pos] != ',') { cp->err = 1; json_hyfree_hynode_hy((int64_t)(intptr_t)n); return 0; }
         cp->pos++;
       }
     }
     cp->pos++;
+    cp->depth--;
     return (int64_t)(intptr_t)n;
   }
   cp->err = 1;
@@ -8823,8 +8911,8 @@ static int64_t json_hydec_hyparse_hyvalue_hy(void * c) {
 }
 
 static int64_t json_sldecode(const char * s) {
-        struct tur_json_ctx { const char *s; size_t pos; int err; };
-  struct tur_json_ctx ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0;
+        struct tur_json_ctx { const char *s; size_t pos; int err; int depth; };
+  struct tur_json_ctx ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0; ctx.depth = 0;
   int64_t result = json_hydec_hyparse_hyvalue_hy((void *)&ctx);
   if (ctx.err) return 0;
   return result;
@@ -8854,8 +8942,8 @@ static int64_t json_sldecode_hyfile_ex(const char * path) {
   }
   fclose(f);
   buf[len] = 0;
-  struct tur_json_ctx { const char *s; size_t pos; int err; };
-  struct tur_json_ctx ctx; ctx.s = buf; ctx.pos = 0; ctx.err = 0;
+  struct tur_json_ctx { const char *s; size_t pos; int err; int depth; };
+  struct tur_json_ctx ctx; ctx.s = buf; ctx.pos = 0; ctx.err = 0; ctx.depth = 0;
   int64_t result = json_hydec_hyparse_hyvalue_hy((void *)&ctx);
   free(buf);
   if (ctx.err) return 0;

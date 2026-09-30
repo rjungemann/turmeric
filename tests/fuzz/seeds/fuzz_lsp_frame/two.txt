@@ -1,0 +1,6 @@
+Content-Length: 7
+
+{"a":1}content-length: 2
+Content-Type: application/vscode-jsonrpc; charset=utf-8
+
+[]

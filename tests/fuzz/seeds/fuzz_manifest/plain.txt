@@ -1,0 +1,6 @@
+p(spice guestbook
+  :version "0.1.0"
+  :spices [(dep json :path "../json")]
+  :exports [main]
+  :link-libs ["m"]
+  :build-dir "build")

@@ -27,7 +27,7 @@ keeps.
 | # | Boundary | Untrusted input | Promise |
 | --- | --- | --- | --- |
 | T1 | Compiling a project | a `.tur` tree, its `build.tur`, its `spices/`, its Justfile | Split -- see below. `tur build` makes **no promise**. `tur check`, `tur run --list` and the language server promise not to execute repo-supplied code or shell unless you asked them to. |
-| T2 | A compiled program's own inputs | bytes handed to stdlib readers: `bytes->serial-cont`, image files, JSON, HTTP requests to `httpd`, `read-async` lengths | A malformed input is a `result` error or a panic -- never a wild read or write. |
+| T2 | A compiled program's own inputs | bytes handed to stdlib readers: `bytes->serial-cont`, image files, JSON, HTTP requests to `httpd`, `read-async` lengths | A malformed input is a `result` error or a panic -- never a wild read or write. Well-formed is not authentic: authenticating bytes is the program's job. |
 | T3 | The sandboxed interpreter | the program text evaluated inside `Env/new-sandboxed`, the macro environment, or the playground | A capability-denied environment does no I/O, no filesystem, no process, no environment, no FFI, no inline C; it cannot corrupt or end the host process; and it terminates under fuel. |
 | T4 | The supply chain | the installer, release assets, `tur fetch` of a `:url` spice, Actions inputs | Installing a release gets you the bytes CI built, verifiably. A spice pinned in `tur.lock` cannot change under a rebuild without a diagnostic. |
 | T5 | Editor protocols | LSP, DAP and MCP messages over stdio | The peer is your editor, so it is semi-trusted -- but framing must be robust. A bad `Content-Length` must not overflow. |
@@ -156,26 +156,39 @@ image, a JSON body, an HTTP request. **The stdlib reader must not corrupt memory
 on any input.** A malformed input is a `result` error or a panic, never a wild
 read or write. This is the ordinary promise a runtime library makes.
 
-**Status today: not kept for the serial/continuation and image paths (M-1,
-open, high).** `tur_serial_cont_deserialize` bounds-checks nothing: frame count,
-name length, string length and environment length are all trusted from the
-input, and raw integers from the byte stream become frame environments.
-`bytes->serial-cont` validates first, but shallowly, and two entry points --
-`resume-cont!` and `image/blob-resume!` -- skip validation altogether. An
-image's CRC covers its 68-byte header only, while the payload length read from
-that header sizes a `malloc`.
+What the stdlib readers do:
 
-This matters most where the project already ships T2 across a network: the
-guestbook example resumes a continuation from a `POST` token. **Today a forged
-token is a forged continuation.** Do not accept a serialized continuation from
-an untrusted source.
+- **Serialized continuations.** Every route that rebuilds one --
+  `bytes->serial-cont`, `resume-cont!`, `image/blob-resume!` -- runs the same
+  check inside the runtime: each record must fit the buffer, carry a known tag,
+  and, for a call frame, name a frame this program registered, with the
+  environment kind that frame was registered with. `bytes->serial-cont` turns a
+  bad buffer into an `Err`; the others panic.
+- **Images.** The header's payload length is held to the file's real size, a
+  CRC covers the payload as well as the header, and the continuation is checked
+  before the image counts as loadable -- a damaged image is a cold start.
+- **JSON.** Both decoders (compiled and interpreter) cap nesting at 256, decode
+  `\uXXXX` (a lone surrogate or `\u0000` is an error), and free what they built
+  when they fail.
+- **`httpd`.** A malformed, conflicting or oversized `Content-Length`, and any
+  `Transfer-Encoding`, is refused before a byte of the body is read; the body
+  cap defaults to 8 MiB (`httpd-set-max-body!`). Servers bind loopback unless
+  the program asks for more. See
+  [httpd-guide](httpd-guide.md#binding-and-request-limits).
 
-Whether `bytes->serial-cont` should verify an HMAC -- integrity is not
-authenticity -- is an open question in the audit plan.
+These readers, along with the LSP framing and the compiler's own front door
+(the reader, the manifest reader, the Justfile parser), run nightly under
+libFuzzer with ASan and UBSan -- see `tests/fuzz/README.md`.
 
-Also open under T2: JSON has no nesting depth limit and over-reads on input
-ending in a backslash (M-2); `httpd` does not cap a request body and does not
-reject a request carrying both `Content-Length` and `Transfer-Encoding` (M-4).
+**Checked is not authenticated.** A continuation buffer that passes the check
+still rebuilds a continuation of *this program's* frames with whatever
+environment values the buffer carries, and an image's CRCs catch corruption,
+not tampering -- anyone who can write the file can recompute them. Do not
+resume bytes that crossed a trust boundary without authenticating them first;
+the guestbook example keeps continuations server-side and hands the client only
+an HMAC-signed name. A `Serializable` instance's own `deserialize`, which
+receives an environment's bytes, is the program's code and the program's
+responsibility.
 
 ---
 
@@ -318,11 +331,9 @@ matters because the release pipeline is what T4's first promise depends on.
 The peer is your own editor, so it is semi-trusted -- but **message framing
 must be robust**.
 
-**Status today: not kept (M-3, open, medium).** The LSP framing layer parses
-`Content-Length` with an unchecked `atol`. A value of `-1` wraps the
-`body_len + 1` allocation to zero, producing a `malloc(0)` followed by a huge
-read -- a heap overflow. Header accumulation is also unbounded. The debug
-adapter reuses the same reader.
+`tur lsp` and `tur dap` accept a `Content-Length` of plain decimal digits, at
+most 64 MiB, after a header block of at most 8 KiB; anything else ends the
+session as a framing error.
 
 ---
 

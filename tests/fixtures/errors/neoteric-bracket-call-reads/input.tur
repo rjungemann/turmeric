@@ -1,0 +1,11 @@
+#lang sweet-exp
+;; security-audit-plan WP4, found by tests/fuzz/fuzz_reader: `f[x]` in a
+;; neoteric or sweet-exp file reads as (bracketapply f x), and building that
+;; form free()d an arena pointer.  Any such file crashed the reader -- `tur
+;; check` and the language server included -- before elaboration ran.  The
+;; reader now hands the form on, and the program fails the ordinary way:
+;; nothing defines bracketapply.
+def v : int 5
+
+defn main [] : int
+  v[1]

@@ -9627,6 +9627,9 @@ static int cmd_image_verify(const char *path, const char *binary) {
     if (!f) { fprintf(stderr, "tur image-verify: cannot open '%s'\n", path); return 2; }
     TurImageHeader h;
     TurImageError e = tur_image_read_header(f, &h);
+    /* The payload too (security-audit-plan M-1): its length against the file,
+     * and its CRC when the header carries one. */
+    if (e == IMAGE_OK) e = tur_image_verify_payload(f, &h);
     fclose(f);
     if (e != IMAGE_OK) {
         fprintf(stderr, "FAIL: %s: %s\n", path, tur_image_strerror(e));
@@ -9645,7 +9648,7 @@ static int cmd_image_verify(const char *path, const char *binary) {
         printf("OK: header valid and build-stamp matches '%s'\n", binary);
         return 0;
     }
-    printf("OK: header valid (magic/version/CRC). build-stamp: ");
+    printf("OK: header and payload valid (magic/version/flags/CRCs). build-stamp: ");
     tur_image_print_stamp(h.build_stamp); printf("\n");
     printf("note: pass a loader binary as the 2nd arg to verify the build-stamp.\n");
     return 0;
