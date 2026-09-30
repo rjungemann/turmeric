@@ -3,14 +3,18 @@
 > **Status:** C1-C3 **landed** 2026-09-11/12 as `spices/crdt` 0.1.0
 > (turmeric-spices #67, #68): counters, causal core, `GSet` / `TwoPSet` /
 > `ORSet`, HLC, both registers and the constrained `ORMap`, with eight test
-> suites including the 400-seed convergence fuzzer. The two typeclass defects
-> below, and every defect the C1-C3 build filed, are fixed and archived.
-> **Open:** C4 (delta-state `DeltaCRDT`), C5 (sequences) and C6 (the separate
-> `crdt-sync` spice) -- none started. Spice follow-ups also open: `ReplicaId`
-> is still a `defalias` for `Sym` although the `defopaque`-over-`Sym` defect
-> was fixed 2026-09-16 (C1); `crdt/set` still uses the explicit-hash macros
-> although the typed adder was fixed 2026-09-16 (C2); no HAMT-join benchmark
-> yet (section 7). **Track:** post-v1 -- nothing on the v1
+> suites including the 400-seed convergence fuzzer. **C4 and C5 landed**
+> 2026-09-29 as 0.2.0 (turmeric-spices #76): `DeltaCRDT` with delta mutators
+> for all eight C1-C3 types, and `crdt/rga`, the sequence. Eleven suites, all
+> green on both CI platforms. The two typeclass defects below, and every
+> defect the C1-C3 build filed, are fixed and archived.
+> **Open:** C6 only (the separate `crdt-sync` spice) -- not started. Spice
+> follow-ups also open: `ReplicaId` is still a `defalias` for `Sym` although
+> the `defopaque`-over-`Sym` defect was fixed 2026-09-16 (C1); `crdt/set`
+> still uses the explicit-hash macros although the typed adder was fixed
+> 2026-09-16 (C2); no HAMT-join benchmark yet (section 7); the spice has no
+> `README.md`, so it does not appear on the docs site (44 of 48 spices have
+> one). **Track:** post-v1 -- nothing on the v1
 > line depends on this; it is written down so the design survives.
 > **Type:** spice (in `../turmeric-spices/`), plus one candidate stdlib
 > addition (`map-merge-with`) that the plan deliberately declines to make.
@@ -570,12 +574,89 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
   The HLC ships a drift bound (`hlc-max-drift`) so a remote replica with a
   wrong clock cannot drag this one forward permanently -- 1.3's requirement.
 
-- **C4 -- deltas.** `DeltaCRDT`, per-instance `Delta` bindings, delta
-  mutators for every C1-C3 type, and the equivalence test that matters:
-  joining a sequence of deltas equals joining the full states.
-- **C5 -- sequences.** RGA (or Fugue) for replicated text. This is the hard
-  one -- interior ordering, tombstones, and an index-to-position map -- and
-  it is the one that most deserves to be deferred until C1-C4 are boring.
+- **C4 -- deltas. DONE 2026-09-29.** `DeltaCRDT` lands in `crdt/lattice` (a
+  `defclass` is not an exportable name, and neither are its methods, so a
+  `crdt/delta` module of its own would have had nothing real to export; the
+  methods are ambient once the defining module is in the build). Delta
+  mutators for all eight C1-C3 types, and `tests/crdt/test_delta.tur` asserts
+  the equivalence this phase was named for -- applying a sequence of deltas
+  equals joining the full states -- plus size, idempotence under duplicate
+  delivery, and buffering, per type.
+
+  **Section 2.4 was right about the ORSet, and the reason is sharper than it
+  wrote.** The associated type is load-bearing, and the split falls exactly
+  along whether a type carries a causal context:
+
+  | | `Delta` |
+  | --- | --- |
+  | GCounter, PNCounter, GSet, TwoPSet, LwwRegister, MvRegister, Rga | the state type |
+  | **ORSet, ORMap** | **a distinct delta type** |
+
+  A `DotContext` is a compacted VERSION VECTOR -- `alice -> 3` means alice's
+  dots 1, 2 and 3 -- which is exact for a state and wrong for a delta.
+  Measured on the first attempt, which shipped `Delta = ORSet`: an add-delta
+  from alice@3 carrying `{alice: 3}` claims alice@1 and alice@2 as observed,
+  so the receiver reads its own untouched elements as deliberately removed
+  and drops them. Delivering ONE delta to a replica holding two elements left
+  it holding one, silently. So `crdt/causal` gained an exact `DotSet` and the
+  two causal types carry `OrsetDelta` / `OrmapDelta` instead.
+
+  **Two shapes in 2.4's sketch do not compile**, both filed:
+  [associated-type-unusable-nullary-and-generic](../reported/associated-type-unusable-nullary-and-generic.md).
+
+  1. `(delta-bottom [] : Delta)` -- a nullary method whose only mention of the
+     class variable is through the associated type is not registered at all.
+     Dispatch reads the first parameter; there is nothing to dispatch on. A
+     two-parameter class with a fundep (`[a d] | (a -> d)`) was probed as the
+     alternative and fails the same way, because dispatch reads only the FIRST
+     class variable. Hence the `^borrow x : a` WITNESS parameter on
+     `delta-bottom` and `delta-join` -- they take a state they do not read.
+  2. `(Delta A)` projected at a type VARIABLE is rejected; at a concrete type
+     it works. So the class cannot be used generically, and C4 ships no
+     generic delta helpers: every `apply-delta` caller names a concrete state
+     type. That is the biggest limitation of C4 as shipped.
+
+  Deltas here require CAUSAL DELIVERY, which is the assumption `crdt/causal`
+  already documents for its version-vector compaction -- applying a delta
+  folds its exact dots into the receiver's version vector, and that is only
+  lossless while a replica's dots arrive without gaps. C6 owes this module
+  that; an exception-cloud `DotContext` is the alternative and costs every
+  state operation.
+
+- **C5 -- sequences. DONE 2026-09-29.** `crdt/rga`: a replicated growable
+  array over LAMPORT ids -- not the per-replica counters `crdt/causal` mints,
+  because RGA's linear integration scan is correct only while a node's id
+  exceeds its origin's -- with tombstones and an O(n) index-to-position walk.
+  `test_rga` pins six hand-written scenarios; `test_rga_converge` runs 300
+  seeded cases in three sweeps.
+
+  **The scenario worth the file is `test-no-interleave`**: concurrent runs of
+  "abc" and "xyz" must merge to one run then the other, never "axbycz". A
+  fuzzer cannot see that -- interleaving converges perfectly -- which is the
+  same complementarity C2 measured between `test_orset` and `test_converge`,
+  arriving for a third time.
+
+  **Every assertion was mutation-tested, and three mutations survived the
+  first draft.** Each got a test written for it:
+
+  | mutation | caught by, after | why it slipped |
+  | --- | --- | --- |
+  | retract by "counter at or below", not the exact dot | `test-orset-remove-is-exact` | every other test retracts the LOWEST dot its replica minted, so there is nothing below to over-reach onto |
+  | drop ORMap's already-seen guard | `test-ormap-duplicates` | nothing else re-delivered anything |
+  | drop the clock max in `rga-merge` | `test-clock-monotone` | **invisible to the fuzzer**: every replica corrupts the id tree identically and they still agree |
+
+  The third is the one to remember. It is C2's finding again in its strongest
+  form: a convergence check cannot see a bug that converges, and the only
+  thing that caught it was stating the invariant directly as a white-box
+  assertion.
+
+  Two compiler defects were filed building it, neither blocking:
+  [vec-push-byvalue-struct-param-emits-unbridged-pointer](../reported/vec-push-byvalue-struct-param-emits-unbridged-pointer.md)
+  (a `defstruct` wider than two words cannot be pushed into a `(Vec T)` from a
+  parameter -- hence the eight-parameter `__ins-at!`) and
+  [phantom-parametric-heap-let-binding-repr-ice](../reported/phantom-parametric-heap-let-binding-repr-ice.md)
+  (which also records the pre-existing macOS-only red in `test_ormap.tur`,
+  fixed in the same PR).
 - **C6 -- sync.** A separate `crdt-sync` spice over `valkey` pubsub or the
   `ws-*` spices: delta buffering, acknowledgment, anti-entropy. Separate
   because a transport dependency has no business in the core, and because
@@ -583,7 +664,7 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
 
 C1-C3 are the useful unit; someone can build with the spice at the end of
 C3. C4 is what makes it usable over a network, C5 is a research-grade
-follow-on, C6 is plumbing.
+follow-on, C6 is plumbing. C1-C5 are in; only C6 is left.
 
 ## 7. Risks and open questions
 
