@@ -54,7 +54,9 @@
 ;;;
 ;;; Returns:
 ;;;   The continuation's return value, after rebuilding the chain from b and
-;;;   resuming it with v.
+;;;   resuming it with v.  A b that is not a valid continuation buffer for
+;;;   this program is a panic (never a resumed garbage chain); use
+;;;   bytes->serial-cont from stdlib/serial.tur to get a Result instead.
 ;;;
 ;;; Since: Phase 21
 

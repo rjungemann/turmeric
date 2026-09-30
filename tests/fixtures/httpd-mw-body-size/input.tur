@@ -2,7 +2,7 @@
 ;;
 ;; Two requests on one keep-alive socket:
 ;;
-;;   1. POST / with Content-Length: 1000 (well over the 100-byte cap).
+;;   1. POST / with a 1000-byte body (well over the 100-byte cap).
 ;;      mw-body-size should short-circuit with 413 WITHOUT calling base.
 ;;
 ;;   2. POST / with Content-Length: 5 ("hello"). mw-body-size passes through
@@ -36,10 +36,12 @@
   addr.sin_port        = htons((uint16_t)port);
   if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
 
-  /* Request 1: oversize -- claim 1000-byte body but send only a small chunk;
-   * mw-body-size rejects on Content-Length before any body read. We close
-   * the socket and re-connect for the second request because the server's
-   * keep-alive path would otherwise wait for the full 1000-byte body. */
+  /* Request 1: oversize -- a complete 1000-byte body, over mw-body-size's
+   * 100-byte cap.  mw-body-size runs in the handler chain, after the server
+   * has read the body (the server-wide ceiling that refuses a body before
+   * reading it is httpd-set-max-body!; httpd-parse-head-refusals covers
+   * that).  The body is sent in full because the server drops, rather than
+   * dispatches, a request whose body falls short of its Content-Length. */
   {
       const char *req =
           "POST / HTTP/1.0\r\n"
@@ -47,6 +49,9 @@
           "Content-Length: 1000\r\n"
           "\r\n";
       send(fd, req, strlen(req), 0);
+      char pad[1000];
+      memset(pad, 'x', sizeof pad);
+      send(fd, pad, sizeof pad, 0);
       char drain[1024];
       int total = 0;
       while (total < (int)sizeof(drain) - 1) {

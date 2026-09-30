@@ -1,0 +1,53 @@
+;; security-audit-plan M-2: json/decode on input an attacker chose.
+;;
+;; Both decoders (stdlib/json.tur's inline C, and the interpreter's native twin
+;; in src/turi/interpreter_natives.c) are held to the same answers here:
+;;   - a string ending in a lone backslash used to copy the NUL, step past it
+;;     and keep reading the heap -- it is now a decode error;
+;;   - nesting is capped at 256, so a deep document is an error instead of a
+;;     stack overflow;
+;;   - \uXXXX decodes to UTF-8 (surrogate pairs included); a lone surrogate
+;;     and \u0000 (unrepresentable in a C string) are errors;
+;;   - the encoder escapes control characters instead of emitting them raw.
+;; Error paths free what they built, which only a leak check can see.
+
+(load "stdlib/json.tur")
+(load "stdlib/cstr.tur")
+(load "stdlib/str-build.tur")
+
+(defn brackets [s : cstr n : int] : cstr
+  (if (= n 0) "" (str-concat s (brackets s (- n 1)))))
+
+(defn nested [depth : int] : cstr
+  (str-concat (brackets "[" depth) (brackets "]" depth)))
+
+(defn show [label : cstr node : int] : void
+  (if (= node 0)
+    (println (str-concat label ": error"))
+    (println (str-concat label (str-concat ": " (json/encode node))))))
+
+(defn main [] : int
+  (do
+    ;; the over-read: backslash, then the terminator
+    (show "trailing backslash" (json/decode "\"abc\\"))
+    (show "backslash in array" (json/decode "[\"x\\"))
+    ;; nesting: 256 deep is accepted, one more is not
+    (println (if (= (json/decode (nested 256)) 0) "depth 256: error" "depth 256: ok"))
+    (show "depth 257" (json/decode (nested 257)))
+    (show "depth 2000" (json/decode (nested 2000)))
+    ;; \u escapes: A, e-acute, euro sign, and an astral code point via a
+    ;; surrogate pair -- 1 + 2 + 3 + 4 UTF-8 bytes
+    (let [s (json/decode "\"\\u0041\\u00e9\\u20AC\\ud83d\\ude00\"")]
+      (println (str-concat "utf-8 bytes: " (int->str (cstr-len (json/get-string s))))))
+    (show "lone high surrogate" (json/decode "\"\\ud83d\""))
+    (show "high surrogate then text" (json/decode "\"\\ud83dxy\""))
+    (show "lone low surrogate" (json/decode "\"\\ude00x\""))
+    (show "u0000" (json/decode "\"a\\u0000b\""))
+    (show "short u escape" (json/decode "\"\\u00\""))
+    ;; an error part-way through a container frees the partial tree
+    (show "bad array" (json/decode "[1, \"two\", {\"k\": [3, 4}]"))
+    (show "bad object" (json/decode "{\"a\": [1, 2], \"b\": }"))
+    ;; control characters round-trip escaped, never raw
+    (show "control chars" (json/decode "\"a\\u0001b\\tc\\u001f\\b\\f\""))
+    (show "ok" (json/decode "{\"k\": [1, \"v\\n\", true, null]}"))
+    0))

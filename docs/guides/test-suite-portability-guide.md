@@ -557,9 +557,11 @@ suite's counts.
 ## 8. Harness environment parity
 
 `tests/run.sh` exports `TUR_BIND_LOOPBACK=1`; `stdlib/httpd.tur` and
-`stdlib/async_socket.tur` read it at run time and bind `INADDR_LOOPBACK`
-instead of `INADDR_ANY`. A sibling harness that forgets the export makes
-every server fixture bind all interfaces.
+`stdlib/async_socket.tur` read it at run time and bind `INADDR_LOOPBACK`.
+`stdlib/async_socket.tur` otherwise binds `INADDR_ANY`, and `stdlib/httpd.tur`
+binds loopback by default but `INADDR_ANY` once a program calls
+`httpd-set-bind-any!` -- so a sibling harness that forgets the export still
+makes server fixtures bind all interfaces.
 
 That is not a cosmetic difference. It surfaced as an apparent macOS-only
 JIT defect: BSD permits a wildcard bind while a specific address holds the

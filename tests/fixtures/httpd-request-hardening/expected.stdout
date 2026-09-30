@@ -1,0 +1,25 @@
+get: GET /a?b=1 clen=0
+post: POST /f clen=5
+negative: refused 400
+trailing junk: refused 400
+plus sign: refused 400
+empty: refused 400
+int wrap: refused 413
+huge: refused 413
+dup same: POST / clen=3
+dup differ: refused 400
+chunked: refused 501
+cl and te: refused 400
+over default: refused 413
+at default: POST / clen=8388608
+over 16: refused 413
+at 16: POST / clen=16
+HTTP/1.1 200 OK | Content-Length: 0 | Connection: close | Content-Type: text/plain; charset=utf-8 | X-Ok: fine |  | 
+served
+served
+refused
+refused
+refused
+refused
+refused
+5040

@@ -93,6 +93,35 @@ Inside the handler:
 A `port` of `0` lets the kernel choose; read it back with
 `(httpd-port h)`. This is the recommended pattern for tests.
 
+### Binding and request limits
+
+Servers listen on **127.0.0.1** unless the program asks for more. To be
+reachable from the network, call `(httpd-set-bind-any! true)` before the
+constructor (or set `TUR_HTTPD_BIND_ANY=1` in the environment); that binds
+`0.0.0.0`. `TUR_BIND_LOOPBACK`, which the test harnesses export, forces
+loopback either way.
+
+Before a handler runs, the server refuses, and closes the connection on:
+
+| Request | Answer |
+| --- | --- |
+| `Content-Length` that is not plain decimal digits, or repeated with different values | 400 |
+| `Content-Length` together with `Transfer-Encoding` | 400 |
+| `Transfer-Encoding` alone (chunked bodies are not implemented) | 501 |
+| `Content-Length` above the body cap (8 MiB by default; `httpd-set-max-body!`) | 413 |
+| A body shorter than its `Content-Length` (timeout or peer close) | dropped, no answer |
+
+The body cap is checked before anything is allocated for the body.
+`mw-body-size` is a lower, per-route limit that runs inside the handler chain,
+after the body has been read.
+
+Response headers whose name or value contains a CR or LF, or whose name
+contains a colon or a blank, are dropped when the response is written, so a
+handler that copies request data into a header cannot split the response.
+`mw-static` serves only regular files that resolve inside its root (symlinks
+included), ignores the query string, and refuses any path segment starting
+with `.` other than `.well-known`.
+
 ---
 
 ## Lifecycle
@@ -208,7 +237,9 @@ HTTP/1.1 keep-alive is on by default. A worker loops on the same socket
 until:
 
 - The client sends `Connection: close`.
-- A 5-second `SO_RCVTIMEO` fires (no data within the idle window).
+- A 5-second `SO_RCVTIMEO` fires (no data within the idle window). The async
+  server (`httpd-new-async`) applies the same 5-second bound to each wait
+  while reading a request.
 - The peer closes the socket.
 
 HTTP/1.0 connections close after one request unless the client sends

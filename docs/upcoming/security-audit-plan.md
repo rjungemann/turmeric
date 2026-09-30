@@ -1,7 +1,7 @@
 # Security audit -- Turmeric as it stands at v0.56.3
 
-> **Status: WP1 and WP2 DONE (2026-09-29); WP3, WP5 and WP6 DONE
-> (2026-09-30); WP4, WP7, WP8 PROPOSED.** Written 2026-09-30
+> **Status: WP1 and WP2 DONE (2026-09-29); WP3, WP4, WP5 and WP6 DONE
+> (2026-09-30); WP7, WP8 PROPOSED.** Written 2026-09-30
 > against `main` @ 81e12de4 (v0.56.3). Section 2 lists what a one-afternoon
 > survey already turned up, so the audit starts from a map, not from zero;
 > every row there is a *candidate* until the work package that owns it
@@ -29,12 +29,19 @@
 > and the R7RS `eval` bridge as a full escape), and a new high, S-5, that the
 > capability check cannot close.
 >
+> **WP4 landed 2026-09-30** against `main` @ 5fd23a65.  M-1 to M-4 are fixed
+> with fixtures.  Ten libFuzzer targets now live in `tests/fuzz` and run
+> nightly.  Across their 60-second and 10-minute passes they found eight
+> defects, all fixed.  WP4's
+> research pass is recorded in section 2e: re-grades, the survey line numbers
+> that had moved, and fifteen findings the survey did not have.
+>
 > **WP5 landed 2026-09-30** against `main` @ 5fd23a65. M-5 and M-6 are fixed
 > with fixtures, the TSan job and the format-string flags are in; section 2d
 > records what the verification found, what the survey had wrong, and what was
 > handed to WP3/WP4.
 >
-> **WP6 landed 2026-09-30.** Its pass is section 2e: W-2 reproduced as a
+> **WP6 landed 2026-09-30.** Its pass is section 2f: W-2 reproduced as a
 > working attribute injection from the editor's first line, a same-origin gap
 > the survey did not have (every generated doc page ran inline script, so the
 > CSP needed the doc generators changed), and a broken Share button filed as an
@@ -150,10 +157,10 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 
 | Id | Sev | Finding | Where |
 | --- | --- | --- | --- |
-| M-1 | high (under T2) | `tur_serial_cont_deserialize` has **no bounds checks**: frame count, name length, cstr length and env length are trusted from the bytes; raw int64s become frame environments; `__sk_frame_for_tag` takes an unchecked tag (`src/runtime/generated/tur_rt_split.c:2247-2291`; emitted copy `src/compiler/emit_dk_runtime.c:324`). `bytes->serial-cont` validates first but shallowly (`stdlib/serial.tur:598-651`); `resume-cont!` (`stdlib/workflow.tur:61-68`) and `image/blob-resume!` (`stdlib/image.tur:672-677`, via `load-resume-file!` `:699`) skip validation entirely. Image CRC covers the 68-byte header only, and `plen`/`goff` from the file size the `malloc` (`stdlib/image.tur:617-655`, `src/runtime/image.c:136-167`). The guestbook example resumes a continuation from a `POST` token -- this is the one place the project already ships T2 across a network. |
-| M-2 | medium | JSON: input ending in `\` steps past the NUL terminator (compiled `stdlib/json.tur:545-563`; interpreter `src/turi/interpreter_natives.c:1211-1230`); no nesting depth limit (`json.tur:616-660`); no `\u`; error paths leak. |
-| M-3 | medium (under T5) | LSP framing parses `Content-Length` with an unchecked `atol`; `-1` wraps `body_len + 1` to 0, `malloc(0)`, then a huge `read` -- heap overflow (`src/lsp/lsp_io.c:71-96`, **verified**); `read_headers` grows unbounded (`:40-68`). DAP reuses it (`src/turi/dap.c:818, 1114, 1340`). |
-| M-4 | medium | `httpd`: `Content-Length` is `(int)strtol` into `malloc(content_len + 1)` with no cap (`stdlib/httpd.tur:293, 329, 2491`); `Transfer-Encoding` ignored (smuggling behind a proxy); static-file traversal guard is `strstr(path, "..")` with `stat` not `lstat` (`:4143-4200`); binds `INADDR_ANY` by default (`:720`). Multipart (`:2102-2176`) and Basic auth (`:1963, 2014`) unreviewed. |
+| M-1 | high (under T2) | **FIXED (WP4)** -- fixtures `serial-resume-rejects-forged-env`, `image-*`; `tests/image_unit.c`; fuzz targets `fuzz_serial_cont`, `fuzz_image_header`. `tur_serial_cont_deserialize` has **no bounds checks**: frame count, name length, cstr length and env length are trusted from the bytes; raw int64s become frame environments; `__sk_frame_for_tag` takes an unchecked tag (`src/runtime/generated/tur_rt_split.c:2247-2291`; emitted copy `src/compiler/emit_dk_runtime.c:324`). `bytes->serial-cont` validates first but shallowly (`stdlib/serial.tur:598-651`); `resume-cont!` (`stdlib/workflow.tur:61-68`) and `image/blob-resume!` (`stdlib/image.tur:672-677`, via `load-resume-file!` `:699`) skip validation entirely. Image CRC covers the 68-byte header only, and `plen`/`goff` from the file size the `malloc` (`stdlib/image.tur:617-655`, `src/runtime/image.c:136-167`). The guestbook example resumes a continuation from a `POST` token -- this is the one place the project already ships T2 across a network. |
+| M-2 | medium | **FIXED (WP4)** -- fixture `json-decode-hostile-input`; fuzz targets `fuzz_json_compiled`, `fuzz_json_interp`. JSON: input ending in `\` steps past the NUL terminator (compiled `stdlib/json.tur:545-563`; interpreter `src/turi/interpreter_natives.c:1211-1230`); no nesting depth limit (`json.tur:616-660`); no `\u`; error paths leak. |
+| M-3 | medium (under T5) | **FIXED (WP4)** -- ctest `tur_lsp_io_unit`; fuzz target `fuzz_lsp_frame`. LSP framing parses `Content-Length` with an unchecked `atol`; `-1` wraps `body_len + 1` to 0, `malloc(0)`, then a huge `read` -- heap overflow (`src/lsp/lsp_io.c:71-96`, **verified**); `read_headers` grows unbounded (`:40-68`). DAP reuses it (`src/turi/dap.c:818, 1114, 1340`). |
+| M-4 | medium | **FIXED (WP4)**, residue filed as `docs/reported/httpd-residual-request-hardening.md` -- fixture `httpd-request-hardening`; fuzz target `fuzz_httpd_head`. `httpd`: `Content-Length` is `(int)strtol` into `malloc(content_len + 1)` with no cap (`stdlib/httpd.tur:293, 329, 2491`); `Transfer-Encoding` ignored (smuggling behind a proxy); static-file traversal guard is `strstr(path, "..")` with `stat` not `lstat` (`:4143-4200`); binds `INADDR_ANY` by default (`:720`). Multipart (`:2102-2176`) and Basic auth (`:1963, 2014`) unreviewed. |
 | M-5 | medium | **FIXED by WP5** (section 2d), with 26 more sites the sweep found. `read-async` does `malloc((size_t)bytes + 1)` with an unchecked, possibly negative `int` (`src/turi/fiber.c:763`); `tur_string_substring`/`slice` compute `start + len > n` with signed overflow (`src/runtime/tur_string.c:183, 300`); `n_from_bytes` accepts `len > strlen` (`src/turi/string_native.c:25-30`); `sb_reserve` doubles unchecked (`tur_string.c:238-243`); `bytes-alloc` `malloc(8 + (size_t)n)` with negative `n` (`stdlib/serial.tur:56-62`); `alloca(n * 8)` with user `n` in `stdlib/sized-buf.tur:445, 484` (gated `#fx{Unsafe}`). |
 | M-6 | medium (silent UAF class) | **FIXED by WP5** (section 2d): one survey site confirmed -- as a class, not a site -- three retired, and a second class the survey did not have. Region escape hooks missing, per the CLAUDE.md rule: `tur_hamt_transient_set` (`src/runtime/hamt.c:1879`, from `stdlib/hamt.tur:740`), `tvar/write`/`tvar/swap` (`stdlib/stm.tur:88, 109`; `src/runtime/stm.c` has no note), `sized-buf-set!` (`sized-buf.tur:307`), `sized-matrix-set!` (`:232`), `sized-bitvec-set!` (`sized-bits.tur:139`), `httpd-resp-header-add!` (`httpd.tur:1281`). Each is a candidate use-after-rewind on the default build. |
 | M-7 | info | The effect system is not a security boundary today: `--strict-effects` defaults off and only warns (`src/runtime/globals.c:135`); inline-C outside `Unsafe` is a lint behind `--lint-inline-c-unsafe`, default off (`globals.c:19`, `src/compiler/elab_toplevel.c:875`); the deserializers above infer plain rows. |
@@ -163,8 +170,8 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | Id | Sev | Finding | Where |
 | --- | --- | --- | --- |
 | W-1 | medium -- **FIXED in WP6** | No CSP anywhere: no meta tag, none in `web/public/_headers` (COOP/COEP only) or `web/worker.js:78-92`. | One policy in `web/csp.js`, applied by the dev/preview servers, stamped into the built `_headers`, and set by `worker.js` on its own responses. |
-| W-2 | medium -- **FIXED in WP6**, **verified** | `escapeHtml` (`web/main.js:905`) does not escape `"` but is used inside attributes (`main.js:1495, 1498-1499, 4733` -- `data-name="${escapeHtml(item.name)}"`); `escapeAttr` (`:922`) exists and is unused there. `hydrateConsole` re-inserts HTML from `localStorage['tur.try.console.v1']` unescaped (`:184-196`). | Reproduced: see section 2e. `escapeHtml` escapes both quotes; the transcript is stored as data (`tur.try.console.v2`). |
-| W-3 | low -- **FIXED in WP6** | No eval timeout or `worker.terminate` for the wasm worker (`web/public/eval-worker.js`), so a runaway program hangs its own tab. `#code=` share links only fill the editor (`main.js:1081-1090`) -- good. | Watchdog plus Stop. The share-link half was moot: Share has never worked (section 2e). |
+| W-2 | medium -- **FIXED in WP6**, **verified** | `escapeHtml` (`web/main.js:905`) does not escape `"` but is used inside attributes (`main.js:1495, 1498-1499, 4733` -- `data-name="${escapeHtml(item.name)}"`); `escapeAttr` (`:922`) exists and is unused there. `hydrateConsole` re-inserts HTML from `localStorage['tur.try.console.v1']` unescaped (`:184-196`). | Reproduced: see section 2f. `escapeHtml` escapes both quotes; the transcript is stored as data (`tur.try.console.v2`). |
+| W-3 | low -- **FIXED in WP6** | No eval timeout or `worker.terminate` for the wasm worker (`web/public/eval-worker.js`), so a runaway program hangs its own tab. `#code=` share links only fill the editor (`main.js:1081-1090`) -- good. | Watchdog plus Stop. The share-link half was moot: Share has never worked (section 2f). |
 | W-4 | info -- **documented in WP6** | The docs pane `innerHTML`s same-origin docs-pack HTML (`main.js:5543`), so the trust boundary is `tools/gendocs.py` over `;;;` docstrings -- including third-party spice docstrings via `tools/genspices.py`. | The security guide's Try Turmeric section names the docs as trusted content; the CSP stops injected HTML running script. |
 | W-5 | medium -- **FIXED in WP6**, found by WP6 | Every page under `/docs/html/` -- the playground's origin -- ran two inline `<script>` blocks and three `onload="this.rel='stylesheet'"` handlers, emitted by `tools/genguides.py`, `gendocs.py` and `genspices.py`. | The generators write their scripts as files beside the pages and link plain stylesheets, so the doc pages run under the same policy. |
 
@@ -177,7 +184,7 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | C-3 | medium | `tur.lock` is trust-on-first-use: the tree hash is recomputed and **overwritten** on every fetch, never compared (`src/compiler/pkg.c:2572-2582`); `:resolved` is never used to check out (clones track the branch/tag in `:ref`); verification happens only in `tur run` for already-present dirs, skipped for legacy/git-SHA hashes (`src/main.c:5710-5760`, `pkg.c:1744`). `consuming-spices-guide.md:405` overclaims. `tur audit` "lists; it does not verify" (`:420-424`). |
 | C-4 | medium | Release assets are unsigned: no Sigstore/cosign, no GitHub build-provenance attestation, tags are `git tag -a` not `-s` (`.claude/commands/cut-*-release.md`). `softprops/action-gh-release@v2` runs floating with `contents: write` (`release.yml:338-355`). |
 | C-5 | medium | No workflow pins an action to a SHA; `mymindstorm/setup-emsdk@v14` with `version: latest` (`ci.yml:134, 1470`); `msys2/setup-msys2@v2`; `pip install` unpinned (`ci.yml:105, 1467`; `release.yml:286`); `ci.yml:152-157` clones `turmeric-spices` default branch unpinned and compiles it; `ci.yml` has no top-level `permissions:` (default token scope everywhere except `publish-timings`' `contents: write`, `:762-765`); ccache `restore-keys` prefixes (`:112, 1454`). |
-| C-6 | low | `fuzz.yml:75` interpolates `${{ inputs.seed }}` directly into a `run:` block (dispatch-only, so needs write access already; `inputs.n` at `:87` uses the safe `env:` form). Workflow has `issues: write` and `GITHUB_TOKEN` for `gh issue create` (`:41-43, 122+`). |
+| C-6 | low | **`inputs.seed` half FIXED (WP4)**, in passing, while adding the parser job to the same file: the seed goes through `env:` with a digits check. The `issues: write` scope is WP7's. `fuzz.yml:75` interpolates `${{ inputs.seed }}` directly into a `run:` block (dispatch-only, so needs write access already; `inputs.n` at `:87` uses the safe `env:` form). Workflow has `issues: write` and `GITHUB_TOKEN` for `gh issue create` (`:41-43, 122+`). |
 | C-7 | low | `cmake/mir.cmake:138-160` fetches MIR from the personal fork `rjungemann/mir.git` (SHA-pinned; JIT-only, default off). `examples/snake` pins raylib by tag. `Dockerfile` uses `ubuntu:22.04` by tag; `.devcontainer/Dockerfile` has two `curl \| bash` installs. |
 | C-8 | low | Committed to git: `.claude/settings.local.json` (with a broad `Bash(xargs cat *)` allow), a `.claude/projects/.../memory/project_er6.md`, and `TEMP.md`. Missing: `SECURITY.md`, `CODEOWNERS`, `.github/dependabot.yml`, CodeQL/scanning workflow, and any private-vulnerability-reporting setting. |
 
@@ -698,7 +705,163 @@ preamble's thread-local guard, `select` read and handler-group counter changed.
 The split-runtime artifacts were regenerated with them. Under the 500-fixture
 coordination bar, so regenerated in the same change.
 
-## 2e. WP6's verification pass (2026-09-30)
+## 2e. WP4's research pass (2026-09-30)
+
+Everything below was read in the source against `main` @ 5fd23a65 before any
+WP4 change was made. The survey's WP4 rows still stood. Three of its
+mechanisms were sharper than it said, one claim was wrong, and several line
+numbers had moved.
+
+### Rows confirmed, with the mechanism tightened
+
+- **M-1: the validating route was not safe either.** `bytes->serial-cont`'s
+  validator (`stdlib/serial.tur:598-651`) checked every length, but it never
+  compared a call record's env kind with the kind the frame was *registered*
+  with. The env kinds are:
+  - `SK_ENV_INT` only ever carries a `TY_INT` operand. `cps_scalar_kind_ok`,
+    `src/passes/cps_ir.c:1109`, admits int and cstr alone, and
+    `check_serializable_capture_precise` rejects any other capture with
+    TUR-E0018.
+  - `SK_ENV_CSTR` carries a pointer.
+
+  A buffer that labels a cstr-env frame's record `SK_ENV_INT` therefore hands
+  that frame an attacker-chosen integer, which it dereferences as a string. The
+  validator accepted this, and `resume-cont!` / `image/blob-resume!` never
+  validated at all. The "raw int64s become frame environments" line in the
+  survey is exactly this route, and it is the only one: a genuine int env is an
+  int. Reproduced by fixture `serial-resume-rejects-forged-env`.
+- **M-1's image half.** `image/read-image-file` sized its `malloc` from the
+  header's `payload_len` without comparing it to the file.
+  `image/loadable?` checked less than `image/load-resume-file!`, so "loadable"
+  could still fail to load. The CRC covered 68 header bytes only. The runtime's
+  `tur_image_read_header` ignored the flags word, which the header documents
+  as "must be 0".
+- **M-2 in both decoders, plus two more.**
+  - `\u` was not decoded at all: `A` came back as the literal `u0041`.
+  - The encoder wrote control characters other than `\n\r\t` raw, which is
+    invalid JSON.
+  - On an error part-way through a container, the parser freed the vector but
+    not the elements it had already parsed.
+- **M-3 exactly as filed, plus one.** The `strstr(headers, "Content-Length:")`
+  lookup also matched the name inside another header's value.
+- **The TSER wire codec has no caller.** `serial_cont_from_bytes`
+  (`src/runtime/serial.c`) is compiled into `tur_core` and nothing calls it. It
+  was still worth fixing, because it is public API in `serial.h`:
+  - A u32 string or bytes length reached `malloc` before it was checked against
+    the remaining input, so four bytes could ask for 4 GiB.
+  - `n_fields` sized a `calloc` unchecked.
+  - Decoded field names leaked on every frame.
+
+  Deleting the codec is the author's call.
+
+### Re-graded
+
+- **"The guestbook resumes a continuation from a `POST` token -- a forged
+  token is a forged continuation" was already false when the survey was
+  written.** Since `01e7fa71` (2026-09-25), the token is a random 64-hex
+  *name*, HMAC-signed with `GUESTBOOK_SECRET`. The continuation bytes never
+  leave the server (`data/conts/<token>.bin`), and the load goes through
+  `bytes->serial-cont`. The example had already answered section 7 Q2 the
+  "application's job" way.
+
+  Its one real gap was that a correctly signed token was used as a file name
+  without checking its shape. With the dev default secret, which anyone can
+  read, a signed `../../x` named any `.bin` file outside `data/conts/`.
+  `verify-token` now requires the 64-hex shape. After M-1's fix, such a file
+  could only have rebuilt this program's own frames anyway.
+
+### Survey line numbers that had moved (M-4)
+
+- `stdlib/httpd.tur:329` is the `body_in_buf` clamp, not a `Content-Length`
+  parse; the `malloc` is at `:330`.
+- The third parse is `httpd-mw-content-length` (`:3736`), not `:2491`, which is
+  the async copy of the core parse.
+- The request parser existed twice: `httpd-handle` (`:175-546`) and
+  `httpd-async-fiber-body` (`:2356-2694`). The copies had drifted: the async
+  cleanup never freed multipart parts or attributes, and the blocking path's
+  status table had no 401.
+
+### Findings the survey did not have
+
+httpd, from a full read of `stdlib/httpd.tur`:
+
+- **A stack buffer overrun in `httpd-set-cookie!`.** `n += snprintf(buf + n,
+  sizeof buf - n, ...)` over a 2 KiB stack buffer never clamped `n`. Once
+  `name=value` passed 2 KiB, `sizeof buf - n` wrapped and the next attribute
+  was written past the buffer. It is reachable whenever a handler reflects
+  request data into a cookie.
+- **Response splitting.** Response headers were written with `"%s: %s\r\n"`
+  and no CR/LF check.
+- **`Content-Length` was `(int)strtol`.** `4294967306` became 10, `10abc`
+  became 10, and duplicate headers were last-wins. Together with ignoring
+  `Transfer-Encoding`, that is a request-smuggling kit behind a proxy.
+- **A short body was dispatched.** A body shorter than its `Content-Length`
+  (a timeout or peer close) reached the handler truncated. The
+  `httpd-mw-body-size` fixture relied on exactly that, after a 5 s stall.
+- **`mw-body-size` is not a pre-read check.** Its comment said it "prevents
+  the body read entirely", but it runs in the handler chain after the core
+  has read the body.
+- **The async server waited forever.** `tur_local_park_fd(..., -1)` let a
+  half-sent request hold its fiber indefinitely.
+- **Static files.**
+  - `stat` and `open` both follow symlinks, so a symlink inside the root that
+    points outside it was served.
+  - Dotfiles (`.env`, `.git/config`) were served.
+  - The query string was part of the file name.
+  - There was a `stat`/`open` TOCTOU window.
+- **Basic auth.** A decoded NUL truncated the credentials the verifier saw.
+- **Multipart.** A repeated part header leaked the earlier value.
+
+The compiler's own front door, found by the new fuzz targets. The first two
+came from the 60-second pass and the rest from the 10-minute passes:
+
+- **The reader `free()`d arena memory.** `read_neoteric_bracket`
+  (`src/compiler/reader.c:2988`) called `free(call_items)` on an
+  `arena_alloc` pointer for `f[x]` (the `bracketapply` form). Any neoteric or
+  sweet-exp file containing `f[x]` crashed `tur check` and the language server
+  at read time: an invalid free, or glibc abort or heap corruption in a Release
+  build. T1, high, now fixed. Fixture `errors/neoteric-bracket-call-reads`.
+- **A Justfile parser leak.** `parse_recipe_header` leaked the parameters it
+  had parsed when the line turned out not to be a recipe header. Low; fixed.
+- **A Justfile parser hang.** In a dependency with arguments, `(a #` never
+  terminated: `parse_value` consumes nothing at a `#` or `\r`, and the argument
+  loop did not stop on either. The loop spun forever and allocated an empty
+  argument on every turn, so `tur run --list` on such a Justfile hung until it
+  ran out of memory. T1, medium (denial of service); fixed. Pinned by a case
+  in `tests/run-tur-run-attrs.sh`.
+- **Stack exhaustion in the Justfile evaluator.** Parentheses and call
+  arguments recurse through `re_expr`, so an assignment nested a few thousand
+  deep overflowed the C stack while the file was only being parsed, and
+  `tur run --list` crashed. T1, medium; fixed with a nesting cap of 256
+  ("expression nested too deeply"). Pinned in `tests/run-tur-run-attrs.sh`.
+- **Manifest reader leaks.** A repeated key leaked the earlier value, both for
+  scalar keys (`:version`, `:description`, `:build-dir`, `:engine`, ...) and
+  for vector keys (`:exports`, `:authors`, `:spices`, `:build-opts`, ...).
+  Only `:name` freed before overwriting. Each slot now releases its earlier
+  value through the helpers `pkg_manifest_free` also uses, so last-wins is
+  unchanged. Separately, the `#lang` trailing-token rejection (TUR-E0330)
+  returned without `symtab_free`. Low; fixed.
+- **Undefined behaviour on an empty sweet-exp file.** `sweet_preprocess`
+  called `memcpy(dst, NULL, 0)` when the preprocessed text was empty. It is
+  harmless in practice, but UBSan stops on it and a compiler may exploit it.
+  Fixed.
+
+### Deliberately not done here
+
+- The httpd items that need a design choice or are not parser work are filed
+  as `docs/reported/httpd-residual-request-hardening.md`:
+  - the quadratic header scan
+  - async writes that park forever
+  - no default in-flight cap
+  - a rate limiter that fails open when full
+  - oversized request fields silently read as `""`
+  - the `Connection` prefix match
+  - the Basic-auth doc example leaking username validity
+- `stdlib/async_socket.tur` still binds `INADDR_ANY` by default. It is a raw
+  socket API, where the POSIX default is the expected one, so it was left
+  alone. httpd's default moved; see WP4.
+
+## 2f. WP6's verification pass (2026-09-30)
 
 Read and run against `main` @ 1ef4cd2f. `web/main.js` had moved since the
 survey, so the W-rows' line numbers are the survey's; the code they point at
@@ -985,43 +1148,142 @@ its caller's capabilities instead of requiring all of them.
 `--no-proc-macros` by default for now; the question stays open for
 reconsideration.
 
-### WP4 -- Deserializers, parsers, and the fuzz harnesses (5-6 days)
+### WP4 -- Deserializers, parsers, and the fuzz harnesses (5-6 days) -- DONE 2026-09-30
 
-This is the package with the most lasting value: it leaves libFuzzer
-targets behind that run under the ASan build CI already has.
+This package is the one with the most lasting value: the libFuzzer targets it
+leaves behind run nightly under ASan and UBSan. Its research pass is section
+2e.
 
-- **Serial continuations and images (M-1):** make `tur_serial_cont_deserialize`
-  bounds-check every length against the remaining input, validate every
-  tag against the registry before use, and cap frame count and env size;
-  route `resume-cont!` and `image/blob-resume!` through `bytes->serial-cont`'s
-  validation (or make the validation live inside the deserializer so there
-  is no unvalidated entry). Extend the image CRC over the payload, or add a
-  payload hash to the header. Make the guestbook's `POST /submit?k=TOKEN`
-  the worked example: today a forged token is a forged continuation.
-  Decide (section 7) whether continuations from the network need an HMAC
-  -- integrity is not authenticity.
-- **JSON (M-2):** fix the trailing-backslash over-read in both parsers, add
-  a depth limit (256 is plenty), decide on `\u`, free on error.
-- **LSP/DAP framing (M-3):** `strtoul` with range check, reject
-  `Content-Length` over a sane cap (16 MiB), cap header bytes.
-- **httpd (M-4):** cap body size (configurable, default a few MiB), parse
-  `Content-Length` as `size_t` with overflow check, reject requests with
-  both `Content-Length` and `Transfer-Encoding` (or implement chunked),
-  `lstat`+`realpath` containment for static files, default bind to
-  `127.0.0.1` with an explicit opt-in for `0.0.0.0`; review multipart and
-  Basic auth.
-- **Harnesses:** add `tests/fuzz/` with libFuzzer targets for
-  `serial_cont_from_bytes`, `tur_serial_cont_deserialize`, the image header
-  reader, both JSON parsers, `lsp_read_message`, `httpd`'s request parser,
-  and -- the compiler's own front door -- the reader (`src/compiler/reader.c`),
-  `pkg_manifest_read`, and the Justfile parser. Build them under
-  `-fsanitize=fuzzer,address,undefined` behind a `TUR_FUZZ` CMake option;
-  seed each from the fixture corpus. Add a `fuzz-parsers` job to
-  `fuzz.yml` running each target for a fixed budget nightly, alongside the
-  existing differential fuzzers, and file crashes the way that workflow
-  already files issues.
-- **Exit:** every target runs 10 minutes clean under ASan; the fixed bugs
-  each have a fixture with the crashing input.
+- [x] **Serial continuations (M-1).**
+  - Validation lives inside `tur_serial_cont_deserialize` (the emitted
+    `tur_serial_cont_check`, `src/compiler/emit_dk_runtime.c`), so no entry
+    point can skip it.
+  - The check covers every length, every tag, the frame registry, and the
+    record's env kind against the frame's registered kind. That last check is
+    the one the old validator missed.
+  - `bytes->serial-cont` maps the check's codes to its existing `Err`
+    messages. `resume-cont!` and `image/blob-resume!` panic, and a caught panic
+    yields the identity continuation.
+  - No frame-count cap is needed: every record consumes at least 8 bytes or
+    fails the walk, so a passing `n` is bounded by the input.
+  - `cont-from-file` holds its stored length to the file size.
+  - The JIT runtime split (`src/runtime/generated/`) was regenerated.
+- [x] **Images (M-1).**
+  - Header `flags` bit 0 is now `TUR_IMAGE_FLAG_PAYLOAD_CRC`: a CRC-32 of the
+    payload trails it. The writer always sets it; an unknown bit is refused.
+  - `payload_len` is held to the file's real size.
+  - The continuation is checked before an image counts as loadable, so a
+    damaged image is a cold start rather than a panic.
+  - `image/loadable?` runs the full load-time check.
+  - `tur image-verify` checks the payload (`tur_image_verify_payload`).
+  - The CRC is corruption detection, not authentication; the guide says so.
+- [x] **The guestbook as worked example (M-1).** It was already HMAC-signing
+  a server-side name, so the survey's claim did not hold (section 2e).
+  `verify-token` now also requires the 64-hex shape, closing the one real gap.
+- [x] **JSON (M-2), in both decoders, kept step-for-step identical.**
+  - The trailing-backslash over-read is fixed.
+  - Nesting is capped at 256.
+  - Decided on `\u`: it is decoded to UTF-8, surrogate pairs included. A lone
+    surrogate is an error, and so is `\u0000`, because the value is a C string.
+  - Partial trees are freed on every error path.
+  - The encoder escapes control characters.
+  - `turi_json_decode_cstr` exposes the interpreter's decoder to the fuzz
+    target.
+- [x] **LSP/DAP framing (M-3).**
+  - `Content-Length` is matched per line and case-insensitively, and must be
+    digits only.
+  - It must be non-zero and at most 64 MiB, and repeated headers must agree.
+  - The header block is capped at 8 KiB.
+  - ctest `tur_lsp_io_unit`.
+- [x] **httpd (M-4).**
+  - One head parser, `httpd-parse-head`, is shared by both server loops and is
+    pure over a buffer.
+  - `Content-Length` must be digits only and repeats must agree (400).
+    `Content-Length` together with `Transfer-Encoding` is 400, and
+    `Transfer-Encoding` alone is 501.
+  - The body cap is `httpd-set-max-body!`, 8 MiB by default, and it is checked
+    before anything is allocated (413). A short body drops the connection.
+  - Servers **bind 127.0.0.1 by default**. `httpd-set-bind-any!` or
+    `TUR_HTTPD_BIND_ANY=1` opts in to 0.0.0.0, and `TUR_BIND_LOOPBACK` still
+    forces loopback.
+  - One response-head builder drops headers that would split the response.
+  - One per-request release fixes the async path's leaks.
+  - Async reads wait 5 s per park.
+  - `mw-static` checks `realpath` containment (symlinks included), opens what
+    it stats, strips the query string, and refuses dot-segments (except
+    `.well-known`) and backslashes.
+  - Also fixed: the `httpd-set-cookie!` overrun, Basic-auth NUL truncation,
+    and the multipart repeated-header leak.
+  - Reviewed but deliberately not changed: see
+    `docs/reported/httpd-residual-request-hardening.md`.
+- [x] **Harnesses.** `tests/fuzz/` has ten libFuzzer targets behind
+  `-DTUR_FUZZ=ON`, which is clang only and instruments `tur_core` with
+  `-fsanitize=fuzzer-no-link`:
+  - `fuzz_serial_cont`, `fuzz_serial_wire` and `fuzz_image_header`
+  - `fuzz_json_compiled` and `fuzz_json_interp`
+  - `fuzz_httpd_head` and `fuzz_lsp_frame`
+  - `fuzz_reader` (all six dialects), `fuzz_manifest` and `fuzz_justfile`
+
+  How they are built:
+  - **The three stdlib-inline-C targets include `tur emit-c` output generated
+    at build time**, so they fuzz the code a compiled program ships, not a
+    copy. `hoist-includes.py` applies the `__tur_include__` hoist that
+    `tur build` does and `emit-c` does not.
+  - **`fuzz_justfile` renames `popen`, `system`, `setenv` and `chdir` before
+    it includes `justrun.c`.** The parser still evaluates backticks (D-2), and
+    a fuzzer must never run a command it made up.
+
+  How they run:
+  - Each target is a ctest that replays its committed seeds.
+  - `run-fuzzers.sh` adds the tree's own inputs (every fixture, every
+    `build.tur`, every `.json`, the Justfile) to the seeds.
+  - The nightly `fuzz-parsers` job in `fuzz.yml` runs at 600 s per target
+    with a `contents: read` token.
+  - **On a finding, the job fails rather than filing a public issue.** These
+    parsers take untrusted bytes, so an auto-filed issue would be public
+    disclosure. Triage starts private, per `SECURITY.md`.
+
+  Reference: `tests/fuzz/README.md`.
+- [x] **Findings of the harnesses themselves**, all fixed with the reproducer
+  committed as a seed:
+  - the reader's arena `free()` (T1, high; fixture
+    `errors/neoteric-bracket-call-reads`)
+  - the Justfile `(dep #` hang (T1, medium; `tests/run-tur-run-attrs.sh`)
+  - Justfile expression stack exhaustion (T1, medium; same script)
+  - the Justfile parameter leak
+  - the manifest repeated-key leaks, for scalar and vector keys, and the
+    `#lang` rejection's symbol-table leak
+  - the empty-sweet-exp `memcpy(NULL, 0)`
+- **Exit.**
+  - **Tests for the fixes.** Every fixed memory-safety bug and the hang have
+    a fixture, a unit test or a harness case that exercises the input. Three
+    of the lesser fixes are covered only by the fuzz seeds and the replay:
+    the two leaks and the TSER allocation caps. One has no dedicated test at
+    all: the Basic-auth NUL refusal, because `fuzz_httpd_head` does not
+    drive the verifier.
+  - **The 10-minute runs.** Each target ran for 600 s under ASan and UBSan
+    on a 4-core box, four at a time, and all ten finished clean.
+    - The first 10-minute pass stopped `fuzz_manifest` and `fuzz_justfile`
+      on findings, and the reruns found more. Each finding was fixed and the
+      target rerun, until both went the full 600 s clean.
+    - Executions in 600 s:
+      - `fuzz_serial_cont` 182M
+      - `fuzz_image_header` 39M
+      - `fuzz_serial_wire` 31M
+      - `fuzz_httpd_head` 18M
+      - `fuzz_json_compiled` 8.9M
+      - `fuzz_lsp_frame` 4.5M
+      - `fuzz_json_interp` 4.0M
+      - `fuzz_reader` 1.1M
+      - `fuzz_manifest` 1.8M, in its final clean run
+      - `fuzz_justfile` 1.0M, in its final clean run
+- **Decisions this package took, for the author to overrule:**
+  - **The httpd bind default moved to loopback.** It is the one change a
+    deployed server notices. The plan asked for it, the opt-in is one call,
+    and `docs/guides/httpd-guide.md` says so.
+  - **`\u0000` is an error**, not U+FFFD.
+  - **Section 7 Q2** is answered provisionally as "the application's job";
+    see there.
 
 ### WP5 -- Runtime memory safety (3 days) -- DONE 2026-09-30
 
@@ -1055,7 +1317,7 @@ interpreter natives (S-5, open), httpd's body cap and response-writer
 
 ### WP6 -- Try Turmeric and the web worker (1-2 days) -- DONE 2026-09-30
 
-Section 2e has the repro and the deviations. What landed:
+Section 2f has the repro and the deviations. What landed:
 
 - [x] **W-1, the policy.** `web/csp.js` is the one definition, with each
   allowance's reason beside it. `vite.config.js` sends it from the dev and
@@ -1176,7 +1438,9 @@ checklist, not a gate.
    corrected.
 2. Every section 2 row is either fixed with a fixture, filed as an open
    report, or retired with a one-line reason in this plan.
-3. `tests/fuzz/` targets run nightly under ASan and file crashes.
+3. `tests/fuzz/` targets run nightly under ASan and flag crashes. **Met by
+   WP4.** The job fails, rather than filing a public issue, so that a finding
+   in an untrusted-input parser is triaged privately.
 4. The generated sandbox test pins every native's capability.
 5. Release assets are attested and the installer verifies a checksum.
 6. Every workflow action is SHA-pinned with least-privilege permissions.
@@ -1214,6 +1478,16 @@ checklist, not a gate.
 2. **Continuations over the network:** should `bytes->serial-cont` accept a
    key and verify an HMAC, or is it the application's job (the guestbook
    example would then need to show it)?
+   **Proposed by WP4, pending the author: the application's job.** The
+   guestbook already shows it, and shows the better design: it never sends
+   the bytes at all, only an HMAC-signed name for a server-side file (section
+   2e). What the runtime now guarantees is memory safety. Every rebuild route
+   checks the buffer against this program's frame registry, which is the T2
+   promise. The security guide's T2 section says in so many words that a
+   checked buffer is not an authenticated one. A keyed
+   `bytes->serial-cont/verified` could still be added later without breaking
+   anything. It would be the natural home for the HMAC the guestbook
+   hand-rolls in inline C, if a second program ever needs one.
 3. **`#fx{Unsafe}` semantics** (WP8): pointer arithmetic only, or "may
    corrupt memory on bad input"?
 4. **Try Turmeric:** keep `CAP_ALL` behind the browser sandbox (proposed),

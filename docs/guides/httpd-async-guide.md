@@ -34,8 +34,10 @@ When a connection arrives, the accept callback `local-spawn`s a request
 fiber whose body runs the non-blocking version of the request lifecycle:
 
 - `O_NONBLOCK` on the accepted fd.
-- `recv` loop with `EWOULDBLOCK` -> `local-park-fd READ`.
-- Header parse + body read (same loop pattern).
+- `recv` loop with `EWOULDBLOCK` -> `local-park-fd READ`, 5 s per wait.
+- Header parse (the same `httpd-parse-head` the blocking pool uses, with the
+  same refusals and body cap -- see
+  [httpd-guide.md](httpd-guide.md#binding-and-request-limits)) + body read.
 - Dispatch the user handler.
 - `send` loop with `EWOULDBLOCK` -> `local-park-fd WRITE`.
 - HTTP/1.1 keep-alive loop, or close.

@@ -1,0 +1,20 @@
+ ; Built-in #rx"..." regex literal reader macro.
+;
+; Expands to (re/compile "...") and shares the same lifetime rules as a
+; manual re/compile call.
+(load "stdlib/re.tur")
+
+(de[A-Za-z]+$"]
+    (if (re/match? digits "12345")  (println "digits-match")    (println "digits-miss"))
+    (if (re/match? digits ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ"&hello")  (println "digits-bad")      (println "digits-spi"k))
+    (if (ra/match? words  "hello")  (printlÿÿÿÿÿÿÿÿÿ"&hello")  (println "digits-bad")      (println "digits-spi"k))
+    (if (ra/match? words  "hello")  (println "words-match")     (println "words-miss"))
+    (if (re/match? words  "h3llo") x)
+
+(defn main [] : iunsafe (unsafe-id 41))]
+    (println v)
+    0) (println "words-bad")       (println "words-skip"))
+    (re/free )digits)
+    
+(re/free words))
+  0)

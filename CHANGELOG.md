@@ -2,6 +2,44 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Security
+
+- **Untrusted-input parsers hardened (security-audit-plan WP4).**
+  - Serialized continuations are checked inside the runtime on every rebuild
+    route: `bytes->serial-cont` returns an `Err`, while `resume-cont!` and
+    `image/blob-resume!` panic. A forged buffer could previously hand a
+    cstr-env frame an integer to dereference.
+  - Images carry a payload CRC and are held to their file size.
+  - Both JSON decoders fix an over-read past a trailing backslash, cap nesting
+    at 256, decode `\uXXXX`, and free partial trees on error.
+  - `tur lsp` / `tur dap` reject a malformed or oversized `Content-Length`. A
+    `-1` was a heap overflow.
+  - `httpd` changes:
+    - It refuses malformed, conflicting or oversized `Content-Length`, and
+      any `Transfer-Encoding`, before reading a body.
+    - It caps bodies at 8 MiB (`httpd-set-max-body!`).
+    - It drops response headers that would split the response.
+    - It keeps `mw-static` inside its root, symlinks included.
+    - It fixes a stack overrun in `httpd-set-cookie!`.
+  - The reader no longer `free()`s arena memory on `f[x]` in a neoteric or
+    sweet-exp file. That was a crash in `tur check` and the language server.
+  - `tur run --list` no longer hangs, allocating without bound, on a Justfile
+    dependency argument list cut off by a comment (`(dep #`). It also no longer
+    overflows the stack on deeply nested parentheses: nesting past 256 is a
+    parse error.
+  - The parsers now run nightly under libFuzzer (`tests/fuzz`,
+    `-DTUR_FUZZ=ON`).
+
+### Changed
+
+- **`httpd` servers bind 127.0.0.1 by default.** Call
+  `(httpd-set-bind-any! true)` or set `TUR_HTTPD_BIND_ANY=1` to listen on
+  every interface. A body shorter than its `Content-Length` now drops the
+  connection instead of reaching the handler truncated. See the httpd guide's
+  "Binding and request limits".
+
 ## [0.57.0] -- 2026-09-30
 
 ### Added

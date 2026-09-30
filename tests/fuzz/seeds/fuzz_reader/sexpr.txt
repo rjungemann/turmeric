@@ -1,0 +1,2 @@
+0(defn add [a : int b : int] : int (+ a b))
+(println (add 1 {2 * 3}))

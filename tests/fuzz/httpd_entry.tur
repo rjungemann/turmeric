@@ -1,0 +1,52 @@
+;; tests/fuzz/httpd_entry.tur -- stdlib/httpd.tur's request path as a fuzz
+;; target, with no socket: httpd-parse-head (the parser both server loops
+;; share), then the accessors a handler runs over request bytes -- headers,
+;; cookies, the url-encoded form, multipart, and the JSON body.
+(load "stdlib/httpd.tur")
+
+;; Parse a head out of buf; attach whatever follows it (up to the declared
+;; Content-Length) as the body.  NULL when the server would refuse it.
+(defn fuzz-conn [buf : ptr<void> n : int] : ptr<void>
+  ```c
+  HttpdConn *c = (HttpdConn *)calloc(1, sizeof(HttpdConn));
+  if (!c) return NULL;
+  int64_t clen = 0;
+  int64_t head = httpd_hyparse_hyhead((void *)c, buf, n, (void *)&clen);
+  if (head < 0) { httpd_hyconn_hyrelease((void *)c); free(c); return NULL; }
+  int64_t have = n - head;
+  if (have < 0) have = 0;
+  if (have > clen) have = clen;
+  c->body = (char *)malloc((size_t)have + 1);
+  if (have > 0) memcpy(c->body, (char *)buf + head, (size_t)have);
+  c->body[have] = '\0';
+  c->body_len = (int)have;
+  return (void *)c;
+  ```)
+
+(defn fuzz-release [c : ptr<void>] : int
+  ```c httpd_hyconn_hyrelease(c); free(c); return 0; ```)
+
+(defn fuzz-null? [c : ptr<void>] : bool
+  ```c return c == NULL; ```)
+
+(defn fuzz-http [buf : ptr<void> n : int] : int
+  (let [c (fuzz-conn buf n)]
+    (if (fuzz-null? c)
+      0
+      (do
+        (httpd-req-header c "Content-Type")
+        (httpd-req-cookie c "session")
+        (httpd-req-form c "name")
+        (httpd-req-multipart-parse c)
+        (httpd-req-json c)
+        (fuzz-release c)
+        1))))
+
+(defn fuzz-buf [] : ptr<void>
+  ```c
+  static char req[] = "POST /x HTTP/1.1\r\nContent-Length: 3\r\n\r\na=b";
+  return (void *)req;
+  ```)
+
+(defn main [] : int
+  (fuzz-http (fuzz-buf) 43))

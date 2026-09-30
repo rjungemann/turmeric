@@ -1,0 +1,53 @@
+;; security-audit-plan M-1: a serialized continuation is only as safe as the
+;; deserializer that rebuilds it.  bytes->serial-cont validated its buffer, but
+;; resume-cont! and image/blob-resume! called tur_serial_cont_deserialize
+;; directly, and neither path checked that a call frame's env kind matched the
+;; kind the frame was REGISTERED with.  A frame whose env is a cstr, handed an
+;; inline int env by a forged buffer, dereferenced that int as a pointer.
+;;
+;; The check now lives inside the deserializer, so every entry point runs it:
+;; bytes->serial-cont reports the forged buffer as an Err, and resume-cont!
+;; panics with the same reason instead of reading through 0x41414141.
+
+(load "stdlib/serial.tur")
+(load "stdlib/workflow.tur")
+
+(defn greet-len [s : cstr n : int] : int
+  ```c
+  return (int64_t)strlen(s) + n;
+  ```)
+
+(defn rt [k : serial-cont] : int
+  (resume-cont! (serial-cont->bytes k) 10))
+
+;; [n=1][SK_TAG_CALL][len]"greet_hylen$2R"[env_kind=INT][env=0x41414141] -- the
+;; frame this program registered for (greet-len "hello" []), whose env is a
+;; cstr, handed an inline int instead.
+(defn forged [] : ptr<void>
+  ```c
+  const char *nm = "greet_hylen$2R";
+  int64_t L = (int64_t)strlen(nm);
+  int64_t plen = 8 + 8 + 8 + L + 8 + 8;
+  int64_t *b = malloc(8 + (size_t)plen);
+  b[0] = plen;
+  uint8_t *c = (uint8_t *)(b + 1);
+  int64_t n = 1, tag = 100, ek = 0, env = 0x41414141;
+  memcpy(c, &n, 8); c += 8; memcpy(c, &tag, 8); c += 8; memcpy(c, &L, 8); c += 8;
+  memcpy(c, nm, (size_t)L); c += L; memcpy(c, &ek, 8); c += 8; memcpy(c, &env, 8);
+  return b;
+  ```)
+
+(defn report [r : (Result serial-cont cstr)] : void
+  (match r
+    (Ok k)  (println (serial-resume k 5))
+    (Err m) (println m)))
+
+(defn main [] : int
+  (do
+    ;; The genuine round trip still works: strlen("hello") + 10.
+    (println (serial-reset (greet-len "hello" (serial-shift rt 0))))
+    (report (bytes->serial-cont (forged)))
+    (println "resuming the forged buffer directly")
+    (println (resume-cont! (forged) 5))
+    (println "unreachable")
+    0))

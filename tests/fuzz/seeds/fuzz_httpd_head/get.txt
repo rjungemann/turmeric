@@ -1,0 +1,5 @@
+GET /a/b?x=1 HTTP/1.1
+Host: h
+Cookie: session=abc; x=y
+Connection: keep-alive
+

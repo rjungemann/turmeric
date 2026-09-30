@@ -1,0 +1,3 @@
+sspice demo
+  :version "1.0.0"
+  :members ["a" "b"]

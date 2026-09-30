@@ -2985,7 +2985,10 @@ static Form *read_neoteric_bracket(Reader *r, Form *atom, int bracket) {
         ba_items[0] = form_sym(r->arena, span, bracketapply_sym);
         ba_items[1] = atom;
         ba_items[2] = call_items[1]; /* the single argument */
-        free(call_items);
+        /* call_items is arena memory: no free.  A free() here was an invalid
+         * free of an arena slab interior -- any `f[x]` in a neoteric or
+         * sweet-exp file crashed the reader (`tur check`, the LSP), found by
+         * tests/fuzz/fuzz_reader (security-audit-plan WP4). */
         result = form_list(r->arena, span, ba_items, 3);
     } else {
         result = form_list(r->arena, span, call_items, n + 1);
@@ -5354,7 +5357,9 @@ static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
     if (cur < len) emit_copy_(&emit, src, cur, len - cur);
 
     char *result = (char *)arena_alloc(arena, b.len + 1);
-    memcpy(result, b.data, b.len);
+    /* An empty result leaves b.data NULL, and memcpy's source must not be
+     * NULL even for zero bytes (UBSan, tests/fuzz/fuzz_manifest). */
+    if (b.len) memcpy(result, b.data, b.len);
     result[b.len] = 0;
     *out_len = b.len;
     buf_free(&b);
