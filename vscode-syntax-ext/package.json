@@ -26,6 +26,15 @@
     "scheme",
     "sweet-exp"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "restrictedConfigurations": [
+        "turmeric.serverPath"
+      ],
+      "description": "turmeric.serverPath names the executable started as the language server. In an untrusted workspace the folder's own value is ignored and your user setting is used, so a repository cannot redirect the server to another binary by shipping a .vscode/settings.json. Syntax highlighting and formatting are unaffected."
+    }
+  },
   "contributes": {
     "commands": [
       {

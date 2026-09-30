@@ -402,9 +402,21 @@ Turmeric library so CMake projects can consume it), see the
 
 ## Security
 
-- All fetched spices are verified against the SHA-256 hash in `tur.lock`.
-  Builds fail on mismatch; no silent re-downloads.
-- Use git tags (not branch names) for `:ref` to avoid moving targets.
+- **`tur.lock`'s hash is trust-on-first-use, not a pin.** It is recomputed and
+  overwritten on every fetch, so it records what you last downloaded rather
+  than what you agreed to. It can therefore catch a local edit to `spices/`
+  after a fetch; it cannot catch upstream changing under you. The one
+  comparison in the tree runs in `tur run` only -- **`tur build` does not
+  check** -- and is skipped when the dependency directory is absent (that path
+  fetches and rewrites the hash) and when the recorded hash predates the
+  current algorithm. Tightening this is tracked as C-3 in the
+  [security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md);
+  see the [Security Guide](https://github.com/rjungemann/turmeric/blob/main/docs/guides/security-guide.md)
+  for the promise this is measured against.
+- Because of the above, **use git tags (not branch names) for `:ref`** and read
+  a new spice before you add it. A tag is the pin `tur.lock` does not give you.
+  A clone tracks the branch or tag in `:ref`; the `:resolved` commit is
+  recorded but not used to check out.
 - Any `:cmake-deps` entry is a trust decision equivalent to executing build
   scripts from that repository. Audit before adding.
 - `tur audit` lists every origin the build fetches code from -- Turmeric

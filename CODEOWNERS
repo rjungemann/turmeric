@@ -1,0 +1,44 @@
+# Code owners for security-sensitive surfaces.
+#
+# Every path below sits on a trust boundary described in
+# docs/guides/security-guide.md. A change here should be read with that
+# boundary in mind, not just for correctness.
+#
+# GitHub reads this file from the repository root, .github/, or docs/.
+# Ownership is last-match-wins, so the general rule goes first.
+
+*                                   @rjungemann
+
+# T3 -- the sandboxed interpreter. env.c decides what every environment can
+# reach; a native registered here lands in the sandboxed and macro envs too.
+/src/turi/env.c                     @rjungemann
+/src/turi/macro_env.c               @rjungemann
+/src/turi/interpreter_natives.c     @rjungemann
+
+# T4 -- the supply chain. Manifest parsing, fetch, and tur.lock verification.
+/src/compiler/pkg.c                 @rjungemann
+/tvm/                               @rjungemann
+/Formula/turmeric.rb                @rjungemann
+
+# T1 -- the compiler driver: every place a string reaches a shell.
+/src/main.c                         @rjungemann
+/src/compiler/justrun.c             @rjungemann
+
+# T2 -- deserializers that read bytes the program did not choose.
+/stdlib/serial.tur                  @rjungemann
+/stdlib/image.tur                   @rjungemann
+
+# T5 -- protocol framing.
+/src/lsp/                           @rjungemann
+/src/turi/dap.c                     @rjungemann
+
+# The installer the README advertises, and the playground's origin.
+/web/worker.js                      @rjungemann
+
+# CI holds the release tokens.
+/.github/workflows/                 @rjungemann
+
+# The promises themselves.
+/SECURITY.md                        @rjungemann
+/docs/guides/security-guide.md      @rjungemann
+/CODEOWNERS                         @rjungemann

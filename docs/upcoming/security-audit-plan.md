@@ -1,12 +1,18 @@
 # Security audit -- Turmeric as it stands at v0.56.3
 
-> **Status: PROPOSED.** Written 2026-09-30 against `main` @ 81e12de4
-> (v0.56.3). Nothing in this plan has been executed. Section 2 lists what a
-> one-afternoon survey already turned up, so the audit starts from a map, not
-> from zero; every row there is a *candidate* until the work package that
-> owns it verifies or retires it. Items marked **verified** were reproduced
-> or read in the source during the survey; the rest are read-only findings
-> from the survey and still need a repro.
+> **Status: WP1 DONE (2026-09-29); WP2-WP8 PROPOSED.** Written 2026-09-30
+> against `main` @ 81e12de4 (v0.56.3). Section 2 lists what a one-afternoon
+> survey already turned up, so the audit starts from a map, not from zero;
+> every row there is a *candidate* until the work package that owns it
+> verifies or retires it. Items marked **verified** were reproduced or read in
+> the source during the survey; the rest are read-only findings from the
+> survey and still need a repro.
+>
+> **WP1 landed 2026-09-29** against `main` @ dc95b2fdc. Every file the survey
+> cited was re-read and is byte-identical between 81e12de4 and dc95b2fdc, so
+> the section 2 rows hold as written. WP1's own verification results, three
+> re-grades and three findings the survey did not have are recorded in
+> section 2a; section 7 Q1 is answered.
 > **Type:** Security / process / tooling
 > **Depends on:** nothing that is not already in the tree. The Debug build's
 > ASan+UBSan (`CMakeLists.txt:33`), the four differential fuzzers
@@ -43,7 +49,19 @@ did find that three documents promise more than the code delivers:
 - The install path advertised in `README.md:20` is `curl | sh` into
   `brew install --HEAD`, which builds whatever `main` is at that moment
   (`web/worker.js:1-24`, `Formula/turmeric.rb:5`), not a release with a
-  checksum (section 2, C-1).
+  checksum (section 2, C-1). **Re-graded by WP1: not an overclaim.** `README.md`
+  says only "installs via the Homebrew formula in this repo", which is true,
+  and `releases-and-installation-guide.md:152-154` already disclosed the
+  `--HEAD`-only formula. The defect was an *undisclosed material fact at the
+  most prominent entry point*, fixed in WP1 by one sentence each in
+  `README.md` and `web/index.html`. C-1 (the installer itself) is untouched
+  and still WP7's.
+- **A fourth overclaim the survey missed, on the same footing as the spice
+  one:** `releases-and-installation-guide.md:47` says `tvm install` "verifies
+  them against the release's `sha256sums.txt`" (and `:39` comments "SHA-256
+  verify"), while `tvm/tvm.sh:262-280` has four paths that skip the check, two
+  of them printing nothing at all (section 2a). Corrected in WP1; the
+  fail-closed fix stays C-2 in WP7.
 
 The audit is eight work packages (section 3), ordered so that the first
 two weeks close the items an outside reporter would find first, and so that
@@ -131,6 +149,115 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | C-7 | low | `cmake/mir.cmake:138-160` fetches MIR from the personal fork `rjungemann/mir.git` (SHA-pinned; JIT-only, default off). `examples/snake` pins raylib by tag. `Dockerfile` uses `ubuntu:22.04` by tag; `.devcontainer/Dockerfile` has two `curl \| bash` installs. |
 | C-8 | low | Committed to git: `.claude/settings.local.json` (with a broad `Bash(xargs cat *)` allow), a `.claude/projects/.../memory/project_er6.md`, and `TEMP.md`. Missing: `SECURITY.md`, `CODEOWNERS`, `.github/dependabot.yml`, CodeQL/scanning workflow, and any private-vulnerability-reporting setting. |
 
+## 2a. WP1's verification pass (2026-09-29)
+
+Everything below was read in the source against `main` @ dc95b2fdc. No file the
+survey cited moved between 81e12de4 and dc95b2fdc.
+
+### Rows confirmed, with the mechanism tightened
+
+- **S-1 confirmed structurally, and the sweep is now exhaustive.** A grep of
+  `TURI_CAP_` across `src/turi/*.c` finds every capability check in the
+  interpreter, and there are nine: the FFI thunk (`ffi_thunk.c:330`), three
+  FFI sites in `eval.c` (`:470, :1963, :2045`), `is_blocked_builtin`
+  (`:4070-4101`), inline-C (`:9897, :9911, :11524`), async (`:10696, :11577`),
+  and import (`:14319`). **Exactly one native consults caps:** `native_doc_print`
+  (`interpreter_natives.c:5569`). Everything else in the table is unchecked.
+  `turi_env_new_sandboxed` (`env.c:277-286`) is `turi_env_new()` plus
+  `caps = TURI_CAP_NONE`, and `turi_env_new` registers the whole table at
+  `env.c:224-251`, so the sandbox is porous by construction rather than by
+  oversight.
+- **The `read-async` route needs no `(async ...)` at all.** `native_read_async`
+  (`fiber.c:754`) does its `read(fd, buf, bytes)` eagerly in the non-blocking
+  fast path at `:763-764`, before any future is created, so the
+  `TURI_CAP_ASYNC` gate on the `(async ...)` form never intercedes. This is the
+  cheapest PoC for WP3 to write first, and it is also the M-5 negative-`int`
+  `malloc` in the same two lines.
+- **The macro env is the sharper half of S-1.** `macro_env.c:222-232` calls
+  `turi_env_deny(env, TURI_CAP_ALL)` under a comment promising "no I/O, FFI,
+  inline-C, async, unsafe, import" -- ten lines *after* `:212` registers the
+  unchecked native table into that same env. The intent is on the page; the
+  enforcement is not.
+- **D-2 confirmed, and the fix is one struct field.** `re_primary`
+  (`justrun.c:954-969`) runs `jr_capture_command` -> `popen` the moment it sees
+  a backtick, and it is reached from `eval_rhs` at `:1439`, which runs inside
+  the line-by-line parse loop for a `name := value` assignment. `parse_justfile`
+  (`:2990`) strictly precedes the `--list` branch (`:3017`). Deferring is
+  scoped: give `JVar` the unevaluated text plus a lazily-filled `value` and
+  evaluate on first use by a recipe. It also makes `--set` cheaper -- today a
+  `--set` override at `:2996-3011` pays for the backtick and throws the value
+  away.
+- **D-3 confirmed.** `needs_rebuild` (`spice_loader.c:210-216`) is a bare mtime
+  comparison, so a committed `.tur-repl-cache/lib-N.so` newer than the sources
+  is `dlopen`ed with no build. The `.gitignore` handshake in `ensure_cache_dir`
+  (`:222-250`) only appends to an existing `.gitignore` and does nothing
+  against a repo that commits the object deliberately.
+- **D-1's manifest half confirmed, with the analogy that explains it.**
+  `append_manifest_link_flags` (`main.c:2380-2394`) documents `:link-flags` as
+  "the verbatim sibling -- no prefix is added" and `buf_printf`s it straight
+  into the flag string that later reaches `system()`. `:build-dir`
+  (`pkg.c:808-810`) is parsed with `form_str_dup` under a comment saying
+  "relative path" with nothing enforcing relative, absolute, or `..`.
+- **C-3 confirmed, four ways.** `pkg_hash_comparable`/`pkg_hash_dir` have
+  exactly one comparison call site in the tree: `main.c:5737`, inside `tur run`.
+  `tur build` never checks. The check is skipped when the dep dir is absent
+  (that branch fetches, then `pkg.c:2576-2582` unconditionally `free`s and
+  overwrites `le->sha256`) and when the hash predates `PKG_TREE_HASH_TAG`.
+  Because the hash is rewritten from the tree just fetched, it can only catch a
+  local post-fetch edit -- never upstream drift.
+- **C-2 confirmed, and it is four skip paths, not one.** `tvm/tvm.sh:262-280`:
+  an empty-or-unreachable sums file (`2>/dev/null` swallows the fetch error)
+  skips **silently**; an asset with no row leaves `$_want` empty so the `elif`
+  is false and it falls through **silently**; no sha tool logs a skip; `--from`
+  bypasses the block. Only the third says anything.
+
+### Rows re-graded
+
+- **C-1 -> the README half is a disclosure gap, not an overclaim.** See
+  section 0. The installer fix is unchanged.
+- **C-8 -> low, and no history rewrite is needed.** All three files were read:
+  `.claude/settings.local.json` holds no credentials, only a machine's absolute
+  paths (`/Users/.../turmeric2/...`), a broad `Bash(xargs cat *)` allow and two
+  MCP server names; `project_er6.md` is a stale status note; `TEMP.md` is 34
+  commits deep and was not opened. So `git rm --cached` plus `.gitignore` closes
+  it completely -- **no rotation, no rewrite.** The one live risk is real
+  though: that committed allowlist is pre-approved in any contributor's agent
+  session after a clone.
+- **The `--macro-caps=io` flag points the wrong way for WP3.** It is the only
+  macro capability flag that exists (`main.c:9190-9193, :12001`;
+  `globals.c:201`) and it *grants*. There is no `--no-macros` equivalent, so
+  `tur check`'s macro exposure has no opt-out today.
+
+### Findings the survey did not have
+
+- **The VS Code LSP extension lets a repository redirect the language server
+  binary.** `vscode-syntax-ext/package.json` contributes the setting
+  `turmeric.serverPath` ("Path to the tur executable used for the language
+  server", default `tur`), and neither extension declared
+  `capabilities.untrustedWorkspaces`. A workspace `.vscode/settings.json` could
+  therefore name any executable and have it started on folder open. **Fixed in
+  WP1** by declaring both extensions `"supported": "limited"` and listing
+  `turmeric.serverPath` in `restrictedConfigurations`, so Restricted Mode
+  ignores the folder's value while highlighting and formatting keep working.
+  `editors/vscode-turmeric` takes its adapter path from the launch
+  configuration (`extension.js:14-16`), which Restricted Mode covers by
+  refusing to debug.
+- **`main` has no branch protection** (`GET /branches/main/protection` ->
+  `404 Branch not protected`). Worth a decision given that the workflow is
+  PR-only and that CI does not run for PRs not based on `main`. Not assigned to
+  a package; the author's call.
+- **Secret scanning and push protection are disabled**, both free on a public
+  repo, as is Dependabot security updates (separate from WP7's
+  `dependabot.yml`). Suggest folding the repo-settings half into WP7.
+
+### Not reproduced
+
+The survey's four failed attempts to reach a native from macro time were not
+retried here -- WP3 owns the PoC. The likeliest reason remains that
+`TURI_CAP_IMPORT` is granted only transiently around a `:for-macros` load
+(`macro_env.c:504-506`), so the module's natives are not resolvable by the time
+the macro body runs. WP3 should write down whichever it turns out to be.
+
 ## 3. Work packages
 
 Each package names its scope, method, deliverable and exit criterion.
@@ -140,21 +267,43 @@ it for someone who does not. Findings are filed the usual way, under
 exploitable one, which goes to the private channel WP1 sets up until the
 fix lands, then is archived normally.
 
-### WP1 -- Threat model, SECURITY.md, disclosure channel (1 day)
+### WP1 -- Threat model, SECURITY.md, disclosure channel (1 day) -- DONE 2026-09-29
 
-- Turn section 1 into `docs/guides/security-guide.md` (the promises) and a
-  root `SECURITY.md` (how to report, what is in scope, response time).
-- Enable GitHub private vulnerability reporting on the repo; add
-  `CODEOWNERS` for `src/turi/env.c`, `src/compiler/pkg.c`, `src/main.c`
-  (driver), `stdlib/serial.tur`, `stdlib/image.tur`, `web/worker.js`,
-  `.github/workflows/`.
-- Correct the three overclaims in section 0 *now*, before their code is
-  fixed: a doc that says "verified" while the code says TOFU is the finding
-  a reporter writes up first.
-- Remove `.claude/settings.local.json`, the memory file and `TEMP.md` from
-  git and add them to `.gitignore` (C-8).
-- **Exit:** the guide exists, links from README, and every later work
-  package grades against it.
+- [x] `docs/guides/security-guide.md` -- section 1's five boundaries, each with
+  the promise and a **status today** block naming the open defect where the
+  promise is not kept. Written so a closed gap is deletable in one piece, per
+  the no-archeology rule for guides.
+- [x] Root `SECURITY.md` -- the private advisory form, 7-day acknowledgement /
+  14-day assessment, no fix deadline promised, scope and non-scope.
+- [x] GitHub private vulnerability reporting **enabled** (was `false`).
+- [x] `CODEOWNERS` at the repo root, grouped by the boundary each path sits on
+  rather than by directory, and covering the survey's seven plus
+  `justrun.c`, `macro_env.c`, `interpreter_natives.c`, `src/lsp/`, `dap.c`,
+  `tvm/` and `Formula/turmeric.rb`.
+- [x] Four overclaims corrected (the survey's three, re-graded, plus the `tvm`
+  one it missed -- see section 2a): `sandboxing-guide.md` (the false
+  "`read-async`/`write-async` are similarly blocked" claim, the I/O row of the
+  capability table, and a header warning), `consuming-spices-guide.md` (TOFU
+  stated plainly, `tur build` named as unchecked), `releases-and-installation-guide.md`
+  (the `tvm` verify claim, with the four skip paths tabulated; the `--HEAD`
+  consequence), `README.md` + `web/index.html` (the install disclosure).
+- [x] C-8: the three files untracked and `.gitignore`d. Re-graded low -- none
+  held a credential, so no rewrite (section 2a).
+- [x] Both VS Code extensions declare `capabilities.untrustedWorkspaces`, with
+  `turmeric.serverPath` restricted. This was a finding of WP1's own, not a
+  section 2 row (section 2a), and it is what makes T1's editor promise
+  enforceable rather than aspirational.
+- [x] README links the guide and the advisory form from a new `## Security`
+  section.
+- **Exit met.** Later packages grade against the guide's boundary table; each
+  open item in the guide names its section 2 id, so closing a row means
+  deleting that guide block.
+
+**Left for others deliberately:** the repo-settings half of the new findings
+(branch protection, secret scanning, Dependabot) is folded into WP7 rather than
+flipped here, and the four T1 code fixes the promise depends on (defer Justfile
+backticks, a `--no-macros` equivalent, the direnv-style repl trust prompt, the
+`:link-flags`/`:build-dir` grammar) stay with WP2 and WP3.
 
 ### WP2 -- Compiler driver: command construction and filesystem (4-5 days)
 
@@ -380,9 +529,33 @@ checklist, not a gate.
 
 ## 7. Open questions for the author
 
-1. **T1 line:** is `tur check` / the LSP / `tur run --list` / `tur repl`
-   auto-discovery meant to be safe on a tree you have merely opened? The
-   plan assumes yes (editors run them without asking).
+1. ~~**T1 line:**~~ **ANSWERED 2026-09-29.** Not "safe" -- clangd's line:
+   *`tur check`, `tur run --list` and the language server do not execute
+   repo-supplied code or shell unless you asked them to.* Consequences the
+   answer settles:
+   - **D-2 stays high.** `--list` reads as an inventory command in every
+     toolchain, so evaluating Justfile backticks at parse time fails the
+     surprise test regardless of what the guide promises. The fix is scoped
+     (defer to recipe invocation), not a rewrite -- see section 2a.
+   - **Macros at check time are Rust's proc-macro problem**, and the promise
+     is deferred until S-1 lands rather than made now. A genuinely
+     capability-denied macro env would be a better story than Rust's and is
+     worth promising *then*. Until then the guide says `tur check` expands
+     macros, and WP2/WP3 owe the `--no-macros` equivalent that rust-analyzer
+     ships as `procMacro.enable`.
+   - **`tur repl` auto-discovery gets no promise** -- it compiles and
+     `dlopen`s, which is Gradle-tier. But `TUR_NO_AUTO_SPICE=1` is
+     default-allow, which points against where pnpm, Bun, Deno and Neovim have
+     all moved. direnv's model (hash `build.tur`, ask once, remember) is cheap
+     and converts D-3 from a defect into a documented design.
+   - **`build.tur` is Turmeric's `.cargo/config.toml`.** `:link-flags`,
+     `:c-sources` and an absolute `:build-dir` are repo-supplied toolchain
+     redirection, and Cargo's answer to the identical hazard is "building is
+     running". So `tur build` keeps no promise, and the guide names the
+     analogy -- which does more work than a severity number.
+   - **The LSP declares its trust support.** Whatever the CLI promises, the
+     editor integration should let the editor enforce it; done in WP1, and it
+     buys Restricted Mode users the protection Go's extension gives them.
 2. **Continuations over the network:** should `bytes->serial-cont` accept a
    key and verify an HMAC, or is it the application's job (the guestbook
    example would then need to show it)?
