@@ -1,0 +1,2 @@
+(extern-c getenv [^cstr name] :cstr)
+(getenv "HOME")

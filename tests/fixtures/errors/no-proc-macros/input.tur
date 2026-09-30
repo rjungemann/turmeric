@@ -1,0 +1,6 @@
+;; security-audit-plan WP3: --no-proc-macros refuses defmacro* outright, so
+;; no macro-time code runs on a tree you have not read.
+(defmodule prog
+  (defmacro* seven []
+    (int->syntax 7))
+  (defn main [] : int (println (seven)) 0))

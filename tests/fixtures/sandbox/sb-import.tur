@@ -1,1 +1,3 @@
-(import turi/list)
+(defmodule m
+  (import list)
+  (defn f [] : int 1))

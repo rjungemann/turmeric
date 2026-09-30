@@ -125,6 +125,12 @@ struct TuriClosure {
     /* Phase S7: native function support (fn == NULL when native is set) */
     TuriNativeFn    native;    /* non-NULL for native C builtins */
     void           *native_ud; /* user data passed to native */
+    /* security-audit-plan WP3 (S-1): capabilities a caller must hold for the
+     * native to run, and the name to report when it may not (NULL when
+     * native_caps is 0).  Stamped at registration from native_caps.c's table
+     * or by turi_env_register_native_caps; checked in eval_apply_driven. */
+    TuriCaps        native_caps;
+    const char     *native_cap_name;
     /* EX_CLOSURE closures have a synthetic __env_p first param for codegen;
      * the interpreter skips it and uses the captured frame instead. */
     bool            skip_env_param;
@@ -161,14 +167,53 @@ static TuriValue native_resume_cont(TuriEnv *env, TuriValue *args, uint32_t n, v
 
 /* Register a native C function as a global binding in env.
  * Declared in eval.h; implemented here because TuriClosure is internal. */
+static void register_native_with_caps(TuriEnv *env, const char *name,
+                                      TuriNativeFn fn, void *ud,
+                                      TuriCaps required,
+                                      const char *cap_name) {
+    TuriClosure *cl = (TuriClosure *)turi_val_calloc(env, sizeof(TuriClosure));
+    cl->fn              = NULL;
+    cl->captured        = NULL;
+    cl->native          = fn;
+    cl->native_ud       = ud;
+    cl->native_caps     = required;
+    cl->native_cap_name = required ? cap_name : NULL;
+    turi_env_set(env, name, turi_closure(cl));
+}
+
+/* A builtin name takes its requirement from the classification table
+ * (native_caps.c); the row's name is static, so it doubles as the diagnostic
+ * name.  An unclassified name -- an embedder's own native -- carries none. */
 void turi_env_register_native(TuriEnv *env, const char *name,
                                TuriNativeFn fn, void *ud) {
-    TuriClosure *cl = (TuriClosure *)turi_val_calloc(env, sizeof(TuriClosure));
-    cl->fn        = NULL;
-    cl->captured  = NULL;
-    cl->native    = fn;
-    cl->native_ud = ud;
-    turi_env_set(env, name, turi_closure(cl));
+    const TuriNativeCapRow *row = turi_native_cap_find(name);
+    register_native_with_caps(env, name, fn, ud, row ? row->caps : 0,
+                              row ? row->name : NULL);
+}
+
+void turi_env_register_native_caps(TuriEnv *env, const char *name,
+                                   TuriNativeFn fn, void *ud,
+                                   TuriCaps required) {
+    const char *cap_name = NULL;
+    if (required && name) {
+        /* The caller's string may be transient; the env's symbol arena is
+         * permanent for the env's lifetime, which bounds the closure's. */
+        size_t len = strlen(name);
+        char *copy = (char *)arena_alloc(&env->sym_arena, len + 1);
+        memcpy(copy, name, len + 1);
+        cap_name = copy;
+    }
+    register_native_with_caps(env, name, fn, ud, required, cap_name);
+}
+
+/* The refusal a native call gets when env lacks some of cl->native_caps. */
+static TuriValue native_caps_denied(TuriEnv *env, const TuriClosure *cl) {
+    char need[64];
+    turi_caps_describe(cl->native_caps & ~env->caps, need, sizeof need);
+    return turi_errorf("eval: '%s' requires capability %s, which this "
+                       "environment does not hold",
+                       cl->native_cap_name ? cl->native_cap_name : "<native>",
+                       need);
 }
 
 /* Typed variant: install the native exactly as turi_env_register_native does,
@@ -366,23 +411,79 @@ static TuriValue native_extern_getenv(TuriEnv *env, TuriValue *args, uint32_t n,
     return turi_nil();
 }
 
-/* printf: supports one argument (%lld for int, %s for cstr, %f/%g for float). */
+/* security-audit-plan WP3 (S-2): the program's format string never reaches
+ * libc as-is.  It is re-emitted into `out` with every conversion checked
+ * against the argument actually passed for it: literal text and `%%` copy
+ * through; there must be exactly one conversion per character of `kinds`;
+ * flags, a decimal width and a decimal precision are kept; the length
+ * modifier is replaced with the one matching how the argument is passed (`ll`
+ * for an int, none for a double or a string).  Anything else -- `%n`, `*`,
+ * `$`, `%p`, a surplus conversion, a conversion of the wrong kind for its
+ * argument -- rejects the whole format.  Each character of `kinds` is 'i'
+ * (int), 'f' (float) or 's' (cstr).  Shared with the inline-C snprintf
+ * emulator (S-3). */
+static bool extern_printf_format(const char *fmt, const char *kinds,
+                                 char *out, size_t cap) {
+    size_t o = 0;
+    size_t want = strlen(kinds);
+    size_t convs = 0;
+#define EPF_PUT(c) do { if (o + 1 >= cap) return false; out[o++] = (c); } while (0)
+    for (const char *p = fmt; *p; p++) {
+        if (*p != '%') { EPF_PUT(*p); continue; }
+        if (p[1] == '%') { EPF_PUT('%'); EPF_PUT('%'); p++; continue; }
+        EPF_PUT('%');
+        p++;
+        while (*p && strchr("-+ #0", *p)) EPF_PUT(*p++);
+        while (isdigit((unsigned char)*p)) EPF_PUT(*p++);
+        if (*p == '.') { EPF_PUT(*p++); while (isdigit((unsigned char)*p)) EPF_PUT(*p++); }
+        while (*p && strchr("hlLqjzt", *p)) p++;   /* dropped; re-derived below */
+        char c = *p;
+        if (convs >= want) return false;
+        char kind = kinds[convs++];
+        bool ok;
+        switch (kind) {
+        case 'i': ok = c && strchr("diuxXo", c); break;
+        case 'f': ok = c && strchr("eEfFgGaA", c); break;
+        default:  ok = (c == 's'); break;
+        }
+        if (!ok) return false;
+        if (kind == 'i') { EPF_PUT('l'); EPF_PUT('l'); }
+        EPF_PUT(c);
+    }
+#undef EPF_PUT
+    if (convs != want) return false;
+    out[o] = '\0';
+    return true;
+}
+
+/* printf: one optional argument, formatted through the checked format above.
+ * A format the check rejects is a TURI_ERROR, never a libc call. */
 static TuriValue native_extern_printf(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1 || args[0].tag != TURI_CSTR || !args[0].as_cstr) return turi_int(0);
     const char *fmt = args[0].as_cstr;
-    int ret = 0;
+    char kind = 'i';
     if (n >= 2) {
-        TuriValue arg = args[1];
-        if (arg.tag == TURI_CSTR)
-            ret = printf(fmt, arg.as_cstr);
-        else if (arg.tag == TURI_FLOAT)
-            ret = printf(fmt, arg.as_float);
-        else
-            ret = printf(fmt, (long long)arg.as_int);
-    } else {
-        ret = printf("%s", fmt);
+        if (args[1].tag == TURI_CSTR)       kind = 's';
+        else if (args[1].tag == TURI_FLOAT) kind = 'f';
     }
+    size_t cap = strlen(fmt) * 2 + 8;   /* each conversion grows by at most 2 */
+    char *safe = (char *)malloc(cap);
+    if (!safe) return turi_error("printf: out of memory");
+    char kinds[2] = { n >= 2 ? kind : '\0', '\0' };
+    if (!extern_printf_format(fmt, kinds, safe, cap)) {
+        free(safe);
+        return turi_errorf("printf: format \"%s\" does not match its %s argument "
+                           "(the interpreter formats one int, float or string "
+                           "argument; %%n, %%p, * and $ are refused)",
+                           fmt, n >= 2 ? "one" : "absent");
+    }
+    int ret;
+    if (n < 2)                        ret = printf(safe, 0);
+    else if (kind == 's')             ret = printf(safe, args[1].as_cstr ? args[1].as_cstr : "");
+    else if (kind == 'f')             ret = printf(safe, args[1].as_float);
+    else                              ret = printf(safe, (long long)args[1].as_int);
+    free(safe);
     return turi_int((int64_t)ret);
 }
 
@@ -400,20 +501,24 @@ static TuriValue native_extern_puts(TuriEnv *env, TuriValue *args, uint32_t n, v
  * allocations are reproduced from the env value-arena, not raw malloc),
  * `exit` must flush-and-_exit, and printf/puts marshal turi values rather
  * than trusting a variadic ABI. */
+/* security-audit-plan WP3 (S-2): every override is an extern-c, so it needs
+ * TURI_CAP_FFI exactly as the thunk path does, plus the class of what it does.
+ * Before WP3 these seven skipped the FFI check the thunk path enforces. */
 static bool register_extern_c_known(TuriEnv *env, const char *fname) {
-    struct { const char *name; TuriNativeFn fn; } known[] = {
-        { "exit",     native_extern_exit     },
-        { "free",     native_extern_free     },
-        { "strlen",   native_extern_strlen   },
-        { "getenv",   native_extern_getenv   },
-        { "printf",   native_extern_printf   },
-        { "printf_s", native_extern_printf   },
-        { "puts",     native_extern_puts     },
-        { NULL, NULL }
+    struct { const char *name; TuriNativeFn fn; TuriCaps caps; } known[] = {
+        { "exit",     native_extern_exit,   TURI_CAP_FFI | TURI_CAP_PROC },
+        { "free",     native_extern_free,   TURI_CAP_FFI },
+        { "strlen",   native_extern_strlen, TURI_CAP_FFI },
+        { "getenv",   native_extern_getenv, TURI_CAP_FFI | TURI_CAP_ENV },
+        { "printf",   native_extern_printf, TURI_CAP_FFI | TURI_CAP_IO },
+        { "printf_s", native_extern_printf, TURI_CAP_FFI | TURI_CAP_IO },
+        { "puts",     native_extern_puts,   TURI_CAP_FFI | TURI_CAP_IO },
+        { NULL, NULL, 0 }
     };
     for (int i = 0; known[i].name; i++) {
         if (strcmp(fname, known[i].name) == 0) {
-            turi_env_register_native(env, fname, known[i].fn, NULL);
+            turi_env_register_native_caps(env, fname, known[i].fn, NULL,
+                                          known[i].caps);
             return true;
         }
     }
@@ -2499,6 +2604,23 @@ static inline void panic_fill_cstr_payload(TuriEnv *env, const char *s) {
     env->catch_panic_line  = 0;
 }
 
+/* security-audit-plan S-5: every place a panic would end the process calls
+ * this first.  In an env that may not end the host (turi_eval installs
+ * env->host_exit_jmp when the env lacks TURI_CAP_PROC) it lands on turi_eval's
+ * pad, which returns TURI_ERROR "panic: <msg>" to the embedder; otherwise it
+ * returns and the caller exits exactly as before.  `msg`, when non-NULL,
+ * replaces the stashed message (the double-panic paths have none of their
+ * own). */
+static void host_exit_unwind(TuriEnv *env, const char *msg) {
+    if (!env || !env->host_exit_jmp) return;
+    if (msg) panic_fill_cstr_payload(env, msg);
+    longjmp(*env->host_exit_jmp, 1);
+}
+
+void turi_host_exit_guard(TuriEnv *env, const char *msg) {
+    host_exit_unwind(env, msg ? msg : "(no message)");
+}
+
 /* Phase R2: shared interpreter panic entry point.  Mirrors the EX_PANIC eval
  * case so native functions (result-must, option-must, option-expect, ...) raise
  * a *catchable* panic -- recoverable by catch-unwind and carrying the standard
@@ -2517,6 +2639,7 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
     const char *s = msg ? msg : "(no message)";
     if (env->panicking || g_firing_panic_defer) {
         /* Double panic: a defer (or a panic during unwinding) panicked again. */
+        host_exit_unwind(env, "double panic");
         fprintf(stderr, "double panic: aborting\n");
         fflush(stderr);
         fflush(stdout);
@@ -2531,6 +2654,9 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
             return;                 /* raise signal; the driver unwinds to DK_CATCH_UNWIND */
         longjmp(*cb->jmp, 1);       /* setjmp boundary: unwind the C stack to it */
     }
+    /* No catch boundary took it (or no-unwind forbids catching): the process
+     * would end here.  A host that denied TURI_CAP_PROC gets an error back. */
+    host_exit_unwind(env, s);
     env->panicking = true;
     if (env->in_no_unwind) {
         fprintf(stderr, "panic (no unwind): %s\n", s);
@@ -5498,6 +5624,10 @@ static TuriValue ic_format_snprintf_call(TuriEnv *env, const char *fp,
     fq=fmte+1;
     /* parse snprintf arguments */
     int64_t sn_args[8]; int sn_argc=0;
+    /* WP3 (S-3): the kind of each argument, for the format check below.  An
+     * argument is a string ('s') only when it names a parameter that arrived
+     * as a TURI_CSTR; everything else the evaluator produces is an int. */
+    char sn_kinds[9] = {0};
     while(*fq&&*fq!=')'&&sn_argc<8) {
         if(*fq==',') fq++;
         fq=ic_skip_ws(fq); if(*fq==')') break;
@@ -5520,10 +5650,31 @@ static TuriValue ic_format_snprintf_call(TuriEnv *env, const char *fp,
              * family of bugs is about -- decline the whole match so
              * try_exec_simple_inline_c falls through to a clean "inline-C not
              * supported" error instead of a plausible-but-wrong number. */
+            int pi=ic_param_idx(fn,abuf,param_offset);
+            if(pi>=0&&(uint32_t)pi<n_args&&args[pi].tag==TURI_CSTR&&args[pi].as_cstr){
+                sn_kinds[sn_argc]='s';
+                sn_args[sn_argc++]=(int64_t)(intptr_t)args[pi].as_cstr;
+                continue;
+            }
             if(!ic_eval_assign_expr(abuf,fn,param_offset,args,n_args,&val,body))
                 return turi_nil();
+            sn_kinds[sn_argc]='i';
             sn_args[sn_argc++]=val;
         }
+    }
+    /* security-audit-plan WP3 (S-3): the format must carry exactly one
+     * conversion per argument, each of that argument's kind: an integer
+     * conversion for an int, %s only for a string parameter.  Before WP3 a %s
+     * over an integer argument dereferenced it, and %n wrote through one.
+     * The checked copy also normalises each integer length modifier to `ll`,
+     * which is what is passed.  A format that fails is declined (nil), and
+     * try_exec_simple_inline_c reports the body as unsupported.  (A string
+     * argument still travels as a pointer-width long long, as before WP3.) */
+    {
+        char safe_fmt[sizeof fmt_str];
+        if (!extern_printf_format(fmt_str, sn_kinds, safe_fmt, sizeof safe_fmt))
+            return turi_nil();
+        memcpy(fmt_str, safe_fmt, strlen(safe_fmt) + 1);
     }
     /* format the result */
     char result_buf[1024]; int rlen=0;
@@ -5536,8 +5687,13 @@ static TuriValue ic_format_snprintf_call(TuriEnv *env, const char *fp,
         default: return turi_nil();
     }
     if(rlen<0) return turi_nil();
+    /* snprintf returns the length it WOULD have written; a result longer
+     * than the buffer was truncated there, so copy only what is in it.
+     * (Copying rlen+1 bytes read past result_buf -- WP3.) */
+    if((size_t)rlen>=sizeof(result_buf)) rlen=(int)sizeof(result_buf)-1;
     char *out=(char*)turi_val_alloc(env, (size_t)rlen+1);
-    memcpy(out,result_buf,(size_t)rlen+1);
+    memcpy(out,result_buf,(size_t)rlen);
+    out[rlen]='\0';
     TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=out; return rv;
 }
 
@@ -9875,9 +10031,14 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
         env->step_fuel--;
     }
 
-    /* Phase S7: native function dispatch -- leaf, no driver. */
-    if (cl->native)
+    /* Phase S7: native function dispatch -- leaf, no driver.
+     * security-audit-plan WP3 (S-1): the one capability check every native
+     * call passes through -- by name from Turmeric, via turi_call from C, from
+     * a HOF native re-entering evaluation, and the inline-C override below. */
+    if (cl->native) {
+        if (cl->native_caps & ~env->caps) return native_caps_denied(env, cl);
         return cl->native(env, args, n_args, cl->native_ud);
+    }
 
     FnDef *fn = (FnDef *)cl->fn;
     /* EX_CLOSURE adds a synthetic __env_p first param for codegen; skip it. */
@@ -9900,6 +10061,8 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
         TuriValue native_v = turi_env_get(env, fname);
         if (native_v.tag == TURI_CLOSURE && native_v.as_closure &&
             native_v.as_closure->native) {
+            if (native_v.as_closure->native_caps & ~env->caps)
+                return native_caps_denied(env, native_v.as_closure);
             return native_v.as_closure->native(env, args, n_args,
                                                native_v.as_closure->native_ud);
         }
@@ -11768,6 +11931,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue pv = eval_expr(env, frame, e->as.panic_with_.payload);
         if (turi_is_error(pv) || env_signaled(env)) return pv;
         if (env->panicking || g_firing_panic_defer) {
+            host_exit_unwind(env, "double panic");
             fprintf(stderr, "double panic: aborting\n");
             fflush(stderr);
             fflush(stdout);
@@ -11788,6 +11952,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (cb->is_driver) return pv;   /* raise signal; driver unwinds */
             longjmp(*cb->jmp, 1);
         }
+        host_exit_unwind(env, "typed panic");
         env->panicking = true;
         fprintf(stderr, "panic at\n");
         fflush(stderr);
@@ -11910,6 +12075,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 if (outer->is_driver) return env->catch_panic_value;
                 longjmp(*outer->jmp, 1);
             }
+            host_exit_unwind(env, NULL);
             fprintf(stderr, "panic at\npanic: %s\n", env->catch_panic_msg);
             fflush(stderr);
             fire_defers_to_mark_by_scope(env, NULL, NULL);
@@ -14084,6 +14250,107 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     collsweep_after_rewind(env, *result);
 }
 
+/* Run program items [0, n_fsd) then [start, total): the imported module
+ * bodies, then this turn's new forms.  Stops at the first error or uncaught
+ * throw. */
+static TuriValue eval_toplevel_items(TuriEnv *env, Expr *prog, uint32_t n_fsd,
+                                     uint32_t start, uint32_t total) {
+    TuriValue last = turi_nil();
+    for (int pass = 0; pass < 2; pass++) {
+        uint32_t lo = pass == 0 ? 0 : start;
+        uint32_t hi = pass == 0 ? n_fsd : total;
+        for (uint32_t i = lo; i < hi; i++) {
+            last = eval_expr(env, NULL, prog->as.program.items[i]);
+            if (env->returning) {
+                last = env->return_value;
+                env->returning = false;
+            }
+            if (env->throwing) {
+                env->throwing = false;
+                return turi_error("uncaught exception");
+            }
+            if (turi_is_error(last)) return last;
+        }
+    }
+    return last;
+}
+
+/* security-audit-plan S-5: an env that may not end the host process (no
+ * TURI_CAP_PROC -- turi_env_new_sandboxed, the macro env) gets a landing pad
+ * for every panic path that would otherwise exit() or abort(): an uncaught
+ * panic, a panic under no-unwind, a double panic, and a native's own
+ * out-of-bounds or failed-contract exit (turi_host_exit_guard).  The program
+ * stops and turi_eval returns TURI_ERROR "panic: <msg>"; the embedder decides
+ * what happens next.  User catch-unwind is untouched -- the pad is reached only
+ * where the process would have ended.  The program's pending defers are
+ * dropped, not run: it has been stopped, not unwound, and a defer that
+ * panicked again would have nowhere left to go.  A separate function so the
+ * setjmp frame holds only the saved state below.
+ *
+ * `nested_ok`: reuse a pad already installed further out instead of pushing
+ * one (turi_call from a higher-order native mid-program), so the common path
+ * pays no setjmp. */
+typedef TuriValue (*HostGuardedFn)(TuriEnv *env, void *ctx);
+
+static TuriValue host_guarded_run(TuriEnv *env, HostGuardedFn run, void *ctx,
+                                  bool nested_ok) {
+    if ((env->caps & TURI_CAP_PROC) || (nested_ok && env->host_exit_jmp))
+        return run(env, ctx);
+    struct {
+        jmp_buf            pad;
+        jmp_buf           *host_jmp;
+        jmp_buf           *catch_jmp;
+        void              *handlers;
+        void              *defers;
+        const char        *module;
+        bool               no_unwind;
+        TuriCatchBoundary *catch_stack;
+    } *volatile g = calloc(1, sizeof *g);
+    if (!g) return turi_error("eval: out of memory");
+    g->host_jmp    = env->host_exit_jmp;
+    g->catch_jmp   = env->catch_jmp;
+    g->handlers    = env->handler_stack;
+    g->defers      = env->defer_stack;
+    g->module      = env->current_module;
+    g->no_unwind   = env->in_no_unwind;
+    g->catch_stack = g_catch_stack;
+    env->host_exit_jmp = &g->pad;
+    TuriValue r;
+    if (setjmp(g->pad) == 0) {
+        r = run(env, ctx);
+    } else {
+        env->catch_jmp      = g->catch_jmp;
+        env->handler_stack  = g->handlers;
+        env->defer_stack    = g->defers;
+        env->current_module = g->module;
+        env->in_no_unwind   = g->no_unwind;
+        env->panicking      = false;
+        env->returning      = false;
+        env->throwing       = false;
+        g_catch_stack       = g->catch_stack;
+        g_firing_panic_defer = false;
+        r = turi_errorf("panic: %s", env->catch_panic_msg);
+    }
+    env->host_exit_jmp = g->host_jmp;
+    free(g);
+    return r;
+}
+
+typedef struct { Expr *prog; uint32_t n_fsd, start, total; } ToplevelRun;
+
+static TuriValue toplevel_run(TuriEnv *env, void *ctx) {
+    ToplevelRun *t = (ToplevelRun *)ctx;
+    return eval_toplevel_items(env, t->prog, t->n_fsd, t->start, t->total);
+}
+
+/* turi_eval's evaluation phase: always the innermost pad, so a nested
+ * turi_eval (from a native) unwinds to its own caller's cleanup. */
+static TuriValue eval_toplevel_guarded(TuriEnv *env, Expr *prog, uint32_t n_fsd,
+                                       uint32_t start, uint32_t total) {
+    ToplevelRun t = { prog, n_fsd, start, total };
+    return host_guarded_run(env, toplevel_run, &t, false);
+}
+
 static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                  char *out_type_tag, size_t tag_cap) {
     if (!env || !src) return turi_error("turi_eval: null argument");
@@ -14468,22 +14735,6 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     uint32_t total = prog->as.program.n;
     uint32_t n_fsd = actual_n_fsd;
 
-#define EVAL_TOPLEVEL_RANGE(lo, hi) do {                                      \
-    for (uint32_t _i = (lo); _i < (hi); _i++) {                              \
-        last = eval_expr(env, NULL, prog->as.program.items[_i]);             \
-        if (env->returning) {                                                 \
-            last = env->return_value;                                         \
-            env->returning = false;                                           \
-        }                                                                     \
-        if (env->throwing) {                                                  \
-            env->throwing = false;                                            \
-            last = turi_error("uncaught exception");                          \
-            goto eval_done;                                                   \
-        }                                                                     \
-        if (turi_is_error(last)) goto eval_done;                             \
-    }                                                                         \
-} while (0)
-
     TuriValue last = turi_nil();
     /* The already-run tail of the program is n_fsd file-scope defs followed by
      * prior_prog non-fsd program items from earlier evals.  Skip exactly that
@@ -14493,10 +14744,8 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * items, so none of them have run before -- the already-run prefix is zero.
      * On the whole-program path the cumulative count applies, as before. */
     uint32_t prior_prog = use_incr_elab ? 0u : env->prior_prog_items;
-    EVAL_TOPLEVEL_RANGE(0, n_fsd);                   /* imported module bodies */
-    EVAL_TOPLEVEL_RANGE(n_fsd + prior_prog, total);  /* new user forms         */
-eval_done:;
-#undef EVAL_TOPLEVEL_RANGE
+    /* Imported module bodies [0, n_fsd), then the new user forms. */
+    last = eval_toplevel_guarded(env, prog, n_fsd, n_fsd + prior_prog, total);
 
     /* 8. Update accumulated state only on success.
      * Store nforms (parsed count) rather than total so the n_fsd formula
@@ -14615,10 +14864,23 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path) {
  * turi_call: directly invoke a closure value
  * ---------------------------------------------------------------------- */
 
+typedef struct { TuriClosure *cl; TuriValue *args; uint32_t n; } CallRun;
+
+static TuriValue call_run(TuriEnv *env, void *ctx) {
+    CallRun *c = (CallRun *)ctx;
+    return eval_apply(env, c->cl, c->args, c->n);
+}
+
 TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args) {
     if (!env) return turi_error("turi_call: null env");
     if (fn.tag != TURI_CLOSURE || !fn.as_closure)
         return turi_errorf("turi_call: expected closure, got tag %d", fn.tag);
+    /* S-5: an embedder (or the macro env) calling straight into a restricted
+     * env gets the same host-exit pad turi_eval installs. */
+    if (!(env->caps & TURI_CAP_PROC) && !env->host_exit_jmp) {
+        CallRun c = { fn.as_closure, args, n_args };
+        return host_guarded_run(env, call_run, &c, true);
+    }
     return eval_apply(env, fn.as_closure, args, n_args);
 }
 

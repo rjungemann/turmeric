@@ -308,13 +308,25 @@ See `tests/fixtures/reader-macros-procedural/`.
 
 ## Effectful macros (`--macro-caps=io`)
 
-Macro-time code runs with every capability denied.  For the rare
+Macro-time code runs with every capability denied, and that covers native
+functions reached by name as well as the builtins: a `defmacro*` body that
+calls `process/spawn` or `r7rs-unlink__` gets an expansion-time diagnostic
+naming the capability, and nothing runs
+(`tests/fixtures/errors/macro-native-denied/`).  For the rare
 legitimately-effectful macro (an embed-file style generator), the global
-flag `--macro-caps=io` re-grants exactly I/O; anything else -- ffi,
-unsafe, inline-C, async -- is refused by the flag parser and never
-available at expansion time.  Without the flag, an I/O call in a macro
-body is a plain expansion-time diagnostic
+flag `--macro-caps=io` re-grants I/O and file access by path; anything else
+-- process, environment, ffi, unsafe, inline-C, async -- is refused by the
+flag parser and never available at expansion time.  Without the flag, an I/O
+call in a macro body is a plain expansion-time diagnostic
 (`tests/fixtures/errors/macro-io-denied/`).
+
+## Refusing procedural macros (`--no-proc-macros`)
+
+The global flag `--no-proc-macros` refuses every `defmacro*` definition, call
+and `:for-macros` import with a diagnostic, so no macro-time code runs at all.
+Template `defmacro` still expands, since substitution runs nothing.  It is
+rust-analyzer's `procMacro.enable = false`: the switch for pointing `tur check`
+at a tree you have not read yet (`tests/fixtures/errors/no-proc-macros/`).
 - **Unhygienic like `defmacro`** -- mint bindings with `syntax-gensym`.
 
 Prefer a plain `defmacro` template when substitution is all you need; it

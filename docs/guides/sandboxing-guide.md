@@ -1,7 +1,7 @@
 ---
 title: Sandboxing Guide
 category: Interoperability
-description: Restricting Turmeric code inside a C host with turi_env_new_sandboxed, capability flags, and resource limits -- and which operations the capability check does not yet cover
+description: Restricting Turmeric code inside a C host with turi_env_new_sandboxed, capability flags, the native classification table, and resource limits -- and the memory-safety gap that keeps it from being a boundary against hostile code
 ---
 
 # Sandboxing Guide
@@ -10,17 +10,18 @@ The libturi embedding API provides a sandboxed evaluation environment for
 Turmeric code -- REPL widgets, plug-in scripts, user-supplied formulas --
 inside a C host process with I/O, FFI, and unsafe memory operations denied.
 
-> **Do not rely on this as a boundary against hostile code yet.** The
-> capability set is enforced for the builtin operations listed under
-> [What the Sandbox Blocks](#what-the-sandbox-blocks), but **native functions
-> are registered into every environment and almost none of them consult it**,
-> so a sandboxed environment still reaches process spawning, file open and
-> write, and raw-descriptor reads. This is tracked as S-1 in the
+> **Do not rely on this as a boundary against hostile code yet.** Every
+> capability is enforced -- each native function has a row in one
+> [classification table](#capability-classification) and the native dispatch
+> refuses a call the environment has no capability for -- so a sandboxed
+> script cannot open a file, spawn a process, or read the environment, however
+> it spells the call. What is **not** kept is memory safety: most natives take
+> collection and string handles as bare integers, so a script can forge one and
+> read or write an arbitrary address. This is tracked as S-5 in the
 > [security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md);
 > the [Security Guide](security-guide.md#t3-the-sandboxed-interpreter) states
 > the promise and where it stands. Treat the sandbox as protection against
-> *accidents* -- a plug-in that calls `println` by mistake -- not against an
-> adversary.
+> *careless* code, not against code written to corrupt memory.
 
 See [eval-api.md](eval-api.md) for the full C embedding API reference.
 
@@ -39,7 +40,7 @@ int main(void) {
     /* v.tag == TURI_INT, v.as_int == 3 */
 
     /* I/O is blocked */
-    TuriValue bad = turi_eval(env, "(println-int 42)");
+    TuriValue bad = turi_eval(env, "(println 42)");
     /* bad.tag == TURI_ERROR */
 
     turi_env_free(env);
@@ -56,23 +57,30 @@ without restriction.
 
 ## What the Sandbox Blocks
 
-### I/O builtins
+### I/O, filesystem, processes, and the environment
 
-All `println-*` variants (`println-int`, `println-float`, `println-bool`,
-`println-cstr`, `println-uint`, `println-float32`) return `TURI_ERROR` in a
-sandboxed environment.
+The `println` family returns `TURI_ERROR` in a sandboxed environment, and so
+does every native function whose row in the
+[classification table](#capability-classification) names a capability the
+environment does not hold: `process/spawn`, `io-fopen-write`, `r7rs-unlink__`,
+`r7rs-getenv__`, the raw-descriptor `read-async`/`write-async`, and the rest.
+The check is made once, where every native call is dispatched, so a native
+reached by name, through `turi_call`, or from a higher-order native is refused
+the same way:
 
-`read-async` and `write-async` are **not** blocked, despite being I/O: they are
-native functions rather than builtins, and the native dispatch does not consult
-the capability set (S-1). `read-async` performs its read eagerly, before any
-future machinery, so the `TURI_CAP_ASYNC` gate on the `(async ...)` form does
-not stop it either. Do not pass a descriptor you care about to a host that
-evaluates untrusted text.
+```
+eval: 'process/spawn' requires capability proc, which this environment does not hold
+```
+
+`(load "path")` is refused alongside `(import ...)`.
 
 ### FFI (dynamic loading)
 
 `dlopen`, `dlsym`, and `dlclose` are blocked.  A sandboxed script cannot load
-native shared libraries.
+native shared libraries.  `extern-c` declarations need `TURI_CAP_FFI` too,
+including the ones the interpreter implements itself (`printf`, `puts`,
+`getenv`, `exit`, `strlen`, `free`), which additionally need the capability of
+what they do.
 
 ### Inline-C expressions
 
@@ -127,12 +135,16 @@ case but filesystem I/O is not -- use the capability API instead of the boolean
 ```c
 typedef uint32_t TuriCaps;
 
-#define TURI_CAP_IO        (1u << 0)  /* println-*, file/socket I/O builtins */
-#define TURI_CAP_FFI       (1u << 1)  /* dlopen/dlsym/dlclose */
+#define TURI_CAP_IO        (1u << 0)  /* stdout/stdin, raw-fd read/write, pipes */
+#define TURI_CAP_FFI       (1u << 1)  /* dlopen/dlsym/dlclose, extern-c */
 #define TURI_CAP_INLINE_C  (1u << 2)  /* inline-C expressions */
-#define TURI_CAP_ASYNC     (1u << 3)  /* (async ...) forms */
+#define TURI_CAP_ASYNC     (1u << 3)  /* (async ...) and the scheduler natives */
 #define TURI_CAP_UNSAFE    (1u << 4)  /* raw-malloc, ptr-deref, ... */
-#define TURI_CAP_IMPORT    (1u << 5)  /* (import ...) module loading */
+#define TURI_CAP_IMPORT    (1u << 5)  /* (import ...) and (load ...) */
+#define TURI_CAP_FS        (1u << 6)  /* open/create/remove/stat by path */
+#define TURI_CAP_PROC      (1u << 7)  /* spawn, wait, exit the host process */
+#define TURI_CAP_ENV       (1u << 8)  /* getenv / environ */
+#define TURI_CAP_EVERY     /* every bit above */
 #define TURI_CAP_ALL       (~(TuriCaps)0)
 #define TURI_CAP_NONE      ((TuriCaps)0)
 ```
@@ -146,17 +158,21 @@ TuriEnv *env = turi_env_new_sandboxed();
 turi_env_allow(env, TURI_CAP_ASYNC);
 
 TuriValue ok  = turi_eval(env, "(async (fn [] :int 42))"); /* allowed */
-TuriValue bad = turi_eval(env, "(println-int 1)");         /* TURI_ERROR */
+TuriValue bad = turi_eval(env, "(println 1)");             /* TURI_ERROR */
 ```
 
 ```c
-/* Unrestricted env with I/O revoked -- useful inside a plugin host. */
+/* Unrestricted env with the outside world revoked -- useful inside a plugin
+ * host that wants the script to print but touch nothing else. */
 TuriEnv *env = turi_env_new();
-turi_env_deny(env, TURI_CAP_IO);
-turi_env_deny(env, TURI_CAP_FFI);
+turi_env_deny(env, TURI_CAP_FS | TURI_CAP_PROC | TURI_CAP_ENV | TURI_CAP_FFI);
 ```
 
-Query whether a capability is active:
+A native that needs more than one capability runs only when the environment
+holds all of them.
+
+Query whether a capability is active (`turi_env_has_cap` answers true when
+*any* of the bits passed is held, so query one bit at a time):
 
 ```c
 if (!turi_env_has_cap(env, TURI_CAP_IO)) {
@@ -234,6 +250,22 @@ static TuriValue safe_sqrt(TuriEnv *env, TuriValue *args,
 turi_env_register_native(sandbox, "safe-sqrt", safe_sqrt, NULL);
 ```
 
+A native registered under a name of your own carries no capability
+requirement: you exposed it, so it runs. A native registered under a name the
+[classification table](#capability-classification) already lists takes that
+row's requirement, so re-registering `io-fopen-read` does not quietly give a
+sandbox file access. When you want to say which it is, use the explicit form:
+
+```c
+/* Gate your own native behind a capability ... */
+turi_env_register_native_caps(env, "host/read-config", read_config, NULL,
+                              TURI_CAP_FS);
+
+/* ... or deliberately expose one under a classified builtin name. */
+turi_env_register_native_caps(env, "r7rs-getenv__", fake_getenv, NULL,
+                              TURI_CAP_NONE);
+```
+
 Only expose native functions you are willing to let untrusted code call.
 
 ---
@@ -256,6 +288,20 @@ Step-fuel exhaustion also surfaces as `TURI_ERROR`:
 ```
 sandbox error: eval: step fuel exhausted
 ```
+
+So does a panic. An environment without `TURI_CAP_PROC` may not end your
+process, so a panic nothing in the script catches -- `(panic ...)`, an
+out-of-bounds `vec-get`, a failed contract -- stops the script and comes back
+from `turi_eval` or `turi_call` as an error, and the environment stays
+usable:
+
+```
+sandbox error: panic: vec index out of bounds
+```
+
+A `catch-unwind` inside the script still catches first. An environment that
+holds `TURI_CAP_PROC` keeps the compiled program's behaviour: print the panic
+and exit.
 
 ---
 
@@ -305,7 +351,7 @@ Expected output:
 #<fn hyp>
 5.0
 13.0
-[error] eval: builtin not allowed in sandboxed environment
+[error] eval: 'println-float' requires capability io, which this environment does not hold
 ```
 
 ---
@@ -314,19 +360,54 @@ Expected output:
 
 | Capability | `TURI_CAP_*` bit | Blocked by default | What it covers |
 |---|---|---|---|
-| I/O | `TURI_CAP_IO` | yes | `println-*`. **Not** `read-async`/`write-async` -- see S-1 above |
-| FFI | `TURI_CAP_FFI` | yes | `dlopen`, `dlsym`, `dlclose` |
+| I/O | `TURI_CAP_IO` | yes | `println`, stdout writers, `read-async`/`write-async` on raw descriptors, pipes, the reactor, the stdio ports |
+| Filesystem | `TURI_CAP_FS` | yes | opening, creating, removing and testing files by path |
+| Process | `TURI_CAP_PROC` | yes | `process/spawn`, `process/wait`, exiting the host process |
+| Environment | `TURI_CAP_ENV` | yes | `getenv`, `environ` |
+| FFI | `TURI_CAP_FFI` | yes | `dlopen`, `dlsym`, `dlclose`, every `extern-c`, spice reload |
 | Inline-C | `TURI_CAP_INLINE_C` | yes | `` (` ``c ... `` `) `` expressions |
-| Async | `TURI_CAP_ASYNC` | yes | `(async ...)` forms |
-| Unsafe memory | `TURI_CAP_UNSAFE` | yes | `raw-malloc`, `ptr-deref`, `ptr-write`, `raw-memset`, ... |
-| Import | `TURI_CAP_IMPORT` | yes | `(import ...)` module loading |
+| Async | `TURI_CAP_ASYNC` | yes | `(async ...)` forms and the scheduler natives |
+| Unsafe memory | `TURI_CAP_UNSAFE` | yes | `raw-malloc`, `ptr-deref`, `ptr-write`, `raw-memset`, the raw-address natives |
+| Import | `TURI_CAP_IMPORT` | yes | `(import ...)` and `(load ...)` |
 
-All six capabilities are denied when you call `turi_env_new_sandboxed()`.
+All nine capabilities are denied when you call `turi_env_new_sandboxed()`.
 Use `turi_env_allow` to selectively re-enable any subset.
 
-Denied means the *checked* operations refuse. The checks live in the builtin
-dispatch, the FFI thunk path, inline-C evaluation, the `(async ...)` form, and
-`import`. A native function reached by name is not checked (S-1).
+## Capability Classification
+
+Every native function a new environment holds has one row in
+`src/turi/native_caps.c` naming the capabilities a caller must hold. The table
+is the source of truth; the sandbox test (`tests/turi/sandbox-eval.c`) fails if
+a native a fresh environment holds has no row, or if any row with a
+requirement can be called from a sandboxed environment.
+
+A native is classified by what its *caller* can make it do. One that writes
+`stderr` only on its own panic path is still pure; one that takes a raw
+descriptor is I/O even though it opens nothing, because descriptors 0, 1 and 2
+need no open. About six hundred natives are pure; these are the rest:
+
+| Class | Natives |
+|---|---|
+| `proc` | `process/spawn`, `process/wait`, `r7rs-exit__` |
+| `fs` | `fs/tmpfile`, `fs/tmpfile-path`, `fs/tmpfile-fd`, `fs/tmpfile-free`, `io-fopen-read`, `io-fopen-write`, `io-fread-chunk`, `io-fwrite-chunk`, `io-fclose`, `io-remove`, `write-temp-file`, `json/decode-file!`, `r7rs-io-open__`, `r7rs-file-exists-c__`, `r7rs-unlink__` |
+| `fs`, `io` | `random-access-bench` |
+| `env` | `r7rs-getenv__`, `r7rs-getenv-set?__`, `r7rs-environ-count__`, `r7rs-environ-name__`, `r7rs-environ-value__` |
+| `io` | `println-float`, `show-string-fputs`, `bt-print`, `doc-print`, `run-ring`, `run-nbody`, `read-async`, `write-async`, `async-pipe-init`, `r7rs-io-std__`, `reactor-new`, `tur_reactor_new`, `tur_reactor_poll`, `break` |
+| `async` | `sleep-async`, `with-timeout`, `async-all2`, `await-val`, `async-race`, `cancel-task`, `task-cancelled?` |
+| `ffi` | `reload` |
+| `unsafe` | `box`, `unbox`, `io-alloc`, `io-free`, `io-buf-new`, `io-buf-free`, `int-val`, `alloc-int`, `alloc-key`, `alloc-str`, `flat-new`, `flat-get`, `flat-set`, `array-get`, `array-set` |
+| every capability | `r7rs-eval-c-eval__`, `r7rs-eval-c-load__` -- they evaluate text in the process-global R7RS `eval` environment, which holds every capability |
+
+`unsafe` is given to the natives whose only purpose is to allocate, free or
+dereference a raw address with no typed wrapper. It is not given to the
+collection and string natives, although they take handles as bare integers
+too; a sandbox without vectors and maps would be useless, and closing that gap
+is S-5's job, not a capability's.
+
+The operations that are not native functions are checked where they are
+evaluated: the `println` builtins and the raw-memory builtins in the builtin
+dispatch, `dlopen` and friends and `extern-c` on the FFI path, inline C, the
+`(async ...)` form, and `import`/`load` in the elaborator.
 
 ---
 

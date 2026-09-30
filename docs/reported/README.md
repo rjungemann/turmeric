@@ -34,6 +34,17 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Security (filed 2026-09-30)
+
+Findings from [security-audit-plan](../upcoming/security-audit-plan.md) that
+are open in the tree. Section 2 of the plan is the full candidate list; a row
+lands here only once a work package has reproduced it and chosen not to fix it
+in the same change.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [turi-sandbox-handles-are-forgeable-integers](turi-sandbox-handles-are-forgeable-integers.md) | high | S-5, filed by WP3, narrowed the same day: a sandboxed or macro-time `(vec-get 4096 0)` reads address 4096. Interpreter handles are bare integers that 204+ natives cast back unchecked. The host-exit half (`panic` and native error paths ending the host) is fixed. Direction: a per-native handle-kind column in `native_caps.c` plus a provenance set per restricted env |
+
 ## Representation gaps (filed 2026-09-09, extended 2026-09-10)
 
 A value whose representation does not fit the one the typed path already chose
@@ -2374,6 +2385,20 @@ RF4 fixture, whose measure originally returned a refined ADT.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [refined-adt-return-type-miscompiles](refined-adt-return-type-miscompiles.md) | medium | Any `defn` whose RESULT is `#refine{ r : <ADT> | ... }` fails to build: the emitted C signature returns the peeled type's carrier (`int64_t`) while the body returns the by-value aggregate (`tur_adt_Lst`), so `cc` rejects the return. Parameter refinements over an ADT are fine; a plain `: Lst` result builds and prints `7`. Fix: peel the refinement for representation where the plain result type is classified, so both spellings emit one signature; add `refine-adt-return` (+ `--no-contracts` variant) |
+
+## Found building crdt-spice-plan C4 and C5 (filed 2026-09-29)
+
+Found implementing delta-state CRDTs and an RGA sequence in
+`turmeric-spices/spices/crdt` (turmeric-spices#76). All three are worked
+around in the spice, with the workaround and its reason recorded at each
+site; none blocked the work. The first two are the reason C4's `DeltaCRDT`
+carries a witness parameter and ships no generic helpers.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [associated-type-unusable-nullary-and-generic](associated-type-unusable-nullary-and-generic.md) | medium | Two halves, both hard errors at `check`. (1) A nullary class method whose only mention of the class variable is through an associated type (`(empty [] : Inner)`) is declared and instanced fine but is unreachable: calling it is `unknown function or operator`, and an ascribed call is `ascribed type does not match the result shape`. Dispatch reads the first parameter, so there is nothing to resolve from; a fundep'd two-parameter class fails the same way because dispatch reads only the FIRST class variable. (2) `(Inner A)` projected at a type VARIABLE inside a generic constrained by that very class is `no instance binding for associated type` -- at a concrete type it reduces as documented -- so no generic function can take or return the projection. A third shape also blocks: a constrained generic in a module holding no instance of its own reports "this program declares no instance at all" even when instances exist elsewhere in the program. Workaround for (1) is a witness parameter the method does not read |
+| [vec-push-byvalue-struct-param-emits-unbridged-pointer](vec-push-byvalue-struct-param-emits-unbridged-pointer.md) | medium | `(defn push! [v : (Vec T) x : T] (vec-push! v x))` does not compile for any `defstruct` wider than two words: the parameter arrives as `const tur_adt_T *`, the carrier bridge assigns it to a `tur_adt_T` temp without dereferencing, then dereferences the temp's address as a pointer. `check` and `emit-c` are clean; cc rejects it. Measured boundary: two fields compile, three fail, field types irrelevant; constructing the struct AT the push site compiles. Not either archived `vec-push!` by-value report -- no generic, no Result, and it never reaches runtime |
+| [phantom-parametric-heap-let-binding-repr-ice](phantom-parametric-heap-let-binding-repr-ice.md) | medium | `(let [a (holder-put ...)] ...)` where the value is a `:heap` parametric struct with a PHANTOM type parameter ICEs with `repr-shadow binding let-bind ... want=heap-ptr got=scalar-bits`. Needs both ingredients: dropping the `let` compiles, and so does making the parameter non-phantom. Ascribing the binding does NOT help, which is the usual remedy for this family. Same family as the resolved `bare-parametric-heap-base-repr-disagreement` (also found in `crdt/ormap`) but a different site -- that one was a merge temp inside a generic. The report also records the same family surfacing as bad C rather than an ICE (a macOS-only red in the spice's own suite, since `-Wint-conversion` is only an error on clang >= 21), and two constructor-argument spellings in one spice whose remedies are exact opposites depending on whether the enclosing `defn` is generic |
 
 ## Found executing the security audit's WP2 (filed 2026-09-29)
 
