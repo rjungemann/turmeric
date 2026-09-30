@@ -874,7 +874,7 @@ GUIDE_JS_CORE = '''\
   // in the <pre>: with no network (the offline docs pane, a docs tarball read
   // from disk) the import fails and the diagram degrades to its own source
   // text, which is readable. It does not degrade to an empty box.
-  var MERMAID_SRC = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  var MERMAID_SRC = 'https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs';
   var mermaidPromise = null;
 
   // Mermaid gets the guide palette by hand: it cannot read our CSS custom
