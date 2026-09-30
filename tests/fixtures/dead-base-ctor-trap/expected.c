@@ -6890,6 +6890,7 @@ static int64_t __fn_5(void * __env_p_8) {
         struct __env_7 *__env___env_7 = (struct __env_7 *)__env_p_8;
         int64_t __ps_62 = (tnil());
         if (tur_panicking) return ((int64_t)0);
+        TUR_REGION_NOTE_WORDS(&(__ps_62), sizeof(__ps_62));
         return tcons(__env___env_7->x, __ps_62);
 }
 
@@ -9586,6 +9587,7 @@ static tur_adt_Cons__int * __fn_5__spec__tur_adt_Cons__int___void__(void * __env
         struct __env_7__spec__tur_adt_Cons__int__ *__env___env_7__spec__tur_adt_Cons__int__ = (struct __env_7__spec__tur_adt_Cons__int__ *)__env_p_8;
         tur_adt_Cons__int * __ps_183 = (tnil__spec__tur_adt_Cons__int__());
         if (tur_panicking) return ((tur_adt_Cons__int *)0);
+        TUR_REGION_NOTE_WORDS(&(__ps_183), sizeof(__ps_183));
         tur_adt_Cons__int * __ps_184 = (tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__env___env_7__spec__tur_adt_Cons__int__->x, (int64_t)(intptr_t)(__ps_183)));
         if (tur_panicking) return ((tur_adt_Cons__int *)0);
         return __ps_184;

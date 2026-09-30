@@ -2375,6 +2375,16 @@ RF4 fixture, whose measure originally returned a refined ADT.
 | --- | --- | --- |
 | [refined-adt-return-type-miscompiles](refined-adt-return-type-miscompiles.md) | medium | Any `defn` whose RESULT is `#refine{ r : <ADT> | ... }` fails to build: the emitted C signature returns the peeled type's carrier (`int64_t`) while the body returns the by-value aggregate (`tur_adt_Lst`), so `cc` rejects the return. Parameter refinements over an ADT are fine; a plain `: Lst` result builds and prints `7`. Fix: peel the refinement for representation where the plain result type is classified, so both spellings emit one signature; add `refine-adt-return` (+ `--no-contracts` variant) |
 
+## Found executing security-audit-plan WP5 (filed 2026-09-30)
+
+Found while probing the region store hooks for the security audit's runtime
+memory-safety package; unrelated to the audit's own findings, which are
+tracked in `docs/upcoming/security-audit-plan.md`.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [stm-inside-closure-captured-tvar-undeclared](stm-inside-closure-captured-tvar-undeclared.md) | medium | `(atomically (stm (tvar/write tv v)))` inside any lambda that captures `tv` passes `tur check` and fails in cc with `'tv_N' undeclared`: the capture is lost where the lambda's lift and `stm`'s nest. Every `with-region` body is a lambda, so a transaction cannot run inside a bracket |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

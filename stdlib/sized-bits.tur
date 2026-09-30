@@ -268,7 +268,7 @@
 ;;; Since: Phase SZ3
 
 
-(defn sized-bitvec-assert-len! [bv expected]
+(defn sized-bitvec-assert-len! [bv expected : Size]
   #fx{Unsafe}
   : nil
   (require-msg! (= (sized-bitvec-len bv) (size-eval expected))

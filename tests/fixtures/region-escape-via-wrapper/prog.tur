@@ -1,0 +1,81 @@
+;; security-audit-plan WP5 (M-6): two routes by which a node reached an
+;; inline-C store with no region note, so a bracket's generation rewound under
+;; the stored word -- a silent use-after-rewind on the default build.  Both
+;; read back the arena poison (-2387225703656530210) before the fix.
+;;
+;;   - A TURMERIC wrapper over an inline-C store.  The implicit node -> `:int`
+;;     erasure was noted only at an inline-C callee; inside the wrapper the
+;;     word is already an int, so the store it forwards to sees no node.
+;;     `sized-buf-set!` is that shape in the stdlib, and so is any user
+;;     wrapper like `stash` below.
+;;   - A TYPE-VARIABLE parameter of an inline-C callee.  The body-entry note
+;;     skips a def-less tyvar, and nothing on the way in erased the node.
+;;
+;; Stdout alone cannot see this -- a rewound generation's memory is not
+;; necessarily reused before the read -- so hook.sh pins the TUR_REGION_STATS
+;; line too, and re-runs the program with TUR_REGIONS=0 to show the values do
+;; not depend on regions.  Four storing brackets retire; the two controls (a
+;; typed tree built by constructors, and a scalar handed to the generic
+;; callee) keep their rewinds.
+
+(load "stdlib/sized.tur")
+(load "stdlib/sized-buf.tur")
+
+(defdata Link :heap (Link [v : int nxt : int]))
+(defdata Tree :heap (Leaf [v : int]) (Node [l : Tree r : Tree]))
+
+(defn link-v [l : Link] : int
+  (match l (Link a b) a))
+
+(defn tree-sum [t : Tree] : int
+  (match t (Leaf v) v (Node l r) (+ (tree-sum l) (tree-sum r))))
+
+(defn keep [slot : ptr<void> v : int] : nil
+  ```c *(int64_t *)slot = v; ```)
+
+(defn keep-gen [A] [slot : ptr<void> v : A] : nil
+  ```c *(int64_t *)slot = (int64_t)v; ```)
+
+(defn mk-slot [] : ptr<void>
+  ```c return calloc(1, sizeof(int64_t)); ```)
+
+(defn read-slot [slot : ptr<void>] : int
+  ```c return ((int64_t *)*(int64_t *)slot)[0]; ```)
+
+(defn read-word [w : int] : int
+  ```c return ((int64_t *)w)[0]; ```)
+
+;; A Turmeric-bodied wrapper: `v` is erased on the way IN, then forwarded.
+(defn stash [slot : ptr<void> v : int] : nil
+  (keep slot v))
+
+;; A generic Turmeric wrapper over the generic inline-C store.
+(defn stash-gen [A] [slot : ptr<void> v : A] : nil
+  (keep-gen slot v))
+
+(defn mk-buf [] : (SizedBuf (Static 1))
+  (:: (sized-buf-new-zeroed 1) :SizedBuf))
+
+(defn main [] : int
+  (let [b  (mk-buf)
+        s2 (mk-slot)
+        s3 (mk-slot)
+        s4 (mk-slot)
+        s6 (mk-slot)]
+    ;; 1. the stdlib wrapper: sized-buf-set! over __sized-buf-set!-raw.
+    (with-region (fn [] (do (sized-buf-set! b 0 (Link 41 0)) 1)))
+    ;; 2. a user wrapper with an `:int` parameter.
+    (with-region (fn [] (do (stash s2 (Link 42 0)) 1)))
+    ;; 3. a generic inline-C callee, called directly.
+    (with-region (fn [] (do (keep-gen s3 (Link 43 0)) 1)))
+    ;; 4. a generic Turmeric wrapper over the generic inline-C callee.
+    (with-region (fn [] (do (stash-gen s4 (Link 44 0)) 1)))
+    ;; 5. control: a typed tree built by constructors is region-to-region.
+    (println (with-region (fn [] (tree-sum (Node (Leaf 1) (Node (Leaf 2) (Leaf 3)))))))
+    ;; 6. control: a scalar handed to the generic callee is not a node.
+    (with-region (fn [] (do (keep-gen s6 (link-v (Link 7 0))) 1)))
+    (println (read-word (sized-buf-get b 0)))
+    (println (read-slot s2))
+    (println (read-slot s3))
+    (println (read-slot s4)))
+  0)

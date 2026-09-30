@@ -362,7 +362,7 @@
 ;;; Since: Phase SZ3
 
 
-(defn sized-matrix-assert-shape! [m expected-rows expected-cols]
+(defn sized-matrix-assert-shape! [m expected-rows : Size expected-cols : Size]
   #fx{Unsafe}
   : nil
   (let [actual-rows (sized-matrix-rows m)]
