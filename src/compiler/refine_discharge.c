@@ -469,6 +469,23 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         RefineVC *pvc = refine_vc_build(ob, a, &why);
         ob->vc = pvc;   /* so a caller can follow up (e.g. ask for a witness) */
         if (!pvc) return false;
+        /* reflected-measures: a probe's unfoldings are real work the summary
+         * should show -- a per-arm path probe is exactly where RF4's
+         * hypothesis-selected arms happen.  No fuel diagnostic here: a probe
+         * that runs out simply fails, and the real obligation reports. */
+        g_stats.reflect_unfolds     += pvc->reflect_unfolds;
+        g_stats.reflect_arms_by_hyp += pvc->reflect_arms_by_hyp;
+        /* A probe's VC is where a per-arm proof actually happens, so the dump
+         * switch shows it too -- labelled, since it is not an obligation the
+         * user wrote. */
+        if (dump_enabled()) {
+            Buf b; buf_init(&b);
+            refine_smtlib_emit(pvc, &b);
+            fprintf(stderr, "--- refinement VC (%s probe) ---\n",
+                    ob->path_probe ? "path" : "template");
+            if (b.data && b.len) fwrite(b.data, 1, b.len, stderr);
+            buf_free(&b);
+        }
         /* A probe's caps are accounted exactly like a real obligation's.  They
          * used to be counted globally and recorded nowhere, so a cap that bit
          * during a probe made the per-compile summary say "** HIT" while every
@@ -506,6 +523,7 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
      * diagnostic (TUR-W0385) only if the obligation then stays unknown. */
     if (vc) {
         g_stats.reflect_unfolds += vc->reflect_unfolds;
+        g_stats.reflect_arms_by_hyp += vc->reflect_arms_by_hyp;
         if (vc->reflect_fuel_exhausted) {
             g_stats.reflect_fuel_out++;
             if (stats_enabled())
@@ -805,9 +823,10 @@ void refine_discharge_all(RefineObligationVec *v, Arena *a) {
                     g_stats.inferred, g_stats.templates_tried);
         if (g_stats.reflect_unfolds || g_stats.reflect_fuel_out)
             fprintf(stderr,
-                    "refine: %u reflected unfolding(s) asserted, %u obligation(s) "
-                    "ran out of fuel\n",
-                    g_stats.reflect_unfolds, g_stats.reflect_fuel_out);
+                    "refine: %u reflected unfolding(s) asserted (%u arm(s) selected "
+                    "from a hypothesis), %u obligation(s) ran out of fuel\n",
+                    g_stats.reflect_unfolds, g_stats.reflect_arms_by_hyp,
+                    g_stats.reflect_fuel_out);
         refine_report_caps();
     }
 }

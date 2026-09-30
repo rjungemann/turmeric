@@ -19,12 +19,22 @@ All notable changes to Turmeric are documented here.
   unit). Unfolding is fuel-bounded per obligation (default 8,
   `TUR_REFLECT_FUEL` overrides); running out is `TUR-W0385` beside the
   ordinary `TUR-W0372`, promoted by `--strict-refine`. `--dump-reflect`
-  prints each site's verdict. Nothing changes for a program that does not
+  prints each site's verdict. Inside a `match` arm of the function being
+  proved, a reflected measure applied to the scrutinee unfolds through the
+  arm's own tag fact, with the arm's binders standing for the field
+  selectors (plan RF4). Nothing changes for a program that does not
   write `^reflect`; without the flag the attribute warns and is inert. See
   `docs/upcoming/reflected-measures-plan.md` and the refinement guide's
   "Reflected measures" section.
 
 ### Fixed
+
+- A `match` arm's binders were declared to the refinement solver at the sort
+  of the function's *result* refinement rather than of their own field, so in
+  a `: #refine{ r : bool | ... }` body every binder was a proposition and its
+  field equation (`(= t (.tl xs))`) was silently dropped as a sort mismatch.
+  Binders now carry their field's sort; a bool-returning `match` body knows
+  what its arms destructure.
 
 - The refinement purity walk memoized a caller's UNKNOWN verdict when its
   callee had no body yet (a forward reference), so a function asked about

@@ -3,7 +3,7 @@
 > **Status:** **In progress** since 2026-09-29, behind
 > `--enable=reflected-measures` (`EXPERIMENTS[]` row, introduced 0.57.0,
 > `expires_at` 0.61.0, prototype). RF0, RF1, RF2, RF3 and RF5 landed in the
-> first cut; RF4 and RF6 are open (see "Landed" below). Taken off hold by
+> first cut (2026-09-29), RF4 the next day; RF6 is open (see "Landed" below). Taken off hold by
 > direct request ("execute the plan"), not by one of the triggers below.
 > **Last Updated:** 2026-09-29
 >
@@ -31,7 +31,7 @@
 | RF1 purity + termination | landed | `src/compiler/elab_reflect.c`: `rf_resolve_reflect_sites` (deferred, before crossings resolve) plus an eager TOTAL-only stamp at the end of `elab_defn` so in-place return obligations can unfold |
 | RF2 coverage | landed | same walk: `#{NonExhaustive}`, literal match without `_`/variable arm, and every unrecognised form reject |
 | RF3 bounded ground unfolding | landed | `refine_collect.c`: `rf_unfold` / `rf_def` / `rf_reduce`; fuel 8 per obligation, `TUR_REFLECT_FUEL` override; `RefineFnInfo::{is_ctor, reflect_*}`; `RefineVC::reflect_*`; `RefineStats::{reflect_unfolds, reflect_fuel_out}` |
-| RF4 non-ground unfolding | **open** | not started; a variable scrutinee declines in `rf_def` |
+| RF4 non-ground unfolding | landed 2026-09-30 | `rf_match_pat` selects an arm from a tag fact `(= (#dt/tag s) k)` in the hypotheses and binds the arm's variables to `.field` selectors, comparing forms modulo the binder equations (`rf_canon`); a literal-pattern arm selects from `(= s <lit>)` the same way; `RefineFnInfo::ctor_*` carries the constructor shape; `RefineStats::reflect_arms_by_hyp` counts it |
 | RF5 diagnostics, strict, dump | landed | `TUR-E0384` / `TUR-W0385` (the plan's E0383/W0384 were taken by `#reads` by land time), `tur explain` entries, `--strict-refine` promotes W0385 at the W0372 site, `--dump-reflect` |
 | RF6 follow-ons | **open** | counterexamples with measures (`refine_model_search` still declines any ufunc, so a false ground obligation reports `TUR-W0372`, not `TUR-E0371` -- pinned by `errors/reflect-len-depth-false`) |
 
@@ -57,6 +57,41 @@ Three things the first cut settled that the phases below did not predict:
   the way a recursion edge already did. `reflect-mutual` is the fixture that
   found it (its pair was rejected at the purity gate instead of the
   termination gate).
+
+RF4 (2026-09-30) is exactly the plan's reduction-through-hypotheses and no
+more: no guarded per-arm equations over tag/selector symbols are asserted,
+so a scrutinee nothing pins simply declines. Acceptance: `reflect-nonground-arm`
+(the match-guarded `sorted?` shape: the Cons/Cons arm of a return obligation
+proves from the precondition's unfolding plus `t = (.tl xs)`) proves, its
+sibling `errors/reflect-nonground-no-tag` stays unknown. The fixture
+returns a `bool` because two pre-existing bugs surfaced on the way: a
+refined **ADT** result type miscompiles outright
+(`docs/reported/refined-adt-return-type-miscompiles.md`, filed, unrelated
+to reflection), and a `match` arm's binders were declared at the result
+refinement's sort instead of their field's, which in a `bool`-returning
+body dropped every `(= t (.tl xs))` as a Bool/Int mismatch -- fixed in
+`rt_prove_paths` as part of this work, since RF4 has nothing to select
+through without those equations. (`(= r true)` as the predicate still
+does not prove where bare `r` does: an equality between two propositions is
+an atom the cube expansion cannot see inside -- the same limitation the
+Bool-measure `iff` encoding works around.) Cost: cube and
+EUF-term peaks over all 116 pre-existing `refine-*`/`reflect-*` fixtures
+(happy and `errors/`) are **identical before and after** on every fixture
+(max cubes 16, max EUF terms 50; sums 178 and 863; the two new RF4 fixtures
+add 16 cubes / 33 terms and 2 / 17) -- RF4 adds terms only to an obligation that
+mentions a reflected measure at a non-ground argument with a tag fact in
+scope. Budget going forward: the same two peaks must not grow on a fixture
+that writes no `^reflect`.
+
+One thing to know about crossings: `rt_collect_path_conds` deliberately
+omits an arm's tag and selector facts for a CALL-SITE crossing (a pattern
+binder that shadows an outer name would inherit its hypotheses in the flat
+namespace), so RF4 fires on return obligations and on crossings only where
+a tag fact reaches the environment some other way. Extending the collector
+with the same shadow veto `let` has is possible and was not done: every
+tag/selector fact is a ufunc, and `refine_model_search` declines any VC
+with one, so pushing them into crossing VCs would turn refuted crossings
+(TUR-E0371 with a model) into unknown ones -- the RF6 item first.
 
 Sabotage run (RF1/RF3 acceptance): with `rf_classify` stubbed to return
 TOTAL, `errors/reflect-nontotal-self` compiles under `--strict-refine` and

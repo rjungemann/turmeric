@@ -602,6 +602,124 @@ static bool rf_form_is_literal(const Form *f) {
                  f->tag == F_STR || f->tag == F_NIL);
 }
 
+/* A symbol form the encoder can mint without a symbol table.  Every consumer
+ * of a Form inside the encoder compares symbols by NAME (form_equal, sym_is,
+ * enc's `->name` reads), so an arena Symbol that is never interned is
+ * indistinguishable from an interned one here -- and these forms never leave
+ * the encoder (a ufunc `origin` is the one place they are stored, and it is
+ * read for its span alone). */
+static const Form *rf_sym_form(RefineVC *vc, const char *name) {
+    Symbol *s = (Symbol *)arena_alloc(vc->arena, sizeof(Symbol));
+    size_t n = strlen(name);
+    s->name = arena_strdup(vc->arena, name, n);
+    s->len  = (uint32_t)n;
+    s->hash = 0;
+    Span sp; memset(&sp, 0, sizeof(sp));
+    return form_sym(vc->arena, sp, s);
+}
+
+/* `(.field v)` -- the selector form the arm hypotheses are written with. */
+static const Form *rf_sel_form(RefineVC *vc, const char *field, const Form *v) {
+    char acc[128];
+    snprintf(acc, sizeof(acc), ".%s", field);
+    Form **k = (Form **)arena_alloc(vc->arena, 2 * sizeof(Form *));
+    k[0] = (Form *)rf_sym_form(vc, acc);
+    k[1] = (Form *)v;
+    return form_list(vc->arena, v->span, k, 2);
+}
+
+/* ---- RF4: what the hypotheses say about a NON-ground scrutinee ----------
+ *
+ * A caller's own `match` arm puts two kinds of fact in the environment
+ * (rt_prove_paths): the constructor's discriminant, `(= (#dt/tag s) k)`, and
+ * each binder's identity, `(= t (.tl s))`.  Neither is `s = (Cons h t)`, so
+ * the syntactic reduction of RF3 has no constructor term to select an arm
+ * against.  It does have enough: the TAG picks the arm, and the binders of
+ * that arm are the field SELECTORS applied to the scrutinee -- the very
+ * terms the arm hypotheses already equate the caller's binders to, so
+ * congruence closure connects them for free.
+ *
+ * Forms are compared modulo the hypotheses' variable equations: `t` and
+ * `(.tl xs)` are one thing when `(= t (.tl xs))` is in scope, so a tag fact
+ * about `t` answers for the reduced form `(.tl xs)` and vice versa.  That is
+ * a bounded syntactic canonicalisation, not congruence closure -- a
+ * completeness knob; every fact consulted is a hypothesis of this path, so
+ * an arm selected here is the arm that runs on it. */
+
+#define RF_CANON_DEPTH 6
+
+static bool rf_hyp_is_plain_eq(const RefineHyp *h, const Form **a, const Form **b) {
+    if (!h || h->bound_var || !h->pred || h->pred->tag != F_LIST ||
+        h->pred->as.list.len != 3) return false;
+    const Form *hd = h->pred->as.list.items[0];
+    if (!sym_is(hd, "=") && !sym_is(hd, "==")) return false;
+    *a = h->pred->as.list.items[1];
+    *b = h->pred->as.list.items[2];
+    return true;
+}
+
+/* Replace every symbol that some hypothesis equates to a non-symbol form by
+ * that form, recursively and boundedly, so two spellings of one value
+ * compare equal.  Returns `f` itself when nothing changes. */
+static const Form *rf_canon(const Enc *E, const Form *f, uint32_t depth) {
+    if (!f || depth > RF_CANON_DEPTH || !E->env) return f;
+    if (f->tag == F_SYM) {
+        for (const RefineHyp *h = E->env->head; h; h = h->next) {
+            const Form *a, *b;
+            if (!rf_hyp_is_plain_eq(h, &a, &b)) continue;
+            const Form *other = NULL;
+            if (form_equal(a, f) && b->tag != F_SYM) other = b;
+            else if (form_equal(b, f) && a->tag != F_SYM) other = a;
+            if (other && other->tag == F_LIST) return rf_canon(E, other, depth + 1);
+        }
+        return f;
+    }
+    if (f->tag != F_LIST || f->as.list.len == 0) return f;
+    Form **items = NULL;
+    for (uint32_t i = 0; i < f->as.list.len; i++) {
+        const Form *c = rf_canon(E, f->as.list.items[i], depth + 1);
+        if (c == f->as.list.items[i] && !items) continue;
+        if (!items) {
+            items = (Form **)arena_alloc(E->vc->arena, f->as.list.len * sizeof(Form *));
+            for (uint32_t j = 0; j < i; j++) items[j] = f->as.list.items[j];
+        }
+        items[i] = (Form *)c;
+    }
+    return items ? form_list(E->vc->arena, f->span, items, f->as.list.len) : f;
+}
+
+/* The constructor tag the hypotheses pin `scrut` to, if any. */
+static bool rf_hyp_tag_of(const Enc *E, const Form *scrut, int64_t *tag) {
+    if (!E->env) return false;
+    const Form *cs = rf_canon(E, scrut, 0);
+    for (const RefineHyp *h = E->env->head; h; h = h->next) {
+        const Form *a, *b;
+        if (!rf_hyp_is_plain_eq(h, &a, &b)) continue;
+        for (int side = 0; side < 2; side++) {
+            const Form *x = side ? b : a, *y = side ? a : b;
+            if (!x || x->tag != F_LIST || x->as.list.len != 2 ||
+                !sym_is(x->as.list.items[0], "#dt/tag") || !y || y->tag != F_INT)
+                continue;
+            if (form_equal(rf_canon(E, x->as.list.items[1], 0), cs)) { *tag = y->as.i; return true; }
+        }
+    }
+    return false;
+}
+
+/* The literal the hypotheses equate `scrut` to, if any (a literal-pattern
+ * arm's `(= s 0)`). */
+static const Form *rf_hyp_literal_of(const Enc *E, const Form *scrut) {
+    if (!E->env) return NULL;
+    const Form *cs = rf_canon(E, scrut, 0);
+    for (const RefineHyp *h = E->env->head; h; h = h->next) {
+        const Form *a, *b;
+        if (!rf_hyp_is_plain_eq(h, &a, &b)) continue;
+        if (rf_form_is_literal(b) && form_equal(rf_canon(E, a, 0), cs)) return b;
+        if (rf_form_is_literal(a) && form_equal(rf_canon(E, b, 0), cs)) return a;
+    }
+    return NULL;
+}
+
 /* Is this caller-namespace form headed by a data constructor? */
 static bool rf_form_is_ctor_app(const Enc *E, const Form *f) {
     if (!f || f->tag != F_LIST || f->as.list.len == 0) return false;
@@ -658,7 +776,13 @@ static int rf_match_pat(Enc *E, const Form *pat, const Form *v, RfEnv *env) {
         return rf_env_bind(env, pat->as.sym ? pat->as.sym->name : NULL, v) ? 1 : -1;
     }
     if (rf_form_is_literal(pat)) {
-        if (!rf_form_is_literal(v)) return -1;
+        if (!rf_form_is_literal(v)) {
+            /* RF4: a literal-pattern arm's own `(= s <lit>)` fact. */
+            const Form *lit = rf_hyp_literal_of(E, v);
+            if (!lit) return -1;
+            E->vc->reflect_arms_by_hyp++;
+            v = lit;
+        }
         if (pat->tag != v->tag) {
             /* An int literal against a float literal (or any cross-tag pair)
              * is a typing question the elaborator settled; decline. */
@@ -677,7 +801,31 @@ static int rf_match_pat(Enc *E, const Form *pat, const Form *v, RfEnv *env) {
     if (pat->tag == F_LIST && pat->as.list.len > 0) {
         const Form *ph = pat->as.list.items[0];
         if (ph->tag != F_SYM || !ph->as.sym) return -1;
-        if (!rf_form_is_ctor_app(E, v)) return -1;
+        if (!rf_form_is_ctor_app(E, v)) {
+            /* RF4: not a constructor term -- ask the hypotheses for its tag,
+             * select by tag, and bind the arm's variables to the field
+             * selectors the caller's own arm hypotheses are written with. */
+            int64_t tag;
+            if (!rf_hyp_tag_of(E, v, &tag)) return -1;
+            if (!E->env || !E->env->resolve_fn) return -1;
+            RefineFnInfo ci; memset(&ci, 0, sizeof(ci));
+            if (!E->env->resolve_fn(E->env->resolve_ud, ph->as.sym->name, &ci) || !ci.is_ctor)
+                return -1;
+            if ((int64_t)ci.ctor_tag != tag) return 0;
+            if (pat->as.list.len - 1 != ci.ctor_n_fields) return -1;
+            E->vc->reflect_arms_by_hyp++;
+            for (uint32_t i = 1; i < pat->as.list.len; i++) {
+                const Form *sp = pat->as.list.items[i];
+                if (sp->tag == F_SYM && sym_is(sp, "_")) continue;
+                /* Only a record constructor has a selector to bind through. */
+                if (!ci.ctor_is_record || !ci.ctor_field_names || !ci.ctor_field_names[i - 1])
+                    return -1;
+                const Form *sel = rf_sel_form(E->vc, ci.ctor_field_names[i - 1], v);
+                int r = rf_match_pat(E, sp, sel, env);
+                if (r != 1) return r;
+            }
+            return 1;
+        }
         const Form *vh = v->as.list.items[0];
         if (strcmp(ph->as.sym->name, vh->as.sym->name) != 0) return 0;
         if (pat->as.list.len != v->as.list.len) return -1;   /* arity: not ours to judge */
@@ -770,9 +918,9 @@ static VCTerm *rf_def(Enc *E, VCTerm *app, const Form *body, const RfEnv *env, u
             if (body->as.list.len < 4) return NULL;
             const Form *fs = rf_reduce(E, body->as.list.items[1], env, depth + 1);
             if (!fs) return NULL;
-            /* Ground, or decline: a variable scrutinee has no arm to select.
-             * (RF4 would look for an equating hypothesis here.) */
-            if (!rf_form_is_literal(fs) && !rf_form_is_ctor_app(E, fs)) return NULL;
+            /* A constructor term or a literal selects its arm directly; any
+             * other scrutinee selects through the hypotheses (RF4,
+             * rf_match_pat) or declines with -1 and no equation. */
             return rf_def_arms(E, app, body, 2, fs, env, depth + 1);
         }
     }
@@ -1180,6 +1328,11 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
             E.subst[E.n_subst].name = h->bound_var;
             E.subst[E.n_subst].term = vc_var_ref(vc, v);
             E.n_subst++;
+            /* RF4: the same binding as a FORM, so a reflected measure applied
+             * to the bound variable unfolds at the subject name -- where the
+             * caller's tag facts live. */
+            E.rf_subject_name = h->bound_var;
+            E.rf_subject_form = rf_sym_form(vc, h->subject_name);
         }
         VCTerm *t = enc(&E, h->pred);
         /* A hypothesis we cannot encode is simply dropped: fewer hypotheses

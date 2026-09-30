@@ -1154,7 +1154,8 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * That gave every occurrence its own symbol and made the constructor
      * axioms below inert: the `Box(p,3)` in the axiom and the `Box(p,3)` in
      * the goal were different terms. */
-    if (elab_lookup_ctor(e, sym)) {
+    CtorDef *cdef = elab_lookup_ctor(e, sym);
+    if (cdef) {
         out->ret_pred    = NULL;
         out->ret_var     = NULL;
         out->param_names = NULL;
@@ -1164,6 +1165,19 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
          * only thing the predicate language can say about it. */
         out->ret_sort    = VS_INT;
         out->is_ctor     = true;   /* reflected-measures: a ground argument head */
+        /* RF4: tag and field names, so a reflected body's `match` can be
+         * selected against a caller's tag fact and its binders tied to the
+         * same `.field` selectors the arm hypotheses use (rt_prove_paths). */
+        out->ctor_tag       = cdef->tag;
+        out->ctor_is_record = cdef->is_record;
+        out->ctor_n_fields  = cdef->n_fields;
+        if (cdef->n_fields) {
+            const char **fn = (const char **)arena_alloc(
+                e->arena, cdef->n_fields * sizeof(char *));
+            for (uint32_t i = 0; i < cdef->n_fields; i++)
+                fn[i] = cdef->fields[i].name;
+            out->ctor_field_names = fn;
+        }
         return true;
     }
 
@@ -3439,12 +3453,20 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
                             strcmp(env->names[j], b->as.sym->name) == 0)
                             { ok = false; break; }
                     if (!ok) break;
-                    refine_env_declare(env, b->as.sym->name,
-                                       rt_sort_of_kind(base_kind));
+                    /* A binder's sort is its FIELD's, not the refinement's base
+                     * type.  Declaring it at `base_kind` made every binder of
+                     * a `: #refine{ r : bool | ... }` function a proposition,
+                     * so its field equation `(= t (.tl xs))` was dropped as a
+                     * Bool/Int mismatch and the arm knew nothing about `t` --
+                     * which is what kept reflected-measures' non-ground
+                     * unfolding (RF4) from firing in a bool-returning body. */
+                    uint32_t fi = k - 1;
+                    VCSort bsort = rt_sort_of_kind(base_kind);
+                    if (cd && fi < cd->n_fields) bsort = rt_sort_of_kind(cd->fields[fi].kind);
+                    refine_env_declare(env, b->as.sym->name, bsort);
                     /* Only a record constructor has a field NAME to select
                      * with; a positional variant has no accessor to speak of,
                      * so its binder stays unconstrained as before. */
-                    uint32_t fi = k - 1;
                     if (cd && cd->is_record && fi < cd->n_fields &&
                         cd->fields[fi].name) {
                         char acc[128];

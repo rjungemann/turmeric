@@ -656,8 +656,13 @@ reduction introduces (`len(Nil)`) unfold in turn, up to a **fuel** of 8 per
 obligation (`TUR_REFLECT_FUEL=<n>` overrides it). Running out costs
 completeness only: the obligation stays Unknown, reports `TUR-W0385` beside
 the usual `TUR-W0372`, and keeps its runtime check. A `match` on a
-*variable* does not unfold at all in this cut (the arm cannot be selected),
-so `(len xs)` for a parameter `xs` is exactly as opaque as before.
+*variable* unfolds only where the hypotheses already pin the variable's
+constructor -- inside a `match` arm of the function being proved, whose tag
+fact `(= (#dt/tag xs) k)` selects the arm and whose binders are the
+`.field` selectors the arm's variables are bound to. Anywhere else,
+`(len xs)` for a parameter `xs` is exactly as opaque as before. Call-site
+crossings do not receive an arm's tag facts today (see the plan), so this
+mostly serves return refinements.
 
 `if`, `let`, `do` and guarded arms are supported; an `if` has no term in the
 logic, so a body under one is admitted as a proposition,

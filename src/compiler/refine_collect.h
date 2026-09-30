@@ -122,6 +122,15 @@ typedef struct RefineFnInfo {
      * reflect_body / reflect_param_names / reflect_n_params -- the body as
      *   ONE Form and the parameter names it is written in. */
     bool         is_ctor;
+    /* RF4: the constructor's shape, so the unfolder can select a `match` arm
+     * from a TAG FACT (`(= (#dt/tag s) k)`, what a caller's own match arm
+     * knows) and bind the arm's variables to field SELECTORS (`(.tl s)`) when
+     * the scrutinee is not a constructor term.  Only a record constructor has
+     * named fields to select; a positional one binds nothing and declines. */
+    uint32_t     ctor_tag;
+    bool         ctor_is_record;
+    const char **ctor_field_names;
+    uint32_t     ctor_n_fields;
     bool         reflect_total;
     const Form  *reflect_body;
     const char **reflect_param_names;

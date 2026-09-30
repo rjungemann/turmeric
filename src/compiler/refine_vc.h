@@ -121,6 +121,7 @@ typedef struct RefineVC {
      *   so a term reached twice (hash-consing makes it the same VCTerm) costs
      *   one equation and one unit of fuel, not two. */
     uint32_t   reflect_unfolds;
+    uint32_t   reflect_arms_by_hyp;   /* RF4: arms selected from a tag/literal fact */
     bool       reflect_fuel_exhausted;
     uint32_t  *reflect_done; uint32_t n_reflect_done, cap_reflect_done;
 } RefineVC;
