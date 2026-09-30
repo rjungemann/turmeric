@@ -11567,6 +11567,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * generic `(vec-push! v x)` stored box(cell(x)) while
                          * every reader expected the element.  Resolve first. */
                         bridge_ty = emit_resolve_type(ctx, bridge_ty);
+                        /* vec-push-byvalue-struct-param-emits-unbridged-pointer:
+                         * a WIDE by-value struct PARAMETER is materialized as
+                         * `const T *`, so `raw` names the pointer, not the
+                         * aggregate the escaping bridge copies into its heap
+                         * cell (`*__t = x` -- pointer into struct).  Hand the
+                         * bridge the pointee, and suppress the pass-by-ptr
+                         * `(*(...))` deref below: the bridged value is already
+                         * the carrier word, and dereferencing it again was the
+                         * second error (`*((int64_t)(intptr_t)(__t))`).  The
+                         * copy is what the store needs -- the element outlives
+                         * the caller's aggregate this pointer borrows. */
+                        if (expr_is_pbp_param(ctx, emit_arg)) {
+                            Buf _db; buf_init(&_db);
+                            buf_printf(&_db, "(*(%s))", raw);
+                            free(raw);
+                            raw = strdup(_db.data);
+                            buf_free(&_db);
+                            pbp_carrier_cast = true;
+                        }
                         raw = emit_carrier_bridge_escaping(ctx, body, raw,
                                                            CK_CONCRETE, CK_CARRIER,
                                                            bridge_ty);
@@ -11828,11 +11847,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             }
                             if (fn_binding->body_is_inline_c &&
                                 (type_is_wide_byval_adt(rarg) ||
-                                 _n3_container_store))
+                                 _n3_container_store)) {
+                                /* vec-push-byvalue-struct-param-emits-unbridged-
+                                 * pointer: a WIDE struct PARAMETER is
+                                 * materialized as `const T *`, so `raw` names
+                                 * the pointer, not the aggregate the escaping
+                                 * bridge copies into its heap cell (`*__t = x`,
+                                 * pointer into struct).  Hand the bridge the
+                                 * pointee, and suppress the pass-by-ptr
+                                 * `(*(...))` deref below: the bridged value is
+                                 * already the carrier word, and dereferencing
+                                 * it again was the second error
+                                 * (`*((int64_t)(intptr_t)(__t))`).  The copy is
+                                 * what a store needs -- the element outlives
+                                 * the caller's aggregate this pointer borrows. */
+                                if (expr_is_pbp_param(ctx, emit_arg)) {
+                                    Buf _db; buf_init(&_db);
+                                    buf_printf(&_db, "(*(%s))", raw);
+                                    free(raw);
+                                    raw = strdup(_db.data);
+                                    buf_free(&_db);
+                                    pbp_carrier_cast = true;
+                                }
                                 raw = emit_carrier_bridge_escaping(
                                           ctx, body, raw,
                                           CK_CONCRETE, CK_CARRIER, rarg);
-                            else
+                            } else
                                 raw = emit_carrier_bridge(ctx, body, raw,
                                                           CK_CONCRETE, CK_CARRIER,
                                                           rarg);

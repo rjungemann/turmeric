@@ -9349,6 +9349,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     if (ann->kind == TY_TYVAR) {
                         return_tyvar_type = ann;
                     }
+                    /* refined-adt-return-type-miscompiles: an ADT reached
+                     * through this path -- the base of a peeled
+                     * `#refine{ r : Lst | p }` -- keeps its def, exactly as
+                     * the `: Lst` keyword path and the defalias path above
+                     * do.  Without it return_kind said TY_ADT with no def, so
+                     * the signature fell back to the int64_t carrier while the
+                     * body returned the by-value aggregate, and call sites
+                     * read the call as a constructor of the ADT. */
+                    if (ann->kind == TY_ADT && ann->as.adt_.def) {
+                        return_adt_def = ann->as.adt_.def;
+                    }
                     /* SS3a: Capture full session return type so callers see the complete
                      * protocol type (e.g. Session[Rec[self, ...]]) rather than a bare
                      * TY_SESSION shell with a NULL protocol pointer. */

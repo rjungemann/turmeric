@@ -1,0 +1,23 @@
+;; turi-inline-c-bool-return-tagged-as-int: an inline-C body declared
+;; `: bool` must come back as a bool on both paths -- `println` prints
+;; true/false and a `match` on true/false finds its arm (under
+;; `--interpret` it used to be a bare int: `1`, and an aborting match).
+(defn yes [] : bool
+  ```c
+  return 1;
+  ```)
+(defn is-close [c : int] : bool
+  ```c
+  return c == 41;
+  ```)
+(defn main [] : int
+  (println (yes))
+  (println (is-close 41))
+  (println (is-close 7))
+  (println (if (yes) "taken" "not-taken"))
+  (println (not (yes)))
+  (println (= (yes) true))
+  (println (type-of (:: (yes) any)))
+  (println (match (yes) true "t" false "f"))
+  (println (match (is-close 7) true "t" false "f"))
+  0)

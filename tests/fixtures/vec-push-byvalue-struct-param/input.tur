@@ -1,0 +1,34 @@
+;; vec-push-byvalue-struct-param-emits-unbridged-pointer: a by-value struct
+;; PARAMETER pushed into a Vec.  Wider than two words the parameter arrives as
+;; `const T *`; the bridge used to assign that pointer into the heap cell and
+;; then dereference the carrier word.  The two-word struct is the control that
+;; always compiled (passed by value), so the width boundary stays pinned.
+(defstruct Two [a : int b : int])
+(defstruct Three [a : int b : int c : int])
+(defstruct Wide [ctr : int rep : int val : int dead : bool])
+(defstruct Tri [A] [a : A b : A c : A])
+
+(defn push-two! [v : (Vec Two) x : Two] : int (vec-push! v x) 0)
+(defn push-three! [v : (Vec Three) x : Three] : int (vec-push! v x) 0)
+(defn push-wide! [v : (Vec Wide) x : Wide] : int (vec-push! v x) 0)
+(defn push-tri! [v : (Vec (Tri int)) x : (Tri int)] : int (vec-push! v x) 0)
+
+(defn main [] : int
+  (let [v2 (:: (vec-of) (Vec Two))]
+    (push-two! v2 (Two 1 2))
+    (println (.b (vec-get v2 0))))
+  (let [v3 (:: (vec-of) (Vec Three))]
+    (push-three! v3 (Three 1 2 3))
+    (push-three! v3 (Three 4 5 6))
+    (println (.a (vec-get v3 0)))
+    (println (.c (vec-get v3 0)))
+    (println (.b (vec-get v3 1)))
+    (println (vec-len v3)))
+  (let [vw (:: (vec-of) (Vec Wide))]
+    (push-wide! vw (Wide 7 8 9 true))
+    (println (.val (vec-get vw 0)))
+    (println (.dead (vec-get vw 0))))
+  (let [vt (:: (vec-of) (Vec (Tri int)))]
+    (push-tri! vt (Tri 4 5 6))
+    (println (.c (vec-get vt 0))))
+  0)

@@ -10105,13 +10105,23 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
                  * `(:: 7 Route)` spelling already does, so `type-of` answers
                  * the widen's static name (`Route`) instead of `adt`. */
                 bool ret_is_opaque = false;
+                bool ret_is_bool = fn->return_type.kind == TY_BOOL;
                 if (fn->binding && fn->binding->type.kind == TY_FN &&
                     fn->binding->type.as.fn.result_full_type) {
                     const Type *rft = fn->binding->type.as.fn.result_full_type;
                     if (rft->kind == TY_ADT && rft->as.adt_.def &&
                         rft->as.adt_.def->is_opaque)
                         ret_is_opaque = true;
+                    if (rft->kind == TY_BOOL)
+                        ret_is_bool = true;
                 }
+                /* turi-inline-c-bool-return-tagged-as-int: the executor's
+                 * claim sites hand back a C int as a bare TURI_INT whatever
+                 * the declared result is.  A `: bool` body gets the tag the
+                 * compiled program gives it, so `println`, `type-of` and a
+                 * `match` on `true`/`false` agree with the binary. */
+                if (inline_result.tag == TURI_INT && ret_is_bool)
+                    inline_result = turi_bool(inline_result.as_int != 0);
                 if (inline_result.tag == TURI_INT && inline_result.as_int != 0 &&
                     !ret_is_opaque &&
                     (fn->return_type.kind == TY_ADT ||
