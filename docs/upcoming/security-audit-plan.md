@@ -942,6 +942,187 @@ policy is exactly the one worth not having. The generators changed instead.
   version in `MERMAID_SRC` and in `web/csp.js` together belongs with WP7's
   pinning work.
 
+## 2g. WP7's verification pass (2026-09-30)
+
+Read and run against `main` @ 82ccdc555 -- after WP1 and WP6 landed. Two of
+the eight C rows are now **substantially closed by WP1's collateral**, and
+three of the remaining six had a materially different mechanism than the
+survey recorded. The live repo settings had moved the most: three of the four
+the survey called out have since been turned on, and the one that mattered
+most for C-5 turns out to point the other way. `.github/workflows/ci.yml` has
+grown since the survey, so every `ci.yml` line number in the C-5/C-6 rows is
+stale; the code they point at is unchanged and the current numbers are used
+below.
+
+### Rows confirmed as written
+
+- **C-1 confirmed, installer half only.** `web/worker.js:3-26` still serves an
+  `INSTALL_SCRIPT` whose payload is `brew install --HEAD "$TAP/turmeric"`, and
+  `Formula/turmeric.rb:5` is still `head ... branch: "main"` with no `url` and
+  no `sha256`. So `curl | sh` still builds whatever `main` is at that instant,
+  and the release assets' checksums (`release.yml:348-352`) are still installed
+  by nothing but `tvm`. **The disclosure half is already fixed**: WP1 rewrote
+  `README.md:22-27` and `web/index.html:332` to say in so many words that the
+  formula is `--HEAD`-only, "builds whatever is on `main` at that moment and
+  verifies no checksum", and to point at `tvm` or a release tarball for a
+  pinned install. What is left is the fix, not the honesty.
+- **C-2 confirmed, and WP1's count of four skip paths is exact.**
+  `tvm/tvm.sh:262-280`, re-read line by line. `_sums` empty -- whether the sums
+  file is missing, empty, or the fetch failed into `2>/dev/null` -- skips the
+  whole `if [ -n "$_sums" ]` block **silently**. An asset with no row leaves
+  `_want` empty, so `elif [ -n "$_want" ] && [ "$_want" != "$_got" ]` is false
+  and it falls through **silently**. No sha tool (`__tvm_sha256` returns 2)
+  logs a skip, the only one of the four that says anything. `--from` (`:250`)
+  skips the block by construction. Note also that `_got` is computed *inside*
+  the `[ -n "$_sums" ]` arm, so the `_rc = 2` branch is unreachable when the
+  sums fetch already failed -- the "no sha tool" message is not printed in the
+  case where it would matter most.
+- **C-3 confirmed, four ways, and WP1's reading holds exactly.**
+  `pkg.c:2813-2820` unconditionally `free`s `le->sha256` and rewrites it from
+  the tree just fetched, so the recorded hash can only ever describe the last
+  download. The single comparison call site in the tree is `main.c:6001`,
+  inside `tur run`; `tur build` never checks. It is skipped when the dep dir is
+  absent (`main.c:5990`, which routes to a fetch that rewrites the hash) and
+  when `pkg_hash_comparable` rejects a pre-tag hash. `:resolved` is recorded
+  (`pkg.c:2807`) but never checked out: `pkg_git_fetch(it->url, it->ref, dest)`
+  at `:2779` passes the **manifest** ref, and the clone is
+  `git clone --depth 1 --branch <ref>` (`:2266-2268`), so a `:ref` naming a
+  branch tracks that branch forever. Grepping `le->resolved` finds it used only
+  to print (`:2762`, `main.c:6205`) and in `pkg_cmake_verify_lock`.
+  **The guide overclaim is already fixed** -- `consuming-spices-guide.md:404-419`
+  now states the TOFU behaviour, the `tur build` gap and the skip conditions
+  explicitly, and cites C-3. Only the code fix is outstanding.
+- **C-4 confirmed.** A grep for `attest`/`cosign`/`sigstore`/`provenance` over
+  `.github/workflows/` and `.claude/commands/` returns one hit, and it is the
+  word "attested" in an English sentence (`ci.yml:696`). All three
+  `cut-*-release.md` say `git tag -a`, never `-s`.
+  `softprops/action-gh-release@v2` still floats, in the one job that holds
+  `contents: write` (`release.yml:338-355`).
+- **C-5 confirmed on pinning, and it is total.** 56 `uses:` lines across the
+  four workflows, **zero** pinned to a SHA. The inventory also shows the repo
+  is running two majors of three actions at once -- `actions/checkout` at v4
+  (14x) and v5 (3x), `upload-artifact` at v4 (11x) and v5 (3x),
+  `download-artifact` at v4 and v5 -- so a pin pass is also a consistency pass.
+  `mymindstorm/setup-emsdk@v14` is `version: latest` at **both** `ci.yml:155`
+  and `:1520`; the second one carries a comment reading "Pinned to a modern
+  release" directly above the word `latest`, which is the kind of thing that
+  reads as done in review. `pip` is unpinned three ways: bare `pyyaml`
+  (`ci.yml:126`), `--upgrade -r tools/requirements.txt` (`:1517`), and
+  `-r tools/requirements.txt` (`release.yml:286`), where the requirements file
+  itself carries `markdown>=3.4` -- a floor, not a pin, and no hashes.
+  `ci.yml:178` clones `turmeric-spices` at `--depth 1` off its default branch
+  and compiles it. The ccache `restore-keys` prefixes
+  (`:138, 442, 733, 1403, 1460`) are as described.
+- **C-7 confirmed, and it is the mildest row in the table.** MIR is already
+  SHA-pinned (`cmake/mir.cmake:141`) with a paragraph above it explaining that
+  an existing build dir keeps fetching its cached pin -- the pin is the
+  careful part of that file, not the loose part. The fork is the author's own.
+  `Dockerfile:18,34` uses `ubuntu:22.04` by tag; `.devcontainer/Dockerfile:15`
+  and `:20` are the two `curl | bash` installs (NodeSource and just.systems).
+  Both are developer-facing, not on any user's install path.
+
+### Rows whose mechanism was wrong
+
+- **C-5's permissions half points the other way. This is the biggest re-grade.**
+  The survey reads "`ci.yml` has no top-level `permissions:` (default token
+  scope everywhere...)" as an over-grant. It is not, today:
+  `GET /actions/permissions/workflow` returns
+  `{"default_workflow_permissions":"read","can_approve_pull_request_reviews":false}`.
+  The repo default is already read-only, so every job in `ci.yml` and
+  `release.yml` that does not declare `permissions:` is **already** running on
+  a read-only token, and the two jobs that need more declare it locally
+  (`ci.yml:812` `contents: write` scoped to `publish-timings` with a comment
+  saying why it is not top-level; `release.yml:338` `contents: write`).
+  So the finding is **defense in depth, not a live over-grant**: the guarantee
+  currently lives in a repo *setting* that one checkbox in the web UI silently
+  reverts, with nothing in the tree to notice. Writing the top-level block
+  moves that guarantee into version control where a diff shows it. Worth doing
+  and cheap -- but it is **low**, not medium, and it should not be described in
+  a changelog as closing an over-permissioned token.
+- **C-6's injection half is fully fixed, not half.** The survey (and the WP4
+  annotation) say `inputs.seed` was half-fixed and `fuzz.yml:75` still
+  interpolates it into a `run:` block. It does not: all three inputs now go
+  through `env:` -- `INPUT_SEED` (`:89`), `N` (`:104`), `SECS` (`:222`) -- and
+  a grep for `inputs\.` over the file returns exactly those three lines and
+  nothing else. **Nothing in C-6 is left but the `issues: write` scope**, which
+  is a different question from injection and is re-framed below.
+- **C-8 is mostly already closed, by WP1's collateral rather than by WP7.**
+  Of the three committed files, **all three are gone**: the tracked set under
+  `.claude/` is six paths and `settings.local.json` is not among them, the
+  `project_er6.md` memory file is not in the tree, and `TEMP.md` does not
+  exist. Of the five missing files, **`SECURITY.md` and `CODEOWNERS` both now
+  exist**. What is genuinely left is two files -- `.github/dependabot.yml` and
+  a CodeQL workflow -- plus the repo-settings half, which has also moved
+  (below).
+
+### Repo settings: three of four have moved since WP1 read them
+
+WP1 recorded "`main` has no branch protection", "secret scanning and push
+protection are disabled", and suggested folding the repo-settings half into
+WP7. Re-read today, that ledger is stale in the repo's favour, and the one
+remaining gap is not the one WP1 named:
+
+| Setting | WP1 (2026-09-29) | Now | Left to do |
+| --- | --- | --- | --- |
+| Branch protection on `main` | `404 Branch not protected` | **exists** | tighten -- see below |
+| Secret scanning | disabled | **enabled** | -- |
+| Push protection | disabled | **enabled** | -- |
+| Private vulnerability reporting | (not read) | **enabled** | -- |
+| Dependabot alerts | (not read) | **enabled** (204) | -- |
+| Dependabot security updates | disabled | **still disabled** | turn on |
+| Default workflow token | (not read) | **`read`** | mirror into the tree |
+
+The branch protection that now exists is close to empty:
+`required_approving_review_count: 0`, `required_status_checks.contexts: []`,
+`enforce_admins: false`, `required_signatures: false`. What it does buy is
+`allow_force_pushes: false` and `allow_deletions: false` -- which is the half
+that matters for C-1, since `--HEAD` installs track `main` and a force-push to
+`main` is the cheapest way to make every new install build attacker code.
+Worth saying out loud: **C-1's severity is bounded by exactly that setting**,
+and it was not in place when the survey graded the row.
+
+Raising `required_status_checks` is the one that needs the author's judgement
+rather than a patch, because of the standing position that a red suite never
+blocks landing, and because CI does not run at all for PRs not based on `main`
+(so a required check would hard-block every stacked PR). Recommendation: leave
+required checks empty, and do not add required reviews on a solo repo; the
+force-push and deletion locks are the load-bearing part and they are on.
+
+### Findings the survey did not have
+
+- **A fuzz crash is filed as a PUBLIC issue.** `fuzz.yml:184` and
+  `tsan.yml:111` both run `gh issue create` on a finding, which is why both
+  workflows hold `issues: write`. WP4 deliberately gave the new parser job
+  `contents: read` and had it fail rather than file (`fuzz.yml:194-196`), and
+  section 6 item 3 of this plan says so in as many words: "The job fails,
+  rather than filing a public issue, so that a finding in an untrusted-input
+  parser is triaged privately". **Job 1 and `tsan.yml` never got that
+  treatment.** So the repo now has two policies in one file: the libFuzzer
+  parser targets triage privately, while the type-confusion fuzzer and the TSan
+  job publish a title, a seed and a reproducer to a public tracker the moment
+  they find something. That is the same disclosure gap WP1 built `SECURITY.md`
+  to close, reopened by automation. This, not injection, is what
+  `issues: write` costs, and it is the substantive half of C-6.
+- **`markdown>=3.4` is a floor with no ceiling and no hash**, and it is
+  installed in `release.yml:286` -- i.e. inside the job that produces the
+  published docs tarball. `pip install --upgrade` at `ci.yml:1517` takes
+  whatever PyPI serves that morning. This is the one C-5 sub-item with a path
+  into a release artifact rather than into CI only.
+- **WP6 handed WP7 a pin.** `tools/genguides.py:877` imports
+  `https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs` -- a
+  floating major -- and `web/csp.js:32` allows that whole path. A dynamic
+  `import()` cannot carry an SRI hash, so the CSP path scope is the only
+  control, and the version must be pinned in **both** files together or the
+  CSP stops matching. Section 2f flagged this and assigned it here.
+- **Nothing pins the `turmeric-spices` clone, and nothing can, cheaply.**
+  `ci.yml:178` clones the default branch. Pinning it to a SHA means a file in
+  this repo that some human bumps, which in practice goes stale and then gets
+  bumped blind -- the failure mode `cmake/mir.cmake`'s comment block describes
+  from experience. The honest framing is that `turmeric-spices` is the same
+  owner under the same account, so it sits **inside** the trust boundary `main`
+  already draws, not outside it. Recorded here as a deliberate non-pin with a
+  reason rather than left as an open row.
+
 ## 3. Work packages
 
 Each package names its scope, method, deliverable and exit criterion.
