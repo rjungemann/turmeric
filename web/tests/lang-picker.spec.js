@@ -111,9 +111,13 @@ test.describe('language picker', () => {
                 { label: '#lang saffron',        value: 'saffron',        chip: false },
                 { label: '#lang saffron/sweet',  value: 'saffron/sweet',  chip: false },
             ] },
-            // Scheme is gated, so its row -- and only its row -- is badged.
+            // Scheme is gated, so its rows -- and only its rows -- are badged.
+            // It gets a sweet row like the other two languages: sweet is one of
+            // the readers the picker offers (LANG_READERS_SHOWN), and v0.57.0
+            // added `#lang r7rs/sweet` to the registry.
             { name: 'Scheme', rows: [
                 { label: '#lang r7rs',           value: 'r7rs',           chip: true },
+                { label: '#lang r7rs/sweet',     value: 'r7rs/sweet',     chip: true },
             ] },
         ]);
     });

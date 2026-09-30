@@ -1621,6 +1621,7 @@ jobs:
           tests/docs-offline.spec.js tests/lsp.spec.js
           tests/minimap.spec.js tests/footer.spec.js
           tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
+          tests/security.spec.js
 
       - name: Run mobile smoke suite (non-blocking)
         id: mobile

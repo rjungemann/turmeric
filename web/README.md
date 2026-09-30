@@ -106,10 +106,35 @@ The web REPL can be configured via the `CONFIG` object in `main.js`:
 ```javascript
 const CONFIG = {
     DEFAULT_CODE: `(println "Hello, Turmeric!")`,
-    EXECUTION_TIMEOUT: 5000,    // 5 seconds
+    EXECUTION_TIMEOUT: 30000,   // the eval watchdog's limit, in ms
     MAX_OUTPUT_LENGTH: 10000
 };
 ```
+
+`EXECUTION_TIMEOUT` is how long one request may keep the eval worker busy. A
+**Stop** button appears after a second; at the limit the page stops the worker
+itself. Either way the worker is terminated and a fresh one booted, so the
+session's definitions are lost (`stopEvalWorker` in `main.js`).
+
+## Content-Security-Policy
+
+Every response the site serves carries the policy in `csp.js`. It is applied in
+three places from that one definition: the dev and preview servers
+(`vite.config.js`), the built `dist/client/_headers` (stamped at build time;
+`public/_headers` deliberately does not carry it), and every response
+`worker.js` produces itself.
+
+`script-src` has no `'unsafe-inline'`, so:
+
+- no inline `<script>` and no `on...=` attribute, in hand-written pages or in
+  the doc generators' output -- ship a file (`public/pwa-shell.js` is the
+  pattern for something that must run before first paint);
+- no script from another origin that the policy does not name. It names
+  mermaid's jsDelivr path, and nothing else.
+
+`tests/security.spec.js` loads every shipped page with the policy enforced and
+fails on any violation, so a change that breaks it is caught there. Each
+allowance in `csp.js` carries its reason; remove one only with it.
 
 ## Keyboard Shortcuts
 

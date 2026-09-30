@@ -1,3 +1,5 @@
+import { CONTENT_SECURITY_POLICY } from './csp.js';
+
 const INSTALL_SCRIPT = `#!/bin/sh
 set -e
 
@@ -36,6 +38,7 @@ export default {
         headers: {
           'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-cache',
+          'Content-Security-Policy': CONTENT_SECURITY_POLICY,
         },
       });
     }
@@ -64,6 +67,7 @@ export default {
               'Content-Type': 'application/x-ndjson; charset=utf-8',
               'Cache-Control': 'public, max-age=300',
               'X-Timings-Year': y,
+              'Content-Security-Policy': CONTENT_SECURITY_POLICY,
             },
           });
         }
@@ -71,7 +75,10 @@ export default {
 
       return new Response('no timings available\n', {
         status: 502,
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Security-Policy': CONTENT_SECURITY_POLICY,
+        },
       });
     }
 
@@ -84,6 +91,11 @@ export default {
     const headers = new Headers(response.headers);
     headers.set('Cross-Origin-Opener-Policy', 'same-origin');
     headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+    // `_headers` rules do not reach a response the Worker returns, so the
+    // policy is set here too -- `set`, not `append`, so an asset response that
+    // already carries it does not end up with two copies (two policies are
+    // both enforced, and the header would read as a comma-joined pair).
+    headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY);
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,

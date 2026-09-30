@@ -1,7 +1,7 @@
 # Security audit -- Turmeric as it stands at v0.56.3
 
-> **Status: WP1 and WP2 DONE (2026-09-29); WP3, WP4 and WP5 DONE
-> (2026-09-30); WP6-WP8 PROPOSED.** Written 2026-09-30
+> **Status: WP1 and WP2 DONE (2026-09-29); WP3, WP4, WP5 and WP6 DONE
+> (2026-09-30); WP7, WP8 PROPOSED.** Written 2026-09-30
 > against `main` @ 81e12de4 (v0.56.3). Section 2 lists what a one-afternoon
 > survey already turned up, so the audit starts from a map, not from zero;
 > every row there is a *candidate* until the work package that owns it
@@ -40,6 +40,12 @@
 > with fixtures, the TSan job and the format-string flags are in; section 2d
 > records what the verification found, what the survey had wrong, and what was
 > handed to WP3/WP4.
+>
+> **WP6 landed 2026-09-30.** Its pass is section 2f: W-2 reproduced as a
+> working attribute injection from the editor's first line, a same-origin gap
+> the survey did not have (every generated doc page ran inline script, so the
+> CSP needed the doc generators changed), and a broken Share button filed as an
+> ordinary bug.
 > **Type:** Security / process / tooling
 > **Depends on:** nothing that is not already in the tree. The Debug build's
 > ASan+UBSan (`CMakeLists.txt:33`), the four differential fuzzers
@@ -163,10 +169,11 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 
 | Id | Sev | Finding | Where |
 | --- | --- | --- | --- |
-| W-1 | medium | No CSP anywhere: no meta tag, none in `web/public/_headers` (COOP/COEP only) or `web/worker.js:78-92`. |
-| W-2 | medium | `escapeHtml` (`web/main.js:905`) does not escape `"` but is used inside attributes (`main.js:1495, 1498-1499, 4733` -- `data-name="${escapeHtml(item.name)}"`); `escapeAttr` (`:922`) exists and is unused there. `hydrateConsole` re-inserts HTML from `localStorage['tur.try.console.v1']` unescaped (`:184-196`). |
-| W-3 | low | No eval timeout or `worker.terminate` for the wasm worker (`web/public/eval-worker.js`), so a runaway program hangs its own tab. `#code=` share links only fill the editor (`main.js:1081-1090`) -- good. |
-| W-4 | info | The docs pane `innerHTML`s same-origin docs-pack HTML (`main.js:5543`), so the trust boundary is `tools/gendocs.py` over `;;;` docstrings -- including third-party spice docstrings via `tools/genspices.py`. |
+| W-1 | medium -- **FIXED in WP6** | No CSP anywhere: no meta tag, none in `web/public/_headers` (COOP/COEP only) or `web/worker.js:78-92`. | One policy in `web/csp.js`, applied by the dev/preview servers, stamped into the built `_headers`, and set by `worker.js` on its own responses. |
+| W-2 | medium -- **FIXED in WP6**, **verified** | `escapeHtml` (`web/main.js:905`) does not escape `"` but is used inside attributes (`main.js:1495, 1498-1499, 4733` -- `data-name="${escapeHtml(item.name)}"`); `escapeAttr` (`:922`) exists and is unused there. `hydrateConsole` re-inserts HTML from `localStorage['tur.try.console.v1']` unescaped (`:184-196`). | Reproduced: see section 2f. `escapeHtml` escapes both quotes; the transcript is stored as data (`tur.try.console.v2`). |
+| W-3 | low -- **FIXED in WP6** | No eval timeout or `worker.terminate` for the wasm worker (`web/public/eval-worker.js`), so a runaway program hangs its own tab. `#code=` share links only fill the editor (`main.js:1081-1090`) -- good. | Watchdog plus Stop. The share-link half was moot: Share has never worked (section 2f). |
+| W-4 | info -- **documented in WP6** | The docs pane `innerHTML`s same-origin docs-pack HTML (`main.js:5543`), so the trust boundary is `tools/gendocs.py` over `;;;` docstrings -- including third-party spice docstrings via `tools/genspices.py`. | The security guide's Try Turmeric section names the docs as trusted content; the CSP stops injected HTML running script. |
+| W-5 | medium -- **FIXED in WP6**, found by WP6 | Every page under `/docs/html/` -- the playground's origin -- ran two inline `<script>` blocks and three `onload="this.rel='stylesheet'"` handlers, emitted by `tools/genguides.py`, `gendocs.py` and `genspices.py`. | The generators write their scripts as files beside the pages and link plain stylesheets, so the doc pages run under the same policy. |
 
 ### Supply chain and CI (WP7)
 
@@ -854,6 +861,87 @@ came from the 60-second pass and the rest from the 10-minute passes:
   socket API, where the POSIX default is the expected one, so it was left
   alone. httpd's default moved; see WP4.
 
+## 2f. WP6's verification pass (2026-09-30)
+
+Read and run against `main` @ 1ef4cd2f. `web/main.js` had moved since the
+survey, so the W-rows' line numbers are the survey's; the code they point at
+was unchanged.
+
+### W-2 reproduced
+
+The language picker renders a row for whatever base the buffer's first line
+names, and interpolated that name with `escapeHtml` into `value="..."` and
+`title="..."`. `escapeHtml` went through `textContent` -> `innerHTML`, which
+leaves quotes alone. A first line of
+
+```
+#lang x"data-injected="1"onfocus="window.__pwned=1"autofocus="
+```
+
+rendered, before the fix, as
+
+```html
+<input type="radio" name="lang-base" value="x" data-injected="1" onfocus="window.__pwned=1" autofocus="">
+```
+
+No spaces are needed: the HTML tokenizer starts a new attribute after a closing
+quote. The buffer's first line is user data from a pasted file, a restored tab
+or an opened project zip, so this was script execution from content the user
+did not write, one hover or focus away. The survey's two other attribute sites
+(`aria-label` from the registry's language names, `data-name` from the docs
+index) carry repo data only. The console key was the persistence half: anything
+that once reached the transcript as markup came back as markup on every load.
+
+### A same-origin gap the survey did not have (W-5)
+
+The survey read `web/`, but `/docs/html/` is served from the same origin as
+the playground and was not in it. Every generated guide, API page and spice
+page carried inline scripts and `onload` handlers, so a site-wide
+`script-src 'self'` would have broken them all, and before WP6 any injection
+into a doc page ran with the playground's `localStorage`. Cloudflare's `_headers`
+could have given `/docs/html/*` a laxer policy with its `! Header` detach, but
+whether detach-then-reattach in one rule works is not documented, and a laxer
+policy is exactly the one worth not having. The generators changed instead.
+
+### Deviations from the WP6 text
+
+- `connect-src` is `'self'`, not `'self' https://raw.githubusercontent.com`:
+  the CI timings are proxied by the Worker, so the browser never fetches that
+  host.
+- `script-src` names `https://cdn.jsdelivr.net/npm/mermaid@11/dist/`. The guide
+  runtime imports mermaid on demand (`tools/genguides.py`, `MERMAID_SRC`), in
+  the docs pane as well as on the doc pages. It is a path, not the host, so no
+  other package on jsDelivr may load: verified in Chromium with the real
+  `mermaid@11.17.2` dist served at that path (diagrams render, no violation) and
+  an import from `/npm/lodash-es@4/` refused as `script-src-elem`.
+- `style-src` keeps `'unsafe-inline'` (Monaco, and the doc pages' `<style>`
+  blocks) and names the doc pages' font hosts. The console's inline
+  `style="margin:0"` became a class, because the persisted transcript keeps no
+  attributes but `class`.
+- The watchdog stops the worker on its own at 30 s (`CONFIG.EXECUTION_TIMEOUT`,
+  a 5 s value nothing read until now) and offers Stop after 1 s. The worker is
+  serial, so the oldest outstanding request is the one it is running.
+
+### Found in passing
+
+- **Share has never worked.** `encodeState`/`decodeState` call `pako`, which
+  nothing loads; both swallow the `ReferenceError`, so Share reports "Failed to
+  encode code" and a `#code=` link decodes to nothing. Not a security defect --
+  it removed a vector rather than adding one -- so it is filed as
+  [try-share-links-never-encode](../reported/try-share-links-never-encode.md).
+- **The service-worker kill switch could not be built from a clean tree.**
+  The Cloudflare plugin builds the Worker as its own Vite environment and that
+  bundle closes first, before `dist/client/` exists, so `TUR_SW_KILL=1 npm run
+  build` on a fresh checkout threw "the kill-switch was NOT deployed" -- it only
+  ever worked over a stale `dist/`. The CSP stamp hit the same ordering; all
+  three `closeBundle` hooks in `web/vite.config.js` now skip the Worker pass
+  (`isClientBuild`). Fixed alongside, verified both ways from an empty `dist/`.
+- **mermaid is loaded from a floating range.** `mermaid@11` resolves to
+  whatever 11.x jsDelivr serves, with no integrity check (a dynamic `import()`
+  cannot carry one). The CSP scopes it to that package; pinning the exact
+  version in `MERMAID_SRC` and in `web/csp.js` together belongs with WP7's
+  pinning work.
+
 ## 3. Work packages
 
 Each package names its scope, method, deliverable and exit criterion.
@@ -1227,21 +1315,47 @@ leaves behind run nightly under ASan and UBSan. Its research pass is section
 interpreter natives (S-5, open), httpd's body cap and response-writer
 `realloc` (WP4, M-4), and the rest of `serial_cont_from_bytes` (WP4, M-1).
 
-### WP6 -- Try Turmeric and the web worker (1-2 days)
+### WP6 -- Try Turmeric and the web worker (1-2 days) -- DONE 2026-09-30
 
-- Add a CSP to `web/public/_headers` and the worker (`default-src 'self'`,
-  `script-src 'self' 'wasm-unsafe-eval'`, `worker-src 'self'`,
-  `connect-src 'self' https://raw.githubusercontent.com`, `style-src` as
-  the fonts need, `object-src 'none'`, `frame-ancestors 'none'`) and fix
-  whatever it breaks (W-1).
-- Use `escapeAttr` in attribute contexts; make `escapeHtml` escape `"` and
-  `'` anyway; re-escape or store structured data instead of HTML in the
-  console persistence key (W-2).
-- Give the eval worker a watchdog and a "Stop" that terminates and
-  re-creates it (W-3). Document W-4's boundary (docstrings are trusted
-  content from this repo and `turmeric-spices`).
-- **Exit:** Playwright suite green with CSP enforced; an attribute-injection
-  test in the suite.
+Section 2f has the repro and the deviations. What landed:
+
+- [x] **W-1, the policy.** `web/csp.js` is the one definition, with each
+  allowance's reason beside it. `vite.config.js` sends it from the dev and
+  preview servers and stamps it into the built `dist/client/_headers` (the build
+  fails if it cannot); `worker.js` sets it on every response it produces,
+  which `_headers` never reaches. Verified under `wrangler dev` against the
+  built site: one copy of the header on an asset, a Worker route and the
+  asset-passthrough 404.
+- [x] **Whatever it broke.** The `/try/` shell's pre-paint PWA snippet is now
+  `public/pwa-shell.js` (precached by `sw.js`). The three doc generators emit
+  their scripts as files beside the pages and link plain stylesheets (W-5).
+- [x] **W-2.** `escapeHtml` escapes both quotes, so it is safe in any context;
+  the attribute sites say `escapeAttr`. The transcript is stored as runs of
+  text and `[tag, class, runs]` under `tur.try.console.v2` and rebuilt with
+  DOM calls; the HTML-era `v1` key is deleted unread.
+- [x] **W-3.** A watchdog over the eval worker's outstanding requests offers
+  Stop after 1 s and stops it at 30 s; stopping terminates the worker, fails
+  every pending and queued request, and boots a fresh one. A stopped
+  `:type`, `:explain` or Trace reports in the console rather than as an
+  unhandled rejection.
+- [x] **W-4** documented in the security guide's Try Turmeric section.
+- [x] **Tests:** `web/tests/security.spec.js`, added to CI's desktop list --
+  every shipped page and one of each generated kind load with the policy
+  enforced and zero violations; the REPL evaluates under it; an injected
+  handler does not run; the `#lang` attribute injection (failing before the
+  fix); both console-persistence paths and a reload round trip; Stop, the
+  automatic stop, and no Stop on a quick run.
+- **Exit met.** With the policy enforced, CI's desktop list plus the new spec
+  is green: its one red, `lang-picker`'s grouped-list case, failed on `main`
+  too -- it predated the `#lang r7rs/sweet` base v0.57.0 added -- and this PR
+  updates its expectation. The mobile project passes 41 of 41 on WebKit in CI.
+  Against the built site under `wrangler dev`, the deploy gate, smoke, LSP,
+  docs-pane and security specs pass (77). The desktop specs CI does not list
+  pass 37 of 40; the three `repl-intelligence` failures fail identically on the
+  unmodified tree.
+
+**Left for others deliberately:** pinning mermaid's exact version (WP7), and
+fixing Share (filed).
 
 ### WP7 -- Supply chain, release, CI (3 days)
 

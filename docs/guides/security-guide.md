@@ -238,6 +238,42 @@ boundary is the browser's, and the WebAssembly build has no filesystem and no
 process spawning to reach. That is an acceptable posture for a playground and
 this guide records it as intentional rather than a gap.
 
+What the site does promise is the ordinary web one: **text you did not write --
+a pasted file, an opened project zip, a restored tab, a docs page -- is shown
+as text and never runs as script in the page.** Three things keep it:
+
+- **A Content-Security-Policy on every response from turmeric-lang.com**,
+  defined once in `web/csp.js`. Its `script-src` has no `'unsafe-inline'`, so
+  markup that gets past escaping does not execute. It allows WebAssembly
+  compilation (`'wasm-unsafe-eval'`), mermaid from one jsDelivr path, the doc
+  pages' web fonts, and inline *styles* -- Monaco needs them -- and it refuses
+  framing (`frame-ancestors 'none'`). The generated doc pages load their
+  scripts from files for the same reason.
+- **Escaping that holds in attributes as well as in element content**, so a
+  value interpolated into `value="..."` cannot add attributes of its own.
+- **A console transcript stored as data.** What the playground keeps in
+  `localStorage` is rebuilt with DOM calls on load, so nothing read back from
+  storage is ever parsed as markup.
+
+A program that never returns does not take the playground with it. After a
+second a **Stop** button ends it; after 30 seconds the playground stops it
+itself. Either way the interpreter restarts in a fresh session, and the
+definitions from earlier runs are gone.
+
+`'wasm-unsafe-eval'` is understood from Chrome 97, Firefox 102 and Safari 16.
+An older browser that also applies CSP to WebAssembly compilation will not load
+the interpreter.
+
+**The documentation is trusted content.** The in-app docs pane and the pages
+under `/docs/html/` are HTML generated from this repository's guides and
+docstrings and from the READMEs and docstrings in `turmeric-spices`
+(`tools/genguides.py`, `gendocs.py`, `genspices.py`). Markdown passes raw HTML
+through, so a spice whose README carries HTML puts that HTML on
+turmeric-lang.com, in the playground's origin. The policy stops it running
+script; it does not stop it restyling or rewording the page. The defence is
+review: read a documentation change to `turmeric-spices` as a change to the
+site.
+
 ---
 
 ## T4 -- The supply chain

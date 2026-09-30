@@ -6,6 +6,7 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import { resolve } from 'path';
 import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { execSync } from 'child_process';
+import { CONTENT_SECURITY_POLICY } from './csp.js';
 
 const turmericVersion = readFileSync(resolve(__dirname, '../VERSION'), 'utf-8').trim();
 
@@ -35,6 +36,16 @@ function buildId() {
 
 const swCacheVersion = `tur-try-v1-${turmericVersion}-${buildId()}`;
 
+// The Cloudflare plugin builds the Worker as its own Vite environment, and its
+// bundle closes FIRST, before dist/client/ exists. A closeBundle hook that
+// works on dist/client/ must skip that pass: run there, injectSwVersion warned
+// about a missing sw.js on every build, and an armed swKillSwitch threw -- so on
+// a clean dist/ the kill-switch could not be built at all, and with a stale one
+// it only worked because the client pass ran the hook a second time.
+function isClientBuild(ctx) {
+  return !ctx.environment || ctx.environment.name === 'client';
+}
+
 function injectVersion() {
   return {
     name: 'inject-version',
@@ -54,6 +65,7 @@ function injectSwVersion() {
     name: 'inject-sw-version',
     apply: 'build',
     closeBundle() {
+      if (!isClientBuild(this)) return;
       // The Cloudflare plugin splits the output into dist/client/ and
       // dist/<worker>/, so public/ assets land at dist/client/sw.js -- not
       // dist/sw.js, which is where this looked and silently found nothing.
@@ -105,7 +117,7 @@ function swKillSwitch() {
     name: 'sw-kill-switch',
     apply: 'build',
     closeBundle() {
-      if (!armed) return;
+      if (!armed || !isClientBuild(this)) return;
       const src = resolve(__dirname, 'public/sw-kill.js');
       const targets = [
         resolve(__dirname, 'dist/client/sw.js'),
@@ -126,6 +138,54 @@ function swKillSwitch() {
     },
   };
 }
+
+// Write the Content-Security-Policy (web/csp.js) into the built _headers.
+//
+// public/_headers is copied verbatim into dist/, and Cloudflare attaches its
+// rules to every static asset; the Worker never sees those responses. The
+// policy is stamped here rather than written into public/_headers by hand so
+// there is one copy of it (csp.js), shared with the dev server and worker.js.
+//
+// Loud on failure, like swKillSwitch: a build that silently shipped without
+// its CSP is a hardening everyone believes is in place.
+function stampCsp() {
+  return {
+    name: 'stamp-csp',
+    apply: 'build',
+    closeBundle() {
+      if (!isClientBuild(this)) return;
+      const targets = [
+        resolve(__dirname, 'dist/client/_headers'),
+        resolve(__dirname, 'dist/_headers'),
+      ].filter(existsSync);
+      if (targets.length === 0) {
+        throw new Error('_headers not found in dist/ -- the Content-Security-Policy '
+                        + 'was NOT stamped; see web/csp.js');
+      }
+      for (const t of targets) {
+        const src = readFileSync(t, 'utf-8');
+        // Insert as the first header of the `/*` rule, replacing any stale
+        // stamp so a rebuild over an old dist/ stays idempotent.
+        const lines = src.split('\n')
+          .filter((l) => !/^\s+Content-Security-Policy:/.test(l));
+        const at = lines.findIndex((l) => l.trim() === '/*');
+        if (at < 0) {
+          throw new Error(`${t} has no "/*" rule to carry the Content-Security-Policy`);
+        }
+        lines.splice(at + 1, 0, `  Content-Security-Policy: ${CONTENT_SECURITY_POLICY}`);
+        writeFileSync(t, lines.join('\n'));
+      }
+    },
+  };
+}
+
+// The headers the dev and preview servers send on every response. Production
+// gets the same set from _headers (static assets) and worker.js (the rest).
+const SERVER_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+  'Content-Security-Policy': CONTENT_SECURITY_POLICY,
+};
 
 export default defineConfig({
   base: '/',
@@ -153,16 +213,10 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
+    headers: SERVER_HEADERS,
   },
   preview: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
+    headers: SERVER_HEADERS,
   },
-  plugins: [injectVersion(), injectSwVersion(), swKillSwitch(), cloudflare()],
+  plugins: [injectVersion(), injectSwVersion(), swKillSwitch(), stampCsp(), cloudflare()],
 });
