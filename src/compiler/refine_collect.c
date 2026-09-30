@@ -280,6 +280,7 @@ static bool sym_is(const Form *f, const char *s) {
  * positions are propositions. */
 typedef enum EncHead {
     EH_MEASURE = 0,  /* unrecognised head: a named measure          */
+    EH_CAST,         /* (as T e)          -- a type name, then a value */
     EH_ARITH,        /* + - * / mod       -- value operands         */
     EH_ORD,          /* < <= > >=         -- value operands         */
     EH_EQ,           /* = == not= != <>   -- sort-polymorphic       */
@@ -306,6 +307,7 @@ static EncHead enc_head_kind(const Form *h) {
         sym_is(h, "!=") || sym_is(h, "<>")) return EH_EQ;
     if (sym_is(h, "and") || sym_is(h, "or") || sym_is(h, "not") ||
         sym_is(h, "=>")  || sym_is(h, "implies")) return EH_LOGIC;
+    if (sym_is(h, "as")) return EH_CAST;
     return EH_MEASURE;
 }
 
@@ -616,6 +618,74 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
     return app;
 }
 
+/* `(as T e)` -- the language's numeric conversion.  It is a builtin, not a
+ * function, so it must not fall through to enc_measure: that path declared
+ * `as` as an ABSTRACT measure at the position-default sort (Int), and its
+ * first argument -- the type NAME -- as a variable.  `(as float x)` over a
+ * float `x` then became an Int-sorted opaque term, and S2's integer hull
+ * tightened `t <= 2.75` to `t <= 2` and `2.25 <= t` to `3 <= t`, refuting a
+ * cube that `x = 2.5` satisfies (fixtures errors/refine-cast-in-predicate-refuted
+ * and refine-cast-in-predicate).
+ *
+ *   (as float e), e int   -> e itself.  The VC's reals are exact, and an
+ *                            int converted to float denotes the same number
+ *                            (the double rounding past 2^53 is the same
+ *                            approximation every real-sorted fact here makes).
+ *                            Keeping e's Int sort is what lets S2 keep using
+ *                            its integrality -- `(as float n) <= 2.75` IS
+ *                            `n <= 2`.
+ *   (as float e), e real  -> e (identity).
+ *   (as int e),   e int   -> e (identity).
+ *   (as int e),   e real  -> truncation: an opaque INT-sorted term, congruent
+ *                            across occurrences (the conversion is pure),
+ *                            with no axioms -- opaque is sound.
+ *   any other target      -> not encoded; the obligation keeps its runtime
+ *                            check (narrowing conversions change values in
+ *                            ways this fragment does not model; see the table in the body). */
+static bool name_in(const char *n, const char *const *tbl, size_t k) {
+    for (size_t i = 0; i < k; i++) if (strcmp(n, tbl[i]) == 0) return true;
+    return false;
+}
+
+static VCTerm *enc_cast(Enc *E, const Form *f) {
+    if (f->as.list.len != 3) { E->fail = "as takes a type and one operand"; return NULL; }
+    const Form *ty = f->as.list.items[1];
+    if ((ty->tag != F_SYM && ty->tag != F_KEYWORD) || !ty->as.sym) {
+        E->fail = "cast target is not a type name"; return NULL;
+    }
+    const char *tn = ty->as.sym->name;
+    /* The numeric targets `as` accepts (elab_as_cast: typekind_is_numeric),
+     * by what the conversion does to the VALUE:
+     *   exact_real  -- `float` / `f64`: the operand's number, unchanged
+     *                  (the double rounding of a wide int is the same
+     *                  approximation every real-sorted fact here makes);
+     *   wide_int    -- `int` / `i64` / `isize`: identity on an int operand,
+     *                  C truncation on a real one;
+     *   anything else numeric -- `f32` (rounds), the narrower and unsigned
+     *                  ints (wrap): value-changing, kept OPAQUE at the
+     *                  target's sort, congruent across occurrences. */
+    static const char *const EXACT_REAL[] = { "float", "f64" };
+    static const char *const WIDE_INT[]   = { "int", "i64", "isize" };
+    static const char *const OPAQUE_REAL[] = { "f32" };
+    static const char *const OPAQUE_INT[]  = { "i8", "i16", "i32", "u8", "u16",
+                                               "u32", "u64", "usize" };
+    #define IN(tbl) name_in(tn, tbl, sizeof(tbl) / sizeof(tbl[0]))
+    bool exact_real  = IN(EXACT_REAL), wide_int = IN(WIDE_INT);
+    bool opaque_real = IN(OPAQUE_REAL), opaque_int = IN(OPAQUE_INT);
+    #undef IN
+    if (!exact_real && !wide_int && !opaque_real && !opaque_int) {
+        E->fail = "unsupported cast target in predicate"; return NULL;
+    }
+    VCTerm *e = enc(E, f->as.list.items[2]);
+    if (!enc_want_value(E, e)) return NULL;
+    if (exact_real || (wide_int && e->sort == VS_INT)) return e;
+    char nm[48];
+    snprintf(nm, sizeof(nm), "as-%s#conv", tn);
+    uint32_t fn = vc_declare_ufunc(E->vc, nm, 1, opaque_real ? VS_REAL : VS_INT, f, false);
+    VCTerm *args[1] = { e };
+    return vc_app(E->vc, fn, args, 1);
+}
+
 static VCTerm *enc(Enc *E, const Form *f) {
     if (!f) { E->fail = "empty predicate"; return NULL; }
     if (E->fail) return NULL;
@@ -672,6 +742,7 @@ static VCTerm *enc(Enc *E, const Form *f) {
                 if (!enc_want_prop(E, b)) break;
                 r = vc_mk2(E->vc, VC_IMPLIES, a, b);
             }
+            else if (sym_is(h, "as")) r = enc_cast(E, f);
             else r = enc_measure(E, f);
             break;
         }
@@ -740,6 +811,13 @@ static void presort_walk(EncSorts *S, const RefineEnv *env, const Form *f,
          * abstract measure has none), so its ARGUMENTS demand nothing. */
         for (uint32_t i = 1; i < f->as.list.len; i++)
             presort_walk(S, env, f->as.list.items[i], POS_NEUTRAL, depth + 1);
+        return;
+    }
+    if (k == EH_CAST) {
+        /* `as` is a builtin, not a measure, and its first operand is a type
+         * name, not a term: only the value operand is walked. */
+        if (f->as.list.len == 3)
+            presort_walk(S, env, f->as.list.items[2], POS_VALUE, depth + 1);
         return;
     }
     EncPos kid = (k == EH_LOGIC) ? POS_PROP
@@ -830,8 +908,20 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
         VCTerm *t = enc(&E, h->pred);
         /* A hypothesis we cannot encode is simply dropped: fewer hypotheses
          * can only make the goal HARDER to prove, never easier, so this stays
-         * on the safe side of the soundness invariant. */
+         * on the safe side of the soundness invariant.  It is NOT safe for a
+         * refutation, so the VC remembers the drop and the model search
+         * declines it: until 2026-09-29 a `:pre` written with a `let` was
+         * dropped here and the search then refuted the goal without it --
+         * a TUR-E0371 hard error, with a witness, on a correct function
+         * (fixture refine-dropped-hypothesis-keeps-check). */
         if (t) vc_add_hyp(vc, t);
+        else {
+            vc->hyps_dropped = true;
+            if (getenv("TUR_REFINE_STATS"))
+                fprintf(stderr, "refine: hypothesis not encoded (%s): %s\n",
+                        E.fail ? E.fail : "outside the supported fragment",
+                        ob->what ? ob->what : "obligation");
+        }
     }
 
     /* --- goal ------------------------------------------------------------ */
@@ -852,7 +942,11 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
         Enc E2; memset(&E2, 0, sizeof(E2));
         E2.vc = vc; E2.env = ob->env; E2.sorts = &sorts;
         VCTerm *t = enc(&E2, ob->subst[i].form);
-        if (!t) continue;   /* un-encodable argument: leave the name free */
+        /* An un-encodable argument leaves the callee's parameter name FREE,
+         * which is weaker than the truth in the same way a dropped
+         * hypothesis is: a witness could bind it to a value the actual
+         * argument never takes. */
+        if (!t) { vc->hyps_dropped = true; continue; }
         E.subst[E.n_subst].name = ob->subst[i].name;
         E.subst[E.n_subst].term = t;
         E.n_subst++;

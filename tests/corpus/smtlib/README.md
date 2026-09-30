@@ -53,7 +53,9 @@ stage that legitimately decides more later must not break this corpus.
   QF_LRA strictness over the reals where the integer version is unsat,
   QF_UFLIA cases needing both theories to combine, boolean structure
   (`or`, `=>`, `distinct`, `let`), and reader/solver robustness shapes:
-  integer-literal ite branches in a Real logic, a 1500-deep nullary
+  integer-literal ite branches in a Real logic, an Int and a Real literal
+  for one value in one congruence class (`qf_uflira_int_real_literal_sat`,
+  the pair S1 once called a conflict), a 1500-deep nullary
   `define-fun` chain, and a 1000-deep arithmetic term (the shape that used
   to overflow `linearize`).
 - `generated/` -- **machine-generated**, labelled by Z3, curated to 10 per

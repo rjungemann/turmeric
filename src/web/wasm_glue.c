@@ -1259,9 +1259,11 @@ static void smt_json_model(Buf *out, const RefineModel *m) {
         if (i) buf_puts(out, ",");
         buf_puts(out, "{\"name\":");
         smt_json_str(out, b->name);
-        if (b->is_real) buf_printf(out, ",\"sort\":\"Real\",\"value\":%g", b->rval);
-        else            buf_printf(out, ",\"sort\":\"Int\",\"value\":%lld",
-                                   (long long)b->ival);
+        if (b->is_real)      buf_printf(out, ",\"sort\":\"Real\",\"value\":%g", b->rval);
+        else if (b->is_bool) buf_printf(out, ",\"sort\":\"Bool\",\"value\":%s",
+                                        b->ival ? "true" : "false");
+        else                 buf_printf(out, ",\"sort\":\"Int\",\"value\":%lld",
+                                        (long long)b->ival);
         buf_puts(out, "}");
     }
     buf_puts(out, "]");

@@ -102,6 +102,13 @@ typedef struct RefineVC {
     bool       has_real;       /* any VS_REAL var/literal -> QF_UFLRA */
     bool       has_nonlinear;  /* a nonlinear subterm was abstracted   */
     const Form *nonlinear_src; /* first such subterm, for TUR-W0373    */
+    /* A hypothesis (or a call-site sibling argument) the encoder could not
+     * express was LEFT OUT.  Dropping it is sound for a PROOF -- fewer
+     * hypotheses only make the goal harder -- but not for a REFUTATION: a
+     * model found without the dropped fact may violate it, so a witness
+     * would be a false counterexample.  refine_model_search declines a VC
+     * with this set. */
+    bool       hyps_dropped;
 
     /* Hash-cons table: open addressing over term ids.  Slots hold VCTerm*. */
     VCTerm   **htab;    uint32_t htab_cap, htab_len;
@@ -204,7 +211,8 @@ typedef enum RefineVerdict {
  * valid, no model". */
 typedef struct RefineModelBinding {
     const char *name;
-    bool        is_real;
+    bool        is_real;   /* rval holds the value */
+    bool        is_bool;   /* ival is 0 / 1, printed false / true */
     int64_t     ival;
     double      rval;
 } RefineModelBinding;
